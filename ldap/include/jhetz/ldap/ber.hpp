@@ -105,6 +105,21 @@ class writer
 {
   public:
 	writer() = default;
+	writer(const writer &) = default;
+	writer(writer &&) noexcept = default;
+	// Assigning replaces the buffer, so it counts as a reset (see constructed()).
+	writer &operator=(const writer &other)
+	{
+		buf_ = other.buf_;
+		++resets_;
+		return *this;
+	}
+	writer &operator=(writer &&other) noexcept
+	{
+		buf_ = std::exchange(other.buf_, {});
+		++resets_;
+		return *this;
+	}
 
 	void boolean(bool value, tag t = tags::boolean);
 	void integer(std::int64_t value, tag t = tags::integer);

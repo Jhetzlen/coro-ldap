@@ -189,6 +189,25 @@ TEST_CASE("ber::writer rejects clear() or take() inside constructed()", "[ber][w
 						  }),
 		  std::logic_error);
 	}
+	SECTION("assigning another writer")
+	{
+		ber::writer w;
+		w.null();
+		CHECK_THROWS_AS(w.constructed(ber::tags::sequence,
+						  [](ber::writer &s) {
+							  ber::writer big;
+							  big.octet_string(std::string(20, 'y'));
+							  s = std::move(big);
+						  }),
+		  std::logic_error);
+		CHECK_THROWS_AS(w.constructed(ber::tags::sequence,
+						  [](ber::writer &s) {
+							  ber::writer other;
+							  other.null();
+							  s = other;
+						  }),
+		  std::logic_error);
+	}
 	SECTION("clear and take outside constructed() are fine")
 	{
 		ber::writer w;
