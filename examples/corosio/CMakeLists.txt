@@ -43,3 +43,8 @@ target_link_libraries(corosio_echo_server PRIVATE Boost::corosio)
 
 add_executable(corosio_echo_client echo_client.cpp)
 target_link_libraries(corosio_echo_client PRIVATE Boost::corosio)
+
+# sync_wait / future bridge returning std::expected (needs C++23).
+add_executable(corosio_result_future result_future_example.cpp)
+target_link_libraries(corosio_result_future PRIVATE Boost::corosio)
+target_compile_features(corosio_result_future PRIVATE cxx_std_23)

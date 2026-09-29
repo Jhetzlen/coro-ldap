@@ -33,3 +33,41 @@ cmake --build build/corosio
 | Errors thrown by default                                 | Structured result: `auto [ec, n] = co_await ...`      |
 | `async_read_some` / `async_write`                        | `sock.read_some(buf)` / `capy::write(sock, buf)`      |
 | Executor chosen per operation                            | Executor affinity propagates automatically to awaited tasks |
+
+## Calling coroutines from synchronous code
+
+`result_future.hpp` connects coroutines to blocking code without using
+exceptions. Results come back as `std::expected<T, std::error_code>`
+(`jhetz::result<T>`). It requires C++23.
+
+```cpp
+corosio::io_context ioc;
+
+// Run to completion on this thread.
+jhetz::result<int> r = jhetz::sync_wait(ioc, compute(21));
+if (!r)
+    std::cerr << r.error().message() << '\n';
+
+// Or start a task on a context running elsewhere and wait for it later.
+jhetz::result_future<int> f = jhetz::spawn_future(ioc.get_executor(), compute(1));
+jhetz::result<int> v = f.get();   // blocks, never throws
+```
+
+A task can return `T` or `jhetz::result<T>`; both produce a
+`result_future<T>`. Errors that would otherwise be exceptions become error codes:
+
+| What happened                          | `error()`                               |
+|----------------------------------------|-----------------------------------------|
+| Task returned `std::unexpected(ec)`    | `ec`                                    |
+| `std::system_error` escaped the task   | its `code()`                            |
+| `std::bad_alloc`                       | `std::errc::not_enough_memory`          |
+| Any other exception                    | `jhetz::bridge_errc::unhandled_exception` |
+| Task destroyed before finishing        | `std::future_errc::broken_promise`      |
+| `get()` called twice                   | `std::future_errc::no_state`            |
+
+Never block on a future from the thread running the task's
+`io_context`, because that thread is the one that has to finish the task.
+
+```sh
+./build/corosio/corosio_result_future
+```
