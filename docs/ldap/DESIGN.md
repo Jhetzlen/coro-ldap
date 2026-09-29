@@ -48,8 +48,9 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
 
 ## 2. Filters
 
-Built as expressions; values are escaped by construction, so filter
-injection is impossible (verified in the prototype: `x)(uid=*` becomes
+A filter is its RFC 4515 text (`ldap::filter` wraps a `std::string`).
+Operators build it and escape every value, so filter injection is impossible
+when filters are built this way (prototype: `x)(uid=*` becomes
 `x\29\28uid=\2a`).
 
 ```cpp
@@ -58,15 +59,26 @@ auto f = attr("objectClass") == "person"
       && (attr("uid") == user_input || attr("mail").starts_with(prefix))
       && !attr("disabled").present();
 
-// Typed form: attribute names come from the descriptor.
-auto g = field(&person::uid) == user_input;
+auto g = attr("uidNumber") >= "1000" && attr("sn").approx("smith");
 
-// Text that arrives from config or users.
-ldap::result<ldap::filter> h = ldap::filter::parse("(&(uid=jdoe)(mail=*))");
+// Text from config or users: passed through as is.
+auto h = ldap::filter::raw("(&(uid=jdoe)(mail=*))");
 ```
 
-`ldap::filter` is an AST (not a string), so it can be inspected, combined and
-encoded directly to BER.
+| Builder | Produces |
+|---|---|
+| `attr(a) == v` | `(a=v)` |
+| `attr(a) >= v`, `<= v` | `(a>=v)`, `(a<=v)` |
+| `attr(a).approx(v)` | `(a~=v)` |
+| `attr(a).present()` | `(a=*)` |
+| `attr(a).starts_with(v)` / `ends_with(v)` / `contains(v)` | `(a=v*)` / `(a=*v)` / `(a=*v*)` |
+| `f && g`, `f \|\| g`, `!f` | `(&fg)`, `(\|fg)`, `(!f)` |
+| `filter::raw(text)` | `text`, unchanged |
+
+No separate validation step. LDAP sends filters in binary (BER) form, so the
+text is parsed once when the request is encoded; a malformed filter (only
+possible through `raw`) fails that operation with `client_errc::invalid_filter`.
+Extensible match (`:=`) is only available through `raw` for now.
 
 ## 3. Requests
 
@@ -99,12 +111,23 @@ struct person {
 };
 
 template<> constexpr auto ldap::schema<person> = ldap::describe(
+    ldap::object_class("inetOrgPerson"),          // optional, see below
     ldap::field<&person::uid>("uid"),
     ldap::field<&person::cn>("cn"),
     ldap::field<&person::mail>("mail"),
     ldap::field<&person::member_of>("memberOf"),
     ldap::field<&person::created>("createTimestamp", ldap::read_only));
 ```
+
+`object_class(...)` is optional. When present:
+- `search_as<T>` ANDs `(objectClass=…)` into the filter, so a `person` search
+  only returns person entries;
+- `add(dn, T{...})` writes those values to `objectClass` (a new entry cannot be
+  created without them);
+- runtime validation checks the classes exist on the server.
+
+Without it, `search_as<T>` uses your filter unchanged and `add` requires an
+`objectClass` field in the descriptor.
 
 Field shape decides cardinality:
 
@@ -197,6 +220,14 @@ literal, allocation failure) may throw.
 **Runtime (optional):** read the server's subschema entry (RFC 4512) once per
 connection and check descriptors against it.
 
+Parsing is minimal, only what the checks below need:
+- `attributeTypes`: `NAME` (all aliases), `SUP`, `SYNTAX`, `SINGLE-VALUE`,
+  `NO-USER-MODIFICATION`. `SUP` is followed to inherit `SYNTAX`, because many
+  common attributes (`cn`, `sn`, …) only declare `SUP name`.
+- `objectClasses`: `NAME` only.
+- Everything else (matching rules, `MUST`/`MAY`, DIT content rules, extensions)
+  is skipped. Unparseable definitions are skipped, not fatal.
+
 ```cpp
 ldap::result<ldap::server_schema> s = co_await conn.load_schema();
 ldap::schema_report rep = ldap::validate<person>(*s);
@@ -207,6 +238,7 @@ ldap::connection_options{.schema_check = ldap::schema_check::on_first_use};
 ```
 
 Checks:
+- object classes from `object_class(...)` exist;
 - attribute exists on the server (name or alias);
 - cardinality: `T` / `optional<T>` mapped to a multi-valued attribute is
   reported (it only fails at runtime if an entry really has several values);
@@ -262,11 +294,13 @@ auto people = c.search_as<person>({...});          // same request/result types
 - Corosio and Capy pinned by commit, as in `examples/corosio/`.
 - C++26 (reflection, `std::execution` interop) on a separate branch.
 
+## Resolved
+
+- Filters: string-based with builder operators; no validation step (section 2).
+- Descriptors: optional `object_class(...)` (section 4).
+- Schema: minimal parsing (section 6).
+
 ## Open questions
 
-- Filter DSL spelling: `attr("x") == v` vs `ldap::eq("x", v)`; also how to
-  express `>=`, `<=`, `~=` and extensible match.
-- Should `search_as<T>` automatically add `objectClass` constraints from the
-  descriptor (for example `ldap::describe<person>(ldap::object_class("inetOrgPerson"), …)`)?
-- How much of the RFC 4512 schema grammar to parse (probably only what section
-  6 needs: names, SYNTAX, SINGLE-VALUE, NO-USER-MODIFICATION).
+- Should `MUST` attributes of the declared object classes be checked against
+  required (`T`) fields? Needs `MUST`/`MAY` parsing, so deferred.

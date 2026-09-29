@@ -1,8 +1,9 @@
 // Throwaway prototype validating the API shapes in DESIGN.md compile as C++23.
-// Not the implementation: filters are strings here (the real one builds an AST),
-// values are std::string only, and there is no I/O.
+// Not the implementation: values are std::string only, errors are simplified,
+// and there is no I/O or BER encoding.
 //   g++ -std=c++23 -Wall -Wextra docs/ldap/api_prototype.cpp && ./a.out
 
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
@@ -68,8 +69,15 @@ template<auto Ptr> struct field {
     const char* name;
     constexpr explicit field(const char* n) : name(n) {}
 };
-template<class... F> struct descriptor { std::tuple<F...> fields; };
-template<class... F> constexpr auto describe(F... f) { return descriptor<F...>{{f...}}; }
+template<std::size_t N> struct object_classes { std::array<const char*, N> names; };
+template<class... S> constexpr auto object_class(S... names) { return object_classes<sizeof...(S)>{{names...}}; }
+
+template<std::size_t N, class... F> struct descriptor {
+    object_classes<N> classes;
+    std::tuple<F...>  fields;
+};
+template<std::size_t N, class... F> constexpr auto describe(object_classes<N> oc, F... f) { return descriptor<N, F...>{oc, {f...}}; }
+template<class... F> constexpr auto describe(F... f) { return descriptor<0, F...>{{}, {f...}}; }
 
 struct not_described {};
 template<class T> constexpr auto schema = not_described{};
@@ -128,8 +136,8 @@ constexpr bool same_member = [] {
     if constexpr (std::is_same_v<decltype(A), decltype(B)>) return A == B;
     else return false;
 }();
-template<auto Ptr, class... F>
-consteval const char* name_of(const descriptor<F...>& d) {
+template<auto Ptr, std::size_t N, class... F>
+consteval const char* name_of(const descriptor<N, F...>& d) {
     static_assert((same_member<F::ptr, Ptr> || ...), "member is not listed in ldap::schema<T>");
     const char* n = nullptr;
     std::apply([&](auto const&... f) {
@@ -145,7 +153,12 @@ template<auto Ptr, class V> modification replace(V&& v) {
 }
 
 // ---------------- filter DSL ----------------
-struct filter { std::string text; };  // real impl: AST; text form here for the prototype
+// A filter is its RFC 4515 text. Operators build it and escape values; raw()
+// passes text through unchecked (it is parsed when the request is encoded).
+struct filter {
+    std::string text;
+    static filter raw(std::string t) { return {std::move(t)}; }
+};
 inline std::string escape(std::string_view v) {
     std::string o;
     for (unsigned char c : v) {
@@ -155,13 +168,25 @@ inline std::string escape(std::string_view v) {
     return o;
 }
 struct attr { std::string name;
-    filter operator==(std::string_view v) const { return {"(" + name + "=" + escape(v) + ")"}; }
-    filter present() const { return {"(" + name + "=*)"}; }
+    filter cmp(const char* op, std::string_view v) const { return {"(" + name + op + escape(v) + ")"}; }
+    filter operator==(std::string_view v) const { return cmp("=", v); }
+    filter operator>=(std::string_view v) const { return cmp(">=", v); }
+    filter operator<=(std::string_view v) const { return cmp("<=", v); }
+    filter approx(std::string_view v) const     { return cmp("~=", v); }
+    filter present() const                      { return {"(" + name + "=*)"}; }
     filter starts_with(std::string_view v) const { return {"(" + name + "=" + escape(v) + "*)"}; }
+    filter ends_with(std::string_view v) const   { return {"(" + name + "=*" + escape(v) + ")"}; }
+    filter contains(std::string_view v) const    { return {"(" + name + "=*" + escape(v) + "*)"}; }
 };
 inline filter operator&&(filter a, filter b) { return {"(&" + a.text + b.text + ")"}; }
 inline filter operator||(filter a, filter b) { return {"(|" + a.text + b.text + ")"}; }
 inline filter operator!(filter a) { return {"(!" + a.text + ")"}; }
+
+// search_as<T> narrows the filter to the descriptor's object classes.
+template<described T> filter effective_filter(filter f) {
+    for (const char* oc : schema<T>.classes.names) f = attr{"objectClass"} == oc && std::move(f);
+    return f;
+}
 } // namespace ldap
 
 // ---------------- user code ----------------
@@ -172,6 +197,7 @@ struct person {
     int                        uid_number{};
 };
 template<> constexpr auto ldap::schema<person> = ldap::describe(
+    ldap::object_class("inetOrgPerson"),
     ldap::field<&person::uid>("uid"),
     ldap::field<&person::mail>("mail"),
     ldap::field<&person::member_of>("memberOf"),
@@ -193,6 +219,10 @@ int main() {
     ldap::entry bad{"uid=x,dc=x", {{"uid", {"x"}}, {"uidNumber", {"12a"}}}};
     auto b = ldap::decode<person>(bad);
     std::cout << "bad: " << b.error().context << " -> " << b.error().diagnostic << "|" << (b.error().code == ldap::client_errc::conversion_failed) << '\n';
+
+    auto g = attr{"uidNumber"} >= "1000" && attr{"cn"}.contains("*") && attr{"sn"}.approx("smith");
+    std::cout << g.text << '\n';
+    std::cout << ldap::effective_filter<person>(attr{"uid"} == "jdoe").text << '\n';
 
     auto m = ldap::replace<&person::mail>("new@x.org");
     std::cout << "modify: " << m.attr << '\n';
