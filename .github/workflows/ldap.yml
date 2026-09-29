@@ -1,0 +1,88 @@
+name: ldap
+
+on:
+  # Branch pushes are covered by their pull request; only run on push for the
+  # main branches, so a PR branch is not built twice.
+  push:
+    branches: [master, main]
+    paths:
+      - "ldap/**"
+      - ".github/workflows/ldap.yml"
+  pull_request:
+    paths:
+      - "ldap/**"
+      - ".github/workflows/ldap.yml"
+
+permissions:
+  contents: read
+
+env:
+  # UBSan findings abort (the build also uses -fno-sanitize-recover=all).
+  UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+
+jobs:
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format-18
+      - name: Check formatting
+        run: find ldap -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run --Werror
+
+  gcc-sanitize:
+    name: GCC 13 Debug (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++-13
+      - name: Configure
+        run: >
+          cmake -S ldap -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=g++-13
+          -DJHETZ_LDAP_SANITIZE=ON
+          -DJHETZ_LDAP_WERROR=ON
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  clang-fuzz:
+    name: Clang fuzz smoke test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang-18 libclang-rt-18-dev
+      - name: Configure
+        run: >
+          cmake -S ldap -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_CXX_COMPILER=clang++-18
+          -DJHETZ_LDAP_BUILD_FUZZERS=ON
+          -DJHETZ_LDAP_BUILD_TESTS=OFF
+          -DJHETZ_LDAP_WERROR=ON
+      - name: Build
+        run: cmake --build build
+      - name: Run each fuzzer for 60 s
+        run: |
+          set -e
+          for fuzzer in build/fuzzers/*; do
+            name=$(basename "$fuzzer")
+            mkdir -p "corpus/$name" "artifacts/$name"
+            # Seed with the checked-in corpus (same seeds as ber_fuzz_replay).
+            if [ -d "ldap/fuzz/corpus/$name" ]; then cp ldap/fuzz/corpus/$name/* "corpus/$name/"; fi
+            echo "::group::$name"
+            "$fuzzer" -max_total_time=60 -print_final_stats=1 \
+              -artifact_prefix="artifacts/$name/" "corpus/$name"
+            echo "::endgroup::"
+          done
+      - name: Upload crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: artifacts/
