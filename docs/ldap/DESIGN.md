@@ -1,7 +1,10 @@
 # LDAP client: API design
 
-Status: agreed direction, not implemented yet. `api_prototype.cpp` next to this
-file checks that the type-safety parts compile as C++23 (GCC 13).
+Status: steps 1–3 implemented under `ldap/` (errors, BER codec, message model,
+filters, DN/attribute/entry). Sections 3–7 describe the API still to be built;
+"Implemented" notes say where the code differs from the original plan.
+`api_prototype.cpp` next to this file checks that the type-safety parts of
+section 4 compile as C++23 (GCC 13).
 
 ## Goals
 
@@ -29,22 +32,31 @@ Namespace is `jhetz::ldap`; examples below assume `namespace ldap = jhetz::ldap;
 No raw strings for LDAP concepts. Each type validates when it is built.
 
 ```cpp
-ldap::dn        base{"ou=people,dc=example,dc=org"};  // throws only on literal misuse, see below
+ldap::dn        base{"ou=people,dc=example,dc=org"};  // literal: checked at compile time
 ldap::attribute mail{"mail"};                         // case-insensitive equality and hashing
-ldap::url       url{"ldaps://ldap.example.org"};
+ldap::url       url{"ldaps://ldap.example.org"};      // not implemented yet
 
 ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never throws
 ```
 
-- `dn`: parsed RDN sequence (RFC 4514), normalized comparison, `parent()`,
-  `child(rdn)`, `to_string()`.
-- `attribute`: attribute description, compared case-insensitively.
-- `url`: `ldap://`, `ldaps://`, `ldapi://`.
-- `bytes` (`std::vector<std::byte>`) for binary values such as `jpegPhoto` or
-  `objectGUID`.
-- Constructors taking `const char*` are for literals and are `consteval` where
-  the check can run at compile time; everything built from runtime text goes
-  through `parse()` returning `result<T>`.
+- `dn`: parsed RDN sequence (RFC 4514), `parent()`, `child(rdn)`, `rdns()`,
+  `to_string()`. Comparison is syntactic: attribute types case-insensitive,
+  values exact after unescaping, AVA order inside a multi-valued RDN not
+  significant. No matching-rule normalization (so `cn=A` ≠ `cn=a`), and no
+  hash yet. Parsing is lenient like OpenLDAP: spaces around `,` `+` `=` are
+  ignored and unescaped trailing spaces dropped.
+- `attribute`: attribute description, compared and hashed case-insensitively.
+  `attribute::parse()` is strict RFC 4512; `attribute::unchecked()` keeps names
+  as servers send them (Active Directory's `member;range=0-1499`).
+- `entry`: untyped search result (DN text + ordered attributes) with
+  case-insensitive `find()`; duplicate attributes from the server are merged.
+- `url`: `ldap://`, `ldaps://`, `ldapi://` (step 4, not implemented yet).
+- `bytes`: not implemented; wire values are `std::string` holding raw octets
+  for now (see section 10).
+- Literals go through `consteval` helper types (`dn::literal`,
+  `attribute::literal`) that run the same scanner as `parse()`, so an invalid
+  literal is a compile error. A runtime `const char*` does not compile there:
+  runtime text must go through `parse()` returning `result<T>`.
 
 ## 2. Filters
 
@@ -72,13 +84,34 @@ auto h = ldap::filter::raw("(&(uid=jdoe)(mail=*))");
 | `attr(a).approx(v)` | `(a~=v)` |
 | `attr(a).present()` | `(a=*)` |
 | `attr(a).starts_with(v)` / `ends_with(v)` / `contains(v)` | `(a=v*)` / `(a=*v)` / `(a=*v*)` |
-| `f && g`, `f \|\| g`, `!f` | `(&fg)`, `(\|fg)`, `(!f)` |
+| `f && g`, `f \|\| g`, `!f` | `(&fg)`, `(\|fg)`, `(!f)`; chains are flattened, so `f && g && h` is `(&fgh)` |
+| `starts_with("")`, `ends_with("")`, `contains("")` | `(a=*)` (same meaning, and `(a=**)` is not valid) |
 | `filter::raw(text)` | `text`, unchanged |
+
+When a `raw` operand of `&&`, `||` or `!` is not exactly one parenthesized
+group, it is wrapped in parentheses, so `raw("cn=x") && f` works and a
+malformed raw text stays malformed instead of merging into a different valid
+query. Attribute names given to `attr()` are validated too, so names cannot
+inject filter syntax either.
 
 No separate validation step. LDAP sends filters in binary (BER) form, so the
 text is parsed once when the request is encoded; a malformed filter (only
 possible through `raw`) fails that operation with `client_errc::invalid_filter`.
-Extensible match (`:=`) is only available through `raw` for now.
+
+Parser details:
+- full RFC 4515: and/or/not, equality, substrings, `>=`, `<=`, `~=`, present,
+  extensible match (`attr:dn:rule:=value`); builders cover all but extensible
+  match, which is only reachable through `raw` for now;
+- RFC 4526 absolute true/false `(&)` and `(|)` are accepted;
+- text that does not start with `(` is wrapped, like `ldapsearch` does;
+- limits: nesting depth `max_filter_depth` = 24, so a search request with the
+  deepest allowed filter still fits the BER reader's depth limit of 32; and a
+  maximum number of filter elements (default 10,000) on both encode and
+  decode, so a hostile message cannot make decoding use gigabytes.
+
+Decoded filters come back as canonical text (escapes normalized to lower-case
+`\xx` for `* ( ) \ NUL` only, `:dn` lower case, empty substring parts dropped),
+which has the same meaning as the original but may differ textually.
 
 ## 3. Requests
 
@@ -98,6 +131,10 @@ auto r = co_await conn.search({
 
 Controls are typed (`ldap::paged`, `ldap::sort`, …) in a `std::variant`, with
 `ldap::raw_control{oid, critical, bytes}` as the escape hatch.
+
+Implemented so far: only the wire-level `control {type, criticality, value}`
+plus `encode_paged_results` / `decode_paged_results` helpers; the typed
+variant comes with the request API (step 5).
 
 ## 4. Mapping entries to structs
 
@@ -202,10 +239,14 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | `missing_attribute`, `too_many_values`, `conversion_failed`, `decode_error`, `message_too_large`, `schema_mismatch`, `would_deadlock` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock` |
 | system / TLS | from Corosio | `connection_refused`, timeouts, certificate errors |
 
-Plus an `ldap::cond` error condition for grouping across categories
+LDAP result code 0 (success) is not an `errc` value: a successful result is
+the absence of an error. Until `dn`/`url` exist, `matched_dn` and `referrals`
+are strings.
+
+Plus an `ldap::cond` error condition (not implemented yet) for grouping across categories
 (`cond::not_found`, `cond::auth_failed`, `cond::timeout`, …), so callers write
 `if (r.error().code == ldap::cond::auth_failed)`.
 
@@ -293,6 +334,34 @@ auto people = c.search_as<person>({...});          // same request/result types
   `<expected>`); MSVC 17.8+.
 - Corosio and Capy pinned by commit, as in `examples/corosio/`.
 - C++26 (reflection, `std::execution` interop) on a separate branch.
+
+## 10. Message model (implemented, step 3)
+
+`jhetz/ldap/message.hpp` is a faithful wire model of RFC 4511: an
+`ldap::message {id, op, controls}` where `op` is a `std::variant` of every
+protocol operation, requests and responses. Covering both directions lets the
+same codec serve the client and a mock server for tests.
+
+- Wire fields (LDAPDN, LDAPString, attribute values) are `std::string` holding
+  raw octets, so a server sending an odd DN never breaks decoding; the
+  vocabulary types of section 1 are for the API layer.
+- `encode(const message&)` returns `result<std::vector<std::byte>>`. It fails
+  with `invalid_filter` (bad `raw` filter) or `encode_error` (values the wire
+  format cannot carry: negative ids or limits, out-of-range enums, an add
+  with no values), and all checks run before any byte is written.
+  `decode(encode(m)) == m` except that the filter comes back as canonical
+  text, and `encode(decode(encode(m)))` is byte-identical to `encode(m)`.
+- `decode(bytes, decode_options)` takes exactly one framed message.
+  `decode_options::from` restricts which side sent it: the client decodes with
+  `origin::server`, which rejects request operations, so a hostile server
+  cannot make the client parse client-only structures such as search filters.
+  Depth and filter-element limits are also options.
+- Leniency toward real servers: unknown trailing SEQUENCE elements are ignored
+  (RFC 4511 section 4); scope 3 (subordinateSubtree) and modify operation 3
+  (increment, RFC 4525) are accepted; unknown result codes are kept; lists
+  RFC 4511 declares non-empty are accepted when empty (empty means absent).
+- `ldap_result::to_error()` turns a result into `ldap::error` with the
+  server's diagnostic, matched DN and referrals.
 
 ## Resolved
 
