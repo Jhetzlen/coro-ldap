@@ -118,6 +118,14 @@ namespace {
 			return "blocking call from the client's own I/O thread would deadlock";
 		case client_errc::unexpected_tag:
 			return "unexpected tag";
+		case client_errc::unsupported_operation:
+			return "unsupported LDAP operation";
+		case client_errc::invalid_dn:
+			return "invalid distinguished name";
+		case client_errc::invalid_attribute:
+			return "invalid attribute description";
+		case client_errc::encode_error:
+			return "value cannot be encoded in an LDAP message";
 		}
 		return {};
 	}

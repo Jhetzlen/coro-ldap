@@ -67,13 +67,14 @@ jobs:
           -DJHETZ_LDAP_WERROR=ON
       - name: Build
         run: cmake --build build
+      # ber_fuzz, message_fuzz, filter_fuzz, dn_fuzz (every target in fuzz/CMakeLists.txt).
       - name: Run each fuzzer for 60 s
         run: |
           set -e
           for fuzzer in build/fuzzers/*; do
             name=$(basename "$fuzzer")
             mkdir -p "corpus/$name" "artifacts/$name"
-            # Seed with the checked-in corpus (same seeds as ber_fuzz_replay).
+            # Seed with the checked-in corpus (same seeds as <name>_replay).
             if [ -d "ldap/fuzz/corpus/$name" ]; then cp ldap/fuzz/corpus/$name/* "corpus/$name/"; fi
             echo "::group::$name"
             "$fuzzer" -max_total_time=60 -print_final_stats=1 \
