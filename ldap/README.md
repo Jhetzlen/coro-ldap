@@ -11,7 +11,11 @@ C++23 LDAP client library, in progress. Design: [`docs/ldap/DESIGN.md`](../docs/
   `ber::writer`, `ber::reader` (non-owning, depth-bounded, safe on untrusted
   input) and the framer `ber::complete_message_size`.
 
-No networking and no LDAP message types yet.
+LDAP resultCode 0 (success) has no `errc` value: success is the absence of
+an error, and the message layer maps it to a value.
+
+No networking and no LDAP message types yet. The `ldap::cond` error
+conditions from DESIGN.md section 5 are deferred.
 
 ## Build and test
 
@@ -40,8 +44,16 @@ checking that decoded values re-encode consistently.
 cmake -S ldap -B build/ldap-fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DCMAKE_CXX_COMPILER=clang++ -DJHETZ_LDAP_BUILD_FUZZERS=ON -DJHETZ_LDAP_BUILD_TESTS=OFF
 cmake --build build/ldap-fuzz
-mkdir -p corpus && build/ldap-fuzz/fuzzers/ber_fuzz -max_total_time=60 corpus
+mkdir -p corpus && cp ldap/fuzz/corpus/ber_fuzz/* corpus/
+UBSAN_OPTIONS=halt_on_error=1 build/ldap-fuzz/fuzzers/ber_fuzz -max_total_time=60 corpus
 ```
+
+`fuzz/corpus/ber_fuzz/` holds the seed inputs (the same ones `ber_fuzz_replay`
+mutates). Regenerate them after changing the seeds with
+`ber_fuzz_replay --write-seeds ldap/fuzz/corpus/ber_fuzz`.
+
+Sanitized and fuzz builds use `-fno-sanitize-recover=all`, so any UBSan
+finding aborts and fails the test or fuzz run.
 
 With Clang 18 and libstdc++ 13 the build adds
 `-D__cpp_concepts=202002L -Wno-builtin-macro-redefined`, otherwise

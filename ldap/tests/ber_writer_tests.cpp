@@ -2,6 +2,7 @@
 #include "test_util.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <limits>
 #include <stdexcept>
@@ -147,6 +148,7 @@ TEST_CASE("ber tags", "[ber][tag]")
 	STATIC_REQUIRE(ber::tags::enumerated.number == 10);
 
 	CHECK_THROWS_AS(ber::context(31), std::invalid_argument);
+	CHECK_THROWS_AS(ber::identifier_octet(ber::tag{ ber::tag_class::context, false, 31 }), std::invalid_argument);
 	ber::writer w;
 	CHECK_THROWS_AS(w.null(ber::tag{ ber::tag_class::context, false, 31 }), std::invalid_argument);
 	CHECK(w.bytes().empty());
@@ -155,4 +157,131 @@ TEST_CASE("ber tags", "[ber][tag]")
 	CHECK(ber::to_string(ber::context(0)) == "[CONTEXT 0]");
 	CHECK(ber::to_string(ber::application(3, true)) == "[APPLICATION 3 constructed]");
 	CHECK(ber::to_string(ber::private_tag(1)) == "[PRIVATE 1]");
+}
+
+TEST_CASE("ber::writer rejects clear() or take() inside constructed()", "[ber][writer]")
+{
+	SECTION("clear")
+	{
+		ber::writer w;
+		w.null();
+		CHECK_THROWS_AS(w.constructed(ber::tags::sequence, [](ber::writer &s) { s.clear(); }), std::logic_error);
+	}
+	SECTION("take, then enough bytes to hide the shrink")
+	{
+		ber::writer w;
+		w.null();
+		CHECK_THROWS_AS(w.constructed(ber::tags::sequence,
+						  [](ber::writer &s) {
+							  auto stolen = s.take();
+							  s.octet_string("0123456789");
+						  }),
+		  std::logic_error);
+	}
+	SECTION("clear, then the body throws: logic_error wins")
+	{
+		ber::writer w;
+		w.null();
+		CHECK_THROWS_AS(w.constructed(ber::tags::sequence,
+						  [](ber::writer &s) {
+							  s.clear();
+							  throw std::runtime_error("boom");
+						  }),
+		  std::logic_error);
+	}
+	SECTION("clear and take outside constructed() are fine")
+	{
+		ber::writer w;
+		w.constructed(ber::tags::sequence, [](ber::writer &) {});
+		w.clear();
+		w.constructed(ber::tags::sequence, [](ber::writer &s) { s.null(); });
+		CHECK(hex(w.take()) == "30 02 05 00");
+	}
+}
+
+namespace {
+
+// Appends an OCTET STRING whose complete encoding is exactly `total` bytes.
+void octet_string_of_total_size(ber::writer &w, std::size_t total)
+{
+	for (std::size_t payload = total - 2;; --payload) {
+		std::vector<std::byte> header;
+		ber::encode_length(header, payload);
+		if (1 + header.size() + payload == total) {
+			w.octet_string(std::string(payload, 'p'));
+			return;
+		}
+	}
+}
+
+void nest(ber::writer &w, int levels, std::size_t content_size)
+{
+	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
+		if (levels == 0)
+			octet_string_of_total_size(s, content_size);
+		else
+			nest(s, levels - 1, content_size);
+	});
+}
+
+}// namespace
+
+TEST_CASE("ber::writer backpatches lengths at every length-form boundary", "[ber][writer][reader][framer]")
+{
+	struct boundary
+	{
+		std::size_t content;
+		const char *header;
+		int max_levels;
+	};
+	// The 16 MiB cases only get one extra level to keep the test fast.
+	const auto b = GENERATE(boundary{ 127, "30 7F", 3 },
+	  boundary{ 128, "30 81 80", 3 },
+	  boundary{ 255, "30 81 FF", 3 },
+	  boundary{ 256, "30 82 01 00", 3 },
+	  boundary{ 65535, "30 82 FF FF", 3 },
+	  boundary{ 65536, "30 83 01 00 00", 3 },
+	  boundary{ 16777215, "30 83 FF FF FF", 1 },
+	  boundary{ 16777216, "30 84 01 00 00 00", 1 });
+
+	for (int levels = 0; levels <= b.max_levels; ++levels) {
+		INFO("content " << b.content << ", " << levels << " wrapping levels");
+		ber::writer w;
+		nest(w, levels, b.content);
+		const auto &out = w.bytes();
+
+		// Innermost SEQUENCE header is minimal, and sits after the wrappers' headers.
+		std::size_t inner_start = 0;
+		{
+			ber::reader r(out);
+			for (int i = 0; i < levels; ++i) {
+				auto next = r.enter();
+				REQUIRE(next);
+				r = *next;
+			}
+			inner_start = r.offset();
+			const std::string expected_header = b.header;
+			const std::size_t header_len = (expected_header.size() + 1) / 3;
+			CHECK(hex(std::span(out).subspan(inner_start, header_len)) == expected_header);
+
+			auto inner = r.enter();
+			REQUIRE(inner);
+			CHECK(inner->remaining() == b.content);
+			auto str = inner->read_octet_string();
+			REQUIRE(str);
+			CHECK(inner->expect_end().has_value());
+			CHECK(r.expect_end().has_value());
+		}
+
+		// Every wrapper round-trips too, and the framer agrees on the total size.
+		ber::reader top(out);
+		auto e = top.read(ber::tags::sequence);
+		REQUIRE(e);
+		CHECK(e->size() == out.size());
+		CHECK(top.expect_end().has_value());
+		auto framed = ber::complete_message_size(out, std::numeric_limits<std::size_t>::max());
+		REQUIRE(framed);
+		REQUIRE(framed->has_value());
+		CHECK(**framed == out.size());
+	}
 }

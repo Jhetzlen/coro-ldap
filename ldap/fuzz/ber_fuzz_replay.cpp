@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -83,6 +84,22 @@ std::vector<std::vector<std::uint8_t>> seeds()
 	});
 	out.push_back(to_u8(w.take()));
 
+	// Paged-results control: BER encapsulated in an OCTET STRING.
+	{
+		ber::writer inner;
+		inner.constructed(ber::tags::sequence, [](ber::writer &v) {
+			v.integer(100);
+			v.octet_string("cookie");
+		});
+		const auto value = inner.take();
+		w.constructed(ber::tags::sequence, [&](ber::writer &c) {
+			c.octet_string("1.2.840.113556.1.4.319");
+			c.boolean(true);
+			c.octet_string(std::span<const std::byte>(value));
+		});
+		out.push_back(to_u8(w.take()));
+	}
+
 	// Integers at the interesting boundaries.
 	constexpr auto lo = std::numeric_limits<std::int64_t>::min();
 	constexpr auto hi = std::numeric_limits<std::int64_t>::max();
@@ -138,8 +155,38 @@ void mutate(rng &r, std::vector<std::uint8_t> &v)
 
 }// namespace
 
-int main()
+// `ber_fuzz_replay --write-seeds DIR` writes the seed inputs to DIR (used to
+// refresh ldap/fuzz/corpus/ber_fuzz/, the libFuzzer seed corpus) and exits.
+static int write_seeds(const char *dir)
 {
+	const auto inputs = seeds();
+	for (std::size_t i = 0; i < inputs.size(); ++i) {
+		char name[64];
+		std::snprintf(name, sizeof name, "/seed-%02zu.ber", i);
+		const std::string path = std::string(dir) + name;
+		std::FILE *f = std::fopen(path.c_str(), "wb");
+		if (f == nullptr) {
+			std::perror(path.c_str());
+			return 1;
+		}
+		const bool ok = std::fwrite(inputs[i].data(), 1, inputs[i].size(), f) == inputs[i].size();
+		if (std::fclose(f) != 0 || !ok) {
+			std::perror(path.c_str());
+			return 1;
+		}
+	}
+	std::printf("wrote %zu seeds to %s\n", inputs.size(), dir);
+	return 0;
+}
+
+int main(int argc, char **argv)
+{
+	if (argc == 3 && std::string_view(argv[1]) == "--write-seeds") return write_seeds(argv[2]);
+	if (argc != 1) {
+		std::fprintf(stderr, "usage: %s [--write-seeds DIR]\n", argv[0]);
+		return 2;
+	}
+
 	rng r{ 0x5EED'1DA9'0000'0001ull };
 	const auto seed_inputs = seeds();
 	std::size_t runs = 0;

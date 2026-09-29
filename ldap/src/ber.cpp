@@ -100,8 +100,7 @@ void encode_length(std::vector<std::byte> &out, std::size_t length)
 
 void writer::put_identifier(tag t, bool constructed)
 {
-	if (t.number > max_tag_number)
-		throw std::invalid_argument("ber::writer: tag number above 30 needs the high-tag-number form");
+	// identifier_octet throws std::invalid_argument for numbers above 30.
 	buf_.push_back(identifier_octet(tag{ t.cls, constructed, t.number }));
 }
 
@@ -156,18 +155,42 @@ std::size_t writer::begin_constructed(tag t)
 	return mark;
 }
 
-void writer::end_constructed(std::size_t mark)
+void writer::check_mark(std::size_t mark, std::size_t resets) const
 {
+	if (resets != resets_ || buf_.size() < mark + 2)
+		throw std::logic_error("ber::writer: clear() or take() called inside constructed()");
+}
+
+void writer::end_constructed(std::size_t mark, std::size_t resets)
+{
+	check_mark(mark, resets);
 	const std::size_t content_start = mark + 2;
 	const std::size_t length = buf_.size() - content_start;
 	if (length < 0x80) {
 		buf_[mark + 1] = static_cast<std::byte>(length);
 		return;
 	}
-	std::vector<std::byte> len;
-	encode_length(len, length);
-	buf_[mark + 1] = len[0];
-	buf_.insert(buf_.begin() + static_cast<std::ptrdiff_t>(content_start), len.begin() + 1, len.end());
+	// Long form: the extra length octets are inserted in front of the
+	// content, which moves it. Nested long-form elements therefore move their
+	// content once per level (quadratic in the nesting depth in the worst
+	// case); fine for LDAP message sizes and depths.
+	std::array<std::byte, sizeof(std::size_t)> octets{};
+	std::size_t count = 0;
+	for (std::size_t v = length; v != 0; v >>= 8) octets[count++] = static_cast<std::byte>(v & 0xFFu);
+	std::array<std::byte, sizeof(std::size_t)> big_endian{};
+	for (std::size_t i = 0; i < count; ++i) big_endian[i] = octets[count - 1 - i];
+	// Insert first (may throw; std::vector gives the strong guarantee for
+	// trivially copyable elements), then patch the placeholder, which cannot throw.
+	buf_.insert(buf_.begin() + static_cast<std::ptrdiff_t>(content_start),
+	  big_endian.begin(),
+	  big_endian.begin() + static_cast<std::ptrdiff_t>(count));
+	buf_[mark + 1] = static_cast<std::byte>(0x80u | count);
+}
+
+void writer::rollback(std::size_t mark, std::size_t resets)
+{
+	check_mark(mark, resets);
+	buf_.resize(mark);
 }
 
 // ---------------------------------------------------------------- decoder
@@ -210,7 +233,9 @@ result<element> reader::read(tag expected)
 {
 	auto h = parse_header();
 	if (!h) return std::unexpected(std::move(h.error()));
-	if (h->t != expected) return fail(client_errc::unexpected_tag, "ber: " + describe(expected, h->t) + at(offset()));
+	// Class and number only; the element keeps its real constructed bit.
+	if (h->t.cls != expected.cls || h->t.number != expected.number)
+		return fail(client_errc::unexpected_tag, "ber: " + describe(expected, h->t) + at(offset()));
 	return read();
 }
 
@@ -286,13 +311,14 @@ result<void> reader::read_null(tag t)
 	return {};
 }
 
-result<reader> reader::enter(tag t)
+result<reader> reader::enter_impl(tag t, bool constructed, const char *what)
 {
 	auto h = parse_header();
 	if (!h) return std::unexpected(std::move(h.error()));
-	if (!matches(h->t, t, true))
+	if (!matches(h->t, t, constructed))
 		return fail(client_errc::unexpected_tag,
-		  "ber: entering constructed element: " + describe(tag{ t.cls, true, t.number }, h->t) + at(offset()));
+		  std::string("ber: entering ") + what + ": " + describe(tag{ t.cls, constructed, t.number }, h->t)
+			+ at(offset()));
 	if (depth_ >= max_depth_)
 		return fail(client_errc::nesting_too_deep,
 		  "ber: nesting deeper than " + std::to_string(max_depth_) + " levels" + at(offset()));
@@ -301,6 +327,10 @@ result<reader> reader::enter(tag t)
 	pos_ += h->header_size + h->content_size;
 	return sub;
 }
+
+result<reader> reader::enter(tag t) { return enter_impl(t, true, "constructed element"); }
+
+result<reader> reader::enter_encapsulated(tag t) { return enter_impl(t, false, "encapsulated element"); }
 
 result<void> reader::expect_end() const
 {

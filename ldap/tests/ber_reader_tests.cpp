@@ -348,3 +348,71 @@ TEST_CASE("ber::reader error offsets are absolute", "[ber][reader]")
 	CHECK(code_of(v) == client_errc::integer_overflow);
 	CHECK(context_of(v).find("at offset 7") != std::string::npos);
 }
+
+TEST_CASE("ber::reader::read(tag) ignores the constructed bit of the expected tag", "[ber][reader]")
+{
+	const auto data = bytes({ 0xA1, 0x02, 0x05, 0x00, 0x81, 0x00 });
+	ber::reader r(data);
+	auto a = r.read(ber::context(1));
+	REQUIRE(a);
+	CHECK(a->t == ber::context(1, true));// real bit is kept
+	CHECK(hex(a->content) == "05 00");
+	CHECK(code_of(r.read(ber::context(2))) == client_errc::unexpected_tag);
+	CHECK(code_of(r.read(ber::application(1))) == client_errc::unexpected_tag);
+	auto b = r.read(ber::context(1, true));
+	REQUIRE(b);
+	CHECK(b->t == ber::context(1));
+	CHECK(r.empty());
+}
+
+TEST_CASE("ber::reader::enter_encapsulated", "[ber][reader]")
+{
+	// SEQUENCE { OCTET STRING { SEQUENCE { INTEGER with 9 octets } } }
+	const auto data = bytes({ 0x30, 0x0F, 0x04, 0x0D, 0x30, 0x0B, 0x02, 0x09, 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+
+	SECTION("offsets in errors are absolute")
+	{
+		ber::reader r(data);
+		auto a = r.enter();
+		REQUIRE(a);
+		auto b = a->enter_encapsulated();
+		REQUIRE(b);
+		CHECK(a->empty());
+		CHECK(b->depth() == 2);
+		CHECK(b->offset() == 4);
+		auto c = b->enter();
+		REQUIRE(c);
+		CHECK(c->depth() == 3);
+		CHECK(c->offset() == 6);
+		auto v = c->read_integer();
+		CHECK(code_of(v) == client_errc::integer_overflow);
+		CHECK(context_of(v).find("at offset 6") != std::string::npos);
+	}
+	SECTION("the depth limit applies across encapsulation")
+	{
+		ber::reader r(data, 2);
+		auto a = r.enter();
+		REQUIRE(a);
+		auto b = a->enter_encapsulated();
+		REQUIRE(b);
+		CHECK(code_of(b->enter()) == client_errc::nesting_too_deep);
+
+		ber::reader shallow(data, 1);
+		auto s = shallow.enter();
+		REQUIRE(s);
+		CHECK(code_of(s->enter_encapsulated()) == client_errc::nesting_too_deep);
+		CHECK(s->remaining() == 15);// unchanged on failure
+	}
+	SECTION("tag checks")
+	{
+		ber::reader r(data);
+		CHECK(code_of(r.enter_encapsulated()) == client_errc::unexpected_tag);// constructed SEQUENCE
+		const auto ctx = bytes({ 0x80, 0x02, 0x05, 0x00 });
+		ber::reader c(ctx);
+		CHECK(code_of(c.enter_encapsulated()) == client_errc::unexpected_tag);
+		auto inner = c.enter_encapsulated(ber::context(0));
+		REQUIRE(inner);
+		CHECK(inner->read_null().has_value());
+		CHECK(inner->expect_end().has_value());
+	}
+}

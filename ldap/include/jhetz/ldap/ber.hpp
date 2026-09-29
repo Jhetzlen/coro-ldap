@@ -76,9 +76,13 @@ namespace tags {
 	inline constexpr tag set = universal(17, true);
 }// namespace tags
 
-// The single identifier octet for `t` (number must be <= 30).
-constexpr std::byte identifier_octet(tag t) noexcept
+// The single identifier octet for `t`. Throws std::invalid_argument for tag
+// numbers above 30 (a compile error in constant expressions), which would
+// otherwise be silently turned into the high-tag-number marker 0x1F.
+constexpr std::byte identifier_octet(tag t)
 {
+	if (t.number > max_tag_number)
+		throw std::invalid_argument("ber: tag number above 30 needs the high-tag-number form");
 	return static_cast<std::byte>(
 	  (static_cast<unsigned>(t.cls) << 6) | (t.constructed ? 0x20u : 0x00u) | (t.number & 0x1Fu));
 }
@@ -111,32 +115,45 @@ class writer
 	void primitive(tag t, std::span<const std::byte> content);
 
 	// Writes the identifier, runs `body(*this)` to append the contents, then
-	// fills in the minimal definite length. If `body` throws, the partial
-	// element is removed.
+	// fills in the minimal definite length. If `body` or the length fix-up
+	// throws, the partial element is removed. `body` must only append: calling
+	// clear() or take() on this writer inside it throws std::logic_error.
 	template<class F> void constructed(tag t, F &&body)
 	{
+		const std::size_t resets = resets_;
 		const std::size_t mark = begin_constructed(t);
 		try {
 			std::forward<F>(body)(*this);
+			end_constructed(mark, resets);
 		} catch (...) {
-			buf_.resize(mark);
+			rollback(mark, resets);// throws std::logic_error if the buffer was reset
 			throw;
 		}
-		end_constructed(mark);
 	}
 
 	const std::vector<std::byte> &bytes() const noexcept { return buf_; }
 	// Moves the encoded bytes out and leaves the writer empty.
-	std::vector<std::byte> take() noexcept { return std::exchange(buf_, {}); }
-	void clear() noexcept { buf_.clear(); }
+	std::vector<std::byte> take() noexcept
+	{
+		++resets_;
+		return std::exchange(buf_, {});
+	}
+	void clear() noexcept
+	{
+		++resets_;
+		buf_.clear();
+	}
 
   private:
 	void put_identifier(tag t, bool constructed);
 	void put_length(std::size_t length);
 	std::size_t begin_constructed(tag t);
-	void end_constructed(std::size_t mark);
+	void end_constructed(std::size_t mark, std::size_t resets);
+	void rollback(std::size_t mark, std::size_t resets);
+	void check_mark(std::size_t mark, std::size_t resets) const;
 
 	std::vector<std::byte> buf_;
+	std::size_t resets_ = 0;// bumped by clear()/take(), to detect misuse inside constructed()
 };
 
 // Appends the minimal definite length encoding of `length` to `out`.
@@ -174,6 +191,11 @@ struct element
 //
 // Every operation either succeeds and advances, or fails and leaves the reader
 // unchanged. Error contexts include the absolute byte offset of the problem.
+//
+// A reader (and every span or sub-reader it returns) only borrows the buffer:
+// it must not outlive it. `reader r(make_vector());` dangles immediately.
+// To decode BER nested in a value, use `enter_encapsulated` rather than a
+// fresh reader over element::content, so depth and offsets carry over.
 class reader
 {
   public:
@@ -195,7 +217,9 @@ class reader
 	result<tag> peek_tag() const;
 	// Reads the next element of any tag.
 	result<element> read();
-	// Reads the next element; fails with unexpected_tag if its tag differs.
+	// Reads the next element; fails with unexpected_tag unless its class and
+	// number match `expected`. Like the typed reads, the constructed bit of
+	// `expected` is ignored; the returned element carries the real one.
 	result<element> read(tag expected);
 
 	result<bool> read_boolean(tag t = tags::boolean);
@@ -210,6 +234,12 @@ class reader
 	// reader over its contents, one level deeper. Fails with
 	// nesting_too_deep when that would exceed max_depth().
 	result<reader> enter(tag t = tags::sequence);
+
+	// Reads a primitive element with class/number of `t` (by default an
+	// OCTET STRING) whose content is itself BER, e.g. a control value or
+	// the paged-results cookie, and returns a reader over that content one
+	// level deeper, with the same depth limit as `enter` and absolute offsets.
+	result<reader> enter_encapsulated(tag t = tags::octet_string);
 
 	// Fails with decode_error if any bytes are left (trailing garbage).
 	result<void> expect_end() const;
@@ -228,6 +258,7 @@ class reader
 
 	result<header> parse_header() const;
 	result<element> read_primitive(tag expected, const char *what);
+	result<reader> enter_impl(tag t, bool constructed, const char *what);
 	result<std::int64_t> read_int(tag expected, const char *what);
 
 	std::span<const std::byte> data_;

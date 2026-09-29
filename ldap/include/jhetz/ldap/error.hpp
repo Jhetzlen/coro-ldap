@@ -16,8 +16,9 @@ namespace jhetz::ldap {
 //
 // `success` (0) is deliberately not an enumerator: a std::error_code with
 // value 0 means "no error", so a successful LDAP result is represented by the
-// absence of an ldap::error, never by an error_code. The category still
-// describes value 0 as "success" for completeness.
+// absence of an ldap::error, never by an error_code: the message layer maps
+// resultCode 0 to a value, not an error. The category still describes value
+// 0 as "success" for completeness.
 //
 // Some codes are not failures in every context (compare_false, compare_true,
 // referral, sasl_bind_in_progress); they are listed so every resultCode a

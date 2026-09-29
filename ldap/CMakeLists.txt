@@ -22,10 +22,17 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # same way (mixing sanitized and unsanitized code causes false positives).
 if(JHETZ_LDAP_SANITIZE)
     if(MSVC)
+        # /fsanitize=address is incompatible with the /RTC1 runtime checks
+        # CMake puts in the default Debug flags (error D8016), so drop them.
+        foreach(var CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELWITHDEBINFO)
+            string(REGEX REPLACE "/RTC[1csu]+" "" ${var} "${${var}}")
+        endforeach()
         add_compile_options(/fsanitize=address)
     else()
-        add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
-        add_link_options(-fsanitize=address,undefined)
+        # -fno-sanitize-recover=all: UBSan findings abort the process instead
+        # of printing and continuing, so they fail tests.
+        add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=address,undefined -fno-sanitize-recover=all)
     endif()
 endif()
 
@@ -43,8 +50,9 @@ if(JHETZ_LDAP_BUILD_FUZZERS)
     endif()
     # Coverage instrumentation for all code; only fuzz executables link the
     # libFuzzer main (-fsanitize=fuzzer below).
-    add_compile_options(-fsanitize=fuzzer-no-link,address,undefined -fno-omit-frame-pointer)
-    add_link_options(-fsanitize=address,undefined)
+    # -fno-sanitize-recover=all: UBSan findings are reported as crashes.
+    add_compile_options(-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined -fno-sanitize-recover=all)
 endif()
 
 # Warnings apply to our own targets only.

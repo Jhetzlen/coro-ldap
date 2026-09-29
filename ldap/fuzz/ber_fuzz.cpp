@@ -4,6 +4,7 @@
 // - framer and reader agree on the size of the first element;
 // - every element can be walked (constructed elements via `enter`, which is
 //   depth bounded), and the reader never consumes more than it has;
+// - OCTET STRING contents are also walked as encapsulated BER;
 // - decoded INTEGER / ENUMERATED / BOOLEAN / OCTET STRING / NULL values
 //   re-encode to something that decodes to the same value, and to the same
 //   content octets when the input was already minimal.
@@ -56,6 +57,8 @@ bool minimal_integer(std::span<const std::byte> c)
 	const bool high1 = (std::to_integer<unsigned>(c[1]) & 0x80u) != 0;
 	return !((b0 == 0x00u && !high1) || (b0 == 0xFFu && high1));
 }
+
+void walk(ber::reader r);
 
 // Every typed read is attempted with the element's own tag on a copy of the
 // reader; successes must round-trip through the writer.
@@ -117,6 +120,19 @@ void check_typed_reads(const ber::reader &r, ber::tag t, std::span<const std::by
 			auto copy2 = r;
 			auto s = copy2.read_string(t);
 			FUZZ_CHECK(s && s->size() == v->size());
+
+			// Treat the content as encapsulated BER (control values etc.).
+			// Recursion stays bounded: the sub-reader is one level deeper.
+			auto copy3 = r;
+			if (auto sub = copy3.enter_encapsulated(t)) {
+				FUZZ_CHECK(sub->depth() == r.depth() + 1);
+				FUZZ_CHECK(sub->offset() == r.offset() + (r.remaining() - copy3.remaining()) - content.size());
+				FUZZ_CHECK(sub->remaining() == content.size());
+				walk(*sub);
+			} else {
+				FUZZ_CHECK(sub.error().code == client_errc::nesting_too_deep);
+				FUZZ_CHECK(r.depth() >= r.max_depth());
+			}
 		}
 	}
 	{
