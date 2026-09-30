@@ -451,15 +451,15 @@ TEST_CASE("ldap_result::to_error", "[message][error]")
 TEST_CASE("paged results control", "[message][control]")
 {
 	const ldap::paged_results p{ .size = 250, .cookie = "\0\x01\xff"s };
-	const auto c = ldap::encode_paged_results(p, true);
+	const auto c = ldap::encode_paged_results(p, true).value();
 	CHECK(c.type == ldap::paged_results_oid);
 	CHECK(c.criticality);
 	REQUIRE(c.value);
 	CHECK(hex(ldap::test::bytes_of(*c.value)) == "30 09 02 02 00 FA 04 03 00 01 FF");
 	CHECK(ldap::decode_paged_results(c) == p);
-	CHECK_FALSE(ldap::encode_paged_results({}).criticality);
-	CHECK(ldap::decode_paged_results(ldap::encode_paged_results({})) == ldap::paged_results{});
-	CHECK_THROWS_AS(ldap::encode_paged_results({ .size = -1 }), std::invalid_argument);
+	CHECK_FALSE(ldap::encode_paged_results({})->criticality);
+	CHECK(ldap::decode_paged_results(*ldap::encode_paged_results({})) == ldap::paged_results{});
+	CHECK(code_of(ldap::encode_paged_results({ .size = -1 })) == client_errc::encode_error);
 
 	auto value_of = [](auto body) {
 		ber::writer w;
@@ -495,4 +495,145 @@ TEST_CASE("paged results control", "[message][control]")
 		});
 	}));
 	CHECK(extended == ldap::paged_results{ 7, "k" });
+}
+
+TEST_CASE("encode(decode(encode(m))) == encode(m), also for non-canonical filters", "[message]")
+{
+	std::vector<ldap::message> all = ldap::test::sample_messages();
+	for (const char *text : { "cn=x", "(cn=\\41)", "(cn=\\2A)", "(A:DN:=v)", "(a=b**c)" })
+		all.push_back({ .id = 9, .op = ldap::search_request{ .filter = ldap::filter::raw(text) } });
+	for (const auto &m : all) {
+		INFO("sample id " << m.id << ", op index " << m.op.index());
+		auto first = ldap::encode(m);
+		REQUIRE(first);
+		auto decoded = ldap::decode(*first);
+		REQUIRE(decoded);
+		auto second = ldap::encode(*decoded);
+		REQUIRE(second);
+		CHECK(hex(*second) == hex(*first));
+	}
+	// The filter text itself comes back canonical, not as written.
+	auto canonical = [](const char *text) {
+		auto m =
+		  ldap::decode(*ldap::encode({ .id = 1, .op = ldap::search_request{ .filter = ldap::filter::raw(text) } }));
+		REQUIRE(m);
+		return std::get<ldap::search_request>(m->op).filter.text;
+	};
+	CHECK(canonical("cn=x") == "(cn=x)");
+	CHECK(canonical("(cn=\\41)") == "(cn=A)");
+	CHECK(canonical("(cn=\\2A)") == "(cn=\\2a)");
+	CHECK(canonical("(A:DN:=v)") == "(A:dn:=v)");
+	CHECK(canonical("(a=b**c)") == "(a=b*c)");
+}
+
+TEST_CASE("decode_options::from rejects operations the peer may not send", "[message][options]")
+{
+	for (const auto &m : ldap::test::sample_messages()) {
+		const auto bytes = *ldap::encode(m);
+		const bool request =
+		  std::holds_alternative<ldap::bind_request>(m.op) || std::holds_alternative<ldap::unbind_request>(m.op)
+		  || std::holds_alternative<ldap::search_request>(m.op) || std::holds_alternative<ldap::modify_request>(m.op)
+		  || std::holds_alternative<ldap::add_request>(m.op) || std::holds_alternative<ldap::del_request>(m.op)
+		  || std::holds_alternative<ldap::modify_dn_request>(m.op)
+		  || std::holds_alternative<ldap::compare_request>(m.op) || std::holds_alternative<ldap::abandon_request>(m.op)
+		  || std::holds_alternative<ldap::extended_request>(m.op);
+		INFO("sample id " << m.id << ", op index " << m.op.index());
+		CHECK(ldap::decode(bytes, { .from = ldap::origin::any }) == m);
+		auto from_server = ldap::decode(bytes, { .from = ldap::origin::server });
+		auto from_client = ldap::decode(bytes, { .from = ldap::origin::client });
+		if (request) {
+			CHECK(code_of(from_server) == client_errc::unsupported_operation);
+			CHECK(from_client == m);
+		} else {
+			CHECK(from_server == m);
+			CHECK(code_of(from_client) == client_errc::unsupported_operation);
+		}
+	}
+}
+
+TEST_CASE("decode_options limits", "[message][options]")
+{
+	const ldap::message m{ .id = 1, .op = ldap::search_request{ .filter = ldap::filter::raw("(&(a=*)(b=*)(c=*))") } };
+	const auto bytes = *ldap::encode(m);
+	CHECK(ldap::decode(bytes).has_value());
+	CHECK(code_of(ldap::decode(bytes, { .filter = { .max_elements = 3 } })) == client_errc::decode_error);
+	CHECK(code_of(ldap::decode(bytes, { .filter = { .max_depth = 1 } })) == client_errc::nesting_too_deep);
+	// Reader depth: LDAPMessage, SearchRequest and the AND need 3 levels.
+	CHECK(ldap::decode(bytes, { .max_depth = 3 }).has_value());
+	CHECK(code_of(ldap::decode(bytes, { .max_depth = 2 })) == client_errc::nesting_too_deep);
+}
+
+TEST_CASE("regression: a huge AND filter in a search request fails fast", "[message][options]")
+{
+	// Reviewer's shape: [APPLICATION 3] SearchRequest whose filter is an AND of
+	// many 3-byte (a=*) children (87 01 61). Here about 1 MiB, far beyond
+	// max_filter_elements; decoding stops at element 10,001.
+	constexpr std::size_t children = 350'000;
+	auto bytes = raw_message(1, [&](ber::writer &m) {
+		m.constructed(ber::application(3), [&](ber::writer &o) {
+			o.octet_string("");
+			o.enumerated(0);
+			o.enumerated(0);
+			o.integer(0);
+			o.integer(0);
+			o.boolean(false);
+			o.constructed(ber::context(0), [&](ber::writer &a) {
+				for (std::size_t i = 0; i < children; ++i) a.octet_string("a", ber::context(7));
+			});
+			o.constructed(ber::tags::sequence, [](ber::writer &) {});
+		});
+	});
+	REQUIRE(bytes.size() > 1'000'000);
+	auto r = ldap::decode(bytes);
+	REQUIRE_FALSE(r);
+	CHECK(r.error().code == client_errc::decode_error);
+	CHECK(r.error().context.find("more than 10000 filter elements") != std::string::npos);
+	// A client connection (origin::server) does not look at the filter at all.
+	CHECK(code_of(ldap::decode(bytes, { .from = ldap::origin::server })) == client_errc::unsupported_operation);
+}
+
+TEST_CASE("add and modify-add values must not be empty", "[message]")
+{
+	const ldap::message empty_add{ .id = 1,
+		.op = ldap::add_request{ .entry = "cn=x", .attributes = { { "cn", { "x" } }, { "sn", {} } } } };
+	CHECK(code_of(ldap::encode(empty_add)) == client_errc::encode_error);
+	const ldap::message empty_mod_add{ .id = 1,
+		.op =
+		  ldap::modify_request{ .object = "cn=x", .changes = { { ldap::modify_operation::add, { "mail", {} } } } } };
+	CHECK(code_of(ldap::encode(empty_mod_add)) == client_errc::encode_error);
+	// delete / replace without values: delete or clear the whole attribute.
+	for (auto op : { ldap::modify_operation::delete_, ldap::modify_operation::replace }) {
+		const ldap::message ok{ .id = 1,
+			.op = ldap::modify_request{ .object = "cn=x", .changes = { { op, { "mail", {} } } } } };
+		CHECK(round_trip(ok) == ok);
+	}
+
+	// The decoder rejects them too, so decode never accepts what encode refuses.
+	auto add_bytes = raw_message(1, [](ber::writer &m) {
+		m.constructed(ber::application(8), [](ber::writer &o) {
+			o.octet_string("cn=x");
+			o.constructed(ber::tags::sequence, [](ber::writer &list) {
+				list.constructed(ber::tags::sequence, [](ber::writer &pa) {
+					pa.octet_string("sn");
+					pa.constructed(ber::tags::set, [](ber::writer &) {});
+				});
+			});
+		});
+	});
+	CHECK(code_of(ldap::decode(add_bytes)) == client_errc::decode_error);
+	auto mod_bytes = raw_message(1, [](ber::writer &m) {
+		m.constructed(ber::application(6), [](ber::writer &o) {
+			o.octet_string("cn=x");
+			o.constructed(ber::tags::sequence, [](ber::writer &changes) {
+				changes.constructed(ber::tags::sequence, [](ber::writer &c) {
+					c.enumerated(0);
+					c.constructed(ber::tags::sequence, [](ber::writer &pa) {
+						pa.octet_string("mail");
+						pa.constructed(ber::tags::set, [](ber::writer &) {});
+					});
+				});
+			});
+		});
+	});
+	CHECK(code_of(ldap::decode(mod_bytes)) == client_errc::decode_error);
 }

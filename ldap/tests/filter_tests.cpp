@@ -99,9 +99,11 @@ TEST_CASE("filter builders produce escaped RFC 4515 text", "[filter][builder]")
 		// A value ending in an escaped paren is still recognized as one group.
 		const auto p = attr("x") == ")";
 		CHECK((p && a && b).text == "(&(x=\\29)(a=1)(b=2))");
-		// Raw text that is not one group is not merged.
+		// Raw text that is not one group is never merged into the result.
+		// "(&(a=1))(b=2)" is invalid on its own; combined it must stay invalid.
 		const auto raw = ldap::filter::raw("(&(a=1))(b=2)");
-		CHECK((raw && c).text == "(&(&(a=1))(b=2)(c=3))");
+		CHECK((raw && c).text == "(&((&(a=1))(b=2))(c=3))");
+		CHECK(to_ber((raw && c).text).error().code == client_errc::invalid_filter);
 		// Long chains stay flat, far below max_filter_depth.
 		ldap::filter all = a;
 		for (int i = 0; i < 200; ++i) all = all && (attr("n") == std::to_string(i));
@@ -120,6 +122,55 @@ TEST_CASE("filter builders produce escaped RFC 4515 text", "[filter][builder]")
 	{
 		CHECK((attr(ldap::attribute{ "mail" }) == "x").text == "(mail=x)");
 		CHECK_THROWS_AS(attr(ldap::attribute::unchecked("uid=*)(cn")), std::invalid_argument);
+	}
+}
+
+TEST_CASE("filter combinators with raw operands", "[filter][builder]")
+{
+	using namespace ldap::filters;
+	const auto c = attr("c") == "3";
+	SECTION("text without outer parentheses is wrapped, as encode_filter does")
+	{
+		CHECK((ldap::filter::raw("cn=x") && c).text == "(&(cn=x)(c=3))");
+		CHECK((c || ldap::filter::raw("cn=x")).text == "(|(c=3)(cn=x))");
+		CHECK((!ldap::filter::raw("cn=x")).text == "(!(cn=x))");
+		CHECK(to_ber((ldap::filter::raw("cn=x") && c).text).has_value());
+		// Wrapped "&(a=1)(b=2)" is one AND group, so it is flattened.
+		CHECK((ldap::filter::raw("&(a=1)(b=2)") && c).text == "(&(a=1)(b=2)(c=3))");
+	}
+	SECTION("escaped parentheses do not count")
+	{
+		CHECK((ldap::filter::raw("(x=\29\28)") && c).text == "(&(x=\29\28)(c=3))");
+		CHECK((ldap::filter::raw("(&(x=\29))") && c).text == "(&(x=\29)(c=3))");
+	}
+	SECTION("flattening only for one group that is itself an AND / OR")
+	{
+		CHECK((ldap::filter::raw("(|(a=1)(b=2))") && c).text == "(&(|(a=1)(b=2))(c=3))");
+		CHECK((ldap::filter::raw("(&(a=1))(&(b=2))") && c).text == "(&((&(a=1))(&(b=2)))(c=3))");
+	}
+	SECTION("injection through a malformed raw operand stays invalid")
+	{
+		// Built unsafely by string concatenation with user input "x)(|(uid=*".
+		const auto evil = ldap::filter::raw("(uid=x)(|(uid=*)");
+		CHECK_FALSE(to_ber(evil.text).has_value());
+		for (const auto &f : { evil && c, c && evil, evil || c, !evil, !(evil && c) || c }) {
+			INFO(f.text);
+			auto r = to_ber(f.text);
+			REQUIRE_FALSE(r);
+			CHECK(r.error().code == client_errc::invalid_filter);
+		}
+		// Wrapping would balance this one ("(a=1)(|(b=*))"), so it is marked
+		// invalid with a NUL instead.
+		const auto unbalanced = ldap::filter::raw("a=1)(|(b=*)");
+		CHECK_FALSE(to_ber(unbalanced.text).has_value());
+		const auto combined = unbalanced && c;
+		CHECK(combined.text == "(&("s + '\0' + "a=1)(|(b=*))(c=3))");
+		auto r = to_ber(combined.text);
+		REQUIRE_FALSE(r);
+		CHECK(r.error().context.find("malformed operand") != std::string::npos);
+		CHECK_FALSE(to_ber((!unbalanced).text).has_value());
+		// Invalid escapes are never a group either.
+		CHECK_FALSE(to_ber((ldap::filter::raw("(a=\\zz)") && c).text).has_value());
 	}
 }
 
@@ -266,6 +317,14 @@ TEST_CASE("filter nesting is bounded", "[filter][parser]")
 	CHECK(too_deep.error().code == client_errc::invalid_filter);
 	CHECK(too_deep.error().context.find("nested too deeply") != std::string::npos);
 
+	// Custom limits.
+	CHECK(to_ber(nested(3, "(&")).has_value());
+	{
+		ber::writer w;
+		CHECK(ldap::encode_filter(w, nested(3, "(&"), { .max_depth = 2 }).error().code == client_errc::invalid_filter);
+		CHECK(w.bytes().empty());
+	}
+
 	// Bombs fail quickly without deep recursion.
 	CHECK(to_ber(std::string(100'000, '(')).error().code == client_errc::invalid_filter);
 	std::string bomb;
@@ -274,6 +333,57 @@ TEST_CASE("filter nesting is bounded", "[filter][parser]")
 	bomb.clear();
 	for (int i = 0; i < 100'000; ++i) bomb += "(&";
 	CHECK(to_ber(bomb).error().code == client_errc::invalid_filter);
+}
+
+TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limits]")
+{
+	auto and_of = [](std::size_t children) {
+		std::string t = "(&";
+		for (std::size_t i = 0; i < children; ++i) t += "(a=*)";
+		return t + ")";
+	};
+	// The AND itself counts: 1 + 9,999 children is the maximum.
+	CHECK(to_ber(and_of(ldap::max_filter_elements - 1)).has_value());
+	auto too_many = to_ber(and_of(ldap::max_filter_elements));
+	REQUIRE_FALSE(too_many);
+	CHECK(too_many.error().code == client_errc::invalid_filter);
+	CHECK(too_many.error().context.find("too many elements") != std::string::npos);
+	{
+		ber::writer w;
+		CHECK_FALSE(ldap::encode_filter(w, and_of(3), { .max_elements = 3 }));
+		CHECK(ldap::encode_filter(w, and_of(2), { .max_elements = 3 }));
+	}
+
+	// Decode: BER built directly, 3 bytes per child (87 01 61).
+	auto ber_and_of = [](std::size_t children) {
+		ber::writer w;
+		w.constructed(ber::context(0), [&](ber::writer &a) {
+			for (std::size_t i = 0; i < children; ++i) a.octet_string("a", ber::context(7));
+		});
+		return w.take();
+	};
+	{
+		const auto ok = ber_and_of(ldap::max_filter_elements - 1);
+		ber::reader r(ok);
+		CHECK(ldap::decode_filter(r).has_value());
+	}
+	{
+		// Many times the limit: fails at the first element over it.
+		const auto big = ber_and_of(100'000);
+		ber::reader r(big);
+		auto t = ldap::decode_filter(r);
+		REQUIRE_FALSE(t);
+		CHECK(t.error().code == client_errc::decode_error);
+		CHECK(t.error().context.find("more than 10000 filter elements") != std::string::npos);
+		CHECK(r.offset() == 0);
+	}
+	{
+		const auto small = ber_and_of(3);
+		ber::reader r(small);
+		CHECK_FALSE(ldap::decode_filter(r, { .max_elements = 3 }));
+		ber::reader r2(small);
+		CHECK(ldap::decode_filter(r2, { .max_elements = 4 }) == "(&(a=*)(a=*)(a=*))");
+	}
 }
 
 TEST_CASE("decode_filter rejects BER without an RFC 4515 form", "[filter][decode]")

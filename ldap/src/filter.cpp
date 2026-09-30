@@ -8,6 +8,7 @@ namespace jhetz::ldap {
 
 // ---------------------------------------------------------------- escaping and builders
 
+// Bytes that are not UTF-8 pass through unchanged (values may be binary).
 std::string escape_filter_value(std::string_view value)
 {
 	static constexpr char digits[] = "0123456789abcdef";
@@ -36,33 +37,53 @@ std::string escape_filter_value(std::string_view value)
 namespace filters {
 	namespace {
 
-		// True if `text` is one parenthesized group "(<op>...)": the '(' at
-		// index 0 is closed by the last character. `\xx` escapes are skipped,
-		// so escaped parentheses in values do not count.
-		bool is_group(std::string_view text, char op)
+		// Lexical check: `text` is exactly one parenthesized group, i.e. the
+		// '(' at index 0 is closed by the last character. `\xx` escapes are
+		// skipped as the parser skips them; a `\` not followed by two hex
+		// digits makes the text invalid anywhere, so it is not a group.
+		// The parser matches parentheses the same way (unescaped '(' in a
+		// value is an error, ')' ends it), so a group that parses inside a
+		// larger filter consumes exactly this text and means the same.
+		bool is_group(std::string_view text)
 		{
-			if (text.size() < 3 || text[0] != '(' || text[1] != op || text.back() != ')') return false;
+			if (text.empty() || text[0] != '(') return false;
 			std::size_t depth = 0;
 			for (std::size_t i = 0; i < text.size(); ++i) {
 				const char c = text[i];
 				if (c == '\\') {
+					if (i + 2 >= text.size() || !detail::is_hex(text[i + 1]) || !detail::is_hex(text[i + 2]))
+						return false;
 					i += 2;
 				} else if (c == '(') {
 					++depth;
 				} else if (c == ')') {
-					if (depth == 0) return false;
 					if (--depth == 0) return i + 1 == text.size();
 				}
 			}
 			return false;
 		}
 
+		// An operand as one group: as is, wrapped in parentheses (the same
+		// leniency encode_filter applies to a whole filter), or, if neither is
+		// one group, poisoned with a NUL byte, which the parser rejects
+		// wherever it appears, so the combined filter cannot become valid.
+		std::string as_group(const std::string &text)
+		{
+			if (is_group(text)) return text;
+			std::string wrapped = "(" + text + ")";
+			if (is_group(wrapped)) return wrapped;
+			wrapped.insert(1, 1, '\0');
+			return wrapped;
+		}
+
 		void append_operand(std::string &out, const filter &f, char op)
 		{
-			if (is_group(f.text, op))
-				out.append(f.text, 2, f.text.size() - 3);
+			std::string g = as_group(f.text);
+			// Flatten only a single group that is itself an AND (resp. OR).
+			if (g.size() >= 3 && g[1] == op)
+				out.append(g, 2, g.size() - 3);
 			else
-				out += f.text;
+				out += g;
 		}
 
 		filter combine(const filter &f, const filter &g, char op)
@@ -119,7 +140,7 @@ namespace filters {
 
 	filter operator&&(const filter &f, const filter &g) { return combine(f, g, '&'); }
 	filter operator||(const filter &f, const filter &g) { return combine(f, g, '|'); }
-	filter operator!(const filter &f) { return filter{ "(!" + f.text + ")" }; }
+	filter operator!(const filter &f) { return filter{ "(!" + as_group(f.text) + ")" }; }
 
 }// namespace filters
 
@@ -136,7 +157,9 @@ namespace detail {
 		  public:
 			// `shift`: 1 when the text was wrapped in parentheses, so positions
 			// in errors refer to the caller's text.
-			filter_parser(std::string_view s, std::size_t shift) : s_(s), shift_(shift) {}
+			filter_parser(std::string_view s, std::size_t shift, const filter_limits &limits)
+			  : s_(s), shift_(shift), limits_(limits)
+			{}
 
 			result<filter_node> parse()
 			{
@@ -168,10 +191,11 @@ namespace detail {
 				return {};
 			}
 
-			// Bounded recursion: depth never exceeds max_filter_depth.
+			// Bounded recursion: depth never exceeds limits_.max_depth.
 			result<filter_node> parse_filter(std::size_t depth)
 			{
-				if (depth > max_filter_depth) return error("filter nested too deeply");
+				if (depth > limits_.max_depth) return error("filter nested too deeply");
+				if (++elements_ > limits_.max_elements) return error("filter has too many elements");
 				if (auto e = expect('('); !e) return std::unexpected(std::move(e.error()));
 				if (at_end()) return error("unexpected end of filter");
 				filter_node node;
@@ -233,6 +257,8 @@ namespace detail {
 				filter_node node;
 				node.attr = std::string(s_.substr(attr_start, i_ - attr_start));
 				if (at_end()) return error("unexpected end of filter");
+				// filters::operator&& / || / ! mark malformed raw operands this way.
+				if (peek() == '\0') return error("NUL byte (unescaped, or a malformed operand of &&, || or !)");
 				if (peek() == ':') return parse_extensible(std::move(node), attr_start);
 				if (!is_attribute_description(node.attr)) return error("invalid attribute description", attr_start);
 
@@ -309,16 +335,18 @@ namespace detail {
 
 			std::string_view s_;
 			std::size_t shift_;
+			filter_limits limits_;
 			std::size_t i_ = 0;
+			std::size_t elements_ = 0;
 		};
 
 	}// namespace
 
-	result<filter_node> parse_filter(std::string_view text)
+	result<filter_node> parse_filter(std::string_view text, const filter_limits &limits)
 	{
-		if (!text.empty() && text.front() == '(') return filter_parser(text, 0).parse();
+		if (!text.empty() && text.front() == '(') return filter_parser(text, 0, limits).parse();
 		const std::string wrapped = "(" + std::string(text) + ")";
-		return filter_parser(wrapped, 1).parse();
+		return filter_parser(wrapped, 1, limits).parse();
 	}
 
 	// ---------------------------------------------------------------- tree -> BER
@@ -379,9 +407,9 @@ namespace detail {
 
 }// namespace detail
 
-result<void> encode_filter(ber::writer &w, std::string_view text)
+result<void> encode_filter(ber::writer &w, std::string_view text, const filter_limits &limits)
 {
-	auto node = detail::parse_filter(text);
+	auto node = detail::parse_filter(text, limits);
 	if (!node) return std::unexpected(std::move(node.error()));
 	detail::write_filter(w, *node);
 	return {};
@@ -394,9 +422,9 @@ namespace {
 	using detail::filter_kind;
 	using detail::filter_node;
 
-	std::unexpected<error> bad(const char *what, std::size_t offset)
+	std::unexpected<error> bad(const std::string &what, std::size_t offset)
 	{
-		return fail(client_errc::decode_error, std::string("filter: ") + what + " at offset " + std::to_string(offset));
+		return fail(client_errc::decode_error, "filter: " + what + " at offset " + std::to_string(offset));
 	}
 
 	// RFC 4511 section 4: unknown trailing SEQUENCE elements are ignored (but
@@ -419,7 +447,13 @@ namespace {
 		return s;
 	}
 
-	result<filter_node> decode_node(ber::reader &r, std::size_t depth);
+	struct decode_state
+	{
+		filter_limits limits;
+		std::size_t elements = 0;
+	};
+
+	result<filter_node> decode_node(ber::reader &r, std::size_t depth, decode_state &st);
 
 	result<filter_node> decode_ava(ber::reader &r, ber::tag t, filter_kind kind)
 	{
@@ -516,14 +550,17 @@ namespace {
 		return n;
 	}
 
-	// Bounded recursion: depth never exceeds max_filter_depth.
-	result<filter_node> decode_node(ber::reader &r, std::size_t depth)
+	// Bounded recursion: depth never exceeds st.limits.max_depth. The element
+	// count is checked before anything is allocated for the element.
+	result<filter_node> decode_node(ber::reader &r, std::size_t depth, decode_state &st)
 	{
 		const std::size_t at = r.offset();
-		if (depth > max_filter_depth)
+		if (depth > st.limits.max_depth)
 			return fail(client_errc::nesting_too_deep,
-			  "filter: nested deeper than " + std::to_string(max_filter_depth) + " levels at offset "
+			  "filter: nested deeper than " + std::to_string(st.limits.max_depth) + " levels at offset "
 				+ std::to_string(at));
+		if (++st.elements > st.limits.max_elements)
+			return bad("more than " + std::to_string(st.limits.max_elements) + " filter elements", at);
 		auto t = r.peek_tag();
 		if (!t) return std::unexpected(std::move(t.error()));
 		if (t->cls != ber::tag_class::context)
@@ -538,13 +575,13 @@ namespace {
 			filter_node n;
 			n.kind = t->number == 0 ? filter_kind::and_ : t->number == 1 ? filter_kind::or_ : filter_kind::not_;
 			if (n.kind == filter_kind::not_) {
-				auto child = decode_node(*sub, depth + 1);
+				auto child = decode_node(*sub, depth + 1, st);
 				if (!child) return child;
 				n.children.push_back(std::move(*child));
 				if (auto e = sub->expect_end(); !e) return std::unexpected(std::move(e.error()));
 			} else {
 				while (!sub->empty()) {
-					auto child = decode_node(*sub, depth + 1);
+					auto child = decode_node(*sub, depth + 1, st);
 					if (!child) return child;
 					n.children.push_back(std::move(*child));
 				}
@@ -625,10 +662,11 @@ namespace {
 
 }// namespace
 
-result<std::string> decode_filter(ber::reader &r)
+result<std::string> decode_filter(ber::reader &r, const filter_limits &limits)
 {
 	ber::reader copy = r;
-	auto node = decode_node(copy, 1);
+	decode_state st{ limits };
+	auto node = decode_node(copy, 1, st);
 	if (!node) return std::unexpected(std::move(node.error()));
 	std::string out;
 	print(out, *node);

@@ -93,7 +93,7 @@ inline std::vector<message> sample_messages()
 
 inline std::vector<control> sample_controls()
 {
-	return { encode_paged_results({ .size = 100, .cookie = "\x01\x02" }, true),
+	return { encode_paged_results({ .size = 100, .cookie = "\x01\x02" }, true).value(),
 		control{ .type = "1.2.840.113556.1.4.805" },
 		control{ .type = "1.2.3.4", .criticality = true, .value = "" } };
 }

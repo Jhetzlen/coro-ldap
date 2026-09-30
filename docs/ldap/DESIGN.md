@@ -89,9 +89,11 @@ auto h = ldap::filter::raw("(&(uid=jdoe)(mail=*))");
 | `filter::raw(text)` | `text`, unchanged |
 
 When a `raw` operand of `&&`, `||` or `!` is not exactly one parenthesized
-group, it is wrapped in parentheses, so `raw("cn=x") && f` works and a
-malformed raw text stays malformed instead of merging into a different valid
-query. Attribute names given to `attr()` are validated too, so names cannot
+group, it is wrapped in parentheses if that makes it one group, so
+`raw("cn=x") && f` works. Otherwise (for example `raw("a=1)(|(b=*)")`, where
+wrapping would produce a valid but different filter) a NUL byte is inserted,
+which the parser always rejects: malformed raw text stays malformed instead of
+merging into a different valid query. Attribute names given to `attr()` are validated too, so names cannot
 inject filter syntax either.
 
 No separate validation step. LDAP sends filters in binary (BER) form, so the
@@ -348,7 +350,8 @@ same codec serve the client and a mock server for tests.
 - `encode(const message&)` returns `result<std::vector<std::byte>>`. It fails
   with `invalid_filter` (bad `raw` filter) or `encode_error` (values the wire
   format cannot carry: negative ids or limits, out-of-range enums, an add
-  with no values), and all checks run before any byte is written.
+  with no values), and all checks run before any byte is written. The decoder
+  rejects the same empty adds, so both sides accept the same messages.
   `decode(encode(m)) == m` except that the filter comes back as canonical
   text, and `encode(decode(encode(m)))` is byte-identical to `encode(m)`.
 - `decode(bytes, decode_options)` takes exactly one framed message.

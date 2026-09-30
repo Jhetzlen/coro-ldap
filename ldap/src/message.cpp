@@ -3,7 +3,6 @@
 #include "filter_ast.hpp"
 
 #include <limits>
-#include <stdexcept>
 #include <utility>
 
 // Early return on failure: `LDAP_TRY(x, expr);` declares `x` from a result.
@@ -96,7 +95,13 @@ namespace {
 			for (const auto &c : mod->changes) {
 				const auto op = static_cast<std::int32_t>(c.operation);
 				if (op < 0 || op > 3) return out_of_range("modify operation");
+				if (c.operation == modify_operation::add && c.modification.values.empty())
+					return fail(client_errc::encode_error, "message: modify add change without values");
 			}
+		} else if (const auto *add = std::get_if<add_request>(&m.op)) {
+			for (const auto &attr : add->attributes)
+				if (attr.values.empty())
+					return fail(client_errc::encode_error, "message: add request attribute without values");
 		}
 		return filter;
 	}
@@ -413,7 +418,7 @@ namespace {
 		return protocol_op{ std::move(b) };
 	}
 
-	result<protocol_op> read_search_request(ber::reader &r, ber::tag t)
+	result<protocol_op> read_search_request(ber::reader &r, ber::tag t, const filter_limits &limits)
 	{
 		LDAP_TRY(o, r.enter(t));
 		search_request s;
@@ -423,7 +428,7 @@ namespace {
 		LDAP_TRY(size_limit, read_ranged(o, ber::tags::integer, 0, max_int, "size limit"));
 		LDAP_TRY(time_limit, read_ranged(o, ber::tags::integer, 0, max_int, "time limit"));
 		LDAP_TRY(types_only, o.read_boolean());
-		LDAP_TRY(filter_text, decode_filter(o));
+		LDAP_TRY(filter_text, decode_filter(o, limits));
 		LDAP_TRY(attrs, o.enter());
 		while (!attrs.empty()) {
 			LDAP_TRY(a, attrs.read_string());
@@ -470,7 +475,10 @@ namespace {
 		while (!changes.empty()) {
 			LDAP_TRY(change, changes.enter());
 			LDAP_TRY(op, read_ranged(change, ber::tags::enumerated, 0, 3, "modify operation", true));
+			const std::size_t attr_at = change.offset();
 			LDAP_TRY(attr, read_attribute(change));
+			if (op == static_cast<std::int32_t>(modify_operation::add) && attr.values.empty())
+				return bad("modify add change without values", attr_at);
 			LDAP_TRY_VOID(skip_rest(change));
 			m.changes.push_back(modify_change{ static_cast<modify_operation>(op), std::move(attr) });
 		}
@@ -482,7 +490,10 @@ namespace {
 	{
 		LDAP_TRY(o, r.enter(t));
 		LDAP_TRY(entry, o.read_string());
+		const std::size_t attrs_at = o.offset();
 		LDAP_TRY(attrs, read_attributes(o));
+		for (const auto &a : attrs)
+			if (a.values.empty()) return bad("add request attribute '" + a.type + "' without values", attrs_at);
 		LDAP_TRY_VOID(skip_rest(o));
 		return protocol_op{ add_request{ std::move(entry), std::move(attrs) } };
 	}
@@ -546,7 +557,27 @@ namespace {
 		return protocol_op{ intermediate_response{ std::move(name), std::move(value) } };
 	}
 
-	result<protocol_op> read_op(ber::reader &r)
+	// Operations a client sends (RFC 4511 section 4.2 protocolOp requests).
+	bool is_request(std::uint8_t number)
+	{
+		switch (number) {
+		case op_tag::bind_request:
+		case op_tag::unbind_request:
+		case op_tag::search_request:
+		case op_tag::modify_request:
+		case op_tag::add_request:
+		case op_tag::del_request:
+		case op_tag::modify_dn_request:
+		case op_tag::compare_request:
+		case op_tag::abandon_request:
+		case op_tag::extended_request:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	result<protocol_op> read_op(ber::reader &r, const decode_options &options)
 	{
 		const std::size_t offset = r.offset();
 		LDAP_TRY(t, r.peek_tag());
@@ -555,6 +586,14 @@ namespace {
 			  client_errc::unsupported_operation, "message: unknown protocolOp " + ber::to_string(t) + at(offset));
 		};
 		if (t.cls != ber::tag_class::application) return unsupported();
+		// Checked before decoding, so a peer cannot make us parse (for
+		// example) a huge search request filter it may not send at all.
+		if (options.from == origin::server && is_request(t.number))
+			return fail(client_errc::unsupported_operation,
+			  "message: request operation " + ber::to_string(t) + " from a server" + at(offset));
+		if (options.from == origin::client && !is_request(t.number))
+			return fail(client_errc::unsupported_operation,
+			  "message: response operation " + ber::to_string(t) + " from a client" + at(offset));
 		switch (t.number) {
 		case op_tag::bind_request:
 			return read_bind_request(r, t);
@@ -565,7 +604,7 @@ namespace {
 			return protocol_op{ unbind_request{} };
 		}
 		case op_tag::search_request:
-			return read_search_request(r, t);
+			return read_search_request(r, t, options.filter);
 		case op_tag::search_result_entry:
 			return read_search_result_entry(r, t);
 		case op_tag::search_result_done:
@@ -653,15 +692,15 @@ result<std::vector<std::byte>> encode(const message &m)
 	return w.take();
 }
 
-result<message> decode(std::span<const std::byte> one_complete_message)
+result<message> decode(std::span<const std::byte> one_complete_message, const decode_options &options)
 {
-	ber::reader top(one_complete_message);
+	ber::reader top(one_complete_message, options.max_depth);
 	LDAP_TRY(r, top.enter());
 	LDAP_TRY_VOID(top.expect_end());
 	message m;
 	LDAP_TRY(id, read_ranged(r, ber::tags::integer, 0, max_int, "message id"));
 	m.id = id;
-	LDAP_TRY(op, read_op(r));
+	LDAP_TRY(op, read_op(r, options));
 	m.op = std::move(op);
 	if (next_is(r, ber::context(0))) {
 		LDAP_TRY(list, r.enter(ber::context(0)));
@@ -676,9 +715,9 @@ result<message> decode(std::span<const std::byte> one_complete_message)
 
 // ---------------------------------------------------------------- paged results
 
-control encode_paged_results(const paged_results &value, bool criticality)
+result<control> encode_paged_results(const paged_results &value, bool criticality)
 {
-	if (value.size < 0) throw std::invalid_argument("ldap::encode_paged_results: negative size");
+	if (value.size < 0) return fail(client_errc::encode_error, "paged results: negative size");
 	ber::writer w;
 	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
 		s.integer(value.size);

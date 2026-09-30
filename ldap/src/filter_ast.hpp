@@ -4,6 +4,7 @@
 
 #include "jhetz/ldap/ber.hpp"
 #include "jhetz/ldap/error.hpp"
+#include "jhetz/ldap/filter.hpp"
 
 #include <optional>
 #include <string>
@@ -39,7 +40,7 @@ struct filter_node
 };
 
 // RFC 4515 text -> tree (invalid_filter on error).
-result<filter_node> parse_filter(std::string_view text);
+result<filter_node> parse_filter(std::string_view text, const filter_limits &limits = {});
 
 // Tree -> BER; cannot fail.
 void write_filter(ber::writer &w, const filter_node &node);

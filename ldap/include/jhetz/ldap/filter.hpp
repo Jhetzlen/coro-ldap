@@ -21,6 +21,22 @@ namespace jhetz::ldap {
 // LDAPMessage and SearchRequest take 2 levels, a substrings leaf 1 extra.
 inline constexpr std::size_t max_filter_depth = 24;
 
+// Maximum number of filter elements (every `(...)`, leaves included) in one
+// filter. A hostile peer could otherwise send a multi-megabyte
+// `(&(a=*)(a=*)...)` whose 3-byte BER children each become a large parsed
+// node. 10,000 leaves room for large real filters (group membership ORs)
+// while keeping the parsed form at a few MB.
+inline constexpr std::size_t max_filter_elements = 10'000;
+
+// Limits applied when parsing filter text and when decoding BER filters.
+// Raising `max_depth` above 24 can produce search requests deeper than
+// ber::reader's default depth limit.
+struct filter_limits
+{
+	std::size_t max_depth = max_filter_depth;
+	std::size_t max_elements = max_filter_elements;
+};
+
 // A filter is its RFC 4515 text. Build it with the ldap::filters operators
 // (values are escaped, so user input cannot change the filter structure) or
 // pass text through unchanged with filter::raw. Text is only parsed when a
@@ -35,7 +51,7 @@ struct filter
 };
 
 // RFC 4515 section 3 escaping: `*` `(` `)` `\` and NUL become \2a \28 \29 \5c
-// \00; every other byte is kept as is.
+// \00; every other byte is kept as is, including bytes that are not UTF-8.
 std::string escape_filter_value(std::string_view value);
 
 namespace filters {
@@ -70,6 +86,14 @@ namespace filters {
 
 	// (&fg), (|fg), (!f). Operands that already are an AND (resp. OR) are
 	// merged, so `a && b && c` gives (&abc), not (&(&ab)c).
+	//
+	// Operands made with filter::raw are checked lexically (parentheses
+	// balanced, `\xx` escapes skipped): text that is one parenthesized group
+	// is used as is, text that becomes one group when wrapped in `(...)` is
+	// wrapped (so `raw("cn=x") && f` works, as `cn=x` does on its own), and
+	// anything else is marked invalid with a NUL byte, so the combined filter
+	// fails with invalid_filter when encoded. Malformed raw text can therefore
+	// never turn into a valid filter with another meaning by being combined.
 	filter operator&&(const filter &f, const filter &g);
 	filter operator||(const filter &f, const filter &g);
 	filter operator!(const filter &f);
@@ -87,8 +111,9 @@ namespace filters {
 // Leniency: text that does not start with '(' is wrapped in parentheses, as
 // ldapsearch does (`uid=jdoe` is `(uid=jdoe)`). No other leniency: no
 // whitespace between elements, and `(`, `)`, `*` (outside substrings), `\`
-// and NUL must be escaped in values.
-result<void> encode_filter(ber::writer &w, std::string_view text);
+// and NUL must be escaped in values. Filters beyond `limits` (depth or number
+// of elements) fail with invalid_filter.
+result<void> encode_filter(ber::writer &w, std::string_view text, const filter_limits &limits = {});
 
 // Reads one BER Filter from `r` and returns its canonical RFC 4515 text:
 // values escaped with escape_filter_value (hex digits lower case), `:dn`
@@ -96,8 +121,9 @@ result<void> encode_filter(ber::writer &w, std::string_view text);
 // same BER. Filters that cannot be written as RFC 4515 text are rejected with
 // decode_error (invalid attribute descriptions, empty substrings, initial or
 // final out of place, extensible match without type and rule), as are
-// filters deeper than max_filter_depth (nesting_too_deep). On failure `r` is
+// filters deeper than limits.max_depth (nesting_too_deep) and filters with
+// more than limits.max_elements elements (decode_error). On failure `r` is
 // unchanged.
-result<std::string> decode_filter(ber::reader &r);
+result<std::string> decode_filter(ber::reader &r, const filter_limits &limits = {});
 
 }// namespace jhetz::ldap

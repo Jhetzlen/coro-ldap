@@ -16,11 +16,15 @@
 // - enumerations the model relies on (scope, derefAliases, modify operation)
 //   and INTEGER ranges (message id, version, limits) are checked and fail
 //   with decode_error, but unknown resultCode values are kept;
-// - SEQUENCE OF / SET OF with SIZE (1..MAX) (referral, attribute values of
-//   AddRequest, search references) are accepted when empty; an empty list is
-//   the same as an absent one in this model;
-// - nesting is bounded by ber::reader's depth limit, and nothing is allocated
-//   from a length that was not checked against the input first.
+// - SEQUENCE OF with SIZE (1..MAX) (referral, search references) is accepted
+//   when empty; an empty list is the same as an absent one in this model.
+//   Values of an AddRequest attribute or of a modify `add` change must not be
+//   empty (SIZE (1..MAX), servers reject it): encode fails with encode_error,
+//   decode with decode_error;
+// - nesting is bounded by ber::reader's depth limit, filters by
+//   filter_limits (depth and number of elements), and nothing is allocated
+//   from a length that was not checked against the input first;
+// - decode_options::from rejects operations the peer may not send.
 #pragma once
 
 #include "jhetz/ldap/ber.hpp"
@@ -338,17 +342,40 @@ struct message
 // ---------------------------------------------------------------- codec
 
 // Encodes one LDAPMessage. Fails before writing anything with
-// - invalid_filter if a search request's filter text is malformed;
+// - invalid_filter if a search request's filter text is malformed or beyond
+//   the default filter_limits;
 // - encode_error for values the wire format cannot carry (negative message
-//   id, limits or paged size; version outside 1..127; enum values outside the
-//   ranges above). This keeps the invariant: if encode(m) succeeds,
-//   decode(*encode(m)) == m.
+//   id or limits; version outside 1..127; enum values outside the ranges
+//   above; an AddRequest attribute or modify `add` change without values).
+// If encode(m) succeeds, then
+// - decode(*encode(m)) == m, except that a search request's filter comes back
+//   as canonical text (see decode_filter): `cn=x` -> `(cn=x)`,
+//   `(cn=\41)` -> `(cn=A)`, `(a=b**c)` -> `(a=b*c)`, ...;
+// - encode(*decode(*encode(m))) == encode(m), byte for byte.
 result<std::vector<std::byte>> encode(const message &m);
 result<void> encode(ber::writer &w, const message &m);
 
+// Which side sent the message being decoded.
+enum class origin {
+	any,// both requests and responses (tests, tools)
+	server,// responses only: what a client receives
+	client,// requests only: what a server (or mock server) receives
+};
+
+struct decode_options
+{
+	// Operations the peer may not send fail with unsupported_operation before
+	// they are decoded.
+	origin from = origin::any;
+	// ber::reader depth limit for the whole message.
+	std::size_t max_depth = ber::reader::default_max_depth;
+	// Limits for the filter of a search request.
+	filter_limits filter{};
+};
+
 // Decodes exactly one LDAPMessage, as delimited by ber::complete_message_size;
 // trailing bytes are an error (decode_error).
-result<message> decode(std::span<const std::byte> one_complete_message);
+result<message> decode(std::span<const std::byte> one_complete_message, const decode_options &options = {});
 
 // ---------------------------------------------------------------- typed controls
 
@@ -362,8 +389,8 @@ struct paged_results
 	friend bool operator==(const paged_results &, const paged_results &) = default;
 };
 
-// Throws std::invalid_argument for a negative size (programming error).
-control encode_paged_results(const paged_results &value, bool criticality = false);
+// Fails with encode_error for a negative size.
+result<control> encode_paged_results(const paged_results &value, bool criticality = false);
 // Fails with decode_error if `c` is not a paged results control or its value
 // is missing or malformed (trailing bytes after the SEQUENCE included; unknown
 // trailing SEQUENCE elements are skipped).

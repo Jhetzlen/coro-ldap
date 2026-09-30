@@ -7,12 +7,16 @@
 // - as a value: every builder accepts it, the result always parses, and
 //   `attr("cn") == v` decodes to an equality whose value is exactly v;
 // - as BER: if a filter decodes, its text re-encodes to BER that decodes to
-//   the same text.
+//   the same text;
+// - as a raw operand of &&, || and !: the combination only parses if the raw
+//   text parses on its own (malformed text cannot become valid by combining),
+//   and then the operand keeps its meaning (its BER appears in the result).
 #include "jhetz/ldap/filter.hpp"
 
 #define FUZZ_TARGET "filter_fuzz"
 #include "check.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -99,6 +103,35 @@ void check_ber(std::span<const std::byte> input)
 	LDAP_FUZZ_CHECK(must_decode(b) == *t);
 }
 
+bool parses(std::string_view text)
+{
+	ber::writer w;
+	return ldap::encode_filter(w, text).has_value();
+}
+
+void check_combinators(std::string_view text)
+{
+	using namespace ldap::filters;
+	const auto raw = ldap::filter::raw(std::string(text));
+	const auto other = attr("zz") == "1";
+	const bool alone = parses(text);
+	for (const auto &f : { raw && other, other || raw, !raw }) {
+		if (!parses(f.text)) continue;
+		LDAP_FUZZ_CHECK(alone);
+	}
+	// (!raw) is NOT around exactly the operand's BER. It may exceed the depth
+	// or element limit by one when the operand is at the limit.
+	if (!alone || !parses((!raw).text)) return;
+	const auto operand = must_encode(text);
+	const auto negated = must_encode((!raw).text);
+	ber::reader r(negated);
+	auto inner = r.enter(ber::context(2));
+	LDAP_FUZZ_CHECK(inner.has_value());
+	LDAP_FUZZ_CHECK(inner->remaining() == operand.size());
+	LDAP_FUZZ_CHECK(
+	  std::equal(operand.begin(), operand.end(), negated.end() - static_cast<std::ptrdiff_t>(operand.size())));
+}
+
 }// namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size)
@@ -107,5 +140,6 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 	check_text(text);
 	check_value(text);
 	check_ber(std::as_bytes(std::span(data, size)));
+	check_combinators(text);
 	return 0;
 }

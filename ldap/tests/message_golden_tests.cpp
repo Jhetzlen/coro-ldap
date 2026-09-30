@@ -208,7 +208,7 @@ TEST_CASE("golden: search with paged results control", "[message][golden]")
 		.op = ldap::search_request{ .base_object = "dc=example,dc=org",
 		  .scope = ldap::search_scope::whole_subtree,
 		  .filter = ldap::filter::raw("(objectClass=*)") },
-		.controls = { ldap::encode_paged_results({ .size = 100, .cookie = "" }, true) } });
+		.controls = { ldap::encode_paged_results({ .size = 100, .cookie = "" }, true).value() } });
 	// Non-critical: the DEFAULT FALSE criticality is omitted.
 	check_golden(search_paged_cookie,
 	  { .id = 13,
@@ -217,7 +217,7 @@ TEST_CASE("golden: search with paged results control", "[message][golden]")
 		  .types_only = true,
 		  .filter = ldap::filter::raw("(objectClass=*)"),
 		  .attributes = { "1.1" } },
-		.controls = { ldap::encode_paged_results({ .size = 50, .cookie = "\x01\x02\x03" }, false) } });
+		.controls = { ldap::encode_paged_results({ .size = 50, .cookie = "\x01\x02\x03" }, false).value() } });
 }
 
 TEST_CASE("golden: bind response with server SASL credentials", "[message][golden]")

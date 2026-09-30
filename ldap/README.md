@@ -15,10 +15,19 @@ C++23 LDAP client library, in progress. Design: [`docs/ldap/DESIGN.md`](../docs/
   `ldap_result` with `to_error()`), `encode()` / `decode()`, and the paged
   results control (RFC 2696). Wire strings stay `std::string`; see the header
   for the decoding rules (RFC 4511 section 4 extensibility, range checks).
+  `decode_options` limits what a peer may send: `from = origin::server`
+  (a client connection) rejects request operations, `origin::client` (a
+  server) rejects responses, before anything is decoded; plus the reader
+  depth and the filter limits.
 - `jhetz/ldap/filter.hpp`: `ldap::filter` (RFC 4515 text), escaping builders in
   `ldap::filters` (`attr("uid") == v && !attr("x").present()`), the RFC 4515
   parser to BER (`encode_filter`) and BER back to canonical text
-  (`decode_filter`). Filters nest at most `max_filter_depth` (24) levels.
+  (`decode_filter`). Filters nest at most `max_filter_depth` (24) levels and
+  have at most `max_filter_elements` (10,000) elements, both configurable
+  with `filter_limits`. `&&`, `||` and `!` wrap a `filter::raw` operand that
+  is not one parenthesized group, and mark it invalid if wrapping does not
+  make it one, so malformed raw text never turns into a different valid
+  filter.
 - `jhetz/ldap/dn.hpp`: `ldap::dn` (RFC 4514 parse / `to_string`, multi-valued
   RDNs, `parent()`, `child()`, compile-time checked literals). Syntax only: no
   matching-rule normalization of values.
