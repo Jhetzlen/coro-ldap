@@ -363,6 +363,11 @@ transport buffers); existing step 3 types are converted in step 4b.
   `run_async(ex, mr)`.
 - Step 4b includes a benchmark (large search response, default heap vs arena)
   to confirm the benefit.
+- BER parsing itself never allocates (`ber::reader` returns views into the
+  receive buffer). Decoded values are copied into the arena, so there is one
+  owning message type; a zero-copy view model (values pointing into the
+  receive buffer, like OpenLDAP's `berval`) was considered and rejected for
+  now, since it needs a second message type with stricter lifetimes.
 
 ## 9. Toolchain
 
