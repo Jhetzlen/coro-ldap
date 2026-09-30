@@ -195,6 +195,10 @@ TEST_CASE("URL hosts", "[url]")
 		CHECK(parse("ldap://[1:2:3:4:5:6:1.2.3.4]").host() == "1:2:3:4:5:6:1.2.3.4");
 		CHECK(parse("ldap://[fe80::1%25eth0]:389").host() == "fe80::1%eth0");
 		CHECK(parse("ldap://[fe80::1%25eth0]:389").to_string() == "ldap://[fe80::1%25eth0]:389");
+		// ':' (or '%') inside the zone stays encoded; only the address keeps literal ':'.
+		CHECK(parse("ldap://[fe80::1%25a%3Ab]").host() == "fe80::1%a:b");
+		CHECK(parse("ldap://[fe80::1%25a%3Ab]").to_string() == "ldap://[fe80::1%25a%3Ab]");
+		CHECK(parse("ldap://[fe80::1%25a%25b]").to_string() == "ldap://[fe80::1%25a%25b]");
 
 		for (auto bad : { "ldap://[::1",
 			   "ldap://[]",
@@ -428,6 +432,23 @@ TEST_CASE("URL allocations go through the given memory resource", "[url][pmr]")
 		ldap::url moved_elsewhere(ldap::url(*u, &counting), &arena);
 		CHECK(moved_elsewhere.get_allocator().resource() == &arena);
 		CHECK(moved_elsewhere == *u);
+
+		// Assignment keeps the target's resource, extensions included (also when
+		// the target had no extension value before).
+		{
+			auto target = ldap::url::parse("ldap://h/????short", &arena);
+			REQUIRE(target.has_value());
+			*target = *u;
+			CHECK(*target == *u);
+			CHECK(target->host().get_allocator().resource() == &arena);
+			CHECK(target->attributes()[0].get_allocator().resource() == &arena);
+			CHECK(target->extensions()[0].type.get_allocator().resource() == &arena);
+			CHECK(target->extensions()[0].value->get_allocator().resource() == &arena);
+			auto target2 = ldap::url::parse("ldap://h", &arena);
+			*target2 = ldap::url(*u, &counting);// move assignment across resources
+			CHECK(*target2 == *u);
+			CHECK(target2->extensions()[0].value->get_allocator().resource() == &arena);
+		}
 
 		// A pmr::vector<url> hands its resource to its elements.
 		std::pmr::vector<ldap::url> referrals(&arena);

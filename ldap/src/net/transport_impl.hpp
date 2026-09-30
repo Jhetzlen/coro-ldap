@@ -19,8 +19,11 @@ namespace jhetz::ldap::net {
 // the TLS layer (which refers to the socket), then the sockets.
 struct transport::impl
 {
+	explicit impl(std::pmr::memory_resource *r) : mr(r), name(r) {}
+
+	std::pmr::memory_resource *mr;// impl itself was allocated from it
 	kind type = kind::none;
-	std::pmr::string name{};
+	std::pmr::string name;
 	std::optional<boost::corosio::tcp_socket> tcp{};
 	std::optional<boost::corosio::local_stream_socket> local{};
 	std::optional<boost::corosio::tls_context> tls_context{};
@@ -31,7 +34,10 @@ struct transport::impl
 
 struct transport_access
 {
-	static transport make(transport::kind k, std::string_view name) { return transport::make(k, name); }
+	static transport make(transport::kind k, std::string_view name, std::pmr::memory_resource *mr)
+	{
+		return transport::make(k, name, mr);
+	}
 	static transport::impl &get(transport &t) noexcept { return *t.impl_; }
 };
 

@@ -85,16 +85,20 @@ class read_buffer
 // Returns the next complete LDAPMessage from `t`, reading as needed and
 // leaving any bytes after it in `buf`.
 //
-// Errors (context "read <transport name>: ..."):
-// - the transport's error_code for I/O failures; the peer closing the
-//   connection gives boost::capy::error::eof, with "connection closed" in
-//   the context when no PDU was started and "connection closed after N of M
-//   bytes" (or "... inside a PDU header") mid-PDU;
+// Errors (context "read <transport name>: ..."). After any error the caller
+// must drop the connection:
+// - the transport's error_code for I/O failures. The peer closing the
+//   connection gives boost::capy::error::eof, or cond::stream_truncated for
+//   a TLS peer that skips close_notify; between PDUs both read "connection
+//   closed" (the latter "... (without TLS close_notify)"), inside a PDU
+//   "connection closed after N of M bytes of a PDU" or "... inside a PDU
+//   header";
 // - message_too_large, decode_error (not a SEQUENCE, bad length) from the
-//   header, before the body is read;
-// - decode() errors for the PDU itself; the PDU is consumed, so the buffer
-//   stays in sync, but the connection should be dropped (the peer is
-//   broken or hostile);
+//   header, before the body is read. Nothing is consumed, so every later
+//   call fails the same way: the stream cannot be re-framed;
+// - decode() errors for a complete PDU. Only here is the bad PDU consumed,
+//   so a later call would start at the next PDU; the peer is still broken
+//   or hostile, so drop the connection anyway;
 // - canceled / timeout if the awaiting coroutine is stopped.
 // `t` and `buf` must outlive the task (normal when it is co_awaited at once).
 boost::capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_options options = {});

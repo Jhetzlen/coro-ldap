@@ -57,29 +57,45 @@ on by default) with the network parts. It depends on Corosio and Capy
   `capy::any_stream`. The TCP socket is owned separately from the TLS layer,
   which wraps it in reference mode, so StartTLS (step 7) can later add TLS to
   a plain connection in place; the header describes how.
-- `jhetz/ldap/net/connect.hpp`: `co_await net::connect(ioc, url, options)`
+- `jhetz/ldap/net/connect.hpp`: `co_await net::connect(ioc, url, options, mr)`
   returns `result<net::transport>`: resolves the host, tries each address,
   sets TCP_NODELAY, and for `ldaps://` runs the TLS handshake with
   certificate and host name verification, SNI and TLS 1.2+ by default
-  (`tls_options`: CA file / directory / PEM, client certificate, `server_name`,
-  and `certificate_verification::insecure_accept_any` as the explicit
-  opt-out). One `timeout` (default 30 s) bounds the whole connect. Errors keep
-  the system / TLS `error_code` and name the stage:
-  `connect ldaps://h:636: tls handshake: server certificate: hostname mismatch ...`.
-  `ldapi://` is tested on Linux (should work wherever Corosio has
-  `local_stream_socket`).
+  (`tls_options`: CA file / directory (`std::filesystem::path`) / PEM, client
+  certificate, `server_name`, and `certificate_verification::insecure_accept_any`
+  as the explicit opt-out). TLS configuration (files, certificates, `ca_dir`,
+  `server_name`) is checked before any network traffic.
+  - Timeout: `std::optional<milliseconds> timeout` (default 30 s) bounds the
+    whole connect; `nullopt` means no limit, zero or negative fails at once
+    with `capy::error::timeout`. The name lookup runs detached because
+    getaddrinfo cannot be interrupted, so the timeout holds while it blocks
+    (the io_context stays busy until it returns). With several addresses each
+    TCP attempt gets `min(remaining, max(remaining / addresses left, 1 s))`.
+  - Host name checks are OpenSSL's defaults, which Corosio does not let us
+    change: subjectAltName DNS entries, the subject CN only when there is no
+    subjectAltName, wildcards (also partial, `ld*.example.org`) in the
+    leftmost label; IP literals against iPAddress entries, without an IPv6
+    zone.
+  - Errors keep the system / TLS `error_code` and name the stage:
+    `connect ldaps://h:636: tls handshake: server certificate: hostname mismatch ...`.
+  - `ldapi://` is tested on Linux (should work wherever Corosio has
+    `local_stream_socket`).
+  - `mr` holds the transport's own block and name.
 - `jhetz/ldap/net/message_io.hpp`: `read_message(transport, read_buffer,
   options)` returns the next complete `ldap::message`, decoded with
   `origin::server` by default; bytes of the following PDUs stay in the
   `read_buffer`. A PDU that is not a SEQUENCE or declares more than
   `max_message_size` (16 MiB default) is rejected from its header, before its
-  body is read; the buffer grows to one PDU (or 16 KiB) at most.
-  `write_message` / `write_bytes` send.
+  body is read; the buffer grows to one PDU (or 16 KiB) at most. A TLS peer
+  closing without close_notify between PDUs reads as a close. After any
+  error the connection must be dropped. `write_message` / `write_bytes` send.
 
 Memory: new public types use `std::pmr` containers (DESIGN.md section 8):
-`url` is allocator-aware (`url::parse(text, &resource)`, allocator-extended
-copies) and `read_buffer` takes a `memory_resource*`; the defaults use the
-default resource, i.e. the heap. The step 3 types (message, filter, dn,
+`url` and `url_extension` are allocator-aware (`url::parse(text, &resource)`,
+allocator-extended copies, assignment keeps the target's resource),
+`read_buffer`, `connect` and `transport::wrap` take a `memory_resource*`; the
+defaults use the default resource, i.e. the heap. `tls_options` is a plain
+aggregate (configuration, not a hot path). The step 3 types (message, filter, dn,
 attribute, entry, error) are converted in step 4b.
 
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
@@ -132,6 +148,7 @@ cmake -S ldap -B build/ldap-fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
 cmake --build build/ldap-fuzz
 mkdir -p corpus && cp ldap/fuzz/corpus/message_fuzz/* corpus/
 UBSAN_OPTIONS=halt_on_error=1 build/ldap-fuzz/fuzzers/message_fuzz -max_total_time=60 corpus
+# url_fuzz has a dictionary: add -dict=ldap/fuzz/url.dict
 ```
 
 `fuzz/corpus/<target>/` holds the seed inputs (the same ones

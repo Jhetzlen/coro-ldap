@@ -52,6 +52,14 @@ endif()
 # globally: Corosio, Capy and Catch2 do not use <expected> and are compiled
 # unchanged. Only needed for the Clang (fuzz) build; DESIGN.md section 9 lists
 # Clang 19+ as the supported Clang.
+# Side effect: libstdc++ also keys other features on __cpp_concepts (e.g. the
+# conditionally trivial special members of std::variant / std::optional), so
+# our translation units and Corosio's see those class templates configured
+# differently: in principle an ODR mismatch where such a type crosses into
+# Corosio code compiled without the define. In practice the Clang 18 build
+# with jhetz::ldap_net passes the whole test suite; supported compilers
+# (GCC 13+, Clang 19+) never take this branch.
+
 set(jhetz_ldap_clang18_expected_workaround OFF)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19)
     set(jhetz_ldap_clang18_expected_workaround ON)
@@ -135,6 +143,7 @@ if(JHETZ_LDAP_BUILD_NET)
     add_library(jhetz_ldap_net STATIC
         src/net/connect.cpp
         src/net/message_io.cpp
+        src/net/tls.cpp
         src/net/transport.cpp
     )
     add_library(jhetz::ldap_net ALIAS jhetz_ldap_net)

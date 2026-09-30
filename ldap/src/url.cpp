@@ -207,8 +207,15 @@ namespace {
 	void append_host(std::pmr::string &out, url_scheme scheme, std::string_view host, bool ipv6)
 	{
 		if (ipv6) {
+			// address%zone: ':' stays literal in the address only; the zone
+			// (RFC 6874 ZoneID = 1*(unreserved / pct-encoded)) encodes it.
+			const std::size_t zone = host.find('%');
 			out += '[';
-			encode(out, host, [](char c) { return is_unreserved(c) || c == ':'; });
+			encode(out, host.substr(0, zone), [](char c) { return is_unreserved(c) || c == ':'; });
+			if (zone != std::string_view::npos) {
+				out += "%25";
+				encode(out, host.substr(zone + 1), is_unreserved);
+			}
 			out += ']';
 		} else if (scheme == url_scheme::ldapi) {
 			encode(out, host, is_unreserved);// '/' becomes %2F
@@ -217,25 +224,66 @@ namespace {
 		}
 	}
 
-	url_extension copy_extension(const url_extension &e, std::pmr::memory_resource *mr)
-	{
-		url_extension out{ std::pmr::string(e.type, mr), std::nullopt, e.critical };
-		if (e.value) out.value.emplace(*e.value, mr);
-		return out;
-	}
-
 }// namespace
+
+url_extension::url_extension(std::string_view type_,
+  std::optional<std::string_view> value_,
+  bool critical_,
+  const allocator_type &alloc)
+  : type(type_, alloc), critical(critical_)
+{
+	if (value_) value.emplace(*value_, alloc);
+}
+
+url_extension::url_extension(const url_extension &other, const allocator_type &alloc)
+  : type(other.type, alloc), critical(other.critical)
+{
+	if (other.value) value.emplace(*other.value, alloc);
+}
+
+url_extension::url_extension(url_extension &&other, const allocator_type &alloc)
+  : type(std::move(other.type), alloc), critical(other.critical)
+{
+	if (other.value) value.emplace(std::move(*other.value), alloc);
+}
+
+// std::optional's own assignment would copy-construct a missing value on the
+// default resource; keep it on this extension's resource instead.
+url_extension &url_extension::operator=(const url_extension &other)
+{
+	if (this == &other) return *this;
+	type = other.type;
+	if (!other.value)
+		value.reset();
+	else if (value)
+		*value = *other.value;
+	else
+		value.emplace(*other.value, type.get_allocator());
+	critical = other.critical;
+	return *this;
+}
+
+url_extension &url_extension::operator=(url_extension &&other)
+{
+	if (this == &other) return *this;
+	type = std::move(other.type);
+	if (!other.value)
+		value.reset();
+	else if (value)
+		*value = std::move(*other.value);
+	else
+		value.emplace(std::move(*other.value), type.get_allocator());
+	critical = other.critical;
+	return *this;
+}
 
 url::url(const allocator_type &alloc) : host_(alloc), attributes_(alloc), extensions_(alloc) {}
 
 url::url(const url &other, const allocator_type &alloc)
   : scheme_(other.scheme_), host_(other.host_, alloc), host_is_ipv6_(other.host_is_ipv6_), port_(other.port_),
 	dn_(other.dn_), attributes_(other.attributes_, alloc), scope_(other.scope_), filter_(other.filter_),
-	extensions_(alloc)
-{
-	extensions_.reserve(other.extensions_.size());
-	for (const auto &e : other.extensions_) extensions_.push_back(copy_extension(e, alloc.resource()));
-}
+	extensions_(other.extensions_, alloc)
+{}
 
 url::url(url &&other, const allocator_type &alloc)
   : url(other.get_allocator() == alloc ? url(std::move(other)) : url(other, alloc))
@@ -435,7 +483,7 @@ result<url> url::parse(std::string_view text, std::pmr::memory_resource *mr)
 	// extensions
 	if (count > 4 && !parts[4].empty()) {
 		auto r = split(parts[4], offsets[4], ',', [&](std::string_view piece, std::size_t off) -> result<void> {
-			url_extension e{ std::pmr::string(mr), std::nullopt, false };
+			url_extension e{ allocator_type(mr) };
 			if (!piece.empty() && piece[0] == '!') {
 				e.critical = true;
 				piece.remove_prefix(1);

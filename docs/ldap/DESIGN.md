@@ -1,7 +1,7 @@
 # LDAP client: API design
 
-Status: steps 1–3 implemented under `ldap/` (errors, BER codec, message model,
-filters, DN/attribute/entry). Sections 3–7 describe the API still to be built;
+Status: steps 1–4 implemented under `ldap/` (errors, BER codec, message model,
+filters, DN/attribute/entry, URLs, transports and connect). Sections 3–7 describe the API still to be built;
 "Implemented" notes say where the code differs from the original plan.
 `api_prototype.cpp` next to this file checks that the type-safety parts of
 section 4 compile as C++23 (GCC 13).
@@ -34,7 +34,7 @@ No raw strings for LDAP concepts. Each type validates when it is built.
 ```cpp
 ldap::dn        base{"ou=people,dc=example,dc=org"};  // literal: checked at compile time
 ldap::attribute mail{"mail"};                         // case-insensitive equality and hashing
-ldap::url       url{"ldaps://ldap.example.org"};      // not implemented yet
+auto            url = ldap::url::parse("ldaps://ldap.example.org");  // result<url>
 
 ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never throws
 ```
@@ -50,7 +50,13 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
   as servers send them (Active Directory's `member;range=0-1499`).
 - `entry`: untyped search result (DN text + ordered attributes) with
   case-insensitive `find()`; duplicate attributes from the server are merged.
-- `url`: `ldap://`, `ldaps://`, `ldapi://` (step 4, not implemented yet).
+- `url`: RFC 4516 (`ldap://`, `ldaps://`, `ldapi://`, IPv6 with RFC 6874
+  zones, dn/attributes/scope/filter/extensions with the critical `!`).
+  `parse(text, mr)` never throws; `to_string()` is canonical and
+  `parse(to_string()) == *this`. Absent and empty dn/scope/filter are kept
+  apart (referral chasing needs "absent = same as the original request").
+  Allocator-aware (`std::pmr`), including its extensions. No literal
+  constructor: use `parse`.
 - `bytes`: not implemented; wire values are `std::string` holding raw octets
   for now (see section 10).
 - Literals go through `consteval` helper types (`dn::literal`,
@@ -255,8 +261,8 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock` |
-| system / TLS | from Corosio | `connection_refused`, timeouts, certificate errors |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock` |
+| system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 LDAP result code 0 (success) is not an `errc` value: a successful result is
 the absence of an error. Until `dn`/`url` exist, `matched_dn` and `referrals`
@@ -325,6 +331,38 @@ ldap::sync::client c{url};                         // owns an io_context + 1 I/O
 auto people = c.search_as<person>({...});          // same request/result types
 ```
 
+Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
+- `net::connect(ctx, url, connect_options, mr)` returns a `net::transport`
+  over TCP, TLS or a Unix socket. One deadline (`timeout`, an
+  `optional<milliseconds>`, default 30 s; `nullopt` = no limit; zero or
+  negative fails at once) covers name lookup, every TCP attempt and the TLS
+  handshake. The lookup runs detached so a slow DNS server cannot hold
+  `connect` past the deadline (the io_context itself stays busy until the
+  lookup thread returns). Each address gets
+  `min(remaining, max(remaining / addresses left, 1 s))`, so one
+  black-holed address does not starve the others. Errors name the stage:
+  `connect ldaps://h:636: tls handshake: ...`.
+- TLS: verification is on by default (Corosio's own default is off), with
+  the system trust store, SNI, host name checks (IP literals against iPAddress
+  entries, zone stripped) and TLS 1.2 minimum. Options: `ca_file`, `ca_dir`,
+  `ca_pem`, client `cert_file` + `key_file`, `server_name`; the only opt-out
+  is `certificate_verification::insecure_accept_any`. Configuration errors
+  (bad PEM, missing `ca_dir`) fail before any network traffic. Host matching
+  follows OpenSSL defaults, which Corosio does not let us change: CN fallback
+  when there is no SAN, and partial wildcards in the leftmost label.
+  CA bundles are split by us because Corosio loads only the first
+  certificate of a bundle (worth reporting upstream).
+- StartTLS readiness: TLS is a reference-mode `openssl_stream` over the
+  socket the transport owns; step 7 builds it on a live plain transport with
+  the same `detail::make_tls_setup` / `detail::tls_handshake`. The read
+  buffer must be empty at the upgrade.
+- `net::read_message` / `write_message`: rejects a PDU whose first octet is
+  not SEQUENCE or whose declared size exceeds `read_options::max_message_size`
+  (16 MiB) from the header alone; decodes with `origin::server`; a TLS close
+  without close_notify between PDUs reads as a normal close. After any error
+  the caller drops the connection (header errors repeat, they are not
+  consumed). No timeout of its own: step 5 cancels with stop tokens.
+
 - `sync::client` methods start the coroutine on its internal I/O thread with
   `spawn_future` and wait on the `result_future` (see
   `examples/corosio/result_future.hpp`), so any number of caller threads can
@@ -339,6 +377,11 @@ auto people = c.search_as<person>({...});          // same request/result types
 - Public types (`dn`, `entry`, `error`, user structs, requests) own their data
   and are regular. Nothing returned to the user points into a receive buffer.
 - Zero-copy views exist only inside the BER decoder.
+- `std::pmr` status: `url` (fully allocator-aware), the read buffer and the
+  transport (allocated from the resource given to `net::connect`) are done.
+  `tls_options` is a plain aggregate (configuration, not hot path) with
+  `std::filesystem::path` for files. The message model, filters, `dn`,
+  `attribute`, `entry`, `ber::writer` and `error` follow in step 4b.
 - One `connection` runs on one executor. Starting operations from other
   threads is done by posting to that executor (the sync facade does this for
   you).
@@ -374,7 +417,10 @@ transport buffers); existing step 3 types are converted in step 4b.
 - C++23: `std::expected`, deducing `this`, `std::print` where available.
 - Compilers: GCC 13+; Clang 19+ (Clang 18 cannot use libstdc++ 13's
   `<expected>`); MSVC 17.8+.
-- Corosio and Capy pinned by commit, as in `examples/corosio/`.
+- Corosio and Capy pinned by commit, as in `examples/corosio/`, used only by
+  `jhetz_ldap_net` (option `JHETZ_LDAP_BUILD_NET`, off in fuzz builds);
+  it also needs OpenSSL. The codec library `jhetz_ldap` has no dependencies.
+- The Clang < 19 `<expected>` workaround is scoped to our own targets.
 - C++26 (reflection, `std::execution` interop) on a separate branch.
 
 ## 10. Message model (implemented, step 3)
@@ -418,8 +464,13 @@ same codec serve the client and a mock server for tests.
 
 ## Open questions
 
-- Step 5 (connection): make the maximum message size configurable (16 MiB
-  default today) and decide whether to lower it or add per-entry limits. A
+- Happy Eyeballs (RFC 8305) instead of sequential per-address attempts.
+- Stricter TLS host matching (no CN fallback, no partial wildcards) needs
+  Corosio to expose the OpenSSL check flags.
+
+- Step 5 (connection): the maximum message size is configurable
+  (`read_options::max_message_size`, 16 MiB default); decide whether to lower
+  the default or add per-entry limits. A
   16 MiB SearchResultEntry of empty values legitimately decodes to about
   300 MB (linear, about 12-18x the message size).
 - Filter element cap counts filter nodes, not substring parts: one

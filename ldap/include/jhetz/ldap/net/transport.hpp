@@ -14,8 +14,12 @@
 // and custom streams, transport::wrap().
 //
 // Ownership: the transport owns the socket, the TLS layer (if any) and the
-// type-erased view, in one heap block, so their addresses stay stable when the
-// transport itself is moved (the TLS layer and the view point into it).
+// type-erased view, in one block allocated from the memory resource given to
+// connect() or wrap() (default: the default resource), so their addresses stay
+// stable when the transport itself is moved (the TLS layer and the view point
+// into it). name() lives on the same resource. Corosio's and Capy's own
+// internals (socket state, the any_stream's cached awaitables, the OpenSSL
+// session) still allocate with operator new.
 //
 // StartTLS (step 7, not implemented): the design keeps the plain tcp_socket
 // as a separate member for this. start_tls() will require type() ==
@@ -28,7 +32,8 @@
 // and re-points stream() at the TLS layer. The socket is never moved, so
 // nothing referring to it is invalidated. ldaps:// already uses exactly this
 // layering (reference-mode TLS over the owned socket), so StartTLS reuses
-// the ldaps:// handshake code.
+// the ldaps:// handshake code: detail::make_tls_setup() and
+// detail::tls_handshake() in src/net/tls.hpp.
 //
 // Threading (Capy/Corosio rules): at most one read and one write may be in
 // flight at a time, and all operations must run on the executor of the
@@ -42,6 +47,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -69,9 +75,12 @@ class transport
 	// Takes ownership of any capy::Stream (kind::custom). `name` is used in
 	// error contexts ("read <name>: ..."). close() and cancel() do nothing on
 	// a custom stream; the stream's own means of closing apply.
-	template<boost::capy::Stream S> static transport wrap(S stream, std::string_view name = "custom stream")
+	template<boost::capy::Stream S>
+	static transport wrap(S stream,
+	  std::string_view name = "custom stream",
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	{
-		transport t = make(kind::custom, name);
+		transport t = make(kind::custom, name, mr);
 		t.set_custom(boost::capy::any_stream(std::move(stream)));
 		return t;
 	}
@@ -100,10 +109,11 @@ class transport
   private:
 	friend struct transport_access;
 
-	static transport make(kind k, std::string_view name);
+	static transport make(kind k, std::string_view name, std::pmr::memory_resource *mr);
+	void destroy() noexcept;
 	void set_custom(boost::capy::any_stream s);
 
-	std::unique_ptr<impl> impl_;
+	impl *impl_ = nullptr;// allocated from the resource it records
 };
 
 }// namespace jhetz::ldap::net

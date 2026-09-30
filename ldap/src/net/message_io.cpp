@@ -42,6 +42,9 @@ std::span<std::byte> read_buffer::prepare(std::size_t n)
 			// What is needed, at least min_read: read_message asks for the
 			// rest of the current PDU, so the buffer never exceeds one PDU
 			// (or min_read) and grows at most once per PDU.
+			// The new vector is zero-filled; for at most one PDU per growth
+			// that costs little next to receiving it, and keeps this a plain
+			// pmr container.
 			std::pmr::vector<std::byte> bigger(std::max(used + n, min_read), buf_.get_allocator());
 			if (used != 0) std::memcpy(bigger.data(), buf_.data() + begin_, used);
 			buf_.swap(bigger);
@@ -99,13 +102,19 @@ capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_op
 		// fails; treat a stream that breaks that rule as closed, not as a loop.
 		if (!ec && n == 0) ec = capy::error::eof;
 		if (!ec) continue;
-		if (n != 0 && ec == capy::cond::eof) continue;// use the bytes; eof again on the next read
+		// A TLS peer that closes without close_notify gives stream_truncated.
+		// Between PDUs no data is lost (LDAP frames every message), so it is
+		// reported like a plain close; inside a PDU it is a truncation. The
+		// original error code is kept either way.
+		const bool closed = ec == capy::cond::eof || ec == capy::cond::stream_truncated;
+		if (n != 0 && closed) continue;// use the bytes; the close shows again on the next read
 
 		std::string context = where;
-		if (ec == capy::cond::eof) {
+		if (closed) {
 			const std::size_t have = buf.size();
 			if (have == 0)
-				context += ": connection closed";
+				context +=
+				  ec == capy::cond::eof ? ": connection closed" : ": connection closed (without TLS close_notify)";
 			else if (declared)
 				context += ": connection closed after " + std::to_string(have) + " of " + std::to_string(*declared)
 						   + " bytes of a PDU";

@@ -70,12 +70,31 @@ enum class url_scheme : std::uint8_t {
 std::string_view to_string(url_scheme s) noexcept;
 
 // One RFC 4516 extension: `[!]type[=value]`.
-// An aggregate; url copies it into its own resource.
+// Allocator-aware like url: in a url (a pmr::vector<url_extension>) the
+// strings live on the url's resource; assignment keeps the target's resource.
 struct url_extension
 {
+	using allocator_type = std::pmr::polymorphic_allocator<>;
+
 	std::pmr::string type{};// descriptor or numeric OID, e.g. "bindname", "1.2.3.4"
 	std::optional<std::pmr::string> value{};// decoded; nullopt without '=', "" for "type="
 	bool critical = false;// '!' prefix: a client that does not know it must not use the URL
+
+	url_extension() = default;
+	explicit url_extension(const allocator_type &alloc) : type(alloc) {}
+	url_extension(std::string_view type_,
+	  std::optional<std::string_view> value_ = std::nullopt,
+	  bool critical_ = false,
+	  const allocator_type &alloc = {});
+	url_extension(const url_extension &) = default;// default resource, like any pmr copy
+	url_extension(url_extension &&) noexcept = default;
+	url_extension(const url_extension &other, const allocator_type &alloc);
+	url_extension(url_extension &&other, const allocator_type &alloc);
+	url_extension &operator=(const url_extension &other);
+	url_extension &operator=(url_extension &&other);
+	~url_extension() = default;
+
+	allocator_type get_allocator() const noexcept { return type.get_allocator(); }
 
 	friend bool operator==(const url_extension &, const url_extension &) = default;
 };
@@ -95,6 +114,7 @@ class url
 	url(url &&) noexcept = default;
 	url(const url &other, const allocator_type &alloc);
 	url(url &&other, const allocator_type &alloc);
+	// Assignment keeps this url's resource for everything it owns.
 	url &operator=(const url &) = default;
 	url &operator=(url &&) = default;
 	~url() = default;

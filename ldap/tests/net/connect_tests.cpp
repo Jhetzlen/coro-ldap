@@ -2,12 +2,15 @@
 // CA generated at run time) and Unix domain sockets. No external server, no
 // fixed ports (the kernel picks them), no sleeps: every wait ends on an
 // event, and the timeouts tested are the library's own.
+#include "../../src/net/tls.hpp"
+#include "../counting_resource.hpp"
 #include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "net_test_support.hpp"
 
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/cond.hpp>
+#include <boost/capy/test/stream.hpp>
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/ipv4_address.hpp>
 #include <boost/corosio/local_endpoint.hpp>
@@ -19,7 +22,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <chrono>
+#include <filesystem>
 #include <optional>
+#include <string_view>
+#include <thread>
+
+#include <dlfcn.h>
+#include <netdb.h>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -33,6 +43,46 @@ using Catch::Matchers::ContainsSubstring;
 using Catch::Matchers::EndsWith;
 using Catch::Matchers::StartsWith;
 using ldap::client_errc;
+
+// ---------------------------------------------------------------- DNS seam
+//
+// getaddrinfo is interposed for this test binary (Corosio calls it on a pool
+// thread; the real one is reached through RTLD_NEXT, via the sanitizer's own
+// interceptor when there is one). Names outside these two test prefixes go
+// to the real resolver unchanged.
+//   slow-dns-*   answers 127.0.0.1 after slow_dns_delay: a lookup that no
+//                timeout can interrupt
+//   two-addr-*   answers 127.0.0.2, then 127.0.0.1 (same port)
+namespace {
+constexpr auto slow_dns_delay = std::chrono::milliseconds(1000);
+}
+
+extern "C" int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res)
+{
+	using fn = int (*)(const char *, const char *, const struct addrinfo *, struct addrinfo **);
+	static const auto real = reinterpret_cast<fn>(dlsym(RTLD_NEXT, "getaddrinfo"));
+	const std::string_view name = node != nullptr ? node : "";
+	if (name.starts_with("slow-dns-")) {
+		std::this_thread::sleep_for(slow_dns_delay);
+		return real("127.0.0.1", service, hints, res);
+	}
+	if (name.starts_with("two-addr-")) {
+		struct addrinfo v4 = hints != nullptr ? *hints : addrinfo{};
+		v4.ai_family = AF_INET;
+		struct addrinfo *first = nullptr, *second = nullptr;
+		if (int rc = real("127.0.0.2", service, &v4, &first); rc != 0) return rc;
+		if (int rc = real("127.0.0.1", service, &v4, &second); rc != 0) {
+			freeaddrinfo(first);
+			return rc;
+		}
+		struct addrinfo *tail = first;
+		while (tail->ai_next != nullptr) tail = tail->ai_next;
+		tail->ai_next = second;// glibc frees the nodes one by one, so chaining is fine
+		*res = first;
+		return 0;
+	}
+	return real(node, service, hints, res);
+}
 
 namespace {
 
@@ -162,10 +212,10 @@ TEST_CASE("connect ldap:// to a loopback server and exchange messages", "[net][c
 	CHECK(server.get() == "");
 }
 
-TEST_CASE("connect without a time limit", "[net][connect][tcp]")
+TEST_CASE("connect timeout semantics", "[net][connect][tcp][timeout]")
 {
-	for (auto limit :
-	  { std::chrono::milliseconds(0), std::chrono::milliseconds(-5), std::chrono::milliseconds::max() }) {
+	// nullopt and values too large for the clock: no limit.
+	for (auto limit : { std::optional<std::chrono::milliseconds>{}, std::optional(std::chrono::milliseconds::max()) }) {
 		corosio::io_context ioc;
 		tcp_server srv(ioc);
 		outcome<std::string> server, client;
@@ -175,6 +225,87 @@ TEST_CASE("connect without a time limit", "[net][connect][tcp]")
 		CHECK(client.get() == "");
 		CHECK(server.get() == "");
 	}
+	// Zero or negative: fails at once, before any traffic.
+	for (auto limit : { std::chrono::milliseconds(0), std::chrono::milliseconds(-5) }) {
+		corosio::io_context ioc;
+		auto t = connect_to(ioc, "ldap://127.0.0.1:1", { .timeout = limit });
+		REQUIRE_FALSE(t.has_value());
+		CHECK(t.error().code == capy::cond::timeout);
+		CHECK(t.error().context
+			  == "connect ldap://127.0.0.1:1: the connect timeout (" + std::to_string(limit.count())
+				   + " ms) is not positive");
+	}
+}
+
+TEST_CASE("connect timeout holds while the name lookup blocks", "[net][connect][timeout][dns]")
+{
+	// Timestamped when connect() returns, not when the io_context runs out
+	// of work: Corosio keeps the context busy until getaddrinfo returns.
+	std::chrono::steady_clock::duration elapsed{};
+	{
+		corosio::io_context ioc;
+		outcome<ldap::error> out;
+		spawn(
+		  ioc,
+		  [](corosio::io_context &io, std::chrono::steady_clock::duration &took) -> capy::task<ldap::error> {
+			  const auto start = std::chrono::steady_clock::now();
+			  auto t = co_await net::connect(
+				io, *ldap::url::parse("ldap://slow-dns-a.test:1"), { .timeout = std::chrono::milliseconds(200) });
+			  took = std::chrono::steady_clock::now() - start;
+			  co_return t ? ldap::error{} : t.error();
+		  }(ioc, elapsed),
+		  out);
+		drive(ioc);
+		const auto &e = out.get();
+		CHECK(e.code == capy::cond::timeout);
+		CHECK(e.context
+			  == "connect ldap://slow-dns-a.test:1: resolve slow-dns-a.test: gave up after the 200 ms connect timeout");
+		// drive() waits for the lookup to finish (Corosio counts it as work),
+		// so the detached lookup completes and frees everything here.
+	}
+	INFO("connect returned after " << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() << " ms");
+	CHECK(elapsed >= std::chrono::milliseconds(150));
+	CHECK(elapsed < std::chrono::milliseconds(700));// the lookup itself takes 1000 ms
+
+	// A slow lookup within the budget still succeeds.
+	corosio::io_context ioc;
+	tcp_server srv(ioc);
+	outcome<std::string> server, client;
+	spawn(ioc, accept_and_serve(srv.acc), server);
+	spawn(ioc, exchange(ioc, srv.url("ldap", "slow-dns-b.test"), { .timeout = std::chrono::seconds(10) }), client);
+	drive(ioc);
+	CHECK(client.get() == "");
+	CHECK(server.get() == "");
+}
+
+TEST_CASE("each address gets a share of the connect timeout", "[net][connect][tcp][timeout][dns]")
+{
+	// two-addr-* resolves to 127.0.0.2 first, then 127.0.0.1. On 127.0.0.2
+	// a full backlog-0 listener drops the SYN (see the TCP timeout test), so
+	// that attempt hangs; with a 1500 ms budget it may use max(1500/2, 1000)
+	// = 1000 ms, and 127.0.0.1 still gets the remaining 500 ms.
+	corosio::io_context ioc;
+	tcp_server good(ioc);
+	auto [aec, loopback2] = corosio::make_ipv4_address("127.0.0.2");
+	REQUIRE_FALSE(aec);
+	corosio::tcp_acceptor blackhole(ioc, corosio::endpoint(loopback2, good.port), 0);
+	corosio::tcp_socket filler(ioc);
+	auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::io_result<>> {
+		co_return co_await s.connect(ep);
+	}(filler, blackhole.local_endpoint()));
+	REQUIRE_FALSE(fec);
+
+	outcome<std::string> server, client;
+	spawn(ioc, accept_and_serve(good.acc), server);
+	const auto start = std::chrono::steady_clock::now();
+	spawn(
+	  ioc, exchange(ioc, good.url("ldap", "two-addr-a.test"), { .timeout = std::chrono::milliseconds(1500) }), client);
+	drive(ioc);
+	const auto elapsed = std::chrono::steady_clock::now() - start;
+	CHECK(client.get() == "");
+	CHECK(server.get() == "");
+	CHECK(elapsed >= std::chrono::milliseconds(900));// the first address used its share
+	CHECK(elapsed < std::chrono::milliseconds(1500));
 }
 
 TEST_CASE("connect ldap://localhost resolves the name", "[net][connect][tcp]")
@@ -343,9 +474,7 @@ TEST_CASE("ldaps:// with the CA configured", "[net][connect][tls]")
 		temp_path bundle(".pem");
 		bundle.write(other.ca_pem() + pki().ca_pem());
 		spawn(ioc, accept_and_serve(srv.acc, server_context(localhost_cert())), server);
-		spawn(ioc,
-		  exchange(ioc, srv.url("ldaps", "localhost"), { .tls = { .ca_file = std::pmr::string(bundle.str()) } }, true),
-		  client);
+		spawn(ioc, exchange(ioc, srv.url("ldaps", "localhost"), { .tls = { .ca_file = bundle.str() } }, true), client);
 		drive(ioc);
 	}
 	SECTION("server_name for a certificate that does not name the address")
@@ -440,9 +569,7 @@ TEST_CASE("ldaps:// client certificate", "[net][connect][tls]")
 		spawn(ioc,
 		  exchange(ioc,
 			srv.url("ldaps"),
-			{ .tls = { .ca_pem = std::pmr::string(pki().ca_pem()),
-				.cert_file = std::pmr::string(cert.str()),
-				.key_file = std::pmr::string(key.str()) } },
+			{ .tls = { .ca_pem = std::pmr::string(pki().ca_pem()), .cert_file = cert.str(), .key_file = key.str() } },
 			true),
 		  client);
 		drive(ioc);
@@ -500,4 +627,115 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	auto not_pem = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_pem = "garbage" } });
 	REQUIRE_FALSE(not_pem.has_value());
 	CHECK_THAT(not_pem.error().context, ContainsSubstring("tls: ca_pem: no PEM certificate found"));
+
+	// PEM armour around garbage: parsed now, not at handshake time.
+	const std::string broken = "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n";
+	auto bad_cert =
+	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_pem = std::pmr::string(pki().ca_pem() + broken) } });
+	REQUIRE_FALSE(bad_cert.has_value());
+	CHECK(bad_cert.error().code == std::errc::invalid_argument);
+	CHECK_THAT(bad_cert.error().context, EndsWith("tls: ca_pem: certificate 2 of 2 does not parse"));
+
+	temp_path bad_file(".pem");
+	bad_file.write(broken);
+	auto bad_ca_file = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_file = bad_file.str() } });
+	REQUIRE_FALSE(bad_ca_file.has_value());
+	CHECK_THAT(bad_ca_file.error().context, EndsWith(": certificate 1 of 1 does not parse"));
+
+	auto no_dir = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_dir = "/nonexistent/certs" } });
+	REQUIRE_FALSE(no_dir.has_value());
+	CHECK(no_dir.error().code == std::errc::no_such_file_or_directory);
+	CHECK_THAT(no_dir.error().context, EndsWith("tls: ca_dir /nonexistent/certs"));
+
+	auto file_dir = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_dir = bad_file.str() } });
+	REQUIRE_FALSE(file_dir.has_value());
+	CHECK(file_dir.error().code == std::errc::not_a_directory);
+
+	for (std::string_view name : { std::string_view("ldap\0.example.org", 17), std::string_view("a\nb") }) {
+		auto bad_name = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .server_name = std::pmr::string(name) } });
+		REQUIRE_FALSE(bad_name.has_value());
+		CHECK(bad_name.error().code == std::errc::invalid_argument);
+		CHECK(bad_name.error().context == "connect ldaps://127.0.0.1:1: tls: control character in server_name");
+	}
+}
+
+TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
+{
+	// The server answers, then drops the TCP connection without a TLS
+	// close_notify. Between PDUs that reads as a plain close.
+	corosio::io_context ioc;
+	tcp_server srv(ioc);
+	outcome<std::string> server, client;
+	spawn(
+	  ioc,
+	  [](corosio::tcp_acceptor &acc, corosio::tls_context ctx) -> capy::task<std::string> {
+		  auto [ec, peer] = co_await acc.accept();
+		  if (ec) co_return "accept: " + ec.message();
+		  corosio::openssl_stream stream(std::move(peer), ctx);
+		  auto [hec] = co_await stream.handshake(corosio::tls_role::server);
+		  if (hec) co_return "handshake: " + hec.message();
+		  auto t = net::transport::wrap(std::move(stream), "server");
+		  if (auto w = co_await net::write_message(t, bind_response_msg(1, "bye")); !w) co_return w.error().message();
+		  co_return "";// the transport and its socket go away: no close_notify
+	  }(srv.acc, server_context(localhost_cert())),
+	  server);
+	spawn(
+	  ioc,
+	  [](corosio::io_context &io, std::string text) -> capy::task<std::string> {
+		  auto u = ldap::url::parse(text);
+		  auto t = co_await net::connect(io, *u, { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()) } });
+		  if (!t) co_return "connect: " + t.error().message();
+		  net::read_buffer buf;
+		  auto first = co_await net::read_message(*t, buf);
+		  if (!first || *first != bind_response_msg(1, "bye")) co_return "first read failed";
+		  auto second = co_await net::read_message(*t, buf);
+		  if (second) co_return "second read succeeded";
+		  co_return second.error().context + " | " + second.error().code.message();
+	  }(ioc, srv.url("ldaps")),
+	  client);
+	drive(ioc);
+	CHECK(server.get() == "");
+	const std::string result = client.get();
+	INFO(result);
+	// Corosio reports the missing close_notify as cond::stream_truncated.
+	CHECK(result == "read " + srv.url("ldaps") + ": connection closed (without TLS close_notify) | stream truncated");
+}
+
+TEST_CASE("connect allocates the transport from the given resource", "[net][connect][pmr]")
+{
+	jhetz::ldap::test::counting_resource counting;
+	{
+		corosio::io_context ioc;
+		tcp_server srv(ioc);
+		outcome<void> server;
+		spawn(ioc, accept_and_close(srv.acc), server);
+		auto u = ldap::url::parse(srv.url("ldap"));
+		REQUIRE(u.has_value());
+		auto t = run(ioc, net::connect(ioc, *u, {}, &counting));
+		REQUIRE(t.has_value());
+		server.get();
+		CHECK(t->name().get_allocator().resource() == &counting);
+		CHECK(counting.allocations() >= 2);// the transport block and its name
+		CHECK(counting.outstanding() > 0);
+	}
+	CHECK(counting.outstanding() == 0);
+
+	jhetz::ldap::test::counting_resource for_wrap;
+	{
+		auto [a, b] = capy::test::make_stream_pair();
+		auto t = net::transport::wrap(std::move(a), "a custom stream with a long name", &for_wrap);
+		CHECK(t.name().get_allocator().resource() == &for_wrap);
+		CHECK(for_wrap.allocations() == 2);
+	}
+	CHECK(for_wrap.outstanding() == 0);
+}
+
+TEST_CASE("TLS peer name: server_name, else the host without an IPv6 zone", "[net][connect][tls]")
+{
+	using net::detail::tls_peer_name;
+	CHECK(tls_peer_name("ldap.example.org", {}) == "ldap.example.org");
+	CHECK(tls_peer_name("127.0.0.1", {}) == "127.0.0.1");
+	CHECK(tls_peer_name("::1", {}) == "::1");
+	CHECK(tls_peer_name("fe80::1%eth0", {}) == "fe80::1");
+	CHECK(tls_peer_name("fe80::1%eth0", { .server_name = "ldap.example.org" }) == "ldap.example.org");
 }

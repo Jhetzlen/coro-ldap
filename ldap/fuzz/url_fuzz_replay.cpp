@@ -26,6 +26,7 @@ int main(int argc, char **argv)
 		"ldaps://127.0.0.1:636/cn=J%C3%BCrgen,dc=x",
 		"ldap://h/????x,y=a%2Cb",
 		"ldap://",
+		"ldap://[fe80::1%25a%3Ab]",// zone with an encoded ':' (review finding)
 	};
 	fuzz::replay_config cfg{ .name = "url_fuzz_replay",
 		.extension = ".txt",

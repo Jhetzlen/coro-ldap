@@ -5,11 +5,14 @@
 
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/cond.hpp>
+#include <boost/capy/error.hpp>
+#include <boost/capy/ex/io_env.hpp>
 #include <boost/capy/test/stream.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <coroutine>
 #include <cstddef>
 #include <limits>
 #include <memory>
@@ -40,6 +43,49 @@ struct recording_stream
 		return inner.read_some(buffers);
 	}
 	template<capy::ConstBufferSequence CB> auto write_some(CB buffers) { return inner.write_some(buffers); }
+};
+
+// Replays a script of read results: (error, bytes) per read_some; completes
+// at once. Writes are accepted and dropped.
+struct scripted_stream
+{
+	struct step
+	{
+		std::error_code ec{};
+		std::string bytes{};
+	};
+	std::shared_ptr<std::vector<step>> script;
+	std::size_t next = 0;
+
+	template<capy::MutableBufferSequence MB> auto read_some(MB buffers)
+	{
+		struct awaitable
+		{
+			scripted_stream *self;
+			MB buffers;
+			bool await_ready() const noexcept { return true; }
+			std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, const capy::io_env *) { return h; }
+			capy::io_result<std::size_t> await_resume()
+			{
+				if (self->next == self->script->size()) return { capy::error::eof, 0 };
+				const auto &st = (*self->script)[self->next++];
+				const auto n = capy::buffer_copy(buffers, capy::const_buffer(st.bytes.data(), st.bytes.size()));
+				return { st.ec, n };
+			}
+		};
+		return awaitable{ this, buffers };
+	}
+	template<capy::ConstBufferSequence CB> auto write_some(CB buffers)
+	{
+		struct awaitable
+		{
+			std::size_t n;
+			bool await_ready() const noexcept { return true; }
+			std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, const capy::io_env *) { return h; }
+			capy::io_result<std::size_t> await_resume() { return { std::error_code{}, n }; }
+		};
+		return awaitable{ capy::buffer_size(buffers) };
+	}
 };
 
 // A client transport over one end of a stream pair; `peer` is the server end
@@ -404,5 +450,65 @@ TEST_CASE("read_buffer allocates from the given memory resource", "[net][read_me
 			REQUIRE(r.has_value());
 			CHECK(r->id == i);
 		}
+	}
+}
+
+TEST_CASE("read_message: header errors repeat until the connection is dropped", "[net][read_message]")
+{
+	mock m;
+	m.peer->provide(std::string("\x04\x01\x00", 3) + bytes_of(bind_response_msg(1)));
+	auto first = m.read();
+	auto second = m.read();
+	REQUIRE_FALSE(first.has_value());
+	REQUIRE_FALSE(second.has_value());
+	CHECK(first.error() == second.error());// nothing consumed: the stream cannot be re-framed
+	CHECK(m.buf.size() == 3 + bytes_of(bind_response_msg(1)).size());
+
+	mock big;
+	big.peer->provide(std::string("\x30\x84\x7f\x00\x00\x00", 6));
+	auto a = big.read();
+	auto b = big.read();
+	REQUIRE_FALSE(a.has_value());
+	CHECK(a.error().code == client_errc::message_too_large);
+	CHECK(a.error() == b.error());
+	CHECK(big.reads->size() == 1);// the second call fails from the buffer, without reading
+}
+
+TEST_CASE("read_message: TLS truncation (no close_notify)", "[net][read_message]")
+{
+	const std::error_code truncated = capy::error::stream_truncated;
+	const auto one = bytes_of(bind_response_msg(1));
+	auto run_script = [](std::vector<scripted_stream::step> steps) {
+		corosio::io_context ioc;
+		auto t = net::transport::wrap(
+		  scripted_stream{ std::make_shared<std::vector<scripted_stream::step>>(std::move(steps)) }, "tls");
+		net::read_buffer buf;
+		std::vector<ldap::result<ldap::message>> out;
+		for (int i = 0; i < 2; ++i) out.push_back(run(ioc, net::read_message(t, buf)));
+		return out;
+	};
+
+	SECTION("between PDUs: reported like a close, code kept")
+	{
+		auto r = run_script({ { {}, one }, { truncated, "" } });
+		REQUIRE(r[0].has_value());
+		REQUIRE_FALSE(r[1].has_value());
+		CHECK(r[1].error().code == truncated);
+		CHECK(r[1].error().context == "read tls: connection closed (without TLS close_notify)");
+	}
+	SECTION("with the last bytes of a PDU")
+	{
+		auto r = run_script({ { truncated, one } });// data and the truncation in one read
+		REQUIRE(r[0].has_value());
+		CHECK(*r[0] == bind_response_msg(1));
+		REQUIRE_FALSE(r[1].has_value());
+	}
+	SECTION("inside a PDU: an error with the progress")
+	{
+		auto r = run_script({ { {}, one.substr(0, 5) }, { truncated, "" } });
+		REQUIRE_FALSE(r[0].has_value());
+		CHECK(r[0].error().code == truncated);
+		CHECK(r[0].error().context
+			  == "read tls: connection closed after 5 of " + std::to_string(one.size()) + " bytes of a PDU");
 	}
 }

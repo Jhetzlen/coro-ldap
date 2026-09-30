@@ -5,14 +5,32 @@
 namespace jhetz::ldap::net {
 
 transport::transport() noexcept = default;
-transport::transport(transport &&) noexcept = default;
-transport &transport::operator=(transport &&) noexcept = default;
-transport::~transport() = default;
 
-transport transport::make(kind k, std::string_view name)
+transport::transport(transport &&other) noexcept : impl_(std::exchange(other.impl_, nullptr)) {}
+
+transport &transport::operator=(transport &&other) noexcept
+{
+	if (this != &other) {
+		destroy();
+		impl_ = std::exchange(other.impl_, nullptr);
+	}
+	return *this;
+}
+
+transport::~transport() { destroy(); }
+
+void transport::destroy() noexcept
+{
+	if (impl_ == nullptr) return;
+	std::pmr::polymorphic_allocator<impl> alloc(impl_->mr);
+	alloc.delete_object(std::exchange(impl_, nullptr));
+}
+
+transport transport::make(kind k, std::string_view name, std::pmr::memory_resource *mr)
 {
 	transport t;
-	t.impl_ = std::make_unique<impl>();
+	std::pmr::polymorphic_allocator<impl> alloc(mr);
+	t.impl_ = alloc.new_object<impl>(mr);
 	t.impl_->type = k;
 	t.impl_->name = name;
 	return t;
