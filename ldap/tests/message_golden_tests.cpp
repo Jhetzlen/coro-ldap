@@ -119,57 +119,66 @@ void check_golden(std::string_view golden, const ldap::message &m)
 	CHECK(*decoded == m);
 }
 
-const std::string people = "ou=people,dc=example,dc=org";
-const std::string jdoe = "uid=jdoe,ou=people,dc=example,dc=org";
+constexpr std::string_view people = "ou=people,dc=example,dc=org";
+constexpr std::string_view jdoe = "uid=jdoe,ou=people,dc=example,dc=org";
+
+ldap::filter raw(std::string_view text) { return ldap::filter::raw(text).value(); }
 
 }// namespace
 
 TEST_CASE("golden: simple bind", "[message][golden]")
 {
-	check_golden(simple_bind,
-	  { .id = 1,
-		.op = ldap::bind_request{
-		  .version = 3, .name = "cn=admin,dc=example,dc=org", .authentication = ldap::simple_auth{ "secret" } } });
+	check_golden(
+	  simple_bind, { 1, ldap::bind_request{ 3, "cn=admin,dc=example,dc=org", ldap::simple_auth{ "secret" } } });
 }
 
 TEST_CASE("golden: SASL bind", "[message][golden]")
 {
-	check_golden(sasl_bind_external,
-	  { .id = 2,
-		.op = ldap::bind_request{ .version = 3, .name = "", .authentication = ldap::sasl_auth{ "EXTERNAL", {} } } });
-	check_golden(sasl_bind_plain,
-	  { .id = 3,
-		.op = ldap::bind_request{
-		  .version = 3, .name = "", .authentication = ldap::sasl_auth{ "PLAIN", "\0user\0pass"s } } });
+	check_golden(sasl_bind_external, { 2, ldap::bind_request{ 3, "", ldap::sasl_auth{ "EXTERNAL", {} } } });
+	check_golden(sasl_bind_plain, { 3, ldap::bind_request{ 3, "", ldap::sasl_auth{ "PLAIN", "\0user\0pass"s } } });
 }
 
 TEST_CASE("golden: search request with a complex filter", "[message][golden]")
 {
 	// and/or/not, substrings with initial/any/final, >=, <=, ~=, present,
 	// extensible match with :dn: and a rule, rule-only extensible match,
-	// escaped values. The text is already canonical, so it decodes unchanged.
-	const std::string filter =
+	// escaped values. The text is canonical, so to_string() gives it back.
+	const std::string_view filter =
 	  "(&(objectClass=person)(|(cn=Jo*hn*Sm*ith)(!(uid=admin)))(uidNumber>=1000)"
 	  "(uidNumber<=2000)(sn~=smyth)(mail=*)(cn:dn:2.5.13.5:=John)(:caseExactMatch:=x\\2ay)"
 	  "(description=a\\28b\\29\\5cc)(cn=*end)(cn=start*))";
-	check_golden(search_complex,
-	  { .id = 4,
-		.op = ldap::search_request{ .base_object = people,
-		  .scope = ldap::search_scope::whole_subtree,
-		  .deref = ldap::deref_aliases::always,
-		  .size_limit = 500,
-		  .time_limit = 10,
-		  .types_only = false,
-		  .filter = ldap::filter::raw(filter),
-		  .attributes = { "cn", "mail", "jpegPhoto;binary" } } });
+	const ldap::message m{ 4,
+		ldap::search_request{ people,
+		  ldap::search_scope::whole_subtree,
+		  ldap::deref_aliases::always,
+		  500,
+		  10,
+		  false,
+		  raw(filter),
+		  { "cn", "mail", "jpegPhoto;binary" } } };
+	check_golden(search_complex, m);
+	CHECK(std::get<ldap::search_request>(m.op).filter.to_string() == filter);
+
+	// The builders produce the same tree (and so the same bytes) for every
+	// part they can express: all but multi-part substrings and extensible match.
+	using namespace ldap::filters;
+	const auto built = attr("objectClass") == "person" && (raw("(cn=Jo*hn*Sm*ith)") || !(attr("uid") == "admin"))
+					   && attr("uidNumber") >= "1000" && attr("uidNumber") <= "2000" && attr("sn").approx("smyth")
+					   && attr("mail").present() && raw("(cn:dn:2.5.13.5:=John)") && raw("(:caseExactMatch:=x\\2ay)")
+					   && attr("description") == "a(b)\\c" && attr("cn").ends_with("end")
+					   && attr("cn").starts_with("start");
+	CHECK(built == std::get<ldap::search_request>(m.op).filter);
+	auto built_message = m;
+	std::get<ldap::search_request>(built_message.op).filter = built;
+	check_golden(search_complex, built_message);
 }
 
 TEST_CASE("golden: modify request with every operation", "[message][golden]")
 {
 	check_golden(modify_all_ops,
-	  { .id = 5,
-		.op = ldap::modify_request{ .object = jdoe,
-		  .changes = {
+	  { 5,
+		ldap::modify_request{ jdoe,
+		  {
 			{ ldap::modify_operation::add, { "mail", { "a@example.org", "b@example.org" } } },
 			{ ldap::modify_operation::delete_, { "telephoneNumber", {} } },
 			{ ldap::modify_operation::replace, { "sn", { "Doe" } } },
@@ -180,59 +189,57 @@ TEST_CASE("golden: modify request with every operation", "[message][golden]")
 TEST_CASE("golden: add, delete, modify DN, compare, abandon", "[message][golden]")
 {
 	check_golden(add,
-	  { .id = 6,
-		.op = ldap::add_request{ .entry = "uid=new,ou=people,dc=example,dc=org",
-		  .attributes = { { "objectClass", { "top", "person" } }, { "cn", { "New User" } }, { "sn", { "User" } } } } });
-	check_golden(delete_, { .id = 7, .op = ldap::del_request{ "uid=old,ou=people,dc=example,dc=org" } });
-	check_golden(modify_dn,
-	  { .id = 8,
-		.op = ldap::modify_dn_request{ .entry = jdoe,
-		  .new_rdn = "uid=john.doe",
-		  .delete_old_rdn = true,
-		  .new_superior = "ou=staff,dc=example,dc=org" } });
-	check_golden(
-	  compare, { .id = 9, .op = ldap::compare_request{ .entry = jdoe, .ava = { "userPassword", "secret" } } });
-	check_golden(abandon, { .id = 10, .op = ldap::abandon_request{ 4 } });
-	check_golden(unbind, { .id = 14, .op = ldap::unbind_request{} });
+	  { 6,
+		ldap::add_request{ "uid=new,ou=people,dc=example,dc=org",
+		  { { "objectClass", { "top", "person" } }, { "cn", { "New User" } }, { "sn", { "User" } } } } });
+	check_golden(delete_, { 7, ldap::del_request{ "uid=old,ou=people,dc=example,dc=org" } });
+	check_golden(modify_dn, { 8, ldap::modify_dn_request{ jdoe, "uid=john.doe", true, "ou=staff,dc=example,dc=org" } });
+	check_golden(compare, { 9, ldap::compare_request{ jdoe, { "userPassword", "secret" } } });
+	check_golden(abandon, { 10, ldap::abandon_request{ 4 } });
+	check_golden(unbind, { 14, ldap::unbind_request{} });
 }
 
 TEST_CASE("golden: StartTLS extended request", "[message][golden]")
 {
-	check_golden(start_tls, { .id = 11, .op = ldap::extended_request{ std::string(ldap::start_tls_oid), {} } });
+	check_golden(start_tls, { 11, ldap::extended_request{ ldap::start_tls_oid, {} } });
 }
 
 TEST_CASE("golden: search with paged results control", "[message][golden]")
 {
-	check_golden(search_paged,
-	  { .id = 12,
-		.op = ldap::search_request{ .base_object = "dc=example,dc=org",
-		  .scope = ldap::search_scope::whole_subtree,
-		  .filter = ldap::filter::raw("(objectClass=*)") },
-		.controls = { ldap::encode_paged_results({ .size = 100, .cookie = "" }, true).value() } });
-	// Non-critical: the DEFAULT FALSE criticality is omitted.
-	check_golden(search_paged_cookie,
-	  { .id = 13,
-		.op = ldap::search_request{ .base_object = "dc=example,dc=org",
-		  .scope = ldap::search_scope::single_level,
-		  .types_only = true,
-		  .filter = ldap::filter::raw("(objectClass=*)"),
-		  .attributes = { "1.1" } },
-		.controls = { ldap::encode_paged_results({ .size = 50, .cookie = "\x01\x02\x03" }, false).value() } });
+	// (objectClass=*) three ways: parsed, built, and search_request's default.
+	using ldap::filters::attr;
+	for (const auto &filter :
+	  { raw("(objectClass=*)"), attr("objectClass").present(), ldap::search_request{}.filter }) {
+		check_golden(search_paged,
+		  { 12,
+			ldap::search_request{ "dc=example,dc=org", ldap::search_scope::whole_subtree, filter },
+			{ ldap::encode_paged_results({ 100, "" }, true).value() } });
+		// Non-critical: the DEFAULT FALSE criticality is omitted.
+		check_golden(search_paged_cookie,
+		  { 13,
+			ldap::search_request{ "dc=example,dc=org",
+			  ldap::search_scope::single_level,
+			  ldap::deref_aliases::never,
+			  0,
+			  0,
+			  true,
+			  filter,
+			  { "1.1" } },
+			{ ldap::encode_paged_results({ 50, "\x01\x02\x03" }, false).value() } });
+	}
 }
 
 TEST_CASE("golden: bind response with server SASL credentials", "[message][golden]")
 {
-	check_golden(bind_response_sasl,
-	  { .id = 1,
-		.op = ldap::bind_response{ .result = { .result_code = 14 }, .server_sasl_creds = "challenge\0\xff"s } });
+	check_golden(bind_response_sasl, { 1, ldap::bind_response{ { 14 }, "challenge\0\xff"s } });
 }
 
 TEST_CASE("golden: search result entry with multi-valued and binary attributes", "[message][golden]")
 {
 	check_golden(search_entry,
-	  { .id = 4,
-		.op = ldap::search_result_entry{ .object_name = jdoe,
-		  .attributes = { { "cn", { "John Doe", "Johnny" } },
+	  { 4,
+		ldap::search_result_entry{ jdoe,
+		  { { "cn", { "John Doe", "Johnny" } },
 			{ "objectClass", { "top", "person", "inetOrgPerson" } },
 			{ "jpegPhoto", { "\xff\xd8\0\x01\x80"s } } } } });
 }
@@ -240,32 +247,26 @@ TEST_CASE("golden: search result entry with multi-valued and binary attributes",
 TEST_CASE("golden: search done with referral, search reference", "[message][golden]")
 {
 	check_golden(search_done_referral,
-	  { .id = 4,
-		.op = ldap::search_result_done{ { .result_code = 10,
-		  .matched_dn = "dc=example,dc=org",
-		  .diagnostic_message = "go elsewhere",
-		  .referral = { "ldap://a.example.org/dc=example,dc=org", "ldap://b.example.org/dc=example,dc=org" } } } });
-	check_golden(search_reference,
-	  { .id = 4, .op = ldap::search_result_reference{ { "ldap://c.example.org/ou=x,dc=example,dc=org??sub" } } });
+	  { 4,
+		ldap::search_result_done{ { 10,
+		  "dc=example,dc=org",
+		  "go elsewhere",
+		  { "ldap://a.example.org/dc=example,dc=org", "ldap://b.example.org/dc=example,dc=org" } } } });
+	check_golden(
+	  search_reference, { 4, ldap::search_result_reference{ { "ldap://c.example.org/ou=x,dc=example,dc=org??sub" } } });
 }
 
 TEST_CASE("golden: extended and intermediate responses", "[message][golden]")
 {
-	check_golden(extended_response,
-	  { .id = 15,
-		.op = ldap::extended_response{
-		  .result = {}, .response_name = "1.3.6.1.4.1.4203.1.11.3", .response_value = "\x30\x05\x80\x03u:x" } });
-	check_golden(intermediate_response,
-	  { .id = 16,
-		.op =
-		  ldap::intermediate_response{ .response_name = "1.3.6.1.4.1.4203.1.9.1.4", .response_value = "\x01\x02" } });
+	check_golden(
+	  extended_response, { 15, ldap::extended_response{ {}, "1.3.6.1.4.1.4203.1.11.3", "\x30\x05\x80\x03u:x" } });
+	check_golden(intermediate_response, { 16, ldap::intermediate_response{ "1.3.6.1.4.1.4203.1.9.1.4", "\x01\x02" } });
 }
 
 TEST_CASE("golden: unsolicited notice of disconnection", "[message][golden]")
 {
-	const ldap::message notice{ .id = 0,
-		.op = ldap::extended_response{ .result = { .result_code = 52, .diagnostic_message = "server shutting down" },
-		  .response_name = std::string(ldap::notice_of_disconnection_oid) } };
+	const ldap::message notice{ 0,
+		ldap::extended_response{ { 52, "", "server shutting down" }, ldap::notice_of_disconnection_oid } };
 	check_golden(notice_of_disconnection, notice);
 
 	auto m = ldap::decode(from_hex(notice_of_disconnection));

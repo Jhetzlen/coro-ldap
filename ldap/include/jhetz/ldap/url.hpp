@@ -26,7 +26,7 @@
 // Attributes and extensions are lists; absent and empty are the same.
 //
 // Validation: the DN must be RFC 4514 (dn::parse), the filter RFC 4515
-// (encode_filter), scope one of base/one/sub (case-insensitive), extension
+// (filter::raw), scope one of base/one/sub (case-insensitive), extension
 // types descriptors or numeric OIDs, attribute selectors non-empty. The port
 // must be 1..65535. Characters outside RFC 3986 are rejected, except that
 // unencoded spaces and bytes >= 0x80 are accepted in the DN, attribute, scope,
@@ -35,15 +35,16 @@
 // offset in the context.
 //
 // Comparison is syntactic on the decoded parts: host names are compared
-// exactly (no case folding), the DN with dn's equality, the filter as text.
+// exactly (no case folding), the DN with dn's equality, the filter as a tree
+// (so `cn=x` and `(cn=x)` are the same filter). to_string() writes the
+// filter's canonical text (filter::to_string), so it is canonical too.
 //
-// Memory (DESIGN.md section 8): url is allocator-aware. Its own strings and
-// lists are std::pmr containers using the resource given to parse() or the
-// constructor (default: std::pmr::get_default_resource(), i.e. the heap); a
-// plain copy uses the default resource, the allocator-extended copy the one
-// given, as for any pmr container. The DN and filter are still the step 3
-// types and allocate from the default resource.
-// TODO(4b): dn and filter become pmr-aware and take the url's resource.
+// Memory (DESIGN.md section 8): url is allocator-aware. Everything it owns
+// (strings, lists, the DN and the filter tree) uses the resource given to
+// parse() or the constructor (default: std::pmr::get_default_resource(),
+// i.e. the heap); a plain copy uses the default resource, the
+// allocator-extended copy the one given, as for any pmr container, and
+// assignment keeps this url's resource.
 #pragma once
 
 #include "jhetz/ldap/dn.hpp"
@@ -115,8 +116,8 @@ class url
 	url(const url &other, const allocator_type &alloc);
 	url(url &&other, const allocator_type &alloc);
 	// Assignment keeps this url's resource for everything it owns.
-	url &operator=(const url &) = default;
-	url &operator=(url &&) = default;
+	url &operator=(const url &other);
+	url &operator=(url &&other);
 	~url() = default;
 
 	allocator_type get_allocator() const noexcept { return host_.get_allocator(); }

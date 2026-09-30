@@ -22,6 +22,7 @@ add_executable(jhetz_ldap_tests
     framer_tests.cpp
     message_golden_tests.cpp
     message_tests.cpp
+    pmr_tests.cpp
     url_tests.cpp
 )
 target_link_libraries(jhetz_ldap_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)

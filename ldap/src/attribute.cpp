@@ -5,12 +5,12 @@
 
 namespace jhetz::ldap {
 
-result<attribute> attribute::parse(std::string_view text)
+result<attribute> attribute::parse(std::string_view text, std::pmr::memory_resource *mr)
 {
 	if (!detail::is_attribute_description(text))
 		return fail(
 		  client_errc::invalid_attribute, "attribute: \"" + std::string(text) + "\" is not an attribute description");
-	return unchecked(std::string(text));
+	return unchecked(text, mr);
 }
 
 std::weak_ordering operator<=>(const attribute &a, const attribute &b) noexcept

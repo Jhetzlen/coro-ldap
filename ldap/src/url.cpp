@@ -1,6 +1,6 @@
 #include "jhetz/ldap/url.hpp"
 
-#include "jhetz/ldap/ber.hpp"
+#include "pmr_util.hpp"
 
 #include <cstddef>
 #include <string>
@@ -281,9 +281,41 @@ url::url(const allocator_type &alloc) : host_(alloc), attributes_(alloc), extens
 
 url::url(const url &other, const allocator_type &alloc)
   : scheme_(other.scheme_), host_(other.host_, alloc), host_is_ipv6_(other.host_is_ipv6_), port_(other.port_),
-	dn_(other.dn_), attributes_(other.attributes_, alloc), scope_(other.scope_), filter_(other.filter_),
-	extensions_(other.extensions_, alloc)
+	dn_(detail::optional_with(other.dn_, alloc)), attributes_(other.attributes_, alloc), scope_(other.scope_),
+	filter_(detail::optional_with(other.filter_, alloc)), extensions_(other.extensions_, alloc)
 {}
+
+// std::optional's own assignment would construct a missing DN or filter on
+// the source's (or the default) resource; keep them on this url's resource.
+url &url::operator=(const url &other)
+{
+	if (this == &other) return *this;
+	scheme_ = other.scheme_;
+	host_ = other.host_;
+	host_is_ipv6_ = other.host_is_ipv6_;
+	port_ = other.port_;
+	detail::assign_optional(dn_, other.dn_, get_allocator());
+	attributes_ = other.attributes_;
+	scope_ = other.scope_;
+	detail::assign_optional(filter_, other.filter_, get_allocator());
+	extensions_ = other.extensions_;
+	return *this;
+}
+
+url &url::operator=(url &&other)
+{
+	if (this == &other) return *this;
+	scheme_ = other.scheme_;
+	host_ = std::move(other.host_);
+	host_is_ipv6_ = other.host_is_ipv6_;
+	port_ = other.port_;
+	detail::assign_optional(dn_, std::move(other.dn_), get_allocator());
+	attributes_ = std::move(other.attributes_);
+	scope_ = other.scope_;
+	detail::assign_optional(filter_, std::move(other.filter_), get_allocator());
+	extensions_ = std::move(other.extensions_);
+	return *this;
+}
 
 url::url(url &&other, const allocator_type &alloc)
   : url(other.get_allocator() == alloc ? url(std::move(other)) : url(other, alloc))
@@ -438,8 +470,8 @@ result<url> url::parse(std::string_view text, std::pmr::memory_resource *mr)
 	{
 		auto text_dn = decode(parts[0], offsets[0], "DN", is_lenient_part_char, mr);
 		if (!text_dn) return std::unexpected(std::move(text_dn.error()));
-		auto d = dn::parse(*text_dn);
-		if (!d) return bad("invalid DN (" + d.error().context + ")", offsets[0]);
+		auto d = dn::parse(*text_dn, mr);
+		if (!d) return bad("invalid DN (" + std::string(d.error().context) + ")", offsets[0]);
 		u.dn_ = std::move(*d);
 	}
 
@@ -474,10 +506,9 @@ result<url> url::parse(std::string_view text, std::pmr::memory_resource *mr)
 	if (count > 3 && !parts[3].empty()) {
 		auto f = decode(parts[3], offsets[3], "filter", is_lenient_part_char, mr);
 		if (!f) return std::unexpected(std::move(f.error()));
-		ber::writer w;
-		if (auto r = encode_filter(w, *f); !r) return bad("invalid filter (" + r.error().context + ")", offsets[3]);
-		// TODO(4b): the filter type becomes pmr-aware; until then it copies to the default resource.
-		u.filter_ = filter::raw(std::string(*f));
+		auto parsed = filter::raw(*f, mr);
+		if (!parsed) return bad("invalid filter (" + std::string(parsed.error().context) + ")", offsets[3]);
+		u.filter_ = std::move(*parsed);
 	}
 
 	// extensions
@@ -542,7 +573,7 @@ std::pmr::string url::to_string(std::pmr::memory_resource *mr) const
 	const auto list_item = [](char c) { return is_part_char(c) && c != ','; };
 
 	out += '/';
-	if (dn_) encode(out, dn_->to_string(), part);
+	if (dn_) encode(out, dn_->to_string(mr), part);
 	if (last >= 1) {
 		out += '?';
 		for (std::size_t i = 0; i < attributes_.size(); ++i) {
@@ -556,7 +587,7 @@ std::pmr::string url::to_string(std::pmr::memory_resource *mr) const
 	}
 	if (last >= 3) {
 		out += '?';
-		if (filter_) encode(out, filter_->text, part);
+		if (filter_) encode(out, filter_->to_string(mr), part);
 	}
 	if (last >= 4) {
 		out += '?';

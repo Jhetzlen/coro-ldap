@@ -2,8 +2,10 @@
 #pragma once
 
 #include <expected>
+#include <memory_resource>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <type_traits>
 #include <utility>
@@ -100,18 +102,27 @@ inline std::error_code make_error_code(errc e) noexcept { return { static_cast<i
 
 inline std::error_code make_error_code(client_errc e) noexcept { return { static_cast<int>(e), client_category() }; }
 
+// An error: its code plus what the server and the client said about it.
+//
+// Memory (DESIGN.md section 8): the strings are std::pmr containers, but error
+// is deliberately not allocator-aware (no allocator_type). The library always
+// builds errors on the default resource, never on a caller's arena, even when
+// it fails while decoding into one: errors travel up the call stack and into
+// logs, often after the arena of the failed operation was released, so they
+// must not depend on it. Copies use the default resource too, as for any pmr
+// container. Errors are the cold path, so the extra allocations do not matter.
 struct error
 {
 	std::error_code code{};
-	std::string diagnostic{};// server's diagnosticMessage, if any
-	// TODO: becomes std::optional<ldap::dn> once the dn type exists.
-	std::optional<std::string> matched_dn{};// server's matchedDN, if any
-	// TODO: becomes std::vector<ldap::url> once the url type exists.
-	std::vector<std::string> referrals{};// from a referral result
-	std::string context{};// client-side path, e.g. "ber: integer at offset 12"
+	std::pmr::string diagnostic{};// server's diagnosticMessage, if any
+	// TODO: becomes std::optional<ldap::dn> (step 5).
+	std::optional<std::pmr::string> matched_dn{};// server's matchedDN, if any
+	// TODO: becomes a vector of ldap::url (step 5).
+	std::pmr::vector<std::pmr::string> referrals{};// from a referral result
+	std::pmr::string context{};// client-side path, e.g. "ber: integer at offset 12"
 
 	// Everything above, human readable, on one line.
-	std::string message() const;
+	std::pmr::string message(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
 
 	friend bool operator==(const error &, const error &) = default;
 };
@@ -119,18 +130,18 @@ struct error
 template<class T> using result = std::expected<T, error>;
 
 // Builds an error carrying only a code and a client-side context string.
-inline error make_error(std::error_code code, std::string context = {})
+inline error make_error(std::error_code code, std::string_view context = {})
 {
 	error e;
 	e.code = code;
-	e.context = std::move(context);
+	e.context.assign(context);
 	return e;
 }
 
 // Shorthand for `return std::unexpected(make_error(...));`.
-inline std::unexpected<error> fail(std::error_code code, std::string context = {})
+inline std::unexpected<error> fail(std::error_code code, std::string_view context = {})
 {
-	return std::unexpected(make_error(code, std::move(context)));
+	return std::unexpected(make_error(code, context));
 }
 
 }// namespace jhetz::ldap

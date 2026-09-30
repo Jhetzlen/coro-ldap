@@ -85,7 +85,7 @@ std::string to_string(tag t)
 
 // ---------------------------------------------------------------- encoder
 
-void encode_length(std::vector<std::byte> &out, std::size_t length)
+void encode_length(std::pmr::vector<std::byte> &out, std::size_t length)
 {
 	if (length < 0x80) {
 		out.push_back(static_cast<std::byte>(length));
@@ -291,13 +291,13 @@ result<std::span<const std::byte>> reader::read_octet_string(tag t)
 	return e->content;
 }
 
-result<std::string> reader::read_string(tag t)
+result<std::pmr::string> reader::read_string(tag t, std::pmr::memory_resource *mr)
 {
 	auto s = read_octet_string(t);
 	if (!s) return std::unexpected(std::move(s.error()));
 	// The length was checked against the bytes present, so this allocation is
 	// bounded by the input size.
-	return std::string(reinterpret_cast<const char *>(s->data()), s->size());
+	return std::pmr::string(reinterpret_cast<const char *>(s->data()), s->size(), mr);
 }
 
 result<void> reader::read_null(tag t)

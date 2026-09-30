@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -101,12 +102,22 @@ std::string to_string(tag t);
 //
 // Tags with a number above 30 cannot be encoded and throw
 // std::invalid_argument (only reachable by aggregate-initialising a `tag`).
+//
+// Memory: the buffer is a std::pmr::vector on the resource given to the
+// constructor (default: the default resource), so it can live in an arena or
+// be reused: clear() keeps its capacity. Like any pmr container, a copy uses
+// the default resource and assignment keeps the target's resource.
 class writer
 {
   public:
+	using allocator_type = std::pmr::polymorphic_allocator<>;
+
 	writer() = default;
+	explicit writer(const allocator_type &alloc) : buf_(alloc) {}
 	writer(const writer &) = default;
 	writer(writer &&) noexcept = default;
+	writer(const writer &other, const allocator_type &alloc) : buf_(other.buf_, alloc) {}
+	writer(writer &&other, const allocator_type &alloc) : buf_(std::move(other.buf_), alloc) {}
 	// Assigning replaces the buffer, so it counts as a reset (see constructed()).
 	writer &operator=(const writer &other)
 	{
@@ -114,12 +125,17 @@ class writer
 		++resets_;
 		return *this;
 	}
-	writer &operator=(writer &&other) noexcept
+	writer &operator=(writer &&other)
 	{
-		buf_ = std::exchange(other.buf_, {});
+		buf_ = std::move(other.buf_);
+		other.buf_.clear();
+		++other.resets_;
 		++resets_;
 		return *this;
 	}
+	~writer() = default;
+
+	allocator_type get_allocator() const noexcept { return buf_.get_allocator(); }
 
 	void boolean(bool value, tag t = tags::boolean);
 	void integer(std::int64_t value, tag t = tags::integer);
@@ -146,12 +162,18 @@ class writer
 		}
 	}
 
-	const std::vector<std::byte> &bytes() const noexcept { return buf_; }
-	// Moves the encoded bytes out and leaves the writer empty.
-	std::vector<std::byte> take() noexcept
+	// Capacity for at least `n` bytes in all (like std::vector::reserve).
+	void reserve(std::size_t n) { buf_.reserve(n); }
+
+	const std::pmr::vector<std::byte> &bytes() const noexcept { return buf_; }
+	// Moves the encoded bytes out (on the writer's resource) and leaves the
+	// writer empty, still on the same resource.
+	std::pmr::vector<std::byte> take() noexcept
 	{
 		++resets_;
-		return std::exchange(buf_, {});
+		std::pmr::vector<std::byte> out(std::move(buf_));
+		buf_.clear();// valid but unspecified after the move: make it empty
+		return out;
 	}
 	void clear() noexcept
 	{
@@ -167,12 +189,12 @@ class writer
 	void rollback(std::size_t mark, std::size_t resets);
 	void check_mark(std::size_t mark, std::size_t resets) const;
 
-	std::vector<std::byte> buf_;
+	std::pmr::vector<std::byte> buf_{};
 	std::size_t resets_ = 0;// bumped by clear()/take(), to detect misuse inside constructed()
 };
 
 // Appends the minimal definite length encoding of `length` to `out`.
-void encode_length(std::vector<std::byte> &out, std::size_t length);
+void encode_length(std::pmr::vector<std::byte> &out, std::size_t length);
 
 // ---------------------------------------------------------------- decoder
 
@@ -241,8 +263,10 @@ class reader
 	result<std::int64_t> read_integer(tag t = tags::integer);
 	result<std::int64_t> read_enumerated(tag t = tags::enumerated);
 	result<std::span<const std::byte>> read_octet_string(tag t = tags::octet_string);
-	// Same as read_octet_string, copied into an owning std::string.
-	result<std::string> read_string(tag t = tags::octet_string);
+	// Same as read_octet_string, copied into a string allocated from `mr`
+	// (the only allocation any reader operation makes, apart from errors).
+	result<std::pmr::string> read_string(tag t = tags::octet_string,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 	result<void> read_null(tag t = tags::null);
 
 	// Reads a constructed element with class/number of `t` and returns a

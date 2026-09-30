@@ -16,9 +16,14 @@ namespace capy = boost::capy;
 namespace jhetz::ldap::net {
 namespace {
 
-	error with_context(error e, const std::string &prefix)
+	error with_context(error e, std::string_view prefix)
 	{
-		e.context = e.context.empty() ? prefix : prefix + ": " + e.context;
+		if (e.context.empty()) {
+			e.context.assign(prefix);
+		} else {
+			e.context.insert(0, ": ");
+			e.context.insert(0, prefix);
+		}
 		return e;
 	}
 
@@ -81,8 +86,8 @@ capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_op
 			if (!size) co_return std::unexpected(with_context(std::move(size.error()), where));
 			declared = *size;
 			if (declared && data.size() >= *declared) {
-				// TODO(4b): decode_options gets a memory resource; then the
-				// connection layer decodes each response into an arena.
+				// Allocated from options.decode.memory (e.g. a per-response
+				// arena of the connection layer).
 				auto m = decode(data.first(*declared), options.decode);
 				buf.consume(*declared);
 				if (!m) co_return std::unexpected(with_context(std::move(m.error()), where));
@@ -137,11 +142,19 @@ capy::task<result<void>> write_bytes(transport &t, std::span<const std::byte> by
 	co_return result<void>{};
 }
 
-capy::task<result<void>> write_message(transport &t, const message &m)
+capy::task<result<void>> write_message(transport &t, const message &m, std::pmr::memory_resource *mr)
 {
-	auto bytes = encode(m);
+	auto bytes = encode(m, mr);
 	if (!bytes) co_return std::unexpected(with_context(std::move(bytes.error()), "write " + std::string(t.name())));
 	co_return co_await write_bytes(t, *bytes);
+}
+
+capy::task<result<void>> write_message(transport &t, const message &m, ber::writer &w)
+{
+	w.clear();
+	if (auto e = encode(w, m); !e)
+		co_return std::unexpected(with_context(std::move(e.error()), "write " + std::string(t.name())));
+	co_return co_await write_bytes(t, w.bytes());
 }
 
 }// namespace jhetz::ldap::net

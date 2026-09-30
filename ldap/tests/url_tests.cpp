@@ -14,6 +14,7 @@ using ldap::client_errc;
 using ldap::search_scope;
 using ldap::url_scheme;
 using namespace std::string_literals;
+using namespace std::string_view_literals;
 using strings = std::pmr::vector<std::pmr::string>;
 
 namespace {
@@ -21,7 +22,7 @@ namespace {
 ldap::url parse(std::string_view text)
 {
 	auto u = ldap::url::parse(text);
-	INFO(text << " -> " << (u ? std::string("ok") : u.error().message()));
+	INFO(text << " -> " << (u ? std::string("ok") : std::string(u.error().message())));
 	REQUIRE(u.has_value());
 	// Every accepted URL round-trips.
 	auto back = ldap::url::parse(u->to_string());
@@ -78,7 +79,8 @@ TEST_CASE("RFC 4516 section 4 examples", "[url]")
 		CHECK(u.port() == 6666);
 		CHECK(u.scope() == search_scope::whole_subtree);
 		REQUIRE(u.search_filter());
-		CHECK(u.search_filter()->text == "(cn=Babs Jensen)");
+		CHECK(u.search_filter()->to_string() == "(cn=Babs Jensen)");
+		CHECK(u.search_filter()->root().value() == "Babs Jensen");
 		CHECK(
 		  u.to_string() == "ldap://ldap1.example.net:6666/o=University%20of%20Michigan,c=US??sub?(cn=Babs%20Jensen)");
 	}
@@ -102,7 +104,8 @@ TEST_CASE("RFC 4516 section 4 examples", "[url]")
 		const auto u = parse(
 		  "ldap://ldap3.example.com/o=Babsco,c=US???"
 		  "(four-octet=%5c00%5c00%5c00%5c04)");
-		CHECK(u.search_filter()->text == "(four-octet=\\00\\00\\00\\04)");
+		CHECK(u.search_filter()->to_string() == "(four-octet=\\00\\00\\00\x04)");
+		CHECK(u.search_filter()->root().value() == "\0\0\0\x04"sv);
 	}
 	SECTION("DN with an escaped comma")
 	{
@@ -268,16 +271,21 @@ TEST_CASE("URL parts after the host", "[url]")
 	}
 	SECTION("filter")
 	{
-		CHECK(parse("ldap://h/???uid=jdoe").search_filter()->text == "uid=jdoe");// ldapsearch-style, unwrapped
+		// ldapsearch-style, unwrapped: the same filter as (uid=jdoe), printed canonically.
+		CHECK(parse("ldap://h/???uid=jdoe").search_filter()->to_string() == "(uid=jdoe)");
+		CHECK(parse("ldap://h/???uid=jdoe")
+			  == parse("ldap://h/???"
+					   "(uid=jdoe)"));
+		CHECK(parse("ldap://h/???uid=jdoe").to_string() == "ldap://h/???" "(uid=jdoe)");
 		CHECK(parse("ldap://h/???"
 					"(&(a=1)(b=2))")
 				.search_filter()
-				->text
+				->to_string()
 			  == "(&(a=1)(b=2))");
 		CHECK(parse("ldap://h/???"
 					"(cn=a%3Fb)")
 				.search_filter()
-				->text
+				->to_string()
 			  == "(cn=a?b)");
 		CHECK(parse("ldap://h/???" "(cn=a%3Fb)").to_string() == "ldap://h/???" "(cn=a%3Fb)");
 		rejected(
@@ -380,9 +388,10 @@ TEST_CASE("URL percent-encoding round trip of every byte", "[url]")
 	};
 	encoded += pct(all) + "??" + pct("(cn=" + filter_value + ")") + "?x=" + pct(all);
 	const auto u = parse(encoded);
-	CHECK(u.base_dn()->rdns()[0].avas[0].value == all);
+	CHECK(u.base_dn()->rdns()[0].avas[0].value == std::string_view(all));
 	CHECK(u.attributes() == strings{ std::pmr::string(all) });
-	CHECK(u.search_filter()->text == "(cn=" + filter_value + ")");
+	CHECK(u.search_filter()->to_string() == std::string_view("(cn=" + filter_value + ")"));
+	CHECK(u.search_filter()->root().value() == std::string_view(all));
 	CHECK(u.extensions()[0].value == std::string_view(all));
 }
 
@@ -406,6 +415,10 @@ TEST_CASE("URL allocations go through the given memory resource", "[url][pmr]")
 		CHECK(u->extensions().get_allocator().resource() == &counting);
 		CHECK(u->extensions()[0].type.get_allocator().resource() == &counting);
 		CHECK(u->extensions()[0].value->get_allocator().resource() == &counting);
+		// The DN and filter too.
+		CHECK(u->base_dn()->get_allocator().resource() == &counting);
+		CHECK(u->base_dn()->rdns()[0].avas[0].value.get_allocator().resource() == &counting);
+		CHECK(u->search_filter()->get_allocator().resource() == &counting);
 
 		// to_string / authority into a chosen resource.
 		const auto before = counting.allocations();
@@ -425,6 +438,8 @@ TEST_CASE("URL allocations go through the given memory resource", "[url][pmr]")
 		CHECK(in_arena == *u);
 		CHECK(in_arena.host().get_allocator().resource() == &arena);
 		CHECK(in_arena.extensions()[0].value->get_allocator().resource() == &arena);
+		CHECK(in_arena.base_dn()->get_allocator().resource() == &arena);
+		CHECK(in_arena.search_filter()->get_allocator().resource() == &arena);
 
 		// Moving with the same resource keeps it; with another one copies into it.
 		ldap::url moved(ldap::url(*u, &counting), &counting);
@@ -444,10 +459,15 @@ TEST_CASE("URL allocations go through the given memory resource", "[url][pmr]")
 			CHECK(target->attributes()[0].get_allocator().resource() == &arena);
 			CHECK(target->extensions()[0].type.get_allocator().resource() == &arena);
 			CHECK(target->extensions()[0].value->get_allocator().resource() == &arena);
+			// DN and filter were absent in the target: engaged on its resource.
+			CHECK(target->base_dn()->get_allocator().resource() == &arena);
+			CHECK(target->search_filter()->get_allocator().resource() == &arena);
 			auto target2 = ldap::url::parse("ldap://h", &arena);
 			*target2 = ldap::url(*u, &counting);// move assignment across resources
 			CHECK(*target2 == *u);
 			CHECK(target2->extensions()[0].value->get_allocator().resource() == &arena);
+			CHECK(target2->base_dn()->rdns()[0].get_allocator().resource() == &arena);
+			CHECK(target2->search_filter()->get_allocator().resource() == &arena);
 		}
 
 		// A pmr::vector<url> hands its resource to its elements.
@@ -468,4 +488,13 @@ TEST_CASE("URL parsing into a monotonic buffer", "[url][pmr]")
 	REQUIRE(u.has_value());
 	CHECK(u->host() == "/var/run/slapd/very-long-socket-name-for-ldapi");
 	CHECK(u->host().get_allocator().resource() == &arena);
+
+	// A DN and a filter, with values too long for the small-string buffer.
+	auto full = ldap::url::parse(
+	  "ldap://h/cn=a-value-well-beyond-the-small-string-size,dc=example???"
+	  "(cn=another-long-assertion-value*)",
+	  &arena);
+	REQUIRE(full.has_value());
+	CHECK(full->base_dn()->rdns()[0].avas[0].value.get_allocator().resource() == &arena);
+	CHECK(full->search_filter()->get_allocator().resource() == &arena);
 }

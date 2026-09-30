@@ -23,7 +23,7 @@ template<class T> std::error_code code_of(const jhetz::ldap::result<T> &r)
 template<class T> std::string context_of(const jhetz::ldap::result<T> &r)
 {
 	REQUIRE_FALSE(r.has_value());
-	return r.error().context;
+	return std::string(r.error().context);
 }
 
 }// namespace
@@ -79,7 +79,7 @@ TEST_CASE("ber::reader round-trips the other primitive types", "[ber][reader]")
 	REQUIRE(empty);
 	CHECK(empty->empty());
 	CHECK(r.read_string() == "hello");
-	CHECK(r.read_string(ber::context(2)) == std::string(1000, 'z'));
+	CHECK(r.read_string(ber::context(2)) == std::pmr::string(1000, 'z'));
 	CHECK(r.read_boolean(ber::context(1)) == true);
 	CHECK(r.read_null(ber::context(7)).has_value());
 	CHECK(r.empty());

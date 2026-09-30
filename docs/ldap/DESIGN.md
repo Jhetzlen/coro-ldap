@@ -1,7 +1,8 @@
 # LDAP client: API design
 
-Status: steps 1–4 implemented under `ldap/` (errors, BER codec, message model,
-filters, DN/attribute/entry, URLs, transports and connect). Sections 3–7 describe the API still to be built;
+Status: steps 1–4b implemented under `ldap/` (errors, BER codec, message model,
+typed filters, DN/attribute/entry, URLs, transports and connect, `std::pmr`
+throughout). Sections 3–7 describe the API still to be built;
 "Implemented" notes say where the code differs from the original plan.
 `api_prototype.cpp` next to this file checks that the type-safety parts of
 section 4 compile as C++23 (GCC 13).
@@ -57,8 +58,8 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
   apart (referral chasing needs "absent = same as the original request").
   Allocator-aware (`std::pmr`), including its extensions. No literal
   constructor: use `parse`.
-- `bytes`: not implemented; wire values are `std::string` holding raw octets
-  for now (see section 10).
+- `bytes`: not implemented; wire values are `std::pmr::string` holding raw
+  octets (see section 10).
 - Literals go through `consteval` helper types (`dn::literal`,
   `attribute::literal`) that run the same scanner as `parse()`, so an invalid
   literal is a compile error. A runtime `const char*` does not compile there:
@@ -66,10 +67,10 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
 
 ## 2. Filters
 
-A filter is its RFC 4515 text (`ldap::filter` wraps a `std::string`).
-Operators build it and escape every value, so filter injection is impossible
-when filters are built this way (prototype: `x)(uid=*` becomes
-`x\29\28uid=\2a`).
+A filter is a typed tree (implemented in step 4b). The builders create nodes
+directly and hold values unescaped, so a value can never change the filter's
+structure; the encoder writes BER straight from the tree, so builder-made
+filters are never parsed.
 
 ```cpp
 using namespace ldap::filters;
@@ -79,61 +80,48 @@ auto f = attr("objectClass") == "person"
 
 auto g = attr("uidNumber") >= "1000" && attr("sn").approx("smith");
 
-// Text from config or users: passed through as is.
-auto h = ldap::filter::raw("(&(uid=jdoe)(mail=*))");
+// Text from config or users: parsed once, here.
+ldap::result<ldap::filter> h = ldap::filter::raw("(&(uid=jdoe)(mail=*))");
+if (h) f = std::move(f) && *h;
+
+f.to_string();   // "(&(objectClass=person)...)" for logs
 ```
 
-| Builder | Produces |
+| Builder | Node (`to_string()`) |
 |---|---|
-| `attr(a) == v` | `(a=v)` |
+| `attr(a) == v` | equality `(a=v)` |
 | `attr(a) >= v`, `<= v` | `(a>=v)`, `(a<=v)` |
 | `attr(a).approx(v)` | `(a~=v)` |
 | `attr(a).present()` | `(a=*)` |
-| `attr(a).starts_with(v)` / `ends_with(v)` / `contains(v)` | `(a=v*)` / `(a=*v)` / `(a=*v*)` |
-| `f && g`, `f \|\| g`, `!f` | `(&fg)`, `(\|fg)`, `(!f)`; chains are flattened, so `f && g && h` is `(&fgh)` |
-| `starts_with("")`, `ends_with("")`, `contains("")` | `(a=*)` (same meaning, and `(a=**)` is not valid) |
-| `filter::raw(text)` | `text`, unchanged |
+| `attr(a).starts_with(v)` / `ends_with(v)` / `contains(v)` | substrings `(a=v*)` / `(a=*v)` / `(a=*v*)` |
+| `starts_with("")`, `ends_with("")`, `contains("")` | present `(a=*)` (same meaning) |
+| `f && g`, `f \|\| g`, `!f` | and / or / not; chains are flattened, so `f && g && h` is one and-node |
+| `filter::raw(text)` | parsed once → `result<filter>`; malformed text fails here with `invalid_filter` |
 
-When a `raw` operand of `&&`, `||` or `!` is not exactly one parenthesized
-group, it is wrapped in parentheses if that makes it one group, so
-`raw("cn=x") && f` works. Otherwise (for example `raw("a=1)(|(b=*)")`, where
-wrapping would produce a valid but different filter) a NUL byte is inserted,
-which the parser always rejects: malformed raw text stays malformed instead of
-merging into a different valid query. Attribute names given to `attr()` are validated too, so names cannot
-inject filter syntax either.
-
-No separate validation step. LDAP sends filters in binary (BER) form, so the
-text is parsed once when the request is encoded; a malformed filter (only
-possible through `raw`) fails that operation with `client_errc::invalid_filter`.
-
-Parser details:
-- full RFC 4515: and/or/not, equality, substrings, `>=`, `<=`, `~=`, present,
-  extensible match (`attr:dn:rule:=value`); builders cover all but extensible
-  match, which is only reachable through `raw` for now;
-- RFC 4526 absolute true/false `(&)` and `(|)` are accepted;
-- text that does not start with `(` is wrapped, like `ldapsearch` does;
-- limits: nesting depth `max_filter_depth` = 24, so a search request with the
-  deepest allowed filter still fits the BER reader's depth limit of 32; and a
-  maximum number of filter elements (default 10,000) on both encode and
-  decode, so a hostile message cannot make decoding use gigabytes.
-
-Decoded filters come back as canonical text (escapes normalized to lower-case
-`\xx` for `* ( ) \ NUL` only, `:dn` lower case, empty substring parts dropped),
-which has the same meaning as the original but may differ textually.
-
-**Planned change (step 4b, after step 4, before step 5; together with the
-`std::pmr` support in section 8): typed filter tree.**
-Today `filter` stores text and the whole text is parsed again when a request
-is encoded, which also forces the raw-operand wrapping above. The builders
-will instead produce a small typed tree (and/or/not/equality/substring/
-ordering/present/approx/extensible nodes holding unescaped values); the
-encoder writes BER straight from the tree, so builder-made filters are never
-parsed. `filter::raw(text)` becomes the only parsing path, runs once when
-called and returns `result<filter>`; combining a raw filter is just adding a
-node, so the wrapping/NUL logic goes away. `to_string()` renders RFC 4515
-text for logging; decoding BER back to a filter tree stays for the mock
-server. The builder syntax (`attr("sAMAccountName").starts_with("emp") && ...`)
-does not change.
+- Combining is adding a node: a parsed filter keeps its exact meaning inside
+  a larger one (there is no text concatenation, so no wrapping rules).
+- Attribute names given to `attr()` are validated (literals at compile time),
+  so names cannot inject filter syntax either.
+- The combining operators live in namespace `ldap` (found by ADL for any
+  filter) and are re-exported in `ldap::filters`.
+- Storage: one flat `std::pmr::vector` of small nodes linked by indices plus
+  one pooled string, so a filter is two allocations, copies are cheap and
+  nothing recurses on destruction, equality or printing, at any depth.
+- Chains: combining reuses an rvalue operand's storage, so `a && b && c` and
+  `f = std::move(f) || x` in a loop are linear; `f = f || x` in a loop copies
+  and is quadratic.
+- Limits: `max_filter_depth` = 24 (so a search request with the deepest
+  filter fits the BER reader's depth limit of 32) and `max_filter_elements`
+  = 10,000. Parsing and decoding enforce them while reading; builders never
+  throw or truncate, and an over-limit (or empty, default-constructed) filter
+  fails at encode with `invalid_filter`.
+- Parser (only for `raw`): full RFC 4515 including extensible match
+  (`attr:dn:rule:=value`, only reachable through `raw` for now), RFC 4526
+  `(&)` / `(|)`, and text without a leading `(` is wrapped like `ldapsearch`.
+- `to_string()` is canonical (escapes `* ( ) \ NUL` as lower-case `\xx`,
+  `:dn` lower case); equality compares trees, so
+  `raw("cn=x") == raw("(cn=x)")`. Decoding BER rebuilds the exact tree
+  (needed by the mock server).
 
 ## 3. Requests
 
@@ -153,6 +141,10 @@ auto r = co_await conn.search({
 
 Controls are typed (`ldap::paged`, `ldap::sort`, …) in a `std::variant`, with
 `ldap::raw_control{oid, critical, bytes}` as the escape hatch.
+
+The designated-initializer style above is for the step 5 request structs,
+which stay aggregates. The wire model of section 10 is allocator-aware and
+uses constructors instead (`message{1, search_request{base, scope, f, {"cn"}}}`).
 
 Implemented so far: only the wire-level `control {type, criticality, value}`
 plus `encode_paged_results` / `decode_paged_results` helpers; the typed
@@ -263,6 +255,10 @@ Error-code categories:
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
 | `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
+
+`error`'s strings are `std::pmr::string` but always on the default
+resource, never an arena, even when decoding into one fails: errors outlive
+the operation (they go up the stack and into logs) and are the cold path.
 
 LDAP result code 0 (success) is not an `errc` value: a successful result is
 the absence of an error. `matched_dn` and `referrals` are still strings;
@@ -378,40 +374,35 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
 - Public types (`dn`, `entry`, `error`, user structs, requests) own their data
   and are regular. Nothing returned to the user points into a receive buffer.
 - Zero-copy views exist only inside the BER decoder.
-- `std::pmr` status: `url` (fully allocator-aware), the read buffer and the
-  transport (allocated from the resource given to `net::connect`) are done.
-  `tls_options` is a plain aggregate (configuration, not hot path) with
-  `std::filesystem::path` for files. The message model, filters, `dn`,
-  `attribute`, `entry`, `ber::writer` and `error` follow in step 4b.
-- One `connection` runs on one executor. Starting operations from other
-  threads is done by posting to that executor (the sync facade does this for
-  you).
+- `std::pmr` status (step 4b: done). Every public type that owns strings is
+  allocator-aware (`allocator_type`, allocator-extended copy/move, assignment
+  keeps the target's resource): the message model, `filter`, `dn`,
+  `attribute`, `entry`, `url`, `ber::writer`. `error` is the deliberate
+  exception (section 5). `decode_options::memory` sets where decoding
+  allocates (`read_options.decode.memory` for the network path);
+  `encode(m, mr)` and `write_message(t, m, mr | ber::writer&)` let callers
+  pool write buffers. `tls_options` stays a plain aggregate with
+  `std::filesystem::path` for files.
 
-**Decided: `std::pmr::string` / `std::pmr::vector` replace `std::string` /
-`std::vector` in public types.** New code uses them from step 4 (URLs,
-transport buffers); existing step 3 types are converted in step 4b.
-
-**Planned (step 4b): `std::pmr` support for encoding and decoding.**
-- Message model containers become `std::pmr::string` / `std::pmr::vector`
-  (filter tree nodes too); `decode_options` gains a `memory_resource*`
-  (default: the default resource, so behaviour is unchanged unless opted in).
-- `ber::writer` and the transport read/write buffers take a
-  `memory_resource*` so buffers can be pooled or reused.
-- The connection layer can decode each response into a per-response
-  `monotonic_buffer_resource`, then copy into user types (`search_as<T>`) or
-  hand out the entry, releasing the arena at once.
+**`std::pmr` (implemented, step 4b).**
 - Rule: an object decoded into a caller-supplied arena must not outlive it.
   Copies of pmr containers use the default resource, so copying out is always
   safe, and results decoded with default options are always safe.
+- BER parsing itself never allocates (`ber::reader` returns views into the
+  receive buffer). Decoded values are copied into the chosen resource, so
+  there is one owning message type; a zero-copy view model (values pointing
+  into the receive buffer, like OpenLDAP's `berval`) was considered and
+  rejected for now, since it needs a second message type with stricter
+  lifetimes.
 - Coroutine frames already accept a memory resource via Capy's
   `run_async(ex, mr)`.
-- Step 4b includes a benchmark (large search response, default heap vs arena)
-  to confirm the benefit.
-- BER parsing itself never allocates (`ber::reader` returns views into the
-  receive buffer). Decoded values are copied into the arena, so there is one
-  owning message type; a zero-copy view model (values pointing into the
-  receive buffer, like OpenLDAP's `berval`) was considered and rejected for
-  now, since it needs a second message type with stricter lifetimes.
+- Benchmark (`ldap/bench`, GCC 13 Release; 1,000 SearchResultEntry PDUs of
+  30 attributes x 3 values, every 20th with 68 KiB of binaries, 7.1 MiB):
+  default heap 15.1 ms and 111.7 allocations per entry; per-message
+  monotonic arena with a 256 KiB buffer 10.9 ms and 0 heap allocations. The
+  arena path is about 20% faster than step 4; the default heap path is about
+  9% slower than step 4 (virtual resource calls plus an element-counting pass
+  that reserves vectors exactly).
 
 ## 9. Toolchain
 
@@ -434,13 +425,16 @@ same codec serve the client and a mock server for tests.
 - Wire fields (LDAPDN, LDAPString, attribute values) are `std::string` holding
   raw octets, so a server sending an odd DN never breaks decoding; the
   vocabulary types of section 1 are for the API layer.
-- `encode(const message&)` returns `result<std::vector<std::byte>>`. It fails
-  with `invalid_filter` (bad `raw` filter) or `encode_error` (values the wire
+- Types are allocator-aware with value constructors (not aggregates); wire
+  strings are `std::pmr::string`, lists `std::pmr::vector` (`string_list`).
+- `encode(const message&, mr)` returns `result<std::pmr::vector<std::byte>>`.
+  It fails with `invalid_filter` (empty or over-limit filter) or
+  `encode_error` (values the wire
   format cannot carry: negative ids or limits, out-of-range enums, an add
   with no values), and all checks run before any byte is written. The decoder
   rejects the same empty adds, so both sides accept the same messages.
-  `decode(encode(m)) == m` except that the filter comes back as canonical
-  text, and `encode(decode(encode(m)))` is byte-identical to `encode(m)`.
+  `decode(encode(m)) == m` exactly (filters are trees), and
+  `encode(decode(encode(m)))` is byte-identical to `encode(m)`.
 - `decode(bytes, decode_options)` takes exactly one framed message.
   `decode_options::from` restricts which side sent it (default `origin::any`,
   used by tests and round trips). The connection layer (step 5) must pass
@@ -459,11 +453,16 @@ same codec serve the client and a mock server for tests.
 
 ## Resolved
 
-- Filters: string-based with builder operators; no validation step (section 2).
+- Filters: a typed tree built by operators; only `filter::raw` parses (section 2).
 - Descriptors: optional `object_class(...)` (section 4).
 - Schema: minimal parsing (section 6).
 
 ## Open questions
+
+- Default-heap decode is about 9% slower than before step 4b; the
+  element-counting pass (exact `reserve`) costs about 1 ms per 1,000 entries
+  in arena mode but saves a third of heap allocations. Revisit with real
+  workloads.
 
 - Happy Eyeballs (RFC 8305) instead of sequential per-address attempts.
 - Stricter TLS host matching (no CN fallback, no partial wildcards) needs

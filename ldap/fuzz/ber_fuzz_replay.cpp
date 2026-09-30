@@ -37,7 +37,7 @@ struct rng
 	std::uint8_t byte() { return static_cast<std::uint8_t>(next() & 0xFFu); }
 };
 
-std::vector<std::uint8_t> to_u8(const std::vector<std::byte> &v)
+std::vector<std::uint8_t> to_u8(std::span<const std::byte> v)
 {
 	std::vector<std::uint8_t> out(v.size());
 	for (std::size_t i = 0; i < v.size(); ++i) out[i] = std::to_integer<std::uint8_t>(v[i]);

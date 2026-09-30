@@ -35,6 +35,9 @@ struct read_options
 	std::size_t max_message_size = ber::default_max_message_size;
 	// Passed to decode(). A client must keep origin::server: a server may
 	// not send request operations (for example search filters).
+	// decode.memory is the resource the message is decoded into (default:
+	// the default resource); with a per-response arena the message must not
+	// outlive the arena (see message.hpp).
 	decode_options decode{ .from = origin::server };
 };
 
@@ -106,9 +109,13 @@ boost::capy::task<result<message>> read_message(transport &t, read_buffer &buf, 
 // Encodes `m` and writes all of it. Encoding errors are returned before
 // anything is written. Only one write may be in flight on a transport. `m`
 // must outlive the task.
-// TODO(4b): encode through a ber::writer on a caller-supplied memory
-// resource, so the write buffer can be pooled like read_buffer.
-boost::capy::task<result<void>> write_message(transport &t, const message &m);
+// The first overload encodes into a buffer allocated from `mr` for this
+// call; the second clears `w` and encodes into it, so one writer (on any
+// resource) can be reused for every message of a connection, like
+// read_buffer. `w` must outlive the task and not be used until it is done.
+boost::capy::task<result<void>>
+  write_message(transport &t, const message &m, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+boost::capy::task<result<void>> write_message(transport &t, const message &m, ber::writer &w);
 
 // Writes already encoded bytes (e.g. one or more PDUs from encode()).
 boost::capy::task<result<void>> write_bytes(transport &t, std::span<const std::byte> bytes);

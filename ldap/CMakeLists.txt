@@ -22,6 +22,7 @@ option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap_net (transports and connect; fetc
     ${jhetz_ldap_net_default})
 option(JHETZ_LDAP_SANITIZE "Build all targets with AddressSanitizer and UBSan" OFF)
 option(JHETZ_LDAP_WERROR "Treat warnings in jhetz::ldap code as errors" OFF)
+option(JHETZ_LDAP_BUILD_BENCH "Build the benchmarks (bench/, not run by ctest)" OFF)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -158,4 +159,12 @@ endif()
 
 if(JHETZ_LDAP_BUILD_FUZZERS)
     add_subdirectory(fuzz)
+endif()
+
+# Decode benchmark: default resource vs per-message arena (README.md has
+# numbers). Build it optimized and without sanitizers.
+if(JHETZ_LDAP_BUILD_BENCH)
+    add_executable(jhetz_ldap_decode_bench bench/decode_bench.cpp)
+    target_link_libraries(jhetz_ldap_decode_bench PRIVATE jhetz::ldap)
+    jhetz_ldap_warnings(jhetz_ldap_decode_bench)
 endif()

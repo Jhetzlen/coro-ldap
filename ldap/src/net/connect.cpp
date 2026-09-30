@@ -34,7 +34,8 @@ namespace {
 	using detail::clock;
 	using detail::deadline_t;
 
-	// Error contexts are std::string (ldap::error is a step 3 type).
+	// Contexts are built as std::string (cold path) and copied into the
+	// error, which lives on the default resource.
 	std::string str(std::string_view s) { return std::string(s); }
 
 	std::string to_text(const corosio::endpoint &ep)
@@ -208,7 +209,7 @@ capy::task<result<transport>>
 		auto setup = detail::make_tls_setup(options.tls);
 		if (!setup) {
 			auto e = std::move(setup.error());
-			e.context = target + ": " + e.context;
+			e.context.insert(0, target + ": ");
 			co_return std::unexpected(std::move(e));
 		}
 		tls.emplace(std::move(*setup));

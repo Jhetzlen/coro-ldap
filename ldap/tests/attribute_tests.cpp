@@ -11,6 +11,7 @@
 namespace ldap = jhetz::ldap;
 using jhetz::ldap::client_errc;
 using namespace std::string_literals;
+using namespace std::string_view_literals;
 
 static_assert(ldap::detail::is_attribute_description("cn"));
 static_assert(ldap::detail::is_attribute_description("userCertificate;binary"));
@@ -33,7 +34,7 @@ TEST_CASE("valid attribute descriptions", "[attribute]")
 	INFO(good);
 	auto a = ldap::attribute::parse(good);
 	REQUIRE(a);
-	CHECK(a->name() == good);
+	CHECK(a->name() == std::string_view(good));
 }
 
 TEST_CASE("invalid attribute descriptions", "[attribute]")
@@ -92,8 +93,8 @@ TEST_CASE("attribute comparison and hashing ignore case", "[attribute]")
 
 TEST_CASE("entry from a search result entry", "[entry]")
 {
-	ldap::search_result_entry e{ .object_name = "uid=jdoe,dc=example,dc=org",
-		.attributes = { { "cn", { "John", "Johnny" } },
+	ldap::search_result_entry e{ "uid=jdoe,dc=example,dc=org",
+		{ { "cn", { "John", "Johnny" } },
 		  { "objectClass", { "top", "person" } },
 		  { "jpegPhoto", { "\xff\xd8\0\x01"s } },
 		  { "CN", { "J" } },
@@ -107,9 +108,9 @@ TEST_CASE("entry from a search result entry", "[entry]")
 
 	const auto *cn = x.find("CN");
 	REQUIRE(cn != nullptr);
-	CHECK(*cn == std::vector<std::string>{ "John", "Johnny", "J" });
+	CHECK(*cn == ldap::string_list{ "John", "Johnny", "J" });
 	CHECK(x.find(ldap::attribute{ "OBJECTCLASS" }) == &x.attributes[1].values);
-	CHECK(x.find("jpegphoto")->front() == "\xff\xd8\0\x01"s);
+	CHECK(x.find("jpegphoto")->front() == "\xff\xd8\0\x01"sv);
 	CHECK(x.find("member;range=0-1499") != nullptr);
 	CHECK(x.find("member") == nullptr);
 	CHECK(x.find("mail") == nullptr);

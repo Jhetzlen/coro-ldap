@@ -3,14 +3,21 @@
 //
 // For any input it must not crash, and if the input decodes as a message:
 // - it encodes (the decoder only accepts what the encoder can write);
-// - the encoding decodes to an equal message and re-encodes to the same bytes;
+// - the encoding decodes to an equal message (exactly: filters are trees, so
+//   nothing is canonicalized) and re-encodes to the same bytes;
+// - decoding into a std::pmr::monotonic_buffer_resource gives an equal
+//   message without touching the default resource (a null resource is
+//   installed as the default meanwhile); a copy made before the arena is
+//   released stays valid after it (ASan reports any access to released
+//   arena memory);
 // - the framer measures the encoding as exactly one complete message;
 // - a paged results control that decodes re-encodes to an equal value;
 // - search entries convert to ldap::entry, results to ldap::error;
 // - decode_options::from accepts exactly the responses (origin::server) or the
 //   requests (origin::client), failing otherwise with unsupported_operation.
-// Also, with the input as (possibly non-canonical) filter text of a search
-// request m: if encode(m) succeeds, encode(decode(encode(m))) == encode(m).
+// Also, with the input as (possibly non-canonical) filter text: if it
+// parses, the search request m carrying it encodes, decode(encode(m)) == m
+// and encode(decode(encode(m))) == encode(m).
 #include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/message.hpp"
 
@@ -18,6 +25,8 @@
 #include "check.hpp"
 
 #include <cstdint>
+#include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -50,7 +59,9 @@ void exercise(const ldap::message &m)
 	  [](const auto &op) {
 		  using T = std::decay_t<decltype(op)>;
 		  if constexpr (std::is_same_v<T, ldap::search_result_entry>) {
-			  const auto e = ldap::entry::from(op);
+			  // A copy on op's resource, so the entry is made on it too.
+			  const auto e = ldap::entry::from(ldap::search_result_entry(op, op.get_allocator()));
+			  LDAP_FUZZ_CHECK(e.get_allocator() == op.get_allocator());
 			  LDAP_FUZZ_CHECK(e.dn == op.object_name);
 			  for (const auto &a : op.attributes) LDAP_FUZZ_CHECK(e.find(a.type) != nullptr);
 		  } else if constexpr (has_result<T>) {
@@ -81,20 +92,69 @@ void check_origins(std::span<const std::byte> input, const ldap::message &m)
 	LDAP_FUZZ_CHECK(*(request ? from_client : from_server) == m);
 }
 
-// encode(decode(encode(m))) == encode(m) for arbitrary filter text.
+// Search requests with arbitrary filter text round-trip exactly.
 void check_filter_text(std::span<const std::uint8_t> data)
 {
-	const std::string text(reinterpret_cast<const char *>(data.data()), data.size());
-	const ldap::message m{ .id = 1, .op = ldap::search_request{ .filter = ldap::filter::raw(text) } };
-	auto encoded = ldap::encode(m);
-	if (!encoded) {
-		LDAP_FUZZ_CHECK(encoded.error().code == ldap::client_errc::invalid_filter);
+	const std::string_view text(reinterpret_cast<const char *>(data.data()), data.size());
+	auto f = ldap::filter::raw(text);
+	if (!f) {
+		LDAP_FUZZ_CHECK(f.error().code == ldap::client_errc::invalid_filter);
 		return;
 	}
+	ldap::search_request s;
+	s.filter = std::move(*f);
+	const ldap::message m{ 1, std::move(s) };
+	auto encoded = ldap::encode(m);
+	LDAP_FUZZ_CHECK(encoded.has_value());
 	auto decoded = ldap::decode(*encoded);
 	LDAP_FUZZ_CHECK(decoded.has_value());
+	LDAP_FUZZ_CHECK(*decoded == m);
 	auto again = ldap::encode(*decoded);
 	LDAP_FUZZ_CHECK(again.has_value() && *again == *encoded);
+}
+
+// Default resource that fails loudly (std::bad_alloc, an uncaught exception
+// in the fuzzer) on any allocation, while the arena decode runs.
+class scoped_null_default
+{
+  public:
+	scoped_null_default() noexcept : old_(std::pmr::set_default_resource(std::pmr::null_memory_resource())) {}
+	scoped_null_default(const scoped_null_default &) = delete;
+	scoped_null_default &operator=(const scoped_null_default &) = delete;
+	~scoped_null_default() { std::pmr::set_default_resource(old_); }
+
+  private:
+	std::pmr::memory_resource *old_;
+};
+
+// Decodes into an arena whose memory all comes from the heap in chunks (no
+// initial buffer), so releasing it frees everything and ASan catches any
+// later access to it.
+void check_arena(std::span<const std::byte> input, const ldap::message &expected)
+{
+	std::pmr::monotonic_buffer_resource arena(std::pmr::new_delete_resource());
+	ldap::decode_options options;
+	options.memory = &arena;
+	std::optional<ldap::message> copy;
+	{
+		std::optional<ldap::result<ldap::message>> in_arena;
+		{
+			scoped_null_default guard;
+			in_arena.emplace(ldap::decode(input, options));
+		}
+		LDAP_FUZZ_CHECK(in_arena->has_value());
+		const ldap::message &m = **in_arena;
+		LDAP_FUZZ_CHECK(m == expected);
+		LDAP_FUZZ_CHECK(m.get_allocator().resource() == &arena);
+		exercise(m);
+		copy.emplace(m);// plain copy: default resource
+	}
+	arena.release();
+	LDAP_FUZZ_CHECK(copy->get_allocator().resource() == std::pmr::get_default_resource());
+	LDAP_FUZZ_CHECK(*copy == expected);
+	auto bytes = ldap::encode(*copy);
+	LDAP_FUZZ_CHECK(bytes.has_value());
+	LDAP_FUZZ_CHECK(ldap::decode(*bytes).value() == expected);
 }
 
 }// namespace
@@ -122,5 +182,6 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 
 	check_origins(input, *m);
 	exercise(*m);
+	check_arena(input, *m);
 	return 0;
 }

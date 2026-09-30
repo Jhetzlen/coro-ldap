@@ -94,10 +94,10 @@ capy::task<std::string> serve_one(net::transport t)
 {
 	net::read_buffer buf;
 	auto req = co_await net::read_message(t, buf, as_server);
-	if (!req) co_return "server read: " + req.error().message();
+	if (!req) co_return "server read: " + std::string(req.error().message());
 	if (*req != bind_request_msg(1)) co_return "server: unexpected request";
 	if (auto w = co_await net::write_message(t, bind_response_msg(1, "welcome")); !w)
-		co_return "server write: " + w.error().message();
+		co_return "server write: " + std::string(w.error().message());
 	auto end = co_await net::read_message(t, buf, as_server);
 	co_return end ? "server: unexpected second request" : "";
 }
@@ -138,16 +138,16 @@ capy::task<std::string>
   exchange(corosio::io_context &ioc, std::string text, net::connect_options options = {}, bool expect_tls = false)
 {
 	auto u = ldap::url::parse(text);
-	if (!u) co_return "url: " + u.error().message();
+	if (!u) co_return "url: " + std::string(u.error().message());
 	auto t = co_await net::connect(ioc, *u, options);
-	if (!t) co_return "connect: " + t.error().message();
+	if (!t) co_return "connect: " + std::string(t.error().message());
 	if (!t->is_open()) co_return "transport not open";
 	if (t->is_tls() != expect_tls) co_return "unexpected is_tls()";
 	if (auto w = co_await net::write_message(*t, bind_request_msg(1)); !w)
-		co_return "client write: " + w.error().message();
+		co_return "client write: " + std::string(w.error().message());
 	net::read_buffer buf;
 	auto r = co_await net::read_message(*t, buf);
-	if (!r) co_return "client read: " + r.error().message();
+	if (!r) co_return "client read: " + std::string(r.error().message());
 	if (*r != bind_response_msg(1, "welcome")) co_return "client: unexpected response";
 	t->close();
 	CHECK_FALSE(t->is_open());
@@ -231,7 +231,7 @@ TEST_CASE("connect timeout semantics", "[net][connect][tcp][timeout]")
 		auto t = connect_to(ioc, "ldap://127.0.0.1:1", { .timeout = limit });
 		REQUIRE_FALSE(t.has_value());
 		CHECK(t.error().code == capy::cond::timeout);
-		CHECK(t.error().context
+		CHECK(std::string(t.error().context)
 			  == "connect ldap://127.0.0.1:1: the connect timeout (" + std::to_string(limit.count())
 				   + " ms) is not positive");
 	}
@@ -350,8 +350,8 @@ TEST_CASE("connection refused", "[net][connect][tcp]")
 	auto t = connect_to(ioc, url);
 	REQUIRE_FALSE(t.has_value());
 	CHECK(t.error().code == std::errc::connection_refused);
-	CHECK(t.error().context == "connect " + url + ": tcp connect " + url.substr(7));
-	CHECK_THAT(t.error().message(), StartsWith("connect " + url + ": tcp connect "));
+	CHECK(std::string(t.error().context) == "connect " + url + ": tcp connect " + url.substr(7));
+	CHECK_THAT(std::string(t.error().message()), StartsWith("connect " + url + ": tcp connect "));
 }
 
 TEST_CASE("connect timeout while the TCP handshake cannot complete", "[net][connect][tcp][timeout]")
@@ -373,8 +373,8 @@ TEST_CASE("connect timeout while the TCP handshake cannot complete", "[net][conn
 	const auto elapsed = std::chrono::steady_clock::now() - start;
 	REQUIRE_FALSE(t.has_value());
 	CHECK(t.error().code == capy::cond::timeout);
-	CHECK_THAT(t.error().context, ContainsSubstring(": tcp connect 127.0.0.1:"));
-	CHECK_THAT(t.error().context, ContainsSubstring("gave up after the 300 ms connect timeout"));
+	CHECK_THAT(std::string(t.error().context), ContainsSubstring(": tcp connect 127.0.0.1:"));
+	CHECK_THAT(std::string(t.error().context), ContainsSubstring("gave up after the 300 ms connect timeout"));
 	CHECK(elapsed >= std::chrono::milliseconds(250));
 	CHECK(elapsed < std::chrono::seconds(10));
 }
@@ -386,7 +386,8 @@ TEST_CASE("unresolvable host", "[net][connect][tcp]")
 	// fail differently or time out; both are reported at the resolve stage.
 	auto t = connect_to(ioc, "ldap://no-such-host.invalid", { .timeout = std::chrono::seconds(5) });
 	REQUIRE_FALSE(t.has_value());
-	CHECK_THAT(t.error().context, StartsWith("connect ldap://no-such-host.invalid:389: resolve no-such-host.invalid"));
+	CHECK_THAT(std::string(t.error().context),
+	  StartsWith("connect ldap://no-such-host.invalid:389: resolve no-such-host.invalid"));
 	CHECK(t.error().code);
 }
 
@@ -396,7 +397,8 @@ TEST_CASE("URLs connect() refuses", "[net][connect]")
 	auto no_host = connect_to(ioc, "ldap:///dc=example");
 	REQUIRE_FALSE(no_host.has_value());
 	CHECK(no_host.error().code == client_errc::invalid_url);
-	CHECK(no_host.error().context == "connect ldap://:389: the URL names no host (or, for ldapi, no socket path)");
+	CHECK(std::string(no_host.error().context)
+		  == "connect ldap://:389: the URL names no host (or, for ldapi, no socket path)");
 
 	auto no_path = connect_to(ioc, "ldapi://");
 	REQUIRE_FALSE(no_path.has_value());
@@ -407,7 +409,7 @@ TEST_CASE("URLs connect() refuses", "[net][connect]")
 		INFO(text);
 		REQUIRE_FALSE(control.has_value());
 		CHECK(control.error().code == client_errc::invalid_url);
-		CHECK_THAT(control.error().context, EndsWith(": control character in the host"));
+		CHECK_THAT(std::string(control.error().context), EndsWith(": control character in the host"));
 	}
 
 	auto critical = connect_to(ioc,
@@ -415,7 +417,7 @@ TEST_CASE("URLs connect() refuses", "[net][connect]")
 	  "!x-unknown");
 	REQUIRE_FALSE(critical.has_value());
 	CHECK(critical.error().code == client_errc::invalid_url);
-	CHECK_THAT(critical.error().context, ContainsSubstring("unsupported critical extension x-unknown"));
+	CHECK_THAT(std::string(critical.error().context), ContainsSubstring("unsupported critical extension x-unknown"));
 }
 
 // ---------------------------------------------------------------- ldapi
@@ -445,7 +447,7 @@ TEST_CASE("ldapi:// errors", "[net][connect][ldapi]")
 	auto t = connect_to(ioc, "ldapi://" + percent_encode(missing.str()));
 	REQUIRE_FALSE(t.has_value());
 	CHECK(t.error().code == std::errc::no_such_file_or_directory);
-	CHECK_THAT(t.error().context, ContainsSubstring(": connect " + missing.str()));
+	CHECK_THAT(std::string(t.error().context), ContainsSubstring(": connect " + missing.str()));
 
 	auto too_long = connect_to(ioc, "ldapi://" + percent_encode("/" + std::string(200, 'x')));
 	REQUIRE_FALSE(too_long.has_value());
@@ -505,8 +507,8 @@ TEST_CASE("ldaps:// verification failures", "[net][connect][tls]")
 		spawn(ioc, accept_and_serve(srv.acc, server_context(localhost_cert())), server);
 		t = connect_to(ioc, srv.url("ldaps"));
 		REQUIRE_FALSE(t->has_value());
-		CHECK_THAT(
-		  t->error().context, StartsWith("connect " + srv.url("ldaps") + ": tls handshake: server certificate: "));
+		CHECK_THAT(std::string(t->error().context),
+		  StartsWith("connect " + srv.url("ldaps") + ": tls handshake: server certificate: "));
 	}
 	SECTION("host name mismatch")
 	{
@@ -514,7 +516,7 @@ TEST_CASE("ldaps:// verification failures", "[net][connect][tls]")
 		spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
 		t = connect_to(ioc, srv.url("ldaps", "localhost"), { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()) } });
 		REQUIRE_FALSE(t->has_value());
-		CHECK_THAT(t->error().context,
+		CHECK_THAT(std::string(t->error().context),
 		  ContainsSubstring("tls handshake: server certificate: hostname mismatch", Catch::CaseSensitive::No));
 	}
 	SECTION("IP address mismatch")
@@ -523,7 +525,7 @@ TEST_CASE("ldaps:// verification failures", "[net][connect][tls]")
 		spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
 		t = connect_to(ioc, srv.url("ldaps"), { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()) } });
 		REQUIRE_FALSE(t->has_value());
-		CHECK_THAT(t->error().context,
+		CHECK_THAT(std::string(t->error().context),
 		  ContainsSubstring("tls handshake: server certificate: IP address mismatch", Catch::CaseSensitive::No));
 	}
 	drive(ioc);
@@ -603,8 +605,8 @@ TEST_CASE("ldaps:// handshake timeout against a silent server", "[net][connect][
 	const auto elapsed = std::chrono::steady_clock::now() - start;
 	REQUIRE_FALSE(t.has_value());
 	CHECK(t.error().code == capy::cond::timeout);
-	CHECK(
-	  t.error().context == "connect " + srv.url("ldaps") + ": tls handshake: gave up after the 300 ms connect timeout");
+	CHECK(std::string(t.error().context)
+		  == "connect " + srv.url("ldaps") + ": tls handshake: gave up after the 300 ms connect timeout");
 	CHECK(elapsed >= std::chrono::milliseconds(250));
 	CHECK(elapsed < std::chrono::seconds(10));
 	server.get();
@@ -617,16 +619,17 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	auto half = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = "/nonexistent.crt" } });
 	REQUIRE_FALSE(half.has_value());
 	CHECK(half.error().code == std::errc::invalid_argument);
-	CHECK(half.error().context == "connect ldaps://127.0.0.1:1: tls: cert_file and key_file must be given together");
+	CHECK(std::string(half.error().context)
+		  == "connect ldaps://127.0.0.1:1: tls: cert_file and key_file must be given together");
 
 	auto missing = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_file = "/nonexistent/ca.pem" } });
 	REQUIRE_FALSE(missing.has_value());
 	CHECK(missing.error().code == std::errc::no_such_file_or_directory);
-	CHECK_THAT(missing.error().context, ContainsSubstring("tls: ca_file /nonexistent/ca.pem"));
+	CHECK_THAT(std::string(missing.error().context), ContainsSubstring("tls: ca_file /nonexistent/ca.pem"));
 
 	auto not_pem = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_pem = "garbage" } });
 	REQUIRE_FALSE(not_pem.has_value());
-	CHECK_THAT(not_pem.error().context, ContainsSubstring("tls: ca_pem: no PEM certificate found"));
+	CHECK_THAT(std::string(not_pem.error().context), ContainsSubstring("tls: ca_pem: no PEM certificate found"));
 
 	// PEM armour around garbage: parsed now, not at handshake time.
 	const std::string broken = "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n";
@@ -634,18 +637,18 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_pem = std::pmr::string(pki().ca_pem() + broken) } });
 	REQUIRE_FALSE(bad_cert.has_value());
 	CHECK(bad_cert.error().code == std::errc::invalid_argument);
-	CHECK_THAT(bad_cert.error().context, EndsWith("tls: ca_pem: certificate 2 of 2 does not parse"));
+	CHECK_THAT(std::string(bad_cert.error().context), EndsWith("tls: ca_pem: certificate 2 of 2 does not parse"));
 
 	temp_path bad_file(".pem");
 	bad_file.write(broken);
 	auto bad_ca_file = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_file = bad_file.str() } });
 	REQUIRE_FALSE(bad_ca_file.has_value());
-	CHECK_THAT(bad_ca_file.error().context, EndsWith(": certificate 1 of 1 does not parse"));
+	CHECK_THAT(std::string(bad_ca_file.error().context), EndsWith(": certificate 1 of 1 does not parse"));
 
 	auto no_dir = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_dir = "/nonexistent/certs" } });
 	REQUIRE_FALSE(no_dir.has_value());
 	CHECK(no_dir.error().code == std::errc::no_such_file_or_directory);
-	CHECK_THAT(no_dir.error().context, EndsWith("tls: ca_dir /nonexistent/certs"));
+	CHECK_THAT(std::string(no_dir.error().context), EndsWith("tls: ca_dir /nonexistent/certs"));
 
 	auto file_dir = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_dir = bad_file.str() } });
 	REQUIRE_FALSE(file_dir.has_value());
@@ -664,31 +667,33 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = junk.str(), .key_file = key_one.str() } });
 	REQUIRE_FALSE(junk_cert.has_value());
 	CHECK(junk_cert.error().code == std::errc::invalid_argument);
-	CHECK_THAT(junk_cert.error().context, EndsWith(": no parseable PEM certificate"));
+	CHECK_THAT(std::string(junk_cert.error().context), EndsWith(": no parseable PEM certificate"));
 
 	auto junk_key =
 	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = junk.str() } });
 	REQUIRE_FALSE(junk_key.has_value());
 	CHECK(junk_key.error().code == std::errc::invalid_argument);
-	CHECK_THAT(junk_key.error().context, ContainsSubstring(": no parseable PEM private key"));
+	CHECK_THAT(std::string(junk_key.error().context), ContainsSubstring(": no parseable PEM private key"));
 
 	auto mismatch =
 	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = key_two.str() } });
 	REQUIRE_FALSE(mismatch.has_value());
 	CHECK(mismatch.error().code == std::errc::invalid_argument);
-	CHECK_THAT(mismatch.error().context, ContainsSubstring(": does not match the certificate in tls: cert_file"));
+	CHECK_THAT(
+	  std::string(mismatch.error().context), ContainsSubstring(": does not match the certificate in tls: cert_file"));
 
 	// A valid pair passes the checks and fails only when connecting.
 	auto valid =
 	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = key_one.str() } });
 	REQUIRE_FALSE(valid.has_value());
-	CHECK_THAT(valid.error().context, ContainsSubstring("tcp connect"));
+	CHECK_THAT(std::string(valid.error().context), ContainsSubstring("tcp connect"));
 
 	for (std::string_view name : { std::string_view("ldap\0.example.org", 17), std::string_view("a\nb") }) {
 		auto bad_name = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .server_name = std::pmr::string(name) } });
 		REQUIRE_FALSE(bad_name.has_value());
 		CHECK(bad_name.error().code == std::errc::invalid_argument);
-		CHECK(bad_name.error().context == "connect ldaps://127.0.0.1:1: tls: control character in server_name");
+		CHECK(std::string(bad_name.error().context)
+			  == "connect ldaps://127.0.0.1:1: tls: control character in server_name");
 	}
 }
 
@@ -708,7 +713,8 @@ TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
 		  auto [hec] = co_await stream.handshake(corosio::tls_role::server);
 		  if (hec) co_return "handshake: " + hec.message();
 		  auto t = net::transport::wrap(std::move(stream), "server");
-		  if (auto w = co_await net::write_message(t, bind_response_msg(1, "bye")); !w) co_return w.error().message();
+		  if (auto w = co_await net::write_message(t, bind_response_msg(1, "bye")); !w)
+			  co_return std::string(w.error().message());
 		  co_return "";// the transport and its socket go away: no close_notify
 	  }(srv.acc, server_context(localhost_cert())),
 	  server);
@@ -717,13 +723,13 @@ TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
 	  [](corosio::io_context &io, std::string text) -> capy::task<std::string> {
 		  auto u = ldap::url::parse(text);
 		  auto t = co_await net::connect(io, *u, { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()) } });
-		  if (!t) co_return "connect: " + t.error().message();
+		  if (!t) co_return "connect: " + std::string(t.error().message());
 		  net::read_buffer buf;
 		  auto first = co_await net::read_message(*t, buf);
 		  if (!first || *first != bind_response_msg(1, "bye")) co_return "first read failed";
 		  auto second = co_await net::read_message(*t, buf);
 		  if (second) co_return "second read succeeded";
-		  co_return second.error().context + " | " + second.error().code.message();
+		  co_return std::string(second.error().context) + " | " + second.error().code.message();
 	  }(ioc, srv.url("ldaps")),
 	  client);
 	drive(ioc);
