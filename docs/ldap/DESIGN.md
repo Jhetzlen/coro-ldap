@@ -343,6 +343,10 @@ auto people = c.search_as<person>({...});          // same request/result types
   threads is done by posting to that executor (the sync facade does this for
   you).
 
+**Decided: `std::pmr::string` / `std::pmr::vector` replace `std::string` /
+`std::vector` in public types.** New code uses them from step 4 (URLs,
+transport buffers); existing step 3 types are converted in step 4b.
+
 **Planned (step 4b): `std::pmr` support for encoding and decoding.**
 - Message model containers become `std::pmr::string` / `std::pmr::vector`
   (filter tree nodes too); `decode_options` gains a `memory_resource*`
