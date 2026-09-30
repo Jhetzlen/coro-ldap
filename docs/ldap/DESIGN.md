@@ -115,7 +115,8 @@ Decoded filters come back as canonical text (escapes normalized to lower-case
 `\xx` for `* ( ) \ NUL` only, `:dn` lower case, empty substring parts dropped),
 which has the same meaning as the original but may differ textually.
 
-**Planned change (step 4b, after step 4, before step 5): typed filter tree.**
+**Planned change (step 4b, after step 4, before step 5; together with the
+`std::pmr` support in section 8): typed filter tree.**
 Today `filter` stores text and the whole text is parsed again when a request
 is encoded, which also forces the raw-operand wrapping above. The builders
 will instead produce a small typed tree (and/or/not/equality/substring/
@@ -341,6 +342,23 @@ auto people = c.search_as<person>({...});          // same request/result types
 - One `connection` runs on one executor. Starting operations from other
   threads is done by posting to that executor (the sync facade does this for
   you).
+
+**Planned (step 4b): `std::pmr` support for encoding and decoding.**
+- Message model containers become `std::pmr::string` / `std::pmr::vector`
+  (filter tree nodes too); `decode_options` gains a `memory_resource*`
+  (default: the default resource, so behaviour is unchanged unless opted in).
+- `ber::writer` and the transport read/write buffers take a
+  `memory_resource*` so buffers can be pooled or reused.
+- The connection layer can decode each response into a per-response
+  `monotonic_buffer_resource`, then copy into user types (`search_as<T>`) or
+  hand out the entry, releasing the arena at once.
+- Rule: an object decoded into a caller-supplied arena must not outlive it.
+  Copies of pmr containers use the default resource, so copying out is always
+  safe, and results decoded with default options are always safe.
+- Coroutine frames already accept a memory resource via Capy's
+  `run_async(ex, mr)`.
+- Step 4b includes a benchmark (large search response, default heap vs arena)
+  to confirm the benefit.
 
 ## 9. Toolchain
 
