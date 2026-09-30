@@ -4,6 +4,7 @@ Status: steps 1–4b implemented under `ldap/` (errors, BER codec, message model
 typed filters, DN/attribute/entry, URLs, transports and connect, `std::pmr`
 throughout). Sections 3–7 describe the API still to be built;
 "Implemented" notes say where the code differs from the original plan.
+Remaining work is tracked as GitHub issues, indexed in `ROADMAP.md`.
 `api_prototype.cpp` next to this file checks that the type-safety parts of
 section 4 compile as C++23 (GCC 13).
 
