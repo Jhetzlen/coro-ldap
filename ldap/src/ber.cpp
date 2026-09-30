@@ -342,7 +342,7 @@ result<void> reader::expect_end() const
 
 // ---------------------------------------------------------------- framer
 
-result<std::optional<std::size_t>> complete_message_size(std::span<const std::byte> buf, std::size_t max_size)
+result<std::optional<std::size_t>> declared_message_size(std::span<const std::byte> buf, std::size_t max_size)
 {
 	auto h = parse_header_at(buf, 0);
 	if (!h) return std::unexpected(std::move(h.error()));
@@ -353,8 +353,15 @@ result<std::optional<std::size_t>> complete_message_size(std::span<const std::by
 		return fail(client_errc::message_too_large,
 		  "ber: declared message size " + std::to_string(total) + " exceeds the maximum of " + std::to_string(max_size)
 			+ " bytes");
-	if (buf.size() < total) return std::optional<std::size_t>{};
 	return std::optional<std::size_t>{ static_cast<std::size_t>(total) };
+}
+
+result<std::optional<std::size_t>> complete_message_size(std::span<const std::byte> buf, std::size_t max_size)
+{
+	auto total = declared_message_size(buf, max_size);
+	if (!total) return total;
+	if (!*total || buf.size() < **total) return std::optional<std::size_t>{};
+	return total;
 }
 
 }// namespace jhetz::ldap::ber

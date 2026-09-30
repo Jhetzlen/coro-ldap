@@ -1,0 +1,1 @@
+ldap://ldap2.example.com/o=Question%3f,c=US?mail

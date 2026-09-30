@@ -90,6 +90,7 @@ enum class client_errc : int {
 	invalid_dn,// RFC 4514 DN text could not be parsed
 	invalid_attribute,// not a valid attribute description (RFC 4512)
 	encode_error,// value out of range for the LDAP message being encoded
+	invalid_url,// RFC 4516 LDAP URL could not be parsed, or cannot be used to connect
 };
 
 const std::error_category &result_category() noexcept;// "ldap.result"

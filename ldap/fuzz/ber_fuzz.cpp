@@ -213,6 +213,19 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 		FUZZ_CHECK(e->size() > max_size);
 	}
 
+	// declared_message_size knows the size from the header alone: it fails
+	// exactly when the framer fails, and agrees with it once complete.
+	auto declared = ber::declared_message_size(input, max_size);
+	FUZZ_CHECK(declared.has_value() == framed.has_value());
+	if (!declared) {
+		FUZZ_CHECK(declared.error() == framed.error());
+	} else if (*framed) {
+		FUZZ_CHECK(*declared == *framed);
+	} else if (*declared) {
+		FUZZ_CHECK(**declared > input.size());// header complete, content missing
+		FUZZ_CHECK(**declared <= max_size);
+	}
+
 	// Walk everything, with the default and with a tiny depth limit.
 	walk(ber::reader(input));
 	walk(ber::reader(input, 2));
