@@ -98,22 +98,20 @@ template<class T> T run(corosio::io_context &ioc, capy::task<T> t)
 
 // ---------------------------------------------------------------- messages
 
-inline message bind_request_msg(std::int32_t id, std::string name = "cn=admin,dc=example,dc=org")
+inline message bind_request_msg(std::int32_t id, std::string_view name = "cn=admin,dc=example,dc=org")
 {
-	return message{ .id = id,
-		.op = bind_request{ .version = 3, .name = std::move(name), .authentication = simple_auth{ "secret" } } };
+	return message{ id, bind_request{ 3, name, simple_auth{ "secret" } } };
 }
 
-inline message bind_response_msg(std::int32_t id, std::string diagnostic = {})
+inline message bind_response_msg(std::int32_t id, std::string_view diagnostic = {})
 {
-	return message{ .id = id,
-		.op = bind_response{ .result = { .result_code = 0, .diagnostic_message = std::move(diagnostic) } } };
+	return message{ id, bind_response{ { 0, "", diagnostic } } };
 }
 
 inline std::string bytes_of(const message &m)
 {
 	auto b = encode(m);
-	if (!b) throw std::runtime_error("encode failed: " + b.error().message());
+	if (!b) throw std::runtime_error("encode failed: " + std::string(b.error().message()));
 	return std::string(reinterpret_cast<const char *>(b->data()), b->size());
 }
 

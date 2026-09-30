@@ -224,7 +224,7 @@ namespace {
 void octet_string_of_total_size(ber::writer &w, std::size_t total)
 {
 	for (std::size_t payload = total - 2;; --payload) {
-		std::vector<std::byte> header;
+		std::pmr::vector<std::byte> header;
 		ber::encode_length(header, payload);
 		if (1 + header.size() + payload == total) {
 			w.octet_string(std::string(payload, 'p'));

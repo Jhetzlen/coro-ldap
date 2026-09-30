@@ -8,33 +8,51 @@ C++23 LDAP client library, in progress. Design: [`docs/ldap/DESIGN.md`](../docs/
   `ldap::errc` (RFC 4511 result codes, category `ldap.result`) and
   `ldap::client_errc` (category `ldap.client`).
 - `jhetz/ldap/ber.hpp`: the restricted BER codec LDAP uses (RFC 4511 section 5.1):
-  `ber::writer`, `ber::reader` (non-owning, depth-bounded, safe on untrusted
-  input) and the framer `ber::complete_message_size`.
+  `ber::writer` (its buffer on a `memory_resource`, reusable), `ber::reader`
+  (non-owning, depth-bounded, safe on untrusted input) and the framer
+  `ber::complete_message_size`.
 - `jhetz/ldap/message.hpp`: RFC 4511 `LDAPMessage` as a wire model
   (`ldap::message`, `protocol_op` = every request and response, `control`,
   `ldap_result` with `to_error()`), `encode()` / `decode()`, and the paged
-  results control (RFC 2696). Wire strings stay `std::string`; see the header
+  results control (RFC 2696). Wire strings are `std::pmr::string` holding the
+  octets as sent; the search filter is an `ldap::filter` tree; see the header
   for the decoding rules (RFC 4511 section 4 extensibility, range checks).
+  `decode(encode(m)) == m` exactly, and re-encoding is byte-identical.
   `decode_options` limits what a peer may send: `from = origin::server`
   (a client connection) rejects request operations, `origin::client` (a
   server) rejects responses, before anything is decoded; plus the reader
-  depth and the filter limits.
-- `jhetz/ldap/filter.hpp`: `ldap::filter` (RFC 4515 text), escaping builders in
-  `ldap::filters` (`attr("uid") == v && !attr("x").present()`), the RFC 4515
-  parser to BER (`encode_filter`) and BER back to canonical text
-  (`decode_filter`). Filters nest at most `max_filter_depth` (24) levels and
-  have at most `max_filter_elements` (10,000) elements, both configurable
-  with `filter_limits`. `&&`, `||` and `!` wrap a `filter::raw` operand that
-  is not one parenthesized group, and mark it invalid if wrapping does not
-  make it one, so malformed raw text never turns into a different valid
-  filter.
+  depth and the filter limits; `memory` is the resource everything decoded
+  is allocated from. The types have constructors taking the fields in order
+  (`message{1, search_request{base, search_scope::whole_subtree, f, {"cn"}}}`);
+  they are not aggregates, so designated initializers do not work on them.
+- `jhetz/ldap/filter.hpp`: `ldap::filter`, a typed tree (and / or / not,
+  equality, substrings, >=, <=, present, approx, extensible match) holding
+  unescaped values. Built by the builders in `ldap::filters`
+  (`attr("uid") == v && !attr("x").present()`), which make nodes directly
+  (never text), or parsed once from RFC 4515 text by `filter::raw(text)`,
+  which returns `result<filter>` (malformed text fails there, with
+  `invalid_filter`). `encode_filter` writes BER straight from the tree;
+  `decode_filter` builds a tree from BER (for a mock server);
+  `to_string()` prints canonical RFC 4515 text for logs; `root()` gives a
+  read-only view of the nodes. Equality compares trees. `&&`, `||` and `!`
+  only add nodes (AND / OR chains are flattened), so combining parsed
+  filters cannot change their meaning. Filters nest at most
+  `max_filter_depth` (24) levels and have at most `max_filter_elements`
+  (10,000) elements (`filter_limits`): `raw` and `decode_filter` check while
+  reading, and a builder-made filter beyond them fails with `invalid_filter`
+  when encoded. Nodes live in one vector and the strings in one pool (two
+  allocations per filter); combining reuses rvalue operands, so a chain
+  built in one expression (nested either way) or in a loop as
+  `f = std::move(f) || x` is linear (`f = f || x` copies `f` each time), and
+  nothing but encoding recurses.
 - `jhetz/ldap/dn.hpp`: `ldap::dn` (RFC 4514 parse / `to_string`, multi-valued
   RDNs, `parent()`, `child()`, compile-time checked literals). Syntax only: no
   matching-rule normalization of values.
 - `jhetz/ldap/attribute.hpp`: `ldap::attribute`, an attribute description with
   case-insensitive equality, ordering and `std::hash`.
 - `jhetz/ldap/entry.hpp`: `ldap::entry`, the untyped search result entry
-  (DN text + attributes, case-insensitive `find`).
+  (DN text + attributes, case-insensitive `find`); `entry::from` takes the
+  strings of a decoded `search_result_entry` and keeps its resource.
 - `jhetz/ldap/url.hpp`: `ldap::url`, RFC 4516 LDAP URLs (`ldap://`,
   `ldaps://`, `ldapi://` with a percent-encoded socket path): host (name,
   IPv4, bracketed IPv6 with optional zone), port (explicit or scheme
@@ -88,15 +106,40 @@ on by default) with the network parts. It depends on Corosio and Capy
   `max_message_size` (16 MiB default) is rejected from its header, before its
   body is read; the buffer grows to one PDU (or 16 KiB) at most. A TLS peer
   closing without close_notify between PDUs reads as a close. After any
-  error the connection must be dropped. `write_message` / `write_bytes` send.
+  error the connection must be dropped. `read_options::decode.memory` is the
+  resource the message is decoded into (e.g. a per-response arena).
+  `write_message(t, m, mr)` encodes into a buffer on `mr`;
+  `write_message(t, m, writer)` reuses the caller's `ber::writer`;
+  `write_bytes` sends raw bytes.
 
-Memory: new public types use `std::pmr` containers (DESIGN.md section 8):
-`url` and `url_extension` are allocator-aware (`url::parse(text, &resource)`,
-allocator-extended copies, assignment keeps the target's resource),
-`read_buffer`, `connect` and `transport::wrap` take a `memory_resource*`; the
-defaults use the default resource, i.e. the heap. `tls_options` is a plain
-aggregate (configuration, not a hot path). The step 3 types (message, filter, dn,
-attribute, entry, error) are converted in step 4b.
+Memory (DESIGN.md section 8): the public types use `std::pmr` containers
+and are allocator-aware: the message model (every operation, `ldap_result`,
+`control`, `partial_attribute`, `message`, `paged_results`), `filter`,
+`dn` / `rdn` / `ava`, `attribute`, `entry` / `attribute_values`, `url` /
+`url_extension` and `ber::writer` have `allocator_type`, `get_allocator()`,
+an allocator constructor, allocator-extended copy and move constructors, and
+assignment that keeps the target's resource (also for their `std::optional`
+and `std::variant` members). Parsing and decoding take the resource:
+`decode_options::memory`, `filter::raw(text, mr)`, `decode_filter(r, limits,
+mr)`, `dn::parse(text, mr)`, `attribute::parse(text, mr)`,
+`url::parse(text, mr)`, `filters::attr(name, alloc)`, `encode(m, mr)`.
+`read_buffer`, `connect` and `transport::wrap` take a `memory_resource*` too.
+The defaults are the default resource, i.e. the heap, so nothing changes
+unless a resource is given.
+- Lifetime rule: an object decoded into (or built on) a caller-supplied
+  resource, such as a per-response `std::pmr::monotonic_buffer_resource`,
+  must not outlive it. A plain copy uses the default resource, so copying out
+  is always safe.
+- `ldap::error` holds `std::pmr` strings but is not allocator-aware: errors
+  are always built on the default resource, never in a caller's arena, even
+  when decoding into one fails, because they outlive the operation (they go
+  up the call stack and into logs). Errors are the cold path.
+- Decoding is tested to allocate only from `decode_options::memory` for every
+  sample message (a large entry included), and a builder-made filter plus
+  `encode` only from the resource given, with a counting resource and with a
+  `monotonic_buffer_resource` over a fixed buffer with a null upstream while
+  the default resource is `null_memory_resource()` (`tests/pmr_tests.cpp`).
+- `tls_options` is a plain aggregate (configuration, not a hot path).
 
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
@@ -131,14 +174,15 @@ certificates generated at run time through the OpenSSL API.
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
 | `JHETZ_LDAP_WERROR` | `OFF` | warnings are errors in our code (CI turns it on) |
+| `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench` (see below; not run by ctest or CI) |
 
 ## Fuzz
 
 | Target | Input | Properties |
 |---|---|---|
 | `ber_fuzz` | bytes | framer and reader agree; every element walks; values re-encode consistently |
-| `message_fuzz` | bytes | a message that decodes encodes, decodes to an equal message and re-encodes to the same bytes |
-| `filter_fuzz` | text / bytes | filter text -> BER -> text -> identical BER; every builder output parses and `attr("cn") == v` carries `v` exactly; decodable BER filters round-trip |
+| `message_fuzz` | bytes | a message that decodes encodes, decodes to an equal message (exactly) and re-encodes to the same bytes; decoding into a `monotonic_buffer_resource` (with `null_memory_resource()` as the default resource meanwhile) gives an equal message, and a copy taken before the arena is released stays valid (ASan); filter text in a search request round-trips exactly |
+| `filter_fuzz` | text / bytes | `filter::raw` text -> BER -> equal tree -> same BER, and `to_string` -> `raw` -> equal tree (a fixed point); every builder's text parses back to its tree (escaping) and `attr("cn") == v` carries `v` exactly; decodable BER filters round-trip; `!f` holds exactly `f`'s BER |
 | `dn_fuzz` | text | `parse(to_string(d)) == d`; the literal validator agrees with `parse` |
 | `url_fuzz` | text | `parse(to_string(u)) == u` and `to_string` is canonical; printed URLs contain only RFC 3986 characters |
 
@@ -171,6 +215,45 @@ Without libFuzzer, the `<target>_replay` tests (part of `ctest`) run the same
 entry points on deterministic generated and mutated inputs (about 300,000 for
 `ber_fuzz`, 200,000 for `message_fuzz` and `url_fuzz`, 150,000 for `dn_fuzz`
 and 45,000 for the slower `filter_fuzz`).
+
+## Benchmark
+
+`bench/decode_bench.cpp` (option `JHETZ_LDAP_BUILD_BENCH`) decodes a stream
+of 1,000 SearchResultEntry PDUs, 30 attributes x 3 values (10-60 bytes) each,
+plus a 64 KiB `jpegPhoto` and a 4 KiB `userCertificate` in every 20th entry
+(7.1 MiB, 90,100 values), with the default resource and with one
+`monotonic_buffer_resource` `release()`d after each message, with and
+without a 256 KiB initial buffer. Heap allocations are counted with a
+counting default resource in a separate pass.
+
+```sh
+cmake -S ldap -B build/ldap-bench -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DJHETZ_LDAP_BUILD_BENCH=ON -DJHETZ_LDAP_BUILD_TESTS=OFF -DJHETZ_LDAP_BUILD_NET=OFF
+cmake --build build/ldap-bench && build/ldap-bench/jhetz_ldap_decode_bench
+```
+
+GCC 13.3, Release (`-O3`), one core of a shared 4-core VM, best / median of
+15 runs (three invocations agreed within 2%):
+
+| Mode | Best | Median | Heap allocations | per entry | Heap MiB |
+|---|---:|---:|---:|---:|---:|
+| default resource (heap) | 14.8 ms | 15.1 ms | 111,662 | 111.7 | 11.8 |
+| monotonic arena, 256 KiB buffer, `release()` | 10.7 ms | 10.9 ms | 0 | 0 | 0 |
+| monotonic arena, no buffer, `release()` | 11.1 ms | 11.3 ms | 5,100 | 5.1 | 17.4 |
+
+A reused arena with a buffer that holds a typical response removes every
+heap allocation and saves about 28% of the decode time here; without a
+buffer, `release()` hands the chunks back and each message fetches them
+again (about 5 per entry, larger ones for the photos). Decoding reserves the
+attribute and value vectors exactly (counting the elements first), which
+took the heap mode from 177 to 112 allocations per entry and the arena
+without buffer from 24.6 to 17.4 MiB, at the price of reading the element
+headers twice (the arena modes were about 1 ms faster without it).
+For reference, the step 4 decoder (`std::string` / `std::vector`, before
+this change) took 13.6 ms for the same stream (ported benchmark, heap only):
+the default-resource path is now about 9% slower (the virtual
+`memory_resource` calls and the counting pass), the arena paths about 20%
+faster.
 
 ## Golden vectors
 

@@ -6,6 +6,7 @@
 #include <compare>
 #include <cstddef>
 #include <functional>
+#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -100,9 +101,15 @@ namespace detail {
 //   kept as sent (Active Directory, for one, sends `member;range=0-1499`,
 //   which is not RFC 4512 syntax). Only use it for data that is not going
 //   back into a request unvalidated.
+//
+// Memory: allocator-aware (std::pmr); the name is allocated from the resource
+// given to the constructor, parse() or unchecked(). A plain copy uses the
+// default resource, assignment keeps the target's resource.
 class attribute
 {
   public:
+	using allocator_type = std::pmr::polymorphic_allocator<>;
+
 	// Compile-time checked literal (consteval: invalid text fails to compile).
 	struct literal
 	{
@@ -114,17 +121,34 @@ class attribute
 	};
 
 	attribute() = default;
-	attribute(literal l) : name_(l.text) {}
+	explicit attribute(const allocator_type &alloc) : name_(alloc) {}
+	attribute(literal l, const allocator_type &alloc = {}) : name_(l.text, alloc) {}
+	attribute(const attribute &) = default;
+	attribute(attribute &&) noexcept = default;
+	attribute(const attribute &other, const allocator_type &alloc) : name_(other.name_, alloc) {}
+	attribute(attribute &&other, const allocator_type &alloc) : name_(std::move(other.name_), alloc) {}
+	attribute &operator=(const attribute &) = default;
+	attribute &operator=(attribute &&) = default;
+	~attribute() = default;
 
-	static result<attribute> parse(std::string_view text);
-	static attribute unchecked(std::string text)
+	allocator_type get_allocator() const noexcept { return name_.get_allocator(); }
+
+	static result<attribute> parse(std::string_view text,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	static attribute unchecked(std::string_view text, const allocator_type &alloc = {})
 	{
-		attribute a;
-		a.name_ = std::move(text);
+		attribute a(alloc);
+		a.name_.assign(text);
 		return a;
 	}
+	static attribute unchecked(const char *text, const allocator_type &alloc = {})
+	{
+		return unchecked(std::string_view(text), alloc);
+	}
+	// Takes the string, with its resource.
+	static attribute unchecked(std::pmr::string &&text) noexcept { return attribute(std::move(text), adopt{}); }
 
-	const std::string &name() const noexcept { return name_; }
+	const std::pmr::string &name() const noexcept { return name_; }
 	bool empty() const noexcept { return name_.empty(); }
 
 	friend bool operator==(const attribute &a, const attribute &b) noexcept
@@ -134,7 +158,12 @@ class attribute
 	friend std::weak_ordering operator<=>(const attribute &a, const attribute &b) noexcept;
 
   private:
-	std::string name_;
+	struct adopt
+	{
+	};
+	attribute(std::pmr::string &&name, adopt) noexcept : name_(std::move(name)) {}
+
+	std::pmr::string name_{};
 };
 
 // Case-insensitive hash, consistent with operator==.

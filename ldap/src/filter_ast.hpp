@@ -1,48 +1,17 @@
-// Internal: parsed form of a filter, shared by filter.cpp and message.cpp so a
-// search request can check its filter before anything is written.
+// Internal: the two halves of encode_filter, so a search request can check its
+// filter before anything is written, then write it.
 #pragma once
 
 #include "jhetz/ldap/ber.hpp"
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/filter.hpp"
 
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
-
 namespace jhetz::ldap::detail {
 
-enum class filter_kind {
-	and_,
-	or_,
-	not_,
-	equality,
-	substrings,
-	greater_or_equal,
-	less_or_equal,
-	present,
-	approx,
-	extensible
-};
+// invalid_filter if `f` is empty or beyond `limits`.
+result<void> check_filter(const filter &f, const filter_limits &limits);
 
-struct filter_node
-{
-	filter_kind kind = filter_kind::present;
-	std::string attr;// attribute description (extensible: type, may be empty)
-	std::string value;// assertion value / matchValue
-	std::string rule;// extensible: matchingRule, may be empty
-	bool dn_attributes = false;// extensible
-	std::optional<std::string> initial;// substrings
-	std::vector<std::string> any;// substrings
-	std::optional<std::string> final_;// substrings
-	std::vector<filter_node> children;// and / or: any number; not: exactly one
-};
-
-// RFC 4515 text -> tree (invalid_filter on error).
-result<filter_node> parse_filter(std::string_view text, const filter_limits &limits = {});
-
-// Tree -> BER; cannot fail.
-void write_filter(ber::writer &w, const filter_node &node);
+// Tree -> BER. Precondition: check_filter succeeded (it bounds the recursion).
+void write_filter(ber::writer &w, const filter &f);
 
 }// namespace jhetz::ldap::detail

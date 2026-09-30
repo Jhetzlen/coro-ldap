@@ -98,10 +98,10 @@ TEST_CASE("dn::to_string escapes what RFC 4514 requires", "[dn]")
 	  P{ "", "cn=" });
 	INFO(text);
 	const auto d = ldap::dn{}.child(single("cn", value));
-	CHECK(d.to_string() == text);
+	CHECK(d.to_string() == std::string_view(text));
 	const auto back = parse(text);
 	CHECK(back == d);
-	CHECK(back.rdns()[0].avas[0].value == value);
+	CHECK(back.rdns()[0].avas[0].value == std::string_view(value));
 }
 
 TEST_CASE("dn parsing leniency", "[dn]")

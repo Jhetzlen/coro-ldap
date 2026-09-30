@@ -4,73 +4,140 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <chrono>
+#include <concepts>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace ber = jhetz::ldap::ber;
 namespace ldap = jhetz::ldap;
 using jhetz::ldap::client_errc;
 using jhetz::ldap::test::hex;
 using namespace std::string_literals;
+using namespace std::string_view_literals;
 
 namespace {
 
-ldap::result<std::vector<std::byte>> to_ber(std::string_view text)
+ldap::filter raw(std::string_view text)
+{
+	auto f = ldap::filter::raw(text);
+	INFO(text);
+	REQUIRE(f.has_value());
+	return std::move(*f);
+}
+
+ldap::result<std::pmr::vector<std::byte>> to_ber(const ldap::filter &f, const ldap::filter_limits &limits = {})
 {
 	ber::writer w;
-	auto r = ldap::encode_filter(w, text);
-	if (!r) return std::unexpected(r.error());
+	auto r = ldap::encode_filter(w, f, limits);
+	if (!r) {
+		CHECK(w.bytes().empty());
+		return std::unexpected(r.error());
+	}
 	return w.take();
 }
 
-// text -> BER -> canonical text; also checks canonical text -> same BER.
+ldap::result<ldap::filter> from_ber(std::span<const std::byte> bytes, const ldap::filter_limits &limits = {})
+{
+	ber::reader r(bytes);
+	auto f = ldap::decode_filter(r, limits);
+	if (f)
+		CHECK(r.empty());
+	else
+		CHECK(r.offset() == 0);// unchanged on failure
+	return f;
+}
+
+// Text -> tree -> canonical text; also checks tree -> BER -> the same tree,
+// and that the canonical text parses to the same tree again.
 std::string canonical(std::string_view text)
 {
-	auto b = to_ber(text);
+	const auto f = raw(text);
+	auto b = to_ber(f);
 	REQUIRE(b.has_value());
-	ber::reader r(*b);
-	auto t = ldap::decode_filter(r);
-	REQUIRE(t.has_value());
-	CHECK(r.empty());
-	auto again = to_ber(*t);
-	REQUIRE(again.has_value());
-	CHECK(hex(*again) == hex(*b));
-	return *t;
+	auto back = from_ber(*b);
+	REQUIRE(back.has_value());
+	CHECK(*back == f);
+	const std::string out(f.to_string());
+	CHECK(raw(out) == f);
+	CHECK(back->to_string() == std::string_view(out));
+	return out;
 }
+
+std::string text_of(const ldap::filter &f) { return std::string(f.to_string()); }
+
+// `t && f`, `f || t` and `!t` give filters.
+template<class T>
+concept combinable = requires(const T &t, const ldap::filter &f) {
+	{ t &&f } -> std::same_as<ldap::filter>;
+	{ f || t } -> std::same_as<ldap::filter>;
+	{ !t } -> std::same_as<ldap::filter>;
+};
 
 }// namespace
 
-TEST_CASE("filter builders produce escaped RFC 4515 text", "[filter][builder]")
+TEST_CASE("filter builders make one-node trees with unescaped values", "[filter][builder]")
 {
 	using namespace ldap::filters;
-	CHECK((attr("cn") == "Babs Jensen").text == "(cn=Babs Jensen)");
-	CHECK((attr("uidNumber") >= "1000").text == "(uidNumber>=1000)");
-	CHECK((attr("uidNumber") <= "2000").text == "(uidNumber<=2000)");
-	CHECK(attr("sn").approx("smith").text == "(sn~=smith)");
-	CHECK(attr("mail").present().text == "(mail=*)");
-	CHECK(attr("cn").starts_with("Jo").text == "(cn=Jo*)");
-	CHECK(attr("cn").ends_with("son").text == "(cn=*son)");
-	CHECK(attr("cn").contains("oh").text == "(cn=*oh*)");
-	CHECK(attr("cn").starts_with("").text == "(cn=*)");
-	CHECK(attr("cn").contains("").text == "(cn=*)");
-	CHECK((attr("cn;lang-en") == "x").text == "(cn;lang-en=x)");
-	CHECK((attr("2.5.4.3") == "x").text == "(2.5.4.3=x)");
+	using kind = ldap::filter::kind;
+	CHECK(text_of(attr("cn") == "Babs Jensen") == "(cn=Babs Jensen)");
+	CHECK(text_of(attr("uidNumber") >= "1000") == "(uidNumber>=1000)");
+	CHECK(text_of(attr("uidNumber") <= "2000") == "(uidNumber<=2000)");
+	CHECK(text_of(attr("sn").approx("smith")) == "(sn~=smith)");
+	CHECK(text_of(attr("mail").present()) == "(mail=*)");
+	CHECK(text_of(attr("cn").starts_with("Jo")) == "(cn=Jo*)");
+	CHECK(text_of(attr("cn").ends_with("son")) == "(cn=*son)");
+	CHECK(text_of(attr("cn").contains("oh")) == "(cn=*oh*)");
+	CHECK(text_of(attr("cn").starts_with("")) == "(cn=*)");
+	CHECK(text_of(attr("cn").ends_with("")) == "(cn=*)");
+	CHECK(text_of(attr("cn").contains("")) == "(cn=*)");
+	CHECK(text_of(attr("cn;lang-en") == "x") == "(cn;lang-en=x)");
+	CHECK(text_of(attr("2.5.4.3") == "x") == "(2.5.4.3=x)");
 
-	SECTION("every special byte is escaped")
+	SECTION("the tree")
 	{
-		CHECK((attr("cn") == "a*b(c)d\\e"s + '\0' + "f").text == "(cn=a\\2ab\\28c\\29d\\5ce\\00f)");
+		const auto eq = attr("cn") == "a*b";
+		CHECK(eq.root().kind() == kind::equality);
+		CHECK(eq.root().attribute() == "cn");
+		CHECK(eq.root().value() == "a*b");// unescaped
+		CHECK(eq.root().children().empty());
+		CHECK(eq.depth() == 1);
+		CHECK(eq.elements() == 1);
+		CHECK((attr("cn") >= "1").root().kind() == kind::greater_or_equal);
+		CHECK((attr("cn") <= "1").root().kind() == kind::less_or_equal);
+		CHECK(attr("cn").approx("1").root().kind() == kind::approx);
+		CHECK(attr("cn").present().root().kind() == kind::present);
+		CHECK(attr("cn").contains("").root().kind() == kind::present);
+
+		const auto sw = attr("cn").starts_with("J(");
+		CHECK(sw.root().kind() == kind::substrings);
+		CHECK(sw.root().initial() == "J(");
+		CHECK(sw.root().any().empty());
+		CHECK_FALSE(sw.root().final_());
+		const auto c = attr("cn").contains("o");
+		CHECK_FALSE(c.root().initial());
+		CHECK(std::vector<std::string_view>(c.root().any().begin(), c.root().any().end())
+			  == std::vector<std::string_view>{ "o" });
+		CHECK(attr("cn").ends_with("x").root().final_() == "x");
+	}
+	SECTION("every special byte is escaped in the text, and kept as is in the tree")
+	{
+		const auto f = attr("cn") == "a*b(c)d\\e"s + '\0' + "f";
+		CHECK(text_of(f) == "(cn=a\\2ab\\28c\\29d\\5ce\\00f)");
+		CHECK(f.root().value() == "a*b(c)d\\e"s + '\0' + "f");
 		CHECK(ldap::escape_filter_value("\xc3\xa9\n") == "\xc3\xa9\n");
-		CHECK(attr("cn").starts_with("*").text == "(cn=\\2a*)");
+		CHECK(text_of(attr("cn").starts_with("*")) == "(cn=\\2a*)");
 	}
 	SECTION("injection attempts stay inside the value")
 	{
 		const std::string evil = "x)(uid=*";
 		const auto f = attr("objectClass") == "person" && attr("uid") == evil;
-		CHECK(f.text == "(&(objectClass=person)(uid=x\\29\\28uid=\\2a))");
-		CHECK(canonical(f.text) == f.text);
+		CHECK(text_of(f) == "(&(objectClass=person)(uid=x\\29\\28uid=\\2a))");
+		CHECK(canonical(text_of(f)) == text_of(f));
 		// The BER has exactly two equality assertions, the second with the raw value.
-		auto b = to_ber(f.text);
+		auto b = to_ber(f);
 		REQUIRE(b);
 		ber::reader r(*b);
 		auto a = r.enter(ber::context(0));
@@ -79,7 +146,7 @@ TEST_CASE("filter builders produce escaped RFC 4515 text", "[filter][builder]")
 		auto uid = a->enter(ber::context(3));
 		REQUIRE(uid);
 		CHECK(uid->read_string() == "uid");
-		CHECK(uid->read_string() == evil);
+		CHECK(uid->read_string() == std::string_view(evil));
 		CHECK(a->empty());
 	}
 	SECTION("operators")
@@ -87,27 +154,36 @@ TEST_CASE("filter builders produce escaped RFC 4515 text", "[filter][builder]")
 		const auto a = attr("a") == "1";
 		const auto b = attr("b") == "2";
 		const auto c = attr("c") == "3";
-		CHECK((a && b).text == "(&(a=1)(b=2))");
-		CHECK((a || b).text == "(|(a=1)(b=2))");
-		CHECK((!a).text == "(!(a=1))");
-		// Chains are flattened, mixed operators nest.
-		CHECK((a && b && c).text == "(&(a=1)(b=2)(c=3))");
-		CHECK((a && (b && c)).text == "(&(a=1)(b=2)(c=3))");
-		CHECK((a || b || c).text == "(|(a=1)(b=2)(c=3))");
-		CHECK(((a || b) && c).text == "(&(|(a=1)(b=2))(c=3))");
-		CHECK(((a && b) || c).text == "(|(&(a=1)(b=2))(c=3))");
-		// A value ending in an escaped paren is still recognized as one group.
-		const auto p = attr("x") == ")";
-		CHECK((p && a && b).text == "(&(x=\\29)(a=1)(b=2))");
-		// Raw text that is not one group is never merged into the result.
-		// "(&(a=1))(b=2)" is invalid on its own; combined it must stay invalid.
-		const auto raw = ldap::filter::raw("(&(a=1))(b=2)");
-		CHECK((raw && c).text == "(&((&(a=1))(b=2))(c=3))");
-		CHECK(to_ber((raw && c).text).error().code == client_errc::invalid_filter);
+		CHECK(text_of(a && b) == "(&(a=1)(b=2))");
+		CHECK(text_of(a || b) == "(|(a=1)(b=2))");
+		CHECK(text_of(!a) == "(!(a=1))");
+		CHECK(text_of(!!a) == "(!(!(a=1)))");
+		// Chains are flattened whichever way they nest; mixed operators nest.
+		CHECK(text_of(a && b && c) == "(&(a=1)(b=2)(c=3))");
+		CHECK(text_of(a && (b && c)) == "(&(a=1)(b=2)(c=3))");
+		CHECK(text_of((a && b) && (c && a)) == "(&(a=1)(b=2)(c=3)(a=1))");
+		CHECK(text_of(a || b || c) == "(|(a=1)(b=2)(c=3))");
+		CHECK(text_of(a || (b || c)) == "(|(a=1)(b=2)(c=3))");
+		CHECK(text_of((a || b) && c) == "(&(|(a=1)(b=2))(c=3))");
+		CHECK(text_of((a && b) || c) == "(|(&(a=1)(b=2))(c=3))");
+		CHECK(text_of(c || (a && b)) == "(|(c=3)(&(a=1)(b=2)))");
+		CHECK((a && b && c).depth() == 2);
+		CHECK((a && b && c).elements() == 4);
+		CHECK(((a || b) && !c).depth() == 3);
+		CHECK(((a || b) && !c).elements() == 6);
+		// Operands are not changed; the same operand can appear twice.
+		CHECK(text_of(a && a) == "(&(a=1)(a=1))");
+		CHECK(text_of(a) == "(a=1)");
+		// Rvalue operands on either side (their storage is reused).
+		CHECK(text_of((attr("x") == "1") && (attr("y") == "2" || attr("z") == "3")) == "(&(x=1)(|(y=2)(z=3)))");
+		CHECK(text_of((attr("x") == "1" && attr("y") == "2") && (attr("z") == "3" && attr("w") == "4"))
+			  == "(&(x=1)(y=2)(z=3)(w=4))");
 		// Long chains stay flat, far below max_filter_depth.
 		ldap::filter all = a;
 		for (int i = 0; i < 200; ++i) all = all && (attr("n") == std::to_string(i));
-		CHECK(to_ber(all.text).has_value());
+		CHECK(all.depth() == 2);
+		CHECK(all.elements() == 202);
+		CHECK(to_ber(all).has_value());
 	}
 	SECTION("DESIGN.md example")
 	{
@@ -115,66 +191,184 @@ TEST_CASE("filter builders produce escaped RFC 4515 text", "[filter][builder]")
 		const std::string prefix = "j";
 		auto f = attr("objectClass") == "person" && (attr("uid") == user_input || attr("mail").starts_with(prefix))
 				 && !attr("disabled").present();
-		CHECK(f.text == "(&(objectClass=person)(|(uid=x\\29\\28uid=\\2a)(mail=j*))(!(disabled=*)))");
-		CHECK(canonical(f.text) == f.text);
+		CHECK(text_of(f) == "(&(objectClass=person)(|(uid=x\\29\\28uid=\\2a)(mail=j*))(!(disabled=*)))");
+		CHECK(canonical(text_of(f)) == text_of(f));
+		CHECK(f == raw("(&(objectClass=person)(|(uid=x\\29\\28uid=\\2a)(mail=j*))(!(disabled=*)))"));
 	}
 	SECTION("attribute objects")
 	{
-		CHECK((attr(ldap::attribute{ "mail" }) == "x").text == "(mail=x)");
+		CHECK(text_of(attr(ldap::attribute{ "mail" }) == "x") == "(mail=x)");
 		CHECK_THROWS_AS(attr(ldap::attribute::unchecked("uid=*)(cn")), std::invalid_argument);
+	}
+	SECTION("empty filters")
+	{
+		const ldap::filter empty;
+		CHECK(empty.empty());
+		CHECK(empty.depth() == 0);
+		CHECK(empty.to_string().empty());
+		CHECK(empty == ldap::filter{});
+		CHECK_FALSE(empty == (attr("a") == "1"));
+		// Combining never turns an empty filter into a condition.
+		CHECK((empty && attr("a") == "1").empty());
+		CHECK((attr("a") == "1" || empty).empty());
+		CHECK((!empty).empty());
+		auto r = to_ber(empty);
+		REQUIRE_FALSE(r);
+		CHECK(r.error().code == client_errc::invalid_filter);
+		CHECK(r.error().context == "filter: empty filter");
 	}
 }
 
-TEST_CASE("filter combinators with raw operands", "[filter][builder]")
+TEST_CASE("combining parsed filters cannot change their meaning", "[filter][builder]")
 {
 	using namespace ldap::filters;
 	const auto c = attr("c") == "3";
-	SECTION("text without outer parentheses is wrapped, as encode_filter does")
-	{
-		CHECK((ldap::filter::raw("cn=x") && c).text == "(&(cn=x)(c=3))");
-		CHECK((c || ldap::filter::raw("cn=x")).text == "(|(c=3)(cn=x))");
-		CHECK((!ldap::filter::raw("cn=x")).text == "(!(cn=x))");
-		CHECK(to_ber((ldap::filter::raw("cn=x") && c).text).has_value());
-		// Wrapped "&(a=1)(b=2)" is one AND group, so it is flattened.
-		CHECK((ldap::filter::raw("&(a=1)(b=2)") && c).text == "(&(a=1)(b=2)(c=3))");
-	}
-	SECTION("escaped parentheses do not count")
-	{
-		CHECK((ldap::filter::raw("(x=\29\28)") && c).text == "(&(x=\29\28)(c=3))");
-		CHECK((ldap::filter::raw("(&(x=\29))") && c).text == "(&(x=\29)(c=3))");
-	}
-	SECTION("flattening only for one group that is itself an AND / OR")
-	{
-		CHECK((ldap::filter::raw("(|(a=1)(b=2))") && c).text == "(&(|(a=1)(b=2))(c=3))");
-		CHECK((ldap::filter::raw("(&(a=1))(&(b=2))") && c).text == "(&((&(a=1))(&(b=2)))(c=3))");
-	}
-	SECTION("injection through a malformed raw operand stays invalid")
+	SECTION("malformed text is rejected by raw(), so there is nothing to combine")
 	{
 		// Built unsafely by string concatenation with user input "x)(|(uid=*".
-		const auto evil = ldap::filter::raw("(uid=x)(|(uid=*)");
-		CHECK_FALSE(to_ber(evil.text).has_value());
-		for (const auto &f : { evil && c, c && evil, evil || c, !evil, !(evil && c) || c }) {
-			INFO(f.text);
-			auto r = to_ber(f.text);
+		for (auto text : { "(uid=x)(|(uid=*)"sv, "a=1)(|(b=*)"sv, "(&(a=1))(b=2)"sv, "(a=\\zz)"sv, ""sv }) {
+			INFO(text);
+			auto r = ldap::filter::raw(text);
 			REQUIRE_FALSE(r);
 			CHECK(r.error().code == client_errc::invalid_filter);
 		}
-		// Wrapping would balance this one ("(a=1)(|(b=*))"), so it is marked
-		// invalid with a NUL instead.
-		const auto unbalanced = ldap::filter::raw("a=1)(|(b=*)");
-		CHECK_FALSE(to_ber(unbalanced.text).has_value());
-		const auto combined = unbalanced && c;
-		CHECK(combined.text == "(&("s + '\0' + "a=1)(|(b=*))(c=3))");
-		auto r = to_ber(combined.text);
-		REQUIRE_FALSE(r);
-		CHECK(r.error().context.find("malformed operand") != std::string::npos);
-		CHECK_FALSE(to_ber((!unbalanced).text).has_value());
-		// Invalid escapes are never a group either.
-		CHECK_FALSE(to_ber((ldap::filter::raw("(a=\\zz)") && c).text).has_value());
+		// A result<filter> is not a filter: `raw(...) && f` does not make a
+		// filter until the error is handled.
+		STATIC_CHECK_FALSE(combinable<ldap::result<ldap::filter>>);
+		STATIC_CHECK(combinable<ldap::filter>);
+	}
+	SECTION("a parsed operand is one subtree of the result, whatever it contains")
+	{
+		for (auto text : { "cn=x"sv,
+			   "(cn=x)"sv,
+			   "(x=\\29\\28)"sv,
+			   "(&(x=\\29))"sv,
+			   "(|(a=1)(b=2))"sv,
+			   "(!(a=*))"sv,
+			   "(&)"sv,
+			   "(|)"sv,
+			   "(cn:dn:2.5.13.5:=a\\29)"sv,
+			   "(cn=*\\28*\\29*)"sv }) {
+			INFO(text);
+			const auto p = raw(text);
+			const auto neg = !p;
+			// (!p): exactly p below the new node, in text and in BER.
+			CHECK(text_of(neg) == "(!" + text_of(p) + ")");
+			const auto operand = *to_ber(p);
+			const auto negated = *to_ber(neg);
+			ber::reader r(negated);
+			auto inner = r.enter(ber::context(2));
+			REQUIRE(inner);
+			CHECK(inner->remaining() == operand.size());
+			CHECK(hex(std::span(negated).subspan(negated.size() - operand.size())) == hex(operand));
+			// p || c and c && p: p is a child (or, for an OR resp. AND, its
+			// children are), so the text of p appears unchanged.
+			const std::string pt = text_of(p);
+			const auto or_ = text_of(p || c);
+			const auto and_ = text_of(c && p);
+			if (p.root().kind() == ldap::filter::kind::or_)
+				CHECK(or_ == pt.substr(0, pt.size() - 1) + "(c=3))");
+			else
+				CHECK(or_ == "(|" + pt + "(c=3))");
+			if (p.root().kind() == ldap::filter::kind::and_)
+				CHECK(and_ == "(&(c=3)" + pt.substr(2));
+			else
+				CHECK(and_ == "(&(c=3)" + pt + ")");
+			// And the combination is the tree that parsing its text gives.
+			CHECK(raw(or_) == (p || c));
+			CHECK(raw(and_) == (c && p));
+		}
+	}
+	SECTION("merging an AND into an AND (an OR into an OR) keeps the meaning")
+	{
+		CHECK(text_of(raw("&(a=1)(b=2)") && c) == "(&(a=1)(b=2)(c=3))");
+		CHECK(text_of(raw("(|(a=1)(b=2))") && c) == "(&(|(a=1)(b=2))(c=3))");
+		// (&) is true, so (&) && c is c; (|) is false, so (|) || c is c.
+		CHECK(text_of(raw("(&)") && c) == "(&(c=3))");
+		CHECK(text_of(raw("(|)") || c) == "(|(c=3))");
+		CHECK(text_of(raw("(|)") && c) == "(&(|)(c=3))");
 	}
 }
 
-TEST_CASE("filter parser accepts RFC 4515 and returns canonical text", "[filter][parser]")
+TEST_CASE("filter equality compares trees", "[filter]")
+{
+	using namespace ldap::filters;
+	CHECK(raw("(&(a=1)(b=2))") == (attr("a") == "1" && attr("b") == "2"));
+	CHECK(raw("uid=jdoe") == raw("(uid=jdoe)"));
+	CHECK(raw("(cn=\\41)") == raw("(cn=A)"));
+	CHECK(raw("(cn=a**b)") == raw("(cn=a*b)"));
+	CHECK(raw("(cn=*)") == attr("cn").present());
+	CHECK(raw("(cn=J*)") == attr("cn").starts_with("J"));
+	CHECK(raw("(A:DN:=v)") == raw("(A:dn:=v)"));
+
+	CHECK_FALSE(raw("(cn=a)") == raw("(CN=a)"));// descriptions compare exactly
+	CHECK_FALSE(raw("(cn=a)") == raw("(cn=A)"));
+	CHECK_FALSE(raw("(cn=a)") == raw("(cn>=a)"));
+	CHECK_FALSE(raw("(&(a=1)(b=2))") == raw("(&(b=2)(a=1))"));
+	CHECK_FALSE(raw("(&(a=1)(b=2))") == raw("(|(a=1)(b=2))"));
+	CHECK_FALSE(raw("(&(a=1)(b=2))") == raw("(&(a=1))"));
+	CHECK_FALSE(raw("(&(a=1))") == raw("(&(a=1)(b=2))"));
+	CHECK_FALSE(raw("(&(&(a=1))(b=2))") == raw("(&(&(a=1)(b=2)))"));
+	CHECK_FALSE(raw("(cn=a*b)") == raw("(cn=a*b*)"));
+	CHECK_FALSE(raw("(cn=*a*b)") == raw("(cn=*a*b*)"));
+	CHECK_FALSE(raw("(cn=*a*)") == raw("(cn=a*)"));
+	CHECK_FALSE(raw("(cn:=v)") == raw("(cn:dn:=v)"));
+	CHECK_FALSE(raw("(cn:1.2:=v)") == raw("(cn:1.3:=v)"));
+	CHECK_FALSE(raw("(!(a=1))") == raw("(a=1)"));
+
+	// Copies are equal and independent.
+	const auto f = raw("(&(a=1)(|(b=*)(c=x*y)))");
+	auto g = f;
+	CHECK(g == f);
+	g = g && raw("(d=1)");
+	CHECK_FALSE(g == f);
+	CHECK(text_of(f) == "(&(a=1)(|(b=*)(c=x*y)))");
+}
+
+TEST_CASE("filter views expose every node", "[filter]")
+{
+	using kind = ldap::filter::kind;
+	const auto f = raw("(&(objectClass=person)(|(cn=Jo*hn*Sm*ith)(!(uid=admin)))(sn:dn:2.5.13.5:=x)(:1.2.3:=y))");
+	const auto root = f.root();
+	CHECK(root.kind() == kind::and_);
+	CHECK(root.attribute().empty());
+	std::vector<ldap::filter::view> children(root.children().begin(), root.children().end());
+	REQUIRE(children.size() == 4);
+	CHECK(children[0].kind() == kind::equality);
+	CHECK(children[0].attribute() == "objectClass");
+	CHECK(children[0].value() == "person");
+
+	std::vector<ldap::filter::view> alts(children[1].children().begin(), children[1].children().end());
+	REQUIRE(alts.size() == 2);
+	CHECK(alts[0].kind() == kind::substrings);
+	CHECK(alts[0].attribute() == "cn");
+	CHECK(alts[0].initial() == "Jo");
+	CHECK(std::vector<std::string_view>(alts[0].any().begin(), alts[0].any().end())
+		  == std::vector<std::string_view>{ "hn", "Sm" });
+	CHECK(alts[0].final_() == "ith");
+	CHECK(alts[0].children().empty());// parts are not children
+	CHECK(alts[1].kind() == kind::not_);
+	REQUIRE_FALSE(alts[1].children().empty());
+	CHECK((*alts[1].children().begin()).value() == "admin");
+
+	CHECK(children[2].kind() == kind::extensible_match);
+	CHECK(children[2].attribute() == "sn");
+	CHECK(children[2].dn_attributes());
+	CHECK(children[2].matching_rule() == "2.5.13.5");
+	CHECK(children[2].value() == "x");
+	CHECK(children[3].attribute().empty());
+	CHECK_FALSE(children[3].dn_attributes());
+	CHECK(children[3].matching_rule() == "1.2.3");
+
+	CHECK(f.depth() == 4);
+	CHECK(f.elements() == 8);
+	// Leaves have no parts or children.
+	CHECK_FALSE(children[0].initial());
+	CHECK(children[0].any().empty());
+	CHECK_FALSE(children[0].final_());
+}
+
+TEST_CASE("filter parser accepts RFC 4515 text; to_string is canonical", "[filter][parser]")
 {
 	using P = std::pair<std::string, std::string>;
 	const auto [input, expected] = GENERATE(
@@ -224,15 +418,21 @@ TEST_CASE("filter parser accepts RFC 4515 and returns canonical text", "[filter]
 
 TEST_CASE("filter BER for selected forms", "[filter][parser]")
 {
-	CHECK(hex(*to_ber("(&)")) == "A0 00");
-	CHECK(hex(*to_ber("(|)")) == "A1 00");
-	CHECK(hex(*to_ber("(cn=*)")) == "87 02 63 6E");
-	CHECK(hex(*to_ber("(!(a=b))")) == "A2 08 A3 06 04 01 61 04 01 62");
-	CHECK(hex(*to_ber("(a=*x*)")) == "A4 08 04 01 61 30 03 81 01 78");
+	auto ber_of = [](std::string_view text) { return hex(*to_ber(raw(text))); };
+	CHECK(ber_of("(&)") == "A0 00");
+	CHECK(ber_of("(|)") == "A1 00");
+	CHECK(ber_of("(cn=*)") == "87 02 63 6E");
+	CHECK(ber_of("(!(a=b))") == "A2 08 A3 06 04 01 61 04 01 62");
+	CHECK(ber_of("(a=*x*)") == "A4 08 04 01 61 30 03 81 01 78");
 	// dnAttributes is DEFAULT FALSE: omitted unless :dn is given.
-	CHECK(hex(*to_ber("(a:=x)")) == "A9 06 82 01 61 83 01 78");
-	CHECK(hex(*to_ber("(a:dn:=x)")) == "A9 09 82 01 61 83 01 78 84 01 FF");
-	CHECK(hex(*to_ber("(:r:=x)")) == "A9 06 81 01 72 83 01 78");
+	CHECK(ber_of("(a:=x)") == "A9 06 82 01 61 83 01 78");
+	CHECK(ber_of("(a:dn:=x)") == "A9 09 82 01 61 83 01 78 84 01 FF");
+	CHECK(ber_of("(:r:=x)") == "A9 06 81 01 72 83 01 78");
+	// Builders write the same bytes.
+	using namespace ldap::filters;
+	CHECK(hex(*to_ber(attr("cn").present())) == "87 02 63 6E");
+	CHECK(hex(*to_ber(!(attr("a") == "b"))) == "A2 08 A3 06 04 01 61 04 01 62");
+	CHECK(hex(*to_ber(attr("a").contains("x"))) == "A4 08 04 01 61 30 03 81 01 78");
 }
 
 TEST_CASE("filter parser rejects malformed text", "[filter][parser]")
@@ -280,28 +480,31 @@ TEST_CASE("filter parser rejects malformed text", "[filter][parser]")
 	  "(cn:dn)",
 	  "(cn:=x",
 	  "(cn=x\0y)"s,
-	  "(cn=x"s + '\0' + ")");
+	  "(cn=x"s + '\0' + ")",
+	  "(cn"s + '\0' + "=x)",
+	  "(cn=*\\zz*)",
+	  "(cn=*\\2*)");
 	INFO(bad);
-	ber::writer w;
-	auto r = ldap::encode_filter(w, bad);
+	auto r = ldap::filter::raw(bad);
 	REQUIRE_FALSE(r);
 	CHECK(r.error().code == client_errc::invalid_filter);
 	CHECK(r.error().context.find("position") != std::string::npos);
-	CHECK(w.bytes().empty());
 }
 
 TEST_CASE("filter parse errors report the position in the caller's text", "[filter][parser]")
 {
-	auto ctx = [](std::string_view text) { return to_ber(text).error().context; };
+	auto ctx = [](std::string_view text) { return std::string(ldap::filter::raw(text).error().context); };
 	CHECK(ctx("(cn=a(b)") == "filter: unescaped '(' or NUL in value at position 5");
 	CHECK(ctx("(&(cn=x)(sn=\\zz))") == "filter: invalid escape (expected \\ and two hex digits) at position 12");
 	CHECK(ctx("(c n=x)") == "filter: expected a filter type ('=', '~=', '>=', '<=' or ':=') at position 2");
+	CHECK(ctx("(cn=**)") == "filter: substring filter without any substring at position 4");
+	CHECK(ctx("(cn~=a*)") == "filter: unescaped '*' in value at position 6");
 	// Wrapped text: positions still refer to the original.
 	CHECK(ctx("cn=a(b") == "filter: unescaped '(' or NUL in value at position 4");
 	CHECK(ctx("(cn=x)(sn=y)") == "filter: unexpected characters after the filter at position 6");
 }
 
-TEST_CASE("filter nesting is bounded", "[filter][parser]")
+TEST_CASE("filter nesting is bounded", "[filter][limits]")
 {
 	auto nested = [](std::size_t depth, const std::string &open) {
 		std::string t;
@@ -310,29 +513,131 @@ TEST_CASE("filter nesting is bounded", "[filter][parser]")
 		for (std::size_t i = 1; i < depth; ++i) t += ")";
 		return t;
 	};
-	CHECK(to_ber(nested(ldap::max_filter_depth, "(&")).has_value());
-	CHECK(to_ber(nested(ldap::max_filter_depth, "(!")).has_value());
-	auto too_deep = to_ber(nested(ldap::max_filter_depth + 1, "(|"));
+	CHECK(raw(nested(ldap::max_filter_depth, "(&")).depth() == ldap::max_filter_depth);
+	CHECK(to_ber(raw(nested(ldap::max_filter_depth, "(!"))).has_value());
+	auto too_deep = ldap::filter::raw(nested(ldap::max_filter_depth + 1, "(|"));
 	REQUIRE_FALSE(too_deep);
 	CHECK(too_deep.error().code == client_errc::invalid_filter);
 	CHECK(too_deep.error().context.find("nested too deeply") != std::string::npos);
 
 	// Custom limits.
-	CHECK(to_ber(nested(3, "(&")).has_value());
-	{
-		ber::writer w;
-		CHECK(ldap::encode_filter(w, nested(3, "(&"), { .max_depth = 2 }).error().code == client_errc::invalid_filter);
-		CHECK(w.bytes().empty());
-	}
+	CHECK(ldap::filter::raw(nested(3, "(&"), { .max_depth = 2 }).error().code == client_errc::invalid_filter);
+	CHECK(ldap::filter::raw(nested(30, "(&"), { .max_depth = 30 }).has_value());
 
 	// Bombs fail quickly without deep recursion.
-	CHECK(to_ber(std::string(100'000, '(')).error().code == client_errc::invalid_filter);
+	CHECK(ldap::filter::raw(std::string(100'000, '(')).error().code == client_errc::invalid_filter);
 	std::string bomb;
 	for (int i = 0; i < 100'000; ++i) bomb += "(!";
-	CHECK(to_ber(bomb).error().code == client_errc::invalid_filter);
+	CHECK(ldap::filter::raw(bomb).error().code == client_errc::invalid_filter);
 	bomb.clear();
 	for (int i = 0; i < 100'000; ++i) bomb += "(&";
-	CHECK(to_ber(bomb).error().code == client_errc::invalid_filter);
+	CHECK(ldap::filter::raw(bomb).error().code == client_errc::invalid_filter);
+}
+
+TEST_CASE("builders beyond the limits fail when encoded", "[filter][limits][builder]")
+{
+	using namespace ldap::filters;
+	SECTION("depth: fails with invalid_filter, before anything is written")
+	{
+		auto f = attr("a") == "b";
+		for (std::size_t i = 1; i < ldap::max_filter_depth; ++i) f = !std::move(f);
+		CHECK(f.depth() == ldap::max_filter_depth);
+		CHECK(to_ber(f).has_value());
+		f = !std::move(f);
+		auto r = to_ber(f);
+		REQUIRE_FALSE(r);
+		CHECK(r.error().code == client_errc::invalid_filter);
+		CHECK(r.error().context == "filter: nested too deeply (25 levels, at most 24)");
+		CHECK(to_ber(f, { .max_depth = 25 }).has_value());
+	}
+	SECTION("a very deep builder filter is safe to copy, compare, print and destroy")
+	{
+		// No recursion anywhere except encoding, which refuses it first.
+		auto f = attr("a") == "b";
+		for (int i = 0; i < 200'000; ++i) f = !std::move(f);
+		CHECK(f.depth() == 200'001);
+		const auto copy = f;
+		CHECK(copy == f);
+		CHECK_FALSE(copy == !f);
+		const auto text = f.to_string();
+		CHECK(text.size() == 200'000 * 3 + 5);
+		CHECK(text.starts_with("(!(!(!"));
+		CHECK(text.substr(200'000 * 2).starts_with("(a=b))))"));
+		CHECK(text.ends_with("))))"));
+		CHECK(to_ber(f).error().code == client_errc::invalid_filter);
+		auto alternating = attr("a") == "b";
+		for (int i = 0; i < 100'000; ++i)
+			alternating =
+			  i % 2 == 0 ? (std::move(alternating) || attr("x") == "1") : (std::move(alternating) && attr("y") == "2");
+		CHECK(alternating.depth() == 100'001);
+		CHECK(to_ber(alternating).error().code == client_errc::invalid_filter);
+	}
+	SECTION("elements")
+	{
+		auto f = attr("m") == "0";
+		for (std::size_t i = 1; i + 1 < ldap::max_filter_elements; ++i) f = std::move(f) || attr("m") == "1";
+		CHECK(f.elements() == ldap::max_filter_elements);
+		CHECK(to_ber(f).has_value());
+		f = std::move(f) || attr("m") == "2";
+		auto r = to_ber(f);
+		REQUIRE_FALSE(r);
+		CHECK(r.error().code == client_errc::invalid_filter);
+		CHECK(r.error().context == "filter: too many elements (10001, at most 10000)");
+	}
+}
+
+TEST_CASE("combining a filter with itself copies instead of emptying it", "[filter][builder]")
+{
+	using namespace ldap::filters;
+	const auto expected_and = (attr("cn") == "x" && attr("cn") == "x").to_string();
+	const auto expected_or = (attr("cn") == "x" || attr("cn") == "x").to_string();
+	{
+		auto f = attr("cn") == "x";
+		f = std::move(f) && f;
+		CHECK(f.to_string() == expected_and);
+	}
+	{
+		auto f = attr("cn") == "x";
+		f = f && std::move(f);
+		CHECK(f.to_string() == expected_and);
+	}
+	{
+		auto f = attr("cn") == "x";
+		f = std::move(f) && std::move(f);
+		CHECK(f.to_string() == expected_and);
+	}
+	{
+		auto f = attr("cn") == "x";
+		f = std::move(f) || f;
+		CHECK(f.to_string() == expected_or);
+	}
+	{
+		auto f = attr("cn") == "x";
+		f = std::move(f) || std::move(f);
+		CHECK(f.to_string() == expected_or);
+	}
+}
+
+TEST_CASE("building long chains is linear in either direction", "[filter][builder]")
+{
+	// Each would take minutes if a combination copied the accumulated side.
+	using namespace ldap::filters;
+	constexpr int n = 100'000;
+	const auto start = std::chrono::steady_clock::now();
+	ldap::filter left = attr("a") == "0";
+	for (int i = 1; i < n; ++i) left = std::move(left) || attr("a") == "1";
+	ldap::filter right = attr("a") == "0";
+	for (int i = 1; i < n; ++i) right = attr("a") == "1" || std::move(right);
+	ldap::filter lvalue_right = attr("a") == "0";
+	const auto leaf = attr("a") == "1";
+	for (int i = 1; i < n; ++i) lvalue_right = leaf || std::move(lvalue_right);
+	const auto elapsed = std::chrono::steady_clock::now() - start;
+	CHECK(left.elements() == n + 1);
+	CHECK(right.elements() == n + 1);
+	CHECK(lvalue_right.elements() == n + 1);
+	CHECK(left.depth() == 2);
+	CHECK_FALSE(left == right);// (a=0) is first in one, last in the other
+	CHECK(elapsed < std::chrono::seconds(20));// ~10 ms normally, even under ASan
 }
 
 TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limits]")
@@ -343,16 +648,19 @@ TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limit
 		return t + ")";
 	};
 	// The AND itself counts: 1 + 9,999 children is the maximum.
-	CHECK(to_ber(and_of(ldap::max_filter_elements - 1)).has_value());
-	auto too_many = to_ber(and_of(ldap::max_filter_elements));
+	CHECK(raw(and_of(ldap::max_filter_elements - 1)).elements() == ldap::max_filter_elements);
+	auto too_many = ldap::filter::raw(and_of(ldap::max_filter_elements));
 	REQUIRE_FALSE(too_many);
 	CHECK(too_many.error().code == client_errc::invalid_filter);
 	CHECK(too_many.error().context.find("too many elements") != std::string::npos);
-	{
-		ber::writer w;
-		CHECK_FALSE(ldap::encode_filter(w, and_of(3), { .max_elements = 3 }));
-		CHECK(ldap::encode_filter(w, and_of(2), { .max_elements = 3 }));
-	}
+	CHECK_FALSE(ldap::filter::raw(and_of(3), { .max_elements = 3 }));
+	CHECK(ldap::filter::raw(and_of(2), { .max_elements = 3 }));
+	// Substring parts are not elements.
+	CHECK(raw("(a=1*2*3*4*5)").elements() == 1);
+
+	// Encode with custom limits.
+	CHECK_FALSE(to_ber(raw(and_of(3)), { .max_elements = 3 }));
+	CHECK(to_ber(raw(and_of(2)), { .max_elements = 3 }));
 
 	// Decode: BER built directly, 3 bytes per child (87 01 61).
 	auto ber_and_of = [](std::size_t children) {
@@ -362,27 +670,22 @@ TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limit
 		});
 		return w.take();
 	};
-	{
-		const auto ok = ber_and_of(ldap::max_filter_elements - 1);
-		ber::reader r(ok);
-		CHECK(ldap::decode_filter(r).has_value());
-	}
+	CHECK(from_ber(ber_and_of(ldap::max_filter_elements - 1)).has_value());
 	{
 		// Many times the limit: fails at the first element over it.
-		const auto big = ber_and_of(100'000);
-		ber::reader r(big);
-		auto t = ldap::decode_filter(r);
+		auto t = from_ber(ber_and_of(100'000));
 		REQUIRE_FALSE(t);
 		CHECK(t.error().code == client_errc::decode_error);
 		CHECK(t.error().context.find("more than 10000 filter elements") != std::string::npos);
-		CHECK(r.offset() == 0);
 	}
 	{
 		const auto small = ber_and_of(3);
-		ber::reader r(small);
-		CHECK_FALSE(ldap::decode_filter(r, { .max_elements = 3 }));
-		ber::reader r2(small);
-		CHECK(ldap::decode_filter(r2, { .max_elements = 4 }) == "(&(a=*)(a=*)(a=*))");
+		CHECK_FALSE(from_ber(small, { .max_elements = 3 }));
+		auto t = from_ber(small, { .max_elements = 4 });
+		REQUIRE(t);
+		CHECK(t->to_string() == "(&(a=*)(a=*)(a=*))");
+		CHECK(t->elements() == 4);
+		CHECK(t->depth() == 2);
 	}
 }
 
@@ -391,11 +694,7 @@ TEST_CASE("decode_filter rejects BER without an RFC 4515 form", "[filter][decode
 	auto decode = [](auto body) {
 		ber::writer w;
 		body(w);
-		auto bytes = w.take();
-		ber::reader r(bytes);
-		auto t = ldap::decode_filter(r);
-		if (!t) CHECK(r.offset() == 0);// unchanged on failure
-		return t;
+		return from_ber(w.take());
 	};
 	auto code = [&](auto body) {
 		auto t = decode(body);
@@ -440,6 +739,12 @@ TEST_CASE("decode_filter rejects BER without an RFC 4515 form", "[filter][decode
 		});
 	}) == client_errc::decode_error);
 	CHECK(code([](ber::writer &w) {
+		w.constructed(ber::context(9), [](ber::writer &e) {
+			e.octet_string("1.2.", ber::context(1));
+			e.octet_string("v", ber::context(3));
+		});
+	}) == client_errc::decode_error);
+	CHECK(code([](ber::writer &w) {
 		w.constructed(ber::context(2), [](ber::writer &n) {
 			n.octet_string("a", ber::context(7));
 			n.octet_string("b", ber::context(7));
@@ -466,7 +771,8 @@ TEST_CASE("decode_filter rejects BER without an RFC 4515 form", "[filter][decode
 	CHECK(decode(nested(ldap::max_filter_depth)).has_value());
 	CHECK(code(nested(ldap::max_filter_depth + 1)) == client_errc::nesting_too_deep);
 
-	// Accepted variations: explicit dnAttributes FALSE, unknown trailing elements.
+	// Accepted variations: explicit dnAttributes FALSE, unknown trailing
+	// elements. The tree is the same as without them.
 	auto t = decode([](ber::writer &w) {
 		w.constructed(ber::context(9), [](ber::writer &e) {
 			e.octet_string("cn", ber::context(2));
@@ -475,7 +781,9 @@ TEST_CASE("decode_filter rejects BER without an RFC 4515 form", "[filter][decode
 			e.null(ber::context(5));
 		});
 	});
-	CHECK(t == "(cn:=v)");
+	REQUIRE(t);
+	CHECK(t->to_string() == "(cn:=v)");
+	CHECK(*t == raw("(cn:=v)"));
 }
 
 TEST_CASE("equality builder round-trips every byte", "[filter][builder]")
@@ -484,13 +792,17 @@ TEST_CASE("equality builder round-trips every byte", "[filter][builder]")
 	for (int c = 0; c < 256; ++c) all += static_cast<char>(c);
 	for (const std::string &v : { all, ""s, "*"s, "\\"s, "()"s, "\0"s }) {
 		const auto f = ldap::filters::attr("cn") == v;
-		auto b = to_ber(f.text);
+		auto b = to_ber(f);
 		REQUIRE(b);
 		ber::reader r(*b);
 		auto eq = r.enter(ber::context(3));
 		REQUIRE(eq);
 		CHECK(eq->read_string() == "cn");
-		CHECK(eq->read_string() == v);
-		CHECK(canonical(f.text) == f.text);
+		CHECK(eq->read_string() == std::string_view(v));
+		auto back = from_ber(*b);
+		REQUIRE(back);
+		CHECK(*back == f);
+		CHECK(back->root().value() == std::string_view(v));
+		CHECK(canonical(text_of(f)) == text_of(f));
 	}
 }

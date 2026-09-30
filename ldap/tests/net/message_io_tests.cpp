@@ -200,7 +200,7 @@ TEST_CASE("read_message: oversized PDU rejected from its header", "[net][read_me
 		auto r = m.read();// would wait forever for the body if it were not rejected
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == client_errc::message_too_large);
-		CHECK(r.error().context.starts_with("read mock: ber: declared message size 16777222"));
+		CHECK(std::string(r.error().context).starts_with("read mock: ber: declared message size 16777222"));
 		CHECK(m.reads->size() == 1);
 	}
 	SECTION("configured limit, length split across reads")
@@ -231,7 +231,7 @@ TEST_CASE("read_message: garbage rejected from the first octet", "[net][read_mes
 	auto r = m.read();
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == client_errc::decode_error);
-	CHECK(r.error().context == "read mock: PDU starts with 0x04, not a SEQUENCE (0x30)");
+	CHECK(std::string(r.error().context) == "read mock: PDU starts with 0x04, not a SEQUENCE (0x30)");
 
 	mock n;
 	n.peer->provide(std::string("\x30\x80", 2));// indefinite length
@@ -251,7 +251,7 @@ TEST_CASE("read_message: end of stream", "[net][read_message]")
 		auto r = m.read();
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == capy::cond::eof);
-		CHECK(r.error().context == "read mock: connection closed");
+		CHECK(std::string(r.error().context) == "read mock: connection closed");
 	}
 	SECTION("in the middle of a PDU")
 	{
@@ -262,7 +262,7 @@ TEST_CASE("read_message: end of stream", "[net][read_message]")
 		auto r = m.read();
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == capy::cond::eof);
-		CHECK(r.error().context
+		CHECK(std::string(r.error().context)
 			  == "read mock: connection closed after 10 of " + std::to_string(wire.size()) + " bytes of a PDU");
 	}
 	SECTION("inside the header")
@@ -273,7 +273,7 @@ TEST_CASE("read_message: end of stream", "[net][read_message]")
 		auto r = m.read();
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == capy::cond::eof);
-		CHECK(r.error().context == "read mock: connection closed inside a PDU header");
+		CHECK(std::string(r.error().context) == "read mock: connection closed inside a PDU header");
 	}
 }
 
@@ -284,7 +284,7 @@ TEST_CASE("read_message: request operations from the server are rejected", "[net
 	auto r = m.read();
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == client_errc::unsupported_operation);
-	CHECK(r.error().context.starts_with("read mock: "));
+	CHECK(std::string(r.error().context).starts_with("read mock: "));
 	// The bad PDU was consumed; the stream stays framed.
 	auto next = m.read();
 	REQUIRE(next.has_value());
@@ -304,9 +304,8 @@ TEST_CASE("read_message: large PDUs and buffer bounds", "[net][read_message]")
 {
 	mock m(64 * 1024);
 	// A 3 MiB search entry followed by a small message.
-	ldap::message big{ .id = 5,
-		.op = ldap::search_result_entry{ .object_name = "cn=big",
-		  .attributes = { { .type = "data", .values = { std::string(3 * 1024 * 1024, 'q') } } } } };
+	ldap::message big{ 5,
+		ldap::search_result_entry{ "cn=big", { { "data", { std::string(3 * 1024 * 1024, 'q') } } } } };
 	const auto wire = bytes_of(big);
 	m.peer->provide(wire + bytes_of(bind_response_msg(6)));
 	auto r = m.read();
@@ -369,10 +368,90 @@ TEST_CASE("write_message and write_bytes", "[net][write_message]")
 	}
 
 	// Encoding errors come back before anything is written.
-	auto bad = run(ioc, net::write_message(client, ldap::message{ .id = -1, .op = ldap::unbind_request{} }));
+	auto bad = run(ioc, net::write_message(client, ldap::message{ -1, ldap::unbind_request{} }));
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == client_errc::encode_error);
-	CHECK(bad.error().context.starts_with("write client: "));
+	CHECK(std::string(bad.error().context).starts_with("write client: "));
+	CHECK(buf.empty());
+}
+
+TEST_CASE("read_message decodes into read_options' memory resource", "[net][read_message][pmr]")
+{
+	mock m;
+	// Long enough that every string needs an allocation.
+	const auto sent = ldap::message{ 7,
+		ldap::search_result_entry{ "cn=someone-with-a-long-name,ou=people,dc=example,dc=org",
+		  { { "description", { std::string(100, 'd'), std::string(200, 'e') } } } } };
+	m.peer->provide(bytes_of(sent) + bytes_of(sent));
+
+	ldap::test::counting_resource arena_upstream;
+	std::pmr::monotonic_buffer_resource arena(&arena_upstream);
+	ldap::test::counting_resource heap;
+	net::read_options options;
+	options.decode.memory = &arena;
+	{
+		// Nothing of the decoded message comes from the default resource.
+		ldap::test::scoped_default_resource guard(&heap);
+		auto r = m.read(options);
+		REQUIRE(r.has_value());
+		CHECK(r->get_allocator().resource() == &arena);
+		const auto &e = std::get<ldap::search_result_entry>(r->op);
+		CHECK(e.object_name.get_allocator().resource() == &arena);
+		CHECK(e.attributes[0].values[1].get_allocator().resource() == &arena);
+		CHECK(*r == sent);
+	}
+	CHECK(arena_upstream.allocations() > 0);
+	// Only the coroutine frame and the error-free read path: no message data.
+	const auto before = heap.bytes();
+	{
+		ldap::test::scoped_default_resource guard(&heap);
+		auto r = m.read();// default options: the default resource
+		REQUIRE(r.has_value());
+		CHECK(r->get_allocator().resource() == &heap);
+	}
+	CHECK(heap.bytes() > before);
+	arena.release();
+	CHECK(arena_upstream.outstanding() == 0);
+}
+
+TEST_CASE("write_message into a caller's resource or a reused writer", "[net][write_message][pmr]")
+{
+	corosio::io_context ioc;
+	auto [a, b] = capy::test::make_stream_pair();
+	auto client = net::transport::wrap(std::move(a), "client");
+	auto server = net::transport::wrap(std::move(b), "server");
+	const net::read_options as_server{ .decode = { .from = ldap::origin::client } };
+	net::read_buffer buf;
+
+	ldap::test::counting_resource counting;
+	ldap::test::counting_resource heap;
+	{
+		// The PDU buffer comes from the given resource (only the coroutine
+		// frame from the default one, as before).
+		ldap::test::scoped_default_resource guard(&heap);
+		REQUIRE(run(ioc, net::write_message(client, bind_request_msg(1), &counting)).has_value());
+	}
+	CHECK(counting.allocations() == 1);// the encoded PDU, reserved once
+	CHECK(counting.outstanding() == 0);
+
+	ldap::ber::writer w{ ldap::ber::writer::allocator_type(&counting) };
+	REQUIRE(run(ioc, net::write_message(client, bind_request_msg(2), w)).has_value());
+	const auto grown = counting.allocations();
+	for (int id = 3; id <= 4; ++id) REQUIRE(run(ioc, net::write_message(client, bind_request_msg(id), w)).has_value());
+	CHECK(counting.allocations() == grown);// reused, no new allocation
+	CHECK(w.get_allocator().resource() == &counting);
+	CHECK(w.bytes() == *ldap::encode(bind_request_msg(4)));// holds the last PDU
+	// An encoding error leaves the writer empty and writes nothing.
+	auto bad = run(ioc, net::write_message(client, ldap::message{ -1, ldap::unbind_request{} }, w));
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(bad.error().code == client_errc::encode_error);
+	CHECK(w.bytes().empty());
+
+	for (int id = 1; id <= 4; ++id) {
+		auto r = run(ioc, net::read_message(server, buf, as_server));
+		REQUIRE(r.has_value());
+		CHECK(*r == bind_request_msg(id));
+	}
 	CHECK(buf.empty());
 }
 
@@ -494,7 +573,7 @@ TEST_CASE("read_message: TLS truncation (no close_notify)", "[net][read_message]
 		REQUIRE(r[0].has_value());
 		REQUIRE_FALSE(r[1].has_value());
 		CHECK(r[1].error().code == truncated);
-		CHECK(r[1].error().context == "read tls: connection closed (without TLS close_notify)");
+		CHECK(std::string(r[1].error().context) == "read tls: connection closed (without TLS close_notify)");
 	}
 	SECTION("with the last bytes of a PDU")
 	{
@@ -508,7 +587,7 @@ TEST_CASE("read_message: TLS truncation (no close_notify)", "[net][read_message]
 		auto r = run_script({ { {}, one.substr(0, 5) }, { truncated, "" } });
 		REQUIRE_FALSE(r[0].has_value());
 		CHECK(r[0].error().code == truncated);
-		CHECK(r[0].error().context
+		CHECK(std::string(r[0].error().context)
 			  == "read tls: connection closed after 5 of " + std::to_string(one.size()) + " bytes of a PDU");
 	}
 }

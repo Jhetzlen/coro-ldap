@@ -3,15 +3,16 @@
 #include <algorithm>
 #include <stdexcept>
 #include <tuple>
+#include <vector>
 
 namespace jhetz::ldap {
 namespace {
 
 	// Unescapes a value the scanner has already validated.
-	std::string unescape(const detail::dn_token &tok)
+	std::pmr::string unescape(const detail::dn_token &tok, std::pmr::memory_resource *mr)
 	{
 		const std::string_view raw = tok.raw_value;
-		std::string out;
+		std::pmr::string out(mr);
 		out.reserve(raw.size());
 		if (tok.hex) {
 			for (std::size_t i = 0; i + 1 < raw.size(); i += 2)
@@ -34,13 +35,13 @@ namespace {
 
 	constexpr char hex_digits[] = "0123456789abcdef";
 
-	void append_hex(std::string &out, unsigned char c)
+	void append_hex(std::pmr::string &out, unsigned char c)
 	{
 		out += hex_digits[c >> 4];
 		out += hex_digits[c & 0xFu];
 	}
 
-	void append_value(std::string &out, const ava &a)
+	void append_value(std::pmr::string &out, const ava &a)
 	{
 		if (a.hex_form) {
 			out += '#';
@@ -92,39 +93,47 @@ bool operator==(const rdn &a, const rdn &b)
 {
 	if (a.avas.size() != b.avas.size()) return false;
 	if (a.avas.size() == 1) return a.avas[0] == b.avas[0];
-	auto x = a.avas;
-	auto y = b.avas;
-	std::sort(x.begin(), x.end(), ava_less);
-	std::sort(y.begin(), y.end(), ava_less);
-	return x == y;
+	// Sorted copies (short-lived, on the default resource).
+	std::vector<const ava *> x;
+	std::vector<const ava *> y;
+	x.reserve(a.avas.size());
+	y.reserve(b.avas.size());
+	for (const auto &v : a.avas) x.push_back(&v);
+	for (const auto &v : b.avas) y.push_back(&v);
+	auto less = [](const ava *p, const ava *q) { return ava_less(*p, *q); };
+	std::sort(x.begin(), x.end(), less);
+	std::sort(y.begin(), y.end(), less);
+	for (std::size_t i = 0; i < x.size(); ++i)
+		if (!(*x[i] == *y[i])) return false;
+	return true;
 }
 
-dn::dn(literal l)
+dn::dn(literal l, const allocator_type &alloc) : rdns_(alloc)
 {
-	auto parsed = parse(l.text);
+	auto parsed = parse(l.text, alloc.resource());
 	// Unreachable: the literal was validated at compile time with the same scanner.
 	if (!parsed) throw std::invalid_argument("ldap::dn: invalid distinguished name");
-	*this = std::move(*parsed);
+	rdns_ = std::move(parsed->rdns_);// same resource: no copy
 }
 
-result<dn> dn::parse(std::string_view text)
+result<dn> dn::parse(std::string_view text, std::pmr::memory_resource *mr)
 {
-	dn out;
+	dn out{ allocator_type(mr) };
 	const std::size_t err = detail::scan_dn(text, [&](const detail::dn_token &tok) {
-		ava a{ attribute::unchecked(std::string(tok.type)), unescape(tok), tok.hex };
-		if (tok.new_rdn || out.rdns_.empty())
-			out.rdns_.push_back(rdn{ { std::move(a) } });
-		else
-			out.rdns_.back().avas.push_back(std::move(a));
+		if (tok.new_rdn || out.rdns_.empty()) out.rdns_.emplace_back();// uses-allocator: on mr
+		auto &a = out.rdns_.back().avas.emplace_back();
+		a.type = attribute::unchecked(tok.type, mr);
+		a.value = unescape(tok, mr);
+		a.hex_form = tok.hex;
 	});
 	if (err != std::string_view::npos)
 		return fail(client_errc::invalid_dn, "dn: syntax error at position " + std::to_string(err));
 	return out;
 }
 
-std::string dn::to_string() const
+std::pmr::string dn::to_string(std::pmr::memory_resource *mr) const
 {
-	std::string out;
+	std::pmr::string out(mr);
 	for (std::size_t i = 0; i < rdns_.size(); ++i) {
 		if (i != 0) out += ',';
 		const auto &avas = rdns_[i].avas;
@@ -140,7 +149,7 @@ std::string dn::to_string() const
 
 dn dn::parent() const
 {
-	dn out;
+	dn out(get_allocator());
 	if (rdns_.size() > 1) out.rdns_.assign(rdns_.begin() + 1, rdns_.end());
 	return out;
 }
@@ -153,7 +162,7 @@ dn dn::child(rdn r) const
 		if (!detail::is_oid(a.type.name())) throw std::invalid_argument("ldap::dn::child: invalid attribute type");
 		if (a.hex_form && a.value.empty()) throw std::invalid_argument("ldap::dn::child: empty #hex value");
 	}
-	dn out;
+	dn out(get_allocator());
 	out.rdns_.reserve(rdns_.size() + 1);
 	out.rdns_.push_back(std::move(r));
 	out.rdns_.insert(out.rdns_.end(), rdns_.begin(), rdns_.end());

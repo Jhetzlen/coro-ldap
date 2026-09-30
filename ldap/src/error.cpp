@@ -172,10 +172,10 @@ const std::error_category &client_category() noexcept
 	return instance;
 }
 
-std::string error::message() const
+std::pmr::string error::message(std::pmr::memory_resource *mr) const
 {
 	// "<context>: <code message> [<category>:<value>]; server: ...; matched DN: ...; referrals: ..."
-	std::string out;
+	std::pmr::string out(mr);
 	if (!context.empty()) {
 		out += context;
 		out += ": ";

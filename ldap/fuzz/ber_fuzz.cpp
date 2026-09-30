@@ -41,7 +41,7 @@ bool same_bytes(std::span<const std::byte> a, std::span<const std::byte> b)
 }
 
 // Content octets of the single element in `encoded`.
-std::span<const std::byte> content_of(const std::vector<std::byte> &encoded)
+std::span<const std::byte> content_of(std::span<const std::byte> encoded)
 {
 	ber::reader r(encoded);
 	auto e = r.read();

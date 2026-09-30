@@ -12,12 +12,20 @@
 // and NUL must be escaped, `\` is followed by a special character or two hex
 // digits, `#` starts a hex-encoded (BER) value, types are descriptors or
 // numeric OIDs without options.
+//
+// Memory: ava, rdn and dn are allocator-aware (std::pmr). Everything a dn owns
+// is allocated from the resource given to parse(), the literal constructor or
+// the allocator-extended constructors; parent() and child() use the dn's own
+// resource. A plain copy uses the default resource, assignment keeps the
+// target's resource.
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"
 #include "jhetz/ldap/error.hpp"
 
 #include <cstddef>
+#include <initializer_list>
+#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -138,9 +146,30 @@ namespace detail {
 // bytes, and to_string() writes them back as `#...`.
 struct ava
 {
+	using allocator_type = std::pmr::polymorphic_allocator<>;
+
 	attribute type{};
-	std::string value{};
+	std::pmr::string value{};
 	bool hex_form = false;
+
+	ava() = default;
+	explicit ava(const allocator_type &alloc) : type(alloc), value(alloc) {}
+	ava(const attribute &type_, std::string_view value_, bool hex_form_ = false, const allocator_type &alloc = {})
+	  : type(type_, alloc), value(value_, alloc), hex_form(hex_form_)
+	{}
+	ava(const ava &) = default;
+	ava(ava &&) noexcept = default;
+	ava(const ava &other, const allocator_type &alloc)
+	  : type(other.type, alloc), value(other.value, alloc), hex_form(other.hex_form)
+	{}
+	ava(ava &&other, const allocator_type &alloc)
+	  : type(std::move(other.type), alloc), value(std::move(other.value), alloc), hex_form(other.hex_form)
+	{}
+	ava &operator=(const ava &) = default;
+	ava &operator=(ava &&) = default;
+	~ava() = default;
+
+	allocator_type get_allocator() const noexcept { return value.get_allocator(); }
 
 	// Type case-insensitively, value and form exactly.
 	friend bool operator==(const ava &, const ava &) = default;
@@ -150,7 +179,22 @@ struct ava
 // ignores the order of the AVAs (RFC 4512: an RDN is a set).
 struct rdn
 {
-	std::vector<ava> avas{};
+	using allocator_type = std::pmr::polymorphic_allocator<>;
+
+	std::pmr::vector<ava> avas{};
+
+	rdn() = default;
+	explicit rdn(const allocator_type &alloc) : avas(alloc) {}
+	rdn(std::initializer_list<ava> avas_, const allocator_type &alloc = {}) : avas(avas_, alloc) {}
+	rdn(const rdn &) = default;
+	rdn(rdn &&) noexcept = default;
+	rdn(const rdn &other, const allocator_type &alloc) : avas(other.avas, alloc) {}
+	rdn(rdn &&other, const allocator_type &alloc) : avas(std::move(other.avas), alloc) {}
+	rdn &operator=(const rdn &) = default;
+	rdn &operator=(rdn &&) = default;
+	~rdn() = default;
+
+	allocator_type get_allocator() const noexcept { return avas.get_allocator(); }
 
 	friend bool operator==(const rdn &a, const rdn &b);
 };
@@ -158,6 +202,8 @@ struct rdn
 class dn
 {
   public:
+	using allocator_type = std::pmr::polymorphic_allocator<>;
+
 	// Compile-time checked literal: `ldap::dn base{"ou=people,dc=example,dc=org"};`
 	// (consteval: invalid text fails to compile; runtime text uses parse()).
 	struct literal
@@ -170,17 +216,27 @@ class dn
 	};
 
 	dn() = default;// the empty DN (root DSE)
-	dn(literal l);
+	explicit dn(const allocator_type &alloc) : rdns_(alloc) {}
+	dn(literal l, const allocator_type &alloc = {});
+	dn(const dn &) = default;
+	dn(dn &&) noexcept = default;
+	dn(const dn &other, const allocator_type &alloc) : rdns_(other.rdns_, alloc) {}
+	dn(dn &&other, const allocator_type &alloc) : rdns_(std::move(other.rdns_), alloc) {}
+	dn &operator=(const dn &) = default;
+	dn &operator=(dn &&) = default;
+	~dn() = default;
 
-	static result<dn> parse(std::string_view text);
+	allocator_type get_allocator() const noexcept { return rdns_.get_allocator(); }
+
+	static result<dn> parse(std::string_view text, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 	// RFC 4514 string form. Types keep their spelling; values are escaped as
 	// needed (`, + " \ < > ;`, leading space or '#', trailing space as `\c`;
 	// NUL and other control characters as `\xx`). parse(to_string()) == *this.
-	std::string to_string() const;
+	std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
 
 	// Most specific RDN first, as in the string form.
-	const std::vector<rdn> &rdns() const noexcept { return rdns_; }
+	const std::pmr::vector<rdn> &rdns() const noexcept { return rdns_; }
 	bool empty() const noexcept { return rdns_.empty(); }
 	// Without the first RDN; the parent of the empty DN is the empty DN.
 	dn parent() const;
@@ -192,7 +248,7 @@ class dn
 	friend bool operator==(const dn &, const dn &) = default;
 
   private:
-	std::vector<rdn> rdns_{};
+	std::pmr::vector<rdn> rdns_{};
 };
 
 }// namespace jhetz::ldap
