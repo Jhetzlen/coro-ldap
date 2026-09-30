@@ -86,6 +86,10 @@ enum class client_errc : int {
 	schema_mismatch,// runtime schema validation reported errors
 	would_deadlock,// blocking call made from the client's I/O thread
 	unexpected_tag,// well-formed element, but not the expected tag
+	unsupported_operation,// LDAPMessage protocolOp this library does not know
+	invalid_dn,// RFC 4514 DN text could not be parsed
+	invalid_attribute,// not a valid attribute description (RFC 4512)
+	encode_error,// value out of range for the LDAP message being encoded
 };
 
 const std::error_category &result_category() noexcept;// "ldap.result"

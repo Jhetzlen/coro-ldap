@@ -67,8 +67,13 @@ function(jhetz_ldap_warnings target)
 endfunction()
 
 add_library(jhetz_ldap STATIC
+    src/attribute.cpp
     src/ber.cpp
+    src/dn.cpp
+    src/entry.cpp
     src/error.cpp
+    src/filter.cpp
+    src/message.cpp
 )
 add_library(jhetz::ldap ALIAS jhetz_ldap)
 target_include_directories(jhetz_ldap PUBLIC

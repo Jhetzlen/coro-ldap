@@ -13,21 +13,29 @@ list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 
 add_executable(jhetz_ldap_tests
+    attribute_tests.cpp
     ber_reader_tests.cpp
     ber_writer_tests.cpp
+    dn_tests.cpp
     error_tests.cpp
+    filter_tests.cpp
     framer_tests.cpp
+    message_golden_tests.cpp
+    message_tests.cpp
 )
 target_link_libraries(jhetz_ldap_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)
 jhetz_ldap_warnings(jhetz_ldap_tests)
 catch_discover_tests(jhetz_ldap_tests)
 
-# Runs the libFuzzer entry point on deterministic inputs, so the fuzz
-# properties are checked by every compiler, without libFuzzer.
-add_executable(ber_fuzz_replay
-    ${PROJECT_SOURCE_DIR}/fuzz/ber_fuzz.cpp
-    ${PROJECT_SOURCE_DIR}/fuzz/ber_fuzz_replay.cpp
-)
-target_link_libraries(ber_fuzz_replay PRIVATE jhetz::ldap)
-jhetz_ldap_warnings(ber_fuzz_replay)
-add_test(NAME ber_fuzz_replay COMMAND ber_fuzz_replay)
+# Each <target>_fuzz_replay runs the libFuzzer entry point of fuzz/<target>.cpp
+# on deterministic inputs, so the fuzz properties are checked by every
+# compiler, without libFuzzer.
+foreach(target ber_fuzz message_fuzz filter_fuzz dn_fuzz)
+    add_executable(${target}_replay
+        ${PROJECT_SOURCE_DIR}/fuzz/${target}.cpp
+        ${PROJECT_SOURCE_DIR}/fuzz/${target}_replay.cpp
+    )
+    target_link_libraries(${target}_replay PRIVATE jhetz::ldap)
+    jhetz_ldap_warnings(${target}_replay)
+    add_test(NAME ${target}_replay COMMAND ${target}_replay)
+endforeach()
