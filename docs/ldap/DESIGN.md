@@ -109,7 +109,8 @@ f.to_string();   // "(&(objectClass=person)...)" for logs
   nothing recurses on destruction, equality or printing, at any depth.
 - Chains: combining reuses an rvalue operand's storage, so `a && b && c` and
   `f = std::move(f) || x` in a loop are linear; `f = f || x` in a loop copies
-  and is quadratic.
+  and is quadratic. Combining a filter with itself (`std::move(f) && f`)
+  copies instead of reusing, so it gives the same result as `f && f`.
 - Limits: `max_filter_depth` = 24 (so a search request with the deepest
   filter fits the BER reader's depth limit of 32) and `max_filter_elements`
   = 10,000. Parsing and decoding enforce them while reading; builders never
@@ -259,6 +260,9 @@ Error-code categories:
 `error`'s strings are `std::pmr::string` but always on the default
 resource, never an arena, even when decoding into one fails: errors outlive
 the operation (they go up the stack and into logs) and are the cold path.
+They use whatever the default resource is when they are built, so an
+application that replaces the default resource must keep it alive as long
+as its errors.
 
 LDAP result code 0 (success) is not an `errc` value: a successful result is
 the absence of an error. `matched_dn` and `referrals` are still strings;

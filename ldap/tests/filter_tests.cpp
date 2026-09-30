@@ -586,6 +586,38 @@ TEST_CASE("builders beyond the limits fail when encoded", "[filter][limits][buil
 	}
 }
 
+TEST_CASE("combining a filter with itself copies instead of emptying it", "[filter][builder]")
+{
+	using namespace ldap::filters;
+	const auto expected_and = (attr("cn") == "x" && attr("cn") == "x").to_string();
+	const auto expected_or = (attr("cn") == "x" || attr("cn") == "x").to_string();
+	{
+		auto f = attr("cn") == "x";
+		f = std::move(f) && f;
+		CHECK(f.to_string() == expected_and);
+	}
+	{
+		auto f = attr("cn") == "x";
+		f = f && std::move(f);
+		CHECK(f.to_string() == expected_and);
+	}
+	{
+		auto f = attr("cn") == "x";
+		f = std::move(f) && std::move(f);
+		CHECK(f.to_string() == expected_and);
+	}
+	{
+		auto f = attr("cn") == "x";
+		f = std::move(f) || f;
+		CHECK(f.to_string() == expected_or);
+	}
+	{
+		auto f = attr("cn") == "x";
+		f = std::move(f) || std::move(f);
+		CHECK(f.to_string() == expected_or);
+	}
+}
+
 TEST_CASE("building long chains is linear in either direction", "[filter][builder]")
 {
 	// Each would take minutes if a combination copied the accumulated side.

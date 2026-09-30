@@ -613,20 +613,38 @@ filter operator&&(const filter &f, const filter &g)
 {
 	return access::combine(filter(f, f.get_allocator()), g, filter::kind::and_);
 }
-filter operator&&(filter &&f, const filter &g) { return access::combine(std::move(f), g, filter::kind::and_); }
-filter operator&&(const filter &f, filter &&g) { return access::combine_right(f, std::move(g), filter::kind::and_); }
+filter operator&&(filter &&f, const filter &g)
+{
+	if (&f == &g) return static_cast<const filter &>(f) && g;// same object: copy, don't steal
+	return access::combine(std::move(f), g, filter::kind::and_);
+}
+filter operator&&(const filter &f, filter &&g)
+{
+	if (&f == &g) return f && static_cast<const filter &>(g);
+	return access::combine_right(f, std::move(g), filter::kind::and_);
+}
 filter operator&&(filter &&f, filter &&g)
 {
+	if (&f == &g) return static_cast<const filter &>(f) && static_cast<const filter &>(g);
 	return access::combine_both(std::move(f), std::move(g), filter::kind::and_);
 }
 filter operator||(const filter &f, const filter &g)
 {
 	return access::combine(filter(f, f.get_allocator()), g, filter::kind::or_);
 }
-filter operator||(filter &&f, const filter &g) { return access::combine(std::move(f), g, filter::kind::or_); }
-filter operator||(const filter &f, filter &&g) { return access::combine_right(f, std::move(g), filter::kind::or_); }
+filter operator||(filter &&f, const filter &g)
+{
+	if (&f == &g) return static_cast<const filter &>(f) || g;// same object: copy, don't steal
+	return access::combine(std::move(f), g, filter::kind::or_);
+}
+filter operator||(const filter &f, filter &&g)
+{
+	if (&f == &g) return f || static_cast<const filter &>(g);
+	return access::combine_right(f, std::move(g), filter::kind::or_);
+}
 filter operator||(filter &&f, filter &&g)
 {
+	if (&f == &g) return static_cast<const filter &>(f) || static_cast<const filter &>(g);
 	return access::combine_both(std::move(f), std::move(g), filter::kind::or_);
 }
 filter operator!(const filter &f) { return access::negate(filter(f, f.get_allocator())); }

@@ -4,6 +4,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -622,6 +623,49 @@ TEST_CASE("regression: a huge AND filter in a search request fails fast", "[mess
 	CHECK(r.error().context.find("more than 10000 filter elements") != std::string::npos);
 	// A client connection (origin::server) does not look at the filter at all.
 	CHECK(code_of(ldap::decode(bytes, { .from = ldap::origin::server })) == client_errc::unsupported_operation);
+}
+
+TEST_CASE("regression: invalid list elements do not drive the reserve size", "[message][options]")
+{
+	// Reviewer's shape: a SearchResultEntry whose attribute list holds many
+	// empty SEQUENCEs (30 00, each invalid as a PartialAttribute), or whose
+	// value set holds NULLs (05 00). Decoding into a small arena with no
+	// upstream must return decode_error, not throw bad_alloc from a reserve
+	// sized by the invalid elements.
+	constexpr std::size_t count = 200'000;
+	auto entry_with = [&](bool bad_attributes) {
+		return raw_message(1, [&](ber::writer &m) {
+			m.constructed(ber::application(4), [&](ber::writer &o) {
+				o.octet_string("cn=x");
+				o.constructed(ber::tags::sequence, [&](ber::writer &list) {
+					if (bad_attributes) {
+						for (std::size_t i = 0; i < count; ++i)
+							list.constructed(ber::tags::sequence, [](ber::writer &) {});
+						return;
+					}
+					list.constructed(ber::tags::sequence, [&](ber::writer &pa) {
+						pa.octet_string("cn");
+						pa.constructed(ber::tags::set, [&](ber::writer &vals) {
+							for (std::size_t i = 0; i < count; ++i) vals.null();
+						});
+					});
+				});
+			});
+		});
+	};
+	for (bool bad_attributes : { true, false }) {
+		const auto bytes = entry_with(bad_attributes);
+		// Far less than count * sizeof(element): a reserve sized by the
+		// invalid elements would exhaust it and throw.
+		std::vector<std::byte> buffer(64 * 1024);
+		std::pmr::monotonic_buffer_resource arena(buffer.data(), buffer.size(), std::pmr::null_memory_resource());
+		ldap::result<ldap::message> r = std::unexpected(ldap::error{});
+		REQUIRE_NOTHROW(r = ldap::decode(bytes, { .from = ldap::origin::server, .memory = &arena }));
+		REQUIRE_FALSE(r);
+		// decode_error (empty SEQUENCE) or unexpected_tag (NULL value): a
+		// decoding error either way, reported instead of thrown.
+		CHECK(r.error().code.category() == ldap::make_error_code(client_errc::decode_error).category());
+	}
 }
 
 TEST_CASE("add and modify-add values must not be empty", "[message]")

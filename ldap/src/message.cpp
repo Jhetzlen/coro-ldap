@@ -680,18 +680,29 @@ namespace {
 
 	using alloc_t = std::pmr::polymorphic_allocator<>;
 
-	// Number of elements left in `r` (a copy: only headers are read), to
-	// reserve vectors exactly. That saves the growth reallocations, which
-	// matter most in a monotonic arena (it never reuses the old buffers).
-	// Each element takes at least 2 input bytes, so this never reserves more
-	// than the elements decoding creates anyway. Stops at the first bad
-	// header; decoding then reports it.
-	std::size_t count_elements(ber::reader r)
+	// Number of leading elements in `r` (a copy: only headers are read) that
+	// carry tag `t` and are at least `min_size` bytes, to reserve vectors
+	// exactly. That saves the growth reallocations, which matter most in a
+	// monotonic arena (it never reuses the old buffers). Counting stops at
+	// the first element that could not decode as one, so a hostile list of
+	// invalid elements (e.g. 8M empty SEQUENCEs) cannot make decode reserve
+	// more than a valid message of the same size would really use.
+	std::size_t count_elements(ber::reader r, ber::tag t, std::size_t min_size)
 	{
 		std::size_t n = 0;
-		while (!r.empty() && r.read()) ++n;
+		while (!r.empty()) {
+			auto e = r.read();
+			if (!e || e->t != t || e->size() < min_size) break;
+			++n;
+		}
 		return n;
 	}
+
+	// Smallest valid encodings: a value is an OCTET STRING (`04 00`); a
+	// PartialAttribute is SEQUENCE { type OCTET STRING, vals SET }
+	// (`30 04 04 00 31 00`).
+	constexpr std::size_t min_value_size = 2;
+	constexpr std::size_t min_attribute_size = 6;
 
 	// Everything decoded is allocated from `a` (decode_options::memory). The
 	// objects are built with `a` and their parts moved in, so nothing is
@@ -775,7 +786,7 @@ namespace {
 			LDAP_TRY(type, str(pa));
 			LDAP_TRY(vals, pa.enter(ber::tags::set));
 			out.type = std::move(type);
-			out.values.reserve(count_elements(vals));
+			out.values.reserve(count_elements(vals, ber::tags::octet_string, min_value_size));
 			while (!vals.empty()) {
 				LDAP_TRY(v, str(vals));
 				out.values.push_back(std::move(v));
@@ -787,7 +798,7 @@ namespace {
 		result<void> read_attributes(ber::reader &r, std::pmr::vector<partial_attribute> &out)
 		{
 			LDAP_TRY(list, r.enter());
-			out.reserve(count_elements(list));
+			out.reserve(count_elements(list, ber::tags::sequence, min_attribute_size));
 			while (!list.empty()) LDAP_TRY_VOID(read_attribute(list, out.emplace_back()));
 			return {};
 		}
