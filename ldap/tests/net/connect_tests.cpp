@@ -651,6 +651,39 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	REQUIRE_FALSE(file_dir.has_value());
 	CHECK(file_dir.error().code == std::errc::not_a_directory);
 
+	// Client certificate and key are parsed and matched before connecting too.
+	const auto one = pki().issue("client-one", "DNS:client-one");
+	const auto two = pki().issue("client-two", "DNS:client-two");
+	temp_path cert_one(".crt"), key_one(".key"), key_two(".key"), junk(".pem");
+	cert_one.write(one.cert_pem);
+	key_one.write(one.key_pem);
+	key_two.write(two.key_pem);
+	junk.write("not pem at all\n");
+
+	auto junk_cert =
+	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = junk.str(), .key_file = key_one.str() } });
+	REQUIRE_FALSE(junk_cert.has_value());
+	CHECK(junk_cert.error().code == std::errc::invalid_argument);
+	CHECK_THAT(junk_cert.error().context, EndsWith(": no parseable PEM certificate"));
+
+	auto junk_key =
+	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = junk.str() } });
+	REQUIRE_FALSE(junk_key.has_value());
+	CHECK(junk_key.error().code == std::errc::invalid_argument);
+	CHECK_THAT(junk_key.error().context, ContainsSubstring(": no parseable PEM private key"));
+
+	auto mismatch =
+	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = key_two.str() } });
+	REQUIRE_FALSE(mismatch.has_value());
+	CHECK(mismatch.error().code == std::errc::invalid_argument);
+	CHECK_THAT(mismatch.error().context, ContainsSubstring(": does not match the certificate in tls: cert_file"));
+
+	// A valid pair passes the checks and fails only when connecting.
+	auto valid =
+	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = key_one.str() } });
+	REQUIRE_FALSE(valid.has_value());
+	CHECK_THAT(valid.error().context, ContainsSubstring("tcp connect"));
+
 	for (std::string_view name : { std::string_view("ldap\0.example.org", 17), std::string_view("a\nb") }) {
 		auto bad_name = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .server_name = std::pmr::string(name) } });
 		REQUIRE_FALSE(bad_name.has_value());

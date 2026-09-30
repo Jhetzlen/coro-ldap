@@ -82,7 +82,7 @@ struct url_extension
 
 	url_extension() = default;
 	explicit url_extension(const allocator_type &alloc) : type(alloc) {}
-	url_extension(std::string_view type_,
+	explicit url_extension(std::string_view type_,
 	  std::optional<std::string_view> value_ = std::nullopt,
 	  bool critical_ = false,
 	  const allocator_type &alloc = {});

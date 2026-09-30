@@ -265,8 +265,8 @@ Error-code categories:
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 LDAP result code 0 (success) is not an `errc` value: a successful result is
-the absence of an error. Until `dn`/`url` exist, `matched_dn` and `referrals`
-are strings.
+the absence of an error. `matched_dn` and `referrals` are still strings;
+step 5 switches them to `dn` / `url`.
 
 Plus an `ldap::cond` error condition (not implemented yet) for grouping across categories
 (`cond::not_found`, `cond::auth_failed`, `cond::timeout`, …), so callers write
@@ -347,7 +347,8 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   entries, zone stripped) and TLS 1.2 minimum. Options: `ca_file`, `ca_dir`,
   `ca_pem`, client `cert_file` + `key_file`, `server_name`; the only opt-out
   is `certificate_verification::insecure_accept_any`. Configuration errors
-  (bad PEM, missing `ca_dir`) fail before any network traffic. Host matching
+  (bad or mismatched PEM certificates and keys, missing `ca_dir`) fail before
+  any network traffic. Host matching
   follows OpenSSL defaults, which Corosio does not let us change: CN fallback
   when there is no SAN, and partial wildcards in the leftmost label.
   CA bundles are split by us because Corosio loads only the first
@@ -467,7 +468,6 @@ same codec serve the client and a mock server for tests.
 - Happy Eyeballs (RFC 8305) instead of sequential per-address attempts.
 - Stricter TLS host matching (no CN fallback, no partial wildcards) needs
   Corosio to expose the OpenSSL check flags.
-
 - Step 5 (connection): the maximum message size is configurable
   (`read_options::max_message_size`, 16 MiB default); decide whether to lower
   the default or add per-entry limits. A

@@ -3,6 +3,8 @@
 #include <boost/corosio/openssl_stream.hpp>
 
 #include <openssl/bio.h>
+#include <openssl/err.h>
+#include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
@@ -55,6 +57,45 @@ namespace {
 		X509_free(cert);
 		BIO_free(bio);
 		return ok;
+	}
+
+	// Checks a client certificate chain file and key file before any network
+	// traffic: Corosio only parses them when the handshake starts. The first
+	// certificate of the chain must parse, the key must parse, and they must
+	// belong together.
+	// Password callback that refuses: with a null callback OpenSSL would prompt
+	// on the terminal for an encrypted key. Encrypted keys are not supported.
+	int no_password(char *, int, int, void *) { return -1; }
+
+	result<void> check_client_credentials(const std::string &cert_pem,
+	  const std::string &key_pem,
+	  const std::string &cert_what,
+	  const std::string &key_what)
+	{
+		const auto invalid = std::make_error_code(std::errc::invalid_argument);
+		BIO *cert_bio = BIO_new_mem_buf(cert_pem.data(), static_cast<int>(cert_pem.size()));
+		X509 *cert = cert_bio != nullptr ? PEM_read_bio_X509(cert_bio, nullptr, nullptr, nullptr) : nullptr;
+		BIO_free(cert_bio);
+		if (cert == nullptr) {
+			ERR_clear_error();
+			return fail(invalid, cert_what + ": no parseable PEM certificate");
+		}
+		BIO *key_bio = BIO_new_mem_buf(key_pem.data(), static_cast<int>(key_pem.size()));
+		EVP_PKEY *key = key_bio != nullptr ? PEM_read_bio_PrivateKey(key_bio, nullptr, no_password, nullptr) : nullptr;
+		BIO_free(key_bio);
+		if (key == nullptr) {
+			X509_free(cert);
+			ERR_clear_error();
+			return fail(invalid, key_what + ": no parseable PEM private key (encrypted keys are not supported)");
+		}
+		const bool match = X509_check_private_key(cert, key) == 1;
+		EVP_PKEY_free(key);
+		X509_free(cert);
+		if (!match) {
+			ERR_clear_error();
+			return fail(invalid, key_what + ": does not match the certificate in " + cert_what);
+		}
+		return {};
 	}
 
 	std::optional<std::string> read_file(const std::filesystem::path &path)
@@ -161,6 +202,14 @@ result<tls_setup> make_tls_setup(const tls_options &o)
 		return fail(
 		  std::make_error_code(std::errc::invalid_argument), "tls: cert_file and key_file must be given together");
 	if (!o.cert_file.empty()) {
+		const std::string cert_what = "tls: cert_file " + o.cert_file.string();
+		const std::string key_what = "tls: key_file " + o.key_file.string();
+		const auto cert_pem = read_file(o.cert_file);
+		if (!cert_pem) return fail(std::make_error_code(std::errc::no_such_file_or_directory), cert_what);
+		const auto key_pem = read_file(o.key_file);
+		if (!key_pem) return fail(std::make_error_code(std::errc::no_such_file_or_directory), key_what);
+		if (auto r = check_client_credentials(*cert_pem, *key_pem, cert_what, key_what); !r)
+			return std::unexpected(std::move(r.error()));
 		if (auto r =
 			  check(ctx.use_certificate_chain_file(o.cert_file.string()), "tls: cert_file " + o.cert_file.string());
 			!r)

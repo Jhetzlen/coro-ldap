@@ -76,15 +76,32 @@ namespace {
 	capy::task<void>
 	  resolve_detached(corosio::io_context &ioc, std::string host, std::string port, std::shared_ptr<resolve_state> st)
 	{
-		corosio::resolver resolver(ioc);
-		{
-			std::lock_guard lock(st->mutex);
-			st->resolver = &resolver;
+		std::error_code ec{};
+		std::vector<corosio::endpoint> endpoints{};
+		try {
+			corosio::resolver resolver(ioc);
+			{
+				std::lock_guard lock(st->mutex);
+				st->resolver = &resolver;
+			}
+			auto [rec, found] = co_await resolver.resolve(host, port, corosio::resolve_flags::numeric_service);
+			{
+				std::lock_guard lock(st->mutex);
+				st->resolver = nullptr;
+			}
+			ec = rec;
+			endpoints = std::move(found);
+		} catch (...) {
+			// Never leave connect() waiting (it may have no deadline).
+			{
+				std::lock_guard lock(st->mutex);
+				st->resolver = nullptr;
+			}
+			ec = std::make_error_code(std::errc::not_enough_memory);
+			endpoints.clear();
 		}
-		auto [ec, endpoints] = co_await resolver.resolve(host, port, corosio::resolve_flags::numeric_service);
 		{
 			std::lock_guard lock(st->mutex);
-			st->resolver = nullptr;
 			st->done = true;
 			st->ec = ec;
 			st->endpoints = std::move(endpoints);
@@ -101,9 +118,10 @@ namespace {
 		auto [wec] = co_await bounded(st->waker.wait(), deadline);
 		std::lock_guard lock(st->mutex);
 		if (st->done) co_return { st->ec, std::move(st->endpoints) };
-		// Timed out or cancelled: stop waiting. Cancelling the resolver
-		// completes the detached task at once; getaddrinfo itself finishes
-		// later on its thread and its result is dropped by Corosio.
+		// Timed out or cancelled: stop waiting and return now. Cancelling the
+		// resolver only marks the lookup; Corosio completes it (and so the
+		// detached task) when getaddrinfo returns on its thread, and the late
+		// result is dropped with the shared state.
 		if (st->resolver != nullptr) st->resolver->cancel();
 		co_return { wec ? wec : make_error_code(capy::error::canceled), {} };
 	}
