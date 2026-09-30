@@ -115,6 +115,19 @@ Decoded filters come back as canonical text (escapes normalized to lower-case
 `\xx` for `* ( ) \ NUL` only, `:dn` lower case, empty substring parts dropped),
 which has the same meaning as the original but may differ textually.
 
+**Planned change (step 4b, after step 4, before step 5): typed filter tree.**
+Today `filter` stores text and the whole text is parsed again when a request
+is encoded, which also forces the raw-operand wrapping above. The builders
+will instead produce a small typed tree (and/or/not/equality/substring/
+ordering/present/approx/extensible nodes holding unescaped values); the
+encoder writes BER straight from the tree, so builder-made filters are never
+parsed. `filter::raw(text)` becomes the only parsing path, runs once when
+called and returns `result<filter>`; combining a raw filter is just adding a
+node, so the wrapping/NUL logic goes away. `to_string()` renders RFC 4515
+text for logging; decoding BER back to a filter tree stays for the mock
+server. The builder syntax (`attr("sAMAccountName").starts_with("emp") && ...`)
+does not change.
+
 ## 3. Requests
 
 Plain aggregates with defaults, filled with designated initializers.
