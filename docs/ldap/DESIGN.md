@@ -355,14 +355,18 @@ same codec serve the client and a mock server for tests.
   `decode(encode(m)) == m` except that the filter comes back as canonical
   text, and `encode(decode(encode(m)))` is byte-identical to `encode(m)`.
 - `decode(bytes, decode_options)` takes exactly one framed message.
-  `decode_options::from` restricts which side sent it: the client decodes with
-  `origin::server`, which rejects request operations, so a hostile server
+  `decode_options::from` restricts which side sent it (default `origin::any`,
+  used by tests and round trips). The connection layer (step 5) must pass
+  `origin::server` explicitly; it rejects request operations, so a hostile server
   cannot make the client parse client-only structures such as search filters.
   Depth and filter-element limits are also options.
 - Leniency toward real servers: unknown trailing SEQUENCE elements are ignored
   (RFC 4511 section 4); scope 3 (subordinateSubtree) and modify operation 3
   (increment, RFC 4525) are accepted; unknown result codes are kept; lists
-  RFC 4511 declares non-empty are accepted when empty (empty means absent).
+  RFC 4511 declares non-empty are accepted when empty (empty means absent),
+  except attribute values in an AddRequest (RFC 4511 `SIZE(1..MAX)`) and in a
+  modify `add` change. The latter is server policy (OpenLDAP rejects it), not
+  an RFC rule; both sides refuse it so encode and decode accept the same set.
 - `ldap_result::to_error()` turns a result into `ldap::error` with the
   server's diagnostic, matched DN and referrals.
 
@@ -373,6 +377,15 @@ same codec serve the client and a mock server for tests.
 - Schema: minimal parsing (section 6).
 
 ## Open questions
+
+- Step 5 (connection): make the maximum message size configurable (16 MiB
+  default today) and decide whether to lower it or add per-entry limits. A
+  16 MiB SearchResultEntry of empty values legitimately decodes to about
+  300 MB (linear, about 12-18x the message size).
+- Filter element cap counts filter nodes, not substring parts: one
+  `(a=*x*x*…)` with millions of parts is not capped. Harmless for the client
+  (`origin::server` never decodes filters); count parts if a mock server or
+  proxy ever decodes untrusted requests.
 
 - Should `MUST` attributes of the declared object classes be checked against
   required (`T`) fields? Needs `MUST`/`MAY` parsing, so deferred.
