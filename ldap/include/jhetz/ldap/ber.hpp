@@ -298,4 +298,12 @@ inline constexpr std::size_t default_max_message_size = std::size_t{ 16 } * 1024
 result<std::optional<std::size_t>> complete_message_size(std::span<const std::byte> buf,
   std::size_t max_size = default_max_message_size);
 
+// Total size (header + content) that the first element at the start of `buf`
+// declares, known as soon as its header is complete, whether or not the
+// content has arrived: nullopt while the header is incomplete; the same
+// errors as complete_message_size. Lets a reader size its buffer for the
+// whole element after reading only the header.
+result<std::optional<std::size_t>> declared_message_size(std::span<const std::byte> buf,
+  std::size_t max_size = default_max_message_size);
+
 }// namespace jhetz::ldap::ber

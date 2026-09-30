@@ -1,0 +1,1 @@
+ldap://ldap1.example.net/o=University%20of%20Michigan,c=US?postalAddress

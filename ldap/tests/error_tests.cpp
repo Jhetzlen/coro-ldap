@@ -100,7 +100,7 @@ TEST_CASE("every errc and client_errc has a real message", "[error]")
 		CHECK_FALSE(text.empty());
 		CHECK(text.find("unknown") == std::string::npos);
 	}
-	for (int v = 1; v <= static_cast<int>(ldap::client_errc::encode_error); ++v) {
+	for (int v = 1; v <= static_cast<int>(ldap::client_errc::invalid_url); ++v) {
 		const auto text = std::error_code(static_cast<ldap::client_errc>(v)).message();
 		INFO("client_errc " << v << ": " << text);
 		CHECK_FALSE(text.empty());

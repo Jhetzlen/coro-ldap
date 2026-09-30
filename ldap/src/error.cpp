@@ -126,6 +126,8 @@ namespace {
 			return "invalid attribute description";
 		case client_errc::encode_error:
 			return "value cannot be encoded in an LDAP message";
+		case client_errc::invalid_url:
+			return "invalid LDAP URL";
 		}
 		return {};
 	}

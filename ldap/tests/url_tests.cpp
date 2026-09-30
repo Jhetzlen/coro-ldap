@@ -1,0 +1,450 @@
+#include "counting_resource.hpp"
+#include "jhetz/ldap/url.hpp"
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+
+#include <memory_resource>
+#include <optional>
+#include <string>
+#include <string_view>
+
+namespace ldap = jhetz::ldap;
+using ldap::client_errc;
+using ldap::search_scope;
+using ldap::url_scheme;
+using namespace std::string_literals;
+using strings = std::pmr::vector<std::pmr::string>;
+
+namespace {
+
+ldap::url parse(std::string_view text)
+{
+	auto u = ldap::url::parse(text);
+	INFO(text << " -> " << (u ? std::string("ok") : u.error().message()));
+	REQUIRE(u.has_value());
+	// Every accepted URL round-trips.
+	auto back = ldap::url::parse(u->to_string());
+	INFO("to_string: " << u->to_string());
+	REQUIRE(back.has_value());
+	CHECK(*back == *u);
+	CHECK(back->to_string() == u->to_string());
+	return *u;
+}
+
+void rejected(std::string_view text)
+{
+	auto u = ldap::url::parse(text);
+	INFO(text);
+	REQUIRE_FALSE(u.has_value());
+	CHECK(u.error().code == client_errc::invalid_url);
+	CHECK(u.error().context.starts_with("url: "));
+}
+
+ldap::dn dn(std::string_view text) { return *ldap::dn::parse(text); }
+
+}// namespace
+
+TEST_CASE("RFC 4516 section 4 examples", "[url]")
+{
+	SECTION("ldap:///o=University%20of%20Michigan,c=US")
+	{
+		const auto u = parse("ldap:///o=University%20of%20Michigan,c=US");
+		CHECK(u.scheme() == url_scheme::ldap);
+		CHECK(u.host().empty());
+		CHECK_FALSE(u.port());
+		CHECK(u.port_or_default() == 389);
+		REQUIRE(u.base_dn());
+		CHECK(*u.base_dn() == dn("o=University of Michigan,c=US"));
+		CHECK(u.attributes().empty());
+		CHECK_FALSE(u.scope());
+		CHECK_FALSE(u.search_filter());
+		CHECK(u.to_string() == "ldap:///o=University%20of%20Michigan,c=US");
+	}
+	SECTION("host and port")
+	{
+		const auto u = parse("ldap://ldap1.example.net/o=University%20of%20Michigan,c=US");
+		CHECK(u.host() == "ldap1.example.net");
+		CHECK(u.authority() == "ldap1.example.net:389");
+	}
+	SECTION("attributes")
+	{
+		const auto u = parse("ldap://ldap1.example.net/o=University%20of%20Michigan,c=US?postalAddress");
+		CHECK(u.attributes() == strings{ "postalAddress" });
+	}
+	SECTION("scope and filter")
+	{
+		const auto u = parse("ldap://ldap1.example.net:6666/o=University%20of%20Michigan,c=US??sub?(cn=Babs%20Jensen)");
+		CHECK(u.port() == 6666);
+		CHECK(u.scope() == search_scope::whole_subtree);
+		REQUIRE(u.search_filter());
+		CHECK(u.search_filter()->text == "(cn=Babs Jensen)");
+		CHECK(
+		  u.to_string() == "ldap://ldap1.example.net:6666/o=University%20of%20Michigan,c=US??sub?(cn=Babs%20Jensen)");
+	}
+	SECTION("one level, no attributes")
+	{
+		const auto u = parse("LDAP://ldap1.example.com/c=GB?objectClass?ONE");
+		CHECK(u.scheme() == url_scheme::ldap);
+		CHECK(u.attributes() == strings{ "objectClass" });
+		CHECK(u.scope() == search_scope::single_level);
+		CHECK(u.to_string() == "ldap://ldap1.example.com/c=GB?objectClass?one");
+	}
+	SECTION("escaped question mark in the DN")
+	{
+		const auto u = parse("ldap://ldap2.example.com/o=Question%3f,c=US?mail");
+		CHECK(*u.base_dn() == dn("o=Question?,c=US"));
+		CHECK(u.attributes() == strings{ "mail" });
+		CHECK(u.to_string() == "ldap://ldap2.example.com/o=Question%3F,c=US?mail");
+	}
+	SECTION("filter with an escaped NUL")
+	{
+		const auto u = parse(
+		  "ldap://ldap3.example.com/o=Babsco,c=US???"
+		  "(four-octet=%5c00%5c00%5c00%5c04)");
+		CHECK(u.search_filter()->text == "(four-octet=\\00\\00\\00\\04)");
+	}
+	SECTION("DN with an escaped comma")
+	{
+		const auto u = parse("ldap://ldap.example.com/o=An%20Example%5C2C%20Inc.,c=US");
+		CHECK(*u.base_dn() == dn("o=An Example\\2C Inc.,c=US"));
+		CHECK(u.base_dn()->rdns()[0].avas[0].value == "An Example, Inc.");
+	}
+	SECTION("bindname extension, not critical and critical")
+	{
+		const auto u = parse("ldap:///??sub??e-bindname=cn=Manager%2cdc=example%2cdc=com");
+		REQUIRE(u.extensions().size() == 1);
+		CHECK(u.extensions()[0].type == "e-bindname");
+		CHECK(u.extensions()[0].value == "cn=Manager,dc=example,dc=com");
+		CHECK_FALSE(u.extensions()[0].critical);
+		CHECK_FALSE(u.has_critical_extension());
+
+		const auto c = parse(
+		  "ldap:///??sub??"
+		  "!e-bindname=cn=Manager%2cdc=example%2cdc=com");
+		CHECK(c.extensions()[0].critical);
+		CHECK(c.has_critical_extension());
+		CHECK(c.to_string() == "ldap:///??sub??" "!e-bindname=cn=Manager%2Cdc=example%2Cdc=com");
+	}
+}
+
+TEST_CASE("URL schemes and default ports", "[url]")
+{
+	CHECK(parse("ldap://h").port_or_default() == 389);
+	CHECK(parse("ldaps://h").port_or_default() == 636);
+	CHECK(parse("LdApS://h").scheme() == url_scheme::ldaps);
+	CHECK(parse("ldaps://h:1636").port_or_default() == 1636);
+	CHECK(parse("ldaps://h").authority() == "h:636");
+	CHECK(parse("ldap://h:").port() == std::nullopt);// empty port: default
+	CHECK(parse("ldap://h:0389").port() == 389);
+	CHECK(parse("ldap://h:65535").port() == 65535);
+	CHECK(parse("ldap://").host().empty());
+	CHECK(parse("ldap://:1389").port() == 1389);
+	CHECK(ldap::url{}.to_string() == "ldap://");
+
+	// Explicit default port is kept as written.
+	const auto explicit_port = parse("ldap://h:389");
+	CHECK(explicit_port.port() == 389);
+	CHECK(explicit_port.to_string() == "ldap://h:389");
+	CHECK(explicit_port != parse("ldap://h"));
+}
+
+TEST_CASE("ldapi URLs", "[url]")
+{
+	const auto u = parse("ldapi://%2Fvar%2Frun%2Fslapd%2Fldapi");
+	CHECK(u.scheme() == url_scheme::ldapi);
+	CHECK(u.host() == "/var/run/slapd/ldapi");
+	CHECK_FALSE(u.port());
+	CHECK(u.port_or_default() == 0);
+	CHECK(u.authority() == "%2Fvar%2Frun%2Fslapd%2Fldapi");
+	CHECK(u.to_string() == "ldapi://%2Fvar%2Frun%2Fslapd%2Fldapi");
+
+	CHECK(parse("ldapi://%2ftmp%2fa%20b/dc=x").host() == "/tmp/a b");
+	CHECK(parse("ldapi://").host().empty());
+	CHECK(parse("ldapi:///dc=example,dc=com").base_dn() == dn("dc=example,dc=com"));
+
+	rejected("ldapi://%2Ftmp%2Fs:389");// no port
+	rejected("ldapi://[::1]");
+	rejected("ldapi:///tmp/sock");// the path must be encoded ('/' starts the DN) - here "tmp/sock" is not a DN
+}
+
+TEST_CASE("URL hosts", "[url]")
+{
+	SECTION("IPv4 and names")
+	{
+		CHECK(parse("ldap://127.0.0.1:1389").host() == "127.0.0.1");
+		CHECK_FALSE(parse("ldap://127.0.0.1").host_is_ipv6());
+		CHECK(parse("ldap://Example.COM").host() == "Example.COM");// kept as written
+		CHECK(parse("ldap://a%2Db").host() == "a-b");
+		CHECK(parse("ldap://a%2Db").to_string() == "ldap://a-b");
+	}
+	SECTION("IPv6")
+	{
+		const auto u = parse("ldap://[::1]:1389/dc=x");
+		CHECK(u.host() == "::1");
+		CHECK(u.host_is_ipv6());
+		CHECK(u.port() == 1389);
+		CHECK(u.authority() == "[::1]:1389");
+		CHECK(u.to_string() == "ldap://[::1]:1389/dc=x");
+
+		CHECK(parse("ldaps://[2001:db8::7]").authority() == "[2001:db8::7]:636");
+		CHECK(parse("ldap://[::]").host() == "::");
+		CHECK(parse("ldap://[1:2:3:4:5:6:7:8]").host() == "1:2:3:4:5:6:7:8");
+		CHECK(parse("ldap://[1:2:3:4:5:6:7::]").host() == "1:2:3:4:5:6:7::");
+		CHECK(parse("ldap://[::ffff:192.0.2.1]").host() == "::ffff:192.0.2.1");
+		CHECK(parse("ldap://[1:2:3:4:5:6:1.2.3.4]").host() == "1:2:3:4:5:6:1.2.3.4");
+		CHECK(parse("ldap://[fe80::1%25eth0]:389").host() == "fe80::1%eth0");
+		CHECK(parse("ldap://[fe80::1%25eth0]:389").to_string() == "ldap://[fe80::1%25eth0]:389");
+
+		for (auto bad : { "ldap://[::1",
+			   "ldap://[]",
+			   "ldap://[1:2:3:4:5:6:7:8:9]",
+			   "ldap://[1::2::3]",
+			   "ldap://[12345::]",
+			   "ldap://[:1]",
+			   "ldap://[1:]",
+			   "ldap://[1:2:3:4:5:6:7]",
+			   "ldap://[::1.2.3]",
+			   "ldap://[::256.1.1.1]",
+			   "ldap://[::01.1.1.1]",
+			   "ldap://[v1.x]",
+			   "ldap://[::1]x",
+			   "ldap://[::1]:x",
+			   "ldap://[fe80::1%25]",
+			   "ldap://[fe80::1%eth0]",
+			   "ldap://[g::1]" })
+			rejected(bad);
+	}
+	SECTION("invalid")
+	{
+		rejected("ldap://user@host");
+		rejected("ldap://h:65536");
+		rejected("ldap://h:0");
+		rejected("ldap://h:12a");
+		rejected("ldap://h:-1");
+		rejected("ldap://h h");
+		rejected("ldap://h%");
+		rejected("ldap://h%2");
+		rejected("ldap://h%zz");
+		rejected("ldap://h:1:2");
+		rejected("ldap://h?cn");// '?' needs the "/" first
+		rejected("ldap://h#frag");
+	}
+}
+
+TEST_CASE("URL parts after the host", "[url]")
+{
+	SECTION("absent vs empty DN")
+	{
+		CHECK_FALSE(parse("ldap://h").base_dn());
+		const auto root = parse("ldap://h/");
+		REQUIRE(root.base_dn());
+		CHECK(root.base_dn()->empty());
+		CHECK(root.to_string() == "ldap://h/");
+		CHECK(parse("ldap://h/???") == root);// empty parts are absent
+	}
+	SECTION("attributes")
+	{
+		const auto u = parse("ldap://h/dc=x?cn,mail,*,+,1.1,cn;lang-en");
+		CHECK(u.attributes() == strings{ "cn", "mail", "*", "+", "1.1", "cn;lang-en" });
+		CHECK(parse("ldap://h/?a%2Cb").attributes() == strings{ "a,b" });
+		CHECK(parse("ldap://h/?a%2Cb").to_string() == "ldap://h/?a%2Cb");
+		rejected("ldap://h/?a,,b");
+		rejected("ldap://h/?a,");
+		rejected("ldap://h/?,a");
+	}
+	SECTION("scope")
+	{
+		CHECK(parse("ldap://h/??base").scope() == search_scope::base_object);
+		CHECK(parse("ldap://h/??One").scope() == search_scope::single_level);
+		CHECK(parse("ldap://h/??SUB").scope() == search_scope::whole_subtree);
+		CHECK_FALSE(parse("ldap://h/??").scope());
+		rejected("ldap://h/??subtree");
+		rejected("ldap://h/??children");
+	}
+	SECTION("filter")
+	{
+		CHECK(parse("ldap://h/???uid=jdoe").search_filter()->text == "uid=jdoe");// ldapsearch-style, unwrapped
+		CHECK(parse("ldap://h/???"
+					"(&(a=1)(b=2))")
+				.search_filter()
+				->text
+			  == "(&(a=1)(b=2))");
+		CHECK(parse("ldap://h/???"
+					"(cn=a%3Fb)")
+				.search_filter()
+				->text
+			  == "(cn=a?b)");
+		CHECK(parse("ldap://h/???" "(cn=a%3Fb)").to_string() == "ldap://h/???" "(cn=a%3Fb)");
+		rejected(
+		  "ldap://h/???"
+		  "(cn=a");
+		rejected(
+		  "ldap://h/???"
+		  "(cn=a)(b=c)");
+	}
+	SECTION("extensions")
+	{
+		const auto u = parse("ldap://h/????x,!1.2.3=,y=a%2Cb");
+		REQUIRE(u.extensions().size() == 3);
+		CHECK(u.extensions()[0] == ldap::url_extension{ "x", std::nullopt, false });
+		CHECK(u.extensions()[1] == ldap::url_extension{ "1.2.3", "", true });
+		CHECK(u.extensions()[2] == ldap::url_extension{ "y", "a,b", false });
+		CHECK(u.to_string() == "ldap://h/????x,!1.2.3=,y=a%2Cb");
+		rejected("ldap://h/????x,,y");
+		rejected(
+		  "ldap://h/????"
+		  "!");
+		rejected(
+		  "ldap://h/????"
+		  "=v");
+		rejected("ldap://h/????1x=v");// neither descriptor nor numeric OID
+		rejected("ldap://h/????a b");
+	}
+	SECTION("only the parts needed are written")
+	{
+		CHECK(parse("ldap://h/dc=x???").to_string() == "ldap://h/dc=x");
+		CHECK(parse("ldap://h/dc=x??sub?").to_string() == "ldap://h/dc=x??sub");
+		CHECK(parse("ldap://h/???" "(a=b)?").to_string() == "ldap://h/???" "(a=b)");
+	}
+	SECTION("lenient characters")
+	{
+		// Unencoded spaces and UTF-8 are accepted after the host and encoded
+		// by to_string.
+		const auto u = parse("ldap://h/cn=J\xC3\xBCrgen M,dc=x");
+		CHECK(u.base_dn()->rdns()[0].avas[0].value == "J\xC3\xBCrgen M");
+		CHECK(u.to_string() == "ldap://h/cn=J%C3%BCrgen%20M,dc=x");
+	}
+	SECTION("invalid")
+	{
+		rejected("ldap://h/cn");// not a DN
+		rejected("ldap://h/cn=a\\");// '\' must be encoded
+		rejected("ldap://h/cn=%5C");// ... and is then still an invalid DN escape
+		rejected("ldap://h/dc=x?a?sub?(a=b)?e?more");
+		rejected("ldap://h/dc=x#f");
+		rejected("ldap://h/dc=%0");
+		rejected("ldap://h/dc=x\x01");
+		rejected("ldap://h/dc=x\"");
+	}
+}
+
+TEST_CASE("URL schemes and structure errors", "[url]")
+{
+	rejected("");
+	rejected("ldap:");
+	rejected("ldap:/h");
+	rejected("http://h");
+	rejected("ldapx://h");
+	rejected("://h");
+	rejected("ldap//h");
+}
+
+TEST_CASE("URL percent-encoding round trip of every byte", "[url]")
+{
+	// Every byte value in a DN value, an attribute, a filter value and an
+	// extension value survives to_string -> parse.
+	std::string all;
+	for (int b = 1; b < 256; ++b) all += static_cast<char>(b);
+	std::string filter_value;
+	for (char c : all) {
+		if (c == '*' || c == '(' || c == ')' || c == '\\') {
+			static constexpr char hex[] = "0123456789abcdef";
+			filter_value += '\\';
+			filter_value += hex[(static_cast<unsigned char>(c) >> 4) & 0xF];
+			filter_value += hex[static_cast<unsigned char>(c) & 0xF];
+		} else {
+			filter_value += c;
+		}
+	}
+	std::string encoded = "ldap://h/cn=";
+	for (char c : all) {
+		static constexpr char hex[] = "0123456789ABCDEF";
+		encoded += "%5C";// DN escape '\' + two hex digits, itself percent-encoded
+		encoded += hex[(static_cast<unsigned char>(c) >> 4) & 0xF];
+		encoded += hex[static_cast<unsigned char>(c) & 0xF];
+	}
+	encoded += "?";
+	auto pct = [](std::string_view s) {
+		static constexpr char hex[] = "0123456789ABCDEF";
+		std::string out;
+		for (char c : s) {
+			out += '%';
+			out += hex[(static_cast<unsigned char>(c) >> 4) & 0xF];
+			out += hex[static_cast<unsigned char>(c) & 0xF];
+		}
+		return out;
+	};
+	encoded += pct(all) + "??" + pct("(cn=" + filter_value + ")") + "?x=" + pct(all);
+	const auto u = parse(encoded);
+	CHECK(u.base_dn()->rdns()[0].avas[0].value == all);
+	CHECK(u.attributes() == strings{ std::pmr::string(all) });
+	CHECK(u.search_filter()->text == "(cn=" + filter_value + ")");
+	CHECK(u.extensions()[0].value == std::string_view(all));
+}
+
+TEST_CASE("URL allocations go through the given memory resource", "[url][pmr]")
+{
+	using jhetz::ldap::test::counting_resource;
+	// Long enough that no string fits the small-string buffer.
+	const std::string_view text =
+	  "ldaps://a-rather-long-host-name.example.org:1636/dc=example,dc=org"
+	  "?givenName,surname-that-is-long?sub?(cn=x)?e-bindname=cn=Manager%2Cdc=example%2Cdc=org";
+
+	counting_resource counting;
+	{
+		auto u = ldap::url::parse(text, &counting);
+		REQUIRE(u.has_value());
+		CHECK(counting.allocations() > 0);
+		CHECK(u->get_allocator().resource() == &counting);
+		CHECK(u->host().get_allocator().resource() == &counting);
+		CHECK(u->attributes().get_allocator().resource() == &counting);
+		CHECK(u->attributes()[1].get_allocator().resource() == &counting);
+		CHECK(u->extensions().get_allocator().resource() == &counting);
+		CHECK(u->extensions()[0].type.get_allocator().resource() == &counting);
+		CHECK(u->extensions()[0].value->get_allocator().resource() == &counting);
+
+		// to_string / authority into a chosen resource.
+		const auto before = counting.allocations();
+		const auto printed = u->to_string(&counting);
+		CHECK(printed.get_allocator().resource() == &counting);
+		CHECK(counting.allocations() > before);
+
+		// A plain copy uses the default resource; the allocator-extended copy the
+		// one given, with equal contents.
+		const ldap::url copy = *u;
+		CHECK(copy.get_allocator().resource() == std::pmr::get_default_resource());
+		CHECK(copy.extensions()[0].type.get_allocator().resource() == std::pmr::get_default_resource());
+		CHECK(copy == *u);
+
+		std::pmr::monotonic_buffer_resource arena;
+		const ldap::url in_arena(*u, &arena);
+		CHECK(in_arena == *u);
+		CHECK(in_arena.host().get_allocator().resource() == &arena);
+		CHECK(in_arena.extensions()[0].value->get_allocator().resource() == &arena);
+
+		// Moving with the same resource keeps it; with another one copies into it.
+		ldap::url moved(ldap::url(*u, &counting), &counting);
+		CHECK(moved.get_allocator().resource() == &counting);
+		ldap::url moved_elsewhere(ldap::url(*u, &counting), &arena);
+		CHECK(moved_elsewhere.get_allocator().resource() == &arena);
+		CHECK(moved_elsewhere == *u);
+
+		// A pmr::vector<url> hands its resource to its elements.
+		std::pmr::vector<ldap::url> referrals(&arena);
+		referrals.push_back(*u);
+		CHECK(referrals[0].get_allocator().resource() == &arena);
+		CHECK(referrals[0].attributes()[0].get_allocator().resource() == &arena);
+	}
+	CHECK(counting.outstanding() == 0);// everything allocated from it was given back
+}
+
+TEST_CASE("URL parsing into a monotonic buffer", "[url][pmr]")
+{
+	std::byte storage[4096];
+	std::pmr::monotonic_buffer_resource arena(storage, sizeof storage, std::pmr::null_memory_resource());
+	// With a null upstream, anything that does not come from the buffer throws.
+	auto u = ldap::url::parse("ldapi://%2Fvar%2Frun%2Fslapd%2Fvery-long-socket-name-for-ldapi", &arena);
+	REQUIRE(u.has_value());
+	CHECK(u->host() == "/var/run/slapd/very-long-socket-name-for-ldapi");
+	CHECK(u->host().get_allocator().resource() == &arena);
+}
