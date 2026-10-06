@@ -84,7 +84,18 @@ inline void drive(corosio::io_context &ioc)
 	ioc.restart();
 }
 
-// Runs one task to completion and returns its result.
+// Runs `ioc` until `done()` holds or it has no work left, at most io_limit.
+// Unlike drive(), returns as soon as `done()` holds even if other coroutines
+// (a scripted server waiting for the next request) still have work pending.
+template<class Pred> void drive_until(corosio::io_context &ioc, Pred done)
+{
+	const auto deadline = std::chrono::steady_clock::now() + io_limit;
+	while (!done() && ioc.run_one_until(deadline) != 0) {}
+	ioc.restart();
+}
+
+// Runs one task to completion and returns its result, after running `ioc`
+// until it has no work left (so peers spawned on it finish too).
 template<class T> T run(corosio::io_context &ioc, capy::task<T> t)
 {
 	outcome<T> out;

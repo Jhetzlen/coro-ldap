@@ -148,9 +148,14 @@ The designated-initializer style above is for the step 5 request structs,
 which stay aggregates. The wire model of section 10 is allocator-aware and
 uses constructors instead (`message{1, search_request{base, scope, f, {"cn"}}}`).
 
-Implemented so far: only the wire-level `control {type, criticality, value}`
-plus `encode_paged_results` / `decode_paged_results` helpers; the typed
-variant comes with the request API (step 5).
+Implemented (step 5a): `ldap::search_params` in `connection.hpp`, an
+aggregate with `.base` (`ldap::dn`), `.scope` (`search_scope`, default
+subtree), `.filter` (default `(objectClass=*)`), `.attributes`, `.deref`,
+`.size_limit`, `.time_limit` (`std::chrono::seconds`), `.types_only` and
+`.controls`. Values are checked when the request is encoded, before
+anything is sent. Controls are still the wire-level `control {type,
+criticality, value}` plus `encode_paged_results` / `decode_paged_results`;
+the typed variant above is step 6.
 
 ## 4. Mapping entries to structs
 
@@ -266,8 +271,24 @@ application that replaces the default resource must keep it alive as long
 as its errors.
 
 LDAP result code 0 (success) is not an `errc` value: a successful result is
-the absence of an error. `matched_dn` and `referrals` are still strings;
-step 5 switches them to `dn` / `url`.
+the absence of an error.
+
+`matched_dn` and `referrals` stay strings, exactly as the server sent them
+(decided in step 5a, instead of `std::optional<dn>` / `std::vector<url>` as
+sketched above): a server's matchedDN or referral URI may not parse (servers
+send odd DNs, and referral URIs with unknown critical extensions), and an
+error must neither lose them nor fail to be built. Callers parse on demand
+with `dn::parse` / `url::parse`. `dn.hpp` and `url.hpp` also include
+`error.hpp` for `result<T>`, so the switch would need a header split.
+
+Connection errors (step 5a, `client_errc`): `unexpected_response` (a
+response with another message id or an operation that does not answer the
+request), `not_connected` (closed by `unbind`, `close` or an earlier
+failure, which the context names), `operation_in_progress` (the connection
+is busy; nothing is queued), `unauthenticated_bind` (a name with an empty
+password). Server errors carry the operation as context
+(`search ou=people,dc=example,dc=org`) and leave the connection usable;
+transport and protocol errors close it.
 
 Plus an `ldap::cond` error condition (not implemented yet) for grouping across categories
 (`cond::not_found`, `cond::auth_failed`, `cond::timeout`, …), so callers write
@@ -365,6 +386,39 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   the caller drops the connection (header errors repeat, they are not
   consumed). No timeout of its own: step 5 cancels with stop tokens.
 
+Implemented (step 5a, `ldap::connection`, also in `jhetz_ldap_net`):
+- `ldap::connect(ioc, url, connection_options, mr)` wraps `net::connect`;
+  `connection(net::transport, options, mr)` runs over any transport (the
+  tests use a Unix socket pair with a scripted server that decodes with
+  `origin::client`). `simple_bind`, `search`, `search_stream`, `unbind`
+  and `close()`.
+- Sequential: one request in flight; an open `search_stream` counts as in
+  flight until it read the SearchResultDone or is destroyed (the next
+  operation then reads and drops the rest of that search, decoding into the
+  connection's scratch arena). Anything started meanwhile fails with
+  `operation_in_progress`. Multiplexing and Abandon are step 5b.
+- Message ids are per connection, from 1, wrapping at maxInt; a request
+  that fails to encode sends nothing and does not use up an id.
+- Every response is decoded with `origin::server` and checked against the
+  request in flight (id and operation). IntermediateResponses with the
+  right id are skipped; id 0 is an unsolicited notification: a Notice of
+  Disconnection fails the operation with its result code (`unavailable`
+  if it claims success) and closes the connection, other extended
+  responses are ignored. A skipped message decoded into the scratch arena
+  releases it at once, so a server cannot grow it without bound.
+- Failure model: a server result error is returned and the connection
+  stays usable; a transport error, a malformed or oversized PDU, an
+  unexpected response or a Notice of Disconnection closes the transport
+  and is remembered, so later operations fail with `not_connected` naming
+  it. An operation whose coroutine is destroyed (or whose read is
+  cancelled) before it finished also closes the connection, because the
+  response it waited for would otherwise be read by the next operation.
+- State lives in one block allocated from the connection's resource, so
+  the connection is cheaply movable and a `search_stream` keeps working
+  across a move of its connection.
+- No per-operation timeout yet: cancel with a stop token (which closes the
+  connection, see above); timeouts and abandon come with step 5b.
+
 - `sync::client` methods start the coroutine on its internal I/O thread with
   `spawn_future` and wait on the `result_future` (see
   `examples/corosio/result_future.hpp`), so any number of caller threads can
@@ -442,8 +496,8 @@ same codec serve the client and a mock server for tests.
   `encode(decode(encode(m)))` is byte-identical to `encode(m)`.
 - `decode(bytes, decode_options)` takes exactly one framed message.
   `decode_options::from` restricts which side sent it (default `origin::any`,
-  used by tests and round trips). The connection layer (step 5) must pass
-  `origin::server` explicitly; it rejects request operations, so a hostile server
+  used by tests and round trips). The connection layer (step 5a) passes
+  `origin::server` for everything it reads; it rejects request operations, so a hostile server
   cannot make the client parse client-only structures such as search filters.
   Depth and filter-element limits are also options.
 - Leniency toward real servers: unknown trailing SEQUENCE elements are ignored
@@ -472,11 +526,12 @@ same codec serve the client and a mock server for tests.
 - Happy Eyeballs (RFC 8305) instead of sequential per-address attempts.
 - Stricter TLS host matching (no CN fallback, no partial wildcards) needs
   Corosio to expose the OpenSSL check flags.
-- Step 5 (connection): the maximum message size is configurable
-  (`read_options::max_message_size`, 16 MiB default); decide whether to lower
-  the default or add per-entry limits. A
-  16 MiB SearchResultEntry of empty values legitimately decodes to about
-  300 MB (linear, about 12-18x the message size).
+- Message size: step 5a keeps the 16 MiB default
+  (`connection_options::max_message_size`), since one entry of a large group
+  or with photos and certificates can legitimately take several MiB, and
+  documents that a 16 MiB SearchResultEntry of empty values decodes to
+  about 300 MB (linear, about 12-18x the message size). Per-entry or
+  per-search memory limits are still open (#19).
 - Filter element cap counts filter nodes, not substring parts: one
   `(a=*x*x*…)` with millions of parts is not capped. Harmless for the client
   (`origin::server` never decodes filters); count parts if a mock server or
