@@ -92,6 +92,7 @@ endfunction()
 add_library(jhetz_ldap STATIC
     src/attribute.cpp
     src/ber.cpp
+    src/controls.cpp
     src/dn.cpp
     src/entry.cpp
     src/error.cpp

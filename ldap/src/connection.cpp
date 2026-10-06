@@ -12,9 +12,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <deque>
 #include <memory_resource>
 #include <span>
+#include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -417,6 +419,10 @@ struct connection::impl
 		if (fatal) shut(std::move(*fatal), true);
 	}
 
+	// search_stream / paged_search constructors are private.
+	static ldap::search_stream make_stream(search_stream::state *s) noexcept { return ldap::search_stream(s); }
+	static ldap::paged_search make_paged(paged_search::state *s) noexcept { return ldap::paged_search(s); }
+
 	// ---------------------------------------------------------------- waiting
 
 	// The next response for `p`, waiting until `deadline` at most. On
@@ -587,21 +593,102 @@ void connection::close() noexcept
 	impl_->shut(make_error(client_errc::not_connected, "connection closed"), false);
 }
 
+namespace {
+
+	// One request with one response (everything but search): sends it,
+	// waits for the response of index `expect` and returns it. `self` keeps
+	// the state alive across the suspension.
+	capy::task<result<message>> request_response(impl_ref self,
+	  message request,
+	  std::size_t expect,
+	  std::string context,
+	  std::optional<std::chrono::milliseconds> timeout)
+	{
+		pending_op p(self->mr, false, expect);
+		if (auto r = self->submit(request, &p, context); !r) co_return std::unexpected(std::move(r.error()));
+		registration reg(*self, p);
+		co_return co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout), context);
+	}
+
+	// The ldap_result of a response, whatever the operation.
+	const ldap_result &result_of(const message &m)
+	{
+		return std::visit(
+		  [](const auto &op) -> const ldap_result & {
+			  if constexpr (requires { op.result; })
+				  return op.result;
+			  else
+				  throw std::logic_error("ldap: response without an LDAPResult");// the reader checked the operation
+		  },
+		  m.op);
+	}
+
+	// A response that only carries an LDAPResult: success gives its
+	// controls, anything else the error.
+	result<response> to_response(result<message> m, std::string_view context)
+	{
+		if (!m) return std::unexpected(std::move(m.error()));
+		const ldap_result &r = result_of(*m);
+		if (!r.is_success()) return std::unexpected(r.to_error(context));
+		response out;
+		out.controls.assign(m->controls.begin(), m->controls.end());
+		return out;
+	}
+
+	// Builds a message whose controls are `controls` (encoded on `mr`).
+	result<message> with_controls(protocol_op op,
+	  const request_controls &controls,
+	  std::pmr::memory_resource *mr,
+	  std::string_view context)
+	{
+		message m{ std::pmr::polymorphic_allocator<>(mr) };
+		m.op = std::move(op);
+		if (auto c = append_controls(controls, m.controls); !c)
+			return std::unexpected(with_context(std::move(c.error()), context));
+		return m;
+	}
+
+	// Validates and sends a search; returns its stream. Never suspends.
+	result<ldap::search_stream> start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr)
+	{
+		std::string context = op_context("search", p.base);
+		const auto seconds = p.time_limit.count();
+		if (seconds < 0 || seconds > max_int)
+			return fail(client_errc::encode_error,
+			  context + ": time_limit of " + std::to_string(seconds) + " s is outside 0 .. 2^31-1");
+
+		const std::pmr::polymorphic_allocator<> alloc(c.mr);
+		search_request wire(alloc);
+		wire.base_object = p.base.to_string(c.mr);
+		wire.scope = p.scope;
+		wire.deref = p.deref;
+		wire.size_limit = p.size_limit;
+		wire.time_limit = static_cast<std::int32_t>(seconds);
+		wire.types_only = p.types_only;
+		wire.filter = p.filter;
+		wire.attributes.assign(p.attributes.begin(), p.attributes.end());
+		auto request = with_controls(std::move(wire), p.controls, c.mr, context);
+		if (!request) return std::unexpected(std::move(request.error()));
+
+		auto *state = new_state(c, mr, context);
+		ldap::search_stream s = connection::impl::make_stream(state);
+		state->deadline = deadline_after(p.timeout ? p.timeout : c.default_timeout);
+		if (auto r = c.submit(*request, &state->op, context); !r) return std::unexpected(std::move(r.error()));
+		return s;
+	}
+
+}// namespace
+
 capy::task<result<void>> connection::simple_bind(dn name, std::string password)
 {
-	const std::string context = op_context("bind", name);
+	std::string context = op_context("bind", name);
 	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
 	if (!name.empty() && password.empty())
 		co_return fail(client_errc::unauthenticated_bind, context + ": empty password (RFC 4513 section 5.1.2)");
-	const impl_ref self(impl_);// `this` may be moved from while suspended
-
+	impl_ref self(impl_);// `this` may be moved from while suspended
 	message request(std::pmr::polymorphic_allocator<>(self->mr));
 	request.op = bind_request(3, name.to_string(self->mr), simple_auth(password, self->mr), self->mr);
-	pending_op p(self->mr, false, op_index<bind_response>);
-	if (auto r = self->submit(request, &p, context); !r) co_return r;
-	registration reg(*self, p);
-
-	auto m = co_await self->next_response(p, deadline_after(self->default_timeout), context);
+	auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
 	if (!m) co_return std::unexpected(std::move(m.error()));
 	const auto &r = std::get<bind_response>(m->op);// checked by the reader
 	if (!r.result.is_success()) co_return std::unexpected(r.result.to_error(context));
@@ -610,32 +697,8 @@ capy::task<result<void>> connection::simple_bind(dn name, std::string password)
 
 capy::task<result<ldap::search_stream>> connection::search_stream(search_params p, std::pmr::memory_resource *mr)
 {
-	std::string context = op_context("search", p.base);
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
-	const impl_ref self(impl_);
-	const auto seconds = p.time_limit.count();
-	if (seconds < 0 || seconds > max_int)
-		co_return fail(client_errc::encode_error,
-		  context + ": time_limit of " + std::to_string(seconds) + " s is outside 0 .. 2^31-1");
-
-	const std::pmr::polymorphic_allocator<> alloc(self->mr);
-	search_request wire(alloc);
-	wire.base_object = p.base.to_string(self->mr);
-	wire.scope = p.scope;
-	wire.deref = p.deref;
-	wire.size_limit = p.size_limit;
-	wire.time_limit = static_cast<std::int32_t>(seconds);
-	wire.types_only = p.types_only;
-	wire.filter = std::move(p.filter);
-	wire.attributes.assign(p.attributes.begin(), p.attributes.end());
-	message request(alloc);
-	request.op = std::move(wire);
-	request.controls.assign(p.controls.begin(), p.controls.end());
-
-	ldap::search_stream s(new_state(*self, mr, context));
-	s.state_->deadline = deadline_after(p.timeout ? p.timeout : self->default_timeout);
-	if (auto r = self->submit(request, &s.state_->op, context); !r) co_return std::unexpected(std::move(r.error()));
-	co_return std::move(s);
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(op_context("search", p.base)));
+	co_return start_search(*impl_, p, mr);
 }
 
 capy::task<result<std::pmr::vector<entry>>> connection::search(search_params request, std::pmr::memory_resource *mr)
@@ -650,6 +713,146 @@ capy::task<result<std::pmr::vector<entry>>> connection::search(search_params req
 		out.push_back(std::move(**e));
 	}
 	co_return out;
+}
+
+// ---------------------------------------------------------------- other operations
+
+namespace mod {
+
+	namespace {
+		modify_change change(modify_operation op, std::string_view type, std::initializer_list<std::string_view> values)
+		{
+			return modify_change(op, partial_attribute(type, values));
+		}
+	}// namespace
+
+	modify_change add(std::string_view type, std::initializer_list<std::string_view> values)
+	{
+		return change(modify_operation::add, type, values);
+	}
+	modify_change remove(std::string_view type, std::initializer_list<std::string_view> values)
+	{
+		return change(modify_operation::delete_, type, values);
+	}
+	modify_change replace(std::string_view type, std::initializer_list<std::string_view> values)
+	{
+		return change(modify_operation::replace, type, values);
+	}
+	modify_change increment(std::string_view type, std::string_view delta)
+	{
+		return change(modify_operation::increment, type, { delta });
+	}
+
+}// namespace mod
+
+capy::task<result<response>> connection::add(add_params p)
+{
+	std::string context = op_context("add", p.entry);
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	impl_ref self(impl_);
+	const std::pmr::polymorphic_allocator<> alloc(self->mr);
+	add_request op(alloc);
+	op.entry = p.entry.to_string(self->mr);
+	op.attributes.assign(p.attributes.begin(), p.attributes.end());
+	auto request = with_controls(std::move(op), p.controls, self->mr, context);
+	if (!request) co_return std::unexpected(std::move(request.error()));
+	co_return to_response(
+	  co_await request_response(self, std::move(*request), op_index<add_response>, context, p.timeout), context);
+}
+
+capy::task<result<response>> connection::modify(modify_params p)
+{
+	std::string context = op_context("modify", p.object);
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	impl_ref self(impl_);
+	const std::pmr::polymorphic_allocator<> alloc(self->mr);
+	modify_request op(alloc);
+	op.object = p.object.to_string(self->mr);
+	op.changes.assign(p.changes.begin(), p.changes.end());
+	auto request = with_controls(std::move(op), p.controls, self->mr, context);
+	if (!request) co_return std::unexpected(std::move(request.error()));
+	co_return to_response(
+	  co_await request_response(self, std::move(*request), op_index<modify_response>, context, p.timeout), context);
+}
+
+capy::task<result<response>> connection::del(del_params p)
+{
+	std::string context = op_context("delete", p.entry);
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	impl_ref self(impl_);
+	auto request = with_controls(del_request(p.entry.to_string(self->mr), std::pmr::polymorphic_allocator<>(self->mr)),
+	  p.controls,
+	  self->mr,
+	  context);
+	if (!request) co_return std::unexpected(std::move(request.error()));
+	co_return to_response(
+	  co_await request_response(self, std::move(*request), op_index<del_response>, context, p.timeout), context);
+}
+
+capy::task<result<response>> connection::modify_dn(modify_dn_params p)
+{
+	std::string context = op_context("modify DN", p.entry);
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (p.new_rdn.avas.empty()) co_return fail(client_errc::invalid_dn, context + ": empty new RDN");
+	impl_ref self(impl_);
+	const std::pmr::polymorphic_allocator<> alloc(self->mr);
+	modify_dn_request op(alloc);
+	op.entry = p.entry.to_string(self->mr);
+	op.new_rdn = dn{}.child(p.new_rdn).to_string(self->mr);// an RDN prints as a one-RDN DN
+	op.delete_old_rdn = p.delete_old_rdn;
+	if (p.new_superior) op.new_superior = p.new_superior->to_string(self->mr);
+	auto request = with_controls(std::move(op), p.controls, self->mr, context);
+	if (!request) co_return std::unexpected(std::move(request.error()));
+	co_return to_response(
+	  co_await request_response(self, std::move(*request), op_index<modify_dn_response>, context, p.timeout), context);
+}
+
+capy::task<result<bool>> connection::compare(compare_params p)
+{
+	std::string context = op_context("compare", p.entry);
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	impl_ref self(impl_);
+	const std::pmr::polymorphic_allocator<> alloc(self->mr);
+	auto request = with_controls(
+	  compare_request(p.entry.to_string(self->mr), attribute_value_assertion(p.attribute, p.value, alloc), alloc),
+	  p.controls,
+	  self->mr,
+	  context);
+	if (!request) co_return std::unexpected(std::move(request.error()));
+	auto m = co_await request_response(self, std::move(*request), op_index<compare_response>, context, p.timeout);
+	if (!m) co_return std::unexpected(std::move(m.error()));
+	const ldap_result &r = result_of(*m);
+	if (r.result_code == static_cast<int>(errc::compare_true)) co_return true;
+	if (r.result_code == static_cast<int>(errc::compare_false)) co_return false;
+	co_return std::unexpected(r.to_error(context));// success (0) is not a valid answer either
+}
+
+capy::task<result<extended_result>> connection::extended(extended_params p)
+{
+	std::string context = "extended operation " + p.name;
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	impl_ref self(impl_);
+	const std::pmr::polymorphic_allocator<> alloc(self->mr);
+	std::optional<std::string_view> value;
+	if (p.value) value = *p.value;
+	auto request = with_controls(extended_request(p.name, value, alloc), p.controls, self->mr, context);
+	if (!request) co_return std::unexpected(std::move(request.error()));
+	auto m = co_await request_response(self, std::move(*request), op_index<extended_response>, context, p.timeout);
+	if (!m) co_return std::unexpected(std::move(m.error()));
+	auto &x = std::get<extended_response>(m->op);
+	if (!x.result.is_success()) co_return std::unexpected(x.result.to_error(context));
+	extended_result out;
+	if (x.response_name) out.name.emplace(*x.response_name);
+	if (x.response_value) out.value.emplace(*x.response_value);
+	out.controls.assign(m->controls.begin(), m->controls.end());
+	co_return out;
+}
+
+capy::task<result<std::string>> connection::who_am_i(request_controls controls)
+{
+	auto r = co_await extended({ .name = std::string(who_am_i_oid), .controls = std::move(controls) });
+	if (!r) co_return std::unexpected(std::move(r.error()));
+	co_return r->value ? std::string(*r->value) : std::string();
 }
 
 capy::task<result<void>> connection::unbind()
@@ -752,6 +955,136 @@ capy::task<result<std::optional<entry>>> search_stream::next()
 			co_return std::unexpected(*s.error_);
 		}
 		co_return std::optional<entry>{};
+	}
+}
+
+std::pmr::vector<url> search_stream::reference_urls(std::pmr::memory_resource *mr) const
+{
+	return url::parse_list(references(), mr);
+}
+
+// ---------------------------------------------------------------- paged_search
+
+struct paged_search::state
+{
+	impl_ref conn;
+	search_params params;
+	std::int32_t page_size;
+	std::pmr::memory_resource *mr;
+	ldap::search_stream current{};
+	std::size_t pages = 0;
+	bool finished = false;
+	std::optional<error> error_{};
+	string_list references{};
+	std::pmr::vector<control> controls{};
+
+	// Sends the search for the next page (cookie empty for the first).
+	result<void> request_page(std::string cookie)
+	{
+		auto &cs = params.controls;
+		std::erase_if(cs, [](const request_control &c) {
+			return std::holds_alternative<paged>(c)
+				   || (std::holds_alternative<control>(c) && std::get<control>(c).type == paged_results_oid);
+		});
+		cs.push_back(paged{ .page_size = page_size, .cookie = std::move(cookie) });
+		auto s = start_search(*conn, params, mr);
+		if (!s) return std::unexpected(std::move(s.error()));
+		current = std::move(*s);
+		++pages;
+		return {};
+	}
+};
+
+capy::task<result<ldap::paged_search>>
+  connection::search_paged(search_params p, std::int32_t page_size, std::pmr::memory_resource *mr)
+{
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(op_context("search", p.base)));
+	if (page_size <= 0)
+		co_return fail(client_errc::encode_error,
+		  op_context("search", p.base) + ": page size " + std::to_string(page_size) + " is not positive");
+	std::pmr::polymorphic_allocator<> alloc(impl_->mr);
+	auto *st = alloc.new_object<paged_search::state>(
+	  paged_search::state{ impl_ref(impl_), std::move(p), page_size, mr, {}, 0, false, {}, {}, {} });
+	ldap::paged_search out = connection::impl::make_paged(st);
+	if (auto r = st->request_page({}); !r) co_return std::unexpected(std::move(r.error()));
+	co_return std::move(out);
+}
+
+namespace {
+
+	void delete_paged(paged_search::state *s) noexcept
+	{
+		if (s == nullptr) return;
+		impl_ref keep = s->conn;
+		std::pmr::polymorphic_allocator<> alloc(keep->mr);
+		alloc.delete_object(s);// its current stream abandons its search
+	}
+
+}// namespace
+
+paged_search::paged_search(paged_search &&other) noexcept : state_(std::exchange(other.state_, nullptr)) {}
+
+paged_search &paged_search::operator=(paged_search &&other) noexcept
+{
+	if (this != &other) {
+		delete_paged(state_);
+		state_ = std::exchange(other.state_, nullptr);
+	}
+	return *this;
+}
+
+paged_search::~paged_search() { delete_paged(state_); }
+
+bool paged_search::done() const noexcept { return state_ == nullptr || state_->finished; }
+
+std::size_t paged_search::pages() const noexcept { return state_ == nullptr ? 0 : state_->pages; }
+
+const string_list &paged_search::references() const noexcept
+{
+	static const string_list none;
+	return state_ == nullptr ? none : state_->references;
+}
+
+std::pmr::vector<url> paged_search::reference_urls(std::pmr::memory_resource *mr) const
+{
+	return url::parse_list(references(), mr);
+}
+
+const std::pmr::vector<control> &paged_search::controls() const noexcept
+{
+	static const std::pmr::vector<control> none;
+	return state_ == nullptr ? none : state_->controls;
+}
+
+capy::task<result<std::optional<entry>>> paged_search::next()
+{
+	if (state_ == nullptr) co_return std::unexpected(not_connected("search"));
+	state &s = *state_;
+	if (s.finished) {
+		if (s.error_) co_return std::unexpected(*s.error_);
+		co_return std::optional<entry>{};
+	}
+	auto finish = [&s](error e) -> result<std::optional<entry>> {
+		s.finished = true;
+		s.error_ = e;
+		return std::unexpected(std::move(e));
+	};
+	while (true) {
+		const std::size_t seen = s.current.references().size();
+		auto e = co_await s.current.next();
+		const auto &refs = s.current.references();
+		s.references.insert(s.references.end(), refs.begin() + static_cast<std::ptrdiff_t>(seen), refs.end());
+		if (!e) co_return finish(std::move(e.error()));
+		if (*e) co_return std::move(*e);
+		// The page ended: the next one, if the server gave a cookie.
+		s.controls = s.current.controls();
+		auto pr = find_paged(s.controls);
+		if (!pr) co_return finish(with_context(std::move(pr.error()), op_context("search", s.params.base)));
+		if (!*pr || (*pr)->cookie.empty()) {
+			s.finished = true;
+			co_return std::optional<entry>{};
+		}
+		if (auto r = s.request_page(std::string((*pr)->cookie)); !r) co_return finish(std::move(r.error()));
 	}
 }
 

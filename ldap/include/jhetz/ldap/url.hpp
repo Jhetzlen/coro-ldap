@@ -125,6 +125,11 @@ class url
 	// Parses RFC 4516 text; fails with invalid_url (never throws on bad input).
 	// The url's strings and lists are allocated from `mr`.
 	static result<url> parse(std::string_view text, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	// Parses each URI (e.g. the referral or continuation references of a
+	// result) and returns those that are valid LDAP URLs, in order; the
+	// others are left out (servers may send any URI scheme).
+	static std::pmr::vector<url> parse_list(const std::pmr::vector<std::pmr::string> &uris,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 	// RFC 4516 text: lower-case scheme, IPv6 in brackets, the port only if
 	// one was given, then only as many parts as needed to carry the ones that

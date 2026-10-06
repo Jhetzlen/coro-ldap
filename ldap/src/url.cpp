@@ -605,4 +605,12 @@ std::pmr::string url::to_string(std::pmr::memory_resource *mr) const
 	return out;
 }
 
+std::pmr::vector<url> url::parse_list(const std::pmr::vector<std::pmr::string> &uris, std::pmr::memory_resource *mr)
+{
+	std::pmr::vector<url> out(mr);
+	for (const auto &u : uris)
+		if (auto parsed = parse(u, mr)) out.push_back(std::move(*parsed));
+	return out;
+}
+
 }// namespace jhetz::ldap
