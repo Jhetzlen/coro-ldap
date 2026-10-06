@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <utility>
 #include <vector>
@@ -73,6 +74,23 @@ template<class T> void spawn(corosio::io_context &ioc, capy::task<T> t, outcome<
 	else
 		capy::run_async(
 		  ioc.get_executor(),
+		  [&out](T v) { out.value.emplace(std::move(v)); },
+		  [&out](std::exception_ptr e) { out.error = e; })(std::move(t));
+}
+
+// spawn() with a stop token, to cancel the task from the test.
+template<class T> void spawn(corosio::io_context &ioc, std::stop_token st, capy::task<T> t, outcome<T> &out)
+{
+	if constexpr (std::is_void_v<T>)
+		capy::run_async(
+		  ioc.get_executor(),
+		  std::move(st),
+		  [&out] { out.finished = true; },
+		  [&out](std::exception_ptr e) { out.error = e; })(std::move(t));
+	else
+		capy::run_async(
+		  ioc.get_executor(),
+		  std::move(st),
 		  [&out](T v) { out.value.emplace(std::move(v)); },
 		  [&out](std::exception_ptr e) { out.error = e; })(std::move(t));
 }

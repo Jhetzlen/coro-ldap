@@ -118,12 +118,13 @@ on by default) with the network parts. It depends on Corosio and Capy
   `write_message(t, m, writer)` reuses the caller's `ber::writer`;
   `write_bytes` sends raw bytes.
 
-- `jhetz/ldap/connection.hpp` (step 5a): `ldap::connection`, the client API.
-  `co_await ldap::connect(ioc, url, connection_options, mr)` wraps
-  `net::connect` (`connection_options`: connect `timeout`, `tls`,
-  `tcp_no_delay`, `max_message_size`, still 16 MiB by default); a
-  connection can also be built on any `net::transport`. Operations run one
-  at a time: `simple_bind(dn, password)` (an empty name and password is
+- `jhetz/ldap/connection.hpp` (steps 5a, 5b): `ldap::connection`, the
+  client API. `co_await ldap::connect(ioc, url, connection_options, mr)`
+  wraps `net::connect` (`connection_options`: connect `timeout`, `tls`,
+  `tcp_no_delay`, `max_message_size` (16 MiB by default),
+  `operation_timeout`); a connection can also be built on any
+  `net::transport` with `connection(ioc, transport, options, mr)`.
+  Operations: `simple_bind(dn, password)` (an empty name and password is
   anonymous; a name with an empty password is refused with
   `client_errc::unauthenticated_bind`, RFC 4513 section 5.1.2),
   `search(search_params, mr)` returning `result<std::pmr::vector<entry>>`,
@@ -131,17 +132,26 @@ on by default) with the network parts. It depends on Corosio and Capy
   entry at a time (and keeps the search references and the done controls),
   and `unbind()`. `search_params` is a plain aggregate for designated
   initializers (`.base`, `.scope`, `.filter`, `.attributes`, `.deref`,
-  `.size_limit`, `.time_limit`, `.types_only`, `.controls`). Starting an
-  operation while another is suspended or a stream is open fails with
-  `client_errc::operation_in_progress`; a stream destroyed early is drained
-  by the next operation. Every response is decoded with `origin::server`
-  and must carry the id of the request in flight and an operation that
-  answers it (else `client_errc::unexpected_response`); IntermediateResponses
-  are skipped; a Notice of Disconnection fails the operation. A server
-  result error leaves the connection usable; a transport or protocol error,
-  or an operation interrupted before it finished, closes it, and later
-  operations fail with `client_errc::not_connected` naming the first error.
-  The header documents the memory, threading and move rules.
+  `.size_limit`, `.time_limit`, `.types_only`, `.controls`, `.timeout`).
+  Multiplexed: any number of operations may be outstanding (concurrent
+  tasks on the connection's executor); one writer sends the PDUs in order
+  and one reader, running only while something is outstanding, routes
+  each response by message id and decodes it straight into that
+  operation's memory resource. Each operation honours its task's stop
+  token and its timeout: it then fails with `capy::error::canceled` /
+  `timeout` and is abandoned (AbandonRequest; late responses dropped), and
+  the connection stays usable; so does a stream destroyed before its end.
+  Every response is decoded with `origin::server` and must answer an
+  outstanding request (else `client_errc::unexpected_response`);
+  IntermediateResponses are skipped; a Notice of Disconnection fails every
+  outstanding operation. A server result error fails one operation; a
+  transport or protocol error fails all of them once and closes the
+  connection, and later operations fail with `client_errc::not_connected`
+  naming the first error. The header documents the memory, threading and
+  lifetime rules.
+- `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
+  the reader uses: wait for one complete PDU without decoding it, then read
+  only its message id and operation tag.
 - `examples/ldapsearch.cpp` (target `jhetz_ldapsearch`, binary `ldapsearch`,
   option `JHETZ_LDAP_BUILD_EXAMPLES`): connect, optional simple bind,
   search, LDIF output, unbind; `ldapsearch -D dn -w pw URL [filter [attrs]]`.
@@ -178,8 +188,7 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: multiplexing, cancellation and abandon (step 5b), the other
-operations (step 6), StartTLS, SASL.
+Not yet: the other operations (step 6), StartTLS, SASL.
 
 ## Build and test
 

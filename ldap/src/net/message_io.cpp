@@ -68,7 +68,7 @@ void read_buffer::consume(std::size_t n) noexcept
 	if (buf_.size() > shrink_threshold) { std::pmr::vector<std::byte>(buf_.get_allocator()).swap(buf_); }
 }
 
-capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_options options)
+capy::task<result<std::size_t>> read_frame(transport &t, read_buffer &buf, std::size_t max_message_size)
 {
 	std::string where = "read ";
 	where += t.name();
@@ -82,17 +82,10 @@ capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_op
 			if (data[0] != std::byte{ 0x30 })
 				co_return fail(client_errc::decode_error,
 				  where + ": PDU starts with " + hex_byte(data[0]) + ", not a SEQUENCE (0x30)");
-			auto size = ber::declared_message_size(data, options.max_message_size);
+			auto size = ber::declared_message_size(data, max_message_size);
 			if (!size) co_return std::unexpected(with_context(std::move(size.error()), where));
 			declared = *size;
-			if (declared && data.size() >= *declared) {
-				// Allocated from options.decode.memory (e.g. a per-response
-				// arena of the connection layer).
-				auto m = decode(data.first(*declared), options.decode);
-				buf.consume(*declared);
-				if (!m) co_return std::unexpected(with_context(std::move(m.error()), where));
-				co_return m;
-			}
+			if (declared && data.size() >= *declared) co_return *declared;
 			// Room for exactly the rest of this PDU (or, while its header is
 			// incomplete, for min_read bytes in all): asking for more would
 			// reallocate on every short read near the end of a PDU. Free
@@ -128,6 +121,18 @@ capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_op
 		}
 		co_return fail(ec, std::move(context));
 	}
+}
+
+capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_options options)
+{
+	auto size = co_await read_frame(t, buf, options.max_message_size);
+	if (!size) co_return std::unexpected(std::move(size.error()));
+	// Allocated from options.decode.memory (e.g. a per-response arena of the
+	// connection layer).
+	auto m = decode(buf.data().first(*size), options.decode);
+	buf.consume(*size);
+	if (!m) co_return std::unexpected(with_context(std::move(m.error()), "read " + std::string(t.name())));
+	co_return m;
 }
 
 capy::task<result<void>> write_bytes(transport &t, std::span<const std::byte> bytes)

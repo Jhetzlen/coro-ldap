@@ -1,6 +1,6 @@
-// An LDAP connection: bind, search and unbind over a net::transport, one
-// operation at a time (DESIGN.md sections 3, 5 and 7). Part of
-// jhetz::ldap_net.
+// An LDAP connection: bind, search and unbind over a net::transport, with
+// any number of operations outstanding at once (DESIGN.md sections 3, 5 and
+// 7). Part of jhetz::ldap_net.
 //
 //   corosio::io_context ioc;
 //   auto u = ldap::url::parse("ldaps://ldap.example.org");
@@ -13,49 +13,63 @@
 //   });                                   // result<std::pmr::vector<entry>>
 //   co_await c->unbind();
 //
-// Sequential: one request is in flight at a time, and a search_stream counts
-// as in flight until it has read the SearchResultDone or is destroyed.
-// Starting another operation meanwhile fails with
-// client_errc::operation_in_progress (nothing is queued). Multiplexing,
-// cancellation and abandon are step 5b.
+// Multiplexing (step 5b): operations started concurrently (several tasks on
+// the connection's executor, e.g. with capy::when_all) are all sent at once,
+// each with its own message id, and their responses are matched by id. One
+// writer coroutine sends the PDUs in order, never interleaved; one reader
+// coroutine routes each response to the operation waiting for it, and runs
+// only while some operation waits (an idle connection has no pending read,
+// so io_context::run() can return). Search entries are queued per search
+// until its stream takes them; the queue is not bounded, because a bound
+// would let one slow stream stall every other operation on the connection.
 //
-// What the server sends is decoded with origin::server, always: a server
-// cannot make the client decode request operations such as filters. Each
-// response must carry the id of the request in flight and an operation that
-// answers it; anything else (another id, a bind response to a search, a
-// request operation) is client_errc::unexpected_response. IntermediateResponse
-// messages with the right id are skipped. Unsolicited notifications (id 0,
-// RFC 4511 section 4.4): a Notice of Disconnection fails the operation with
-// the server's result code (errc::unavailable if it sent success) and closes
-// the connection; other extended responses with id 0 are ignored, and any
-// other operation with id 0 is unexpected_response.
+// Cancellation and timeouts: every operation honours the stop token of the
+// task awaiting it, and a timeout (search_params::timeout, else
+// connection_options::operation_timeout). When either fires before the
+// final response, the operation fails with capy::error::canceled or
+// capy::error::timeout (ldap::cond::canceled / cond::timeout), an
+// AbandonRequest (RFC 4511 section 4.11) is sent for it, and responses that
+// still arrive for it are dropped; the connection stays usable. A
+// search_stream destroyed before its end abandons its search the same way.
+// Abandon is best effort: the server may have answered already.
 //
-// Errors: a server result other than success is `ldap_result::to_error` (code
-// in the ldap.result category, diagnostic, matched DN and referrals, as text)
-// with the operation as context, e.g. "search ou=people,dc=example,dc=org".
-// Such an error leaves the connection usable. So does a request that fails to
-// encode (nothing is sent). A transport error, a malformed or oversized PDU,
-// an unexpected response or a Notice of Disconnection closes the connection:
-// every later operation fails with client_errc::not_connected, naming the
-// original error. The same happens when an operation's task is destroyed
-// before it finished (or its read is cancelled): the response it was waiting
-// for would otherwise be read by the next operation.
+// What the server sends is decoded with origin::server, always. Each
+// response must carry the id of an outstanding (or recently abandoned)
+// request and an operation that answers it; anything else is
+// client_errc::unexpected_response. IntermediateResponses are skipped.
+// Unsolicited notifications (id 0, RFC 4511 section 4.4): a Notice of
+// Disconnection fails every outstanding operation with the server's result
+// code (errc::unavailable if it sent success) and closes the connection;
+// other extended responses with id 0 are ignored.
 //
-// Memory: entries returned by search() and search_stream are decoded into
-// the memory resource given to that call (default: the default resource) and
-// moved into the result, with no copy; with a caller's arena the entries
-// must not outlive it (DESIGN.md section 8). Responses the connection
-// discards (those of a search_stream destroyed early) are decoded into a
-// per-connection monotonic arena that is released after each message. The
-// connection's own state, read buffer and encode buffer live on the resource
-// given to connect() or the constructor.
+// Errors: a server result other than success is `ldap_result::to_error`
+// with the operation as context, e.g. "search ou=people,dc=example,dc=org";
+// it fails that operation only. So does a request that fails to encode
+// (nothing is sent) and a cancellation or timeout. A transport error, a
+// malformed or oversized PDU, an unexpected response or a Notice of
+// Disconnection fails every outstanding operation, exactly once, and closes
+// the connection: every later operation fails with
+// client_errc::not_connected, naming the original error.
 //
-// Threading (Capy / Corosio rules): all operations of a connection, and of
-// its search_streams, must run on the executor of the io_context it was
-// created on, never concurrently. A connection may be moved; a search_stream
-// keeps working across the move because the state stays where it is.
-// Destroying a connection while one of its tasks is suspended is undefined:
-// let the task finish (close() makes a pending read finish at once).
+// Memory: entries returned by search() and search_stream are decoded
+// straight into the memory resource given to that call (default: the
+// default resource), with no copy: the reader looks at a PDU's message id
+// before decoding it. With a caller's arena the entries must not outlive it
+// (DESIGN.md section 8). The connection's own state, buffers and queues live
+// on the resource given to connect() or the constructor.
+//
+// Threading (Capy / Corosio rules): a connection belongs to the executor of
+// the io_context it was created with. All its operations, and those of its
+// search_streams, must run on that executor (one thread); from another
+// thread, start them there, e.g. capy::run_async(conn.executor())(task).
+// Operations may be outstanding concurrently, but each search_stream has at
+// most one next() at a time. Connections and streams are cheap to move;
+// the shared state is reference counted, so a stream, an outstanding
+// operation or the internal reader may outlive the connection object
+// (destroying the connection closes it; they then fail with not_connected).
+// Operations never wait on I/O themselves (the writer and reader do), only
+// for their responses, so destroying a task suspended in one of them is
+// safe: the operation is abandoned. Stop tokens are the normal way to cancel.
 #pragma once
 
 #include "jhetz/ldap/ber.hpp"
@@ -95,6 +109,11 @@ struct connection_options
 	// can take about 12-18x the PDU size in memory for pathological entries
 	// (many empty values); lower this if the server is not trusted.
 	std::size_t max_message_size = ber::default_max_message_size;
+	// Default limit for each operation, from sending its request to its
+	// final response (for a search: to the SearchResultDone, across every
+	// next()). On expiry the operation fails with capy::error::timeout and
+	// is abandoned. nullopt: no limit (cancel with a stop token instead).
+	std::optional<std::chrono::milliseconds> operation_timeout{};
 };
 
 // A search, as a plain aggregate for designated initializers (DESIGN.md
@@ -111,10 +130,14 @@ struct search_params
 	string_list attributes{};
 	deref_aliases deref = deref_aliases::never;
 	std::int32_t size_limit = 0;// entries; 0 = no client-requested limit
-	std::chrono::seconds time_limit{ 0 };// 0 = no client-requested limit
+	std::chrono::seconds time_limit{ 0 };// 0 = no client-requested limit (sent to the server)
 	bool types_only = false;
 	// Request controls, sent as given (typed controls: step 6).
 	std::pmr::vector<control> controls{};
+	// Client-side limit for the whole search (see
+	// connection_options::operation_timeout, which applies if this is
+	// nullopt). Unlike time_limit it is enforced by the client.
+	std::optional<std::chrono::milliseconds> timeout{};
 };
 
 class search_stream;
@@ -122,13 +145,16 @@ class search_stream;
 class connection
 {
   public:
+	using executor_type = boost::corosio::io_context::executor_type;
+
 	// Not connected: every operation fails with client_errc::not_connected.
 	connection() noexcept = default;
 	// Runs LDAP over an open transport (for example one from net::connect(),
-	// or transport::wrap() of a test stream). Of `options` only
-	// max_message_size applies here. The connection's state is allocated
-	// from `mr`.
-	explicit connection(net::transport t,
+	// or transport::wrap() of a test stream) whose I/O runs on `ioc`. Of
+	// `options` only max_message_size and operation_timeout apply here. The
+	// connection's state is allocated from `mr`.
+	connection(boost::corosio::io_context &ioc,
+	  net::transport t,
 	  const connection_options &options = {},
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 	connection(connection &&other) noexcept;
@@ -137,6 +163,7 @@ class connection
 	connection &operator=(const connection &) = delete;
 	// Closes the transport without sending an UnbindRequest (a destructor
 	// cannot wait for I/O); co_await unbind() first for a clean shutdown.
+	// Outstanding operations and open streams fail with not_connected.
 	~connection();
 
 	// False before connecting, after unbind() or close(), and once a
@@ -145,6 +172,12 @@ class connection
 	// Where it is connected ("ldap://127.0.0.1:389"), for logs; empty if never
 	// connected.
 	std::string_view name() const noexcept;
+	// The executor every operation of this connection must run on.
+	// Precondition: constructed with a transport (not default, not moved from).
+	executor_type executor() const noexcept;
+	// Operations waiting for a response (searches until their
+	// SearchResultDone, or until abandoned). For tests and diagnostics.
+	std::size_t outstanding() const noexcept;
 
 	// Simple bind (RFC 4511 section 4.2, RFC 4513 section 5.1). An empty name
 	// and password is an anonymous bind. A name with an empty password would
@@ -152,7 +185,9 @@ class connection
 	// checking anything, so it is refused before anything is sent
 	// (client_errc::unauthenticated_bind). A server error (e.g.
 	// errc::invalid_credentials) comes back as an error; the connection stays
-	// usable (anonymous) and may bind again.
+	// usable (anonymous) and may bind again. RFC 4511 section 4.2.1: do not
+	// start other operations while a bind is outstanding (the server may
+	// reject or delay them); this is not enforced.
 	boost::capy::task<result<void>> simple_bind(dn name, std::string password);
 
 	// Runs a search to its end and returns the entries in the order received,
@@ -165,21 +200,21 @@ class connection
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 	// Sends the search and returns a stream that yields its entries one at a
-	// time, each decoded into `mr`. The connection is busy until the stream
-	// has returned the end (or an error), or is destroyed; destroyed early,
-	// the next operation first reads and discards the rest of the search
-	// (no Abandon yet: step 5b).
+	// time, each decoded into `mr`. Other operations may run while the
+	// stream is open. Destroyed before its end, the stream abandons the
+	// search.
 	boost::capy::task<result<ldap::search_stream>> search_stream(search_params request,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
-	// Sends an UnbindRequest and closes the connection (RFC 4511 section
-	// 4.3: there is no response). Allowed while a search_stream is open (the
-	// stream then fails with not_connected), not while another operation is
-	// suspended. The connection is closed even if the write fails.
+	// Sends an UnbindRequest, waits until it is written, and closes the
+	// connection (RFC 4511 section 4.3: there is no response). Outstanding
+	// operations and open streams fail with not_connected (an unbind
+	// abandons them on the server too). The connection is closed even if
+	// the write fails or the task is cancelled.
 	boost::capy::task<result<void>> unbind();
 
-	// Closes the transport at once, without an UnbindRequest. A suspended
-	// operation completes with an error. Idempotent.
+	// Closes the transport at once, without an UnbindRequest. Outstanding
+	// operations complete with not_connected. Idempotent.
 	void close() noexcept;
 
 	struct impl;// defined in connection.cpp
@@ -187,7 +222,7 @@ class connection
   private:
 	friend class ldap::search_stream;
 
-	impl *impl_ = nullptr;// allocated from the resource it records
+	impl *impl_ = nullptr;// reference counted; allocated from the resource it records
 };
 
 // The entries of one search, read one at a time:
@@ -201,9 +236,10 @@ class connection
 //       use(**e);
 //   }
 //
-// Move-only. A default-constructed stream, or one whose connection was
-// closed or destroyed, fails with client_errc::not_connected. The stream
-// must not be destroyed or moved while its next() is suspended.
+// Move-only. A default-constructed stream fails with
+// client_errc::not_connected. The stream must not be destroyed or moved
+// while its next() is suspended; a second next() while one is suspended
+// fails with client_errc::operation_in_progress.
 class search_stream
 {
   public:
@@ -212,39 +248,32 @@ class search_stream
 	search_stream &operator=(search_stream &&other) noexcept;
 	search_stream(const search_stream &) = delete;
 	search_stream &operator=(const search_stream &) = delete;
-	// Unfinished: the connection discards the rest of the search before its
-	// next operation.
+	// Unfinished: the search is abandoned.
 	~search_stream();
 
 	// The next entry, nullopt at the end (SearchResultDone with success), or
-	// an error: the server's result code (the connection stays usable) or a
-	// connection failure. After the end or an error, next() returns the same
-	// again without I/O.
+	// an error: the server's result code (the connection stays usable), a
+	// cancellation or timeout (the search is abandoned, the connection stays
+	// usable) or a connection failure. After the end or an error, next()
+	// returns the same again without I/O.
 	boost::capy::task<result<std::optional<entry>>> next();
 
 	// True once the SearchResultDone (or an error) was read.
-	bool done() const noexcept { return finished_; }
+	bool done() const noexcept;
 	// URIs of the SearchResultReference messages received so far, in order,
 	// as sent (one string per URI; parse with url::parse).
-	const string_list &references() const noexcept { return references_; }
+	const string_list &references() const noexcept;
 	// Controls of the SearchResultDone (e.g. paged results), once done().
-	const std::pmr::vector<control> &controls() const noexcept { return controls_; }
+	const std::pmr::vector<control> &controls() const noexcept;
+
+	struct state;// defined in connection.cpp
 
   private:
 	friend class connection;
-	friend struct connection::impl;
 
-	search_stream(connection::impl *conn, std::int32_t id, std::pmr::string context, std::pmr::memory_resource *mr);
-	void detach() noexcept;
+	explicit search_stream(state *s) noexcept : state_(s) {}
 
-	connection::impl *conn_ = nullptr;
-	std::int32_t id_ = 0;
-	std::pmr::memory_resource *mr_ = std::pmr::get_default_resource();
-	bool finished_ = false;
-	std::optional<error> error_{};
-	std::pmr::string context_{};// "search <base>"
-	string_list references_{};
-	std::pmr::vector<control> controls_{};
+	state *state_ = nullptr;
 };
 
 // Opens a connection to `u` (net::connect: resolve, TCP, TLS for ldaps://,

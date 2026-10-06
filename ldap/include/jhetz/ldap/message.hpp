@@ -860,6 +860,18 @@ struct decode_options
 // trailing bytes are an error (decode_error).
 result<message> decode(std::span<const std::byte> one_complete_message, const decode_options &options = {});
 
+// The messageID and the protocolOp tag of one complete PDU, read without
+// decoding the rest or allocating: a multiplexed connection uses it to find
+// the operation a response belongs to (and the resource to decode it into)
+// before decoding. Only the outer SEQUENCE header, the id (0 .. maxInt) and
+// the next tag are checked; decode() still validates everything.
+struct message_header
+{
+	std::int32_t id = 0;
+	ber::tag op{};// e.g. [APPLICATION 4] for a SearchResultEntry
+};
+result<message_header> peek_message_header(std::span<const std::byte> one_complete_message);
+
 // ---------------------------------------------------------------- typed controls
 
 // Simple Paged Results (RFC 2696): realSearchControlValue.

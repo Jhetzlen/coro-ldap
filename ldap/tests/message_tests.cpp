@@ -710,3 +710,37 @@ TEST_CASE("add and modify-add values must not be empty", "[message]")
 	});
 	CHECK(code_of(ldap::decode(mod_bytes)) == client_errc::decode_error);
 }
+
+TEST_CASE("peek_message_header reads the id and the operation tag only", "[message]")
+{
+	const auto bytes = ldap::encode(ldap::message{ 4711, ldap::search_result_done{ ldap::ldap_result{ 0 } } }).value();
+	auto h = ldap::peek_message_header(bytes);
+	REQUIRE(h.has_value());
+	CHECK(h->id == 4711);
+	CHECK(h->op == ldap::ber::application(5, true));
+
+	const auto entry = ldap::encode(
+	  ldap::message{ 1, ldap::search_result_entry{ "cn=x", { ldap::partial_attribute{ "cn", { "x" } } } } })
+						 .value();
+	CHECK(ldap::peek_message_header(entry)->op == ldap::ber::application(4, true));
+
+	// Only the header is checked: a body decode() would reject still peeks.
+	auto broken = bytes;
+	broken.back() = std::byte{ 0xFF };
+	CHECK(ldap::peek_message_header(broken).has_value());
+
+	// Not a SEQUENCE, a negative id, no protocolOp, truncated.
+	const std::byte not_seq[] = { std::byte{ 0x04 }, std::byte{ 0x00 } };
+	CHECK_FALSE(ldap::peek_message_header(not_seq).has_value());
+	const std::byte negative[] = {
+		std::byte{ 0x30 }, std::byte{ 0x03 }, std::byte{ 0x02 }, std::byte{ 0x01 }, std::byte{ 0xFF }
+	};
+	CHECK_FALSE(ldap::peek_message_header(negative).has_value());
+	const std::byte no_op[] = {
+		std::byte{ 0x30 }, std::byte{ 0x03 }, std::byte{ 0x02 }, std::byte{ 0x01 }, std::byte{ 0x01 }
+	};
+	auto missing = ldap::peek_message_header(no_op);
+	REQUIRE_FALSE(missing.has_value());
+	CHECK(missing.error().code == ldap::client_errc::decode_error);
+	CHECK_FALSE(ldap::peek_message_header(std::span(bytes).first(3)).has_value());
+}
