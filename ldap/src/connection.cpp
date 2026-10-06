@@ -705,6 +705,39 @@ capy::task<result<void>> connection::simple_bind(dn name, std::string password)
 	co_return result<void>{};
 }
 
+capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn name)
+{
+	std::string context = "sasl bind ";
+	context += mechanism.name();
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	impl_ref self(impl_);
+	constexpr int max_steps = 32;
+	auto creds = mechanism.start();
+	for (int step = 0;; ++step) {
+		if (!creds) co_return std::unexpected(detail::with_context(std::move(creds.error()), context));
+		if (step == max_steps)
+			co_return fail(client_errc::unexpected_response,
+			  context + ": still in progress after " + std::to_string(max_steps) + " steps");
+		message request(std::pmr::polymorphic_allocator<>(self->mr));
+		std::optional<std::string_view> c;
+		if (*creds) c = **creds;
+		request.op = bind_request(3, name.to_string(self->mr), sasl_auth(mechanism.name(), c, self->mr), self->mr);
+		auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
+		if (!m) co_return std::unexpected(std::move(m.error()));
+		const auto &r = std::get<bind_response>(m->op);
+		std::optional<std::string_view> server_creds;
+		if (r.server_sasl_creds) server_creds = *r.server_sasl_creds;
+		if (r.result.is_success()) {
+			if (auto done = mechanism.complete(server_creds); !done)
+				co_return std::unexpected(detail::with_context(std::move(done.error()), context));
+			co_return result<void>{};
+		}
+		if (r.result.result_code != static_cast<int>(errc::sasl_bind_in_progress))
+			co_return std::unexpected(r.result.to_error(context));
+		creds = mechanism.step(server_creds);
+	}
+}
+
 capy::task<result<ldap::search_stream>> connection::search_stream(search_params p, std::pmr::memory_resource *mr)
 {
 	if (impl_ == nullptr) co_return std::unexpected(not_connected(op_context("search", p.base)));

@@ -174,7 +174,19 @@ compare, `extended_result` for extended operations, the authzId string for
 compareFalse map to `true` / `false` (a compare answered with success is
 an error: it is not a valid answer). referral (10) is an error with the
 URIs in `error::referrals`; saslBindInProgress (14) is an error for a
-simple bind and will be the "continue" signal of SASL binds (#11).
+simple bind and the "continue" signal of `sasl_bind` (#11).
+
+SASL (implemented, #11, `sasl.hpp`): `connection::sasl_bind(mechanism,
+name)` sends one BindRequest per step while the server answers
+saslBindInProgress (at most 32 steps). A mechanism implements
+`sasl_mechanism`: `name()`, `start()` (first credentials; also resets),
+`step(challenge)` and `complete(final server creds)`, which lets a
+mechanism such as SCRAM verify the server. `sasl_external` (RFC 4422
+appendix A) is provided, with an optional authorization identity; the
+identity comes from a TLS client certificate (`tls_options::cert_file`) or
+an ldapi:// socket. A server or mechanism error fails the bind and leaves
+the connection usable. An end-to-end EXTERNAL test needs a real server
+(#14).
 
 Referrals and continuation references are returned, never chased:
 `error::referrals` and `search_stream::references()` keep the URIs as

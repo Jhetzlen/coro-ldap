@@ -82,6 +82,7 @@
 #include "jhetz/ldap/message.hpp"
 #include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/transport.hpp"
+#include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/url.hpp"
 
 #include <boost/capy/task.hpp>
@@ -293,6 +294,15 @@ class connection
 	// start other operations while a bind is outstanding (the server may
 	// reject or delay them); this is not enforced.
 	boost::capy::task<result<void>> simple_bind(dn name, std::string password);
+
+	// SASL bind (RFC 4513 section 5.2): sends one BindRequest per step of
+	// `mechanism` while the server answers saslBindInProgress (at most 32
+	// steps, then the bind fails with unexpected_response). `name` is
+	// usually empty (the mechanism carries the identity). A server error
+	// (e.g. errc::inappropriate_authentication) or a mechanism error fails
+	// the bind; the connection stays usable (anonymous). The same rules as
+	// simple_bind apply otherwise. `mechanism` must outlive the task.
+	boost::capy::task<result<void>> sasl_bind(sasl_mechanism &mechanism, dn name = {});
 
 	// Runs a search to its end and returns the entries in the order received,
 	// allocated from `mr` (see "Memory" above). Search result references
