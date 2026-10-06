@@ -1,4 +1,4 @@
-// A minimal ldapsearch: connect, optionally bind, search, print LDIF, unbind.
+// jhetz-ldapsearch: connect, optionally bind, search, print LDIF, unbind.
 //
 //   ldapsearch [options] URL [FILTER [ATTRIBUTE...]]
 //
@@ -10,6 +10,10 @@
 //   -z N         size limit (entries), -l N time limit (seconds)
 //   --page N     fetch the results in pages of N entries (RFC 2696)
 //   --ca-file F  CA certificates (PEM) for ldaps://
+//   -Y EXTERNAL  SASL EXTERNAL bind (identity from --cert or ldapi://);
+//                -X AUTHZID asks to act as another identity
+//   -Z           StartTLS before binding (ldap:// only)
+//   --cert F --key F  TLS client certificate and key (PEM)
 //   --insecure   do not verify the server certificate (testing only)
 //
 // The URL's filter and attributes apply when none are given on the command
@@ -71,14 +75,20 @@ struct options
 	std::int32_t time_limit = 0;
 	std::string ca_file{};
 	bool insecure = false;
+	std::string cert_file{};
+	std::string key_file{};
+	bool start_tls = false;
+	std::optional<std::string> sasl_mech{};
+	std::string authz_id{};
 };
 
 [[noreturn]] void usage(std::string_view problem)
 {
-	if (!problem.empty()) println(stderr, "ldapsearch: {}", problem);
+	if (!problem.empty()) println(stderr, "jhetz-ldapsearch: {}", problem);
 	println(stderr,
-	  "usage: ldapsearch [-D binddn] [-w password] [-b base] [-s base|one|sub|children]\n"
-	  "                  [-z sizelimit] [-l timelimit] [--page size] [--ca-file file] [--insecure]\n"
+	  "usage: jhetz-ldapsearch [-D binddn] [-w password] [-b base] [-s base|one|sub|children]\n"
+	  "                  [-z sizelimit] [-l timelimit] [--page size] [-Y EXTERNAL [-X authzid]] [-Z]\n"
+	  "                  [--ca-file file] [--cert file --key file] [--insecure]\n"
 	  "                  URL [filter [attribute...]]");
 	std::exit(2);
 }
@@ -131,6 +141,17 @@ options parse_args(int argc, char **argv)
 			o.ca_file = value();
 		else if (a == "--insecure")
 			o.insecure = true;
+		else if (a == "--cert")
+			o.cert_file = value();
+		else if (a == "--key")
+			o.key_file = value();
+		else if (a == "-Z")
+			o.start_tls = true;
+		else if (a == "-Y") {
+			o.sasl_mech = value();
+			if (*o.sasl_mech != "EXTERNAL") usage("only -Y EXTERNAL is supported");
+		} else if (a == "-X")
+			o.authz_id = value();
 		else if (a == "-h" || a == "--help")
 			usage({});
 		else if (a.starts_with('-') && a.size() > 1)
@@ -212,7 +233,7 @@ void print_entry(const ldap::entry &e)
 template<class Stream> capy::task<int> print_all(ldap::result<Stream> &s)
 {
 	if (!s) {
-		println(stderr, "ldapsearch: {}", s.error().message());
+		println(stderr, "jhetz-ldapsearch: {}", s.error().message());
 		co_return 1;
 	}
 	int status = 0;
@@ -220,7 +241,7 @@ template<class Stream> capy::task<int> print_all(ldap::result<Stream> &s)
 	while (true) {
 		auto e = co_await s->next();
 		if (!e) {
-			println(stderr, "ldapsearch: {}", e.error().message());
+			println(stderr, "jhetz-ldapsearch: {}", e.error().message());
 			status = 1;
 			break;
 		}
@@ -240,7 +261,7 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 {
 	auto u = ldap::url::parse(o.url);
 	if (!u) {
-		println(stderr, "ldapsearch: {}", u.error().message());
+		println(stderr, "jhetz-ldapsearch: {}", u.error().message());
 		co_return 2;
 	}
 
@@ -248,7 +269,7 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 	if (o.base) {
 		auto d = ldap::dn::parse(*o.base);
 		if (!d) {
-			println(stderr, "ldapsearch: -b: {}", d.error().message());
+			println(stderr, "jhetz-ldapsearch: -b: {}", d.error().message());
 			co_return 2;
 		}
 		params.base = std::move(*d);
@@ -259,7 +280,7 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 	if (o.filter) {
 		auto f = ldap::filter::raw(*o.filter);
 		if (!f) {
-			println(stderr, "ldapsearch: {}", f.error().message());
+			println(stderr, "jhetz-ldapsearch: {}", f.error().message());
 			co_return 2;
 		}
 		params.filter = std::move(*f);
@@ -276,21 +297,30 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 	ldap::connection_options copts;
 	copts.tls.ca_file = o.ca_file;
 	if (o.insecure) copts.tls.verification = ldap::net::certificate_verification::insecure_accept_any;
+	copts.tls.cert_file = o.cert_file;
+	copts.tls.key_file = o.key_file;
+	copts.start_tls = o.start_tls;
 
 	auto c = co_await ldap::connect(ioc, std::move(*u), std::move(copts));
 	if (!c) {
-		println(stderr, "ldapsearch: {}", c.error().message());
+		println(stderr, "jhetz-ldapsearch: {}", c.error().message());
 		co_return 1;
 	}
 
-	if (o.bind_dn) {
+	if (o.sasl_mech) {
+		ldap::sasl_external mech(o.authz_id);
+		if (auto b = co_await c->sasl_bind(mech); !b) {
+			println(stderr, "jhetz-ldapsearch: {}", b.error().message());
+			co_return 1;
+		}
+	} else if (o.bind_dn) {
 		auto name = ldap::dn::parse(*o.bind_dn);
 		if (!name) {
-			println(stderr, "ldapsearch: -D: {}", name.error().message());
+			println(stderr, "jhetz-ldapsearch: -D: {}", name.error().message());
 			co_return 2;
 		}
 		if (auto b = co_await c->simple_bind(std::move(*name), o.password.value_or("")); !b) {
-			println(stderr, "ldapsearch: {}", b.error().message());
+			println(stderr, "jhetz-ldapsearch: {}", b.error().message());
 			co_return 1;
 		}
 	}
@@ -304,7 +334,7 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 		status = co_await print_all(s);
 	}
 	if (c->is_open()) {
-		if (auto r = co_await c->unbind(); !r) println(stderr, "ldapsearch: {}", r.error().message());
+		if (auto r = co_await c->unbind(); !r) println(stderr, "jhetz-ldapsearch: {}", r.error().message());
 	}
 	co_return status;
 }
@@ -323,7 +353,7 @@ int main(int argc, char **argv)
 		  try {
 			  std::rethrow_exception(e);
 		  } catch (const std::exception &x) {
-			  println(stderr, "ldapsearch: {}", x.what());
+			  println(stderr, "jhetz-ldapsearch: {}", x.what());
 		  }
 	  })(run(ioc, std::move(o)));
 	ioc.run();

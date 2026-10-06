@@ -85,9 +85,15 @@ if(JHETZ_LDAP_BUILD_NET)
         net/operations_tests.cpp
         net/sasl_tests.cpp
         net/start_tls_tests.cpp
+        net/sync_tests.cpp
         net/message_io_tests.cpp
     )
     target_link_libraries(jhetz_ldap_net_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
+    # sync_tests.cpp runs the CLI against its in-process server.
+    if(TARGET jhetz_ldapsearch)
+        add_dependencies(jhetz_ldap_net_tests jhetz_ldapsearch)
+        target_compile_definitions(jhetz_ldap_net_tests PRIVATE JHETZ_LDAPSEARCH="$<TARGET_FILE:jhetz_ldapsearch>")
+    endif()
     jhetz_ldap_warnings(jhetz_ldap_net_tests)
     catch_discover_tests(jhetz_ldap_net_tests TEST_PREFIX "net.")
 endif()

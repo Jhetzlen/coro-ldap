@@ -146,6 +146,7 @@ if(JHETZ_LDAP_BUILD_NET)
 
     add_library(jhetz_ldap_net STATIC
         src/connection.cpp
+        src/sync.cpp
         src/net/connect.cpp
         src/net/message_io.cpp
         src/net/tls.cpp
@@ -158,7 +159,7 @@ endif()
 
 if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     add_executable(jhetz_ldapsearch examples/ldapsearch.cpp)
-    set_target_properties(jhetz_ldapsearch PROPERTIES OUTPUT_NAME ldapsearch)
+    set_target_properties(jhetz_ldapsearch PROPERTIES OUTPUT_NAME jhetz-ldapsearch)
     target_link_libraries(jhetz_ldapsearch PRIVATE jhetz::ldap_net)
     jhetz_ldap_warnings(jhetz_ldapsearch)
 endif()

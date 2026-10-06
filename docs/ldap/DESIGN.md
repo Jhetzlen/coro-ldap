@@ -561,10 +561,18 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   io_context (`connection::executor()`); from another thread, start the
   operation there (`capy::run_async(conn.executor())(task)`).
 
-- `sync::client` methods start the coroutine on its internal I/O thread with
-  `spawn_future` and wait on the `result_future` (see
-  `examples/corosio/result_future.hpp`), so any number of caller threads can
-  share one client.
+- Implemented (#12, `jhetz/ldap/sync.hpp`): `sync::client` owns an
+  io_context and one I/O thread (kept alive by a work guard). Each method
+  posts a wrapper coroutine to that thread, which builds and awaits the
+  matching `ldap::connection` operation, and the caller waits on a
+  `std::promise` holding the same `ldap::result<T>` (an exception thrown
+  by the operation is rethrown in the caller). The connection is touched
+  only on the I/O thread, so any number of caller threads can share one
+  client, their operations multiplexed. `result_future` from the Corosio
+  examples was not reused: it flattens errors to `std::error_code`, losing
+  `ldap::error`'s diagnostic and context. The destructor closes the
+  connection on the I/O thread, drops the work guard and joins, which
+  waits for a detached getaddrinfo still running. No connection pool yet.
 - Calling a blocking method from inside the client's own I/O thread would
   deadlock; it returns `client_errc::would_deadlock` instead.
 - The facade exposes exactly the same request, entry, error and mapping types;

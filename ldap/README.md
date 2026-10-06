@@ -185,9 +185,17 @@ on by default) with the network parts. It depends on Corosio and Capy
 - `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.
-- `examples/ldapsearch.cpp` (target `jhetz_ldapsearch`, binary `ldapsearch`,
-  option `JHETZ_LDAP_BUILD_EXAMPLES`): connect, optional simple bind,
-  search, LDIF output, unbind; `ldapsearch -D dn -w pw URL [filter [attrs]]`.
+- `jhetz/ldap/sync.hpp` (#12): `ldap::sync::client`, the blocking facade.
+  It owns an io_context and an I/O thread; every method runs the
+  corresponding connection operation there and waits, with the same
+  types. Callable from any number of threads; a call from its own I/O
+  thread fails with `client_errc::would_deadlock`.
+- `examples/ldapsearch.cpp` (target `jhetz_ldapsearch`, binary
+  `jhetz-ldapsearch`, option `JHETZ_LDAP_BUILD_EXAMPLES`): connect,
+  StartTLS (`-Z`), simple bind (`-D dn -w pw`) or SASL EXTERNAL
+  (`-Y EXTERNAL [-X authzid]`, client certificate `--cert` / `--key`),
+  search (paged with `--page N`), LDIF output, unbind;
+  `jhetz-ldapsearch [options] URL [filter [attrs]]`.
 
 Memory (DESIGN.md section 8): the public types use `std::pmr` containers
 and are allocator-aware: the message model (every operation, `ldap_result`,
@@ -221,7 +229,7 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: other SASL mechanisms, schema validation, the blocking facade.
+Not yet: other SASL mechanisms, schema validation, a connection pool.
 
 ## Build and test
 
