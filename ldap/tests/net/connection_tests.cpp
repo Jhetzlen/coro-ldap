@@ -24,6 +24,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory_resource>
@@ -31,8 +33,10 @@
 #include <span>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace ldap = jhetz::ldap;
@@ -170,7 +174,7 @@ struct mock_ldap
 
 	explicit mock_ldap(ldap::connection_options options = {},
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource())
-	  : conn(net::transport::wrap(socket_ref{ &sockets.client }, "mock"), options, mr)
+	  : conn(ioc, net::transport::wrap(socket_ref{ &sockets.client }, "mock"), options, mr)
 	{
 		log.hang_up = [this] { sockets.server.close(); };
 	}
@@ -458,49 +462,77 @@ TEST_CASE("connection: search_stream keeps the entries before an error", "[net][
 	m.check_server();
 }
 
-TEST_CASE("connection: one operation at a time", "[net][connection]")
+TEST_CASE("connection: other operations run while a stream is open", "[net][connection]")
 {
 	mock_ldap m;
-	m.serve(
-	  { answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1) }), answer({ bind_resp(2) }) });
+	// The bind is answered while the search is still going on.
+	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A") }),
+	  answer({ bind_resp(2), entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B"), done_msg(1) }) });
 	auto s = m.run(m.conn.search_stream(people_search()));
 	REQUIRE(s.has_value());
+	auto a = m.run(s->next());
+	REQUIRE(a.has_value());
+	REQUIRE(a->has_value());
 
-	auto busy = m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
-	REQUIRE_FALSE(busy.has_value());
-	CHECK(busy.error().code == client_errc::operation_in_progress);
-	auto busy_search = m.run(m.conn.search({}));
-	REQUIRE_FALSE(busy_search.has_value());
-	CHECK(busy_search.error().code == client_errc::operation_in_progress);
+	auto bound = m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
+	CHECK(bound.has_value());
+	CHECK_FALSE(s->done());// its last entry and done may be queued already, not yet taken
 
-	auto entries = m.run(drain_stream(*s));
-	REQUIRE(entries.has_value());
-	CHECK(entries->size() == 1);
-	CHECK(m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+	auto rest = m.run(drain_stream(*s));
+	REQUIRE(rest.has_value());
+	REQUIRE(rest->size() == 1);
+	CHECK((*rest)[0] == expected_entry("uid=b,ou=people,dc=example,dc=org", "B"));
+	CHECK(m.conn.outstanding() == 0);
 	m.check_server();
 	REQUIRE(m.log.received.size() == 2);
+	CHECK(m.log.received[1] == bind_request_msg(2));
 }
 
-TEST_CASE("connection: a stream destroyed early is drained by the next operation", "[net][connection]")
+TEST_CASE("connection: a stream destroyed early abandons its search", "[net][connection]")
 {
 	mock_ldap m;
-	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"),
-				entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B"),
-				ref_msg(1, { "ldap://r.example.org/" }),
-				done_msg(1, 4) }),
-	  answer({ bind_resp(2) }) });
+	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A") }),
+	  // The server reads the AbandonRequest, but the rest of the search was
+	  // already on its way: those late responses must be dropped.
+	  answer({ entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B"),
+		ref_msg(1, { "ldap://r.example.org/" }),
+		done_msg(1, 4) }),
+	  answer({ bind_resp(3) }) });
 	{
 		auto s = m.run(m.conn.search_stream(people_search()));
 		REQUIRE(s.has_value());
 		auto a = m.run(s->next());
 		REQUIRE(a.has_value());
 		REQUIRE(a->has_value());
-	}// the rest of the search (B, the reference, the done) is still coming
+		CHECK(m.conn.outstanding() == 1);
+	}
+	CHECK(m.conn.outstanding() == 0);
 	auto b = m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
 	CHECK(b.has_value());
+	CHECK(m.conn.is_open());
 	m.check_server();
-	REQUIRE(m.log.received.size() == 2);
-	CHECK(m.log.received[1] == bind_request_msg(2));
+	REQUIRE(m.log.received.size() == 3);
+	CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+	CHECK(m.log.received[2] == bind_request_msg(3));
+}
+
+TEST_CASE("connection: a second next() on the same stream is refused", "[net][connection]")
+{
+	mock_ldap m;
+	m.serve({ step{} });// reads the search, does not answer
+	auto s = m.run(m.conn.search_stream(people_search()));
+	REQUIRE(s.has_value());
+	outcome<ldap::result<std::optional<ldap::entry>>> first;
+	spawn(m.ioc, s->next(), first);
+	drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+	CHECK_FALSE(first.done());
+	auto second = m.run(s->next());
+	REQUIRE_FALSE(second.has_value());
+	CHECK(second.error().code == client_errc::operation_in_progress);
+	m.conn.close();
+	drive_until(m.ioc, [&first] { return first.done(); });
+	REQUIRE_FALSE(first.get().has_value());
+	CHECK(first.get().error().code == client_errc::not_connected);
 }
 
 TEST_CASE("connection: moving connections and streams", "[net][connection]")
@@ -617,15 +649,17 @@ TEST_CASE("connection: protocol violations close the connection", "[net][connect
 		{ "wrong message id",
 		  { bytes_of(bind_resp(7)) },
 		  client_errc::unexpected_response,
-		  "bind cn=admin,dc=example,dc=org: BindResponse with message id 7, expected 1" },
+		  "bind cn=admin,dc=example,dc=org: read mock: message with id 7, which matches no outstanding request" },
 		{ "wrong operation",
 		  { bytes_of(done_msg(1)) },
 		  client_errc::unexpected_response,
-		  "bind cn=admin,dc=example,dc=org: SearchResultDone in response to a BindRequest" },
+		  "bind cn=admin,dc=example,dc=org: read mock: SearchResultDone with message id 1 in response to a "
+		  "BindRequest" },
 		{ "entry for a bind",
 		  { bytes_of(entry_msg(1, "cn=x", "x")) },
 		  client_errc::unexpected_response,
-		  "bind cn=admin,dc=example,dc=org: SearchResultEntry in response to a BindRequest" },
+		  "bind cn=admin,dc=example,dc=org: read mock: SearchResultEntry with message id 1 in response to a "
+		  "BindRequest" },
 		{ "request operation from the server",
 		  { bytes_of(bind_request_msg(1)) },
 		  client_errc::unsupported_operation,
@@ -633,7 +667,7 @@ TEST_CASE("connection: protocol violations close the connection", "[net][connect
 		{ "id 0 that is not a notification",
 		  { bytes_of(bind_resp(0)) },
 		  client_errc::unexpected_response,
-		  "bind cn=admin,dc=example,dc=org: BindResponse with message id 0" },
+		  "bind cn=admin,dc=example,dc=org: read mock: BindResponse with message id 0" },
 		{ "not a PDU", { std::string("\x04\x01\x00", 3) }, client_errc::decode_error, nullptr },
 	};
 	for (const auto &c : cases) {
@@ -667,7 +701,10 @@ TEST_CASE("connection: wrong operation inside a search", "[net][connection]")
 	auto r = m.run(m.conn.search(people_search()));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == client_errc::unexpected_response);
-	CHECK(r.error().context == "search ou=people,dc=example,dc=org: BindResponse in response to a SearchRequest");
+	CHECK(
+	  r.error().context
+	  == "search ou=people,dc=example,dc=org: read mock: BindResponse with message id 1 in response to a "
+		 "SearchRequest");
 	CHECK_FALSE(m.conn.is_open());
 }
 
@@ -763,33 +800,294 @@ TEST_CASE("connection: unsolicited notifications and intermediate responses", "[
 	}
 }
 
-TEST_CASE("connection: a cancelled operation closes the connection", "[net][connection]")
+TEST_CASE("connection: a cancelled search is abandoned", "[net][connection]")
 {
 	mock_ldap m;
-	m.serve({ step{} });// reads the request, never answers
+	// Reads the search and answers nothing; then reads the AbandonRequest
+	// and sends a late entry and done anyway; then answers a bind.
+	m.serve({ step{},
+	  answer({ entry_msg(1, "uid=late,ou=people,dc=example,dc=org", "L"), done_msg(1) }),
+	  answer({ bind_resp(3) }) });
 	std::stop_source stop;
-	outcome<ldap::result<std::vector<ldap::entry>>> out;
-	auto search = [](ldap::connection &c) -> capy::task<ldap::result<std::vector<ldap::entry>>> {
-		auto r = co_await c.search({});
-		if (!r) co_return std::unexpected(std::move(r.error()));
-		co_return std::vector<ldap::entry>(r->begin(), r->end());
-	};
-	capy::run_async(
-	  m.ioc.get_executor(),
-	  stop.get_token(),
-	  [&out](ldap::result<std::vector<ldap::entry>> v) { out.value.emplace(std::move(v)); },
-	  [&out](std::exception_ptr e) { out.error = e; })(search(m.conn));
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> out;
+	spawn(m.ioc, stop.get_token(), m.conn.search({}), out);
 	drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 	REQUIRE(m.log.received.size() == 1);
 	CHECK_FALSE(out.done());
+	CHECK(m.conn.outstanding() == 1);
 	stop.request_stop();
 	drive_until(m.ioc, [&out] { return out.done(); });
 	auto &r = out.get();
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == capy::cond::canceled);
 	CHECK(r.error().code == ldap::cond::canceled);
-	CHECK_FALSE(m.conn.is_open());
+	CHECK(r.error().context == "search \"\": canceled (abandoned)");
+	CHECK(m.conn.is_open());
+	CHECK(m.conn.outstanding() == 0);
+
+	// The late entry and done are dropped; the connection still works.
+	CHECK(m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
 	m.check_server();
+	REQUIRE(m.log.received.size() == 3);
+	CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+}
+
+// ---------------------------------------------------------------- multiplexing
+
+TEST_CASE("connection: concurrent searches with interleaved responses", "[net][connection][mux]")
+{
+	mock_ldap m;
+	m.serve({ step{},// reads the first search
+	  answer({ entry_msg(1, "uid=a1,ou=people,dc=example,dc=org", "A1"),
+		entry_msg(2, "uid=b1,ou=groups,dc=example,dc=org", "B1"),
+		entry_msg(1, "uid=a2,ou=people,dc=example,dc=org", "A2"),
+		done_msg(2),
+		entry_msg(1, "uid=a3,ou=people,dc=example,dc=org", "A3"),
+		done_msg(1) }) });
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> a, b;
+	spawn(m.ioc, m.conn.search(people_search()), a);
+	spawn(m.ioc, m.conn.search({ .base = ldap::dn{ "ou=groups,dc=example,dc=org" } }), b);
+	drive_until(m.ioc, [&] { return a.done() && b.done(); });
+	REQUIRE(a.get().has_value());
+	REQUIRE(b.get().has_value());
+	REQUIRE(a.get()->size() == 3);
+	CHECK((*a.get())[0] == expected_entry("uid=a1,ou=people,dc=example,dc=org", "A1"));
+	CHECK((*a.get())[2] == expected_entry("uid=a3,ou=people,dc=example,dc=org", "A3"));
+	REQUIRE(b.get()->size() == 1);
+	CHECK((*b.get())[0] == expected_entry("uid=b1,ou=groups,dc=example,dc=org", "B1"));
+	m.check_server();
+	REQUIRE(m.log.received.size() == 2);
+	CHECK(m.log.received[0].id == 1);
+	CHECK(m.log.received[1].id == 2);
+	CHECK(m.conn.outstanding() == 0);
+}
+
+TEST_CASE("connection: timeouts abandon the operation", "[net][connection][mux][timeout]")
+{
+	SECTION("search_params::timeout")
+	{
+		mock_ldap m;
+		m.serve({ step{}, step{} });// reads the search and the abandon, answers nothing
+		const auto start = std::chrono::steady_clock::now();
+		auto r = m.run(m.conn.search({ .timeout = std::chrono::milliseconds(100) }));
+		const auto elapsed = std::chrono::steady_clock::now() - start;
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == capy::cond::timeout);
+		CHECK(r.error().code == ldap::cond::timeout);
+		CHECK(r.error().context == "search \"\": timed out (abandoned)");
+		CHECK(elapsed >= std::chrono::milliseconds(80));
+		CHECK(elapsed < std::chrono::seconds(10));
+		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+	}
+	SECTION("connection_options::operation_timeout")
+	{
+		mock_ldap m({ .operation_timeout = std::chrono::milliseconds(100) });
+		m.serve({ step{}, step{}, answer({ done_msg(3) }) });
+		auto r = m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::timeout);
+		CHECK(r.error().context == "bind cn=admin,dc=example,dc=org: timed out (abandoned)");
+		// A search that is answered in time is unaffected.
+		CHECK(m.run(m.conn.search({})).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+	}
+}
+
+TEST_CASE("connection: a disconnect fails every outstanding operation once", "[net][connection][mux]")
+{
+	mock_ldap m;
+	m.serve({ step{}, step{ true, {}, true } });// reads both requests, then hangs up
+	outcome<ldap::result<void>> bind;
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
+	spawn(m.ioc, m.conn.search(people_search()), search);
+	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
+	REQUIRE_FALSE(bind.get().has_value());
+	REQUIRE_FALSE(search.get().has_value());
+	CHECK(bind.get().error().code == ldap::cond::connection_lost);
+	CHECK(bind.get().error().context == "bind cn=admin,dc=example,dc=org: read mock: connection closed");
+	CHECK(search.get().error().code == ldap::cond::connection_lost);
+	CHECK(search.get().error().context == "search ou=people,dc=example,dc=org: read mock: connection closed");
+	CHECK_FALSE(m.conn.is_open());
+	CHECK(m.conn.outstanding() == 0);
+	m.check_server();
+}
+
+TEST_CASE("connection: a notice of disconnection fails every outstanding operation", "[net][connection][mux]")
+{
+	mock_ldap m;
+	m.serve({ step{},
+	  answer({ ldap::message{ 0,
+		ldap::extended_response{
+		  ldap::ldap_result{ 51, "", "too busy" }, std::string(ldap::notice_of_disconnection_oid) } } }) });
+	outcome<ldap::result<void>> bind;
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
+	spawn(m.ioc, m.conn.search(people_search()), search);
+	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
+	REQUIRE_FALSE(bind.get().has_value());
+	REQUIRE_FALSE(search.get().has_value());
+	CHECK(bind.get().error().code == errc::busy);
+	CHECK(bind.get().error().diagnostic == "too busy");
+	CHECK(bind.get().error().context == "bind cn=admin,dc=example,dc=org: notice of disconnection");
+	CHECK(search.get().error().code == errc::busy);
+	CHECK(search.get().error().context == "search ou=people,dc=example,dc=org: notice of disconnection");
+	CHECK_FALSE(m.conn.is_open());
+	auto later = m.run(m.conn.search({}));
+	REQUIRE_FALSE(later.has_value());
+	CHECK(later.error().code == client_errc::not_connected);
+	CHECK_THAT(std::string(later.error().context), ContainsSubstring("notice of disconnection"));
+}
+
+TEST_CASE("connection: an idle connection leaves the io_context free to stop", "[net][connection][mux]")
+{
+	mock_ldap m;
+	m.serve({ answer({ bind_resp(1) }) });
+	REQUIRE(m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+	m.check_server();
+	// No read is pending once nothing is outstanding: run() returns at once.
+	const auto start = std::chrono::steady_clock::now();
+	drive(m.ioc);
+	CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
+	CHECK(m.conn.is_open());
+}
+
+TEST_CASE("connection: destroying the connection fails its outstanding operations", "[net][connection][mux]")
+{
+	mock_ldap m;
+	m.serve({ step{} });
+	outcome<ldap::result<void>> bind;
+	spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
+	drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+	m.conn = ldap::connection{};
+	drive_until(m.ioc, [&bind] { return bind.done(); });
+	REQUIRE_FALSE(bind.get().has_value());
+	CHECK(bind.get().error().code == client_errc::not_connected);
+	CHECK(bind.get().error().context == "bind cn=admin,dc=example,dc=org: connection closed");
+}
+
+namespace {
+
+// Reads `n` requests (skipping AbandonRequests, which may come in
+// between), then answers them all with their responses interleaved at
+// random (each operation's own responses stay in order): a bind gets a
+// BindResponse, a search two entries under its base DN and a
+// SearchResultDone. Abandoned requests are answered too: the client
+// must drop those late responses.
+capy::task<void> serve_shuffled(net::transport t, std::size_t n, std::uint64_t seed, server_log &log)
+{
+	net::read_buffer buf;
+	std::vector<std::vector<std::string>> queues;
+	while (queues.size() < n) {
+		auto r = co_await net::read_message(t, buf, as_server);
+		if (!r) {
+			log.error = "server read: " + std::string(r.error().message());
+			co_return;
+		}
+		if (std::holds_alternative<ldap::abandon_request>(r->op)) continue;
+		std::vector<std::string> q;
+		if (const auto *sr = std::get_if<ldap::search_request>(&r->op)) {
+			const std::string base(sr->base_object);
+			q.push_back(bytes_of(entry_msg(r->id, "uid=x," + base, "X")));
+			q.push_back(bytes_of(entry_msg(r->id, "uid=y," + base, "Y")));
+			q.push_back(bytes_of(done_msg(r->id)));
+		} else {
+			q.push_back(bytes_of(bind_resp(r->id)));
+		}
+		std::reverse(q.begin(), q.end());// popped from the back
+		queues.push_back(std::move(q));
+		log.received.push_back(std::move(*r));
+	}
+	std::uint64_t state = seed;
+	auto next = [&state](std::size_t bound) {
+		state = state * 6364136223846793005u + 1442695040888963407u;
+		return static_cast<std::size_t>((state >> 33) % bound);
+	};
+	std::vector<std::size_t> live(n);
+	for (std::size_t i = 0; i < n; ++i) live[i] = i;
+	while (!live.empty()) {
+		const std::size_t pick = next(live.size());
+		auto &q = queues[live[pick]];
+		const std::string bytes = std::move(q.back());
+		q.pop_back();
+		if (q.empty()) {
+			live[pick] = live.back();
+			live.pop_back();
+		}
+		if (auto w = co_await net::write_bytes(t, std::as_bytes(std::span(bytes))); !w) {
+			log.error = "server write: " + std::string(w.error().message());
+			co_return;
+		}
+	}
+}
+
+// A search whose entries must all lie under its own base.
+capy::task<std::string> checked_search(ldap::connection &c, std::string base)
+{
+	auto d = ldap::dn::parse(base);
+	if (!d) co_return "bad base";
+	auto r = co_await c.search({ .base = std::move(*d) });
+	if (!r) co_return std::string(r.error().message());
+	if (r->size() != 2) co_return "expected 2 entries, got " + std::to_string(r->size());
+	for (const auto &e : *r)
+		if (!std::string_view(e.dn).ends_with("," + base))
+			co_return "entry " + std::string(e.dn) + " not under " + base;
+	co_return "";
+}
+
+capy::task<std::string> checked_bind(ldap::connection &c)
+{
+	auto r = co_await c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret");
+	co_return r ? "" : std::string(r.error().message());
+}
+
+}// namespace
+
+// Many concurrent operations, responses interleaved at random, some
+// cancelled while outstanding; 20 rounds (run under ASan in CI).
+TEST_CASE("connection: stress with many concurrent operations", "[net][connection][mux]")
+{
+	constexpr std::size_t ops = 64;
+	for (std::uint64_t round = 0; round < 20; ++round) {
+		INFO("round " << round);
+		mock_ldap m;
+		spawn(m.ioc,
+		  serve_shuffled(net::transport::wrap(socket_ref{ &m.sockets.server }, "server"), ops, 0x51ed + round, m.log),
+		  m.server);
+		std::vector<std::stop_source> stops(ops);
+		std::vector<outcome<std::string>> results(ops);
+		for (std::size_t i = 0; i < ops; ++i) {
+			if (i % 3 == 0)
+				spawn(m.ioc, stops[i].get_token(), checked_bind(m.conn), results[i]);
+			else
+				spawn(m.ioc,
+				  stops[i].get_token(),
+				  checked_search(m.conn, "ou=" + std::to_string(i) + ",dc=example,dc=org"),
+				  results[i]);
+		}
+		// Cancel every 7th operation before the server answers anything.
+		for (std::size_t i = 0; i < ops; i += 7) stops[i].request_stop();
+		drive_until(
+		  m.ioc, [&] { return std::all_of(results.begin(), results.end(), [](const auto &r) { return r.done(); }); });
+		for (std::size_t i = 0; i < ops; ++i) {
+			INFO("operation " << i);
+			if (i % 7 == 0)
+				CHECK_THAT(results[i].get(), ContainsSubstring("canceled"));
+			else
+				CHECK(results[i].get() == "");
+		}
+		m.check_server();
+		CHECK(m.conn.is_open());
+		CHECK(m.conn.outstanding() == 0);
+		// Every late response for a cancelled operation was dropped; the
+		// connection still works.
+		CHECK(m.log.received.size() == ops);
+	}
 }
 
 // Deterministic fuzzing of the response path: a valid search answer with
@@ -837,7 +1135,7 @@ TEST_CASE("connection: mutated server responses", "[net][connection]")
 		socket_pair sp(ioc);
 		server_log log;
 		log.hang_up = [&sp] { sp.server.close(); };
-		ldap::connection conn(net::transport::wrap(socket_ref{ &sp.client }, "mock"));
+		ldap::connection conn(ioc, net::transport::wrap(socket_ref{ &sp.client }, "mock"));
 		step s;
 		s.replies.push_back(bytes);
 		s.close_after = true;

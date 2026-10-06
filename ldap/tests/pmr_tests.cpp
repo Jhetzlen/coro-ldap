@@ -178,7 +178,11 @@ TEST_CASE("filter::raw and decode_filter allocate from the given resource", "[pm
 	std::pmr::monotonic_buffer_resource arena(storage, sizeof storage, std::pmr::null_memory_resource());
 	scoped_default_resource guard(std::pmr::null_memory_resource());
 	// Unwrapped text too (the parser wraps it in the given resource).
-	auto f = ldap::filter::raw("&(cn=a-long-value-that-needs-memory*)(|(x=1)(y:dn:1.2.3:=z))", &arena);
+	// Extensible matches without dnAttributes too: decoding probes for the
+	// optional [4] at the end of the sequence (which once built and dropped
+	// an error on the default resource).
+	auto f = ldap::filter::raw(
+	  "&(cn=a-long-value-that-needs-memory*)(|(x=1)(y:dn:1.2.3:=z)(cn:2.5.13.5:=x)(:1.2.3:=v)(sn:=w))", &arena);
 	REQUIRE(f.has_value());
 	CHECK(f->get_allocator().resource() == &arena);
 	ldap::ber::writer w{ ldap::ber::writer::allocator_type(&arena) };
@@ -188,7 +192,8 @@ TEST_CASE("filter::raw and decode_filter allocate from the given resource", "[pm
 	REQUIRE(back.has_value());
 	CHECK(*back == *f);
 	CHECK(back->get_allocator().resource() == &arena);
-	CHECK(f->to_string(&arena) == "(&(cn=a-long-value-that-needs-memory*)(|(x=1)(y:dn:1.2.3:=z)))");
+	CHECK(f->to_string(&arena)
+		  == "(&(cn=a-long-value-that-needs-memory*)(|(x=1)(y:dn:1.2.3:=z)(cn:2.5.13.5:=x)(:1.2.3:=v)(sn:=w)))");
 }
 
 TEST_CASE("message model types are allocator-aware", "[pmr][message]")

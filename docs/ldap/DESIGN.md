@@ -418,38 +418,68 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   the caller drops the connection (header errors repeat, they are not
   consumed). No timeout of its own: step 5 cancels with stop tokens.
 
-Implemented (step 5a, `ldap::connection`, also in `jhetz_ldap_net`):
+Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
 - `ldap::connect(ioc, url, connection_options, mr)` wraps `net::connect`;
-  `connection(net::transport, options, mr)` runs over any transport (the
-  tests use a Unix socket pair with a scripted server that decodes with
-  `origin::client`). `simple_bind`, `search`, `search_stream`, `unbind`
-  and `close()`.
-- Sequential: one request in flight; an open `search_stream` counts as in
-  flight until it read the SearchResultDone or is destroyed (the next
-  operation then reads and drops the rest of that search, decoding into the
-  connection's scratch arena). Anything started meanwhile fails with
-  `operation_in_progress`. Multiplexing and Abandon are step 5b.
-- Message ids are per connection, from 1, wrapping at maxInt; a request
-  that fails to encode sends nothing and does not use up an id.
+  `connection(ioc, net::transport, options, mr)` runs over any transport
+  whose I/O runs on `ioc` (the tests use a Unix socket pair with a scripted
+  server that decodes with `origin::client`). `simple_bind`, `search`,
+  `search_stream`, `unbind`, `close()`.
+- Multiplexed (5b): any number of operations outstanding, matched by
+  message id. Ids are per connection, from 1, wrapping at maxInt; a request
+  that fails to encode sends nothing and does not use up an id. Sending is
+  synchronous for the operation: it encodes, registers itself under its id
+  (before the write, since the answer may come first) and queues the PDU.
+- One writer coroutine drains the queue, one PDU at a time, so PDUs never
+  interleave; it runs without a stop token, so a PDU is never cut in half.
+  A single queue-draining writer does what an async mutex around each write
+  would, without parking every operation in a mutex wait.
+- One reader coroutine reads frames (`net::read_frame`), peeks at the
+  message id and protocolOp tag (`peek_message_header`) and decodes the PDU
+  straight into the memory resource of the operation it belongs to, so
+  entries reach a caller's arena without a copy. It runs only while some
+  operation is outstanding: when the last one finishes it is stopped
+  through its stop token (bytes already received stay in the read buffer),
+  so an idle connection holds no pending read and `io_context::run()` can
+  return. A notice arriving while idle is seen by the next operation.
+- Search responses are queued per search (on the search's resource) until
+  its stream takes them. The queue is unbounded: a bound would make the
+  reader wait for one slow consumer and stall every other operation, and a
+  caller who waits on another operation before draining a stream would
+  deadlock. Abandoning (destroying the stream) is the way to stop a search.
+- Cancellation (5b): operations wait on a `capy::async_event`, wrapped in
+  `corosio::timeout` when a deadline applies (`search_params::timeout`,
+  else `connection_options::operation_timeout`; a search's deadline covers
+  the whole search). A stop request or the deadline fails the operation
+  with `capy::error::canceled` / `timeout` (`cond::canceled` / `cond::timeout`),
+  unregisters it and queues an AbandonRequest. Late responses for the last
+  1024 abandoned requests are dropped (a search's until its
+  SearchResultDone); a response for an id nobody waits for is a protocol
+  error. A search_stream destroyed early abandons its search; a task
+  destroyed while waiting abandons its operation (operations never wait on
+  I/O themselves, so this is safe).
 - Every response is decoded with `origin::server` and checked against the
-  request in flight (id and operation). IntermediateResponses with the
-  right id are skipped; id 0 is an unsolicited notification: a Notice of
-  Disconnection fails the operation with its result code (`unavailable`
-  if it claims success) and closes the connection, other extended
-  responses are ignored. A skipped message decoded into the scratch arena
-  releases it at once, so a server cannot grow it without bound.
-- Failure model: a server result error is returned and the connection
-  stays usable; a transport error, a malformed or oversized PDU, an
-  unexpected response or a Notice of Disconnection closes the transport
-  and is remembered, so later operations fail with `not_connected` naming
-  it. An operation whose coroutine is destroyed (or whose read is
-  cancelled) before it finished also closes the connection, because the
-  response it waited for would otherwise be read by the next operation.
-- State lives in one block allocated from the connection's resource, so
-  the connection is cheaply movable and a `search_stream` keeps working
-  across a move of its connection.
-- No per-operation timeout yet: cancel with a stop token (which closes the
-  connection, see above); timeouts and abandon come with step 5b.
+  request it answers (the operation, by id). IntermediateResponses are
+  skipped without decoding; id 0 is an unsolicited notification: a Notice of
+  Disconnection fails every outstanding operation with its result code
+  (`unavailable` if it claims success) and closes the connection; other
+  extended responses are ignored.
+- Failure model: a server result error, an encode error, a cancellation or
+  a timeout fails one operation and the connection stays usable. A
+  transport error, a malformed or oversized PDU, an unexpected response or
+  a Notice of Disconnection fails every outstanding operation exactly once
+  (each with its own context) and closes the transport; the error is
+  remembered, so later operations fail with `not_connected` naming it.
+  `unbind()` fails the outstanding operations with `not_connected` (the
+  server abandons them too), waits until the UnbindRequest is written even
+  if cancelled, then closes.
+- Lifetime: the state is one reference-counted block on the connection's
+  resource, held by the connection, each outstanding operation, each
+  stream, and the reader and writer frames. Moving a connection or stream
+  is a pointer move; destroying the connection closes it and the others
+  finish with `not_connected` and release the block.
+- Threading: everything runs on the executor of the connection's
+  io_context (`connection::executor()`); from another thread, start the
+  operation there (`capy::run_async(conn.executor())(task)`).
 
 - `sync::client` methods start the coroutine on its internal I/O thread with
   `spawn_future` and wait on the `result_future` (see

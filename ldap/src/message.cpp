@@ -1158,6 +1158,16 @@ result<message> decode(std::span<const std::byte> one_complete_message, const de
 	return decoder(options).run(one_complete_message);
 }
 
+result<message_header> peek_message_header(std::span<const std::byte> one_complete_message)
+{
+	ber::reader top(one_complete_message);
+	LDAP_TRY(r, top.enter());
+	LDAP_TRY(id, read_ranged(r, ber::tags::integer, 0, max_int, "message id"));
+	if (r.empty()) return fail(client_errc::decode_error, "LDAPMessage without a protocolOp");
+	LDAP_TRY(op, r.peek_tag());
+	return message_header{ id, op };
+}
+
 // ---------------------------------------------------------------- paged results
 
 result<control> encode_paged_results(const paged_results &value, bool criticality, std::pmr::memory_resource *mr)

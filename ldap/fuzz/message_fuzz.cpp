@@ -11,6 +11,8 @@
 //   released stays valid after it (ASan reports any access to released
 //   arena memory);
 // - the framer measures the encoding as exactly one complete message;
+// - peek_message_header never crashes, and agrees with decode (id) and with
+//   the re-encoding (id, operation tag) whenever the input decodes;
 // - a paged results control that decodes re-encodes to an equal value;
 // - search entries convert to ldap::entry, results to ldap::error;
 // - decode_options::from accepts exactly the responses (origin::server) or the
@@ -163,11 +165,14 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 {
 	const auto input = std::as_bytes(std::span(data, size));
 	check_filter_text(std::span(data, size));
+	const auto header = ldap::peek_message_header(input);// must not crash on anything
 	auto m = ldap::decode(input);
 	if (!m) {
 		LDAP_FUZZ_CHECK(static_cast<bool>(m.error().code));
 		return 0;
 	}
+	// Whatever decodes, peeks, with the same id and the operation's tag.
+	LDAP_FUZZ_CHECK(header.has_value() && header->id == m->id);
 
 	auto encoded = ldap::encode(*m);
 	LDAP_FUZZ_CHECK(encoded.has_value());
@@ -176,6 +181,10 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 	LDAP_FUZZ_CHECK(*again == *m);
 	auto reencoded = ldap::encode(*again);
 	LDAP_FUZZ_CHECK(reencoded.has_value() && *reencoded == *encoded);
+
+	const auto reheader = ldap::peek_message_header(*encoded);
+	LDAP_FUZZ_CHECK(reheader.has_value() && reheader->id == m->id && reheader->op.cls == header->op.cls
+					&& reheader->op.number == header->op.number);
 
 	auto framed = jhetz::ldap::ber::complete_message_size(*encoded);
 	LDAP_FUZZ_CHECK(framed && *framed && **framed == encoded->size());

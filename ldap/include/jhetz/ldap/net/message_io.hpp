@@ -106,6 +106,15 @@ class read_buffer
 // `t` and `buf` must outlive the task (normal when it is co_awaited at once).
 boost::capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_options options = {});
 
+// The framing half of read_message(): reads until a complete PDU is at the
+// front of `buf` and returns its size; buf.data().first(size) are its bytes.
+// Nothing is consumed or decoded: the caller decodes (for example after
+// peek_message_header() told it where the message goes) and then calls
+// buf.consume(size). Same errors as read_message() except decode errors.
+// Bytes received before a cancellation stay in `buf`, so a reader that is
+// stopped between PDUs can resume later without losing data.
+boost::capy::task<result<std::size_t>> read_frame(transport &t, read_buffer &buf, std::size_t max_message_size);
+
 // Encodes `m` and writes all of it. Encoding errors are returned before
 // anything is written. Only one write may be in flight on a transport. `m`
 // must outlive the task.

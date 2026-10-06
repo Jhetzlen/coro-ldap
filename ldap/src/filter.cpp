@@ -1128,6 +1128,9 @@ namespace {
 			auto sub = r.enter(t);
 			if (!sub) return std::unexpected(std::move(sub.error()));
 			auto next_is = [&](std::uint8_t number) {
+				// Checked first: peek_tag() on an empty reader would build an
+				// error (on the default resource) only to drop it.
+				if (sub->empty()) return false;
 				auto pt = sub->peek_tag();
 				return pt && pt->cls == ber::tag_class::context && pt->number == number;
 			};
