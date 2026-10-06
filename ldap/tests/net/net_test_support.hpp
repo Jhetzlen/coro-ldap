@@ -125,6 +125,19 @@ template<class T> T run(corosio::io_context &ioc, capy::task<T> t)
 		return std::move(out.get());
 }
 
+// Runs one task until it finishes and returns its result, without waiting
+// for other work on `ioc` (a server still parked on a read, say).
+template<class T> T finish(corosio::io_context &ioc, capy::task<T> t)
+{
+	outcome<T> out;
+	spawn(ioc, std::move(t), out);
+	drive_until(ioc, [&out] { return out.done(); });
+	if constexpr (std::is_void_v<T>)
+		out.get();
+	else
+		return std::move(out.get());
+}
+
 // ---------------------------------------------------------------- messages
 
 inline message bind_request_msg(std::int32_t id, std::string_view name = "cn=admin,dc=example,dc=org")

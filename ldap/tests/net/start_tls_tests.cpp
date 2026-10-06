@@ -140,7 +140,7 @@ struct tls_fixture
 	{
 		auto u = ldap::url::parse(url(host));
 		REQUIRE(u.has_value());
-		auto c = run(ioc, ldap::connect(ioc, *u, o));
+		auto c = finish(ioc, ldap::connect(ioc, *u, o));
 		REQUIRE(c.has_value());
 		return std::move(*c);
 	}
@@ -154,11 +154,11 @@ TEST_CASE("start_tls: upgrade, then LDAP over TLS", "[net][starttls]")
 	f.serve(mode::upgrade);
 	auto c = f.connect();
 	CHECK_FALSE(c.is_tls());
-	auto r = run(f.ioc, c.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }));
+	auto r = finish(f.ioc, c.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }));
 	REQUIRE(r.has_value());
 	CHECK(c.is_tls());
 	CHECK(c.is_open());
-	auto b = run(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
+	auto b = finish(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
 	CHECK(b.has_value());
 	c.close();
 	drive(f.ioc);
@@ -171,7 +171,7 @@ TEST_CASE("start_tls: connection_options::start_tls upgrades right after connect
 	f.serve(mode::upgrade);
 	auto c = f.connect(trusting({ .start_tls = true }));
 	CHECK(c.is_tls());
-	CHECK(run(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+	CHECK(finish(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
 	c.close();
 	drive(f.ioc);
 	CHECK(f.server.get() == "");
@@ -182,7 +182,7 @@ TEST_CASE("start_tls: the server refuses", "[net][starttls]")
 	tls_fixture f;
 	f.serve(mode::refuse);
 	auto c = f.connect();
-	auto r = run(f.ioc, c.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }));
+	auto r = finish(f.ioc, c.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::errc::unavailable);
 	CHECK(r.error().diagnostic == "no TLS here");
@@ -190,7 +190,7 @@ TEST_CASE("start_tls: the server refuses", "[net][starttls]")
 	// Still usable, in clear.
 	CHECK(c.is_open());
 	CHECK_FALSE(c.is_tls());
-	CHECK(run(f.ioc, c.search({})).has_value());
+	CHECK(finish(f.ioc, c.search({})).has_value());
 	c.close();
 	drive(f.ioc);
 	CHECK(f.server.get() == "");
@@ -201,13 +201,13 @@ TEST_CASE("start_tls: bytes before the handshake are refused", "[net][starttls]"
 	tls_fixture f;
 	f.serve(mode::inject);
 	auto c = f.connect();
-	auto r = run(f.ioc, c.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }));
+	auto r = finish(f.ioc, c.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::client_errc::decode_error);
 	CHECK_THAT(std::string(r.error().context), ContainsSubstring("arrived before the TLS handshake"));
 	CHECK_FALSE(c.is_open());
 	CHECK_FALSE(c.is_tls());
-	auto later = run(f.ioc, c.search({}));
+	auto later = finish(f.ioc, c.search({}));
 	REQUIRE_FALSE(later.has_value());
 	CHECK(later.error().code == ldap::client_errc::not_connected);
 	drive(f.ioc);
@@ -221,7 +221,7 @@ TEST_CASE("start_tls: certificate verification failures", "[net][starttls]")
 		tls_fixture f;
 		f.serve(mode::upgrade);
 		auto c = f.connect(ldap::connection_options{});
-		auto r = run(f.ioc, c.start_tls());
+		auto r = finish(f.ioc, c.start_tls());
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::tls_failure);
 		CHECK_THAT(std::string(r.error().context), StartsWith("start tls ldap://127.0.0.1:"));
@@ -235,7 +235,7 @@ TEST_CASE("start_tls: certificate verification failures", "[net][starttls]")
 		tls_fixture f;
 		f.serve(mode::upgrade, pki().issue("other.example", "DNS:other.example"));
 		auto c = f.connect(trusting(), "localhost");
-		auto r = run(f.ioc, c.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }));
+		auto r = finish(f.ioc, c.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::tls_failure);
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("hostname mismatch", Catch::CaseSensitive::No));
@@ -272,7 +272,7 @@ TEST_CASE("start_tls: only on plain TCP connections", "[net][starttls]")
 	corosio::io_context ioc;
 	auto u = ldap::url::parse("ldaps://127.0.0.1:1");
 	REQUIRE(u.has_value());
-	auto c = run(ioc, ldap::connect(ioc, *u, { .start_tls = true }));
+	auto c = finish(ioc, ldap::connect(ioc, *u, { .start_tls = true }));
 	REQUIRE_FALSE(c.has_value());
 	CHECK(c.error().code == ldap::client_errc::invalid_url);
 	CHECK_THAT(std::string(c.error().context), ContainsSubstring("start_tls needs an ldap:// URL"));
