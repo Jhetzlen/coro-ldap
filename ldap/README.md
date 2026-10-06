@@ -161,6 +161,18 @@ on by default) with the network parts. It depends on Corosio and Capy
   `manage_dsa_it`, `proxied_authorization`, or a raw `ldap::control`) in a
   `std::variant`, `to_control` / `append_controls` to encode them and
   `find_paged` to read a response's paged results control.
+- `jhetz/ldap/mapping.hpp` (#9): typed struct mapping. A descriptor
+  (`ldap::schema<T> = ldap::describe(ldap::object_class(...),
+  ldap::field<&T::m>("attr", ldap::read_only)...)`) maps members to
+  attributes; the member type decides cardinality (`T`,
+  `std::optional<T>`, `std::vector<T>`); `value_traits<T>` converts values
+  (strings, integers, bool, `dn`, `binary`, `sys_seconds` as
+  GeneralizedTime, enums with an `enum_names` table). `decode<T>(entry)`,
+  `to_attributes(value)`, typed changes `replace / add / remove<&T::m>(v)`,
+  typed filters `filters::field<&T::m>() == v`, and on the connection
+  `search_as<T>`, `modify<T>(dn, changes)` and `add(dn, value)`. Mistakes
+  (unmapped or read_only member, wrong value type, invalid names) fail to
+  compile; `tests/compile/` checks each.
 - `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.
@@ -200,7 +212,7 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: StartTLS, SASL, struct mapping, schema validation.
+Not yet: StartTLS, SASL, schema validation.
 
 ## Build and test
 

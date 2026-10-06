@@ -97,6 +97,7 @@ add_library(jhetz_ldap STATIC
     src/entry.cpp
     src/error.cpp
     src/filter.cpp
+    src/mapping.cpp
     src/message.cpp
     src/url.cpp
 )
