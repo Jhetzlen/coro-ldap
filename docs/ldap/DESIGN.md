@@ -260,7 +260,7 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`; connection: `unexpected_response`, `not_connected`, `operation_in_progress`, `unauthenticated_bind`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 `error`'s strings are `std::pmr::string` but always on the default
@@ -290,9 +290,41 @@ password). Server errors carry the operation as context
 (`search ou=people,dc=example,dc=org`) and leave the connection usable;
 transport and protocol errors close it.
 
-Plus an `ldap::cond` error condition (not implemented yet) for grouping across categories
-(`cond::not_found`, `cond::auth_failed`, `cond::timeout`, …), so callers write
-`if (r.error().code == ldap::cond::auth_failed)`.
+**Error conditions (implemented, #15).** `ldap::cond` (category
+`ldap.cond`, an `is_error_condition_enum`) groups codes by meaning across
+categories, so callers write `if (r.error().code == ldap::cond::auth_failed)`.
+Each code matches at most one condition; codes without a clear meaning for
+a caller match none, deliberately (test them by exact code).
+
+| Condition | `ldap.result` (`errc`) | `ldap.client` (`client_errc`) | system / Capy / TLS |
+|---|---|---|---|
+| `not_found` | `no_such_object`, `no_such_attribute` | | |
+| `auth_failed` | `invalid_credentials`, `inappropriate_authentication`, `auth_method_not_supported` | `unauthenticated_bind` | |
+| `timeout` | `time_limit_exceeded` | | `timed_out`, `capy::error::timeout` |
+| `canceled` | | | `operation_canceled`, `capy::error::canceled` |
+| `connection_lost` | | `not_connected` | `connection_reset`, `connection_aborted`, `broken_pipe`, `not_connected`; Capy `eof`, `stream_truncated` |
+| `tls_failure` | | | any `corosio.openssl` (or `corosio.wolfssl`) code |
+| `protocol_error` | `protocol_error` | `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `integer_overflow`, `unexpected_tag`, `unsupported_operation`, `unexpected_response` | |
+| `busy_or_unavailable` | `busy`, `unavailable` | | `connection_refused`, `host_unreachable`, `network_unreachable`, `network_down` |
+| `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | | `permission_denied` |
+| `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
+| `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
+| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress` | everything else |
+
+Choices worth knowing: `unauthenticated_bind` is `auth_failed` (an empty
+password on a login form is a failed login); `stronger_auth_required` and
+`confidentiality_required` are `access_denied` (the credentials may be fine,
+the session is not good enough); `unwilling_to_perform` matches nothing
+(servers use it for unrelated refusals); `size_limit_exceeded` matches
+nothing (it comes with partial results); `operation_in_progress` matches
+nothing (it is a usage error, not a busy server); file errors from TLS
+configuration are `invalid_input`, not `not_found`, which is for directory
+entries. System codes match through their generic condition, so both the
+system and generic categories work. `jhetz::ldap` does not link Capy or
+Corosio, so their codes are matched by category name (`boost.capy` values
+`eof` = 1 and `stream_truncated` = 4; `canceled` and `timeout` already map
+to generic conditions); a Capy upgrade that renumbers them must update
+`error.cpp` (the net tests check the real eof, canceled, timeout and TLS codes).
 
 Nothing on the normal path throws: network, protocol, server and mapping
 failures all come back as `ldap::error`. Only programming errors (bad

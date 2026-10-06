@@ -1,5 +1,7 @@
 #include "jhetz/ldap/error.hpp"
 
+#include <optional>
+#include <string>
 #include <string_view>
 
 namespace jhetz::ldap {
@@ -140,6 +142,143 @@ namespace {
 		return {};
 	}
 
+	// The condition of each code (DESIGN.md section 5), nullopt for none.
+	std::optional<cond> result_cond(int value) noexcept
+	{
+		switch (static_cast<errc>(value)) {
+		case errc::no_such_object:
+		case errc::no_such_attribute:
+			return cond::not_found;
+		case errc::invalid_credentials:
+		case errc::inappropriate_authentication:
+		case errc::auth_method_not_supported:
+			return cond::auth_failed;
+		case errc::time_limit_exceeded:
+			return cond::timeout;
+		case errc::protocol_error:
+			return cond::protocol_error;
+		case errc::busy:
+		case errc::unavailable:
+			return cond::busy_or_unavailable;
+		case errc::insufficient_access_rights:
+		case errc::stronger_auth_required:
+		case errc::confidentiality_required:
+			return cond::access_denied;
+		case errc::entry_already_exists:
+		case errc::attribute_or_value_exists:
+			return cond::already_exists;
+		case errc::undefined_attribute_type:
+		case errc::inappropriate_matching:
+		case errc::constraint_violation:
+		case errc::invalid_attribute_syntax:
+		case errc::invalid_dn_syntax:
+		case errc::naming_violation:
+		case errc::object_class_violation:
+			return cond::invalid_input;
+		default:
+			return std::nullopt;
+		}
+	}
+
+	std::optional<cond> client_cond(int value) noexcept
+	{
+		switch (static_cast<client_errc>(value)) {
+		case client_errc::decode_error:
+		case client_errc::message_too_large:
+		case client_errc::nesting_too_deep:
+		case client_errc::unsupported_tag:
+		case client_errc::integer_overflow:
+		case client_errc::unexpected_tag:
+		case client_errc::unsupported_operation:
+		case client_errc::unexpected_response:
+			return cond::protocol_error;
+		case client_errc::invalid_filter:
+		case client_errc::invalid_dn:
+		case client_errc::invalid_attribute:
+		case client_errc::encode_error:
+		case client_errc::invalid_url:
+			return cond::invalid_input;
+		case client_errc::not_connected:
+			return cond::connection_lost;
+		case client_errc::unauthenticated_bind:
+			return cond::auth_failed;
+		default:
+			return std::nullopt;
+		}
+	}
+
+	// Codes of other categories: by generic condition, or by category name
+	// for Capy and Corosio (this library does not link them).
+	std::optional<cond> foreign_cond(const std::error_code &ec) noexcept
+	{
+		const std::string_view category = ec.category().name();
+		if (category == "boost.capy") {
+			// boost::capy::error: eof = 1, stream_truncated = 4 (canceled and
+			// timeout map to generic conditions, below).
+			if (ec.value() == 1 || ec.value() == 4) return cond::connection_lost;
+		}
+		if (category == "corosio.openssl" || category == "corosio.wolfssl") return cond::tls_failure;
+
+		const std::error_condition g = ec.default_error_condition();
+		if (g.category() != std::generic_category()) return std::nullopt;
+		switch (static_cast<std::errc>(g.value())) {
+		case std::errc::timed_out:
+			return cond::timeout;
+		case std::errc::operation_canceled:
+			return cond::canceled;
+		case std::errc::connection_reset:
+		case std::errc::connection_aborted:
+		case std::errc::broken_pipe:
+		case std::errc::not_connected:
+			return cond::connection_lost;
+		case std::errc::connection_refused:
+		case std::errc::host_unreachable:
+		case std::errc::network_unreachable:
+		case std::errc::network_down:
+			return cond::busy_or_unavailable;
+		case std::errc::permission_denied:
+			return cond::access_denied;
+		// Configuration problems (a missing CA file, a bad PEM): not
+		// not_found, which callers use for directory entries.
+		case std::errc::no_such_file_or_directory:
+		case std::errc::not_a_directory:
+		case std::errc::filename_too_long:
+		case std::errc::invalid_argument:
+			return cond::invalid_input;
+		default:
+			return std::nullopt;
+		}
+	}
+
+	std::string_view cond_text(int value) noexcept
+	{
+		switch (static_cast<cond>(value)) {
+		case cond::not_found:
+			return "not found";
+		case cond::auth_failed:
+			return "authentication failed";
+		case cond::timeout:
+			return "timed out";
+		case cond::canceled:
+			return "canceled";
+		case cond::connection_lost:
+			return "connection lost";
+		case cond::tls_failure:
+			return "TLS failure";
+		case cond::protocol_error:
+			return "protocol error";
+		case cond::busy_or_unavailable:
+			return "server busy or unavailable";
+		case cond::access_denied:
+			return "access denied";
+		case cond::already_exists:
+			return "already exists";
+		case cond::invalid_input:
+			return "invalid input";
+		}
+		return {};
+	}
+
 	class result_category_impl final : public std::error_category
 	{
 	  public:
@@ -166,6 +305,31 @@ namespace {
 		}
 	};
 
+	class cond_category_impl final : public std::error_category
+	{
+	  public:
+		const char *name() const noexcept override { return "ldap.cond"; }
+
+		std::string message(int value) const override
+		{
+			auto text = cond_text(value);
+			if (text.empty()) return "unknown LDAP error condition " + std::to_string(value);
+			return std::string(text);
+		}
+
+		bool equivalent(const std::error_code &ec, int condition) const noexcept override
+		{
+			std::optional<cond> c;
+			if (ec.category() == result_category())
+				c = result_cond(ec.value());
+			else if (ec.category() == client_category())
+				c = client_cond(ec.value());
+			else
+				c = foreign_cond(ec);
+			return c && static_cast<int>(*c) == condition;
+		}
+	};
+
 }// namespace
 
 const std::error_category &result_category() noexcept
@@ -177,6 +341,12 @@ const std::error_category &result_category() noexcept
 const std::error_category &client_category() noexcept
 {
 	static const client_category_impl instance;
+	return instance;
+}
+
+const std::error_category &cond_category() noexcept
+{
+	static const cond_category_impl instance;
 	return instance;
 }
 

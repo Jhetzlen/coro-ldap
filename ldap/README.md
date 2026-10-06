@@ -6,7 +6,13 @@ C++23 LDAP client library, in progress. Design: [`docs/ldap/DESIGN.md`](../docs/
 
 - `jhetz/ldap/error.hpp`: `ldap::error`, `ldap::result<T>` (`std::expected`),
   `ldap::errc` (RFC 4511 result codes, category `ldap.result`) and
-  `ldap::client_errc` (category `ldap.client`).
+  `ldap::client_errc` (category `ldap.client`), and the error conditions
+  `ldap::cond` (category `ldap.cond`: `not_found`, `auth_failed`, `timeout`,
+  `canceled`, `connection_lost`, `tls_failure`, `protocol_error`,
+  `busy_or_unavailable`, `access_denied`, `already_exists`,
+  `invalid_input`) that group LDAP, client, system, Capy and TLS codes by
+  meaning: `if (r.error().code == ldap::cond::auth_failed)`. The mapping
+  table is in DESIGN.md section 5.
 - `jhetz/ldap/ber.hpp`: the restricted BER codec LDAP uses (RFC 4511 section 5.1):
   `ber::writer` (its buffer on a `memory_resource`, reusable), `ber::reader`
   (non-owning, depth-bounded, safe on untrusted input) and the framer
@@ -173,8 +179,7 @@ LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
 Not yet: multiplexing, cancellation and abandon (step 5b), the other
-operations (step 6), StartTLS, SASL. The `ldap::cond` error conditions from
-DESIGN.md section 5 are deferred (#15).
+operations (step 6), StartTLS, SASL.
 
 ## Build and test
 
