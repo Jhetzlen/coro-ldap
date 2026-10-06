@@ -128,6 +128,14 @@ namespace {
 			return "value cannot be encoded in an LDAP message";
 		case client_errc::invalid_url:
 			return "invalid LDAP URL";
+		case client_errc::unexpected_response:
+			return "unexpected response from the server";
+		case client_errc::not_connected:
+			return "not connected";
+		case client_errc::operation_in_progress:
+			return "another operation is in progress on this connection";
+		case client_errc::unauthenticated_bind:
+			return "simple bind with a name but no password (unauthenticated bind)";
 		}
 		return {};
 	}

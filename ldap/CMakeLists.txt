@@ -23,6 +23,7 @@ option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap_net (transports and connect; fetc
 option(JHETZ_LDAP_SANITIZE "Build all targets with AddressSanitizer and UBSan" OFF)
 option(JHETZ_LDAP_WERROR "Treat warnings in jhetz::ldap code as errors" OFF)
 option(JHETZ_LDAP_BUILD_BENCH "Build the benchmarks (bench/, not run by ctest)" OFF)
+option(JHETZ_LDAP_BUILD_EXAMPLES "Build the examples (examples/; need JHETZ_LDAP_BUILD_NET)" ON)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -142,6 +143,7 @@ if(JHETZ_LDAP_BUILD_NET)
     endif()
 
     add_library(jhetz_ldap_net STATIC
+        src/connection.cpp
         src/net/connect.cpp
         src/net/message_io.cpp
         src/net/tls.cpp
@@ -150,6 +152,13 @@ if(JHETZ_LDAP_BUILD_NET)
     add_library(jhetz::ldap_net ALIAS jhetz_ldap_net)
     target_link_libraries(jhetz_ldap_net PUBLIC jhetz_ldap Boost::corosio Boost::corosio_openssl)
     jhetz_ldap_warnings(jhetz_ldap_net)
+endif()
+
+if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
+    add_executable(jhetz_ldapsearch examples/ldapsearch.cpp)
+    set_target_properties(jhetz_ldapsearch PROPERTIES OUTPUT_NAME ldapsearch)
+    target_link_libraries(jhetz_ldapsearch PRIVATE jhetz::ldap_net)
+    jhetz_ldap_warnings(jhetz_ldapsearch)
 endif()
 
 if(JHETZ_LDAP_BUILD_TESTS)

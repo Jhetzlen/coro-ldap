@@ -112,6 +112,34 @@ on by default) with the network parts. It depends on Corosio and Capy
   `write_message(t, m, writer)` reuses the caller's `ber::writer`;
   `write_bytes` sends raw bytes.
 
+- `jhetz/ldap/connection.hpp` (step 5a): `ldap::connection`, the client API.
+  `co_await ldap::connect(ioc, url, connection_options, mr)` wraps
+  `net::connect` (`connection_options`: connect `timeout`, `tls`,
+  `tcp_no_delay`, `max_message_size`, still 16 MiB by default); a
+  connection can also be built on any `net::transport`. Operations run one
+  at a time: `simple_bind(dn, password)` (an empty name and password is
+  anonymous; a name with an empty password is refused with
+  `client_errc::unauthenticated_bind`, RFC 4513 section 5.1.2),
+  `search(search_params, mr)` returning `result<std::pmr::vector<entry>>`,
+  `search_stream(search_params, mr)` whose `co_await s.next()` yields one
+  entry at a time (and keeps the search references and the done controls),
+  and `unbind()`. `search_params` is a plain aggregate for designated
+  initializers (`.base`, `.scope`, `.filter`, `.attributes`, `.deref`,
+  `.size_limit`, `.time_limit`, `.types_only`, `.controls`). Starting an
+  operation while another is suspended or a stream is open fails with
+  `client_errc::operation_in_progress`; a stream destroyed early is drained
+  by the next operation. Every response is decoded with `origin::server`
+  and must carry the id of the request in flight and an operation that
+  answers it (else `client_errc::unexpected_response`); IntermediateResponses
+  are skipped; a Notice of Disconnection fails the operation. A server
+  result error leaves the connection usable; a transport or protocol error,
+  or an operation interrupted before it finished, closes it, and later
+  operations fail with `client_errc::not_connected` naming the first error.
+  The header documents the memory, threading and move rules.
+- `examples/ldapsearch.cpp` (target `jhetz_ldapsearch`, binary `ldapsearch`,
+  option `JHETZ_LDAP_BUILD_EXAMPLES`): connect, optional simple bind,
+  search, LDIF output, unbind; `ldapsearch -D dn -w pw URL [filter [attrs]]`.
+
 Memory (DESIGN.md section 8): the public types use `std::pmr` containers
 and are allocator-aware: the message model (every operation, `ldap_result`,
 `control`, `partial_attribute`, `message`, `paged_results`), `filter`,
@@ -144,8 +172,9 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-No LDAP operations over the network yet (bind, search: step 5). The
-`ldap::cond` error conditions from DESIGN.md section 5 are deferred.
+Not yet: multiplexing, cancellation and abandon (step 5b), the other
+operations (step 6), StartTLS, SASL. The `ldap::cond` error conditions from
+DESIGN.md section 5 are deferred (#15).
 
 ## Build and test
 
@@ -157,7 +186,7 @@ and for `jhetz::ldap_net` Corosio and Capy, are fetched from GitHub;
 cmake -S ldap -B build/ldap -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON
 cmake --build build/ldap
 ctest --test-dir build/ldap --output-on-failure
-ctest --test-dir build/ldap -R '^net\.'     # just the transport / connect tests
+ctest --test-dir build/ldap -R '^net\.'     # just the transport / connect / connection tests
 ```
 
 To build against local checkouts instead of downloading, pass

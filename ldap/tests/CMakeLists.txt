@@ -48,6 +48,7 @@ endforeach()
 if(JHETZ_LDAP_BUILD_NET)
     add_executable(jhetz_ldap_net_tests
         net/connect_tests.cpp
+        net/connection_tests.cpp
         net/message_io_tests.cpp
     )
     target_link_libraries(jhetz_ldap_net_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)

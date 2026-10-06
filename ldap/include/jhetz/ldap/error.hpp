@@ -93,6 +93,10 @@ enum class client_errc : int {
 	invalid_attribute,// not a valid attribute description (RFC 4512)
 	encode_error,// value out of range for the LDAP message being encoded
 	invalid_url,// RFC 4516 LDAP URL could not be parsed, or cannot be used to connect
+	unexpected_response,// server message that does not answer the request in flight (id, operation)
+	not_connected,// connection closed (unbind, close, or an earlier failure)
+	operation_in_progress,// the connection is busy with another operation or an open search_stream
+	unauthenticated_bind,// simple bind with a name and an empty password (RFC 4513 section 5.1.2)
 };
 
 const std::error_category &result_category() noexcept;// "ldap.result"
@@ -115,9 +119,12 @@ struct error
 {
 	std::error_code code{};
 	std::pmr::string diagnostic{};// server's diagnosticMessage, if any
-	// TODO: becomes std::optional<ldap::dn> (step 5).
+	// matched_dn and referrals stay text, exactly as the server sent them
+	// (DESIGN.md section 5): a server's matchedDN or referral URI may not
+	// parse as ldap::dn / ldap::url, and an error must not lose it or fail to
+	// be built. Parse on demand with dn::parse / url::parse. (dn.hpp and
+	// url.hpp also depend on this header for result<T>.)
 	std::optional<std::pmr::string> matched_dn{};// server's matchedDN, if any
-	// TODO: becomes a vector of ldap::url (step 5).
 	std::pmr::vector<std::pmr::string> referrals{};// from a referral result
 	std::pmr::string context{};// client-side path, e.g. "ber: integer at offset 12"
 
