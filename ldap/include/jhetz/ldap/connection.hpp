@@ -118,6 +118,10 @@ struct connection_options
 	// next()). On expiry the operation fails with capy::error::timeout and
 	// is abandoned. nullopt: no limit (cancel with a stop token instead).
 	std::optional<std::chrono::milliseconds> operation_timeout{};
+	// ldap::connect() only: upgrade an ldap:// connection with StartTLS
+	// right after connecting (using `tls` and `timeout`), and fail if that
+	// does not work. Not allowed with ldaps:// or ldapi:// (invalid_url).
+	bool start_tls = false;
 };
 
 // A search, as a plain aggregate for designated initializers (DESIGN.md
@@ -276,6 +280,8 @@ class connection
 	// Operations waiting for a response (searches until their
 	// SearchResultDone, or until abandoned). For tests and diagnostics.
 	std::size_t outstanding() const noexcept;
+	// True once TLS protects the connection (ldaps://, or after start_tls()).
+	bool is_tls() const noexcept;
 
 	// Simple bind (RFC 4511 section 4.2, RFC 4513 section 5.1). An empty name
 	// and password is an anonymous bind. A name with an empty password would
@@ -372,6 +378,21 @@ class connection
 		co_return co_await add(
 		  add_params{ .entry = std::move(entry), .attributes = to_attributes(value), .controls = std::move(controls) });
 	}
+
+	// StartTLS (RFC 4511 section 4.14): upgrades a plain ldap:// connection
+	// to TLS in place, with the same verification rules as ldaps://
+	// (`options`; the name checked is options.server_name, else the URL's
+	// host). Refused with operation_in_progress while any operation is
+	// outstanding; while it runs, starting another operation fails the same
+	// way. If the server refuses (a result code other than success), that
+	// error is returned and the connection stays usable, unprotected. Bytes
+	// received after the StartTLS response and before the handshake are
+	// refused (decode_error: a plaintext injection attempt), and a failed
+	// handshake closes the connection. `timeout` bounds the exchange and the
+	// handshake (nullopt: connection_options::operation_timeout for the
+	// exchange, no limit for the handshake).
+	boost::capy::task<result<void>> start_tls(net::tls_options options = {},
+	  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 
 	// Sends an UnbindRequest, waits until it is written, and closes the
 	// connection (RFC 4511 section 4.3: there is no response). Outstanding

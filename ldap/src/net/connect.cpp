@@ -1,6 +1,7 @@
 #include "jhetz/ldap/net/connect.hpp"
 
 #include "deadline.hpp"
+#include "jhetz/ldap/net/message_io.hpp"
 #include "tls.hpp"
 #include "transport_impl.hpp"
 
@@ -194,6 +195,7 @@ capy::task<result<transport>>
 				+ " bytes");
 		transport t = transport_access::make(transport::kind::local, server, mr);
 		auto &im = transport_access::get(t);
+		im.host = u.host();
 		im.local.emplace(ioc);
 		auto [ec] = co_await bounded(im.local->connect(corosio::local_endpoint(u.host())), deadline);
 		if (ec) co_return fail(ec, stage_context(target, "connect " + str(u.host()), ec, options.timeout));
@@ -225,6 +227,7 @@ capy::task<result<transport>>
 	// ---- TCP: each address in turn, until one accepts
 	transport t = transport_access::make(transport::kind::tcp, server, mr);
 	auto &im = transport_access::get(t);
+	im.host = u.host();
 	im.tcp.emplace(ioc);
 	std::error_code last;
 	std::string last_endpoint;
@@ -270,6 +273,34 @@ capy::task<result<transport>>
 		co_return std::unexpected(std::move(e));
 	}
 	co_return t;
+}
+
+capy::task<result<void>> start_tls(transport &t,
+  const read_buffer &pending,
+  tls_options options,
+  std::optional<std::chrono::milliseconds> timeout)
+{
+	std::string context = "start tls ";
+	context += t.name();
+	if (t.type() != transport::kind::tcp || t.is_tls() || !t.is_open())
+		co_return fail(
+		  std::make_error_code(std::errc::invalid_argument), context + ": needs an open plain TCP transport");
+	if (!pending.empty())
+		co_return fail(client_errc::decode_error,
+		  context + ": " + std::to_string(pending.size())
+			+ " bytes arrived before the TLS handshake (refused: they were not protected)");
+	auto prefixed = [&context](error e) {
+		e.context.insert(0, context + (e.context.empty() ? "" : ": "));
+		return std::unexpected(std::move(e));
+	};
+	auto setup = detail::make_tls_setup(options);
+	if (!setup) co_return prefixed(std::move(setup.error()));
+	auto &im = transport_access::get(t);
+	deadline_t deadline;
+	if (timeout) deadline = detail::clock::now() + *timeout;
+	auto hs = co_await detail::tls_handshake(im, im.host, options, std::move(*setup), deadline);
+	if (!hs) co_return prefixed(std::move(hs.error()));
+	co_return result<void>{};
 }
 
 }// namespace jhetz::ldap::net

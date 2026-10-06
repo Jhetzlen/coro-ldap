@@ -465,10 +465,20 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   when there is no SAN, and partial wildcards in the leftmost label.
   CA bundles are split by us because Corosio loads only the first
   certificate of a bundle (worth reporting upstream).
-- StartTLS readiness: TLS is a reference-mode `openssl_stream` over the
-  socket the transport owns; step 7 builds it on a live plain transport with
-  the same `detail::make_tls_setup` / `detail::tls_handshake`. The read
-  buffer must be empty at the upgrade.
+- StartTLS (implemented, step 7): `net::start_tls(transport, read_buffer,
+  tls_options, timeout)` builds a reference-mode `openssl_stream` over the
+  socket the transport owns, with the same `detail::make_tls_setup` /
+  `detail::tls_handshake` as ldaps:// (the name checked is
+  `server_name`, else the URL host the transport now records). It refuses
+  a transport that is not plain TCP and a non-empty read buffer (bytes that
+  arrived before the handshake were not protected: CVE-2011-0411).
+  `connection::start_tls(options, timeout)` refuses while operations are
+  outstanding, sends the ExtendedRequest, blocks new requests until done
+  (RFC 4511 section 4.14.1), waits for the reader and writer to stop, then
+  upgrades. A refusal by the server leaves the connection usable in clear;
+  injected bytes or a failed handshake close it.
+  `connection_options::start_tls` makes `ldap::connect` upgrade right away
+  (ldap:// only).
 - `net::read_message` / `write_message`: rejects a PDU whose first octet is
   not SEQUENCE or whose declared size exceeds `read_options::max_message_size`
   (16 MiB) from the header alone; decodes with `origin::server`; a TLS close
