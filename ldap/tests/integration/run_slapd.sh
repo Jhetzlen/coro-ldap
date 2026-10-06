@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Starts a throwaway OpenLDAP slapd for the integration tests, runs a
+# command with the JHETZ_LDAP_IT_* variables set, and stops slapd:
+#
+#   ldap/tests/integration/run_slapd.sh ctest --test-dir build -L integration --output-on-failure
+#
+# slapd listens on ldap://127.0.0.1:$PORT, ldaps://localhost:$((PORT+1))
+# and an ldapi:// socket in a temporary directory, with a test CA, a
+# server certificate (localhost, 127.0.0.1) and a client certificate for
+# SASL EXTERNAL; the data is make_fixture.py's. Needs slapd and openssl.
+#
+# Environment (defaults suit Debian / Ubuntu's slapd package):
+#   SLAPD              slapd binary              (/usr/sbin/slapd)
+#   SLAPD_SCHEMA_DIR   directory of *.schema     (/etc/ldap/schema)
+#   SLAPD_MODULE_PATH  slapd modules, if any     (/usr/lib/ldap; back_mdb is loaded if found there)
+#   JHETZ_LDAP_IT_PORT first port                (3389)
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+slapd="${SLAPD:-/usr/sbin/slapd}"
+schema_dir="${SLAPD_SCHEMA_DIR:-/etc/ldap/schema}"
+module_path="${SLAPD_MODULE_PATH:-/usr/lib/ldap}"
+port="${JHETZ_LDAP_IT_PORT:-3389}"
+tls_port=$((port + 1))
+
+dir="$(mktemp -d /tmp/jldap.XXXXXX)"
+pid=""
+cleanup() {
+	if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+		kill "$pid"
+		for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+	fi
+	rm -rf "$dir"
+}
+trap cleanup EXIT
+
+# ---- certificates
+cd "$dir"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 \
+	-subj "/CN=jhetz-ldap integration CA" -keyout ca.key -out ca.pem 2>/dev/null
+cat > server.ext <<EXT
+basicConstraints = CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = serverAuth
+subjectAltName = DNS:localhost, IP:127.0.0.1
+EXT
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=localhost" \
+	-keyout server.key -out server.csr 2>/dev/null
+openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 \
+	-extfile server.ext -out server.pem 2>/dev/null
+cat > client.ext <<EXT
+basicConstraints = CA:FALSE
+keyUsage = critical, digitalSignature
+extendedKeyUsage = clientAuth
+EXT
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/DC=org/DC=example/CN=client" \
+	-keyout client.key -out client.csr 2>/dev/null
+openssl x509 -req -in client.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 \
+	-extfile client.ext -out client.pem 2>/dev/null
+
+# ---- configuration and data
+mkdir data
+modules=""
+if [[ -e "$module_path/back_mdb.so" || -e "$module_path/back_mdb.la" ]]; then
+	modules="modulepath $module_path
+moduleload back_mdb"
+fi
+cat > slapd.conf <<CONF
+include $schema_dir/core.schema
+include $schema_dir/cosine.schema
+include $schema_dir/inetorgperson.schema
+include $schema_dir/nis.schema
+$modules
+pidfile $dir/slapd.pid
+TLSCACertificateFile $dir/ca.pem
+TLSCertificateFile $dir/server.pem
+TLSCertificateKeyFile $dir/server.key
+TLSVerifyClient try
+sizelimit 1000
+
+database mdb
+maxsize 268435456
+suffix "dc=example,dc=org"
+rootdn "cn=admin,dc=example,dc=org"
+rootpw secret
+directory $dir/data
+index objectClass eq
+index uid eq
+access to * by * read
+CONF
+python3 "$here/make_fixture.py" > fixture.ldif
+"$slapd" -T add -f slapd.conf -l fixture.ldif -q
+
+# ---- start and wait until it accepts connections
+socket="$dir/ldapi"
+socket_url="ldapi://$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$socket")"
+"$slapd" -f slapd.conf -h "ldap://127.0.0.1:$port/ ldaps://127.0.0.1:$tls_port/ $socket_url" -s 0
+for _ in $(seq 100); do
+	if [[ -S "$socket" ]] && (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then break; fi
+	sleep 0.1
+done
+pid="$(cat "$dir/slapd.pid")"
+cd - > /dev/null
+
+export JHETZ_LDAP_IT_LDAP="ldap://127.0.0.1:$port"
+export JHETZ_LDAP_IT_LDAPS="ldaps://localhost:$tls_port"
+export JHETZ_LDAP_IT_LDAPI="$socket_url"
+export JHETZ_LDAP_IT_CA="$dir/ca.pem"
+export JHETZ_LDAP_IT_CLIENT_CERT="$dir/client.pem"
+export JHETZ_LDAP_IT_CLIENT_KEY="$dir/client.key"
+"$@"

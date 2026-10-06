@@ -267,6 +267,25 @@ certificates generated at run time through the OpenSSL API.
 | `JHETZ_LDAP_WERROR` | `OFF` | warnings are errors in our code (CI turns it on) |
 | `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench` (see below; not run by ctest or CI) |
 
+## Integration tests
+
+`tests/integration/` runs the client against a real OpenLDAP `slapd`
+(ldap://, ldaps://, StartTLS, ldapi://; simple and SASL EXTERNAL binds over
+ldapi:// and with a TLS client certificate; plain, streaming, paged and
+typed searches with the server's schema; every write operation;
+cancellation; a fault-injecting proxy that truncates, oversizes or cuts
+the server's answer). `run_slapd.sh` starts a throwaway slapd with a test
+PKI and the fixture from `make_fixture.py`, runs a command and stops it:
+
+```sh
+ldap/tests/integration/run_slapd.sh ctest --test-dir build/ldap -L integration --output-on-failure
+```
+
+It needs `slapd` and `openssl`; the defaults suit Debian / Ubuntu's slapd
+package, others are set with `SLAPD`, `SLAPD_SCHEMA_DIR` and
+`SLAPD_MODULE_PATH`. Without it the `integration` test is skipped, so plain
+`ctest` stays hermetic. CI runs it in the `integration` job.
+
 ## Fuzz
 
 | Target | Input | Properties |

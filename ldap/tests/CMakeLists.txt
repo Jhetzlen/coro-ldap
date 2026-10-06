@@ -90,6 +90,15 @@ if(JHETZ_LDAP_BUILD_NET)
         net/message_io_tests.cpp
     )
     target_link_libraries(jhetz_ldap_net_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
+    # Integration tests against a real slapd (tests/integration/run_slapd.sh
+    # starts one and sets JHETZ_LDAP_IT_*): one ctest entry, label
+    # "integration", skipped (Catch2 exit code 4) when no server is set up.
+    add_executable(jhetz_ldap_integration_tests integration/integration_tests.cpp)
+    target_link_libraries(jhetz_ldap_integration_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
+    jhetz_ldap_warnings(jhetz_ldap_integration_tests)
+    add_test(NAME integration COMMAND jhetz_ldap_integration_tests)
+    set_tests_properties(integration PROPERTIES LABELS integration SKIP_RETURN_CODE 4)
+
     # sync_tests.cpp runs the CLI against its in-process server.
     if(TARGET jhetz_ldapsearch)
         add_dependencies(jhetz_ldap_net_tests jhetz_ldapsearch)

@@ -56,6 +56,34 @@ jobs:
       - name: Repeat network tests
         run: ctest --test-dir build --output-on-failure -R '^net\.' --repeat until-fail:5
 
+  integration:
+    name: Integration (OpenLDAP slapd, GCC 13, ASan + UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools and slapd
+        run: |
+          sudo apt-get update
+          echo 'slapd slapd/no_configuration boolean true' | sudo debconf-set-selections
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ninja-build g++-13 libssl-dev slapd
+          # The tests run their own slapd from a temporary directory, which
+          # the packaged AppArmor profile does not allow.
+          sudo systemctl stop slapd || true
+          if [ -e /etc/apparmor.d/usr.sbin.slapd ]; then sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.slapd || true; fi
+      - name: Configure
+        run: >
+          cmake -S ldap -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=g++-13
+          -DJHETZ_LDAP_SANITIZE=ON
+          -DJHETZ_LDAP_WERROR=ON
+      - name: Build
+        run: cmake --build build --target jhetz_ldap_integration_tests
+      # run_slapd.sh starts slapd (ldap, ldaps, ldapi, test PKI, fixture),
+      # runs the command, and stops it.
+      - name: Integration tests
+        run: ldap/tests/integration/run_slapd.sh ctest --test-dir build -L integration --output-on-failure
+
   clang-fuzz:
     name: Clang fuzz smoke test
     runs-on: ubuntu-24.04
