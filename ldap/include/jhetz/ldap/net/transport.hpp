@@ -21,8 +21,8 @@
 // internals (socket state, the any_stream's cached awaitables, the OpenSSL
 // session) still allocate with operator new.
 //
-// StartTLS (step 7, not implemented): the design keeps the plain tcp_socket
-// as a separate member for this. start_tls() will require type() ==
+// StartTLS (step 7, net::start_tls in connect.hpp): the plain tcp_socket is
+// a separate member for this. start_tls() requires type() ==
 // kind::tcp, !is_tls(), no operation in flight, and an empty read_buffer
 // (bytes that arrived after the StartTLS response were sent before the TLS
 // handshake and must not be trusted; the plaintext injection bug class of
@@ -96,6 +96,9 @@ class transport
 	// Where it is connected, for error messages: "ldap://127.0.0.1:389",
 	// "ldapi://%2Frun%2Fldapi", or the name given to wrap().
 	const std::pmr::string &name() const noexcept;
+	// The URL's host for transports from net::connect() (the socket path for
+	// ldapi://); empty for wrap()ped streams. StartTLS verifies against it.
+	const std::pmr::string &host() const noexcept;
 
 	// Cancels pending operations; they complete with an error comparing equal
 	// to boost::capy::cond::canceled. The connection stays open.

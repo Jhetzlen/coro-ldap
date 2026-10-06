@@ -148,6 +148,7 @@ struct connection::impl
 		default_timeout(options.operation_timeout), pending(mr_), abandoned(mr_), outbox(mr_), scratch(mr_)
 	{
 		write_idle.set();
+		reader_idle.set();
 	}
 
 	corosio::io_context::executor_type ex;
@@ -174,6 +175,9 @@ struct connection::impl
 	// Reader: runs while `pending` is not empty.
 	bool reading = false;
 	std::stop_source reader_stop{};
+	capy::async_event reader_idle{};// set while the reader is not running
+	// StartTLS in progress: no other request may be sent (RFC 4511 4.14.1).
+	bool upgrading = false;
 	// Unsolicited notifications are decoded here, then released.
 	std::pmr::monotonic_buffer_resource scratch;
 
@@ -267,6 +271,8 @@ struct connection::impl
 	result<void> submit(message &m, pending_op *p, std::string_view context)
 	{
 		if (!open) return std::unexpected(not_connected(context));
+		if (upgrading && !std::holds_alternative<abandon_request>(m.op))
+			return fail(client_errc::operation_in_progress, std::string(context) + ": StartTLS is in progress");
 		m.id = next_id;
 		auto bytes = encode(m, mr);
 		if (!bytes) return std::unexpected(with_context(std::move(bytes.error()), context));
@@ -302,6 +308,7 @@ struct connection::impl
 	{
 		if (reading) return;// a reader that is stopping restarts itself if needed
 		reading = true;
+		reader_idle.clear();
 		reader_stop = std::stop_source{};
 		add_ref();// released by the reader
 		capy::run_async(ex, reader_stop.get_token())(reader(this));
@@ -327,6 +334,7 @@ struct connection::impl
 			self->route(*size);
 		}
 		self->reading = false;
+		self->reader_idle.set();
 		// Stopped while an operation was being registered: start afresh,
 		// with a new stop token.
 		if (self->open && !self->pending.empty()) self->start_reader();
@@ -586,6 +594,8 @@ std::string_view connection::name() const noexcept
 connection::executor_type connection::executor() const noexcept { return impl_->ex; }
 
 std::size_t connection::outstanding() const noexcept { return impl_ == nullptr ? 0 : impl_->pending.size(); }
+
+bool connection::is_tls() const noexcept { return impl_ != nullptr && impl_->transport.is_tls(); }
 
 void connection::close() noexcept
 {
@@ -855,6 +865,61 @@ capy::task<result<std::string>> connection::who_am_i(request_controls controls)
 	co_return r->value ? std::string(*r->value) : std::string();
 }
 
+// ---------------------------------------------------------------- StartTLS
+
+capy::task<result<void>> connection::start_tls(net::tls_options options,
+  std::optional<std::chrono::milliseconds> timeout)
+{
+	std::string context = "start tls";
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	impl_ref self(impl_);
+	if (!self->open) co_return std::unexpected(self->not_connected(context));
+	if (self->upgrading)
+		co_return fail(client_errc::operation_in_progress, context + ": StartTLS is already in progress");
+	if (!self->pending.empty())
+		co_return fail(client_errc::operation_in_progress,
+		  context + ": " + std::to_string(self->pending.size()) + " operations are outstanding");
+	if (self->transport.type() != net::transport::kind::tcp || self->transport.is_tls())
+		co_return fail(std::make_error_code(std::errc::invalid_argument),
+		  context + ": needs a plain TCP connection (not ldaps://, ldapi:// or a custom stream)");
+
+	// The ExtendedRequest; nothing else may be sent until it is answered
+	// and the handshake is done (RFC 4511 section 4.14.1).
+	message request{ 0, extended_request(start_tls_oid) };
+	pending_op p(self->mr, false, op_index<extended_response>);
+	if (auto r = self->submit(request, &p, context); !r) co_return r;
+	self->upgrading = true;
+	struct clear_upgrading
+	{
+		connection::impl &c;
+		~clear_upgrading() { c.upgrading = false; }
+	} clear{ *self };
+	{
+		registration reg(*self, p);
+		auto m = co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout), context);
+		if (!m) co_return std::unexpected(std::move(m.error()));
+		const auto &x = std::get<extended_response>(m->op);
+		if (!x.result.is_success()) co_return std::unexpected(x.result.to_error(context));// still usable, in clear
+	}
+
+	// The reader and writer must be idle: the handshake reads and writes
+	// the socket itself. Not cancellable: they stop promptly on their own.
+	co_await capy::run(std::stop_token{})([](connection::impl &c) -> capy::task<void> {
+		(void)co_await c.write_idle.wait();
+		(void)co_await c.reader_idle.wait();
+	}(*self));
+	if (!self->open) co_return std::unexpected(self->not_connected(context));
+
+	auto r = co_await net::start_tls(self->transport, self->buf, std::move(options), timeout);
+	if (!r) {
+		// Injected bytes or a failed handshake: the stream cannot be trusted.
+		error e = std::move(r.error());
+		self->shut(e, true);
+		co_return std::unexpected(std::move(e));
+	}
+	co_return result<void>{};
+}
+
 capy::task<result<void>> connection::unbind()
 {
 	const std::string context = "unbind";
@@ -1093,12 +1158,21 @@ capy::task<result<std::optional<entry>>> paged_search::next()
 capy::task<result<connection>>
   connect(corosio::io_context &ioc, url u, connection_options options, std::pmr::memory_resource *mr)
 {
+	if (options.start_tls && u.scheme() != url_scheme::ldap)
+		co_return fail(client_errc::invalid_url,
+		  "connect " + std::string(u.to_string())
+			+ ": start_tls needs an ldap:// URL (ldaps:// and ldapi:// are not upgraded)");
 	auto t = co_await net::connect(ioc,
 	  std::move(u),
 	  net::connect_options{ .timeout = options.timeout, .tls = options.tls, .tcp_no_delay = options.tcp_no_delay },
 	  mr);
 	if (!t) co_return std::unexpected(std::move(t.error()));
-	co_return connection(ioc, std::move(*t), options, mr);
+	connection c(ioc, std::move(*t), options, mr);
+	if (options.start_tls) {
+		if (auto r = co_await c.start_tls(options.tls, options.timeout); !r)
+			co_return std::unexpected(std::move(r.error()));
+	}
+	co_return std::move(c);
 }
 
 }// namespace jhetz::ldap

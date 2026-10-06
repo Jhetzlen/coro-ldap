@@ -157,6 +157,11 @@ on by default) with the network parts. It depends on Corosio and Capy
   Paged Results cookie across pages. Referrals are returned (in
   `error::referrals` and `search_stream::references()`), never chased;
   `url::parse_list` parses them.
+- StartTLS (step 7): `connection::start_tls(tls_options)` upgrades a plain
+  ldap:// connection in place (refused while operations are outstanding;
+  bytes received before the handshake are rejected; a server refusal keeps
+  the connection usable in clear), `connection_options::start_tls` does it
+  in `ldap::connect`, and `net::start_tls` is the transport-level piece.
 - `jhetz/ldap/controls.hpp`: typed request controls (`ldap::paged`,
   `manage_dsa_it`, `proxied_authorization`, or a raw `ldap::control`) in a
   `std::variant`, `to_control` / `append_controls` to encode them and
@@ -212,7 +217,7 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: StartTLS, SASL, schema validation.
+Not yet: SASL, schema validation.
 
 ## Build and test
 

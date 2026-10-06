@@ -131,4 +131,22 @@ boost::capy::task<result<transport>> connect(boost::corosio::io_context &ioc,
   connect_options options = {},
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
+class read_buffer;
+
+// Upgrades a plain TCP transport to TLS in place (StartTLS, RFC 4511
+// section 4.14; the LDAP exchange before it is the connection's job). The
+// same verification rules as ldaps:// apply (`options`; the name checked is
+// options.server_name, else t.host()). Fails without touching the
+// transport if it is not plain TCP (invalid_argument), if `pending` holds
+// unread bytes (decode_error: they arrived before the handshake, so they
+// were not protected; the plaintext injection of CVE-2011-0411), or if the
+// TLS configuration is bad. A failed handshake leaves the transport
+// unusable: close it. `timeout` bounds the handshake (nullopt: no limit).
+// `t` and `pending` must outlive the task; no other read or write may be in
+// flight on `t` meanwhile.
+boost::capy::task<result<void>> start_tls(transport &t,
+  const read_buffer &pending,
+  tls_options options,
+  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
+
 }// namespace jhetz::ldap::net

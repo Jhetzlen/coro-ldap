@@ -66,6 +66,12 @@ const std::pmr::string &transport::name() const noexcept
 	return impl_ ? impl_->name : none;
 }
 
+const std::pmr::string &transport::host() const noexcept
+{
+	static const std::pmr::string none(std::pmr::new_delete_resource());
+	return impl_ ? impl_->host : none;
+}
+
 void transport::cancel() noexcept
 {
 	if (!impl_) return;

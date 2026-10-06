@@ -19,11 +19,12 @@ namespace jhetz::ldap::net {
 // the TLS layer (which refers to the socket), then the sockets.
 struct transport::impl
 {
-	explicit impl(std::pmr::memory_resource *r) : mr(r), name(r) {}
+	explicit impl(std::pmr::memory_resource *r) : mr(r), name(r), host(r) {}
 
 	std::pmr::memory_resource *mr;// impl itself was allocated from it
 	kind type = kind::none;
 	std::pmr::string name;
+	std::pmr::string host;// the URL's host (for StartTLS verification); empty for custom streams
 	std::optional<boost::corosio::tcp_socket> tcp{};
 	std::optional<boost::corosio::local_stream_socket> local{};
 	std::optional<boost::corosio::tls_context> tls_context{};
