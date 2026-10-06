@@ -25,6 +25,7 @@ add_executable(jhetz_ldap_tests
     message_golden_tests.cpp
     message_tests.cpp
     pmr_tests.cpp
+    schema_tests.cpp
     url_tests.cpp
 )
 target_link_libraries(jhetz_ldap_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)
@@ -64,7 +65,7 @@ endif()
 # Each <target>_fuzz_replay runs the libFuzzer entry point of fuzz/<target>.cpp
 # on deterministic inputs, so the fuzz properties are checked by every
 # compiler, without libFuzzer.
-foreach(target ber_fuzz message_fuzz filter_fuzz dn_fuzz url_fuzz value_fuzz)
+foreach(target ber_fuzz message_fuzz filter_fuzz dn_fuzz url_fuzz value_fuzz schema_fuzz)
     add_executable(${target}_replay
         ${PROJECT_SOURCE_DIR}/fuzz/${target}.cpp
         ${PROJECT_SOURCE_DIR}/fuzz/${target}_replay.cpp

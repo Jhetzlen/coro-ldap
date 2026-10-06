@@ -438,6 +438,24 @@ With `schema_check::on_first_use`, the first typed operation for `T` runs
 `validate<T>` and fails with `client_errc::schema_mismatch` if the report has
 errors. Results are cached per connection.
 
+Implemented (#13, `schema.hpp`): `parse_attribute_type` /
+`parse_object_class` (a small RFC 4512 lexer: parentheses, quoted strings
+with `\27` / `\5C` escapes, bare words; keywords without an argument are
+known flags, every other keyword takes one value or a `( a $ b )` list).
+Lenient with real servers (quoted OIDs as Active Directory sends them,
+keywords in any case, no space before `)`); a definition whose OID is not
+an OID is skipped, NAMEs that are not descriptors are dropped (they could
+never be looked up). `server_schema` indexes names and OIDs
+case-insensitively, ignores attribute options on lookup and follows SUP for
+the syntax (depth-limited against cycles). The cardinality check is a
+warning (`schema_issue::is_error() == false`), the others are errors.
+Syntaxes per type come from `value_syntaxes<T>` (built in: integers →
+INTEGER / NumericString, bool → Boolean, dn → DN / NameAndOptionalUID,
+sys_seconds → GeneralizedTime; strings and binary accept any syntax), or a
+`syntaxes` member of `value_traits<T>`. `connection::load_schema()` reads
+the root DSE's `subschemaSubentry` (default `cn=Subschema`). The parser
+has a fuzz target (`schema_fuzz`) with OpenLDAP and AD seeds.
+
 ## 7. Async core and blocking facade
 
 Decision: **async-first**. The coroutine API is the library; the blocking API

@@ -6,6 +6,7 @@
 #include "net_test_support.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -113,4 +114,80 @@ TEST_CASE("typed: modify<T> and add(dn, T)", "[net][mapping]")
 		  == ldap::message{ 2,
 			ldap::add_request{ "uid=jdoe,ou=people,dc=example,dc=org",
 			  { { "objectClass", { "inetOrgPerson" } }, { "uid", { "jdoe" } }, { "uidNumber", { "2000" } } } } });
+}
+
+// ---------------------------------------------------------------- schema
+
+namespace {
+
+struct mismatched
+{
+	std::int64_t uid = 0;// uid is a DirectoryString: syntax error
+};
+
+ldap::message root_dse(std::int32_t id)
+{
+	return ldap::message{ id, ldap::search_result_entry{ "", { { "subschemaSubentry", { "cn=Subschema" } } } } };
+}
+
+ldap::message subschema(std::int32_t id)
+{
+	return ldap::message{ id,
+		ldap::search_result_entry{ "cn=Subschema",
+		  { { "attributeTypes",
+			  { "( 0.9.2342.19200300.100.1.1 NAME 'uid' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE )",
+				"( 0.9.2342.19200300.100.1.3 NAME 'mail' SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )",
+				"( 1.2.840.113556.1.2.102 NAME 'memberOf' SYNTAX 1.3.6.1.4.1.1466.115.121.1.12 )",
+				"( 1.3.6.1.1.1.1.0 NAME 'uidNumber' SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+				"( 2.5.18.2 NAME 'modifyTimestamp' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE "
+				"NO-USER-MODIFICATION )",
+				"not a definition" } },
+			{ "objectClasses", { "( 2.16.840.1.113730.3.2.2 NAME 'inetOrgPerson' STRUCTURAL )" } } } } };
+}
+
+}// namespace
+
+template<> constexpr auto ldap::schema<mismatched> = ldap::describe(ldap::field<&mismatched::uid>("uid"));
+
+TEST_CASE("typed: load_schema reads the subschema named by the root DSE", "[net][mapping][schema]")
+{
+	mock_ldap m;
+	m.serve({ answer({ root_dse(1), done_msg(1) }), answer({ subschema(2), done_msg(2) }) });
+	auto s = m.run(m.conn.load_schema());
+	REQUIRE(s.has_value());
+	CHECK(s->attribute_count() == 5);
+	CHECK(s->skipped() == 1);
+	CHECK(ldap::validate<account>(*s).ok());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 2);
+	const auto &root = std::get<ldap::search_request>(m.log.received[0].op);
+	CHECK(root.base_object == "");
+	CHECK(root.scope == ldap::search_scope::base_object);
+	CHECK(root.attributes == ldap::string_list{ "subschemaSubentry" });
+	const auto &sub = std::get<ldap::search_request>(m.log.received[1].op);
+	CHECK(sub.base_object == "cn=Subschema");
+	CHECK(sub.filter.to_string() == "(objectClass=subschema)");
+	CHECK(sub.attributes == ldap::string_list{ "attributeTypes", "objectClasses" });
+}
+
+TEST_CASE("typed: schema_check::on_first_use", "[net][mapping][schema]")
+{
+	mock_ldap m({ .schema_check = ldap::schema_check::on_first_use });
+	m.serve({ answer({ root_dse(1), done_msg(1) }),
+	  answer({ subschema(2), done_msg(2) }),
+	  answer({ account_entry(3, "a", "1000"), done_msg(3) }),
+	  answer({ done_msg(4) }) });
+	// The first typed search loads and checks the schema, then runs.
+	auto first = m.run(m.conn.search_as<account>({}));
+	REQUIRE(first.has_value());
+	CHECK(first->size() == 1);
+	// The second one does neither again.
+	CHECK(m.run(m.conn.search_as<account>({})).has_value());
+	// A type that does not match fails before anything is sent.
+	auto bad = m.run(m.conn.search_as<mismatched>({}));
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(bad.error().code == ldap::client_errc::schema_mismatch);
+	CHECK_THAT(std::string(bad.error().context), Catch::Matchers::ContainsSubstring("error: attribute uid: syntax"));
+	m.check_server();
+	CHECK(m.log.received.size() == 4);
 }

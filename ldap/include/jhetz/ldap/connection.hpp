@@ -83,6 +83,7 @@
 #include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/transport.hpp"
 #include "jhetz/ldap/sasl.hpp"
+#include "jhetz/ldap/schema.hpp"
 #include "jhetz/ldap/url.hpp"
 
 #include <boost/capy/task.hpp>
@@ -96,9 +97,21 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <typeindex>
 #include <vector>
 
 namespace jhetz::ldap {
+
+// When typed operations check their struct against the server's schema
+// (DESIGN.md section 6).
+enum class schema_check {
+	off,
+	// The first search_as / modify<T> / add(dn, T) for each T loads the
+	// subschema (once per connection) and runs validate<T>; errors in the
+	// report fail the operation with client_errc::schema_mismatch (the
+	// report in the context). The result is cached per connection and T.
+	on_first_use,
+};
 
 struct connection_options
 {
@@ -123,6 +136,7 @@ struct connection_options
 	// right after connecting (using `tls` and `timeout`), and fail if that
 	// does not work. Not allowed with ldaps:// or ldapi:// (invalid_url).
 	bool start_tls = false;
+	ldap::schema_check schema_check = ldap::schema_check::off;
 };
 
 // A search, as a plain aggregate for designated initializers (DESIGN.md
@@ -346,6 +360,11 @@ class connection
 	// "u:<user>", or "" when anonymous.
 	boost::capy::task<result<std::string>> who_am_i(request_controls controls = {});
 
+	// Reads the server's subschema (RFC 4512): the root DSE's
+	// subschemaSubentry (cn=Subschema if it names none), then that entry's
+	// attributeTypes and objectClasses. See schema.hpp.
+	boost::capy::task<result<server_schema>> load_schema();
+
 	// Typed operations (mapping.hpp, DESIGN.md section 4).
 	//
 	// search_as<T>: a search whose attribute list is T's descriptor's (any
@@ -355,6 +374,8 @@ class connection
 	// the search, the entry and the attribute).
 	template<described T> boost::capy::task<result<std::vector<T>>> search_as(search_params request)
 	{
+		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c)
+			co_return std::unexpected(std::move(c.error()));
 		request.attributes = attribute_names<T>();
 		request.filter = narrow_filter<T>(std::move(request.filter));
 		const std::string base = request.base.empty() ? std::string("\"\"") : std::string(request.base.to_string());
@@ -375,6 +396,8 @@ class connection
 	boost::capy::task<result<response>>
 	  modify(dn object, std::vector<change<T>> changes, request_controls controls = {})
 	{
+		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c)
+			co_return std::unexpected(std::move(c.error()));
 		modify_params p{ .object = std::move(object), .controls = std::move(controls) };
 		p.changes.reserve(changes.size());
 		for (auto &c : changes) p.changes.push_back(std::move(c.wire));
@@ -385,6 +408,8 @@ class connection
 	// read_only members, objectClass from the descriptor).
 	template<described T> boost::capy::task<result<response>> add(dn entry, T value, request_controls controls = {})
 	{
+		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c)
+			co_return std::unexpected(std::move(c.error()));
 		co_return co_await add(
 		  add_params{ .entry = std::move(entry), .attributes = to_attributes(value), .controls = std::move(controls) });
 	}
@@ -420,6 +445,10 @@ class connection
   private:
 	friend class ldap::search_stream;
 	friend class ldap::paged_search;
+
+	// schema_check::on_first_use for one type (see above).
+	boost::capy::task<result<void>> check_schema(std::type_index type,
+	  schema_report (*validate_type)(const server_schema &));
 
 	impl *impl_ = nullptr;// reference counted; allocated from the resource it records
 };

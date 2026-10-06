@@ -14,6 +14,7 @@
 #include <array>
 #include <cstddef>
 #include <deque>
+#include <memory>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
@@ -21,6 +22,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <typeindex>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -147,6 +149,7 @@ struct connection::impl
 	  : ex(ioc.get_executor()), mr(mr_), transport(std::move(t)), buf(mr_), max_message_size(options.max_message_size),
 		default_timeout(options.operation_timeout), pending(mr_), abandoned(mr_), outbox(mr_), scratch(mr_)
 	{
+		schema_mode = options.schema_check;
 		write_idle.set();
 		reader_idle.set();
 	}
@@ -178,6 +181,10 @@ struct connection::impl
 	capy::async_event reader_idle{};// set while the reader is not running
 	// StartTLS in progress: no other request may be sent (RFC 4511 4.14.1).
 	bool upgrading = false;
+	// schema_check::on_first_use: the loaded schema and the types checked.
+	ldap::schema_check schema_mode = ldap::schema_check::off;
+	std::shared_ptr<const server_schema> schema{};
+	std::vector<std::type_index> schema_checked{};
 	// Unsolicited notifications are decoded here, then released.
 	std::pmr::monotonic_buffer_resource scratch;
 
@@ -896,6 +903,79 @@ capy::task<result<std::string>> connection::who_am_i(request_controls controls)
 	auto r = co_await extended({ .name = std::string(who_am_i_oid), .controls = std::move(controls) });
 	if (!r) co_return std::unexpected(std::move(r.error()));
 	co_return r->value ? std::string(*r->value) : std::string();
+}
+
+// ---------------------------------------------------------------- schema
+
+namespace {
+
+	// The one entry of a base-scope search (nullopt if none came back).
+	capy::task<result<std::optional<entry>>> read_one(impl_ref self, search_params p)
+	{
+		auto s = start_search(*self, p, std::pmr::get_default_resource());
+		if (!s) co_return std::unexpected(std::move(s.error()));
+		std::optional<entry> found;
+		while (true) {
+			auto e = co_await s->next();
+			if (!e) co_return std::unexpected(std::move(e.error()));
+			if (!*e) co_return found;
+			if (!found) found = std::move(**e);
+		}
+	}
+
+	capy::task<result<server_schema>> load_schema_impl(impl_ref self)
+	{
+		const std::string context = "load schema";
+		auto root =
+		  co_await read_one(self, { .scope = search_scope::base_object, .attributes = { "subschemaSubentry" } });
+		if (!root) co_return std::unexpected(detail::with_context(std::move(root.error()), context));
+		std::string where = "cn=Subschema";
+		if (*root)
+			if (const auto *v = (*root)->find("subschemaSubentry"); v != nullptr && !v->empty())
+				where = std::string(v->front());
+		auto base = dn::parse(where);
+		if (!base)
+			co_return fail(
+			  client_errc::invalid_dn, context + ": the root DSE names an invalid subschemaSubentry: " + where);
+		auto sub = co_await read_one(self,
+		  { .base = std::move(*base),
+			.scope = search_scope::base_object,
+			.filter = filters::attr("objectClass") == "subschema",
+			.attributes = { "attributeTypes", "objectClasses" } });
+		if (!sub) co_return std::unexpected(detail::with_context(std::move(sub.error()), context));
+		if (!*sub) co_return fail(errc::no_such_object, context + ": no subschema entry at " + where);
+		static const std::pmr::vector<std::pmr::string> none;
+		const auto *types = (*sub)->find("attributeTypes");
+		const auto *classes = (*sub)->find("objectClasses");
+		co_return server_schema::parse(types ? *types : none, classes ? *classes : none);
+	}
+
+}// namespace
+
+capy::task<result<server_schema>> connection::load_schema()
+{
+	if (impl_ == nullptr) co_return std::unexpected(not_connected("load schema"));
+	co_return co_await load_schema_impl(impl_ref(impl_));
+}
+
+capy::task<result<void>> connection::check_schema(std::type_index type,
+  schema_report (*validate_type)(const server_schema &))
+{
+	if (impl_ == nullptr || impl_->schema_mode == ldap::schema_check::off) co_return result<void>{};
+	impl_ref self(impl_);
+	if (std::find(self->schema_checked.begin(), self->schema_checked.end(), type) != self->schema_checked.end())
+		co_return result<void>{};
+	if (!self->schema) {
+		auto s = co_await load_schema_impl(self);
+		if (!s) co_return std::unexpected(std::move(s.error()));
+		self->schema = std::make_shared<const server_schema>(std::move(*s));
+	}
+	const schema_report report = validate_type(*self->schema);
+	if (!report.ok())
+		co_return fail(
+		  client_errc::schema_mismatch, "schema check of " + std::string(type.name()) + ":\n" + report.to_string());
+	self->schema_checked.push_back(type);
+	co_return result<void>{};
 }
 
 // ---------------------------------------------------------------- StartTLS

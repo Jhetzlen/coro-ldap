@@ -182,6 +182,13 @@ on by default) with the network parts. It depends on Corosio and Capy
   `search_as<T>`, `modify<T>(dn, changes)` and `add(dn, value)`. Mistakes
   (unmapped or read_only member, wrong value type, invalid names) fail to
   compile; `tests/compile/` checks each.
+- `jhetz/ldap/schema.hpp` (#13): runtime schema validation. A lenient
+  RFC 4512 parser for the subschema's attributeTypes / objectClasses,
+  `server_schema`, `validate<T>(schema)` listing every issue (unknown
+  attribute or object class, syntax the member's type cannot read, a
+  writable member on a NO-USER-MODIFICATION attribute; single member on a
+  multi-valued attribute as a warning), `connection::load_schema()` and
+  `connection_options::schema_check = schema_check::on_first_use`.
 - `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.
@@ -229,7 +236,7 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: other SASL mechanisms, schema validation, a connection pool.
+Not yet: other SASL mechanisms, a connection pool.
 
 ## Build and test
 
