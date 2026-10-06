@@ -78,6 +78,7 @@
 #include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/filter.hpp"
+#include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/message.hpp"
 #include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/transport.hpp"
@@ -328,6 +329,49 @@ class connection
 	// The authorization identity of this connection (RFC 4532): "dn:<dn>",
 	// "u:<user>", or "" when anonymous.
 	boost::capy::task<result<std::string>> who_am_i(request_controls controls = {});
+
+	// Typed operations (mapping.hpp, DESIGN.md section 4).
+	//
+	// search_as<T>: a search whose attribute list is T's descriptor's (any
+	// `request.attributes` are replaced) and whose filter is narrowed to T's
+	// object classes, if it declares some. Each entry is decoded to T; the
+	// first entry that does not decode fails the whole call (its error names
+	// the search, the entry and the attribute).
+	template<described T> boost::capy::task<result<std::vector<T>>> search_as(search_params request)
+	{
+		request.attributes = attribute_names<T>();
+		request.filter = narrow_filter<T>(std::move(request.filter));
+		const std::string base = request.base.empty() ? std::string("\"\"") : std::string(request.base.to_string());
+		auto entries = co_await search(std::move(request));
+		if (!entries) co_return std::unexpected(std::move(entries.error()));
+		std::vector<T> out;
+		out.reserve(entries->size());
+		for (const auto &e : *entries) {
+			auto v = ldap::decode<T>(e);
+			if (!v) co_return std::unexpected(detail::with_context(std::move(v.error()), "search " + base));
+			out.push_back(std::move(*v));
+		}
+		co_return out;
+	}
+
+	// modify<T>: changes built with ldap::replace / add / remove<&T::member>.
+	template<described T>
+	boost::capy::task<result<response>>
+	  modify(dn object, std::vector<change<T>> changes, request_controls controls = {})
+	{
+		modify_params p{ .object = std::move(object), .controls = std::move(controls) };
+		p.changes.reserve(changes.size());
+		for (auto &c : changes) p.changes.push_back(std::move(c.wire));
+		co_return co_await modify(std::move(p));
+	}
+
+	// add(dn, value): the attributes of ldap::to_attributes(value) (no
+	// read_only members, objectClass from the descriptor).
+	template<described T> boost::capy::task<result<response>> add(dn entry, T value, request_controls controls = {})
+	{
+		co_return co_await add(
+		  add_params{ .entry = std::move(entry), .attributes = to_attributes(value), .controls = std::move(controls) });
+	}
 
 	// Sends an UnbindRequest, waits until it is written, and closes the
 	// connection (RFC 4511 section 4.3: there is no response). Outstanding

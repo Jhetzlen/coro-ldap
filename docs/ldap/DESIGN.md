@@ -228,39 +228,64 @@ Field shape decides cardinality:
 | `std::optional<T>` | optional, single value | more than one value |
 | `std::vector<T>` | zero or more values | a value fails to convert |
 
+(A value that fails to convert is `conversion_failed` for every shape.)
+
 Value conversion is an extension point, like `std::formatter`:
 
 ```cpp
-template<> struct ldap::value_traits<my_enum> {
-    static constexpr auto syntaxes = {ldap::syntax::directory_string};  // for runtime validation
-    static ldap::result<my_enum> decode(std::span<const std::byte>);
-    static ldap::bytes encode(my_enum);
+template<> struct jhetz::ldap::value_traits<my_type> {
+    static ldap::result<my_type> decode(std::string_view raw);  // conversion_failed on bad input
+    static std::string encode(const my_type &v);
 };
 ```
 
-Built-in: `std::string`, integers, `bool`, `ldap::dn`, `ldap::bytes`,
-`std::chrono::sys_seconds` (GeneralizedTime), enums via a name table.
+Built-in: `std::string`, `std::pmr::string`, integers (decimal, range
+checked), `bool` (TRUE / FALSE), `ldap::dn`, `ldap::binary`
+(`std::vector<std::byte>`, a single binary value; `std::vector<ldap::binary>`
+for several), `std::chrono::sys_seconds` (GeneralizedTime: every RFC 4517
+form decodes — minutes and seconds optional, fractions of the last unit,
+`Z` or an offset; it encodes as `YYYYMMDDHHMMSSZ`), and enums with an
+`ldap::enum_names<E>` table. A `syntaxes` member for runtime validation
+comes with #13.
 
-Usage:
+Usage (implemented, #9, `mapping.hpp` and `connection.hpp`):
 
 ```cpp
-// Attribute list is derived from the descriptor.
+// Attribute list from the descriptor; filter narrowed to its object classes.
 ldap::result<std::vector<person>> people = co_await conn.search_as<person>({.base = base, .filter = f});
 
 co_await conn.modify<person>(dn, {
-    ldap::replace(&person::mail, "new@example.org"),
-    ldap::add(&person::member_of, group_dn),
+    ldap::replace<&person::mail>("new@example.org"),
+    ldap::add<&person::member_of>(group_dn),
+    ldap::remove<&person::mail>(),
 });
-co_await conn.add(dn, person{...});   // read_only fields are skipped
+co_await conn.add(dn, person{...});   // read_only fields skipped, objectClass written
+auto f = ldap::filters::field<&person::uid_number>() >= 1000;   // typed value
+ldap::result<person> p = ldap::decode<person>(entry);
 ```
 
-Compile-time guarantees (prototype-checked):
-- the attribute list and names come only from the descriptor;
-- `modify` on a member that is not in the descriptor is a `static_assert`
-  failure;
-- Planned: member type and value type must match
-  (`replace(&person::created, "x")` does not compile).
-- Planned: `modify` on a `read_only` field is a compile error.
+The member is a template argument (`replace<&person::mail>(v)`), not a
+function argument as first sketched (`replace(&person::mail, v)`): a member
+pointer passed as an argument is a runtime value, so "not in the descriptor"
+and "read_only" could not be compile errors.
+
+Compile-time guarantees (all implemented, each with a compile test in
+`tests/compile/`):
+- the attribute list and names come only from the descriptor, and names
+  are validated (`field<&T::m>("not valid!")` does not compile);
+- every field of a descriptor belongs to the same struct;
+- a member type without `value_traits` does not compile;
+- a change to a member that is not in the descriptor is a `static_assert`;
+- a change to a `read_only` member is a `static_assert`;
+- the value type must match the member (`replace<&person::created>("x")`
+  and `field<&person::uid_number>() == "x"` do not compile), and a
+  single-valued member takes no range of values;
+- changes of another struct cannot be passed to `modify<person>`;
+- `add` needs `object_class(...)` or an `objectClass` member.
+
+Errors name the entry and attribute: `search ou=people,dc=example,dc=org:
+entry uid=b,ou=people,dc=example,dc=org: attribute uidNumber: not an
+integer: "x"`. A mapping error fails `search_as` but not the connection.
 
 The untyped `ldap::entry` (dn + attribute → values) stays available for
 exploring unknown data; `ldap::decode<T>(entry)` converts one explicitly.
