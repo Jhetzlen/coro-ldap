@@ -162,6 +162,10 @@ on by default) with the network parts. It depends on Corosio and Capy
   bytes received before the handshake are rejected; a server refusal keeps
   the connection usable in clear), `connection_options::start_tls` does it
   in `ldap::connect`, and `net::start_tls` is the transport-level piece.
+- SASL (#11, `jhetz/ldap/sasl.hpp`): `connection::sasl_bind(mechanism)`
+  drives the saslBindInProgress exchange; `sasl_external` (identity from a
+  TLS client certificate or ldapi://, optional authorization identity) is
+  built in, and `sasl_mechanism` is the interface for others.
 - `jhetz/ldap/controls.hpp`: typed request controls (`ldap::paged`,
   `manage_dsa_it`, `proxied_authorization`, or a raw `ldap::control`) in a
   `std::variant`, `to_control` / `append_controls` to encode them and
@@ -217,7 +221,7 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: SASL, schema validation.
+Not yet: other SASL mechanisms, schema validation, the blocking facade.
 
 ## Build and test
 
