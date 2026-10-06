@@ -231,6 +231,7 @@ TEST_CASE("connect timeout semantics", "[net][connect][tcp][timeout]")
 		auto t = connect_to(ioc, "ldap://127.0.0.1:1", { .timeout = limit });
 		REQUIRE_FALSE(t.has_value());
 		CHECK(t.error().code == capy::cond::timeout);
+		CHECK(t.error().code == ldap::cond::timeout);
 		CHECK(std::string(t.error().context)
 			  == "connect ldap://127.0.0.1:1: the connect timeout (" + std::to_string(limit.count())
 				   + " ms) is not positive");
@@ -373,6 +374,7 @@ TEST_CASE("connect timeout while the TCP handshake cannot complete", "[net][conn
 	const auto elapsed = std::chrono::steady_clock::now() - start;
 	REQUIRE_FALSE(t.has_value());
 	CHECK(t.error().code == capy::cond::timeout);
+	CHECK(t.error().code == ldap::cond::timeout);
 	CHECK_THAT(std::string(t.error().context), ContainsSubstring(": tcp connect 127.0.0.1:"));
 	CHECK_THAT(std::string(t.error().context), ContainsSubstring("gave up after the 300 ms connect timeout"));
 	CHECK(elapsed >= std::chrono::milliseconds(250));
@@ -530,6 +532,7 @@ TEST_CASE("ldaps:// verification failures", "[net][connect][tls]")
 	}
 	drive(ioc);
 	CHECK(t->error().code);// the handshake's own error code is kept
+	CHECK(t->error().code == ldap::cond::tls_failure);
 	CHECK_THAT(server.get(), StartsWith("server handshake: "));
 }
 
@@ -605,6 +608,7 @@ TEST_CASE("ldaps:// handshake timeout against a silent server", "[net][connect][
 	const auto elapsed = std::chrono::steady_clock::now() - start;
 	REQUIRE_FALSE(t.has_value());
 	CHECK(t.error().code == capy::cond::timeout);
+	CHECK(t.error().code == ldap::cond::timeout);
 	CHECK(std::string(t.error().context)
 		  == "connect " + srv.url("ldaps") + ": tls handshake: gave up after the 300 ms connect timeout");
 	CHECK(elapsed >= std::chrono::milliseconds(250));

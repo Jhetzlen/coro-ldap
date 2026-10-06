@@ -256,6 +256,7 @@ TEST_CASE("connection: bind errors keep the connection usable", "[net][connectio
 	auto bad = m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "wrong"));
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == errc::invalid_credentials);
+	CHECK(bad.error().code == ldap::cond::auth_failed);
 	CHECK(bad.error().diagnostic == "bad password");
 	CHECK(bad.error().context == "bind cn=admin,dc=example,dc=org");
 	CHECK(m.conn.is_open());
@@ -275,6 +276,7 @@ TEST_CASE("connection: anonymous and unauthenticated binds", "[net][connection]"
 	auto unauth = m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, ""));
 	REQUIRE_FALSE(unauth.has_value());
 	CHECK(unauth.error().code == client_errc::unauthenticated_bind);
+	CHECK(unauth.error().code == ldap::cond::auth_failed);
 	CHECK(m.log.received.empty());
 	CHECK(m.conn.is_open());
 
@@ -350,6 +352,7 @@ TEST_CASE("connection: search result errors", "[net][connection]")
 	auto r = m.run(m.conn.search({ .base = ldap::dn{ "ou=missing,dc=example,dc=org" } }));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == errc::no_such_object);
+	CHECK(r.error().code == ldap::cond::not_found);
 	CHECK(r.error().matched_dn == "dc=example,dc=org");
 	CHECK(r.error().diagnostic == "no such entry");
 	CHECK(r.error().context == "search ou=missing,dc=example,dc=org");
@@ -643,6 +646,7 @@ TEST_CASE("connection: protocol violations close the connection", "[net][connect
 			auto r = m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
 			REQUIRE_FALSE(r.has_value());
 			CHECK(r.error().code == c.code);
+			CHECK(r.error().code == ldap::cond::protocol_error);
 			if (c.context != nullptr) CHECK(r.error().context == c.context);
 			CHECK_FALSE(m.conn.is_open());
 			m.check_server();
@@ -687,6 +691,7 @@ TEST_CASE("connection: server closing mid-search", "[net][connection]")
 		auto r = m.run(m.conn.search(people_search()));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == capy::cond::eof);
+		CHECK(r.error().code == ldap::cond::connection_lost);
 		CHECK(r.error().context == "search ou=people,dc=example,dc=org: read mock: connection closed");
 		CHECK_FALSE(m.conn.is_open());
 		m.check_server();
@@ -711,6 +716,7 @@ TEST_CASE("connection: server closing mid-search", "[net][connection]")
 		auto later = m.run(m.conn.simple_bind(ldap::dn{}, ""));
 		REQUIRE_FALSE(later.has_value());
 		CHECK(later.error().code == client_errc::not_connected);
+		CHECK(later.error().code == ldap::cond::connection_lost);
 		CHECK_THAT(std::string(later.error().context), ContainsSubstring("connection closed after 10 of"));
 	}
 }
@@ -726,6 +732,7 @@ TEST_CASE("connection: unsolicited notifications and intermediate responses", "[
 		auto r = m.run(m.conn.search(people_search()));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == errc::unavailable);
+		CHECK(r.error().code == ldap::cond::busy_or_unavailable);
 		CHECK(r.error().diagnostic == "shutting down");
 		CHECK(r.error().context == "search ou=people,dc=example,dc=org: notice of disconnection");
 		CHECK_FALSE(m.conn.is_open());
@@ -780,6 +787,7 @@ TEST_CASE("connection: a cancelled operation closes the connection", "[net][conn
 	auto &r = out.get();
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == capy::cond::canceled);
+	CHECK(r.error().code == ldap::cond::canceled);
 	CHECK_FALSE(m.conn.is_open());
 	m.check_server();
 }
@@ -964,6 +972,7 @@ TEST_CASE("connection: ldap::connect failures", "[net][connection]")
 	auto c = run(ioc, ldap::connect(ioc, *u));
 	REQUIRE_FALSE(c.has_value());
 	CHECK(c.error().code == std::errc::connection_refused);
+	CHECK(c.error().code == ldap::cond::busy_or_unavailable);
 	CHECK_THAT(std::string(c.error().context), StartsWith("connect ldap://127.0.0.1:"));
 
 	auto bad = ldap::url::parse("ldap://127.0.0.1:1/??sub?(cn=x)?!unknown-ext");

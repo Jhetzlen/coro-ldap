@@ -2,9 +2,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cerrno>
+#include <cstddef>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 namespace ldap = jhetz::ldap;
 
@@ -152,4 +157,182 @@ TEST_CASE("ldap::error message and helpers", "[error]")
 
 	ldap::error copy = s;
 	CHECK(copy == s);
+}
+
+// ---------------------------------------------------------------- ldap::cond
+
+namespace {
+
+constexpr ldap::cond all_conds[] = {
+	ldap::cond::not_found,
+	ldap::cond::auth_failed,
+	ldap::cond::timeout,
+	ldap::cond::canceled,
+	ldap::cond::connection_lost,
+	ldap::cond::tls_failure,
+	ldap::cond::protocol_error,
+	ldap::cond::busy_or_unavailable,
+	ldap::cond::access_denied,
+	ldap::cond::already_exists,
+	ldap::cond::invalid_input,
+};
+
+// The one condition `ec` matches, or nullopt; fails the test if it matches several.
+std::optional<ldap::cond> cond_of(std::error_code ec)
+{
+	std::optional<ldap::cond> found;
+	for (auto c : all_conds) {
+		if (ec != c) continue;
+		if (found)
+			FAIL_CHECK(ec.message() << " matches both " << static_cast<int>(*found) << " and " << static_cast<int>(c));
+		found = c;
+	}
+	return found;
+}
+
+// Stands in for Capy's and Corosio's categories, which jhetz::ldap does not link.
+class named_category final : public std::error_category
+{
+  public:
+	explicit named_category(const char *name) : name_(name) {}
+	const char *name() const noexcept override { return name_; }
+	std::string message(int value) const override { return std::string(name_) + " " + std::to_string(value); }
+
+  private:
+	const char *name_;
+};
+
+}// namespace
+
+TEST_CASE("every errc maps to its documented condition", "[error][cond]")
+{
+	using ldap::cond;
+	using ldap::errc;
+	const std::vector<std::pair<errc, std::optional<cond>>> table{
+		{ errc::operations_error, std::nullopt },
+		{ errc::protocol_error, cond::protocol_error },
+		{ errc::time_limit_exceeded, cond::timeout },
+		{ errc::size_limit_exceeded, std::nullopt },
+		{ errc::compare_false, std::nullopt },
+		{ errc::compare_true, std::nullopt },
+		{ errc::auth_method_not_supported, cond::auth_failed },
+		{ errc::stronger_auth_required, cond::access_denied },
+		{ errc::referral, std::nullopt },
+		{ errc::admin_limit_exceeded, std::nullopt },
+		{ errc::unavailable_critical_extension, std::nullopt },
+		{ errc::confidentiality_required, cond::access_denied },
+		{ errc::sasl_bind_in_progress, std::nullopt },
+		{ errc::no_such_attribute, cond::not_found },
+		{ errc::undefined_attribute_type, cond::invalid_input },
+		{ errc::inappropriate_matching, cond::invalid_input },
+		{ errc::constraint_violation, cond::invalid_input },
+		{ errc::attribute_or_value_exists, cond::already_exists },
+		{ errc::invalid_attribute_syntax, cond::invalid_input },
+		{ errc::no_such_object, cond::not_found },
+		{ errc::alias_problem, std::nullopt },
+		{ errc::invalid_dn_syntax, cond::invalid_input },
+		{ errc::alias_dereferencing_problem, std::nullopt },
+		{ errc::inappropriate_authentication, cond::auth_failed },
+		{ errc::invalid_credentials, cond::auth_failed },
+		{ errc::insufficient_access_rights, cond::access_denied },
+		{ errc::busy, cond::busy_or_unavailable },
+		{ errc::unavailable, cond::busy_or_unavailable },
+		{ errc::unwilling_to_perform, std::nullopt },
+		{ errc::loop_detect, std::nullopt },
+		{ errc::naming_violation, cond::invalid_input },
+		{ errc::object_class_violation, cond::invalid_input },
+		{ errc::not_allowed_on_non_leaf, std::nullopt },
+		{ errc::not_allowed_on_rdn, std::nullopt },
+		{ errc::entry_already_exists, cond::already_exists },
+		{ errc::object_class_mods_prohibited, std::nullopt },
+		{ errc::affects_multiple_dsas, std::nullopt },
+		{ errc::other, std::nullopt },
+	};
+	CHECK(table.size() == 38);// every non-success resultCode
+	for (const auto &[e, expected] : table) {
+		INFO("errc " << static_cast<int>(e) << " " << std::error_code(e).message());
+		CHECK(cond_of(e) == expected);
+	}
+	// Unknown result codes (servers may send any value) match nothing.
+	CHECK(cond_of(std::error_code(4711, ldap::result_category())) == std::nullopt);
+}
+
+TEST_CASE("every client_errc maps to its documented condition", "[error][cond]")
+{
+	using ldap::client_errc;
+	using ldap::cond;
+	const std::vector<std::pair<client_errc, std::optional<cond>>> table{
+		{ client_errc::decode_error, cond::protocol_error },
+		{ client_errc::message_too_large, cond::protocol_error },
+		{ client_errc::nesting_too_deep, cond::protocol_error },
+		{ client_errc::unsupported_tag, cond::protocol_error },
+		{ client_errc::integer_overflow, cond::protocol_error },
+		{ client_errc::invalid_filter, cond::invalid_input },
+		{ client_errc::missing_attribute, std::nullopt },
+		{ client_errc::too_many_values, std::nullopt },
+		{ client_errc::conversion_failed, std::nullopt },
+		{ client_errc::schema_mismatch, std::nullopt },
+		{ client_errc::would_deadlock, std::nullopt },
+		{ client_errc::unexpected_tag, cond::protocol_error },
+		{ client_errc::unsupported_operation, cond::protocol_error },
+		{ client_errc::invalid_dn, cond::invalid_input },
+		{ client_errc::invalid_attribute, cond::invalid_input },
+		{ client_errc::encode_error, cond::invalid_input },
+		{ client_errc::invalid_url, cond::invalid_input },
+		{ client_errc::unexpected_response, cond::protocol_error },
+		{ client_errc::not_connected, cond::connection_lost },
+		{ client_errc::operation_in_progress, std::nullopt },
+		{ client_errc::unauthenticated_bind, cond::auth_failed },
+	};
+	// Every value, in order: a new client_errc must be added here.
+	REQUIRE(table.size() == static_cast<std::size_t>(client_errc::unauthenticated_bind));
+	for (std::size_t i = 0; i < table.size(); ++i) {
+		const auto &[e, expected] = table[i];
+		INFO("client_errc " << static_cast<int>(e) << " " << std::error_code(e).message());
+		CHECK(static_cast<std::size_t>(e) == i + 1);
+		CHECK(cond_of(e) == expected);
+	}
+}
+
+TEST_CASE("system, Capy and TLS codes map to conditions", "[error][cond]")
+{
+	using ldap::cond;
+	CHECK(cond_of(std::make_error_code(std::errc::timed_out)) == cond::timeout);
+	CHECK(cond_of(std::make_error_code(std::errc::operation_canceled)) == cond::canceled);
+	CHECK(cond_of(std::make_error_code(std::errc::connection_reset)) == cond::connection_lost);
+	CHECK(cond_of(std::make_error_code(std::errc::broken_pipe)) == cond::connection_lost);
+	CHECK(cond_of(std::make_error_code(std::errc::connection_refused)) == cond::busy_or_unavailable);
+	CHECK(cond_of(std::make_error_code(std::errc::host_unreachable)) == cond::busy_or_unavailable);
+	CHECK(cond_of(std::make_error_code(std::errc::permission_denied)) == cond::access_denied);
+	CHECK(cond_of(std::make_error_code(std::errc::no_such_file_or_directory)) == cond::invalid_input);
+	CHECK(cond_of(std::make_error_code(std::errc::invalid_argument)) == cond::invalid_input);
+	CHECK(cond_of(std::make_error_code(std::errc::not_enough_memory)) == std::nullopt);
+	// The system category, as the network layer reports errno values.
+	CHECK(cond_of(std::error_code(ETIMEDOUT, std::system_category())) == cond::timeout);
+	CHECK(cond_of(std::error_code(ECONNRESET, std::system_category())) == cond::connection_lost);
+
+	const named_category capy("boost.capy");
+	CHECK(cond_of(std::error_code(1, capy)) == cond::connection_lost);// eof
+	CHECK(cond_of(std::error_code(4, capy)) == cond::connection_lost);// stream_truncated
+	CHECK(cond_of(std::error_code(3, capy)) == std::nullopt);// test_failure
+	const named_category openssl("corosio.openssl");
+	CHECK(cond_of(std::error_code(0x0A000086, openssl)) == cond::tls_failure);
+	const named_category other("something.else");
+	CHECK(cond_of(std::error_code(1, other)) == std::nullopt);
+	CHECK(cond_of(std::error_code{}) == std::nullopt);
+}
+
+TEST_CASE("ldap::cond category", "[error][cond]")
+{
+	CHECK(std::string(ldap::cond_category().name()) == "ldap.cond");
+	for (auto c : all_conds) {
+		const std::error_condition ec = c;
+		CHECK(&ec.category() == &ldap::cond_category());
+		CHECK_FALSE(ec.message().empty());
+		CHECK(ec.message().find("unknown") == std::string::npos);
+	}
+	// Works through ldap::error, as callers write it.
+	const ldap::error e = ldap::make_error(ldap::errc::invalid_credentials, "bind cn=x");
+	CHECK(e.code == ldap::cond::auth_failed);
+	CHECK(e.code != ldap::cond::not_found);
 }

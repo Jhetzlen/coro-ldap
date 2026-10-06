@@ -99,12 +99,42 @@ enum class client_errc : int {
 	unauthenticated_bind,// simple bind with a name and an empty password (RFC 4513 section 5.1.2)
 };
 
+// Error conditions: what an error means, across categories (DESIGN.md
+// section 5), so callers test meaning rather than exact codes:
+//
+//   if (r.error().code == ldap::cond::auth_failed) ...
+//
+// Each code maps to at most one condition; codes with no clear meaning for
+// a caller (size_limit_exceeded, referral, other, ...) match none. The full
+// table is in DESIGN.md section 5. Codes from outside this library are
+// matched too: system codes through their generic condition
+// (std::errc::timed_out, connection_reset, ...), Capy's by category name
+// ("boost.capy": eof, stream_truncated; canceled and timeout through their
+// generic conditions) and TLS errors by category ("corosio.openssl"), so
+// this header needs neither Capy nor Corosio.
+enum class cond : int {
+	not_found = 1,// the entry (or attribute) does not exist
+	auth_failed,// bad credentials, or an authentication method refused
+	timeout,// a client deadline or the server's time limit
+	canceled,// cancelled through a stop token
+	connection_lost,// the connection closed or broke (or was never open)
+	tls_failure,// TLS handshake or record layer failure
+	protocol_error,// malformed or unexpected data from the peer
+	busy_or_unavailable,// the server is busy, unavailable or unreachable: retry later or elsewhere
+	access_denied,// not allowed with the current authorization
+	already_exists,// the entry or value already exists
+	invalid_input,// a request the client or the server rejected as malformed
+};
+
 const std::error_category &result_category() noexcept;// "ldap.result"
 const std::error_category &client_category() noexcept;// "ldap.client"
+const std::error_category &cond_category() noexcept;// "ldap.cond"
 
 inline std::error_code make_error_code(errc e) noexcept { return { static_cast<int>(e), result_category() }; }
 
 inline std::error_code make_error_code(client_errc e) noexcept { return { static_cast<int>(e), client_category() }; }
+
+inline std::error_condition make_error_condition(cond c) noexcept { return { static_cast<int>(c), cond_category() }; }
 
 // An error: its code plus what the server and the client said about it.
 //
@@ -158,5 +188,9 @@ template<> struct std::is_error_code_enum<jhetz::ldap::errc> : std::true_type
 };
 
 template<> struct std::is_error_code_enum<jhetz::ldap::client_errc> : std::true_type
+{
+};
+
+template<> struct std::is_error_condition_enum<jhetz::ldap::cond> : std::true_type
 {
 };
