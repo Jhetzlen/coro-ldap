@@ -8,6 +8,7 @@
 //   -b DN        search base (default: the URL's DN, else the root DSE)
 //   -s SCOPE     base | one | sub | children (default: the URL's, else sub)
 //   -z N         size limit (entries), -l N time limit (seconds)
+//   --page N     fetch the results in pages of N entries (RFC 2696)
 //   --ca-file F  CA certificates (PEM) for ldaps://
 //   --insecure   do not verify the server certificate (testing only)
 //
@@ -66,6 +67,7 @@ struct options
 	std::optional<std::string> filter{};
 	std::vector<std::string> attributes{};
 	std::int32_t size_limit = 0;
+	std::int32_t page_size = 0;
 	std::int32_t time_limit = 0;
 	std::string ca_file{};
 	bool insecure = false;
@@ -76,7 +78,7 @@ struct options
 	if (!problem.empty()) println(stderr, "ldapsearch: {}", problem);
 	println(stderr,
 	  "usage: ldapsearch [-D binddn] [-w password] [-b base] [-s base|one|sub|children]\n"
-	  "                  [-z sizelimit] [-l timelimit] [--ca-file file] [--insecure]\n"
+	  "                  [-z sizelimit] [-l timelimit] [--page size] [--ca-file file] [--insecure]\n"
 	  "                  URL [filter [attribute...]]");
 	std::exit(2);
 }
@@ -122,7 +124,10 @@ options parse_args(int argc, char **argv)
 			o.size_limit = to_int(value(), "-z");
 		else if (a == "-l")
 			o.time_limit = to_int(value(), "-l");
-		else if (a == "--ca-file")
+		else if (a == "--page") {
+			o.page_size = to_int(value(), "--page");
+			if (o.page_size == 0) usage("--page must be positive");
+		} else if (a == "--ca-file")
 			o.ca_file = value();
 		else if (a == "--insecure")
 			o.insecure = true;
@@ -202,6 +207,35 @@ void print_entry(const ldap::entry &e)
 
 // ---------------------------------------------------------------- session
 
+// Prints every entry of a search_stream or paged_search, then its
+// references and a count; 0, or 1 on an error.
+template<class Stream> capy::task<int> print_all(ldap::result<Stream> &s)
+{
+	if (!s) {
+		println(stderr, "ldapsearch: {}", s.error().message());
+		co_return 1;
+	}
+	int status = 0;
+	std::size_t count = 0;
+	while (true) {
+		auto e = co_await s->next();
+		if (!e) {
+			println(stderr, "ldapsearch: {}", e.error().message());
+			status = 1;
+			break;
+		}
+		if (!*e) break;
+		print_entry(**e);
+		++count;
+	}
+	for (const auto &ref : s->references()) println("# search reference: {}", ref);
+	if constexpr (requires { s->pages(); })
+		println("# {} entries in {} pages", count, s->pages());
+	else
+		println("# {} entries", count);
+	co_return status;
+}
+
 capy::task<int> run(corosio::io_context &ioc, options o)
 {
 	auto u = ldap::url::parse(o.url);
@@ -262,26 +296,12 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 	}
 
 	int status = 0;
-	{
+	if (o.page_size > 0) {
+		auto s = co_await c->search_paged(std::move(params), o.page_size);
+		status = co_await print_all(s);
+	} else {
 		auto s = co_await c->search_stream(std::move(params));
-		if (!s) {
-			println(stderr, "ldapsearch: {}", s.error().message());
-			co_return 1;
-		}
-		std::size_t count = 0;
-		while (true) {
-			auto e = co_await s->next();
-			if (!e) {
-				println(stderr, "ldapsearch: {}", e.error().message());
-				status = 1;
-				break;
-			}
-			if (!*e) break;
-			print_entry(**e);
-			++count;
-		}
-		for (const auto &ref : s->references()) println("# search reference: {}", ref);
-		println("# {} entries", count);
+		status = co_await print_all(s);
 	}
 	if (c->is_open()) {
 		if (auto r = co_await c->unbind(); !r) println(stderr, "ldapsearch: {}", r.error().message());

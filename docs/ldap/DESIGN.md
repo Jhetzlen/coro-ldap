@@ -148,14 +148,47 @@ The designated-initializer style above is for the step 5 request structs,
 which stay aggregates. The wire model of section 10 is allocator-aware and
 uses constructors instead (`message{1, search_request{base, scope, f, {"cn"}}}`).
 
-Implemented (step 5a): `ldap::search_params` in `connection.hpp`, an
-aggregate with `.base` (`ldap::dn`), `.scope` (`search_scope`, default
-subtree), `.filter` (default `(objectClass=*)`), `.attributes`, `.deref`,
-`.size_limit`, `.time_limit` (`std::chrono::seconds`), `.types_only` and
-`.controls`. Values are checked when the request is encoded, before
-anything is sent. Controls are still the wire-level `control {type,
-criticality, value}` plus `encode_paged_results` / `decode_paged_results`;
-the typed variant above is step 6.
+Implemented (steps 5a and 6, `connection.hpp`): one aggregate per
+operation — `search_params`, `add_params`, `modify_params` (changes built
+with `ldap::mod::add / remove / replace / increment`), `del_params`,
+`modify_dn_params` (`new_rdn` as an `ldap::rdn`, optional `new_superior`),
+`compare_params`, `extended_params` — each with `.controls` and a
+client-side `.timeout`. Values are checked when the request is encoded,
+before anything is sent.
+
+Typed controls (step 6, `controls.hpp`): `request_control` is
+`std::variant<control, paged, manage_dsa_it, proxied_authorization>`, so
+the raw wire `control {type, criticality, value}` stays the escape hatch
+and existing code that passes raw controls compiles unchanged. They are
+encoded on the connection's resource when the request is sent. Response
+controls stay wire-level (`std::pmr::vector<control>`, in `response`,
+`extended_result`, `search_stream::controls()`); `find_paged()` reads the
+paged one. Only controls with a clear use are typed so far; sort (RFC
+2891), assertion (RFC 4528) and pre/post-read (RFC 4527) can follow the
+same pattern.
+
+Results (step 6): success returns the operation's value — `response`
+(the response controls) for add / modify / delete / modify DN, `bool` for
+compare, `extended_result` for extended operations, the authzId string for
+`who_am_i()` (RFC 4532). Any other result code is an error. compareTrue /
+compareFalse map to `true` / `false` (a compare answered with success is
+an error: it is not a valid answer). referral (10) is an error with the
+URIs in `error::referrals`; saslBindInProgress (14) is an error for a
+simple bind and will be the "continue" signal of SASL binds (#11).
+
+Referrals and continuation references are returned, never chased:
+`error::referrals` and `search_stream::references()` keep the URIs as
+sent; `url::parse_list()` / `reference_urls()` parse them, leaving out
+those that are not LDAP URLs.
+
+Paged search (step 6): `connection::search_paged(params, page_size)`
+returns a `paged_search` that yields entries across pages, requesting the
+next page with the server's cookie when one ends, until the cookie is
+empty. A server that ignores the (non-critical) control returns
+everything as one page, which works the same. Each page is a separate
+search on the wire (its own message id and timeout). Destroying the
+`paged_search` early abandons the current page; RFC 2696's explicit
+release (a request with page size 0) is not sent.
 
 ## 4. Mapping entries to structs
 

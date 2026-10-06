@@ -149,6 +149,18 @@ on by default) with the network parts. It depends on Corosio and Capy
   connection, and later operations fail with `client_errc::not_connected`
   naming the first error. The header documents the memory, threading and
   lifetime rules.
+  Step 6 adds the other operations: `add`, `modify` (changes from
+  `ldap::mod::add / remove / replace / increment`), `del`, `modify_dn`
+  (rename and / or move), `compare` (`result<bool>`), `extended` and
+  `who_am_i` (RFC 4532), each taking a params aggregate with `.controls`
+  and `.timeout`; `search_paged(params, page_size)` follows the Simple
+  Paged Results cookie across pages. Referrals are returned (in
+  `error::referrals` and `search_stream::references()`), never chased;
+  `url::parse_list` parses them.
+- `jhetz/ldap/controls.hpp`: typed request controls (`ldap::paged`,
+  `manage_dsa_it`, `proxied_authorization`, or a raw `ldap::control`) in a
+  `std::variant`, `to_control` / `append_controls` to encode them and
+  `find_paged` to read a response's paged results control.
 - `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.
@@ -188,7 +200,7 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: the other operations (step 6), StartTLS, SASL.
+Not yet: StartTLS, SASL, struct mapping, schema validation.
 
 ## Build and test
 
