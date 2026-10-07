@@ -294,6 +294,8 @@ namespace detail {
 			if (!initial.empty()) add_part(f, f.root_, filter::part_initial, initial);
 			if (!any.empty()) add_part(f, f.root_, filter::part_any, any);
 			if (!final_.empty()) add_part(f, f.root_, filter::part_final, final_);
+			f.elements_ +=
+			  std::size_t{ !initial.empty() } + std::size_t{ !any.empty() } + std::size_t{ !final_.empty() };
 			return f;
 		}
 
@@ -398,7 +400,7 @@ filter::substring_range filter::view::any() const noexcept
 	return substring_range(substring_iterator(f_, i));
 }
 
-std::optional<std::string_view> filter::view::final_() const noexcept
+std::optional<std::string_view> filter::view::final() const noexcept
 {
 	const node &x = n();
 	if (x.k != access::k(kind::substrings) || x.last == npos) return std::nullopt;
@@ -605,6 +607,38 @@ namespace filters {
 	filter attr::contains(std::string_view value) const
 	{
 		return access::substrings(name_.get_allocator(), name_, {}, value, {});
+	}
+
+	namespace {
+		filter extensible(const filter::allocator_type &alloc,
+		  std::string_view attr,
+		  std::string_view rule,
+		  std::string_view value,
+		  bool dn_attributes)
+		{
+			if (!rule.empty() && !detail::is_oid(rule))
+				throw std::invalid_argument("ldap::filters: invalid matching rule \"" + std::string(rule) + "\"");
+			if (!dn_attributes && detail::iequals(rule, "dn"))
+				throw std::invalid_argument("ldap::filters: a matching rule named \"dn\" needs dn_attributes");
+			filter f = access::leaf(alloc, kind::extensible_match, attr, value);
+			if (!rule.empty()) access::set_rule(f, access::root(f), rule);
+			access::set_dn_attributes(f, access::root(f), dn_attributes);
+			return f;
+		}
+	}// namespace
+
+	filter attr::matches(std::string_view rule, std::string_view value, bool dn_attributes) const
+	{
+		return extensible(name_.get_allocator(), name_, rule, value, dn_attributes);
+	}
+
+	filter rule_matches(std::string_view rule,
+	  std::string_view value,
+	  bool dn_attributes,
+	  const filter::allocator_type &alloc)
+	{
+		if (rule.empty()) throw std::invalid_argument("ldap::filters::rule_matches: the matching rule is required");
+		return extensible(alloc, {}, rule, value, dn_attributes);
 	}
 
 }// namespace filters
@@ -825,6 +859,7 @@ namespace {
 				if (!part) return std::unexpected(std::move(part.error()));
 				const bool last = peek() == ')';
 				if (part->second != 0) {
+					if (++elements_ > limits_.max_elements) return error("filter has too many elements");
 					const std::uint8_t k = first ? filter_part_initial : last ? filter_part_final : filter_part_any;
 					const std::uint32_t p = access::add_node(out_, k);
 					access::set_value_range(out_, p, part->first, part->second);
@@ -1112,6 +1147,8 @@ namespace {
 					k = filter_part_final;
 					final_seen = true;
 				}
+				if (++elements_ > limits_.max_elements)
+					return bad("more than " + std::to_string(limits_.max_elements) + " filter elements", item_at);
 				const std::uint32_t p = access::add_node(out_, k);
 				access::set_value(out_, p, as_text(*s));
 				access::link_last(out_, n, p);

@@ -117,7 +117,7 @@ void check_value(std::string_view v)
 	for (const auto &f : all) check_round_trips(f);
 	if (!v.empty()) {
 		LDAP_FUZZ_CHECK(all[3].root().initial() == v);
-		LDAP_FUZZ_CHECK(all[4].root().final_() == v);
+		LDAP_FUZZ_CHECK(all[4].root().final() == v);
 		LDAP_FUZZ_CHECK(*all[5].root().any().begin() == v);
 	}
 }

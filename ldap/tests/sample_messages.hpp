@@ -26,6 +26,14 @@ inline std::vector<message> sample_messages()
 	typed_only.size_limit = max_int;
 	typed_only.time_limit = max_int;
 	typed_only.types_only = true;
+	search_request people{ "ou=people,dc=example,dc=org",
+		search_scope::whole_subtree,
+		raw_filter("(&(objectClass=person)(|(uid=jdoe)(mail=j*@*.org))(!(disabled=TRUE))"
+				   "(cn:dn:2.5.13.5:=x\\2ay)(sn~=smith)(uidNumber>=1000)(uidNumber<=2000)(&)(|))"),
+		{ "uid", "mail", "cn;lang-en", "1.3.6.1.4.1.1466.101.120.16" } };
+	people.deref = deref_aliases::finding_base_obj;
+	people.size_limit = 500;
+	people.time_limit = 30;
 	std::vector<protocol_op> ops{
 		bind_request{ 3, dn, simple_auth{ "secret" } },
 		bind_request{ 2, "", simple_auth{ "" } },
@@ -35,15 +43,7 @@ inline std::vector<message> sample_messages()
 		bind_response{ { 14 }, "\x60\x82"s },
 		bind_response{ sample_result(), ""s },
 		unbind_request{},
-		search_request{ "ou=people,dc=example,dc=org",
-		  search_scope::whole_subtree,
-		  deref_aliases::finding_base_obj,
-		  500,
-		  30,
-		  false,
-		  raw_filter("(&(objectClass=person)(|(uid=jdoe)(mail=j*@*.org))(!(disabled=TRUE))"
-					 "(cn:dn:2.5.13.5:=x\\2ay)(sn~=smith)(uidNumber>=1000)(uidNumber<=2000)(&)(|))"),
-		  { "uid", "mail", "cn;lang-en", "1.3.6.1.4.1.1466.101.120.16" } },
+		std::move(people),
 		search_request{},
 		typed_only,
 		search_result_entry{},

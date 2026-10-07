@@ -115,12 +115,12 @@ TEST_CASE("filter builders make one-node trees with unescaped values", "[filter]
 		CHECK(sw.root().kind() == kind::substrings);
 		CHECK(sw.root().initial() == "J(");
 		CHECK(sw.root().any().empty());
-		CHECK_FALSE(sw.root().final_());
+		CHECK_FALSE(sw.root().final());
 		const auto c = attr("cn").contains("o");
 		CHECK_FALSE(c.root().initial());
 		CHECK(std::vector<std::string_view>(c.root().any().begin(), c.root().any().end())
 			  == std::vector<std::string_view>{ "o" });
-		CHECK(attr("cn").ends_with("x").root().final_() == "x");
+		CHECK(attr("cn").ends_with("x").root().final() == "x");
 	}
 	SECTION("every special byte is escaped in the text, and kept as is in the tree")
 	{
@@ -345,7 +345,7 @@ TEST_CASE("filter views expose every node", "[filter]")
 	CHECK(alts[0].initial() == "Jo");
 	CHECK(std::vector<std::string_view>(alts[0].any().begin(), alts[0].any().end())
 		  == std::vector<std::string_view>{ "hn", "Sm" });
-	CHECK(alts[0].final_() == "ith");
+	CHECK(alts[0].final() == "ith");
 	CHECK(alts[0].children().empty());// parts are not children
 	CHECK(alts[1].kind() == kind::not_);
 	REQUIRE_FALSE(alts[1].children().empty());
@@ -361,11 +361,11 @@ TEST_CASE("filter views expose every node", "[filter]")
 	CHECK(children[3].matching_rule() == "1.2.3");
 
 	CHECK(f.depth() == 4);
-	CHECK(f.elements() == 8);
+	CHECK(f.elements() == 12);// 8 nodes and 4 substring parts
 	// Leaves have no parts or children.
 	CHECK_FALSE(children[0].initial());
 	CHECK(children[0].any().empty());
-	CHECK_FALSE(children[0].final_());
+	CHECK_FALSE(children[0].final());
 }
 
 TEST_CASE("filter parser accepts RFC 4515 text; to_string is canonical", "[filter][parser]")
@@ -655,8 +655,17 @@ TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limit
 	CHECK(too_many.error().context.find("too many elements") != std::string::npos);
 	CHECK_FALSE(ldap::filter::raw(and_of(3), { .max_elements = 3 }));
 	CHECK(ldap::filter::raw(and_of(2), { .max_elements = 3 }));
-	// Substring parts are not elements.
-	CHECK(raw("(a=1*2*3*4*5)").elements() == 1);
+	// Substring parts count: one node and five parts.
+	CHECK(raw("(a=1*2*3*4*5)").elements() == 6);
+	CHECK_FALSE(ldap::filter::raw("(a=1*2*3*4*5)", { .max_elements = 5 }));
+	CHECK(ldap::filters::attr("cn").contains("x").elements() == 2);
+	// A substring filter with a huge number of parts is capped like any other.
+	std::string many = "(a=";
+	for (std::size_t i = 0; i < ldap::max_filter_elements; ++i) many += "x*";
+	many += "x)";
+	auto capped = ldap::filter::raw(many);
+	REQUIRE_FALSE(capped);
+	CHECK(capped.error().context.find("too many elements") != std::string::npos);
 
 	// Encode with custom limits.
 	CHECK_FALSE(to_ber(raw(and_of(3)), { .max_elements = 3 }));
@@ -805,4 +814,29 @@ TEST_CASE("equality builder round-trips every byte", "[filter][builder]")
 		CHECK(back->root().value() == std::string_view(v));
 		CHECK(canonical(text_of(f)) == text_of(f));
 	}
+}
+
+TEST_CASE("extensible match builders", "[filter][builders]")
+{
+	using ldap::filters::attr;
+	CHECK(attr("cn").matches("caseExactMatch", "Jane").to_string() == "(cn:caseExactMatch:=Jane)");
+	CHECK(attr("ou").matches("", "people", true).to_string() == "(ou:dn:=people)");
+	CHECK(attr("cn").matches("2.5.13.5", "x*y", true).to_string() == "(cn:dn:2.5.13.5:=x\\2ay)");
+	CHECK(ldap::filters::rule_matches("2.5.13.5", "v").to_string() == "(:2.5.13.5:=v)");
+	CHECK(ldap::filters::rule_matches("dn", "v", true).to_string() == "(:dn:dn:=v)");
+	// Same trees as the parsed text.
+	CHECK(attr("cn").matches("caseExactMatch", "Jane", true) == raw("(cn:dn:caseExactMatch:=Jane)"));
+	CHECK(ldap::filters::rule_matches("1.2.3", "v") == raw("(:1.2.3:=v)"));
+	const auto ext = attr("cn").matches("caseExactMatch", "Jane", true);
+	const auto view = ext.root();
+	CHECK(view.kind() == ldap::filter::kind::extensible_match);
+	CHECK(view.matching_rule() == "caseExactMatch");
+	CHECK(view.dn_attributes());
+	// Round trip through BER.
+	const auto f = attr("cn").matches("caseExactMatch", "Jane");
+	CHECK(from_ber(*to_ber(f)).value() == f);
+
+	CHECK_THROWS_AS(attr("cn").matches("not a rule!", "v"), std::invalid_argument);
+	CHECK_THROWS_AS(attr("cn").matches("dn", "v"), std::invalid_argument);
+	CHECK_THROWS_AS(ldap::filters::rule_matches("", "v"), std::invalid_argument);
 }

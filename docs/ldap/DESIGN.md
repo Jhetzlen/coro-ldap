@@ -96,6 +96,8 @@ f.to_string();   // "(&(objectClass=person)...)" for logs
 | `attr(a).present()` | `(a=*)` |
 | `attr(a).starts_with(v)` / `ends_with(v)` / `contains(v)` | substrings `(a=v*)` / `(a=*v)` / `(a=*v*)` |
 | `starts_with("")`, `ends_with("")`, `contains("")` | present `(a=*)` (same meaning) |
+| `attr(a).matches(rule, v)`, `matches(rule, v, true)` | extensible match `(a:rule:=v)`, `(a:dn:rule:=v)`; empty rule gives `(a:=v)` |
+| `rule_matches(rule, v)`, `rule_matches(rule, v, true)` | `(:rule:=v)`, `(:dn:rule:=v)` (rule required) |
 | `f && g`, `f \|\| g`, `!f` | and / or / not; chains are flattened, so `f && g && h` is one and-node |
 | `filter::raw(text)` | parsed once → `result<filter>`; malformed text fails here with `invalid_filter` |
 
@@ -114,11 +116,11 @@ f.to_string();   // "(&(objectClass=person)...)" for logs
   copies instead of reusing, so it gives the same result as `f && f`.
 - Limits: `max_filter_depth` = 24 (so a search request with the deepest
   filter fits the BER reader's depth limit of 32) and `max_filter_elements`
-  = 10,000. Parsing and decoding enforce them while reading; builders never
+  = 10,000 (substring parts count as elements). Parsing and decoding enforce them while reading; builders never
   throw or truncate, and an over-limit (or empty, default-constructed) filter
   fails at encode with `invalid_filter`.
 - Parser (only for `raw`): full RFC 4515 including extensible match
-  (`attr:dn:rule:=value`, only reachable through `raw` for now), RFC 4526
+  (`attr:dn:rule:=value`), RFC 4526
   `(&)` / `(|)`, and text without a leading `(` is wrapped like `ldapsearch`.
 - `to_string()` is canonical (escapes `* ( ) \ NUL` as lower-case `\xx`,
   `:dn` lower case); equality compares trees, so
@@ -700,10 +702,6 @@ same codec serve the client and a mock server for tests.
   documents that a 16 MiB SearchResultEntry of empty values decodes to
   about 300 MB (linear, about 12-18x the message size). Per-entry or
   per-search memory limits are still open (#19).
-- Filter element cap counts filter nodes, not substring parts: one
-  `(a=*x*x*…)` with millions of parts is not capped. Harmless for the client
-  (`origin::server` never decodes filters); count parts if a mock server or
-  proxy ever decodes untrusted requests.
 
 - Should `MUST` attributes of the declared object classes be checked against
   required (`T`) fields? Needs `MUST`/`MAY` parsing, so deferred.

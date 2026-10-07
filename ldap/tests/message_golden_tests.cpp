@@ -147,26 +147,24 @@ TEST_CASE("golden: search request with a complex filter", "[message][golden]")
 	  "(&(objectClass=person)(|(cn=Jo*hn*Sm*ith)(!(uid=admin)))(uidNumber>=1000)"
 	  "(uidNumber<=2000)(sn~=smyth)(mail=*)(cn:dn:2.5.13.5:=John)(:caseExactMatch:=x\\2ay)"
 	  "(description=a\\28b\\29\\5cc)(cn=*end)(cn=start*))";
-	const ldap::message m{ 4,
-		ldap::search_request{ people,
-		  ldap::search_scope::whole_subtree,
-		  ldap::deref_aliases::always,
-		  500,
-		  10,
-		  false,
-		  raw(filter),
-		  { "cn", "mail", "jpegPhoto;binary" } } };
+	ldap::search_request req{
+		people, ldap::search_scope::whole_subtree, raw(filter), { "cn", "mail", "jpegPhoto;binary" }
+	};
+	req.deref = ldap::deref_aliases::always;
+	req.size_limit = 500;
+	req.time_limit = 10;
+	const ldap::message m{ 4, std::move(req) };
 	check_golden(search_complex, m);
 	CHECK(std::get<ldap::search_request>(m.op).filter.to_string() == filter);
 
 	// The builders produce the same tree (and so the same bytes) for every
-	// part they can express: all but multi-part substrings and extensible match.
+	// part they can express: all but multi-part substrings.
 	using namespace ldap::filters;
 	const auto built = attr("objectClass") == "person" && (raw("(cn=Jo*hn*Sm*ith)") || !(attr("uid") == "admin"))
 					   && attr("uidNumber") >= "1000" && attr("uidNumber") <= "2000" && attr("sn").approx("smyth")
-					   && attr("mail").present() && raw("(cn:dn:2.5.13.5:=John)") && raw("(:caseExactMatch:=x\\2ay)")
-					   && attr("description") == "a(b)\\c" && attr("cn").ends_with("end")
-					   && attr("cn").starts_with("start");
+					   && attr("mail").present() && attr("cn").matches("2.5.13.5", "John", true)
+					   && rule_matches("caseExactMatch", "x*y") && attr("description") == "a(b)\\c"
+					   && attr("cn").ends_with("end") && attr("cn").starts_with("start");
 	CHECK(built == std::get<ldap::search_request>(m.op).filter);
 	auto built_message = m;
 	std::get<ldap::search_request>(built_message.op).filter = built;
@@ -215,17 +213,10 @@ TEST_CASE("golden: search with paged results control", "[message][golden]")
 			ldap::search_request{ "dc=example,dc=org", ldap::search_scope::whole_subtree, filter },
 			{ ldap::encode_paged_results({ 100, "" }, true).value() } });
 		// Non-critical: the DEFAULT FALSE criticality is omitted.
+		ldap::search_request types_only{ "dc=example,dc=org", ldap::search_scope::single_level, filter, { "1.1" } };
+		types_only.types_only = true;
 		check_golden(search_paged_cookie,
-		  { 13,
-			ldap::search_request{ "dc=example,dc=org",
-			  ldap::search_scope::single_level,
-			  ldap::deref_aliases::never,
-			  0,
-			  0,
-			  true,
-			  filter,
-			  { "1.1" } },
-			{ ldap::encode_paged_results({ 50, "\x01\x02\x03" }, false).value() } });
+		  { 13, std::move(types_only), { ldap::encode_paged_results({ 50, "\x01\x02\x03" }, false).value() } });
 	}
 }
 

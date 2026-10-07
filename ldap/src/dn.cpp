@@ -1,6 +1,9 @@
 #include "jhetz/ldap/dn.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
+#include <memory_resource>
 #include <stdexcept>
 #include <tuple>
 #include <vector>
@@ -93,9 +96,12 @@ bool operator==(const rdn &a, const rdn &b)
 {
 	if (a.avas.size() != b.avas.size()) return false;
 	if (a.avas.size() == 1) return a.avas[0] == b.avas[0];
-	// Sorted copies (short-lived, on the default resource).
-	std::vector<const ava *> x;
-	std::vector<const ava *> y;
+	// Sorted pointer copies in a small stack buffer (multi-valued RDNs are
+	// short); unusually long ones fall back to the heap.
+	std::array<std::byte, 2 * 16 * sizeof(const ava *) + 64> buffer;
+	std::pmr::monotonic_buffer_resource scratch(buffer.data(), buffer.size());
+	std::pmr::vector<const ava *> x(&scratch);
+	std::pmr::vector<const ava *> y(&scratch);
 	x.reserve(a.avas.size());
 	y.reserve(b.avas.size());
 	for (const auto &v : a.avas) x.push_back(&v);

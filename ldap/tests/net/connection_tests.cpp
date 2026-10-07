@@ -133,12 +133,11 @@ TEST_CASE("connection: search sends the request and collects the entries", "[net
 
 	ldap::search_request wire{ people,
 		ldap::search_scope::single_level,
-		ldap::deref_aliases::always,
-		10,
-		5,
-		false,
 		ldap::filter::raw("(&(objectClass=person)(uid=*))").value(),
 		{ "cn", "mail" } };
+	wire.deref = ldap::deref_aliases::always;
+	wire.size_limit = 10;
+	wire.time_limit = 5;
 	REQUIRE(m.log.received.size() == 1);
 	CHECK(m.log.received[0] == ldap::message{ 1, wire, { ldap::control{ "1.2.3.4", true, "v" } } });
 }

@@ -211,19 +211,6 @@ search_request::search_request(std::string_view base_object_,
 	attributes(strings(attributes_, alloc))
 {}
 
-search_request::search_request(std::string_view base_object_,
-  search_scope scope_,
-  deref_aliases deref_,
-  std::int32_t size_limit_,
-  std::int32_t time_limit_,
-  bool types_only_,
-  ldap::filter filter_,
-  std::initializer_list<std::string_view> attributes_,
-  const allocator_type &alloc)
-  : base_object(base_object_, alloc), scope(scope_), deref(deref_), size_limit(size_limit_), time_limit(time_limit_),
-	types_only(types_only_), filter(std::move(filter_), alloc), attributes(strings(attributes_, alloc))
-{}
-
 search_request::search_request(const search_request &other, const allocator_type &alloc)
   : base_object(other.base_object, alloc), scope(other.scope), deref(other.deref), size_limit(other.size_limit),
 	time_limit(other.time_limit), types_only(other.types_only), filter(other.filter, alloc),

@@ -131,6 +131,16 @@ TEST_CASE("dn equality", "[dn]")
 	CHECK(parse("cn=a+sn=b") != parse("cn=a+sn=c"));
 	CHECK(parse("cn=a+cn=a") != parse("cn=a+sn=b"));
 	CHECK(parse("cn=a+sn=b") != parse("cn=a"));
+	// Longer than the comparison's stack buffer (16 AVAs): falls back to the heap.
+	std::string forward;
+	std::string backward;
+	for (int i = 0; i < 40; ++i) {
+		const auto a = "a" + std::to_string(i) + "=v";
+		forward += (i == 0 ? "" : "+") + a;
+		backward = a + (i == 0 ? "" : "+") + backward;
+	}
+	CHECK(parse(forward) == parse(backward));
+	CHECK(parse(forward) != parse(backward + "x"));
 	// '#' form and string form are different values here (no schema).
 	CHECK(parse("cn=#6162") != parse("cn=ab"));
 	// No normalization beyond that (documented limit).

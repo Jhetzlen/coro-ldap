@@ -29,9 +29,9 @@ namespace jhetz::ldap {
 // leaf 1 extra.
 inline constexpr std::size_t max_filter_depth = 24;
 
-// Maximum number of filter elements (every `(...)`, leaves included; not the
-// parts of a substring assertion) in one filter, with the same checks as
-// max_filter_depth. A hostile peer could otherwise send a multi-megabyte
+// Maximum number of filter elements (every `(...)`, leaves included, plus
+// every part of a substring assertion: `(a=*x*y*)` is 3) in one filter, with
+// the same checks as max_filter_depth. A hostile peer could otherwise send a multi-megabyte
 // `(&(a=*)(a=*)...)` whose 3-byte BER children each become a tree node.
 // 10,000 leaves room for large real filters (group membership ORs).
 inline constexpr std::size_t max_filter_elements = 10'000;
@@ -227,7 +227,7 @@ class filter::view
 	// for other kinds.
 	std::optional<std::string_view> initial() const noexcept;
 	substring_range any() const noexcept;
-	std::optional<std::string_view> final_() const noexcept;
+	std::optional<std::string_view> final() const noexcept;
 
   private:
 	friend class filter;
@@ -381,10 +381,23 @@ namespace filters {
 		filter starts_with(std::string_view value) const;
 		filter ends_with(std::string_view value) const;
 		filter contains(std::string_view value) const;
+		// Extensible match (RFC 4515): `(a:rule:=v)`, `(a:dn:rule:=v)` with
+		// dn_attributes, `(a:=v)` / `(a:dn:=v)` with an empty rule. The rule
+		// is a matching rule name or OID ("caseExactMatch", "2.5.13.5");
+		// anything else throws std::invalid_argument, as does the rule "dn"
+		// without dn_attributes (RFC 4515 has no form for it).
+		filter matches(std::string_view rule, std::string_view value, bool dn_attributes = false) const;
 
 	  private:
 		std::pmr::string name_;
 	};
+
+	// Extensible match without an attribute: `(:rule:=v)`, `(:dn:rule:=v)`.
+	// The rule is required; same checks as attr::matches.
+	filter rule_matches(std::string_view rule,
+	  std::string_view value,
+	  bool dn_attributes = false,
+	  const filter::allocator_type &alloc = {});
 
 	// The combinators live in namespace ldap (found by argument-dependent
 	// lookup for any filter, parsed or built); also reachable from here.

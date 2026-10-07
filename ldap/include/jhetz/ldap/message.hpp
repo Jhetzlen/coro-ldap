@@ -376,19 +376,11 @@ struct search_request
 
 	search_request() = default;
 	explicit search_request(const allocator_type &alloc);
-	// Base, scope, filter and attributes; the other fields keep their defaults.
+	// Base, scope, filter and attributes; the other fields keep their defaults
+	// and are set by name afterwards (no positional constructor for them:
+	// size_limit and time_limit are adjacent int32_t and easy to swap).
 	search_request(std::string_view base_object_,
 	  search_scope scope_,
-	  ldap::filter filter_,
-	  std::initializer_list<std::string_view> attributes_ = {},
-	  const allocator_type &alloc = {});
-	// Every field, in declaration order.
-	search_request(std::string_view base_object_,
-	  search_scope scope_,
-	  deref_aliases deref_,
-	  std::int32_t size_limit_,
-	  std::int32_t time_limit_,
-	  bool types_only_,
 	  ldap::filter filter_,
 	  std::initializer_list<std::string_view> attributes_ = {},
 	  const allocator_type &alloc = {});
