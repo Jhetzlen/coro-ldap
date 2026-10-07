@@ -38,16 +38,6 @@ using Catch::Matchers::StartsWith;
 
 namespace {
 
-// Runs `t` until it finishes (not until the io_context runs out of work:
-// the fault-injection proxy keeps waiting on its sockets meanwhile).
-template<class T> T finish(corosio::io_context &ioc, capy::task<T> t)
-{
-	outcome<T> out;
-	spawn(ioc, std::move(t), out);
-	drive_until(ioc, [&out] { return out.done(); });
-	return std::move(out.get());
-}
-
 std::string env(const char *name)
 {
 	const char *v = std::getenv(name);
