@@ -1,5 +1,9 @@
 #include "transport_impl.hpp"
 
+#include "deadline.hpp"
+
+#include <string>
+
 #include <utility>
 
 namespace jhetz::ldap::net {
@@ -22,8 +26,13 @@ transport::~transport() { destroy(); }
 void transport::destroy() noexcept
 {
 	if (impl_ == nullptr) return;
-	std::pmr::polymorphic_allocator<impl> alloc(impl_->mr);
-	alloc.delete_object(std::exchange(impl_, nullptr));
+	impl *im = std::exchange(impl_, nullptr);
+	if (im->custom != nullptr) {
+		im->stream = {};// refers to the custom stream
+		im->custom_ops.destroy(im->custom, im->mr);
+	}
+	std::pmr::polymorphic_allocator<impl> alloc(im->mr);
+	alloc.delete_object(im);
 }
 
 transport transport::make(kind k, std::string_view name, std::pmr::memory_resource *mr)
@@ -36,7 +45,11 @@ transport transport::make(kind k, std::string_view name, std::pmr::memory_resour
 	return t;
 }
 
-void transport::set_custom(boost::capy::any_stream s) { impl_->stream = std::move(s); }
+void transport::set_custom(void *stream, custom_ops ops) noexcept
+{
+	impl_->custom = stream;
+	impl_->custom_ops = ops;
+}
 
 boost::capy::any_stream &transport::stream() noexcept { return impl_->stream; }
 
@@ -53,7 +66,7 @@ bool transport::is_open() const noexcept
 	case kind::local:
 		return impl_->local && impl_->local->is_open();
 	case kind::custom:
-		return impl_->stream.has_value();
+		return impl_->stream.has_value() && !impl_->custom_closed;
 	case kind::none:
 		break;
 	}
@@ -77,6 +90,7 @@ void transport::cancel() noexcept
 	if (!impl_) return;
 	if (impl_->tcp) impl_->tcp->cancel();
 	if (impl_->local) impl_->local->cancel();
+	if (impl_->custom && impl_->custom_ops.cancel) impl_->custom_ops.cancel(impl_->custom);
 }
 
 void transport::close() noexcept
@@ -84,6 +98,24 @@ void transport::close() noexcept
 	if (!impl_) return;
 	if (impl_->tcp) impl_->tcp->close();
 	if (impl_->local) impl_->local->close();
+	if (impl_->custom && !impl_->custom_closed) {
+		impl_->custom_closed = true;
+		if (impl_->custom_ops.close) impl_->custom_ops.close(impl_->custom);
+	}
+}
+
+boost::capy::task<result<void>> transport::shutdown(std::optional<std::chrono::milliseconds> timeout)
+{
+	if (impl_ == nullptr || !impl_->tls || !is_open()) {
+		close();
+		co_return result<void>{};
+	}
+	detail::deadline_t deadline;
+	if (timeout) deadline = detail::clock::now() + *timeout;
+	auto [ec] = co_await detail::bounded(impl_->tls->shutdown(), deadline);
+	close();
+	if (ec) co_return fail(ec, "tls shutdown " + std::string(impl_->name));
+	co_return result<void>{};
 }
 
 }// namespace jhetz::ldap::net

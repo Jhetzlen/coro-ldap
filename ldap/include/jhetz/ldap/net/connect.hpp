@@ -4,7 +4,7 @@
 //   auto u = ldap::url::parse("ldaps://ldap.example.org");
 //   ldap::result<net::transport> t = co_await net::connect(ioc, *u, {.timeout = 5s});
 //
-// ldap://   resolve the host, try each address in order, TCP_NODELAY on.
+// ldap://   resolve the host, connect with Happy Eyeballs (below), TCP_NODELAY on.
 // ldaps://  the same, then a TLS client handshake (tls_options below).
 // ldapi://  connect to the Unix domain socket named by the URL's host part.
 //           Supported where Corosio has local_stream_socket (Linux, other
@@ -32,9 +32,16 @@
 // start. The name lookup runs detached (Corosio's getaddrinfo on a pool
 // thread cannot be interrupted): on timeout connect() returns at once and the
 // lookup's late result is dropped. The io_context still counts that lookup as
-// work, so io_context::run() only returns once getaddrinfo has. With several addresses, each TCP attempt
-// gets min(remaining, max(remaining / addresses left, 1 s)), so one
-// black-holed address does not use up the budget of the others.
+// work, so io_context::run() only returns once getaddrinfo has.
+//
+// Several addresses (Happy Eyeballs, RFC 8305): the addresses are reordered
+// to alternate IPv6 and IPv4, starting with the family getaddrinfo put first.
+// The first attempt starts at once; each next one starts when the previous
+// one fails or after connect_options::attempt_delay, whichever comes first.
+// Attempts then run side by side; the first to connect wins and the others
+// are cancelled. A black-holed address so costs attempt_delay, not the
+// budget. When every attempt fails, the error is the last failure's, e.g.
+//   "connect ldap://ldap.example.org:389: tcp connect 192.0.2.7:389 (2 of 2 addresses tried)"
 //
 // Host name checks (inherited from OpenSSL through Corosio, which does not
 // expose the flags): a DNS name is matched against the subjectAltName DNS
@@ -111,6 +118,10 @@ struct connect_options
 	// Zero or negative: fails at once with boost::capy::error::timeout.
 	std::optional<std::chrono::milliseconds> timeout{ std::chrono::seconds(30) };
 	tls_options tls{};
+	// Happy Eyeballs "Connection Attempt Delay" (RFC 8305 section 5, which
+	// recommends 250 ms): how long an attempt runs alone before the next
+	// address is tried in parallel. Zero: every address at once.
+	std::chrono::milliseconds attempt_delay{ 250 };
 	// TCP_NODELAY on TCP transports: LDAP sends small requests and waits for
 	// the answer, which Nagle's algorithm would delay.
 	bool tcp_no_delay = true;

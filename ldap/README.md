@@ -82,7 +82,10 @@ on by default) with the network parts. It depends on Corosio and Capy
   which wraps it in reference mode, so StartTLS (step 7) can later add TLS to
   a plain connection in place; the header describes how.
 - `jhetz/ldap/net/connect.hpp`: `co_await net::connect(ioc, url, options, mr)`
-  returns `result<net::transport>`: resolves the host, tries each address,
+  returns `result<net::transport>`: resolves the host, races the addresses
+  with Happy Eyeballs (RFC 8305: families alternate, a new attempt every
+  `attempt_delay` = 250 ms or as soon as the previous one fails, first
+  connection wins),
   sets TCP_NODELAY, and for `ldaps://` runs the TLS handshake with
   certificate and host name verification, SNI and TLS 1.2+ by default
   (`tls_options`: CA file / directory (`std::filesystem::path`) / PEM, client
@@ -93,8 +96,12 @@ on by default) with the network parts. It depends on Corosio and Capy
     whole connect; `nullopt` means no limit, zero or negative fails at once
     with `capy::error::timeout`. The name lookup runs detached because
     getaddrinfo cannot be interrupted, so the timeout holds while it blocks
-    (the io_context stays busy until it returns). With several addresses each
-    TCP attempt gets `min(remaining, max(remaining / addresses left, 1 s))`.
+    (the io_context stays busy until it returns). Happy Eyeballs attempts
+    all run within that one budget.
+  - `transport::close()` closes at once; `transport::shutdown(timeout)` ends
+    a TLS session with close_notify first (`connection::unbind()` does, within
+    `connection_options::tls_shutdown_timeout`). `transport::wrap()` forwards
+    `close()` / `cancel()` to the wrapped stream when it has them.
   - Host name checks are OpenSSL's defaults, which Corosio does not let us
     change: subjectAltName DNS entries, the subject CN only when there is no
     subjectAltName, wildcards (also partial, `ld*.example.org`) in the
@@ -103,7 +110,10 @@ on by default) with the network parts. It depends on Corosio and Capy
   - Errors keep the system / TLS `error_code` and name the stage:
     `connect ldaps://h:636: tls handshake: server certificate: hostname mismatch ...`.
   - `ldapi://` is tested on Linux (should work wherever Corosio has
-    `local_stream_socket`).
+    `local_stream_socket`). IPv6 is tested over `[::1]` and a link-local
+    address with a zone. CI builds with GCC 13 and Clang 19 on Linux and
+    with Apple Clang on macOS (non-blocking for now); tests that need Linux
+    loopback behaviour skip elsewhere.
   - `mr` holds the transport's own block and name.
 - `jhetz/ldap/net/message_io.hpp`: `read_message(transport, read_buffer,
   options)` returns the next complete `ldap::message`, decoded with

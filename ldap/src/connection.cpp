@@ -147,8 +147,8 @@ struct connection::impl
 {
 	impl(corosio::io_context &ioc, net::transport t, const connection_options &options, std::pmr::memory_resource *mr_)
 	  : ex(ioc.get_executor()), mr(mr_), transport(std::move(t)), buf(mr_), max_message_size(options.max_message_size),
-		max_elements(options.max_elements), default_timeout(options.operation_timeout), pending(mr_), abandoned(mr_),
-		outbox(mr_), scratch(mr_)
+		max_elements(options.max_elements), default_timeout(options.operation_timeout),
+		tls_shutdown_timeout(options.tls_shutdown_timeout), pending(mr_), abandoned(mr_), outbox(mr_), scratch(mr_)
 	{
 		schema_mode = options.schema_check;
 		write_idle.set();
@@ -163,6 +163,7 @@ struct connection::impl
 	std::size_t max_message_size;
 	std::size_t max_elements;
 	std::optional<std::chrono::milliseconds> default_timeout;
+	std::optional<std::chrono::milliseconds> tls_shutdown_timeout;
 	std::int32_t next_id = 1;
 	bool open = true;
 	std::optional<error> failure{};// why the connection closed, if it failed
@@ -215,12 +216,14 @@ struct connection::impl
 
 	// Closes the transport and fails every outstanding operation with `e`
 	// (they add their own context). `remember`: later operations name it.
-	void shut(error e, bool remember)
+	// `close_transport` false: the caller closes it (unbind, after the TLS
+	// shutdown).
+	void shut(error e, bool remember, bool close_transport = true)
 	{
 		if (!open) return;
 		open = false;
 		if (remember) failure = e;
-		transport.close();
+		if (close_transport) transport.close();
 		outbox.clear();
 		abandoned.clear();
 		auto waiting = std::move(pending);
@@ -610,6 +613,7 @@ void connection::close() noexcept
 {
 	if (impl_ == nullptr) return;
 	impl_->shut(make_error(client_errc::not_connected, "connection closed"), false);
+	impl_->transport.close();// also ends a TLS shutdown that unbind() is waiting for
 }
 
 namespace {
@@ -1061,7 +1065,16 @@ capy::task<result<void>> connection::unbind()
 		(void)ec;
 	}
 	std::optional<error> failed = self->failure;
-	self->shut(make_error(client_errc::not_connected, "connection closed"), false);
+	self->shut(make_error(client_errc::not_connected, "connection closed"), false, false);
+	// TLS: close_notify, after the reader has stopped (it would otherwise
+	// read the peer's close_notify itself). Best effort and bounded: the
+	// unbind is complete whatever the peer does.
+	if (!failed && self->transport.is_tls() && self->transport.is_open()) {
+		(void)co_await capy::run(std::stop_token{})(
+		  [](connection::impl &c) -> capy::task<capy::io_result<>> { co_return co_await c.reader_idle.wait(); }(*self));
+		(void)co_await self->transport.shutdown(self->tls_shutdown_timeout);
+	}
+	self->transport.close();
 	if (failed) co_return std::unexpected(with_context(std::move(*failed), context));
 	co_return result<void>{};
 }
@@ -1279,7 +1292,10 @@ capy::task<result<connection>>
 			+ ": start_tls needs an ldap:// URL (ldaps:// and ldapi:// are not upgraded)");
 	auto t = co_await net::connect(ioc,
 	  std::move(u),
-	  net::connect_options{ .timeout = options.timeout, .tls = options.tls, .tcp_no_delay = options.tcp_no_delay },
+	  net::connect_options{ .timeout = options.timeout,
+		.tls = options.tls,
+		.attempt_delay = options.attempt_delay,
+		.tcp_no_delay = options.tcp_no_delay },
 	  mr);
 	if (!t) co_return std::unexpected(std::move(t.error()));
 	connection c(ioc, std::move(*t), options, mr);

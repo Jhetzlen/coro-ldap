@@ -326,7 +326,7 @@ namespace detail {
 		constexpr std::size_t n = std::tuple_size_v<fields>;
 		std::size_t index = n;
 		[&]<std::size_t... I>(std::index_sequence<I...>) {
-			((same_member<std::tuple_element_t<I, fields>::ptr, Ptr>() ? (index = I, true) : false) || ...);
+			(void)((same_member<std::tuple_element_t<I, fields>::ptr, Ptr>() ? (index = I, true) : false) || ...);
 		}(std::make_index_sequence<n>{});
 		return index;
 	}

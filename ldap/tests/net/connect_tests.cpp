@@ -2,6 +2,7 @@
 // CA generated at run time) and Unix domain sockets. No external server, no
 // fixed ports (the kernel picks them), no sleeps: every wait ends on an
 // event, and the timeouts tested are the library's own.
+#include "../../src/net/happy_eyeballs.hpp"
 #include "../../src/net/tls.hpp"
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/net/connect.hpp"
@@ -13,6 +14,7 @@
 #include <boost/capy/test/stream.hpp>
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/ipv4_address.hpp>
+#include <boost/corosio/ipv6_address.hpp>
 #include <boost/corosio/local_endpoint.hpp>
 #include <boost/corosio/local_stream_acceptor.hpp>
 #include <boost/corosio/openssl_stream.hpp>
@@ -23,13 +25,18 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <optional>
 #include <string_view>
 #include <thread>
 
+#include <arpa/inet.h>
 #include <dlfcn.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netdb.h>
+#include <netinet/in.h>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -279,34 +286,141 @@ TEST_CASE("connect timeout holds while the name lookup blocks", "[net][connect][
 	CHECK(server.get() == "");
 }
 
-TEST_CASE("each address gets a share of the connect timeout", "[net][connect][tcp][timeout][dns]")
+namespace {
+
+// A listener on `addr`:`port` with backlog 0 whose one queue slot is taken:
+// Linux drops further SYNs, so a connect to it stays pending (see the TCP
+// timeout test below).
+struct blackhole
 {
-	// two-addr-* resolves to 127.0.0.2 first, then 127.0.0.1. On 127.0.0.2
-	// a full backlog-0 listener drops the SYN (see the TCP timeout test), so
-	// that attempt hangs; with a 1500 ms budget it may use max(1500/2, 1000)
-	// = 1000 ms, and 127.0.0.1 still gets the remaining 500 ms.
+	corosio::tcp_acceptor acc;
+	corosio::tcp_socket filler;
+	blackhole(corosio::io_context &ioc, const char *addr, std::uint16_t port) : acc(make(ioc, addr, port)), filler(ioc)
+	{
+		auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::io_result<>> {
+			co_return co_await s.connect(ep);
+		}(filler, acc.local_endpoint()));
+		REQUIRE_FALSE(fec);
+	}
+	static corosio::tcp_acceptor make(corosio::io_context &ioc, const char *addr, std::uint16_t port)
+	{
+		auto [aec, a] = corosio::make_ipv4_address(addr);
+		REQUIRE_FALSE(aec);
+		return corosio::tcp_acceptor(ioc, corosio::endpoint(a, port), 0);
+	}
+};
+
+}// namespace
+
+TEST_CASE("Happy Eyeballs: a black-holed first address costs the attempt delay", "[net][connect][tcp][timeout][dns]")
+{
+	skip_unless_linux_loopback();
+	// two-addr-* resolves to 127.0.0.2 first, then 127.0.0.1. The attempt on
+	// 127.0.0.2 hangs; 127.0.0.1 is tried 200 ms later, side by side, and
+	// wins long before the 10 s budget.
 	corosio::io_context ioc;
 	tcp_server good(ioc);
-	auto [aec, loopback2] = corosio::make_ipv4_address("127.0.0.2");
-	REQUIRE_FALSE(aec);
-	corosio::tcp_acceptor blackhole(ioc, corosio::endpoint(loopback2, good.port), 0);
-	corosio::tcp_socket filler(ioc);
-	auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::io_result<>> {
-		co_return co_await s.connect(ep);
-	}(filler, blackhole.local_endpoint()));
-	REQUIRE_FALSE(fec);
+	blackhole hole(ioc, "127.0.0.2", good.port);
 
 	outcome<std::string> server, client;
 	spawn(ioc, accept_and_serve(good.acc), server);
 	const auto start = std::chrono::steady_clock::now();
-	spawn(
-	  ioc, exchange(ioc, good.url("ldap", "two-addr-a.test"), { .timeout = std::chrono::milliseconds(1500) }), client);
+	spawn(ioc,
+	  exchange(ioc,
+		good.url("ldap", "two-addr-a.test"),
+		{ .timeout = std::chrono::seconds(10), .attempt_delay = std::chrono::milliseconds(200) }),
+	  client);
 	drive(ioc);
 	const auto elapsed = std::chrono::steady_clock::now() - start;
 	CHECK(client.get() == "");
 	CHECK(server.get() == "");
-	CHECK(elapsed >= std::chrono::milliseconds(900));// the first address used its share
-	CHECK(elapsed < std::chrono::milliseconds(1500));
+	INFO("connected after " << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() << " ms");
+	CHECK(elapsed >= std::chrono::milliseconds(150));// the second attempt waited for the delay
+	CHECK(elapsed < std::chrono::seconds(5));
+}
+
+TEST_CASE("Happy Eyeballs: a refused address starts the next attempt at once", "[net][connect][tcp][dns]")
+{
+	skip_unless_linux_loopback();
+	// Nothing listens on 127.0.0.2:<port>: that attempt is refused at once,
+	// so 127.0.0.1 does not wait out the (long) attempt delay.
+	corosio::io_context ioc;
+	tcp_server good(ioc);
+	outcome<std::string> server, client;
+	spawn(ioc, accept_and_serve(good.acc), server);
+	const auto start = std::chrono::steady_clock::now();
+	spawn(ioc,
+	  exchange(ioc,
+		good.url("ldap", "two-addr-b.test"),
+		{ .timeout = std::chrono::seconds(30), .attempt_delay = std::chrono::seconds(20) }),
+	  client);
+	drive(ioc);
+	CHECK(client.get() == "");
+	CHECK(server.get() == "");
+	CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(5));
+}
+
+TEST_CASE("Happy Eyeballs: every address fails", "[net][connect][tcp][dns]")
+{
+	skip_unless_linux_loopback();
+	corosio::io_context ioc;
+	std::string url;
+	{
+		tcp_server srv(ioc);// take a free port, then release it
+		url = srv.url("ldap", "two-addr-c.test");
+	}
+	auto t = connect_to(ioc, url, { .attempt_delay = std::chrono::milliseconds(0) });
+	REQUIRE_FALSE(t.has_value());
+	CHECK(t.error().code == std::errc::connection_refused);
+	CHECK_THAT(std::string(t.error().context), StartsWith("connect " + url + ": tcp connect 127.0.0."));
+	CHECK_THAT(std::string(t.error().context), EndsWith(" (2 of 2 addresses tried)"));
+}
+
+TEST_CASE("Happy Eyeballs: the budget covers every attempt", "[net][connect][tcp][timeout][dns]")
+{
+	skip_unless_linux_loopback();
+	corosio::io_context ioc;
+	tcp_server srv(ioc, 0);
+	blackhole first(ioc, "127.0.0.2", srv.port);
+	corosio::tcp_socket filler(ioc);
+	auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::io_result<>> {
+		co_return co_await s.connect(ep);
+	}(filler, corosio::endpoint(corosio::ipv4_address::loopback(), srv.port)));
+	REQUIRE_FALSE(fec);
+
+	const auto start = std::chrono::steady_clock::now();
+	auto t = connect_to(ioc,
+	  srv.url("ldap", "two-addr-d.test"),
+	  { .timeout = std::chrono::milliseconds(400), .attempt_delay = std::chrono::milliseconds(100) });
+	const auto elapsed = std::chrono::steady_clock::now() - start;
+	REQUIRE_FALSE(t.has_value());
+	CHECK(t.error().code == capy::cond::timeout);
+	CHECK_THAT(std::string(t.error().context), ContainsSubstring("(2 of 2 addresses tried)"));
+	CHECK_THAT(std::string(t.error().context), EndsWith("gave up after the 400 ms connect timeout"));
+	CHECK(elapsed >= std::chrono::milliseconds(350));
+	CHECK(elapsed < std::chrono::seconds(10));
+}
+
+TEST_CASE("Happy Eyeballs: address families alternate", "[net][connect]")
+{
+	auto v4 = [](const char *a) {
+		auto [ec, addr] = corosio::make_ipv4_address(a);
+		REQUIRE_FALSE(ec);
+		return corosio::endpoint(addr, 389);
+	};
+	auto v6 = [](const char *a) {
+		auto [ec, addr] = corosio::make_ipv6_address(a);
+		REQUIRE_FALSE(ec);
+		return corosio::endpoint(addr, 389);
+	};
+	using list = std::vector<corosio::endpoint>;
+	CHECK(net::detail::interleave_families({}).empty());
+	CHECK(
+	  net::detail::interleave_families({ v4("10.0.0.1"), v4("10.0.0.2") }) == list{ v4("10.0.0.1"), v4("10.0.0.2") });
+	CHECK(net::detail::interleave_families({ v6("::1"), v6("::2"), v6("::3"), v4("10.0.0.1") })
+		  == list{ v6("::1"), v4("10.0.0.1"), v6("::2"), v6("::3") });
+	CHECK(net::detail::interleave_families({ v4("10.0.0.1"), v4("10.0.0.2"), v6("::1"), v6("::2") })
+		  == list{ v4("10.0.0.1"), v6("::1"), v4("10.0.0.2"), v6("::2") });
 }
 
 TEST_CASE("connect ldap://localhost resolves the name", "[net][connect][tcp]")
@@ -357,6 +471,7 @@ TEST_CASE("connection refused", "[net][connect][tcp]")
 
 TEST_CASE("connect timeout while the TCP handshake cannot complete", "[net][connect][tcp][timeout]")
 {
+	skip_unless_linux_loopback();
 	// A listening socket with backlog 0 whose one queue slot is taken: Linux
 	// drops further SYNs, so the next connect stays pending deterministically
 	// (a listening socket that merely never accepts would complete the TCP
@@ -391,6 +506,109 @@ TEST_CASE("unresolvable host", "[net][connect][tcp]")
 	CHECK_THAT(std::string(t.error().context),
 	  StartsWith("connect ldap://no-such-host.invalid:389: resolve no-such-host.invalid"));
 	CHECK(t.error().code);
+}
+
+namespace {
+
+// A listener on an IPv6 address, if this host has one. `zone` is the
+// interface name for a link-local address, empty otherwise.
+struct ipv6_server
+{
+	std::optional<corosio::tcp_acceptor> acc{};
+	std::string address{};// as in a certificate's iPAddress ("::1")
+	std::string zone{};
+
+	// [::1]
+	static ipv6_server loopback(corosio::io_context &ioc)
+	{
+		ipv6_server s;
+		s.listen(ioc, corosio::ipv6_address::loopback(), "::1", "");
+		return s;
+	}
+
+	// The first link-local address of an up, non-loopback interface (glibc
+	// only accepts a zone on a link-local address, so [::1%25lo] cannot be
+	// used).
+	static ipv6_server link_local(corosio::io_context &ioc)
+	{
+		ipv6_server s;
+		ifaddrs *list = nullptr;
+		if (::getifaddrs(&list) != 0) return s;
+		for (ifaddrs *i = list; i != nullptr && !s.acc; i = i->ifa_next) {
+			if (i->ifa_addr == nullptr || i->ifa_addr->sa_family != AF_INET6) continue;
+			if ((i->ifa_flags & IFF_UP) == 0 || (i->ifa_flags & IFF_LOOPBACK) != 0) continue;
+			const auto *sa = reinterpret_cast<const sockaddr_in6 *>(i->ifa_addr);
+			if (!IN6_IS_ADDR_LINKLOCAL(&sa->sin6_addr)) continue;
+			corosio::ipv6_address::bytes_type bytes{};
+			std::memcpy(bytes.data(), &sa->sin6_addr, bytes.size());
+			char text[INET6_ADDRSTRLEN] = {};
+			::inet_ntop(AF_INET6, &sa->sin6_addr, text, sizeof text);
+			s.listen(ioc, corosio::ipv6_address(bytes, sa->sin6_scope_id), text, i->ifa_name);
+		}
+		::freeifaddrs(list);
+		return s;
+	}
+
+	std::string url(const char *scheme) const
+	{
+		std::string host = "[" + address + (zone.empty() ? "" : "%25" + zone) + "]";
+		return std::string(scheme) + "://" + host + ":" + std::to_string(acc->local_endpoint().port());
+	}
+
+  private:
+	void listen(corosio::io_context &ioc, corosio::ipv6_address a, std::string text, std::string z)
+	{
+		try {
+			acc.emplace(ioc, corosio::endpoint(a, 0), 16);
+			address = std::move(text);
+			zone = std::move(z);
+		} catch (const std::system_error &) {// IPv6 disabled, or the address is not usable yet
+			acc.reset();
+		}
+	}
+};
+
+void exchange_over(corosio::io_context &ioc, ipv6_server &v6)
+{
+	SECTION("ldap://")
+	{
+		outcome<std::string> server, client;
+		spawn(ioc, accept_and_serve(*v6.acc), server);
+		spawn(ioc, exchange(ioc, v6.url("ldap")), client);
+		drive(ioc);
+		CHECK(client.get() == "");
+		CHECK(server.get() == "");
+	}
+	SECTION("ldaps://: the certificate's iPAddress matches (without the zone)")
+	{
+		const auto leaf = pki().issue("ipv6", "IP:" + v6.address);
+		outcome<std::string> server, client;
+		spawn(ioc, accept_and_serve(*v6.acc, server_context(leaf)), server);
+		spawn(
+		  ioc, exchange(ioc, v6.url("ldaps"), { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()) } }, true), client);
+		drive(ioc);
+		CHECK(client.get() == "");
+		CHECK(server.get() == "");
+	}
+}
+
+}// namespace
+
+TEST_CASE("connect over the IPv6 loopback", "[net][connect][tcp][tls][ipv6]")
+{
+	corosio::io_context ioc;
+	auto v6 = ipv6_server::loopback(ioc);
+	if (!v6.acc) SKIP("no IPv6 loopback");
+	exchange_over(ioc, v6);
+}
+
+TEST_CASE("connect to a link-local IPv6 address with a zone", "[net][connect][tcp][tls][ipv6]")
+{
+	corosio::io_context ioc;
+	auto v6 = ipv6_server::link_local(ioc);
+	if (!v6.acc) SKIP("no usable link-local IPv6 address");
+	INFO(v6.url("ldap"));
+	exchange_over(ioc, v6);
 }
 
 TEST_CASE("URLs connect() refuses", "[net][connect]")
@@ -744,6 +962,94 @@ TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
 	CHECK(result == "read " + srv.url("ldaps") + ": connection closed (without TLS close_notify) | stream truncated");
 }
 
+namespace {
+
+// Accepts a TLS client and reads until its TLS session ends. Returns what
+// the read reported ("end of file" for a close_notify). `answer`: reply to
+// the close_notify with ours; otherwise stay silent until the client hangs
+// up the TCP connection.
+capy::task<std::string> serve_until_close(corosio::tcp_acceptor &acc, corosio::tls_context ctx, bool answer)
+{
+	auto [ec, peer] = co_await acc.accept();
+	if (ec) co_return "accept: " + ec.message();
+	corosio::openssl_stream stream(&peer, ctx);
+	auto [hec] = co_await stream.handshake(corosio::tls_role::server);
+	if (hec) co_return "handshake: " + hec.message();
+	char buf[256];
+	auto [rec, n] = co_await stream.read_some(capy::mutable_buffer(buf, sizeof buf));
+	if (!rec) co_return "unexpected data";
+	if (answer) {
+		auto [sec] = co_await stream.shutdown();
+		if (sec) co_return "server shutdown: " + sec.message();
+	} else {
+		while (true) {
+			auto [pec, m] = co_await peer.read_some(capy::mutable_buffer(buf, sizeof buf));
+			if (pec) break;
+		}
+	}
+	co_return rec == capy::cond::eof ? "close_notify" : rec.message();
+}
+
+capy::task<std::pair<std::string, bool>>
+  connect_and_shutdown(corosio::io_context &io, std::string text, std::chrono::milliseconds bound)
+{
+	auto u = ldap::url::parse(text);
+	auto t = co_await net::connect(io, *u, { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()) } });
+	if (!t) co_return { "connect: " + std::string(t.error().message()), false };
+	auto r = co_await t->shutdown(bound);
+	co_return { r ? std::string() : std::string(r.error().message()), t->is_open() };
+}
+
+}// namespace
+
+TEST_CASE("transport shutdown: TLS close_notify both ways", "[net][connect][tls]")
+{
+	corosio::io_context ioc;
+	tcp_server srv(ioc);
+	outcome<std::string> server;
+	outcome<std::pair<std::string, bool>> client;
+	spawn(ioc, serve_until_close(srv.acc, server_context(localhost_cert()), true), server);
+	spawn(ioc, connect_and_shutdown(ioc, srv.url("ldaps"), std::chrono::seconds(10)), client);
+	drive(ioc);
+	CHECK(server.get() == "close_notify");
+	CHECK(client.get().first == "");
+	CHECK_FALSE(client.get().second);// closed
+}
+
+TEST_CASE("transport shutdown: a peer that does not answer costs the bound", "[net][connect][tls][timeout]")
+{
+	corosio::io_context ioc;
+	tcp_server srv(ioc);
+	outcome<std::string> server;
+	outcome<std::pair<std::string, bool>> client;
+	spawn(ioc, serve_until_close(srv.acc, server_context(localhost_cert()), false), server);
+	const auto start = std::chrono::steady_clock::now();
+	spawn(ioc, connect_and_shutdown(ioc, srv.url("ldaps"), std::chrono::milliseconds(200)), client);
+	drive(ioc);
+	const auto elapsed = std::chrono::steady_clock::now() - start;
+	CHECK(server.get() == "close_notify");// ours arrived
+	CHECK_THAT(client.get().first, StartsWith("tls shutdown " + srv.url("ldaps") + ": "));
+	CHECK_FALSE(client.get().second);
+	CHECK(elapsed >= std::chrono::milliseconds(150));
+	CHECK(elapsed < std::chrono::seconds(10));
+}
+
+TEST_CASE("transport shutdown: plain and wrapped transports just close", "[net][connect]")
+{
+	corosio::io_context ioc;
+	auto [a, b] = capy::test::make_stream_pair();
+	auto t = net::transport::wrap(std::move(a), "pair");
+	CHECK(t.is_open());
+	REQUIRE(run(ioc, t.shutdown(std::chrono::milliseconds(100))).has_value());
+	CHECK_FALSE(t.is_open());
+	// capy::test::stream::close() ran: the peer reads end of file.
+	char byte = 0;
+	auto [ec, n] = run(ioc, [](capy::test::stream &s, char &c) -> capy::task<capy::io_result<std::size_t>> {
+		co_return co_await s.read_some(capy::mutable_buffer(&c, 1));
+	}(b, byte));
+	CHECK(ec == capy::cond::eof);
+}
+
 TEST_CASE("connect allocates the transport from the given resource", "[net][connect][pmr]")
 {
 	jhetz::ldap::test::counting_resource counting;
@@ -768,7 +1074,7 @@ TEST_CASE("connect allocates the transport from the given resource", "[net][conn
 		auto [a, b] = capy::test::make_stream_pair();
 		auto t = net::transport::wrap(std::move(a), "a custom stream with a long name", &for_wrap);
 		CHECK(t.name().get_allocator().resource() == &for_wrap);
-		CHECK(for_wrap.allocations() == 2);
+		CHECK(for_wrap.allocations() == 3);// the transport block, its name and the stream
 	}
 	CHECK(for_wrap.outstanding() == 0);
 }

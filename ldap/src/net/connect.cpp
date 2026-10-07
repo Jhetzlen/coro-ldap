@@ -1,18 +1,22 @@
 #include "jhetz/ldap/net/connect.hpp"
 
 #include "deadline.hpp"
+#include "happy_eyeballs.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "tls.hpp"
 #include "transport_impl.hpp"
 
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
+#include <boost/capy/ex/async_event.hpp>
 #include <boost/capy/ex/async_waker.hpp>
 #include <boost/capy/ex/run_async.hpp>
+#include <boost/capy/when_any.hpp>
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/local_endpoint.hpp>
 #include <boost/corosio/resolver.hpp>
 #include <boost/corosio/socket_option.hpp>
+#include <boost/corosio/tcp_socket.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -23,12 +27,28 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace capy = boost::capy;
 namespace corosio = boost::corosio;
 
 namespace jhetz::ldap::net {
+
+std::vector<corosio::endpoint> detail::interleave_families(std::vector<corosio::endpoint> in)
+{
+	if (in.empty()) return in;
+	const bool first_v6 = in.front().is_v6();
+	std::vector<corosio::endpoint> preferred, other, out;
+	for (auto &ep : in) (ep.is_v6() == first_v6 ? preferred : other).push_back(ep);
+	out.reserve(in.size());
+	for (std::size_t i = 0; i < std::max(preferred.size(), other.size()); ++i) {
+		if (i < preferred.size()) out.push_back(preferred[i]);
+		if (i < other.size()) out.push_back(other[i]);
+	}
+	return out;
+}
+
 namespace {
 
 	using detail::bounded;
@@ -140,16 +160,69 @@ namespace {
 		return now + *timeout;
 	}
 
-	// Budget for one TCP attempt: min(remaining, max(remaining / left, 1 s)).
-	deadline_t attempt_deadline(deadline_t overall, std::size_t addresses_left)
+	// ---------------------------------------------------------------- Happy Eyeballs
+
+	// Shared by the attempts of one connect(), which outlives them (when_any
+	// waits for every child). Attempt i starts once attempt i-1 has failed
+	// or has been running for attempt_delay, whichever comes first.
+	struct race_state
 	{
-		if (!overall) return std::nullopt;
-		const auto now = clock::now();
-		if (*overall <= now) return overall;
-		const auto remaining = *overall - now;
-		const auto share = remaining / static_cast<long>(addresses_left);
-		const clock::duration floor = std::chrono::seconds(1);
-		return now + std::min(remaining, std::max(share, floor));
+		race_state(corosio::io_context &ioc, std::vector<corosio::endpoint> eps, deadline_t d, clock::duration delay)
+		  : endpoints(std::move(eps)), started(std::make_unique<capy::async_event[]>(endpoints.size())),
+			failed(std::make_unique<capy::async_event[]>(endpoints.size())), start_times(endpoints.size()), deadline(d),
+			attempt_delay(delay)
+		{
+			sockets.reserve(endpoints.size());
+			for (std::size_t i = 0; i < endpoints.size(); ++i) sockets.emplace_back(ioc);
+		}
+
+		std::vector<corosio::endpoint> endpoints;
+		std::vector<corosio::tcp_socket> sockets;
+		std::unique_ptr<capy::async_event[]> started;
+		std::unique_ptr<capy::async_event[]> failed;
+		std::vector<clock::time_point> start_times;
+		deadline_t deadline;
+		clock::duration attempt_delay;
+		// The attempt that failed last, for the error message.
+		std::error_code last{};
+		std::size_t last_index = 0;
+		std::size_t attempted = 0;
+		bool canceled = false;// a wait or connect was stopped by the caller
+	};
+
+	capy::task<capy::io_result<>> wait_for(capy::async_event &e) { co_return co_await e.wait(); }
+
+	// One connection attempt of the race; succeeds only if it connected.
+	capy::task<capy::io_result<>> attempt(race_state &st, std::size_t i)
+	{
+		const auto give_up = [&st, i](std::error_code ec) -> capy::io_result<> {
+			if (ec == capy::cond::canceled) st.canceled = true;
+			st.failed[i].set();
+			st.started[i].set();// never leave the next attempt waiting
+			return { ec };
+		};
+		if (i > 0) {
+			// Attempt i-1 sets `started` before it suspends, so this wait
+			// is short; then race its failure against the attempt delay.
+			if (auto [ec] = co_await wait_for(st.started[i - 1]); ec) co_return give_up(ec);
+			deadline_t until = st.start_times[i - 1] + st.attempt_delay;
+			if (st.deadline && *st.deadline < *until) until = st.deadline;
+			auto [ec] = co_await bounded(wait_for(st.failed[i - 1]), until);
+			if (ec && ec != capy::cond::timeout) co_return give_up(ec);
+			if (st.deadline && clock::now() >= *st.deadline) co_return give_up(make_error_code(capy::error::timeout));
+		}
+		st.start_times[i] = clock::now();
+		st.started[i].set();
+		++st.attempted;
+		auto [ec] = co_await bounded(st.sockets[i].connect(st.endpoints[i]), st.deadline);
+		if (ec) {
+			if (ec != capy::cond::canceled) {
+				st.last = ec;
+				st.last_index = i;
+			}
+			co_return give_up(ec);
+		}
+		co_return {};
 	}
 
 	bool has_control_character(std::string_view host, url_scheme scheme)
@@ -224,34 +297,34 @@ capy::task<result<transport>>
 		co_return fail(std::make_error_code(std::errc::no_such_device_or_address),
 		  target + ": resolve " + str(u.host()) + ": no address");
 
-	// ---- TCP: each address in turn, until one accepts
+	// ---- TCP: Happy Eyeballs (RFC 8305), staggered attempts over every
+	// address, the first to connect wins and the others are cancelled
+	race_state race(ioc,
+	  detail::interleave_families(std::move(endpoints)),
+	  deadline,
+	  std::max<clock::duration>(options.attempt_delay, clock::duration::zero()));
+	std::vector<capy::task<capy::io_result<>>> attempts;
+	attempts.reserve(race.endpoints.size());
+	for (std::size_t i = 0; i < race.endpoints.size(); ++i) attempts.push_back(attempt(race, i));
+	auto winner = co_await capy::when_any(std::move(attempts));
+	if (winner.index() == 0) {
+		std::error_code ec = race.last;
+		const bool timed_out = deadline && clock::now() >= *deadline;
+		if (timed_out)
+			ec = make_error_code(capy::error::timeout);// the whole budget
+		else if (race.canceled || !ec)
+			ec = make_error_code(capy::error::canceled);// stopped by the caller
+		std::string stage = "tcp connect " + to_text(race.endpoints[race.last_index]);
+		if (race.endpoints.size() > 1)
+			stage += " (" + std::to_string(race.attempted) + " of " + std::to_string(race.endpoints.size())
+					 + " addresses tried)";
+		co_return fail(ec, stage_context(target, stage, ec, options.timeout));
+	}
+
 	transport t = transport_access::make(transport::kind::tcp, server, mr);
 	auto &im = transport_access::get(t);
 	im.host = u.host();
-	im.tcp.emplace(ioc);
-	std::error_code last;
-	std::string last_endpoint;
-	bool connected = false;
-	for (std::size_t i = 0; i < endpoints.size(); ++i) {
-		if (im.tcp->is_open()) im.tcp->close();
-		last_endpoint = to_text(endpoints[i]);
-		auto [ec] = co_await bounded(im.tcp->connect(endpoints[i]), attempt_deadline(deadline, endpoints.size() - i));
-		if (!ec) {
-			connected = true;
-			break;
-		}
-		last = ec;
-		if (ec == capy::cond::canceled) break;// stopped by the caller
-		if (deadline && clock::now() >= *deadline) {
-			last = make_error_code(capy::error::timeout);// the whole budget, not just this attempt's share
-			break;
-		}
-	}
-	if (!connected) {
-		std::string stage = "tcp connect " + last_endpoint;
-		if (endpoints.size() > 1) stage += " (last of " + std::to_string(endpoints.size()) + " addresses)";
-		co_return fail(last, stage_context(target, stage, last, options.timeout));
-	}
+	im.tcp.emplace(std::move(race.sockets[std::get<1>(winner)]));
 	if (options.tcp_no_delay) {
 		try {
 			im.tcp->set_option(corosio::socket_option::no_delay(true));

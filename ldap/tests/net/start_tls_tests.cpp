@@ -9,6 +9,7 @@
 #include "net_test_support.hpp"
 
 #include <boost/capy/buffers.hpp>
+#include <boost/capy/cond.hpp>
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/ipv4_address.hpp>
 #include <boost/corosio/openssl_stream.hpp>
@@ -19,6 +20,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -74,6 +76,10 @@ enum class mode {
 	upgrade,// answer success, handshake, then answer one request over TLS
 	refuse,// answer StartTLS with an error, then answer one request in clear
 	inject,// answer success followed by extra plaintext bytes
+	// upgrade, then expect an UnbindRequest followed by a TLS close_notify,
+	// and answer the close_notify (or not)
+	unbind,
+	unbind_silent,
 };
 
 capy::task<std::string> serve_start_tls(corosio::tcp_acceptor &acc, corosio::tls_context ctx, mode m)
@@ -117,7 +123,23 @@ capy::task<std::string> serve_start_tls(corosio::tcp_acceptor &acc, corosio::tls
 	if (hec) co_return "server handshake: " + hec.message();
 	net::transport secure = net::transport::wrap(stream_ref<corosio::openssl_stream>{ &tls }, "server tls");
 	net::read_buffer tls_buf;
-	co_return co_await answer_one(secure, tls_buf);
+	if (auto r = co_await answer_one(secure, tls_buf); !r.empty() || (m != mode::unbind && m != mode::unbind_silent))
+		co_return r;
+
+	auto unbind = co_await net::read_message(secure, tls_buf, as_server);
+	if (!unbind || !std::holds_alternative<ldap::unbind_request>(unbind->op)) co_return "expected an UnbindRequest";
+	char byte = 0;
+	auto [rec, n] = co_await tls.read_some(capy::mutable_buffer(&byte, 1));
+	if (rec != capy::cond::eof) co_return "expected close_notify, got: " + rec.message();
+	if (m == mode::unbind) {
+		auto [sec] = co_await tls.shutdown();
+		if (sec) co_return "server shutdown: " + sec.message();
+		co_return "";
+	}
+	while (true) {// silent: wait for the client to hang up
+		auto [pec, k] = co_await peer.read_some(capy::mutable_buffer(&byte, 1));
+		if (pec) co_return "";
+	}
 }
 
 struct tls_fixture
@@ -175,6 +197,35 @@ TEST_CASE("start_tls: connection_options::start_tls upgrades right after connect
 	c.close();
 	drive(f.ioc);
 	CHECK(f.server.get() == "");
+}
+
+TEST_CASE("start_tls: unbind ends the TLS session with close_notify", "[net][starttls]")
+{
+	tls_fixture f;
+	f.serve(mode::unbind);
+	auto c = f.connect(trusting({ .start_tls = true }));
+	REQUIRE(finish(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+	REQUIRE(finish(f.ioc, c.unbind()).has_value());
+	CHECK_FALSE(c.is_open());
+	drive(f.ioc);
+	CHECK(f.server.get() == "");
+}
+
+TEST_CASE("start_tls: unbind waits for the server's close_notify at most tls_shutdown_timeout",
+  "[net][starttls][timeout]")
+{
+	tls_fixture f;
+	f.serve(mode::unbind_silent);
+	auto c = f.connect(trusting({ .tls_shutdown_timeout = std::chrono::milliseconds(200), .start_tls = true }));
+	REQUIRE(finish(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+	const auto start = std::chrono::steady_clock::now();
+	REQUIRE(finish(f.ioc, c.unbind()).has_value());// the TLS shutdown is best effort
+	const auto elapsed = std::chrono::steady_clock::now() - start;
+	CHECK_FALSE(c.is_open());
+	drive(f.ioc);
+	CHECK(f.server.get() == "");
+	CHECK(elapsed >= std::chrono::milliseconds(150));
+	CHECK(elapsed < std::chrono::seconds(10));
 }
 
 TEST_CASE("start_tls: the server refuses", "[net][starttls]")

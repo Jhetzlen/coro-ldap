@@ -4,6 +4,8 @@
 
 #include "jhetz/ldap/message.hpp"
 
+#include <catch2/catch_test_macros.hpp>
+
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/task.hpp>
 #include <boost/corosio/io_context.hpp>
@@ -136,6 +138,17 @@ template<class T> T finish(corosio::io_context &ioc, capy::task<T> t)
 		out.get();
 	else
 		return std::move(out.get());
+}
+
+// Tests that rely on Linux loopback behaviour: all of 127/8 is routed to lo
+// (127.0.0.2 works without configuration), and a listener with a full
+// backlog drops SYNs instead of refusing them, so a connect stays pending.
+// Other systems refuse such a connect or lack the address.
+inline void skip_unless_linux_loopback()
+{
+#if !defined(__linux__)
+	SKIP("needs Linux loopback behaviour (127/8 routed, SYN dropped at a full backlog)");
+#endif
 }
 
 // ---------------------------------------------------------------- messages

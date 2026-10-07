@@ -119,7 +119,14 @@ struct connection_options
 	// net::connect_options. nullopt: no limit.
 	std::optional<std::chrono::milliseconds> timeout{ std::chrono::seconds(30) };
 	net::tls_options tls{};
+	// Happy Eyeballs delay between connection attempts (see
+	// net::connect_options::attempt_delay).
+	std::chrono::milliseconds attempt_delay{ 250 };
 	bool tcp_no_delay = true;
+	// unbind() on a TLS connection (ldaps:// or after StartTLS) sends a TLS
+	// close_notify and waits at most this long for the server's before
+	// closing (net::transport::shutdown). nullopt: no limit.
+	std::optional<std::chrono::milliseconds> tls_shutdown_timeout{ std::chrono::seconds(1) };
 	// Largest PDU accepted from the server, checked from its header before
 	// the body is read (client_errc::message_too_large, which closes the
 	// connection). 16 MiB by default: one entry of a large group or with
@@ -433,7 +440,10 @@ class connection
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 
 	// Sends an UnbindRequest, waits until it is written, and closes the
-	// connection (RFC 4511 section 4.3: there is no response). Outstanding
+	// connection (RFC 4511 section 4.3: there is no response). On TLS it
+	// then ends the TLS session gracefully: close_notify, then the server's,
+	// within connection_options::tls_shutdown_timeout (best effort: the
+	// result does not depend on it). Outstanding
 	// operations and open streams fail with not_connected (an unbind
 	// abandons them on the server too). The connection is closed even if
 	// the write fails or the task is cancelled.

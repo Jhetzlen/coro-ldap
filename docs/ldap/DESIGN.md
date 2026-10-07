@@ -482,10 +482,25 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   negative fails at once) covers name lookup, every TCP attempt and the TLS
   handshake. The lookup runs detached so a slow DNS server cannot hold
   `connect` past the deadline (the io_context itself stays busy until the
-  lookup thread returns). Each address gets
-  `min(remaining, max(remaining / addresses left, 1 s))`, so one
-  black-holed address does not starve the others. Errors name the stage:
-  `connect ldaps://h:636: tls handshake: ...`.
+  lookup thread returns). Several addresses are raced with Happy Eyeballs
+  (RFC 8305, #18): families interleaved (first family first), each attempt
+  started when the previous one fails or after `attempt_delay` (250 ms),
+  the first connection wins and the others are cancelled (Capy's
+  `when_any`, one socket per attempt). A black-holed address costs
+  `attempt_delay`, not the budget. Errors name the stage:
+  `connect ldaps://h:636: tls handshake: ...`, and for TCP the last
+  failure with `(N of M addresses tried)`.
+- Closing: `transport::close()` is immediate (no close_notify).
+  `transport::shutdown(timeout)` sends close_notify and waits, bounded, for
+  the peer's (#18); `connection::unbind()` uses it after the UnbindRequest
+  is written and the reader has stopped, with
+  `connection_options::tls_shutdown_timeout` (1 s), best effort.
+  `transport::wrap()` owns the custom stream on the transport's resource and
+  forwards `close()` / `cancel()` to it when the stream has them.
+- IPv6: tested end to end over `[::1]` and over a link-local address with a
+  zone (`[fe80::...%25eth0]`, skipped without one). glibc accepts a zone
+  only on link-local and multicast addresses, so `[::1%25lo]` fails to
+  resolve.
 - TLS: verification is on by default (Corosio's own default is off), with
   the system trust store, SNI, host name checks (IP literals against iPAddress
   entries, zone stripped) and TLS 1.2 minimum. Options: `ca_file`, `ca_dir`,
@@ -697,7 +712,6 @@ same codec serve the client and a mock server for tests.
 
 ## Open questions
 
-- Happy Eyeballs (RFC 8305) instead of sequential per-address attempts.
 - Stricter TLS host matching (no CN fallback, no partial wildcards) needs
   Corosio to expose the OpenSSL check flags.
 - Per-search memory limits (across many entries) are left to the caller:

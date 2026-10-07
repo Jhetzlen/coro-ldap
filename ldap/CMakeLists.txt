@@ -79,12 +79,18 @@ if(JHETZ_LDAP_BUILD_FUZZERS)
 endif()
 
 # Warnings apply to our own targets only.
+# Clang 21+ counts __COUNTER__ (used by Catch2's macros, expanded in our
+# test sources) as a C2y extension under -Wpedantic.
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag(-Wno-c2y-extensions JHETZ_LDAP_HAS_WNO_C2Y_EXTENSIONS)
+
 function(jhetz_ldap_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 $<$<BOOL:${JHETZ_LDAP_WERROR}>:/WX>)
     else()
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow
+            $<$<BOOL:${JHETZ_LDAP_HAS_WNO_C2Y_EXTENSIONS}>:-Wno-c2y-extensions>
             $<$<BOOL:${JHETZ_LDAP_WERROR}>:-Werror>)
     endif()
 endfunction()

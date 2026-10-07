@@ -56,6 +56,50 @@ jobs:
       - name: Repeat network tests
         run: ctest --test-dir build --output-on-failure -R '^net\.' --repeat until-fail:5
 
+  clang-net:
+    name: Clang 19 Debug with NET (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang-19 libssl-dev
+      - name: Configure
+        run: >
+          cmake -S ldap -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=clang++-19
+          -DJHETZ_LDAP_SANITIZE=ON
+          -DJHETZ_LDAP_WERROR=ON
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  # Not yet seen green: kept non-blocking until it is. Tests relying on Linux
+  # loopback behaviour (127/8, SYN drop at a full backlog) skip themselves.
+  macos:
+    name: macOS (Apple Clang, NET)
+    runs-on: macos-15
+    continue-on-error: true
+    env:
+      # The default TMPDIR is too long for the ldapi:// tests' socket paths
+      # (sockaddr_un holds 104 bytes on macOS).
+      TMPDIR: /tmp
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: brew install ninja openssl@3
+      - name: Configure
+        run: >
+          cmake -S ldap -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          -DJHETZ_LDAP_WERROR=ON
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
   integration:
     name: Integration (OpenLDAP slapd, GCC 13, ASan + UBSan)
     runs-on: ubuntu-24.04

@@ -35,6 +35,12 @@
 // the ldaps:// handshake code: detail::make_tls_setup() and
 // detail::tls_handshake() in src/net/tls.hpp.
 //
+// Ending a connection: close() is immediate (the socket goes away; for TLS no
+// close_notify alert is sent, so the peer sees a truncated stream).
+// shutdown() is the graceful variant: for TLS it sends close_notify and
+// waits, within a bound, for the peer's before closing (RFC 5246 section
+// 7.2.1; RFC 4511 section 4.13 for StartTLS). connection::unbind() uses it.
+//
 // Threading (Capy/Corosio rules): at most one read and one write may be in
 // flight at a time, and all operations must run on the executor of the
 // io_context the transport was created on. Destroying a transport with an
@@ -42,12 +48,17 @@
 // Moving one is fine, the parts stay where they are.
 #pragma once
 
+#include "jhetz/ldap/error.hpp"
+
 #include <boost/capy/concept/stream.hpp>
 #include <boost/capy/io/any_stream.hpp>
+#include <boost/capy/task.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -72,16 +83,29 @@ class transport
 	transport &operator=(const transport &) = delete;
 	~transport();
 
-	// Takes ownership of any capy::Stream (kind::custom). `name` is used in
-	// error contexts ("read <name>: ..."). close() and cancel() do nothing on
-	// a custom stream; the stream's own means of closing apply.
+	// Takes ownership of any capy::Stream (kind::custom), stored with the
+	// transport's block on `mr`. `name` is used in error contexts ("read
+	// <name>: ..."). close() and cancel() call the stream's own close() and
+	// cancel() if it has them (a tcp_socket, capy::test::stream's close());
+	// a stream without close() cannot be closed by the transport, but
+	// is_open() turns false after close() either way.
 	template<boost::capy::Stream S>
 	static transport wrap(S stream,
 	  std::string_view name = "custom stream",
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	{
 		transport t = make(kind::custom, name, mr);
-		t.set_custom(boost::capy::any_stream(std::move(stream)));
+		std::pmr::polymorphic_allocator<S> alloc(mr);
+		custom_ops ops{};
+		ops.destroy = [](void *s, std::pmr::memory_resource *r) noexcept {
+			std::pmr::polymorphic_allocator<S>(r).delete_object(static_cast<S *>(s));
+		};
+		if constexpr (requires(S &s) { s.close(); }) ops.close = [](void *s) noexcept { static_cast<S *>(s)->close(); };
+		if constexpr (requires(S &s) { s.cancel(); })
+			ops.cancel = [](void *s) noexcept { static_cast<S *>(s)->cancel(); };
+		S *p = alloc.template new_object<S>(std::move(stream));
+		t.set_custom(p, ops);// owns p from here
+		t.stream() = boost::capy::any_stream(p);
 		return t;
 	}
 
@@ -107,6 +131,16 @@ class transport
 	// complete with an error; later reads and writes fail. Idempotent.
 	void close() noexcept;
 
+	// Graceful close. TLS: sends close_notify and waits for the peer's, at
+	// most `timeout` (nullopt: no limit), then close(). The result is the
+	// TLS shutdown's: success when the peer answered, an error comparing
+	// equal to boost::capy::cond::timeout when it did not in time, or the
+	// transport error (capy::error::stream_truncated when the peer closed
+	// without close_notify). Plain TCP, ldapi and custom streams: close()
+	// and success. A stop request ends the wait (capy::cond::canceled). The
+	// transport is closed in every case. No write may be in flight; a read may (Corosio's rule).
+	boost::capy::task<result<void>> shutdown(std::optional<std::chrono::milliseconds> timeout);
+
 	struct impl;// defined in src/net/transport_impl.hpp (used by connect)
 
   private:
@@ -114,7 +148,13 @@ class transport
 
 	static transport make(kind k, std::string_view name, std::pmr::memory_resource *mr);
 	void destroy() noexcept;
-	void set_custom(boost::capy::any_stream s);
+	struct custom_ops
+	{
+		void (*destroy)(void *, std::pmr::memory_resource *) noexcept = nullptr;
+		void (*close)(void *) noexcept = nullptr;
+		void (*cancel)(void *) noexcept = nullptr;
+	};
+	void set_custom(void *stream, custom_ops ops) noexcept;
 
 	impl *impl_ = nullptr;// allocated from the resource it records
 };

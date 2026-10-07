@@ -30,6 +30,11 @@ struct transport::impl
 	std::optional<boost::corosio::tls_context> tls_context{};
 	// Reference mode over *tcp (see transport.hpp, StartTLS).
 	std::optional<boost::corosio::openssl_stream> tls{};
+	// kind::custom: the wrapped stream, owned (allocated from mr) and
+	// destroyed by transport::destroy() after `stream`, which refers to it.
+	void *custom = nullptr;
+	transport::custom_ops custom_ops{};
+	bool custom_closed = false;
 	boost::capy::any_stream stream{};
 };
 
