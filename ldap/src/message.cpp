@@ -673,11 +673,12 @@ namespace {
 	// monotonic arena (it never reuses the old buffers). Counting stops at
 	// the first element that could not decode as one, so a hostile list of
 	// invalid elements (e.g. 8M empty SEQUENCEs) cannot make decode reserve
-	// more than a valid message of the same size would really use.
-	std::size_t count_elements(ber::reader r, ber::tag t, std::size_t min_size)
+	// more than a valid message of the same size would really use. It also
+	// stops at `limit` (what is left of decode_options::max_elements).
+	std::size_t count_elements(ber::reader r, ber::tag t, std::size_t min_size, std::size_t limit)
 	{
 		std::size_t n = 0;
-		while (!r.empty()) {
+		while (!r.empty() && n < limit) {
 			auto e = r.read();
 			if (!e || e->t != t || e->size() < min_size) break;
 			++n;
@@ -723,8 +724,23 @@ namespace {
 	  private:
 		result<std::pmr::string> str(ber::reader &r, ber::tag t = ber::tags::octet_string)
 		{
+			if (strings_ == options_.max_elements) [[unlikely]]
+				return too_many_elements(r.offset());
+			// Counted before reading (a failed read ends the decode anyway),
+			// so the result is returned directly, not copied.
+			++strings_;
 			return r.read_string(t, a_.resource());
 		}
+
+		// Kept out of str(), the hottest decoding path.
+		std::unexpected<error> too_many_elements(std::size_t offset) const
+		{
+			return fail(client_errc::message_too_large,
+			  "message: more than " + std::to_string(options_.max_elements) + " elements" + at(offset));
+		}
+
+		// Elements str() may still decode.
+		std::size_t budget() const noexcept { return options_.max_elements - strings_; }
 
 		result<std::optional<std::pmr::string>> optional_str(ber::reader &r, ber::tag t)
 		{
@@ -773,7 +789,7 @@ namespace {
 			LDAP_TRY(type, str(pa));
 			LDAP_TRY(vals, pa.enter(ber::tags::set));
 			out.type = std::move(type);
-			out.values.reserve(count_elements(vals, ber::tags::octet_string, min_value_size));
+			out.values.reserve(count_elements(vals, ber::tags::octet_string, min_value_size, budget()));
 			while (!vals.empty()) {
 				LDAP_TRY(v, str(vals));
 				out.values.push_back(std::move(v));
@@ -785,7 +801,7 @@ namespace {
 		result<void> read_attributes(ber::reader &r, std::pmr::vector<partial_attribute> &out)
 		{
 			LDAP_TRY(list, r.enter());
-			out.reserve(count_elements(list, ber::tags::sequence, min_attribute_size));
+			out.reserve(count_elements(list, ber::tags::sequence, min_attribute_size, budget()));
 			while (!list.empty()) LDAP_TRY_VOID(read_attribute(list, out.emplace_back()));
 			return {};
 		}
@@ -1108,6 +1124,7 @@ namespace {
 
 		const decode_options &options_;
 		alloc_t a_;
+		std::size_t strings_ = 0;// decoded by str(), against options_.max_elements
 	};
 
 }// namespace

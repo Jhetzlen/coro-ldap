@@ -668,6 +668,71 @@ TEST_CASE("regression: invalid list elements do not drive the reserve size", "[m
 	}
 }
 
+TEST_CASE("decode_options::max_elements bounds the strings of one message", "[message][options]")
+{
+	// Object name, one type, three values: 5 strings.
+	ldap::search_result_entry e;
+	e.object_name = "cn=x";
+	e.attributes.push_back({ "cn", { "a", "b", "c" } });
+	const auto entry = *ldap::encode(ldap::message{ 1, e });
+	CHECK(ldap::decode(entry, { .max_elements = 5 }).has_value());
+	const auto over = ldap::decode(entry, { .max_elements = 4 });
+	REQUIRE_FALSE(over);
+	CHECK(over.error().code == client_errc::message_too_large);
+	CHECK(over.error().context.starts_with("message: more than 4 elements at offset "));
+	// Referral URIs and control OIDs count too.
+	ldap::search_result_done done{ { 10, "", "", { "ldap://a/", "ldap://b/" } } };
+	const auto referral = *ldap::encode(ldap::message{ 2, done, { ldap::control{ "1.2.3" } } });
+	CHECK(ldap::decode(referral, { .max_elements = 5 }).has_value());
+	CHECK(code_of(ldap::decode(referral, { .max_elements = 4 })) == client_errc::message_too_large);
+}
+
+TEST_CASE("regression: many tiny values cannot multiply a message's size in memory", "[message][options]")
+{
+	// A SearchResultEntry of `count` empty values (04 00) in one attribute,
+	// or of `count` attributes with an empty type and no values
+	// (30 04 04 00 31 00). Valid, so before max_elements every one became a
+	// string (a 16 MiB PDU took about 300 MB). Decoding must stop at the
+	// limit, and the reserve sized from the list must stop there too: a
+	// small arena with no upstream would throw bad_alloc otherwise.
+	constexpr std::size_t count = 300'000;
+	auto entry_with = [&](bool many_attributes) {
+		return raw_message(1, [&](ber::writer &m) {
+			m.constructed(ber::application(4), [&](ber::writer &o) {
+				o.octet_string("cn=x");
+				o.constructed(ber::tags::sequence, [&](ber::writer &list) {
+					if (many_attributes) {
+						for (std::size_t i = 0; i < count; ++i)
+							list.constructed(ber::tags::sequence, [](ber::writer &pa) {
+								pa.octet_string("");
+								pa.constructed(ber::tags::set, [](ber::writer &) {});
+							});
+						return;
+					}
+					list.constructed(ber::tags::sequence, [&](ber::writer &pa) {
+						pa.octet_string("cn");
+						pa.constructed(ber::tags::set, [&](ber::writer &vals) {
+							for (std::size_t i = 0; i < count; ++i) vals.octet_string("");
+						});
+					});
+				});
+			});
+		});
+	};
+	for (bool many_attributes : { false, true }) {
+		const auto bytes = entry_with(many_attributes);
+		// Under the default limit it decodes.
+		CHECK(ldap::decode(bytes).has_value());
+		std::vector<std::byte> buffer(256 * 1024);
+		std::pmr::monotonic_buffer_resource arena(buffer.data(), buffer.size(), std::pmr::null_memory_resource());
+		ldap::result<ldap::message> r = std::unexpected(ldap::error{});
+		REQUIRE_NOTHROW(
+		  r = ldap::decode(bytes, { .from = ldap::origin::server, .max_elements = 1000, .memory = &arena }));
+		REQUIRE_FALSE(r);
+		CHECK(r.error().code == client_errc::message_too_large);
+	}
+}
+
 TEST_CASE("add and modify-add values must not be empty", "[message]")
 {
 	const ldap::message empty_add{ 1, ldap::add_request{ "cn=x", { { "cn", { "x" } }, { "sn", {} } } } };

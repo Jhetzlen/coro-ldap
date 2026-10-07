@@ -625,13 +625,18 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   lifetimes.
 - Coroutine frames already accept a memory resource via Capy's
   `run_async(ex, mr)`.
-- Benchmark (`ldap/bench`, GCC 13 Release; 1,000 SearchResultEntry PDUs of
+- Benchmark (`ldap/bench`, GCC 16 Release; 1,000 SearchResultEntry PDUs of
   30 attributes x 3 values, every 20th with 68 KiB of binaries, 7.1 MiB):
-  default heap 15.1 ms and 111.7 allocations per entry; per-message
-  monotonic arena with a 256 KiB buffer 10.9 ms and 0 heap allocations. The
-  arena path is about 20% faster than step 4; the default heap path is about
-  9% slower than step 4 (virtual resource calls plus an element-counting pass
-  that reserves vectors exactly).
+  default heap 10.0 ms and 111.7 allocations per entry; per-message
+  monotonic arena with a 256 KiB buffer 7.6 ms and 0 heap allocations.
+  Decoding counts list elements first to reserve vectors exactly (a third
+  fewer heap allocations); with the BER header fast path (#19) that costs
+  nothing measurable, so it is unconditional.
+- Decoded memory is bounded by `decode_options::max_elements` (decoded
+  strings per message, 1,000,000 by default; `connection_options::
+  max_elements`), not only by the PDU size: a 16 MiB PDU of empty values
+  stops at 38 MiB instead of decoding to 320 MiB. Vectors are reserved
+  within that budget too.
 
 ## 9. Toolchain
 
@@ -682,26 +687,22 @@ same codec serve the client and a mock server for tests.
 
 ## Resolved
 
+- Message size (#19): `max_message_size` stays 16 MiB (one entry of a
+  large group, or with photos and certificates, can legitimately take
+  several MiB); the decoded size is bounded separately by `max_elements`.
+
 - Filters: a typed tree built by operators; only `filter::raw` parses (section 2).
 - Descriptors: optional `object_class(...)` (section 4).
 - Schema: minimal parsing (section 6).
 
 ## Open questions
 
-- Default-heap decode is about 9% slower than before step 4b; the
-  element-counting pass (exact `reserve`) costs about 1 ms per 1,000 entries
-  in arena mode but saves a third of heap allocations. Revisit with real
-  workloads.
-
 - Happy Eyeballs (RFC 8305) instead of sequential per-address attempts.
 - Stricter TLS host matching (no CN fallback, no partial wildcards) needs
   Corosio to expose the OpenSSL check flags.
-- Message size: step 5a keeps the 16 MiB default
-  (`connection_options::max_message_size`), since one entry of a large group
-  or with photos and certificates can legitimately take several MiB, and
-  documents that a 16 MiB SearchResultEntry of empty values decodes to
-  about 300 MB (linear, about 12-18x the message size). Per-entry or
-  per-search memory limits are still open (#19).
+- Per-search memory limits (across many entries) are left to the caller:
+  `search_stream` hands entries over one at a time, and `max_message_size`
+  with `max_elements` bound each one.
 
 - Should `MUST` attributes of the declared object classes be checked against
   required (`T`) fields? Needs `MUST`/`MAY` parsing, so deferred.

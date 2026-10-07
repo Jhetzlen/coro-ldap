@@ -531,6 +531,18 @@ TEST_CASE("connection: oversized responses are rejected from the header", "[net]
 	CHECK_FALSE(m.conn.is_open());
 }
 
+TEST_CASE("connection: max_elements applies to responses", "[net][connection]")
+{
+	// The entry decodes to 6 strings (name, two types, three values).
+	mock_ldap m({ .max_elements = 2 });
+	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1) }) });
+	auto r = m.run(m.conn.search(people_search()));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == client_errc::message_too_large);
+	CHECK_THAT(std::string(r.error().context), ContainsSubstring("more than 2 elements"));
+	CHECK_FALSE(m.conn.is_open());
+}
+
 TEST_CASE("connection: server closing mid-search", "[net][connection]")
 {
 	SECTION("between PDUs")

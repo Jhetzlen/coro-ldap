@@ -30,8 +30,7 @@ struct read_options
 {
 	// Largest accepted PDU (header + body). A larger declared length fails
 	// with client_errc::message_too_large before the body is read. The
-	// default is 16 MiB; see DESIGN.md "Open questions" for why a lower
-	// value or per-entry limits may be preferable.
+	// default is 16 MiB; decode.max_elements bounds the decoded size.
 	std::size_t max_message_size = ber::default_max_message_size;
 	// Passed to decode(). A client must keep origin::server: a server may
 	// not send request operations (for example search filters).

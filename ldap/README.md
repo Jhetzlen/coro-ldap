@@ -110,7 +110,11 @@ on by default) with the network parts. It depends on Corosio and Capy
   `origin::server` by default; bytes of the following PDUs stay in the
   `read_buffer`. A PDU that is not a SEQUENCE or declares more than
   `max_message_size` (16 MiB default) is rejected from its header, before its
-  body is read; the buffer grows to one PDU (or 16 KiB) at most. A TLS peer
+  body is read; the buffer grows to one PDU (or 16 KiB) at most. A PDU that
+  decodes to more than `decode_options::max_elements` strings (1,000,000
+  by default) fails with `message_too_large`, which bounds the memory of a
+  PDU made of tiny values (38 MiB instead of 320 MiB for 16 MiB of empty
+  values). A TLS peer
   closing without close_notify between PDUs reads as a close. After any
   error the connection must be dropped. `read_options::decode.memory` is the
   resource the message is decoded into (e.g. a per-response arena).
@@ -121,7 +125,8 @@ on by default) with the network parts. It depends on Corosio and Capy
 - `jhetz/ldap/connection.hpp` (steps 5a, 5b): `ldap::connection`, the
   client API. `co_await ldap::connect(ioc, url, connection_options, mr)`
   wraps `net::connect` (`connection_options`: connect `timeout`, `tls`,
-  `tcp_no_delay`, `max_message_size` (16 MiB by default),
+  `tcp_no_delay`, `max_message_size` (16 MiB by default), `max_elements`
+  (1,000,000 decoded strings per response by default),
   `operation_timeout`); a connection can also be built on any
   `net::transport` with `connection(ioc, transport, options, mr)`.
   Operations: `simple_bind(dn, password)` (an empty name and password is
@@ -342,28 +347,30 @@ cmake -S ldap -B build/ldap-bench -G Ninja -DCMAKE_BUILD_TYPE=Release \
 cmake --build build/ldap-bench && build/ldap-bench/jhetz_ldap_decode_bench
 ```
 
-GCC 13.3, Release (`-O3`), one core of a shared 4-core VM, best / median of
-15 runs (three invocations agreed within 2%):
+GCC 16.2, Release (`-O3`), a 12-thread desktop, best / median of 15 runs
+(three invocations; the heap row varies by about 10% between them, the
+arena rows by under 1%):
 
 | Mode | Best | Median | Heap allocations | per entry | Heap MiB |
 |---|---:|---:|---:|---:|---:|
-| default resource (heap) | 14.8 ms | 15.1 ms | 111,662 | 111.7 | 11.8 |
-| monotonic arena, 256 KiB buffer, `release()` | 10.7 ms | 10.9 ms | 0 | 0 | 0 |
-| monotonic arena, no buffer, `release()` | 11.1 ms | 11.3 ms | 5,100 | 5.1 | 17.4 |
+| default resource (heap) | 10.0 ms | 10.0 ms | 111,662 | 111.7 | 11.8 |
+| monotonic arena, 256 KiB buffer, `release()` | 7.6 ms | 7.6 ms | 0 | 0 | 0 |
+| monotonic arena, no buffer, `release()` | 8.0 ms | 8.0 ms | 5,100 | 5.1 | 17.4 |
 
 A reused arena with a buffer that holds a typical response removes every
-heap allocation and saves about 28% of the decode time here; without a
+heap allocation and saves about 24% of the decode time here; without a
 buffer, `release()` hands the chunks back and each message fetches them
 again (about 5 per entry, larger ones for the photos). Decoding reserves the
 attribute and value vectors exactly (counting the elements first), which
 took the heap mode from 177 to 112 allocations per entry and the arena
 without buffer from 24.6 to 17.4 MiB, at the price of reading the element
-headers twice (the arena modes were about 1 ms faster without it).
-For reference, the step 4 decoder (`std::string` / `std::vector`, before
-this change) took 13.6 ms for the same stream (ported benchmark, heap only):
-the default-resource path is now about 9% slower (the virtual
-`memory_resource` calls and the counting pass), the arena paths about 20%
-faster.
+headers twice. Since BER headers are parsed without building a `result` in
+the common case (#19), that second read costs nothing measurable, and
+decoding got faster in every mode: on the same machine and in the same
+session, before and after that change, heap 11.5 to 10.0 ms (-13%), arena
+with buffer 9.3 to 7.6 ms (-18%), arena without buffer 9.6 to 8.0 ms
+(-17%). Counting decoded strings against `decode_options::max_elements`
+costs about 0.3 ms of that.
 
 ## Golden vectors
 

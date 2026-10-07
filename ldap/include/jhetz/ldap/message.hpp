@@ -832,6 +832,8 @@ enum class origin {
 	client,// requests only: what a server (or mock server) receives
 };
 
+inline constexpr std::size_t default_max_elements = 1'000'000;
+
 struct decode_options
 {
 	// Operations the peer may not send fail with unsupported_operation before
@@ -841,6 +843,14 @@ struct decode_options
 	std::size_t max_depth = ber::reader::default_max_depth;
 	// Limits for the filter of a search request.
 	filter_limits filter{};
+	// Most strings (attribute types, values, DNs, URIs, OIDs...) one message
+	// may decode to; more fail with message_too_large. Every list element
+	// holds at least one, so this bounds every list: without it a 16 MiB
+	// entry of empty values (2 bytes each on the wire) takes 320 MiB to
+	// decode. 1,000,000 is far above real entries (335,000 member DNs of
+	// 48 bytes already fill 16 MiB) and stops that case at 38 MiB.
+	// Filters have their own limits (filter_limits).
+	std::size_t max_elements = default_max_elements;
 	// Everything the decoded message owns is allocated from here. With an
 	// arena (e.g. a std::pmr::monotonic_buffer_resource per response), the
 	// message must not outlive it; see the lifetime rule at the top. Errors

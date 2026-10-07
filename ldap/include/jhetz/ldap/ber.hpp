@@ -295,6 +295,7 @@ class reader
 	  : data_(data), base_(base), depth_(depth), max_depth_(max_depth)
 	{}
 
+	bool fast_header(header &out) const noexcept;
 	result<header> parse_header() const;
 	result<element> read_primitive(tag expected, const char *what);
 	result<reader> enter_impl(tag t, bool constructed, const char *what);

@@ -147,7 +147,8 @@ struct connection::impl
 {
 	impl(corosio::io_context &ioc, net::transport t, const connection_options &options, std::pmr::memory_resource *mr_)
 	  : ex(ioc.get_executor()), mr(mr_), transport(std::move(t)), buf(mr_), max_message_size(options.max_message_size),
-		default_timeout(options.operation_timeout), pending(mr_), abandoned(mr_), outbox(mr_), scratch(mr_)
+		max_elements(options.max_elements), default_timeout(options.operation_timeout), pending(mr_), abandoned(mr_),
+		outbox(mr_), scratch(mr_)
 	{
 		schema_mode = options.schema_check;
 		write_idle.set();
@@ -160,6 +161,7 @@ struct connection::impl
 	net::transport transport;
 	net::read_buffer buf;
 	std::size_t max_message_size;
+	std::size_t max_elements;
 	std::optional<std::chrono::milliseconds> default_timeout;
 	std::int32_t next_id = 1;
 	bool open = true;
@@ -373,7 +375,7 @@ struct connection::impl
 				buf.consume(size);// skipped, not decoded
 				return;
 			}
-			auto m = decode(bytes, { .from = origin::server, .memory = p.mr });
+			auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = p.mr });
 			buf.consume(size);
 			if (!m) {
 				shut(with_context(std::move(m.error()), "read " + std::string(transport.name())), true);
@@ -418,7 +420,7 @@ struct connection::impl
 	{
 		std::optional<error> fatal;
 		{
-			auto m = decode(bytes, { .from = origin::server, .memory = &scratch });
+			auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = &scratch });
 			if (!m) {
 				fatal = with_context(std::move(m.error()), "read " + std::string(transport.name()));
 			} else if (const auto *x = std::get_if<extended_response>(&m->op); x == nullptr) {

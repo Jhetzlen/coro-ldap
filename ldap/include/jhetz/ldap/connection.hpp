@@ -123,10 +123,13 @@ struct connection_options
 	// Largest PDU accepted from the server, checked from its header before
 	// the body is read (client_errc::message_too_large, which closes the
 	// connection). 16 MiB by default: one entry of a large group or with
-	// photos and certificates can legitimately take several MiB. Decoding
-	// can take about 12-18x the PDU size in memory for pathological entries
-	// (many empty values); lower this if the server is not trusted.
+	// photos and certificates can legitimately take several MiB.
 	std::size_t max_message_size = ber::default_max_message_size;
+	// Most strings one response may decode to (decode_options::max_elements):
+	// bounds the memory a PDU of many tiny values takes once decoded. More
+	// fail with client_errc::message_too_large, which closes the connection
+	// like any response that does not decode.
+	std::size_t max_elements = default_max_elements;
 	// Default limit for each operation, from sending its request to its
 	// final response (for a search: to the SearchResultDone, across every
 	// next()). On expiry the operation fails with capy::error::timeout and

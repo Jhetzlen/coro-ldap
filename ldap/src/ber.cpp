@@ -195,8 +195,33 @@ void writer::rollback(std::size_t mark, std::size_t resets)
 
 // ---------------------------------------------------------------- decoder
 
+// The common case (low tag number, definite length, content present), without
+// building a result; everything else, every error included, goes through
+// parse_header_at.
+bool reader::fast_header(header &out) const noexcept
+{
+	const auto rest = data_.subspan(pos_);
+	if (rest.size() < 2) return false;
+	const unsigned id = octet(rest[0]);
+	if ((id & 0x1Fu) == 0x1Fu) return false;
+	const unsigned first = octet(rest[1]);
+	std::size_t header_size = 2;
+	std::size_t length = first;
+	if (first >= 0x80u) {
+		const std::size_t count = first & 0x7Fu;
+		if (count == 0 || count > max_length_octets || rest.size() < 2 + count) return false;
+		length = 0;
+		for (std::size_t i = 0; i < count; ++i) length = (length << 8) | octet(rest[2 + i]);
+		header_size += count;
+	}
+	if (length > rest.size() - header_size) return false;
+	out = header{ tag_from_identifier(id), header_size, length };
+	return true;
+}
+
 result<reader::header> reader::parse_header() const
 {
+	if (header h; fast_header(h)) return h;
 	const auto rest = data_.subspan(pos_);
 	if (rest.empty()) return fail(client_errc::decode_error, "ber: unexpected end of input" + at(offset()));
 	auto h = parse_header_at(rest, offset());
