@@ -306,7 +306,8 @@ TEST_CASE("decode checks enumerations and integer ranges", "[message]")
 	auto unbind_with_id = [](std::int64_t id) {
 		return raw_message(id, [](ber::writer &m) { m.null(ber::application(2)); });
 	};
-	CHECK(ldap::decode(unbind_with_id(0)).has_value());
+	CHECK(code_of(ldap::decode(unbind_with_id(0))) == client_errc::decode_error);// reserved, RFC 4511 4.1.1
+	CHECK(ldap::decode(unbind_with_id(1)).has_value());
 	CHECK(ldap::decode(unbind_with_id(ldap::max_int)).has_value());
 	CHECK(code_of(ldap::decode(unbind_with_id(-1))) == client_errc::decode_error);
 	CHECK(code_of(ldap::decode(unbind_with_id(0x8000'0000LL))) == client_errc::decode_error);
@@ -813,13 +814,15 @@ TEST_CASE("peek_message_header reads the id and the operation tag only", "[messa
 // ---------------------------------------------------------------- RFC conformance
 
 // RFC 4511 section 4.1.1: "The messageID of a request MUST have a non-zero
-// value"; zero is reserved for unsolicited notifications. origin::any stays
-// lenient (see "decode checks enumerations and integer ranges").
-// Gap coro_http_client-23i.6: drop [!shouldfail] once fixed.
-TEST_CASE("RFC 4511 4.1.1: requests never carry message id 0", "[message][rfc][!shouldfail]")
+// value"; zero is reserved for unsolicited notifications.
+TEST_CASE("RFC 4511 4.1.1: requests never carry message id 0", "[message][rfc]")
 {
-	CHECK_FALSE(ldap::encode(ldap::message{ 0, ldap::del_request{ "cn=x" } }).has_value());
-	CHECK_FALSE(ldap::encode(ldap::message{ 0, ldap::unbind_request{} }).has_value());
+	CHECK(code_of(ldap::encode(ldap::message{ 0, ldap::del_request{ "cn=x" } })) == client_errc::encode_error);
+	CHECK(code_of(ldap::encode(ldap::message{ 0, ldap::unbind_request{} })) == client_errc::encode_error);
 	auto del = raw_message(0, [](ber::writer &m) { m.octet_string("cn=x", ber::application(10)); });
-	CHECK_FALSE(ldap::decode(del, { .from = ldap::origin::client }).has_value());
+	CHECK(code_of(ldap::decode(del, { .from = ldap::origin::client })) == client_errc::decode_error);
+	CHECK(code_of(ldap::decode(del)) == client_errc::decode_error);
+	// Responses may: an unsolicited notification is an ExtendedResponse with id 0.
+	const ldap::message notice{ 0, ldap::extended_response{ {}, ldap::notice_of_disconnection_oid } };
+	CHECK(round_trip(notice) == notice);
 }

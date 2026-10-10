@@ -433,11 +433,28 @@ namespace {
 		return fail(client_errc::encode_error, std::string("message: ") + what + " out of range");
 	}
 
+	// The operations a client sends (RFC 4511 section 4.2 protocolOp requests).
+	bool is_request_op(const protocol_op &op) noexcept
+	{
+		return std::visit(
+		  []<class T>(const T &) {
+			  return std::is_same_v<T, bind_request> || std::is_same_v<T, unbind_request>
+					 || std::is_same_v<T, search_request> || std::is_same_v<T, modify_request>
+					 || std::is_same_v<T, add_request> || std::is_same_v<T, del_request>
+					 || std::is_same_v<T, modify_dn_request> || std::is_same_v<T, compare_request>
+					 || std::is_same_v<T, abandon_request> || std::is_same_v<T, extended_request>;
+		  },
+		  op);
+	}
+
 	// Checks everything encoding could reject (the filter of a search request
 	// included), so the writer is only touched once nothing can fail.
 	result<void> precheck(const message &m)
 	{
 		if (m.id < 0) return out_of_range("message id");
+		// RFC 4511 section 4.1.1: id 0 is reserved for unsolicited notifications.
+		if (m.id == 0 && is_request_op(m.op))
+			return fail(client_errc::encode_error, "message: a request with message id 0");
 		if (const auto *s = std::get_if<search_request>(&m.op)) {
 			const auto scope = static_cast<std::int32_t>(s->scope);
 			const auto deref = static_cast<std::int32_t>(s->deref);
@@ -708,6 +725,12 @@ namespace {
 			message m(a_);
 			LDAP_TRY(id, read_ranged(r, ber::tags::integer, 0, max_int, "message id"));
 			m.id = id;
+			// RFC 4511 section 4.1.1: id 0 is reserved for unsolicited notifications.
+			if (id == 0 && !r.empty()) {
+				auto t = r.peek_tag();
+				if (t && t->cls == ber::tag_class::application && is_request(t->number))
+					return bad("request with message id 0", r.offset());
+			}
 			LDAP_TRY(op, read_op(r));
 			m.op = std::move(op);// same resource: moved, not copied
 			if (next_is(r, ber::context(0))) {

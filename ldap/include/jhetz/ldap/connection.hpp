@@ -116,7 +116,9 @@ enum class schema_check {
 	// The first search_as / modify<T> / add(dn, T) for each T loads the
 	// subschema (once per connection) and runs validate<T>; errors in the
 	// report fail the operation with client_errc::schema_mismatch (the
-	// report in the context). The result is cached per connection and T.
+	// report in the context). The result is cached per connection and T,
+	// and dropped by start_tls() (RFC 4513 section 3.1.5: what was read in
+	// clear is read again over TLS).
 	on_first_use,
 };
 

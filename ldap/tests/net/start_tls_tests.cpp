@@ -488,10 +488,8 @@ capy::task<std::string>
 // RFC 4513 section 3.1.5: once TLS is established, "the client SHOULD
 // discard or refresh all information about the server that it obtained
 // prior to the initiation of the TLS negotiation and that it did not obtain
-// through secure mechanisms". Gap coro_http_client-23i.5: drop [!shouldfail]
-// once fixed.
-TEST_CASE("RFC 4513 3.1.5: the schema read in clear is read again after StartTLS",
-  "[net][starttls][rfc][schema][!shouldfail]")
+// through secure mechanisms".
+TEST_CASE("RFC 4513 3.1.5: the schema read in clear is read again after StartTLS", "[net][starttls][rfc][schema]")
 {
 	tls_fixture f;
 	std::vector<std::string> log;
