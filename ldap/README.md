@@ -257,6 +257,34 @@ an error; `ldap_result::is_success()` checks for it.
 
 Not yet: other SASL mechanisms, a connection pool.
 
+## Examples
+
+Small, commented programs in `examples/` (option `JHETZ_LDAP_BUILD_EXAMPLES`,
+targets `jhetz_ldap_example_<name>`). Each reads the server URL and
+credentials from the environment (`LDAP_URL`, `LDAP_BIND_DN`,
+`LDAP_PASSWORD`, `LDAP_BASE`), with defaults for a local OpenLDAP serving
+`dc=example,dc=org` (`ldap://localhost`, `cn=admin,dc=example,dc=org` /
+`secret`); the header comment of each file lists its settings.
+
+| Example | Shows |
+|---|---|
+| `basics.cpp` | connect, simple bind, a search with an `ldap::filters` filter, reading entries, unbind; `ldap::error` (code, `ldap::cond`, diagnostic, matched DN, context) |
+| `mapping.cpp` | a struct with an `ldap::schema<T>` descriptor: `add(dn, value)`, `search_as<T>`, `modify<T>` with typed changes, `decode<T>`, `schema_check::on_first_use` |
+| `writes.cpp` | `add`, `modify` (`mod::add / remove / replace`, atomicity), `compare`, `modify_dn` (rename and move), `del`, and their failures |
+| `streaming.cpp` | `search_stream`, `search_paged`, size and time limits, a client-side timeout, cancellation with a stop token |
+| `sync_threads.cpp` | `ldap::sync::client` shared by several threads |
+| `security.cpp` | ldaps:// and StartTLS with `tls_options` (CA file, server name), SASL EXTERNAL over ldapi:// and with a client certificate |
+
+`examples/ldapsearch.cpp` (above) is a fuller command-line tool. To try them
+all against the throwaway slapd of the integration tests:
+
+```sh
+ldap/tests/integration/run_slapd.sh sh -c 'LDAP_URL=$JHETZ_LDAP_IT_LDAP LDAPS_URL=$JHETZ_LDAP_IT_LDAPS \
+  LDAPI_URL=$JHETZ_LDAP_IT_LDAPI LDAP_CA_FILE=$JHETZ_LDAP_IT_CA \
+  LDAP_CLIENT_CERT=$JHETZ_LDAP_IT_CLIENT_CERT LDAP_CLIENT_KEY=$JHETZ_LDAP_IT_CLIENT_KEY \
+  build/ldap/jhetz_ldap_example_security'
+```
+
 ## Build and test
 
 Standalone CMake project (CMake 3.25+, GCC 13+ or Clang 19+). Catch2 v3,

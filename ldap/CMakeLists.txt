@@ -174,6 +174,13 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     set_target_properties(jhetz_ldapsearch PROPERTIES OUTPUT_NAME jhetz-ldapsearch)
     target_link_libraries(jhetz_ldapsearch PRIVATE jhetz::ldap_net)
     jhetz_ldap_warnings(jhetz_ldapsearch)
+
+    # Small programs showing the main use cases (README.md, "Examples").
+    foreach(example basics mapping writes streaming sync_threads security)
+        add_executable(jhetz_ldap_example_${example} examples/${example}.cpp)
+        target_link_libraries(jhetz_ldap_example_${example} PRIVATE jhetz::ldap_net)
+        jhetz_ldap_warnings(jhetz_ldap_example_${example})
+    endforeach()
 endif()
 
 if(JHETZ_LDAP_BUILD_TESTS)
