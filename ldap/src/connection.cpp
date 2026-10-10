@@ -1011,6 +1011,70 @@ capy::task<result<std::string>> connection::who_am_i(request_controls controls)
 	co_return r->value ? std::string(*r->value) : std::string();
 }
 
+namespace {
+
+	// PasswdModifyRequestValue ::= SEQUENCE { userIdentity [0], oldPasswd [1],
+	// newPasswd [2] } (all OCTET STRING OPTIONAL). nullopt when all are
+	// absent: the requestValue is then left out (RFC 3062 section 2).
+	std::optional<std::string> encode_password_modify(const password_modify_params &p)
+	{
+		if (!p.user && !p.old_password && !p.new_password) return std::nullopt;
+		ber::writer w;
+		w.constructed(ber::tags::sequence, [&](ber::writer &s) {
+			if (p.user) s.octet_string(*p.user, ber::context(0));
+			if (p.old_password) s.octet_string(*p.old_password, ber::context(1));
+			if (p.new_password) s.octet_string(*p.new_password, ber::context(2));
+		});
+		const auto &bytes = w.bytes();
+		return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+	}
+
+	// PasswdModifyResponseValue ::= SEQUENCE { genPasswd [0] OCTET STRING
+	// OPTIONAL }; unknown trailing elements are ignored.
+	result<std::optional<std::string>> decode_password_modify(std::string_view value)
+	{
+		ber::reader r(std::as_bytes(std::span(value)));
+		auto s = r.enter();
+		if (!s) return std::unexpected(std::move(s.error()));
+		if (auto end = r.expect_end(); !end) return std::unexpected(std::move(end.error()));
+		std::optional<std::string> generated;
+		if (!s->empty()) {
+			auto t = s->peek_tag();
+			if (t && t->cls == ber::tag_class::context && t->number == 0) {
+				auto g = s->read_octet_string(ber::context(0));
+				if (!g) return std::unexpected(std::move(g.error()));
+				generated.emplace(reinterpret_cast<const char *>(g->data()), g->size());
+			}
+		}
+		return generated;
+	}
+
+}// namespace
+
+capy::task<result<std::optional<std::string>>> connection::password_modify(password_modify_params p)
+{
+	std::string context = "password modify";
+	if (p.user) context += " " + *p.user;
+	extended_params request{ .name = std::string(password_modify_oid),
+		.value = encode_password_modify(p),
+		.controls = std::move(p.controls),
+		.timeout = p.timeout };
+	auto r = co_await extended(std::move(request));
+	if (!r) {
+		// "extended operation <oid>..." names the operation by its OID; say
+		// what it is instead.
+		error e = std::move(r.error());
+		const std::string generic = "extended operation " + std::string(password_modify_oid);
+		if (std::string_view(e.context).starts_with(generic)) e.context.replace(0, generic.size(), context);
+		co_return std::unexpected(std::move(e));
+	}
+	if (!r->value) co_return std::optional<std::string>{};
+	auto generated = decode_password_modify(*r->value);
+	if (!generated)
+		co_return std::unexpected(detail::with_context(std::move(generated.error()), context + ": response value"));
+	co_return std::move(*generated);
+}
+
 // ---------------------------------------------------------------- schema
 
 namespace {

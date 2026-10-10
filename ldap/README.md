@@ -171,8 +171,9 @@ on by default) with the network parts. It depends on Corosio and Capy
   lifetime rules.
   Step 6 adds the other operations: `add`, `modify` (changes from
   `ldap::mod::add / remove / replace / increment`), `del`, `modify_dn`
-  (rename and / or move), `compare` (`result<bool>`), `extended` and
-  `who_am_i` (RFC 4532), each taking a params aggregate with `.controls`
+  (rename and / or move), `compare` (`result<bool>`), `extended`,
+  `who_am_i` (RFC 4532) and `password_modify` (RFC 3062: returns the
+  server-generated password, if any), each taking a params aggregate with `.controls`
   and `.timeout`; `search_paged(params, page_size)` follows the Simple
   Paged Results cookie across pages. Referrals are returned (in
   `error::referrals` and `search_stream::references()`), never chased;

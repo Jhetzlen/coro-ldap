@@ -18,6 +18,7 @@
 namespace ldap = jhetz::ldap;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::ContainsSubstring;
+using Catch::Matchers::StartsWith;
 using ldap::client_errc;
 using ldap::errc;
 
@@ -427,4 +428,57 @@ TEST_CASE("operations: referrals are returned, not chased", "[net][operations][r
 	CHECK(urls[0].base_dn() == jdoe);
 	CHECK(m.conn.is_open());
 	m.check_server();
+}
+
+// ---------------------------------------------------------------- password modify
+
+TEST_CASE("operations: password modify (RFC 3062)", "[net][operations]")
+{
+	using namespace std::string_literals;
+	const auto ok = [](std::int32_t id, std::optional<std::string_view> value = {}) {
+		return ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, value } };
+	};
+	mock_ldap m;
+	m.serve({ answer({ ok(1) }),
+	  answer({ ok(2, "\x30\x07\x80\x05s3cr3"s) }),
+	  answer({ ok(3, "\x30\x00"s) }),
+	  answer({ ldap::message{ 4, ldap::extended_response{ ldap::ldap_result{ 49, "", "old password wrong" } } } }),
+	  answer({ ok(5, "\x04\x00"s) }) });
+
+	// All fields: no generated password.
+	auto set = m.run(m.conn.password_modify(
+	  { .user = "uid=jdoe,ou=people,dc=example,dc=org", .old_password = "old", .new_password = "new" }));
+	REQUIRE(set.has_value());
+	CHECK_FALSE(set->has_value());
+	// No new password: the server generates one.
+	auto generated = m.run(m.conn.password_modify({}));
+	REQUIRE(generated.has_value());
+	CHECK(*generated == "s3cr3");
+	auto empty = m.run(m.conn.password_modify({ .new_password = "x" }));
+	REQUIRE(empty.has_value());
+	CHECK_FALSE(empty->has_value());
+	// Server errors name the operation and the user, never a password.
+	auto refused = m.run(m.conn.password_modify({ .user = "uid=jdoe", .old_password = "bad", .new_password = "new" }));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == errc::invalid_credentials);
+	CHECK(refused.error().context == "password modify uid=jdoe");
+	CHECK(refused.error().diagnostic == "old password wrong");
+	// A malformed response value.
+	auto bad = m.run(m.conn.password_modify({}));
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(bad.error().code == ldap::cond::protocol_error);
+	CHECK_THAT(std::string(bad.error().context), StartsWith("password modify: response value"));
+	CHECK(m.conn.is_open());
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 5);
+	// SEQUENCE { [0] user, [1] old, [2] new }
+	CHECK(m.log.received[0]
+		  == ldap::message{ 1,
+			ldap::extended_request{ ldap::password_modify_oid,
+			  "\x30\x30\x80\x24uid=jdoe,ou=people,dc=example,dc=org\x81\x03old\x82\x03new"s } });
+	// Nothing to send: no requestValue at all.
+	CHECK(m.log.received[1] == ldap::message{ 2, ldap::extended_request{ ldap::password_modify_oid } });
+	CHECK(m.log.received[2]
+		  == ldap::message{ 3, ldap::extended_request{ ldap::password_modify_oid, "\x30\x03\x82\x01x"s } });
 }

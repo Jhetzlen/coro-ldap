@@ -143,6 +143,10 @@ class client
 	{
 		return call([&](connection &c) { return c.who_am_i(std::move(controls)); });
 	}
+	result<std::optional<std::string>> password_modify(password_modify_params request)
+	{
+		return call([&](connection &c) { return c.password_modify(std::move(request)); });
+	}
 
 	result<void> unbind();
 	// Closes the connection at once (no UnbindRequest).

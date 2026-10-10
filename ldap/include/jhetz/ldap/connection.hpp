@@ -275,6 +275,22 @@ struct extended_result
 // RFC 4532 "Who am I?" extended operation.
 inline constexpr std::string_view who_am_i_oid = "1.3.6.1.4.1.4203.1.11.3";
 
+// RFC 3062 Password Modify extended operation.
+inline constexpr std::string_view password_modify_oid = "1.3.6.1.4.1.4203.1.11.1";
+
+struct password_modify_params
+{
+	// userIdentity: whose password, usually a DN (the server decides the
+	// form). nullopt: the user this connection is bound as.
+	std::optional<std::string> user{};
+	// oldPasswd: servers usually require it when users change their own.
+	std::optional<std::string> old_password{};
+	// newPasswd. nullopt: the server generates one and returns it.
+	std::optional<std::string> new_password{};
+	request_controls controls{};
+	std::optional<std::chrono::milliseconds> timeout{};
+};
+
 class search_stream;
 class paged_search;
 class connection;
@@ -385,6 +401,10 @@ class connection
 	// The authorization identity of this connection (RFC 4532): "dn:<dn>",
 	// "u:<user>", or "" when anonymous.
 	boost::capy::task<result<std::string>> who_am_i(request_controls controls = {});
+	// Changes a password (RFC 3062). Returns the password the server
+	// generated (genPasswd) when new_password was not given, else nullopt.
+	// Passwords never appear in error contexts.
+	boost::capy::task<result<std::optional<std::string>>> password_modify(password_modify_params request);
 
 	// Reads the server's subschema (RFC 4512): the root DSE's
 	// subschemaSubentry (cn=Subschema if it names none), then that entry's

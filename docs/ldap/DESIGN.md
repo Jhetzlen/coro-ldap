@@ -172,7 +172,9 @@ same pattern.
 Results (step 6): success returns the operation's value — `response`
 (the response controls) for add / modify / delete / modify DN, `bool` for
 compare, `extended_result` for extended operations, the authzId string for
-`who_am_i()` (RFC 4532). Any other result code is an error. compareTrue /
+`who_am_i()` (RFC 4532), the generated password (if any) for
+`password_modify()` (RFC 3062; passwords never appear in error contexts).
+Any other result code is an error. compareTrue /
 compareFalse map to `true` / `false` (a compare answered with success is
 an error: it is not a valid answer). referral (10) is an error with the
 URIs in `error::referrals`; saslBindInProgress (14) is an error for a

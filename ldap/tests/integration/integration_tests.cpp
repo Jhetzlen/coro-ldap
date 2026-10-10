@@ -312,6 +312,50 @@ TEST_CASE("integration: add, modify, compare, rename and delete", "[integration]
 	CHECK(deleted.error().code == ldap::errc::no_such_object);
 }
 
+TEST_CASE("integration: password modify (RFC 3062)", "[integration]")
+{
+	REQUIRE_SLAPD();
+	corosio::io_context ioc;
+	auto c = open_admin(ioc);
+	const std::string name = unique("pw");
+	const std::string who = "uid=" + name + ",ou=people,dc=example,dc=org";
+	const ldap::dn entry = *ldap::dn::parse(who);
+	REQUIRE(finish(ioc,
+	  c.add({ .entry = entry,
+		.attributes = { { "objectClass", { "inetOrgPerson" } },
+		  { "uid", { name } },
+		  { "cn", { "Password" } },
+		  { "sn", { "Test" } },
+		  { "userPassword", { "start" } } } }))
+			  .has_value());
+
+	// The admin sets a password, then has the server generate one.
+	auto set = finish(ioc, c.password_modify({ .user = who, .new_password = "first" }));
+	REQUIRE(set.has_value());
+	CHECK_FALSE(set->has_value());
+	{
+		auto u = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
+		CHECK(finish(ioc, u.simple_bind(entry, "first")).has_value());
+		// This server's ACL (read only) refuses users their own change.
+		auto own = finish(ioc, u.password_modify({ .old_password = "first", .new_password = "second" }));
+		REQUIRE_FALSE(own.has_value());
+		CHECK(own.error().code == ldap::errc::insufficient_access_rights);
+		CHECK(own.error().context == "password modify");
+	}
+	auto generated = finish(ioc, c.password_modify({ .user = who }));
+	REQUIRE(generated.has_value());
+	REQUIRE(generated->has_value());
+	CHECK_FALSE((*generated)->empty());
+	{
+		auto u = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
+		CHECK(finish(ioc, u.simple_bind(entry, **generated)).has_value());
+		auto old = finish(ioc, u.simple_bind(entry, "first"));
+		REQUIRE_FALSE(old.has_value());
+		CHECK(old.error().code == ldap::errc::invalid_credentials);
+	}
+	REQUIRE(finish(ioc, c.del({ .entry = entry })).has_value());
+}
+
 // ---------------------------------------------------------------- cancellation
 
 TEST_CASE("integration: cancellation mid-search", "[integration]")
