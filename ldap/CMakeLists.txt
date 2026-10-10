@@ -28,6 +28,11 @@ option(JHETZ_LDAP_BUILD_EXAMPLES "Build the examples (examples/; need JHETZ_LDAP
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# No C++20 modules here or in Capy/Corosio. CMake 3.28+ with Ninja scans every
+# C++20 source for them by default, and GCC 16's scanner (-fdeps-format=p1689r5)
+# crashes on Corosio's uring_scheduler.hpp. Set before FetchContent so the
+# dependencies inherit it.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 # Global flags: set before any dependency is fetched so Catch2 is built the
 # same way (mixing sanitized and unsanitized code causes false positives).
