@@ -287,6 +287,28 @@ ldap/tests/integration/run_slapd.sh sh -c 'LDAP_URL=$JHETZ_LDAP_IT_LDAP LDAPS_UR
   build/ldap/jhetz_ldap_example_security'
 ```
 
+## Using it from another project
+
+Either add it to the build (`add_subdirectory(ldap)` or FetchContent) and
+link `jhetz::ldap` / `jhetz::ldap_net`, or install it and use the CMake
+package:
+
+```cmake
+find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net)   # or without `net`
+target_link_libraries(app PRIVATE jhetz::ldap_net)     # jhetz::ldap: codec only
+```
+
+`cmake --install` installs the headers, the libraries and the `jhetz_ldap`
+package (`JHETZ_LDAP_INSTALL`, on when this is the top-level project).
+`jhetz::ldap_net` is part of the package only when Capy and Corosio were
+found as installed packages (on `CMAKE_PREFIX_PATH`; configure prefers them
+to fetching): a fetched Corosio does not export its targets. Without it the
+package is the codec only, without the networking headers. Corosio at the
+pinned commit needs help to install against an installed Capy;
+`tests/install/check_install.sh WORK_DIR` does the whole sequence (Capy,
+Corosio, jhetz_ldap, then a consumer in `tests/install/consumer/`, also
+codec-only) and is the reference for doing it by hand.
+
 ## Build and test
 
 Standalone CMake project (CMake 3.25+, GCC 13+ or Clang 19+). Catch2 v3,

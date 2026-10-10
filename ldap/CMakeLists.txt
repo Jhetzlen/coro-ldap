@@ -24,6 +24,7 @@ option(JHETZ_LDAP_SANITIZE "Build all targets with AddressSanitizer and UBSan" O
 option(JHETZ_LDAP_WERROR "Treat warnings in jhetz::ldap code as errors" OFF)
 option(JHETZ_LDAP_BUILD_BENCH "Build the benchmarks (bench/, not run by ctest)" OFF)
 option(JHETZ_LDAP_BUILD_EXAMPLES "Build the examples (examples/; need JHETZ_LDAP_BUILD_NET)" ON)
+option(JHETZ_LDAP_INSTALL "Generate install rules and the jhetz_ldap CMake package" ${PROJECT_IS_TOP_LEVEL})
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -114,9 +115,12 @@ add_library(jhetz_ldap STATIC
     src/url.cpp
 )
 add_library(jhetz::ldap ALIAS jhetz_ldap)
+include(GNUInstallDirs)
 target_include_directories(jhetz_ldap PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
+set_target_properties(jhetz_ldap PROPERTIES EXPORT_NAME ldap)
 target_compile_features(jhetz_ldap PUBLIC cxx_std_23)
 if(jhetz_ldap_clang18_expected_workaround)
     target_compile_options(jhetz_ldap PUBLIC -D__cpp_concepts=202002L -Wno-builtin-macro-redefined)
@@ -125,18 +129,22 @@ jhetz_ldap_warnings(jhetz_ldap)
 
 if(JHETZ_LDAP_BUILD_NET)
     include(FetchContent)
-    # Same pinned commits as examples/corosio. Local checkouts can be used
-    # with -DFETCHCONTENT_SOURCE_DIR_CAPY=... -DFETCHCONTENT_SOURCE_DIR_COROSIO=...
+    # Installed packages (boost_capy, boost_corosio on CMAKE_PREFIX_PATH)
+    # are used when found; otherwise the same pinned commits as
+    # examples/corosio are fetched. Local checkouts can be used with
+    # -DFETCHCONTENT_SOURCE_DIR_CAPY=... -DFETCHCONTENT_SOURCE_DIR_COROSIO=...
     # SYSTEM: our warning flags must not fire on their headers.
     FetchContent_Declare(capy
         GIT_REPOSITORY https://github.com/cppalliance/capy.git
         GIT_TAG a372a6b054261f29497ac0d19c2a9533f9eaad40
         SYSTEM
+        FIND_PACKAGE_ARGS NAMES boost_capy CONFIG
     )
     FetchContent_Declare(corosio
         GIT_REPOSITORY https://github.com/cppalliance/corosio.git
         GIT_TAG 54e28fd40cf7ee6cc18365dd81ad5615c38908cc
         SYSTEM
+        FIND_PACKAGE_ARGS NAMES boost_corosio CONFIG
     )
     # Not their tests, examples or benchmarks (normal variables: both
     # projects' option() calls honour them, policy CMP0077).
@@ -165,6 +173,7 @@ if(JHETZ_LDAP_BUILD_NET)
         src/net/transport.cpp
     )
     add_library(jhetz::ldap_net ALIAS jhetz_ldap_net)
+    set_target_properties(jhetz_ldap_net PROPERTIES EXPORT_NAME ldap_net)
     target_link_libraries(jhetz_ldap_net PUBLIC jhetz_ldap Boost::corosio Boost::corosio_openssl)
     jhetz_ldap_warnings(jhetz_ldap_net)
 endif()
@@ -181,6 +190,53 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
         target_link_libraries(jhetz_ldap_example_${example} PRIVATE jhetz::ldap_net)
         jhetz_ldap_warnings(jhetz_ldap_example_${example})
     endforeach()
+endif()
+
+# cmake --install: headers, libraries and the jhetz_ldap package, so
+# consumers can find_package(jhetz_ldap) and link jhetz::ldap (codec) and
+# jhetz::ldap_net (connection, TLS). jhetz::ldap_net needs Corosio and Capy
+# as installed packages (CMAKE_PREFIX_PATH): a fetched Corosio does not
+# export its targets, so it cannot be referenced from our export set.
+if(JHETZ_LDAP_INSTALL)
+    include(CMakePackageConfigHelpers)
+    set(jhetz_ldap_install_targets jhetz_ldap)
+    set(JHETZ_LDAP_PACKAGE_NET OFF)
+    if(JHETZ_LDAP_BUILD_NET)
+        get_target_property(jhetz_ldap_corosio_imported Boost::corosio IMPORTED)
+        if(jhetz_ldap_corosio_imported)
+            list(APPEND jhetz_ldap_install_targets jhetz_ldap_net)
+            set(JHETZ_LDAP_PACKAGE_NET ON)
+        else()
+            message(STATUS "jhetz_ldap: jhetz::ldap_net is not installed: Corosio was fetched, not found "
+                "as a package (install Capy and Corosio and add their prefix to CMAKE_PREFIX_PATH)")
+        endif()
+    endif()
+    set(jhetz_ldap_cmakedir ${CMAKE_INSTALL_LIBDIR}/cmake/jhetz_ldap)
+    install(TARGETS ${jhetz_ldap_install_targets}
+        EXPORT jhetz_ldap-targets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    if(JHETZ_LDAP_PACKAGE_NET)
+        install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    else()
+        # Without jhetz::ldap_net, its headers (they need Corosio) are left out.
+        install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            PATTERN "net" EXCLUDE
+            PATTERN "connection.hpp" EXCLUDE
+            PATTERN "sync.hpp" EXCLUDE)
+    endif()
+    install(EXPORT jhetz_ldap-targets NAMESPACE jhetz:: DESTINATION ${jhetz_ldap_cmakedir})
+    configure_package_config_file(cmake/jhetz_ldap-config.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/jhetz_ldap-config.cmake
+        INSTALL_DESTINATION ${jhetz_ldap_cmakedir})
+    # 0.x: minor versions may break the API.
+    write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/jhetz_ldap-config-version.cmake
+        COMPATIBILITY SameMinorVersion)
+    install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/jhetz_ldap-config.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/jhetz_ldap-config-version.cmake
+        DESTINATION ${jhetz_ldap_cmakedir})
 endif()
 
 if(JHETZ_LDAP_BUILD_TESTS)
