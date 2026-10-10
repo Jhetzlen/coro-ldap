@@ -460,22 +460,38 @@ bool operator==(const filter &a, const filter &b) noexcept
 
 namespace {
 
+	// RFC 4515 section 3: `*`, `(`, `)`, `\` and NUL are escaped as \XX, and
+	// so is every octet that is not part of valid UTF-8 (the string form is
+	// UTF-8).
 	void append_escaped(std::pmr::string &out, std::string_view value)
 	{
 		static constexpr char digits[] = "0123456789abcdef";
-		for (char c : value) {
+		auto escape = [&](unsigned char u) {
+			out += '\\';
+			out += digits[u >> 4];
+			out += digits[u & 0xFu];
+		};
+		for (std::size_t i = 0; i < value.size(); ++i) {
+			const char c = value[i];
+			const auto u = static_cast<unsigned char>(c);
+			if (u >= 0x80u) {
+				const std::size_t len = detail::utf8_sequence_length(value, i);
+				if (len == 0) {
+					escape(u);
+				} else {
+					out += value.substr(i, len);
+					i += len - 1;
+				}
+				continue;
+			}
 			switch (c) {
 			case '*':
 			case '(':
 			case ')':
 			case '\\':
-			case '\0': {
-				const auto u = static_cast<unsigned char>(c);
-				out += '\\';
-				out += digits[u >> 4];
-				out += digits[u & 0xFu];
+			case '\0':
+				escape(u);
 				break;
-			}
 			default:
 				out += c;
 			}
@@ -484,7 +500,6 @@ namespace {
 
 }// namespace
 
-// Bytes that are not UTF-8 pass through unchanged (values may be binary).
 std::pmr::string escape_filter_value(std::string_view value, std::pmr::memory_resource *mr)
 {
 	std::pmr::string out(mr);
@@ -691,6 +706,7 @@ namespace {
 
 	using detail::hex_value;
 	using detail::is_hex;
+	using detail::utf8_sequence_length;
 	using kind = filter::kind;
 	constexpr std::uint32_t npos = access::npos;
 	constexpr std::uint8_t filter_part_initial = access::part_initial;
@@ -801,6 +817,14 @@ namespace {
 						return error("invalid escape (expected \\ and two hex digits)");
 					byte = static_cast<char>((hex_value(s_[i_ + 1]) << 4) | hex_value(s_[i_ + 2]));
 					i_ += 3;
+				} else if (static_cast<unsigned char>(c) >= 0x80u) {
+					// RFC 4515 section 3: unescaped octets are UTF-8.
+					const std::size_t n = utf8_sequence_length(s_, i_);
+					if (n == 0) return error("invalid UTF-8 in value");
+					for (std::size_t k = 0; k < n; ++k) access::add_char(out_, s_[i_ + k]);
+					i_ += n;
+					len += static_cast<std::uint32_t>(n);
+					continue;
 				} else {
 					++i_;
 				}

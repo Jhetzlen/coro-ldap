@@ -145,7 +145,8 @@ class filter
 	// escapes. Leniency: text that does not start with '(' is read as if it
 	// were wrapped in parentheses, as ldapsearch does (`uid=jdoe` is
 	// `(uid=jdoe)`). No other leniency: no whitespace between elements, and
-	// `(`, `)`, `*` (outside substrings), `\` and NUL must be escaped in values.
+	// `(`, `)`, `*` (outside substrings), `\` and NUL must be escaped in values,
+	// and unescaped octets must be valid UTF-8 (escapes may give any octet).
 	// Filters beyond `limits` (depth or number of elements) fail too.
 	static result<filter> raw(std::string_view text, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 	static result<filter> raw(std::string_view text,
@@ -332,7 +333,8 @@ class filter::substring_range
 inline filter::view filter::root() const noexcept { return view(this, root_); }
 
 // RFC 4515 section 3 escaping: `*` `(` `)` `\` and NUL become \2a \28 \29 \5c
-// \00; every other byte is kept as is, including bytes that are not UTF-8.
+// \00, and octets that are not part of valid UTF-8 become \xx (the string
+// form is UTF-8); valid UTF-8 is kept as is.
 std::pmr::string escape_filter_value(std::string_view value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 

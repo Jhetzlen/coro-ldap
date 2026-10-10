@@ -55,6 +55,18 @@ namespace {
 		for (std::size_t i = 0; i < v.size(); ++i) {
 			const char c = v[i];
 			const auto u = static_cast<unsigned char>(c);
+			if (u >= 0x80u) {
+				// RFC 4514 section 2: the output is UTF-8; other octets are escaped.
+				const std::size_t len = detail::utf8_sequence_length(v, i);
+				if (len == 0) {
+					out += '\\';
+					append_hex(out, u);
+				} else {
+					out += v.substr(i, len);
+					i += len - 1;
+				}
+				continue;
+			}
 			switch (c) {
 			case ',':
 			case '+':

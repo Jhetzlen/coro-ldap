@@ -359,7 +359,8 @@ TEST_CASE("URL percent-encoding round trip of every byte", "[url]")
 	for (int b = 1; b < 256; ++b) all += static_cast<char>(b);
 	std::string filter_value;
 	for (char c : all) {
-		if (c == '*' || c == '(' || c == ')' || c == '\\') {
+		// Specials, and octets 0x80-0xFF (alone, none is valid UTF-8).
+		if (c == '*' || c == '(' || c == ')' || c == '\\' || static_cast<unsigned char>(c) >= 0x80u) {
 			static constexpr char hex[] = "0123456789abcdef";
 			filter_value += '\\';
 			filter_value += hex[(static_cast<unsigned char>(c) >> 4) & 0xF];

@@ -37,6 +37,36 @@ namespace detail {
 		return true;
 	}
 
+	// Length of the valid UTF-8 sequence starting at s[i] (RFC 3629; RFC
+	// 4512 UTF1 / UTFMB: no overlong forms, surrogates or code points above
+	// U+10FFFF), or 0 if there is none. Precondition: i < s.size().
+	constexpr std::size_t utf8_sequence_length(std::string_view s, std::size_t i) noexcept
+	{
+		const auto at = [&](std::size_t k) { return static_cast<unsigned char>(s[i + k]); };
+		const unsigned char c = at(0);
+		if (c < 0x80u) return 1;
+		std::size_t n = 0;
+		unsigned char lo = 0x80u, hi = 0xBFu;// range of the second octet
+		if (c >= 0xC2u && c <= 0xDFu) {
+			n = 2;
+		} else if (c >= 0xE0u && c <= 0xEFu) {
+			n = 3;
+			if (c == 0xE0u) lo = 0xA0u;// overlong
+			if (c == 0xEDu) hi = 0x9Fu;// surrogates
+		} else if (c >= 0xF0u && c <= 0xF4u) {
+			n = 4;
+			if (c == 0xF0u) lo = 0x90u;// overlong
+			if (c == 0xF4u) hi = 0x8Fu;// above U+10FFFF
+		} else {
+			return 0;
+		}
+		if (s.size() - i < n) return 0;
+		if (at(1) < lo || at(1) > hi) return 0;
+		for (std::size_t k = 2; k < n; ++k)
+			if (at(k) < 0x80u || at(k) > 0xBFu) return 0;
+		return n;
+	}
+
 	// descr = keystring = ALPHA *(ALPHA / DIGIT / HYPHEN)
 	constexpr bool is_descr(std::string_view s) noexcept
 	{

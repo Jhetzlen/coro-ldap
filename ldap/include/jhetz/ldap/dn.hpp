@@ -8,10 +8,12 @@
 //
 // Parsing is RFC 4514 with the leniency of RFC 2253 section 4 / OpenLDAP:
 // spaces around `,`, `+` and `=` are ignored, and unescaped trailing spaces of
-// a value are dropped. Everything else follows RFC 4514: `"`, `;`, `<`, `>`
-// and NUL must be escaped, `\` is followed by a special character or two hex
-// digits, `#` starts a hex-encoded (BER) value, types are descriptors or
-// numeric OIDs without options.
+// a value are dropped. Everything else follows RFC 4514: the text is UTF-8,
+// `"`, `;`, `<`, `>` and NUL must be escaped, `\` is followed by a special
+// character or two hex digits (any octet, so values need not be UTF-8), `#`
+// starts a hex-encoded (BER) value, types are descriptors or numeric OIDs
+// without options. to_string() escapes octets that are not part of valid
+// UTF-8, so its output is UTF-8 too.
 //
 // Memory: ava, rdn and dn are allocator-aware (std::pmr). Everything a dn owns
 // is allocated from the resource given to parse(), the literal constructor or
@@ -115,6 +117,11 @@ namespace detail {
 						return i;
 					} else if (c == ' ') {
 						++i;
+					} else if (static_cast<unsigned char>(c) >= 0x80u) {
+						const std::size_t len = utf8_sequence_length(s, i);// RFC 4514: UTF-8 only
+						if (len == 0) return i;
+						i += len;
+						end = i;
 					} else {
 						++i;
 						end = i;

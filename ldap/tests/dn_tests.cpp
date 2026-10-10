@@ -230,15 +230,14 @@ TEST_CASE("dn to_string/parse round-trips arbitrary values", "[dn]")
 
 // RFC 4514 section 2 converts a DN to a UTF-8 string; section 3 only allows
 // valid UTF-8 (stringchar = SUTF1 / UTFMB), any other octet is a hex pair.
-// Gap coro_http_client-23i.4: drop [!shouldfail] once fixed.
-TEST_CASE("RFC 4514 2: printed DNs are valid UTF-8", "[dn][rfc][!shouldfail]")
+TEST_CASE("RFC 4514 2: printed DNs are valid UTF-8", "[dn][rfc]")
 {
 	CHECK(parse("cn=\\ff").to_string() == "cn=\\ff");
 	CHECK(ldap::dn{}.child(single("cn", "a\xc3")).to_string() == "cn=a\\c3");// truncated sequence
 	CHECK(parse("cn=\\c3\\a9").to_string() == "cn=\xc3\xa9");// valid UTF-8 is kept
 }
 
-TEST_CASE("RFC 4514 3: DN text with invalid UTF-8 is rejected", "[dn][rfc][!shouldfail]")
+TEST_CASE("RFC 4514 3: DN text with invalid UTF-8 is rejected", "[dn][rfc]")
 {
 	const std::string bad = GENERATE(as<std::string>{},
 	  "cn=\xff",
