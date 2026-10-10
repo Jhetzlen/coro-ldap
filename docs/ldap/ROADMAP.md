@@ -34,13 +34,15 @@ Suggested order: #15 → #6 → #7 and #8 (in parallel) → #9 → #10 / #11 →
 
 ## Follow-ups
 
+Tracked in beads (`bd list`) since 2026-10-10; the GitHub numbers are history.
+
 | Ticket | What |
 |---|---|
-| #16 | Report Corosio issues upstream (TLS verification default, CA bundles, host-check flags, resolve shutdown) |
+| #16 → `coro_http_client-cqx` | Report Corosio issues upstream (TLS verification default, CA bundles, host-check flags, resolve shutdown) |
 | #17 | API polish: extensible-match builder, filter view naming, wire constructors |
 | #18 | Networking: Happy Eyeballs, TLS close_notify, IPv6 and non-Linux CI |
 | #19 | Decode performance: default-heap regression, message size limits |
-| #20 | Clean up the legacy Asio code at the repo root |
+| #20 → `coro_http_client-6k2` | Clean up the legacy Asio code at the repo root (done: deleted) |
 
 ## Definition of done (every ticket)
 
