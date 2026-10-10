@@ -1103,3 +1103,46 @@ TEST_CASE("connection: ldap::connect failures", "[net][connection]")
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == client_errc::invalid_url);
 }
+
+// ---------------------------------------------------------------- RFC conformance
+
+// RFC 4511 section 4.11: "Abandon, Bind, Unbind, and StartTLS operations
+// cannot be abandoned." Gap coro_http_client-23i.1: drop [!shouldfail] once
+// fixed (and update "timeouts abandon the operation", which expects the
+// AbandonRequest).
+TEST_CASE("RFC 4511 4.11: a bind that times out is not abandoned", "[net][connection][rfc][timeout][!shouldfail]")
+{
+	mock_ldap m({ .operation_timeout = std::chrono::milliseconds(100) });
+	m.serve({ step{}, step{} });// reads the bind and whatever comes next, answers nothing
+	auto r = m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::cond::timeout);
+	// Whether the connection closes or goes on, no AbandonRequest is sent.
+	if (m.conn.is_open()) (void)m.run(m.conn.unbind());
+	drive_until(m.ioc, [&m] { return m.server.done(); });
+	REQUIRE_FALSE(m.log.received.empty());
+	CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+	for (const auto &msg : m.log.received) CHECK_FALSE(std::holds_alternative<ldap::abandon_request>(msg.op));
+}
+
+// RFC 4511 section 4.2.1: "After sending a BindRequest, clients MUST NOT send
+// further LDAP PDUs until receiving the BindResponse." Gap
+// coro_http_client-23i.2: drop [!shouldfail] once fixed (and adapt the tests
+// above that start a bind and a search together).
+TEST_CASE("RFC 4511 4.2.1: nothing is sent while a bind is outstanding", "[net][connection][rfc][!shouldfail]")
+{
+	// The server never answers the bind; the timeout ends both operations.
+	mock_ldap m({ .operation_timeout = std::chrono::milliseconds(200) });
+	m.serve({ step{}, step{} });
+	outcome<ldap::result<void>> bind;
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
+	spawn(m.ioc, m.conn.search(people_search()), search);
+	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
+	CHECK_FALSE(bind.get().has_value());
+	CHECK_FALSE(search.get().has_value());
+	// No BindResponse came, so the BindRequest is all the server got.
+	REQUIRE_FALSE(m.log.received.empty());
+	CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+	CHECK(m.log.received.size() == 1);
+}

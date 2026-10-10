@@ -840,3 +840,33 @@ TEST_CASE("extensible match builders", "[filter][builders]")
 	CHECK_THROWS_AS(attr("cn").matches("dn", "v"), std::invalid_argument);
 	CHECK_THROWS_AS(ldap::filters::rule_matches("", "v"), std::invalid_argument);
 }
+
+// ---------------------------------------------------------------- RFC conformance
+
+// RFC 4515 section 3: the string form is UTF-8 (valueencoding = 0*(normal /
+// escaped), normal = UTF1SUBSET / UTFMB); any other octet only appears
+// escaped as \XX. Gap coro_http_client-23i.3: drop [!shouldfail] once fixed.
+TEST_CASE("RFC 4515 3: printed filters are valid UTF-8", "[filter][rfc][!shouldfail]")
+{
+	using namespace ldap::filters;
+	CHECK(ldap::escape_filter_value("\xff") == "\\ff");
+	CHECK(ldap::escape_filter_value("a\xc3") == "a\\c3");// truncated sequence
+	CHECK(ldap::escape_filter_value("\xc3\xa9") == "\xc3\xa9");// valid UTF-8 is kept
+	CHECK(text_of(attr("cn") == "\x80") == "(cn=\\80)");
+	CHECK(text_of(attr("cn").starts_with("\xfe")) == "(cn=\\fe*)");
+	CHECK(text_of(raw("(cn=\\ff)")) == "(cn=\\ff)");
+}
+
+TEST_CASE("RFC 4515 3: filter text with invalid UTF-8 is rejected", "[filter][parser][rfc][!shouldfail]")
+{
+	const std::string bad = GENERATE(as<std::string>{},
+	  "(cn=\xff)",
+	  "(cn=a\xc3)",// truncated sequence
+	  "(cn=\xc0\xaf)",// overlong '/'
+	  "(cn=\xed\xa0\x80)",// UTF-16 surrogate
+	  "(cn=\x80*)");
+	INFO(hex(std::as_bytes(std::span(bad))));
+	auto r = ldap::filter::raw(bad);
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == client_errc::invalid_filter);
+}
