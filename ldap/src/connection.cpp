@@ -302,8 +302,9 @@ struct connection::impl
 		std::int32_t id = next_id;
 		if (!wrapped) return id;// ids so far only increased: none is in use
 		auto in_use = [this](std::int32_t i) {
-			return pending.contains(i)
-				   || std::any_of(abandoned.begin(), abandoned.end(), [i](const abandoned_req &r) { return r.id == i; });
+			return pending.contains(i) || std::any_of(abandoned.begin(), abandoned.end(), [i](const abandoned_req &r) {
+				return r.id == i;
+			});
 		};
 		while (in_use(id)) id = id == max_int ? 1 : id + 1;
 		return id;
