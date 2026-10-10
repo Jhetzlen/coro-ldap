@@ -594,7 +594,7 @@ namespace {
 	{
 		while (c->binding) {
 			auto [ec] = co_await c->bind_idle.wait();
-			if (ec) co_return fail(ec, std::string(context) + ": canceled");
+			if (ec) co_return fail(ec, context);
 		}
 		c->binding = true;
 		c->bind_idle.clear();
