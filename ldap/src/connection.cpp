@@ -133,6 +133,9 @@ namespace detail {
 		std::size_t expect;// protocol_op index of the (final) response
 		std::int32_t id = 0;
 		bool registered = false;
+		// False for Bind and StartTLS, which cannot be abandoned (RFC 4511
+		// section 4.11): giving up on them closes the connection instead.
+		bool abandonable = true;
 		std::pmr::deque<message> queue;// on mr, so messages move in without a copy
 		bool finished = false;// final response queued, or failed / abandoned
 		std::optional<error> failure{};// connection failure (without op context)
@@ -148,11 +151,13 @@ struct connection::impl
 	impl(corosio::io_context &ioc, net::transport t, const connection_options &options, std::pmr::memory_resource *mr_)
 	  : ex(ioc.get_executor()), mr(mr_), transport(std::move(t)), buf(mr_), max_message_size(options.max_message_size),
 		max_elements(options.max_elements), default_timeout(options.operation_timeout),
-		tls_shutdown_timeout(options.tls_shutdown_timeout), pending(mr_), abandoned(mr_), outbox(mr_), scratch(mr_)
+		tls_shutdown_timeout(options.tls_shutdown_timeout), pending(mr_), abandoned(mr_), outbox(mr_), held(mr_),
+		scratch(mr_)
 	{
 		schema_mode = options.schema_check;
 		write_idle.set();
 		reader_idle.set();
+		bind_idle.set();
 	}
 
 	corosio::io_context::executor_type ex;
@@ -178,6 +183,17 @@ struct connection::impl
 	std::pmr::deque<std::pmr::vector<std::byte>> outbox;
 	bool writing = false;
 	capy::async_event write_idle{};// set while the writer is not running
+	// A bind exchange (every step of a SASL bind) is in progress: other
+	// requests are held until it ends, since nothing may be sent while a
+	// BindRequest is outstanding (RFC 4511 section 4.2.1).
+	bool binding = false;
+	capy::async_event bind_idle{};// set while `binding` is false
+	struct held_request
+	{
+		std::int32_t id;
+		std::pmr::vector<std::byte> bytes;
+	};
+	std::pmr::deque<held_request> held;
 	// Reader: runs while `pending` is not empty.
 	bool reading = false;
 	std::stop_source reader_stop{};
@@ -225,6 +241,7 @@ struct connection::impl
 		if (remember) failure = e;
 		if (close_transport) transport.close();
 		outbox.clear();
+		held.clear();
 		abandoned.clear();
 		auto waiting = std::move(pending);
 		pending.clear();
@@ -289,14 +306,31 @@ struct connection::impl
 		auto bytes = encode(m, mr);
 		if (!bytes) return std::unexpected(with_context(std::move(bytes.error()), context));
 		next_id = m.id == max_int ? 1 : m.id + 1;
+		const bool bind = std::holds_alternative<bind_request>(m.op);
 		if (p != nullptr) {
+			const auto *x = std::get_if<extended_request>(&m.op);
+			p->abandonable = !bind && (x == nullptr || x->request_name != start_tls_oid);
 			p->id = m.id;
 			p->registered = true;
 			pending.emplace(m.id, p);
 			start_reader();
 		}
+		if (binding && !bind) {
+			held.push_back({ m.id, std::move(*bytes) });
+			return {};
+		}
 		enqueue(std::move(*bytes));
 		return {};
+	}
+
+	// The bind exchange ended: sends the requests it held, in order.
+	void release_held()
+	{
+		while (open && !held.empty()) {
+			enqueue(std::move(held.front().bytes));
+			held.pop_front();
+		}
+		held.clear();
 	}
 
 	// Stops waiting for `p`'s responses and tells the server (best effort).
@@ -308,6 +342,18 @@ struct connection::impl
 		pending.erase(p.id);
 		stop_reader_if_idle();
 		if (!open) return;
+		if (!p.abandonable) {
+			shut(make_error(client_errc::not_connected,
+				   "connection closed: a Bind or StartTLS request cannot be abandoned (RFC 4511 section 4.11)"),
+			  true);
+			return;
+		}
+		// Held by a bind exchange, so never sent: nothing to tell the server.
+		auto h = std::find_if(held.begin(), held.end(), [&](const held_request &r) { return r.id == p.id; });
+		if (h != held.end()) {
+			held.erase(h);
+			return;
+		}
 		abandoned.push_back({ p.id, p.search });
 		if (abandoned.size() > max_abandoned) abandoned.pop_front();
 		message m{ 0, abandon_request{ p.id } };
@@ -463,10 +509,11 @@ struct connection::impl
 			if (!ec) continue;
 			// Cancelled or timed out before the response came.
 			if (!p.queue.empty() || p.finished) break;// it came anyway: use it
+			const bool was_open = open;
 			abandon(p);
 			std::string text(context);
 			text += ec == capy::cond::timeout ? ": timed out" : ": canceled";
-			if (open) text += " (abandoned)";
+			if (was_open) text += p.abandonable ? " (abandoned)" : " (connection closed)";
 			co_return fail(ec, text);
 		}
 		if (!p.queue.empty()) {
@@ -525,6 +572,35 @@ namespace {
 	{
 		return make_error(client_errc::not_connected, std::string(context) + ": not connected");
 	}
+
+	// Waits until no other bind exchange is in progress (binds are
+	// serialized), then marks this one as in progress; bind_exchange ends it.
+	capy::task<result<void>> begin_bind(impl_ref c, std::string_view context)
+	{
+		while (c->binding) {
+			auto [ec] = co_await c->bind_idle.wait();
+			if (ec) co_return fail(ec, std::string(context) + ": canceled");
+		}
+		c->binding = true;
+		c->bind_idle.clear();
+		co_return result<void>{};
+	}
+
+	// Ends the bind exchange begun by begin_bind() and sends the requests
+	// it held.
+	struct bind_exchange
+	{
+		impl_ref c;
+		explicit bind_exchange(impl_ref c_) noexcept : c(std::move(c_)) {}
+		bind_exchange(const bind_exchange &) = delete;
+		bind_exchange &operator=(const bind_exchange &) = delete;
+		~bind_exchange()
+		{
+			c->binding = false;
+			c->bind_idle.set();
+			c->release_held();
+		}
+	};
 
 }// namespace
 
@@ -709,6 +785,8 @@ capy::task<result<void>> connection::simple_bind(dn name, std::string password)
 	if (!name.empty() && password.empty())
 		co_return fail(client_errc::unauthenticated_bind, context + ": empty password (RFC 4513 section 5.1.2)");
 	impl_ref self(impl_);// `this` may be moved from while suspended
+	if (auto b = co_await begin_bind(self, context); !b) co_return std::unexpected(std::move(b.error()));
+	const bind_exchange exchange{ self };
 	message request(std::pmr::polymorphic_allocator<>(self->mr));
 	request.op = bind_request(3, name.to_string(self->mr), simple_auth(password, self->mr), self->mr);
 	auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
@@ -724,6 +802,8 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 	context += mechanism.name();
 	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
 	impl_ref self(impl_);
+	if (auto b = co_await begin_bind(self, context); !b) co_return std::unexpected(std::move(b.error()));
+	const bind_exchange exchange{ self };
 	constexpr int max_steps = 32;
 	auto creds = mechanism.start();
 	for (int step = 0;; ++step) {
@@ -995,6 +1075,7 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	if (!self->open) co_return std::unexpected(self->not_connected(context));
 	if (self->upgrading)
 		co_return fail(client_errc::operation_in_progress, context + ": StartTLS is already in progress");
+	if (self->binding) co_return fail(client_errc::operation_in_progress, context + ": a bind is in progress");
 	if (!self->pending.empty())
 		co_return fail(client_errc::operation_in_progress,
 		  context + ": " + std::to_string(self->pending.size()) + " operations are outstanding");
@@ -1045,6 +1126,12 @@ capy::task<result<void>> connection::unbind()
 	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
 	const impl_ref self(impl_);
 	if (!self->open) co_return std::unexpected(self->not_connected(context));
+	// Nothing may be sent while a BindRequest is outstanding (RFC 4511
+	// section 4.2.1), an UnbindRequest included: just close.
+	if (self->binding) {
+		self->shut(make_error(client_errc::not_connected, "connection closed"), false);
+		co_return result<void>{};
+	}
 
 	// Outstanding operations are abandoned by the unbind (RFC 4511 section 4.3).
 	auto waiting = std::move(self->pending);

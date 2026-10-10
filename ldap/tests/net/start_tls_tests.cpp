@@ -383,8 +383,8 @@ capy::task<std::vector<ldap::message>> silent_start_tls(corosio::tcp_acceptor &a
 }// namespace
 
 // RFC 4511 section 4.11: "Abandon, Bind, Unbind, and StartTLS operations
-// cannot be abandoned." Gap coro_http_client-23i.1: drop [!shouldfail] once fixed.
-TEST_CASE("RFC 4511 4.11: a StartTLS that times out is not abandoned", "[net][starttls][rfc][timeout][!shouldfail]")
+// cannot be abandoned." Giving up on StartTLS closes the connection instead.
+TEST_CASE("RFC 4511 4.11: a StartTLS that times out is not abandoned", "[net][starttls][rfc][timeout]")
 {
 	tls_fixture f;
 	outcome<std::vector<ldap::message>> server;
@@ -393,14 +393,12 @@ TEST_CASE("RFC 4511 4.11: a StartTLS that times out is not abandoned", "[net][st
 	auto r = finish(f.ioc, c.start_tls(trusting().tls, std::chrono::milliseconds(100)));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::cond::timeout);
-	// Whether the connection closes or goes on, no AbandonRequest is sent.
-	if (c.is_open()) (void)finish(f.ioc, c.unbind());
-	c.close();
+	CHECK(r.error().context == "start tls: timed out (connection closed)");
+	CHECK_FALSE(c.is_open());
 	drive_until(f.ioc, [&server] { return server.done(); });
 	const auto &got = server.get();
-	REQUIRE_FALSE(got.empty());
+	REQUIRE(got.size() == 1);// the StartTLS request, then the connection closed
 	CHECK(std::holds_alternative<ldap::extended_request>(got[0].op));
-	for (const auto &m : got) CHECK_FALSE(std::holds_alternative<ldap::abandon_request>(m.op));
 }
 
 namespace {

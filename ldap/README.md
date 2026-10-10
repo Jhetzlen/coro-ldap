@@ -156,6 +156,10 @@ on by default) with the network parts. It depends on Corosio and Capy
   token and its timeout: it then fails with `capy::error::canceled` /
   `timeout` and is abandoned (AbandonRequest; late responses dropped), and
   the connection stays usable; so does a stream destroyed before its end.
+  Bind and StartTLS cannot be abandoned (RFC 4511 section 4.11): giving up
+  on one closes the connection. Nothing is sent while a bind is outstanding
+  (RFC 4511 section 4.2.1): requests started during a bind exchange are
+  held and sent after it, and binds are serialized.
   Every response is decoded with `origin::server` and must answer an
   outstanding request (else `client_errc::unexpected_response`);
   IntermediateResponses are skipped; a Notice of Disconnection fails every

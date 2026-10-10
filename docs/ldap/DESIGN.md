@@ -571,7 +571,16 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   SearchResultDone); a response for an id nobody waits for is a protocol
   error. A search_stream destroyed early abandons its search; a task
   destroyed while waiting abandons its operation (operations never wait on
-  I/O themselves, so this is safe).
+  I/O themselves, so this is safe). Bind and StartTLS cannot be abandoned
+  (RFC 4511 section 4.11): giving up on one closes the connection instead,
+  since its outcome is unknown.
+- Bind sequencing (RFC 4511 section 4.2.1: no PDU while a BindRequest is
+  outstanding): a bind exchange (every step of a SASL bind) marks the
+  connection as binding. Requests started meanwhile are encoded, registered
+  and held, then sent in order when the exchange ends; one cancelled while
+  held is dropped (never sent, so no AbandonRequest). Binds are serialized:
+  a second one waits for the first. `unbind()` during a bind closes without
+  an UnbindRequest; `start_tls()` during one is refused.
 - Every response is decoded with `origin::server` and checked against the
   request it answers (the operation, by id). IntermediateResponses are
   skipped without decoding; id 0 is an unsolicited notification: a Notice of
@@ -579,7 +588,8 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   (`unavailable` if it claims success) and closes the connection; other
   extended responses are ignored.
 - Failure model: a server result error, an encode error, a cancellation or
-  a timeout fails one operation and the connection stays usable. A
+  a timeout fails one operation and the connection stays usable (except a
+  cancelled or timed-out Bind or StartTLS, which closes it). A
   transport error, a malformed or oversized PDU, an unexpected response or
   a Notice of Disconnection fails every outstanding operation exactly once
   (each with its own context) and closes the transport; the error is

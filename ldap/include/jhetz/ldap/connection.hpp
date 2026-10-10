@@ -31,7 +31,14 @@
 // AbandonRequest (RFC 4511 section 4.11) is sent for it, and responses that
 // still arrive for it are dropped; the connection stays usable. A
 // search_stream destroyed before its end abandons its search the same way.
-// Abandon is best effort: the server may have answered already.
+// Abandon is best effort: the server may have answered already. Bind and
+// StartTLS cannot be abandoned (section 4.11): giving up on one closes the
+// connection instead (its outcome is unknown).
+//
+// Binds (RFC 4511 section 4.2.1): nothing is sent while a BindRequest is
+// outstanding. Requests started during a bind exchange (all the steps of a
+// SASL bind) are held and sent, in order, once it ends; one cancelled while
+// held is never sent. Binds are serialized: a second waits for the first.
 //
 // What the server sends is decoded with origin::server, always. Each
 // response must carry the id of an outstanding (or recently abandoned)
@@ -314,9 +321,10 @@ class connection
 	// checking anything, so it is refused before anything is sent
 	// (client_errc::unauthenticated_bind). A server error (e.g.
 	// errc::invalid_credentials) comes back as an error; the connection stays
-	// usable (anonymous) and may bind again. RFC 4511 section 4.2.1: do not
-	// start other operations while a bind is outstanding (the server may
-	// reject or delay them); this is not enforced.
+	// usable (anonymous) and may bind again. Other operations started while
+	// the bind is outstanding are held until it ends (RFC 4511 section
+	// 4.2.1), and a second bind waits for this one. Cancelled or timed out,
+	// the bind closes the connection (a bind cannot be abandoned).
 	boost::capy::task<result<void>> simple_bind(dn name, std::string password);
 
 	// SASL bind (RFC 4513 section 5.2): sends one BindRequest per step of
@@ -427,20 +435,22 @@ class connection
 	// StartTLS (RFC 4511 section 4.14): upgrades a plain ldap:// connection
 	// to TLS in place, with the same verification rules as ldaps://
 	// (`options`; the name checked is options.server_name, else the URL's
-	// host). Refused with operation_in_progress while any operation is
-	// outstanding; while it runs, starting another operation fails the same
+	// host). Refused with operation_in_progress while any operation (or a
+	// bind exchange) is outstanding; while it runs, starting another operation fails the same
 	// way. If the server refuses (a result code other than success), that
 	// error is returned and the connection stays usable, unprotected. Bytes
 	// received after the StartTLS response and before the handshake are
 	// refused (decode_error: a plaintext injection attempt), and a failed
-	// handshake closes the connection. `timeout` bounds the exchange and the
+	// handshake closes the connection, as does a cancellation or timeout
+	// (StartTLS cannot be abandoned, RFC 4511 section 4.11). `timeout` bounds the exchange and the
 	// handshake (nullopt: connection_options::operation_timeout for the
 	// exchange, no limit for the handshake).
 	boost::capy::task<result<void>> start_tls(net::tls_options options = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 
 	// Sends an UnbindRequest, waits until it is written, and closes the
-	// connection (RFC 4511 section 4.3: there is no response). On TLS it
+	// connection (RFC 4511 section 4.3: there is no response). During a bind
+	// it only closes: nothing may be sent while a BindRequest is outstanding. On TLS it
 	// then ends the TLS session gracefully: close_notify, then the server's,
 	// within connection_options::tls_shutdown_timeout (best effort: the
 	// result does not depend on it). Outstanding

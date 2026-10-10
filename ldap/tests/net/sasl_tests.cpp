@@ -157,3 +157,28 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		m.check_server();
 	}
 }
+
+// RFC 4511 section 4.2.1: nothing is sent while a BindRequest is outstanding.
+// A request started during a SASL exchange waits for all of its steps.
+TEST_CASE("sasl: requests started during the exchange wait for its end", "[net][sasl][rfc]")
+{
+	mock_ldap m;
+	m.serve({ answer({ sasl_resp(1, 14, "c1") }),
+	  answer({ sasl_resp(3, 14) }),
+	  answer({ sasl_resp(4, 0, "server-final") }),
+	  answer({ done_msg(2) }) });
+	echo_mechanism mech;
+	outcome<ldap::result<void>> bind;
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	spawn(m.ioc, m.conn.sasl_bind(mech), bind);
+	spawn(m.ioc, m.conn.search({}), search);// id 2, held
+	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
+	CHECK(bind.get().has_value());
+	CHECK(search.get().has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 4);
+	CHECK(m.log.received[0] == sasl_req(1, "X-ECHO", "hello"));
+	CHECK(m.log.received[1] == sasl_req(3, "X-ECHO", "re:c1"));
+	CHECK(m.log.received[2] == sasl_req(4, "X-ECHO", "re:"));
+	CHECK(m.log.received[3].id == 2);
+}
