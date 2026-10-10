@@ -13,7 +13,8 @@
 
 namespace ldap = jhetz::ldap;
 
-// All 38 non-success resultCodes of RFC 4511 section 4.1.9 / Appendix A.
+// All 38 non-success resultCodes of RFC 4511 section 4.1.9 / Appendix A, plus
+// assertionFailed (122, RFC 4528).
 TEST_CASE("ldap::errc keeps RFC 4511 resultCode numbers", "[error]")
 {
 	STATIC_REQUIRE(static_cast<int>(ldap::errc::operations_error) == 1);
@@ -54,6 +55,7 @@ TEST_CASE("ldap::errc keeps RFC 4511 resultCode numbers", "[error]")
 	STATIC_REQUIRE(static_cast<int>(ldap::errc::object_class_mods_prohibited) == 69);
 	STATIC_REQUIRE(static_cast<int>(ldap::errc::affects_multiple_dsas) == 71);
 	STATIC_REQUIRE(static_cast<int>(ldap::errc::other) == 80);
+	STATIC_REQUIRE(static_cast<int>(ldap::errc::assertion_failed) == 122);
 }
 
 TEST_CASE("every errc and client_errc has a real message", "[error]")
@@ -97,8 +99,9 @@ TEST_CASE("every errc and client_errc has a real message", "[error]")
 		ldap::errc::object_class_mods_prohibited,
 		ldap::errc::affects_multiple_dsas,
 		ldap::errc::other,
+		ldap::errc::assertion_failed,
 	};
-	STATIC_REQUIRE(std::size(all) == 38);
+	STATIC_REQUIRE(std::size(all) == 39);
 	for (auto e : all) {
 		const auto text = std::error_code(e).message();
 		INFO("errc " << static_cast<int>(e) << ": " << text);
@@ -247,8 +250,9 @@ TEST_CASE("every errc maps to its documented condition", "[error][cond]")
 		{ errc::object_class_mods_prohibited, std::nullopt },
 		{ errc::affects_multiple_dsas, std::nullopt },
 		{ errc::other, std::nullopt },
+		{ errc::assertion_failed, std::nullopt },
 	};
-	CHECK(table.size() == 38);// every non-success resultCode
+	CHECK(table.size() == 39);// every non-success resultCode
 	for (const auto &[e, expected] : table) {
 		INFO("errc " << static_cast<int>(e) << " " << std::error_code(e).message());
 		CHECK(cond_of(e) == expected);

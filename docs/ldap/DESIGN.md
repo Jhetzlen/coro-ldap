@@ -156,8 +156,9 @@ auto r = co_await conn.search({
 });
 ```
 
-Controls are typed (`ldap::paged`, `ldap::sort`, …) in a `std::variant`, with
-`ldap::raw_control{oid, critical, bytes}` as the escape hatch.
+Controls are typed (`ldap::paged`, `ldap::server_side_sort`, …) in a
+`std::variant`, with `ldap::raw_control{oid, critical, bytes}` as the escape
+hatch.
 
 The designated-initializer style above is for the step 5 request structs,
 which stay aggregates. The wire model of section 10 is allocator-aware and
@@ -172,15 +173,50 @@ client-side `.timeout`. Values are checked when the request is encoded,
 before anything is sent.
 
 Typed controls (step 6, `controls.hpp`): `request_control` is
-`std::variant<control, paged, manage_dsa_it, proxied_authorization>`, so
-the raw wire `control {type, criticality, value}` stays the escape hatch
-and existing code that passes raw controls compiles unchanged. They are
-encoded on the connection's resource when the request is sent. Response
-controls stay wire-level (`std::pmr::vector<control>`, in `response`,
-`extended_result`, `search_stream::controls()`); `find_paged()` reads the
-paged one. Only controls with a clear use are typed so far; sort (RFC
-2891), assertion (RFC 4528) and pre/post-read (RFC 4527) can follow the
-same pattern.
+`std::variant<control, paged, manage_dsa_it, proxied_authorization,
+server_side_sort, assertion, pre_read, post_read>`, so the raw wire
+`control {type, criticality, value}` stays the escape hatch and existing
+code that passes raw controls compiles unchanged. They are encoded on the
+connection's resource when the request is sent; an invalid one (a sort
+without keys, an empty assertion filter) fails before anything is sent.
+Response controls stay wire-level (`std::pmr::vector<control>`, in
+`response`, `extended_result`, `search_stream::controls()`,
+`paged_search::controls()`), and a `find_*` function reads each typed one
+from such a vector: nullopt when absent, an error when malformed, so a
+server's bad control fails only the caller who asks for it.
+
+- Server side sorting (RFC 2891): `server_side_sort{.keys = {{.attribute,
+  .ordering_rule, .reverse}}, .critical}`; the SearchResultDone's
+  SortResult is `find_sort_result()` -> `sort_result{result_code,
+  attribute_type}`. A server that cannot sort fails a critical request and
+  returns the entries unsorted otherwise, so callers check
+  `is_success()`. Named `server_side_sort`, not `sort`: a class named
+  `sort` in `jhetz::ldap` would hide `std::sort` from unqualified calls
+  there (and in code that uses the namespace).
+- Assertion (RFC 4528): `assertion{.filter, .critical = true}`, the value
+  being the Filter itself. Critical by default, because a server that
+  ignored the condition would apply an update the caller meant to be
+  conditional. A false assertion fails the operation with
+  `errc::assertion_failed` (122).
+- Pre-read / post-read (RFC 4527): `pre_read{.attributes}` /
+  `post_read{.attributes}` on add / delete / modify / modify DN;
+  `find_pre_read()` / `find_post_read()` decode the returned
+  SearchResultEntry into an `ldap::entry`, with the message decoder's
+  depth and element limits.
+
+The response codecs (`encode_` / `decode_sort_result`,
+`encode_` / `decode_read_entry`) live in `message.hpp` next to the paged
+results one, so mock servers and the fuzzers use them too. Request controls
+are only encoded (no decoder: the client never reads them). Errors from
+inside a response control's value name the control (`post-read: ber: ...
+at offset 9`), since their offsets are relative to the value; request
+encoding errors name the control too (`server side sort: key 2 has no
+attribute`, `assertion: filter: empty`), after the operation's context.
+Text in these controls (assertion values, sort result attribute, the read
+entries' DN and values) is UTF-8 passed through unchanged. The unit tests
+pin the encodings and decodings against bytes captured between OpenLDAP
+2.7's ldapsearch / ldapmodify and slapd (sssvlv overlay), with UTF-8
+values, and the integration tests run them against slapd.
 
 Results (step 6): success returns the operation's value — `response`
 (the response controls) for add / modify / delete / modify DN, `bool` for
@@ -437,7 +473,7 @@ a caller match none, deliberately (test them by exact code).
 | `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | | `permission_denied` |
 | `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
 | `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
-| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress` | everything else |
+| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `assertion_failed`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress` | everything else |
 
 Choices worth knowing: `unauthenticated_bind` is `auth_failed` (an empty
 password on a login form is a failed login); `stronger_auth_required` and

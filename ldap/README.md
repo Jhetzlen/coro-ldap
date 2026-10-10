@@ -5,7 +5,8 @@ C++23 LDAP client library, in progress. Design: [`docs/ldap/DESIGN.md`](../docs/
 ## What exists
 
 - `jhetz/ldap/error.hpp`: `ldap::error`, `ldap::result<T>` (`std::expected`),
-  `ldap::errc` (RFC 4511 result codes, category `ldap.result`) and
+  `ldap::errc` (RFC 4511 result codes and RFC 4528's `assertion_failed`,
+  category `ldap.result`) and
   `ldap::client_errc` (category `ldap.client`), and the error conditions
   `ldap::cond` (category `ldap.cond`: `not_found`, `auth_failed`, `timeout`,
   `canceled`, `connection_lost`, `tls_failure`, `protocol_error`,
@@ -199,10 +200,21 @@ on by default) with the network parts. It depends on Corosio and Capy
   reports success but the mechanism's `complete()` refuses it (e.g. a
   wrong SCRAM server signature), `sasl_bind` returns the error and closes
   the connection, since the server considers it bound.
-- `jhetz/ldap/controls.hpp`: typed request controls (`ldap::paged`,
-  `manage_dsa_it`, `proxied_authorization`, or a raw `ldap::control`) in a
-  `std::variant`, `to_control` / `append_controls` to encode them and
-  `find_paged` to read a response's paged results control.
+- `jhetz/ldap/controls.hpp`: typed request controls in a `std::variant`
+  (`ldap::paged`, `manage_dsa_it`, `proxied_authorization`,
+  `server_side_sort` (RFC 2891), `assertion` (RFC 4528, critical by default;
+  a false one fails with `errc::assertion_failed`), `pre_read` /
+  `post_read` (RFC 4527), or a raw `ldap::control`), `to_control` /
+  `append_controls` to encode them, and readers for the typed response
+  controls of a `std::pmr::vector<control>` (`response::controls`,
+  `search_stream::controls()`, ...): `find_paged`, `find_sort_result`
+  (`sort_result{result_code, attribute_type}`), `find_pre_read` /
+  `find_post_read` (the entry as an `ldap::entry`). Each returns nullopt when
+  the control is absent and an error when it is malformed. The response
+  control codecs (`encode_` / `decode_sort_result`, `encode_` /
+  `decode_read_entry`) are in `message.hpp`, for mock servers. The sort
+  result comes with the SearchResultDone, so it needs `search_stream`
+  (`search()` returns only the entries).
 - `jhetz/ldap/mapping.hpp` (#9): typed struct mapping. A descriptor
   (`ldap::schema<T> = ldap::describe(ldap::object_class(...),
   ldap::field<&T::m>("attr", ldap::read_only)...)`) maps members to
@@ -359,7 +371,9 @@ certificates generated at run time through the OpenSSL API.
 ldapi:// and with a TLS client certificate; SASL SCRAM-SHA-256 binds,
 also with a non-ASCII username and password, skipped unless cyrus-sasl's scram plugin is installed, e.g. Debian's
 libsasl2-modules; plain, streaming, paged and
-typed searches with the server's schema; every write operation;
+typed searches with the server's schema; every write operation; the
+assertion, pre-read, post-read and (with the sssvlv overlay) server side
+sort controls;
 cancellation; a fault-injecting proxy that truncates, oversizes or cuts
 the server's answer). `run_slapd.sh` starts a throwaway slapd with a test
 PKI and the fixture from `make_fixture.py`, runs a command and stops it:
@@ -370,15 +384,17 @@ ldap/tests/integration/run_slapd.sh ctest --test-dir build/ldap -L integration -
 
 It needs `slapd` and `openssl`; the defaults suit Debian / Ubuntu's slapd
 package, others are set with `SLAPD`, `SLAPD_SCHEMA_DIR` and
-`SLAPD_MODULE_PATH`. Without it the `integration` test is skipped, so plain
-`ctest` stays hermetic. CI runs it in the `integration` job.
+`SLAPD_MODULE_PATH`. The sssvlv overlay is loaded when it is in the module
+path; without it the server side sort test is skipped. Without slapd the
+`integration` test is skipped, so plain `ctest` stays hermetic. CI runs it
+in the `integration` job.
 
 ## Fuzz
 
 | Target | Input | Properties |
 |---|---|---|
 | `ber_fuzz` | bytes | framer and reader agree; every element walks; values re-encode consistently |
-| `message_fuzz` | bytes | a message that decodes encodes, decodes to an equal message (exactly) and re-encodes to the same bytes; decoding into a `monotonic_buffer_resource` (with `null_memory_resource()` as the default resource meanwhile) gives an equal message, and a copy taken before the arena is released stays valid (ASan); filter text in a search request round-trips exactly |
+| `message_fuzz` | bytes | a message that decodes encodes, decodes to an equal message (exactly) and re-encodes to the same bytes; paged results, sort result and pre-/post-read controls that decode re-encode to equal values; decoding into a `monotonic_buffer_resource` (with `null_memory_resource()` as the default resource meanwhile) gives an equal message, and a copy taken before the arena is released stays valid (ASan); filter text in a search request round-trips exactly |
 | `filter_fuzz` | text / bytes | `filter::raw` text -> BER -> equal tree -> same BER, and `to_string` -> `raw` -> equal tree (a fixed point); every builder's text parses back to its tree (escaping) and `attr("cn") == v` carries `v` exactly; decodable BER filters round-trip; `!f` holds exactly `f`'s BER |
 | `dn_fuzz` | text | `parse(to_string(d)) == d`; the literal validator agrees with `parse` |
 | `url_fuzz` | text | `parse(to_string(u)) == u` and `to_string` is canonical; printed URLs contain only RFC 3986 characters |

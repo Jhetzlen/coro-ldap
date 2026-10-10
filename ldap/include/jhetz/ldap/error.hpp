@@ -71,6 +71,8 @@ enum class errc : int {
 	affects_multiple_dsas = 71,
 	// 72-79 unused
 	other = 80,
+	// Codes defined by extensions (RFC 4520 IANA registry)
+	assertion_failed = 122,// RFC 4528: the assertion control's filter did not match
 };
 
 // Failures detected by the client itself. Values start at 1 (0 is "no

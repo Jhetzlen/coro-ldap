@@ -919,4 +919,78 @@ result<control> encode_paged_results(const paged_results &value,
 result<paged_results> decode_paged_results(const control &c,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
+// Server Side Sorting (RFC 2891). The request control (sort keys) is built
+// from ldap::server_side_sort (controls.hpp); this is the response control,
+// SortResult, which the server attaches to the SearchResultDone.
+inline constexpr std::string_view sort_request_oid = "1.2.840.113556.1.4.473";
+inline constexpr std::string_view sort_response_oid = "1.2.840.113556.1.4.474";
+
+struct sort_result
+{
+	using allocator_type = std::pmr::polymorphic_allocator<>;
+
+	// sortResult: 0 (success) or the LDAP result code saying why the entries
+	// are not sorted (RFC 2891 section 1.2: e.g. 18 inappropriateMatching,
+	// 53 unwillingToPerform). Unknown values are kept, as for resultCode.
+	std::int32_t result_code = 0;
+	// attributeType [0]: the attribute that caused the failure. Empty when
+	// absent (an empty AttributeDescription is not valid, so nothing is lost).
+	std::pmr::string attribute_type{};
+
+	sort_result() = default;
+	explicit sort_result(const allocator_type &alloc) : attribute_type(alloc) {}
+	sort_result(std::int32_t code_, std::string_view attribute_type_ = {}, const allocator_type &alloc = {})
+	  : result_code(code_), attribute_type(attribute_type_, alloc)
+	{}
+	sort_result(const sort_result &) = default;
+	sort_result(sort_result &&) noexcept = default;
+	sort_result(const sort_result &other, const allocator_type &alloc)
+	  : result_code(other.result_code), attribute_type(other.attribute_type, alloc)
+	{}
+	sort_result(sort_result &&other, const allocator_type &alloc)
+	  : result_code(other.result_code), attribute_type(std::move(other.attribute_type), alloc)
+	{}
+	sort_result &operator=(const sort_result &) = default;
+	sort_result &operator=(sort_result &&) = default;
+	~sort_result() = default;
+
+	allocator_type get_allocator() const noexcept { return attribute_type.get_allocator(); }
+
+	bool is_success() const noexcept { return result_code == 0; }
+
+	friend bool operator==(const sort_result &, const sort_result &) = default;
+};
+
+// The response control (as a server sends it; for mock servers and tests).
+// Allocated from `mr`. Never fails today; result<> like the other encoders.
+result<control> encode_sort_result(const sort_result &value,
+  bool criticality = false,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+// Fails with decode_error if `c` is not a sort response control or its value
+// is missing or malformed (trailing bytes after the SEQUENCE included; unknown
+// trailing SEQUENCE elements are skipped). Allocated from `mr`.
+result<sort_result> decode_sort_result(const control &c,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+
+// Pre-Read and Post-Read (RFC 4527). The request controls (an attribute
+// selection) are built from ldap::pre_read / ldap::post_read (controls.hpp);
+// the response control of either carries the entry as it was before / is
+// after the update, encoded as a SearchResultEntry.
+inline constexpr std::string_view pre_read_oid = "1.3.6.1.1.13.1";
+inline constexpr std::string_view post_read_oid = "1.3.6.1.1.13.2";
+
+// The response control `oid` (pre_read_oid or post_read_oid, else
+// encode_error) carrying `entry` (for mock servers and tests). Allocated
+// from `mr`.
+result<control> encode_read_entry(std::string_view oid,
+  const search_result_entry &entry,
+  bool criticality = false,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+// The entry of a pre-read or post-read response control. Fails with
+// decode_error if `c` is neither or has no value, and like decode() if the
+// value is not exactly one SearchResultEntry: options.max_depth and
+// options.max_elements apply, and the entry is allocated from
+// options.memory (options.from and options.filter do not matter).
+result<search_result_entry> decode_read_entry(const control &c, const decode_options &options = {});
+
 }// namespace jhetz::ldap

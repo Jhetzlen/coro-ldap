@@ -281,6 +281,117 @@ TEST_CASE("operations: typed controls on the wire", "[net][operations][controls]
 	CHECK(bad.error().code == client_errc::encode_error);
 }
 
+TEST_CASE("operations: assertion and pre/post-read on a modify", "[net][operations][controls]")
+{
+	mock_ldap m;
+	ldap::message ok = result_msg<ldap::modify_response>(1);
+	ok.controls.push_back(*ldap::encode_read_entry(ldap::pre_read_oid,
+	  ldap::search_result_entry{ "uid=jdoe,ou=people,dc=example,dc=org", { { "sn", { "Doe" } } } }));
+	ok.controls.push_back(*ldap::encode_read_entry(ldap::post_read_oid,
+	  ldap::search_result_entry{ "uid=jdoe,ou=people,dc=example,dc=org", { { "sn", { "Roe" } } } }));
+	m.serve({ answer({ ok }), answer({ result_msg<ldap::modify_response>(2, 122, "assertion failed") }) });
+
+	const auto assert_doe = ldap::filters::attr("sn") == "Doe";
+	auto r = m.run(m.conn.modify({
+	  .object = jdoe,
+	  .changes = { ldap::mod::replace("sn", { "Roe" }) },
+	  .controls = { ldap::assertion{ .filter = assert_doe },
+		ldap::pre_read{ .attributes = { "sn" } },
+		ldap::post_read{ .attributes = { "sn" } } },
+	}));
+	REQUIRE(r.has_value());
+	auto before = ldap::find_pre_read(r->controls);
+	REQUIRE(before.has_value());
+	REQUIRE(before->has_value());
+	CHECK((*before)->dn == "uid=jdoe,ou=people,dc=example,dc=org");
+	CHECK(*(*before)->find("sn") == ldap::string_list{ "Doe" });
+	auto after = ldap::find_post_read(r->controls);
+	REQUIRE(after.has_value());
+	REQUIRE(after->has_value());
+	CHECK(*(*after)->find("sn") == ldap::string_list{ "Roe" });
+
+	auto failed = m.run(m.conn.modify({
+	  .object = jdoe,
+	  .changes = { ldap::mod::replace("sn", { "Roe" }) },
+	  .controls = { ldap::assertion{ .filter = assert_doe } },
+	}));
+	REQUIRE_FALSE(failed.has_value());
+	CHECK(failed.error().code == errc::assertion_failed);
+	CHECK(m.conn.is_open());
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 2);
+	const auto &cs = m.log.received[0].controls;
+	REQUIRE(cs.size() == 3);
+	CHECK(cs[0] == ldap::to_control(ldap::assertion{ .filter = assert_doe }).value());
+	CHECK(cs[0].criticality);
+	CHECK(cs[1] == ldap::to_control(ldap::pre_read{ .attributes = { "sn" } }).value());
+	CHECK(cs[2] == ldap::to_control(ldap::post_read{ .attributes = { "sn" } }).value());
+}
+
+TEST_CASE("operations: server side sort result of a search", "[net][operations][controls]")
+{
+	mock_ldap m;
+	ldap::message sorted = done_msg(1);
+	sorted.controls.push_back(*ldap::encode_sort_result({ 0 }));
+	ldap::message unsorted = done_msg(2);
+	unsorted.controls.push_back(*ldap::encode_sort_result({ 18, "cn" }));
+	ldap::message garbage = done_msg(3);
+	garbage.controls.push_back(ldap::control{ ldap::sort_response_oid, false, "x" });
+	m.serve({ answer({ entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B"),
+				entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"),
+				sorted }),
+	  answer({ unsorted }),
+	  answer({ garbage }) });
+
+	const ldap::server_side_sort by_cn{ .keys = { { .attribute = "cn", .reverse = true } } };
+	auto s = m.run(m.conn.search_stream({ .base = ldap::dn{ "ou=people,dc=example,dc=org" }, .controls = { by_cn } }));
+	REQUIRE(s.has_value());
+	auto first = m.run(s->next());
+	REQUIRE(first.has_value());
+	REQUIRE(first->has_value());
+	CHECK((*first)->dn == "uid=b,ou=people,dc=example,dc=org");
+	while (true) {
+		auto e = m.run(s->next());
+		REQUIRE(e.has_value());
+		if (!e->has_value()) break;
+	}
+	auto ok = ldap::find_sort_result(s->controls());
+	REQUIRE(ok.has_value());
+	REQUIRE(ok->has_value());
+	CHECK((*ok)->is_success());
+
+	auto s2 = m.run(m.conn.search_stream({ .base = ldap::dn{ "ou=people,dc=example,dc=org" }, .controls = { by_cn } }));
+	REQUIRE(s2.has_value());
+	REQUIRE(m.run(s2->next()).has_value());
+	auto not_sorted = ldap::find_sort_result(s2->controls());
+	REQUIRE(not_sorted.has_value());
+	REQUIRE(not_sorted->has_value());
+	CHECK((*not_sorted)->result_code == 18);
+	CHECK((*not_sorted)->attribute_type == "cn");
+
+	auto s3 = m.run(m.conn.search_stream({ .base = ldap::dn{ "ou=people,dc=example,dc=org" }, .controls = { by_cn } }));
+	REQUIRE(s3.has_value());
+	REQUIRE(m.run(s3->next()).has_value());
+	auto bad = ldap::find_sort_result(s3->controls());
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(bad.error().code == ldap::cond::protocol_error);
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 3);
+	REQUIRE(m.log.received[0].controls.size() == 1);
+	CHECK(m.log.received[0].controls[0] == ldap::to_control(by_cn).value());
+
+	// Invalid typed controls fail before anything is sent.
+	auto no_keys = m.run(m.conn.search({ .controls = { ldap::server_side_sort{} } }));
+	REQUIRE_FALSE(no_keys.has_value());
+	CHECK(no_keys.error().code == client_errc::encode_error);
+	auto no_filter = m.run(m.conn.del({ .entry = jdoe, .controls = { ldap::assertion{} } }));
+	REQUIRE_FALSE(no_filter.has_value());
+	CHECK(no_filter.error().code == client_errc::invalid_filter);
+	CHECK(m.log.received.size() == 3);
+}
+
 // ---------------------------------------------------------------- paged search
 
 namespace {

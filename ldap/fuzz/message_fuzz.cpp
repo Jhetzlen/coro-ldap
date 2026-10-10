@@ -13,7 +13,9 @@
 // - the framer measures the encoding as exactly one complete message;
 // - peek_message_header never crashes, and agrees with decode (id) and with
 //   the re-encoding (id, operation tag) whenever the input decodes;
-// - a paged results control that decodes re-encodes to an equal value;
+// - a paged results, sort result or pre-/post-read control that decodes
+//   re-encodes to an equal value (the entry of a read control allocated
+//   from the message's resource);
 // - search entries convert to ldap::entry, results to ldap::error;
 // - decode_options::from accepts exactly the responses (origin::server) or the
 //   requests (origin::client), failing otherwise with unsupported_operation.
@@ -41,22 +43,49 @@ namespace ldap = jhetz::ldap;
 template<class T>
 concept has_result = requires(const T &t) { t.result.to_error(); };
 
-void exercise(const ldap::message &m)
+bool is_decode_failure(const ldap::error &e)
 {
-	for (const auto &c : m.controls) {
-		if (c.type != ldap::paged_results_oid) continue;
+	return e.code == ldap::client_errc::decode_error || e.code == ldap::client_errc::unexpected_tag
+		   || e.code == ldap::client_errc::nesting_too_deep || e.code == ldap::client_errc::integer_overflow
+		   || e.code == ldap::client_errc::unsupported_tag;
+}
+
+void exercise_control(const ldap::control &c)
+{
+	if (c.type == ldap::paged_results_oid) {
 		if (auto p = ldap::decode_paged_results(c)) {
 			const auto again = ldap::encode_paged_results(*p, c.criticality);
 			LDAP_FUZZ_CHECK(again.has_value());
 			LDAP_FUZZ_CHECK(ldap::decode_paged_results(*again) == *p);
 		} else {
-			LDAP_FUZZ_CHECK(p.error().code == ldap::client_errc::decode_error
-							|| p.error().code == ldap::client_errc::unexpected_tag
-							|| p.error().code == ldap::client_errc::nesting_too_deep
-							|| p.error().code == ldap::client_errc::integer_overflow
-							|| p.error().code == ldap::client_errc::unsupported_tag);
+			LDAP_FUZZ_CHECK(is_decode_failure(p.error()));
+		}
+	} else if (c.type == ldap::sort_response_oid) {
+		if (auto s = ldap::decode_sort_result(c, c.get_allocator().resource())) {
+			LDAP_FUZZ_CHECK(s->get_allocator() == c.get_allocator());
+			const auto again = ldap::encode_sort_result(*s, c.criticality);
+			LDAP_FUZZ_CHECK(again.has_value());
+			LDAP_FUZZ_CHECK(ldap::decode_sort_result(*again) == *s);
+		} else {
+			LDAP_FUZZ_CHECK(is_decode_failure(s.error()));
+		}
+	} else if (c.type == ldap::pre_read_oid || c.type == ldap::post_read_oid) {
+		ldap::decode_options options;
+		options.memory = c.get_allocator().resource();
+		if (auto e = ldap::decode_read_entry(c, options)) {
+			LDAP_FUZZ_CHECK(e->get_allocator() == c.get_allocator());
+			const auto again = ldap::encode_read_entry(c.type, *e, c.criticality);
+			LDAP_FUZZ_CHECK(again.has_value());
+			LDAP_FUZZ_CHECK(ldap::decode_read_entry(*again) == *e);
+		} else {
+			LDAP_FUZZ_CHECK(is_decode_failure(e.error()) || e.error().code == ldap::client_errc::message_too_large);
 		}
 	}
+}
+
+void exercise(const ldap::message &m)
+{
+	for (const auto &c : m.controls) exercise_control(c);
 	std::visit(
 	  [](const auto &op) {
 		  using T = std::decay_t<decltype(op)>;

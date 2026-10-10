@@ -367,6 +367,133 @@ TEST_CASE("integration: add, modify, compare, rename and delete", "[integration]
 	CHECK(deleted.error().code == ldap::errc::no_such_object);
 }
 
+TEST_CASE("integration: assertion and pre/post-read controls", "[integration][controls]")
+{
+	REQUIRE_SLAPD();
+	corosio::io_context ioc;
+	auto c = open_admin(ioc);
+	const std::string name = unique("ctl");
+	const ldap::dn entry = *ldap::dn::parse("uid=" + name + ",ou=people,dc=example,dc=org");
+	using ldap::filters::attr;
+	// UTF-8 values all the way: in the assertion filter and in the entries read back.
+	const char before_sn[] = "\xC3\x86r\xC3\xB8";// Ærø
+	const char after_sn[] = "\xE6\x97\xA5\xE6\x9C\xAC";// 日本
+
+	// Post-read on an add: the entry as stored.
+	auto added = finish(ioc,
+	  c.add({ .entry = entry,
+		.attributes = { { "objectClass", { "inetOrgPerson" } },
+		  { "uid", { name } },
+		  { "cn", { "C" } },
+		  { "sn", { before_sn } } },
+		.controls = { ldap::post_read{ .attributes = { "sn", "entryUUID" } } } }));
+	REQUIRE(added.has_value());
+	auto stored = ldap::find_post_read(added->controls);
+	REQUIRE(stored.has_value());
+	REQUIRE(stored->has_value());
+	CHECK(ldap::dn::parse((*stored)->dn).value() == entry);
+	REQUIRE((*stored)->find("sn") != nullptr);
+	CHECK(*(*stored)->find("sn") == ldap::string_list{ before_sn });
+	CHECK((*stored)->find("entryUUID") != nullptr);// operational attributes can be asked for by name
+	CHECK((*stored)->find("cn") == nullptr);
+
+	// Assertion holds: the modify runs; pre-read and post-read show both sides.
+	auto changed = finish(ioc,
+	  c.modify({ .object = entry,
+		.changes = { ldap::mod::replace("sn", { after_sn }) },
+		.controls = { ldap::assertion{ .filter = attr("sn") == before_sn },
+		  ldap::pre_read{ .attributes = { "sn" } },
+		  ldap::post_read{ .attributes = { "sn" } } } }));
+	REQUIRE(changed.has_value());
+	auto before = ldap::find_pre_read(changed->controls);
+	auto after = ldap::find_post_read(changed->controls);
+	REQUIRE(before.has_value());
+	REQUIRE(before->has_value());
+	REQUIRE(after.has_value());
+	REQUIRE(after->has_value());
+	CHECK(*(*before)->find("sn") == ldap::string_list{ before_sn });
+	CHECK(*(*after)->find("sn") == ldap::string_list{ after_sn });
+
+	// Assertion fails: nothing changes, the connection stays usable.
+	auto refused = finish(ioc,
+	  c.modify({ .object = entry,
+		.changes = { ldap::mod::replace("sn", { "Again" }) },
+		.controls = { ldap::assertion{ .filter = attr("sn") == before_sn } } }));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::errc::assertion_failed);
+	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "sn", .value = after_sn })) == true);
+	// On a search the assertion applies to the base entry.
+	auto search_refused = finish(ioc,
+	  c.search({ .base = entry,
+		.scope = ldap::search_scope::base_object,
+		.controls = { ldap::assertion{ .filter = attr("sn") == before_sn } } }));
+	REQUIRE_FALSE(search_refused.has_value());
+	CHECK(search_refused.error().code == ldap::errc::assertion_failed);
+
+	// Pre-read on a delete: the entry as it was.
+	auto deleted = finish(ioc,
+	  c.del({ .entry = entry,
+		.controls = {
+		  ldap::assertion{ .filter = attr("sn") == after_sn }, ldap::pre_read{ .attributes = { "sn" } } } }));
+	REQUIRE(deleted.has_value());
+	auto last = ldap::find_pre_read(deleted->controls);
+	REQUIRE(last.has_value());
+	REQUIRE(last->has_value());
+	CHECK(*(*last)->find("sn") == ldap::string_list{ after_sn });
+}
+
+TEST_CASE("integration: server side sort", "[integration][controls]")
+{
+	REQUIRE_SLAPD();
+	if (env("JHETZ_LDAP_IT_SORT").empty()) SKIP("slapd without the sssvlv overlay");
+	corosio::io_context ioc;
+	auto c = open_admin(ioc);
+	auto s = finish(ioc,
+	  c.search_stream({ .base = people,
+		.filter = ldap::filters::attr("objectClass") == "posixAccount",
+		.attributes = { "uid", "uidNumber" },
+		.controls = {
+		  ldap::server_side_sort{ .keys = { { .attribute = "uidNumber", .reverse = true } }, .critical = true } } }));
+	REQUIRE(s.has_value());
+	std::vector<std::string> uids;
+	while (true) {
+		auto e = finish(ioc, s->next());
+		REQUIRE(e.has_value());
+		if (!*e) break;
+		REQUIRE((*e)->find("uid") != nullptr);
+		uids.emplace_back((*e)->find("uid")->front());
+	}
+	REQUIRE(uids.size() == 250);
+	CHECK(uids.front() == "user249");
+	CHECK(uids[1] == "user248");
+	CHECK(uids.back() == "user000");
+	auto sorted = ldap::find_sort_result(s->controls());
+	REQUIRE(sorted.has_value());
+	REQUIRE(sorted->has_value());
+	CHECK((*sorted)->is_success());
+
+	// An ordering rule given by name: sn descending ("249" .. "000").
+	auto by_sn = finish(ioc,
+	  c.search({ .base = people,
+		.filter = ldap::filters::attr("objectClass") == "posixAccount",
+		.attributes = { "sn" },
+		.controls = { ldap::server_side_sort{
+		  .keys = { { .attribute = "sn", .ordering_rule = "caseIgnoreOrderingMatch", .reverse = true } },
+		  .critical = true } } }));
+	REQUIRE(by_sn.has_value());
+	REQUIRE(by_sn->size() == 250);
+	CHECK(by_sn->front().find("sn")->front() == "249");
+	CHECK(by_sn->back().find("sn")->front() == "000");
+
+	// cn has no ORDERING rule: a critical sort by it fails the search.
+	auto refused = finish(ioc,
+	  c.search({ .base = people,
+		.controls = { ldap::server_side_sort{ .keys = { { .attribute = "cn" } }, .critical = true } } }));
+	REQUIRE_FALSE(refused.has_value());
+	INFO(refused.error().message());
+	CHECK(refused.error().code.category() == ldap::result_category());
+}
+
 TEST_CASE("integration: password modify (RFC 3062)", "[integration]")
 {
 	REQUIRE_SLAPD();

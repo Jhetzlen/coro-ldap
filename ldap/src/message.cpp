@@ -717,6 +717,16 @@ namespace {
 	  public:
 		explicit decoder(const decode_options &options) : options_(options), a_(options.memory) {}
 
+		// The value of a pre-read / post-read response control: exactly one
+		// SearchResultEntry.
+		result<search_result_entry> run_entry(std::span<const std::byte> bytes)
+		{
+			ber::reader top(bytes, options_.max_depth);
+			LDAP_TRY(op, read_search_result_entry(top, ber::application(op_tag::search_result_entry)));
+			LDAP_TRY_VOID(top.expect_end());
+			return std::move(std::get<search_result_entry>(op));
+		}
+
 		result<message> run(std::span<const std::byte> bytes)
 		{
 			ber::reader top(bytes, options_.max_depth);
@@ -1230,6 +1240,109 @@ result<paged_results> decode_paged_results(const control &c, std::pmr::memory_re
 	out.size = size;
 	out.cookie = std::move(cookie);
 	return out;
+}
+
+// ---------------------------------------------------------------- server side sorting
+
+namespace {
+
+	result<void> expect_control(const control &c, std::string_view oid, std::string_view what)
+	{
+		if (c.type != oid)
+			return fail(client_errc::decode_error,
+			  std::string(what) + ": control type is " + std::string(c.type) + ", not " + std::string(oid));
+		if (!c.value) return fail(client_errc::decode_error, std::string(what) + ": control has no value");
+		return {};
+	}
+
+	control bytes_control(std::string_view oid, bool criticality, const ber::writer &w, std::pmr::memory_resource *mr)
+	{
+		const auto &bytes = w.bytes();
+		return control(oid,
+		  criticality,
+		  std::string_view(reinterpret_cast<const char *>(bytes.data()), bytes.size()),
+		  control::allocator_type(mr));
+	}
+
+}// namespace
+
+result<control> encode_sort_result(const sort_result &value, bool criticality, std::pmr::memory_resource *mr)
+{
+	ber::writer w{ ber::writer::allocator_type(mr) };
+	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
+		s.enumerated(value.result_code);
+		if (!value.attribute_type.empty()) s.octet_string(value.attribute_type, ber::context(0));
+	});
+	return bytes_control(sort_response_oid, criticality, w, mr);
+}
+
+namespace {
+
+	// SortResult ::= SEQUENCE { sortResult ENUMERATED, attributeType [0] AttributeDescription OPTIONAL }
+	result<sort_result> read_sort_result(std::span<const std::byte> value, std::pmr::memory_resource *mr)
+	{
+		ber::reader r(value);
+		LDAP_TRY(s, r.enter());
+		LDAP_TRY_VOID(r.expect_end());
+		LDAP_TRY(code,
+		  read_ranged(s,
+			ber::tags::enumerated,
+			std::numeric_limits<std::int32_t>::min(),
+			std::numeric_limits<std::int32_t>::max(),
+			"sortResult",
+			true));
+		sort_result out{ sort_result::allocator_type(mr) };
+		out.result_code = code;
+		if (next_is(s, ber::context(0))) {
+			LDAP_TRY(type, s.read_string(ber::context(0), mr));
+			out.attribute_type = std::move(type);
+		}
+		LDAP_TRY_VOID(skip_rest(s));
+		return out;
+	}
+
+	// Errors from inside a control value name the control: their offsets
+	// are relative to the value, not to the message.
+	template<class T> result<T> in_control(result<T> r, std::string_view name)
+	{
+		if (r) return r;
+		auto e = std::move(r.error());
+		if (!e.context.empty()) e.context.insert(0, ": ");
+		e.context.insert(0, name);
+		return std::unexpected(std::move(e));
+	}
+
+}// namespace
+
+result<sort_result> decode_sort_result(const control &c, std::pmr::memory_resource *mr)
+{
+	LDAP_TRY_VOID(expect_control(c, sort_response_oid, "sort result"));
+	return in_control(read_sort_result(std::as_bytes(std::span(*c.value)), mr), "sort result");
+}
+
+// ---------------------------------------------------------------- pre-read / post-read
+
+result<control> encode_read_entry(std::string_view oid,
+  const search_result_entry &entry,
+  bool criticality,
+  std::pmr::memory_resource *mr)
+{
+	if (oid != pre_read_oid && oid != post_read_oid)
+		return fail(
+		  client_errc::encode_error, "read entry control: " + std::string(oid) + " is not pre-read or post-read");
+	ber::writer w{ ber::writer::allocator_type(mr) };
+	op_writer{ w }(entry);
+	return bytes_control(oid, criticality, w, mr);
+}
+
+result<search_result_entry> decode_read_entry(const control &c, const decode_options &options)
+{
+	if (c.type != pre_read_oid && c.type != post_read_oid)
+		return fail(client_errc::decode_error,
+		  "read entry: control type is " + std::string(c.type) + ", not pre-read or post-read");
+	const std::string_view name = c.type == pre_read_oid ? "pre-read" : "post-read";
+	LDAP_TRY_VOID(expect_control(c, c.type, name));
+	return in_control(decoder(options).run_entry(std::as_bytes(std::span(*c.value))), name);
 }
 
 }// namespace jhetz::ldap

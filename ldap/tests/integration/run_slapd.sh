@@ -13,7 +13,8 @@
 # Environment (defaults suit Debian / Ubuntu's slapd package):
 #   SLAPD              slapd binary              (/usr/sbin/slapd)
 #   SLAPD_SCHEMA_DIR   directory of *.schema     (/etc/ldap/schema)
-#   SLAPD_MODULE_PATH  slapd modules, if any     (/usr/lib/ldap; back_mdb is loaded if found there)
+#   SLAPD_MODULE_PATH  slapd modules, if any     (/usr/lib/ldap; back_mdb and the sssvlv
+#                                                 overlay are loaded if found there)
 #   JHETZ_LDAP_IT_PORT first port                (3389)
 set -euo pipefail
 
@@ -62,9 +63,23 @@ openssl x509 -req -in client.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 
 # ---- configuration and data
 mkdir data
 modules=""
-if [[ -e "$module_path/back_mdb.so" || -e "$module_path/back_mdb.la" ]]; then
+overlays=""
+has_module() { [[ -e "$module_path/$1.so" || -e "$module_path/$1.la" ]]; }
+if has_module back_mdb; then
+	modules="moduleload back_mdb"
+fi
+# Server side sorting (RFC 2891) needs the sssvlv overlay; the sort test is
+# skipped without it (JHETZ_LDAP_IT_SORT unset).
+sort_available=""
+if has_module sssvlv; then
+	modules="$modules
+moduleload sssvlv"
+	overlays="overlay sssvlv"
+	sort_available=1
+fi
+if [[ -n "$modules" ]]; then
 	modules="modulepath $module_path
-moduleload back_mdb"
+$modules"
 fi
 cat > slapd.conf <<CONF
 include $schema_dir/core.schema
@@ -91,6 +106,7 @@ directory $dir/data
 index objectClass eq
 index uid eq
 access to * by * read
+$overlays
 CONF
 python3 "$here/make_fixture.py" > fixture.ldif
 "$slapd" -T add -f slapd.conf -l fixture.ldif -q
@@ -112,4 +128,5 @@ export JHETZ_LDAP_IT_LDAPI="$socket_url"
 export JHETZ_LDAP_IT_CA="$dir/ca.pem"
 export JHETZ_LDAP_IT_CLIENT_CERT="$dir/client.pem"
 export JHETZ_LDAP_IT_CLIENT_KEY="$dir/client.key"
+if [[ -n "$sort_available" ]]; then export JHETZ_LDAP_IT_SORT=1; fi
 "$@"

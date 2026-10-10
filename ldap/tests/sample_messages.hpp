@@ -94,7 +94,9 @@ inline std::pmr::vector<control> sample_controls()
 {
 	return { encode_paged_results({ 100, "\x01\x02" }, true).value(),
 		control{ "1.2.840.113556.1.4.805" },
-		control{ "1.2.3.4", true, "" } };
+		control{ "1.2.3.4", true, "" },
+		encode_sort_result({ 18, "cn" }).value(),
+		encode_read_entry(post_read_oid, search_result_entry{ "cn=x", { { "cn", { "x", "y" } } } }).value() };
 }
 
 }// namespace jhetz::ldap::test

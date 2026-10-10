@@ -259,7 +259,7 @@ struct extended_params
 };
 
 // What a successful operation returns besides success: the controls of the
-// server's response (e.g. a post-read entry, RFC 4527).
+// server's response (e.g. a post-read entry, RFC 4527: find_post_read()).
 struct response
 {
 	std::pmr::vector<control> controls{};
@@ -549,7 +549,8 @@ class search_stream
 	const string_list &references() const noexcept;
 	// references() parsed as LDAP URLs; URIs that do not parse are left out.
 	std::pmr::vector<url> reference_urls(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
-	// Controls of the SearchResultDone (e.g. paged results), once done().
+	// Controls of the SearchResultDone (e.g. paged results, or the sort
+	// result: find_sort_result()), once done().
 	const std::pmr::vector<control> &controls() const noexcept;
 
 	struct state;// defined in connection.cpp

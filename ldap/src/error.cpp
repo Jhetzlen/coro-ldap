@@ -88,6 +88,8 @@ namespace {
 			return "affects multiple DSAs";
 		case 80:
 			return "other";
+		case 122:
+			return "assertion failed";
 		default:
 			return {};
 		}
