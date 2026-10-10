@@ -16,6 +16,10 @@ cmake -S examples/corosio -B build/corosio -G Ninja
 cmake --build build/corosio
 ```
 
+The examples build with the same warnings as `ldap/` (`-Wall -Wextra
+-Wpedantic -Wconversion -Wsign-conversion -Wshadow`); add
+`-DCOROSIO_EXAMPLES_WERROR=ON` to make them errors, as CI does.
+
 ## Run
 
 ```sh

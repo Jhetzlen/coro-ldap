@@ -15,13 +15,13 @@ Checks: "*,
         -misc-non-private-member-variables-in-classes,
         -misc-no-recursion,
         -misc-use-anonymous-namespace,
-        -misc-use-internal-linkage
+        -misc-use-internal-linkage,
+        readability-identifier-length
 "
 WarningsAsErrors: ''
 HeaderFilterRegex: ''
 FormatStyle:     none
 
-Checks: 'readability-identifier-length'
 CheckOptions:
   # Minimum length for normal variables (default is 3)
   - key:             readability-identifier-length.MinimumVariableNameLength
@@ -32,7 +32,3 @@ CheckOptions:
   # Loop counters (e.g., i, j) already default to 2
   - key:             readability-identifier-length.MinimumLoopCounterNameLength
     value:           '2'
-
-
-
-

@@ -7,10 +7,12 @@ on:
     branches: [master, main]
     paths:
       - "ldap/**"
+      - "examples/corosio/**"
       - ".github/workflows/ldap.yml"
   pull_request:
     paths:
       - "ldap/**"
+      - "examples/corosio/**"
       - ".github/workflows/ldap.yml"
 
 permissions:
@@ -74,6 +76,27 @@ jobs:
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  # The standalone Corosio examples (examples/corosio): same pinned Corosio and
+  # Capy commits as jhetz::ldap_net. Built only; the echo client needs a server.
+  corosio-examples:
+    name: Corosio examples (GCC 13)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++-13 libssl-dev
+      - name: Configure
+        run: >
+          cmake -S examples/corosio -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=g++-13
+          -DCOROSIO_EXAMPLES_WERROR=ON
+      - name: Build
+        run: cmake --build build
+      # Runs entirely in-process (no server needed).
+      - name: Run result_future example
+        run: build/corosio_result_future
 
   # Not yet seen green: kept non-blocking until it is. Tests relying on Linux
   # loopback behaviour (127/8, SYN drop at a full backlog) skip themselves.

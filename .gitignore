@@ -49,3 +49,7 @@ build/
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# Stray CMake in-source build output
+CMakeCache.txt
+CMakeFiles/
