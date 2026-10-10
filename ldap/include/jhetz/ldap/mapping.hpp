@@ -372,13 +372,12 @@ namespace detail {
 			}
 			return out;
 		} else {
-			if (n > 1)
-				return fail(client_errc::too_many_values, std::to_string(n) + " values for a single-valued member");
+			if (n > 1) return fail(client_errc::too_many_values, std::to_string(n) + " values");
 			if (n == 0) {
 				if constexpr (F::kind == cardinality::optional)
 					return M{};
 				else
-					return fail(client_errc::missing_attribute, "required attribute missing");
+					return fail(client_errc::missing_attribute);
 			}
 			auto v = value_traits<E>::decode((*values)[0]);
 			if (!v) return std::unexpected(std::move(v.error()));

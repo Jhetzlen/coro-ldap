@@ -246,12 +246,12 @@ TEST_CASE("decode errors name the entry and the attribute", "[mapping][decode]")
 		  "uid",
 		  {},
 		  ldap::client_errc::missing_attribute,
-		  "entry uid=jdoe,ou=people,dc=example,dc=org: attribute uid: required attribute missing" },
+		  "entry uid=jdoe,ou=people,dc=example,dc=org: attribute uid" },
 		{ "two values for a required member",
 		  "cn",
 		  { "a", "b" },
 		  ldap::client_errc::too_many_values,
-		  "entry uid=jdoe,ou=people,dc=example,dc=org: attribute cn: 2 values for a single-valued member" },
+		  "entry uid=jdoe,ou=people,dc=example,dc=org: attribute cn: 2 values" },
 		{ "two values for an optional member", "mail", { "a", "b" }, ldap::client_errc::too_many_values, nullptr },
 		{ "bad integer",
 		  "uidNumber",
@@ -283,8 +283,26 @@ TEST_CASE("decode errors name the entry and the attribute", "[mapping][decode]")
 			REQUIRE_FALSE(p.has_value());
 			CHECK(p.error().code == c.code);
 			if (c.context != nullptr) CHECK(p.error().context == c.context);
+			// The code's text appears once in message(), after the context.
+			const std::string message(p.error().message());
+			const std::string code_text = c.code.message();
+			const auto first = message.find(code_text);
+			REQUIRE(first != std::string::npos);
+			CHECK(message.find(code_text, first + 1) == std::string::npos);
 		}
 	}
+}
+
+TEST_CASE("a mapping error message names the code once", "[mapping][decode]")
+{
+	ldap::entry e = full_entry();
+	const ldap::attribute uid{ "uid" };
+	std::erase_if(e.attributes, [&](const ldap::attribute_values &a) { return a.type == uid; });
+	auto p = ldap::decode<person>(e);
+	REQUIRE_FALSE(p.has_value());
+	CHECK(std::string(p.error().message())
+		  == "entry uid=jdoe,ou=people,dc=example,dc=org: attribute uid: required attribute missing [ldap.client:"
+			   + std::to_string(static_cast<int>(ldap::client_errc::missing_attribute)) + "]");
 }
 
 // ---------------------------------------------------------------- encode / descriptor

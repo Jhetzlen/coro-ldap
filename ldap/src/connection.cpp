@@ -586,10 +586,7 @@ namespace {
 		~registration() { c.abandon(p); }
 	};
 
-	error not_connected(std::string_view context)
-	{
-		return make_error(client_errc::not_connected, std::string(context) + ": not connected");
-	}
+	error not_connected(std::string_view context) { return make_error(client_errc::not_connected, context); }
 
 	// Waits until no other bind exchange is in progress (binds are
 	// serialized), then marks this one as in progress; bind_exchange ends it.

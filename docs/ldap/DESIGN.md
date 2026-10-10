@@ -347,6 +347,12 @@ as its errors.
 LDAP result code 0 (success) is not an `errc` value: a successful result is
 the absence of an error.
 
+`message()` is `<context>: <code's message> [<category>:<value>]` followed
+by the server's parts, so the context says where and with what (operation,
+entry DN, attribute, offending value), never the code's own text again: a
+missing required attribute reads `entry uid=x,ou=people,dc=example,dc=org:
+attribute uid: required attribute missing [ldap.client:7]`.
+
 `matched_dn` and `referrals` stay strings, exactly as the server sent them
 (decided in step 5a, instead of `std::optional<dn>` / `std::vector<url>` as
 sketched above): a server's matchedDN or referral URI may not parse (servers
