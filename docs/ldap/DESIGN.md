@@ -1,10 +1,10 @@
 # LDAP client: API design
 
-Status: steps 1–4b implemented under `ldap/` (errors, BER codec, message model,
-typed filters, DN/attribute/entry, URLs, transports and connect, `std::pmr`
-throughout). Sections 3–7 describe the API still to be built;
+Status: the roadmap in `ROADMAP.md` is implemented under `ldap/` (codec,
+connection with multiplexing, every RFC 4511 operation, StartTLS, SASL,
+typed mapping, runtime schema checks, blocking facade, `ldapsearch`).
 "Implemented" notes say where the code differs from the original plan.
-Remaining work is tracked as GitHub issues, indexed in `ROADMAP.md`.
+Remaining work is tracked in beads (`bd list`).
 `api_prototype.cpp` next to this file checks that the type-safety parts of
 section 4 compile as C++23 (GCC 13).
 
@@ -508,8 +508,11 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   is `certificate_verification::insecure_accept_any`. Configuration errors
   (bad or mismatched PEM certificates and keys, missing `ca_dir`) fail before
   any network traffic. Host matching
-  follows OpenSSL defaults, which Corosio does not let us change: CN fallback
-  when there is no SAN, and partial wildcards in the leftmost label.
+  follows OpenSSL defaults: CN fallback when there is no SAN, and partial
+  wildcards in the leftmost label. Corosio has no option for the check
+  flags, but its verify callback sees the X509_STORE_CTX, so a stricter
+  check (X509_check_host with NEVER_CHECK_SUBJECT and NO_PARTIAL_WILDCARDS
+  at depth 0) can be done on our side.
   CA bundles are split by us because Corosio loads only the first
   certificate of a bundle (worth reporting upstream).
 - StartTLS (implemented, step 7): `net::start_tls(transport, read_buffer,
@@ -726,8 +729,8 @@ same codec serve the client and a mock server for tests.
 
 ## Open questions
 
-- Stricter TLS host matching (no CN fallback, no partial wildcards) needs
-  Corosio to expose the OpenSSL check flags.
+- Stricter TLS host matching (no CN fallback, no partial wildcards, RFC
+  6125): doable in our verify callback; not done yet.
 - Per-search memory limits (across many entries) are left to the caller:
   `search_stream` hands entries over one at a time, and `max_message_size`
   with `max_elements` bound each one.

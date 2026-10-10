@@ -1,9 +1,8 @@
 # LDAP client: roadmap and tickets
 
-Work left after steps 1–4b (merged). Each ticket is a GitHub issue written so
-an agent can pick it up cold: goal, what to read first (`DESIGN.md` sections),
-scope, acceptance criteria and dependencies. Read `DESIGN.md` and
-`ldap/README.md` before starting any of them.
+History of the LDAP client roadmap. Everything below is done (on main by
+2026-10-07); open work is tracked in beads (`bd list`, `bd ready`). Read
+`DESIGN.md` and `ldap/README.md` before starting anything.
 
 ## Done
 
@@ -14,7 +13,7 @@ scope, acceptance criteria and dependencies. Read `DESIGN.md` and
 | 4 | URLs, transports (TCP / TLS / Unix), connect, message I/O | #4 |
 | 4b | Typed filter tree, `std::pmr` throughout, decode benchmark | #5 |
 
-## Next
+## Steps 5–10 (done)
 
 | Ticket | What | Depends on |
 |---|---|---|
@@ -38,11 +37,13 @@ Tracked in beads (`bd list`) since 2026-10-10; the GitHub numbers are history.
 
 | Ticket | What |
 |---|---|
-| #16 → `coro_http_client-cqx` | Report Corosio issues upstream (TLS verification default, CA bundles, host-check flags, resolve shutdown) |
+| #16 → `coro_http_client-cqx` | Report the Corosio CA bundle bug upstream (the other suspected issues were re-checked: not Corosio bugs) |
 | #17 | API polish: extensible-match builder, filter view naming, wire constructors |
 | #18 | Networking: Happy Eyeballs, TLS close_notify, IPv6 and non-Linux CI |
 | #19 | Decode performance: default-heap regression, message size limits |
 | #20 → `coro_http_client-6k2` | Clean up the legacy Asio code at the repo root (done: deleted) |
+| `coro_http_client-23i` | RFC 4511–4516 conformance audit and fixes (done) |
+| `coro_http_client-ct6` | Strict TLS host matching through the verify callback |
 
 ## Definition of done (every ticket)
 
