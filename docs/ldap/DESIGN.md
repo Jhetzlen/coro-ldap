@@ -540,7 +540,9 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   server that decodes with `origin::client`). `simple_bind`, `search`,
   `search_stream`, `unbind`, `close()`.
 - Multiplexed (5b): any number of operations outstanding, matched by
-  message id. Ids are per connection, from 1, wrapping at maxInt; a request
+  message id. Ids are per connection, from 1, wrapping at maxInt; after a
+  wrap, ids of outstanding or recently abandoned requests are skipped (RFC
+  4511 section 4.1.1: the server may still be servicing them). A request
   that fails to encode sends nothing and does not use up an id. Sending is
   synchronous for the operation: it encodes, registers itself under its id
   (before the write, since the answer may come first) and queues the PDU.

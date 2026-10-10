@@ -170,6 +170,7 @@ struct connection::impl
 	std::optional<std::chrono::milliseconds> default_timeout;
 	std::optional<std::chrono::milliseconds> tls_shutdown_timeout;
 	std::int32_t next_id = 1;
+	bool wrapped = false;// next_id went past maxInt: ids may be in use
 	bool open = true;
 	std::optional<error> failure{};// why the connection closed, if it failed
 	std::pmr::unordered_map<std::int32_t, pending_op *> pending;
@@ -293,7 +294,22 @@ struct connection::impl
 		capy::run_async(ex)(writer(this));
 	}
 
-	// Gives `m` the next message id, encodes it and queues it for the
+	// The next message id the server cannot still be servicing (RFC 4511
+	// section 4.1.1): after wrapping at maxInt, ids of outstanding or
+	// recently abandoned requests are skipped.
+	std::int32_t free_id() const
+	{
+		std::int32_t id = next_id;
+		if (!wrapped) return id;// ids so far only increased: none is in use
+		auto in_use = [this](std::int32_t i) {
+			return pending.contains(i)
+				   || std::any_of(abandoned.begin(), abandoned.end(), [i](const abandoned_req &r) { return r.id == i; });
+		};
+		while (in_use(id)) id = id == max_int ? 1 : id + 1;
+		return id;
+	}
+
+	// Gives `m` the next free message id, encodes it and queues it for the
 	// writer. If `p` is given it is registered under that id first (its
 	// response may arrive before the write completes). If encoding fails
 	// nothing is sent and the id is not used up.
@@ -302,9 +318,10 @@ struct connection::impl
 		if (!open) return std::unexpected(not_connected(context));
 		if (upgrading && !std::holds_alternative<abandon_request>(m.op))
 			return fail(client_errc::operation_in_progress, std::string(context) + ": StartTLS is in progress");
-		m.id = next_id;
+		m.id = free_id();
 		auto bytes = encode(m, mr);
 		if (!bytes) return std::unexpected(with_context(std::move(bytes.error()), context));
+		if (m.id == max_int) wrapped = true;
 		next_id = m.id == max_int ? 1 : m.id + 1;
 		const bool bind = std::holds_alternative<bind_request>(m.op);
 		if (p != nullptr) {
@@ -643,6 +660,8 @@ namespace {
 }// namespace
 
 // ---------------------------------------------------------------- connection
+
+void detail::set_next_message_id(connection &c, std::int32_t id) noexcept { c.impl_->next_id = id; }
 
 connection::connection(corosio::io_context &ioc,
   net::transport t,

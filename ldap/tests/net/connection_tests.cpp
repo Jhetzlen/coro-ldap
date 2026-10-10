@@ -1236,3 +1236,52 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 		CHECK_THAT(m.log.error, StartsWith("server read: "));
 	}
 }
+
+// RFC 4511 section 4.1.1: a client "MUST NOT send a request with the same
+// messageID as an earlier request in the same LDAP session unless it can be
+// determined that the server is no longer servicing the earlier request".
+TEST_CASE("RFC 4511 4.1.1: ids still in use are skipped after wrapping", "[net][connection][rfc]")
+{
+	auto del_resp = [](std::int32_t id) { return ldap::message{ id, ldap::del_response{ ldap::ldap_result{ 0 } } }; };
+	const ldap::dn x{ "cn=x,dc=example,dc=org" };
+	SECTION("an outstanding search keeps its id")
+	{
+		mock_ldap m;
+		// Reads the search (id 1) and leaves it open; answers two deletes,
+		// then ends the search.
+		m.serve({ step{}, answer({ del_resp(ldap::max_int) }), answer({ del_resp(2), done_msg(1) }) });
+		auto s = m.run(m.conn.search_stream({}));
+		REQUIRE(s.has_value());
+		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+		ldap::detail::set_next_message_id(m.conn, ldap::max_int);
+		CHECK(m.run(m.conn.del({ .entry = x })).has_value());// max_int
+		CHECK(m.run(m.conn.del({ .entry = x })).has_value());// 2: 1 is the search's
+		auto rest = m.run(drain_stream(*s));
+		CHECK(rest.has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(m.log.received[1].id == ldap::max_int);
+		CHECK(m.log.received[2].id == 2);
+		CHECK(m.conn.is_open());
+	}
+	SECTION("an abandoned request keeps its id")
+	{
+		mock_ldap m;
+		// Reads the search (id 1), its AbandonRequest (id 2), then answers
+		// a delete: it must not reuse 1, which the server may still serve.
+		m.serve({ step{}, step{}, answer({ del_resp(ldap::max_int) }), answer({ del_resp(2) }) });
+		std::stop_source stop;
+		outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+		spawn(m.ioc, stop.get_token(), m.conn.search({}), search);
+		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+		stop.request_stop();
+		drive_until(m.ioc, [&] { return search.done() && m.log.received.size() == 2; });
+		ldap::detail::set_next_message_id(m.conn, ldap::max_int);
+		CHECK(m.run(m.conn.del({ .entry = x })).has_value());// max_int
+		CHECK(m.run(m.conn.del({ .entry = x })).has_value());// 2: 1 was abandoned (2, the AbandonRequest's, is free)
+		m.check_server();
+		REQUIRE(m.log.received.size() == 4);
+		CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+		CHECK(m.log.received[3].id == 2);
+	}
+}

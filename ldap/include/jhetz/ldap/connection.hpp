@@ -277,6 +277,12 @@ inline constexpr std::string_view who_am_i_oid = "1.3.6.1.4.1.4203.1.11.3";
 
 class search_stream;
 class paged_search;
+class connection;
+
+namespace detail {
+	// For tests only: the message id the next request tries first.
+	void set_next_message_id(connection &c, std::int32_t id) noexcept;
+}// namespace detail
 
 class connection
 {
@@ -470,6 +476,7 @@ class connection
   private:
 	friend class ldap::search_stream;
 	friend class ldap::paged_search;
+	friend void detail::set_next_message_id(connection &, std::int32_t) noexcept;
 
 	// schema_check::on_first_use for one type (see above).
 	boost::capy::task<result<void>> check_schema(std::type_index type,
