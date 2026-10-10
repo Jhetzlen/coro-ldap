@@ -20,11 +20,14 @@
 
 namespace jhetz::ldap::net::detail {
 
-// Why the verify callback rejected the peer, e.g. "hostname mismatch
-// (certificate depth 0)"; empty if it did not.
+// Shared with the verify callback: why it rejected the peer, e.g.
+// "hostname mismatch (certificate depth 0)" (empty if it did not), and the
+// DNS name to match strictly (host_name_matching::strict; empty for an IP
+// literal or legacy matching), set by tls_handshake().
 struct verify_failure
 {
 	std::string reason{};
+	std::string strict_host{};
 };
 
 struct tls_setup

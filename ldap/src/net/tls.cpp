@@ -8,6 +8,7 @@
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
+#include <openssl/x509v3.h>
 
 #include <filesystem>
 #include <fstream>
@@ -132,6 +133,17 @@ namespace {
 		return false;
 	}
 
+	bool is_ip_literal(const std::string &name)
+	{
+		ASN1_OCTET_STRING *ip = a2i_IPADDRESS(name.c_str());
+		if (ip == nullptr) {
+			ERR_clear_error();
+			return false;
+		}
+		ASN1_OCTET_STRING_free(ip);
+		return true;
+	}
+
 	result<void> check(std::error_code ec, const std::string &what)
 	{
 		if (ec) return fail(ec, what);
@@ -180,16 +192,30 @@ result<tls_setup> make_tls_setup(const tls_options &o)
 			if (auto r = add_cas(ctx, o.ca_pem, "tls: ca_pem"); !r) return std::unexpected(std::move(r.error()));
 		}
 		// Records why verification failed; the handshake error itself only
-		// says "certificate verify failed". Returns the built-in verdict
-		// unchanged, so it never relaxes verification.
+		// says "certificate verify failed". Never relaxes the built-in
+		// verdict; with strict_host set it also rejects a leaf that only
+		// OpenSSL's lenient host matching accepted (Corosio has no option for
+		// the X509_CHECK_FLAG_* flags, so the check is redone here).
 		ctx.set_verify_callback([failure = setup.failure](bool preverified, corosio::verify_context &vc) {
-			if (!preverified && failure->reason.empty()) {
-				if (auto *store = static_cast<X509_STORE_CTX *>(vc.native_handle())) {
-					const int err = X509_STORE_CTX_get_error(store);
-					failure->reason = X509_verify_cert_error_string(err);
-					failure->reason +=
-					  " (certificate depth " + std::to_string(X509_STORE_CTX_get_error_depth(store)) + ")";
+			auto *store = static_cast<X509_STORE_CTX *>(vc.native_handle());
+			if (store == nullptr) return preverified;
+			if (preverified && !failure->strict_host.empty() && X509_STORE_CTX_get_error_depth(store) == 0) {
+				const std::string &host = failure->strict_host;
+				constexpr unsigned flags = X509_CHECK_FLAG_NEVER_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS;
+				if (X509_check_host(X509_STORE_CTX_get_current_cert(store), host.data(), host.size(), flags, nullptr)
+					!= 1) {
+					X509_STORE_CTX_set_error(store, X509_V_ERR_HOSTNAME_MISMATCH);
+					preverified = false;
+					if (failure->reason.empty())
+						failure->reason =
+						  "hostname mismatch (strict matching: subjectAltName DNS names only, no "
+						  "partial wildcards; certificate depth 0)";
 				}
+			}
+			if (!preverified && failure->reason.empty()) {
+				const int err = X509_STORE_CTX_get_error(store);
+				failure->reason = X509_verify_cert_error_string(err);
+				failure->reason += " (certificate depth " + std::to_string(X509_STORE_CTX_get_error_depth(store)) + ")";
 			}
 			return preverified;
 		});
@@ -236,6 +262,9 @@ boost::capy::task<result<void>> tls_handshake(transport::impl &im,
   deadline_t deadline)
 {
 	const std::string name = tls_peer_name(host, options);
+	if (options.verification == certificate_verification::full && options.host_matching == host_name_matching::strict
+		&& !is_ip_literal(name))
+		setup.failure->strict_host = name;
 	im.tls_context.emplace(std::move(setup.context));
 	im.tls.emplace(&*im.tcp, *im.tls_context);
 	im.tls->set_hostname(name);

@@ -102,11 +102,12 @@ on by default) with the network parts. It depends on Corosio and Capy
     a TLS session with close_notify first (`connection::unbind()` does, within
     `connection_options::tls_shutdown_timeout`). `transport::wrap()` forwards
     `close()` / `cancel()` to the wrapped stream when it has them.
-  - Host name checks are OpenSSL's defaults, which Corosio does not let us
-    change: subjectAltName DNS entries, the subject CN only when there is no
-    subjectAltName, wildcards (also partial, `ld*.example.org`) in the
-    leftmost label; IP literals against iPAddress entries, without an IPv6
-    zone.
+  - Host name checks are strict by default (RFC 6125): subjectAltName DNS
+    entries only (never the subject CN), wildcards only as a whole leftmost
+    label (`*.example.org`, not `ld*.example.org`); IP literals against
+    iPAddress entries, without an IPv6 zone. `tls_options::host_matching =
+    host_name_matching::legacy` accepts what OpenSSL does by default (CN
+    when there is no subjectAltName, partial wildcards).
   - Errors keep the system / TLS `error_code` and name the stage:
     `connect ldaps://h:636: tls handshake: server certificate: hostname mismatch ...`.
   - `ldapi://` is tested on Linux (should work wherever Corosio has

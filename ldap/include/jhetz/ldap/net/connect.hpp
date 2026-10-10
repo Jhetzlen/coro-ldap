@@ -80,6 +80,20 @@ enum class certificate_verification : unsigned char {
 	insecure_accept_any,
 };
 
+// How the host name is matched against the server certificate (with
+// certificate_verification::full). IP literals are matched against
+// iPAddress entries either way.
+enum class host_name_matching : unsigned char {
+	// Default (RFC 6125, RFC 4513 section 3.1.3): only subjectAltName DNS
+	// names count, never the subject CN, and a wildcard must be the whole
+	// leftmost label (`*.example.org`, not `ldap*.example.org`).
+	strict,
+	// OpenSSL's defaults: the subject CN is used when the certificate has no
+	// subjectAltName DNS name, and partial wildcards match. For old
+	// certificates only.
+	legacy,
+};
+
 // TLS settings for ldaps:// (and StartTLS, step 7). The defaults are secure:
 // certificate verification with the system trust store, host name check, SNI,
 // TLS 1.2 or later. A plain aggregate on purpose: this is configuration, read
@@ -107,6 +121,7 @@ struct tls_options
 	// host. Set it when connecting by address to a server whose certificate
 	// only names its DNS name. Control characters (NUL included) are rejected.
 	std::pmr::string server_name{};
+	host_name_matching host_matching = host_name_matching::strict;
 
 	boost::corosio::tls_version min_version = boost::corosio::tls_version::tls_1_2;
 };

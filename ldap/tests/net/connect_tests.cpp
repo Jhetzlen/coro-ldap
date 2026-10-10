@@ -754,6 +754,63 @@ TEST_CASE("ldaps:// verification failures", "[net][connect][tls]")
 	CHECK_THAT(server.get(), StartsWith("server handshake: "));
 }
 
+// RFC 6125 / RFC 4513 section 3.1.3: by default only subjectAltName DNS
+// names count (no subject CN fallback) and a wildcard is a whole leftmost
+// label; host_name_matching::legacy restores OpenSSL's defaults.
+TEST_CASE("ldaps:// host name matching", "[net][connect][tls][rfc]")
+{
+	struct case_t
+	{
+		const char *name;
+		const char *cn;
+		const char *sans;
+		bool strict_ok;
+		bool legacy_ok;
+	};
+	const std::vector<case_t> cases{
+		{ "exact subjectAltName", "x", "DNS:ldap.example.org", true, true },
+		{ "whole-label wildcard", "x", "DNS:*.example.org", true, true },
+		{ "subject CN only, no subjectAltName", "ldap.example.org", "", false, true },
+		{ "partial wildcard", "x", "DNS:ld*.example.org", false, true },
+		{ "subject CN ignored when subjectAltName names another host",
+		  "ldap.example.org",
+		  "DNS:other.example.org",
+		  false,
+		  false },
+	};
+	for (const auto &c : cases) {
+		for (const auto matching : { net::host_name_matching::strict, net::host_name_matching::legacy }) {
+			const bool strict = matching == net::host_name_matching::strict;
+			DYNAMIC_SECTION(c.name << (strict ? ", strict" : ", legacy"))
+			{
+				corosio::io_context ioc;
+				tcp_server srv(ioc);
+				outcome<std::string> server;
+				const auto leaf = pki().issue(c.cn, c.sans);
+				spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
+				const net::connect_options o{ .tls = { .ca_pem = std::pmr::string(pki().ca_pem()),
+												.server_name = "ldap.example.org",
+												.host_matching = matching } };
+				if (strict ? c.strict_ok : c.legacy_ok) {
+					outcome<std::string> client;
+					spawn(ioc, exchange(ioc, srv.url("ldaps"), o, true), client);
+					drive(ioc);
+					CHECK(client.get() == "");
+					CHECK(server.get() == "");
+				} else {
+					auto t = connect_to(ioc, srv.url("ldaps"), o);
+					REQUIRE_FALSE(t.has_value());
+					CHECK(t.error().code == ldap::cond::tls_failure);
+					CHECK_THAT(std::string(t.error().context),
+					  ContainsSubstring("server certificate: hostname mismatch", Catch::CaseSensitive::No));
+					drive(ioc);
+					CHECK_THAT(server.get(), StartsWith("server handshake: "));
+				}
+			}
+		}
+	}
+}
+
 TEST_CASE("ldaps:// insecure opt-out accepts an untrusted certificate", "[net][connect][tls]")
 {
 	corosio::io_context ioc;

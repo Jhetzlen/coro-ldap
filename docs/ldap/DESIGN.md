@@ -507,12 +507,13 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   `ca_pem`, client `cert_file` + `key_file`, `server_name`; the only opt-out
   is `certificate_verification::insecure_accept_any`. Configuration errors
   (bad or mismatched PEM certificates and keys, missing `ca_dir`) fail before
-  any network traffic. Host matching
-  follows OpenSSL defaults: CN fallback when there is no SAN, and partial
-  wildcards in the leftmost label. Corosio has no option for the check
-  flags, but its verify callback sees the X509_STORE_CTX, so a stricter
-  check (X509_check_host with NEVER_CHECK_SUBJECT and NO_PARTIAL_WILDCARDS
-  at depth 0) can be done on our side.
+  any network traffic. Host matching is strict by default (RFC 6125, RFC
+  4513 section 3.1.3): subjectAltName DNS names only, no subject CN
+  fallback, wildcards only as a whole leftmost label. Corosio has no option
+  for OpenSSL's check flags, so our verify callback redoes the check on the
+  leaf (X509_check_host with NEVER_CHECK_SUBJECT | NO_PARTIAL_WILDCARDS)
+  after OpenSSL's lenient one; `tls_options::host_matching = legacy` keeps
+  OpenSSL's defaults for old certificates.
   CA bundles are split by us because Corosio loads only the first
   certificate of a bundle (worth reporting upstream).
 - StartTLS (implemented, step 7): `net::start_tls(transport, read_buffer,
@@ -729,8 +730,6 @@ same codec serve the client and a mock server for tests.
 
 ## Open questions
 
-- Stricter TLS host matching (no CN fallback, no partial wildcards, RFC
-  6125): doable in our verify callback; not done yet.
 - Per-search memory limits (across many entries) are left to the caller:
   `search_stream` hands entries over one at a time, and `max_message_size`
   with `max_elements` bound each one.
