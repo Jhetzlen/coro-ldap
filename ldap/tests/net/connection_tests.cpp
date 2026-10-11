@@ -645,7 +645,7 @@ TEST_CASE("connection: a cancelled search is abandoned", "[net][connection]")
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == capy::cond::canceled);
 	CHECK(r.error().code == ldap::cond::canceled);
-	CHECK(r.error().context == "search \"\": canceled (abandoned)");
+	CHECK(r.error().context == "search \"\" (abandoned)");
 	CHECK(m.conn.is_open());
 	CHECK(m.conn.outstanding() == 0);
 
@@ -698,7 +698,7 @@ TEST_CASE("connection: timeouts abandon the operation", "[net][connection][mux][
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == capy::cond::timeout);
 		CHECK(r.error().code == ldap::cond::timeout);
-		CHECK(r.error().context == "search \"\": timed out (abandoned)");
+		CHECK(r.error().context == "search \"\" (abandoned)");
 		CHECK(elapsed >= std::chrono::milliseconds(80));
 		CHECK(elapsed < std::chrono::seconds(10));
 		CHECK(m.conn.is_open());
@@ -713,7 +713,7 @@ TEST_CASE("connection: timeouts abandon the operation", "[net][connection][mux][
 		auto r = m.run(m.conn.del({ .entry = ldap::dn{ "cn=x,dc=example,dc=org" } }));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::timeout);
-		CHECK(r.error().context == "delete cn=x,dc=example,dc=org: timed out (abandoned)");
+		CHECK(r.error().context == "delete cn=x,dc=example,dc=org (abandoned)");
 		// A search that is answered in time is unaffected.
 		CHECK(m.run(m.conn.search({})).has_value());
 		m.check_server();
@@ -1103,10 +1103,9 @@ TEST_CASE("connection: ldap::connect failures", "[net][connection]")
 // cannot be abandoned." Giving up on a bind closes the connection instead.
 TEST_CASE("RFC 4511 4.11: a bind that is given up on is not abandoned", "[net][connection][rfc][timeout]")
 {
-	auto check = [](mock_ldap &m, const ldap::result<void> &r, std::string_view why) {
+	auto check = [](mock_ldap &m, const ldap::result<void> &r) {
 		REQUIRE_FALSE(r.has_value());
-		CHECK(std::string(r.error().context)
-			  == "bind cn=admin,dc=example,dc=org: " + std::string(why) + " (connection closed)");
+		CHECK(r.error().context == "bind cn=admin,dc=example,dc=org (connection closed)");
 		CHECK_FALSE(m.conn.is_open());
 		// Nothing more can be sent: the server's second read sees EOF.
 		m.sockets.client.close();// closing a wrapped transport leaves the socket open
@@ -1124,7 +1123,7 @@ TEST_CASE("RFC 4511 4.11: a bind that is given up on is not abandoned", "[net][c
 		m.serve({ step{}, step{} });// reads the bind and whatever comes next, answers nothing
 		auto r = m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
 		CHECK(r.error().code == ldap::cond::timeout);
-		check(m, r, "timed out");
+		check(m, r);
 	}
 	SECTION("cancellation")
 	{
@@ -1137,7 +1136,7 @@ TEST_CASE("RFC 4511 4.11: a bind that is given up on is not abandoned", "[net][c
 		stop.request_stop();
 		drive_until(m.ioc, [&bind] { return bind.done(); });
 		CHECK(bind.get().error().code == ldap::cond::canceled);
-		check(m, bind.get(), "canceled");
+		check(m, bind.get());
 	}
 }
 

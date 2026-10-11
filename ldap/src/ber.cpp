@@ -345,8 +345,8 @@ result<reader> reader::enter_impl(tag t, bool constructed, const char *what)
 		  std::string("ber: entering ") + what + ": " + describe(tag{ t.cls, constructed, t.number }, h->t)
 			+ at(offset()));
 	if (depth_ >= max_depth_)
-		return fail(client_errc::nesting_too_deep,
-		  "ber: nesting deeper than " + std::to_string(max_depth_) + " levels" + at(offset()));
+		return fail(
+		  client_errc::nesting_too_deep, "ber: limit " + std::to_string(max_depth_) + " levels" + at(offset()));
 	const std::size_t content_offset = offset() + h->header_size;
 	reader sub(data_.subspan(pos_ + h->header_size, h->content_size), content_offset, depth_ + 1, max_depth_);
 	pos_ += h->header_size + h->content_size;

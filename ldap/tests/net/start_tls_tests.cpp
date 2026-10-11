@@ -308,7 +308,7 @@ TEST_CASE("start_tls: refused while an operation is outstanding", "[net][starttl
 	auto r = m.run(m.conn.start_tls());
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::client_errc::operation_in_progress);
-	CHECK(r.error().context == "start tls: 1 operations are outstanding");
+	CHECK(r.error().context == "start tls: 1 outstanding");
 	CHECK(m.conn.is_open());
 	m.conn.close();
 	drive_until(m.ioc, [&search] { return search.done(); });
@@ -350,7 +350,7 @@ TEST_CASE("RFC 4511 4.14.1: requests are refused while StartTLS is in progress",
 	drive_until(f.ioc, [&] { return upgrade.done() && bind.done(); });
 	REQUIRE_FALSE(bind.get().has_value());
 	CHECK(bind.get().error().code == ldap::client_errc::operation_in_progress);
-	CHECK(bind.get().error().context == "bind \"\": StartTLS is in progress");
+	CHECK(bind.get().error().context == "bind \"\": StartTLS");
 	REQUIRE(upgrade.get().has_value());
 	CHECK(c.is_tls());
 	// The server got nothing in clear after the StartTLS request: its one
@@ -393,7 +393,7 @@ TEST_CASE("RFC 4511 4.11: a StartTLS that times out is not abandoned", "[net][st
 	auto r = finish(f.ioc, c.start_tls(trusting().tls, std::chrono::milliseconds(100)));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::cond::timeout);
-	CHECK(r.error().context == "start tls: timed out (connection closed)");
+	CHECK(r.error().context == "start tls (connection closed)");
 	CHECK_FALSE(c.is_open());
 	drive_until(f.ioc, [&server] { return server.done(); });
 	const auto &got = server.get();

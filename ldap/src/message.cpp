@@ -852,8 +852,7 @@ namespace {
 				sasl.credentials = std::move(credentials);
 			} else {
 				if (o.empty()) return bad("bind request without authentication", auth_at);
-				return fail(
-				  client_errc::unsupported_operation, "message: unsupported bind authentication choice" + at(auth_at));
+				return fail(client_errc::unsupported_operation, "message: bind authentication choice" + at(auth_at));
 			}
 			LDAP_TRY_VOID(skip_rest(o));
 			return op;

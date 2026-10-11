@@ -294,8 +294,8 @@ capy::task<result<transport>>
 	auto [rec, endpoints] = co_await resolve_bounded(ioc, str(u.host()), std::to_string(u.port_or_default()), deadline);
 	if (rec) co_return fail(rec, stage_context(target, "resolve " + str(u.host()), rec, options.timeout));
 	if (endpoints.empty())
-		co_return fail(std::make_error_code(std::errc::no_such_device_or_address),
-		  target + ": resolve " + str(u.host()) + ": no address");
+		co_return fail(
+		  std::make_error_code(std::errc::no_such_device_or_address), target + ": resolve " + str(u.host()));
 
 	// ---- TCP: Happy Eyeballs (RFC 8305), staggered attempts over every
 	// address, the first to connect wins and the others are cancelled

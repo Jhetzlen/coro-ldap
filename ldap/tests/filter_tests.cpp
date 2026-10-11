@@ -215,7 +215,7 @@ TEST_CASE("filter builders make one-node trees with unescaped values", "[filter]
 		auto r = to_ber(empty);
 		REQUIRE_FALSE(r);
 		CHECK(r.error().code == client_errc::invalid_filter);
-		CHECK(r.error().context == "filter: empty filter");
+		CHECK(r.error().context == "filter: empty");
 	}
 }
 

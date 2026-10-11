@@ -978,7 +978,7 @@ namespace detail {
 
 	result<void> check_filter(const filter &f, const filter_limits &limits)
 	{
-		if (f.empty()) return fail(client_errc::invalid_filter, "filter: empty filter");
+		if (f.empty()) return fail(client_errc::invalid_filter, "filter: empty");
 		if (f.depth() > limits.max_depth)
 			return fail(client_errc::invalid_filter,
 			  "filter: nested too deeply (" + std::to_string(f.depth()) + " levels, at most "
@@ -1238,8 +1238,7 @@ namespace {
 			const std::size_t at = r.offset();
 			if (depth > limits_.max_depth)
 				return fail(client_errc::nesting_too_deep,
-				  "filter: nested deeper than " + std::to_string(limits_.max_depth) + " levels at offset "
-					+ std::to_string(at));
+				  "filter: limit " + std::to_string(limits_.max_depth) + " levels, at offset " + std::to_string(at));
 			if (++elements_ > limits_.max_elements)
 				return bad("more than " + std::to_string(limits_.max_elements) + " filter elements", at);
 			depth_ = std::max(depth_, depth);

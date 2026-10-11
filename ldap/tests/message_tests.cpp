@@ -432,7 +432,7 @@ TEST_CASE("encode rejects values the wire format cannot carry", "[message]")
 	// The only filter encode() rejects besides over-limit ones: an empty one.
 	auto empty = ldap::encode(search_message(ldap::filter{}));
 	CHECK(code_of(empty) == client_errc::invalid_filter);
-	CHECK(empty.error().context == "filter: empty filter");
+	CHECK(empty.error().context == "filter: empty");
 
 	// Nothing is written on failure.
 	ber::writer w;
