@@ -16,6 +16,11 @@ section 4 compile as C++23 (GCC 13).
   (copyable, movable, comparable), and can cross threads.
 - **Modern API.** Coroutines (Corosio/Capy), designated-initializer requests,
   `std::expected` results, no exceptions for expected failures.
+- **Unicode.** Text is UTF-8 everywhere: DNs, RDNs, attribute values,
+  filters, SASL usernames and passwords, error contexts. No ASCII-only
+  restriction, documented or not: text is prepared as the RFCs say
+  (SASLprep, RFC 4013, for SASL; LDAPprep, RFC 4518, for matching), and
+  invalid UTF-8 is a clear error.
 
 ## Decisions
 
@@ -26,6 +31,7 @@ section 4 compile as C++23 (GCC 13).
 | 3 | Schema checking | Both compile-time (descriptor) and optional runtime validation against the server schema |
 | 4 | Sync API | Async core; thin blocking facade in its own header (see below) |
 | 5 | Language | C++23. A C++26 upgrade happens on a branch |
+| 6 | Unicode | Full UTF-8; ICU (normalization, stringprep profiles) is the Unicode dependency |
 
 Namespace is `jhetz::ldap`; examples below assume `namespace ldap = jhetz::ldap;`.
 
@@ -714,6 +720,8 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
 - Corosio and Capy pinned by commit, as in `examples/corosio/`, used only by
   `jhetz_ldap_net` (option `JHETZ_LDAP_BUILD_NET`, off in fuzz builds);
   it also needs OpenSSL. The codec library `jhetz_ldap` has no dependencies.
+- ICU, from coro_http_client-8x5.2 on, for Unicode normalization and the
+  stringprep profiles (decision 6).
 - The Clang < 19 `<expected>` workaround is scoped to our own targets.
 - C++26 (reflection, `std::execution` interop) on a separate branch.
 
