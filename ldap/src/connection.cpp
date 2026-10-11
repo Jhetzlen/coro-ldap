@@ -178,8 +178,16 @@ struct connection::impl
 	{
 		std::int32_t id;
 		bool search;
+		// Sent by send_unanswered: an answer is certain (an abandoned
+		// request may or may not be answered).
+		bool due = false;
 	};
 	std::pmr::deque<abandoned_req> abandoned;
+	// Entries of `abandoned` that are `due`: requests still to be answered
+	// although nothing waits for them. Counted as outstanding, so StartTLS
+	// waits for their answers (RFC 4513 section 3.1.1), and read by the
+	// reader, which runs while there are any.
+	std::size_t due_answers = 0;
 	// Writer: PDUs waiting to be written, in order.
 	std::pmr::deque<std::pmr::vector<std::byte>> outbox;
 	bool writing = false;
@@ -195,7 +203,7 @@ struct connection::impl
 		std::pmr::vector<std::byte> bytes;
 	};
 	std::pmr::deque<held_request> held;
-	// Reader: runs while `pending` is not empty.
+	// Reader: runs while `pending` is not empty or answers are due.
 	bool reading = false;
 	std::stop_source reader_stop{};
 	capy::async_event reader_idle{};// set while the reader is not running
@@ -244,6 +252,7 @@ struct connection::impl
 		outbox.clear();
 		held.clear();
 		abandoned.clear();
+		due_answers = 0;
 		auto waiting = std::move(pending);
 		pending.clear();
 		for (auto &[id, p] : waiting) {
@@ -373,14 +382,16 @@ struct connection::impl
 			return;
 		}
 		abandoned.push_back({ p.id, p.search });
-		if (abandoned.size() > max_abandoned) abandoned.pop_front();
+		trim_abandoned();
 		message m{ 0, abandon_request{ p.id } };
 		(void)submit(m, nullptr, "abandon");// cannot fail to encode
 	}
 
 	// Sends `m` without waiting for an answer: its responses are dropped like
-	// late responses to an abandoned request. Best effort: nothing is sent if
-	// the connection is closed or cannot send `m` now. Never suspends.
+	// late responses to an abandoned request. `m` must be a request that is
+	// always answered: the answer is counted as `due` until it arrives, and a
+	// reader is started to read it. Best effort: nothing is sent if the
+	// connection is closed or cannot send `m` now. Never suspends.
 	void send_unanswered(message &m, bool search, std::string_view context)
 	{
 		// Listed before `m` is queued, like abandon(): nothing may fail after
@@ -398,8 +409,28 @@ struct connection::impl
 		}
 		if (!open) return;
 		abandoned.back().id = m.id;
-		if (abandoned.size() > max_abandoned) abandoned.pop_front();
+		abandoned.back().due = true;
+		++due_answers;
+		trim_abandoned();
+		start_reader();
 	}
+
+	// Forgets an abandoned request: a later response for it is unexpected.
+	void forget_abandoned(std::pmr::deque<abandoned_req>::iterator a)
+	{
+		if (a->due) --due_answers;
+		abandoned.erase(a);
+		stop_reader_if_idle();
+	}
+
+	// Forgets the oldest abandoned request if there are too many.
+	void trim_abandoned()
+	{
+		if (abandoned.size() > max_abandoned) forget_abandoned(abandoned.begin());
+	}
+
+	// Requests still to be answered: those waited for, and `due` answers.
+	std::size_t outstanding() const noexcept { return pending.size() + due_answers; }
 
 	// ---------------------------------------------------------------- reader
 
@@ -415,13 +446,13 @@ struct connection::impl
 
 	void stop_reader_if_idle()
 	{
-		if (pending.empty() && reading) reader_stop.request_stop();
+		if (outstanding() == 0 && reading) reader_stop.request_stop();
 	}
 
 	static capy::task<void> reader(impl *self)
 	{
 		const frame_ref ref(self);
-		while (self->open && !self->pending.empty()) {
+		while (self->open && self->outstanding() != 0) {
 			auto size = co_await net::read_frame(self->transport, self->buf, self->max_message_size);
 			if (!size) {
 				// Stopped because nothing is outstanding (bytes already
@@ -436,7 +467,7 @@ struct connection::impl
 		self->reader_idle.set();
 		// Stopped while an operation was being registered: start afresh,
 		// with a new stop token.
-		if (self->open && !self->pending.empty()) self->start_reader();
+		if (self->open && self->outstanding() != 0) self->start_reader();
 	}
 
 	error unexpected(std::string text)
@@ -499,7 +530,7 @@ struct connection::impl
 			// A late response to an abandoned request: dropped. The search's
 			// SearchResultDone (or any response to another request) is its
 			// last.
-			if (!a->search || same_tag(h->op, search_result_done_tag)) abandoned.erase(a);
+			if (!a->search || same_tag(h->op, search_result_done_tag)) forget_abandoned(a);
 			return;
 		}
 		shut(unexpected("message with id " + std::to_string(h->id) + ", which matches no outstanding request"), true);
@@ -728,7 +759,7 @@ std::string_view connection::name() const noexcept
 
 connection::executor_type connection::executor() const noexcept { return impl_->ex; }
 
-std::size_t connection::outstanding() const noexcept { return impl_ == nullptr ? 0 : impl_->pending.size(); }
+std::size_t connection::outstanding() const noexcept { return impl_ == nullptr ? 0 : impl_->outstanding(); }
 
 bool connection::is_tls() const noexcept { return impl_ != nullptr && impl_->transport.is_tls(); }
 
@@ -1198,7 +1229,10 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	if (!self->open) co_return std::unexpected(self->not_connected(context));
 	if (self->upgrading) co_return fail(client_errc::operation_in_progress, context + " during an earlier StartTLS");
 	if (self->binding) co_return fail(client_errc::operation_in_progress, context + " during a bind");
-	if (const std::size_t n = self->pending.size(); n != 0)
+	// Including the answers still due to released paged searches: StartTLS
+	// may only be sent once every response is received (RFC 4513 section
+	// 3.1.1).
+	if (const std::size_t n = self->outstanding(); n != 0)
 		co_return fail(client_errc::operation_in_progress,
 		  context + " with " + std::to_string(n) + (n == 1 ? " request" : " requests") + " outstanding");
 	if (self->transport.type() != net::transport::kind::tcp || self->transport.is_tls())
@@ -1270,6 +1304,9 @@ capy::task<result<void>> connection::unbind()
 		op->finished = true;
 		op->ready.set();// they fail with not_connected ("connection closed")
 	}
+	// The answers still due are not read either.
+	for (auto &a : self->abandoned) a.due = false;
+	self->due_answers = 0;
 	self->stop_reader_if_idle();
 	message request{ 0, unbind_request{} };
 	if (auto r = self->submit(request, nullptr, context); !r) co_return r;

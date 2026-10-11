@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <variant>
 #include <vector>
 
@@ -562,8 +563,9 @@ TEST_CASE("operations: a paged search stopped between pages releases the server'
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
 		CHECK(s->pages() == 2);
 	}
-	CHECK(m.conn.outstanding() == 0);
+	CHECK(m.conn.outstanding() == 1);// the release's answer is due
 	auto b = m.run(bind_admin(m.conn));
+	CHECK(m.conn.outstanding() == 0);
 	CHECK(b.has_value());
 	CHECK(m.conn.is_open());
 	m.check_server();
@@ -593,8 +595,11 @@ TEST_CASE("operations: a paged search stopped mid-page abandons it, then release
 			}
 			CHECK(m.conn.outstanding() == 1);
 		}
-		CHECK(m.conn.outstanding() == 0);
+		// The abandoned page is not counted (it may never be answered), the
+		// release is (its answer is certain).
+		CHECK(m.conn.outstanding() == 1);
 		auto b = m.run(bind_admin(m.conn));
+		CHECK(m.conn.outstanding() == 0);
 		CHECK(b.has_value());
 		CHECK(m.conn.is_open());
 		m.check_server();
@@ -826,6 +831,114 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		drive_until(m.ioc, [&m] { return m.server.done(); });
 		CHECK(m.log.received.size() <= 2);
 		if (m.log.received.size() == 2) check_release(m.log.received[1], m.log.received[0], "page2");
+	}
+}
+
+// RFC 4513 section 3.1.1: StartTLS is not sent while a response is still
+// due, and the answer to a release is always due.
+TEST_CASE("operations: StartTLS waits for the answer to a paged search release", "[net][operations][paged][starttls]")
+{
+	SECTION("refused while the release's SearchResultDone is due")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  step{},// reads the release, does not answer yet
+		  answer({ paged_done(2, ""), bind_resp(3) }) });// reads the bind; answers the release, then the bind
+		{
+			auto s = m.run(m.conn.search_paged(people_search(), 1));
+			REQUIRE(s.has_value());
+			auto e = m.run(s->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+		}
+		CHECK(m.conn.outstanding() == 1);
+		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+		auto r = m.run(m.conn.start_tls());
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::operation_in_progress);
+		CHECK(r.error().context == "start tls with 1 request outstanding");
+		CHECK(m.conn.is_open());
+		CHECK(m.conn.outstanding() == 1);
+
+		auto b = m.run(bind_admin(m.conn));
+		CHECK(b.has_value());
+		CHECK(m.conn.outstanding() == 0);
+		// Allowed now: refused only because the mock is not a TCP connection.
+		auto again = m.run(m.conn.start_tls());
+		REQUIRE_FALSE(again.has_value());
+		CHECK(again.error().code == std::errc::invalid_argument);
+		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		check_release(m.log.received[1], m.log.received[0], "page2");
+		CHECK(m.log.received[2] == bind_request_msg(3));
+	}
+	SECTION("the answer is read with no other operation running")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  answer({ paged_done(2, "") }) });// the release's answer: read and dropped
+		{
+			auto s = m.run(m.conn.search_paged(people_search(), 1));
+			REQUIRE(s.has_value());
+			auto e = m.run(s->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+		}
+		CHECK(m.conn.outstanding() == 1);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.is_open());
+		auto r = m.run(m.conn.start_tls());
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == std::errc::invalid_argument);// not a TCP connection: past the check
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		check_release(m.log.received[1], m.log.received[0], "page2");
+	}
+	SECTION("an abandoned search is not waited for: it may never be answered")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A") }),
+		  step{} });// reads the AbandonRequest, answers nothing
+		{
+			auto s = m.run(m.conn.search_stream(people_search()));
+			REQUIRE(s.has_value());
+			auto e = m.run(s->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+		}
+		CHECK(m.conn.outstanding() == 0);
+		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+		auto r = m.run(m.conn.start_tls());
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == std::errc::invalid_argument);// not a TCP connection: past the check
+		m.check_server();
+		CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+	}
+	SECTION("unbind does not wait for the release's answer")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  step{},// reads the release, never answers
+		  step{} });// reads the UnbindRequest
+		{
+			auto s = m.run(m.conn.search_paged(people_search(), 1));
+			REQUIRE(s.has_value());
+			auto e = m.run(s->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+		}
+		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.run(m.conn.unbind()).has_value());
+		CHECK(m.conn.outstanding() == 0);
+		CHECK_FALSE(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(std::holds_alternative<ldap::unbind_request>(m.log.received[2].op));
 	}
 }
 
