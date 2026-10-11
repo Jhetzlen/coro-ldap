@@ -172,6 +172,10 @@ on by default) with the network parts. It depends on Corosio and Capy
   thread only with the io_context's default `corosio::locking_mode::safe`;
   under `unsafe_io` and `unsafe`, only from the thread running the
   io_context) as well as on the awaiting task's.
+  Abandon is best effort (RFC 4511 section 4.11): the server may have
+  finished first, so an update (add, modify, delete, modify DN) that timed
+  out, was stopped or lost a race may still have been applied; re-read the
+  entry if the outcome matters.
   Bind and StartTLS cannot be abandoned (RFC 4511 section 4.11): giving up
   on one closes the connection (one stopped before it starts is not sent,
   and the connection stays open). Nothing is sent while a bind is outstanding

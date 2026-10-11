@@ -676,8 +676,12 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   else `connection_options::operation_timeout`; a search's deadline covers
   the whole search). A stop request or the deadline fails the operation
   with `capy::error::canceled` / `timeout` (`cond::canceled` / `cond::timeout`),
-  unregisters it and queues an AbandonRequest. Late responses for the last
-  1024 abandoned requests are dropped (a search's until its
+  unregisters it and queues an AbandonRequest. Abandon is best effort
+  (RFC 4511 section 4.11): the server may have finished first, so an
+  update (add, modify, delete, modify DN) that timed out, was stopped or
+  lost a race (`raceable`, `with_stop`) may still have been applied;
+  callers that need certainty re-read the entry. Late responses for the
+  last 1024 abandoned requests are dropped (a search's until its
   SearchResultDone); a response for an id nobody waits for is a protocol
   error. A search_stream destroyed early abandons its search; a task
   destroyed while waiting abandons its operation (operations never wait on
