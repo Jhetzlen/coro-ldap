@@ -1364,6 +1364,8 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 			if (left == 0) continue;
 		}
 		// Cancelled or timed out: nothing was sent, the connection is usable.
+		// A stop reports the count waited for, not due_answers: the last
+		// answer may have come meanwhile, and "0 releases" would say nothing.
 		if (ec)
 			co_return fail(ec,
 			  context + " (waiting for the answer" + (left == 1 ? "" : "s") + " to " + std::to_string(left)

@@ -324,15 +324,16 @@ would be bytes before the handshake, which close the connection). When
 more than 1024 requests are listed, the oldest whose answer is not due is
 forgotten first. Nothing is sent after the last page (empty cookie),
 after an error that ended the search (the server's result, a malformed
-paged results control, a connection error), during StartTLS, or once the
-connection is closed; during a bind it is held until the bind ends, like
-any request. After a timeout or cancellation (the page was abandoned) or
-a next page that could not be sent, the last cookie is kept and the
-destructor releases it (`capy::cond`, not `ldap::cond::timeout`, decides:
-the latter also matches the server's timeLimitExceeded, which ended the
-search). There is no awaitable `release()`: the destructor does
-everything that needs no waiting, and waiting for the server's answer
-would tell the caller nothing it could act on.
+paged results control, a connection error), during a StartTLS exchange,
+or once the connection is closed; during a bind it is held until the
+bind ends, like any request. After a timeout or cancellation (the page
+was abandoned) or a next page that could not be sent, the last cookie is
+kept and the destructor releases it (`capy::cond`, not
+`ldap::cond::timeout`, decides: the latter also matches the server's
+timeLimitExceeded, which ended the search). There is no awaitable
+`release()`: the destructor does everything that needs no waiting, and
+waiting for the server's answer would tell the caller nothing it could
+act on.
 `sync::client::search_paged` keeps the `paged_search` on the I/O thread
 and either reads every page or destroys it after an error, so it needs
 nothing more.

@@ -525,9 +525,9 @@ class connection
 	// response; after it, it closes the connection (refused as such bytes, or
 	// failing the handshake). `timeout` bounds the wait for due answers, then
 	// the exchange, then the handshake, each on its own, so start_tls may take
-	// up to three times `timeout` (nullopt:
+	// up to three times `timeout`. nullopt:
 	// connection_options::operation_timeout for the wait and the exchange, no
-	// limit for the handshake).
+	// limit for the handshake.
 	boost::capy::task<result<void>> start_tls(net::tls_options options = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 
@@ -635,11 +635,11 @@ class search_stream
 // StartTLS). Nothing is released after the last page (empty cookie), after
 // an error that ended the search (the server's result, a malformed paged
 // results control, a closed connection), while the first page is running
-// (no cookie yet: only the abandon), during StartTLS, or once the
-// connection is closed. A page that timed out or was cancelled, or a next
-// page that could not be sent, leaves the paged_search done with the last
-// cookie kept, and its destruction releases the state. Like search_stream,
-// it must be destroyed on the connection's executor.
+// (no cookie yet: only the abandon), during a StartTLS exchange, or once
+// the connection is closed. A page that timed out or was cancelled, or a
+// next page that could not be sent, leaves the paged_search done with the
+// last cookie kept, and its destruction releases the state. Like
+// search_stream, it must be destroyed on the connection's executor.
 class paged_search
 {
   public:
