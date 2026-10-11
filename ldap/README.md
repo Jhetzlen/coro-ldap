@@ -77,7 +77,7 @@ C++23 LDAP client library, in progress. Design: [`docs/ldap/DESIGN.md`](../docs/
 A second library (target `jhetz::ldap_net`, option `JHETZ_LDAP_BUILD_NET`,
 on by default) with the network parts. It depends on Corosio and Capy
 (fetched with FetchContent at the same pinned commits as
-`examples/corosio/`) and OpenSSL; `jhetz::ldap` itself stays dependency-free.
+`examples/corosio/`), OpenSSL and ICU; `jhetz::ldap` itself stays dependency-free.
 
 - `jhetz/ldap/net/transport.hpp`: `net::transport`, the one byte stream a
   connection uses: plain TCP (`ldap://`), TLS over TCP (`ldaps://`), a Unix
@@ -193,7 +193,8 @@ on by default) with the network parts. It depends on Corosio and Capy
   TLS client certificate or ldapi://, optional authorization identity) and
   `sasl_scram_sha256` (`jhetz/ldap/sasl_scram.hpp`, RFC 5802 / 7677:
   username and password, the bind fails unless the server proves it knows
-  the password; SASLprep for ASCII only, no channel binding) are built in,
+  the password; UTF-8 usernames and passwords prepared with SASLprep, RFC
+  4013, through ICU; no channel binding) are built in,
   and `sasl_mechanism` is the interface for others. When the server
   reports success but the mechanism's `complete()` refuses it (e.g. a
   wrong SCRAM server signature), `sasl_bind` returns the error and closes
@@ -312,7 +313,9 @@ package (`JHETZ_LDAP_INSTALL`, on when this is the top-level project).
 `jhetz::ldap_net` is part of the package only when Capy and Corosio were
 found as installed packages (on `CMAKE_PREFIX_PATH`; configure prefers them
 to fetching): a fetched Corosio does not export its targets. Without it the
-package is the codec only, without the networking headers. Corosio at the
+package is the codec only, without the networking headers. With `net`, the
+package finds ICU (`find_dependency(ICU COMPONENTS uc data)`), which the
+static `jhetz::ldap_net` needs at link time. Corosio at the
 pinned commit needs help to install against an installed Capy;
 `tests/install/check_install.sh WORK_DIR` does the whole sequence (Capy,
 Corosio, jhetz_ldap, then a consumer in `tests/install/consumer/`, also
@@ -322,7 +325,9 @@ codec-only) and is the reference for doing it by hand.
 
 Standalone CMake project (CMake 3.25+, GCC 13+ or Clang 19+). Catch2 v3,
 and for `jhetz::ldap_net` Corosio and Capy, are fetched from GitHub;
-`jhetz::ldap_net` also needs the OpenSSL development files (`libssl-dev`).
+`jhetz::ldap_net` also needs the OpenSSL and ICU development files
+(`libssl-dev libicu-dev`; Arch: `openssl icu`; Homebrew: `openssl icu4c`,
+with `-DICU_ROOT=$(brew --prefix icu4c)`).
 
 ```sh
 cmake -S ldap -B build/ldap -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON
@@ -341,7 +346,7 @@ certificates generated at run time through the OpenSSL API.
 | Option | Default | |
 |---|---|---|
 | `JHETZ_LDAP_BUILD_TESTS` | `ON` | unit tests and the `*_fuzz_replay` tests |
-| `JHETZ_LDAP_BUILD_NET` | `ON` (`OFF` with fuzzers) | `jhetz::ldap_net` and its tests; fetches Corosio + Capy, needs OpenSSL |
+| `JHETZ_LDAP_BUILD_NET` | `ON` (`OFF` with fuzzers) | `jhetz::ldap_net` and its tests; fetches Corosio + Capy, needs OpenSSL and ICU |
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
 | `JHETZ_LDAP_WERROR` | `OFF` | warnings are errors in our code (CI turns it on) |
@@ -352,7 +357,7 @@ certificates generated at run time through the OpenSSL API.
 `tests/integration/` runs the client against a real OpenLDAP `slapd`
 (ldap://, ldaps://, StartTLS, ldapi://; simple and SASL EXTERNAL binds over
 ldapi:// and with a TLS client certificate; SASL SCRAM-SHA-256 binds,
-skipped unless cyrus-sasl's scram plugin is installed, e.g. Debian's
+also with a non-ASCII username and password, skipped unless cyrus-sasl's scram plugin is installed, e.g. Debian's
 libsasl2-modules; plain, streaming, paged and
 typed searches with the server's schema; every write operation;
 cancellation; a fault-injecting proxy that truncates, oversizes or cuts

@@ -7,13 +7,20 @@
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 
+#include <unicode/usprep.h>
+#include <unicode/ustring.h>
+#include <unicode/utf8.h>
+#include <unicode/utypes.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace jhetz::ldap {
 namespace {
@@ -128,22 +135,117 @@ namespace {
 
 	// ------------------------------------------------------------ input preparation
 
-	// SASLprep (RFC 4013) restricted to ASCII: no ASCII character is mapped
-	// (table B.1 and the non-ASCII spaces of C.1.2 are all outside ASCII),
-	// NFKC leaves ASCII unchanged, and the only prohibited ASCII characters
-	// are the controls of table C.2.1. Bidi rules do not apply to ASCII.
-	result<void> saslprep_ascii(std::string_view s, std::string_view what)
+	// A buffer that may hold (a form of) the password, wiped before it is freed.
+	template<class T> struct wiped_buffer
 	{
-		if (s.empty()) return input_error(std::string("empty ") + std::string(what));
-		for (const char ch : s) {
-			const auto c = static_cast<unsigned char>(ch);
-			if (c >= 0x80)
-				return input_error(
-				  std::string(what) + " is not ASCII (only the ASCII subset of SASLprep is implemented, RFC 4013)");
-			if (c < 0x20 || c == 0x7f)
-				return input_error(std::string(what) + " contains a control character (prohibited by SASLprep)");
+		std::vector<T> v;
+		explicit wiped_buffer(std::size_t n) : v(n) {}
+		wiped_buffer(const wiped_buffer &) = delete;
+		wiped_buffer &operator=(const wiped_buffer &) = delete;
+		~wiped_buffer() { OPENSSL_cleanse(v.data(), v.size() * sizeof(T)); }
+	};
+
+	struct usprep_closer
+	{
+		void operator()(UStringPrepProfile *p) const noexcept { usprep_close(p); }
+	};
+
+	// Treat the string as RFC 3454's "stored string" (unassigned code points
+	// are refused) or as a "query" (they are passed through).
+	enum class prep_kind : std::uint8_t { query, stored };
+
+	std::unexpected<error> icu_failure(std::string_view what, UErrorCode status)
+	{
+		return input_error(std::string(what) + ": SASLprep failed (ICU " + u_errorName(status) + ")");
+	}
+
+	// SASLprep (RFC 4013, the RFC 3454 stringprep profile) with ICU's
+	// usprep: map table B.1 to nothing and the non-ASCII spaces of C.1.2 to
+	// U+0020, NFKC, refuse the prohibited tables (C.1.2, C.2.1 .. C.9), check
+	// the bidi rules (RFC 3454 section 6) and, for a stored string, refuse
+	// the unassigned code points of table A.1 (Unicode 3.2). The input must
+	// be UTF-8; the result is UTF-8. `what` names the input in error
+	// contexts, which never quote it (it may be the password). Every buffer
+	// of ours that held the text is wiped; ICU's internal working buffers
+	// cannot be.
+	result<std::string> saslprep(std::string_view s, std::string_view what, prep_kind kind)
+	{
+		const std::string name(what);
+		if (s.empty()) return input_error("empty " + name);
+		if (s.size() > static_cast<std::size_t>(INT32_MAX / 4)) return input_error(name + " is too long");
+
+		// UTF-8 -> UTF-16. u_strFromUTF8 refuses ill-formed UTF-8 (overlong
+		// forms, surrogates, code points above U+10FFFF, truncated sequences).
+		UErrorCode status = U_ZERO_ERROR;
+		int32_t n16 = 0;
+		u_strFromUTF8(nullptr, 0, &n16, s.data(), static_cast<int32_t>(s.size()), &status);
+		if (status == U_INVALID_CHAR_FOUND || status == U_ILLEGAL_CHAR_FOUND)
+			return input_error(name + " is not valid UTF-8");
+		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) return icu_failure(name, status);
+		wiped_buffer<UChar> in(static_cast<std::size_t>(n16));
+		status = U_ZERO_ERROR;
+		u_strFromUTF8(in.v.data(), n16, &n16, s.data(), static_cast<int32_t>(s.size()), &status);
+		if (U_FAILURE(status)) return icu_failure(name, status);
+
+		status = U_ZERO_ERROR;
+		const std::unique_ptr<UStringPrepProfile, usprep_closer> profile(
+		  usprep_openByType(USPREP_RFC4013_SASLPREP, &status));
+		if (U_FAILURE(status)) return icu_failure(name, status);
+		const int32_t options = kind == prep_kind::stored ? USPREP_DEFAULT : USPREP_ALLOW_UNASSIGNED;
+		auto prepare = [&](UChar *dest, int32_t capacity) {
+			UParseError where{};
+			status = U_ZERO_ERROR;
+			return usprep_prepare(profile.get(), in.v.data(), n16, dest, capacity, options, &where, &status);
+		};
+		// The prepared length first (NFKC may make the string longer).
+		int32_t nprep = prepare(nullptr, 0);
+		switch (status) {
+		case U_BUFFER_OVERFLOW_ERROR:
+		case U_STRING_NOT_TERMINATED_WARNING:
+		case U_ZERO_ERROR:
+			break;
+		case U_STRINGPREP_PROHIBITED_ERROR:
+			return input_error(name + " contains a character prohibited by SASLprep (RFC 4013 section 2.3)");
+		case U_STRINGPREP_UNASSIGNED_ERROR:
+			return input_error(name + " contains a code point unassigned in Unicode 3.2 (RFC 4013 section 2.5)");
+		case U_STRINGPREP_CHECK_BIDI_ERROR:
+			return input_error(name + " breaks the bidirectional text rules of SASLprep (RFC 3454 section 6)");
+		default:
+			return icu_failure(name, status);
 		}
-		return {};
+		if (nprep == 0) return input_error(name + " is empty after SASLprep");
+		wiped_buffer<UChar> prepared(static_cast<std::size_t>(nprep));
+		nprep = prepare(prepared.v.data(), nprep);
+		if (U_FAILURE(status)) return icu_failure(name, status);
+
+		// UTF-16 -> UTF-8, straight into the result (sized once: no copy
+		// of the text is left in a freed buffer).
+		status = U_ZERO_ERROR;
+		int32_t n8 = 0;
+		u_strToUTF8(nullptr, 0, &n8, prepared.v.data(), nprep, &status);
+		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) return icu_failure(name, status);
+		std::string out(static_cast<std::size_t>(n8), '\0');
+		status = U_ZERO_ERROR;
+		u_strToUTF8(out.data(), n8, &n8, prepared.v.data(), nprep, &status);
+		if (U_FAILURE(status)) {
+			wipe_string(out);
+			return icu_failure(name, status);
+		}
+		return out;
+	}
+
+	// Well-formed UTF-8 (RFC 3629): no overlong forms, surrogates or code
+	// points above U+10FFFF.
+	bool valid_utf8(std::string_view s)
+	{
+		const auto *p = reinterpret_cast<const std::uint8_t *>(s.data());
+		const auto n = static_cast<std::int64_t>(s.size());
+		for (std::int64_t i = 0; i < n;) {
+			UChar32 c = 0;
+			U8_NEXT(p, i, n, c);
+			if (c < 0) return false;
+		}
+		return true;
 	}
 
 	// saslname (RFC 5802 section 5.1): '=' -> "=3D", ',' -> "=2C".
@@ -212,15 +314,31 @@ namespace {
 		return static_cast<std::uint32_t>(v);
 	}
 
-	// A server-supplied string for an error context: printable ASCII only, cut short.
+	// A server-supplied string for an error context, quoted and cut to at
+	// most 64 bytes on a code point boundary. Valid UTF-8 is kept; control
+	// characters (C0, DEL, C1) and ill-formed sequences become U+FFFD.
 	std::string quoted(std::string_view s)
 	{
+		constexpr std::int64_t max_bytes = 64;
+		constexpr std::string_view replacement = "\xEF\xBF\xBD";// U+FFFD
+		const auto *p = reinterpret_cast<const std::uint8_t *>(s.data());
+		const auto n = static_cast<std::int64_t>(s.size());
 		std::string out = "\"";
-		for (const char ch : s.substr(0, 64)) {
-			const auto c = static_cast<unsigned char>(ch);
-			out += c >= 0x20 && c < 0x7f ? ch : '?';
+		std::int64_t i = 0;
+		while (i < n) {
+			const std::int64_t start = i;
+			UChar32 c = 0;
+			U8_NEXT(p, i, n, c);
+			if (i > max_bytes) {
+				i = start;
+				break;
+			}
+			if (c < 0 || c < 0x20 || (c >= 0x7f && c < 0xa0))
+				out += replacement;
+			else
+				out.append(s.substr(static_cast<std::size_t>(start), static_cast<std::size_t>(i - start)));
 		}
-		if (s.size() > 64) out += "...";
+		if (i < n) out += "...";
 		out += '"';
 		return out;
 	}
@@ -261,6 +379,7 @@ sasl_scram_sha256::~sasl_scram_sha256()
 {
 	wipe();
 	wipe_string(password_);
+	wipe_string(prepared_password_);
 }
 
 void sasl_scram_sha256::wipe() noexcept
@@ -273,8 +392,18 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 {
 	state_ = state::idle;
 	wipe();
-	if (auto r = saslprep_ascii(username_, "username"); !r) return std::unexpected(std::move(r.error()));
-	if (auto r = saslprep_ascii(password_, "password"); !r) return std::unexpected(std::move(r.error()));
+	wipe_string(prepared_password_);
+	// RFC 5802 section 5.1: the username is prepared as a query (unassigned
+	// code points allowed); section 2.2: the password as a stored string.
+	auto user = saslprep(username_, "username", prep_kind::query);
+	if (!user) return std::unexpected(std::move(user.error()));
+	auto password = saslprep(password_, "password", prep_kind::stored);
+	if (!password) return std::unexpected(std::move(password.error()));
+	prepared_password_ = std::move(*password);
+	wipe_string(*password);// a short (SSO) string was copied, not moved
+	// The authorization identity is a saslname too (UTF-8), but RFC 5802
+	// does not prepare it: it is sent as given (escaped) once checked.
+	if (!valid_utf8(authz_id_)) return input_error("authorization identity is not valid UTF-8");
 	for (const char ch : authz_id_) {
 		const auto c = static_cast<unsigned char>(ch);
 		if (c < 0x20 || c == 0x7f) return input_error("authorization identity contains a control character");
@@ -290,7 +419,7 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 	}
 
 	gs2_header_ = authz_id_.empty() ? "n,," : "n,a=" + escape_saslname(authz_id_) + ",";
-	client_first_bare_ = "n=" + escape_saslname(username_) + ",r=" + client_nonce_;
+	client_first_bare_ = "n=" + escape_saslname(*user) + ",r=" + client_nonce_;
 	state_ = state::sent_first;
 	return std::optional<std::string>(gs2_header_ + client_first_bare_);
 }
@@ -319,6 +448,12 @@ result<std::optional<std::string>> sasl_scram_sha256::step(std::optional<std::st
 result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_view server_first)
 {
 	state_ = state::idle;// any failure below ends the exchange
+	// The prepared password is needed only for PBKDF2, below.
+	struct wipe_on_exit
+	{
+		std::string &s;
+		~wipe_on_exit() { wipe_string(s); }
+	} const wipe_password{ prepared_password_ };
 	// server-first-message = [reserved-mext ","] nonce "," salt ","
 	//                        iteration-count ["," extensions]
 	attribute_reader in{ server_first };
@@ -372,8 +507,8 @@ result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_v
 	auth_message += without_proof;
 
 	wiped<key_size> salted, client_key, stored_key, client_signature, proof, server_key;
-	if (PKCS5_PBKDF2_HMAC(password_.data(),
-		  static_cast<int>(password_.size()),
+	if (PKCS5_PBKDF2_HMAC(prepared_password_.data(),
+		  static_cast<int>(prepared_password_.size()),
 		  reinterpret_cast<const unsigned char *>(salt->data()),
 		  static_cast<int>(salt->size()),
 		  static_cast<int>(*iterations),

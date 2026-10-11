@@ -183,6 +183,25 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		// The same object binds again (fresh nonce).
 		REQUIRE(finish(ioc, c.sasl_bind(mech)).has_value());
 	}
+	SECTION("a non-ASCII username and password, SASLprep'ed")
+	{
+		// Stored: uid "jörg", password "pässwörd 日本 €" (already in
+		// SASLprep form). Given: "jo" U+0308 "rg" (decomposed) and the
+		// password with a NO-BREAK SPACE and an IDEOGRAPHIC SPACE, which
+		// SASLprep turns into the stored forms.
+		ldap::sasl_scram_sha256 mech(
+		  "jo\xCC\x88rg", "p\xC3\xA4ssw\xC3\xB6rd\xC2\xA0\xE6\x97\xA5\xE6\x9C\xAC\xE3\x80\x80\xE2\x82\xAC");
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE(r.has_value());
+		CHECK(finish(ioc, c.who_am_i()) == "dn:uid=j\xC3\xB6rg,ou=people,dc=example,dc=org");
+	}
+	SECTION("a non-ASCII password that is wrong")
+	{
+		ldap::sasl_scram_sha256 mech("j\xC3\xB6rg", "p\xC3\xA4ssw\xC3\xB6rd");
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::auth_failed);
+	}
 	SECTION("a wrong password")
 	{
 		ldap::sasl_scram_sha256 mech("user007", "wrong");

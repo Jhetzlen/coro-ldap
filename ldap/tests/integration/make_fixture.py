@@ -2,7 +2,8 @@
 """Writes the LDIF fixture of the integration tests to stdout.
 
 dc=example,dc=org with ou=people (250 inetOrgPerson / posixAccount users,
-user000 .. user249, enough for several pages), ou=groups (staff with 10
+user000 .. user249, enough for several pages; and uid=jörg, not a
+posixAccount, with a non-ASCII password for SCRAM), ou=groups (staff with 10
 members, big with 2000 member values) and a user with a 10000-byte binary
 jpegPhoto whose bytes are i % 251 (the tests check them).
 """
@@ -26,6 +27,14 @@ for i in range(250):
           "uidNumber: %d" % (10000 + i), "gidNumber: 100",
           "homeDirectory: /home/" + uid,
           "userPassword: pw-" + uid)
+# Non-ASCII values are base64 in LDIF. The password is in SASLprep form
+# (cyrus-sasl's SCRAM derives its keys from userPassword as stored).
+def b64(text):
+    return base64.b64encode(text.encode()).decode()
+entry_dn = "uid=j\u00f6rg,ou=people,dc=example,dc=org"
+out.extend(["dn:: " + b64(entry_dn), "objectClass: inetOrgPerson", "uid:: " + b64("j\u00f6rg"),
+            "cn:: " + b64("J\u00f6rg \u00c5ngstr\u00f6m"), "sn:: " + b64("\u00c5ngstr\u00f6m"),
+            "userPassword:: " + b64("p\u00e4ssw\u00f6rd \u65e5\u672c \u20ac"), ""])
 photo = bytes(i % 251 for i in range(10000))
 entry("uid=photo,ou=people,dc=example,dc=org",
       "objectClass: inetOrgPerson", "uid: photo", "cn: Photo", "sn: Photo",

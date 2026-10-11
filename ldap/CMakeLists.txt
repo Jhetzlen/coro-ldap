@@ -11,14 +11,14 @@ project(jhetz_ldap VERSION 0.1.0 LANGUAGES CXX)
 
 option(JHETZ_LDAP_BUILD_TESTS "Build the jhetz::ldap unit tests" ON)
 option(JHETZ_LDAP_BUILD_FUZZERS "Build the libFuzzer targets (Clang only)" OFF)
-# jhetz::ldap_net needs Corosio + Capy (fetched) and OpenSSL. The fuzzers
+# jhetz::ldap_net needs Corosio + Capy (fetched), OpenSSL and ICU. The fuzzers
 # only exercise the codec, so a fuzz build leaves it off by default.
 if(JHETZ_LDAP_BUILD_FUZZERS)
     set(jhetz_ldap_net_default OFF)
 else()
     set(jhetz_ldap_net_default ON)
 endif()
-option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap_net (transports and connect; fetches Corosio and Capy, needs OpenSSL)"
+option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap_net (transports and connect; fetches Corosio and Capy, needs OpenSSL and ICU)"
     ${jhetz_ldap_net_default})
 option(JHETZ_LDAP_SANITIZE "Build all targets with AddressSanitizer and UBSan" OFF)
 option(JHETZ_LDAP_WERROR "Treat warnings in jhetz::ldap code as errors" OFF)
@@ -163,6 +163,14 @@ if(JHETZ_LDAP_BUILD_NET)
         message(FATAL_ERROR "jhetz::ldap_net needs OpenSSL (e.g. apt install libssl-dev), "
             "or configure with -DJHETZ_LDAP_BUILD_NET=OFF")
     endif()
+    # ICU is the Unicode dependency (DESIGN.md decision 6): SASLprep for
+    # SCRAM (usprep). `data` too, for a static ICU (libicuuc.so already
+    # pulls in libicudata).
+    find_package(ICU COMPONENTS uc data)
+    if(NOT ICU_FOUND)
+        message(FATAL_ERROR "jhetz::ldap_net needs ICU (e.g. apt install libicu-dev), "
+            "or configure with -DJHETZ_LDAP_BUILD_NET=OFF")
+    endif()
 
     add_library(jhetz_ldap_net STATIC
         src/connection.cpp
@@ -175,7 +183,8 @@ if(JHETZ_LDAP_BUILD_NET)
     )
     add_library(jhetz::ldap_net ALIAS jhetz_ldap_net)
     set_target_properties(jhetz_ldap_net PROPERTIES EXPORT_NAME ldap_net)
-    target_link_libraries(jhetz_ldap_net PUBLIC jhetz_ldap Boost::corosio Boost::corosio_openssl)
+    target_link_libraries(jhetz_ldap_net PUBLIC jhetz_ldap Boost::corosio Boost::corosio_openssl
+        PRIVATE ICU::uc ICU::data)
     jhetz_ldap_warnings(jhetz_ldap_net)
 endif()
 

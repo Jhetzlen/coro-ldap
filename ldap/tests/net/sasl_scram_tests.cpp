@@ -9,6 +9,7 @@
 
 #include <optional>
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -133,25 +134,211 @@ TEST_CASE("scram: random client nonces", "[sasl][scram]")
 	CHECK(seen.size() == 16);
 }
 
-TEST_CASE("scram: SASLprep and input checks", "[sasl][scram]")
+namespace {
+
+// Bytes as hex, for INFO().
+std::string hex(std::string_view s)
 {
-	auto check = [](const ldap::error &e, std::string_view what) {
-		CHECK(e.code == ldap::client_errc::encode_error);
-		CHECK(e.code == ldap::cond::invalid_input);
-		CHECK_THAT(std::string(e.context), StartsWith(std::string(what)));
-		CHECK_THAT(std::string(e.context), !ContainsSubstring("s3cret"));
-	};
-	check(start_error("", "s3cret"), "empty username");
-	check(start_error("user", ""), "empty password");
-	check(start_error("us\ter", "s3cret"), "username contains a control character");
-	check(start_error("user", std::string("s3cret\0x", 8)), "password contains a control character");
-	check(start_error("user", "s3cret\x7f"), "password contains a control character");
-	check(start_error("j\xc3\xb6rg", "s3cret"), "username is not ASCII");
-	check(start_error("user", "s3cr\xc3\xa9t"), "password is not ASCII");
-	check(start_error("user", "s3cret", "dn:\n"), "authorization identity contains a control character");
+	std::ostringstream out;
+	for (const char c : s)
+		out << std::hex << (static_cast<unsigned>(static_cast<unsigned char>(c)) | 0x100u) % 0x100u << ' ';
+	return out.str();
+}
+
+// The username as start() sends it (SASLprep'ed and escaped).
+std::string sent_username(std::string username)
+{
+	auto m = ldap::detail::scram_test_access::with_nonce(std::move(username), "pencil", "", "fixednonce");
+	const std::string first = response(m.start());
+	REQUIRE_THAT(first, StartsWith("n,,n="));
+	REQUIRE_THAT(first, Catch::Matchers::EndsWith(",r=fixednonce"));
+	return first.substr(5, first.size() - 5 - std::string_view(",r=fixednonce").size());
+}
+
+// The client-final-message for `password` (fixed username, nonce and
+// server-first-message): equal for passwords that SASLprep makes equal.
+std::string client_final_for(std::string password)
+{
+	auto m = ldap::detail::scram_test_access::with_nonce("user", std::move(password), "", "fixednonce");
+	REQUIRE(m.start().has_value());
+	return response(m.step("r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=4096"));
+}
+
+void check_input_error(const ldap::error &e, std::string_view context, std::string_view secret = "s3cret")
+{
+	CHECK(e.code == ldap::client_errc::encode_error);
+	CHECK(e.code == ldap::cond::invalid_input);
+	CHECK(e.context == context);
+	CHECK_THAT(std::string(e.message()), StartsWith(std::string(context) + ": value cannot be encoded"));
+	CHECK_THAT(std::string(e.message()), !ContainsSubstring(std::string(secret)));
+	CHECK_THAT(std::string(e.message()), !ContainsSubstring("SCRAM"));
+}
+
+}// namespace
+
+TEST_CASE("scram: SASLprep, the RFC 4013 section 3 examples", "[sasl][scram][rfc]")
+{
+	// 1. SOFT HYPHEN mapped to nothing.
+	CHECK(sent_username("I\xC2\xAD"
+						"X")
+		  == "IX");
+	CHECK(client_final_for("I\xC2\xAD"
+						   "X")
+		  == client_final_for("IX"));
+	// 2., 3. No transformation; case is preserved.
+	CHECK(sent_username("user") == "user");
+	CHECK(sent_username("USER") == "USER");
+	CHECK(client_final_for("USER") != client_final_for("user"));
+	// 4. FEMININE ORDINAL INDICATOR (U+00AA) -> "a" (NFKC).
+	CHECK(sent_username("\xC2\xAA") == "a");
+	CHECK(client_final_for("\xC2\xAA") == client_final_for("a"));
+	// 5. ROMAN NUMERAL NINE (U+2168) -> "IX" (NFKC).
+	CHECK(sent_username("\xE2\x85\xA8") == "IX");
+	CHECK(client_final_for("\xE2\x85\xA8") == client_final_for("IX"));
+	// 6. U+0007: prohibited.
+	check_input_error(
+	  start_error("user", "\x07"), "password contains a character prohibited by SASLprep (RFC 4013 section 2.3)");
+	// 7. U+0627 U+0031: bidi violation (starts but does not end with an RandALCat character).
+	check_input_error(start_error("user",
+						"\xD8\xA7"
+						"1"),
+	  "password breaks the bidirectional text rules of SASLprep (RFC 3454 section 6)");
+}
+
+TEST_CASE("scram: SASLprep mapping and normalization", "[sasl][scram]")
+{
+	// NFKC: composition, compatibility characters.
+	CHECK(sent_username("A\xCC\x8Angstro\xCC\x88m") == "\xC3\x85ngstr\xC3\xB6m");
+	CHECK(sent_username("\xEF\xBC\xAA\xC3\xB6rg") == "J\xC3\xB6rg");// FULLWIDTH J
+	CHECK(sent_username("\xEF\xAC\x81le") == "file");// LATIN SMALL LIGATURE FI
+	// Already prepared non-ASCII text is sent unchanged.
+	CHECK(sent_username("j\xC3\xB6rg") == "j\xC3\xB6rg");
+	CHECK(sent_username("\xE5\xB1\xB1\xE7\x94\xB0") == "\xE5\xB1\xB1\xE7\x94\xB0");
+	CHECK(sent_username("\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D") == "\xD7\xA9\xD7\x9C\xD7\x95\xD7\x9D");// RTL only
+	// B.1, mapped to nothing: SOFT HYPHEN, ZERO WIDTH JOINER, ZERO WIDTH NO-BREAK SPACE.
+	CHECK(sent_username("a\xC2\xAD"
+						"b\xE2\x80\x8D"
+						"c\xEF\xBB\xBF"
+						"d")
+		  == "abcd");
+	// ZERO WIDTH SPACE is in both B.1 and C.1.2: ICU applies the C.1.2
+	// mapping (to U+0020), as PostgreSQL's SASLprep does.
+	CHECK(sent_username("a\xE2\x80\x8B"
+						"b")
+		  == "a b");
+	// C.1.2, non-ASCII spaces mapped to U+0020: NO-BREAK SPACE, EM SPACE, IDEOGRAPHIC SPACE.
+	CHECK(sent_username("a\xC2\xA0"
+						"b\xE2\x80\x83"
+						"c\xE3\x80\x80"
+						"d")
+		  == "a b c d");
+	CHECK(client_final_for("p\xC2\xA0w") == client_final_for("p w"));
+	// Escaping comes after the preparation: FULLWIDTH EQUALS SIGN and COMMA.
+	CHECK(sent_username("a\xEF\xBC\x9D"
+						"b\xEF\xBC\x8C"
+						"c")
+		  == "a=3Db=2Cc");
+	// The username is a query: code points unassigned in Unicode 3.2 pass
+	// (U+1F600, U+0221).
+	CHECK(sent_username("\xF0\x9F\x98\x80") == "\xF0\x9F\x98\x80");
+	CHECK(sent_username("\xC8\xA1") == "\xC8\xA1");
+}
+
+TEST_CASE("scram: SASLprep rejections and input checks", "[sasl][scram]")
+{
+	const std::string prohibited = "contains a character prohibited by SASLprep (RFC 4013 section 2.3)";
+	check_input_error(start_error("", "s3cret"), "empty username");
+	check_input_error(start_error("user", ""), "empty password");
+	check_input_error(start_error("\xC2\xAD", "s3cret"), "username is empty after SASLprep");
+	check_input_error(start_error("user", "\xE2\x80\x8D\xC2\xAD"), "password is empty after SASLprep", "\xE2\x80\x8D");
+
+	// Prohibited, in the username and in the password.
+	check_input_error(start_error("us\ter", "s3cret"), "username " + prohibited);
+	for (const std::string_view c : {
+		   std::string_view("\0", 1),// C.2.1 ASCII control
+		   std::string_view("\x7F"),// C.2.1 DEL
+		   std::string_view("\xC2\x85"),// C.2.2 NEXT LINE
+		   std::string_view("\xE2\x80\xA8"),// C.2.2 LINE SEPARATOR
+		   std::string_view("\xEE\x80\x80"),// C.3 private use U+E000
+		   std::string_view("\xEF\xBF\xBF"),// C.4 non-character U+FFFF
+		   std::string_view("\xEF\xBF\xBD"),// C.6 REPLACEMENT CHARACTER
+		   std::string_view("\xE2\xBF\xB0"),// C.7 ideographic description U+2FF0
+		   std::string_view("\xE2\x80\x8E"),// C.8 LEFT-TO-RIGHT MARK
+		   std::string_view("\xE2\x80\xAE"),// C.8 RIGHT-TO-LEFT OVERRIDE
+		   std::string_view("\xF3\xA0\x80\x81"),// C.9 LANGUAGE TAG U+E0001
+		 }) {
+		INFO("code point " << hex(c));
+		check_input_error(start_error("user", "s3cret" + std::string(c)), "password " + prohibited);
+		check_input_error(start_error("u" + std::string(c), "s3cret"), "username " + prohibited);
+	}
+
+	// Bidi (RFC 3454 section 6): RandALCat and LCat mixed, or an RTL
+	// string that does not end with an RandALCat character.
+	const std::string bidi = "breaks the bidirectional text rules of SASLprep (RFC 3454 section 6)";
+	check_input_error(start_error("\xD7\xA9"
+								  "a"
+								  "\xD7\x9D",
+						"s3cret"),
+	  "username " + bidi);
+	check_input_error(start_error("user",
+						"\xD7\xA9\xD7\x9C"
+						"1"),
+	  "password " + bidi);
+	CHECK(client_final_for("\xD8\xA7"
+						   "1"
+						   "\xD8\xA8")
+			.size()
+		  > 0);// RTL, digits inside: fine
+
+	// The password is a stored string: unassigned code points (Unicode 3.2) are refused.
+	const std::string unassigned = "password contains a code point unassigned in Unicode 3.2 (RFC 4013 section 2.5)";
+	check_input_error(start_error("user", "s3cret\xF0\x9F\x98\x80"), unassigned);
+	check_input_error(start_error("user", "s3cret\xC8\xA1"), unassigned);
+
+	// Invalid UTF-8: truncated, overlong, a surrogate, above U+10FFFF, stray bytes.
+	for (const std::string_view bad : {
+		   std::string_view("\xC3"),
+		   std::string_view("\xC0\xAF"),
+		   std::string_view("\xE0\x80\xAF"),
+		   std::string_view("\xED\xA0\x80"),
+		   std::string_view("\xF4\x90\x80\x80"),
+		   std::string_view("\xFF"),
+		   std::string_view("\x80"),
+		   std::string_view("\xE2\x82"),
+		 }) {
+		INFO("bytes " << hex(bad));
+		check_input_error(start_error("u" + std::string(bad), "s3cret"), "username is not valid UTF-8");
+		check_input_error(start_error("user", "s3cret" + std::string(bad)), "password is not valid UTF-8");
+		check_input_error(
+		  start_error("user", "s3cret", "u:" + std::string(bad)), "authorization identity is not valid UTF-8");
+	}
+
+	// The authorization identity: UTF-8, no control characters; not SASLprep'ed.
+	check_input_error(start_error("user", "s3cret", "dn:\n"), "authorization identity contains a control character");
+	{
+		auto m = ldap::detail::scram_test_access::with_nonce(
+		  "user", "pencil", "dn:cn=J\xC3\xB6rg \xEF\xBC\xAA,dc=example", "fixednonce");
+		CHECK(response(m.start()) == "n,a=dn:cn=3DJ\xC3\xB6rg \xEF\xBC\xAA=2Cdc=3Dexample,n=user,r=fixednonce");
+	}
+
 	// Printable ASCII, including spaces and SCRAM's separators, is accepted.
 	ldap::sasl_scram_sha256 ok("a b=c,d", " p,=w ");
 	CHECK(ok.start().has_value());
+}
+
+TEST_CASE("scram: a non-ASCII exchange", "[sasl][scram]")
+{
+	// Username "A" U+030A "ngstro" U+0308 "m" (decomposed), password
+	// "p" U+00E4 "ss" U+00A0 "w" U+00F6 "rd" U+2168 U+00AD. Expected values
+	// computed independently with Python: SASLprep from the stringprep
+	// module (Unicode 3.2 tables), PBKDF2 and HMAC from hashlib / hmac over
+	// the prepared UTF-8 bytes ("\xC3\x85ngstr\xC3\xB6m", "p\xC3\xA4ss w\xC3\xB6rdIX").
+	auto m = ldap::detail::scram_test_access::with_nonce(
+	  "A\xCC\x8Angstro\xCC\x88m", "p\xC3\xA4ss\xC2\xA0w\xC3\xB6rd\xE2\x85\xA8\xC2\xAD", "", "fixednonce");
+	CHECK(response(m.start()) == "n,,n=\xC3\x85ngstr\xC3\xB6m,r=fixednonce");
+	CHECK(response(m.step("r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=4096"))
+		  == "c=biws,r=fixednoncesrv,p=Y11RbG3iFQ+PS2iZbI5QTUxQOcGMUdBmwdZHIALNcls=");
+	CHECK(m.complete("v=co+6SuWgvyobykMIOtBkZKlvkGQGAhKa/0rxVdUVyj4=").has_value());
 }
 
 TEST_CASE("scram: server-first-message rejections", "[sasl][scram]")
@@ -235,6 +422,27 @@ TEST_CASE("scram: server-final-message rejections (mutual authentication)", "[sa
 		auto e = final_error("e=invalid-proof");
 		CHECK(e.code == ldap::client_errc::unexpected_response);
 		CHECK(e.context == "the server reported an error: \"invalid-proof\"");
+	}
+	SECTION("a server error is quoted as UTF-8, sanitized and cut on a code point boundary")
+	{
+		auto context = [](std::string_view value) {
+			return std::string(final_error("e=" + std::string(value)).context);
+		};
+		const std::string prefix = "the server reported an error: ";
+		// Valid UTF-8 is kept.
+		CHECK(context("d\xC3\xA9j\xC3\xA0 vu \xE2\x82\xAC \xF0\x9F\x98\x80")
+			  == prefix + "\"d\xC3\xA9j\xC3\xA0 vu \xE2\x82\xAC \xF0\x9F\x98\x80\"");
+		// Control characters (C0, DEL, C1) and ill-formed sequences become U+FFFD.
+		CHECK(context("a\x01" "b\x7F" "c\xC2\x85" "d\xFF" "e\xC3" "f\xED\xA0\x80" "g")
+			  == prefix + "\"a\xEF\xBF\xBD" "b\xEF\xBF\xBD" "c\xEF\xBF\xBD" "d\xEF\xBF\xBD" "e\xEF\xBF\xBD"
+						  "f\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD" "g\"");
+		// At most 64 bytes of the value, never half a character.
+		std::string e_acute;
+		for (int i = 0; i < 40; ++i) e_acute += "\xC3\xA9";
+		CHECK(context(e_acute) == prefix + "\"" + e_acute.substr(0, 64) + "...\"");
+		CHECK(context("a" + e_acute) == prefix + "\"a" + e_acute.substr(0, 62) + "...\"");
+		CHECK(context(std::string(64, 'x')) == prefix + "\"" + std::string(64, 'x') + "\"");
+		CHECK(context(std::string(65, 'x')) == prefix + "\"" + std::string(64, 'x') + "...\"");
 	}
 	SECTION("success without server-final-message")
 	{

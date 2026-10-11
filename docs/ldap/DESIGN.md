@@ -220,12 +220,21 @@ signature with `CRYPTO_memcmp`. A missing or wrong signature, or a server
 "e=" error, fails the bind (`client_errc::unexpected_response`) even if
 the server reported success (then the connection is closed): the server
 is not authenticated. The
-username and authz_id are escaped ("=2C", "=3D"); SASLprep is ASCII only
-(no ASCII character is mapped, controls are prohibited) and non-ASCII
-usernames or passwords are refused rather than sent unnormalized. No
+username and password are UTF-8 and prepared with SASLprep (RFC 4013,
+ICU's usprep): B.1 mapped to nothing, non-ASCII spaces to U+0020, NFKC,
+prohibited characters and bidi violations refused, unassigned code points
+(Unicode 3.2) refused in the password (a stored string) and allowed in the
+username (a query), as RFC 5802 sections 2.2 and 5.1 say; invalid UTF-8 is
+refused. The authz_id must be valid UTF-8 and is not prepared. The
+prepared username and the authz_id are escaped ("=2C", "=3D"). cyrus-sasl
+(slapd) does not SASLprep the userPassword it derives the keys from, so
+only passwords stored in SASLprep form match there. No
 channel binding (GS2 header "n,,"; no -PLUS variant). Key material is
-wiped with `OPENSSL_cleanse` (the password when the object is destroyed,
-derived keys as soon as the proof is built). Contexts do not name the
+wiped with `OPENSSL_cleanse` (the password when the object is destroyed;
+its prepared form, our preparation buffers and the derived keys as soon as
+the proof is built; ICU's internal buffers cannot be). Server text quoted
+in error contexts stays UTF-8: only control characters and ill-formed
+sequences are replaced (U+FFFD), and it is cut on a code point boundary. Contexts do not name the
 mechanism (`sasl_bind` prefixes "sasl bind SCRAM-SHA-256"). Tested with the RFC 7677 vector and against
 slapd with cyrus-sasl's scram plugin.
 
@@ -722,8 +731,11 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
 - Corosio and Capy pinned by commit, as in `examples/corosio/`, used only by
   `jhetz_ldap_net` (option `JHETZ_LDAP_BUILD_NET`, off in fuzz builds);
   it also needs OpenSSL. The codec library `jhetz_ldap` has no dependencies.
-- ICU, from coro_http_client-8x5.2 on, for Unicode normalization and the
-  stringprep profiles (decision 6).
+- ICU (decision 6; `find_package(ICU COMPONENTS uc data)`) for Unicode
+  normalization and the stringprep profiles. Today only `jhetz_ldap_net`
+  links it (SASLprep for SCRAM), privately; the installed package config
+  finds it as a dependency of `net`. LDAPprep matching (RFC 4518) in the
+  codec will make it a dependency of `jhetz_ldap` too.
 - The Clang < 19 `<expected>` workaround is scoped to our own targets.
 - C++26 (reflection, `std::execution` interop) on a separate branch.
 

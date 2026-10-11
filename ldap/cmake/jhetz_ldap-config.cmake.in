@@ -1,6 +1,6 @@
 # find_package(jhetz_ldap) gives jhetz::ldap (codec, no dependencies) and,
-# when installed with networking, jhetz::ldap_net (needs Corosio, Capy and
-# OpenSSL, found here as packages). Component `net` requires the latter:
+# when installed with networking, jhetz::ldap_net (needs Corosio, Capy,
+# OpenSSL and ICU, found here as packages). Component `net` requires the latter:
 #   find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net)
 @PACKAGE_INIT@
 
@@ -8,6 +8,8 @@ set(jhetz_ldap_net_FOUND @JHETZ_LDAP_PACKAGE_NET@)
 if(jhetz_ldap_net_FOUND)
     include(CMakeFindDependencyMacro)
     find_dependency(boost_corosio CONFIG)
+    # Linked privately, but a static jhetz::ldap_net needs it at link time.
+    find_dependency(ICU COMPONENTS uc data)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/jhetz_ldap-targets.cmake")

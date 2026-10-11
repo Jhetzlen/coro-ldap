@@ -9,19 +9,26 @@
 // knows the stored keys (the "v=" server signature of the last message).
 // Use it over TLS anyway: SCRAM does not protect the rest of the session.
 //
-// Part of jhetz::ldap_net (the implementation needs OpenSSL), not of the
-// codec library jhetz::ldap.
+// Part of jhetz::ldap_net (the implementation needs OpenSSL and ICU), not
+// of the codec library jhetz::ldap.
 //
 // Scope and limits:
 // - No channel binding: the GS2 header is "n,," ("n,a=<authzid>," with an
 //   authorization identity). SCRAM-SHA-256-PLUS is not provided.
-// - SASLprep (RFC 4013) is implemented for ASCII only. For ASCII input the
-//   profile maps nothing and only prohibits the control characters
-//   (U+0000..U+001F, U+007F); NFKC leaves ASCII unchanged. A username or
-//   password with a non-ASCII byte is rejected (client_errc::encode_error)
-//   rather than sent unnormalized, since that would only work by chance.
-//   The authorization identity is not SASLprep'ed (RFC 5802 does not ask
-//   for it): control characters are rejected, other bytes are sent as is.
+// - Usernames and passwords are UTF-8 and are prepared with SASLprep (RFC
+//   4013, with ICU), as RFC 5802 requires: soft hyphens and the like are
+//   mapped to nothing, non-ASCII spaces to U+0020, the text is normalized
+//   to NFKC, and prohibited characters (controls, private use,
+//   non-characters, ...) or text breaking the bidi rules are refused. The
+//   password is a "stored string" (code points unassigned in Unicode 3.2
+//   are refused), the username a "query" (they are allowed), as RFC 5802
+//   sections 2.2 and 5.1 say. Invalid UTF-8 is refused.
+//   Interoperability: cyrus-sasl's SCRAM (OpenLDAP's slapd) does not
+//   SASLprep the password it reads from userPassword, so a stored password
+//   that SASLprep changes (e.g. one with a non-ASCII space or not in NFKC)
+//   does not match there. Passwords already in SASLprep form work.
+// - The authorization identity must be valid UTF-8 without control
+//   characters; it is not SASLprep'ed (RFC 5802 does not ask for it).
 // - '=' and ',' in the username and authorization identity are escaped as
 //   "=3D" and "=2C" (RFC 5802 section 5.1).
 // - The server's iteration count must be in [min_iterations,
@@ -32,13 +39,17 @@
 // - The server nonce must extend the client nonce (start with it and be
 //   longer).
 // - The password is kept (to allow later binds with the same object) and
-//   wiped with OPENSSL_cleanse when the object is destroyed; the salted
-//   password and the derived keys are wiped as soon as the proof is built.
+//   wiped with OPENSSL_cleanse when the object is destroyed; the buffers
+//   of the SASLprep preparation when start() returns; the prepared
+//   password, the salted password and the derived keys as soon as the
+//   proof is built. ICU's own internal working buffers cannot be wiped.
 //   Copies the caller made of the password are the caller's to wipe.
 //
 // Errors (contexts never contain the password, nor name the mechanism):
-// - client_errc::encode_error (cond::invalid_input): empty or non-ASCII
-//   username or password, control characters.
+// - client_errc::encode_error (cond::invalid_input): an empty username or
+//   password (also after SASLprep), invalid UTF-8, a character SASLprep
+//   prohibits (e.g. a control character) or that is unassigned, a bidi
+//   rule violation; also an ICU failure.
 // - client_errc::decode_error (cond::protocol_error): a malformed server
 //   message.
 // - client_errc::unexpected_response (cond::protocol_error): a server
@@ -122,6 +133,7 @@ class sasl_scram_sha256 final : public sasl_mechanism
 
 	std::string username_;
 	std::string password_;
+	std::string prepared_password_;// SASLprep'ed, from start() until PBKDF2
 	std::string authz_id_;
 	std::optional<std::string> fixed_nonce_;
 	state state_ = state::idle;
