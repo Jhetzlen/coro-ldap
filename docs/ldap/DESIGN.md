@@ -713,8 +713,8 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   another thread (`unsafe` has no scheduler lock; `unsafe_io` drops the I/O
   locks, and on io_uring it also skips the eventfd wake, so a `run()`
   blocked in the ring never sees the posted resumption). Neither helper
-  owns anything
-  beyond its coroutine frame, which outlives the operation it awaits.
+  owns anything beyond its coroutine frame, which outlives the operation it
+  awaits.
 - Bind sequencing (RFC 4511 section 4.2.1: no PDU while a BindRequest is
   outstanding): a bind exchange (every step of a SASL bind) marks the
   connection as binding. Requests started meanwhile are encoded, registered
