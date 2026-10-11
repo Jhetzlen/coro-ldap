@@ -318,7 +318,7 @@ struct connection::impl
 	{
 		if (!open) return std::unexpected(not_connected(context));
 		if (upgrading && !std::holds_alternative<abandon_request>(m.op))
-			return fail(client_errc::operation_in_progress, std::string(context) + ": StartTLS");
+			return fail(client_errc::operation_in_progress, std::string(context) + " during StartTLS");
 		m.id = free_id();
 		auto bytes = encode(m, mr);
 		if (!bytes) return std::unexpected(with_context(std::move(bytes.error()), context));
@@ -1155,11 +1155,11 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
 	impl_ref self(impl_);
 	if (!self->open) co_return std::unexpected(self->not_connected(context));
-	if (self->upgrading) co_return fail(client_errc::operation_in_progress, context + ": another StartTLS");
-	if (self->binding) co_return fail(client_errc::operation_in_progress, context + ": a bind");
-	if (!self->pending.empty())
-		co_return fail(
-		  client_errc::operation_in_progress, context + ": " + std::to_string(self->pending.size()) + " outstanding");
+	if (self->upgrading) co_return fail(client_errc::operation_in_progress, context + " during an earlier StartTLS");
+	if (self->binding) co_return fail(client_errc::operation_in_progress, context + " during a bind");
+	if (const std::size_t n = self->pending.size(); n != 0)
+		co_return fail(client_errc::operation_in_progress,
+		  context + " with " + std::to_string(n) + (n == 1 ? " request" : " requests") + " outstanding");
 	if (self->transport.type() != net::transport::kind::tcp || self->transport.is_tls())
 		co_return fail(std::make_error_code(std::errc::invalid_argument),
 		  context + ": needs a plain TCP connection (not ldaps://, ldapi:// or a custom stream)");
@@ -1289,7 +1289,8 @@ capy::task<result<std::optional<entry>>> search_stream::next()
 		co_return std::optional<entry>{};
 	}
 	if (s.in_next)
-		co_return fail(client_errc::operation_in_progress, s.context + ": another next() on this search_stream");
+		co_return fail(
+		  client_errc::operation_in_progress, s.context + " during an earlier next() on this search_stream");
 	s.in_next = true;
 	struct reset
 	{
