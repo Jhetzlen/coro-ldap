@@ -266,27 +266,28 @@ Not yet: other SASL mechanisms, a connection pool.
 
 ## Examples
 
-Minimal programs in `examples/`, one use case each (option
+Bare programs in `examples/`, one action each (option
 `JHETZ_LDAP_BUILD_EXAMPLES`, targets `jhetz_ldap_example_<name>`). They
 expect a local OpenLDAP serving `dc=example,dc=org` with
 `cn=admin,dc=example,dc=org` / `secret`; the first argument overrides the
 URL (`ldap://localhost`).
 
-| Example | Shows |
+| Example | Does |
 |---|---|
-| `basics.cpp` | connect, simple bind, a search with an `ldap::filters` filter, reading entries |
-| `writes.cpp` | `add`, `modify`, `modify_dn` (rename), `del` |
-| `mapping.cpp` | a struct with an `ldap::schema<T>` descriptor: `add(dn, value)`, `modify<T>`, `search_as<T>` |
-| `streaming.cpp` | `search_paged`: a large result one entry at a time |
-| `sync_threads.cpp` | the blocking `ldap::sync::client`, shared by several threads |
-| `security.cpp` | StartTLS with a CA file (second argument), then a bind |
+| `connect.cpp` | connect and simple bind |
+| `search.cpp` | search `ou=people` with a filter, print each DN and `cn` |
+| `modify.cpp` | replace a user's `mail` |
+| `add.cpp` | add the user `uid=jane` |
+| `delete.cpp` | delete the user `uid=jane` |
+| `starttls.cpp` | connect with StartTLS, then bind |
+| `blocking.cpp` | the same search with the blocking `ldap::sync::client` |
 
 `examples/ldapsearch.cpp` (above) is a fuller command-line tool. To try an
 example against the throwaway slapd of the integration tests:
 
 ```sh
 ldap/tests/integration/run_slapd.sh sh -c \
-  'build/ldap/jhetz_ldap_example_security $JHETZ_LDAP_IT_LDAP $JHETZ_LDAP_IT_CA'
+  'build/ldap/jhetz_ldap_example_search $JHETZ_LDAP_IT_LDAP'
 ```
 
 ## Using it from another project
