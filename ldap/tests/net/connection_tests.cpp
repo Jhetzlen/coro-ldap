@@ -1508,6 +1508,33 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 		m.sockets.client.close();// closing a wrapped transport leaves the socket open
 		drive_until(m.ioc, [&] { return first.done() && m.server.done(); });
 	}
+	SECTION("a bind stopped after the first ends, before it resumes, is not sent")
+	{
+		// The first bind's end posts the waiting bind's resumption
+		// (bind_idle.set() claims the waiter); the stop comes before that
+		// resumption runs, so the wait itself is not cancelled.
+		mock_ldap m;
+		m.serve({ answer({ bind_resp(1) }), answer({ done_msg(2) }) });
+		outcome<ldap::result<void>> first, second;
+		std::stop_source stop;
+		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), first);
+		spawn(m.ioc, stop.get_token(), m.conn.simple_bind(ldap::dn{}, ""), second);
+		drive_until(m.ioc, [&first] { return first.done(); });
+		CHECK(first.get().has_value());
+		REQUIRE_FALSE(second.done());
+		stop.request_stop();
+		drive_until(m.ioc, [&second] { return second.done(); });
+		REQUIRE_FALSE(second.get().has_value());
+		CHECK(second.get().error().code == ldap::cond::canceled);
+		CHECK(second.get().error().context == "bind \"\"");
+		CHECK(m.conn.is_open());
+		CHECK(m.run(m.conn.search({})).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);// the stopped bind was never sent
+		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+		CHECK(m.log.received[1].id == 2);
+		CHECK(std::holds_alternative<ldap::search_request>(m.log.received[1].op));
+	}
 	SECTION("unbind during a bind closes without an UnbindRequest")
 	{
 		mock_ldap m;

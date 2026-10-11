@@ -592,14 +592,17 @@ namespace {
 	// Waits until no other bind exchange is in progress (binds are
 	// serialized), then marks this one as in progress; bind_exchange ends it.
 	// A bind already given up on is not sent: a bind cannot be abandoned, so
-	// sending it would only close the connection.
+	// sending it would only close the connection. The stop is checked after
+	// the wait, right before the bind is sent: a stop that comes once
+	// bind_idle.set() has claimed the waiter, but before it resumes, does
+	// not cancel the wait.
 	capy::task<result<void>> begin_bind(impl_ref c, std::string_view context)
 	{
-		if ((co_await capy::this_coro::stop_token).stop_requested()) co_return fail(capy::error::canceled, context);
 		while (c->binding) {
 			auto [ec] = co_await c->bind_idle.wait();
 			if (ec) co_return fail(ec, context);
 		}
+		if ((co_await capy::this_coro::stop_token).stop_requested()) co_return fail(capy::error::canceled, context);
 		c->binding = true;
 		c->bind_idle.clear();
 		co_return result<void>{};
