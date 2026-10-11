@@ -58,10 +58,6 @@ template<class T> bool report(const char *step, const ldap::result<T> &r)
 	return r.has_value();
 }
 
-// The RDN of a DN literal (checked at compile time), e.g. to build
-// <child>,<base> with dn::child.
-ldap::rdn rdn_of(ldap::dn::literal text) { return ldap::dn(text).rdns().front(); }
-
 capy::task<int> run(corosio::io_context &ioc, std::string url_text)
 {
 	auto u = ldap::url::parse(url_text);
@@ -81,9 +77,9 @@ capy::task<int> run(corosio::io_context &ioc, std::string url_text)
 		co_return 1;
 	}
 
-	const ldap::dn entry = base->child(rdn_of("uid=example-writes"));
-	const ldap::dn archive = base->child(rdn_of("ou=example-archive"));
-	const ldap::dn renamed = archive.child(rdn_of("uid=example-renamed"));
+	const ldap::dn entry = base->child(ldap::rdn{ "uid=example-writes" });
+	const ldap::dn archive = base->child(ldap::rdn{ "ou=example-archive" });
+	const ldap::dn renamed = archive.child(ldap::rdn{ "uid=example-renamed" });
 	// Leftovers of an interrupted run; "no such object" is fine here.
 	for (const ldap::dn *d : { &renamed, &entry, &archive })
 		if (auto r = co_await c->del({ .entry = *d }); !r && r.error().code != ldap::cond::not_found)

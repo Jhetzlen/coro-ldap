@@ -53,7 +53,12 @@ C++23 LDAP client library, in progress. Design: [`docs/ldap/DESIGN.md`](../docs/
   nothing but encoding recurses.
 - `jhetz/ldap/dn.hpp`: `ldap::dn` (RFC 4514 parse / `to_string`, multi-valued
   RDNs, `parent()`, `child()`, compile-time checked literals). Syntax only: no
-  matching-rule normalization of values.
+  matching-rule normalization of values. `ldap::rdn` has its own literal and
+  `rdn::parse()` / `to_string()` for exactly one RDN (`cn=a+sn=b` is one RDN,
+  `cn=a,dc=b` is rejected). DNs are built from parts with `child()`:
+  `base.child(ldap::rdn{"uid=jdoe"})` is `uid=jdoe,<base>`, and
+  `base.child(ldap::dn{"uid=jdoe,ou=people"})` prepends a relative DN
+  (`uid=jdoe,ou=people,<base>`); the result uses `base`'s resource.
 - `jhetz/ldap/attribute.hpp`: `ldap::attribute`, an attribute description with
   case-insensitive equality, ordering and `std::hash`.
 - `jhetz/ldap/entry.hpp`: `ldap::entry`, the untyped search result entry
@@ -234,7 +239,7 @@ an allocator constructor, allocator-extended copy and move constructors, and
 assignment that keeps the target's resource (also for their `std::optional`
 and `std::variant` members). Parsing and decoding take the resource:
 `decode_options::memory`, `filter::raw(text, mr)`, `decode_filter(r, limits,
-mr)`, `dn::parse(text, mr)`, `attribute::parse(text, mr)`,
+mr)`, `dn::parse(text, mr)`, `rdn::parse(text, mr)`, `attribute::parse(text, mr)`,
 `url::parse(text, mr)`, `filters::attr(name, alloc)`, `encode(m, mr)`.
 `read_buffer`, `connect` and `transport::wrap` take a `memory_resource*` too.
 The defaults are the default resource, i.e. the heap, so nothing changes

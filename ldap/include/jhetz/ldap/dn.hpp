@@ -18,8 +18,9 @@
 // Memory: ava, rdn and dn are allocator-aware (std::pmr). Everything a dn owns
 // is allocated from the resource given to parse(), the literal constructor or
 // the allocator-extended constructors; parent() and child() use the dn's own
-// resource. A plain copy uses the default resource, assignment keeps the
-// target's resource.
+// resource. rdn::parse() and the rdn literal allocate from their resource
+// too. A plain copy uses the default resource, assignment keeps the target's
+// resource.
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"
@@ -146,6 +147,16 @@ namespace detail {
 		return scan_dn(s, [](const dn_token &) {}) == std::string_view::npos;
 	}
 
+	// Exactly one RDN (one or more AVAs joined with '+'), no ','.
+	constexpr bool is_rdn(std::string_view s) noexcept
+	{
+		std::size_t rdns = 0;
+		const auto count = [&rdns](const dn_token &t) {
+			if (t.new_rdn) ++rdns;
+		};
+		return scan_dn(s, count) == std::string_view::npos && rdns == 1;
+	}
+
 }// namespace detail
 
 // One attribute type and value of an RDN. `value` holds the unescaped bytes;
@@ -184,14 +195,30 @@ struct ava
 
 // Relative distinguished name: one or more AVAs joined with '+'. Equality
 // ignores the order of the AVAs (RFC 4512: an RDN is a set).
+//
+// Built from a literal (`ldap::rdn{"uid=jdoe"}`, checked at compile time),
+// from runtime text with parse(), or AVA by AVA. parse() and the literal take
+// exactly one RDN: "cn=a+sn=b" is one RDN, "cn=a,dc=b" is a DN.
 struct rdn
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
+
+	// Compile-time checked literal: `ldap::rdn{"uid=jdoe"}` (consteval: text
+	// that is not exactly one RDN fails to compile; runtime text uses parse()).
+	struct literal
+	{
+		consteval literal(const char *s) : text(s)
+		{
+			if (!detail::is_rdn(s)) throw "ldap::rdn: not exactly one relative distinguished name";
+		}
+		const char *text;
+	};
 
 	std::pmr::vector<ava> avas{};
 
 	rdn() = default;
 	explicit rdn(const allocator_type &alloc) : avas(alloc) {}
+	rdn(literal l, const allocator_type &alloc = {});
 	rdn(std::initializer_list<ava> avas_, const allocator_type &alloc = {}) : avas(avas_, alloc) {}
 	rdn(const rdn &) = default;
 	rdn(rdn &&) noexcept = default;
@@ -202,6 +229,14 @@ struct rdn
 	~rdn() = default;
 
 	allocator_type get_allocator() const noexcept { return avas.get_allocator(); }
+
+	// RFC 4514 text of one RDN (`uid=jdoe`, `cn=a+sn=b`). invalid_dn if the
+	// text is empty, has a syntax error, or holds more than one RDN.
+	static result<rdn> parse(std::string_view text, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+
+	// Escaped like dn::to_string(); parse(to_string()) == *this for an RDN
+	// that parse() or the literal built.
+	std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
 
 	friend bool operator==(const rdn &a, const rdn &b);
 };
@@ -247,10 +282,19 @@ class dn
 	bool empty() const noexcept { return rdns_.empty(); }
 	// Without the first RDN; the parent of the empty DN is the empty DN.
 	dn parent() const;
-	// `r` prepended to this DN. Throws std::invalid_argument (programming
-	// error) if `r` has no AVA, a type that is not a descriptor or numeric
-	// OID, or an empty `#` value.
-	dn child(rdn r) const;
+	// `r` prepended to this DN: `base.child(ldap::rdn{"uid=jdoe"})` is
+	// `uid=jdoe,<base>`. Throws std::invalid_argument (programming error) if
+	// `r` has no AVA, a type that is not a descriptor or numeric OID, or an
+	// empty `#` value.
+	dn child(const rdn &r) const;
+	dn child(rdn &&r) const;
+	// `relative` prepended to this DN, its RDNs in order (the leftmost stays
+	// the most specific): `base.child(ldap::dn{"uid=jdoe,ou=people"})` is
+	// `uid=jdoe,ou=people,<base>`. A child of the empty DN is `relative`.
+	//
+	// `base.child({"uid=jdoe"})` does not compile (ambiguous between rdn
+	// and dn): name the type, `ldap::rdn{...}` or `ldap::dn{...}`.
+	dn child(const dn &relative) const;
 
 	friend bool operator==(const dn &, const dn &) = default;
 

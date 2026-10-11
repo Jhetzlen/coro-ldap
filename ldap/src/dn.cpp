@@ -5,7 +5,9 @@
 #include <cstddef>
 #include <memory_resource>
 #include <stdexcept>
+#include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 namespace jhetz::ldap {
@@ -93,6 +95,25 @@ namespace {
 		}
 	}
 
+	void append_rdn(std::pmr::string &out, const rdn &r)
+	{
+		for (std::size_t j = 0; j < r.avas.size(); ++j) {
+			if (j != 0) out += '+';
+			out += r.avas[j].type.name();
+			out += '=';
+			append_value(out, r.avas[j]);
+		}
+	}
+
+	// The AVA of `tok`, allocated on `mr`.
+	void append_ava(rdn &r, const detail::dn_token &tok, std::pmr::memory_resource *mr)
+	{
+		auto &a = r.avas.emplace_back();// uses-allocator: on r's resource
+		a.type = attribute::unchecked(tok.type, mr);
+		a.value = unescape(tok, mr);
+		a.hex_form = tok.hex;
+	}
+
 	// Case-insensitive type, then form, then value: a total order consistent
 	// with ava::operator==, used to compare RDNs as sets.
 	bool ava_less(const ava &a, const ava &b)
@@ -126,6 +147,36 @@ bool operator==(const rdn &a, const rdn &b)
 	return true;
 }
 
+rdn::rdn(literal l, const allocator_type &alloc) : avas(alloc)
+{
+	auto parsed = parse(l.text, alloc.resource());
+	// Unreachable: the literal was validated at compile time with the same scanner.
+	if (!parsed) throw std::invalid_argument("ldap::rdn: invalid relative distinguished name");
+	avas = std::move(parsed->avas);// same resource: no copy
+}
+
+result<rdn> rdn::parse(std::string_view text, std::pmr::memory_resource *mr)
+{
+	rdn out{ allocator_type(mr) };
+	std::size_t rdns = 0;
+	const std::size_t err = detail::scan_dn(text, [&](const detail::dn_token &tok) {
+		if (tok.new_rdn) ++rdns;
+		if (rdns == 1) append_ava(out, tok, mr);// later RDNs are only counted
+	});
+	if (err != std::string_view::npos)
+		return fail(client_errc::invalid_dn, "rdn: syntax error at position " + std::to_string(err));
+	if (rdns == 0) return fail(client_errc::invalid_dn, "rdn: empty");
+	if (rdns > 1) return fail(client_errc::invalid_dn, "rdn: " + std::to_string(rdns) + " RDNs where one is expected");
+	return out;
+}
+
+std::pmr::string rdn::to_string(std::pmr::memory_resource *mr) const
+{
+	std::pmr::string out(mr);
+	append_rdn(out, *this);
+	return out;
+}
+
 dn::dn(literal l, const allocator_type &alloc) : rdns_(alloc)
 {
 	auto parsed = parse(l.text, alloc.resource());
@@ -139,10 +190,7 @@ result<dn> dn::parse(std::string_view text, std::pmr::memory_resource *mr)
 	dn out{ allocator_type(mr) };
 	const std::size_t err = detail::scan_dn(text, [&](const detail::dn_token &tok) {
 		if (tok.new_rdn || out.rdns_.empty()) out.rdns_.emplace_back();// uses-allocator: on mr
-		auto &a = out.rdns_.back().avas.emplace_back();
-		a.type = attribute::unchecked(tok.type, mr);
-		a.value = unescape(tok, mr);
-		a.hex_form = tok.hex;
+		append_ava(out.rdns_.back(), tok, mr);
 	});
 	if (err != std::string_view::npos)
 		return fail(client_errc::invalid_dn, "dn: syntax error at position " + std::to_string(err));
@@ -154,13 +202,7 @@ std::pmr::string dn::to_string(std::pmr::memory_resource *mr) const
 	std::pmr::string out(mr);
 	for (std::size_t i = 0; i < rdns_.size(); ++i) {
 		if (i != 0) out += ',';
-		const auto &avas = rdns_[i].avas;
-		for (std::size_t j = 0; j < avas.size(); ++j) {
-			if (j != 0) out += '+';
-			out += avas[j].type.name();
-			out += '=';
-			append_value(out, avas[j]);
-		}
+		append_rdn(out, rdns_[i]);
 	}
 	return out;
 }
@@ -172,7 +214,12 @@ dn dn::parent() const
 	return out;
 }
 
-dn dn::child(rdn r) const
+dn dn::child(const rdn &r) const
+{
+	return child(rdn(r, get_allocator()));// copied straight onto this DN's resource
+}
+
+dn dn::child(rdn &&r) const
 {
 	// Programming errors: the result would not survive to_string()/parse().
 	if (r.avas.empty()) throw std::invalid_argument("ldap::dn::child: empty RDN");
@@ -183,6 +230,17 @@ dn dn::child(rdn r) const
 	dn out(get_allocator());
 	out.rdns_.reserve(rdns_.size() + 1);
 	out.rdns_.push_back(std::move(r));
+	out.rdns_.insert(out.rdns_.end(), rdns_.begin(), rdns_.end());
+	return out;
+}
+
+dn dn::child(const dn &relative) const
+{
+	// No checks: every RDN of a dn is valid (parse, the literal and
+	// child(rdn) guarantee it).
+	dn out(get_allocator());
+	out.rdns_.reserve(relative.rdns_.size() + rdns_.size());
+	out.rdns_.insert(out.rdns_.end(), relative.rdns_.begin(), relative.rdns_.end());
 	out.rdns_.insert(out.rdns_.end(), rdns_.begin(), rdns_.end());
 	return out;
 }

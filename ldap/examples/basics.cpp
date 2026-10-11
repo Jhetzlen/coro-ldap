@@ -139,7 +139,7 @@ capy::task<int> run(corosio::io_context &ioc, std::string url_text)
 	// the condition is cond::not_found, and matched_dn tells how far the
 	// server got. A server error fails this operation only.
 	auto missing = co_await c->search({
-	  .base = base->child(ldap::dn{ "ou=no-such-unit" }.rdns().front()),
+	  .base = base->child(ldap::rdn{ "ou=no-such-unit" }),
 	  .scope = ldap::search_scope::base_object,
 	});
 	if (!missing && missing.error().code == ldap::cond::not_found)

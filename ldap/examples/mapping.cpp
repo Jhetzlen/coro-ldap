@@ -133,7 +133,7 @@ capy::task<int> run(corosio::io_context &ioc, std::string url_text)
 		co_return 1;
 	}
 
-	const ldap::dn entry = base->child(ldap::dn{ "uid=example-mapping" }.rdns().front());
+	const ldap::dn entry = base->child(ldap::rdn{ "uid=example-mapping" });
 	if (auto r = co_await c->del({ .entry = entry }); !r && r.error().code != ldap::cond::not_found)
 		println(stderr, "cleanup: {}", r.error().message());
 

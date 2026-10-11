@@ -148,7 +148,7 @@ TEST_CASE("operations: modify DN", "[net][operations]")
 	// Rename, keeping the old RDN value.
 	REQUIRE(m.run(m.conn.modify_dn({
 					.entry = jdoe,
-					.new_rdn = ldap::dn{ "uid=john.doe" }.rdns().front(),
+					.new_rdn = ldap::rdn{ "uid=john.doe" },
 					.delete_old_rdn = false,
 				  }))
 			  .has_value());

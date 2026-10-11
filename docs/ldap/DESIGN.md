@@ -41,12 +41,16 @@ auto            url = ldap::url::parse("ldaps://ldap.example.org");  // result<u
 ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never throws
 ```
 
-- `dn`: parsed RDN sequence (RFC 4514), `parent()`, `child(rdn)`, `rdns()`,
-  `to_string()`. Comparison is syntactic: attribute types case-insensitive,
-  values exact after unescaping, AVA order inside a multi-valued RDN not
-  significant. No matching-rule normalization (so `cn=A` ≠ `cn=a`), and no
-  hash yet. Parsing is lenient like OpenLDAP: spaces around `,` `+` `=` are
-  ignored and unescaped trailing spaces dropped.
+- `dn`: parsed RDN sequence (RFC 4514), `parent()`, `child(rdn)` /
+  `child(dn)` (prepend one RDN or a relative DN: `base.child(ldap::rdn{"uid=x"})`
+  is `uid=x,<base>`), `rdns()`, `to_string()`. Comparison is syntactic:
+  attribute types case-insensitive, values exact after unescaping, AVA order
+  inside a multi-valued RDN not significant. No matching-rule normalization
+  (so `cn=A` ≠ `cn=a`), and no hash yet. Parsing is lenient like OpenLDAP:
+  spaces around `,` `+` `=` are ignored and unescaped trailing spaces dropped.
+- `rdn`: one (possibly multi-valued) RDN, with its own literal
+  (`ldap::rdn{"uid=x"}`), `rdn::parse()` and `to_string()`; text holding more
+  than one RDN is rejected.
 - `attribute`: attribute description, compared and hashed case-insensitively.
   `attribute::parse()` is strict RFC 4512; `attribute::unchecked()` keeps names
   as servers send them (Active Directory's `member;range=0-1499`).
@@ -62,9 +66,10 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
 - `bytes`: not implemented; wire values are `std::pmr::string` holding raw
   octets (see section 10).
 - Literals go through `consteval` helper types (`dn::literal`,
-  `attribute::literal`) that run the same scanner as `parse()`, so an invalid
-  literal is a compile error. A runtime `const char*` does not compile there:
-  runtime text must go through `parse()` returning `result<T>`.
+  `rdn::literal`, `attribute::literal`) that run the same scanner as
+  `parse()`, so an invalid literal is a compile error. A runtime
+  `const char*` does not compile there: runtime text must go through
+  `parse()` returning `result<T>`.
 
 ## 2. Filters
 

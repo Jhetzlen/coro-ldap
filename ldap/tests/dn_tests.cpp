@@ -1,13 +1,18 @@
+#include "counting_resource.hpp"
 #include "jhetz/ldap/dn.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <cstddef>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 
 namespace ldap = jhetz::ldap;
 using jhetz::ldap::client_errc;
+using jhetz::ldap::test::counting_resource;
+using jhetz::ldap::test::scoped_default_resource;
 using namespace std::string_literals;
 
 namespace {
@@ -32,6 +37,13 @@ static_assert(ldap::detail::is_dn("cn=x,dc=example,dc=org"));
 static_assert(ldap::detail::is_dn("OU=Sales+CN=J.  Smith,DC=example,DC=net"));
 static_assert(!ldap::detail::is_dn("cn"));
 static_assert(!ldap::detail::is_dn("cn=x,"));
+static_assert(ldap::detail::is_rdn("uid=jdoe"));
+static_assert(ldap::detail::is_rdn("OU=Sales + CN=J.  Smith"));
+static_assert(ldap::detail::is_rdn("cn=a\\,b"));// an escaped comma is part of the value
+static_assert(!ldap::detail::is_rdn(""));
+static_assert(!ldap::detail::is_rdn("uid=jdoe,dc=org"));
+static_assert(!ldap::detail::is_rdn("uid=jdoe,"));
+static_assert(!ldap::detail::is_rdn("uid"));
 
 TEST_CASE("RFC 4514 section 4 examples", "[dn]")
 {
@@ -173,6 +185,181 @@ TEST_CASE("dn literal constructor", "[dn]")
 	const ldap::dn base{ "ou=people,dc=example,dc=org" };
 	CHECK(base == parse("ou=people,dc=example,dc=org"));
 	CHECK(base.to_string() == "ou=people,dc=example,dc=org");
+}
+
+// ---------------------------------------------------------------- building DNs from parts
+
+TEST_CASE("rdn literal constructor", "[dn][rdn]")
+{
+	const ldap::rdn uid{ "uid=jdoe" };
+	REQUIRE(uid.avas.size() == 1);
+	CHECK(uid.avas[0].type == ldap::attribute{ "uid" });
+	CHECK(uid.avas[0].value == "jdoe");
+	CHECK(uid == single("uid", "jdoe"));
+	CHECK(uid.to_string() == "uid=jdoe");
+
+	const ldap::rdn multi{ "OU=Sales + CN=J.  Smith" };
+	REQUIRE(multi.avas.size() == 2);
+	CHECK(multi.avas[1].value == "J.  Smith");
+	CHECK(multi.to_string() == "OU=Sales+CN=J.  Smith");
+	CHECK(multi == ldap::rdn{ "cn=J.  Smith+ou=Sales" });// a set: order and type case do not matter
+
+	const ldap::rdn escaped{ "cn=Smith\\, John" };
+	CHECK(escaped.avas[0].value == "Smith, John");
+	CHECK(escaped.to_string() == "cn=Smith\\, John");
+
+	const ldap::rdn hex{ "1.3.6.1.4.1.1466.0=#04024869" };
+	CHECK(hex.avas[0].hex_form);
+	CHECK(hex.to_string() == "1.3.6.1.4.1.1466.0=#04024869");
+}
+
+TEST_CASE("rdn::parse", "[dn][rdn]")
+{
+	SECTION("valid")
+	{
+		auto r = ldap::rdn::parse("uid=jdoe");
+		REQUIRE(r.has_value());
+		CHECK(*r == ldap::rdn{ "uid=jdoe" });
+		auto m = ldap::rdn::parse("cn=a+sn=b");
+		REQUIRE(m.has_value());
+		CHECK(m->avas.size() == 2);
+		CHECK(m->to_string() == "cn=a+sn=b");
+	}
+	SECTION("invalid")
+	{
+		struct case_t
+		{
+			std::string text;
+			const char *context;
+		};
+		const case_t c = GENERATE(values<case_t>({
+		  { "", "rdn: empty" },
+		  { "uid=jdoe,dc=org", "rdn: 2 RDNs where one is expected" },
+		  { "uid=jdoe,", "rdn: syntax error at position 9" },
+		  { ",uid=jdoe", "rdn: syntax error at position 0" },
+		  { "uid", "rdn: syntax error at position 3" },
+		  { "cn=a+", "rdn: syntax error at position 5" },
+		  { " ", "rdn: syntax error at position 1" },
+		}));
+		INFO(c.text);
+		auto r = ldap::rdn::parse(c.text);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::invalid_dn);
+		CHECK(r.error().context == c.context);
+	}
+}
+
+TEST_CASE("rdn to_string/parse round-trips arbitrary values", "[dn][rdn]")
+{
+	std::string all;
+	for (int c = 0; c < 256; ++c) all += static_cast<char>(c);
+	for (std::size_t start = 0; start < all.size(); start += 7) {
+		const std::string value = " " + all.substr(start, 13) + " ";
+		const ldap::rdn r{ { ldap::ava{ ldap::attribute{ "cn" }, value },
+		  ldap::ava{ ldap::attribute{ "sn" }, value } } };
+		const auto text = r.to_string();
+		INFO(text);
+		auto back = ldap::rdn::parse(text);
+		REQUIRE(back.has_value());
+		CHECK(*back == r);
+		CHECK(back->to_string() == text);
+	}
+}
+
+TEST_CASE("dn::child of an rdn", "[dn][rdn]")
+{
+	const ldap::dn base{ "ou=people,dc=example,dc=org" };
+	CHECK(base.child(ldap::rdn{ "uid=jdoe" }) == ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" });
+	CHECK(base.child(ldap::rdn{ "uid=jdoe" }).to_string() == "uid=jdoe,ou=people,dc=example,dc=org");
+	CHECK(base.child(ldap::rdn{ "cn=a+sn=b" }).to_string() == "cn=a+sn=b,ou=people,dc=example,dc=org");
+	const auto runtime = ldap::rdn::parse(std::string("uid=") + "x\\,y");
+	REQUIRE(runtime.has_value());
+	CHECK(base.child(*runtime).to_string() == "uid=x\\,y,ou=people,dc=example,dc=org");
+	CHECK(ldap::dn{}.child(ldap::rdn{ "dc=org" }) == ldap::dn{ "dc=org" });
+	CHECK(base.child(ldap::rdn{ "uid=jdoe" }).parent() == base);
+}
+
+TEST_CASE("dn::child of a relative dn", "[dn]")
+{
+	const ldap::dn base{ "dc=example,dc=org" };
+	const ldap::dn relative{ "uid=jdoe,ou=people" };
+	const auto d = base.child(relative);
+	// The relative DN's leftmost RDN stays the most specific (RFC 4514).
+	CHECK(d == ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" });
+	CHECK(d.to_string() == "uid=jdoe,ou=people,dc=example,dc=org");
+	CHECK(parse(d.to_string()) == d);
+	CHECK(d.parent().parent() == base);
+	CHECK(base.child(ldap::dn{}) == base);// nothing below
+	CHECK(ldap::dn{}.child(relative) == relative);// under the root DSE
+	CHECK(base.child(ldap::dn{ "ou=people" }).child(ldap::rdn{ "uid=jdoe" }) == d);
+	CHECK(base.child(ldap::dn{ "cn=a+sn=b,ou=x" }).to_string() == "cn=a+sn=b,ou=x,dc=example,dc=org");
+}
+
+TEST_CASE("rdn and child allocate from the given resource", "[dn][rdn][pmr]")
+{
+	std::byte storage[8192];
+	std::pmr::monotonic_buffer_resource arena(storage, sizeof storage, std::pmr::null_memory_resource());
+	scoped_default_resource guard(std::pmr::null_memory_resource());
+
+	const ldap::rdn lit(ldap::rdn::literal("cn=a long common name\\, with spaces+uid=someone-long"), &arena);
+	CHECK(lit.get_allocator().resource() == &arena);
+	CHECK(lit.avas[1].value.get_allocator().resource() == &arena);
+	CHECK(lit.avas[1].type.get_allocator().resource() == &arena);
+
+	auto parsed = ldap::rdn::parse("uid=a-user-with-a-long-name-to-allocate", &arena);
+	REQUIRE(parsed.has_value());
+	CHECK(parsed->get_allocator().resource() == &arena);
+	CHECK(parsed->avas[0].value.get_allocator().resource() == &arena);
+	CHECK(parsed->to_string(&arena).get_allocator().resource() == &arena);
+
+	const ldap::dn base(ldap::dn::literal("ou=people,dc=example,dc=org"), &arena);
+	const ldap::dn relative(ldap::dn::literal("uid=someone-with-a-long-name,ou=a-long-unit-name"), &arena);
+	const auto under = base.child(relative);
+	CHECK(under.get_allocator().resource() == &arena);
+	CHECK(under.rdns()[0].avas[0].value.get_allocator().resource() == &arena);
+	CHECK(under.rdns()[3].avas[0].type.get_allocator().resource() == &arena);
+	const auto child = base.child(*parsed);
+	CHECK(child.get_allocator().resource() == &arena);
+	CHECK(child.rdns()[0].avas[0].value.get_allocator().resource() == &arena);
+}
+
+TEST_CASE("child uses the dn's resource, not the argument's", "[dn][rdn][pmr]")
+{
+	counting_resource base_mr;
+	counting_resource other_mr;
+	const ldap::dn base(ldap::dn::literal("ou=people,dc=example,dc=org"), &base_mr);
+	const ldap::dn relative(ldap::dn::literal("uid=someone-with-a-long-name,ou=a-long-unit-name"), &other_mr);
+	const ldap::rdn r(ldap::rdn::literal("uid=someone-with-a-long-name"), &other_mr);
+	const std::size_t other_before = other_mr.allocations();
+	const std::size_t base_before = base_mr.allocations();
+
+	const auto a = base.child(relative);
+	const auto b = base.child(r);
+	CHECK(a.get_allocator().resource() == &base_mr);
+	CHECK(a.rdns()[0].avas[0].value.get_allocator().resource() == &base_mr);
+	CHECK(b.rdns()[0].avas[0].value.get_allocator().resource() == &base_mr);
+	CHECK(base_mr.allocations() > base_before);
+	CHECK(other_mr.allocations() == other_before);
+}
+
+TEST_CASE("child of an rvalue rdn on another resource uses the dn's resource", "[dn][rdn][pmr]")
+{
+	counting_resource base_mr;
+	counting_resource other_mr;
+	const ldap::dn base(ldap::dn::literal("ou=people,dc=example,dc=org"), &base_mr);
+	auto r = ldap::rdn::parse("cn=a long common name to allocate+uid=someone-with-a-long-name", &other_mr);
+	REQUIRE(r.has_value());
+	const std::size_t other_before = other_mr.allocations();
+
+	const auto d = base.child(std::move(*r));
+	CHECK(
+	  d.to_string() == "cn=a long common name to allocate+uid=someone-with-a-long-name,ou=people,dc=example,dc=org");
+	CHECK(d.get_allocator().resource() == &base_mr);
+	for (const auto &a : d.rdns()[0].avas) {
+		CHECK(a.type.get_allocator().resource() == &base_mr);
+		CHECK(a.value.get_allocator().resource() == &base_mr);
+	}
+	CHECK(other_mr.allocations() == other_before);// copied, not moved, across resources
 }
 
 TEST_CASE("invalid DNs are rejected", "[dn]")
