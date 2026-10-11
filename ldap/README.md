@@ -266,30 +266,27 @@ Not yet: other SASL mechanisms, a connection pool.
 
 ## Examples
 
-Small, commented programs in `examples/` (option `JHETZ_LDAP_BUILD_EXAMPLES`,
-targets `jhetz_ldap_example_<name>`). Each reads the server URL and
-credentials from the environment (`LDAP_URL`, `LDAP_BIND_DN`,
-`LDAP_PASSWORD`, `LDAP_BASE`), with defaults for a local OpenLDAP serving
-`dc=example,dc=org` (`ldap://localhost`, `cn=admin,dc=example,dc=org` /
-`secret`); the header comment of each file lists its settings.
+Minimal programs in `examples/`, one use case each (option
+`JHETZ_LDAP_BUILD_EXAMPLES`, targets `jhetz_ldap_example_<name>`). They
+expect a local OpenLDAP serving `dc=example,dc=org` with
+`cn=admin,dc=example,dc=org` / `secret`; the first argument overrides the
+URL (`ldap://localhost`).
 
 | Example | Shows |
 |---|---|
-| `basics.cpp` | connect, simple bind, a search with an `ldap::filters` filter, reading entries, unbind; `ldap::error` (code, `ldap::cond`, diagnostic, matched DN, context) |
-| `mapping.cpp` | a struct with an `ldap::schema<T>` descriptor: `add(dn, value)`, `search_as<T>`, `modify<T>` with typed changes, `decode<T>`, `schema_check::on_first_use` |
-| `writes.cpp` | `add`, `modify` (`mod::add / remove / replace`, atomicity), `compare`, `modify_dn` (rename and move), `del`, and their failures |
-| `streaming.cpp` | `search_stream`, `search_paged`, size and time limits, a client-side timeout, cancellation with a stop token |
-| `sync_threads.cpp` | `ldap::sync::client` shared by several threads |
-| `security.cpp` | ldaps:// and StartTLS with `tls_options` (CA file, server name), SASL EXTERNAL over ldapi:// and with a client certificate |
+| `basics.cpp` | connect, simple bind, a search with an `ldap::filters` filter, reading entries |
+| `writes.cpp` | `add`, `modify`, `modify_dn` (rename), `del` |
+| `mapping.cpp` | a struct with an `ldap::schema<T>` descriptor: `add(dn, value)`, `modify<T>`, `search_as<T>` |
+| `streaming.cpp` | `search_paged`: a large result one entry at a time |
+| `sync_threads.cpp` | the blocking `ldap::sync::client`, shared by several threads |
+| `security.cpp` | StartTLS with a CA file (second argument), then a bind |
 
-`examples/ldapsearch.cpp` (above) is a fuller command-line tool. To try them
-all against the throwaway slapd of the integration tests:
+`examples/ldapsearch.cpp` (above) is a fuller command-line tool. To try an
+example against the throwaway slapd of the integration tests:
 
 ```sh
-ldap/tests/integration/run_slapd.sh sh -c 'LDAP_URL=$JHETZ_LDAP_IT_LDAP LDAPS_URL=$JHETZ_LDAP_IT_LDAPS \
-  LDAPI_URL=$JHETZ_LDAP_IT_LDAPI LDAP_CA_FILE=$JHETZ_LDAP_IT_CA \
-  LDAP_CLIENT_CERT=$JHETZ_LDAP_IT_CLIENT_CERT LDAP_CLIENT_KEY=$JHETZ_LDAP_IT_CLIENT_KEY \
-  build/ldap/jhetz_ldap_example_security'
+ldap/tests/integration/run_slapd.sh sh -c \
+  'build/ldap/jhetz_ldap_example_security $JHETZ_LDAP_IT_LDAP $JHETZ_LDAP_IT_CA'
 ```
 
 ## Using it from another project
