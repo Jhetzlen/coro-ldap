@@ -1,7 +1,7 @@
 // ldap::connection against a scripted in-process LDAP server: the server end
 // decodes requests with origin::client and answers with encoded responses
 // from a script, over a Unix socket pair (and once over loopback TCP,
-// through ldap::connect).
+// through ldap::connect: tcp_mock_ldap).
 //
 // Not capy::test::stream: at the pinned Capy commit its wake() posts the
 // parked continuation by reference and then clears the handle while it is
@@ -1335,59 +1335,23 @@ TEST_CASE("connection: entries live on the resource given to search", "[net][con
 
 // ---------------------------------------------------------------- over TCP
 
-namespace {
-
-capy::task<void> accept_and_serve(corosio::tcp_acceptor &acc, std::vector<step> script, server_log &log)
-{
-	auto [ec, peer] = co_await acc.accept();
-	if (ec) {
-		log.error = "accept: " + ec.message();
-		co_return;
-	}
-	net::transport t = net::transport::wrap(std::move(peer), "server");
-	co_await serve_script(std::move(t), std::move(script), log);
-}
-
-capy::task<std::string> tcp_session(corosio::io_context &ioc, std::string text)
-{
-	auto u = ldap::url::parse(text);
-	if (!u) co_return "url: " + std::string(u.error().message());
-	auto c = co_await ldap::connect(ioc, *u, { .timeout = std::chrono::seconds(10) });
-	if (!c) co_return "connect: " + std::string(c.error().message());
-	if (!c->is_open() || c->name() != text) co_return "unexpected connection state";
-	if (auto b = co_await c->simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"); !b)
-		co_return "bind: " + std::string(b.error().message());
-	auto r = co_await c->search(people_search());
-	if (!r) co_return "search: " + std::string(r.error().message());
-	if (r->size() != 1 || (*r)[0] != expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "J"))
-		co_return "unexpected entries";
-	if (auto u2 = co_await c->unbind(); !u2) co_return "unbind: " + std::string(u2.error().message());
-	co_return "";
-}
-
-}// namespace
-
 TEST_CASE("connection: ldap::connect, bind, search and unbind over TCP", "[net][connection]")
 {
-	corosio::io_context ioc;
-	corosio::tcp_acceptor acc(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 16);
-	const std::string url = "ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port());
-
-	server_log log;
-	log.hang_up = [] {};
-	outcome<void> server;
-	spawn(ioc,
-	  accept_and_serve(acc,
-		{ answer({ bind_resp(1) }),
-		  answer({ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "J"), done_msg(2) }),
-		  step{} },
-		log),
-	  server);
-	CHECK(run(ioc, tcp_session(ioc, url)) == "");
-	CHECK(log.error == "");
-	CHECK(server.done());
-	REQUIRE(log.received.size() == 3);
-	CHECK(std::holds_alternative<ldap::unbind_request>(log.received[2].op));
+	tcp_mock_ldap m({ .timeout = std::chrono::seconds(10) });
+	m.serve({ answer({ bind_resp(1) }),
+	  answer({ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "J"), done_msg(2) }),
+	  step{} });
+	CHECK(m.conn.is_open());
+	CHECK(m.conn.name() == m.url());
+	CHECK(m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+	auto r = m.run(m.conn.search(people_search()));
+	REQUIRE(r.has_value());
+	REQUIRE(r->size() == 1);
+	CHECK((*r)[0] == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "J"));
+	CHECK(m.run(m.conn.unbind()).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 3);
+	CHECK(std::holds_alternative<ldap::unbind_request>(m.log.received[2].op));
 }
 
 TEST_CASE("connection: ldap::connect failures", "[net][connection]")

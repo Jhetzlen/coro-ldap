@@ -151,8 +151,36 @@ struct socket_pair
 	}
 };
 
+// What mock_ldap and tcp_mock_ldap share: `Self` has `ioc`, `log`,
+// `server` (the script's outcome) and server_end().
+template<class Self> struct scripted_server
+{
+	// Runs `script` on the server's end.
+	void serve(std::vector<step> script)
+	{
+		auto &m = self();
+		spawn(m.ioc, serve_script(m.server_end(), std::move(script), m.log), m.server);
+	}
+
+	// Runs `t` until it finishes; the server, parked on its next request,
+	// is left as is.
+	template<class T> T run(capy::task<T> t) { return finish(self().ioc, std::move(t)); }
+
+	// The script ran to its end without errors.
+	void check_server()
+	{
+		auto &m = self();
+		drive_until(m.ioc, [&m] { return m.server.done(); });
+		CHECK(m.log.error == "");
+		CHECK(m.server.done());
+	}
+
+  private:
+	Self &self() { return static_cast<Self &>(*this); }
+};
+
 // A connection over a socket pair, and a scripted server on the other end.
-struct mock_ldap
+struct mock_ldap : scripted_server<mock_ldap>
 {
 	corosio::io_context ioc{};
 	socket_pair sockets{ ioc };
@@ -180,35 +208,12 @@ struct mock_ldap
 
 	// The server's end, to write outside the script.
 	net::transport server_end() { return net::transport::wrap(socket_ref{ &sockets.server }, "server"); }
-
-	void serve(std::vector<step> script) { spawn(ioc, serve_script(server_end(), std::move(script), log), server); }
-
-	// Runs `t` until it finishes; the server, parked on its next request,
-	// is left as is.
-	template<class T> T run(capy::task<T> t)
-	{
-		outcome<T> out;
-		spawn(ioc, std::move(t), out);
-		drive_until(ioc, [&out] { return out.done(); });
-		if constexpr (std::is_void_v<T>)
-			out.get();
-		else
-			return std::move(out.get());
-	}
-
-	// The script ran to its end without errors.
-	void check_server()
-	{
-		drive_until(ioc, [this] { return server.done(); });
-		CHECK(log.error == "");
-		CHECK(server.done());
-	}
 };
 
 // mock_ldap over loopback TCP: the connection is made by ldap::connect, so
 // its transport is plain TCP and start_tls() sends its request (the server
 // can only refuse it: it does not speak TLS).
-struct tcp_mock_ldap
+struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 {
 	corosio::io_context ioc{};
 	corosio::tcp_acceptor acc{ ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1 };
@@ -227,13 +232,20 @@ struct tcp_mock_ldap
 			  if (ec) throw std::system_error(ec, "accept");
 		  }(acc, peer),
 		  accepted);
-		auto u = ldap::url::parse("ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port()));
-		REQUIRE(u.has_value());
-		auto c = finish(ioc, ldap::connect(ioc, *u, options));
-		REQUIRE(c.has_value());
-		conn = std::move(*c);
-		drive_until(ioc, [&accepted] { return accepted.done(); });
-		accepted.get();
+		try {
+			auto c = finish(ioc, ldap::connect(ioc, *ldap::url::parse(url()), options));
+			REQUIRE(c.has_value());
+			conn = std::move(*c);
+			drive_until(ioc, [&accepted] { return accepted.done(); });
+			accepted.get();
+		} catch (...) {
+			// No destructor runs: end the accept, which refers to `accepted`,
+			// `acc` and `peer`, before they go.
+			acc.close();
+			peer.close();
+			drive_until(ioc, [&accepted] { return accepted.done(); });
+			throw;
+		}
 		log.hang_up = [this] { peer.close(); };
 	}
 
@@ -247,27 +259,11 @@ struct tcp_mock_ldap
 		drive(ioc);
 	}
 
+	// The URL the connection was made to.
+	std::string url() const { return "ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port()); }
+
+	// The server's end, to write outside the script.
 	net::transport server_end() { return net::transport::wrap(socket_ref{ &peer }, "server"); }
-
-	void serve(std::vector<step> script) { spawn(ioc, serve_script(server_end(), std::move(script), log), server); }
-
-	template<class T> T run(capy::task<T> t)
-	{
-		outcome<T> out;
-		spawn(ioc, std::move(t), out);
-		drive_until(ioc, [&out] { return out.done(); });
-		if constexpr (std::is_void_v<T>)
-			out.get();
-		else
-			return std::move(out.get());
-	}
-
-	void check_server()
-	{
-		drive_until(ioc, [this] { return server.done(); });
-		CHECK(log.error == "");
-		CHECK(server.done());
-	}
 };
 
 inline ldap::search_params people_search()
