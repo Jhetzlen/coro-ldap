@@ -60,16 +60,19 @@ struct proxied_authorization
 };
 
 // Server Side Sorting (RFC 2891, OID sort_request_oid): sort the search's
-// entries by `keys`, the first one most significant. RFC 2891 section 1.2
+// entries by `keys`, the first one most significant. RFC 2891 section 2
 // says a server that supports the control but cannot sort SHOULD fail the
-// search (critical) or return the entries unsorted (not critical), with a
-// sort result control on the SearchResultDone either way; a server without
-// sort support ignores a non-critical control and sends none. Servers
-// deviate: OpenLDAP 2.7's sssvlv fails an unsortable search with 18
+// search if it is critical and should return the entries unsorted if not,
+// with a sort result control on the SearchResultDone, though scenario 6
+// lets the server omit that control when the search fails or returns no
+// entries; a server without sort support ignores a non-critical control
+// and sends none. A server may accept only one key. Servers deviate:
+// OpenLDAP 2.7's sssvlv fails an unsortable search with 18
 // inappropriateMatching and no sort result even when not critical, and
-// fails any multi-key sort with 2 protocolError (libldap's own requests
-// too). So check the search's result, and treat find_sort_result()
-// returning nullopt as "not known to be sorted". Fails with encode_error,
+// answers every multi-key sort with 2 protocolError ("decoding error") and
+// no sort result, even when not critical (libldap's own requests too). So
+// check the search's result, and treat find_sort_result() returning
+// nullopt as "not known to be sorted". Fails with encode_error,
 // before anything is sent, if there are no keys or a key has no attribute.
 struct sort_key
 {

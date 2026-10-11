@@ -188,16 +188,19 @@ server's bad control fails only the caller who asks for it.
 - Server side sorting (RFC 2891): `server_side_sort{.keys = {{.attribute,
   .ordering_rule, .reverse}}, .critical}`; the SearchResultDone's
   SortResult is `find_sort_result()` -> `sort_result{result_code,
-  attribute_type}`. RFC 2891 section 1.2 says a server that cannot sort
-  SHOULD fail a critical request and return the entries unsorted
-  otherwise, attaching a SortResult either way (a server without sort
-  support ignores a non-critical control and attaches none). Servers
-  deviate: OpenLDAP 2.7's sssvlv fails an unsortable search with
-  inappropriateMatching (18) and no SortResult even when the control is
-  not critical, and fails every multi-key sort with protocolError (2),
-  libldap's own included. So callers check the search's result, and
-  `find_sort_result()` returning nullopt is a normal answer meaning "not
-  known to be sorted", which they must handle. Named `server_side_sort`, not `sort`: a class named
+  attribute_type}`. RFC 2891 section 2 says a server that cannot sort
+  SHOULD fail a critical request and should return the entries unsorted
+  otherwise, attaching a SortResult, though scenario 6 lets it omit the
+  SortResult when the search fails or returns no entries (a server
+  without sort support ignores a non-critical control and attaches
+  none). A server may accept only one key. Servers deviate: OpenLDAP
+  2.7's sssvlv fails an unsortable search with inappropriateMatching (18)
+  and no SortResult even when the control is not critical, and answers
+  every multi-key sort with protocolError (2) "decoding error" and no
+  SortResult, even when not critical, libldap's own included. So callers
+  check the search's result, and `find_sort_result()` returning nullopt
+  is a normal answer meaning "not known to be sorted", which they must
+  handle. Named `server_side_sort`, not `sort`: a class named
   `sort` in `jhetz::ldap` would hide `std::sort` from unqualified calls
   there (and in code that uses the namespace).
 - Assertion (RFC 4528): `assertion{.filter, .critical = true}`, the value

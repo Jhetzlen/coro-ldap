@@ -922,7 +922,7 @@ result<paged_results> decode_paged_results(const control &c,
 // Server Side Sorting (RFC 2891). The request control (sort keys) is built
 // from ldap::server_side_sort (controls.hpp); this is the response control,
 // SortResult, which the server attaches to the SearchResultDone (not
-// always: see server_side_sort).
+// always, even per RFC 2891 section 2: see server_side_sort).
 inline constexpr std::string_view sort_request_oid = "1.2.840.113556.1.4.473";
 inline constexpr std::string_view sort_response_oid = "1.2.840.113556.1.4.474";
 
