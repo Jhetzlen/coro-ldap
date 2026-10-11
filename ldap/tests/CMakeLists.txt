@@ -84,6 +84,7 @@ if(JHETZ_LDAP_BUILD_NET)
         net/connection_tests.cpp
         net/mapping_ops_tests.cpp
         net/operations_tests.cpp
+        net/sasl_scram_tests.cpp
         net/sasl_tests.cpp
         net/start_tls_tests.cpp
         net/sync_tests.cpp

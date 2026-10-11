@@ -1,8 +1,10 @@
 // SASL binds (connection::sasl_bind) against the scripted mock server.
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl.hpp"
+#include "jhetz/ldap/sasl_scram.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
+#include "scram_test_access.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -132,6 +134,13 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		auto r = m.run(m.conn.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("server signature mismatch"));
+		// The server considers the connection bound: it is closed, and later
+		// operations name the reason.
+		CHECK_FALSE(m.conn.is_open());
+		auto later = m.run(m.conn.who_am_i());
+		REQUIRE_FALSE(later.has_value());
+		CHECK(later.error().code == ldap::client_errc::not_connected);
+		CHECK_THAT(std::string(later.error().context), ContainsSubstring("server signature mismatch"));
 	}
 	SECTION("EXTERNAL given a challenge")
 	{
@@ -181,4 +190,93 @@ TEST_CASE("sasl: requests started during the exchange wait for its end", "[net][
 	CHECK(m.log.received[1] == sasl_req(3, "X-ECHO", "re:c1"));
 	CHECK(m.log.received[2] == sasl_req(4, "X-ECHO", "re:"));
 	CHECK(m.log.received[3].id == 2);
+}
+
+// SCRAM-SHA-256 with the RFC 7677 section 3 test vector (the mechanism's
+// own tests are in sasl_scram_tests.cpp).
+TEST_CASE("sasl: SCRAM-SHA-256 with the RFC 7677 test vector", "[net][sasl][scram][rfc]")
+{
+	constexpr std::string_view client_first = "n,,n=user,r=rOprNGfwEbeRWgbNEkqO";
+	constexpr std::string_view server_first =
+	  "r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096";
+	constexpr std::string_view client_final =
+	  "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=";
+	constexpr std::string_view server_final = "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=";
+	auto mech = ldap::detail::scram_test_access::with_nonce("user", "pencil", "", "rOprNGfwEbeRWgbNEkqO");
+
+	SECTION("server-final-message with the success result")
+	{
+		mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 14, server_first) }), answer({ sasl_resp(2, 0, server_final) }) });
+		REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[0] == sasl_req(1, "SCRAM-SHA-256", client_first));
+		CHECK(m.log.received[1] == sasl_req(2, "SCRAM-SHA-256", client_final));
+	}
+	SECTION("server-final-message as a last challenge")
+	{
+		mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 14, server_first) }),
+		  answer({ sasl_resp(2, 14, server_final) }),
+		  answer({ sasl_resp(3, 0) }) });
+		REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(m.log.received[2] == sasl_req(3, "SCRAM-SHA-256", ""));
+	}
+	SECTION("a server that does not prove it knows the password")
+	{
+		// Each time the server reported success: the connection is closed.
+		auto refused = [&](std::vector<step> script, std::string_view why) {
+			mock_ldap m;
+			m.serve(std::move(script));
+			auto r = m.run(m.conn.sasl_bind(mech));
+			REQUIRE_FALSE(r.has_value());
+			CHECK(r.error().code == ldap::client_errc::unexpected_response);
+			CHECK(std::string(r.error().context) == "sasl bind SCRAM-SHA-256: " + std::string(why));
+			CHECK_FALSE(m.conn.is_open());
+			m.check_server();
+		};
+		refused({ answer({ sasl_resp(1, 14, server_first) }), answer({ sasl_resp(2, 0) }) },
+		  "the server reported success without a server signature (v=)");
+		refused({ answer({ sasl_resp(1, 14, server_first) }),
+				  answer({ sasl_resp(2, 0, "v=7rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=") }) },
+		  "wrong server signature: the server could not be authenticated");
+		refused({ answer({ sasl_resp(1, 0) }) },
+		  "the server reported success before the exchange was complete (no server signature)");
+	}
+	SECTION("a wrong server signature as a challenge")
+	{
+		// The server has not reported success yet: the bind fails, the
+		// connection is not closed.
+		mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 14, server_first) }),
+		  answer({ sasl_resp(2, 14, "v=7rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=") }) });
+		auto r = m.run(m.conn.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().context
+			  == "sasl bind SCRAM-SHA-256: wrong server signature: the server could not be authenticated");
+		m.check_server();
+	}
+	SECTION("the server refuses the proof")
+	{
+		mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 14, server_first) }),
+		  answer({ ldap::message{ 2, ldap::bind_response{ ldap::ldap_result{ 49 }, "e=invalid-proof" } } }) });
+		auto r = m.run(m.conn.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::invalid_credentials);
+		CHECK(r.error().code == ldap::cond::auth_failed);
+		CHECK(m.conn.is_open());
+	}
+	SECTION("a server nonce that does not extend the client's")
+	{
+		mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 14, "r=forged,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096") }) });
+		auto r = m.run(m.conn.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::unexpected_response);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("does not start with the client nonce"));
+	}
 }

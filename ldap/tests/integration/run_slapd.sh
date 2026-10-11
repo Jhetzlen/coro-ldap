@@ -7,7 +7,8 @@
 # slapd listens on ldap://127.0.0.1:$PORT, ldaps://localhost:$((PORT+1))
 # and an ldapi:// socket in a temporary directory, with a test CA, a
 # server certificate (localhost, 127.0.0.1) and a client certificate for
-# SASL EXTERNAL; the data is make_fixture.py's. Needs slapd and openssl.
+# SASL EXTERNAL, and authz-regexp for SASL SCRAM-SHA-256; the data is
+# make_fixture.py's. Needs slapd and openssl.
 #
 # Environment (defaults suit Debian / Ubuntu's slapd package):
 #   SLAPD              slapd binary              (/usr/sbin/slapd)
@@ -77,6 +78,9 @@ TLSCertificateFile $dir/server.pem
 TLSCertificateKeyFile $dir/server.key
 TLSVerifyClient try
 sizelimit 1000
+# SASL SCRAM-SHA-256 (cyrus-sasl's scram plugin, if installed): the
+# username is a uid, checked against the entry's cleartext userPassword.
+authz-regexp "^uid=([^,]+)(,cn=[^,]+)?,cn=scram-sha-256,cn=auth\$" "uid=\$1,ou=people,dc=example,dc=org"
 
 database mdb
 maxsize 268435456

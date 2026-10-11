@@ -9,6 +9,7 @@
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
+#include "jhetz/ldap/sasl_scram.hpp"
 
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/ex/run_async.hpp>
@@ -20,6 +21,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
@@ -155,6 +157,40 @@ TEST_CASE("integration: SASL EXTERNAL", "[integration][sasl]")
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE(r.has_value());
 		CHECK(finish(ioc, c.who_am_i()) == "dn:cn=client,dc=example,dc=org");
+	}
+}
+
+TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
+{
+	REQUIRE_SLAPD();
+	corosio::io_context ioc;
+	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
+	// slapd offers SCRAM-SHA-256 only with cyrus-sasl's scram plugin installed.
+	auto dse =
+	  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "supportedSASLMechanisms" } }));
+	REQUIRE(dse.has_value());
+	REQUIRE(dse->size() == 1);
+	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");
+	if (mechs == nullptr || std::ranges::find(*mechs, "SCRAM-SHA-256") == mechs->end())
+		SKIP("slapd does not offer SCRAM-SHA-256 (cyrus-sasl scram plugin not installed)");
+
+	SECTION("the right password")
+	{
+		ldap::sasl_scram_sha256 mech("user007", "pw-user007");
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE(r.has_value());
+		CHECK(finish(ioc, c.who_am_i()) == "dn:uid=user007,ou=people,dc=example,dc=org");
+		// The same object binds again (fresh nonce).
+		REQUIRE(finish(ioc, c.sasl_bind(mech)).has_value());
+	}
+	SECTION("a wrong password")
+	{
+		ldap::sasl_scram_sha256 mech("user007", "wrong");
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::auth_failed);
+		CHECK(c.is_open());
+		CHECK(finish(ioc, c.who_am_i()) == "");
 	}
 }
 

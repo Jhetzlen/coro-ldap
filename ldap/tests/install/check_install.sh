@@ -56,7 +56,7 @@ cmake -S "$ldap" -B "$work/build/ldap-codec" $gen -DCMAKE_INSTALL_PREFIX="$work/
 	-DJHETZ_LDAP_BUILD_NET=OFF -DJHETZ_LDAP_BUILD_TESTS=OFF >/dev/null
 cmake --build "$work/build/ldap-codec" >/dev/null
 cmake --install "$work/build/ldap-codec" >/dev/null
-for h in connection.hpp sync.hpp net; do
+for h in connection.hpp sync.hpp sasl_scram.hpp net; do
 	if [ -e "$work/prefix-codec/include/jhetz/ldap/$h" ]; then
 		echo "unexpected: $h installed without jhetz::ldap_net"
 		exit 1

@@ -194,8 +194,32 @@ mechanism such as SCRAM verify the server. `sasl_external` (RFC 4422
 appendix A) is provided, with an optional authorization identity; the
 identity comes from a TLS client certificate (`tls_options::cert_file`) or
 an ldapi:// socket. A server or mechanism error fails the bind and leaves
-the connection usable. An end-to-end EXTERNAL test needs a real server
+the connection usable, except a `complete()` that refuses the server's
+success: the server then considers the connection bound, so `sasl_bind`
+closes it. An end-to-end EXTERNAL test needs a real server
 (#14).
+
+SCRAM-SHA-256 (`sasl_scram.hpp`, RFC 5802 / RFC 7677, in jhetz::ldap_net
+since it needs OpenSSL): `sasl_scram_sha256(username, password,
+authz_id)`. `start()` sends the client-first-message with a fresh
+18-byte random nonce; `step()` checks the server-first-message (the nonce
+must extend ours, iteration count in [4096, 1'000'000]: PBKDF2 runs on the
+event loop thread, unknown "m="
+extensions refused), runs PBKDF2-HMAC-SHA-256 and returns the
+client-final-message with the proof; `complete()` (or `step()`, when the
+server sends its final message as a challenge) compares the "v=" server
+signature with `CRYPTO_memcmp`. A missing or wrong signature, or a server
+"e=" error, fails the bind (`client_errc::unexpected_response`) even if
+the server reported success (then the connection is closed): the server
+is not authenticated. The
+username and authz_id are escaped ("=2C", "=3D"); SASLprep is ASCII only
+(no ASCII character is mapped, controls are prohibited) and non-ASCII
+usernames or passwords are refused rather than sent unnormalized. No
+channel binding (GS2 header "n,,"; no -PLUS variant). Key material is
+wiped with `OPENSSL_cleanse` (the password when the object is destroyed,
+derived keys as soon as the proof is built). Contexts do not name the
+mechanism (`sasl_bind` prefixes "sasl bind SCRAM-SHA-256"). Tested with the RFC 7677 vector and against
+slapd with cyrus-sasl's scram plugin.
 
 Referrals and continuation references are returned, never chased:
 `error::referrals` and `search_stream::references()` keep the URIs as

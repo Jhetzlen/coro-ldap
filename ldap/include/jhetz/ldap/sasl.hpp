@@ -7,9 +7,10 @@
 //   ldap::sasl_external mech;                       // identity from TLS / ldapi://
 //   if (auto r = co_await conn.sasl_bind(mech); !r) ...
 //
-// Implement sasl_mechanism to add one (SCRAM-SHA-256 and GSSAPI would fit
-// this interface; they are not provided). A mechanism object serves one
-// bind at a time.
+// SCRAM-SHA-256 is sasl_scram_sha256 (sasl_scram.hpp, in jhetz::ldap_net).
+// Implement sasl_mechanism to add another (GSSAPI would fit this
+// interface; it is not provided). A mechanism object serves one bind at a
+// time.
 #pragma once
 
 #include "jhetz/ldap/error.hpp"

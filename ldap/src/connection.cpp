@@ -839,8 +839,14 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 		std::optional<std::string_view> server_creds;
 		if (r.server_sasl_creds) server_creds = *r.server_sasl_creds;
 		if (r.result.is_success()) {
-			if (auto done = mechanism.complete(server_creds); !done)
-				co_return std::unexpected(detail::with_context(std::move(done.error()), context));
+			if (auto done = mechanism.complete(server_creds); !done) {
+				// The server considers the connection bound, the client does
+				// not (e.g. SCRAM could not authenticate the server): close
+				// it rather than leave it bound to an identity nobody vouched for.
+				auto e = detail::with_context(std::move(done.error()), context);
+				self->shut(e, true);
+				co_return std::unexpected(std::move(e));
+			}
 			co_return result<void>{};
 		}
 		if (r.result.result_code != static_cast<int>(errc::sasl_bind_in_progress))

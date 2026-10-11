@@ -166,6 +166,7 @@ if(JHETZ_LDAP_BUILD_NET)
 
     add_library(jhetz_ldap_net STATIC
         src/connection.cpp
+        src/sasl_scram.cpp
         src/sync.cpp
         src/net/connect.cpp
         src/net/message_io.cpp
@@ -220,10 +221,12 @@ if(JHETZ_LDAP_INSTALL)
     if(JHETZ_LDAP_PACKAGE_NET)
         install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
     else()
-        # Without jhetz::ldap_net, its headers (they need Corosio) are left out.
+        # Without jhetz::ldap_net, its headers (they need Corosio, or their
+        # implementation is in jhetz::ldap_net) are left out.
         install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             PATTERN "net" EXCLUDE
             PATTERN "connection.hpp" EXCLUDE
+            PATTERN "sasl_scram.hpp" EXCLUDE
             PATTERN "sync.hpp" EXCLUDE)
     endif()
     install(EXPORT jhetz_ldap-targets NAMESPACE jhetz:: DESTINATION ${jhetz_ldap_cmakedir})

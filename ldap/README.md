@@ -190,8 +190,11 @@ on by default) with the network parts. It depends on Corosio and Capy
   in `ldap::connect`, and `net::start_tls` is the transport-level piece.
 - SASL (#11, `jhetz/ldap/sasl.hpp`): `connection::sasl_bind(mechanism)`
   drives the saslBindInProgress exchange; `sasl_external` (identity from a
-  TLS client certificate or ldapi://, optional authorization identity) is
-  built in, and `sasl_mechanism` is the interface for others.
+  TLS client certificate or ldapi://, optional authorization identity) and
+  `sasl_scram_sha256` (`jhetz/ldap/sasl_scram.hpp`, RFC 5802 / 7677:
+  username and password, the bind fails unless the server proves it knows
+  the password; SASLprep for ASCII only, no channel binding) are built in,
+  and `sasl_mechanism` is the interface for others.
 - `jhetz/ldap/controls.hpp`: typed request controls (`ldap::paged`,
   `manage_dsa_it`, `proxied_authorization`, or a raw `ldap::control`) in a
   `std::variant`, `to_control` / `append_controls` to encode them and
@@ -262,7 +265,7 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: other SASL mechanisms, a connection pool.
+Not yet: other SASL mechanisms (SCRAM-SHA-256-PLUS, GSSAPI), a connection pool.
 
 ## Examples
 
@@ -345,7 +348,9 @@ certificates generated at run time through the OpenSSL API.
 
 `tests/integration/` runs the client against a real OpenLDAP `slapd`
 (ldap://, ldaps://, StartTLS, ldapi://; simple and SASL EXTERNAL binds over
-ldapi:// and with a TLS client certificate; plain, streaming, paged and
+ldapi:// and with a TLS client certificate; SASL SCRAM-SHA-256 binds,
+skipped unless cyrus-sasl's scram plugin is installed, e.g. Debian's
+libsasl2-modules; plain, streaming, paged and
 typed searches with the server's schema; every write operation;
 cancellation; a fault-injecting proxy that truncates, oversizes or cuts
 the server's answer). `run_slapd.sh` starts a throwaway slapd with a test
