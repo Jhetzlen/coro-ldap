@@ -16,11 +16,13 @@ section 4 compile as C++23 (GCC 13).
   (copyable, movable, comparable), and can cross threads.
 - **Modern API.** Coroutines (Corosio/Capy), designated-initializer requests,
   `std::expected` results, no exceptions for expected failures.
-- **Unicode.** Text is UTF-8 everywhere: DNs, RDNs, attribute values,
-  filters, SASL usernames and passwords, error contexts. No ASCII-only
-  restriction, documented or not: text is prepared as the RFCs say
-  (SASLprep, RFC 4013, for SASL; LDAPprep, RFC 4518, for matching), and
-  invalid UTF-8 is a clear error.
+- **Unicode.** Text is UTF-8 everywhere: the string forms of DNs and
+  filters, values of string syntaxes (Directory String and the like), SASL
+  usernames and passwords, error contexts. No ASCII-only restriction,
+  documented or not: text is prepared as the RFCs say (SASLprep, RFC 4013,
+  for SASL; LDAPprep, RFC 4518, for matching), and invalid UTF-8 in text is
+  a clear error. Binary values (`ldap::binary`, `jpegPhoto`, `;binary`) and
+  `\xx`-escaped octets stay raw bytes.
 
 ## Decisions
 
