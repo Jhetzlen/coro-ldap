@@ -383,8 +383,21 @@ struct connection::impl
 	// the connection is closed or cannot send `m` now. Never suspends.
 	void send_unanswered(message &m, bool search, std::string_view context)
 	{
-		if (!open || !submit(m, nullptr, context)) return;
-		abandoned.push_back({ m.id, search });
+		// Listed before `m` is queued, like abandon(): nothing may fail after
+		// that, or its answer would match no request. Id 0 is never a
+		// request's; submit fails before queueing, and shut clears the list.
+		abandoned.push_back({ 0, search });
+		try {
+			if (!submit(m, nullptr, context)) {
+				abandoned.pop_back();
+				return;
+			}
+		} catch (...) {
+			if (!abandoned.empty()) abandoned.pop_back();
+			throw;
+		}
+		if (!open) return;
+		abandoned.back().id = m.id;
 		if (abandoned.size() > max_abandoned) abandoned.pop_front();
 	}
 
