@@ -165,10 +165,14 @@ namespace {
 	// the bidi rules (RFC 3454 section 6) and, for a stored string, refuse
 	// the unassigned code points of table A.1 (Unicode 3.2). The input must
 	// be UTF-8; the result is UTF-8. `what` names the input in error
-	// contexts, which never quote it (it may be the password). Every buffer
-	// of ours that held the text is wiped; ICU's internal working buffers
-	// cannot be.
-	result<std::string> saslprep(std::string_view s, std::string_view what, prep_kind kind)
+	// contexts, which never quote it (it may be the password). The result
+	// is written into `out`, which must be empty (e.g. just wiped): it is
+	// sized once and wiped on failure, so no other copy of the prepared
+	// text is made (returning a std::string would move it, and a move out
+	// of a short (SSO) string copies the characters and leaves them in the
+	// moved-from one). Every buffer of ours that held the text is wiped;
+	// ICU's internal working buffers cannot be.
+	result<void> saslprep(std::string_view s, std::string_view what, prep_kind kind, std::string &out)
 	{
 		const std::string name(what);
 		if (s.empty()) return input_error("empty " + name);
@@ -218,20 +222,20 @@ namespace {
 		nprep = prepare(prepared.v.data(), nprep);
 		if (U_FAILURE(status)) return icu_failure(name, status);
 
-		// UTF-16 -> UTF-8, straight into the result (sized once: no copy
-		// of the text is left in a freed buffer).
+		// UTF-16 -> UTF-8, straight into `out` (sized once: no copy of the
+		// text is left in a freed buffer).
 		status = U_ZERO_ERROR;
 		int32_t n8 = 0;
 		u_strToUTF8(nullptr, 0, &n8, prepared.v.data(), nprep, &status);
 		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) return icu_failure(name, status);
-		std::string out(static_cast<std::size_t>(n8), '\0');
+		out.resize(static_cast<std::size_t>(n8));
 		status = U_ZERO_ERROR;
 		u_strToUTF8(out.data(), n8, &n8, prepared.v.data(), nprep, &status);
 		if (U_FAILURE(status)) {
 			wipe_string(out);
 			return icu_failure(name, status);
 		}
-		return out;
+		return {};
 	}
 
 	// Well-formed UTF-8 (RFC 3629): no overlong forms, surrogates or code
@@ -395,12 +399,9 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 	wipe_string(prepared_password_);
 	// RFC 5802 section 5.1: the username is prepared as a query (unassigned
 	// code points allowed); section 2.2: the password as a stored string.
-	auto user = saslprep(username_, "username", prep_kind::query);
-	if (!user) return std::unexpected(std::move(user.error()));
-	auto password = saslprep(password_, "password", prep_kind::stored);
-	if (!password) return std::unexpected(std::move(password.error()));
-	prepared_password_ = std::move(*password);
-	wipe_string(*password);// a short (SSO) string was copied, not moved
+	std::string user;
+	if (auto r = saslprep(username_, "username", prep_kind::query, user); !r)
+		return std::unexpected(std::move(r.error()));
 	// The authorization identity is a saslname too (UTF-8), but RFC 5802
 	// does not prepare it: it is sent as given (escaped) once checked.
 	if (!valid_utf8(authz_id_)) return input_error("authorization identity is not valid UTF-8");
@@ -418,8 +419,13 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 		client_nonce_ = base64_encode(raw.data(), raw.size());
 	}
 
+	// The password last, after every other check: a failure above leaves
+	// no prepared password behind, and saslprep() wipes its own on failure.
+	if (auto r = saslprep(password_, "password", prep_kind::stored, prepared_password_); !r)
+		return std::unexpected(std::move(r.error()));
+
 	gs2_header_ = authz_id_.empty() ? "n,," : "n,a=" + escape_saslname(authz_id_) + ",";
-	client_first_bare_ = "n=" + escape_saslname(*user) + ",r=" + client_nonce_;
+	client_first_bare_ = "n=" + escape_saslname(user) + ",r=" + client_nonce_;
 	state_ = state::sent_first;
 	return std::optional<std::string>(gs2_header_ + client_first_bare_);
 }

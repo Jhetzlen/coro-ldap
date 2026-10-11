@@ -19,6 +19,9 @@ struct scram_test_access
 		return sasl_scram_sha256(
 		  std::move(username), std::move(password), std::move(authz_id), std::optional<std::string>(std::move(nonce)));
 	}
+
+	// The SASLprep'ed password the mechanism holds (empty when it holds none).
+	static const std::string &prepared_password(const sasl_scram_sha256 &m) { return m.prepared_password_; }
 };
 
 }// namespace jhetz::ldap::detail

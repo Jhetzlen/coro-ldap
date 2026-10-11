@@ -326,6 +326,32 @@ TEST_CASE("scram: SASLprep rejections and input checks", "[sasl][scram]")
 	CHECK(ok.start().has_value());
 }
 
+TEST_CASE("scram: the prepared password is held only from start() until the proof", "[sasl][scram]")
+{
+	using access = ldap::detail::scram_test_access;
+	// U+00AA FEMININE ORDINAL INDICATOR: NFKC makes it 'a'.
+	auto m = access::with_nonce("user", "s3cret\xC2\xAA", "", "fixednonce");
+	CHECK(access::prepared_password(m).empty());
+	REQUIRE(m.start().has_value());
+	CHECK(access::prepared_password(m) == "s3creta");
+	REQUIRE(m.step("r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=4096").has_value());
+	CHECK(access::prepared_password(m).empty());
+
+	// A start() that fails, on the password or on any other check, leaves none.
+	auto bad_authz = access::with_nonce("user", "s3cret", "dn:\n", "fixednonce");
+	CHECK_FALSE(bad_authz.start().has_value());
+	CHECK(access::prepared_password(bad_authz).empty());
+	auto bad_nonce = access::with_nonce("user", "s3cret", "", "bad,nonce");
+	CHECK_FALSE(bad_nonce.start().has_value());
+	CHECK(access::prepared_password(bad_nonce).empty());
+	auto bad_password = access::with_nonce("user", "s3cret\x7F", "", "fixednonce");
+	CHECK_FALSE(bad_password.start().has_value());
+	CHECK(access::prepared_password(bad_password).empty());
+	auto bad_user = access::with_nonce("us\ter", "s3cret", "", "fixednonce");
+	CHECK_FALSE(bad_user.start().has_value());
+	CHECK(access::prepared_password(bad_user).empty());
+}
+
 TEST_CASE("scram: a non-ASCII exchange", "[sasl][scram]")
 {
 	// Username "A" U+030A "ngstro" U+0308 "m" (decomposed), password

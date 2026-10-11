@@ -42,8 +42,9 @@
 //   wiped with OPENSSL_cleanse when the object is destroyed; the buffers
 //   of the SASLprep preparation when start() returns; the prepared
 //   password, the salted password and the derived keys as soon as the
-//   proof is built. ICU's own internal working buffers cannot be wiped.
-//   Copies the caller made of the password are the caller's to wipe.
+//   proof is built (a start() that fails leaves no prepared password).
+//   ICU's own internal working buffers cannot be wiped. Copies the caller
+//   made of the password are the caller's to wipe.
 //
 // Errors (contexts never contain the password, nor name the mechanism):
 // - client_errc::encode_error (cond::invalid_input): an empty username or
