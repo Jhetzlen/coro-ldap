@@ -393,6 +393,18 @@ certificates generated at run time through the OpenSSL API.
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
 | `JHETZ_LDAP_WERROR` | `OFF` | warnings are errors in our code (CI turns it on) |
 | `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench` (see below; not run by ctest or CI) |
+| `JHETZ_LDAP_COVERAGE` | `OFF` | Clang source-based coverage on our own targets (see below) |
+
+Coverage: `ldap/tests/coverage/run_coverage.sh [BUILD_DIR]` builds
+`build/coverage` with clang++ and `-DJHETZ_LDAP_COVERAGE=ON` (only our
+libraries, tests and examples are instrumented; no sanitizers), runs the
+whole ctest suite, and with `SLAPD` set (as for `run_slapd.sh`) the
+integration tests too, then reports on `ldap/src` and `ldap/include`:
+`llvm-cov report` on the terminal, HTML with line, region and branch counts
+in `BUILD_DIR/llvm-cov/html/index.html`, and `llvm-cov export -summary-only`
+JSON in `BUILD_DIR/llvm-cov/summary.json`. It needs `llvm-profdata` and
+`llvm-cov` matching the compiler (the `llvm` package; or set `LLVM_PROFDATA`,
+`LLVM_COV` and `CXX`).
 
 ## Integration tests
 

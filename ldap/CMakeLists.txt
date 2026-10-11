@@ -22,6 +22,7 @@ option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap_net (transports and connect; fetc
     ${jhetz_ldap_net_default})
 option(JHETZ_LDAP_SANITIZE "Build all targets with AddressSanitizer and UBSan" OFF)
 option(JHETZ_LDAP_WERROR "Treat warnings in jhetz::ldap code as errors" OFF)
+option(JHETZ_LDAP_COVERAGE "Instrument our own targets for Clang source-based coverage (llvm-cov)" OFF)
 option(JHETZ_LDAP_BUILD_BENCH "Build the benchmarks (bench/, not run by ctest)" OFF)
 option(JHETZ_LDAP_BUILD_EXAMPLES "Build the examples (examples/; need JHETZ_LDAP_BUILD_NET)" ON)
 option(JHETZ_LDAP_INSTALL "Generate install rules and the jhetz_ldap CMake package" ${PROJECT_IS_TOP_LEVEL})
@@ -84,7 +85,21 @@ if(JHETZ_LDAP_BUILD_FUZZERS)
     add_link_options(-fsanitize=address,undefined -fno-sanitize-recover=all)
 endif()
 
-# Warnings apply to our own targets only.
+# Coverage (tests/coverage/run_coverage.sh): Clang source-based coverage
+# on our own targets only, through jhetz_ldap_warnings below, so Corosio,
+# Capy and Catch2 are not instrumented. -O0 so regions and branches map to
+# the source as written.
+if(JHETZ_LDAP_COVERAGE)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR MSVC)
+        message(FATAL_ERROR "JHETZ_LDAP_COVERAGE needs Clang (-fprofile-instr-generate, llvm-cov)")
+    endif()
+    if(JHETZ_LDAP_SANITIZE OR JHETZ_LDAP_BUILD_FUZZERS)
+        message(WARNING "JHETZ_LDAP_COVERAGE is meant for a plain build: turn JHETZ_LDAP_SANITIZE "
+            "and JHETZ_LDAP_BUILD_FUZZERS off")
+    endif()
+endif()
+
+# Warnings (and coverage instrumentation) apply to our own targets only.
 # Clang 21+ counts __COUNTER__ (used by Catch2's macros, expanded in our
 # test sources) as a C2y extension under -Wpedantic.
 include(CheckCXXCompilerFlag)
@@ -98,6 +113,10 @@ function(jhetz_ldap_warnings target)
             -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow
             $<$<BOOL:${JHETZ_LDAP_HAS_WNO_C2Y_EXTENSIONS}>:-Wno-c2y-extensions>
             $<$<BOOL:${JHETZ_LDAP_WERROR}>:-Werror>)
+        if(JHETZ_LDAP_COVERAGE)
+            target_compile_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping -O0 -g)
+            target_link_options(${target} PRIVATE -fprofile-instr-generate)
+        endif()
     endif()
 endfunction()
 

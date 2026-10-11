@@ -870,6 +870,9 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   finds it as a dependency of `net`. LDAPprep matching (RFC 4518) in the
   codec will make it a dependency of `jhetz_ldap` too.
 - The Clang < 19 `<expected>` workaround is scoped to our own targets.
+- Coverage: Clang source-based coverage (`JHETZ_LDAP_COVERAGE`, llvm-cov),
+  scoped to our own targets like the warnings; `tests/coverage/run_coverage.sh`
+  runs it (README.md, "Build and test"). Local only, not in CI.
 - C++26 (reflection, `std::execution` interop) on a separate branch.
 
 ## 10. Message model (implemented, step 3)
