@@ -299,8 +299,23 @@ next page with the server's cookie when one ends, until the cookie is
 empty. A server that ignores the (non-critical) control returns
 everything as one page, which works the same. Each page is a separate
 search on the wire (its own message id and timeout). Destroying the
-`paged_search` early abandons the current page; RFC 2696's explicit
-release (a request with page size 0) is not sent.
+`paged_search` early abandons the current page if it is still running,
+then sends RFC 2696's release (section 3): the same search with page size
+0 and the last cookie the server returned (the current page's when its
+SearchResultDone was already received, else the previous page's; none
+while the first page runs). The destructor cannot wait, so the release is
+fire-and-forget, like an AbandonRequest: it is queued, its id joins the
+abandoned requests and its answer is dropped when some later operation's
+reader sees it. Nothing is sent after the last page (empty cookie), after a
+server or connection error, during StartTLS, or once the connection is
+closed; during a bind it is held until the bind ends, like any request.
+After a timeout or cancellation (the page was abandoned) or a next page
+that could not be sent, the destructor releases. There is no awaitable
+`release()`: the destructor does everything that needs no waiting, and
+waiting for the server's answer would tell the caller nothing it could act
+on. `sync::client::search_paged` keeps the `paged_search` on the I/O
+thread and either reads every page or destroys it after an error, so it
+needs nothing more.
 
 ## 4. Mapping entries to structs
 

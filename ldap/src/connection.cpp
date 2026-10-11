@@ -378,6 +378,16 @@ struct connection::impl
 		(void)submit(m, nullptr, "abandon");// cannot fail to encode
 	}
 
+	// Sends `m` without waiting for an answer: its responses are dropped like
+	// late responses to an abandoned request. Best effort: nothing is sent if
+	// the connection is closed or cannot send `m` now. Never suspends.
+	void send_unanswered(message &m, bool search, std::string_view context)
+	{
+		if (!open || !submit(m, nullptr, context)) return;
+		abandoned.push_back({ m.id, search });
+		if (abandoned.size() > max_abandoned) abandoned.pop_front();
+	}
+
 	// ---------------------------------------------------------------- reader
 
 	void start_reader()
@@ -771,10 +781,9 @@ namespace {
 		return m;
 	}
 
-	// Validates and sends a search; returns its stream. Never suspends.
-	result<ldap::search_stream> start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr)
+	// The SearchRequest for `p`, validated (errors carry `context`).
+	result<message> search_message(connection::impl &c, const search_params &p, const std::string &context)
 	{
-		std::string context = op_context("search", p.base);
 		const auto seconds = p.time_limit.count();
 		if (seconds < 0 || seconds > max_int)
 			return fail(client_errc::encode_error,
@@ -790,7 +799,14 @@ namespace {
 		wire.types_only = p.types_only;
 		wire.filter = p.filter;
 		wire.attributes.assign(p.attributes.begin(), p.attributes.end());
-		auto request = with_controls(std::move(wire), p.controls, c.mr, context);
+		return with_controls(std::move(wire), p.controls, c.mr, context);
+	}
+
+	// Validates and sends a search; returns its stream. Never suspends.
+	result<ldap::search_stream> start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr)
+	{
+		std::string context = op_context("search", p.base);
+		auto request = search_message(c, p, context);
 		if (!request) return std::unexpected(std::move(request.error()));
 
 		auto *state = new_state(c, mr, context);
@@ -1357,21 +1373,70 @@ struct paged_search::state
 	std::optional<error> error_{};
 	string_list references{};
 	std::pmr::vector<control> controls{};
+	// The last cookie the server returned: its paging state, to release if
+	// the search stops early. Empty before the first page ends, after the
+	// last one, and after an error that ended the search on the server.
+	std::string cookie{};
 
-	// Sends the search for the next page (cookie empty for the first).
-	result<void> request_page(std::string cookie)
+	void set_page_control(std::int32_t size, std::string page_cookie)
 	{
 		auto &cs = params.controls;
 		std::erase_if(cs, [](const request_control &c) {
 			return std::holds_alternative<paged>(c)
 				   || (std::holds_alternative<control>(c) && std::get<control>(c).type == paged_results_oid);
 		});
-		cs.push_back(paged{ .page_size = page_size, .cookie = std::move(cookie) });
+		cs.push_back(paged{ .page_size = size, .cookie = std::move(page_cookie) });
+	}
+
+	// Sends the search for the next page (cookie empty for the first).
+	result<void> request_page(std::string page_cookie)
+	{
+		set_page_control(page_size, std::move(page_cookie));
 		auto s = start_search(*conn, params, mr);
 		if (!s) return std::unexpected(std::move(s.error()));
 		current = std::move(*s);
 		++pages;
 		return {};
+	}
+
+	// The paging state the server holds now: `cookie`, or the current
+	// page's own if its SearchResultDone was already received (the page
+	// ended, next() has not read it yet).
+	std::string server_cookie() const
+	{
+		if (current.state_ == nullptr) return cookie;
+		const auto &q = current.state_->op.queue;
+		if (q.empty() || !std::holds_alternative<search_result_done>(q.back().op)) return cookie;
+		if (!std::get<search_result_done>(q.back().op).result.is_success()) return {};
+		auto pr = find_paged(q.back().controls);
+		if (!pr || !*pr) return {};
+		return std::string((*pr)->cookie);
+	}
+
+	// Stopped before its end (destroyed): abandons the current page, then
+	// releases the server's paging state (RFC 2696 section 3: page size 0
+	// and the last cookie). Best effort and never suspends: the release is
+	// sent without waiting for its answer, which is dropped. Nothing is sent
+	// if the connection is closed or in StartTLS (a bind holds it until the
+	// bind ends, like any request).
+	void stop() noexcept
+	{
+		std::string last;
+		try {
+			last = finished ? cookie : server_cookie();
+		} catch (...) {// out of memory: the release is best effort
+		}
+		current = ldap::search_stream{};// abandons the page if it is still running
+		finished = true;
+		cookie.clear();
+		try {
+			if (last.empty() || !conn->open) return;
+			set_page_control(0, std::move(last));
+			const std::string context = op_context("search", params.base) + " (paged results release)";
+			auto request = search_message(*conn, params, context);
+			if (request) conn->send_unanswered(*request, true, context);
+		} catch (...) {// out of memory: the release is best effort
+		}
 	}
 };
 
@@ -1384,7 +1449,7 @@ capy::task<result<ldap::paged_search>>
 		  op_context("search", p.base) + ": page size " + std::to_string(page_size) + " is not positive");
 	std::pmr::polymorphic_allocator<> alloc(impl_->mr);
 	auto *st = alloc.new_object<paged_search::state>(
-	  paged_search::state{ impl_ref(impl_), std::move(p), page_size, mr, {}, 0, false, {}, {}, {} });
+	  paged_search::state{ impl_ref(impl_), std::move(p), page_size, mr, {}, 0, false, {}, {}, {}, {} });
 	ldap::paged_search out = connection::impl::make_paged(st);
 	if (auto r = st->request_page({}); !r) co_return std::unexpected(std::move(r.error()));
 	co_return std::move(out);
@@ -1395,9 +1460,10 @@ namespace {
 	void delete_paged(paged_search::state *s) noexcept
 	{
 		if (s == nullptr) return;
+		s->stop();
 		impl_ref keep = s->conn;
 		std::pmr::polymorphic_allocator<> alloc(keep->mr);
-		alloc.delete_object(s);// its current stream abandons its search
+		alloc.delete_object(s);
 	}
 
 }// namespace
@@ -1444,7 +1510,13 @@ capy::task<result<std::optional<entry>>> paged_search::next()
 		if (s.error_) co_return std::unexpected(*s.error_);
 		co_return std::optional<entry>{};
 	}
-	auto finish = [&s](error e) -> result<std::optional<entry>> {
+	// `ended`: the error ended the search on the server (an error result,
+	// a malformed answer, a closed connection), so there is nothing to
+	// release. A cancelled or timed-out page was only abandoned, and a page
+	// request that could not be sent was never seen: the server may still
+	// hold the paging state of `cookie`, which the destructor releases.
+	auto finish = [&s](error e, bool ended = true) -> result<std::optional<entry>> {
+		if (ended && e.code != capy::cond::canceled && e.code != capy::cond::timeout) s.cookie.clear();
 		s.finished = true;
 		s.error_ = e;
 		return std::unexpected(std::move(e));
@@ -1460,11 +1532,12 @@ capy::task<result<std::optional<entry>>> paged_search::next()
 		s.controls = s.current.controls();
 		auto pr = find_paged(s.controls);
 		if (!pr) co_return finish(with_context(std::move(pr.error()), op_context("search", s.params.base)));
-		if (!*pr || (*pr)->cookie.empty()) {
+		s.cookie = *pr ? std::string((*pr)->cookie) : std::string();
+		if (s.cookie.empty()) {
 			s.finished = true;
 			co_return std::optional<entry>{};
 		}
-		if (auto r = s.request_page(std::string((*pr)->cookie)); !r) co_return finish(std::move(r.error()));
+		if (auto r = s.request_page(s.cookie); !r) co_return finish(std::move(r.error()), false);
 	}
 }
 

@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -516,6 +517,315 @@ TEST_CASE("operations: paged search errors", "[net][operations][paged]")
 		REQUIRE_FALSE(s.has_value());
 		CHECK(s.error().code == client_errc::encode_error);
 		CHECK(m.log.received.empty());
+	}
+}
+
+// ---------------------------------------------------------------- paged search release
+
+namespace {
+
+// `req` is the first page's search with page size 0 and `cookie` (RFC 2696
+// section 3: the release of the server's paging state).
+void check_release(const ldap::message &req, const ldap::message &first, std::string_view cookie)
+{
+	CHECK(req.op == first.op);
+	REQUIRE(req.controls.size() == 1);
+	auto p = ldap::decode_paged_results(req.controls[0]);
+	REQUIRE(p.has_value());
+	CHECK(p->size == 0);
+	CHECK(p->cookie == cookie);
+}
+
+capy::task<ldap::result<void>> bind_admin(ldap::connection &c)
+{
+	co_return co_await c.simple_bind(*ldap::dn::parse(admin), "secret");
+}
+
+}// namespace
+
+TEST_CASE("operations: a paged search stopped between pages releases the server's state", "[net][operations][paged]")
+{
+	mock_ldap m;
+	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+	  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), paged_done(2, "page3") }),
+	  answer({ paged_done(3, "") }),// the release's answer: dropped
+	  answer({ bind_resp(4) }) });
+	{
+		auto s = m.run(m.conn.search_paged(people_search(), 1));
+		REQUIRE(s.has_value());
+		for (int i = 0; i < 2; ++i) {
+			auto e = m.run(s->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+		}
+		// Page 2 ended (its SearchResultDone is queued), next() not called.
+		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+		CHECK(s->pages() == 2);
+	}
+	CHECK(m.conn.outstanding() == 0);
+	auto b = m.run(bind_admin(m.conn));
+	CHECK(b.has_value());
+	CHECK(m.conn.is_open());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 4);// no AbandonRequest: the page had ended
+	CHECK(m.log.received[2].id == 3);
+	check_release(m.log.received[2], m.log.received[0], "page3");
+	CHECK(m.log.received[3] == bind_request_msg(4));
+}
+
+TEST_CASE("operations: a paged search stopped mid-page abandons it, then releases", "[net][operations][paged]")
+{
+	SECTION("a later page: released with the last cookie the server returned")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B") }),
+		  answer({ paged_done(2, "page3") }),// reads the AbandonRequest; a late done, dropped
+		  answer({ paged_done(4, "") }),// the release's answer: dropped
+		  answer({ bind_resp(5) }) });
+		{
+			auto s = m.run(m.conn.search_paged(people_search(), 1));
+			REQUIRE(s.has_value());
+			for (int i = 0; i < 2; ++i) {
+				auto e = m.run(s->next());
+				REQUIRE(e.has_value());
+				REQUIRE(e->has_value());
+			}
+			CHECK(m.conn.outstanding() == 1);
+		}
+		CHECK(m.conn.outstanding() == 0);
+		auto b = m.run(bind_admin(m.conn));
+		CHECK(b.has_value());
+		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 5);
+		CHECK(m.log.received[2] == ldap::message{ 3, ldap::abandon_request{ 2 } });
+		CHECK(m.log.received[3].id == 4);
+		check_release(m.log.received[3], m.log.received[0], "page2");
+		CHECK(m.log.received[4] == bind_request_msg(5));
+	}
+	SECTION("a page stopped with with_stop: abandoned; the destructor releases")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B") }),
+		  step{},// reads the AbandonRequest
+		  answer({ paged_done(4, "") }),// the release's answer: dropped
+		  answer({ bind_resp(5) }) });
+		{
+			auto s = m.run(m.conn.search_paged(people_search(), 1));
+			REQUIRE(s.has_value());
+			for (int i = 0; i < 2; ++i) {
+				auto e = m.run(s->next());
+				REQUIRE(e.has_value());
+				REQUIRE(e->has_value());
+			}
+			std::stop_source cancel;
+			outcome<ldap::result<std::optional<ldap::entry>>> out;
+			spawn(m.ioc, ldap::with_stop(cancel.get_token(), s->next()), out);
+			cancel.request_stop();
+			drive_until(m.ioc, [&out] { return out.done(); });
+			REQUIRE_FALSE(out.get().has_value());
+			CHECK(out.get().error().code == ldap::cond::canceled);
+			CHECK(out.get().error().context == "search ou=people,dc=example,dc=org (abandoned)");
+			CHECK(s->done());
+			CHECK(m.conn.outstanding() == 0);
+			drive_until(m.ioc, [&m] { return m.log.received.size() == 3; });
+			CHECK(m.log.received[2] == ldap::message{ 3, ldap::abandon_request{ 2 } });
+		}
+		auto b = m.run(bind_admin(m.conn));
+		CHECK(b.has_value());
+		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 5);
+		CHECK(m.log.received[3].id == 4);
+		check_release(m.log.received[3], m.log.received[0], "page2");
+		CHECK(m.log.received[4] == bind_request_msg(5));
+	}
+	SECTION("the first page: no cookie yet, only abandoned")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A") }),
+		  answer({ paged_done(1, "page2") }),// reads the AbandonRequest; a late done, dropped
+		  answer({ bind_resp(3) }) });
+		{
+			auto s = m.run(m.conn.search_paged(people_search(), 1));
+			REQUIRE(s.has_value());
+			auto e = m.run(s->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+		}
+		auto b = m.run(bind_admin(m.conn));
+		CHECK(b.has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+		CHECK(m.log.received[2] == bind_request_msg(3));
+	}
+	SECTION("a page that timed out")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  step{},// reads page 2's search, does not answer
+		  step{},// reads its AbandonRequest
+		  answer({ paged_done(4, "") }),// the release's answer: dropped
+		  answer({ bind_resp(5) }) });
+		{
+			auto p = people_search();
+			p.timeout = std::chrono::milliseconds(50);
+			auto s = m.run(m.conn.search_paged(std::move(p), 1));
+			REQUIRE(s.has_value());
+			auto e = m.run(s->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+			auto late = m.run(s->next());
+			REQUIRE_FALSE(late.has_value());
+			CHECK(late.error().code == ldap::cond::timeout);
+			CHECK(s->done());
+		}
+		auto b = m.run(bind_admin(m.conn));
+		CHECK(b.has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 5);
+		CHECK(m.log.received[2] == ldap::message{ 3, ldap::abandon_request{ 2 } });
+		check_release(m.log.received[3], m.log.received[0], "page2");
+		CHECK(m.log.received[4] == bind_request_msg(5));
+	}
+}
+
+TEST_CASE("operations: a paged search that ended sends no release", "[net][operations][paged]")
+{
+	SECTION("ran to completion (empty cookie)")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), paged_done(2, "") }),
+		  answer({ bind_resp(3) }) });
+		{
+			auto s = m.run(m.conn.search_paged(people_search(), 1));
+			REQUIRE(s.has_value());
+			auto dns = m.run(drain_paged(*s));
+			REQUIRE(dns.has_value());
+			CHECK(dns->size() == 2);
+		}
+		auto b = m.run(bind_admin(m.conn));
+		CHECK(b.has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(m.log.received[2] == bind_request_msg(3));
+	}
+	SECTION("the last page ended, next() not called")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "") }),
+		  answer({ bind_resp(2) }) });
+		{
+			auto s = m.run(m.conn.search_paged(people_search(), 1));
+			REQUIRE(s.has_value());
+			auto e = m.run(s->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+		}
+		auto b = m.run(bind_admin(m.conn));
+		CHECK(b.has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[1] == bind_request_msg(2));
+	}
+	SECTION("a server error")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "next") }),
+		  answer({ done_msg(2, 51, "", "busy") }),
+		  answer({ bind_resp(3) }) });
+		{
+			auto s = m.run(m.conn.search_paged(people_search(), 1));
+			REQUIRE(s.has_value());
+			auto r = m.run(drain_paged(*s));
+			REQUIRE_FALSE(r.has_value());
+			CHECK(r.error().code == errc::busy);
+		}
+		auto b = m.run(bind_admin(m.conn));
+		CHECK(b.has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(m.log.received[2] == bind_request_msg(3));
+	}
+	SECTION("the connection is closed")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  step{} });// would read a release
+		{
+			auto s = m.run(m.conn.search_paged(people_search(), 1));
+			REQUIRE(s.has_value());
+			auto e = m.run(s->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			m.conn.close();
+		}
+		m.sockets.client.close();// closing a wrapped transport leaves the socket open
+		drive_until(m.ioc, [&m] { return m.server.done(); });
+		CHECK_THAT(m.log.error, StartsWith("server read: "));
+		CHECK(m.log.received.size() == 1);
+		CHECK_FALSE(m.conn.is_open());
+	}
+}
+
+TEST_CASE("operations: a paged search release and the connection's state", "[net][operations][paged]")
+{
+	SECTION("during a bind: held until the bind ends, like any request")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  step{},// reads the BindRequest, does not answer yet
+		  step{ .read_request = false, .replies = { bytes_of(bind_resp(2)) } },
+		  answer({ paged_done(3, "") }),// the release's answer: dropped
+		  answer({ bind_resp(4) }) });
+		outcome<ldap::result<void>> bound;
+		{
+			auto s = m.run(m.conn.search_paged(people_search(), 1));
+			REQUIRE(s.has_value());
+			auto e = m.run(s->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			spawn(m.ioc, bind_admin(m.conn), bound);
+			drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+			CHECK_FALSE(bound.done());
+		}// destroyed while the bind is outstanding
+		drive_until(m.ioc, [&bound] { return bound.done(); });
+		CHECK(bound.get().has_value());
+		auto b = m.run(bind_admin(m.conn));
+		CHECK(b.has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 4);
+		CHECK(m.log.received[1] == bind_request_msg(2));
+		CHECK(m.log.received[2].id == 3);
+		check_release(m.log.received[2], m.log.received[0], "page2");
+		CHECK(m.log.received[3] == bind_request_msg(4));
+	}
+	SECTION("the connection destroyed right after: nothing outlives it")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  step{} });// may read the release
+		{
+			auto s = m.run(m.conn.search_paged(people_search(), 1));
+			REQUIRE(s.has_value());
+			auto e = m.run(s->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			ldap::connection gone = std::move(m.conn);
+			*s = ldap::paged_search{};// queues the release
+		}// the connection is destroyed: closed
+		m.sockets.client.close();// closing a wrapped transport leaves the socket open
+		drive_until(m.ioc, [&m] { return m.server.done(); });
+		CHECK(m.log.received.size() <= 2);
+		if (m.log.received.size() == 2) check_release(m.log.received[1], m.log.received[0], "page2");
 	}
 }
 

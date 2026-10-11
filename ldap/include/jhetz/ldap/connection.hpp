@@ -418,7 +418,9 @@ class connection
 	// `request.controls` is replaced. A server that ignores the
 	// (non-critical) control returns everything as one page, which works the
 	// same. Each page is one search on the wire, with its own message id
-	// and its own `request.timeout`.
+	// and its own `request.timeout`. Destroyed early, the paged_search
+	// abandons the current page and releases the server's paging state
+	// (see paged_search).
 	boost::capy::task<result<ldap::paged_search>> search_paged(search_params request,
 	  std::int32_t page_size,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
@@ -600,9 +602,20 @@ class search_stream
 
 // The entries of a paged search, across pages (connection::search_paged):
 // used like search_stream. Move-only; the same rules as search_stream
-// apply. Destroyed early, the current page's search is abandoned (the
-// server may keep its paging state until the connection closes; RFC 2696
-// would need one more request with page size 0 to release it early).
+// apply.
+//
+// Destroyed before its end, it stops the search on the server: the current
+// page's search is abandoned if it is still running, then the server's
+// paging state is released (RFC 2696 section 3: the same search with page
+// size 0 and the last cookie the server returned, which is the current
+// page's if it already ended, else the previous page's). This is best
+// effort and never waits: the release is queued like an AbandonRequest and
+// its answer is dropped unread. Nothing is released after the last page
+// (empty cookie), after a server or connection error, while the first page
+// is running (no cookie yet: only the abandon), during StartTLS, or once
+// the connection is closed. A page that timed out or was cancelled leaves
+// the paged_search done, and its destruction releases the state. Like
+// search_stream, it must be destroyed on the connection's executor.
 class paged_search
 {
   public:

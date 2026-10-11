@@ -257,6 +257,77 @@ TEST_CASE("integration: plain, streaming and paged searches", "[integration]")
 	CHECK(limited.error().code == ldap::errc::size_limit_exceeded);
 }
 
+namespace {
+
+// One page of `params` by hand (a search with the paged control): its
+// entry count and the cookie the server returned.
+struct manual_page
+{
+	std::size_t entries = 0;
+	std::string cookie{};
+};
+
+ldap::result<manual_page>
+  page_by_hand(corosio::io_context &ioc, ldap::connection &c, ldap::search_params params, ldap::paged control)
+{
+	params.controls = { std::move(control) };
+	auto s = finish(ioc, c.search_stream(std::move(params)));
+	if (!s) return std::unexpected(std::move(s.error()));
+	manual_page out;
+	while (true) {
+		auto e = finish(ioc, s->next());
+		if (!e) return std::unexpected(std::move(e.error()));
+		if (!*e) break;
+		++out.entries;
+	}
+	for (const auto &ctl : s->controls())
+		if (ctl.type == ldap::paged_results_oid) out.cookie = std::string(ldap::decode_paged_results(ctl)->cookie);
+	return out;
+}
+
+}// namespace
+
+TEST_CASE("integration: a paged search stopped between pages sends a release", "[integration]")
+{
+	REQUIRE_SLAPD();
+	corosio::io_context ioc;
+	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
+	const ldap::search_params all_users{
+		.base = people, .filter = ldap::filters::attr("objectClass") == "posixAccount", .attributes = { "uid" }
+	};
+
+	// slapd answers a release (RFC 2696 section 3: page size 0 and the last
+	// cookie) with success, no entries and no cookie. Its paging state is
+	// only the last entry sent, so the cookie is not refused afterwards.
+	auto first = page_by_hand(ioc, c, all_users, { .page_size = 40 });
+	REQUIRE(first.has_value());
+	CHECK(first->entries == 40);
+	REQUIRE_FALSE(first->cookie.empty());
+	auto release = page_by_hand(ioc, c, all_users, { .page_size = 0, .cookie = first->cookie });
+	REQUIRE(release.has_value());
+	CHECK(release->entries == 0);
+	CHECK(release->cookie.empty());
+
+	// The paged_search sends that release when destroyed between pages; its
+	// answer is dropped without harm.
+	{
+		auto p = finish(ioc, c.search_paged(all_users, 40));
+		REQUIRE(p.has_value());
+		for (int i = 0; i < 40; ++i) {
+			auto e = finish(ioc, p->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+		}
+		drive_until(ioc, [&c] { return c.outstanding() == 0; });
+		CHECK(p->pages() == 1);
+	}
+	CHECK(c.outstanding() == 0);
+	CHECK(c.is_open());
+	auto all = finish(ioc, c.search(all_users));
+	REQUIRE(all.has_value());
+	CHECK(all->size() == 250);
+}
+
 TEST_CASE("integration: large and binary values", "[integration]")
 {
 	REQUIRE_SLAPD();
