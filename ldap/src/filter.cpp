@@ -743,6 +743,11 @@ namespace {
 			  client_errc::invalid_filter, std::string("filter: ") + what + " at position " + std::to_string(pos));
 		}
 		std::unexpected<ldap::error> error(const char *what) const { return error(what, i_); }
+		std::unexpected<ldap::error> error(const std::string &what) const { return error(what.c_str(), i_); }
+		std::unexpected<ldap::error> too_many_elements() const
+		{
+			return error("too many elements (more than " + std::to_string(limits_.max_elements) + ")");
+		}
 
 		bool at_end() const { return i_ >= s_.size(); }
 		char peek() const { return s_[i_]; }
@@ -767,8 +772,9 @@ namespace {
 		// Bounded recursion: depth never exceeds limits_.max_depth.
 		result<std::uint32_t> parse_filter(std::size_t depth, std::uint32_t parent)
 		{
-			if (depth > limits_.max_depth) return error("nested too deeply");
-			if (++elements_ > limits_.max_elements) return error("too many elements");
+			if (depth > limits_.max_depth)
+				return error("nested too deeply (more than " + std::to_string(limits_.max_depth) + " levels)");
+			if (++elements_ > limits_.max_elements) return too_many_elements();
 			depth_ = std::max(depth_, depth);
 			if (auto e = expect('('); !e) return std::unexpected(std::move(e.error()));
 			if (at_end()) return error("unexpected end of filter");
@@ -883,7 +889,7 @@ namespace {
 				if (!part) return std::unexpected(std::move(part.error()));
 				const bool last = peek() == ')';
 				if (part->second != 0) {
-					if (++elements_ > limits_.max_elements) return error("too many elements");
+					if (++elements_ > limits_.max_elements) return too_many_elements();
 					const std::uint8_t k = first ? filter_part_initial : last ? filter_part_final : filter_part_any;
 					const std::uint32_t p = access::add_node(out_, k);
 					access::set_value_range(out_, p, part->first, part->second);

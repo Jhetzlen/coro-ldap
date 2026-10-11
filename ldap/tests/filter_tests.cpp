@@ -518,10 +518,13 @@ TEST_CASE("filter nesting is bounded", "[filter][limits]")
 	auto too_deep = ldap::filter::raw(nested(ldap::max_filter_depth + 1, "(|"));
 	REQUIRE_FALSE(too_deep);
 	CHECK(too_deep.error().code == client_errc::invalid_filter);
-	CHECK(too_deep.error().context.find("nested too deeply") != std::string::npos);
+	CHECK(too_deep.error().context == "filter: nested too deeply (more than 24 levels) at position 48");
 
 	// Custom limits.
-	CHECK(ldap::filter::raw(nested(3, "(&"), { .max_depth = 2 }).error().code == client_errc::invalid_filter);
+	auto custom_deep = ldap::filter::raw(nested(3, "(&"), { .max_depth = 2 });
+	REQUIRE_FALSE(custom_deep);
+	CHECK(custom_deep.error().code == client_errc::invalid_filter);
+	CHECK(custom_deep.error().context == "filter: nested too deeply (more than 2 levels) at position 4");
 	CHECK(ldap::filter::raw(nested(30, "(&"), { .max_depth = 30 }).has_value());
 
 	// Bombs fail quickly without deep recursion.
@@ -652,8 +655,10 @@ TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limit
 	auto too_many = ldap::filter::raw(and_of(ldap::max_filter_elements));
 	REQUIRE_FALSE(too_many);
 	CHECK(too_many.error().code == client_errc::invalid_filter);
-	CHECK(too_many.error().context.find("too many elements") != std::string::npos);
-	CHECK_FALSE(ldap::filter::raw(and_of(3), { .max_elements = 3 }));
+	CHECK(too_many.error().context == "filter: too many elements (more than 10000) at position 49997");
+	auto custom_many = ldap::filter::raw(and_of(3), { .max_elements = 3 });
+	REQUIRE_FALSE(custom_many);
+	CHECK(custom_many.error().context == "filter: too many elements (more than 3) at position 12");
 	CHECK(ldap::filter::raw(and_of(2), { .max_elements = 3 }));
 	// Substring parts count: one node and five parts.
 	CHECK(raw("(a=1*2*3*4*5)").elements() == 6);
@@ -665,7 +670,7 @@ TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limit
 	many += "x)";
 	auto capped = ldap::filter::raw(many);
 	REQUIRE_FALSE(capped);
-	CHECK(capped.error().context.find("too many elements") != std::string::npos);
+	CHECK(capped.error().context == "filter: too many elements (more than 10000) at position 20002");
 
 	// Encode with custom limits.
 	CHECK_FALSE(to_ber(raw(and_of(3)), { .max_elements = 3 }));
