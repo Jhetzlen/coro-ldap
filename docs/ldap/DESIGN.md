@@ -157,8 +157,8 @@ auto r = co_await conn.search({
 ```
 
 Controls are typed (`ldap::paged`, `ldap::server_side_sort`, …) in a
-`std::variant`, with `ldap::raw_control{oid, critical, bytes}` as the escape
-hatch.
+`std::variant` (`ldap::request_control`), with the wire
+`ldap::control{type, criticality, value}` as the escape hatch.
 
 The designated-initializer style above is for the step 5 request structs,
 which stay aggregates. The wire model of section 10 is allocator-aware and
