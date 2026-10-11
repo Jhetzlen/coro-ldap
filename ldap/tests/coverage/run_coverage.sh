@@ -15,7 +15,7 @@
 # --run-only builds and runs the tests and leaves the .profraw files in
 # BUILD_DIR/llvm-cov/profraw, without llvm-profdata / llvm-cov.
 # When a test fails the report is still written, and the script exits with
-# the test run's status.
+# the first failing step's status.
 #
 # Linux, bash >= 4.4, GNU coreutils (realpath -m), like check_install.sh.
 #
@@ -38,11 +38,19 @@ build="$(realpath -m "${1:-$ldap/../build/coverage}")"
 out="$build/llvm-cov"
 cxx="${CXX:-clang++}"
 
+# Any type: a first configure that failed in project() (before
+# option(JHETZ_LDAP_COVERAGE)) leaves JHETZ_LDAP_COVERAGE:UNINITIALIZED=ON.
 if [[ -f "$build/CMakeCache.txt" ]] &&
-	! grep -qixE 'JHETZ_LDAP_COVERAGE:BOOL=(ON|TRUE|YES|Y|1)' "$build/CMakeCache.txt"; then
+	! grep -qixE 'JHETZ_LDAP_COVERAGE:[A-Z]+=(ON|TRUE|YES|Y|1)' "$build/CMakeCache.txt"; then
 	echo "error: $build is not a coverage build (its CMakeCache.txt lacks" \
 		"JHETZ_LDAP_COVERAGE=ON); refusing to reconfigure it: pass a new or" \
 		"coverage BUILD_DIR" >&2
+	exit 1
+fi
+
+if ! command -v "$cxx" >/dev/null 2>&1; then
+	echo "error: C++ compiler $cxx not found (set CXX to a Clang C++ compiler," \
+		"e.g. CXX=clang++-18)" >&2
 	exit 1
 fi
 
@@ -106,8 +114,12 @@ if [[ ${#profiles[@]} -eq 0 ]]; then
 fi
 
 step "report"
-"$profdata" merge -sparse "${profiles[@]}" -o "$out/ldap.profdata"
-# Every executable: our targets are the only ones built with
+# --failure-mode=all: skip (with a warning) a profile a killed process left
+# truncated, e.g. on a ctest timeout or a child the test kills on purpose
+# (which need not fail the test), rather than lose the whole report; it
+# still fails when no profile is readable.
+"$profdata" merge -sparse --failure-mode=all "${profiles[@]}" -o "$out/ldap.profdata"
+# Every ELF executable: our targets are the only ones built with
 # -fprofile-instr-generate, so the rest (Catch2, Corosio) has no mapping.
 # Only ELF files: llvm-cov rejects anything else (e.g. an executable script).
 # llvm-cov takes the first as a positional argument, the rest with -object.
@@ -119,7 +131,7 @@ while IFS= read -r exe; do
 done < <(find "$build" -path "$build/_deps" -prune -o -path "*/CMakeFiles" -prune -o \
 	-type f -perm -u+x -print | sort)
 if [[ ${#objects[@]} -eq 0 ]]; then
-	echo "error: no executables in $build" >&2
+	echo "error: no ELF executables in $build" >&2
 	exit 1
 fi
 # "N functions have mismatched data" is expected: hash-0 placeholder records
