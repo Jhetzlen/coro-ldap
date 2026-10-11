@@ -330,6 +330,8 @@ result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_v
 	const std::string_view nonce = a->second;
 	if (nonce.empty() || !printable(nonce)) return malformed("server-first-message: nonce");
 	if (!nonce.starts_with(client_nonce_)) return refused("the server nonce does not start with the client nonce");
+	if (nonce.size() <= client_nonce_.size())
+		return refused("the server nonce does not extend the client nonce (no server part)");
 
 	a = in.next();
 	if (!a || a->first != 's') return malformed("server-first-message: no salt (s=)");

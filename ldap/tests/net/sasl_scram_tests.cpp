@@ -168,6 +168,8 @@ TEST_CASE("scram: server-first-message rejections", "[sasl][scram]")
 	refused(first_error("r=XXXprNGfwEbeRWgbNEkqOsrv,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096"),
 	  "does not start with the client nonce");
 	refused(first_error("r=rOprNGfwEbe,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096"), "does not start with the client nonce");
+	refused(
+	  first_error("r=rOprNGfwEbeRWgbNEkqO,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096"), "does not extend the client nonce");
 	refused(first_error("r=rOprNGfwEbeRWgbNEkqOsrv,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4095"),
 	  "iteration count 4095 is below the minimum of 4096");
 	refused(first_error("r=rOprNGfwEbeRWgbNEkqOsrv,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4000000000"), "above the maximum");

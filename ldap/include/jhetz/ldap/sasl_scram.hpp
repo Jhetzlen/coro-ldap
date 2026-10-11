@@ -36,7 +36,7 @@
 //   password and the derived keys are wiped as soon as the proof is built.
 //   Copies the caller made of the password are the caller's to wipe.
 //
-// Errors (contexts start with "SCRAM-SHA-256: ", never contain the password):
+// Errors (contexts never contain the password, nor name the mechanism):
 // - client_errc::encode_error (cond::invalid_input): empty or non-ASCII
 //   username or password, control characters.
 // - client_errc::decode_error (cond::protocol_error): a malformed server

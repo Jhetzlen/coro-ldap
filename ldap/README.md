@@ -194,7 +194,10 @@ on by default) with the network parts. It depends on Corosio and Capy
   `sasl_scram_sha256` (`jhetz/ldap/sasl_scram.hpp`, RFC 5802 / 7677:
   username and password, the bind fails unless the server proves it knows
   the password; SASLprep for ASCII only, no channel binding) are built in,
-  and `sasl_mechanism` is the interface for others.
+  and `sasl_mechanism` is the interface for others. When the server
+  reports success but the mechanism's `complete()` refuses it (e.g. a
+  wrong SCRAM server signature), `sasl_bind` returns the error and closes
+  the connection, since the server considers it bound.
 - `jhetz/ldap/controls.hpp`: typed request controls (`ldap::paged`,
   `manage_dsa_it`, `proxied_authorization`, or a raw `ldap::control`) in a
   `std::variant`, `to_control` / `append_controls` to encode them and
