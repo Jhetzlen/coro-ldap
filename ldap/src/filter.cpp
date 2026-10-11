@@ -1238,7 +1238,7 @@ namespace {
 			const std::size_t at = r.offset();
 			if (depth > limits_.max_depth)
 				return fail(client_errc::nesting_too_deep,
-				  "filter: limit " + std::to_string(limits_.max_depth) + " levels, at offset " + std::to_string(at));
+				  "filter: more than " + std::to_string(limits_.max_depth) + " levels at offset " + std::to_string(at));
 			if (++elements_ > limits_.max_elements)
 				return bad("more than " + std::to_string(limits_.max_elements) + " filter elements", at);
 			depth_ = std::max(depth_, depth);
