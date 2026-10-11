@@ -163,6 +163,7 @@ TEST_CASE("sync: a blocking call from the I/O thread fails with would_deadlock",
 	auto r = got.get_future().get();
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::client_errc::would_deadlock);
+	CHECK(r.error().context == "sync::client");
 	// The client still works from other threads.
 	CHECK(c.who_am_i() == "dn:cn=me");
 }

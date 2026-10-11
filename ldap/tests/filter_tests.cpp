@@ -784,6 +784,11 @@ TEST_CASE("decode_filter rejects BER without an RFC 4515 form", "[filter][decode
 	};
 	CHECK(decode(nested(ldap::max_filter_depth)).has_value());
 	CHECK(code(nested(ldap::max_filter_depth + 1)) == client_errc::nesting_too_deep);
+	auto deep = decode(nested(ldap::max_filter_depth + 1));
+	REQUIRE_FALSE(deep.has_value());
+	CHECK(std::string(deep.error().context)
+		  == "filter: more than " + std::to_string(ldap::max_filter_depth) + " levels at offset "
+			   + std::to_string(2 * ldap::max_filter_depth));
 
 	// Accepted variations: explicit dnAttributes FALSE, unknown trailing
 	// elements. The tree is the same as without them.

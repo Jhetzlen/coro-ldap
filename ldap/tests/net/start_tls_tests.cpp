@@ -314,6 +314,38 @@ TEST_CASE("start_tls: refused while an operation is outstanding", "[net][starttl
 	drive_until(m.ioc, [&search] { return search.done(); });
 }
 
+TEST_CASE("start_tls: the refusal counts the outstanding requests", "[net][starttls]")
+{
+	mock_ldap m;
+	m.serve({ step{}, step{} });// reads both searches, never answers
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> first, second;
+	spawn(m.ioc, m.conn.search({}), first);
+	spawn(m.ioc, m.conn.search({}), second);
+	drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+	auto r = m.run(m.conn.start_tls());
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::client_errc::operation_in_progress);
+	CHECK(r.error().context == "start tls with 2 requests outstanding");
+	m.conn.close();
+	drive_until(m.ioc, [&] { return first.done() && second.done(); });
+}
+
+TEST_CASE("start_tls: refused during a bind", "[net][starttls]")
+{
+	mock_ldap m;
+	m.serve({ step{} });// reads the bind, never answers
+	outcome<ldap::result<void>> bind;
+	spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
+	drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+	auto r = m.run(m.conn.start_tls());
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::client_errc::operation_in_progress);
+	CHECK(r.error().context == "start tls during a bind");
+	CHECK(m.conn.is_open());
+	m.conn.close();
+	drive_until(m.ioc, [&bind] { return bind.done(); });
+}
+
 TEST_CASE("start_tls: only on plain TCP connections", "[net][starttls]")
 {
 	mock_ldap m;// a wrapped custom stream
@@ -345,12 +377,17 @@ TEST_CASE("RFC 4511 4.14.1: requests are refused while StartTLS is in progress",
 	auto c = f.connect();
 	outcome<ldap::result<void>> upgrade;
 	outcome<ldap::result<void>> bind;
+	outcome<ldap::result<void>> again;
 	spawn(f.ioc, c.start_tls(trusting().tls), upgrade);
 	spawn(f.ioc, c.simple_bind(ldap::dn{}, ""), bind);
-	drive_until(f.ioc, [&] { return upgrade.done() && bind.done(); });
+	spawn(f.ioc, c.start_tls(trusting().tls), again);
+	drive_until(f.ioc, [&] { return upgrade.done() && bind.done() && again.done(); });
 	REQUIRE_FALSE(bind.get().has_value());
 	CHECK(bind.get().error().code == ldap::client_errc::operation_in_progress);
 	CHECK(bind.get().error().context == "bind \"\" during StartTLS");
+	REQUIRE_FALSE(again.get().has_value());
+	CHECK(again.get().error().code == ldap::client_errc::operation_in_progress);
+	CHECK(again.get().error().context == "start tls during an earlier StartTLS");
 	REQUIRE(upgrade.get().has_value());
 	CHECK(c.is_tls());
 	// The server got nothing in clear after the StartTLS request: its one

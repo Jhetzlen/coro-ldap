@@ -395,7 +395,9 @@ TEST_CASE("ber::reader::enter_encapsulated", "[ber][reader]")
 		REQUIRE(a);
 		auto b = a->enter_encapsulated();
 		REQUIRE(b);
-		CHECK(code_of(b->enter()) == client_errc::nesting_too_deep);
+		auto deep = b->enter();
+		CHECK(code_of(deep) == client_errc::nesting_too_deep);
+		CHECK(context_of(deep) == "ber: more than 2 levels at offset 4");
 
 		ber::reader shallow(data, 1);
 		auto s = shallow.enter();

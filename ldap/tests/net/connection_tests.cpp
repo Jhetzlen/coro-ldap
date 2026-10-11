@@ -341,6 +341,8 @@ TEST_CASE("connection: a second next() on the same stream is refused", "[net][co
 	auto second = m.run(s->next());
 	REQUIRE_FALSE(second.has_value());
 	CHECK(second.error().code == client_errc::operation_in_progress);
+	CHECK(
+	  second.error().context == "search ou=people,dc=example,dc=org during an earlier next() on this search_stream");
 	m.conn.close();
 	drive_until(m.ioc, [&first] { return first.done(); });
 	REQUIRE_FALSE(first.get().has_value());
@@ -369,9 +371,15 @@ TEST_CASE("connection: moving connections and streams", "[net][connection]")
 		auto e = m.run(empty.next());
 		REQUIRE_FALSE(e.has_value());
 		CHECK(e.error().code == client_errc::not_connected);
+		CHECK(e.error().context == "search");
 		auto nc = m.run(m.conn.search({}));
 		REQUIRE_FALSE(nc.has_value());
 		CHECK(nc.error().code == client_errc::not_connected);
+		CHECK(nc.error().context == "search \"\"");
+		auto tls = m.run(m.conn.start_tls());
+		REQUIRE_FALSE(tls.has_value());
+		CHECK(tls.error().code == client_errc::not_connected);
+		CHECK(tls.error().context == "start tls");
 	}
 	SECTION("a stream outliving its connection")
 	{
@@ -1217,6 +1225,26 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 		REQUIRE(m.log.received.size() == 2);
 		CHECK(std::get<ldap::bind_request>(m.log.received[0].op).name == "cn=admin,dc=example,dc=org");
 		CHECK(std::get<ldap::bind_request>(m.log.received[1].op).name == "");
+	}
+	SECTION("a bind cancelled while waiting for the first")
+	{
+		mock_ldap m;
+		m.serve({ step{}, step{} });// reads the first bind, never answers
+		outcome<ldap::result<void>> first, second;
+		std::stop_source stop;
+		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), first);
+		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+		spawn(m.ioc, stop.get_token(), m.conn.simple_bind(ldap::dn{}, ""), second);
+		CHECK_FALSE(second.done());
+		stop.request_stop();
+		drive_until(m.ioc, [&second] { return second.done(); });
+		REQUIRE_FALSE(second.get().has_value());
+		CHECK(second.get().error().code == ldap::cond::canceled);
+		CHECK(second.get().error().context == "bind \"\"");
+		CHECK(m.log.received.size() == 1);// the waiting bind was never sent
+		m.conn.close();
+		m.sockets.client.close();// closing a wrapped transport leaves the socket open
+		drive_until(m.ioc, [&] { return first.done() && m.server.done(); });
 	}
 	SECTION("unbind during a bind closes without an UnbindRequest")
 	{
