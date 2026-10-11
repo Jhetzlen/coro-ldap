@@ -214,7 +214,14 @@ on by default) with the network parts. It depends on Corosio and Capy
   control codecs (`encode_` / `decode_sort_result`, `encode_` /
   `decode_read_entry`) are in `message.hpp`, for mock servers. The sort
   result comes with the SearchResultDone, so it needs `search_stream`
-  (`search()` returns only the entries).
+  (`search()` returns only the entries). RFC 2891 says a server that
+  cannot sort SHOULD fail a critical sort and return the entries unsorted
+  for a non-critical one, with a SortResult either way, but servers
+  deviate: OpenLDAP 2.7's sssvlv fails an unsortable search with
+  inappropriateMatching (18) and no SortResult even when not critical, and
+  fails every multi-key sort with protocolError (2), libldap's own
+  included. So check the search's result, and handle `find_sort_result`
+  returning nullopt ("not known to be sorted").
 - `jhetz/ldap/mapping.hpp` (#9): typed struct mapping. A descriptor
   (`ldap::schema<T> = ldap::describe(ldap::object_class(...),
   ldap::field<&T::m>("attr", ldap::read_only)...)`) maps members to

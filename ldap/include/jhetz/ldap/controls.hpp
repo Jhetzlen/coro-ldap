@@ -60,11 +60,17 @@ struct proxied_authorization
 };
 
 // Server Side Sorting (RFC 2891, OID sort_request_oid): sort the search's
-// entries by `keys`, the first one most significant. A server that cannot
-// sort fails the search (critical) or returns the entries unsorted (not
-// critical); either way the SearchResultDone carries a sort result control
-// (find_sort_result). Fails with encode_error, before anything is sent, if
-// there are no keys or a key has no attribute.
+// entries by `keys`, the first one most significant. RFC 2891 section 1.2
+// says a server that supports the control but cannot sort SHOULD fail the
+// search (critical) or return the entries unsorted (not critical), with a
+// sort result control on the SearchResultDone either way; a server without
+// sort support ignores a non-critical control and sends none. Servers
+// deviate: OpenLDAP 2.7's sssvlv fails an unsortable search with 18
+// inappropriateMatching and no sort result even when not critical, and
+// fails any multi-key sort with 2 protocolError (libldap's own requests
+// too). So check the search's result, and treat find_sort_result()
+// returning nullopt as "not known to be sorted". Fails with encode_error,
+// before anything is sent, if there are no keys or a key has no attribute.
 struct sort_key
 {
 	std::string attribute{};// attributeType: an attribute description
@@ -124,7 +130,9 @@ result<std::optional<paged_results>> find_paged(const std::pmr::vector<control> 
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 // The sort result control among `controls` (a SearchResultDone's), nullopt
-// if there is none, or decode_error if it is malformed.
+// if there is none, or decode_error if it is malformed. nullopt is a normal
+// answer, even to a search that sent server_side_sort (see there): callers
+// must handle it, as "not known to be sorted".
 result<std::optional<sort_result>> find_sort_result(const std::pmr::vector<control> &controls,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
