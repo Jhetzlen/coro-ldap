@@ -28,7 +28,8 @@
 //   that SASLprep changes (e.g. one with a non-ASCII space or not in NFKC)
 //   does not match there. Passwords already in SASLprep form work.
 // - The authorization identity must be valid UTF-8 without control
-//   characters; it is not SASLprep'ed (RFC 5802 does not ask for it).
+//   characters (C0, DEL, C1: U+0000-U+001F, U+007F-U+009F); any other code
+//   point is accepted. It is not SASLprep'ed (RFC 5802 does not ask for it).
 // - '=' and ',' in the username and authorization identity are escaped as
 //   "=3D" and "=2C" (RFC 5802 section 5.1).
 // - The server's iteration count must be in [min_iterations,

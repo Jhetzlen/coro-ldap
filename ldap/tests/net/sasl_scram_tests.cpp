@@ -313,8 +313,33 @@ TEST_CASE("scram: SASLprep rejections and input checks", "[sasl][scram]")
 		  start_error("user", "s3cret", "u:" + std::string(bad)), "authorization identity is not valid UTF-8");
 	}
 
-	// The authorization identity: UTF-8, no control characters; not SASLprep'ed.
-	check_input_error(start_error("user", "s3cret", "dn:\n"), "authorization identity contains a control character");
+	// The authorization identity: UTF-8, no control characters (C0, DEL, C1); not SASLprep'ed.
+	for (const std::string_view control : {
+		   std::string_view("\0", 1),
+		   std::string_view("\n"),
+		   std::string_view("\x1F"),
+		   std::string_view("\x7F"),
+		   std::string_view("\xC2\x80"),// U+0080
+		   std::string_view("\xC2\x85"),// U+0085 NEXT LINE
+		   std::string_view("\xC2\x9F"),// U+009F
+		 }) {
+		INFO("bytes " << hex(control));
+		check_input_error(start_error("user", "s3cret", "u:a" + std::string(control)),
+		  "authorization identity contains a control character");
+	}
+	// Just outside the control ranges, and other non-ASCII characters, go on the wire as given.
+	for (const std::string_view ok : {
+		   std::string_view(" ~"),
+		   std::string_view("\xC2\xA0"),// U+00A0 NO-BREAK SPACE
+		   std::string_view("\xC2\xAD"),// U+00AD SOFT HYPHEN
+		   std::string_view("\xE2\x80\x8E"),// U+200E LEFT-TO-RIGHT MARK
+		   std::string_view("\xE2\x80\xA8"),// U+2028 LINE SEPARATOR
+		   std::string_view("\xF0\x9F\x98\x80"),// U+1F600
+		 }) {
+		INFO("bytes " << hex(ok));
+		auto m = ldap::detail::scram_test_access::with_nonce("user", "pencil", "u:" + std::string(ok), "fixednonce");
+		CHECK(response(m.start()) == "n,a=u:" + std::string(ok) + ",n=user,r=fixednonce");
+	}
 	{
 		auto m = ldap::detail::scram_test_access::with_nonce(
 		  "user", "pencil", "dn:cn=J\xC3\xB6rg \xEF\xBC\xAA,dc=example", "fixednonce");

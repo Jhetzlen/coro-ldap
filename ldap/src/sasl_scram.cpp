@@ -239,20 +239,6 @@ namespace {
 		return {};
 	}
 
-	// Well-formed UTF-8 (RFC 3629): no overlong forms, surrogates or code
-	// points above U+10FFFF.
-	bool valid_utf8(std::string_view s)
-	{
-		const auto *p = reinterpret_cast<const std::uint8_t *>(s.data());
-		const auto n = static_cast<std::int64_t>(s.size());
-		for (std::int64_t i = 0; i < n;) {
-			UChar32 c = 0;
-			U8_NEXT(p, i, n, c);
-			if (c < 0) return false;
-		}
-		return true;
-	}
-
 	// saslname (RFC 5802 section 5.1): '=' -> "=3D", ',' -> "=2C".
 	std::string escape_saslname(std::string_view s)
 	{
@@ -411,11 +397,20 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 	if (auto r = saslprep(username_, "username", prep_kind::query, user); !r)
 		return std::unexpected(std::move(r.error()));
 	// The authorization identity is a saslname too (UTF-8), but RFC 5802
-	// does not prepare it: it is sent as given (escaped) once checked.
-	if (!valid_utf8(authz_id_)) return input_error("authorization identity is not valid UTF-8");
-	for (const char ch : authz_id_) {
-		const auto c = static_cast<unsigned char>(ch);
-		if (c < 0x20 || c == 0x7f) return input_error("authorization identity contains a control character");
+	// does not prepare it: it is sent as given (escaped) once checked. It
+	// must be well-formed UTF-8 (RFC 3629: U8_NEXT refuses overlong forms,
+	// surrogates and code points above U+10FFFF) without control characters
+	// (C0, DEL, C1); every other code point is accepted.
+	{
+		const auto *p = reinterpret_cast<const std::uint8_t *>(authz_id_.data());
+		const auto n = static_cast<std::int64_t>(authz_id_.size());
+		for (std::int64_t i = 0; i < n;) {
+			UChar32 c = 0;
+			U8_NEXT(p, i, n, c);
+			if (c < 0) return input_error("authorization identity is not valid UTF-8");
+			if (c < 0x20 || (c >= 0x7f && c < 0xa0))
+				return input_error("authorization identity contains a control character");
+		}
 	}
 
 	if (fixed_nonce_) {
