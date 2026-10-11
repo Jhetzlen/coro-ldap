@@ -13,8 +13,12 @@
 #include "net_test_support.hpp"
 
 #include <boost/capy/buffers.hpp>
+#include <boost/corosio/endpoint.hpp>
+#include <boost/corosio/ipv4_address.hpp>
 #include <boost/corosio/local_connect_pair.hpp>
 #include <boost/corosio/local_stream_socket.hpp>
+#include <boost/corosio/tcp_acceptor.hpp>
+#include <boost/corosio/tcp_socket.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -127,9 +131,9 @@ inline capy::task<void> serve_script(net::transport t, std::vector<step> script,
 
 // Forwards to a socket owned elsewhere, so the test can still close it
 // (transport::close() does nothing on a wrapped stream).
-struct socket_ref
+template<class Socket> struct socket_ref
 {
-	corosio::local_stream_socket *s;
+	Socket *s;
 	template<capy::MutableBufferSequence MB> auto read_some(MB buffers) { return s->read_some(buffers); }
 	template<capy::ConstBufferSequence CB> auto write_some(CB buffers) { return s->write_some(buffers); }
 };
@@ -174,12 +178,10 @@ struct mock_ldap
 		drive(ioc);
 	}
 
-	void serve(std::vector<step> script)
-	{
-		spawn(ioc,
-		  serve_script(net::transport::wrap(socket_ref{ &sockets.server }, "server"), std::move(script), log),
-		  server);
-	}
+	// The server's end, to write outside the script.
+	net::transport server_end() { return net::transport::wrap(socket_ref{ &sockets.server }, "server"); }
+
+	void serve(std::vector<step> script) { spawn(ioc, serve_script(server_end(), std::move(script), log), server); }
 
 	// Runs `t` until it finishes; the server, parked on its next request,
 	// is left as is.
@@ -195,6 +197,71 @@ struct mock_ldap
 	}
 
 	// The script ran to its end without errors.
+	void check_server()
+	{
+		drive_until(ioc, [this] { return server.done(); });
+		CHECK(log.error == "");
+		CHECK(server.done());
+	}
+};
+
+// mock_ldap over loopback TCP: the connection is made by ldap::connect, so
+// its transport is plain TCP and start_tls() sends its request (the server
+// can only refuse it: it does not speak TLS).
+struct tcp_mock_ldap
+{
+	corosio::io_context ioc{};
+	corosio::tcp_acceptor acc{ ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1 };
+	corosio::tcp_socket peer{ ioc };
+	ldap::connection conn{};
+	server_log log{};
+	outcome<void> server{};
+
+	explicit tcp_mock_ldap(ldap::connection_options options = {})
+	{
+		outcome<void> accepted;
+		spawn(
+		  ioc,
+		  [](corosio::tcp_acceptor &a, corosio::tcp_socket &p) -> capy::task<void> {
+			  auto [ec] = co_await a.accept(p);
+			  if (ec) throw std::system_error(ec, "accept");
+		  }(acc, peer),
+		  accepted);
+		auto u = ldap::url::parse("ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port()));
+		REQUIRE(u.has_value());
+		auto c = finish(ioc, ldap::connect(ioc, *u, options));
+		REQUIRE(c.has_value());
+		conn = std::move(*c);
+		drive_until(ioc, [&accepted] { return accepted.done(); });
+		accepted.get();
+		log.hang_up = [this] { peer.close(); };
+	}
+
+	tcp_mock_ldap(const tcp_mock_ldap &) = delete;
+	tcp_mock_ldap &operator=(const tcp_mock_ldap &) = delete;
+
+	~tcp_mock_ldap()
+	{
+		conn.close();
+		peer.close();
+		drive(ioc);
+	}
+
+	net::transport server_end() { return net::transport::wrap(socket_ref{ &peer }, "server"); }
+
+	void serve(std::vector<step> script) { spawn(ioc, serve_script(server_end(), std::move(script), log), server); }
+
+	template<class T> T run(capy::task<T> t)
+	{
+		outcome<T> out;
+		spawn(ioc, std::move(t), out);
+		drive_until(ioc, [&out] { return out.done(); });
+		if constexpr (std::is_void_v<T>)
+			out.get();
+		else
+			return std::move(out.get());
+	}
+
 	void check_server()
 	{
 		drive_until(ioc, [this] { return server.done(); });

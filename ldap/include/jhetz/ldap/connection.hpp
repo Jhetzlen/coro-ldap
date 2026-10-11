@@ -504,9 +504,11 @@ class connection
 	// StartTLS (RFC 4511 section 4.14): upgrades a plain ldap:// connection
 	// to TLS in place, with the same verification rules as ldaps://
 	// (`options`; the name checked is options.server_name, else the URL's
-	// host). Refused with operation_in_progress while any operation (or a
-	// bind exchange) is outstanding; while it runs, starting another
-	// operation fails the same way. The answers still due to destroyed
+	// host). Fails with invalid_argument on a connection that is not plain
+	// TCP (ldaps://, ldapi://, a custom stream), and with
+	// operation_in_progress while any operation (or a bind exchange) is
+	// outstanding; while it runs, starting another operation fails the
+	// same way. The answers still due to destroyed
 	// paged_searches' releases are waited for first (RFC 4513 section 3.1.1:
 	// no response outstanding), until they arrive or their deadline passes
 	// (see paged_search); the checks are then made again, so an operation
@@ -518,9 +520,9 @@ class connection
 	// refused (decode_error: a plaintext injection attempt), and a failed
 	// handshake closes the connection, as does a cancellation or timeout
 	// (StartTLS cannot be abandoned, RFC 4511 section 4.11). `timeout` bounds
-	// the exchange, the wait for due answers included, and the handshake
-	// (nullopt: connection_options::operation_timeout for the exchange, no
-	// limit for the handshake).
+	// the wait for due answers, then the exchange, then the handshake, each
+	// on its own (nullopt: connection_options::operation_timeout for the
+	// wait and the exchange, no limit for the handshake).
 	boost::capy::task<result<void>> start_tls(net::tls_options options = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 

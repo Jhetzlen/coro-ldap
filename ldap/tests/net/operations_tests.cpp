@@ -546,8 +546,8 @@ capy::task<ldap::result<void>> bind_admin(ldap::connection &c)
 
 // Reads one entry of a paged search of page size 1 whose first page ends
 // with cookie "page2", then destroys it: the release (id 2) is sent and
-// read by the server's second step.
-void release_after_one_page(mock_ldap &m, ldap::search_params params = people_search())
+// read by the server's second step. `M` is mock_ldap or tcp_mock_ldap.
+template<class M> void release_after_one_page(M &m, ldap::search_params params = people_search())
 {
 	auto s = m.run(m.conn.search_paged(std::move(params), 1));
 	REQUIRE(s.has_value());
@@ -561,18 +561,32 @@ void release_after_one_page(mock_ldap &m, ldap::search_params params = people_se
 }
 
 // Writes `msg` from the server's end, outside its script.
-void server_sends(mock_ldap &m, const ldap::message &msg)
+template<class M> void server_sends(M &m, const ldap::message &msg)
 {
-	auto t = net::transport::wrap(socket_ref{ &m.sockets.server }, "server");
+	auto t = m.server_end();
 	const std::string bytes = bytes_of(msg);
 	REQUIRE(m.run(net::write_bytes(t, std::as_bytes(std::span(bytes)))).has_value());
 }
 
-// Runs what is ready now, without blocking (the reader stays parked).
-void settle(mock_ldap &m)
+// Runs the io_context briefly (the reader stays parked): what is ready
+// runs, and a request sent meanwhile reaches the server.
+template<class M> void settle(M &m)
 {
-	m.ioc.poll();
+	m.ioc.run_for(std::chrono::milliseconds(20));
 	m.ioc.restart();
+}
+
+// The server's answer to StartTLS over tcp_mock_ldap, which does not speak
+// TLS: a refusal, which leaves the connection usable in clear.
+ldap::message start_tls_refused(std::int32_t id)
+{
+	return ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ 52, "", "no TLS here" } } };
+}
+
+bool is_start_tls(const ldap::message &m)
+{
+	const auto *x = std::get_if<ldap::extended_request>(&m.op);
+	return x != nullptr && x->request_name == ldap::start_tls_oid;
 }
 
 }// namespace
@@ -869,31 +883,51 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 
 // RFC 4513 section 3.1.1: StartTLS is not sent while a response is still
 // due, and the answer to a release is always due: StartTLS waits for it.
-// The mock is not a TCP connection, so a StartTLS past the wait fails with
-// invalid_argument without sending anything.
+// Over tcp_mock_ldap StartTLS is sent once the wait ends, and the server
+// refuses it (errc::unavailable), which leaves the connection usable.
 TEST_CASE("operations: StartTLS waits for the answer to a paged search release", "[net][operations][paged][starttls]")
 {
 	SECTION("waits until the release's SearchResultDone arrives, then proceeds")
 	{
-		mock_ldap m;
+		tcp_mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
-		  step{} });// reads the release, does not answer
+		  step{},// reads the release, does not answer
+		  answer({ start_tls_refused(3) }) });
 		release_after_one_page(m);
 		outcome<ldap::result<void>> tls;
 		spawn(m.ioc, m.conn.start_tls(), tls);
 		settle(m);
 		CHECK_FALSE(tls.done());
 		CHECK(m.conn.outstanding() == 1);
+		CHECK(m.log.received.size() == 2);// no StartTLS yet
 
 		server_sends(m, paged_done(2, ""));
 		drive_until(m.ioc, [&tls] { return tls.done(); });
 		REQUIRE_FALSE(tls.get().has_value());
-		CHECK(tls.get().error().code == std::errc::invalid_argument);// past the wait
+		CHECK(tls.get().error().code == errc::unavailable);// sent, and refused
 		CHECK(m.conn.outstanding() == 0);
 		CHECK(m.conn.is_open());
 		m.check_server();
-		REQUIRE(m.log.received.size() == 2);
+		REQUIRE(m.log.received.size() == 3);
 		check_release(m.log.received[1], m.log.received[0], "page2");
+		CHECK(is_start_tls(m.log.received[2]));
+	}
+	SECTION("not a plain TCP connection: refused at once, answers due or not")
+	{
+		mock_ldap m;// a wrapped custom stream
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  step{} });// reads the release, does not answer
+		release_after_one_page(m);
+		auto r = m.run(m.conn.start_tls());
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == std::errc::invalid_argument);
+		CHECK(m.conn.outstanding() == 1);// still due
+		server_sends(m, paged_done(2, ""));
+		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.is_open());
+		m.check_server();
+		CHECK(m.log.received.size() == 2);
 	}
 	SECTION("refused for a real operation, answers due or not")
 	{
@@ -917,7 +951,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 	}
 	SECTION("a bind started while it waits: refused once the answer arrives, as if called then")
 	{
-		mock_ldap m;
+		tcp_mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
 		  step{},// reads the release, does not answer
 		  step{} });// reads the bind, does not answer
@@ -940,12 +974,15 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		CHECK(bound.get().has_value());
 		CHECK(m.conn.outstanding() == 0);
 		CHECK(m.conn.is_open());
+		m.check_server();
+		CHECK(m.log.received.size() == 3);// no StartTLS
 	}
 	SECTION("the release's deadline passes: StartTLS proceeds, the reader stops, a late answer is dropped")
 	{
-		mock_ldap m;
+		tcp_mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
-		  step{} });// reads the release, never answers in time
+		  step{},// reads the release, never answers in time
+		  answer({ start_tls_refused(3) }) });
 		auto p = people_search();
 		p.timeout = std::chrono::milliseconds(100);// the page's limit, and the release's
 		release_after_one_page(m, std::move(p));
@@ -954,9 +991,11 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		auto r = m.run(m.conn.start_tls());// no limit of its own
 		CHECK(std::chrono::steady_clock::now() - start >= std::chrono::milliseconds(50));// most of the 100 ms
 		REQUIRE_FALSE(r.has_value());
-		CHECK(r.error().code == std::errc::invalid_argument);// past the wait
+		CHECK(r.error().code == errc::unavailable);// sent, and refused
 		CHECK(m.conn.outstanding() == 0);
 		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(is_start_tls(m.log.received[2]));
 		// Nothing left running: no reader parked on the socket, no timer.
 		const auto idle = std::chrono::steady_clock::now();
 		m.ioc.run_for(io_limit);
@@ -965,7 +1004,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 
 		// The release's id is still known: its late answer is dropped.
 		server_sends(m, paged_done(2, ""));
-		server_sends(m, bind_resp(3));// answers the bind below before it is read
+		server_sends(m, bind_resp(4));// answers the bind below before it is read
 		auto b = m.run(bind_admin(m.conn));
 		CHECK(b.has_value());
 		CHECK(m.conn.is_open());
@@ -984,7 +1023,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 	}
 	SECTION("its own timeout, or a stop, ends the wait; nothing is sent")
 	{
-		mock_ldap m;
+		tcp_mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
 		  step{} });// reads the release, does not answer
 		release_after_one_page(m);
@@ -1010,11 +1049,12 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
 		CHECK(m.conn.outstanding() == 0);
 		m.check_server();
+		settle(m);
 		CHECK(m.log.received.size() == 2);// no StartTLS
 	}
 	SECTION("the connection closes while it waits")
 	{
-		mock_ldap m;
+		tcp_mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
 		  step{} });// reads the release, does not answer
 		release_after_one_page(m);
@@ -1031,7 +1071,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 	}
 	SECTION("unbind while it waits: StartTLS is not sent after the UnbindRequest")
 	{
-		mock_ldap m;
+		tcp_mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
 		  step{},// reads the release, never answers
 		  step{} });// reads the UnbindRequest
@@ -1050,9 +1090,10 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 	}
 	SECTION("the answer is read with no other operation running")
 	{
-		mock_ldap m;
+		tcp_mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
-		  answer({ paged_done(2, "") }) });// the release's answer: read and dropped
+		  answer({ paged_done(2, "") }),// the release's answer: read and dropped
+		  answer({ start_tls_refused(3) }) });
 		{
 			auto s = m.run(m.conn.search_paged(people_search(), 1));
 			REQUIRE(s.has_value());
@@ -1067,16 +1108,18 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		CHECK(m.conn.is_open());
 		auto r = m.run(m.conn.start_tls());
 		REQUIRE_FALSE(r.has_value());
-		CHECK(r.error().code == std::errc::invalid_argument);// not a TCP connection: past the check
+		CHECK(r.error().code == errc::unavailable);// sent, and refused
 		m.check_server();
-		REQUIRE(m.log.received.size() == 2);
+		REQUIRE(m.log.received.size() == 3);
 		check_release(m.log.received[1], m.log.received[0], "page2");
+		CHECK(is_start_tls(m.log.received[2]));
 	}
 	SECTION("an abandoned search is not waited for: it may never be answered")
 	{
-		mock_ldap m;
+		tcp_mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A") }),
-		  step{} });// reads the AbandonRequest, answers nothing
+		  step{},// reads the AbandonRequest, answers nothing
+		  answer({ start_tls_refused(3) }) });
 		{
 			auto s = m.run(m.conn.search_stream(people_search()));
 			REQUIRE(s.has_value());
@@ -1088,9 +1131,10 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 		auto r = m.run(m.conn.start_tls());
 		REQUIRE_FALSE(r.has_value());
-		CHECK(r.error().code == std::errc::invalid_argument);// not a TCP connection: past the check
+		CHECK(r.error().code == errc::unavailable);// sent, and refused
 		m.check_server();
 		CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+		CHECK(is_start_tls(m.log.received[2]));
 	}
 	SECTION("unbind does not wait for the release's answer")
 	{
@@ -1114,6 +1158,40 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		REQUIRE(m.log.received.size() == 3);
 		CHECK(std::holds_alternative<ldap::unbind_request>(m.log.received[2].op));
 	}
+}
+
+// The release's deadline and StartTLS's timeout are about the same here
+// (both connection_options::operation_timeout), so the wait ends with
+// little of StartTLS's timeout left: the ExtendedResponse gets a timeout of
+// its own, since giving up on StartTLS closes the connection (RFC 4511
+// section 4.11).
+TEST_CASE("operations: StartTLS after waiting for a release's answer has its whole timeout",
+  "[net][operations][paged][starttls][timeout]")
+{
+	tcp_mock_ldap m({ .operation_timeout = std::chrono::milliseconds(400) });
+	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+	  step{},// reads the release, never answers
+	  step{} });// reads StartTLS, answered late below
+	release_after_one_page(m);
+	outcome<ldap::result<void>> tls;
+	spawn(m.ioc, m.conn.start_tls(), tls);
+	drive_until(m.ioc, [&m] { return m.log.received.size() == 3; });// once the release's deadline passed
+	REQUIRE(m.log.received.size() == 3);
+	CHECK(is_start_tls(m.log.received[2]));
+	// Much longer than what was left of StartTLS's timeout after the wait,
+	// well within a whole one.
+	m.ioc.run_for(std::chrono::milliseconds(200));
+	m.ioc.restart();
+	CHECK_FALSE(tls.done());
+	server_sends(m, start_tls_refused(3));
+	drive_until(m.ioc, [&tls] { return tls.done(); });
+	REQUIRE_FALSE(tls.get().has_value());
+	CHECK(tls.get().error().code == errc::unavailable);// answered in time, and refused
+	CHECK(m.conn.is_open());
+	CHECK(m.conn.outstanding() == 0);
+	m.check_server();
+	server_sends(m, bind_resp(4));// answers the bind below before it is read
+	CHECK(m.run(bind_admin(m.conn)).has_value());
 }
 
 // Late responses are dropped for the last 1024 abandoned requests; when

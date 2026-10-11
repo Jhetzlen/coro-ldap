@@ -658,8 +658,11 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   a transport that is not plain TCP and a non-empty read buffer (bytes that
   arrived before the handshake were not protected: CVE-2011-0411).
   `connection::start_tls(options, timeout)` refuses while operations are
-  outstanding, waits (within `timeout`, cancellable) until no paged search
-  release's answer is due and checks again, sends the ExtendedRequest,
+  outstanding or on a transport that is not plain TCP, waits (within
+  `timeout`, cancellable) until no paged search release's answer is due
+  and checks again, sends the ExtendedRequest and waits for its response
+  within a fresh `timeout` (a wait that used most of the first would
+  otherwise leave StartTLS to time out, which closes the connection),
   blocks new requests until done (RFC 4511 section 4.14.1), waits for the
   reader and writer to stop, then upgrades. A
   refusal by the server leaves the connection usable in clear; injected

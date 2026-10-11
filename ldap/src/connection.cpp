@@ -1319,14 +1319,13 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	std::string context = "start tls";
 	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
 	impl_ref self(impl_);
-	// One budget for the whole exchange, waiting for due answers included.
-	const auto deadline = deadline_after(timeout ? timeout : self->default_timeout);
 	// StartTLS may only be sent once every response is received (RFC 4513
 	// section 3.1.1). Operations are refused; the answers still due to
 	// released paged searches are waited for (they are certain, or given
-	// up on at their own deadline). The checks are made again after the
-	// wait: an operation started meanwhile is refused as if start_tls had
-	// been called then.
+	// up on at their own deadline), within `timeout`. The checks are made
+	// again after the wait: an operation started meanwhile is refused as
+	// if start_tls had been called then.
+	const auto wait_deadline = deadline_after(timeout ? timeout : self->default_timeout);
 	while (true) {
 		if (!self->open) co_return std::unexpected(self->not_connected(context));
 		if (self->upgrading)
@@ -1335,11 +1334,15 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 		if (const std::size_t n = self->pending.size(); n != 0)
 			co_return fail(client_errc::operation_in_progress,
 			  context + " with " + std::to_string(n) + (n == 1 ? " request" : " requests") + " outstanding");
+		// Checked before the wait too, so misuse fails at once.
+		if (self->transport.type() != net::transport::kind::tcp || self->transport.is_tls())
+			co_return fail(std::make_error_code(std::errc::invalid_argument),
+			  context + ": needs a plain TCP connection (not ldaps://, ldapi:// or a custom stream)");
 		const std::size_t due = self->due_answers;
 		if (due == 0) break;
 		std::error_code ec;
-		if (deadline) {
-			auto [e] = co_await corosio::timeout(self->due_idle.wait(), *deadline);
+		if (wait_deadline) {
+			auto [e] = co_await corosio::timeout(self->due_idle.wait(), *wait_deadline);
 			ec = e;
 		} else {
 			auto [e] = co_await self->due_idle.wait();
@@ -1351,9 +1354,6 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 			  context + " (waiting for the answer" + (due == 1 ? "" : "s") + " to " + std::to_string(due)
 				+ " paged search release" + (due == 1 ? ")" : "s)"));
 	}
-	if (self->transport.type() != net::transport::kind::tcp || self->transport.is_tls())
-		co_return fail(std::make_error_code(std::errc::invalid_argument),
-		  context + ": needs a plain TCP connection (not ldaps://, ldapi:// or a custom stream)");
 
 	// The ExtendedRequest; nothing else may be sent until it is answered
 	// and the handshake is done (RFC 4511 section 4.14.1).
@@ -1371,7 +1371,9 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	} clear{ *self };
 	{
 		registration reg(*self, p);
-		auto m = co_await self->next_response(p, deadline, context);
+		// A budget of its own: the wait may have used most of the first one,
+		// and giving up on StartTLS closes the connection.
+		auto m = co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout), context);
 		if (!m) co_return std::unexpected(std::move(m.error()));
 		const auto &x = std::get<extended_response>(m->op);
 		if (!x.result.is_success()) co_return std::unexpected(x.result.to_error(context));// still usable, in clear
@@ -1425,6 +1427,7 @@ capy::task<result<void>> connection::unbind()
 	// not_connected instead of being sent after the UnbindRequest.
 	for (auto &a : self->abandoned) a.due = false;
 	self->due_answers = 0;
+	self->due_changed.set();// the due watcher ends
 	self->stop_reader_if_idle();
 	message request{ 0, unbind_request{} };
 	if (auto r = self->submit(request, nullptr, context); !r) co_return r;
