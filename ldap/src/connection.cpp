@@ -408,7 +408,12 @@ struct connection::impl
 	{
 		// Listed before `m` is queued, like abandon(): nothing may fail after
 		// that, or its answer would match no request. Id 0 is never a
-		// request's; submit fails before queueing, and shut clears the list.
+		// request's. submit returns an error only before queueing, so the
+		// entry is still last then. It may start the writer inline, whose
+		// failed write runs shut() inside it, which clears the list: hence
+		// the guarded pop_back() on a throw, and the !open check after it.
+		// A throw after queueing leaves the bytes unsent (the writer is
+		// wedged, coro_http_client-46q), so no answer can come for them.
 		abandoned.push_back({ 0, search });
 		try {
 			if (!submit(m, nullptr, context)) {
@@ -1348,19 +1353,21 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 			auto [e] = co_await self->due_idle.wait();
 			ec = e;
 		}
-		// The deadline of a due answer may have passed with this one, and
-		// this wait's timeout run before the due watcher's expiry: expire
-		// them here, and proceed if none is left. Only those whose own
-		// deadline passed; a stop is not a timeout.
+		// The wait's timeout may run before the due watcher expires an
+		// answer whose deadline passed at the same time: expire those here
+		// (only those past their own deadline), and check again if none is
+		// left. A stop gives canceled, not timeout.
+		std::size_t left = due;
 		if (ec == capy::cond::timeout) {
 			self->expire_due(clock::now());
-			if (self->due_answers == 0) continue;
+			left = self->due_answers;
+			if (left == 0) continue;
 		}
 		// Cancelled or timed out: nothing was sent, the connection is usable.
 		if (ec)
 			co_return fail(ec,
-			  context + " (waiting for the answer" + (due == 1 ? "" : "s") + " to " + std::to_string(due)
-				+ " paged search release" + (due == 1 ? ")" : "s)"));
+			  context + " (waiting for the answer" + (left == 1 ? "" : "s") + " to " + std::to_string(left)
+				+ " paged search release" + (left == 1 ? ")" : "s)"));
 	}
 
 	// The ExtendedRequest; nothing else may be sent until it is answered
@@ -1696,6 +1703,8 @@ capy::task<result<std::optional<entry>>> paged_search::next()
 	// release. A cancelled or timed-out page was only abandoned, and a page
 	// request that could not be sent was never seen: the server may still
 	// hold the paging state of `cookie`, which the destructor releases.
+	// Decided by capy::cond, not ldap::cond::timeout: that also matches the
+	// server's timeLimitExceeded, which ended the search on the server.
 	auto finish = [&s](error e, bool ended = true) -> result<std::optional<entry>> {
 		if (ended && e.code != capy::cond::canceled && e.code != capy::cond::timeout) s.cookie.clear();
 		s.finished = true;

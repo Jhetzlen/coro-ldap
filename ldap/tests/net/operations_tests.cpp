@@ -961,7 +961,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		check_release(m.log.received[1], m.log.received[0], "page2");
 		CHECK(is_start_tls(m.log.received[2]));
 	}
-	SECTION("two StartTLS wait: the first proceeds, the second is refused")
+	SECTION("two StartTLS wait: one proceeds, the other is refused")
 	{
 		tcp_mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
@@ -979,10 +979,15 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		server_sends(m, paged_done(2, ""));
 		drive_until(m.ioc, [&] { return first.done() && second.done(); });
 		REQUIRE_FALSE(first.get().has_value());
-		CHECK(first.get().error().code == errc::unavailable);// sent, and refused
 		REQUIRE_FALSE(second.get().has_value());
-		CHECK(second.get().error().code == client_errc::operation_in_progress);
-		CHECK(second.get().error().context == "start tls during an earlier StartTLS");
+		// Either may be woken first: exactly one is sent (and refused by the
+		// server), the other then sees it running.
+		const bool first_sent = first.get().error().code == errc::unavailable;
+		const ldap::error &sent = (first_sent ? first : second).get().error();
+		const ldap::error &refused = (first_sent ? second : first).get().error();
+		CHECK(sent.code == errc::unavailable);
+		CHECK(refused.code == client_errc::operation_in_progress);
+		CHECK(refused.context == "start tls during an earlier StartTLS");
 		CHECK(m.conn.is_open());
 		CHECK(m.conn.outstanding() == 0);
 		m.check_server();
@@ -1445,7 +1450,7 @@ TEST_CASE("operations: release answers' deadlines", "[net][operations][paged][ti
 		REQUIRE(m.log.received.size() == 4);
 		check_release(m.log.received[3], m.log.received[0], "page2");
 	}
-	SECTION("one with a deadline, one without: only the first expires")
+	SECTION("one with a deadline, one without: only the one with a deadline expires")
 	{
 		mock_ldap m;// no operation_timeout
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),

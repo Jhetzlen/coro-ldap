@@ -18,8 +18,9 @@
 // each with its own message id, and their responses are matched by id. One
 // writer coroutine sends the PDUs in order, never interleaved; one reader
 // coroutine routes each response to the operation waiting for it, and runs
-// only while some operation waits (an idle connection has no pending read,
-// so io_context::run() can return). Search entries are queued per search
+// only while some operation waits or the answer to a paged search release
+// is due (see paged_search; an idle connection has no pending read, so
+// io_context::run() can return). Search entries are queued per search
 // until its stream takes them; the queue is not bounded, because a bound
 // would let one slow stream stall every other operation on the connection.
 //
@@ -501,29 +502,32 @@ class connection
 		  add_params{ .entry = std::move(entry), .attributes = to_attributes(value), .controls = std::move(controls) });
 	}
 
-	// StartTLS (RFC 4511 section 4.14): upgrades a plain ldap:// connection
-	// to TLS in place, with the same verification rules as ldaps://
-	// (`options`; the name checked is options.server_name, else the URL's
-	// host). Fails with invalid_argument on a connection that is not plain
-	// TCP (ldaps://, ldapi://, a custom stream), and with
-	// operation_in_progress while any operation (or a bind exchange) is
-	// outstanding; while it runs, starting another operation fails the
-	// same way. The answers still due to destroyed
-	// paged_searches' releases are waited for first (RFC 4513 section 3.1.1:
-	// no response outstanding), until they arrive or their deadline passes
-	// (see paged_search); the checks are then made again, so an operation
-	// started meanwhile and still outstanding refuses it. A timeout or
-	// cancellation during that wait sends nothing and leaves the connection
-	// usable. If the server refuses (a result code other than success), that
-	// error is returned and the connection stays usable, unprotected. Bytes
-	// received after the StartTLS response and before the handshake are
-	// refused (decode_error: a plaintext injection attempt), and a failed
-	// handshake closes the connection, as does a cancellation or timeout
-	// (StartTLS cannot be abandoned, RFC 4511 section 4.11). `timeout` bounds
-	// the wait for due answers, then the exchange, then the handshake, each
-	// on its own, so start_tls may take up to three times `timeout`
-	// (nullopt: connection_options::operation_timeout for the wait and the
-	// exchange, no limit for the handshake).
+	// StartTLS (RFC 4511 section 4.14): upgrades a plain ldap:// connection to
+	// TLS in place, with the same verification rules as ldaps:// (`options`;
+	// the name checked is options.server_name, else the URL's host). Fails at
+	// once with invalid_argument on a connection that is not plain TCP
+	// (ldaps://, ldapi://, a custom stream), and with operation_in_progress
+	// while any operation (or a bind exchange) is outstanding. The answers
+	// still due to destroyed paged_searches' releases are then waited for
+	// (RFC 4513 section 3.1.1: no response outstanding), until they arrive or
+	// their deadline passes (see paged_search); the checks are made again
+	// after the wait, so an operation started meanwhile and still outstanding
+	// refuses it. A timeout or cancellation during that wait sends nothing and
+	// leaves the connection usable. Once the request is sent, starting another
+	// operation, or another start_tls, fails with operation_in_progress. If
+	// the server refuses (a result code other than success), that error is
+	// returned and the connection stays usable, unprotected. Bytes received
+	// after the StartTLS response and before the handshake are refused
+	// (decode_error: a plaintext injection attempt), and a failed handshake
+	// closes the connection, as does a cancellation or timeout (StartTLS
+	// cannot be abandoned, RFC 4511 section 4.11). So a release's answer that
+	// comes after its deadline is dropped if it comes before the StartTLS
+	// response; after it, it closes the connection (refused as such bytes, or
+	// failing the handshake). `timeout` bounds the wait for due answers, then
+	// the exchange, then the handshake, each on its own, so start_tls may take
+	// up to three times `timeout` (nullopt:
+	// connection_options::operation_timeout for the wait and the exchange, no
+	// limit for the handshake).
 	boost::capy::task<result<void>> start_tls(net::tls_options options = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 
@@ -627,12 +631,15 @@ class search_stream
 // would be waited for (search_params::timeout, else
 // connection_options::operation_timeout; no limit without either),
 // outstanding() counts it and start_tls() waits for it; past that deadline
-// a late answer is still dropped. Nothing is released after the last page
-// (empty cookie), after a server or connection error, while the first page
-// is running (no cookie yet: only the abandon), during StartTLS, or once
-// the connection is closed. A page that timed out or was cancelled leaves
-// the paged_search done, and its destruction releases the state. Like
-// search_stream, it must be destroyed on the connection's executor.
+// a late answer is still dropped (see start_tls for one that comes during
+// StartTLS). Nothing is released after the last page (empty cookie), after
+// an error that ended the search (the server's result, a malformed paged
+// results control, a closed connection), while the first page is running
+// (no cookie yet: only the abandon), during StartTLS, or once the
+// connection is closed. A page that timed out or was cancelled, or a next
+// page that could not be sent, leaves the paged_search done with the last
+// cookie kept, and its destruction releases the state. Like search_stream,
+// it must be destroyed on the connection's executor.
 class paged_search
 {
   public:

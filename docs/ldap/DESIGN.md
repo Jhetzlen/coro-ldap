@@ -319,18 +319,23 @@ coroutine sleeps until the earliest deadline (`corosio::timeout` on an
 event, like an operation's wait) and runs only while a due answer has
 one; on expiry the answer stops being counted, so the reader can stop and
 StartTLS proceeds, but its entry stays among the abandoned requests, so a
-late answer is still dropped. When more than 1024 requests are listed,
-the oldest whose answer is not due is forgotten first.
-Nothing is sent after the last page (empty cookie), after a server or
-connection error, during StartTLS, or once the connection is closed;
-during a bind it is held until the bind ends, like any request.
-After a timeout or cancellation (the page was abandoned) or a next page
-that could not be sent, the destructor releases. There is no awaitable
-`release()`: the destructor does everything that needs no waiting, and
-waiting for the server's answer would tell the caller nothing it could act
-on. `sync::client::search_paged` keeps the `paged_search` on the I/O
-thread and either reads every page or destroys it after an error, so it
-needs nothing more.
+late answer is still dropped (once the StartTLS response has arrived, it
+would be bytes before the handshake, which close the connection). When
+more than 1024 requests are listed, the oldest whose answer is not due is
+forgotten first. Nothing is sent after the last page (empty cookie),
+after an error that ended the search (the server's result, a malformed
+paged results control, a connection error), during StartTLS, or once the
+connection is closed; during a bind it is held until the bind ends, like
+any request. After a timeout or cancellation (the page was abandoned) or
+a next page that could not be sent, the last cookie is kept and the
+destructor releases it (`capy::cond`, not `ldap::cond::timeout`, decides:
+the latter also matches the server's timeLimitExceeded, which ended the
+search). There is no awaitable `release()`: the destructor does
+everything that needs no waiting, and waiting for the server's answer
+would tell the caller nothing it could act on.
+`sync::client::search_paged` keeps the `paged_search` on the I/O thread
+and either reads every page or destroys it after an error, so it needs
+nothing more.
 
 ## 4. Mapping entries to structs
 
@@ -657,17 +662,22 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   `server_name`, else the URL host the transport now records). It refuses
   a transport that is not plain TCP and a non-empty read buffer (bytes that
   arrived before the handshake were not protected: CVE-2011-0411).
-  `connection::start_tls(options, timeout)` refuses while operations are
-  outstanding or on a transport that is not plain TCP, waits (within
-  `timeout`, cancellable) until no paged search release's answer is due
-  and checks again, sends the ExtendedRequest and waits for its response
-  within a fresh `timeout` (a wait that used most of the first would
-  otherwise leave StartTLS to time out, which closes the connection; with
-  the handshake's, start_tls may take up to three times `timeout`),
-  blocks new requests until done (RFC 4511 section 4.14.1), waits for the
-  reader and writer to stop, then upgrades. A
-  refusal by the server leaves the connection usable in clear; injected
-  bytes or a failed handshake close it.
+  `connection::start_tls(options, timeout)` refuses at once while
+  operations are outstanding, during a bind or a StartTLS exchange, or on
+  a transport that is not plain TCP, waits (within `timeout`, cancellable;
+  giving up sends nothing and keeps the connection) until no paged search
+  release's answer is due and checks again (so of two StartTLS waiting,
+  one is sent and the other refused), sends the ExtendedRequest and waits
+  for its response within a fresh `timeout` (a wait that used most of the
+  first would otherwise leave StartTLS to time out, which closes the
+  connection; with the handshake's, start_tls may take up to three times
+  `timeout`), blocks new requests until done (RFC 4511 section 4.14.1),
+  waits for the reader and writer to stop, then upgrades. A refusal by
+  the server leaves the connection usable in clear; injected bytes or a
+  failed handshake close it. A release's answer that comes after its
+  deadline is dropped if it comes before the StartTLS response; after it,
+  it counts as injected bytes (or breaks the handshake) and closes the
+  connection.
   `connection_options::start_tls` makes `ldap::connect` upgrade right away
   (ldap:// only).
 - `net::read_message` / `write_message`: rejects a PDU whose first octet is

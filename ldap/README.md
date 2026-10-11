@@ -197,14 +197,17 @@ on by default) with the network parts. It depends on Corosio and Capy
   and `.timeout`; `search_paged(params, page_size)` follows the Simple
   Paged Results cookie across pages (destroyed early, it abandons the
   current page and releases the server's paging state with a page size 0
-  request, RFC 2696 section 3). Referrals are returned (in
+  request, RFC 2696 section 3, unless the search already ended; the
+  release's answer is read and dropped, and counted by `outstanding()`
+  until it arrives or the page timeout passes). Referrals are returned (in
   `error::referrals` and `search_stream::references()`), never chased;
   `url::parse_list` parses them.
 - StartTLS (step 7): `connection::start_tls(tls_options)` upgrades a plain
   ldap:// connection in place (refused while operations are outstanding;
-  bytes received before the handshake are rejected; a server refusal keeps
-  the connection usable in clear), `connection_options::start_tls` does it
-  in `ldap::connect`, and `net::start_tls` is the transport-level piece.
+  it first waits for the answers due to paged search releases; bytes
+  received before the handshake are rejected; a server refusal keeps the
+  connection usable in clear), `connection_options::start_tls` does it in
+  `ldap::connect`, and `net::start_tls` is the transport-level piece.
 - SASL (#11, `jhetz/ldap/sasl.hpp`): `connection::sasl_bind(mechanism)`
   drives the saslBindInProgress exchange; `sasl_external` (identity from a
   TLS client certificate or ldapi://, optional authorization identity) and

@@ -233,14 +233,18 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 		  }(acc, peer),
 		  accepted);
 		try {
-			auto c = finish(ioc, ldap::connect(ioc, *ldap::url::parse(url()), options));
+			auto u = ldap::url::parse(url());
+			REQUIRE(u.has_value());
+			auto c = finish(ioc, ldap::connect(ioc, *u, options));
 			REQUIRE(c.has_value());
 			conn = std::move(*c);
 			drive_until(ioc, [&accepted] { return accepted.done(); });
 			accepted.get();
 		} catch (...) {
-			// No destructor runs: end the accept, which refers to `accepted`,
-			// `acc` and `peer`, before they go.
+			// No destructor runs: close the connection, as the destructor
+			// does, then end the accept, which refers to `accepted`, `acc` and
+			// `peer`, before they go.
+			conn.close();
 			acc.close();
 			peer.close();
 			drive_until(ioc, [&accepted] { return accepted.done(); });
