@@ -149,9 +149,10 @@ struct connect_options
 // or a strand over a multi-threaded one (DESIGN.md section 8: one connection,
 // one executor). The detached name lookup may finish on any thread; it hands
 // its result over through a mutex and a capy::async_waker, which is safe
-// across threads. Arguments are taken by value, so the task does not
-// depend on the caller's objects. The transport's own block and name are
-// allocated from `mr`.
+// across threads. To stop it from another thread, see with_stop in
+// connection.hpp (locking_mode::safe only). Arguments are taken by value, so
+// the task does not depend on the caller's objects. The transport's own block
+// and name are allocated from `mr`.
 boost::capy::task<result<transport>> connect(boost::corosio::io_context &ioc,
   url u,
   connect_options options = {},

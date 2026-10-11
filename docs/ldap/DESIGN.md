@@ -707,12 +707,13 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   resolver is not: the stop wakes the wait for the lookup, and
   `resolver::cancel()` then runs on the executor. An open connection's
   reader, writer and StartTLS handshake run under their own stop tokens.
-  So a stop from any thread is safe with Corosio's default
-  `locking_mode::safe`. With `unsafe` (no scheduler lock) a post from
-  another thread is undefined behaviour, so the stop must come from the
-  thread running the io_context; `unsafe_io` keeps the scheduler lock but
-  drops those I/O locks, which only matters while `connect()` is
-  stopped. Neither helper owns anything
+  So a stop from any thread is safe only with Corosio's default
+  `locking_mode::safe`. Under `unsafe_io` and `unsafe` the stop must come
+  from the thread running the io_context: both tiers forbid a post from
+  another thread (`unsafe` has no scheduler lock; `unsafe_io` drops the I/O
+  locks, and on io_uring it also skips the eventfd wake, so a `run()`
+  blocked in the ring never sees the posted resumption). Neither helper
+  owns anything
   beyond its coroutine frame, which outlives the operation it awaits.
 - Bind sequencing (RFC 4511 section 4.2.1: no PDU while a BindRequest is
   outstanding): a bind exchange (every step of a SASL bind) marks the
