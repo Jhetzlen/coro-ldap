@@ -167,14 +167,17 @@ namespace {
 	// the unassigned code points of table A.1 (Unicode 3.2). The input must
 	// be UTF-8; the result is UTF-8. `what` names the input in error
 	// contexts, which never quote it (it may be the password). The result
-	// is written into `out`, which must be empty (e.g. just wiped): it is
-	// sized once and wiped on failure, so no other copy of the prepared
-	// text is made (returning a std::string would move it, and a move out
-	// of a short (SSO) string copies the characters and leaves them in the
-	// moved-from one). Every buffer of ours that held the text is wiped;
-	// ICU's internal working buffers cannot be.
+	// is written into `out`, whose old content is wiped first (resizing a
+	// non-empty string could free a buffer still holding it, or leave its
+	// bytes past size()); it is then sized once and wiped on failure, so no
+	// other copy of the prepared text is made (returning a std::string
+	// would move it, and a move out of a short (SSO) string copies the
+	// characters and leaves them in the moved-from one). Every buffer of
+	// ours that held the text is wiped; ICU's internal working buffers
+	// cannot be.
 	result<void> saslprep(std::string_view s, std::string_view what, prep_kind kind, std::string &out)
 	{
+		wipe_string(out);
 		const std::string name(what);
 		if (s.empty()) return input_error("empty " + name);
 		if (s.size() > static_cast<std::size_t>(INT32_MAX / 4)) return input_error(name + " is too long");
@@ -392,7 +395,7 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 	wipe();
 	wipe_string(prepared_password_);
 	// RFC 5802 section 5.1: the username is prepared as a query (unassigned
-	// code points allowed); section 2.2: the password as a stored string.
+	// code points allowed).
 	std::string user;
 	if (auto r = saslprep(username_, "username", prep_kind::query, user); !r)
 		return std::unexpected(std::move(r.error()));
@@ -424,6 +427,8 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 
 	// The password last, after every other check: a failure above leaves
 	// no prepared password behind, and saslprep() wipes its own on failure.
+	// RFC 5802 section 2.2: the password is prepared as a stored string
+	// (unassigned code points refused).
 	if (auto r = saslprep(password_, "password", prep_kind::stored, prepared_password_); !r)
 		return std::unexpected(std::move(r.error()));
 
