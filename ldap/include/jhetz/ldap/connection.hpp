@@ -521,8 +521,9 @@ class connection
 	// handshake closes the connection, as does a cancellation or timeout
 	// (StartTLS cannot be abandoned, RFC 4511 section 4.11). `timeout` bounds
 	// the wait for due answers, then the exchange, then the handshake, each
-	// on its own (nullopt: connection_options::operation_timeout for the
-	// wait and the exchange, no limit for the handshake).
+	// on its own, so start_tls may take up to three times `timeout`
+	// (nullopt: connection_options::operation_timeout for the wait and the
+	// exchange, no limit for the handshake).
 	boost::capy::task<result<void>> start_tls(net::tls_options options = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 

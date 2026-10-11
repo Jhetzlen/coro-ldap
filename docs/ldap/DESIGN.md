@@ -662,7 +662,8 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   `timeout`, cancellable) until no paged search release's answer is due
   and checks again, sends the ExtendedRequest and waits for its response
   within a fresh `timeout` (a wait that used most of the first would
-  otherwise leave StartTLS to time out, which closes the connection),
+  otherwise leave StartTLS to time out, which closes the connection; with
+  the handshake's, start_tls may take up to three times `timeout`),
   blocks new requests until done (RFC 4511 section 4.14.1), waits for the
   reader and writer to stop, then upgrades. A
   refusal by the server leaves the connection usable in clear; injected

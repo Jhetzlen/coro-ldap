@@ -16,6 +16,7 @@
 #include <stop_token>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -569,7 +570,9 @@ template<class M> void server_sends(M &m, const ldap::message &msg)
 }
 
 // Runs the io_context briefly (the reader stays parked): what is ready
-// runs, and a request sent meanwhile reaches the server.
+// runs, and a request sent meanwhile reaches the server. 20 ms proves
+// nothing positive under load: it only precedes checks that something did
+// not happen (not done yet, nothing more sent).
 template<class M> void settle(M &m)
 {
 	m.ioc.run_for(std::chrono::milliseconds(20));
@@ -1168,7 +1171,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 TEST_CASE("operations: StartTLS after waiting for a release's answer has its whole timeout",
   "[net][operations][paged][starttls][timeout]")
 {
-	tcp_mock_ldap m({ .operation_timeout = std::chrono::milliseconds(400) });
+	tcp_mock_ldap m({ .operation_timeout = std::chrono::milliseconds(1000) });
 	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
 	  step{},// reads the release, never answers
 	  step{} });// reads StartTLS, answered late below
@@ -1180,7 +1183,7 @@ TEST_CASE("operations: StartTLS after waiting for a release's answer has its who
 	CHECK(is_start_tls(m.log.received[2]));
 	// Much longer than what was left of StartTLS's timeout after the wait,
 	// well within a whole one.
-	m.ioc.run_for(std::chrono::milliseconds(200));
+	m.ioc.run_for(std::chrono::milliseconds(300));
 	m.ioc.restart();
 	CHECK_FALSE(tls.done());
 	server_sends(m, start_tls_refused(3));
@@ -1192,6 +1195,35 @@ TEST_CASE("operations: StartTLS after waiting for a release's answer has its who
 	m.check_server();
 	server_sends(m, bind_resp(4));// answers the bind below before it is read
 	CHECK(m.run(bind_admin(m.conn)).has_value());
+}
+
+// The release's deadline and StartTLS's wait deadline (later by a little)
+// have both passed when the io_context next runs: StartTLS's wait may time
+// out before the due watcher expires the release's answer. It is expired
+// then, and StartTLS proceeds.
+TEST_CASE("operations: StartTLS whose wait times out with a release's deadline passed proceeds",
+  "[net][operations][paged][starttls][timeout]")
+{
+	tcp_mock_ldap m({ .operation_timeout = std::chrono::milliseconds(300) });
+	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+	  step{},// reads the release, never answers
+	  answer({ start_tls_refused(3) }) });
+	release_after_one_page(m);
+	outcome<ldap::result<void>> tls;
+	spawn(m.ioc, m.conn.start_tls(), tls);
+	settle(m);// StartTLS waits for the release's answer
+	CHECK_FALSE(tls.done());
+	CHECK(m.log.received.size() == 2);
+	std::this_thread::sleep_for(std::chrono::milliseconds(400));// past both deadlines, the io_context idle
+	drive_until(m.ioc, [&tls] { return tls.done(); });
+	REQUIRE(tls.done());
+	REQUIRE_FALSE(tls.get().has_value());
+	CHECK(tls.get().error().code == errc::unavailable);// sent, and refused
+	CHECK(m.conn.is_open());
+	CHECK(m.conn.outstanding() == 0);
+	m.check_server();
+	REQUIRE(m.log.received.size() == 3);
+	CHECK(is_start_tls(m.log.received[2]));
 }
 
 // Late responses are dropped for the last 1024 abandoned requests; when

@@ -1348,6 +1348,14 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 			auto [e] = co_await self->due_idle.wait();
 			ec = e;
 		}
+		// The deadline of a due answer may have passed with this one, and
+		// this wait's timeout run before the due watcher's expiry: expire
+		// them here, and proceed if none is left. Only those whose own
+		// deadline passed; a stop is not a timeout.
+		if (ec == capy::cond::timeout) {
+			self->expire_due(clock::now());
+			if (self->due_answers == 0) continue;
+		}
 		// Cancelled or timed out: nothing was sent, the connection is usable.
 		if (ec)
 			co_return fail(ec,
