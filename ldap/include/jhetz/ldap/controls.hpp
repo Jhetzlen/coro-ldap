@@ -99,11 +99,12 @@ struct assertion
 	bool critical = true;
 };
 
-// Pre-Read / Post-Read (RFC 4527, OIDs pre_read_oid / post_read_oid): on an
-// add, delete, modify or modify DN, return the target entry as it was
-// before / is after the update, with the given attributes (as in a search:
-// empty means all user attributes, "+" operational ones). The entry comes
-// back in a response control: find_pre_read / find_post_read.
+// Pre-Read / Post-Read (RFC 4527, OIDs pre_read_oid / post_read_oid): return
+// the target entry as it was before (pre_read: on a modify, delete or modify
+// DN) / is after (post_read: on an add, modify or modify DN) the update, with
+// the given attributes (as in a search: empty means all user attributes, "+"
+// operational ones). There is no pre-read of an add or post-read of a delete.
+// The entry comes back in a response control: find_pre_read / find_post_read.
 struct pre_read
 {
 	std::vector<std::string> attributes{};
@@ -139,11 +140,11 @@ result<std::optional<paged_results>> find_paged(const std::pmr::vector<control> 
 result<std::optional<sort_result>> find_sort_result(const std::pmr::vector<control> &controls,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
-// The entry of the pre-read / post-read response control among `controls`
-// (an add, delete, modify or modify DN response's), nullopt if there is
-// none, or an error if it is malformed (decode_error, or message_too_large
-// beyond decode_options' default element limit). The entry is allocated
-// from `mr`.
+// The entry of the pre-read response control (of a modify, delete or modify
+// DN response) / post-read response control (of an add, modify or modify DN
+// response) among `controls`, nullopt if there is none, or an error if it
+// is malformed (decode_error, or message_too_large beyond decode_options'
+// default element limit). The entry is allocated from `mr`.
 result<std::optional<entry>> find_pre_read(const std::pmr::vector<control> &controls,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 result<std::optional<entry>> find_post_read(const std::pmr::vector<control> &controls,

@@ -208,8 +208,10 @@ server's bad control fails only the caller who asks for it.
   ignored the condition would apply an update the caller meant to be
   conditional. A false assertion fails the operation with
   `errc::assertion_failed` (122).
-- Pre-read / post-read (RFC 4527): `pre_read{.attributes}` /
-  `post_read{.attributes}` on add / delete / modify / modify DN;
+- Pre-read / post-read (RFC 4527): `pre_read{.attributes}` on modify /
+  delete / modify DN, `post_read{.attributes}` on add / modify / modify DN
+  (sections 3.1 and 3.2: nothing to pre-read before an add, nothing to
+  post-read after a delete);
   `find_pre_read()` / `find_post_read()` decode the returned
   SearchResultEntry into an `ldap::entry`, with the message decoder's
   depth and element limits.
