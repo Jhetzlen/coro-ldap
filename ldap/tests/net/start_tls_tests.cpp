@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -436,6 +437,25 @@ TEST_CASE("RFC 4511 4.11: a StartTLS that times out is not abandoned", "[net][st
 	const auto &got = server.get();
 	REQUIRE(got.size() == 1);// the StartTLS request, then the connection closed
 	CHECK(std::holds_alternative<ldap::extended_request>(got[0].op));
+}
+
+TEST_CASE("start_tls: stopped before it starts, it is not sent", "[net][starttls][cancel]")
+{
+	tls_fixture f;
+	outcome<std::vector<ldap::message>> server;
+	spawn(f.ioc, silent_start_tls(f.acc), server);
+	auto c = f.connect();
+	std::stop_source cancel;
+	cancel.request_stop();
+	auto r = finish(f.ioc, ldap::with_stop(cancel.get_token(), c.start_tls(trusting().tls)));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::cond::canceled);
+	CHECK(r.error().context == "start tls");
+	CHECK(c.is_open());
+	CHECK_FALSE(c.is_tls());
+	c.close();
+	drive_until(f.ioc, [&server] { return server.done(); });
+	CHECK(server.get().empty());
 }
 
 namespace {

@@ -683,7 +683,22 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   destroyed while waiting abandons its operation (operations never wait on
   I/O themselves, so this is safe). Bind and StartTLS cannot be abandoned
   (RFC 4511 section 4.11): giving up on one closes the connection instead,
-  since its outcome is unknown.
+  since its outcome is unknown; so a bind or StartTLS whose stop token is
+  already set when it starts is not sent at all (it fails with
+  `capy::error::canceled`, the connection stays open).
+- Cancelling from a coroutine (header-only helpers in `connection.hpp`):
+  `capy::when_any` races only awaitables returning `io_result`, so
+  `ldap::raceable(op)` makes an operation's `result<T>` the payload of one.
+  Its error code is set only when the operation failed with
+  `cond::canceled` while its stop token was set (it lost, or the awaiting
+  task was stopped), so any completion, a server error included, wins and
+  a cancelled operation never does. `ldap::with_stop(token, op)` awaits an
+  operation with a fresh `std::stop_source` that both `token` and the
+  caller's own token stop through `std::stop_callback`s; `capy::run(token)`
+  alone would replace the caller's token. The stop callbacks may run on any
+  thread: they only reach Capy's waits, whose cancellation posts the
+  resumption to the connection's executor. Neither helper owns anything
+  beyond its coroutine frame, which outlives the operation it awaits.
 - Bind sequencing (RFC 4511 section 4.2.1: no PDU while a BindRequest is
   outstanding): a bind exchange (every step of a SASL bind) marks the
   connection as binding. Requests started meanwhile are encoded, registered

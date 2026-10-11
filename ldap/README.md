@@ -163,8 +163,16 @@ on by default) with the network parts. It depends on Corosio and Capy
   token and its timeout: it then fails with `capy::error::canceled` /
   `timeout` and is abandoned (AbandonRequest; late responses dropped), and
   the connection stays usable; so does a stream destroyed before its end.
+  To give up on an operation when another event comes first,
+  `capy::when_any(ldap::raceable(c.search(p)), corosio::delay(5s))` races
+  it (`raceable` makes its `result<T>` the payload of a `capy::io_result`,
+  as `when_any` requires; the first to complete wins, the other is
+  stopped, so a losing operation is abandoned). `ldap::with_stop(token,
+  op)` cancels it on a `std::stop_token` of your own (stoppable from any
+  thread) as well as on the awaiting task's.
   Bind and StartTLS cannot be abandoned (RFC 4511 section 4.11): giving up
-  on one closes the connection. Nothing is sent while a bind is outstanding
+  on one closes the connection (one stopped before it starts is not sent,
+  and the connection stays open). Nothing is sent while a bind is outstanding
   (RFC 4511 section 4.2.1): requests started during a bind exchange are
   held and sent after it, and binds are serialized.
   Every response is decoded with `origin::server` and must answer an
@@ -309,6 +317,7 @@ URL (`ldap://localhost`).
 | `add.cpp` | add the user `uid=jane` |
 | `delete.cpp` | delete the user `uid=jane` |
 | `starttls.cpp` | connect with StartTLS, then bind |
+| `cancel.cpp` | search the whole tree; Ctrl-C gives up on it (`capy::when_any` with `ldap::raceable`) |
 | `blocking.cpp` | the same search with the blocking `ldap::sync::client` |
 
 `examples/ldapsearch.cpp` (above) is a fuller command-line tool. To try an

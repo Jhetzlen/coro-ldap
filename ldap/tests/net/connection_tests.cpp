@@ -15,6 +15,9 @@
 
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/cond.hpp>
+#include <boost/capy/ex/async_event.hpp>
+#include <boost/capy/when_any.hpp>
+#include <boost/corosio/delay.hpp>
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/ipv4_address.hpp>
 #include <boost/corosio/local_connect_pair.hpp>
@@ -36,6 +39,8 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -662,6 +667,263 @@ TEST_CASE("connection: a cancelled search is abandoned", "[net][connection]")
 	m.check_server();
 	REQUIRE(m.log.received.size() == 3);
 	CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+}
+
+// ---------------------------------------------------------------- raceable, with_stop
+
+namespace {
+
+using entries = ldap::result<std::pmr::vector<ldap::entry>>;
+using event_race = std::variant<std::error_code, entries, std::tuple<>>;
+
+// A search raced against `event`.
+capy::task<event_race> search_or(ldap::connection &c, capy::async_event &event)
+{
+	co_return co_await capy::when_any(ldap::raceable(c.search({})), event.wait());
+}
+
+// A search raced against a timer.
+capy::task<event_race> search_or_delay(ldap::connection &c, std::chrono::milliseconds d)
+{
+	co_return co_await capy::when_any(ldap::raceable(c.search({})), corosio::delay(d));
+}
+
+using bind_race = std::variant<std::error_code, ldap::result<void>, std::tuple<>>;
+
+// A simple bind raced against a timer.
+capy::task<bind_race> bind_or_delay(ldap::connection &c, std::chrono::milliseconds d)
+{
+	co_return co_await capy::when_any(
+	  ldap::raceable(c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")), corosio::delay(d));
+}
+
+// The search was abandoned (AbandonRequest for message 1, sent as message
+// 2) and the connection still works: a bind (message 3) is answered.
+void check_abandoned_and_usable(mock_ldap &m)
+{
+	CHECK(m.conn.is_open());
+	CHECK(m.conn.outstanding() == 0);
+	CHECK(m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 3);
+	CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+}
+
+// A bind given up on closed the connection (RFC 4511 section 4.11).
+void check_bind_closed(mock_ldap &m, const ldap::result<void> &r)
+{
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::cond::canceled);
+	CHECK(r.error().context == "bind cn=admin,dc=example,dc=org (connection closed)");
+	CHECK_FALSE(m.conn.is_open());
+	REQUIRE(m.log.received.size() == 1);
+	CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+}
+
+}// namespace
+
+TEST_CASE("raceable: an operation raced with capy::when_any", "[net][connection][cancel]")
+{
+	mock_ldap m;
+	capy::async_event event;
+	outcome<event_race> out;
+
+	SECTION("completes first: the operation wins, the other waiter is cancelled")
+	{
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1) }) });
+		spawn(m.ioc, search_or(m.conn, event), out);
+		drive_until(m.ioc, [&out] { return out.done(); });
+		REQUIRE(out.get().index() == 1);
+		auto &r = std::get<1>(out.get());
+		REQUIRE(r.has_value());
+		CHECK(r->size() == 1);
+		// The other event after completion: nothing more happens.
+		event.set();
+		m.check_server();
+		CHECK(m.log.received.size() == 1);
+		CHECK(m.conn.outstanding() == 0);
+	}
+	SECTION("a server error also completes the operation, and wins")
+	{
+		m.serve({ answer({ done_msg(1, 32) }) });
+		spawn(m.ioc, search_or(m.conn, event), out);
+		drive_until(m.ioc, [&out] { return out.done(); });
+		REQUIRE(out.get().index() == 1);
+		REQUIRE_FALSE(std::get<1>(out.get()).has_value());
+		CHECK(std::get<1>(out.get()).error().code == errc::no_such_object);
+		m.check_server();
+	}
+	SECTION("the other event first: it wins, the operation is abandoned")
+	{
+		// Reads the search and the abandon, answers nothing; then a bind.
+		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
+		spawn(m.ioc, search_or(m.conn, event), out);
+		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+		CHECK_FALSE(out.done());
+		event.set();
+		drive_until(m.ioc, [&out] { return out.done(); });
+		CHECK(out.get().index() == 2);
+		check_abandoned_and_usable(m);
+	}
+	SECTION("stopping the awaiting task cancels both: nothing wins")
+	{
+		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
+		std::stop_source stop;
+		spawn(m.ioc, stop.get_token(), search_or(m.conn, event), out);
+		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+		stop.request_stop();
+		drive_until(m.ioc, [&out] { return out.done(); });
+		REQUIRE(out.get().index() == 0);
+		CHECK(std::get<0>(out.get()) == ldap::cond::canceled);
+		check_abandoned_and_usable(m);
+	}
+	SECTION("the awaiting task stopped before the race starts: nothing wins, the search is abandoned at once")
+	{
+		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
+		std::stop_source stop;
+		stop.request_stop();
+		spawn(m.ioc, stop.get_token(), search_or(m.conn, event), out);
+		drive_until(m.ioc, [&out] { return out.done(); });
+		REQUIRE(out.get().index() == 0);
+		CHECK(std::get<0>(out.get()) == ldap::cond::canceled);
+		check_abandoned_and_usable(m);
+	}
+}
+
+TEST_CASE("raceable: an operation raced with a timer", "[net][connection][cancel][timeout]")
+{
+	mock_ldap m;
+	outcome<event_race> out;
+
+	SECTION("the timer fires first: the operation is abandoned")
+	{
+		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
+		spawn(m.ioc, search_or_delay(m.conn, std::chrono::milliseconds(50)), out);
+		drive_until(m.ioc, [&out] { return out.done(); });
+		CHECK(out.get().index() == 2);
+		check_abandoned_and_usable(m);
+	}
+	SECTION("the operation completes first: the timer is cancelled, the race ends at once")
+	{
+		m.serve({ answer({ done_msg(1) }) });
+		const auto start = std::chrono::steady_clock::now();
+		spawn(m.ioc, search_or_delay(m.conn, std::chrono::hours(1)), out);
+		drive_until(m.ioc, [&out] { return out.done(); });
+		CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(10));
+		REQUIRE(out.get().index() == 1);
+		CHECK(std::get<1>(out.get()).has_value());
+		m.check_server();
+		CHECK(m.log.received.size() == 1);
+		CHECK(m.conn.outstanding() == 0);
+	}
+	SECTION("a bind that loses closes the connection")
+	{
+		m.serve({ step{}, step{} });// reads the bind, then sees EOF
+		outcome<bind_race> bind;
+		spawn(m.ioc, bind_or_delay(m.conn, std::chrono::milliseconds(50)), bind);
+		drive_until(m.ioc, [&bind] { return bind.done(); });
+		CHECK(bind.get().index() == 2);
+		CHECK_FALSE(m.conn.is_open());
+		m.sockets.client.close();// closing a wrapped transport leaves the socket open
+		drive_until(m.ioc, [&m] { return m.server.done(); });
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+	}
+}
+
+TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "[net][connection][cancel]")
+{
+	mock_ldap m;
+	std::stop_source cancel;
+	outcome<entries> out;
+
+	SECTION("completes normally; a stop requested afterwards has no effect")
+	{
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1) }) });
+		spawn(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.search({})), out);
+		drive_until(m.ioc, [&out] { return out.done(); });
+		REQUIRE(out.get().has_value());
+		CHECK(out.get()->size() == 1);
+		cancel.request_stop();
+		m.check_server();
+		CHECK(out.get().has_value());
+		CHECK(m.log.received.size() == 1);
+		CHECK(m.conn.outstanding() == 0);
+	}
+	SECTION("stopped mid-operation: the operation is abandoned")
+	{
+		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
+		spawn(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.search({})), out);
+		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+		CHECK_FALSE(out.done());
+		cancel.request_stop();
+		drive_until(m.ioc, [&out] { return out.done(); });
+		REQUIRE_FALSE(out.get().has_value());
+		CHECK(out.get().error().code == ldap::cond::canceled);
+		CHECK(out.get().error().context == "search \"\" (abandoned)");
+		CHECK(out.get().error().message() == "search \"\" (abandoned): operation canceled [boost.capy:2]");
+		check_abandoned_and_usable(m);
+	}
+	SECTION("stopped from another thread")
+	{
+		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
+		spawn(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.search({})), out);
+		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+		std::thread([&cancel] { cancel.request_stop(); }).join();
+		drive_until(m.ioc, [&out] { return out.done(); });
+		REQUIRE_FALSE(out.get().has_value());
+		CHECK(out.get().error().code == ldap::cond::canceled);
+		check_abandoned_and_usable(m);
+	}
+	SECTION("stop requested before it starts")
+	{
+		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
+		cancel.request_stop();
+		auto r = m.run(ldap::with_stop(cancel.get_token(), m.conn.search({})));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::canceled);
+		CHECK(r.error().context == "search \"\" (abandoned)");
+		check_abandoned_and_usable(m);
+	}
+	SECTION("a bind stopped before it starts is not sent: the connection stays open")
+	{
+		m.serve({ answer({ done_msg(1) }) });
+		cancel.request_stop();
+		auto r = m.run(
+		  ldap::with_stop(cancel.get_token(), m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::canceled);
+		CHECK(r.error().context == "bind cn=admin,dc=example,dc=org");
+		CHECK(m.conn.is_open());
+		CHECK(m.run(m.conn.search({})).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));
+	}
+	SECTION("the awaiting task's own stop token still cancels it")
+	{
+		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
+		std::stop_source outer;
+		spawn(m.ioc, outer.get_token(), ldap::with_stop(cancel.get_token(), m.conn.search({})), out);
+		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+		outer.request_stop();
+		drive_until(m.ioc, [&out] { return out.done(); });
+		REQUIRE_FALSE(out.get().has_value());
+		CHECK(out.get().error().code == ldap::cond::canceled);
+		check_abandoned_and_usable(m);
+	}
+	SECTION("a bind stopped mid-exchange closes the connection")
+	{
+		m.serve({ step{}, step{} });
+		outcome<ldap::result<void>> bind;
+		spawn(m.ioc,
+		  ldap::with_stop(cancel.get_token(), m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")),
+		  bind);
+		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+		cancel.request_stop();
+		drive_until(m.ioc, [&bind] { return bind.done(); });
+		check_bind_closed(m, bind.get());
+	}
 }
 
 // ---------------------------------------------------------------- multiplexing

@@ -591,8 +591,11 @@ namespace {
 
 	// Waits until no other bind exchange is in progress (binds are
 	// serialized), then marks this one as in progress; bind_exchange ends it.
+	// A bind already given up on is not sent: a bind cannot be abandoned, so
+	// sending it would only close the connection.
 	capy::task<result<void>> begin_bind(impl_ref c, std::string_view context)
 	{
+		if ((co_await capy::this_coro::stop_token).stop_requested()) co_return fail(capy::error::canceled, context);
 		while (c->binding) {
 			auto [ec] = co_await c->bind_idle.wait();
 			if (ec) co_return fail(ec, context);
@@ -1172,6 +1175,9 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 
 	// The ExtendedRequest; nothing else may be sent until it is answered
 	// and the handshake is done (RFC 4511 section 4.14.1).
+	// Given up on already: not sent, since it could only be given up on by
+	// closing the connection.
+	if ((co_await capy::this_coro::stop_token).stop_requested()) co_return fail(capy::error::canceled, context);
 	message request{ 0, extended_request(start_tls_oid) };
 	pending_op p(self->mr, false, op_index<extended_response>);
 	if (auto r = self->submit(request, &p, context); !r) co_return r;

@@ -33,7 +33,28 @@
 // search_stream destroyed before its end abandons its search the same way.
 // Abandon is best effort: the server may have answered already. Bind and
 // StartTLS cannot be abandoned (section 4.11): giving up on one closes the
-// connection instead (its outcome is unknown).
+// connection instead (its outcome is unknown). One whose stop token is set
+// before it starts is not sent: it fails with capy::error::canceled and the
+// connection stays open.
+//
+// Cancelling from a coroutine: the per-operation timeout covers the common
+// case. To give up on an operation when something else happens first (a
+// timer, Ctrl-C, a capy::async_event), race it with capy::when_any through
+// raceable(): when_any only takes awaitables returning capy::io_result. The
+// first to complete wins and the others are stopped, so a losing operation
+// is abandoned as above (a losing bind or StartTLS closes the connection):
+//
+//   auto r = co_await capy::when_any(ldap::raceable(c->search(params)),
+//                                    corosio::delay(std::chrono::seconds(5)));
+//   if (r.index() == 1) use(std::get<1>(r));  // the search's result<T>, success or not
+//   else ...                                  // the delay won (2), or our task was stopped (0)
+//
+// To cancel it from a std::stop_source of your own (a "Cancel" button, a
+// parent giving up), await it with with_stop(source.get_token(), op): it then
+// stops on either that token or the awaiting task's. (capy::run(token)(op)
+// replaces the task's token instead, so stopping the task would be ignored.)
+// request_stop() may be called from any thread; the operation still
+// completes on the connection's executor.
 //
 // Binds (RFC 4511 section 4.2.1): nothing is sent while a BindRequest is
 // outstanding. Requests started during a bind exchange (all the steps of a
@@ -93,6 +114,9 @@
 #include "jhetz/ldap/schema.hpp"
 #include "jhetz/ldap/url.hpp"
 
+#include <boost/capy/ex/run.hpp>
+#include <boost/capy/ex/this_coro.hpp>
+#include <boost/capy/io_result.hpp>
 #include <boost/capy/task.hpp>
 #include <boost/corosio/io_context.hpp>
 
@@ -102,9 +126,12 @@
 #include <initializer_list>
 #include <memory_resource>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <typeindex>
+#include <utility>
 #include <vector>
 
 namespace jhetz::ldap {
@@ -613,5 +640,36 @@ boost::capy::task<result<connection>> connect(boost::corosio::io_context &ioc,
   url u,
   connection_options options = {},
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+
+// Adapts an operation for capy::when_any, which races only awaitables
+// returning capy::io_result: the operation's result<T> becomes the payload
+// of an io_result with no error, so it wins the race once it completes,
+// successfully or not. If it is cancelled (it lost the race, or the awaiting
+// task was stopped) the io_result carries its error code instead and cannot
+// win; the operation was then abandoned, or, for a bind or StartTLS, the
+// connection closed. At the operation's index, when_any's result holds the
+// result<T>.
+template<class T> boost::capy::task<boost::capy::io_result<result<T>>> raceable(boost::capy::task<result<T>> op)
+{
+	result<T> r = co_await std::move(op);
+	std::error_code ec;
+	if (!r && r.error().code == cond::canceled && (co_await boost::capy::this_coro::stop_token).stop_requested())
+		ec = r.error().code;
+	co_return boost::capy::io_result<result<T>>{ ec, std::move(r) };
+}
+
+// Awaits `op` with a stop token that is set when either `token` or the
+// awaiting task's own stop token is: either cancels the operation (an LDAP
+// operation then fails with cond::canceled and is abandoned, or, for a bind
+// or StartTLS, closes the connection). A stop requested after `op` has
+// completed has no effect. `token` may be stopped from any thread.
+template<class T> boost::capy::task<T> with_stop(std::stop_token token, boost::capy::task<T> op)
+{
+	std::stop_source either;
+	const auto forward = [&either] { either.request_stop(); };
+	const std::stop_callback on_outer(co_await boost::capy::this_coro::stop_token, forward);
+	const std::stop_callback on_token(std::move(token), forward);
+	co_return co_await boost::capy::run(either.get_token())(std::move(op));
+}
 
 }// namespace jhetz::ldap
