@@ -462,6 +462,54 @@ TEST_CASE("scram: server-final-message rejections (mutual authentication)", "[sa
 		CHECK(context("a\x01" "b\x7F" "c\xC2\x85" "d\xFF" "e\xC3" "f\xED\xA0\x80" "g")
 			  == prefix + "\"a\xEF\xBF\xBD" "b\xEF\xBF\xBD" "c\xEF\xBF\xBD" "d\xEF\xBF\xBD" "e\xEF\xBF\xBD"
 						  "f\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD" "g\"");
+		// The bidi controls (Bidi_Control: U+061C, U+200E, U+200F,
+		// U+202A-U+202E, U+2066-U+2069) and U+2028/U+2029 become U+FFFD.
+		const std::string fffd = "\xEF\xBF\xBD";
+		const std::string_view replaced[] = {
+			"\xD8\x9C",// U+061C ARABIC LETTER MARK
+			"\xE2\x80\x8E",// U+200E LRM
+			"\xE2\x80\x8F",// U+200F RLM
+			"\xE2\x80\xA8",// U+2028 LINE SEPARATOR
+			"\xE2\x80\xA9",// U+2029 PARAGRAPH SEPARATOR
+			"\xE2\x80\xAA",// U+202A LRE
+			"\xE2\x80\xAB",// U+202B RLE
+			"\xE2\x80\xAC",// U+202C PDF
+			"\xE2\x80\xAD",// U+202D LRO
+			"\xE2\x80\xAE",// U+202E RLO
+			"\xE2\x81\xA6",// U+2066 LRI
+			"\xE2\x81\xA7",// U+2067 RLI
+			"\xE2\x81\xA8",// U+2068 FSI
+			"\xE2\x81\xA9",// U+2069 PDI
+		};
+		for (const std::string_view c : replaced) {
+			CAPTURE(c);
+			CHECK(context("a" + std::string(c) + "b") == prefix + "\"a" + fffd + "b\"");
+		}
+		// A Trojan Source style message: RLO ... PDI.
+		CHECK(context("ok\xE2\x80\xAE"
+					  "deliaf\xE2\x81\xA9!")
+			  == prefix + "\"ok" + fffd + "deliaf" + fffd + "!\"");
+		// Their neighbours and the other format characters are text and are
+		// kept: U+061B, U+200C ZWNJ, U+200D ZWJ in an emoji sequence, U+2027,
+		// U+202F, U+2065, U+206A, the tag characters of a subdivision flag,
+		// and letters, CJK and emoji.
+		const std::string kept =
+		  "\xD8\x9B"// U+061B
+		  "\xE2\x80\x8C"// U+200C
+		  "\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x92\xBB"// U+1F469 U+200D U+1F4BB
+		  "\xE2\x80\xA7"// U+2027
+		  "\xE2\x80\xAF"// U+202F
+		  "\xE2\x81\xA5"// U+2065
+		  "\xE2\x81\xAA";// U+206A
+		CHECK(context(kept) == prefix + "\"" + kept + "\"");
+		const std::string scotland =
+		  "\xF0\x9F\x8F\xB4\xF3\xA0\x81\xA7\xF3\xA0\x81\xA2\xF3\xA0\x81\xB3"
+		  "\xF3\xA0\x81\xA3\xF3\xA0\x81\xB4\xF3\xA0\x81\xBF";// U+1F3F4 U+E0067...U+E007F
+		CHECK(context("\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC " + scotland)
+			  == prefix + "\"\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC " + scotland + "\"");
+		// The cut counts the bytes of the value, before replacement.
+		CHECK(context(std::string(61, 'x') + "\xE2\x80\xAE") == prefix + "\"" + std::string(61, 'x') + fffd + "\"");
+		CHECK(context(std::string(62, 'x') + "\xE2\x80\xAE") == prefix + "\"" + std::string(62, 'x') + "...\"");
 		// At most 64 bytes of the value, never half a character.
 		std::string e_acute;
 		for (int i = 0; i < 40; ++i) e_acute += "\xC3\xA9";

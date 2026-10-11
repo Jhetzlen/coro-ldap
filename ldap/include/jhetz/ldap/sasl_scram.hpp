@@ -56,12 +56,14 @@
 // - client_errc::unexpected_response (cond::protocol_error): a server
 //   message out of order, a nonce that does not extend ours, an iteration
 //   count out of bounds, an unknown mandatory extension ("m="), a server
-//   error ("e="), a wrong server signature, or a server that reports
-//   success without a valid signature. The last three mean the server could
-//   not be authenticated: do not trust that connection. When the server had
-//   already reported success (the error comes from complete()),
-//   connection::sasl_bind closes the connection, since the server considers
-//   it bound.
+//   error ("e=", its text quoted in the context: at most 64 bytes, UTF-8,
+//   with control characters, bidi controls, U+2028/U+2029 and ill-formed
+//   sequences replaced by U+FFFD), a wrong server signature, or a server
+//   that reports success without a valid signature. The last three mean
+//   the server could not be authenticated: do not trust that connection.
+//   When the server had already reported success (the error comes from
+//   complete()), connection::sasl_bind closes the connection, since the
+//   server considers it bound.
 // - client_errc::encode_error also for an OpenSSL failure (RAND_bytes,
 //   PBKDF2, HMAC, SHA-256).
 // Error contexts do not name the mechanism: sasl_bind prefixes

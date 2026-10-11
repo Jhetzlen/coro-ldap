@@ -7,6 +7,7 @@
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 
+#include <unicode/uchar.h>
 #include <unicode/usprep.h>
 #include <unicode/ustring.h>
 #include <unicode/utf8.h>
@@ -319,8 +320,14 @@ namespace {
 	}
 
 	// A server-supplied string for an error context, quoted and cut to at
-	// most 64 bytes on a code point boundary. Valid UTF-8 is kept; control
-	// characters (C0, DEL, C1) and ill-formed sequences become U+FFFD.
+	// most 64 bytes on a code point boundary. Valid UTF-8 is kept; these
+	// become U+FFFD: ill-formed sequences, control characters (C0, DEL,
+	// C1), the bidi controls (Unicode property Bidi_Control: U+061C,
+	// U+200E, U+200F, U+202A-U+202E, U+2066-U+2069), which could reorder
+	// how the rest of a log line or terminal message is displayed ("Trojan
+	// Source"), and LINE/PARAGRAPH SEPARATOR (U+2028, U+2029), which log
+	// viewers may show as line breaks. Other format characters (ZWJ, ZWNJ,
+	// emoji tags, ...) are ordinary text and are kept.
 	std::string quoted(std::string_view s)
 	{
 		constexpr std::int64_t max_bytes = 64;
@@ -337,7 +344,8 @@ namespace {
 				i = start;
 				break;
 			}
-			if (c < 0 || c < 0x20 || (c >= 0x7f && c < 0xa0))
+			if (c < 0 || c < 0x20 || (c >= 0x7f && c < 0xa0) || u_hasBinaryProperty(c, UCHAR_BIDI_CONTROL) != 0
+				|| u_charType(c) == U_LINE_SEPARATOR || u_charType(c) == U_PARAGRAPH_SEPARATOR)
 				out += replacement;
 			else
 				out.append(s.substr(static_cast<std::size_t>(start), static_cast<std::size_t>(i - start)));

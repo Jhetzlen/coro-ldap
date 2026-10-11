@@ -233,8 +233,10 @@ channel binding (GS2 header "n,,"; no -PLUS variant). Key material is
 wiped with `OPENSSL_cleanse` (the password when the object is destroyed;
 its prepared form, our preparation buffers and the derived keys as soon as
 the proof is built; ICU's internal buffers cannot be). Server text quoted
-in error contexts stays UTF-8: only control characters and ill-formed
-sequences are replaced (U+FFFD), and it is cut on a code point boundary. Contexts do not name the
+in error contexts stays UTF-8: only control characters, ill-formed
+sequences, the bidi controls (Bidi_Control: "Trojan Source" reordering)
+and U+2028/U+2029 (line breaks in some log viewers) are replaced (U+FFFD),
+and it is cut on a code point boundary. Contexts do not name the
 mechanism (`sasl_bind` prefixes "sasl bind SCRAM-SHA-256"). Tested with the RFC 7677 vector and against
 slapd with cyrus-sasl's scram plugin.
 
