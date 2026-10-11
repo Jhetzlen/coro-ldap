@@ -307,9 +307,20 @@ while the first page runs). The destructor cannot wait, so the release is
 fire-and-forget, like an AbandonRequest: it is queued and its id joins the
 abandoned requests. Unlike an abandoned request it is always answered, so
 its answer is counted as due: the reader runs until it arrives and drops
-it, and `outstanding()` counts it meanwhile, so `start_tls()` refuses
-until then (RFC 4513 section 3.1.1: no outstanding responses). An
-abandoned request is not counted, since it may never be answered.
+it, and `outstanding()` counts it meanwhile, so `start_tls()` waits for it
+(RFC 4513 section 3.1.1: no outstanding responses). An abandoned request
+is not counted, since it may never be answered. A due answer has the
+deadline a page of the same search would have (`search_params::timeout`,
+else `operation_timeout`; none without either): the release often follows
+a page that timed out on a slow or hung server, and without a deadline
+the reader would stay parked (`io_context::run()` would not return while
+the connection lives) and StartTLS would wait forever. A watcher
+coroutine sleeps until the earliest deadline (`corosio::timeout` on an
+event, like an operation's wait) and runs only while a due answer has
+one; on expiry the answer stops being counted, so the reader can stop and
+StartTLS proceeds, but its entry stays among the abandoned requests, so a
+late answer is still dropped. When more than 1024 requests are listed,
+the oldest whose answer is not due is forgotten first.
 Nothing is sent after the last page (empty cookie), after a server or
 connection error, during StartTLS, or once the connection is closed;
 during a bind it is held until the bind ends, like any request.
@@ -647,9 +658,10 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   a transport that is not plain TCP and a non-empty read buffer (bytes that
   arrived before the handshake were not protected: CVE-2011-0411).
   `connection::start_tls(options, timeout)` refuses while operations are
-  outstanding (or a paged search release's answer is due), sends the
-  ExtendedRequest, blocks new requests until done (RFC 4511 section
-  4.14.1), waits for the reader and writer to stop, then upgrades. A
+  outstanding, waits (within `timeout`, cancellable) until no paged search
+  release's answer is due and checks again, sends the ExtendedRequest,
+  blocks new requests until done (RFC 4511 section 4.14.1), waits for the
+  reader and writer to stop, then upgrades. A
   refusal by the server leaves the connection usable in clear; injected
   bytes or a failed handshake close it.
   `connection_options::start_tls` makes `ldap::connect` upgrade right away
@@ -682,10 +694,11 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   message id and protocolOp tag (`peek_message_header`) and decodes the PDU
   straight into the memory resource of the operation it belongs to, so
   entries reach a caller's arena without a copy. It runs only while some
-  operation is outstanding (or a paged search release's answer is due):
-  when the last one finishes it is stopped through its stop token (bytes
-  already received stay in the read buffer), so an idle connection holds
-  no pending read and `io_context::run()` can return. A notice arriving while idle is seen by the next operation.
+  operation is outstanding (or a paged search release's answer is due,
+  until its deadline): when the last one finishes it is stopped through
+  its stop token (bytes already received stay in the read buffer), so an
+  idle connection holds no pending read and `io_context::run()` can
+  return. A notice arriving while idle is seen by the next operation.
 - Search responses are queued per search (on the search's resource) until
   its stream takes them. The queue is unbounded: a bound would make the
   reader wait for one slow consumer and stall every other operation, and a

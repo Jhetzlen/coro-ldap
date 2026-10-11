@@ -158,6 +158,7 @@ struct connection::impl
 		write_idle.set();
 		reader_idle.set();
 		bind_idle.set();
+		due_idle.set();
 	}
 
 	corosio::io_context::executor_type ex;
@@ -179,8 +180,10 @@ struct connection::impl
 		std::int32_t id;
 		bool search;
 		// Sent by send_unanswered: an answer is certain (an abandoned
-		// request may or may not be answered).
+		// request may or may not be answered), until `deadline`, after
+		// which it is no longer waited for (but still dropped if it comes).
 		bool due = false;
+		std::optional<clock::time_point> deadline{};
 	};
 	std::pmr::deque<abandoned_req> abandoned;
 	// Entries of `abandoned` that are `due`: requests still to be answered
@@ -188,6 +191,12 @@ struct connection::impl
 	// waits for their answers (RFC 4513 section 3.1.1), and read by the
 	// reader, which runs while there are any.
 	std::size_t due_answers = 0;
+	capy::async_event due_idle{};// set while due_answers is 0 (shut sets it after unbind)
+	// The due watcher: runs while a due answer has a deadline, and stops
+	// counting it once that passes. Woken by `due_changed` when the due
+	// answers change.
+	bool watching = false;
+	capy::async_event due_changed{};
 	// Writer: PDUs waiting to be written, in order.
 	std::pmr::deque<std::pmr::vector<std::byte>> outbox;
 	bool writing = false;
@@ -253,6 +262,8 @@ struct connection::impl
 		held.clear();
 		abandoned.clear();
 		due_answers = 0;
+		due_idle.set();// a StartTLS waiting for them fails with not_connected
+		due_changed.set();// the due watcher ends
 		auto waiting = std::move(pending);
 		pending.clear();
 		for (auto &[id, p] : waiting) {
@@ -389,10 +400,11 @@ struct connection::impl
 
 	// Sends `m` without waiting for an answer: its responses are dropped like
 	// late responses to an abandoned request. `m` must be a request that is
-	// always answered: the answer is counted as `due` until it arrives, and a
-	// reader is started to read it. Best effort: nothing is sent if the
-	// connection is closed or cannot send `m` now. Never suspends.
-	void send_unanswered(message &m, bool search, std::string_view context)
+	// always answered: the answer is counted as `due` until it arrives or
+	// `deadline` passes, and a reader is started to read it. Best effort:
+	// nothing is sent if the connection is closed or cannot send `m` now.
+	// Never suspends.
+	void send_unanswered(message &m, bool search, std::optional<clock::time_point> deadline, std::string_view context)
 	{
 		// Listed before `m` is queued, like abandon(): nothing may fail after
 		// that, or its answer would match no request. Id 0 is never a
@@ -410,23 +422,104 @@ struct connection::impl
 		if (!open) return;
 		abandoned.back().id = m.id;
 		abandoned.back().due = true;
+		abandoned.back().deadline = deadline;
 		++due_answers;
+		due_updated();
 		trim_abandoned();
 		start_reader();
+		if (deadline) start_due_watcher();
 	}
 
 	// Forgets an abandoned request: a later response for it is unexpected.
 	void forget_abandoned(std::pmr::deque<abandoned_req>::iterator a)
 	{
-		if (a->due) --due_answers;
+		const bool due = a->due;
+		if (due) --due_answers;
 		abandoned.erase(a);
+		if (due) due_updated();
 		stop_reader_if_idle();
 	}
 
-	// Forgets the oldest abandoned request if there are too many.
+	// Forgets an abandoned request if there are too many: the oldest whose
+	// answer is not due (those are the least likely to still come), else
+	// the oldest. Never the one just added.
 	void trim_abandoned()
 	{
-		if (abandoned.size() > max_abandoned) forget_abandoned(abandoned.begin());
+		if (abandoned.size() <= max_abandoned) return;
+		auto a =
+		  std::find_if(abandoned.begin(), std::prev(abandoned.end()), [](const abandoned_req &r) { return !r.due; });
+		forget_abandoned(a != std::prev(abandoned.end()) ? a : abandoned.begin());
+	}
+
+	// due_answers changed: wakes a StartTLS waiting for 0, and the due
+	// watcher.
+	void due_updated()
+	{
+		if (due_answers == 0)
+			due_idle.set();
+		else
+			due_idle.clear();
+		due_changed.set();
+	}
+
+	// ---------------------------------------------------------------- due answers
+
+	void start_due_watcher()
+	{
+		if (watching) {
+			due_changed.set();// recomputes its next deadline
+			return;
+		}
+		watching = true;
+		add_ref();// released by the watcher
+		capy::run_async(ex)(due_watcher(this));
+	}
+
+	// The earliest deadline of a due answer, if any has one.
+	std::optional<clock::time_point> next_due_deadline() const
+	{
+		std::optional<clock::time_point> next;
+		for (const auto &a : abandoned)
+			if (a.due && a.deadline && (!next || *a.deadline < *next)) next = a.deadline;
+		return next;
+	}
+
+	// Due answers whose deadline passed are no longer waited for: their
+	// entries stay (a late answer is still dropped), but they are not
+	// counted, so StartTLS proceeds and the reader can stop.
+	void expire_due(clock::time_point now)
+	{
+		bool changed = false;
+		for (auto &a : abandoned) {
+			if (!a.due || !a.deadline || *a.deadline > now) continue;
+			a.due = false;
+			--due_answers;
+			changed = true;
+		}
+		if (!changed) return;
+		due_updated();
+		stop_reader_if_idle();
+	}
+
+	// Sleeps until the next deadline of a due answer (or a change), then
+	// expires what is past. Ends when no due answer has a deadline, so an
+	// idle connection holds no timer and `io_context::run()` can return.
+	// No stop token: it ends on its own when the due answers do (or when
+	// the connection closes).
+	static capy::task<void> due_watcher(impl *self)
+	{
+		const frame_ref ref(self);
+		while (self->open) {
+			const auto next = self->next_due_deadline();
+			if (!next) break;
+			if (clock::now() < *next) {
+				self->due_changed.clear();
+				(void)co_await corosio::timeout(self->due_changed.wait(), *next);
+				continue;// a change, or the deadline: look again
+			}
+			self->expire_due(clock::now());
+		}
+		self->watching = false;
 	}
 
 	// Requests still to be answered: those waited for, and `due` answers.
@@ -1226,15 +1319,38 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	std::string context = "start tls";
 	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
 	impl_ref self(impl_);
-	if (!self->open) co_return std::unexpected(self->not_connected(context));
-	if (self->upgrading) co_return fail(client_errc::operation_in_progress, context + " during an earlier StartTLS");
-	if (self->binding) co_return fail(client_errc::operation_in_progress, context + " during a bind");
-	// Including the answers still due to released paged searches: StartTLS
-	// may only be sent once every response is received (RFC 4513 section
-	// 3.1.1).
-	if (const std::size_t n = self->outstanding(); n != 0)
-		co_return fail(client_errc::operation_in_progress,
-		  context + " with " + std::to_string(n) + (n == 1 ? " request" : " requests") + " outstanding");
+	// One budget for the whole exchange, waiting for due answers included.
+	const auto deadline = deadline_after(timeout ? timeout : self->default_timeout);
+	// StartTLS may only be sent once every response is received (RFC 4513
+	// section 3.1.1). Operations are refused; the answers still due to
+	// released paged searches are waited for (they are certain, or given
+	// up on at their own deadline). The checks are made again after the
+	// wait: an operation started meanwhile is refused as if start_tls had
+	// been called then.
+	while (true) {
+		if (!self->open) co_return std::unexpected(self->not_connected(context));
+		if (self->upgrading)
+			co_return fail(client_errc::operation_in_progress, context + " during an earlier StartTLS");
+		if (self->binding) co_return fail(client_errc::operation_in_progress, context + " during a bind");
+		if (const std::size_t n = self->pending.size(); n != 0)
+			co_return fail(client_errc::operation_in_progress,
+			  context + " with " + std::to_string(n) + (n == 1 ? " request" : " requests") + " outstanding");
+		const std::size_t due = self->due_answers;
+		if (due == 0) break;
+		std::error_code ec;
+		if (deadline) {
+			auto [e] = co_await corosio::timeout(self->due_idle.wait(), *deadline);
+			ec = e;
+		} else {
+			auto [e] = co_await self->due_idle.wait();
+			ec = e;
+		}
+		// Cancelled or timed out: nothing was sent, the connection is usable.
+		if (ec)
+			co_return fail(ec,
+			  context + " (waiting for the answer" + (due == 1 ? "" : "s") + " to " + std::to_string(due)
+				+ " paged search release" + (due == 1 ? ")" : "s)"));
+	}
 	if (self->transport.type() != net::transport::kind::tcp || self->transport.is_tls())
 		co_return fail(std::make_error_code(std::errc::invalid_argument),
 		  context + ": needs a plain TCP connection (not ldaps://, ldapi:// or a custom stream)");
@@ -1255,7 +1371,7 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	} clear{ *self };
 	{
 		registration reg(*self, p);
-		auto m = co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout), context);
+		auto m = co_await self->next_response(p, deadline, context);
 		if (!m) co_return std::unexpected(std::move(m.error()));
 		const auto &x = std::get<extended_response>(m->op);
 		if (!x.result.is_success()) co_return std::unexpected(x.result.to_error(context));// still usable, in clear
@@ -1304,7 +1420,9 @@ capy::task<result<void>> connection::unbind()
 		op->finished = true;
 		op->ready.set();// they fail with not_connected ("connection closed")
 	}
-	// The answers still due are not read either.
+	// The answers still due are not read either. due_idle stays clear until
+	// shut() below: a StartTLS waiting for them then fails with
+	// not_connected instead of being sent after the UnbindRequest.
 	for (auto &a : self->abandoned) a.due = false;
 	self->due_answers = 0;
 	self->stop_reader_if_idle();
@@ -1484,7 +1602,9 @@ struct paged_search::state
 			set_page_control(0, std::move(last));
 			const std::string context = op_context("search", params.base) + " (paged results release)";
 			auto request = search_message(*conn, params, context);
-			if (request) conn->send_unanswered(*request, true, context);
+			// Its answer is waited for as long as a page would be.
+			const auto timeout = params.timeout ? params.timeout : conn->default_timeout;
+			if (request) conn->send_unanswered(*request, true, deadline_after(timeout), context);
 		} catch (...) {// out of memory: the release is best effort
 		}
 	}

@@ -311,8 +311,8 @@ TEST_CASE("integration: a paged search stopped between pages sends a release", "
 	CHECK(release->cookie.empty());
 
 	// The paged_search sends that release when destroyed between pages; its
-	// answer is read and dropped without harm. Until it arrives, StartTLS is
-	// refused (RFC 4513 section 3.1.1; slapd would refuse it too).
+	// answer is read and dropped without harm. StartTLS waits for it (RFC
+	// 4513 section 3.1.1; slapd would refuse a StartTLS sent before).
 	{
 		auto p = finish(ioc, c.search_paged(all_users, 40));
 		REQUIRE(p.has_value());
@@ -325,12 +325,8 @@ TEST_CASE("integration: a paged search stopped between pages sends a release", "
 		CHECK(p->pages() == 1);
 	}
 	CHECK(c.outstanding() == 1);// the release
-	auto refused = finish(ioc, c.start_tls(trusting().tls));
-	REQUIRE_FALSE(refused.has_value());
-	CHECK(refused.error().code == ldap::client_errc::operation_in_progress);
-	drive_until(ioc, [&c] { return c.outstanding() == 0; });
-	CHECK(c.is_open());
 	REQUIRE(finish(ioc, c.start_tls(trusting().tls)).has_value());
+	CHECK(c.outstanding() == 0);
 	CHECK(c.is_tls());
 	auto all = finish(ioc, c.search(all_users));
 	REQUIRE(all.has_value());
