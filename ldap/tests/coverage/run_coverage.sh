@@ -10,9 +10,14 @@
 #   BUILD_DIR/llvm-cov/html/index.html line, region and branch details
 #   BUILD_DIR/llvm-cov/summary.json   llvm-cov export -summary-only
 #
-# BUILD_DIR defaults to build/coverage at the repository root.
+# BUILD_DIR defaults to build/coverage at the repository root; an existing
+# build directory configured without JHETZ_LDAP_COVERAGE=ON is refused.
 # --run-only builds and runs the tests and leaves the .profraw files in
 # BUILD_DIR/llvm-cov/profraw, without llvm-profdata / llvm-cov.
+# When a test fails the report is still written, and the script exits with
+# the test run's status.
+#
+# Linux, bash >= 4.4, GNU coreutils (realpath -m), like check_install.sh.
 #
 # Environment:
 #   CXX                          Clang C++ compiler        (clang++)
@@ -32,6 +37,14 @@ ldap="$(cd "$here/../.." && pwd)"
 build="$(realpath -m "${1:-$ldap/../build/coverage}")"
 out="$build/llvm-cov"
 cxx="${CXX:-clang++}"
+
+if [[ -f "$build/CMakeCache.txt" ]] &&
+	! grep -qixE 'JHETZ_LDAP_COVERAGE:BOOL=(ON|TRUE|YES|Y|1)' "$build/CMakeCache.txt"; then
+	echo "error: $build is not a coverage build (its CMakeCache.txt lacks" \
+		"JHETZ_LDAP_COVERAGE=ON); refusing to reconfigure it: pass a new or" \
+		"coverage BUILD_DIR" >&2
+	exit 1
+fi
 
 find_tool() { # VAR NAME: the tool's path, from $VAR or PATH
 	local tool="${!1:-$2}"
@@ -57,19 +70,25 @@ done
 step "configure and build $build"
 cmake -S "$ldap" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="$cxx" \
 	-DJHETZ_LDAP_COVERAGE=ON -DJHETZ_LDAP_SANITIZE=OFF -DJHETZ_LDAP_BUILD_FUZZERS=OFF \
-	"${fetch_args[@]}" >/dev/null
+	${fetch_args[@]+"${fetch_args[@]}"} >/dev/null
 cmake --build "$build"
 
-# One profile per process (%p): the tests also run jhetz-ldapsearch.
+# %m: one profile per instrumented binary (the tests also run
+# jhetz-ldapsearch), merged online across that binary's processes; %p is
+# optional and only splits them per process, the merge below sums them.
 rm -rf "$out"
 mkdir -p "$out/profraw"
 export LLVM_PROFILE_FILE="$out/profraw/%p-%m.profraw"
 
+# A failing test still leaves its profile: report anyway, then exit with
+# the first failing step's status.
+status=0
 step "ctest"
-ctest --test-dir "$build" --output-on-failure -j "$(nproc 2>/dev/null || echo 2)"
+ctest --test-dir "$build" --output-on-failure -j "$(nproc 2>/dev/null || echo 2)" || status=$?
 if [[ -n "${SLAPD:-}" ]]; then
 	step "integration tests against $SLAPD"
-	"$ldap/tests/integration/run_slapd.sh" ctest --test-dir "$build" -L integration --output-on-failure
+	"$ldap/tests/integration/run_slapd.sh" ctest --test-dir "$build" -L integration --output-on-failure ||
+		{ rc=$?; if [[ $status -eq 0 ]]; then status=$rc; fi; }
 else
 	echo "(SLAPD not set: integration tests skipped, see tests/integration/run_slapd.sh)"
 fi
@@ -77,27 +96,43 @@ fi
 shopt -s nullglob
 profiles=("$out"/profraw/*.profraw)
 echo "${#profiles[@]} profiles in $out/profraw"
-if [[ -n "$run_only" ]]; then exit 0; fi
+if [[ $status -ne 0 ]]; then
+	echo "warning: tests failed (status $status); the report covers the runs so far" >&2
+fi
+if [[ -n "$run_only" ]]; then exit "$status"; fi
+if [[ ${#profiles[@]} -eq 0 ]]; then
+	echo "error: no profiles in $out/profraw" >&2
+	exit 1
+fi
 
 step "report"
 "$profdata" merge -sparse "${profiles[@]}" -o "$out/ldap.profdata"
-# Every instrumented executable: our targets are the only ones built with
+# Every executable: our targets are the only ones built with
 # -fprofile-instr-generate, so the rest (Catch2, Corosio) has no mapping.
+# Only ELF files: llvm-cov rejects anything else (e.g. an executable script).
 # llvm-cov takes the first as a positional argument, the rest with -object.
 objects=()
 while IFS= read -r exe; do
+	if ! cmp -s -n 4 "$exe" <(printf '\177ELF'); then continue; fi
 	if [[ ${#objects[@]} -gt 0 ]]; then objects+=(-object); fi
 	objects+=("$exe")
 done < <(find "$build" -path "$build/_deps" -prune -o -path "*/CMakeFiles" -prune -o \
 	-type f -perm -u+x -print | sort)
+if [[ ${#objects[@]} -eq 0 ]]; then
+	echo "error: no executables in $build" >&2
+	exit 1
+fi
 # "N functions have mismatched data" is expected: hash-0 placeholder records
 # of inline / constexpr functions a binary never emitted (e.g. ldap::detail::
 # is_dn, used at compile time); the emitted copy carries the counts.
+# The source paths alone select our files (no -ignore-filename-regex: it
+# matches the absolute path, so a checkout under e.g. ~/src/examples/ would
+# drop everything).
 filters=(-instr-profile "$out/ldap.profdata" "${objects[@]}"
-	-ignore-filename-regex '/(_deps|tests|fuzz|bench|examples)/'
 	"$ldap/src" "$ldap/include")
 "$cov" report "${filters[@]}" | tee "$out/summary.txt"
 "$cov" show "${filters[@]}" -format=html -output-dir "$out/html" \
 	-show-branches=count -show-line-counts-or-regions
 "$cov" export "${filters[@]}" -summary-only -format=text >"$out/summary.json"
 echo "HTML report: $out/html/index.html"
+exit "$status"

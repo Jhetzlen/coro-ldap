@@ -393,18 +393,7 @@ certificates generated at run time through the OpenSSL API.
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
 | `JHETZ_LDAP_WERROR` | `OFF` | warnings are errors in our code (CI turns it on) |
 | `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench` (see below; not run by ctest or CI) |
-| `JHETZ_LDAP_COVERAGE` | `OFF` | Clang source-based coverage on our own targets (see below) |
-
-Coverage: `ldap/tests/coverage/run_coverage.sh [BUILD_DIR]` builds
-`build/coverage` with clang++ and `-DJHETZ_LDAP_COVERAGE=ON` (only our
-libraries, tests and examples are instrumented; no sanitizers), runs the
-whole ctest suite, and with `SLAPD` set (as for `run_slapd.sh`) the
-integration tests too, then reports on `ldap/src` and `ldap/include`:
-`llvm-cov report` on the terminal, HTML with line, region and branch counts
-in `BUILD_DIR/llvm-cov/html/index.html`, and `llvm-cov export -summary-only`
-JSON in `BUILD_DIR/llvm-cov/summary.json`. It needs `llvm-profdata` and
-`llvm-cov` matching the compiler (the `llvm` package; or set `LLVM_PROFDATA`,
-`LLVM_COV` and `CXX`).
+| `JHETZ_LDAP_COVERAGE` | `OFF` | Clang source-based coverage on our own targets (see [Coverage](#coverage)) |
 
 ## Integration tests
 
@@ -430,6 +419,33 @@ package, others are set with `SLAPD`, `SLAPD_SCHEMA_DIR` and
 path; without it the server side sort test is skipped. Without slapd the
 `integration` test is skipped, so plain `ctest` stays hermetic. CI runs it
 in the `integration` job.
+
+## Coverage
+
+`tests/coverage/run_coverage.sh` configures and builds `BUILD_DIR` (default
+`build/coverage`) with clang++ and `-DJHETZ_LDAP_COVERAGE=ON` (only our
+libraries, tests and examples are instrumented; no sanitizers), runs the
+whole ctest suite, and with `SLAPD` set (as for `run_slapd.sh`) the
+integration tests too, then reports on `ldap/src` and `ldap/include`:
+
+```sh
+SLAPD=/usr/sbin/slapd ldap/tests/coverage/run_coverage.sh [--run-only] [BUILD_DIR]
+```
+
+- `BUILD_DIR/llvm-cov/summary.txt`: the `llvm-cov report` table (also printed)
+- `BUILD_DIR/llvm-cov/html/index.html`: line, region and branch counts per file
+- `BUILD_DIR/llvm-cov/summary.json`: `llvm-cov export -summary-only`
+
+`--run-only` stops after the tests and leaves the raw profiles in
+`BUILD_DIR/llvm-cov/profraw`. A failing test still gets a report, and the
+script exits with the test run's status. An existing `BUILD_DIR` configured
+without the option is refused rather than reconfigured. It needs
+`llvm-profdata` and `llvm-cov` matching the compiler (the `llvm` package; or
+set `LLVM_PROFDATA`, `LLVM_COV` and `CXX`), on Linux.
+
+A template that nothing instantiates generates no code, so it is missing
+from the report rather than shown as 0% (uncalled inline functions do show
+up, with zero counts).
 
 ## Fuzz
 
