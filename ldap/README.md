@@ -169,7 +169,9 @@ on by default) with the network parts. It depends on Corosio and Capy
   as `when_any` requires; the first to complete wins, the other is
   stopped, so a losing operation is abandoned). `ldap::with_stop(token,
   op)` cancels it on a `std::stop_token` of your own (stoppable from any
-  thread) as well as on the awaiting task's.
+  thread with the io_context's default `corosio::locking_mode::safe`; see
+  `connection.hpp` for the lockless tiers) as well as on the awaiting
+  task's.
   Bind and StartTLS cannot be abandoned (RFC 4511 section 4.11): giving up
   on one closes the connection (one stopped before it starts is not sent,
   and the connection stays open). Nothing is sent while a bind is outstanding

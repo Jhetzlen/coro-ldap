@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <latch>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -864,17 +865,6 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 		CHECK(out.get().error().message() == "search \"\" (abandoned): operation canceled [boost.capy:2]");
 		check_abandoned_and_usable(m);
 	}
-	SECTION("stopped from another thread")
-	{
-		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
-		spawn(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.search({})), out);
-		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
-		std::thread([&cancel] { cancel.request_stop(); }).join();
-		drive_until(m.ioc, [&out] { return out.done(); });
-		REQUIRE_FALSE(out.get().has_value());
-		CHECK(out.get().error().code == ldap::cond::canceled);
-		check_abandoned_and_usable(m);
-	}
 	SECTION("stop requested before it starts")
 	{
 		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
@@ -923,6 +913,62 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 		cancel.request_stop();
 		drive_until(m.ioc, [&bind] { return bind.done(); });
 		check_bind_closed(m, bind.get());
+	}
+}
+
+namespace {
+
+// Awaits `op`, then stops `ioc`, so that run() returns on the thread running it.
+capy::task<entries> then_stop_ioc(corosio::io_context &ioc, capy::task<entries> op)
+{
+	auto r = co_await std::move(op);
+	ioc.stop();
+	co_return r;
+}
+
+}// namespace
+
+// The io_context runs on a worker thread while the test thread requests the
+// stop, so the stop callbacks (Capy's wait cancellation and, with a timeout,
+// Corosio's timer cancellation) run concurrently with the event loop. The
+// latch is counted down by a handler run inside run(), and run() cannot
+// return before the search completes, which needs the stop: the stop always
+// lands while run() is executing on the worker (usually blocked in the
+// reactor wait, though nothing forces that exact point). Catch2 assertions
+// stay on the test thread, after the join.
+TEST_CASE("with_stop: stopped from another thread while the io_context runs", "[net][connection][cancel]")
+{
+	const auto stopped_while_running = [](ldap::connection_options options) {
+		std::stop_source cancel;
+		outcome<entries> out;
+		mock_ldap m(options);
+		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
+		spawn(m.ioc, then_stop_ioc(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.search({}))), out);
+		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+		REQUIRE_FALSE(out.done());
+
+		std::latch running{ 1 };
+		capy::run_async(m.ioc.get_executor())([](std::latch &l) -> capy::task<void> {
+			l.count_down();
+			co_return;
+		}(running));
+		std::thread io([&m] { m.ioc.run_for(io_limit); });
+		running.wait();
+		cancel.request_stop();
+		io.join();
+		m.ioc.restart();
+
+		REQUIRE(out.done());
+		REQUIRE_FALSE(out.get().has_value());
+		CHECK(out.get().error().code == ldap::cond::canceled);
+		CHECK(out.get().error().context == "search \"\" (abandoned)");
+		check_abandoned_and_usable(m);
+	};
+
+	SECTION("waiting for the response") { stopped_while_running({}); }
+	SECTION("with a timeout: the stop also cancels the timer")
+	{
+		stopped_while_running({ .operation_timeout = std::chrono::hours(1) });
 	}
 }
 

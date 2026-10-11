@@ -695,9 +695,24 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   a cancelled operation never does. `ldap::with_stop(token, op)` awaits an
   operation with a fresh `std::stop_source` that both `token` and the
   caller's own token stop through `std::stop_callback`s; `capy::run(token)`
-  alone would replace the caller's token. The stop callbacks may run on any
-  thread: they only reach Capy's waits, whose cancellation posts the
-  resumption to the connection's executor. Neither helper owns anything
+  alone would replace the caller's token. The stop callbacks run on the
+  thread that requests the stop. What they reach: Capy's waits
+  (`async_event`, `async_waker`), whose cancellation posts the resumption
+  to the executor; the Corosio timer of `corosio::timeout` when the
+  operation has a deadline (`operation_timeout`, `.timeout`, connect's
+  timeout), cancelled under the timer service's own mutex and then posted;
+  and, when `with_stop` wraps `ldap::connect()`, the sockets of the TCP
+  connect and the ldaps:// TLS handshake, cancelled under Corosio's I/O
+  lock (per descriptor on the reactors, the ring lock on io_uring). The
+  resolver is not: the stop wakes the wait for the lookup, and
+  `resolver::cancel()` then runs on the executor. An open connection's
+  reader, writer and StartTLS handshake run under their own stop tokens.
+  So a stop from any thread is safe with Corosio's default
+  `locking_mode::safe`. With `unsafe` (no scheduler lock) a post from
+  another thread is undefined behaviour, so the stop must come from the
+  thread running the io_context; `unsafe_io` keeps the scheduler lock but
+  drops those I/O locks, which only matters while `connect()` is
+  stopped. Neither helper owns anything
   beyond its coroutine frame, which outlives the operation it awaits.
 - Bind sequencing (RFC 4511 section 4.2.1: no PDU while a BindRequest is
   outstanding): a bind exchange (every step of a SASL bind) marks the

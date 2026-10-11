@@ -53,8 +53,12 @@
 // parent giving up), await it with with_stop(source.get_token(), op): it then
 // stops on either that token or the awaiting task's. (capy::run(token)(op)
 // replaces the task's token instead, so stopping the task would be ignored.)
-// request_stop() may be called from any thread; the operation still
-// completes on the connection's executor.
+// request_stop() may be called from any thread while the io_context uses
+// Corosio's default locking_mode::safe; the operation still completes on the
+// connection's executor. With locking_mode::unsafe, call it only on the
+// thread running the io_context (posting from another thread is undefined
+// there); with unsafe_io, likewise while it wraps connect(), whose socket
+// operations that tier leaves unlocked.
 //
 // Binds (RFC 4511 section 4.2.1): nothing is sent while a BindRequest is
 // outstanding. Requests started during a bind exchange (all the steps of a
@@ -662,7 +666,9 @@ template<class T> boost::capy::task<boost::capy::io_result<result<T>>> raceable(
 // awaiting task's own stop token is: either cancels the operation (an LDAP
 // operation then fails with cond::canceled and is abandoned, or, for a bind
 // or StartTLS, closes the connection). A stop requested after `op` has
-// completed has no effect. `token` may be stopped from any thread.
+// completed has no effect. `token` may be stopped from any thread under the
+// io_context's default locking_mode::safe (see "Cancelling from a coroutine"
+// above for the lockless tiers).
 template<class T> boost::capy::task<T> with_stop(std::stop_token token, boost::capy::task<T> op)
 {
 	std::stop_source either;
