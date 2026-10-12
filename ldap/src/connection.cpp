@@ -1436,17 +1436,22 @@ namespace {
 		if (*root)
 			if (const auto *v = (*root)->find("subschemaSubentry"); v != nullptr && !v->empty())
 				where = std::string(v->front());
+		// `where` is the server's text: quoted sanitized (a DN, as entry_context).
+		auto quoted = [&where](std::string text) {
+			detail::append_sanitized(text, where, 256);
+			return text;
+		};
 		auto base = dn::parse(where);
 		if (!base)
 			co_return fail(
-			  client_errc::invalid_dn, context + ": the root DSE names an invalid subschemaSubentry: " + where);
+			  client_errc::invalid_dn, quoted(context + ": the root DSE names an invalid subschemaSubentry: "));
 		auto sub = co_await read_one(self,
 		  { .base = std::move(*base),
 			.scope = search_scope::base_object,
 			.filter = filters::attr("objectClass") == "subschema",
 			.attributes = { "attributeTypes", "objectClasses" } });
 		if (!sub) co_return std::unexpected(detail::with_context(std::move(sub.error()), context));
-		if (!*sub) co_return fail(errc::no_such_object, context + ": no subschema entry at " + where);
+		if (!*sub) co_return fail(errc::no_such_object, quoted(context + ": no subschema entry at "));
 		static const std::pmr::vector<std::pmr::string> none;
 		const auto *types = (*sub)->find("attributeTypes");
 		const auto *classes = (*sub)->find("objectClasses");

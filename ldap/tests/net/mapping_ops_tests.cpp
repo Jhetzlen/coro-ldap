@@ -171,6 +171,47 @@ TEST_CASE("typed: load_schema reads the subschema named by the root DSE", "[net]
 	CHECK(sub.attributes == ldap::string_list{ "attributeTypes", "objectClasses" });
 }
 
+// The root DSE's subschemaSubentry is the server's text: quoted in the
+// context sanitized (valid UTF-8 kept, controls, bidi controls and
+// U+2028 shown as U+FFFD) and cut at 256 bytes.
+TEST_CASE("typed: load_schema quotes the subschemaSubentry sanitized", "[net][mapping][schema]")
+{
+	const std::string fffd = "\xEF\xBF\xBD";
+	auto root_naming = [](std::string where) {
+		return answer(
+		  { ldap::message{ 1, ldap::search_result_entry{ "", { { "subschemaSubentry", { where } } } } }, done_msg(1) });
+	};
+
+	SECTION("not a DN")
+	{
+		mock_ldap m;
+		// 27 bytes, then x up to the cut.
+		m.serve(
+		  { root_naming("Subschema\r\n\x1b[31m\xC3\xA9\xE6\x97\xA5\xE6\x9C\xAC\xE2\x80\xAE" + std::string(300, 'x')) });
+		auto s = m.run(m.conn.load_schema());
+		REQUIRE_FALSE(s.has_value());
+		CHECK(s.error().code == ldap::client_errc::invalid_dn);
+		CHECK(std::string(s.error().context)
+			  == "load schema: the root DSE names an invalid subschemaSubentry: Subschema" + fffd + fffd + fffd
+				   + "[31m\xC3\xA9\xE6\x97\xA5\xE6\x9C\xAC" + fffd + std::string(256 - 27, 'x') + "...");
+		m.check_server();
+	}
+	SECTION("a DN with no subschema entry")
+	{
+		mock_ldap m;
+		// 19 bytes: U+0085 (C1) and U+2028, then y up to the cut.
+		m.serve({ root_naming("cn=sub\xC2\x85\xE2\x80\xA8\xC3\xA9\xE6\x97\xA5\xE6\x9C\xAC" + std::string(300, 'y')),
+		  answer({ done_msg(2) }) });
+		auto s = m.run(m.conn.load_schema());
+		REQUIRE_FALSE(s.has_value());
+		CHECK(s.error().code == ldap::errc::no_such_object);
+		CHECK(std::string(s.error().context)
+			  == "load schema: no subschema entry at cn=sub" + fffd + fffd + "\xC3\xA9\xE6\x97\xA5\xE6\x9C\xAC"
+				   + std::string(256 - 19, 'y') + "...");
+		m.check_server();
+	}
+}
+
 TEST_CASE("typed: schema_check::on_first_use", "[net][mapping][schema]")
 {
 	mock_ldap m({ .schema_check = ldap::schema_check::on_first_use });
