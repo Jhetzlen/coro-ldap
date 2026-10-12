@@ -41,9 +41,8 @@ namespace detail {
 
 result<dn> value_traits<dn>::decode(std::string_view raw)
 {
-	auto d = dn::parse(raw);
-	if (!d) return std::unexpected(detail::conversion_error("not a distinguished name", raw));
-	return d;
+	return dn::parse(raw).transform_error(
+	  [raw](const error &) { return detail::conversion_error("not a distinguished name", raw); });
 }
 
 // ---------------------------------------------------------------- GeneralizedTime

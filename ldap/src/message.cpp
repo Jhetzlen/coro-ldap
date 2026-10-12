@@ -1305,11 +1305,11 @@ namespace {
 	// are relative to the value, not to the message.
 	template<class T> result<T> in_control(result<T> r, std::string_view name)
 	{
-		if (r) return r;
-		auto e = std::move(r.error());
-		if (!e.context.empty()) e.context.insert(0, ": ");
-		e.context.insert(0, name);
-		return std::unexpected(std::move(e));
+		return std::move(r).transform_error([name](error &&e) {
+			if (!e.context.empty()) e.context.insert(0, ": ");
+			e.context.insert(0, name);
+			return std::move(e);
+		});
 	}
 
 }// namespace

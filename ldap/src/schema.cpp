@@ -158,26 +158,26 @@ namespace {
 
 result<attribute_type> parse_attribute_type(std::string_view text)
 {
-	auto d = parse_definition(text);
-	if (!d) return std::unexpected(std::move(d.error()));
-	attribute_type a;
-	a.oid = std::move(d->oid);
-	a.names = valid_names(d->get("NAME"));
-	if (const auto *s = d->get("SUP"); s && !s->empty()) a.sup = s->front();
-	if (const auto *s = d->get("SYNTAX"); s && !s->empty()) a.syntax = strip_length(s->front());
-	a.single_value = d->has("SINGLE-VALUE");
-	a.no_user_modification = d->has("NO-USER-MODIFICATION");
-	return a;
+	return parse_definition(text).transform([](definition &&d) {
+		attribute_type a;
+		a.oid = std::move(d.oid);
+		a.names = valid_names(d.get("NAME"));
+		if (const auto *s = d.get("SUP"); s && !s->empty()) a.sup = s->front();
+		if (const auto *s = d.get("SYNTAX"); s && !s->empty()) a.syntax = strip_length(s->front());
+		a.single_value = d.has("SINGLE-VALUE");
+		a.no_user_modification = d.has("NO-USER-MODIFICATION");
+		return a;
+	});
 }
 
 result<object_class_type> parse_object_class(std::string_view text)
 {
-	auto d = parse_definition(text);
-	if (!d) return std::unexpected(std::move(d.error()));
-	object_class_type c;
-	c.oid = std::move(d->oid);
-	c.names = valid_names(d->get("NAME"));
-	return c;
+	return parse_definition(text).transform([](definition &&d) {
+		object_class_type c;
+		c.oid = std::move(d.oid);
+		c.names = valid_names(d.get("NAME"));
+		return c;
+	});
 }
 
 server_schema server_schema::parse(std::span<const std::pmr::string> attribute_types,

@@ -2,6 +2,7 @@
 
 #include "jhetz/ldap/ber.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <type_traits>
@@ -53,18 +54,27 @@ namespace {
 		return value_control(oid, critical, w, control::allocator_type(mr));
 	}
 
+	// The first control of type `oid`, decoded by `decode` (which returns
+	// a result<T>); nullopt if there is none.
+	template<class T, class Decode>
+	result<std::optional<T>>
+	  find_decoded(const std::pmr::vector<control> &controls, std::string_view oid, Decode decode)
+	{
+		const auto it = std::ranges::find(controls, oid, &control::type);
+		if (it == controls.end()) return std::optional<T>{};
+		return decode(*it).transform([](T &&v) { return std::optional<T>(std::move(v)); });
+	}
+
 	result<std::optional<entry>>
 	  find_read_entry(const std::pmr::vector<control> &controls, std::string_view oid, std::pmr::memory_resource *mr)
 	{
-		for (const auto &c : controls) {
-			if (c.type != oid) continue;
+		return find_decoded<entry>(controls, oid, [mr](const control &c) {
 			decode_options options;
 			options.memory = mr;
-			auto e = decode_read_entry(c, options);
-			if (!e) return std::unexpected(std::move(e.error()));
-			return std::optional<entry>(entry::from(std::move(*e)));
-		}
-		return std::optional<entry>{};
+			return decode_read_entry(c, options).transform([](search_result_entry &&e) {
+				return entry::from(std::move(e));
+			});
+		});
 	}
 
 }// namespace
@@ -86,13 +96,12 @@ result<control> to_control(const request_control &c, std::pmr::memory_resource *
 		  } else if constexpr (std::is_same_v<T, assertion>) {
 			  // controlValue is the Filter itself (RFC 4528 section 3).
 			  ber::writer w{ ber::writer::allocator_type(mr) };
-			  auto ok = encode_filter(w, v.filter);
-			  if (!ok) {
-				  auto e = std::move(ok.error());
-				  e.context.insert(0, e.context.empty() ? "assertion" : "assertion: ");
-				  return std::unexpected(std::move(e));
-			  }
-			  return value_control(assertion_oid, v.critical, w, alloc);
+			  return encode_filter(w, v.filter)
+				.transform_error([](error &&e) {
+					e.context.insert(0, e.context.empty() ? "assertion" : "assertion: ");
+					return std::move(e);
+				})
+				.transform([&] { return value_control(assertion_oid, v.critical, w, alloc); });
 		  } else if constexpr (std::is_same_v<T, pre_read>) {
 			  return encode_selection(pre_read_oid, v.attributes, v.critical, mr);
 		  } else if constexpr (std::is_same_v<T, post_read>) {
@@ -119,25 +128,15 @@ result<void> append_controls(const request_controls &controls, std::pmr::vector<
 result<std::optional<paged_results>> find_paged(const std::pmr::vector<control> &controls,
   std::pmr::memory_resource *mr)
 {
-	for (const auto &c : controls) {
-		if (c.type != paged_results_oid) continue;
-		auto p = decode_paged_results(c, mr);
-		if (!p) return std::unexpected(std::move(p.error()));
-		return std::optional<paged_results>(std::move(*p));
-	}
-	return std::optional<paged_results>{};
+	return find_decoded<paged_results>(
+	  controls, paged_results_oid, [mr](const control &c) { return decode_paged_results(c, mr); });
 }
 
 result<std::optional<sort_result>> find_sort_result(const std::pmr::vector<control> &controls,
   std::pmr::memory_resource *mr)
 {
-	for (const auto &c : controls) {
-		if (c.type != sort_response_oid) continue;
-		auto r = decode_sort_result(c, mr);
-		if (!r) return std::unexpected(std::move(r.error()));
-		return std::optional<sort_result>(std::move(*r));
-	}
-	return std::optional<sort_result>{};
+	return find_decoded<sort_result>(
+	  controls, sort_response_oid, [mr](const control &c) { return decode_sort_result(c, mr); });
 }
 
 result<std::optional<entry>> find_pre_read(const std::pmr::vector<control> &controls, std::pmr::memory_resource *mr)
