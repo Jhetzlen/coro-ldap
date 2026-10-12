@@ -443,11 +443,13 @@ TEST_CASE("connection: unbind with a stream open ends the stream", "[net][connec
 }
 
 // RFC 4511 section 4.3: nothing may follow the UnbindRequest. The writer is
-// kept busy with an AddRequest nothing reads yet, so unbind() waits for it
-// with its UnbindRequest queued behind; what starts meanwhile is refused.
+// kept busy with an AddRequest nothing reads yet (larger than the socket
+// buffers), so unbind() waits for it with its UnbindRequest queued behind;
+// what starts meanwhile is refused.
 TEST_CASE("RFC 4511 4.3: requests started while unbind waits for the writer are refused", "[net][connection][rfc]")
 {
-	tcp_mock_ldap m;// over TCP, so StartTLS gets past its transport check
+	tcp_mock_ldap m({}, socket_buffers::small);// over TCP, so StartTLS gets past its transport check
+	REQUIRE(m.buffered_at_most() < oversized_add_value);
 	outcome<ldap::result<ldap::response>> add;
 	spawn(m.ioc, m.conn.add(oversized_add()), add);
 	outcome<ldap::result<void>> unbind;

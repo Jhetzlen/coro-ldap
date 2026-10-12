@@ -8,6 +8,7 @@
 // provide()-before-read use in message_io_tests.cpp never parks a reader.
 #pragma once
 
+#include "../../src/net/transport_impl.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "net_test_support.hpp"
@@ -18,11 +19,13 @@
 #include <boost/corosio/ipv4_address.hpp>
 #include <boost/corosio/local_connect_pair.hpp>
 #include <boost/corosio/local_stream_socket.hpp>
+#include <boost/corosio/socket_option.hpp>
 #include <boost/corosio/tcp_acceptor.hpp>
 #include <boost/corosio/tcp_socket.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
@@ -233,9 +236,22 @@ struct mock_ldap : scripted_server<mock_ldap>
 	net::transport server_end() { return net::transport::wrap(socket_ref{ &sockets.server }, "server"); }
 };
 
-// mock_ldap over loopback TCP: the connection is made by ldap::connect, so
-// its transport is plain TCP and start_tls() sends its request (the server
-// can only refuse it: it does not speak TLS).
+// The kernel buffers of tcp_mock_ldap's sockets: the system's (Linux
+// autotunes them, up to the tcp_wmem / tcp_rmem sysctls), or small fixed
+// ones, so that what the client can write while the server's end does not
+// read is bounded whatever the host's settings (oversized_add()).
+enum class socket_buffers { system, small };
+
+// SO_SNDBUF and SO_RCVBUF asked for with socket_buffers::small. Linux
+// doubles them (for its bookkeeping) and caps them at net.core.wmem_max /
+// rmem_max; setting them also turns autotuning off.
+inline constexpr int small_socket_buffer = 64 * 1024;
+
+// mock_ldap over loopback TCP: the transport is plain TCP, so start_tls()
+// sends its request (the server can only refuse it: it does not speak TLS).
+// The connection is made by ldap::connect, or with socket_buffers::small
+// from a socket of the test's own with a small send buffer (connect() sets
+// no buffer sizes); the server's end has a small receive buffer then.
 struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 {
 	corosio::io_context ioc{};
@@ -244,9 +260,15 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 	ldap::connection conn{};
 	server_log log{};
 	outcome<void> server{};
+	// socket_buffers::small: the client's SO_SNDBUF as the kernel reports it.
+	std::size_t client_send_buffer = 0;
 
-	explicit tcp_mock_ldap(ldap::connection_options options = {})
+	explicit tcp_mock_ldap(ldap::connection_options options = {}, socket_buffers buffers = socket_buffers::system)
 	{
+		// The accepted socket inherits it; set before the client connects,
+		// so the window offered from the start is the small one.
+		if (buffers == socket_buffers::small)
+			acc.set_option(corosio::socket_option::receive_buffer_size(small_socket_buffer));
 		outcome<void> accepted;
 		spawn(
 		  ioc,
@@ -256,11 +278,15 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 		  }(acc, peer),
 		  accepted);
 		try {
-			auto u = ldap::url::parse(url());
-			REQUIRE(u.has_value());
-			auto c = finish(ioc, ldap::connect(ioc, *u, options));
-			REQUIRE(c.has_value());
-			conn = std::move(*c);
+			if (buffers == socket_buffers::small) {
+				conn = finish(ioc, connect_small(options));
+			} else {
+				auto u = ldap::url::parse(url());
+				REQUIRE(u.has_value());
+				auto c = finish(ioc, ldap::connect(ioc, *u, options));
+				REQUIRE(c.has_value());
+				conn = std::move(*c);
+			}
 			drive_until(ioc, [&accepted] { return accepted.done(); });
 			accepted.get();
 		} catch (...) {
@@ -291,17 +317,48 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 
 	// The server's end, to write outside the script.
 	net::transport server_end() { return net::transport::wrap(socket_ref{ &peer }, "server"); }
+
+	// socket_buffers::small: at most what the kernel holds of a PDU the
+	// client writes while the server's end does not read (the client's send
+	// buffer and the server's receive buffer, as reported: on Linux they
+	// include the bookkeeping, so the data they hold is less).
+	std::size_t buffered_at_most() const
+	{
+		const auto received = peer.get_option<corosio::socket_option::receive_buffer_size>().value();
+		return client_send_buffer + static_cast<std::size_t>(received);
+	}
+
+  private:
+	// What ldap::connect does for ldap://, but on a socket whose send buffer
+	// is set before it connects.
+	capy::task<ldap::connection> connect_small(ldap::connection_options options)
+	{
+		corosio::tcp_socket s(ioc);
+		if (auto ec = s.open(); ec) throw std::system_error(ec, "open");
+		s.set_option(corosio::socket_option::send_buffer_size(small_socket_buffer));
+		if (auto [ec] = co_await s.connect(acc.local_endpoint()); ec) throw std::system_error(ec, "connect");
+		client_send_buffer = static_cast<std::size_t>(s.get_option<corosio::socket_option::send_buffer_size>().value());
+		const std::string name = url();
+		net::transport t =
+		  net::transport_access::make(net::transport::kind::tcp, name, std::pmr::get_default_resource());
+		auto &im = net::transport_access::get(t);
+		im.host = "127.0.0.1";
+		im.tcp.emplace(std::move(s));
+		im.stream = capy::any_stream(&*im.tcp);
+		co_return ldap::connection(ioc, std::move(t), options);
+	}
 };
 
-// An AddRequest of 8 MiB: about twice what loopback TCP buffers while
-// nothing reads (Linux: the send buffer grows to tcp_wmem's 4 MiB, the
-// receive window only as the peer reads), so the writer is still busy with
-// it until the server's end reads. Less than read_options::max_message_size,
-// so the server can read it then.
+// An AddRequest of 1 MiB: several times what tcp_mock_ldap with
+// socket_buffers::small holds while the server's end does not read (check
+// buffered_at_most()), so the writer is still busy with it until the server
+// reads. Less than read_options::max_message_size, so the server can read
+// it then.
+inline constexpr std::size_t oversized_add_value = std::size_t{ 1 } << 20;
 inline ldap::add_params oversized_add()
 {
 	return { .entry = ldap::dn{ "uid=big,ou=people,dc=example,dc=org" },
-		.attributes = { ldap::partial_attribute{ "description", { std::string(std::size_t{ 8 } << 20, 'x') } } } };
+		.attributes = { ldap::partial_attribute{ "description", { std::string(oversized_add_value, 'x') } } } };
 }
 
 inline ldap::search_params people_search()
