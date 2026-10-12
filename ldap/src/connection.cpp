@@ -36,6 +36,15 @@ namespace capy = boost::capy;
 namespace corosio = boost::corosio;
 
 namespace jhetz::ldap {
+
+std::string detail::op_context(std::string_view op, const dn &d)
+{
+	if (d.empty()) return detail::format("{} \"\"", op);
+	std::string text = detail::format("{} ", op);
+	detail::append_sanitized(text, d.to_string(), 256);// as mapping's entry_context
+	return text;
+}
+
 namespace {
 
 	// Contexts are built as std::string (cold path) and copied into the
@@ -92,12 +101,7 @@ namespace {
 
 	bool same_tag(ber::tag a, ber::tag b) noexcept { return a.cls == b.cls && a.number == b.number; }
 
-	// "search ou=people,dc=example,dc=org", `search ""` for the root DSE.
-	std::string op_context(std::string_view op, const dn &d)
-	{
-		if (d.empty()) return detail::format("{} \"\"", op);
-		return detail::format("{} {}", op, d.to_string());
-	}
+	using detail::op_context;
 
 	using clock = std::chrono::steady_clock;
 
@@ -1387,7 +1391,10 @@ namespace {
 capy::task<result<std::optional<std::string>>> connection::password_modify(password_modify_params p)
 {
 	std::string context = "password modify";
-	if (p.user) context += " " + *p.user;
+	if (p.user) {// usually a DN, often the server's: as op_context
+		context += ' ';
+		detail::append_sanitized(context, *p.user, 256);
+	}
 	extended_params request{ .name = std::string(password_modify_oid),
 		.value = encode_password_modify(p),
 		.controls = std::move(p.controls),

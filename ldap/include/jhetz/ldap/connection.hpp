@@ -332,6 +332,11 @@ class connection;
 namespace detail {
 	// For tests only: the message id the next request tries first.
 	void set_next_message_id(connection &c, std::int32_t id) noexcept;
+	// An operation's error context: "search ou=people,dc=example,dc=org",
+	// `search ""` for the root DSE. The DN is often the server's text (an
+	// entry's DN, a referral's): sanitized and cut at 256 bytes, as an
+	// entry's in decode errors.
+	std::string op_context(std::string_view op, const dn &d);
 }// namespace detail
 
 class connection
@@ -479,14 +484,14 @@ class connection
 			co_return std::unexpected(std::move(c.error()));
 		request.attributes = attribute_names<T>();
 		request.filter = narrow_filter<T>(std::move(request.filter));
-		const std::string base = request.base.empty() ? std::string("\"\"") : std::string(request.base.to_string());
+		const std::string context = detail::op_context("search", request.base);
 		auto entries = co_await search(std::move(request));
 		if (!entries) co_return std::unexpected(std::move(entries.error()));
 		std::vector<T> out;
 		out.reserve(entries->size());
 		for (const auto &e : *entries) {
 			auto v = ldap::decode<T>(e);
-			if (!v) co_return std::unexpected(detail::with_context(std::move(v.error()), "search " + base));
+			if (!v) co_return std::unexpected(detail::with_context(std::move(v.error()), context));
 			out.push_back(std::move(*v));
 		}
 		co_return out;

@@ -86,6 +86,24 @@ TEST_CASE("typed: an entry that does not decode fails search_as", "[net][mapping
 	CHECK(m.conn.is_open());// a mapping error is not a connection error
 }
 
+// The base is often a DN the server returned: sanitized in the context
+// (valid UTF-8 kept, U+2028 shown as U+FFFD) and cut at 256 bytes, as the
+// entry's DN.
+TEST_CASE("typed: search_as quotes its base sanitized", "[net][mapping]")
+{
+	mock_ldap m;
+	m.serve({ answer({ account_entry(1, "b", "x"), done_msg(1) }) });
+	// 13 bytes: U+2028 and accents; then o up to the cut.
+	auto base = ldap::dn::parse("ou=\xE2\x80\xA8p\xC3\xA9pl\xC3\xA9" + std::string(400, 'o') + ",dc=example,dc=org");
+	REQUIRE(base.has_value());
+	auto r = m.run(m.conn.search_as<account>({ .base = std::move(*base) }));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::client_errc::conversion_failed);
+	CHECK(std::string(r.error().context)
+		  == "search ou=\xEF\xBF\xBDp\xC3\xA9pl\xC3\xA9" + std::string(256 - 13, 'o')
+			   + "...: entry uid=b,ou=people,dc=example,dc=org: attribute uidNumber: not an integer: \"x\"");
+}
+
 TEST_CASE("typed: modify<T> and add(dn, T)", "[net][mapping]")
 {
 	mock_ldap m;

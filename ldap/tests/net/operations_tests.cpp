@@ -135,6 +135,37 @@ TEST_CASE("operations: modify", "[net][operations]")
 				{ op::increment, { "uidNumber", { "2" } } } } } });
 }
 
+// The operation's DN is often one the server returned (an entry's, a
+// referral's): the context quotes it sanitized (valid UTF-8 kept, C1 and
+// bidi controls shown as U+FFFD) and cut at 256 bytes, as an entry's. So
+// is a password modify's user.
+TEST_CASE("operations: the context quotes the DN sanitized", "[net][operations]")
+{
+	mock_ldap m;
+	m.serve({ answer({ result_msg<ldap::modify_response>(1, 50, "no write access") }),
+	  answer({ ldap::message{ 2, ldap::extended_response{ ldap::ldap_result{ 50 } } } }) });
+	// 16 bytes: U+202E, U+0085 (C1), accents and CJK; then z up to the cut.
+	auto parsed = ldap::dn::parse(
+	  "cn=\xE2\x80\xAE\xC2\x85\xC3\xA9\xE6\x97\xA5\xE6\x9C\xAC" + std::string(1000, 'z') + ",dc=example,dc=org");
+	REQUIRE(parsed.has_value());
+	const ldap::dn target = std::move(*parsed);
+	auto r = m.run(m.conn.modify({ .object = target, .changes = { ldap::mod::replace("sn", { "X" }) } }));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::cond::access_denied);
+	const std::string fffd = "\xEF\xBF\xBD";
+	CHECK(std::string(r.error().context)
+		  == "modify cn=" + fffd + fffd + "\xC3\xA9\xE6\x97\xA5\xE6\x9C\xAC" + std::string(256 - 16, 'z') + "...");
+	// A password modify's user, usually a DN, likewise.
+	auto pw = m.run(m.conn.password_modify({ .user = "uid=\r\n\xE2\x80\xA8j\xC3\xB6rg", .new_password = "new" }));
+	REQUIRE_FALSE(pw.has_value());
+	CHECK(pw.error().code == ldap::cond::access_denied);
+	CHECK(std::string(pw.error().context) == "password modify uid=" + fffd + fffd + fffd + "j\xC3\xB6rg");
+	m.check_server();
+	REQUIRE(m.log.received.size() == 2);
+	// The request carries the DN as given.
+	CHECK(std::get<ldap::modify_request>(m.log.received[0].op).object == target.to_string());
+}
+
 // ---------------------------------------------------------------- delete
 
 TEST_CASE("operations: delete", "[net][operations]")

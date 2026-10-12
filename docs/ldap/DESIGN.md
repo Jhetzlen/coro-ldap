@@ -487,8 +487,11 @@ escapes or Trojan Source reordering, or make every message huge. The fields
 keep the text exactly as sent. Server text the library quotes in a
 `context` (a value that failed to convert, an entry's DN, a SCRAM server
 error, a control type, an AddRequest attribute, the text
-`attribute::parse` rejected) gets the same treatment, cut at 64 or 256
-bytes.
+`attribute::parse` rejected, the root DSE's subschemaSubentry, an
+attribute type's SYNTAX) gets the same treatment, cut at 64 or 256 bytes.
+So does the DN an operation names (`search <base>`, `modify <DN>`, ...)
+and a password modify's user: the caller's, but often a DN the server
+returned.
 
 LDAP result code 0 (success) is not an `errc` value: a successful result is
 the absence of an error.
