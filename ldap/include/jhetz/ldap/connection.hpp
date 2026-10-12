@@ -398,12 +398,14 @@ class connection
 	// the bind; the connection stays usable (anonymous). A mechanism error
 	// (or the step limit) once the server answered saslBindInProgress first
 	// aborts the exchange with an anonymous simple bind (RFC 4511 section
-	// 4.2.1), before any held request is sent; if the server refuses that,
-	// the connection is closed. Except: when the server reports success and
-	// the mechanism's complete() refuses it (e.g. SCRAM-SHA-256 with a wrong
-	// server signature), the server considers the connection bound, so it is
-	// closed. The same rules as simple_bind apply
-	// otherwise. `mechanism` must outlive the task.
+	// 4.2.1), before any held request is sent. Any answer to it ends the
+	// exchange, even a refusal (a server that disallows anonymous binds), and
+	// the connection stays usable (anonymous); without an answer (timeout,
+	// cancellation) the connection is closed, as for any bind. Except: when
+	// the server reports success and the mechanism's complete() refuses it
+	// (e.g. SCRAM-SHA-256 with a wrong server signature), the server
+	// considers the connection bound, so it is closed. The same rules as
+	// simple_bind apply otherwise. `mechanism` must outlive the task.
 	boost::capy::task<result<void>> sasl_bind(sasl_mechanism &mechanism, dn name = {});
 
 	// Runs a search to its end and returns the entries in the order received,

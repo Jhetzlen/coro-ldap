@@ -136,20 +136,28 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 	}
 	SECTION("a server that refuses the abort")
 	{
-		// The server's state is unknown: the connection is closed, and the
-		// mechanism's error is still the result.
+		// Any BindResponse ends the exchange (RFC 4511 section 4.2.1), even a
+		// refusal from a server that disallows anonymous binds: the
+		// connection stays open (anonymous), the held search then goes out,
+		// and the mechanism's error is still the result.
 		mock_ldap m;
-		m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(2, 1, "no") }) });
+		m.serve({ answer({ sasl_resp(1, 14, "bad") }),
+		  answer({ bind_resp(3, 48, "anonymous bind disallowed") }),
+		  answer({ done_msg(2) }) });
 		echo_mechanism mech;
-		auto r = m.run(m.conn.sasl_bind(mech));
-		REQUIRE_FALSE(r.has_value());
-		CHECK(r.error().context == "sasl bind X-ECHO: X-ECHO: bad challenge");
-		CHECK_FALSE(m.conn.is_open());
+		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
+		spawn(m.ioc, m.conn.search({}), search);// id 2, held
+		drive_until(m.ioc, [&] { return bind.done() && search.done(); });
+		REQUIRE_FALSE(bind.get().has_value());
+		CHECK(bind.get().error().context == "sasl bind X-ECHO: X-ECHO: bad challenge");
+		CHECK(search.get().has_value());
+		CHECK(m.conn.is_open());
 		m.check_server();
-		auto later = m.run(m.conn.who_am_i());
-		REQUIRE_FALSE(later.has_value());
-		CHECK(later.error().code == ldap::client_errc::not_connected);
-		CHECK_THAT(std::string(later.error().context), ContainsSubstring("could not be aborted"));
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(m.log.received[1] == abort_req(3));
+		CHECK(m.log.received[2].id == 2);
 	}
 	SECTION("final server credentials the mechanism rejects")
 	{
