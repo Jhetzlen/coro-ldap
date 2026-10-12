@@ -28,7 +28,8 @@ entry entry::from(search_result_entry e)
 	// Reserved up front, so the attribute names the index points into never move.
 	out.attributes.reserve(e.attributes.size());
 	// Index by description, so a server sending many attributes cannot make
-	// this quadratic. Temporary, on the entry's resource.
+	// this quadratic (hash_value is seeded per process, so it cannot send
+	// names that collide either). Temporary, on the entry's resource.
 	std::pmr::unordered_map<std::string_view, std::size_t, detail::ci_hash, detail::ci_equal> index(alloc);
 	for (auto &pa : e.attributes) {
 		const auto it = index.find(pa.type);

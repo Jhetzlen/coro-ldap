@@ -1,8 +1,11 @@
 #include "jhetz/ldap/attribute.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <exception>
+#include <random>
 
 namespace jhetz::ldap {
 
@@ -73,14 +76,33 @@ namespace {
 		return h ^ (h >> 32);
 	}
 
+	// The hash's starting state, random per process. The rounds above are
+	// invertible, so with a fixed start anyone can compute names that
+	// collide in all 64 bits, and a server sending them makes the
+	// unordered containers keyed by its names (entry::from, schema name
+	// indexes) quadratic. Not knowing the start, it cannot.
+	std::uint64_t make_seed() noexcept
+	{
+		try {
+			std::random_device random;
+			return (std::uint64_t{ random() } << 32) ^ random();
+		} catch (const std::exception &) {
+			// No random device: the clock and an address (ASLR), weaker
+			// but not fixed.
+			const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+			return mix(static_cast<std::uint64_t>(now), reinterpret_cast<std::uintptr_t>(&now));
+		}
+	}
+
 }// namespace
 
 std::size_t hash_value(std::string_view attribute_name) noexcept
 {
+	static const std::uint64_t seed = make_seed();
 	// Eight lower-cased bytes at a time (names and OIDs are often longer
 	// than a byte-wise hash is fast for).
 	const std::size_t n = attribute_name.size();
-	std::uint64_t h = 0xCBF2'9CE4'8422'2325ull;
+	std::uint64_t h = seed;
 	std::size_t i = 0;
 	for (; i + 8 <= n; i += 8) h = mix(h, ascii_lower8(load8(attribute_name.data() + i)));
 	if (i != n) h = mix(h, ascii_lower8(tail8(attribute_name)));

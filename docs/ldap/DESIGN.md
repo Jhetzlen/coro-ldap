@@ -59,7 +59,9 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
 - `rdn`: one (possibly multi-valued) RDN, with its own literal
   (`ldap::rdn{"uid=x"}`), `rdn::parse()` and `to_string()`; text holding more
   than one RDN is rejected.
-- `attribute`: attribute description, compared and hashed case-insensitively.
+- `attribute`: attribute description, compared and hashed case-insensitively
+  (the hash is seeded at random per process, so a server cannot send names
+  that collide; its values differ between runs).
   `attribute::parse()` is strict RFC 4512; `attribute::unchecked()` keeps names
   as servers send them (Active Directory's `member;range=0-1499`).
 - `entry`: untyped search result (DN text + ordered attributes) with

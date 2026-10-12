@@ -218,7 +218,9 @@ class attribute
 	std::pmr::string name_{};
 };
 
-// Case-insensitive hash, consistent with operator==.
+// Case-insensitive hash, consistent with operator==. Seeded at random per
+// process, so a server cannot craft names that collide: values differ from
+// one run to the next and must not be stored or sent anywhere.
 [[nodiscard]] std::size_t hash_value(std::string_view attribute_name) noexcept;
 
 namespace detail {
