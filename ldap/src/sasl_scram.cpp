@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -41,6 +42,7 @@ namespace {
 		~wiped() { OPENSSL_cleanse(bytes.data(), bytes.size()); }
 		unsigned char *data() { return bytes.data(); }
 		static constexpr std::size_t size() { return N; }
+		std::span<unsigned char, N> span() { return bytes; }
 		unsigned char &operator[](std::size_t i) { return bytes[i]; }
 	};
 
@@ -66,8 +68,9 @@ namespace {
 
 	constexpr std::string_view b64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-	std::string base64_encode(const unsigned char *data, std::size_t n)
+	std::string base64_encode(std::span<const unsigned char> data)
 	{
+		const std::size_t n = data.size();
 		std::string out;
 		out.reserve((n + 2) / 3 * 4);
 		std::size_t i = 0;
@@ -95,7 +98,7 @@ namespace {
 
 	std::string base64_encode(std::string_view s)
 	{
-		return base64_encode(reinterpret_cast<const unsigned char *>(s.data()), s.size());
+		return base64_encode(std::span(reinterpret_cast<const unsigned char *>(s.data()), s.size()));
 	}
 
 	int b64_value(char c)
@@ -348,16 +351,18 @@ namespace {
 
 	// ------------------------------------------------------------ crypto
 
-	// HMAC-SHA-256 into out[0..32). False if OpenSSL fails.
-	[[nodiscard]] bool hmac(const unsigned char *k, std::size_t kn, std::string_view data, unsigned char *out)
+	// HMAC-SHA-256 of `data` keyed with `key`, into `out`. False if OpenSSL
+	// fails.
+	[[nodiscard]] bool
+	  hmac(std::span<const unsigned char> key, std::string_view data, std::span<unsigned char, key_size> out)
 	{
 		unsigned int n = 0;
 		const unsigned char *r = HMAC(EVP_sha256(),
-		  k,
-		  static_cast<int>(kn),
+		  key.data(),
+		  static_cast<int>(key.size()),
 		  reinterpret_cast<const unsigned char *>(data.data()),
 		  data.size(),
-		  out,
+		  out.data(),
 		  &n);
 		return r != nullptr && n == key_size;
 	}
@@ -424,7 +429,7 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 	} else {
 		wiped<nonce_bytes> raw;
 		if (RAND_bytes(raw.data(), static_cast<int>(raw.size())) != 1) return input_error("OpenSSL RAND_bytes failed");
-		client_nonce_ = base64_encode(raw.data(), raw.size());
+		client_nonce_ = base64_encode(raw.span());
 	}
 
 	// The password last, after every other check: a failure above leaves
@@ -532,11 +537,11 @@ result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_v
 		  salted.data())
 		!= 1)
 		return input_error("OpenSSL PBKDF2 failed");
-	if (!hmac(salted.data(), salted.size(), "Client Key", client_key.data())
+	if (!hmac(salted.span(), "Client Key", client_key.span())
 		|| SHA256(client_key.data(), client_key.size(), stored_key.data()) == nullptr
-		|| !hmac(stored_key.data(), stored_key.size(), auth_message, client_signature.data())
-		|| !hmac(salted.data(), salted.size(), "Server Key", server_key.data())
-		|| !hmac(server_key.data(), server_key.size(), auth_message, server_signature_.data())) {
+		|| !hmac(stored_key.span(), auth_message, client_signature.span())
+		|| !hmac(salted.span(), "Server Key", server_key.span())
+		|| !hmac(server_key.span(), auth_message, server_signature_)) {
 		wipe();
 		return input_error("OpenSSL HMAC or SHA-256 failed");
 	}
@@ -545,7 +550,7 @@ result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_v
 		proof[k] = static_cast<unsigned char>(client_key[k] ^ client_signature[k]);
 
 	state_ = state::sent_final;
-	return std::optional<std::string>(without_proof + ",p=" + base64_encode(proof.data(), proof.size()));
+	return std::optional<std::string>(without_proof + ",p=" + base64_encode(proof.span()));
 }
 
 result<void> sasl_scram_sha256::verify(std::string_view server_final)

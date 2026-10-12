@@ -364,16 +364,22 @@ template<described T> [[nodiscard]] constexpr std::span<const char *const> objec
 // ---------------------------------------------------------------- decode / encode
 
 namespace detail {
-	template<class F> result<typename F::member> decode_field(const std::pmr::vector<std::pmr::string> *values)
+	// The values entry::find returned, or none when the attribute is absent.
+	inline std::span<const std::pmr::string> values_or_empty(const std::pmr::vector<std::pmr::string> *values) noexcept
+	{
+		return values == nullptr ? std::span<const std::pmr::string>{} : std::span(*values);
+	}
+
+	template<class F> result<typename F::member> decode_field(std::span<const std::pmr::string> values)
 	{
 		using E = typename F::element;
 		using M = typename F::member;
-		const std::size_t n = values == nullptr ? 0 : values->size();
+		const std::size_t n = values.size();
 		if constexpr (F::kind == cardinality::multiple) {
 			M out;
 			out.reserve(n);
-			for (std::size_t i = 0; i < n; ++i) {
-				auto v = value_traits<E>::decode((*values)[i]);
+			for (const std::pmr::string &value : values) {
+				auto v = value_traits<E>::decode(value);
 				if (!v) return std::unexpected(std::move(v.error()));
 				out.push_back(std::move(*v));
 			}
@@ -386,7 +392,7 @@ namespace detail {
 				else
 					return fail(client_errc::missing_attribute);
 			}
-			auto v = value_traits<E>::decode((*values)[0]);
+			auto v = value_traits<E>::decode(values.front());
 			if (!v) return std::unexpected(std::move(v.error()));
 			return M(std::move(*v));
 		}
@@ -407,7 +413,8 @@ template<described T> [[nodiscard]] result<T> decode(const entry &e)
 		  (
 			[&] {
 				if (failed) return;
-				auto v = detail::decode_field<std::remove_cvref_t<decltype(f)>>(e.find(f.name));
+				auto v =
+				  detail::decode_field<std::remove_cvref_t<decltype(f)>>(detail::values_or_empty(e.find(f.name)));
 				if (!v) {
 					failed = detail::with_context(std::move(v.error()), detail::entry_context(e.dn, f.name));
 					return;
