@@ -881,6 +881,21 @@ namespace {
 		co_return co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout), context);
 	}
 
+	// Ends a SASL exchange the client gives up on while the server waits for
+	// its next step: until then the server refuses other operations (RFC
+	// 4511 section 4.2.1). An anonymous simple bind aborts it. If that fails
+	// the server's state is unknown, so the connection is closed.
+	capy::task<void> abort_sasl(impl_ref self, const std::string &context)
+	{
+		message request(std::pmr::polymorphic_allocator<>(self->mr));
+		request.op = bind_request(3, {}, simple_auth(std::string_view(), self->mr), self->mr);
+		auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
+		if (m && std::get<bind_response>(m->op).result.is_success()) co_return;
+		std::string text = context + ": connection closed: the SASL exchange could not be aborted: ";
+		text += (m ? std::get<bind_response>(m->op).result.to_error() : m.error()).message();
+		self->shut(make_error(client_errc::not_connected, text), true);
+	}
+
 	// The ldap_result of a response, whatever the operation.
 	const ldap_result &result_of(const message &m)
 	{
@@ -985,10 +1000,15 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 	constexpr int max_steps = 32;
 	auto creds = mechanism.start();
 	for (int step = 0;; ++step) {
-		if (!creds) co_return std::unexpected(detail::with_context(std::move(creds.error()), context));
-		if (step == max_steps)
-			co_return fail(client_errc::unexpected_response,
-			  detail::format("{}: still in progress after {} steps", context, max_steps));
+		if (!creds || step == max_steps) {
+			auto e = creds ? make_error(client_errc::unexpected_response,
+							   detail::format("{}: still in progress after {} steps", context, max_steps))
+						   : detail::with_context(std::move(creds.error()), context);
+			// Past the first step the server answered saslBindInProgress:
+			// abort the exchange before the held requests are sent.
+			if (step > 0) co_await abort_sasl(self, context);
+			co_return std::unexpected(std::move(e));
+		}
 		message request(std::pmr::polymorphic_allocator<>(self->mr));
 		std::optional<std::string_view> c;
 		if (*creds) c = **creds;

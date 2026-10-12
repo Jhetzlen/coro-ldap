@@ -29,6 +29,12 @@ ldap::message sasl_req(std::int32_t id, std::string_view mech, std::optional<std
 	return ldap::message{ id, ldap::bind_request{ 3, "", ldap::sasl_auth{ mech, creds } } };
 }
 
+// The anonymous simple bind that aborts a SASL exchange (RFC 4511 section 4.2.1).
+ldap::message abort_req(std::int32_t id)
+{
+	return ldap::message{ id, ldap::bind_request{ 3, "", ldap::simple_auth{ "" } } };
+}
+
 // A made-up multi-step mechanism: sends "hello", then answers each
 // challenge with "re:<challenge>", and records the final server creds.
 class echo_mechanism final : public ldap::sasl_mechanism
@@ -118,12 +124,32 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 	SECTION("a challenge the mechanism rejects")
 	{
 		mock_ldap m;
-		m.serve({ answer({ sasl_resp(1, 14, "bad") }) });
+		m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(2) }) });
 		echo_mechanism mech;
 		auto r = m.run(m.conn.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().context == "sasl bind X-ECHO: X-ECHO: bad challenge");
 		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[1] == abort_req(2));
+	}
+	SECTION("a server that refuses the abort")
+	{
+		// The server's state is unknown: the connection is closed, and the
+		// mechanism's error is still the result.
+		mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(2, 1, "no") }) });
+		echo_mechanism mech;
+		auto r = m.run(m.conn.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().context == "sasl bind X-ECHO: X-ECHO: bad challenge");
+		CHECK_FALSE(m.conn.is_open());
+		m.check_server();
+		auto later = m.run(m.conn.who_am_i());
+		REQUIRE_FALSE(later.has_value());
+		CHECK(later.error().code == ldap::client_errc::not_connected);
+		CHECK_THAT(std::string(later.error().context), ContainsSubstring("could not be aborted"));
 	}
 	SECTION("final server credentials the mechanism rejects")
 	{
@@ -145,18 +171,23 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 	SECTION("EXTERNAL given a challenge")
 	{
 		mock_ldap m;
-		m.serve({ answer({ sasl_resp(1, 14, "what?") }) });
+		m.serve({ answer({ sasl_resp(1, 14, "what?") }), answer({ bind_resp(2) }) });
 		ldap::sasl_external mech;
 		auto r = m.run(m.conn.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::unexpected_response);
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("EXTERNAL has a single step"));
+		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[1] == abort_req(2));
 	}
 	SECTION("a server that never finishes")
 	{
 		mock_ldap m;
 		std::vector<step> script;
 		for (std::int32_t id = 1; id <= 32; ++id) script.push_back(answer({ sasl_resp(id, 14, "more") }));
+		script.push_back(answer({ bind_resp(33) }));
 		m.serve(script);
 		echo_mechanism mech;
 		auto r = m.run(m.conn.sasl_bind(mech));
@@ -164,6 +195,8 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		CHECK(r.error().code == ldap::client_errc::unexpected_response);
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("still in progress after 32 steps"));
 		m.check_server();
+		REQUIRE(m.log.received.size() == 33);
+		CHECK(m.log.received[32] == abort_req(33));
 	}
 }
 
@@ -190,6 +223,29 @@ TEST_CASE("sasl: requests started during the exchange wait for its end", "[net][
 	CHECK(m.log.received[1] == sasl_req(3, "X-ECHO", "re:c1"));
 	CHECK(m.log.received[2] == sasl_req(4, "X-ECHO", "re:"));
 	CHECK(m.log.received[3].id == 2);
+}
+
+// RFC 4511 section 4.2.1: a client that gives up on a SASL exchange the
+// server still considers in progress aborts it with another bind before
+// anything else is sent (coro_http_client-f1e).
+TEST_CASE("sasl: a failed exchange is aborted before held requests are sent", "[net][sasl][rfc]")
+{
+	mock_ldap m;
+	m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(3) }), answer({ done_msg(2) }) });
+	echo_mechanism mech;
+	outcome<ldap::result<void>> bind;
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	spawn(m.ioc, m.conn.sasl_bind(mech), bind);
+	spawn(m.ioc, m.conn.search({}), search);// id 2, held
+	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
+	REQUIRE_FALSE(bind.get().has_value());
+	CHECK(bind.get().error().context == "sasl bind X-ECHO: X-ECHO: bad challenge");
+	CHECK(search.get().has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 3);
+	CHECK(m.log.received[0] == sasl_req(1, "X-ECHO", "hello"));
+	CHECK(m.log.received[1] == abort_req(3));
+	CHECK(m.log.received[2].id == 2);
 }
 
 // SCRAM-SHA-256 with the RFC 7677 section 3 test vector (the mechanism's
@@ -252,12 +308,16 @@ TEST_CASE("sasl: SCRAM-SHA-256 with the RFC 7677 test vector", "[net][sasl][scra
 		// connection is not closed.
 		mock_ldap m;
 		m.serve({ answer({ sasl_resp(1, 14, server_first) }),
-		  answer({ sasl_resp(2, 14, "v=7rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=") }) });
+		  answer({ sasl_resp(2, 14, "v=7rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=") }),
+		  answer({ bind_resp(3) }) });
 		auto r = m.run(m.conn.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().context
 			  == "sasl bind SCRAM-SHA-256: wrong server signature: the server could not be authenticated");
+		CHECK(m.conn.is_open());
 		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(m.log.received[2] == abort_req(3));
 	}
 	SECTION("the server refuses the proof")
 	{
@@ -273,10 +333,15 @@ TEST_CASE("sasl: SCRAM-SHA-256 with the RFC 7677 test vector", "[net][sasl][scra
 	SECTION("a server nonce that does not extend the client's")
 	{
 		mock_ldap m;
-		m.serve({ answer({ sasl_resp(1, 14, "r=forged,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096") }) });
+		m.serve(
+		  { answer({ sasl_resp(1, 14, "r=forged,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096") }), answer({ bind_resp(2) }) });
 		auto r = m.run(m.conn.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::unexpected_response);
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("does not start with the client nonce"));
+		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[1] == abort_req(2));
 	}
 }

@@ -80,6 +80,22 @@ ldap::connection open_admin(corosio::io_context &ioc)
 	return c;
 }
 
+// SCRAM-SHA-256 that gives up on the server's first message, as on one it
+// refuses: the client fails a step while slapd waits for the next one.
+class scram_giving_up final : public ldap::sasl_mechanism
+{
+  public:
+	std::string_view name() const noexcept override { return scram.name(); }
+	ldap::result<std::optional<std::string>> start() override { return scram.start(); }
+	ldap::result<std::optional<std::string>> step(std::optional<std::string_view>) override
+	{
+		return ldap::fail(ldap::client_errc::unexpected_response, "giving up");
+	}
+
+  private:
+	ldap::sasl_scram_sha256 scram{ "user007", "pw-user007" };
+};
+
 // A unique RDN value per test run, so runs against the same server do not collide.
 std::string unique(std::string_view stem)
 {
@@ -210,6 +226,21 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::auth_failed);
 		CHECK(c.is_open());
+		CHECK(finish(ioc, c.who_am_i()) == "");
+	}
+	SECTION("a step the client fails mid-exchange")
+	{
+		// RFC 4511 section 4.2.1: the exchange is aborted, so slapd accepts
+		// other operations again (coro_http_client-f1e).
+		scram_giving_up mech;
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().context == "sasl bind SCRAM-SHA-256: giving up");
+		REQUIRE(c.is_open());
+		auto again =
+		  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "namingContexts" } }));
+		REQUIRE(again.has_value());
+		CHECK(again->size() == 1);
 		CHECK(finish(ioc, c.who_am_i()) == "");
 	}
 }
