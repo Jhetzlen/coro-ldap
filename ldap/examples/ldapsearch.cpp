@@ -35,8 +35,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
-#include <format>
 #include <optional>
+#include <print>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -47,19 +47,6 @@ namespace capy = boost::capy;
 namespace corosio = boost::corosio;
 
 namespace {
-
-// std::println is not in libstdc++ 13 (the oldest supported GCC).
-template<class... Args> void println(std::FILE *f, std::format_string<Args...> fmt, Args &&...args)
-{
-	std::string line = std::format(fmt, std::forward<Args>(args)...);
-	line += '\n';
-	std::fwrite(line.data(), 1, line.size(), f);
-}
-
-template<class... Args> void println(std::format_string<Args...> fmt, Args &&...args)
-{
-	println(stdout, fmt, std::forward<Args>(args)...);
-}
 
 struct options
 {
@@ -84,8 +71,8 @@ struct options
 
 [[noreturn]] void usage(std::string_view problem)
 {
-	if (!problem.empty()) println(stderr, "jhetz-ldapsearch: {}", problem);
-	println(stderr,
+	if (!problem.empty()) std::println(stderr, "jhetz-ldapsearch: {}", problem);
+	std::println(stderr,
 	  "usage: jhetz-ldapsearch [-D binddn] [-w password] [-b base] [-s base|one|sub|children]\n"
 	  "                  [-z sizelimit] [-l timelimit] [--page size] [-Y EXTERNAL [-X authzid]] [-Z]\n"
 	  "                  [--ca-file file] [--cert file --key file] [--insecure]\n"
@@ -213,9 +200,9 @@ std::string base64(std::string_view in)
 void print_line(std::string_view type, std::string_view value)
 {
 	if (ldif_safe(value))
-		println("{}: {}", type, value);
+		std::println("{}: {}", type, value);
 	else
-		println("{}:: {}", type, base64(value));
+		std::println("{}:: {}", type, base64(value));
 }
 
 void print_entry(const ldap::entry &e)
@@ -223,7 +210,7 @@ void print_entry(const ldap::entry &e)
 	print_line("dn", e.dn);
 	for (const auto &a : e.attributes)
 		for (const auto &v : a.values) print_line(a.type.name(), v);
-	println("");
+	std::println("");
 }
 
 // ---------------------------------------------------------------- session
@@ -233,7 +220,7 @@ void print_entry(const ldap::entry &e)
 template<class Stream> capy::task<int> print_all(ldap::result<Stream> &s)
 {
 	if (!s) {
-		println(stderr, "jhetz-ldapsearch: {}", s.error().message());
+		std::println(stderr, "jhetz-ldapsearch: {}", s.error().message());
 		co_return 1;
 	}
 	int status = 0;
@@ -241,7 +228,7 @@ template<class Stream> capy::task<int> print_all(ldap::result<Stream> &s)
 	while (true) {
 		auto e = co_await s->next();
 		if (!e) {
-			println(stderr, "jhetz-ldapsearch: {}", e.error().message());
+			std::println(stderr, "jhetz-ldapsearch: {}", e.error().message());
 			status = 1;
 			break;
 		}
@@ -249,11 +236,11 @@ template<class Stream> capy::task<int> print_all(ldap::result<Stream> &s)
 		print_entry(**e);
 		++count;
 	}
-	for (const auto &ref : s->references()) println("# search reference: {}", ref);
+	for (const auto &ref : s->references()) std::println("# search reference: {}", ref);
 	if constexpr (requires { s->pages(); })
-		println("# {} entries in {} pages", count, s->pages());
+		std::println("# {} entries in {} pages", count, s->pages());
 	else
-		println("# {} entries", count);
+		std::println("# {} entries", count);
 	co_return status;
 }
 
@@ -261,7 +248,7 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 {
 	auto u = ldap::url::parse(o.url);
 	if (!u) {
-		println(stderr, "jhetz-ldapsearch: {}", u.error().message());
+		std::println(stderr, "jhetz-ldapsearch: {}", u.error().message());
 		co_return 2;
 	}
 
@@ -269,7 +256,7 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 	if (o.base) {
 		auto d = ldap::dn::parse(*o.base);
 		if (!d) {
-			println(stderr, "jhetz-ldapsearch: -b: {}", d.error().message());
+			std::println(stderr, "jhetz-ldapsearch: -b: {}", d.error().message());
 			co_return 2;
 		}
 		params.base = std::move(*d);
@@ -280,7 +267,7 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 	if (o.filter) {
 		auto f = ldap::filter::raw(*o.filter);
 		if (!f) {
-			println(stderr, "jhetz-ldapsearch: {}", f.error().message());
+			std::println(stderr, "jhetz-ldapsearch: {}", f.error().message());
 			co_return 2;
 		}
 		params.filter = std::move(*f);
@@ -303,24 +290,24 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 
 	auto c = co_await ldap::connect(ioc, std::move(*u), std::move(copts));
 	if (!c) {
-		println(stderr, "jhetz-ldapsearch: {}", c.error().message());
+		std::println(stderr, "jhetz-ldapsearch: {}", c.error().message());
 		co_return 1;
 	}
 
 	if (o.sasl_mech) {
 		ldap::sasl_external mech(o.authz_id);
 		if (auto b = co_await c->sasl_bind(mech); !b) {
-			println(stderr, "jhetz-ldapsearch: {}", b.error().message());
+			std::println(stderr, "jhetz-ldapsearch: {}", b.error().message());
 			co_return 1;
 		}
 	} else if (o.bind_dn) {
 		auto name = ldap::dn::parse(*o.bind_dn);
 		if (!name) {
-			println(stderr, "jhetz-ldapsearch: -D: {}", name.error().message());
+			std::println(stderr, "jhetz-ldapsearch: -D: {}", name.error().message());
 			co_return 2;
 		}
 		if (auto b = co_await c->simple_bind(std::move(*name), o.password.value_or("")); !b) {
-			println(stderr, "jhetz-ldapsearch: {}", b.error().message());
+			std::println(stderr, "jhetz-ldapsearch: {}", b.error().message());
 			co_return 1;
 		}
 	}
@@ -334,7 +321,7 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 		status = co_await print_all(s);
 	}
 	if (c->is_open()) {
-		if (auto r = co_await c->unbind(); !r) println(stderr, "jhetz-ldapsearch: {}", r.error().message());
+		if (auto r = co_await c->unbind(); !r) std::println(stderr, "jhetz-ldapsearch: {}", r.error().message());
 	}
 	co_return status;
 }
@@ -353,7 +340,7 @@ int main(int argc, char **argv)
 		  try {
 			  std::rethrow_exception(e);
 		  } catch (const std::exception &x) {
-			  println(stderr, "jhetz-ldapsearch: {}", x.what());
+			  std::println(stderr, "jhetz-ldapsearch: {}", x.what());
 		  }
 	  })(run(ioc, std::move(o)));
 	ioc.run();

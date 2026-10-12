@@ -47,7 +47,7 @@ Tracked in beads (`bd list`) since 2026-10-10; the GitHub numbers are history.
 
 ## Definition of done (every ticket)
 
-- GCC 13 Debug with `-DJHETZ_LDAP_SANITIZE=ON -DJHETZ_LDAP_WERROR=ON`: 0
+- GCC 16 Debug with `-DJHETZ_LDAP_SANITIZE=ON -DJHETZ_LDAP_WERROR=ON`: 0
   warnings, `UBSAN_OPTIONS=halt_on_error=1 ctest` green; network tests pass
   under `--repeat until-fail:10 -j8`.
 - New parsers of untrusted input get a fuzz target, seeds and a GCC replay

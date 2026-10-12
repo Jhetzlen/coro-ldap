@@ -46,9 +46,6 @@ catch_discover_tests(jhetz_ldap_alloc_tests)
 # must warn ([[nodiscard]], on by default in GCC and Clang).
 if(NOT MSVC)
     set(jhetz_ldap_compile_flags -std=c++23 -fsyntax-only -I${PROJECT_SOURCE_DIR}/include)
-    if(jhetz_ldap_clang18_expected_workaround)
-        list(APPEND jhetz_ldap_compile_flags -D__cpp_concepts=202002L -Wno-builtin-macro-redefined)
-    endif()
     function(jhetz_ldap_compile_test name expected)
         add_test(NAME compile.${name}
             COMMAND ${CMAKE_CXX_COMPILER} ${jhetz_ldap_compile_flags} ${CMAKE_CURRENT_SOURCE_DIR}/compile/${name}.cpp)

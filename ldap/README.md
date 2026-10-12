@@ -118,9 +118,9 @@ on by default) with the network parts. It depends on Corosio and Capy
     `connect ldaps://h:636: tls handshake: server certificate: hostname mismatch ...`.
   - `ldapi://` is tested on Linux (should work wherever Corosio has
     `local_stream_socket`). IPv6 is tested over `[::1]` and a link-local
-    address with a zone. CI builds with GCC 13 and Clang 19 on Linux and
-    with Apple Clang on macOS (non-blocking for now); tests that need Linux
-    loopback behaviour skip elsewhere.
+    address with a zone. CI builds with GCC 16 and Clang 23 (libstdc++ 16)
+    on Linux and with Apple Clang on macOS (non-blocking for now); tests
+    that need Linux loopback behaviour skip elsewhere.
   - `mr` holds the transport's own block and name.
 - `jhetz/ldap/net/message_io.hpp`: `read_message(transport, read_buffer,
   options)` returns the next complete `ldap::message`, decoded with
@@ -365,11 +365,13 @@ codec-only) and is the reference for doing it by hand.
 
 ## Build and test
 
-Standalone CMake project (CMake 3.25+, GCC 13+ or Clang 19+). Catch2 v3,
-and for `jhetz::ldap_net` Corosio and Capy, are fetched from GitHub;
-`jhetz::ldap_net` also needs the OpenSSL and ICU development files
-(`libssl-dev libicu-dev`; Arch: `openssl icu`; Homebrew: `openssl icu4c`,
-with `-DICU_ROOT=$(brew --prefix icu4c)`).
+Standalone CMake project (CMake 3.25+, GCC 16+ or Clang 23+; Clang needs
+libstdc++ 16+ too, so install g++-16 next to it; configure stops with an
+error on anything older). Catch2 v3, and for `jhetz::ldap_net` Corosio
+and Capy, are fetched from GitHub; `jhetz::ldap_net` also needs the
+OpenSSL and ICU development files (`libssl-dev libicu-dev`; Arch:
+`openssl icu`; Homebrew: `openssl icu4c`, with
+`-DICU_ROOT=$(brew --prefix icu4c)`).
 
 ```sh
 cmake -S ldap -B build/ldap -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON
@@ -473,12 +475,6 @@ UBSAN_OPTIONS=halt_on_error=1 build/ldap-fuzz/fuzzers/message_fuzz -max_total_ti
 Sanitized and fuzz builds use `-fno-sanitize-recover=all`, so any UBSan
 finding aborts and fails the test or fuzz run.
 
-With Clang 18 and libstdc++ 13 the build adds
-`-D__cpp_concepts=202002L -Wno-builtin-macro-redefined`, otherwise
-`<expected>` is unavailable. It is a PUBLIC option of `jhetz_ldap`, so it
-reaches our libraries, tests and fuzzers (everything that includes our
-headers) but not the Corosio, Capy and Catch2 sources, which do not need it;
-a Clang 18 build with `JHETZ_LDAP_BUILD_NET=ON` compiles and passes the tests.
 A fuzz build leaves `JHETZ_LDAP_BUILD_NET` off by default: the fuzzers only
 cover the codec and URLs.
 

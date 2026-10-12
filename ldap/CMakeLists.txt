@@ -27,13 +27,37 @@ option(JHETZ_LDAP_BUILD_BENCH "Build the benchmarks (bench/, not run by ctest)" 
 option(JHETZ_LDAP_BUILD_EXAMPLES "Build the examples (examples/; need JHETZ_LDAP_BUILD_NET)" ON)
 option(JHETZ_LDAP_INSTALL "Generate install rules and the jhetz_ldap CMake package" ${PROJECT_IS_TOP_LEVEL})
 
+# Minimum compilers: GCC 16, Clang 23, and libstdc++ 16 when it is the
+# standard library (Clang uses the newest GCC's libstdc++ it finds; install
+# g++-16 next to clang++-23, or pass --gcc-install-dir), for the C++23 library
+# additions older versions lack (std::print, std::ranges::to, ...). Apple
+# Clang and MSVC are not checked here.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16)
+    message(FATAL_ERROR "jhetz::ldap needs GCC 16 or newer (found ${CMAKE_CXX_COMPILER_VERSION})")
+endif()
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 23)
+    message(FATAL_ERROR "jhetz::ldap needs Clang 23 or newer (found ${CMAKE_CXX_COMPILER_VERSION})")
+endif()
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles([=[
+#include <version>
+#if defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE < 16
+#error libstdc++ older than 16
+#endif
+int main() {}
+]=] JHETZ_LDAP_STDLIB_RECENT_ENOUGH)
+if(NOT JHETZ_LDAP_STDLIB_RECENT_ENOUGH)
+    message(FATAL_ERROR "jhetz::ldap needs libstdc++ 16 or newer: install g++-16 (Clang picks the newest "
+        "GCC installation's libstdc++) or point Clang at it with --gcc-install-dir")
+endif()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 # No C++20 modules here or in Capy/Corosio. CMake 3.28+ with Ninja scans every
-# C++20 source for them by default, and GCC 16's scanner (-fdeps-format=p1689r5)
-# crashes on Corosio's uring_scheduler.hpp. Set before FetchContent so the
-# dependencies inherit it.
+# C++20 source for them by default, and GCC 16 (still 16.2) crashes compiling
+# Corosio's uring_scheduler.hpp in module mode (-fmodules). Set before
+# FetchContent so the dependencies inherit it.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 # Global flags: set before any dependency is fetched so Catch2 is built the
@@ -52,26 +76,6 @@ if(JHETZ_LDAP_SANITIZE)
         add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
         add_link_options(-fsanitize=address,undefined -fno-sanitize-recover=all)
     endif()
-endif()
-
-# Clang 18 reports __cpp_concepts < 202002L, so libstdc++ 13 hides
-# std::expected. Clang 18 does implement what <expected> needs, so our targets
-# claim the value libstdc++ checks for. It is attached to jhetz_ldap as a
-# PUBLIC option below (so everything including our headers gets it), not set
-# globally: Corosio, Capy and Catch2 do not use <expected> and are compiled
-# unchanged. Only needed for the Clang (fuzz) build; DESIGN.md section 9 lists
-# Clang 19+ as the supported Clang.
-# Side effect: libstdc++ also keys other features on __cpp_concepts (e.g. the
-# conditionally trivial special members of std::variant / std::optional), so
-# our translation units and Corosio's see those class templates configured
-# differently: in principle an ODR mismatch where such a type crosses into
-# Corosio code compiled without the define. In practice the Clang 18 build
-# with jhetz::ldap_net passes the whole test suite; supported compilers
-# (GCC 13+, Clang 19+) never take this branch.
-
-set(jhetz_ldap_clang18_expected_workaround OFF)
-if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19)
-    set(jhetz_ldap_clang18_expected_workaround ON)
 endif()
 
 if(JHETZ_LDAP_BUILD_FUZZERS)
@@ -100,8 +104,9 @@ if(JHETZ_LDAP_COVERAGE)
 endif()
 
 # Warnings (and coverage instrumentation) apply to our own targets only.
-# Clang 21+ counts __COUNTER__ (used by Catch2's macros, expanded in our
-# test sources) as a C2y extension under -Wpedantic.
+# Clang counts __COUNTER__ (used by Catch2's macros, expanded in our test
+# sources) as a C2y extension under -Wpedantic. The probe keeps the flag off
+# compilers that reject it (Apple Clang, which is not version-checked above).
 include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag(-Wno-c2y-extensions JHETZ_LDAP_HAS_WNO_C2Y_EXTENSIONS)
 
@@ -141,9 +146,6 @@ target_include_directories(jhetz_ldap PUBLIC
 )
 set_target_properties(jhetz_ldap PROPERTIES EXPORT_NAME ldap)
 target_compile_features(jhetz_ldap PUBLIC cxx_std_23)
-if(jhetz_ldap_clang18_expected_workaround)
-    target_compile_options(jhetz_ldap PUBLIC -D__cpp_concepts=202002L -Wno-builtin-macro-redefined)
-endif()
 jhetz_ldap_warnings(jhetz_ldap)
 
 if(JHETZ_LDAP_BUILD_NET)

@@ -6,7 +6,7 @@ typed mapping, runtime schema checks, blocking facade, `ldapsearch`).
 "Implemented" notes say where the code differs from the original plan.
 Remaining work is tracked in beads (`bd list`).
 `api_prototype.cpp` next to this file checks that the type-safety parts of
-section 4 compile as C++23 (GCC 13).
+section 4 compile as C++23 (GCC 16).
 
 ## Goals
 
@@ -858,9 +858,10 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
 
 ## 9. Toolchain
 
-- C++23: `std::expected`, deducing `this`, `std::print` where available.
-- Compilers: GCC 13+; Clang 19+ (Clang 18 cannot use libstdc++ 13's
-  `<expected>`); MSVC 17.8+.
+- C++23: `std::expected`, deducing `this`, `std::print`, the C++23 ranges
+  additions.
+- Compilers: GCC 16+; Clang 23+ with libstdc++ 16+ (CMake checks all three
+  at configure time); MSVC 17.8+. No workarounds for older compilers.
 - Corosio and Capy pinned by commit, as in `examples/corosio/`, used only by
   `jhetz_ldap_net` (option `JHETZ_LDAP_BUILD_NET`, off in fuzz builds);
   it also needs OpenSSL. The codec library `jhetz_ldap` has no dependencies.
@@ -869,7 +870,6 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   links it (SASLprep for SCRAM), privately; the installed package config
   finds it as a dependency of `net`. LDAPprep matching (RFC 4518) in the
   codec will make it a dependency of `jhetz_ldap` too.
-- The Clang < 19 `<expected>` workaround is scoped to our own targets.
 - Coverage: Clang source-based coverage (`JHETZ_LDAP_COVERAGE`, llvm-cov),
   scoped to our own targets like the warnings; `tests/coverage/run_coverage.sh`
   runs it (README.md, "Coverage"). Local only, not in CI.

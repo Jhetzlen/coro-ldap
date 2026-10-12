@@ -50,7 +50,7 @@ fi
 
 if ! command -v "$cxx" >/dev/null 2>&1; then
 	echo "error: C++ compiler $cxx not found (set CXX to a Clang C++ compiler," \
-		"e.g. CXX=clang++-18)" >&2
+		"e.g. CXX=clang++-23)" >&2
 	exit 1
 fi
 
