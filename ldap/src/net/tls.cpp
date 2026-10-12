@@ -13,8 +13,10 @@
 #include <openssl/x509v3.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -73,20 +75,25 @@ namespace {
 	using evp_pkey_ptr = std::unique_ptr<EVP_PKEY, evp_pkey_deleter>;
 	using asn1_octet_string_ptr = std::unique_ptr<ASN1_OCTET_STRING, asn1_octet_string_deleter>;
 
-	// Read-only memory BIO over `pem`, or null.
+	// Read-only memory BIO over `pem`, or null. Null too above INT_MAX
+	// bytes: BIO_new_mem_buf takes an int, so a larger size would wrap to a
+	// truncated length, or a negative one (-1 means "up to the first NUL").
 	bio_ptr pem_bio(const std::string &pem)
 	{
+		if (pem.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return nullptr;
 		return bio_ptr(BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())));
 	}
 
 	// True if `pem` holds one certificate OpenSSL can parse. Corosio only
 	// parses trust anchors when the handshake starts, which would make a
-	// broken CA fail after the TCP connect; this checks it up front.
+	// broken CA fail after the TCP connect; this checks it up front. A
+	// failure leaves nothing on the thread's OpenSSL error queue.
 	bool parses_as_certificate(const std::string &pem)
 	{
 		const bio_ptr bio = pem_bio(pem);
-		if (!bio) return false;
-		return x509_ptr(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr)) != nullptr;
+		if (bio && x509_ptr(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr)) != nullptr) return true;
+		ERR_clear_error();
+		return false;
 	}
 
 	// Checks a client certificate chain file and key file before any network

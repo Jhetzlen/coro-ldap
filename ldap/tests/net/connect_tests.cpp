@@ -21,6 +21,8 @@
 #include <boost/corosio/tcp_acceptor.hpp>
 #include <boost/corosio/tcp_socket.hpp>
 
+#include <openssl/err.h>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -974,6 +976,24 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 		CHECK(std::string(bad_name.error().context)
 			  == "connect ldaps://127.0.0.1:1: tls: control character in server_name");
 	}
+}
+
+TEST_CASE("TLS configuration errors leave the OpenSSL error queue empty", "[net][connect][tls]")
+{
+	// The checks run on the calling thread; a CA that does not parse used
+	// to leave PEM errors on its queue, for the next OpenSSL user to find.
+	ERR_clear_error();
+	const std::string broken = "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n";
+	auto bad_ca = net::detail::make_tls_setup({ .ca_pem = std::pmr::string(pki().ca_pem() + broken) });
+	REQUIRE_FALSE(bad_ca.has_value());
+	CHECK_THAT(std::string(bad_ca.error().context), EndsWith("certificate 2 of 2 does not parse"));
+	CHECK(ERR_peek_error() == 0);
+
+	temp_path junk(".pem");
+	junk.write("not pem at all\n");
+	auto junk_cert = net::detail::make_tls_setup({ .cert_file = junk.str(), .key_file = junk.str() });
+	REQUIRE_FALSE(junk_cert.has_value());
+	CHECK(ERR_peek_error() == 0);
 }
 
 TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
