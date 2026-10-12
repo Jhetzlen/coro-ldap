@@ -301,7 +301,7 @@ struct connection::impl
 
 	// An allocation failed where no exception may go: in a destructor (an
 	// AbandonRequest, the requests a bind held) or a detached task (the
-	// writer, the reader, the due watcher). What was to be sent or read is
+	// writer, the reader). What was to be sent or read is
 	// lost, so the connection cannot go on: it is closed, and its
 	// operations fail with not_enough_memory instead of waiting for what
 	// never comes.
@@ -328,9 +328,16 @@ struct connection::impl
 	// the caller sets its flags: a bad_alloc then leaves no flag set without
 	// its task. (capy::run_async allocates its own frame before the task's;
 	// a task frame failing there would leak it, and its work guard.)
-	// Known limitation, outside this library: capy::run_async allocates its
-	// own frame (the trampoline) in a noexcept constructor, so that
-	// allocation failing ends the program, whatever the caller catches.
+	// Known limitations, outside this library, where an allocation failing
+	// ends the program, whatever the caller catches:
+	// - capy::run_async allocates its own frame (the trampoline) in a
+	//   noexcept constructor;
+	// - corosio::timeout builds its timer and starts its timeout coroutine
+	//   (a frame) in await_suspend, which capy's task calls from a noexcept
+	//   wrapper (transform_awaiter), so a timed wait cannot fail with
+	//   bad_alloc: the due watcher, next_response and start_tls's wait for
+	//   due answers with a deadline, and net::detail::bounded (connect, TLS
+	//   handshake and shutdown with a deadline).
 	capy::task<void> new_task(capy::task<void> (*body)(impl *))
 	{
 		struct frame_allocator_scope
@@ -351,7 +358,8 @@ struct connection::impl
 	// ---------------------------------------------------------------- writer
 
 	// A bad_alloc in a detached task would end the program (run_async's
-	// default handler): each catches its own and closes the connection.
+	// default handler): the writer and the reader catch their own and close
+	// the connection. (The due watcher has none to catch, see there.)
 	static capy::task<void> writer(impl *self)
 	{
 		const frame_ref ref(self);
@@ -608,22 +616,22 @@ struct connection::impl
 	// idle connection holds no timer and `io_context::run()` can return.
 	// No stop token: it ends on its own when the due answers do (or when
 	// the connection closes).
+	// Nothing here can throw a bad_alloc to catch: its only allocations are
+	// corosio::timeout's (its timer and timeout coroutine), made in an
+	// await_suspend that capy calls from a noexcept wrapper, so one failing
+	// ends the program (a known limitation, see new_task).
 	static capy::task<void> due_watcher(impl *self)
 	{
 		const frame_ref ref(self);
-		try {
-			while (self->open) {
-				const auto next = self->next_due_deadline();
-				if (!next) break;
-				if (clock::now() < *next) {
-					self->due_changed.clear();
-					(void)co_await corosio::timeout(self->due_changed.wait(), *next);
-					continue;// a change, or the deadline: look again
-				}
-				self->expire_due(clock::now());
+		while (self->open) {
+			const auto next = self->next_due_deadline();
+			if (!next) break;
+			if (clock::now() < *next) {
+				self->due_changed.clear();
+				(void)co_await corosio::timeout(self->due_changed.wait(), *next);
+				continue;// a change, or the deadline: look again
 			}
-		} catch (const std::bad_alloc &) {
-			self->shut_out_of_memory();
+			self->expire_due(clock::now());
 		}
 		self->watching = false;
 	}

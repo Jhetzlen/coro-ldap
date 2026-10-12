@@ -813,13 +813,18 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   every new request, a StartTLS (including one whose wait for due answers
   ends then) and another `unbind()` fail with `not_connected`.
   An allocation that fails where no exception can go (a destructor sending
-  an AbandonRequest or the requests a bind held; the writer, reader or due
-  watcher task) closes the connection: what was to be sent or read is
-  lost, and the outstanding operations fail with
-  `std::errc::not_enough_memory` (remembered, like any failure). Elsewhere
-  `std::bad_alloc` propagates from the operation's task. Known limitation:
-  `capy::run_async` allocates its own frame in a `noexcept` constructor, so
-  that allocation failing ends the program.
+  an AbandonRequest or the requests a bind held; the writer or reader
+  task) closes the connection: what was to be sent or read is lost, and
+  the outstanding operations fail with `std::errc::not_enough_memory`
+  (remembered, like any failure). Elsewhere `std::bad_alloc` propagates
+  from the operation's task. Known limitations, where an allocation
+  failing ends the program: `capy::run_async` allocates its own frame in a
+  `noexcept` constructor; `corosio::timeout` builds its timer and starts
+  its timeout coroutine in `await_suspend`, which capy's task calls from a
+  `noexcept` wrapper, so every wait with a deadline (an operation's
+  timeout, StartTLS's wait for due answers, the due watcher, and connect,
+  the TLS handshake and the TLS shutdown with a deadline) ends the program
+  if those allocations fail instead of throwing.
 - Lifetime: the state is one reference-counted block on the connection's
   resource, held by the connection, each outstanding operation, each
   stream, and the reader and writer frames. Moving a connection or stream

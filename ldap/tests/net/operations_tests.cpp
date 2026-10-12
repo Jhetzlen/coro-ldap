@@ -27,6 +27,8 @@
 #include <variant>
 #include <vector>
 
+#include <unistd.h>
+
 namespace ldap = jhetz::ldap;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::ContainsSubstring;

@@ -540,7 +540,9 @@ class connection
 	// the exchange, then the handshake, each on its own, so start_tls may take
 	// up to three times `timeout`. nullopt:
 	// connection_options::operation_timeout for the wait and the exchange, no
-	// limit for the handshake.
+	// limit for the handshake. An unbind() once the StartTLS request is sent
+	// closes the connection (nothing may be sent until the handshake), and
+	// start_tls then fails with not_connected.
 	boost::capy::task<result<void>> start_tls(net::tls_options options = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 
