@@ -17,45 +17,45 @@ namespace ldap = jhetz::ldap;
 // assertionFailed (122, RFC 4528).
 TEST_CASE("ldap::errc keeps RFC 4511 resultCode numbers", "[error]")
 {
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::operations_error) == 1);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::protocol_error) == 2);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::time_limit_exceeded) == 3);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::size_limit_exceeded) == 4);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::compare_false) == 5);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::compare_true) == 6);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::auth_method_not_supported) == 7);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::stronger_auth_required) == 8);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::referral) == 10);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::admin_limit_exceeded) == 11);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::unavailable_critical_extension) == 12);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::confidentiality_required) == 13);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::sasl_bind_in_progress) == 14);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::no_such_attribute) == 16);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::undefined_attribute_type) == 17);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::inappropriate_matching) == 18);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::constraint_violation) == 19);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::attribute_or_value_exists) == 20);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::invalid_attribute_syntax) == 21);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::no_such_object) == 32);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::alias_problem) == 33);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::invalid_dn_syntax) == 34);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::alias_dereferencing_problem) == 36);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::inappropriate_authentication) == 48);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::invalid_credentials) == 49);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::insufficient_access_rights) == 50);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::busy) == 51);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::unavailable) == 52);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::unwilling_to_perform) == 53);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::loop_detect) == 54);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::naming_violation) == 64);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::object_class_violation) == 65);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::not_allowed_on_non_leaf) == 66);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::not_allowed_on_rdn) == 67);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::entry_already_exists) == 68);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::object_class_mods_prohibited) == 69);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::affects_multiple_dsas) == 71);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::other) == 80);
-	STATIC_REQUIRE(static_cast<int>(ldap::errc::assertion_failed) == 122);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::operations_error) == 1);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::protocol_error) == 2);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::time_limit_exceeded) == 3);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::size_limit_exceeded) == 4);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::compare_false) == 5);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::compare_true) == 6);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::auth_method_not_supported) == 7);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::stronger_auth_required) == 8);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::referral) == 10);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::admin_limit_exceeded) == 11);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::unavailable_critical_extension) == 12);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::confidentiality_required) == 13);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::sasl_bind_in_progress) == 14);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::no_such_attribute) == 16);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::undefined_attribute_type) == 17);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::inappropriate_matching) == 18);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::constraint_violation) == 19);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::attribute_or_value_exists) == 20);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::invalid_attribute_syntax) == 21);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::no_such_object) == 32);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::alias_problem) == 33);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::invalid_dn_syntax) == 34);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::alias_dereferencing_problem) == 36);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::inappropriate_authentication) == 48);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::invalid_credentials) == 49);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::insufficient_access_rights) == 50);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::busy) == 51);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::unavailable) == 52);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::unwilling_to_perform) == 53);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::loop_detect) == 54);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::naming_violation) == 64);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::object_class_violation) == 65);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::not_allowed_on_non_leaf) == 66);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::not_allowed_on_rdn) == 67);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::entry_already_exists) == 68);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::object_class_mods_prohibited) == 69);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::affects_multiple_dsas) == 71);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::other) == 80);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::assertion_failed) == 122);
 }
 
 TEST_CASE("every errc and client_errc has a real message", "[error]")
@@ -104,11 +104,11 @@ TEST_CASE("every errc and client_errc has a real message", "[error]")
 	STATIC_REQUIRE(std::size(all) == 39);
 	for (auto e : all) {
 		const auto text = std::error_code(e).message();
-		INFO("errc " << static_cast<int>(e) << ": " << text);
+		INFO("errc " << std::to_underlying(e) << ": " << text);
 		CHECK_FALSE(text.empty());
 		CHECK(text.find("unknown") == std::string::npos);
 	}
-	for (int v = 1; v <= static_cast<int>(ldap::client_errc::unauthenticated_bind); ++v) {
+	for (int v = 1; v <= std::to_underlying(ldap::client_errc::unauthenticated_bind); ++v) {
 		const auto text = std::error_code(static_cast<ldap::client_errc>(v)).message();
 		INFO("client_errc " << v << ": " << text);
 		CHECK_FALSE(text.empty());
@@ -187,7 +187,8 @@ std::optional<ldap::cond> cond_of(std::error_code ec)
 	for (auto c : all_conds) {
 		if (ec != c) continue;
 		if (found)
-			FAIL_CHECK(ec.message() << " matches both " << static_cast<int>(*found) << " and " << static_cast<int>(c));
+			FAIL_CHECK(
+			  ec.message() << " matches both " << std::to_underlying(*found) << " and " << std::to_underlying(c));
 		found = c;
 	}
 	return found;
@@ -254,7 +255,7 @@ TEST_CASE("every errc maps to its documented condition", "[error][cond]")
 	};
 	CHECK(table.size() == 39);// every non-success resultCode
 	for (const auto &[e, expected] : table) {
-		INFO("errc " << static_cast<int>(e) << " " << std::error_code(e).message());
+		INFO("errc " << std::to_underlying(e) << " " << std::error_code(e).message());
 		CHECK(cond_of(e) == expected);
 	}
 	// Unknown result codes (servers may send any value) match nothing.
@@ -292,7 +293,7 @@ TEST_CASE("every client_errc maps to its documented condition", "[error][cond]")
 	REQUIRE(table.size() == static_cast<std::size_t>(client_errc::unauthenticated_bind));
 	for (std::size_t i = 0; i < table.size(); ++i) {
 		const auto &[e, expected] = table[i];
-		INFO("client_errc " << static_cast<int>(e) << " " << std::error_code(e).message());
+		INFO("client_errc " << std::to_underlying(e) << " " << std::error_code(e).message());
 		CHECK(static_cast<std::size_t>(e) == i + 1);
 		CHECK(cond_of(e) == expected);
 	}

@@ -4,6 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
+#include <utility>
 
 namespace ber = jhetz::ldap::ber;
 using jhetz::ldap::client_errc;
@@ -20,9 +21,9 @@ std::string frame(std::span<const std::byte> buf, std::size_t max_size = ber::de
 	return "size " + std::to_string(**r);
 }
 
-const std::string too_large = "ldap.client:" + std::to_string(static_cast<int>(client_errc::message_too_large));
-const std::string decode_error = "ldap.client:" + std::to_string(static_cast<int>(client_errc::decode_error));
-const std::string unsupported_tag = "ldap.client:" + std::to_string(static_cast<int>(client_errc::unsupported_tag));
+const std::string too_large = "ldap.client:" + std::to_string(std::to_underlying(client_errc::message_too_large));
+const std::string decode_error = "ldap.client:" + std::to_string(std::to_underlying(client_errc::decode_error));
+const std::string unsupported_tag = "ldap.client:" + std::to_string(std::to_underlying(client_errc::unsupported_tag));
 
 const auto bind_request = bytes({ 0x30, 0x0C, 0x02, 0x01, 0x01, 0x60, 0x07, 0x02, 0x01, 0x03, 0x04, 0x00, 0x80, 0x00 });
 

@@ -1015,7 +1015,7 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 			}
 			co_return result<void>{};
 		}
-		if (r.result.result_code != static_cast<int>(errc::sasl_bind_in_progress))
+		if (r.result.result_code != std::to_underlying(errc::sasl_bind_in_progress))
 			co_return std::unexpected(r.result.to_error(context));
 		creds = mechanism.step(server_creds);
 	}
@@ -1148,8 +1148,8 @@ capy::task<result<bool>> connection::compare(compare_params p)
 	auto m = co_await request_response(self, std::move(*request), op_index<compare_response>, context, p.timeout);
 	if (!m) co_return std::unexpected(std::move(m.error()));
 	const ldap_result &r = result_of(*m);
-	if (r.result_code == static_cast<int>(errc::compare_true)) co_return true;
-	if (r.result_code == static_cast<int>(errc::compare_false)) co_return false;
+	if (r.result_code == std::to_underlying(errc::compare_true)) co_return true;
+	if (r.result_code == std::to_underlying(errc::compare_false)) co_return false;
 	co_return std::unexpected(r.to_error(context));// success (0) is not a valid answer either
 }
 

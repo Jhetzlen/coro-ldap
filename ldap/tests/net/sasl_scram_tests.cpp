@@ -12,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace ldap = jhetz::ldap;
 using Catch::Matchers::ContainsSubstring;
@@ -451,7 +452,7 @@ TEST_CASE("scram: server-final-message rejections (mutual authentication)", "[sa
 		CHECK(std::string(e.message())
 			  == "wrong server signature: the server could not be authenticated: unexpected response from the server "
 				 "[ldap.client:"
-				   + std::to_string(static_cast<int>(ldap::client_errc::unexpected_response)) + "]");
+				   + std::to_string(std::to_underlying(ldap::client_errc::unexpected_response)) + "]");
 	}
 	SECTION("a signature of the wrong length")
 	{

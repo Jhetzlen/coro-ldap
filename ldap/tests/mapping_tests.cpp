@@ -302,7 +302,7 @@ TEST_CASE("a mapping error message names the code once", "[mapping][decode]")
 	REQUIRE_FALSE(p.has_value());
 	CHECK(std::string(p.error().message())
 		  == "entry uid=jdoe,ou=people,dc=example,dc=org: attribute uid: required attribute missing [ldap.client:"
-			   + std::to_string(static_cast<int>(ldap::client_errc::missing_attribute)) + "]");
+			   + std::to_string(std::to_underlying(ldap::client_errc::missing_attribute)) + "]");
 }
 
 // ---------------------------------------------------------------- encode / descriptor

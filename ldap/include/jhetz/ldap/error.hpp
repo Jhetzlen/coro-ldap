@@ -14,7 +14,7 @@
 namespace jhetz::ldap {
 
 // RFC 4511 resultCode values (section 4.1.9 and Appendix A), numbers kept
-// exactly so that `static_cast<int>(errc::invalid_credentials) == 49`.
+// exactly so that `std::to_underlying(errc::invalid_credentials) == 49`.
 //
 // `success` (0) is deliberately not an enumerator: a std::error_code with
 // value 0 means "no error", so a successful LDAP result is represented by the
@@ -134,17 +134,17 @@ const std::error_category &cond_category() noexcept;// "ldap.cond"
 
 [[nodiscard]] inline std::error_code make_error_code(errc e) noexcept
 {
-	return { static_cast<int>(e), result_category() };
+	return { std::to_underlying(e), result_category() };
 }
 
 [[nodiscard]] inline std::error_code make_error_code(client_errc e) noexcept
 {
-	return { static_cast<int>(e), client_category() };
+	return { std::to_underlying(e), client_category() };
 }
 
 [[nodiscard]] inline std::error_condition make_error_condition(cond c) noexcept
 {
-	return { static_cast<int>(c), cond_category() };
+	return { std::to_underlying(c), cond_category() };
 }
 
 // An error: its code plus what the server and the client said about it.

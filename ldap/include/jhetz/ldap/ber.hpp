@@ -85,7 +85,7 @@ namespace tags {
 	if (t.number > max_tag_number)
 		throw std::invalid_argument("ber: tag number above 30 needs the high-tag-number form");
 	return static_cast<std::byte>(
-	  (static_cast<unsigned>(t.cls) << 6) | (t.constructed ? 0x20u : 0x00u) | (t.number & 0x1Fu));
+	  (unsigned{ std::to_underlying(t.cls) } << 6) | (t.constructed ? 0x20u : 0x00u) | (t.number & 0x1Fu));
 }
 
 // Human readable form, e.g. "[UNIVERSAL 16 constructed]", for error context.

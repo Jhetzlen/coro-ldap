@@ -2,6 +2,7 @@
 
 #include <array>
 #include <string>
+#include <utility>
 
 namespace jhetz::ldap::ber {
 namespace {
@@ -75,7 +76,7 @@ std::string to_string(tag t)
 {
 	static constexpr std::array<const char *, 4> names{ "UNIVERSAL", "APPLICATION", "CONTEXT", "PRIVATE" };
 	std::string out = "[";
-	out += names[static_cast<std::size_t>(t.cls) & 3u];
+	out += names[std::to_underlying(t.cls) & 3u];
 	out += ' ';
 	out += std::to_string(t.number);
 	if (t.constructed) out += " constructed";

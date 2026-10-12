@@ -203,7 +203,7 @@ struct value_traits<E>
 	{
 		for (const auto &[value, name] : enum_names<E>)
 			if (value == v) return std::string(name);
-		return std::to_string(static_cast<std::underlying_type_t<E>>(v));// not in the table: its number
+		return std::to_string(std::to_underlying(v));// not in the table: its number
 	}
 };
 

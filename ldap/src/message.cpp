@@ -456,8 +456,8 @@ namespace {
 		if (m.id == 0 && is_request_op(m.op))
 			return fail(client_errc::encode_error, "message: a request with message id 0");
 		if (const auto *s = std::get_if<search_request>(&m.op)) {
-			const auto scope = static_cast<std::int32_t>(s->scope);
-			const auto deref = static_cast<std::int32_t>(s->deref);
+			const auto scope = std::to_underlying(s->scope);
+			const auto deref = std::to_underlying(s->deref);
 			if (scope < 0 || scope > 3) return out_of_range("search scope");
 			if (deref < 0 || deref > 3) return out_of_range("derefAliases");
 			if (s->size_limit < 0) return out_of_range("size limit");
@@ -470,7 +470,7 @@ namespace {
 			if (a->message_id < 0) return out_of_range("abandoned message id");
 		} else if (const auto *mod = std::get_if<modify_request>(&m.op)) {
 			for (const auto &c : mod->changes) {
-				const auto op = static_cast<std::int32_t>(c.operation);
+				const auto op = std::to_underlying(c.operation);
 				if (op < 0 || op > 3) return out_of_range("modify operation");
 				if (c.operation == modify_operation::add && c.modification.values.empty())
 					return fail(client_errc::encode_error, "message: modify add change without values");
@@ -550,8 +550,8 @@ namespace {
 		{
 			seq(op_tag::search_request, [&](ber::writer &o) {
 				o.octet_string(s.base_object);
-				o.enumerated(static_cast<std::int32_t>(s.scope));
-				o.enumerated(static_cast<std::int32_t>(s.deref));
+				o.enumerated(std::to_underlying(s.scope));
+				o.enumerated(std::to_underlying(s.deref));
 				o.integer(s.size_limit);
 				o.integer(s.time_limit);
 				o.boolean(s.types_only);
@@ -581,7 +581,7 @@ namespace {
 				o.constructed(ber::tags::sequence, [&](ber::writer &changes) {
 					for (const auto &c : m.changes)
 						changes.constructed(ber::tags::sequence, [&](ber::writer &change) {
-							change.enumerated(static_cast<std::int32_t>(c.operation));
+							change.enumerated(std::to_underlying(c.operation));
 							write_attribute(change, c.modification);
 						});
 				});

@@ -25,7 +25,7 @@ namespace detail {
 		static constexpr std::uint8_t part_any = filter::part_any;
 		static constexpr std::uint8_t part_final = filter::part_final;
 
-		static constexpr std::uint8_t k(kind x) noexcept { return static_cast<std::uint8_t>(x); }
+		static constexpr std::uint8_t k(kind x) noexcept { return std::to_underlying(x); }
 
 		// and / or / not: the nodes whose children are elements.
 		static bool composite(const node &n) noexcept { return n.k <= k(kind::not_); }

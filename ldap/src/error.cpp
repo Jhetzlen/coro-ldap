@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace jhetz::ldap {
 namespace {
@@ -328,7 +329,7 @@ namespace {
 				c = client_cond(ec.value());
 			else
 				c = foreign_cond(ec);
-			return c && static_cast<int>(*c) == condition;
+			return c && std::to_underlying(*c) == condition;
 		}
 	};
 
