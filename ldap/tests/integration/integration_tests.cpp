@@ -286,12 +286,20 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		// slapd ends the exchange before it refuses the anonymous bind that
 		// aborts it (inappropriateAuthentication): the connection stays
 		// open and anonymous, and a bind then succeeds (coro_http_client-f1e.1).
+		// bind_anon refuses only anonymous binds, not anonymous operations:
+		// the search succeeds only if the exchange ended (a server still in
+		// it would answer operationsError).
 		const anonymous_binds_disallowed disallowed(ioc);
 		scram_giving_up mech;
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().context == "sasl bind SCRAM-SHA-256: giving up");
 		REQUIRE(c.is_open());
+		auto again =
+		  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "namingContexts" } }));
+		REQUIRE(again.has_value());
+		CHECK(again->size() == 1);
+		CHECK(finish(ioc, c.who_am_i()) == "");
 		// The abort was refused: so is the same bind, made directly.
 		auto anonymous = finish(ioc, c.simple_bind({}, ""));
 		REQUIRE_FALSE(anonymous.has_value());
