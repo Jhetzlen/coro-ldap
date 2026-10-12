@@ -76,7 +76,8 @@ TEST_CASE("schema: parse OpenLDAP definitions", "[schema]")
 	CHECK(cn->names == std::vector<std::string>{ "cn", "commonName" });
 	CHECK(cn->sup == "name");
 	CHECK_FALSE(cn->syntax.has_value());
-	CHECK(s.syntax_of(*cn) == ldap::syntax::directory_string);// inherited from name, {32768} removed
+	REQUIRE(s.syntax_of(*cn) != nullptr);
+	CHECK(*s.syntax_of(*cn) == ldap::syntax::directory_string);// inherited from name, {32768} removed
 	CHECK(s.find_attribute("CN") == cn);
 	CHECK(s.find_attribute("cn;lang-en") == cn);
 	CHECK(s.find_attribute("2.5.4.3") == cn);
@@ -141,7 +142,7 @@ TEST_CASE("schema: SUP cycles do not loop", "[schema]")
 {
 	const std::pmr::vector<std::pmr::string> types{ "( 1.1 NAME 'a' SUP b )", "( 1.2 NAME 'b' SUP a )" };
 	const auto s = ldap::server_schema::parse(types, {});
-	CHECK_FALSE(s.syntax_of(*s.find_attribute("a")).has_value());
+	CHECK(s.syntax_of(*s.find_attribute("a")) == nullptr);
 }
 
 TEST_CASE("schema: lookups fold ASCII case only", "[schema]")
@@ -165,7 +166,8 @@ TEST_CASE("schema: lookups fold ASCII case only", "[schema]")
 	CHECK(s.find_attribute("OTHER")->oid == "1.2");
 	CHECK(s.find_attribute("1.2")->oid == "1.2");
 	CHECK(s.find_attribute("Zz")->oid == "1.3");
-	CHECK(s.syntax_of(*s.find_attribute("zz")) == ldap::syntax::directory_string);// SUP looked up in any case
+	REQUIRE(s.syntax_of(*s.find_attribute("zz")) != nullptr);
+	CHECK(*s.syntax_of(*s.find_attribute("zz")) == ldap::syntax::directory_string);// SUP looked up in any case
 	CHECK(s.find_object_class("person")->oid == "2.1");
 	CHECK(s.find_object_class("PERSON")->oid == "2.1");
 	CHECK(s.find_object_class("2.2")->oid == "2.2");

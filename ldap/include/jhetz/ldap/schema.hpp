@@ -69,8 +69,9 @@ class server_schema
 	[[nodiscard]] const attribute_type *find_attribute(std::string_view name) const noexcept;
 	[[nodiscard]] const object_class_type *find_object_class(std::string_view name) const noexcept;
 	// The attribute's SYNTAX, or its supertypes' (SUP followed, with a depth
-	// limit against cycles); nullopt if none declares one.
-	[[nodiscard]] std::optional<std::string> syntax_of(const attribute_type &a) const;
+	// limit against cycles); nullptr if none declares one. Points into the
+	// schema: valid while it lives.
+	[[nodiscard]] const std::string *syntax_of(const attribute_type &a) const noexcept;
 
 	std::size_t attribute_count() const noexcept { return attributes_.size(); }
 	std::size_t object_class_count() const noexcept { return classes_.size(); }

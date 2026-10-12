@@ -223,15 +223,15 @@ const object_class_type *server_schema::find_object_class(std::string_view name)
 	return it == class_index_.end() ? nullptr : &classes_[it->second];
 }
 
-std::optional<std::string> server_schema::syntax_of(const attribute_type &a) const
+const std::string *server_schema::syntax_of(const attribute_type &a) const noexcept
 {
 	const attribute_type *cur = &a;
 	for (int depth = 0; depth < 32 && cur != nullptr; ++depth) {
-		if (cur->syntax) return cur->syntax;
-		if (!cur->sup) return std::nullopt;
+		if (cur->syntax) return &*cur->syntax;
+		if (!cur->sup) return nullptr;
 		cur = find_attribute(*cur->sup);
 	}
-	return std::nullopt;
+	return nullptr;
 }
 
 // ---------------------------------------------------------------- report
@@ -288,8 +288,8 @@ namespace detail {
 			  std::string(name),
 			  "the attribute is NO-USER-MODIFICATION: mark the member ldap::read_only" });
 		if (!syntaxes.empty()) {
-			const auto syn = s.syntax_of(*a);
-			if (syn && std::none_of(syntaxes.begin(), syntaxes.end(), [&](const char *x) { return *syn == x; })) {
+			const std::string *syn = s.syntax_of(*a);
+			if (syn != nullptr && std::none_of(syntaxes.begin(), syntaxes.end(), [&](const char *x) { return *syn == x; })) {
 				std::string text = detail::format("syntax {} is not one the member's type reads (", *syn);
 				for (std::size_t i = 0; i < syntaxes.size(); ++i)
 					detail::format_to(text, "{}{}", i ? ", " : "", syntaxes[i]);
