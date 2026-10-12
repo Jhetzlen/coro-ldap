@@ -610,7 +610,12 @@ an OID, or whose `SYNTAX` is not a numeric OID with an optional `{len}`
 in a report), is skipped, NAMEs that are not descriptors are dropped (they
 could never be looked up). `server_schema` indexes names and OIDs
 case-insensitively, ignores attribute options on lookup and follows SUP for
-the syntax (depth-limited against cycles). The cardinality check is a
+the syntax (depth-limited against cycles). A member whose syntax cannot be
+determined because a SUP on the chain is not defined, was skipped for its
+SYNTAX, or loops is a `syntax_mismatch` error ("syntax unknown: ..."), not
+a silent pass; the names of definitions skipped for their SYNTAX are
+remembered, so a member mapped to one is told so rather than "not
+defined on the server". The cardinality check is a
 warning (`schema_issue::is_error() == false`), the others are errors.
 Syntaxes per type come from `value_syntaxes<T>` (built in: integers →
 INTEGER / NumericString, bool → Boolean, dn → DN / NameAndOptionalUID,

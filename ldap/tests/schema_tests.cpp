@@ -293,6 +293,64 @@ TEST_CASE("schema: a syntax mismatch quotes the server's SYNTAX cut", "[schema][
 			   + ldap::syntax::numeric_string + ")");
 }
 
+namespace {
+
+struct broken_sup
+{
+	std::vector<std::int64_t> child;
+	std::vector<std::int64_t> orphan;
+	std::vector<std::int64_t> parent;
+	std::vector<std::string> child_text;// strings read any syntax: not checked
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<broken_sup> = ldap::describe(ldap::object_class("top"),
+  ldap::field<&broken_sup::child>("childAttr"),
+  ldap::field<&broken_sup::orphan>("orphanAttr"),
+  ldap::field<&broken_sup::parent>("parentAttr"),
+  ldap::field<&broken_sup::child_text>("childAttr"));
+
+// A subtype without a SYNTAX of its own whose SUP was skipped (its SYNTAX is
+// not a numeric OID) or is not defined at all has no syntax_of: the syntax
+// cannot be checked, which is an error, not ok(). The member mapped to the
+// skipped definition itself is told why it is missing. The SUP is server
+// text: quoted sanitized (U+202E becomes U+FFFD). Definitions carry UTF-8.
+TEST_CASE("schema: a SUP that is missing or skipped for its SYNTAX is reported", "[schema][validate]")
+{
+	const std::pmr::vector<std::pmr::string> types{
+		"( 1.2.4 NAME 'parentAttr' DESC 'caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC' SYNTAX 'Directory String' )",
+		"( 1.2.5 NAME 'childAttr' DESC 'na\xC3\xAFve \xE5\xAD\x90' SUP parentAttr )",
+		"( 1.2.6 NAME 'orphanAttr' DESC '\xC3\xA9t\xC3\xA9 \xE5\xAD\xA4' SUP 'no\xE2\x80\xAEsuch' )",
+	};
+	const std::pmr::vector<std::pmr::string> classes{ "( 2.5.6.0 NAME 'top' ABSTRACT )" };
+	const auto s = ldap::server_schema::parse(types, classes);
+	CHECK(s.skipped() == 1);
+	CHECK(s.find_attribute("parentAttr") == nullptr);
+	CHECK(s.skipped_for_syntax("PARENTATTR;lang-en"));
+	CHECK(s.skipped_for_syntax("1.2.4"));
+	CHECK_FALSE(s.skipped_for_syntax("childAttr"));
+	CHECK_FALSE(s.skipped_for_syntax("nope"));
+	REQUIRE(s.find_attribute("childAttr") != nullptr);
+	CHECK(s.syntax_of(*s.find_attribute("childAttr")) == nullptr);
+
+	const auto rep = ldap::validate<broken_sup>(s);
+	CHECK_FALSE(rep.ok());
+	using k = ldap::schema_issue::kind;
+	REQUIRE(rep.issues.size() == 3);
+	CHECK(rep.issues[0].what == k::syntax_mismatch);
+	CHECK(rep.issues[0].name == "childAttr");
+	CHECK(rep.issues[0].detail
+		  == "syntax unknown: SUP parentAttr is defined on the server, but skipped: its SYNTAX is not a numeric OID");
+	CHECK(rep.issues[1].what == k::syntax_mismatch);
+	CHECK(rep.issues[1].name == "orphanAttr");
+	CHECK(rep.issues[1].detail == "syntax unknown: SUP no\xEF\xBF\xBDsuch is not defined on the server");
+	CHECK(rep.issues[2].what == k::unknown_attribute);
+	CHECK(rep.issues[2].name == "parentAttr");
+	CHECK(rep.issues[2].detail == "defined on the server, but skipped: its SYNTAX is not a numeric OID");
+}
+
 TEST_CASE("schema: validate a matching descriptor", "[schema][validate]")
 {
 	const auto s = ldap::server_schema::parse(openldap_types, openldap_classes);

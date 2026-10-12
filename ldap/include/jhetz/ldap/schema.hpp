@@ -15,8 +15,9 @@
 // OIDs (Active Directory), keywords in any case, missing spaces before ')'.
 // A definition whose OID is not a valid OID, or whose SYNTAX is not a
 // numeric OID (RFC 4512 noidlen: no descriptor, no other text), is
-// skipped; NAMEs that are not valid descriptors are dropped (they could
-// never be looked up).
+// skipped (the names of those skipped for their SYNTAX are remembered, see
+// skipped_for_syntax); NAMEs that are not valid descriptors are dropped
+// (they could never be looked up).
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"
@@ -31,6 +32,7 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace jhetz::ldap {
@@ -71,9 +73,15 @@ class server_schema
 	[[nodiscard]] const attribute_type *find_attribute(std::string_view name) const noexcept;
 	[[nodiscard]] const object_class_type *find_object_class(std::string_view name) const noexcept;
 	// The attribute's SYNTAX, or its supertypes' (SUP followed, with a depth
-	// limit against cycles); nullptr if none declares one. Points into the
-	// schema: valid while it lives.
+	// limit against cycles); nullptr if none declares one, or if a SUP on the
+	// chain is not found (see skipped_for_syntax). Points into the schema:
+	// valid while it lives.
 	[[nodiscard]] const std::string *syntax_of(const attribute_type &a) const noexcept;
+	// An attribute type definition by this NAME or OID (options ignored)
+	// parsed, but was skipped because its SYNTAX is not a numeric OID: the
+	// server defines it, the library cannot use it. Case-insensitive, no
+	// allocation.
+	[[nodiscard]] bool skipped_for_syntax(std::string_view name) const noexcept;
 
 	std::size_t attribute_count() const noexcept { return attributes_.size(); }
 	std::size_t object_class_count() const noexcept { return classes_.size(); }
@@ -87,6 +95,8 @@ class server_schema
 	using name_index = std::unordered_map<std::string, std::size_t, detail::ci_hash, detail::ci_equal>;
 	name_index attribute_index_{};
 	name_index class_index_{};
+	// The names and OIDs of attribute types skipped for their SYNTAX.
+	std::unordered_set<std::string, detail::ci_hash, detail::ci_equal> bad_syntax_{};
 	std::size_t skipped_ = 0;
 };
 
@@ -151,8 +161,10 @@ struct schema_issue
 {
 	enum class kind {
 		unknown_object_class,// error
-		unknown_attribute,// error
-		syntax_mismatch,// error
+		unknown_attribute,// error (also when its definition was skipped, see detail)
+		// error; also when the syntax cannot be determined because a SUP on
+		// the attribute's chain is not defined (or was skipped)
+		syntax_mismatch,
 		writable_but_no_user_modification,// error
 		single_member_multi_valued,// warning: only fails if an entry really has several values
 	};

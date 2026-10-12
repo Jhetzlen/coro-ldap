@@ -3,7 +3,10 @@
 #include "format_util.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace jhetz::ldap {
 namespace {
@@ -158,9 +161,12 @@ namespace {
 
 }// namespace
 
-result<attribute_type> parse_attribute_type(std::string_view text)
-{
-	return parse_definition(text).and_then([](definition &&d) -> result<attribute_type> {
+namespace {
+
+	// The attribute type of a definition that parsed; fails only for its
+	// SYNTAX (server_schema::parse remembers those definitions' names).
+	result<attribute_type> to_attribute_type(definition &&d)
+	{
 		attribute_type a;
 		a.oid = std::move(d.oid);
 		a.names = valid_names(d.get("NAME"));
@@ -176,7 +182,13 @@ result<attribute_type> parse_attribute_type(std::string_view text)
 		a.single_value = d.has("SINGLE-VALUE");
 		a.no_user_modification = d.has("NO-USER-MODIFICATION");
 		return a;
-	});
+	}
+
+}// namespace
+
+result<attribute_type> parse_attribute_type(std::string_view text)
+{
+	return parse_definition(text).and_then(to_attribute_type);
 }
 
 result<object_class_type> parse_object_class(std::string_view text)
@@ -194,9 +206,19 @@ server_schema server_schema::parse(std::span<const std::pmr::string> attribute_t
 {
 	server_schema s;
 	for (const auto &text : attribute_types) {
-		auto a = parse_attribute_type(text);
+		auto d = parse_definition(text);
+		if (!d) {
+			++s.skipped_;
+			continue;
+		}
+		// Kept before the definition is moved: its names, if the SYNTAX
+		// fails (they are valid descriptors or an OID, never raw text).
+		std::vector<std::string> names = valid_names(d->get("NAME"));
+		names.push_back(d->oid);
+		auto a = to_attribute_type(std::move(*d));
 		if (!a) {
 			++s.skipped_;
+			for (auto &n : names) s.bad_syntax_.insert(std::move(n));
 			continue;
 		}
 		const std::size_t i = s.attributes_.size();
@@ -230,6 +252,11 @@ const object_class_type *server_schema::find_object_class(std::string_view name)
 	return it == class_index_.end() ? nullptr : &classes_[it->second];
 }
 
+bool server_schema::skipped_for_syntax(std::string_view name) const noexcept
+{
+	return bad_syntax_.find(without_options(name)) != bad_syntax_.end();
+}
+
 const std::string *server_schema::syntax_of(const attribute_type &a) const noexcept
 {
 	const attribute_type *cur = &a;
@@ -260,6 +287,34 @@ std::string schema_report::to_string() const
 	return out;
 }
 
+namespace {
+
+	// Why syntax_of(a) is nullptr, when it is not because no definition on
+	// the chain declares a SYNTAX: a SUP that names no definition (or one
+	// skipped for its SYNTAX), or a chain too long (a cycle). The syntax
+	// cannot be checked then; before SYNTAX was checked when parsed, the
+	// skipped supertype's text gave a syntax_mismatch, not silence.
+	std::optional<std::string> broken_sup_chain(const server_schema &s, const attribute_type &a)
+	{
+		const attribute_type *cur = &a;
+		for (int depth = 0; depth < 32; ++depth) {
+			if (cur->syntax || !cur->sup) return std::nullopt;
+			const attribute_type *next = s.find_attribute(*cur->sup);
+			if (next == nullptr) {
+				std::string text = "syntax unknown: SUP ";
+				detail::append_sanitized(text, *cur->sup, 64);
+				text += s.skipped_for_syntax(*cur->sup)
+						  ? " is defined on the server, but skipped: its SYNTAX is not a numeric OID"
+						  : " is not defined on the server";
+				return text;
+			}
+			cur = next;
+		}
+		return "syntax unknown: the SUP chain is longer than 32 (a cycle?)";
+	}
+
+}// namespace
+
 namespace detail {
 
 	void check_object_class(const server_schema &s, std::string_view name, schema_report &out)
@@ -278,8 +333,10 @@ namespace detail {
 	{
 		const attribute_type *a = s.find_attribute(name);
 		if (a == nullptr) {
-			out.issues.push_back(
-			  { schema_issue::kind::unknown_attribute, std::string(name), "not defined on the server" });
+			out.issues.push_back({ schema_issue::kind::unknown_attribute,
+			  std::string(name),
+			  s.skipped_for_syntax(name) ? "defined on the server, but skipped: its SYNTAX is not a numeric OID"
+										 : "not defined on the server" });
 			return;
 		}
 		if (kind != cardinality::multiple && !a->single_value)
@@ -293,7 +350,10 @@ namespace detail {
 			  "the attribute is NO-USER-MODIFICATION: mark the member ldap::read_only" });
 		if (!syntaxes.empty()) {
 			const std::string *syn = s.syntax_of(*a);
-			if (syn != nullptr && std::ranges::none_of(syntaxes, [&](const char *x) { return *syn == x; })) {
+			if (syn == nullptr) {
+				if (auto why = broken_sup_chain(s, *a))
+					out.issues.push_back({ schema_issue::kind::syntax_mismatch, std::string(name), std::move(*why) });
+			} else if (std::ranges::none_of(syntaxes, [&](const char *x) { return *syn == x; })) {
 				// A numeric OID (parse_attribute_type), but of any length.
 				std::string text = "syntax ";
 				detail::append_sanitized(text, *syn, 64);
