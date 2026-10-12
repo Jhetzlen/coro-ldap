@@ -413,17 +413,22 @@ TEST_CASE("filter child and substring ranges are borrowed views", "[filter]")
 	CHECK(static_cast<bool>(f.root().children()));
 	CHECK_FALSE(static_cast<bool>((*it).children()));
 	CHECK((*subs).any().front() == "hn");
-	CHECK(std::ranges::empty((*it).any()));
+	CHECK((*it).any().empty());
 
 	// Composes with adaptors, by value, without dangling.
 	auto present = f.root().children() | std::views::filter([](view v) { return v.kind() == kind::present; })
 				   | std::views::transform(&view::attribute);
-	CHECK(std::ranges::to<std::vector<std::string_view>>(present) == std::vector<std::string_view>{ "cn", "mail" });
+	std::vector<std::string_view> present_attrs;
+	std::ranges::copy(present, std::back_inserter(present_attrs));
+	CHECK(present_attrs == std::vector<std::string_view>{ "cn", "mail" });
 	auto lengths = (*subs).any() | std::views::transform(&std::string_view::size);
-	CHECK(std::ranges::to<std::vector<std::size_t>>(lengths) == std::vector<std::size_t>{ 2, 2 });
+	std::vector<std::size_t> sizes;
+	std::ranges::copy(lengths, std::back_inserter(sizes));
+	CHECK(sizes == std::vector<std::size_t>{ 2, 2 });
 	auto first_two = f.root().children() | std::views::take(2) | std::views::transform(&view::attribute);
-	CHECK(std::ranges::to<std::vector<std::string_view>>(first_two)
-		  == std::vector<std::string_view>{ "objectClass", "cn" });
+	std::vector<std::string_view> first_attrs;
+	std::ranges::copy(first_two, std::back_inserter(first_attrs));
+	CHECK(first_attrs == std::vector<std::string_view>{ "objectClass", "cn" });
 }
 
 TEST_CASE("filter parser accepts RFC 4515 text; to_string is canonical", "[filter][parser]")
