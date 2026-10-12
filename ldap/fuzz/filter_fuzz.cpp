@@ -87,8 +87,7 @@ void check_text(std::string_view text)
 	auto inner = r.enter(ber::context(2));
 	LDAP_FUZZ_CHECK(inner.has_value());
 	LDAP_FUZZ_CHECK(inner->remaining() == operand.size());
-	LDAP_FUZZ_CHECK(
-	  std::equal(operand.begin(), operand.end(), negated.end() - static_cast<std::ptrdiff_t>(operand.size())));
+	LDAP_FUZZ_CHECK(std::ranges::ends_with(negated, operand));
 }
 
 void check_value(std::string_view v)

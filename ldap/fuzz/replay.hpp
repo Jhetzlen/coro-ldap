@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <format>
+#include <print>
 #include <span>
 #include <string>
 #include <string_view>
@@ -77,9 +79,7 @@ inline void mutate(rng &r, input &v, std::span<const std::uint8_t> interesting)
 inline int write_seeds(const char *dir, const std::vector<input> &inputs, const char *extension)
 {
 	for (std::size_t i = 0; i < inputs.size(); ++i) {
-		char name[64];
-		std::snprintf(name, sizeof name, "/seed-%02zu%s", i, extension);
-		const std::string path = std::string(dir) + name;
+		const std::string path = std::format("{}/seed-{:02}{}", dir, i, extension);
 		std::FILE *f = std::fopen(path.c_str(), "wb");
 		if (f == nullptr) {
 			std::perror(path.c_str());
@@ -91,7 +91,7 @@ inline int write_seeds(const char *dir, const std::vector<input> &inputs, const 
 			return 1;
 		}
 	}
-	std::printf("wrote %zu seeds to %s\n", inputs.size(), dir);
+	std::println("wrote {} seeds to {}", inputs.size(), dir);
 	return 0;
 }
 
@@ -115,7 +115,7 @@ inline int replay_main(int argc, char **argv, const replay_config &cfg)
 	if (argc == 3 && std::string_view(argv[1]) == "--write-seeds")
 		return write_seeds(argv[2], cfg.seeds, cfg.extension);
 	if (argc != 1) {
-		std::fprintf(stderr, "usage: %s [--write-seeds DIR]\n", argv[0]);
+		std::println(stderr, "usage: {} [--write-seeds DIR]", argv[0]);
 		return 2;
 	}
 	rng r{ cfg.rng_seed };
@@ -140,7 +140,7 @@ inline int replay_main(int argc, char **argv, const replay_config &cfg)
 		run(v);
 		++runs;
 	}
-	std::printf("%s: %zu inputs, no property violations\n", cfg.name, runs);
+	std::println("{}: {} inputs, no property violations", cfg.name, runs);
 	return 0;
 }
 

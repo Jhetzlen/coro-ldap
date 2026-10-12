@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <print>
 #include <span>
 #include <vector>
 
@@ -23,7 +24,7 @@ using jhetz::ldap::client_errc;
 
 [[noreturn]] void property_failed(const char *what, int line)
 {
-	std::fprintf(stderr, "ber_fuzz: property violated: %s (line %d)\n", what, line);
+	std::println(stderr, "ber_fuzz: property violated: {} (line {})", what, line);
 	std::abort();
 }
 

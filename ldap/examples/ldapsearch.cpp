@@ -30,6 +30,7 @@
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/corosio/io_context.hpp>
 
+#include <algorithm>
 #include <charconv>
 #include <cstdint>
 #include <cstdio>
@@ -37,6 +38,7 @@
 #include <exception>
 #include <optional>
 #include <print>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -149,7 +151,7 @@ options parse_args(int argc, char **argv)
 	if (positional.empty()) usage("missing URL");
 	o.url = positional[0];
 	if (positional.size() > 1) o.filter = positional[1];
-	for (std::size_t i = 2; i < positional.size(); ++i) o.attributes.emplace_back(positional[i]);
+	o.attributes = std::ranges::to<std::vector<std::string>>(positional | std::views::drop(2));
 	if (o.bind_dn && !o.password) {
 		if (const char *env = std::getenv("LDAP_PASSWORD")) o.password = env;
 	}
@@ -164,11 +166,10 @@ bool ldif_safe(std::string_view v) noexcept
 {
 	if (v.empty()) return true;
 	if (v.front() == ' ' || v.front() == ':' || v.front() == '<' || v.back() == ' ') return false;
-	for (const char c : v) {
+	return std::ranges::none_of(v, [](char c) {
 		const auto b = static_cast<unsigned char>(c);
-		if (b == 0 || b == '\n' || b == '\r' || b > 127) return false;
-	}
-	return true;
+		return b == 0 || b == '\n' || b == '\r' || b > 127;
+	});
 }
 
 std::string base64(std::string_view in)

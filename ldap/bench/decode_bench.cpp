@@ -17,10 +17,10 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
-#include <cstdio>
 #include <cstdlib>
 #include <memory_resource>
 #include <optional>
+#include <print>
 #include <span>
 #include <string>
 #include <vector>
@@ -162,7 +162,7 @@ outcome measure(const stream &s, mode how, int runs)
 		if (sum != out.checksum) std::abort();
 		times.push_back(std::chrono::duration<double, std::milli>(end - start).count());
 	}
-	std::sort(times.begin(), times.end());
+	std::ranges::sort(times);
 	out.best_ms = times.front();
 	out.median_ms = times[times.size() / 2];
 	return out;
@@ -184,16 +184,17 @@ int main(int argc, char **argv)
 	if (entries == 0 || runs == 0) return 2;
 
 	const auto s = make_stream(entries, attributes, values);
-	std::printf(
-	  "stream: %zu SearchResultEntry PDUs, %zu attributes x %zu values each (+ jpegPhoto and\n"
-	  "userCertificate every 20th entry), %zu values, %.1f MiB; best / median of %d runs\n\n",
+	std::print(
+	  "stream: {} SearchResultEntry PDUs, {} attributes x {} values each (+ jpegPhoto and\n"
+	  "userCertificate every 20th entry), {} values, {:.1f} MiB; best / median of {} runs\n\n",
 	  s.pdus.size(),
 	  attributes,
 	  values,
 	  s.values,
 	  static_cast<double>(s.bytes.size()) / (1024.0 * 1024.0),
 	  runs);
-	std::printf("%-44s %9s %9s %13s %11s %12s\n", "mode", "best ms", "median", "heap allocs", "per entry", "heap MiB");
+	std::println(
+	  "{:<44} {:>9} {:>9} {:>13} {:>11} {:>12}", "mode", "best ms", "median", "heap allocs", "per entry", "heap MiB");
 	const struct
 	{
 		const char *name;
@@ -205,7 +206,7 @@ int main(int argc, char **argv)
 	};
 	for (const auto &m : modes) {
 		const auto o = measure(s, m.how, runs);
-		std::printf("%-44s %9.2f %9.2f %13zu %11.1f %12.1f\n",
+		std::println("{:<44} {:9.2f} {:9.2f} {:13} {:11.1f} {:12.1f}",
 		  m.name,
 		  o.best_ms,
 		  o.median_ms,

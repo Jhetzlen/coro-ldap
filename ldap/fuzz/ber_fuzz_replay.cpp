@@ -10,7 +10,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <format>
 #include <limits>
+#include <print>
 #include <span>
 #include <string>
 #include <string_view>
@@ -161,9 +163,7 @@ static int write_seeds(const char *dir)
 {
 	const auto inputs = seeds();
 	for (std::size_t i = 0; i < inputs.size(); ++i) {
-		char name[64];
-		std::snprintf(name, sizeof name, "/seed-%02zu.ber", i);
-		const std::string path = std::string(dir) + name;
+		const std::string path = std::format("{}/seed-{:02}.ber", dir, i);
 		std::FILE *f = std::fopen(path.c_str(), "wb");
 		if (f == nullptr) {
 			std::perror(path.c_str());
@@ -175,7 +175,7 @@ static int write_seeds(const char *dir)
 			return 1;
 		}
 	}
-	std::printf("wrote %zu seeds to %s\n", inputs.size(), dir);
+	std::println("wrote {} seeds to {}", inputs.size(), dir);
 	return 0;
 }
 
@@ -183,7 +183,7 @@ int main(int argc, char **argv)
 {
 	if (argc == 3 && std::string_view(argv[1]) == "--write-seeds") return write_seeds(argv[2]);
 	if (argc != 1) {
-		std::fprintf(stderr, "usage: %s [--write-seeds DIR]\n", argv[0]);
+		std::println(stderr, "usage: {} [--write-seeds DIR]", argv[0]);
 		return 2;
 	}
 
@@ -223,6 +223,6 @@ int main(int argc, char **argv)
 		++runs;
 	}
 
-	std::printf("ber_fuzz_replay: %zu inputs, no property violations\n", runs);
+	std::println("ber_fuzz_replay: {} inputs, no property violations", runs);
 	return 0;
 }

@@ -4,12 +4,13 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <print>
 
 namespace jhetz::ldap::fuzz {
 
 [[noreturn]] inline void property_failed(const char *target, const char *what, int line)
 {
-	std::fprintf(stderr, "%s: property violated: %s (line %d)\n", target, what, line);
+	std::println(stderr, "{}: property violated: {} (line {})", target, what, line);
 	std::abort();
 }
 
