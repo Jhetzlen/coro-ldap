@@ -6,6 +6,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/task.hpp>
 #include <boost/corosio/io_context.hpp>
@@ -17,10 +18,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <memory_resource>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <stop_token>
@@ -139,6 +143,54 @@ template<class T> T finish(corosio::io_context &ioc, capy::task<T> t)
 	else
 		return std::move(out.get());
 }
+
+// The io_context's frame allocator in the out-of-memory tests: counts the
+// coroutine frames allocated from it (every run_async's and its task's, and
+// their children's) and can fail one allocation with bad_alloc.
+class failing_frames final : public std::pmr::memory_resource
+{
+  public:
+	// The n-th allocation from now fails (1 for the next one; 0: none).
+	void fail_at(std::size_t n) noexcept
+	{
+		count_ = 0;
+		fail_ = n;
+	}
+	// Allocations attempted since fail_at().
+	std::size_t count() const noexcept { return count_; }
+	// Frames allocated and not yet freed.
+	std::size_t live() const noexcept { return live_; }
+
+  private:
+	void *do_allocate(std::size_t bytes, std::size_t align) override
+	{
+		if (++count_ == fail_) throw std::bad_alloc();
+		void *p = std::pmr::new_delete_resource()->allocate(bytes, align);
+		++live_;
+		return p;
+	}
+	void do_deallocate(void *p, std::size_t bytes, std::size_t align) override
+	{
+		--live_;
+		std::pmr::new_delete_resource()->deallocate(p, bytes, align);
+	}
+	bool do_is_equal(const std::pmr::memory_resource &other) const noexcept override { return this == &other; }
+
+	std::size_t count_ = 0;
+	std::size_t fail_ = 0;
+	std::size_t live_ = 0;
+};
+
+// Corosio resumes coroutines without restoring the thread's current frame
+// allocator, so it can still be a failing_frames once the io_context has
+// run: cleared before that goes, for the frames made after the test.
+struct clear_frame_allocator
+{
+	clear_frame_allocator() = default;
+	clear_frame_allocator(const clear_frame_allocator &) = delete;
+	clear_frame_allocator &operator=(const clear_frame_allocator &) = delete;
+	~clear_frame_allocator() { capy::set_current_frame_allocator(nullptr); }
+};
 
 // Tests that rely on Linux loopback behaviour: all of 127/8 is routed to lo
 // (127.0.0.2 works without configuration), and a listener with a full

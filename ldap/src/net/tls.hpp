@@ -51,8 +51,9 @@ std::string tls_peer_name(std::string_view host, const tls_options &options);
 // Requires im.tcp connected and !im.tls. `host` is the URL host; the name
 // used for SNI and verification is options.server_name if set, else `host`
 // without an IPv6 zone. On success im.tls and im.tls_context are set and
-// im.stream points at the TLS layer. Errors have the context "tls handshake"
-// (plus ": server certificate: <reason>" when verification failed).
+// im.stream points at the TLS layer; on an error or a throw (bad_alloc)
+// neither is, and im.stream is unchanged. Errors have the context "tls
+// handshake" (plus ": server certificate: <reason>" when verification failed).
 boost::capy::task<result<void>> tls_handshake(transport::impl &im,
   std::string_view host,
   const tls_options &options,

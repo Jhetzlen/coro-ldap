@@ -168,7 +168,9 @@ class read_buffer;
 // unread bytes (decode_error: they arrived before the handshake, so they
 // were not protected; the plaintext injection of CVE-2011-0411), or if the
 // TLS configuration is bad. A failed handshake leaves the transport
-// unusable: close it. `timeout` bounds the handshake (nullopt: no limit).
+// unusable: close it. If the handshake or its setup throws (bad_alloc), the
+// transport is closed (and not is_tls()) before the exception propagates.
+// `timeout` bounds the handshake (nullopt: no limit).
 // `t` and `pending` must outlive the task; no other read or write may be in
 // flight on `t` meanwhile.
 boost::capy::task<result<void>> start_tls(transport &t,

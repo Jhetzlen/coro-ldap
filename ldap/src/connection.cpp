@@ -1581,15 +1581,25 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 		if (!x.result.is_success()) co_return std::unexpected(x.result.to_error(context));// still usable, in clear
 	}
 
-	// The reader and writer must be idle: the handshake reads and writes
-	// the socket itself. Not cancellable: they stop promptly on their own.
-	co_await capy::run(std::stop_token{})([](connection::impl &c) -> capy::task<void> {
-		(void)co_await c.write_idle.wait();
-		(void)co_await c.reader_idle.wait();
-	}(*self));
-	if (!self->open) co_return std::unexpected(self->not_connected(context));
-
-	auto r = co_await net::start_tls(self->transport, self->buf, std::move(options), timeout);
+	// From here on the server expects a handshake, so the session cannot go
+	// on in clear (RFC 4511 section 4.14.1): a bad_alloc (this wait's frames,
+	// the handshake's setup or the handshake; net::start_tls then closed the
+	// transport) closes the connection before it propagates, and later
+	// operations fail naming not_enough_memory.
+	result<void> r;
+	try {
+		// The reader and writer must be idle: the handshake reads and writes
+		// the socket itself. Not cancellable: they stop promptly on their own.
+		co_await capy::run(std::stop_token{})([](connection::impl &c) -> capy::task<void> {
+			(void)co_await c.write_idle.wait();
+			(void)co_await c.reader_idle.wait();
+		}(*self));
+		if (!self->open) co_return std::unexpected(self->not_connected(context));
+		r = co_await net::start_tls(self->transport, self->buf, std::move(options), timeout);
+	} catch (const std::bad_alloc &) {
+		self->shut_out_of_memory();
+		throw;
+	}
 	// Closed meanwhile (unbind(), close()): the handshake failed because of
 	// that, or ended over a closed transport; say so, as for the steps above.
 	if (!self->open) co_return std::unexpected(self->not_connected(context));

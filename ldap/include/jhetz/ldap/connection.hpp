@@ -537,7 +537,8 @@ class connection
 	// returned and the connection stays usable, unprotected. Bytes received
 	// after the StartTLS response and before the handshake are refused
 	// (decode_error: a plaintext injection attempt), and a failed handshake
-	// closes the connection, as does a cancellation or timeout (StartTLS
+	// closes the connection, as does a std::bad_alloc from the handshake or
+	// its setup (then rethrown), or a cancellation or timeout (StartTLS
 	// cannot be abandoned, RFC 4511 section 4.11). So a release's answer that
 	// comes after its deadline is dropped if it comes before the StartTLS
 	// response; after it, it closes the connection (refused as such bytes, or

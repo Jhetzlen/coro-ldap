@@ -372,8 +372,16 @@ capy::task<result<void>> start_tls(transport &t,
 	auto &im = transport_access::get(t);
 	deadline_t deadline;
 	if (timeout) deadline = detail::clock::now() + *timeout;
-	auto hs = co_await detail::tls_handshake(im, im.host, options, std::move(*setup), deadline);
-	if (!hs) co_return prefixed(std::move(hs.error()));
+	try {
+		auto hs = co_await detail::tls_handshake(im, im.host, options, std::move(*setup), deadline);
+		if (!hs) co_return prefixed(std::move(hs.error()));
+	} catch (...) {
+		// bad_alloc in the handshake's setup or the handshake: the peer
+		// expects a handshake now (or is in the middle of one), so the
+		// session cannot go on in clear; closed, as for a failed handshake.
+		t.close();
+		throw;
+	}
 	co_return result<void>{};
 }
 

@@ -297,20 +297,34 @@ boost::capy::task<result<void>> tls_handshake(transport::impl &im,
 	if (options.verification == certificate_verification::full && options.host_matching == host_name_matching::strict
 		&& !is_ip_literal(name))
 		setup.failure->strict_host = name;
+	// im.tls is set only once the handshake succeeded: transport::is_tls()
+	// says TLS protects the stream. Undone on a failed handshake, and on a
+	// throw (bad_alloc) from openssl_stream's construction, set_hostname(),
+	// the handshake's frame, bounded()'s or the timeout's stop_source. Back
+	// to the plain socket; the connection is unusable anyway and must be
+	// closed (the server expects a handshake now).
+	struct undo_tls
+	{
+		transport::impl &im;
+		bool keep = false;
+		~undo_tls()
+		{
+			if (keep) return;
+			im.tls.reset();
+			im.tls_context.reset();
+		}
+	} undo{ im };
 	im.tls_context.emplace(std::move(setup.context));
 	im.tls.emplace(&*im.tcp, *im.tls_context);
 	im.tls->set_hostname(name);
 	auto [ec] = co_await bounded(im.tls->handshake(corosio::tls_role::client), deadline);
 	if (ec) {
-		// Back to the plain socket; after a failed handshake the connection
-		// is unusable anyway and must be closed.
-		im.tls.reset();
-		im.tls_context.reset();
 		std::string context = "tls handshake";
 		if (!setup.failure->reason.empty()) context += ": server certificate: " + setup.failure->reason;
 		co_return fail(ec, std::move(context));
 	}
 	im.stream = boost::capy::any_stream(&*im.tls);
+	undo.keep = true;
 	co_return result<void>{};
 }
 

@@ -822,7 +822,9 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   watcher task) closes the connection: what was to be sent or read is
   lost, and the outstanding operations fail with
   `std::errc::not_enough_memory` (remembered, like any failure). Elsewhere
-  `std::bad_alloc` propagates from the operation's task. Known
+  `std::bad_alloc` propagates from the operation's task; from StartTLS's
+  handshake or its setup it first closes the connection the same way (the
+  server expects a handshake, so the session cannot go on in clear). Known
   limitations, where an allocation failing ends the program:
   `capy::run_async` allocates its own frame in a `noexcept` constructor;
   `corosio::timeout` builds its timer (growing the timer heap) and starts
