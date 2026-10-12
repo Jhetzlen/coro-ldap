@@ -90,7 +90,7 @@ class transport
 	// a stream without close() cannot be closed by the transport, but
 	// is_open() turns false after close() either way.
 	template<boost::capy::Stream S>
-	static transport wrap(S stream,
+	[[nodiscard]] static transport wrap(S stream,
 	  std::string_view name = "custom stream",
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	{

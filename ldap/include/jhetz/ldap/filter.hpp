@@ -148,12 +148,13 @@ class filter
 	// `(`, `)`, `*` (outside substrings), `\` and NUL must be escaped in values,
 	// and unescaped octets must be valid UTF-8 (escapes may give any octet).
 	// Filters beyond `limits` (depth or number of elements) fail too.
-	static result<filter> raw(std::string_view text, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
-	static result<filter> raw(std::string_view text,
+	[[nodiscard]] static result<filter> raw(std::string_view text,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	[[nodiscard]] static result<filter> raw(std::string_view text,
 	  const filter_limits &limits,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
-	bool empty() const noexcept { return nodes_.empty(); }
+	[[nodiscard]] bool empty() const noexcept { return nodes_.empty(); }
 	// The top node. Precondition: !empty().
 	view root() const noexcept;
 	// Longest path from the root to a leaf, counting both (`(cn=x)` is 1), and
@@ -166,7 +167,7 @@ class filter
 	// substring parts dropped, attribute descriptions and rules as stored.
 	// raw(to_string()) == *this for every filter within the limits. Empty
 	// filter: "".
-	std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
 
 	friend bool operator==(const filter &a, const filter &b) noexcept;
 
@@ -274,7 +275,7 @@ class filter::child_range
   public:
 	child_iterator begin() const noexcept { return first_; }
 	child_iterator end() const noexcept { return {}; }
-	bool empty() const noexcept { return first_ == child_iterator{}; }
+	[[nodiscard]] bool empty() const noexcept { return first_ == child_iterator{}; }
 
   private:
 	friend class filter::view;
@@ -322,7 +323,7 @@ class filter::substring_range
   public:
 	substring_iterator begin() const noexcept { return first_; }
 	substring_iterator end() const noexcept { return {}; }
-	bool empty() const noexcept { return first_ == substring_iterator{}; }
+	[[nodiscard]] bool empty() const noexcept { return first_ == substring_iterator{}; }
 
   private:
 	friend class filter::view;
@@ -335,7 +336,7 @@ inline filter::view filter::root() const noexcept { return view(this, root_); }
 // RFC 4515 section 3 escaping: `*` `(` `)` `\` and NUL become \2a \28 \29 \5c
 // \00, and octets that are not part of valid UTF-8 become \xx (the string
 // form is UTF-8); valid UTF-8 is kept as is.
-std::pmr::string escape_filter_value(std::string_view value,
+[[nodiscard]] std::pmr::string escape_filter_value(std::string_view value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 // (&fg), (|fg), (!f). An operand that is itself an AND (resp. OR) is merged,
@@ -345,16 +346,16 @@ std::pmr::string escape_filter_value(std::string_view value,
 // meaning (merging (&...) into an AND does not change it). The result is
 // allocated from the left operand's resource; an rvalue operand's storage is
 // reused when possible. An empty operand gives an empty result.
-filter operator&&(const filter &f, const filter &g);
-filter operator&&(filter &&f, const filter &g);
-filter operator&&(const filter &f, filter &&g);
-filter operator&&(filter &&f, filter &&g);
-filter operator||(const filter &f, const filter &g);
-filter operator||(filter &&f, const filter &g);
-filter operator||(const filter &f, filter &&g);
-filter operator||(filter &&f, filter &&g);
-filter operator!(const filter &f);
-filter operator!(filter &&f);
+[[nodiscard]] filter operator&&(const filter &f, const filter &g);
+[[nodiscard]] filter operator&&(filter &&f, const filter &g);
+[[nodiscard]] filter operator&&(const filter &f, filter &&g);
+[[nodiscard]] filter operator&&(filter &&f, filter &&g);
+[[nodiscard]] filter operator||(const filter &f, const filter &g);
+[[nodiscard]] filter operator||(filter &&f, const filter &g);
+[[nodiscard]] filter operator||(const filter &f, filter &&g);
+[[nodiscard]] filter operator||(filter &&f, filter &&g);
+[[nodiscard]] filter operator!(const filter &f);
+[[nodiscard]] filter operator!(filter &&f);
 
 namespace filters {
 
@@ -373,22 +374,22 @@ namespace filters {
 		attr(attribute::literal name, const allocator_type &alloc = {}) : name_(name.text, alloc) {}
 		explicit attr(const attribute &name, const allocator_type &alloc = {});
 
-		filter operator==(std::string_view value) const;// (a=v)
-		filter operator>=(std::string_view value) const;// (a>=v)
-		filter operator<=(std::string_view value) const;// (a<=v)
-		filter approx(std::string_view value) const;// (a~=v)
-		filter present() const;// (a=*)
+		[[nodiscard]] filter operator==(std::string_view value) const;// (a=v)
+		[[nodiscard]] filter operator>=(std::string_view value) const;// (a>=v)
+		[[nodiscard]] filter operator<=(std::string_view value) const;// (a<=v)
+		[[nodiscard]] filter approx(std::string_view value) const;// (a~=v)
+		[[nodiscard]] filter present() const;// (a=*)
 		// (a=v*), (a=*v), (a=*v*). With an empty value these mean "has any
 		// value" and give present(), since (a=**) is not a valid filter.
-		filter starts_with(std::string_view value) const;
-		filter ends_with(std::string_view value) const;
-		filter contains(std::string_view value) const;
+		[[nodiscard]] filter starts_with(std::string_view value) const;
+		[[nodiscard]] filter ends_with(std::string_view value) const;
+		[[nodiscard]] filter contains(std::string_view value) const;
 		// Extensible match (RFC 4515): `(a:rule:=v)`, `(a:dn:rule:=v)` with
 		// dn_attributes, `(a:=v)` / `(a:dn:=v)` with an empty rule. The rule
 		// is a matching rule name or OID ("caseExactMatch", "2.5.13.5");
 		// anything else throws std::invalid_argument, as does the rule "dn"
 		// without dn_attributes (RFC 4515 has no form for it).
-		filter matches(std::string_view rule, std::string_view value, bool dn_attributes = false) const;
+		[[nodiscard]] filter matches(std::string_view rule, std::string_view value, bool dn_attributes = false) const;
 
 	  private:
 		std::pmr::string name_;
@@ -396,7 +397,7 @@ namespace filters {
 
 	// Extensible match without an attribute: `(:rule:=v)`, `(:dn:rule:=v)`.
 	// The rule is required; same checks as attr::matches.
-	filter rule_matches(std::string_view rule,
+	[[nodiscard]] filter rule_matches(std::string_view rule,
 	  std::string_view value,
 	  bool dn_attributes = false,
 	  const filter::allocator_type &alloc = {});
@@ -412,7 +413,7 @@ namespace filters {
 // Appends the BER Filter (RFC 4511 section 4.5.1.7) of `f` to `w`. Fails with
 // invalid_filter, before writing anything, if `f` is empty or deeper or larger
 // than `limits` (only possible for filters made by the builders).
-result<void> encode_filter(ber::writer &w, const filter &f, const filter_limits &limits = {});
+[[nodiscard]] result<void> encode_filter(ber::writer &w, const filter &f, const filter_limits &limits = {});
 
 // Reads one BER Filter from `r` into a tree allocated from `mr`. Filters that
 // cannot be written as RFC 4515 text are rejected with decode_error (invalid
@@ -423,7 +424,7 @@ result<void> encode_filter(ber::writer &w, const filter &f, const filter_limits 
 // (decode_error). So every decoded filter encodes, and encodes to the same
 // tree. Unknown trailing elements are skipped and an explicit dnAttributes
 // FALSE is accepted (re-encoding omits both). On failure `r` is unchanged.
-result<filter> decode_filter(ber::reader &r,
+[[nodiscard]] result<filter> decode_filter(ber::reader &r,
   const filter_limits &limits = {},
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 

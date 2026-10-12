@@ -163,23 +163,26 @@ class attribute
 
 	allocator_type get_allocator() const noexcept { return name_.get_allocator(); }
 
-	static result<attribute> parse(std::string_view text,
+	[[nodiscard]] static result<attribute> parse(std::string_view text,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
-	static attribute unchecked(std::string_view text, const allocator_type &alloc = {})
+	[[nodiscard]] static attribute unchecked(std::string_view text, const allocator_type &alloc = {})
 	{
 		attribute a(alloc);
 		a.name_.assign(text);
 		return a;
 	}
-	static attribute unchecked(const char *text, const allocator_type &alloc = {})
+	[[nodiscard]] static attribute unchecked(const char *text, const allocator_type &alloc = {})
 	{
 		return unchecked(std::string_view(text), alloc);
 	}
 	// Takes the string, with its resource.
-	static attribute unchecked(std::pmr::string &&text) noexcept { return attribute(std::move(text), adopt{}); }
+	[[nodiscard]] static attribute unchecked(std::pmr::string &&text) noexcept
+	{
+		return attribute(std::move(text), adopt{});
+	}
 
 	const std::pmr::string &name() const noexcept { return name_; }
-	bool empty() const noexcept { return name_.empty(); }
+	[[nodiscard]] bool empty() const noexcept { return name_.empty(); }
 
 	friend bool operator==(const attribute &a, const attribute &b) noexcept
 	{
@@ -197,7 +200,7 @@ class attribute
 };
 
 // Case-insensitive hash, consistent with operator==.
-std::size_t hash_value(std::string_view attribute_name) noexcept;
+[[nodiscard]] std::size_t hash_value(std::string_view attribute_name) noexcept;
 
 namespace detail {
 

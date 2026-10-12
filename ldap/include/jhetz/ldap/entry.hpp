@@ -71,14 +71,17 @@ struct entry
 	// Values of `type` (case-insensitive, options included: `cn;lang-en` is
 	// not `cn`), or nullptr if the entry has no such attribute. An attribute
 	// present without values (typesOnly searches) gives an empty vector.
-	const std::pmr::vector<std::pmr::string> *find(std::string_view type) const noexcept;
-	const std::pmr::vector<std::pmr::string> *find(const attribute &type) const noexcept { return find(type.name()); }
+	[[nodiscard]] const std::pmr::vector<std::pmr::string> *find(std::string_view type) const noexcept;
+	[[nodiscard]] const std::pmr::vector<std::pmr::string> *find(const attribute &type) const noexcept
+	{
+		return find(type.name());
+	}
 
 	// Attributes with the same description (compared case-insensitively) are
 	// merged, keeping the first spelling and the order of first appearance.
 	// The entry takes the strings of `e` and is allocated from e's resource
 	// (so an entry made from a message decoded into an arena lives in it too).
-	static entry from(search_result_entry e);
+	[[nodiscard]] static entry from(search_result_entry e);
 
 	friend bool operator==(const entry &, const entry &) = default;
 };

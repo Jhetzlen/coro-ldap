@@ -51,8 +51,8 @@ struct object_class_type
 
 // One definition each (an attributeTypes / objectClasses value); errors are
 // decode_error with the reason.
-result<attribute_type> parse_attribute_type(std::string_view text);
-result<object_class_type> parse_object_class(std::string_view text);
+[[nodiscard]] result<attribute_type> parse_attribute_type(std::string_view text);
+[[nodiscard]] result<object_class_type> parse_object_class(std::string_view text);
 
 class server_schema
 {
@@ -60,17 +60,17 @@ class server_schema
 	server_schema() = default;
 	// From the attributeTypes and objectClasses values of a subschema
 	// entry. Unparseable definitions are skipped (see skipped()).
-	static server_schema parse(std::span<const std::pmr::string> attribute_types,
+	[[nodiscard]] static server_schema parse(std::span<const std::pmr::string> attribute_types,
 	  std::span<const std::pmr::string> object_classes);
 
 	// By any NAME (case-insensitive) or the OID; options ("cn;lang-en") are
 	// ignored. nullptr if unknown. Case folds A-Z only (names and OIDs are
 	// ASCII, RFC 4512 section 1.4). No allocation.
-	const attribute_type *find_attribute(std::string_view name) const noexcept;
-	const object_class_type *find_object_class(std::string_view name) const noexcept;
+	[[nodiscard]] const attribute_type *find_attribute(std::string_view name) const noexcept;
+	[[nodiscard]] const object_class_type *find_object_class(std::string_view name) const noexcept;
 	// The attribute's SYNTAX, or its supertypes' (SUP followed, with a depth
 	// limit against cycles); nullopt if none declares one.
-	std::optional<std::string> syntax_of(const attribute_type &a) const;
+	[[nodiscard]] std::optional<std::string> syntax_of(const attribute_type &a) const;
 
 	std::size_t attribute_count() const noexcept { return attributes_.size(); }
 	std::size_t object_class_count() const noexcept { return classes_.size(); }
@@ -165,7 +165,7 @@ struct schema_report
 	// No errors (warnings allowed).
 	bool ok() const noexcept;
 	// One issue per line: "error: attribute uidNumber: ..." / "warning: ...".
-	std::string to_string() const;
+	[[nodiscard]] std::string to_string() const;
 };
 
 namespace detail {
@@ -179,7 +179,7 @@ namespace detail {
 }// namespace detail
 
 // Checks T's descriptor against the server's schema; lists every issue.
-template<described T> schema_report validate(const server_schema &s)
+template<described T> [[nodiscard]] schema_report validate(const server_schema &s)
 {
 	schema_report out;
 	for (const char *oc : schema<T>.classes.names) detail::check_object_class(s, oc, out);

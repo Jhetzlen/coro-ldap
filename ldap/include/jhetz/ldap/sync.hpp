@@ -67,7 +67,7 @@ class client
 
 	// Connects (and with options.start_tls, upgrades). Replaces (closes) a
 	// previous connection.
-	result<void> connect(url u);
+	[[nodiscard]] result<void> connect(url u);
 
 	// As connection::is_open() / is_tls(): is_tls() is true only while TLS
 	// protects the open connection (false after unbind() or close()).
@@ -77,80 +77,80 @@ class client
 	// facade. Blocking methods called from there fail with would_deadlock.
 	connection::executor_type executor() const noexcept { return ioc_.get_executor(); }
 
-	result<void> simple_bind(dn name, std::string password)
+	[[nodiscard]] result<void> simple_bind(dn name, std::string password)
 	{
 		return call([&](connection &c) { return c.simple_bind(std::move(name), std::move(password)); });
 	}
 	// `mechanism` is used on the I/O thread while the call runs.
-	result<void> sasl_bind(sasl_mechanism &mechanism, dn name = {})
+	[[nodiscard]] result<void> sasl_bind(sasl_mechanism &mechanism, dn name = {})
 	{
 		return call([&](connection &c) { return c.sasl_bind(mechanism, std::move(name)); });
 	}
-	result<void> start_tls(net::tls_options options = {},
+	[[nodiscard]] result<void> start_tls(net::tls_options options = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt)
 	{
 		return call([&](connection &c) { return c.start_tls(std::move(options), timeout); });
 	}
 
-	result<std::pmr::vector<entry>> search(search_params request,
+	[[nodiscard]] result<std::pmr::vector<entry>> search(search_params request,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	{
 		return call([&](connection &c) { return c.search(std::move(request), mr); });
 	}
 	// Every page of a paged search (connection::search_paged), collected.
-	result<std::pmr::vector<entry>> search_paged(search_params request,
+	[[nodiscard]] result<std::pmr::vector<entry>> search_paged(search_params request,
 	  std::int32_t page_size,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
-	template<described T> result<std::vector<T>> search_as(search_params request)
+	template<described T> [[nodiscard]] result<std::vector<T>> search_as(search_params request)
 	{
 		return call([&](connection &c) { return c.search_as<T>(std::move(request)); });
 	}
 
-	result<response> add(add_params request)
+	[[nodiscard]] result<response> add(add_params request)
 	{
 		return call([&](connection &c) { return c.add(std::move(request)); });
 	}
-	template<described T> result<response> add(dn entry, T value, request_controls controls = {})
+	template<described T> [[nodiscard]] result<response> add(dn entry, T value, request_controls controls = {})
 	{
 		return call([&](connection &c) { return c.add(std::move(entry), std::move(value), std::move(controls)); });
 	}
-	result<response> modify(modify_params request)
+	[[nodiscard]] result<response> modify(modify_params request)
 	{
 		return call([&](connection &c) { return c.modify(std::move(request)); });
 	}
 	template<described T>
-	result<response> modify(dn object, std::vector<change<T>> changes, request_controls controls = {})
+	[[nodiscard]] result<response> modify(dn object, std::vector<change<T>> changes, request_controls controls = {})
 	{
 		return call(
 		  [&](connection &c) { return c.modify<T>(std::move(object), std::move(changes), std::move(controls)); });
 	}
-	result<response> del(del_params request)
+	[[nodiscard]] result<response> del(del_params request)
 	{
 		return call([&](connection &c) { return c.del(std::move(request)); });
 	}
-	result<response> modify_dn(modify_dn_params request)
+	[[nodiscard]] result<response> modify_dn(modify_dn_params request)
 	{
 		return call([&](connection &c) { return c.modify_dn(std::move(request)); });
 	}
-	result<bool> compare(compare_params request)
+	[[nodiscard]] result<bool> compare(compare_params request)
 	{
 		return call([&](connection &c) { return c.compare(std::move(request)); });
 	}
-	result<extended_result> extended(extended_params request)
+	[[nodiscard]] result<extended_result> extended(extended_params request)
 	{
 		return call([&](connection &c) { return c.extended(std::move(request)); });
 	}
-	result<std::string> who_am_i(request_controls controls = {})
+	[[nodiscard]] result<std::string> who_am_i(request_controls controls = {})
 	{
 		return call([&](connection &c) { return c.who_am_i(std::move(controls)); });
 	}
-	result<std::optional<std::string>> password_modify(password_modify_params request)
+	[[nodiscard]] result<std::optional<std::string>> password_modify(password_modify_params request)
 	{
 		return call([&](connection &c) { return c.password_modify(std::move(request)); });
 	}
 
-	result<void> unbind();
+	[[nodiscard]] result<void> unbind();
 	// Closes the connection at once (no UnbindRequest).
 	void close();
 

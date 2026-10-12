@@ -42,7 +42,8 @@ catch_discover_tests(jhetz_ldap_alloc_tests)
 # Compile tests for the mapping's compile-time checks (DESIGN.md section 4):
 # each file in compile/ is compiled with -fsyntax-only and must fail with the
 # expected diagnostic (matched in the C locale); ok.cpp must compile, so the
-# failures are not due to the command line.
+# failures are not due to the command line. discarded_child.cpp compiles but
+# must warn ([[nodiscard]], on by default in GCC and Clang).
 if(NOT MSVC)
     set(jhetz_ldap_compile_flags -std=c++23 -fsyntax-only -I${PROJECT_SOURCE_DIR}/include)
     if(jhetz_ldap_clang18_expected_workaround)
@@ -67,6 +68,7 @@ if(NOT MSVC)
     jhetz_ldap_compile_test(invalid_attribute_name "invalid attribute description")
     jhetz_ldap_compile_test(fields_of_two_structs "every field must be a member of the same struct")
     jhetz_ldap_compile_test(add_without_object_class "declare ldap::object_class")
+    jhetz_ldap_compile_test(discarded_child "ignoring return value.*nodiscard")
 endif()
 
 # Each <target>_fuzz_replay runs the libFuzzer entry point of fuzz/<target>.cpp

@@ -232,11 +232,12 @@ struct rdn
 
 	// RFC 4514 text of one RDN (`uid=jdoe`, `cn=a+sn=b`). invalid_dn if the
 	// text is empty, has a syntax error, or holds more than one RDN.
-	static result<rdn> parse(std::string_view text, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	[[nodiscard]] static result<rdn> parse(std::string_view text,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 	// Escaped like dn::to_string(); parse(to_string()) == *this for an RDN
 	// that parse() or the literal built.
-	std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
 
 	friend bool operator==(const rdn &a, const rdn &b);
 };
@@ -270,31 +271,32 @@ class dn
 
 	allocator_type get_allocator() const noexcept { return rdns_.get_allocator(); }
 
-	static result<dn> parse(std::string_view text, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	[[nodiscard]] static result<dn> parse(std::string_view text,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 	// RFC 4514 string form. Types keep their spelling; values are escaped as
 	// needed (`, + " \ < > ;`, leading space or '#', trailing space as `\c`;
 	// NUL and other control characters as `\xx`). parse(to_string()) == *this.
-	std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
 
 	// Most specific RDN first, as in the string form.
 	const std::pmr::vector<rdn> &rdns() const noexcept { return rdns_; }
-	bool empty() const noexcept { return rdns_.empty(); }
+	[[nodiscard]] bool empty() const noexcept { return rdns_.empty(); }
 	// Without the first RDN; the parent of the empty DN is the empty DN.
-	dn parent() const;
+	[[nodiscard]] dn parent() const;
 	// `r` prepended to this DN: `base.child(ldap::rdn{"uid=jdoe"})` is
 	// `uid=jdoe,<base>`. Throws std::invalid_argument (programming error) if
 	// `r` has no AVA, a type that is not a descriptor or numeric OID, or an
 	// empty `#` value.
-	dn child(const rdn &r) const;
-	dn child(rdn &&r) const;
+	[[nodiscard]] dn child(const rdn &r) const;
+	[[nodiscard]] dn child(rdn &&r) const;
 	// `relative` prepended to this DN, its RDNs in order (the leftmost stays
 	// the most specific): `base.child(ldap::dn{"uid=jdoe,ou=people"})` is
 	// `uid=jdoe,ou=people,<base>`. A child of the empty DN is `relative`.
 	//
 	// `base.child({"uid=jdoe"})` does not compile (ambiguous between rdn
 	// and dn): name the type, `ldap::rdn{...}` or `ldap::dn{...}`.
-	dn child(const dn &relative) const;
+	[[nodiscard]] dn child(const dn &relative) const;
 
 	friend bool operator==(const dn &, const dn &) = default;
 

@@ -68,7 +68,7 @@ enum class url_scheme : std::uint8_t {
 };
 
 // "ldap", "ldaps" or "ldapi".
-std::string_view to_string(url_scheme s) noexcept;
+[[nodiscard]] std::string_view to_string(url_scheme s) noexcept;
 
 // One RFC 4516 extension: `[!]type[=value]`.
 // Allocator-aware like url: in a url (a pmr::vector<url_extension>) the
@@ -124,11 +124,12 @@ class url
 
 	// Parses RFC 4516 text; fails with invalid_url (never throws on bad input).
 	// The url's strings and lists are allocated from `mr`.
-	static result<url> parse(std::string_view text, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	[[nodiscard]] static result<url> parse(std::string_view text,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 	// Parses each URI (e.g. the referral or continuation references of a
 	// result) and returns those that are valid LDAP URLs, in order; the
 	// others are left out (servers may send any URI scheme).
-	static std::pmr::vector<url> parse_list(const std::pmr::vector<std::pmr::string> &uris,
+	[[nodiscard]] static std::pmr::vector<url> parse_list(const std::pmr::vector<std::pmr::string> &uris,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 	// RFC 4516 text: lower-case scheme, IPv6 in brackets, the port only if
@@ -137,7 +138,7 @@ class url
 	// ambiguous in their part are percent-encoded (always `%`, `?`, `#`, and
 	// `,` inside attributes and extension values; `/` in an ldapi path).
 	// parse(to_string()) == *this.
-	std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
 
 	url_scheme scheme() const noexcept { return scheme_; }
 	// Decoded host: a name, an IPv4 address, an IPv6 address without the
@@ -151,7 +152,7 @@ class url
 	std::uint16_t port_or_default() const noexcept;
 	// Encoded `host:port` with the port made explicit (`[::1]:389`), or the
 	// encoded socket path for ldapi. For error messages and logs.
-	std::pmr::string authority(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] std::pmr::string authority(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
 
 	// nullopt when the URL has no "/" (then no later part either).
 	const std::optional<dn> &base_dn() const noexcept { return dn_; }

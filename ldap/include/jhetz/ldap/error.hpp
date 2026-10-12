@@ -132,11 +132,20 @@ const std::error_category &result_category() noexcept;// "ldap.result"
 const std::error_category &client_category() noexcept;// "ldap.client"
 const std::error_category &cond_category() noexcept;// "ldap.cond"
 
-inline std::error_code make_error_code(errc e) noexcept { return { static_cast<int>(e), result_category() }; }
+[[nodiscard]] inline std::error_code make_error_code(errc e) noexcept
+{
+	return { static_cast<int>(e), result_category() };
+}
 
-inline std::error_code make_error_code(client_errc e) noexcept { return { static_cast<int>(e), client_category() }; }
+[[nodiscard]] inline std::error_code make_error_code(client_errc e) noexcept
+{
+	return { static_cast<int>(e), client_category() };
+}
 
-inline std::error_condition make_error_condition(cond c) noexcept { return { static_cast<int>(c), cond_category() }; }
+[[nodiscard]] inline std::error_condition make_error_condition(cond c) noexcept
+{
+	return { static_cast<int>(c), cond_category() };
+}
 
 // An error: its code plus what the server and the client said about it.
 //
@@ -161,7 +170,7 @@ struct error
 	std::pmr::string context{};// client-side path, e.g. "ber: integer at offset 12"
 
 	// Everything above, human readable, on one line.
-	std::pmr::string message(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] std::pmr::string message(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
 
 	friend bool operator==(const error &, const error &) = default;
 };
@@ -169,7 +178,7 @@ struct error
 template<class T> using result = std::expected<T, error>;
 
 // Builds an error carrying only a code and a client-side context string.
-inline error make_error(std::error_code code, std::string_view context = {})
+[[nodiscard]] inline error make_error(std::error_code code, std::string_view context = {})
 {
 	error e;
 	e.code = code;
@@ -178,7 +187,7 @@ inline error make_error(std::error_code code, std::string_view context = {})
 }
 
 // Shorthand for `return std::unexpected(make_error(...));`.
-inline std::unexpected<error> fail(std::error_code code, std::string_view context = {})
+[[nodiscard]] inline std::unexpected<error> fail(std::error_code code, std::string_view context = {})
 {
 	return std::unexpected(make_error(code, context));
 }

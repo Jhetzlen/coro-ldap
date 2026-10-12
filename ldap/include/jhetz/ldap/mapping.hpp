@@ -97,14 +97,14 @@ namespace detail {
 
 template<> struct value_traits<std::string>
 {
-	static result<std::string> decode(std::string_view raw) { return std::string(raw); }
-	static std::string encode(const std::string &v) { return v; }
+	[[nodiscard]] static result<std::string> decode(std::string_view raw) { return std::string(raw); }
+	[[nodiscard]] static std::string encode(const std::string &v) { return v; }
 };
 
 template<> struct value_traits<std::pmr::string>
 {
-	static result<std::pmr::string> decode(std::string_view raw) { return std::pmr::string(raw); }
-	static std::string encode(const std::pmr::string &v) { return std::string(v); }
+	[[nodiscard]] static result<std::pmr::string> decode(std::string_view raw) { return std::pmr::string(raw); }
+	[[nodiscard]] static std::string encode(const std::pmr::string &v) { return std::string(v); }
 };
 
 namespace detail {
@@ -118,7 +118,7 @@ template<std::integral T>
 	requires(!std::same_as<T, bool> && !detail::char_like<T>)
 struct value_traits<T>
 {
-	static result<T> decode(std::string_view raw)
+	[[nodiscard]] static result<T> decode(std::string_view raw)
 	{
 		T v{};
 		const char *end = raw.data() + raw.size();
@@ -127,35 +127,35 @@ struct value_traits<T>
 			return std::unexpected(detail::conversion_error("not an integer", raw));
 		return v;
 	}
-	static std::string encode(T v) { return std::to_string(v); }
+	[[nodiscard]] static std::string encode(T v) { return std::to_string(v); }
 };
 
 // Boolean syntax (RFC 4517 section 3.3.3): exactly "TRUE" or "FALSE".
 template<> struct value_traits<bool>
 {
-	static result<bool> decode(std::string_view raw)
+	[[nodiscard]] static result<bool> decode(std::string_view raw)
 	{
 		if (raw == "TRUE") return true;
 		if (raw == "FALSE") return false;
 		return std::unexpected(detail::conversion_error("not TRUE or FALSE", raw));
 	}
-	static std::string encode(bool v) { return v ? "TRUE" : "FALSE"; }
+	[[nodiscard]] static std::string encode(bool v) { return v ? "TRUE" : "FALSE"; }
 };
 
 template<> struct value_traits<dn>
 {
-	static result<dn> decode(std::string_view raw);
-	static std::string encode(const dn &v) { return std::string(v.to_string()); }
+	[[nodiscard]] static result<dn> decode(std::string_view raw);
+	[[nodiscard]] static std::string encode(const dn &v) { return std::string(v.to_string()); }
 };
 
 template<> struct value_traits<binary>
 {
-	static result<binary> decode(std::string_view raw)
+	[[nodiscard]] static result<binary> decode(std::string_view raw)
 	{
 		const auto *p = reinterpret_cast<const std::byte *>(raw.data());
 		return binary(p, p + raw.size());
 	}
-	static std::string encode(const binary &v)
+	[[nodiscard]] static std::string encode(const binary &v)
 	{
 		return std::string(reinterpret_cast<const char *>(v.data()), v.size());
 	}
@@ -164,15 +164,18 @@ template<> struct value_traits<binary>
 // GeneralizedTime (RFC 4517 section 3.3.13): decodes every form (minutes,
 // seconds, fractions of the last unit, "Z" or an offset; fractions of a
 // second are truncated), encodes as "YYYYMMDDHHMMSSZ". Years 0000-9999.
-result<std::chrono::sys_seconds> parse_generalized_time(std::string_view text);
-result<std::string> format_generalized_time(std::chrono::sys_seconds t);
+[[nodiscard]] result<std::chrono::sys_seconds> parse_generalized_time(std::string_view text);
+[[nodiscard]] result<std::string> format_generalized_time(std::chrono::sys_seconds t);
 
 template<> struct value_traits<std::chrono::sys_seconds>
 {
-	static result<std::chrono::sys_seconds> decode(std::string_view raw) { return parse_generalized_time(raw); }
+	[[nodiscard]] static result<std::chrono::sys_seconds> decode(std::string_view raw)
+	{
+		return parse_generalized_time(raw);
+	}
 	// A time outside years 0000-9999 cannot be written: throws
 	// std::out_of_range (a programming error, like a bad DN literal).
-	static std::string encode(std::chrono::sys_seconds v);
+	[[nodiscard]] static std::string encode(std::chrono::sys_seconds v);
 };
 
 // Enums map to names through a table:
@@ -190,13 +193,13 @@ template<class E>
 	requires std::is_enum_v<E> && (!std::same_as<std::remove_cvref_t<decltype(enum_names<E>)>, no_enum_names>)
 struct value_traits<E>
 {
-	static result<E> decode(std::string_view raw)
+	[[nodiscard]] static result<E> decode(std::string_view raw)
 	{
 		for (const auto &[value, name] : enum_names<E>)
 			if (name == raw) return value;
 		return std::unexpected(detail::conversion_error("not a known name", raw));
 	}
-	static std::string encode(E v)
+	[[nodiscard]] static std::string encode(E v)
 	{
 		for (const auto &[value, name] : enum_names<E>)
 			if (value == v) return std::string(name);
@@ -344,7 +347,8 @@ namespace detail {
 }// namespace detail
 
 // The attribute names of T's descriptor, in order (what search_as requests).
-template<described T> string_list attribute_names(std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+template<described T>
+[[nodiscard]] string_list attribute_names(std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 {
 	string_list out(mr);
 	std::apply([&](const auto &...f) { (out.emplace_back(f.name), ...); }, schema<T>.fields);
@@ -352,7 +356,10 @@ template<described T> string_list attribute_names(std::pmr::memory_resource *mr 
 }
 
 // The object classes of T's descriptor (empty if none were declared).
-template<described T> constexpr std::span<const char *const> object_classes_of() { return schema<T>.classes.names; }
+template<described T> [[nodiscard]] constexpr std::span<const char *const> object_classes_of()
+{
+	return schema<T>.classes.names;
+}
 
 // ---------------------------------------------------------------- decode / encode
 
@@ -391,7 +398,7 @@ namespace detail {
 // Converts an entry to T (default-constructed, then every described member
 // assigned). Attribute names match case-insensitively, options included
 // (see entry::find).
-template<described T> result<T> decode(const entry &e)
+template<described T> [[nodiscard]] result<T> decode(const entry &e)
 {
 	T out{};
 	std::optional<error> failed;
@@ -436,7 +443,7 @@ namespace detail {
 // descriptor's object classes when it declares some. Without declared
 // object classes the descriptor must map objectClass itself.
 template<described T>
-std::pmr::vector<partial_attribute> to_attributes(const T &value,
+[[nodiscard]] std::pmr::vector<partial_attribute> to_attributes(const T &value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 {
 	constexpr auto &d = schema<T>;
@@ -511,23 +518,23 @@ namespace detail {
 // Replaces all values of the member's attribute with `v` (an element, an
 // optional element — nullopt removes the attribute — or, for a vector
 // member, a range of elements).
-template<auto Ptr, class V> change<detail::owner_of<Ptr>> replace(const V &v)
+template<auto Ptr, class V> [[nodiscard]] change<detail::owner_of<Ptr>> replace(const V &v)
 {
 	return detail::make_change<Ptr>(modify_operation::replace, detail::encode_values<Ptr>(v));
 }
 
 // Adds values (an element, or a range of elements for a vector member).
-template<auto Ptr, class V> change<detail::owner_of<Ptr>> add(const V &v)
+template<auto Ptr, class V> [[nodiscard]] change<detail::owner_of<Ptr>> add(const V &v)
 {
 	return detail::make_change<Ptr>(modify_operation::add, detail::encode_values<Ptr>(v));
 }
 
 // Removes the whole attribute, or only the given values.
-template<auto Ptr> change<detail::owner_of<Ptr>> remove()
+template<auto Ptr> [[nodiscard]] change<detail::owner_of<Ptr>> remove()
 {
 	return detail::make_change<Ptr>(modify_operation::delete_, {});
 }
-template<auto Ptr, class V> change<detail::owner_of<Ptr>> remove(const V &v)
+template<auto Ptr, class V> [[nodiscard]] change<detail::owner_of<Ptr>> remove(const V &v)
 {
 	return detail::make_change<Ptr>(modify_operation::delete_, detail::encode_values<Ptr>(v));
 }
@@ -543,23 +550,23 @@ namespace filters {
 		using E = typename std::remove_cvref_t<decltype(detail::field_of<Ptr>())>::element;
 
 	  public:
-		filter operator==(const E &v) const { return a() == value_traits<E>::encode(v); }
-		filter operator>=(const E &v) const { return a() >= value_traits<E>::encode(v); }
-		filter operator<=(const E &v) const { return a() <= value_traits<E>::encode(v); }
-		filter approx(const E &v) const { return a().approx(value_traits<E>::encode(v)); }
-		filter present() const { return a().present(); }
+		[[nodiscard]] filter operator==(const E &v) const { return a() == value_traits<E>::encode(v); }
+		[[nodiscard]] filter operator>=(const E &v) const { return a() >= value_traits<E>::encode(v); }
+		[[nodiscard]] filter operator<=(const E &v) const { return a() <= value_traits<E>::encode(v); }
+		[[nodiscard]] filter approx(const E &v) const { return a().approx(value_traits<E>::encode(v)); }
+		[[nodiscard]] filter present() const { return a().present(); }
 
 	  private:
 		static attr a() { return attr(detail::field_of<Ptr>().name); }
 	};
 
-	template<auto Ptr> typed_attr<Ptr> field() { return {}; }
+	template<auto Ptr> [[nodiscard]] typed_attr<Ptr> field() { return {}; }
 
 }// namespace filters
 
 // `(&(objectClass=c1)...(objectClass=cN) f)`, or `f` when T declares no
 // object class: what search_as<T> sends.
-template<described T> filter narrow_filter(filter f)
+template<described T> [[nodiscard]] filter narrow_filter(filter f)
 {
 	constexpr auto &names = schema<T>.classes.names;
 	if constexpr (names.size() == 0) {

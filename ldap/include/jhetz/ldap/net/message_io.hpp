@@ -66,7 +66,7 @@ class read_buffer
 	// response before the TLS handshake).
 	std::span<const std::byte> data() const noexcept { return std::span(buf_).subspan(begin_, end_ - begin_); }
 	std::size_t size() const noexcept { return end_ - begin_; }
-	bool empty() const noexcept { return begin_ == end_; }
+	[[nodiscard]] bool empty() const noexcept { return begin_ == end_; }
 	std::size_t capacity() const noexcept { return buf_.size(); }
 	void clear() noexcept { begin_ = end_ = 0; }
 

@@ -111,14 +111,14 @@ class sasl_scram_sha256 final : public sasl_mechanism
 
 	std::string_view name() const noexcept override { return "SCRAM-SHA-256"; }
 	// client-first-message: GS2 header, n=<username>, r=<client nonce>.
-	result<std::optional<std::string>> start() override;
+	[[nodiscard]] result<std::optional<std::string>> start() override;
 	// After the client-first-message: the server-first-message gives the
 	// client-final-message (c=, r=, p=<proof>). After the client-final-message
 	// (a server that sends its server-final-message as a challenge rather than
 	// with the success result): verifies it and answers with an empty response.
-	result<std::optional<std::string>> step(std::optional<std::string_view> challenge) override;
+	[[nodiscard]] result<std::optional<std::string>> step(std::optional<std::string_view> challenge) override;
 	// Verifies the server-final-message ("v=") unless step() already did.
-	result<void> complete(std::optional<std::string_view> server_creds) override;
+	[[nodiscard]] result<void> complete(std::optional<std::string_view> server_creds) override;
 
   private:
 	friend struct detail::scram_test_access;

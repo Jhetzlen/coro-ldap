@@ -44,25 +44,25 @@ struct tag
 
 // Builds a tag, checking the number. Throws std::invalid_argument for numbers
 // above 30 (a programming error; in a constant expression it fails to compile).
-constexpr tag make_tag(tag_class cls, std::uint8_t number, bool constructed = false)
+[[nodiscard]] constexpr tag make_tag(tag_class cls, std::uint8_t number, bool constructed = false)
 {
 	if (number > max_tag_number) throw std::invalid_argument("ber: tag number above 30 needs the high-tag-number form");
 	return tag{ cls, constructed, number };
 }
 
-constexpr tag universal(std::uint8_t number, bool constructed = false)
+[[nodiscard]] constexpr tag universal(std::uint8_t number, bool constructed = false)
 {
 	return make_tag(tag_class::universal, number, constructed);
 }
-constexpr tag application(std::uint8_t number, bool constructed = false)
+[[nodiscard]] constexpr tag application(std::uint8_t number, bool constructed = false)
 {
 	return make_tag(tag_class::application, number, constructed);
 }
-constexpr tag context(std::uint8_t number, bool constructed = false)
+[[nodiscard]] constexpr tag context(std::uint8_t number, bool constructed = false)
 {
 	return make_tag(tag_class::context, number, constructed);
 }
-constexpr tag private_tag(std::uint8_t number, bool constructed = false)
+[[nodiscard]] constexpr tag private_tag(std::uint8_t number, bool constructed = false)
 {
 	return make_tag(tag_class::private_, number, constructed);
 }
@@ -80,7 +80,7 @@ namespace tags {
 // The single identifier octet for `t`. Throws std::invalid_argument for tag
 // numbers above 30 (a compile error in constant expressions), which would
 // otherwise be silently turned into the high-tag-number marker 0x1F.
-constexpr std::byte identifier_octet(tag t)
+[[nodiscard]] constexpr std::byte identifier_octet(tag t)
 {
 	if (t.number > max_tag_number)
 		throw std::invalid_argument("ber: tag number above 30 needs the high-tag-number form");
@@ -89,7 +89,7 @@ constexpr std::byte identifier_octet(tag t)
 }
 
 // Human readable form, e.g. "[UNIVERSAL 16 constructed]", for error context.
-std::string to_string(tag t);
+[[nodiscard]] std::string to_string(tag t);
 
 // ---------------------------------------------------------------- encoder
 
@@ -168,7 +168,7 @@ class writer
 	const std::pmr::vector<std::byte> &bytes() const noexcept { return buf_; }
 	// Moves the encoded bytes out (on the writer's resource) and leaves the
 	// writer empty, still on the same resource.
-	std::pmr::vector<std::byte> take() noexcept
+	[[nodiscard]] std::pmr::vector<std::byte> take() noexcept
 	{
 		++resets_;
 		std::pmr::vector<std::byte> out(std::move(buf_));
@@ -242,7 +242,7 @@ class reader
 	  : data_(data), max_depth_(max_depth)
 	{}
 
-	bool empty() const noexcept { return pos_ == data_.size(); }
+	[[nodiscard]] bool empty() const noexcept { return pos_ == data_.size(); }
 	std::size_t remaining() const noexcept { return data_.size() - pos_; }
 	// Absolute offset of the next byte, counted from the start of the
 	// outermost reader's buffer.
@@ -251,37 +251,37 @@ class reader
 	std::size_t depth() const noexcept { return depth_; }
 	std::size_t max_depth() const noexcept { return max_depth_; }
 
-	result<tag> peek_tag() const;
+	[[nodiscard]] result<tag> peek_tag() const;
 	// Reads the next element of any tag.
-	result<element> read();
+	[[nodiscard]] result<element> read();
 	// Reads the next element; fails with unexpected_tag unless its class and
 	// number match `expected`. Like the typed reads, the constructed bit of
 	// `expected` is ignored; the returned element carries the real one.
-	result<element> read(tag expected);
+	[[nodiscard]] result<element> read(tag expected);
 
-	result<bool> read_boolean(tag t = tags::boolean);
-	result<std::int64_t> read_integer(tag t = tags::integer);
-	result<std::int64_t> read_enumerated(tag t = tags::enumerated);
-	result<std::span<const std::byte>> read_octet_string(tag t = tags::octet_string);
+	[[nodiscard]] result<bool> read_boolean(tag t = tags::boolean);
+	[[nodiscard]] result<std::int64_t> read_integer(tag t = tags::integer);
+	[[nodiscard]] result<std::int64_t> read_enumerated(tag t = tags::enumerated);
+	[[nodiscard]] result<std::span<const std::byte>> read_octet_string(tag t = tags::octet_string);
 	// Same as read_octet_string, copied into a string allocated from `mr`
 	// (the only allocation any reader operation makes, apart from errors).
-	result<std::pmr::string> read_string(tag t = tags::octet_string,
+	[[nodiscard]] result<std::pmr::string> read_string(tag t = tags::octet_string,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
-	result<void> read_null(tag t = tags::null);
+	[[nodiscard]] result<void> read_null(tag t = tags::null);
 
 	// Reads a constructed element with class/number of `t` and returns a
 	// reader over its contents, one level deeper. Fails with
 	// nesting_too_deep when that would exceed max_depth().
-	result<reader> enter(tag t = tags::sequence);
+	[[nodiscard]] result<reader> enter(tag t = tags::sequence);
 
 	// Reads a primitive element with class/number of `t` (by default an
 	// OCTET STRING) whose content is itself BER, e.g. a control value or
 	// the paged-results cookie, and returns a reader over that content one
 	// level deeper, with the same depth limit as `enter` and absolute offsets.
-	result<reader> enter_encapsulated(tag t = tags::octet_string);
+	[[nodiscard]] result<reader> enter_encapsulated(tag t = tags::octet_string);
 
 	// Fails with decode_error if any bytes are left (trailing garbage).
-	result<void> expect_end() const;
+	[[nodiscard]] result<void> expect_end() const;
 
   private:
 	struct header
@@ -320,7 +320,7 @@ inline constexpr std::size_t default_max_message_size = std::size_t{ 16 } * 1024
 //            total size above `max_size` (message_too_large). Both are decided
 //            from the header alone, before any content has arrived.
 // Only the header is inspected; the content is not validated.
-result<std::optional<std::size_t>> complete_message_size(std::span<const std::byte> buf,
+[[nodiscard]] result<std::optional<std::size_t>> complete_message_size(std::span<const std::byte> buf,
   std::size_t max_size = default_max_message_size);
 
 // Total size (header + content) that the first element at the start of `buf`
@@ -328,7 +328,7 @@ result<std::optional<std::size_t>> complete_message_size(std::span<const std::by
 // content has arrived: nullopt while the header is incomplete; the same
 // errors as complete_message_size. Lets a reader size its buffer for the
 // whole element after reading only the header.
-result<std::optional<std::size_t>> declared_message_size(std::span<const std::byte> buf,
+[[nodiscard]] result<std::optional<std::size_t>> declared_message_size(std::span<const std::byte> buf,
   std::size_t max_size = default_max_message_size);
 
 }// namespace jhetz::ldap::ber

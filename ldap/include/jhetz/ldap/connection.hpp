@@ -243,13 +243,13 @@ struct modify_params
 
 namespace mod {
 	// Adds values (at least one).
-	modify_change add(std::string_view type, std::initializer_list<std::string_view> values);
+	[[nodiscard]] modify_change add(std::string_view type, std::initializer_list<std::string_view> values);
 	// Deletes the given values, or the whole attribute if none are given.
-	modify_change remove(std::string_view type, std::initializer_list<std::string_view> values = {});
+	[[nodiscard]] modify_change remove(std::string_view type, std::initializer_list<std::string_view> values = {});
 	// Replaces all values (none: deletes the attribute if present).
-	modify_change replace(std::string_view type, std::initializer_list<std::string_view> values);
+	[[nodiscard]] modify_change replace(std::string_view type, std::initializer_list<std::string_view> values);
 	// Adds `delta` to an integer attribute (RFC 4525 Modify-Increment).
-	modify_change increment(std::string_view type, std::string_view delta = "1");
+	[[nodiscard]] modify_change increment(std::string_view type, std::string_view delta = "1");
 }// namespace mod
 
 // DelRequest (RFC 4511 section 4.8): deletes a leaf entry.
@@ -602,7 +602,8 @@ class search_stream
 	// parses them.
 	const string_list &references() const noexcept;
 	// references() parsed as LDAP URLs; URIs that do not parse are left out.
-	std::pmr::vector<url> reference_urls(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] std::pmr::vector<url> reference_urls(
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
 	// Controls of the SearchResultDone (e.g. paged results, or the sort
 	// result: find_sort_result()), once done().
 	const std::pmr::vector<control> &controls() const noexcept;
@@ -661,7 +662,8 @@ class paged_search
 	std::size_t pages() const noexcept;
 	// References of every page so far, in order.
 	const string_list &references() const noexcept;
-	std::pmr::vector<url> reference_urls(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] std::pmr::vector<url> reference_urls(
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
 	// Controls of the last SearchResultDone, once done().
 	const std::pmr::vector<control> &controls() const noexcept;
 

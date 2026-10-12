@@ -30,15 +30,15 @@ class sasl_mechanism
 	virtual std::string_view name() const noexcept = 0;
 	// Credentials of the first BindRequest (nullopt: none sent). Called at
 	// the start of each bind, so it also resets the mechanism.
-	virtual result<std::optional<std::string>> start() = 0;
+	[[nodiscard]] virtual result<std::optional<std::string>> start() = 0;
 	// After saslBindInProgress: the server's challenge (serverSaslCreds,
 	// nullopt if absent) gives the credentials of the next BindRequest. An
 	// error aborts the bind.
-	virtual result<std::optional<std::string>> step(std::optional<std::string_view> challenge) = 0;
+	[[nodiscard]] virtual result<std::optional<std::string>> step(std::optional<std::string_view> challenge) = 0;
 	// After success: the server's final serverSaslCreds, if any (e.g. a
 	// SCRAM server signature to verify). An error fails the bind. Default:
 	// accept anything.
-	virtual result<void> complete(std::optional<std::string_view> server_creds)
+	[[nodiscard]] virtual result<void> complete(std::optional<std::string_view> server_creds)
 	{
 		(void)server_creds;
 		return {};
@@ -56,8 +56,8 @@ class sasl_external final : public sasl_mechanism
 	explicit sasl_external(std::string authz_id = {}) : authz_id_(std::move(authz_id)) {}
 
 	std::string_view name() const noexcept override { return "EXTERNAL"; }
-	result<std::optional<std::string>> start() override { return std::optional<std::string>(authz_id_); }
-	result<std::optional<std::string>> step(std::optional<std::string_view>) override
+	[[nodiscard]] result<std::optional<std::string>> start() override { return std::optional<std::string>(authz_id_); }
+	[[nodiscard]] result<std::optional<std::string>> step(std::optional<std::string_view>) override
 	{
 		return fail(
 		  client_errc::unexpected_response, "EXTERNAL: the server sent a challenge (EXTERNAL has a single step)");

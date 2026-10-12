@@ -113,7 +113,7 @@ struct ldap_result
 	// message), diagnostic, matched DN (when not empty), referral URIs and
 	// `context`. For a success result the code is 0, i.e. "no error"; callers
 	// check is_success() first.
-	error to_error(std::string_view context = {}) const;
+	[[nodiscard]] error to_error(std::string_view context = {}) const;
 
 	friend bool operator==(const ldap_result &, const ldap_result &) = default;
 };
@@ -821,9 +821,9 @@ struct message
 // - encode(*decode(*encode(m))) == encode(m), byte for byte.
 // The first overload returns the bytes in a vector allocated from `mr`; the
 // second appends them to `w` (e.g. a reused writer, or one on an arena).
-result<std::pmr::vector<std::byte>> encode(const message &m,
+[[nodiscard]] result<std::pmr::vector<std::byte>> encode(const message &m,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
-result<void> encode(ber::writer &w, const message &m);
+[[nodiscard]] result<void> encode(ber::writer &w, const message &m);
 
 // Which side sent the message being decoded.
 enum class origin {
@@ -860,7 +860,8 @@ struct decode_options
 
 // Decodes exactly one LDAPMessage, as delimited by ber::complete_message_size;
 // trailing bytes are an error (decode_error).
-result<message> decode(std::span<const std::byte> one_complete_message, const decode_options &options = {});
+[[nodiscard]] result<message> decode(std::span<const std::byte> one_complete_message,
+  const decode_options &options = {});
 
 // The messageID and the protocolOp tag of one complete PDU, read without
 // decoding the rest or allocating: a multiplexed connection uses it to find
@@ -872,7 +873,7 @@ struct message_header
 	std::int32_t id = 0;
 	ber::tag op{};// e.g. [APPLICATION 4] for a SearchResultEntry
 };
-result<message_header> peek_message_header(std::span<const std::byte> one_complete_message);
+[[nodiscard]] result<message_header> peek_message_header(std::span<const std::byte> one_complete_message);
 
 // ---------------------------------------------------------------- typed controls
 
@@ -910,13 +911,13 @@ struct paged_results
 
 // Fails with encode_error for a negative size. The control is allocated
 // from `mr`.
-result<control> encode_paged_results(const paged_results &value,
+[[nodiscard]] result<control> encode_paged_results(const paged_results &value,
   bool criticality = false,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 // Fails with decode_error if `c` is not a paged results control or its value
 // is missing or malformed (trailing bytes after the SEQUENCE included; unknown
 // trailing SEQUENCE elements are skipped). The result is allocated from `mr`.
-result<paged_results> decode_paged_results(const control &c,
+[[nodiscard]] result<paged_results> decode_paged_results(const control &c,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 // Server Side Sorting (RFC 2891). The request control (sort keys) is built
@@ -964,13 +965,13 @@ struct sort_result
 
 // The response control (as a server sends it; for mock servers and tests).
 // Allocated from `mr`. Never fails today; result<> like the other encoders.
-result<control> encode_sort_result(const sort_result &value,
+[[nodiscard]] result<control> encode_sort_result(const sort_result &value,
   bool criticality = false,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 // Fails with decode_error if `c` is not a sort response control or its value
 // is missing or malformed (trailing bytes after the SEQUENCE included; unknown
 // trailing SEQUENCE elements are skipped). Allocated from `mr`.
-result<sort_result> decode_sort_result(const control &c,
+[[nodiscard]] result<sort_result> decode_sort_result(const control &c,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 // Pre-Read and Post-Read (RFC 4527). The request controls (an attribute
@@ -983,7 +984,7 @@ inline constexpr std::string_view post_read_oid = "1.3.6.1.1.13.2";
 // The response control `oid` (pre_read_oid or post_read_oid, else
 // encode_error) carrying `entry` (for mock servers and tests). Allocated
 // from `mr`.
-result<control> encode_read_entry(std::string_view oid,
+[[nodiscard]] result<control> encode_read_entry(std::string_view oid,
   const search_result_entry &entry,
   bool criticality = false,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
@@ -992,6 +993,6 @@ result<control> encode_read_entry(std::string_view oid,
 // value is not exactly one SearchResultEntry: options.max_depth and
 // options.max_elements apply, and the entry is allocated from
 // options.memory (options.from and options.filter do not matter).
-result<search_result_entry> decode_read_entry(const control &c, const decode_options &options = {});
+[[nodiscard]] result<search_result_entry> decode_read_entry(const control &c, const decode_options &options = {});
 
 }// namespace jhetz::ldap

@@ -123,21 +123,22 @@ using request_controls = std::vector<request_control>;
 // The wire form of `c`, on `mr`. Fails with encode_error for a negative
 // page size or an invalid sort, invalid_filter for an empty (or too large)
 // assertion filter.
-result<control> to_control(const request_control &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+[[nodiscard]] result<control> to_control(const request_control &c,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 // Appends the wire form of every control to `out`.
-result<void> append_controls(const request_controls &controls, std::pmr::vector<control> &out);
+[[nodiscard]] result<void> append_controls(const request_controls &controls, std::pmr::vector<control> &out);
 
 // The paged results control among `controls` (e.g. a SearchResultDone's),
 // nullopt if there is none, or decode_error if it is malformed.
-result<std::optional<paged_results>> find_paged(const std::pmr::vector<control> &controls,
+[[nodiscard]] result<std::optional<paged_results>> find_paged(const std::pmr::vector<control> &controls,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 // The sort result control among `controls` (a SearchResultDone's), nullopt
 // if there is none, or decode_error if it is malformed. nullopt is a normal
 // answer, even to a search that sent server_side_sort (see there): callers
 // must handle it, as "not known to be sorted".
-result<std::optional<sort_result>> find_sort_result(const std::pmr::vector<control> &controls,
+[[nodiscard]] result<std::optional<sort_result>> find_sort_result(const std::pmr::vector<control> &controls,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 // The entry of the pre-read response control (of a modify, delete or modify
@@ -145,9 +146,9 @@ result<std::optional<sort_result>> find_sort_result(const std::pmr::vector<contr
 // response) among `controls`, nullopt if there is none, or an error if it
 // is malformed (decode_error, or message_too_large beyond decode_options'
 // default element limit). The entry is allocated from `mr`.
-result<std::optional<entry>> find_pre_read(const std::pmr::vector<control> &controls,
+[[nodiscard]] result<std::optional<entry>> find_pre_read(const std::pmr::vector<control> &controls,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
-result<std::optional<entry>> find_post_read(const std::pmr::vector<control> &controls,
+[[nodiscard]] result<std::optional<entry>> find_post_read(const std::pmr::vector<control> &controls,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 }// namespace jhetz::ldap
