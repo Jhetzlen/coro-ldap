@@ -442,6 +442,46 @@ TEST_CASE("connection: unbind with a stream open ends the stream", "[net][connec
 	CHECK(std::holds_alternative<ldap::unbind_request>(m.log.received[1].op));
 }
 
+// RFC 4511 section 4.3: nothing may follow the UnbindRequest. The writer is
+// kept busy with an AddRequest nothing reads yet, so unbind() waits for it
+// with its UnbindRequest queued behind; what starts meanwhile is refused.
+TEST_CASE("RFC 4511 4.3: requests started while unbind waits for the writer are refused", "[net][connection][rfc]")
+{
+	tcp_mock_ldap m;// over TCP, so StartTLS gets past its transport check
+	outcome<ldap::result<ldap::response>> add;
+	spawn(m.ioc, m.conn.add(oversized_add()), add);
+	outcome<ldap::result<void>> unbind;
+	spawn(m.ioc, m.conn.unbind(), unbind);
+	drive_until(m.ioc, [&add] { return add.done(); });// abandoned by the unbind
+	REQUIRE_FALSE(add.get().has_value());
+	CHECK(add.get().error().code == client_errc::not_connected);
+	REQUIRE_FALSE(unbind.done());
+	CHECK(m.conn.is_open());
+
+	auto s = m.run(m.conn.search(people_search()));
+	REQUIRE_FALSE(s.has_value());
+	CHECK(s.error().code == client_errc::not_connected);
+	CHECK(s.error().context == "search ou=people,dc=example,dc=org: connection closing (unbind)");
+	auto t = m.run(m.conn.start_tls());
+	REQUIRE_FALSE(t.has_value());
+	CHECK(t.error().code == client_errc::not_connected);
+	CHECK(t.error().context == "start tls: connection closing (unbind)");
+	auto u = m.run(m.conn.unbind());
+	REQUIRE_FALSE(u.has_value());
+	CHECK(u.error().code == client_errc::not_connected);
+	CHECK_FALSE(unbind.done());
+
+	// The server reads: the AddRequest, the UnbindRequest, then the close.
+	m.serve({ step{}, step{}, client_hangs_up() });
+	drive_until(m.ioc, [&unbind] { return unbind.done(); });
+	CHECK(unbind.get().has_value());
+	CHECK_FALSE(m.conn.is_open());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 2);
+	CHECK(std::holds_alternative<ldap::add_request>(m.log.received[0].op));
+	CHECK(m.log.received[1] == ldap::message{ 2, ldap::unbind_request{} });
+}
+
 TEST_CASE("connection: message ids increase per request", "[net][connection]")
 {
 	mock_ldap m;

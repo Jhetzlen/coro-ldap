@@ -170,6 +170,9 @@ struct connection::impl
 	std::int32_t next_id = 1;
 	bool wrapped = false;// next_id went past maxInt: ids may be in use
 	bool open = true;
+	// unbind() sent its UnbindRequest and waits for the writer: still open,
+	// but nothing more may be sent (RFC 4511 section 4.3).
+	bool unbinding = false;
 	std::optional<error> failure{};// why the connection closed, if it failed
 	std::pmr::unordered_map<std::int32_t, pending_op *> pending;
 	struct abandoned_req
@@ -279,6 +282,8 @@ struct connection::impl
 		if (failure) {
 			text += ": connection closed by an earlier error: ";
 			text += failure->message();
+		} else if (open && unbinding) {
+			text += ": connection closing (unbind)";
 		} else {
 			text += ": connection closed";
 		}
@@ -332,7 +337,7 @@ struct connection::impl
 	// nothing is sent and the id is not used up.
 	result<void> submit(message &m, pending_op *p, std::string_view context)
 	{
-		if (!open) return std::unexpected(not_connected(context));
+		if (!open || unbinding) return std::unexpected(not_connected(context));
 		if (upgrading && !std::holds_alternative<abandon_request>(m.op))
 			return fail(client_errc::operation_in_progress, std::string(context) + " during StartTLS");
 		m.id = free_id();
@@ -1352,10 +1357,11 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	// released paged searches are waited for (they are certain, or given
 	// up on at their own deadline), within `timeout`. The checks are made
 	// again after the wait: an operation started meanwhile is refused as
-	// if start_tls had been called then.
+	// if start_tls had been called then, and so is an unbind() (which
+	// zeroes the answers due without waking this wait until it closes).
 	const auto wait_deadline = deadline_after(timeout ? timeout : self->default_timeout);
 	while (true) {
-		if (!self->open) co_return std::unexpected(self->not_connected(context));
+		if (!self->open || self->unbinding) co_return std::unexpected(self->not_connected(context));
 		if (self->upgrading)
 			co_return fail(client_errc::operation_in_progress, context + " during an earlier StartTLS");
 		if (self->binding) co_return fail(client_errc::operation_in_progress, context + " during a bind");
@@ -1449,7 +1455,7 @@ capy::task<result<void>> connection::unbind()
 	const std::string context = "unbind";
 	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
 	const impl_ref self(impl_);
-	if (!self->open) co_return std::unexpected(self->not_connected(context));
+	if (!self->open || self->unbinding) co_return std::unexpected(self->not_connected(context));
 	// Nothing may be sent while a BindRequest is outstanding (RFC 4511
 	// section 4.2.1), an UnbindRequest included: just close.
 	if (self->binding) {
@@ -1467,13 +1473,18 @@ capy::task<result<void>> connection::unbind()
 	}
 	// The answers still due are not read either. due_idle stays clear until
 	// shut() below: a StartTLS waiting for them then fails with
-	// not_connected instead of being sent after the UnbindRequest.
+	// not_connected instead of being sent after the UnbindRequest (as does
+	// one whose wait times out meanwhile: `unbinding`).
 	for (auto &a : self->abandoned) a.due = false;
 	self->due_answers = 0;
 	self->due_changed.set();// the due watcher ends
 	self->stop_reader_if_idle();
 	message request{ 0, unbind_request{} };
 	if (auto r = self->submit(request, nullptr, context); !r) co_return r;
+	// Nothing may follow the UnbindRequest (RFC 4511 section 4.3): an
+	// operation, StartTLS or unbind() started while the writer finishes
+	// fails with not_connected.
+	self->unbinding = true;
 	// Wait for the writer, even if this task is cancelled: closing first
 	// would cut the UnbindRequest off.
 	{

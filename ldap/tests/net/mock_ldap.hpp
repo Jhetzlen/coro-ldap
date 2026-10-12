@@ -293,6 +293,17 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 	net::transport server_end() { return net::transport::wrap(socket_ref{ &peer }, "server"); }
 };
 
+// An AddRequest of 8 MiB: about twice what loopback TCP buffers while
+// nothing reads (Linux: the send buffer grows to tcp_wmem's 4 MiB, the
+// receive window only as the peer reads), so the writer is still busy with
+// it until the server's end reads. Less than read_options::max_message_size,
+// so the server can read it then.
+inline ldap::add_params oversized_add()
+{
+	return { .entry = ldap::dn{ "uid=big,ou=people,dc=example,dc=org" },
+		.attributes = { ldap::partial_attribute{ "description", { std::string(std::size_t{ 8 } << 20, 'x') } } } };
+}
+
 inline ldap::search_params people_search()
 {
 	return { .base = ldap::dn{ "ou=people,dc=example,dc=org" }, .filter = ldap::filters::attr("uid") == "jdoe" };

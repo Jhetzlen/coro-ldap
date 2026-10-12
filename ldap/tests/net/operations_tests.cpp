@@ -1173,6 +1173,42 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		REQUIRE(m.log.received.size() == 3);
 		CHECK(std::holds_alternative<ldap::unbind_request>(m.log.received[2].op));
 	}
+	SECTION("unbind while it waits, and its timeout passes meanwhile: StartTLS is not sent after the UnbindRequest")
+	{
+		tcp_mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  step{} });// reads the release, never answers; nothing reads after it
+		release_after_one_page(m);
+		m.check_server();
+		outcome<ldap::result<void>> tls;
+		spawn(m.ioc, m.conn.start_tls({}, std::chrono::milliseconds(100)), tls);
+		settle(m);
+		CHECK_FALSE(tls.done());
+		// The writer stays busy with the AddRequest, so unbind() waits for it
+		// (the answers due no longer counted) past StartTLS's timeout.
+		outcome<ldap::result<ldap::response>> add;
+		spawn(m.ioc, m.conn.add(oversized_add()), add);
+		outcome<ldap::result<void>> unbind;
+		spawn(m.ioc, m.conn.unbind(), unbind);
+		drive_until(m.ioc, [&tls] { return tls.done(); });
+		REQUIRE_FALSE(tls.get().has_value());
+		CHECK(tls.get().error().code == client_errc::not_connected);
+		CHECK(tls.get().error().context == "start tls: connection closing (unbind)");
+		CHECK_FALSE(unbind.done());
+
+		// The server reads again: the AddRequest, the UnbindRequest, the close.
+		server_log drained;
+		outcome<void> server;
+		spawn(m.ioc, serve_script(m.server_end(), { step{}, step{}, client_hangs_up() }, drained), server);
+		drive_until(m.ioc, [&] { return unbind.done() && server.done(); });
+		CHECK(unbind.get().has_value());
+		CHECK(add.done());
+		server.get();
+		CHECK(drained.error == "");
+		REQUIRE(drained.received.size() == 2);
+		CHECK(std::holds_alternative<ldap::add_request>(drained.received[0].op));
+		CHECK(std::holds_alternative<ldap::unbind_request>(drained.received[1].op));
+	}
 	SECTION("the answer is read with no other operation running")
 	{
 		tcp_mock_ldap m;

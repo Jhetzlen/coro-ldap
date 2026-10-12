@@ -551,8 +551,10 @@ class connection
 	// within connection_options::tls_shutdown_timeout (best effort: the
 	// result does not depend on it). Outstanding
 	// operations and open streams fail with not_connected (an unbind
-	// abandons them on the server too). The connection is closed even if
-	// the write fails or the task is cancelled.
+	// abandons them on the server too). Nothing is sent after the
+	// UnbindRequest: an operation, start_tls() or unbind() started while it
+	// is being written fails with not_connected. The connection is closed
+	// even if the write fails or the task is cancelled.
 	boost::capy::task<result<void>> unbind();
 
 	// Closes the transport at once, without an UnbindRequest. Outstanding

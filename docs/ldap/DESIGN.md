@@ -793,7 +793,10 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   remembered, so later operations fail with `not_connected` naming it.
   `unbind()` fails the outstanding operations with `not_connected` (the
   server abandons them too), waits until the UnbindRequest is written even
-  if cancelled, then closes.
+  if cancelled, then closes. Nothing may follow the UnbindRequest (RFC 4511
+  section 4.3): while it is written, the connection is still open but
+  every new request, a StartTLS (including one whose wait for due answers
+  ends then) and another `unbind()` fail with `not_connected`.
 - Lifetime: the state is one reference-counted block on the connection's
   resource, held by the connection, each outstanding operation, each
   stream, and the reader and writer frames. Moving a connection or stream
