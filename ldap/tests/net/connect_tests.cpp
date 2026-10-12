@@ -26,10 +26,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <thread>
 
@@ -510,6 +512,36 @@ TEST_CASE("unresolvable host", "[net][connect][tcp]")
 	CHECK(t.error().code);
 }
 
+// The decoded host is quoted sanitized and cut (as an operation's DN): the
+// URL is often a server's (a referral). U+202E and U+0085 become U+FFFD, the
+// accented letter stays; the encoded URL in the prefix is ASCII already,
+// cut at 256 bytes like the host. Neither name resolves (.invalid, RFC 6761;
+// a label over 63 bytes): without DNS access the lookup may fail
+// differently or time out, at the same stage.
+TEST_CASE("connect: the resolve context quotes the decoded host sanitized and cut", "[net][connect][tcp]")
+{
+	corosio::io_context ioc;
+	const net::connect_options limited{ .timeout = std::chrono::seconds(5) };
+	auto starts_resolve = [](const ldap::error &e, const std::string &expected) {
+		const std::string context(e.context);
+		CHECK_THAT(context, StartsWith(expected));
+		const std::string rest = context.substr(std::min(expected.size(), context.size()));
+		CHECK((rest.empty() || rest == ": gave up after the 5000 ms connect timeout"));
+	};
+
+	auto bidi = connect_to(ioc, "ldap://%E2%80%AE%C2%85caf%C3%A9.invalid/", limited);
+	REQUIRE_FALSE(bidi.has_value());
+	starts_resolve(bidi.error(),
+	  "connect ldap://%E2%80%AE%C2%85caf%C3%A9.invalid:389: resolve \xEF\xBF\xBD\xEF\xBF\xBD"
+	  "caf\xC3\xA9.invalid");
+
+	const std::string label(300, 'a');
+	auto long_host = connect_to(ioc, "ldap://" + label + ".invalid/", limited);
+	REQUIRE_FALSE(long_host.has_value());
+	starts_resolve(long_host.error(),
+	  "connect " + ("ldap://" + label).substr(0, 256) + "...: resolve " + label.substr(0, 256) + "...");
+}
+
 namespace {
 
 // A listener on an IPv6 address, if this host has one. `zone` is the
@@ -670,6 +702,19 @@ TEST_CASE("ldapi:// errors", "[net][connect][ldapi]")
 	REQUIRE_FALSE(t.has_value());
 	CHECK(t.error().code == std::errc::no_such_file_or_directory);
 	CHECK_THAT(std::string(t.error().context), ContainsSubstring(": connect " + missing.str()));
+
+	// The decoded path is quoted sanitized: U+2028 becomes U+FFFD, the
+	// accented letter stays.
+	temp_path odd(
+	  "-x\xE2\x80\xA8"
+	  "caf\xC3\xA9.sock");// never created
+	auto sanitized = connect_to(ioc, "ldapi://" + percent_encode(odd.str()));
+	REQUIRE_FALSE(sanitized.has_value());
+	CHECK(sanitized.error().code == std::errc::no_such_file_or_directory);
+	std::string shown = odd.str();
+	shown.replace(shown.find("\xE2\x80\xA8"), 3, "\xEF\xBF\xBD");
+	CHECK_THAT(std::string(sanitized.error().context), StartsWith("connect ldapi://"));
+	CHECK_THAT(std::string(sanitized.error().context), EndsWith(": connect " + shown));
 
 	auto too_long = connect_to(ioc, "ldapi://" + percent_encode("/" + std::string(200, 'x')));
 	REQUIRE_FALSE(too_long.has_value());

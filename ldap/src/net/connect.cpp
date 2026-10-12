@@ -227,6 +227,19 @@ namespace {
 		co_return {};
 	}
 
+	// "<what> <text>", with `text` (a decoded host or socket path, or the
+	// encoded URL) sanitized and cut as op_context quotes a DN: the URL is
+	// often a server's (a referral), and its decoded host may hold C1 or
+	// bidi controls, U+2028 or ill-formed UTF-8 (has_control_character only
+	// rejects C0 and DEL). Valid non-ASCII (an IDN's U-labels) is kept.
+	std::string quoted(std::string_view what, std::string_view text)
+	{
+		std::string out(what);
+		out += ' ';
+		ldap::detail::append_sanitized(out, text, 256);
+		return out;
+	}
+
 	bool has_control_character(std::string_view host, url_scheme scheme)
 	{
 		for (std::size_t i = 0; i < host.size(); ++i) {
@@ -244,7 +257,7 @@ capy::task<result<transport>>
 {
 	const auto start = clock::now();
 	const std::string server = str(to_string(u.scheme())) + "://" + str(u.authority());
-	const std::string target = "connect " + server;
+	const std::string target = quoted("connect", server);
 
 	if (u.host().empty())
 		co_return fail(client_errc::invalid_url, target + ": the URL names no host (or, for ldapi, no socket path)");
@@ -273,7 +286,7 @@ capy::task<result<transport>>
 		im.host = u.host();
 		im.local.emplace(ioc);
 		auto [ec] = co_await bounded(im.local->connect(corosio::local_endpoint(u.host())), deadline);
-		if (ec) co_return fail(ec, stage_context(target, "connect " + str(u.host()), ec, options.timeout));
+		if (ec) co_return fail(ec, stage_context(target, quoted("connect", u.host()), ec, options.timeout));
 		im.stream = capy::any_stream(&*im.local);
 		co_return t;
 	}
@@ -293,10 +306,10 @@ capy::task<result<transport>>
 
 	// ---- ldap:// and ldaps://: resolve
 	auto [rec, endpoints] = co_await resolve_bounded(ioc, str(u.host()), std::to_string(u.port_or_default()), deadline);
-	if (rec) co_return fail(rec, stage_context(target, "resolve " + str(u.host()), rec, options.timeout));
+	if (rec) co_return fail(rec, stage_context(target, quoted("resolve", u.host()), rec, options.timeout));
 	if (endpoints.empty())
 		co_return fail(
-		  std::make_error_code(std::errc::no_such_device_or_address), target + ": resolve " + str(u.host()));
+		  std::make_error_code(std::errc::no_such_device_or_address), target + ": " + quoted("resolve", u.host()));
 
 	// ---- TCP: Happy Eyeballs (RFC 8305), staggered attempts over every
 	// address, the first to connect wins and the others are cancelled

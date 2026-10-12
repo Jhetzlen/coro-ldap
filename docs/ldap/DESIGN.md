@@ -491,7 +491,9 @@ error, a control type, an AddRequest attribute, the text
 attribute type's SYNTAX) gets the same treatment, cut at 64 or 256 bytes.
 So does the DN an operation names (`search <base>`, `modify <DN>`, ...)
 and a password modify's user: the caller's, but often a DN the server
-returned.
+returned. Likewise the host `connect()` quotes decoded (`resolve <host>`,
+an ldapi:// `connect <path>`), and its encoded URL, cut: often a
+referral's.
 
 LDAP result code 0 (success) is not an `errc` value: a successful result is
 the absence of an error.
