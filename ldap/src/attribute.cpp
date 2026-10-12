@@ -50,8 +50,9 @@ namespace {
 
 	// The bytes of s packed little-endian when it is shorter than 8, else its
 	// last 8 (overlapping the previous word). On big-endian the two paths
-	// pack differently, but each is self-consistent and the length is in
-	// the hash seed, so equal strings still hash equally.
+	// pack differently, but each is self-consistent, so equal strings still
+	// hash equally; hash_value mixes in the length to separate strings that
+	// only differ by trailing zero bytes ("a" / "a\0").
 	std::uint64_t tail8(std::string_view s) noexcept
 	{
 		if (s.size() >= 8) return load8(s.data() + s.size() - 8);
@@ -79,10 +80,14 @@ std::size_t hash_value(std::string_view attribute_name) noexcept
 	// Eight lower-cased bytes at a time (names and OIDs are often longer
 	// than a byte-wise hash is fast for).
 	const std::size_t n = attribute_name.size();
-	std::uint64_t h = 0xCBF2'9CE4'8422'2325ull ^ n;
+	std::uint64_t h = 0xCBF2'9CE4'8422'2325ull;
 	std::size_t i = 0;
 	for (; i + 8 <= n; i += 8) h = mix(h, ascii_lower8(load8(attribute_name.data() + i)));
 	if (i != n) h = mix(h, ascii_lower8(tail8(attribute_name)));
+	// The length goes in after the data: XORed into the seed it landed in
+	// the same bits as the first word, so "1.1.1.1.1" and "3.1.1.1.1.1"
+	// collided in all 64 bits.
+	h ^= n;
 	h *= 0xFF51'AFD7'ED55'8CCDull;
 	return static_cast<std::size_t>(h ^ (h >> 33));
 }

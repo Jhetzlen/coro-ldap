@@ -8,6 +8,7 @@
 #include <map>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace ldap = jhetz::ldap;
@@ -113,6 +114,40 @@ TEST_CASE("ci_hash: no full 64-bit collisions among similar OIDs", "[attribute]"
 				  hash("1.3.6.1.4.1." + std::to_string(a) + "." + std::to_string(b) + ".1." + std::to_string(c)));
 	std::ranges::sort(hashes);
 	CHECK(std::ranges::adjacent_find(hashes) == hashes.end());
+}
+
+TEST_CASE("ci_hash: strings of different lengths do not collide", "[attribute]")
+{
+	// The length XORed into the seed shared bits with the first word, so
+	// these collided in all 64 bits.
+	const ldap::detail::ci_hash hash;
+	CHECK(hash("1.1.1.1.1") != hash("3.1.1.1.1.1"));
+	CHECK(hash("2.2.2.2.2") != hash("0.2.2.2.2.2"));
+	CHECK(hash("abbbbbbbb") != hash("bbbbbbbbbb"));
+	CHECK(hash("a") != hash(std::string_view("b\0", 2)));
+
+	const auto distinct = [](std::vector<std::size_t> hashes) {
+		std::ranges::sort(hashes);
+		return std::ranges::adjacent_find(hashes) == hashes.end();
+	};
+	// Every byte (bar A-Z, which fold onto a-z) repeated, lengths 1..64:
+	// the length-in-seed hash had 7 collisions here.
+	std::vector<std::size_t> hashes;
+	for (int c = 0; c < 256; ++c)
+		if (c < 'A' || c > 'Z')
+			for (std::size_t n = 1; n <= 64; ++n) hashes.push_back(hash(std::string(n, static_cast<char>(c))));
+	CHECK(distinct(std::move(hashes)));
+	// Periodic OID-like strings: "<d>" + ".<e>" * k.
+	hashes.clear();
+	for (char d = '0'; d <= '9'; ++d)
+		for (char e = '0'; e <= '9'; ++e) {
+			std::string s(1, d);
+			for (int k = 1; k <= 24; ++k) {
+				s += std::string{ '.', e };
+				hashes.push_back(hash(s));
+			}
+		}
+	CHECK(distinct(std::move(hashes)));
 }
 
 TEST_CASE("attribute comparison and hashing ignore case", "[attribute]")
