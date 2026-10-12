@@ -1,5 +1,7 @@
 #include "jhetz/ldap/mapping.hpp"
 
+#include "format_util.hpp"
+
 #include <stdexcept>
 #include <string>
 
@@ -10,11 +12,8 @@ namespace detail {
 	error conversion_error(std::string_view what, std::string_view raw)
 	{
 		constexpr std::size_t shown = 64;
-		std::string text(what);
-		text += ": \"";
-		text.append(raw.substr(0, shown));
-		text += raw.size() > shown ? "\"..." : "\"";
-		return make_error(client_errc::conversion_failed, text);
+		return make_error(client_errc::conversion_failed,
+		  detail::format("{}: \"{}{}", what, raw.substr(0, shown), raw.size() > shown ? "\"..." : "\""));
 	}
 
 	error with_context(error e, std::string_view prefix)
@@ -30,11 +29,7 @@ namespace detail {
 
 	std::string entry_context(std::string_view dn, std::string_view attribute)
 	{
-		std::string out = "entry ";
-		out += dn.empty() ? std::string_view("\"\"") : dn;
-		out += ": attribute ";
-		out += attribute;
-		return out;
+		return detail::format("entry {}: attribute {}", dn.empty() ? std::string_view("\"\"") : dn, attribute);
 	}
 
 }// namespace detail
@@ -72,7 +67,7 @@ namespace {
 result<sys_seconds> parse_generalized_time(std::string_view s)
 {
 	auto bad = [&](const char *why) {
-		return std::unexpected(detail::conversion_error(std::string("not a GeneralizedTime (") + why + ")", s));
+		return std::unexpected(detail::conversion_error(detail::format("not a GeneralizedTime ({})", why), s));
 	};
 	std::size_t pos = 0;
 	const auto year = digits(s, pos, 4);
@@ -146,20 +141,17 @@ result<std::string> format_generalized_time(sys_seconds t)
 	const year_month_day ymd(day);
 	const int y = static_cast<int>(ymd.year());
 	if (y < 0 || y > 9999)
-		return fail(client_errc::encode_error, "GeneralizedTime: year " + std::to_string(y) + " outside 0000-9999");
+		return fail(client_errc::encode_error, detail::format("GeneralizedTime: year {} outside 0000-9999", y));
+	// Plain integers rather than the chrono formatter ("{:%Y%m%d%H%M%S}Z"),
+	// which costs this file seconds of compile time for the same output.
 	const hh_mm_ss hms(t - day);
-	char buf[16];
-	auto put = [&buf](std::size_t at, unsigned v, std::size_t width) {
-		for (std::size_t i = width; i-- > 0; v /= 10) buf[at + i] = static_cast<char>('0' + v % 10);
-	};
-	put(0, static_cast<unsigned>(y), 4);
-	put(4, static_cast<unsigned>(ymd.month()), 2);
-	put(6, static_cast<unsigned>(ymd.day()), 2);
-	put(8, static_cast<unsigned>(hms.hours().count()), 2);
-	put(10, static_cast<unsigned>(hms.minutes().count()), 2);
-	put(12, static_cast<unsigned>(hms.seconds().count()), 2);
-	buf[14] = 'Z';
-	return std::string(buf, 15);
+	return detail::format("{:04}{:02}{:02}{:02}{:02}{:02}Z",
+	  y,
+	  static_cast<unsigned>(ymd.month()),
+	  static_cast<unsigned>(ymd.day()),
+	  hms.hours().count(),
+	  hms.minutes().count(),
+	  hms.seconds().count());
 }
 
 std::string value_traits<sys_seconds>::encode(sys_seconds v)

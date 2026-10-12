@@ -1,5 +1,6 @@
 #include "jhetz/ldap/url.hpp"
 
+#include "format_util.hpp"
 #include "pmr_util.hpp"
 
 #include <cstddef>
@@ -62,9 +63,9 @@ namespace {
 
 	// ------------------------------------------------------------ errors
 
-	std::unexpected<error> bad(std::string what, std::size_t offset)
+	std::unexpected<error> bad(std::string_view what, std::size_t offset)
 	{
-		return fail(client_errc::invalid_url, "url: " + std::move(what) + " at offset " + std::to_string(offset));
+		return fail(client_errc::invalid_url, detail::format("url: {} at offset {}", what, offset));
 	}
 
 	// ------------------------------------------------------------ percent-encoding
@@ -80,15 +81,15 @@ namespace {
 		for (std::size_t i = 0; i < s.size(); ++i) {
 			const char c = s[i];
 			if (c == '%') {
-				if (i + 2 >= s.size()) return bad(std::string("truncated percent-encoding in ") + what, offset + i);
+				if (i + 2 >= s.size()) return bad(detail::format("truncated percent-encoding in {}", what), offset + i);
 				if (!is_hex(s[i + 1]) || !is_hex(s[i + 2]))
-					return bad(std::string("invalid percent-encoding in ") + what, offset + i);
+					return bad(detail::format("invalid percent-encoding in {}", what), offset + i);
 				out += static_cast<char>((hex_value(s[i + 1]) << 4) | hex_value(s[i + 2]));
 				i += 2;
 			} else if (allowed(c)) {
 				out += c;
 			} else {
-				return bad(std::string("character not allowed in ") + what, offset + i);
+				return bad(detail::format("character not allowed in {}", what), offset + i);
 			}
 		}
 		return out;
@@ -471,7 +472,7 @@ result<url> url::parse(std::string_view text, std::pmr::memory_resource *mr)
 		auto text_dn = decode(parts[0], offsets[0], "DN", is_lenient_part_char, mr);
 		if (!text_dn) return std::unexpected(std::move(text_dn.error()));
 		auto d = dn::parse(*text_dn, mr);
-		if (!d) return bad("invalid DN (" + std::string(d.error().context) + ")", offsets[0]);
+		if (!d) return bad(detail::format("invalid DN ({})", d.error().context), offsets[0]);
 		u.dn_ = std::move(*d);
 	}
 
@@ -507,7 +508,7 @@ result<url> url::parse(std::string_view text, std::pmr::memory_resource *mr)
 		auto f = decode(parts[3], offsets[3], "filter", is_lenient_part_char, mr);
 		if (!f) return std::unexpected(std::move(f.error()));
 		auto parsed = filter::raw(*f, mr);
-		if (!parsed) return bad("invalid filter (" + std::string(parsed.error().context) + ")", offsets[3]);
+		if (!parsed) return bad(detail::format("invalid filter ({})", parsed.error().context), offsets[3]);
 		u.filter_ = std::move(*parsed);
 	}
 

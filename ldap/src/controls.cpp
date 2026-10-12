@@ -1,5 +1,7 @@
 #include "jhetz/ldap/controls.hpp"
 
+#include "format_util.hpp"
+
 #include "jhetz/ldap/ber.hpp"
 
 #include <algorithm>
@@ -28,7 +30,7 @@ namespace {
 		for (std::size_t i = 0; i < v.keys.size(); ++i)
 			if (v.keys[i].attribute.empty())
 				return fail(
-				  client_errc::encode_error, "server side sort: key " + std::to_string(i + 1) + " has no attribute");
+				  client_errc::encode_error, detail::format("server side sort: key {} has no attribute", i + 1));
 		ber::writer w{ ber::writer::allocator_type(mr) };
 		w.constructed(ber::tags::sequence, [&](ber::writer &list) {
 			for (const auto &k : v.keys)

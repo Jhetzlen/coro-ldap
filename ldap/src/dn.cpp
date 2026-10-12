@@ -1,5 +1,7 @@
 #include "jhetz/ldap/dn.hpp"
 
+#include "format_util.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -164,9 +166,9 @@ result<rdn> rdn::parse(std::string_view text, std::pmr::memory_resource *mr)
 		if (rdns == 1) append_ava(out, tok, mr);// later RDNs are only counted
 	});
 	if (err != std::string_view::npos)
-		return fail(client_errc::invalid_dn, "rdn: syntax error at position " + std::to_string(err));
+		return fail(client_errc::invalid_dn, detail::format("rdn: syntax error at position {}", err));
 	if (rdns == 0) return fail(client_errc::invalid_dn, "rdn: empty");
-	if (rdns > 1) return fail(client_errc::invalid_dn, "rdn: " + std::to_string(rdns) + " RDNs where one is expected");
+	if (rdns > 1) return fail(client_errc::invalid_dn, detail::format("rdn: {} RDNs where one is expected", rdns));
 	return out;
 }
 
@@ -193,7 +195,7 @@ result<dn> dn::parse(std::string_view text, std::pmr::memory_resource *mr)
 		append_ava(out.rdns_.back(), tok, mr);
 	});
 	if (err != std::string_view::npos)
-		return fail(client_errc::invalid_dn, "dn: syntax error at position " + std::to_string(err));
+		return fail(client_errc::invalid_dn, detail::format("dn: syntax error at position {}", err));
 	return out;
 }
 

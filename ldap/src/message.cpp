@@ -1,6 +1,7 @@
 #include "jhetz/ldap/message.hpp"
 
 #include "filter_ast.hpp"
+#include "format_util.hpp"
 #include "pmr_util.hpp"
 
 #include <limits>
@@ -419,18 +420,16 @@ namespace {
 		constexpr std::uint8_t intermediate_response = 25;
 	}// namespace op_tag
 
-	std::string at(std::size_t offset) { return " at offset " + std::to_string(offset); }
-
-	std::unexpected<error> bad(const std::string &what, std::size_t offset)
+	std::unexpected<error> bad(std::string_view what, std::size_t offset)
 	{
-		return fail(client_errc::decode_error, "message: " + what + at(offset));
+		return fail(client_errc::decode_error, detail::format("message: {} at offset {}", what, offset));
 	}
 
 	// ---------------------------------------------------------------- encoder
 
 	std::unexpected<error> out_of_range(const char *what)
 	{
-		return fail(client_errc::encode_error, std::string("message: ") + what + " out of range");
+		return fail(client_errc::encode_error, detail::format("message: {} out of range", what));
 	}
 
 	// The operations a client sends (RFC 4511 section 4.2 protocolOp requests).
@@ -674,10 +673,7 @@ namespace {
 		const std::size_t offset = r.offset();
 		auto copy = r;
 		LDAP_TRY(v, enumerated ? copy.read_enumerated(t) : copy.read_integer(t));
-		if (v < lo || v > hi)
-			return bad(std::string(what) + " " + std::to_string(v) + " outside " + std::to_string(lo) + ".."
-						 + std::to_string(hi),
-			  offset);
+		if (v < lo || v > hi) return bad(detail::format("{} {} outside {}..{}", what, v, lo, hi), offset);
 		r = copy;
 		return static_cast<std::int32_t>(v);
 	}
@@ -769,7 +765,7 @@ namespace {
 		std::unexpected<error> too_many_elements(std::size_t offset) const
 		{
 			return fail(client_errc::message_too_large,
-			  "message: more than " + std::to_string(options_.max_elements) + " elements" + at(offset));
+			  detail::format("message: more than {} elements at offset {}", options_.max_elements, offset));
 		}
 
 		// Elements str() may still decode.
@@ -862,7 +858,8 @@ namespace {
 				sasl.credentials = std::move(credentials);
 			} else {
 				if (o.empty()) return bad("bind request without authentication", auth_at);
-				return fail(client_errc::unsupported_operation, "message: bind authentication choice" + at(auth_at));
+				return fail(client_errc::unsupported_operation,
+				  detail::format("message: bind authentication choice at offset {}", auth_at));
 			}
 			LDAP_TRY_VOID(skip_rest(o));
 			return op;
@@ -966,7 +963,7 @@ namespace {
 			LDAP_TRY_VOID(read_attributes(o, add.attributes));
 			for (const auto &a : add.attributes)
 				if (a.values.empty())
-					return bad("add request attribute '" + std::string(a.type) + "' without values", attrs_at);
+					return bad(detail::format("add request attribute '{}' without values", a.type), attrs_at);
 			LDAP_TRY_VOID(skip_rest(o));
 			return op;
 		}
@@ -1050,18 +1047,20 @@ namespace {
 			const std::size_t offset = r.offset();
 			LDAP_TRY(t, r.peek_tag());
 			auto unsupported = [&] {
-				return fail(
-				  client_errc::unsupported_operation, "message: unknown protocolOp " + ber::to_string(t) + at(offset));
+				return fail(client_errc::unsupported_operation,
+				  detail::format("message: unknown protocolOp {} at offset {}", ber::to_string(t), offset));
 			};
 			if (t.cls != ber::tag_class::application) return unsupported();
 			// Checked before decoding, so a peer cannot make us parse (for
 			// example) a huge search request filter it may not send at all.
 			if (options_.from == origin::server && is_request(t.number))
 				return fail(client_errc::unsupported_operation,
-				  "message: request operation " + ber::to_string(t) + " from a server" + at(offset));
+				  detail::format(
+					"message: request operation {} from a server at offset {}", ber::to_string(t), offset));
 			if (options_.from == origin::client && !is_request(t.number))
 				return fail(client_errc::unsupported_operation,
-				  "message: response operation " + ber::to_string(t) + " from a client" + at(offset));
+				  detail::format(
+					"message: response operation {} from a client at offset {}", ber::to_string(t), offset));
 			switch (t.number) {
 			case op_tag::bind_request:
 				return read_bind_request(r, t);
@@ -1225,7 +1224,7 @@ result<paged_results> decode_paged_results(const control &c, std::pmr::memory_re
 {
 	if (c.type != paged_results_oid)
 		return fail(client_errc::decode_error,
-		  "paged results: control type is " + std::string(c.type) + ", not " + std::string(paged_results_oid));
+		  detail::format("paged results: control type is {}, not {}", c.type, paged_results_oid));
 	if (!c.value) return fail(client_errc::decode_error, "paged results: control has no value");
 	// The control value was already taken out of its OCTET STRING by
 	// decode(), so it is decoded with its own reader (offsets relative to the
@@ -1249,9 +1248,8 @@ namespace {
 	result<void> expect_control(const control &c, std::string_view oid, std::string_view what)
 	{
 		if (c.type != oid)
-			return fail(client_errc::decode_error,
-			  std::string(what) + ": control type is " + std::string(c.type) + ", not " + std::string(oid));
-		if (!c.value) return fail(client_errc::decode_error, std::string(what) + ": control has no value");
+			return fail(client_errc::decode_error, detail::format("{}: control type is {}, not {}", what, c.type, oid));
+		if (!c.value) return fail(client_errc::decode_error, detail::format("{}: control has no value", what));
 		return {};
 	}
 
@@ -1329,7 +1327,7 @@ result<control> encode_read_entry(std::string_view oid,
 {
 	if (oid != pre_read_oid && oid != post_read_oid)
 		return fail(
-		  client_errc::encode_error, "read entry control: " + std::string(oid) + " is not pre-read or post-read");
+		  client_errc::encode_error, detail::format("read entry control: {} is not pre-read or post-read", oid));
 	ber::writer w{ ber::writer::allocator_type(mr) };
 	op_writer{ w }(entry);
 	return bytes_control(oid, criticality, w, mr);
@@ -1339,7 +1337,7 @@ result<search_result_entry> decode_read_entry(const control &c, const decode_opt
 {
 	if (c.type != pre_read_oid && c.type != post_read_oid)
 		return fail(client_errc::decode_error,
-		  "read entry: control type is " + std::string(c.type) + ", not pre-read or post-read");
+		  detail::format("read entry: control type is {}, not pre-read or post-read", c.type));
 	const std::string_view name = c.type == pre_read_oid ? "pre-read" : "post-read";
 	LDAP_TRY_VOID(expect_control(c, c.type, name));
 	return in_control(decoder(options).run_entry(std::as_bytes(std::span(*c.value))), name);

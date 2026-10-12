@@ -1,6 +1,7 @@
 #include "jhetz/ldap/filter.hpp"
 
 #include "filter_ast.hpp"
+#include "format_util.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -632,7 +633,7 @@ namespace filters {
 		  bool dn_attributes)
 		{
 			if (!rule.empty() && !detail::is_oid(rule))
-				throw std::invalid_argument("ldap::filters: invalid matching rule \"" + std::string(rule) + "\"");
+				throw std::invalid_argument(detail::format("ldap::filters: invalid matching rule \"{}\"", rule));
 			if (!dn_attributes && detail::iequals(rule, "dn"))
 				throw std::invalid_argument("ldap::filters: a matching rule named \"dn\" needs dn_attributes");
 			filter f = access::leaf(alloc, kind::extensible_match, attr, value);
@@ -736,17 +737,15 @@ namespace {
 		}
 
 	  private:
-		std::unexpected<ldap::error> error(const char *what, std::size_t at) const
+		std::unexpected<ldap::error> error(std::string_view what, std::size_t at) const
 		{
 			const std::size_t pos = at >= shift_ ? at - shift_ : 0;
-			return fail(
-			  client_errc::invalid_filter, std::string("filter: ") + what + " at position " + std::to_string(pos));
+			return fail(client_errc::invalid_filter, detail::format("filter: {} at position {}", what, pos));
 		}
-		std::unexpected<ldap::error> error(const char *what) const { return error(what, i_); }
-		std::unexpected<ldap::error> error(const std::string &what) const { return error(what.c_str(), i_); }
+		std::unexpected<ldap::error> error(std::string_view what) const { return error(what, i_); }
 		std::unexpected<ldap::error> too_many_elements() const
 		{
-			return error("too many elements (more than " + std::to_string(limits_.max_elements) + ")");
+			return error(detail::format("too many elements (more than {})", limits_.max_elements));
 		}
 
 		bool at_end() const { return i_ >= s_.size(); }
@@ -773,7 +772,7 @@ namespace {
 		result<std::uint32_t> parse_filter(std::size_t depth, std::uint32_t parent)
 		{
 			if (depth > limits_.max_depth)
-				return error("nested too deeply (more than " + std::to_string(limits_.max_depth) + " levels)");
+				return error(detail::format("nested too deeply (more than {} levels)", limits_.max_depth));
 			if (++elements_ > limits_.max_elements) return too_many_elements();
 			depth_ = std::max(depth_, depth);
 			if (auto e = expect('('); !e) return std::unexpected(std::move(e.error()));
@@ -987,12 +986,10 @@ namespace detail {
 		if (f.empty()) return fail(client_errc::invalid_filter, "filter: empty");
 		if (f.depth() > limits.max_depth)
 			return fail(client_errc::invalid_filter,
-			  "filter: nested too deeply (" + std::to_string(f.depth()) + " levels, at most "
-				+ std::to_string(limits.max_depth) + ")");
+			  detail::format("filter: nested too deeply ({} levels, at most {})", f.depth(), limits.max_depth));
 		if (f.elements() > limits.max_elements)
 			return fail(client_errc::invalid_filter,
-			  "filter: too many elements (" + std::to_string(f.elements()) + ", at most "
-				+ std::to_string(limits.max_elements) + ")");
+			  detail::format("filter: too many elements ({}, at most {})", f.elements(), limits.max_elements));
 		return {};
 	}
 
@@ -1078,9 +1075,9 @@ result<void> encode_filter(ber::writer &w, const filter &f, const filter_limits 
 
 namespace {
 
-	std::unexpected<error> bad(const std::string &what, std::size_t offset)
+	std::unexpected<error> bad(std::string_view what, std::size_t offset)
 	{
-		return fail(client_errc::decode_error, "filter: " + what + " at offset " + std::to_string(offset));
+		return fail(client_errc::decode_error, detail::format("filter: {} at offset {}", what, offset));
 	}
 
 	std::string_view as_text(std::span<const std::byte> b)
@@ -1178,7 +1175,7 @@ namespace {
 					final_seen = true;
 				}
 				if (++elements_ > limits_.max_elements)
-					return bad("more than " + std::to_string(limits_.max_elements) + " filter elements", item_at);
+					return bad(detail::format("more than {} filter elements", limits_.max_elements), item_at);
 				const std::uint32_t p = access::add_node(out_, k);
 				access::set_value(out_, p, as_text(*s));
 				access::link_last(out_, n, p);
@@ -1244,15 +1241,15 @@ namespace {
 			const std::size_t at = r.offset();
 			if (depth > limits_.max_depth)
 				return fail(client_errc::nesting_too_deep,
-				  "filter: more than " + std::to_string(limits_.max_depth) + " levels at offset " + std::to_string(at));
+				  detail::format("filter: more than {} levels at offset {}", limits_.max_depth, at));
 			if (++elements_ > limits_.max_elements)
-				return bad("more than " + std::to_string(limits_.max_elements) + " filter elements", at);
+				return bad(detail::format("more than {} filter elements", limits_.max_elements), at);
 			depth_ = std::max(depth_, depth);
 			auto t = r.peek_tag();
 			if (!t) return std::unexpected(std::move(t.error()));
 			if (t->cls != ber::tag_class::context)
 				return fail(client_errc::unexpected_tag,
-				  "filter: unknown filter choice " + ber::to_string(*t) + " at offset " + std::to_string(at));
+				  detail::format("filter: unknown filter choice {} at offset {}", ber::to_string(*t), at));
 			switch (t->number) {
 			case 0:
 			case 1:
@@ -1294,7 +1291,7 @@ namespace {
 				return extensible(r, *t, parent);
 			default:
 				return fail(client_errc::unexpected_tag,
-				  "filter: unknown filter choice " + ber::to_string(*t) + " at offset " + std::to_string(at));
+				  detail::format("filter: unknown filter choice {} at offset {}", ber::to_string(*t), at));
 			}
 		}
 

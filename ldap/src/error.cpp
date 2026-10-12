@@ -1,5 +1,8 @@
 #include "jhetz/ldap/error.hpp"
 
+#include "format_util.hpp"
+
+#include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -290,7 +293,7 @@ namespace {
 		std::string message(int value) const override
 		{
 			auto text = result_text(value);
-			if (text.empty()) return "unknown LDAP result code " + std::to_string(value);
+			if (text.empty()) return detail::format("unknown LDAP result code {}", value);
 			return std::string(text);
 		}
 	};
@@ -303,7 +306,7 @@ namespace {
 		std::string message(int value) const override
 		{
 			auto text = client_text(value);
-			if (text.empty()) return "unknown LDAP client error " + std::to_string(value);
+			if (text.empty()) return detail::format("unknown LDAP client error {}", value);
 			return std::string(text);
 		}
 	};
@@ -316,7 +319,7 @@ namespace {
 		std::string message(int value) const override
 		{
 			auto text = cond_text(value);
-			if (text.empty()) return "unknown LDAP error condition " + std::to_string(value);
+			if (text.empty()) return detail::format("unknown LDAP error condition {}", value);
 			return std::string(text);
 		}
 
@@ -352,6 +355,17 @@ const std::error_category &cond_category() noexcept
 	static const cond_category_impl instance;
 	return instance;
 }
+
+namespace detail {
+
+	std::string vformat(std::string_view fmt, std::format_args args) { return std::vformat(fmt, args); }
+
+	void vformat_to(std::string &out, std::string_view fmt, std::format_args args)
+	{
+		std::vformat_to(std::back_inserter(out), fmt, args);
+	}
+
+}// namespace detail
 
 std::pmr::string error::message(std::pmr::memory_resource *mr) const
 {

@@ -1,5 +1,7 @@
 #include "jhetz/ldap/ber.hpp"
 
+#include "format_util.hpp"
+
 #include <array>
 #include <bit>
 #include <iterator>
@@ -22,8 +24,6 @@ namespace {
 		return tag{ static_cast<tag_class>(id >> 6), (id & 0x20u) != 0, static_cast<std::uint8_t>(id & 0x1Fu) };
 	}
 
-	std::string at(std::size_t offset) { return " at offset " + std::to_string(offset); }
-
 	struct raw_header
 	{
 		tag t;
@@ -39,19 +39,21 @@ namespace {
 		if (buf.empty()) return std::nullopt;
 
 		const unsigned id = octet(buf[0]);
-		if ((id & 0x1Fu) == 0x1Fu) return fail(client_errc::unsupported_tag, "ber: high-tag-number form" + at(base));
+		if ((id & 0x1Fu) == 0x1Fu)
+			return fail(client_errc::unsupported_tag, detail::format("ber: high-tag-number form at offset {}", base));
 		const tag t = tag_from_identifier(id);
 
 		if (buf.size() < 2) return std::nullopt;
 		const unsigned first = octet(buf[1]);
 		if (first < 0x80u) return raw_header{ t, 2, first };
-		if (first == 0x80u) return fail(client_errc::decode_error, "ber: indefinite length" + at(base + 1));
+		if (first == 0x80u)
+			return fail(client_errc::decode_error, detail::format("ber: indefinite length at offset {}", base + 1));
 
 		const std::size_t count = first & 0x7Fu;
 		if (count > max_length_octets)
 			return fail(client_errc::decode_error,
-			  "ber: length uses " + std::to_string(count) + " octets (at most " + std::to_string(max_length_octets)
-				+ " supported)" + at(base + 1));
+			  detail::format(
+				"ber: length uses {} octets (at most {} supported) at offset {}", count, max_length_octets, base + 1));
 		if (buf.size() < 2 + count) return std::nullopt;
 
 		// Non-minimal long forms (leading zero octets, or values < 128) are
@@ -80,7 +82,7 @@ namespace {
 
 	std::string describe(tag expected, tag actual)
 	{
-		return "expected " + to_string(expected) + ", got " + to_string(actual);
+		return detail::format("expected {}, got {}", to_string(expected), to_string(actual));
 	}
 
 	// Class and number must match; the form is imposed by the operation.
@@ -94,13 +96,8 @@ namespace {
 std::string to_string(tag t)
 {
 	static constexpr std::array<const char *, 4> names{ "UNIVERSAL", "APPLICATION", "CONTEXT", "PRIVATE" };
-	std::string out = "[";
-	out += names[std::to_underlying(t.cls) & 3u];
-	out += ' ';
-	out += std::to_string(t.number);
-	if (t.constructed) out += " constructed";
-	out += ']';
-	return out;
+	return detail::format(
+	  "[{} {}{}]", names[std::to_underlying(t.cls) & 3u], t.number, t.constructed ? " constructed" : "");
 }
 
 // ---------------------------------------------------------------- encoder
@@ -237,25 +234,28 @@ result<reader::header> reader::parse_header() const
 {
 	if (header h; fast_header(h)) return h;
 	const auto rest = data_.subspan(pos_);
-	if (rest.empty()) return fail(client_errc::decode_error, "ber: unexpected end of input" + at(offset()));
+	if (rest.empty())
+		return fail(client_errc::decode_error, detail::format("ber: unexpected end of input at offset {}", offset()));
 	auto h = parse_header_at(rest, offset());
 	if (!h) return std::unexpected(std::move(h.error()));
-	if (!*h) return fail(client_errc::decode_error, "ber: truncated header" + at(offset()));
+	if (!*h) return fail(client_errc::decode_error, detail::format("ber: truncated header at offset {}", offset()));
 	const raw_header &raw = **h;
 	const std::size_t available = rest.size() - raw.header_size;
 	if (raw.content_size > available)
 		return fail(client_errc::decode_error,
-		  "ber: length " + std::to_string(raw.content_size) + " exceeds the " + std::to_string(available)
-			+ " remaining bytes" + at(offset()));
+		  detail::format(
+			"ber: length {} exceeds the {} remaining bytes at offset {}", raw.content_size, available, offset()));
 	return header{ raw.t, raw.header_size, static_cast<std::size_t>(raw.content_size) };
 }
 
 result<tag> reader::peek_tag() const
 {
 	// Only the identifier octet is inspected; length problems surface on read.
-	if (empty()) return fail(client_errc::decode_error, "ber: unexpected end of input" + at(offset()));
+	if (empty())
+		return fail(client_errc::decode_error, detail::format("ber: unexpected end of input at offset {}", offset()));
 	const unsigned id = octet(data_[pos_]);
-	if ((id & 0x1Fu) == 0x1Fu) return fail(client_errc::unsupported_tag, "ber: high-tag-number form" + at(offset()));
+	if ((id & 0x1Fu) == 0x1Fu)
+		return fail(client_errc::unsupported_tag, detail::format("ber: high-tag-number form at offset {}", offset()));
 	return tag_from_identifier(id);
 }
 
@@ -274,7 +274,8 @@ result<element> reader::read(tag expected)
 	if (!h) return std::unexpected(std::move(h.error()));
 	// Class and number only; the element keeps its real constructed bit.
 	if (h->t.cls != expected.cls || h->t.number != expected.number)
-		return fail(client_errc::unexpected_tag, "ber: " + describe(expected, h->t) + at(offset()));
+		return fail(
+		  client_errc::unexpected_tag, detail::format("ber: {} at offset {}", describe(expected, h->t), offset()));
 	return read();
 }
 
@@ -284,8 +285,10 @@ result<element> reader::read_primitive(tag expected, const char *what)
 	if (!h) return std::unexpected(std::move(h.error()));
 	if (!matches(h->t, expected, false))
 		return fail(client_errc::unexpected_tag,
-		  std::string("ber: reading ") + what + ": " + describe(tag{ expected.cls, false, expected.number }, h->t)
-			+ at(offset()));
+		  detail::format("ber: reading {}: {} at offset {}",
+			what,
+			describe(tag{ expected.cls, false, expected.number }, h->t),
+			offset()));
 	// Not committed yet: the caller validates the content first.
 	return element{ h->t, data_.subspan(pos_ + h->header_size, h->content_size), offset(), h->header_size };
 }
@@ -296,7 +299,7 @@ result<bool> reader::read_boolean(tag t)
 	if (!e) return std::unexpected(std::move(e.error()));
 	if (e->content.size() != 1)
 		return fail(client_errc::decode_error,
-		  "ber: BOOLEAN with " + std::to_string(e->content.size()) + " content octets" + at(e->offset));
+		  detail::format("ber: BOOLEAN with {} content octets at offset {}", e->content.size(), e->offset));
 	pos_ += e->size();
 	return e->content[0] != std::byte{ 0 };
 }
@@ -306,10 +309,11 @@ result<std::int64_t> reader::read_int(tag t, const char *what)
 	auto e = read_primitive(t, what);
 	if (!e) return std::unexpected(std::move(e.error()));
 	const auto c = e->content;
-	if (c.empty()) return fail(client_errc::decode_error, std::string("ber: empty ") + what + at(e->offset));
+	if (c.empty())
+		return fail(client_errc::decode_error, detail::format("ber: empty {} at offset {}", what, e->offset));
 	if (c.size() > 8)
 		return fail(client_errc::integer_overflow,
-		  std::string("ber: ") + what + " with " + std::to_string(c.size()) + " content octets" + at(e->offset));
+		  detail::format("ber: {} with {} content octets at offset {}", what, c.size(), e->offset));
 	// Sign-extend from the first octet; unsigned arithmetic avoids UB, and the
 	// final conversion to int64 is modular (well defined since C++20).
 	std::uint64_t v = (octet(c[0]) & 0x80u) != 0 ? ~std::uint64_t{ 0 } : 0;
@@ -345,7 +349,7 @@ result<void> reader::read_null(tag t)
 	if (!e) return std::unexpected(std::move(e.error()));
 	if (!e->content.empty())
 		return fail(client_errc::decode_error,
-		  "ber: NULL with " + std::to_string(e->content.size()) + " content octets" + at(e->offset));
+		  detail::format("ber: NULL with {} content octets at offset {}", e->content.size(), e->offset));
 	pos_ += e->size();
 	return {};
 }
@@ -356,11 +360,11 @@ result<reader> reader::enter_impl(tag t, bool constructed, const char *what)
 	if (!h) return std::unexpected(std::move(h.error()));
 	if (!matches(h->t, t, constructed))
 		return fail(client_errc::unexpected_tag,
-		  std::string("ber: entering ") + what + ": " + describe(tag{ t.cls, constructed, t.number }, h->t)
-			+ at(offset()));
+		  detail::format(
+			"ber: entering {}: {} at offset {}", what, describe(tag{ t.cls, constructed, t.number }, h->t), offset()));
 	if (depth_ >= max_depth_)
 		return fail(
-		  client_errc::nesting_too_deep, "ber: more than " + std::to_string(max_depth_) + " levels" + at(offset()));
+		  client_errc::nesting_too_deep, detail::format("ber: more than {} levels at offset {}", max_depth_, offset()));
 	const std::size_t content_offset = offset() + h->header_size;
 	reader sub(data_.subspan(pos_ + h->header_size, h->content_size), content_offset, depth_ + 1, max_depth_);
 	pos_ += h->header_size + h->content_size;
@@ -375,7 +379,7 @@ result<void> reader::expect_end() const
 {
 	if (!empty())
 		return fail(client_errc::decode_error,
-		  "ber: " + std::to_string(remaining()) + " unexpected trailing bytes" + at(offset()));
+		  detail::format("ber: {} unexpected trailing bytes at offset {}", remaining(), offset()));
 	return {};
 }
 
@@ -390,8 +394,7 @@ result<std::optional<std::size_t>> declared_message_size(std::span<const std::by
 	const std::uint64_t total = (*h)->header_size + (*h)->content_size;
 	if (total > static_cast<std::uint64_t>(max_size))
 		return fail(client_errc::message_too_large,
-		  "ber: declared message size " + std::to_string(total) + " exceeds the maximum of " + std::to_string(max_size)
-			+ " bytes");
+		  detail::format("ber: declared message size {} exceeds the maximum of {} bytes", total, max_size));
 	return std::optional<std::size_t>{ static_cast<std::size_t>(total) };
 }
 

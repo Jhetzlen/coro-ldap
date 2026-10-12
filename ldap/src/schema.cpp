@@ -1,5 +1,7 @@
 #include "jhetz/ldap/schema.hpp"
 
+#include "format_util.hpp"
+
 #include <algorithm>
 #include <string>
 
@@ -88,7 +90,7 @@ namespace {
 
 	result<definition> parse_definition(std::string_view text)
 	{
-		auto bad = [](const char *why) { return fail(client_errc::decode_error, std::string("schema: ") + why); };
+		auto bad = [](const char *why) { return fail(client_errc::decode_error, detail::format("schema: {}", why)); };
 		lexer lx(text);
 		auto t = lx.next();
 		if (!t) return std::unexpected(std::move(t.error()));
@@ -244,11 +246,12 @@ std::string schema_report::to_string() const
 	std::string out;
 	for (const auto &i : issues) {
 		if (!out.empty()) out += '\n';
-		out += i.is_error() ? "error: " : "warning: ";
-		out += i.what == schema_issue::kind::unknown_object_class ? "object class " : "attribute ";
-		out += i.name;
-		out += ": ";
-		out += i.detail;
+		detail::format_to(out,
+		  "{}{}{}: {}",
+		  i.is_error() ? "error: " : "warning: ",
+		  i.what == schema_issue::kind::unknown_object_class ? "object class " : "attribute ",
+		  i.name,
+		  i.detail);
 	}
 	return out;
 }
@@ -287,9 +290,11 @@ namespace detail {
 		if (!syntaxes.empty()) {
 			const auto syn = s.syntax_of(*a);
 			if (syn && std::none_of(syntaxes.begin(), syntaxes.end(), [&](const char *x) { return *syn == x; })) {
-				std::string detail = "syntax " + *syn + " is not one the member's type reads (";
-				for (std::size_t i = 0; i < syntaxes.size(); ++i) detail += (i ? ", " : "") + std::string(syntaxes[i]);
-				out.issues.push_back({ schema_issue::kind::syntax_mismatch, std::string(name), detail + ")" });
+				std::string text = detail::format("syntax {} is not one the member's type reads (", *syn);
+				for (std::size_t i = 0; i < syntaxes.size(); ++i)
+					detail::format_to(text, "{}{}", i ? ", " : "", syntaxes[i]);
+				text += ')';
+				out.issues.push_back({ schema_issue::kind::syntax_mismatch, std::string(name), std::move(text) });
 			}
 		}
 	}
