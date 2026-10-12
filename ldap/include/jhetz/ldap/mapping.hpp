@@ -91,7 +91,8 @@ concept mapped_value = requires(std::string_view raw, const T &v) {
 };
 
 namespace detail {
-	// "not an integer: \"12a\"" (the value is quoted and cut at 64 bytes).
+	// "not an integer: \"12a\"" (the value is quoted, sanitized and cut at 64
+	// bytes, see append_sanitized in src/format_util.hpp).
 	error conversion_error(std::string_view what, std::string_view raw);
 }// namespace detail
 

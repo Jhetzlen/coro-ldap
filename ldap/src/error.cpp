@@ -1,7 +1,10 @@
 #include "jhetz/ldap/error.hpp"
 
+#include "jhetz/ldap/attribute.hpp"
+
 #include "format_util.hpp"
 
+#include <cstddef>
 #include <iterator>
 #include <optional>
 #include <string>
@@ -365,11 +368,69 @@ namespace detail {
 		std::vformat_to(std::back_inserter(out), fmt, args);
 	}
 
+	namespace {
+
+		// The code point of a well-formed UTF-8 sequence.
+		constexpr char32_t code_point(std::string_view seq) noexcept
+		{
+			const auto b = [&](std::size_t k) { return char32_t{ static_cast<unsigned char>(seq[k]) }; };
+			switch (seq.size()) {
+			case 1:
+				return b(0);
+			case 2:
+				return (b(0) & 0x1Fu) << 6 | (b(1) & 0x3Fu);
+			case 3:
+				return (b(0) & 0x0Fu) << 12 | (b(1) & 0x3Fu) << 6 | (b(2) & 0x3Fu);
+			default:
+				return (b(0) & 0x07u) << 18 | (b(1) & 0x3Fu) << 12 | (b(2) & 0x3Fu) << 6 | (b(3) & 0x3Fu);
+			}
+		}
+
+		// C0, DEL, C1, Bidi_Control and U+2028/U+2029 (append_sanitized).
+		constexpr bool replaced(char32_t c) noexcept
+		{
+			return c < 0x20 || (c >= 0x7F && c < 0xA0) || c == 0x061C || c == 0x200E || c == 0x200F
+				   || (c >= 0x2028 && c <= 0x202E)// U+2028, U+2029, U+202A-U+202E
+				   || (c >= 0x2066 && c <= 0x2069);
+		}
+
+		template<class String> void append_sanitized_to(String &out, std::string_view s, std::size_t max_bytes)
+		{
+			constexpr std::string_view replacement = "\xEF\xBF\xBD";// U+FFFD
+			std::size_t i = 0;
+			while (i < s.size()) {
+				const auto [n, well_formed] = utf8_sequence_at(s, i);
+				if (n > max_bytes - i) break;// i <= max_bytes here
+				const std::string_view seq = s.substr(i, n);
+				if (!well_formed || replaced(code_point(seq)))
+					out += replacement;
+				else
+					out += seq;
+				i += n;
+			}
+			if (i < s.size()) out += "...";
+		}
+
+	}// namespace
+
+	void append_sanitized(std::string &out, std::string_view s, std::size_t max_bytes)
+	{
+		append_sanitized_to(out, s, max_bytes);
+	}
+
+	void append_sanitized(std::pmr::string &out, std::string_view s, std::size_t max_bytes)
+	{
+		append_sanitized_to(out, s, max_bytes);
+	}
+
 }// namespace detail
 
 std::pmr::string error::message(std::pmr::memory_resource *mr) const
 {
 	// "<context>: <code message> [<category>:<value>]; server: ...; matched DN: ...; referrals: ..."
+	// The server's text is sanitized and cut (error.hpp).
+	constexpr std::size_t max_shown = 256;// bytes of each server string
+	constexpr std::size_t max_referrals = 8;
 	std::pmr::string out(mr);
 	if (!context.empty()) {
 		out += context;
@@ -383,17 +444,22 @@ std::pmr::string error::message(std::pmr::memory_resource *mr) const
 	out += ']';
 	if (!diagnostic.empty()) {
 		out += "; server: ";
-		out += diagnostic;
+		detail::append_sanitized(out, diagnostic, max_shown);
 	}
 	if (matched_dn && !matched_dn->empty()) {
 		out += "; matched DN: ";
-		out += *matched_dn;
+		detail::append_sanitized(out, *matched_dn, max_shown);
 	}
 	if (!referrals.empty()) {
 		out += "; referrals:";
-		for (const auto &r : referrals) {
+		for (std::size_t i = 0; i < referrals.size() && i < max_referrals; ++i) {
 			out += ' ';
-			out += r;
+			detail::append_sanitized(out, referrals[i], max_shown);
+		}
+		if (referrals.size() > max_referrals) {
+			out += " (and ";
+			out += std::to_string(referrals.size() - max_referrals);
+			out += " more)";
 		}
 	}
 	return out;

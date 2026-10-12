@@ -37,14 +37,23 @@ namespace detail {
 		return true;
 	}
 
-	// Length of the valid UTF-8 sequence starting at s[i] (RFC 3629; RFC
-	// 4512 UTF1 / UTFMB: no overlong forms, surrogates or code points above
-	// U+10FFFF), or 0 if there is none. Precondition: i < s.size().
-	constexpr std::size_t utf8_sequence_length(std::string_view s, std::size_t i) noexcept
+	// The UTF-8 sequence starting at s[i] (RFC 3629; RFC 4512 UTF1 / UTFMB:
+	// no overlong forms, surrogates or code points above U+10FFFF). If it is
+	// well-formed, its length; if not, the length of its maximal subpart
+	// (Unicode section 3.9: the longest prefix of a well-formed sequence, at
+	// least one octet), which one U+FFFD replaces in a decoder following the
+	// Unicode recommendation (ICU's U8_NEXT, WHATWG). Precondition:
+	// i < s.size().
+	struct utf8_sequence
+	{
+		std::size_t length;
+		bool well_formed;
+	};
+	constexpr utf8_sequence utf8_sequence_at(std::string_view s, std::size_t i) noexcept
 	{
 		const auto at = [&](std::size_t k) { return static_cast<unsigned char>(s[i + k]); };
 		const unsigned char c = at(0);
-		if (c < 0x80u) return 1;
+		if (c < 0x80u) return { 1, true };
 		std::size_t n = 0;
 		unsigned char lo = 0x80u, hi = 0xBFu;// range of the second octet
 		if (c >= 0xC2u && c <= 0xDFu) {
@@ -58,13 +67,23 @@ namespace detail {
 			if (c == 0xF0u) lo = 0x90u;// overlong
 			if (c == 0xF4u) hi = 0x8Fu;// above U+10FFFF
 		} else {
-			return 0;
+			return { 1, false };
 		}
-		if (s.size() - i < n) return 0;
-		if (at(1) < lo || at(1) > hi) return 0;
-		for (std::size_t k = 2; k < n; ++k)
-			if (at(k) < 0x80u || at(k) > 0xBFu) return 0;
-		return n;
+		const std::size_t avail = s.size() - i;
+		std::size_t k = 1;
+		if (avail > 1 && at(1) >= lo && at(1) <= hi) {
+			k = 2;
+			while (k < n && k < avail && at(k) >= 0x80u && at(k) <= 0xBFu) ++k;
+		}
+		return { k, k == n };
+	}
+
+	// Length of the valid UTF-8 sequence starting at s[i], or 0 if there is
+	// none (see utf8_sequence_at). Precondition: i < s.size().
+	constexpr std::size_t utf8_sequence_length(std::string_view s, std::size_t i) noexcept
+	{
+		const utf8_sequence q = utf8_sequence_at(s, i);
+		return q.well_formed ? q.length : 0;
 	}
 
 	// descr = keystring = ALPHA *(ALPHA / DIGIT / HYPHEN)

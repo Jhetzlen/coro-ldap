@@ -11,9 +11,10 @@ namespace detail {
 
 	error conversion_error(std::string_view what, std::string_view raw)
 	{
-		constexpr std::size_t shown = 64;
-		return make_error(client_errc::conversion_failed,
-		  detail::format("{}: \"{}{}", what, raw.substr(0, shown), raw.size() > shown ? "\"..." : "\""));
+		std::string text = detail::format("{}: \"", what);
+		detail::append_sanitized(text, raw, 64);
+		text += '"';
+		return make_error(client_errc::conversion_failed, text);
 	}
 
 	error with_context(error e, std::string_view prefix)
@@ -29,7 +30,14 @@ namespace detail {
 
 	std::string entry_context(std::string_view dn, std::string_view attribute)
 	{
-		return detail::format("entry {}: attribute {}", dn.empty() ? std::string_view("\"\"") : dn, attribute);
+		// The DN is the server's text.
+		std::string text = "entry ";
+		if (dn.empty())
+			text += "\"\"";
+		else
+			detail::append_sanitized(text, dn, 256);
+		detail::format_to(text, ": attribute {}", attribute);
+		return text;
 	}
 
 }// namespace detail

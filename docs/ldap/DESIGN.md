@@ -476,6 +476,16 @@ They use whatever the default resource is when they are built, so an
 application that replaces the default resource must keep it alive as long
 as its errors.
 
+`message()` shows the server's text (diagnostic, matched DN, referrals)
+sanitized: valid UTF-8 is kept, control characters (C0, DEL, C1), bidi
+controls (Bidi_Control), U+2028/U+2029 and ill-formed UTF-8 become U+FFFD,
+each string is cut at 256 bytes on a character boundary and at most 8
+referrals are listed, so a hostile server cannot inject log lines, terminal
+escapes or Trojan Source reordering, or make every message huge. The fields
+keep the text exactly as sent. Server text the library quotes in a
+`context` (a value that failed to convert, an entry's DN, a SCRAM server
+error) gets the same treatment, cut at 64 or 256 bytes.
+
 LDAP result code 0 (success) is not an `errc` value: a successful result is
 the absence of an error.
 

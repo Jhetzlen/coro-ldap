@@ -16,7 +16,8 @@
 // - a paged results, sort result or pre-/post-read control that decodes
 //   re-encodes to an equal value (the entry of a read control allocated
 //   from the message's resource);
-// - search entries convert to ldap::entry, results to ldap::error;
+// - search entries convert to ldap::entry, results to ldap::error, whose
+//   message() is well-formed UTF-8 without C0 controls or DEL;
 // - decode_options::from accepts exactly the responses (origin::server) or the
 //   requests (origin::client), failing otherwise with unsupported_operation.
 // Also, with the input as (possibly non-canonical) filter text: if it
@@ -28,6 +29,7 @@
 #define FUZZ_TARGET "message_fuzz"
 #include "check.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
@@ -98,7 +100,15 @@ void exercise(const ldap::message &m)
 		  } else if constexpr (has_result<T>) {
 			  const auto err = op.result.to_error("fuzz");
 			  LDAP_FUZZ_CHECK(err.code.value() == op.result.result_code);
-			  LDAP_FUZZ_CHECK(!err.message().empty());
+			  // The server's text is sanitized: well-formed UTF-8, no C0 or DEL.
+			  const auto text = err.message();
+			  LDAP_FUZZ_CHECK(!text.empty());
+			  for (std::size_t i = 0; i < text.size();) {
+				  const std::size_t n = ldap::detail::utf8_sequence_length(text, i);
+				  LDAP_FUZZ_CHECK(n != 0);
+				  LDAP_FUZZ_CHECK(n > 1 || (text[i] >= 0x20 && text[i] != 0x7F));
+				  i += n == 0 ? 1 : n;
+			  }
 		  }
 	  },
 	  m.op);

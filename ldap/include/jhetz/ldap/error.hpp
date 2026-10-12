@@ -169,7 +169,14 @@ struct error
 	std::pmr::vector<std::pmr::string> referrals{};// from a referral result
 	std::pmr::string context{};// client-side path, e.g. "ber: integer at offset 12"
 
-	// Everything above, human readable, on one line.
+	// Everything above, human readable, on one line. The server's text
+	// (diagnostic, matched_dn, referrals) is shown sanitized, so a hostile
+	// server cannot break the line or change how a log or terminal displays
+	// it: valid UTF-8 is kept; control characters (C0, DEL, C1), bidi
+	// controls, U+2028/U+2029 and ill-formed UTF-8 become U+FFFD; each string
+	// is cut at 256 bytes on a character boundary ("..." marks the cut), and
+	// at most 8 referrals are listed. The fields above keep the text exactly
+	// as the server sent it.
 	[[nodiscard]] std::pmr::string message(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
 
 	friend bool operator==(const error &, const error &) = default;

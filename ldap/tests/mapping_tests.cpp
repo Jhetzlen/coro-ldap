@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -303,6 +304,35 @@ TEST_CASE("a mapping error message names the code once", "[mapping][decode]")
 	CHECK(std::string(p.error().message())
 		  == "entry uid=jdoe,ou=people,dc=example,dc=org: attribute uid: required attribute missing [ldap.client:"
 			   + std::to_string(std::to_underlying(ldap::client_errc::missing_attribute)) + "]");
+}
+
+TEST_CASE("a conversion error shows the value and the DN sanitized", "[mapping][decode]")
+{
+	const std::string fffd = "\xEF\xBF\xBD";// U+FFFD
+	const auto context = [](std::string_view raw) {
+		auto r = ldap::value_traits<int>::decode(raw);
+		REQUIRE_FALSE(r.has_value());
+		return std::string(r.error().context);
+	};
+	// Valid UTF-8 is kept; controls, bidi controls and ill-formed bytes become U+FFFD.
+	CHECK(context("\xC3\xA9t\xC3\xA9 \xF0\x9F\x98\x80") == "not an integer: \"\xC3\xA9t\xC3\xA9 \xF0\x9F\x98\x80\"");
+	CHECK(context("1\r\n\x1B[0m\xE2\x80\xAE\xFF")
+		  == "not an integer: \"1" + fffd + fffd + fffd + "[0m" + fffd + fffd + "\"");
+	// At most 64 bytes, never half a character: a 2-byte character
+	// straddling byte 64 is left out with what follows.
+	const std::string straddling = std::string(63, '1') + "\xC3\xA9" + "1";
+	CHECK(context(straddling) == "not an integer: \"" + std::string(63, '1') + "...\"");
+	CHECK(context(std::string(62, '1') + "\xC3\xA9") == "not an integer: \"" + std::string(62, '1') + "\xC3\xA9\"");
+	CHECK(context(std::string(65, '1')) == "not an integer: \"" + std::string(64, '1') + "...\"");
+
+	// The entry's DN (the server's text) too.
+	ldap::entry e = full_entry();
+	e.dn = "uid=x\n2026-01-01 forged,dc=example";
+	const ldap::attribute uid{ "uid" };
+	std::erase_if(e.attributes, [&](const ldap::attribute_values &a) { return a.type == uid; });
+	auto p = ldap::decode<person>(e);
+	REQUIRE_FALSE(p.has_value());
+	CHECK(std::string(p.error().context) == "entry uid=x" + fffd + "2026-01-01 forged,dc=example: attribute uid");
 }
 
 // ---------------------------------------------------------------- encode / descriptor
