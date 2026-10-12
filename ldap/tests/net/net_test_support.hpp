@@ -167,7 +167,7 @@ inline std::string bytes_of(const message &m)
 {
 	auto b = encode(m);
 	if (!b) throw std::runtime_error("encode failed: " + std::string(b.error().message()));
-	return std::string(reinterpret_cast<const char *>(b->data()), b->size());
+	return std::string(ldap::detail::as_text(*b));
 }
 
 // ---------------------------------------------------------------- PKI

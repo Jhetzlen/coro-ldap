@@ -1193,8 +1193,7 @@ namespace {
 			if (p.old_password) s.octet_string(*p.old_password, ber::context(1));
 			if (p.new_password) s.octet_string(*p.new_password, ber::context(2));
 		});
-		const auto &bytes = w.bytes();
-		return std::string(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+		return std::string(detail::as_text(w.bytes()));
 	}
 
 	// PasswdModifyResponseValue ::= SEQUENCE { genPasswd [0] OCTET STRING
@@ -1211,7 +1210,7 @@ namespace {
 			if (t && t->cls == ber::tag_class::context && t->number == 0) {
 				auto g = s->read_octet_string(ber::context(0));
 				if (!g) return std::unexpected(std::move(g.error()));
-				generated.emplace(reinterpret_cast<const char *>(g->data()), g->size());
+				generated.emplace(detail::as_text(*g));
 			}
 		}
 		return generated;

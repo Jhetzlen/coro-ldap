@@ -498,9 +498,7 @@ TEST_CASE("paged results control", "[message][control]")
 		ber::writer w;
 		body(w);
 		const auto &b = w.bytes();
-		return ldap::control{
-			ldap::paged_results_oid, false, std::string_view(reinterpret_cast<const char *>(b.data()), b.size())
-		};
+		return ldap::control{ ldap::paged_results_oid, false, ldap::detail::as_text(b) };
 	};
 	CHECK(code_of(ldap::decode_paged_results({ "1.2.3", false, c.value })) == client_errc::decode_error);
 	CHECK(code_of(ldap::decode_paged_results(ldap::control{ ldap::paged_results_oid })) == client_errc::decode_error);

@@ -1213,11 +1213,7 @@ result<control> encode_paged_results(const paged_results &value, bool criticalit
 		s.integer(value.size);
 		s.octet_string(value.cookie);
 	});
-	const auto &bytes = w.bytes();
-	return control(paged_results_oid,
-	  criticality,
-	  std::string_view(reinterpret_cast<const char *>(bytes.data()), bytes.size()),
-	  control::allocator_type(mr));
+	return control(paged_results_oid, criticality, detail::as_text(w.bytes()), control::allocator_type(mr));
 }
 
 result<paged_results> decode_paged_results(const control &c, std::pmr::memory_resource *mr)
@@ -1255,11 +1251,7 @@ namespace {
 
 	control bytes_control(std::string_view oid, bool criticality, const ber::writer &w, std::pmr::memory_resource *mr)
 	{
-		const auto &bytes = w.bytes();
-		return control(oid,
-		  criticality,
-		  std::string_view(reinterpret_cast<const char *>(bytes.data()), bytes.size()),
-		  control::allocator_type(mr));
+		return control(oid, criticality, detail::as_text(w.bytes()), control::allocator_type(mr));
 	}
 
 }// namespace

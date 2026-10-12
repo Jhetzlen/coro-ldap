@@ -25,6 +25,18 @@
 #include <utility>
 #include <vector>
 
+namespace jhetz::ldap::detail {
+
+// The bytes as text, without copying (char may alias any object). For BER
+// payloads that hold strings: LDAPString, OCTET STRING values, encoded
+// control values.
+[[nodiscard]] inline std::string_view as_text(std::span<const std::byte> b) noexcept
+{
+	return { reinterpret_cast<const char *>(b.data()), b.size() };
+}
+
+}// namespace jhetz::ldap::detail
+
 namespace jhetz::ldap::ber {
 
 enum class tag_class : std::uint8_t { universal = 0, application = 1, context = 2, private_ = 3 };

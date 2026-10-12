@@ -340,7 +340,7 @@ result<std::pmr::string> reader::read_string(tag t, std::pmr::memory_resource *m
 	if (!s) return std::unexpected(std::move(s.error()));
 	// The length was checked against the bytes present, so this allocation is
 	// bounded by the input size.
-	return std::pmr::string(reinterpret_cast<const char *>(s->data()), s->size(), mr);
+	return std::pmr::string(detail::as_text(*s), mr);
 }
 
 result<void> reader::read_null(tag t)

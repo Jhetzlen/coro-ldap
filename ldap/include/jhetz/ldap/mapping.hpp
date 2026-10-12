@@ -155,10 +155,7 @@ template<> struct value_traits<binary>
 		const auto *p = reinterpret_cast<const std::byte *>(raw.data());
 		return binary(p, p + raw.size());
 	}
-	[[nodiscard]] static std::string encode(const binary &v)
-	{
-		return std::string(reinterpret_cast<const char *>(v.data()), v.size());
-	}
+	[[nodiscard]] static std::string encode(const binary &v) { return std::string(detail::as_text(v)); }
 };
 
 // GeneralizedTime (RFC 4517 section 3.3.13): decodes every form (minutes,
@@ -501,7 +498,7 @@ namespace detail {
 			static_assert(F::kind == cardinality::multiple, "ldap: several values for a single-valued member");
 			for (const auto &x : v) out.emplace_back(value_traits<E>::encode(x));
 		} else {
-			static_assert(sizeof(V) == 0, "ldap: the value's type does not match the member's type");
+			static_assert(false, "ldap: the value's type does not match the member's type");
 		}
 		return out;
 	}

@@ -27,7 +27,7 @@ std::string value_hex(const ldap::control &c)
 ldap::control with_value(std::string_view oid, std::string_view hex_value)
 {
 	const auto b = from_hex(hex_value);
-	return ldap::control{ oid, false, std::string_view(reinterpret_cast<const char *>(b.data()), b.size()) };
+	return ldap::control{ oid, false, ldap::detail::as_text(b) };
 }
 
 }// namespace

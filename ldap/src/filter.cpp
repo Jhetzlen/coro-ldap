@@ -1080,11 +1080,6 @@ namespace {
 		return fail(client_errc::decode_error, detail::format("filter: {} at offset {}", what, offset));
 	}
 
-	std::string_view as_text(std::span<const std::byte> b)
-	{
-		return std::string_view(reinterpret_cast<const char *>(b.data()), b.size());
-	}
-
 	// RFC 4511 section 4: unknown trailing SEQUENCE elements are ignored (but
 	// must be well-formed).
 	result<void> skip_rest(ber::reader &r)
@@ -1123,7 +1118,7 @@ namespace {
 			const std::size_t at = r.offset();
 			auto s = r.read_octet_string(t);
 			if (!s) return std::unexpected(std::move(s.error()));
-			const auto text = as_text(*s);
+			const auto text = detail::as_text(*s);
 			if (!detail::is_attribute_description(text)) return bad("invalid attribute description", at);
 			return text;
 		}
@@ -1139,7 +1134,7 @@ namespace {
 			if (auto e = skip_rest(*sub); !e) return std::unexpected(std::move(e.error()));
 			const std::uint32_t n = add(k, parent);
 			access::set_attr(out_, n, *a);
-			access::set_value(out_, n, as_text(*v));
+			access::set_value(out_, n, detail::as_text(*v));
 			return n;
 		}
 
@@ -1177,7 +1172,7 @@ namespace {
 				if (++elements_ > limits_.max_elements)
 					return bad(detail::format("more than {} filter elements", limits_.max_elements), item_at);
 				const std::uint32_t p = access::add_node(out_, k);
-				access::set_value(out_, p, as_text(*s));
+				access::set_value(out_, p, detail::as_text(*s));
 				access::link_last(out_, n, p);
 				first = false;
 			}
@@ -1205,7 +1200,7 @@ namespace {
 				const std::size_t rule_at = sub->offset();
 				auto s = sub->read_octet_string(ber::context(1));
 				if (!s) return std::unexpected(std::move(s.error()));
-				rule = as_text(*s);
+				rule = detail::as_text(*s);
 				if (!detail::is_oid(rule)) return bad("invalid matching rule", rule_at);
 			}
 			if (next_is(2)) {
@@ -1229,7 +1224,7 @@ namespace {
 			const std::uint32_t n = add(kind::extensible_match, parent);
 			access::set_attr(out_, n, type);
 			access::set_rule(out_, n, rule);
-			access::set_value(out_, n, as_text(*v));
+			access::set_value(out_, n, detail::as_text(*v));
 			access::set_dn_attributes(out_, n, dn_attributes);
 			return n;
 		}
