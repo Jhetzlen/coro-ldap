@@ -262,8 +262,8 @@ TEST_CASE("sasl: a failed exchange is aborted before held requests are sent", "[
 // connection, and the requests it held fail without being sent.
 TEST_CASE("sasl: an abort without an answer closes the connection", "[net][sasl]")
 {
-	// The server reads the abort, then whatever comes next, and answers
-	// neither.
+	// The server reads the abort, answers nothing, and then sees the
+	// client hang up: nothing else is sent.
 	auto check = [](mock_ldap &m,
 				   outcome<ldap::result<void>> &bind,
 				   outcome<ldap::result<std::pmr::vector<ldap::entry>>> &search) {
@@ -273,7 +273,8 @@ TEST_CASE("sasl: an abort without an answer closes the connection", "[net][sasl]
 		REQUIRE_FALSE(search.get().has_value());
 		CHECK(search.get().error().code == ldap::client_errc::not_connected);
 		CHECK_THAT(std::string(search.get().error().context), ContainsSubstring("cannot be abandoned"));
-		drive_until(m.ioc, [&m] { return m.server.done(); });
+		m.sockets.client.close();// closing a wrapped transport leaves the socket open
+		m.check_server();
 		REQUIRE(m.log.received.size() == 2);
 		CHECK(m.log.received[0] == sasl_req(1, "X-ECHO", "hello"));
 		CHECK(m.log.received[1] == abort_req(3));
@@ -284,7 +285,7 @@ TEST_CASE("sasl: an abort without an answer closes the connection", "[net][sasl]
 	SECTION("timeout")
 	{
 		mock_ldap m({ .operation_timeout = std::chrono::milliseconds(100) });
-		m.serve({ answer({ sasl_resp(1, 14, "bad") }), step{}, step{} });
+		m.serve({ answer({ sasl_resp(1, 14, "bad") }), step{}, client_hangs_up() });
 		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 		// id 2, held; its own timeout is longer, so the abort's ends it.
 		spawn(m.ioc, m.conn.search({ .timeout = std::chrono::seconds(10) }), search);
@@ -294,7 +295,7 @@ TEST_CASE("sasl: an abort without an answer closes the connection", "[net][sasl]
 	SECTION("cancellation")
 	{
 		mock_ldap m;
-		m.serve({ answer({ sasl_resp(1, 14, "bad") }), step{}, step{} });
+		m.serve({ answer({ sasl_resp(1, 14, "bad") }), step{}, client_hangs_up() });
 		std::stop_source stop;
 		spawn(m.ioc, stop.get_token(), m.conn.sasl_bind(mech), bind);
 		spawn(m.ioc, m.conn.search({}), search);// id 2, held
