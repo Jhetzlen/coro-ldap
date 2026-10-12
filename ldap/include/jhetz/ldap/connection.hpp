@@ -546,7 +546,8 @@ class connection
 
 	// Sends an UnbindRequest, waits until it is written, and closes the
 	// connection (RFC 4511 section 4.3: there is no response). During a bind
-	// it only closes: nothing may be sent while a BindRequest is outstanding. On TLS it
+	// or a start_tls() it only closes: nothing may be sent while a BindRequest
+	// or StartTLS is in progress (the start_tls() fails). On TLS it
 	// then ends the TLS session gracefully: close_notify, then the server's,
 	// within connection_options::tls_shutdown_timeout (best effort: the
 	// result does not depend on it). Outstanding

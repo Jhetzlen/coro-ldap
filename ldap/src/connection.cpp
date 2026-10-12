@@ -1506,8 +1506,12 @@ capy::task<result<void>> connection::unbind()
 	const impl_ref self(impl_);
 	if (!self->open || self->unbinding) co_return std::unexpected(self->not_connected(context));
 	// Nothing may be sent while a BindRequest is outstanding (RFC 4511
-	// section 4.2.1), an UnbindRequest included: just close.
-	if (self->binding) {
+	// section 4.2.1), or during StartTLS until its response is received and
+	// the handshake done (section 4.14.1), an UnbindRequest included: just
+	// close, before anything is changed (StartTLS then fails with
+	// not_connected). Refusing instead would leave the session the caller
+	// wants ended open.
+	if (self->binding || self->upgrading) {
 		self->shut(make_error(client_errc::not_connected, "connection closed"), false);
 		co_return result<void>{};
 	}

@@ -485,6 +485,33 @@ TEST_CASE("RFC 4511 4.11: a StartTLS that times out is not abandoned", "[net][st
 	CHECK(std::holds_alternative<ldap::extended_request>(got[0].op));
 }
 
+// RFC 4511 section 4.14.1: not even an UnbindRequest may follow the StartTLS
+// request before its response. unbind() then closes the connection, as
+// during a bind (RFC 4511 section 4.2.1), and StartTLS fails: the
+// connection is never left open with its StartTLS given up on.
+TEST_CASE("RFC 4511 4.14.1: unbind while StartTLS waits for its response closes the connection", "[net][starttls][rfc]")
+{
+	tls_fixture f;
+	outcome<std::vector<ldap::message>> server;
+	spawn(f.ioc, silent_start_tls(f.acc), server);
+	auto c = f.connect();
+	outcome<ldap::result<void>> upgrade;
+	spawn(f.ioc, c.start_tls(trusting().tls), upgrade);
+	drive_until(f.ioc, [&c] { return c.outstanding() == 1; });// the StartTLS request is sent
+	REQUIRE(c.outstanding() == 1);
+	auto u = finish(f.ioc, c.unbind());
+	CHECK(u.has_value());
+	CHECK_FALSE(c.is_open());
+	drive_until(f.ioc, [&] { return upgrade.done() && server.done(); });
+	REQUIRE_FALSE(upgrade.get().has_value());
+	CHECK(upgrade.get().error().code == ldap::client_errc::not_connected);
+	CHECK(upgrade.get().error().context == "start tls: connection closed");
+	CHECK(c.outstanding() == 0);
+	const auto &got = server.get();
+	REQUIRE(got.size() == 1);// the StartTLS request, then the connection closed: no UnbindRequest
+	CHECK(std::holds_alternative<ldap::extended_request>(got[0].op));
+}
+
 TEST_CASE("start_tls: stopped before it starts, it is not sent", "[net][starttls][cancel]")
 {
 	tls_fixture f;

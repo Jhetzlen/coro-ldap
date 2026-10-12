@@ -777,7 +777,8 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   and held, then sent in order when the exchange ends; one cancelled while
   held is dropped (never sent, so no AbandonRequest). Binds are serialized:
   a second one waits for the first. `unbind()` during a bind closes without
-  an UnbindRequest; `start_tls()` during one is refused.
+  an UnbindRequest; `start_tls()` during one is refused. `unbind()` once StartTLS
+  is sent closes the same way (RFC 4511 section 4.14.1) and fails it.
 - Every response is decoded with `origin::server` and checked against the
   request it answers (the operation, by id). IntermediateResponses are
   skipped without decoding; id 0 is an unsolicited notification: a Notice of
