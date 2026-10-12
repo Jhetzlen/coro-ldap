@@ -1568,6 +1568,42 @@ class failing_frames final : public std::pmr::memory_resource
 	std::size_t live_ = 0;
 };
 
+// Corosio resumes coroutines without restoring the thread's current frame
+// allocator, so it can still be a failing_frames once the io_context has
+// run: cleared before that goes, for the frames made after the test.
+struct clear_frame_allocator
+{
+	clear_frame_allocator() = default;
+	clear_frame_allocator(const clear_frame_allocator &) = delete;
+	clear_frame_allocator &operator=(const clear_frame_allocator &) = delete;
+	~clear_frame_allocator() { capy::set_current_frame_allocator(nullptr); }
+};
+
+// Reads the first page of a paged search (page size 1, cookie "page2", the
+// release's deadline `timeout`), waits until the reader and the writer are
+// idle (every frame allocated since `frames` was set has been freed), then
+// destroys it with the `failing`-th frame allocation failing. Returns the
+// allocations tried. `M` is mock_ldap or tcp_mock_ldap.
+template<class M>
+std::size_t
+  release_failing(M &m, failing_frames &frames, std::size_t failing, std::optional<std::chrono::milliseconds> timeout)
+{
+	auto p = people_search();
+	p.timeout = timeout;
+	auto s = m.run(m.conn.search_paged(std::move(p), 1));
+	REQUIRE(s.has_value());
+	auto e = m.run(s->next());
+	REQUIRE(e.has_value());
+	REQUIRE(e->has_value());
+	drive_until(m.ioc, [&] { return frames.live() == 0; });
+	REQUIRE(frames.live() == 0);
+	frames.fail_at(failing);
+	*s = ldap::paged_search{};
+	const std::size_t attempted = frames.count();
+	frames.fail_at(0);
+	return attempted;
+}
+
 }// namespace
 
 // A paged search's release starts the writer, the reader and the due
@@ -1580,36 +1616,11 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
   "[net][operations][paged][oom]")
 {
 	failing_frames frames;// outlives the io_context's coroutines
-	// Corosio resumes coroutines without restoring the thread's current
-	// frame allocator, so it can still be `frames` once the io_context has
-	// run: cleared before `frames` goes, for the frames made after this test.
-	struct clear_frame_allocator
-	{
-		clear_frame_allocator() = default;
-		clear_frame_allocator(const clear_frame_allocator &) = delete;
-		clear_frame_allocator &operator=(const clear_frame_allocator &) = delete;
-		~clear_frame_allocator() { capy::set_current_frame_allocator(nullptr); }
-	} clear;
+	const clear_frame_allocator clear;
 	mock_ldap m;
-	// Reads the first page of a paged search (page size 1, cookie "page2"),
-	// waits until the reader and the writer are idle (every frame allocated
-	// since the allocator was set has been freed), then destroys it with the
-	// `failing`-th frame allocation failing. Returns the allocations tried.
+	// The release's deadline: the due watcher runs.
 	auto release_failing = [&](std::size_t failing) {
-		auto p = people_search();
-		p.timeout = std::chrono::milliseconds(100);// the release's deadline: the due watcher runs
-		auto s = m.run(m.conn.search_paged(std::move(p), 1));
-		REQUIRE(s.has_value());
-		auto e = m.run(s->next());
-		REQUIRE(e.has_value());
-		REQUIRE(e->has_value());
-		drive_until(m.ioc, [&] { return frames.live() == 0; });
-		REQUIRE(frames.live() == 0);
-		frames.fail_at(failing);
-		*s = ldap::paged_search{};
-		const std::size_t attempted = frames.count();
-		frames.fail_at(0);
-		return attempted;
+		return ::release_failing(m, frames, failing, std::chrono::milliseconds(100));
 	};
 	auto page = [](std::int32_t id) {
 		return answer({ entry_msg(id, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(id, "page2") });
@@ -1669,6 +1680,61 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
 		REQUIRE(m.log.received.size() == 4);
 		check_release(m.log.received[1], m.log.received[0], "page2");
 		check_release(m.log.received[3], m.log.received[2], "page2");
+	}
+}
+
+// send_unanswered() could not start the reader (the release's task frame
+// failing, the due watcher's is then not tried): the release is sent, its
+// answer due, and nothing reads it or applies its deadline. StartTLS, with
+// no timeout of its own, waits for that answer: its wait starts them.
+TEST_CASE("operations: StartTLS waits for a release's answer whose reader could not start",
+  "[net][operations][paged][starttls][oom]")
+{
+	failing_frames frames;// outlives the io_context's coroutines
+	const clear_frame_allocator clear;
+	outcome<ldap::result<void>> tls;// outlives `m`: a StartTLS still waiting ends with it
+	tcp_mock_ldap m;
+	auto start_tls = [&m, &tls] {
+		spawn(m.ioc, m.conn.start_tls(), tls);
+		drive_until(m.ioc, [&tls] { return tls.done(); });
+		REQUIRE(tls.done());
+		return tls.get();
+	};
+	auto page = answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") });
+
+	SECTION("the answer comes: a reader reads it, then StartTLS is sent")
+	{
+		m.serve({ page, step{}, answer({ start_tls_refused(3) }) });// reads the release, answered below
+		m.ioc.set_frame_allocator(&frames);
+		CHECK(release_failing(m, frames, 3, std::nullopt) == 3);// the writer's, run_async's, the reader's
+		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+		CHECK(m.conn.outstanding() == 1);
+		server_sends(m, paged_done(2, ""));
+		auto r = start_tls();
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == errc::unavailable);// sent, and refused
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		check_release(m.log.received[1], m.log.received[0], "page2");
+		CHECK(is_start_tls(m.log.received[2]));
+	}
+	SECTION("the answer never comes: a due watcher expires it at its deadline, then StartTLS is sent")
+	{
+		m.serve({ page, step{}, answer({ start_tls_refused(3) }) });// reads the release, never answers
+		m.ioc.set_frame_allocator(&frames);
+		CHECK(release_failing(m, frames, 3, std::chrono::milliseconds(100)) == 3);
+		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+		CHECK(m.conn.outstanding() == 1);
+		auto r = start_tls();
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == errc::unavailable);// sent, and refused
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(is_start_tls(m.log.received[2]));
 	}
 }
 

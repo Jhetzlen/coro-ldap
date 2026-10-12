@@ -460,7 +460,7 @@ struct connection::impl
 		// after it. If starting the reader or the due watcher below throws,
 		// the request is sent and its answer still counted as due: the next
 		// reader started reads it, and its deadline is applied once a due
-		// watcher runs again (or by StartTLS's wait when that times out).
+		// watcher runs again (StartTLS's wait starts both).
 		abandoned.push_back({ 0, search });
 		try {
 			if (!submit(m, nullptr, context)) {
@@ -1423,6 +1423,11 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 			  context + ": needs a plain TCP connection (not ldaps://, ldapi:// or a custom stream)");
 		const std::size_t due = self->due_answers;
 		if (due == 0) break;
+		// Something must read the answers and expire their deadlines: if
+		// send_unanswered() could not start the reader or the due watcher
+		// (bad_alloc), nothing else may (a throw here is this task's).
+		self->start_reader();
+		if (!self->watching && self->next_due_deadline()) self->start_due_watcher();
 		std::error_code ec;
 		if (wait_deadline) {
 			auto [e] = co_await corosio::timeout(self->due_idle.wait(), *wait_deadline);
