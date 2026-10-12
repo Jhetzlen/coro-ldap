@@ -2,6 +2,8 @@
 
 #include "jhetz/ldap/net/message_io.hpp"
 
+#include "format_util.hpp"
+
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/async_event.hpp>
@@ -90,13 +92,8 @@ namespace {
 	// "search ou=people,dc=example,dc=org", `search ""` for the root DSE.
 	std::string op_context(std::string_view op, const dn &d)
 	{
-		std::string out(op);
-		out += ' ';
-		if (d.empty())
-			out += "\"\"";
-		else
-			out += d.to_string();
-		return out;
+		if (d.empty()) return detail::format("{} \"\"", op);
+		return detail::format("{} {}", op, d.to_string());
 	}
 
 	using clock = std::chrono::steady_clock;
@@ -570,7 +567,7 @@ struct connection::impl
 
 	error unexpected(std::string text)
 	{
-		return make_error(client_errc::unexpected_response, "read " + std::string(transport.name()) + ": " + text);
+		return make_error(client_errc::unexpected_response, detail::format("read {}: {}", transport.name(), text));
 	}
 
 	// Delivers the PDU at the front of buf (`size` bytes) and consumes it.
@@ -580,7 +577,7 @@ struct connection::impl
 		auto h = peek_message_header(bytes);
 		if (!h) {
 			buf.consume(size);
-			shut(with_context(std::move(h.error()), "read " + std::string(transport.name())), true);
+			shut(with_context(std::move(h.error()), detail::format("read {}", transport.name())), true);
 			return;
 		}
 		if (h->id == 0) {
@@ -597,7 +594,7 @@ struct connection::impl
 			auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = p.mr });
 			buf.consume(size);
 			if (!m) {
-				shut(with_context(std::move(m.error()), "read " + std::string(transport.name())), true);
+				shut(with_context(std::move(m.error()), detail::format("read {}", transport.name())), true);
 				return;
 			}
 			const std::size_t index = m->op.index();
@@ -605,9 +602,10 @@ struct connection::impl
 			const bool streamed =
 			  p.search && (index == op_index<search_result_entry> || index == op_index<search_result_reference>);
 			if (!final && !streamed) {
-				shut(unexpected(std::string(op_name(m->op)) + " with message id " + std::to_string(h->id)
-								+ " in response to a "
-								+ (p.search ? "SearchRequest" : std::string(op_names[p.expect - 1]))),
+				shut(unexpected(detail::format("{} with message id {} in response to a {}",
+					   op_name(m->op),
+					   h->id,
+					   p.search ? std::string_view("SearchRequest") : op_names[p.expect - 1])),
 				  true);
 				return;
 			}
@@ -631,7 +629,7 @@ struct connection::impl
 			if (!a->search || same_tag(h->op, search_result_done_tag)) forget_abandoned(a);
 			return;
 		}
-		shut(unexpected("message with id " + std::to_string(h->id) + ", which matches no outstanding request"), true);
+		shut(unexpected(detail::format("message with id {}, which matches no outstanding request", h->id)), true);
 	}
 
 	// An unsolicited notification (message id 0, RFC 4511 section 4.4).
@@ -641,7 +639,7 @@ struct connection::impl
 		{
 			auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = &scratch });
 			if (!m) {
-				fatal = with_context(std::move(m.error()), "read " + std::string(transport.name()));
+				fatal = with_context(std::move(m.error()), detail::format("read {}", transport.name()));
 			} else if (const auto *x = std::get_if<extended_response>(&m->op); x == nullptr) {
 				fatal = unexpected(std::string(op_name(m->op)) + " with message id 0");
 			} else if (x->response_name && *x->response_name == notice_of_disconnection_oid) {
@@ -931,7 +929,7 @@ namespace {
 		const auto seconds = p.time_limit.count();
 		if (seconds < 0 || seconds > max_int)
 			return fail(client_errc::encode_error,
-			  context + ": time_limit of " + std::to_string(seconds) + " s is outside 0 .. 2^31-1");
+			  detail::format("{}: time_limit of {} s is outside 0 .. 2^31-1", context, seconds));
 
 		const std::pmr::polymorphic_allocator<> alloc(c.mr);
 		search_request wire(alloc);
@@ -994,7 +992,7 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 		if (!creds) co_return std::unexpected(detail::with_context(std::move(creds.error()), context));
 		if (step == max_steps)
 			co_return fail(client_errc::unexpected_response,
-			  context + ": still in progress after " + std::to_string(max_steps) + " steps");
+			  detail::format("{}: still in progress after {} steps", context, max_steps));
 		message request(std::pmr::polymorphic_allocator<>(self->mr));
 		std::optional<std::string_view> c;
 		if (*creds) c = **creds;
@@ -1234,7 +1232,7 @@ capy::task<result<std::optional<std::string>>> connection::password_modify(passw
 		// "extended operation <oid>..." names the operation by its OID; say
 		// what it is instead.
 		error e = std::move(r.error());
-		const std::string generic = "extended operation " + std::string(password_modify_oid);
+		const std::string generic = detail::format("extended operation {}", password_modify_oid);
 		if (std::string_view(e.context).starts_with(generic)) e.context.replace(0, generic.size(), context);
 		co_return std::unexpected(std::move(e));
 	}
@@ -1313,7 +1311,7 @@ capy::task<result<void>> connection::check_schema(std::type_index type,
 	const schema_report report = validate_type(*self->schema);
 	if (!report.ok())
 		co_return fail(
-		  client_errc::schema_mismatch, "schema check of " + std::string(type.name()) + ":\n" + report.to_string());
+		  client_errc::schema_mismatch, detail::format("schema check of {}:\n{}", type.name(), report.to_string()));
 	self->schema_checked.push_back(type);
 	co_return result<void>{};
 }
@@ -1340,7 +1338,7 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 		if (self->binding) co_return fail(client_errc::operation_in_progress, context + " during a bind");
 		if (const std::size_t n = self->pending.size(); n != 0)
 			co_return fail(client_errc::operation_in_progress,
-			  context + " with " + std::to_string(n) + (n == 1 ? " request" : " requests") + " outstanding");
+			  detail::format("{} with {} {} outstanding", context, n, n == 1 ? "request" : "requests"));
 		// Checked before the wait too, so misuse fails at once.
 		if (self->transport.type() != net::transport::kind::tcp || self->transport.is_tls())
 			co_return fail(std::make_error_code(std::errc::invalid_argument),
@@ -1370,8 +1368,11 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 		// answer may have come meanwhile, and "0 releases" would say nothing.
 		if (ec)
 			co_return fail(ec,
-			  context + " (waiting for the answer" + (left == 1 ? "" : "s") + " to " + std::to_string(left)
-				+ " paged search release" + (left == 1 ? ")" : "s)"));
+			  detail::format("{} (waiting for the answer{} to {} paged search release{})",
+				context,
+				left == 1 ? "" : "s",
+				left,
+				left == 1 ? "" : "s"));
 	}
 
 	// The ExtendedRequest; nothing else may be sent until it is answered
@@ -1638,7 +1639,7 @@ capy::task<result<ldap::paged_search>>
 	if (impl_ == nullptr) co_return std::unexpected(not_connected(op_context("search", p.base)));
 	if (page_size <= 0)
 		co_return fail(client_errc::encode_error,
-		  op_context("search", p.base) + ": page size " + std::to_string(page_size) + " is not positive");
+		  detail::format("{}: page size {} is not positive", op_context("search", p.base), page_size));
 	std::pmr::polymorphic_allocator<> alloc(impl_->mr);
 	auto *st = alloc.new_object<paged_search::state>(
 	  paged_search::state{ impl_ref(impl_), std::move(p), page_size, mr, {}, 0, false, {}, {}, {}, {} });
@@ -1742,8 +1743,8 @@ capy::task<result<connection>>
 {
 	if (options.start_tls && u.scheme() != url_scheme::ldap)
 		co_return fail(client_errc::invalid_url,
-		  "connect " + std::string(u.to_string())
-			+ ": start_tls needs an ldap:// URL (ldaps:// and ldapi:// are not upgraded)");
+		  detail::format(
+			"connect {}: start_tls needs an ldap:// URL (ldaps:// and ldapi:// are not upgraded)", u.to_string()));
 	auto t = co_await net::connect(ioc,
 	  std::move(u),
 	  net::connect_options{ .timeout = options.timeout,

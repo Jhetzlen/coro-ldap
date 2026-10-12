@@ -1,5 +1,7 @@
 #include "tls.hpp"
 
+#include "../format_util.hpp"
+
 #include <boost/corosio/openssl_stream.hpp>
 
 #include <openssl/bio.h>
@@ -141,8 +143,7 @@ namespace {
 		for (std::size_t i = 0; i < certs.size(); ++i) {
 			if (!parses_as_certificate(certs[i]))
 				return fail(std::make_error_code(std::errc::invalid_argument),
-				  what + ": certificate " + std::to_string(i + 1) + " of " + std::to_string(certs.size())
-					+ " does not parse");
+				  ldap::detail::format("{}: certificate {} of {} does not parse", what, i + 1, certs.size()));
 			if (auto ec = ctx.add_certificate_authority(certs[i]); ec) return fail(ec, what);
 		}
 		return {};
@@ -238,7 +239,8 @@ result<tls_setup> make_tls_setup(const tls_options &o)
 			if (!preverified && failure->reason.empty()) {
 				const int err = X509_STORE_CTX_get_error(store);
 				failure->reason = X509_verify_cert_error_string(err);
-				failure->reason += " (certificate depth " + std::to_string(X509_STORE_CTX_get_error_depth(store)) + ")";
+				ldap::detail::format_to(
+				  failure->reason, " (certificate depth {})", X509_STORE_CTX_get_error_depth(store));
 			}
 			return preverified;
 		});

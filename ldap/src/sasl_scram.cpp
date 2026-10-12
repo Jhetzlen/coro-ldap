@@ -1,6 +1,8 @@
 // SCRAM-SHA-256 client (RFC 5802, RFC 7677). See sasl_scram.hpp.
 #include "jhetz/ldap/sasl_scram.hpp"
 
+#include "format_util.hpp"
+
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -492,11 +494,10 @@ result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_v
 	const auto iterations = parse_count(a->second);
 	if (!iterations) return malformed("server-first-message: iteration count");
 	if (*iterations < min_iterations)
-		return refused("iteration count " + std::to_string(*iterations) + " is below the minimum of "
-					   + std::to_string(min_iterations) + " (RFC 7677 section 4)");
+		return refused(detail::format(
+		  "iteration count {} is below the minimum of {} (RFC 7677 section 4)", *iterations, min_iterations));
 	if (*iterations > max_iterations)
-		return refused("iteration count " + std::to_string(*iterations) + " is above the maximum of "
-					   + std::to_string(max_iterations));
+		return refused(detail::format("iteration count {} is above the maximum of {}", *iterations, max_iterations));
 	while (!in.done()) {
 		if (!in.next()) return malformed("server-first-message: extension");
 	}

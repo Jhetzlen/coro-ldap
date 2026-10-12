@@ -1,5 +1,6 @@
 #include "jhetz/ldap/net/connect.hpp"
 
+#include "../format_util.hpp"
 #include "deadline.hpp"
 #include "happy_eyeballs.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
@@ -62,7 +63,8 @@ namespace {
 	std::string to_text(const corosio::endpoint &ep)
 	{
 		const auto addr = ep.address().to_string();
-		return ep.is_v6() ? "[" + addr + "]:" + std::to_string(ep.port()) : addr + ":" + std::to_string(ep.port());
+		return ep.is_v6() ? ldap::detail::format("[{}]:{}", addr, ep.port())
+						  : ldap::detail::format("{}:{}", addr, ep.port());
 	}
 
 	// "<target>: <stage>", plus the budget when the stage ran out of time.
@@ -75,7 +77,7 @@ namespace {
 		out += ": ";
 		out += stage;
 		if (ec == capy::cond::timeout && timeout)
-			out += ": gave up after the " + std::to_string(timeout->count()) + " ms connect timeout";
+			ldap::detail::format_to(out, ": gave up after the {} ms connect timeout", timeout->count());
 		return out;
 	}
 
@@ -257,15 +259,15 @@ capy::task<result<transport>>
 
 	if (options.timeout && options.timeout->count() <= 0)
 		co_return fail(make_error_code(capy::error::timeout),
-		  target + ": the connect timeout (" + std::to_string(options.timeout->count()) + " ms) is not positive");
+		  ldap::detail::format("{}: the connect timeout ({} ms) is not positive", target, options.timeout->count()));
 	const deadline_t deadline = make_deadline(options.timeout, start);
 
 	// ---- ldapi://
 	if (u.scheme() == url_scheme::ldapi) {
 		if (u.host().size() > corosio::local_endpoint::max_path_length)
 			co_return fail(std::make_error_code(std::errc::filename_too_long),
-			  target + ": socket path longer than " + std::to_string(corosio::local_endpoint::max_path_length)
-				+ " bytes");
+			  ldap::detail::format(
+				"{}: socket path longer than {} bytes", target, corosio::local_endpoint::max_path_length));
 		transport t = transport_access::make(transport::kind::local, server, mr);
 		auto &im = transport_access::get(t);
 		im.host = u.host();
@@ -315,8 +317,7 @@ capy::task<result<transport>>
 			ec = make_error_code(capy::error::canceled);// stopped by the caller
 		std::string stage = "tcp connect " + to_text(race.endpoints[race.last_index]);
 		if (race.endpoints.size() > 1)
-			stage += " (" + std::to_string(race.attempted) + " of " + std::to_string(race.endpoints.size())
-					 + " addresses tried)";
+			ldap::detail::format_to(stage, " ({} of {} addresses tried)", race.attempted, race.endpoints.size());
 		co_return fail(ec, stage_context(target, stage, ec, options.timeout));
 	}
 
@@ -359,8 +360,9 @@ capy::task<result<void>> start_tls(transport &t,
 		  std::make_error_code(std::errc::invalid_argument), context + ": needs an open plain TCP transport");
 	if (!pending.empty())
 		co_return fail(client_errc::decode_error,
-		  context + ": " + std::to_string(pending.size())
-			+ " bytes arrived before the TLS handshake (refused: they were not protected)");
+		  ldap::detail::format("{}: {} bytes arrived before the TLS handshake (refused: they were not protected)",
+			context,
+			pending.size()));
 	auto prefixed = [&context](error e) {
 		e.context.insert(0, context + (e.context.empty() ? "" : ": "));
 		return std::unexpected(std::move(e));

@@ -1,5 +1,7 @@
 #include "jhetz/ldap/net/message_io.hpp"
 
+#include "../format_util.hpp"
+
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
@@ -114,8 +116,7 @@ capy::task<result<std::size_t>> read_frame(transport &t, read_buffer &buf, std::
 				context +=
 				  ec == capy::cond::eof ? ": connection closed" : ": connection closed (without TLS close_notify)";
 			else if (declared)
-				context += ": connection closed after " + std::to_string(have) + " of " + std::to_string(*declared)
-						   + " bytes of a PDU";
+				ldap::detail::format_to(context, ": connection closed after {} of {} bytes of a PDU", have, *declared);
 			else
 				context += ": connection closed inside a PDU header";
 		}
@@ -131,7 +132,7 @@ capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_op
 	// connection layer).
 	auto m = decode(buf.data().first(*size), options.decode);
 	buf.consume(*size);
-	if (!m) co_return std::unexpected(with_context(std::move(m.error()), "read " + std::string(t.name())));
+	if (!m) co_return std::unexpected(with_context(std::move(m.error()), ldap::detail::format("read {}", t.name())));
 	co_return m;
 }
 
@@ -141,7 +142,7 @@ capy::task<result<void>> write_bytes(transport &t, std::span<const std::byte> by
 	if (ec) {
 		std::string context = "write ";
 		context += t.name();
-		if (n != 0) context += " (" + std::to_string(n) + " of " + std::to_string(bytes.size()) + " bytes written)";
+		if (n != 0) ldap::detail::format_to(context, " ({} of {} bytes written)", n, bytes.size());
 		co_return fail(ec, std::move(context));
 	}
 	co_return result<void>{};
@@ -150,7 +151,8 @@ capy::task<result<void>> write_bytes(transport &t, std::span<const std::byte> by
 capy::task<result<void>> write_message(transport &t, const message &m, std::pmr::memory_resource *mr)
 {
 	auto bytes = encode(m, mr);
-	if (!bytes) co_return std::unexpected(with_context(std::move(bytes.error()), "write " + std::string(t.name())));
+	if (!bytes)
+		co_return std::unexpected(with_context(std::move(bytes.error()), ldap::detail::format("write {}", t.name())));
 	co_return co_await write_bytes(t, *bytes);
 }
 
@@ -158,7 +160,7 @@ capy::task<result<void>> write_message(transport &t, const message &m, ber::writ
 {
 	w.clear();
 	if (auto e = encode(w, m); !e)
-		co_return std::unexpected(with_context(std::move(e.error()), "write " + std::string(t.name())));
+		co_return std::unexpected(with_context(std::move(e.error()), ldap::detail::format("write {}", t.name())));
 	co_return co_await write_bytes(t, w.bytes());
 }
 
