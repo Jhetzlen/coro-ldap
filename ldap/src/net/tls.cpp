@@ -12,6 +12,7 @@
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -151,11 +152,10 @@ namespace {
 
 	bool has_control_character(std::string_view s) noexcept
 	{
-		for (char c : s) {
+		return std::ranges::any_of(s, [](char c) {
 			const auto b = static_cast<unsigned char>(c);
-			if (b < 0x20 || b == 0x7F) return true;
-		}
-		return false;
+			return b < 0x20 || b == 0x7F;
+		});
 	}
 
 	bool is_ip_literal(const std::string &name)
@@ -276,7 +276,7 @@ result<tls_setup> make_tls_setup(const tls_options &o)
 std::string tls_peer_name(std::string_view host, const tls_options &options)
 {
 	if (!options.server_name.empty()) return std::string(options.server_name);
-	if (host.find(':') != std::string_view::npos) host = host.substr(0, host.find('%'));// IPv6 literal
+	if (host.contains(':')) host = host.substr(0, host.find('%'));// IPv6 literal
 	return std::string(host);
 }
 

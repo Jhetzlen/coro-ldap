@@ -319,9 +319,7 @@ struct connection::impl
 		std::int32_t id = next_id;
 		if (!wrapped) return id;// ids so far only increased: none is in use
 		auto in_use = [this](std::int32_t i) {
-			return pending.contains(i) || std::any_of(abandoned.begin(), abandoned.end(), [i](const abandoned_req &r) {
-				return r.id == i;
-			});
+			return pending.contains(i) || std::ranges::contains(abandoned, i, &abandoned_req::id);
 		};
 		while (in_use(id)) id = id == max_int ? 1 : id + 1;
 		return id;
@@ -384,7 +382,7 @@ struct connection::impl
 			return;
 		}
 		// Held by a bind exchange, so never sent: nothing to tell the server.
-		auto h = std::find_if(held.begin(), held.end(), [&](const held_request &r) { return r.id == p.id; });
+		auto h = std::ranges::find(held, p.id, &held_request::id);
 		if (h != held.end()) {
 			held.erase(h);
 			return;
@@ -448,8 +446,7 @@ struct connection::impl
 	void trim_abandoned()
 	{
 		if (abandoned.size() <= max_abandoned) return;
-		auto a =
-		  std::find_if(abandoned.begin(), std::prev(abandoned.end()), [](const abandoned_req &r) { return !r.due; });
+		auto a = std::ranges::find(abandoned.begin(), std::prev(abandoned.end()), false, &abandoned_req::due);
 		forget_abandoned(a != std::prev(abandoned.end()) ? a : abandoned.begin());
 	}
 
@@ -620,8 +617,7 @@ struct connection::impl
 			return;
 		}
 		buf.consume(size);
-		auto a =
-		  std::find_if(abandoned.begin(), abandoned.end(), [&](const abandoned_req &r) { return r.id == h->id; });
+		auto a = std::ranges::find(abandoned, h->id, &abandoned_req::id);
 		if (a != abandoned.end()) {
 			// A late response to an abandoned request: dropped. The search's
 			// SearchResultDone (or any response to another request) is its
@@ -1300,8 +1296,7 @@ capy::task<result<void>> connection::check_schema(std::type_index type,
 {
 	if (impl_ == nullptr || impl_->schema_mode == ldap::schema_check::off) co_return result<void>{};
 	impl_ref self(impl_);
-	if (std::find(self->schema_checked.begin(), self->schema_checked.end(), type) != self->schema_checked.end())
-		co_return result<void>{};
+	if (std::ranges::contains(self->schema_checked, type)) co_return result<void>{};
 	if (!self->schema) {
 		auto s = co_await load_schema_impl(self);
 		if (!s) co_return std::unexpected(std::move(s.error()));
@@ -1530,7 +1525,7 @@ capy::task<result<std::optional<entry>>> search_stream::next()
 		if (auto *e = std::get_if<search_result_entry>(&m->op))
 			co_return std::optional<entry>(entry::from(std::move(*e)));// on the stream's resource, no copy
 		if (auto *ref = std::get_if<search_result_reference>(&m->op)) {
-			for (auto &uri : ref->uris) s.references.emplace_back(uri);
+			s.references.append_range(ref->uris);
 			continue;
 		}
 		const auto &d = std::get<search_result_done>(m->op);// checked by the reader

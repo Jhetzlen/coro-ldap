@@ -15,6 +15,7 @@
 #include <unicode/utf8.h>
 #include <unicode/utypes.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -266,11 +267,10 @@ namespace {
 	// printable (RFC 5802 section 7): %x21-2B / %x2D-7E, i.e. no ','.
 	bool printable(std::string_view s)
 	{
-		for (const char ch : s) {
+		return std::ranges::none_of(s, [](char ch) {
 			const auto c = static_cast<unsigned char>(ch);
-			if (c < 0x21 || c > 0x7e || c == ',') return false;
-		}
-		return true;
+			return c < 0x21 || c > 0x7e || c == ',';
+		});
 	}
 
 	// ------------------------------------------------------------ message parsing
