@@ -12,6 +12,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -46,18 +47,43 @@ namespace {
 		return out;
 	}
 
+	// Deleters for the OpenSSL objects owned below. Each wraps the free call
+	// rather than taking its address: some are macros in older OpenSSL.
+	struct bio_deleter
+	{
+		void operator()(BIO *p) const noexcept { BIO_free(p); }
+	};
+	struct x509_deleter
+	{
+		void operator()(X509 *p) const noexcept { X509_free(p); }
+	};
+	struct evp_pkey_deleter
+	{
+		void operator()(EVP_PKEY *p) const noexcept { EVP_PKEY_free(p); }
+	};
+	struct asn1_octet_string_deleter
+	{
+		void operator()(ASN1_OCTET_STRING *p) const noexcept { ASN1_OCTET_STRING_free(p); }
+	};
+	using bio_ptr = std::unique_ptr<BIO, bio_deleter>;
+	using x509_ptr = std::unique_ptr<X509, x509_deleter>;
+	using evp_pkey_ptr = std::unique_ptr<EVP_PKEY, evp_pkey_deleter>;
+	using asn1_octet_string_ptr = std::unique_ptr<ASN1_OCTET_STRING, asn1_octet_string_deleter>;
+
+	// Read-only memory BIO over `pem`, or null.
+	bio_ptr pem_bio(const std::string &pem)
+	{
+		return bio_ptr(BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())));
+	}
+
 	// True if `pem` holds one certificate OpenSSL can parse. Corosio only
 	// parses trust anchors when the handshake starts, which would make a
 	// broken CA fail after the TCP connect; this checks it up front.
 	bool parses_as_certificate(const std::string &pem)
 	{
-		BIO *bio = BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size()));
-		if (bio == nullptr) return false;
-		X509 *cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
-		const bool ok = cert != nullptr;
-		X509_free(cert);
-		BIO_free(bio);
-		return ok;
+		const bio_ptr bio = pem_bio(pem);
+		if (!bio) return false;
+		return x509_ptr(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr)) != nullptr;
 	}
 
 	// Checks a client certificate chain file and key file before any network
@@ -74,25 +100,23 @@ namespace {
 	  const std::string &key_what)
 	{
 		const auto invalid = std::make_error_code(std::errc::invalid_argument);
-		BIO *cert_bio = BIO_new_mem_buf(cert_pem.data(), static_cast<int>(cert_pem.size()));
-		X509 *cert = cert_bio != nullptr ? PEM_read_bio_X509(cert_bio, nullptr, nullptr, nullptr) : nullptr;
-		BIO_free(cert_bio);
-		if (cert == nullptr) {
+		const x509_ptr cert = [&] {
+			const bio_ptr bio = pem_bio(cert_pem);
+			return x509_ptr(bio ? PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr) : nullptr);
+		}();
+		if (!cert) {
 			ERR_clear_error();
 			return fail(invalid, cert_what + ": no parseable PEM certificate");
 		}
-		BIO *key_bio = BIO_new_mem_buf(key_pem.data(), static_cast<int>(key_pem.size()));
-		EVP_PKEY *key = key_bio != nullptr ? PEM_read_bio_PrivateKey(key_bio, nullptr, no_password, nullptr) : nullptr;
-		BIO_free(key_bio);
-		if (key == nullptr) {
-			X509_free(cert);
+		const evp_pkey_ptr key = [&] {
+			const bio_ptr bio = pem_bio(key_pem);
+			return evp_pkey_ptr(bio ? PEM_read_bio_PrivateKey(bio.get(), nullptr, no_password, nullptr) : nullptr);
+		}();
+		if (!key) {
 			ERR_clear_error();
 			return fail(invalid, key_what + ": no parseable PEM private key (encrypted keys are not supported)");
 		}
-		const bool match = X509_check_private_key(cert, key) == 1;
-		EVP_PKEY_free(key);
-		X509_free(cert);
-		if (!match) {
+		if (X509_check_private_key(cert.get(), key.get()) != 1) {
 			ERR_clear_error();
 			return fail(invalid, key_what + ": does not match the certificate in " + cert_what);
 		}
@@ -135,12 +159,11 @@ namespace {
 
 	bool is_ip_literal(const std::string &name)
 	{
-		ASN1_OCTET_STRING *ip = a2i_IPADDRESS(name.c_str());
-		if (ip == nullptr) {
+		const asn1_octet_string_ptr ip(a2i_IPADDRESS(name.c_str()));
+		if (!ip) {
 			ERR_clear_error();
 			return false;
 		}
-		ASN1_OCTET_STRING_free(ip);
 		return true;
 	}
 
