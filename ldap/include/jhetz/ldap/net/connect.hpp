@@ -7,8 +7,8 @@
 // ldap://   resolve the host, connect with Happy Eyeballs (below), TCP_NODELAY on.
 // ldaps://  the same, then a TLS client handshake (tls_options below).
 // ldapi://  connect to the Unix domain socket named by the URL's host part.
-//           Supported where Corosio has local_stream_socket (Linux, other
-//           POSIX systems); tested on Linux only. The path must fit in
+//           Linux only (the supported platform, through Corosio's
+//           local_stream_socket). The path must fit in
 //           sockaddr_un (corosio::local_endpoint::max_path_length bytes).
 //
 // URLs connect() rejects with client_errc::invalid_url: an empty host (RFC

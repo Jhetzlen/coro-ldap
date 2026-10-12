@@ -58,7 +58,7 @@ find_tool() { # VAR NAME: the tool's path, from $VAR or PATH
 	local tool="${!1:-$2}"
 	if ! command -v "$tool" >/dev/null 2>&1; then
 		echo "error: $2 not found (set $1, or install LLVM: apt install llvm," \
-			"pacman -S llvm, brew install llvm); it must match $cxx's version" >&2
+			"pacman -S llvm); it must match $cxx's version" >&2
 		exit 1
 	fi
 	command -v "$tool"

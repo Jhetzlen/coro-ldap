@@ -30,8 +30,12 @@ option(JHETZ_LDAP_INSTALL "Generate install rules and the jhetz_ldap CMake packa
 # Minimum compilers: GCC 16, Clang 23, and libstdc++ 16 when it is the
 # standard library (Clang uses the newest GCC's libstdc++ it finds; install
 # g++-16 next to clang++-23, or pass --gcc-install-dir), for the C++23 library
-# additions older versions lack (std::print, std::ranges::to, ...). Apple
-# Clang and MSVC are not checked here.
+# additions older versions lack (std::print, std::ranges::to, ...). Linux is
+# the supported platform; Apple Clang (macOS) is rejected, MSVC is not checked
+# here.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+    message(FATAL_ERROR "jhetz::ldap does not support Apple Clang (macOS is not a supported platform)")
+endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 16)
     message(FATAL_ERROR "jhetz::ldap needs GCC 16 or newer (found ${CMAKE_CXX_COMPILER_VERSION})")
 endif()
@@ -105,10 +109,9 @@ endif()
 
 # Warnings (and coverage instrumentation) apply to our own targets only.
 # Clang counts __COUNTER__ (used by Catch2's macros, expanded in our test
-# sources) as a C2y extension under -Wpedantic. The probe keeps the flag off
-# compilers that reject it (Apple Clang, which is not version-checked above).
-include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag(-Wno-c2y-extensions JHETZ_LDAP_HAS_WNO_C2Y_EXTENSIONS)
+# sources) as a C2y extension under -Wpedantic. Clang only: GCC has no such
+# warning (it accepts the unknown -Wno- flag, then notes it next to any other
+# warning).
 
 function(jhetz_ldap_warnings target)
     if(MSVC)
@@ -116,7 +119,7 @@ function(jhetz_ldap_warnings target)
     else()
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow
-            $<$<BOOL:${JHETZ_LDAP_HAS_WNO_C2Y_EXTENSIONS}>:-Wno-c2y-extensions>
+            $<$<CXX_COMPILER_ID:Clang>:-Wno-c2y-extensions>
             $<$<BOOL:${JHETZ_LDAP_WERROR}>:-Werror>)
         if(JHETZ_LDAP_COVERAGE)
             target_compile_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping -O0 -g)

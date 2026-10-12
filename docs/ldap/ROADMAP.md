@@ -39,7 +39,7 @@ Tracked in beads (`bd list`) since 2026-10-10; the GitHub numbers are history.
 |---|---|
 | #16 → `coro_http_client-cqx` | Report the Corosio CA bundle bug upstream (the other suspected issues were re-checked: not Corosio bugs) |
 | #17 | API polish: extensible-match builder, filter view naming, wire constructors |
-| #18 | Networking: Happy Eyeballs, TLS close_notify, IPv6 and non-Linux CI |
+| #18 | Networking: Happy Eyeballs, TLS close_notify, IPv6 and non-Linux CI (the macOS job was later dropped: Linux only, `coro_http_client-5ch`) |
 | #19 | Decode performance: default-heap regression, message size limits |
 | #20 → `coro_http_client-6k2` | Clean up the legacy Asio code at the repo root (done: deleted) |
 | `coro_http_client-23i` | RFC 4511–4516 conformance audit and fixes (done) |

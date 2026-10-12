@@ -116,11 +116,10 @@ on by default) with the network parts. It depends on Corosio and Capy
     when there is no subjectAltName, partial wildcards).
   - Errors keep the system / TLS `error_code` and name the stage:
     `connect ldaps://h:636: tls handshake: server certificate: hostname mismatch ...`.
-  - `ldapi://` is tested on Linux (should work wherever Corosio has
-    `local_stream_socket`). IPv6 is tested over `[::1]` and a link-local
-    address with a zone. CI builds with GCC 16 and Clang 23 (libstdc++ 16)
-    on Linux and with Apple Clang on macOS (non-blocking for now); tests
-    that need Linux loopback behaviour skip elsewhere.
+  - Linux is the supported platform (macOS is not; configure rejects Apple
+    Clang). `ldapi://` and IPv6 are tested there, IPv6 over `[::1]` and a
+    link-local address with a zone. CI builds with GCC 16 and Clang 23
+    (libstdc++ 16).
   - `mr` holds the transport's own block and name.
 - `jhetz/ldap/net/message_io.hpp`: `read_message(transport, read_buffer,
   options)` returns the next complete `ldap::message`, decoded with
@@ -370,8 +369,7 @@ libstdc++ 16+ too, so install g++-16 next to it; configure stops with an
 error on anything older). Catch2 v3, and for `jhetz::ldap_net` Corosio
 and Capy, are fetched from GitHub; `jhetz::ldap_net` also needs the
 OpenSSL and ICU development files (`libssl-dev libicu-dev`; Arch:
-`openssl icu`; Homebrew: `openssl icu4c`, with
-`-DICU_ROOT=$(brew --prefix icu4c)`).
+`openssl icu`).
 
 ```sh
 cmake -S ldap -B build/ldap -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON

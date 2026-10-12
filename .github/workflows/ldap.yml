@@ -118,32 +118,6 @@ jobs:
       - name: Run result_future example
         run: build/corosio_result_future
 
-  # Not yet seen green: kept non-blocking until it is. Tests relying on Linux
-  # loopback behaviour (127/8, SYN drop at a full backlog) skip themselves.
-  macos:
-    name: macOS (Apple Clang, NET)
-    runs-on: macos-15
-    continue-on-error: true
-    env:
-      # The default TMPDIR is too long for the ldapi:// tests' socket paths
-      # (sockaddr_un holds 104 bytes on macOS).
-      TMPDIR: /tmp
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install tools
-        run: brew install ninja openssl@3 icu4c
-      - name: Configure
-        run: >
-          cmake -S ldap -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Debug
-          -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
-          -DICU_ROOT="$(brew --prefix icu4c)"
-          -DJHETZ_LDAP_WERROR=ON
-      - name: Build
-        run: cmake --build build
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
-
   integration:
     name: Integration (OpenLDAP slapd, GCC 16, ASan + UBSan)
     runs-on: ubuntu-24.04
