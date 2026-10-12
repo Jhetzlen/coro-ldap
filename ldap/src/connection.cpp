@@ -887,12 +887,20 @@ namespace {
 	// BindResponse ends the exchange, even a refusal (a server that disallows
 	// anonymous binds): the connection is then anonymous and stays open.
 	// Without a response (timeout, stop, transport error) the connection is
-	// already closed: a bind cannot be abandoned.
+	// already closed: a bind cannot be abandoned. Except: saslBindInProgress
+	// cannot answer a simple bind (RFC 4511 section 4.2.2), and the server
+	// may still be in the exchange, so the connection is closed.
 	capy::task<void> abort_sasl(impl_ref self, const std::string &context)
 	{
 		message request(std::pmr::polymorphic_allocator<>(self->mr));
 		request.op = bind_request(3, {}, simple_auth(std::string_view(), self->mr), self->mr);
-		(void)co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
+		auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
+		if (!m) co_return;
+		const auto &r = std::get<bind_response>(m->op);// checked by the reader
+		if (r.result.result_code != std::to_underlying(errc::sasl_bind_in_progress)) co_return;
+		std::string text = context + ": connection closed: the SASL exchange could not be aborted: ";
+		text += "saslBindInProgress in answer to a simple bind";
+		self->shut(make_error(client_errc::unexpected_response, text), true);
 	}
 
 	// The ldap_result of a response, whatever the operation.

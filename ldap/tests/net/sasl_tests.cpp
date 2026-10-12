@@ -161,6 +161,30 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		CHECK(m.log.received[1] == abort_req(3));
 		CHECK(m.log.received[2].id == 2);
 	}
+	SECTION("a server that answers the abort with saslBindInProgress")
+	{
+		// Not an answer to a simple bind (RFC 4511 section 4.2.2): the
+		// server may still be in the exchange, so the connection is closed
+		// and the held search fails with that error, without being sent.
+		mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(3, 14) }), client_hangs_up() });
+		echo_mechanism mech;
+		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
+		spawn(m.ioc, m.conn.search({}), search);// id 2, held
+		drive_until(m.ioc, [&] { return bind.done() && search.done(); });
+		REQUIRE_FALSE(bind.get().has_value());
+		CHECK(bind.get().error().context == "sasl bind X-ECHO: X-ECHO: bad challenge");
+		CHECK_FALSE(m.conn.is_open());
+		REQUIRE_FALSE(search.get().has_value());
+		CHECK(search.get().error().code == ldap::client_errc::unexpected_response);
+		CHECK_THAT(std::string(search.get().error().context), ContainsSubstring("could not be aborted"));
+		m.sockets.client.close();// closing a wrapped transport leaves the socket open
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[1] == abort_req(3));
+	}
 	SECTION("final server credentials the mechanism rejects")
 	{
 		mock_ldap m;
