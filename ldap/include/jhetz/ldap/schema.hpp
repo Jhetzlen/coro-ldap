@@ -13,8 +13,10 @@
 // text comes from the server, so the parser must accept anything without
 // harm: there is a fuzz target). Lenient where real servers are: quoted
 // OIDs (Active Directory), keywords in any case, missing spaces before ')'.
-// A definition whose OID is not a valid OID is skipped; NAMEs that are not
-// valid descriptors are dropped (they could never be looked up).
+// A definition whose OID is not a valid OID, or whose SYNTAX is not a
+// numeric OID (RFC 4512 noidlen: no descriptor, no other text), is
+// skipped; NAMEs that are not valid descriptors are dropped (they could
+// never be looked up).
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"

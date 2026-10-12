@@ -491,6 +491,7 @@ TEST_CASE("integration: typed search with the server's schema", "[integration][m
 	auto s = finish(ioc, c.load_schema());
 	REQUIRE(s.has_value());
 	CHECK(s->attribute_count() > 100);
+	CHECK(s->skipped() == 0);// every SYNTAX a numeric OID (RFC 4512 noidlen)
 	const auto report = ldap::validate<person>(*s);
 	INFO(report.to_string());
 	CHECK(report.ok());

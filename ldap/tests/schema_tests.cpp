@@ -4,6 +4,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -138,6 +139,37 @@ TEST_CASE("schema: unparseable definitions are skipped", "[schema]")
 	CHECK(ldap::parse_attribute_type("( 1.2 name 'lower' single-value )")->single_value);
 }
 
+// RFC 4512 section 4.1.2: SYNTAX is a noidlen, a numericoid with an
+// optional {len}. Anything else is the server's own text (it could never
+// match a syntax the mapping knows): the definition is skipped, and the
+// error does not quote it.
+TEST_CASE("schema: a SYNTAX that is not a numeric OID skips the definition", "[schema]")
+{
+	const std::pmr::vector<std::pmr::string> types{
+		"( 1.2.1 NAME 'accented' DESC '\\5C caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC' SYNTAX "
+		"'1.3.6.1.4.1.1466.115.121.1.15{64}' )",
+		"( 1.2.2 NAME 'forged' SYNTAX '1.2\x1b[31m\\5C\r\nerror: forged' )",
+		"( 1.2.3 NAME 'bidi' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15\xE2\x80\xAE )",
+		"( 1.2.4 NAME 'named' SYNTAX directoryString )",
+		"( 1.2.5 NAME 'accentedSyntax' SYNTAX 1.2.\xC3\xA9 )",
+		"( 1.2.6 NAME 'lengthOnly' SYNTAX {64} )",
+		"( 1.2.7 NAME 'leadingZero' SYNTAX 1.02 )",
+	};
+	const auto s = ldap::server_schema::parse(types, {});
+	CHECK(s.attribute_count() == 1);
+	CHECK(s.skipped() == types.size() - 1);
+	const auto *accented = s.find_attribute("accented");
+	REQUIRE(accented != nullptr);
+	CHECK(accented->syntax == ldap::syntax::directory_string);
+
+	auto forged = ldap::parse_attribute_type(types[1]);
+	REQUIRE_FALSE(forged.has_value());
+	CHECK(forged.error().code == ldap::client_errc::decode_error);
+	CHECK(forged.error().context == "schema: SYNTAX is not a numeric OID");
+	// An object class has no SYNTAX: not checked there.
+	CHECK(ldap::parse_object_class(types[1]).has_value());
+}
+
 TEST_CASE("schema: SUP cycles do not loop", "[schema]")
 {
 	const std::pmr::vector<std::pmr::string> types{ "( 1.1 NAME 'a' SUP b )", "( 1.2 NAME 'b' SUP a )" };
@@ -230,6 +262,36 @@ constexpr auto ldap::schema<bad_person> = ldap::describe(ldap::object_class("ine
   ldap::field<&bad_person::no_such>("x-noSuchAttribute"),
   ldap::field<&bad_person::created>("createTimestamp"),
   ldap::field<&bad_person::user_password>("userPassword"));
+
+namespace {
+
+struct long_syntax
+{
+	std::int64_t n = 0;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<long_syntax> =
+  ldap::describe(ldap::object_class("top"), ldap::field<&long_syntax::n>("longSyntax"));
+
+// The SYNTAX is a numeric OID (checked when parsed), but of any length: the
+// report cuts it at 64 bytes.
+TEST_CASE("schema: a syntax mismatch quotes the server's SYNTAX cut", "[schema][validate]")
+{
+	std::string oid = "1";
+	for (int i = 0; i < 100; ++i) oid += ".2";
+	const std::pmr::vector<std::pmr::string> types{ std::pmr::string(
+	  "( 1.2.1 NAME 'longSyntax' SYNTAX " + oid + " SINGLE-VALUE )") };
+	const std::pmr::vector<std::pmr::string> classes{ "( 2.5.6.0 NAME 'top' ABSTRACT )" };
+	const auto rep = ldap::validate<long_syntax>(ldap::server_schema::parse(types, classes));
+	REQUIRE(rep.issues.size() == 1);
+	CHECK(rep.issues[0].what == ldap::schema_issue::kind::syntax_mismatch);
+	CHECK(rep.issues[0].detail
+		  == "syntax " + oid.substr(0, 64) + "... is not one the member's type reads (" + ldap::syntax::integer + ", "
+			   + ldap::syntax::numeric_string + ")");
+}
 
 TEST_CASE("schema: validate a matching descriptor", "[schema][validate]")
 {

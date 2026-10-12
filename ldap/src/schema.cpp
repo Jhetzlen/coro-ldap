@@ -160,12 +160,19 @@ namespace {
 
 result<attribute_type> parse_attribute_type(std::string_view text)
 {
-	return parse_definition(text).transform([](definition &&d) {
+	return parse_definition(text).and_then([](definition &&d) -> result<attribute_type> {
 		attribute_type a;
 		a.oid = std::move(d.oid);
 		a.names = valid_names(d.get("NAME"));
 		if (const auto *s = d.get("SUP"); s && !s->empty()) a.sup = s->front();
-		if (const auto *s = d.get("SYNTAX"); s && !s->empty()) a.syntax = strip_length(s->front());
+		// RFC 4512 section 4.1.2: SYNTAX noidlen, a numericoid with an
+		// optional {len}. Anything else could never match a syntax the
+		// mapping knows, and would be the server's raw text in a report.
+		if (const auto *s = d.get("SYNTAX"); s && !s->empty()) {
+			a.syntax = strip_length(s->front());
+			if (!detail::is_numericoid(*a.syntax))
+				return fail(client_errc::decode_error, "schema: SYNTAX is not a numeric OID");
+		}
 		a.single_value = d.has("SINGLE-VALUE");
 		a.no_user_modification = d.has("NO-USER-MODIFICATION");
 		return a;
@@ -287,7 +294,10 @@ namespace detail {
 		if (!syntaxes.empty()) {
 			const std::string *syn = s.syntax_of(*a);
 			if (syn != nullptr && std::ranges::none_of(syntaxes, [&](const char *x) { return *syn == x; })) {
-				std::string text = detail::format("syntax {} is not one the member's type reads (", *syn);
+				// A numeric OID (parse_attribute_type), but of any length.
+				std::string text = "syntax ";
+				detail::append_sanitized(text, *syn, 64);
+				text += " is not one the member's type reads (";
 				for (std::size_t i = 0; i < syntaxes.size(); ++i)
 					detail::format_to(text, "{}{}", i ? ", " : "", syntaxes[i]);
 				text += ')';

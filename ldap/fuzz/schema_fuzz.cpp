@@ -3,7 +3,9 @@
 //
 // For any input it must not crash, and:
 // - a rejected definition fails with decode_error;
-// - an accepted one has a non-empty OID, and a SYNTAX without '{';
+// - an accepted one has a non-empty OID, and a SYNTAX that is a numeric
+//   OID (no '{');
+// - the object class grammar is the same, but SYNTAX is not checked;
 // - server_schema::parse of the input (as both an attribute type and an
 //   object class) finds what parsed by OID and every NAME, and counts
 //   what did not as skipped; syntax_of terminates.
@@ -27,10 +29,11 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 		LDAP_FUZZ_CHECK(a.error().code == ldap::client_errc::decode_error);
 	} else {
 		LDAP_FUZZ_CHECK(!a->oid.empty());
-		LDAP_FUZZ_CHECK(!a->syntax || !a->syntax->contains('{'));
+		LDAP_FUZZ_CHECK(!a->syntax || ldap::detail::is_numericoid(*a->syntax));
 	}
 	auto c = ldap::parse_object_class(text);
-	LDAP_FUZZ_CHECK(c.has_value() == a.has_value());// same grammar
+	// Same grammar; only an attribute type's SYNTAX is checked.
+	LDAP_FUZZ_CHECK(!a ? !c || a.error().context == "schema: SYNTAX is not a numeric OID" : c.has_value());
 
 	const std::pmr::vector<std::pmr::string> values{ std::pmr::string(text) };
 	const auto s = ldap::server_schema::parse(values, values);
@@ -42,8 +45,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 		LDAP_FUZZ_CHECK(s.find_object_class(c->oid) != nullptr);
 		LDAP_FUZZ_CHECK(s.skipped() == 0);
 	} else {
-		LDAP_FUZZ_CHECK(s.skipped() == 2);
+		LDAP_FUZZ_CHECK(s.skipped() == (c ? 1u : 2u));
 		LDAP_FUZZ_CHECK(s.attribute_count() == 0);
+		if (c) LDAP_FUZZ_CHECK(s.find_object_class(c->oid) != nullptr);
 	}
 	return 0;
 }

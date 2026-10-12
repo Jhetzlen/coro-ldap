@@ -22,6 +22,7 @@ int main(int argc, char **argv)
 		"( 1.2.840.113556.1.5.9 NAME 'user' SUP organizationalPerson STRUCTURAL MUST (objectClass ) MAY (o $ b ) )",
 		"( 1.2 NAME 'it\\27s' DESC 'back\\5cslash' )",
 		"(1.2 NAME 'tight' SINGLE-VALUE)",
+		"( 1.2.4 NAME 'named' SYNTAX directoryString )",
 		"( 1.2.3 NAME 'unterminated )",
 		"",
 	};
