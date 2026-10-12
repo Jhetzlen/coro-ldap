@@ -19,11 +19,13 @@
 #include <deque>
 #include <memory>
 #include <memory_resource>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <typeindex>
 #include <unordered_map>
@@ -250,15 +252,35 @@ struct connection::impl
 
 	// ---------------------------------------------------------------- failure
 
+	// A copy of `e`, or if there is no memory for it, an out_of_memory():
+	// for paths that must not throw.
+	static error copy_error(const error &e) noexcept
+	{
+		try {
+			return e;
+		} catch (const std::bad_alloc &) {
+			return out_of_memory();
+		}
+	}
+
+	// not_enough_memory without a context, so building and copying it
+	// allocates nothing; operations add their own.
+	static error out_of_memory() noexcept
+	{
+		error e;
+		e.code = std::make_error_code(std::errc::not_enough_memory);
+		return e;
+	}
+
 	// Closes the transport and fails every outstanding operation with `e`
 	// (they add their own context). `remember`: later operations name it.
 	// `close_transport` false: the caller closes it (unbind, after the TLS
-	// shutdown).
-	void shut(error e, bool remember, bool close_transport = true)
+	// shutdown). Never throws: destructors and the detached tasks call it.
+	void shut(error e, bool remember, bool close_transport = true) noexcept
 	{
 		if (!open) return;
 		open = false;
-		if (remember) failure = e;
+		if (remember) failure = copy_error(e);
 		if (close_transport) transport.close();
 		outbox.clear();
 		held.clear();
@@ -271,11 +293,19 @@ struct connection::impl
 		for (auto &[id, p] : waiting) {
 			p->registered = false;
 			p->finished = true;
-			p->failure = e;
+			p->failure = copy_error(e);
 			p->ready.set();
 		}
 		if (reading) reader_stop.request_stop();
 	}
+
+	// An allocation failed where no exception may go: in a destructor (an
+	// AbandonRequest, the requests a bind held) or a detached task (the
+	// writer, the reader, the due watcher). What was to be sent or read is
+	// lost, so the connection cannot go on: it is closed, and its
+	// operations fail with not_enough_memory instead of waiting for what
+	// never comes.
+	void shut_out_of_memory() noexcept { shut(out_of_memory(), true); }
 
 	error not_connected(std::string_view context) const
 	{
@@ -297,9 +327,10 @@ struct connection::impl
 	// executor's frame allocator as capy::run_async would use. Made before
 	// the caller sets its flags: a bad_alloc then leaves no flag set without
 	// its task. (capy::run_async allocates its own frame before the task's;
-	// a task frame failing there would leak it, and its work guard. Its own
-	// allocation failing ends the program: it is made in a noexcept
-	// constructor.)
+	// a task frame failing there would leak it, and its work guard.)
+	// Known limitation, outside this library: capy::run_async allocates its
+	// own frame (the trampoline) in a noexcept constructor, so that
+	// allocation failing ends the program, whatever the caller catches.
 	capy::task<void> new_task(capy::task<void> (*body)(impl *))
 	{
 		struct frame_allocator_scope
@@ -319,14 +350,20 @@ struct connection::impl
 
 	// ---------------------------------------------------------------- writer
 
+	// A bad_alloc in a detached task would end the program (run_async's
+	// default handler): each catches its own and closes the connection.
 	static capy::task<void> writer(impl *self)
 	{
 		const frame_ref ref(self);
-		while (self->open && !self->outbox.empty()) {
-			auto bytes = std::move(self->outbox.front());
-			self->outbox.pop_front();
-			auto w = co_await net::write_bytes(self->transport, bytes);
-			if (!w) self->shut(std::move(w.error()), true);
+		try {
+			while (self->open && !self->outbox.empty()) {
+				auto bytes = std::move(self->outbox.front());
+				self->outbox.pop_front();
+				auto w = co_await net::write_bytes(self->transport, bytes);
+				if (!w) self->shut(std::move(w.error()), true);
+			}
+		} catch (const std::bad_alloc &) {
+			self->shut_out_of_memory();
 		}
 		self->writing = false;
 		self->write_idle.set();
@@ -406,18 +443,27 @@ struct connection::impl
 		return {};
 	}
 
-	// The bind exchange ended: sends the requests it held, in order.
-	void release_held()
+	// The bind exchange ended: sends the requests it held, in order. Called
+	// from a destructor: if one cannot be queued, the connection is closed
+	// (the held requests fail with not_enough_memory).
+	void release_held() noexcept
 	{
-		while (open && !held.empty()) {
-			enqueue(std::move(held.front().bytes));
-			held.pop_front();
+		try {
+			while (open && !held.empty()) {
+				enqueue(std::move(held.front().bytes));
+				held.pop_front();
+			}
+		} catch (const std::bad_alloc &) {
+			shut_out_of_memory();
 		}
 		held.clear();
 	}
 
 	// Stops waiting for `p`'s responses and tells the server (best effort).
-	void abandon(pending_op &p)
+	// Called from destructors: if the AbandonRequest cannot be built or
+	// queued, the connection is closed (a late response would then match
+	// no request).
+	void abandon(pending_op &p) noexcept
 	{
 		if (!p.registered) return;
 		p.registered = false;
@@ -425,22 +471,26 @@ struct connection::impl
 		pending.erase(p.id);
 		stop_reader_if_idle();
 		if (!open) return;
-		if (!p.abandonable) {
-			shut(make_error(client_errc::not_connected,
-				   "connection closed: a Bind or StartTLS request cannot be abandoned (RFC 4511 section 4.11)"),
-			  true);
-			return;
+		try {
+			if (!p.abandonable) {
+				shut(make_error(client_errc::not_connected,
+					   "connection closed: a Bind or StartTLS request cannot be abandoned (RFC 4511 section 4.11)"),
+				  true);
+				return;
+			}
+			// Held by a bind exchange, so never sent: nothing to tell the server.
+			auto h = std::ranges::find(held, p.id, &held_request::id);
+			if (h != held.end()) {
+				held.erase(h);
+				return;
+			}
+			abandoned.push_back({ p.id, p.search });
+			trim_abandoned();
+			message m{ 0, abandon_request{ p.id } };
+			(void)submit(m, nullptr, "abandon");// cannot fail to encode
+		} catch (const std::bad_alloc &) {
+			shut_out_of_memory();
 		}
-		// Held by a bind exchange, so never sent: nothing to tell the server.
-		auto h = std::ranges::find(held, p.id, &held_request::id);
-		if (h != held.end()) {
-			held.erase(h);
-			return;
-		}
-		abandoned.push_back({ p.id, p.search });
-		trim_abandoned();
-		message m{ 0, abandon_request{ p.id } };
-		(void)submit(m, nullptr, "abandon");// cannot fail to encode
 	}
 
 	// Sends `m` without waiting for an answer: its responses are dropped like
@@ -561,15 +611,19 @@ struct connection::impl
 	static capy::task<void> due_watcher(impl *self)
 	{
 		const frame_ref ref(self);
-		while (self->open) {
-			const auto next = self->next_due_deadline();
-			if (!next) break;
-			if (clock::now() < *next) {
-				self->due_changed.clear();
-				(void)co_await corosio::timeout(self->due_changed.wait(), *next);
-				continue;// a change, or the deadline: look again
+		try {
+			while (self->open) {
+				const auto next = self->next_due_deadline();
+				if (!next) break;
+				if (clock::now() < *next) {
+					self->due_changed.clear();
+					(void)co_await corosio::timeout(self->due_changed.wait(), *next);
+					continue;// a change, or the deadline: look again
+				}
+				self->expire_due(clock::now());
 			}
-			self->expire_due(clock::now());
+		} catch (const std::bad_alloc &) {
+			self->shut_out_of_memory();
 		}
 		self->watching = false;
 	}
@@ -599,22 +653,31 @@ struct connection::impl
 	static capy::task<void> reader(impl *self)
 	{
 		const frame_ref ref(self);
-		while (self->open && self->outstanding() != 0) {
-			auto size = co_await net::read_frame(self->transport, self->buf, self->max_message_size);
-			if (!size) {
-				// Stopped because nothing is outstanding (bytes already
-				// received stay in buf), or a real failure.
-				if (size.error().code == capy::cond::canceled && self->open) break;
-				self->shut(std::move(size.error()), true);
-				break;
+		try {
+			while (self->open && self->outstanding() != 0) {
+				auto size = co_await net::read_frame(self->transport, self->buf, self->max_message_size);
+				if (!size) {
+					// Stopped because nothing is outstanding (bytes already
+					// received stay in buf), or a real failure.
+					if (size.error().code == capy::cond::canceled && self->open) break;
+					self->shut(std::move(size.error()), true);
+					break;
+				}
+				self->route(*size);
 			}
-			self->route(*size);
+		} catch (const std::bad_alloc &) {
+			self->shut_out_of_memory();// a response may be lost
 		}
 		self->reading = false;
 		self->reader_idle.set();
 		// Stopped while an operation was being registered: start afresh,
-		// with a new stop token.
-		if (self->open && self->outstanding() != 0) self->start_reader();
+		// with a new stop token. If it cannot start, nothing would read the
+		// responses: closed.
+		try {
+			if (self->open && self->outstanding() != 0) self->start_reader();
+		} catch (const std::bad_alloc &) {
+			self->shut_out_of_memory();
+		}
 	}
 
 	error unexpected(std::string text)
@@ -916,7 +979,15 @@ bool connection::is_tls() const noexcept { return is_open() && !impl_->upgrading
 void connection::close() noexcept
 {
 	if (impl_ == nullptr) return;
-	impl_->shut(make_error(client_errc::not_connected, "connection closed"), false);
+	// Without memory for the error's text, operations fail with
+	// not_enough_memory instead.
+	error closed;
+	try {
+		closed = make_error(client_errc::not_connected, "connection closed");
+	} catch (const std::bad_alloc &) {
+		closed = impl::out_of_memory();
+	}
+	impl_->shut(std::move(closed), false);
 	impl_->transport.close();// also ends a TLS shutdown that unbind() is waiting for
 }
 

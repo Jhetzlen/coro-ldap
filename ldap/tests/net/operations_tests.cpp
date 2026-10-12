@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <memory_resource>
 #include <new>
 #include <optional>
@@ -1735,6 +1736,117 @@ TEST_CASE("operations: StartTLS waits for a release's answer whose reader could 
 		m.check_server();
 		REQUIRE(m.log.received.size() == 3);
 		CHECK(is_start_tls(m.log.received[2]));
+	}
+}
+
+namespace {
+
+// Writes `msgs` to the server's end at once, without the io_context: no
+// coroutine frame is allocated (failing_frames may be set to fail one).
+void server_writes_now(mock_ldap &m, std::initializer_list<ldap::message> msgs)
+{
+	for (const auto &msg : msgs) {
+		const std::string bytes = bytes_of(msg);
+		REQUIRE(
+		  ::write(m.sockets.server.native_handle(), bytes.data(), bytes.size()) == static_cast<ssize_t>(bytes.size()));
+	}
+}
+
+}// namespace
+
+// Where no exception may go (a destructor, a detached task), a failed frame
+// allocation closes the connection: what was to be sent or read is lost,
+// and the operations fail with not_enough_memory instead of waiting for it
+// (or the program ending). Nothing is spawned while an allocation is set to
+// fail: run_async's own frame failing ends the program (made in a noexcept
+// constructor, outside this library).
+TEST_CASE("operations: a failed allocation where nothing may throw closes the connection", "[net][operations][oom]")
+{
+	failing_frames frames;// outlives the io_context's coroutines
+	const clear_frame_allocator clear;
+	mock_ldap m;
+	m.ioc.set_frame_allocator(&frames);
+	// Runs what is ready: requests are written, the reader parks.
+	auto settle_now = [&m] {
+		while (m.ioc.poll() != 0) {}
+		m.ioc.restart();
+	};
+	const std::string_view base = "search ou=people,dc=example,dc=org";
+
+	SECTION("the reader's next read: the operations fail")
+	{
+		auto s = m.run(m.conn.search_stream(people_search()));
+		REQUIRE(s.has_value());
+		settle_now();
+		server_writes_now(m, { entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1) });
+		frames.fail_at(1);// the reader routes the entry, then reads again
+		drive_until(m.ioc, [&frames] { return frames.count() == 1; });
+		frames.fail_at(0);
+		CHECK_FALSE(m.conn.is_open());
+		CHECK(m.conn.outstanding() == 0);
+		auto e = m.run(s->next());
+		REQUIRE(e.has_value());
+		CHECK(e->has_value());// received before
+		auto end = m.run(s->next());
+		REQUIRE_FALSE(end.has_value());
+		CHECK(end.error().code == std::errc::not_enough_memory);
+		CHECK(end.error().context == base);
+		auto later = m.run(m.conn.search(people_search()));
+		REQUIRE_FALSE(later.has_value());
+		CHECK(later.error().code == client_errc::not_connected);
+		CHECK_THAT(std::string(later.error().context),
+		  StartsWith(std::string(base) + ": connection closed by an earlier error: "));
+	}
+	SECTION("an AbandonRequest from a stream's destructor: the other operations fail")
+	{
+		auto first = m.run(m.conn.search_stream(people_search()));
+		auto second = m.run(m.conn.search_stream(people_search()));
+		REQUIRE(first.has_value());
+		REQUIRE(second.has_value());
+		settle_now();
+		frames.fail_at(1);
+		*first = ldap::search_stream{};// abandoned: the writer's frame fails
+		CHECK(frames.count() == 1);
+		frames.fail_at(0);
+		CHECK_FALSE(m.conn.is_open());
+		auto e = m.run(second->next());
+		REQUIRE_FALSE(e.has_value());
+		CHECK(e.error().code == std::errc::not_enough_memory);
+	}
+	SECTION("the writer's write of an AbandonRequest: the other operations fail")
+	{
+		auto first = m.run(m.conn.search_stream(people_search()));
+		auto second = m.run(m.conn.search_stream(people_search()));
+		REQUIRE(first.has_value());
+		REQUIRE(second.has_value());
+		settle_now();
+		frames.fail_at(3);// the writer's frame, run_async's, then the writer's write
+		*first = ldap::search_stream{};
+		drive_until(m.ioc, [&frames] { return frames.count() == 3; });
+		frames.fail_at(0);
+		CHECK_FALSE(m.conn.is_open());
+		auto e = m.run(second->next());
+		REQUIRE_FALSE(e.has_value());
+		CHECK(e.error().code == std::errc::not_enough_memory);
+	}
+	SECTION("the requests a bind held, sent as it ends: they fail")
+	{
+		outcome<ldap::result<void>> bind;
+		spawn(m.ioc, bind_admin(m.conn), bind);
+		settle_now();// the BindRequest is written
+		outcome<ldap::result<ldap::response>> add;
+		spawn(m.ioc, m.conn.add({ .entry = jdoe }), add);// held
+		settle_now();
+		server_writes_now(m, { bind_resp(1) });
+		frames.fail_at(2);// the reader's next read, then the writer's frame for the held AddRequest
+		drive_until(m.ioc, [&] { return bind.done() && add.done(); });
+		CHECK(frames.count() == 2);
+		frames.fail_at(0);
+		CHECK(bind.get().has_value());
+		REQUIRE_FALSE(add.get().has_value());
+		CHECK(add.get().error().code == std::errc::not_enough_memory);
+		CHECK(add.get().error().context == "add uid=jdoe,ou=people,dc=example,dc=org");
+		CHECK_FALSE(m.conn.is_open());
 	}
 }
 

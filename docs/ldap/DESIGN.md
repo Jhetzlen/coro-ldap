@@ -798,6 +798,14 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   section 4.3): while it is written, the connection is still open but
   every new request, a StartTLS (including one whose wait for due answers
   ends then) and another `unbind()` fail with `not_connected`.
+  An allocation that fails where no exception can go (a destructor sending
+  an AbandonRequest or the requests a bind held; the writer, reader or due
+  watcher task) closes the connection: what was to be sent or read is
+  lost, and the outstanding operations fail with
+  `std::errc::not_enough_memory` (remembered, like any failure). Elsewhere
+  `std::bad_alloc` propagates from the operation's task. Known limitation:
+  `capy::run_async` allocates its own frame in a `noexcept` constructor, so
+  that allocation failing ends the program.
 - Lifetime: the state is one reference-counted block on the connection's
   resource, held by the connection, each outstanding operation, each
   stream, and the reader and writer frames. Moving a connection or stream
