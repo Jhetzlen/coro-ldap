@@ -67,7 +67,9 @@ void read_buffer::consume(std::size_t n) noexcept
 	begin_ += std::min(n, end_ - begin_);
 	if (begin_ != end_) return;
 	begin_ = end_ = 0;
-	if (buf_.size() > shrink_threshold) { std::pmr::vector<std::byte>(buf_.get_allocator()).swap(buf_); }
+	if (buf_.size() > shrink_threshold) {
+		std::pmr::vector<std::byte>(buf_.get_allocator()).swap(buf_);
+	}
 }
 
 capy::task<result<std::size_t>> read_frame(transport &t, read_buffer &buf, std::size_t max_message_size)

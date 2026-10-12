@@ -118,7 +118,9 @@ std::vector<std::vector<std::uint8_t>> seeds()
 
 	// Deep nesting (beyond the default limit of 32), built inside out.
 	std::vector<std::uint8_t> deep{ 0x05, 0x00 };
-	for (int i = 0; i < 40; ++i) { deep.insert(deep.begin(), { 0x30, static_cast<std::uint8_t>(deep.size()) }); }
+	for (int i = 0; i < 40; ++i) {
+		deep.insert(deep.begin(), { 0x30, static_cast<std::uint8_t>(deep.size()) });
+	}
 	out.push_back(deep);
 	return out;
 }

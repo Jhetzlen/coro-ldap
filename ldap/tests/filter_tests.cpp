@@ -75,7 +75,7 @@ std::string text_of(const ldap::filter &f) { return std::string(f.to_string()); 
 // `t && f`, `f || t` and `!t` give filters.
 template<class T>
 concept combinable = requires(const T &t, const ldap::filter &f) {
-	{ t &&f } -> std::same_as<ldap::filter>;
+	{ t && f } -> std::same_as<ldap::filter>;
 	{ f || t } -> std::same_as<ldap::filter>;
 	{ !t } -> std::same_as<ldap::filter>;
 };

@@ -502,7 +502,7 @@ std::string kind_of(const ldap::message &m)
 		return "search";
 	}
 	if (const auto *x = std::get_if<ldap::extended_request>(&m.op);
-		x != nullptr && x->request_name == ldap::start_tls_oid)
+	  x != nullptr && x->request_name == ldap::start_tls_oid)
 		return "StartTLS";
 	return "other";
 }

@@ -427,7 +427,7 @@ TEST_CASE("integration: add, modify, compare, rename and delete", "[integration]
 		  ldap::mod::remove("mail", { "a@example.org" }),
 		  ldap::mod::replace("cn", { "Renamed Integration" }),
 		  ldap::mod::increment("uidNumber", "5") } }))
-			  .has_value());
+		.has_value());
 	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "mail", .value = "b@example.org" })) == true);
 	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "mail", .value = "a@example.org" })) == false);
 	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "uidNumber", .value = "505" })) == true);
@@ -586,7 +586,7 @@ TEST_CASE("integration: password modify (RFC 3062)", "[integration]")
 		  { "cn", { "Password" } },
 		  { "sn", { "Test" } },
 		  { "userPassword", { "start" } } } }))
-			  .has_value());
+		.has_value());
 
 	// The admin sets a password, then has the server generate one.
 	auto set = finish(ioc, c.password_modify({ .user = who, .new_password = "first" }));

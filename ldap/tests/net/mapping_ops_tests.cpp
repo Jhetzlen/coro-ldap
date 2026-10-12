@@ -92,13 +92,14 @@ TEST_CASE("typed: modify<T> and add(dn, T)", "[net][mapping]")
 	m.serve({ answer({ ldap::message{ 1, ldap::modify_response{ ldap::ldap_result{ 0 } } } }),
 	  answer({ ldap::message{ 2, ldap::add_response{ ldap::ldap_result{ 0 } } } }) });
 	const ldap::dn who{ "uid=jdoe,ou=people,dc=example,dc=org" };
-	REQUIRE(m.run(m.conn.modify<account>(who,
-					{ ldap::replace<&account::mail>("jdoe@example.org"),
-					  ldap::add<&account::groups>(ldap::dn{ "cn=admins,ou=groups,dc=example,dc=org" }),
-					  ldap::replace<&account::uid_number>(std::int64_t{ 2000 }) }))
-			  .has_value());
+	REQUIRE(
+	  m.run(m.conn.modify<account>(who,
+			  { ldap::replace<&account::mail>("jdoe@example.org"),
+				ldap::add<&account::groups>(ldap::dn{ "cn=admins,ou=groups,dc=example,dc=org" }),
+				ldap::replace<&account::uid_number>(std::int64_t{ 2000 }) }))
+		.has_value());
 	REQUIRE(m.run(m.conn.add(who, account{ .uid = "jdoe", .mail = std::nullopt, .groups = {}, .uid_number = 2000 }))
-			  .has_value());
+		.has_value());
 	m.check_server();
 
 	using op = ldap::modify_operation;

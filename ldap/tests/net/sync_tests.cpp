@@ -502,11 +502,11 @@ TEST_CASE("sync: modify_dn", "[net][sync]")
 	  answer({ result_msg<ldap::modify_dn_response>(2, 68, "target exists") }) });
 	connected k(srv);
 	REQUIRE(k.c
-			  .modify_dn({ .entry = jdoe,
-				.new_rdn = ldap::rdn{ "uid=john.doe" },
-				.delete_old_rdn = false,
-				.new_superior = ldap::dn{ "ou=alumni,dc=example,dc=org" } })
-			  .has_value());
+		.modify_dn({ .entry = jdoe,
+		  .new_rdn = ldap::rdn{ "uid=john.doe" },
+		  .delete_old_rdn = false,
+		  .new_superior = ldap::dn{ "ou=alumni,dc=example,dc=org" } })
+		.has_value());
 	auto taken = k.c.modify_dn({ .entry = jdoe, .new_rdn = ldap::rdn{ "uid=jane" } });
 	REQUIRE_FALSE(taken.has_value());
 	CHECK(taken.error().code == ldap::errc::entry_already_exists);

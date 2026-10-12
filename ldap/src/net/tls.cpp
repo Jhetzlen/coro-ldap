@@ -263,11 +263,11 @@ result<tls_setup> make_tls_setup(const tls_options &o)
 			return std::unexpected(std::move(r.error()));
 		if (auto r =
 			  check(ctx.use_certificate_chain_file(o.cert_file.string()), "tls: cert_file " + o.cert_file.string());
-			!r)
+		  !r)
 			return std::unexpected(std::move(r.error()));
 		if (auto r = check(ctx.use_private_key_file(o.key_file.string(), corosio::tls_file_format::pem),
 			  "tls: key_file " + o.key_file.string());
-			!r)
+		  !r)
 			return std::unexpected(std::move(r.error()));
 	}
 	return setup;

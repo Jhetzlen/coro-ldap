@@ -152,19 +152,21 @@ TEST_CASE("operations: modify DN", "[net][operations]")
 	m.serve(
 	  { answer({ result_msg<ldap::modify_dn_response>(1) }), answer({ result_msg<ldap::modify_dn_response>(2) }) });
 	// Rename, keeping the old RDN value.
-	REQUIRE(m.run(m.conn.modify_dn({
-					.entry = jdoe,
-					.new_rdn = ldap::rdn{ "uid=john.doe" },
-					.delete_old_rdn = false,
-				  }))
-			  .has_value());
+	REQUIRE(
+	  m.run(m.conn.modify_dn({
+			  .entry = jdoe,
+			  .new_rdn = ldap::rdn{ "uid=john.doe" },
+			  .delete_old_rdn = false,
+			}))
+		.has_value());
 	// Move under another parent, same RDN.
-	REQUIRE(m.run(m.conn.modify_dn({
-					.entry = jdoe,
-					.new_rdn = jdoe.rdns().front(),
-					.new_superior = ldap::dn{ "ou=alumni,dc=example,dc=org" },
-				  }))
-			  .has_value());
+	REQUIRE(
+	  m.run(m.conn.modify_dn({
+			  .entry = jdoe,
+			  .new_rdn = jdoe.rdns().front(),
+			  .new_superior = ldap::dn{ "ou=alumni,dc=example,dc=org" },
+			}))
+		.has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 2);
 	CHECK(
@@ -266,13 +268,14 @@ TEST_CASE("operations: typed controls on the wire", "[net][operations][controls]
 {
 	mock_ldap m;
 	m.serve({ answer({ done_msg(1) }) });
-	REQUIRE(m.run(m.conn.search({
-					.controls = { ldap::proxied_authorization{ "dn:uid=jdoe,ou=people,dc=example,dc=org" },
-					  ldap::manage_dsa_it{ .critical = true },
-					  ldap::paged{ .page_size = 10, .cookie = "c" },
-					  ldap::control{ "1.2.3.4", false, "raw" } },
-				  }))
-			  .has_value());
+	REQUIRE(
+	  m.run(m.conn.search({
+			  .controls = { ldap::proxied_authorization{ "dn:uid=jdoe,ou=people,dc=example,dc=org" },
+				ldap::manage_dsa_it{ .critical = true },
+				ldap::paged{ .page_size = 10, .cookie = "c" },
+				ldap::control{ "1.2.3.4", false, "raw" } },
+			}))
+		.has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 1);
 	const auto &cs = m.log.received[0].controls;

@@ -57,7 +57,7 @@ TEST_CASE("controls are encoded on the given resource", "[controls][pmr]")
 	jhetz::ldap::test::counting_resource mr;
 	std::pmr::vector<ldap::control> out(&mr);
 	REQUIRE(ldap::append_controls({ ldap::paged{ .page_size = 5 }, ldap::proxied_authorization{ "dn:cn=x" } }, out)
-			  .has_value());
+		.has_value());
 	REQUIRE(out.size() == 2);
 	for (const auto &c : out) CHECK(c.get_allocator().resource() == &mr);
 	CHECK(mr.allocations() > 0);
@@ -345,7 +345,7 @@ TEST_CASE("new typed controls and their results use the given resource", "[contr
 									ldap::pre_read{ .attributes = { "cn" } },
 									ldap::post_read{} },
 	  out)
-			  .has_value());
+		.has_value());
 	REQUIRE(out.size() == 4);
 	for (const auto &c : out) CHECK(c.get_allocator().resource() == &mr);
 
@@ -442,7 +442,7 @@ TEST_CASE("assertion and pre/post-read controls match OpenLDAP", "[controls][ass
 									ldap::pre_read{ .attributes = { "sn" } },
 									ldap::post_read{ .attributes = { "sn" } } },
 	  modify.controls)
-			  .has_value());
+		.has_value());
 	CHECK(message_hex(modify)
 		  == "30 81 99 02 01 02 66 3C 04 23 " + std::string(cap_dn_hex)
 			   + " 30 15 30 13 0A 01 02 30 0E 04 02 73 6E 31 08 04 06 E6 97 A5 E6 9C AC"
