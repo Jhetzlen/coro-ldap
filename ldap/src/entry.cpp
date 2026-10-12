@@ -1,6 +1,7 @@
 #include "jhetz/ldap/entry.hpp"
 
-#include <iterator>
+#include <algorithm>
+#include <ranges>
 #include <unordered_map>
 #include <utility>
 
@@ -9,17 +10,14 @@ namespace jhetz::ldap {
 attribute_values::attribute_values(const attribute &type_,
   std::initializer_list<std::string_view> values_,
   const allocator_type &alloc)
-  : type(type_, alloc), values(alloc)
-{
-	values.reserve(values_.size());
-	for (auto v : values_) values.emplace_back(v);
-}
+  : type(type_, alloc), values(values_.begin(), values_.end(), alloc)
+{}
 
 const std::pmr::vector<std::pmr::string> *entry::find(std::string_view type) const noexcept
 {
-	for (const auto &a : attributes)
-		if (detail::iequals(a.type.name(), type)) return &a.values;
-	return nullptr;
+	const auto it =
+	  std::ranges::find_if(attributes, [&](const attribute_values &a) { return detail::iequals(a.type.name(), type); });
+	return it == attributes.end() ? nullptr : &it->values;
 }
 
 entry entry::from(search_result_entry e)
@@ -40,9 +38,7 @@ entry entry::from(search_result_entry e)
 			a.values = std::move(pa.values);
 			index.emplace(std::string_view(a.type.name()), out.attributes.size() - 1);
 		} else {
-			auto &values = out.attributes[it->second].values;
-			values.insert(
-			  values.end(), std::make_move_iterator(pa.values.begin()), std::make_move_iterator(pa.values.end()));
+			out.attributes[it->second].values.append_range(pa.values | std::views::as_rvalue);
 		}
 	}
 	return out;

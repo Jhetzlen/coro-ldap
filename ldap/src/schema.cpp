@@ -236,10 +236,7 @@ const std::string *server_schema::syntax_of(const attribute_type &a) const noexc
 
 // ---------------------------------------------------------------- report
 
-bool schema_report::ok() const noexcept
-{
-	return std::none_of(issues.begin(), issues.end(), [](const schema_issue &i) { return i.is_error(); });
-}
+bool schema_report::ok() const noexcept { return std::ranges::none_of(issues, &schema_issue::is_error); }
 
 std::string schema_report::to_string() const
 {
@@ -289,7 +286,7 @@ namespace detail {
 			  "the attribute is NO-USER-MODIFICATION: mark the member ldap::read_only" });
 		if (!syntaxes.empty()) {
 			const std::string *syn = s.syntax_of(*a);
-			if (syn != nullptr && std::none_of(syntaxes.begin(), syntaxes.end(), [&](const char *x) { return *syn == x; })) {
+			if (syn != nullptr && std::ranges::none_of(syntaxes, [&](const char *x) { return *syn == x; })) {
 				std::string text = detail::format("syntax {} is not one the member's type reads (", *syn);
 				for (std::size_t i = 0; i < syntaxes.size(); ++i)
 					detail::format_to(text, "{}{}", i ? ", " : "", syntaxes[i]);

@@ -3,6 +3,7 @@
 #include "format_util.hpp"
 #include "pmr_util.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -349,12 +350,7 @@ std::uint16_t url::port_or_default() const noexcept
 	return 0;
 }
 
-bool url::has_critical_extension() const noexcept
-{
-	for (const auto &e : extensions_)
-		if (e.critical) return true;
-	return false;
-}
+bool url::has_critical_extension() const noexcept { return std::ranges::any_of(extensions_, &url_extension::critical); }
 
 result<url> url::parse(std::string_view text, std::pmr::memory_resource *mr)
 {

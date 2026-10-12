@@ -864,9 +864,7 @@ namespace {
 			// Unescaped '*' up to the closing ')' decide the kind. Escapes are
 			// `\` and two hex digits, so they never hide a '*' or ')'; text
 			// with a bad escape fails below, whatever the count.
-			std::size_t stars = 0;
-			for (std::size_t j = i_; j < s_.size() && s_[j] != ')'; ++j)
-				if (s_[j] == '*') ++stars;
+			const auto stars = std::ranges::count(s_.substr(i_, s_.find(')', i_) - i_), '*');
 			if (stars == 0) {
 				const std::uint32_t node = add(kind::equality, parent);
 				access::set_attr(out_, node, attr);

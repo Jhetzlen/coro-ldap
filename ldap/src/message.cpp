@@ -33,10 +33,9 @@ namespace {
 
 	string_list strings(std::initializer_list<std::string_view> list, const string_list::allocator_type &alloc)
 	{
-		string_list out(alloc);
-		out.reserve(list.size());
-		for (auto s : list) out.emplace_back(s);
-		return out;
+		// Not ranges::to: string_view -> pmr::string is explicit, so it would
+		// build each element as a nested range on the default resource first.
+		return string_list(list.begin(), list.end(), alloc);
 	}
 
 }// namespace
