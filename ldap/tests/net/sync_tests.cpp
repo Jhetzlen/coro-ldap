@@ -26,6 +26,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace ldap = jhetz::ldap;
@@ -238,13 +239,17 @@ struct peer_server
 		thread.join();
 	}
 
+	// Runs `script`, then waits for the client to hang up: any request
+	// after the script's last (an UnbindRequest, say) is logged as an error.
 	void serve(std::vector<step> script)
 	{
+		script.push_back(client_hangs_up());
 		start(serve_script(net::transport::wrap(socket_ref{ &peer }, "server"), std::move(script), log));
 	}
 
-	// Answers StartTLS with success, runs the server side of the handshake
-	// with `leaf`, then answers binds over TLS until the client hangs up.
+	// Expects a StartTLS request and answers it with success, runs the
+	// server side of the handshake with `leaf`, then answers binds over TLS
+	// until the client hangs up.
 	void serve_start_tls(test_pki::issued leaf) { start(upgrade(peer, std::move(leaf), log)); }
 
 	ldap::url url() const
@@ -284,7 +289,13 @@ struct peer_server
 			co_return;
 		}
 		const std::int32_t id = req->id;
+		const auto *x = std::get_if<ldap::extended_request>(&req->op);
+		const bool is_start_tls = x != nullptr && x->request_name == ldap::start_tls_oid;
 		log.received.push_back(std::move(*req));
+		if (!is_start_tls) {
+			log.error = "expected a StartTLS request";
+			co_return;
+		}
 		const std::string ok = bytes_of(
 		  ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ 0 }, std::string(ldap::start_tls_oid) } });
 		if (auto w = co_await net::write_bytes(plain, std::as_bytes(std::span(ok))); !w) {
@@ -317,10 +328,11 @@ struct peer_server
 	}
 };
 
-// A client connected to `srv`.
+// A client connected to `srv`. The operation timeout fails a call the
+// server never answers (a script too short) instead of hanging the test.
 struct connected
 {
-	ldap::sync::client c{};
+	ldap::sync::client c{ { .operation_timeout = std::chrono::seconds(10) } };
 	explicit connected(peer_server &srv) { REQUIRE(c.connect(srv.url()).has_value()); }
 };
 
@@ -353,7 +365,7 @@ TEST_CASE("sync: sasl_bind", "[net][sync][sasl]")
 	ldap::sasl_external as_jdoe("dn:uid=jdoe,ou=people,dc=example,dc=org");
 	REQUIRE(k.c.sasl_bind(as_jdoe).has_value());
 	ldap::sasl_external plain;
-	auto r = k.c.sasl_bind(plain);
+	auto r = k.c.sasl_bind(plain, jdoe);
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::errc::inappropriate_authentication);
 	CHECK(r.error().code == ldap::cond::auth_failed);
@@ -365,7 +377,7 @@ TEST_CASE("sync: sasl_bind", "[net][sync][sasl]")
 	CHECK(got[0]
 		  == ldap::message{
 			1, ldap::bind_request{ 3, "", ldap::sasl_auth{ "EXTERNAL", "dn:uid=jdoe,ou=people,dc=example,dc=org" } } });
-	CHECK(got[1] == ldap::message{ 2, ldap::bind_request{ 3, "", ldap::sasl_auth{ "EXTERNAL", "" } } });
+	CHECK(got[1] == ldap::message{ 2, ldap::bind_request{ 3, jdoe_str, ldap::sasl_auth{ "EXTERNAL", "" } } });
 }
 
 TEST_CASE("sync: start_tls refused leaves the connection in clear", "[net][sync][starttls]")
@@ -431,6 +443,7 @@ TEST_CASE("sync: add", "[net][sync]")
 	CHECK(got[0]
 		  == ldap::message{
 			1, ldap::add_request{ jdoe_str, { { "objectClass", { "inetOrgPerson" } }, { "cn", { "Jöhn Doe" } } } } });
+	CHECK(got[1] == ldap::message{ 2, ldap::add_request{ jdoe_str, { { "cn", { "x" } } } } });
 }
 
 TEST_CASE("sync: modify", "[net][sync]")
@@ -456,6 +469,9 @@ TEST_CASE("sync: modify", "[net][sync]")
 			ldap::modify_request{ jdoe_str,
 			  { ldap::modify_change{ op::replace, { "sn", { "Doe" } } },
 				ldap::modify_change{ op::delete_, { "description", {} } } } } });
+	CHECK(got[1]
+		  == ldap::message{
+			2, ldap::modify_request{ jdoe_str, { ldap::modify_change{ op::replace, { "sn", { "X" } } } } } });
 }
 
 TEST_CASE("sync: del", "[net][sync]")
@@ -526,6 +542,7 @@ TEST_CASE("sync: compare", "[net][sync]")
 	REQUIRE(got.size() == 3);
 	CHECK(got[0] == ldap::message{ 1, ldap::compare_request{ jdoe_str, { "mail", "jdoe@example.org" } } });
 	CHECK(got[1] == ldap::message{ 2, ldap::compare_request{ jdoe_str, { "cn", "Jöhn" } } });
+	CHECK(got[2] == ldap::message{ 3, ldap::compare_request{ jdoe_str, { "pager", "1" } } });
 }
 
 TEST_CASE("sync: extended", "[net][sync]")
@@ -600,7 +617,8 @@ TEST_CASE("sync: close without an UnbindRequest", "[net][sync]")
 	REQUIRE_FALSE(after.has_value());
 	CHECK(after.error().code == ldap::client_errc::not_connected);
 	k.c.close();// again: nothing happens
-	// The server saw the bind, then the connection end: no UnbindRequest.
+	// The server saw the bind, then the connection end: an UnbindRequest
+	// would show in the log and as an error (peer_server::serve).
 	const auto &got = hang_up(k.c, srv);
 	REQUIRE(got.size() == 1);
 	CHECK(got[0] == bind_request_msg(1));

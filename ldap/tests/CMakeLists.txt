@@ -106,5 +106,6 @@ if(JHETZ_LDAP_BUILD_NET)
         target_compile_definitions(jhetz_ldap_net_tests PRIVATE JHETZ_LDAPSEARCH="$<TARGET_FILE:jhetz_ldapsearch>")
     endif()
     jhetz_ldap_warnings(jhetz_ldap_net_tests)
-    catch_discover_tests(jhetz_ldap_net_tests TEST_PREFIX "net.")
+    # A hung network test fails after two minutes, not after ctest's 1500 s.
+    catch_discover_tests(jhetz_ldap_net_tests TEST_PREFIX "net." PROPERTIES TIMEOUT 120)
 endif()

@@ -13,6 +13,7 @@
 #include "net_test_support.hpp"
 
 #include <boost/capy/buffers.hpp>
+#include <boost/capy/cond.hpp>
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/ipv4_address.hpp>
 #include <boost/corosio/local_connect_pair.hpp>
@@ -81,12 +82,15 @@ inline ldap::message ref_msg(std::int32_t id, ldap::string_list uris)
 // ---------------------------------------------------------------- server
 
 // One step of a server script: optionally wait for one request, then send
-// `replies` (each written separately), then optionally hang up.
+// `replies` (each written separately), then optionally hang up. Or, with
+// expect_close, wait for the client to hang up: a request instead is logged
+// and is an error.
 struct step
 {
 	bool read_request = true;
 	std::vector<std::string> replies{};
 	bool close_after = false;
+	bool expect_close = false;
 };
 
 inline step answer(std::initializer_list<ldap::message> replies, bool close_after = false)
@@ -94,6 +98,15 @@ inline step answer(std::initializer_list<ldap::message> replies, bool close_afte
 	step s;
 	for (const auto &m : replies) s.replies.push_back(bytes_of(m));
 	s.close_after = close_after;
+	return s;
+}
+
+// The client hangs up (a clean close, nothing more sent).
+inline step client_hangs_up()
+{
+	step s;
+	s.read_request = false;
+	s.expect_close = true;
 	return s;
 }
 
@@ -108,6 +121,16 @@ inline capy::task<void> serve_script(net::transport t, std::vector<step> script,
 {
 	net::read_buffer buf;
 	for (auto &st : script) {
+		if (st.expect_close) {
+			auto r = co_await net::read_message(t, buf, as_server);
+			if (r) {
+				log.received.push_back(std::move(*r));
+				log.error = "expected the client to hang up, got another request";
+			} else if (r.error().code != capy::cond::eof) {
+				log.error = "server read: " + std::string(r.error().message());
+			}
+			co_return;
+		}
 		if (st.read_request) {
 			auto r = co_await net::read_message(t, buf, as_server);
 			if (!r) {
