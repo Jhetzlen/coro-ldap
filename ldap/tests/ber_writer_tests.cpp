@@ -72,6 +72,31 @@ TEST_CASE("ber::writer uses minimal definite lengths", "[ber][writer]")
 	CHECK(header_for(65536) == "04 83 01 00 00");
 }
 
+TEST_CASE("ber::encode_length pins the octets at every octet-count boundary", "[ber][writer]")
+{
+	const auto encoded = [](std::size_t n) {
+		std::pmr::vector<std::byte> out{ std::byte{ 0xAA } };// appends after existing content
+		ber::encode_length(out, n);
+		REQUIRE(out.front() == std::byte{ 0xAA });
+		return hex(std::span(out).subspan(1));
+	};
+	CHECK(encoded(0) == "00");
+	CHECK(encoded(127) == "7F");
+	CHECK(encoded(128) == "81 80");
+	CHECK(encoded(255) == "81 FF");
+	CHECK(encoded(256) == "82 01 00");
+	CHECK(encoded(65535) == "82 FF FF");
+	CHECK(encoded(65536) == "83 01 00 00");
+	CHECK(encoded(0xFF'FFFF) == "83 FF FF FF");
+	CHECK(encoded(0x100'0000) == "84 01 00 00 00");
+	CHECK(encoded(0xFFFF'FFFF) == "84 FF FF FF FF");
+	if constexpr (sizeof(std::size_t) == 8) {
+		CHECK(encoded(std::size_t{ 1 } << 32) == "85 01 00 00 00 00");
+		CHECK(encoded(std::size_t{ 0x0123'4567'89AB'CDEF }) == "88 01 23 45 67 89 AB CD EF");
+		CHECK(encoded(std::numeric_limits<std::size_t>::max()) == "88 FF FF FF FF FF FF FF FF");
+	}
+}
+
 TEST_CASE("ber::writer backpatches constructed lengths", "[ber][writer]")
 {
 	SECTION("short form")

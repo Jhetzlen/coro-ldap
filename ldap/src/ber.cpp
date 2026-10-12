@@ -1,6 +1,8 @@
 #include "jhetz/ldap/ber.hpp"
 
 #include <array>
+#include <bit>
+#include <iterator>
 #include <string>
 #include <utility>
 
@@ -59,6 +61,22 @@ namespace {
 		return raw_header{ t, 2 + count, length };
 	}
 
+	// Long-form definite lengths (length >= 0x80): the initial octet is
+	// 0x80 | count, followed by `count` minimal big-endian length octets.
+	unsigned length_octet_count(std::size_t length) noexcept
+	{
+		return static_cast<unsigned>(std::bit_width(length) + 7) / 8;
+	}
+
+	// Writes the `count` low octets of `length` through `out`, most significant first.
+	template<class Out> void put_length_octets(Out out, std::size_t length, unsigned count)
+	{
+		for (unsigned shift = 8 * count; shift != 0;) {
+			shift -= 8;
+			*out++ = static_cast<std::byte>((length >> shift) & 0xFFu);
+		}
+	}
+
 	std::string describe(tag expected, tag actual)
 	{
 		return "expected " + to_string(expected) + ", got " + to_string(actual);
@@ -92,11 +110,9 @@ void encode_length(std::pmr::vector<std::byte> &out, std::size_t length)
 		out.push_back(static_cast<std::byte>(length));
 		return;
 	}
-	std::array<std::byte, sizeof(std::size_t)> tmp{};
-	std::size_t count = 0;
-	for (std::size_t v = length; v != 0; v >>= 8) tmp[count++] = static_cast<std::byte>(v & 0xFFu);
+	const unsigned count = length_octet_count(length);
 	out.push_back(static_cast<std::byte>(0x80u | count));
-	for (std::size_t i = count; i > 0; --i) out.push_back(tmp[i - 1]);
+	put_length_octets(std::back_inserter(out), length, count);
 }
 
 void writer::put_identifier(tag t, bool constructed)
@@ -175,16 +191,12 @@ void writer::end_constructed(std::size_t mark, std::size_t resets)
 	// content, which moves it. Nested long-form elements therefore move their
 	// content once per level (quadratic in the nesting depth in the worst
 	// case); fine for LDAP message sizes and depths.
-	std::array<std::byte, sizeof(std::size_t)> octets{};
-	std::size_t count = 0;
-	for (std::size_t v = length; v != 0; v >>= 8) octets[count++] = static_cast<std::byte>(v & 0xFFu);
-	std::array<std::byte, sizeof(std::size_t)> big_endian{};
-	for (std::size_t i = 0; i < count; ++i) big_endian[i] = octets[count - 1 - i];
-	// Insert first (may throw; std::vector gives the strong guarantee for
-	// trivially copyable elements), then patch the placeholder, which cannot throw.
-	buf_.insert(buf_.begin() + static_cast<std::ptrdiff_t>(content_start),
-	  big_endian.begin(),
-	  big_endian.begin() + static_cast<std::ptrdiff_t>(count));
+	const unsigned count = length_octet_count(length);
+	// Make room first (may throw; std::vector gives the strong guarantee for
+	// trivially copyable elements), then fill it and patch the placeholder,
+	// which cannot throw.
+	const auto room = buf_.insert(buf_.begin() + static_cast<std::ptrdiff_t>(content_start), count, std::byte{ 0 });
+	put_length_octets(room, length, count);
 	buf_[mark + 1] = static_cast<std::byte>(0x80u | count);
 }
 
