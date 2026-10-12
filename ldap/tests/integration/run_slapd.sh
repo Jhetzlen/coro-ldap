@@ -97,6 +97,11 @@ sizelimit 1000
 # username is a uid, checked against the entry's cleartext userPassword.
 authz-regexp "^uid=([^,]+)(,cn=[^,]+)?,cn=scram-sha-256,cn=auth\$" "uid=\$1,ou=people,dc=example,dc=org"
 
+# cn=config, writable by cn=config / secret: a test toggles settings at
+# run time (olcDisallows) and restores them.
+database config
+rootpw secret
+
 database mdb
 maxsize 268435456
 suffix "dc=example,dc=org"

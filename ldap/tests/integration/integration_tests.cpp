@@ -96,6 +96,44 @@ class scram_giving_up final : public ldap::sasl_mechanism
 	ldap::sasl_scram_sha256 scram{ "user007", "pw-user007" };
 };
 
+// slapd refuses anonymous binds (olcDisallows: bind_anon, set through
+// cn=config, which run_slapd.sh makes writable) while this lives. The
+// setting is global: the tests run one at a time, and it is restored even
+// when the test fails.
+class anonymous_binds_disallowed
+{
+  public:
+	explicit anonymous_binds_disallowed(corosio::io_context &ioc)
+	  : ioc_(ioc), config_(open(ioc, env("JHETZ_LDAP_IT_LDAP")))
+	{
+		auto b = finish(ioc_, config_.simple_bind(config_dn, "secret"));
+		if (!b) FAIL("bind as cn=config: " << b.error().message());
+		auto m = finish(ioc_,
+		  config_.modify({ .object = config_dn, .changes = { ldap::mod::add("olcDisallows", { "bind_anon" }) } }));
+		if (!m) FAIL("disallow bind_anon: " << m.error().message());
+	}
+
+	anonymous_binds_disallowed(const anonymous_binds_disallowed &) = delete;
+	anonymous_binds_disallowed &operator=(const anonymous_binds_disallowed &) = delete;
+
+	~anonymous_binds_disallowed()
+	{
+		try {
+			auto m = finish(ioc_,
+			  config_.modify(
+				{ .object = config_dn, .changes = { ldap::mod::remove("olcDisallows", { "bind_anon" }) } }));
+			if (!m) WARN("could not allow bind_anon again: " << m.error().message());
+		} catch (...) {
+			WARN("could not allow bind_anon again");
+		}
+	}
+
+  private:
+	inline static const ldap::dn config_dn{ "cn=config" };
+	corosio::io_context &ioc_;
+	ldap::connection config_;
+};
+
 // A unique RDN value per test run, so runs against the same server do not collide.
 std::string unique(std::string_view stem)
 {
@@ -242,6 +280,26 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		REQUIRE(again.has_value());
 		CHECK(again->size() == 1);
 		CHECK(finish(ioc, c.who_am_i()) == "");
+	}
+	SECTION("a step the client fails, and a server that refuses the abort")
+	{
+		// slapd ends the exchange before it refuses the anonymous bind that
+		// aborts it (inappropriateAuthentication): the connection stays
+		// open and anonymous, and a bind then succeeds (coro_http_client-f1e.1).
+		const anonymous_binds_disallowed disallowed(ioc);
+		scram_giving_up mech;
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().context == "sasl bind SCRAM-SHA-256: giving up");
+		REQUIRE(c.is_open());
+		// The abort was refused: so is the same bind, made directly.
+		auto anonymous = finish(ioc, c.simple_bind({}, ""));
+		REQUIRE_FALSE(anonymous.has_value());
+		CHECK(anonymous.error().code == ldap::errc::inappropriate_authentication);
+		REQUIRE(c.is_open());
+		REQUIRE(
+		  finish(ioc, c.simple_bind(ldap::dn{ "uid=user007,ou=people,dc=example,dc=org" }, "pw-user007")).has_value());
+		CHECK(finish(ioc, c.who_am_i()) == "dn:uid=user007,ou=people,dc=example,dc=org");
 	}
 }
 
