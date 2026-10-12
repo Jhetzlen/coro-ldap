@@ -309,6 +309,23 @@ TEST_CASE("malformed pre-read and post-read controls", "[controls][read_entry]")
 		  == "read entry control: 1.2.3 is not pre-read or post-read");
 }
 
+TEST_CASE("control errors show the control type sanitized", "[controls]")
+{
+	const std::string fffd = "\xEF\xBF\xBD";// U+FFFD
+	// Valid non-ASCII UTF-8 is kept; CR LF, ESC and bidi controls are not.
+	const std::string type = "1.2\r\n\x1B\xE2\x80\xAE\xC3\xA9\xE6\x97\xA5";
+	const std::string shown = "1.2" + fffd + fffd + fffd + fffd + "\xC3\xA9\xE6\x97\xA5";
+	CHECK(std::string(ldap::decode_sort_result(ldap::control{ type }).error().context)
+		  == "sort result: control type is " + shown + ", not 1.2.840.113556.1.4.474");
+	CHECK(std::string(ldap::decode_read_entry(ldap::control{ type }).error().context)
+		  == "read entry: control type is " + shown + ", not pre-read or post-read");
+	CHECK(std::string(ldap::encode_read_entry(type, sample_entry()).error().context)
+		  == "read entry control: " + shown + " is not pre-read or post-read");
+	// Cut at 64 bytes, never inside a character.
+	CHECK(std::string(ldap::decode_sort_result(ldap::control{ std::string(63, '1') + "\xC3\xA9" }).error().context)
+		  == "sort result: control type is " + std::string(63, '1') + "..., not 1.2.840.113556.1.4.474");
+}
+
 TEST_CASE("find_pre_read and find_post_read", "[controls][read_entry]")
 {
 	const std::pmr::vector<ldap::control> both{ ldap::control{ "1.2.3" },

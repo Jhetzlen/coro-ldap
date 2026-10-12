@@ -486,7 +486,9 @@ referrals are listed, so a hostile server cannot inject log lines, terminal
 escapes or Trojan Source reordering, or make every message huge. The fields
 keep the text exactly as sent. Server text the library quotes in a
 `context` (a value that failed to convert, an entry's DN, a SCRAM server
-error) gets the same treatment, cut at 64 or 256 bytes.
+error, a control type, an AddRequest attribute, the text
+`attribute::parse` rejected) gets the same treatment, cut at 64 or 256
+bytes.
 
 LDAP result code 0 (success) is not an `errc` value: a successful result is
 the absence of an error.

@@ -5,6 +5,7 @@
 #include "pmr_util.hpp"
 
 #include <limits>
+#include <string>
 #include <utility>
 
 // Early return on failure: `LDAP_TRY(x, expr);` declares `x` from a result.
@@ -36,6 +37,17 @@ namespace {
 		// Not ranges::to: string_view -> pmr::string is explicit, so it would
 		// build each element as a nested range on the default resource first.
 		return string_list(list.begin(), list.end(), alloc);
+	}
+
+	// `before`, the peer's `text` sanitized and cut to 64 bytes
+	// (detail::append_sanitized), then `after`: an error context naming a
+	// control type or attribute the peer sent.
+	std::string sanitized_context(std::string_view before, std::string_view text, std::string_view after)
+	{
+		std::string out(before);
+		detail::append_sanitized(out, text, 64);
+		out += after;
+		return out;
 	}
 
 }// namespace
@@ -962,7 +974,7 @@ namespace {
 			LDAP_TRY_VOID(read_attributes(o, add.attributes));
 			for (const auto &a : add.attributes)
 				if (a.values.empty())
-					return bad(detail::format("add request attribute '{}' without values", a.type), attrs_at);
+					return bad(sanitized_context("add request attribute '", a.type, "' without values"), attrs_at);
 			LDAP_TRY_VOID(skip_rest(o));
 			return op;
 		}
@@ -1219,7 +1231,7 @@ result<paged_results> decode_paged_results(const control &c, std::pmr::memory_re
 {
 	if (c.type != paged_results_oid)
 		return fail(client_errc::decode_error,
-		  detail::format("paged results: control type is {}, not {}", c.type, paged_results_oid));
+		  sanitized_context("paged results: control type is ", c.type, detail::format(", not {}", paged_results_oid)));
 	if (!c.value) return fail(client_errc::decode_error, "paged results: control has no value");
 	// The control value was already taken out of its OCTET STRING by
 	// decode(), so it is decoded with its own reader (offsets relative to the
@@ -1243,7 +1255,8 @@ namespace {
 	result<void> expect_control(const control &c, std::string_view oid, std::string_view what)
 	{
 		if (c.type != oid)
-			return fail(client_errc::decode_error, detail::format("{}: control type is {}, not {}", what, c.type, oid));
+			return fail(client_errc::decode_error,
+			  sanitized_context(detail::format("{}: control type is ", what), c.type, detail::format(", not {}", oid)));
 		if (!c.value) return fail(client_errc::decode_error, detail::format("{}: control has no value", what));
 		return {};
 	}
@@ -1318,7 +1331,7 @@ result<control> encode_read_entry(std::string_view oid,
 {
 	if (oid != pre_read_oid && oid != post_read_oid)
 		return fail(
-		  client_errc::encode_error, detail::format("read entry control: {} is not pre-read or post-read", oid));
+		  client_errc::encode_error, sanitized_context("read entry control: ", oid, " is not pre-read or post-read"));
 	ber::writer w{ ber::writer::allocator_type(mr) };
 	op_writer{ w }(entry);
 	return bytes_control(oid, criticality, w, mr);
@@ -1328,7 +1341,7 @@ result<search_result_entry> decode_read_entry(const control &c, const decode_opt
 {
 	if (c.type != pre_read_oid && c.type != post_read_oid)
 		return fail(client_errc::decode_error,
-		  detail::format("read entry: control type is {}, not pre-read or post-read", c.type));
+		  sanitized_context("read entry: control type is ", c.type, ", not pre-read or post-read"));
 	const std::string_view name = c.type == pre_read_oid ? "pre-read" : "post-read";
 	LDAP_TRY_VOID(expect_control(c, c.type, name));
 	return in_control(decoder(options).run_entry(std::as_bytes(std::span(*c.value))), name);

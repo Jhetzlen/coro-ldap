@@ -70,6 +70,22 @@ TEST_CASE("invalid attribute descriptions", "[attribute]")
 	CHECK(b.error().code == client_errc::invalid_attribute);
 }
 
+TEST_CASE("attribute::parse shows its input sanitized", "[attribute]")
+{
+	const std::string fffd = "\xEF\xBF\xBD";// U+FFFD
+	const auto context = [](std::string_view text) {
+		auto r = ldap::attribute::parse(text);
+		REQUIRE_FALSE(r);
+		return std::string(r.error().context);
+	};
+	// Valid non-ASCII UTF-8 is kept; CR LF, ESC, bidi controls and ill-formed bytes are not.
+	CHECK(context("n\xC3\xA9 \xE6\x97\xA5\r\n\x1B\xE2\x80\xAE\xFF")
+		  == "attribute: \"n\xC3\xA9 \xE6\x97\xA5" + fffd + fffd + fffd + fffd + fffd
+			   + "\" is not an attribute description");
+	CHECK(context(std::string(1000, '_'))
+		  == "attribute: \"" + std::string(64, '_') + "...\" is not an attribute description");
+}
+
 TEST_CASE("ci_hash / ci_equal fold A-Z only, in every byte position", "[attribute]")
 {
 	// Every pair of byte values, at each position of strings around the

@@ -1,5 +1,7 @@
 #include "jhetz/ldap/attribute.hpp"
 
+#include "format_util.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -11,9 +13,13 @@ namespace jhetz::ldap {
 
 result<attribute> attribute::parse(std::string_view text, std::pmr::memory_resource *mr)
 {
-	if (!detail::is_attribute_description(text))
-		return fail(
-		  client_errc::invalid_attribute, "attribute: \"" + std::string(text) + "\" is not an attribute description");
+	if (!detail::is_attribute_description(text)) {
+		// The text may be a value a server sent.
+		std::string context = "attribute: \"";
+		detail::append_sanitized(context, text, 64);
+		context += "\" is not an attribute description";
+		return fail(client_errc::invalid_attribute, context);
+	}
 	return unchecked(text, mr);
 }
 

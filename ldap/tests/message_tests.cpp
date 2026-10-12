@@ -775,6 +775,40 @@ TEST_CASE("add and modify-add values must not be empty", "[message]")
 	CHECK(code_of(ldap::decode(mod_bytes)) == client_errc::decode_error);
 }
 
+TEST_CASE("decode errors show the peer's attribute and control type sanitized", "[message]")
+{
+	const std::string fffd = "\xEF\xBF\xBD";// U+FFFD
+	const auto add_context = [](const std::string &type) {
+		auto bytes = raw_message(1, [&](ber::writer &m) {
+			m.constructed(ber::application(8), [&](ber::writer &o) {
+				o.octet_string("cn=x");
+				o.constructed(ber::tags::sequence, [&](ber::writer &list) {
+					list.constructed(ber::tags::sequence, [&](ber::writer &pa) {
+						pa.octet_string(type);
+						pa.constructed(ber::tags::set, [](ber::writer &) {});
+					});
+				});
+			});
+		});
+		auto r = ldap::decode(bytes);
+		REQUIRE_FALSE(r);
+		return std::string(r.error().context);
+	};
+	// Valid non-ASCII UTF-8 is kept; CR LF, ESC and bidi controls are not.
+	CHECK(add_context("n\xC3\xA9\xE6\x97\xA5\r\nx\x1B\xE2\x80\xAE")
+		.starts_with("message: add request attribute 'n\xC3\xA9\xE6\x97\xA5" + fffd + fffd + "x" + fffd + fffd
+					 + "' without values at offset "));
+	// Cut at 64 bytes.
+	CHECK(add_context(std::string(1000, 'a'))
+		.starts_with("message: add request attribute '" + std::string(64, 'a') + "...' without values at offset "));
+
+	const std::string paged =
+	  std::string(ldap::decode_paged_results({ "1.2.3\r\n\xC3\xA9", false, "" }).error().context);
+	CHECK(paged
+		  == "paged results: control type is 1.2.3" + fffd + fffd + "\xC3\xA9, not "
+			   + std::string(ldap::paged_results_oid));
+}
+
 TEST_CASE("peek_message_header reads the id and the operation tag only", "[message]")
 {
 	const auto bytes = ldap::encode(ldap::message{ 4711, ldap::search_result_done{ ldap::ldap_result{ 0 } } }).value();
