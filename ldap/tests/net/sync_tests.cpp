@@ -1,5 +1,6 @@
 // ldap::sync::client against an in-process LDAP server on loopback TCP that
 // runs on its own thread and io_context and answers requests as they come.
+#include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -7,16 +8,23 @@
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/ipv4_address.hpp>
+#include <boost/corosio/openssl_stream.hpp>
 #include <boost/corosio/tcp_acceptor.hpp>
 #include <boost/corosio/tcp_socket.hpp>
+#include <boost/corosio/tls_context.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <future>
+#include <span>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -189,6 +197,413 @@ TEST_CASE("sync: connect failures and destruction without unbind", "[net][sync]"
 		REQUIRE(c.simple_bind(ldap::dn{}, "").has_value());
 	}// destroyed while connected: closes and joins
 	SUCCEED();
+}
+
+// ---------------------------------------------------------------- wrappers
+//
+// Each wrapper against a scripted server (mock_ldap.hpp's serve_script) on
+// its own thread: the request on the wire, the value returned, and an LDAP
+// error result returned as the same ldap::error as the async API's.
+
+namespace {
+
+// One connection accepted on loopback, served by a scripted session (or a
+// StartTLS upgrade) on the server's own thread and io_context.
+struct peer_server
+{
+	corosio::io_context ioc{};
+	corosio::tcp_acceptor acc{ ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1 };
+	corosio::tcp_socket peer{ ioc };
+	server_log log{};
+	outcome<void> session{};
+	std::thread thread{};
+
+	peer_server()
+	{
+		log.hang_up = [this] { peer.close(); };
+	}
+	peer_server(const peer_server &) = delete;
+	peer_server &operator=(const peer_server &) = delete;
+
+	// Ends a session still waiting (the test failed before the client hung
+	// up), then joins.
+	~peer_server()
+	{
+		if (!thread.joinable()) return;
+		capy::run_async(ioc.get_executor())([](corosio::tcp_acceptor &a, corosio::tcp_socket &p) -> capy::task<void> {
+			a.close();
+			p.close();
+			co_return;
+		}(acc, peer));
+		thread.join();
+	}
+
+	void serve(std::vector<step> script)
+	{
+		start(serve_script(net::transport::wrap(socket_ref{ &peer }, "server"), std::move(script), log));
+	}
+
+	// Answers StartTLS with success, runs the server side of the handshake
+	// with `leaf`, then answers binds over TLS until the client hangs up.
+	void serve_start_tls(test_pki::issued leaf) { start(upgrade(peer, std::move(leaf), log)); }
+
+	ldap::url url() const
+	{
+		return *ldap::url::parse("ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port()));
+	}
+
+	// Waits for the session to end: the script ran out, or the client hung
+	// up. After it the test thread may read the log.
+	void join()
+	{
+		thread.join();
+		session.get();
+	}
+
+  private:
+	void start(capy::task<void> s)
+	{
+		spawn(
+		  ioc,
+		  [](corosio::tcp_acceptor &a, corosio::tcp_socket &p, capy::task<void> t) -> capy::task<void> {
+			  auto [ec] = co_await a.accept(p);
+			  if (ec) throw std::system_error(ec, "accept");
+			  co_await std::move(t);
+		  }(acc, peer, std::move(s)),
+		  session);
+		thread = std::thread([this] { ioc.run(); });
+	}
+
+	static capy::task<void> upgrade(corosio::tcp_socket &peer, test_pki::issued leaf, server_log &log)
+	{
+		net::transport plain = net::transport::wrap(socket_ref{ &peer }, "server");
+		net::read_buffer buf;
+		auto req = co_await net::read_message(plain, buf, as_server);
+		if (!req) {
+			log.error = "read StartTLS: " + std::string(req.error().message());
+			co_return;
+		}
+		const std::int32_t id = req->id;
+		log.received.push_back(std::move(*req));
+		const std::string ok = bytes_of(
+		  ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ 0 }, std::string(ldap::start_tls_oid) } });
+		if (auto w = co_await net::write_bytes(plain, std::as_bytes(std::span(ok))); !w) {
+			log.error = "write: " + std::string(w.error().message());
+			co_return;
+		}
+		corosio::tls_context ctx;
+		if (ctx.use_certificate(leaf.cert_pem, corosio::tls_file_format::pem)
+			|| ctx.use_private_key(leaf.key_pem, corosio::tls_file_format::pem)) {
+			log.error = "server certificate";
+			co_return;
+		}
+		corosio::openssl_stream tls(&peer, ctx);
+		if (auto [ec] = co_await tls.handshake(corosio::tls_role::server); ec) {
+			log.error = "server handshake: " + ec.message();
+			co_return;
+		}
+		net::transport secure = net::transport::wrap(socket_ref{ &tls }, "server tls");
+		net::read_buffer tls_buf;
+		while (true) {
+			auto r = co_await net::read_message(secure, tls_buf, as_server);
+			if (!r) co_return;// the client hung up
+			const std::string out = bytes_of(bind_resp(r->id));
+			log.received.push_back(std::move(*r));
+			if (auto w = co_await net::write_bytes(secure, std::as_bytes(std::span(out))); !w) {
+				log.error = "write over TLS: " + std::string(w.error().message());
+				co_return;
+			}
+		}
+	}
+};
+
+// A client connected to `srv`.
+struct connected
+{
+	ldap::sync::client c{};
+	explicit connected(peer_server &srv) { REQUIRE(c.connect(srv.url()).has_value()); }
+};
+
+// Hangs up and waits for the server's session to end; what it received.
+std::vector<ldap::message> &hang_up(ldap::sync::client &c, peer_server &srv)
+{
+	c.close();
+	srv.join();
+	CHECK(srv.log.error == "");
+	return srv.log.received;
+}
+
+template<class Response>
+ldap::message result_msg(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic = {})
+{
+	return ldap::message{ id, Response{ ldap::ldap_result{ code, "", diagnostic } } };
+}
+
+const ldap::dn jdoe{ "uid=jdoe,ou=people,dc=example,dc=org" };
+constexpr std::string_view jdoe_str = "uid=jdoe,ou=people,dc=example,dc=org";
+
+}// namespace
+
+TEST_CASE("sync: sasl_bind", "[net][sync][sasl]")
+{
+	peer_server srv;
+	srv.serve({ answer({ ldap::message{ 1, ldap::bind_response{ ldap::ldap_result{ 0 } } } }),
+	  answer({ ldap::message{ 2, ldap::bind_response{ ldap::ldap_result{ 48, "", "no client certificate" } } } }) });
+	connected k(srv);
+	ldap::sasl_external as_jdoe("dn:uid=jdoe,ou=people,dc=example,dc=org");
+	REQUIRE(k.c.sasl_bind(as_jdoe).has_value());
+	ldap::sasl_external plain;
+	auto r = k.c.sasl_bind(plain);
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::errc::inappropriate_authentication);
+	CHECK(r.error().code == ldap::cond::auth_failed);
+	CHECK(r.error().diagnostic == "no client certificate");
+	CHECK(r.error().context == "sasl bind EXTERNAL");
+	CHECK(k.c.is_open());
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 2);
+	CHECK(got[0]
+		  == ldap::message{
+			1, ldap::bind_request{ 3, "", ldap::sasl_auth{ "EXTERNAL", "dn:uid=jdoe,ou=people,dc=example,dc=org" } } });
+	CHECK(got[1] == ldap::message{ 2, ldap::bind_request{ 3, "", ldap::sasl_auth{ "EXTERNAL", "" } } });
+}
+
+TEST_CASE("sync: start_tls refused leaves the connection in clear", "[net][sync][starttls]")
+{
+	peer_server srv;
+	srv.serve({ answer({ ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 52, "", "no TLS here" } } } }),
+	  answer({ bind_resp(2) }) });
+	connected k(srv);
+	CHECK_FALSE(k.c.is_tls());
+	auto r = k.c.start_tls();
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::errc::unavailable);
+	CHECK(r.error().diagnostic == "no TLS here");
+	CHECK(r.error().context == "start tls");
+	CHECK(k.c.is_open());
+	CHECK_FALSE(k.c.is_tls());
+	CHECK(k.c.simple_bind(*ldap::dn::parse(admin), "secret").has_value());
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 2);
+	CHECK(got[0] == ldap::message{ 1, ldap::extended_request{ ldap::start_tls_oid } });
+	CHECK(got[1] == bind_request_msg(2));
+}
+
+TEST_CASE("sync: start_tls upgrades, then is_tls()", "[net][sync][starttls]")
+{
+	test_pki pki("jhetz-ldap sync StartTLS test CA");
+	peer_server srv;
+	srv.serve_start_tls(pki.issue("localhost", "DNS:localhost,IP:127.0.0.1"));
+	connected k(srv);
+	CHECK_FALSE(k.c.is_tls());
+	auto r = k.c.start_tls({ .ca_pem = std::pmr::string(pki.ca_pem()) }, std::chrono::seconds(10));
+	REQUIRE(r.has_value());
+	CHECK(k.c.is_tls());
+	CHECK(k.c.is_open());
+	CHECK(k.c.simple_bind(*ldap::dn::parse(admin), "secret").has_value());
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 2);
+	CHECK(got[0] == ldap::message{ 1, ldap::extended_request{ ldap::start_tls_oid } });
+	CHECK(got[1] == bind_request_msg(2));
+}
+
+TEST_CASE("sync: add", "[net][sync]")
+{
+	const ldap::control post_read{ "1.3.6.1.1.13.2", false, "entry" };
+	ldap::message ok = result_msg<ldap::add_response>(1);
+	ok.controls.push_back(post_read);
+	peer_server srv;
+	srv.serve({ answer({ ok }), answer({ result_msg<ldap::add_response>(2, 68, "exists") }) });
+	connected k(srv);
+	auto r =
+	  k.c.add({ .entry = jdoe, .attributes = { { "objectClass", { "inetOrgPerson" } }, { "cn", { "Jöhn Doe" } } } });
+	REQUIRE(r.has_value());
+	REQUIRE(r->controls.size() == 1);
+	CHECK(r->controls[0] == post_read);
+	auto again = k.c.add({ .entry = jdoe, .attributes = { { "cn", { "x" } } } });
+	REQUIRE_FALSE(again.has_value());
+	CHECK(again.error().code == ldap::errc::entry_already_exists);
+	CHECK(again.error().code == ldap::cond::already_exists);
+	CHECK(again.error().context == "add uid=jdoe,ou=people,dc=example,dc=org");
+	CHECK(again.error().diagnostic == "exists");
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 2);
+	CHECK(got[0]
+		  == ldap::message{
+			1, ldap::add_request{ jdoe_str, { { "objectClass", { "inetOrgPerson" } }, { "cn", { "Jöhn Doe" } } } } });
+}
+
+TEST_CASE("sync: modify", "[net][sync]")
+{
+	peer_server srv;
+	srv.serve({ answer({ result_msg<ldap::modify_response>(1) }),
+	  answer({ result_msg<ldap::modify_response>(2, 50, "no write access") }) });
+	connected k(srv);
+	auto r = k.c.modify(
+	  { .object = jdoe, .changes = { ldap::mod::replace("sn", { "Doe" }), ldap::mod::remove("description") } });
+	REQUIRE(r.has_value());
+	CHECK(r->controls.empty());
+	auto denied = k.c.modify({ .object = jdoe, .changes = { ldap::mod::replace("sn", { "X" }) } });
+	REQUIRE_FALSE(denied.has_value());
+	CHECK(denied.error().code == ldap::errc::insufficient_access_rights);
+	CHECK(denied.error().code == ldap::cond::access_denied);
+	CHECK(denied.error().context == "modify uid=jdoe,ou=people,dc=example,dc=org");
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 2);
+	using op = ldap::modify_operation;
+	CHECK(got[0]
+		  == ldap::message{ 1,
+			ldap::modify_request{ jdoe_str,
+			  { ldap::modify_change{ op::replace, { "sn", { "Doe" } } },
+				ldap::modify_change{ op::delete_, { "description", {} } } } } });
+}
+
+TEST_CASE("sync: del", "[net][sync]")
+{
+	peer_server srv;
+	srv.serve({ answer({ result_msg<ldap::del_response>(1) }),
+	  answer({ result_msg<ldap::del_response>(2, 66, "has children") }) });
+	connected k(srv);
+	REQUIRE(k.c.del({ .entry = jdoe }).has_value());
+	auto busy = k.c.del({ .entry = *ldap::dn::parse(people) });
+	REQUIRE_FALSE(busy.has_value());
+	CHECK(busy.error().code == ldap::errc::not_allowed_on_non_leaf);
+	CHECK(busy.error().context == "delete ou=people,dc=example,dc=org");
+	CHECK(busy.error().diagnostic == "has children");
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 2);
+	CHECK(got[0] == ldap::message{ 1, ldap::del_request{ jdoe_str } });
+	CHECK(got[1] == ldap::message{ 2, ldap::del_request{ people } });
+}
+
+TEST_CASE("sync: modify_dn", "[net][sync]")
+{
+	peer_server srv;
+	srv.serve({ answer({ result_msg<ldap::modify_dn_response>(1) }),
+	  answer({ result_msg<ldap::modify_dn_response>(2, 68, "target exists") }) });
+	connected k(srv);
+	REQUIRE(k.c
+			  .modify_dn({ .entry = jdoe,
+				.new_rdn = ldap::rdn{ "uid=john.doe" },
+				.delete_old_rdn = false,
+				.new_superior = ldap::dn{ "ou=alumni,dc=example,dc=org" } })
+			  .has_value());
+	auto taken = k.c.modify_dn({ .entry = jdoe, .new_rdn = ldap::rdn{ "uid=jane" } });
+	REQUIRE_FALSE(taken.has_value());
+	CHECK(taken.error().code == ldap::errc::entry_already_exists);
+	CHECK(taken.error().diagnostic == "target exists");
+	// Refused before anything is sent.
+	auto empty = k.c.modify_dn({ .entry = jdoe });
+	REQUIRE_FALSE(empty.has_value());
+	CHECK(empty.error().code == ldap::client_errc::invalid_dn);
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 2);
+	CHECK(
+	  got[0]
+	  == ldap::message{ 1, ldap::modify_dn_request{ jdoe_str, "uid=john.doe", false, "ou=alumni,dc=example,dc=org" } });
+	CHECK(got[1] == ldap::message{ 2, ldap::modify_dn_request{ jdoe_str, "uid=jane", true } });
+}
+
+TEST_CASE("sync: compare", "[net][sync]")
+{
+	peer_server srv;
+	srv.serve({ answer({ result_msg<ldap::compare_response>(1, 6) }),
+	  answer({ result_msg<ldap::compare_response>(2, 5) }),
+	  answer({ result_msg<ldap::compare_response>(3, 16, "no such attribute") }) });
+	connected k(srv);
+	auto yes = k.c.compare({ .entry = jdoe, .attribute = "mail", .value = "jdoe@example.org" });
+	REQUIRE(yes.has_value());
+	CHECK(*yes);
+	auto no = k.c.compare({ .entry = jdoe, .attribute = "cn", .value = "Jöhn" });
+	REQUIRE(no.has_value());
+	CHECK_FALSE(*no);
+	auto missing = k.c.compare({ .entry = jdoe, .attribute = "pager", .value = "1" });
+	REQUIRE_FALSE(missing.has_value());
+	CHECK(missing.error().code == ldap::errc::no_such_attribute);
+	CHECK(missing.error().code == ldap::cond::not_found);
+	CHECK(missing.error().context == "compare uid=jdoe,ou=people,dc=example,dc=org");
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 3);
+	CHECK(got[0] == ldap::message{ 1, ldap::compare_request{ jdoe_str, { "mail", "jdoe@example.org" } } });
+	CHECK(got[1] == ldap::message{ 2, ldap::compare_request{ jdoe_str, { "cn", "Jöhn" } } });
+}
+
+TEST_CASE("sync: extended", "[net][sync]")
+{
+	peer_server srv;
+	srv.serve({ answer({ ldap::message{
+				  1, ldap::extended_response{ ldap::ldap_result{ 0 }, "1.2.3.4.5", std::string("\x04\x01x", 3) } } }),
+	  answer({ ldap::message{
+		2, ldap::extended_response{ ldap::ldap_result{ 2, "", "unsupported extended operation" } } } }) });
+	connected k(srv);
+	auto x = k.c.extended({ .name = "1.2.3.4", .value = std::string("\x30\x00", 2) });
+	REQUIRE(x.has_value());
+	CHECK(x->name == "1.2.3.4.5");
+	CHECK(x->value == std::pmr::string("\x04\x01x", 3));
+	auto unknown = k.c.extended({ .name = "1.9.9" });
+	REQUIRE_FALSE(unknown.has_value());
+	CHECK(unknown.error().code == ldap::errc::protocol_error);
+	CHECK(unknown.error().context == "extended operation 1.9.9");
+	CHECK(unknown.error().diagnostic == "unsupported extended operation");
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 2);
+	CHECK(got[0] == ldap::message{ 1, ldap::extended_request{ "1.2.3.4", std::string("\x30\x00", 2) } });
+	CHECK(got[1] == ldap::message{ 2, ldap::extended_request{ "1.9.9" } });
+}
+
+TEST_CASE("sync: password_modify", "[net][sync]")
+{
+	using namespace std::string_literals;
+	peer_server srv;
+	srv.serve({ answer({ ldap::message{
+				  1, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, "\x30\x07\x80\x05s3cr3"s } } }),
+	  answer({ ldap::message{ 2, ldap::extended_response{ ldap::ldap_result{ 49, "", "old password wrong" } } } }) });
+	connected k(srv);
+	auto generated = k.c.password_modify({ .user = std::string(jdoe_str) });
+	REQUIRE(generated.has_value());
+	CHECK(*generated == "s3cr3");
+	auto refused = k.c.password_modify({ .user = "uid=jdoe", .old_password = "bad", .new_password = "new" });
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::errc::invalid_credentials);
+	CHECK(refused.error().context == "password modify uid=jdoe");
+	CHECK(refused.error().diagnostic == "old password wrong");
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 2);
+	// SEQUENCE { [0] user }
+	CHECK(
+	  got[0]
+	  == ldap::message{ 1,
+		ldap::extended_request{ ldap::password_modify_oid, "\x30\x26\x80\x24uid=jdoe,ou=people,dc=example,dc=org"s } });
+	// SEQUENCE { [0] user, [1] old, [2] new }
+	CHECK(got[1]
+		  == ldap::message{ 2,
+			ldap::extended_request{ ldap::password_modify_oid,
+			  "\x30\x14\x80\x08uid=jdoe\x81\x03"
+			  "bad\x82\x03new"s } });
+}
+
+TEST_CASE("sync: close without an UnbindRequest", "[net][sync]")
+{
+	{
+		ldap::sync::client never;
+		never.close();// nothing to close
+		CHECK_FALSE(never.is_open());
+		CHECK_FALSE(never.is_tls());
+	}
+	peer_server srv;
+	srv.serve({ answer({ bind_resp(1) }) });
+	connected k(srv);
+	REQUIRE(k.c.simple_bind(*ldap::dn::parse(admin), "secret").has_value());
+	k.c.close();
+	CHECK_FALSE(k.c.is_open());
+	auto after = k.c.who_am_i();
+	REQUIRE_FALSE(after.has_value());
+	CHECK(after.error().code == ldap::client_errc::not_connected);
+	k.c.close();// again: nothing happens
+	// The server saw the bind, then the connection end: no UnbindRequest.
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 1);
+	CHECK(got[0] == bind_request_msg(1));
 }
 
 #ifdef JHETZ_LDAPSEARCH

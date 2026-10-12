@@ -10,6 +10,7 @@
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/sasl_scram.hpp"
+#include "jhetz/ldap/sync.hpp"
 
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/ex/run_async.hpp>
@@ -612,6 +613,66 @@ TEST_CASE("integration: password modify (RFC 3062)", "[integration]")
 		CHECK(old.error().code == ldap::errc::invalid_credentials);
 	}
 	REQUIRE(finish(ioc, c.del({ .entry = entry })).has_value());
+}
+
+// ---------------------------------------------------------------- sync client
+
+TEST_CASE("integration: the sync client", "[integration][sync]")
+{
+	REQUIRE_SLAPD();
+	SECTION("StartTLS, then writes")
+	{
+		ldap::sync::client c(trusting());
+		auto u = env("JHETZ_LDAP_IT_LDAP");
+		u.replace(u.find("127.0.0.1"), 9, "localhost");
+		REQUIRE(c.connect(*ldap::url::parse(u)).has_value());
+		CHECK_FALSE(c.is_tls());
+		net::tls_options tls;
+		tls.ca_file = env("JHETZ_LDAP_IT_CA");
+		REQUIRE(c.start_tls(std::move(tls)).has_value());
+		CHECK(c.is_tls());
+		REQUIRE(c.simple_bind(admin, "secret").has_value());
+
+		const std::string name = unique("sync");
+		const ldap::dn entry = *ldap::dn::parse("uid=" + name + ",ou=people,dc=example,dc=org");
+		const ldap::add_params add{ .entry = entry,
+			.attributes = { { "objectClass", { "inetOrgPerson" } },
+			  { "uid", { name } },
+			  { "cn", { "Synchrone" } },
+			  { "sn", { "Zoë" } } } };
+		REQUIRE(c.add(add).has_value());
+		auto again = c.add(add);
+		REQUIRE_FALSE(again.has_value());
+		CHECK(again.error().code == ldap::cond::already_exists);
+		REQUIRE(
+		  c.modify({ .object = entry, .changes = { ldap::mod::add("mail", { "sync@example.org" }) } }).has_value());
+		CHECK(c.compare({ .entry = entry, .attribute = "mail", .value = "sync@example.org" }) == true);
+		CHECK(c.compare({ .entry = entry, .attribute = "sn", .value = "Zoe" }) == false);
+		auto pw = c.password_modify({ .user = std::string(entry.to_string()) });
+		REQUIRE(pw.has_value());
+		CHECK(pw->has_value());
+		const ldap::dn renamed = *ldap::dn::parse("uid=" + name + "-r,ou=people,dc=example,dc=org");
+		REQUIRE(c.modify_dn({ .entry = entry, .new_rdn = renamed.rdns().front() }).has_value());
+		REQUIRE(c.del({ .entry = renamed }).has_value());
+		auto gone = c.del({ .entry = renamed });
+		REQUIRE_FALSE(gone.has_value());
+		CHECK(gone.error().code == ldap::errc::no_such_object);
+		auto x = c.extended({ .name = std::string(ldap::who_am_i_oid) });
+		REQUIRE(x.has_value());
+		CHECK(x->value == "dn:cn=admin,dc=example,dc=org");
+		REQUIRE(c.unbind().has_value());
+		CHECK_FALSE(c.is_open());
+	}
+	SECTION("SASL EXTERNAL over ldapi://, then close")
+	{
+		ldap::sync::client c(trusting());
+		REQUIRE(c.connect(*ldap::url::parse(env("JHETZ_LDAP_IT_LDAPI"))).has_value());
+		ldap::sasl_external mech;
+		REQUIRE(c.sasl_bind(mech).has_value());
+		CHECK_THAT(c.who_am_i().value(), ContainsSubstring("cn=peercred,cn=external,cn=auth"));
+		c.close();
+		CHECK_FALSE(c.is_open());
+	}
 }
 
 // ---------------------------------------------------------------- cancellation
