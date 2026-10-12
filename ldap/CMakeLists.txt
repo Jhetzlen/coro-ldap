@@ -154,8 +154,8 @@ jhetz_ldap_warnings(jhetz_ldap)
 if(JHETZ_LDAP_BUILD_NET)
     include(FetchContent)
     # Installed packages (boost_capy, boost_corosio on CMAKE_PREFIX_PATH)
-    # are used when found; otherwise the same pinned commits as
-    # examples/corosio are fetched. Local checkouts can be used with
+    # are used when found; otherwise these pinned commits are fetched.
+    # Local checkouts can be used with
     # -DFETCHCONTENT_SOURCE_DIR_CAPY=... -DFETCHCONTENT_SOURCE_DIR_COROSIO=...
     # SYSTEM: our warning flags must not fire on their headers.
     FetchContent_Declare(capy

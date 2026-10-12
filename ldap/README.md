@@ -77,8 +77,8 @@ C++23 LDAP client library, in progress. Design: [`docs/ldap/DESIGN.md`](../docs/
 
 A second library (target `jhetz::ldap_net`, option `JHETZ_LDAP_BUILD_NET`,
 on by default) with the network parts. It depends on Corosio and Capy
-(fetched with FetchContent at the same pinned commits as
-`examples/corosio/`), OpenSSL and ICU; `jhetz::ldap` itself stays dependency-free.
+(fetched with FetchContent at pinned commits), OpenSSL and ICU; `jhetz::ldap`
+itself stays dependency-free.
 
 - `jhetz/ldap/net/transport.hpp`: `net::transport`, the one byte stream a
   connection uses: plain TCP (`ldap://`), TLS over TCP (`ldaps://`), a Unix

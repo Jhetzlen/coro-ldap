@@ -1,12 +1,19 @@
 # LDAP client: API design
 
-Status: the roadmap in `ROADMAP.md` is implemented under `ldap/` (codec,
-connection with multiplexing, every RFC 4511 operation, StartTLS, SASL,
-typed mapping, runtime schema checks, blocking facade, `ldapsearch`).
+Status: implemented under `ldap/` (codec, connection with multiplexing,
+every RFC 4511 operation, StartTLS, SASL, typed mapping, runtime schema
+checks, blocking facade, `ldapsearch`). The original roadmap (GitHub
+tickets #2 to #20, done by 2026-10-07) and the pre-implementation API
+sketch `api_prototype.cpp` were removed once finished; see the git history.
 "Implemented" notes say where the code differs from the original plan.
 Remaining work is tracked in beads (`bd list`).
-`api_prototype.cpp` next to this file checks that the type-safety parts of
-section 4 compile as C++23 (GCC 16).
+
+Definition of done for a change: GCC 16 Debug with
+`-DJHETZ_LDAP_SANITIZE=ON -DJHETZ_LDAP_WERROR=ON` builds without warnings
+and `ctest` is green (network tests also under `--repeat until-fail:10
+-j8`); new parsers of untrusted input get a fuzz target, seeds and a GCC
+replay test; `clang-format --dry-run --Werror` (clang-format 23) is clean;
+this document is updated.
 
 ## Goals
 
@@ -920,7 +927,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   additions.
 - Compilers: GCC 16+; Clang 23+ with libstdc++ 16+ (CMake checks all three
   at configure time); MSVC 17.8+. No workarounds for older compilers.
-- Corosio and Capy pinned by commit, as in `examples/corosio/`, used only by
+- Corosio and Capy pinned by commit (FetchContent), used only by
   `jhetz_ldap_net` (option `JHETZ_LDAP_BUILD_NET`, off in fuzz builds);
   it also needs OpenSSL. The codec library `jhetz_ldap` has no dependencies.
 - ICU (decision 6; `find_package(ICU COMPONENTS uc data)`) for Unicode

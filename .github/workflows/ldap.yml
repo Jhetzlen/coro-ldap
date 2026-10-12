@@ -7,12 +7,10 @@ on:
     branches: [master, main]
     paths:
       - "ldap/**"
-      - "examples/corosio/**"
       - ".github/workflows/ldap.yml"
   pull_request:
     paths:
       - "ldap/**"
-      - "examples/corosio/**"
       - ".github/workflows/ldap.yml"
 
 permissions:
@@ -97,28 +95,6 @@ jobs:
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
-
-  # The standalone Corosio examples (examples/corosio): same pinned Corosio and
-  # Capy commits as jhetz::ldap_net. Built only; the echo client needs a server.
-  corosio-examples:
-    name: Corosio examples (GCC 16)
-    runs-on: ubuntu-24.04
-    container: debian:sid
-    steps:
-      - name: Install tools
-        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build g++-16 libssl-dev
-      - uses: actions/checkout@v4
-      - name: Configure
-        run: >
-          cmake -S examples/corosio -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_CXX_COMPILER=g++-16
-          -DCOROSIO_EXAMPLES_WERROR=ON
-      - name: Build
-        run: cmake --build build
-      # Runs entirely in-process (no server needed).
-      - name: Run result_future example
-        run: build/corosio_result_future
 
   integration:
     name: Integration (OpenLDAP slapd, GCC 16, ASan + UBSan)
