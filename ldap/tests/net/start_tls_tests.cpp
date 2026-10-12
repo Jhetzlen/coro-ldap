@@ -187,8 +187,26 @@ TEST_CASE("start_tls: upgrade, then LDAP over TLS", "[net][starttls]")
 	auto b = finish(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
 	CHECK(b.has_value());
 	c.close();
+	// is_tls() describes the open connection: false once closed.
+	CHECK_FALSE(c.is_open());
+	CHECK_FALSE(c.is_tls());
 	drive(f.ioc);
 	CHECK(f.server.get() == "");
+}
+
+TEST_CASE("start_tls: is_tls() is false once the server drops the connection", "[net][starttls]")
+{
+	tls_fixture f;
+	f.serve(mode::upgrade);// answers one request over TLS, then hangs up
+	auto c = f.connect(trusting({ .start_tls = true }));
+	CHECK(c.is_tls());
+	REQUIRE(finish(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+	drive_until(f.ioc, [&f] { return f.server.done(); });
+	CHECK(f.server.get() == "");
+	auto r = finish(f.ioc, c.search({}));
+	REQUIRE_FALSE(r.has_value());
+	CHECK_FALSE(c.is_open());
+	CHECK_FALSE(c.is_tls());
 }
 
 TEST_CASE("start_tls: connection_options::start_tls upgrades right after connecting", "[net][starttls]")
@@ -209,8 +227,10 @@ TEST_CASE("start_tls: unbind ends the TLS session with close_notify", "[net][sta
 	f.serve(mode::unbind);
 	auto c = f.connect(trusting({ .start_tls = true }));
 	REQUIRE(finish(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+	CHECK(c.is_tls());
 	REQUIRE(finish(f.ioc, c.unbind()).has_value());
 	CHECK_FALSE(c.is_open());
+	CHECK_FALSE(c.is_tls());
 	drive(f.ioc);
 	CHECK(f.server.get() == "");
 }

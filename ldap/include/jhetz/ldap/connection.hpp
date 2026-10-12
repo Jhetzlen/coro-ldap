@@ -373,7 +373,9 @@ class connection
 	// abandoned request is not counted: it may never be answered). For
 	// tests and diagnostics.
 	std::size_t outstanding() const noexcept;
-	// True once TLS protects the connection (ldaps://, or after start_tls()).
+	// True while TLS protects the open connection (ldaps://, or after
+	// start_tls()). False whenever is_open() is: before connecting, after
+	// unbind() or close(), and once a failure closed the connection.
 	bool is_tls() const noexcept;
 
 	// Simple bind (RFC 4511 section 4.2, RFC 4513 section 5.1). An empty name

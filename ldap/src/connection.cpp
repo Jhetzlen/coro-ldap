@@ -859,7 +859,9 @@ connection::executor_type connection::executor() const noexcept { return impl_->
 
 std::size_t connection::outstanding() const noexcept { return impl_ == nullptr ? 0 : impl_->outstanding(); }
 
-bool connection::is_tls() const noexcept { return impl_ != nullptr && impl_->transport.is_tls(); }
+// Describes the open connection: false after close(), unbind() or a failure,
+// even though the closed transport still holds its TLS layer.
+bool connection::is_tls() const noexcept { return is_open() && impl_->transport.is_tls(); }
 
 void connection::close() noexcept
 {

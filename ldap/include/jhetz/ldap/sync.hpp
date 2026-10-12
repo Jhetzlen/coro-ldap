@@ -69,6 +69,8 @@ class client
 	// previous connection.
 	result<void> connect(url u);
 
+	// As connection::is_open() / is_tls(): is_tls() is true only while TLS
+	// protects the open connection (false after unbind() or close()).
 	bool is_open() const;
 	bool is_tls() const;
 	// The executor of the I/O thread, e.g. to run coroutines next to the

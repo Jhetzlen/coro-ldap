@@ -414,6 +414,9 @@ TEST_CASE("sync: start_tls upgrades, then is_tls()", "[net][sync][starttls]")
 	CHECK(k.c.is_open());
 	CHECK(k.c.simple_bind(*ldap::dn::parse(admin), "secret").has_value());
 	const auto &got = hang_up(k.c, srv);
+	// is_tls() describes the open connection: false once closed.
+	CHECK_FALSE(k.c.is_open());
+	CHECK_FALSE(k.c.is_tls());
 	REQUIRE(got.size() == 2);
 	CHECK(got[0] == ldap::message{ 1, ldap::extended_request{ ldap::start_tls_oid } });
 	CHECK(got[1] == bind_request_msg(2));
