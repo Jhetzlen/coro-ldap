@@ -334,14 +334,18 @@ constexpr auto ldap::schema<long_syntax> =
   ldap::describe(ldap::object_class("top"), ldap::field<&long_syntax::n>("longSyntax"));
 
 // The SYNTAX is a numeric OID (checked when parsed), but of any length: the
-// report cuts it at 64 bytes.
+// report cuts it at 64 bytes. Both definitions carry a UTF-8 DESC (accents,
+// CJK, an emoji): the cut applies to the SYNTAX only, and the rest of the
+// definition is accepted.
 TEST_CASE("schema: a syntax mismatch quotes the server's SYNTAX cut", "[schema][validate]")
 {
 	std::string oid = "1";
 	for (int i = 0; i < 100; ++i) oid += ".2";
+	const std::string desc = "DESC 'caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC \xF0\x9F\x94\x91'";
 	const std::pmr::vector<std::pmr::string> types{ std::pmr::string(
-	  "( 1.2.1 NAME 'longSyntax' SYNTAX " + oid + " SINGLE-VALUE )") };
-	const std::pmr::vector<std::pmr::string> classes{ "( 2.5.6.0 NAME 'top' ABSTRACT )" };
+	  "( 1.2.1 NAME 'longSyntax' " + desc + " SYNTAX " + oid + " SINGLE-VALUE )") };
+	const std::pmr::vector<std::pmr::string> classes{ std::pmr::string(
+	  "( 2.5.6.0 NAME 'top' " + desc + " ABSTRACT )") };
 	const auto rep = ldap::validate<long_syntax>(ldap::server_schema::parse(types, classes));
 	REQUIRE(rep.issues.size() == 1);
 	CHECK(rep.issues[0].what == ldap::schema_issue::kind::syntax_mismatch);
