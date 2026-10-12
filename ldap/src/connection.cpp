@@ -883,13 +883,13 @@ namespace {
 
 	// Ends a SASL exchange the client gives up on while the server waits for
 	// its next step: until then the server refuses other operations (RFC
-	// 4511 section 4.2.1). An anonymous simple bind aborts it. Any
+	// 4511 section 4.2.1). An anonymous simple bind aborts it. A
 	// BindResponse ends the exchange, even a refusal (a server that disallows
-	// anonymous binds): the connection is then anonymous and stays open.
-	// Without a response (timeout, stop, transport error) the connection is
-	// already closed: a bind cannot be abandoned. Except: saslBindInProgress
-	// cannot answer a simple bind (RFC 4511 section 4.2.2), and the server
-	// may still be in the exchange, so the connection is closed.
+	// anonymous binds): the connection is then anonymous and stays open. The
+	// exception is saslBindInProgress, which cannot answer a simple bind (RFC
+	// 4511 section 4.2.2), and the server may still be in the exchange, so
+	// the connection is closed. Without a response (timeout, stop, transport
+	// error) the connection is already closed: a bind cannot be abandoned.
 	capy::task<void> abort_sasl(impl_ref self, const std::string &context)
 	{
 		message request(std::pmr::polymorphic_allocator<>(self->mr));
