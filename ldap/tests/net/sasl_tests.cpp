@@ -43,11 +43,13 @@ class echo_mechanism final : public ldap::sasl_mechanism
 	std::vector<std::string> challenges;
 	std::optional<std::string> final_creds;
 	bool reject_final = false;
+	bool fail_start = false;
 
 	std::string_view name() const noexcept override { return "X-ECHO"; }
 	ldap::result<std::optional<std::string>> start() override
 	{
 		challenges.clear();
+		if (fail_start) return ldap::fail(ldap::client_errc::decode_error, "X-ECHO: no credentials");
 		return std::optional<std::string>("hello");
 	}
 	ldap::result<std::optional<std::string>> step(std::optional<std::string_view> c) override
@@ -254,6 +256,72 @@ TEST_CASE("sasl: a failed exchange is aborted before held requests are sent", "[
 	CHECK(m.log.received[0] == sasl_req(1, "X-ECHO", "hello"));
 	CHECK(m.log.received[1] == abort_req(3));
 	CHECK(m.log.received[2].id == 2);
+}
+
+// A bind cannot be abandoned: an abort that gets no answer closes the
+// connection, and the requests it held fail without being sent.
+TEST_CASE("sasl: an abort without an answer closes the connection", "[net][sasl]")
+{
+	// The server reads the abort, then whatever comes next, and answers
+	// neither.
+	auto check = [](mock_ldap &m,
+				   outcome<ldap::result<void>> &bind,
+				   outcome<ldap::result<std::pmr::vector<ldap::entry>>> &search) {
+		REQUIRE_FALSE(bind.get().has_value());
+		CHECK(bind.get().error().context == "sasl bind X-ECHO: X-ECHO: bad challenge");
+		CHECK_FALSE(m.conn.is_open());
+		REQUIRE_FALSE(search.get().has_value());
+		CHECK(search.get().error().code == ldap::client_errc::not_connected);
+		CHECK_THAT(std::string(search.get().error().context), ContainsSubstring("cannot be abandoned"));
+		drive_until(m.ioc, [&m] { return m.server.done(); });
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[0] == sasl_req(1, "X-ECHO", "hello"));
+		CHECK(m.log.received[1] == abort_req(3));
+	};
+	echo_mechanism mech;
+	outcome<ldap::result<void>> bind;
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	SECTION("timeout")
+	{
+		mock_ldap m({ .operation_timeout = std::chrono::milliseconds(100) });
+		m.serve({ answer({ sasl_resp(1, 14, "bad") }), step{}, step{} });
+		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
+		// id 2, held; its own timeout is longer, so the abort's ends it.
+		spawn(m.ioc, m.conn.search({ .timeout = std::chrono::seconds(10) }), search);
+		drive_until(m.ioc, [&] { return bind.done() && search.done(); });
+		check(m, bind, search);
+	}
+	SECTION("cancellation")
+	{
+		mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 14, "bad") }), step{}, step{} });
+		std::stop_source stop;
+		spawn(m.ioc, stop.get_token(), m.conn.sasl_bind(mech), bind);
+		spawn(m.ioc, m.conn.search({}), search);// id 2, held
+		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+		CHECK_FALSE(bind.done());
+		stop.request_stop();
+		drive_until(m.ioc, [&] { return bind.done() && search.done(); });
+		check(m, bind, search);
+	}
+}
+
+// Before the first request the server knows of no exchange: a mechanism
+// that fails to start sends nothing, not even an abort.
+TEST_CASE("sasl: a mechanism that fails to start sends nothing", "[net][sasl]")
+{
+	mock_ldap m;
+	m.serve({ answer({ done_msg(1) }) });
+	echo_mechanism mech;
+	mech.fail_start = true;
+	auto r = m.run(m.conn.sasl_bind(mech));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().context == "sasl bind X-ECHO: X-ECHO: no credentials");
+	CHECK(m.conn.is_open());
+	CHECK(m.run(m.conn.search({})).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 1);
+	CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));
 }
 
 // SCRAM-SHA-256 with the RFC 7677 section 3 test vector (the mechanism's
