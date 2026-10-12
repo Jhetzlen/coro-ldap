@@ -7,6 +7,7 @@
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/async_event.hpp>
+#include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/this_coro.hpp>
@@ -290,6 +291,32 @@ struct connection::impl
 		return make_error(client_errc::not_connected, text);
 	}
 
+	// ---------------------------------------------------------------- tasks
+
+	// The frame of a detached task (writer, reader, due watcher), from the
+	// executor's frame allocator as capy::run_async would use. Made before
+	// the caller sets its flags: a bad_alloc then leaves no flag set without
+	// its task. (capy::run_async allocates its own frame before the task's;
+	// a task frame failing there would leak it, and its work guard. Its own
+	// allocation failing ends the program: it is made in a noexcept
+	// constructor.)
+	capy::task<void> new_task(capy::task<void> (*body)(impl *))
+	{
+		struct frame_allocator_scope
+		{
+			std::pmr::memory_resource *saved = capy::get_current_frame_allocator();
+			explicit frame_allocator_scope(std::pmr::memory_resource *mr) noexcept
+			{
+				capy::set_current_frame_allocator(mr);
+			}
+			frame_allocator_scope(const frame_allocator_scope &) = delete;
+			frame_allocator_scope &operator=(const frame_allocator_scope &) = delete;
+			~frame_allocator_scope() { capy::set_current_frame_allocator(saved); }
+		};
+		const frame_allocator_scope scope(ex.context().get_frame_allocator());
+		return body(this);
+	}
+
 	// ---------------------------------------------------------------- writer
 
 	static capy::task<void> writer(impl *self)
@@ -305,16 +332,22 @@ struct connection::impl
 		self->write_idle.set();
 	}
 
+	// Queues `bytes` and starts the writer if it is not running. A throw
+	// (bad_alloc) queues nothing and changes nothing.
 	void enqueue(std::pmr::vector<std::byte> bytes)
 	{
+		if (writing) {
+			outbox.push_back(std::move(bytes));
+			return;
+		}
+		auto task = new_task(&writer);
 		outbox.push_back(std::move(bytes));
-		if (writing) return;
 		writing = true;
 		write_idle.clear();
 		add_ref();// released by the writer
 		// No stop token: a PDU is always written whole (a cancelled write
 		// would leave half a PDU on the wire).
-		capy::run_async(ex)(writer(this));
+		capy::run_async(ex)(std::move(task));
 	}
 
 	// The next message id the server cannot still be servicing (RFC 4511
@@ -334,7 +367,8 @@ struct connection::impl
 	// Gives `m` the next free message id, encodes it and queues it for the
 	// writer. If `p` is given it is registered under that id first (its
 	// response may arrive before the write completes). If encoding fails
-	// nothing is sent and the id is not used up.
+	// nothing is sent and the id is not used up. On a throw (bad_alloc)
+	// nothing is queued and `p` is not registered (the id is used up).
 	result<void> submit(message &m, pending_op *p, std::string_view context)
 	{
 		if (!open || unbinding) return std::unexpected(not_connected(context));
@@ -350,15 +384,25 @@ struct connection::impl
 			const auto *x = std::get_if<extended_request>(&m.op);
 			p->abandonable = !bind && (x == nullptr || x->request_name != start_tls_oid);
 			p->id = m.id;
-			p->registered = true;
 			pending.emplace(m.id, p);
-			start_reader();
+			p->registered = true;
 		}
-		if (binding && !bind) {
-			held.push_back({ m.id, std::move(*bytes) });
-			return {};
+		try {
+			if (p != nullptr) start_reader();
+			if (binding && !bind)
+				held.push_back({ m.id, std::move(*bytes) });
+			else
+				enqueue(std::move(*bytes));
+		} catch (...) {
+			// `p` (in the caller's frame) must not stay registered: its
+			// request is not sent.
+			if (p != nullptr) {
+				pending.erase(m.id);
+				p->registered = false;
+				stop_reader_if_idle();
+			}
+			throw;
 		}
-		enqueue(std::move(*bytes));
 		return {};
 	}
 
@@ -409,12 +453,14 @@ struct connection::impl
 	{
 		// Listed before `m` is queued, like abandon(): nothing may fail after
 		// that, or its answer would match no request. Id 0 is never a
-		// request's. submit returns an error only before queueing, so the
-		// entry is still last then. It may start the writer inline, whose
-		// failed write runs shut() inside it, which clears the list: hence
-		// the guarded pop_back() on a throw, and the !open check after it.
-		// A throw after queueing leaves the bytes unsent (the writer is
-		// wedged, coro_http_client-46q), so no answer can come for them.
+		// request's. submit returns an error, or throws, only with nothing
+		// queued, so the entry is still last then. It may start the writer
+		// inline, whose failed write runs shut() inside it, which clears the
+		// list: hence the guarded pop_back() on a throw, and the !open check
+		// after it. If starting the reader or the due watcher below throws,
+		// the request is sent and its answer still counted as due: the next
+		// reader started reads it, and its deadline is applied once a due
+		// watcher runs again (or by StartTLS's wait when that times out).
 		abandoned.push_back({ 0, search });
 		try {
 			if (!submit(m, nullptr, context)) {
@@ -475,9 +521,10 @@ struct connection::impl
 			due_changed.set();// recomputes its next deadline
 			return;
 		}
+		auto task = new_task(&due_watcher);
 		watching = true;
 		add_ref();// released by the watcher
-		capy::run_async(ex)(due_watcher(this));
+		capy::run_async(ex)(std::move(task));
 	}
 
 	// The earliest deadline of a due answer, if any has one.
@@ -535,11 +582,13 @@ struct connection::impl
 	void start_reader()
 	{
 		if (reading) return;// a reader that is stopping restarts itself if needed
+		std::stop_source stop;
+		auto task = new_task(&reader);
 		reading = true;
 		reader_idle.clear();
-		reader_stop = std::stop_source{};
+		reader_stop = std::move(stop);
 		add_ref();// released by the reader
-		capy::run_async(ex, reader_stop.get_token())(reader(this));
+		capy::run_async(ex, reader_stop.get_token())(std::move(task));
 	}
 
 	void stop_reader_if_idle()

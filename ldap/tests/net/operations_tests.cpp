@@ -6,12 +6,17 @@
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
+#include <boost/capy/ex/frame_allocator.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <memory_resource>
+#include <new>
 #include <optional>
 #include <span>
 #include <stop_token>
@@ -1516,6 +1521,149 @@ TEST_CASE("operations: release answers' deadlines", "[net][operations][paged][ti
 		server_sends(m, bind_resp(5));// answers the bind below before it is read
 		CHECK(m.run(bind_admin(m.conn)).has_value());
 		CHECK(m.conn.is_open());
+		REQUIRE(m.log.received.size() == 4);
+		check_release(m.log.received[1], m.log.received[0], "page2");
+		check_release(m.log.received[3], m.log.received[2], "page2");
+	}
+}
+
+namespace {
+
+// The io_context's frame allocator in the test below: counts the coroutine
+// frames allocated from it (every run_async's and its task's, and their
+// children's) and can fail one allocation with bad_alloc.
+class failing_frames final : public std::pmr::memory_resource
+{
+  public:
+	// The n-th allocation from now fails (1 for the next one; 0: none).
+	void fail_at(std::size_t n) noexcept
+	{
+		count_ = 0;
+		fail_ = n;
+	}
+	// Allocations attempted since fail_at().
+	std::size_t count() const noexcept { return count_; }
+	// Frames allocated and not yet freed.
+	std::size_t live() const noexcept { return live_; }
+
+  private:
+	void *do_allocate(std::size_t bytes, std::size_t align) override
+	{
+		if (++count_ == fail_) throw std::bad_alloc();
+		void *p = std::pmr::new_delete_resource()->allocate(bytes, align);
+		++live_;
+		return p;
+	}
+	void do_deallocate(void *p, std::size_t bytes, std::size_t align) override
+	{
+		--live_;
+		std::pmr::new_delete_resource()->deallocate(p, bytes, align);
+	}
+	bool do_is_equal(const std::pmr::memory_resource &other) const noexcept override { return this == &other; }
+
+	std::size_t count_ = 0;
+	std::size_t fail_ = 0;
+	std::size_t live_ = 0;
+};
+
+}// namespace
+
+// A paged search's release starts the writer, the reader and the due
+// watcher from a destructor (no operation running), in that order: each
+// allocates its task's frame, then run_async's. Failing one of the task
+// frames throws bad_alloc there (the release is best effort: swallowed);
+// the flag that says the task runs must not be left set without it, or
+// that task is never started again.
+TEST_CASE("operations: a failed allocation for the writer, reader or due watcher wedges nothing",
+  "[net][operations][paged][oom]")
+{
+	failing_frames frames;// outlives the io_context's coroutines
+	// Corosio resumes coroutines without restoring the thread's current
+	// frame allocator, so it can still be `frames` once the io_context has
+	// run: cleared before `frames` goes, for the frames made after this test.
+	struct clear_frame_allocator
+	{
+		clear_frame_allocator() = default;
+		clear_frame_allocator(const clear_frame_allocator &) = delete;
+		clear_frame_allocator &operator=(const clear_frame_allocator &) = delete;
+		~clear_frame_allocator() { capy::set_current_frame_allocator(nullptr); }
+	} clear;
+	mock_ldap m;
+	// Reads the first page of a paged search (page size 1, cookie "page2"),
+	// waits until the reader and the writer are idle (every frame allocated
+	// since the allocator was set has been freed), then destroys it with the
+	// `failing`-th frame allocation failing. Returns the allocations tried.
+	auto release_failing = [&](std::size_t failing) {
+		auto p = people_search();
+		p.timeout = std::chrono::milliseconds(100);// the release's deadline: the due watcher runs
+		auto s = m.run(m.conn.search_paged(std::move(p), 1));
+		REQUIRE(s.has_value());
+		auto e = m.run(s->next());
+		REQUIRE(e.has_value());
+		REQUIRE(e->has_value());
+		drive_until(m.ioc, [&] { return frames.live() == 0; });
+		REQUIRE(frames.live() == 0);
+		frames.fail_at(failing);
+		*s = ldap::paged_search{};
+		const std::size_t attempted = frames.count();
+		frames.fail_at(0);
+		return attempted;
+	};
+	auto page = [](std::int32_t id) {
+		return answer({ entry_msg(id, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(id, "page2") });
+	};
+
+	SECTION("nothing fails: the writer's frame, then the reader's, then the due watcher's, each with run_async's")
+	{
+		m.serve({ page(1), step{} });// reads the release
+		m.ioc.set_frame_allocator(&frames);
+		CHECK(release_failing(0) == 6);
+		CHECK(m.conn.outstanding() == 1);
+		m.check_server();
+		check_release(m.log.received[1], m.log.received[0], "page2");
+	}
+	SECTION("the writer's: the release is not sent, later requests are")
+	{
+		m.serve({ page(1), answer({ bind_resp(3) }) });
+		m.ioc.set_frame_allocator(&frames);
+		CHECK(release_failing(1) == 1);
+		CHECK(m.conn.outstanding() == 0);// nothing is due
+		CHECK(m.run(bind_admin(m.conn)).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[1] == bind_request_msg(3));// the release's id is used up
+	}
+	SECTION("the reader's: the release is sent, the next operation's reader reads its answer")
+	{
+		m.serve({ page(1), answer({ paged_done(2, "") }), answer({ bind_resp(3) }) });
+		m.ioc.set_frame_allocator(&frames);
+		CHECK(release_failing(3) == 3);
+		CHECK(m.conn.outstanding() == 1);// due, not read yet
+		CHECK(m.run(bind_admin(m.conn)).has_value());
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		check_release(m.log.received[1], m.log.received[0], "page2");
+	}
+	SECTION("the due watcher's: the next release starts one, which expires both answers")
+	{
+		m.serve({ page(1), step{}, page(3), step{} });// reads each release, never answers
+		m.ioc.set_frame_allocator(&frames);
+		CHECK(release_failing(5) == 5);
+		CHECK(m.conn.outstanding() == 1);
+		{
+			auto p = people_search();
+			p.timeout = std::chrono::milliseconds(100);
+			auto s = m.run(m.conn.search_paged(std::move(p), 1));
+			REQUIRE(s.has_value());
+			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 1; });// page 3 ended
+		}
+		CHECK(m.conn.outstanding() == 2);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });// both deadlines pass
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.is_open());
+		m.check_server();
 		REQUIRE(m.log.received.size() == 4);
 		check_release(m.log.received[1], m.log.received[0], "page2");
 		check_release(m.log.received[3], m.log.received[2], "page2");
