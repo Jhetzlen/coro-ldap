@@ -116,18 +116,24 @@ class anonymous_binds_disallowed
 	anonymous_binds_disallowed(const anonymous_binds_disallowed &) = delete;
 	anonymous_binds_disallowed &operator=(const anonymous_binds_disallowed &) = delete;
 
+	// The failure is reported once, after the attempt. FAIL_CHECK throws
+	// when Catch2 aborts the run (-a, -x): that only ends the run, as asked,
+	// so it is caught rather than left to escape the destructor.
 	~anonymous_binds_disallowed()
 	{
+		bool restored = false;
+		std::string why;
 		try {
 			auto m = finish(ioc_,
 			  config_.modify(
 				{ .object = config_dn, .changes = { ldap::mod::remove("olcDisallows", { "bind_anon" }) } }));
-			if (!m)
-				FAIL_CHECK(
-				  "could not allow bind_anon again, later tests run with it disallowed: " << m.error().message());
-		} catch (...) {
-			FAIL_CHECK("could not allow bind_anon again, later tests run with it disallowed");
-		}
+			restored = m.has_value();
+			if (!m) why = ": " + std::string(m.error().message());
+		} catch (...) {}
+		if (restored) return;
+		try {
+			FAIL_CHECK("could not allow bind_anon again, later tests run with it disallowed" << why);
+		} catch (...) {}
 	}
 
   private:
