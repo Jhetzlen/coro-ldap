@@ -99,7 +99,7 @@ class scram_giving_up final : public ldap::sasl_mechanism
 // slapd refuses anonymous binds (olcDisallows: bind_anon, set through
 // cn=config, which run_slapd.sh makes writable) while this lives. The
 // setting is global: the tests run one at a time, and it is restored even
-// when the test fails.
+// when the test fails. A failed restore fails the test.
 class anonymous_binds_disallowed
 {
   public:
@@ -122,9 +122,11 @@ class anonymous_binds_disallowed
 			auto m = finish(ioc_,
 			  config_.modify(
 				{ .object = config_dn, .changes = { ldap::mod::remove("olcDisallows", { "bind_anon" }) } }));
-			if (!m) WARN("could not allow bind_anon again: " << m.error().message());
+			if (!m)
+				FAIL_CHECK(
+				  "could not allow bind_anon again, later tests run with it disallowed: " << m.error().message());
 		} catch (...) {
-			WARN("could not allow bind_anon again");
+			FAIL_CHECK("could not allow bind_anon again, later tests run with it disallowed");
 		}
 	}
 
