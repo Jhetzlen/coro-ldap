@@ -66,6 +66,17 @@ namespace {
 		std::size_t pos_ = 0;
 	};
 
+	// A keyword: RFC 4512 keystring (ALPHA *( ALPHA / DIGIT / "-" )) or an
+	// extension's xstring ("X-" 1*( ALPHA / "-" / "_" ), as eDirectory's
+	// X-NDS_SYNTAX). Anything else (a "{256}" spaced from SYNTAX's OID, a
+	// stray "$" or OID) fails the definition: taken as a keyword, it would
+	// swallow the next one (SINGLE-VALUE, say) as its value.
+	bool is_keyword(std::string_view k)
+	{
+		if (k.empty() || !detail::is_alpha(k[0])) return false;
+		return std::ranges::all_of(k, [](char c) { return detail::is_keychar(c) || c == '_'; });
+	}
+
 	// Keywords without an argument.
 	bool is_flag(std::string_view k)
 	{
@@ -112,7 +123,7 @@ namespace {
 			if (!k) return std::unexpected(std::move(k.error()));
 			if (k->k == token::close) break;
 			if (k->k == token::end) return bad("missing ')'");
-			if (k->k != token::word) return bad("expected a keyword");
+			if (k->k != token::word || !is_keyword(k->text)) return bad("expected a keyword");
 			if (d.fields.size() == max_fields) return bad("too many fields");
 			std::vector<std::string> values;
 			if (!is_flag(k->text)) {
@@ -142,8 +153,18 @@ namespace {
 		return d;
 	}
 
-	// "1.2.3{64}" -> "1.2.3".
-	std::string strip_length(std::string_view s) { return std::string(s.substr(0, s.find('{'))); }
+	// noidlen without its length: "1.2.3{64}" -> "1.2.3". The length must
+	// be "{" 1*DIGIT "}" right after the OID and end the text; otherwise
+	// nullopt (the definition is then skipped).
+	std::optional<std::string> strip_length(std::string_view s)
+	{
+		const std::size_t open = s.find('{');
+		if (open == std::string_view::npos) return std::string(s);
+		const std::string_view len = s.substr(open + 1);
+		if (len.size() < 2 || len.back() != '}') return std::nullopt;
+		if (!std::ranges::all_of(len.substr(0, len.size() - 1), detail::is_digit)) return std::nullopt;
+		return std::string(s.substr(0, open));
+	}
 
 	// Keeps the NAMEs that are valid descriptors (RFC 4512 section 1.4);
 	// others could never be looked up, so they are dropped.
@@ -172,11 +193,13 @@ namespace {
 		a.names = valid_names(d.get("NAME"));
 		if (const auto *s = d.get("SUP"); s && !s->empty()) a.sup = s->front();
 		// RFC 4512 section 4.1.2: SYNTAX noidlen, a numericoid with an
-		// optional {len}. Anything else could never match a syntax the
-		// mapping knows, and would be the server's raw text in a report.
+		// optional {len} right after it ("{" 1*DIGIT "}", no space; a spaced
+		// "{len}" already failed as a keyword). Anything else could never
+		// match a syntax the mapping knows, and would be the server's raw
+		// text in a report.
 		if (const auto *s = d.get("SYNTAX"); s && !s->empty()) {
 			a.syntax = strip_length(s->front());
-			if (!detail::is_numericoid(*a.syntax))
+			if (!a.syntax || !detail::is_numericoid(*a.syntax))
 				return fail(client_errc::decode_error, "schema: SYNTAX is not a numeric OID");
 		}
 		a.single_value = d.has("SINGLE-VALUE");

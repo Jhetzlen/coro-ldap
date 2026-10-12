@@ -4,7 +4,8 @@
 // For any input it must not crash, and:
 // - a rejected definition fails with decode_error;
 // - an accepted one has a non-empty OID, and a SYNTAX that is a numeric
-//   OID (no '{');
+//   OID (the input's noidlen without its "{" 1*DIGIT "}", the only length
+//   accepted; a length apart from the OID fails as a keyword);
 // - the object class grammar is the same, but SYNTAX is not checked;
 // - server_schema::parse of the input (as both an attribute type and an
 //   object class) finds what parsed by OID and every NAME, and counts

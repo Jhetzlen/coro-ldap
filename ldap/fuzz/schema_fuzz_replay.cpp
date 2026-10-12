@@ -23,6 +23,8 @@ int main(int argc, char **argv)
 		"( 1.2 NAME 'it\\27s' DESC 'back\\5cslash' )",
 		"(1.2 NAME 'tight' SINGLE-VALUE)",
 		"( 1.2.4 NAME 'named' SYNTAX directoryString )",
+		"( 1.2.10 NAME 'spacelen' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 {256} SINGLE-VALUE )",
+		"( 1.2.11 NAME 'junklen' SYNTAX '1.3.6.1.4.1.1466.115.121.1.15{\r\nforged' X-NDS_SYNTAX '1' )",
 		"( 1.2.3 NAME 'unterminated )",
 		"",
 	};

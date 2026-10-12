@@ -170,6 +170,63 @@ TEST_CASE("schema: a SYNTAX that is not a numeric OID skips the definition", "[s
 	CHECK(ldap::parse_object_class(types[1]).has_value());
 }
 
+// noidlen's {len} is "{" 1*DIGIT "}" right after the OID (no space). A
+// spaced "{256}" is not a keyword: it fails the definition, which is
+// skipped and counted, instead of being read as a keyword that takes
+// SINGLE-VALUE as its value (single_value false, silently). Any other word
+// where a keyword goes fails the same way; X- extension names may hold '_'.
+TEST_CASE("schema: SYNTAX lengths are {digits} attached to the OID; other words are not keywords", "[schema]")
+{
+	const std::string desc = " DESC 'caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC \xF0\x9F\x94\x91'";
+	auto def = [&](std::string_view oid, std::string_view rest) {
+		return std::pmr::string("( " + std::string(oid) + " NAME 'n" + std::string(oid.substr(4)) + "'" + desc + " "
+								+ std::string(rest) + " )");
+	};
+	const std::pmr::vector<std::pmr::string> good{
+		def("1.2.1", "SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} SINGLE-VALUE"),
+		def("1.2.2", "SYNTAX '1.3.6.1.4.1.1466.115.121.1.15{64}' SINGLE-VALUE"),
+		def("1.2.3", "SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{0} X-NDS_SYNTAX '3' X-ORIGIN 'caf\xC3\xA9'"),
+	};
+	const auto ok = ldap::server_schema::parse(good, {});
+	CHECK(ok.skipped() == 0);
+	REQUIRE(ok.attribute_count() == good.size());
+	for (const char *n : { "n1", "n2" }) {
+		const auto *a = ok.find_attribute(n);
+		REQUIRE(a != nullptr);
+		CHECK(a->syntax == ldap::syntax::directory_string);
+		CHECK(a->single_value);
+	}
+	CHECK(ok.find_attribute("n3")->syntax == ldap::syntax::directory_string);
+
+	const std::pmr::vector<std::pmr::string> bad{
+		def("1.2.4", "SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 {256} SINGLE-VALUE"),
+		def("1.2.5", "SYNTAX '1.3.6.1.4.1.1466.115.121.1.15{\r\nforged'"),
+		def("1.2.6", "SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{64"),
+		def("1.2.7", "SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{}"),
+		def("1.2.8", "SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{6a}"),
+		def("1.2.9", "SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{64}x"),
+		def("1.2.10", "SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{64}{64}"),
+		def("1.2.11", "$ SINGLE-VALUE"),
+		def("1.2.12", "1.2.3 SINGLE-VALUE"),
+		def("1.2.13", "-X SINGLE-VALUE"),
+		def("1.2.14", "SINGLE-VALUE caf\xC3\xA9 'x'"),
+	};
+	const auto s = ldap::server_schema::parse(bad, bad);
+	CHECK(s.attribute_count() == 0);
+	CHECK(s.skipped() == 2 * bad.size() - 6);// the SYNTAX failures are not the object class grammar's
+	CHECK(s.object_class_count() == 6);
+	CHECK(s.skipped_for_syntax("n5"));
+	CHECK_FALSE(s.skipped_for_syntax("n4"));// failed as a keyword: not a SYNTAX failure
+
+	auto spaced = ldap::parse_attribute_type(bad[0]);
+	REQUIRE_FALSE(spaced.has_value());
+	CHECK(spaced.error().code == ldap::client_errc::decode_error);
+	CHECK(spaced.error().context == "schema: expected a keyword");
+	auto junk = ldap::parse_attribute_type(bad[1]);
+	REQUIRE_FALSE(junk.has_value());
+	CHECK(junk.error().context == "schema: SYNTAX is not a numeric OID");
+}
+
 TEST_CASE("schema: SUP cycles do not loop", "[schema]")
 {
 	const std::pmr::vector<std::pmr::string> types{ "( 1.1 NAME 'a' SUP b )", "( 1.2 NAME 'b' SUP a )" };

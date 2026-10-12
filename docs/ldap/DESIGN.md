@@ -605,10 +605,15 @@ with `\27` / `\5C` escapes, bare words; keywords without an argument are
 known flags, every other keyword takes one value or a `( a $ b )` list).
 Lenient with real servers (quoted OIDs as Active Directory sends them,
 keywords in any case, no space before `)`); a definition whose OID is not
-an OID, or whose `SYNTAX` is not a numeric OID with an optional `{len}`
-(RFC 4512 `noidlen`; it could never match, and would put the server's text
-in a report), is skipped, NAMEs that are not descriptors are dropped (they
-could never be looked up). `server_schema` indexes names and OIDs
+an OID, or whose `SYNTAX` is not a numeric OID with an optional `{len}` of
+digits right after it (RFC 4512 `noidlen`: `1.2.3{64}`; it could never
+match, and would put the server's text in a report), is skipped, and so is
+one with a keyword that is not a keystring or `X-` extension name: a
+`{len}` written apart from the OID (`1.2.3 {64}`, against the grammar;
+OpenLDAP and Active Directory attach it) would otherwise be read as a
+keyword taking the next one (`SINGLE-VALUE`) as its value.
+NAMEs that are not descriptors are dropped (they could never be looked
+up). `server_schema` indexes names and OIDs
 case-insensitively, ignores attribute options on lookup and follows SUP for
 the syntax (depth-limited against cycles). A member whose syntax cannot be
 determined because a SUP on the chain is not defined, was skipped for its

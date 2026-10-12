@@ -13,8 +13,10 @@
 // text comes from the server, so the parser must accept anything without
 // harm: there is a fuzz target). Lenient where real servers are: quoted
 // OIDs (Active Directory), keywords in any case, missing spaces before ')'.
-// A definition whose OID is not a valid OID, or whose SYNTAX is not a
-// numeric OID (RFC 4512 noidlen: no descriptor, no other text), is
+// A definition whose OID is not a valid OID, whose SYNTAX is not a numeric
+// OID with an optional "{" digits "}" right after it (RFC 4512 noidlen: no
+// descriptor, no space, no other text), or with a keyword that is not a
+// keystring or X- extension name (a "{len}" spaced from the OID is one) is
 // skipped (the names of those skipped for their SYNTAX are remembered, see
 // skipped_for_syntax); NAMEs that are not valid descriptors are dropped
 // (they could never be looked up).
