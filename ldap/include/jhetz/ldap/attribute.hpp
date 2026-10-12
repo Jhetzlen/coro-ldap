@@ -199,6 +199,32 @@ class attribute
 // Case-insensitive hash, consistent with operator==.
 std::size_t hash_value(std::string_view attribute_name) noexcept;
 
+namespace detail {
+
+	// iequals, 8 bytes at a time (not constexpr).
+	bool iequals_fast(std::string_view a, std::string_view b) noexcept;
+
+	// Hash and equality for unordered containers keyed by names that compare
+	// case-insensitively (A-Z only, as iequals and hash_value: other bytes as
+	// they are). Transparent, so a std::string-keyed container is searched
+	// with a std::string_view, without a copy.
+	struct ci_hash
+	{
+		using is_transparent = void;
+		// Never throws, but deliberately not noexcept: libstdc++ then caches
+		// the hash code in each node, as it does for std::hash<std::string>.
+		// Without it, a find hashes the key of every node it walks past (to
+		// see where the bucket ends): measured about 10% slower lookups.
+		std::size_t operator()(std::string_view s) const { return hash_value(s); }
+	};
+	struct ci_equal
+	{
+		using is_transparent = void;
+		bool operator()(std::string_view a, std::string_view b) const noexcept { return iequals_fast(a, b); }
+	};
+
+}// namespace detail
+
 }// namespace jhetz::ldap
 
 template<> struct std::hash<jhetz::ldap::attribute>

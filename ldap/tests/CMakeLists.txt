@@ -32,6 +32,13 @@ target_link_libraries(jhetz_ldap_tests PRIVATE jhetz::ldap Catch2::Catch2WithMai
 jhetz_ldap_warnings(jhetz_ldap_tests)
 catch_discover_tests(jhetz_ldap_tests)
 
+# Replaces the global operator new / delete to count allocations, so it
+# gets its own executable.
+add_executable(jhetz_ldap_alloc_tests schema_alloc_tests.cpp)
+target_link_libraries(jhetz_ldap_alloc_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)
+jhetz_ldap_warnings(jhetz_ldap_alloc_tests)
+catch_discover_tests(jhetz_ldap_alloc_tests)
+
 # Compile tests for the mapping's compile-time checks (DESIGN.md section 4):
 # each file in compile/ is compiled with -fsyntax-only and must fail with the
 # expected diagnostic (matched in the C locale); ok.cpp must compile, so the

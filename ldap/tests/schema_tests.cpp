@@ -144,6 +144,49 @@ TEST_CASE("schema: SUP cycles do not loop", "[schema]")
 	CHECK_FALSE(s.syntax_of(*s.find_attribute("a")).has_value());
 }
 
+TEST_CASE("schema: lookups fold ASCII case only", "[schema]")
+{
+	const std::pmr::vector<std::pmr::string> types{
+		"( 1.1 NAME 'fooBar' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+		"( 1.2 NAME ( 'FOOBAR' 'other' ) )",// differs from 1.1's NAME only in case: 1.1 keeps it
+		"( 1.3 NAME ( 'zz' 'ZZ' ) SUP FOOBAR )",
+	};
+	const std::pmr::vector<std::pmr::string> classes{
+		"( 2.1 NAME 'Person' )",
+		"( 2.2 NAME 'PERSON' )",
+	};
+	const auto s = ldap::server_schema::parse(types, classes);
+	REQUIRE(s.attribute_count() == 3);
+
+	const auto *foo = s.find_attribute("foobar");
+	REQUIRE(foo != nullptr);
+	CHECK(foo->oid == "1.1");
+	for (const char *n : { "fooBar", "FOOBAR", "fOoBaR", "FooBar;Lang-EN", "1.1" }) CHECK(s.find_attribute(n) == foo);
+	CHECK(s.find_attribute("OTHER")->oid == "1.2");
+	CHECK(s.find_attribute("1.2")->oid == "1.2");
+	CHECK(s.find_attribute("Zz")->oid == "1.3");
+	CHECK(s.syntax_of(*s.find_attribute("zz")) == ldap::syntax::directory_string);// SUP looked up in any case
+	CHECK(s.find_object_class("person")->oid == "2.1");
+	CHECK(s.find_object_class("PERSON")->oid == "2.1");
+	CHECK(s.find_object_class("2.2")->oid == "2.2");
+
+	// Only A-Z fold: bytes >= 0x80 compare as they are (0xC1 is 'A' | 0x80,
+	// 0xC1 / 0xE1 are Latin-1 A / a acute, C3 81 is UTF-8 U+00C1).
+	CHECK(s.find_attribute("foob\xC1r") == nullptr);
+	CHECK(s.find_attribute("foob\xE1r") == nullptr);
+	CHECK(s.find_attribute("foob\xC3\x81r") == nullptr);
+	CHECK(s.find_attribute("") == nullptr);
+	CHECK(s.find_attribute("fooba") == nullptr);
+	CHECK(s.find_object_class("pers\xCFn") == nullptr);// 0xCF is 'O' | 0x80
+	CHECK(ldap::detail::ci_equal{}("\xC1", "\xC1"));
+	CHECK_FALSE(ldap::detail::ci_equal{}("\xC1", "\xE1"));
+	CHECK_FALSE(ldap::detail::ci_equal{}("\xC1", "A"));
+	CHECK(ldap::detail::ci_hash{}("FooBar") == ldap::detail::ci_hash{}("fOObAR"));
+
+	STATIC_REQUIRE(noexcept(s.find_attribute("x")));
+	STATIC_REQUIRE(noexcept(s.find_object_class("x")));
+}
+
 // ---------------------------------------------------------------- validate
 
 namespace {

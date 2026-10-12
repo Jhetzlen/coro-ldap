@@ -22,19 +22,6 @@ const std::pmr::vector<std::pmr::string> *entry::find(std::string_view type) con
 	return nullptr;
 }
 
-namespace {
-
-	struct ihash
-	{
-		std::size_t operator()(std::string_view s) const noexcept { return hash_value(s); }
-	};
-	struct iequal
-	{
-		bool operator()(std::string_view a, std::string_view b) const noexcept { return detail::iequals(a, b); }
-	};
-
-}// namespace
-
 entry entry::from(search_result_entry e)
 {
 	const allocator_type alloc = e.get_allocator();
@@ -44,7 +31,7 @@ entry entry::from(search_result_entry e)
 	out.attributes.reserve(e.attributes.size());
 	// Index by description, so a server sending many attributes cannot make
 	// this quadratic. Temporary, on the entry's resource.
-	std::pmr::unordered_map<std::string_view, std::size_t, ihash, iequal> index(alloc);
+	std::pmr::unordered_map<std::string_view, std::size_t, detail::ci_hash, detail::ci_equal> index(alloc);
 	for (auto &pa : e.attributes) {
 		const auto it = index.find(pa.type);
 		if (it == index.end()) {

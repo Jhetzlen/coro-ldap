@@ -17,6 +17,7 @@
 // valid descriptors are dropped (they could never be looked up).
 #pragma once
 
+#include "jhetz/ldap/attribute.hpp"
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/mapping.hpp"
 
@@ -63,9 +64,10 @@ class server_schema
 	  std::span<const std::pmr::string> object_classes);
 
 	// By any NAME (case-insensitive) or the OID; options ("cn;lang-en") are
-	// ignored. nullptr if unknown.
-	const attribute_type *find_attribute(std::string_view name) const;
-	const object_class_type *find_object_class(std::string_view name) const;
+	// ignored. nullptr if unknown. Case folds A-Z only (names and OIDs are
+	// ASCII, RFC 4512 section 1.4). No allocation.
+	const attribute_type *find_attribute(std::string_view name) const noexcept;
+	const object_class_type *find_object_class(std::string_view name) const noexcept;
 	// The attribute's SYNTAX, or its supertypes' (SUP followed, with a depth
 	// limit against cycles); nullopt if none declares one.
 	std::optional<std::string> syntax_of(const attribute_type &a) const;
@@ -78,8 +80,10 @@ class server_schema
   private:
 	std::vector<attribute_type> attributes_{};
 	std::vector<object_class_type> classes_{};
-	std::unordered_map<std::string, std::size_t> attribute_index_{};// lower-cased name / OID
-	std::unordered_map<std::string, std::size_t> class_index_{};
+	// Name / OID (as the server spells it; the first definition wins) -> index.
+	using name_index = std::unordered_map<std::string, std::size_t, detail::ci_hash, detail::ci_equal>;
+	name_index attribute_index_{};
+	name_index class_index_{};
 	std::size_t skipped_ = 0;
 };
 

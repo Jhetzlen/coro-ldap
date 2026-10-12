@@ -6,14 +6,6 @@
 namespace jhetz::ldap {
 namespace {
 
-	std::string lower(std::string_view s)
-	{
-		std::string out(s);
-		for (char &c : out)
-			if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-		return out;
-	}
-
 	bool is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
 	// RFC 4512 section 4.1 definitions: "(", ")", 'quoted strings' (with
@@ -199,8 +191,8 @@ server_schema server_schema::parse(std::span<const std::pmr::string> attribute_t
 			continue;
 		}
 		const std::size_t i = s.attributes_.size();
-		s.attribute_index_.emplace(lower(a->oid), i);
-		for (const auto &n : a->names) s.attribute_index_.emplace(lower(n), i);
+		s.attribute_index_.emplace(a->oid, i);
+		for (const auto &n : a->names) s.attribute_index_.emplace(n, i);
 		s.attributes_.push_back(std::move(*a));
 	}
 	for (const auto &text : object_classes) {
@@ -210,22 +202,22 @@ server_schema server_schema::parse(std::span<const std::pmr::string> attribute_t
 			continue;
 		}
 		const std::size_t i = s.classes_.size();
-		s.class_index_.emplace(lower(c->oid), i);
-		for (const auto &n : c->names) s.class_index_.emplace(lower(n), i);
+		s.class_index_.emplace(c->oid, i);
+		for (const auto &n : c->names) s.class_index_.emplace(n, i);
 		s.classes_.push_back(std::move(*c));
 	}
 	return s;
 }
 
-const attribute_type *server_schema::find_attribute(std::string_view name) const
+const attribute_type *server_schema::find_attribute(std::string_view name) const noexcept
 {
-	auto it = attribute_index_.find(lower(without_options(name)));
+	const auto it = attribute_index_.find(without_options(name));
 	return it == attribute_index_.end() ? nullptr : &attributes_[it->second];
 }
 
-const object_class_type *server_schema::find_object_class(std::string_view name) const
+const object_class_type *server_schema::find_object_class(std::string_view name) const noexcept
 {
-	auto it = class_index_.find(lower(name));
+	const auto it = class_index_.find(name);
 	return it == class_index_.end() ? nullptr : &classes_[it->second];
 }
 

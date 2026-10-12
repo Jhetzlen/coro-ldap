@@ -62,6 +62,41 @@ TEST_CASE("invalid attribute descriptions", "[attribute]")
 	CHECK(b.error().code == client_errc::invalid_attribute);
 }
 
+TEST_CASE("ci_hash / ci_equal fold A-Z only, in every byte position", "[attribute]")
+{
+	// Every pair of byte values, at each position of strings around the
+	// 8-byte word boundaries: ci_equal agrees with iequals (byte-wise
+	// ascii_lower), and equal strings hash the same.
+	const ldap::detail::ci_hash hash;
+	const ldap::detail::ci_equal equal;
+	const std::string base = "abcdefghijklmnopqrstuvwxyz";
+	std::size_t mismatches = 0, hash_mismatches = 0, equal_pairs = 0;
+	for (std::size_t len : { 1u, 2u, 7u, 8u, 9u, 15u, 16u, 17u, 25u }) {
+		for (std::size_t pos : { std::size_t{ 0 }, len / 2, len - 1 }) {
+			std::string x = base.substr(0, len), y = x;
+			for (int c = 0; c < 256; ++c) {
+				x[pos] = static_cast<char>(c);
+				for (int d = 0; d < 256; ++d) {
+					y[pos] = static_cast<char>(d);
+					const bool expected = ldap::detail::iequals(x, y);
+					if (equal(x, y) != expected) ++mismatches;
+					if (expected) {
+						++equal_pairs;
+						if (hash(x) != hash(y)) ++hash_mismatches;
+					}
+				}
+			}
+		}
+	}
+	CHECK(mismatches == 0);
+	CHECK(hash_mismatches == 0);
+	CHECK(equal_pairs == 9 * 3 * (256 + 2 * 26));// each byte with itself, A-Z with a-z both ways
+	CHECK_FALSE(equal("ab", "abc"));
+	CHECK(equal("", ""));
+	CHECK(hash("") == hash(std::string_view()));
+	CHECK(hash("a") != hash(std::string_view("a\0", 2)));
+}
+
 TEST_CASE("attribute comparison and hashing ignore case", "[attribute]")
 {
 	const ldap::attribute a{ "objectClass" };
