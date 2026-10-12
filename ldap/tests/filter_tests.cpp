@@ -4,10 +4,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <concepts>
+#include <iterator>
+#include <ranges>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -366,6 +370,60 @@ TEST_CASE("filter views expose every node", "[filter]")
 	CHECK_FALSE(children[0].initial());
 	CHECK(children[0].any().empty());
 	CHECK_FALSE(children[0].final());
+}
+
+// child_range and substring_range are borrowed views: their iterators refer
+// to the filter, so algorithms on a temporary range return usable iterators
+// (not std::ranges::dangling) and they compose with range adaptors.
+static_assert(std::ranges::view<ldap::filter::child_range>);
+static_assert(std::ranges::borrowed_range<ldap::filter::child_range>);
+static_assert(std::ranges::forward_range<ldap::filter::child_range>);
+static_assert(std::ranges::view<ldap::filter::substring_range>);
+static_assert(std::ranges::borrowed_range<ldap::filter::substring_range>);
+static_assert(std::ranges::forward_range<ldap::filter::substring_range>);
+// view_interface is an empty base: the layout is still just the iterator.
+static_assert(sizeof(ldap::filter::child_range) == sizeof(ldap::filter::child_iterator));
+static_assert(sizeof(ldap::filter::substring_range) == sizeof(ldap::filter::substring_iterator));
+static_assert(std::is_trivially_copyable_v<ldap::filter::child_range>);
+static_assert(std::is_trivially_copyable_v<ldap::filter::substring_range>);
+
+TEST_CASE("filter child and substring ranges are borrowed views", "[filter]")
+{
+	using kind = ldap::filter::kind;
+	using view = ldap::filter::view;
+	const auto f = raw("(&(objectClass=person)(cn=*)(sn=Jo*hn*Sm*ith)(mail=*))");
+
+	// find on the temporary range returns a real iterator.
+	auto it = std::ranges::find(f.root().children(), kind::present, &view::kind);
+	static_assert(std::same_as<decltype(it), ldap::filter::child_iterator>);
+	REQUIRE(it != ldap::filter::child_iterator{});
+	CHECK((*it).attribute() == "cn");
+	CHECK(std::ranges::find(f.root().children(), kind::approx, &view::kind) == ldap::filter::child_iterator{});
+
+	auto subs = std::ranges::find(f.root().children(), kind::substrings, &view::kind);
+	REQUIRE(subs != ldap::filter::child_iterator{});
+	auto part = std::ranges::find((*subs).any(), "Sm"sv);
+	static_assert(std::same_as<decltype(part), ldap::filter::substring_iterator>);
+	REQUIRE(part != ldap::filter::substring_iterator{});
+	CHECK(*part == "Sm");
+	CHECK(std::ranges::distance((*subs).any()) == 2);
+
+	// Members from view_interface (front, operator bool); empty() is ours.
+	CHECK(f.root().children().front().attribute() == "objectClass");
+	CHECK(static_cast<bool>(f.root().children()));
+	CHECK_FALSE(static_cast<bool>((*it).children()));
+	CHECK((*subs).any().front() == "hn");
+	CHECK(std::ranges::empty((*it).any()));
+
+	// Composes with adaptors, by value, without dangling.
+	auto present = f.root().children() | std::views::filter([](view v) { return v.kind() == kind::present; })
+				   | std::views::transform(&view::attribute);
+	CHECK(std::ranges::to<std::vector<std::string_view>>(present) == std::vector<std::string_view>{ "cn", "mail" });
+	auto lengths = (*subs).any() | std::views::transform(&std::string_view::size);
+	CHECK(std::ranges::to<std::vector<std::size_t>>(lengths) == std::vector<std::size_t>{ 2, 2 });
+	auto first_two = f.root().children() | std::views::take(2) | std::views::transform(&view::attribute);
+	CHECK(std::ranges::to<std::vector<std::string_view>>(first_two)
+		  == std::vector<std::string_view>{ "objectClass", "cn" });
 }
 
 TEST_CASE("filter parser accepts RFC 4515 text; to_string is canonical", "[filter][parser]")

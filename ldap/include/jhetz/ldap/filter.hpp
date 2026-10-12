@@ -13,6 +13,7 @@
 #include <iterator>
 #include <memory_resource>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -270,7 +271,10 @@ class filter::child_iterator
 	std::uint32_t i_ = filter::npos;
 };
 
-class filter::child_range
+// A borrowed view: its iterators point into the filter, not into the range,
+// so they stay valid after the range object is gone (as long as the filter
+// lives). view_interface adds front() and explicit operator bool.
+class filter::child_range : public std::ranges::view_interface<filter::child_range>
 {
   public:
 	child_iterator begin() const noexcept { return first_; }
@@ -318,7 +322,8 @@ class filter::substring_iterator
 	std::uint32_t i_ = filter::npos;
 };
 
-class filter::substring_range
+// A borrowed view, like child_range.
+class filter::substring_range : public std::ranges::view_interface<filter::substring_range>
 {
   public:
 	substring_iterator begin() const noexcept { return first_; }
@@ -429,3 +434,7 @@ namespace filters {
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
 }// namespace jhetz::ldap
+
+// The ranges' iterators refer to the filter, never to the range object.
+template<> inline constexpr bool std::ranges::enable_borrowed_range<jhetz::ldap::filter::child_range> = true;
+template<> inline constexpr bool std::ranges::enable_borrowed_range<jhetz::ldap::filter::substring_range> = true;
