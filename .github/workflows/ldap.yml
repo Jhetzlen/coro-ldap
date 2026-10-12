@@ -21,6 +21,17 @@ permissions:
 env:
   # UBSan findings abort (the build also uses -fno-sanitize-recover=all).
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+  DEBIAN_FRONTEND: noninteractive
+
+# Toolchain: the project needs GCC 16 / Clang 23 with libstdc++ 16. The
+# Ubuntu runner images ship at most GCC 15 / Clang 22, and the only GCC 16
+# Ubuntu packages (ubuntu-toolchain-r/test for 24.04, the 26.04 archive) are
+# pre-release snapshots from March 2026. So the Linux build jobs run in a
+# debian:sid container, which has the released g++-16 (16.2) and clang-23
+# (23.1) in one archive, plus slapd. Clang uses the newest installed GCC's
+# libstdc++, so the Clang jobs install g++-16 too. The sysctl gives the
+# container an IPv6 loopback for the [::1] network tests (they skip without
+# one).
 
 jobs:
   format:
@@ -34,20 +45,23 @@ jobs:
         run: find ldap -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run --Werror
 
   gcc-sanitize:
-    name: GCC 13 Debug (ASan + UBSan)
+    name: GCC 16 Debug (ASan + UBSan)
     runs-on: ubuntu-24.04
+    container:
+      image: debian:sid
+      options: --sysctl net.ipv6.conf.all.disable_ipv6=0
     steps:
-      - uses: actions/checkout@v4
       # libssl-dev, libicu-dev: jhetz::ldap_net (Corosio's OpenSSL backend;
       # ICU for SCRAM's SASLprep). Corosio and Capy are fetched from GitHub at
-      # configure time (pinned commits).
+      # configure time (pinned commits), hence git.
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build g++-13 libssl-dev libicu-dev
+        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build g++-16 libssl-dev libicu-dev
+      - uses: actions/checkout@v4
       - name: Configure
         run: >
           cmake -S ldap -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_CXX_COMPILER=g++-13
+          -DCMAKE_CXX_COMPILER=g++-16
           -DJHETZ_LDAP_SANITIZE=ON
           -DJHETZ_LDAP_WERROR=ON
       - name: Build
@@ -60,17 +74,21 @@ jobs:
         run: ctest --test-dir build --output-on-failure -R '^net\.' --repeat until-fail:5
 
   clang-net:
-    name: Clang 19 Debug with NET (ASan + UBSan)
+    name: Clang 23 Debug with NET (ASan + UBSan)
     runs-on: ubuntu-24.04
+    container:
+      image: debian:sid
+      options: --sysctl net.ipv6.conf.all.disable_ipv6=0
     steps:
-      - uses: actions/checkout@v4
+      # g++-16 for libstdc++ 16 (Clang uses the newest GCC installation's).
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build clang-19 libssl-dev libicu-dev
+        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build clang-23 g++-16 libssl-dev libicu-dev
+      - uses: actions/checkout@v4
       - name: Configure
         run: >
           cmake -S ldap -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_CXX_COMPILER=clang++-19
+          -DCMAKE_CXX_COMPILER=clang++-23
           -DJHETZ_LDAP_SANITIZE=ON
           -DJHETZ_LDAP_WERROR=ON
       - name: Build
@@ -81,17 +99,18 @@ jobs:
   # The standalone Corosio examples (examples/corosio): same pinned Corosio and
   # Capy commits as jhetz::ldap_net. Built only; the echo client needs a server.
   corosio-examples:
-    name: Corosio examples (GCC 13)
+    name: Corosio examples (GCC 16)
     runs-on: ubuntu-24.04
+    container: debian:sid
     steps:
-      - uses: actions/checkout@v4
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build g++-13 libssl-dev
+        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build g++-16 libssl-dev
+      - uses: actions/checkout@v4
       - name: Configure
         run: >
           cmake -S examples/corosio -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_CXX_COMPILER=g++-13
+          -DCMAKE_CXX_COMPILER=g++-16
           -DCOROSIO_EXAMPLES_WERROR=ON
       - name: Build
         run: cmake --build build
@@ -126,24 +145,26 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
   integration:
-    name: Integration (OpenLDAP slapd, GCC 13, ASan + UBSan)
+    name: Integration (OpenLDAP slapd, GCC 16, ASan + UBSan)
     runs-on: ubuntu-24.04
+    container:
+      image: debian:sid
+      options: --sysctl net.ipv6.conf.all.disable_ipv6=0
     steps:
-      - uses: actions/checkout@v4
+      # No systemd or AppArmor in the container: the packaged slapd is not
+      # started, and the tests run their own from a temporary directory.
+      # run_slapd.sh needs openssl (test PKI) and python3 (fixture).
       - name: Install tools and slapd
         run: |
-          sudo apt-get update
-          echo 'slapd slapd/no_configuration boolean true' | sudo debconf-set-selections
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ninja-build g++-13 libssl-dev libicu-dev slapd
-          # The tests run their own slapd from a temporary directory, which
-          # the packaged AppArmor profile does not allow.
-          sudo systemctl stop slapd || true
-          if [ -e /etc/apparmor.d/usr.sbin.slapd ]; then sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.slapd || true; fi
+          apt-get update
+          echo 'slapd slapd/no_configuration boolean true' | debconf-set-selections
+          apt-get install -y git ca-certificates cmake ninja-build g++-16 libssl-dev libicu-dev slapd openssl python3
+      - uses: actions/checkout@v4
       - name: Configure
         run: >
           cmake -S ldap -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
-          -DCMAKE_CXX_COMPILER=g++-13
+          -DCMAKE_CXX_COMPILER=g++-16
           -DJHETZ_LDAP_SANITIZE=ON
           -DJHETZ_LDAP_WERROR=ON
       - name: Build
@@ -154,19 +175,22 @@ jobs:
         run: ldap/tests/integration/run_slapd.sh ctest --test-dir build -L integration --output-on-failure
 
   clang-fuzz:
-    name: Clang fuzz smoke test
+    name: Clang 23 fuzz smoke test
     runs-on: ubuntu-24.04
+    container: debian:sid
     steps:
-      - uses: actions/checkout@v4
+      # libclang-rt-23-dev: libFuzzer and the sanitizer runtimes; g++-16 for
+      # libstdc++ 16.
       - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build clang-18 libclang-rt-18-dev
+        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build clang-23 libclang-rt-23-dev g++-16
+      - uses: actions/checkout@v4
       # A fuzz build leaves jhetz::ldap_net off by default (the fuzzers only
       # cover the codec and URLs), so nothing is fetched here.
       - name: Configure
         run: >
           cmake -S ldap -B build -G Ninja
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DCMAKE_CXX_COMPILER=clang++-18
+          -DCMAKE_CXX_COMPILER=clang++-23
           -DJHETZ_LDAP_BUILD_FUZZERS=ON
           -DJHETZ_LDAP_BUILD_TESTS=OFF
           -DJHETZ_LDAP_WERROR=ON
