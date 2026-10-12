@@ -6,21 +6,21 @@ namespace capy = boost::capy;
 
 namespace jhetz::ldap::sync {
 
-client::client(connection_options options) : options_(std::move(options))
+connection::connection(connection_options options) : options_(std::move(options))
 {
 	guard_.emplace(ioc_.get_executor());
 	io_thread_ = std::thread([this] { ioc_.run(); });
 	io_thread_id_ = io_thread_.get_id();
 }
 
-client::~client()
+connection::~connection()
 {
 	// Close on the I/O thread, then let the io_context run out of work:
 	// operations still running finish with not_connected, a detached name
 	// lookup finishes, and run() returns.
 	std::promise<void> closed;
-	capy::run_async(ioc_.get_executor())([](connection &c, std::promise<void> &p) -> capy::task<void> {
-		c = connection{};
+	capy::run_async(ioc_.get_executor())([](ldap::connection &c, std::promise<void> &p) -> capy::task<void> {
+		c = ldap::connection{};
 		p.set_value();
 		co_return;
 	}(conn_, closed));
@@ -29,10 +29,10 @@ client::~client()
 	io_thread_.join();
 }
 
-result<void> client::connect(url u)
+result<void> connection::connect(url u)
 {
-	return call([&](connection &c) -> capy::task<result<void>> {
-		return [](connection &target,
+	return call([&](ldap::connection &c) -> capy::task<result<void>> {
+		return [](ldap::connection &target,
 				 boost::corosio::io_context &ioc,
 				 url where,
 				 connection_options o) -> capy::task<result<void>> {
@@ -44,25 +44,25 @@ result<void> client::connect(url u)
 	});
 }
 
-bool client::is_open() const
+bool connection::is_open() const
 {
-	return const_cast<client *>(this)
-	  ->call([](connection &c) -> capy::task<result<bool>> { co_return c.is_open(); })
+	return const_cast<connection *>(this)
+	  ->call([](ldap::connection &c) -> capy::task<result<bool>> { co_return c.is_open(); })
 	  .value_or(false);
 }
 
-bool client::is_tls() const
+bool connection::is_tls() const
 {
-	return const_cast<client *>(this)
-	  ->call([](connection &c) -> capy::task<result<bool>> { co_return c.is_tls(); })
+	return const_cast<connection *>(this)
+	  ->call([](ldap::connection &c) -> capy::task<result<bool>> { co_return c.is_tls(); })
 	  .value_or(false);
 }
 
 result<std::pmr::vector<entry>>
-  client::search_paged(search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
+  connection::search_paged(search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
 {
-	return call([&](connection &c) {
-		return [](connection &conn,
+	return call([&](ldap::connection &c) {
+		return [](ldap::connection &conn,
 				 search_params p,
 				 std::int32_t n,
 				 std::pmr::memory_resource *m) -> capy::task<result<std::pmr::vector<entry>>> {
@@ -79,14 +79,14 @@ result<std::pmr::vector<entry>>
 	});
 }
 
-result<void> client::unbind()
+result<void> connection::unbind()
 {
-	return call([](connection &c) { return c.unbind(); });
+	return call([](ldap::connection &c) { return c.unbind(); });
 }
 
-void client::close()
+void connection::close()
 {
-	(void)call([](connection &c) -> capy::task<result<void>> {
+	(void)call([](ldap::connection &c) -> capy::task<result<void>> {
 		c.close();
 		co_return result<void>{};
 	});

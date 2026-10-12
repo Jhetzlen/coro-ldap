@@ -11,16 +11,16 @@ int main(int argc, char **argv)
 		std::cerr << url.error().message() << '\n';
 		return 1;
 	}
-	ldap::sync::client client;
-	if (auto connected = client.connect(*url); !connected) {
+	ldap::sync::connection conn;
+	if (auto connected = conn.connect(*url); !connected) {
 		std::cerr << connected.error().message() << '\n';
 		return 1;
 	}
-	if (auto bound = client.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"); !bound) {
+	if (auto bound = conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"); !bound) {
 		std::cerr << bound.error().message() << '\n';
 		return 1;
 	}
-	auto people = client.search({
+	auto people = conn.search({
 	  .base = ldap::dn{ "ou=people,dc=example,dc=org" },
 	  .filter = ldap::filters::attr("uid").starts_with("user00"),
 	  .attributes = { "cn" },

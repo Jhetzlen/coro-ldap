@@ -88,7 +88,7 @@ enum class client_errc : int {
 	too_many_values,// single-valued mapping got several values
 	conversion_failed,// value_traits<T>::decode failed
 	schema_mismatch,// runtime schema validation reported errors
-	would_deadlock,// blocking call made from the client's I/O thread
+	would_deadlock,// blocking call made from a sync::connection's I/O thread
 	unexpected_tag,// well-formed element, but not the expected tag
 	unsupported_operation,// LDAPMessage protocolOp this library does not know
 	invalid_dn,// RFC 4514 DN text could not be parsed

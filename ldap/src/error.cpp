@@ -126,7 +126,7 @@ namespace {
 		case client_errc::schema_mismatch:
 			return "mapping does not match the server schema";
 		case client_errc::would_deadlock:
-			return "blocking call from the client's own I/O thread would deadlock";
+			return "blocking call from the sync::connection's own I/O thread would deadlock";
 		case client_errc::unexpected_tag:
 			return "unexpected tag";
 		case client_errc::unsupported_operation:

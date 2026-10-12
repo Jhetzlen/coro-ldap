@@ -721,14 +721,14 @@ TEST_CASE("integration: password modify (RFC 3062)", "[integration]")
 	REQUIRE(finish(ioc, c.del({ .entry = entry })).has_value());
 }
 
-// ---------------------------------------------------------------- sync client
+// ---------------------------------------------------------------- sync connection
 
-TEST_CASE("integration: the sync client", "[integration][sync]")
+TEST_CASE("integration: the sync connection", "[integration][sync]")
 {
 	REQUIRE_SLAPD();
 	SECTION("StartTLS, then writes")
 	{
-		ldap::sync::client c(trusting());
+		ldap::sync::connection c(trusting());
 		auto u = env("JHETZ_LDAP_IT_LDAP");
 		u.replace(u.find("127.0.0.1"), 9, "localhost");
 		REQUIRE(c.connect(*ldap::url::parse(u)).has_value());
@@ -771,7 +771,7 @@ TEST_CASE("integration: the sync client", "[integration][sync]")
 	}
 	SECTION("SASL EXTERNAL over ldapi://, then close")
 	{
-		ldap::sync::client c(trusting());
+		ldap::sync::connection c(trusting());
 		REQUIRE(c.connect(*ldap::url::parse(env("JHETZ_LDAP_IT_LDAPI"))).has_value());
 		ldap::sasl_external mech;
 		REQUIRE(c.sasl_bind(mech).has_value());

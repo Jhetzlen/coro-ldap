@@ -1,4 +1,4 @@
-// ldap::sync::client against an in-process LDAP server on loopback TCP that
+// ldap::sync::connection against an in-process LDAP server on loopback TCP that
 // runs on its own thread and io_context and answers requests as they come.
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/sync.hpp"
@@ -108,7 +108,7 @@ struct server_thread
 TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 {
 	server_thread srv;
-	ldap::sync::client c({ .timeout = std::chrono::seconds(10) });
+	ldap::sync::connection c({ .timeout = std::chrono::seconds(10) });
 	CHECK_FALSE(c.is_open());
 	REQUIRE(c.connect(srv.url()).has_value());
 	CHECK(c.is_open());
@@ -131,10 +131,10 @@ TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 	CHECK(after.error().code == ldap::client_errc::not_connected);
 }
 
-TEST_CASE("sync: many threads share one client", "[net][sync]")
+TEST_CASE("sync: many threads share one connection", "[net][sync]")
 {
 	server_thread srv;
-	ldap::sync::client c;
+	ldap::sync::connection c;
 	REQUIRE(c.connect(srv.url()).has_value());
 	constexpr int threads = 8, per_thread = 25;
 	std::atomic<int> failures{ 0 };
@@ -161,19 +161,19 @@ TEST_CASE("sync: many threads share one client", "[net][sync]")
 TEST_CASE("sync: a blocking call from the I/O thread fails with would_deadlock", "[net][sync]")
 {
 	server_thread srv;
-	ldap::sync::client c;
+	ldap::sync::connection c;
 	REQUIRE(c.connect(srv.url()).has_value());
 	std::promise<ldap::result<std::string>> got;
 	capy::run_async(c.executor())(
-	  [](ldap::sync::client &cl, std::promise<ldap::result<std::string>> &p) -> capy::task<void> {
+	  [](ldap::sync::connection &cl, std::promise<ldap::result<std::string>> &p) -> capy::task<void> {
 		  p.set_value(cl.who_am_i());// blocking, on the I/O thread
 		  co_return;
 	  }(c, got));
 	auto r = got.get_future().get();
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::client_errc::would_deadlock);
-	CHECK(r.error().context == "sync::client");
-	// The client still works from other threads.
+	CHECK(r.error().context == "sync::connection");
+	// The connection still works from other threads.
 	CHECK(c.who_am_i() == "dn:cn=me");
 }
 
@@ -186,14 +186,14 @@ TEST_CASE("sync: connect failures and destruction without unbind", "[net][sync]"
 		port = acc.local_endpoint().port();
 	}
 	{
-		ldap::sync::client c;
+		ldap::sync::connection c;
 		auto r = c.connect(*ldap::url::parse("ldap://127.0.0.1:" + std::to_string(port)));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == std::errc::connection_refused);
 	}
 	server_thread srv;
 	{
-		ldap::sync::client c;
+		ldap::sync::connection c;
 		REQUIRE(c.connect(srv.url()).has_value());
 		REQUIRE(c.simple_bind(ldap::dn{}, "").has_value());
 	}// destroyed while connected: closes and joins
@@ -328,16 +328,16 @@ struct peer_server
 	}
 };
 
-// A client connected to `srv`. The operation timeout fails a call the
+// A sync::connection connected to `srv`. The operation timeout fails a call the
 // server never answers (a script too short) instead of hanging the test.
 struct connected
 {
-	ldap::sync::client c{ { .operation_timeout = std::chrono::seconds(10) } };
+	ldap::sync::connection c{ { .operation_timeout = std::chrono::seconds(10) } };
 	explicit connected(peer_server &srv) { REQUIRE(c.connect(srv.url()).has_value()); }
 };
 
 // Hangs up and waits for the server's session to end; what it received.
-std::vector<ldap::message> &hang_up(ldap::sync::client &c, peer_server &srv)
+std::vector<ldap::message> &hang_up(ldap::sync::connection &c, peer_server &srv)
 {
 	c.close();
 	srv.join();
@@ -605,7 +605,7 @@ TEST_CASE("sync: password_modify", "[net][sync]")
 TEST_CASE("sync: close without an UnbindRequest", "[net][sync]")
 {
 	{
-		ldap::sync::client never;
+		ldap::sync::connection never;
 		never.close();// nothing to close
 		CHECK_FALSE(never.is_open());
 		CHECK_FALSE(never.is_tls());

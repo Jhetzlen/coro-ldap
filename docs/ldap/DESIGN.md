@@ -343,7 +343,7 @@ timeLimitExceeded, which ended the search). There is no awaitable
 `release()`: the destructor does everything that needs no waiting, and
 waiting for the server's answer would tell the caller nothing it could
 act on.
-`sync::client::search_paged` keeps the `paged_search` on the I/O thread
+`sync::connection::search_paged` keeps the `paged_search` on the I/O thread
 and either reads every page or destroys it after an error, so it needs
 nothing more.
 
@@ -649,7 +649,7 @@ auto stream = co_await conn.search_stream_as<person>({...});
 while (auto p = co_await stream.next()) { ... }   // result<std::optional<person>>
 
 // blocking (jhetz/ldap/sync.hpp)
-ldap::sync::client c{url};                         // owns an io_context + 1 I/O thread
+ldap::sync::connection c{url};                     // owns an io_context + 1 I/O thread
 auto people = c.search_as<person>({...});          // same request/result types
 ```
 
@@ -864,19 +864,19 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   io_context (`connection::executor()`); from another thread, start the
   operation there (`capy::run_async(conn.executor())(task)`).
 
-- Implemented (#12, `jhetz/ldap/sync.hpp`): `sync::client` owns an
+- Implemented (#12, `jhetz/ldap/sync.hpp`): `sync::connection` owns an
   io_context and one I/O thread (kept alive by a work guard). Each method
   posts a wrapper coroutine to that thread, which builds and awaits the
   matching `ldap::connection` operation, and the caller waits on a
   `std::promise` holding the same `ldap::result<T>` (an exception thrown
   by the operation is rethrown in the caller). The connection is touched
   only on the I/O thread, so any number of caller threads can share one
-  client, their operations multiplexed. `result_future` from the Corosio
-  examples was not reused: it flattens errors to `std::error_code`, losing
-  `ldap::error`'s diagnostic and context. The destructor closes the
+  `sync::connection`, their operations multiplexed. `result_future` from
+  the (since removed) Corosio examples was not reused: it flattens errors
+  to `std::error_code`, losing `ldap::error`'s diagnostic and context. The destructor closes the
   connection on the I/O thread, drops the work guard and joins, which
   waits for a detached getaddrinfo still running. No connection pool yet.
-- Calling a blocking method from inside the client's own I/O thread would
+- Calling a blocking method from inside the facade's own I/O thread would
   deadlock; it returns `client_errc::would_deadlock` instead.
 - The facade exposes exactly the same request, entry, error and mapping types;
   only the calling convention differs.

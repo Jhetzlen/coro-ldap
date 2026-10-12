@@ -265,7 +265,7 @@ itself stays dependency-free.
 - `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.
-- `jhetz/ldap/sync.hpp` (#12): `ldap::sync::client`, the blocking facade.
+- `jhetz/ldap/sync.hpp` (#12): `ldap::sync::connection`, the blocking facade.
   It owns an io_context and an I/O thread; every method runs the
   corresponding connection operation there and waits, with the same
   types. Callable from any number of threads; a call from its own I/O
@@ -328,7 +328,7 @@ URL (`ldap://localhost`).
 | `delete.cpp` | delete the user `uid=jane` |
 | `starttls.cpp` | connect with StartTLS, then bind |
 | `cancel.cpp` | search the whole tree; Ctrl-C gives up on it (`capy::when_any` with `ldap::raceable`) |
-| `blocking.cpp` | the same search with the blocking `ldap::sync::client` |
+| `blocking.cpp` | the same search with the blocking `ldap::sync::connection` |
 
 `examples/ldapsearch.cpp` (above) is a fuller command-line tool. To try an
 example against the throwaway slapd of the integration tests:
