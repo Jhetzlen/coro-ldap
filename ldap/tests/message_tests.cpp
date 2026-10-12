@@ -288,7 +288,7 @@ TEST_CASE("decode checks enumerations and integer ranges", "[message]")
 	CHECK(ldap::decode(modify(3)).has_value());
 	auto bad_op = ldap::decode(modify(4));
 	CHECK(code_of(bad_op) == client_errc::decode_error);
-	CHECK(bad_op.error().context.find("modify operation 4") != std::string::npos);
+	CHECK(bad_op.error().context.contains("modify operation 4"));
 
 	auto bind = [](std::int64_t version) {
 		return raw_message(1, [&](ber::writer &m) {
@@ -621,7 +621,7 @@ TEST_CASE("regression: a huge AND filter in a search request fails fast", "[mess
 	auto r = ldap::decode(bytes);
 	REQUIRE_FALSE(r);
 	CHECK(r.error().code == client_errc::decode_error);
-	CHECK(r.error().context.find("more than 10000 filter elements") != std::string::npos);
+	CHECK(r.error().context.contains("more than 10000 filter elements"));
 	// A client connection (origin::server) does not look at the filter at all.
 	CHECK(code_of(ldap::decode(bytes, { .from = ldap::origin::server })) == client_errc::unsupported_operation);
 }

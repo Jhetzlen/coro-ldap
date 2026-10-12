@@ -27,7 +27,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 		LDAP_FUZZ_CHECK(a.error().code == ldap::client_errc::decode_error);
 	} else {
 		LDAP_FUZZ_CHECK(!a->oid.empty());
-		LDAP_FUZZ_CHECK(!a->syntax || a->syntax->find('{') == std::string::npos);
+		LDAP_FUZZ_CHECK(!a->syntax || !a->syntax->contains('{'));
 	}
 	auto c = ldap::parse_object_class(text);
 	LDAP_FUZZ_CHECK(c.has_value() == a.has_value());// same grammar

@@ -34,6 +34,7 @@
 #include <functional>
 #include <latch>
 #include <memory_resource>
+#include <numeric>
 #include <optional>
 #include <span>
 #include <stop_token>
@@ -1151,7 +1152,7 @@ capy::task<void> serve_shuffled(net::transport t, std::size_t n, std::uint64_t s
 		return static_cast<std::size_t>((state >> 33) % bound);
 	};
 	std::vector<std::size_t> live(n);
-	for (std::size_t i = 0; i < n; ++i) live[i] = i;
+	std::ranges::iota(live, std::size_t{ 0 });
 	while (!live.empty()) {
 		const std::size_t pick = next(live.size());
 		auto &q = queues[live[pick]];
@@ -1205,8 +1206,7 @@ TEST_CASE("connection: stress with many concurrent operations", "[net][connectio
 			  results[i]);
 		// Cancel every 7th operation before the server answers anything.
 		for (std::size_t i = 0; i < ops; i += 7) stops[i].request_stop();
-		drive_until(
-		  m.ioc, [&] { return std::all_of(results.begin(), results.end(), [](const auto &r) { return r.done(); }); });
+		drive_until(m.ioc, [&] { return std::ranges::all_of(results, [](const auto &r) { return r.done(); }); });
 		for (std::size_t i = 0; i < ops; ++i) {
 			INFO("operation " << i);
 			if (i % 7 == 0)

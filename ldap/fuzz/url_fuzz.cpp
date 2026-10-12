@@ -23,7 +23,7 @@ namespace {
 bool is_uri_char(char c)
 {
 	if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return true;
-	return std::string_view("-._~!$&'()*+,;=:@/?%[]").find(c) != std::string_view::npos;
+	return std::string_view("-._~!$&'()*+,;=:@/?%[]").contains(c);
 }
 
 }// namespace

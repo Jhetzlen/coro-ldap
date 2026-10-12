@@ -395,7 +395,7 @@ TEST_CASE("invalid DNs are rejected", "[dn]")
 	auto d = ldap::dn::parse(bad);
 	REQUIRE_FALSE(d);
 	CHECK(d.error().code == client_errc::invalid_dn);
-	CHECK(d.error().context.find("position") != std::string::npos);
+	CHECK(d.error().context.contains("position"));
 }
 
 TEST_CASE("dn to_string/parse round-trips arbitrary values", "[dn]")

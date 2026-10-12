@@ -421,7 +421,7 @@ TEST_CASE("filter child and substring ranges are borrowed views", "[filter]")
 	std::vector<std::string_view> present_attrs;
 	std::ranges::copy(present, std::back_inserter(present_attrs));
 	CHECK(present_attrs == std::vector<std::string_view>{ "cn", "mail" });
-	auto lengths = (*subs).any() | std::views::transform(&std::string_view::size);
+	auto lengths = (*subs).any() | std::views::transform([](std::string_view s) { return s.size(); });
 	std::vector<std::size_t> sizes;
 	std::ranges::copy(lengths, std::back_inserter(sizes));
 	CHECK(sizes == std::vector<std::size_t>{ 2, 2 });
@@ -551,7 +551,7 @@ TEST_CASE("filter parser rejects malformed text", "[filter][parser]")
 	auto r = ldap::filter::raw(bad);
 	REQUIRE_FALSE(r);
 	CHECK(r.error().code == client_errc::invalid_filter);
-	CHECK(r.error().context.find("position") != std::string::npos);
+	CHECK(r.error().context.contains("position"));
 }
 
 TEST_CASE("filter parse errors report the position in the caller's text", "[filter][parser]")
@@ -753,7 +753,7 @@ TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limit
 		auto t = from_ber(ber_and_of(100'000));
 		REQUIRE_FALSE(t);
 		CHECK(t.error().code == client_errc::decode_error);
-		CHECK(t.error().context.find("more than 10000 filter elements") != std::string::npos);
+		CHECK(t.error().context.contains("more than 10000 filter elements"));
 	}
 	{
 		const auto small = ber_and_of(3);

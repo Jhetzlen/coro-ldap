@@ -203,7 +203,7 @@ TEST_CASE("ber::reader rejects malformed input", "[ber][reader][malformed]")
 		ber::reader r(partial_length);
 		auto e = r.read();
 		CHECK(code_of(e) == client_errc::decode_error);
-		CHECK(context_of(e).find("truncated header") != std::string::npos);
+		CHECK(context_of(e).contains("truncated header"));
 		CHECK(r.offset() == 0);
 	}
 	SECTION("truncated content / length beyond the input")
@@ -214,7 +214,7 @@ TEST_CASE("ber::reader rejects malformed input", "[ber][reader][malformed]")
 		REQUIRE(seq);// outer element itself is complete
 		auto s = seq->read_octet_string();
 		CHECK(code_of(s) == client_errc::decode_error);
-		CHECK(context_of(s).find("offset 2") != std::string::npos);
+		CHECK(context_of(s).contains("offset 2"));
 
 		const auto huge = bytes({ 0x04, 0x84, 0xFF, 0xFF, 0xFF, 0xFF, 0x00 });
 		CHECK(code_of(ber::reader(huge).read()) == client_errc::decode_error);
@@ -224,7 +224,7 @@ TEST_CASE("ber::reader rejects malformed input", "[ber][reader][malformed]")
 		const auto data = bytes({ 0x30, 0x80, 0x05, 0x00, 0x00, 0x00 });
 		auto e = ber::reader(data).enter();
 		CHECK(code_of(e) == client_errc::decode_error);
-		CHECK(context_of(e).find("indefinite") != std::string::npos);
+		CHECK(context_of(e).contains("indefinite"));
 	}
 	SECTION("length of length too big")
 	{
@@ -246,7 +246,7 @@ TEST_CASE("ber::reader rejects malformed input", "[ber][reader][malformed]")
 		ber::reader r(data);
 		auto v = r.read_integer();
 		CHECK(code_of(v) == client_errc::integer_overflow);
-		CHECK(context_of(v).find("offset 0") != std::string::npos);
+		CHECK(context_of(v).contains("offset 0"));
 		CHECK(r.offset() == 0);// unchanged on failure
 	}
 	SECTION("empty INTEGER and ENUMERATED")
@@ -275,7 +275,7 @@ TEST_CASE("ber::reader rejects malformed input", "[ber][reader][malformed]")
 		ber::reader r(data);
 		auto v = r.read_integer();
 		CHECK(code_of(v) == client_errc::unexpected_tag);
-		CHECK(context_of(v).find("[UNIVERSAL 4]") != std::string::npos);
+		CHECK(context_of(v).contains("[UNIVERSAL 4]"));
 		CHECK(code_of(r.read_boolean()) == client_errc::unexpected_tag);
 		CHECK(code_of(r.read_octet_string(ber::context(4))) == client_errc::unexpected_tag);
 		CHECK(code_of(r.enter()) == client_errc::unexpected_tag);
@@ -297,7 +297,7 @@ TEST_CASE("ber::reader rejects malformed input", "[ber][reader][malformed]")
 		CHECK(seq->read_integer() == 7);
 		auto end = seq->expect_end();
 		CHECK(code_of(end) == client_errc::decode_error);
-		CHECK(context_of(end).find("offset 5") != std::string::npos);
+		CHECK(context_of(end).contains("offset 5"));
 	}
 }
 
@@ -346,7 +346,7 @@ TEST_CASE("ber::reader error offsets are absolute", "[ber][reader]")
 	CHECK(b->offset() == 7);
 	auto v = b->read_integer();
 	CHECK(code_of(v) == client_errc::integer_overflow);
-	CHECK(context_of(v).find("at offset 7") != std::string::npos);
+	CHECK(context_of(v).contains("at offset 7"));
 }
 
 TEST_CASE("ber::reader::read(tag) ignores the constructed bit of the expected tag", "[ber][reader]")
@@ -386,7 +386,7 @@ TEST_CASE("ber::reader::enter_encapsulated", "[ber][reader]")
 		CHECK(c->offset() == 6);
 		auto v = c->read_integer();
 		CHECK(code_of(v) == client_errc::integer_overflow);
-		CHECK(context_of(v).find("at offset 6") != std::string::npos);
+		CHECK(context_of(v).contains("at offset 6"));
 	}
 	SECTION("the depth limit applies across encapsulation")
 	{

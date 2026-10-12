@@ -106,13 +106,13 @@ TEST_CASE("every errc and client_errc has a real message", "[error]")
 		const auto text = std::error_code(e).message();
 		INFO("errc " << std::to_underlying(e) << ": " << text);
 		CHECK_FALSE(text.empty());
-		CHECK(text.find("unknown") == std::string::npos);
+		CHECK_FALSE(text.contains("unknown"));
 	}
 	for (int v = 1; v <= std::to_underlying(ldap::client_errc::unauthenticated_bind); ++v) {
 		const auto text = std::error_code(static_cast<ldap::client_errc>(v)).message();
 		INFO("client_errc " << v << ": " << text);
 		CHECK_FALSE(text.empty());
-		CHECK(text.find("unknown") == std::string::npos);
+		CHECK_FALSE(text.contains("unknown"));
 	}
 }
 
@@ -334,7 +334,7 @@ TEST_CASE("ldap::cond category", "[error][cond]")
 		const std::error_condition ec = c;
 		CHECK(&ec.category() == &ldap::cond_category());
 		CHECK_FALSE(ec.message().empty());
-		CHECK(ec.message().find("unknown") == std::string::npos);
+		CHECK_FALSE(ec.message().contains("unknown"));
 	}
 	// Works through ldap::error, as callers write it.
 	const ldap::error e = ldap::make_error(ldap::errc::invalid_credentials, "bind cn=x");
