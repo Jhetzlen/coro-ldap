@@ -92,7 +92,7 @@ TEST_CASE("ber::encode_length pins the octets at every octet-count boundary", "[
 	CHECK(encoded(0xFFFF'FFFF) == "84 FF FF FF FF");
 	if constexpr (sizeof(std::size_t) == 8) {
 		CHECK(encoded(std::size_t{ 1 } << 32) == "85 01 00 00 00 00");
-		CHECK(encoded(std::size_t{ 0x0123'4567'89AB'CDEF }) == "88 01 23 45 67 89 AB CD EF");
+		CHECK(encoded(static_cast<std::size_t>(0x0123'4567'89AB'CDEFull)) == "88 01 23 45 67 89 AB CD EF");
 		CHECK(encoded(std::numeric_limits<std::size_t>::max()) == "88 FF FF FF FF FF FF FF FF");
 	}
 }

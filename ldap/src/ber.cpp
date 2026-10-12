@@ -63,6 +63,7 @@ namespace {
 
 	// Long-form definite lengths (length >= 0x80): the initial octet is
 	// 0x80 | count, followed by `count` minimal big-endian length octets.
+	// Precondition: length >= 0x80 (short-form lengths have no length octets).
 	unsigned length_octet_count(std::size_t length) noexcept
 	{
 		return static_cast<unsigned>(std::bit_width(length) + 7) / 8;
