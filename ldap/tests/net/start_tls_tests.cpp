@@ -209,6 +209,30 @@ TEST_CASE("start_tls: is_tls() is false once the server drops the connection", "
 	CHECK_FALSE(c.is_tls());
 }
 
+// The TLS layer is in place before the handshake runs: is_tls() waits for
+// start_tls() to succeed. The server answers StartTLS but never handshakes,
+// so the client's handshake runs until its timeout; is_tls() is checked
+// after every step of the io_context meanwhile.
+TEST_CASE("start_tls: is_tls() is false while the handshake runs", "[net][starttls]")
+{
+	tcp_mock_ldap m;
+	m.serve({ answer(
+	  { ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 0 }, std::string(ldap::start_tls_oid) } } }) });
+	outcome<ldap::result<void>> tls;
+	spawn(m.ioc, m.conn.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }, std::chrono::milliseconds(200)), tls);
+	bool seen_tls = false;
+	drive_until(m.ioc, [&] {
+		seen_tls = seen_tls || m.conn.is_tls();
+		return tls.done();
+	});
+	CHECK_FALSE(seen_tls);
+	REQUIRE_FALSE(tls.get().has_value());
+	CHECK(tls.get().error().code == ldap::cond::timeout);
+	CHECK_FALSE(m.conn.is_open());
+	CHECK_FALSE(m.conn.is_tls());
+	m.check_server();
+}
+
 TEST_CASE("start_tls: connection_options::start_tls upgrades right after connecting", "[net][starttls]")
 {
 	tls_fixture f;
@@ -302,6 +326,7 @@ TEST_CASE("start_tls: certificate verification failures", "[net][starttls]")
 		CHECK_THAT(std::string(r.error().context), StartsWith("start tls ldap://127.0.0.1:"));
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("tls handshake: server certificate: "));
 		CHECK_FALSE(c.is_open());
+		CHECK_FALSE(c.is_tls());
 		drive(f.ioc);
 		CHECK_THAT(f.server.get(), StartsWith("server handshake: "));
 	}
@@ -315,6 +340,7 @@ TEST_CASE("start_tls: certificate verification failures", "[net][starttls]")
 		CHECK(r.error().code == ldap::cond::tls_failure);
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("hostname mismatch", Catch::CaseSensitive::No));
 		CHECK_FALSE(c.is_open());
+		CHECK_FALSE(c.is_tls());
 		drive(f.ioc);
 	}
 }

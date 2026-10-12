@@ -675,7 +675,11 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   `timeout`), blocks new requests until done (RFC 4511 section 4.14.1),
   waits for the reader and writer to stop, then upgrades. A refusal by
   the server leaves the connection usable in clear; injected bytes or a
-  failed handshake close it. A release's answer that comes after its
+  failed handshake close it. `connection::is_tls()` is true only once
+  start_tls has succeeded, and only while the connection is open: it is
+  false while start_tls runs, its handshake included (the transport holds
+  the TLS layer from before the handshake, so `transport::is_tls()` alone
+  would say true too early). A release's answer that comes after its
   deadline is dropped if it comes before the StartTLS response; after it,
   it counts as injected bytes (or breaks the handshake) and closes the
   connection.

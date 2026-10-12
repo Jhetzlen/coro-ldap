@@ -213,7 +213,8 @@ struct connection::impl
 	bool reading = false;
 	std::stop_source reader_stop{};
 	capy::async_event reader_idle{};// set while the reader is not running
-	// StartTLS in progress: no other request may be sent (RFC 4511 4.14.1).
+	// StartTLS in progress: no other request may be sent (RFC 4511 4.14.1),
+	// and is_tls() is false (the TLS layer is set before the handshake).
 	bool upgrading = false;
 	// schema_check::on_first_use: the loaded schema and the types checked.
 	ldap::schema_check schema_mode = ldap::schema_check::off;
@@ -854,8 +855,9 @@ connection::executor_type connection::executor() const noexcept { return impl_->
 std::size_t connection::outstanding() const noexcept { return impl_ == nullptr ? 0 : impl_->outstanding(); }
 
 // Describes the open connection: false after close(), unbind() or a failure,
-// even though the closed transport still holds its TLS layer.
-bool connection::is_tls() const noexcept { return is_open() && impl_->transport.is_tls(); }
+// even though the closed transport still holds its TLS layer. False during
+// start_tls() too: the TLS layer is in place before its handshake runs.
+bool connection::is_tls() const noexcept { return is_open() && !impl_->upgrading && impl_->transport.is_tls(); }
 
 void connection::close() noexcept
 {
