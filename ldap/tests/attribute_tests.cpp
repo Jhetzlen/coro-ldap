@@ -4,9 +4,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <algorithm>
 #include <map>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace ldap = jhetz::ldap;
 using jhetz::ldap::client_errc;
@@ -95,6 +97,22 @@ TEST_CASE("ci_hash / ci_equal fold A-Z only, in every byte position", "[attribut
 	CHECK(equal("", ""));
 	CHECK(hash("") == hash(std::string_view()));
 	CHECK(hash("a") != hash(std::string_view("a\0", 2)));
+}
+
+TEST_CASE("ci_hash: no full 64-bit collisions among similar OIDs", "[attribute]")
+{
+	// A single multiply per word let these collide in all 64 bits.
+	const ldap::detail::ci_hash hash;
+	CHECK(hash("1.3.6.1.4.1.0.14.1.8") != hash("1.3.6.1.4.1.0.18.1.4"));
+	// 8000 OIDs 1.3.6.1.4.1.a.b.1.c (the weak mix gave 40 collisions).
+	std::vector<std::size_t> hashes;
+	for (int a = 0; a < 20; ++a)
+		for (int b = 0; b < 20; ++b)
+			for (int c = 0; c < 20; ++c)
+				hashes.push_back(
+				  hash("1.3.6.1.4.1." + std::to_string(a) + "." + std::to_string(b) + ".1." + std::to_string(c)));
+	std::ranges::sort(hashes);
+	CHECK(std::ranges::adjacent_find(hashes) == hashes.end());
 }
 
 TEST_CASE("attribute comparison and hashing ignore case", "[attribute]")

@@ -48,8 +48,10 @@ namespace {
 		return w;
 	}
 
-	// The last s.size() % 8 bytes of s as a word (0 if none); when s has at
-	// least 8 bytes, its last 8 (overlapping the previous word).
+	// The bytes of s packed little-endian when it is shorter than 8, else its
+	// last 8 (overlapping the previous word). On big-endian the two paths
+	// pack differently, but each is self-consistent and the length is in
+	// the hash seed, so equal strings still hash equally.
 	std::uint64_t tail8(std::string_view s) noexcept
 	{
 		if (s.size() >= 8) return load8(s.data() + s.size() - 8);
@@ -58,9 +60,15 @@ namespace {
 		return w;
 	}
 
+	// Two multiply / xor-shift rounds: one alone cannot carry a difference
+	// in a word's high bytes down past the next word, so OIDs differing
+	// only there ("1.3.6.1.4.1.0.14.1.8" / "...0.18.1.4") collided in all
+	// 64 bits. Portable (no 128-bit product).
 	constexpr std::uint64_t mix(std::uint64_t h, std::uint64_t w) noexcept
 	{
 		h = (h ^ w) * 0x9E37'79B9'7F4A'7C15ull;
+		h ^= h >> 32;
+		h *= 0xD6E8'FEB8'6659'FD93ull;
 		return h ^ (h >> 32);
 	}
 
