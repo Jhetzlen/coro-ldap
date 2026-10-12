@@ -1578,6 +1578,9 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	if (!self->open) co_return std::unexpected(self->not_connected(context));
 
 	auto r = co_await net::start_tls(self->transport, self->buf, std::move(options), timeout);
+	// Closed meanwhile (unbind(), close()): the handshake failed because of
+	// that, or ended over a closed transport; say so, as for the steps above.
+	if (!self->open) co_return std::unexpected(self->not_connected(context));
 	if (!r) {
 		// Injected bytes or a failed handshake: the stream cannot be trusted.
 		error e = std::move(r.error());

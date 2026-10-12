@@ -542,7 +542,7 @@ class connection
 	// connection_options::operation_timeout for the wait and the exchange, no
 	// limit for the handshake. An unbind() once the StartTLS request is sent
 	// closes the connection (nothing may be sent until the handshake), and
-	// start_tls then fails with not_connected.
+	// start_tls then fails with not_connected, during the handshake too.
 	boost::capy::task<result<void>> start_tls(net::tls_options options = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
 

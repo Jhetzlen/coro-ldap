@@ -233,6 +233,41 @@ TEST_CASE("start_tls: is_tls() is false while the handshake runs", "[net][startt
 	m.check_server();
 }
 
+// unbind() during the handshake closes the connection (nothing may be sent
+// until the handshake is done): start_tls fails with not_connected, as it
+// does while it waits for its response, not with the error the closed
+// socket gave the handshake. The server answers StartTLS, then reads the
+// first byte of the ClientHello and never handshakes.
+TEST_CASE("start_tls: unbind during the handshake closes the connection", "[net][starttls]")
+{
+	outcome<ldap::result<void>> tls;// outlive `m`: what still waits ends with it
+	outcome<int> hello;
+	tcp_mock_ldap m;
+	m.serve({ answer(
+	  { ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 0 }, std::string(ldap::start_tls_oid) } } }) });
+	spawn(m.ioc, m.conn.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }), tls);
+	m.check_server();
+	spawn(
+	  m.ioc,
+	  [](corosio::tcp_socket &peer) -> capy::task<int> {
+		  unsigned char byte = 0;
+		  auto [ec, n] = co_await peer.read_some(capy::mutable_buffer(&byte, 1));
+		  co_return (ec || n != 1) ? -1 : byte;
+	  }(m.peer),
+	  hello);
+	drive_until(m.ioc, [&hello] { return hello.done(); });
+	REQUIRE(hello.get() == 0x16);// a TLS handshake record: the handshake runs
+	REQUIRE_FALSE(tls.done());
+	auto u = m.run(m.conn.unbind());
+	CHECK(u.has_value());
+	CHECK_FALSE(m.conn.is_open());
+	drive_until(m.ioc, [&tls] { return tls.done(); });
+	REQUIRE_FALSE(tls.get().has_value());
+	CHECK(tls.get().error().code == ldap::client_errc::not_connected);
+	CHECK(tls.get().error().context == "start tls: connection closed");
+	CHECK_FALSE(m.conn.is_tls());
+}
+
 TEST_CASE("start_tls: connection_options::start_tls upgrades right after connecting", "[net][starttls]")
 {
 	tls_fixture f;
