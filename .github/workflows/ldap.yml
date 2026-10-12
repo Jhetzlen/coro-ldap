@@ -27,22 +27,24 @@ env:
 # Ubuntu runner images ship at most GCC 15 / Clang 22, and the only GCC 16
 # Ubuntu packages (ubuntu-toolchain-r/test for 24.04, the 26.04 archive) are
 # pre-release snapshots from March 2026. So the Linux build jobs run in a
-# debian:sid container, which has the released g++-16 (16.2) and clang-23
-# (23.1) in one archive, plus slapd. Clang uses the newest installed GCC's
-# libstdc++, so the Clang jobs install g++-16 too. The sysctl gives the
-# container an IPv6 loopback for the [::1] network tests (they skip without
-# one).
+# debian:sid container, which has the released g++-16 (16.2), clang-23
+# (23.1) and clang-format-23 in one archive, plus slapd. Clang uses the
+# newest installed GCC's libstdc++, so the Clang jobs install g++-16 too.
+# The sysctl gives the container an IPv6 loopback for the [::1] network
+# tests (they skip without one).
 
 jobs:
+  # clang-format 23, from the same debian:sid container as the build jobs.
   format:
-    name: clang-format
+    name: clang-format 23
     runs-on: ubuntu-24.04
+    container: debian:sid
     steps:
-      - uses: actions/checkout@v4
       - name: Install clang-format
-        run: sudo apt-get update && sudo apt-get install -y clang-format-18
+        run: apt-get update && apt-get install -y git ca-certificates clang-format-23
+      - uses: actions/checkout@v4
       - name: Check formatting
-        run: find ldap -name '*.cpp' -o -name '*.hpp' | xargs clang-format-18 --dry-run --Werror
+        run: find ldap -name '*.cpp' -o -name '*.hpp' | xargs clang-format-23 --dry-run --Werror
 
   gcc-sanitize:
     name: GCC 16 Debug (ASan + UBSan)

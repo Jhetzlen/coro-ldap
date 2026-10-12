@@ -52,5 +52,5 @@ Tracked in beads (`bd list`) since 2026-10-10; the GitHub numbers are history.
   under `--repeat until-fail:10 -j8`.
 - New parsers of untrusted input get a fuzz target, seeds and a GCC replay
   test.
-- `clang-format --dry-run --Werror` clean, CI green, `DESIGN.md` updated,
-  independent review done.
+- `clang-format --dry-run --Werror` clean (clang-format 23, as in CI), CI
+  green, `DESIGN.md` updated, independent review done.

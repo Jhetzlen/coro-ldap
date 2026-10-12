@@ -1,22 +1,22 @@
 AccessModifierOffset: -2
-AlignAfterOpenBracket: DontAlign
+AlignAfterOpenBracket: false
 AlignConsecutiveAssignments: false
 AlignConsecutiveDeclarations: false
 AlignEscapedNewlines: Left
-AlignOperands: true
-AlignTrailingComments: false
+AlignOperands: Align
+AlignTrailingComments:
+  Kind: Never
 AllowAllParametersOfDeclarationOnNextLine: false
-AllowShortBlocksOnASingleLine: true
+# Empty, not Always: with Always, clang-format 23 (unlike 18) also merges a
+# function body into one line under its wrapped signature (`{ return x; }`)
+# when the whole function does not fit. The style here keeps such bodies on
+# their own lines; one-line `{ stmt; }` blocks were rare anyway.
+AllowShortBlocksOnASingleLine: Empty
 AllowShortCaseLabelsOnASingleLine: false
 AllowShortFunctionsOnASingleLine: All
-AllowShortIfStatementsOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: WithoutElse
 AllowShortLoopsOnASingleLine: true
-AlwaysBreakAfterDefinitionReturnType: None
-AlwaysBreakAfterReturnType: None
 AlwaysBreakBeforeMultilineStrings: true
-AlwaysBreakTemplateDeclarations: false
-BinPackArguments: false
-BinPackParameters: false
 BraceWrapping:
   AfterClass: true
   AfterControlStatement: false
@@ -35,18 +35,18 @@ BraceWrapping:
 BreakAfterJavaFieldAnnotations: true
 BreakBeforeBinaryOperators: NonAssignment
 BreakBeforeBraces: Custom
-BreakBeforeInheritanceComma: true
 BreakBeforeTernaryOperators: true
+BreakAfterReturnType: None
 BreakConstructorInitializers: BeforeColon
-BreakConstructorInitializersBeforeComma: false
+BreakInheritanceList: BeforeComma
 BreakStringLiterals: true
+BreakTemplateDeclarations: MultiLine
 ColumnLimit: 120
 CommentPragmas: '^ IWYU pragma:'
 CompactNamespaces: false
-ConstructorInitializerAllOnOneLineOrOnePerLine: false
 ConstructorInitializerIndentWidth: 2
 ContinuationIndentWidth: 2
-Cpp11BracedListStyle: false
+Cpp11BracedListStyle: Block
 DerivePointerAlignment: false
 DisableFormat: false
 ExperimentalAutoDetectBinPacking: true
@@ -68,7 +68,10 @@ IndentWidth: 4
 IndentWrappedFunctionNames: true
 JavaScriptQuotes: Leave
 JavaScriptWrapImports: true
-KeepEmptyLinesAtTheStartOfBlocks: true
+KeepEmptyLines:
+  AtEndOfFile: false
+  AtStartOfBlock: true
+  AtStartOfFile: true
 Language: Cpp
 MacroBlockBegin: ''
 MacroBlockEnd: ''
@@ -77,9 +80,16 @@ NamespaceIndentation: Inner
 ObjCBlockIndentWidth: 7
 ObjCSpaceAfterProperty: true
 ObjCSpaceBeforeProtocolList: false
+PackArguments:
+  BinPack: OnePerLine
+PackConstructorInitializers: BinPack
+PackParameters:
+  BinPack: OnePerLine
 PointerAlignment: Right
-ReflowComments: true
-SortIncludes: true
+ReflowComments: Always
+SortIncludes:
+  Enabled: true
+  IgnoreCase: false
 SortUsingDeclarations: false
 SpaceAfterCStyleCast: false
 SpaceAfterTemplateKeyword: false
@@ -87,11 +97,10 @@ SpaceBeforeAssignmentOperators: true
 SpaceBeforeParens: ControlStatements
 SpaceInEmptyParentheses: false
 SpacesBeforeTrailingComments: 0
-SpacesInAngles: false
-SpacesInCStyleCastParentheses: false
+SpacesInAngles: Never
 SpacesInContainerLiterals: true
-SpacesInParentheses: false
+SpacesInParens: Never
 SpacesInSquareBrackets: false
 Standard: c++20
-TabWidth: 4 
+TabWidth: 4
 UseTab: Always
