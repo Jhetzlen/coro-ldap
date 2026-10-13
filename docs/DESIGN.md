@@ -395,9 +395,13 @@ the public header (pimpl). `gss_acquire_cred` and every
 `gss_init_sec_context` call run off the I/O thread (`offload_start`,
 `offload_step`, above): with MIT krb5 the first one resolves the KDC
 (DNS SRV, possibly canonicalizing the host) and sends the TGS-REQ,
-bounded only by krb5.conf (`kdc_timeout`, `max_retries`, per KDC); the
-bind's timeout and cancellation do not interrupt that call, they stop
-waiting for it. `gss_unwrap` / `gss_wrap` (local) stay on the I/O thread.
+with a fixed retry schedule (several passes over the KDCs, with
+backoff), bounded in total only by `[libdefaults] request_timeout` (MIT
+1.22 and later, default 0: no maximum; `kdc_timeout` and `max_retries`
+are Heimdal's, MIT has neither), and its DNS lookups by `resolv.conf`'s
+`timeout` and `attempts`; the bind's timeout and cancellation do not
+interrupt that call, they stop waiting for it. `gss_unwrap` / `gss_wrap`
+(local) stay on the I/O thread.
 Failures are `client_errc::gssapi_failure`
 (`cond::auth_failed`) with the call's name and `gss_display_status`'s
 major and minor messages (sanitized, as server text is), never tokens.

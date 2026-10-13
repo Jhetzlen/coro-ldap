@@ -16,13 +16,15 @@
 // Behaviour:
 // - Threading: gss_acquire_cred and gss_init_sec_context may block for a
 //   long time (MIT krb5 resolves the KDC and the realm through DNS and
-//   sends the TGS-REQ for the service ticket, with its own retries and
-//   timeouts: krb5.conf's kdc_timeout and max_retries, several seconds per
-//   unreachable KDC). connection::sasl_bind runs them on a thread of its
-//   own (one per call, offload_start and offload_step), so the io_context
-//   (or the sync::connection's I/O thread) goes on with other work. The
-//   bind's timeout (connection_options::operation_timeout) and
-//   cancellation stop the wait, not the call: the bind then fails with
+//   sends the TGS-REQ for the service ticket, retrying with backoff over
+//   the KDCs, several seconds per unreachable one; the total is bounded
+//   only by krb5.conf's [libdefaults] request_timeout, MIT 1.22 and later,
+//   default none; DNS by resolv.conf's timeout and attempts; Heimdal has
+//   kdc_timeout and max_retries instead). connection::sasl_bind runs them
+//   on a thread of its own (one per call, offload_start and offload_step),
+//   so the io_context (or the sync::connection's I/O thread) goes on with
+//   other work. The bind's timeout (connection_options::operation_timeout)
+//   and cancellation stop the wait, not the call: the bind then fails with
 //   capy::error::timeout or canceled, and the call runs to its end on its
 //   thread, with handles of its own, released there. The io_context keeps
 //   the call as outstanding work: run() returns only once it is over, and

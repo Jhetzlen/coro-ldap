@@ -268,7 +268,9 @@ itself stays dependency-free.
   tokens or credentials. Every GSS-API handle is released (RAII).
   The GSS-API calls that may block (`gss_acquire_cred`,
   `gss_init_sec_context`: MIT krb5 does DNS lookups and asks the KDC for
-  the service ticket, with krb5.conf's `kdc_timeout` and `max_retries`)
+  the service ticket, retrying over the KDCs with backoff; the total is
+  bounded by krb5.conf's `request_timeout`, MIT 1.22 and later, default
+  none, and DNS by `resolv.conf`'s `timeout` and `attempts`)
   run on a thread of their own, one per call, so the io_context (or the
   `sync::connection`'s I/O thread) is not stalled. `operation_timeout`
   and cancellation stop the bind's wait (`capy::error::timeout` /

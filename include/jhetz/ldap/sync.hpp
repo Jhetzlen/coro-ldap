@@ -27,9 +27,10 @@
 // in progress (net::connect runs getaddrinfo detached, which cannot be
 // interrupted) is waited for, so destruction can take as long as the
 // system resolver's own timeout; so is a SASL step sasl_bind gave up on
-// but which still runs on its thread (GSSAPI waiting for a KDC, bounded
-// by krb5.conf's kdc_timeout and max_retries). Do not destroy a sync::connection while
-// another thread is inside one of its methods.
+// but which still runs on its thread (GSSAPI waiting for a KDC: with MIT
+// krb5, bounded by krb5.conf's request_timeout, from 1.22, else by its
+// retry schedule, and DNS by resolv.conf). Do not destroy a
+// sync::connection while another thread is inside one of its methods.
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"
