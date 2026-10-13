@@ -312,9 +312,12 @@ service of the io_context (`offload_threads`, `src/connection.cpp`) owns
 them and joins them in its `shutdown()`. Capy shuts services down, then
 deletes them, newest first (`execution_context::shutdown()` /
 `destroy()` walk a list that `use_service()` pushes onto the front), and
-the scheduler is the io_context's first service (made by its
-constructor, `Backend::construct`), so the join runs while the scheduler
-is alive and nothing of the thread outlives the io_context. The cost:
+the io_context's constructor makes the scheduler (`Backend::construct`)
+and the services it needs before any `offload_threads`: oldest first,
+the timer service (which the scheduler's constructor makes), the
+scheduler, the thread pool, then the services made on use, such as
+`offload_threads`. So the join runs while the scheduler is alive and
+nothing of the thread outlives the io_context. The cost:
 destroying the io_context (and so `sync::connection`'s destructor)
 waits for a step still running, as long as krb5's own timeouts. A
 thread that has ended is joined when the next one starts, so they do
