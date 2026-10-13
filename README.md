@@ -166,11 +166,12 @@ itself stays dependency-free.
   `capy::when_any(ldap::raceable(c.search(p)), corosio::delay(5s))` races
   it (`raceable` makes its `result<T>` the payload of a `capy::io_result`,
   as `when_any` requires; the first to complete wins, the other is
-  stopped, so a losing operation is abandoned). `ldap::with_stop(token,
-  op)` cancels it on a `std::stop_token` of your own (stoppable from any
-  thread only with the io_context's default `corosio::locking_mode::safe`;
-  under `unsafe_io` and `unsafe`, only from the thread running the
-  io_context) as well as on the awaiting task's.
+  stopped, so a losing operation is abandoned; one stopped before it
+  starts is not sent). `ldap::with_stop(token, op)` cancels it on a
+  `std::stop_token` of your own (stoppable from any thread only with the
+  io_context's default `corosio::locking_mode::safe`; under `unsafe_io`
+  and `unsafe`, only from the thread running the io_context) as well as on
+  the awaiting task's.
   Abandon is best effort (RFC 4511 section 4.11): the server may have
   finished first, so an update (add, modify, delete, modify DN) that timed
   out, was stopped or lost a race may still have been applied; re-read the
@@ -179,9 +180,9 @@ itself stays dependency-free.
   certainly not applied); it fails with `capy::error::canceled`.
   Bind and StartTLS cannot be abandoned (RFC 4511 section 4.11): giving up
   on one closes the connection (one stopped before it starts is not sent
-  either, and the connection stays open). Nothing is sent while a bind is outstanding
-  (RFC 4511 section 4.2.1): requests started during a bind exchange are
-  held and sent after it, and binds are serialized.
+  either, and the connection stays open). Nothing is sent while a bind is
+  outstanding (RFC 4511 section 4.2.1): requests started during a bind
+  exchange are held and sent after it, and binds are serialized.
   Every response is decoded with `origin::server` and must answer an
   outstanding request (else `client_errc::unexpected_response`);
   IntermediateResponses are skipped; a Notice of Disconnection fails every

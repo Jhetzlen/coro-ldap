@@ -803,10 +803,12 @@ boost::capy::task<result<connection>> connect(boost::corosio::io_context &ioc,
 // successfully or not. If it is cancelled (it lost the race, or the awaiting
 // task was stopped) the io_result carries its error code instead and cannot
 // win; the operation was then abandoned, or, for a bind or StartTLS, the
-// connection closed. At the operation's index, when_any's result holds the
-// result<T>. Abandon is best effort (RFC 4511 section 4.11): an update (add,
-// modify, delete, modify DN) that lost the race may still have been applied
-// by the server; re-read the entry if the outcome matters.
+// connection closed (one stopped before it starts is not sent: nothing is
+// abandoned and the connection stays open). At the operation's index,
+// when_any's result holds the result<T>. Abandon is best effort (RFC 4511
+// section 4.11): an update (add, modify, delete, modify DN) that lost the
+// race may still have been applied by the server; re-read the entry if the
+// outcome matters.
 template<class T> boost::capy::task<boost::capy::io_result<result<T>>> raceable(boost::capy::task<result<T>> op)
 {
 	result<T> r = co_await std::move(op);
@@ -819,9 +821,11 @@ template<class T> boost::capy::task<boost::capy::io_result<result<T>>> raceable(
 // Awaits `op` with a stop token that is set when either `token` or the
 // awaiting task's own stop token is: either cancels the operation (an LDAP
 // operation then fails with cond::canceled and is abandoned, or, for a bind
-// or StartTLS, closes the connection). Abandon is best effort (RFC 4511
-// section 4.11): a stopped update (add, modify, delete, modify DN) may still
-// have been applied by the server; re-read the entry if the outcome matters.
+// or StartTLS, closes the connection; one stopped before it starts is not
+// sent: nothing is abandoned and the connection stays open). Abandon is best
+// effort (RFC 4511 section 4.11): a stopped update (add, modify, delete,
+// modify DN) may still have been applied by the server; re-read the entry if
+// the outcome matters.
 // A stop requested after `op` has completed has no effect. `token` may be
 // stopped from any thread only under the io_context's default
 // locking_mode::safe; under unsafe_io and unsafe, only from the thread
