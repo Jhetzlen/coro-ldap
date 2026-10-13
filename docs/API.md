@@ -202,7 +202,13 @@ itself stays dependency-free.
   current page and releases the server's paging state with a page size 0
   request, RFC 2696 section 3, unless the search already ended; the
   release's answer is read and dropped, and counted by `outstanding()`
-  until it arrives or the page timeout passes). Referrals are returned (in
+  until it arrives or the page timeout passes). Several paged searches
+  may run at once on a connection (RFC 2696 section 3), but OpenLDAP keeps
+  one per connection: it refuses the older one's next page with
+  unwillingToPerform, and with `server_side_sort` its sssvlv overlay
+  answers that page with the latest sorted paged search's entries
+  instead, which the client cannot detect; there, give each concurrent
+  paged search its own connection. Referrals are returned (in
   `error::referrals` and `search_stream::references()`), never chased;
   `url::parse_list` parses them.
 - Password changes that work on OpenLDAP and Active Directory alike:

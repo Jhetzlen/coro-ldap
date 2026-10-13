@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <format>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -674,6 +675,140 @@ TEST_CASE("integration: server side sort", "[integration][controls]")
 	REQUIRE_FALSE(refused.has_value());
 	INFO(refused.error().message());
 	CHECK(refused.error().code.category() == ldap::result_category());
+}
+
+namespace {
+
+// One page of `params` by hand, with `control` added: the uids it returned
+// and the cookie of its paged results control.
+struct uid_page
+{
+	std::vector<std::string> uids{};
+	std::string cookie{};
+};
+
+ldap::result<uid_page>
+  uid_page_by_hand(corosio::io_context &ioc, ldap::connection &c, ldap::search_params params, ldap::paged control)
+{
+	params.controls.emplace_back(std::move(control));
+	auto s = finish(ioc, c.search_stream(std::move(params)));
+	if (!s) return std::unexpected(std::move(s.error()));
+	uid_page out;
+	while (true) {
+		auto e = finish(ioc, s->next());
+		if (!e) return std::unexpected(std::move(e.error()));
+		if (!*e) break;
+		out.uids.emplace_back((*e)->find("uid")->front());
+	}
+	for (const auto &ctl : s->controls())
+		if (ctl.type == ldap::paged_results_oid) out.cookie = std::string(ldap::decode_paged_results(ctl)->cookie);
+	return out;
+}
+
+// user<n>*, by sn descending if `sorted`.
+ldap::search_params hundred_users(int n, bool sorted)
+{
+	ldap::search_params p{ .base = people,
+		.filter = ldap::filters::attr("uid").starts_with("user" + std::to_string(n)),
+		.attributes = { "uid" } };
+	if (sorted)
+		p.controls.emplace_back(ldap::server_side_sort{
+		  .keys = { { .attribute = "sn", .ordering_rule = "caseIgnoreOrderingMatch", .reverse = true } } });
+	return p;
+}
+
+// "user<n><99 - first>" .. "user<n><99 - first - count + 1>".
+std::vector<std::string> descending_uids(int n, int first, int count)
+{
+	std::vector<std::string> out;
+	for (int i = 0; i < count; ++i) out.emplace_back(std::format("user{}{:02}", n, 99 - first - i));
+	return out;
+}
+
+}// namespace
+
+// slapd keeps one paged search per connection (RFC 2696 section 3 lets a
+// server age out older ones). Without sorting, resuming the older one
+// fails cleanly. With the sssvlv overlay (sorted paged searches), any
+// non-empty cookie resumes the connection's latest sorted paged search:
+// sssvlv looks the session up by ps_cookie, which slapd's control parser
+// copies from the connection's last returned cookie, and never reads the
+// request's own cookie (ps_cookieval; OpenLDAP 2.7.1 and master as of
+// 2026-10). The client cannot tell: concurrent sorted paged searches need
+// one connection each, which this checks.
+TEST_CASE("integration: concurrent paged searches with and without sorting", "[integration][controls]")
+{
+	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (env("JHETZ_LDAP_IT_SORT").empty()) SKIP("slapd without the sssvlv overlay");
+	corosio::io_context ioc;
+
+	SECTION("unsorted on one connection: the older search's cookie is refused")
+	{
+		auto c = open_admin(ioc);
+		auto a1 = uid_page_by_hand(ioc, c, hundred_users(0, false), { .page_size = 20 });
+		auto b1 = uid_page_by_hand(ioc, c, hundred_users(1, false), { .page_size = 20 });
+		REQUIRE(a1.has_value());
+		REQUIRE(b1.has_value());
+		CHECK(a1->uids.size() == 20);
+		CHECK(b1->uids.size() == 20);
+		auto a2 = uid_page_by_hand(ioc, c, hundred_users(0, false), { .page_size = 20, .cookie = a1->cookie });
+		REQUIRE_FALSE(a2.has_value());
+		CHECK(a2.error().code == ldap::errc::unwilling_to_perform);
+		auto b2 = uid_page_by_hand(ioc, c, hundred_users(1, false), { .page_size = 20, .cookie = b1->cookie });
+		REQUIRE(b2.has_value());
+		CHECK(b2->uids.front() == "user120");
+	}
+
+	SECTION("sorted on one connection: the older search's cookie resumes the latest (slapd bug)")
+	{
+		auto c = open_admin(ioc);
+		auto a1 = uid_page_by_hand(ioc, c, hundred_users(0, true), { .page_size = 20 });
+		auto b1 = uid_page_by_hand(ioc, c, hundred_users(1, true), { .page_size = 20 });
+		REQUIRE(a1.has_value());
+		REQUIRE(b1.has_value());
+		CHECK(a1->uids == descending_uids(0, 0, 20));
+		CHECK(b1->uids == descending_uids(1, 0, 20));
+		REQUIRE_FALSE(a1->cookie.empty());
+		CHECK(a1->cookie != b1->cookie);
+		// The request carries A's own cookie, filter and sort; the answer is
+		// B's second page. Failing here means slapd fixed it: update the
+		// notes of search_paged (connection.hpp) and docs/API.md.
+		auto a2 = uid_page_by_hand(ioc, c, hundred_users(0, true), { .page_size = 20, .cookie = a1->cookie });
+		REQUIRE(a2.has_value());
+		CHECK(a2->uids == descending_uids(1, 20, 20));
+	}
+
+	SECTION("sorted, one connection each: every search gets its own entries")
+	{
+		std::vector<ldap::connection> conns;
+		std::vector<ldap::paged_search> searches;
+		for (int n = 0; n < 3; ++n) {
+			conns.push_back(open_admin(ioc));
+			auto p = finish(ioc, conns.back().search_paged(hundred_users(n, true), 20));
+			REQUIRE(p.has_value());
+			searches.push_back(std::move(*p));
+		}
+		// One entry of each in turn, so their pages interleave.
+		std::vector<std::vector<std::string>> uids(3);
+		for (bool more = true; more;) {
+			more = false;
+			for (std::size_t i = 0; i < searches.size(); ++i) {
+				if (searches[i].done()) continue;
+				auto e = finish(ioc, searches[i].next());
+				REQUIRE(e.has_value());
+				if (!*e) continue;
+				uids[i].emplace_back((*e)->find("uid")->front());
+				more = true;
+			}
+		}
+		// user2xx has 50 users (user200 .. user249).
+		CHECK(uids[0] == descending_uids(0, 0, 100));
+		CHECK(uids[1] == descending_uids(1, 0, 100));
+		CHECK(uids[2] == descending_uids(2, 50, 50));
+		CHECK(searches[0].pages() == 5);
+		CHECK(searches[1].pages() == 5);
+		CHECK(searches[2].pages() == 3);
+	}
 }
 
 TEST_CASE("integration: password modify (RFC 3062)", "[integration]")
