@@ -562,7 +562,8 @@ SLAPD=/usr/sbin/slapd tests/coverage/run_coverage.sh [--run-only] [BUILD_DIR]
 
 `--run-only` stops after the tests and leaves the raw profiles in
 `BUILD_DIR/llvm-cov/profraw`. A failing test still gets a report, and the
-script exits with the first failing step's status. An existing `BUILD_DIR`
+script exits with the first failing test step's status (a failing report
+step exits with its own). An existing `BUILD_DIR`
 configured without the option is refused rather than reconfigured. It needs
 `llvm-profdata` and `llvm-cov` matching the compiler (the `llvm` package; or
 set `LLVM_PROFDATA`, `LLVM_COV` and `CXX`), on Linux.

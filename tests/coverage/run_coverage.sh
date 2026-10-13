@@ -15,7 +15,8 @@
 # --run-only builds and runs the tests and leaves the .profraw files in
 # BUILD_DIR/llvm-cov/profraw, without llvm-profdata / llvm-cov.
 # When a test fails the report is still written, and the script exits with
-# the first failing step's status.
+# the first failing test step's status; a failing report step (no profiles,
+# llvm-profdata, llvm-cov) exits with its own.
 #
 # Linux, bash >= 4.4, GNU coreutils (realpath -m), like check_install.sh.
 #
@@ -51,6 +52,10 @@ fi
 if ! command -v "$cxx" >/dev/null 2>&1; then
 	echo "error: C++ compiler $cxx not found (set CXX to a Clang C++ compiler," \
 		"e.g. CXX=clang++-23)" >&2
+	if [[ "$cxx" == *[[:space:]]* ]]; then
+		echo "hint: CXX is one command; for a launcher such as ccache set" \
+			"CMAKE_CXX_COMPILER_LAUNCHER=ccache CXX=clang++" >&2
+	fi
 	exit 1
 fi
 
@@ -89,7 +94,8 @@ mkdir -p "$out/profraw"
 export LLVM_PROFILE_FILE="$out/profraw/%p-%m.profraw"
 
 # A failing test still leaves its profile: report anyway, then exit with
-# the first failing step's status.
+# the first failing test step's status (a report step that fails exits with
+# its own).
 status=0
 step "ctest"
 ctest --test-dir "$build" --output-on-failure -j "$(nproc 2>/dev/null || echo 2)" || status=$?
@@ -117,8 +123,17 @@ step "report"
 # --failure-mode=all: skip (with a warning) a profile a killed process left
 # truncated, e.g. on a ctest timeout or a child the test kills on purpose
 # (which need not fail the test), rather than lose the whole report; it
-# still fails when no profile is readable.
-"$profdata" merge -sparse --failure-mode=all "${profiles[@]}" -o "$out/ldap.profdata"
+# still fails when no profile is readable. Its warnings (one per skipped
+# profile) are shown, then counted.
+merge_rc=0
+"$profdata" merge -sparse --failure-mode=all "${profiles[@]}" -o "$out/ldap.profdata" \
+	2>"$out/profdata.err" || merge_rc=$?
+cat "$out/profdata.err" >&2
+if [[ $merge_rc -ne 0 ]]; then exit "$merge_rc"; fi
+skipped="$(grep -c 'warning:' "$out/profdata.err" || true)"
+if [[ $skipped -gt 0 ]]; then
+	echo "warning: $skipped profiles skipped; the report omits them" >&2
+fi
 # Every ELF executable: our targets are the only ones built with
 # -fprofile-instr-generate, so the rest (Catch2, Corosio) has no mapping.
 # Only ELF files: llvm-cov rejects anything else (e.g. an executable script).
