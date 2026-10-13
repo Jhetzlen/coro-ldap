@@ -117,6 +117,17 @@ TEST_CASE("scram: escaping and the authorization identity", "[sasl][scram]")
 	CHECK(m.complete("v=44oJZOE51dvHBrJoVQjNtv0u5bbyofhujrU0K4VF1rs=").has_value());
 }
 
+TEST_CASE("scram: a GS2 header with one byte past a base64 group", "[sasl][scram]")
+{
+	// "n,a=u:bob," is 10 bytes (1 mod 3), so c= ends in "=="; checked with
+	// `printf 'n,a=u:bob,' | base64`. Proof and signature from Python's hashlib.
+	auto m = ldap::detail::scram_test_access::with_nonce("user", "pencil", "u:bob", "fixednonce");
+	CHECK(response(m.start()) == "n,a=u:bob,n=user,r=fixednonce");
+	CHECK(response(m.step("r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=4096"))
+		  == "c=bixhPXU6Ym9iLA==,r=fixednoncesrv,p=jpj8q4xge3eOzcY2SZneuFcJZQ2ClSsgmvemVL61f8s=");
+	CHECK(m.complete("v=j2XIKPPyr6tpEvuVuZIzqnAREfc+3qIlk1j6i51Y6H4=").has_value());
+}
+
 TEST_CASE("scram: random client nonces", "[sasl][scram]")
 {
 	ldap::sasl_scram_sha256 m("user", "pencil");
