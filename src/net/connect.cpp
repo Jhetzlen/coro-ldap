@@ -296,11 +296,12 @@ capy::task<result<transport>>
 	// network traffic.
 	std::optional<detail::tls_setup> tls;
 	if (u.scheme() == url_scheme::ldaps) {
-		auto setup = detail::make_tls_setup(options.tls).transform_error([&target](error &&e) {
+		auto setup = detail::make_tls_setup(options.tls);
+		if (!setup) {
+			auto e = std::move(setup.error());
 			e.context.insert(0, target + ": ");
-			return std::move(e);
-		});
-		if (!setup) co_return std::unexpected(std::move(setup.error()));
+			co_return std::unexpected(std::move(e));
+		}
 		tls.emplace(std::move(*setup));
 	}
 

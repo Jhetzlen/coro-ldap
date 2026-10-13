@@ -99,7 +99,7 @@ result<control> to_control(const request_control &c, std::pmr::memory_resource *
 			  return encode_filter(w, v.filter)
 				.transform_error([](error &&e) {
 					e.context.insert(0, e.context.empty() ? "assertion" : "assertion: ");
-					return std::move(e);
+					return e;
 				})
 				.transform([&] { return value_control(assertion_oid, v.critical, w, alloc); });
 		  } else if constexpr (std::is_same_v<T, pre_read>) {

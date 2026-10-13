@@ -1241,7 +1241,7 @@ namespace {
 		return std::move(r).transform_error([name](error &&e) {
 			if (!e.context.empty()) e.context.insert(0, ": ");
 			e.context.insert(0, name);
-			return std::move(e);
+			return e;
 		});
 	}
 

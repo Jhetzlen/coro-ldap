@@ -88,6 +88,18 @@ TEST_CASE("find_paged", "[controls]")
 	REQUIRE_FALSE(n.has_value());
 	CHECK(n.error().context
 		  == "paged results: ber: reading INTEGER: expected [UNIVERSAL 2], got [UNIVERSAL 4] at offset 2");
+
+	// The first control of the OID wins; later ones are not decoded.
+	std::pmr::vector<ldap::control> two{ *ldap::encode_paged_results({ 0, "first" }),
+		*ldap::encode_paged_results({ 0, "second" }),
+		ldap::control{ ldap::paged_results_oid, false, "x" } };
+	auto f = ldap::find_paged(two);
+	REQUIRE(f.has_value());
+	REQUIRE(f->has_value());
+	CHECK((*f)->cookie == "first");
+	std::pmr::vector<ldap::control> bad_first{ ldap::control{ ldap::paged_results_oid, false, "x" },
+		*ldap::encode_paged_results({ 0, "second" }) };
+	CHECK_FALSE(ldap::find_paged(bad_first).has_value());
 }
 
 // ---------------------------------------------------------------- server side sort (RFC 2891)

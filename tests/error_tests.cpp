@@ -352,7 +352,9 @@ TEST_CASE("every client_errc maps to its documented condition", "[error][cond]")
 		{ client_errc::gssapi_failure, cond::auth_failed },
 		{ client_errc::security_layer_required, cond::access_denied },
 	};
-	// Every value, in order: a new client_errc must be added here.
+	// Every value, in order: a new client_errc must be added here. The
+	// static_casts to std::size_t are deliberate: std::to_underlying gives
+	// int and would make signed/unsigned comparisons.
 	REQUIRE(table.size() == static_cast<std::size_t>(client_errc::security_layer_required));
 	for (std::size_t i = 0; i < table.size(); ++i) {
 		const auto &[e, expected] = table[i];
