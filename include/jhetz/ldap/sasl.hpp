@@ -50,6 +50,8 @@ struct sasl_bind_context
 // cannot be detected) is unsupported, its wakeup may be lost.
 using sasl_work = std::move_only_function<result<std::optional<std::string>>()>;
 
+// sasl_bind prefixes an error's context with "sasl bind <name>", so a
+// mechanism's own contexts should not name the mechanism.
 class sasl_mechanism
 {
   public:
@@ -104,8 +106,7 @@ class sasl_external final : public sasl_mechanism
 	[[nodiscard]] result<std::optional<std::string>> start() override { return std::optional<std::string>(authz_id_); }
 	[[nodiscard]] result<std::optional<std::string>> step(std::optional<std::string_view>) override
 	{
-		return fail(
-		  client_errc::unexpected_response, "EXTERNAL: the server sent a challenge (EXTERNAL has a single step)");
+		return fail(client_errc::unexpected_response, "the server sent a challenge to a single-step mechanism");
 	}
 
   private:

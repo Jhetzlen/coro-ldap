@@ -59,19 +59,19 @@ class echo_mechanism final : public ldap::sasl_mechanism
 	{
 		hosts.emplace_back("start");
 		challenges.clear();
-		if (fail_start) return ldap::fail(ldap::client_errc::decode_error, "X-ECHO: no credentials");
+		if (fail_start) return ldap::fail(ldap::client_errc::decode_error, "no credentials");
 		return std::optional<std::string>("hello");
 	}
 	ldap::result<std::optional<std::string>> step(std::optional<std::string_view> c) override
 	{
 		challenges.emplace_back(c.value_or("<none>"));
-		if (c == "bad") return ldap::fail(ldap::client_errc::decode_error, "X-ECHO: bad challenge");
+		if (c == "bad") return ldap::fail(ldap::client_errc::decode_error, "bad challenge");
 		return std::optional<std::string>("re:" + std::string(c.value_or("")));
 	}
 	ldap::result<void> complete(std::optional<std::string_view> c) override
 	{
 		if (c) final_creds.emplace(*c);
-		if (reject_final) return ldap::fail(ldap::client_errc::decode_error, "X-ECHO: server signature mismatch");
+		if (reject_final) return ldap::fail(ldap::client_errc::decode_error, "server signature mismatch");
 		return {};
 	}
 };
@@ -248,7 +248,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		echo_mechanism mech;
 		auto r = m.run(m.conn.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
-		CHECK(r.error().context == "sasl bind X-ECHO: X-ECHO: bad challenge");
+		CHECK(r.error().context == "sasl bind X-ECHO: bad challenge");
 		CHECK(m.conn.is_open());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 2);
@@ -271,7 +271,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		spawn(m.ioc, m.conn.search({}), search);// id 2, held
 		drive_until(m.ioc, [&] { return bind.done() && search.done(); });
 		REQUIRE_FALSE(bind.get().has_value());
-		CHECK(bind.get().error().context == "sasl bind X-ECHO: X-ECHO: bad challenge");
+		CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
 		CHECK(search.get().has_value());
 		CHECK(m.conn.is_open());
 		m.check_server();
@@ -293,7 +293,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		spawn(m.ioc, m.conn.search({}), search);// id 2, held
 		drive_until(m.ioc, [&] { return bind.done() && search.done(); });
 		REQUIRE_FALSE(bind.get().has_value());
-		CHECK(bind.get().error().context == "sasl bind X-ECHO: X-ECHO: bad challenge");
+		CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
 		CHECK_FALSE(m.conn.is_open());
 		REQUIRE_FALSE(search.get().has_value());
 		CHECK(search.get().error().code == ldap::client_errc::unexpected_response);
@@ -328,7 +328,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		auto r = m.run(m.conn.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::unexpected_response);
-		CHECK_THAT(std::string(r.error().context), ContainsSubstring("EXTERNAL has a single step"));
+		CHECK(r.error().context == "sasl bind EXTERNAL: the server sent a challenge to a single-step mechanism");
 		CHECK(m.conn.is_open());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 2);
@@ -391,7 +391,7 @@ TEST_CASE("sasl: a failed exchange is aborted before held requests are sent", "[
 	spawn(m.ioc, m.conn.search({}), search);// id 2, held
 	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
 	REQUIRE_FALSE(bind.get().has_value());
-	CHECK(bind.get().error().context == "sasl bind X-ECHO: X-ECHO: bad challenge");
+	CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
 	CHECK(search.get().has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 3);
@@ -410,7 +410,7 @@ TEST_CASE("sasl: an abort without an answer closes the connection", "[net][sasl]
 				   outcome<ldap::result<void>> &bind,
 				   outcome<ldap::result<std::pmr::vector<ldap::entry>>> &search) {
 		REQUIRE_FALSE(bind.get().has_value());
-		CHECK(bind.get().error().context == "sasl bind X-ECHO: X-ECHO: bad challenge");
+		CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
 		CHECK_FALSE(m.conn.is_open());
 		REQUIRE_FALSE(search.get().has_value());
 		CHECK(search.get().error().code == ldap::client_errc::not_connected);
@@ -459,7 +459,7 @@ TEST_CASE("sasl: a mechanism that fails to start sends nothing", "[net][sasl]")
 	mech.fail_start = true;
 	auto r = m.run(m.conn.sasl_bind(mech));
 	REQUIRE_FALSE(r.has_value());
-	CHECK(r.error().context == "sasl bind X-ECHO: X-ECHO: no credentials");
+	CHECK(r.error().context == "sasl bind X-ECHO: no credentials");
 	CHECK(m.conn.is_open());
 	CHECK(m.run(m.conn.search({})).has_value());
 	m.check_server();
