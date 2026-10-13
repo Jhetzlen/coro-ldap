@@ -1,6 +1,5 @@
 #include "jhetz/ldap/connection.hpp"
 
-#include <openssl/crypto.h>
 #include <unicode/ustring.h>
 #include <unicode/utypes.h>
 
@@ -29,10 +28,8 @@ result<std::string> ad_password_value(std::string_view password)
 	std::vector<UChar> units(static_cast<std::size_t>(n));
 	status = U_ZERO_ERROR;
 	if (n != 0) u_strFromUTF8(units.data(), n, &n, password.data(), static_cast<int32_t>(password.size()), &status);
-	if (U_FAILURE(status)) {
-		OPENSSL_cleanse(units.data(), units.size() * sizeof(UChar));
+	if (U_FAILURE(status))
 		return fail(client_errc::encode_error, std::string(context) + ": the password is not valid UTF-8");
-	}
 
 	// '"' password '"', each UTF-16 code unit little-endian.
 	std::string out;
@@ -44,7 +41,6 @@ result<std::string> ad_password_value(std::string_view password)
 	put(u'"');
 	for (const UChar u : units) put(static_cast<char16_t>(u));
 	put(u'"');
-	OPENSSL_cleanse(units.data(), units.size() * sizeof(UChar));
 	return out;
 }
 

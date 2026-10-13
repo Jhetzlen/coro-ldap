@@ -356,7 +356,8 @@ inline constexpr std::string_view active_directory_capability_oid = "1.2.840.113
 // client_errc::encode_error (the context never quotes the password). For a
 // ModifyRequest built by hand: replace unicodePwd with it to reset a
 // password, or delete the old value and add the new one in one modify to
-// change it. AD accepts it only over TLS.
+// change it. AD accepts it only over TLS. Neither the result nor the
+// scratch buffers are wiped (see change_password()).
 [[nodiscard]] result<std::string> ad_password_value(std::string_view password);
 
 class search_stream;
@@ -521,6 +522,12 @@ class connection
 	// root DSE decides; if it cannot be read, or advertises no method this
 	// library knows (client_errc::no_password_method), the error says to
 	// choose one. Passwords never appear in errors.
+	//
+	// Password memory is not wiped, here or in password_modify(), simple
+	// binds and ad_password_value(): the password passes through
+	// std::string copies (the arguments, the request's values, the encoded
+	// PDU in the connection's buffers) that the library cannot wipe all of.
+	// Only sasl_scram wipes what it holds.
 	boost::capy::task<result<void>> change_password(dn user,
 	  std::string old_password,
 	  std::string new_password,

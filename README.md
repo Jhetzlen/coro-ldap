@@ -219,6 +219,10 @@ itself stays dependency-free.
   `connection_options::password_method` or per call
   (`ldap::password_method::rfc3062` / `active_directory`): an explicit
   method never reads the root DSE. Passwords never appear in errors.
+  Password memory is not wiped (simple binds, `password_modify`, these
+  two, `ad_password_value`): the password goes through `std::string`
+  copies the library cannot all reach. Only `sasl_scram_sha256` wipes
+  what it holds.
 - StartTLS (step 7): `connection::start_tls(tls_options)` upgrades a plain
   ldap:// connection in place (refused while operations are outstanding;
   it first waits for the answers due to paged search releases; bytes

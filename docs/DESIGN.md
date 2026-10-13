@@ -258,7 +258,12 @@ the schema; the AD path refuses a connection without TLS before sending
 fails with the server's own error (e.g. insufficientAccessRights); one
 that returns no entry, or advertises neither method, fails with
 `client_errc::no_password_method`. Both errors name the option that skips
-the lookup.
+the lookup. Password memory is not wiped on these paths, nor in simple
+binds and `password_modify()`: the password passes through `std::string`
+copies (the caller's, the request's values, the encoded PDU in the
+connection's pmr buffers) that cannot all be reached, and wiping one of
+them would suggest a protection the library does not give. Only SCRAM
+wipes its key material (below).
 
 SASL (implemented, #11, `sasl.hpp`): `connection::sasl_bind(mechanism,
 name)` sends one BindRequest per step while the server answers
