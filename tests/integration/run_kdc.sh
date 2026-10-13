@@ -14,11 +14,14 @@
 # KRB5_CONFIG and KRB5_KDC_PROFILE point into it, and KRB5RCACHEDIR too,
 # for slapd's replay cache (MIT's default is /var/tmp).
 #
-# Needs MIT krb5's KDC tools (krb5kdc, kdb5_util, kadmin.local, kinit),
-# and for slapd cyrus-sasl's gssapi plugin (Debian:
+# Needs MIT krb5's KDC tools (krb5kdc, kdb5_util, kadmin.local, kinit);
+# without them the command runs without Kerberos, so the GSSAPI test is
+# skipped. slapd needs cyrus-sasl's gssapi plugin (Debian:
 # libsasl2-modules-gssapi-mit, Arch: cyrus-sasl-gssapi). A plugin outside
-# cyrus-sasl's directory is found through SASL_PATH, which replaces that
-# directory: it must hold the other plugins too (SCRAM's).
+# cyrus-sasl's directory is found through SASL_PATH, a colon-separated
+# list of directories that replaces the default one, so name that too:
+# SASL_PATH=<plugin dir>:/usr/lib/sasl2 (Arch; Debian:
+# /usr/lib/x86_64-linux-gnu/sasl2).
 #
 # Environment:
 #   JHETZ_LDAP_IT_KDC_PORT  KDC port, UDP and TCP  (3750)
@@ -28,8 +31,8 @@ port="${JHETZ_LDAP_IT_KDC_PORT:-3750}"
 realm=EXAMPLE.ORG
 for tool in krb5kdc kdb5_util kadmin.local kinit; do
 	if ! command -v "$tool" > /dev/null; then
-		echo "run_kdc.sh: $tool not found (MIT krb5's KDC tools)" >&2
-		exit 1
+		echo "run_kdc.sh: $tool not found (MIT krb5's KDC tools): running without Kerberos" >&2
+		exec "$@"
 	fi
 done
 

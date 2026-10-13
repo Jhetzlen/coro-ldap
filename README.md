@@ -499,11 +499,30 @@ tests/integration/run_kdc.sh tests/integration/run_slapd.sh \
 
 It needs MIT krb5's KDC tools (`krb5kdc`, `kdb5_util`, `kadmin.local`,
 `kinit`) and cyrus-sasl's gssapi plugin for slapd (Debian
-`libsasl2-modules-gssapi-mit`, Arch `cyrus-sasl-gssapi`; a plugin outside
-cyrus-sasl's directory is found through `SASL_PATH`, which must then list
-the other plugins too). The KDC listens on 127.0.0.1, port
-`JHETZ_LDAP_IT_KDC_PORT` (3750). Without them the test is skipped. Not in
+`libsasl2-modules-gssapi-mit`, Arch `cyrus-sasl-gssapi`). Without the KDC
+tools `run_kdc.sh` runs the command without Kerberos, and without the
+plugin slapd does not offer GSSAPI: either way the test is skipped. The
+KDC listens on 127.0.0.1, port `JHETZ_LDAP_IT_KDC_PORT` (3750). Not in
 CI.
+
+A plugin outside cyrus-sasl's directory is found through `SASL_PATH`, a
+colon-separated list of directories replacing the default one, so list
+that one too. To use the plugin without installing it (Arch), extract the
+package into a scratch directory, as for a local slapd:
+
+```sh
+mkdir -p /tmp/sasl-gssapi
+curl -L https://archlinux.org/packages/extra/x86_64/cyrus-sasl-gssapi/download/ \
+  | bsdtar -xf - -C /tmp/sasl-gssapi
+SASL_PATH=/tmp/sasl-gssapi/usr/lib/sasl2:/usr/lib/sasl2 \
+  SLAPD=<ol>/usr/bin/slapd SLAPD_SCHEMA_DIR=<ol>/etc/openldap/schema \
+  SLAPD_MODULE_PATH=<ol>/usr/lib/openldap \
+  tests/integration/run_kdc.sh tests/integration/run_slapd.sh \
+  ctest --test-dir build/gssapi -L integration --output-on-failure
+```
+
+(`<ol>`: the Arch `openldap` package extracted the same way; `build/gssapi`
+configured with `-DJHETZ_LDAP_WITH_GSSAPI=ON`.)
 
 ## Coverage
 
