@@ -14,7 +14,6 @@
 #include "jhetz/ldap/ad.hpp"
 #include "jhetz/ldap/mapping.hpp"
 
-#define FUZZ_TARGET "value_fuzz"
 #include "check.hpp"
 
 #include <chrono>
@@ -22,6 +21,8 @@
 #include <limits>
 #include <string>
 #include <string_view>
+
+constexpr jhetz::ldap::fuzz::checker check{ "value_fuzz" };
 
 namespace ldap = jhetz::ldap;
 
@@ -31,13 +32,14 @@ template<class T> void round_trip(std::string_view text)
 {
 	auto v = ldap::value_traits<T>::decode(text);
 	if (!v) {
-		LDAP_FUZZ_CHECK(v.error().code == ldap::client_errc::conversion_failed);
+		check(v.error().code == ldap::client_errc::conversion_failed,
+		  "v.error().code == ldap::client_errc::conversion_failed");
 		return;
 	}
 	const std::string encoded = ldap::value_traits<T>::encode(*v);
 	auto again = ldap::value_traits<T>::decode(encoded);
-	LDAP_FUZZ_CHECK(again.has_value());
-	LDAP_FUZZ_CHECK(*again == *v);
+	check(again.has_value(), "again.has_value()");
+	check(*again == *v, "*again == *v");
 }
 
 void filetime_checks(std::string_view text)
@@ -45,17 +47,21 @@ void filetime_checks(std::string_view text)
 	namespace ad = ldap::ad;
 	const auto t = ldap::value_traits<ad::filetime_clock::time_point>::decode(text);
 	const auto n = ldap::value_traits<std::int64_t>::decode(text);
-	LDAP_FUZZ_CHECK(t.has_value() == (n.has_value() && *n >= -1));
+	check(t.has_value() == (n.has_value() && *n >= -1), "t.has_value() == (n.has_value() && *n >= -1)");
 	if (!t) {
-		LDAP_FUZZ_CHECK(t.error().code == ldap::client_errc::conversion_failed);
+		check(t.error().code == ldap::client_errc::conversion_failed,
+		  "t.error().code == ldap::client_errc::conversion_failed");
 		return;
 	}
-	LDAP_FUZZ_CHECK(t->time_since_epoch().count() == *n);
-	LDAP_FUZZ_CHECK(ldap::value_traits<ad::filetime_clock::time_point>::encode(*t) == std::to_string(*n));
-	LDAP_FUZZ_CHECK(ad::is_never(*t) == (*n == 0 || *n == std::numeric_limits<std::int64_t>::max()));
+	check(t->time_since_epoch().count() == *n, "t->time_since_epoch().count() == *n");
+	check(ldap::value_traits<ad::filetime_clock::time_point>::encode(*t) == std::to_string(*n),
+	  "ldap::value_traits<ad::filetime_clock::time_point>::encode(*t) == std::to_string(*n)");
+	check(ad::is_never(*t) == (*n == 0 || *n == std::numeric_limits<std::int64_t>::max()),
+	  "ad::is_never(*t) == (*n == 0 || *n == std::numeric_limits<std::int64_t>::max())");
 	if (*t == ad::never) return;
 	const auto sys = std::chrono::clock_cast<std::chrono::system_clock>(*t);
-	LDAP_FUZZ_CHECK(std::chrono::clock_cast<ad::filetime_clock>(sys) == *t);
+	check(
+	  std::chrono::clock_cast<ad::filetime_clock>(sys) == *t, "std::chrono::clock_cast<ad::filetime_clock>(sys) == *t");
 }
 
 }// namespace
@@ -66,14 +72,15 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 
 	auto t = ldap::parse_generalized_time(text);
 	if (!t) {
-		LDAP_FUZZ_CHECK(t.error().code == ldap::client_errc::conversion_failed);
+		check(t.error().code == ldap::client_errc::conversion_failed,
+		  "t.error().code == ldap::client_errc::conversion_failed");
 	} else if (auto s = ldap::format_generalized_time(*t)) {
 		// Offsets can move a time out of years 0000-9999; inside, it round-trips.
 		auto back = ldap::parse_generalized_time(*s);
-		LDAP_FUZZ_CHECK(back.has_value() && *back == *t);
-		LDAP_FUZZ_CHECK(ldap::format_generalized_time(*back) == *s);
+		check(back.has_value() && *back == *t, "back.has_value() && *back == *t");
+		check(ldap::format_generalized_time(*back) == *s, "ldap::format_generalized_time(*back) == *s");
 	} else {
-		LDAP_FUZZ_CHECK(s.error().code == ldap::client_errc::encode_error);
+		check(s.error().code == ldap::client_errc::encode_error, "s.error().code == ldap::client_errc::encode_error");
 	}
 
 	round_trip<std::int64_t>(text);

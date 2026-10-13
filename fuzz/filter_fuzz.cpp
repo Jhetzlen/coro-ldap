@@ -15,7 +15,6 @@
 //   BER and prints as "(!" + text + ")".
 #include "jhetz/ldap/filter.hpp"
 
-#define FUZZ_TARGET "filter_fuzz"
 #include "check.hpp"
 
 #include <algorithm>
@@ -23,6 +22,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+
+constexpr jhetz::ldap::fuzz::checker check{ "filter_fuzz" };
 
 namespace {
 
@@ -33,7 +34,7 @@ std::pmr::vector<std::byte> must_encode(const ldap::filter &f)
 {
 	ber::writer w;
 	auto r = ldap::encode_filter(w, f);
-	LDAP_FUZZ_CHECK(r.has_value());
+	check(r.has_value(), "r.has_value()");
 	return w.take();
 }
 
@@ -41,15 +42,15 @@ ldap::filter must_decode(std::span<const std::byte> bytes)
 {
 	ber::reader r(bytes);
 	auto f = ldap::decode_filter(r);
-	LDAP_FUZZ_CHECK(f.has_value());
-	LDAP_FUZZ_CHECK(r.empty());
+	check(f.has_value(), "f.has_value()");
+	check(r.empty(), "r.empty()");
 	return std::move(*f);
 }
 
 ldap::filter must_parse(std::string_view text)
 {
 	auto f = ldap::filter::raw(text);
-	LDAP_FUZZ_CHECK(f.has_value());
+	check(f.has_value(), "f.has_value()");
 	return std::move(*f);
 }
 
@@ -58,20 +59,22 @@ void check_round_trips(const ldap::filter &f)
 {
 	const auto bytes = must_encode(f);
 	const auto back = must_decode(bytes);
-	LDAP_FUZZ_CHECK(back == f);
-	LDAP_FUZZ_CHECK(must_encode(back) == bytes);
+	check(back == f, "back == f");
+	check(must_encode(back) == bytes, "must_encode(back) == bytes");
 	const auto text = f.to_string();
 	const auto reparsed = must_parse(text);
-	LDAP_FUZZ_CHECK(reparsed == f);
-	LDAP_FUZZ_CHECK(reparsed.to_string() == text);
-	LDAP_FUZZ_CHECK(reparsed.depth() == f.depth() && reparsed.elements() == f.elements());
+	check(reparsed == f, "reparsed == f");
+	check(reparsed.to_string() == text, "reparsed.to_string() == text");
+	check(reparsed.depth() == f.depth() && reparsed.elements() == f.elements(),
+	  "reparsed.depth() == f.depth() && reparsed.elements() == f.elements()");
 }
 
 void check_text(std::string_view text)
 {
 	auto f = ldap::filter::raw(text);
 	if (!f) {
-		LDAP_FUZZ_CHECK(f.error().code == ldap::client_errc::invalid_filter);
+		check(
+		  f.error().code == ldap::client_errc::invalid_filter, "f.error().code == ldap::client_errc::invalid_filter");
 		return;
 	}
 	check_round_trips(*f);
@@ -80,29 +83,30 @@ void check_text(std::string_view text)
 	// the limits: f may be at the depth or element limit already).
 	const auto neg = !*f;
 	if (neg.depth() > ldap::max_filter_depth || neg.elements() > ldap::max_filter_elements) return;
-	LDAP_FUZZ_CHECK(std::string(neg.to_string()) == "(!" + std::string(f->to_string()) + ")");
+	check(std::string(neg.to_string()) == "(!" + std::string(f->to_string()) + ")",
+	  "std::string(neg.to_string()) == \"(!\" + std::string(f->to_string()) + \")\"");
 	const auto operand = must_encode(*f);
 	const auto negated = must_encode(neg);
 	ber::reader r(negated);
 	auto inner = r.enter(ber::context(2));
-	LDAP_FUZZ_CHECK(inner.has_value());
-	LDAP_FUZZ_CHECK(inner->remaining() == operand.size());
-	LDAP_FUZZ_CHECK(std::ranges::ends_with(negated, operand));
+	check(inner.has_value(), "inner.has_value()");
+	check(inner->remaining() == operand.size(), "inner->remaining() == operand.size()");
+	check(std::ranges::ends_with(negated, operand), "std::ranges::ends_with(negated, operand)");
 }
 
 void check_value(std::string_view v)
 {
 	using namespace ldap::filters;
 	const auto eq = attr("cn") == v;
-	LDAP_FUZZ_CHECK(eq.root().value() == v);
+	check(eq.root().value() == v, "eq.root().value() == v");
 	const auto bytes = must_encode(eq);
 	{
 		ber::reader r(bytes);
 		auto ava = r.enter(ber::context(3));
-		LDAP_FUZZ_CHECK(ava.has_value());
-		LDAP_FUZZ_CHECK(ava->read_string() == "cn");
-		LDAP_FUZZ_CHECK(ava->read_string() == v);
-		LDAP_FUZZ_CHECK(ava->empty() && r.empty());
+		check(ava.has_value(), "ava.has_value()");
+		check(ava->read_string() == "cn", "ava->read_string() == \"cn\"");
+		check(ava->read_string() == v, "ava->read_string() == v");
+		check(ava->empty() && r.empty(), "ava->empty() && r.empty()");
 	}
 	check_round_trips(eq);
 
@@ -115,9 +119,9 @@ void check_value(std::string_view v)
 		!(eq && attr("sn").present()) || eq };
 	for (const auto &f : all) check_round_trips(f);
 	if (!v.empty()) {
-		LDAP_FUZZ_CHECK(all[3].root().initial() == v);
-		LDAP_FUZZ_CHECK(all[4].root().final() == v);
-		LDAP_FUZZ_CHECK(*all[5].root().any().begin() == v);
+		check(all[3].root().initial() == v, "all[3].root().initial() == v");
+		check(all[4].root().final() == v, "all[4].root().final() == v");
+		check(*all[5].root().any().begin() == v, "*all[5].root().any().begin() == v");
 	}
 }
 
@@ -126,7 +130,7 @@ void check_ber(std::span<const std::byte> input)
 	ber::reader r(input);
 	auto f = ldap::decode_filter(r);
 	if (!f) {
-		LDAP_FUZZ_CHECK(r.offset() == 0);
+		check(r.offset() == 0, "r.offset() == 0");
 		return;
 	}
 	check_round_trips(*f);

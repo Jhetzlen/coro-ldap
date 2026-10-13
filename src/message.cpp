@@ -8,18 +8,6 @@
 #include <string>
 #include <utility>
 
-// Early return on failure: `LDAP_TRY(x, expr);` declares `x` from a result.
-#define LDAP_TRY(var, expr)                                                       \
-	auto var##_result_ = (expr);                                                  \
-	if (!var##_result_) return std::unexpected(std::move(var##_result_.error())); \
-	auto var = std::move(*var##_result_)
-
-#define LDAP_TRY_VOID(expr)                                                       \
-	do {                                                                          \
-		auto try_result_ = (expr);                                                \
-		if (!try_result_) return std::unexpected(std::move(try_result_.error())); \
-	} while (false)
-
 namespace jhetz::ldap {
 
 // ---------------------------------------------------------------- constructors and assignment
@@ -683,10 +671,11 @@ namespace {
 	{
 		const std::size_t offset = r.offset();
 		auto copy = r;
-		LDAP_TRY(v, enumerated ? copy.read_enumerated(t) : copy.read_integer(t));
-		if (v < lo || v > hi) return bad(detail::format("{} {} outside {}..{}", what, v, lo, hi), offset);
+		auto v = enumerated ? copy.read_enumerated(t) : copy.read_integer(t);
+		if (!v) return std::unexpected(std::move(v.error()));
+		if (*v < lo || *v > hi) return bad(detail::format("{} {} outside {}..{}", what, *v, lo, hi), offset);
 		r = copy;
-		return static_cast<std::int32_t>(v);
+		return static_cast<std::int32_t>(*v);
 	}
 
 	using alloc_t = std::pmr::polymorphic_allocator<>;
@@ -729,35 +718,41 @@ namespace {
 		result<search_result_entry> run_entry(std::span<const std::byte> bytes)
 		{
 			ber::reader top(bytes, options_.max_depth);
-			LDAP_TRY(op, read_search_result_entry(top, ber::application(op_tag::search_result_entry)));
-			LDAP_TRY_VOID(top.expect_end());
-			return std::move(std::get<search_result_entry>(op));
+			auto op = read_search_result_entry(top, ber::application(op_tag::search_result_entry));
+			if (!op) return std::unexpected(std::move(op.error()));
+			if (auto done = top.expect_end(); !done) return std::unexpected(std::move(done.error()));
+			return std::move(std::get<search_result_entry>(*op));
 		}
 
 		result<message> run(std::span<const std::byte> bytes)
 		{
 			ber::reader top(bytes, options_.max_depth);
-			LDAP_TRY(r, top.enter());
-			LDAP_TRY_VOID(top.expect_end());
+			auto r = top.enter();
+			if (!r) return std::unexpected(std::move(r.error()));
+			if (auto done = top.expect_end(); !done) return std::unexpected(std::move(done.error()));
 			message m(a_);
-			LDAP_TRY(id, read_ranged(r, ber::tags::integer, 0, max_int, "message id"));
-			m.id = id;
+			auto id = read_ranged(*r, ber::tags::integer, 0, max_int, "message id");
+			if (!id) return std::unexpected(std::move(id.error()));
+			m.id = *id;
 			// RFC 4511 section 4.1.1: id 0 is reserved for unsolicited notifications.
-			if (id == 0 && !r.empty()) {
-				auto t = r.peek_tag();
+			if (*id == 0 && !r->empty()) {
+				auto t = r->peek_tag();
 				if (t && t->cls == ber::tag_class::application && is_request(t->number))
-					return bad("request with message id 0", r.offset());
+					return bad("request with message id 0", r->offset());
 			}
-			LDAP_TRY(op, read_op(r));
-			m.op = std::move(op);// same resource: moved, not copied
-			if (next_is(r, ber::context(0))) {
-				LDAP_TRY(list, r.enter(ber::context(0)));
-				while (!list.empty()) {
-					LDAP_TRY(c, read_control(list));
-					m.controls.push_back(std::move(c));
+			auto op = read_op(*r);
+			if (!op) return std::unexpected(std::move(op.error()));
+			m.op = std::move(*op);// same resource: moved, not copied
+			if (next_is(*r, ber::context(0))) {
+				auto list = r->enter(ber::context(0));
+				if (!list) return std::unexpected(std::move(list.error()));
+				while (!list->empty()) {
+					auto c = read_control(*list);
+					if (!c) return std::unexpected(std::move(c.error()));
+					m.controls.push_back(std::move(*c));
 				}
 			}
-			LDAP_TRY_VOID(skip_rest(r));
+			if (auto done = skip_rest(*r); !done) return std::unexpected(std::move(done.error()));
 			return m;
 		}
 
@@ -785,30 +780,35 @@ namespace {
 		result<std::optional<std::pmr::string>> optional_str(ber::reader &r, ber::tag t)
 		{
 			if (!next_is(r, t)) return std::optional<std::pmr::string>{};
-			LDAP_TRY(s, str(r, t));
-			return std::optional<std::pmr::string>{ std::move(s) };
+			auto s = str(r, t);
+			if (!s) return std::unexpected(std::move(s.error()));
+			return std::optional<std::pmr::string>{ std::move(*s) };
 		}
 
 		// COMPONENTS OF LDAPResult: the fields are inline in the op's SEQUENCE.
 		result<void> read_result(ber::reader &r, ldap_result &out)
 		{
-			LDAP_TRY(code,
-			  read_ranged(r,
-				ber::tags::enumerated,
-				std::numeric_limits<std::int32_t>::min(),
-				std::numeric_limits<std::int32_t>::max(),
-				"resultCode",
-				true));
-			LDAP_TRY(matched, str(r));
-			LDAP_TRY(diag, str(r));
-			out.result_code = code;
-			out.matched_dn = std::move(matched);
-			out.diagnostic_message = std::move(diag);
+			auto code = read_ranged(r,
+			  ber::tags::enumerated,
+			  std::numeric_limits<std::int32_t>::min(),
+			  std::numeric_limits<std::int32_t>::max(),
+			  "resultCode",
+			  true);
+			if (!code) return std::unexpected(std::move(code.error()));
+			auto matched = str(r);
+			if (!matched) return std::unexpected(std::move(matched.error()));
+			auto diag = str(r);
+			if (!diag) return std::unexpected(std::move(diag.error()));
+			out.result_code = *code;
+			out.matched_dn = std::move(*matched);
+			out.diagnostic_message = std::move(*diag);
 			if (next_is(r, ber::context(3))) {
-				LDAP_TRY(ref, r.enter(ber::context(3)));
-				while (!ref.empty()) {
-					LDAP_TRY(uri, str(ref));
-					out.referral.push_back(std::move(uri));
+				auto ref = r.enter(ber::context(3));
+				if (!ref) return std::unexpected(std::move(ref.error()));
+				while (!ref->empty()) {
+					auto uri = str(*ref);
+					if (!uri) return std::unexpected(std::move(uri.error()));
+					out.referral.push_back(std::move(*uri));
 				}
 			}
 			return {};
@@ -816,249 +816,311 @@ namespace {
 
 		template<class T> result<protocol_op> result_only(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<T>, a_);
-			LDAP_TRY_VOID(read_result(o, std::get<T>(op).result));
-			LDAP_TRY_VOID(skip_rest(o));
+			if (auto done = read_result(*o, std::get<T>(op).result); !done)
+				return std::unexpected(std::move(done.error()));
+			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
 			return op;
 		}
 
 		result<void> read_attribute(ber::reader &r, partial_attribute &out)
 		{
-			LDAP_TRY(pa, r.enter());
-			LDAP_TRY(type, str(pa));
-			LDAP_TRY(vals, pa.enter(ber::tags::set));
-			out.type = std::move(type);
-			out.values.reserve(count_elements(vals, ber::tags::octet_string, min_value_size, budget()));
-			while (!vals.empty()) {
-				LDAP_TRY(v, str(vals));
-				out.values.push_back(std::move(v));
+			auto pa = r.enter();
+			if (!pa) return std::unexpected(std::move(pa.error()));
+			auto type = str(*pa);
+			if (!type) return std::unexpected(std::move(type.error()));
+			auto vals = pa->enter(ber::tags::set);
+			if (!vals) return std::unexpected(std::move(vals.error()));
+			out.type = std::move(*type);
+			out.values.reserve(count_elements(*vals, ber::tags::octet_string, min_value_size, budget()));
+			while (!vals->empty()) {
+				auto v = str(*vals);
+				if (!v) return std::unexpected(std::move(v.error()));
+				out.values.push_back(std::move(*v));
 			}
-			LDAP_TRY_VOID(skip_rest(pa));
+			if (auto done = skip_rest(*pa); !done) return std::unexpected(std::move(done.error()));
 			return {};
 		}
 
 		result<void> read_attributes(ber::reader &r, std::pmr::vector<partial_attribute> &out)
 		{
-			LDAP_TRY(list, r.enter());
-			out.reserve(count_elements(list, ber::tags::sequence, min_attribute_size, budget()));
-			while (!list.empty()) LDAP_TRY_VOID(read_attribute(list, out.emplace_back()));
+			auto list = r.enter();
+			if (!list) return std::unexpected(std::move(list.error()));
+			out.reserve(count_elements(*list, ber::tags::sequence, min_attribute_size, budget()));
+			while (!list->empty())
+				if (auto done = read_attribute(*list, out.emplace_back()); !done)
+					return std::unexpected(std::move(done.error()));
 			return {};
 		}
 
 		result<protocol_op> read_bind_request(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<bind_request>, a_);
 			auto &b = std::get<bind_request>(op);
-			LDAP_TRY(version, read_ranged(o, ber::tags::integer, 1, 127, "bind version"));
-			LDAP_TRY(name, str(o));
-			b.version = version;
-			b.name = std::move(name);
-			const std::size_t auth_at = o.offset();
-			if (next_is(o, ber::context(0))) {
-				LDAP_TRY(password, str(o, ber::context(0)));
-				std::get<simple_auth>(b.authentication).password = std::move(password);
-			} else if (next_is(o, ber::context(3))) {
-				LDAP_TRY(s, o.enter(ber::context(3)));
-				LDAP_TRY(mechanism, str(s));
-				LDAP_TRY(credentials, optional_str(s, ber::tags::octet_string));
-				LDAP_TRY_VOID(skip_rest(s));
+			auto version = read_ranged(*o, ber::tags::integer, 1, 127, "bind version");
+			if (!version) return std::unexpected(std::move(version.error()));
+			auto name = str(*o);
+			if (!name) return std::unexpected(std::move(name.error()));
+			b.version = *version;
+			b.name = std::move(*name);
+			const std::size_t auth_at = o->offset();
+			if (next_is(*o, ber::context(0))) {
+				auto password = str(*o, ber::context(0));
+				if (!password) return std::unexpected(std::move(password.error()));
+				std::get<simple_auth>(b.authentication).password = std::move(*password);
+			} else if (next_is(*o, ber::context(3))) {
+				auto s = o->enter(ber::context(3));
+				if (!s) return std::unexpected(std::move(s.error()));
+				auto mechanism = str(*s);
+				if (!mechanism) return std::unexpected(std::move(mechanism.error()));
+				auto credentials = optional_str(*s, ber::tags::octet_string);
+				if (!credentials) return std::unexpected(std::move(credentials.error()));
+				if (auto done = skip_rest(*s); !done) return std::unexpected(std::move(done.error()));
 				auto &sasl = b.authentication.emplace<sasl_auth>(a_);
-				sasl.mechanism = std::move(mechanism);
-				sasl.credentials = std::move(credentials);
+				sasl.mechanism = std::move(*mechanism);
+				sasl.credentials = std::move(*credentials);
 			} else {
-				if (o.empty()) return bad("bind request without authentication", auth_at);
-				LDAP_TRY(choice, o.peek_tag());
+				if (o->empty()) return bad("bind request without authentication", auth_at);
+				auto choice = o->peek_tag();
+				if (!choice) return std::unexpected(std::move(choice.error()));
 				return fail(client_errc::unsupported_operation,
 				  detail::format(
-					"message: bind authentication choice {} at offset {}", ber::to_string(choice), auth_at));
+					"message: bind authentication choice {} at offset {}", ber::to_string(*choice), auth_at));
 			}
-			LDAP_TRY_VOID(skip_rest(o));
+			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
 			return op;
 		}
 
 		result<protocol_op> read_bind_response(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<bind_response>, a_);
 			auto &b = std::get<bind_response>(op);
-			LDAP_TRY_VOID(read_result(o, b.result));
-			LDAP_TRY(creds, optional_str(o, ber::context(7)));
-			LDAP_TRY_VOID(skip_rest(o));
-			b.server_sasl_creds = std::move(creds);
+			if (auto done = read_result(*o, b.result); !done) return std::unexpected(std::move(done.error()));
+			auto creds = optional_str(*o, ber::context(7));
+			if (!creds) return std::unexpected(std::move(creds.error()));
+			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			b.server_sasl_creds = std::move(*creds);
 			return op;
 		}
 
 		result<protocol_op> read_search_request(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<search_request>, a_);
 			auto &s = std::get<search_request>(op);
-			LDAP_TRY(base, str(o));
-			LDAP_TRY(scope, read_ranged(o, ber::tags::enumerated, 0, 3, "search scope", true));
-			LDAP_TRY(deref, read_ranged(o, ber::tags::enumerated, 0, 3, "derefAliases", true));
-			LDAP_TRY(size_limit, read_ranged(o, ber::tags::integer, 0, max_int, "size limit"));
-			LDAP_TRY(time_limit, read_ranged(o, ber::tags::integer, 0, max_int, "time limit"));
-			LDAP_TRY(types_only, o.read_boolean());
-			LDAP_TRY(f, decode_filter(o, options_.filter, a_.resource()));
-			LDAP_TRY(attrs, o.enter());
-			while (!attrs.empty()) {
-				LDAP_TRY(a, str(attrs));
-				s.attributes.push_back(std::move(a));
+			auto base = str(*o);
+			if (!base) return std::unexpected(std::move(base.error()));
+			auto scope = read_ranged(*o, ber::tags::enumerated, 0, 3, "search scope", true);
+			if (!scope) return std::unexpected(std::move(scope.error()));
+			auto deref = read_ranged(*o, ber::tags::enumerated, 0, 3, "derefAliases", true);
+			if (!deref) return std::unexpected(std::move(deref.error()));
+			auto size_limit = read_ranged(*o, ber::tags::integer, 0, max_int, "size limit");
+			if (!size_limit) return std::unexpected(std::move(size_limit.error()));
+			auto time_limit = read_ranged(*o, ber::tags::integer, 0, max_int, "time limit");
+			if (!time_limit) return std::unexpected(std::move(time_limit.error()));
+			auto types_only = o->read_boolean();
+			if (!types_only) return std::unexpected(std::move(types_only.error()));
+			auto f = decode_filter(*o, options_.filter, a_.resource());
+			if (!f) return std::unexpected(std::move(f.error()));
+			auto attrs = o->enter();
+			if (!attrs) return std::unexpected(std::move(attrs.error()));
+			while (!attrs->empty()) {
+				auto a = str(*attrs);
+				if (!a) return std::unexpected(std::move(a.error()));
+				s.attributes.push_back(std::move(*a));
 			}
-			LDAP_TRY_VOID(skip_rest(o));
-			s.base_object = std::move(base);
-			s.scope = static_cast<search_scope>(scope);
-			s.deref = static_cast<deref_aliases>(deref);
-			s.size_limit = size_limit;
-			s.time_limit = time_limit;
-			s.types_only = types_only;
-			s.filter = std::move(f);
+			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			s.base_object = std::move(*base);
+			s.scope = static_cast<search_scope>(*scope);
+			s.deref = static_cast<deref_aliases>(*deref);
+			s.size_limit = *size_limit;
+			s.time_limit = *time_limit;
+			s.types_only = *types_only;
+			s.filter = std::move(*f);
 			return op;
 		}
 
 		result<protocol_op> read_search_result_entry(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<search_result_entry>, a_);
 			auto &e = std::get<search_result_entry>(op);
-			LDAP_TRY(name, str(o));
-			e.object_name = std::move(name);
-			LDAP_TRY_VOID(read_attributes(o, e.attributes));
-			LDAP_TRY_VOID(skip_rest(o));
+			auto name = str(*o);
+			if (!name) return std::unexpected(std::move(name.error()));
+			e.object_name = std::move(*name);
+			if (auto done = read_attributes(*o, e.attributes); !done) return std::unexpected(std::move(done.error()));
+			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
 			return op;
 		}
 
 		result<protocol_op> read_search_result_reference(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<search_result_reference>, a_);
 			auto &ref = std::get<search_result_reference>(op);
-			while (!o.empty()) {
-				LDAP_TRY(uri, str(o));
-				ref.uris.push_back(std::move(uri));
+			while (!o->empty()) {
+				auto uri = str(*o);
+				if (!uri) return std::unexpected(std::move(uri.error()));
+				ref.uris.push_back(std::move(*uri));
 			}
 			return op;
 		}
 
 		result<protocol_op> read_modify_request(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<modify_request>, a_);
 			auto &m = std::get<modify_request>(op);
-			LDAP_TRY(object, str(o));
-			m.object = std::move(object);
-			LDAP_TRY(changes, o.enter());
-			while (!changes.empty()) {
-				LDAP_TRY(change, changes.enter());
-				LDAP_TRY(op_code, read_ranged(change, ber::tags::enumerated, 0, 3, "modify operation", true));
-				const std::size_t attr_at = change.offset();
+			auto object = str(*o);
+			if (!object) return std::unexpected(std::move(object.error()));
+			m.object = std::move(*object);
+			auto changes = o->enter();
+			if (!changes) return std::unexpected(std::move(changes.error()));
+			while (!changes->empty()) {
+				auto change = changes->enter();
+				if (!change) return std::unexpected(std::move(change.error()));
+				auto op_code = read_ranged(*change, ber::tags::enumerated, 0, 3, "modify operation", true);
+				if (!op_code) return std::unexpected(std::move(op_code.error()));
+				const std::size_t attr_at = change->offset();
 				auto &c = m.changes.emplace_back();
-				c.operation = static_cast<modify_operation>(op_code);
-				LDAP_TRY_VOID(read_attribute(change, c.modification));
+				c.operation = static_cast<modify_operation>(*op_code);
+				if (auto done = read_attribute(*change, c.modification); !done)
+					return std::unexpected(std::move(done.error()));
 				if (c.operation == modify_operation::add && c.modification.values.empty())
 					return bad("modify add change without values", attr_at);
-				LDAP_TRY_VOID(skip_rest(change));
+				if (auto done = skip_rest(*change); !done) return std::unexpected(std::move(done.error()));
 			}
-			LDAP_TRY_VOID(skip_rest(o));
+			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
 			return op;
 		}
 
 		result<protocol_op> read_add_request(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<add_request>, a_);
 			auto &add = std::get<add_request>(op);
-			LDAP_TRY(entry, str(o));
-			add.entry = std::move(entry);
-			const std::size_t attrs_at = o.offset();
-			LDAP_TRY_VOID(read_attributes(o, add.attributes));
+			auto entry = str(*o);
+			if (!entry) return std::unexpected(std::move(entry.error()));
+			add.entry = std::move(*entry);
+			const std::size_t attrs_at = o->offset();
+			if (auto done = read_attributes(*o, add.attributes); !done) return std::unexpected(std::move(done.error()));
 			for (const auto &a : add.attributes)
 				if (a.values.empty())
 					return bad(sanitized_context("add request attribute '", a.type, "' without values"), attrs_at);
-			LDAP_TRY_VOID(skip_rest(o));
+			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
 			return op;
 		}
 
 		result<protocol_op> read_modify_dn_request(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<modify_dn_request>, a_);
 			auto &m = std::get<modify_dn_request>(op);
-			LDAP_TRY(entry, str(o));
-			LDAP_TRY(new_rdn, str(o));
-			LDAP_TRY(delete_old, o.read_boolean());
-			LDAP_TRY(superior, optional_str(o, ber::context(0)));
-			LDAP_TRY_VOID(skip_rest(o));
-			m.entry = std::move(entry);
-			m.new_rdn = std::move(new_rdn);
-			m.delete_old_rdn = delete_old;
-			m.new_superior = std::move(superior);
+			auto entry = str(*o);
+			if (!entry) return std::unexpected(std::move(entry.error()));
+			auto new_rdn = str(*o);
+			if (!new_rdn) return std::unexpected(std::move(new_rdn.error()));
+			auto delete_old = o->read_boolean();
+			if (!delete_old) return std::unexpected(std::move(delete_old.error()));
+			auto superior = optional_str(*o, ber::context(0));
+			if (!superior) return std::unexpected(std::move(superior.error()));
+			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			m.entry = std::move(*entry);
+			m.new_rdn = std::move(*new_rdn);
+			m.delete_old_rdn = *delete_old;
+			m.new_superior = std::move(*superior);
 			return op;
 		}
 
 		result<protocol_op> read_compare_request(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<compare_request>, a_);
 			auto &c = std::get<compare_request>(op);
-			LDAP_TRY(entry, str(o));
-			LDAP_TRY(ava, o.enter());
-			LDAP_TRY(desc, str(ava));
-			LDAP_TRY(value, str(ava));
-			LDAP_TRY_VOID(skip_rest(ava));
-			LDAP_TRY_VOID(skip_rest(o));
-			c.entry = std::move(entry);
-			c.ava.attribute_desc = std::move(desc);
-			c.ava.assertion_value = std::move(value);
+			auto entry = str(*o);
+			if (!entry) return std::unexpected(std::move(entry.error()));
+			auto ava = o->enter();
+			if (!ava) return std::unexpected(std::move(ava.error()));
+			auto desc = str(*ava);
+			if (!desc) return std::unexpected(std::move(desc.error()));
+			auto value = str(*ava);
+			if (!value) return std::unexpected(std::move(value.error()));
+			if (auto done = skip_rest(*ava); !done) return std::unexpected(std::move(done.error()));
+			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			c.entry = std::move(*entry);
+			c.ava.attribute_desc = std::move(*desc);
+			c.ava.assertion_value = std::move(*value);
 			return op;
 		}
 
 		result<protocol_op> read_extended_request(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<extended_request>, a_);
 			auto &e = std::get<extended_request>(op);
-			LDAP_TRY(name, str(o, ber::context(0)));
-			LDAP_TRY(value, optional_str(o, ber::context(1)));
-			LDAP_TRY_VOID(skip_rest(o));
-			e.request_name = std::move(name);
-			e.request_value = std::move(value);
+			auto name = str(*o, ber::context(0));
+			if (!name) return std::unexpected(std::move(name.error()));
+			auto value = optional_str(*o, ber::context(1));
+			if (!value) return std::unexpected(std::move(value.error()));
+			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			e.request_name = std::move(*name);
+			e.request_value = std::move(*value);
 			return op;
 		}
 
 		result<protocol_op> read_extended_response(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<extended_response>, a_);
 			auto &e = std::get<extended_response>(op);
-			LDAP_TRY_VOID(read_result(o, e.result));
-			LDAP_TRY(name, optional_str(o, ber::context(10)));
-			LDAP_TRY(value, optional_str(o, ber::context(11)));
-			LDAP_TRY_VOID(skip_rest(o));
-			e.response_name = std::move(name);
-			e.response_value = std::move(value);
+			if (auto done = read_result(*o, e.result); !done) return std::unexpected(std::move(done.error()));
+			auto name = optional_str(*o, ber::context(10));
+			if (!name) return std::unexpected(std::move(name.error()));
+			auto value = optional_str(*o, ber::context(11));
+			if (!value) return std::unexpected(std::move(value.error()));
+			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			e.response_name = std::move(*name);
+			e.response_value = std::move(*value);
 			return op;
 		}
 
 		result<protocol_op> read_intermediate_response(ber::reader &r, ber::tag t)
 		{
-			LDAP_TRY(o, r.enter(t));
+			auto o = r.enter(t);
+			if (!o) return std::unexpected(std::move(o.error()));
 			protocol_op op(std::in_place_type<intermediate_response>, a_);
 			auto &i = std::get<intermediate_response>(op);
-			LDAP_TRY(name, optional_str(o, ber::context(0)));
-			LDAP_TRY(value, optional_str(o, ber::context(1)));
-			LDAP_TRY_VOID(skip_rest(o));
-			i.response_name = std::move(name);
-			i.response_value = std::move(value);
+			auto name = optional_str(*o, ber::context(0));
+			if (!name) return std::unexpected(std::move(name.error()));
+			auto value = optional_str(*o, ber::context(1));
+			if (!value) return std::unexpected(std::move(value.error()));
+			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			i.response_name = std::move(*name);
+			i.response_value = std::move(*value);
 			return op;
 		}
 
 		result<protocol_op> read_op(ber::reader &r)
 		{
 			const std::size_t offset = r.offset();
-			LDAP_TRY(t, r.peek_tag());
+			auto peeked = r.peek_tag();
+			if (!peeked) return std::unexpected(std::move(peeked.error()));
+			const ber::tag t = *peeked;
 			auto unsupported = [&] {
 				return fail(client_errc::unsupported_operation,
 				  detail::format("message: unknown protocolOp {} at offset {}", ber::to_string(t), offset));
@@ -1080,7 +1142,7 @@ namespace {
 			case op_tag::bind_response:
 				return read_bind_response(r, t);
 			case op_tag::unbind_request: {
-				LDAP_TRY_VOID(r.read_null(t));
+				if (auto done = r.read_null(t); !done) return std::unexpected(std::move(done.error()));
 				return protocol_op{ unbind_request{} };
 			}
 			case op_tag::search_request:
@@ -1100,9 +1162,10 @@ namespace {
 			case op_tag::add_response:
 				return result_only<add_response>(r, t);
 			case op_tag::del_request: {
-				LDAP_TRY(entry, str(r, t));
+				auto entry = str(r, t);
+				if (!entry) return std::unexpected(std::move(entry.error()));
 				protocol_op op(std::in_place_type<del_request>, a_);
-				std::get<del_request>(op).entry = std::move(entry);
+				std::get<del_request>(op).entry = std::move(*entry);
 				return op;
 			}
 			case op_tag::del_response:
@@ -1116,8 +1179,9 @@ namespace {
 			case op_tag::compare_response:
 				return result_only<compare_response>(r, t);
 			case op_tag::abandon_request: {
-				LDAP_TRY(id, read_ranged(r, t, 0, max_int, "abandoned message id"));
-				return protocol_op{ abandon_request{ id } };
+				auto id = read_ranged(r, t, 0, max_int, "abandoned message id");
+				if (!id) return std::unexpected(std::move(id.error()));
+				return protocol_op{ abandon_request{ *id } };
 			}
 			case op_tag::extended_request:
 				return read_extended_request(r, t);
@@ -1132,17 +1196,21 @@ namespace {
 
 		result<control> read_control(ber::reader &r)
 		{
-			LDAP_TRY(c, r.enter());
+			auto c = r.enter();
+			if (!c) return std::unexpected(std::move(c.error()));
 			control out(a_);
-			LDAP_TRY(type, str(c));
-			out.type = std::move(type);
-			if (next_is(c, ber::tags::boolean)) {
-				LDAP_TRY(critical, c.read_boolean());
-				out.criticality = critical;
+			auto type = str(*c);
+			if (!type) return std::unexpected(std::move(type.error()));
+			out.type = std::move(*type);
+			if (next_is(*c, ber::tags::boolean)) {
+				auto critical = c->read_boolean();
+				if (!critical) return std::unexpected(std::move(critical.error()));
+				out.criticality = *critical;
 			}
-			LDAP_TRY(value, optional_str(c, ber::tags::octet_string));
-			out.value = std::move(value);
-			LDAP_TRY_VOID(skip_rest(c));
+			auto value = optional_str(*c, ber::tags::octet_string);
+			if (!value) return std::unexpected(std::move(value.error()));
+			out.value = std::move(*value);
+			if (auto done = skip_rest(*c); !done) return std::unexpected(std::move(done.error()));
 			return out;
 		}
 
@@ -1175,7 +1243,7 @@ namespace {
 
 result<void> encode(ber::writer &w, const message &m)
 {
-	LDAP_TRY_VOID(precheck(m));
+	if (auto done = precheck(m); !done) return std::unexpected(std::move(done.error()));
 	w.constructed(ber::tags::sequence, [&](ber::writer &msg) {
 		msg.integer(m.id);
 		std::visit(op_writer{ msg }, m.op);
@@ -1197,7 +1265,7 @@ result<std::pmr::vector<std::byte>> encode(const message &m, std::pmr::memory_re
 	ber::writer w{ ber::writer::allocator_type(mr) };
 	// Most requests fit; saves the first few doublings of the buffer.
 	w.reserve(256);
-	LDAP_TRY_VOID(encode(w, m));
+	if (auto done = encode(w, m); !done) return std::unexpected(std::move(done.error()));
 	return w.take();
 }
 
@@ -1209,11 +1277,14 @@ result<message> decode(std::span<const std::byte> one_complete_message, const de
 result<message_header> peek_message_header(std::span<const std::byte> one_complete_message)
 {
 	ber::reader top(one_complete_message);
-	LDAP_TRY(r, top.enter());
-	LDAP_TRY(id, read_ranged(r, ber::tags::integer, 0, max_int, "message id"));
-	if (r.empty()) return fail(client_errc::decode_error, "LDAPMessage without a protocolOp");
-	LDAP_TRY(op, r.peek_tag());
-	return message_header{ id, op };
+	auto r = top.enter();
+	if (!r) return std::unexpected(std::move(r.error()));
+	auto id = read_ranged(*r, ber::tags::integer, 0, max_int, "message id");
+	if (!id) return std::unexpected(std::move(id.error()));
+	if (r->empty()) return fail(client_errc::decode_error, "LDAPMessage without a protocolOp");
+	auto op = r->peek_tag();
+	if (!op) return std::unexpected(std::move(op.error()));
+	return message_header{ *id, *op };
 }
 
 // ---------------------------------------------------------------- control values
@@ -1266,14 +1337,17 @@ namespace {
 	result<paged_results> read_paged_results(std::span<const std::byte> value, std::pmr::memory_resource *mr)
 	{
 		ber::reader r(value);
-		LDAP_TRY(s, r.enter());
-		LDAP_TRY_VOID(r.expect_end());
-		LDAP_TRY(size, read_ranged(s, ber::tags::integer, 0, max_int, "size"));
-		LDAP_TRY(cookie, s.read_string(ber::tags::octet_string, mr));
-		LDAP_TRY_VOID(skip_rest(s));
+		auto s = r.enter();
+		if (!s) return std::unexpected(std::move(s.error()));
+		if (auto done = r.expect_end(); !done) return std::unexpected(std::move(done.error()));
+		auto size = read_ranged(*s, ber::tags::integer, 0, max_int, "size");
+		if (!size) return std::unexpected(std::move(size.error()));
+		auto cookie = s->read_string(ber::tags::octet_string, mr);
+		if (!cookie) return std::unexpected(std::move(cookie.error()));
+		if (auto done = skip_rest(*s); !done) return std::unexpected(std::move(done.error()));
 		paged_results out{ paged_results::allocator_type(mr) };
-		out.size = size;
-		out.cookie = std::move(cookie);
+		out.size = *size;
+		out.cookie = std::move(*cookie);
 		return out;
 	}
 
@@ -1281,7 +1355,8 @@ namespace {
 
 result<paged_results> decode_paged_results(const control &c, std::pmr::memory_resource *mr)
 {
-	LDAP_TRY_VOID(expect_control(c, paged_results_oid, "paged results"));
+	if (auto done = expect_control(c, paged_results_oid, "paged results"); !done)
+		return std::unexpected(std::move(done.error()));
 	return in_control(read_paged_results(std::as_bytes(std::span(*c.value)), mr), "paged results");
 }
 
@@ -1303,22 +1378,24 @@ namespace {
 	result<sort_result> read_sort_result(std::span<const std::byte> value, std::pmr::memory_resource *mr)
 	{
 		ber::reader r(value);
-		LDAP_TRY(s, r.enter());
-		LDAP_TRY_VOID(r.expect_end());
-		LDAP_TRY(code,
-		  read_ranged(s,
-			ber::tags::enumerated,
-			std::numeric_limits<std::int32_t>::min(),
-			std::numeric_limits<std::int32_t>::max(),
-			"sortResult",
-			true));
+		auto s = r.enter();
+		if (!s) return std::unexpected(std::move(s.error()));
+		if (auto done = r.expect_end(); !done) return std::unexpected(std::move(done.error()));
+		auto code = read_ranged(*s,
+		  ber::tags::enumerated,
+		  std::numeric_limits<std::int32_t>::min(),
+		  std::numeric_limits<std::int32_t>::max(),
+		  "sortResult",
+		  true);
+		if (!code) return std::unexpected(std::move(code.error()));
 		sort_result out{ sort_result::allocator_type(mr) };
-		out.result_code = code;
-		if (next_is(s, ber::context(0))) {
-			LDAP_TRY(type, s.read_string(ber::context(0), mr));
-			out.attribute_type = std::move(type);
+		out.result_code = *code;
+		if (next_is(*s, ber::context(0))) {
+			auto type = s->read_string(ber::context(0), mr);
+			if (!type) return std::unexpected(std::move(type.error()));
+			out.attribute_type = std::move(*type);
 		}
-		LDAP_TRY_VOID(skip_rest(s));
+		if (auto done = skip_rest(*s); !done) return std::unexpected(std::move(done.error()));
 		return out;
 	}
 
@@ -1326,7 +1403,8 @@ namespace {
 
 result<sort_result> decode_sort_result(const control &c, std::pmr::memory_resource *mr)
 {
-	LDAP_TRY_VOID(expect_control(c, sort_response_oid, "sort result"));
+	if (auto done = expect_control(c, sort_response_oid, "sort result"); !done)
+		return std::unexpected(std::move(done.error()));
 	return in_control(read_sort_result(std::as_bytes(std::span(*c.value)), mr), "sort result");
 }
 
@@ -1351,11 +1429,8 @@ result<search_result_entry> decode_read_entry(const control &c, const decode_opt
 		return fail(client_errc::decode_error,
 		  sanitized_context("read entry: control type is ", c.type, ", not pre-read or post-read"));
 	const std::string_view name = c.type == pre_read_oid ? "pre-read" : "post-read";
-	LDAP_TRY_VOID(expect_control(c, c.type, name));
+	if (auto done = expect_control(c, c.type, name); !done) return std::unexpected(std::move(done.error()));
 	return in_control(decoder(options).run_entry(std::as_bytes(std::span(*c.value))), name);
 }
 
 }// namespace jhetz::ldap
-
-#undef LDAP_TRY
-#undef LDAP_TRY_VOID

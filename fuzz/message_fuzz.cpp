@@ -26,7 +26,6 @@
 #include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/message.hpp"
 
-#define FUZZ_TARGET "message_fuzz"
 #include "check.hpp"
 
 #include <cstddef>
@@ -37,6 +36,8 @@
 #include <string>
 #include <type_traits>
 #include <variant>
+
+constexpr jhetz::ldap::fuzz::checker check{ "message_fuzz" };
 
 namespace {
 
@@ -57,30 +58,31 @@ void exercise_control(const ldap::control &c)
 	if (c.type == ldap::paged_results_oid) {
 		if (auto p = ldap::decode_paged_results(c)) {
 			const auto again = ldap::encode_paged_results(*p, c.criticality);
-			LDAP_FUZZ_CHECK(again.has_value());
-			LDAP_FUZZ_CHECK(ldap::decode_paged_results(*again) == *p);
+			check(again.has_value(), "again.has_value()");
+			check(ldap::decode_paged_results(*again) == *p, "ldap::decode_paged_results(*again) == *p");
 		} else {
-			LDAP_FUZZ_CHECK(is_decode_failure(p.error()));
+			check(is_decode_failure(p.error()), "is_decode_failure(p.error())");
 		}
 	} else if (c.type == ldap::sort_response_oid) {
 		if (auto s = ldap::decode_sort_result(c, c.get_allocator().resource())) {
-			LDAP_FUZZ_CHECK(s->get_allocator() == c.get_allocator());
+			check(s->get_allocator() == c.get_allocator(), "s->get_allocator() == c.get_allocator()");
 			const auto again = ldap::encode_sort_result(*s, c.criticality);
-			LDAP_FUZZ_CHECK(again.has_value());
-			LDAP_FUZZ_CHECK(ldap::decode_sort_result(*again) == *s);
+			check(again.has_value(), "again.has_value()");
+			check(ldap::decode_sort_result(*again) == *s, "ldap::decode_sort_result(*again) == *s");
 		} else {
-			LDAP_FUZZ_CHECK(is_decode_failure(s.error()));
+			check(is_decode_failure(s.error()), "is_decode_failure(s.error())");
 		}
 	} else if (c.type == ldap::pre_read_oid || c.type == ldap::post_read_oid) {
 		ldap::decode_options options;
 		options.memory = c.get_allocator().resource();
 		if (auto e = ldap::decode_read_entry(c, options)) {
-			LDAP_FUZZ_CHECK(e->get_allocator() == c.get_allocator());
+			check(e->get_allocator() == c.get_allocator(), "e->get_allocator() == c.get_allocator()");
 			const auto again = ldap::encode_read_entry(c.type, *e, c.criticality);
-			LDAP_FUZZ_CHECK(again.has_value());
-			LDAP_FUZZ_CHECK(ldap::decode_read_entry(*again) == *e);
+			check(again.has_value(), "again.has_value()");
+			check(ldap::decode_read_entry(*again) == *e, "ldap::decode_read_entry(*again) == *e");
 		} else {
-			LDAP_FUZZ_CHECK(is_decode_failure(e.error()) || e.error().code == ldap::client_errc::message_too_large);
+			check(is_decode_failure(e.error()) || e.error().code == ldap::client_errc::message_too_large,
+			  "is_decode_failure(e.error()) || e.error().code == ldap::client_errc::message_too_large");
 		}
 	}
 }
@@ -94,19 +96,19 @@ void exercise(const ldap::message &m)
 		  if constexpr (std::is_same_v<T, ldap::search_result_entry>) {
 			  // A copy on op's resource, so the entry is made on it too.
 			  const auto e = ldap::entry::from(ldap::search_result_entry(op, op.get_allocator()));
-			  LDAP_FUZZ_CHECK(e.get_allocator() == op.get_allocator());
-			  LDAP_FUZZ_CHECK(e.dn == op.object_name);
-			  for (const auto &a : op.attributes) LDAP_FUZZ_CHECK(e.find(a.type) != nullptr);
+			  check(e.get_allocator() == op.get_allocator(), "e.get_allocator() == op.get_allocator()");
+			  check(e.dn == op.object_name, "e.dn == op.object_name");
+			  for (const auto &a : op.attributes) check(e.find(a.type) != nullptr, "e.find(a.type) != nullptr");
 		  } else if constexpr (has_result<T>) {
 			  const auto err = op.result.to_error("fuzz");
-			  LDAP_FUZZ_CHECK(err.code.value() == op.result.result_code);
+			  check(err.code.value() == op.result.result_code, "err.code.value() == op.result.result_code");
 			  // The server's text is sanitized: well-formed UTF-8, no C0 or DEL.
 			  const auto text = err.message();
-			  LDAP_FUZZ_CHECK(!text.empty());
+			  check(!text.empty(), "!text.empty()");
 			  for (std::size_t i = 0; i < text.size();) {
 				  const std::size_t n = ldap::detail::utf8_sequence_length(text, i);
-				  LDAP_FUZZ_CHECK(n != 0);
-				  LDAP_FUZZ_CHECK(n > 1 || (text[i] >= 0x20 && text[i] != 0x7F));
+				  check(n != 0, "n != 0");
+				  check(n > 1 || (text[i] >= 0x20 && text[i] != 0x7F), "n > 1 || (text[i] >= 0x20 && text[i] != 0x7F)");
 				  i += n == 0 ? 1 : n;
 			  }
 		  }
@@ -126,11 +128,12 @@ void check_origins(std::span<const std::byte> input, const ldap::message &m)
 	const bool request = std::visit([](const auto &op) { return is_request_v<std::decay_t<decltype(op)>>; }, m.op);
 	auto from_server = ldap::decode(input, { .from = ldap::origin::server });
 	auto from_client = ldap::decode(input, { .from = ldap::origin::client });
-	LDAP_FUZZ_CHECK(from_server.has_value() == !request);
-	LDAP_FUZZ_CHECK(from_client.has_value() == request);
+	check(from_server.has_value() == !request, "from_server.has_value() == !request");
+	check(from_client.has_value() == request, "from_client.has_value() == request");
 	const auto &rejected = request ? from_server : from_client;
-	LDAP_FUZZ_CHECK(rejected.error().code == ldap::client_errc::unsupported_operation);
-	LDAP_FUZZ_CHECK(*(request ? from_client : from_server) == m);
+	check(rejected.error().code == ldap::client_errc::unsupported_operation,
+	  "rejected.error().code == ldap::client_errc::unsupported_operation");
+	check(*(request ? from_client : from_server) == m, "*(request ? from_client : from_server) == m");
 }
 
 // Search requests with arbitrary filter text round-trip exactly.
@@ -139,19 +142,20 @@ void check_filter_text(std::span<const std::uint8_t> data)
 	const std::string_view text(reinterpret_cast<const char *>(data.data()), data.size());
 	auto f = ldap::filter::raw(text);
 	if (!f) {
-		LDAP_FUZZ_CHECK(f.error().code == ldap::client_errc::invalid_filter);
+		check(
+		  f.error().code == ldap::client_errc::invalid_filter, "f.error().code == ldap::client_errc::invalid_filter");
 		return;
 	}
 	ldap::search_request s;
 	s.filter = std::move(*f);
 	const ldap::message m{ 1, std::move(s) };
 	auto encoded = ldap::encode(m);
-	LDAP_FUZZ_CHECK(encoded.has_value());
+	check(encoded.has_value(), "encoded.has_value()");
 	auto decoded = ldap::decode(*encoded);
-	LDAP_FUZZ_CHECK(decoded.has_value());
-	LDAP_FUZZ_CHECK(*decoded == m);
+	check(decoded.has_value(), "decoded.has_value()");
+	check(*decoded == m, "*decoded == m");
 	auto again = ldap::encode(*decoded);
-	LDAP_FUZZ_CHECK(again.has_value() && *again == *encoded);
+	check(again.has_value() && *again == *encoded, "again.has_value() && *again == *encoded");
 }
 
 // Default resource that fails loudly (std::bad_alloc, an uncaught exception
@@ -183,19 +187,20 @@ void check_arena(std::span<const std::byte> input, const ldap::message &expected
 			scoped_null_default guard;
 			in_arena.emplace(ldap::decode(input, options));
 		}
-		LDAP_FUZZ_CHECK(in_arena->has_value());
+		check(in_arena->has_value(), "in_arena->has_value()");
 		const ldap::message &m = **in_arena;
-		LDAP_FUZZ_CHECK(m == expected);
-		LDAP_FUZZ_CHECK(m.get_allocator().resource() == &arena);
+		check(m == expected, "m == expected");
+		check(m.get_allocator().resource() == &arena, "m.get_allocator().resource() == &arena");
 		exercise(m);
 		copy.emplace(m);// plain copy: default resource
 	}
 	arena.release();
-	LDAP_FUZZ_CHECK(copy->get_allocator().resource() == std::pmr::get_default_resource());
-	LDAP_FUZZ_CHECK(*copy == expected);
+	check(copy->get_allocator().resource() == std::pmr::get_default_resource(),
+	  "copy->get_allocator().resource() == std::pmr::get_default_resource()");
+	check(*copy == expected, "*copy == expected");
 	auto bytes = ldap::encode(*copy);
-	LDAP_FUZZ_CHECK(bytes.has_value());
-	LDAP_FUZZ_CHECK(ldap::decode(*bytes).value() == expected);
+	check(bytes.has_value(), "bytes.has_value()");
+	check(ldap::decode(*bytes).value() == expected, "ldap::decode(*bytes).value() == expected");
 }
 
 }// namespace
@@ -207,26 +212,28 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 	const auto header = ldap::peek_message_header(input);// must not crash on anything
 	auto m = ldap::decode(input);
 	if (!m) {
-		LDAP_FUZZ_CHECK(static_cast<bool>(m.error().code));
+		check(static_cast<bool>(m.error().code), "static_cast<bool>(m.error().code)");
 		return 0;
 	}
 	// Whatever decodes, peeks, with the same id and the operation's tag.
-	LDAP_FUZZ_CHECK(header.has_value() && header->id == m->id);
+	check(header.has_value() && header->id == m->id, "header.has_value() && header->id == m->id");
 
 	auto encoded = ldap::encode(*m);
-	LDAP_FUZZ_CHECK(encoded.has_value());
+	check(encoded.has_value(), "encoded.has_value()");
 	auto again = ldap::decode(*encoded);
-	LDAP_FUZZ_CHECK(again.has_value());
-	LDAP_FUZZ_CHECK(*again == *m);
+	check(again.has_value(), "again.has_value()");
+	check(*again == *m, "*again == *m");
 	auto reencoded = ldap::encode(*again);
-	LDAP_FUZZ_CHECK(reencoded.has_value() && *reencoded == *encoded);
+	check(reencoded.has_value() && *reencoded == *encoded, "reencoded.has_value() && *reencoded == *encoded");
 
 	const auto reheader = ldap::peek_message_header(*encoded);
-	LDAP_FUZZ_CHECK(reheader.has_value() && reheader->id == m->id && reheader->op.cls == header->op.cls
-					&& reheader->op.number == header->op.number);
+	check(reheader.has_value() && reheader->id == m->id && reheader->op.cls == header->op.cls
+			&& reheader->op.number == header->op.number,
+	  "reheader.has_value() && reheader->id == m->id && reheader->op.cls == header->op.cls && reheader->op.number == "
+	  "header->op.number");
 
 	auto framed = jhetz::ldap::ber::complete_message_size(*encoded);
-	LDAP_FUZZ_CHECK(framed && *framed && **framed == encoded->size());
+	check(framed && *framed && **framed == encoded->size(), "framed && *framed && **framed == encoded->size()");
 
 	check_origins(input, *m);
 	exercise(*m);

@@ -12,13 +12,14 @@
 //   what did not as skipped; syntax_of terminates.
 #include "jhetz/ldap/schema.hpp"
 
-#define FUZZ_TARGET "schema_fuzz"
 #include "check.hpp"
 
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
+
+constexpr jhetz::ldap::fuzz::checker check{ "schema_fuzz" };
 
 namespace ldap = jhetz::ldap;
 
@@ -27,28 +28,30 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 	const std::string_view text(reinterpret_cast<const char *>(data), size);
 	auto a = ldap::parse_attribute_type(text);
 	if (!a) {
-		LDAP_FUZZ_CHECK(a.error().code == ldap::client_errc::decode_error);
+		check(a.error().code == ldap::client_errc::decode_error, "a.error().code == ldap::client_errc::decode_error");
 	} else {
-		LDAP_FUZZ_CHECK(!a->oid.empty());
-		LDAP_FUZZ_CHECK(!a->syntax || ldap::detail::is_numericoid(*a->syntax));
+		check(!a->oid.empty(), "!a->oid.empty()");
+		check(!a->syntax || ldap::detail::is_numericoid(*a->syntax),
+		  "!a->syntax || ldap::detail::is_numericoid(*a->syntax)");
 	}
 	auto c = ldap::parse_object_class(text);
 	// Same grammar; only an attribute type's SYNTAX is checked.
-	LDAP_FUZZ_CHECK(!a ? !c || a.error().context == "schema: SYNTAX is not a numeric OID" : c.has_value());
+	check(!a ? !c || a.error().context == "schema: SYNTAX is not a numeric OID" : c.has_value(),
+	  "!a ? !c || a.error().context == \"schema: SYNTAX is not a numeric OID\" : c.has_value()");
 
 	const std::pmr::vector<std::pmr::string> values{ std::pmr::string(text) };
 	const auto s = ldap::server_schema::parse(values, values);
 	if (a) {
 		const auto *found = s.find_attribute(a->oid);
-		LDAP_FUZZ_CHECK(found != nullptr);
-		for (const auto &n : a->names) LDAP_FUZZ_CHECK(s.find_attribute(n) != nullptr);
+		check(found != nullptr, "found != nullptr");
+		for (const auto &n : a->names) check(s.find_attribute(n) != nullptr, "s.find_attribute(n) != nullptr");
 		(void)s.syntax_of(*found);
-		LDAP_FUZZ_CHECK(s.find_object_class(c->oid) != nullptr);
-		LDAP_FUZZ_CHECK(s.skipped() == 0);
+		check(s.find_object_class(c->oid) != nullptr, "s.find_object_class(c->oid) != nullptr");
+		check(s.skipped() == 0, "s.skipped() == 0");
 	} else {
-		LDAP_FUZZ_CHECK(s.skipped() == (c ? 1u : 2u));
-		LDAP_FUZZ_CHECK(s.attribute_count() == 0);
-		if (c) LDAP_FUZZ_CHECK(s.find_object_class(c->oid) != nullptr);
+		check(s.skipped() == (c ? 1u : 2u), "s.skipped() == (c ? 1u : 2u)");
+		check(s.attribute_count() == 0, "s.attribute_count() == 0");
+		if (c) check(s.find_object_class(c->oid) != nullptr, "s.find_object_class(c->oid) != nullptr");
 	}
 	return 0;
 }

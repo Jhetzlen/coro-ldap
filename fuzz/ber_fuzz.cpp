@@ -10,28 +10,18 @@
 //   content octets when the input was already minimal.
 #include "jhetz/ldap/ber.hpp"
 
+#include "check.hpp"
+
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <print>
 #include <span>
 #include <vector>
+
+constexpr jhetz::ldap::fuzz::checker check{ "ber_fuzz" };
 
 namespace {
 
 namespace ber = jhetz::ldap::ber;
 using jhetz::ldap::client_errc;
-
-[[noreturn]] void property_failed(const char *what, int line)
-{
-	std::println(stderr, "ber_fuzz: property violated: {} (line {})", what, line);
-	std::abort();
-}
-
-#define FUZZ_CHECK(cond)                               \
-	do {                                               \
-		if (!(cond)) property_failed(#cond, __LINE__); \
-	} while (false)
 
 bool same_bytes(std::span<const std::byte> a, std::span<const std::byte> b)
 {
@@ -46,8 +36,8 @@ std::span<const std::byte> content_of(std::span<const std::byte> encoded)
 {
 	ber::reader r(encoded);
 	auto e = r.read();
-	FUZZ_CHECK(e.has_value());
-	FUZZ_CHECK(r.empty());
+	check(e.has_value(), "e.has_value()");
+	check(r.empty(), "r.empty()");
 	return e->content;
 }
 
@@ -69,21 +59,21 @@ void check_typed_reads(const ber::reader &r, ber::tag t, std::span<const std::by
 	{
 		auto copy = r;
 		if (auto v = copy.read_integer(t)) {
-			FUZZ_CHECK(!t.constructed);
+			check(!t.constructed, "!t.constructed");
 			ber::writer w;
 			w.integer(*v, prim);
 			ber::reader back(w.bytes());
 			auto again = back.read_integer(prim);
-			FUZZ_CHECK(again && *again == *v);
+			check(again && *again == *v, "again && *again == *v");
 			const auto re = content_of(w.bytes());
 			if (minimal_integer(content))
-				FUZZ_CHECK(same_bytes(re, content));
+				check(same_bytes(re, content), "same_bytes(re, content)");
 			else
-				FUZZ_CHECK(re.size() < content.size());
+				check(re.size() < content.size(), "re.size() < content.size()");
 		} else {
-			FUZZ_CHECK(copy.offset() == r.offset());
+			check(copy.offset() == r.offset(), "copy.offset() == r.offset()");
 			if (!t.constructed && !content.empty() && content.size() <= 8)
-				property_failed("integer rejected", __LINE__);
+				check.failed("integer rejected", std::source_location::current());
 		}
 	}
 	{
@@ -91,59 +81,62 @@ void check_typed_reads(const ber::reader &r, ber::tag t, std::span<const std::by
 		if (auto v = copy.read_enumerated(t)) {
 			auto copy2 = r;
 			auto i = copy2.read_integer(t);
-			FUZZ_CHECK(i && *i == *v);
+			check(i && *i == *v, "i && *i == *v");
 		}
 	}
 	{
 		auto copy = r;
 		if (auto v = copy.read_boolean(t)) {
-			FUZZ_CHECK(content.size() == 1);
+			check(content.size() == 1, "content.size() == 1");
 			ber::writer w;
 			w.boolean(*v, prim);
 			ber::reader back(w.bytes());
 			auto again = back.read_boolean(prim);
-			FUZZ_CHECK(again && *again == *v);
+			check(again && *again == *v, "again && *again == *v");
 			const auto b = std::to_integer<unsigned>(content[0]);
-			if (b == 0x00u || b == 0xFFu) FUZZ_CHECK(same_bytes(content_of(w.bytes()), content));
+			if (b == 0x00u || b == 0xFFu)
+				check(same_bytes(content_of(w.bytes()), content), "same_bytes(content_of(w.bytes()), content)");
 		} else {
-			FUZZ_CHECK(copy.offset() == r.offset());
+			check(copy.offset() == r.offset(), "copy.offset() == r.offset()");
 		}
 	}
 	{
 		auto copy = r;
 		if (auto v = copy.read_octet_string(t)) {
-			FUZZ_CHECK(same_bytes(*v, content));
+			check(same_bytes(*v, content), "same_bytes(*v, content)");
 			ber::writer w;
 			w.octet_string(*v, prim);
 			ber::reader back(w.bytes());
 			auto again = back.read_octet_string(prim);
-			FUZZ_CHECK(again && same_bytes(*again, *v));
+			check(again && same_bytes(*again, *v), "again && same_bytes(*again, *v)");
 			auto copy2 = r;
 			auto s = copy2.read_string(t);
-			FUZZ_CHECK(s && s->size() == v->size());
+			check(s && s->size() == v->size(), "s && s->size() == v->size()");
 
 			// Treat the content as encapsulated BER (control values etc.).
 			// Recursion stays bounded: the sub-reader is one level deeper.
 			auto copy3 = r;
 			if (auto sub = copy3.enter_encapsulated(t)) {
-				FUZZ_CHECK(sub->depth() == r.depth() + 1);
-				FUZZ_CHECK(sub->offset() == r.offset() + (r.remaining() - copy3.remaining()) - content.size());
-				FUZZ_CHECK(sub->remaining() == content.size());
+				check(sub->depth() == r.depth() + 1, "sub->depth() == r.depth() + 1");
+				check(sub->offset() == r.offset() + (r.remaining() - copy3.remaining()) - content.size(),
+				  "sub->offset() == r.offset() + (r.remaining() - copy3.remaining()) - content.size()");
+				check(sub->remaining() == content.size(), "sub->remaining() == content.size()");
 				walk(*sub);
 			} else {
-				FUZZ_CHECK(sub.error().code == client_errc::nesting_too_deep);
-				FUZZ_CHECK(r.depth() >= r.max_depth());
+				check(sub.error().code == client_errc::nesting_too_deep,
+				  "sub.error().code == client_errc::nesting_too_deep");
+				check(r.depth() >= r.max_depth(), "r.depth() >= r.max_depth()");
 			}
 		}
 	}
 	{
 		auto copy = r;
 		if (copy.read_null(t)) {
-			FUZZ_CHECK(content.empty());
+			check(content.empty(), "content.empty()");
 			ber::writer w;
 			w.null(prim);
 			ber::reader back(w.bytes());
-			FUZZ_CHECK(back.read_null(prim).has_value());
+			check(back.read_null(prim).has_value(), "back.read_null(prim).has_value()");
 		}
 	}
 }
@@ -156,39 +149,40 @@ void walk(ber::reader r)
 		const std::size_t before = r.remaining();
 		auto t = r.peek_tag();
 		if (!t) {
-			FUZZ_CHECK(t.error().code == client_errc::unsupported_tag);
-			FUZZ_CHECK(!r.read().has_value());
+			check(t.error().code == client_errc::unsupported_tag, "t.error().code == client_errc::unsupported_tag");
+			check(!r.read().has_value(), "!r.read().has_value()");
 			return;
 		}
 
 		auto probe = r;
 		auto e = probe.read();
 		if (!e) {
-			FUZZ_CHECK(r.remaining() == before);
+			check(r.remaining() == before, "r.remaining() == before");
 			return;
 		}
-		FUZZ_CHECK(e->t == *t);
-		FUZZ_CHECK(e->size() <= before);
-		FUZZ_CHECK(probe.remaining() == before - e->size());
+		check(e->t == *t, "e->t == *t");
+		check(e->size() <= before, "e->size() <= before");
+		check(probe.remaining() == before - e->size(), "probe.remaining() == before - e->size()");
 
 		if (t->constructed) {
 			auto copy = r;
 			auto sub = copy.enter(*t);
 			if (sub) {
-				FUZZ_CHECK(sub->depth() == r.depth() + 1);
-				FUZZ_CHECK(sub->remaining() == e->content.size());
-				FUZZ_CHECK(copy.remaining() == probe.remaining());
+				check(sub->depth() == r.depth() + 1, "sub->depth() == r.depth() + 1");
+				check(sub->remaining() == e->content.size(), "sub->remaining() == e->content.size()");
+				check(copy.remaining() == probe.remaining(), "copy.remaining() == probe.remaining()");
 				walk(*sub);
 			} else {
-				FUZZ_CHECK(sub.error().code == client_errc::nesting_too_deep);
-				FUZZ_CHECK(r.depth() >= r.max_depth());
+				check(sub.error().code == client_errc::nesting_too_deep,
+				  "sub.error().code == client_errc::nesting_too_deep");
+				check(r.depth() >= r.max_depth(), "r.depth() >= r.max_depth()");
 			}
 		} else {
 			check_typed_reads(r, *t, e->content);
 		}
 		r = probe;
 	}
-	FUZZ_CHECK(r.expect_end().has_value());
+	check(r.expect_end().has_value(), "r.expect_end().has_value()");
 }
 
 }// namespace
@@ -203,28 +197,29 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 	ber::reader first(input);
 	auto e = first.read();
 	if (framed && *framed) {
-		FUZZ_CHECK(**framed <= input.size());
-		FUZZ_CHECK(**framed <= max_size);
-		FUZZ_CHECK(e && e->size() == **framed);
+		check(**framed <= input.size(), "**framed <= input.size()");
+		check(**framed <= max_size, "**framed <= max_size");
+		check(e && e->size() == **framed, "e && e->size() == **framed");
 	} else if (framed) {
-		FUZZ_CHECK(!e.has_value());// needs more bytes: reader must fail too
+		check(!e.has_value(), "!e.has_value()");// needs more bytes: reader must fail too
 	} else if (e) {
 		// Framer refused a readable element: only because it is too large.
-		FUZZ_CHECK(framed.error().code == client_errc::message_too_large);
-		FUZZ_CHECK(e->size() > max_size);
+		check(framed.error().code == client_errc::message_too_large,
+		  "framed.error().code == client_errc::message_too_large");
+		check(e->size() > max_size, "e->size() > max_size");
 	}
 
 	// declared_message_size knows the size from the header alone: it fails
 	// exactly when the framer fails, and agrees with it once complete.
 	auto declared = ber::declared_message_size(input, max_size);
-	FUZZ_CHECK(declared.has_value() == framed.has_value());
+	check(declared.has_value() == framed.has_value(), "declared.has_value() == framed.has_value()");
 	if (!declared) {
-		FUZZ_CHECK(declared.error() == framed.error());
+		check(declared.error() == framed.error(), "declared.error() == framed.error()");
 	} else if (*framed) {
-		FUZZ_CHECK(*declared == *framed);
+		check(*declared == *framed, "*declared == *framed");
 	} else if (*declared) {
-		FUZZ_CHECK(**declared > input.size());// header complete, content missing
-		FUZZ_CHECK(**declared <= max_size);
+		check(**declared > input.size(), "**declared > input.size()");// header complete, content missing
+		check(**declared <= max_size, "**declared <= max_size");
 	}
 
 	// Walk everything, with the default and with a tiny depth limit.
