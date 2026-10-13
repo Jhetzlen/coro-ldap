@@ -1165,7 +1165,7 @@ and its destructor joins the thread.
   codec will make it a dependency of `jhetz_ldap` too.
 - Coverage: Clang source-based coverage (`JHETZ_LDAP_COVERAGE`, llvm-cov),
   scoped to our own targets like the warnings; `tests/coverage/run_coverage.sh`
-  runs it (README.md, "Coverage"). Local only, not in CI.
+  runs it (docs/DEVELOPMENT.md, "Coverage"). Local only, not in CI.
 - C++26 (reflection, `std::execution` interop) on a separate branch.
 
 ## 10. Message model (implemented, step 3)

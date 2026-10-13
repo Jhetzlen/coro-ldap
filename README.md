@@ -1,658 +1,126 @@
-# jhetz::ldap
+# coro-ldap
 
-C++23 LDAP client library, in progress. Design: [`docs/DESIGN.md`](docs/DESIGN.md).
+A modern C++23 LDAP client library built on coroutines.
 
-## What exists
+## Goal
 
-- `jhetz/ldap/error.hpp`: `ldap::error`, `ldap::result<T>` (`std::expected`),
-  `ldap::errc` (RFC 4511 result codes and RFC 4528's `assertion_failed`,
-  category `ldap.result`) and
-  `ldap::client_errc` (category `ldap.client`), and the error conditions
-  `ldap::cond` (category `ldap.cond`: `not_found`, `auth_failed`, `timeout`,
-  `canceled`, `connection_lost`, `tls_failure`, `protocol_error`,
-  `busy_or_unavailable`, `access_denied`, `already_exists`,
-  `invalid_input`) that group LDAP, client, system, Capy and TLS codes by
-  meaning: `if (r.error().code == ldap::cond::auth_failed)`. The mapping
-  table is in DESIGN.md section 5.
-- `jhetz/ldap/ber.hpp`: the restricted BER codec LDAP uses (RFC 4511 section 5.1):
-  `ber::writer` (its buffer on a `memory_resource`, reusable), `ber::reader`
-  (non-owning, depth-bounded, safe on untrusted input) and the framer
-  `ber::complete_message_size`.
-- `jhetz/ldap/message.hpp`: RFC 4511 `LDAPMessage` as a wire model
-  (`ldap::message`, `protocol_op` = every request and response, `control`,
-  `ldap_result` with `to_error()`), `encode()` / `decode()`, and the paged
-  results control (RFC 2696). Wire strings are `std::pmr::string` holding the
-  octets as sent; the search filter is an `ldap::filter` tree; see the header
-  for the decoding rules (RFC 4511 section 4 extensibility, range checks).
-  `decode(encode(m)) == m` exactly, and re-encoding is byte-identical.
-  `decode_options` limits what a peer may send: `from = origin::server`
-  (a client connection) rejects request operations, `origin::client` (a
-  server) rejects responses, before anything is decoded; plus the reader
-  depth and the filter limits; `memory` is the resource everything decoded
-  is allocated from. The types have constructors taking the fields in order
-  (`message{1, search_request{base, search_scope::whole_subtree, f, {"cn"}}}`);
-  they are not aggregates, so designated initializers do not work on them.
-- `jhetz/ldap/filter.hpp`: `ldap::filter`, a typed tree (and / or / not,
-  equality, substrings, >=, <=, present, approx, extensible match) holding
-  unescaped values. Built by the builders in `ldap::filters`
-  (`attr("uid") == v && !attr("x").present()`), which make nodes directly
-  (never text), or parsed once from RFC 4515 text by `filter::raw(text)`,
-  which returns `result<filter>` (malformed text fails there, with
-  `invalid_filter`). `encode_filter` writes BER straight from the tree;
-  `decode_filter` builds a tree from BER (for a mock server);
-  `to_string()` prints canonical RFC 4515 text for logs; `root()` gives a
-  read-only view of the nodes. Equality compares trees. `&&`, `||` and `!`
-  only add nodes (AND / OR chains are flattened), so combining parsed
-  filters cannot change their meaning. Filters nest at most
-  `max_filter_depth` (24) levels and have at most `max_filter_elements`
-  (10,000) elements (`filter_limits`): `raw` and `decode_filter` check while
-  reading, and a builder-made filter beyond them fails with `invalid_filter`
-  when encoded. Nodes live in one vector and the strings in one pool (two
-  allocations per filter); combining reuses rvalue operands, so a chain
-  built in one expression (nested either way) or in a loop as
-  `f = std::move(f) || x` is linear (`f = f || x` copies `f` each time), and
-  nothing but encoding recurses.
-- `jhetz/ldap/dn.hpp`: `ldap::dn` (RFC 4514 parse / `to_string`, multi-valued
-  RDNs, `parent()`, `child()`, compile-time checked literals). Syntax only: no
-  matching-rule normalization of values. `ldap::rdn` has its own literal and
-  `rdn::parse()` / `to_string()` for exactly one RDN (`cn=a+sn=b` is one RDN,
-  `cn=a,dc=b` is rejected). DNs are built from parts with `child()`:
-  `base.child(ldap::rdn{"uid=jdoe"})` is `uid=jdoe,<base>`, and
-  `base.child(ldap::dn{"uid=jdoe,ou=people"})` prepends a relative DN
-  (`uid=jdoe,ou=people,<base>`); the result uses `base`'s resource.
-- `jhetz/ldap/attribute.hpp`: `ldap::attribute`, an attribute description with
-  case-insensitive equality, ordering and `std::hash`.
-- `jhetz/ldap/entry.hpp`: `ldap::entry`, the untyped search result entry
-  (DN text + attributes, case-insensitive `find`); `entry::from` takes the
-  strings of a decoded `search_result_entry` and keeps its resource.
-- `jhetz/ldap/url.hpp`: `ldap::url`, RFC 4516 LDAP URLs (`ldap://`,
-  `ldaps://`, `ldapi://` with a percent-encoded socket path): host (name,
-  IPv4, bracketed IPv6 with optional zone), port (explicit or scheme
-  default), DN, attributes, scope, filter and extensions (with the critical
-  `!` marker), all percent-decoded; `parse()` / `to_string()` round-trip.
-  Absent and empty DN / scope / filter stay distinct, as referrals need.
-  Allocator-aware (`std::pmr`, see below).
+coro-ldap aims to be the LDAP client you would want to use from modern C++:
 
-### `jhetz::ldap_net`: transports and connecting
+- **Asynchronous.** Operations are coroutines on
+  [Corosio](https://github.com/cppalliance/corosio) /
+  [Capy](https://github.com/cppalliance/capy). One connection carries any
+  number of concurrent operations, and each one can be cancelled or timed
+  out without dropping the connection. A blocking facade
+  (`ldap::sync::connection`) covers code that is not coroutine-based.
+- **Type-safe.** Filters are built as typed trees (`attr("uid") == v`), not
+  pasted strings, DN literals are checked at compile time, and entries map
+  to your own structs. Many mistakes fail to compile.
+- **Secure by default.** TLS certificate and host name verification are on,
+  passwords never appear in errors, and every input from the server is
+  bounded and decoded defensively (the codec is fuzzed).
+- **Unicode-correct.** UTF-8 everywhere: DNs, filters, values, SASL user
+  names and passwords (SASLprep through ICU).
+- **Errors as values.** Every operation returns `ldap::result<T>`, a
+  `std::expected` with the error and a readable context, and error
+  conditions group causes by meaning (`ldap::cond::auth_failed`, `timeout`,
+  ...).
 
-A second library (target `jhetz::ldap_net`, option `JHETZ_LDAP_BUILD_NET`,
-on by default) with the network parts. It depends on Corosio and Capy
-(fetched with FetchContent at pinned commits), OpenSSL and ICU; `jhetz::ldap`
-itself stays dependency-free.
+## Features
 
-- `jhetz/ldap/net/transport.hpp`: `net::transport`, the one byte stream a
-  connection uses: plain TCP (`ldap://`), TLS over TCP (`ldaps://`), a Unix
-  domain socket (`ldapi://`), or any `capy::Stream` (`transport::wrap`, used by
-  the tests with Capy's mock streams). Reads and writes go through a
-  `capy::any_stream`. The TCP socket is owned separately from the TLS layer,
-  which wraps it in reference mode, so StartTLS (step 7) can later add TLS to
-  a plain connection in place; the header describes how.
-- `jhetz/ldap/net/connect.hpp`: `co_await net::connect(ioc, url, options, mr)`
-  returns `result<net::transport>`: resolves the host, races the addresses
-  with Happy Eyeballs (RFC 8305: families alternate, a new attempt every
-  `attempt_delay` = 250 ms or as soon as the previous one fails, first
-  connection wins),
-  sets TCP_NODELAY, and for `ldaps://` runs the TLS handshake with
-  certificate and host name verification, SNI and TLS 1.2+ by default
-  (`tls_options`: CA file / directory (`std::filesystem::path`) / PEM, client
-  certificate, `server_name`, and `certificate_verification::insecure_accept_any`
-  as the explicit opt-out). TLS configuration (files, certificates, `ca_dir`,
-  `server_name`) is checked before any network traffic.
-  - Timeout: `std::optional<milliseconds> timeout` (default 30 s) bounds the
-    whole connect; `nullopt` means no limit, zero or negative fails at once
-    with `capy::error::timeout`. The name lookup runs detached because
-    getaddrinfo cannot be interrupted, so the timeout holds while it blocks
-    (the io_context stays busy until it returns). Happy Eyeballs attempts
-    all run within that one budget.
-  - `transport::close()` closes at once; `transport::shutdown(timeout)` ends
-    a TLS session with close_notify first (`connection::unbind()` does, within
-    `connection_options::tls_shutdown_timeout`). `transport::wrap()` forwards
-    `close()` / `cancel()` to the wrapped stream when it has them.
-  - Host name checks are strict by default (RFC 6125): subjectAltName DNS
-    entries only (never the subject CN), wildcards only as a whole leftmost
-    label (`*.example.org`, not `ld*.example.org`); IP literals against
-    iPAddress entries, without an IPv6 zone. `tls_options::host_matching =
-    host_name_matching::legacy` accepts what OpenSSL does by default (CN
-    when there is no subjectAltName, partial wildcards).
-  - Errors keep the system / TLS `error_code` and name the stage:
-    `connect ldaps://h:636: tls handshake: server certificate: hostname mismatch ...`.
-  - Linux is the supported platform (macOS is not; configure rejects Apple
-    Clang). `ldapi://` and IPv6 are tested there, IPv6 over `[::1]` and a
-    link-local address with a zone. CI builds with GCC 16 and Clang 23
-    (libstdc++ 16).
-  - `mr` holds the transport's own block and name.
-- `jhetz/ldap/net/message_io.hpp`: `read_message(transport, read_buffer,
-  options)` returns the next complete `ldap::message`, decoded with
-  `origin::server` by default; bytes of the following PDUs stay in the
-  `read_buffer`. A PDU that is not a SEQUENCE or declares more than
-  `max_message_size` (16 MiB default) is rejected from its header, before its
-  body is read; the buffer grows to one PDU (or 16 KiB) at most. A PDU that
-  decodes to more than `decode_options::max_elements` strings (1,000,000
-  by default) fails with `message_too_large`, which bounds the memory of a
-  PDU made of tiny values (38 MiB instead of 320 MiB for 16 MiB of empty
-  values). A TLS peer
-  closing without close_notify between PDUs reads as a close. After any
-  error the connection must be dropped. `read_options::decode.memory` is the
-  resource the message is decoded into (e.g. a per-response arena).
-  `write_message(t, m, mr)` encodes into a buffer on `mr`;
-  `write_message(t, m, writer)` reuses the caller's `ber::writer`;
-  `write_bytes` sends raw bytes.
+- `ldap://`, `ldaps://`, StartTLS and `ldapi://` (Unix sockets), with Happy
+  Eyeballs connection racing
+- Simple bind and SASL EXTERNAL, SCRAM-SHA-256 and GSSAPI (Kerberos, optional)
+- Search (all at once, streamed or paged), add, modify, delete, modify DN,
+  compare, extended operations, Who am I?, Password Modify, and password
+  change / reset that works on both OpenLDAP and Active Directory
+- Controls: paged results, server-side sort, assertion, pre-/post-read,
+  proxied authorization, ManageDsaIT
+- Struct mapping, runtime schema validation, Active Directory time types
+- `std::pmr` allocators throughout, so a response can be decoded into an
+  arena
+- A dependency-free codec library (BER, messages, DN, filter, URL) usable
+  on its own
 
-- `jhetz/ldap/connection.hpp` (steps 5a, 5b): `ldap::connection`, the
-  client API. `co_await ldap::connect(ioc, url, connection_options, mr)`
-  wraps `net::connect` (`connection_options`: connect `timeout`, `tls`,
-  `tcp_no_delay`, `max_message_size` (16 MiB by default), `max_elements`
-  (1,000,000 decoded strings per response by default),
-  `operation_timeout`); a connection can also be built on any
-  `net::transport` with `connection(ioc, transport, options, mr)`.
-  Operations: `simple_bind(dn, password)` (an empty name and password is
-  anonymous; a name with an empty password is refused with
-  `client_errc::unauthenticated_bind`, RFC 4513 section 5.1.2),
-  `search(search_params, mr)` returning `result<std::pmr::vector<entry>>`,
-  `search_stream(search_params, mr)` whose `co_await s.next()` yields one
-  entry at a time (and keeps the search references and the done controls),
-  and `unbind()`. `search_params` is a plain aggregate for designated
-  initializers (`.base`, `.scope`, `.filter`, `.attributes`, `.deref`,
-  `.size_limit`, `.time_limit`, `.types_only`, `.controls`, `.timeout`).
-  Multiplexed: any number of operations may be outstanding (concurrent
-  tasks on the connection's executor); one writer sends the PDUs in order
-  and one reader, running only while something is outstanding, routes
-  each response by message id and decodes it straight into that
-  operation's memory resource. Each operation honours its task's stop
-  token and its timeout: it then fails with `capy::error::canceled` /
-  `timeout` and is abandoned (AbandonRequest; late responses dropped), and
-  the connection stays usable; so does a stream destroyed before its end.
-  To give up on an operation when another event comes first,
-  `capy::when_any(ldap::raceable(c.search(p)), corosio::delay(5s))` races
-  it (`raceable` makes its `result<T>` the payload of a `capy::io_result`,
-  as `when_any` requires; the first to complete wins, the other is
-  stopped, so a losing operation is abandoned; one stopped before it
-  starts is not sent). `ldap::with_stop(token, op)` cancels it on a
-  `std::stop_token` of your own (stoppable from any thread only with the
-  io_context's default `corosio::locking_mode::safe`; under `unsafe_io`
-  and `unsafe`, only from the thread running the io_context) as well as on
-  the awaiting task's.
-  Abandon is best effort (RFC 4511 section 4.11): the server may have
-  finished first, so an update (add, modify, delete, modify DN) that timed
-  out, was stopped or lost a race may still have been applied; re-read the
-  entry if the outcome matters.
-  An operation stopped before it starts is not sent (an update is then
-  certainly not applied); it fails with `capy::error::canceled`.
-  Bind and StartTLS cannot be abandoned (RFC 4511 section 4.11): giving up
-  on one closes the connection (one stopped before it starts is not sent
-  either, and the connection stays open). Nothing is sent while a bind is
-  outstanding (RFC 4511 section 4.2.1): requests started during a bind
-  exchange are held and sent after it, and binds are serialized.
-  Every response is decoded with `origin::server` and must answer an
-  outstanding request (else `client_errc::unexpected_response`);
-  IntermediateResponses are skipped; a Notice of Disconnection fails every
-  outstanding operation. A server result error fails one operation; a
-  transport or protocol error fails all of them once and closes the
-  connection, and later operations fail with `client_errc::not_connected`
-  naming the first error. The header documents the memory, threading and
-  lifetime rules.
-  Step 6 adds the other operations: `add`, `modify` (changes from
-  `ldap::mod::add / remove / replace / increment`), `del`, `modify_dn`
-  (rename and / or move), `compare` (`result<bool>`), `extended`,
-  `who_am_i` (RFC 4532) and `password_modify` (RFC 3062: returns the
-  server-generated password, if any), each taking a params aggregate with `.controls`
-  and `.timeout`; `search_paged(params, page_size)` follows the Simple
-  Paged Results cookie across pages (destroyed early, it abandons the
-  current page and releases the server's paging state with a page size 0
-  request, RFC 2696 section 3, unless the search already ended; the
-  release's answer is read and dropped, and counted by `outstanding()`
-  until it arrives or the page timeout passes). Referrals are returned (in
-  `error::referrals` and `search_stream::references()`), never chased;
-  `url::parse_list` parses them.
-- Password changes that work on OpenLDAP and Active Directory alike:
-  `change_password(user, old, new)` (a user's own) and
-  `reset_password(user, new)` (an administrator's), on `connection` and
-  `sync::connection`. The method comes from the server's root DSE, read
-  once per connection (again after StartTLS): RFC 3062 Password Modify if
-  `supportedExtension` lists it, else Active Directory (and Samba AD) if
-  `supportedCapabilities` lists `1.2.840.113556.1.4.800`, else
-  `client_errc::no_password_method`; a server offering both gets RFC 3062.
-  On AD the password goes into one ModifyRequest of `unicodePwd`
-  (`ldap::ad_password_value`: quoted, UTF-16LE, full Unicode), deleting the
-  old value and adding the new one for a change, replacing it for a reset,
-  and only over TLS (`client_errc::tls_required` before anything is sent);
-  AD's diagnostics for common refusals (`0000052D` password policy,
-  `00000056` wrong old password) are explained in the error's context.
-  When the root DSE is hidden by access controls, choose the method with
-  `connection_options::password_method` or per call
-  (`ldap::password_method::rfc3062` / `active_directory`): an explicit
-  method never reads the root DSE. Passwords never appear in errors.
-  Password memory is not wiped (simple binds, `password_modify`, these
-  two, `ad_password_value`): the password goes through `std::string`
-  copies the library cannot all reach. Only `sasl_scram_sha256` wipes
-  what it holds.
-- StartTLS (step 7): `connection::start_tls(tls_options)` upgrades a plain
-  ldap:// connection in place (refused while operations are outstanding;
-  it first waits for the answers due to paged search releases; bytes
-  received before the handshake are rejected; a server refusal keeps the
-  connection usable in clear), `connection_options::start_tls` does it in
-  `ldap::connect`, and `net::start_tls` is the transport-level piece.
-- SASL (#11, `jhetz/ldap/sasl.hpp`): `connection::sasl_bind(mechanism)`
-  drives the saslBindInProgress exchange; `sasl_external` (identity from a
-  TLS client certificate or ldapi://, optional authorization identity) and
-  `sasl_scram_sha256` (`jhetz/ldap/sasl_scram.hpp`, RFC 5802 / 7677:
-  username and password, the bind fails unless the server proves it knows
-  the password; UTF-8 usernames and passwords prepared with SASLprep, RFC
-  4013, through ICU; no channel binding) are built in,
-  `sasl_gssapi` (`jhetz/ldap/sasl_gssapi.hpp`, Kerberos V5, RFC 4752;
-  optional, see below) too when built with `JHETZ_LDAP_WITH_GSSAPI`,
-  and `sasl_mechanism` is the interface for others (`prepare()` gives a
-  mechanism the URL's host before each bind; a step that may block, such
-  as a network call, is handed to `sasl_bind` with `offload_start()` /
-  `offload_step()` and runs on a thread of its own). When the server
-  reports success but the mechanism's `complete()` refuses it (e.g. a
-  wrong SCRAM server signature), `sasl_bind` returns the error and closes
-  the connection, since the server considers it bound.
-- SASL GSSAPI (`sasl_gssapi`, option `JHETZ_LDAP_WITH_GSSAPI`, off by
-  default; needs the GSS-API library, MIT krb5's `libgssapi_krb5`, found
-  with pkg-config: Debian `libkrb5-dev`, Arch `krb5`): Kerberos binds with
-  the default credentials (the ticket cache of `kinit`, `KRB5CCNAME`) or
-  `sasl_gssapi_options::principal` (UTF-8, e.g. `jdoe@EXAMPLE.ORG`); the
-  target is `ldap@<the URL's host>` unless `options.target` names
-  another (connect with the server's DNS name, not an address; ldapi://
-  needs an explicit target); mutual authentication is required; an
-  optional `authz_id`. The client always chooses "no security layer"
-  (maximum buffer size 0), so SASL neither signs nor seals the session:
-  use it over ldaps:// or StartTLS unless the network is trusted. A
-  server that requires integrity or confidentiality fails the bind with
-  `client_errc::security_layer_required`. Active Directory: with the
-  "LDAP server signing requirements" policy set to require signing, AD
-  refuses unsigned SASL binds over plain ldap:// (`stronger_auth_required`,
-  `00002028`), so use TLS there; there is no channel binding, so an AD
-  whose "LDAP channel binding" policy is "Always" refuses it over TLS.
-  GSS-API failures (no ticket, unknown service principal, unreachable
-  KDC) are `client_errc::gssapi_failure` (`cond::auth_failed`), the
-  context quoting GSS-API's major and minor status messages; never
-  tokens or credentials. Every GSS-API handle is released (RAII).
-  The GSS-API calls that may block (`gss_acquire_cred`,
-  `gss_init_sec_context`: MIT krb5 does DNS lookups and asks the KDC for
-  the service ticket, retrying over the KDCs with backoff; the total is
-  bounded by krb5.conf's `request_timeout`, MIT 1.22 and later, default
-  none, and DNS by `resolv.conf`'s `timeout` and `attempts`)
-  run on a thread of their own, one per call, so the io_context (or the
-  `sync::connection`'s I/O thread) is not stalled. `operation_timeout`
-  and cancellation stop the bind's wait (`capy::error::timeout` /
-  `canceled`; before the first BindRequest nothing was sent and the
-  connection stays usable), not the Kerberos call, which runs to its end
-  on its thread; `io_context::run()` returns only after it, and
-  destroying the io_context (or a `sync::connection`) waits for its
-  thread to end, as long as krb5's own timeouts. That needs an io_context
-  that accepts posts from other threads (the default `locking_mode::safe`;
-  under `unsafe` the bind fails with `std::errc::operation_not_supported`
-  before anything is sent; `unsafe_io` is unsupported).
-  `examples/gssapi.cpp` binds with StartTLS and the default ticket.
-- `jhetz/ldap/controls.hpp`: typed request controls in a `std::variant`
-  (`ldap::paged`, `manage_dsa_it`, `proxied_authorization`,
-  `server_side_sort` (RFC 2891), `assertion` (RFC 4528, critical by default;
-  a false one fails with `errc::assertion_failed`), `pre_read` /
-  `post_read` (RFC 4527), or a raw `ldap::control`), `to_control` /
-  `append_controls` to encode them, and readers for the typed response
-  controls of a `std::pmr::vector<control>` (`response::controls`,
-  `search_stream::controls()`, ...): `find_paged`, `find_sort_result`
-  (`sort_result{result_code, attribute_type}`), `find_pre_read` /
-  `find_post_read` (the entry as an `ldap::entry`). Each returns nullopt when
-  the control is absent and an error when it is malformed. The response
-  control codecs (`encode_` / `decode_sort_result`, `encode_` /
-  `decode_read_entry`) are in `message.hpp`, for mock servers. The sort
-  result comes with the SearchResultDone, so it needs `search_stream`
-  (`search()` returns only the entries). RFC 2891 section 2 says a server
-  that cannot sort SHOULD fail a critical sort and should return the
-  entries unsorted for a non-critical one, with a SortResult, though
-  scenario 6 lets it omit the SortResult when the search fails or returns
-  no entries; a server may also accept only one key. Servers deviate:
-  OpenLDAP 2.7's sssvlv fails an unsortable search with
-  inappropriateMatching (18) and no SortResult even when not critical, and
-  answers every multi-key sort with protocolError (2) "decoding error" and
-  no SortResult, even when not critical, libldap's own included. So check
-  the search's result, and handle `find_sort_result` returning nullopt
-  ("not known to be sorted").
-- `jhetz/ldap/mapping.hpp` (#9): typed struct mapping. A descriptor
-  (`ldap::schema<T> = ldap::describe(ldap::object_class(...),
-  ldap::field<&T::m>("attr", ldap::read_only)...)`) maps members to
-  attributes; the member type decides cardinality (`T`,
-  `std::optional<T>`, `std::vector<T>`); `value_traits<T>` converts values
-  (strings, integers, bool, `dn`, `binary`, `sys_seconds` as
-  GeneralizedTime, enums with an `enum_names` table). `decode<T>(entry)`,
-  `to_attributes(value)`, typed changes `replace / add / remove<&T::m>(v)`,
-  typed filters `filters::field<&T::m>() == v`, and on the connection
-  `search_as<T>`, `modify<T>(dn, changes)` and `add(dn, value)`. Mistakes
-  (unmapped or read_only member, wrong value type, invalid names) fail to
-  compile; `tests/compile/` checks each.
-- `jhetz/ldap/ad.hpp`: Active Directory's Large Integer syntax
-  (1.2.840.113556.1.4.906) as std::chrono types. `ad::filetime_clock` is a
-  C++20 Clock for FILETIME (100 ns ticks since 1601-01-01 UTC;
-  `clock_cast` to `system_clock` and `utc_clock`, and a `zoned_time` from
-  the resulting `sys_time`);
-  `ad::filetime_clock::time_point` members map dates (accountExpires,
-  pwdLastSet, lastLogonTimestamp) as the plain tick count:
-  9223372036854775807 is `ad::never`, 0 is tick 0 (1601-01-01, before every
-  date: "never happened" for lastLogon, `ad::pwd_must_change` for
-  pwdLastSet), and `ad::is_never(t)` is true for both of accountExpires'
-  "never expires" spellings; `ad::pwd_must_change` / `ad::pwd_set_now`
-  write pwdLastSet 0 / -1; and `ad::filetime_clock::duration` members map
-  the negative intervals (maxPwdAge, lockoutDuration; `ad::forever` for
-  -9223372036854775808). `std::int64_t` members read any 906 attribute raw.
-- `jhetz/ldap/schema.hpp` (#13): runtime schema validation. A lenient
-  RFC 4512 parser for the subschema's attributeTypes / objectClasses,
-  `server_schema`, `validate<T>(schema)` listing every issue (unknown
-  attribute or object class, syntax the member's type cannot read, a
-  writable member on a NO-USER-MODIFICATION attribute; single member on a
-  multi-valued attribute as a warning), `connection::load_schema()` and
-  `connection_options::schema_check = schema_check::on_first_use`.
-- `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
-  the reader uses: wait for one complete PDU without decoding it, then read
-  only its message id and operation tag.
-- `jhetz/ldap/sync.hpp` (#12): `ldap::sync::connection`, the blocking facade.
-  It owns an io_context and an I/O thread; every method runs the
-  corresponding connection operation there and waits, with the same
-  types. Callable from any number of threads; a call from its own I/O
-  thread fails with `client_errc::would_deadlock`.
-- `examples/ldapsearch.cpp` (target `jhetz_ldapsearch`, binary
-  `jhetz-ldapsearch`, option `JHETZ_LDAP_BUILD_EXAMPLES`): connect,
-  StartTLS (`-Z`), simple bind (`-D dn -w pw`) or SASL EXTERNAL
-  (`-Y EXTERNAL [-X authzid]`, client certificate `--cert` / `--key`),
-  search (paged with `--page N`), LDIF output, unbind;
-  `jhetz-ldapsearch [options] URL [filter [attrs]]`.
+Linux only.
 
-Memory (DESIGN.md section 8): the public types use `std::pmr` containers
-and are allocator-aware: the message model (every operation, `ldap_result`,
-`control`, `partial_attribute`, `message`, `paged_results`), `filter`,
-`dn` / `rdn` / `ava`, `attribute`, `entry` / `attribute_values`, `url` /
-`url_extension` and `ber::writer` have `allocator_type`, `get_allocator()`,
-an allocator constructor, allocator-extended copy and move constructors, and
-assignment that keeps the target's resource (also for their `std::optional`
-and `std::variant` members). Parsing and decoding take the resource:
-`decode_options::memory`, `filter::raw(text, mr)`, `decode_filter(r, limits,
-mr)`, `dn::parse(text, mr)`, `rdn::parse(text, mr)`, `attribute::parse(text, mr)`,
-`url::parse(text, mr)`, `filters::attr(name, alloc)`, `encode(m, mr)`.
-`read_buffer`, `connect` and `transport::wrap` take a `memory_resource*` too.
-The defaults are the default resource, i.e. the heap, so nothing changes
-unless a resource is given.
-- Lifetime rule: an object decoded into (or built on) a caller-supplied
-  resource, such as a per-response `std::pmr::monotonic_buffer_resource`,
-  must not outlive it. A plain copy uses the default resource, so copying out
-  is always safe.
-- `ldap::error` holds `std::pmr` strings but is not allocator-aware: errors
-  are always built on the default resource, never in a caller's arena, even
-  when decoding into one fails, because they outlive the operation (they go
-  up the call stack and into logs). Errors are the cold path.
-- Decoding is tested to allocate only from `decode_options::memory` for every
-  sample message (a large entry included), and a builder-made filter plus
-  `encode` only from the resource given, with a counting resource and with a
-  `monotonic_buffer_resource` over a fixed buffer with a null upstream while
-  the default resource is `null_memory_resource()` (`tests/pmr_tests.cpp`).
-- `tls_options` is a plain aggregate (configuration, not a hot path).
+## Example
 
-LDAP resultCode 0 (success) has no `errc` value: success is the absence of
-an error; `ldap_result::is_success()` checks for it.
+```cpp
+#include "jhetz/ldap/connection.hpp"
 
-Not yet: other SASL mechanisms (SCRAM-SHA-256-PLUS, GSS-SPNEGO, GSSAPI
-security layers and channel binding), a connection pool.
+#include <boost/capy/ex/run_async.hpp>
+#include <boost/corosio/io_context.hpp>
 
-## Examples
+#include <iostream>
 
-Bare programs in `examples/`, one action each (option
-`JHETZ_LDAP_BUILD_EXAMPLES`, targets `jhetz_ldap_example_<name>`). They
-expect a local OpenLDAP serving `dc=example,dc=org` with
-`cn=admin,dc=example,dc=org` / `secret`; the first argument overrides the
-URL (`ldap://localhost`).
+namespace ldap = jhetz::ldap;
 
-| Example | Does |
-|---|---|
-| `connect.cpp` | connect and simple bind |
-| `search.cpp` | search `ou=people` with a filter, print each DN and `cn` |
-| `modify.cpp` | replace a user's `mail` |
-| `add.cpp` | add the user `uid=jane` |
-| `delete.cpp` | delete the user `uid=jane` |
-| `password.cpp` | reset a user's password (RFC 3062 or Active Directory, from the root DSE) |
-| `starttls.cpp` | connect with StartTLS, then bind |
-| `cancel.cpp` | search the whole tree; Ctrl-C gives up on it (`capy::when_any` with `ldap::raceable`) |
-| `paged.cpp` | page through `ou=people` 100 entries at a time, sorted by `mail` (RFC 2696 paging, RFC 2891 server-side sort) |
-| `blocking.cpp` | the same search with the blocking `ldap::sync::connection` |
-| `gssapi.cpp` | StartTLS, then a Kerberos bind with the default ticket (`sasl_gssapi`; built with `JHETZ_LDAP_WITH_GSSAPI`) |
+boost::capy::task<int> run(boost::corosio::io_context &ioc)
+{
+	auto url = ldap::url::parse("ldap://localhost");
+	auto c = co_await ldap::connect(ioc, *url);
+	if (!c) {
+		std::cerr << c.error().message() << '\n';
+		co_return 1;
+	}
+	auto bound = co_await c->simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret");
+	if (!bound) {
+		std::cerr << bound.error().message() << '\n';
+		co_return 1;
+	}
+	auto people = co_await c->search({
+	  .base = ldap::dn{ "ou=people,dc=example,dc=org" },
+	  .filter = ldap::filters::attr("uid").starts_with("user00"),
+	  .attributes = { "cn" },
+	});
+	if (!people) {
+		std::cerr << people.error().message() << '\n';
+		co_return 1;
+	}
+	for (const ldap::entry &person : *people) std::cout << person.dn << ": " << person.find("cn")->front() << '\n';
+	co_return 0;
+}
 
-`examples/ldapsearch.cpp` (above) is a fuller command-line tool. To try an
-example against the throwaway slapd of the integration tests:
-
-```sh
-tests/integration/run_slapd.sh sh -c \
-  'build/main/jhetz_ldap_example_search $JHETZ_LDAP_IT_LDAP'
+int main()
+{
+	boost::corosio::io_context ioc;
+	int rc = 1;
+	boost::capy::run_async(ioc.get_executor(), [&](int r) { rc = r; })(run(ioc));
+	ioc.run();
+	return rc;
+}
 ```
 
-## Using it from another project
+More in [`examples/`](examples/): one small program per task (connect,
+search, add, modify, delete, password reset, StartTLS, cancellation, paged
+search, the blocking API, Kerberos), and `ldapsearch.cpp`, a small
+command-line tool.
 
-Either add it to the build (`add_subdirectory(ldap)` or FetchContent) and
-link `jhetz::ldap` / `jhetz::ldap_net`, or install it and use the CMake
-package:
+## Build
+
+Requirements: CMake 3.25+, GCC 16+ or Clang 23+ with libstdc++ 16+, and for
+the network library the OpenSSL and ICU development files (Debian:
+`libssl-dev libicu-dev`, Arch: `openssl icu`). Catch2, Corosio and Capy are
+fetched by CMake.
+
+```sh
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+ctest --test-dir build
+```
+
+## Use it from CMake
 
 ```cmake
-find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net)   # or without `net`
-target_link_libraries(app PRIVATE jhetz::ldap_net)     # jhetz::ldap: codec only
+find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net)
+target_link_libraries(app PRIVATE jhetz::ldap_net)   # jhetz::ldap: codec only
 ```
 
-`cmake --install` installs the headers, the libraries and the `jhetz_ldap`
-package (`JHETZ_LDAP_INSTALL`, on when this is the top-level project).
-`jhetz::ldap_net` is part of the package only when Capy and Corosio were
-found as installed packages (on `CMAKE_PREFIX_PATH`; configure prefers them
-to fetching): a fetched Corosio does not export its targets. Without it the
-package is the codec only, without the networking headers. With `net`, the
-package finds ICU (`find_dependency(ICU COMPONENTS uc data)`), which the
-static `jhetz::ldap_net` needs at link time. Corosio at the
-pinned commit needs help to install against an installed Capy;
-`tests/install/check_install.sh WORK_DIR` does the whole sequence (Capy,
-Corosio, jhetz_ldap, then a consumer in `tests/install/consumer/`, also
-codec-only) and is the reference for doing it by hand.
+or add it with `add_subdirectory` / FetchContent and link the same targets.
 
-## Build and test
+## Documentation
 
-Linux only (configure rejects Apple Clang, even for the codec-only
-target). Standalone CMake project (CMake 3.25+, GCC 16+ or Clang 23+;
-Clang needs libstdc++ 16+ too, so install g++-16 next to it; configure
-stops with an error on anything older; libc++ is neither supported nor
-checked, so use libstdc++). Catch2 v3, and for `jhetz::ldap_net` Corosio
-and Capy, are fetched from GitHub; `jhetz::ldap_net` also needs the
-OpenSSL and ICU development files (`libssl-dev libicu-dev`; Arch:
-`openssl icu`).
-
-```sh
-cmake -B build/main -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON
-cmake --build build/main
-ctest --test-dir build/main --output-on-failure
-ctest --test-dir build/main -R '^net\.'     # just the transport / connect / connection tests
-```
-
-To build against local checkouts instead of downloading, pass
-`-DFETCHCONTENT_SOURCE_DIR_CAPY=/path/to/capy -DFETCHCONTENT_SOURCE_DIR_COROSIO=/path/to/corosio`.
-
-The `net.*` tests need no LDAP server and no fixed ports: they run TCP, TLS
-and Unix socket servers in-process on loopback, with a throwaway CA and
-certificates generated at run time through the OpenSSL API.
-
-| Option | Default | |
-|---|---|---|
-| `JHETZ_LDAP_BUILD_TESTS` | `ON` | unit tests and the `*_fuzz_replay` tests |
-| `JHETZ_LDAP_BUILD_NET` | `ON` (`OFF` with fuzzers) | `jhetz::ldap_net` and its tests; fetches Corosio + Capy, needs OpenSSL and ICU |
-| `JHETZ_LDAP_WITH_GSSAPI` | `OFF` | SASL GSSAPI (Kerberos) in `jhetz::ldap_net`, its tests and example; needs the GSS-API library (pkg-config `krb5-gssapi`). The installed package then has the component `gssapi` |
-| `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
-| `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
-| `JHETZ_LDAP_WERROR` | `OFF` | warnings are errors in our code (CI turns it on) |
-| `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench` (see below; not run by ctest or CI) |
-| `JHETZ_LDAP_COVERAGE` | `OFF` | Clang source-based coverage on our own targets (see [Coverage](#coverage)) |
-
-## Integration tests
-
-`tests/integration/` runs the client against a real OpenLDAP `slapd`
-(ldap://, ldaps://, StartTLS, ldapi://; simple and SASL EXTERNAL binds over
-ldapi:// and with a TLS client certificate; SASL SCRAM-SHA-256 binds,
-also with a non-ASCII username and password, skipped unless cyrus-sasl's scram plugin is installed, e.g. Debian's
-libsasl2-modules; plain, streaming, paged and
-typed searches with the server's schema; every write operation; the
-assertion, pre-read, post-read and (with the sssvlv overlay) server side
-sort controls;
-cancellation; a fault-injecting proxy that truncates, oversizes or cuts
-the server's answer). `run_slapd.sh` starts a throwaway slapd with a test
-PKI and the fixture from `make_fixture.py`, runs a command and stops it:
-
-```sh
-tests/integration/run_slapd.sh ctest --test-dir build/main -L integration --output-on-failure
-```
-
-It needs `slapd` and `openssl`; the defaults suit Debian / Ubuntu's slapd
-package, others are set with `SLAPD`, `SLAPD_SCHEMA_DIR` and
-`SLAPD_MODULE_PATH`. The sssvlv overlay is loaded when it is in the module
-path; without it the server side sort test is skipped. Without slapd the
-`integration` test is skipped, so plain `ctest` stays hermetic. CI runs it
-in the `integration` job.
-
-SASL GSSAPI (built with `JHETZ_LDAP_WITH_GSSAPI`) has its own test,
-`integration.gssapi` (labels `integration` and `kerberos`), run with a
-throwaway MIT Kerberos KDC around slapd: `run_kdc.sh` creates the realm
-`EXAMPLE.ORG`, the service principal `ldap/localhost` (slapd's keytab)
-and tickets for `user007` and `jörg`, with its configuration in a
-temporary directory, and `run_slapd.sh` then configures slapd for GSSAPI:
-
-```sh
-tests/integration/run_kdc.sh tests/integration/run_slapd.sh \
-  ctest --test-dir build/main -L integration --output-on-failure
-```
-
-It needs MIT krb5's KDC tools (`krb5kdc`, `kdb5_util`, `kadmin.local`,
-`kinit`) and cyrus-sasl's gssapi plugin for slapd (Debian
-`libsasl2-modules-gssapi-mit`, Arch `cyrus-sasl-gssapi`). Without the KDC
-tools `run_kdc.sh` runs the command without Kerberos, and without the
-plugin slapd does not offer GSSAPI: either way the test is skipped. The
-KDC listens on 127.0.0.1, port `JHETZ_LDAP_IT_KDC_PORT` (3750). Not in
-CI.
-
-A plugin outside cyrus-sasl's directory is found through `SASL_PATH`, a
-colon-separated list of directories replacing the default one, so list
-that one too. To use the plugin without installing it (Arch), extract the
-package into a scratch directory, as for a local slapd:
-
-```sh
-mkdir -p /tmp/sasl-gssapi
-curl -L https://archlinux.org/packages/extra/x86_64/cyrus-sasl-gssapi/download/ \
-  | bsdtar -xf - -C /tmp/sasl-gssapi
-SASL_PATH=/tmp/sasl-gssapi/usr/lib/sasl2:/usr/lib/sasl2 \
-  SLAPD=<ol>/usr/bin/slapd SLAPD_SCHEMA_DIR=<ol>/etc/openldap/schema \
-  SLAPD_MODULE_PATH=<ol>/usr/lib/openldap \
-  tests/integration/run_kdc.sh tests/integration/run_slapd.sh \
-  ctest --test-dir build/gssapi -L integration --output-on-failure
-```
-
-(`<ol>`: the Arch `openldap` package extracted the same way; `build/gssapi`
-configured with `-DJHETZ_LDAP_WITH_GSSAPI=ON`.)
-
-## Coverage
-
-`tests/coverage/run_coverage.sh` configures and builds `BUILD_DIR` (default
-`build/coverage`) with clang++ and `-DJHETZ_LDAP_COVERAGE=ON` (only our
-libraries, tests and examples are instrumented; no sanitizers), runs the
-whole ctest suite, and with `SLAPD` set (as for `run_slapd.sh`) the
-integration tests too, then reports on `src` and `include`:
-
-```sh
-SLAPD=/usr/sbin/slapd tests/coverage/run_coverage.sh [--run-only] [BUILD_DIR]
-```
-
-- `BUILD_DIR/llvm-cov/summary.txt`: the `llvm-cov report` table (also printed)
-- `BUILD_DIR/llvm-cov/html/index.html`: line, region and branch counts per file
-- `BUILD_DIR/llvm-cov/summary.json`: `llvm-cov export -summary-only`
-
-`--run-only` stops after the tests and leaves the raw profiles in
-`BUILD_DIR/llvm-cov/profraw`. A failing test still gets a report, and the
-script exits with the first failing test step's status (a failing report
-step exits with its own). An existing `BUILD_DIR`
-configured without the option is refused rather than reconfigured. It needs
-`llvm-profdata` and `llvm-cov` matching the compiler (the `llvm` package; or
-set `LLVM_PROFDATA`, `LLVM_COV` and `CXX`), on Linux.
-
-A template that nothing instantiates generates no code, so it is missing
-from the report rather than shown as 0% (uncalled inline functions do show
-up, with zero counts).
-
-## Fuzz
-
-| Target | Input | Properties |
-|---|---|---|
-| `ber_fuzz` | bytes | framer and reader agree; every element walks; values re-encode consistently |
-| `message_fuzz` | bytes | a message that decodes encodes, decodes to an equal message (exactly) and re-encodes to the same bytes; paged results, sort result and pre-/post-read controls that decode re-encode to equal values; decoding into a `monotonic_buffer_resource` (with `null_memory_resource()` as the default resource meanwhile) gives an equal message, and a copy taken before the arena is released stays valid (ASan); filter text in a search request round-trips exactly |
-| `filter_fuzz` | text / bytes | `filter::raw` text -> BER -> equal tree -> same BER, and `to_string` -> `raw` -> equal tree (a fixed point); every builder's text parses back to its tree (escaping) and `attr("cn") == v` carries `v` exactly; decodable BER filters round-trip; `!f` holds exactly `f`'s BER |
-| `dn_fuzz` | text | `parse(to_string(d)) == d`; the literal validator agrees with `parse` |
-| `url_fuzz` | text | `parse(to_string(u)) == u` and `to_string` is canonical; printed URLs contain only RFC 3986 characters |
-
-```sh
-cmake -B build/fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-      -DCMAKE_CXX_COMPILER=clang++ -DJHETZ_LDAP_BUILD_FUZZERS=ON -DJHETZ_LDAP_BUILD_TESTS=OFF
-cmake --build build/fuzz
-mkdir -p corpus && cp fuzz/corpus/message_fuzz/* corpus/
-UBSAN_OPTIONS=halt_on_error=1 build/fuzz/fuzzers/message_fuzz -max_total_time=60 corpus
-# url_fuzz has a dictionary: add -dict=fuzz/url.dict
-```
-
-`fuzz/corpus/<target>/` holds the seed inputs (the same ones
-`<target>_replay` mutates). Regenerate them after changing the seeds with
-`<target>_replay --write-seeds fuzz/corpus/<target>`.
-
-Sanitized and fuzz builds use `-fno-sanitize-recover=all`, so any UBSan
-finding aborts and fails the test or fuzz run.
-
-A fuzz build leaves `JHETZ_LDAP_BUILD_NET` off by default: the fuzzers only
-cover the codec and URLs.
-
-Without libFuzzer, the `<target>_replay` tests (part of `ctest`) run the same
-entry points on deterministic generated and mutated inputs (about 300,000 for
-`ber_fuzz`, 200,000 for `message_fuzz` and `url_fuzz`, 150,000 for `dn_fuzz`
-and 45,000 for the slower `filter_fuzz`).
-
-## Benchmark
-
-`bench/decode_bench.cpp` (option `JHETZ_LDAP_BUILD_BENCH`) decodes a stream
-of 1,000 SearchResultEntry PDUs, 30 attributes x 3 values (10-60 bytes) each,
-plus a 64 KiB `jpegPhoto` and a 4 KiB `userCertificate` in every 20th entry
-(7.1 MiB, 90,100 values), with the default resource and with one
-`monotonic_buffer_resource` `release()`d after each message, with and
-without a 256 KiB initial buffer. Heap allocations are counted with a
-counting default resource in a separate pass.
-
-```sh
-cmake -B build/bench -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DJHETZ_LDAP_BUILD_BENCH=ON -DJHETZ_LDAP_BUILD_TESTS=OFF -DJHETZ_LDAP_BUILD_NET=OFF
-cmake --build build/bench && build/bench/jhetz_ldap_decode_bench
-```
-
-GCC 16.2, Release (`-O3`), a 12-thread desktop, best / median of 15 runs
-(three invocations; the heap row varies by about 10% between them, the
-arena rows by under 1%):
-
-| Mode | Best | Median | Heap allocations | per entry | Heap MiB |
-|---|---:|---:|---:|---:|---:|
-| default resource (heap) | 10.0 ms | 10.0 ms | 111,662 | 111.7 | 11.8 |
-| monotonic arena, 256 KiB buffer, `release()` | 7.6 ms | 7.6 ms | 0 | 0 | 0 |
-| monotonic arena, no buffer, `release()` | 8.0 ms | 8.0 ms | 5,100 | 5.1 | 17.4 |
-
-A reused arena with a buffer that holds a typical response removes every
-heap allocation and saves about 24% of the decode time here; without a
-buffer, `release()` hands the chunks back and each message fetches them
-again (about 5 per entry, larger ones for the photos). Decoding reserves the
-attribute and value vectors exactly (counting the elements first), which
-took the heap mode from 177 to 112 allocations per entry and the arena
-without buffer from 24.6 to 17.4 MiB, at the price of reading the element
-headers twice. Since BER headers are parsed without building a `result` in
-the common case (#19), that second read costs nothing measurable, and
-decoding got faster in every mode: on the same machine and in the same
-session, before and after that change, heap 11.5 to 10.0 ms (-13%), arena
-with buffer 9.3 to 7.6 ms (-18%), arena without buffer 9.6 to 8.0 ms
-(-17%). Counting decoded strings against `decode_options::max_elements`
-costs about 0.3 ms of that.
-
-## Golden vectors
-
-`tests/message_golden_tests.cpp` compares the codec with encodings produced
-by an independent implementation (ldap3 2.9.1 / pyasn1 0.6.4); the generating
-script is in the file.
+- [`docs/API.md`](docs/API.md): what each header provides, in detail
+- [`docs/DESIGN.md`](docs/DESIGN.md): design notes and rationale
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): build options, installing,
+  integration tests against slapd, coverage, fuzzing, benchmark

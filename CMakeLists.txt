@@ -4,7 +4,7 @@
 #   cmake --build build/main
 #   ctest --test-dir build/main --output-on-failure
 #
-# See README.md for sanitizer and fuzzer builds.
+# See docs/DEVELOPMENT.md for sanitizer and fuzzer builds.
 cmake_minimum_required(VERSION 3.25)
 
 project(jhetz_ldap VERSION 0.1.0 LANGUAGES CXX)
@@ -242,7 +242,7 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     target_link_libraries(jhetz_ldapsearch PRIVATE jhetz::ldap_net)
     jhetz_ldap_warnings(jhetz_ldapsearch)
 
-    # Small programs showing the main use cases (README.md, "Examples").
+    # Small programs showing the main use cases (docs/DEVELOPMENT.md, "Examples").
     set(jhetz_ldap_examples connect search modify add delete password starttls cancel blocking bulk paged)
     if(JHETZ_LDAP_WITH_GSSAPI)
         list(APPEND jhetz_ldap_examples gssapi)
@@ -318,7 +318,7 @@ if(JHETZ_LDAP_BUILD_FUZZERS)
     add_subdirectory(fuzz)
 endif()
 
-# Decode benchmark: default resource vs per-message arena (README.md has
+# Decode benchmark: default resource vs per-message arena (docs/DEVELOPMENT.md has
 # numbers). Build it optimized and without sanitizers.
 if(JHETZ_LDAP_BUILD_BENCH)
     add_executable(jhetz_ldap_decode_bench bench/decode_bench.cpp)

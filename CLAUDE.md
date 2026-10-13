@@ -78,7 +78,7 @@ SLAPD=<ol>/usr/bin/slapd SLAPD_SCHEMA_DIR=<ol>/etc/openldap/schema SLAPD_MODULE_
 ```
 
 Fuzzers (`build/fuzz`, Clang, `-DJHETZ_LDAP_BUILD_FUZZERS=ON`), the bench
-(`build/bench`, `-DJHETZ_LDAP_BUILD_BENCH=ON`) and coverage are described in README.md.
+(`build/bench`, `-DJHETZ_LDAP_BUILD_BENCH=ON`) and coverage are described in docs/DEVELOPMENT.md.
 
 ## Architecture Overview
 
