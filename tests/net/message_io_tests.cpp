@@ -462,6 +462,7 @@ TEST_CASE("transport basics", "[net][transport]")
 	CHECK_FALSE(empty.is_open());
 	CHECK_FALSE(empty.is_tls());
 	CHECK(empty.name() == "no transport");
+	CHECK(empty.host().empty());
 	empty.close();// harmless
 	empty.cancel();
 
@@ -474,6 +475,55 @@ TEST_CASE("transport basics", "[net][transport]")
 	CHECK(moved.is_open());
 	CHECK(moved.name() == "x");
 	CHECK_FALSE(t.is_open());// NOLINT(bugprone-use-after-move): moved-from is empty
+}
+
+namespace {
+
+// A capy::test::stream that counts calls to its cancel() and close().
+struct hooked_stream
+{
+	capy::test::stream inner;
+	std::shared_ptr<int> cancels;
+	std::shared_ptr<int> closes;
+
+	template<capy::MutableBufferSequence MB> auto read_some(MB buffers) { return inner.read_some(buffers); }
+	template<capy::ConstBufferSequence CB> auto write_some(CB buffers) { return inner.write_some(buffers); }
+	void cancel() noexcept { ++*cancels; }
+	void close() noexcept
+	{
+		++*closes;
+		inner.close();
+	}
+};
+
+}// namespace
+
+TEST_CASE("transport forwards cancel and close to a wrapped stream", "[net][transport]")
+{
+	auto cancels = std::make_shared<int>(0);
+	auto closes = std::make_shared<int>(0);
+	auto [a, b] = capy::test::make_stream_pair();
+	auto t = net::transport::wrap(hooked_stream{ std::move(a), cancels, closes }, "hooked");
+	CHECK(t.host().empty());// only connect() records a host
+
+	t.cancel();
+	CHECK(*cancels == 1);
+	CHECK(t.is_open());// cancel leaves the connection open
+	t.cancel();
+	CHECK(*cancels == 2);
+
+	t.close();
+	CHECK(*closes == 1);
+	CHECK_FALSE(t.is_open());
+	t.close();// idempotent: the stream's close() runs once
+	CHECK(*closes == 1);
+	CHECK(*cancels == 2);
+
+	// A stream without cancel() (capy::test::stream): cancel() is a no-op.
+	auto [c, d] = capy::test::make_stream_pair();
+	auto plain = net::transport::wrap(std::move(c), "plain");
+	plain.cancel();
+	CHECK(plain.is_open());
 }
 
 TEST_CASE("read_buffer allocates from the given memory resource", "[net][read_message][pmr]")
