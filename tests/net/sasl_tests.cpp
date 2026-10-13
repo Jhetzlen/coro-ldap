@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <semaphore>
 #include <stop_token>
 #include <string>
 #include <thread>
@@ -686,12 +687,15 @@ TEST_CASE("sasl: a timeout or cancellation gives up on an offloaded step", "[net
 // stop() when the io_context was destroyed).
 TEST_CASE("sasl: destroying the io_context waits for an offloaded step", "[net][sasl][offload]")
 {
-	// The step is let through well after the bind times out (100 ms), and
-	// whatever happens in the scope: a failed REQUIRE there still destroys
-	// the io_context, which then waits for the step, not forever.
+	// The step is let through only once the scope has checked it is still
+	// blocked (armed), shortly before the io_context is destroyed. If the
+	// scope exits early (a failed REQUIRE), the opener lets it through after
+	// 2 s anyway, so the io_context's destructor waits for it, not forever.
 	const auto gate = std::make_shared<offload_gate>();
-	const std::jthread opener([gate] {
-		std::this_thread::sleep_for(std::chrono::milliseconds(300));
+	std::binary_semaphore armed{ 0 };
+	const std::jthread opener([gate, &armed] {
+		(void)armed.try_acquire_for(std::chrono::seconds(2));
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 		gate->allow(1);
 	});
 	{
@@ -711,6 +715,7 @@ TEST_CASE("sasl: destroying the io_context waits for an offloaded step", "[net][
 		sockets.server.close();
 		ioc.poll();// what is ready, not the step: it still holds work
 		CHECK(gate->finished == 0);
+		armed.release();
 	}
 	CHECK(gate->finished == 1);
 }
