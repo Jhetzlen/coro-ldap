@@ -317,9 +317,21 @@ struct peer_server
 		net::read_buffer tls_buf;
 		while (true) {
 			auto r = co_await net::read_message(secure, tls_buf, as_server);
-			if (!r) co_return;// the client hung up
+			if (!r) {
+				// The client hung up: close() sends no close_notify, so between
+				// PDUs that reads as stream_truncated rather than eof.
+				const auto code = r.error().code;
+				if (code != capy::cond::eof && code != capy::cond::stream_truncated)
+					log.error = "read over TLS: " + std::string(r.error().message());
+				co_return;
+			}
+			const bool is_bind = std::holds_alternative<ldap::bind_request>(r->op);
 			const std::string out = bytes_of(bind_resp(r->id));
 			log.received.push_back(std::move(*r));
+			if (!is_bind) {
+				log.error = "expected a bind request over TLS";
+				co_return;
+			}
 			if (auto w = co_await net::write_bytes(secure, std::as_bytes(std::span(out))); !w) {
 				log.error = "write over TLS: " + std::string(w.error().message());
 				co_return;

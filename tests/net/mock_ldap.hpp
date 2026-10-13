@@ -87,7 +87,8 @@ inline ldap::message ref_msg(std::int32_t id, ldap::string_list uris)
 // One step of a server script: optionally wait for one request, then send
 // `replies` (each written separately), then optionally hang up. Or, with
 // expect_close, wait for the client to hang up: a request instead is logged
-// and is an error.
+// and is an error. expect_close ignores read_request, replies and
+// close_after.
 struct step
 {
 	bool read_request = true;
