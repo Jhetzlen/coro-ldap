@@ -8,14 +8,16 @@
 // - accepted input encodes to text that decodes to the same value, and
 //   GeneralizedTime re-encodes to the same text (encoding is canonical).
 // AD FILETIME dates decode to the plain tick count (0 is tick 0, only the
-// maximum is ad::never), so they accept what int64 accepts and encode the
-// same text.
+// maximum is ad::never), accept what int64 accepts from -1 up and encode
+// the same text; every decoded date other than ad::never clock_casts to
+// system_clock and back unchanged (UBSan catches an overflow).
 #include "jhetz/ldap/ad.hpp"
 #include "jhetz/ldap/mapping.hpp"
 
 #define FUZZ_TARGET "value_fuzz"
 #include "check.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -43,11 +45,17 @@ void filetime_checks(std::string_view text)
 	namespace ad = ldap::ad;
 	const auto t = ldap::value_traits<ad::filetime_clock::time_point>::decode(text);
 	const auto n = ldap::value_traits<std::int64_t>::decode(text);
-	LDAP_FUZZ_CHECK(t.has_value() == n.has_value());
-	if (!t) return;
+	LDAP_FUZZ_CHECK(t.has_value() == (n.has_value() && *n >= -1));
+	if (!t) {
+		LDAP_FUZZ_CHECK(t.error().code == ldap::client_errc::conversion_failed);
+		return;
+	}
 	LDAP_FUZZ_CHECK(t->time_since_epoch().count() == *n);
 	LDAP_FUZZ_CHECK(ldap::value_traits<ad::filetime_clock::time_point>::encode(*t) == std::to_string(*n));
 	LDAP_FUZZ_CHECK(ad::is_never(*t) == (*n == 0 || *n == std::numeric_limits<std::int64_t>::max()));
+	if (*t == ad::never) return;
+	const auto sys = std::chrono::clock_cast<std::chrono::system_clock>(*t);
+	LDAP_FUZZ_CHECK(std::chrono::clock_cast<ad::filetime_clock>(sys) == *t);
 }
 
 }// namespace

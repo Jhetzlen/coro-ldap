@@ -447,6 +447,15 @@ type decides:
     arithmetic on it stays defined.
   - pwdLastSet: 0 equals `ad::pwd_must_change`.
 
+  Values below -1 fail to decode (`conversion_failed`): AD writes no date
+  before 1601, -1 is kept because it is the `ad::pwd_set_now` command (every
+  constant decodes back), and below `time_point::min() + unix_epoch_offset`
+  `to_sys` would overflow. So every decoded date converts; `ad::never` does
+  too, to year 30828, which is no real date (test `ad::is_never` first).
+  `to_sys` keeps 100 ns ticks: converting its result to nanoseconds
+  (`system_clock::time_point`) overflows after 2262. `from_sys` is defined
+  up to year 30828, which covers every `system_clock::time_point`.
+
   pwdLastSet takes two commands when written: `ad::pwd_must_change` (0,
   change at next logon) and `ad::pwd_set_now` (-1, AD stores the current
   time); they are plain tick counts, so the typed `replace<&T::m>(...)`

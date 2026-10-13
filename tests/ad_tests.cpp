@@ -67,6 +67,29 @@ TEST_CASE("filetime_clock: a known AD value, round trips and now()", "[ad][clock
 	CHECK(clock_cast<system_clock>(now) <= after);
 }
 
+TEST_CASE("filetime_clock: conversions at the limits", "[ad][clock]")
+{
+	using ft = ad::filetime_clock;
+	constexpr ticks offset = ft::unix_epoch_offset;
+	// The lowest date to_sys converts, and the highest from_sys produces.
+	static_assert(ft::to_sys(filetime::min() + offset) == sys_time<ticks>::min());
+	static_assert(ft::from_sys(sys_time<ticks>::min()) == filetime::min() + offset);
+	static_assert(ft::from_sys(sys_time<ticks>::max() - offset) == ad::never);
+	// ad::never converts without overflow, to year 30828 (no real date).
+	static_assert(ft::to_sys(ad::never) == sys_time<ticks>(ticks::max() - offset));
+	CHECK(year_month_day(floor<days>(clock_cast<system_clock>(ad::never))).year() == 30828y);
+	CHECK(clock_cast<ad::filetime_clock>(clock_cast<system_clock>(ad::never)) == ad::never);
+	// The decodable extremes: -1 (ad::pwd_set_now) and tick 0.
+	CHECK(clock_cast<system_clock>(*traits::decode("-1")) == sys_days(1601y / January / 1) - ticks{ 1 });
+	CHECK(clock_cast<system_clock>(*traits::decode("0")) == sys_days(1601y / January / 1));
+	CHECK(clock_cast<ad::filetime_clock>(clock_cast<system_clock>(ad::pwd_set_now)) == ad::pwd_set_now);
+	// Every system_clock::time_point is in from_sys' range.
+	CHECK(clock_cast<ad::filetime_clock>(system_clock::time_point::max())
+		  == filetime(floor<ticks>(system_clock::duration::max()) + offset));
+	CHECK(clock_cast<ad::filetime_clock>(system_clock::time_point::min())
+		  == filetime(floor<ticks>(system_clock::duration::min()) + offset));
+}
+
 TEST_CASE("filetime_clock: utc_clock and zoned_time", "[ad][clock]")
 {
 	const filetime t{ ticks{ new_year_2024 } };
@@ -115,6 +138,15 @@ TEST_CASE("filetime value_traits: ticks, sentinels and errors", "[ad][traits]")
 		CHECK(r.error().code == ldap::client_errc::conversion_failed);
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("not an integer"));
 	}
+	// Below -1: no AD date, and where to_sys would overflow.
+	for (const char *bad : { "-2", "-116444736000000000", "-9223372036854775808" }) {
+		const auto r = traits::decode(bad);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::conversion_failed);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("FILETIME date before -1"));
+	}
+	// Intervals keep the full range.
+	CHECK(interval_traits::decode("-2") == ticks{ -2 });
 }
 
 TEST_CASE("interval value_traits keep AD's negative intervals", "[ad][traits]")
