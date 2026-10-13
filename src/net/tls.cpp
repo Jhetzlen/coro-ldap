@@ -297,12 +297,14 @@ boost::capy::task<result<void>> tls_handshake(transport::impl &im,
 	if (options.verification == certificate_verification::full && options.host_matching == host_name_matching::strict
 		&& !is_ip_literal(name))
 		setup.failure->strict_host = name;
-	// im.tls is set only once the handshake succeeded: transport::is_tls()
-	// says TLS protects the stream. Undone on a failed handshake, and on a
-	// throw (bad_alloc) from openssl_stream's construction, set_hostname(),
-	// the handshake's frame, bounded()'s or the timeout's stop_source. Back
-	// to the plain socket; the connection is unusable anyway and must be
-	// closed (the server expects a handshake now).
+	// im.tls is set before the handshake and kept only if it succeeds:
+	// transport::is_tls() is true during the handshake, so a caller that
+	// needs "TLS protects the stream" must also check that no handshake is
+	// in progress (connection's `upgrading`). Undone on a failed handshake,
+	// and on a throw (bad_alloc) from openssl_stream's construction,
+	// set_hostname(), the handshake's frame, bounded()'s or the timeout's
+	// stop_source. Back to the plain socket; the connection is unusable
+	// anyway and must be closed (the server expects a handshake now).
 	struct undo_tls
 	{
 		transport::impl &im;
