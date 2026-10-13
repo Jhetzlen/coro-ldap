@@ -93,8 +93,8 @@ namespace jhetz::ldap::ad {
 // implementation-defined (libstdc++: 2174-01-01, nanoseconds).
 // std::chrono::clock_cast converts to and from system_clock (and so
 // utc_clock, ...) through to_sys / from_sys; a zoned_time is then built
-// from the sys_time it returns. Leap seconds are
-// not counted, as in FILETIME and system_clock.
+// from the sys_time it returns. Leap seconds are not counted, as in
+// FILETIME and system_clock.
 struct filetime_clock
 {
 	using rep = std::int64_t;

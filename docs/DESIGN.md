@@ -433,12 +433,13 @@ type decides:
   C++20 Clock (`rep` int64, period 100 ns, epoch 1601-01-01 UTC, not steady)
   with `to_sys` / `from_sys`, so `std::chrono::clock_cast` converts to
   `system_clock` (offset 11644473600 s) and on to `utc_clock`; a
-  `zoned_time` is built from the `sys_time` it returns. `from_sys` rounds down to a tick. `std::chrono::file_clock`
-  is not usable: its epoch and period are implementation-defined (libstdc++:
-  2174-01-01, nanoseconds). Values decode and encode as the plain tick
-  count. 9223372036854775807 is `ad::never` (`time_point::max()`). 0 is
-  tick 0 (`time_point{}`, 1601-01-01, never a real AD date), which sorts
-  before every date; its meaning depends on the attribute:
+  `zoned_time` is built from the `sys_time` it returns. `from_sys` rounds
+  down to a tick. `std::chrono::file_clock` is not usable: its epoch and
+  period are implementation-defined (libstdc++: 2174-01-01, nanoseconds).
+  Values decode and encode as the plain tick count. 9223372036854775807 is
+  `ad::never` (`time_point::max()`). 0 is tick 0 (`time_point{}`,
+  1601-01-01, never a real AD date), which sorts before every date; its
+  meaning depends on the attribute:
   - accountExpires: 0 and 9223372036854775807 both mean "never expires";
     `ad::is_never(t)` is true for either.
   - lastLogon, lastLogonTimestamp, badPasswordTime: 0 is "never
