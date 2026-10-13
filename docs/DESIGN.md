@@ -447,11 +447,11 @@ type decides:
     `last_logon < cutoff` includes accounts that never logged on.
   - lockoutTime: 0 is "not currently locked out". AD writes 0 when an
     account is unlocked, so it does not mean "never locked out".
+  - pwdLastSet: 0 equals `ad::pwd_must_change`.
 
   Date arithmetic on tick 0 stays defined for ordinary intervals, but not
   with `ad::forever`: `lockout_time - lockout_duration` overflows when
   lockoutDuration is `ad::forever` (see below).
-  - pwdLastSet: 0 equals `ad::pwd_must_change`.
 
   Values below -1 fail to decode (`conversion_failed`): AD writes no date
   before 1601, -1 is kept because it is the `ad::pwd_set_now` command (every
