@@ -277,7 +277,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 	SECTION("a step the client fails mid-exchange")
 	{
 		// RFC 4511 section 4.2.1: the exchange is aborted, so slapd accepts
-		// other operations again (coro_http_client-f1e).
+		// other operations again (coro-ldap-f1e).
 		scram_giving_up mech;
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
@@ -293,7 +293,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 	{
 		// slapd ends the exchange before it refuses the anonymous bind that
 		// aborts it (inappropriateAuthentication): the connection stays
-		// open and anonymous, and a bind then succeeds (coro_http_client-f1e.1).
+		// open and anonymous, and a bind then succeeds (coro-ldap-f1e.1).
 		// bind_anon refuses only anonymous binds, not anonymous operations:
 		// the search succeeds only if the exchange ended (a server still in
 		// it would answer operationsError).

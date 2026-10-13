@@ -261,7 +261,7 @@ TEST_CASE("sasl: requests started during the exchange wait for its end", "[net][
 
 // RFC 4511 section 4.2.1: a client that gives up on a SASL exchange the
 // server still considers in progress aborts it with another bind before
-// anything else is sent (coro_http_client-f1e).
+// anything else is sent (coro-ldap-f1e).
 TEST_CASE("sasl: a failed exchange is aborted before held requests are sent", "[net][sasl][rfc]")
 {
 	mock_ldap m;

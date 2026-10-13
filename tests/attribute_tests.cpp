@@ -205,7 +205,7 @@ static_assert(unmix(mix(0, 0x0123'4567'89AB'CDEFull)) == 0x0123'4567'89AB'CDEFul
 
 }// namespace
 
-// coro_http_client-pyf: hash_value started from a fixed state and its
+// coro-ldap-pyf: hash_value started from a fixed state and its
 // rounds are invertible, so anyone could compute attribute names colliding
 // in all 64 bits, and a server sending them made entry::from quadratic.
 TEST_CASE("ci_hash is seeded: names crafted to collide under a fixed start spread", "[attribute]")
