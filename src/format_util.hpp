@@ -2,7 +2,7 @@
 // Calling std::format directly instantiates the whole formatting engine
 // (about 100 KB of code and seconds of -O3 compile time) in every
 // translation unit that builds a message; these wrappers type-erase the
-// arguments and run the engine once, in error.cpp. The format string is
+// arguments and run the engine once, in format_util.cpp. The format string is
 // still checked at compile time.
 #pragma once
 

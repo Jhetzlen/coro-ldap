@@ -53,6 +53,7 @@
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"
+#include "jhetz/ldap/ber.hpp"
 #include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/error.hpp"

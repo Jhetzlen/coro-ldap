@@ -5,7 +5,6 @@
 #include "format_util.hpp"
 
 #include <cstddef>
-#include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -372,13 +371,6 @@ const std::error_category &cond_category() noexcept
 }
 
 namespace detail {
-
-	std::string vformat(std::string_view fmt, std::format_args args) { return std::vformat(fmt, args); }
-
-	void vformat_to(std::string &out, std::string_view fmt, std::format_args args)
-	{
-		std::vformat_to(std::back_inserter(out), fmt, args);
-	}
 
 	namespace {
 
