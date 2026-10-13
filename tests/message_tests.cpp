@@ -243,7 +243,7 @@ TEST_CASE("decode rejects unknown operations", "[message][extensibility]")
 	});
 	auto r = ldap::decode(sicily);
 	CHECK(code_of(r) == client_errc::unsupported_operation);
-	CHECK(r.error().context == "message: bind authentication choice at offset 12");
+	CHECK(r.error().context == "message: bind authentication choice [CONTEXT 9] at offset 12");
 }
 
 TEST_CASE("decode checks enumerations and integer ranges", "[message]")
