@@ -1784,26 +1784,36 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 	}
 	SECTION("the reader restarted for a request registered as it stopped: the request fails")
 	{
-		auto s = m.run(m.conn.search_stream(people_search()));
+		// The writer stays busy with the SearchRequest (larger than the
+		// socket buffers, and the server's end does not read): it cannot
+		// resume, so the frame that fails is the reader's, not the writer's
+		// next write.
+		tcp_mock_ldap t({}, socket_buffers::small);
+		REQUIRE(t.buffered_at_most() < oversized_add_value);
+		t.ioc.set_frame_allocator(&frames);
+		auto big = people_search();
+		big.filter = ldap::filters::attr("description") == std::string(oversized_add_value, 'x');
+		auto s = t.run(t.conn.search_stream(std::move(big)));
 		REQUIRE(s.has_value());
-		settle_now();// the reader parks on its read
+		while (t.ioc.poll() != 0) {}// the reader parks on its read, the writer on its write
+		t.ioc.restart();
 		// In one go, so the reader cannot run in between: the stream is
 		// abandoned (nothing is outstanding, the reader is told to stop),
 		// then an AddRequest is registered while the reader still runs. The
 		// reader then ends on its cancelled read and starts afresh for it.
 		auto body = [&]() -> capy::task<ldap::result<ldap::response>> {
 			*s = ldap::search_stream{};
-			auto add = m.conn.add({ .entry = jdoe });
+			auto add = t.conn.add({ .entry = jdoe });
 			frames.fail_at(3);// the add's request_response and next_response, then the new reader's frame
 			co_return co_await std::move(add);
 		};
 		outcome<ldap::result<ldap::response>> add;
-		spawn(m.ioc, body(), add);
-		drive_until(m.ioc, [&add] { return add.done(); });
+		spawn(t.ioc, body(), add);
+		drive_until(t.ioc, [&add] { return add.done(); });
 		CHECK(frames.count() == 3);
 		frames.fail_at(0);
-		CHECK_FALSE(m.conn.is_open());
-		CHECK(m.conn.outstanding() == 0);
+		CHECK_FALSE(t.conn.is_open());
+		CHECK(t.conn.outstanding() == 0);
 		REQUIRE_FALSE(add.get().has_value());
 		CHECK(add.get().error().code == std::errc::not_enough_memory);
 		CHECK(add.get().error().context == "add uid=jdoe,ou=people,dc=example,dc=org");
