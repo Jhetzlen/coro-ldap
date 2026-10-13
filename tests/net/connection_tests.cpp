@@ -1478,7 +1478,9 @@ TEST_CASE("RFC 4511 4.2.1: nothing is sent while a bind is outstanding", "[net][
 	REQUIRE_FALSE(search.get().has_value());
 	CHECK_THAT(std::string(search.get().error().context), ContainsSubstring("cannot be abandoned"));
 	// No BindResponse came, so the BindRequest is all the server got.
+	m.sockets.client.close();// closing a wrapped transport leaves the socket open
 	drive_until(m.ioc, [&m] { return m.server.done(); });
+	REQUIRE(m.server.done());
 	REQUIRE(m.log.received.size() == 1);
 	CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
 }
