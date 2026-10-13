@@ -249,6 +249,32 @@ class test_pki
 
 	const std::string &ca_pem() const noexcept { return ca_pem_; }
 
+	// The CA's subject name hash: "<hash, 8 hex digits>.0" is its file name
+	// in a c_rehash-style CA directory.
+	unsigned long ca_subject_hash() const { return X509_subject_name_hash(ca_cert_.get()); }
+
+	// `key_pem` re-encrypted with AES-256-CBC under `passphrase`.
+	static std::string encrypted_key_pem(const std::string &key_pem, const std::string &passphrase)
+	{
+		BIO *in = BIO_new_mem_buf(key_pem.data(), static_cast<int>(key_pem.size()));
+		check(in != nullptr, "BIO_new_mem_buf");
+		std::unique_ptr<EVP_PKEY, key_free> key(PEM_read_bio_PrivateKey(in, nullptr, nullptr, nullptr));
+		BIO_free(in);
+		check(key != nullptr, "PEM_read_bio_PrivateKey");
+		BIO *bio = BIO_new(BIO_s_mem());
+		check(bio != nullptr
+				&& PEM_write_bio_PKCS8PrivateKey(bio,
+					 key.get(),
+					 EVP_aes_256_cbc(),
+					 passphrase.data(),
+					 static_cast<int>(passphrase.size()),
+					 nullptr,
+					 nullptr)
+					 == 1,
+		  "PEM_write_bio_PKCS8PrivateKey");
+		return from_bio(bio);
+	}
+
 	// A leaf certificate for `subject_alt_names` ("DNS:localhost,IP:127.0.0.1").
 	issued issue(const char *cn, const std::string &subject_alt_names)
 	{

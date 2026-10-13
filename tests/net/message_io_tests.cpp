@@ -12,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
+#include <algorithm>
 #include <coroutine>
 #include <cstddef>
 #include <limits>
@@ -86,6 +87,33 @@ struct scripted_stream
 		};
 		return awaitable{ capy::buffer_size(buffers) };
 	}
+};
+
+// Accepts `budget` bytes in all (at most `chunk` per write_some), then fails
+// every write with broken_pipe. Completes at once.
+struct short_write_stream
+{
+	std::size_t budget = 0;
+	std::size_t chunk = 0;
+
+	template<capy::MutableBufferSequence MB> auto read_some(MB) { return ready{ capy::error::eof, 0 }; }
+	template<capy::ConstBufferSequence CB> auto write_some(CB buffers)
+	{
+		if (budget == 0) return ready{ std::make_error_code(std::errc::broken_pipe), 0 };
+		const std::size_t n = std::min({ capy::buffer_size(buffers), budget, chunk });
+		budget -= n;
+		return ready{ std::error_code{}, n };
+	}
+
+  private:
+	struct ready
+	{
+		std::error_code ec;
+		std::size_t n;
+		bool await_ready() const noexcept { return true; }
+		std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, const capy::io_env *) { return h; }
+		capy::io_result<std::size_t> await_resume() { return { ec, n }; }
+	};
 };
 
 // A client transport over one end of a stream pair; `peer` is the server end
@@ -373,6 +401,26 @@ TEST_CASE("write_message and write_bytes", "[net][write_message]")
 	CHECK(bad.error().code == client_errc::encode_error);
 	CHECK(std::string(bad.error().context).starts_with("write client: "));
 	CHECK(buf.empty());
+}
+
+TEST_CASE("write_message: a write failure reports how much was written", "[net][write_message]")
+{
+	corosio::io_context ioc;
+	const auto size = bytes_of(bind_request_msg(1)).size();
+
+	// Ten bytes go out in two writes, then the stream breaks.
+	auto partial = net::transport::wrap(short_write_stream{ .budget = 10, .chunk = 5 }, "partial");
+	auto r = run(ioc, net::write_message(partial, bind_request_msg(1)));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == std::errc::broken_pipe);
+	CHECK(std::string(r.error().context) == "write partial (10 of " + std::to_string(size) + " bytes written)");
+
+	// Nothing written: no count.
+	auto none = net::transport::wrap(short_write_stream{}, "none");
+	auto z = run(ioc, net::write_message(none, bind_request_msg(1)));
+	REQUIRE_FALSE(z.has_value());
+	CHECK(z.error().code == std::errc::broken_pipe);
+	CHECK(std::string(z.error().context) == "write none");
 }
 
 TEST_CASE("read_message decodes into read_options' memory resource", "[net][read_message][pmr]")

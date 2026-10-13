@@ -27,10 +27,14 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <format>
+#include <fstream>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -64,9 +68,15 @@ using ldap::client_errc;
 //   slow-dns-*   answers 127.0.0.1 after slow_dns_delay: a lookup that no
 //                timeout can interrupt
 //   two-addr-*   answers 127.0.0.2, then 127.0.0.1 (same port)
+//   no-ip-*      succeeds with only non-IP (AF_UNIX) entries, which the
+//                resolver drops: a lookup with no usable address
+//   stop-dns-*   requests stop on lookup_stop (from the lookup's thread),
+//                then answers 127.0.0.1 after slow_dns_delay: a connect
+//                stopped while the lookup runs
 namespace {
 constexpr auto slow_dns_delay = std::chrono::milliseconds(1000);
-}
+std::atomic<std::stop_source *> lookup_stop{ nullptr };
+}// namespace
 
 extern "C" int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res)
 {
@@ -74,6 +84,16 @@ extern "C" int getaddrinfo(const char *node, const char *service, const struct a
 	static const auto real = reinterpret_cast<fn>(dlsym(RTLD_NEXT, "getaddrinfo"));
 	const std::string_view name = node != nullptr ? node : "";
 	if (name.starts_with("slow-dns-")) {
+		std::this_thread::sleep_for(slow_dns_delay);
+		return real("127.0.0.1", service, hints, res);
+	}
+	if (name.starts_with("no-ip-")) {
+		if (int rc = real("127.0.0.1", service, hints, res); rc != 0) return rc;
+		for (struct addrinfo *p = *res; p != nullptr; p = p->ai_next) p->ai_family = AF_UNIX;
+		return 0;
+	}
+	if (name.starts_with("stop-dns-")) {
+		if (auto *stop = lookup_stop.load(); stop != nullptr) stop->request_stop();
 		std::this_thread::sleep_for(slow_dns_delay);
 		return real("127.0.0.1", service, hints, res);
 	}
@@ -510,6 +530,44 @@ TEST_CASE("unresolvable host", "[net][connect][tcp]")
 	CHECK_THAT(std::string(t.error().context),
 	  StartsWith("connect ldap://no-such-host.invalid:389: resolve no-such-host.invalid"));
 	CHECK(t.error().code);
+}
+
+TEST_CASE("a lookup with no usable address", "[net][connect][tcp][dns]")
+{
+	corosio::io_context ioc;
+	auto t = connect_to(ioc, "ldap://no-ip-a.test:1");
+	REQUIRE_FALSE(t.has_value());
+	CHECK(t.error().code == std::errc::no_such_device_or_address);
+	CHECK(std::string(t.error().context) == "connect ldap://no-ip-a.test:1: resolve no-ip-a.test");
+}
+
+TEST_CASE("connect stopped during the name lookup", "[net][connect][cancel][dns]")
+{
+	// The stop comes while getaddrinfo still runs: connect returns at once,
+	// the late answer is dropped.
+	std::chrono::steady_clock::duration elapsed{};
+	corosio::io_context ioc;
+	std::stop_source stop;
+	lookup_stop = &stop;
+	outcome<ldap::error> out;
+	spawn(
+	  ioc,
+	  stop.get_token(),
+	  [](corosio::io_context &io, std::chrono::steady_clock::duration &took) -> capy::task<ldap::error> {
+		  const auto start = std::chrono::steady_clock::now();
+		  auto t = co_await net::connect(io, *ldap::url::parse("ldap://stop-dns-a.test:1"));
+		  took = std::chrono::steady_clock::now() - start;
+		  co_return t ? ldap::error{} : t.error();
+	  }(ioc, elapsed),
+	  out);
+	drive(ioc);// until the detached lookup has finished too
+	lookup_stop = nullptr;
+	const auto &e = out.get();
+	CHECK(e.code == capy::cond::canceled);
+	CHECK(e.code == ldap::cond::canceled);
+	CHECK(e.context == "connect ldap://stop-dns-a.test:1: resolve stop-dns-a.test");
+	INFO("connect returned after " << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() << " ms");
+	CHECK(elapsed < std::chrono::milliseconds(700));// the lookup itself takes 1000 ms
 }
 
 // The decoded host is quoted sanitized and cut (as an operation's DN): the
@@ -1008,6 +1066,38 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	CHECK_THAT(
 	  std::string(mismatch.error().context), ContainsSubstring(": does not match the certificate in tls: cert_file"));
 
+	// Each file is read before connecting: a missing one is named.
+	auto no_cert = connect_to(
+	  ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = "/nonexistent/client.crt", .key_file = key_one.str() } });
+	REQUIRE_FALSE(no_cert.has_value());
+	CHECK(no_cert.error().code == std::errc::no_such_file_or_directory);
+	CHECK(
+	  std::string(no_cert.error().context) == "connect ldaps://127.0.0.1:1: tls: cert_file /nonexistent/client.crt");
+
+	auto no_key = connect_to(
+	  ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = "/nonexistent/client.key" } });
+	REQUIRE_FALSE(no_key.has_value());
+	CHECK(no_key.error().code == std::errc::no_such_file_or_directory);
+	CHECK(std::string(no_key.error().context) == "connect ldaps://127.0.0.1:1: tls: key_file /nonexistent/client.key");
+
+	// An encrypted key is refused without prompting for its passphrase.
+	temp_path encrypted(".key");
+	encrypted.write(test_pki::encrypted_key_pem(one.key_pem, "passphrase"));
+	auto locked =
+	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = encrypted.str() } });
+	REQUIRE_FALSE(locked.has_value());
+	CHECK(locked.error().code == std::errc::invalid_argument);
+	CHECK(std::string(locked.error().context)
+		  == "connect ldaps://127.0.0.1:1: tls: key_file " + encrypted.str()
+			   + ": no parseable PEM private key (encrypted keys are not supported)");
+
+	// A CA file without any PEM certificate.
+	auto empty_ca_file = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_file = junk.str() } });
+	REQUIRE_FALSE(empty_ca_file.has_value());
+	CHECK(empty_ca_file.error().code == std::errc::invalid_argument);
+	CHECK(std::string(empty_ca_file.error().context)
+		  == "connect ldaps://127.0.0.1:1: tls: ca_file " + junk.str() + ": no PEM certificate found");
+
 	// A valid pair passes the checks and fails only when connecting.
 	auto valid =
 	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = key_one.str() } });
@@ -1039,6 +1129,60 @@ TEST_CASE("TLS configuration errors leave the OpenSSL error queue empty", "[net]
 	auto junk_cert = net::detail::make_tls_setup({ .cert_file = junk.str(), .key_file = junk.str() });
 	REQUIRE_FALSE(junk_cert.has_value());
 	CHECK(ERR_peek_error() == 0);
+
+	const auto leaf = pki().issue("client-locked", "DNS:client-locked");
+	temp_path cert(".crt"), encrypted(".key");
+	cert.write(leaf.cert_pem);
+	encrypted.write(test_pki::encrypted_key_pem(leaf.key_pem, "passphrase"));
+	auto locked = net::detail::make_tls_setup({ .cert_file = cert.str(), .key_file = encrypted.str() });
+	REQUIRE_FALSE(locked.has_value());
+	CHECK(ERR_peek_error() == 0);
+}
+
+TEST_CASE("ldaps:// with a CA directory", "[net][connect][tls]")
+{
+	// A c_rehash-style directory: the CA under "<subject hash>.0". Only the
+	// directory is trusted (no system store), and the server's CA is in it.
+	temp_path dir("-certs");
+	std::filesystem::create_directory(dir.str());
+	const auto ca_name = std::format("{:08x}.0", pki().ca_subject_hash());
+	struct remove_contents
+	{
+		std::filesystem::path p;
+		~remove_contents()
+		{
+			std::error_code ec;
+			std::filesystem::remove(p, ec);
+		}
+	} ca_file{ std::filesystem::path(dir.str()) / ca_name };
+	{
+		std::ofstream out(ca_file.p, std::ios::binary);
+		out << pki().ca_pem();
+		out.close();
+		REQUIRE_FALSE(out.fail());
+	}
+
+	corosio::io_context ioc;
+	tcp_server srv(ioc);
+	outcome<std::string> server, client;
+	spawn(ioc, accept_and_serve(srv.acc, server_context(localhost_cert())), server);
+	spawn(ioc, exchange(ioc, srv.url("ldaps"), { .tls = { .ca_dir = dir.str() } }, true), client);
+	drive(ioc);
+	CHECK(client.get() == "");
+	CHECK(server.get() == "");
+
+	// A directory without that CA: the server's certificate is untrusted.
+	std::filesystem::remove(ca_file.p);
+	tcp_server srv2(ioc);
+	outcome<std::string> server2;
+	spawn(ioc, accept_and_serve(srv2.acc, server_context(localhost_cert())), server2);
+	auto t = connect_to(ioc, srv2.url("ldaps"), { .tls = { .ca_dir = dir.str() } });
+	REQUIRE_FALSE(t.has_value());
+	CHECK(t.error().code == ldap::cond::tls_failure);
+	CHECK_THAT(std::string(t.error().context),
+	  StartsWith("connect " + srv2.url("ldaps") + ": tls handshake: server certificate: "));
+	drive(ioc);
+	CHECK_THAT(server2.get(), StartsWith("server handshake: "));
 }
 
 TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
@@ -1209,4 +1353,17 @@ TEST_CASE("TLS peer name: server_name, else the host without an IPv6 zone", "[ne
 	CHECK(tls_peer_name("::1", {}) == "::1");
 	CHECK(tls_peer_name("fe80::1%eth0", {}) == "fe80::1");
 	CHECK(tls_peer_name("fe80::1%eth0", { .server_name = "ldap.example.org" }) == "ldap.example.org");
+}
+
+TEST_CASE("net::start_tls needs an open plain TCP transport", "[net][starttls]")
+{
+	corosio::io_context ioc;
+	auto [a, b] = capy::test::make_stream_pair();
+	auto wrapped = net::transport::wrap(std::move(a), "custom");
+	const net::read_buffer none;
+	auto r = run(ioc, net::start_tls(wrapped, none, { .ca_pem = std::pmr::string(pki().ca_pem()) }));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == std::errc::invalid_argument);
+	CHECK(std::string(r.error().context) == "start tls custom: needs an open plain TCP transport");
+	CHECK(wrapped.is_open());// refused, not closed
 }
