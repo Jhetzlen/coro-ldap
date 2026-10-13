@@ -1,8 +1,9 @@
 // change_password / reset_password (password_method) against the scripted
 // mock server: the method picked from the root DSE (RFC 3062, Active
 // Directory, neither, both), explicit methods that skip the root DSE, the
-// unicodePwd ModifyRequests over TLS and their refusal without it, and
-// ad_password_value's UTF-16LE encoding.
+// unicodePwd ModifyRequests over TLS (StartTLS or ldaps://) and their
+// refusal without it or during StartTLS, and ad_password_value's UTF-16LE
+// encoding.
 #include "jhetz/ldap/connection.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -17,6 +18,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <unistd.h>
+
+#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
@@ -126,7 +130,7 @@ corosio::tls_context server_context()
 
 // Serves `clear` in clear, the last step of which answers a StartTLS
 // request, then runs the server side of the handshake and serves `secure`
-// over TLS.
+// over TLS. With `clear` empty: an ldaps:// server.
 capy::task<void> serve_upgrading(corosio::tcp_acceptor &acc,
   corosio::tls_context ctx,
   std::vector<step> clear,
@@ -174,10 +178,11 @@ struct tls_mock
 		drive(ioc);
 	}
 
-	ldap::result<void> connect(ldap::connection_options o = {})
+	// `scheme` "ldaps": TLS from the start (tls_mock({}, secure)).
+	ldap::result<void> connect(ldap::connection_options o = {}, std::string_view scheme = "ldap")
 	{
 		o.tls.ca_pem = std::pmr::string(pki().ca_pem());
-		auto u = ldap::url::parse("ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port()));
+		auto u = ldap::url::parse(std::string(scheme) + "://127.0.0.1:" + std::to_string(acc.local_endpoint().port()));
 		REQUIRE(u.has_value());
 		auto c = finish(ioc, ldap::connect(ioc, *u, o));
 		if (!c) return std::unexpected(std::move(c.error()));
@@ -321,6 +326,105 @@ TEST_CASE("change_password: the AD capability without TLS is refused before send
 	m.check_server();
 	REQUIRE(m.log.received.size() == 1);
 	check_root_dse_search(m.log.received[0]);
+}
+
+TEST_CASE("change_password: the AD capability over ldaps:// sends unicodePwd modifies", "[net][password]")
+{
+	tls_mock f({},
+	  { answer({ root_dse(1, {}, { ldap::active_directory_capability_oid }), done_msg(1) }),
+		answer({ modify_result(2) }),
+		answer({ modify_result(3) }) });
+	REQUIRE(f.connect({}, "ldaps").has_value());
+	REQUIRE(f.conn.is_tls());
+	CHECK(f.run(f.conn.change_password(jdoe, std::string(old_pw), std::string(new_pw))).has_value());
+	CHECK(f.run(f.conn.reset_password(jdoe, std::string(new_pw))).has_value());
+	f.check_server();
+
+	REQUIRE(f.log.received.size() == 3);
+	check_root_dse_search(f.log.received[0]);
+	check_change_shape(f.log.received[1]);
+	check_reset_shape(f.log.received[2]);
+}
+
+namespace {
+
+// Reads what the server's end receives, up to `limit` bytes (the client's
+// first write, at least) or, with no limit, until the client hangs up.
+capy::task<std::string> raw_bytes(corosio::tcp_socket &peer, std::size_t limit = 0)
+{
+	std::string out;
+	char buf[4096];
+	while (true) {
+		auto [ec, n] = co_await peer.read_some(capy::mutable_buffer(buf, sizeof buf));
+		out.append(buf, n);
+		if (ec || n == 0 || (limit != 0 && out.size() >= limit)) co_return out;
+	}
+}
+
+// `bytes` is whole TLS records, all of them handshake records (content
+// type 22): no LDAP message in clear.
+bool only_tls_handshake_records(std::string_view bytes)
+{
+	while (!bytes.empty()) {
+		if (bytes.size() < 5 || bytes[0] != '\x16') return false;
+		const std::size_t length =
+		  std::size_t{ static_cast<unsigned char>(bytes[3]) } * 256 + static_cast<unsigned char>(bytes[4]);
+		if (bytes.size() < 5 + length) return false;
+		bytes.remove_prefix(5 + length);
+	}
+	return true;
+}
+
+}// namespace
+
+// StartTLS accepted, the client's handshake under way: the transport
+// already has its TLS layer (it is undone if the handshake fails), but
+// is_tls() is false until start_tls() returns. A password change then is
+// refused, and nothing is sent.
+TEST_CASE("change_password: Active Directory during StartTLS is refused before sending", "[net][password][starttls]")
+{
+	outcome<ldap::result<void>> tls;// outlive `m`
+	outcome<std::string> hello;
+	outcome<std::string> rest;
+	tcp_mock_ldap m;
+	m.serve({ step{} });// reads the StartTLS request, answered below
+	spawn(m.ioc, m.conn.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }), tls);
+	m.check_server();
+	spawn(m.ioc, raw_bytes(m.peer, 1), hello);
+	while (m.ioc.poll() != 0) {}// parks the reader and the server's read
+	m.ioc.restart();
+	const std::string accepted = bytes_of(start_tls_ok(1));
+	REQUIRE(::write(m.peer.native_handle(), accepted.data(), accepted.size()) == static_cast<ssize_t>(accepted.size()));
+	// The ClientHello arrives: the client waits for the server's answer.
+	drive_until(m.ioc, [&hello] { return hello.done(); });
+	REQUIRE(hello.done());
+	REQUIRE_FALSE(tls.done());
+	CHECK_FALSE(m.conn.is_tls());
+
+	auto reset = m.run(m.conn.reset_password(jdoe, std::string(new_pw), password_method::active_directory));
+	REQUIRE_FALSE(reset.has_value());
+	CHECK(reset.error().code == client_errc::tls_required);
+	CHECK(std::string(reset.error().context)
+		  == "reset password " + jdoe_context
+			   + ": Active Directory sets unicodePwd only over TLS (ldaps:// or start_tls())");
+	auto change =
+	  m.run(m.conn.change_password(jdoe, std::string(old_pw), std::string(new_pw), password_method::active_directory));
+	REQUIRE_FALSE(change.has_value());
+	CHECK(change.error().code == client_errc::tls_required);
+	check_no_password(change.error());
+	REQUIRE_FALSE(tls.done());
+
+	m.conn.close();
+	spawn(m.ioc, raw_bytes(m.peer), rest);
+	drive_until(m.ioc, [&] { return tls.done() && rest.done(); });
+	REQUIRE_FALSE(tls.get().has_value());
+	CHECK(tls.get().error().code == client_errc::not_connected);
+	// After the StartTLS request: the handshake's records, nothing else.
+	CHECK(only_tls_handshake_records(hello.get() + rest.get()));
+	REQUIRE(m.log.received.size() == 1);
+	const auto *x = std::get_if<ldap::extended_request>(&m.log.received[0].op);
+	REQUIRE(x != nullptr);
+	CHECK(x->request_name == ldap::start_tls_oid);
 }
 
 TEST_CASE("change_password: no known method, or a hidden root DSE", "[net][password]")
