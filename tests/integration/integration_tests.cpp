@@ -776,9 +776,14 @@ TEST_CASE("integration: concurrent paged searches with and without sorting", "[i
 		REQUIRE_FALSE(a1->cookie.empty());
 		CHECK(a1->cookie != b1->cookie);
 		// The request carries A's own cookie, filter and sort; the answer is
-		// B's second page. Failing here means slapd fixed it: update the
-		// notes of search_paged (connection.hpp) and docs/API.md.
+		// B's second page. Pins the slapd sssvlv bug (coro-ldap-seo): failing
+		// here means slapd fixed it, so update the notes of search_paged
+		// (connection.hpp), docs/API.md and this section.
+		INFO(
+		  "pinned slapd sssvlv bug (coro-ldap-seo): if this fails slapd fixed it; update search_paged notes, "
+		  "docs/API.md, this section");
 		auto a2 = uid_page_by_hand(ioc, c, hundred_users(0, true), { .page_size = 20, .cookie = a1->cookie });
+		INFO((a2.has_value() ? std::pmr::string{} : a2.error().message()));
 		REQUIRE(a2.has_value());
 		CHECK(a2->uids == descending_uids(1, 20, 20));
 	}
