@@ -182,7 +182,7 @@ client-side `.timeout`. Values are checked when the request is encoded,
 before anything is sent.
 
 Typed controls (step 6, `controls.hpp`): `request_control` is
-`std::variant<control, paged, manage_dsa_it, proxied_authorization,
+`std::variant<control, paged, manage_dsa_it, relax_rules, proxied_authorization,
 server_side_sort, assertion, pre_read, post_read>`, so the raw wire
 `control {type, criticality, value}` stays the escape hatch and existing
 code that passes raw controls compiles unchanged. They are encoded on the

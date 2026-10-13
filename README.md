@@ -34,7 +34,7 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
   compare, extended operations, Who am I?, Password Modify, and password
   change / reset that works on both OpenLDAP and Active Directory
 - Controls: paged results, server-side sort, assertion, pre-/post-read,
-  proxied authorization, ManageDsaIT
+  proxied authorization, ManageDsaIT, Relax Rules
 - Struct mapping, runtime schema validation, Active Directory time types
 - `std::pmr` allocators throughout, so a response can be decoded into an
   arena

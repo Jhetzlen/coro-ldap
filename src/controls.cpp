@@ -91,6 +91,8 @@ result<control> to_control(const request_control &c, std::pmr::memory_resource *
 			  return encode_paged_results(paged_results(v.page_size, v.cookie, alloc), v.critical, mr);
 		  } else if constexpr (std::is_same_v<T, manage_dsa_it>) {
 			  return control(manage_dsa_it_oid, v.critical, std::nullopt, alloc);
+		  } else if constexpr (std::is_same_v<T, relax_rules>) {
+			  return control(relax_rules_oid, v.critical, std::nullopt, alloc);
 		  } else if constexpr (std::is_same_v<T, server_side_sort>) {
 			  return encode_sort(v, mr);
 		  } else if constexpr (std::is_same_v<T, assertion>) {

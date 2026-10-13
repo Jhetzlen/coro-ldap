@@ -306,7 +306,8 @@ itself stays dependency-free.
   before anything is sent; `unsafe_io` is unsupported).
   `examples/gssapi.cpp` binds with StartTLS and the default ticket.
 - `jhetz/ldap/controls.hpp`: typed request controls in a `std::variant`
-  (`ldap::paged`, `manage_dsa_it`, `proxied_authorization`,
+  (`ldap::paged`, `manage_dsa_it`, `relax_rules`
+  (draft-zeilenga-ldap-relax, critical by default), `proxied_authorization`,
   `server_side_sort` (RFC 2891), `assertion` (RFC 4528, critical by default;
   a false one fails with `errc::assertion_failed`), `pre_read` /
   `post_read` (RFC 4527), or a raw `ldap::control`), `to_control` /

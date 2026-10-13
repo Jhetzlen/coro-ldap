@@ -50,6 +50,20 @@ struct manage_dsa_it
 	bool critical = false;
 };
 
+// Relax Rules (draft-zeilenga-ldap-relax): let the update bend the
+// server's schema and other data rules, e.g. set a NO-USER-MODIFICATION
+// attribute such as createTimestamp or entryUUID when migrating entries;
+// the server still decides who may (OpenLDAP: manage access, so in
+// practice the rootdn). No value. Critical by default, as the draft
+// specifies: a server that does not know the control then refuses the
+// operation (unavailable_critical_extension) instead of applying the
+// ordinary rules.
+inline constexpr std::string_view relax_rules_oid = "1.3.6.1.4.1.4203.666.5.12";
+struct relax_rules
+{
+	bool critical = true;
+};
+
 // Proxied Authorization (RFC 4370): run the operation as `authz_id`
 // ("dn:<dn>", "u:<user>", or "" for anonymous). Always critical (RFC 4370
 // section 3).
@@ -118,8 +132,15 @@ struct post_read
 	bool critical = false;
 };
 
-using request_control =
-  std::variant<control, paged, manage_dsa_it, proxied_authorization, server_side_sort, assertion, pre_read, post_read>;
+using request_control = std::variant<control,
+  paged,
+  manage_dsa_it,
+  relax_rules,
+  proxied_authorization,
+  server_side_sort,
+  assertion,
+  pre_read,
+  post_read>;
 using request_controls = std::vector<request_control>;
 
 // The wire form of `c`, on `mr`. Fails with encode_error for a negative

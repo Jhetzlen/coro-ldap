@@ -625,6 +625,38 @@ TEST_CASE("integration: assertion and pre/post-read controls", "[integration][co
 	CHECK(*(*last)->find("sn") == ldap::string_list{ after_sn });
 }
 
+TEST_CASE("integration: the relax rules control", "[integration][controls]")
+{
+	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	corosio::io_context ioc;
+	auto c = open_admin(ioc);
+	const std::string name = unique("relax");
+	const ldap::dn entry = *ldap::dn::parse("uid=" + name + ",ou=people,dc=example,dc=org");
+	REQUIRE(finish(ioc,
+	  c.add({ .entry = entry,
+		.attributes = { { "objectClass", { "inetOrgPerson" } },
+		  { "uid", { name } },
+		  { "cn", { "R" } },
+		  { "sn", { "R" } } } }))
+		.has_value());
+
+	// createTimestamp is NO-USER-MODIFICATION: refused, even to the rootdn,
+	// unless the modify relaxes the rules (as a migration restoring it would).
+	const char migrated[] = "20010203040506Z";
+	auto refused =
+	  finish(ioc, c.modify({ .object = entry, .changes = { ldap::mod::replace("createTimestamp", { migrated }) } }));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::errc::constraint_violation);
+	auto relaxed = finish(ioc,
+	  c.modify({ .object = entry,
+		.changes = { ldap::mod::replace("createTimestamp", { migrated }) },
+		.controls = { ldap::relax_rules{} } }));
+	REQUIRE(relaxed.has_value());
+	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "createTimestamp", .value = migrated })) == true);
+
+	REQUIRE(finish(ioc, c.del({ .entry = entry })).has_value());
+}
+
 TEST_CASE("integration: server side sort", "[integration][controls]")
 {
 	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");

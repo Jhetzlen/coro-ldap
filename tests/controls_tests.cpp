@@ -37,6 +37,11 @@ TEST_CASE("typed request controls encode to their wire form", "[controls]")
 	CHECK(ldap::to_control(ldap::manage_dsa_it{}).value() == ldap::control{ ldap::manage_dsa_it_oid, false });
 	CHECK(ldap::to_control(ldap::manage_dsa_it{ .critical = true }).value()
 		  == ldap::control{ ldap::manage_dsa_it_oid, true });
+	// draft-zeilenga-ldap-relax: no value, critical by default.
+	CHECK(ldap::to_control(ldap::relax_rules{}).value() == ldap::control{ "1.3.6.1.4.1.4203.666.5.12", true });
+	CHECK(!ldap::to_control(ldap::relax_rules{}).value().value.has_value());
+	CHECK(ldap::to_control(ldap::relax_rules{ .critical = false }).value()
+		  == ldap::control{ ldap::relax_rules_oid, false });
 	// RFC 4370: always critical; the value is the authzId itself.
 	CHECK(ldap::to_control(ldap::proxied_authorization{ "u:jdoe" }).value()
 		  == ldap::control{ ldap::proxied_authorization_oid, true, "u:jdoe" });
