@@ -200,6 +200,23 @@ TEST_CASE("sync: connect failures and destruction without unbind", "[net][sync]"
 	SUCCEED();
 }
 
+TEST_CASE("sync: connect with the URL as text", "[net][sync]")
+{
+	server_thread srv;
+	ldap::sync::connection c;
+	const std::string where = "ldap://127.0.0.1:" + std::to_string(srv.acc.local_endpoint().port());
+	auto bad = c.connect(where + "/??sub?(cn=x");
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(bad.error().code == ldap::client_errc::invalid_url);
+	CHECK(bad.error() == ldap::url::parse(where + "/??sub?(cn=x").error());
+	CHECK_FALSE(c.is_open());
+	CHECK(srv.requests == 0);
+	REQUIRE(c.connect(where).has_value());
+	CHECK(c.is_open());
+	CHECK(c.who_am_i() == "dn:cn=me");
+	CHECK(srv.requests == 1);
+}
+
 // ---------------------------------------------------------------- wrappers
 //
 // Each wrapper against a scripted server (mock_ldap.hpp's serve_script) on

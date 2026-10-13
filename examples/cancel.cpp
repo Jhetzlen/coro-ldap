@@ -14,12 +14,7 @@ namespace ldap = jhetz::ldap;
 
 boost::capy::task<int> run(boost::corosio::io_context &ioc, std::string text)
 {
-	auto url = ldap::url::parse(text);
-	if (!url) {
-		std::cerr << url.error().message() << '\n';
-		co_return 1;
-	}
-	auto c = co_await ldap::connect(ioc, *url);
+	auto c = co_await ldap::connect(ioc, text);
 	if (!c) {
 		std::cerr << c.error().message() << '\n';
 		co_return 1;

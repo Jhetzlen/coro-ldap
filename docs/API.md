@@ -144,8 +144,11 @@ itself stays dependency-free.
   wraps `net::connect` (`connection_options`: connect `timeout`, `tls`,
   `tcp_no_delay`, `max_message_size` (16 MiB by default), `max_elements`
   (1,000,000 decoded strings per response by default),
-  `operation_timeout`); a connection can also be built on any
-  `net::transport` with `connection(ioc, transport, options, mr)`.
+  `operation_timeout`). The URL can also be given as text,
+  `ldap::connect(ioc, "ldaps://ldap.example.org")`: it is parsed before
+  connecting and a bad one fails with `url::parse`'s `invalid_url`. A
+  connection can also be built on any `net::transport` with
+  `connection(ioc, transport, options, mr)`.
   Operations: `simple_bind(dn, password)` (an empty name and password is
   anonymous; a name with an empty password is refused with
   `client_errc::unauthenticated_bind`, RFC 4513 section 5.1.2),
@@ -360,7 +363,8 @@ itself stays dependency-free.
 - `jhetz/ldap/sync.hpp` (#12): `ldap::sync::connection`, the blocking facade.
   It owns an io_context and an I/O thread; every method runs the
   corresponding connection operation there and waits, with the same
-  types. Callable from any number of threads; a call from its own I/O
+  types (`connect` takes a `url` or its text, as `ldap::connect` does).
+  Callable from any number of threads; a call from its own I/O
   thread fails with `client_errc::would_deadlock`.
 - `examples/ldapsearch.cpp` (target `jhetz_ldapsearch`, binary
   `jhetz-ldapsearch`, option `JHETZ_LDAP_BUILD_EXAMPLES`): connect,

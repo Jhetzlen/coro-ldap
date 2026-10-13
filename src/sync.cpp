@@ -45,6 +45,13 @@ result<void> connection::connect(url u)
 	});
 }
 
+result<void> connection::connect(std::string_view text)
+{
+	auto u = url::parse(text);
+	if (!u) return std::unexpected(std::move(u.error()));
+	return connect(std::move(*u));
+}
+
 bool connection::is_open() const
 {
 	return const_cast<connection *>(this)

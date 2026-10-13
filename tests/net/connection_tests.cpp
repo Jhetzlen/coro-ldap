@@ -25,6 +25,8 @@
 #include <boost/corosio/tcp_acceptor.hpp>
 #include <boost/corosio/tcp_socket.hpp>
 
+#include <poll.h>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -1463,6 +1465,41 @@ TEST_CASE("connection: ldap::connect failures", "[net][connection]")
 	auto refused = run(ioc, ldap::connect(ioc, *bad));
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == client_errc::invalid_url);
+}
+
+TEST_CASE("connection: ldap::connect with the URL as text", "[net][connection][connect]")
+{
+	corosio::io_context ioc;
+	corosio::tcp_acceptor acc(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1);
+	const std::string where = "ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port());
+	// A connection the kernel completed and the acceptor has not taken.
+	auto pending = [&acc] {
+		::pollfd p{ .fd = acc.native_handle(), .events = POLLIN, .revents = 0 };
+		return ::poll(&p, 1, 0) == 1;
+	};
+
+	SECTION("a bad URL fails with url::parse's error before connecting")
+	{
+		const std::string text = where + "/??sub?(cn=x";
+		auto parsed = ldap::url::parse(text);
+		REQUIRE_FALSE(parsed.has_value());
+		auto c = finish(ioc, ldap::connect(ioc, text));
+		REQUIRE_FALSE(c.has_value());
+		CHECK(c.error().code == client_errc::invalid_url);
+		CHECK(c.error() == parsed.error());
+		CHECK_FALSE(pending());
+	}
+	SECTION("a good URL connects; the text need not outlive the call")
+	{
+		auto task = ldap::connect(ioc, std::string(where), { .timeout = std::chrono::seconds(10) });
+		auto c = finish(ioc, std::move(task));
+		REQUIRE(c.has_value());
+		CHECK(c->is_open());
+		CHECK(c->name() == where);
+		CHECK(pending());
+		c->close();
+		drive(ioc);
+	}
 }
 
 // ---------------------------------------------------------------- RFC conformance

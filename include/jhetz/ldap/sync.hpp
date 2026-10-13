@@ -2,7 +2,7 @@
 // that does not use coroutines. Part of jhetz::ldap_net.
 //
 //   ldap::sync::connection c;
-//   if (auto r = c.connect(*ldap::url::parse("ldaps://ldap.example.org")); !r) ...
+//   if (auto r = c.connect("ldaps://ldap.example.org"); !r) ...
 //   c.simple_bind(ldap::dn{"cn=admin,dc=example,dc=org"}, password);
 //   ldap::result<std::vector<person>> people = c.search_as<person>({.base = base});
 //
@@ -45,6 +45,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -71,6 +72,9 @@ class connection
 	// Connects (and with options.start_tls, upgrades). Replaces (closes) a
 	// previous connection.
 	[[nodiscard]] result<void> connect(url u);
+	// As connect(url), to the URL `text` (url::parse); a bad URL fails with
+	// url::parse's error (client_errc::invalid_url) before connecting.
+	[[nodiscard]] result<void> connect(std::string_view text);
 
 	// As ldap::connection::is_open() / is_tls(): is_tls() is true only while TLS
 	// protects the open connection (false after unbind() or close()).

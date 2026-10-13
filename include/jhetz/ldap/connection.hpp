@@ -3,8 +3,8 @@
 // 7). Part of jhetz::ldap_net.
 //
 //   corosio::io_context ioc;
-//   auto u = ldap::url::parse("ldaps://ldap.example.org");
-//   ldap::result<ldap::connection> c = co_await ldap::connect(ioc, *u, {.timeout = 5s});
+//   ldap::result<ldap::connection> c = co_await ldap::connect(ioc, "ldaps://ldap.example.org", {.timeout = 5s});
+//   if (!c) ...                           // a bad URL fails here too (invalid_url)
 //   if (auto b = co_await c->simple_bind(ldap::dn{"cn=admin,dc=example,dc=org"}, password); !b) ...
 //   auto people = co_await c->search({
 //       .base       = ldap::dn{"ou=people,dc=example,dc=org"},
@@ -801,6 +801,15 @@ class paged_search
 // run on its executor. Arguments are taken by value.
 boost::capy::task<result<connection>> connect(boost::corosio::io_context &ioc,
   url u,
+  connection_options options = {},
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+
+// As above, to the URL `text` (RFC 4516, url::parse). A bad URL fails with
+// url::parse's error (client_errc::invalid_url) and nothing is connected.
+// `text` is parsed here, before the task starts, so it need not outlive the
+// call.
+boost::capy::task<result<connection>> connect(boost::corosio::io_context &ioc,
+  std::string_view text,
   connection_options options = {},
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 

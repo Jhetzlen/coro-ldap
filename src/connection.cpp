@@ -2321,4 +2321,19 @@ capy::task<result<connection>>
 	co_return std::move(c);
 }
 
+namespace {
+
+	capy::task<result<connection>> connect_failed(error e) { co_return std::unexpected(std::move(e)); }
+
+}// namespace
+
+capy::task<result<connection>>
+  connect(corosio::io_context &ioc, std::string_view text, connection_options options, std::pmr::memory_resource *mr)
+{
+	// Not a coroutine: `text` is parsed now, so the task does not refer to it.
+	auto u = url::parse(text, mr);
+	if (!u) return connect_failed(std::move(u.error()));
+	return connect(ioc, std::move(*u), std::move(options), mr);
+}
+
 }// namespace jhetz::ldap
