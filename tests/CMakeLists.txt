@@ -28,6 +28,7 @@ add_executable(jhetz_ldap_tests
     pmr_tests.cpp
     schema_tests.cpp
     url_tests.cpp
+    value_semantics_tests.cpp
 )
 target_link_libraries(jhetz_ldap_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)
 jhetz_ldap_warnings(jhetz_ldap_tests)
