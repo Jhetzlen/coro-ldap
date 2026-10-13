@@ -32,6 +32,12 @@
 //                      "never expires". Decodes from and encodes as
 //                      9223372036854775807. As a date it is in year 30828:
 //                      test for it before converting or doing arithmetic.
+//                      Arithmetic on any decoded date near the top of the
+//                      range can overflow too, like any std::chrono value:
+//                      an untrusted lockoutTime 9223372036854775806 minus a
+//                      30-minute lockoutDuration is undefined. Check
+//                      ad::is_never / ad::forever first, and keep the
+//                      result in range.
 //   0                  decodes to tick 0 (time_point{}, 1601-01-01, never a
 //                      real AD date), which sorts before every date and
 //                      encodes as 0 again. What it means depends on the
@@ -106,10 +112,13 @@ struct filetime_clock
 	// -27258, sys_time::min()); below, the subtraction overflows. Every
 	// decoded value is in range (decode rejects dates below -1). ad::never
 	// converts without overflow, to a sys_time in year 30828 that is no real
-	// date: test ad::is_never (or == ad::never) before converting. The
-	// result keeps the 100 ns ticks; assigning it to a
-	// system_clock::time_point (nanoseconds) overflows after 2262, ad::never
-	// included, so keep the ticks or floor to seconds.
+	// date: test ad::is_never (or == ad::never) before converting.
+	// Converting is defined for every decoded date, but arithmetic on a date
+	// near the top of the range (t + days(n), t - lockout_duration) can
+	// overflow, like on any std::chrono value. The result keeps the 100 ns
+	// ticks; assigning it to a system_clock::time_point (nanoseconds)
+	// overflows after 2262, ad::never included, so keep the ticks or floor
+	// to seconds.
 	template<class D>
 	[[nodiscard]] static constexpr std::chrono::sys_time<std::common_type_t<D, std::chrono::seconds>> to_sys(
 	  const std::chrono::time_point<filetime_clock, D> &t)

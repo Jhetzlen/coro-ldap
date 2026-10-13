@@ -457,6 +457,12 @@ type decides:
   constant decodes back), and below `time_point::min() + unix_epoch_offset`
   `to_sys` would overflow. So every decoded date converts; `ad::never` does
   too, to year 30828, which is no real date (test `ad::is_never` first).
+  Converting is safe, arithmetic is not: decode accepts every date up to
+  9223372036854775807, and adding or subtracting an interval from a date
+  near the top of the range overflows like on any `std::chrono` value (an
+  untrusted lockoutTime 9223372036854775806 minus a 30-minute
+  lockoutDuration is undefined). Check `ad::is_never` / `ad::forever`
+  first and keep the result in range.
   `to_sys` keeps 100 ns ticks: converting its result to nanoseconds
   (`system_clock::time_point`) overflows after 2262. `from_sys` is defined
   up to year 30828, which covers every `system_clock::time_point`.
