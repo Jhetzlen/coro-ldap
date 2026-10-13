@@ -244,17 +244,21 @@ Results (step 6): success returns the operation's value — `response`
 compare, `extended_result` for extended operations, the authzId string for
 `who_am_i()` (RFC 4532), the generated password (if any) for
 `password_modify()` (RFC 3062; passwords never appear in error contexts).
-`change_password()` / `reset_password()` pick RFC 3062 or Active
-Directory's `unicodePwd` Modify from the root DSE (`password_method`,
-connection.hpp), cached per connection and dropped by `start_tls()` like
-the schema; the AD path refuses a connection without TLS before sending
-(`client_errc::tls_required`), and an unreadable or silent root DSE fails
-with `client_errc::no_password_method`, naming the option that skips it.
 Any other result code is an error. compareTrue /
 compareFalse map to `true` / `false` (a compare answered with success is
 an error: it is not a valid answer). referral (10) is an error with the
 URIs in `error::referrals`; saslBindInProgress (14) is an error for a
 simple bind and the "continue" signal of `sasl_bind` (#11).
+
+`change_password()` / `reset_password()` pick RFC 3062 or Active
+Directory's `unicodePwd` Modify from the root DSE (`password_method`,
+connection.hpp), cached per connection and dropped by `start_tls()` like
+the schema; the AD path refuses a connection without TLS before sending
+(`client_errc::tls_required`). A root DSE the server refuses to read
+fails with the server's own error (e.g. insufficientAccessRights); one
+that returns no entry, or advertises neither method, fails with
+`client_errc::no_password_method`. Both errors name the option that skips
+the lookup.
 
 SASL (implemented, #11, `sasl.hpp`): `connection::sasl_bind(mechanism,
 name)` sends one BindRequest per step while the server answers
