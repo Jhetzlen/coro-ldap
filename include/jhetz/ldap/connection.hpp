@@ -354,11 +354,12 @@ inline constexpr std::string_view active_directory_capability_oid = "1.2.840.113
 // The unicodePwd value Active Directory expects (MS-ADTS 3.1.1.3.1.5): the
 // password in double quotes, encoded UTF-16LE, characters outside the BMP
 // as surrogate pairs. `password` is UTF-8; ill-formed UTF-8 fails with
-// client_errc::encode_error (the context never quotes the password). For a
-// ModifyRequest built by hand: replace unicodePwd with it to reset a
-// password, or delete the old value and add the new one in one modify to
-// change it. AD accepts it only over TLS. Neither the result nor the
-// scratch buffers are wiped (see change_password()).
+// client_errc::encode_error, any other ICU failure (e.g. out of memory)
+// with client_errc::internal_error (the context never quotes the
+// password). For a ModifyRequest built by hand: replace unicodePwd with it
+// to reset a password, or delete the old value and add the new one in one
+// modify to change it. AD accepts it only over TLS. Neither the result nor
+// the scratch buffers are wiped (see change_password()).
 [[nodiscard]] result<std::string> ad_password_value(std::string_view password);
 
 class search_stream;
