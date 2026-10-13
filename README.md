@@ -280,7 +280,8 @@ itself stays dependency-free.
 - `jhetz/ldap/ad.hpp`: Active Directory's Large Integer syntax
   (1.2.840.113556.1.4.906) as std::chrono types. `ad::filetime_clock` is a
   C++20 Clock for FILETIME (100 ns ticks since 1601-01-01 UTC;
-  `clock_cast` to `system_clock`, `utc_clock`, `zoned_time`);
+  `clock_cast` to `system_clock` and `utc_clock`, and a `zoned_time` from
+  the resulting `sys_time`);
   `ad::filetime_clock::time_point` members map dates (accountExpires,
   pwdLastSet, lastLogonTimestamp) as the plain tick count:
   9223372036854775807 is `ad::never`, 0 is tick 0 (1601-01-01, before every

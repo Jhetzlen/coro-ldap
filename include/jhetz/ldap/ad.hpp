@@ -17,7 +17,11 @@
 //   if (u.account_expires && !ldap::ad::is_never(*u.account_expires)) {
 //       auto utc = std::chrono::clock_cast<std::chrono::system_clock>(*u.account_expires);
 //   }
-//   auto f = ldap::filters::field<&ad_user::account_expires>() <= ldap::ad::filetime_clock::now();
+//   // Expired accounts. AD compares the numbers, and 0 ("never expires")
+//   // is below every date: ">= 1" leaves it out.
+//   using ft = ldap::ad::filetime_clock;
+//   auto expires = ldap::filters::field<&ad_user::account_expires>();
+//   auto f = expires >= ft::time_point{ ft::duration{ 1 } } && expires <= ft::now();
 //
 // The schema cannot tell a date from a counter (uSNChanged is 906 too): the
 // member's type decides. std::int64_t members read every 906 attribute as
@@ -54,6 +58,10 @@
 // filters::attr("accountExpires") <= ldap::value_traits<ad::filetime_clock::time_point>::encode(t).
 // AD compares the numbers, so 0 ("never") is below every date:
 // "accounts that expired" is (&(accountExpires>=1)(accountExpires<=now)).
+// An equality filter on ad::never encodes 9223372036854775807 only and
+// misses accounts stored as 0; "never expires" takes both spellings:
+// expires == ad::never || expires == ft::time_point{}, that is
+// (|(accountExpires=9223372036854775807)(accountExpires=0)).
 #pragma once
 
 #include "jhetz/ldap/mapping.hpp"
@@ -74,8 +82,9 @@ namespace jhetz::ldap::ad {
 // A C++20 Clock for FILETIME: 100 ns ticks since 1601-01-01 00:00:00 UTC.
 // std::chrono::file_clock is not this clock: its epoch and period are
 // implementation-defined (libstdc++: 2174-01-01, nanoseconds).
-// std::chrono::clock_cast converts to and from system_clock (and so to
-// zoned_time, utc_clock, ...) through to_sys / from_sys. Leap seconds are
+// std::chrono::clock_cast converts to and from system_clock (and so
+// utc_clock, ...) through to_sys / from_sys; a zoned_time is then built
+// from the sys_time it returns. Leap seconds are
 // not counted, as in FILETIME and system_clock.
 struct filetime_clock
 {

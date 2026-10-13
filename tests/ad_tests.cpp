@@ -334,6 +334,12 @@ TEST_CASE("filters on AD times", "[ad][filter]")
 	const auto expired = ldap::filters::field<&ad_user::account_expires>() >= filetime{ ticks{ 1 } }
 						 && ldap::filters::field<&ad_user::account_expires>() <= t;
 	CHECK(expired.to_string() == "(&(accountExpires>=1)(accountExpires<=133485408000000000))");
+	// "Never expires": equality on ad::never matches 9223372036854775807
+	// only, so ask for 0 too.
+	const auto expires = ldap::filters::field<&ad_user::account_expires>();
+	CHECK((expires == ad::never).to_string() == "(accountExpires=9223372036854775807)");
+	CHECK((expires == ad::never || expires == filetime{}).to_string()
+		  == "(|(accountExpires=9223372036854775807)(accountExpires=0))");
 	// Untyped: encode the value.
 	CHECK((ldap::filters::attr("lastLogonTimestamp") >= traits::encode(t)).to_string()
 		  == "(lastLogonTimestamp>=133485408000000000)");

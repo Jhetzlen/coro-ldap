@@ -432,8 +432,8 @@ type decides:
 - `ldap::ad::filetime_clock::time_point`: a date. `ad::filetime_clock` is a
   C++20 Clock (`rep` int64, period 100 ns, epoch 1601-01-01 UTC, not steady)
   with `to_sys` / `from_sys`, so `std::chrono::clock_cast` converts to
-  `system_clock` (offset 11644473600 s) and on to `utc_clock` or
-  `zoned_time`; `from_sys` rounds down to a tick. `std::chrono::file_clock`
+  `system_clock` (offset 11644473600 s) and on to `utc_clock`; a
+  `zoned_time` is built from the `sys_time` it returns. `from_sys` rounds down to a tick. `std::chrono::file_clock`
   is not usable: its epoch and period are implementation-defined (libstdc++:
   2174-01-01, nanoseconds). Values decode and encode as the plain tick
   count. 9223372036854775807 is `ad::never` (`time_point::max()`). 0 is
@@ -470,7 +470,10 @@ Typed filters encode these like any value
 (`filters::field<&user::account_expires>() <= t`); on an untyped attribute,
 use `value_traits<ad::filetime_clock::time_point>::encode(t)`. AD compares
 the numbers, so "never" as 0 sorts below every date: expired accounts are
-`(&(accountExpires>=1)(accountExpires<=now))`.
+`(&(accountExpires>=1)(accountExpires<=now))`. An equality filter on
+`ad::never` encodes 9223372036854775807 only and misses accounts stored as
+0: "never expires" is `expires == ad::never || expires == time_point{}`,
+`(|(accountExpires=9223372036854775807)(accountExpires=0))`.
 
 Usage (implemented, #9, `mapping.hpp` and `connection.hpp`):
 
