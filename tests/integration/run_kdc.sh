@@ -11,7 +11,8 @@
 # and two users matching make_fixture.py's entries, user007 and jörg,
 # whose tickets are in a DIR: credential cache collection (KRB5CCNAME),
 # user007's the default. Nothing outside a temporary directory is used:
-# KRB5_CONFIG and KRB5_KDC_PROFILE point into it.
+# KRB5_CONFIG and KRB5_KDC_PROFILE point into it, and KRB5RCACHEDIR too,
+# for slapd's replay cache (MIT's default is /var/tmp).
 #
 # Needs MIT krb5's KDC tools (krb5kdc, kdb5_util, kadmin.local, kinit),
 # and for slapd cyrus-sasl's gssapi plugin (Debian:
@@ -95,5 +96,6 @@ echo "pässwörd" | kinit "jörg@$realm" > /dev/null
 echo "pw-user007" | kinit "user007@$realm" > /dev/null
 
 export KRB5_KTNAME="FILE:$dir/ldap.keytab"
+export KRB5RCACHEDIR="$dir"
 export JHETZ_LDAP_IT_KRB5_REALM="$realm"
 "$@"
