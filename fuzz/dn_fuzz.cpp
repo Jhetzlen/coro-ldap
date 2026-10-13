@@ -8,12 +8,15 @@
 //   as text that parses back to it;
 // - child() rebuilds the DN from its parts: parent().child(first RDN), and
 //   the empty DN's child(dn);
-// - rejected input fails with invalid_dn.
+// - rejected input fails with invalid_dn;
+// - as a value: "cn=" + escape_dn_value(v) parses to one AVA holding v, and
+//   is how to_string() prints it.
 #include "jhetz/ldap/dn.hpp"
 
 #include "check.hpp"
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 constexpr jhetz::ldap::fuzz::checker check{ "dn_fuzz" };
@@ -23,6 +26,14 @@ namespace ldap = jhetz::ldap;
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size)
 {
 	const std::string_view text(reinterpret_cast<const char *>(data), size);
+	{
+		const auto escaped = "cn=" + std::string(ldap::escape_dn_value(text));
+		auto v = ldap::rdn::parse(escaped);
+		check(v.has_value(), "v.has_value()");
+		check(v->avas.size() == 1 && v->avas[0].value == text && !v->avas[0].hex_form,
+		  "v->avas.size() == 1 && v->avas[0].value == text && !v->avas[0].hex_form");
+		check(v->to_string() == std::string_view(escaped), "v->to_string() == escaped");
+	}
 	auto d = ldap::dn::parse(text);
 	check(ldap::detail::is_dn(text) == d.has_value(), "ldap::detail::is_dn(text) == d.has_value()");
 	auto r = ldap::rdn::parse(text);

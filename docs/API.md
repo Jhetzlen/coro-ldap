@@ -52,7 +52,12 @@ rationale is in [`DESIGN.md`](DESIGN.md).
   allocations per filter); combining reuses rvalue operands, so a chain
   built in one expression (nested either way) or in a loop as
   `f = std::move(f) || x` is linear (`f = f || x` copies `f` each time), and
-  nothing but encoding recurses.
+  nothing but encoding recurses. For filter text built elsewhere (another
+  tool, a config file), `escape_filter_value(v)` gives the RFC 4515 text of
+  one value, exactly as `to_string()` writes it (`*` `(` `)` `\` NUL and
+  non-UTF-8 octets as `\xx`; UTF-8 is kept), and
+  `unescape_filter_value(text)` returns `result<std::pmr::string>`, failing
+  with `invalid_filter` on what `filter::raw` would reject in a value.
 - `jhetz/ldap/dn.hpp`: `ldap::dn` (RFC 4514 parse / `to_string`, multi-valued
   RDNs, `parent()`, `child()`, compile-time checked literals). Syntax only: no
   matching-rule normalization of values. `ldap::rdn` has its own literal and
@@ -61,6 +66,8 @@ rationale is in [`DESIGN.md`](DESIGN.md).
   `base.child(ldap::rdn{"uid=jdoe"})` is `uid=jdoe,<base>`, and
   `base.child(ldap::dn{"uid=jdoe,ou=people"})` prepends a relative DN
   (`uid=jdoe,ou=people,<base>`); the result uses `base`'s resource.
+  `escape_dn_value(v)` gives the RFC 4514 text of one attribute value,
+  exactly as `to_string()` writes it, for DN text built elsewhere.
 - `jhetz/ldap/attribute.hpp`: `ldap::attribute`, an attribute description with
   case-insensitive equality, ordering and `std::hash`.
 - `jhetz/ldap/entry.hpp`: `ldap::entry`, the untyped search result entry

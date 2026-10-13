@@ -909,6 +909,74 @@ TEST_CASE("extensible match builders", "[filter][builders]")
 	CHECK_THROWS_AS(ldap::filters::rule_matches("", "v"), std::invalid_argument);
 }
 
+// ---------------------------------------------------------------- escaping helpers
+
+TEST_CASE("escape_filter_value is what to_string writes, and unescape_filter_value reverses it", "[filter][escape]")
+{
+	using namespace ldap::filters;
+	const std::string value = GENERATE(std::string{},
+	  "plain"s,
+	  " spaces "s,
+	  "*"s,
+	  "("s,
+	  ")"s,
+	  "\\"s,
+	  "\0"s,
+	  "x)(uid=*"s,
+	  "a=b#c,d+e;f<g>h\""s,
+	  "caf\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac"s,// 2- and 3-byte UTF-8
+	  "\xf0\x9f\x98\x80\xf0\x90\x8d\x88"s,// 4-byte UTF-8
+	  "\xff\xc3"s,// not UTF-8
+	  "\xf0\x9f\x98"s);// truncated 4-byte sequence
+	INFO(value);
+	const auto text = std::string(ldap::escape_filter_value(value));
+	CHECK(text_of(attr("cn") == value) == "(cn=" + text + ")");
+	const auto back = ldap::unescape_filter_value(text);
+	REQUIRE(back.has_value());
+	CHECK(*back == std::string_view(value));
+	const auto parsed = ldap::filter::raw("(cn=" + text + ")");
+	REQUIRE(parsed.has_value());
+	CHECK(parsed->root().value() == value);
+}
+
+TEST_CASE("escape_filter_value keeps UTF-8 and escapes only specials", "[filter][escape]")
+{
+	CHECK(ldap::escape_filter_value("\xf0\x9f\x98\x80") == "\xf0\x9f\x98\x80");
+	CHECK(ldap::escape_filter_value("a*b(c)d\\e"s + '\0') == "a\\2ab\\28c\\29d\\5ce\\00");
+	CHECK(ldap::escape_filter_value(" #,=\n") == " #,=\n");
+	CHECK(ldap::escape_filter_value("").empty());
+}
+
+TEST_CASE("unescape_filter_value", "[filter][escape]")
+{
+	CHECK(ldap::unescape_filter_value("\\2A\\2a\\c3\\A9") == "**\xc3\xa9");// hex in either case
+	CHECK(ldap::unescape_filter_value("\\ff\\00") == "\xff\0"sv);// escapes give any octet
+	CHECK(ldap::unescape_filter_value("\xf0\x9f\x98\x80 ok") == "\xf0\x9f\x98\x80 ok");
+	CHECK(ldap::unescape_filter_value("") == "");
+	CHECK(ldap::unescape_filter_value("a\\").error().context
+		  == "filter value: invalid escape (expected \\ and two hex digits) at position 1");
+	using P = std::pair<std::string, std::string>;
+	const auto [text, what] = GENERATE(P{ "\\", "invalid escape" },
+	  P{ "\\4", "invalid escape" },
+	  P{ "\\zz", "invalid escape" },
+	  P{ "\\4g", "invalid escape" },
+	  P{ "\\x41", "invalid escape" },
+	  P{ "a*", "unescaped '*'" },
+	  P{ "(", "unescaped '('" },
+	  P{ ")", "unescaped ')'" },
+	  P{ "a\0b"s, "NUL" },
+	  P{ "\xff", "invalid UTF-8" },
+	  P{ "\xf0\x9f\x98", "invalid UTF-8" });
+	INFO(text);
+	const auto r = ldap::unescape_filter_value(text);
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == client_errc::invalid_filter);
+	CHECK(r.error().context.find(what) != std::string::npos);
+	// filter::raw rejects the same value (an unescaped '*' would make it a
+	// substring filter there).
+	if (text.find('*') == std::string::npos) CHECK_FALSE(ldap::filter::raw("(cn=" + text + ")").has_value());
+}
+
 // ---------------------------------------------------------------- RFC conformance
 
 // RFC 4515 section 3: the string form is UTF-8 (valueencoding = 0*(normal /

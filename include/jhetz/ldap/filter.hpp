@@ -344,6 +344,14 @@ inline filter::view filter::root() const noexcept { return view(this, root_); }
 [[nodiscard]] std::pmr::string escape_filter_value(std::string_view value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 
+// The inverse of escape_filter_value: the octets of one RFC 4515 assertion
+// value, `\XX` (either case) decoded to any octet. Accepts what filter::raw
+// accepts in a value: `(`, `)`, `*`, NUL and a `\` not followed by two hex
+// digits fail with invalid_filter, and so do unescaped octets that are not
+// valid UTF-8. unescape_filter_value(escape_filter_value(v)) == v for any v.
+[[nodiscard]] result<std::pmr::string> unescape_filter_value(std::string_view text,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+
 // (&fg), (|fg), (!f). An operand that is itself an AND (resp. OR) is merged,
 // so `a && b && c` gives (&abc), not (&(&ab)c), in whichever order the chain
 // is built; (!f) is always a new node. Combining only adds nodes: an

@@ -4,6 +4,7 @@
 #include "format_util.hpp"
 
 #include <algorithm>
+#include <expected>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -714,6 +715,36 @@ namespace {
 	constexpr std::uint8_t filter_part_any = access::part_any;
 	constexpr std::uint8_t filter_part_final = access::part_final;
 
+	// One unit of an RFC 4515 assertion value at s[i], once the caller has
+	// handled its own terminators (`)`, and `*` in substrings): `\XX` gives one
+	// octet, any other octet below 0x80 itself, and an octet from 0x80 must
+	// start a valid UTF-8 sequence, which is kept. `(`, `*` and NUL must be
+	// escaped. Appends the octets with `emit` and returns the number of
+	// characters read, or what is wrong. Shared by filter::raw and
+	// unescape_filter_value, so they accept the same values.
+	template<class Emit>
+	std::expected<std::size_t, std::string_view> read_value_unit(std::string_view s, std::size_t i, Emit &&emit)
+	{
+		const char c = s[i];
+		if (c == '(' || c == '\0') return std::unexpected("unescaped '(' or NUL in value");
+		if (c == '*') return std::unexpected("unescaped '*' in value");
+		if (c == '\\') {
+			if (i + 2 >= s.size() || !is_hex(s[i + 1]) || !is_hex(s[i + 2]))
+				return std::unexpected("invalid escape (expected \\ and two hex digits)");
+			emit(static_cast<char>((hex_value(s[i + 1]) << 4) | hex_value(s[i + 2])));
+			return 3;
+		}
+		if (static_cast<unsigned char>(c) < 0x80u) {
+			emit(c);
+			return 1;
+		}
+		// RFC 4515 section 3: unescaped octets are UTF-8.
+		const std::size_t n = utf8_sequence_length(s, i);
+		if (n == 0) return std::unexpected("invalid UTF-8 in value");
+		for (std::size_t k = 0; k < n; ++k) emit(s[i + k]);
+		return n;
+	}
+
 	bool is_attr_char(char c) { return detail::is_keychar(c) || c == '.' || c == ';'; }
 	bool is_oid_char(char c) { return detail::is_keychar(c) || c == '.'; }
 
@@ -810,31 +841,13 @@ namespace {
 			while (true) {
 				if (at_end()) return error("unexpected end of filter");
 				const char c = peek();
-				if (c == ')') break;
-				if (c == '(' || c == '\0') return error("unescaped '(' or NUL in value");
-				if (c == '*') {
-					if (!stars) return error("unescaped '*' in value");
-					break;
-				}
-				char byte = c;
-				if (c == '\\') {
-					if (i_ + 2 >= s_.size() || !is_hex(s_[i_ + 1]) || !is_hex(s_[i_ + 2]))
-						return error("invalid escape (expected \\ and two hex digits)");
-					byte = static_cast<char>((hex_value(s_[i_ + 1]) << 4) | hex_value(s_[i_ + 2]));
-					i_ += 3;
-				} else if (static_cast<unsigned char>(c) >= 0x80u) {
-					// RFC 4515 section 3: unescaped octets are UTF-8.
-					const std::size_t n = utf8_sequence_length(s_, i_);
-					if (n == 0) return error("invalid UTF-8 in value");
-					for (std::size_t k = 0; k < n; ++k) access::add_char(out_, s_[i_ + k]);
-					i_ += n;
-					len += static_cast<std::uint32_t>(n);
-					continue;
-				} else {
-					++i_;
-				}
-				access::add_char(out_, byte);
-				++len;
+				if (c == ')' || (c == '*' && stars)) break;
+				const auto n = read_value_unit(s_, i_, [&](char byte) {
+					access::add_char(out_, byte);
+					++len;
+				});
+				if (!n) return error(n.error());
+				i_ += *n;
 			}
 			return std::pair{ off, len };
 		}
@@ -972,6 +985,22 @@ result<filter> filter::raw(std::string_view text, const filter_limits &limits, s
 	wrapped += text;
 	wrapped += ')';
 	if (auto r = filter_parser(wrapped, 1, limits, out).parse(); !r) return std::unexpected(std::move(r.error()));
+	return out;
+}
+
+result<std::pmr::string> unescape_filter_value(std::string_view text, std::pmr::memory_resource *mr)
+{
+	std::pmr::string out(mr);
+	out.reserve(text.size());
+	auto error = [&](std::string_view what, std::size_t at) {
+		return fail(client_errc::invalid_filter, detail::format("filter value: {} at position {}", what, at));
+	};
+	for (std::size_t i = 0; i < text.size();) {
+		if (text[i] == ')') return error("unescaped ')' in value", i);
+		const auto n = read_value_unit(text, i, [&](char byte) { out += byte; });
+		if (!n) return error(n.error(), i);
+		i += *n;
+	}
 	return out;
 }
 

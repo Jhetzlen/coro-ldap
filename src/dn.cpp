@@ -49,14 +49,10 @@ namespace {
 		out += hex_digits[c & 0xFu];
 	}
 
-	void append_value(std::pmr::string &out, const ava &a)
+	// RFC 4514 section 2.4 escaping of a string value, shared by to_string()
+	// and escape_dn_value().
+	void append_escaped(std::pmr::string &out, std::string_view v)
 	{
-		if (a.hex_form) {
-			out += '#';
-			for (char c : a.value) append_hex(out, static_cast<unsigned char>(c));
-			return;
-		}
-		const std::string_view v = a.value;
 		for (std::size_t i = 0; i < v.size(); ++i) {
 			const char c = v[i];
 			const auto u = static_cast<unsigned char>(c);
@@ -98,6 +94,16 @@ namespace {
 		}
 	}
 
+	void append_value(std::pmr::string &out, const ava &a)
+	{
+		if (a.hex_form) {
+			out += '#';
+			for (char c : a.value) append_hex(out, static_cast<unsigned char>(c));
+			return;
+		}
+		append_escaped(out, a.value);
+	}
+
 	void append_rdn(std::pmr::string &out, const rdn &r)
 	{
 		for (std::size_t j = 0; j < r.avas.size(); ++j) {
@@ -127,6 +133,14 @@ namespace {
 	}
 
 }// namespace
+
+std::pmr::string escape_dn_value(std::string_view value, std::pmr::memory_resource *mr)
+{
+	std::pmr::string out(mr);
+	out.reserve(value.size());
+	append_escaped(out, value);
+	return out;
+}
 
 bool operator==(const rdn &a, const rdn &b)
 {

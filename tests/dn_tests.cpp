@@ -114,6 +114,45 @@ TEST_CASE("dn::to_string escapes what RFC 4514 requires", "[dn]")
 	const auto back = parse(text);
 	CHECK(back == d);
 	CHECK(back.rdns()[0].avas[0].value == std::string_view(value));
+	CHECK(ldap::escape_dn_value(value) == std::string_view(text).substr(3));// what to_string writes
+}
+
+TEST_CASE("escape_dn_value: RFC 4514 text that parses back to the value", "[dn][escape]")
+{
+	const std::string value = GENERATE(std::string{},
+	  "plain"s,
+	  " both ends "s,
+	  "#"s,
+	  "# "s,
+	  "a#b "s,
+	  "\\"s,
+	  ",+\"<>;\\="s,
+	  "\0"s,
+	  "caf\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac"s,// 2- and 3-byte UTF-8
+	  "\xf0\x9f\x98\x80 \xf0\x90\x8d\x88"s,// 4-byte UTF-8
+	  "\xff\xc3"s,// not UTF-8
+	  "\xf0\x9f\x98"s);// truncated 4-byte sequence
+	INFO(value);
+	const auto text = ldap::escape_dn_value(value);
+	const auto d = parse("cn=" + std::string(text) + ",dc=org");
+	REQUIRE(d.rdns().size() == 2);
+	CHECK(d.rdns()[0].avas[0].value == std::string_view(value));
+	CHECK_FALSE(d.rdns()[0].avas[0].hex_form);
+	CHECK(ldap::dn{}.child(single("cn", value)).to_string() == std::string_view("cn=" + std::string(text)));
+}
+
+TEST_CASE("escape_dn_value keeps UTF-8 and escapes only specials", "[dn][escape]")
+{
+	CHECK(ldap::escape_dn_value("\xf0\x9f\x98\x80") == "\xf0\x9f\x98\x80");
+	CHECK(ldap::escape_dn_value("J\xc3\xb6rg, Smith") == "J\xc3\xb6rg\\, Smith");
+	CHECK(ldap::escape_dn_value("#a#") == "\\#a#");
+	CHECK(ldap::escape_dn_value(" a ") == "\\ a\\ ");
+	CHECK(ldap::escape_dn_value("\xff") == "\\ff");
+	CHECK(ldap::escape_dn_value("a\0b"s) == "a\\00b");
+	CHECK(ldap::escape_dn_value("").empty());
+	counting_resource mr;
+	const auto s = ldap::escape_dn_value("a long enough value to need an allocation", &mr);
+	CHECK(s.get_allocator().resource() == &mr);
 }
 
 TEST_CASE("dn parsing leniency", "[dn]")

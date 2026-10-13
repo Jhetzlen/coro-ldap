@@ -304,4 +304,12 @@ class dn
 	std::pmr::vector<rdn> rdns_{};
 };
 
+// One attribute value escaped for RFC 4514 text, exactly as dn::to_string()
+// writes it, so `"cn=" + escape_dn_value(v)` parses back to the value `v`:
+// `, + " \ < > ;` and a leading space or `#` or a trailing space become
+// `\c`; NUL, other control characters and octets that are not part of valid
+// UTF-8 become `\xx`; valid UTF-8 is kept as is. An empty value stays empty.
+[[nodiscard]] std::pmr::string escape_dn_value(std::string_view value,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+
 }// namespace jhetz::ldap

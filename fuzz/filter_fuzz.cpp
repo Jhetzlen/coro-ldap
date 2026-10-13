@@ -8,7 +8,11 @@
 // - as a value: every builder accepts it and its tree holds it unescaped;
 //   `attr("cn") == v` encodes to an equality whose value is exactly v; the
 //   text of every builder filter parses back to the same tree (so the
-//   escaping is right); builder trees round-trip through BER;
+//   escaping is right), and is "(cn=" + escape_filter_value(v) + ")";
+//   unescape_filter_value reverses escape_filter_value; builder trees
+//   round-trip through BER;
+// - as an escaped value without '*': unescape_filter_value accepts it
+//   exactly when filter::raw accepts "(cn=" + it + ")", with the same value;
 // - as BER: if a filter decodes, it re-encodes to BER that decodes to an
 //   equal tree, and its text parses to an equal tree;
 // - a parsed filter keeps its meaning when combined: (!f) holds exactly f's
@@ -109,6 +113,10 @@ void check_value(std::string_view v)
 		check(ava->empty() && r.empty(), "ava->empty() && r.empty()");
 	}
 	check_round_trips(eq);
+	const auto escaped = std::string(ldap::escape_filter_value(v));
+	check(std::string(eq.to_string()) == "(cn=" + escaped + ")", "eq.to_string() == \"(cn=\" + escaped + \")\"");
+	const auto unescaped = ldap::unescape_filter_value(escaped);
+	check(unescaped.has_value() && *unescaped == v, "unescaped.has_value() && *unescaped == v");
 
 	const ldap::filter all[] = { attr("cn") >= v,
 		attr("cn;x-1") <= v,
@@ -123,6 +131,20 @@ void check_value(std::string_view v)
 		check(all[4].root().final() == v, "all[4].root().final() == v");
 		check(*all[5].root().any().begin() == v, "*all[5].root().any().begin() == v");
 	}
+}
+
+void check_unescape(std::string_view text)
+{
+	if (text.find('*') != std::string_view::npos) return;// a substring filter in raw
+	const auto u = ldap::unescape_filter_value(text);
+	const auto f = ldap::filter::raw("(cn=" + std::string(text) + ")");
+	check(u.has_value() == f.has_value(), "u.has_value() == f.has_value()");
+	if (!u) {
+		check(
+		  u.error().code == ldap::client_errc::invalid_filter, "u.error().code == ldap::client_errc::invalid_filter");
+		return;
+	}
+	check(f->root().value() == *u, "f->root().value() == *u");
 }
 
 void check_ber(std::span<const std::byte> input)
@@ -143,6 +165,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 	const std::string_view text(reinterpret_cast<const char *>(data), size);
 	check_text(text);
 	check_value(text);
+	check_unescape(text);
 	check_ber(std::as_bytes(std::span(data, size)));
 	return 0;
 }
