@@ -6,12 +6,26 @@ on:
   push:
     branches: [master, main]
     paths:
-      - "ldap/**"
-      - ".github/workflows/ldap.yml"
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "include/**"
+      - "src/**"
+      - "tests/**"
+      - "fuzz/**"
+      - "examples/**"
+      - "bench/**"
+      - ".github/workflows/ci.yml"
   pull_request:
     paths:
-      - "ldap/**"
-      - ".github/workflows/ldap.yml"
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "include/**"
+      - "src/**"
+      - "tests/**"
+      - "fuzz/**"
+      - "examples/**"
+      - "bench/**"
+      - ".github/workflows/ci.yml"
 
 permissions:
   contents: read
@@ -42,7 +56,7 @@ jobs:
         run: apt-get update && apt-get install -y git ca-certificates clang-format-23
       - uses: actions/checkout@v4
       - name: Check formatting
-        run: find ldap -name '*.cpp' -o -name '*.hpp' | xargs clang-format-23 --dry-run --Werror
+        run: find include src tests fuzz examples bench -name '*.cpp' -o -name '*.hpp' | xargs clang-format-23 --dry-run --Werror
 
   gcc-sanitize:
     name: GCC 16 Debug (ASan + UBSan)
@@ -59,7 +73,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Configure
         run: >
-          cmake -S ldap -B build -G Ninja
+          cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_COMPILER=g++-16
           -DJHETZ_LDAP_SANITIZE=ON
@@ -86,7 +100,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Configure
         run: >
-          cmake -S ldap -B build -G Ninja
+          cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_COMPILER=clang++-23
           -DJHETZ_LDAP_SANITIZE=ON
@@ -114,7 +128,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Configure
         run: >
-          cmake -S ldap -B build -G Ninja
+          cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_COMPILER=g++-16
           -DJHETZ_LDAP_SANITIZE=ON
@@ -124,7 +138,7 @@ jobs:
       # run_slapd.sh starts slapd (ldap, ldaps, ldapi, test PKI, fixture),
       # runs the command, and stops it.
       - name: Integration tests
-        run: ldap/tests/integration/run_slapd.sh ctest --test-dir build -L integration --output-on-failure
+        run: tests/integration/run_slapd.sh ctest --test-dir build -L integration --output-on-failure
 
   clang-fuzz:
     name: Clang 23 fuzz smoke test
@@ -140,7 +154,7 @@ jobs:
       # cover the codec and URLs), so nothing is fetched here.
       - name: Configure
         run: >
-          cmake -S ldap -B build -G Ninja
+          cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
           -DCMAKE_CXX_COMPILER=clang++-23
           -DJHETZ_LDAP_BUILD_FUZZERS=ON
@@ -156,10 +170,10 @@ jobs:
             name=$(basename "$fuzzer")
             mkdir -p "corpus/$name" "artifacts/$name"
             # Seed with the checked-in corpus (same seeds as <name>_replay).
-            if [ -d "ldap/fuzz/corpus/$name" ]; then cp ldap/fuzz/corpus/$name/* "corpus/$name/"; fi
+            if [ -d "fuzz/corpus/$name" ]; then cp fuzz/corpus/$name/* "corpus/$name/"; fi
             # A dictionary, where there is one (fuzz/<name>.dict).
             dict=()
-            if [ -f "ldap/fuzz/$name.dict" ]; then dict=(-dict="ldap/fuzz/$name.dict"); fi
+            if [ -f "fuzz/$name.dict" ]; then dict=(-dict="fuzz/$name.dict"); fi
             echo "::group::$name"
             "$fuzzer" -max_total_time=60 -print_final_stats=1 "${dict[@]}" \
               -artifact_prefix="artifacts/$name/" "corpus/$name"

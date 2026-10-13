@@ -1,7 +1,7 @@
 // Integration tests against a real OpenLDAP slapd, started by
 // run_slapd.sh (which sets the JHETZ_LDAP_IT_* variables):
 //
-//   ldap/tests/integration/run_slapd.sh ctest --test-dir build -L integration --output-on-failure
+//   tests/integration/run_slapd.sh ctest --test-dir build -L integration --output-on-failure
 //
 // Without those variables every test is skipped (ctest reports the run as
 // skipped). The data is make_fixture.py's.

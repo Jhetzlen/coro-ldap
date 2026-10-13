@@ -2,7 +2,7 @@
 # Starts a throwaway OpenLDAP slapd for the integration tests, runs a
 # command with the JHETZ_LDAP_IT_* variables set, and stops slapd:
 #
-#   ldap/tests/integration/run_slapd.sh ctest --test-dir build -L integration --output-on-failure
+#   tests/integration/run_slapd.sh ctest --test-dir build -L integration --output-on-failure
 #
 # slapd listens on ldap://127.0.0.1:$PORT, ldaps://localhost:$((PORT+1))
 # and an ldapi:// socket in a temporary directory, with a test CA, a

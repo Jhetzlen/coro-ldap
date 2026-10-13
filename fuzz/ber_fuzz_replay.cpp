@@ -160,7 +160,7 @@ void mutate(rng &r, std::vector<std::uint8_t> &v)
 }// namespace
 
 // `ber_fuzz_replay --write-seeds DIR` writes the seed inputs to DIR (used to
-// refresh ldap/fuzz/corpus/ber_fuzz/, the libFuzzer seed corpus) and exits.
+// refresh fuzz/corpus/ber_fuzz/, the libFuzzer seed corpus) and exits.
 static int write_seeds(const char *dir)
 {
 	const auto inputs = seeds();

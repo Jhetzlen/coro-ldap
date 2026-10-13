@@ -3,14 +3,14 @@
 # a fresh prefix, and builds tests/install/consumer with find_package; then
 # the same for a codec-only install (no Corosio needed by consumers).
 #
-#   ldap/tests/install/check_install.sh WORK_DIR
+#   tests/install/check_install.sh WORK_DIR
 #
 # Sources: FETCHCONTENT_SOURCE_DIR_CAPY / _COROSIO if set (local
 # checkouts), else the pinned commits are cloned into WORK_DIR.
 set -eu
 work=$(realpath -m "${1:?usage: check_install.sh WORK_DIR}")
 here=$(cd "$(dirname "$0")" && pwd)
-ldap=$(cd "$here/../.." && pwd)
+root=$(cd "$here/../.." && pwd)
 rm -rf "$work/prefix" "$work/prefix-codec" "$work/build"
 mkdir -p "$work/build"
 gen="-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
@@ -24,7 +24,7 @@ source_of() {
 	fi
 	echo "$work/src-$1"
 }
-pin() { sed -n "/FetchContent_Declare($1/,/)/s/.*GIT_TAG \([0-9a-f]*\).*/\1/p" "$ldap/CMakeLists.txt"; }
+pin() { sed -n "/FetchContent_Declare($1/,/)/s/.*GIT_TAG \([0-9a-f]*\).*/\1/p" "$root/CMakeLists.txt"; }
 capy=$(source_of capy https://github.com/cppalliance/capy.git "$(pin capy)" "${FETCHCONTENT_SOURCE_DIR_CAPY:-}")
 corosio=$(source_of corosio https://github.com/cppalliance/corosio.git "$(pin corosio)" "${FETCHCONTENT_SOURCE_DIR_COROSIO:-}")
 
@@ -42,7 +42,7 @@ cmake -S "$corosio" -B "$work/build/corosio" $gen -DCMAKE_INSTALL_PREFIX="$work/
 cmake --build "$work/build/corosio" >/dev/null
 cmake --install "$work/build/corosio" >/dev/null
 step "jhetz_ldap with networking"
-cmake -S "$ldap" -B "$work/build/ldap" $gen -DCMAKE_INSTALL_PREFIX="$work/prefix" \
+cmake -S "$root" -B "$work/build/ldap" $gen -DCMAKE_INSTALL_PREFIX="$work/prefix" \
 	-DCMAKE_PREFIX_PATH="$work/prefix" -DJHETZ_LDAP_BUILD_TESTS=OFF -DJHETZ_LDAP_BUILD_EXAMPLES=OFF >/dev/null
 cmake --build "$work/build/ldap" >/dev/null
 cmake --install "$work/build/ldap" >/dev/null
@@ -52,7 +52,7 @@ cmake --build "$work/build/consumer" >/dev/null
 "$work/build/consumer/consumer"
 
 step "jhetz_ldap codec only"
-cmake -S "$ldap" -B "$work/build/ldap-codec" $gen -DCMAKE_INSTALL_PREFIX="$work/prefix-codec" \
+cmake -S "$root" -B "$work/build/ldap-codec" $gen -DCMAKE_INSTALL_PREFIX="$work/prefix-codec" \
 	-DJHETZ_LDAP_BUILD_NET=OFF -DJHETZ_LDAP_BUILD_TESTS=OFF >/dev/null
 cmake --build "$work/build/ldap-codec" >/dev/null
 cmake --install "$work/build/ldap-codec" >/dev/null

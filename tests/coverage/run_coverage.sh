@@ -2,9 +2,9 @@
 # Coverage report for jhetz::ldap with Clang source-based coverage: builds
 # BUILD_DIR with -DJHETZ_LDAP_COVERAGE=ON (our targets only, no sanitizers),
 # runs the whole ctest suite (and the slapd integration tests when SLAPD is
-# set), merges the profiles and reports on ldap/src and ldap/include:
+# set), merges the profiles and reports on src and include:
 #
-#   ldap/tests/coverage/run_coverage.sh [--run-only] [BUILD_DIR]
+#   tests/coverage/run_coverage.sh [--run-only] [BUILD_DIR]
 #
 #   BUILD_DIR/llvm-cov/summary.txt    llvm-cov report (also printed)
 #   BUILD_DIR/llvm-cov/html/index.html line, region and branch details
@@ -33,8 +33,8 @@ if [[ "${1:-}" == "--run-only" ]]; then
 	shift
 fi
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ldap="$(cd "$here/../.." && pwd)"
-build="$(realpath -m "${1:-$ldap/../build/coverage}")"
+root="$(cd "$here/../.." && pwd)"
+build="$(realpath -m "${1:-$root/build/coverage}")"
 out="$build/llvm-cov"
 cxx="${CXX:-clang++}"
 
@@ -76,7 +76,7 @@ for dep in CAPY COROSIO CATCH2; do
 done
 
 step "configure and build $build"
-cmake -S "$ldap" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="$cxx" \
+cmake -S "$root" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="$cxx" \
 	-DJHETZ_LDAP_COVERAGE=ON -DJHETZ_LDAP_SANITIZE=OFF -DJHETZ_LDAP_BUILD_FUZZERS=OFF \
 	${fetch_args[@]+"${fetch_args[@]}"} >/dev/null
 cmake --build "$build"
@@ -95,7 +95,7 @@ step "ctest"
 ctest --test-dir "$build" --output-on-failure -j "$(nproc 2>/dev/null || echo 2)" || status=$?
 if [[ -n "${SLAPD:-}" ]]; then
 	step "integration tests against $SLAPD"
-	"$ldap/tests/integration/run_slapd.sh" ctest --test-dir "$build" -L integration --output-on-failure ||
+	"$root/tests/integration/run_slapd.sh" ctest --test-dir "$build" -L integration --output-on-failure ||
 		{ rc=$?; if [[ $status -eq 0 ]]; then status=$rc; fi; }
 else
 	echo "(SLAPD not set: integration tests skipped, see tests/integration/run_slapd.sh)"
@@ -141,7 +141,7 @@ fi
 # matches the absolute path, so a checkout under e.g. ~/src/examples/ would
 # drop everything).
 filters=(-instr-profile "$out/ldap.profdata" "${objects[@]}"
-	"$ldap/src" "$ldap/include")
+	"$root/src" "$root/include")
 "$cov" report "${filters[@]}" | tee "$out/summary.txt"
 "$cov" show "${filters[@]}" -format=html -output-dir "$out/html" \
 	-show-branches=count -show-line-counts-or-regions

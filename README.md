@@ -1,6 +1,6 @@
 # jhetz::ldap
 
-C++23 LDAP client library, in progress. Design: [`docs/ldap/DESIGN.md`](../docs/ldap/DESIGN.md).
+C++23 LDAP client library, in progress. Design: [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## What exists
 
@@ -334,8 +334,8 @@ URL (`ldap://localhost`).
 example against the throwaway slapd of the integration tests:
 
 ```sh
-ldap/tests/integration/run_slapd.sh sh -c \
-  'build/ldap/jhetz_ldap_example_search $JHETZ_LDAP_IT_LDAP'
+tests/integration/run_slapd.sh sh -c \
+  'build/main/jhetz_ldap_example_search $JHETZ_LDAP_IT_LDAP'
 ```
 
 ## Using it from another project
@@ -372,10 +372,10 @@ OpenSSL and ICU development files (`libssl-dev libicu-dev`; Arch:
 `openssl icu`).
 
 ```sh
-cmake -S ldap -B build/ldap -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON
-cmake --build build/ldap
-ctest --test-dir build/ldap --output-on-failure
-ctest --test-dir build/ldap -R '^net\.'     # just the transport / connect / connection tests
+cmake -B build/main -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON
+cmake --build build/main
+ctest --test-dir build/main --output-on-failure
+ctest --test-dir build/main -R '^net\.'     # just the transport / connect / connection tests
 ```
 
 To build against local checkouts instead of downloading, pass
@@ -410,7 +410,7 @@ the server's answer). `run_slapd.sh` starts a throwaway slapd with a test
 PKI and the fixture from `make_fixture.py`, runs a command and stops it:
 
 ```sh
-ldap/tests/integration/run_slapd.sh ctest --test-dir build/ldap -L integration --output-on-failure
+tests/integration/run_slapd.sh ctest --test-dir build/main -L integration --output-on-failure
 ```
 
 It needs `slapd` and `openssl`; the defaults suit Debian / Ubuntu's slapd
@@ -426,10 +426,10 @@ in the `integration` job.
 `build/coverage`) with clang++ and `-DJHETZ_LDAP_COVERAGE=ON` (only our
 libraries, tests and examples are instrumented; no sanitizers), runs the
 whole ctest suite, and with `SLAPD` set (as for `run_slapd.sh`) the
-integration tests too, then reports on `ldap/src` and `ldap/include`:
+integration tests too, then reports on `src` and `include`:
 
 ```sh
-SLAPD=/usr/sbin/slapd ldap/tests/coverage/run_coverage.sh [--run-only] [BUILD_DIR]
+SLAPD=/usr/sbin/slapd tests/coverage/run_coverage.sh [--run-only] [BUILD_DIR]
 ```
 
 - `BUILD_DIR/llvm-cov/summary.txt`: the `llvm-cov report` table (also printed)
@@ -458,17 +458,17 @@ up, with zero counts).
 | `url_fuzz` | text | `parse(to_string(u)) == u` and `to_string` is canonical; printed URLs contain only RFC 3986 characters |
 
 ```sh
-cmake -S ldap -B build/ldap-fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+cmake -B build/fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
       -DCMAKE_CXX_COMPILER=clang++ -DJHETZ_LDAP_BUILD_FUZZERS=ON -DJHETZ_LDAP_BUILD_TESTS=OFF
-cmake --build build/ldap-fuzz
-mkdir -p corpus && cp ldap/fuzz/corpus/message_fuzz/* corpus/
-UBSAN_OPTIONS=halt_on_error=1 build/ldap-fuzz/fuzzers/message_fuzz -max_total_time=60 corpus
-# url_fuzz has a dictionary: add -dict=ldap/fuzz/url.dict
+cmake --build build/fuzz
+mkdir -p corpus && cp fuzz/corpus/message_fuzz/* corpus/
+UBSAN_OPTIONS=halt_on_error=1 build/fuzz/fuzzers/message_fuzz -max_total_time=60 corpus
+# url_fuzz has a dictionary: add -dict=fuzz/url.dict
 ```
 
 `fuzz/corpus/<target>/` holds the seed inputs (the same ones
 `<target>_replay` mutates). Regenerate them after changing the seeds with
-`<target>_replay --write-seeds ldap/fuzz/corpus/<target>`.
+`<target>_replay --write-seeds fuzz/corpus/<target>`.
 
 Sanitized and fuzz builds use `-fno-sanitize-recover=all`, so any UBSan
 finding aborts and fails the test or fuzz run.
@@ -492,9 +492,9 @@ without a 256 KiB initial buffer. Heap allocations are counted with a
 counting default resource in a separate pass.
 
 ```sh
-cmake -S ldap -B build/ldap-bench -G Ninja -DCMAKE_BUILD_TYPE=Release \
+cmake -B build/bench -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DJHETZ_LDAP_BUILD_BENCH=ON -DJHETZ_LDAP_BUILD_TESTS=OFF -DJHETZ_LDAP_BUILD_NET=OFF
-cmake --build build/ldap-bench && build/ldap-bench/jhetz_ldap_decode_bench
+cmake --build build/bench && build/bench/jhetz_ldap_decode_bench
 ```
 
 GCC 16.2, Release (`-O3`), a 12-thread desktop, best / median of 15 runs

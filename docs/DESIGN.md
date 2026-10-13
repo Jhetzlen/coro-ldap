@@ -1,6 +1,6 @@
 # LDAP client: API design
 
-Status: implemented under `ldap/` (codec, connection with multiplexing,
+Status: implemented in this repository (codec, connection with multiplexing,
 every RFC 4511 operation, StartTLS, SASL, typed mapping, runtime schema
 checks, blocking facade, `ldapsearch`). The original roadmap (GitHub
 tickets #2 to #20, done by 2026-10-07) and the pre-implementation API
@@ -908,7 +908,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   lifetimes.
 - Coroutine frames already accept a memory resource via Capy's
   `run_async(ex, mr)`.
-- Benchmark (`ldap/bench`, GCC 16 Release; 1,000 SearchResultEntry PDUs of
+- Benchmark (`bench`, GCC 16 Release; 1,000 SearchResultEntry PDUs of
   30 attributes x 3 values, every 20th with 68 KiB of binaries, 7.1 MiB):
   default heap 10.0 ms and 111.7 allocations per entry; per-message
   monotonic arena with a 256 KiB buffer 7.6 ms and 0 heap allocations.

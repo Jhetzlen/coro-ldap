@@ -1,8 +1,8 @@
 # jhetz::ldap - C++23 LDAP client library (work in progress).
 #
-#   cmake -S ldap -B build/ldap -G Ninja -DCMAKE_BUILD_TYPE=Debug
-#   cmake --build build/ldap
-#   ctest --test-dir build/ldap --output-on-failure
+#   cmake -B build/main -G Ninja -DCMAKE_BUILD_TYPE=Debug
+#   cmake --build build/main
+#   ctest --test-dir build/main --output-on-failure
 #
 # See README.md for sanitizer and fuzzer builds.
 cmake_minimum_required(VERSION 3.25)
