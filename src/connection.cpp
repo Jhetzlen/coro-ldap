@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <deque>
 #include <memory>
@@ -159,6 +160,7 @@ struct connection::impl
 		scratch(mr_)
 	{
 		schema_mode = options.schema_check;
+		password_mode = options.password_method;
 		write_idle.set();
 		reader_idle.set();
 		bind_idle.set();
@@ -230,6 +232,10 @@ struct connection::impl
 	ldap::schema_check schema_mode = ldap::schema_check::off;
 	std::shared_ptr<const server_schema> schema{};
 	std::vector<std::type_index> schema_checked{};
+	// change_password / reset_password: the connection's default method, and
+	// the one the root DSE advertised (password_method::automatic), once read.
+	ldap::password_method password_mode = ldap::password_method::automatic;
+	std::optional<ldap::password_method> advertised_password_method{};
 	// Unsolicited notifications are decoded here, then released.
 	std::pmr::monotonic_buffer_resource scratch;
 
@@ -1254,19 +1260,27 @@ capy::task<result<response>> connection::add(add_params p)
 	  co_await request_response(self, std::move(*request), op_index<add_response>, context, p.timeout), context);
 }
 
+namespace {
+
+	capy::task<result<response>> modify_impl(impl_ref self, modify_params p, std::string context)
+	{
+		const std::pmr::polymorphic_allocator<> alloc(self->mr);
+		modify_request op(alloc);
+		op.object = p.object.to_string(self->mr);
+		op.changes.assign(p.changes.begin(), p.changes.end());
+		auto request = with_controls(std::move(op), p.controls, self->mr, context);
+		if (!request) co_return std::unexpected(std::move(request.error()));
+		co_return to_response(
+		  co_await request_response(self, std::move(*request), op_index<modify_response>, context, p.timeout), context);
+	}
+
+}// namespace
+
 capy::task<result<response>> connection::modify(modify_params p)
 {
 	std::string context = op_context("modify", p.object);
 	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
-	impl_ref self(impl_);
-	const std::pmr::polymorphic_allocator<> alloc(self->mr);
-	modify_request op(alloc);
-	op.object = p.object.to_string(self->mr);
-	op.changes.assign(p.changes.begin(), p.changes.end());
-	auto request = with_controls(std::move(op), p.controls, self->mr, context);
-	if (!request) co_return std::unexpected(std::move(request.error()));
-	co_return to_response(
-	  co_await request_response(self, std::move(*request), op_index<modify_response>, context, p.timeout), context);
+	co_return co_await modify_impl(impl_ref(impl_), std::move(p), std::move(context));
 }
 
 capy::task<result<response>> connection::del(del_params p)
@@ -1321,25 +1335,33 @@ capy::task<result<bool>> connection::compare(compare_params p)
 	co_return std::unexpected(r.to_error(context));// success (0) is not a valid answer either
 }
 
+namespace {
+
+	capy::task<result<extended_result>> extended_impl(impl_ref self, extended_params p)
+	{
+		std::string context = "extended operation " + p.name;
+		const std::pmr::polymorphic_allocator<> alloc(self->mr);
+		std::optional<std::string_view> value;
+		if (p.value) value = *p.value;
+		auto request = with_controls(extended_request(p.name, value, alloc), p.controls, self->mr, context);
+		if (!request) co_return std::unexpected(std::move(request.error()));
+		auto m = co_await request_response(self, std::move(*request), op_index<extended_response>, context, p.timeout);
+		if (!m) co_return std::unexpected(std::move(m.error()));
+		auto &x = std::get<extended_response>(m->op);
+		if (!x.result.is_success()) co_return std::unexpected(x.result.to_error(context));
+		extended_result out;
+		if (x.response_name) out.name.emplace(*x.response_name);
+		if (x.response_value) out.value.emplace(*x.response_value);
+		out.controls.assign(m->controls.begin(), m->controls.end());
+		co_return out;
+	}
+
+}// namespace
+
 capy::task<result<extended_result>> connection::extended(extended_params p)
 {
-	std::string context = "extended operation " + p.name;
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
-	impl_ref self(impl_);
-	const std::pmr::polymorphic_allocator<> alloc(self->mr);
-	std::optional<std::string_view> value;
-	if (p.value) value = *p.value;
-	auto request = with_controls(extended_request(p.name, value, alloc), p.controls, self->mr, context);
-	if (!request) co_return std::unexpected(std::move(request.error()));
-	auto m = co_await request_response(self, std::move(*request), op_index<extended_response>, context, p.timeout);
-	if (!m) co_return std::unexpected(std::move(m.error()));
-	auto &x = std::get<extended_response>(m->op);
-	if (!x.result.is_success()) co_return std::unexpected(x.result.to_error(context));
-	extended_result out;
-	if (x.response_name) out.name.emplace(*x.response_name);
-	if (x.response_value) out.value.emplace(*x.response_value);
-	out.controls.assign(m->controls.begin(), m->controls.end());
-	co_return out;
+	if (impl_ == nullptr) co_return std::unexpected(not_connected("extended operation " + p.name));
+	co_return co_await extended_impl(impl_ref(impl_), std::move(p));
 }
 
 capy::task<result<std::string>> connection::who_am_i(request_controls controls)
@@ -1386,6 +1408,29 @@ namespace {
 		return generated;
 	}
 
+	// `context` names the operation in errors, instead of "extended
+	// operation <oid>".
+	capy::task<result<std::optional<std::string>>>
+	  password_modify_impl(impl_ref self, password_modify_params p, std::string context)
+	{
+		extended_params request{ .name = std::string(password_modify_oid),
+			.value = encode_password_modify(p),
+			.controls = std::move(p.controls),
+			.timeout = p.timeout };
+		auto r = co_await extended_impl(std::move(self), std::move(request));
+		if (!r) {
+			error e = std::move(r.error());
+			const std::string generic = detail::format("extended operation {}", password_modify_oid);
+			if (std::string_view(e.context).starts_with(generic)) e.context.replace(0, generic.size(), context);
+			co_return std::unexpected(std::move(e));
+		}
+		if (!r->value) co_return std::optional<std::string>{};
+		auto generated = decode_password_modify(*r->value);
+		if (!generated)
+			co_return std::unexpected(detail::with_context(std::move(generated.error()), context + ": response value"));
+		co_return std::move(*generated);
+	}
+
 }// namespace
 
 capy::task<result<std::optional<std::string>>> connection::password_modify(password_modify_params p)
@@ -1395,24 +1440,8 @@ capy::task<result<std::optional<std::string>>> connection::password_modify(passw
 		context += ' ';
 		detail::append_sanitized(context, *p.user, 256);
 	}
-	extended_params request{ .name = std::string(password_modify_oid),
-		.value = encode_password_modify(p),
-		.controls = std::move(p.controls),
-		.timeout = p.timeout };
-	auto r = co_await extended(std::move(request));
-	if (!r) {
-		// "extended operation <oid>..." names the operation by its OID; say
-		// what it is instead.
-		error e = std::move(r.error());
-		const std::string generic = detail::format("extended operation {}", password_modify_oid);
-		if (std::string_view(e.context).starts_with(generic)) e.context.replace(0, generic.size(), context);
-		co_return std::unexpected(std::move(e));
-	}
-	if (!r->value) co_return std::optional<std::string>{};
-	auto generated = decode_password_modify(*r->value);
-	if (!generated)
-		co_return std::unexpected(detail::with_context(std::move(generated.error()), context + ": response value"));
-	co_return std::move(*generated);
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	co_return co_await password_modify_impl(impl_ref(impl_), std::move(p), std::move(context));
 }
 
 // ---------------------------------------------------------------- schema
@@ -1490,6 +1519,149 @@ capy::task<result<void>> connection::check_schema(std::type_index type,
 		  client_errc::schema_mismatch, detail::format("schema check of {}:\n{}", type.name(), report.to_string()));
 	self->schema_checked.push_back(type);
 	co_return result<void>{};
+}
+
+// ---------------------------------------------------------------- password changes
+
+namespace {
+
+	// How to choose the method when the root DSE does not tell.
+	constexpr std::string_view choose_password_method =
+	  "choose the method with connection_options::password_method or the method argument "
+	  "(ldap::password_method::rfc3062 or active_directory)";
+
+	// password_method::automatic: what the root DSE advertises, RFC 3062
+	// first. Errors are prefixed with `context`.
+	capy::task<result<ldap::password_method>> advertised_password_method(impl_ref self, const std::string &context)
+	{
+		auto root = co_await read_one(self,
+		  { .scope = search_scope::base_object, .attributes = { "supportedExtension", "supportedCapabilities" } });
+		if (!root)
+			co_return std::unexpected(detail::with_context(std::move(root.error()),
+			  detail::format("{}: reading the root DSE to pick the method failed ({} to skip it)",
+				context,
+				choose_password_method)));
+		const auto lists = [&root](std::string_view type, std::string_view oid) {
+			const auto *values = *root ? (*root)->find(type) : nullptr;
+			return values != nullptr && std::ranges::contains(*values, oid);
+		};
+		if (lists("supportedExtension", password_modify_oid)) co_return ldap::password_method::rfc3062;
+		if (lists("supportedCapabilities", active_directory_capability_oid))
+			co_return ldap::password_method::active_directory;
+		co_return fail(client_errc::no_password_method,
+		  detail::format("{}: the root DSE advertises neither the RFC 3062 password modify extension nor Active "
+						 "Directory (it may be hidden by access controls): {}, or call password_modify()",
+			context,
+			choose_password_method));
+	}
+
+	// Active Directory starts its diagnosticMessage with the Win32 error in
+	// hex ("0000052D: Constraint violation - ..."): the common ones of a
+	// password change, explained ("" for the others).
+	std::string_view ad_password_explanation(std::string_view diagnostic)
+	{
+		if (diagnostic.size() < 9 || diagnostic[8] != ':') return {};
+		unsigned code = 0;
+		const auto [end, ec] = std::from_chars(diagnostic.data(), diagnostic.data() + 8, code, 16);
+		if (ec != std::errc{} || end != diagnostic.data() + 8) return {};
+		switch (code) {
+		case 0x5:// ERROR_ACCESS_DENIED
+			return "not allowed to set this user's password";
+		case 0x56:// ERROR_INVALID_PASSWORD
+			return "the old password is wrong";
+		case 0x52D:// ERROR_PASSWORD_RESTRICTION
+			return "the new password does not meet the password policy (length, complexity, history or minimum "
+				   "age)";
+		case 0x775:// ERROR_ACCOUNT_LOCKED_OUT
+			return "the account is locked out";
+		default:
+			return {};
+		}
+	}
+
+	// password_method::active_directory: a ModifyRequest of unicodePwd.
+	capy::task<result<void>> ad_set_password(impl_ref self,
+	  const dn &user,
+	  const std::optional<std::string> &old_password,
+	  const std::string &new_password,
+	  const std::string &context)
+	{
+		if (user.empty()) co_return fail(client_errc::invalid_dn, context + ": Active Directory needs the user's DN");
+		// As is_tls(); a closed connection fails with not_connected below.
+		if (self->open && (self->upgrading || !self->transport.is_tls()))
+			co_return fail(client_errc::tls_required,
+			  context + ": Active Directory sets unicodePwd only over TLS (ldaps:// or start_tls())");
+		auto new_value = ad_password_value(new_password);
+		if (!new_value) co_return std::unexpected(detail::with_context(std::move(new_value.error()), context));
+		modify_params p{ .object = user };
+		if (old_password) {
+			auto old_value = ad_password_value(*old_password);
+			if (!old_value) co_return std::unexpected(detail::with_context(std::move(old_value.error()), context));
+			p.changes.push_back(mod::remove("unicodePwd", { *old_value }));
+			p.changes.push_back(mod::add("unicodePwd", { *new_value }));
+		} else {
+			p.changes.push_back(mod::replace("unicodePwd", { *new_value }));
+		}
+		auto r = co_await modify_impl(std::move(self), std::move(p), context + ": modify unicodePwd");
+		if (r) co_return result<void>{};
+		error e = std::move(r.error());
+		if (const auto text = ad_password_explanation(e.diagnostic); !text.empty())
+			e.context +=
+			  detail::format(": {} (Active Directory error {})", text, std::string_view(e.diagnostic).substr(0, 8));
+		co_return std::unexpected(std::move(e));
+	}
+
+	// change_password (with `old_password`) and reset_password.
+	capy::task<result<void>> set_password(impl_ref self,
+	  std::string context,
+	  dn user,
+	  std::optional<std::string> old_password,
+	  std::string new_password,
+	  std::optional<ldap::password_method> method)
+	{
+		if (new_password.empty())
+			co_return fail(std::make_error_code(std::errc::invalid_argument), context + ": empty new password");
+		if (old_password && old_password->empty())
+			co_return fail(std::make_error_code(std::errc::invalid_argument),
+			  context + ": empty old password (reset_password() sets one without it)");
+		ldap::password_method m = method.value_or(self->password_mode);
+		if (m == ldap::password_method::automatic) {
+			if (!self->advertised_password_method) {
+				auto found = co_await advertised_password_method(self, context);
+				if (!found) co_return std::unexpected(std::move(found.error()));
+				self->advertised_password_method = *found;
+			}
+			m = *self->advertised_password_method;
+		}
+		if (m == ldap::password_method::active_directory)
+			co_return co_await ad_set_password(std::move(self), user, old_password, new_password, context);
+		password_modify_params p{ .old_password = std::move(old_password), .new_password = std::move(new_password) };
+		if (!user.empty()) p.user = std::string(user.to_string());
+		auto r = co_await password_modify_impl(std::move(self), std::move(p), context + ": password modify (RFC 3062)");
+		if (!r) co_return std::unexpected(std::move(r.error()));
+		co_return result<void>{};
+	}
+
+}// namespace
+
+capy::task<result<void>> connection::change_password(dn user,
+  std::string old_password,
+  std::string new_password,
+  std::optional<ldap::password_method> method)
+{
+	std::string context = op_context("change password", user);
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	co_return co_await set_password(
+	  impl_ref(impl_), std::move(context), std::move(user), std::move(old_password), std::move(new_password), method);
+}
+
+capy::task<result<void>>
+  connection::reset_password(dn user, std::string new_password, std::optional<ldap::password_method> method)
+{
+	std::string context = op_context("reset password", user);
+	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	co_return co_await set_password(
+	  impl_ref(impl_), std::move(context), std::move(user), std::nullopt, std::move(new_password), method);
 }
 
 // ---------------------------------------------------------------- StartTLS
@@ -1613,6 +1785,7 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	// (possibly from an attacker) is discarded; the schema is read again.
 	self->schema.reset();
 	self->schema_checked.clear();
+	self->advertised_password_method.reset();
 	co_return result<void>{};
 }
 

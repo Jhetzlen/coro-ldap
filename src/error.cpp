@@ -147,6 +147,10 @@ namespace {
 			return "another operation is in progress on this connection";
 		case client_errc::unauthenticated_bind:
 			return "simple bind with a name but no password (unauthenticated bind)";
+		case client_errc::tls_required:
+			return "the connection must be protected by TLS";
+		case client_errc::no_password_method:
+			return "no known password-change method on this server";
 		}
 		return {};
 	}
@@ -211,6 +215,8 @@ namespace {
 			return cond::connection_lost;
 		case client_errc::unauthenticated_bind:
 			return cond::auth_failed;
+		case client_errc::tls_required:
+			return cond::access_denied;
 		default:
 			return std::nullopt;
 		}

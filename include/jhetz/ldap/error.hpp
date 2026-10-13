@@ -99,6 +99,8 @@ enum class client_errc : int {
 	not_connected,// connection closed (unbind, close, or an earlier failure)
 	operation_in_progress,// the connection is busy with another operation or an open search_stream
 	unauthenticated_bind,// simple bind with a name and an empty password (RFC 4513 section 5.1.2)
+	tls_required,// refused on a connection without TLS (an Active Directory password change)
+	no_password_method,// the server advertises no password-change method this library knows
 };
 
 // Error conditions: what an error means, across categories (DESIGN.md

@@ -602,6 +602,28 @@ TEST_CASE("sync: password_modify", "[net][sync]")
 			  "bad\x82\x03new"s } });
 }
 
+TEST_CASE("sync: change_password and reset_password", "[net][sync][password]")
+{
+	peer_server srv;
+	srv.serve({ answer({ ldap::message{ 1,
+						   ldap::search_result_entry{
+							 "", { ldap::partial_attribute{ "supportedExtension", { ldap::password_modify_oid } } } } },
+				  done_msg(1) }),
+	  answer({ ldap::message{ 2, ldap::extended_response{ ldap::ldap_result{ 0 } } } }),
+	  answer({ ldap::message{ 3, ldap::extended_response{ ldap::ldap_result{ 0 } } } }) });
+	connected k(srv);
+	CHECK(k.c.change_password(jdoe, "old", "new").has_value());
+	CHECK(k.c.reset_password(jdoe, "next", ldap::password_method::rfc3062).has_value());
+	auto refused = k.c.reset_password(jdoe, "next", ldap::password_method::active_directory);
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::client_errc::tls_required);
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 3);
+	CHECK(std::holds_alternative<ldap::search_request>(got[0].op));
+	CHECK(std::holds_alternative<ldap::extended_request>(got[1].op));
+	CHECK(std::holds_alternative<ldap::extended_request>(got[2].op));
+}
+
 TEST_CASE("sync: close without an UnbindRequest", "[net][sync]")
 {
 	{

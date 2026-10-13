@@ -109,7 +109,7 @@ TEST_CASE("every errc and client_errc has a real message", "[error]")
 		CHECK_FALSE(text.empty());
 		CHECK_FALSE(text.contains("unknown"));
 	}
-	for (int v = 1; v <= std::to_underlying(ldap::client_errc::unauthenticated_bind); ++v) {
+	for (int v = 1; v <= std::to_underlying(ldap::client_errc::no_password_method); ++v) {
 		const auto text = std::error_code(static_cast<ldap::client_errc>(v)).message();
 		INFO("client_errc " << v << ": " << text);
 		CHECK_FALSE(text.empty());
@@ -347,9 +347,11 @@ TEST_CASE("every client_errc maps to its documented condition", "[error][cond]")
 		{ client_errc::not_connected, cond::connection_lost },
 		{ client_errc::operation_in_progress, std::nullopt },
 		{ client_errc::unauthenticated_bind, cond::auth_failed },
+		{ client_errc::tls_required, cond::access_denied },
+		{ client_errc::no_password_method, std::nullopt },
 	};
 	// Every value, in order: a new client_errc must be added here.
-	REQUIRE(table.size() == static_cast<std::size_t>(client_errc::unauthenticated_bind));
+	REQUIRE(table.size() == static_cast<std::size_t>(client_errc::no_password_method));
 	for (std::size_t i = 0; i < table.size(); ++i) {
 		const auto &[e, expected] = table[i];
 		INFO("client_errc " << std::to_underlying(e) << " " << std::error_code(e).message());

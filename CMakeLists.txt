@@ -197,6 +197,7 @@ if(JHETZ_LDAP_BUILD_NET)
     endif()
 
     add_library(jhetz_ldap_net STATIC
+        src/ad_password.cpp
         src/connection.cpp
         src/sasl_scram.cpp
         src/sync.cpp
@@ -219,7 +220,7 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     jhetz_ldap_warnings(jhetz_ldapsearch)
 
     # Small programs showing the main use cases (README.md, "Examples").
-    foreach(example connect search modify add delete starttls cancel blocking bulk bulk_paged)
+    foreach(example connect search modify add delete password starttls cancel blocking bulk bulk_paged)
         add_executable(jhetz_ldap_example_${example} examples/${example}.cpp)
         target_link_libraries(jhetz_ldap_example_${example} PRIVATE jhetz::ldap_net)
         jhetz_ldap_warnings(jhetz_ldap_example_${example})

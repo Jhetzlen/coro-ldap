@@ -150,6 +150,21 @@ class connection
 	{
 		return call([&](ldap::connection &c) { return c.password_modify(std::move(request)); });
 	}
+	[[nodiscard]] result<void> change_password(dn user,
+	  std::string old_password,
+	  std::string new_password,
+	  std::optional<ldap::password_method> method = std::nullopt)
+	{
+		return call([&](ldap::connection &c) {
+			return c.change_password(std::move(user), std::move(old_password), std::move(new_password), method);
+		});
+	}
+	[[nodiscard]] result<void>
+	  reset_password(dn user, std::string new_password, std::optional<ldap::password_method> method = std::nullopt)
+	{
+		return call(
+		  [&](ldap::connection &c) { return c.reset_password(std::move(user), std::move(new_password), method); });
+	}
 
 	[[nodiscard]] result<void> unbind();
 	// Closes the connection at once (no UnbindRequest).

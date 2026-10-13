@@ -201,6 +201,24 @@ itself stays dependency-free.
   until it arrives or the page timeout passes). Referrals are returned (in
   `error::referrals` and `search_stream::references()`), never chased;
   `url::parse_list` parses them.
+- Password changes that work on OpenLDAP and Active Directory alike:
+  `change_password(user, old, new)` (a user's own) and
+  `reset_password(user, new)` (an administrator's), on `connection` and
+  `sync::connection`. The method comes from the server's root DSE, read
+  once per connection (again after StartTLS): RFC 3062 Password Modify if
+  `supportedExtension` lists it, else Active Directory (and Samba AD) if
+  `supportedCapabilities` lists `1.2.840.113556.1.4.800`, else
+  `client_errc::no_password_method`; a server offering both gets RFC 3062.
+  On AD the password goes into one ModifyRequest of `unicodePwd`
+  (`ldap::ad_password_value`: quoted, UTF-16LE, full Unicode), deleting the
+  old value and adding the new one for a change, replacing it for a reset,
+  and only over TLS (`client_errc::tls_required` before anything is sent);
+  AD's diagnostics for common refusals (`0000052D` password policy,
+  `00000056` wrong old password) are explained in the error's context.
+  When the root DSE is hidden by access controls, choose the method with
+  `connection_options::password_method` or per call
+  (`ldap::password_method::rfc3062` / `active_directory`): an explicit
+  method never reads the root DSE. Passwords never appear in errors.
 - StartTLS (step 7): `connection::start_tls(tls_options)` upgrades a plain
   ldap:// connection in place (refused while operations are outstanding;
   it first waits for the answers due to paged search releases; bytes
@@ -326,6 +344,7 @@ URL (`ldap://localhost`).
 | `modify.cpp` | replace a user's `mail` |
 | `add.cpp` | add the user `uid=jane` |
 | `delete.cpp` | delete the user `uid=jane` |
+| `password.cpp` | reset a user's password (RFC 3062 or Active Directory, from the root DSE) |
 | `starttls.cpp` | connect with StartTLS, then bind |
 | `cancel.cpp` | search the whole tree; Ctrl-C gives up on it (`capy::when_any` with `ldap::raceable`) |
 | `blocking.cpp` | the same search with the blocking `ldap::sync::connection` |

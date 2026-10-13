@@ -244,6 +244,12 @@ Results (step 6): success returns the operation's value — `response`
 compare, `extended_result` for extended operations, the authzId string for
 `who_am_i()` (RFC 4532), the generated password (if any) for
 `password_modify()` (RFC 3062; passwords never appear in error contexts).
+`change_password()` / `reset_password()` pick RFC 3062 or Active
+Directory's `unicodePwd` Modify from the root DSE (`password_method`,
+connection.hpp), cached per connection and dropped by `start_tls()` like
+the schema; the AD path refuses a connection without TLS before sending
+(`client_errc::tls_required`), and an unreadable or silent root DSE fails
+with `client_errc::no_password_method`, naming the option that skips it.
 Any other result code is an error. compareTrue /
 compareFalse map to `true` / `false` (a compare answered with success is
 an error: it is not a valid answer). referral (10) is an error with the
@@ -475,7 +481,7 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`; connection: `unexpected_response`, `not_connected`, `operation_in_progress`, `unauthenticated_bind`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`; connection: `unexpected_response`, `not_connected`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `no_password_method`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 `error`'s strings are `std::pmr::string` but always on the default
@@ -524,7 +530,9 @@ response with another message id or an operation that does not answer the
 request), `not_connected` (closed by `unbind`, `close` or an earlier
 failure, which the context names), `operation_in_progress` (the connection
 is busy; nothing is queued), `unauthenticated_bind` (a name with an empty
-password). Server errors carry the operation as context
+password), `tls_required` (an Active Directory password change on a
+connection without TLS), `no_password_method` (the root DSE advertises
+no password-change method this library knows). Server errors carry the operation as context
 (`search ou=people,dc=example,dc=org`) and leave the connection usable;
 transport and protocol errors close it.
 
@@ -544,10 +552,10 @@ a caller match none, deliberately (test them by exact code).
 | `tls_failure` | | | any `corosio.openssl` (or `corosio.wolfssl`) code |
 | `protocol_error` | `protocol_error` | `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `integer_overflow`, `unexpected_tag`, `unsupported_operation`, `unexpected_response` | |
 | `busy_or_unavailable` | `busy`, `unavailable` | | `connection_refused`, `host_unreachable`, `network_unreachable`, `network_down` |
-| `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | | `permission_denied` |
+| `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required` | `permission_denied` |
 | `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
 | `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
-| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `assertion_failed`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress` | everything else |
+| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `assertion_failed`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `no_password_method` | everything else |
 
 Choices worth knowing: `unauthenticated_bind` is `auth_failed` (an empty
 password on a login form is a failed login); `stronger_auth_required` and

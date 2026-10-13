@@ -156,6 +156,24 @@ enum class schema_check {
 	on_first_use,
 };
 
+// How connection::change_password and reset_password change a password.
+enum class password_method {
+	// Pick from the root DSE, read when first needed (one base search) and
+	// kept for the connection until start_tls() (RFC 4513 section 3.1.5:
+	// what was read in clear is read again over TLS): rfc3062 if its
+	// supportedExtension lists password_modify_oid, else active_directory
+	// if its supportedCapabilities lists active_directory_capability_oid
+	// (Samba AD too), else client_errc::no_password_method. A server
+	// offering both gets rfc3062. A root DSE hidden by access controls
+	// advertises neither: choose the method explicitly then.
+	automatic,
+	// RFC 3062 Password Modify (password_modify()). Never reads the root DSE.
+	rfc3062,
+	// Active Directory: a ModifyRequest of unicodePwd (ad_password_value()),
+	// which needs TLS. Never reads the root DSE.
+	active_directory,
+};
+
 struct connection_options
 {
 	// Budget for the whole connect (resolve, TCP, TLS handshake); see
@@ -190,6 +208,9 @@ struct connection_options
 	// does not work. Not allowed with ldaps:// or ldapi:// (invalid_url).
 	bool start_tls = false;
 	ldap::schema_check schema_check = ldap::schema_check::off;
+	// The method change_password() and reset_password() use unless a call
+	// names one.
+	ldap::password_method password_method = ldap::password_method::automatic;
 };
 
 // A search, as a plain aggregate for designated initializers (DESIGN.md
@@ -324,6 +345,19 @@ struct password_modify_params
 	request_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
 };
+
+// LDAP_CAP_ACTIVE_DIRECTORY_OID: in the root DSE's supportedCapabilities of
+// Active Directory and Samba AD domain controllers.
+inline constexpr std::string_view active_directory_capability_oid = "1.2.840.113556.1.4.800";
+
+// The unicodePwd value Active Directory expects (MS-ADTS 3.1.1.3.1.5): the
+// password in double quotes, encoded UTF-16LE, characters outside the BMP
+// as surrogate pairs. `password` is UTF-8; ill-formed UTF-8 fails with
+// client_errc::encode_error (the context never quotes the password). For a
+// ModifyRequest built by hand: replace unicodePwd with it to reset a
+// password, or delete the old value and add the new one in one modify to
+// change it. AD accepts it only over TLS.
+[[nodiscard]] result<std::string> ad_password_value(std::string_view password);
 
 class search_stream;
 class paged_search;
@@ -465,6 +499,34 @@ class connection
 	// generated (genPasswd) when new_password was not given, else nullopt.
 	// Passwords never appear in error contexts.
 	boost::capy::task<result<std::optional<std::string>>> password_modify(password_modify_params request);
+
+	// Password changes that work on OpenLDAP and Active Directory alike:
+	// `method` (nullopt: connection_options::password_method) picks how (see
+	// password_method). change_password is a user's own change, which needs
+	// the old password; reset_password is an administrator's, without it.
+	// Both need a new password (only password_modify() has the server
+	// generate one) and the old one too for a change, else they fail with
+	// std::errc::invalid_argument before anything is sent.
+	//
+	// rfc3062: password_modify() with `user` as userIdentity (left out if
+	// `user` is empty: the bound user). active_directory: one ModifyRequest
+	// of `user`'s unicodePwd (ad_password_value()), deleting the old value
+	// and adding the new one for a change, replacing it for a reset; `user`
+	// may not be empty (client_errc::invalid_dn), and the connection must be
+	// TLS-protected (is_tls(): ldaps:// or after start_tls()), else
+	// client_errc::tls_required before anything is sent. AD's own
+	// diagnostics for common refusals (0000052D: the password policy,
+	// 00000056: a wrong old password, ...) are explained in the error's
+	// context; error::diagnostic keeps the server's text. automatic: the
+	// root DSE decides; if it cannot be read, or advertises no method this
+	// library knows (client_errc::no_password_method), the error says to
+	// choose one. Passwords never appear in errors.
+	boost::capy::task<result<void>> change_password(dn user,
+	  std::string old_password,
+	  std::string new_password,
+	  std::optional<ldap::password_method> method = std::nullopt);
+	boost::capy::task<result<void>>
+	  reset_password(dn user, std::string new_password, std::optional<ldap::password_method> method = std::nullopt);
 
 	// Reads the server's subschema (RFC 4512): the root DSE's
 	// subschemaSubentry (cn=Subschema if it names none), then that entry's

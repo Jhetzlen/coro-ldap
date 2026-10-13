@@ -721,6 +721,45 @@ TEST_CASE("integration: password modify (RFC 3062)", "[integration]")
 	REQUIRE(finish(ioc, c.del({ .entry = entry })).has_value());
 }
 
+TEST_CASE("integration: change_password and reset_password pick RFC 3062", "[integration][password]")
+{
+	REQUIRE_SLAPD();
+	corosio::io_context ioc;
+	auto c = open_admin(ioc);
+	const std::string name = unique("pwc");
+	const ldap::dn entry = *ldap::dn::parse("uid=" + name + ",ou=people,dc=example,dc=org");
+	REQUIRE(finish(ioc,
+	  c.add({ .entry = entry,
+		.attributes = { { "objectClass", { "inetOrgPerson" } },
+		  { "uid", { name } },
+		  { "cn", { "Password" } },
+		  { "sn", { "Test" } },
+		  { "userPassword", { "start" } } } }))
+		.has_value());
+	const auto binds = [&](std::string password) {
+		auto u = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
+		return finish(ioc, u.simple_bind(entry, std::move(password))).has_value();
+	};
+
+	// slapd's root DSE lists the password modify extension (automatic).
+	const std::string first = "pässwörd 日本 \xF0\x9F\x94\x91";
+	REQUIRE(finish(ioc, c.reset_password(entry, first)).has_value());
+	CHECK(binds(first));
+	REQUIRE(finish(ioc, c.change_password(entry, first, "second")).has_value());
+	CHECK(binds("second"));
+	CHECK_FALSE(binds(first));
+	// slapd checks the old password.
+	auto wrong = finish(ioc, c.change_password(entry, "not-the-password", "third"));
+	REQUIRE_FALSE(wrong.has_value());
+	INFO(wrong.error().message());
+	CHECK_FALSE(std::string(wrong.error().message()).contains("not-the-password"));
+	CHECK(binds("second"));
+	// Explicitly, without the root DSE.
+	REQUIRE(finish(ioc, c.reset_password(entry, "fourth", ldap::password_method::rfc3062)).has_value());
+	CHECK(binds("fourth"));
+	REQUIRE(finish(ioc, c.del({ .entry = entry })).has_value());
+}
+
 // ---------------------------------------------------------------- sync connection
 
 TEST_CASE("integration: the sync connection", "[integration][sync]")
