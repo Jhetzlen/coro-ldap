@@ -452,6 +452,16 @@ class connection
 	// (e.g. SCRAM-SHA-256 with a wrong server signature), the server
 	// considers the connection bound, so it is closed. The same rules as
 	// simple_bind apply otherwise. `mechanism` must outlive the task.
+	// A step the mechanism offloads (sasl_mechanism::offload_start,
+	// offload_step: GSSAPI's calls to the KDC) runs on a thread of its own
+	// while the task waits, within operation_timeout and the stop token.
+	// Giving up on it fails the bind with capy::error::timeout or canceled
+	// and leaves the step running on its thread (it is not interrupted);
+	// before the first BindRequest nothing was sent, so the connection
+	// stays usable; later the exchange is aborted as for a mechanism error
+	// (a cancellation cancels that abort too, which closes the connection).
+	// The io_context counts the running step as work: run() returns only
+	// once it is over.
 	boost::capy::task<result<void>> sasl_bind(sasl_mechanism &mechanism, dn name = {});
 
 	// Runs a search to its end and returns the entries in the order received,

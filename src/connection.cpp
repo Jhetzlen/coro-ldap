@@ -7,10 +7,12 @@
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/async_event.hpp>
+#include <boost/capy/ex/async_waker.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/this_coro.hpp>
+#include <boost/capy/ex/work_guard.hpp>
 #include <boost/corosio/timeout.hpp>
 
 #include <algorithm>
@@ -18,6 +20,7 @@
 #include <charconv>
 #include <cstddef>
 #include <deque>
+#include <exception>
 #include <memory>
 #include <memory_resource>
 #include <new>
@@ -27,6 +30,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <type_traits>
 #include <typeindex>
 #include <unordered_map>
@@ -1056,6 +1060,59 @@ namespace {
 		self->shut(make_error(client_errc::unexpected_response, text), true);
 	}
 
+	// Runs a mechanism's offloaded step (sasl_work) on a thread of its own
+	// and waits for its result, within the operation timeout and the stop
+	// token. Errors are without the bind's context (sasl_bind adds it).
+	// The thread shares `offloaded` with this wait, so giving up (timeout,
+	// cancellation, the task destroyed) leaves the work running with what
+	// it owns; its wake() then latches a token nobody reads, and the last
+	// owner frees the work and its result. The thread holds work on the
+	// connection's io_context until it is done, so run() returns (and the
+	// io_context can be destroyed) only after the work: a wakeup the
+	// thread posts never reaches a destroyed context. A thread per call:
+	// the work blocks for as long as the network takes (a Kerberos KDC),
+	// which a shared pool would spend its threads on.
+	struct offloaded
+	{
+		explicit offloaded(sasl_work w) noexcept : work(std::move(w)) {}
+		sasl_work work;
+		std::optional<result<std::optional<std::string>>> value{};
+		std::exception_ptr thrown{};
+		capy::async_waker done{};
+	};
+
+	capy::task<result<std::optional<std::string>>> run_offloaded(impl_ref self, sasl_work work)
+	{
+		auto shared = std::make_shared<offloaded>(std::move(work));
+		try {
+			std::thread([shared, guard = capy::work_guard(self->ex)]() mutable noexcept {
+				try {
+					shared->value.emplace(shared->work());
+				} catch (...) {
+					shared->thrown = std::current_exception();
+				}
+				shared->work = nullptr;// the mechanism's state, released on this thread
+				shared->done.wake();
+				shared.reset();
+				guard.reset();// last: the io_context may stop and be destroyed after this
+			}).detach();
+		} catch (const std::system_error &e) {
+			co_return fail(e.code(), "could not start a thread for the mechanism's step");
+		}
+		const auto deadline = deadline_after(self->default_timeout);
+		std::error_code ec;
+		if (deadline) {
+			auto [e] = co_await corosio::timeout(shared->done.wait(), *deadline);
+			ec = e;
+		} else {
+			auto [e] = co_await shared->done.wait();
+			ec = e;
+		}
+		if (ec) co_return fail(ec, "gave up on the mechanism's step (it runs on, on its own thread)");
+		if (shared->thrown) std::rethrow_exception(shared->thrown);
+		co_return std::move(*shared->value);
+	}
+
 	// The ldap_result of a response, whatever the operation.
 	const ldap_result &result_of(const message &m)
 	{
@@ -1161,7 +1218,11 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 	sasl_bind_context bind_context;
 	if (self->transport.type() == net::transport::kind::tcp) bind_context.host = self->transport.host();
 	mechanism.prepare(bind_context);
-	auto creds = mechanism.start();
+	result<std::optional<std::string>> creds;
+	if (auto work = mechanism.offload_start())
+		creds = co_await run_offloaded(self, std::move(work));
+	else
+		creds = mechanism.start();
 	for (int step = 0;; ++step) {
 		if (!creds || step == max_steps) {
 			auto e = creds ? make_error(client_errc::unexpected_response,
@@ -1194,7 +1255,10 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 		}
 		if (r.result.result_code != std::to_underlying(errc::sasl_bind_in_progress))
 			co_return std::unexpected(r.result.to_error(context));
-		creds = mechanism.step(server_creds);
+		if (auto work = mechanism.offload_step(server_creds))
+			creds = co_await run_offloaded(self, std::move(work));
+		else
+			creds = mechanism.step(server_creds);
 	}
 }
 

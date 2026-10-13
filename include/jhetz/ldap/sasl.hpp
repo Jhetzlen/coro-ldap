@@ -11,10 +11,16 @@
 // GSSAPI (Kerberos) sasl_gssapi (sasl_gssapi.hpp, in jhetz::ldap_net when
 // built with JHETZ_LDAP_WITH_GSSAPI). Implement sasl_mechanism to add
 // another. A mechanism object serves one bind at a time.
+//
+// start(), step() and complete() run on the connection's I/O thread, so
+// they must not block. A mechanism whose steps may block (network I/O,
+// like GSSAPI contacting a Kerberos KDC) hands them to sasl_bind as work
+// to run on a thread of its own instead (offload_start, offload_step).
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -30,6 +36,15 @@ struct sasl_bind_context
 	// for transports wrap()ped by the caller.
 	std::string_view host{};
 };
+
+// A step's credentials computed off the I/O thread (offload_start,
+// offload_step): sasl_bind calls it once, on a thread of its own, and waits
+// for it. The wait honours the bind's timeout and cancellation, but the
+// work itself is not interrupted: once sasl_bind gave up, the work runs on
+// while the mechanism may be destroyed or start another bind, so it must
+// own (or share) everything it uses, and the mechanism must not touch that
+// state again until the work is over. Its result is then discarded.
+using sasl_work = std::move_only_function<result<std::optional<std::string>>()>;
 
 class sasl_mechanism
 {
@@ -55,6 +70,17 @@ class sasl_mechanism
 	[[nodiscard]] virtual result<void> complete(std::optional<std::string_view> server_creds)
 	{
 		(void)server_creds;
+		return {};
+	}
+
+	// For a step that may block: the work of start() or step(), to run on
+	// another thread (sasl_work). sasl_bind calls these in place of start()
+	// and step(), and uses the work's result as theirs; empty work (the
+	// default) means start() or step() is called on the I/O thread instead.
+	[[nodiscard]] virtual sasl_work offload_start() { return {}; }
+	[[nodiscard]] virtual sasl_work offload_step(std::optional<std::string_view> challenge)
+	{
+		(void)challenge;
 		return {};
 	}
 };

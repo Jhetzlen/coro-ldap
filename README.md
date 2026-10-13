@@ -239,7 +239,9 @@ itself stays dependency-free.
   `sasl_gssapi` (`jhetz/ldap/sasl_gssapi.hpp`, Kerberos V5, RFC 4752;
   optional, see below) too when built with `JHETZ_LDAP_WITH_GSSAPI`,
   and `sasl_mechanism` is the interface for others (`prepare()` gives a
-  mechanism the URL's host before each bind). When the server
+  mechanism the URL's host before each bind; a step that may block, such
+  as a network call, is handed to `sasl_bind` with `offload_start()` /
+  `offload_step()` and runs on a thread of its own). When the server
   reports success but the mechanism's `complete()` refuses it (e.g. a
   wrong SCRAM server signature), `sasl_bind` returns the error and closes
   the connection, since the server considers it bound.
@@ -264,6 +266,17 @@ itself stays dependency-free.
   KDC) are `client_errc::gssapi_failure` (`cond::auth_failed`), the
   context quoting GSS-API's major and minor status messages; never
   tokens or credentials. Every GSS-API handle is released (RAII).
+  The GSS-API calls that may block (`gss_acquire_cred`,
+  `gss_init_sec_context`: MIT krb5 does DNS lookups and asks the KDC for
+  the service ticket, with krb5.conf's `kdc_timeout` and `max_retries`)
+  run on a thread of their own, one per call, so the io_context (or the
+  `sync::connection`'s I/O thread) is not stalled. `operation_timeout`
+  and cancellation stop the bind's wait (`capy::error::timeout` /
+  `canceled`; before the first BindRequest nothing was sent and the
+  connection stays usable), not the Kerberos call, which runs to its end
+  on its thread; `io_context::run()` (and a `sync::connection`'s
+  destructor) returns only after it. That needs an io_context that
+  accepts posts from other threads (the default `locking_mode::safe`).
   `examples/gssapi.cpp` binds with StartTLS and the default ticket.
 - `jhetz/ldap/controls.hpp`: typed request controls in a `std::variant`
   (`ldap::paged`, `manage_dsa_it`, `proxied_authorization`,

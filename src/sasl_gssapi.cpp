@@ -9,6 +9,7 @@
 #include <unicode/utf8.h>
 #include <unicode/utypes.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -202,9 +203,22 @@ struct sasl_gssapi::state
 	};
 
 	phase at = phase::idle;
+	// Set while a step runs on sasl_bind's thread (offload_start,
+	// offload_step): the mechanism leaves the state alone until it clears.
+	std::atomic<bool> busy{ false };
 	name_handle target;
 	cred_handle credentials;
 	context_handle context;
+
+	// Clears `busy` at the end of an offloaded step, whatever its outcome.
+	struct busy_scope
+	{
+		state &s;
+		explicit busy_scope(state &s_) noexcept : s(s_) {}
+		busy_scope(const busy_scope &) = delete;
+		busy_scope &operator=(const busy_scope &) = delete;
+		~busy_scope() { s.busy.store(false, std::memory_order_release); }
+	};
 
 	void reset() noexcept
 	{
@@ -272,9 +286,49 @@ struct sasl_gssapi::state
 		at = phase::replied;
 		return std::optional<std::string>(std::string(wrapped.view()));
 	}
+
+	// The first token: names imported, credentials acquired (for a given
+	// principal), first gss_init_sec_context call.
+	result<std::optional<std::string>> begin(const sasl_gssapi_options &options, std::string_view host)
+	{
+		std::string target_name = options.target;
+		if (target_name.empty()) {
+			if (host.empty())
+				return input_error(
+				  "no target: the connection has no host name (ldapi://, or a wrapped transport): set the target");
+			target_name = "ldap@";
+			target_name += host;
+		}
+		if (auto c = check_text(target_name, "target"); !c) return std::unexpected(std::move(c.error()));
+		if (auto c = check_text(options.principal, "principal"); !c) return std::unexpected(std::move(c.error()));
+		if (auto c = check_text(options.authz_id, "authorization identity"); !c)
+			return std::unexpected(std::move(c.error()));
+
+		if (auto n = import_name(target_name, GSS_C_NT_HOSTBASED_SERVICE, target); !n)
+			return std::unexpected(std::move(n.error()));
+		if (!options.principal.empty()) {
+			name_handle principal;
+			if (auto n = import_name(options.principal, GSS_C_NT_USER_NAME, principal); !n)
+				return std::unexpected(std::move(n.error()));
+			OM_uint32 minor = 0;
+			const OM_uint32 major = gss_acquire_cred(&minor,
+			  principal.get(),
+			  GSS_C_INDEFINITE,
+			  &krb5_oid_set,
+			  GSS_C_INITIATE,
+			  credentials.out(),
+			  nullptr,
+			  nullptr);
+			if (GSS_ERROR(major) != 0) {
+				reset();
+				return gss_failure("gss_acquire_cred", major, minor);
+			}
+		}
+		return init(std::nullopt);
+	}
 };
 
-sasl_gssapi::sasl_gssapi(sasl_gssapi_options options) : options_(std::move(options)), state_(std::make_unique<state>())
+sasl_gssapi::sasl_gssapi(sasl_gssapi_options options) : options_(std::move(options)), state_(std::make_shared<state>())
 {}
 
 sasl_gssapi::~sasl_gssapi() = default;
@@ -283,50 +337,41 @@ sasl_gssapi &sasl_gssapi::operator=(sasl_gssapi &&) noexcept = default;
 
 void sasl_gssapi::prepare(const sasl_bind_context &context) { host_.assign(context.host); }
 
-result<std::optional<std::string>> sasl_gssapi::start()
+sasl_work sasl_gssapi::offload_start()
 {
-	if (state_ == nullptr) state_ = std::make_unique<state>();// moved from
-	state &s = *state_;
-	s.reset();
-	std::string target = options_.target;
-	if (target.empty()) {
-		if (host_.empty())
-			return input_error(
-			  "no target: the connection has no host name (ldapi://, or a wrapped transport): set the target");
-		target = "ldap@" + host_;
-	}
-	if (auto c = check_text(target, "target"); !c) return std::unexpected(std::move(c.error()));
-	if (auto c = check_text(options_.principal, "principal"); !c) return std::unexpected(std::move(c.error()));
-	if (auto c = check_text(options_.authz_id, "authorization identity"); !c)
-		return std::unexpected(std::move(c.error()));
-
-	if (auto n = import_name(target, GSS_C_NT_HOSTBASED_SERVICE, s.target); !n)
-		return std::unexpected(std::move(n.error()));
-	if (!options_.principal.empty()) {
-		name_handle principal;
-		if (auto n = import_name(options_.principal, GSS_C_NT_USER_NAME, principal); !n)
-			return std::unexpected(std::move(n.error()));
-		OM_uint32 minor = 0;
-		const OM_uint32 major = gss_acquire_cred(&minor,
-		  principal.get(),
-		  GSS_C_INDEFINITE,
-		  &krb5_oid_set,
-		  GSS_C_INITIATE,
-		  s.credentials.out(),
-		  nullptr,
-		  nullptr);
-		if (GSS_ERROR(major) != 0) {
-			s.reset();
-			return gss_failure("gss_acquire_cred", major, minor);
-		}
-	}
-	return s.init(std::nullopt);
+	// A new state for each bind: one whose step sasl_bind gave up on may
+	// still be in use by its thread.
+	auto s = std::make_shared<state>();
+	s->busy.store(true, std::memory_order_relaxed);
+	state_ = s;
+	return [s, options = options_, host = host_]() {
+		const state::busy_scope scope{ *s };
+		return s->begin(options, host);
+	};
 }
+
+sasl_work sasl_gssapi::offload_step(std::optional<std::string_view> challenge)
+{
+	// Only gss_init_sec_context may block; step() handles the rest
+	// (the security layer reply, errors) on the I/O thread.
+	if (state_ == nullptr || state_->busy.load(std::memory_order_acquire) || state_->at != state::phase::negotiating
+		|| !challenge)
+		return {};
+	auto s = state_;
+	s->busy.store(true, std::memory_order_relaxed);
+	return [s, token = std::string(*challenge)]() {
+		const state::busy_scope scope{ *s };
+		return s->init(token);
+	};
+}
+
+result<std::optional<std::string>> sasl_gssapi::start() { return offload_start()(); }
 
 result<std::optional<std::string>> sasl_gssapi::step(std::optional<std::string_view> challenge)
 {
 	if (state_ == nullptr) return refused("a challenge before the exchange started");
 	state &s = *state_;
+	if (s.busy.load(std::memory_order_acquire)) return refused("a challenge while the previous step still runs");
 	switch (s.at) {
 	case state::phase::negotiating:
 		if (!challenge) {
@@ -356,6 +401,7 @@ result<void> sasl_gssapi::complete(std::optional<std::string_view> server_creds)
 {
 	if (state_ == nullptr) return refused("success before the exchange started");
 	state &s = *state_;
+	if (s.busy.load(std::memory_order_acquire)) return refused("success while the previous step still runs");
 	const bool replied = s.at == state::phase::replied;
 	// No security layer: the context is not used after the bind.
 	s.reset();

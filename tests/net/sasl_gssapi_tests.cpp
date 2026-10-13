@@ -199,3 +199,49 @@ TEST_CASE("gssapi: challenges and success out of order", "[net][sasl][gssapi]")
 	CHECK_FALSE(mech.step(std::nullopt).has_value());
 	CHECK(mech.name() == "GSSAPI");
 }
+
+// sasl_bind runs the gss_acquire_cred and gss_init_sec_context calls on a
+// thread of its own (offload_start, offload_step): the work shares the
+// GSS-API handles with the mechanism, which leaves them alone meanwhile.
+TEST_CASE("gssapi: offloaded steps", "[net][sasl][gssapi]")
+{
+	const scoped_env config("KRB5_CONFIG", "/dev/null");
+	const scoped_env cache("KRB5CCNAME", "FILE:/nonexistent/jhetz-ldap-test-ccache");
+	const scoped_env keytab("KRB5_CLIENT_KTNAME", "FILE:/nonexistent/jhetz-ldap-test-keytab");
+
+	SECTION("the work outlives the mechanism")
+	{
+		ldap::sasl_work work;
+		{
+			ldap::sasl_gssapi mech({ .target = "ldap@dc1.example.org" });
+			work = mech.offload_start();
+			REQUIRE(work);
+		}
+		auto r = work();
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
+		CHECK_THAT(std::string(r.error().context), StartsWith("gss_init_sec_context: "));
+	}
+	SECTION("steps while the work runs are refused; start() begins anew")
+	{
+		ldap::sasl_gssapi mech({ .target = "ldap@dc1.example.org" });
+		auto work = mech.offload_start();
+		auto challenge = mech.step("token"sv);
+		REQUIRE_FALSE(challenge.has_value());
+		CHECK(challenge.error().context == "a challenge while the previous step still runs");
+		auto success = mech.complete(std::nullopt);
+		REQUIRE_FALSE(success.has_value());
+		CHECK(success.error().context == "success while the previous step still runs");
+		CHECK_FALSE(mech.offload_step("token"sv));// step() would refuse it
+		auto again = mech.start();
+		REQUIRE_FALSE(again.has_value());
+		CHECK(again.error().code == ldap::client_errc::gssapi_failure);
+		CHECK_FALSE(work().has_value());// the first state, still its own
+	}
+	SECTION("nothing to offload outside the context establishment")
+	{
+		ldap::sasl_gssapi mech;
+		CHECK_FALSE(mech.offload_step("token"sv));
+		CHECK_FALSE(mech.offload_step(std::nullopt));
+	}
+}

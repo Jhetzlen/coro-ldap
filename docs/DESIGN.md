@@ -281,6 +281,41 @@ closes it. An end-to-end EXTERNAL test needs a real server
 (default: ignored) with the URL's host (empty for ldapi:// and wrapped
 transports), which GSSAPI needs for its default target.
 
+`start()`, `step()` and `complete()` run on the I/O thread. A mechanism
+whose steps may block (GSSAPI: the KDC) overrides `offload_start()` /
+`offload_step(challenge)`, which `sasl_bind` calls in their place: they
+return a `sasl_work` (`std::move_only_function` returning the step's
+`result<std::optional<std::string>>`), empty for "call start() / step()
+here" (the default, so EXTERNAL and SCRAM are unchanged). Non-empty work
+runs on a `std::thread` of its own, detached, and wakes the bind through
+a `capy::async_waker` (zero-allocation, `wake()` from any thread, the
+resumption posted to the waiter's executor); the bind waits on it with
+`corosio::timeout` (`operation_timeout`) and its stop token, like a
+response. Giving up (timeout, cancellation, the task destroyed) leaves
+the work running: it shares a `shared_ptr` block (the work, its result,
+the waker) with the wait, so nothing it touches dies under it, and its
+late `wake()` only latches a token nobody reads. The work owns or shares
+everything it uses (the mechanism may be destroyed, or start another
+bind, meanwhile): GSSAPI's work holds the handles' block by `shared_ptr`,
+marked busy while it runs (`step()` and `complete()` refuse it,
+`offload_start()` makes a new block), so no handle is used from two
+threads at once. The thread holds a `capy::work_guard` on the
+connection's io_context and drops it last: `run()` (and
+`sync::connection`'s destructor) returns only after the work, so the
+post never reaches a destroyed context, and no thread is left running
+past the io_context in normal use. The posts from the worker need
+Corosio's default `locking_mode::safe`. A thread per call rather than a
+pool: Capy's system pool (`get_system_context()`) is shared and sized for
+CPU work, and a KDC call can block one of its threads for many seconds;
+Corosio's blocking-call pool (used for getaddrinfo) is
+`corosio::detail::thread_pool`, not public, with one thread per
+io_context by default that name lookups would then wait behind. Creating
+a thread costs little next to a Kerberos exchange. Failing to create one
+fails the bind with its `std::system_error` code. Timing out before the
+first BindRequest sends nothing (the connection stays usable); later the
+exchange is aborted as for a mechanism error (a cancellation also cancels
+that abort, which closes the connection).
+
 SCRAM-SHA-256 (`sasl_scram.hpp`, RFC 5802 / RFC 7677, in jhetz::ldap_net
 since it needs OpenSSL): `sasl_scram_sha256(username, password,
 authz_id)`. `start()` sends the client-first-message with a fresh
@@ -341,7 +376,14 @@ layer nothing uses it after the bind. The layer messages are pure
 functions (`detail::parse_gssapi_layer_offer`, `gssapi_layer_reply`),
 unit tested without Kerberos. GSS-API handles (names, credentials,
 context, buffers) are owned by small RAII types; `gssapi.h` stays out of
-the public header (pimpl). Failures are `client_errc::gssapi_failure`
+the public header (pimpl). `gss_acquire_cred` and every
+`gss_init_sec_context` call run off the I/O thread (`offload_start`,
+`offload_step`, above): with MIT krb5 the first one resolves the KDC
+(DNS SRV, possibly canonicalizing the host) and sends the TGS-REQ,
+bounded only by krb5.conf (`kdc_timeout`, `max_retries`, per KDC); the
+bind's timeout and cancellation do not interrupt that call, they stop
+waiting for it. `gss_unwrap` / `gss_wrap` (local) stay on the I/O thread.
+Failures are `client_errc::gssapi_failure`
 (`cond::auth_failed`) with the call's name and `gss_display_status`'s
 major and minor messages (sanitized, as server text is), never tokens.
 Names are UTF-8, checked (well-formed, no control characters) and given
@@ -1001,7 +1043,10 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   finish with `not_connected` and release the block.
 - Threading: everything runs on the executor of the connection's
   io_context (`connection::executor()`); from another thread, start the
-  operation there (`capy::run_async(conn.executor())(task)`).
+  operation there (`capy::run_async(conn.executor())(task)`). The one
+  exception is a SASL step a mechanism offloads (GSSAPI's calls to the
+  KDC, section 3): it runs on a thread of its own and wakes the bind
+  through the executor; the io_context counts it as outstanding work.
 
 - Implemented (#12, `jhetz/ldap/sync.hpp`): `sync::connection` owns an
   io_context and one I/O thread (kept alive by a work guard). Each method
@@ -1014,7 +1059,8 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   the (since removed) Corosio examples was not reused: it flattens errors
   to `std::error_code`, losing `ldap::error`'s diagnostic and context. The destructor closes the
   connection on the I/O thread, drops the work guard and joins, which
-  waits for a detached getaddrinfo still running. No connection pool yet.
+  waits for a detached getaddrinfo, or an offloaded SASL step (GSSAPI),
+  still running. No connection pool yet.
 - Calling a blocking method from inside the facade's own I/O thread would
   deadlock; it returns `client_errc::would_deadlock` instead.
 - The facade exposes exactly the same request, entry, error and mapping types;

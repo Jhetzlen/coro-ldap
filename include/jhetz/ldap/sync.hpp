@@ -26,7 +26,9 @@
 // finish with not_connected, and joins the I/O thread. A host name lookup
 // in progress (net::connect runs getaddrinfo detached, which cannot be
 // interrupted) is waited for, so destruction can take as long as the
-// system resolver's own timeout. Do not destroy a sync::connection while
+// system resolver's own timeout; so is a SASL step sasl_bind gave up on
+// but which still runs on its thread (GSSAPI waiting for a KDC, bounded
+// by krb5.conf's kdc_timeout and max_retries). Do not destroy a sync::connection while
 // another thread is inside one of its methods.
 #pragma once
 

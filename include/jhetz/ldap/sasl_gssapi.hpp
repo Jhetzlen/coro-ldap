@@ -14,6 +14,23 @@
 // (an optional dependency, off by default).
 //
 // Behaviour:
+// - Threading: gss_acquire_cred and gss_init_sec_context may block for a
+//   long time (MIT krb5 resolves the KDC and the realm through DNS and
+//   sends the TGS-REQ for the service ticket, with its own retries and
+//   timeouts: krb5.conf's kdc_timeout and max_retries, several seconds per
+//   unreachable KDC). connection::sasl_bind runs them on a thread of its
+//   own (one per call, offload_start and offload_step), so the io_context
+//   (or the sync::connection's I/O thread) goes on with other work. The
+//   bind's timeout (connection_options::operation_timeout) and
+//   cancellation stop the wait, not the call: the bind then fails with
+//   capy::error::timeout or canceled, and the call runs to its end on its
+//   thread, with handles of its own, released there. The io_context keeps
+//   the call as outstanding work: run() returns (and a sync::connection's
+//   destructor) only once it is over. The io_context must accept posts
+//   from other threads (Corosio's default locking_mode::safe). Before the
+//   first BindRequest (the first call, which contacts the KDC) nothing was
+//   sent: the connection stays usable. start() and step() called directly
+//   still block their caller.
 // - The target is a host-based service name (GSS_C_NT_HOSTBASED_SERVICE),
 //   "ldap@<host>" with the host of the URL connected to (ldap://,
 //   ldaps://), unless sasl_gssapi_options::target names another. Kerberos
@@ -44,7 +61,8 @@
 // - Every GSS-API handle (names, credentials, the security context, output
 //   buffers) is released when no longer needed: the security context when
 //   the bind succeeds (no security layer: nothing uses it afterwards), when
-//   the mechanism fails, at the next start(), or with the object.
+//   the mechanism fails, at the next start(), or with the object; those of
+//   a call sasl_bind gave up on, by its thread once it ends.
 //
 // Errors (contexts never contain tokens or credentials, nor name the
 // mechanism: connection::sasl_bind prefixes "sasl bind GSSAPI"):
@@ -107,11 +125,19 @@ class sasl_gssapi final : public sasl_mechanism
 	std::string_view name() const noexcept override { return "GSSAPI"; }
 	// Keeps the host, for the default target.
 	void prepare(const sasl_bind_context &context) override;
-	// The first token of the Kerberos exchange (an AP-REQ).
+	// The first token of the Kerberos exchange (an AP-REQ). Blocks while
+	// the KDC is contacted: sasl_bind calls offload_start() instead.
 	[[nodiscard]] result<std::optional<std::string>> start() override;
 	// The next token while the security context is being established, then
 	// the wrapped security layer reply to the server's wrapped offer.
 	[[nodiscard]] result<std::optional<std::string>> step(std::optional<std::string_view> challenge) override;
+	// start()'s work for another thread, and step()'s while the security
+	// context is being established (the gss_init_sec_context calls). The
+	// work shares the GSS-API handles with the mechanism, which leaves them
+	// alone until it is done: a step meanwhile is refused, and start()
+	// begins with new handles.
+	[[nodiscard]] sasl_work offload_start() override;
+	[[nodiscard]] sasl_work offload_step(std::optional<std::string_view> challenge) override;
 	// Succeeds only once the security layer reply was sent.
 	[[nodiscard]] result<void> complete(std::optional<std::string_view> server_creds) override;
 
@@ -119,7 +145,7 @@ class sasl_gssapi final : public sasl_mechanism
 	struct state;// GSS-API handles; gssapi.h stays out of this header
 	sasl_gssapi_options options_;
 	std::string host_;
-	std::unique_ptr<state> state_;
+	std::shared_ptr<state> state_;// shared with an offloaded step
 };
 
 namespace detail {

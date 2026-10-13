@@ -9,8 +9,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <atomic>
+#include <chrono>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace ldap = jhetz::ldap;
@@ -68,6 +74,91 @@ class echo_mechanism final : public ldap::sasl_mechanism
 		return {};
 	}
 };
+
+// What the offloaded steps of offload_mechanism share with the test (and
+// not with the mechanism, which may be gone while they run): each step
+// waits for a permit, on the thread sasl_bind gives it.
+struct offload_gate
+{
+	std::atomic<int> permits{ 0 };
+	std::atomic<int> started{ 0 };
+	std::atomic<int> finished{ 0 };
+	std::mutex mutex;
+	std::vector<std::thread::id> threads;
+
+	// Lets the first `n` steps through.
+	void allow(int n)
+	{
+		permits.store(n);
+		permits.notify_all();
+	}
+	void enter()
+	{
+		const int index = started.fetch_add(1);
+		{
+			const std::lock_guard lock(mutex);
+			threads.push_back(std::this_thread::get_id());
+		}
+		for (int n = permits.load(); n <= index; n = permits.load()) permits.wait(n);
+	}
+};
+
+// Lets every step through at the end of a test, before the mock server
+// (declared earlier) runs its io_context out of work.
+struct open_at_exit
+{
+	std::shared_ptr<offload_gate> gate;
+	explicit open_at_exit(std::shared_ptr<offload_gate> g) noexcept : gate(std::move(g)) {}
+	open_at_exit(const open_at_exit &) = delete;
+	open_at_exit &operator=(const open_at_exit &) = delete;
+	~open_at_exit() { gate->allow(1000); }
+};
+
+// Steps that may block (sasl_mechanism::offload_start, offload_step), as
+// GSSAPI's: "hello", then "re:<challenge>", each once the gate allows it.
+class offload_mechanism final : public ldap::sasl_mechanism
+{
+  public:
+	std::shared_ptr<offload_gate> gate = std::make_shared<offload_gate>();
+
+	std::string_view name() const noexcept override { return "X-SLOW"; }
+	ldap::result<std::optional<std::string>> start() override
+	{
+		return ldap::fail(ldap::client_errc::unexpected_response, "start() called");
+	}
+	ldap::result<std::optional<std::string>> step(std::optional<std::string_view>) override
+	{
+		return ldap::fail(ldap::client_errc::unexpected_response, "step() called");
+	}
+	ldap::sasl_work offload_start() override
+	{
+		return [g = gate]() -> ldap::result<std::optional<std::string>> {
+			g->enter();
+			g->finished.fetch_add(1);
+			return std::optional<std::string>("hello");
+		};
+	}
+	ldap::sasl_work offload_step(std::optional<std::string_view> c) override
+	{
+		return [g = gate, c = std::string(c.value_or(""))]() -> ldap::result<std::optional<std::string>> {
+			g->enter();
+			g->finished.fetch_add(1);
+			return std::optional<std::string>("re:" + c);
+		};
+	}
+};
+
+// Runs `ioc` until `done()` holds, at most io_limit: for conditions another
+// thread makes true, which drive_until() would sleep through (run_one()
+// waits for a handler).
+template<class Pred> void poll_until(corosio::io_context &ioc, Pred done)
+{
+	const auto deadline = std::chrono::steady_clock::now() + io_limit;
+	while (!done() && std::chrono::steady_clock::now() < deadline) {
+		ioc.run_one_for(std::chrono::milliseconds(1));
+		ioc.restart();
+	}
+}
 
 }// namespace
 
@@ -467,6 +558,122 @@ TEST_CASE("sasl: SCRAM-SHA-256 with the RFC 7677 test vector", "[net][sasl][scra
 		CHECK(r.error().code == ldap::client_errc::unexpected_response);
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("does not start with the client nonce"));
 		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[1] == abort_req(2));
+	}
+}
+
+// A mechanism's blocking steps run on a thread of their own (offload_start,
+// offload_step), and the bind's timeout and cancellation apply to the wait
+// (coro-ldap-2px.1).
+TEST_CASE("sasl: offloaded steps run off the I/O thread", "[net][sasl][offload]")
+{
+	mock_ldap m;
+	m.serve({ answer({ sasl_resp(1, 14, "c1") }), answer({ sasl_resp(2, 0) }) });
+	offload_mechanism mech;
+	mech.gate->allow(2);
+	REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 2);
+	CHECK(m.log.received[0] == sasl_req(1, "X-SLOW", "hello"));
+	CHECK(m.log.received[1] == sasl_req(2, "X-SLOW", "re:c1"));
+	CHECK(mech.gate->finished == 2);
+	const std::lock_guard lock(mech.gate->mutex);
+	REQUIRE(mech.gate->threads.size() == 2);
+	for (auto id : mech.gate->threads) CHECK(id != std::this_thread::get_id());
+}
+
+TEST_CASE("sasl: a timeout or cancellation gives up on an offloaded step", "[net][sasl][offload][cancel][timeout]")
+{
+	SECTION("timeout before the first request: nothing sent, the connection stays usable")
+	{
+		mock_ldap m({ .operation_timeout = std::chrono::milliseconds(100) });
+		m.serve({ answer({ done_msg(1) }) });
+		auto mech = std::make_unique<offload_mechanism>();
+		const auto gate = mech->gate;
+		const open_at_exit opener{ gate };
+		auto r = m.run(m.conn.sasl_bind(*mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::timeout);
+		CHECK(r.error().context == "sasl bind X-SLOW: gave up on the mechanism's step (it runs on, on its own thread)");
+		CHECK(m.conn.is_open());
+		// The step still runs, with what it owns: the mechanism can go.
+		mech.reset();
+		CHECK(gate->finished == 0);
+		CHECK(m.run(m.conn.search({})).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));
+		// The io_context keeps running until the step is over (its wakeup
+		// then reaches nobody): run() returns after it, never before.
+		std::jthread later([gate] {
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			gate->allow(1);
+		});
+		m.sockets.client.close();
+		m.sockets.server.close();
+		drive(m.ioc);
+		CHECK(gate->finished == 1);
+	}
+	SECTION("cancellation before the first request: nothing sent, the connection stays usable")
+	{
+		mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 0) }) });
+		offload_mechanism mech;
+		const open_at_exit opener{ mech.gate };
+		std::stop_source stop;
+		outcome<ldap::result<void>> bind;
+		spawn(m.ioc, stop.get_token(), m.conn.sasl_bind(mech), bind);
+		poll_until(m.ioc, [&] { return mech.gate->started == 1; });
+		REQUIRE(mech.gate->started == 1);
+		CHECK_FALSE(bind.done());
+		stop.request_stop();
+		drive_until(m.ioc, [&] { return bind.done(); });
+		REQUIRE_FALSE(bind.get().has_value());
+		CHECK(bind.get().error().code == ldap::cond::canceled);
+		CHECK(m.conn.is_open());
+		// Another bind with the same mechanism, while the first step runs on.
+		mech.gate->allow(2);
+		CHECK(m.run(m.conn.sasl_bind(mech)).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(m.log.received[0] == sasl_req(1, "X-SLOW", "hello"));
+	}
+	SECTION("timeout during the exchange: aborted as for a mechanism error")
+	{
+		mock_ldap m({ .operation_timeout = std::chrono::milliseconds(100) });
+		m.serve({ answer({ sasl_resp(1, 14, "c1") }), answer({ bind_resp(2) }) });
+		offload_mechanism mech;
+		const open_at_exit opener{ mech.gate };
+		mech.gate->allow(1);// start, not the step
+		auto r = m.run(m.conn.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::timeout);
+		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[0] == sasl_req(1, "X-SLOW", "hello"));
+		CHECK(m.log.received[1] == abort_req(2));
+	}
+	SECTION("cancellation during the exchange: the abort is cancelled too, the connection closed")
+	{
+		mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 14, "c1") }), step{}, client_hangs_up() });
+		offload_mechanism mech;
+		const open_at_exit opener{ mech.gate };
+		mech.gate->allow(1);
+		std::stop_source stop;
+		outcome<ldap::result<void>> bind;
+		spawn(m.ioc, stop.get_token(), m.conn.sasl_bind(mech), bind);
+		poll_until(m.ioc, [&] { return mech.gate->started == 2; });
+		REQUIRE(mech.gate->started == 2);
+		stop.request_stop();
+		drive_until(m.ioc, [&] { return bind.done(); });
+		REQUIRE_FALSE(bind.get().has_value());
+		CHECK(bind.get().error().code == ldap::cond::canceled);
+		CHECK_FALSE(m.conn.is_open());
+		m.sockets.client.close();// closing a wrapped transport leaves the socket open
 		m.check_server();
 		REQUIRE(m.log.received.size() == 2);
 		CHECK(m.log.received[1] == abort_req(2));
