@@ -686,8 +686,14 @@ TEST_CASE("sasl: a timeout or cancellation gives up on an offloaded step", "[net
 // stop() when the io_context was destroyed).
 TEST_CASE("sasl: destroying the io_context waits for an offloaded step", "[net][sasl][offload]")
 {
-	std::shared_ptr<offload_gate> gate;
-	std::jthread opener;
+	// The step is let through well after the bind times out (100 ms), and
+	// whatever happens in the scope: a failed REQUIRE there still destroys
+	// the io_context, which then waits for the step, not forever.
+	const auto gate = std::make_shared<offload_gate>();
+	const std::jthread opener([gate] {
+		std::this_thread::sleep_for(std::chrono::milliseconds(300));
+		gate->allow(1);
+	});
 	{
 		corosio::io_context ioc;
 		socket_pair sockets{ ioc };
@@ -695,7 +701,7 @@ TEST_CASE("sasl: destroying the io_context waits for an offloaded step", "[net][
 		  ldap::net::transport::wrap(socket_ref{ &sockets.client }, "mock"),
 		  { .operation_timeout = std::chrono::milliseconds(100) });
 		offload_mechanism mech;
-		gate = mech.gate;
+		mech.gate = gate;
 		auto r = finish(ioc, conn.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::timeout);
@@ -705,10 +711,6 @@ TEST_CASE("sasl: destroying the io_context waits for an offloaded step", "[net][
 		sockets.server.close();
 		ioc.poll();// what is ready, not the step: it still holds work
 		CHECK(gate->finished == 0);
-		opener = std::jthread([gate] {
-			std::this_thread::sleep_for(std::chrono::milliseconds(50));
-			gate->allow(1);
-		});
 	}
 	CHECK(gate->finished == 1);
 }
