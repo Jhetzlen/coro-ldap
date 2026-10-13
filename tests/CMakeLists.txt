@@ -13,6 +13,7 @@ list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
 
 add_executable(jhetz_ldap_tests
+    ad_tests.cpp
     attribute_tests.cpp
     ber_reader_tests.cpp
     ber_writer_tests.cpp

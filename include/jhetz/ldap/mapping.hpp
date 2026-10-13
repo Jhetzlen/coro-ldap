@@ -48,7 +48,8 @@
 // Built in: std::string, std::pmr::string, integers (decimal, range
 // checked), bool (TRUE / FALSE, RFC 4517), ldap::dn, ldap::binary,
 // std::chrono::sys_seconds (GeneralizedTime, RFC 4517 section 3.3.13) and
-// enums that have an ldap::enum_names table.
+// enums that have an ldap::enum_names table. ad.hpp adds Active Directory's
+// FILETIME dates and intervals.
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"

@@ -28,6 +28,7 @@
 
 #include <cstddef>
 #include <initializer_list>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -104,7 +105,8 @@ class server_schema
 
 // ---------------------------------------------------------------- syntaxes
 
-// RFC 4517 syntax OIDs used by the built-in value_traits.
+// Syntax OIDs used by the built-in value_traits: RFC 4517, and Active
+// Directory's Large Integer.
 namespace syntax {
 	inline constexpr const char *boolean = "1.3.6.1.4.1.1466.115.121.1.7";
 	inline constexpr const char *dn = "1.3.6.1.4.1.1466.115.121.1.12";
@@ -113,6 +115,10 @@ namespace syntax {
 	inline constexpr const char *name_and_optional_uid = "1.3.6.1.4.1.1466.115.121.1.34";
 	inline constexpr const char *numeric_string = "1.3.6.1.4.1.1466.115.121.1.36";
 	inline constexpr const char *directory_string = "1.3.6.1.4.1.1466.115.121.1.15";
+	// Active Directory's Large Integer / Interval (a signed 64-bit integer in
+	// decimal): FILETIME dates such as accountExpires, intervals such as
+	// maxPwdAge, and counters such as uSNChanged. See ad.hpp.
+	inline constexpr const char *ad_large_integer = "1.2.840.113556.1.4.906";
 }// namespace syntax
 
 // The syntaxes a value type accepts, for validate<T>. Empty: any (strings
@@ -133,16 +139,29 @@ template<class T> struct value_syntaxes
 
 namespace detail {
 	inline constexpr const char *integer_syntaxes[] = { syntax::integer, syntax::numeric_string };
+	inline constexpr const char *int64_syntaxes[] = { syntax::integer,
+		syntax::numeric_string,
+		syntax::ad_large_integer };
 	inline constexpr const char *dn_syntaxes[] = { syntax::dn, syntax::name_and_optional_uid };
 	inline constexpr const char *bool_syntaxes[] = { syntax::boolean };
 	inline constexpr const char *time_syntaxes[] = { syntax::generalized_time };
 }// namespace detail
 
+// Integers read INTEGER and NumericString; signed integers of 64 bits or
+// more also read AD Large Integer, whose values (FILETIME dates, negative
+// intervals) a narrower or unsigned type could not hold: a 32-bit or
+// unsigned member on such an attribute is a syntax_mismatch.
 template<std::integral T>
 	requires(!std::same_as<T, bool> && !detail::char_like<T>)
 struct value_syntaxes<T>
 {
-	static std::span<const char *const> get() { return detail::integer_syntaxes; }
+	static std::span<const char *const> get()
+	{
+		if constexpr (std::signed_integral<T> && std::numeric_limits<T>::digits >= 63)
+			return detail::int64_syntaxes;
+		else
+			return detail::integer_syntaxes;
+	}
 };
 template<> struct value_syntaxes<bool>
 {

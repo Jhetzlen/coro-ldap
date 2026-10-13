@@ -420,6 +420,40 @@ form decodes — minutes and seconds optional, fractions of the last unit,
 `ldap::enum_names<E>` table. A `syntaxes` member for runtime validation
 comes with #13.
 
+Active Directory's Large Integer syntax (`1.2.840.113556.1.4.906`, `ad.hpp`)
+holds FILETIME dates (accountExpires, pwdLastSet, lastLogonTimestamp,
+lastLogon, badPasswordTime, lockoutTime: a signed 64-bit count of 100 ns
+ticks since 1601-01-01 00:00:00 UTC, in decimal), intervals (maxPwdAge,
+minPwdAge, lockoutDuration, lockOutObservationWindow: negative tick counts)
+and counters (uSNChanged). The schema cannot tell them apart, so the member
+type decides:
+
+- `std::int64_t`: the raw number, for any 906 attribute.
+- `ldap::ad::filetime_clock::time_point`: a date. `ad::filetime_clock` is a
+  C++20 Clock (`rep` int64, period 100 ns, epoch 1601-01-01 UTC, not steady)
+  with `to_sys` / `from_sys`, so `std::chrono::clock_cast` converts to
+  `system_clock` (offset 11644473600 s) and on to `utc_clock` or
+  `zoned_time`; `from_sys` rounds down to a tick. `std::chrono::file_clock`
+  is not usable: its epoch and period are implementation-defined (libstdc++:
+  2174-01-01, nanoseconds). AD writes 0 or 9223372036854775807 for "never"
+  (accountExpires); both decode to `ad::never` (`time_point::max()`), which
+  encodes as 9223372036854775807, so "never" stays distinct from any real
+  date. pwdLastSet takes two commands when written: `ad::pwd_must_change`
+  (0, change at next logon) and `ad::pwd_set_now` (-1, AD stores the current
+  time); they are plain tick counts, so the typed `replace<&T::m>(...)`
+  writes them with no special case. Read back, pwdLastSet 0 is `ad::never`
+  ("no date set"), like every 0.
+- `ldap::ad::filetime_clock::duration`: an interval, sign kept (maxPwdAge
+  -36288000000000 is `-days(42)`); `ad::forever` (`duration::min()`,
+  -9223372036854775808) is "passwords never expire" / "locked until an
+  administrator unlocks".
+
+Typed filters encode these like any value
+(`filters::field<&user::account_expires>() <= t`); on an untyped attribute,
+use `value_traits<ad::filetime_clock::time_point>::encode(t)`. AD compares
+the numbers, so "never" as 0 sorts below every date: expired accounts are
+`(&(accountExpires>=1)(accountExpires<=now))`.
+
 Usage (implemented, #9, `mapping.hpp` and `connection.hpp`):
 
 ```cpp
@@ -647,7 +681,12 @@ remembered, so a member mapped to one is told so rather than "not
 defined on the server". The cardinality check is a
 warning (`schema_issue::is_error() == false`), the others are errors.
 Syntaxes per type come from `value_syntaxes<T>` (built in: integers →
-INTEGER / NumericString, bool → Boolean, dn → DN / NameAndOptionalUID,
+INTEGER / NumericString, and also AD Large Integer
+(`syntax::ad_large_integer`, 1.2.840.113556.1.4.906) for signed integers of
+64 bits or more: a 32-bit or unsigned member could not hold its values, so
+it gets a `syntax_mismatch` rather than a conversion failure on the first
+large or negative value; `ad::filetime_clock` time points and durations →
+AD Large Integer only; bool → Boolean, dn → DN / NameAndOptionalUID,
 sys_seconds → GeneralizedTime; strings and binary accept any syntax), or a
 `syntaxes` member of `value_traits<T>`. `connection::load_schema()` reads
 the root DSE's `subschemaSubentry` (default `cn=Subschema`). The parser

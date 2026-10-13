@@ -277,6 +277,16 @@ itself stays dependency-free.
   `search_as<T>`, `modify<T>(dn, changes)` and `add(dn, value)`. Mistakes
   (unmapped or read_only member, wrong value type, invalid names) fail to
   compile; `tests/compile/` checks each.
+- `jhetz/ldap/ad.hpp`: Active Directory's Large Integer syntax
+  (1.2.840.113556.1.4.906) as std::chrono types. `ad::filetime_clock` is a
+  C++20 Clock for FILETIME (100 ns ticks since 1601-01-01 UTC;
+  `clock_cast` to `system_clock`, `utc_clock`, `zoned_time`);
+  `ad::filetime_clock::time_point` members map dates (accountExpires,
+  pwdLastSet, lastLogonTimestamp; 0 and 9223372036854775807 decode to
+  `ad::never`; `ad::pwd_must_change` / `ad::pwd_set_now` write pwdLastSet
+  0 / -1) and `ad::filetime_clock::duration` members map the negative
+  intervals (maxPwdAge, lockoutDuration; `ad::forever` for
+  -9223372036854775808). `std::int64_t` members read any 906 attribute raw.
 - `jhetz/ldap/schema.hpp` (#13): runtime schema validation. A lenient
   RFC 4512 parser for the subschema's attributeTypes / objectClasses,
   `server_schema`, `validate<T>(schema)` listing every issue (unknown

@@ -3,10 +3,11 @@
 // value_fuzz_replay).
 //
 // For any input it must not crash, and for each decoder (GeneralizedTime,
-// integers, bool, dn):
+// integers, bool, dn, AD FILETIME dates and intervals):
 // - rejected input fails with conversion_failed;
 // - accepted input encodes to text that decodes to the same value, and
 //   GeneralizedTime re-encodes to the same text (encoding is canonical).
+#include "jhetz/ldap/ad.hpp"
 #include "jhetz/ldap/mapping.hpp"
 
 #define FUZZ_TARGET "value_fuzz"
@@ -55,5 +56,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 	round_trip<std::uint8_t>(text);
 	round_trip<bool>(text);
 	round_trip<ldap::dn>(text);
+	round_trip<ldap::ad::filetime_clock::time_point>(text);
+	round_trip<ldap::ad::filetime_clock::duration>(text);
 	return 0;
 }
