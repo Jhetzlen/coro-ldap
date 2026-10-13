@@ -1913,10 +1913,11 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	}
 
 	// From here on the server expects a handshake, so the session cannot go
-	// on in clear (RFC 4511 section 4.14.1): a bad_alloc (this wait's frames,
+	// on in clear (RFC 4511 section 4.14.1): an exception (this wait's frames,
 	// the handshake's setup or the handshake; net::start_tls then closed the
-	// transport) closes the connection before it propagates, and later
-	// operations fail naming not_enough_memory.
+	// transport) closes the connection before it propagates. Later
+	// operations fail naming not_enough_memory for a bad_alloc, the abort
+	// otherwise (no other exception is known to escape today: defensive).
 	result<void> r;
 	try {
 		// The reader and writer must be idle: the handshake reads and writes
@@ -1929,6 +1930,14 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 		r = co_await net::start_tls(self->transport, self->buf, std::move(options), timeout);
 	} catch (const std::bad_alloc &) {
 		self->shut_out_of_memory();
+		throw;
+	} catch (...) {
+		try {// the message's allocation may fail too
+			self->shut(
+			  make_error(client_errc::not_connected, "connection closed: StartTLS aborted by an exception"), true);
+		} catch (const std::bad_alloc &) {
+			self->shut_out_of_memory();
+		}
 		throw;
 	}
 	// Closed meanwhile (unbind(), close()): the handshake failed because of

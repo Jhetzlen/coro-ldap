@@ -312,6 +312,57 @@ TEST_CASE("start_tls: a failed allocation in the handshake's setup closes the co
 	CHECK(failing > 4);// the wait's frames, net::start_tls's, tls_handshake's, the handshake's, bounded()'s
 }
 
+// The same window, failed by an exception that is not bad_alloc (none is
+// known to escape it today): start_tls rethrows it, the connection is
+// closed, and later operations name the abort.
+TEST_CASE("start_tls: another exception in the handshake's setup closes the connection", "[net][starttls]")
+{
+	const ldap::message accepted{ 1,
+		ldap::extended_response{ ldap::ldap_result{ 0 }, std::string(ldap::start_tls_oid) } };
+	const std::string accepted_bytes = bytes_of(accepted);
+	// True if the failing-th allocation threw, false if the handshake started.
+	auto fail_one = [&](std::size_t failing) {
+		failing_frames frames;// outlives the io_context's coroutines
+		const clear_frame_allocator clear;
+		outcome<ldap::result<void>> tls;// outlive `m`: what still waits ends with it
+		outcome<int> sent;
+		tcp_mock_ldap m;
+		m.serve({ step{} });// reads the StartTLS request, answered below
+		m.ioc.set_frame_allocator(&frames);
+		spawn(m.ioc, m.conn.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }), tls);
+		m.check_server();
+		spawn(m.ioc, first_byte(m.peer), sent);
+		while (m.ioc.poll() != 0) {}// parks the reader and the server's read
+		m.ioc.restart();
+		frames.fail_at(failing, true);
+		REQUIRE(::write(m.peer.native_handle(), accepted_bytes.data(), accepted_bytes.size())
+				== static_cast<ssize_t>(accepted_bytes.size()));
+		drive_until(m.ioc, [&] { return tls.done() || sent.done(); });
+		while (m.ioc.poll() != 0) {}// the rest of the handshake's first step
+		m.ioc.restart();
+		const bool failed = tls.done();
+		frames.fail_at(0);
+		if (!failed) {
+			CHECK(sent.get() == 0x16);// a TLS handshake record
+			m.conn.close();
+			return false;
+		}
+		CHECK_THROWS_AS(tls.get(), std::runtime_error);
+		CHECK_FALSE(m.conn.is_open());
+		CHECK_FALSE(m.conn.is_tls());
+		auto later = m.run(m.conn.search({}));
+		REQUIRE_FALSE(later.has_value());
+		CHECK(later.error().code == ldap::client_errc::not_connected);
+		CHECK_THAT(std::string(later.error().context), ContainsSubstring("StartTLS aborted by an exception"));
+		drive_until(m.ioc, [&sent] { return sent.done(); });
+		CHECK((sent.get() == -1 || sent.get() == 0x16));
+		return true;
+	};
+	std::size_t failing = 1;
+	while (fail_one(failing)) ++failing;
+	CHECK(failing > 4);
+}
+
 // unbind() during the handshake closes the connection (nothing may be sent
 // until the handshake is done): start_tls fails with not_connected, as it
 // does while it waits for its response, not with the error the closed

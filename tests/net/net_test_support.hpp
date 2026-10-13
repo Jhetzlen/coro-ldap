@@ -146,15 +146,17 @@ template<class T> T finish(corosio::io_context &ioc, capy::task<T> t)
 
 // The io_context's frame allocator in the out-of-memory tests: counts the
 // coroutine frames allocated from it (every run_async's and its task's, and
-// their children's) and can fail one allocation with bad_alloc.
+// their children's) and can fail one allocation with bad_alloc (or, with
+// `other`, a std::runtime_error: an exception that is not bad_alloc).
 class failing_frames final : public std::pmr::memory_resource
 {
   public:
 	// The n-th allocation from now fails (1 for the next one; 0: none).
-	void fail_at(std::size_t n) noexcept
+	void fail_at(std::size_t n, bool other = false) noexcept
 	{
 		count_ = 0;
 		fail_ = n;
+		other_ = other;
 	}
 	// Allocations attempted since fail_at().
 	std::size_t count() const noexcept { return count_; }
@@ -164,7 +166,10 @@ class failing_frames final : public std::pmr::memory_resource
   private:
 	void *do_allocate(std::size_t bytes, std::size_t align) override
 	{
-		if (++count_ == fail_) throw std::bad_alloc();
+		if (++count_ == fail_) {
+			if (other_) throw std::runtime_error("injected frame allocation failure");
+			throw std::bad_alloc();
+		}
 		void *p = std::pmr::new_delete_resource()->allocate(bytes, align);
 		++live_;
 		return p;
@@ -179,6 +184,7 @@ class failing_frames final : public std::pmr::memory_resource
 	std::size_t count_ = 0;
 	std::size_t fail_ = 0;
 	std::size_t live_ = 0;
+	bool other_ = false;
 };
 
 // Corosio resumes coroutines without restoring the thread's current frame
