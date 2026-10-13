@@ -46,7 +46,9 @@ catch_discover_tests(jhetz_ldap_alloc_tests)
 # failures are not due to the command line. discarded_child.cpp compiles but
 # must warn ([[nodiscard]], on by default in GCC and Clang).
 if(NOT MSVC)
-    set(jhetz_ldap_compile_flags -std=c++23 -fsyntax-only -I${PROJECT_SOURCE_DIR}/include)
+    # CMAKE_CXX_FLAGS too, so flags such as --gcc-install-dir reach the compiler.
+    separate_arguments(jhetz_ldap_user_flags UNIX_COMMAND "${CMAKE_CXX_FLAGS}")
+    set(jhetz_ldap_compile_flags ${jhetz_ldap_user_flags} -std=c++23 -fsyntax-only -I${PROJECT_SOURCE_DIR}/include)
     function(jhetz_ldap_compile_test name expected)
         add_test(NAME compile.${name}
             COMMAND ${CMAKE_CXX_COMPILER} ${jhetz_ldap_compile_flags} ${CMAKE_CURRENT_SOURCE_DIR}/compile/${name}.cpp)

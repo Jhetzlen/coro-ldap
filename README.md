@@ -450,7 +450,8 @@ codec-only) and is the reference for doing it by hand.
 Linux only (configure rejects Apple Clang, even for the codec-only
 target). Standalone CMake project (CMake 3.25+, GCC 16+ or Clang 23+;
 Clang needs libstdc++ 16+ too, so install g++-16 next to it; configure
-stops with an error on anything older). Catch2 v3, and for `jhetz::ldap_net` Corosio
+stops with an error on anything older; libc++ is neither supported nor
+checked, so use libstdc++). Catch2 v3, and for `jhetz::ldap_net` Corosio
 and Capy, are fetched from GitHub; `jhetz::ldap_net` also needs the
 OpenSSL and ICU development files (`libssl-dev libicu-dev`; Arch:
 `openssl icu`).

@@ -44,6 +44,9 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION
     message(FATAL_ERROR "jhetz::ldap needs Clang 23 or newer (found ${CMAKE_CXX_COMPILER_VERSION})")
 endif()
 include(CheckCXXSourceCompiles)
+# Re-run the probe on every configure: a cached failure would otherwise keep
+# failing after the user installs a newer libstdc++ or changes the flags.
+unset(JHETZ_LDAP_STDLIB_RECENT_ENOUGH CACHE)
 check_cxx_source_compiles([=[
 #include <version>
 #if defined(_GLIBCXX_RELEASE) && _GLIBCXX_RELEASE < 16
