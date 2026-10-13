@@ -53,3 +53,7 @@ build/
 # Stray CMake in-source build output
 CMakeCache.txt
 CMakeFiles/
+
+# Claude Code local settings and agent worktrees
+.claude/settings.local.json
+.claude/worktrees/

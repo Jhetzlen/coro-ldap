@@ -61,18 +61,58 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
 ## Build & Test
 
-_Add your build and test commands here_
+Build dir `build/main`, configured from the repo root (Ninja, Debug, GCC):
 
 ```bash
-# Example:
-# npm install
-# npm test
+cmake -B build/main -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON -DJHETZ_LDAP_WERROR=ON
+cmake --build build/main -j
+ctest --test-dir build/main -j12        # serial ctest is ~4x slower (fuzz replays); let the build finish first
+
+# Integration tests against a throwaway OpenLDAP slapd (skipped without slapd).
+# SLAPD, SLAPD_SCHEMA_DIR and SLAPD_MODULE_PATH point at the slapd install:
+SLAPD=<ol>/usr/bin/slapd SLAPD_SCHEMA_DIR=<ol>/etc/openldap/schema SLAPD_MODULE_PATH=<ol>/usr/lib/openldap \
+  tests/integration/run_slapd.sh ctest --test-dir build/main -L integration --output-on-failure
+
+# Formatting: clang-format 23, same as CI
+/usr/bin/clang-format -i <files>
 ```
+
+Fuzzers (`build/fuzz`, Clang, `-DJHETZ_LDAP_BUILD_FUZZERS=ON`), the bench
+(`build/bench`, `-DJHETZ_LDAP_BUILD_BENCH=ON`) and coverage are described in README.md.
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+coro-ldap is a C++23 LDAP client library with two CMake targets:
+
+- **`jhetz::ldap`**: the codec, with no dependencies: BER, LDAP messages and controls, DN, filter, URL, schema, and the entry-to-struct mapping.
+- **`jhetz::ldap_net`**: the async `ldap::connection` on Corosio/Capy coroutines, with multiplexed operations, OpenSSL TLS (ldaps://, StartTLS), ldapi://, and SASL (EXTERNAL, SCRAM-SHA-256), using ICU for SASLprep.
+- **`ldap::sync::connection`** (`sync.hpp`): a blocking facade over the async connection.
+
+Layout: `include/jhetz/ldap/` for the public headers (`net/` for the transport), `src/` for the implementation (`src/net/` for transport and TLS), `tests/` for the Catch2 unit tests (`tests/net/` for in-process network tests, `tests/integration/` for slapd), and `fuzz/`, `examples/` and `bench/`. The design notes are in `docs/DESIGN.md`.
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+The `bd prime` memories have the details. In short:
+
+- Don't add new macros. Use functions, templates and constexpr instead (Catch2's macros are fine).
+- Text handling is full UTF-8 everywhere. Never ship an ASCII-only restriction; implement the RFC preparation instead.
+- ICU is the Unicode dependency.
+- Don't use `std::optional<T&>`; lookups return pointers (null means not found).
+- Linux only.
+- `examples/` holds bare one-action files of about 15-30 lines, with no helpers.
+- Format with `/usr/bin/clang-format` (v23).
+- Don't touch CI (`.github/workflows`, `gh run`) unless asked.
+
+## Non-Interactive Shell Commands
+
+Shell commands like `cp`, `mv` and `rm` may be aliased to interactive mode (`-i`), so an agent can hang waiting for y/n input. Always use the non-interactive forms:
+
+```bash
+cp -f source dest       # NOT: cp source dest
+mv -f source dest       # NOT: mv source dest
+rm -f file              # NOT: rm file
+rm -rf directory        # NOT: rm -r directory
+cp -rf source dest      # NOT: cp -r source dest
+```
+
+Other commands that may prompt: `scp` and `ssh` (use `-o BatchMode=yes`), `apt-get` (use `-y`), `brew` (set `HOMEBREW_NO_AUTO_UPDATE=1`).
