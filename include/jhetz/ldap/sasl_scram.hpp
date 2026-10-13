@@ -51,7 +51,7 @@
 // - client_errc::encode_error (cond::invalid_input): an empty username or
 //   password (also after SASLprep), invalid UTF-8, a character SASLprep
 //   prohibits (e.g. a control character) or that is unassigned, a bidi
-//   rule violation; also an ICU failure.
+//   rule violation.
 // - client_errc::decode_error (cond::protocol_error): a malformed server
 //   message.
 // - client_errc::unexpected_response (cond::protocol_error): a server
@@ -65,8 +65,9 @@
 //   When the server had already reported success (the error comes from
 //   complete()), connection::sasl_bind closes the connection, since the
 //   server considers it bound.
-// - client_errc::encode_error also for an OpenSSL failure (RAND_bytes,
-//   PBKDF2, HMAC, SHA-256).
+// - client_errc::internal_error (no condition): OpenSSL (RAND_bytes,
+//   PBKDF2, HMAC, SHA-256) or ICU (e.g. out of memory, ICU data without
+//   the SASLprep profile) failed: the environment, not the credentials.
 // Error contexts do not name the mechanism: sasl_bind prefixes
 // "sasl bind SCRAM-SHA-256".
 // A server that refuses the proof normally answers invalidCredentials,

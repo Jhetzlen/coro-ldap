@@ -109,7 +109,7 @@ TEST_CASE("every errc and client_errc has a real message", "[error]")
 		CHECK_FALSE(text.empty());
 		CHECK_FALSE(text.contains("unknown"));
 	}
-	for (int v = 1; v <= std::to_underlying(ldap::client_errc::security_layer_required); ++v) {
+	for (int v = 1; v <= std::to_underlying(ldap::client_errc::internal_error); ++v) {
 		const auto text = std::error_code(static_cast<ldap::client_errc>(v)).message();
 		INFO("client_errc " << v << ": " << text);
 		CHECK_FALSE(text.empty());
@@ -351,17 +351,33 @@ TEST_CASE("every client_errc maps to its documented condition", "[error][cond]")
 		{ client_errc::no_password_method, std::nullopt },
 		{ client_errc::gssapi_failure, cond::auth_failed },
 		{ client_errc::security_layer_required, cond::access_denied },
+		{ client_errc::internal_error, std::nullopt },
 	};
 	// Every value, in order: a new client_errc must be added here. The
 	// static_casts to std::size_t are deliberate: std::to_underlying gives
 	// int and would make signed/unsigned comparisons.
-	REQUIRE(table.size() == static_cast<std::size_t>(client_errc::security_layer_required));
+	REQUIRE(table.size() == static_cast<std::size_t>(client_errc::internal_error));
 	for (std::size_t i = 0; i < table.size(); ++i) {
 		const auto &[e, expected] = table[i];
 		INFO("client_errc " << std::to_underlying(e) << " " << std::error_code(e).message());
 		CHECK(static_cast<std::size_t>(e) == i + 1);
 		CHECK(cond_of(e) == expected);
 	}
+}
+
+TEST_CASE("internal_error is a library failure, not invalid input", "[error][cond]")
+{
+	// SCRAM's OpenSSL and ICU failures, and ICU failures in
+	// ad_password_value, use it: a caller testing cond::invalid_input must
+	// not take the environment's failure for a bad username or password.
+	const std::error_code ec = ldap::client_errc::internal_error;
+	CHECK(ec.value() == 26);
+	CHECK(ec.message() == "a library the client uses failed");
+	CHECK(ec != ldap::cond::invalid_input);
+	CHECK(ec != ldap::cond::auth_failed);
+	CHECK(cond_of(ec) == std::nullopt);
+	const ldap::error e = ldap::make_error(ldap::client_errc::internal_error, "OpenSSL PBKDF2 failed");
+	CHECK(e.message() == "OpenSSL PBKDF2 failed: a library the client uses failed [ldap.client:26]");
 }
 
 TEST_CASE("system, Capy and TLS codes map to conditions", "[error][cond]")

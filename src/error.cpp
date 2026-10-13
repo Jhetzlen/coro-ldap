@@ -154,6 +154,8 @@ namespace {
 			return "GSS-API failure";
 		case client_errc::security_layer_required:
 			return "the server requires a SASL security layer";
+		case client_errc::internal_error:
+			return "a library the client uses failed";
 		}
 		return {};
 	}

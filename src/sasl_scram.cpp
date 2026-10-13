@@ -51,6 +51,10 @@ namespace {
 	// prefixes "sasl bind SCRAM-SHA-256".
 	std::unexpected<error> input_error(std::string_view what) { return fail(client_errc::encode_error, what); }
 
+	// OpenSSL or ICU failed (memory, missing ICU data): the environment, not
+	// the caller's username or password.
+	std::unexpected<error> library_error(std::string_view what) { return fail(client_errc::internal_error, what); }
+
 	std::unexpected<error> malformed(std::string_view what) { return fail(client_errc::decode_error, what); }
 
 	std::unexpected<error> refused(std::string_view what) { return fail(client_errc::unexpected_response, what); }
@@ -162,7 +166,7 @@ namespace {
 
 	std::unexpected<error> icu_failure(std::string_view what, UErrorCode status)
 	{
-		return input_error(std::string(what) + ": SASLprep failed (ICU " + u_errorName(status) + ")");
+		return library_error(std::string(what) + ": SASLprep failed (ICU " + u_errorName(status) + ")");
 	}
 
 	// SASLprep (RFC 4013, the RFC 3454 stringprep profile) with ICU's
@@ -401,7 +405,8 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 		client_nonce_ = *fixed_nonce_;
 	} else {
 		wiped<nonce_bytes> raw;
-		if (RAND_bytes(raw.data(), static_cast<int>(raw.size())) != 1) return input_error("OpenSSL RAND_bytes failed");
+		if (RAND_bytes(raw.data(), static_cast<int>(raw.size())) != 1)
+			return library_error("OpenSSL RAND_bytes failed");
 		client_nonce_ = base64_encode(raw.span());
 	}
 
@@ -509,14 +514,14 @@ result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_v
 		  static_cast<int>(salted.size()),
 		  salted.data())
 		!= 1)
-		return input_error("OpenSSL PBKDF2 failed");
+		return library_error("OpenSSL PBKDF2 failed");
 	if (!hmac(salted.span(), "Client Key", client_key.span())
 		|| SHA256(client_key.data(), client_key.size(), stored_key.data()) == nullptr
 		|| !hmac(stored_key.span(), auth_message, client_signature.span())
 		|| !hmac(salted.span(), "Server Key", server_key.span())
 		|| !hmac(server_key.span(), auth_message, server_signature_)) {
 		wipe();
-		return input_error("OpenSSL HMAC or SHA-256 failed");
+		return library_error("OpenSSL HMAC or SHA-256 failed");
 	}
 	have_signature_ = true;
 	for (std::size_t k = 0; k < key_size; ++k)

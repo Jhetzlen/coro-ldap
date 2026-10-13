@@ -103,6 +103,7 @@ enum class client_errc : int {
 	no_password_method,// the server advertises no password-change method this library knows
 	gssapi_failure,// a GSS-API (Kerberos) call failed during a SASL GSSAPI bind
 	security_layer_required,// the server requires a SASL security layer (integrity, confidentiality)
+	internal_error,// a library the client uses failed (OpenSSL, ICU), not the caller's input
 };
 
 // Error conditions: what an error means, across categories (DESIGN.md

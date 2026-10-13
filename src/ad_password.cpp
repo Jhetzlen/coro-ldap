@@ -20,16 +20,21 @@ result<std::string> ad_password_value(std::string_view password)
 	// UTF-8 -> UTF-16 (ICU's native order). u_strFromUTF8 refuses ill-formed
 	// UTF-8: overlong forms, surrogates, code points above U+10FFFF,
 	// truncated sequences.
+	// Any other ICU status is ICU's failure, not the password's.
+	const auto failed = [&](UErrorCode status) {
+		if (status == U_INVALID_CHAR_FOUND || status == U_ILLEGAL_CHAR_FOUND)
+			return fail(client_errc::encode_error, std::string(context) + ": the password is not valid UTF-8");
+		return fail(client_errc::internal_error,
+		  std::string(context) + ": UTF-16 conversion failed (ICU " + u_errorName(status) + ")");
+	};
 	UErrorCode status = U_ZERO_ERROR;
 	int32_t n = 0;
 	u_strFromUTF8(nullptr, 0, &n, password.data(), static_cast<int32_t>(password.size()), &status);
-	if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status))
-		return fail(client_errc::encode_error, std::string(context) + ": the password is not valid UTF-8");
+	if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) return failed(status);
 	std::vector<UChar> units(static_cast<std::size_t>(n));
 	status = U_ZERO_ERROR;
 	if (n != 0) u_strFromUTF8(units.data(), n, &n, password.data(), static_cast<int32_t>(password.size()), &status);
-	if (U_FAILURE(status))
-		return fail(client_errc::encode_error, std::string(context) + ": the password is not valid UTF-8");
+	if (U_FAILURE(status)) return failed(status);
 
 	// '"' password '"', each UTF-16 code unit little-endian.
 	std::string out;

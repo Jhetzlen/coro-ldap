@@ -673,7 +673,7 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`; connection: `unexpected_response`, `not_connected`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `no_password_method`, `gssapi_failure`, `security_layer_required`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`; connection: `unexpected_response`, `not_connected`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `no_password_method`, `gssapi_failure`, `security_layer_required`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock`; environment: `internal_error` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 `error`'s strings are `std::pmr::string` but always on the default
@@ -751,7 +751,7 @@ a caller match none, deliberately (test them by exact code).
 | `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required`, `security_layer_required` | `permission_denied` |
 | `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
 | `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
-| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `assertion_failed`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `no_password_method` | everything else |
+| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `assertion_failed`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `no_password_method`, `internal_error` | everything else |
 
 Choices worth knowing: `unauthenticated_bind` is `auth_failed` (an empty
 password on a login form is a failed login); `stronger_auth_required` and
@@ -759,7 +759,12 @@ password on a login form is a failed login); `stronger_auth_required` and
 the session is not good enough); `unwilling_to_perform` matches nothing
 (servers use it for unrelated refusals); `size_limit_exceeded` matches
 nothing (it comes with partial results); `operation_in_progress` matches
-nothing (it is a usage error, not a busy server); file errors from TLS
+nothing (it is a usage error, not a busy server); `internal_error` (a
+library the client uses failed: OpenSSL in SCRAM, ICU in SASLprep or
+`ad_password_value`, e.g. out of memory or ICU data without the SASLprep
+profile) matches nothing: it is neither the caller's input (`invalid_input`
+would make an application prompt for the password again) nor the server's
+doing, and no retry or fix is implied; file errors from TLS
 configuration are `invalid_input`, not `not_found`, which is for directory
 entries. System codes match through their generic condition, so both the
 system and generic categories work. `jhetz::ldap` does not link Capy or
