@@ -77,9 +77,11 @@ class server_schema
 	[[nodiscard]] const object_class_type *find_object_class(std::string_view name) const noexcept;
 	// The attribute's SYNTAX, or its supertypes' (SUP followed, with a depth
 	// limit against cycles); nullptr if none declares one, or if a SUP on the
-	// chain is not found (see skipped_for_syntax). Points into the schema:
-	// valid while it lives.
+	// chain is not found (see skipped_for_syntax). Points into a (if it
+	// declares SYNTAX itself) or the schema: valid while both live, so a
+	// temporary attribute is rejected.
 	[[nodiscard]] const std::string *syntax_of(const attribute_type &a) const noexcept;
+	const std::string *syntax_of(const attribute_type &&) const = delete;
 	// An attribute type definition by this NAME or OID (options ignored)
 	// parsed, but was skipped because its SYNTAX is not a numeric OID: the
 	// server defines it, the library cannot use it. Case-insensitive, no
