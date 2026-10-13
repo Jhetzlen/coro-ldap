@@ -409,6 +409,7 @@ URL (`ldap://localhost`).
 | `password.cpp` | reset a user's password (RFC 3062 or Active Directory, from the root DSE) |
 | `starttls.cpp` | connect with StartTLS, then bind |
 | `cancel.cpp` | search the whole tree; Ctrl-C gives up on it (`capy::when_any` with `ldap::raceable`) |
+| `paged.cpp` | page through `ou=people` 100 entries at a time, sorted by `mail` (RFC 2696 paging, RFC 2891 server-side sort) |
 | `blocking.cpp` | the same search with the blocking `ldap::sync::connection` |
 | `gssapi.cpp` | StartTLS, then a Kerberos bind with the default ticket (`sasl_gssapi`; built with `JHETZ_LDAP_WITH_GSSAPI`) |
 
