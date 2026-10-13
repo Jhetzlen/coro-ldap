@@ -221,6 +221,13 @@ struct mock_ldap : scripted_server<mock_ldap>
 		log.hang_up = [this] { sockets.server.close(); };
 	}
 
+	// Over an io_context made with `io` (a locking_mode, say).
+	explicit mock_ldap(const corosio::io_context_options &io, ldap::connection_options options = {})
+	  : ioc(io), conn(ioc, net::transport::wrap(socket_ref{ &sockets.client }, "mock"), options)
+	{
+		log.hang_up = [this] { sockets.server.close(); };
+	}
+
 	mock_ldap(const mock_ldap &) = delete;
 	mock_ldap &operator=(const mock_ldap &) = delete;
 

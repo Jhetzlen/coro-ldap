@@ -13,6 +13,7 @@
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/this_coro.hpp>
 #include <boost/capy/ex/work_guard.hpp>
+#include <boost/corosio/detail/scheduler.hpp>
 #include <boost/corosio/timeout.hpp>
 
 #include <algorithm>
@@ -1164,6 +1165,13 @@ namespace {
 
 	capy::task<result<std::optional<std::string>>> run_offloaded(impl_ref self, sasl_work work)
 	{
+		// The thread posts its wakeup and drops its work from outside the
+		// I/O thread, undefined behaviour under locking_mode::unsafe, so the
+		// step fails at once there, as Corosio's resolver does (unsafe_io
+		// cannot be told from safe: documented instead).
+		if (corosio::detail::get_scheduler(self->ex.context()).scheduler_locking_disabled())
+			co_return fail(std::make_error_code(std::errc::operation_not_supported),
+			  "the mechanism's step runs on a thread of its own, which needs an io_context in locking_mode::safe");
 		auto shared = std::make_shared<offloaded>(std::move(work));
 		try {
 			auto &threads = self->ex.context().use_service<offload_threads>();

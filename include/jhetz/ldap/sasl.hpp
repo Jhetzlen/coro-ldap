@@ -43,7 +43,11 @@ struct sasl_bind_context
 // work itself is not interrupted: once sasl_bind gave up, the work runs on
 // while the mechanism may be destroyed or start another bind, so it must
 // own (or share) everything it uses, and the mechanism must not touch that
-// state again until the work is over. Its result is then discarded.
+// state again until the work is over. Its result is then discarded. The
+// thread wakes the bind through the io_context, so the io_context must use
+// Corosio's default locking_mode::safe: under unsafe the step fails with
+// std::errc::operation_not_supported before the work runs; unsafe_io (which
+// cannot be detected) is unsupported, its wakeup may be lost.
 using sasl_work = std::move_only_function<result<std::optional<std::string>>()>;
 
 class sasl_mechanism
@@ -77,6 +81,7 @@ class sasl_mechanism
 	// another thread (sasl_work). sasl_bind calls these in place of start()
 	// and step(), and uses the work's result as theirs; empty work (the
 	// default) means start() or step() is called on the I/O thread instead.
+	// Non-empty work needs an io_context in locking_mode::safe (sasl_work).
 	[[nodiscard]] virtual sasl_work offload_start() { return {}; }
 	[[nodiscard]] virtual sasl_work offload_step(std::optional<std::string_view> challenge)
 	{

@@ -712,3 +712,24 @@ TEST_CASE("sasl: destroying the io_context waits for an offloaded step", "[net][
 	}
 	CHECK(gate->finished == 1);
 }
+
+// The thread of an offloaded step posts to the io_context from outside, so
+// it needs Corosio's locking_mode::safe: under unsafe the step fails before
+// anything is sent, as Corosio's resolver does (coro-ldap-2px.1.3).
+TEST_CASE("sasl: an offloaded step needs locking_mode::safe", "[net][sasl][offload]")
+{
+	mock_ldap m(corosio::io_context_options{ .locking = corosio::locking_mode::unsafe });
+	m.serve({ answer({ done_msg(1) }) });
+	offload_mechanism mech;
+	mech.gate->allow(2);
+	auto r = m.run(m.conn.sasl_bind(mech));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == std::errc::operation_not_supported);
+	CHECK_THAT(std::string(r.error().context), ContainsSubstring("locking_mode::safe"));
+	CHECK(mech.gate->started == 0);
+	CHECK(m.conn.is_open());
+	CHECK(m.run(m.conn.search({})).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 1);
+	CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));
+}

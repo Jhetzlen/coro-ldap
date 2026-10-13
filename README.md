@@ -278,8 +278,10 @@ itself stays dependency-free.
   connection stays usable), not the Kerberos call, which runs to its end
   on its thread; `io_context::run()` returns only after it, and
   destroying the io_context (or a `sync::connection`) waits for its
-  thread to end, as long as krb5's own timeouts. That needs an io_context that
-  accepts posts from other threads (the default `locking_mode::safe`).
+  thread to end, as long as krb5's own timeouts. That needs an io_context
+  that accepts posts from other threads (the default `locking_mode::safe`;
+  under `unsafe` the bind fails with `std::errc::operation_not_supported`
+  before anything is sent; `unsafe_io` is unsupported).
   `examples/gssapi.cpp` binds with StartTLS and the default ticket.
 - `jhetz/ldap/controls.hpp`: typed request controls in a `std::variant`
   (`ldap::paged`, `manage_dsa_it`, `proxied_authorization`,

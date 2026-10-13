@@ -319,7 +319,13 @@ destroying the io_context (and so `sync::connection`'s destructor)
 waits for a step still running, as long as krb5's own timeouts. A
 thread that has ended is joined when the next one starts, so they do
 not pile up. The posts from the worker need
-Corosio's default `locking_mode::safe`. A thread per call rather than a
+Corosio's default `locking_mode::safe`: under `unsafe` (no scheduler
+locking) `run_offloaded` fails with `std::errc::operation_not_supported`
+before starting the thread, as Corosio's resolver does
+(`detail::scheduler::scheduler_locking_disabled()`); `unsafe_io` keeps
+scheduler locking but io_uring then skips the cross-thread wakeup, and
+Corosio exposes nothing to tell it from `safe`, so it is documented as
+unsupported. A thread per call rather than a
 pool: Capy's system pool (`get_system_context()`) is shared and sized for
 CPU work, and a KDC call can block one of its threads for many seconds;
 Corosio's blocking-call pool (used for getaddrinfo) is

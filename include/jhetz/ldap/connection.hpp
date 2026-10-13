@@ -462,7 +462,11 @@ class connection
 	// (a cancellation cancels that abort too, which closes the connection).
 	// The io_context counts the running step as work: run() returns only
 	// once it is over, and destroying the io_context waits for its thread
-	// to end (as long as the step takes: krb5's own timeouts).
+	// to end (as long as the step takes: krb5's own timeouts). The thread
+	// posts to the io_context, which must use Corosio's default
+	// locking_mode::safe: under unsafe an offloaded step fails with
+	// std::errc::operation_not_supported before it runs (at the first step,
+	// nothing sent); unsafe_io cannot be detected and is unsupported.
 	boost::capy::task<result<void>> sasl_bind(sasl_mechanism &mechanism, dn name = {});
 
 	// Runs a search to its end and returns the entries in the order received,
