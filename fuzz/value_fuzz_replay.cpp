@@ -1,7 +1,7 @@
 // Deterministic driver for value_fuzz (see value_fuzz.cpp), so its
 // properties run under ctest with any compiler, without libFuzzer.
 // Seeds: GeneralizedTime in every form (RFC 4517 section 3.3.13), integers,
-// booleans and DNs.
+// booleans, DNs and the AD FILETIME limits.
 #include "replay.hpp"
 
 #include <string_view>
@@ -31,6 +31,12 @@ int main(int argc, char **argv)
 		"cn=Jane Doe+uid=jd,ou=people,dc=example,dc=org",
 		"cn=\\23x\\2C,dc=org",
 		"",
+		// FILETIME limits: lowest accepted date (ad::pwd_set_now), first
+		// rejected, highest date clock_cast, ad::never (not converted).
+		"-1",
+		"-2",
+		"9223372036854775806",
+		"9223372036854775807",
 	};
 	fuzz::replay_config cfg{ .name = "value_fuzz_replay",
 		.extension = ".txt",
