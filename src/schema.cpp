@@ -312,16 +312,19 @@ std::string schema_report::to_string() const
 
 namespace {
 
-	// Why syntax_of(a) is nullptr, when it is not because no definition on
-	// the chain declares a SYNTAX: a SUP that names no definition (or one
-	// skipped for its SYNTAX), or a chain too long (a cycle). The syntax
-	// cannot be checked then; before SYNTAX was checked when parsed, the
-	// skipped supertype's text gave a syntax_mismatch, not silence.
+	// Why syntax_of(a) is nullptr: a SUP that names no definition (or one
+	// skipped for its SYNTAX), a chain too long (a cycle), or a chain that
+	// ends without any SYNTAX (RFC 4512 4.1.2 requires a SYNTAX or a SUP;
+	// slapd refuses such a definition, AD always gives SYNTAX). The syntax
+	// cannot be checked then, which is an error, not a silent pass.
 	std::optional<std::string> broken_sup_chain(const server_schema &s, const attribute_type &a)
 	{
 		const attribute_type *cur = &a;
 		for (int depth = 0; depth < 32; ++depth) {
-			if (cur->syntax || !cur->sup) return std::nullopt;
+			if (cur->syntax) return std::nullopt;
+			if (!cur->sup)
+				return cur == &a ? "syntax unknown: the server declares no SYNTAX and no SUP for it"
+								 : "syntax unknown: the server declares no SYNTAX for it or its supertypes";
 			const attribute_type *next = s.find_attribute(*cur->sup);
 			if (next == nullptr) {
 				std::string text = "syntax unknown: SUP ";

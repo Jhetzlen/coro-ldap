@@ -412,6 +412,49 @@ TEST_CASE("schema: a SUP that is missing or skipped for its SYNTAX is reported",
 	CHECK(rep.issues[2].detail == "defined on the server, but skipped: its SYNTAX is not a numeric OID");
 }
 
+namespace {
+
+struct no_syntax
+{
+	std::vector<std::int64_t> bare;
+	std::vector<std::int64_t> child;
+	std::vector<std::string> bare_text;// strings read any syntax: not checked
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<no_syntax> = ldap::describe(ldap::object_class("top"),
+  ldap::field<&no_syntax::bare>("bareAttr"),
+  ldap::field<&no_syntax::child>("bareChild"),
+  ldap::field<&no_syntax::bare_text>("bareAttr"));
+
+// RFC 4512 4.1.2 requires a SYNTAX or a SUP; a definition with neither (or a
+// chain ending in one) still parses, but its syntax cannot be checked: an
+// error, not ok(). Definitions carry UTF-8.
+TEST_CASE("schema: an attribute type with neither SYNTAX nor SUP is reported", "[schema][validate]")
+{
+	const std::pmr::vector<std::pmr::string> types{
+		"( 1.2.7 NAME 'bareAttr' DESC 'caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC \xF0\x9F\x93\x9C' )",
+		"( 1.2.8 NAME 'bareChild' DESC 'na\xC3\xAFve \xE5\xAD\x90' SUP bareAttr )",
+	};
+	const std::pmr::vector<std::pmr::string> classes{ "( 2.5.6.0 NAME 'top' ABSTRACT )" };
+	const auto s = ldap::server_schema::parse(types, classes);
+	CHECK(s.skipped() == 0);
+	REQUIRE(s.find_attribute("bareAttr") != nullptr);
+	CHECK(s.syntax_of(*s.find_attribute("bareAttr")) == nullptr);
+
+	const auto rep = ldap::validate<no_syntax>(s);
+	CHECK_FALSE(rep.ok());
+	REQUIRE(rep.issues.size() == 2);
+	CHECK(rep.issues[0].what == ldap::schema_issue::kind::syntax_mismatch);
+	CHECK(rep.issues[0].name == "bareAttr");
+	CHECK(rep.issues[0].detail == "syntax unknown: the server declares no SYNTAX and no SUP for it");
+	CHECK(rep.issues[1].what == ldap::schema_issue::kind::syntax_mismatch);
+	CHECK(rep.issues[1].name == "bareChild");
+	CHECK(rep.issues[1].detail == "syntax unknown: the server declares no SYNTAX for it or its supertypes");
+}
+
 TEST_CASE("schema: validate a matching descriptor", "[schema][validate]")
 {
 	const auto s = ldap::server_schema::parse(openldap_types, openldap_classes);

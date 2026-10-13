@@ -186,7 +186,8 @@ struct schema_issue
 		unknown_object_class,// error
 		unknown_attribute,// error (also when its definition was skipped, see detail)
 		// error; also when the syntax cannot be determined because a SUP on
-		// the attribute's chain is not defined (or was skipped)
+		// the attribute's chain is not defined (or was skipped), or because
+		// no definition on the chain declares a SYNTAX
 		syntax_mismatch,
 		writable_but_no_user_modification,// error
 		single_member_multi_valued,// warning: only fails if an entry really has several values

@@ -833,7 +833,8 @@ up). `server_schema` indexes names and OIDs
 case-insensitively, ignores attribute options on lookup and follows SUP for
 the syntax (depth-limited against cycles). A member whose syntax cannot be
 determined because a SUP on the chain is not defined, was skipped for its
-SYNTAX, or loops is a `syntax_mismatch` error ("syntax unknown: ..."), not
+SYNTAX, or loops, or because no definition on the chain declares a SYNTAX
+(against RFC 4512 4.1.2; slapd refuses one), is a `syntax_mismatch` error ("syntax unknown: ..."), not
 a silent pass; the names of definitions skipped for their SYNTAX are
 remembered, so a member mapped to one is told so rather than "not
 defined on the server". The cardinality check is a
