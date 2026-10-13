@@ -151,6 +151,10 @@ namespace {
 			return "the connection must be protected by TLS";
 		case client_errc::no_password_method:
 			return "no known password-change method on this server";
+		case client_errc::gssapi_failure:
+			return "GSS-API failure";
+		case client_errc::security_layer_required:
+			return "the server requires a SASL security layer";
 		}
 		return {};
 	}
@@ -214,8 +218,10 @@ namespace {
 		case client_errc::not_connected:
 			return cond::connection_lost;
 		case client_errc::unauthenticated_bind:
+		case client_errc::gssapi_failure:
 			return cond::auth_failed;
 		case client_errc::tls_required:
+		case client_errc::security_layer_required:
 			return cond::access_denied;
 		default:
 			return std::nullopt;

@@ -277,7 +277,9 @@ an ldapi:// socket. A server or mechanism error fails the bind and leaves
 the connection usable, except a `complete()` that refuses the server's
 success: the server then considers the connection bound, so `sasl_bind`
 closes it. An end-to-end EXTERNAL test needs a real server
-(#14).
+(#14). Before `start()`, `sasl_bind` calls `prepare(sasl_bind_context)`
+(default: ignored) with the URL's host (empty for ldapi:// and wrapped
+transports), which GSSAPI needs for its default target.
 
 SCRAM-SHA-256 (`sasl_scram.hpp`, RFC 5802 / RFC 7677, in jhetz::ldap_net
 since it needs OpenSSL): `sasl_scram_sha256(username, password,
@@ -311,6 +313,48 @@ and U+2028/U+2029 (line breaks in some log viewers) are replaced (U+FFFD),
 and it is cut on a code point boundary. Contexts do not name the
 mechanism (`sasl_bind` prefixes "sasl bind SCRAM-SHA-256"). Tested with the RFC 7677 vector and against
 slapd with cyrus-sasl's scram plugin.
+
+GSSAPI (`sasl_gssapi.hpp`, RFC 4752, Kerberos V5; in jhetz::ldap_net only
+with the CMake option `JHETZ_LDAP_WITH_GSSAPI`, off by default): an
+optional dependency on the GSS-API C library (MIT krb5's
+`libgssapi_krb5`), found with pkg-config (`krb5-gssapi`, or Heimdal's
+`heimdal-gssapi`, untested) and linked privately; the installed package
+config finds it again (component `gssapi`). `sasl_gssapi(options)` with
+`target` (a host-based service name, default `ldap@<host>`, the host
+from `prepare()`), `principal` (default: the default credentials of the
+ccache; otherwise `gss_acquire_cred` for that name, which looks through
+the cache collection) and `authz_id`. `start()` and `step()` run
+`gss_init_sec_context` (Kerberos OID 1.2.840.113554.1.2.2, written out
+so the code builds against MIT and Heimdal headers; mutual authentication
+and sequencing requested; no channel bindings) until the context is
+established, the last output token sent even if empty; a context without
+mutual authentication is refused. The next challenge is the server's
+wrapped security layer offer (`gss_unwrap`, exactly 4 octets: layer mask,
+max size); the client always answers "no security layer" (`0x01`), max
+size 0, then the authz_id, wrapped without confidentiality (`gss_wrap`,
+conf_flag 0), as RFC 4752 section 3.1 says. An offer without the "none"
+bit fails with `client_errc::security_layer_required` (the exchange is
+aborted, the connection stays usable). `complete()` refuses a success
+that comes before that reply (the server was not authenticated, so
+`sasl_bind` closes the connection), and releases the context: with no
+layer nothing uses it after the bind. The layer messages are pure
+functions (`detail::parse_gssapi_layer_offer`, `gssapi_layer_reply`),
+unit tested without Kerberos. GSS-API handles (names, credentials,
+context, buffers) are owned by small RAII types; `gssapi.h` stays out of
+the public header (pimpl). Failures are `client_errc::gssapi_failure`
+(`cond::auth_failed`) with the call's name and `gss_display_status`'s
+major and minor messages (sanitized, as server text is), never tokens.
+Names are UTF-8, checked (well-formed, no control characters) and given
+to GSS-API as is. Security layers (integrity, confidentiality: wrapping
+every LDAP PDU) are not provided; TLS is the protection. Active Directory
+notes: its "LDAP server signing requirements" policy, when it requires
+signing, refuses no-layer SASL binds over plain LDAP
+(strongerAuthRequired, 00002028), so use TLS there; its "LDAP channel
+binding" policy, when "Always", refuses them over TLS too, since no
+channel bindings (tls-server-end-point) are sent. Tested without a KDC
+(the layer messages, input checks, GSS-API errors before anything is
+sent) and end to end against slapd (cyrus-sasl's gssapi plugin) and a
+throwaway MIT KDC (`tests/integration/run_kdc.sh`).
 
 Referrals and continuation references are returned, never chased:
 `error::referrals` and `search_stream::references()` keep the URIs as
@@ -559,7 +603,7 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`; connection: `unexpected_response`, `not_connected`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `no_password_method`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`; connection: `unexpected_response`, `not_connected`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `no_password_method`, `gssapi_failure`, `security_layer_required`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 `error`'s strings are `std::pmr::string` but always on the default
@@ -610,7 +654,11 @@ failure, which the context names), `operation_in_progress` (the connection
 is busy; nothing is queued), `unauthenticated_bind` (a name with an empty
 password), `tls_required` (an Active Directory password change on a
 connection without TLS), `no_password_method` (the root DSE advertises
-no password-change method this library knows). Server errors carry the operation as context
+no password-change method this library knows), `gssapi_failure` (a GSS-API
+call failed in a SASL GSSAPI bind: the context quotes GSS-API's major and
+minor status messages), `security_layer_required` (the server accepts a
+SASL GSSAPI bind only with a security layer, which the client does not
+provide). Server errors carry the operation as context
 (`search ou=people,dc=example,dc=org`) and leave the connection usable;
 transport and protocol errors close it.
 
@@ -623,14 +671,14 @@ a caller match none, deliberately (test them by exact code).
 | Condition | `ldap.result` (`errc`) | `ldap.client` (`client_errc`) | system / Capy / TLS |
 |---|---|---|---|
 | `not_found` | `no_such_object`, `no_such_attribute` | | |
-| `auth_failed` | `invalid_credentials`, `inappropriate_authentication`, `auth_method_not_supported` | `unauthenticated_bind` | |
+| `auth_failed` | `invalid_credentials`, `inappropriate_authentication`, `auth_method_not_supported` | `unauthenticated_bind`, `gssapi_failure` | |
 | `timeout` | `time_limit_exceeded` | | `timed_out`, `capy::error::timeout` |
 | `canceled` | | | `operation_canceled`, `capy::error::canceled` |
 | `connection_lost` | | `not_connected` | `connection_reset`, `connection_aborted`, `broken_pipe`, `not_connected`; Capy `eof`, `stream_truncated` |
 | `tls_failure` | | | any `corosio.openssl` (or `corosio.wolfssl`) code |
 | `protocol_error` | `protocol_error` | `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `integer_overflow`, `unexpected_tag`, `unsupported_operation`, `unexpected_response` | |
 | `busy_or_unavailable` | `busy`, `unavailable` | | `connection_refused`, `host_unreachable`, `network_unreachable`, `network_down` |
-| `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required` | `permission_denied` |
+| `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required`, `security_layer_required` | `permission_denied` |
 | `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
 | `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
 | none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `assertion_failed`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `no_password_method` | everything else |
@@ -1024,7 +1072,10 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
 - ICU (decision 6; `find_package(ICU COMPONENTS uc data)`) for Unicode
   normalization and the stringprep profiles. Today only `jhetz_ldap_net`
   links it (SASLprep for SCRAM), privately; the installed package config
-  finds it as a dependency of `net`. LDAPprep matching (RFC 4518) in the
+  finds it as a dependency of `net`.
+- Optional: the GSS-API library (MIT krb5) for SASL GSSAPI, with
+  `JHETZ_LDAP_WITH_GSSAPI` (pkg-config `krb5-gssapi`), privately linked
+  by `jhetz_ldap_net`. LDAPprep matching (RFC 4518) in the
   codec will make it a dependency of `jhetz_ldap` too.
 - Coverage: Clang source-based coverage (`JHETZ_LDAP_COVERAGE`, llvm-cov),
   scoped to our own targets like the warnings; `tests/coverage/run_coverage.sh`

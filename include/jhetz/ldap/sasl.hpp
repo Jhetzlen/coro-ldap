@@ -7,10 +7,10 @@
 //   ldap::sasl_external mech;                       // identity from TLS / ldapi://
 //   if (auto r = co_await conn.sasl_bind(mech); !r) ...
 //
-// SCRAM-SHA-256 is sasl_scram_sha256 (sasl_scram.hpp, in jhetz::ldap_net).
-// Implement sasl_mechanism to add another (GSSAPI would fit this
-// interface; it is not provided). A mechanism object serves one bind at a
-// time.
+// SCRAM-SHA-256 is sasl_scram_sha256 (sasl_scram.hpp, in jhetz::ldap_net),
+// GSSAPI (Kerberos) sasl_gssapi (sasl_gssapi.hpp, in jhetz::ldap_net when
+// built with JHETZ_LDAP_WITH_GSSAPI). Implement sasl_mechanism to add
+// another. A mechanism object serves one bind at a time.
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -21,10 +21,24 @@
 
 namespace jhetz::ldap {
 
+// What connection::sasl_bind tells a mechanism about the server, before
+// start() (sasl_mechanism::prepare). Valid only during that call.
+struct sasl_bind_context
+{
+	// The host of the URL connected to (ldap://, ldaps://), as decoded:
+	// a name or an IP address (without brackets). Empty for ldapi:// and
+	// for transports wrap()ped by the caller.
+	std::string_view host{};
+};
+
 class sasl_mechanism
 {
   public:
 	virtual ~sasl_mechanism() = default;
+
+	// Called by sasl_bind at the start of each bind, before start(), e.g.
+	// for GSSAPI's default target (ldap@<host>). Default: ignored.
+	virtual void prepare(const sasl_bind_context &context) { (void)context; }
 
 	// The mechanism name sent in the BindRequest, e.g. "EXTERNAL".
 	virtual std::string_view name() const noexcept = 0;

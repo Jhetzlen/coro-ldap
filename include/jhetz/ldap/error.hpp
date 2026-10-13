@@ -101,6 +101,8 @@ enum class client_errc : int {
 	unauthenticated_bind,// simple bind with a name and an empty password (RFC 4513 section 5.1.2)
 	tls_required,// refused on a connection without TLS (an Active Directory password change)
 	no_password_method,// the server advertises no password-change method this library knows
+	gssapi_failure,// a GSS-API (Kerberos) call failed during a SASL GSSAPI bind
+	security_layer_required,// the server requires a SASL security layer (integrity, confidentiality)
 };
 
 // Error conditions: what an error means, across categories (DESIGN.md

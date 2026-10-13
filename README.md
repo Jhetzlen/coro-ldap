@@ -236,10 +236,35 @@ itself stays dependency-free.
   username and password, the bind fails unless the server proves it knows
   the password; UTF-8 usernames and passwords prepared with SASLprep, RFC
   4013, through ICU; no channel binding) are built in,
-  and `sasl_mechanism` is the interface for others. When the server
+  `sasl_gssapi` (`jhetz/ldap/sasl_gssapi.hpp`, Kerberos V5, RFC 4752;
+  optional, see below) too when built with `JHETZ_LDAP_WITH_GSSAPI`,
+  and `sasl_mechanism` is the interface for others (`prepare()` gives a
+  mechanism the URL's host before each bind). When the server
   reports success but the mechanism's `complete()` refuses it (e.g. a
   wrong SCRAM server signature), `sasl_bind` returns the error and closes
   the connection, since the server considers it bound.
+- SASL GSSAPI (`sasl_gssapi`, option `JHETZ_LDAP_WITH_GSSAPI`, off by
+  default; needs the GSS-API library, MIT krb5's `libgssapi_krb5`, found
+  with pkg-config: Debian `libkrb5-dev`, Arch `krb5`): Kerberos binds with
+  the default credentials (the ticket cache of `kinit`, `KRB5CCNAME`) or
+  `sasl_gssapi_options::principal` (UTF-8, e.g. `jdoe@EXAMPLE.ORG`); the
+  target is `ldap@<the URL's host>` unless `options.target` names
+  another (connect with the server's DNS name, not an address; ldapi://
+  needs an explicit target); mutual authentication is required; an
+  optional `authz_id`. The client always chooses "no security layer"
+  (maximum buffer size 0), so SASL neither signs nor seals the session:
+  use it over ldaps:// or StartTLS unless the network is trusted. A
+  server that requires integrity or confidentiality fails the bind with
+  `client_errc::security_layer_required`. Active Directory: with the
+  "LDAP server signing requirements" policy set to require signing, AD
+  refuses unsigned SASL binds over plain ldap:// (`stronger_auth_required`,
+  `00002028`), so use TLS there; there is no channel binding, so an AD
+  whose "LDAP channel binding" policy is "Always" refuses it over TLS.
+  GSS-API failures (no ticket, unknown service principal, unreachable
+  KDC) are `client_errc::gssapi_failure` (`cond::auth_failed`), the
+  context quoting GSS-API's major and minor status messages; never
+  tokens or credentials. Every GSS-API handle is released (RAII).
+  `examples/gssapi.cpp` binds with StartTLS and the default ticket.
 - `jhetz/ldap/controls.hpp`: typed request controls in a `std::variant`
   (`ldap::paged`, `manage_dsa_it`, `proxied_authorization`,
   `server_side_sort` (RFC 2891), `assertion` (RFC 4528, critical by default;
@@ -345,7 +370,8 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: other SASL mechanisms (SCRAM-SHA-256-PLUS, GSSAPI), a connection pool.
+Not yet: other SASL mechanisms (SCRAM-SHA-256-PLUS, GSS-SPNEGO, GSSAPI
+security layers and channel binding), a connection pool.
 
 ## Examples
 
@@ -366,6 +392,7 @@ URL (`ldap://localhost`).
 | `starttls.cpp` | connect with StartTLS, then bind |
 | `cancel.cpp` | search the whole tree; Ctrl-C gives up on it (`capy::when_any` with `ldap::raceable`) |
 | `blocking.cpp` | the same search with the blocking `ldap::sync::connection` |
+| `gssapi.cpp` | StartTLS, then a Kerberos bind with the default ticket (`sasl_gssapi`; built with `JHETZ_LDAP_WITH_GSSAPI`) |
 
 `examples/ldapsearch.cpp` (above) is a fuller command-line tool. To try an
 example against the throwaway slapd of the integration tests:
@@ -426,6 +453,7 @@ certificates generated at run time through the OpenSSL API.
 |---|---|---|
 | `JHETZ_LDAP_BUILD_TESTS` | `ON` | unit tests and the `*_fuzz_replay` tests |
 | `JHETZ_LDAP_BUILD_NET` | `ON` (`OFF` with fuzzers) | `jhetz::ldap_net` and its tests; fetches Corosio + Capy, needs OpenSSL and ICU |
+| `JHETZ_LDAP_WITH_GSSAPI` | `OFF` | SASL GSSAPI (Kerberos) in `jhetz::ldap_net`, its tests and example; needs the GSS-API library (pkg-config `krb5-gssapi`). The installed package then has the component `gssapi` |
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
 | `JHETZ_LDAP_WERROR` | `OFF` | warnings are errors in our code (CI turns it on) |
@@ -456,6 +484,26 @@ package, others are set with `SLAPD`, `SLAPD_SCHEMA_DIR` and
 path; without it the server side sort test is skipped. Without slapd the
 `integration` test is skipped, so plain `ctest` stays hermetic. CI runs it
 in the `integration` job.
+
+SASL GSSAPI (built with `JHETZ_LDAP_WITH_GSSAPI`) has its own test,
+`integration.gssapi` (labels `integration` and `kerberos`), run with a
+throwaway MIT Kerberos KDC around slapd: `run_kdc.sh` creates the realm
+`EXAMPLE.ORG`, the service principal `ldap/localhost` (slapd's keytab)
+and tickets for `user007` and `jörg`, with its configuration in a
+temporary directory, and `run_slapd.sh` then configures slapd for GSSAPI:
+
+```sh
+tests/integration/run_kdc.sh tests/integration/run_slapd.sh \
+  ctest --test-dir build/main -L integration --output-on-failure
+```
+
+It needs MIT krb5's KDC tools (`krb5kdc`, `kdb5_util`, `kadmin.local`,
+`kinit`) and cyrus-sasl's gssapi plugin for slapd (Debian
+`libsasl2-modules-gssapi-mit`, Arch `cyrus-sasl-gssapi`; a plugin outside
+cyrus-sasl's directory is found through `SASL_PATH`, which must then list
+the other plugins too). The KDC listens on 127.0.0.1, port
+`JHETZ_LDAP_IT_KDC_PORT` (3750). Without them the test is skipped. Not in
+CI.
 
 ## Coverage
 

@@ -1158,6 +1158,9 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 	if (auto b = co_await begin_bind(self, context); !b) co_return std::unexpected(std::move(b.error()));
 	const bind_exchange exchange{ self };
 	constexpr int max_steps = 32;
+	sasl_bind_context bind_context;
+	if (self->transport.type() == net::transport::kind::tcp) bind_context.host = self->transport.host();
+	mechanism.prepare(bind_context);
 	auto creds = mechanism.start();
 	for (int step = 0;; ++step) {
 		if (!creds || step == max_steps) {

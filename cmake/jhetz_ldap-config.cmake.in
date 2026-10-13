@@ -2,14 +2,29 @@
 # when installed with networking, jhetz::ldap_net (needs Corosio, Capy,
 # OpenSSL and ICU, found here as packages). Component `net` requires the latter:
 #   find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net)
+# Component `gssapi`: jhetz::ldap_net was built with SASL GSSAPI
+# (JHETZ_LDAP_WITH_GSSAPI); the GSS-API library is then found with pkg-config.
 @PACKAGE_INIT@
 
 set(jhetz_ldap_net_FOUND @JHETZ_LDAP_PACKAGE_NET@)
+set(jhetz_ldap_gssapi_FOUND @JHETZ_LDAP_PACKAGE_GSSAPI@)
 if(jhetz_ldap_net_FOUND)
     include(CMakeFindDependencyMacro)
     find_dependency(boost_corosio CONFIG)
     # Linked privately, but a static jhetz::ldap_net needs it at link time.
     find_dependency(ICU COMPONENTS uc data)
+    if(jhetz_ldap_gssapi_FOUND)
+        # The same: the target jhetz::ldap_net links, PkgConfig::JHETZ_LDAP_GSSAPI.
+        find_dependency(PkgConfig)
+        if(NOT TARGET PkgConfig::JHETZ_LDAP_GSSAPI)
+            pkg_search_module(JHETZ_LDAP_GSSAPI IMPORTED_TARGET krb5-gssapi heimdal-gssapi)
+        endif()
+        if(NOT TARGET PkgConfig::JHETZ_LDAP_GSSAPI)
+            set(jhetz_ldap_FOUND FALSE)
+            set(jhetz_ldap_NOT_FOUND_MESSAGE "jhetz::ldap_net needs the GSS-API library (pkg-config krb5-gssapi)")
+            return()
+        endif()
+    endif()
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/jhetz_ldap-targets.cmake")

@@ -24,6 +24,7 @@ option(JHETZ_LDAP_SANITIZE "Build all targets with AddressSanitizer and UBSan" O
 option(JHETZ_LDAP_WERROR "Treat warnings in jhetz::ldap code as errors" OFF)
 option(JHETZ_LDAP_COVERAGE "Instrument our own targets for Clang source-based coverage (llvm-cov)" OFF)
 option(JHETZ_LDAP_BUILD_BENCH "Build the benchmarks (bench/, not run by ctest)" OFF)
+option(JHETZ_LDAP_WITH_GSSAPI "Add SASL GSSAPI (Kerberos) to jhetz::ldap_net (needs the GSS-API library, MIT krb5's libgssapi_krb5, found with pkg-config)" OFF)
 option(JHETZ_LDAP_BUILD_EXAMPLES "Build the examples (examples/; need JHETZ_LDAP_BUILD_NET)" ON)
 option(JHETZ_LDAP_INSTALL "Generate install rules and the jhetz_ldap CMake package" ${PROJECT_IS_TOP_LEVEL})
 
@@ -211,6 +212,24 @@ if(JHETZ_LDAP_BUILD_NET)
     target_link_libraries(jhetz_ldap_net PUBLIC jhetz_ldap Boost::corosio Boost::corosio_openssl
         PRIVATE ICU::uc ICU::data)
     jhetz_ldap_warnings(jhetz_ldap_net)
+    # SASL GSSAPI (sasl_gssapi.hpp), optional: the GSS-API library is found
+    # with pkg-config (MIT krb5's krb5-gssapi; Heimdal's heimdal-gssapi
+    # should work too, untested). The installed package config finds it
+    # the same way.
+    if(JHETZ_LDAP_WITH_GSSAPI)
+        find_package(PkgConfig)
+        if(PkgConfig_FOUND)
+            pkg_search_module(JHETZ_LDAP_GSSAPI IMPORTED_TARGET krb5-gssapi heimdal-gssapi)
+        endif()
+        if(NOT TARGET PkgConfig::JHETZ_LDAP_GSSAPI)
+            message(FATAL_ERROR "JHETZ_LDAP_WITH_GSSAPI needs the GSS-API library and pkg-config "
+                "(e.g. apt install libkrb5-dev pkg-config), or configure with -DJHETZ_LDAP_WITH_GSSAPI=OFF")
+        endif()
+        target_sources(jhetz_ldap_net PRIVATE src/sasl_gssapi.cpp)
+        target_link_libraries(jhetz_ldap_net PRIVATE PkgConfig::JHETZ_LDAP_GSSAPI)
+    endif()
+elseif(JHETZ_LDAP_WITH_GSSAPI)
+    message(FATAL_ERROR "JHETZ_LDAP_WITH_GSSAPI needs JHETZ_LDAP_BUILD_NET")
 endif()
 
 if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
@@ -220,7 +239,11 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     jhetz_ldap_warnings(jhetz_ldapsearch)
 
     # Small programs showing the main use cases (README.md, "Examples").
-    foreach(example connect search modify add delete password starttls cancel blocking bulk bulk_paged)
+    set(jhetz_ldap_examples connect search modify add delete password starttls cancel blocking bulk bulk_paged)
+    if(JHETZ_LDAP_WITH_GSSAPI)
+        list(APPEND jhetz_ldap_examples gssapi)
+    endif()
+    foreach(example ${jhetz_ldap_examples})
         add_executable(jhetz_ldap_example_${example} examples/${example}.cpp)
         target_link_libraries(jhetz_ldap_example_${example} PRIVATE jhetz::ldap_net)
         jhetz_ldap_warnings(jhetz_ldap_example_${example})
@@ -252,8 +275,13 @@ if(JHETZ_LDAP_INSTALL)
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-    if(JHETZ_LDAP_PACKAGE_NET)
+    set(JHETZ_LDAP_PACKAGE_GSSAPI OFF)
+    if(JHETZ_LDAP_PACKAGE_NET AND JHETZ_LDAP_WITH_GSSAPI)
+        set(JHETZ_LDAP_PACKAGE_GSSAPI ON)
         install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    elseif(JHETZ_LDAP_PACKAGE_NET)
+        install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            PATTERN "sasl_gssapi.hpp" EXCLUDE)
     else()
         # Without jhetz::ldap_net, its headers (they need Corosio, or their
         # implementation is in jhetz::ldap_net) are left out.
@@ -261,6 +289,7 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "net" EXCLUDE
             PATTERN "connection.hpp" EXCLUDE
             PATTERN "sasl_scram.hpp" EXCLUDE
+            PATTERN "sasl_gssapi.hpp" EXCLUDE
             PATTERN "sync.hpp" EXCLUDE)
     endif()
     install(EXPORT jhetz_ldap-targets NAMESPACE jhetz:: DESTINATION ${jhetz_ldap_cmakedir})

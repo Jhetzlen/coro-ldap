@@ -44,10 +44,13 @@ class echo_mechanism final : public ldap::sasl_mechanism
 	std::optional<std::string> final_creds;
 	bool reject_final = false;
 	bool fail_start = false;
+	std::vector<std::string> hosts;// prepare()'s, then "start" at each start()
 
 	std::string_view name() const noexcept override { return "X-ECHO"; }
+	void prepare(const ldap::sasl_bind_context &context) override { hosts.emplace_back(context.host); }
 	ldap::result<std::optional<std::string>> start() override
 	{
+		hosts.emplace_back("start");
 		challenges.clear();
 		if (fail_start) return ldap::fail(ldap::client_errc::decode_error, "X-ECHO: no credentials");
 		return std::optional<std::string>("hello");
@@ -80,6 +83,29 @@ TEST_CASE("sasl: EXTERNAL in one step", "[net][sasl]")
 	REQUIRE(m.log.received.size() == 2);
 	CHECK(m.log.received[0] == sasl_req(1, "EXTERNAL", ""));
 	CHECK(m.log.received[1] == sasl_req(2, "EXTERNAL", "dn:uid=jdoe,ou=people,dc=example,dc=org"));
+}
+
+TEST_CASE("sasl: prepare() gets the URL's host before each start()", "[net][sasl]")
+{
+	SECTION("a wrapped transport has none")
+	{
+		mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 0) }) });
+		echo_mechanism mech;
+		REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
+		m.check_server();
+		CHECK(mech.hosts == std::vector<std::string>{ "", "start" });
+	}
+	SECTION("ldap:// has the URL's")
+	{
+		tcp_mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 0) }), answer({ sasl_resp(2, 0) }) });
+		echo_mechanism mech;
+		REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
+		REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
+		m.check_server();
+		CHECK(mech.hosts == std::vector<std::string>{ "127.0.0.1", "start", "127.0.0.1", "start" });
+	}
 }
 
 TEST_CASE("sasl: failure codes keep the connection usable", "[net][sasl]")

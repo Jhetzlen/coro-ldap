@@ -433,7 +433,8 @@ class connection
 
 	// SASL bind (RFC 4513 section 5.2): sends one BindRequest per step of
 	// `mechanism` while the server answers saslBindInProgress (at most 32
-	// steps, then the bind fails with unexpected_response). `name` is
+	// steps, then the bind fails with unexpected_response), after
+	// mechanism.prepare() with the URL's host (sasl_bind_context). `name` is
 	// usually empty (the mechanism carries the identity). A server error
 	// (e.g. errc::inappropriate_authentication) or a mechanism error fails
 	// the bind; the connection stays usable (anonymous). A mechanism error

@@ -98,6 +98,9 @@ if(JHETZ_LDAP_BUILD_NET)
         net/sync_tests.cpp
         net/message_io_tests.cpp
     )
+    if(JHETZ_LDAP_WITH_GSSAPI)
+        target_sources(jhetz_ldap_net_tests PRIVATE net/sasl_gssapi_tests.cpp)
+    endif()
     target_link_libraries(jhetz_ldap_net_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
     # Integration tests against a real slapd (tests/integration/run_slapd.sh
     # starts one and sets JHETZ_LDAP_IT_*): one ctest entry, label
@@ -107,6 +110,15 @@ if(JHETZ_LDAP_BUILD_NET)
     jhetz_ldap_warnings(jhetz_ldap_integration_tests)
     add_test(NAME integration COMMAND jhetz_ldap_integration_tests)
     set_tests_properties(integration PROPERTIES LABELS integration SKIP_RETURN_CODE 4)
+    # SASL GSSAPI against slapd and a throwaway KDC (run_kdc.sh around
+    # run_slapd.sh): skipped without them.
+    if(JHETZ_LDAP_WITH_GSSAPI)
+        add_executable(jhetz_ldap_gssapi_integration_tests integration/gssapi_tests.cpp)
+        target_link_libraries(jhetz_ldap_gssapi_integration_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
+        jhetz_ldap_warnings(jhetz_ldap_gssapi_integration_tests)
+        add_test(NAME integration.gssapi COMMAND jhetz_ldap_gssapi_integration_tests)
+        set_tests_properties(integration.gssapi PROPERTIES LABELS "integration;kerberos" SKIP_RETURN_CODE 4)
+    endif()
 
     # sync_tests.cpp runs the CLI against its in-process server.
     if(TARGET jhetz_ldapsearch)
