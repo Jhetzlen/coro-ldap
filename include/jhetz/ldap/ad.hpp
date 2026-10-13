@@ -38,10 +38,13 @@
 //                      attribute:
 //                      - accountExpires: "never expires", like ad::never.
 //                        ad::is_never(t) is true for both.
-//                      - lastLogon, lastLogonTimestamp, badPasswordTime,
-//                        lockoutTime: "never happened". Being before every
-//                        date, `last_logon < cutoff` includes accounts that
-//                        never logged on (test != time_point{} to skip them).
+//                      - lastLogon, lastLogonTimestamp, badPasswordTime:
+//                        "never happened". Being before every date,
+//                        `last_logon < cutoff` includes accounts that never
+//                        logged on (test != time_point{} to skip them).
+//                      - lockoutTime: "not currently locked out". AD writes
+//                        0 when an account is unlocked, so it does not mean
+//                        the account was never locked out.
 //                      - pwdLastSet: equals ad::pwd_must_change (the user
 //                        must change the password at the next logon).
 //   ad::pwd_must_change  pwdLastSet 0 (time_point{}): written, the user must

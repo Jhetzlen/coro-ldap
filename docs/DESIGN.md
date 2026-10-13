@@ -441,10 +441,15 @@ type decides:
   before every date; its meaning depends on the attribute:
   - accountExpires: 0 and 9223372036854775807 both mean "never expires";
     `ad::is_never(t)` is true for either.
-  - lastLogon, lastLogonTimestamp, badPasswordTime, lockoutTime: 0 is
-    "never happened". It sorts before every date, so a stale-account check
-    `last_logon < cutoff` includes accounts that never logged on, and date
-    arithmetic on it stays defined.
+  - lastLogon, lastLogonTimestamp, badPasswordTime: 0 is "never
+    happened". It sorts before every date, so a stale-account check
+    `last_logon < cutoff` includes accounts that never logged on.
+  - lockoutTime: 0 is "not currently locked out". AD writes 0 when an
+    account is unlocked, so it does not mean "never locked out".
+
+  Date arithmetic on tick 0 stays defined for ordinary intervals, but not
+  with `ad::forever`: `lockout_time - lockout_duration` overflows when
+  lockoutDuration is `ad::forever` (see below).
   - pwdLastSet: 0 equals `ad::pwd_must_change`.
 
   Values below -1 fail to decode (`conversion_failed`): AD writes no date
@@ -464,7 +469,9 @@ type decides:
 - `ldap::ad::filetime_clock::duration`: an interval, sign kept (maxPwdAge
   -36288000000000 is `-days(42)`); `ad::forever` (`duration::min()`,
   -9223372036854775808) is "passwords never expire" / "locked until an
-  administrator unlocks".
+  administrator unlocks". Negating it, or subtracting it from a date
+  (`lockout_time - lockout_duration`), overflows: test for `ad::forever`
+  first.
 
 Typed filters encode these like any value
 (`filters::field<&user::account_expires>() <= t`); on an untyped attribute,
