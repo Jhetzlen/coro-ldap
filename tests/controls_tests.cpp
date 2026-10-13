@@ -80,6 +80,14 @@ TEST_CASE("find_paged", "[controls]")
 	auto b = ldap::find_paged(bad);
 	REQUIRE_FALSE(b.has_value());
 	CHECK(b.error().code == ldap::cond::protocol_error);
+	// BER errors name the control: their offsets are relative to its value.
+	CHECK(b.error().context == "paged results: ber: truncated header at offset 0");
+	std::pmr::vector<ldap::control> no_size{ ldap::control{
+	  ldap::paged_results_oid, false, std::string("\x30\x02\x04\x00", 4) } };
+	auto n = ldap::find_paged(no_size);
+	REQUIRE_FALSE(n.has_value());
+	CHECK(n.error().context
+		  == "paged results: ber: reading INTEGER: expected [UNIVERSAL 2], got [UNIVERSAL 4] at offset 2");
 }
 
 // ---------------------------------------------------------------- server side sort (RFC 2891)

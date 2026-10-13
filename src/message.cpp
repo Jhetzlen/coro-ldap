@@ -1214,41 +1214,7 @@ result<message_header> peek_message_header(std::span<const std::byte> one_comple
 	return message_header{ id, op };
 }
 
-// ---------------------------------------------------------------- paged results
-
-result<control> encode_paged_results(const paged_results &value, bool criticality, std::pmr::memory_resource *mr)
-{
-	if (value.size < 0) return fail(client_errc::encode_error, "paged results: negative size");
-	ber::writer w{ ber::writer::allocator_type(mr) };
-	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
-		s.integer(value.size);
-		s.octet_string(value.cookie);
-	});
-	return control(paged_results_oid, criticality, detail::as_text(w.bytes()), control::allocator_type(mr));
-}
-
-result<paged_results> decode_paged_results(const control &c, std::pmr::memory_resource *mr)
-{
-	if (c.type != paged_results_oid)
-		return fail(client_errc::decode_error,
-		  sanitized_context("paged results: control type is ", c.type, detail::format(", not {}", paged_results_oid)));
-	if (!c.value) return fail(client_errc::decode_error, "paged results: control has no value");
-	// The control value was already taken out of its OCTET STRING by
-	// decode(), so it is decoded with its own reader (offsets relative to the
-	// value).
-	ber::reader r(std::as_bytes(std::span(*c.value)));
-	LDAP_TRY(s, r.enter());
-	LDAP_TRY_VOID(r.expect_end());
-	LDAP_TRY(size, read_ranged(s, ber::tags::integer, 0, max_int, "paged results size"));
-	LDAP_TRY(cookie, s.read_string(ber::tags::octet_string, mr));
-	LDAP_TRY_VOID(skip_rest(s));
-	paged_results out{ paged_results::allocator_type(mr) };
-	out.size = size;
-	out.cookie = std::move(cookie);
-	return out;
-}
-
-// ---------------------------------------------------------------- server side sorting
+// ---------------------------------------------------------------- control values
 
 namespace {
 
@@ -1266,7 +1232,58 @@ namespace {
 		return control(oid, criticality, detail::as_text(w.bytes()), control::allocator_type(mr));
 	}
 
+	// Errors from inside a control value name the control: their offsets
+	// are relative to the value, not to the message.
+	template<class T> result<T> in_control(result<T> r, std::string_view name)
+	{
+		return std::move(r).transform_error([name](error &&e) {
+			if (!e.context.empty()) e.context.insert(0, ": ");
+			e.context.insert(0, name);
+			return std::move(e);
+		});
+	}
+
 }// namespace
+
+// ---------------------------------------------------------------- paged results
+
+result<control> encode_paged_results(const paged_results &value, bool criticality, std::pmr::memory_resource *mr)
+{
+	if (value.size < 0) return fail(client_errc::encode_error, "paged results: negative size");
+	ber::writer w{ ber::writer::allocator_type(mr) };
+	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
+		s.integer(value.size);
+		s.octet_string(value.cookie);
+	});
+	return control(paged_results_oid, criticality, detail::as_text(w.bytes()), control::allocator_type(mr));
+}
+
+namespace {
+
+	// realSearchControlValue ::= SEQUENCE { size INTEGER (0..maxInt), cookie OCTET STRING }
+	result<paged_results> read_paged_results(std::span<const std::byte> value, std::pmr::memory_resource *mr)
+	{
+		ber::reader r(value);
+		LDAP_TRY(s, r.enter());
+		LDAP_TRY_VOID(r.expect_end());
+		LDAP_TRY(size, read_ranged(s, ber::tags::integer, 0, max_int, "size"));
+		LDAP_TRY(cookie, s.read_string(ber::tags::octet_string, mr));
+		LDAP_TRY_VOID(skip_rest(s));
+		paged_results out{ paged_results::allocator_type(mr) };
+		out.size = size;
+		out.cookie = std::move(cookie);
+		return out;
+	}
+
+}// namespace
+
+result<paged_results> decode_paged_results(const control &c, std::pmr::memory_resource *mr)
+{
+	LDAP_TRY_VOID(expect_control(c, paged_results_oid, "paged results"));
+	return in_control(read_paged_results(std::as_bytes(std::span(*c.value)), mr), "paged results");
+}
+
+// ---------------------------------------------------------------- server side sorting
 
 result<control> encode_sort_result(const sort_result &value, bool criticality, std::pmr::memory_resource *mr)
 {
@@ -1301,17 +1318,6 @@ namespace {
 		}
 		LDAP_TRY_VOID(skip_rest(s));
 		return out;
-	}
-
-	// Errors from inside a control value name the control: their offsets
-	// are relative to the value, not to the message.
-	template<class T> result<T> in_control(result<T> r, std::string_view name)
-	{
-		return std::move(r).transform_error([name](error &&e) {
-			if (!e.context.empty()) e.context.insert(0, ": ");
-			e.context.insert(0, name);
-			return std::move(e);
-		});
 	}
 
 }// namespace
