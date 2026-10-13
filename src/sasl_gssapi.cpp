@@ -243,7 +243,8 @@ struct sasl_gssapi::state
 		} else {
 			if ((flags & GSS_C_MUTUAL_FLAG) == 0) {
 				reset();
-				return refused("the server was not authenticated (no mutual authentication)");
+				return fail(client_errc::gssapi_failure,
+				  "gss_init_sec_context: no mutual authentication (the server was not authenticated)");
 			}
 			at = phase::established;
 		}
