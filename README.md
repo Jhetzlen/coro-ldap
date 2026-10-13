@@ -175,9 +175,11 @@ itself stays dependency-free.
   finished first, so an update (add, modify, delete, modify DN) that timed
   out, was stopped or lost a race may still have been applied; re-read the
   entry if the outcome matters.
+  An operation stopped before it starts is not sent (an update is then
+  certainly not applied); it fails with `capy::error::canceled`.
   Bind and StartTLS cannot be abandoned (RFC 4511 section 4.11): giving up
-  on one closes the connection (one stopped before it starts is not sent,
-  and the connection stays open). Nothing is sent while a bind is outstanding
+  on one closes the connection (one stopped before it starts is not sent
+  either, and the connection stays open). Nothing is sent while a bind is outstanding
   (RFC 4511 section 4.2.1): requests started during a bind exchange are
   held and sent after it, and binds are serialized.
   Every response is decoded with `origin::server` and must answer an

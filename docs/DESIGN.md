@@ -991,9 +991,14 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   destroyed while waiting abandons its operation (operations never wait on
   I/O themselves, so this is safe). Bind and StartTLS cannot be abandoned
   (RFC 4511 section 4.11): giving up on one closes the connection instead,
-  since its outcome is unknown; so a bind or StartTLS whose stop token is
-  already set when it starts is not sent at all (it fails with
-  `capy::error::canceled`, the connection stays open).
+  since its outcome is unknown. No operation whose stop token is already
+  set when it starts is sent at all: it fails with `capy::error::canceled`
+  and the connection stays open (sending it would only abandon it at once,
+  and an update might be applied). The check is right before the request
+  is submitted (for a bind, after the wait for an earlier bind; later steps
+  of a SASL exchange are sent, since the server waits for them; for a paged
+  search, before each page). unbind() and AbandonRequests, which end or
+  give up on work, and a paged search's release are sent regardless.
 - Cancelling from a coroutine (header-only helpers in `connection.hpp`):
   `capy::when_any` races only awaitables returning `io_result`, so
   `ldap::raceable(op)` makes an operation's `result<T>` the payload of one.

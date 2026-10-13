@@ -36,9 +36,10 @@
 // (add, modify, delete, modify DN) that timed out or was cancelled may still
 // have been applied; re-read the entry if the outcome matters. Bind and
 // StartTLS cannot be abandoned (section 4.11): giving up on one closes the
-// connection instead (its outcome is unknown). One whose stop token is set
-// before it starts is not sent: it fails with capy::error::canceled and the
-// connection stays open.
+// connection instead (its outcome is unknown). An operation whose stop token
+// is set before it starts is not sent (nothing is abandoned, an update is
+// not applied): it fails with capy::error::canceled and the connection stays
+// open. unbind() is sent regardless.
 //
 // Cancelling from a coroutine: the per-operation timeout covers the common
 // case. To give up on an operation when something else happens first (a

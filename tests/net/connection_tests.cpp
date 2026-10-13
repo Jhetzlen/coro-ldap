@@ -821,16 +821,21 @@ TEST_CASE("raceable: an operation raced with capy::when_any", "[net][connection]
 		CHECK(std::get<0>(out.get()) == ldap::cond::canceled);
 		check_abandoned_and_usable(m);
 	}
-	SECTION("the awaiting task stopped before the race starts: nothing wins, the search is abandoned at once")
+	SECTION("the awaiting task stopped before the race starts: nothing wins, the search is not sent")
 	{
-		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
+		m.serve({ answer({ bind_resp(1) }) });
 		std::stop_source stop;
 		stop.request_stop();
 		spawn(m.ioc, stop.get_token(), search_or(m.conn, event), out);
 		drive_until(m.ioc, [&out] { return out.done(); });
 		REQUIRE(out.get().index() == 0);
 		CHECK(std::get<0>(out.get()) == ldap::cond::canceled);
-		check_abandoned_and_usable(m);
+		CHECK(m.conn.is_open());
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
 	}
 }
 
@@ -908,15 +913,54 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 		CHECK(out.get().error().message() == "search \"\" (abandoned): operation canceled [boost.capy:2]");
 		check_abandoned_and_usable(m);
 	}
-	SECTION("stop requested before it starts")
+	SECTION("a search stopped before it starts is not sent: the connection stays open")
 	{
-		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
+		m.serve({ answer({ bind_resp(1) }) });
 		cancel.request_stop();
 		auto r = m.run(ldap::with_stop(cancel.get_token(), m.conn.search({})));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::canceled);
-		CHECK(r.error().context == "search \"\" (abandoned)");
-		check_abandoned_and_usable(m);
+		CHECK(r.error().context == "search \"\"");
+		CHECK(m.conn.is_open());
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+	}
+	SECTION("a paged search stopped before it starts is not sent")
+	{
+		m.serve({ answer({ bind_resp(1) }) });
+		cancel.request_stop();
+		auto r = m.run(ldap::with_stop(cancel.get_token(), m.conn.search_paged({}, 10)));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::canceled);
+		CHECK(r.error().context == "search \"\"");
+		CHECK(m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+	}
+	SECTION("an update stopped before it starts is not sent, so it cannot be applied")
+	{
+		m.serve({ answer({ bind_resp(1) }) });
+		cancel.request_stop();
+		auto add = m.run(ldap::with_stop(cancel.get_token(),
+		  m.conn.add({ .entry = ldap::dn{ "cn=x,dc=example,dc=org" }, .attributes = { { "cn", { "x" } } } })));
+		REQUIRE_FALSE(add.has_value());
+		CHECK(add.error().code == ldap::cond::canceled);
+		CHECK(add.error().context == "add cn=x,dc=example,dc=org");
+		auto mod = m.run(ldap::with_stop(cancel.get_token(),
+		  m.conn.modify(
+			{ .object = ldap::dn{ "cn=x,dc=example,dc=org" }, .changes = { ldap::mod::replace("cn", { "y" }) } })));
+		REQUIRE_FALSE(mod.has_value());
+		CHECK(mod.error().code == ldap::cond::canceled);
+		CHECK(m.conn.is_open());
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
 	}
 	SECTION("a bind stopped before it starts is not sent: the connection stays open")
 	{
@@ -1246,7 +1290,9 @@ TEST_CASE("connection: stress with many concurrent operations", "[net][connectio
 			  stops[i].get_token(),
 			  checked_search(m.conn, "ou=" + std::to_string(i) + ",dc=example,dc=org"),
 			  results[i]);
-		// Cancel every 7th operation before the server answers anything.
+		// Cancel every 7th operation once all are sent, before the server
+		// answers anything (one stopped before it starts would not be sent).
+		drive_until(m.ioc, [&m] { return m.conn.outstanding() == ops; });
 		for (std::size_t i = 0; i < ops; i += 7) stops[i].request_stop();
 		drive_until(m.ioc, [&] { return std::ranges::all_of(results, [](const auto &r) { return r.done(); }); });
 		for (std::size_t i = 0; i < ops; ++i) {
@@ -1515,6 +1561,7 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 		std::stop_source stop;
 		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
 		spawn(m.ioc, stop.get_token(), m.conn.search(people_search()), cancelled);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 2; });// the search is held
 		stop.request_stop();
 		drive_until(m.ioc, [&] { return bind.done() && cancelled.done(); });
 		CHECK(bind.get().has_value());

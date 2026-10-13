@@ -1030,13 +1030,21 @@ namespace {
 
 	// One request with one response (everything but search): sends it,
 	// waits for the response of index `expect` and returns it. `self` keeps
-	// the state alive across the suspension.
+	// the state alive across the suspension. One whose stop token is set
+	// already is not sent (sending it would only abandon it at once, and an
+	// update might be applied): it fails with capy::error::canceled. Binds
+	// are checked by begin_bind() instead: a later step of a SASL exchange
+	// is sent, since the server waits for it (abandoning it then closes the
+	// connection).
 	capy::task<result<message>> request_response(impl_ref self,
 	  message request,
 	  std::size_t expect,
 	  std::string context,
 	  std::optional<std::chrono::milliseconds> timeout)
 	{
+		if (!std::holds_alternative<bind_request>(request.op)
+			&& (co_await capy::this_coro::stop_token).stop_requested())
+			co_return fail(capy::error::canceled, context);
 		pending_op p(self->mr, false, expect);
 		if (auto r = self->submit(request, &p, context); !r) co_return std::unexpected(std::move(r.error()));
 		registration reg(*self, p);
@@ -1265,11 +1273,15 @@ namespace {
 	}
 
 	// Validates and sends a search; returns its stream. Never suspends.
-	result<ldap::search_stream> start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr)
+	// `stop` is the awaiting task's stop token: if it is set already, the
+	// search is not sent and fails with capy::error::canceled.
+	result<ldap::search_stream>
+	  start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr, const std::stop_token &stop)
 	{
 		std::string context = op_context("search", p.base);
 		auto request = search_message(c, p, context);
 		if (!request) return std::unexpected(std::move(request.error()));
+		if (stop.stop_requested()) return fail(capy::error::canceled, context);
 
 		auto *state = new_state(c, mr, context);
 		ldap::search_stream s = connection::impl::make_stream(state);
@@ -1357,7 +1369,7 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 capy::task<result<ldap::search_stream>> connection::search_stream(search_params p, std::pmr::memory_resource *mr)
 {
 	if (impl_ == nullptr) co_return std::unexpected(not_connected(op_context("search", p.base)));
-	co_return start_search(*impl_, p, mr);
+	co_return start_search(*impl_, p, mr, co_await capy::this_coro::stop_token);
 }
 
 capy::task<result<std::pmr::vector<entry>>> connection::search(search_params request, std::pmr::memory_resource *mr)
@@ -1610,7 +1622,7 @@ namespace {
 	// The one entry of a base-scope search (nullopt if none came back).
 	capy::task<result<std::optional<entry>>> read_one(impl_ref self, search_params p)
 	{
-		auto s = start_search(*self, p, std::pmr::get_default_resource());
+		auto s = start_search(*self, p, std::pmr::get_default_resource(), co_await capy::this_coro::stop_token);
 		if (!s) co_return std::unexpected(std::move(s.error()));
 		std::optional<entry> found;
 		while (true) {
@@ -2124,11 +2136,12 @@ struct paged_search::state
 		cs.push_back(paged{ .page_size = size, .cookie = std::move(page_cookie) });
 	}
 
-	// Sends the search for the next page (cookie empty for the first).
-	result<void> request_page(std::string page_cookie)
+	// Sends the search for the next page (cookie empty for the first);
+	// not sent if `stop` (the awaiting task's) is set already.
+	result<void> request_page(std::string page_cookie, const std::stop_token &stop)
 	{
 		set_page_control(page_size, std::move(page_cookie));
-		auto s = start_search(*conn, params, mr);
+		auto s = start_search(*conn, params, mr, stop);
 		if (!s) return std::unexpected(std::move(s.error()));
 		current = std::move(*s);
 		++pages;
@@ -2189,7 +2202,8 @@ capy::task<result<ldap::paged_search>>
 	auto *st = alloc.new_object<paged_search::state>(
 	  paged_search::state{ impl_ref(impl_), std::move(p), page_size, mr, {}, 0, false, {}, {}, {}, {} });
 	ldap::paged_search out = connection::impl::make_paged(st);
-	if (auto r = st->request_page({}); !r) co_return std::unexpected(std::move(r.error()));
+	if (auto r = st->request_page({}, co_await capy::this_coro::stop_token); !r)
+		co_return std::unexpected(std::move(r.error()));
 	co_return std::move(out);
 }
 
@@ -2277,7 +2291,8 @@ capy::task<result<std::optional<entry>>> paged_search::next()
 			s.finished = true;
 			co_return std::optional<entry>{};
 		}
-		if (auto r = s.request_page(s.cookie); !r) co_return finish(std::move(r.error()), false);
+		if (auto r = s.request_page(s.cookie, co_await capy::this_coro::stop_token); !r)
+			co_return finish(std::move(r.error()), false);
 	}
 }
 
