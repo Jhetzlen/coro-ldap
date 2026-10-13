@@ -728,8 +728,10 @@ std::vector<std::string> descending_uids(int n, int first, int count)
 }// namespace
 
 // slapd keeps one paged search per connection (RFC 2696 section 3 lets a
-// server age out older ones). Without sorting, resuming the older one
-// fails cleanly. With the sssvlv overlay (sorted paged searches), any
+// server age out older ones). Without sorting, resuming any but the
+// last-answered one fails cleanly: back-mdb compares the request's cookie
+// (an entry ID) with the connection's last returned one, older gives 53
+// unwillingToPerform and newer 2 protocolError. With the sssvlv overlay (sorted paged searches), any
 // non-empty cookie resumes the connection's latest sorted paged search:
 // sssvlv looks the session up by ps_cookie, which slapd's control parser
 // copies from the connection's last returned cookie, and never reads the
@@ -744,6 +746,9 @@ TEST_CASE("integration: concurrent paged searches with and without sorting", "[i
 
 	SECTION("unsorted on one connection: the older search's cookie is refused")
 	{
+		// unwilling_to_perform because user0xx were loaded before user1xx:
+		// A's cookie is a lower entry ID than B's. Started the other way
+		// round, A's next page would get protocol_error.
 		auto c = open_admin(ioc);
 		auto a1 = uid_page_by_hand(ioc, c, hundred_users(0, false), { .page_size = 20 });
 		auto b1 = uid_page_by_hand(ioc, c, hundred_users(1, false), { .page_size = 20 });

@@ -497,11 +497,12 @@ class connection
 	// abandons the current page and releases the server's paging state
 	// (see paged_search). Several may run at once on one connection (RFC
 	// 2696 section 3), but servers may limit that: OpenLDAP keeps one paged
-	// search per connection and refuses the older one's next page
-	// (unwilling_to_perform), and with server_side_sort (its sssvlv overlay)
-	// it answers any next page with the latest sorted paged search's
-	// entries instead, which the client cannot detect. Give each concurrent
-	// paged search its own connection there.
+	// search per connection and refuses the next page of any but the one
+	// whose page it answered last (unwilling_to_perform or protocol_error,
+	// depending on the cookies' entry order), and with server_side_sort (its
+	// sssvlv overlay) it answers any next page with the latest sorted paged
+	// search's entries instead, which the client cannot detect. Give each
+	// concurrent paged search its own connection there.
 	boost::capy::task<result<ldap::paged_search>> search_paged(search_params request,
 	  std::int32_t page_size,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());

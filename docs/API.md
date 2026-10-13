@@ -204,8 +204,10 @@ itself stays dependency-free.
   release's answer is read and dropped, and counted by `outstanding()`
   until it arrives or the page timeout passes). Several paged searches
   may run at once on a connection (RFC 2696 section 3), but OpenLDAP keeps
-  one per connection: it refuses the older one's next page with
-  unwillingToPerform, and with `server_side_sort` its sssvlv overlay
+  one per connection: it refuses the next page of any but the one whose
+  page it answered last, with unwillingToPerform (53) or protocolError (2)
+  depending on the cookies' entry order, and with `server_side_sort` its
+  sssvlv overlay
   answers that page with the latest sorted paged search's entries
   instead, which the client cannot detect; there, give each concurrent
   paged search its own connection. Referrals are returned (in
@@ -317,7 +319,8 @@ itself stays dependency-free.
   answers every multi-key sort with protocolError (2) "decoding error" and
   no SortResult, even when not critical, libldap's own included. So check
   the search's result, and handle `find_sort_result` returning nullopt
-  ("not known to be sorted").
+  ("not known to be sorted"). Sorted paged searches sharing one OpenLDAP
+  connection get each other's entries: see `search_paged` above.
 - `jhetz/ldap/mapping.hpp` (#9): typed struct mapping. A descriptor
   (`ldap::schema<T> = ldap::describe(ldap::object_class(...),
   ldap::field<&T::m>("attr", ldap::read_only)...)`) maps members to

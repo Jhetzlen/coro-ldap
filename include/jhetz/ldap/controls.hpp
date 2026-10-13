@@ -72,8 +72,10 @@ struct proxied_authorization
 // answers every multi-key sort with 2 protocolError ("decoding error") and
 // no sort result, even when not critical (libldap's own requests too). So
 // check the search's result, and treat find_sort_result() returning
-// nullopt as "not known to be sorted". Fails with encode_error,
-// before anything is sent, if there are no keys or a key has no attribute.
+// nullopt as "not known to be sorted". sssvlv also mixes up concurrent
+// sorted paged searches on one connection (see connection::search_paged).
+// Fails with encode_error, before anything is sent, if there are no keys or
+// a key has no attribute.
 struct sort_key
 {
 	std::string attribute{};// attributeType: an attribute description
