@@ -83,19 +83,31 @@ TEST_CASE("filetime value_traits: ticks, sentinels and errors", "[ad][traits]")
 	CHECK(traits::encode(filetime{ ticks{ new_year_2024 } }) == "133485408001234567");
 	CHECK(traits::decode("1") == filetime{ ticks{ 1 } });
 
-	// accountExpires "never": both spellings decode to ad::never, which
-	// encodes as the maximum.
+	// The maximum is ad::never; 0 is tick 0 (1601-01-01), before every date.
 	CHECK(ad::never == filetime::max());
-	CHECK(traits::decode("0") == ad::never);
 	CHECK(traits::decode("9223372036854775807") == ad::never);
 	CHECK(traits::encode(ad::never) == "9223372036854775807");
 	CHECK(ad::never != filetime{ ticks{ new_year_2024 } });
+	CHECK(traits::decode("0") == filetime{});
+	CHECK(traits::encode(filetime{}) == "0");
+	CHECK(*traits::decode("0") < filetime{ ticks{ 1 } });
+
+	// accountExpires "never expires": either spelling.
+	static_assert(ad::is_never(filetime{}));
+	static_assert(ad::is_never(ad::never));
+	static_assert(noexcept(ad::is_never(ad::never)));
+	CHECK(ad::is_never(*traits::decode("0")));
+	CHECK(ad::is_never(*traits::decode("9223372036854775807")));
+	CHECK_FALSE(ad::is_never(*traits::decode("1")));
+	CHECK_FALSE(ad::is_never(*traits::decode("-1")));
+	CHECK_FALSE(ad::is_never(filetime{ ticks{ new_year_2024 } }));
+	CHECK_FALSE(ad::is_never(filetime::max() - ticks{ 1 }));
 
 	// pwdLastSet: 0 forces a change at the next logon, -1 sets it to now.
 	CHECK(traits::encode(ad::pwd_must_change) == "0");
 	CHECK(traits::encode(ad::pwd_set_now) == "-1");
 	CHECK(traits::decode("-1") == ad::pwd_set_now);
-	CHECK(traits::decode("0") != ad::pwd_must_change);// read back as "no date"
+	CHECK(traits::decode("0") == ad::pwd_must_change);// read back
 
 	for (const char *bad : { "", "x", "1.5", "+1", "9223372036854775808", "-9223372036854775809", " 1" }) {
 		const auto r = traits::decode(bad);
@@ -243,8 +255,19 @@ TEST_CASE("mapping AD users and domain policy", "[ad][mapping]")
 		{ "lastLogonTimestamp", { "133485408001234567" } } }));
 	REQUIRE(u.has_value());
 	CHECK(u->account_expires == ad::never);
-	CHECK(u->pwd_last_set == ad::never);
+	CHECK(ad::is_never(*u->account_expires));
+	CHECK(u->pwd_last_set == ad::pwd_must_change);
 	CHECK(u->last_logon_timestamp == filetime{ ticks{ new_year_2024 } });
+
+	// 0: accountExpires never expires; lastLogonTimestamp never happened, so
+	// it sorts before any cutoff (a stale-account check includes it).
+	auto fresh = ldap::decode<ad_user>(make_entry("CN=new,CN=Users,DC=example,DC=org",
+	  { { "sAMAccountName", { "new" } }, { "accountExpires", { "0" } }, { "lastLogonTimestamp", { "0" } } }));
+	REQUIRE(fresh.has_value());
+	CHECK(fresh->account_expires == filetime{});
+	CHECK(ad::is_never(*fresh->account_expires));
+	CHECK(fresh->last_logon_timestamp == filetime{});
+	CHECK(*fresh->last_logon_timestamp < clock_cast<ad::filetime_clock>(sys_days(2024y / January / 1)) - days(90));
 
 	auto raw = ldap::decode<ad_user_raw>(make_entry("CN=jdoe,CN=Users,DC=example,DC=org",
 	  { { "sAMAccountName", { "jdoe" } }, { "accountExpires", { "9223372036854775807" } } }));

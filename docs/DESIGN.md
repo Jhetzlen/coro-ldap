@@ -435,14 +435,23 @@ type decides:
   `system_clock` (offset 11644473600 s) and on to `utc_clock` or
   `zoned_time`; `from_sys` rounds down to a tick. `std::chrono::file_clock`
   is not usable: its epoch and period are implementation-defined (libstdc++:
-  2174-01-01, nanoseconds). AD writes 0 or 9223372036854775807 for "never"
-  (accountExpires); both decode to `ad::never` (`time_point::max()`), which
-  encodes as 9223372036854775807, so "never" stays distinct from any real
-  date. pwdLastSet takes two commands when written: `ad::pwd_must_change`
-  (0, change at next logon) and `ad::pwd_set_now` (-1, AD stores the current
+  2174-01-01, nanoseconds). Values decode and encode as the plain tick
+  count. 9223372036854775807 is `ad::never` (`time_point::max()`). 0 is
+  tick 0 (`time_point{}`, 1601-01-01, never a real AD date), which sorts
+  before every date; its meaning depends on the attribute:
+  - accountExpires: 0 and 9223372036854775807 both mean "never expires";
+    `ad::is_never(t)` is true for either.
+  - lastLogon, lastLogonTimestamp, badPasswordTime, lockoutTime: 0 is
+    "never happened". It sorts before every date, so a stale-account check
+    `last_logon < cutoff` includes accounts that never logged on, and date
+    arithmetic on it stays defined.
+  - pwdLastSet: 0 equals `ad::pwd_must_change`.
+
+  pwdLastSet takes two commands when written: `ad::pwd_must_change` (0,
+  change at next logon) and `ad::pwd_set_now` (-1, AD stores the current
   time); they are plain tick counts, so the typed `replace<&T::m>(...)`
-  writes them with no special case. Read back, pwdLastSet 0 is `ad::never`
-  ("no date set"), like every 0.
+  writes them with no special case, and a pwdLastSet of 0 read back
+  compares equal to `ad::pwd_must_change`.
 - `ldap::ad::filetime_clock::duration`: an interval, sign kept (maxPwdAge
   -36288000000000 is `-days(42)`); `ad::forever` (`duration::min()`,
   -9223372036854775808) is "passwords never expire" / "locked until an

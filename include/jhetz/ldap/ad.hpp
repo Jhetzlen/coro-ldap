@@ -14,7 +14,7 @@
 //       ldap::ad::filetime_clock::duration max_pwd_age{};   // negative
 //   };
 //
-//   if (u.account_expires && *u.account_expires != ldap::ad::never) {
+//   if (u.account_expires && !ldap::ad::is_never(*u.account_expires)) {
 //       auto utc = std::chrono::clock_cast<std::chrono::system_clock>(*u.account_expires);
 //   }
 //   auto f = ldap::filters::field<&ad_user::account_expires>() <= ldap::ad::filetime_clock::now();
@@ -24,14 +24,25 @@
 // the raw number; the time_point and duration below read 906 only.
 //
 // Sentinels:
-//   ad::never          accountExpires (and lastLogonTimestamp, ...) 0 or
-//                      9223372036854775807 decode to it: "no date". It is
-//                      time_point::max() and encodes as 9223372036854775807
-//                      (AD's "never expires"). Compare against it before
-//                      converting: as a date it is in year 30828.
-//   ad::pwd_must_change  pwdLastSet 0: written, the user must change the
-//                      password at the next logon. On read, pwdLastSet 0
-//                      decodes to ad::never (no date set), like any 0.
+//   ad::never          9223372036854775807, time_point::max(): accountExpires
+//                      "never expires". Decodes from and encodes as
+//                      9223372036854775807. As a date it is in year 30828:
+//                      test for it before converting or doing arithmetic.
+//   0                  decodes to tick 0 (time_point{}, 1601-01-01, never a
+//                      real AD date), which sorts before every date and
+//                      encodes as 0 again. What it means depends on the
+//                      attribute:
+//                      - accountExpires: "never expires", like ad::never.
+//                        ad::is_never(t) is true for both.
+//                      - lastLogon, lastLogonTimestamp, badPasswordTime,
+//                        lockoutTime: "never happened". Being before every
+//                        date, `last_logon < cutoff` includes accounts that
+//                        never logged on (test != time_point{} to skip them).
+//                      - pwdLastSet: equals ad::pwd_must_change (the user
+//                        must change the password at the next logon).
+//   ad::pwd_must_change  pwdLastSet 0 (time_point{}): written, the user must
+//                      change the password at the next logon; read back,
+//                      pwdLastSet 0 compares equal to it.
 //   ad::pwd_set_now    pwdLastSet -1: written, AD sets pwdLastSet to now.
 //   ad::forever        an interval of -9223372036854775808 ticks
 //                      (duration::min()): maxPwdAge "passwords never
@@ -100,13 +111,20 @@ inline constexpr filetime_clock::time_point pwd_must_change{ filetime_clock::dur
 inline constexpr filetime_clock::time_point pwd_set_now{ filetime_clock::duration{ -1 } };
 inline constexpr filetime_clock::duration forever = filetime_clock::duration::min();
 
+// accountExpires "never expires": true for both of AD's spellings, 0 (tick 0)
+// and 9223372036854775807 (ad::never).
+[[nodiscard]] constexpr bool is_never(filetime_clock::time_point t) noexcept
+{
+	return t == filetime_clock::time_point{} || t == never;
+}
+
 }// namespace jhetz::ldap::ad
 
 namespace jhetz::ldap {
 
-// A FILETIME date: decimal ticks. 0 and 9223372036854775807 decode to
-// ad::never; any other value (negative ones included) is that many ticks
-// from 1601-01-01. Encodes the tick count (ad::never: 9223372036854775807).
+// A FILETIME date: decimal ticks from 1601-01-01, decoded and encoded as
+// the plain tick count: 0 is time_point{} (ad::pwd_must_change) and
+// 9223372036854775807 is ad::never.
 template<> struct value_traits<ad::filetime_clock::time_point>
 {
 	static constexpr std::array syntaxes{ syntax::ad_large_integer };
@@ -115,7 +133,6 @@ template<> struct value_traits<ad::filetime_clock::time_point>
 	{
 		auto ticks = value_traits<std::int64_t>::decode(raw);
 		if (!ticks) return std::unexpected(std::move(ticks.error()));
-		if (*ticks == 0) return ad::never;
 		return ad::filetime_clock::time_point(ad::filetime_clock::duration(*ticks));
 	}
 	[[nodiscard]] static std::string encode(ad::filetime_clock::time_point v)

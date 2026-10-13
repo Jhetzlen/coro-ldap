@@ -7,6 +7,9 @@
 // - rejected input fails with conversion_failed;
 // - accepted input encodes to text that decodes to the same value, and
 //   GeneralizedTime re-encodes to the same text (encoding is canonical).
+// AD FILETIME dates decode to the plain tick count (0 is tick 0, only the
+// maximum is ad::never), so they accept what int64 accepts and encode the
+// same text.
 #include "jhetz/ldap/ad.hpp"
 #include "jhetz/ldap/mapping.hpp"
 
@@ -14,6 +17,7 @@
 #include "check.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -32,6 +36,18 @@ template<class T> void round_trip(std::string_view text)
 	auto again = ldap::value_traits<T>::decode(encoded);
 	LDAP_FUZZ_CHECK(again.has_value());
 	LDAP_FUZZ_CHECK(*again == *v);
+}
+
+void filetime_checks(std::string_view text)
+{
+	namespace ad = ldap::ad;
+	const auto t = ldap::value_traits<ad::filetime_clock::time_point>::decode(text);
+	const auto n = ldap::value_traits<std::int64_t>::decode(text);
+	LDAP_FUZZ_CHECK(t.has_value() == n.has_value());
+	if (!t) return;
+	LDAP_FUZZ_CHECK(t->time_since_epoch().count() == *n);
+	LDAP_FUZZ_CHECK(ldap::value_traits<ad::filetime_clock::time_point>::encode(*t) == std::to_string(*n));
+	LDAP_FUZZ_CHECK(ad::is_never(*t) == (*n == 0 || *n == std::numeric_limits<std::int64_t>::max()));
 }
 
 }// namespace
@@ -58,5 +74,6 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 	round_trip<ldap::dn>(text);
 	round_trip<ldap::ad::filetime_clock::time_point>(text);
 	round_trip<ldap::ad::filetime_clock::duration>(text);
+	filetime_checks(text);
 	return 0;
 }

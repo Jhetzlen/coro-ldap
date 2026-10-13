@@ -282,9 +282,12 @@ itself stays dependency-free.
   C++20 Clock for FILETIME (100 ns ticks since 1601-01-01 UTC;
   `clock_cast` to `system_clock`, `utc_clock`, `zoned_time`);
   `ad::filetime_clock::time_point` members map dates (accountExpires,
-  pwdLastSet, lastLogonTimestamp; 0 and 9223372036854775807 decode to
-  `ad::never`; `ad::pwd_must_change` / `ad::pwd_set_now` write pwdLastSet
-  0 / -1) and `ad::filetime_clock::duration` members map the negative
+  pwdLastSet, lastLogonTimestamp) as the plain tick count:
+  9223372036854775807 is `ad::never`, 0 is tick 0 (1601-01-01, before every
+  date: "never happened" for lastLogon, `ad::pwd_must_change` for
+  pwdLastSet), and `ad::is_never(t)` is true for both of accountExpires'
+  "never expires" spellings; `ad::pwd_must_change` / `ad::pwd_set_now` write
+  pwdLastSet 0 / -1) and `ad::filetime_clock::duration` members map the negative
   intervals (maxPwdAge, lockoutDuration; `ad::forever` for
   -9223372036854775808). `std::int64_t` members read any 906 attribute raw.
 - `jhetz/ldap/schema.hpp` (#13): runtime schema validation. A lenient
