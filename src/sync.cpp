@@ -17,7 +17,8 @@ connection::~connection()
 {
 	// Close on the I/O thread, then let the io_context run out of work:
 	// operations still running finish with not_connected, a detached name
-	// lookup or offloaded SASL step finishes, and run() returns.
+	// lookup or offloaded SASL step finishes, and run() returns. ioc_'s
+	// destructor then joins that step's thread.
 	std::promise<void> closed;
 	capy::run_async(ioc_.get_executor())([](ldap::connection &c, std::promise<void> &p) -> capy::task<void> {
 		c = ldap::connection{};

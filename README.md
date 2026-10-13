@@ -274,8 +274,9 @@ itself stays dependency-free.
   and cancellation stop the bind's wait (`capy::error::timeout` /
   `canceled`; before the first BindRequest nothing was sent and the
   connection stays usable), not the Kerberos call, which runs to its end
-  on its thread; `io_context::run()` (and a `sync::connection`'s
-  destructor) returns only after it. That needs an io_context that
+  on its thread; `io_context::run()` returns only after it, and
+  destroying the io_context (or a `sync::connection`) waits for its
+  thread to end, as long as krb5's own timeouts. That needs an io_context that
   accepts posts from other threads (the default `locking_mode::safe`).
   `examples/gssapi.cpp` binds with StartTLS and the default ticket.
 - `jhetz/ldap/controls.hpp`: typed request controls in a `std::variant`

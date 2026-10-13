@@ -287,7 +287,7 @@ whose steps may block (GSSAPI: the KDC) overrides `offload_start()` /
 return a `sasl_work` (`std::move_only_function` returning the step's
 `result<std::optional<std::string>>`), empty for "call start() / step()
 here" (the default, so EXTERNAL and SCRAM are unchanged). Non-empty work
-runs on a `std::thread` of its own, detached, and wakes the bind through
+runs on a `std::thread` of its own and wakes the bind through
 a `capy::async_waker` (zero-allocation, `wake()` from any thread, the
 resumption posted to the waiter's executor); the bind waits on it with
 `corosio::timeout` (`operation_timeout`) and its stop token, like a
@@ -300,10 +300,25 @@ bind, meanwhile): GSSAPI's work holds the handles' block by `shared_ptr`,
 marked busy while it runs (`step()` and `complete()` refuse it,
 `offload_start()` makes a new block), so no handle is used from two
 threads at once. The thread holds a `capy::work_guard` on the
-connection's io_context and drops it last: `run()` (and
-`sync::connection`'s destructor) returns only after the work, so the
-post never reaches a destroyed context, and no thread is left running
-past the io_context in normal use. The posts from the worker need
+connection's io_context and drops it last, so `run()` returns only after
+the work. Dropping it is not the thread's end, though: Corosio's
+`work_finished()` decrements the count and then calls `stop()`, which
+locks the scheduler's mutex, and in between the I/O thread can see no
+work left, return from `run()` and let the owner destroy the io_context
+(a heap-use-after-free under ASan, coro-ldap-2px.1.1); and the thread
+still runs its own teardown (the closure, libkrb5's thread-local
+destructors) after that. So the threads are not detached: a Capy
+service of the io_context (`offload_threads`, `src/connection.cpp`) owns
+them and joins them in its `shutdown()`. Capy shuts services down, then
+deletes them, newest first (`execution_context::shutdown()` /
+`destroy()` walk a list that `use_service()` pushes onto the front), and
+the scheduler is the io_context's first service (made by its
+constructor, `Backend::construct`), so the join runs while the scheduler
+is alive and nothing of the thread outlives the io_context. The cost:
+destroying the io_context (and so `sync::connection`'s destructor)
+waits for a step still running, as long as krb5's own timeouts. A
+thread that has ended is joined when the next one starts, so they do
+not pile up. The posts from the worker need
 Corosio's default `locking_mode::safe`. A thread per call rather than a
 pool: Capy's system pool (`get_system_context()`) is shared and sized for
 CPU work, and a KDC call can block one of its threads for many seconds;
@@ -1046,7 +1061,8 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   operation there (`capy::run_async(conn.executor())(task)`). The one
   exception is a SASL step a mechanism offloads (GSSAPI's calls to the
   KDC, section 3): it runs on a thread of its own and wakes the bind
-  through the executor; the io_context counts it as outstanding work.
+  through the executor; the io_context counts it as outstanding work,
+and its destructor joins the thread.
 
 - Implemented (#12, `jhetz/ldap/sync.hpp`): `sync::connection` owns an
   io_context and one I/O thread (kept alive by a work guard). Each method
@@ -1060,7 +1076,8 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   to `std::error_code`, losing `ldap::error`'s diagnostic and context. The destructor closes the
   connection on the I/O thread, drops the work guard and joins, which
   waits for a detached getaddrinfo, or an offloaded SASL step (GSSAPI),
-  still running. No connection pool yet.
+  still running; destroying the io_context then joins that step's
+  thread. No connection pool yet.
 - Calling a blocking method from inside the facade's own I/O thread would
   deadlock; it returns `client_errc::would_deadlock` instead.
 - The facade exposes exactly the same request, entry, error and mapping types;

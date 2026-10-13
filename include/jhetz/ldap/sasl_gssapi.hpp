@@ -25,12 +25,13 @@
 //   cancellation stop the wait, not the call: the bind then fails with
 //   capy::error::timeout or canceled, and the call runs to its end on its
 //   thread, with handles of its own, released there. The io_context keeps
-//   the call as outstanding work: run() returns (and a sync::connection's
-//   destructor) only once it is over. The io_context must accept posts
-//   from other threads (Corosio's default locking_mode::safe). Before the
-//   first BindRequest (the first call, which contacts the KDC) nothing was
-//   sent: the connection stays usable. start() and step() called directly
-//   still block their caller.
+//   the call as outstanding work: run() returns only once it is over, and
+//   destroying the io_context (a sync::connection's destructor too) waits
+//   for its thread to end. The io_context must accept posts from other
+//   threads (Corosio's default locking_mode::safe). Before the first
+//   BindRequest (the first call, which contacts the KDC) nothing was sent:
+//   the connection stays usable. start() and step() called directly still
+//   block their caller.
 // - The target is a host-based service name (GSS_C_NT_HOSTBASED_SERVICE),
 //   "ldap@<host>" with the host of the URL connected to (ldap://,
 //   ldaps://), unless sasl_gssapi_options::target names another. Kerberos

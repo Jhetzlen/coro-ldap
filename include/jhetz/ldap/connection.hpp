@@ -461,7 +461,8 @@ class connection
 	// stays usable; later the exchange is aborted as for a mechanism error
 	// (a cancellation cancels that abort too, which closes the connection).
 	// The io_context counts the running step as work: run() returns only
-	// once it is over.
+	// once it is over, and destroying the io_context waits for its thread
+	// to end (as long as the step takes: krb5's own timeouts).
 	boost::capy::task<result<void>> sasl_bind(sasl_mechanism &mechanism, dn name = {});
 
 	// Runs a search to its end and returns the entries in the order received,

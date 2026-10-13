@@ -679,3 +679,36 @@ TEST_CASE("sasl: a timeout or cancellation gives up on an offloaded step", "[net
 		CHECK(m.log.received[1] == abort_req(2));
 	}
 }
+
+// The io_context's destructor joins the thread of a step still running, so
+// nothing of it outlives the scheduler it wakes and releases its work on
+// (coro-ldap-2px.1.1: a detached thread could still be in the scheduler's
+// stop() when the io_context was destroyed).
+TEST_CASE("sasl: destroying the io_context waits for an offloaded step", "[net][sasl][offload]")
+{
+	std::shared_ptr<offload_gate> gate;
+	std::jthread opener;
+	{
+		corosio::io_context ioc;
+		socket_pair sockets{ ioc };
+		ldap::connection conn(ioc,
+		  ldap::net::transport::wrap(socket_ref{ &sockets.client }, "mock"),
+		  { .operation_timeout = std::chrono::milliseconds(100) });
+		offload_mechanism mech;
+		gate = mech.gate;
+		auto r = finish(ioc, conn.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::timeout);
+		CHECK(gate->started == 1);
+		conn.close();
+		sockets.client.close();
+		sockets.server.close();
+		ioc.poll();// what is ready, not the step: it still holds work
+		CHECK(gate->finished == 0);
+		opener = std::jthread([gate] {
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			gate->allow(1);
+		});
+	}
+	CHECK(gate->finished == 1);
+}
