@@ -103,13 +103,13 @@ struct filetime_clock
 	[[nodiscard]] static time_point now() noexcept { return from_sys(std::chrono::system_clock::now()); }
 
 	// Defined for t >= time_point::min() + unix_epoch_offset (about year
-	// -27627); below, the subtraction overflows. Every decoded value is in
-	// range (decode rejects dates below -1). ad::never converts without
-	// overflow, to a sys_time in year 30828 that is no real date: test
-	// ad::is_never (or == ad::never) before converting. The result keeps the
-	// 100 ns ticks; assigning it to a system_clock::time_point (nanoseconds)
-	// overflows after 2262, ad::never included, so keep the ticks or floor
-	// to seconds.
+	// -27258, sys_time::min()); below, the subtraction overflows. Every
+	// decoded value is in range (decode rejects dates below -1). ad::never
+	// converts without overflow, to a sys_time in year 30828 that is no real
+	// date: test ad::is_never (or == ad::never) before converting. The
+	// result keeps the 100 ns ticks; assigning it to a
+	// system_clock::time_point (nanoseconds) overflows after 2262, ad::never
+	// included, so keep the ticks or floor to seconds.
 	template<class D>
 	[[nodiscard]] static constexpr std::chrono::sys_time<std::common_type_t<D, std::chrono::seconds>> to_sys(
 	  const std::chrono::time_point<filetime_clock, D> &t)
