@@ -18,8 +18,6 @@ namespace corosio = boost::corosio;
 
 namespace jhetz::ldap {
 
-using detail::begin_bind;
-using detail::bind_exchange;
 using detail::impl_ref;
 using detail::no_connection;
 using detail::op_context;
@@ -60,8 +58,8 @@ capy::task<result<void>> connection::simple_bind(dn name, std::string password)
 	if (!name.empty() && password.empty())
 		co_return fail(client_errc::unauthenticated_bind, context + ": empty password (RFC 4513 section 5.1.2)");
 	impl_ref self(impl_);// `this` may be moved from while suspended
-	if (auto b = co_await begin_bind(self, context); !b) co_return std::unexpected(std::move(b.error()));
-	const bind_exchange exchange{ self };
+	if (auto b = co_await impl::begin_bind(self, context); !b) co_return std::unexpected(std::move(b.error()));
+	const impl::bind_scope exchange{ self };
 	message request(std::pmr::polymorphic_allocator<>(self->mr()));
 	request.op = bind_request(3, name.to_string(self->mr()), simple_auth(password, self->mr()), self->mr());
 	auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
@@ -77,8 +75,8 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 	context += mechanism.name();
 	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	impl_ref self(impl_);
-	if (auto b = co_await begin_bind(self, context); !b) co_return std::unexpected(std::move(b.error()));
-	const bind_exchange exchange{ self };
+	if (auto b = co_await impl::begin_bind(self, context); !b) co_return std::unexpected(std::move(b.error()));
+	const impl::bind_scope exchange{ self };
 	constexpr int max_steps = 32;
 	sasl_bind_context bind_context;
 	if (self->transport().type() == net::transport::kind::tcp) bind_context.host = self->transport().host();

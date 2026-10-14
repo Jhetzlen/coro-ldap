@@ -127,25 +127,12 @@ namespace detail {
 namespace detail {
 
 	class impl_ref;
-	struct bind_exchange;
-
-	// Waits until no other bind exchange is in progress (binds are
-	// serialized), then marks this one as in progress; bind_exchange ends it.
-	// A bind already given up on is not sent: a bind cannot be abandoned, so
-	// sending it would only close the connection. The stop is checked after
-	// the wait, right before the bind is sent: a stop that comes once
-	// bind_idle.set() has claimed the waiter, but before it resumes, does
-	// not cancel the wait.
-	boost::capy::task<result<void>> begin_bind(impl_ref c, std::string_view context);
 
 }// namespace detail
 
 // The multiplexing core. Its state is private: the operations reach it
 // through the members below, which keep its invariants (message ids, the
 // writer, the reader, the due answers, the bind and StartTLS exclusions).
-// begin_bind and bind_exchange (core.cpp) are its friends: they are the
-// bind serialization, a part of the core kept outside the class only
-// because begin_bind is a coroutine holding an impl_ref.
 class connection::impl
 {
   public:
@@ -282,6 +269,21 @@ class connection::impl
 	static ldap::search_stream make_stream(search_stream::state *s) noexcept;
 	static ldap::paged_search make_paged(paged_search::state *s) noexcept;
 
+	// ---------------------------------------------------------------- binds
+
+	// Waits until no other bind exchange is in progress (binds are
+	// serialized), then marks this one as in progress; bind_scope ends it.
+	// A bind already given up on is not sent: a bind cannot be abandoned, so
+	// sending it would only close the connection. The stop is checked after
+	// the wait, right before the bind is sent: a stop that comes once
+	// bind_idle.set() has claimed the waiter, but before it resumes, does
+	// not cancel the wait.
+	static boost::capy::task<result<void>> begin_bind(detail::impl_ref c, std::string_view context);
+
+	// Ends the bind exchange begun by begin_bind() and sends the requests
+	// it held. Defined after detail::impl_ref.
+	class bind_scope;
+
 	// ---------------------------------------------------------------- StartTLS
 
 	// StartTLS may only be sent once every response is received (RFC 4513
@@ -347,9 +349,6 @@ class connection::impl
 	boost::capy::task<std::optional<error>> finish_unbind();
 
   private:
-	friend boost::capy::task<result<void>> detail::begin_bind(detail::impl_ref c, std::string_view context);
-	friend struct detail::bind_exchange;
-
 	boost::corosio::io_context::executor_type ex;
 	std::pmr::memory_resource *mr_;
 	std::size_t refs = 1;
@@ -580,16 +579,21 @@ namespace detail {
 		connection::impl *p_ = nullptr;
 	};
 
-	// Ends the bind exchange begun by begin_bind() and sends the requests
-	// it held.
-	struct bind_exchange
-	{
-		impl_ref c;
-		explicit bind_exchange(impl_ref c_) noexcept : c(std::move(c_)) {}
-		bind_exchange(const bind_exchange &) = delete;
-		bind_exchange &operator=(const bind_exchange &) = delete;
-		~bind_exchange();
-	};
+}// namespace detail
+
+class connection::impl::bind_scope
+{
+  public:
+	explicit bind_scope(detail::impl_ref c) noexcept : c_(std::move(c)) {}
+	bind_scope(const bind_scope &) = delete;
+	bind_scope &operator=(const bind_scope &) = delete;
+	~bind_scope();
+
+  private:
+	detail::impl_ref c_;
+};
+
+namespace detail {
 
 	// Abandons `p` if the operation's task is destroyed (or returns early)
 	// while the request is still outstanding.

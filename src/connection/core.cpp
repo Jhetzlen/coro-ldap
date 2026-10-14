@@ -704,28 +704,24 @@ capy::task<result<message>>
 
 // ---------------------------------------------------------------- binds
 
-namespace detail {
-
-	capy::task<result<void>> begin_bind(impl_ref c, std::string_view context)
-	{
-		while (c->binding) {
-			auto [ec] = co_await c->bind_idle.wait();
-			if (ec) co_return fail(ec, context);
-		}
-		if ((co_await capy::this_coro::stop_token).stop_requested()) co_return fail(capy::error::canceled, context);
-		c->binding = true;
-		c->bind_idle.clear();
-		co_return result<void>{};
+capy::task<result<void>> connection::impl::begin_bind(impl_ref c, std::string_view context)
+{
+	while (c->binding) {
+		auto [ec] = co_await c->bind_idle.wait();
+		if (ec) co_return fail(ec, context);
 	}
+	if ((co_await capy::this_coro::stop_token).stop_requested()) co_return fail(capy::error::canceled, context);
+	c->binding = true;
+	c->bind_idle.clear();
+	co_return result<void>{};
+}
 
-	bind_exchange::~bind_exchange()
-	{
-		c->binding = false;
-		c->bind_idle.set();
-		c->release_held();
-	}
-
-}// namespace detail
+connection::impl::bind_scope::~bind_scope()
+{
+	c_->binding = false;
+	c_->bind_idle.set();
+	c_->release_held();
+}
 
 // ---------------------------------------------------------------- requests
 
