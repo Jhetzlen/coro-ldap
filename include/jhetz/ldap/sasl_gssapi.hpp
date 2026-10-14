@@ -126,7 +126,7 @@ class sasl_gssapi final : public sasl_mechanism
 	sasl_gssapi(const sasl_gssapi &) = delete;
 	auto operator=(const sasl_gssapi &) -> sasl_gssapi & = delete;
 
-	auto name() const noexcept -> std::string_view override { return "GSSAPI"; }
+	[[nodiscard]] auto name() const noexcept -> std::string_view override { return "GSSAPI"; }
 	// Keeps the host, for the default target.
 	void prepare(const sasl_bind_context &context) override;
 	// The first token of the Kerberos exchange (an AP-REQ). Blocks while

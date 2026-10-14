@@ -95,7 +95,7 @@ struct url_extension
 	auto operator=(url_extension &&other) -> url_extension &;
 	~url_extension() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return type.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return type.get_allocator(); }
 
 	friend auto operator==(const url_extension &, const url_extension &) -> bool = default;
 };
@@ -120,7 +120,7 @@ class url
 	auto operator=(url &&other) -> url &;
 	~url() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return host_.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return host_.get_allocator(); }
 
 	// Parses RFC 4516 text; fails with invalid_url (never throws on bad input).
 	// The url's strings and lists are allocated from `mr`.
@@ -141,31 +141,31 @@ class url
 	[[nodiscard]] auto to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
 	  -> std::pmr::string;
 
-	auto scheme() const noexcept -> url_scheme { return scheme_; }
+	[[nodiscard]] auto scheme() const noexcept -> url_scheme { return scheme_; }
 	// Decoded host: a name, an IPv4 address, an IPv6 address without the
 	// brackets (zone after '%'), or for ldapi the socket path. May be empty.
-	auto host() const noexcept -> const std::pmr::string & { return host_; }
+	[[nodiscard]] auto host() const noexcept -> const std::pmr::string & { return host_; }
 	// The host was written as a bracketed IPv6 literal.
-	auto host_is_ipv6() const noexcept -> bool { return host_is_ipv6_; }
+	[[nodiscard]] auto host_is_ipv6() const noexcept -> bool { return host_is_ipv6_; }
 	// The port as written; nullopt when absent (always for ldapi).
-	auto port() const noexcept -> std::optional<std::uint16_t> { return port_; }
+	[[nodiscard]] auto port() const noexcept -> std::optional<std::uint16_t> { return port_; }
 	// port(), or 389 for ldap and 636 for ldaps; 0 for ldapi.
-	auto port_or_default() const noexcept -> std::uint16_t;
+	[[nodiscard]] auto port_or_default() const noexcept -> std::uint16_t;
 	// Encoded `host:port` with the port made explicit (`[::1]:389`), or the
 	// encoded socket path for ldapi. For error messages and logs.
 	[[nodiscard]] auto authority(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
 	  -> std::pmr::string;
 
 	// nullopt when the URL has no "/" (then no later part either).
-	auto base_dn() const noexcept -> const std::optional<dn> & { return dn_; }
+	[[nodiscard]] auto base_dn() const noexcept -> const std::optional<dn> & { return dn_; }
 	// Attribute selectors as written (decoded): descriptions, "*", "+", "1.1".
-	auto attributes() const noexcept -> const std::pmr::vector<std::pmr::string> & { return attributes_; }
-	auto scope() const noexcept -> std::optional<search_scope> { return scope_; }
-	auto search_filter() const noexcept -> const std::optional<ldap::filter> & { return filter_; }
-	auto extensions() const noexcept -> const std::pmr::vector<url_extension> & { return extensions_; }
+	[[nodiscard]] auto attributes() const noexcept -> const std::pmr::vector<std::pmr::string> & { return attributes_; }
+	[[nodiscard]] auto scope() const noexcept -> std::optional<search_scope> { return scope_; }
+	[[nodiscard]] auto search_filter() const noexcept -> const std::optional<ldap::filter> & { return filter_; }
+	[[nodiscard]] auto extensions() const noexcept -> const std::pmr::vector<url_extension> & { return extensions_; }
 	// True if some extension is marked critical ('!'). This library knows no
 	// extension yet, so such a URL must not be used (RFC 4516 section 2.1).
-	auto has_critical_extension() const noexcept -> bool;
+	[[nodiscard]] auto has_critical_extension() const noexcept -> bool;
 
 	friend auto operator==(const url &, const url &) -> bool = default;
 

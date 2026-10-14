@@ -55,7 +55,7 @@ class echo_mechanism final : public ldap::sasl_mechanism
 	bool fail_start = false;
 	std::vector<std::string> hosts;// prepare()'s, then "start" at each start()
 
-	auto name() const noexcept -> std::string_view override { return "X-ECHO"; }
+	[[nodiscard]] auto name() const noexcept -> std::string_view override { return "X-ECHO"; }
 	void prepare(const ldap::sasl_bind_context &context) override { hosts.emplace_back(context.host); }
 	auto start() -> ldap::result<std::optional<std::string>> override
 	{
@@ -134,7 +134,7 @@ class offload_mechanism final : public ldap::sasl_mechanism
   public:
 	std::shared_ptr<offload_gate> gate = std::make_shared<offload_gate>();
 
-	auto name() const noexcept -> std::string_view override { return "X-SLOW"; }
+	[[nodiscard]] auto name() const noexcept -> std::string_view override { return "X-SLOW"; }
 	auto start() -> ldap::result<std::optional<std::string>> override
 	{
 		return ldap::fail(ldap::client_errc::unexpected_response, "start() called");

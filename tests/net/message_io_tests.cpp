@@ -64,7 +64,7 @@ struct scripted_stream
 		{
 			scripted_stream *self;
 			MB buffers;
-			auto await_ready() const noexcept -> bool { return true; }
+			[[nodiscard]] auto await_ready() const noexcept -> bool { return true; }
 			auto await_suspend(std::coroutine_handle<> h, const capy::io_env *) -> std::coroutine_handle<> { return h; }
 			auto await_resume() -> capy::io_result<std::size_t>
 			{
@@ -83,7 +83,7 @@ struct scripted_stream
 		struct awaitable
 		{
 			std::size_t n;
-			auto await_ready() const noexcept -> bool { return true; }
+			[[nodiscard]] auto await_ready() const noexcept -> bool { return true; }
 			auto await_suspend(std::coroutine_handle<> h, const capy::io_env *) -> std::coroutine_handle<> { return h; }
 			auto await_resume() -> capy::io_result<std::size_t> { return { std::error_code{}, n }; }
 		};
@@ -114,7 +114,7 @@ struct short_write_stream
 	{
 		std::error_code ec;
 		std::size_t n;
-		auto await_ready() const noexcept -> bool { return true; }
+		[[nodiscard]] auto await_ready() const noexcept -> bool { return true; }
 		auto await_suspend(std::coroutine_handle<> h, const capy::io_env *) -> std::coroutine_handle<> { return h; }
 		auto await_resume() -> capy::io_result<std::size_t> { return { ec, n }; }
 	};

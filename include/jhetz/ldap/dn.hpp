@@ -208,7 +208,7 @@ struct ava
 	auto operator=(ava &&) -> ava & = default;
 	~ava() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return value.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return value.get_allocator(); }
 
 	// Type case-insensitively, value and form exactly.
 	friend auto operator==(const ava &, const ava &) -> bool = default;
@@ -252,7 +252,7 @@ struct rdn
 	auto operator=(rdn &&) -> rdn & = default;
 	~rdn() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return avas.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return avas.get_allocator(); }
 
 	// RFC 4514 text of one RDN (`uid=jdoe`, `cn=a+sn=b`). invalid_dn if the
 	// text is empty, has a syntax error, or holds more than one RDN.
@@ -297,7 +297,7 @@ class dn
 	auto operator=(dn &&) -> dn & = default;
 	~dn() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return rdns_.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return rdns_.get_allocator(); }
 
 	[[nodiscard]] static auto parse(std::string_view text,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<dn>;
@@ -309,7 +309,7 @@ class dn
 	  -> std::pmr::string;
 
 	// Most specific RDN first, as in the string form.
-	auto rdns() const noexcept -> const std::pmr::vector<rdn> & { return rdns_; }
+	[[nodiscard]] auto rdns() const noexcept -> const std::pmr::vector<rdn> & { return rdns_; }
 	[[nodiscard]] auto empty() const noexcept -> bool { return rdns_.empty(); }
 	// Without the first RDN; the parent of the empty DN is the empty DN.
 	[[nodiscard]] auto parent() const -> dn;

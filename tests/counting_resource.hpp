@@ -14,9 +14,9 @@ class counting_resource final : public std::pmr::memory_resource
 	  : upstream_(upstream)
 	{}
 
-	auto allocations() const noexcept -> std::size_t { return allocations_; }
-	auto bytes() const noexcept -> std::size_t { return bytes_; }
-	auto outstanding() const noexcept -> std::size_t { return outstanding_; }
+	[[nodiscard]] auto allocations() const noexcept -> std::size_t { return allocations_; }
+	[[nodiscard]] auto bytes() const noexcept -> std::size_t { return bytes_; }
+	[[nodiscard]] auto outstanding() const noexcept -> std::size_t { return outstanding_; }
 
   private:
 	auto do_allocate(std::size_t n, std::size_t align) -> void * override
@@ -32,7 +32,10 @@ class counting_resource final : public std::pmr::memory_resource
 		outstanding_ -= n;
 		upstream_->deallocate(p, n, align);
 	}
-	auto do_is_equal(const std::pmr::memory_resource &other) const noexcept -> bool override { return this == &other; }
+	[[nodiscard]] auto do_is_equal(const std::pmr::memory_resource &other) const noexcept -> bool override
+	{
+		return this == &other;
+	}
 
 	std::pmr::memory_resource *upstream_;
 	std::size_t allocations_ = 0;

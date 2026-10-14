@@ -50,7 +50,7 @@ template<class T> struct outcome
 {
 	std::optional<T> value{};
 	std::exception_ptr error{};
-	auto done() const noexcept -> bool { return value.has_value() || error != nullptr; }
+	[[nodiscard]] auto done() const noexcept -> bool { return value.has_value() || error != nullptr; }
 	auto get() -> T &
 	{
 		if (error) {
@@ -67,7 +67,7 @@ template<> struct outcome<void>
 {
 	bool finished = false;
 	std::exception_ptr error{};
-	auto done() const noexcept -> bool { return finished || error != nullptr; }
+	[[nodiscard]] auto done() const noexcept -> bool { return finished || error != nullptr; }
 	void get()
 	{
 		if (error) {
@@ -171,9 +171,9 @@ class failing_frames final : public std::pmr::memory_resource
 		other_ = other;
 	}
 	// Allocations attempted since fail_at().
-	auto count() const noexcept -> std::size_t { return count_; }
+	[[nodiscard]] auto count() const noexcept -> std::size_t { return count_; }
 	// Frames allocated and not yet freed.
-	auto live() const noexcept -> std::size_t { return live_; }
+	[[nodiscard]] auto live() const noexcept -> std::size_t { return live_; }
 
   private:
 	auto do_allocate(std::size_t bytes, std::size_t align) -> void * override
@@ -193,7 +193,10 @@ class failing_frames final : public std::pmr::memory_resource
 		--live_;
 		std::pmr::new_delete_resource()->deallocate(p, bytes, align);
 	}
-	auto do_is_equal(const std::pmr::memory_resource &other) const noexcept -> bool override { return this == &other; }
+	[[nodiscard]] auto do_is_equal(const std::pmr::memory_resource &other) const noexcept -> bool override
+	{
+		return this == &other;
+	}
 
 	std::size_t count_ = 0;
 	std::size_t fail_ = 0;
@@ -263,11 +266,11 @@ class test_pki
 		ca_pem_ = to_pem(ca_cert_.get());
 	}
 
-	auto ca_pem() const noexcept -> const std::string & { return ca_pem_; }
+	[[nodiscard]] auto ca_pem() const noexcept -> const std::string & { return ca_pem_; }
 
 	// The CA's subject name hash: "<hash, 8 hex digits>.0" is its file name
 	// in a c_rehash-style CA directory.
-	auto ca_subject_hash() const -> unsigned long { return X509_subject_name_hash(ca_cert_.get()); }
+	[[nodiscard]] auto ca_subject_hash() const -> unsigned long { return X509_subject_name_hash(ca_cert_.get()); }
 
 	// `key_pem` re-encrypted with AES-256-CBC under `passphrase`.
 	static auto encrypted_key_pem(const std::string &key_pem, const std::string &passphrase) -> std::string
@@ -433,7 +436,7 @@ class temp_path
 		std::error_code ec;
 		std::filesystem::remove(path_, ec);
 	}
-	auto str() const noexcept -> const std::string & { return path_; }
+	[[nodiscard]] auto str() const noexcept -> const std::string & { return path_; }
 
 	void write(const std::string &contents) const
 	{

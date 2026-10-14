@@ -882,14 +882,14 @@ namespace {
 		}
 
 		// Kept out of str(), the hottest decoding path.
-		auto too_many_elements(std::size_t offset) const -> std::unexpected<error>
+		[[nodiscard]] auto too_many_elements(std::size_t offset) const -> std::unexpected<error>
 		{
 			return fail(client_errc::message_too_large,
 			  detail::format("message: more than {} elements at offset {}", options_.max_elements, offset));
 		}
 
 		// Elements str() may still decode.
-		auto budget() const noexcept -> std::size_t { return options_.max_elements - strings_; }
+		[[nodiscard]] auto budget() const noexcept -> std::size_t { return options_.max_elements - strings_; }
 
 		auto optional_str(ber::reader &r, ber::tag t) -> result<std::optional<std::pmr::string>>
 		{

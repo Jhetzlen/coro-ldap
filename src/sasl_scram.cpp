@@ -331,7 +331,7 @@ namespace {
 	{
 		std::string_view rest;
 		bool more = true;// false once the last attribute was read
-		auto done() const -> bool { return !more; }
+		[[nodiscard]] auto done() const -> bool { return !more; }
 		// The next attribute: its name (a letter) and value. nullopt if it is
 		// not of the form ALPHA "=" value (an empty one after a trailing ',').
 		auto next() -> std::optional<std::pair<char, std::string_view>>

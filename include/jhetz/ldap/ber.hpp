@@ -153,7 +153,7 @@ class writer
 	}
 	~writer() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return buf_.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return buf_.get_allocator(); }
 
 	void boolean(bool value, tag t = tags::boolean);
 	void integer(std::int64_t value, tag t = tags::integer);
@@ -183,7 +183,7 @@ class writer
 	// Capacity for at least `n` bytes in all (like std::vector::reserve).
 	void reserve(std::size_t n) { buf_.reserve(n); }
 
-	auto bytes() const noexcept -> const std::pmr::vector<std::byte> & { return buf_; }
+	[[nodiscard]] auto bytes() const noexcept -> const std::pmr::vector<std::byte> & { return buf_; }
 	// Moves the encoded bytes out (on the writer's resource) and leaves the
 	// writer empty, still on the same resource.
 	[[nodiscard]] auto take() noexcept -> std::pmr::vector<std::byte>
@@ -223,7 +223,7 @@ struct element
 	std::size_t offset = 0;// absolute offset of the identifier octet
 	std::size_t header_size = 0;// identifier + length octets
 
-	auto size() const noexcept -> std::size_t { return header_size + content.size(); }
+	[[nodiscard]] auto size() const noexcept -> std::size_t { return header_size + content.size(); }
 };
 
 // Sequential decoder over a caller-owned buffer.
@@ -261,13 +261,13 @@ class reader
 	{}
 
 	[[nodiscard]] auto empty() const noexcept -> bool { return pos_ == data_.size(); }
-	auto remaining() const noexcept -> std::size_t { return data_.size() - pos_; }
+	[[nodiscard]] auto remaining() const noexcept -> std::size_t { return data_.size() - pos_; }
 	// Absolute offset of the next byte, counted from the start of the
 	// outermost reader's buffer.
-	auto offset() const noexcept -> std::size_t { return base_ + pos_; }
+	[[nodiscard]] auto offset() const noexcept -> std::size_t { return base_ + pos_; }
 	// Number of `enter` calls between the outermost reader and this one.
-	auto depth() const noexcept -> std::size_t { return depth_; }
-	auto max_depth() const noexcept -> std::size_t { return max_depth_; }
+	[[nodiscard]] auto depth() const noexcept -> std::size_t { return depth_; }
+	[[nodiscard]] auto max_depth() const noexcept -> std::size_t { return max_depth_; }
 
 	[[nodiscard]] auto peek_tag() const -> result<tag>;
 	// Reads the next element of any tag.

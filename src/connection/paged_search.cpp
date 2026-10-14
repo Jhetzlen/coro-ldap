@@ -74,7 +74,7 @@ struct paged_search::state
 	// The paging state the server holds now: `cookie`, or the current
 	// page's own if its SearchResultDone was already received (the page
 	// ended, next() has not read it yet).
-	auto server_cookie() const -> std::string
+	[[nodiscard]] auto server_cookie() const -> std::string
 	{
 		if (current.state_ == nullptr) {
 			return cookie;

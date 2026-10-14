@@ -110,7 +110,7 @@ namespace {
 		std::string oid;
 		std::vector<std::pair<std::string, std::vector<std::string>>> fields;
 
-		auto get(std::string_view keyword) const -> const std::vector<std::string> *
+		[[nodiscard]] auto get(std::string_view keyword) const -> const std::vector<std::string> *
 		{
 			for (const auto &[k, v] : fields) {
 				if (detail::iequals(k, keyword)) {
@@ -119,7 +119,7 @@ namespace {
 			}
 			return nullptr;
 		}
-		auto has(std::string_view keyword) const -> bool { return get(keyword) != nullptr; }
+		[[nodiscard]] auto has(std::string_view keyword) const -> bool { return get(keyword) != nullptr; }
 	};
 
 	auto parse_definition(std::string_view text) -> result<definition>

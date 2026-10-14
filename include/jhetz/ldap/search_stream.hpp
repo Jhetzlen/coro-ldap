@@ -50,17 +50,17 @@ class search_stream
 	auto next() -> boost::capy::task<result<std::optional<entry>>>;
 
 	// True once the SearchResultDone (or an error) was read.
-	auto done() const noexcept -> bool;
+	[[nodiscard]] auto done() const noexcept -> bool;
 	// URIs of the SearchResultReference messages received so far, in order,
 	// as sent (one string per URI). They are not chased; reference_urls()
 	// parses them.
-	auto references() const noexcept -> const string_list &;
+	[[nodiscard]] auto references() const noexcept -> const string_list &;
 	// references() parsed as LDAP URLs; URIs that do not parse are left out.
 	[[nodiscard]] auto reference_urls(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
 	  -> std::pmr::vector<url>;
 	// Controls of the SearchResultDone (e.g. paged results, or the sort
 	// result: find_sort_result()), once done().
-	auto controls() const noexcept -> const std::pmr::vector<control> &;
+	[[nodiscard]] auto controls() const noexcept -> const std::pmr::vector<control> &;
 
 	struct state;// defined in src/connection/search.hpp
 

@@ -263,8 +263,11 @@ class named_category final : public std::error_category
 {
   public:
 	explicit named_category(const char *name) : name_(name) {}
-	auto name() const noexcept -> const char * override { return name_; }
-	auto message(int value) const -> std::string override { return std::string(name_) + " " + std::to_string(value); }
+	[[nodiscard]] auto name() const noexcept -> const char * override { return name_; }
+	[[nodiscard]] auto message(int value) const -> std::string override
+	{
+		return std::string(name_) + " " + std::to_string(value);
+	}
 
   private:
 	const char *name_;

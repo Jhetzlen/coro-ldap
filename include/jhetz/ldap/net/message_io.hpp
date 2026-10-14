@@ -60,14 +60,17 @@ class read_buffer
 	read_buffer() = default;
 	explicit read_buffer(const allocator_type &alloc) : buf_(alloc) {}
 
-	auto get_allocator() const noexcept -> allocator_type { return buf_.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return buf_.get_allocator(); }
 
 	// Unconsumed bytes (e.g. to check that nothing follows a StartTLS
 	// response before the TLS handshake).
-	auto data() const noexcept -> std::span<const std::byte> { return std::span(buf_).subspan(begin_, end_ - begin_); }
-	auto size() const noexcept -> std::size_t { return end_ - begin_; }
+	[[nodiscard]] auto data() const noexcept -> std::span<const std::byte>
+	{
+		return std::span(buf_).subspan(begin_, end_ - begin_);
+	}
+	[[nodiscard]] auto size() const noexcept -> std::size_t { return end_ - begin_; }
 	[[nodiscard]] auto empty() const noexcept -> bool { return begin_ == end_; }
-	auto capacity() const noexcept -> std::size_t { return buf_.size(); }
+	[[nodiscard]] auto capacity() const noexcept -> std::size_t { return buf_.size(); }
 	void clear() noexcept { begin_ = end_ = 0; }
 
 	// All free space after the data, at least `n` bytes (compacting, or

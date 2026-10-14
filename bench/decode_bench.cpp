@@ -46,7 +46,10 @@ class counting_resource final : public std::pmr::memory_resource
 	{
 		std::pmr::new_delete_resource()->deallocate(p, n, align);
 	}
-	auto do_is_equal(const std::pmr::memory_resource &other) const noexcept -> bool override { return this == &other; }
+	[[nodiscard]] auto do_is_equal(const std::pmr::memory_resource &other) const noexcept -> bool override
+	{
+		return this == &other;
+	}
 };
 
 struct stream

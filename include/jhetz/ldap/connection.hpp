@@ -173,24 +173,24 @@ class connection
 
 	// False before connecting, after unbind() or close(), and once a
 	// failure closed the connection.
-	auto is_open() const noexcept -> bool;
+	[[nodiscard]] auto is_open() const noexcept -> bool;
 	// Where it is connected ("ldap://127.0.0.1:389"), for logs; empty if never
 	// connected.
-	auto name() const noexcept -> std::string_view;
+	[[nodiscard]] auto name() const noexcept -> std::string_view;
 	// The executor every operation of this connection must run on.
 	// Precondition: constructed with a transport (not default, not moved from).
-	auto executor() const noexcept -> executor_type;
+	[[nodiscard]] auto executor() const noexcept -> executor_type;
 	// Requests waiting for a response: operations (searches until their
 	// SearchResultDone, or until abandoned) and paged search releases until
 	// their answer arrives or their deadline passes (see paged_search; an
 	// abandoned request is not counted: it may never be answered). For
 	// tests and diagnostics.
-	auto outstanding() const noexcept -> std::size_t;
+	[[nodiscard]] auto outstanding() const noexcept -> std::size_t;
 	// True while TLS protects the open connection (ldaps://, or once
 	// start_tls() has succeeded; false while it runs, its handshake
 	// included). False whenever is_open() is: before connecting, after
 	// unbind() or close(), and once a failure closed the connection.
-	auto is_tls() const noexcept -> bool;
+	[[nodiscard]] auto is_tls() const noexcept -> bool;
 
 	// Simple bind (RFC 4511 section 4.2, RFC 4513 section 5.1). An empty name
 	// and password is an anonymous bind. A name with an empty password would

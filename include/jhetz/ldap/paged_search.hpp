@@ -55,15 +55,15 @@ class paged_search
 	// search's, or a malformed paged results control: decode_error).
 	auto next() -> boost::capy::task<result<std::optional<entry>>>;
 
-	auto done() const noexcept -> bool;
+	[[nodiscard]] auto done() const noexcept -> bool;
 	// Pages requested so far (1 after search_paged()).
-	auto pages() const noexcept -> std::size_t;
+	[[nodiscard]] auto pages() const noexcept -> std::size_t;
 	// References of every page so far, in order.
-	auto references() const noexcept -> const string_list &;
+	[[nodiscard]] auto references() const noexcept -> const string_list &;
 	[[nodiscard]] auto reference_urls(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
 	  -> std::pmr::vector<url>;
 	// Controls of the last SearchResultDone, once done().
-	auto controls() const noexcept -> const std::pmr::vector<control> &;
+	[[nodiscard]] auto controls() const noexcept -> const std::pmr::vector<control> &;
 
 	struct state;// defined in src/connection/paged_search.cpp
 

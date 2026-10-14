@@ -37,7 +37,7 @@ namespace {
 		auto operator=(const gss_handle &) -> gss_handle & = delete;
 		~gss_handle() { reset(); }
 
-		auto get() const noexcept -> H { return h_; }
+		[[nodiscard]] auto get() const noexcept -> H { return h_; }
 		// For a call that creates the handle: releases the current one.
 		auto out() noexcept -> H *
 		{
@@ -81,7 +81,7 @@ namespace {
 				gss_release_buffer(&minor, &desc);
 			}
 		}
-		auto view() const noexcept -> std::string_view
+		[[nodiscard]] auto view() const noexcept -> std::string_view
 		{
 			return desc.value == nullptr ? std::string_view()
 										 : std::string_view(static_cast<const char *>(desc.value), desc.length);

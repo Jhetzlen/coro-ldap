@@ -116,16 +116,16 @@ class transport
 	// Precondition: kind() != kind::none.
 	auto stream() noexcept -> boost::capy::any_stream &;
 
-	auto type() const noexcept -> kind;
-	auto is_tls() const noexcept -> bool;
+	[[nodiscard]] auto type() const noexcept -> kind;
+	[[nodiscard]] auto is_tls() const noexcept -> bool;
 	// False for an empty transport and after close().
-	auto is_open() const noexcept -> bool;
+	[[nodiscard]] auto is_open() const noexcept -> bool;
 	// Where it is connected, for error messages: "ldap://127.0.0.1:389",
 	// "ldapi://%2Frun%2Fldapi", or the name given to wrap().
-	auto name() const noexcept -> const std::pmr::string &;
+	[[nodiscard]] auto name() const noexcept -> const std::pmr::string &;
 	// The URL's host for transports from net::connect() (the socket path for
 	// ldapi://); empty for wrap()ped streams. StartTLS verifies against it.
-	auto host() const noexcept -> const std::pmr::string &;
+	[[nodiscard]] auto host() const noexcept -> const std::pmr::string &;
 
 	// Cancels pending operations; they complete with an error comparing equal
 	// to boost::capy::cond::canceled. The connection stays open.

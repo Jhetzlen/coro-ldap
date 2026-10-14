@@ -310,9 +310,9 @@ namespace {
 	class result_category_impl final : public std::error_category
 	{
 	  public:
-		auto name() const noexcept -> const char * override { return "ldap.result"; }
+		[[nodiscard]] auto name() const noexcept -> const char * override { return "ldap.result"; }
 
-		auto message(int value) const -> std::string override
+		[[nodiscard]] auto message(int value) const -> std::string override
 		{
 			auto text = result_text(value);
 			if (text.empty()) {
@@ -325,9 +325,9 @@ namespace {
 	class client_category_impl final : public std::error_category
 	{
 	  public:
-		auto name() const noexcept -> const char * override { return "ldap.client"; }
+		[[nodiscard]] auto name() const noexcept -> const char * override { return "ldap.client"; }
 
-		auto message(int value) const -> std::string override
+		[[nodiscard]] auto message(int value) const -> std::string override
 		{
 			auto text = client_text(value);
 			if (text.empty()) {
@@ -340,9 +340,9 @@ namespace {
 	class cond_category_impl final : public std::error_category
 	{
 	  public:
-		auto name() const noexcept -> const char * override { return "ldap.cond"; }
+		[[nodiscard]] auto name() const noexcept -> const char * override { return "ldap.cond"; }
 
-		auto message(int value) const -> std::string override
+		[[nodiscard]] auto message(int value) const -> std::string override
 		{
 			auto text = cond_text(value);
 			if (text.empty()) {
@@ -351,7 +351,7 @@ namespace {
 			return std::string(text);
 		}
 
-		auto equivalent(const std::error_code &ec, int condition) const noexcept -> bool override
+		[[nodiscard]] auto equivalent(const std::error_code &ec, int condition) const noexcept -> bool override
 		{
 			std::optional<cond> c;
 			if (ec.category() == result_category()) {

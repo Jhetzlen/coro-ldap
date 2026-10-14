@@ -196,14 +196,14 @@ struct schema_issue
 	kind what;
 	std::string name;// the attribute or object class
 	std::string detail;
-	auto is_error() const noexcept -> bool { return what != kind::single_member_multi_valued; }
+	[[nodiscard]] auto is_error() const noexcept -> bool { return what != kind::single_member_multi_valued; }
 };
 
 struct schema_report
 {
 	std::vector<schema_issue> issues{};
 	// No errors (warnings allowed).
-	auto ok() const noexcept -> bool;
+	[[nodiscard]] auto ok() const noexcept -> bool;
 	// One issue per line: "error: attribute uidNumber: ..." / "warning: ...".
 	[[nodiscard]] auto to_string() const -> std::string;
 };

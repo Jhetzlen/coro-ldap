@@ -235,7 +235,7 @@ class attribute
 	auto operator=(attribute &&) -> attribute & = default;
 	~attribute() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return name_.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return name_.get_allocator(); }
 
 	[[nodiscard]] static auto parse(std::string_view text,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<attribute>;
@@ -255,7 +255,7 @@ class attribute
 		return attribute(std::move(text), adopt{});
 	}
 
-	auto name() const noexcept -> const std::pmr::string & { return name_; }
+	[[nodiscard]] auto name() const noexcept -> const std::pmr::string & { return name_; }
 	[[nodiscard]] auto empty() const noexcept -> bool { return name_.empty(); }
 
 	friend auto operator==(const attribute &a, const attribute &b) noexcept -> bool

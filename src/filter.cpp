@@ -879,19 +879,22 @@ namespace {
 		}
 
 	  private:
-		auto error(std::string_view what, std::size_t at) const -> std::unexpected<ldap::error>
+		[[nodiscard]] auto error(std::string_view what, std::size_t at) const -> std::unexpected<ldap::error>
 		{
 			const std::size_t pos = at >= shift_ ? at - shift_ : 0;
 			return fail(client_errc::invalid_filter, detail::format("filter: {} at position {}", what, pos));
 		}
-		auto error(std::string_view what) const -> std::unexpected<ldap::error> { return error(what, i_); }
-		auto too_many_elements() const -> std::unexpected<ldap::error>
+		[[nodiscard]] auto error(std::string_view what) const -> std::unexpected<ldap::error>
+		{
+			return error(what, i_);
+		}
+		[[nodiscard]] auto too_many_elements() const -> std::unexpected<ldap::error>
 		{
 			return error(detail::format("too many elements (more than {})", limits_.max_elements));
 		}
 
-		auto at_end() const -> bool { return i_ >= s_.size(); }
-		auto peek() const -> char { return s_[i_]; }
+		[[nodiscard]] auto at_end() const -> bool { return i_ >= s_.size(); }
+		[[nodiscard]] auto peek() const -> char { return s_[i_]; }
 
 		auto expect(char c) -> result<void>
 		{

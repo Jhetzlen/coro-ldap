@@ -38,7 +38,7 @@ struct search_stream::state
 
 	// The SearchResultDone already queued (received, not yet read by
 	// next()), or null.
-	auto queued_done() const noexcept -> const message *
+	[[nodiscard]] auto queued_done() const noexcept -> const message *
 	{
 		if (op.queue.empty() || !std::holds_alternative<search_result_done>(op.queue.back().op)) {
 			return nullptr;

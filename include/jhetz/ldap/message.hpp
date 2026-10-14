@@ -104,9 +104,9 @@ struct ldap_result
 	auto operator=(ldap_result &&) -> ldap_result & = default;
 	~ldap_result() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return matched_dn.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return matched_dn.get_allocator(); }
 
-	auto is_success() const noexcept -> bool { return result_code == 0; }
+	[[nodiscard]] auto is_success() const noexcept -> bool { return result_code == 0; }
 
 	// The result as an ldap::error (on the default resource): code in
 	// result_category() (unknown codes keep their number and get a generic
@@ -141,7 +141,7 @@ struct control
 	auto operator=(control &&other) -> control &;
 	~control() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return type.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return type.get_allocator(); }
 
 	friend auto operator==(const control &, const control &) -> bool = default;
 };
@@ -171,7 +171,7 @@ struct partial_attribute
 	auto operator=(partial_attribute &&) -> partial_attribute & = default;
 	~partial_attribute() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return type.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return type.get_allocator(); }
 
 	friend auto operator==(const partial_attribute &, const partial_attribute &) -> bool = default;
 };
@@ -203,7 +203,7 @@ struct attribute_value_assertion
 	auto operator=(attribute_value_assertion &&) -> attribute_value_assertion & = default;
 	~attribute_value_assertion() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return attribute_desc.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return attribute_desc.get_allocator(); }
 
 	friend auto operator==(const attribute_value_assertion &, const attribute_value_assertion &) -> bool = default;
 };
@@ -229,7 +229,7 @@ template<std::uint8_t Tag> struct result_response
 	auto operator=(result_response &&) -> result_response & = default;
 	~result_response() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return result.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return result.get_allocator(); }
 
 	friend auto operator==(const result_response &, const result_response &) -> bool = default;
 };
@@ -253,7 +253,7 @@ struct simple_auth
 	auto operator=(simple_auth &&) -> simple_auth & = default;
 	~simple_auth() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return password.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return password.get_allocator(); }
 
 	friend auto operator==(const simple_auth &, const simple_auth &) -> bool = default;
 };
@@ -278,7 +278,7 @@ struct sasl_auth
 	auto operator=(sasl_auth &&other) -> sasl_auth &;
 	~sasl_auth() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return mechanism.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return mechanism.get_allocator(); }
 
 	friend auto operator==(const sasl_auth &, const sasl_auth &) -> bool = default;
 };
@@ -309,7 +309,7 @@ struct bind_request
 	auto operator=(bind_request &&other) -> bind_request &;
 	~bind_request() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return name.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return name.get_allocator(); }
 
 	friend auto operator==(const bind_request &, const bind_request &) -> bool = default;
 };
@@ -335,7 +335,7 @@ struct bind_response
 	auto operator=(bind_response &&other) -> bind_response &;
 	~bind_response() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return result.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return result.get_allocator(); }
 
 	friend auto operator==(const bind_response &, const bind_response &) -> bool = default;
 };
@@ -392,7 +392,7 @@ struct search_request
 	auto operator=(search_request &&) -> search_request & = default;
 	~search_request() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return base_object.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return base_object.get_allocator(); }
 
 	friend auto operator==(const search_request &, const search_request &) -> bool = default;
 };
@@ -424,7 +424,7 @@ struct search_result_entry
 	auto operator=(search_result_entry &&) -> search_result_entry & = default;
 	~search_result_entry() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return object_name.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return object_name.get_allocator(); }
 
 	friend auto operator==(const search_result_entry &, const search_result_entry &) -> bool = default;
 };
@@ -456,7 +456,7 @@ struct search_result_reference
 	auto operator=(search_result_reference &&) -> search_result_reference & = default;
 	~search_result_reference() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return uris.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return uris.get_allocator(); }
 
 	friend auto operator==(const search_result_reference &, const search_result_reference &) -> bool = default;
 };
@@ -489,7 +489,7 @@ struct modify_change
 	auto operator=(modify_change &&) -> modify_change & = default;
 	~modify_change() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return modification.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return modification.get_allocator(); }
 
 	friend auto operator==(const modify_change &, const modify_change &) -> bool = default;
 };
@@ -521,7 +521,7 @@ struct modify_request
 	auto operator=(modify_request &&) -> modify_request & = default;
 	~modify_request() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return object.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return object.get_allocator(); }
 
 	friend auto operator==(const modify_request &, const modify_request &) -> bool = default;
 };
@@ -556,7 +556,7 @@ struct add_request
 	auto operator=(add_request &&) -> add_request & = default;
 	~add_request() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
 
 	friend auto operator==(const add_request &, const add_request &) -> bool = default;
 };
@@ -582,7 +582,7 @@ struct del_request
 	auto operator=(del_request &&) -> del_request & = default;
 	~del_request() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
 
 	friend auto operator==(const del_request &, const del_request &) -> bool = default;
 };
@@ -615,7 +615,7 @@ struct modify_dn_request
 	auto operator=(modify_dn_request &&other) -> modify_dn_request &;
 	~modify_dn_request() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
 
 	friend auto operator==(const modify_dn_request &, const modify_dn_request &) -> bool = default;
 };
@@ -648,7 +648,7 @@ struct compare_request
 	auto operator=(compare_request &&) -> compare_request & = default;
 	~compare_request() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
 
 	friend auto operator==(const compare_request &, const compare_request &) -> bool = default;
 };
@@ -684,7 +684,7 @@ struct extended_request
 	auto operator=(extended_request &&other) -> extended_request &;
 	~extended_request() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return request_name.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return request_name.get_allocator(); }
 
 	friend auto operator==(const extended_request &, const extended_request &) -> bool = default;
 };
@@ -714,7 +714,7 @@ struct extended_response
 	auto operator=(extended_response &&other) -> extended_response &;
 	~extended_response() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return result.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return result.get_allocator(); }
 
 	friend auto operator==(const extended_response &, const extended_response &) -> bool = default;
 };
@@ -741,7 +741,7 @@ struct intermediate_response
 	~intermediate_response() = default;
 
 	// Both members may be absent, so the resource is kept separately.
-	auto get_allocator() const noexcept -> allocator_type { return alloc_; }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return alloc_; }
 
 	friend auto operator==(const intermediate_response &a, const intermediate_response &b) -> bool
 	{
@@ -801,7 +801,7 @@ struct message
 	auto operator=(message &&other) -> message &;
 	~message() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return controls.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return controls.get_allocator(); }
 
 	friend auto operator==(const message &, const message &) -> bool = default;
 };
@@ -904,7 +904,7 @@ struct paged_results
 	auto operator=(paged_results &&) -> paged_results & = default;
 	~paged_results() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return cookie.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return cookie.get_allocator(); }
 
 	friend auto operator==(const paged_results &, const paged_results &) -> bool = default;
 };
@@ -956,9 +956,9 @@ struct sort_result
 	auto operator=(sort_result &&) -> sort_result & = default;
 	~sort_result() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return attribute_type.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return attribute_type.get_allocator(); }
 
-	auto is_success() const noexcept -> bool { return result_code == 0; }
+	[[nodiscard]] auto is_success() const noexcept -> bool { return result_code == 0; }
 
 	friend auto operator==(const sort_result &, const sort_result &) -> bool = default;
 };

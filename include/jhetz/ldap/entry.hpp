@@ -39,7 +39,7 @@ struct attribute_values
 	auto operator=(attribute_values &&) -> attribute_values & = default;
 	~attribute_values() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return values.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return values.get_allocator(); }
 
 	friend auto operator==(const attribute_values &, const attribute_values &) -> bool = default;
 };
@@ -66,7 +66,7 @@ struct entry
 	auto operator=(entry &&) -> entry & = default;
 	~entry() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return dn.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return dn.get_allocator(); }
 
 	// Values of `type` (case-insensitive, options included: `cn;lang-en` is
 	// not `cn`), or nullptr if the entry has no such attribute. An attribute

@@ -134,7 +134,7 @@ class filter
 	auto operator=(filter &&other) -> filter &;
 	~filter() = default;
 
-	auto get_allocator() const noexcept -> allocator_type { return nodes_.get_allocator(); }
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return nodes_.get_allocator(); }
 
 	// Parses RFC 4515 text into a tree allocated from `mr`. Fails with
 	// invalid_filter (position in the context); never throws on bad input.
@@ -157,11 +157,11 @@ class filter
 
 	[[nodiscard]] auto empty() const noexcept -> bool { return nodes_.empty(); }
 	// The top node. Precondition: !empty().
-	auto root() const noexcept -> view;
+	[[nodiscard]] auto root() const noexcept -> view;
 	// Longest path from the root to a leaf, counting both (`(cn=x)` is 1), and
 	// number of elements; both 0 when empty. Constant time.
-	auto depth() const noexcept -> std::size_t { return empty() ? 0 : depth_; }
-	auto elements() const noexcept -> std::size_t { return empty() ? 0 : elements_; }
+	[[nodiscard]] auto depth() const noexcept -> std::size_t { return empty() ? 0 : depth_; }
+	[[nodiscard]] auto elements() const noexcept -> std::size_t { return empty() ? 0 : elements_; }
 
 	// Canonical RFC 4515 text, for logs: values escaped with
 	// escape_filter_value (lower-case hex), `:dn` in lower case, empty
@@ -198,7 +198,7 @@ class filter
 		std::uint32_t next = npos;// next sibling
 	};
 
-	auto str(std::uint32_t off, std::uint32_t len) const noexcept -> std::string_view
+	[[nodiscard]] auto str(std::uint32_t off, std::uint32_t len) const noexcept -> std::string_view
 	{
 		return std::string_view(text_).substr(off, len);
 	}
@@ -216,28 +216,31 @@ class filter
 class filter::view
 {
   public:
-	auto kind() const noexcept -> filter::kind { return static_cast<filter::kind>(n().k); }
+	[[nodiscard]] auto kind() const noexcept -> filter::kind { return static_cast<filter::kind>(n().k); }
 	// Attribute description of a leaf; the (possibly empty) type of an
 	// extensible match; empty for and / or / not.
-	auto attribute() const noexcept -> std::string_view { return f_->str(n().attr_off, n().attr_len); }
+	[[nodiscard]] auto attribute() const noexcept -> std::string_view { return f_->str(n().attr_off, n().attr_len); }
 	// Assertion value of equality, >=, <=, ~= and extensible match (unescaped).
-	auto value() const noexcept -> std::string_view { return f_->str(n().value_off, n().value_len); }
+	[[nodiscard]] auto value() const noexcept -> std::string_view { return f_->str(n().value_off, n().value_len); }
 	// Extensible match: matching rule (may be empty) and dnAttributes.
-	auto matching_rule() const noexcept -> std::string_view { return f_->str(n().rule_off, n().rule_len); }
-	auto dn_attributes() const noexcept -> bool { return n().dn_attributes; }
+	[[nodiscard]] auto matching_rule() const noexcept -> std::string_view
+	{
+		return f_->str(n().rule_off, n().rule_len);
+	}
+	[[nodiscard]] auto dn_attributes() const noexcept -> bool { return n().dn_attributes; }
 	// Children of and / or (any number) and not (one); empty for other kinds.
-	auto children() const noexcept -> child_range;
+	[[nodiscard]] auto children() const noexcept -> child_range;
 	// Parts of a substrings assertion (never empty strings); nullopt / empty
 	// for other kinds.
-	auto initial() const noexcept -> std::optional<std::string_view>;
-	auto any() const noexcept -> substring_range;
-	auto final() const noexcept -> std::optional<std::string_view>;
+	[[nodiscard]] auto initial() const noexcept -> std::optional<std::string_view>;
+	[[nodiscard]] auto any() const noexcept -> substring_range;
+	[[nodiscard]] auto final() const noexcept -> std::optional<std::string_view>;
 
   private:
 	friend class filter;
 	friend class filter::child_iterator;
 	view(const filter *f, std::uint32_t i) noexcept : f_(f), i_(i) {}
-	auto n() const noexcept -> const node & { return f_->nodes_[i_]; }
+	[[nodiscard]] auto n() const noexcept -> const node & { return f_->nodes_[i_]; }
 
 	const filter *f_;
 	std::uint32_t i_;
@@ -278,8 +281,8 @@ class filter::child_iterator
 class filter::child_range : public std::ranges::view_interface<filter::child_range>
 {
   public:
-	auto begin() const noexcept -> child_iterator { return first_; }
-	auto end() const noexcept -> child_iterator { return {}; }
+	[[nodiscard]] auto begin() const noexcept -> child_iterator { return first_; }
+	[[nodiscard]] auto end() const noexcept -> child_iterator { return {}; }
 	// NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): same result, kept [[nodiscard]] noexcept
 	[[nodiscard]] auto empty() const noexcept -> bool { return first_ == child_iterator{}; }
 
@@ -333,8 +336,8 @@ class filter::substring_iterator
 class filter::substring_range : public std::ranges::view_interface<filter::substring_range>
 {
   public:
-	auto begin() const noexcept -> substring_iterator { return first_; }
-	auto end() const noexcept -> substring_iterator { return {}; }
+	[[nodiscard]] auto begin() const noexcept -> substring_iterator { return first_; }
+	[[nodiscard]] auto end() const noexcept -> substring_iterator { return {}; }
 	// NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): same result, kept [[nodiscard]] noexcept
 	[[nodiscard]] auto empty() const noexcept -> bool { return first_ == substring_iterator{}; }
 

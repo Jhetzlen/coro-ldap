@@ -91,7 +91,7 @@ auto open_admin(corosio::io_context &ioc) -> ldap::connection
 class scram_giving_up final : public ldap::sasl_mechanism
 {
   public:
-	auto name() const noexcept -> std::string_view override { return scram.name(); }
+	[[nodiscard]] auto name() const noexcept -> std::string_view override { return scram.name(); }
 	auto start() -> ldap::result<std::optional<std::string>> override { return scram.start(); }
 	auto step(std::optional<std::string_view>) -> ldap::result<std::optional<std::string>> override
 	{

@@ -146,7 +146,7 @@ class sasl_scram_sha256 final : public sasl_mechanism
 	sasl_scram_sha256(const sasl_scram_sha256 &) = delete;
 	auto operator=(const sasl_scram_sha256 &) -> sasl_scram_sha256 & = delete;
 
-	auto name() const noexcept -> std::string_view override { return "SCRAM-SHA-256"; }
+	[[nodiscard]] auto name() const noexcept -> std::string_view override { return "SCRAM-SHA-256"; }
 	// Notes whether sasl_bind can run a step on another thread
 	// (sasl_bind_context::can_offload).
 	void prepare(const sasl_bind_context &context) override;

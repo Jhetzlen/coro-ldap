@@ -69,7 +69,7 @@ class sasl_mechanism
 	virtual void prepare(const sasl_bind_context &context) { (void)context; }
 
 	// The mechanism name sent in the BindRequest, e.g. "EXTERNAL".
-	virtual auto name() const noexcept -> std::string_view = 0;
+	[[nodiscard]] virtual auto name() const noexcept -> std::string_view = 0;
 	// Credentials of the first BindRequest (nullopt: none sent). Called at
 	// the start of each bind, so it also resets the mechanism.
 	[[nodiscard]] virtual auto start() -> result<std::optional<std::string>> = 0;
@@ -110,7 +110,7 @@ class sasl_external final : public sasl_mechanism
   public:
 	explicit sasl_external(std::string authz_id = {}) : authz_id_(std::move(authz_id)) {}
 
-	auto name() const noexcept -> std::string_view override { return "EXTERNAL"; }
+	[[nodiscard]] auto name() const noexcept -> std::string_view override { return "EXTERNAL"; }
 	[[nodiscard]] auto start() -> result<std::optional<std::string>> override
 	{
 		return std::optional<std::string>(authz_id_);
