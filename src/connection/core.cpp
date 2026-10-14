@@ -402,6 +402,80 @@ capy::task<void> connection::impl::due_watcher(impl *self)
 
 std::size_t connection::impl::outstanding() const noexcept { return pending.size() + due_answers; }
 
+capy::task<connection::impl::due_wait> connection::impl::wait_due_answers(std::optional<clock::time_point> deadline)
+{
+	const std::size_t due = due_answers;
+	// Something must read the answers and expire their deadlines: if
+	// send_unanswered() could not start the reader or the due watcher
+	// (bad_alloc), nothing else may (a throw here is the caller's).
+	start_reader();
+	if (!watching && next_due_deadline()) start_due_watcher();
+	std::error_code ec;
+	if (deadline) {
+		auto [e] = co_await corosio::timeout(due_idle.wait(), *deadline);
+		ec = e;
+	} else {
+		auto [e] = co_await due_idle.wait();
+		ec = e;
+	}
+	// The wait's timeout may run before the due watcher expires an
+	// answer whose deadline passed at the same time: expire those here
+	// (only those past their own deadline), and check again if none is
+	// left. A stop gives canceled, not timeout.
+	std::size_t left = due;
+	if (ec == capy::cond::timeout) {
+		expire_due(clock::now());
+		left = due_answers;
+		if (left == 0) co_return due_wait{};
+	}
+	// A stop reports the count waited for, not due_answers: the last
+	// answer may have come meanwhile, and "0 releases" would say nothing.
+	co_return due_wait{ ec, left };
+}
+
+// ---------------------------------------------------------------- unbind
+
+void connection::impl::abandon_all_for_unbind()
+{
+	auto waiting = std::move(pending);
+	pending.clear();
+	for (auto &[id, op] : waiting) {
+		op->registered = false;
+		op->finished = true;
+		op->ready.set();// they fail with not_connected ("connection closed")
+	}
+	// The answers still due are not read either. due_idle stays clear until
+	// unbind() calls shut(): a StartTLS waiting for them then fails with
+	// not_connected instead of being sent after the UnbindRequest (as does
+	// one whose wait times out meanwhile: `unbinding`).
+	for (auto &a : abandoned) a.due = false;
+	due_answers = 0;
+	due_changed.set();// the due watcher ends
+	stop_reader_if_idle();
+}
+
+// ---------------------------------------------------------------- idle
+
+capy::task<void> connection::impl::wait_io_idle()
+{
+	co_await capy::run(std::stop_token{})([](impl &c) -> capy::task<void> {
+		(void)co_await c.write_idle.wait();
+		(void)co_await c.reader_idle.wait();
+	}(*this));
+}
+
+capy::task<void> connection::impl::wait_write_idle()
+{
+	(void)co_await capy::run(std::stop_token{})(
+	  [](impl &c) -> capy::task<capy::io_result<>> { co_return co_await c.write_idle.wait(); }(*this));
+}
+
+capy::task<void> connection::impl::wait_reader_idle()
+{
+	(void)co_await capy::run(std::stop_token{})(
+	  [](impl &c) -> capy::task<capy::io_result<>> { co_return co_await c.reader_idle.wait(); }(*this));
+}
+
 // ---------------------------------------------------------------- reader
 
 void connection::impl::start_reader()

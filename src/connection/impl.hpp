@@ -24,6 +24,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <typeindex>
 #include <unordered_map>
@@ -368,11 +369,48 @@ struct connection::impl
 	// Requests still to be answered: those waited for, and `due` answers.
 	std::size_t outstanding() const noexcept;
 
+	// Requests waited for (registered operations), without the due answers.
+	std::size_t requests_waiting() const noexcept { return pending.size(); }
+
+	// Answers still due to requests nothing waits for (send_unanswered).
+	std::size_t answers_due() const noexcept { return due_answers; }
+
+	// What wait_due_answers() ended with: no error (woken, or timed out with
+	// nothing left: check again), or the error and the answers it leaves.
+	struct due_wait
+	{
+		std::error_code ec{};
+		std::size_t left = 0;
+	};
+
+	// StartTLS's wait for the answers due (answers_due() != 0), until
+	// `deadline` at most: starts the reader and the due watcher if they are
+	// not running, waits for due_idle, and on a timeout expires the answers
+	// past their own deadline. `left` is the count waited for, or after a
+	// timeout the count still due. A throw (bad_alloc) is the caller's.
+	boost::capy::task<due_wait> wait_due_answers(std::optional<detail::clock::time_point> deadline);
+
 	// Describes the open connection: false after close(), unbind() or a
 	// failure, even though the closed transport still holds its TLS layer.
 	// False during start_tls() too: the TLS layer is in place before its
 	// handshake runs.
 	bool is_tls() const noexcept { return open && !upgrading && transport.is_tls(); }
+
+	// ---------------------------------------------------------------- unbind
+
+	// unbind(): every outstanding operation is abandoned with the session
+	// (RFC 4511 section 4.3), and the answers due are no longer waited for,
+	// without closing the connection (the UnbindRequest is still to be sent).
+	void abandon_all_for_unbind();
+
+	// ---------------------------------------------------------------- idle
+
+	// Waits until the writer, then the reader, is idle; and each alone. Not
+	// cancellable (they run under an empty stop token): the writer and the
+	// reader stop promptly on their own, and a PDU is written whole.
+	boost::capy::task<void> wait_io_idle();
+	boost::capy::task<void> wait_write_idle();
+	boost::capy::task<void> wait_reader_idle();
 
 	// ---------------------------------------------------------------- reader
 

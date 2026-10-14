@@ -143,41 +143,16 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 		if (self->upgrading)
 			co_return fail(client_errc::operation_in_progress, context + " during an earlier StartTLS");
 		if (self->binding) co_return fail(client_errc::operation_in_progress, context + " during a bind");
-		if (const std::size_t n = self->pending.size(); n != 0)
+		if (const std::size_t n = self->requests_waiting(); n != 0)
 			co_return fail(client_errc::operation_in_progress,
 			  detail::format("{} with {} {} outstanding", context, n, n == 1 ? "request" : "requests"));
 		// Checked before the wait too, so misuse fails at once.
 		if (self->transport.type() != net::transport::kind::tcp || self->transport.is_tls())
 			co_return fail(std::make_error_code(std::errc::invalid_argument),
 			  context + ": needs a plain TCP connection (not ldaps://, ldapi:// or a custom stream)");
-		const std::size_t due = self->due_answers;
-		if (due == 0) break;
-		// Something must read the answers and expire their deadlines: if
-		// send_unanswered() could not start the reader or the due watcher
-		// (bad_alloc), nothing else may (a throw here is this task's).
-		self->start_reader();
-		if (!self->watching && self->next_due_deadline()) self->start_due_watcher();
-		std::error_code ec;
-		if (wait_deadline) {
-			auto [e] = co_await corosio::timeout(self->due_idle.wait(), *wait_deadline);
-			ec = e;
-		} else {
-			auto [e] = co_await self->due_idle.wait();
-			ec = e;
-		}
-		// The wait's timeout may run before the due watcher expires an
-		// answer whose deadline passed at the same time: expire those here
-		// (only those past their own deadline), and check again if none is
-		// left. A stop gives canceled, not timeout.
-		std::size_t left = due;
-		if (ec == capy::cond::timeout) {
-			self->expire_due(clock::now());
-			left = self->due_answers;
-			if (left == 0) continue;
-		}
+		if (self->answers_due() == 0) break;
+		const auto [ec, left] = co_await self->wait_due_answers(wait_deadline);
 		// Cancelled or timed out: nothing was sent, the connection is usable.
-		// A stop reports the count waited for, not due_answers: the last
-		// answer may have come meanwhile, and "0 releases" would say nothing.
 		if (ec)
 			co_return fail(ec,
 			  detail::format("{} (waiting for the answer{} to {} paged search release{})",
@@ -221,10 +196,7 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	try {
 		// The reader and writer must be idle: the handshake reads and writes
 		// the socket itself. Not cancellable: they stop promptly on their own.
-		co_await capy::run(std::stop_token{})([](connection::impl &c) -> capy::task<void> {
-			(void)co_await c.write_idle.wait();
-			(void)co_await c.reader_idle.wait();
-		}(*self));
+		co_await self->wait_io_idle();
 		if (!self->open) co_return std::unexpected(self->not_connected(context));
 		r = co_await net::start_tls(self->transport, self->buf, std::move(options), timeout);
 	} catch (const std::bad_alloc &) {
@@ -272,21 +244,7 @@ capy::task<result<void>> connection::unbind()
 	}
 
 	// Outstanding operations are abandoned by the unbind (RFC 4511 section 4.3).
-	auto waiting = std::move(self->pending);
-	self->pending.clear();
-	for (auto &[id, op] : waiting) {
-		op->registered = false;
-		op->finished = true;
-		op->ready.set();// they fail with not_connected ("connection closed")
-	}
-	// The answers still due are not read either. due_idle stays clear until
-	// shut() below: a StartTLS waiting for them then fails with
-	// not_connected instead of being sent after the UnbindRequest (as does
-	// one whose wait times out meanwhile: `unbinding`).
-	for (auto &a : self->abandoned) a.due = false;
-	self->due_answers = 0;
-	self->due_changed.set();// the due watcher ends
-	self->stop_reader_if_idle();
+	self->abandon_all_for_unbind();
 	message request{ 0, unbind_request{} };
 	if (auto r = self->submit(request, nullptr, context); !r) co_return r;
 	// Nothing may follow the UnbindRequest (RFC 4511 section 4.3): an
@@ -295,19 +253,14 @@ capy::task<result<void>> connection::unbind()
 	self->unbinding = true;
 	// Wait for the writer, even if this task is cancelled: closing first
 	// would cut the UnbindRequest off.
-	{
-		auto [ec] = co_await capy::run(std::stop_token{})(
-		  [](connection::impl &c) -> capy::task<capy::io_result<>> { co_return co_await c.write_idle.wait(); }(*self));
-		(void)ec;
-	}
+	co_await self->wait_write_idle();
 	std::optional<error> failed = self->failure;
 	self->shut(make_error(client_errc::not_connected, "connection closed"), false, false);
 	// TLS: close_notify, after the reader has stopped (it would otherwise
 	// read the peer's close_notify itself). Best effort and bounded: the
 	// unbind is complete whatever the peer does.
 	if (!failed && self->transport.is_tls() && self->transport.is_open()) {
-		(void)co_await capy::run(std::stop_token{})(
-		  [](connection::impl &c) -> capy::task<capy::io_result<>> { co_return co_await c.reader_idle.wait(); }(*self));
+		co_await self->wait_reader_idle();
 		(void)co_await self->transport.shutdown(self->tls_shutdown_timeout);
 	}
 	self->transport.close();
