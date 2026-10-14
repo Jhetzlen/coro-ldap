@@ -1033,7 +1033,9 @@ TEST_CASE("integration: the sync connection", "[integration][sync]")
 		CHECK_FALSE(c.is_tls());
 		net::tls_options tls;
 		tls.ca_file = env("JHETZ_LDAP_IT_CA");
-		REQUIRE(c.start_tls(std::move(tls)).has_value());
+		// Out of REQUIRE, which spells its expression twice (one unevaluated).
+		const auto started = c.start_tls(std::move(tls));
+		REQUIRE(started.has_value());
 		CHECK(c.is_tls());
 		REQUIRE(c.simple_bind(admin, "secret").has_value());
 

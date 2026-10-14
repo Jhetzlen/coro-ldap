@@ -41,7 +41,7 @@ auto round_trip(const ldap::message &m) -> ldap::message
 
 // LDAPMessage { id, <op built by body>, <extra built by tail> }
 template<class Op, class Tail = void (*)(ber::writer &)>
-auto raw_message(std::int64_t id, Op &&op, Tail &&tail = [](ber::writer &) {}) -> std::pmr::vector<std::byte>
+auto raw_message(std::int64_t id, const Op &op, const Tail &tail = [](ber::writer &) {}) -> std::pmr::vector<std::byte>
 {
 	ber::writer w;
 	w.constructed(ber::tags::sequence, [&](ber::writer &m) {

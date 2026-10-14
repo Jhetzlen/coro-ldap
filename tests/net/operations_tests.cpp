@@ -1812,6 +1812,8 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 		// abandoned (nothing is outstanding, the reader is told to stop),
 		// then an AddRequest is registered while the reader still runs. The
 		// reader then ends on its cancelled read and starts afresh for it.
+		// body outlives its task: drive_until below runs the task to completion.
+		// NOLINTNEXTLINE(cppcoreguidelines-avoid-capturing-lambda-coroutines): see above
 		auto body = [&]() -> capy::task<ldap::result<ldap::response>> {
 			*s = ldap::search_stream{};
 			auto add = t.conn.add({ .entry = jdoe });

@@ -182,7 +182,7 @@ class connection
   private:
 	// Runs make_task(conn_) on the I/O thread and waits for its result.
 	template<class F>
-	auto call(F &&make_task) ->
+	auto call(const F &make_task) ->
 	  typename detail::task_value<decltype(make_task(std::declval<ldap::connection &>()))>::type
 	{
 		using R = typename detail::task_value<decltype(make_task(std::declval<ldap::connection &>()))>::type;
@@ -197,7 +197,8 @@ class connection
 		  ioc_.get_executor(),
 		  [&done](R r) { done.set_value(std::move(r)); },
 		  [&done](std::exception_ptr e) { done.set_exception(e); })(
-		  [](ldap::connection &c, F &make) -> boost::capy::task<R> { co_return co_await make(c); }(conn_, make_task));
+		  [](ldap::connection &c, const F &make) -> boost::capy::task<R> { co_return co_await make(c); }(
+												   conn_, make_task));
 		return f.get();
 	}
 

@@ -375,7 +375,9 @@ TEST_CASE("value semantics: ber::writer", "[value_semantics][ber]")
 	target2 = std::move(source);
 	CHECK(hex(target2.bytes()) == expected);
 	CHECK(target2.get_allocator().resource() == &rb);
-	CHECK(source.bytes().empty());// cleared, still usable
+	// Checks the moved-from state on purpose: cleared, still usable.
+	// NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+	CHECK(source.bytes().empty());
 	CHECK(source.get_allocator().resource() == &ra);
 }
 

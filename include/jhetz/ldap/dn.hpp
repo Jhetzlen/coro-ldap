@@ -68,7 +68,7 @@ namespace detail {
 	// Scans RFC 4514 text and calls `on_ava(dn_token)` for every AVA in
 	// order. Returns npos on success, otherwise the offset of the error.
 	// constexpr, so the same code validates literals at compile time.
-	template<class F> constexpr auto scan_dn(std::string_view s, F &&on_ava) -> std::size_t
+	template<class F> constexpr auto scan_dn(std::string_view s, const F &on_ava) -> std::size_t
 	{
 		constexpr std::size_t ok = std::string_view::npos;
 		if (s.empty()) {

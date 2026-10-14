@@ -220,7 +220,7 @@ namespace {
 	}
 
 	// Splits `s` on `sep`, calling on(piece, offset of piece in the URL).
-	template<class F> auto split(std::string_view s, std::size_t offset, char sep, F &&on) -> result<void>
+	template<class F> auto split(std::string_view s, std::size_t offset, char sep, const F &on) -> result<void>
 	{
 		std::size_t start = 0;
 		while (true) {

@@ -820,7 +820,8 @@ namespace {
 	// characters read, or what is wrong. Shared by filter::raw and
 	// unescape_filter_value, so they accept the same values.
 	template<class Emit>
-	auto read_value_unit(std::string_view s, std::size_t i, Emit &&emit) -> std::expected<std::size_t, std::string_view>
+	auto read_value_unit(std::string_view s, std::size_t i, const Emit &emit)
+	  -> std::expected<std::size_t, std::string_view>
 	{
 		const char c = s[i];
 		if (c == '(' || c == '\0') {

@@ -168,9 +168,8 @@ TEST_CASE("ci_hash: strings of different lengths do not collide", "[attribute]")
 			}
 		}
 	}
-	CHECK(distinct(std::move(hashes)));
+	CHECK(distinct(std::exchange(hashes, {})));
 	// Periodic OID-like strings: "<d>" + ".<e>" * k.
-	hashes.clear();
 	for (char d = '0'; d <= '9'; ++d) {
 		for (char e = '0'; e <= '9'; ++e) {
 			std::string s(1, d);
@@ -180,7 +179,7 @@ TEST_CASE("ci_hash: strings of different lengths do not collide", "[attribute]")
 			}
 		}
 	}
-	CHECK(distinct(std::move(hashes)));
+	CHECK(distinct(std::exchange(hashes, {})));
 }
 
 namespace {

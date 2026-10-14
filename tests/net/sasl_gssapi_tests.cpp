@@ -198,7 +198,7 @@ TEST_CASE("gssapi: challenges and success out of order", "[net][sasl][gssapi]")
 
 	// A moved-from mechanism is still usable.
 	ldap::sasl_gssapi other(std::move(mech));
-	CHECK_FALSE(mech.complete(std::nullopt).has_value());
+	CHECK_FALSE(mech.complete(std::nullopt).has_value());// NOLINT(bugprone-use-after-move): moved-from state on purpose
 	CHECK_FALSE(mech.step(std::nullopt).has_value());
 	CHECK(mech.name() == "GSSAPI");
 }

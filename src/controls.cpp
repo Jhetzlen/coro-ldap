@@ -112,7 +112,7 @@ auto to_control(const request_control &c, std::pmr::memory_resource *mr) -> resu
 			  // controlValue is the Filter itself (RFC 4528 section 3).
 			  ber::writer w{ ber::writer::allocator_type(mr) };
 			  return encode_filter(w, v.filter)
-				.transform_error([](error &&e) {
+				.transform_error([](error e) {
 					e.context.insert(0, e.context.empty() ? "assertion" : "assertion: ");
 					return e;
 				})

@@ -70,7 +70,8 @@ namespace {
 	// out of a short (SSO) string leaves behind.
 	void wipe_string(std::string &s) noexcept
 	{
-		s.resize(s.capacity());
+		// Callers pass moved-from strings on purpose.
+		s.resize(s.capacity());// NOLINT(clang-analyzer-cplusplus.Move): wipes what a move left
 		OPENSSL_cleanse(s.data(), s.size());
 		s.clear();
 	}

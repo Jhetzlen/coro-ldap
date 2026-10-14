@@ -569,7 +569,10 @@ namespace {
 	{
 		ber::writer &w;
 
-		template<class F> void seq(std::uint8_t number, F &&body) { w.constructed(ber::application(number), body); }
+		template<class F> void seq(std::uint8_t number, F &&body)
+		{
+			w.constructed(ber::application(number), std::forward<F>(body));
+		}
 
 		template<std::uint8_t Tag> void operator()(const result_response<Tag> &r)
 		{
@@ -1637,7 +1640,7 @@ namespace {
 	// are relative to the value, not to the message.
 	template<class T> auto in_control(result<T> r, std::string_view name) -> result<T>
 	{
-		return std::move(r).transform_error([name](error &&e) {
+		return std::move(r).transform_error([name](error e) {
 			if (!e.context.empty()) {
 				e.context.insert(0, ": ");
 			}
