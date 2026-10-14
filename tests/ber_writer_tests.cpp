@@ -233,6 +233,17 @@ TEST_CASE("ber::writer rejects clear() or take() inside constructed()", "[ber][w
 						  }),
 		  std::logic_error);
 	}
+	SECTION("self copy-assignment is not a reset")
+	{
+		ber::writer w;
+		w.null();
+		CHECK_NOTHROW(w.constructed(ber::tags::sequence, [](ber::writer &s) {
+			const ber::writer &self = s;
+			s = self;
+			s.integer(1);
+		}));
+		CHECK(hex(w.bytes()) == "05 00 30 03 02 01 01");
+	}
 	SECTION("clear and take outside constructed() are fine")
 	{
 		ber::writer w;
