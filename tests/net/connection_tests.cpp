@@ -486,6 +486,71 @@ TEST_CASE("RFC 4511 4.3: requests started while unbind waits for the writer are 
 	CHECK(m.log.received[1] == ldap::message{ 2, ldap::unbind_request{} });
 }
 
+// Once the UnbindRequest is queued nothing may follow it, so an exception
+// from unbind() must not leave the connection open and "closing (unbind)"
+// for good. The writer is kept busy (as above), so every frame unbind()
+// allocates after it is spawned (finish_unbind's, its wait's) comes before
+// the wait: each is failed in turn. unbind() rethrows, the connection is
+// closed, and later operations name not_enough_memory, or the abort for an
+// exception that is not bad_alloc (none is known to escape today). Past
+// them, unbind() waits for the writer and completes.
+TEST_CASE("connection: a failed allocation in unbind closes the connection", "[net][connection][oom]")
+{
+	// True if the failing-th allocation threw, false if unbind() waited.
+	auto fail_one = [](std::size_t failing, bool other) {
+		failing_frames frames;// outlives the io_context's coroutines
+		const clear_frame_allocator clear;
+		outcome<ldap::result<ldap::response>> add;// outlive `m`: what still waits ends with it
+		outcome<ldap::result<void>> unbind;
+		tcp_mock_ldap m({}, socket_buffers::small);
+		REQUIRE(m.buffered_at_most() < oversized_add_value);
+		m.ioc.set_frame_allocator(&frames);
+		spawn(m.ioc, m.conn.add(oversized_add()), add);
+		while (m.ioc.poll() != 0) {}// the writer parks on its write
+		m.ioc.restart();
+		spawn(m.ioc, m.conn.unbind(), unbind);
+		frames.fail_at(failing, other);
+		while (m.ioc.poll() != 0) {}
+		m.ioc.restart();
+		const std::size_t tried = frames.count();
+		const bool failed = unbind.done();
+		frames.fail_at(0);
+		if (!failed) {
+			CHECK(m.conn.is_open());// waiting for the writer
+			m.serve({ step{}, step{}, client_hangs_up() });
+			drive_until(m.ioc, [&unbind] { return unbind.done(); });
+			CHECK(unbind.get().has_value());
+			CHECK_FALSE(m.conn.is_open());
+			return false;
+		}
+		CHECK(tried == failing);
+		if (other)
+			CHECK_THROWS_AS(unbind.get(), std::runtime_error);
+		else
+			CHECK_THROWS_AS(unbind.get(), std::bad_alloc);
+		CHECK_FALSE(m.conn.is_open());
+		REQUIRE(add.done());// abandoned by the unbind
+		CHECK_FALSE(add.get().has_value());
+		auto later = m.run(m.conn.search(people_search()));
+		REQUIRE_FALSE(later.has_value());
+		CHECK(later.error().code == client_errc::not_connected);
+		CHECK_THAT(std::string(later.error().context),
+		  ContainsSubstring(other ? ": connection closed by an earlier error: connection closed: unbind aborted"
+								  : ": connection closed by an earlier error: "));
+		CHECK_THAT(std::string(later.error().context), !ContainsSubstring("unbind)"));
+		auto again = m.run(m.conn.unbind());
+		REQUIRE_FALSE(again.has_value());
+		CHECK(again.error().code == client_errc::not_connected);
+		return true;
+	};
+	for (const bool other : { false, true }) {
+		CAPTURE(other);
+		std::size_t failing = 1;
+		while (fail_one(failing, other)) ++failing;
+		CHECK(failing > 2);// finish_unbind's, wait_write_idle's, its lambda's
+	}
+}
+
 TEST_CASE("connection: message ids increase per request", "[net][connection]")
 {
 	mock_ldap m;

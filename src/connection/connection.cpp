@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -97,9 +98,30 @@ capy::task<result<void>> connection::unbind()
 	}
 
 	// Outstanding operations are abandoned by the unbind (RFC 4511 section
-	// 4.3), and nothing may follow the UnbindRequest.
-	if (auto r = self->send_unbind(context); !r) co_return r;
-	std::optional<error> failed = co_await self->finish_unbind();
+	// 4.3), and nothing may follow the UnbindRequest. An exception (the
+	// writer's frame, finish_unbind's, its wait's) closes the connection
+	// before it propagates, as for StartTLS: left open, it would stay
+	// "closing (unbind)" until close(). Later operations fail naming
+	// not_enough_memory for a bad_alloc, the abort otherwise (no other
+	// exception is known to escape today: defensive).
+	std::optional<error> failed;
+	try {
+		if (auto r = self->send_unbind(context); !r) co_return r;
+		failed = co_await self->finish_unbind();
+	} catch (const std::bad_alloc &) {
+		self->shut_out_of_memory();
+		self->close();// the transport, if finish_unbind had shut the connection already
+		throw;
+	} catch (...) {
+		try {// the message's allocation may fail too
+			self->shut(
+			  make_error(client_errc::not_connected, "connection closed: unbind aborted by an exception"), true);
+		} catch (const std::bad_alloc &) {
+			self->shut_out_of_memory();
+		}
+		self->close();
+		throw;
+	}
 	if (failed) co_return std::unexpected(detail::with_context(std::move(*failed), context));
 	co_return result<void>{};
 }
