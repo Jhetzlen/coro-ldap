@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <functional>
 #include <latch>
+#include <limits>
 #include <memory_resource>
 #include <numeric>
 #include <optional>
@@ -203,7 +204,8 @@ TEST_CASE("connection: requests that cannot be encoded are not sent", "[net][con
 	REQUIRE_FALSE(negative.has_value());
 	CHECK(negative.error().code == client_errc::encode_error);
 
-	auto too_long = m.run(m.conn.search({ .time_limit = std::chrono::seconds(std::int64_t{ 1 } << 31) }));
+	auto too_long = m.run(m.conn.search(
+	  { .time_limit = std::chrono::seconds(std::int64_t{ std::numeric_limits<std::int32_t>::max() } + 1) }));
 	REQUIRE_FALSE(too_long.has_value());
 	CHECK(too_long.error().code == client_errc::encode_error);
 	CHECK_THAT(std::string(too_long.error().context), StartsWith("search \"\": time_limit"));

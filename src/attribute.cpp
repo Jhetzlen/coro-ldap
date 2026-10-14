@@ -54,7 +54,7 @@ namespace {
 
 	auto load8(const char *p) noexcept -> std::uint64_t
 	{
-		std::uint64_t w;
+		std::uint64_t w{};
 		std::memcpy(&w, p, 8);
 		return w;
 	}

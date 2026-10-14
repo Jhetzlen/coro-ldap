@@ -305,8 +305,8 @@ class reader
 	struct header
 	{
 		tag t;
-		std::size_t header_size;
-		std::size_t content_size;
+		std::size_t header_size{};
+		std::size_t content_size{};
 	};
 
 	reader(std::span<const std::byte> data, std::size_t base, std::size_t depth, std::size_t max_depth) noexcept

@@ -40,7 +40,7 @@ auto large_entry() -> ldap::message
 		auto &pa = e.attributes.emplace_back();
 		pa.type = "attribute-number-" + std::to_string(a);
 		for (int v = 0; v < 3; ++v) {
-			pa.values.emplace_back(std::string(20 + static_cast<std::size_t>(a), 'a' + static_cast<char>(v)));
+			pa.values.emplace_back(std::string(20 + static_cast<std::size_t>(a), static_cast<char>('a' + v)));
 		}
 	}
 	std::string binary(1 << 20, '\0');

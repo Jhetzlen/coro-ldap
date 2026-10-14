@@ -1894,7 +1894,7 @@ TEST_CASE("operations: a due release answer outlives older abandoned requests", 
 	std::vector<step> script{
 		answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }), step{}
 	};// reads the release, does not answer yet
-	script.resize(script.size() + 2 * abandoned_searches);// each search and its AbandonRequest
+	script.resize(script.size() + 2uz * abandoned_searches);// each search and its AbandonRequest
 	m.serve(std::move(script));
 	release_after_one_page(m);
 	for (int i = 0; i < abandoned_searches; ++i) {

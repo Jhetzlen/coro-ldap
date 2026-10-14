@@ -118,7 +118,7 @@ TEST_CASE("ci_hash / ci_equal fold A-Z only, in every byte position", "[attribut
 	}
 	CHECK(mismatches == 0);
 	CHECK(hash_mismatches == 0);
-	CHECK(equal_pairs == 9 * 3 * (256 + 2 * 26));// each byte with itself, A-Z with a-z both ways
+	CHECK(equal_pairs == 9uz * 3 * (256 + 2 * 26));// each byte with itself, A-Z with a-z both ways
 	CHECK_FALSE(equal("ab", "abc"));
 	CHECK(equal("", ""));
 	CHECK(hash("") == hash(std::string_view()));
@@ -228,7 +228,7 @@ TEST_CASE("ci_hash is seeded: names crafted to collide under a fixed start sprea
 	constexpr std::uint64_t h0 = 0xCBF2'9CE4'8422'2325ull;
 	const std::uint64_t target = mix(mix(h0, 1), 2);
 	const auto word = [](std::string_view s) {
-		std::uint64_t w;
+		std::uint64_t w{};
 		std::memcpy(&w, s.data(), 8);// as hash_value loads it
 		return w;
 	};

@@ -366,8 +366,8 @@ TEST_CASE("URL percent-encoding round trip of every byte", "[url]")
 		if (c == '*' || c == '(' || c == ')' || c == '\\' || static_cast<unsigned char>(c) >= 0x80u) {
 			static constexpr char hex[] = "0123456789abcdef";
 			filter_value += '\\';
-			filter_value += hex[(static_cast<unsigned char>(c) >> 4) & 0xF];
-			filter_value += hex[static_cast<unsigned char>(c) & 0xF];
+			filter_value += hex[(unsigned{ static_cast<unsigned char>(c) } >> 4U) & 0xFU];
+			filter_value += hex[unsigned{ static_cast<unsigned char>(c) } & 0xFU];
 		} else {
 			filter_value += c;
 		}
@@ -376,8 +376,8 @@ TEST_CASE("URL percent-encoding round trip of every byte", "[url]")
 	for (char c : all) {
 		static constexpr char hex[] = "0123456789ABCDEF";
 		encoded += "%5C";// DN escape '\' + two hex digits, itself percent-encoded
-		encoded += hex[(static_cast<unsigned char>(c) >> 4) & 0xF];
-		encoded += hex[static_cast<unsigned char>(c) & 0xF];
+		encoded += hex[(unsigned{ static_cast<unsigned char>(c) } >> 4U) & 0xFU];
+		encoded += hex[unsigned{ static_cast<unsigned char>(c) } & 0xFU];
 	}
 	encoded += "?";
 	auto pct = [](std::string_view s) {
@@ -385,8 +385,8 @@ TEST_CASE("URL percent-encoding round trip of every byte", "[url]")
 		std::string out;
 		for (char c : s) {
 			out += '%';
-			out += hex[(static_cast<unsigned char>(c) >> 4) & 0xF];
-			out += hex[static_cast<unsigned char>(c) & 0xF];
+			out += hex[(unsigned{ static_cast<unsigned char>(c) } >> 4U) & 0xFU];
+			out += hex[unsigned{ static_cast<unsigned char>(c) } & 0xFU];
 		}
 		return out;
 	};

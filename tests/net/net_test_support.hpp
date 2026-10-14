@@ -353,7 +353,7 @@ class test_pki
 		check(X509_set_version(cert, 2) == 1, "X509_set_version");
 		check(ASN1_INTEGER_set(X509_get_serialNumber(cert), serial) == 1, "serial");
 		check(X509_gmtime_adj(X509_getm_notBefore(cert), -3600) != nullptr, "notBefore");
-		check(X509_gmtime_adj(X509_getm_notAfter(cert), 24 * 3600) != nullptr, "notAfter");
+		check(X509_gmtime_adj(X509_getm_notAfter(cert), 24L * 3600) != nullptr, "notAfter");
 		check(X509_set_pubkey(cert, key) == 1, "X509_set_pubkey");
 		X509_NAME *name = X509_get_subject_name(cert);
 		check(

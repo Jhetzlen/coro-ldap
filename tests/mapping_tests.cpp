@@ -146,7 +146,7 @@ TEST_CASE("GeneralizedTime", "[mapping][traits][time]")
 	const sys_seconds noon = sys_days(2024y / February / 29) + 12h;
 	struct case_t
 	{
-		const char *text;
+		const char *text{};
 		sys_seconds expected;
 	};
 	const case_t cases[] = {

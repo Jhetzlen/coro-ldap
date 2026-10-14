@@ -666,7 +666,7 @@ TEST_CASE("regression: invalid list elements do not drive the reserve size", "[m
 		const auto bytes = entry_with(bad_attributes);
 		// Far less than count * sizeof(element): a reserve sized by the
 		// invalid elements would exhaust it and throw.
-		std::vector<std::byte> buffer(64 * 1024);
+		std::vector<std::byte> buffer(64uz * 1024);
 		std::pmr::monotonic_buffer_resource arena(buffer.data(), buffer.size(), std::pmr::null_memory_resource());
 		ldap::result<ldap::message> r = std::unexpected(ldap::error{});
 		REQUIRE_NOTHROW(r = ldap::decode(bytes, { .from = ldap::origin::server, .memory = &arena }));
@@ -735,7 +735,7 @@ TEST_CASE("regression: many tiny values cannot multiply a message's size in memo
 		const auto bytes = entry_with(many_attributes);
 		// Under the default limit it decodes.
 		CHECK(ldap::decode(bytes).has_value());
-		std::vector<std::byte> buffer(256 * 1024);
+		std::vector<std::byte> buffer(256uz * 1024);
 		std::pmr::monotonic_buffer_resource arena(buffer.data(), buffer.size(), std::pmr::null_memory_resource());
 		ldap::result<ldap::message> r = std::unexpected(ldap::error{});
 		REQUIRE_NOTHROW(

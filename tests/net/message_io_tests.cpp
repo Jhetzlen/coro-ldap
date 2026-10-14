@@ -336,10 +336,10 @@ TEST_CASE("read_message: request operations from the server are rejected", "[net
 
 TEST_CASE("read_message: large PDUs and buffer bounds", "[net][read_message]")
 {
-	mock m(64 * 1024);
+	mock m(64uz * 1024);
 	// A 3 MiB search entry followed by a small message.
 	ldap::message big{ 5,
-		ldap::search_result_entry{ "cn=big", { { "data", { std::string(3 * 1024 * 1024, 'q') } } } } };
+		ldap::search_result_entry{ "cn=big", { { "data", { std::string(3uz * 1024 * 1024, 'q') } } } } };
 	const auto wire = bytes_of(big);
 	m.peer->provide(wire + bytes_of(bind_response_msg(6)));
 	auto r = m.read();
@@ -350,7 +350,7 @@ TEST_CASE("read_message: large PDUs and buffer bounds", "[net][read_message]")
 	// allocation is released.
 	CHECK(m.buf.empty());
 	CHECK(m.buf.capacity() == 0);
-	CHECK(m.reads->size() == 1 + (wire.size() - net::read_buffer::min_read + 64 * 1024 - 1) / (64 * 1024));
+	CHECK(m.reads->size() == 1 + (wire.size() - net::read_buffer::min_read + 64uz * 1024 - 1) / (64uz * 1024));
 	auto small = m.read();
 	REQUIRE(small.has_value());
 	CHECK(*small == bind_response_msg(6));
@@ -631,7 +631,7 @@ TEST_CASE("read_buffer allocates from the given memory resource", "[net][read_me
 	SECTION("fixed arena without fallback")
 	{
 		// Every buffer allocation must come from the arena: its upstream throws.
-		std::vector<std::byte> storage(128 * 1024);
+		std::vector<std::byte> storage(128uz * 1024);
 		std::pmr::monotonic_buffer_resource arena(storage.data(), storage.size(), std::pmr::null_memory_resource());
 		mock m(7, &arena);
 		for (int i = 1; i <= 3; ++i) {

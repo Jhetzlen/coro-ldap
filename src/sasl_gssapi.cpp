@@ -194,7 +194,7 @@ namespace detail {
 	auto gssapi_layer_reply(const gssapi_layer_offer &offer, std::string_view authz_id) -> result<std::string>
 	{
 		if ((offer.layers & gssapi_no_layer) == 0) {
-			if ((offer.layers & (gssapi_integrity | gssapi_confidentiality)) != 0) {
+			if ((offer.layers & (unsigned{ gssapi_integrity } | unsigned{ gssapi_confidentiality })) != 0) {
 				return fail(client_errc::security_layer_required,
 				  "the server requires integrity or confidentiality protection, which this client does not "
 				  "provide (use TLS, and a server policy that accepts no security layer over it)");

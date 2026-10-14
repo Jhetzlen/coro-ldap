@@ -638,9 +638,9 @@ TEST_CASE("builders beyond the limits fail when encoded", "[filter][limits][buil
 		CHECK(copy == f);
 		CHECK_FALSE(copy == !f);
 		const auto text = f.to_string();
-		CHECK(text.size() == 200'000 * 3 + 5);
+		CHECK(text.size() == 200'000uz * 3 + 5);
 		CHECK(text.starts_with("(!(!(!"));
-		CHECK(text.substr(200'000 * 2).starts_with("(a=b))))"));
+		CHECK(text.substr(200'000uz * 2).starts_with("(a=b))))"));
 		CHECK(text.ends_with("))))"));
 		CHECK(to_ber(f).error().code == client_errc::invalid_filter);
 		auto alternating = attr("a") == "b";

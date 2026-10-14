@@ -346,8 +346,8 @@ class connection::impl
 	std::pmr::unordered_map<std::int32_t, detail::pending_op *> pending;
 	struct abandoned_req
 	{
-		std::int32_t id;
-		bool search;
+		std::int32_t id{};
+		bool search{};
 		// Sent by send_unanswered: an answer is certain (an abandoned
 		// request may or may not be answered), until `deadline`, after
 		// which it is no longer waited for (but still dropped if it comes).
