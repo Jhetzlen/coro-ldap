@@ -47,6 +47,26 @@ namespace {
 
 namespace detail {
 
+	result<message> search_message(connection::impl &c, const search_params &p, const std::string &context)
+	{
+		const auto seconds = p.time_limit.count();
+		if (seconds < 0 || seconds > max_int)
+			return fail(client_errc::encode_error,
+			  detail::format("{}: time_limit of {} s is outside 0 .. 2^31-1", context, seconds));
+
+		const std::pmr::polymorphic_allocator<> alloc(c.mr);
+		search_request wire(alloc);
+		wire.base_object = p.base.to_string(c.mr);
+		wire.scope = p.scope;
+		wire.deref = p.deref;
+		wire.size_limit = p.size_limit;
+		wire.time_limit = static_cast<std::int32_t>(seconds);
+		wire.types_only = p.types_only;
+		wire.filter = p.filter;
+		wire.attributes.assign(p.attributes.begin(), p.attributes.end());
+		return with_controls(std::move(wire), p.controls, c.mr, context);
+	}
+
 	result<ldap::search_stream>
 	  start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr, const std::stop_token &stop)
 	{

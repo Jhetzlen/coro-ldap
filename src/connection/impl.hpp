@@ -459,6 +459,12 @@ namespace detail {
 	  std::string context,
 	  std::optional<std::chrono::milliseconds> timeout);
 
+	// Builds a message whose controls are `controls` (encoded on `mr`).
+	result<message> with_controls(protocol_op op,
+	  const request_controls &controls,
+	  std::pmr::memory_resource *mr,
+	  std::string_view context);
+
 	boost::capy::task<result<response>> modify_impl(impl_ref self, modify_params p, std::string context);
 
 	boost::capy::task<result<extended_result>> extended_impl(impl_ref self, extended_params p);
