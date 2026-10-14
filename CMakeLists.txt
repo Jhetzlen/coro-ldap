@@ -316,7 +316,9 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "sasl_gssapi.hpp" EXCLUDE)
     else()
         # Without jhetz::ldap_net, its headers (they need Corosio, or their
-        # implementation is in jhetz::ldap_net) are left out.
+        # implementation is in jhetz::ldap_net) are left out. Keep this list
+        # in step with jhetz_ldap_net_headers in tests/CMakeLists.txt and the
+        # absence check in tests/install/check_install.sh.
         install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             PATTERN "net" EXCLUDE
             PATTERN "cancel.hpp" EXCLUDE

@@ -83,6 +83,9 @@ endif()
 # A new header is picked up when CMake reconfigures (CONFIGURE_DEPENDS).
 file(GLOB_RECURSE jhetz_ldap_public_headers CONFIGURE_DEPENDS
     RELATIVE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/include/jhetz/ldap/*.hpp)
+# The headers that need jhetz::ldap_net; the root CMakeLists.txt's codec-only
+# install() EXCLUDE patterns spell the same list (checked by
+# tests/install/check_install.sh).
 set(jhetz_ldap_net_headers
     jhetz/ldap/cancel.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
     jhetz/ldap/paged_search.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp

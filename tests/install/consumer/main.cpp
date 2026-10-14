@@ -1,9 +1,11 @@
-// Uses the installed headers and libraries: the codec always, the
-// connection with WITH_NET (a connect that must be refused: no server) and
-// SCRAM's SASLprep (links ICU through the package).
+// Uses the installed headers and libraries: the codec always (with the
+// operations.hpp mod:: builders), the connection with WITH_NET (a connect
+// that must be refused: no server) and SCRAM's SASLprep (links ICU through
+// the package).
 #include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
+#include "jhetz/ldap/operations.hpp"
 
 #ifdef WITH_NET
 #include "jhetz/ldap/connection.hpp"
@@ -25,6 +27,12 @@ auto main() -> int
 	  ldap::encode(ldap::message{ 1, ldap::search_request{ base.to_string(), ldap::search_scope::whole_subtree, f } });
 	if (!bytes || f.to_string() != "(uid=jdoe)") {
 		std::puts("codec: unexpected result");
+		return 1;
+	}
+	const auto change = ldap::mod::replace("mail", { "x" });
+	if (change.operation != ldap::modify_operation::replace || change.modification.type != "mail"
+		|| change.modification.values.size() != 1) {
+		std::puts("codec: unexpected mod::replace result");
 		return 1;
 	}
 #ifdef WITH_NET
