@@ -22,8 +22,6 @@ Checks:
   - -readability-trailing-comma
   # Style: lower-case literal suffixes (0u, 1ull) are used throughout.
   - -readability-uppercase-literal-suffix
-  # Style: else after return is kept when both branches read as alternatives.
-  - -readability-else-after-return
   # Style: x.static_member() through an instance is fine.
   - -readability-static-accessed-through-instance
   # Style: top-level const on by-value parameters is not repeated in declarations.
