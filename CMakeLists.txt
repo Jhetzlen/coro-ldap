@@ -206,6 +206,7 @@ if(JHETZ_LDAP_BUILD_NET)
         src/connection.cpp
         src/connection/core.cpp
         src/connection/sasl_offload.cpp
+        src/connection/search.cpp
         src/sasl_scram.cpp
         src/sync.cpp
         src/net/connect.cpp

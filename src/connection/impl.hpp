@@ -84,6 +84,10 @@ namespace detail {
 		return clock::now() + *d;
 	}
 
+	// The error of an operation on a default-constructed or moved-from
+	// object (connection, search_stream, paged_search).
+	inline error no_connection(std::string_view context) { return make_error(client_errc::not_connected, context); }
+
 }// namespace detail
 
 // ---------------------------------------------------------------- state
@@ -455,15 +459,6 @@ namespace detail {
 	  std::string context,
 	  std::optional<std::chrono::milliseconds> timeout);
 
-	// The SearchRequest for `p`, validated (errors carry `context`).
-	result<message> search_message(connection::impl &c, const search_params &p, const std::string &context);
-
-	// Validates and sends a search; returns its stream. Never suspends.
-	// `stop` is the awaiting task's stop token: if it is set already, the
-	// search is not sent and fails with capy::error::canceled.
-	result<ldap::search_stream>
-	  start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr, const std::stop_token &stop);
-
 	boost::capy::task<result<response>> modify_impl(impl_ref self, modify_params p, std::string context);
 
 	boost::capy::task<result<extended_result>> extended_impl(impl_ref self, extended_params p);
@@ -472,9 +467,6 @@ namespace detail {
 	// operation <oid>".
 	boost::capy::task<result<std::optional<std::string>>>
 	  password_modify_impl(impl_ref self, password_modify_params p, std::string context);
-
-	// The one entry of a base-scope search (nullopt if none came back).
-	boost::capy::task<result<std::optional<entry>>> read_one(impl_ref self, search_params p);
 
 }// namespace detail
 

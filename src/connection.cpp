@@ -4,6 +4,7 @@
 
 #include "connection/impl.hpp"
 #include "connection/sasl_offload.hpp"
+#include "connection/search.hpp"
 #include "format_util.hpp"
 
 #include <boost/capy/cond.hpp>
@@ -57,6 +58,7 @@ using detail::clock;
 using detail::deadline_after;
 using detail::impl_ref;
 using detail::intermediate_response_tag;
+using detail::no_connection;
 using detail::op_context;
 using detail::op_index;
 using detail::op_name;
@@ -65,50 +67,6 @@ using detail::pending_op;
 using detail::registration;
 using detail::same_tag;
 using detail::search_result_done_tag;
-
-namespace {
-
-	error no_connection(std::string_view context) { return make_error(client_errc::not_connected, context); }
-
-}// namespace
-
-// ---------------------------------------------------------------- search_stream state
-
-struct search_stream::state
-{
-	state(connection::impl *c, std::pmr::memory_resource *entries, std::string context_)
-	  : conn(c), op(entries, true, op_index<search_result_done>), context(std::move(context_))
-	{}
-
-	impl_ref conn;
-	pending_op op;
-	std::string context;// "search <base>"
-	std::optional<clock::time_point> deadline{};
-	bool in_next = false;
-	bool finished = false;
-	std::optional<error> error_{};
-	string_list references{};
-	std::pmr::vector<control> controls{};
-};
-
-namespace {
-
-	search_stream::state *new_state(connection::impl &c, std::pmr::memory_resource *entries, std::string context)
-	{
-		std::pmr::polymorphic_allocator<> alloc(c.mr);
-		return alloc.new_object<search_stream::state>(&c, entries, std::move(context));
-	}
-
-	void delete_state(search_stream::state *s) noexcept
-	{
-		if (s == nullptr) return;
-		s->conn->abandon(s->op);
-		impl_ref keep = s->conn;// the state lives on the connection's resource
-		std::pmr::polymorphic_allocator<> alloc(keep->mr);
-		alloc.delete_object(s);
-	}
-
-}// namespace
 
 // ---------------------------------------------------------------- connection
 
@@ -261,21 +219,6 @@ namespace detail {
 		return with_controls(std::move(wire), p.controls, c.mr, context);
 	}
 
-	result<ldap::search_stream>
-	  start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr, const std::stop_token &stop)
-	{
-		std::string context = op_context("search", p.base);
-		auto request = search_message(c, p, context);
-		if (!request) return std::unexpected(std::move(request.error()));
-		if (stop.stop_requested()) return fail(capy::error::canceled, context);
-
-		auto *state = new_state(c, mr, context);
-		ldap::search_stream s = connection::impl::make_stream(state);
-		state->deadline = deadline_after(p.timeout ? p.timeout : c.default_timeout);
-		if (auto r = c.submit(*request, &state->op, context); !r) return std::unexpected(std::move(r.error()));
-		return s;
-	}
-
 }// namespace detail
 
 using detail::search_message;
@@ -354,26 +297,6 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 		else
 			creds = mechanism.step(server_creds);
 	}
-}
-
-capy::task<result<ldap::search_stream>> connection::search_stream(search_params p, std::pmr::memory_resource *mr)
-{
-	if (impl_ == nullptr) co_return std::unexpected(no_connection(op_context("search", p.base)));
-	co_return start_search(*impl_, p, mr, co_await capy::this_coro::stop_token);
-}
-
-capy::task<result<std::pmr::vector<entry>>> connection::search(search_params request, std::pmr::memory_resource *mr)
-{
-	auto s = co_await search_stream(std::move(request), mr);
-	if (!s) co_return std::unexpected(std::move(s.error()));
-	std::pmr::vector<entry> out(mr);
-	while (true) {
-		auto e = co_await s->next();
-		if (!e) co_return std::unexpected(std::move(e.error()));
-		if (!*e) break;
-		out.push_back(std::move(**e));
-	}
-	co_return out;
 }
 
 // ---------------------------------------------------------------- other operations
@@ -614,23 +537,6 @@ capy::task<result<std::optional<std::string>>> connection::password_modify(passw
 }
 
 // ---------------------------------------------------------------- schema
-
-namespace detail {
-
-	capy::task<result<std::optional<entry>>> read_one(impl_ref self, search_params p)
-	{
-		auto s = start_search(*self, p, std::pmr::get_default_resource(), co_await capy::this_coro::stop_token);
-		if (!s) co_return std::unexpected(std::move(s.error()));
-		std::optional<entry> found;
-		while (true) {
-			auto e = co_await s->next();
-			if (!e) co_return std::unexpected(std::move(e.error()));
-			if (!*e) co_return found;
-			if (!found) found = std::move(**e);
-		}
-	}
-
-}// namespace detail
 
 using detail::read_one;
 
@@ -1031,83 +937,6 @@ capy::task<result<void>> connection::unbind()
 	self->transport.close();
 	if (failed) co_return std::unexpected(detail::with_context(std::move(*failed), context));
 	co_return result<void>{};
-}
-
-// ---------------------------------------------------------------- search_stream
-
-search_stream::search_stream(search_stream &&other) noexcept : state_(std::exchange(other.state_, nullptr)) {}
-
-search_stream &search_stream::operator=(search_stream &&other) noexcept
-{
-	if (this != &other) {
-		delete_state(state_);
-		state_ = std::exchange(other.state_, nullptr);
-	}
-	return *this;
-}
-
-search_stream::~search_stream() { delete_state(state_); }
-
-bool search_stream::done() const noexcept { return state_ == nullptr || state_->finished; }
-
-const string_list &search_stream::references() const noexcept
-{
-	static const string_list none;
-	return state_ == nullptr ? none : state_->references;
-}
-
-const std::pmr::vector<control> &search_stream::controls() const noexcept
-{
-	static const std::pmr::vector<control> none;
-	return state_ == nullptr ? none : state_->controls;
-}
-
-capy::task<result<std::optional<entry>>> search_stream::next()
-{
-	if (state_ == nullptr) co_return std::unexpected(no_connection("search"));
-	state &s = *state_;// stable: the stream must not be moved while next() runs
-	if (s.finished) {
-		if (s.error_) co_return std::unexpected(*s.error_);
-		co_return std::optional<entry>{};
-	}
-	if (s.in_next)
-		co_return fail(
-		  client_errc::operation_in_progress, s.context + " during an earlier next() on this search_stream");
-	s.in_next = true;
-	struct reset
-	{
-		bool &flag;
-		~reset() { flag = false; }
-	} r{ s.in_next };
-
-	const impl_ref conn = s.conn;
-	while (true) {
-		auto m = co_await conn->next_response(s.op, s.deadline, s.context);
-		if (!m) {
-			s.finished = true;
-			s.error_ = m.error();
-			co_return std::unexpected(std::move(m.error()));
-		}
-		if (auto *e = std::get_if<search_result_entry>(&m->op))
-			co_return std::optional<entry>(entry::from(std::move(*e)));// on the stream's resource, no copy
-		if (auto *ref = std::get_if<search_result_reference>(&m->op)) {
-			s.references.append_range(ref->uris);
-			continue;
-		}
-		const auto &d = std::get<search_result_done>(m->op);// checked by the reader
-		s.finished = true;
-		s.controls.assign(m->controls.begin(), m->controls.end());
-		if (!d.result.is_success()) {
-			s.error_ = d.result.to_error(s.context);
-			co_return std::unexpected(*s.error_);
-		}
-		co_return std::optional<entry>{};
-	}
-}
-
-std::pmr::vector<url> search_stream::reference_urls(std::pmr::memory_resource *mr) const
-{
-	return url::parse_list(references(), mr);
 }
 
 // ---------------------------------------------------------------- paged_search
