@@ -73,8 +73,8 @@ connection::impl::impl(corosio::io_context &ioc,
 	tls_shutdown_timeout(options.tls_shutdown_timeout), pending(mr_), abandoned(mr_), outbox(mr_), held(mr_),
 	scratch(mr_)
 {
-	schema_mode = options.schema_check;
-	password_mode = options.password_method;
+	knowledge.schema_mode = options.schema_check;
+	knowledge.password_mode = options.password_method;
 	write_idle.set();
 	reader_idle.set();
 	bind_idle.set();
