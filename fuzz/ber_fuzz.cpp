@@ -62,7 +62,7 @@ void walk(ber::reader r);
 // reader; successes must round-trip through the writer.
 void check_typed_reads(const ber::reader &r, ber::tag t, std::span<const std::byte> content)
 {
-	const ber::tag prim{ t.cls, false, t.number };
+	const ber::tag prim{ .cls = t.cls, .constructed = false, .number = t.number };
 	{
 		auto copy = r;
 		if (auto v = copy.read_integer(t)) {

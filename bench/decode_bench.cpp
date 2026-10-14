@@ -210,9 +210,9 @@ auto main(int argc, char **argv) -> int
 		const char *name;
 		mode how;
 	} modes[] = {
-		{ "default resource (heap)", mode::heap },
-		{ "monotonic arena, 256 KiB buffer, release()", mode::arena_with_buffer },
-		{ "monotonic arena, no buffer, release()", mode::arena_without_buffer },
+		{ .name = "default resource (heap)", .how = mode::heap },
+		{ .name = "monotonic arena, 256 KiB buffer, release()", .how = mode::arena_with_buffer },
+		{ .name = "monotonic arena, no buffer, release()", .how = mode::arena_without_buffer },
 	};
 	for (const auto &m : modes) {
 		const auto o = measure(s, m.how, runs);

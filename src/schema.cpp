@@ -33,14 +33,14 @@ namespace {
 				++pos_;
 			}
 			if (pos_ == s_.size()) {
-				return token{ token::end, {} };
+				return token{ .k = token::end, .text = {} };
 			}
 			const char c = s_[pos_];
 			if (c == '(') {
-				return ++pos_, token{ token::open, {} };
+				return ++pos_, token{ .k = token::open, .text = {} };
 			}
 			if (c == ')') {
-				return ++pos_, token{ token::close, {} };
+				return ++pos_, token{ .k = token::close, .text = {} };
 			}
 			if (c == '\'') {
 				++pos_;
@@ -64,13 +64,13 @@ namespace {
 					return fail(client_errc::decode_error, "schema: unterminated quoted string");
 				}
 				++pos_;
-				return token{ token::quoted, std::move(out) };
+				return token{ .k = token::quoted, .text = std::move(out) };
 			}
 			const std::size_t start = pos_;
 			while (pos_ < s_.size() && !is_space(s_[pos_]) && s_[pos_] != '(' && s_[pos_] != ')' && s_[pos_] != '\'') {
 				++pos_;
 			}
-			return token{ token::word, std::string(s_.substr(start, pos_ - start)) };
+			return token{ .k = token::word, .text = std::string(s_.substr(start, pos_ - start)) };
 		}
 
 	  private:
@@ -430,8 +430,9 @@ namespace detail {
 	void check_object_class(const server_schema &s, std::string_view name, schema_report &out)
 	{
 		if (s.find_object_class(name) == nullptr) {
-			out.issues.push_back(
-			  { schema_issue::kind::unknown_object_class, std::string(name), "not defined on the server" });
+			out.issues.push_back({ .what = schema_issue::kind::unknown_object_class,
+			  .name = std::string(name),
+			  .detail = "not defined on the server" });
 		}
 	}
 
@@ -444,28 +445,32 @@ namespace detail {
 	{
 		const attribute_type *a = s.find_attribute(name);
 		if (a == nullptr) {
-			out.issues.push_back({ schema_issue::kind::unknown_attribute,
-			  std::string(name),
-			  s.skipped_for_syntax(name) ? "defined on the server, but skipped: its SYNTAX is not a numeric OID"
-										 : "not defined on the server" });
+			out.issues.push_back({ .what = schema_issue::kind::unknown_attribute,
+			  .name = std::string(name),
+			  .detail = s.skipped_for_syntax(name)
+						  ? "defined on the server, but skipped: its SYNTAX is not a numeric OID"
+						  : "not defined on the server" });
 			return;
 		}
 		if (kind != cardinality::multiple && !a->single_value) {
-			out.issues.push_back({ schema_issue::kind::single_member_multi_valued,
-			  std::string(name),
-			  "single-valued member, but the attribute is multi-valued (decoding fails if an entry has several "
-			  "values)" });
+			out.issues.push_back({ .what = schema_issue::kind::single_member_multi_valued,
+			  .name = std::string(name),
+			  .detail =
+				"single-valued member, but the attribute is multi-valued (decoding fails if an entry has several "
+				"values)" });
 		}
 		if (!read_only && a->no_user_modification) {
-			out.issues.push_back({ schema_issue::kind::writable_but_no_user_modification,
-			  std::string(name),
-			  "the attribute is NO-USER-MODIFICATION: mark the member ldap::read_only" });
+			out.issues.push_back({ .what = schema_issue::kind::writable_but_no_user_modification,
+			  .name = std::string(name),
+			  .detail = "the attribute is NO-USER-MODIFICATION: mark the member ldap::read_only" });
 		}
 		if (!syntaxes.empty()) {
 			const std::string *syn = s.syntax_of(*a);
 			if (syn == nullptr) {
 				if (auto why = broken_sup_chain(s, *a)) {
-					out.issues.push_back({ schema_issue::kind::syntax_mismatch, std::string(name), std::move(*why) });
+					out.issues.push_back({ .what = schema_issue::kind::syntax_mismatch,
+					  .name = std::string(name),
+					  .detail = std::move(*why) });
 				}
 			} else if (std::ranges::none_of(syntaxes, [&](const char *x) { return *syn == x; })) {
 				// A numeric OID (parse_attribute_type), but of any length.
@@ -476,7 +481,9 @@ namespace detail {
 					detail::format_to(text, "{}{}", i ? ", " : "", syntaxes[i]);
 				}
 				text += ')';
-				out.issues.push_back({ schema_issue::kind::syntax_mismatch, std::string(name), std::move(text) });
+				out.issues.push_back({ .what = schema_issue::kind::syntax_mismatch,
+				  .name = std::string(name),
+				  .detail = std::move(text) });
 			}
 		}
 	}

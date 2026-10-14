@@ -63,8 +63,6 @@ Checks:
   # not noexcept (the defaulted ones get the right exception specification).
   - -cppcoreguidelines-noexcept-move-operations
   - -performance-noexcept-move-constructor
-  # Small aggregates (ber::tag, test case tables) read better positionally.
-  - -modernize-use-designated-initializers
   # Linux-only project; every header uses #pragma once.
   - -portability-avoid-pragma-once
   # do { } while is fine for retry loops (GSS-API status message loop).

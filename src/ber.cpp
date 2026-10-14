@@ -21,7 +21,9 @@ namespace {
 	// Caller has checked that the number is not 31 (high-tag-number form).
 	auto tag_from_identifier(unsigned id) noexcept -> tag
 	{
-		return tag{ static_cast<tag_class>(id >> 6), (id & 0x20u) != 0, static_cast<std::uint8_t>(id & 0x1Fu) };
+		return tag{ .cls = static_cast<tag_class>(id >> 6),
+			.constructed = (id & 0x20u) != 0,
+			.number = static_cast<std::uint8_t>(id & 0x1Fu) };
 	}
 
 	struct raw_header
@@ -51,7 +53,7 @@ namespace {
 		}
 		const unsigned first = octet(buf[1]);
 		if (first < 0x80u) {
-			return raw_header{ t, 2, first };
+			return raw_header{ .t = t, .header_size = 2, .content_size = first };
 		}
 		if (first == 0x80u) {
 			return fail(client_errc::decode_error, detail::format("ber: indefinite length at offset {}", base + 1));
@@ -73,7 +75,7 @@ namespace {
 		for (std::size_t i = 0; i < count; ++i) {
 			length = (length << 8) | octet(buf[2 + i]);
 		}
-		return raw_header{ t, 2 + count, length };
+		return raw_header{ .t = t, .header_size = 2 + count, .content_size = length };
 	}
 
 	// Long-form definite lengths (length >= 0x80): the initial octet is
@@ -129,7 +131,7 @@ void encode_length(std::pmr::vector<std::byte> &out, std::size_t length)
 void writer::put_identifier(tag t, bool constructed)
 {
 	// identifier_octet throws std::invalid_argument for numbers above 30.
-	buf_.push_back(identifier_octet(tag{ t.cls, constructed, t.number }));
+	buf_.push_back(identifier_octet(tag{ .cls = t.cls, .constructed = constructed, .number = t.number }));
 }
 
 void writer::put_length(std::size_t length) { encode_length(buf_, length); }
@@ -253,7 +255,7 @@ auto reader::fast_header(header &out) const noexcept -> bool
 	if (length > rest.size() - header_size) {
 		return false;
 	}
-	out = header{ tag_from_identifier(id), header_size, length };
+	out = header{ .t = tag_from_identifier(id), .header_size = header_size, .content_size = length };
 	return true;
 }
 
@@ -280,7 +282,9 @@ auto reader::parse_header() const -> result<reader::header>
 		  detail::format(
 			"ber: length {} exceeds the {} remaining bytes at offset {}", raw.content_size, available, offset()));
 	}
-	return header{ raw.t, raw.header_size, static_cast<std::size_t>(raw.content_size) };
+	return header{
+		.t = raw.t, .header_size = raw.header_size, .content_size = static_cast<std::size_t>(raw.content_size)
+	};
 }
 
 auto reader::peek_tag() const -> result<tag>
@@ -302,7 +306,10 @@ auto reader::read() -> result<element>
 	if (!h) {
 		return std::unexpected(std::move(h.error()));
 	}
-	element e{ h->t, data_.subspan(pos_ + h->header_size, h->content_size), offset(), h->header_size };
+	element e{ .t = h->t,
+		.content = data_.subspan(pos_ + h->header_size, h->content_size),
+		.offset = offset(),
+		.header_size = h->header_size };
 	pos_ += e.size();
 	return e;
 }
@@ -331,11 +338,14 @@ auto reader::read_primitive(tag expected, const char *what) -> result<element>
 		return fail(client_errc::unexpected_tag,
 		  detail::format("ber: reading {}: {} at offset {}",
 			what,
-			describe(tag{ expected.cls, false, expected.number }, h->t),
+			describe(tag{ .cls = expected.cls, .constructed = false, .number = expected.number }, h->t),
 			offset()));
 	}
 	// Not committed yet: the caller validates the content first.
-	return element{ h->t, data_.subspan(pos_ + h->header_size, h->content_size), offset(), h->header_size };
+	return element{ .t = h->t,
+		.content = data_.subspan(pos_ + h->header_size, h->content_size),
+		.offset = offset(),
+		.header_size = h->header_size };
 }
 
 auto reader::read_boolean(tag t) -> result<bool>
@@ -423,8 +433,10 @@ auto reader::enter_impl(tag t, bool constructed, const char *what) -> result<rea
 	}
 	if (!matches(h->t, t, constructed)) {
 		return fail(client_errc::unexpected_tag,
-		  detail::format(
-			"ber: entering {}: {} at offset {}", what, describe(tag{ t.cls, constructed, t.number }, h->t), offset()));
+		  detail::format("ber: entering {}: {} at offset {}",
+			what,
+			describe(tag{ .cls = t.cls, .constructed = constructed, .number = t.number }, h->t),
+			offset()));
 	}
 	if (depth_ >= max_depth_) {
 		return fail(

@@ -25,8 +25,8 @@ namespace {
 	// out rather than taken from gssapi_krb5.h (MIT's gss_mech_krb5,
 	// Heimdal's GSS_KRB5_MECHANISM).
 	unsigned char krb5_oid_bytes[] = { 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02 };
-	gss_OID_desc krb5_oid{ sizeof krb5_oid_bytes, krb5_oid_bytes };
-	gss_OID_set_desc krb5_oid_set{ 1, &krb5_oid };
+	gss_OID_desc krb5_oid{ .length = sizeof krb5_oid_bytes, .elements = krb5_oid_bytes };
+	gss_OID_set_desc krb5_oid_set{ .count = 1, .elements = &krb5_oid };
 
 	// Owns a GSS-API handle (a pointer type), released with `Release`.
 	template<class H, auto Release> class gss_handle
@@ -70,7 +70,7 @@ namespace {
 	// A buffer the GSS-API library allocated (output tokens, messages).
 	struct output_buffer
 	{
-		gss_buffer_desc desc{ 0, nullptr };
+		gss_buffer_desc desc{ .length = 0, .value = nullptr };
 		output_buffer() = default;
 		output_buffer(const output_buffer &) = delete;
 		auto operator=(const output_buffer &) -> output_buffer & = delete;
@@ -92,7 +92,7 @@ namespace {
 	// but does not write through input buffers).
 	auto input(std::string_view s) noexcept -> gss_buffer_desc
 	{
-		return gss_buffer_desc{ s.size(), const_cast<char *>(s.data()) };
+		return gss_buffer_desc{ .length = s.size(), .value = const_cast<char *>(s.data()) };
 	}
 
 	// gss_display_status's messages for one status value, joined with "; ".
@@ -187,8 +187,8 @@ namespace detail {
 			  client_errc::decode_error, detail::format("security layer offer of {} bytes, not 4", message.size()));
 		}
 		const auto byte = [&](std::size_t i) { return static_cast<std::uint8_t>(message[i]); };
-		return gssapi_layer_offer{ byte(0),
-			(std::uint32_t{ byte(1) } << 16) | (std::uint32_t{ byte(2) } << 8) | std::uint32_t{ byte(3) } };
+		return gssapi_layer_offer{ .layers = byte(0),
+			.max_size = (std::uint32_t{ byte(1) } << 16) | (std::uint32_t{ byte(2) } << 8) | std::uint32_t{ byte(3) } };
 	}
 
 	auto gssapi_layer_reply(const gssapi_layer_offer &offer, std::string_view authz_id) -> result<std::string>

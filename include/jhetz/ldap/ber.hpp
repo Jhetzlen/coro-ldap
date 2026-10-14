@@ -61,7 +61,7 @@ struct tag
 	if (number > max_tag_number) {
 		throw std::invalid_argument("ber: tag number above 30 needs the high-tag-number form");
 	}
-	return tag{ cls, constructed, number };
+	return tag{ .cls = cls, .constructed = constructed, .number = number };
 }
 
 [[nodiscard]] constexpr auto universal(std::uint8_t number, bool constructed = false) -> tag

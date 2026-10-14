@@ -98,15 +98,15 @@ struct short_write_stream
 	std::size_t budget = 0;
 	std::size_t chunk = 0;
 
-	template<capy::MutableBufferSequence MB> auto read_some(MB) { return ready{ capy::error::eof, 0 }; }
+	template<capy::MutableBufferSequence MB> auto read_some(MB) { return ready{ .ec = capy::error::eof, .n = 0 }; }
 	template<capy::ConstBufferSequence CB> auto write_some(CB buffers)
 	{
 		if (budget == 0) {
-			return ready{ std::make_error_code(std::errc::broken_pipe), 0 };
+			return ready{ .ec = std::make_error_code(std::errc::broken_pipe), .n = 0 };
 		}
 		const std::size_t n = std::min({ capy::buffer_size(buffers), budget, chunk });
 		budget -= n;
-		return ready{ std::error_code{}, n };
+		return ready{ .ec = std::error_code{}, .n = n };
 	}
 
   private:
@@ -136,7 +136,7 @@ struct mock
 	{
 		auto [a, b] = capy::test::make_stream_pair();
 		a.set_max_read_size(max_read);
-		client = net::transport::wrap(recording_stream{ std::move(a), reads }, "mock");
+		client = net::transport::wrap(recording_stream{ .inner = std::move(a), .reads = reads }, "mock");
 		peer.emplace(std::move(b));
 	}
 
@@ -559,7 +559,8 @@ TEST_CASE("transport forwards cancel and close to a wrapped stream", "[net][tran
 	auto cancels = std::make_shared<int>(0);
 	auto closes = std::make_shared<int>(0);
 	auto [a, b] = capy::test::make_stream_pair();
-	auto t = net::transport::wrap(hooked_stream{ std::move(a), cancels, closes }, "hooked");
+	auto t =
+	  net::transport::wrap(hooked_stream{ .inner = std::move(a), .cancels = cancels, .closes = closes }, "hooked");
 	CHECK(t.host().empty());// only connect() records a host
 
 	t.cancel();
@@ -672,7 +673,7 @@ TEST_CASE("read_message: TLS truncation (no close_notify)", "[net][read_message]
 	auto run_script = [](std::vector<scripted_stream::step> steps) {
 		corosio::io_context ioc;
 		auto t = net::transport::wrap(
-		  scripted_stream{ std::make_shared<std::vector<scripted_stream::step>>(std::move(steps)) }, "tls");
+		  scripted_stream{ .script = std::make_shared<std::vector<scripted_stream::step>>(std::move(steps)) }, "tls");
 		net::read_buffer buf;
 		std::vector<ldap::result<ldap::message>> out;
 		for (int i = 0; i < 2; ++i) {
@@ -683,7 +684,7 @@ TEST_CASE("read_message: TLS truncation (no close_notify)", "[net][read_message]
 
 	SECTION("between PDUs: reported like a close, code kept")
 	{
-		auto r = run_script({ { {}, one }, { truncated, "" } });
+		auto r = run_script({ { .ec = {}, .bytes = one }, { .ec = truncated, .bytes = "" } });
 		REQUIRE(r[0].has_value());
 		REQUIRE_FALSE(r[1].has_value());
 		CHECK(r[1].error().code == truncated);
@@ -691,14 +692,14 @@ TEST_CASE("read_message: TLS truncation (no close_notify)", "[net][read_message]
 	}
 	SECTION("with the last bytes of a PDU")
 	{
-		auto r = run_script({ { truncated, one } });// data and the truncation in one read
+		auto r = run_script({ { .ec = truncated, .bytes = one } });// data and the truncation in one read
 		REQUIRE(r[0].has_value());
 		CHECK(*r[0] == bind_response_msg(1));
 		REQUIRE_FALSE(r[1].has_value());
 	}
 	SECTION("inside a PDU: an error with the progress")
 	{
-		auto r = run_script({ { {}, one.substr(0, 5) }, { truncated, "" } });
+		auto r = run_script({ { .ec = {}, .bytes = one.substr(0, 5) }, { .ec = truncated, .bytes = "" } });
 		REQUIRE_FALSE(r[0].has_value());
 		CHECK(r[0].error().code == truncated);
 		CHECK(std::string(r[0].error().context)

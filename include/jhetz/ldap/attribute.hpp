@@ -69,7 +69,7 @@ namespace detail {
 		const auto at = [&](std::size_t k) { return static_cast<unsigned char>(s[i + k]); };
 		const unsigned char c = at(0);
 		if (c < 0x80u) {
-			return { 1, true };
+			return { .length = 1, .well_formed = true };
 		}
 		std::size_t n = 0;
 		unsigned char lo = 0x80u, hi = 0xBFu;// range of the second octet
@@ -92,7 +92,7 @@ namespace detail {
 				hi = 0x8Fu;// above U+10FFFF
 			}
 		} else {
-			return { 1, false };
+			return { .length = 1, .well_formed = false };
 		}
 		const std::size_t avail = s.size() - i;
 		std::size_t k = 1;
@@ -102,7 +102,7 @@ namespace detail {
 				++k;
 			}
 		}
-		return { k, k == n };
+		return { .length = k, .well_formed = k == n };
 	}
 
 	// Length of the valid UTF-8 sequence starting at s[i], or 0 if there is

@@ -282,7 +282,7 @@ auto connection::impl::submit(message &m, pending_op *p, std::string_view contex
 			start_reader();
 		}
 		if (binding && !bind) {
-			held.push_back({ m.id, std::move(*bytes) });
+			held.push_back({ .id = m.id, .bytes = std::move(*bytes) });
 		} else {
 			enqueue(std::move(*bytes));
 		}
@@ -337,7 +337,7 @@ void connection::impl::abandon(pending_op &p) noexcept
 			held.erase(h);
 			return;
 		}
-		abandoned.push_back({ p.id, p.search });
+		abandoned.push_back({ .id = p.id, .search = p.search });
 		trim_abandoned();
 		message m{ 0, abandon_request{ p.id } };
 		(void)submit(m, nullptr, "abandon");// cannot fail to encode
@@ -361,7 +361,7 @@ void connection::impl::send_unanswered(message &m,
 	// the request is sent and its answer still counted as due: the next
 	// reader started reads it, and its deadline is applied once a due
 	// watcher runs again (StartTLS's wait starts both).
-	abandoned.push_back({ 0, search });
+	abandoned.push_back({ .id = 0, .search = search });
 	try {
 		if (!submit(m, nullptr, context)) {
 			abandoned.pop_back();
@@ -520,7 +520,7 @@ auto connection::impl::wait_due_answers(std::optional<clock::time_point> deadlin
 	}
 	// A stop reports the count waited for, not due_answers: the last
 	// answer may have come meanwhile, and "0 releases" would say nothing.
-	co_return due_wait{ ec, left };
+	co_return due_wait{ .ec = ec, .left = left };
 }
 
 // ---------------------------------------------------------------- StartTLS

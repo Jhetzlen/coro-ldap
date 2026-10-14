@@ -586,29 +586,33 @@ TEST_CASE("connection: protocol violations close the connection", "[net][connect
 		const char *context;
 	};
 	const std::vector<case_t> cases{
-		{ "wrong message id",
-		  { bytes_of(bind_resp(7)) },
-		  client_errc::unexpected_response,
-		  "bind cn=admin,dc=example,dc=org: read mock: message with id 7, which matches no outstanding request" },
-		{ "wrong operation",
-		  { bytes_of(done_msg(1)) },
-		  client_errc::unexpected_response,
-		  "bind cn=admin,dc=example,dc=org: read mock: SearchResultDone with message id 1 in response to a "
-		  "BindRequest" },
-		{ "entry for a bind",
-		  { bytes_of(entry_msg(1, "cn=x", "x")) },
-		  client_errc::unexpected_response,
-		  "bind cn=admin,dc=example,dc=org: read mock: SearchResultEntry with message id 1 in response to a "
-		  "BindRequest" },
-		{ "request operation from the server",
-		  { bytes_of(bind_request_msg(1)) },
-		  client_errc::unsupported_operation,
-		  nullptr },
-		{ "id 0 that is not a notification",
-		  { bytes_of(bind_resp(0)) },
-		  client_errc::unexpected_response,
-		  "bind cn=admin,dc=example,dc=org: read mock: BindResponse with message id 0" },
-		{ "not a PDU", { std::string("\x04\x01\x00", 3) }, client_errc::decode_error, nullptr },
+		{ .name = "wrong message id",
+		  .replies = { bytes_of(bind_resp(7)) },
+		  .code = client_errc::unexpected_response,
+		  .context =
+			"bind cn=admin,dc=example,dc=org: read mock: message with id 7, which matches no outstanding request" },
+		{ .name = "wrong operation",
+		  .replies = { bytes_of(done_msg(1)) },
+		  .code = client_errc::unexpected_response,
+		  .context = "bind cn=admin,dc=example,dc=org: read mock: SearchResultDone with message id 1 in response to a "
+					 "BindRequest" },
+		{ .name = "entry for a bind",
+		  .replies = { bytes_of(entry_msg(1, "cn=x", "x")) },
+		  .code = client_errc::unexpected_response,
+		  .context = "bind cn=admin,dc=example,dc=org: read mock: SearchResultEntry with message id 1 in response to a "
+					 "BindRequest" },
+		{ .name = "request operation from the server",
+		  .replies = { bytes_of(bind_request_msg(1)) },
+		  .code = client_errc::unsupported_operation,
+		  .context = nullptr },
+		{ .name = "id 0 that is not a notification",
+		  .replies = { bytes_of(bind_resp(0)) },
+		  .code = client_errc::unexpected_response,
+		  .context = "bind cn=admin,dc=example,dc=org: read mock: BindResponse with message id 0" },
+		{ .name = "not a PDU",
+		  .replies = { std::string("\x04\x01\x00", 3) },
+		  .code = client_errc::decode_error,
+		  .context = nullptr },
 	};
 	for (const auto &c : cases) {
 		DYNAMIC_SECTION(c.name)
@@ -1203,7 +1207,7 @@ TEST_CASE("connection: a disconnect fails every outstanding operation once", "[n
 	mock_ldap m;
 	// Reads the bind, then hangs up; the search, held while the bind is
 	// outstanding, is never sent.
-	m.serve({ step{ true, {}, true } });
+	m.serve({ step{ .read_request = true, .replies = {}, .close_after = true } });
 	outcome<ldap::result<void>> bind;
 	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
 	spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);

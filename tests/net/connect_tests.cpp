@@ -924,15 +924,27 @@ TEST_CASE("ldaps:// host name matching", "[net][connect][tls][rfc]")
 		bool legacy_ok;
 	};
 	const std::vector<case_t> cases{
-		{ "exact subjectAltName", "x", "DNS:ldap.example.org", true, true },
-		{ "whole-label wildcard", "x", "DNS:*.example.org", true, true },
-		{ "subject CN only, no subjectAltName", "ldap.example.org", "", false, true },
-		{ "partial wildcard", "x", "DNS:ld*.example.org", false, true },
-		{ "subject CN ignored when subjectAltName names another host",
-		  "ldap.example.org",
-		  "DNS:other.example.org",
-		  false,
-		  false },
+		{ .name = "exact subjectAltName",
+		  .cn = "x",
+		  .sans = "DNS:ldap.example.org",
+		  .strict_ok = true,
+		  .legacy_ok = true },
+		{ .name = "whole-label wildcard",
+		  .cn = "x",
+		  .sans = "DNS:*.example.org",
+		  .strict_ok = true,
+		  .legacy_ok = true },
+		{ .name = "subject CN only, no subjectAltName",
+		  .cn = "ldap.example.org",
+		  .sans = "",
+		  .strict_ok = false,
+		  .legacy_ok = true },
+		{ .name = "partial wildcard", .cn = "x", .sans = "DNS:ld*.example.org", .strict_ok = false, .legacy_ok = true },
+		{ .name = "subject CN ignored when subjectAltName names another host",
+		  .cn = "ldap.example.org",
+		  .sans = "DNS:other.example.org",
+		  .strict_ok = false,
+		  .legacy_ok = false },
 	};
 	for (const auto &c : cases) {
 		for (const auto matching : { net::host_name_matching::strict, net::host_name_matching::legacy }) {

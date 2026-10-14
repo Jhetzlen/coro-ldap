@@ -659,7 +659,7 @@ auto sasl_scram_sha256::parse_server_first(std::string_view message) -> result<s
 {
 	// server-first-message = [reserved-mext ","] nonce "," salt ","
 	//                        iteration-count ["," extensions]
-	attribute_reader in{ message };
+	attribute_reader in{ .rest = message };
 	auto a = in.next();
 	if (!a) {
 		return malformed("server-first-message");
@@ -819,7 +819,7 @@ auto sasl_scram_sha256::verify(std::string_view server_final) -> result<void>
 	collect();
 	state_ = state::idle;
 	// server-final-message = (server-error / verifier) ["," extensions]
-	attribute_reader in{ server_final };
+	attribute_reader in{ .rest = server_final };
 	auto a = in.next();
 	if (!a) {
 		return malformed("server-final-message");

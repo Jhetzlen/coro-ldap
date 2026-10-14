@@ -1579,7 +1579,7 @@ auto peek_message_header(std::span<const std::byte> one_complete_message) -> res
 	if (!op) {
 		return std::unexpected(std::move(op.error()));
 	}
-	return message_header{ *id, *op };
+	return message_header{ .id = *id, .op = *op };
 }
 
 // ---------------------------------------------------------------- control values

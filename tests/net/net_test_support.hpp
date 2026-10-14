@@ -297,7 +297,7 @@ class test_pki
 		std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(generate_key(), &EVP_PKEY_free);
 		std::unique_ptr<X509, decltype(&X509_free)> cert(
 		  make_cert(key.get(), cn, ca_cert_.get(), ca_key_.get(), false, subject_alt_names, next_serial()), &X509_free);
-		return { to_pem(cert.get()), key_to_pem(key.get()) };
+		return { .cert_pem = to_pem(cert.get()), .key_pem = key_to_pem(key.get()) };
 	}
 
   private:

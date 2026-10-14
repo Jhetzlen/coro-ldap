@@ -99,7 +99,7 @@ namespace detail {
 			++i;
 			skip_spaces();
 
-			dn_token tok{ type, {}, false, new_rdn };
+			dn_token tok{ .type = type, .raw_value = {}, .hex = false, .new_rdn = new_rdn };
 			if (i < n && s[i] == '#') {
 				++i;
 				const std::size_t start = i;

@@ -1184,9 +1184,9 @@ TEST_CASE("integration: a broken server answer closes the connection", "[integra
 		fault f;
 		std::error_code code;
 	} cases[] = {
-		{ "truncated PDU", fault::truncate, capy::error::eof },
-		{ "oversized length", fault::oversized, ldap::client_errc::message_too_large },
-		{ "closed mid-response", fault::close, capy::error::eof },
+		{ .name = "truncated PDU", .f = fault::truncate, .code = capy::error::eof },
+		{ .name = "oversized length", .f = fault::oversized, .code = ldap::client_errc::message_too_large },
+		{ .name = "closed mid-response", .f = fault::close, .code = capy::error::eof },
 	};
 	for (const auto &c : cases) {
 		DYNAMIC_SECTION(c.name)

@@ -92,7 +92,7 @@ TEST_CASE("gssapi: the client's security layer reply", "[net][sasl][gssapi]")
 	{
 		for (std::uint8_t layers : std::to_array<std::uint8_t>({ 2, 4, 6, 0xfe })) {
 			INFO("layers " << int{ layers });
-			auto r = ldap::detail::gssapi_layer_reply({ layers, 0x10000 }, "");
+			auto r = ldap::detail::gssapi_layer_reply({ .layers = layers, .max_size = 0x10000 }, "");
 			REQUIRE_FALSE(r.has_value());
 			CHECK(r.error().code == ldap::client_errc::security_layer_required);
 			CHECK(r.error().code == ldap::cond::access_denied);
@@ -102,7 +102,7 @@ TEST_CASE("gssapi: the client's security layer reply", "[net][sasl][gssapi]")
 	SECTION("an offer of nothing")
 	{
 		for (std::uint8_t layers : std::to_array<std::uint8_t>({ 0, 8, 0xf0 })) {
-			auto r = ldap::detail::gssapi_layer_reply({ layers, 0 }, "");
+			auto r = ldap::detail::gssapi_layer_reply({ .layers = layers, .max_size = 0 }, "");
 			REQUIRE_FALSE(r.has_value());
 			CHECK(r.error().code == ldap::client_errc::unexpected_response);
 		}
@@ -111,7 +111,7 @@ TEST_CASE("gssapi: the client's security layer reply", "[net][sasl][gssapi]")
 	{
 		for (auto bad :
 		  { "dn:\xC3"sv, "dn:\xC0\xAF"sv, "dn:\xED\xA0\x80"sv, "dn:a\nb"sv, "dn:a\0b"sv, "dn:\xC2\x85"sv }) {
-			auto r = ldap::detail::gssapi_layer_reply({ 1, 0 }, bad);
+			auto r = ldap::detail::gssapi_layer_reply({ .layers = 1, .max_size = 0 }, bad);
 			REQUIRE_FALSE(r.has_value());
 			CHECK(r.error().code == ldap::client_errc::encode_error);
 		}

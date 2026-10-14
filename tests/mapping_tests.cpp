@@ -150,18 +150,18 @@ TEST_CASE("GeneralizedTime", "[mapping][traits][time]")
 		sys_seconds expected;
 	};
 	const case_t cases[] = {
-		{ "2024022912Z", noon },
-		{ "202402291230Z", noon + 30min },
-		{ "20240229123045Z", noon + 30min + 45s },
-		{ "20240229123045.999Z", noon + 30min + 45s },// fractions of a second truncated
-		{ "20240229123045,5Z", noon + 30min + 45s },
-		{ "2024022912.5Z", noon + 30min },// fraction of an hour
-		{ "202402291230.25Z", noon + 30min + 15s },// fraction of a minute
-		{ "20240229140000+0200", noon },
-		{ "20240229070000-05", noon },
-		{ "20240229123060Z", noon + 31min },// leap second rolls over
-		{ "19700101000000Z", sys_seconds{} },
-		{ "99991231235959Z", sys_days(9999y / December / 31) + 23h + 59min + 59s },
+		{ .text = "2024022912Z", .expected = noon },
+		{ .text = "202402291230Z", .expected = noon + 30min },
+		{ .text = "20240229123045Z", .expected = noon + 30min + 45s },
+		{ .text = "20240229123045.999Z", .expected = noon + 30min + 45s },// fractions of a second truncated
+		{ .text = "20240229123045,5Z", .expected = noon + 30min + 45s },
+		{ .text = "2024022912.5Z", .expected = noon + 30min },// fraction of an hour
+		{ .text = "202402291230.25Z", .expected = noon + 30min + 15s },// fraction of a minute
+		{ .text = "20240229140000+0200", .expected = noon },
+		{ .text = "20240229070000-05", .expected = noon },
+		{ .text = "20240229123060Z", .expected = noon + 31min },// leap second rolls over
+		{ .text = "19700101000000Z", .expected = sys_seconds{} },
+		{ .text = "99991231235959Z", .expected = sys_days(9999y / December / 31) + 23h + 59min + 59s },
 	};
 	for (const auto &c : cases) {
 		INFO(c.text);
@@ -243,30 +243,47 @@ TEST_CASE("decode errors name the entry and the attribute", "[mapping][decode]")
 		const char *context;
 	};
 	const std::vector<case_t> cases{
-		{ "missing required",
-		  "uid",
-		  {},
-		  ldap::client_errc::missing_attribute,
-		  "entry uid=jdoe,ou=people,dc=example,dc=org: attribute uid" },
-		{ "two values for a required member",
-		  "cn",
-		  { "a", "b" },
-		  ldap::client_errc::too_many_values,
-		  "entry uid=jdoe,ou=people,dc=example,dc=org: attribute cn: 2 values" },
-		{ "two values for an optional member", "mail", { "a", "b" }, ldap::client_errc::too_many_values, nullptr },
-		{ "bad integer",
-		  "uidNumber",
-		  { "12a" },
-		  ldap::client_errc::conversion_failed,
-		  "entry uid=jdoe,ou=people,dc=example,dc=org: attribute uidNumber: not an integer: \"12a\"" },
-		{ "bad element of a vector",
-		  "memberOf",
-		  { "cn=ok,dc=example,dc=org", "bad" },
-		  ldap::client_errc::conversion_failed,
-		  "entry uid=jdoe,ou=people,dc=example,dc=org: attribute memberOf: not a distinguished name: \"bad\"" },
-		{ "bad boolean", "x-disabled", { "yes" }, ldap::client_errc::conversion_failed, nullptr },
-		{ "bad time", "createTimestamp", { "yesterday" }, ldap::client_errc::conversion_failed, nullptr },
-		{ "unknown enum name", "x-status", { "gone" }, ldap::client_errc::conversion_failed, nullptr },
+		{ .name = "missing required",
+		  .attribute = "uid",
+		  .values = {},
+		  .code = ldap::client_errc::missing_attribute,
+		  .context = "entry uid=jdoe,ou=people,dc=example,dc=org: attribute uid" },
+		{ .name = "two values for a required member",
+		  .attribute = "cn",
+		  .values = { "a", "b" },
+		  .code = ldap::client_errc::too_many_values,
+		  .context = "entry uid=jdoe,ou=people,dc=example,dc=org: attribute cn: 2 values" },
+		{ .name = "two values for an optional member",
+		  .attribute = "mail",
+		  .values = { "a", "b" },
+		  .code = ldap::client_errc::too_many_values,
+		  .context = nullptr },
+		{ .name = "bad integer",
+		  .attribute = "uidNumber",
+		  .values = { "12a" },
+		  .code = ldap::client_errc::conversion_failed,
+		  .context = "entry uid=jdoe,ou=people,dc=example,dc=org: attribute uidNumber: not an integer: \"12a\"" },
+		{ .name = "bad element of a vector",
+		  .attribute = "memberOf",
+		  .values = { "cn=ok,dc=example,dc=org", "bad" },
+		  .code = ldap::client_errc::conversion_failed,
+		  .context =
+			"entry uid=jdoe,ou=people,dc=example,dc=org: attribute memberOf: not a distinguished name: \"bad\"" },
+		{ .name = "bad boolean",
+		  .attribute = "x-disabled",
+		  .values = { "yes" },
+		  .code = ldap::client_errc::conversion_failed,
+		  .context = nullptr },
+		{ .name = "bad time",
+		  .attribute = "createTimestamp",
+		  .values = { "yesterday" },
+		  .code = ldap::client_errc::conversion_failed,
+		  .context = nullptr },
+		{ .name = "unknown enum name",
+		  .attribute = "x-status",
+		  .values = { "gone" },
+		  .code = ldap::client_errc::conversion_failed,
+		  .context = nullptr },
 	};
 	for (const auto &c : cases) {
 		DYNAMIC_SECTION(c.name)
@@ -371,7 +388,7 @@ TEST_CASE("to_attributes writes objectClass and skips read_only and empty member
 	CHECK(back->photo == p.photo);
 	CHECK(back->state == p.state);
 
-	const auto dev = ldap::to_attributes(device{ { "top", "device" }, "printer" });
+	const auto dev = ldap::to_attributes(device{ .object_class = { "top", "device" }, .cn = "printer" });
 	REQUIRE(dev.size() == 2);
 	CHECK(dev[0] == ldap::partial_attribute{ "objectClass", { "top", "device" } });
 }

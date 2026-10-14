@@ -369,7 +369,7 @@ auto tls_handshake(transport::impl &im,
 			im.tls.reset();
 			im.tls_context.reset();
 		}
-	} undo{ im };
+	} undo{ .im = im };
 	auto &ctx = im.tls_context.emplace(std::move(setup.context));
 	auto &stream = im.tls.emplace(&*im.tcp, ctx);
 	stream.set_hostname(name);
