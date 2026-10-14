@@ -19,7 +19,7 @@ using strings = std::pmr::vector<std::pmr::string>;
 
 namespace {
 
-ldap::url parse(std::string_view text)
+auto parse(std::string_view text) -> ldap::url
 {
 	auto u = ldap::url::parse(text);
 	INFO(text << " -> " << (u ? std::string("ok") : std::string(u.error().message())));
@@ -42,7 +42,7 @@ void rejected(std::string_view text)
 	CHECK(u.error().context.starts_with("url: "));
 }
 
-ldap::dn dn(std::string_view text) { return *ldap::dn::parse(text); }
+auto dn(std::string_view text) -> ldap::dn { return *ldap::dn::parse(text); }
 
 }// namespace
 

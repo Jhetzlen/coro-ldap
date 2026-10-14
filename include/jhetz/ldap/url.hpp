@@ -68,7 +68,7 @@ enum class url_scheme : std::uint8_t {
 };
 
 // "ldap", "ldaps" or "ldapi".
-[[nodiscard]] std::string_view to_string(url_scheme s) noexcept;
+[[nodiscard]] auto to_string(url_scheme s) noexcept -> std::string_view;
 
 // One RFC 4516 extension: `[!]type[=value]`.
 // Allocator-aware like url: in a url (a pmr::vector<url_extension>) the
@@ -91,13 +91,13 @@ struct url_extension
 	url_extension(url_extension &&) noexcept = default;
 	url_extension(const url_extension &other, const allocator_type &alloc);
 	url_extension(url_extension &&other, const allocator_type &alloc);
-	url_extension &operator=(const url_extension &other);
-	url_extension &operator=(url_extension &&other);
+	auto operator=(const url_extension &other) -> url_extension &;
+	auto operator=(url_extension &&other) -> url_extension &;
 	~url_extension() = default;
 
-	allocator_type get_allocator() const noexcept { return type.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return type.get_allocator(); }
 
-	friend bool operator==(const url_extension &, const url_extension &) = default;
+	friend auto operator==(const url_extension &, const url_extension &) -> bool = default;
 };
 
 class url
@@ -116,21 +116,21 @@ class url
 	url(const url &other, const allocator_type &alloc);
 	url(url &&other, const allocator_type &alloc);
 	// Assignment keeps this url's resource for everything it owns.
-	url &operator=(const url &other);
-	url &operator=(url &&other);
+	auto operator=(const url &other) -> url &;
+	auto operator=(url &&other) -> url &;
 	~url() = default;
 
-	allocator_type get_allocator() const noexcept { return host_.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return host_.get_allocator(); }
 
 	// Parses RFC 4516 text; fails with invalid_url (never throws on bad input).
 	// The url's strings and lists are allocated from `mr`.
-	[[nodiscard]] static result<url> parse(std::string_view text,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	[[nodiscard]] static auto parse(std::string_view text,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<url>;
 	// Parses each URI (e.g. the referral or continuation references of a
 	// result) and returns those that are valid LDAP URLs, in order; the
 	// others are left out (servers may send any URI scheme).
-	[[nodiscard]] static std::pmr::vector<url> parse_list(const std::pmr::vector<std::pmr::string> &uris,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	[[nodiscard]] static auto parse_list(const std::pmr::vector<std::pmr::string> &uris,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> std::pmr::vector<url>;
 
 	// RFC 4516 text: lower-case scheme, IPv6 in brackets, the port only if
 	// one was given, then only as many parts as needed to carry the ones that
@@ -138,34 +138,36 @@ class url
 	// ambiguous in their part are percent-encoded (always `%`, `?`, `#`, and
 	// `,` inside attributes and extension values; `/` in an ldapi path).
 	// parse(to_string()) == *this.
-	[[nodiscard]] std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] auto to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
+	  -> std::pmr::string;
 
-	url_scheme scheme() const noexcept { return scheme_; }
+	auto scheme() const noexcept -> url_scheme { return scheme_; }
 	// Decoded host: a name, an IPv4 address, an IPv6 address without the
 	// brackets (zone after '%'), or for ldapi the socket path. May be empty.
-	const std::pmr::string &host() const noexcept { return host_; }
+	auto host() const noexcept -> const std::pmr::string & { return host_; }
 	// The host was written as a bracketed IPv6 literal.
-	bool host_is_ipv6() const noexcept { return host_is_ipv6_; }
+	auto host_is_ipv6() const noexcept -> bool { return host_is_ipv6_; }
 	// The port as written; nullopt when absent (always for ldapi).
-	std::optional<std::uint16_t> port() const noexcept { return port_; }
+	auto port() const noexcept -> std::optional<std::uint16_t> { return port_; }
 	// port(), or 389 for ldap and 636 for ldaps; 0 for ldapi.
-	std::uint16_t port_or_default() const noexcept;
+	auto port_or_default() const noexcept -> std::uint16_t;
 	// Encoded `host:port` with the port made explicit (`[::1]:389`), or the
 	// encoded socket path for ldapi. For error messages and logs.
-	[[nodiscard]] std::pmr::string authority(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] auto authority(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
+	  -> std::pmr::string;
 
 	// nullopt when the URL has no "/" (then no later part either).
-	const std::optional<dn> &base_dn() const noexcept { return dn_; }
+	auto base_dn() const noexcept -> const std::optional<dn> & { return dn_; }
 	// Attribute selectors as written (decoded): descriptions, "*", "+", "1.1".
-	const std::pmr::vector<std::pmr::string> &attributes() const noexcept { return attributes_; }
-	std::optional<search_scope> scope() const noexcept { return scope_; }
-	const std::optional<ldap::filter> &search_filter() const noexcept { return filter_; }
-	const std::pmr::vector<url_extension> &extensions() const noexcept { return extensions_; }
+	auto attributes() const noexcept -> const std::pmr::vector<std::pmr::string> & { return attributes_; }
+	auto scope() const noexcept -> std::optional<search_scope> { return scope_; }
+	auto search_filter() const noexcept -> const std::optional<ldap::filter> & { return filter_; }
+	auto extensions() const noexcept -> const std::pmr::vector<url_extension> & { return extensions_; }
 	// True if some extension is marked critical ('!'). This library knows no
 	// extension yet, so such a URL must not be used (RFC 4516 section 2.1).
-	bool has_critical_extension() const noexcept;
+	auto has_critical_extension() const noexcept -> bool;
 
-	friend bool operator==(const url &, const url &) = default;
+	friend auto operator==(const url &, const url &) -> bool = default;
 
   private:
 	url_scheme scheme_ = url_scheme::ldap;

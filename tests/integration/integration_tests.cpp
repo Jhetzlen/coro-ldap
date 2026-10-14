@@ -42,7 +42,7 @@ using Catch::Matchers::StartsWith;
 
 namespace {
 
-std::string env(const char *name)
+auto env(const char *name) -> std::string
 {
 	const char *v = std::getenv(name);
 	return v == nullptr ? std::string() : std::string(v);
@@ -50,12 +50,12 @@ std::string env(const char *name)
 
 // Set by run_slapd.sh; each test starts with
 // `if (!have_slapd()) SKIP(...)`, so the skip is reported at the test.
-bool have_slapd() { return !env("JHETZ_LDAP_IT_LDAP").empty(); }
+auto have_slapd() -> bool { return !env("JHETZ_LDAP_IT_LDAP").empty(); }
 
 const ldap::dn admin{ "cn=admin,dc=example,dc=org" };
 const ldap::dn people{ "ou=people,dc=example,dc=org" };
 
-ldap::connection_options trusting(ldap::connection_options o = {})
+auto trusting(ldap::connection_options o = {}) -> ldap::connection_options
 {
 	o.tls.ca_file = env("JHETZ_LDAP_IT_CA");
 	o.timeout = std::chrono::seconds(10);
@@ -63,7 +63,8 @@ ldap::connection_options trusting(ldap::connection_options o = {})
 	return o;
 }
 
-ldap::connection open(corosio::io_context &ioc, const std::string &url, const ldap::connection_options &o = trusting())
+auto open(corosio::io_context &ioc, const std::string &url, const ldap::connection_options &o = trusting())
+  -> ldap::connection
 {
 	auto u = ldap::url::parse(url);
 	REQUIRE(u.has_value());
@@ -74,7 +75,7 @@ ldap::connection open(corosio::io_context &ioc, const std::string &url, const ld
 	return std::move(*c);
 }
 
-ldap::connection open_admin(corosio::io_context &ioc)
+auto open_admin(corosio::io_context &ioc) -> ldap::connection
 {
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	auto b = finish(ioc, c.simple_bind(admin, "secret"));
@@ -89,9 +90,9 @@ ldap::connection open_admin(corosio::io_context &ioc)
 class scram_giving_up final : public ldap::sasl_mechanism
 {
   public:
-	std::string_view name() const noexcept override { return scram.name(); }
-	ldap::result<std::optional<std::string>> start() override { return scram.start(); }
-	ldap::result<std::optional<std::string>> step(std::optional<std::string_view>) override
+	auto name() const noexcept -> std::string_view override { return scram.name(); }
+	auto start() -> ldap::result<std::optional<std::string>> override { return scram.start(); }
+	auto step(std::optional<std::string_view>) -> ldap::result<std::optional<std::string>> override
 	{
 		return ldap::fail(ldap::client_errc::unexpected_response, "giving up");
 	}
@@ -122,7 +123,7 @@ class anonymous_binds_disallowed
 	}
 
 	anonymous_binds_disallowed(const anonymous_binds_disallowed &) = delete;
-	anonymous_binds_disallowed &operator=(const anonymous_binds_disallowed &) = delete;
+	auto operator=(const anonymous_binds_disallowed &) -> anonymous_binds_disallowed & = delete;
 
 	// The failure is reported once, after the attempt. FAIL_CHECK throws
 	// when Catch2 aborts the run (-a, -x): that only ends the run, as asked,
@@ -155,7 +156,7 @@ class anonymous_binds_disallowed
 };
 
 // A unique RDN value per test run, so runs against the same server do not collide.
-std::string unique(std::string_view stem)
+auto unique(std::string_view stem) -> std::string
 {
 	static int counter = 0;
 	return std::string(stem) + "-" + std::to_string(::getpid()) + "-" + std::to_string(counter++);
@@ -400,8 +401,8 @@ struct manual_page
 	std::string cookie{};
 };
 
-ldap::result<manual_page>
-  page_by_hand(corosio::io_context &ioc, ldap::connection &c, ldap::search_params params, ldap::paged control)
+auto page_by_hand(corosio::io_context &ioc, ldap::connection &c, ldap::search_params params, ldap::paged control)
+  -> ldap::result<manual_page>
 {
 	params.controls = { std::move(control) };
 	auto s = finish(ioc, c.search_stream(std::move(params)));
@@ -775,8 +776,8 @@ struct uid_page
 	std::string cookie{};
 };
 
-ldap::result<uid_page>
-  uid_page_by_hand(corosio::io_context &ioc, ldap::connection &c, ldap::search_params params, ldap::paged control)
+auto uid_page_by_hand(corosio::io_context &ioc, ldap::connection &c, ldap::search_params params, ldap::paged control)
+  -> ldap::result<uid_page>
 {
 	params.controls.emplace_back(std::move(control));
 	auto s = finish(ioc, c.search_stream(std::move(params)));
@@ -803,7 +804,7 @@ ldap::result<uid_page>
 }
 
 // user<n>*, by sn descending if `sorted`.
-ldap::search_params hundred_users(int n, bool sorted)
+auto hundred_users(int n, bool sorted) -> ldap::search_params
 {
 	ldap::search_params p{ .base = people,
 		.filter = ldap::filters::attr("uid").starts_with("user" + std::to_string(n)),
@@ -816,7 +817,7 @@ ldap::search_params hundred_users(int n, bool sorted)
 }
 
 // "user<n><99 - first>" .. "user<n><99 - first - count + 1>".
-std::vector<std::string> descending_uids(int n, int first, int count)
+auto descending_uids(int n, int first, int count) -> std::vector<std::string>
 {
 	std::vector<std::string> out;
 	for (int i = 0; i < count; ++i) {
@@ -1122,7 +1123,7 @@ enum class fault {
 
 // A one-connection TCP proxy between the client and slapd that breaks the
 // server's first answer in the given way (the client's bytes pass through).
-capy::task<void> proxy(corosio::io_context &ioc, corosio::tcp_acceptor &acc, std::uint16_t server_port, fault f)
+auto proxy(corosio::io_context &ioc, corosio::tcp_acceptor &acc, std::uint16_t server_port, fault f) -> capy::task<void>
 {
 	auto [aec, client] = co_await acc.accept();
 	if (aec) {

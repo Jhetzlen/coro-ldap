@@ -17,14 +17,14 @@ using namespace std::string_literals;
 
 namespace {
 
-ldap::dn parse(std::string_view text)
+auto parse(std::string_view text) -> ldap::dn
 {
 	auto d = ldap::dn::parse(text);
 	REQUIRE(d.has_value());
 	return *d;
 }
 
-ldap::rdn single(std::string type, std::string value)
+auto single(std::string type, std::string value) -> ldap::rdn
 {
 	return ldap::rdn{ { ldap::ava{ ldap::attribute::unchecked(std::move(type)), std::move(value) } } };
 }

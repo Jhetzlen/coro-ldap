@@ -39,7 +39,7 @@ constexpr auto ldap::schema<account> = ldap::describe(ldap::object_class("inetOr
 
 namespace {
 
-ldap::message account_entry(std::int32_t id, std::string_view uid, std::string_view number)
+auto account_entry(std::int32_t id, std::string_view uid, std::string_view number) -> ldap::message
 {
 	return ldap::message{ id,
 		ldap::search_result_entry{ "uid=" + std::string(uid) + ",ou=people,dc=example,dc=org",
@@ -144,12 +144,12 @@ struct mismatched
 	std::int64_t uid = 0;// uid is a DirectoryString: syntax error
 };
 
-ldap::message root_dse(std::int32_t id)
+auto root_dse(std::int32_t id) -> ldap::message
 {
 	return ldap::message{ id, ldap::search_result_entry{ "", { { "subschemaSubentry", { "cn=Subschema" } } } } };
 }
 
-ldap::message subschema(std::int32_t id)
+auto subschema(std::int32_t id) -> ldap::message
 {
 	return ldap::message{ id,
 		ldap::search_result_entry{ "cn=Subschema",

@@ -40,13 +40,13 @@ struct tls_setup
 // anchors, client certificate, minimum version, server_name check. Every
 // file is read and every certificate parsed here. Errors have contexts
 // starting with "tls: ".
-result<tls_setup> make_tls_setup(const tls_options &options);
+auto make_tls_setup(const tls_options &options) -> result<tls_setup>;
 
 // The name for SNI and certificate verification: options.server_name if
 // set, else `host` without an IPv6 zone ("fe80::1%eth0" -> "fe80::1"): the
 // zone is local routing information, not part of the certificate's
 // iPAddress.
-std::string tls_peer_name(std::string_view host, const tls_options &options);
+auto tls_peer_name(std::string_view host, const tls_options &options) -> std::string;
 
 // Requires im.tcp connected and !im.tls. `host` is the URL host; the name
 // used for SNI and verification is options.server_name if set, else `host`
@@ -54,10 +54,10 @@ std::string tls_peer_name(std::string_view host, const tls_options &options);
 // im.stream points at the TLS layer; on an error or a throw (bad_alloc)
 // neither is, and im.stream is unchanged. Errors have the context "tls
 // handshake" (plus ": server certificate: <reason>" when verification failed).
-boost::capy::task<result<void>> tls_handshake(transport::impl &im,
+auto tls_handshake(transport::impl &im,
   std::string_view host,
   const tls_options &options,
   tls_setup setup,
-  deadline_t deadline);
+  deadline_t deadline) -> boost::capy::task<result<void>>;
 
 }// namespace jhetz::ldap::net::detail

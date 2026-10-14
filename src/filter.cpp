@@ -27,15 +27,15 @@ namespace detail {
 		static constexpr std::uint8_t part_any = filter::part_any;
 		static constexpr std::uint8_t part_final = filter::part_final;
 
-		static constexpr std::uint8_t k(kind x) noexcept { return std::to_underlying(x); }
+		static constexpr auto k(kind x) noexcept -> std::uint8_t { return std::to_underlying(x); }
 
 		// and / or / not: the nodes whose children are elements.
-		static bool composite(const node &n) noexcept { return n.k <= k(kind::not_); }
+		static auto composite(const node &n) noexcept -> bool { return n.k <= k(kind::not_); }
 
-		static std::size_t size(const filter &f) noexcept { return f.nodes_.size(); }
+		static auto size(const filter &f) noexcept -> std::size_t { return f.nodes_.size(); }
 
 		// Appends `s` to the string pool and returns its offset.
-		static std::uint32_t add_text(filter &f, std::string_view s)
+		static auto add_text(filter &f, std::string_view s) -> std::uint32_t
 		{
 			// Offsets are 32-bit to keep nodes small. A filter with 4 GiB of
 			// values cannot be sent anyway; treat it like exceeding max_size().
@@ -47,7 +47,7 @@ namespace detail {
 			return off;
 		}
 
-		static std::uint32_t add_node(filter &f, std::uint8_t node_kind)
+		static auto add_node(filter &f, std::uint8_t node_kind) -> std::uint32_t
 		{
 			if (f.nodes_.size() >= npos) {
 				throw std::length_error("ldap::filter: too many nodes");
@@ -140,8 +140,9 @@ namespace detail {
 		}
 
 		// A single-element filter: `node_kind` with an attribute and a value.
-		static filter
+		static auto
 		  leaf(const filter::allocator_type &alloc, kind node_kind, std::string_view attr, std::string_view value = {})
+			-> filter
 		{
 			filter f(alloc);
 			f.root_ = add_node(f, k(node_kind));
@@ -192,7 +193,7 @@ namespace detail {
 
 		// Copies the subtree of `src` at `top` into `dst` (not linked; returns
 		// its index). `base`: where src's string pool starts in dst's.
-		static std::uint32_t copy_subtree(filter &dst, const filter &src, std::uint32_t top, std::uint32_t base)
+		static auto copy_subtree(filter &dst, const filter &src, std::uint32_t top, std::uint32_t base) -> std::uint32_t
 		{
 			std::uint32_t result = npos;
 			std::uint32_t parent = npos;// dst parent of the next node entered
@@ -238,7 +239,7 @@ namespace detail {
 
 		// f `op` g, reusing f. An AND (resp. OR) root of either operand is
 		// merged into the result.
-		static filter combine(filter f, const filter &g, kind op)
+		static auto combine(filter f, const filter &g, kind op) -> filter
 		{
 			if (f.empty() || g.empty()) {
 				return filter(f.get_allocator());
@@ -264,7 +265,7 @@ namespace detail {
 		}
 
 		// f `op` g, reusing g: f's nodes go in front of g's.
-		static filter combine_front(const filter &f, filter g, kind op)
+		static auto combine_front(const filter &f, filter g, kind op) -> filter
 		{
 			if (f.empty() || g.empty()) {
 				return filter(g.get_allocator());
@@ -293,7 +294,7 @@ namespace detail {
 		}
 
 		// f `op` g with an rvalue g: reused when it is on f's resource.
-		static filter combine_right(const filter &f, filter &&g, kind op)
+		static auto combine_right(const filter &f, filter &&g, kind op) -> filter
 		{
 			if (f.get_allocator() == g.get_allocator()) {
 				return combine_front(f, std::move(g), op);
@@ -303,7 +304,7 @@ namespace detail {
 
 		// Both rvalues: the larger one is reused (so chains nested either way
 		// stay linear), g only when it is on f's resource.
-		static filter combine_both(filter &&f, filter &&g, kind op)
+		static auto combine_both(filter &&f, filter &&g, kind op) -> filter
 		{
 			if (g.nodes_.size() > f.nodes_.size() && f.get_allocator() == g.get_allocator()) {
 				return combine_front(f, std::move(g), op);
@@ -313,11 +314,11 @@ namespace detail {
 
 		// (a=initial*any*...*final); empty parts are omitted, all empty gives
 		// present (callers pass at least one non-empty part otherwise).
-		static filter substrings(const filter::allocator_type &alloc,
+		static auto substrings(const filter::allocator_type &alloc,
 		  std::string_view attr,
 		  std::string_view initial,
 		  std::string_view any,
-		  std::string_view final_)
+		  std::string_view final_) -> filter
 		{
 			if (initial.empty() && any.empty() && final_.empty()) {
 				return leaf(alloc, kind::present, attr);
@@ -337,7 +338,7 @@ namespace detail {
 			return f;
 		}
 
-		static filter negate(filter f)
+		static auto negate(filter f) -> filter
 		{
 			if (!f.empty()) {
 				wrap(f, kind::not_);
@@ -351,20 +352,20 @@ namespace detail {
 			f.elements_ = elements;
 		}
 		static void set_root(filter &f, std::uint32_t root) noexcept { f.root_ = root; }
-		static const node &at(const filter &f, std::uint32_t i) noexcept { return f.nodes_[i]; }
-		static std::string_view attr_of(const filter &f, const node &n) noexcept
+		static auto at(const filter &f, std::uint32_t i) noexcept -> const node & { return f.nodes_[i]; }
+		static auto attr_of(const filter &f, const node &n) noexcept -> std::string_view
 		{
 			return f.str(n.attr_off, n.attr_len);
 		}
-		static std::string_view value_of(const filter &f, const node &n) noexcept
+		static auto value_of(const filter &f, const node &n) noexcept -> std::string_view
 		{
 			return f.str(n.value_off, n.value_len);
 		}
-		static std::string_view rule_of(const filter &f, const node &n) noexcept
+		static auto rule_of(const filter &f, const node &n) noexcept -> std::string_view
 		{
 			return f.str(n.rule_off, n.rule_len);
 		}
-		static std::uint32_t root(const filter &f) noexcept { return f.root_; }
+		static auto root(const filter &f) noexcept -> std::uint32_t { return f.root_; }
 	};
 
 }// namespace detail
@@ -392,7 +393,7 @@ filter::filter(filter &&other, const allocator_type &alloc)
 	other.clear();
 }
 
-filter &filter::operator=(filter &&other)
+auto filter::operator=(filter &&other) -> filter &
 {
 	if (this != &other) {
 		nodes_ = std::move(other.nodes_);
@@ -414,7 +415,7 @@ void filter::clear() noexcept
 	elements_ = 0;
 }
 
-filter::child_range filter::view::children() const noexcept
+auto filter::view::children() const noexcept -> filter::child_range
 {
 	const node &x = n();
 	if (!access::composite(x)) {
@@ -423,7 +424,7 @@ filter::child_range filter::view::children() const noexcept
 	return child_range(child_iterator(f_, x.first));
 }
 
-std::optional<std::string_view> filter::view::initial() const noexcept
+auto filter::view::initial() const noexcept -> std::optional<std::string_view>
 {
 	const node &x = n();
 	if (x.k != access::k(kind::substrings) || x.first == npos) {
@@ -436,7 +437,7 @@ std::optional<std::string_view> filter::view::initial() const noexcept
 	return f_->str(p.value_off, p.value_len);
 }
 
-filter::substring_range filter::view::any() const noexcept
+auto filter::view::any() const noexcept -> filter::substring_range
 {
 	const node &x = n();
 	if (x.k != access::k(kind::substrings)) {
@@ -452,7 +453,7 @@ filter::substring_range filter::view::any() const noexcept
 	return substring_range(substring_iterator(f_, i));
 }
 
-std::optional<std::string_view> filter::view::final() const noexcept
+auto filter::view::final() const noexcept -> std::optional<std::string_view>
 {
 	const node &x = n();
 	if (x.k != access::k(kind::substrings) || x.last == npos) {
@@ -465,7 +466,7 @@ std::optional<std::string_view> filter::view::final() const noexcept
 	return f_->str(p.value_off, p.value_len);
 }
 
-bool operator==(const filter &a, const filter &b) noexcept
+auto operator==(const filter &a, const filter &b) noexcept -> bool
 {
 	using node = filter::node;
 	if (a.empty() || b.empty()) {
@@ -571,7 +572,7 @@ namespace {
 
 }// namespace
 
-std::pmr::string escape_filter_value(std::string_view value, std::pmr::memory_resource *mr)
+auto escape_filter_value(std::string_view value, std::pmr::memory_resource *mr) -> std::pmr::string
 {
 	std::pmr::string out(mr);
 	out.reserve(value.size());
@@ -579,7 +580,7 @@ std::pmr::string escape_filter_value(std::string_view value, std::pmr::memory_re
 	return out;
 }
 
-std::pmr::string filter::to_string(std::pmr::memory_resource *mr) const
+auto filter::to_string(std::pmr::memory_resource *mr) const -> std::pmr::string
 {
 	std::pmr::string out(mr);
 	if (empty()) {
@@ -673,43 +674,43 @@ namespace filters {
 		}
 	}
 
-	filter attr::operator==(std::string_view value) const
+	auto attr::operator==(std::string_view value) const -> filter
 	{
 		return access::leaf(name_.get_allocator(), kind::equality, name_, value);
 	}
-	filter attr::operator>=(std::string_view value) const
+	auto attr::operator>=(std::string_view value) const -> filter
 	{
 		return access::leaf(name_.get_allocator(), kind::greater_or_equal, name_, value);
 	}
-	filter attr::operator<=(std::string_view value) const
+	auto attr::operator<=(std::string_view value) const -> filter
 	{
 		return access::leaf(name_.get_allocator(), kind::less_or_equal, name_, value);
 	}
-	filter attr::approx(std::string_view value) const
+	auto attr::approx(std::string_view value) const -> filter
 	{
 		return access::leaf(name_.get_allocator(), kind::approx, name_, value);
 	}
-	filter attr::present() const { return access::leaf(name_.get_allocator(), kind::present, name_); }
+	auto attr::present() const -> filter { return access::leaf(name_.get_allocator(), kind::present, name_); }
 
-	filter attr::starts_with(std::string_view value) const
+	auto attr::starts_with(std::string_view value) const -> filter
 	{
 		return access::substrings(name_.get_allocator(), name_, value, {}, {});
 	}
-	filter attr::ends_with(std::string_view value) const
+	auto attr::ends_with(std::string_view value) const -> filter
 	{
 		return access::substrings(name_.get_allocator(), name_, {}, {}, value);
 	}
-	filter attr::contains(std::string_view value) const
+	auto attr::contains(std::string_view value) const -> filter
 	{
 		return access::substrings(name_.get_allocator(), name_, {}, value, {});
 	}
 
 	namespace {
-		filter extensible(const filter::allocator_type &alloc,
+		auto extensible(const filter::allocator_type &alloc,
 		  std::string_view attr,
 		  std::string_view rule,
 		  std::string_view value,
-		  bool dn_attributes)
+		  bool dn_attributes) -> filter
 		{
 			if (!rule.empty() && !detail::is_oid(rule)) {
 				throw std::invalid_argument(detail::format("ldap::filters: invalid matching rule \"{}\"", rule));
@@ -726,15 +727,15 @@ namespace filters {
 		}
 	}// namespace
 
-	filter attr::matches(std::string_view rule, std::string_view value, bool dn_attributes) const
+	auto attr::matches(std::string_view rule, std::string_view value, bool dn_attributes) const -> filter
 	{
 		return extensible(name_.get_allocator(), name_, rule, value, dn_attributes);
 	}
 
-	filter rule_matches(std::string_view rule,
+	auto rule_matches(std::string_view rule,
 	  std::string_view value,
 	  bool dn_attributes,
-	  const filter::allocator_type &alloc)
+	  const filter::allocator_type &alloc) -> filter
 	{
 		if (rule.empty()) {
 			throw std::invalid_argument("ldap::filters::rule_matches: the matching rule is required");
@@ -744,58 +745,58 @@ namespace filters {
 
 }// namespace filters
 
-filter operator&&(const filter &f, const filter &g)
+auto operator&&(const filter &f, const filter &g) -> filter
 {
 	return access::combine(filter(f, f.get_allocator()), g, filter::kind::and_);
 }
-filter operator&&(filter &&f, const filter &g)
+auto operator&&(filter &&f, const filter &g) -> filter
 {
 	if (&f == &g) {
 		return static_cast<const filter &>(f) && g;// same object: copy, don't steal
 	}
 	return access::combine(std::move(f), g, filter::kind::and_);
 }
-filter operator&&(const filter &f, filter &&g)
+auto operator&&(const filter &f, filter &&g) -> filter
 {
 	if (&f == &g) {
 		return f && static_cast<const filter &>(g);
 	}
 	return access::combine_right(f, std::move(g), filter::kind::and_);
 }
-filter operator&&(filter &&f, filter &&g)
+auto operator&&(filter &&f, filter &&g) -> filter
 {
 	if (&f == &g) {
 		return static_cast<const filter &>(f) && static_cast<const filter &>(g);
 	}
 	return access::combine_both(std::move(f), std::move(g), filter::kind::and_);
 }
-filter operator||(const filter &f, const filter &g)
+auto operator||(const filter &f, const filter &g) -> filter
 {
 	return access::combine(filter(f, f.get_allocator()), g, filter::kind::or_);
 }
-filter operator||(filter &&f, const filter &g)
+auto operator||(filter &&f, const filter &g) -> filter
 {
 	if (&f == &g) {
 		return static_cast<const filter &>(f) || g;// same object: copy, don't steal
 	}
 	return access::combine(std::move(f), g, filter::kind::or_);
 }
-filter operator||(const filter &f, filter &&g)
+auto operator||(const filter &f, filter &&g) -> filter
 {
 	if (&f == &g) {
 		return f || static_cast<const filter &>(g);
 	}
 	return access::combine_right(f, std::move(g), filter::kind::or_);
 }
-filter operator||(filter &&f, filter &&g)
+auto operator||(filter &&f, filter &&g) -> filter
 {
 	if (&f == &g) {
 		return static_cast<const filter &>(f) || static_cast<const filter &>(g);
 	}
 	return access::combine_both(std::move(f), std::move(g), filter::kind::or_);
 }
-filter operator!(const filter &f) { return access::negate(filter(f, f.get_allocator())); }
-filter operator!(filter &&f) { return access::negate(std::move(f)); }
+auto operator!(const filter &f) -> filter { return access::negate(filter(f, f.get_allocator())); }
+auto operator!(filter &&f) -> filter { return access::negate(std::move(f)); }
 
 
 // ---------------------------------------------------------------- text -> tree
@@ -819,7 +820,7 @@ namespace {
 	// characters read, or what is wrong. Shared by filter::raw and
 	// unescape_filter_value, so they accept the same values.
 	template<class Emit>
-	std::expected<std::size_t, std::string_view> read_value_unit(std::string_view s, std::size_t i, Emit &&emit)
+	auto read_value_unit(std::string_view s, std::size_t i, Emit &&emit) -> std::expected<std::size_t, std::string_view>
 	{
 		const char c = s[i];
 		if (c == '(' || c == '\0') {
@@ -850,8 +851,8 @@ namespace {
 		return n;
 	}
 
-	bool is_attr_char(char c) { return detail::is_keychar(c) || c == '.' || c == ';'; }
-	bool is_oid_char(char c) { return detail::is_keychar(c) || c == '.'; }
+	auto is_attr_char(char c) -> bool { return detail::is_keychar(c) || c == '.' || c == ';'; }
+	auto is_oid_char(char c) -> bool { return detail::is_keychar(c) || c == '.'; }
 
 	class filter_parser
 	{
@@ -862,7 +863,7 @@ namespace {
 		  : s_(s), shift_(shift), limits_(limits), out_(out)
 		{}
 
-		result<void> parse()
+		auto parse() -> result<void>
 		{
 			auto root = parse_filter(1, npos);
 			if (!root) {
@@ -877,21 +878,21 @@ namespace {
 		}
 
 	  private:
-		std::unexpected<ldap::error> error(std::string_view what, std::size_t at) const
+		auto error(std::string_view what, std::size_t at) const -> std::unexpected<ldap::error>
 		{
 			const std::size_t pos = at >= shift_ ? at - shift_ : 0;
 			return fail(client_errc::invalid_filter, detail::format("filter: {} at position {}", what, pos));
 		}
-		std::unexpected<ldap::error> error(std::string_view what) const { return error(what, i_); }
-		std::unexpected<ldap::error> too_many_elements() const
+		auto error(std::string_view what) const -> std::unexpected<ldap::error> { return error(what, i_); }
+		auto too_many_elements() const -> std::unexpected<ldap::error>
 		{
 			return error(detail::format("too many elements (more than {})", limits_.max_elements));
 		}
 
-		bool at_end() const { return i_ >= s_.size(); }
-		char peek() const { return s_[i_]; }
+		auto at_end() const -> bool { return i_ >= s_.size(); }
+		auto peek() const -> char { return s_[i_]; }
 
-		result<void> expect(char c)
+		auto expect(char c) -> result<void>
 		{
 			if (at_end() || peek() != c) {
 				if (c == ')') {
@@ -903,7 +904,7 @@ namespace {
 			return {};
 		}
 
-		std::uint32_t add(kind k, std::uint32_t parent)
+		auto add(kind k, std::uint32_t parent) -> std::uint32_t
 		{
 			const std::uint32_t n = access::add_node(out_, access::k(k));
 			if (parent != npos) {
@@ -913,7 +914,7 @@ namespace {
 		}
 
 		// Bounded recursion: depth never exceeds limits_.max_depth.
-		result<std::uint32_t> parse_filter(std::size_t depth, std::uint32_t parent)
+		auto parse_filter(std::size_t depth, std::uint32_t parent) -> result<std::uint32_t>
 		{
 			if (depth > limits_.max_depth) {
 				return error(detail::format("nested too deeply (more than {} levels)", limits_.max_depth));
@@ -962,7 +963,7 @@ namespace {
 		// Unescapes value bytes up to the closing ')' (or, with `stars`, an
 		// unescaped '*'), which is not consumed, into a string of out_.
 		// Returns (offset, length).
-		result<std::pair<std::uint32_t, std::uint32_t>> read_part(bool stars)
+		auto read_part(bool stars) -> result<std::pair<std::uint32_t, std::uint32_t>>
 		{
 			const std::uint32_t off = access::add_text(out_, {});
 			std::uint32_t len = 0;
@@ -986,7 +987,7 @@ namespace {
 			return std::pair{ off, len };
 		}
 
-		result<std::uint32_t> parse_item(std::uint32_t parent)
+		auto parse_item(std::uint32_t parent) -> result<std::uint32_t>
 		{
 			const std::size_t attr_start = i_;
 			while (!at_end() && is_attr_char(peek())) {
@@ -1072,7 +1073,7 @@ namespace {
 			return node;
 		}
 
-		result<void> set_value(std::uint32_t node)
+		auto set_value(std::uint32_t node) -> result<void>
 		{
 			auto v = read_part(false);
 			if (!v) {
@@ -1083,7 +1084,8 @@ namespace {
 		}
 
 		// attr [":dn"] [":" rule] ":=" value, or [":dn"] ":" rule ":=" value
-		result<std::uint32_t> parse_extensible(std::string_view attr, std::size_t attr_start, std::uint32_t parent)
+		auto parse_extensible(std::string_view attr, std::size_t attr_start, std::uint32_t parent)
+		  -> result<std::uint32_t>
 		{
 			if (!attr.empty() && !detail::is_attribute_description(attr)) {
 				return error("invalid attribute description", attr_start);
@@ -1142,9 +1144,9 @@ namespace {
 
 }// namespace
 
-result<filter> filter::raw(std::string_view text, std::pmr::memory_resource *mr) { return raw(text, {}, mr); }
+auto filter::raw(std::string_view text, std::pmr::memory_resource *mr) -> result<filter> { return raw(text, {}, mr); }
 
-result<filter> filter::raw(std::string_view text, const filter_limits &limits, std::pmr::memory_resource *mr)
+auto filter::raw(std::string_view text, const filter_limits &limits, std::pmr::memory_resource *mr) -> result<filter>
 {
 	filter out{ allocator_type(mr) };
 	if (!text.empty() && text.front() == '(') {
@@ -1164,7 +1166,7 @@ result<filter> filter::raw(std::string_view text, const filter_limits &limits, s
 	return out;
 }
 
-result<std::pmr::string> unescape_filter_value(std::string_view text, std::pmr::memory_resource *mr)
+auto unescape_filter_value(std::string_view text, std::pmr::memory_resource *mr) -> result<std::pmr::string>
 {
 	std::pmr::string out(mr);
 	out.reserve(text.size());
@@ -1188,7 +1190,7 @@ result<std::pmr::string> unescape_filter_value(std::string_view text, std::pmr::
 
 namespace detail {
 
-	result<void> check_filter(const filter &f, const filter_limits &limits)
+	auto check_filter(const filter &f, const filter_limits &limits) -> result<void>
 	{
 		if (f.empty()) {
 			return fail(client_errc::invalid_filter, "filter: empty");
@@ -1282,7 +1284,7 @@ namespace detail {
 
 }// namespace detail
 
-result<void> encode_filter(ber::writer &w, const filter &f, const filter_limits &limits)
+auto encode_filter(ber::writer &w, const filter &f, const filter_limits &limits) -> result<void>
 {
 	if (auto r = detail::check_filter(f, limits); !r) {
 		return r;
@@ -1295,14 +1297,14 @@ result<void> encode_filter(ber::writer &w, const filter &f, const filter_limits 
 
 namespace {
 
-	std::unexpected<error> bad(std::string_view what, std::size_t offset)
+	auto bad(std::string_view what, std::size_t offset) -> std::unexpected<error>
 	{
 		return fail(client_errc::decode_error, detail::format("filter: {} at offset {}", what, offset));
 	}
 
 	// RFC 4511 section 4: unknown trailing SEQUENCE elements are ignored (but
 	// must be well-formed).
-	result<void> skip_rest(ber::reader &r)
+	auto skip_rest(ber::reader &r) -> result<void>
 	{
 		while (!r.empty()) {
 			auto e = r.read();
@@ -1318,7 +1320,7 @@ namespace {
 	  public:
 		filter_decoder(const filter_limits &limits, filter &out) : limits_(limits), out_(out) {}
 
-		result<void> decode(ber::reader &r)
+		auto decode(ber::reader &r) -> result<void>
 		{
 			auto root = node(r, 1, npos);
 			if (!root) {
@@ -1330,7 +1332,7 @@ namespace {
 		}
 
 	  private:
-		std::uint32_t add(kind k, std::uint32_t parent)
+		auto add(kind k, std::uint32_t parent) -> std::uint32_t
 		{
 			const std::uint32_t n = access::add_node(out_, access::k(k));
 			if (parent != npos) {
@@ -1339,7 +1341,7 @@ namespace {
 			return n;
 		}
 
-		result<std::string_view> read_attr(ber::reader &r, ber::tag t = ber::tags::octet_string)
+		auto read_attr(ber::reader &r, ber::tag t = ber::tags::octet_string) -> result<std::string_view>
 		{
 			const std::size_t at = r.offset();
 			auto s = r.read_octet_string(t);
@@ -1353,7 +1355,7 @@ namespace {
 			return text;
 		}
 
-		result<std::uint32_t> ava(ber::reader &r, ber::tag t, kind k, std::uint32_t parent)
+		auto ava(ber::reader &r, ber::tag t, kind k, std::uint32_t parent) -> result<std::uint32_t>
 		{
 			auto sub = r.enter(t);
 			if (!sub) {
@@ -1376,7 +1378,7 @@ namespace {
 			return n;
 		}
 
-		result<std::uint32_t> substrings(ber::reader &r, ber::tag t, std::uint32_t parent)
+		auto substrings(ber::reader &r, ber::tag t, std::uint32_t parent) -> result<std::uint32_t>
 		{
 			const std::size_t at = r.offset();
 			auto sub = r.enter(t);
@@ -1441,7 +1443,7 @@ namespace {
 			return n;
 		}
 
-		result<std::uint32_t> extensible(ber::reader &r, ber::tag t, std::uint32_t parent)
+		auto extensible(ber::reader &r, ber::tag t, std::uint32_t parent) -> result<std::uint32_t>
 		{
 			const std::size_t at = r.offset();
 			auto sub = r.enter(t);
@@ -1510,7 +1512,7 @@ namespace {
 
 		// Bounded recursion: depth never exceeds limits_.max_depth. The
 		// element count is checked before anything is allocated for the element.
-		result<std::uint32_t> node(ber::reader &r, std::size_t depth, std::uint32_t parent)
+		auto node(ber::reader &r, std::size_t depth, std::uint32_t parent) -> result<std::uint32_t>
 		{
 			const std::size_t at = r.offset();
 			if (depth > limits_.max_depth) {
@@ -1592,7 +1594,7 @@ namespace {
 
 }// namespace
 
-result<filter> decode_filter(ber::reader &r, const filter_limits &limits, std::pmr::memory_resource *mr)
+auto decode_filter(ber::reader &r, const filter_limits &limits, std::pmr::memory_resource *mr) -> result<filter>
 {
 	ber::reader copy = r;
 	filter out{ filter::allocator_type(mr) };

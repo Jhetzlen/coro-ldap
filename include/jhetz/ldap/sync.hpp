@@ -66,114 +66,116 @@ class connection
 	// connect().
 	explicit connection(connection_options options = {});
 	connection(const connection &) = delete;
-	connection &operator=(const connection &) = delete;
+	auto operator=(const connection &) -> connection & = delete;
 	~connection();
 
 	// Connects (and with options.start_tls, upgrades). Replaces (closes) a
 	// previous connection.
-	[[nodiscard]] result<void> connect(url u);
+	[[nodiscard]] auto connect(url u) -> result<void>;
 	// As connect(url), to the URL `text` (url::parse); a bad URL fails with
 	// url::parse's error (client_errc::invalid_url) before connecting.
-	[[nodiscard]] result<void> connect(std::string_view text);
+	[[nodiscard]] auto connect(std::string_view text) -> result<void>;
 
 	// As ldap::connection::is_open() / is_tls(): is_tls() is true only while TLS
 	// protects the open connection (false after unbind() or close()).
-	bool is_open() const;
-	bool is_tls() const;
+	auto is_open() const -> bool;
+	auto is_tls() const -> bool;
 	// The executor of the I/O thread, e.g. to run coroutines next to the
 	// facade. Blocking methods called from there fail with would_deadlock.
-	ldap::connection::executor_type executor() const noexcept { return ioc_.get_executor(); }
+	auto executor() const noexcept -> ldap::connection::executor_type { return ioc_.get_executor(); }
 
-	[[nodiscard]] result<void> simple_bind(dn name, std::string password)
+	[[nodiscard]] auto simple_bind(dn name, std::string password) -> result<void>
 	{
 		return call([&](ldap::connection &c) { return c.simple_bind(std::move(name), std::move(password)); });
 	}
 	// `mechanism` is used on the I/O thread while the call runs.
-	[[nodiscard]] result<void> sasl_bind(sasl_mechanism &mechanism, dn name = {})
+	[[nodiscard]] auto sasl_bind(sasl_mechanism &mechanism, dn name = {}) -> result<void>
 	{
 		return call([&](ldap::connection &c) { return c.sasl_bind(mechanism, std::move(name)); });
 	}
-	[[nodiscard]] result<void> start_tls(net::tls_options options = {},
-	  std::optional<std::chrono::milliseconds> timeout = std::nullopt)
+	[[nodiscard]] auto start_tls(net::tls_options options = {},
+	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<void>
 	{
 		return call([&](ldap::connection &c) { return c.start_tls(std::move(options), timeout); });
 	}
 
-	[[nodiscard]] result<std::pmr::vector<entry>> search(search_params request,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+	[[nodiscard]] auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+	  -> result<std::pmr::vector<entry>>
 	{
 		return call([&](ldap::connection &c) { return c.search(std::move(request), mr); });
 	}
 	// Every page of a paged search (ldap::connection::search_paged), collected.
-	[[nodiscard]] result<std::pmr::vector<entry>> search_paged(search_params request,
+	[[nodiscard]] auto search_paged(search_params request,
 	  std::int32_t page_size,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::pmr::vector<entry>>;
 
-	template<described T> [[nodiscard]] result<std::vector<T>> search_as(search_params request)
+	template<described T> [[nodiscard]] auto search_as(search_params request) -> result<std::vector<T>>
 	{
 		return call([&](ldap::connection &c) { return c.search_as<T>(std::move(request)); });
 	}
 
-	[[nodiscard]] result<response> add(add_params request)
+	[[nodiscard]] auto add(add_params request) -> result<response>
 	{
 		return call([&](ldap::connection &c) { return c.add(std::move(request)); });
 	}
-	template<described T> [[nodiscard]] result<response> add(dn entry, T value, request_controls controls = {})
+	template<described T> [[nodiscard]] auto add(dn entry, T value, request_controls controls = {}) -> result<response>
 	{
 		return call(
 		  [&](ldap::connection &c) { return c.add(std::move(entry), std::move(value), std::move(controls)); });
 	}
-	[[nodiscard]] result<response> modify(modify_params request)
+	[[nodiscard]] auto modify(modify_params request) -> result<response>
 	{
 		return call([&](ldap::connection &c) { return c.modify(std::move(request)); });
 	}
 	template<described T>
-	[[nodiscard]] result<response> modify(dn object, std::vector<change<T>> changes, request_controls controls = {})
+	[[nodiscard]] auto modify(dn object, std::vector<change<T>> changes, request_controls controls = {})
+	  -> result<response>
 	{
 		return call(
 		  [&](ldap::connection &c) { return c.modify<T>(std::move(object), std::move(changes), std::move(controls)); });
 	}
-	[[nodiscard]] result<response> del(del_params request)
+	[[nodiscard]] auto del(del_params request) -> result<response>
 	{
 		return call([&](ldap::connection &c) { return c.del(std::move(request)); });
 	}
-	[[nodiscard]] result<response> modify_dn(modify_dn_params request)
+	[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<response>
 	{
 		return call([&](ldap::connection &c) { return c.modify_dn(std::move(request)); });
 	}
-	[[nodiscard]] result<bool> compare(compare_params request)
+	[[nodiscard]] auto compare(compare_params request) -> result<bool>
 	{
 		return call([&](ldap::connection &c) { return c.compare(std::move(request)); });
 	}
-	[[nodiscard]] result<extended_result> extended(extended_params request)
+	[[nodiscard]] auto extended(extended_params request) -> result<extended_result>
 	{
 		return call([&](ldap::connection &c) { return c.extended(std::move(request)); });
 	}
-	[[nodiscard]] result<std::string> who_am_i(request_controls controls = {})
+	[[nodiscard]] auto who_am_i(request_controls controls = {}) -> result<std::string>
 	{
 		return call([&](ldap::connection &c) { return c.who_am_i(std::move(controls)); });
 	}
-	[[nodiscard]] result<std::optional<std::string>> password_modify(password_modify_params request)
+	[[nodiscard]] auto password_modify(password_modify_params request) -> result<std::optional<std::string>>
 	{
 		return call([&](ldap::connection &c) { return c.password_modify(std::move(request)); });
 	}
-	[[nodiscard]] result<void> change_password(dn user,
+	[[nodiscard]] auto change_password(dn user,
 	  std::string old_password,
 	  std::string new_password,
-	  std::optional<ldap::password_method> method = std::nullopt)
+	  std::optional<ldap::password_method> method = std::nullopt) -> result<void>
 	{
 		return call([&](ldap::connection &c) {
 			return c.change_password(std::move(user), std::move(old_password), std::move(new_password), method);
 		});
 	}
-	[[nodiscard]] result<void>
-	  reset_password(dn user, std::string new_password, std::optional<ldap::password_method> method = std::nullopt)
+	[[nodiscard]] auto reset_password(dn user,
+	  std::string new_password,
+	  std::optional<ldap::password_method> method = std::nullopt) -> result<void>
 	{
 		return call(
 		  [&](ldap::connection &c) { return c.reset_password(std::move(user), std::move(new_password), method); });
 	}
 
-	[[nodiscard]] result<void> unbind();
+	[[nodiscard]] auto unbind() -> result<void>;
 	// Closes the connection at once (no UnbindRequest).
 	void close();
 

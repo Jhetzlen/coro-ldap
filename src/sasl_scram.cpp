@@ -39,26 +39,32 @@ namespace {
 		std::array<unsigned char, N> bytes{};
 		wiped() = default;
 		wiped(const wiped &) = delete;
-		wiped &operator=(const wiped &) = delete;
+		auto operator=(const wiped &) -> wiped & = delete;
 		~wiped() { OPENSSL_cleanse(bytes.data(), bytes.size()); }
-		unsigned char *data() { return bytes.data(); }
-		static constexpr std::size_t size() { return N; }
-		std::span<unsigned char, N> span() { return bytes; }
-		unsigned char &operator[](std::size_t i) { return bytes[i]; }
+		auto data() -> unsigned char * { return bytes.data(); }
+		static constexpr auto size() -> std::size_t { return N; }
+		auto span() -> std::span<unsigned char, N> { return bytes; }
+		auto operator[](std::size_t i) -> unsigned char & { return bytes[i]; }
 	};
 
 	// Error contexts say what is wrong, not the code's own text (message()
 	// appends it), and not the mechanism's name: connection::sasl_bind
 	// prefixes "sasl bind SCRAM-SHA-256".
-	std::unexpected<error> input_error(std::string_view what) { return fail(client_errc::encode_error, what); }
+	auto input_error(std::string_view what) -> std::unexpected<error> { return fail(client_errc::encode_error, what); }
 
 	// OpenSSL or ICU failed (memory, missing ICU data): the environment, not
 	// the caller's username or password.
-	std::unexpected<error> library_error(std::string_view what) { return fail(client_errc::internal_error, what); }
+	auto library_error(std::string_view what) -> std::unexpected<error>
+	{
+		return fail(client_errc::internal_error, what);
+	}
 
-	std::unexpected<error> malformed(std::string_view what) { return fail(client_errc::decode_error, what); }
+	auto malformed(std::string_view what) -> std::unexpected<error> { return fail(client_errc::decode_error, what); }
 
-	std::unexpected<error> refused(std::string_view what) { return fail(client_errc::unexpected_response, what); }
+	auto refused(std::string_view what) -> std::unexpected<error>
+	{
+		return fail(client_errc::unexpected_response, what);
+	}
 
 	// Wipes a string's whole buffer, also the bytes past size() that a move
 	// out of a short (SSO) string leaves behind.
@@ -73,7 +79,7 @@ namespace {
 
 	constexpr std::string_view b64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-	std::string base64_encode(std::span<const unsigned char> data)
+	auto base64_encode(std::span<const unsigned char> data) -> std::string
 	{
 		const std::size_t n = data.size();
 		std::string out;
@@ -101,12 +107,12 @@ namespace {
 		return out;
 	}
 
-	std::string base64_encode(std::string_view s)
+	auto base64_encode(std::string_view s) -> std::string
 	{
 		return base64_encode(std::span(reinterpret_cast<const unsigned char *>(s.data()), s.size()));
 	}
 
-	int b64_value(char c)
+	auto b64_value(char c) -> int
 	{
 		if (c >= 'A' && c <= 'Z') {
 			return c - 'A';
@@ -128,7 +134,7 @@ namespace {
 
 	// Strict decoding: length a multiple of 4, padding only at the end, no
 	// stray bits in the last group (RFC 4648 section 3.5 canonical form).
-	std::optional<std::string> base64_decode(std::string_view s)
+	auto base64_decode(std::string_view s) -> std::optional<std::string>
 	{
 		if (s.size() % 4 != 0) {
 			return std::nullopt;
@@ -174,7 +180,7 @@ namespace {
 		std::vector<T> v;
 		explicit wiped_buffer(std::size_t n) : v(n) {}
 		wiped_buffer(const wiped_buffer &) = delete;
-		wiped_buffer &operator=(const wiped_buffer &) = delete;
+		auto operator=(const wiped_buffer &) -> wiped_buffer & = delete;
 		~wiped_buffer() { OPENSSL_cleanse(v.data(), v.size() * sizeof(T)); }
 	};
 
@@ -187,7 +193,7 @@ namespace {
 	// are refused) or as a "query" (they are passed through).
 	enum class prep_kind : std::uint8_t { query, stored };
 
-	std::unexpected<error> icu_failure(std::string_view what, UErrorCode status)
+	auto icu_failure(std::string_view what, UErrorCode status) -> std::unexpected<error>
 	{
 		return library_error(std::string(what) + ": SASLprep failed (ICU " + u_errorName(status) + ")");
 	}
@@ -207,7 +213,7 @@ namespace {
 	// characters and leaves them in the moved-from one). Every buffer of
 	// ours that held the text is wiped; ICU's internal working buffers
 	// cannot be.
-	result<void> saslprep(std::string_view s, std::string_view what, prep_kind kind, std::string &out)
+	auto saslprep(std::string_view s, std::string_view what, prep_kind kind, std::string &out) -> result<void>
 	{
 		wipe_string(out);
 		const std::string name(what);
@@ -292,7 +298,7 @@ namespace {
 	}
 
 	// saslname (RFC 5802 section 5.1): '=' -> "=3D", ',' -> "=2C".
-	std::string escape_saslname(std::string_view s)
+	auto escape_saslname(std::string_view s) -> std::string
 	{
 		std::string out;
 		out.reserve(s.size());
@@ -309,7 +315,7 @@ namespace {
 	}
 
 	// printable (RFC 5802 section 7): %x21-2B / %x2D-7E, i.e. no ','.
-	bool printable(std::string_view s)
+	auto printable(std::string_view s) -> bool
 	{
 		return std::ranges::none_of(s, [](char ch) {
 			const auto c = static_cast<unsigned char>(ch);
@@ -324,10 +330,10 @@ namespace {
 	{
 		std::string_view rest;
 		bool more = true;// false once the last attribute was read
-		bool done() const { return !more; }
+		auto done() const -> bool { return !more; }
 		// The next attribute: its name (a letter) and value. nullopt if it is
 		// not of the form ALPHA "=" value (an empty one after a trailing ',').
-		std::optional<std::pair<char, std::string_view>> next()
+		auto next() -> std::optional<std::pair<char, std::string_view>>
 		{
 			if (!more) {
 				return std::nullopt;
@@ -351,7 +357,7 @@ namespace {
 		}
 	};
 
-	std::optional<std::uint32_t> parse_count(std::string_view s)
+	auto parse_count(std::string_view s) -> std::optional<std::uint32_t>
 	{
 		if (s.empty() || s.size() > 10 || s[0] == '0') {
 			return std::nullopt;
@@ -371,7 +377,7 @@ namespace {
 
 	// A server-supplied string for an error context, quoted, sanitized and
 	// cut to at most 64 bytes (detail::append_sanitized).
-	std::string quoted(std::string_view s)
+	auto quoted(std::string_view s) -> std::string
 	{
 		std::string out = "\"";
 		detail::append_sanitized(out, s, 64);
@@ -383,8 +389,8 @@ namespace {
 
 	// HMAC-SHA-256 of `data` keyed with `key`, into `out`. False if OpenSSL
 	// fails.
-	[[nodiscard]] bool
-	  hmac(std::span<const unsigned char> key, std::string_view data, std::span<unsigned char, key_size> out)
+	[[nodiscard]] auto
+	  hmac(std::span<const unsigned char> key, std::string_view data, std::span<unsigned char, key_size> out) -> bool
 	{
 		unsigned int n = 0;
 		const unsigned char *r = HMAC(EVP_sha256(),
@@ -407,10 +413,10 @@ namespace {
 	//   ClientProof     := ClientKey XOR ClientSignature
 	//   ServerKey       := HMAC(SaltedPassword, "Server Key")
 	//   ServerSignature := HMAC(ServerKey, AuthMessage)
-	[[nodiscard]] bool keys(std::span<const unsigned char, key_size> salted,
+	[[nodiscard]] auto keys(std::span<const unsigned char, key_size> salted,
 	  std::string_view auth_message,
 	  std::string &proof_b64,
-	  std::span<unsigned char, key_size> server_signature)
+	  std::span<unsigned char, key_size> server_signature) -> bool
 	{
 		wiped<key_size> client_key, stored_key, client_signature, proof, server_key;
 		if (!hmac(salted, "Client Key", client_key.span())
@@ -429,10 +435,10 @@ namespace {
 	}
 
 	// SaltedPassword := Hi(Normalize(password), salt, i), PBKDF2-HMAC-SHA-256.
-	[[nodiscard]] bool salted_password(std::string_view password,
+	[[nodiscard]] auto salted_password(std::string_view password,
 	  std::string_view salt,
 	  std::uint32_t iterations,
-	  std::span<unsigned char, key_size> out)
+	  std::span<unsigned char, key_size> out) -> bool
 	{
 		return PKCS5_PBKDF2_HMAC(password.data(),
 				 static_cast<int>(password.size()),
@@ -483,7 +489,7 @@ struct sasl_scram_sha256::derivation
 
 	derivation() = default;
 	derivation(const derivation &) = delete;
-	derivation &operator=(const derivation &) = delete;
+	auto operator=(const derivation &) -> derivation & = delete;
 	~derivation()
 	{
 		wipe_string(password);
@@ -558,7 +564,7 @@ void sasl_scram_sha256::collect() noexcept
 	cache_iterations_ = d->iterations;
 }
 
-result<std::optional<std::string>> sasl_scram_sha256::start()
+auto sasl_scram_sha256::start() -> result<std::optional<std::string>>
 {
 	collect();// the cache, from an offloaded step of the last bind
 	state_ = state::idle;
@@ -622,7 +628,7 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 	return std::optional<std::string>(gs2_header_ + client_first_bare_);
 }
 
-result<std::optional<std::string>> sasl_scram_sha256::step(std::optional<std::string_view> challenge)
+auto sasl_scram_sha256::step(std::optional<std::string_view> challenge) -> result<std::optional<std::string>>
 {
 	switch (state_) {
 	case state::sent_first:
@@ -714,8 +720,8 @@ auto sasl_scram_sha256::parse_server_first(std::string_view message) -> result<s
 namespace {
 	// AuthMessage := client-first-message-bare + "," + server-first-message
 	//                + "," + client-final-message-without-proof
-	std::string
-	  auth_message_of(std::string_view first_bare, std::string_view server_first, std::string_view without_proof)
+	auto auth_message_of(std::string_view first_bare, std::string_view server_first, std::string_view without_proof)
+	  -> std::string
 	{
 		std::string out(first_bare);
 		out += ',';
@@ -726,7 +732,7 @@ namespace {
 	}
 }// namespace
 
-result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_view message)
+auto sasl_scram_sha256::client_final(std::string_view message) -> result<std::optional<std::string>>
 {
 	state_ = state::idle;// any failure below ends the exchange
 	// The prepared password is needed only for PBKDF2, below.
@@ -763,7 +769,7 @@ result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_v
 	return std::optional<std::string>(without_proof + ",p=" + proof);
 }
 
-sasl_work sasl_scram_sha256::offload_step(std::optional<std::string_view> challenge)
+auto sasl_scram_sha256::offload_step(std::optional<std::string_view> challenge) -> sasl_work
 {
 	if (!can_offload_ || state_ != state::sent_first || !challenge) {
 		return {};
@@ -808,7 +814,7 @@ sasl_work sasl_scram_sha256::offload_step(std::optional<std::string_view> challe
 	};
 }
 
-result<void> sasl_scram_sha256::verify(std::string_view server_final)
+auto sasl_scram_sha256::verify(std::string_view server_final) -> result<void>
 {
 	collect();
 	state_ = state::idle;
@@ -843,7 +849,7 @@ result<void> sasl_scram_sha256::verify(std::string_view server_final)
 	return {};
 }
 
-result<void> sasl_scram_sha256::complete(std::optional<std::string_view> server_creds)
+auto sasl_scram_sha256::complete(std::optional<std::string_view> server_creds) -> result<void>
 {
 	switch (state_) {
 	case state::sent_final:

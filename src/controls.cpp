@@ -14,15 +14,15 @@ namespace jhetz::ldap {
 
 namespace {
 
-	control
-	  value_control(std::string_view oid, bool critical, const ber::writer &w, const control::allocator_type &alloc)
+	auto value_control(std::string_view oid, bool critical, const ber::writer &w, const control::allocator_type &alloc)
+	  -> control
 	{
 		return control(oid, critical, detail::as_text(w.bytes()), alloc);
 	}
 
 	// SortKeyList ::= SEQUENCE OF SEQUENCE { attributeType AttributeDescription,
 	//   orderingRule [0] MatchingRuleId OPTIONAL, reverseOrder [1] BOOLEAN DEFAULT FALSE }
-	result<control> encode_sort(const server_side_sort &v, std::pmr::memory_resource *mr)
+	auto encode_sort(const server_side_sort &v, std::pmr::memory_resource *mr) -> result<control>
 	{
 		if (v.keys.empty()) {
 			return fail(client_errc::encode_error, "server side sort: no sort keys");
@@ -51,10 +51,10 @@ namespace {
 	}
 
 	// AttributeSelection ::= SEQUENCE OF selector LDAPString (RFC 4527 section 3.1).
-	result<control> encode_selection(std::string_view oid,
+	auto encode_selection(std::string_view oid,
 	  const std::vector<std::string> &attributes,
 	  bool critical,
-	  std::pmr::memory_resource *mr)
+	  std::pmr::memory_resource *mr) -> result<control>
 	{
 		ber::writer w{ ber::writer::allocator_type(mr) };
 		w.constructed(ber::tags::sequence, [&](ber::writer &list) {
@@ -68,8 +68,8 @@ namespace {
 	// The first control of type `oid`, decoded by `decode` (which returns
 	// a result<T>); nullopt if there is none.
 	template<class T, class Decode>
-	result<std::optional<T>>
-	  find_decoded(const std::pmr::vector<control> &controls, std::string_view oid, Decode decode)
+	auto find_decoded(const std::pmr::vector<control> &controls, std::string_view oid, Decode decode)
+	  -> result<std::optional<T>>
 	{
 		const auto it = std::ranges::find(controls, oid, &control::type);
 		if (it == controls.end()) {
@@ -78,8 +78,8 @@ namespace {
 		return decode(*it).transform([](T &&v) { return std::optional<T>(std::move(v)); });
 	}
 
-	result<std::optional<entry>>
-	  find_read_entry(const std::pmr::vector<control> &controls, std::string_view oid, std::pmr::memory_resource *mr)
+	auto find_read_entry(const std::pmr::vector<control> &controls, std::string_view oid, std::pmr::memory_resource *mr)
+	  -> result<std::optional<entry>>
 	{
 		return find_decoded<entry>(controls, oid, [mr](const control &c) {
 			decode_options options;
@@ -92,7 +92,7 @@ namespace {
 
 }// namespace
 
-result<control> to_control(const request_control &c, std::pmr::memory_resource *mr)
+auto to_control(const request_control &c, std::pmr::memory_resource *mr) -> result<control>
 {
 	return std::visit(
 	  [mr](const auto &v) -> result<control> {
@@ -130,7 +130,7 @@ result<control> to_control(const request_control &c, std::pmr::memory_resource *
 	  c);
 }
 
-result<void> append_controls(const request_controls &controls, std::pmr::vector<control> &out)
+auto append_controls(const request_controls &controls, std::pmr::vector<control> &out) -> result<void>
 {
 	for (const auto &c : controls) {
 		auto wire = to_control(c, out.get_allocator().resource());
@@ -142,26 +142,28 @@ result<void> append_controls(const request_controls &controls, std::pmr::vector<
 	return {};
 }
 
-result<std::optional<paged_results>> find_paged(const std::pmr::vector<control> &controls,
-  std::pmr::memory_resource *mr)
+auto find_paged(const std::pmr::vector<control> &controls, std::pmr::memory_resource *mr)
+  -> result<std::optional<paged_results>>
 {
 	return find_decoded<paged_results>(
 	  controls, paged_results_oid, [mr](const control &c) { return decode_paged_results(c, mr); });
 }
 
-result<std::optional<sort_result>> find_sort_result(const std::pmr::vector<control> &controls,
-  std::pmr::memory_resource *mr)
+auto find_sort_result(const std::pmr::vector<control> &controls, std::pmr::memory_resource *mr)
+  -> result<std::optional<sort_result>>
 {
 	return find_decoded<sort_result>(
 	  controls, sort_response_oid, [mr](const control &c) { return decode_sort_result(c, mr); });
 }
 
-result<std::optional<entry>> find_pre_read(const std::pmr::vector<control> &controls, std::pmr::memory_resource *mr)
+auto find_pre_read(const std::pmr::vector<control> &controls, std::pmr::memory_resource *mr)
+  -> result<std::optional<entry>>
 {
 	return find_read_entry(controls, pre_read_oid, mr);
 }
 
-result<std::optional<entry>> find_post_read(const std::pmr::vector<control> &controls, std::pmr::memory_resource *mr)
+auto find_post_read(const std::pmr::vector<control> &controls, std::pmr::memory_resource *mr)
+  -> result<std::optional<entry>>
 {
 	return find_read_entry(controls, post_read_oid, mr);
 }

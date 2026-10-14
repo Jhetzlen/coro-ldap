@@ -546,8 +546,8 @@ Value conversion is an extension point, like `std::formatter`:
 
 ```cpp
 template<> struct jhetz::ldap::value_traits<my_type> {
-    static ldap::result<my_type> decode(std::string_view raw);  // conversion_failed on bad input
-    static std::string encode(const my_type &v);
+    static auto decode(std::string_view raw) -> ldap::result<my_type>;  // conversion_failed on bad input
+    static auto encode(const my_type &v) -> std::string;
 };
 ```
 
@@ -687,7 +687,7 @@ struct error {
     std::vector<url>        referrals;   // from a referral result
     std::string             context;     // client-side path, e.g.
                                          // "search ou=people: entry uid=x: attribute uidNumber"
-    std::string message() const;         // everything above, human readable
+    auto message() const -> std::string; // everything above, human readable
 };
 
 template<class T> using result = std::expected<T, error>;

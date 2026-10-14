@@ -35,13 +35,13 @@ namespace {
 
 using resources = std::vector<std::pmr::memory_resource *>;
 
-std::pmr::memory_resource *mr(const std::pmr::string &s) { return s.get_allocator().resource(); }
+auto mr(const std::pmr::string &s) -> std::pmr::memory_resource * { return s.get_allocator().resource(); }
 
 // Resources of the members that get_allocator() does not stand for (optional
 // members, nested elements). The default: none.
 struct no_members
 {
-	template<class T> resources operator()(const T &) const { return {}; }
+	template<class T> auto operator()(const T &) const -> resources { return {}; }
 };
 
 template<class T, class Members> void check_on(const T &x, std::pmr::memory_resource *r, const Members &members)
@@ -140,21 +140,21 @@ template<class T, class Members = no_members> void check_value_semantics(const T
 const std::string_view long_dn = "uid=a-user-with-a-long-name,ou=people,dc=example,dc=org";
 const std::string_view long_value = "a value long enough to allocate";
 
-ldap::ldap_result sample_result()
+auto sample_result() -> ldap::ldap_result
 {
 	return { 32, long_dn, "a diagnostic message long enough", { "ldap://referral.example.org/dc=example,dc=org" } };
 }
 
-ldap::control sample_control() { return { "1.2.840.113556.1.4.319", true, long_value }; }
+auto sample_control() -> ldap::control { return { "1.2.840.113556.1.4.319", true, long_value }; }
 
-ldap::sasl_auth sample_sasl() { return { "SCRAM-SHA-256-PLUS-LONG", "n,,n=user,r=a-long-client-nonce" }; }
+auto sample_sasl() -> ldap::sasl_auth { return { "SCRAM-SHA-256-PLUS-LONG", "n,,n=user,r=a-long-client-nonce" }; }
 
-ldap::modify_dn_request sample_modify_dn()
+auto sample_modify_dn() -> ldap::modify_dn_request
 {
 	return { long_dn, "uid=a-new-rdn-long-enough", false, "ou=a-new-superior,dc=example,dc=org" };
 }
 
-resources result_members(const ldap::ldap_result &r)
+auto result_members(const ldap::ldap_result &r) -> resources
 {
 	return { mr(r.diagnostic_message), r.referral.get_allocator().resource(), mr(r.referral.at(0)) };
 }

@@ -30,13 +30,13 @@ constexpr std::string_view rfc_client_final =
   "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=";
 constexpr std::string_view rfc_server_final = "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=";
 
-ldap::sasl_scram_sha256 rfc_mech(std::string password = "pencil")
+auto rfc_mech(std::string password = "pencil") -> ldap::sasl_scram_sha256
 {
 	return ldap::detail::scram_test_access::with_nonce("user", std::move(password), "", std::string(rfc_nonce));
 }
 
 // The response of a start() or step() that must succeed with one.
-std::string response(ldap::result<std::optional<std::string>> r)
+auto response(ldap::result<std::optional<std::string>> r) -> std::string
 {
 	REQUIRE(r.has_value());
 	REQUIRE(r->has_value());
@@ -51,7 +51,7 @@ void to_client_final(ldap::sasl_scram_sha256 &m)
 }
 
 // The error of a step() given `server_first` after start().
-ldap::error first_error(std::string_view server_first)
+auto first_error(std::string_view server_first) -> ldap::error
 {
 	auto m = rfc_mech();
 	REQUIRE(m.start().has_value());
@@ -60,7 +60,7 @@ ldap::error first_error(std::string_view server_first)
 	return r.error();
 }
 
-ldap::error final_error(std::optional<std::string_view> server_final)
+auto final_error(std::optional<std::string_view> server_final) -> ldap::error
 {
 	auto m = rfc_mech();
 	to_client_final(m);
@@ -69,7 +69,7 @@ ldap::error final_error(std::optional<std::string_view> server_final)
 	return r.error();
 }
 
-ldap::error start_error(std::string user, std::string password, std::string authz = {})
+auto start_error(std::string user, std::string password, std::string authz = {}) -> ldap::error
 {
 	ldap::sasl_scram_sha256 m(std::move(user), std::move(password), std::move(authz));
 	auto r = m.start();
@@ -152,7 +152,7 @@ TEST_CASE("scram: random client nonces", "[sasl][scram]")
 namespace {
 
 // Bytes as hex, for INFO().
-std::string hex(std::string_view s)
+auto hex(std::string_view s) -> std::string
 {
 	std::ostringstream out;
 	for (const char c : s) {
@@ -162,7 +162,7 @@ std::string hex(std::string_view s)
 }
 
 // The username as start() sends it (SASLprep'ed and escaped).
-std::string sent_username(std::string username)
+auto sent_username(std::string username) -> std::string
 {
 	auto m = ldap::detail::scram_test_access::with_nonce(std::move(username), "pencil", "", "fixednonce");
 	const std::string first = response(m.start());
@@ -173,7 +173,7 @@ std::string sent_username(std::string username)
 
 // The client-final-message for `password` (fixed username, nonce and
 // server-first-message): equal for passwords that SASLprep makes equal.
-std::string client_final_for(std::string password)
+auto client_final_for(std::string password) -> std::string
 {
 	auto m = ldap::detail::scram_test_access::with_nonce("user", std::move(password), "", "fixednonce");
 	REQUIRE(m.start().has_value());

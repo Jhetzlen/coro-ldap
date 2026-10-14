@@ -144,27 +144,27 @@ class sasl_scram_sha256 final : public sasl_mechanism
 
 	// Holds a password: not copyable, not movable (no stray copies to wipe).
 	sasl_scram_sha256(const sasl_scram_sha256 &) = delete;
-	sasl_scram_sha256 &operator=(const sasl_scram_sha256 &) = delete;
+	auto operator=(const sasl_scram_sha256 &) -> sasl_scram_sha256 & = delete;
 
-	std::string_view name() const noexcept override { return "SCRAM-SHA-256"; }
+	auto name() const noexcept -> std::string_view override { return "SCRAM-SHA-256"; }
 	// Notes whether sasl_bind can run a step on another thread
 	// (sasl_bind_context::can_offload).
 	void prepare(const sasl_bind_context &context) override;
 	// client-first-message: GS2 header, n=<username>, r=<client nonce>.
-	[[nodiscard]] result<std::optional<std::string>> start() override;
+	[[nodiscard]] auto start() -> result<std::optional<std::string>> override;
 	// After the client-first-message: the server-first-message gives the
 	// client-final-message (c=, r=, p=<proof>), PBKDF2 included. After the
 	// client-final-message (a server that sends its server-final-message as
 	// a challenge rather than with the success result): verifies it and
 	// answers with an empty response.
-	[[nodiscard]] result<std::optional<std::string>> step(std::optional<std::string_view> challenge) override;
+	[[nodiscard]] auto step(std::optional<std::string_view> challenge) -> result<std::optional<std::string>> override;
 	// The work of step() on the server-first-message when its PBKDF2 is to
 	// run on a thread of its own (above options.offload_above_iterations,
 	// not cached, after a prepare() that allowed it); empty otherwise, step()
 	// then does it (a malformed message included: step() reports it).
-	[[nodiscard]] sasl_work offload_step(std::optional<std::string_view> challenge) override;
+	[[nodiscard]] auto offload_step(std::optional<std::string_view> challenge) -> sasl_work override;
 	// Verifies the server-final-message ("v=") unless step() already did.
-	[[nodiscard]] result<void> complete(std::optional<std::string_view> server_creds) override;
+	[[nodiscard]] auto complete(std::optional<std::string_view> server_creds) -> result<void> override;
 
   private:
 	friend struct detail::scram_test_access;
@@ -179,10 +179,10 @@ class sasl_scram_sha256 final : public sasl_mechanism
 	struct server_first;// the parsed server-first-message
 	struct derivation;// PBKDF2 and the keys, shared with an offloaded step
 
-	result<server_first> parse_server_first(std::string_view message);
-	result<std::optional<std::string>> client_final(std::string_view message);
+	auto parse_server_first(std::string_view message) -> result<server_first>;
+	auto client_final(std::string_view message) -> result<std::optional<std::string>>;
 	void collect() noexcept;
-	result<void> verify(std::string_view server_final);
+	auto verify(std::string_view server_final) -> result<void>;
 	void wipe() noexcept;
 	void wipe_cache() noexcept;
 

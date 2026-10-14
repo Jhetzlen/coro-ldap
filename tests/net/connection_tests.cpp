@@ -794,13 +794,13 @@ using entries = ldap::result<std::pmr::vector<ldap::entry>>;
 using event_race = std::variant<std::error_code, entries, std::tuple<>>;
 
 // A search raced against `event`.
-capy::task<event_race> search_or(ldap::connection &c, capy::async_event &event)
+auto search_or(ldap::connection &c, capy::async_event &event) -> capy::task<event_race>
 {
 	co_return co_await capy::when_any(ldap::raceable(c.search({})), event.wait());
 }
 
 // A search raced against a timer.
-capy::task<event_race> search_or_delay(ldap::connection &c, std::chrono::milliseconds d)
+auto search_or_delay(ldap::connection &c, std::chrono::milliseconds d) -> capy::task<event_race>
 {
 	co_return co_await capy::when_any(ldap::raceable(c.search({})), corosio::delay(d));
 }
@@ -808,7 +808,7 @@ capy::task<event_race> search_or_delay(ldap::connection &c, std::chrono::millise
 using bind_race = std::variant<std::error_code, ldap::result<void>, std::tuple<>>;
 
 // A simple bind raced against a timer.
-capy::task<bind_race> bind_or_delay(ldap::connection &c, std::chrono::milliseconds d)
+auto bind_or_delay(ldap::connection &c, std::chrono::milliseconds d) -> capy::task<bind_race>
 {
 	co_return co_await capy::when_any(
 	  ldap::raceable(c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")), corosio::delay(d));
@@ -1079,7 +1079,7 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 namespace {
 
 // Awaits `op`, then stops `ioc`, so that run() returns on the thread running it.
-capy::task<entries> then_stop_ioc(corosio::io_context &ioc, capy::task<entries> op)
+auto then_stop_ioc(corosio::io_context &ioc, capy::task<entries> op) -> capy::task<entries>
 {
 	auto r = co_await std::move(op);
 	ioc.stop();
@@ -1281,7 +1281,7 @@ namespace {
 // random (each search's own responses stay in order): two entries under
 // its base DN and a SearchResultDone. Abandoned requests are answered too:
 // the client must drop those late responses.
-capy::task<void> serve_shuffled(net::transport t, std::size_t n, std::uint64_t seed, server_log &log)
+auto serve_shuffled(net::transport t, std::size_t n, std::uint64_t seed, server_log &log) -> capy::task<void>
 {
 	net::read_buffer buf;
 	std::vector<std::vector<std::string>> queues;
@@ -1331,7 +1331,7 @@ capy::task<void> serve_shuffled(net::transport t, std::size_t n, std::uint64_t s
 }
 
 // A search whose entries must all lie under its own base.
-capy::task<std::string> checked_search(ldap::connection &c, std::string base)
+auto checked_search(ldap::connection &c, std::string base) -> capy::task<std::string>
 {
 	auto d = ldap::dn::parse(base);
 	if (!d) {

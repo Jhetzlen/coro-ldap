@@ -13,7 +13,7 @@
 namespace jhetz::ldap {
 namespace {
 
-	std::string_view result_text(int value) noexcept
+	auto result_text(int value) noexcept -> std::string_view
 	{
 		switch (value) {
 		case 0:
@@ -101,7 +101,7 @@ namespace {
 		}
 	}
 
-	std::string_view client_text(int value) noexcept
+	auto client_text(int value) noexcept -> std::string_view
 	{
 		switch (static_cast<client_errc>(value)) {
 		case client_errc::decode_error:
@@ -161,7 +161,7 @@ namespace {
 	}
 
 	// The condition of each code (DESIGN.md section 5), nullopt for none.
-	std::optional<cond> result_cond(int value) noexcept
+	auto result_cond(int value) noexcept -> std::optional<cond>
 	{
 		switch (static_cast<errc>(value)) {
 		case errc::no_such_object:
@@ -198,7 +198,7 @@ namespace {
 		}
 	}
 
-	std::optional<cond> client_cond(int value) noexcept
+	auto client_cond(int value) noexcept -> std::optional<cond>
 	{
 		switch (static_cast<client_errc>(value)) {
 		case client_errc::decode_error:
@@ -231,7 +231,7 @@ namespace {
 
 	// Codes of other categories: by generic condition, or by category name
 	// for Capy and Corosio (this library does not link them).
-	std::optional<cond> foreign_cond(const std::error_code &ec) noexcept
+	auto foreign_cond(const std::error_code &ec) noexcept -> std::optional<cond>
 	{
 		const std::string_view category = ec.category().name();
 		if (category == "boost.capy") {
@@ -278,7 +278,7 @@ namespace {
 		}
 	}
 
-	std::string_view cond_text(int value) noexcept
+	auto cond_text(int value) noexcept -> std::string_view
 	{
 		switch (static_cast<cond>(value)) {
 		case cond::not_found:
@@ -310,9 +310,9 @@ namespace {
 	class result_category_impl final : public std::error_category
 	{
 	  public:
-		const char *name() const noexcept override { return "ldap.result"; }
+		auto name() const noexcept -> const char * override { return "ldap.result"; }
 
-		std::string message(int value) const override
+		auto message(int value) const -> std::string override
 		{
 			auto text = result_text(value);
 			if (text.empty()) {
@@ -325,9 +325,9 @@ namespace {
 	class client_category_impl final : public std::error_category
 	{
 	  public:
-		const char *name() const noexcept override { return "ldap.client"; }
+		auto name() const noexcept -> const char * override { return "ldap.client"; }
 
-		std::string message(int value) const override
+		auto message(int value) const -> std::string override
 		{
 			auto text = client_text(value);
 			if (text.empty()) {
@@ -340,9 +340,9 @@ namespace {
 	class cond_category_impl final : public std::error_category
 	{
 	  public:
-		const char *name() const noexcept override { return "ldap.cond"; }
+		auto name() const noexcept -> const char * override { return "ldap.cond"; }
 
-		std::string message(int value) const override
+		auto message(int value) const -> std::string override
 		{
 			auto text = cond_text(value);
 			if (text.empty()) {
@@ -351,7 +351,7 @@ namespace {
 			return std::string(text);
 		}
 
-		bool equivalent(const std::error_code &ec, int condition) const noexcept override
+		auto equivalent(const std::error_code &ec, int condition) const noexcept -> bool override
 		{
 			std::optional<cond> c;
 			if (ec.category() == result_category()) {
@@ -367,19 +367,19 @@ namespace {
 
 }// namespace
 
-const std::error_category &result_category() noexcept
+auto result_category() noexcept -> const std::error_category &
 {
 	static const result_category_impl instance;
 	return instance;
 }
 
-const std::error_category &client_category() noexcept
+auto client_category() noexcept -> const std::error_category &
 {
 	static const client_category_impl instance;
 	return instance;
 }
 
-const std::error_category &cond_category() noexcept
+auto cond_category() noexcept -> const std::error_category &
 {
 	static const cond_category_impl instance;
 	return instance;
@@ -390,7 +390,7 @@ namespace detail {
 	namespace {
 
 		// The code point of a well-formed UTF-8 sequence.
-		constexpr char32_t code_point(std::string_view seq) noexcept
+		constexpr auto code_point(std::string_view seq) noexcept -> char32_t
 		{
 			const auto b = [&](std::size_t k) { return char32_t{ static_cast<unsigned char>(seq[k]) }; };
 			switch (seq.size()) {
@@ -406,7 +406,7 @@ namespace detail {
 		}
 
 		// C0, DEL, C1, Bidi_Control and U+2028/U+2029 (append_sanitized).
-		constexpr bool replaced(char32_t c) noexcept
+		constexpr auto replaced(char32_t c) noexcept -> bool
 		{
 			return c < 0x20 || (c >= 0x7F && c < 0xA0) || c == 0x061C || c == 0x200E || c == 0x200F
 				   || (c >= 0x2028 && c <= 0x202E)// U+2028, U+2029, U+202A-U+202E
@@ -449,7 +449,7 @@ namespace detail {
 
 }// namespace detail
 
-std::pmr::string error::message(std::pmr::memory_resource *mr) const
+auto error::message(std::pmr::memory_resource *mr) const -> std::pmr::string
 {
 	// "<context>: <code message> [<category>:<value>]; server: ...; matched DN: ...; referrals: ..."
 	// The server's text is sanitized and cut (error.hpp).

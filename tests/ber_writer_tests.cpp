@@ -14,7 +14,7 @@ using jhetz::ldap::test::hex;
 
 namespace {
 
-std::string encode_integer(std::int64_t v)
+auto encode_integer(std::int64_t v) -> std::string
 {
 	ber::writer w;
 	w.integer(v);

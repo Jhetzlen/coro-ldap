@@ -100,22 +100,22 @@ struct ldap_result
 	ldap_result(ldap_result &&) noexcept = default;
 	ldap_result(const ldap_result &other, const allocator_type &alloc);
 	ldap_result(ldap_result &&other, const allocator_type &alloc);
-	ldap_result &operator=(const ldap_result &) = default;
-	ldap_result &operator=(ldap_result &&) = default;
+	auto operator=(const ldap_result &) -> ldap_result & = default;
+	auto operator=(ldap_result &&) -> ldap_result & = default;
 	~ldap_result() = default;
 
-	allocator_type get_allocator() const noexcept { return matched_dn.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return matched_dn.get_allocator(); }
 
-	bool is_success() const noexcept { return result_code == 0; }
+	auto is_success() const noexcept -> bool { return result_code == 0; }
 
 	// The result as an ldap::error (on the default resource): code in
 	// result_category() (unknown codes keep their number and get a generic
 	// message), diagnostic, matched DN (when not empty), referral URIs and
 	// `context`. For a success result the code is 0, i.e. "no error"; callers
 	// check is_success() first.
-	[[nodiscard]] error to_error(std::string_view context = {}) const;
+	[[nodiscard]] auto to_error(std::string_view context = {}) const -> error;
 
-	friend bool operator==(const ldap_result &, const ldap_result &) = default;
+	friend auto operator==(const ldap_result &, const ldap_result &) -> bool = default;
 };
 
 // Control (RFC 4511 section 4.1.11).
@@ -137,13 +137,13 @@ struct control
 	control(control &&) noexcept = default;
 	control(const control &other, const allocator_type &alloc);
 	control(control &&other, const allocator_type &alloc);
-	control &operator=(const control &other);
-	control &operator=(control &&other);
+	auto operator=(const control &other) -> control &;
+	auto operator=(control &&other) -> control &;
 	~control() = default;
 
-	allocator_type get_allocator() const noexcept { return type.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return type.get_allocator(); }
 
-	friend bool operator==(const control &, const control &) = default;
+	friend auto operator==(const control &, const control &) -> bool = default;
 };
 
 // PartialAttribute / Attribute (RFC 4511 section 4.1.7).
@@ -167,13 +167,13 @@ struct partial_attribute
 	partial_attribute(partial_attribute &&other, const allocator_type &alloc)
 	  : type(std::move(other.type), alloc), values(std::move(other.values), alloc)
 	{}
-	partial_attribute &operator=(const partial_attribute &) = default;
-	partial_attribute &operator=(partial_attribute &&) = default;
+	auto operator=(const partial_attribute &) -> partial_attribute & = default;
+	auto operator=(partial_attribute &&) -> partial_attribute & = default;
 	~partial_attribute() = default;
 
-	allocator_type get_allocator() const noexcept { return type.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return type.get_allocator(); }
 
-	friend bool operator==(const partial_attribute &, const partial_attribute &) = default;
+	friend auto operator==(const partial_attribute &, const partial_attribute &) -> bool = default;
 };
 
 // AttributeValueAssertion (RFC 4511 section 4.1.8).
@@ -199,13 +199,13 @@ struct attribute_value_assertion
 	attribute_value_assertion(attribute_value_assertion &&other, const allocator_type &alloc)
 	  : attribute_desc(std::move(other.attribute_desc), alloc), assertion_value(std::move(other.assertion_value), alloc)
 	{}
-	attribute_value_assertion &operator=(const attribute_value_assertion &) = default;
-	attribute_value_assertion &operator=(attribute_value_assertion &&) = default;
+	auto operator=(const attribute_value_assertion &) -> attribute_value_assertion & = default;
+	auto operator=(attribute_value_assertion &&) -> attribute_value_assertion & = default;
 	~attribute_value_assertion() = default;
 
-	allocator_type get_allocator() const noexcept { return attribute_desc.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return attribute_desc.get_allocator(); }
 
-	friend bool operator==(const attribute_value_assertion &, const attribute_value_assertion &) = default;
+	friend auto operator==(const attribute_value_assertion &, const attribute_value_assertion &) -> bool = default;
 };
 
 // An operation that is just an LDAPResult: SearchResultDone, ModifyResponse,
@@ -225,13 +225,13 @@ template<std::uint8_t Tag> struct result_response
 	result_response(result_response &&) noexcept = default;
 	result_response(const result_response &other, const allocator_type &alloc) : result(other.result, alloc) {}
 	result_response(result_response &&other, const allocator_type &alloc) : result(std::move(other.result), alloc) {}
-	result_response &operator=(const result_response &) = default;
-	result_response &operator=(result_response &&) = default;
+	auto operator=(const result_response &) -> result_response & = default;
+	auto operator=(result_response &&) -> result_response & = default;
 	~result_response() = default;
 
-	allocator_type get_allocator() const noexcept { return result.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return result.get_allocator(); }
 
-	friend bool operator==(const result_response &, const result_response &) = default;
+	friend auto operator==(const result_response &, const result_response &) -> bool = default;
 };
 
 // ---------------------------------------------------------------- operations
@@ -249,13 +249,13 @@ struct simple_auth
 	simple_auth(simple_auth &&) noexcept = default;
 	simple_auth(const simple_auth &other, const allocator_type &alloc) : password(other.password, alloc) {}
 	simple_auth(simple_auth &&other, const allocator_type &alloc) : password(std::move(other.password), alloc) {}
-	simple_auth &operator=(const simple_auth &) = default;
-	simple_auth &operator=(simple_auth &&) = default;
+	auto operator=(const simple_auth &) -> simple_auth & = default;
+	auto operator=(simple_auth &&) -> simple_auth & = default;
 	~simple_auth() = default;
 
-	allocator_type get_allocator() const noexcept { return password.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return password.get_allocator(); }
 
-	friend bool operator==(const simple_auth &, const simple_auth &) = default;
+	friend auto operator==(const simple_auth &, const simple_auth &) -> bool = default;
 };
 
 struct sasl_auth
@@ -274,13 +274,13 @@ struct sasl_auth
 	sasl_auth(sasl_auth &&) noexcept = default;
 	sasl_auth(const sasl_auth &other, const allocator_type &alloc);
 	sasl_auth(sasl_auth &&other, const allocator_type &alloc);
-	sasl_auth &operator=(const sasl_auth &other);
-	sasl_auth &operator=(sasl_auth &&other);
+	auto operator=(const sasl_auth &other) -> sasl_auth &;
+	auto operator=(sasl_auth &&other) -> sasl_auth &;
 	~sasl_auth() = default;
 
-	allocator_type get_allocator() const noexcept { return mechanism.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return mechanism.get_allocator(); }
 
-	friend bool operator==(const sasl_auth &, const sasl_auth &) = default;
+	friend auto operator==(const sasl_auth &, const sasl_auth &) -> bool = default;
 };
 
 // [APPLICATION 0]. version is INTEGER (1 .. 127).
@@ -305,13 +305,13 @@ struct bind_request
 	bind_request(bind_request &&) noexcept = default;
 	bind_request(const bind_request &other, const allocator_type &alloc);
 	bind_request(bind_request &&other, const allocator_type &alloc);
-	bind_request &operator=(const bind_request &other);
-	bind_request &operator=(bind_request &&other);
+	auto operator=(const bind_request &other) -> bind_request &;
+	auto operator=(bind_request &&other) -> bind_request &;
 	~bind_request() = default;
 
-	allocator_type get_allocator() const noexcept { return name.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return name.get_allocator(); }
 
-	friend bool operator==(const bind_request &, const bind_request &) = default;
+	friend auto operator==(const bind_request &, const bind_request &) -> bool = default;
 };
 
 // [APPLICATION 1]
@@ -331,19 +331,19 @@ struct bind_response
 	bind_response(bind_response &&) noexcept = default;
 	bind_response(const bind_response &other, const allocator_type &alloc);
 	bind_response(bind_response &&other, const allocator_type &alloc);
-	bind_response &operator=(const bind_response &other);
-	bind_response &operator=(bind_response &&other);
+	auto operator=(const bind_response &other) -> bind_response &;
+	auto operator=(bind_response &&other) -> bind_response &;
 	~bind_response() = default;
 
-	allocator_type get_allocator() const noexcept { return result.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return result.get_allocator(); }
 
-	friend bool operator==(const bind_response &, const bind_response &) = default;
+	friend auto operator==(const bind_response &, const bind_response &) -> bool = default;
 };
 
 // [APPLICATION 2] NULL. No strings, so not allocator-aware.
 struct unbind_request
 {
-	friend bool operator==(const unbind_request &, const unbind_request &) = default;
+	friend auto operator==(const unbind_request &, const unbind_request &) -> bool = default;
 };
 
 // RFC 4511 lists 0-2 with an extension marker; 3 is subordinateSubtree
@@ -388,13 +388,13 @@ struct search_request
 	search_request(search_request &&) noexcept = default;
 	search_request(const search_request &other, const allocator_type &alloc);
 	search_request(search_request &&other, const allocator_type &alloc);
-	search_request &operator=(const search_request &) = default;
-	search_request &operator=(search_request &&) = default;
+	auto operator=(const search_request &) -> search_request & = default;
+	auto operator=(search_request &&) -> search_request & = default;
 	~search_request() = default;
 
-	allocator_type get_allocator() const noexcept { return base_object.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return base_object.get_allocator(); }
 
-	friend bool operator==(const search_request &, const search_request &) = default;
+	friend auto operator==(const search_request &, const search_request &) -> bool = default;
 };
 
 // [APPLICATION 4]
@@ -420,13 +420,13 @@ struct search_result_entry
 	search_result_entry(search_result_entry &&other, const allocator_type &alloc)
 	  : object_name(std::move(other.object_name), alloc), attributes(std::move(other.attributes), alloc)
 	{}
-	search_result_entry &operator=(const search_result_entry &) = default;
-	search_result_entry &operator=(search_result_entry &&) = default;
+	auto operator=(const search_result_entry &) -> search_result_entry & = default;
+	auto operator=(search_result_entry &&) -> search_result_entry & = default;
 	~search_result_entry() = default;
 
-	allocator_type get_allocator() const noexcept { return object_name.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return object_name.get_allocator(); }
 
-	friend bool operator==(const search_result_entry &, const search_result_entry &) = default;
+	friend auto operator==(const search_result_entry &, const search_result_entry &) -> bool = default;
 };
 
 // [APPLICATION 5]
@@ -452,13 +452,13 @@ struct search_result_reference
 	search_result_reference(search_result_reference &&other, const allocator_type &alloc)
 	  : uris(std::move(other.uris), alloc)
 	{}
-	search_result_reference &operator=(const search_result_reference &) = default;
-	search_result_reference &operator=(search_result_reference &&) = default;
+	auto operator=(const search_result_reference &) -> search_result_reference & = default;
+	auto operator=(search_result_reference &&) -> search_result_reference & = default;
 	~search_result_reference() = default;
 
-	allocator_type get_allocator() const noexcept { return uris.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return uris.get_allocator(); }
 
-	friend bool operator==(const search_result_reference &, const search_result_reference &) = default;
+	friend auto operator==(const search_result_reference &, const search_result_reference &) -> bool = default;
 };
 
 // RFC 4511 add/delete/replace with an extension marker, plus increment (3,
@@ -485,13 +485,13 @@ struct modify_change
 	modify_change(modify_change &&other, const allocator_type &alloc)
 	  : operation(other.operation), modification(std::move(other.modification), alloc)
 	{}
-	modify_change &operator=(const modify_change &) = default;
-	modify_change &operator=(modify_change &&) = default;
+	auto operator=(const modify_change &) -> modify_change & = default;
+	auto operator=(modify_change &&) -> modify_change & = default;
 	~modify_change() = default;
 
-	allocator_type get_allocator() const noexcept { return modification.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return modification.get_allocator(); }
 
-	friend bool operator==(const modify_change &, const modify_change &) = default;
+	friend auto operator==(const modify_change &, const modify_change &) -> bool = default;
 };
 
 // [APPLICATION 6]
@@ -517,13 +517,13 @@ struct modify_request
 	modify_request(modify_request &&other, const allocator_type &alloc)
 	  : object(std::move(other.object), alloc), changes(std::move(other.changes), alloc)
 	{}
-	modify_request &operator=(const modify_request &) = default;
-	modify_request &operator=(modify_request &&) = default;
+	auto operator=(const modify_request &) -> modify_request & = default;
+	auto operator=(modify_request &&) -> modify_request & = default;
 	~modify_request() = default;
 
-	allocator_type get_allocator() const noexcept { return object.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return object.get_allocator(); }
 
-	friend bool operator==(const modify_request &, const modify_request &) = default;
+	friend auto operator==(const modify_request &, const modify_request &) -> bool = default;
 };
 
 // [APPLICATION 7]
@@ -552,13 +552,13 @@ struct add_request
 	add_request(add_request &&other, const allocator_type &alloc)
 	  : entry(std::move(other.entry), alloc), attributes(std::move(other.attributes), alloc)
 	{}
-	add_request &operator=(const add_request &) = default;
-	add_request &operator=(add_request &&) = default;
+	auto operator=(const add_request &) -> add_request & = default;
+	auto operator=(add_request &&) -> add_request & = default;
 	~add_request() = default;
 
-	allocator_type get_allocator() const noexcept { return entry.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
 
-	friend bool operator==(const add_request &, const add_request &) = default;
+	friend auto operator==(const add_request &, const add_request &) -> bool = default;
 };
 
 // [APPLICATION 9]
@@ -578,13 +578,13 @@ struct del_request
 	del_request(del_request &&) noexcept = default;
 	del_request(const del_request &other, const allocator_type &alloc) : entry(other.entry, alloc) {}
 	del_request(del_request &&other, const allocator_type &alloc) : entry(std::move(other.entry), alloc) {}
-	del_request &operator=(const del_request &) = default;
-	del_request &operator=(del_request &&) = default;
+	auto operator=(const del_request &) -> del_request & = default;
+	auto operator=(del_request &&) -> del_request & = default;
 	~del_request() = default;
 
-	allocator_type get_allocator() const noexcept { return entry.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
 
-	friend bool operator==(const del_request &, const del_request &) = default;
+	friend auto operator==(const del_request &, const del_request &) -> bool = default;
 };
 
 // [APPLICATION 11]
@@ -611,13 +611,13 @@ struct modify_dn_request
 	modify_dn_request(modify_dn_request &&) noexcept = default;
 	modify_dn_request(const modify_dn_request &other, const allocator_type &alloc);
 	modify_dn_request(modify_dn_request &&other, const allocator_type &alloc);
-	modify_dn_request &operator=(const modify_dn_request &other);
-	modify_dn_request &operator=(modify_dn_request &&other);
+	auto operator=(const modify_dn_request &other) -> modify_dn_request &;
+	auto operator=(modify_dn_request &&other) -> modify_dn_request &;
 	~modify_dn_request() = default;
 
-	allocator_type get_allocator() const noexcept { return entry.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
 
-	friend bool operator==(const modify_dn_request &, const modify_dn_request &) = default;
+	friend auto operator==(const modify_dn_request &, const modify_dn_request &) -> bool = default;
 };
 
 // [APPLICATION 13]
@@ -644,13 +644,13 @@ struct compare_request
 	compare_request(compare_request &&other, const allocator_type &alloc)
 	  : entry(std::move(other.entry), alloc), ava(std::move(other.ava), alloc)
 	{}
-	compare_request &operator=(const compare_request &) = default;
-	compare_request &operator=(compare_request &&) = default;
+	auto operator=(const compare_request &) -> compare_request & = default;
+	auto operator=(compare_request &&) -> compare_request & = default;
 	~compare_request() = default;
 
-	allocator_type get_allocator() const noexcept { return entry.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
 
-	friend bool operator==(const compare_request &, const compare_request &) = default;
+	friend auto operator==(const compare_request &, const compare_request &) -> bool = default;
 };
 
 // [APPLICATION 15]. compare_true (6) / compare_false (5) are the normal outcomes.
@@ -660,7 +660,7 @@ using compare_response = result_response<15>;
 struct abandon_request
 {
 	std::int32_t message_id = 0;
-	friend bool operator==(const abandon_request &, const abandon_request &) = default;
+	friend auto operator==(const abandon_request &, const abandon_request &) -> bool = default;
 };
 
 // [APPLICATION 23]
@@ -680,13 +680,13 @@ struct extended_request
 	extended_request(extended_request &&) noexcept = default;
 	extended_request(const extended_request &other, const allocator_type &alloc);
 	extended_request(extended_request &&other, const allocator_type &alloc);
-	extended_request &operator=(const extended_request &other);
-	extended_request &operator=(extended_request &&other);
+	auto operator=(const extended_request &other) -> extended_request &;
+	auto operator=(extended_request &&other) -> extended_request &;
 	~extended_request() = default;
 
-	allocator_type get_allocator() const noexcept { return request_name.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return request_name.get_allocator(); }
 
-	friend bool operator==(const extended_request &, const extended_request &) = default;
+	friend auto operator==(const extended_request &, const extended_request &) -> bool = default;
 };
 
 // [APPLICATION 24]. An unsolicited notification is an extended_response in a
@@ -710,13 +710,13 @@ struct extended_response
 	extended_response(extended_response &&) noexcept = default;
 	extended_response(const extended_response &other, const allocator_type &alloc);
 	extended_response(extended_response &&other, const allocator_type &alloc);
-	extended_response &operator=(const extended_response &other);
-	extended_response &operator=(extended_response &&other);
+	auto operator=(const extended_response &other) -> extended_response &;
+	auto operator=(extended_response &&other) -> extended_response &;
 	~extended_response() = default;
 
-	allocator_type get_allocator() const noexcept { return result.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return result.get_allocator(); }
 
-	friend bool operator==(const extended_response &, const extended_response &) = default;
+	friend auto operator==(const extended_response &, const extended_response &) -> bool = default;
 };
 
 // [APPLICATION 25]
@@ -736,14 +736,14 @@ struct intermediate_response
 	intermediate_response(intermediate_response &&) noexcept = default;
 	intermediate_response(const intermediate_response &other, const allocator_type &alloc);
 	intermediate_response(intermediate_response &&other, const allocator_type &alloc);
-	intermediate_response &operator=(const intermediate_response &other);
-	intermediate_response &operator=(intermediate_response &&other);
+	auto operator=(const intermediate_response &other) -> intermediate_response &;
+	auto operator=(intermediate_response &&other) -> intermediate_response &;
 	~intermediate_response() = default;
 
 	// Both members may be absent, so the resource is kept separately.
-	allocator_type get_allocator() const noexcept { return alloc_; }
+	auto get_allocator() const noexcept -> allocator_type { return alloc_; }
 
-	friend bool operator==(const intermediate_response &a, const intermediate_response &b)
+	friend auto operator==(const intermediate_response &a, const intermediate_response &b) -> bool
 	{
 		return a.response_name == b.response_name && a.response_value == b.response_value;
 	}
@@ -797,13 +797,13 @@ struct message
 	message(message &&) noexcept = default;
 	message(const message &other, const allocator_type &alloc);
 	message(message &&other, const allocator_type &alloc);
-	message &operator=(const message &other);
-	message &operator=(message &&other);
+	auto operator=(const message &other) -> message &;
+	auto operator=(message &&other) -> message &;
 	~message() = default;
 
-	allocator_type get_allocator() const noexcept { return controls.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return controls.get_allocator(); }
 
-	friend bool operator==(const message &, const message &) = default;
+	friend auto operator==(const message &, const message &) -> bool = default;
 };
 
 // ---------------------------------------------------------------- codec
@@ -821,9 +821,9 @@ struct message
 // - encode(*decode(*encode(m))) == encode(m), byte for byte.
 // The first overload returns the bytes in a vector allocated from `mr`; the
 // second appends them to `w` (e.g. a reused writer, or one on an arena).
-[[nodiscard]] result<std::pmr::vector<std::byte>> encode(const message &m,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
-[[nodiscard]] result<void> encode(ber::writer &w, const message &m);
+[[nodiscard]] auto encode(const message &m, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+  -> result<std::pmr::vector<std::byte>>;
+[[nodiscard]] auto encode(ber::writer &w, const message &m) -> result<void>;
 
 // Which side sent the message being decoded.
 enum class origin {
@@ -860,8 +860,8 @@ struct decode_options
 
 // Decodes exactly one LDAPMessage, as delimited by ber::complete_message_size;
 // trailing bytes are an error (decode_error).
-[[nodiscard]] result<message> decode(std::span<const std::byte> one_complete_message,
-  const decode_options &options = {});
+[[nodiscard]] auto decode(std::span<const std::byte> one_complete_message, const decode_options &options = {})
+  -> result<message>;
 
 // The messageID and the protocolOp tag of one complete PDU, read without
 // decoding the rest or allocating: a multiplexed connection uses it to find
@@ -873,7 +873,7 @@ struct message_header
 	std::int32_t id = 0;
 	ber::tag op{};// e.g. [APPLICATION 4] for a SearchResultEntry
 };
-[[nodiscard]] result<message_header> peek_message_header(std::span<const std::byte> one_complete_message);
+[[nodiscard]] auto peek_message_header(std::span<const std::byte> one_complete_message) -> result<message_header>;
 
 // ---------------------------------------------------------------- typed controls
 
@@ -900,25 +900,25 @@ struct paged_results
 	paged_results(paged_results &&other, const allocator_type &alloc)
 	  : size(other.size), cookie(std::move(other.cookie), alloc)
 	{}
-	paged_results &operator=(const paged_results &) = default;
-	paged_results &operator=(paged_results &&) = default;
+	auto operator=(const paged_results &) -> paged_results & = default;
+	auto operator=(paged_results &&) -> paged_results & = default;
 	~paged_results() = default;
 
-	allocator_type get_allocator() const noexcept { return cookie.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return cookie.get_allocator(); }
 
-	friend bool operator==(const paged_results &, const paged_results &) = default;
+	friend auto operator==(const paged_results &, const paged_results &) -> bool = default;
 };
 
 // Fails with encode_error for a negative size. The control is allocated
 // from `mr`.
-[[nodiscard]] result<control> encode_paged_results(const paged_results &value,
+[[nodiscard]] auto encode_paged_results(const paged_results &value,
   bool criticality = false,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
 // Fails with decode_error if `c` is not a paged results control or its value
 // is missing or malformed (trailing bytes after the SEQUENCE included; unknown
 // trailing SEQUENCE elements are skipped). The result is allocated from `mr`.
-[[nodiscard]] result<paged_results> decode_paged_results(const control &c,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+[[nodiscard]] auto decode_paged_results(const control &c,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<paged_results>;
 
 // Server Side Sorting (RFC 2891). The request control (sort keys) is built
 // from ldap::server_side_sort (controls.hpp); this is the response control,
@@ -952,27 +952,27 @@ struct sort_result
 	sort_result(sort_result &&other, const allocator_type &alloc)
 	  : result_code(other.result_code), attribute_type(std::move(other.attribute_type), alloc)
 	{}
-	sort_result &operator=(const sort_result &) = default;
-	sort_result &operator=(sort_result &&) = default;
+	auto operator=(const sort_result &) -> sort_result & = default;
+	auto operator=(sort_result &&) -> sort_result & = default;
 	~sort_result() = default;
 
-	allocator_type get_allocator() const noexcept { return attribute_type.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return attribute_type.get_allocator(); }
 
-	bool is_success() const noexcept { return result_code == 0; }
+	auto is_success() const noexcept -> bool { return result_code == 0; }
 
-	friend bool operator==(const sort_result &, const sort_result &) = default;
+	friend auto operator==(const sort_result &, const sort_result &) -> bool = default;
 };
 
 // The response control (as a server sends it; for mock servers and tests).
 // Allocated from `mr`. Never fails today; result<> like the other encoders.
-[[nodiscard]] result<control> encode_sort_result(const sort_result &value,
+[[nodiscard]] auto encode_sort_result(const sort_result &value,
   bool criticality = false,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
 // Fails with decode_error if `c` is not a sort response control or its value
 // is missing or malformed (trailing bytes after the SEQUENCE included; unknown
 // trailing SEQUENCE elements are skipped). Allocated from `mr`.
-[[nodiscard]] result<sort_result> decode_sort_result(const control &c,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+[[nodiscard]] auto decode_sort_result(const control &c,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<sort_result>;
 
 // Pre-Read and Post-Read (RFC 4527). The request controls (an attribute
 // selection) are built from ldap::pre_read / ldap::post_read (controls.hpp);
@@ -984,15 +984,16 @@ inline constexpr std::string_view post_read_oid = "1.3.6.1.1.13.2";
 // The response control `oid` (pre_read_oid or post_read_oid, else
 // encode_error) carrying `entry` (for mock servers and tests). Allocated
 // from `mr`.
-[[nodiscard]] result<control> encode_read_entry(std::string_view oid,
+[[nodiscard]] auto encode_read_entry(std::string_view oid,
   const search_result_entry &entry,
   bool criticality = false,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
 // The entry of a pre-read or post-read response control. Fails with
 // decode_error if `c` is neither or has no value, and like decode() if the
 // value is not exactly one SearchResultEntry: options.max_depth and
 // options.max_elements apply, and the entry is allocated from
 // options.memory (options.from and options.filter do not matter).
-[[nodiscard]] result<search_result_entry> decode_read_entry(const control &c, const decode_options &options = {});
+[[nodiscard]] auto decode_read_entry(const control &c, const decode_options &options = {})
+  -> result<search_result_entry>;
 
 }// namespace jhetz::ldap

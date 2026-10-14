@@ -23,7 +23,7 @@ namespace {
 namespace ber = jhetz::ldap::ber;
 using jhetz::ldap::client_errc;
 
-bool same_bytes(std::span<const std::byte> a, std::span<const std::byte> b)
+auto same_bytes(std::span<const std::byte> a, std::span<const std::byte> b) -> bool
 {
 	if (a.size() != b.size()) {
 		return false;
@@ -37,7 +37,7 @@ bool same_bytes(std::span<const std::byte> a, std::span<const std::byte> b)
 }
 
 // Content octets of the single element in `encoded`.
-std::span<const std::byte> content_of(std::span<const std::byte> encoded)
+auto content_of(std::span<const std::byte> encoded) -> std::span<const std::byte>
 {
 	ber::reader r(encoded);
 	auto e = r.read();
@@ -46,7 +46,7 @@ std::span<const std::byte> content_of(std::span<const std::byte> encoded)
 	return e->content;
 }
 
-bool minimal_integer(std::span<const std::byte> c)
+auto minimal_integer(std::span<const std::byte> c) -> bool
 {
 	if (c.size() < 2) {
 		return true;
@@ -197,7 +197,7 @@ void walk(ber::reader r)
 
 }// namespace
 
-extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size)
+extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size) -> int
 {
 	const auto input = std::as_bytes(std::span(data, size));
 

@@ -46,24 +46,24 @@ class paged_search
   public:
 	paged_search() noexcept = default;
 	paged_search(paged_search &&other) noexcept;
-	paged_search &operator=(paged_search &&other) noexcept;
+	auto operator=(paged_search &&other) noexcept -> paged_search &;
 	paged_search(const paged_search &) = delete;
-	paged_search &operator=(const paged_search &) = delete;
+	auto operator=(const paged_search &) -> paged_search & = delete;
 	~paged_search();
 
 	// The next entry, nullopt after the last page, or an error (the
 	// search's, or a malformed paged results control: decode_error).
-	boost::capy::task<result<std::optional<entry>>> next();
+	auto next() -> boost::capy::task<result<std::optional<entry>>>;
 
-	bool done() const noexcept;
+	auto done() const noexcept -> bool;
 	// Pages requested so far (1 after search_paged()).
-	std::size_t pages() const noexcept;
+	auto pages() const noexcept -> std::size_t;
 	// References of every page so far, in order.
-	const string_list &references() const noexcept;
-	[[nodiscard]] std::pmr::vector<url> reference_urls(
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	auto references() const noexcept -> const string_list &;
+	[[nodiscard]] auto reference_urls(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
+	  -> std::pmr::vector<url>;
 	// Controls of the last SearchResultDone, once done().
-	const std::pmr::vector<control> &controls() const noexcept;
+	auto controls() const noexcept -> const std::pmr::vector<control> &;
 
 	struct state;// defined in src/connection/paged_search.cpp
 

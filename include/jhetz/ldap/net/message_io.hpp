@@ -60,19 +60,19 @@ class read_buffer
 	read_buffer() = default;
 	explicit read_buffer(const allocator_type &alloc) : buf_(alloc) {}
 
-	allocator_type get_allocator() const noexcept { return buf_.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return buf_.get_allocator(); }
 
 	// Unconsumed bytes (e.g. to check that nothing follows a StartTLS
 	// response before the TLS handshake).
-	std::span<const std::byte> data() const noexcept { return std::span(buf_).subspan(begin_, end_ - begin_); }
-	std::size_t size() const noexcept { return end_ - begin_; }
-	[[nodiscard]] bool empty() const noexcept { return begin_ == end_; }
-	std::size_t capacity() const noexcept { return buf_.size(); }
+	auto data() const noexcept -> std::span<const std::byte> { return std::span(buf_).subspan(begin_, end_ - begin_); }
+	auto size() const noexcept -> std::size_t { return end_ - begin_; }
+	[[nodiscard]] auto empty() const noexcept -> bool { return begin_ == end_; }
+	auto capacity() const noexcept -> std::size_t { return buf_.size(); }
 	void clear() noexcept { begin_ = end_ = 0; }
 
 	// All free space after the data, at least `n` bytes (compacting, or
 	// growing to max(size() + n, min_read)).
-	std::span<std::byte> prepare(std::size_t n);
+	auto prepare(std::size_t n) -> std::span<std::byte>;
 	// Marks `n` bytes of the prepare()d space as data.
 	void commit(std::size_t n) noexcept { end_ += n; }
 	// Drops `n` bytes from the front of the data.
@@ -103,7 +103,7 @@ class read_buffer
 //   or hostile, so drop the connection anyway;
 // - canceled / timeout if the awaiting coroutine is stopped.
 // `t` and `buf` must outlive the task (normal when it is co_awaited at once).
-boost::capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_options options = {});
+auto read_message(transport &t, read_buffer &buf, read_options options = {}) -> boost::capy::task<result<message>>;
 
 // The framing half of read_message(): reads until a complete PDU is at the
 // front of `buf` and returns its size; buf.data().first(size) are its bytes.
@@ -112,7 +112,7 @@ boost::capy::task<result<message>> read_message(transport &t, read_buffer &buf, 
 // buf.consume(size). Same errors as read_message() except decode errors.
 // Bytes received before a cancellation stay in `buf`, so a reader that is
 // stopped between PDUs can resume later without losing data.
-boost::capy::task<result<std::size_t>> read_frame(transport &t, read_buffer &buf, std::size_t max_message_size);
+auto read_frame(transport &t, read_buffer &buf, std::size_t max_message_size) -> boost::capy::task<result<std::size_t>>;
 
 // Encodes `m` and writes all of it. Encoding errors are returned before
 // anything is written. Only one write may be in flight on a transport. `m`
@@ -121,11 +121,11 @@ boost::capy::task<result<std::size_t>> read_frame(transport &t, read_buffer &buf
 // call; the second clears `w` and encodes into it, so one writer (on any
 // resource) can be reused for every message of a connection, like
 // read_buffer. `w` must outlive the task and not be used until it is done.
-boost::capy::task<result<void>>
-  write_message(transport &t, const message &m, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
-boost::capy::task<result<void>> write_message(transport &t, const message &m, ber::writer &w);
+auto write_message(transport &t, const message &m, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+  -> boost::capy::task<result<void>>;
+auto write_message(transport &t, const message &m, ber::writer &w) -> boost::capy::task<result<void>>;
 
 // Writes already encoded bytes (e.g. one or more PDUs from encode()).
-boost::capy::task<result<void>> write_bytes(transport &t, std::span<const std::byte> bytes);
+auto write_bytes(transport &t, std::span<const std::byte> bytes) -> boost::capy::task<result<void>>;
 
 }// namespace jhetz::ldap::net

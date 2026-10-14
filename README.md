@@ -55,7 +55,7 @@ Linux only.
 
 namespace ldap = jhetz::ldap;
 
-boost::capy::task<int> run(boost::corosio::io_context &ioc)
+auto run(boost::corosio::io_context &ioc) -> boost::capy::task<int>
 {
 	auto c = co_await ldap::connect(ioc, "ldap://localhost");
 	if (!c) {
@@ -82,7 +82,7 @@ boost::capy::task<int> run(boost::corosio::io_context &ioc)
 	co_return 0;
 }
 
-int main()
+auto main() -> int
 {
 	boost::corosio::io_context ioc;
 	int rc = 1;

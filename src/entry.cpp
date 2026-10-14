@@ -13,14 +13,14 @@ attribute_values::attribute_values(const attribute &type_,
   : type(type_, alloc), values(values_.begin(), values_.end(), alloc)
 {}
 
-const std::pmr::vector<std::pmr::string> *entry::find(std::string_view type) const noexcept
+auto entry::find(std::string_view type) const noexcept -> const std::pmr::vector<std::pmr::string> *
 {
 	const auto it =
 	  std::ranges::find_if(attributes, [&](const attribute_values &a) { return detail::iequals(a.type.name(), type); });
 	return it == attributes.end() ? nullptr : &it->values;
 }
 
-entry entry::from(search_result_entry e)
+auto entry::from(search_result_entry e) -> entry
 {
 	const allocator_type alloc = e.get_allocator();
 	entry out(alloc);

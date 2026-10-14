@@ -46,7 +46,7 @@ namespace ldap = jhetz::ldap;
 template<class T>
 concept has_result = requires(const T &t) { t.result.to_error(); };
 
-bool is_decode_failure(const ldap::error &e)
+auto is_decode_failure(const ldap::error &e) -> bool
 {
 	return e.code == ldap::client_errc::decode_error || e.code == ldap::client_errc::unexpected_tag
 		   || e.code == ldap::client_errc::nesting_too_deep || e.code == ldap::client_errc::integer_overflow
@@ -169,7 +169,7 @@ class scoped_null_default
   public:
 	scoped_null_default() noexcept : old_(std::pmr::set_default_resource(std::pmr::null_memory_resource())) {}
 	scoped_null_default(const scoped_null_default &) = delete;
-	scoped_null_default &operator=(const scoped_null_default &) = delete;
+	auto operator=(const scoped_null_default &) -> scoped_null_default & = delete;
 	~scoped_null_default() { std::pmr::set_default_resource(old_); }
 
   private:
@@ -209,7 +209,7 @@ void check_arena(std::span<const std::byte> input, const ldap::message &expected
 
 }// namespace
 
-extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size)
+extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size) -> int
 {
 	const auto input = std::as_bytes(std::span(data, size));
 	check_filter_text(std::span(data, size));

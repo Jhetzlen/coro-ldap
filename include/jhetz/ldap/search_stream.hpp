@@ -36,9 +36,9 @@ class search_stream
   public:
 	search_stream() noexcept = default;
 	search_stream(search_stream &&other) noexcept;
-	search_stream &operator=(search_stream &&other) noexcept;
+	auto operator=(search_stream &&other) noexcept -> search_stream &;
 	search_stream(const search_stream &) = delete;
-	search_stream &operator=(const search_stream &) = delete;
+	auto operator=(const search_stream &) -> search_stream & = delete;
 	// Unfinished: the search is abandoned.
 	~search_stream();
 
@@ -47,20 +47,20 @@ class search_stream
 	// cancellation or timeout (the search is abandoned, the connection stays
 	// usable) or a connection failure. After the end or an error, next()
 	// returns the same again without I/O.
-	boost::capy::task<result<std::optional<entry>>> next();
+	auto next() -> boost::capy::task<result<std::optional<entry>>>;
 
 	// True once the SearchResultDone (or an error) was read.
-	bool done() const noexcept;
+	auto done() const noexcept -> bool;
 	// URIs of the SearchResultReference messages received so far, in order,
 	// as sent (one string per URI). They are not chased; reference_urls()
 	// parses them.
-	const string_list &references() const noexcept;
+	auto references() const noexcept -> const string_list &;
 	// references() parsed as LDAP URLs; URIs that do not parse are left out.
-	[[nodiscard]] std::pmr::vector<url> reference_urls(
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] auto reference_urls(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
+	  -> std::pmr::vector<url>;
 	// Controls of the SearchResultDone (e.g. paged results, or the sort
 	// result: find_sort_result()), once done().
-	const std::pmr::vector<control> &controls() const noexcept;
+	auto controls() const noexcept -> const std::pmr::vector<control> &;
 
 	struct state;// defined in src/connection/search.hpp
 

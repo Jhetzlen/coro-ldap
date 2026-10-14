@@ -20,7 +20,7 @@ using deadline_t = std::optional<clock::time_point>;
 // promptly when cancelled; see resolve_bounded in connect.cpp for one that
 // does not.
 template<class A>
-boost::capy::task<std::remove_cvref_t<boost::capy::awaitable_result_t<A>>> bounded(A a, deadline_t deadline)
+auto bounded(A a, deadline_t deadline) -> boost::capy::task<std::remove_cvref_t<boost::capy::awaitable_result_t<A>>>
 {
 	if (deadline) {
 		co_return co_await boost::corosio::timeout(std::move(a), *deadline);

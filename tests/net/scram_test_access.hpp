@@ -14,8 +14,8 @@ namespace jhetz::ldap::detail {
 
 struct scram_test_access
 {
-	static sasl_scram_sha256
-	  with_nonce(std::string username, std::string password, std::string authz_id, std::string nonce)
+	static auto with_nonce(std::string username, std::string password, std::string authz_id, std::string nonce)
+	  -> sasl_scram_sha256
 	{
 		return with_nonce(std::move(username),
 		  std::move(password),
@@ -23,18 +23,18 @@ struct scram_test_access
 		  std::move(nonce));
 	}
 
-	static sasl_scram_sha256
-	  with_nonce(std::string username, std::string password, sasl_scram_options options, std::string nonce)
+	static auto with_nonce(std::string username, std::string password, sasl_scram_options options, std::string nonce)
+	  -> sasl_scram_sha256
 	{
 		return sasl_scram_sha256(
 		  std::move(username), std::move(password), std::move(options), std::optional<std::string>(std::move(nonce)));
 	}
 
 	// The iteration count whose SaltedPassword is cached (0: none).
-	static std::uint32_t cached_iterations(const sasl_scram_sha256 &m) { return m.cache_iterations_; }
+	static auto cached_iterations(const sasl_scram_sha256 &m) -> std::uint32_t { return m.cache_iterations_; }
 
 	// The SASLprep'ed password the mechanism holds (empty when it holds none).
-	static const std::string &prepared_password(const sasl_scram_sha256 &m) { return m.prepared_password_; }
+	static auto prepared_password(const sasl_scram_sha256 &m) -> const std::string & { return m.prepared_password_; }
 };
 
 }// namespace jhetz::ldap::detail

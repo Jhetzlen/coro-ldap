@@ -38,7 +38,7 @@ struct search_stream::state
 
 	// The SearchResultDone already queued (received, not yet read by
 	// next()), or null.
-	const message *queued_done() const noexcept
+	auto queued_done() const noexcept -> const message *
 	{
 		if (op.queue.empty() || !std::holds_alternative<search_result_done>(op.queue.back().op)) {
 			return nullptr;
@@ -50,16 +50,16 @@ struct search_stream::state
 namespace detail {
 
 	// The SearchRequest for `p`, validated (errors carry `context`).
-	result<message> search_message(connection::impl &c, const search_params &p, const std::string &context);
+	auto search_message(connection::impl &c, const search_params &p, const std::string &context) -> result<message>;
 
 	// Validates and sends a search; returns its stream. Never suspends.
 	// `stop` is the awaiting task's stop token: if it is set already, the
 	// search is not sent and fails with capy::error::canceled.
-	result<ldap::search_stream>
-	  start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr, const std::stop_token &stop);
+	auto start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr, const std::stop_token &stop)
+	  -> result<ldap::search_stream>;
 
 	// The one entry of a base-scope search (nullopt if none came back).
-	boost::capy::task<result<std::optional<entry>>> read_one(impl_ref self, search_params p);
+	auto read_one(impl_ref self, search_params p) -> boost::capy::task<result<std::optional<entry>>>;
 
 }// namespace detail
 

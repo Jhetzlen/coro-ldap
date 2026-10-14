@@ -13,7 +13,7 @@ using jhetz::ldap::test::bytes;
 namespace {
 
 // "need more", "size N" or the error code, for readable comparisons.
-std::string frame(std::span<const std::byte> buf, std::size_t max_size = ber::default_max_message_size)
+auto frame(std::span<const std::byte> buf, std::size_t max_size = ber::default_max_message_size) -> std::string
 {
 	auto r = ber::complete_message_size(buf, max_size);
 	if (!r) {

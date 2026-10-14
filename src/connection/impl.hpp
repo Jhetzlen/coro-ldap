@@ -37,7 +37,7 @@ namespace jhetz::ldap {
 
 namespace detail {
 
-	template<class T, class... Ts> consteval std::size_t index_in(const std::variant<Ts...> *)
+	template<class T, class... Ts> consteval auto index_in(const std::variant<Ts...> *) -> std::size_t
 	{
 		constexpr bool same[] = { std::is_same_v<T, Ts>... };
 		for (std::size_t i = 0; i < sizeof...(Ts); ++i) {
@@ -51,7 +51,7 @@ namespace detail {
 
 	using clock = std::chrono::steady_clock;
 
-	inline std::optional<clock::time_point> deadline_after(std::optional<std::chrono::milliseconds> d)
+	inline auto deadline_after(std::optional<std::chrono::milliseconds> d) -> std::optional<clock::time_point>
 	{
 		if (!d) {
 			return std::nullopt;
@@ -61,7 +61,10 @@ namespace detail {
 
 	// The error of an operation on a default-constructed or moved-from
 	// object (connection, search_stream, paged_search).
-	inline error no_connection(std::string_view context) { return make_error(client_errc::not_connected, context); }
+	inline auto no_connection(std::string_view context) -> error
+	{
+		return make_error(client_errc::not_connected, context);
+	}
 
 }// namespace detail
 
@@ -78,7 +81,7 @@ namespace detail {
 		  : mr(mr_), search(search_), expect(expect_), queue(mr_)
 		{}
 		pending_op(const pending_op &) = delete;
-		pending_op &operator=(const pending_op &) = delete;
+		auto operator=(const pending_op &) -> pending_op & = delete;
 
 		std::pmr::memory_resource *mr;// responses are decoded into this
 		bool search;// many responses, until a SearchResultDone
@@ -128,10 +131,10 @@ class connection::impl
 
 	// ---------------------------------------------------------------- configuration
 
-	boost::corosio::io_context::executor_type executor() const noexcept { return ex; }
-	std::pmr::memory_resource *mr() const noexcept { return mr_; }
-	const net::transport &transport() const noexcept { return transport_; }
-	std::optional<std::chrono::milliseconds> default_timeout() const noexcept { return default_timeout_; }
+	auto executor() const noexcept -> boost::corosio::io_context::executor_type { return ex; }
+	auto mr() const noexcept -> std::pmr::memory_resource * { return mr_; }
+	auto transport() const noexcept -> const net::transport & { return transport_; }
+	auto default_timeout() const noexcept -> std::optional<std::chrono::milliseconds> { return default_timeout_; }
 
 	// What the connection knows about the server: the modes set by the
 	// options, and the caches filled from the server's answers. The core
@@ -156,8 +159,8 @@ class connection::impl
 			advertised_password_method.reset();
 		}
 	};
-	server_knowledge &knowledge() noexcept { return knowledge_; }
-	const server_knowledge &knowledge() const noexcept { return knowledge_; }
+	auto knowledge() noexcept -> server_knowledge & { return knowledge_; }
+	auto knowledge() const noexcept -> const server_knowledge & { return knowledge_; }
 
 	// Tests only (detail::set_next_message_id): the id the next request gets,
 	// to reach maxInt without sending 2^31 requests.
@@ -165,26 +168,26 @@ class connection::impl
 
 	// ---------------------------------------------------------------- state
 
-	bool is_open() const noexcept { return open; }
+	auto is_open() const noexcept -> bool { return open; }
 
 	// Requests may still be sent: open, and no UnbindRequest queued.
-	bool accepts_requests() const noexcept { return open && !unbinding; }
+	auto accepts_requests() const noexcept -> bool { return open && !unbinding; }
 
 	// A bind or a StartTLS exchange is in progress: nothing else may be
 	// sent until it ends (RFC 4511 sections 4.2.1 and 4.14.1).
-	bool exchange_in_progress() const noexcept { return binding || upgrading; }
+	auto exchange_in_progress() const noexcept -> bool { return binding || upgrading; }
 
 	// Describes the open connection: false after close(), unbind() or a
 	// failure, even though the closed transport still holds its TLS layer.
 	// False during start_tls() too: the TLS layer is in place before its
 	// handshake runs.
-	bool is_tls() const noexcept { return open && !upgrading && transport_.is_tls(); }
+	auto is_tls() const noexcept -> bool { return open && !upgrading && transport_.is_tls(); }
 
 	// Requests still to be answered: those waited for, and `due` answers.
-	std::size_t outstanding() const noexcept;
+	auto outstanding() const noexcept -> std::size_t;
 
 	// Answers still due to requests nothing waits for (send_unanswered).
-	std::size_t answers_due() const noexcept { return due_answers; }
+	auto answers_due() const noexcept -> std::size_t { return due_answers; }
 
 	// ---------------------------------------------------------------- failure
 
@@ -202,7 +205,7 @@ class connection::impl
 	// never comes.
 	void shut_out_of_memory() noexcept;
 
-	error not_connected(std::string_view context) const;
+	auto not_connected(std::string_view context) const -> error;
 
 	// connection::close(): shuts the connection ("connection closed") and
 	// closes the transport, which also ends a TLS shutdown unbind() waits for.
@@ -215,7 +218,7 @@ class connection::impl
 	// response may arrive before the write completes). If encoding fails
 	// nothing is sent and the id is not used up. On a throw (bad_alloc)
 	// nothing is queued and `p` is not registered (the id is used up).
-	result<void> submit(message &m, detail::pending_op *p, std::string_view context);
+	auto submit(message &m, detail::pending_op *p, std::string_view context) -> result<void>;
 
 	// Stops waiting for `p`'s responses and tells the server (best effort).
 	// Called from destructors: if the AbandonRequest cannot be built or
@@ -236,12 +239,13 @@ class connection::impl
 
 	// The next response for `p`, waiting until `deadline` at most. On
 	// cancellation or timeout `p` is abandoned. Errors carry `context`.
-	boost::capy::task<result<message>>
-	  next_response(detail::pending_op &p, std::optional<detail::clock::time_point> deadline, std::string_view context);
+	auto next_response(detail::pending_op &p,
+	  std::optional<detail::clock::time_point> deadline,
+	  std::string_view context) -> boost::capy::task<result<message>>;
 
 	// search_stream / paged_search constructors are private.
-	static ldap::search_stream make_stream(search_stream::state *s) noexcept;
-	static ldap::paged_search make_paged(paged_search::state *s) noexcept;
+	static auto make_stream(search_stream::state *s) noexcept -> ldap::search_stream;
+	static auto make_paged(paged_search::state *s) noexcept -> ldap::paged_search;
 
 	// ---------------------------------------------------------------- binds
 
@@ -252,7 +256,7 @@ class connection::impl
 	// the wait, right before the bind is sent: a stop that comes once
 	// bind_idle.set() has claimed the waiter, but before it resumes, does
 	// not cancel the wait.
-	static boost::capy::task<result<void>> begin_bind(detail::impl_ref c, std::string_view context);
+	static auto begin_bind(detail::impl_ref c, std::string_view context) -> boost::capy::task<result<void>>;
 
 	// Ends the bind exchange begun by begin_bind() and sends the requests
 	// it held. Defined after detail::impl_ref.
@@ -264,7 +268,7 @@ class connection::impl
 	// section 3.1.1): fails (with `context`) if requests may not be sent,
 	// during an earlier StartTLS or a bind, or while requests are waited
 	// for. The answers due are the caller's to wait for (wait_due_answers).
-	result<void> check_start_tls(std::string_view context) const;
+	auto check_start_tls(std::string_view context) const -> result<void>;
 
 	// What wait_due_answers() ended with: no error (woken, or timed out with
 	// nothing left: check again), or the error and the answers it leaves.
@@ -279,7 +283,7 @@ class connection::impl
 	// not running, waits for due_idle, and on a timeout expires the answers
 	// past their own deadline. `left` is the count waited for, or after a
 	// timeout the count still due. A throw (bad_alloc) is the caller's.
-	boost::capy::task<due_wait> wait_due_answers(std::optional<detail::clock::time_point> deadline);
+	auto wait_due_answers(std::optional<detail::clock::time_point> deadline) -> boost::capy::task<due_wait>;
 
 	// StartTLS's ExtendedRequest is sent: while this lives, no other request
 	// may be sent (RFC 4511 section 4.14.1), and is_tls() is false (the TLS
@@ -289,7 +293,7 @@ class connection::impl
 	  public:
 		explicit upgrade_scope(impl &c) noexcept : c_(c) { c_.upgrading = true; }
 		upgrade_scope(const upgrade_scope &) = delete;
-		upgrade_scope &operator=(const upgrade_scope &) = delete;
+		auto operator=(const upgrade_scope &) -> upgrade_scope & = delete;
 		~upgrade_scope() { c_.upgrading = false; }
 
 	  private:
@@ -299,12 +303,12 @@ class connection::impl
 	// Waits until the writer, then the reader, is idle. Not cancellable (it
 	// runs under an empty stop token): the writer and the reader stop
 	// promptly on their own, and a PDU is written whole.
-	boost::capy::task<void> wait_io_idle();
+	auto wait_io_idle() -> boost::capy::task<void>;
 
 	// The TLS handshake over the transport, once the reader and writer are
 	// idle (wait_io_idle): net::start_tls, with the bytes already read.
-	boost::capy::task<result<void>> tls_handshake(net::tls_options options,
-	  std::optional<std::chrono::milliseconds> timeout);
+	auto tls_handshake(net::tls_options options, std::optional<std::chrono::milliseconds> timeout)
+	  -> boost::capy::task<result<void>>;
 
 	// ---------------------------------------------------------------- unbind
 
@@ -313,14 +317,14 @@ class connection::impl
 	// waited for. Once it is queued nothing may follow it: an operation,
 	// StartTLS or unbind() started while the writer finishes fails with
 	// not_connected. On failure nothing is queued.
-	result<void> send_unbind(std::string_view context);
+	auto send_unbind(std::string_view context) -> result<void>;
 
 	// After send_unbind(): waits for the writer (even if cancelled: closing
 	// first would cut the UnbindRequest off), shuts the connection, sends
 	// the TLS close_notify (best effort, within tls_shutdown_timeout) and
 	// closes the transport. Gives the failure that closed the connection
 	// before the UnbindRequest was written, if any.
-	boost::capy::task<std::optional<error>> finish_unbind();
+	auto finish_unbind() -> boost::capy::task<std::optional<error>>;
 
   private:
 	boost::corosio::io_context::executor_type ex;
@@ -396,7 +400,7 @@ class connection::impl
 		impl *p;
 		explicit frame_ref(impl *p_) noexcept : p(p_) {}
 		frame_ref(const frame_ref &) = delete;
-		frame_ref &operator=(const frame_ref &) = delete;
+		auto operator=(const frame_ref &) -> frame_ref & = delete;
 		~frame_ref() { p->release(); }
 	};
 
@@ -404,11 +408,11 @@ class connection::impl
 
 	// A copy of `e`, or if there is no memory for it, an out_of_memory():
 	// for paths that must not throw.
-	static error copy_error(const error &e) noexcept;
+	static auto copy_error(const error &e) noexcept -> error;
 
 	// not_enough_memory without a context, so building and copying it
 	// allocates nothing; operations add their own.
-	static error out_of_memory() noexcept;
+	static auto out_of_memory() noexcept -> error;
 
 	// ---------------------------------------------------------------- tasks
 
@@ -430,13 +434,13 @@ class connection::impl
 	//   made when the co_await is evaluated (before await_suspend), throws
 	//   bad_alloc normally: caught by the due watcher, propagated by the
 	//   others.
-	boost::capy::task<void> new_task(boost::capy::task<void> (*body)(impl *));
+	auto new_task(boost::capy::task<void> (*body)(impl *)) -> boost::capy::task<void>;
 
 	// ---------------------------------------------------------------- writer
 
 	// A bad_alloc in a detached task would end the program (run_async's
 	// default handler): each catches its own and closes the connection.
-	static boost::capy::task<void> writer(impl *self);
+	static auto writer(impl *self) -> boost::capy::task<void>;
 
 	// Queues `bytes` and starts the writer if it is not running. A throw
 	// (bad_alloc) queues nothing and changes nothing.
@@ -445,7 +449,7 @@ class connection::impl
 	// The next message id the server cannot still be servicing (RFC 4511
 	// section 4.1.1): after wrapping at maxInt, ids of outstanding or
 	// recently abandoned requests are skipped.
-	std::int32_t free_id() const;
+	auto free_id() const -> std::int32_t;
 
 	// The bind exchange ended: sends the requests it held, in order. Called
 	// from a destructor: if one cannot be queued, the connection is closed
@@ -469,7 +473,7 @@ class connection::impl
 	void start_due_watcher();
 
 	// The earliest deadline of a due answer, if any has one.
-	std::optional<detail::clock::time_point> next_due_deadline() const;
+	auto next_due_deadline() const -> std::optional<detail::clock::time_point>;
 
 	// Due answers whose deadline passed are no longer waited for: their
 	// entries stay (a late answer is still dropped), but they are not
@@ -487,10 +491,10 @@ class connection::impl
 	// timer heap's growth and the timeout coroutine's frame are made in an
 	// await_suspend that capy calls from a noexcept wrapper, so one of
 	// those failing ends the program (a known limitation, see new_task).
-	static boost::capy::task<void> due_watcher(impl *self);
+	static auto due_watcher(impl *self) -> boost::capy::task<void>;
 
 	// Requests waited for (registered operations), without the due answers.
-	std::size_t requests_waiting() const noexcept { return pending.size(); }
+	auto requests_waiting() const noexcept -> std::size_t { return pending.size(); }
 
 	// ---------------------------------------------------------------- unbind
 
@@ -503,8 +507,8 @@ class connection::impl
 	// ---------------------------------------------------------------- idle
 
 	// Waits until the writer, or the reader, is idle (see wait_io_idle).
-	boost::capy::task<void> wait_write_idle();
-	boost::capy::task<void> wait_reader_idle();
+	auto wait_write_idle() -> boost::capy::task<void>;
+	auto wait_reader_idle() -> boost::capy::task<void>;
 
 	// ---------------------------------------------------------------- reader
 
@@ -512,9 +516,9 @@ class connection::impl
 
 	void stop_reader_if_idle();
 
-	static boost::capy::task<void> reader(impl *self);
+	static auto reader(impl *self) -> boost::capy::task<void>;
 
-	error unexpected(std::string text);
+	auto unexpected(std::string text) -> error;
 
 	// Delivers the PDU at the front of buf (`size` bytes) and consumes it.
 	void route(std::size_t size);
@@ -538,7 +542,7 @@ namespace detail {
 		}
 		impl_ref(const impl_ref &o) noexcept : impl_ref(o.p_) {}
 		impl_ref(impl_ref &&o) noexcept : p_(std::exchange(o.p_, nullptr)) {}
-		impl_ref &operator=(impl_ref o) noexcept
+		auto operator=(impl_ref o) noexcept -> impl_ref &
 		{
 			std::swap(p_, o.p_);
 			return *this;
@@ -549,8 +553,8 @@ namespace detail {
 				p_->release();
 			}
 		}
-		connection::impl *operator->() const noexcept { return p_; }
-		connection::impl &operator*() const noexcept { return *p_; }
+		auto operator->() const noexcept -> connection::impl * { return p_; }
+		auto operator*() const noexcept -> connection::impl & { return *p_; }
 		explicit operator bool() const noexcept { return p_ != nullptr; }
 
 	  private:
@@ -564,7 +568,7 @@ class connection::impl::bind_scope
   public:
 	explicit bind_scope(detail::impl_ref c) noexcept : c_(std::move(c)) {}
 	bind_scope(const bind_scope &) = delete;
-	bind_scope &operator=(const bind_scope &) = delete;
+	auto operator=(const bind_scope &) -> bind_scope & = delete;
 	~bind_scope();
 
   private:
@@ -581,7 +585,7 @@ namespace detail {
 		pending_op &p;
 		registration(connection::impl &c_, pending_op &p_) noexcept : c(c_), p(p_) {}
 		registration(const registration &) = delete;
-		registration &operator=(const registration &) = delete;
+		auto operator=(const registration &) -> registration & = delete;
 		~registration() { c.abandon(p); }
 	};
 
@@ -594,26 +598,26 @@ namespace detail {
 	// are checked by begin_bind() instead: a later step of a SASL exchange
 	// is sent, since the server waits for it (abandoning it then closes the
 	// connection).
-	boost::capy::task<result<message>> request_response(impl_ref self,
+	auto request_response(impl_ref self,
 	  message request,
 	  std::size_t expect,
 	  std::string context,
-	  std::optional<std::chrono::milliseconds> timeout);
+	  std::optional<std::chrono::milliseconds> timeout) -> boost::capy::task<result<message>>;
 
 	// Builds a message whose controls are `controls` (encoded on `mr`).
-	result<message> with_controls(protocol_op op,
+	auto with_controls(protocol_op op,
 	  const request_controls &controls,
 	  std::pmr::memory_resource *mr,
-	  std::string_view context);
+	  std::string_view context) -> result<message>;
 
-	boost::capy::task<result<response>> modify_impl(impl_ref self, modify_params p, std::string context);
+	auto modify_impl(impl_ref self, modify_params p, std::string context) -> boost::capy::task<result<response>>;
 
-	boost::capy::task<result<extended_result>> extended_impl(impl_ref self, extended_params p);
+	auto extended_impl(impl_ref self, extended_params p) -> boost::capy::task<result<extended_result>>;
 
 	// `context` names the operation in errors, instead of "extended
 	// operation <oid>".
-	boost::capy::task<result<std::optional<std::string>>>
-	  password_modify_impl(impl_ref self, password_modify_params p, std::string context);
+	auto password_modify_impl(impl_ref self, password_modify_params p, std::string context)
+	  -> boost::capy::task<result<std::optional<std::string>>>;
 
 }// namespace detail
 

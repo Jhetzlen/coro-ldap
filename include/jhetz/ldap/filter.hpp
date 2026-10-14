@@ -130,11 +130,11 @@ class filter
 	filter(const filter &other, const allocator_type &alloc);
 	filter(filter &&other, const allocator_type &alloc);
 	// Assignment keeps this filter's resource.
-	filter &operator=(const filter &) = default;
-	filter &operator=(filter &&other);
+	auto operator=(const filter &) -> filter & = default;
+	auto operator=(filter &&other) -> filter &;
 	~filter() = default;
 
-	allocator_type get_allocator() const noexcept { return nodes_.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return nodes_.get_allocator(); }
 
 	// Parses RFC 4515 text into a tree allocated from `mr`. Fails with
 	// invalid_filter (position in the context); never throws on bad input.
@@ -149,28 +149,29 @@ class filter
 	// `(`, `)`, `*` (outside substrings), `\` and NUL must be escaped in values,
 	// and unescaped octets must be valid UTF-8 (escapes may give any octet).
 	// Filters beyond `limits` (depth or number of elements) fail too.
-	[[nodiscard]] static result<filter> raw(std::string_view text,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
-	[[nodiscard]] static result<filter> raw(std::string_view text,
+	[[nodiscard]] static auto raw(std::string_view text,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<filter>;
+	[[nodiscard]] static auto raw(std::string_view text,
 	  const filter_limits &limits,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<filter>;
 
-	[[nodiscard]] bool empty() const noexcept { return nodes_.empty(); }
+	[[nodiscard]] auto empty() const noexcept -> bool { return nodes_.empty(); }
 	// The top node. Precondition: !empty().
-	view root() const noexcept;
+	auto root() const noexcept -> view;
 	// Longest path from the root to a leaf, counting both (`(cn=x)` is 1), and
 	// number of elements; both 0 when empty. Constant time.
-	std::size_t depth() const noexcept { return empty() ? 0 : depth_; }
-	std::size_t elements() const noexcept { return empty() ? 0 : elements_; }
+	auto depth() const noexcept -> std::size_t { return empty() ? 0 : depth_; }
+	auto elements() const noexcept -> std::size_t { return empty() ? 0 : elements_; }
 
 	// Canonical RFC 4515 text, for logs: values escaped with
 	// escape_filter_value (lower-case hex), `:dn` in lower case, empty
 	// substring parts dropped, attribute descriptions and rules as stored.
 	// raw(to_string()) == *this for every filter within the limits. Empty
 	// filter: "".
-	[[nodiscard]] std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] auto to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
+	  -> std::pmr::string;
 
-	friend bool operator==(const filter &a, const filter &b) noexcept;
+	friend auto operator==(const filter &a, const filter &b) noexcept -> bool;
 
   private:
 	friend struct detail::filter_access;
@@ -197,7 +198,7 @@ class filter
 		std::uint32_t next = npos;// next sibling
 	};
 
-	std::string_view str(std::uint32_t off, std::uint32_t len) const noexcept
+	auto str(std::uint32_t off, std::uint32_t len) const noexcept -> std::string_view
 	{
 		return std::string_view(text_).substr(off, len);
 	}
@@ -215,28 +216,28 @@ class filter
 class filter::view
 {
   public:
-	filter::kind kind() const noexcept { return static_cast<filter::kind>(n().k); }
+	auto kind() const noexcept -> filter::kind { return static_cast<filter::kind>(n().k); }
 	// Attribute description of a leaf; the (possibly empty) type of an
 	// extensible match; empty for and / or / not.
-	std::string_view attribute() const noexcept { return f_->str(n().attr_off, n().attr_len); }
+	auto attribute() const noexcept -> std::string_view { return f_->str(n().attr_off, n().attr_len); }
 	// Assertion value of equality, >=, <=, ~= and extensible match (unescaped).
-	std::string_view value() const noexcept { return f_->str(n().value_off, n().value_len); }
+	auto value() const noexcept -> std::string_view { return f_->str(n().value_off, n().value_len); }
 	// Extensible match: matching rule (may be empty) and dnAttributes.
-	std::string_view matching_rule() const noexcept { return f_->str(n().rule_off, n().rule_len); }
-	bool dn_attributes() const noexcept { return n().dn_attributes; }
+	auto matching_rule() const noexcept -> std::string_view { return f_->str(n().rule_off, n().rule_len); }
+	auto dn_attributes() const noexcept -> bool { return n().dn_attributes; }
 	// Children of and / or (any number) and not (one); empty for other kinds.
-	child_range children() const noexcept;
+	auto children() const noexcept -> child_range;
 	// Parts of a substrings assertion (never empty strings); nullopt / empty
 	// for other kinds.
-	std::optional<std::string_view> initial() const noexcept;
-	substring_range any() const noexcept;
-	std::optional<std::string_view> final() const noexcept;
+	auto initial() const noexcept -> std::optional<std::string_view>;
+	auto any() const noexcept -> substring_range;
+	auto final() const noexcept -> std::optional<std::string_view>;
 
   private:
 	friend class filter;
 	friend class filter::child_iterator;
 	view(const filter *f, std::uint32_t i) noexcept : f_(f), i_(i) {}
-	const node &n() const noexcept { return f_->nodes_[i_]; }
+	auto n() const noexcept -> const node & { return f_->nodes_[i_]; }
 
 	const filter *f_;
 	std::uint32_t i_;
@@ -250,19 +251,19 @@ class filter::child_iterator
 	using iterator_category = std::forward_iterator_tag;
 
 	child_iterator() = default;
-	filter::view operator*() const noexcept { return filter::view(f_, i_); }
-	child_iterator &operator++() noexcept
+	auto operator*() const noexcept -> filter::view { return filter::view(f_, i_); }
+	auto operator++() noexcept -> child_iterator &
 	{
 		i_ = f_->nodes_[i_].next;
 		return *this;
 	}
-	child_iterator operator++(int) noexcept
+	auto operator++(int) noexcept -> child_iterator
 	{
 		auto old = *this;
 		++*this;
 		return old;
 	}
-	friend bool operator==(const child_iterator &a, const child_iterator &b) noexcept { return a.i_ == b.i_; }
+	friend auto operator==(const child_iterator &a, const child_iterator &b) noexcept -> bool { return a.i_ == b.i_; }
 
   private:
 	friend class filter::view;
@@ -277,9 +278,9 @@ class filter::child_iterator
 class filter::child_range : public std::ranges::view_interface<filter::child_range>
 {
   public:
-	child_iterator begin() const noexcept { return first_; }
-	child_iterator end() const noexcept { return {}; }
-	[[nodiscard]] bool empty() const noexcept { return first_ == child_iterator{}; }
+	auto begin() const noexcept -> child_iterator { return first_; }
+	auto end() const noexcept -> child_iterator { return {}; }
+	[[nodiscard]] auto empty() const noexcept -> bool { return first_ == child_iterator{}; }
 
   private:
 	friend class filter::view;
@@ -296,12 +297,12 @@ class filter::substring_iterator
 	using iterator_category = std::forward_iterator_tag;
 
 	substring_iterator() = default;
-	std::string_view operator*() const noexcept
+	auto operator*() const noexcept -> std::string_view
 	{
 		const auto &p = f_->nodes_[i_];
 		return f_->str(p.value_off, p.value_len);
 	}
-	substring_iterator &operator++() noexcept
+	auto operator++() noexcept -> substring_iterator &
 	{
 		i_ = f_->nodes_[i_].next;
 		if (i_ != filter::npos && f_->nodes_[i_].k != part_any) {
@@ -309,13 +310,16 @@ class filter::substring_iterator
 		}
 		return *this;
 	}
-	substring_iterator operator++(int) noexcept
+	auto operator++(int) noexcept -> substring_iterator
 	{
 		auto old = *this;
 		++*this;
 		return old;
 	}
-	friend bool operator==(const substring_iterator &a, const substring_iterator &b) noexcept { return a.i_ == b.i_; }
+	friend auto operator==(const substring_iterator &a, const substring_iterator &b) noexcept -> bool
+	{
+		return a.i_ == b.i_;
+	}
 
   private:
 	friend class filter::view;
@@ -328,9 +332,9 @@ class filter::substring_iterator
 class filter::substring_range : public std::ranges::view_interface<filter::substring_range>
 {
   public:
-	substring_iterator begin() const noexcept { return first_; }
-	substring_iterator end() const noexcept { return {}; }
-	[[nodiscard]] bool empty() const noexcept { return first_ == substring_iterator{}; }
+	auto begin() const noexcept -> substring_iterator { return first_; }
+	auto end() const noexcept -> substring_iterator { return {}; }
+	[[nodiscard]] auto empty() const noexcept -> bool { return first_ == substring_iterator{}; }
 
   private:
 	friend class filter::view;
@@ -338,21 +342,21 @@ class filter::substring_range : public std::ranges::view_interface<filter::subst
 	substring_iterator first_;
 };
 
-inline filter::view filter::root() const noexcept { return view(this, root_); }
+inline auto filter::root() const noexcept -> filter::view { return view(this, root_); }
 
 // RFC 4515 section 3 escaping: `*` `(` `)` `\` and NUL become \2a \28 \29 \5c
 // \00, and octets that are not part of valid UTF-8 become \xx (the string
 // form is UTF-8); valid UTF-8 is kept as is.
-[[nodiscard]] std::pmr::string escape_filter_value(std::string_view value,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+[[nodiscard]] auto escape_filter_value(std::string_view value,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> std::pmr::string;
 
 // The inverse of escape_filter_value: the octets of one RFC 4515 assertion
 // value, `\XX` (either case) decoded to any octet. Accepts what filter::raw
 // accepts in a value: `(`, `)`, `*`, NUL and a `\` not followed by two hex
 // digits fail with invalid_filter, and so do unescaped octets that are not
 // valid UTF-8. unescape_filter_value(escape_filter_value(v)) == v for any v.
-[[nodiscard]] result<std::pmr::string> unescape_filter_value(std::string_view text,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+[[nodiscard]] auto unescape_filter_value(std::string_view text,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::pmr::string>;
 
 // (&fg), (|fg), (!f). An operand that is itself an AND (resp. OR) is merged,
 // so `a && b && c` gives (&abc), not (&(&ab)c), in whichever order the chain
@@ -361,16 +365,16 @@ inline filter::view filter::root() const noexcept { return view(this, root_); }
 // meaning (merging (&...) into an AND does not change it). The result is
 // allocated from the left operand's resource; an rvalue operand's storage is
 // reused when possible. An empty operand gives an empty result.
-[[nodiscard]] filter operator&&(const filter &f, const filter &g);
-[[nodiscard]] filter operator&&(filter &&f, const filter &g);
-[[nodiscard]] filter operator&&(const filter &f, filter &&g);
-[[nodiscard]] filter operator&&(filter &&f, filter &&g);
-[[nodiscard]] filter operator||(const filter &f, const filter &g);
-[[nodiscard]] filter operator||(filter &&f, const filter &g);
-[[nodiscard]] filter operator||(const filter &f, filter &&g);
-[[nodiscard]] filter operator||(filter &&f, filter &&g);
-[[nodiscard]] filter operator!(const filter &f);
-[[nodiscard]] filter operator!(filter &&f);
+[[nodiscard]] auto operator&&(const filter &f, const filter &g) -> filter;
+[[nodiscard]] auto operator&&(filter &&f, const filter &g) -> filter;
+[[nodiscard]] auto operator&&(const filter &f, filter &&g) -> filter;
+[[nodiscard]] auto operator&&(filter &&f, filter &&g) -> filter;
+[[nodiscard]] auto operator||(const filter &f, const filter &g) -> filter;
+[[nodiscard]] auto operator||(filter &&f, const filter &g) -> filter;
+[[nodiscard]] auto operator||(const filter &f, filter &&g) -> filter;
+[[nodiscard]] auto operator||(filter &&f, filter &&g) -> filter;
+[[nodiscard]] auto operator!(const filter &f) -> filter;
+[[nodiscard]] auto operator!(filter &&f) -> filter;
 
 namespace filters {
 
@@ -389,22 +393,23 @@ namespace filters {
 		attr(attribute::literal name, const allocator_type &alloc = {}) : name_(name.text, alloc) {}
 		explicit attr(const attribute &name, const allocator_type &alloc = {});
 
-		[[nodiscard]] filter operator==(std::string_view value) const;// (a=v)
-		[[nodiscard]] filter operator>=(std::string_view value) const;// (a>=v)
-		[[nodiscard]] filter operator<=(std::string_view value) const;// (a<=v)
-		[[nodiscard]] filter approx(std::string_view value) const;// (a~=v)
-		[[nodiscard]] filter present() const;// (a=*)
+		[[nodiscard]] auto operator==(std::string_view value) const -> filter;// (a=v)
+		[[nodiscard]] auto operator>=(std::string_view value) const -> filter;// (a>=v)
+		[[nodiscard]] auto operator<=(std::string_view value) const -> filter;// (a<=v)
+		[[nodiscard]] auto approx(std::string_view value) const -> filter;// (a~=v)
+		[[nodiscard]] auto present() const -> filter;// (a=*)
 		// (a=v*), (a=*v), (a=*v*). With an empty value these mean "has any
 		// value" and give present(), since (a=**) is not a valid filter.
-		[[nodiscard]] filter starts_with(std::string_view value) const;
-		[[nodiscard]] filter ends_with(std::string_view value) const;
-		[[nodiscard]] filter contains(std::string_view value) const;
+		[[nodiscard]] auto starts_with(std::string_view value) const -> filter;
+		[[nodiscard]] auto ends_with(std::string_view value) const -> filter;
+		[[nodiscard]] auto contains(std::string_view value) const -> filter;
 		// Extensible match (RFC 4515): `(a:rule:=v)`, `(a:dn:rule:=v)` with
 		// dn_attributes, `(a:=v)` / `(a:dn:=v)` with an empty rule. The rule
 		// is a matching rule name or OID ("caseExactMatch", "2.5.13.5");
 		// anything else throws std::invalid_argument, as does the rule "dn"
 		// without dn_attributes (RFC 4515 has no form for it).
-		[[nodiscard]] filter matches(std::string_view rule, std::string_view value, bool dn_attributes = false) const;
+		[[nodiscard]] auto matches(std::string_view rule, std::string_view value, bool dn_attributes = false) const
+		  -> filter;
 
 	  private:
 		std::pmr::string name_;
@@ -412,10 +417,10 @@ namespace filters {
 
 	// Extensible match without an attribute: `(:rule:=v)`, `(:dn:rule:=v)`.
 	// The rule is required; same checks as attr::matches.
-	[[nodiscard]] filter rule_matches(std::string_view rule,
+	[[nodiscard]] auto rule_matches(std::string_view rule,
 	  std::string_view value,
 	  bool dn_attributes = false,
-	  const filter::allocator_type &alloc = {});
+	  const filter::allocator_type &alloc = {}) -> filter;
 
 	// The combinators live in namespace ldap (found by argument-dependent
 	// lookup for any filter, parsed or built); also reachable from here.
@@ -428,7 +433,7 @@ namespace filters {
 // Appends the BER Filter (RFC 4511 section 4.5.1.7) of `f` to `w`. Fails with
 // invalid_filter, before writing anything, if `f` is empty or deeper or larger
 // than `limits` (only possible for filters made by the builders).
-[[nodiscard]] result<void> encode_filter(ber::writer &w, const filter &f, const filter_limits &limits = {});
+[[nodiscard]] auto encode_filter(ber::writer &w, const filter &f, const filter_limits &limits = {}) -> result<void>;
 
 // Reads one BER Filter from `r` into a tree allocated from `mr`. Filters that
 // cannot be written as RFC 4515 text are rejected with decode_error (invalid
@@ -439,9 +444,9 @@ namespace filters {
 // (decode_error). So every decoded filter encodes, and encodes to the same
 // tree. Unknown trailing elements are skipped and an explicit dnAttributes
 // FALSE is accepted (re-encoding omits both). On failure `r` is unchanged.
-[[nodiscard]] result<filter> decode_filter(ber::reader &r,
+[[nodiscard]] auto decode_filter(ber::reader &r,
   const filter_limits &limits = {},
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<filter>;
 
 }// namespace jhetz::ldap
 

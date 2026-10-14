@@ -1,6 +1,6 @@
 #include "common.hpp"
 
-int main()
+auto main() -> int
 {
 	auto a = ldap::replace<&person::mail>("x@example.org");
 	auto b = ldap::add<&person::member_of>(ldap::dn{ "cn=g,dc=example,dc=org" });

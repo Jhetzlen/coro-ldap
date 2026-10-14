@@ -36,7 +36,7 @@ namespace corosio = boost::corosio;
 
 namespace jhetz::ldap::net {
 
-std::vector<corosio::endpoint> detail::interleave_families(std::vector<corosio::endpoint> in)
+auto detail::interleave_families(std::vector<corosio::endpoint> in) -> std::vector<corosio::endpoint>
 {
 	if (in.empty()) {
 		return in;
@@ -66,9 +66,9 @@ namespace {
 
 	// Contexts are built as std::string (cold path) and copied into the
 	// error, which lives on the default resource.
-	std::string str(std::string_view s) { return std::string(s); }
+	auto str(std::string_view s) -> std::string { return std::string(s); }
 
-	std::string to_text(const corosio::endpoint &ep)
+	auto to_text(const corosio::endpoint &ep) -> std::string
 	{
 		const auto addr = ep.address().to_string();
 		return ep.is_v6() ? ldap::detail::format("[{}]:{}", addr, ep.port())
@@ -76,10 +76,10 @@ namespace {
 	}
 
 	// "<target>: <stage>", plus the budget when the stage ran out of time.
-	std::string stage_context(const std::string &target,
+	auto stage_context(const std::string &target,
 	  std::string_view stage,
 	  std::error_code ec,
-	  std::optional<std::chrono::milliseconds> timeout)
+	  std::optional<std::chrono::milliseconds> timeout) -> std::string
 	{
 		std::string out = target;
 		out += ": ";
@@ -106,8 +106,9 @@ namespace {
 	// Owns the resolver, so connect() can return on timeout while
 	// getaddrinfo is still running on Corosio's pool thread (it cannot be
 	// interrupted). The late result is stored and dropped with the state.
-	capy::task<void>
+	auto
 	  resolve_detached(corosio::io_context &ioc, std::string host, std::string port, std::shared_ptr<resolve_state> st)
+		-> capy::task<void>
 	{
 		std::error_code ec{};
 		std::vector<corosio::endpoint> endpoints{};
@@ -143,8 +144,8 @@ namespace {
 	}
 
 	// Resolves with a deadline that holds even while getaddrinfo blocks.
-	capy::task<capy::io_result<std::vector<corosio::endpoint>>>
-	  resolve_bounded(corosio::io_context &ioc, std::string host, std::string port, deadline_t deadline)
+	auto resolve_bounded(corosio::io_context &ioc, std::string host, std::string port, deadline_t deadline)
+	  -> capy::task<capy::io_result<std::vector<corosio::endpoint>>>
 	{
 		auto st = std::make_shared<resolve_state>();
 		capy::run_async(ioc.get_executor())(resolve_detached(ioc, std::move(host), std::move(port), st));
@@ -167,7 +168,7 @@ namespace {
 
 	// No deadline for nullopt, or for a timeout so large that now + timeout
 	// would overflow the clock.
-	deadline_t make_deadline(std::optional<std::chrono::milliseconds> timeout, clock::time_point now)
+	auto make_deadline(std::optional<std::chrono::milliseconds> timeout, clock::time_point now) -> deadline_t
 	{
 		if (!timeout) {
 			return std::nullopt;
@@ -211,10 +212,10 @@ namespace {
 		bool canceled = false;// a wait or connect was stopped by the caller
 	};
 
-	capy::task<capy::io_result<>> wait_for(capy::async_event &e) { co_return co_await e.wait(); }
+	auto wait_for(capy::async_event &e) -> capy::task<capy::io_result<>> { co_return co_await e.wait(); }
 
 	// One connection attempt of the race; succeeds only if it connected.
-	capy::task<capy::io_result<>> attempt(race_state &st, std::size_t i)
+	auto attempt(race_state &st, std::size_t i) -> capy::task<capy::io_result<>>
 	{
 		const auto give_up = [&st, i](std::error_code ec) -> capy::io_result<> {
 			if (ec == capy::cond::canceled) {
@@ -261,7 +262,7 @@ namespace {
 	// often a server's (a referral), and its decoded host may hold C1 or
 	// bidi controls, U+2028 or ill-formed UTF-8 (has_control_character only
 	// rejects C0 and DEL). Valid non-ASCII (an IDN's U-labels) is kept.
-	std::string quoted(std::string_view what, std::string_view text)
+	auto quoted(std::string_view what, std::string_view text) -> std::string
 	{
 		std::string out(what);
 		out += ' ';
@@ -269,7 +270,7 @@ namespace {
 		return out;
 	}
 
-	bool has_control_character(std::string_view host, url_scheme scheme)
+	auto has_control_character(std::string_view host, url_scheme scheme) -> bool
 	{
 		for (std::size_t i = 0; i < host.size(); ++i) {
 			const auto c = static_cast<unsigned char>(host[i]);
@@ -283,8 +284,8 @@ namespace {
 
 }// namespace
 
-capy::task<result<transport>>
-  connect(corosio::io_context &ioc, url u, connect_options options, std::pmr::memory_resource *mr)
+auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr::memory_resource *mr)
+  -> capy::task<result<transport>>
 {
 	const auto start = clock::now();
 	const std::string server = str(to_string(u.scheme())) + "://" + str(u.authority());
@@ -408,10 +409,10 @@ capy::task<result<transport>>
 	co_return t;
 }
 
-capy::task<result<void>> start_tls(transport &t,
+auto start_tls(transport &t,
   const read_buffer &pending,
   tls_options options,
-  std::optional<std::chrono::milliseconds> timeout)
+  std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<void>>
 {
 	std::string context = "start tls ";
 	context += t.name();

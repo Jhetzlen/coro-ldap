@@ -27,7 +27,7 @@ using detail::impl_ref;
 using detail::no_connection;
 using detail::op_context;
 
-result<std::string> ad_password_value(std::string_view password)
+auto ad_password_value(std::string_view password) -> result<std::string>
 {
 	constexpr std::string_view context = "Active Directory password value";
 	if (password.size() > static_cast<std::size_t>(INT32_MAX / 2) - 2) {
@@ -81,7 +81,7 @@ namespace {
 	// PasswdModifyRequestValue ::= SEQUENCE { userIdentity [0], oldPasswd [1],
 	// newPasswd [2] } (all OCTET STRING OPTIONAL). nullopt when all are
 	// absent: the requestValue is then left out (RFC 3062 section 2).
-	std::optional<std::string> encode_password_modify(const password_modify_params &p)
+	auto encode_password_modify(const password_modify_params &p) -> std::optional<std::string>
 	{
 		if (!p.user && !p.old_password && !p.new_password) {
 			return std::nullopt;
@@ -103,7 +103,7 @@ namespace {
 
 	// PasswdModifyResponseValue ::= SEQUENCE { genPasswd [0] OCTET STRING
 	// OPTIONAL }; unknown trailing elements are ignored.
-	result<std::optional<std::string>> decode_password_modify(std::string_view value)
+	auto decode_password_modify(std::string_view value) -> result<std::optional<std::string>>
 	{
 		ber::reader r(std::as_bytes(std::span(value)));
 		auto s = r.enter();
@@ -131,8 +131,8 @@ namespace {
 
 namespace detail {
 
-	capy::task<result<std::optional<std::string>>>
-	  password_modify_impl(impl_ref self, password_modify_params p, std::string context)
+	auto password_modify_impl(impl_ref self, password_modify_params p, std::string context)
+	  -> capy::task<result<std::optional<std::string>>>
 	{
 		extended_params request{ .name = std::string(password_modify_oid),
 			.value = encode_password_modify(p),
@@ -161,7 +161,7 @@ namespace detail {
 
 using detail::password_modify_impl;
 
-capy::task<result<std::optional<std::string>>> connection::password_modify(password_modify_params p)
+auto connection::password_modify(password_modify_params p) -> capy::task<result<std::optional<std::string>>>
 {
 	std::string context = "password modify";
 	if (p.user) {// usually a DN, often the server's: as op_context
@@ -187,7 +187,8 @@ namespace {
 
 	// password_method::automatic: what the root DSE advertises, RFC 3062
 	// first. Errors are prefixed with `context`.
-	capy::task<result<ldap::password_method>> advertised_password_method(impl_ref self, const std::string &context)
+	auto advertised_password_method(impl_ref self, const std::string &context)
+	  -> capy::task<result<ldap::password_method>>
 	{
 		auto root = co_await read_one(self,
 		  { .scope = search_scope::base_object, .attributes = { "supportedExtension", "supportedCapabilities" } });
@@ -217,7 +218,7 @@ namespace {
 	// Active Directory starts its diagnosticMessage with the Win32 error in
 	// hex ("0000052D: Constraint violation - ..."): the common ones of a
 	// password change, explained ("" for the others).
-	std::string_view ad_password_explanation(std::string_view diagnostic)
+	auto ad_password_explanation(std::string_view diagnostic) -> std::string_view
 	{
 		if (diagnostic.size() < 9 || diagnostic[8] != ':') {
 			return {};
@@ -243,11 +244,11 @@ namespace {
 	}
 
 	// password_method::active_directory: a ModifyRequest of unicodePwd.
-	capy::task<result<void>> ad_set_password(impl_ref self,
+	auto ad_set_password(impl_ref self,
 	  const dn &user,
 	  const std::optional<std::string> &old_password,
 	  const std::string &new_password,
-	  const std::string &context)
+	  const std::string &context) -> capy::task<result<void>>
 	{
 		if (user.empty()) {
 			co_return fail(client_errc::invalid_dn, context + ": Active Directory needs the user's DN");
@@ -285,12 +286,12 @@ namespace {
 	}
 
 	// change_password (with `old_password`) and reset_password.
-	capy::task<result<void>> set_password(impl_ref self,
+	auto set_password(impl_ref self,
 	  std::string context,
 	  dn user,
 	  std::optional<std::string> old_password,
 	  std::string new_password,
-	  std::optional<ldap::password_method> method)
+	  std::optional<ldap::password_method> method) -> capy::task<result<void>>
 	{
 		if (new_password.empty()) {
 			co_return fail(std::make_error_code(std::errc::invalid_argument), context + ": empty new password");
@@ -328,10 +329,10 @@ namespace {
 
 }// namespace
 
-capy::task<result<void>> connection::change_password(dn user,
+auto connection::change_password(dn user,
   std::string old_password,
   std::string new_password,
-  std::optional<ldap::password_method> method)
+  std::optional<ldap::password_method> method) -> capy::task<result<void>>
 {
 	std::string context = op_context("change password", user);
 	if (impl_ == nullptr) {
@@ -341,8 +342,8 @@ capy::task<result<void>> connection::change_password(dn user,
 	  impl_ref(impl_), std::move(context), std::move(user), std::move(old_password), std::move(new_password), method);
 }
 
-capy::task<result<void>>
-  connection::reset_password(dn user, std::string new_password, std::optional<ldap::password_method> method)
+auto connection::reset_password(dn user, std::string new_password, std::optional<ldap::password_method> method)
+  -> capy::task<result<void>>
 {
 	std::string context = op_context("reset password", user);
 	if (impl_ == nullptr) {

@@ -18,7 +18,7 @@ namespace capy = boost::capy;
 namespace jhetz::ldap::net {
 namespace {
 
-	error with_context(error e, std::string_view prefix)
+	auto with_context(error e, std::string_view prefix) -> error
 	{
 		if (e.context.empty()) {
 			e.context.assign(prefix);
@@ -29,7 +29,7 @@ namespace {
 		return e;
 	}
 
-	std::string hex_byte(std::byte b)
+	auto hex_byte(std::byte b) -> std::string
 	{
 		constexpr char digits[] = "0123456789abcdef";
 		const auto v = std::to_integer<unsigned>(b);
@@ -38,7 +38,7 @@ namespace {
 
 }// namespace
 
-std::span<std::byte> read_buffer::prepare(std::size_t n)
+auto read_buffer::prepare(std::size_t n) -> std::span<std::byte>
 {
 	const std::size_t used = end_ - begin_;
 	if (buf_.size() - end_ < n) {
@@ -76,7 +76,7 @@ void read_buffer::consume(std::size_t n) noexcept
 	}
 }
 
-capy::task<result<std::size_t>> read_frame(transport &t, read_buffer &buf, std::size_t max_message_size)
+auto read_frame(transport &t, read_buffer &buf, std::size_t max_message_size) -> capy::task<result<std::size_t>>
 {
 	std::string where = "read ";
 	where += t.name();
@@ -142,7 +142,7 @@ capy::task<result<std::size_t>> read_frame(transport &t, read_buffer &buf, std::
 	}
 }
 
-capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_options options)
+auto read_message(transport &t, read_buffer &buf, read_options options) -> capy::task<result<message>>
 {
 	auto size = co_await read_frame(t, buf, options.max_message_size);
 	if (!size) {
@@ -158,7 +158,7 @@ capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_op
 	co_return m;
 }
 
-capy::task<result<void>> write_bytes(transport &t, std::span<const std::byte> bytes)
+auto write_bytes(transport &t, std::span<const std::byte> bytes) -> capy::task<result<void>>
 {
 	auto [ec, n] = co_await capy::write(t.stream(), capy::const_buffer(bytes.data(), bytes.size()));
 	if (ec) {
@@ -172,7 +172,7 @@ capy::task<result<void>> write_bytes(transport &t, std::span<const std::byte> by
 	co_return result<void>{};
 }
 
-capy::task<result<void>> write_message(transport &t, const message &m, std::pmr::memory_resource *mr)
+auto write_message(transport &t, const message &m, std::pmr::memory_resource *mr) -> capy::task<result<void>>
 {
 	auto bytes = encode(m, mr);
 	if (!bytes) {
@@ -181,7 +181,7 @@ capy::task<result<void>> write_message(transport &t, const message &m, std::pmr:
 	co_return co_await write_bytes(t, *bytes);
 }
 
-capy::task<result<void>> write_message(transport &t, const message &m, ber::writer &w)
+auto write_message(transport &t, const message &m, ber::writer &w) -> capy::task<result<void>>
 {
 	w.clear();
 	if (auto e = encode(w, m); !e) {

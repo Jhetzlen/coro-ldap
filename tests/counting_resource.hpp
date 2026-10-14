@@ -14,12 +14,12 @@ class counting_resource final : public std::pmr::memory_resource
 	  : upstream_(upstream)
 	{}
 
-	std::size_t allocations() const noexcept { return allocations_; }
-	std::size_t bytes() const noexcept { return bytes_; }
-	std::size_t outstanding() const noexcept { return outstanding_; }
+	auto allocations() const noexcept -> std::size_t { return allocations_; }
+	auto bytes() const noexcept -> std::size_t { return bytes_; }
+	auto outstanding() const noexcept -> std::size_t { return outstanding_; }
 
   private:
-	void *do_allocate(std::size_t n, std::size_t align) override
+	auto do_allocate(std::size_t n, std::size_t align) -> void * override
 	{
 		void *p = upstream_->allocate(n, align);
 		++allocations_;
@@ -32,7 +32,7 @@ class counting_resource final : public std::pmr::memory_resource
 		outstanding_ -= n;
 		upstream_->deallocate(p, n, align);
 	}
-	bool do_is_equal(const std::pmr::memory_resource &other) const noexcept override { return this == &other; }
+	auto do_is_equal(const std::pmr::memory_resource &other) const noexcept -> bool override { return this == &other; }
 
 	std::pmr::memory_resource *upstream_;
 	std::size_t allocations_ = 0;
@@ -46,7 +46,7 @@ class scoped_default_resource
   public:
 	explicit scoped_default_resource(std::pmr::memory_resource *r) noexcept : old_(std::pmr::set_default_resource(r)) {}
 	scoped_default_resource(const scoped_default_resource &) = delete;
-	scoped_default_resource &operator=(const scoped_default_resource &) = delete;
+	auto operator=(const scoped_default_resource &) -> scoped_default_resource & = delete;
 	~scoped_default_resource() { std::pmr::set_default_resource(old_); }
 
   private:

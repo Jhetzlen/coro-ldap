@@ -40,11 +40,11 @@ struct transport::impl
 
 struct transport_access
 {
-	static transport make(transport::kind k, std::string_view name, std::pmr::memory_resource *mr)
+	static auto make(transport::kind k, std::string_view name, std::pmr::memory_resource *mr) -> transport
 	{
 		return transport::make(k, name, mr);
 	}
-	static transport::impl &get(transport &t) noexcept { return *t.impl_; }
+	static auto get(transport &t) noexcept -> transport::impl & { return *t.impl_; }
 };
 
 }// namespace jhetz::ldap::net

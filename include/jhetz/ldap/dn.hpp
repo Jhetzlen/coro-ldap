@@ -38,7 +38,7 @@ namespace jhetz::ldap {
 namespace detail {
 
 	// Characters that may follow `\` as themselves (RFC 4514 `special` + ESC).
-	constexpr bool is_dn_escapable(char c) noexcept
+	constexpr auto is_dn_escapable(char c) noexcept -> bool
 	{
 		switch (c) {
 		case '\\':
@@ -68,7 +68,7 @@ namespace detail {
 	// Scans RFC 4514 text and calls `on_ava(dn_token)` for every AVA in
 	// order. Returns npos on success, otherwise the offset of the error.
 	// constexpr, so the same code validates literals at compile time.
-	template<class F> constexpr std::size_t scan_dn(std::string_view s, F &&on_ava)
+	template<class F> constexpr auto scan_dn(std::string_view s, F &&on_ava) -> std::size_t
 	{
 		constexpr std::size_t ok = std::string_view::npos;
 		if (s.empty()) {
@@ -161,13 +161,13 @@ namespace detail {
 		}
 	}
 
-	constexpr bool is_dn(std::string_view s) noexcept
+	constexpr auto is_dn(std::string_view s) noexcept -> bool
 	{
 		return scan_dn(s, [](const dn_token &) {}) == std::string_view::npos;
 	}
 
 	// Exactly one RDN (one or more AVAs joined with '+'), no ','.
-	constexpr bool is_rdn(std::string_view s) noexcept
+	constexpr auto is_rdn(std::string_view s) noexcept -> bool
 	{
 		std::size_t rdns = 0;
 		const auto count = [&rdns](const dn_token &t) {
@@ -204,14 +204,14 @@ struct ava
 	ava(ava &&other, const allocator_type &alloc)
 	  : type(std::move(other.type), alloc), value(std::move(other.value), alloc), hex_form(other.hex_form)
 	{}
-	ava &operator=(const ava &) = default;
-	ava &operator=(ava &&) = default;
+	auto operator=(const ava &) -> ava & = default;
+	auto operator=(ava &&) -> ava & = default;
 	~ava() = default;
 
-	allocator_type get_allocator() const noexcept { return value.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return value.get_allocator(); }
 
 	// Type case-insensitively, value and form exactly.
-	friend bool operator==(const ava &, const ava &) = default;
+	friend auto operator==(const ava &, const ava &) -> bool = default;
 };
 
 // Relative distinguished name: one or more AVAs joined with '+'. Equality
@@ -247,22 +247,23 @@ struct rdn
 	rdn(rdn &&) noexcept = default;
 	rdn(const rdn &other, const allocator_type &alloc) : avas(other.avas, alloc) {}
 	rdn(rdn &&other, const allocator_type &alloc) : avas(std::move(other.avas), alloc) {}
-	rdn &operator=(const rdn &) = default;
-	rdn &operator=(rdn &&) = default;
+	auto operator=(const rdn &) -> rdn & = default;
+	auto operator=(rdn &&) -> rdn & = default;
 	~rdn() = default;
 
-	allocator_type get_allocator() const noexcept { return avas.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return avas.get_allocator(); }
 
 	// RFC 4514 text of one RDN (`uid=jdoe`, `cn=a+sn=b`). invalid_dn if the
 	// text is empty, has a syntax error, or holds more than one RDN.
-	[[nodiscard]] static result<rdn> parse(std::string_view text,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	[[nodiscard]] static auto parse(std::string_view text,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<rdn>;
 
 	// Escaped like dn::to_string(); parse(to_string()) == *this for an RDN
 	// that parse() or the literal built.
-	[[nodiscard]] std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] auto to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
+	  -> std::pmr::string;
 
-	friend bool operator==(const rdn &a, const rdn &b);
+	friend auto operator==(const rdn &a, const rdn &b) -> bool;
 };
 
 class dn
@@ -290,40 +291,41 @@ class dn
 	dn(dn &&) noexcept = default;
 	dn(const dn &other, const allocator_type &alloc) : rdns_(other.rdns_, alloc) {}
 	dn(dn &&other, const allocator_type &alloc) : rdns_(std::move(other.rdns_), alloc) {}
-	dn &operator=(const dn &) = default;
-	dn &operator=(dn &&) = default;
+	auto operator=(const dn &) -> dn & = default;
+	auto operator=(dn &&) -> dn & = default;
 	~dn() = default;
 
-	allocator_type get_allocator() const noexcept { return rdns_.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return rdns_.get_allocator(); }
 
-	[[nodiscard]] static result<dn> parse(std::string_view text,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	[[nodiscard]] static auto parse(std::string_view text,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<dn>;
 
 	// RFC 4514 string form. Types keep their spelling; values are escaped as
 	// needed (`, + " \ < > ;`, leading space or '#', trailing space as `\c`;
 	// NUL and other control characters as `\xx`). parse(to_string()) == *this.
-	[[nodiscard]] std::pmr::string to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] auto to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
+	  -> std::pmr::string;
 
 	// Most specific RDN first, as in the string form.
-	const std::pmr::vector<rdn> &rdns() const noexcept { return rdns_; }
-	[[nodiscard]] bool empty() const noexcept { return rdns_.empty(); }
+	auto rdns() const noexcept -> const std::pmr::vector<rdn> & { return rdns_; }
+	[[nodiscard]] auto empty() const noexcept -> bool { return rdns_.empty(); }
 	// Without the first RDN; the parent of the empty DN is the empty DN.
-	[[nodiscard]] dn parent() const;
+	[[nodiscard]] auto parent() const -> dn;
 	// `r` prepended to this DN: `base.child(ldap::rdn{"uid=jdoe"})` is
 	// `uid=jdoe,<base>`. Throws std::invalid_argument (programming error) if
 	// `r` has no AVA, a type that is not a descriptor or numeric OID, or an
 	// empty `#` value.
-	[[nodiscard]] dn child(const rdn &r) const;
-	[[nodiscard]] dn child(rdn &&r) const;
+	[[nodiscard]] auto child(const rdn &r) const -> dn;
+	[[nodiscard]] auto child(rdn &&r) const -> dn;
 	// `relative` prepended to this DN, its RDNs in order (the leftmost stays
 	// the most specific): `base.child(ldap::dn{"uid=jdoe,ou=people"})` is
 	// `uid=jdoe,ou=people,<base>`. A child of the empty DN is `relative`.
 	//
 	// `base.child({"uid=jdoe"})` does not compile (ambiguous between rdn
 	// and dn): name the type, `ldap::rdn{...}` or `ldap::dn{...}`.
-	[[nodiscard]] dn child(const dn &relative) const;
+	[[nodiscard]] auto child(const dn &relative) const -> dn;
 
-	friend bool operator==(const dn &, const dn &) = default;
+	friend auto operator==(const dn &, const dn &) -> bool = default;
 
   private:
 	std::pmr::vector<rdn> rdns_{};
@@ -334,7 +336,7 @@ class dn
 // `, + " \ < > ;` and a leading space or `#` or a trailing space become
 // `\c`; NUL, other control characters and octets that are not part of valid
 // UTF-8 become `\xx`; valid UTF-8 is kept as is. An empty value stays empty.
-[[nodiscard]] std::pmr::string escape_dn_value(std::string_view value,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+[[nodiscard]] auto escape_dn_value(std::string_view value,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> std::pmr::string;
 
 }// namespace jhetz::ldap

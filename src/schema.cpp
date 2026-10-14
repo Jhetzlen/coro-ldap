@@ -11,7 +11,7 @@
 namespace jhetz::ldap {
 namespace {
 
-	bool is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+	auto is_space(char c) -> bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
 	// RFC 4512 section 4.1 definitions: "(", ")", 'quoted strings' (with
 	// \27 and \5C escapes) and bare words (keywords, OIDs, descriptors,
@@ -27,7 +27,7 @@ namespace {
 	  public:
 		explicit lexer(std::string_view s) : s_(s) {}
 
-		result<token> next()
+		auto next() -> result<token>
 		{
 			while (pos_ < s_.size() && is_space(s_[pos_])) {
 				++pos_;
@@ -83,7 +83,7 @@ namespace {
 	// X-NDS_SYNTAX). Anything else (a "{256}" spaced from SYNTAX's OID, a
 	// stray "$" or OID) fails the definition: taken as a keyword, it would
 	// swallow the next one (SINGLE-VALUE, say) as its value.
-	bool is_keyword(std::string_view k)
+	auto is_keyword(std::string_view k) -> bool
 	{
 		if (k.empty() || !detail::is_alpha(k[0])) {
 			return false;
@@ -92,7 +92,7 @@ namespace {
 	}
 
 	// Keywords without an argument.
-	bool is_flag(std::string_view k)
+	auto is_flag(std::string_view k) -> bool
 	{
 		for (auto f :
 		  { "OBSOLETE", "SINGLE-VALUE", "COLLECTIVE", "NO-USER-MODIFICATION", "ABSTRACT", "STRUCTURAL", "AUXILIARY" }) {
@@ -110,7 +110,7 @@ namespace {
 		std::string oid;
 		std::vector<std::pair<std::string, std::vector<std::string>>> fields;
 
-		const std::vector<std::string> *get(std::string_view keyword) const
+		auto get(std::string_view keyword) const -> const std::vector<std::string> *
 		{
 			for (const auto &[k, v] : fields) {
 				if (detail::iequals(k, keyword)) {
@@ -119,10 +119,10 @@ namespace {
 			}
 			return nullptr;
 		}
-		bool has(std::string_view keyword) const { return get(keyword) != nullptr; }
+		auto has(std::string_view keyword) const -> bool { return get(keyword) != nullptr; }
 	};
 
-	result<definition> parse_definition(std::string_view text)
+	auto parse_definition(std::string_view text) -> result<definition>
 	{
 		auto bad = [](const char *why) { return fail(client_errc::decode_error, detail::format("schema: {}", why)); };
 		lexer lx(text);
@@ -212,7 +212,7 @@ namespace {
 	// noidlen without its length: "1.2.3{64}" -> "1.2.3". The length must
 	// be "{" 1*DIGIT "}" right after the OID and end the text; otherwise
 	// nullopt (the definition is then skipped).
-	std::optional<std::string> strip_length(std::string_view s)
+	auto strip_length(std::string_view s) -> std::optional<std::string>
 	{
 		const std::size_t open = s.find('{');
 		if (open == std::string_view::npos) {
@@ -230,7 +230,7 @@ namespace {
 
 	// Keeps the NAMEs that are valid descriptors (RFC 4512 section 1.4);
 	// others could never be looked up, so they are dropped.
-	std::vector<std::string> valid_names(const std::vector<std::string> *names)
+	auto valid_names(const std::vector<std::string> *names) -> std::vector<std::string>
 	{
 		std::vector<std::string> out;
 		if (names != nullptr) {
@@ -244,7 +244,7 @@ namespace {
 	}
 
 	// "cn;lang-en" -> "cn".
-	std::string_view without_options(std::string_view s) { return s.substr(0, s.find(';')); }
+	auto without_options(std::string_view s) -> std::string_view { return s.substr(0, s.find(';')); }
 
 }// namespace
 
@@ -252,7 +252,7 @@ namespace {
 
 	// The attribute type of a definition that parsed; fails only for its
 	// SYNTAX (server_schema::parse remembers those definitions' names).
-	result<attribute_type> to_attribute_type(definition &&d)
+	auto to_attribute_type(definition &&d) -> result<attribute_type>
 	{
 		attribute_type a;
 		a.oid = std::move(d.oid);
@@ -278,12 +278,12 @@ namespace {
 
 }// namespace
 
-result<attribute_type> parse_attribute_type(std::string_view text)
+auto parse_attribute_type(std::string_view text) -> result<attribute_type>
 {
 	return parse_definition(text).and_then(to_attribute_type);
 }
 
-result<object_class_type> parse_object_class(std::string_view text)
+auto parse_object_class(std::string_view text) -> result<object_class_type>
 {
 	return parse_definition(text).transform([](definition &&d) {
 		object_class_type c;
@@ -293,8 +293,8 @@ result<object_class_type> parse_object_class(std::string_view text)
 	});
 }
 
-server_schema server_schema::parse(std::span<const std::pmr::string> attribute_types,
-  std::span<const std::pmr::string> object_classes)
+auto server_schema::parse(std::span<const std::pmr::string> attribute_types,
+  std::span<const std::pmr::string> object_classes) -> server_schema
 {
 	server_schema s;
 	for (const auto &text : attribute_types) {
@@ -338,24 +338,24 @@ server_schema server_schema::parse(std::span<const std::pmr::string> attribute_t
 	return s;
 }
 
-const attribute_type *server_schema::find_attribute(std::string_view name) const noexcept
+auto server_schema::find_attribute(std::string_view name) const noexcept -> const attribute_type *
 {
 	const auto it = attribute_index_.find(without_options(name));
 	return it == attribute_index_.end() ? nullptr : &attributes_[it->second];
 }
 
-const object_class_type *server_schema::find_object_class(std::string_view name) const noexcept
+auto server_schema::find_object_class(std::string_view name) const noexcept -> const object_class_type *
 {
 	const auto it = class_index_.find(name);
 	return it == class_index_.end() ? nullptr : &classes_[it->second];
 }
 
-bool server_schema::skipped_for_syntax(std::string_view name) const noexcept
+auto server_schema::skipped_for_syntax(std::string_view name) const noexcept -> bool
 {
 	return bad_syntax_.find(without_options(name)) != bad_syntax_.end();
 }
 
-const std::string *server_schema::syntax_of(const attribute_type &a) const noexcept
+auto server_schema::syntax_of(const attribute_type &a) const noexcept -> const std::string *
 {
 	const attribute_type *cur = &a;
 	for (int depth = 0; depth < 32 && cur != nullptr; ++depth) {
@@ -372,9 +372,9 @@ const std::string *server_schema::syntax_of(const attribute_type &a) const noexc
 
 // ---------------------------------------------------------------- report
 
-bool schema_report::ok() const noexcept { return std::ranges::none_of(issues, &schema_issue::is_error); }
+auto schema_report::ok() const noexcept -> bool { return std::ranges::none_of(issues, &schema_issue::is_error); }
 
-std::string schema_report::to_string() const
+auto schema_report::to_string() const -> std::string
 {
 	std::string out;
 	for (const auto &i : issues) {
@@ -398,7 +398,7 @@ namespace {
 	// ends without any SYNTAX (RFC 4512 4.1.2 requires a SYNTAX or a SUP;
 	// slapd refuses such a definition, AD always gives SYNTAX). The syntax
 	// cannot be checked then, which is an error, not a silent pass.
-	std::optional<std::string> broken_sup_chain(const server_schema &s, const attribute_type &a)
+	auto broken_sup_chain(const server_schema &s, const attribute_type &a) -> std::optional<std::string>
 	{
 		const attribute_type *cur = &a;
 		for (int depth = 0; depth < 32; ++depth) {

@@ -34,7 +34,7 @@ namespace {
 namespace ber = jhetz::ldap::ber;
 namespace ldap = jhetz::ldap;
 
-std::pmr::vector<std::byte> must_encode(const ldap::filter &f)
+auto must_encode(const ldap::filter &f) -> std::pmr::vector<std::byte>
 {
 	ber::writer w;
 	auto r = ldap::encode_filter(w, f);
@@ -42,7 +42,7 @@ std::pmr::vector<std::byte> must_encode(const ldap::filter &f)
 	return w.take();
 }
 
-ldap::filter must_decode(std::span<const std::byte> bytes)
+auto must_decode(std::span<const std::byte> bytes) -> ldap::filter
 {
 	ber::reader r(bytes);
 	auto f = ldap::decode_filter(r);
@@ -51,7 +51,7 @@ ldap::filter must_decode(std::span<const std::byte> bytes)
 	return std::move(*f);
 }
 
-ldap::filter must_parse(std::string_view text)
+auto must_parse(std::string_view text) -> ldap::filter
 {
 	auto f = ldap::filter::raw(text);
 	check(f.has_value(), "f.has_value()");
@@ -166,7 +166,7 @@ void check_ber(std::span<const std::byte> input)
 
 }// namespace
 
-extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size)
+extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size) -> int
 {
 	const std::string_view text(reinterpret_cast<const char *>(data), size);
 	check_text(text);

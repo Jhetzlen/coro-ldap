@@ -28,7 +28,8 @@ using detail::start_search;
 
 namespace {
 
-	search_stream::state *new_state(connection::impl &c, std::pmr::memory_resource *entries, std::string context)
+	auto new_state(connection::impl &c, std::pmr::memory_resource *entries, std::string context)
+	  -> search_stream::state *
 	{
 		std::pmr::polymorphic_allocator<> alloc(c.mr());
 		return alloc.new_object<search_stream::state>(&c, entries, std::move(context));
@@ -49,7 +50,7 @@ namespace {
 
 namespace detail {
 
-	result<message> search_message(connection::impl &c, const search_params &p, const std::string &context)
+	auto search_message(connection::impl &c, const search_params &p, const std::string &context) -> result<message>
 	{
 		const auto seconds = p.time_limit.count();
 		if (seconds < 0 || seconds > max_int) {
@@ -70,8 +71,8 @@ namespace detail {
 		return with_controls(std::move(wire), p.controls, c.mr(), context);
 	}
 
-	result<ldap::search_stream>
-	  start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr, const std::stop_token &stop)
+	auto start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr, const std::stop_token &stop)
+	  -> result<ldap::search_stream>
 	{
 		std::string context = op_context("search", p.base);
 		auto request = search_message(c, p, context);
@@ -93,7 +94,8 @@ namespace detail {
 
 }// namespace detail
 
-capy::task<result<ldap::search_stream>> connection::search_stream(search_params p, std::pmr::memory_resource *mr)
+auto connection::search_stream(search_params p, std::pmr::memory_resource *mr)
+  -> capy::task<result<ldap::search_stream>>
 {
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection(op_context("search", p.base)));
@@ -101,7 +103,8 @@ capy::task<result<ldap::search_stream>> connection::search_stream(search_params 
 	co_return start_search(*impl_, p, mr, co_await capy::this_coro::stop_token);
 }
 
-capy::task<result<std::pmr::vector<entry>>> connection::search(search_params request, std::pmr::memory_resource *mr)
+auto connection::search(search_params request, std::pmr::memory_resource *mr)
+  -> capy::task<result<std::pmr::vector<entry>>>
 {
 	auto s = co_await search_stream(std::move(request), mr);
 	if (!s) {
@@ -123,7 +126,7 @@ capy::task<result<std::pmr::vector<entry>>> connection::search(search_params req
 
 namespace detail {
 
-	capy::task<result<std::optional<entry>>> read_one(impl_ref self, search_params p)
+	auto read_one(impl_ref self, search_params p) -> capy::task<result<std::optional<entry>>>
 	{
 		auto s = start_search(*self, p, std::pmr::get_default_resource(), co_await capy::this_coro::stop_token);
 		if (!s) {
@@ -150,7 +153,7 @@ namespace detail {
 
 search_stream::search_stream(search_stream &&other) noexcept : state_(std::exchange(other.state_, nullptr)) {}
 
-search_stream &search_stream::operator=(search_stream &&other) noexcept
+auto search_stream::operator=(search_stream &&other) noexcept -> search_stream &
 {
 	if (this != &other) {
 		delete_state(state_);
@@ -161,21 +164,21 @@ search_stream &search_stream::operator=(search_stream &&other) noexcept
 
 search_stream::~search_stream() { delete_state(state_); }
 
-bool search_stream::done() const noexcept { return state_ == nullptr || state_->finished; }
+auto search_stream::done() const noexcept -> bool { return state_ == nullptr || state_->finished; }
 
-const string_list &search_stream::references() const noexcept
+auto search_stream::references() const noexcept -> const string_list &
 {
 	static const string_list none;
 	return state_ == nullptr ? none : state_->references;
 }
 
-const std::pmr::vector<control> &search_stream::controls() const noexcept
+auto search_stream::controls() const noexcept -> const std::pmr::vector<control> &
 {
 	static const std::pmr::vector<control> none;
 	return state_ == nullptr ? none : state_->controls;
 }
 
-capy::task<result<std::optional<entry>>> search_stream::next()
+auto search_stream::next() -> capy::task<result<std::optional<entry>>>
 {
 	if (state_ == nullptr) {
 		co_return std::unexpected(no_connection("search"));
@@ -224,7 +227,7 @@ capy::task<result<std::optional<entry>>> search_stream::next()
 	}
 }
 
-std::pmr::vector<url> search_stream::reference_urls(std::pmr::memory_resource *mr) const
+auto search_stream::reference_urls(std::pmr::memory_resource *mr) const -> std::pmr::vector<url>
 {
 	return url::parse_list(references(), mr);
 }

@@ -58,8 +58,8 @@ struct object_class_type
 
 // One definition each (an attributeTypes / objectClasses value); errors are
 // decode_error with the reason.
-[[nodiscard]] result<attribute_type> parse_attribute_type(std::string_view text);
-[[nodiscard]] result<object_class_type> parse_object_class(std::string_view text);
+[[nodiscard]] auto parse_attribute_type(std::string_view text) -> result<attribute_type>;
+[[nodiscard]] auto parse_object_class(std::string_view text) -> result<object_class_type>;
 
 class server_schema
 {
@@ -67,31 +67,31 @@ class server_schema
 	server_schema() = default;
 	// From the attributeTypes and objectClasses values of a subschema
 	// entry. Unparseable definitions are skipped (see skipped()).
-	[[nodiscard]] static server_schema parse(std::span<const std::pmr::string> attribute_types,
-	  std::span<const std::pmr::string> object_classes);
+	[[nodiscard]] static auto parse(std::span<const std::pmr::string> attribute_types,
+	  std::span<const std::pmr::string> object_classes) -> server_schema;
 
 	// By any NAME (case-insensitive) or the OID; options ("cn;lang-en") are
 	// ignored. nullptr if unknown. Case folds A-Z only (names and OIDs are
 	// ASCII, RFC 4512 section 1.4). No allocation.
-	[[nodiscard]] const attribute_type *find_attribute(std::string_view name) const noexcept;
-	[[nodiscard]] const object_class_type *find_object_class(std::string_view name) const noexcept;
+	[[nodiscard]] auto find_attribute(std::string_view name) const noexcept -> const attribute_type *;
+	[[nodiscard]] auto find_object_class(std::string_view name) const noexcept -> const object_class_type *;
 	// The attribute's SYNTAX, or its supertypes' (SUP followed, with a depth
 	// limit against cycles); nullptr if none declares one, or if a SUP on the
 	// chain is not found (see skipped_for_syntax). Points into a (if it
 	// declares SYNTAX itself) or the schema: valid while both live, so a
 	// temporary attribute is rejected.
-	[[nodiscard]] const std::string *syntax_of(const attribute_type &a) const noexcept;
-	const std::string *syntax_of(const attribute_type &&) const = delete;
+	[[nodiscard]] auto syntax_of(const attribute_type &a) const noexcept -> const std::string *;
+	auto syntax_of(const attribute_type &&) const -> const std::string * = delete;
 	// An attribute type definition by this NAME or OID (options ignored)
 	// parsed, but was skipped because its SYNTAX is not a numeric OID: the
 	// server defines it, the library cannot use it. Case-insensitive, no
 	// allocation.
-	[[nodiscard]] bool skipped_for_syntax(std::string_view name) const noexcept;
+	[[nodiscard]] auto skipped_for_syntax(std::string_view name) const noexcept -> bool;
 
-	std::size_t attribute_count() const noexcept { return attributes_.size(); }
-	std::size_t object_class_count() const noexcept { return classes_.size(); }
+	auto attribute_count() const noexcept -> std::size_t { return attributes_.size(); }
+	auto object_class_count() const noexcept -> std::size_t { return classes_.size(); }
 	// Definitions that did not parse.
-	std::size_t skipped() const noexcept { return skipped_; }
+	auto skipped() const noexcept -> std::size_t { return skipped_; }
 
   private:
 	std::vector<attribute_type> attributes_{};
@@ -128,7 +128,7 @@ namespace syntax {
 // value_traits<T> a `syntaxes` member (a range of const char*).
 template<class T> struct value_syntaxes
 {
-	static std::span<const char *const> get()
+	static auto get() -> std::span<const char *const>
 	{
 		if constexpr (requires { value_traits<T>::syntaxes; }) {
 			static constexpr auto list = value_traits<T>::syntaxes;
@@ -157,7 +157,7 @@ template<std::integral T>
 	requires(!std::same_as<T, bool> && !detail::char_like<T>)
 struct value_syntaxes<T>
 {
-	static std::span<const char *const> get()
+	static auto get() -> std::span<const char *const>
 	{
 		if constexpr (std::signed_integral<T> && std::numeric_limits<T>::digits >= 63) {
 			return detail::int64_syntaxes;
@@ -168,15 +168,15 @@ struct value_syntaxes<T>
 };
 template<> struct value_syntaxes<bool>
 {
-	static std::span<const char *const> get() { return detail::bool_syntaxes; }
+	static auto get() -> std::span<const char *const> { return detail::bool_syntaxes; }
 };
 template<> struct value_syntaxes<dn>
 {
-	static std::span<const char *const> get() { return detail::dn_syntaxes; }
+	static auto get() -> std::span<const char *const> { return detail::dn_syntaxes; }
 };
 template<> struct value_syntaxes<std::chrono::sys_seconds>
 {
-	static std::span<const char *const> get() { return detail::time_syntaxes; }
+	static auto get() -> std::span<const char *const> { return detail::time_syntaxes; }
 };
 
 // ---------------------------------------------------------------- report
@@ -196,16 +196,16 @@ struct schema_issue
 	kind what;
 	std::string name;// the attribute or object class
 	std::string detail;
-	bool is_error() const noexcept { return what != kind::single_member_multi_valued; }
+	auto is_error() const noexcept -> bool { return what != kind::single_member_multi_valued; }
 };
 
 struct schema_report
 {
 	std::vector<schema_issue> issues{};
 	// No errors (warnings allowed).
-	bool ok() const noexcept;
+	auto ok() const noexcept -> bool;
 	// One issue per line: "error: attribute uidNumber: ..." / "warning: ...".
-	[[nodiscard]] std::string to_string() const;
+	[[nodiscard]] auto to_string() const -> std::string;
 };
 
 namespace detail {
@@ -219,7 +219,7 @@ namespace detail {
 }// namespace detail
 
 // Checks T's descriptor against the server's schema; lists every issue.
-template<described T> [[nodiscard]] schema_report validate(const server_schema &s)
+template<described T> [[nodiscard]] auto validate(const server_schema &s) -> schema_report
 {
 	schema_report out;
 	for (const char *oc : schema<T>.classes.names) {

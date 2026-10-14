@@ -18,13 +18,13 @@ namespace {
 
 thread_local std::size_t allocations = 0;
 
-void *counted_alloc(std::size_t n) noexcept
+auto counted_alloc(std::size_t n) noexcept -> void *
 {
 	++allocations;
 	return std::malloc(n == 0 ? 1 : n);
 }
 
-void *counted_alloc_or_throw(std::size_t n)
+auto counted_alloc_or_throw(std::size_t n) -> void *
 {
 	if (void *p = counted_alloc(n)) {
 		return p;
@@ -34,10 +34,10 @@ void *counted_alloc_or_throw(std::size_t n)
 
 }// namespace
 
-void *operator new(std::size_t n) { return counted_alloc_or_throw(n); }
-void *operator new[](std::size_t n) { return counted_alloc_or_throw(n); }
-void *operator new(std::size_t n, const std::nothrow_t &) noexcept { return counted_alloc(n); }
-void *operator new[](std::size_t n, const std::nothrow_t &) noexcept { return counted_alloc(n); }
+auto operator new(std::size_t n) -> void * { return counted_alloc_or_throw(n); }
+auto operator new[](std::size_t n) -> void * { return counted_alloc_or_throw(n); }
+auto operator new(std::size_t n, const std::nothrow_t &) noexcept -> void * { return counted_alloc(n); }
+auto operator new[](std::size_t n, const std::nothrow_t &) noexcept -> void * { return counted_alloc(n); }
 void operator delete(void *p) noexcept { std::free(p); }
 void operator delete[](void *p) noexcept { std::free(p); }
 void operator delete(void *p, std::size_t) noexcept { std::free(p); }

@@ -38,7 +38,7 @@ class scoped_env
 		::setenv(name, value, 1);
 	}
 	scoped_env(const scoped_env &) = delete;
-	scoped_env &operator=(const scoped_env &) = delete;
+	auto operator=(const scoped_env &) -> scoped_env & = delete;
 	~scoped_env()
 	{
 		if (old_) {

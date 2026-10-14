@@ -34,18 +34,18 @@ namespace {
 	  public:
 		gss_handle() = default;
 		gss_handle(const gss_handle &) = delete;
-		gss_handle &operator=(const gss_handle &) = delete;
+		auto operator=(const gss_handle &) -> gss_handle & = delete;
 		~gss_handle() { reset(); }
 
-		H get() const noexcept { return h_; }
+		auto get() const noexcept -> H { return h_; }
 		// For a call that creates the handle: releases the current one.
-		H *out() noexcept
+		auto out() noexcept -> H *
 		{
 			reset();
 			return &h_;
 		}
 		// For a call that updates the handle in place (gss_init_sec_context).
-		H *in_out() noexcept { return &h_; }
+		auto in_out() noexcept -> H * { return &h_; }
 		void reset() noexcept
 		{
 			if (h_ == nullptr) {
@@ -73,7 +73,7 @@ namespace {
 		gss_buffer_desc desc{ 0, nullptr };
 		output_buffer() = default;
 		output_buffer(const output_buffer &) = delete;
-		output_buffer &operator=(const output_buffer &) = delete;
+		auto operator=(const output_buffer &) -> output_buffer & = delete;
 		~output_buffer()
 		{
 			OM_uint32 minor = 0;
@@ -81,7 +81,7 @@ namespace {
 				gss_release_buffer(&minor, &desc);
 			}
 		}
-		std::string_view view() const noexcept
+		auto view() const noexcept -> std::string_view
 		{
 			return desc.value == nullptr ? std::string_view()
 										 : std::string_view(static_cast<const char *>(desc.value), desc.length);
@@ -90,13 +90,13 @@ namespace {
 
 	// An input buffer over caller memory (GSS-API takes non-const pointers
 	// but does not write through input buffers).
-	gss_buffer_desc input(std::string_view s) noexcept
+	auto input(std::string_view s) noexcept -> gss_buffer_desc
 	{
 		return gss_buffer_desc{ s.size(), const_cast<char *>(s.data()) };
 	}
 
 	// gss_display_status's messages for one status value, joined with "; ".
-	std::string status_text(OM_uint32 status, int type)
+	auto status_text(OM_uint32 status, int type) -> std::string
 	{
 		std::string out;
 		OM_uint32 message_context = 0;
@@ -121,7 +121,7 @@ namespace {
 		return out;
 	}
 
-	std::unexpected<error> gss_failure(std::string_view call, OM_uint32 major, OM_uint32 minor)
+	auto gss_failure(std::string_view call, OM_uint32 major, OM_uint32 minor) -> std::unexpected<error>
 	{
 		std::string text(call);
 		text += ": ";
@@ -136,14 +136,17 @@ namespace {
 		return fail(client_errc::gssapi_failure, text);
 	}
 
-	std::unexpected<error> input_error(std::string_view what) { return fail(client_errc::encode_error, what); }
+	auto input_error(std::string_view what) -> std::unexpected<error> { return fail(client_errc::encode_error, what); }
 
-	std::unexpected<error> refused(std::string_view what) { return fail(client_errc::unexpected_response, what); }
+	auto refused(std::string_view what) -> std::unexpected<error>
+	{
+		return fail(client_errc::unexpected_response, what);
+	}
 
 	// Well-formed UTF-8 (RFC 3629: U8_NEXT refuses overlong forms,
 	// surrogates and code points above U+10FFFF) without control characters
 	// (C0, DEL, C1). Every other code point is accepted.
-	result<void> check_text(std::string_view s, std::string_view what)
+	auto check_text(std::string_view s, std::string_view what) -> result<void>
 	{
 		const auto *p = reinterpret_cast<const std::uint8_t *>(s.data());
 		const auto n = static_cast<std::int64_t>(s.size());
@@ -160,7 +163,7 @@ namespace {
 		return {};
 	}
 
-	result<void> import_name(std::string_view text, gss_OID type, name_handle &name)
+	auto import_name(std::string_view text, gss_OID type, name_handle &name) -> result<void>
 	{
 		OM_uint32 minor = 0;
 		gss_buffer_desc in = input(text);
@@ -175,7 +178,7 @@ namespace {
 
 namespace detail {
 
-	result<gssapi_layer_offer> parse_gssapi_layer_offer(std::string_view message)
+	auto parse_gssapi_layer_offer(std::string_view message) -> result<gssapi_layer_offer>
 	{
 		// RFC 4752 section 3.1: "If the resulting cleartext is not 4 octets
 		// long, the client fails the negotiation."
@@ -188,7 +191,7 @@ namespace detail {
 			(std::uint32_t{ byte(1) } << 16) | (std::uint32_t{ byte(2) } << 8) | std::uint32_t{ byte(3) } };
 	}
 
-	result<std::string> gssapi_layer_reply(const gssapi_layer_offer &offer, std::string_view authz_id)
+	auto gssapi_layer_reply(const gssapi_layer_offer &offer, std::string_view authz_id) -> result<std::string>
 	{
 		if ((offer.layers & gssapi_no_layer) == 0) {
 			if ((offer.layers & (gssapi_integrity | gssapi_confidentiality)) != 0) {
@@ -233,7 +236,7 @@ struct sasl_gssapi::state
 		state &s;
 		explicit busy_scope(state &s_) noexcept : s(s_) {}
 		busy_scope(const busy_scope &) = delete;
-		busy_scope &operator=(const busy_scope &) = delete;
+		auto operator=(const busy_scope &) -> busy_scope & = delete;
 		~busy_scope() { s.busy.store(false, std::memory_order_release); }
 	};
 
@@ -246,7 +249,7 @@ struct sasl_gssapi::state
 	}
 
 	// One gss_init_sec_context call, with the server's token (none at first).
-	result<std::optional<std::string>> init(std::optional<std::string_view> token)
+	auto init(std::optional<std::string_view> token) -> result<std::optional<std::string>>
 	{
 		OM_uint32 minor = 0;
 		gss_buffer_desc in = input(token.value_or(std::string_view()));
@@ -284,7 +287,7 @@ struct sasl_gssapi::state
 	}
 
 	// The server's wrapped offer gives the wrapped reply.
-	result<std::optional<std::string>> reply(std::string_view wrapped_offer, std::string_view authz_id)
+	auto reply(std::string_view wrapped_offer, std::string_view authz_id) -> result<std::optional<std::string>>
 	{
 		OM_uint32 minor = 0;
 		gss_buffer_desc in = input(wrapped_offer);
@@ -314,7 +317,7 @@ struct sasl_gssapi::state
 
 	// The first token: names imported, credentials acquired (for a given
 	// principal), first gss_init_sec_context call.
-	result<std::optional<std::string>> begin(const sasl_gssapi_options &options, std::string_view host)
+	auto begin(const sasl_gssapi_options &options, std::string_view host) -> result<std::optional<std::string>>
 	{
 		std::string target_name = options.target;
 		if (target_name.empty()) {
@@ -366,11 +369,11 @@ sasl_gssapi::sasl_gssapi(sasl_gssapi_options options) : options_(std::move(optio
 
 sasl_gssapi::~sasl_gssapi() = default;
 sasl_gssapi::sasl_gssapi(sasl_gssapi &&) noexcept = default;
-sasl_gssapi &sasl_gssapi::operator=(sasl_gssapi &&) noexcept = default;
+auto sasl_gssapi::operator=(sasl_gssapi &&) noexcept -> sasl_gssapi & = default;
 
 void sasl_gssapi::prepare(const sasl_bind_context &context) { host_.assign(context.host); }
 
-sasl_work sasl_gssapi::offload_start()
+auto sasl_gssapi::offload_start() -> sasl_work
 {
 	// A new state for each bind: one whose step sasl_bind gave up on may
 	// still be in use by its thread.
@@ -383,7 +386,7 @@ sasl_work sasl_gssapi::offload_start()
 	};
 }
 
-sasl_work sasl_gssapi::offload_step(std::optional<std::string_view> challenge)
+auto sasl_gssapi::offload_step(std::optional<std::string_view> challenge) -> sasl_work
 {
 	// Only gss_init_sec_context may block; step() handles the rest
 	// (the security layer reply, errors) on the I/O thread.
@@ -399,9 +402,9 @@ sasl_work sasl_gssapi::offload_step(std::optional<std::string_view> challenge)
 	};
 }
 
-result<std::optional<std::string>> sasl_gssapi::start() { return offload_start()(); }
+auto sasl_gssapi::start() -> result<std::optional<std::string>> { return offload_start()(); }
 
-result<std::optional<std::string>> sasl_gssapi::step(std::optional<std::string_view> challenge)
+auto sasl_gssapi::step(std::optional<std::string_view> challenge) -> result<std::optional<std::string>>
 {
 	if (state_ == nullptr) {
 		return refused("a challenge before the exchange started");
@@ -437,7 +440,7 @@ result<std::optional<std::string>> sasl_gssapi::step(std::optional<std::string_v
 	return refused("a challenge after the security layer reply");
 }
 
-result<void> sasl_gssapi::complete(std::optional<std::string_view> server_creds)
+auto sasl_gssapi::complete(std::optional<std::string_view> server_creds) -> result<void>
 {
 	if (state_ == nullptr) {
 		return refused("success before the exchange started");

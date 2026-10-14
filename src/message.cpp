@@ -20,7 +20,7 @@ using detail::variant_with;
 
 namespace {
 
-	string_list strings(std::initializer_list<std::string_view> list, const string_list::allocator_type &alloc)
+	auto strings(std::initializer_list<std::string_view> list, const string_list::allocator_type &alloc) -> string_list
 	{
 		// Not ranges::to: string_view -> pmr::string is explicit, so it would
 		// build each element as a nested range on the default resource first.
@@ -30,7 +30,7 @@ namespace {
 	// `before`, the peer's `text` sanitized and cut to 64 bytes
 	// (detail::append_sanitized), then `after`: an error context naming a
 	// control type or attribute the peer sent.
-	std::string sanitized_context(std::string_view before, std::string_view text, std::string_view after)
+	auto sanitized_context(std::string_view before, std::string_view text, std::string_view after) -> std::string
 	{
 		std::string out(before);
 		detail::append_sanitized(out, text, 64);
@@ -59,7 +59,7 @@ ldap_result::ldap_result(ldap_result &&other, const allocator_type &alloc)
 	diagnostic_message(std::move(other.diagnostic_message), alloc), referral(std::move(other.referral), alloc)
 {}
 
-error ldap_result::to_error(std::string_view context) const
+auto ldap_result::to_error(std::string_view context) const -> error
 {
 	// On the default resource, whatever this result's resource is: errors
 	// must not depend on an arena (see error.hpp).
@@ -90,7 +90,7 @@ control::control(control &&other, const allocator_type &alloc)
 	value(optional_with(std::move(other.value), alloc))
 {}
 
-control &control::operator=(const control &other)
+auto control::operator=(const control &other) -> control &
 {
 	type = other.type;
 	criticality = other.criticality;
@@ -98,7 +98,7 @@ control &control::operator=(const control &other)
 	return *this;
 }
 
-control &control::operator=(control &&other)
+auto control::operator=(control &&other) -> control &
 {
 	type = std::move(other.type);
 	criticality = other.criticality;
@@ -126,14 +126,14 @@ sasl_auth::sasl_auth(sasl_auth &&other, const allocator_type &alloc)
   : mechanism(std::move(other.mechanism), alloc), credentials(optional_with(std::move(other.credentials), alloc))
 {}
 
-sasl_auth &sasl_auth::operator=(const sasl_auth &other)
+auto sasl_auth::operator=(const sasl_auth &other) -> sasl_auth &
 {
 	mechanism = other.mechanism;
 	assign_optional(credentials, other.credentials, get_allocator());
 	return *this;
 }
 
-sasl_auth &sasl_auth::operator=(sasl_auth &&other)
+auto sasl_auth::operator=(sasl_auth &&other) -> sasl_auth &
 {
 	mechanism = std::move(other.mechanism);
 	assign_optional(credentials, std::move(other.credentials), get_allocator());
@@ -156,7 +156,7 @@ bind_request::bind_request(bind_request &&other, const allocator_type &alloc)
 	authentication(variant_with(std::move(other.authentication), alloc))
 {}
 
-bind_request &bind_request::operator=(const bind_request &other)
+auto bind_request::operator=(const bind_request &other) -> bind_request &
 {
 	version = other.version;
 	name = other.name;
@@ -164,7 +164,7 @@ bind_request &bind_request::operator=(const bind_request &other)
 	return *this;
 }
 
-bind_request &bind_request::operator=(bind_request &&other)
+auto bind_request::operator=(bind_request &&other) -> bind_request &
 {
 	version = other.version;
 	name = std::move(other.name);
@@ -186,14 +186,14 @@ bind_response::bind_response(bind_response &&other, const allocator_type &alloc)
   : result(std::move(other.result), alloc), server_sasl_creds(optional_with(std::move(other.server_sasl_creds), alloc))
 {}
 
-bind_response &bind_response::operator=(const bind_response &other)
+auto bind_response::operator=(const bind_response &other) -> bind_response &
 {
 	result = other.result;
 	assign_optional(server_sasl_creds, other.server_sasl_creds, get_allocator());
 	return *this;
 }
 
-bind_response &bind_response::operator=(bind_response &&other)
+auto bind_response::operator=(bind_response &&other) -> bind_response &
 {
 	result = std::move(other.result);
 	assign_optional(server_sasl_creds, std::move(other.server_sasl_creds), get_allocator());
@@ -244,7 +244,7 @@ modify_dn_request::modify_dn_request(modify_dn_request &&other, const allocator_
 	delete_old_rdn(other.delete_old_rdn), new_superior(optional_with(std::move(other.new_superior), alloc))
 {}
 
-modify_dn_request &modify_dn_request::operator=(const modify_dn_request &other)
+auto modify_dn_request::operator=(const modify_dn_request &other) -> modify_dn_request &
 {
 	entry = other.entry;
 	new_rdn = other.new_rdn;
@@ -253,7 +253,7 @@ modify_dn_request &modify_dn_request::operator=(const modify_dn_request &other)
 	return *this;
 }
 
-modify_dn_request &modify_dn_request::operator=(modify_dn_request &&other)
+auto modify_dn_request::operator=(modify_dn_request &&other) -> modify_dn_request &
 {
 	entry = std::move(other.entry);
 	new_rdn = std::move(other.new_rdn);
@@ -277,14 +277,14 @@ extended_request::extended_request(extended_request &&other, const allocator_typ
 	request_value(optional_with(std::move(other.request_value), alloc))
 {}
 
-extended_request &extended_request::operator=(const extended_request &other)
+auto extended_request::operator=(const extended_request &other) -> extended_request &
 {
 	request_name = other.request_name;
 	assign_optional(request_value, other.request_value, get_allocator());
 	return *this;
 }
 
-extended_request &extended_request::operator=(extended_request &&other)
+auto extended_request::operator=(extended_request &&other) -> extended_request &
 {
 	request_name = std::move(other.request_name);
 	assign_optional(request_value, std::move(other.request_value), get_allocator());
@@ -309,7 +309,7 @@ extended_response::extended_response(extended_response &&other, const allocator_
 	response_value(optional_with(std::move(other.response_value), alloc))
 {}
 
-extended_response &extended_response::operator=(const extended_response &other)
+auto extended_response::operator=(const extended_response &other) -> extended_response &
 {
 	result = other.result;
 	assign_optional(response_name, other.response_name, get_allocator());
@@ -317,7 +317,7 @@ extended_response &extended_response::operator=(const extended_response &other)
 	return *this;
 }
 
-extended_response &extended_response::operator=(extended_response &&other)
+auto extended_response::operator=(extended_response &&other) -> extended_response &
 {
 	result = std::move(other.result);
 	assign_optional(response_name, std::move(other.response_name), get_allocator());
@@ -347,14 +347,14 @@ intermediate_response::intermediate_response(intermediate_response &&other, cons
 	response_value(optional_with(std::move(other.response_value), alloc)), alloc_(alloc)
 {}
 
-intermediate_response &intermediate_response::operator=(const intermediate_response &other)
+auto intermediate_response::operator=(const intermediate_response &other) -> intermediate_response &
 {
 	assign_optional(response_name, other.response_name, alloc_);
 	assign_optional(response_value, other.response_value, alloc_);
 	return *this;
 }
 
-intermediate_response &intermediate_response::operator=(intermediate_response &&other)
+auto intermediate_response::operator=(intermediate_response &&other) -> intermediate_response &
 {
 	assign_optional(response_name, std::move(other.response_name), alloc_);
 	assign_optional(response_value, std::move(other.response_value), alloc_);
@@ -378,7 +378,7 @@ message::message(message &&other, const allocator_type &alloc)
   : id(other.id), op(variant_with(std::move(other.op), alloc)), controls(std::move(other.controls), alloc)
 {}
 
-message &message::operator=(const message &other)
+auto message::operator=(const message &other) -> message &
 {
 	id = other.id;
 	assign_variant(op, other.op, get_allocator());
@@ -386,7 +386,7 @@ message &message::operator=(const message &other)
 	return *this;
 }
 
-message &message::operator=(message &&other)
+auto message::operator=(message &&other) -> message &
 {
 	id = other.id;
 	assign_variant(op, std::move(other.op), get_allocator());
@@ -421,20 +421,20 @@ namespace {
 		constexpr std::uint8_t intermediate_response = 25;
 	}// namespace op_tag
 
-	std::unexpected<error> bad(std::string_view what, std::size_t offset)
+	auto bad(std::string_view what, std::size_t offset) -> std::unexpected<error>
 	{
 		return fail(client_errc::decode_error, detail::format("message: {} at offset {}", what, offset));
 	}
 
 	// ---------------------------------------------------------------- encoder
 
-	std::unexpected<error> out_of_range(const char *what)
+	auto out_of_range(const char *what) -> std::unexpected<error>
 	{
 		return fail(client_errc::encode_error, detail::format("message: {} out of range", what));
 	}
 
 	// The operations a client sends (RFC 4511 section 4.2 protocolOp requests).
-	bool is_request_op(const protocol_op &op) noexcept
+	auto is_request_op(const protocol_op &op) noexcept -> bool
 	{
 		return std::visit(
 		  []<class T>(const T &) {
@@ -449,7 +449,7 @@ namespace {
 
 	// Checks everything encoding could reject (the filter of a search request
 	// included), so the writer is only touched once nothing can fail.
-	result<void> precheck(const message &m)
+	auto precheck(const message &m) -> result<void>
 	{
 		if (m.id < 0) {
 			return out_of_range("message id");
@@ -695,7 +695,7 @@ namespace {
 	// RFC 4511 section 4: unrecognized elements at the end of a SEQUENCE are
 	// ignored. They must still be well-formed (read() checks the header and
 	// that the length fits).
-	result<void> skip_rest(ber::reader &r)
+	auto skip_rest(ber::reader &r) -> result<void>
 	{
 		while (!r.empty()) {
 			auto e = r.read();
@@ -707,7 +707,7 @@ namespace {
 	}
 
 	// Class and number of the next element, without committing.
-	bool next_is(const ber::reader &r, ber::tag t)
+	auto next_is(const ber::reader &r, ber::tag t) -> bool
 	{
 		if (r.empty()) {
 			return false;
@@ -716,12 +716,12 @@ namespace {
 		return p && p->cls == t.cls && p->number == t.number;
 	}
 
-	result<std::int32_t> read_ranged(ber::reader &r,
+	auto read_ranged(ber::reader &r,
 	  ber::tag t,
 	  std::int64_t lo,
 	  std::int64_t hi,
 	  const char *what,
-	  bool enumerated = false)
+	  bool enumerated = false) -> result<std::int32_t>
 	{
 		const std::size_t offset = r.offset();
 		auto copy = r;
@@ -746,7 +746,7 @@ namespace {
 	// invalid elements (e.g. 8M empty SEQUENCEs) cannot make decode reserve
 	// more than a valid message of the same size would really use. It also
 	// stops at `limit` (what is left of decode_options::max_elements).
-	std::size_t count_elements(ber::reader r, ber::tag t, std::size_t min_size, std::size_t limit)
+	auto count_elements(ber::reader r, ber::tag t, std::size_t min_size, std::size_t limit) -> std::size_t
 	{
 		std::size_t n = 0;
 		while (!r.empty() && n < limit) {
@@ -775,7 +775,7 @@ namespace {
 
 		// The value of a pre-read / post-read response control: exactly one
 		// SearchResultEntry.
-		result<search_result_entry> run_entry(std::span<const std::byte> bytes)
+		auto run_entry(std::span<const std::byte> bytes) -> result<search_result_entry>
 		{
 			ber::reader top(bytes, options_.max_depth);
 			auto op = read_search_result_entry(top, ber::application(op_tag::search_result_entry));
@@ -788,7 +788,7 @@ namespace {
 			return std::move(std::get<search_result_entry>(*op));
 		}
 
-		result<message> run(std::span<const std::byte> bytes)
+		auto run(std::span<const std::byte> bytes) -> result<message>
 		{
 			ber::reader top(bytes, options_.max_depth);
 			auto r = top.enter();
@@ -836,7 +836,7 @@ namespace {
 		}
 
 	  private:
-		result<std::pmr::string> str(ber::reader &r, ber::tag t = ber::tags::octet_string)
+		auto str(ber::reader &r, ber::tag t = ber::tags::octet_string) -> result<std::pmr::string>
 		{
 			if (strings_ == options_.max_elements) [[unlikely]] {
 				return too_many_elements(r.offset());
@@ -848,16 +848,16 @@ namespace {
 		}
 
 		// Kept out of str(), the hottest decoding path.
-		std::unexpected<error> too_many_elements(std::size_t offset) const
+		auto too_many_elements(std::size_t offset) const -> std::unexpected<error>
 		{
 			return fail(client_errc::message_too_large,
 			  detail::format("message: more than {} elements at offset {}", options_.max_elements, offset));
 		}
 
 		// Elements str() may still decode.
-		std::size_t budget() const noexcept { return options_.max_elements - strings_; }
+		auto budget() const noexcept -> std::size_t { return options_.max_elements - strings_; }
 
-		result<std::optional<std::pmr::string>> optional_str(ber::reader &r, ber::tag t)
+		auto optional_str(ber::reader &r, ber::tag t) -> result<std::optional<std::pmr::string>>
 		{
 			if (!next_is(r, t)) {
 				return std::optional<std::pmr::string>{};
@@ -870,7 +870,7 @@ namespace {
 		}
 
 		// COMPONENTS OF LDAPResult: the fields are inline in the op's SEQUENCE.
-		result<void> read_result(ber::reader &r, ldap_result &out)
+		auto read_result(ber::reader &r, ldap_result &out) -> result<void>
 		{
 			auto code = read_ranged(r,
 			  ber::tags::enumerated,
@@ -908,7 +908,7 @@ namespace {
 			return {};
 		}
 
-		template<class T> result<protocol_op> result_only(ber::reader &r, ber::tag t)
+		template<class T> auto result_only(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -924,7 +924,7 @@ namespace {
 			return op;
 		}
 
-		result<void> read_attribute(ber::reader &r, partial_attribute &out)
+		auto read_attribute(ber::reader &r, partial_attribute &out) -> result<void>
 		{
 			auto pa = r.enter();
 			if (!pa) {
@@ -953,7 +953,7 @@ namespace {
 			return {};
 		}
 
-		result<void> read_attributes(ber::reader &r, std::pmr::vector<partial_attribute> &out)
+		auto read_attributes(ber::reader &r, std::pmr::vector<partial_attribute> &out) -> result<void>
 		{
 			auto list = r.enter();
 			if (!list) {
@@ -968,7 +968,7 @@ namespace {
 			return {};
 		}
 
-		result<protocol_op> read_bind_request(ber::reader &r, ber::tag t)
+		auto read_bind_request(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -1030,7 +1030,7 @@ namespace {
 			return op;
 		}
 
-		result<protocol_op> read_bind_response(ber::reader &r, ber::tag t)
+		auto read_bind_response(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -1052,7 +1052,7 @@ namespace {
 			return op;
 		}
 
-		result<protocol_op> read_search_request(ber::reader &r, ber::tag t)
+		auto read_search_request(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -1112,7 +1112,7 @@ namespace {
 			return op;
 		}
 
-		result<protocol_op> read_search_result_entry(ber::reader &r, ber::tag t)
+		auto read_search_result_entry(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -1134,7 +1134,7 @@ namespace {
 			return op;
 		}
 
-		result<protocol_op> read_search_result_reference(ber::reader &r, ber::tag t)
+		auto read_search_result_reference(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -1152,7 +1152,7 @@ namespace {
 			return op;
 		}
 
-		result<protocol_op> read_modify_request(ber::reader &r, ber::tag t)
+		auto read_modify_request(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -1197,7 +1197,7 @@ namespace {
 			return op;
 		}
 
-		result<protocol_op> read_add_request(ber::reader &r, ber::tag t)
+		auto read_add_request(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -1225,7 +1225,7 @@ namespace {
 			return op;
 		}
 
-		result<protocol_op> read_modify_dn_request(ber::reader &r, ber::tag t)
+		auto read_modify_dn_request(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -1259,7 +1259,7 @@ namespace {
 			return op;
 		}
 
-		result<protocol_op> read_compare_request(ber::reader &r, ber::tag t)
+		auto read_compare_request(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -1295,7 +1295,7 @@ namespace {
 			return op;
 		}
 
-		result<protocol_op> read_extended_request(ber::reader &r, ber::tag t)
+		auto read_extended_request(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -1319,7 +1319,7 @@ namespace {
 			return op;
 		}
 
-		result<protocol_op> read_extended_response(ber::reader &r, ber::tag t)
+		auto read_extended_response(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -1346,7 +1346,7 @@ namespace {
 			return op;
 		}
 
-		result<protocol_op> read_intermediate_response(ber::reader &r, ber::tag t)
+		auto read_intermediate_response(ber::reader &r, ber::tag t) -> result<protocol_op>
 		{
 			auto o = r.enter(t);
 			if (!o) {
@@ -1370,7 +1370,7 @@ namespace {
 			return op;
 		}
 
-		result<protocol_op> read_op(ber::reader &r)
+		auto read_op(ber::reader &r) -> result<protocol_op>
 		{
 			const std::size_t offset = r.offset();
 			auto peeked = r.peek_tag();
@@ -1461,7 +1461,7 @@ namespace {
 			}
 		}
 
-		result<control> read_control(ber::reader &r)
+		auto read_control(ber::reader &r) -> result<control>
 		{
 			auto c = r.enter();
 			if (!c) {
@@ -1492,7 +1492,7 @@ namespace {
 		}
 
 		// Operations a client sends (RFC 4511 section 4.2 protocolOp requests).
-		static bool is_request(std::uint8_t number)
+		static auto is_request(std::uint8_t number) -> bool
 		{
 			switch (number) {
 			case op_tag::bind_request:
@@ -1518,7 +1518,7 @@ namespace {
 
 }// namespace
 
-result<void> encode(ber::writer &w, const message &m)
+auto encode(ber::writer &w, const message &m) -> result<void>
 {
 	if (auto done = precheck(m); !done) {
 		return std::unexpected(std::move(done.error()));
@@ -1545,7 +1545,7 @@ result<void> encode(ber::writer &w, const message &m)
 	return {};
 }
 
-result<std::pmr::vector<std::byte>> encode(const message &m, std::pmr::memory_resource *mr)
+auto encode(const message &m, std::pmr::memory_resource *mr) -> result<std::pmr::vector<std::byte>>
 {
 	ber::writer w{ ber::writer::allocator_type(mr) };
 	// Most requests fit; saves the first few doublings of the buffer.
@@ -1556,12 +1556,12 @@ result<std::pmr::vector<std::byte>> encode(const message &m, std::pmr::memory_re
 	return w.take();
 }
 
-result<message> decode(std::span<const std::byte> one_complete_message, const decode_options &options)
+auto decode(std::span<const std::byte> one_complete_message, const decode_options &options) -> result<message>
 {
 	return decoder(options).run(one_complete_message);
 }
 
-result<message_header> peek_message_header(std::span<const std::byte> one_complete_message)
+auto peek_message_header(std::span<const std::byte> one_complete_message) -> result<message_header>
 {
 	ber::reader top(one_complete_message);
 	auto r = top.enter();
@@ -1587,7 +1587,8 @@ result<message_header> peek_message_header(std::span<const std::byte> one_comple
 namespace {
 
 	// The control's value bytes, once its type is `oid` and it has a value.
-	result<std::span<const std::byte>> expect_control(const control &c, std::string_view oid, std::string_view what)
+	auto expect_control(const control &c, std::string_view oid, std::string_view what)
+	  -> result<std::span<const std::byte>>
 	{
 		if (c.type != oid) {
 			return fail(client_errc::decode_error,
@@ -1599,14 +1600,15 @@ namespace {
 		return std::as_bytes(std::span(*c.value));
 	}
 
-	control bytes_control(std::string_view oid, bool criticality, const ber::writer &w, std::pmr::memory_resource *mr)
+	auto bytes_control(std::string_view oid, bool criticality, const ber::writer &w, std::pmr::memory_resource *mr)
+	  -> control
 	{
 		return control(oid, criticality, detail::as_text(w.bytes()), control::allocator_type(mr));
 	}
 
 	// Errors from inside a control value name the control: their offsets
 	// are relative to the value, not to the message.
-	template<class T> result<T> in_control(result<T> r, std::string_view name)
+	template<class T> auto in_control(result<T> r, std::string_view name) -> result<T>
 	{
 		return std::move(r).transform_error([name](error &&e) {
 			if (!e.context.empty()) {
@@ -1621,7 +1623,8 @@ namespace {
 
 // ---------------------------------------------------------------- paged results
 
-result<control> encode_paged_results(const paged_results &value, bool criticality, std::pmr::memory_resource *mr)
+auto encode_paged_results(const paged_results &value, bool criticality, std::pmr::memory_resource *mr)
+  -> result<control>
 {
 	if (value.size < 0) {
 		return fail(client_errc::encode_error, "paged results: negative size");
@@ -1637,7 +1640,7 @@ result<control> encode_paged_results(const paged_results &value, bool criticalit
 namespace {
 
 	// realSearchControlValue ::= SEQUENCE { size INTEGER (0..maxInt), cookie OCTET STRING }
-	result<paged_results> read_paged_results(std::span<const std::byte> value, std::pmr::memory_resource *mr)
+	auto read_paged_results(std::span<const std::byte> value, std::pmr::memory_resource *mr) -> result<paged_results>
 	{
 		ber::reader r(value);
 		auto s = r.enter();
@@ -1666,7 +1669,7 @@ namespace {
 
 }// namespace
 
-result<paged_results> decode_paged_results(const control &c, std::pmr::memory_resource *mr)
+auto decode_paged_results(const control &c, std::pmr::memory_resource *mr) -> result<paged_results>
 {
 	auto value = expect_control(c, paged_results_oid, "paged results");
 	if (!value) {
@@ -1677,7 +1680,7 @@ result<paged_results> decode_paged_results(const control &c, std::pmr::memory_re
 
 // ---------------------------------------------------------------- server side sorting
 
-result<control> encode_sort_result(const sort_result &value, bool criticality, std::pmr::memory_resource *mr)
+auto encode_sort_result(const sort_result &value, bool criticality, std::pmr::memory_resource *mr) -> result<control>
 {
 	ber::writer w{ ber::writer::allocator_type(mr) };
 	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
@@ -1692,7 +1695,7 @@ result<control> encode_sort_result(const sort_result &value, bool criticality, s
 namespace {
 
 	// SortResult ::= SEQUENCE { sortResult ENUMERATED, attributeType [0] AttributeDescription OPTIONAL }
-	result<sort_result> read_sort_result(std::span<const std::byte> value, std::pmr::memory_resource *mr)
+	auto read_sort_result(std::span<const std::byte> value, std::pmr::memory_resource *mr) -> result<sort_result>
 	{
 		ber::reader r(value);
 		auto s = r.enter();
@@ -1728,7 +1731,7 @@ namespace {
 
 }// namespace
 
-result<sort_result> decode_sort_result(const control &c, std::pmr::memory_resource *mr)
+auto decode_sort_result(const control &c, std::pmr::memory_resource *mr) -> result<sort_result>
 {
 	auto value = expect_control(c, sort_response_oid, "sort result");
 	if (!value) {
@@ -1739,10 +1742,10 @@ result<sort_result> decode_sort_result(const control &c, std::pmr::memory_resour
 
 // ---------------------------------------------------------------- pre-read / post-read
 
-result<control> encode_read_entry(std::string_view oid,
+auto encode_read_entry(std::string_view oid,
   const search_result_entry &entry,
   bool criticality,
-  std::pmr::memory_resource *mr)
+  std::pmr::memory_resource *mr) -> result<control>
 {
 	if (oid != pre_read_oid && oid != post_read_oid) {
 		return fail(
@@ -1753,7 +1756,7 @@ result<control> encode_read_entry(std::string_view oid,
 	return bytes_control(oid, criticality, w, mr);
 }
 
-result<search_result_entry> decode_read_entry(const control &c, const decode_options &options)
+auto decode_read_entry(const control &c, const decode_options &options) -> result<search_result_entry>
 {
 	if (c.type != pre_read_oid && c.type != post_read_oid) {
 		return fail(client_errc::decode_error,

@@ -34,7 +34,7 @@ namespace {
 	// Splits PEM text into single certificates. Corosio's tls_context reads
 	// only the first certificate of each CA entry, so bundles are added one
 	// certificate at a time.
-	std::vector<std::string> split_pem_certificates(std::string_view pem)
+	auto split_pem_certificates(std::string_view pem) -> std::vector<std::string>
 	{
 		static constexpr std::string_view begin = "-----BEGIN CERTIFICATE-----";
 		static constexpr std::string_view end = "-----END CERTIFICATE-----";
@@ -82,7 +82,7 @@ namespace {
 	// Read-only memory BIO over `pem`, or null. Null too above INT_MAX
 	// bytes: BIO_new_mem_buf takes an int, so a larger size would wrap to a
 	// truncated length, or a negative one (-1 means "up to the first NUL").
-	bio_ptr pem_bio(const std::string &pem)
+	auto pem_bio(const std::string &pem) -> bio_ptr
 	{
 		if (pem.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
 			return nullptr;
@@ -94,7 +94,7 @@ namespace {
 	// parses trust anchors when the handshake starts, which would make a
 	// broken CA fail after the TCP connect; this checks it up front. A
 	// failure leaves nothing on the thread's OpenSSL error queue.
-	bool parses_as_certificate(const std::string &pem)
+	auto parses_as_certificate(const std::string &pem) -> bool
 	{
 		const bio_ptr bio = pem_bio(pem);
 		if (bio && x509_ptr(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr)) != nullptr) {
@@ -110,12 +110,12 @@ namespace {
 	// belong together.
 	// Password callback that refuses: with a null callback OpenSSL would prompt
 	// on the terminal for an encrypted key. Encrypted keys are not supported.
-	int no_password(char *, int, int, void *) { return -1; }
+	auto no_password(char *, int, int, void *) -> int { return -1; }
 
-	result<void> check_client_credentials(const std::string &cert_pem,
+	auto check_client_credentials(const std::string &cert_pem,
 	  const std::string &key_pem,
 	  const std::string &cert_what,
-	  const std::string &key_what)
+	  const std::string &key_what) -> result<void>
 	{
 		const auto invalid = std::make_error_code(std::errc::invalid_argument);
 		const x509_ptr cert = [&] {
@@ -141,7 +141,7 @@ namespace {
 		return {};
 	}
 
-	std::optional<std::string> read_file(const std::filesystem::path &path)
+	auto read_file(const std::filesystem::path &path) -> std::optional<std::string>
 	{
 		std::ifstream in(path, std::ios::binary);
 		if (!in) {
@@ -155,7 +155,7 @@ namespace {
 		return std::move(s).str();
 	}
 
-	result<void> add_cas(corosio::tls_context &ctx, std::string_view pem, const std::string &what)
+	auto add_cas(corosio::tls_context &ctx, std::string_view pem, const std::string &what) -> result<void>
 	{
 		const auto certs = split_pem_certificates(pem);
 		if (certs.empty()) {
@@ -173,7 +173,7 @@ namespace {
 		return {};
 	}
 
-	bool has_control_character(std::string_view s) noexcept
+	auto has_control_character(std::string_view s) noexcept -> bool
 	{
 		return std::ranges::any_of(s, [](char c) {
 			const auto b = static_cast<unsigned char>(c);
@@ -181,7 +181,7 @@ namespace {
 		});
 	}
 
-	bool is_ip_literal(const std::string &name)
+	auto is_ip_literal(const std::string &name) -> bool
 	{
 		const asn1_octet_string_ptr ip(a2i_IPADDRESS(name.c_str()));
 		if (!ip) {
@@ -191,7 +191,7 @@ namespace {
 		return true;
 	}
 
-	result<void> check(std::error_code ec, const std::string &what)
+	auto check(std::error_code ec, const std::string &what) -> result<void>
 	{
 		if (ec) {
 			return fail(ec, what);
@@ -201,7 +201,7 @@ namespace {
 
 }// namespace
 
-result<tls_setup> make_tls_setup(const tls_options &o)
+auto make_tls_setup(const tls_options &o) -> result<tls_setup>
 {
 	tls_setup setup;
 	auto &ctx = setup.context;
@@ -323,7 +323,7 @@ result<tls_setup> make_tls_setup(const tls_options &o)
 	return setup;
 }
 
-std::string tls_peer_name(std::string_view host, const tls_options &options)
+auto tls_peer_name(std::string_view host, const tls_options &options) -> std::string
 {
 	if (!options.server_name.empty()) {
 		return std::string(options.server_name);
@@ -334,11 +334,11 @@ std::string tls_peer_name(std::string_view host, const tls_options &options)
 	return std::string(host);
 }
 
-boost::capy::task<result<void>> tls_handshake(transport::impl &im,
+auto tls_handshake(transport::impl &im,
   std::string_view host,
   const tls_options &options,
   tls_setup setup,
-  deadline_t deadline)
+  deadline_t deadline) -> boost::capy::task<result<void>>
 {
 	// The documented precondition; both callers check for an open TCP transport.
 	if (!im.tcp) {

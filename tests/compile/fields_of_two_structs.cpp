@@ -1,3 +1,3 @@
 #include "common.hpp"
 constexpr auto mixed = ldap::describe(ldap::field<&person::uid>("uid"), ldap::field<&device::cn>("cn"));
-int main() {}
+auto main() -> int {}

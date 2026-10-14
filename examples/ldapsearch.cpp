@@ -84,7 +84,7 @@ struct options
 	std::exit(2);
 }
 
-std::int32_t to_int(std::string_view text, const char *what)
+auto to_int(std::string_view text, const char *what) -> std::int32_t
 {
 	std::int32_t v = 0;
 	const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), v);
@@ -94,7 +94,7 @@ std::int32_t to_int(std::string_view text, const char *what)
 	return v;
 }
 
-options parse_args(int argc, char **argv)
+auto parse_args(int argc, char **argv) -> options
 {
 	options o;
 	std::vector<std::string_view> positional;
@@ -179,7 +179,7 @@ options parse_args(int argc, char **argv)
 
 // RFC 2849 SAFE-STRING: no NUL, CR, LF or non-ASCII octet, and no leading
 // space, ':' or '<'; no trailing space either (readers may strip it).
-bool ldif_safe(std::string_view v) noexcept
+auto ldif_safe(std::string_view v) noexcept -> bool
 {
 	if (v.empty()) {
 		return true;
@@ -193,7 +193,7 @@ bool ldif_safe(std::string_view v) noexcept
 	});
 }
 
-std::string base64(std::string_view in)
+auto base64(std::string_view in) -> std::string
 {
 	static constexpr char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 	std::string out;
@@ -245,7 +245,7 @@ void print_entry(const ldap::entry &e)
 
 // Prints every entry of a search_stream or paged_search, then its
 // references and a count; 0, or 1 on an error.
-template<class Stream> capy::task<int> print_all(ldap::result<Stream> &s)
+template<class Stream> auto print_all(ldap::result<Stream> &s) -> capy::task<int>
 {
 	if (!s) {
 		std::println(stderr, "jhetz-ldapsearch: {}", s.error().message());
@@ -277,7 +277,7 @@ template<class Stream> capy::task<int> print_all(ldap::result<Stream> &s)
 	co_return status;
 }
 
-capy::task<int> run(corosio::io_context &ioc, options o)
+auto run(corosio::io_context &ioc, options o) -> capy::task<int>
 {
 	auto u = ldap::url::parse(o.url);
 	if (!u) {
@@ -366,7 +366,7 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 
 }// namespace
 
-int main(int argc, char **argv)
+auto main(int argc, char **argv) -> int
 {
 	options o = parse_args(argc, argv);
 	corosio::io_context ioc;

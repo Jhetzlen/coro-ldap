@@ -106,7 +106,7 @@ struct filetime_clock
 	// From 1601-01-01 to 1970-01-01 (the Unix epoch): 134774 days.
 	static constexpr std::chrono::seconds unix_epoch_offset{ 11'644'473'600 };
 
-	[[nodiscard]] static time_point now() noexcept { return from_sys(std::chrono::system_clock::now()); }
+	[[nodiscard]] static auto now() noexcept -> time_point { return from_sys(std::chrono::system_clock::now()); }
 
 	// Defined for t >= time_point::min() + unix_epoch_offset (about year
 	// -27258, sys_time::min()); below, the subtraction overflows. Every
@@ -120,8 +120,8 @@ struct filetime_clock
 	// overflows after 2262, ad::never included, so keep the ticks or floor
 	// to seconds.
 	template<class D>
-	[[nodiscard]] static constexpr std::chrono::sys_time<std::common_type_t<D, std::chrono::seconds>> to_sys(
-	  const std::chrono::time_point<filetime_clock, D> &t)
+	[[nodiscard]] static constexpr auto to_sys(const std::chrono::time_point<filetime_clock, D> &t)
+	  -> std::chrono::sys_time<std::common_type_t<D, std::chrono::seconds>>
 	{
 		return std::chrono::sys_time<std::common_type_t<D, std::chrono::seconds>>(
 		  t.time_since_epoch() - unix_epoch_offset);
@@ -133,7 +133,7 @@ struct filetime_clock
 	// (year 30828) and, for durations coarser than a tick, within the
 	// +/-29227 years from 1970 their tick count can hold. Every
 	// system_clock::time_point (years 1677-2262) is in range.
-	template<class D> [[nodiscard]] static constexpr time_point from_sys(const std::chrono::sys_time<D> &t)
+	template<class D> [[nodiscard]] static constexpr auto from_sys(const std::chrono::sys_time<D> &t) -> time_point
 	{
 		return time_point(std::chrono::floor<duration>(t.time_since_epoch()) + unix_epoch_offset);
 	}
@@ -146,7 +146,7 @@ inline constexpr filetime_clock::duration forever = filetime_clock::duration::mi
 
 // accountExpires "never expires": true for both of AD's spellings, 0 (tick 0)
 // and 9223372036854775807 (ad::never).
-[[nodiscard]] constexpr bool is_never(filetime_clock::time_point t) noexcept
+[[nodiscard]] constexpr auto is_never(filetime_clock::time_point t) noexcept -> bool
 {
 	return t == filetime_clock::time_point{} || t == never;
 }
@@ -165,7 +165,7 @@ template<> struct value_traits<ad::filetime_clock::time_point>
 {
 	static constexpr std::array syntaxes{ syntax::ad_large_integer };
 
-	[[nodiscard]] static result<ad::filetime_clock::time_point> decode(std::string_view raw)
+	[[nodiscard]] static auto decode(std::string_view raw) -> result<ad::filetime_clock::time_point>
 	{
 		auto ticks = value_traits<std::int64_t>::decode(raw);
 		if (!ticks) {
@@ -176,7 +176,7 @@ template<> struct value_traits<ad::filetime_clock::time_point>
 		}
 		return ad::filetime_clock::time_point(ad::filetime_clock::duration(*ticks));
 	}
-	[[nodiscard]] static std::string encode(ad::filetime_clock::time_point v)
+	[[nodiscard]] static auto encode(ad::filetime_clock::time_point v) -> std::string
 	{
 		return std::to_string(v.time_since_epoch().count());
 	}
@@ -188,7 +188,7 @@ template<> struct value_traits<ad::filetime_clock::duration>
 {
 	static constexpr std::array syntaxes{ syntax::ad_large_integer };
 
-	[[nodiscard]] static result<ad::filetime_clock::duration> decode(std::string_view raw)
+	[[nodiscard]] static auto decode(std::string_view raw) -> result<ad::filetime_clock::duration>
 	{
 		auto ticks = value_traits<std::int64_t>::decode(raw);
 		if (!ticks) {
@@ -196,7 +196,10 @@ template<> struct value_traits<ad::filetime_clock::duration>
 		}
 		return ad::filetime_clock::duration(*ticks);
 	}
-	[[nodiscard]] static std::string encode(ad::filetime_clock::duration v) { return std::to_string(v.count()); }
+	[[nodiscard]] static auto encode(ad::filetime_clock::duration v) -> std::string
+	{
+		return std::to_string(v.count());
+	}
 };
 
 }// namespace jhetz::ldap

@@ -17,7 +17,7 @@ namespace jhetz::ldap {
 namespace {
 
 	// Unescapes a value the scanner has already validated.
-	std::pmr::string unescape(const detail::dn_token &tok, std::pmr::memory_resource *mr)
+	auto unescape(const detail::dn_token &tok, std::pmr::memory_resource *mr) -> std::pmr::string
 	{
 		const std::string_view raw = tok.raw_value;
 		std::pmr::string out(mr);
@@ -130,7 +130,7 @@ namespace {
 
 	// Case-insensitive type, then form, then value: a total order consistent
 	// with ava::operator==, used to compare RDNs as sets.
-	bool ava_less(const ava &a, const ava &b)
+	auto ava_less(const ava &a, const ava &b) -> bool
 	{
 		const auto c = a.type <=> b.type;
 		if (c != 0) {
@@ -141,7 +141,7 @@ namespace {
 
 }// namespace
 
-std::pmr::string escape_dn_value(std::string_view value, std::pmr::memory_resource *mr)
+auto escape_dn_value(std::string_view value, std::pmr::memory_resource *mr) -> std::pmr::string
 {
 	std::pmr::string out(mr);
 	out.reserve(value.size());
@@ -149,7 +149,7 @@ std::pmr::string escape_dn_value(std::string_view value, std::pmr::memory_resour
 	return out;
 }
 
-bool operator==(const rdn &a, const rdn &b)
+auto operator==(const rdn &a, const rdn &b) -> bool
 {
 	if (a.avas.size() != b.avas.size()) {
 		return false;
@@ -189,7 +189,7 @@ rdn::rdn(literal l, const allocator_type &alloc) : avas(alloc)
 	avas = std::move(parsed->avas);// same resource: no copy
 }
 
-result<rdn> rdn::parse(std::string_view text, std::pmr::memory_resource *mr)
+auto rdn::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<rdn>
 {
 	rdn out{ allocator_type(mr) };
 	std::size_t rdns = 0;
@@ -213,7 +213,7 @@ result<rdn> rdn::parse(std::string_view text, std::pmr::memory_resource *mr)
 	return out;
 }
 
-std::pmr::string rdn::to_string(std::pmr::memory_resource *mr) const
+auto rdn::to_string(std::pmr::memory_resource *mr) const -> std::pmr::string
 {
 	std::pmr::string out(mr);
 	append_rdn(out, *this);
@@ -230,7 +230,7 @@ dn::dn(literal l, const allocator_type &alloc) : rdns_(alloc)
 	rdns_ = std::move(parsed->rdns_);// same resource: no copy
 }
 
-result<dn> dn::parse(std::string_view text, std::pmr::memory_resource *mr)
+auto dn::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<dn>
 {
 	dn out{ allocator_type(mr) };
 	const std::size_t err = detail::scan_dn(text, [&](const detail::dn_token &tok) {
@@ -245,7 +245,7 @@ result<dn> dn::parse(std::string_view text, std::pmr::memory_resource *mr)
 	return out;
 }
 
-std::pmr::string dn::to_string(std::pmr::memory_resource *mr) const
+auto dn::to_string(std::pmr::memory_resource *mr) const -> std::pmr::string
 {
 	std::pmr::string out(mr);
 	for (std::size_t i = 0; i < rdns_.size(); ++i) {
@@ -257,19 +257,19 @@ std::pmr::string dn::to_string(std::pmr::memory_resource *mr) const
 	return out;
 }
 
-dn dn::parent() const
+auto dn::parent() const -> dn
 {
 	dn out(get_allocator());
 	out.rdns_.assign_range(rdns_ | std::views::drop(1));
 	return out;
 }
 
-dn dn::child(const rdn &r) const
+auto dn::child(const rdn &r) const -> dn
 {
 	return child(rdn(r, get_allocator()));// copied straight onto this DN's resource
 }
 
-dn dn::child(rdn &&r) const
+auto dn::child(rdn &&r) const -> dn
 {
 	// Programming errors: the result would not survive to_string()/parse().
 	if (r.avas.empty()) {
@@ -290,7 +290,7 @@ dn dn::child(rdn &&r) const
 	return out;
 }
 
-dn dn::child(const dn &relative) const
+auto dn::child(const dn &relative) const -> dn
 {
 	// No checks: every RDN of a dn is valid (parse, the literal and
 	// child(rdn) guarantee it).

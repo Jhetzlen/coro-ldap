@@ -189,7 +189,7 @@ namespace {
 // that collide under the hash as it was before it had a seed.
 constexpr std::uint64_t k1 = 0x9E37'79B9'7F4A'7C15ull, k2 = 0xD6E8'FEB8'6659'FD93ull;
 
-constexpr std::uint64_t inverse(std::uint64_t odd)// mod 2^64, by Newton's iteration
+constexpr auto inverse(std::uint64_t odd) -> std::uint64_t// mod 2^64, by Newton's iteration
 {
 	std::uint64_t x = odd;
 	for (int i = 0; i < 6; ++i) {
@@ -198,7 +198,7 @@ constexpr std::uint64_t inverse(std::uint64_t odd)// mod 2^64, by Newton's itera
 	return x;
 }
 
-constexpr std::uint64_t mix(std::uint64_t h, std::uint64_t w)
+constexpr auto mix(std::uint64_t h, std::uint64_t w) -> std::uint64_t
 {
 	h = (h ^ w) * k1;
 	h ^= h >> 32;
@@ -207,7 +207,7 @@ constexpr std::uint64_t mix(std::uint64_t h, std::uint64_t w)
 }
 
 // The x with mix(0, x) == h.
-constexpr std::uint64_t unmix(std::uint64_t h)
+constexpr auto unmix(std::uint64_t h) -> std::uint64_t
 {
 	h ^= h >> 32;
 	h *= inverse(k2);

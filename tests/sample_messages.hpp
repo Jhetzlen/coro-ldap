@@ -10,14 +10,14 @@
 
 namespace jhetz::ldap::test {
 
-inline ldap_result sample_result()
+inline auto sample_result() -> ldap_result
 {
 	return { 32, "dc=example,dc=org", "no such entry", { "ldap://a.example.org/", "ldap://b.example.org/" } };
 }
 
-inline filter raw_filter(std::string_view text) { return filter::raw(text).value(); }
+inline auto raw_filter(std::string_view text) -> filter { return filter::raw(text).value(); }
 
-inline std::vector<message> sample_messages()
+inline auto sample_messages() -> std::vector<message>
 {
 	using namespace std::string_literals;
 	const std::string_view dn = "uid=jdoe,ou=people,dc=example,dc=org";
@@ -92,7 +92,7 @@ inline std::vector<message> sample_messages()
 	return out;
 }
 
-inline std::pmr::vector<control> sample_controls()
+inline auto sample_controls() -> std::pmr::vector<control>
 {
 	return { encode_paged_results({ 100, "\x01\x02" }, true).value(),
 		control{ "1.2.840.113556.1.4.805" },

@@ -3,7 +3,7 @@
 
 namespace ldap = jhetz::ldap;
 
-int main()
+auto main() -> int
 {
 	ldap::server_schema s;
 	return s.syntax_of(ldap::attribute_type{}) != nullptr;

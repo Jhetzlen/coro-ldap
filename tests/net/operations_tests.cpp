@@ -39,14 +39,14 @@ using ldap::errc;
 namespace {
 
 template<class Response>
-ldap::message result_msg(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic = {})
+auto result_msg(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic = {}) -> ldap::message
 {
 	return ldap::message{ id, Response{ ldap::ldap_result{ code, "", diagnostic } } };
 }
 
 const ldap::dn jdoe{ "uid=jdoe,ou=people,dc=example,dc=org" };
 
-ldap::control post_read_control() { return ldap::control{ "1.3.6.1.1.13.2", false, "entry" }; }
+auto post_read_control() -> ldap::control { return ldap::control{ "1.3.6.1.1.13.2", false, "entry" }; }
 
 }// namespace
 
@@ -446,14 +446,14 @@ TEST_CASE("operations: server side sort result of a search", "[net][operations][
 
 namespace {
 
-ldap::message paged_done(std::int32_t id, std::string_view cookie)
+auto paged_done(std::int32_t id, std::string_view cookie) -> ldap::message
 {
 	ldap::message m = done_msg(id);
 	m.controls.push_back(*ldap::encode_paged_results({ 0, cookie }));
 	return m;
 }
 
-capy::task<ldap::result<std::vector<std::string>>> drain_paged(ldap::paged_search &s)
+auto drain_paged(ldap::paged_search &s) -> capy::task<ldap::result<std::vector<std::string>>>
 {
 	std::vector<std::string> dns;
 	while (true) {
@@ -589,7 +589,7 @@ void check_release(const ldap::message &req, const ldap::message &first, std::st
 	CHECK(p->cookie == cookie);
 }
 
-capy::task<ldap::result<void>> bind_admin(ldap::connection &c)
+auto bind_admin(ldap::connection &c) -> capy::task<ldap::result<void>>
 {
 	co_return co_await c.simple_bind(*ldap::dn::parse(admin), "secret");
 }
@@ -630,12 +630,12 @@ template<class M> void settle(M &m)
 
 // The server's answer to StartTLS over tcp_mock_ldap, which does not speak
 // TLS: a refusal, which leaves the connection usable in clear.
-ldap::message start_tls_refused(std::int32_t id)
+auto start_tls_refused(std::int32_t id) -> ldap::message
 {
 	return ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ 52, "", "no TLS here" } } };
 }
 
-bool is_start_tls(const ldap::message &m)
+auto is_start_tls(const ldap::message &m) -> bool
 {
 	const auto *x = std::get_if<ldap::extended_request>(&m.op);
 	return x != nullptr && x->request_name == ldap::start_tls_oid;
@@ -1580,8 +1580,10 @@ namespace {
 // destroys it with the `failing`-th frame allocation failing. Returns the
 // allocations tried. `M` is mock_ldap or tcp_mock_ldap.
 template<class M>
-std::size_t
-  release_failing(M &m, failing_frames &frames, std::size_t failing, std::optional<std::chrono::milliseconds> timeout)
+auto release_failing(M &m,
+  failing_frames &frames,
+  std::size_t failing,
+  std::optional<std::chrono::milliseconds> timeout) -> std::size_t
 {
 	auto p = people_search();
 	p.timeout = timeout;

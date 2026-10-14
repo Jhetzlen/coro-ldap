@@ -14,13 +14,13 @@ using jhetz::ldap::test::hex;
 
 namespace {
 
-template<class T> std::error_code code_of(const jhetz::ldap::result<T> &r)
+template<class T> auto code_of(const jhetz::ldap::result<T> &r) -> std::error_code
 {
 	REQUIRE_FALSE(r.has_value());
 	return r.error().code;
 }
 
-template<class T> std::string context_of(const jhetz::ldap::result<T> &r)
+template<class T> auto context_of(const jhetz::ldap::result<T> &r) -> std::string
 {
 	REQUIRE_FALSE(r.has_value());
 	return std::string(r.error().context);

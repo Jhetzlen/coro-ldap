@@ -21,7 +21,7 @@ using detail::read_one;
 
 namespace {
 
-	capy::task<result<server_schema>> load_schema_impl(impl_ref self)
+	auto load_schema_impl(impl_ref self) -> capy::task<result<server_schema>>
 	{
 		const std::string context = "load schema";
 		auto root =
@@ -64,7 +64,7 @@ namespace {
 
 }// namespace
 
-capy::task<result<server_schema>> connection::load_schema()
+auto connection::load_schema() -> capy::task<result<server_schema>>
 {
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection("load schema"));
@@ -72,8 +72,8 @@ capy::task<result<server_schema>> connection::load_schema()
 	co_return co_await load_schema_impl(impl_ref(impl_));
 }
 
-capy::task<result<void>> connection::check_schema(std::type_index type,
-  schema_report (*validate_type)(const server_schema &))
+auto connection::check_schema(std::type_index type, schema_report (*validate_type)(const server_schema &))
+  -> capy::task<result<void>>
 {
 	if (impl_ == nullptr || impl_->knowledge().schema_mode == ldap::schema_check::off) {
 		co_return result<void>{};

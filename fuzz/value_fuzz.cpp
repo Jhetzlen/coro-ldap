@@ -68,7 +68,7 @@ void filetime_checks(std::string_view text)
 
 }// namespace
 
-extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size)
+extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size) -> int
 {
 	const std::string_view text(reinterpret_cast<const char *>(data), size);
 

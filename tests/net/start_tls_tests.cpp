@@ -45,19 +45,19 @@ using Catch::Matchers::StartsWith;
 
 namespace {
 
-test_pki &pki()
+auto pki() -> test_pki &
 {
 	static test_pki instance("jhetz-ldap StartTLS test CA");
 	return instance;
 }
 
-const test_pki::issued &localhost_cert()
+auto localhost_cert() -> const test_pki::issued &
 {
 	static const auto leaf = pki().issue("localhost", "DNS:localhost,IP:127.0.0.1");
 	return leaf;
 }
 
-corosio::tls_context server_context(const test_pki::issued &leaf)
+auto server_context(const test_pki::issued &leaf) -> corosio::tls_context
 {
 	corosio::tls_context ctx;
 	REQUIRE_FALSE(ctx.use_certificate(leaf.cert_pem, corosio::tls_file_format::pem));
@@ -65,7 +65,7 @@ corosio::tls_context server_context(const test_pki::issued &leaf)
 	return ctx;
 }
 
-ldap::connection_options trusting(ldap::connection_options o = {})
+auto trusting(ldap::connection_options o = {}) -> ldap::connection_options
 {
 	o.tls.ca_pem = std::pmr::string(pki().ca_pem());
 	return o;
@@ -90,7 +90,7 @@ enum class mode {
 	unbind_silent,
 };
 
-capy::task<std::string> serve_start_tls(corosio::tcp_acceptor &acc, corosio::tls_context ctx, mode m)
+auto serve_start_tls(corosio::tcp_acceptor &acc, corosio::tls_context ctx, mode m) -> capy::task<std::string>
 {
 	auto [aec, peer] = co_await acc.accept();
 	if (aec) {
@@ -183,7 +183,7 @@ struct tls_fixture
 	corosio::tcp_acceptor acc{ ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 16 };
 	outcome<std::string> server{};
 
-	std::string url(const char *host = "127.0.0.1") const
+	auto url(const char *host = "127.0.0.1") const -> std::string
 	{
 		return std::string("ldap://") + host + ":" + std::to_string(acc.local_endpoint().port());
 	}
@@ -193,7 +193,7 @@ struct tls_fixture
 		spawn(ioc, serve_start_tls(acc, server_context(leaf), m), server);
 	}
 
-	ldap::connection connect(const ldap::connection_options &o = trusting(), const char *host = "127.0.0.1")
+	auto connect(const ldap::connection_options &o = trusting(), const char *host = "127.0.0.1") -> ldap::connection
 	{
 		auto u = ldap::url::parse(url(host));
 		REQUIRE(u.has_value());
@@ -267,7 +267,7 @@ TEST_CASE("start_tls: is_tls() is false while the handshake runs", "[net][startt
 namespace {
 
 // The first byte the server's end receives (-1: none, the client hung up).
-capy::task<int> first_byte(corosio::tcp_socket &peer)
+auto first_byte(corosio::tcp_socket &peer) -> capy::task<int>
 {
 	unsigned char byte = 0;
 	auto [ec, n] = co_await peer.read_some(capy::mutable_buffer(&byte, 1));
@@ -638,7 +638,7 @@ namespace {
 
 // Reads the StartTLS request, never answers it, then reads at most one
 // more request. Returns the requests.
-capy::task<std::vector<ldap::message>> silent_start_tls(corosio::tcp_acceptor &acc)
+auto silent_start_tls(corosio::tcp_acceptor &acc) -> capy::task<std::vector<ldap::message>>
 {
 	std::vector<ldap::message> got;
 	auto [aec, peer] = co_await acc.accept();
@@ -740,7 +740,7 @@ constexpr auto ldap::schema<tls_account> =
 namespace {
 
 // What a directory request is, for the schema test's log.
-std::string kind_of(const ldap::message &m)
+auto kind_of(const ldap::message &m) -> std::string
 {
 	if (const auto *s = std::get_if<ldap::search_request>(&m.op)) {
 		if (s->base_object.empty() && s->attributes == ldap::string_list{ "subschemaSubentry" }) {
@@ -758,7 +758,7 @@ std::string kind_of(const ldap::message &m)
 	return "other";
 }
 
-std::string directory_reply(const ldap::message &req)
+auto directory_reply(const ldap::message &req) -> std::string
 {
 	const std::string kind = kind_of(req);
 	std::string out;
@@ -783,8 +783,8 @@ std::string directory_reply(const ldap::message &req)
 // Answers the root DSE and subschema searches, any other search (no
 // entries) and StartTLS, in clear and then over TLS, until the client hangs
 // up. Logs each request's kind_of(), prefixed with "tls " over TLS.
-capy::task<std::string>
-  serve_directory(corosio::tcp_acceptor &acc, corosio::tls_context ctx, std::vector<std::string> &log)
+auto serve_directory(corosio::tcp_acceptor &acc, corosio::tls_context ctx, std::vector<std::string> &log)
+  -> capy::task<std::string>
 {
 	auto [aec, peer] = co_await acc.accept();
 	if (aec) {

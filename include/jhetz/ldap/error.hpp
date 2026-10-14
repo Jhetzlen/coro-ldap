@@ -133,21 +133,21 @@ enum class cond : int {
 	invalid_input,// a request the client or the server rejected as malformed
 };
 
-const std::error_category &result_category() noexcept;// "ldap.result"
-const std::error_category &client_category() noexcept;// "ldap.client"
-const std::error_category &cond_category() noexcept;// "ldap.cond"
+auto result_category() noexcept -> const std::error_category &;// "ldap.result"
+auto client_category() noexcept -> const std::error_category &;// "ldap.client"
+auto cond_category() noexcept -> const std::error_category &;// "ldap.cond"
 
-[[nodiscard]] inline std::error_code make_error_code(errc e) noexcept
+[[nodiscard]] inline auto make_error_code(errc e) noexcept -> std::error_code
 {
 	return { std::to_underlying(e), result_category() };
 }
 
-[[nodiscard]] inline std::error_code make_error_code(client_errc e) noexcept
+[[nodiscard]] inline auto make_error_code(client_errc e) noexcept -> std::error_code
 {
 	return { std::to_underlying(e), client_category() };
 }
 
-[[nodiscard]] inline std::error_condition make_error_condition(cond c) noexcept
+[[nodiscard]] inline auto make_error_condition(cond c) noexcept -> std::error_condition
 {
 	return { std::to_underlying(c), cond_category() };
 }
@@ -182,15 +182,16 @@ struct error
 	// is cut at 256 bytes on a character boundary ("..." marks the cut), and
 	// at most 8 referrals are listed. The fields above keep the text exactly
 	// as the server sent it.
-	[[nodiscard]] std::pmr::string message(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
+	[[nodiscard]] auto message(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
+	  -> std::pmr::string;
 
-	friend bool operator==(const error &, const error &) = default;
+	friend auto operator==(const error &, const error &) -> bool = default;
 };
 
 template<class T> using result = std::expected<T, error>;
 
 // Builds an error carrying only a code and a client-side context string.
-[[nodiscard]] inline error make_error(std::error_code code, std::string_view context = {})
+[[nodiscard]] inline auto make_error(std::error_code code, std::string_view context = {}) -> error
 {
 	error e;
 	e.code = code;
@@ -199,7 +200,7 @@ template<class T> using result = std::expected<T, error>;
 }
 
 // Shorthand for `return std::unexpected(make_error(...));`.
-[[nodiscard]] inline std::unexpected<error> fail(std::error_code code, std::string_view context = {})
+[[nodiscard]] inline auto fail(std::error_code code, std::string_view context = {}) -> std::unexpected<error>
 {
 	return std::unexpected(make_error(code, context));
 }

@@ -245,7 +245,7 @@ const std::pmr::vector<std::pmr::string> ad_classes{
 	"( 1.2.840.113556.1.5.67 NAME 'domainDNS' SUP top STRUCTURAL )",
 };
 
-ldap::entry make_entry(std::string_view dn, std::initializer_list<ldap::partial_attribute> attrs)
+auto make_entry(std::string_view dn, std::initializer_list<ldap::partial_attribute> attrs) -> ldap::entry
 {
 	return ldap::entry::from(ldap::search_result_entry(dn, attrs));
 }

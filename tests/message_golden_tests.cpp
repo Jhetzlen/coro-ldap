@@ -122,7 +122,7 @@ void check_golden(std::string_view golden, const ldap::message &m)
 constexpr std::string_view people = "ou=people,dc=example,dc=org";
 constexpr std::string_view jdoe = "uid=jdoe,ou=people,dc=example,dc=org";
 
-ldap::filter raw(std::string_view text) { return ldap::filter::raw(text).value(); }
+auto raw(std::string_view text) -> ldap::filter { return ldap::filter::raw(text).value(); }
 
 }// namespace
 

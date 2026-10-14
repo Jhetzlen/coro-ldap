@@ -69,18 +69,19 @@ class sasl_mechanism
 	virtual void prepare(const sasl_bind_context &context) { (void)context; }
 
 	// The mechanism name sent in the BindRequest, e.g. "EXTERNAL".
-	virtual std::string_view name() const noexcept = 0;
+	virtual auto name() const noexcept -> std::string_view = 0;
 	// Credentials of the first BindRequest (nullopt: none sent). Called at
 	// the start of each bind, so it also resets the mechanism.
-	[[nodiscard]] virtual result<std::optional<std::string>> start() = 0;
+	[[nodiscard]] virtual auto start() -> result<std::optional<std::string>> = 0;
 	// After saslBindInProgress: the server's challenge (serverSaslCreds,
 	// nullopt if absent) gives the credentials of the next BindRequest. An
 	// error aborts the bind.
-	[[nodiscard]] virtual result<std::optional<std::string>> step(std::optional<std::string_view> challenge) = 0;
+	[[nodiscard]] virtual auto step(std::optional<std::string_view> challenge)
+	  -> result<std::optional<std::string>> = 0;
 	// After success: the server's final serverSaslCreds, if any (e.g. a
 	// SCRAM server signature to verify). An error fails the bind. Default:
 	// accept anything.
-	[[nodiscard]] virtual result<void> complete(std::optional<std::string_view> server_creds)
+	[[nodiscard]] virtual auto complete(std::optional<std::string_view> server_creds) -> result<void>
 	{
 		(void)server_creds;
 		return {};
@@ -91,8 +92,8 @@ class sasl_mechanism
 	// and step(), and uses the work's result as theirs; empty work (the
 	// default) means start() or step() is called on the I/O thread instead.
 	// Non-empty work needs an io_context in locking_mode::safe (sasl_work).
-	[[nodiscard]] virtual sasl_work offload_start() { return {}; }
-	[[nodiscard]] virtual sasl_work offload_step(std::optional<std::string_view> challenge)
+	[[nodiscard]] virtual auto offload_start() -> sasl_work { return {}; }
+	[[nodiscard]] virtual auto offload_step(std::optional<std::string_view> challenge) -> sasl_work
 	{
 		(void)challenge;
 		return {};
@@ -109,9 +110,12 @@ class sasl_external final : public sasl_mechanism
   public:
 	explicit sasl_external(std::string authz_id = {}) : authz_id_(std::move(authz_id)) {}
 
-	std::string_view name() const noexcept override { return "EXTERNAL"; }
-	[[nodiscard]] result<std::optional<std::string>> start() override { return std::optional<std::string>(authz_id_); }
-	[[nodiscard]] result<std::optional<std::string>> step(std::optional<std::string_view>) override
+	auto name() const noexcept -> std::string_view override { return "EXTERNAL"; }
+	[[nodiscard]] auto start() -> result<std::optional<std::string>> override
+	{
+		return std::optional<std::string>(authz_id_);
+	}
+	[[nodiscard]] auto step(std::optional<std::string_view>) -> result<std::optional<std::string>> override
 	{
 		return fail(client_errc::unexpected_response, "the server sent a challenge to a single-step mechanism");
 	}

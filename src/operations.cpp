@@ -10,25 +10,26 @@ namespace jhetz::ldap {
 namespace mod {
 
 	namespace {
-		modify_change change(modify_operation op, std::string_view type, std::initializer_list<std::string_view> values)
+		auto change(modify_operation op, std::string_view type, std::initializer_list<std::string_view> values)
+		  -> modify_change
 		{
 			return modify_change(op, partial_attribute(type, values));
 		}
 	}// namespace
 
-	modify_change add(std::string_view type, std::initializer_list<std::string_view> values)
+	auto add(std::string_view type, std::initializer_list<std::string_view> values) -> modify_change
 	{
 		return change(modify_operation::add, type, values);
 	}
-	modify_change remove(std::string_view type, std::initializer_list<std::string_view> values)
+	auto remove(std::string_view type, std::initializer_list<std::string_view> values) -> modify_change
 	{
 		return change(modify_operation::delete_, type, values);
 	}
-	modify_change replace(std::string_view type, std::initializer_list<std::string_view> values)
+	auto replace(std::string_view type, std::initializer_list<std::string_view> values) -> modify_change
 	{
 		return change(modify_operation::replace, type, values);
 	}
-	modify_change increment(std::string_view type, std::string_view delta)
+	auto increment(std::string_view type, std::string_view delta) -> modify_change
 	{
 		return change(modify_operation::increment, type, { delta });
 	}

@@ -16,8 +16,6 @@ Checks:
   - performance-*
   - portability-*
   - readability-*
-  # Style: the codebase writes return types in front.
-  - -modernize-use-trailing-return-type
   # Style: short names (i, n, ec, os, dn, id) are idiomatic here.
   - -readability-identifier-length
   # Style: clang-format decides on trailing commas in braced lists.
@@ -101,3 +99,5 @@ CheckOptions:
   # Non-copyable RAII guards do not need move operations spelled out.
   cppcoreguidelines-special-member-functions.AllowMissingMoveFunctionsWhenCopyIsDeleted: true
   cppcoreguidelines-special-member-functions.AllowImplicitlyDeletedCopyOrMove: true
+  # Trailing return types on functions only; lambdas keep their deduced return type.
+  modernize-use-trailing-return-type.TransformLambdas: none

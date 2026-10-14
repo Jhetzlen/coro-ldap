@@ -47,9 +47,9 @@ constexpr std::string_view old_pw = "Old-S3cret";
 constexpr std::string_view new_pw = "New-S3cret";
 
 // The root DSE's entry, with the attributes that are given.
-ldap::message root_dse(std::int32_t id,
+auto root_dse(std::int32_t id,
   std::initializer_list<std::string_view> extensions,
-  std::initializer_list<std::string_view> capabilities = {})
+  std::initializer_list<std::string_view> capabilities = {}) -> ldap::message
 {
 	ldap::search_result_entry e{ "" };
 	if (extensions.size() != 0) {
@@ -61,17 +61,17 @@ ldap::message root_dse(std::int32_t id,
 	return ldap::message{ id, std::move(e) };
 }
 
-ldap::message extended_ok(std::int32_t id)
+auto extended_ok(std::int32_t id) -> ldap::message
 {
 	return ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ 0 } } };
 }
 
-ldap::message modify_result(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic = {})
+auto modify_result(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic = {}) -> ldap::message
 {
 	return ldap::message{ id, ldap::modify_response{ ldap::ldap_result{ code, "", diagnostic } } };
 }
 
-ldap::message start_tls_ok(std::int32_t id)
+auto start_tls_ok(std::int32_t id) -> ldap::message
 {
 	return ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ 0 }, std::string(ldap::start_tls_oid) } };
 }
@@ -91,13 +91,13 @@ const std::string change_value =
   "\x30\x3e\x80\x24uid=jdoe,ou=people,dc=example,dc=org\x81\x0aOld-S3cret\x82\x0aNew-S3cret"s;
 const std::string reset_value = "\x30\x32\x80\x24uid=jdoe,ou=people,dc=example,dc=org\x82\x0aNew-S3cret"s;
 
-ldap::message password_modify_request(std::int32_t id, const std::string &value)
+auto password_modify_request(std::int32_t id, const std::string &value) -> ldap::message
 {
 	return ldap::message{ id, ldap::extended_request{ ldap::password_modify_oid, value } };
 }
 
 // The unicodePwd value of an ASCII password: quoted, UTF-16LE.
-std::string utf16le_quoted(std::string_view ascii)
+auto utf16le_quoted(std::string_view ascii) -> std::string
 {
 	std::string out = "\"\0"s;
 	for (const char c : ascii) {
@@ -117,13 +117,13 @@ void check_no_password(const ldap::error &e)
 
 // ---------------------------------------------------------------- TLS server
 
-test_pki &pki()
+auto pki() -> test_pki &
 {
 	static test_pki instance("jhetz-ldap password test CA");
 	return instance;
 }
 
-corosio::tls_context server_context()
+auto server_context() -> corosio::tls_context
 {
 	static const auto leaf = pki().issue("localhost", "DNS:localhost,IP:127.0.0.1");
 	corosio::tls_context ctx;
@@ -135,11 +135,11 @@ corosio::tls_context server_context()
 // Serves `clear` in clear, the last step of which answers a StartTLS
 // request, then runs the server side of the handshake and serves `secure`
 // over TLS. With `clear` empty: an ldaps:// server.
-capy::task<void> serve_upgrading(corosio::tcp_acceptor &acc,
+auto serve_upgrading(corosio::tcp_acceptor &acc,
   corosio::tls_context ctx,
   std::vector<step> clear,
   std::vector<step> secure,
-  server_log &log)
+  server_log &log) -> capy::task<void>
 {
 	auto [ec, peer] = co_await acc.accept();
 	if (ec) {
@@ -175,7 +175,7 @@ struct tls_mock
 	}
 
 	tls_mock(const tls_mock &) = delete;
-	tls_mock &operator=(const tls_mock &) = delete;
+	auto operator=(const tls_mock &) -> tls_mock & = delete;
 
 	~tls_mock()
 	{
@@ -185,7 +185,7 @@ struct tls_mock
 	}
 
 	// `scheme` "ldaps": TLS from the start (tls_mock({}, secure)).
-	ldap::result<void> connect(ldap::connection_options o = {}, std::string_view scheme = "ldap")
+	auto connect(ldap::connection_options o = {}, std::string_view scheme = "ldap") -> ldap::result<void>
 	{
 		o.tls.ca_pem = std::pmr::string(pki().ca_pem());
 		auto u = ldap::url::parse(std::string(scheme) + "://127.0.0.1:" + std::to_string(acc.local_endpoint().port()));
@@ -198,7 +198,7 @@ struct tls_mock
 		return {};
 	}
 
-	template<class T> T run(capy::task<T> t) { return finish(ioc, std::move(t)); }
+	template<class T> auto run(capy::task<T> t) -> T { return finish(ioc, std::move(t)); }
 
 	void check_server()
 	{
@@ -208,7 +208,7 @@ struct tls_mock
 	}
 };
 
-ldap::connection_options upgraded(password_method method = password_method::automatic)
+auto upgraded(password_method method = password_method::automatic) -> ldap::connection_options
 {
 	return { .start_tls = true, .password_method = method };
 }
@@ -358,7 +358,7 @@ namespace {
 
 // Reads what the server's end receives, up to `limit` bytes (the client's
 // first write, at least) or, with no limit, until the client hangs up.
-capy::task<std::string> raw_bytes(corosio::tcp_socket &peer, std::size_t limit = 0)
+auto raw_bytes(corosio::tcp_socket &peer, std::size_t limit = 0) -> capy::task<std::string>
 {
 	std::string out;
 	char buf[4096];
@@ -373,7 +373,7 @@ capy::task<std::string> raw_bytes(corosio::tcp_socket &peer, std::size_t limit =
 
 // `bytes` is whole TLS records, all of them handshake records (content
 // type 22): no LDAP message in clear.
-bool only_tls_handshake_records(std::string_view bytes)
+auto only_tls_handshake_records(std::string_view bytes) -> bool
 {
 	while (!bytes.empty()) {
 		if (bytes.size() < 5 || bytes[0] != '\x16') {

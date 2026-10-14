@@ -18,8 +18,8 @@ namespace jhetz::ldap::detail {
 // `timeout` and the stop token. Fails with std::errc::operation_not_supported
 // unless the io_context of `ex` is in locking_mode::safe. Errors are without
 // the bind's context (sasl_bind adds it).
-boost::capy::task<result<std::optional<std::string>>> run_offloaded(boost::corosio::io_context::executor_type ex,
+auto run_offloaded(boost::corosio::io_context::executor_type ex,
   std::optional<std::chrono::milliseconds> timeout,
-  sasl_work work);
+  sasl_work work) -> boost::capy::task<result<std::optional<std::string>>>;
 
 }// namespace jhetz::ldap::detail

@@ -17,7 +17,7 @@
 
 namespace ldap = jhetz::ldap;
 
-int main()
+auto main() -> int
 {
 	const ldap::dn base{ "ou=people,dc=example,dc=org" };
 	const auto f = ldap::filters::attr("uid") == "jdoe";

@@ -32,7 +32,7 @@ namespace {
 
 // 30 attributes of 3 values each, plus two large binary values: the shape of
 // a big directory entry.
-ldap::message large_entry()
+auto large_entry() -> ldap::message
 {
 	ldap::search_result_entry e;
 	e.object_name = "uid=a-user-with-a-long-name,ou=people,ou=department,dc=example,dc=org";
@@ -51,7 +51,7 @@ ldap::message large_entry()
 	return { 42, std::move(e), { ldap::control{ "1.2.840.113556.1.4.319", false, "cookie-cookie-cookie" } } };
 }
 
-std::vector<ldap::message> all_samples()
+auto all_samples() -> std::vector<ldap::message>
 {
 	auto out = ldap::test::sample_messages();
 	for (auto m : ldap::test::sample_messages()) {

@@ -36,7 +36,7 @@ namespace {
 	// 4511 section 4.2.2), and the server may still be in the exchange, so
 	// the connection is closed. Without a response (timeout, stop, transport
 	// error) the connection is already closed: a bind cannot be abandoned.
-	capy::task<void> abort_sasl(impl_ref self, const std::string &context)
+	auto abort_sasl(impl_ref self, const std::string &context) -> capy::task<void>
 	{
 		message request(std::pmr::polymorphic_allocator<>(self->mr()));
 		request.op = bind_request(3, {}, simple_auth(std::string_view(), self->mr()), self->mr());
@@ -55,7 +55,7 @@ namespace {
 
 }// namespace
 
-capy::task<result<void>> connection::simple_bind(dn name, std::string password)
+auto connection::simple_bind(dn name, std::string password) -> capy::task<result<void>>
 {
 	std::string context = op_context("bind", name);
 	if (impl_ == nullptr) {
@@ -82,7 +82,7 @@ capy::task<result<void>> connection::simple_bind(dn name, std::string password)
 	co_return result<void>{};
 }
 
-capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn name)
+auto connection::sasl_bind(sasl_mechanism &mechanism, dn name) -> capy::task<result<void>>
 {
 	std::string context = "sasl bind ";
 	context += mechanism.name();

@@ -13,7 +13,7 @@
 #include <string_view>
 #include <vector>
 
-extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size);
+extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size) -> int;
 
 namespace jhetz::ldap::fuzz {
 
@@ -21,20 +21,20 @@ namespace jhetz::ldap::fuzz {
 struct rng
 {
 	std::uint64_t state;
-	std::uint64_t next()
+	auto next() -> std::uint64_t
 	{
 		std::uint64_t z = (state += 0x9E3779B97F4A7C15ull);
 		z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
 		z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
 		return z ^ (z >> 31);
 	}
-	std::size_t below(std::size_t n) { return static_cast<std::size_t>(next() % n); }
-	std::uint8_t byte() { return static_cast<std::uint8_t>(next() & 0xFFu); }
+	auto below(std::size_t n) -> std::size_t { return static_cast<std::size_t>(next() % n); }
+	auto byte() -> std::uint8_t { return static_cast<std::uint8_t>(next() & 0xFFu); }
 };
 
 using input = std::vector<std::uint8_t>;
 
-inline input to_input(std::span<const std::byte> v)
+inline auto to_input(std::span<const std::byte> v) -> input
 {
 	input out(v.size());
 	for (std::size_t i = 0; i < v.size(); ++i) {
@@ -43,7 +43,7 @@ inline input to_input(std::span<const std::byte> v)
 	return out;
 }
 
-inline input to_input(std::string_view s) { return input(s.begin(), s.end()); }
+inline auto to_input(std::string_view s) -> input { return input(s.begin(), s.end()); }
 
 inline void run(const input &in) { LLVMFuzzerTestOneInput(in.data(), in.size()); }
 
@@ -88,7 +88,7 @@ inline void mutate(rng &r, input &v, std::span<const std::uint8_t> interesting)
 }
 
 // Writes seeds as DIR/seed-NN<extension> (the libFuzzer seed corpus).
-inline int write_seeds(const char *dir, const std::vector<input> &inputs, const char *extension)
+inline auto write_seeds(const char *dir, const std::vector<input> &inputs, const char *extension) -> int
 {
 	for (std::size_t i = 0; i < inputs.size(); ++i) {
 		const std::string path = std::format("{}/seed-{:02}{}", dir, i, extension);
@@ -122,7 +122,7 @@ struct replay_config
 // `<name> --write-seeds DIR` writes the seeds and exits; without arguments,
 // runs every seed, every prefix of every seed, mutations of seeds and random
 // inputs built mostly from `interesting` bytes.
-inline int replay_main(int argc, char **argv, const replay_config &cfg)
+inline auto replay_main(int argc, char **argv, const replay_config &cfg) -> int
 {
 	if (argc == 3 && std::string_view(argv[1]) == "--write-seeds") {
 		return write_seeds(argv[2], cfg.seeds, cfg.extension);

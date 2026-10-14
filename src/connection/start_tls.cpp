@@ -29,8 +29,8 @@ using detail::registration;
 
 // ---------------------------------------------------------------- StartTLS
 
-capy::task<result<void>> connection::start_tls(net::tls_options options,
-  std::optional<std::chrono::milliseconds> timeout)
+auto connection::start_tls(net::tls_options options, std::optional<std::chrono::milliseconds> timeout)
+  -> capy::task<result<void>>
 {
 	std::string context = "start tls";
 	if (impl_ == nullptr) {

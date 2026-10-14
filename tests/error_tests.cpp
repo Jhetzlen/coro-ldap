@@ -242,7 +242,7 @@ constexpr ldap::cond all_conds[] = {
 };
 
 // The one condition `ec` matches, or nullopt; fails the test if it matches several.
-std::optional<ldap::cond> cond_of(std::error_code ec)
+auto cond_of(std::error_code ec) -> std::optional<ldap::cond>
 {
 	std::optional<ldap::cond> found;
 	for (auto c : all_conds) {
@@ -263,8 +263,8 @@ class named_category final : public std::error_category
 {
   public:
 	explicit named_category(const char *name) : name_(name) {}
-	const char *name() const noexcept override { return name_; }
-	std::string message(int value) const override { return std::string(name_) + " " + std::to_string(value); }
+	auto name() const noexcept -> const char * override { return name_; }
+	auto message(int value) const -> std::string override { return std::string(name_) + " " + std::to_string(value); }
 
   private:
 	const char *name_;

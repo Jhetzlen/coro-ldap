@@ -8,7 +8,7 @@
 namespace jhetz::ldap::detail {
 
 // The one instantiation of the formatting engine (see format_util.hpp).
-std::string vformat(std::string_view fmt, std::format_args args) { return std::vformat(fmt, args); }
+auto vformat(std::string_view fmt, std::format_args args) -> std::string { return std::vformat(fmt, args); }
 
 void vformat_to(std::string &out, std::string_view fmt, std::format_args args)
 {

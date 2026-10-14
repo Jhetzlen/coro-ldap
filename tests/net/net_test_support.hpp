@@ -50,8 +50,8 @@ template<class T> struct outcome
 {
 	std::optional<T> value{};
 	std::exception_ptr error{};
-	bool done() const noexcept { return value.has_value() || error != nullptr; }
-	T &get()
+	auto done() const noexcept -> bool { return value.has_value() || error != nullptr; }
+	auto get() -> T &
 	{
 		if (error) {
 			std::rethrow_exception(error);
@@ -67,7 +67,7 @@ template<> struct outcome<void>
 {
 	bool finished = false;
 	std::exception_ptr error{};
-	bool done() const noexcept { return finished || error != nullptr; }
+	auto done() const noexcept -> bool { return finished || error != nullptr; }
 	void get()
 	{
 		if (error) {
@@ -130,7 +130,7 @@ template<class Pred> void drive_until(corosio::io_context &ioc, Pred done)
 
 // Runs one task to completion and returns its result, after running `ioc`
 // until it has no work left (so peers spawned on it finish too).
-template<class T> T run(corosio::io_context &ioc, capy::task<T> t)
+template<class T> auto run(corosio::io_context &ioc, capy::task<T> t) -> T
 {
 	outcome<T> out;
 	spawn(ioc, std::move(t), out);
@@ -144,7 +144,7 @@ template<class T> T run(corosio::io_context &ioc, capy::task<T> t)
 
 // Runs one task until it finishes and returns its result, without waiting
 // for other work on `ioc` (a server still parked on a read, say).
-template<class T> T finish(corosio::io_context &ioc, capy::task<T> t)
+template<class T> auto finish(corosio::io_context &ioc, capy::task<T> t) -> T
 {
 	outcome<T> out;
 	spawn(ioc, std::move(t), out);
@@ -171,12 +171,12 @@ class failing_frames final : public std::pmr::memory_resource
 		other_ = other;
 	}
 	// Allocations attempted since fail_at().
-	std::size_t count() const noexcept { return count_; }
+	auto count() const noexcept -> std::size_t { return count_; }
 	// Frames allocated and not yet freed.
-	std::size_t live() const noexcept { return live_; }
+	auto live() const noexcept -> std::size_t { return live_; }
 
   private:
-	void *do_allocate(std::size_t bytes, std::size_t align) override
+	auto do_allocate(std::size_t bytes, std::size_t align) -> void * override
 	{
 		if (++count_ == fail_) {
 			if (other_) {
@@ -193,7 +193,7 @@ class failing_frames final : public std::pmr::memory_resource
 		--live_;
 		std::pmr::new_delete_resource()->deallocate(p, bytes, align);
 	}
-	bool do_is_equal(const std::pmr::memory_resource &other) const noexcept override { return this == &other; }
+	auto do_is_equal(const std::pmr::memory_resource &other) const noexcept -> bool override { return this == &other; }
 
 	std::size_t count_ = 0;
 	std::size_t fail_ = 0;
@@ -208,7 +208,7 @@ struct clear_frame_allocator
 {
 	clear_frame_allocator() = default;
 	clear_frame_allocator(const clear_frame_allocator &) = delete;
-	clear_frame_allocator &operator=(const clear_frame_allocator &) = delete;
+	auto operator=(const clear_frame_allocator &) -> clear_frame_allocator & = delete;
 	~clear_frame_allocator() { capy::set_current_frame_allocator(nullptr); }
 };
 
@@ -225,17 +225,17 @@ inline void skip_unless_linux_loopback()
 
 // ---------------------------------------------------------------- messages
 
-inline message bind_request_msg(std::int32_t id, std::string_view name = "cn=admin,dc=example,dc=org")
+inline auto bind_request_msg(std::int32_t id, std::string_view name = "cn=admin,dc=example,dc=org") -> message
 {
 	return message{ id, bind_request{ 3, name, simple_auth{ "secret" } } };
 }
 
-inline message bind_response_msg(std::int32_t id, std::string_view diagnostic = {})
+inline auto bind_response_msg(std::int32_t id, std::string_view diagnostic = {}) -> message
 {
 	return message{ id, bind_response{ { 0, "", diagnostic } } };
 }
 
-inline std::string bytes_of(const message &m)
+inline auto bytes_of(const message &m) -> std::string
 {
 	auto b = encode(m);
 	if (!b) {
@@ -263,14 +263,14 @@ class test_pki
 		ca_pem_ = to_pem(ca_cert_.get());
 	}
 
-	const std::string &ca_pem() const noexcept { return ca_pem_; }
+	auto ca_pem() const noexcept -> const std::string & { return ca_pem_; }
 
 	// The CA's subject name hash: "<hash, 8 hex digits>.0" is its file name
 	// in a c_rehash-style CA directory.
-	unsigned long ca_subject_hash() const { return X509_subject_name_hash(ca_cert_.get()); }
+	auto ca_subject_hash() const -> unsigned long { return X509_subject_name_hash(ca_cert_.get()); }
 
 	// `key_pem` re-encrypted with AES-256-CBC under `passphrase`.
-	static std::string encrypted_key_pem(const std::string &key_pem, const std::string &passphrase)
+	static auto encrypted_key_pem(const std::string &key_pem, const std::string &passphrase) -> std::string
 	{
 		BIO *in = BIO_new_mem_buf(key_pem.data(), static_cast<int>(key_pem.size()));
 		check(in != nullptr, "BIO_new_mem_buf");
@@ -292,7 +292,7 @@ class test_pki
 	}
 
 	// A leaf certificate for `subject_alt_names` ("DNS:localhost,IP:127.0.0.1").
-	issued issue(const char *cn, const std::string &subject_alt_names)
+	auto issue(const char *cn, const std::string &subject_alt_names) -> issued
 	{
 		std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(generate_key(), &EVP_PKEY_free);
 		std::unique_ptr<X509, decltype(&X509_free)> cert(
@@ -317,9 +317,9 @@ class test_pki
 		}
 	}
 
-	long next_serial() noexcept { return ++serial_; }
+	auto next_serial() noexcept -> long { return ++serial_; }
 
-	static EVP_PKEY *generate_key()
+	static auto generate_key() -> EVP_PKEY *
 	{
 		std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> ctx(
 		  EVP_PKEY_CTX_new_id(EVP_PKEY_EC, nullptr), &EVP_PKEY_CTX_free);
@@ -340,13 +340,13 @@ class test_pki
 		check(ok, "X509_add_ext");
 	}
 
-	static X509 *make_cert(EVP_PKEY *key,
+	static auto make_cert(EVP_PKEY *key,
 	  const char *cn,
 	  X509 *issuer,
 	  EVP_PKEY *issuer_key,
 	  bool ca,
 	  const std::string &sans,
-	  long serial)
+	  long serial) -> X509 *
 	{
 		X509 *cert = X509_new();
 		check(cert != nullptr, "X509_new");
@@ -382,7 +382,7 @@ class test_pki
 		return cert;
 	}
 
-	static std::string from_bio(BIO *bio)
+	static auto from_bio(BIO *bio) -> std::string
 	{
 		char *data = nullptr;
 		const long len = BIO_get_mem_data(bio, &data);
@@ -391,14 +391,14 @@ class test_pki
 		return out;
 	}
 
-	static std::string to_pem(X509 *cert)
+	static auto to_pem(X509 *cert) -> std::string
 	{
 		BIO *bio = BIO_new(BIO_s_mem());
 		check(bio != nullptr && PEM_write_bio_X509(bio, cert) == 1, "PEM_write_bio_X509");
 		return from_bio(bio);
 	}
 
-	static std::string key_to_pem(EVP_PKEY *key)
+	static auto key_to_pem(EVP_PKEY *key) -> std::string
 	{
 		BIO *bio = BIO_new(BIO_s_mem());
 		check(bio != nullptr && PEM_write_bio_PrivateKey(bio, key, nullptr, nullptr, 0, nullptr, nullptr) == 1,
@@ -427,13 +427,13 @@ class temp_path
 				  .string();
 	}
 	temp_path(const temp_path &) = delete;
-	temp_path &operator=(const temp_path &) = delete;
+	auto operator=(const temp_path &) -> temp_path & = delete;
 	~temp_path()
 	{
 		std::error_code ec;
 		std::filesystem::remove(path_, ec);
 	}
-	const std::string &str() const noexcept { return path_; }
+	auto str() const noexcept -> const std::string & { return path_; }
 
 	void write(const std::string &contents) const
 	{
@@ -452,7 +452,7 @@ class temp_path
 };
 
 // RFC 3986 percent-encoding of everything but unreserved characters.
-inline std::string percent_encode(std::string_view s)
+inline auto percent_encode(std::string_view s) -> std::string
 {
 	static constexpr char hex[] = "0123456789ABCDEF";
 	std::string out;

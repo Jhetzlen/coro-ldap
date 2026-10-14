@@ -16,10 +16,10 @@ namespace {
 	// supported platform.
 	constexpr std::size_t max_length_octets = 4;
 
-	unsigned octet(std::byte b) noexcept { return std::to_integer<unsigned>(b); }
+	auto octet(std::byte b) noexcept -> unsigned { return std::to_integer<unsigned>(b); }
 
 	// Caller has checked that the number is not 31 (high-tag-number form).
-	tag tag_from_identifier(unsigned id) noexcept
+	auto tag_from_identifier(unsigned id) noexcept -> tag
 	{
 		return tag{ static_cast<tag_class>(id >> 6), (id & 0x20u) != 0, static_cast<std::uint8_t>(id & 0x1Fu) };
 	}
@@ -34,7 +34,7 @@ namespace {
 	// Parses the identifier and length octets at the start of `buf`.
 	// nullopt: `buf` ends inside the header. `base` is the absolute offset of
 	// buf[0], used only for error messages. Never reads past buf.size().
-	result<std::optional<raw_header>> parse_header_at(std::span<const std::byte> buf, std::size_t base)
+	auto parse_header_at(std::span<const std::byte> buf, std::size_t base) -> result<std::optional<raw_header>>
 	{
 		if (buf.empty()) {
 			return std::nullopt;
@@ -79,7 +79,7 @@ namespace {
 	// Long-form definite lengths (length >= 0x80): the initial octet is
 	// 0x80 | count, followed by `count` minimal big-endian length octets.
 	// Precondition: length >= 0x80 (short-form lengths have no length octets).
-	unsigned length_octet_count(std::size_t length) noexcept
+	auto length_octet_count(std::size_t length) noexcept -> unsigned
 	{
 		return static_cast<unsigned>(std::bit_width(length) + 7) / 8;
 	}
@@ -93,20 +93,20 @@ namespace {
 		}
 	}
 
-	std::string describe(tag expected, tag actual)
+	auto describe(tag expected, tag actual) -> std::string
 	{
 		return detail::format("expected {}, got {}", to_string(expected), to_string(actual));
 	}
 
 	// Class and number must match; the form is imposed by the operation.
-	bool matches(tag actual, tag expected, bool constructed) noexcept
+	auto matches(tag actual, tag expected, bool constructed) noexcept -> bool
 	{
 		return actual.cls == expected.cls && actual.number == expected.number && actual.constructed == constructed;
 	}
 
 }// namespace
 
-std::string to_string(tag t)
+auto to_string(tag t) -> std::string
 {
 	static constexpr std::array<const char *, 4> names{ "UNIVERSAL", "APPLICATION", "CONTEXT", "PRIVATE" };
 	return detail::format(
@@ -178,7 +178,7 @@ void writer::octet_string(std::string_view value, tag t) { primitive(t, std::as_
 
 void writer::null(tag t) { primitive(t, {}); }
 
-std::size_t writer::begin_constructed(tag t)
+auto writer::begin_constructed(tag t) -> std::size_t
 {
 	const std::size_t mark = buf_.size();
 	put_identifier(t, true);
@@ -226,7 +226,7 @@ void writer::rollback(std::size_t mark, std::size_t resets)
 // The common case (low tag number, definite length, content present), without
 // building a result; everything else, every error included, goes through
 // parse_header_at.
-bool reader::fast_header(header &out) const noexcept
+auto reader::fast_header(header &out) const noexcept -> bool
 {
 	const auto rest = data_.subspan(pos_);
 	if (rest.size() < 2) {
@@ -257,7 +257,7 @@ bool reader::fast_header(header &out) const noexcept
 	return true;
 }
 
-result<reader::header> reader::parse_header() const
+auto reader::parse_header() const -> result<reader::header>
 {
 	if (header h; fast_header(h)) {
 		return h;
@@ -283,7 +283,7 @@ result<reader::header> reader::parse_header() const
 	return header{ raw.t, raw.header_size, static_cast<std::size_t>(raw.content_size) };
 }
 
-result<tag> reader::peek_tag() const
+auto reader::peek_tag() const -> result<tag>
 {
 	// Only the identifier octet is inspected; length problems surface on read.
 	if (empty()) {
@@ -296,7 +296,7 @@ result<tag> reader::peek_tag() const
 	return tag_from_identifier(id);
 }
 
-result<element> reader::read()
+auto reader::read() -> result<element>
 {
 	auto h = parse_header();
 	if (!h) {
@@ -307,7 +307,7 @@ result<element> reader::read()
 	return e;
 }
 
-result<element> reader::read(tag expected)
+auto reader::read(tag expected) -> result<element>
 {
 	auto h = parse_header();
 	if (!h) {
@@ -321,7 +321,7 @@ result<element> reader::read(tag expected)
 	return read();
 }
 
-result<element> reader::read_primitive(tag expected, const char *what)
+auto reader::read_primitive(tag expected, const char *what) -> result<element>
 {
 	auto h = parse_header();
 	if (!h) {
@@ -338,7 +338,7 @@ result<element> reader::read_primitive(tag expected, const char *what)
 	return element{ h->t, data_.subspan(pos_ + h->header_size, h->content_size), offset(), h->header_size };
 }
 
-result<bool> reader::read_boolean(tag t)
+auto reader::read_boolean(tag t) -> result<bool>
 {
 	auto e = read_primitive(t, "BOOLEAN");
 	if (!e) {
@@ -352,7 +352,7 @@ result<bool> reader::read_boolean(tag t)
 	return e->content[0] != std::byte{ 0 };
 }
 
-result<std::int64_t> reader::read_int(tag t, const char *what)
+auto reader::read_int(tag t, const char *what) -> result<std::int64_t>
 {
 	auto e = read_primitive(t, what);
 	if (!e) {
@@ -376,11 +376,11 @@ result<std::int64_t> reader::read_int(tag t, const char *what)
 	return static_cast<std::int64_t>(v);
 }
 
-result<std::int64_t> reader::read_integer(tag t) { return read_int(t, "INTEGER"); }
+auto reader::read_integer(tag t) -> result<std::int64_t> { return read_int(t, "INTEGER"); }
 
-result<std::int64_t> reader::read_enumerated(tag t) { return read_int(t, "ENUMERATED"); }
+auto reader::read_enumerated(tag t) -> result<std::int64_t> { return read_int(t, "ENUMERATED"); }
 
-result<std::span<const std::byte>> reader::read_octet_string(tag t)
+auto reader::read_octet_string(tag t) -> result<std::span<const std::byte>>
 {
 	auto e = read_primitive(t, "OCTET STRING");
 	if (!e) {
@@ -390,7 +390,7 @@ result<std::span<const std::byte>> reader::read_octet_string(tag t)
 	return e->content;
 }
 
-result<std::pmr::string> reader::read_string(tag t, std::pmr::memory_resource *mr)
+auto reader::read_string(tag t, std::pmr::memory_resource *mr) -> result<std::pmr::string>
 {
 	auto s = read_octet_string(t);
 	if (!s) {
@@ -401,7 +401,7 @@ result<std::pmr::string> reader::read_string(tag t, std::pmr::memory_resource *m
 	return std::pmr::string(detail::as_text(*s), mr);
 }
 
-result<void> reader::read_null(tag t)
+auto reader::read_null(tag t) -> result<void>
 {
 	auto e = read_primitive(t, "NULL");
 	if (!e) {
@@ -415,7 +415,7 @@ result<void> reader::read_null(tag t)
 	return {};
 }
 
-result<reader> reader::enter_impl(tag t, bool constructed, const char *what)
+auto reader::enter_impl(tag t, bool constructed, const char *what) -> result<reader>
 {
 	auto h = parse_header();
 	if (!h) {
@@ -436,11 +436,11 @@ result<reader> reader::enter_impl(tag t, bool constructed, const char *what)
 	return sub;
 }
 
-result<reader> reader::enter(tag t) { return enter_impl(t, true, "constructed element"); }
+auto reader::enter(tag t) -> result<reader> { return enter_impl(t, true, "constructed element"); }
 
-result<reader> reader::enter_encapsulated(tag t) { return enter_impl(t, false, "encapsulated element"); }
+auto reader::enter_encapsulated(tag t) -> result<reader> { return enter_impl(t, false, "encapsulated element"); }
 
-result<void> reader::expect_end() const
+auto reader::expect_end() const -> result<void>
 {
 	if (!empty()) {
 		return fail(client_errc::decode_error,
@@ -451,7 +451,7 @@ result<void> reader::expect_end() const
 
 // ---------------------------------------------------------------- framer
 
-result<std::optional<std::size_t>> declared_message_size(std::span<const std::byte> buf, std::size_t max_size)
+auto declared_message_size(std::span<const std::byte> buf, std::size_t max_size) -> result<std::optional<std::size_t>>
 {
 	auto h = parse_header_at(buf, 0);
 	if (!h) {
@@ -469,7 +469,7 @@ result<std::optional<std::size_t>> declared_message_size(std::span<const std::by
 	return std::optional<std::size_t>{ static_cast<std::size_t>(total) };
 }
 
-result<std::optional<std::size_t>> complete_message_size(std::span<const std::byte> buf, std::size_t max_size)
+auto complete_message_size(std::span<const std::byte> buf, std::size_t max_size) -> result<std::optional<std::size_t>>
 {
 	auto total = declared_message_size(buf, max_size);
 	if (!total) {

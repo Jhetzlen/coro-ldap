@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <vector>
 
-int main(int argc, char **argv)
+auto main(int argc, char **argv) -> int
 {
 	namespace ldap = jhetz::ldap;
 	namespace fuzz = jhetz::ldap::fuzz;

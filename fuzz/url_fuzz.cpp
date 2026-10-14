@@ -21,7 +21,7 @@ namespace ldap = jhetz::ldap;
 
 namespace {
 
-bool is_uri_char(char c)
+auto is_uri_char(char c) -> bool
 {
 	if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
 		return true;
@@ -31,7 +31,7 @@ bool is_uri_char(char c)
 
 }// namespace
 
-extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size)
+extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size) -> int
 {
 	const std::string_view text(reinterpret_cast<const char *>(data), size);
 	auto u = ldap::url::parse(text);

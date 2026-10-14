@@ -30,7 +30,7 @@ connection::~connection()
 	io_thread_.join();
 }
 
-result<void> connection::connect(url u)
+auto connection::connect(url u) -> result<void>
 {
 	return call([&](ldap::connection &c) -> capy::task<result<void>> {
 		return [](ldap::connection &target,
@@ -47,7 +47,7 @@ result<void> connection::connect(url u)
 	});
 }
 
-result<void> connection::connect(std::string_view text)
+auto connection::connect(std::string_view text) -> result<void>
 {
 	auto u = url::parse(text);
 	if (!u) {
@@ -56,22 +56,22 @@ result<void> connection::connect(std::string_view text)
 	return connect(std::move(*u));
 }
 
-bool connection::is_open() const
+auto connection::is_open() const -> bool
 {
 	return const_cast<connection *>(this)
 	  ->call([](ldap::connection &c) -> capy::task<result<bool>> { co_return c.is_open(); })
 	  .value_or(false);
 }
 
-bool connection::is_tls() const
+auto connection::is_tls() const -> bool
 {
 	return const_cast<connection *>(this)
 	  ->call([](ldap::connection &c) -> capy::task<result<bool>> { co_return c.is_tls(); })
 	  .value_or(false);
 }
 
-result<std::pmr::vector<entry>>
-  connection::search_paged(search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
+auto connection::search_paged(search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
+  -> result<std::pmr::vector<entry>>
 {
 	return call([&](ldap::connection &c) {
 		return [](ldap::connection &conn,
@@ -97,7 +97,7 @@ result<std::pmr::vector<entry>>
 	});
 }
 
-result<void> connection::unbind()
+auto connection::unbind() -> result<void>
 {
 	return call([](ldap::connection &c) { return c.unbind(); });
 }

@@ -17,7 +17,7 @@ struct in_flight
 	capy::async_event changed{};
 };
 
-capy::task<> add_modify_delete(ldap::connection &c, in_flight &running, int i)
+auto add_modify_delete(ldap::connection &c, in_flight &running, int i) -> capy::task<>
 {
 	auto uid = std::format("bulk{:05}", i);
 	auto who = *ldap::dn::parse(std::format("uid={},ou=people,dc=example,dc=org", uid));
@@ -39,7 +39,7 @@ capy::task<> add_modify_delete(ldap::connection &c, in_flight &running, int i)
 	running.changed.set();
 }
 
-capy::task<int> run(boost::corosio::io_context &ioc, std::string text)
+auto run(boost::corosio::io_context &ioc, std::string text) -> capy::task<int>
 {
 	auto c = co_await ldap::connect(ioc, text);
 	if (!c) {
@@ -68,7 +68,7 @@ capy::task<int> run(boost::corosio::io_context &ioc, std::string text)
 	co_return 0;
 }
 
-int main(int argc, char **argv)
+auto main(int argc, char **argv) -> int
 {
 	boost::corosio::io_context ioc;
 	int rc = 1;

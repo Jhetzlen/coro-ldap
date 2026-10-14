@@ -78,7 +78,8 @@ constexpr auto slow_dns_delay = std::chrono::milliseconds(1000);
 std::atomic<std::stop_source *> lookup_stop{ nullptr };
 }// namespace
 
-extern "C" int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res)
+extern "C" auto getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res)
+  -> int
 {
 	using fn = int (*)(const char *, const char *, const struct addrinfo *, struct addrinfo **);
 	static const auto real = reinterpret_cast<fn>(dlsym(RTLD_NEXT, "getaddrinfo"));
@@ -131,7 +132,7 @@ const net::read_options as_server{ .decode = { .from = ldap::origin::client } };
 
 // Serves one connection: [TLS handshake], read a bind request, answer it,
 // then wait for the client to go away. Returns "" or what went wrong.
-capy::task<std::string> serve_one(net::transport t)
+auto serve_one(net::transport t) -> capy::task<std::string>
 {
 	net::read_buffer buf;
 	auto req = co_await net::read_message(t, buf, as_server);
@@ -149,7 +150,7 @@ capy::task<std::string> serve_one(net::transport t)
 }
 
 template<class Acceptor>
-capy::task<std::string> accept_and_serve(Acceptor &acc, std::optional<corosio::tls_context> tls = std::nullopt)
+auto accept_and_serve(Acceptor &acc, std::optional<corosio::tls_context> tls = std::nullopt) -> capy::task<std::string>
 {
 	auto [ec, peer] = co_await acc.accept();
 	if (ec) {
@@ -167,7 +168,7 @@ capy::task<std::string> accept_and_serve(Acceptor &acc, std::optional<corosio::t
 }
 
 // Accepts, then reads until the client goes away without ever writing.
-capy::task<void> accept_and_stay_silent(corosio::tcp_acceptor &acc)
+auto accept_and_stay_silent(corosio::tcp_acceptor &acc) -> capy::task<void>
 {
 	auto [ec, peer] = co_await acc.accept();
 	if (ec) {
@@ -183,15 +184,15 @@ capy::task<void> accept_and_stay_silent(corosio::tcp_acceptor &acc)
 }
 
 // Accepts and hangs up at once.
-capy::task<void> accept_and_close(corosio::tcp_acceptor &acc)
+auto accept_and_close(corosio::tcp_acceptor &acc) -> capy::task<void>
 {
 	auto [ec, peer] = co_await acc.accept();
 	peer.close();
 }
 
 // Connects, sends a bind request, checks the answer. Returns "" or the error.
-capy::task<std::string>
-  exchange(corosio::io_context &ioc, std::string text, net::connect_options options = {}, bool expect_tls = false)
+auto exchange(corosio::io_context &ioc, std::string text, net::connect_options options = {}, bool expect_tls = false)
+  -> capy::task<std::string>
 {
 	auto u = ldap::url::parse(text);
 	if (!u) {
@@ -230,21 +231,21 @@ struct tcp_server
 	explicit tcp_server(corosio::io_context &ioc, int backlog = 128)
 	  : acc(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), backlog), port(acc.local_endpoint().port())
 	{}
-	std::string url(const char *scheme, const char *host = "127.0.0.1") const
+	auto url(const char *scheme, const char *host = "127.0.0.1") const -> std::string
 	{
 		return std::string(scheme) + "://" + host + ":" + std::to_string(port);
 	}
 };
 
-ldap::result<net::transport>
-  connect_to(corosio::io_context &ioc, const std::string &text, net::connect_options options = {})
+auto connect_to(corosio::io_context &ioc, const std::string &text, net::connect_options options = {})
+  -> ldap::result<net::transport>
 {
 	auto u = ldap::url::parse(text);
 	REQUIRE(u.has_value());
 	return run(ioc, net::connect(ioc, *u, std::move(options)));
 }
 
-corosio::tls_context server_context(const test_pki::issued &leaf)
+auto server_context(const test_pki::issued &leaf) -> corosio::tls_context
 {
 	corosio::tls_context ctx;
 	REQUIRE_FALSE(ctx.use_certificate(leaf.cert_pem, corosio::tls_file_format::pem));
@@ -253,13 +254,13 @@ corosio::tls_context server_context(const test_pki::issued &leaf)
 }
 
 // One PKI for the whole test binary: key generation is the slow part.
-test_pki &pki()
+auto pki() -> test_pki &
 {
 	static test_pki instance;
 	return instance;
 }
 
-const test_pki::issued &localhost_cert()
+auto localhost_cert() -> const test_pki::issued &
 {
 	static const auto leaf = pki().issue("localhost", "DNS:localhost,IP:127.0.0.1");
 	return leaf;
@@ -364,7 +365,7 @@ struct blackhole
 		}(filler, acc.local_endpoint()));
 		REQUIRE_FALSE(fec);
 	}
-	static corosio::tcp_acceptor make(corosio::io_context &ioc, const char *addr, std::uint16_t port)
+	static auto make(corosio::io_context &ioc, const char *addr, std::uint16_t port) -> corosio::tcp_acceptor
 	{
 		auto [aec, a] = corosio::make_ipv4_address(addr);
 		REQUIRE_FALSE(aec);
@@ -649,7 +650,7 @@ struct ipv6_server
 	std::string zone{};
 
 	// [::1]
-	static ipv6_server loopback(corosio::io_context &ioc)
+	static auto loopback(corosio::io_context &ioc) -> ipv6_server
 	{
 		ipv6_server s;
 		s.listen(ioc, corosio::ipv6_address::loopback(), "::1", "");
@@ -659,7 +660,7 @@ struct ipv6_server
 	// The first link-local address of an up, non-loopback interface (glibc
 	// only accepts a zone on a link-local address, so [::1%25lo] cannot be
 	// used).
-	static ipv6_server link_local(corosio::io_context &ioc)
+	static auto link_local(corosio::io_context &ioc) -> ipv6_server
 	{
 		ipv6_server s;
 		ifaddrs *list = nullptr;
@@ -687,7 +688,7 @@ struct ipv6_server
 		return s;
 	}
 
-	std::string url(const char *scheme) const
+	auto url(const char *scheme) const -> std::string
 	{
 		std::string host = "[" + address + (zone.empty() ? "" : "%25" + zone) + "]";
 		return std::string(scheme) + "://" + host + ":" + std::to_string(acc->local_endpoint().port());
@@ -1295,7 +1296,7 @@ namespace {
 // the read reported ("end of file" for a close_notify). `answer`: reply to
 // the close_notify with ours; otherwise stay silent until the client hangs
 // up the TCP connection.
-capy::task<std::string> serve_until_close(corosio::tcp_acceptor &acc, corosio::tls_context ctx, bool answer)
+auto serve_until_close(corosio::tcp_acceptor &acc, corosio::tls_context ctx, bool answer) -> capy::task<std::string>
 {
 	auto [ec, peer] = co_await acc.accept();
 	if (ec) {
@@ -1327,8 +1328,8 @@ capy::task<std::string> serve_until_close(corosio::tcp_acceptor &acc, corosio::t
 	co_return rec == capy::cond::eof ? "close_notify" : rec.message();
 }
 
-capy::task<std::pair<std::string, bool>>
-  connect_and_shutdown(corosio::io_context &io, std::string text, std::chrono::milliseconds bound)
+auto connect_and_shutdown(corosio::io_context &io, std::string text, std::chrono::milliseconds bound)
+  -> capy::task<std::pair<std::string, bool>>
 {
 	auto u = ldap::url::parse(text);
 	auto t = co_await net::connect(io, *u, { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()) } });

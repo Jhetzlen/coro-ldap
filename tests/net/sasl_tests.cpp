@@ -28,18 +28,18 @@ using Catch::Matchers::ContainsSubstring;
 
 namespace {
 
-ldap::message sasl_resp(std::int32_t id, std::int32_t code, std::optional<std::string_view> creds = {})
+auto sasl_resp(std::int32_t id, std::int32_t code, std::optional<std::string_view> creds = {}) -> ldap::message
 {
 	return ldap::message{ id, ldap::bind_response{ ldap::ldap_result{ code }, creds } };
 }
 
-ldap::message sasl_req(std::int32_t id, std::string_view mech, std::optional<std::string_view> creds)
+auto sasl_req(std::int32_t id, std::string_view mech, std::optional<std::string_view> creds) -> ldap::message
 {
 	return ldap::message{ id, ldap::bind_request{ 3, "", ldap::sasl_auth{ mech, creds } } };
 }
 
 // The anonymous simple bind that aborts a SASL exchange (RFC 4511 section 4.2.1).
-ldap::message abort_req(std::int32_t id)
+auto abort_req(std::int32_t id) -> ldap::message
 {
 	return ldap::message{ id, ldap::bind_request{ 3, "", ldap::simple_auth{ "" } } };
 }
@@ -55,9 +55,9 @@ class echo_mechanism final : public ldap::sasl_mechanism
 	bool fail_start = false;
 	std::vector<std::string> hosts;// prepare()'s, then "start" at each start()
 
-	std::string_view name() const noexcept override { return "X-ECHO"; }
+	auto name() const noexcept -> std::string_view override { return "X-ECHO"; }
 	void prepare(const ldap::sasl_bind_context &context) override { hosts.emplace_back(context.host); }
-	ldap::result<std::optional<std::string>> start() override
+	auto start() -> ldap::result<std::optional<std::string>> override
 	{
 		hosts.emplace_back("start");
 		challenges.clear();
@@ -66,7 +66,7 @@ class echo_mechanism final : public ldap::sasl_mechanism
 		}
 		return std::optional<std::string>("hello");
 	}
-	ldap::result<std::optional<std::string>> step(std::optional<std::string_view> c) override
+	auto step(std::optional<std::string_view> c) -> ldap::result<std::optional<std::string>> override
 	{
 		challenges.emplace_back(c.value_or("<none>"));
 		if (c == "bad") {
@@ -74,7 +74,7 @@ class echo_mechanism final : public ldap::sasl_mechanism
 		}
 		return std::optional<std::string>("re:" + std::string(c.value_or("")));
 	}
-	ldap::result<void> complete(std::optional<std::string_view> c) override
+	auto complete(std::optional<std::string_view> c) -> ldap::result<void> override
 	{
 		if (c) {
 			final_creds.emplace(*c);
@@ -123,7 +123,7 @@ struct open_at_exit
 	std::shared_ptr<offload_gate> gate;
 	explicit open_at_exit(std::shared_ptr<offload_gate> g) noexcept : gate(std::move(g)) {}
 	open_at_exit(const open_at_exit &) = delete;
-	open_at_exit &operator=(const open_at_exit &) = delete;
+	auto operator=(const open_at_exit &) -> open_at_exit & = delete;
 	~open_at_exit() { gate->allow(1000); }
 };
 
@@ -134,16 +134,16 @@ class offload_mechanism final : public ldap::sasl_mechanism
   public:
 	std::shared_ptr<offload_gate> gate = std::make_shared<offload_gate>();
 
-	std::string_view name() const noexcept override { return "X-SLOW"; }
-	ldap::result<std::optional<std::string>> start() override
+	auto name() const noexcept -> std::string_view override { return "X-SLOW"; }
+	auto start() -> ldap::result<std::optional<std::string>> override
 	{
 		return ldap::fail(ldap::client_errc::unexpected_response, "start() called");
 	}
-	ldap::result<std::optional<std::string>> step(std::optional<std::string_view>) override
+	auto step(std::optional<std::string_view>) -> ldap::result<std::optional<std::string>> override
 	{
 		return ldap::fail(ldap::client_errc::unexpected_response, "step() called");
 	}
-	ldap::sasl_work offload_start() override
+	auto offload_start() -> ldap::sasl_work override
 	{
 		return [g = gate]() -> ldap::result<std::optional<std::string>> {
 			g->enter();
@@ -151,7 +151,7 @@ class offload_mechanism final : public ldap::sasl_mechanism
 			return std::optional<std::string>("hello");
 		};
 	}
-	ldap::sasl_work offload_step(std::optional<std::string_view> c) override
+	auto offload_step(std::optional<std::string_view> c) -> ldap::sasl_work override
 	{
 		return [g = gate, c = std::string(c.value_or(""))]() -> ldap::result<std::optional<std::string>> {
 			g->enter();

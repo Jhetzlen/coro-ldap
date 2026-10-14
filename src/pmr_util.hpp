@@ -40,7 +40,7 @@ template<class T, class Opt> void assign_optional(std::optional<T> &dst, Opt &&s
 }
 
 // A copy (or move) of `src` whose alternative uses `alloc`.
-template<class Var> std::remove_cvref_t<Var> variant_with(Var &&src, const pmr_alloc &alloc)
+template<class Var> auto variant_with(Var &&src, const pmr_alloc &alloc) -> std::remove_cvref_t<Var>
 {
 	using V = std::remove_cvref_t<Var>;
 	return std::visit(
@@ -67,7 +67,8 @@ template<class... T, class Var> void assign_variant(std::variant<T...> &dst, Var
 }
 
 // Copy of `s` on `alloc` (string_view -> std::pmr::string, optional aware).
-inline std::optional<std::pmr::string> optional_string(std::optional<std::string_view> s, const pmr_alloc &alloc)
+inline auto optional_string(std::optional<std::string_view> s, const pmr_alloc &alloc)
+  -> std::optional<std::pmr::string>
 {
 	if (!s) {
 		return std::nullopt;

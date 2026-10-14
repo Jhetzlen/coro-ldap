@@ -49,12 +49,12 @@ inline constexpr std::string_view people = "ou=people,dc=example,dc=org";
 
 // ---------------------------------------------------------------- messages
 
-inline ldap::message bind_resp(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic = {})
+inline auto bind_resp(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic = {}) -> ldap::message
 {
 	return ldap::message{ id, ldap::bind_response{ ldap::ldap_result{ code, "", diagnostic } } };
 }
 
-inline ldap::message entry_msg(std::int32_t id, std::string_view dn, std::string_view cn)
+inline auto entry_msg(std::int32_t id, std::string_view dn, std::string_view cn) -> ldap::message
 {
 	return ldap::message{
 		id,
@@ -63,21 +63,21 @@ inline ldap::message entry_msg(std::int32_t id, std::string_view dn, std::string
 	};
 }
 
-inline ldap::entry expected_entry(std::string_view dn, std::string_view cn)
+inline auto expected_entry(std::string_view dn, std::string_view cn) -> ldap::entry
 {
 	return ldap::entry::from(std::get<ldap::search_result_entry>(entry_msg(1, dn, cn).op));
 }
 
-inline ldap::message done_msg(std::int32_t id,
+inline auto done_msg(std::int32_t id,
   std::int32_t code = 0,
   std::string_view matched = {},
   std::string_view diagnostic = {},
-  std::initializer_list<std::string_view> referrals = {})
+  std::initializer_list<std::string_view> referrals = {}) -> ldap::message
 {
 	return ldap::message{ id, ldap::search_result_done{ ldap::ldap_result{ code, matched, diagnostic, referrals } } };
 }
 
-inline ldap::message ref_msg(std::int32_t id, ldap::string_list uris)
+inline auto ref_msg(std::int32_t id, ldap::string_list uris) -> ldap::message
 {
 	return ldap::message{ id, ldap::search_result_reference{ std::move(uris) } };
 }
@@ -97,7 +97,7 @@ struct step
 	bool expect_close = false;
 };
 
-inline step answer(std::initializer_list<ldap::message> replies, bool close_after = false)
+inline auto answer(std::initializer_list<ldap::message> replies, bool close_after = false) -> step
 {
 	step s;
 	for (const auto &m : replies) {
@@ -108,7 +108,7 @@ inline step answer(std::initializer_list<ldap::message> replies, bool close_afte
 }
 
 // The client hangs up (a clean close, nothing more sent).
-inline step client_hangs_up()
+inline auto client_hangs_up() -> step
 {
 	step s;
 	s.read_request = false;
@@ -123,7 +123,7 @@ struct server_log
 	std::function<void()> hang_up{};
 };
 
-inline capy::task<void> serve_script(net::transport t, std::vector<step> script, server_log &log)
+inline auto serve_script(net::transport t, std::vector<step> script, server_log &log) -> capy::task<void>
 {
 	net::read_buffer buf;
 	for (auto &st : script) {
@@ -195,7 +195,7 @@ template<class Self> struct scripted_server
 
 	// Runs `t` until it finishes; the server, parked on its next request,
 	// is left as is.
-	template<class T> T run(capy::task<T> t) { return finish(self().ioc, std::move(t)); }
+	template<class T> auto run(capy::task<T> t) -> T { return finish(self().ioc, std::move(t)); }
 
 	// The script ran to its end without errors.
 	void check_server()
@@ -207,7 +207,7 @@ template<class Self> struct scripted_server
 	}
 
   private:
-	Self &self() { return static_cast<Self &>(*this); }
+	auto self() -> Self & { return static_cast<Self &>(*this); }
 };
 
 // A connection over a socket pair, and a scripted server on the other end.
@@ -234,7 +234,7 @@ struct mock_ldap : scripted_server<mock_ldap>
 	}
 
 	mock_ldap(const mock_ldap &) = delete;
-	mock_ldap &operator=(const mock_ldap &) = delete;
+	auto operator=(const mock_ldap &) -> mock_ldap & = delete;
 
 	~mock_ldap()
 	{
@@ -245,7 +245,7 @@ struct mock_ldap : scripted_server<mock_ldap>
 	}
 
 	// The server's end, to write outside the script.
-	net::transport server_end() { return net::transport::wrap(socket_ref{ &sockets.server }, "server"); }
+	auto server_end() -> net::transport { return net::transport::wrap(socket_ref{ &sockets.server }, "server"); }
 };
 
 // The kernel buffers of tcp_mock_ldap's sockets: the system's (Linux
@@ -318,7 +318,7 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 	}
 
 	tcp_mock_ldap(const tcp_mock_ldap &) = delete;
-	tcp_mock_ldap &operator=(const tcp_mock_ldap &) = delete;
+	auto operator=(const tcp_mock_ldap &) -> tcp_mock_ldap & = delete;
 
 	~tcp_mock_ldap()
 	{
@@ -328,16 +328,16 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 	}
 
 	// The URL the connection was made to.
-	std::string url() const { return "ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port()); }
+	auto url() const -> std::string { return "ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port()); }
 
 	// The server's end, to write outside the script.
-	net::transport server_end() { return net::transport::wrap(socket_ref{ &peer }, "server"); }
+	auto server_end() -> net::transport { return net::transport::wrap(socket_ref{ &peer }, "server"); }
 
 	// socket_buffers::small: at most what the kernel holds of a PDU the
 	// client writes while the server's end does not read (the client's send
 	// buffer and the server's receive buffer, as reported: on Linux they
 	// include the bookkeeping, so the data they hold is less).
-	std::size_t buffered_at_most() const
+	auto buffered_at_most() const -> std::size_t
 	{
 		const auto received = peer.get_option<corosio::socket_option::receive_buffer_size>().value();
 		return client_send_buffer + static_cast<std::size_t>(received);
@@ -346,7 +346,7 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
   private:
 	// What ldap::connect does for ldap://, but on a socket whose send buffer
 	// is set before it connects.
-	capy::task<ldap::connection> connect_small(ldap::connection_options options)
+	auto connect_small(ldap::connection_options options) -> capy::task<ldap::connection>
 	{
 		corosio::tcp_socket s(ioc);
 		if (auto ec = s.open(); ec) {
@@ -374,19 +374,19 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 // reads. Less than read_options::max_message_size, so the server can read
 // it then.
 inline constexpr std::size_t oversized_add_value = std::size_t{ 1 } << 20;
-inline ldap::add_params oversized_add()
+inline auto oversized_add() -> ldap::add_params
 {
 	return { .entry = ldap::dn{ "uid=big,ou=people,dc=example,dc=org" },
 		.attributes = { ldap::partial_attribute{ "description", { std::string(oversized_add_value, 'x') } } } };
 }
 
-inline ldap::search_params people_search()
+inline auto people_search() -> ldap::search_params
 {
 	return { .base = ldap::dn{ "ou=people,dc=example,dc=org" }, .filter = ldap::filters::attr("uid") == "jdoe" };
 }
 
 // Reads a stream to its end: the entries, or the first error.
-inline capy::task<ldap::result<std::vector<ldap::entry>>> drain_stream(ldap::search_stream &s)
+inline auto drain_stream(ldap::search_stream &s) -> capy::task<ldap::result<std::vector<ldap::entry>>>
 {
 	std::vector<ldap::entry> out;
 	while (true) {

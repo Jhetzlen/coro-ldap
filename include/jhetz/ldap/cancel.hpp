@@ -57,7 +57,7 @@ namespace jhetz::ldap {
 // section 4.11): an update (add, modify, delete, modify DN) that lost the
 // race may still have been applied by the server; re-read the entry if the
 // outcome matters.
-template<class T> boost::capy::task<boost::capy::io_result<result<T>>> raceable(boost::capy::task<result<T>> op)
+template<class T> auto raceable(boost::capy::task<result<T>> op) -> boost::capy::task<boost::capy::io_result<result<T>>>
 {
 	result<T> r = co_await std::move(op);
 	std::error_code ec;
@@ -79,7 +79,7 @@ template<class T> boost::capy::task<boost::capy::io_result<result<T>>> raceable(
 // stopped from any thread only under the io_context's default
 // locking_mode::safe; under unsafe_io and unsafe, only from the thread
 // running the io_context (see the top of this header).
-template<class T> boost::capy::task<T> with_stop(std::stop_token token, boost::capy::task<T> op)
+template<class T> auto with_stop(std::stop_token token, boost::capy::task<T> op) -> boost::capy::task<T>
 {
 	std::stop_source either;
 	const auto forward = [&either] { either.request_stop(); };

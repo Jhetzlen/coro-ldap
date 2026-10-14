@@ -11,7 +11,7 @@
 
 namespace jhetz::ldap {
 
-result<attribute> attribute::parse(std::string_view text, std::pmr::memory_resource *mr)
+auto attribute::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<attribute>
 {
 	if (!detail::is_attribute_description(text)) {
 		// The text may be a value a server sent.
@@ -23,7 +23,7 @@ result<attribute> attribute::parse(std::string_view text, std::pmr::memory_resou
 	return unchecked(text, mr);
 }
 
-std::weak_ordering operator<=>(const attribute &a, const attribute &b) noexcept
+auto operator<=>(const attribute &a, const attribute &b) noexcept -> std::weak_ordering
 {
 	const std::string_view x = a.name_;
 	const std::string_view y = b.name_;
@@ -42,7 +42,7 @@ namespace {
 
 	// The bytes 'A'-'Z' of w lower-cased, all others (bytes >= 0x80
 	// included) unchanged: ascii_lower on 8 bytes at once.
-	constexpr std::uint64_t ascii_lower8(std::uint64_t w) noexcept
+	constexpr auto ascii_lower8(std::uint64_t w) noexcept -> std::uint64_t
 	{
 		constexpr std::uint64_t ones = 0x0101'0101'0101'0101ull;
 		const std::uint64_t low7 = w & (0x7F * ones);
@@ -52,7 +52,7 @@ namespace {
 		return w | (upper >> 2);// 0x80 >> 2 == 'a' - 'A'
 	}
 
-	std::uint64_t load8(const char *p) noexcept
+	auto load8(const char *p) noexcept -> std::uint64_t
 	{
 		std::uint64_t w;
 		std::memcpy(&w, p, 8);
@@ -64,7 +64,7 @@ namespace {
 	// pack differently, but each is self-consistent, so equal strings still
 	// hash equally; hash_value mixes in the length to separate strings that
 	// only differ by trailing zero bytes ("a" / "a\0").
-	std::uint64_t tail8(std::string_view s) noexcept
+	auto tail8(std::string_view s) noexcept -> std::uint64_t
 	{
 		if (s.size() >= 8) {
 			return load8(s.data() + s.size() - 8);
@@ -80,7 +80,7 @@ namespace {
 	// in a word's high bytes down past the next word, so OIDs differing
 	// only there ("1.3.6.1.4.1.0.14.1.8" / "...0.18.1.4") collided in all
 	// 64 bits. Portable (no 128-bit product).
-	constexpr std::uint64_t mix(std::uint64_t h, std::uint64_t w) noexcept
+	constexpr auto mix(std::uint64_t h, std::uint64_t w) noexcept -> std::uint64_t
 	{
 		h = (h ^ w) * 0x9E37'79B9'7F4A'7C15ull;
 		h ^= h >> 32;
@@ -93,7 +93,7 @@ namespace {
 	// collide in all 64 bits, and a server sending them makes the
 	// unordered containers keyed by its names (entry::from, schema name
 	// indexes) quadratic. Not knowing the start, it cannot.
-	std::uint64_t make_seed() noexcept
+	auto make_seed() noexcept -> std::uint64_t
 	{
 		try {
 			std::random_device random;
@@ -108,7 +108,7 @@ namespace {
 
 }// namespace
 
-std::size_t hash_value(std::string_view attribute_name) noexcept
+auto hash_value(std::string_view attribute_name) noexcept -> std::size_t
 {
 	static const std::uint64_t seed = make_seed();
 	// Eight lower-cased bytes at a time (names and OIDs are often longer
@@ -132,7 +132,7 @@ std::size_t hash_value(std::string_view attribute_name) noexcept
 
 namespace detail {
 
-	bool iequals_fast(std::string_view a, std::string_view b) noexcept
+	auto iequals_fast(std::string_view a, std::string_view b) noexcept -> bool
 	{
 		const std::size_t n = a.size();
 		if (n != b.size()) {

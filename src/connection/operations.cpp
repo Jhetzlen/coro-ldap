@@ -23,7 +23,7 @@ using detail::request_response;
 namespace {
 
 	// The ldap_result of a response, whatever the operation.
-	const ldap_result &result_of(const message &m)
+	auto result_of(const message &m) -> const ldap_result &
 	{
 		return std::visit(
 		  [](const auto &op) -> const ldap_result & {
@@ -38,7 +38,7 @@ namespace {
 
 	// A response that only carries an LDAPResult: success gives its
 	// controls, anything else the error.
-	result<response> to_response(result<message> m, std::string_view context)
+	auto to_response(result<message> m, std::string_view context) -> result<response>
 	{
 		if (!m) {
 			return std::unexpected(std::move(m.error()));
@@ -56,10 +56,10 @@ namespace {
 
 namespace detail {
 
-	result<message> with_controls(protocol_op op,
+	auto with_controls(protocol_op op,
 	  const request_controls &controls,
 	  std::pmr::memory_resource *mr,
-	  std::string_view context)
+	  std::string_view context) -> result<message>
 	{
 		message m{ std::pmr::polymorphic_allocator<>(mr) };
 		m.op = std::move(op);
@@ -75,7 +75,7 @@ using detail::with_controls;
 
 // ---------------------------------------------------------------- other operations
 
-capy::task<result<response>> connection::add(add_params p)
+auto connection::add(add_params p) -> capy::task<result<response>>
 {
 	std::string context = op_context("add", p.entry);
 	if (impl_ == nullptr) {
@@ -96,7 +96,7 @@ capy::task<result<response>> connection::add(add_params p)
 
 namespace detail {
 
-	capy::task<result<response>> modify_impl(impl_ref self, modify_params p, std::string context)
+	auto modify_impl(impl_ref self, modify_params p, std::string context) -> capy::task<result<response>>
 	{
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		modify_request op(alloc);
@@ -114,7 +114,7 @@ namespace detail {
 
 using detail::modify_impl;
 
-capy::task<result<response>> connection::modify(modify_params p)
+auto connection::modify(modify_params p) -> capy::task<result<response>>
 {
 	std::string context = op_context("modify", p.object);
 	if (impl_ == nullptr) {
@@ -123,7 +123,7 @@ capy::task<result<response>> connection::modify(modify_params p)
 	co_return co_await modify_impl(impl_ref(impl_), std::move(p), std::move(context));
 }
 
-capy::task<result<response>> connection::del(del_params p)
+auto connection::del(del_params p) -> capy::task<result<response>>
 {
 	std::string context = op_context("delete", p.entry);
 	if (impl_ == nullptr) {
@@ -142,7 +142,7 @@ capy::task<result<response>> connection::del(del_params p)
 	  co_await request_response(self, std::move(*request), op_index<del_response>, context, p.timeout), context);
 }
 
-capy::task<result<response>> connection::modify_dn(modify_dn_params p)
+auto connection::modify_dn(modify_dn_params p) -> capy::task<result<response>>
 {
 	std::string context = op_context("modify DN", p.entry);
 	if (impl_ == nullptr) {
@@ -168,7 +168,7 @@ capy::task<result<response>> connection::modify_dn(modify_dn_params p)
 	  co_await request_response(self, std::move(*request), op_index<modify_dn_response>, context, p.timeout), context);
 }
 
-capy::task<result<bool>> connection::compare(compare_params p)
+auto connection::compare(compare_params p) -> capy::task<result<bool>>
 {
 	std::string context = op_context("compare", p.entry);
 	if (impl_ == nullptr) {
@@ -200,7 +200,7 @@ capy::task<result<bool>> connection::compare(compare_params p)
 
 namespace detail {
 
-	capy::task<result<extended_result>> extended_impl(impl_ref self, extended_params p)
+	auto extended_impl(impl_ref self, extended_params p) -> capy::task<result<extended_result>>
 	{
 		std::string context = "extended operation " + p.name;
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
@@ -235,7 +235,7 @@ namespace detail {
 
 using detail::extended_impl;
 
-capy::task<result<extended_result>> connection::extended(extended_params p)
+auto connection::extended(extended_params p) -> capy::task<result<extended_result>>
 {
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection("extended operation " + p.name));
@@ -243,7 +243,7 @@ capy::task<result<extended_result>> connection::extended(extended_params p)
 	co_return co_await extended_impl(impl_ref(impl_), std::move(p));
 }
 
-capy::task<result<std::string>> connection::who_am_i(request_controls controls)
+auto connection::who_am_i(request_controls controls) -> capy::task<result<std::string>>
 {
 	auto r = co_await extended({ .name = std::string(who_am_i_oid), .controls = std::move(controls) });
 	if (!r) {

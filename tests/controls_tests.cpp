@@ -17,14 +17,14 @@ using jhetz::ldap::test::hex;
 
 namespace {
 
-std::string value_hex(const ldap::control &c)
+auto value_hex(const ldap::control &c) -> std::string
 {
 	REQUIRE(c.value.has_value());
 	return hex(std::as_bytes(std::span(*c.value)));
 }
 
 // A control whose value is the given hex bytes.
-ldap::control with_value(std::string_view oid, std::string_view hex_value)
+auto with_value(std::string_view oid, std::string_view hex_value) -> ldap::control
 {
 	const auto b = from_hex(hex_value);
 	return ldap::control{ oid, false, ldap::detail::as_text(b) };
@@ -265,7 +265,7 @@ TEST_CASE("pre-read and post-read request controls", "[controls][read_entry]")
 
 namespace {
 
-ldap::search_result_entry sample_entry()
+auto sample_entry() -> ldap::search_result_entry
 {
 	return ldap::search_result_entry{ "uid=jdoe,ou=people,dc=example,dc=org",
 		{ ldap::partial_attribute{ "cn", { "John Doe" } }, ldap::partial_attribute{ "mail", { "a@x", "b@x" } } } };
@@ -426,14 +426,14 @@ constexpr const char aero[] = "\xC3\x86r\xC3\xB8";// Ærø
 constexpr const char nihon[] = "\xE6\x97\xA5\xE6\x9C\xAC";// 日本
 constexpr const char zoe[] = "Zo\xC3\xAB \xC3\x86r\xC3\xB8";// Zoë Ærø
 
-std::string message_hex(const ldap::message &m)
+auto message_hex(const ldap::message &m) -> std::string
 {
 	auto bytes = ldap::encode(m);
 	REQUIRE(bytes.has_value());
 	return hex(*bytes);
 }
 
-ldap::message decoded(std::string_view message_hex)
+auto decoded(std::string_view message_hex) -> ldap::message
 {
 	const auto b = from_hex(message_hex);
 	auto m = ldap::decode(b);

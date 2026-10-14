@@ -153,10 +153,10 @@ struct connect_options
 // connection.hpp (locking_mode::safe only). Arguments are taken by value, so
 // the task does not depend on the caller's objects. The transport's own block
 // and name are allocated from `mr`.
-boost::capy::task<result<transport>> connect(boost::corosio::io_context &ioc,
+auto connect(boost::corosio::io_context &ioc,
   url u,
   connect_options options = {},
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<transport>>;
 
 class read_buffer;
 
@@ -173,9 +173,9 @@ class read_buffer;
 // `timeout` bounds the handshake (nullopt: no limit).
 // `t` and `pending` must outlive the task; no other read or write may be in
 // flight on `t` meanwhile.
-boost::capy::task<result<void>> start_tls(transport &t,
+auto start_tls(transport &t,
   const read_buffer &pending,
   tls_options options,
-  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
+  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> boost::capy::task<result<void>>;
 
 }// namespace jhetz::ldap::net

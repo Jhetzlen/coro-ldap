@@ -20,12 +20,12 @@ namespace {
 
 	// ------------------------------------------------------------ character classes (RFC 3986 section 2)
 
-	constexpr bool is_unreserved(char c) noexcept
+	constexpr auto is_unreserved(char c) noexcept -> bool
 	{
 		return is_alpha(c) || is_digit(c) || c == '-' || c == '.' || c == '_' || c == '~';
 	}
 
-	constexpr bool is_sub_delim(char c) noexcept
+	constexpr auto is_sub_delim(char c) noexcept -> bool
 	{
 		switch (c) {
 		case '!':
@@ -48,23 +48,23 @@ namespace {
 	// pchar / "/" (without '%', handled as pct-encoded): what may appear
 	// unencoded in the path and query of a URI. '?' is the RFC 4516 part
 	// separator and is excluded.
-	constexpr bool is_part_char(char c) noexcept
+	constexpr auto is_part_char(char c) noexcept -> bool
 	{
 		return is_unreserved(c) || is_sub_delim(c) || c == ':' || c == '@' || c == '/';
 	}
 
 	// Leniency in the parts after the host: unencoded spaces and non-ASCII
 	// bytes are unambiguous, and some servers send them.
-	constexpr bool is_lenient_part_char(char c) noexcept
+	constexpr auto is_lenient_part_char(char c) noexcept -> bool
 	{
 		return is_part_char(c) || c == ' ' || static_cast<unsigned char>(c) >= 0x80;
 	}
 
-	constexpr bool is_reg_name_char(char c) noexcept { return is_unreserved(c) || is_sub_delim(c); }
+	constexpr auto is_reg_name_char(char c) noexcept -> bool { return is_unreserved(c) || is_sub_delim(c); }
 
 	// ------------------------------------------------------------ errors
 
-	std::unexpected<error> bad(std::string_view what, std::size_t offset)
+	auto bad(std::string_view what, std::size_t offset) -> std::unexpected<error>
 	{
 		return fail(client_errc::invalid_url, detail::format("url: {} at offset {}", what, offset));
 	}
@@ -74,8 +74,9 @@ namespace {
 	// Checks `s` (starting at `offset` in the URL) against `allowed` plus
 	// pct-encoded triplets, and returns the decoded bytes.
 	template<class Allowed>
-	result<std::pmr::string>
+	auto
 	  decode(std::string_view s, std::size_t offset, const char *what, Allowed allowed, std::pmr::memory_resource *mr)
+		-> result<std::pmr::string>
 	{
 		std::pmr::string out(mr);
 		out.reserve(s.size());
@@ -99,7 +100,7 @@ namespace {
 		return out;
 	}
 
-	constexpr char hex_digit(unsigned v) noexcept { return "0123456789ABCDEF"[v & 0xFu]; }
+	constexpr auto hex_digit(unsigned v) noexcept -> char { return "0123456789ABCDEF"[v & 0xFu]; }
 
 	// Percent-encodes every byte for which `keep` is false.
 	template<class Keep> void encode(std::pmr::string &out, std::string_view s, Keep keep)
@@ -119,7 +120,7 @@ namespace {
 	// ------------------------------------------------------------ addresses
 
 	// dec-octet "." dec-octet "." dec-octet "." dec-octet (no leading zeros).
-	bool is_ipv4(std::string_view s) noexcept
+	auto is_ipv4(std::string_view s) noexcept -> bool
 	{
 		int parts = 0;
 		std::size_t i = 0;
@@ -146,7 +147,7 @@ namespace {
 
 	// RFC 3986 IPv6address: eight 16-bit groups, at most one "::" standing for
 	// one or more zero groups, optionally ending in an IPv4 address (two groups).
-	bool is_ipv6(std::string_view s) noexcept
+	auto is_ipv6(std::string_view s) noexcept -> bool
 	{
 		const std::size_t n = s.size();
 		std::size_t i = 0;
@@ -203,7 +204,7 @@ namespace {
 
 	// ------------------------------------------------------------ parts
 
-	std::string_view scope_name(search_scope s) noexcept
+	auto scope_name(search_scope s) noexcept -> std::string_view
 	{
 		switch (s) {
 		case search_scope::base_object:
@@ -219,7 +220,7 @@ namespace {
 	}
 
 	// Splits `s` on `sep`, calling on(piece, offset of piece in the URL).
-	template<class F> result<void> split(std::string_view s, std::size_t offset, char sep, F &&on)
+	template<class F> auto split(std::string_view s, std::size_t offset, char sep, F &&on) -> result<void>
 	{
 		std::size_t start = 0;
 		while (true) {
@@ -287,7 +288,7 @@ url_extension::url_extension(url_extension &&other, const allocator_type &alloc)
 
 // std::optional's own assignment would copy-construct a missing value on the
 // default resource; keep it on this extension's resource instead.
-url_extension &url_extension::operator=(const url_extension &other)
+auto url_extension::operator=(const url_extension &other) -> url_extension &
 {
 	if (this == &other) {
 		return *this;
@@ -304,7 +305,7 @@ url_extension &url_extension::operator=(const url_extension &other)
 	return *this;
 }
 
-url_extension &url_extension::operator=(url_extension &&other)
+auto url_extension::operator=(url_extension &&other) -> url_extension &
 {
 	if (this == &other) {
 		return *this;
@@ -331,7 +332,7 @@ url::url(const url &other, const allocator_type &alloc)
 
 // std::optional's own assignment would construct a missing DN or filter on
 // the source's (or the default) resource; keep them on this url's resource.
-url &url::operator=(const url &other)
+auto url::operator=(const url &other) -> url &
 {
 	if (this == &other) {
 		return *this;
@@ -348,7 +349,7 @@ url &url::operator=(const url &other)
 	return *this;
 }
 
-url &url::operator=(url &&other)
+auto url::operator=(url &&other) -> url &
 {
 	if (this == &other) {
 		return *this;
@@ -369,7 +370,7 @@ url::url(url &&other, const allocator_type &alloc)
   : url(other.get_allocator() == alloc ? url(std::move(other)) : url(other, alloc))
 {}
 
-std::string_view to_string(url_scheme s) noexcept
+auto to_string(url_scheme s) noexcept -> std::string_view
 {
 	switch (s) {
 	case url_scheme::ldap:
@@ -382,7 +383,7 @@ std::string_view to_string(url_scheme s) noexcept
 	return "ldap";
 }
 
-std::uint16_t url::port_or_default() const noexcept
+auto url::port_or_default() const noexcept -> std::uint16_t
 {
 	if (port_) {
 		return *port_;
@@ -398,9 +399,12 @@ std::uint16_t url::port_or_default() const noexcept
 	return 0;
 }
 
-bool url::has_critical_extension() const noexcept { return std::ranges::any_of(extensions_, &url_extension::critical); }
+auto url::has_critical_extension() const noexcept -> bool
+{
+	return std::ranges::any_of(extensions_, &url_extension::critical);
+}
 
-result<url> url::parse(std::string_view text, std::pmr::memory_resource *mr)
+auto url::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<url>
 {
 	url u{ allocator_type(mr) };
 
@@ -646,7 +650,7 @@ result<url> url::parse(std::string_view text, std::pmr::memory_resource *mr)
 	return u;
 }
 
-std::pmr::string url::authority(std::pmr::memory_resource *mr) const
+auto url::authority(std::pmr::memory_resource *mr) const -> std::pmr::string
 {
 	std::pmr::string out(mr);
 	append_host(out, scheme_, host_, host_is_ipv6_);
@@ -657,7 +661,7 @@ std::pmr::string url::authority(std::pmr::memory_resource *mr) const
 	return out;
 }
 
-std::pmr::string url::to_string(std::pmr::memory_resource *mr) const
+auto url::to_string(std::pmr::memory_resource *mr) const -> std::pmr::string
 {
 	std::pmr::string out(ldap::to_string(scheme_), mr);
 	out += "://";
@@ -736,7 +740,8 @@ std::pmr::string url::to_string(std::pmr::memory_resource *mr) const
 	return out;
 }
 
-std::pmr::vector<url> url::parse_list(const std::pmr::vector<std::pmr::string> &uris, std::pmr::memory_resource *mr)
+auto url::parse_list(const std::pmr::vector<std::pmr::string> &uris, std::pmr::memory_resource *mr)
+  -> std::pmr::vector<url>
 {
 	std::pmr::vector<url> out(mr);
 	for (const auto &u : uris) {

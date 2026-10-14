@@ -24,7 +24,7 @@ using namespace std::string_view_literals;
 
 namespace {
 
-ldap::filter raw(std::string_view text)
+auto raw(std::string_view text) -> ldap::filter
 {
 	auto f = ldap::filter::raw(text);
 	INFO(text);
@@ -32,7 +32,7 @@ ldap::filter raw(std::string_view text)
 	return std::move(*f);
 }
 
-ldap::result<std::pmr::vector<std::byte>> to_ber(const ldap::filter &f, const ldap::filter_limits &limits = {})
+auto to_ber(const ldap::filter &f, const ldap::filter_limits &limits = {}) -> ldap::result<std::pmr::vector<std::byte>>
 {
 	ber::writer w;
 	auto r = ldap::encode_filter(w, f, limits);
@@ -43,7 +43,7 @@ ldap::result<std::pmr::vector<std::byte>> to_ber(const ldap::filter &f, const ld
 	return w.take();
 }
 
-ldap::result<ldap::filter> from_ber(std::span<const std::byte> bytes, const ldap::filter_limits &limits = {})
+auto from_ber(std::span<const std::byte> bytes, const ldap::filter_limits &limits = {}) -> ldap::result<ldap::filter>
 {
 	ber::reader r(bytes);
 	auto f = ldap::decode_filter(r, limits);
@@ -57,7 +57,7 @@ ldap::result<ldap::filter> from_ber(std::span<const std::byte> bytes, const ldap
 
 // Text -> tree -> canonical text; also checks tree -> BER -> the same tree,
 // and that the canonical text parses to the same tree again.
-std::string canonical(std::string_view text)
+auto canonical(std::string_view text) -> std::string
 {
 	const auto f = raw(text);
 	auto b = to_ber(f);
@@ -71,7 +71,7 @@ std::string canonical(std::string_view text)
 	return out;
 }
 
-std::string text_of(const ldap::filter &f) { return std::string(f.to_string()); }
+auto text_of(const ldap::filter &f) -> std::string { return std::string(f.to_string()); }
 
 // `t && f`, `f || t` and `!t` give filters.
 template<class T>

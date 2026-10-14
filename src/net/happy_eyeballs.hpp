@@ -11,6 +11,6 @@ namespace jhetz::ldap::net::detail {
 // RFC 8305 section 4: alternates the address families, starting with the
 // family of the first address (getaddrinfo already sorted them by RFC 6724
 // preference); within a family the order is kept.
-std::vector<boost::corosio::endpoint> interleave_families(std::vector<boost::corosio::endpoint> in);
+auto interleave_families(std::vector<boost::corosio::endpoint> in) -> std::vector<boost::corosio::endpoint>;
 
 }// namespace jhetz::ldap::net::detail

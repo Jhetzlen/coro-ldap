@@ -78,9 +78,9 @@ class transport
 	// An empty transport (kind::none, is_open() == false).
 	transport() noexcept;
 	transport(transport &&) noexcept;
-	transport &operator=(transport &&) noexcept;
+	auto operator=(transport &&) noexcept -> transport &;
 	transport(const transport &) = delete;
-	transport &operator=(const transport &) = delete;
+	auto operator=(const transport &) -> transport & = delete;
 	~transport();
 
 	// Takes ownership of any capy::Stream (kind::custom), stored with the
@@ -90,9 +90,9 @@ class transport
 	// a stream without close() cannot be closed by the transport, but
 	// is_open() turns false after close() either way.
 	template<boost::capy::Stream S>
-	[[nodiscard]] static transport wrap(S stream,
+	[[nodiscard]] static auto wrap(S stream,
 	  std::string_view name = "custom stream",
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> transport
 	{
 		transport t = make(kind::custom, name, mr);
 		std::pmr::polymorphic_allocator<S> alloc(mr);
@@ -114,18 +114,18 @@ class transport
 
 	// The stream to read from and write to (TLS-decrypted for ldaps).
 	// Precondition: kind() != kind::none.
-	boost::capy::any_stream &stream() noexcept;
+	auto stream() noexcept -> boost::capy::any_stream &;
 
-	kind type() const noexcept;
-	bool is_tls() const noexcept;
+	auto type() const noexcept -> kind;
+	auto is_tls() const noexcept -> bool;
 	// False for an empty transport and after close().
-	bool is_open() const noexcept;
+	auto is_open() const noexcept -> bool;
 	// Where it is connected, for error messages: "ldap://127.0.0.1:389",
 	// "ldapi://%2Frun%2Fldapi", or the name given to wrap().
-	const std::pmr::string &name() const noexcept;
+	auto name() const noexcept -> const std::pmr::string &;
 	// The URL's host for transports from net::connect() (the socket path for
 	// ldapi://); empty for wrap()ped streams. StartTLS verifies against it.
-	const std::pmr::string &host() const noexcept;
+	auto host() const noexcept -> const std::pmr::string &;
 
 	// Cancels pending operations; they complete with an error comparing equal
 	// to boost::capy::cond::canceled. The connection stays open.
@@ -142,14 +142,14 @@ class transport
 	// without close_notify). Plain TCP, ldapi and custom streams: close()
 	// and success. A stop request ends the wait (capy::cond::canceled). The
 	// transport is closed in every case. No write may be in flight; a read may (Corosio's rule).
-	boost::capy::task<result<void>> shutdown(std::optional<std::chrono::milliseconds> timeout);
+	auto shutdown(std::optional<std::chrono::milliseconds> timeout) -> boost::capy::task<result<void>>;
 
 	struct impl;// defined in src/net/transport_impl.hpp (used by connect)
 
   private:
 	friend struct transport_access;
 
-	static transport make(kind k, std::string_view name, std::pmr::memory_resource *mr);
+	static auto make(kind k, std::string_view name, std::pmr::memory_resource *mr) -> transport;
 	void destroy() noexcept;
 	struct custom_ops
 	{

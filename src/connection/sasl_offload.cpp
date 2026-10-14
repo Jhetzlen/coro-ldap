@@ -37,7 +37,7 @@ namespace {
 	  public:
 		explicit offload_threads(capy::execution_context &) noexcept {}
 		offload_threads(const offload_threads &) = delete;
-		offload_threads &operator=(const offload_threads &) = delete;
+		auto operator=(const offload_threads &) -> offload_threads & = delete;
 		~offload_threads() override { join(workers_); }// after shutdown(): nothing left
 
 		// Runs `f` on a thread of its own. Throws std::system_error.
@@ -129,8 +129,9 @@ namespace {
 
 }// namespace
 
-capy::task<result<std::optional<std::string>>>
-  run_offloaded(corosio::io_context::executor_type ex, std::optional<std::chrono::milliseconds> timeout, sasl_work work)
+auto run_offloaded(corosio::io_context::executor_type ex,
+  std::optional<std::chrono::milliseconds> timeout,
+  sasl_work work) -> capy::task<result<std::optional<std::string>>>
 {
 	// The thread posts its wakeup and drops its work from outside the
 	// I/O thread, undefined behaviour under locking_mode::unsafe, so the

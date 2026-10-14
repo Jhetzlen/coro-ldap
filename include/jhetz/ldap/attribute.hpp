@@ -15,14 +15,20 @@ namespace jhetz::ldap {
 
 namespace detail {
 
-	constexpr bool is_alpha(char c) noexcept { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
-	constexpr bool is_digit(char c) noexcept { return c >= '0' && c <= '9'; }
-	constexpr bool is_keychar(char c) noexcept { return is_alpha(c) || is_digit(c) || c == '-'; }
-	constexpr char ascii_lower(char c) noexcept { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
+	constexpr auto is_alpha(char c) noexcept -> bool { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
+	constexpr auto is_digit(char c) noexcept -> bool { return c >= '0' && c <= '9'; }
+	constexpr auto is_keychar(char c) noexcept -> bool { return is_alpha(c) || is_digit(c) || c == '-'; }
+	constexpr auto ascii_lower(char c) noexcept -> char
+	{
+		return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+	}
 
-	constexpr bool is_hex(char c) noexcept { return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
+	constexpr auto is_hex(char c) noexcept -> bool
+	{
+		return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+	}
 
-	constexpr unsigned hex_value(char c) noexcept
+	constexpr auto hex_value(char c) noexcept -> unsigned
 	{
 		if (is_digit(c)) {
 			return static_cast<unsigned>(c - '0');
@@ -33,7 +39,7 @@ namespace detail {
 		return static_cast<unsigned>(c - 'A' + 10);
 	}
 
-	constexpr bool iequals(std::string_view a, std::string_view b) noexcept
+	constexpr auto iequals(std::string_view a, std::string_view b) noexcept -> bool
 	{
 		if (a.size() != b.size()) {
 			return false;
@@ -58,7 +64,7 @@ namespace detail {
 		std::size_t length;
 		bool well_formed;
 	};
-	constexpr utf8_sequence utf8_sequence_at(std::string_view s, std::size_t i) noexcept
+	constexpr auto utf8_sequence_at(std::string_view s, std::size_t i) noexcept -> utf8_sequence
 	{
 		const auto at = [&](std::size_t k) { return static_cast<unsigned char>(s[i + k]); };
 		const unsigned char c = at(0);
@@ -101,14 +107,14 @@ namespace detail {
 
 	// Length of the valid UTF-8 sequence starting at s[i], or 0 if there is
 	// none (see utf8_sequence_at). Precondition: i < s.size().
-	constexpr std::size_t utf8_sequence_length(std::string_view s, std::size_t i) noexcept
+	constexpr auto utf8_sequence_length(std::string_view s, std::size_t i) noexcept -> std::size_t
 	{
 		const utf8_sequence q = utf8_sequence_at(s, i);
 		return q.well_formed ? q.length : 0;
 	}
 
 	// descr = keystring = ALPHA *(ALPHA / DIGIT / HYPHEN)
-	constexpr bool is_descr(std::string_view s) noexcept
+	constexpr auto is_descr(std::string_view s) noexcept -> bool
 	{
 		if (s.empty() || !is_alpha(s[0])) {
 			return false;
@@ -123,7 +129,7 @@ namespace detail {
 
 	// numericoid = number 1*( DOT number ); number = DIGIT / ( LDIGIT 1*DIGIT )
 	// (no leading zeros).
-	constexpr bool is_numericoid(std::string_view s) noexcept
+	constexpr auto is_numericoid(std::string_view s) noexcept -> bool
 	{
 		std::size_t parts = 0;
 		std::size_t i = 0;
@@ -151,11 +157,11 @@ namespace detail {
 	}
 
 	// oid = descr / numericoid (RFC 4512 section 1.4)
-	constexpr bool is_oid(std::string_view s) noexcept { return is_descr(s) || is_numericoid(s); }
+	constexpr auto is_oid(std::string_view s) noexcept -> bool { return is_descr(s) || is_numericoid(s); }
 
 	// attributedescription = attributetype options; options = *( SEMI option );
 	// option = 1*keychar
-	constexpr bool is_attribute_description(std::string_view s) noexcept
+	constexpr auto is_attribute_description(std::string_view s) noexcept -> bool
 	{
 		const std::size_t semi = s.find(';');
 		if (!is_oid(s.substr(0, semi))) {
@@ -224,38 +230,38 @@ class attribute
 	attribute(attribute &&) noexcept = default;
 	attribute(const attribute &other, const allocator_type &alloc) : name_(other.name_, alloc) {}
 	attribute(attribute &&other, const allocator_type &alloc) : name_(std::move(other.name_), alloc) {}
-	attribute &operator=(const attribute &) = default;
-	attribute &operator=(attribute &&) = default;
+	auto operator=(const attribute &) -> attribute & = default;
+	auto operator=(attribute &&) -> attribute & = default;
 	~attribute() = default;
 
-	allocator_type get_allocator() const noexcept { return name_.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return name_.get_allocator(); }
 
-	[[nodiscard]] static result<attribute> parse(std::string_view text,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
-	[[nodiscard]] static attribute unchecked(std::string_view text, const allocator_type &alloc = {})
+	[[nodiscard]] static auto parse(std::string_view text,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<attribute>;
+	[[nodiscard]] static auto unchecked(std::string_view text, const allocator_type &alloc = {}) -> attribute
 	{
 		attribute a(alloc);
 		a.name_.assign(text);
 		return a;
 	}
-	[[nodiscard]] static attribute unchecked(const char *text, const allocator_type &alloc = {})
+	[[nodiscard]] static auto unchecked(const char *text, const allocator_type &alloc = {}) -> attribute
 	{
 		return unchecked(std::string_view(text), alloc);
 	}
 	// Takes the string, with its resource.
-	[[nodiscard]] static attribute unchecked(std::pmr::string &&text) noexcept
+	[[nodiscard]] static auto unchecked(std::pmr::string &&text) noexcept -> attribute
 	{
 		return attribute(std::move(text), adopt{});
 	}
 
-	const std::pmr::string &name() const noexcept { return name_; }
-	[[nodiscard]] bool empty() const noexcept { return name_.empty(); }
+	auto name() const noexcept -> const std::pmr::string & { return name_; }
+	[[nodiscard]] auto empty() const noexcept -> bool { return name_.empty(); }
 
-	friend bool operator==(const attribute &a, const attribute &b) noexcept
+	friend auto operator==(const attribute &a, const attribute &b) noexcept -> bool
 	{
 		return detail::iequals(a.name_, b.name_);
 	}
-	friend std::weak_ordering operator<=>(const attribute &a, const attribute &b) noexcept;
+	friend auto operator<=>(const attribute &a, const attribute &b) noexcept -> std::weak_ordering;
 
   private:
 	struct adopt
@@ -269,12 +275,12 @@ class attribute
 // Case-insensitive hash, consistent with operator==. Seeded at random per
 // process, so a server cannot craft names that collide: values differ from
 // one run to the next and must not be stored or sent anywhere.
-[[nodiscard]] std::size_t hash_value(std::string_view attribute_name) noexcept;
+[[nodiscard]] auto hash_value(std::string_view attribute_name) noexcept -> std::size_t;
 
 namespace detail {
 
 	// iequals, 8 bytes at a time (not constexpr).
-	bool iequals_fast(std::string_view a, std::string_view b) noexcept;
+	auto iequals_fast(std::string_view a, std::string_view b) noexcept -> bool;
 
 	// Hash and equality for unordered containers keyed by names that compare
 	// case-insensitively (A-Z only, as iequals and hash_value: other bytes as
@@ -287,12 +293,12 @@ namespace detail {
 		// the hash code in each node, as it does for std::hash<std::string>.
 		// Without it, a find hashes the key of every node it walks past (to
 		// see where the bucket ends): measured about 10% slower lookups.
-		std::size_t operator()(std::string_view s) const { return hash_value(s); }
+		auto operator()(std::string_view s) const -> std::size_t { return hash_value(s); }
 	};
 	struct ci_equal
 	{
 		using is_transparent = void;
-		bool operator()(std::string_view a, std::string_view b) const noexcept { return iequals_fast(a, b); }
+		auto operator()(std::string_view a, std::string_view b) const noexcept -> bool { return iequals_fast(a, b); }
 	};
 
 }// namespace detail
@@ -301,5 +307,8 @@ namespace detail {
 
 template<> struct std::hash<jhetz::ldap::attribute>
 {
-	std::size_t operator()(const jhetz::ldap::attribute &a) const noexcept { return jhetz::ldap::hash_value(a.name()); }
+	auto operator()(const jhetz::ldap::attribute &a) const noexcept -> std::size_t
+	{
+		return jhetz::ldap::hash_value(a.name());
+	}
 };

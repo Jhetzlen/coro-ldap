@@ -19,7 +19,7 @@ namespace corosio = boost::corosio;
 
 namespace jhetz::ldap {
 
-std::string detail::op_context(std::string_view op, const dn &d)
+auto detail::op_context(std::string_view op, const dn &d) -> std::string
 {
 	if (d.empty()) {
 		return detail::format("{} \"\"", op);
@@ -47,7 +47,7 @@ connection::connection(corosio::io_context &ioc,
 
 connection::connection(connection &&other) noexcept : impl_(std::exchange(other.impl_, nullptr)) {}
 
-connection &connection::operator=(connection &&other) noexcept
+auto connection::operator=(connection &&other) noexcept -> connection &
 {
 	if (this != &other) {
 		connection old(std::move(*this));
@@ -65,9 +65,9 @@ connection::~connection()
 	impl_->release();
 }
 
-bool connection::is_open() const noexcept { return impl_ != nullptr && impl_->is_open(); }
+auto connection::is_open() const noexcept -> bool { return impl_ != nullptr && impl_->is_open(); }
 
-std::string_view connection::name() const noexcept
+auto connection::name() const noexcept -> std::string_view
 {
 	if (impl_ == nullptr) {
 		return {};
@@ -75,11 +75,11 @@ std::string_view connection::name() const noexcept
 	return impl_->transport().name();
 }
 
-connection::executor_type connection::executor() const noexcept { return impl_->executor(); }
+auto connection::executor() const noexcept -> connection::executor_type { return impl_->executor(); }
 
-std::size_t connection::outstanding() const noexcept { return impl_ == nullptr ? 0 : impl_->outstanding(); }
+auto connection::outstanding() const noexcept -> std::size_t { return impl_ == nullptr ? 0 : impl_->outstanding(); }
 
-bool connection::is_tls() const noexcept { return impl_ != nullptr && impl_->is_tls(); }
+auto connection::is_tls() const noexcept -> bool { return impl_ != nullptr && impl_->is_tls(); }
 
 void connection::close() noexcept
 {
@@ -88,7 +88,7 @@ void connection::close() noexcept
 	}
 }
 
-capy::task<result<void>> connection::unbind()
+auto connection::unbind() -> capy::task<result<void>>
 {
 	const std::string context = "unbind";
 	if (impl_ == nullptr) {
@@ -144,8 +144,8 @@ capy::task<result<void>> connection::unbind()
 
 // ---------------------------------------------------------------- connect
 
-capy::task<result<connection>>
-  connect(corosio::io_context &ioc, url u, connection_options options, std::pmr::memory_resource *mr)
+auto connect(corosio::io_context &ioc, url u, connection_options options, std::pmr::memory_resource *mr)
+  -> capy::task<result<connection>>
 {
 	if (options.start_tls && u.scheme() != url_scheme::ldap) {
 		co_return fail(client_errc::invalid_url,
@@ -173,12 +173,12 @@ capy::task<result<connection>>
 
 namespace {
 
-	capy::task<result<connection>> connect_failed(error e) { co_return std::unexpected(std::move(e)); }
+	auto connect_failed(error e) -> capy::task<result<connection>> { co_return std::unexpected(std::move(e)); }
 
 }// namespace
 
-capy::task<result<connection>>
-  connect(corosio::io_context &ioc, std::string_view text, connection_options options, std::pmr::memory_resource *mr)
+auto connect(corosio::io_context &ioc, std::string_view text, connection_options options, std::pmr::memory_resource *mr)
+  -> capy::task<result<connection>>
 {
 	// Not a coroutine: `text` is parsed now, so the task does not refer to it.
 	auto u = url::parse(text, mr);

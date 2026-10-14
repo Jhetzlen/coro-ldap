@@ -66,12 +66,12 @@ constexpr auto ldap::schema<device> =
 
 namespace {
 
-ldap::entry make_entry(std::string_view dn, std::initializer_list<ldap::partial_attribute> attrs)
+auto make_entry(std::string_view dn, std::initializer_list<ldap::partial_attribute> attrs) -> ldap::entry
 {
 	return ldap::entry::from(ldap::search_result_entry(dn, attrs));
 }
 
-ldap::entry full_entry()
+auto full_entry() -> ldap::entry
 {
 	return make_entry("uid=jdoe,ou=people,dc=example,dc=org",
 	  { { "uid", { "jdoe" } },

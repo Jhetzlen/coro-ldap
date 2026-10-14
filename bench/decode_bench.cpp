@@ -36,7 +36,7 @@ class counting_resource final : public std::pmr::memory_resource
 	std::size_t bytes = 0;
 
   private:
-	void *do_allocate(std::size_t n, std::size_t align) override
+	auto do_allocate(std::size_t n, std::size_t align) -> void * override
 	{
 		++allocations;
 		bytes += n;
@@ -46,7 +46,7 @@ class counting_resource final : public std::pmr::memory_resource
 	{
 		std::pmr::new_delete_resource()->deallocate(p, n, align);
 	}
-	bool do_is_equal(const std::pmr::memory_resource &other) const noexcept override { return this == &other; }
+	auto do_is_equal(const std::pmr::memory_resource &other) const noexcept -> bool override { return this == &other; }
 };
 
 struct stream
@@ -59,7 +59,7 @@ struct stream
 // `entries` entries of `attributes` attributes with `values` values each
 // (10 to 60 bytes, like names, mail addresses, descriptions); every 20th entry
 // also carries a 64 KiB jpegPhoto and a 4 KiB userCertificate.
-stream make_stream(std::size_t entries, std::size_t attributes, std::size_t values)
+auto make_stream(std::size_t entries, std::size_t attributes, std::size_t values) -> stream
 {
 	stream s;
 	std::vector<std::size_t> sizes;
@@ -96,7 +96,7 @@ stream make_stream(std::size_t entries, std::size_t attributes, std::size_t valu
 }
 
 // Touches the decoded data so nothing is optimized away.
-std::size_t consume(const ldap::message &m)
+auto consume(const ldap::message &m) -> std::size_t
 {
 	const auto &e = std::get<ldap::search_result_entry>(m.op);
 	std::size_t n = e.object_name.size();
@@ -121,7 +121,7 @@ enum class mode { heap, arena_with_buffer, arena_without_buffer };
 
 // One pass over the stream. The arena lives across messages and is released
 // after each, as a connection would do per response.
-std::size_t pass(const stream &s, mode how, std::vector<std::byte> &buffer)
+auto pass(const stream &s, mode how, std::vector<std::byte> &buffer) -> std::size_t
 {
 	std::size_t sum = 0;
 	if (how == mode::heap) {
@@ -148,7 +148,7 @@ std::size_t pass(const stream &s, mode how, std::vector<std::byte> &buffer)
 	return sum;
 }
 
-outcome measure(const stream &s, mode how, int runs)
+auto measure(const stream &s, mode how, int runs) -> outcome
 {
 	std::vector<std::byte> buffer(how == mode::arena_with_buffer ? 256 * 1024 : 0);
 	outcome out;
@@ -176,14 +176,14 @@ outcome measure(const stream &s, mode how, int runs)
 	return out;
 }
 
-std::size_t arg(int argc, char **argv, int i, std::size_t fallback)
+auto arg(int argc, char **argv, int i, std::size_t fallback) -> std::size_t
 {
 	return argc > i ? static_cast<std::size_t>(std::strtoull(argv[i], nullptr, 10)) : fallback;
 }
 
 }// namespace
 
-int main(int argc, char **argv)
+auto main(int argc, char **argv) -> int
 {
 	const std::size_t entries = arg(argc, argv, 1, 1000);
 	const std::size_t attributes = arg(argc, argv, 2, 30);

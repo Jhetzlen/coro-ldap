@@ -8,7 +8,7 @@
 
 namespace ldap = jhetz::ldap;
 
-boost::capy::task<int> run(boost::corosio::io_context &ioc, std::string text)
+auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task<int>
 {
 	auto c = co_await ldap::connect(ioc, text);
 	if (!c) {
@@ -41,7 +41,7 @@ boost::capy::task<int> run(boost::corosio::io_context &ioc, std::string text)
 	}
 }
 
-int main(int argc, char **argv)
+auto main(int argc, char **argv) -> int
 {
 	boost::corosio::io_context ioc;
 	int rc = 1;

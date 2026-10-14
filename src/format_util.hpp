@@ -14,11 +14,11 @@
 
 namespace jhetz::ldap::detail {
 
-std::string vformat(std::string_view fmt, std::format_args args);
+auto vformat(std::string_view fmt, std::format_args args) -> std::string;
 void vformat_to(std::string &out, std::string_view fmt, std::format_args args);
 
 // std::format(fmt, args...).
-template<class... Args> std::string format(std::format_string<const Args &...> fmt, const Args &...args)
+template<class... Args> auto format(std::format_string<const Args &...> fmt, const Args &...args) -> std::string
 {
 	return detail::vformat(fmt.get(), std::make_format_args(args...));
 }

@@ -17,13 +17,13 @@ using namespace std::string_literals;
 
 namespace {
 
-template<class T> std::error_code code_of(const ldap::result<T> &r)
+template<class T> auto code_of(const ldap::result<T> &r) -> std::error_code
 {
 	REQUIRE_FALSE(r.has_value());
 	return r.error().code;
 }
 
-ldap::message round_trip(const ldap::message &m)
+auto round_trip(const ldap::message &m) -> ldap::message
 {
 	auto bytes = ldap::encode(m);
 	REQUIRE(bytes.has_value());
@@ -41,7 +41,7 @@ ldap::message round_trip(const ldap::message &m)
 
 // LDAPMessage { id, <op built by body>, <extra built by tail> }
 template<class Op, class Tail = void (*)(ber::writer &)>
-std::pmr::vector<std::byte> raw_message(std::int64_t id, Op &&op, Tail &&tail = [](ber::writer &) {})
+auto raw_message(std::int64_t id, Op &&op, Tail &&tail = [](ber::writer &) {}) -> std::pmr::vector<std::byte>
 {
 	ber::writer w;
 	w.constructed(ber::tags::sequence, [&](ber::writer &m) {
@@ -53,19 +53,19 @@ std::pmr::vector<std::byte> raw_message(std::int64_t id, Op &&op, Tail &&tail = 
 }
 
 // A message with a default search request whose fields `edit` changes.
-template<class F> ldap::message search_message(F edit, std::int32_t id = 1)
+template<class F> auto search_message(F edit, std::int32_t id = 1) -> ldap::message
 {
 	ldap::search_request s;
 	edit(s);
 	return { id, std::move(s) };
 }
 
-ldap::message search_message(ldap::filter f, std::int32_t id = 1)
+auto search_message(ldap::filter f, std::int32_t id = 1) -> ldap::message
 {
 	return search_message([&](ldap::search_request &s) { s.filter = std::move(f); }, id);
 }
 
-ldap::filter raw(std::string_view text) { return ldap::filter::raw(text).value(); }
+auto raw(std::string_view text) -> ldap::filter { return ldap::filter::raw(text).value(); }
 
 void write_result(ber::writer &o, std::int64_t code = 0)
 {

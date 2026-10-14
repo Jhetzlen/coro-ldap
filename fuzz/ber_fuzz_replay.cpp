@@ -18,7 +18,7 @@
 #include <string_view>
 #include <vector>
 
-extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size);
+extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size) -> int;
 
 namespace {
 
@@ -28,18 +28,18 @@ namespace ber = jhetz::ldap::ber;
 struct rng
 {
 	std::uint64_t state;
-	std::uint64_t next()
+	auto next() -> std::uint64_t
 	{
 		std::uint64_t z = (state += 0x9E3779B97F4A7C15ull);
 		z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
 		z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
 		return z ^ (z >> 31);
 	}
-	std::size_t below(std::size_t n) { return static_cast<std::size_t>(next() % n); }
-	std::uint8_t byte() { return static_cast<std::uint8_t>(next() & 0xFFu); }
+	auto below(std::size_t n) -> std::size_t { return static_cast<std::size_t>(next() % n); }
+	auto byte() -> std::uint8_t { return static_cast<std::uint8_t>(next() & 0xFFu); }
 };
 
-std::vector<std::uint8_t> to_u8(std::span<const std::byte> v)
+auto to_u8(std::span<const std::byte> v) -> std::vector<std::uint8_t>
 {
 	std::vector<std::uint8_t> out(v.size());
 	for (std::size_t i = 0; i < v.size(); ++i) {
@@ -48,7 +48,7 @@ std::vector<std::uint8_t> to_u8(std::span<const std::byte> v)
 	return out;
 }
 
-std::vector<std::vector<std::uint8_t>> seeds()
+auto seeds() -> std::vector<std::vector<std::uint8_t>>
 {
 	std::vector<std::vector<std::uint8_t>> out;
 	ber::writer w;
@@ -173,7 +173,7 @@ void mutate(rng &r, std::vector<std::uint8_t> &v)
 
 // `ber_fuzz_replay --write-seeds DIR` writes the seed inputs to DIR (used to
 // refresh fuzz/corpus/ber_fuzz/, the libFuzzer seed corpus) and exits.
-static int write_seeds(const char *dir)
+static auto write_seeds(const char *dir) -> int
 {
 	const auto inputs = seeds();
 	for (std::size_t i = 0; i < inputs.size(); ++i) {
@@ -193,7 +193,7 @@ static int write_seeds(const char *dir)
 	return 0;
 }
 
-int main(int argc, char **argv)
+auto main(int argc, char **argv) -> int
 {
 	if (argc == 3 && std::string_view(argv[1]) == "--write-seeds") {
 		return write_seeds(argv[2]);

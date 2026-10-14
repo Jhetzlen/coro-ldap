@@ -9,7 +9,7 @@ namespace jhetz::ldap {
 
 namespace detail {
 
-	error conversion_error(std::string_view what, std::string_view raw)
+	auto conversion_error(std::string_view what, std::string_view raw) -> error
 	{
 		std::string text = detail::format("{}: \"", what);
 		detail::append_sanitized(text, raw, 64);
@@ -17,7 +17,7 @@ namespace detail {
 		return make_error(client_errc::conversion_failed, text);
 	}
 
-	error with_context(error e, std::string_view prefix)
+	auto with_context(error e, std::string_view prefix) -> error
 	{
 		if (e.context.empty()) {
 			e.context.assign(prefix);
@@ -28,7 +28,7 @@ namespace detail {
 		return e;
 	}
 
-	std::string entry_context(std::string_view dn, std::string_view attribute)
+	auto entry_context(std::string_view dn, std::string_view attribute) -> std::string
 	{
 		// The DN is the server's text.
 		std::string text = "entry ";
@@ -43,7 +43,7 @@ namespace detail {
 
 }// namespace detail
 
-result<dn> value_traits<dn>::decode(std::string_view raw)
+auto value_traits<dn>::decode(std::string_view raw) -> result<dn>
 {
 	return dn::parse(raw).transform_error(
 	  [raw](const error &) { return detail::conversion_error("not a distinguished name", raw); });
@@ -56,7 +56,7 @@ namespace {
 	using namespace std::chrono;
 
 	// Reads `n` digits at `pos`; nullopt if they are not all digits.
-	std::optional<int> digits(std::string_view s, std::size_t &pos, std::size_t n)
+	auto digits(std::string_view s, std::size_t &pos, std::size_t n) -> std::optional<int>
 	{
 		if (s.size() - pos < n) {
 			return std::nullopt;
@@ -73,11 +73,14 @@ namespace {
 		return v;
 	}
 
-	bool next_is_digit(std::string_view s, std::size_t pos) { return pos < s.size() && s[pos] >= '0' && s[pos] <= '9'; }
+	auto next_is_digit(std::string_view s, std::size_t pos) -> bool
+	{
+		return pos < s.size() && s[pos] >= '0' && s[pos] <= '9';
+	}
 
 }// namespace
 
-result<sys_seconds> parse_generalized_time(std::string_view s)
+auto parse_generalized_time(std::string_view s) -> result<sys_seconds>
 {
 	auto bad = [&](const char *why) {
 		return std::unexpected(detail::conversion_error(detail::format("not a GeneralizedTime ({})", why), s));
@@ -167,7 +170,7 @@ result<sys_seconds> parse_generalized_time(std::string_view s)
 	return local - offset;
 }
 
-result<std::string> format_generalized_time(sys_seconds t)
+auto format_generalized_time(sys_seconds t) -> result<std::string>
 {
 	const sys_days day = floor<days>(t);
 	const year_month_day ymd(day);
@@ -187,7 +190,7 @@ result<std::string> format_generalized_time(sys_seconds t)
 	  hms.seconds().count());
 }
 
-std::string value_traits<sys_seconds>::encode(sys_seconds v)
+auto value_traits<sys_seconds>::encode(sys_seconds v) -> std::string
 {
 	auto s = format_generalized_time(v);
 	if (!s) {

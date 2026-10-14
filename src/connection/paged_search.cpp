@@ -59,7 +59,7 @@ struct paged_search::state
 
 	// Sends the search for the next page (cookie empty for the first);
 	// not sent if `stop` (the awaiting task's) is set already.
-	result<void> request_page(std::string page_cookie, const std::stop_token &stop)
+	auto request_page(std::string page_cookie, const std::stop_token &stop) -> result<void>
 	{
 		set_page_control(page_size, std::move(page_cookie));
 		auto s = start_search(*conn, params, mr, stop);
@@ -74,7 +74,7 @@ struct paged_search::state
 	// The paging state the server holds now: `cookie`, or the current
 	// page's own if its SearchResultDone was already received (the page
 	// ended, next() has not read it yet).
-	std::string server_cookie() const
+	auto server_cookie() const -> std::string
 	{
 		if (current.state_ == nullptr) {
 			return cookie;
@@ -126,8 +126,8 @@ struct paged_search::state
 	}
 };
 
-capy::task<result<ldap::paged_search>>
-  connection::search_paged(search_params p, std::int32_t page_size, std::pmr::memory_resource *mr)
+auto connection::search_paged(search_params p, std::int32_t page_size, std::pmr::memory_resource *mr)
+  -> capy::task<result<ldap::paged_search>>
 {
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection(op_context("search", p.base)));
@@ -163,7 +163,7 @@ namespace {
 
 paged_search::paged_search(paged_search &&other) noexcept : state_(std::exchange(other.state_, nullptr)) {}
 
-paged_search &paged_search::operator=(paged_search &&other) noexcept
+auto paged_search::operator=(paged_search &&other) noexcept -> paged_search &
 {
 	if (this != &other) {
 		delete_paged(state_);
@@ -174,28 +174,28 @@ paged_search &paged_search::operator=(paged_search &&other) noexcept
 
 paged_search::~paged_search() { delete_paged(state_); }
 
-bool paged_search::done() const noexcept { return state_ == nullptr || state_->finished; }
+auto paged_search::done() const noexcept -> bool { return state_ == nullptr || state_->finished; }
 
-std::size_t paged_search::pages() const noexcept { return state_ == nullptr ? 0 : state_->pages; }
+auto paged_search::pages() const noexcept -> std::size_t { return state_ == nullptr ? 0 : state_->pages; }
 
-const string_list &paged_search::references() const noexcept
+auto paged_search::references() const noexcept -> const string_list &
 {
 	static const string_list none;
 	return state_ == nullptr ? none : state_->references;
 }
 
-std::pmr::vector<url> paged_search::reference_urls(std::pmr::memory_resource *mr) const
+auto paged_search::reference_urls(std::pmr::memory_resource *mr) const -> std::pmr::vector<url>
 {
 	return url::parse_list(references(), mr);
 }
 
-const std::pmr::vector<control> &paged_search::controls() const noexcept
+auto paged_search::controls() const noexcept -> const std::pmr::vector<control> &
 {
 	static const std::pmr::vector<control> none;
 	return state_ == nullptr ? none : state_->controls;
 }
 
-capy::task<result<std::optional<entry>>> paged_search::next()
+auto paged_search::next() -> capy::task<result<std::optional<entry>>>
 {
 	if (state_ == nullptr) {
 		co_return std::unexpected(no_connection("search"));

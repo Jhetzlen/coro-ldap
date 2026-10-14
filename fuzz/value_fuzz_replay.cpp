@@ -6,7 +6,7 @@
 
 #include <string_view>
 
-int main(int argc, char **argv)
+auto main(int argc, char **argv) -> int
 {
 	namespace fuzz = jhetz::ldap::fuzz;
 	const std::string_view texts[] = {

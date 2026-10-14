@@ -77,13 +77,14 @@ struct modify_params
 
 namespace mod {
 	// Adds values (at least one).
-	[[nodiscard]] modify_change add(std::string_view type, std::initializer_list<std::string_view> values);
+	[[nodiscard]] auto add(std::string_view type, std::initializer_list<std::string_view> values) -> modify_change;
 	// Deletes the given values, or the whole attribute if none are given.
-	[[nodiscard]] modify_change remove(std::string_view type, std::initializer_list<std::string_view> values = {});
+	[[nodiscard]] auto remove(std::string_view type, std::initializer_list<std::string_view> values = {})
+	  -> modify_change;
 	// Replaces all values (none: deletes the attribute if present).
-	[[nodiscard]] modify_change replace(std::string_view type, std::initializer_list<std::string_view> values);
+	[[nodiscard]] auto replace(std::string_view type, std::initializer_list<std::string_view> values) -> modify_change;
 	// Adds `delta` to an integer attribute (RFC 4525 Modify-Increment).
-	[[nodiscard]] modify_change increment(std::string_view type, std::string_view delta = "1");
+	[[nodiscard]] auto increment(std::string_view type, std::string_view delta = "1") -> modify_change;
 }// namespace mod
 
 // DelRequest (RFC 4511 section 4.8): deletes a leaf entry.

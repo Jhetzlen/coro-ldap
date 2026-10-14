@@ -35,13 +35,13 @@ struct attribute_values
 	attribute_values(attribute_values &&other, const allocator_type &alloc)
 	  : type(std::move(other.type), alloc), values(std::move(other.values), alloc)
 	{}
-	attribute_values &operator=(const attribute_values &) = default;
-	attribute_values &operator=(attribute_values &&) = default;
+	auto operator=(const attribute_values &) -> attribute_values & = default;
+	auto operator=(attribute_values &&) -> attribute_values & = default;
 	~attribute_values() = default;
 
-	allocator_type get_allocator() const noexcept { return values.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return values.get_allocator(); }
 
-	friend bool operator==(const attribute_values &, const attribute_values &) = default;
+	friend auto operator==(const attribute_values &, const attribute_values &) -> bool = default;
 };
 
 // DN text plus attributes in the order the server sent them. The DN is kept
@@ -62,17 +62,17 @@ struct entry
 	entry(entry &&other, const allocator_type &alloc)
 	  : dn(std::move(other.dn), alloc), attributes(std::move(other.attributes), alloc)
 	{}
-	entry &operator=(const entry &) = default;
-	entry &operator=(entry &&) = default;
+	auto operator=(const entry &) -> entry & = default;
+	auto operator=(entry &&) -> entry & = default;
 	~entry() = default;
 
-	allocator_type get_allocator() const noexcept { return dn.get_allocator(); }
+	auto get_allocator() const noexcept -> allocator_type { return dn.get_allocator(); }
 
 	// Values of `type` (case-insensitive, options included: `cn;lang-en` is
 	// not `cn`), or nullptr if the entry has no such attribute. An attribute
 	// present without values (typesOnly searches) gives an empty vector.
-	[[nodiscard]] const std::pmr::vector<std::pmr::string> *find(std::string_view type) const noexcept;
-	[[nodiscard]] const std::pmr::vector<std::pmr::string> *find(const attribute &type) const noexcept
+	[[nodiscard]] auto find(std::string_view type) const noexcept -> const std::pmr::vector<std::pmr::string> *;
+	[[nodiscard]] auto find(const attribute &type) const noexcept -> const std::pmr::vector<std::pmr::string> *
 	{
 		return find(type.name());
 	}
@@ -81,9 +81,9 @@ struct entry
 	// merged, keeping the first spelling and the order of first appearance.
 	// The entry takes the strings of `e` and is allocated from e's resource
 	// (so an entry made from a message decoded into an arena lives in it too).
-	[[nodiscard]] static entry from(search_result_entry e);
+	[[nodiscard]] static auto from(search_result_entry e) -> entry;
 
-	friend bool operator==(const entry &, const entry &) = default;
+	friend auto operator==(const entry &, const entry &) -> bool = default;
 };
 
 }// namespace jhetz::ldap

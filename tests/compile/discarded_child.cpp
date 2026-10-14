@@ -4,7 +4,7 @@
 
 namespace ldap = jhetz::ldap;
 
-int main()
+auto main() -> int
 {
 	const ldap::dn base{ "ou=people,dc=example,dc=org" };
 	base.child(ldap::rdn{ "uid=jdoe" });

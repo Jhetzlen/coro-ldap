@@ -133,7 +133,7 @@ namespace jhetz::ldap {
 // to reset a password, or delete the old value and add the new one in one
 // modify to change it. AD accepts it only over TLS. Neither the result nor
 // the scratch buffers are wiped (see change_password()).
-[[nodiscard]] result<std::string> ad_password_value(std::string_view password);
+[[nodiscard]] auto ad_password_value(std::string_view password) -> result<std::string>;
 
 class connection;
 
@@ -144,7 +144,7 @@ namespace detail {
 	// `search ""` for the root DSE. The DN is often the server's text (an
 	// entry's DN, a referral's): sanitized and cut at 256 bytes, as an
 	// entry's in decode errors.
-	std::string op_context(std::string_view op, const dn &d);
+	auto op_context(std::string_view op, const dn &d) -> std::string;
 }// namespace detail
 
 class connection
@@ -163,9 +163,9 @@ class connection
 	  const connection_options &options = {},
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 	connection(connection &&other) noexcept;
-	connection &operator=(connection &&other) noexcept;
+	auto operator=(connection &&other) noexcept -> connection &;
 	connection(const connection &) = delete;
-	connection &operator=(const connection &) = delete;
+	auto operator=(const connection &) -> connection & = delete;
 	// Closes the transport without sending an UnbindRequest (a destructor
 	// cannot wait for I/O); co_await unbind() first for a clean shutdown.
 	// Outstanding operations and open streams fail with not_connected.
@@ -173,24 +173,24 @@ class connection
 
 	// False before connecting, after unbind() or close(), and once a
 	// failure closed the connection.
-	bool is_open() const noexcept;
+	auto is_open() const noexcept -> bool;
 	// Where it is connected ("ldap://127.0.0.1:389"), for logs; empty if never
 	// connected.
-	std::string_view name() const noexcept;
+	auto name() const noexcept -> std::string_view;
 	// The executor every operation of this connection must run on.
 	// Precondition: constructed with a transport (not default, not moved from).
-	executor_type executor() const noexcept;
+	auto executor() const noexcept -> executor_type;
 	// Requests waiting for a response: operations (searches until their
 	// SearchResultDone, or until abandoned) and paged search releases until
 	// their answer arrives or their deadline passes (see paged_search; an
 	// abandoned request is not counted: it may never be answered). For
 	// tests and diagnostics.
-	std::size_t outstanding() const noexcept;
+	auto outstanding() const noexcept -> std::size_t;
 	// True while TLS protects the open connection (ldaps://, or once
 	// start_tls() has succeeded; false while it runs, its handshake
 	// included). False whenever is_open() is: before connecting, after
 	// unbind() or close(), and once a failure closed the connection.
-	bool is_tls() const noexcept;
+	auto is_tls() const noexcept -> bool;
 
 	// Simple bind (RFC 4511 section 4.2, RFC 4513 section 5.1). An empty name
 	// and password is an anonymous bind. A name with an empty password would
@@ -202,7 +202,7 @@ class connection
 	// the bind is outstanding are held until it ends (RFC 4511 section
 	// 4.2.1), and a second bind waits for this one. Cancelled or timed out,
 	// the bind closes the connection (a bind cannot be abandoned).
-	boost::capy::task<result<void>> simple_bind(dn name, std::string password);
+	auto simple_bind(dn name, std::string password) -> boost::capy::task<result<void>>;
 
 	// SASL bind (RFC 4513 section 5.2): sends one BindRequest per step of
 	// `mechanism` while the server answers saslBindInProgress (at most 32
@@ -241,7 +241,7 @@ class connection
 	// locking_mode::safe: under unsafe an offloaded step fails with
 	// std::errc::operation_not_supported before it runs (at the first step,
 	// nothing sent); unsafe_io cannot be detected and is unsupported.
-	boost::capy::task<result<void>> sasl_bind(sasl_mechanism &mechanism, dn name = {});
+	auto sasl_bind(sasl_mechanism &mechanism, dn name = {}) -> boost::capy::task<result<void>>;
 
 	// Runs a search to its end and returns the entries in the order received,
 	// allocated from `mr` (see "Memory" above). Search result references
@@ -249,15 +249,15 @@ class connection
 	// to see them (referral handling is step 6). A result code other than
 	// success fails the whole call, size_limit_exceeded included; the
 	// entries received before it are lost (search_stream() keeps them).
-	boost::capy::task<result<std::pmr::vector<entry>>> search(search_params request,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+	  -> boost::capy::task<result<std::pmr::vector<entry>>>;
 
 	// Sends the search and returns a stream that yields its entries one at a
 	// time, each decoded into `mr`. Other operations may run while the
 	// stream is open. Destroyed before its end, the stream abandons the
 	// search.
-	boost::capy::task<result<ldap::search_stream>> search_stream(search_params request,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	auto search_stream(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+	  -> boost::capy::task<result<ldap::search_stream>>;
 
 	// A search in pages of `page_size` entries (Simple Paged Results, RFC
 	// 2696): when a page ends, the next page is requested with the server's
@@ -275,28 +275,29 @@ class connection
 	// sssvlv overlay) it answers any next page with the latest sorted paged
 	// search's entries instead, which the client cannot detect. Give each
 	// concurrent paged search its own connection there.
-	boost::capy::task<result<ldap::paged_search>> search_paged(search_params request,
+	auto search_paged(search_params request,
 	  std::int32_t page_size,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+	  -> boost::capy::task<result<ldap::paged_search>>;
 
 	// The other operations. Result codes: success returns the value; any
 	// other code is an error (`ldap_result::to_error`, with the operation as
 	// context), referral included (errc::referral, the URIs in
 	// error::referrals; referrals are not chased, see url::parse_list).
 	// compare() maps compareTrue / compareFalse to true / false.
-	boost::capy::task<result<response>> add(add_params request);
-	boost::capy::task<result<response>> modify(modify_params request);
-	boost::capy::task<result<response>> del(del_params request);
-	boost::capy::task<result<response>> modify_dn(modify_dn_params request);
-	boost::capy::task<result<bool>> compare(compare_params request);
-	boost::capy::task<result<extended_result>> extended(extended_params request);
+	auto add(add_params request) -> boost::capy::task<result<response>>;
+	auto modify(modify_params request) -> boost::capy::task<result<response>>;
+	auto del(del_params request) -> boost::capy::task<result<response>>;
+	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
+	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
+	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
 	// The authorization identity of this connection (RFC 4532): "dn:<dn>",
 	// "u:<user>", or "" when anonymous.
-	boost::capy::task<result<std::string>> who_am_i(request_controls controls = {});
+	auto who_am_i(request_controls controls = {}) -> boost::capy::task<result<std::string>>;
 	// Changes a password (RFC 3062). Returns the password the server
 	// generated (genPasswd) when new_password was not given, else nullopt.
 	// Passwords never appear in error contexts.
-	boost::capy::task<result<std::optional<std::string>>> password_modify(password_modify_params request);
+	auto password_modify(password_modify_params request) -> boost::capy::task<result<std::optional<std::string>>>;
 
 	// Password changes that work on OpenLDAP and Active Directory alike:
 	// `method` (nullopt: connection_options::password_method) picks how (see
@@ -325,17 +326,17 @@ class connection
 	// std::string copies (the arguments, the request's values, the encoded
 	// PDU in the connection's buffers) that the library cannot wipe all of.
 	// Only sasl_scram wipes what it holds.
-	boost::capy::task<result<void>> change_password(dn user,
+	auto change_password(dn user,
 	  std::string old_password,
 	  std::string new_password,
-	  std::optional<ldap::password_method> method = std::nullopt);
-	boost::capy::task<result<void>>
-	  reset_password(dn user, std::string new_password, std::optional<ldap::password_method> method = std::nullopt);
+	  std::optional<ldap::password_method> method = std::nullopt) -> boost::capy::task<result<void>>;
+	auto reset_password(dn user, std::string new_password, std::optional<ldap::password_method> method = std::nullopt)
+	  -> boost::capy::task<result<void>>;
 
 	// Reads the server's subschema (RFC 4512): the root DSE's
 	// subschemaSubentry (cn=Subschema if it names none), then that entry's
 	// attributeTypes and objectClasses. See schema.hpp.
-	boost::capy::task<result<server_schema>> load_schema();
+	auto load_schema() -> boost::capy::task<result<server_schema>>;
 
 	// Typed operations (mapping.hpp, DESIGN.md section 4).
 	//
@@ -344,7 +345,7 @@ class connection
 	// object classes, if it declares some. Each entry is decoded to T; the
 	// first entry that does not decode fails the whole call (its error names
 	// the search, the entry and the attribute).
-	template<described T> boost::capy::task<result<std::vector<T>>> search_as(search_params request)
+	template<described T> auto search_as(search_params request) -> boost::capy::task<result<std::vector<T>>>
 	{
 		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
 			co_return std::unexpected(std::move(c.error()));
@@ -370,8 +371,8 @@ class connection
 
 	// modify<T>: changes built with ldap::replace / add / remove<&T::member>.
 	template<described T>
-	boost::capy::task<result<response>>
-	  modify(dn object, std::vector<change<T>> changes, request_controls controls = {})
+	auto modify(dn object, std::vector<change<T>> changes, request_controls controls = {})
+	  -> boost::capy::task<result<response>>
 	{
 		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
 			co_return std::unexpected(std::move(c.error()));
@@ -386,7 +387,8 @@ class connection
 
 	// add(dn, value): the attributes of ldap::to_attributes(value) (no
 	// read_only members, objectClass from the descriptor).
-	template<described T> boost::capy::task<result<response>> add(dn entry, T value, request_controls controls = {})
+	template<described T>
+	auto add(dn entry, T value, request_controls controls = {}) -> boost::capy::task<result<response>>
 	{
 		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
 			co_return std::unexpected(std::move(c.error()));
@@ -424,8 +426,8 @@ class connection
 	// limit for the handshake. An unbind() once the StartTLS request is sent
 	// closes the connection (nothing may be sent until the handshake), and
 	// start_tls then fails with not_connected, during the handshake too.
-	boost::capy::task<result<void>> start_tls(net::tls_options options = {},
-	  std::optional<std::chrono::milliseconds> timeout = std::nullopt);
+	auto start_tls(net::tls_options options = {}, std::optional<std::chrono::milliseconds> timeout = std::nullopt)
+	  -> boost::capy::task<result<void>>;
 
 	// Sends an UnbindRequest, waits until it is written, and closes the
 	// connection (RFC 4511 section 4.3: there is no response). During a bind
@@ -439,7 +441,7 @@ class connection
 	// UnbindRequest: an operation, start_tls() or unbind() started while it
 	// is being written fails with not_connected. The connection is closed
 	// even if the write fails or the task is cancelled.
-	boost::capy::task<result<void>> unbind();
+	auto unbind() -> boost::capy::task<result<void>>;
 
 	// Closes the transport at once, without an UnbindRequest. Outstanding
 	// operations complete with not_connected. Idempotent.
@@ -453,8 +455,8 @@ class connection
 	friend void detail::set_next_message_id(connection &, std::int32_t) noexcept;
 
 	// schema_check::on_first_use for one type (connection_options.hpp).
-	boost::capy::task<result<void>> check_schema(std::type_index type,
-	  schema_report (*validate_type)(const server_schema &));
+	auto check_schema(std::type_index type, schema_report (*validate_type)(const server_schema &))
+	  -> boost::capy::task<result<void>>;
 
 	impl *impl_ = nullptr;// reference counted; allocated from the resource it records
 };
@@ -464,18 +466,18 @@ class connection
 // Nothing is sent: bind next, or search anonymously. The same rules as
 // net::connect apply: `ioc` must outlive the connection and the task must
 // run on its executor. Arguments are taken by value.
-boost::capy::task<result<connection>> connect(boost::corosio::io_context &ioc,
+auto connect(boost::corosio::io_context &ioc,
   url u,
   connection_options options = {},
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<connection>>;
 
 // As above, to the URL `text` (RFC 4516, url::parse). A bad URL fails with
 // url::parse's error (client_errc::invalid_url) and nothing is connected.
 // `text` is parsed here, before the task starts, so it need not outlive the
 // call.
-boost::capy::task<result<connection>> connect(boost::corosio::io_context &ioc,
+auto connect(boost::corosio::io_context &ioc,
   std::string_view text,
   connection_options options = {},
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<connection>>;
 
 }// namespace jhetz::ldap

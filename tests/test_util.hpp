@@ -12,7 +12,7 @@
 namespace jhetz::ldap::test {
 
 // bytes({0x30, 0x0C, ...})
-inline std::vector<std::byte> bytes(std::initializer_list<unsigned> values)
+inline auto bytes(std::initializer_list<unsigned> values) -> std::vector<std::byte>
 {
 	std::vector<std::byte> out;
 	out.reserve(values.size());
@@ -23,7 +23,7 @@ inline std::vector<std::byte> bytes(std::initializer_list<unsigned> values)
 }
 
 // "30 0C 02 01" - compared as strings so Catch2 prints readable diffs.
-inline std::string hex(std::span<const std::byte> data)
+inline auto hex(std::span<const std::byte> data) -> std::string
 {
 	static constexpr char digits[] = "0123456789ABCDEF";
 	std::string out;
@@ -39,7 +39,7 @@ inline std::string hex(std::span<const std::byte> data)
 }
 
 // from_hex("3005 0201") - whitespace ignored; throws on malformed input.
-inline std::vector<std::byte> from_hex(std::string_view text)
+inline auto from_hex(std::string_view text) -> std::vector<std::byte>
 {
 	auto nibble = [](char c) -> unsigned {
 		if (c >= '0' && c <= '9') {
@@ -73,7 +73,7 @@ inline std::vector<std::byte> from_hex(std::string_view text)
 }
 
 // Bytes of a std::string (binary values in the message model).
-inline std::vector<std::byte> bytes_of(std::string_view s)
+inline auto bytes_of(std::string_view s) -> std::vector<std::byte>
 {
 	const auto b = std::as_bytes(std::span(s));
 	return { b.begin(), b.end() };

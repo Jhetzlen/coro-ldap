@@ -28,7 +28,7 @@ using Catch::Matchers::StartsWith;
 
 namespace {
 
-std::string env(const char *name)
+auto env(const char *name) -> std::string
 {
 	const char *v = std::getenv(name);
 	return v == nullptr ? std::string() : std::string(v);
@@ -36,7 +36,7 @@ std::string env(const char *name)
 
 const std::string user007 = "dn:uid=user007,ou=people,dc=example,dc=org";
 
-ldap::connection_options trusting(ldap::connection_options o = {})
+auto trusting(ldap::connection_options o = {}) -> ldap::connection_options
 {
 	o.tls.ca_file = env("JHETZ_LDAP_IT_CA");
 	o.timeout = std::chrono::seconds(10);
@@ -44,7 +44,8 @@ ldap::connection_options trusting(ldap::connection_options o = {})
 	return o;
 }
 
-ldap::connection open(corosio::io_context &ioc, const std::string &url, const ldap::connection_options &o = trusting())
+auto open(corosio::io_context &ioc, const std::string &url, const ldap::connection_options &o = trusting())
+  -> ldap::connection
 {
 	auto u = ldap::url::parse(url);
 	REQUIRE(u.has_value());
@@ -56,7 +57,7 @@ ldap::connection open(corosio::io_context &ioc, const std::string &url, const ld
 }
 
 // ldap://localhost:<port>: the service principal is ldap/localhost.
-std::string localhost_url()
+auto localhost_url() -> std::string
 {
 	std::string url = env("JHETZ_LDAP_IT_LDAP");
 	const auto at = url.find("127.0.0.1");
@@ -82,7 +83,7 @@ void require_kerberos()
 	}
 }
 
-std::string bind_and_who(corosio::io_context &ioc, ldap::connection &c, ldap::sasl_gssapi &mech)
+auto bind_and_who(corosio::io_context &ioc, ldap::connection &c, ldap::sasl_gssapi &mech) -> std::string
 {
 	auto r = finish(ioc, c.sasl_bind(mech));
 	if (!r) {
@@ -116,7 +117,7 @@ class sasl_secprops
 		set(value);
 	}
 	sasl_secprops(const sasl_secprops &) = delete;
-	sasl_secprops &operator=(const sasl_secprops &) = delete;
+	auto operator=(const sasl_secprops &) -> sasl_secprops & = delete;
 	~sasl_secprops()
 	{
 		try {

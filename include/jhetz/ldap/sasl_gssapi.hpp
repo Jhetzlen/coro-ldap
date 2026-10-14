@@ -122,28 +122,28 @@ class sasl_gssapi final : public sasl_mechanism
 	explicit sasl_gssapi(sasl_gssapi_options options = {});
 	~sasl_gssapi() override;
 	sasl_gssapi(sasl_gssapi &&) noexcept;
-	sasl_gssapi &operator=(sasl_gssapi &&) noexcept;
+	auto operator=(sasl_gssapi &&) noexcept -> sasl_gssapi &;
 	sasl_gssapi(const sasl_gssapi &) = delete;
-	sasl_gssapi &operator=(const sasl_gssapi &) = delete;
+	auto operator=(const sasl_gssapi &) -> sasl_gssapi & = delete;
 
-	std::string_view name() const noexcept override { return "GSSAPI"; }
+	auto name() const noexcept -> std::string_view override { return "GSSAPI"; }
 	// Keeps the host, for the default target.
 	void prepare(const sasl_bind_context &context) override;
 	// The first token of the Kerberos exchange (an AP-REQ). Blocks while
 	// the KDC is contacted: sasl_bind calls offload_start() instead.
-	[[nodiscard]] result<std::optional<std::string>> start() override;
+	[[nodiscard]] auto start() -> result<std::optional<std::string>> override;
 	// The next token while the security context is being established, then
 	// the wrapped security layer reply to the server's wrapped offer.
-	[[nodiscard]] result<std::optional<std::string>> step(std::optional<std::string_view> challenge) override;
+	[[nodiscard]] auto step(std::optional<std::string_view> challenge) -> result<std::optional<std::string>> override;
 	// start()'s work for another thread, and step()'s while the security
 	// context is being established (the gss_init_sec_context calls). The
 	// work shares the GSS-API handles with the mechanism, which leaves them
 	// alone until it is done: a step meanwhile is refused, and start()
 	// begins with new handles.
-	[[nodiscard]] sasl_work offload_start() override;
-	[[nodiscard]] sasl_work offload_step(std::optional<std::string_view> challenge) override;
+	[[nodiscard]] auto offload_start() -> sasl_work override;
+	[[nodiscard]] auto offload_step(std::optional<std::string_view> challenge) -> sasl_work override;
 	// Succeeds only once the security layer reply was sent.
-	[[nodiscard]] result<void> complete(std::optional<std::string_view> server_creds) override;
+	[[nodiscard]] auto complete(std::optional<std::string_view> server_creds) -> result<void> override;
 
   private:
 	struct state;// GSS-API handles; gssapi.h stays out of this header
@@ -166,19 +166,20 @@ namespace detail {
 	{
 		std::uint8_t layers = 0;
 		std::uint32_t max_size = 0;
-		friend bool operator==(const gssapi_layer_offer &, const gssapi_layer_offer &) = default;
+		friend auto operator==(const gssapi_layer_offer &, const gssapi_layer_offer &) -> bool = default;
 	};
 
 	// The server's (unwrapped) message: exactly four octets, the layer mask
 	// and the size in network byte order. Else client_errc::decode_error.
-	[[nodiscard]] result<gssapi_layer_offer> parse_gssapi_layer_offer(std::string_view message);
+	[[nodiscard]] auto parse_gssapi_layer_offer(std::string_view message) -> result<gssapi_layer_offer>;
 
 	// The client's reply (to be wrapped): "no security layer", maximum size
 	// 0, then `authz_id`. client_errc::security_layer_required if the offer
 	// lacks "no security layer" but has another layer, unexpected_response
 	// if it has none at all, encode_error for an `authz_id` that is not
 	// well-formed UTF-8 or holds a control character.
-	[[nodiscard]] result<std::string> gssapi_layer_reply(const gssapi_layer_offer &offer, std::string_view authz_id);
+	[[nodiscard]] auto gssapi_layer_reply(const gssapi_layer_offer &offer, std::string_view authz_id)
+	  -> result<std::string>;
 
 }// namespace detail
 

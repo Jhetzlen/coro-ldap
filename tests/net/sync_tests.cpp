@@ -40,7 +40,7 @@ namespace {
 // Answers each request when it arrives: bind (49 for password "wrong"),
 // search (two entries under its base, then done), extended (who am I),
 // until the client unbinds or hangs up. Abandons are ignored.
-capy::task<void> serve_session(net::transport t, std::atomic<int> &requests)
+auto serve_session(net::transport t, std::atomic<int> &requests) -> capy::task<void>
 {
 	net::read_buffer buf;
 	while (true) {
@@ -69,7 +69,7 @@ capy::task<void> serve_session(net::transport t, std::atomic<int> &requests)
 	}
 }
 
-capy::task<void> accept_loop(corosio::io_context &ioc, corosio::tcp_acceptor &acc, std::atomic<int> &requests)
+auto accept_loop(corosio::io_context &ioc, corosio::tcp_acceptor &acc, std::atomic<int> &requests) -> capy::task<void>
 {
 	while (true) {
 		auto [ec, peer] = co_await acc.accept();
@@ -103,7 +103,7 @@ struct server_thread
 		}(acc));
 		thread.join();
 	}
-	ldap::url url() const
+	auto url() const -> ldap::url
 	{
 		return *ldap::url::parse("ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port()));
 	}
@@ -253,7 +253,7 @@ struct peer_server
 		log.hang_up = [this] { peer.close(); };
 	}
 	peer_server(const peer_server &) = delete;
-	peer_server &operator=(const peer_server &) = delete;
+	auto operator=(const peer_server &) -> peer_server & = delete;
 
 	// Ends a session still waiting (the test failed before the client hung
 	// up), then joins.
@@ -283,7 +283,7 @@ struct peer_server
 	// until the client hangs up.
 	void serve_start_tls(test_pki::issued leaf) { start(upgrade(peer, std::move(leaf), log)); }
 
-	ldap::url url() const
+	auto url() const -> ldap::url
 	{
 		return *ldap::url::parse("ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port()));
 	}
@@ -312,7 +312,7 @@ struct peer_server
 		thread = std::thread([this] { ioc.run(); });
 	}
 
-	static capy::task<void> upgrade(corosio::tcp_socket &peer, test_pki::issued leaf, server_log &log)
+	static auto upgrade(corosio::tcp_socket &peer, test_pki::issued leaf, server_log &log) -> capy::task<void>
 	{
 		net::transport plain = net::transport::wrap(socket_ref{ &peer }, "server");
 		net::read_buffer buf;
@@ -383,7 +383,7 @@ struct connected
 };
 
 // Hangs up and waits for the server's session to end; what it received.
-std::vector<ldap::message> &hang_up(ldap::sync::connection &c, peer_server &srv)
+auto hang_up(ldap::sync::connection &c, peer_server &srv) -> std::vector<ldap::message> &
 {
 	c.close();
 	srv.join();
@@ -392,7 +392,7 @@ std::vector<ldap::message> &hang_up(ldap::sync::connection &c, peer_server &srv)
 }
 
 template<class Response>
-ldap::message result_msg(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic = {})
+auto result_msg(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic = {}) -> ldap::message
 {
 	return ldap::message{ id, Response{ ldap::ldap_result{ code, "", diagnostic } } };
 }
@@ -701,7 +701,7 @@ TEST_CASE("sync: close without an UnbindRequest", "[net][sync]")
 namespace {
 
 // Runs a command, returns its exit status and output (stdout and stderr).
-std::pair<int, std::string> run_command(const std::string &command)
+auto run_command(const std::string &command) -> std::pair<int, std::string>
 {
 	std::string out;
 	FILE *p = ::popen((command + " 2>&1").c_str(), "r");

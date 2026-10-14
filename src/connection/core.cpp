@@ -68,14 +68,14 @@ namespace {
 		"IntermediateResponse" };
 	static_assert(std::variant_size_v<protocol_op> == op_names.size());
 
-	std::string_view op_name(const protocol_op &op) noexcept { return op_names[op.index()]; }
+	auto op_name(const protocol_op &op) noexcept -> std::string_view { return op_names[op.index()]; }
 
 	// RFC 4511 protocolOp tags of the responses the reader recognizes before
 	// decoding.
 	constexpr ber::tag search_result_done_tag = ber::application(5, true);
 	constexpr ber::tag intermediate_response_tag = ber::application(25, true);
 
-	bool same_tag(ber::tag a, ber::tag b) noexcept { return a.cls == b.cls && a.number == b.number; }
+	auto same_tag(ber::tag a, ber::tag b) noexcept -> bool { return a.cls == b.cls && a.number == b.number; }
 
 	// Abandoned requests whose late responses are still dropped. Older ones
 	// are forgotten: a response for them would then be unexpected.
@@ -104,7 +104,7 @@ connection::impl::impl(corosio::io_context &ioc,
 
 // ---------------------------------------------------------------- failure
 
-error connection::impl::copy_error(const error &e) noexcept
+auto connection::impl::copy_error(const error &e) noexcept -> error
 {
 	try {
 		return e;
@@ -113,7 +113,7 @@ error connection::impl::copy_error(const error &e) noexcept
 	}
 }
 
-error connection::impl::out_of_memory() noexcept
+auto connection::impl::out_of_memory() noexcept -> error
 {
 	error e;
 	e.code = std::make_error_code(std::errc::not_enough_memory);
@@ -153,7 +153,7 @@ void connection::impl::shut(error e, bool remember, bool close_transport) noexce
 
 void connection::impl::shut_out_of_memory() noexcept { shut(out_of_memory(), true); }
 
-error connection::impl::not_connected(std::string_view context) const
+auto connection::impl::not_connected(std::string_view context) const -> error
 {
 	std::string text(context);
 	if (failure) {
@@ -183,7 +183,7 @@ void connection::impl::close() noexcept
 
 // ---------------------------------------------------------------- tasks
 
-capy::task<void> connection::impl::new_task(capy::task<void> (*body)(impl *))
+auto connection::impl::new_task(capy::task<void> (*body)(impl *)) -> capy::task<void>
 {
 	struct frame_allocator_scope
 	{
@@ -193,7 +193,7 @@ capy::task<void> connection::impl::new_task(capy::task<void> (*body)(impl *))
 			capy::set_current_frame_allocator(mr);
 		}
 		frame_allocator_scope(const frame_allocator_scope &) = delete;
-		frame_allocator_scope &operator=(const frame_allocator_scope &) = delete;
+		auto operator=(const frame_allocator_scope &) -> frame_allocator_scope & = delete;
 		~frame_allocator_scope() { capy::set_current_frame_allocator(saved); }
 	};
 	const frame_allocator_scope scope(ex.context().get_frame_allocator());
@@ -202,7 +202,7 @@ capy::task<void> connection::impl::new_task(capy::task<void> (*body)(impl *))
 
 // ---------------------------------------------------------------- writer
 
-capy::task<void> connection::impl::writer(impl *self)
+auto connection::impl::writer(impl *self) -> capy::task<void>
 {
 	const frame_ref ref(self);
 	try {
@@ -237,7 +237,7 @@ void connection::impl::enqueue(std::pmr::vector<std::byte> bytes)
 	capy::run_async(ex)(std::move(task));
 }
 
-std::int32_t connection::impl::free_id() const
+auto connection::impl::free_id() const -> std::int32_t
 {
 	std::int32_t id = next_id;
 	if (!wrapped) {
@@ -252,7 +252,7 @@ std::int32_t connection::impl::free_id() const
 	return id;
 }
 
-result<void> connection::impl::submit(message &m, pending_op *p, std::string_view context)
+auto connection::impl::submit(message &m, pending_op *p, std::string_view context) -> result<void>
 {
 	if (!open || unbinding) {
 		return std::unexpected(not_connected(context));
@@ -434,7 +434,7 @@ void connection::impl::start_due_watcher()
 	capy::run_async(ex)(std::move(task));
 }
 
-std::optional<clock::time_point> connection::impl::next_due_deadline() const
+auto connection::impl::next_due_deadline() const -> std::optional<clock::time_point>
 {
 	std::optional<clock::time_point> next;
 	for (const auto &a : abandoned) {
@@ -463,7 +463,7 @@ void connection::impl::expire_due(clock::time_point now)
 	stop_reader_if_idle();
 }
 
-capy::task<void> connection::impl::due_watcher(impl *self)
+auto connection::impl::due_watcher(impl *self) -> capy::task<void>
 {
 	const frame_ref ref(self);
 	try {
@@ -485,9 +485,10 @@ capy::task<void> connection::impl::due_watcher(impl *self)
 	self->watching = false;
 }
 
-std::size_t connection::impl::outstanding() const noexcept { return pending.size() + due_answers; }
+auto connection::impl::outstanding() const noexcept -> std::size_t { return pending.size() + due_answers; }
 
-capy::task<connection::impl::due_wait> connection::impl::wait_due_answers(std::optional<clock::time_point> deadline)
+auto connection::impl::wait_due_answers(std::optional<clock::time_point> deadline)
+  -> capy::task<connection::impl::due_wait>
 {
 	const std::size_t due = due_answers;
 	// Something must read the answers and expire their deadlines: if
@@ -524,7 +525,7 @@ capy::task<connection::impl::due_wait> connection::impl::wait_due_answers(std::o
 
 // ---------------------------------------------------------------- StartTLS
 
-result<void> connection::impl::check_start_tls(std::string_view context) const
+auto connection::impl::check_start_tls(std::string_view context) const -> result<void>
 {
 	if (!accepts_requests()) {
 		return std::unexpected(not_connected(context));
@@ -542,8 +543,8 @@ result<void> connection::impl::check_start_tls(std::string_view context) const
 	return {};
 }
 
-capy::task<result<void>> connection::impl::tls_handshake(net::tls_options options,
-  std::optional<std::chrono::milliseconds> timeout)
+auto connection::impl::tls_handshake(net::tls_options options, std::optional<std::chrono::milliseconds> timeout)
+  -> capy::task<result<void>>
 {
 	return net::start_tls(transport_, buf, std::move(options), timeout);
 }
@@ -571,7 +572,7 @@ void connection::impl::abandon_all_for_unbind()
 	stop_reader_if_idle();
 }
 
-result<void> connection::impl::send_unbind(std::string_view context)
+auto connection::impl::send_unbind(std::string_view context) -> result<void>
 {
 	abandon_all_for_unbind();
 	message request{ 0, unbind_request{} };
@@ -582,7 +583,7 @@ result<void> connection::impl::send_unbind(std::string_view context)
 	return {};
 }
 
-capy::task<std::optional<error>> connection::impl::finish_unbind()
+auto connection::impl::finish_unbind() -> capy::task<std::optional<error>>
 {
 	co_await wait_write_idle();
 	std::optional<error> failed = failure;
@@ -600,7 +601,7 @@ capy::task<std::optional<error>> connection::impl::finish_unbind()
 
 // ---------------------------------------------------------------- idle
 
-capy::task<void> connection::impl::wait_io_idle()
+auto connection::impl::wait_io_idle() -> capy::task<void>
 {
 	co_await capy::run(std::stop_token{})([](impl &c) -> capy::task<void> {
 		(void)co_await c.write_idle.wait();
@@ -608,13 +609,13 @@ capy::task<void> connection::impl::wait_io_idle()
 	}(*this));
 }
 
-capy::task<void> connection::impl::wait_write_idle()
+auto connection::impl::wait_write_idle() -> capy::task<void>
 {
 	(void)co_await capy::run(std::stop_token{})(
 	  [](impl &c) -> capy::task<capy::io_result<>> { co_return co_await c.write_idle.wait(); }(*this));
 }
 
-capy::task<void> connection::impl::wait_reader_idle()
+auto connection::impl::wait_reader_idle() -> capy::task<void>
 {
 	(void)co_await capy::run(std::stop_token{})(
 	  [](impl &c) -> capy::task<capy::io_result<>> { co_return co_await c.reader_idle.wait(); }(*this));
@@ -643,7 +644,7 @@ void connection::impl::stop_reader_if_idle()
 	}
 }
 
-capy::task<void> connection::impl::reader(impl *self)
+auto connection::impl::reader(impl *self) -> capy::task<void>
 {
 	const frame_ref ref(self);
 	try {
@@ -677,7 +678,7 @@ capy::task<void> connection::impl::reader(impl *self)
 	}
 }
 
-error connection::impl::unexpected(std::string text)
+auto connection::impl::unexpected(std::string text) -> error
 {
 	return make_error(client_errc::unexpected_response, detail::format("read {}: {}", transport_.name(), text));
 }
@@ -768,14 +769,20 @@ void connection::impl::notification(std::span<const std::byte> bytes)
 	}
 }
 
-ldap::search_stream connection::impl::make_stream(search_stream::state *s) noexcept { return ldap::search_stream(s); }
+auto connection::impl::make_stream(search_stream::state *s) noexcept -> ldap::search_stream
+{
+	return ldap::search_stream(s);
+}
 
-ldap::paged_search connection::impl::make_paged(paged_search::state *s) noexcept { return ldap::paged_search(s); }
+auto connection::impl::make_paged(paged_search::state *s) noexcept -> ldap::paged_search
+{
+	return ldap::paged_search(s);
+}
 
 // ---------------------------------------------------------------- waiting
 
-capy::task<result<message>>
-  connection::impl::next_response(pending_op &p, std::optional<clock::time_point> deadline, std::string_view context)
+auto connection::impl::next_response(pending_op &p, std::optional<clock::time_point> deadline, std::string_view context)
+  -> capy::task<result<message>>
 {
 	while (p.queue.empty() && !p.finished) {
 		p.ready.clear();
@@ -817,7 +824,7 @@ capy::task<result<message>>
 
 // ---------------------------------------------------------------- binds
 
-capy::task<result<void>> connection::impl::begin_bind(impl_ref c, std::string_view context)
+auto connection::impl::begin_bind(impl_ref c, std::string_view context) -> capy::task<result<void>>
 {
 	while (c->binding) {
 		auto [ec] = co_await c->bind_idle.wait();
@@ -844,11 +851,11 @@ connection::impl::bind_scope::~bind_scope()
 
 namespace detail {
 
-	capy::task<result<message>> request_response(impl_ref self,
+	auto request_response(impl_ref self,
 	  message request,
 	  std::size_t expect,
 	  std::string context,
-	  std::optional<std::chrono::milliseconds> timeout)
+	  std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<message>>
 	{
 		if (!std::holds_alternative<bind_request>(request.op)
 			&& (co_await capy::this_coro::stop_token).stop_requested()) {

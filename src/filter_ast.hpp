@@ -9,7 +9,7 @@
 namespace jhetz::ldap::detail {
 
 // invalid_filter if `f` is empty or beyond `limits`.
-result<void> check_filter(const filter &f, const filter_limits &limits);
+auto check_filter(const filter &f, const filter_limits &limits) -> result<void>;
 
 // Tree -> BER. Precondition: check_filter succeeded (it bounds the recursion).
 void write_filter(ber::writer &w, const filter &f);
