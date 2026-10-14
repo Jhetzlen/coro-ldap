@@ -12,27 +12,20 @@
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/this_coro.hpp>
-#include <boost/corosio/detail/scheduler.hpp>
 #include <boost/corosio/timeout.hpp>
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cstddef>
 #include <deque>
-#include <exception>
 #include <iterator>
-#include <memory>
 #include <memory_resource>
 #include <new>
 #include <span>
-#include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <type_traits>
-#include <typeindex>
 #include <unordered_map>
 #include <utility>
 #include <variant>

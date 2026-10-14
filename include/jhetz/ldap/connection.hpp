@@ -725,7 +725,7 @@ class search_stream
 	// result: find_sort_result()), once done().
 	const std::pmr::vector<control> &controls() const noexcept;
 
-	struct state;// defined in connection.cpp
+	struct state;// defined in src/connection/search.hpp
 
   private:
 	friend class connection;
@@ -784,7 +784,7 @@ class paged_search
 	// Controls of the last SearchResultDone, once done().
 	const std::pmr::vector<control> &controls() const noexcept;
 
-	struct state;// defined in connection.cpp
+	struct state;// defined in src/connection/paged_search.cpp
 
   private:
 	friend class connection;

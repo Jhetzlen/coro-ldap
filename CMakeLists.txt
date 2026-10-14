@@ -202,7 +202,8 @@ if(JHETZ_LDAP_BUILD_NET)
     endif()
 
     add_library(jhetz_ldap_net STATIC
-        src/connection.cpp
+        src/connection/connection.cpp
+        src/connection/start_tls.cpp
         src/connection/bind.cpp
         src/connection/core.cpp
         src/connection/sasl_offload.cpp

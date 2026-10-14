@@ -88,7 +88,7 @@ coro-ldap is a C++23 LDAP client library with two CMake targets:
 - **`jhetz::ldap_net`**: the async `ldap::connection` on Corosio/Capy coroutines, with multiplexed operations, OpenSSL TLS (ldaps://, StartTLS), ldapi://, and SASL (EXTERNAL, SCRAM-SHA-256), using ICU for SASLprep.
 - **`ldap::sync::connection`** (`sync.hpp`): a blocking facade over the async connection.
 
-Layout: `include/jhetz/ldap/` for the public headers (`net/` for the transport), `src/` for the implementation (`src/net/` for transport and TLS), `tests/` for the Catch2 unit tests (`tests/net/` for in-process network tests, `tests/integration/` for slapd), and `fuzz/`, `examples/` and `bench/`. The design notes are in `docs/DESIGN.md`.
+Layout: `include/jhetz/ldap/` for the public headers (`net/` for the transport), `src/` for the implementation (`src/connection/` for the connection modules, `src/net/` for transport and TLS), `tests/` for the Catch2 unit tests (`tests/net/` for in-process network tests, `tests/integration/` for slapd), and `fuzz/`, `examples/` and `bench/`. The design notes are in `docs/DESIGN.md`.
 
 ## Conventions & Patterns
 

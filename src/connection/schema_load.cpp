@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <memory>
-#include <memory_resource>
 #include <string>
 #include <typeindex>
 #include <utility>

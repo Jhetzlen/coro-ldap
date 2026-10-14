@@ -1,6 +1,5 @@
 #include "jhetz/ldap/connection.hpp"
 
-#include "../format_util.hpp"
 #include "impl.hpp"
 
 #include <initializer_list>

@@ -1,7 +1,8 @@
 // Internal: the state of a connection (connection::impl), shared by its
 // operations, and the helpers they share. Coroutine helpers are only
 // declared here: each is defined once, the core (impl's members, binds'
-// serialization, request_response) in core.cpp, the rest in connection.cpp.
+// serialization, request_response) in core.cpp, the rest in the module of
+// the operations that use them (operations.cpp, password.cpp).
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"
