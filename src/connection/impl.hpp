@@ -1,8 +1,9 @@
-// Internal: the state of a connection (connection::impl), shared by its
-// operations, and the helpers they share. Coroutine helpers are only
-// declared here: each is defined once, the core (impl's members, binds'
-// serialization, request_response) in core.cpp, the rest in the module of
-// the operations that use them (operations.cpp, password.cpp).
+// Internal: the core of a connection (connection::impl, its state private
+// behind the core operations the features use), and the helpers they
+// share. Coroutine helpers are only declared here: each is defined once,
+// the core (impl's members, binds' serialization, request_response) in
+// core.cpp, the rest in the module of the operations that use them
+// (operations.cpp, password.cpp).
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"
@@ -123,21 +124,240 @@ namespace detail {
 
 }// namespace detail
 
-struct connection::impl
+namespace detail {
+
+	class impl_ref;
+	struct bind_exchange;
+
+	// Waits until no other bind exchange is in progress (binds are
+	// serialized), then marks this one as in progress; bind_exchange ends it.
+	// A bind already given up on is not sent: a bind cannot be abandoned, so
+	// sending it would only close the connection. The stop is checked after
+	// the wait, right before the bind is sent: a stop that comes once
+	// bind_idle.set() has claimed the waiter, but before it resumes, does
+	// not cancel the wait.
+	boost::capy::task<result<void>> begin_bind(impl_ref c, std::string_view context);
+
+}// namespace detail
+
+// The multiplexing core. Its state is private: the operations reach it
+// through the members below, which keep its invariants (message ids, the
+// writer, the reader, the due answers, the bind and StartTLS exclusions).
+// begin_bind and bind_exchange (core.cpp) are its friends: they are the
+// bind serialization, a part of the core kept outside the class only
+// because begin_bind is a coroutine holding an impl_ref.
+class connection::impl
 {
+  public:
 	impl(boost::corosio::io_context &ioc,
 	  net::transport t,
 	  const connection_options &options,
-	  std::pmr::memory_resource *mr_);
+	  std::pmr::memory_resource *memory);
+
+	// ---------------------------------------------------------------- refs
+
+	// Inline: impl_ref copies call them from every module.
+	void add_ref() noexcept { ++refs; }
+	void release() noexcept
+	{
+		if (--refs != 0) return;
+		std::pmr::polymorphic_allocator<> alloc(mr_);
+		alloc.delete_object(this);
+	}
+
+	// ---------------------------------------------------------------- configuration
+
+	boost::corosio::io_context::executor_type executor() const noexcept { return ex; }
+	std::pmr::memory_resource *mr() const noexcept { return mr_; }
+	const net::transport &transport() const noexcept { return transport_; }
+	std::optional<std::chrono::milliseconds> default_timeout() const noexcept { return default_timeout_; }
+
+	// What the connection knows about the server: the modes set by the
+	// options, and the caches filled from the server's answers. The core
+	// never reads it: it is the operations' (schema checks, password
+	// changes), which fill its caches, hence the mutable accessor.
+	struct server_knowledge
+	{
+		// schema_check::on_first_use: the loaded schema and the types checked.
+		ldap::schema_check schema_mode = ldap::schema_check::off;
+		std::shared_ptr<const server_schema> schema{};
+		std::vector<std::type_index> schema_checked{};
+		// change_password / reset_password: the connection's default method, and
+		// the one the root DSE advertised (password_method::automatic), once read.
+		ldap::password_method password_mode = ldap::password_method::automatic;
+		std::optional<ldap::password_method> advertised_password_method{};
+
+		// Discards what was learnt from the server (the modes are kept).
+		void forget() noexcept
+		{
+			schema.reset();
+			schema_checked.clear();
+			advertised_password_method.reset();
+		}
+	};
+	server_knowledge &knowledge() noexcept { return knowledge_; }
+	const server_knowledge &knowledge() const noexcept { return knowledge_; }
+
+	// Tests only (detail::set_next_message_id): the id the next request gets,
+	// to reach maxInt without sending 2^31 requests.
+	void set_next_message_id(std::int32_t id) noexcept { next_id = id; }
+
+	// ---------------------------------------------------------------- state
+
+	bool is_open() const noexcept { return open; }
+
+	// Requests may still be sent: open, and no UnbindRequest queued.
+	bool accepts_requests() const noexcept { return open && !unbinding; }
+
+	// A bind or a StartTLS exchange is in progress: nothing else may be
+	// sent until it ends (RFC 4511 sections 4.2.1 and 4.14.1).
+	bool exchange_in_progress() const noexcept { return binding || upgrading; }
+
+	// Describes the open connection: false after close(), unbind() or a
+	// failure, even though the closed transport still holds its TLS layer.
+	// False during start_tls() too: the TLS layer is in place before its
+	// handshake runs.
+	bool is_tls() const noexcept { return open && !upgrading && transport_.is_tls(); }
+
+	// Requests still to be answered: those waited for, and `due` answers.
+	std::size_t outstanding() const noexcept;
+
+	// Answers still due to requests nothing waits for (send_unanswered).
+	std::size_t answers_due() const noexcept { return due_answers; }
+
+	// ---------------------------------------------------------------- failure
+
+	// Closes the transport and fails every outstanding operation with `e`
+	// (they add their own context). `remember`: later operations name it.
+	// `close_transport` false: the caller closes it (unbind, after the TLS
+	// shutdown). Never throws: destructors and the detached tasks call it.
+	void shut(error e, bool remember, bool close_transport = true) noexcept;
+
+	// An allocation failed where no exception may go: in a destructor (an
+	// AbandonRequest, the requests a bind held) or a detached task (the
+	// writer, the reader, the due watcher). What was to be sent or read is
+	// lost, so the connection cannot go on: it is closed, and its
+	// operations fail with not_enough_memory instead of waiting for what
+	// never comes.
+	void shut_out_of_memory() noexcept;
+
+	error not_connected(std::string_view context) const;
+
+	// connection::close(): shuts the connection ("connection closed") and
+	// closes the transport, which also ends a TLS shutdown unbind() waits for.
+	void close() noexcept;
+
+	// ---------------------------------------------------------------- requests
+
+	// Gives `m` the next free message id, encodes it and queues it for the
+	// writer. If `p` is given it is registered under that id first (its
+	// response may arrive before the write completes). If encoding fails
+	// nothing is sent and the id is not used up. On a throw (bad_alloc)
+	// nothing is queued and `p` is not registered (the id is used up).
+	result<void> submit(message &m, detail::pending_op *p, std::string_view context);
+
+	// Stops waiting for `p`'s responses and tells the server (best effort).
+	// Called from destructors: if the AbandonRequest cannot be built or
+	// queued, the connection is closed (a late response would then match
+	// no request).
+	void abandon(detail::pending_op &p) noexcept;
+
+	// Sends `m` without waiting for an answer: its responses are dropped like
+	// late responses to an abandoned request. `m` must be a request that is
+	// always answered: the answer is counted as `due` until it arrives or
+	// `deadline` passes, and a reader is started to read it. Best effort:
+	// nothing is sent if the connection is closed or cannot send `m` now.
+	// Never suspends.
+	void send_unanswered(message &m,
+	  bool search,
+	  std::optional<detail::clock::time_point> deadline,
+	  std::string_view context);
+
+	// The next response for `p`, waiting until `deadline` at most. On
+	// cancellation or timeout `p` is abandoned. Errors carry `context`.
+	boost::capy::task<result<message>>
+	  next_response(detail::pending_op &p, std::optional<detail::clock::time_point> deadline, std::string_view context);
+
+	// search_stream / paged_search constructors are private.
+	static ldap::search_stream make_stream(search_stream::state *s) noexcept;
+	static ldap::paged_search make_paged(paged_search::state *s) noexcept;
+
+	// ---------------------------------------------------------------- StartTLS
+
+	// StartTLS may only be sent once every response is received (RFC 4513
+	// section 3.1.1): fails (with `context`) if requests may not be sent,
+	// during an earlier StartTLS or a bind, or while requests are waited
+	// for. The answers due are the caller's to wait for (wait_due_answers).
+	result<void> check_start_tls(std::string_view context) const;
+
+	// What wait_due_answers() ended with: no error (woken, or timed out with
+	// nothing left: check again), or the error and the answers it leaves.
+	struct due_wait
+	{
+		std::error_code ec{};
+		std::size_t left = 0;
+	};
+
+	// StartTLS's wait for the answers due (answers_due() != 0), until
+	// `deadline` at most: starts the reader and the due watcher if they are
+	// not running, waits for due_idle, and on a timeout expires the answers
+	// past their own deadline. `left` is the count waited for, or after a
+	// timeout the count still due. A throw (bad_alloc) is the caller's.
+	boost::capy::task<due_wait> wait_due_answers(std::optional<detail::clock::time_point> deadline);
+
+	// StartTLS's ExtendedRequest is sent: while this lives, no other request
+	// may be sent (RFC 4511 section 4.14.1), and is_tls() is false (the TLS
+	// layer is set before the handshake).
+	class upgrade_scope
+	{
+	  public:
+		explicit upgrade_scope(impl &c) noexcept : c_(c) { c_.upgrading = true; }
+		upgrade_scope(const upgrade_scope &) = delete;
+		upgrade_scope &operator=(const upgrade_scope &) = delete;
+		~upgrade_scope() { c_.upgrading = false; }
+
+	  private:
+		impl &c_;
+	};
+
+	// Waits until the writer, then the reader, is idle. Not cancellable (it
+	// runs under an empty stop token): the writer and the reader stop
+	// promptly on their own, and a PDU is written whole.
+	boost::capy::task<void> wait_io_idle();
+
+	// The TLS handshake over the transport, once the reader and writer are
+	// idle (wait_io_idle): net::start_tls, with the bytes already read.
+	boost::capy::task<result<void>> tls_handshake(net::tls_options options,
+	  std::optional<std::chrono::milliseconds> timeout);
+
+	// ---------------------------------------------------------------- unbind
+
+	// Sends the UnbindRequest: every outstanding operation is abandoned with
+	// the session (RFC 4511 section 4.3), and the answers due are no longer
+	// waited for. Once it is queued nothing may follow it: an operation,
+	// StartTLS or unbind() started while the writer finishes fails with
+	// not_connected. On failure nothing is queued.
+	result<void> send_unbind(std::string_view context);
+
+	// After send_unbind(): waits for the writer (even if cancelled: closing
+	// first would cut the UnbindRequest off), shuts the connection, sends
+	// the TLS close_notify (best effort, within tls_shutdown_timeout) and
+	// closes the transport. Gives the failure that closed the connection
+	// before the UnbindRequest was written, if any.
+	boost::capy::task<std::optional<error>> finish_unbind();
+
+  private:
+	friend boost::capy::task<result<void>> detail::begin_bind(detail::impl_ref c, std::string_view context);
+	friend struct detail::bind_exchange;
 
 	boost::corosio::io_context::executor_type ex;
-	std::pmr::memory_resource *mr;
+	std::pmr::memory_resource *mr_;
 	std::size_t refs = 1;
-	net::transport transport;
+	net::transport transport_;
 	net::read_buffer buf;
 	std::size_t max_message_size;
 	std::size_t max_elements;
-	std::optional<std::chrono::milliseconds> default_timeout;
+	std::optional<std::chrono::milliseconds> default_timeout_;
 	std::optional<std::chrono::milliseconds> tls_shutdown_timeout;
 	std::int32_t next_id = 1;
 	bool wrapped = false;// next_id went past maxInt: ids may be in use
@@ -188,44 +408,13 @@ struct connection::impl
 	bool reading = false;
 	std::stop_source reader_stop{};
 	boost::capy::async_event reader_idle{};// set while the reader is not running
-	// StartTLS in progress: no other request may be sent (RFC 4511 4.14.1),
-	// and is_tls() is false (the TLS layer is set before the handshake).
+	// StartTLS in progress (upgrade_scope): no other request may be sent
+	// (RFC 4511 4.14.1), and is_tls() is false (the TLS layer is set before
+	// the handshake).
 	bool upgrading = false;
-	// What the connection knows about the server: the modes set by the
-	// options, and the caches filled from the server's answers.
-	struct server_knowledge
-	{
-		// schema_check::on_first_use: the loaded schema and the types checked.
-		ldap::schema_check schema_mode = ldap::schema_check::off;
-		std::shared_ptr<const server_schema> schema{};
-		std::vector<std::type_index> schema_checked{};
-		// change_password / reset_password: the connection's default method, and
-		// the one the root DSE advertised (password_method::automatic), once read.
-		ldap::password_method password_mode = ldap::password_method::automatic;
-		std::optional<ldap::password_method> advertised_password_method{};
-
-		// Discards what was learnt from the server (the modes are kept).
-		void forget() noexcept
-		{
-			schema.reset();
-			schema_checked.clear();
-			advertised_password_method.reset();
-		}
-	};
-	server_knowledge knowledge{};
+	server_knowledge knowledge_{};
 	// Unsolicited notifications are decoded here, then released.
 	std::pmr::monotonic_buffer_resource scratch;
-
-	// ---------------------------------------------------------------- refs
-
-	// Inline: impl_ref copies call them from every module.
-	void add_ref() noexcept { ++refs; }
-	void release() noexcept
-	{
-		if (--refs != 0) return;
-		std::pmr::polymorphic_allocator<> alloc(mr);
-		alloc.delete_object(this);
-	}
 
 	// Held by the writer and reader frames, so the state is released even
 	// if a frame is destroyed without finishing (io_context destroyed).
@@ -247,22 +436,6 @@ struct connection::impl
 	// not_enough_memory without a context, so building and copying it
 	// allocates nothing; operations add their own.
 	static error out_of_memory() noexcept;
-
-	// Closes the transport and fails every outstanding operation with `e`
-	// (they add their own context). `remember`: later operations name it.
-	// `close_transport` false: the caller closes it (unbind, after the TLS
-	// shutdown). Never throws: destructors and the detached tasks call it.
-	void shut(error e, bool remember, bool close_transport = true) noexcept;
-
-	// An allocation failed where no exception may go: in a destructor (an
-	// AbandonRequest, the requests a bind held) or a detached task (the
-	// writer, the reader, the due watcher). What was to be sent or read is
-	// lost, so the connection cannot go on: it is closed, and its
-	// operations fail with not_enough_memory instead of waiting for what
-	// never comes.
-	void shut_out_of_memory() noexcept;
-
-	error not_connected(std::string_view context) const;
 
 	// ---------------------------------------------------------------- tasks
 
@@ -301,34 +474,10 @@ struct connection::impl
 	// recently abandoned requests are skipped.
 	std::int32_t free_id() const;
 
-	// Gives `m` the next free message id, encodes it and queues it for the
-	// writer. If `p` is given it is registered under that id first (its
-	// response may arrive before the write completes). If encoding fails
-	// nothing is sent and the id is not used up. On a throw (bad_alloc)
-	// nothing is queued and `p` is not registered (the id is used up).
-	result<void> submit(message &m, detail::pending_op *p, std::string_view context);
-
 	// The bind exchange ended: sends the requests it held, in order. Called
 	// from a destructor: if one cannot be queued, the connection is closed
 	// (the held requests fail with not_enough_memory).
 	void release_held() noexcept;
-
-	// Stops waiting for `p`'s responses and tells the server (best effort).
-	// Called from destructors: if the AbandonRequest cannot be built or
-	// queued, the connection is closed (a late response would then match
-	// no request).
-	void abandon(detail::pending_op &p) noexcept;
-
-	// Sends `m` without waiting for an answer: its responses are dropped like
-	// late responses to an abandoned request. `m` must be a request that is
-	// always answered: the answer is counted as `due` until it arrives or
-	// `deadline` passes, and a reader is started to read it. Best effort:
-	// nothing is sent if the connection is closed or cannot send `m` now.
-	// Never suspends.
-	void send_unanswered(message &m,
-	  bool search,
-	  std::optional<detail::clock::time_point> deadline,
-	  std::string_view context);
 
 	// Forgets an abandoned request: a later response for it is unexpected.
 	void forget_abandoned(std::pmr::deque<abandoned_req>::iterator a);
@@ -367,49 +516,20 @@ struct connection::impl
 	// those failing ends the program (a known limitation, see new_task).
 	static boost::capy::task<void> due_watcher(impl *self);
 
-	// Requests still to be answered: those waited for, and `due` answers.
-	std::size_t outstanding() const noexcept;
-
 	// Requests waited for (registered operations), without the due answers.
 	std::size_t requests_waiting() const noexcept { return pending.size(); }
 
-	// Answers still due to requests nothing waits for (send_unanswered).
-	std::size_t answers_due() const noexcept { return due_answers; }
-
-	// What wait_due_answers() ended with: no error (woken, or timed out with
-	// nothing left: check again), or the error and the answers it leaves.
-	struct due_wait
-	{
-		std::error_code ec{};
-		std::size_t left = 0;
-	};
-
-	// StartTLS's wait for the answers due (answers_due() != 0), until
-	// `deadline` at most: starts the reader and the due watcher if they are
-	// not running, waits for due_idle, and on a timeout expires the answers
-	// past their own deadline. `left` is the count waited for, or after a
-	// timeout the count still due. A throw (bad_alloc) is the caller's.
-	boost::capy::task<due_wait> wait_due_answers(std::optional<detail::clock::time_point> deadline);
-
-	// Describes the open connection: false after close(), unbind() or a
-	// failure, even though the closed transport still holds its TLS layer.
-	// False during start_tls() too: the TLS layer is in place before its
-	// handshake runs.
-	bool is_tls() const noexcept { return open && !upgrading && transport.is_tls(); }
-
 	// ---------------------------------------------------------------- unbind
 
-	// unbind(): every outstanding operation is abandoned with the session
-	// (RFC 4511 section 4.3), and the answers due are no longer waited for,
-	// without closing the connection (the UnbindRequest is still to be sent).
+	// send_unbind(): every outstanding operation is abandoned with the
+	// session (RFC 4511 section 4.3), and the answers due are no longer
+	// waited for, without closing the connection (the UnbindRequest is still
+	// to be sent).
 	void abandon_all_for_unbind();
 
 	// ---------------------------------------------------------------- idle
 
-	// Waits until the writer, then the reader, is idle; and each alone. Not
-	// cancellable (they run under an empty stop token): the writer and the
-	// reader stop promptly on their own, and a PDU is written whole.
-	boost::capy::task<void> wait_io_idle();
+	// Waits until the writer, or the reader, is idle (see wait_io_idle).
 	boost::capy::task<void> wait_write_idle();
 	boost::capy::task<void> wait_reader_idle();
 
@@ -428,17 +548,6 @@ struct connection::impl
 
 	// An unsolicited notification (message id 0, RFC 4511 section 4.4).
 	void notification(std::span<const std::byte> bytes);
-
-	// search_stream / paged_search constructors are private.
-	static ldap::search_stream make_stream(search_stream::state *s) noexcept;
-	static ldap::paged_search make_paged(paged_search::state *s) noexcept;
-
-	// ---------------------------------------------------------------- waiting
-
-	// The next response for `p`, waiting until `deadline` at most. On
-	// cancellation or timeout `p` is abandoned. Errors carry `context`.
-	boost::capy::task<result<message>>
-	  next_response(detail::pending_op &p, std::optional<detail::clock::time_point> deadline, std::string_view context);
 };
 
 namespace detail {
@@ -470,15 +579,6 @@ namespace detail {
 	  private:
 		connection::impl *p_ = nullptr;
 	};
-
-	// Waits until no other bind exchange is in progress (binds are
-	// serialized), then marks this one as in progress; bind_exchange ends it.
-	// A bind already given up on is not sent: a bind cannot be abandoned, so
-	// sending it would only close the connection. The stop is checked after
-	// the wait, right before the bind is sent: a stop that comes once
-	// bind_idle.set() has claimed the waiter, but before it resumes, does
-	// not cancel the wait.
-	boost::capy::task<result<void>> begin_bind(impl_ref c, std::string_view context);
 
 	// Ends the bind exchange begun by begin_bind() and sends the requests
 	// it held.

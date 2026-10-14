@@ -1,5 +1,6 @@
 #include "jhetz/ldap/connection.hpp"
 
+#include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 
 #include "../format_util.hpp"
@@ -60,14 +61,14 @@ namespace {
 connection::impl::impl(corosio::io_context &ioc,
   net::transport t,
   const connection_options &options,
-  std::pmr::memory_resource *mr_)
-  : ex(ioc.get_executor()), mr(mr_), transport(std::move(t)), buf(mr_), max_message_size(options.max_message_size),
-	max_elements(options.max_elements), default_timeout(options.operation_timeout),
-	tls_shutdown_timeout(options.tls_shutdown_timeout), pending(mr_), abandoned(mr_), outbox(mr_), held(mr_),
-	scratch(mr_)
+  std::pmr::memory_resource *memory)
+  : ex(ioc.get_executor()), mr_(memory), transport_(std::move(t)), buf(memory),
+	max_message_size(options.max_message_size), max_elements(options.max_elements),
+	default_timeout_(options.operation_timeout), tls_shutdown_timeout(options.tls_shutdown_timeout), pending(memory),
+	abandoned(memory), outbox(memory), held(memory), scratch(memory)
 {
-	knowledge.schema_mode = options.schema_check;
-	knowledge.password_mode = options.password_method;
+	knowledge_.schema_mode = options.schema_check;
+	knowledge_.password_mode = options.password_method;
 	write_idle.set();
 	reader_idle.set();
 	bind_idle.set();
@@ -97,7 +98,7 @@ void connection::impl::shut(error e, bool remember, bool close_transport) noexce
 	if (!open) return;
 	open = false;
 	if (remember) failure = copy_error(e);
-	if (close_transport) transport.close();
+	if (close_transport) transport_.close();
 	outbox.clear();
 	held.clear();
 	abandoned.clear();
@@ -131,6 +132,20 @@ error connection::impl::not_connected(std::string_view context) const
 	return make_error(client_errc::not_connected, text);
 }
 
+void connection::impl::close() noexcept
+{
+	// Without memory for the error's text, operations fail with
+	// not_enough_memory instead.
+	error closed;
+	try {
+		closed = make_error(client_errc::not_connected, "connection closed");
+	} catch (const std::bad_alloc &) {
+		closed = out_of_memory();
+	}
+	shut(std::move(closed), false);
+	transport_.close();// also ends a TLS shutdown that unbind() is waiting for
+}
+
 // ---------------------------------------------------------------- tasks
 
 capy::task<void> connection::impl::new_task(capy::task<void> (*body)(impl *))
@@ -159,7 +174,7 @@ capy::task<void> connection::impl::writer(impl *self)
 		while (self->open && !self->outbox.empty()) {
 			auto bytes = std::move(self->outbox.front());
 			self->outbox.pop_front();
-			auto w = co_await net::write_bytes(self->transport, bytes);
+			auto w = co_await net::write_bytes(self->transport_, bytes);
 			if (!w) self->shut(std::move(w.error()), true);
 		}
 	} catch (const std::bad_alloc &) {
@@ -202,7 +217,7 @@ result<void> connection::impl::submit(message &m, pending_op *p, std::string_vie
 	if (upgrading && !std::holds_alternative<abandon_request>(m.op))
 		return fail(client_errc::operation_in_progress, std::string(context) + " during StartTLS");
 	m.id = free_id();
-	auto bytes = encode(m, mr);
+	auto bytes = encode(m, mr_);
 	if (!bytes) return std::unexpected(detail::with_context(std::move(bytes.error()), context));
 	if (m.id == max_int) wrapped = true;
 	next_id = m.id == max_int ? 1 : m.id + 1;
@@ -426,6 +441,26 @@ capy::task<connection::impl::due_wait> connection::impl::wait_due_answers(std::o
 	co_return due_wait{ ec, left };
 }
 
+// ---------------------------------------------------------------- StartTLS
+
+result<void> connection::impl::check_start_tls(std::string_view context) const
+{
+	if (!accepts_requests()) return std::unexpected(not_connected(context));
+	if (upgrading)
+		return fail(client_errc::operation_in_progress, std::string(context) + " during an earlier StartTLS");
+	if (binding) return fail(client_errc::operation_in_progress, std::string(context) + " during a bind");
+	if (const std::size_t n = requests_waiting(); n != 0)
+		return fail(client_errc::operation_in_progress,
+		  detail::format("{} with {} {} outstanding", context, n, n == 1 ? "request" : "requests"));
+	return {};
+}
+
+capy::task<result<void>> connection::impl::tls_handshake(net::tls_options options,
+  std::optional<std::chrono::milliseconds> timeout)
+{
+	return net::start_tls(transport_, buf, std::move(options), timeout);
+}
+
 // ---------------------------------------------------------------- unbind
 
 void connection::impl::abandon_all_for_unbind()
@@ -445,6 +480,31 @@ void connection::impl::abandon_all_for_unbind()
 	due_answers = 0;
 	due_changed.set();// the due watcher ends
 	stop_reader_if_idle();
+}
+
+result<void> connection::impl::send_unbind(std::string_view context)
+{
+	abandon_all_for_unbind();
+	message request{ 0, unbind_request{} };
+	if (auto r = submit(request, nullptr, context); !r) return r;
+	unbinding = true;
+	return {};
+}
+
+capy::task<std::optional<error>> connection::impl::finish_unbind()
+{
+	co_await wait_write_idle();
+	std::optional<error> failed = failure;
+	shut(make_error(client_errc::not_connected, "connection closed"), false, false);
+	// TLS: close_notify, after the reader has stopped (it would otherwise
+	// read the peer's close_notify itself). Best effort and bounded: the
+	// unbind is complete whatever the peer does.
+	if (!failed && transport_.is_tls() && transport_.is_open()) {
+		co_await wait_reader_idle();
+		(void)co_await transport_.shutdown(tls_shutdown_timeout);
+	}
+	transport_.close();
+	co_return failed;
 }
 
 // ---------------------------------------------------------------- idle
@@ -493,7 +553,7 @@ capy::task<void> connection::impl::reader(impl *self)
 	const frame_ref ref(self);
 	try {
 		while (self->open && self->outstanding() != 0) {
-			auto size = co_await net::read_frame(self->transport, self->buf, self->max_message_size);
+			auto size = co_await net::read_frame(self->transport_, self->buf, self->max_message_size);
 			if (!size) {
 				// Stopped because nothing is outstanding (bytes already
 				// received stay in buf), or a real failure.
@@ -520,7 +580,7 @@ capy::task<void> connection::impl::reader(impl *self)
 
 error connection::impl::unexpected(std::string text)
 {
-	return make_error(client_errc::unexpected_response, detail::format("read {}: {}", transport.name(), text));
+	return make_error(client_errc::unexpected_response, detail::format("read {}: {}", transport_.name(), text));
 }
 
 void connection::impl::route(std::size_t size)
@@ -529,7 +589,7 @@ void connection::impl::route(std::size_t size)
 	auto h = peek_message_header(bytes);
 	if (!h) {
 		buf.consume(size);
-		shut(detail::with_context(std::move(h.error()), detail::format("read {}", transport.name())), true);
+		shut(detail::with_context(std::move(h.error()), detail::format("read {}", transport_.name())), true);
 		return;
 	}
 	if (h->id == 0) {
@@ -546,7 +606,7 @@ void connection::impl::route(std::size_t size)
 		auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = p.mr });
 		buf.consume(size);
 		if (!m) {
-			shut(detail::with_context(std::move(m.error()), detail::format("read {}", transport.name())), true);
+			shut(detail::with_context(std::move(m.error()), detail::format("read {}", transport_.name())), true);
 			return;
 		}
 		const std::size_t index = m->op.index();
@@ -589,7 +649,7 @@ void connection::impl::notification(std::span<const std::byte> bytes)
 	{
 		auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = &scratch });
 		if (!m) {
-			fatal = detail::with_context(std::move(m.error()), detail::format("read {}", transport.name()));
+			fatal = detail::with_context(std::move(m.error()), detail::format("read {}", transport_.name()));
 		} else if (const auto *x = std::get_if<extended_response>(&m->op); x == nullptr) {
 			fatal = unexpected(std::string(op_name(m->op)) + " with message id 0");
 		} else if (x->response_name && *x->response_name == notice_of_disconnection_oid) {
@@ -680,10 +740,10 @@ namespace detail {
 		if (!std::holds_alternative<bind_request>(request.op)
 			&& (co_await capy::this_coro::stop_token).stop_requested())
 			co_return fail(capy::error::canceled, context);
-		pending_op p(self->mr, false, expect);
+		pending_op p(self->mr(), false, expect);
 		if (auto r = self->submit(request, &p, context); !r) co_return std::unexpected(std::move(r.error()));
 		registration reg(*self, p);
-		co_return co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout), context);
+		co_return co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout()), context);
 	}
 
 }// namespace detail

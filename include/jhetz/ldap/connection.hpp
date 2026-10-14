@@ -665,7 +665,7 @@ class connection
 	// operations complete with not_connected. Idempotent.
 	void close() noexcept;
 
-	struct impl;// defined in src/connection/impl.hpp
+	class impl;// defined in src/connection/impl.hpp
 
   private:
 	friend class ldap::search_stream;
@@ -729,7 +729,7 @@ class search_stream
 
   private:
 	friend class connection;
-	friend struct connection::impl;
+	friend class connection::impl;
 	friend class paged_search;
 
 	explicit search_stream(state *s) noexcept : state_(s) {}
@@ -788,7 +788,7 @@ class paged_search
 
   private:
 	friend class connection;
-	friend struct connection::impl;
+	friend class connection::impl;
 
 	explicit paged_search(state *s) noexcept : state_(s) {}
 

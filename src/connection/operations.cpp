@@ -103,11 +103,11 @@ capy::task<result<response>> connection::add(add_params p)
 	std::string context = op_context("add", p.entry);
 	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	impl_ref self(impl_);
-	const std::pmr::polymorphic_allocator<> alloc(self->mr);
+	const std::pmr::polymorphic_allocator<> alloc(self->mr());
 	add_request op(alloc);
-	op.entry = p.entry.to_string(self->mr);
+	op.entry = p.entry.to_string(self->mr());
 	op.attributes.assign(p.attributes.begin(), p.attributes.end());
-	auto request = with_controls(std::move(op), p.controls, self->mr, context);
+	auto request = with_controls(std::move(op), p.controls, self->mr(), context);
 	if (!request) co_return std::unexpected(std::move(request.error()));
 	co_return to_response(
 	  co_await request_response(self, std::move(*request), op_index<add_response>, context, p.timeout), context);
@@ -117,11 +117,11 @@ namespace detail {
 
 	capy::task<result<response>> modify_impl(impl_ref self, modify_params p, std::string context)
 	{
-		const std::pmr::polymorphic_allocator<> alloc(self->mr);
+		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		modify_request op(alloc);
-		op.object = p.object.to_string(self->mr);
+		op.object = p.object.to_string(self->mr());
 		op.changes.assign(p.changes.begin(), p.changes.end());
-		auto request = with_controls(std::move(op), p.controls, self->mr, context);
+		auto request = with_controls(std::move(op), p.controls, self->mr(), context);
 		if (!request) co_return std::unexpected(std::move(request.error()));
 		co_return to_response(
 		  co_await request_response(self, std::move(*request), op_index<modify_response>, context, p.timeout), context);
@@ -143,10 +143,11 @@ capy::task<result<response>> connection::del(del_params p)
 	std::string context = op_context("delete", p.entry);
 	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	impl_ref self(impl_);
-	auto request = with_controls(del_request(p.entry.to_string(self->mr), std::pmr::polymorphic_allocator<>(self->mr)),
-	  p.controls,
-	  self->mr,
-	  context);
+	auto request =
+	  with_controls(del_request(p.entry.to_string(self->mr()), std::pmr::polymorphic_allocator<>(self->mr())),
+		p.controls,
+		self->mr(),
+		context);
 	if (!request) co_return std::unexpected(std::move(request.error()));
 	co_return to_response(
 	  co_await request_response(self, std::move(*request), op_index<del_response>, context, p.timeout), context);
@@ -158,13 +159,13 @@ capy::task<result<response>> connection::modify_dn(modify_dn_params p)
 	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	if (p.new_rdn.avas.empty()) co_return fail(client_errc::invalid_dn, context + ": empty new RDN");
 	impl_ref self(impl_);
-	const std::pmr::polymorphic_allocator<> alloc(self->mr);
+	const std::pmr::polymorphic_allocator<> alloc(self->mr());
 	modify_dn_request op(alloc);
-	op.entry = p.entry.to_string(self->mr);
-	op.new_rdn = dn{}.child(p.new_rdn).to_string(self->mr);// an RDN prints as a one-RDN DN
+	op.entry = p.entry.to_string(self->mr());
+	op.new_rdn = dn{}.child(p.new_rdn).to_string(self->mr());// an RDN prints as a one-RDN DN
 	op.delete_old_rdn = p.delete_old_rdn;
-	if (p.new_superior) op.new_superior = p.new_superior->to_string(self->mr);
-	auto request = with_controls(std::move(op), p.controls, self->mr, context);
+	if (p.new_superior) op.new_superior = p.new_superior->to_string(self->mr());
+	auto request = with_controls(std::move(op), p.controls, self->mr(), context);
 	if (!request) co_return std::unexpected(std::move(request.error()));
 	co_return to_response(
 	  co_await request_response(self, std::move(*request), op_index<modify_dn_response>, context, p.timeout), context);
@@ -175,11 +176,11 @@ capy::task<result<bool>> connection::compare(compare_params p)
 	std::string context = op_context("compare", p.entry);
 	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	impl_ref self(impl_);
-	const std::pmr::polymorphic_allocator<> alloc(self->mr);
+	const std::pmr::polymorphic_allocator<> alloc(self->mr());
 	auto request = with_controls(
-	  compare_request(p.entry.to_string(self->mr), attribute_value_assertion(p.attribute, p.value, alloc), alloc),
+	  compare_request(p.entry.to_string(self->mr()), attribute_value_assertion(p.attribute, p.value, alloc), alloc),
 	  p.controls,
-	  self->mr,
+	  self->mr(),
 	  context);
 	if (!request) co_return std::unexpected(std::move(request.error()));
 	auto m = co_await request_response(self, std::move(*request), op_index<compare_response>, context, p.timeout);
@@ -195,10 +196,10 @@ namespace detail {
 	capy::task<result<extended_result>> extended_impl(impl_ref self, extended_params p)
 	{
 		std::string context = "extended operation " + p.name;
-		const std::pmr::polymorphic_allocator<> alloc(self->mr);
+		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		std::optional<std::string_view> value;
 		if (p.value) value = *p.value;
-		auto request = with_controls(extended_request(p.name, value, alloc), p.controls, self->mr, context);
+		auto request = with_controls(extended_request(p.name, value, alloc), p.controls, self->mr(), context);
 		if (!request) co_return std::unexpected(std::move(request.error()));
 		auto m = co_await request_response(self, std::move(*request), op_index<extended_response>, context, p.timeout);
 		if (!m) co_return std::unexpected(std::move(m.error()));

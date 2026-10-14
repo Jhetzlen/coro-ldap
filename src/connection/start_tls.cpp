@@ -9,7 +9,6 @@
 #include <boost/capy/ex/this_coro.hpp>
 
 #include <chrono>
-#include <cstddef>
 #include <new>
 #include <optional>
 #include <string>
@@ -43,17 +42,11 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	// again after the wait: an operation started meanwhile is refused as
 	// if start_tls had been called then, and so is an unbind() (which
 	// zeroes the answers due without waking this wait until it closes).
-	const auto wait_deadline = deadline_after(timeout ? timeout : self->default_timeout);
+	const auto wait_deadline = deadline_after(timeout ? timeout : self->default_timeout());
 	while (true) {
-		if (!self->open || self->unbinding) co_return std::unexpected(self->not_connected(context));
-		if (self->upgrading)
-			co_return fail(client_errc::operation_in_progress, context + " during an earlier StartTLS");
-		if (self->binding) co_return fail(client_errc::operation_in_progress, context + " during a bind");
-		if (const std::size_t n = self->requests_waiting(); n != 0)
-			co_return fail(client_errc::operation_in_progress,
-			  detail::format("{} with {} {} outstanding", context, n, n == 1 ? "request" : "requests"));
+		if (auto r = self->check_start_tls(context); !r) co_return r;
 		// Checked before the wait too, so misuse fails at once.
-		if (self->transport.type() != net::transport::kind::tcp || self->transport.is_tls())
+		if (self->transport().type() != net::transport::kind::tcp || self->transport().is_tls())
 			co_return fail(std::make_error_code(std::errc::invalid_argument),
 			  context + ": needs a plain TCP connection (not ldaps://, ldapi:// or a custom stream)");
 		if (self->answers_due() == 0) break;
@@ -74,19 +67,14 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	// closing the connection.
 	if ((co_await capy::this_coro::stop_token).stop_requested()) co_return fail(capy::error::canceled, context);
 	message request{ 0, extended_request(start_tls_oid) };
-	pending_op p(self->mr, false, op_index<extended_response>);
+	pending_op p(self->mr(), false, op_index<extended_response>);
 	if (auto r = self->submit(request, &p, context); !r) co_return r;
-	self->upgrading = true;
-	struct clear_upgrading
-	{
-		connection::impl &c;
-		~clear_upgrading() { c.upgrading = false; }
-	} clear{ *self };
+	const connection::impl::upgrade_scope upgrade(*self);
 	{
 		registration reg(*self, p);
 		// A budget of its own: the wait may have used most of the first one,
 		// and giving up on StartTLS closes the connection.
-		auto m = co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout), context);
+		auto m = co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout()), context);
 		if (!m) co_return std::unexpected(std::move(m.error()));
 		const auto &x = std::get<extended_response>(m->op);
 		if (!x.result.is_success()) co_return std::unexpected(x.result.to_error(context));// still usable, in clear
@@ -103,8 +91,8 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 		// The reader and writer must be idle: the handshake reads and writes
 		// the socket itself. Not cancellable: they stop promptly on their own.
 		co_await self->wait_io_idle();
-		if (!self->open) co_return std::unexpected(self->not_connected(context));
-		r = co_await net::start_tls(self->transport, self->buf, std::move(options), timeout);
+		if (!self->is_open()) co_return std::unexpected(self->not_connected(context));
+		r = co_await self->tls_handshake(std::move(options), timeout);
 	} catch (const std::bad_alloc &) {
 		self->shut_out_of_memory();
 		throw;
@@ -119,7 +107,7 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	}
 	// Closed meanwhile (unbind(), close()): the handshake failed because of
 	// that, or ended over a closed transport; say so, as for the steps above.
-	if (!self->open) co_return std::unexpected(self->not_connected(context));
+	if (!self->is_open()) co_return std::unexpected(self->not_connected(context));
 	if (!r) {
 		// Injected bytes or a failed handshake: the stream cannot be trusted.
 		error e = std::move(r.error());
@@ -128,7 +116,7 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	}
 	// RFC 4513 section 3.1.5: what was learnt about the server in clear
 	// (possibly from an attacker) is discarded; the schema is read again.
-	self->knowledge.forget();
+	self->knowledge().forget();
 	co_return result<void>{};
 }
 

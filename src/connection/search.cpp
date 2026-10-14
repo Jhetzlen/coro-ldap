@@ -30,7 +30,7 @@ namespace {
 
 	search_stream::state *new_state(connection::impl &c, std::pmr::memory_resource *entries, std::string context)
 	{
-		std::pmr::polymorphic_allocator<> alloc(c.mr);
+		std::pmr::polymorphic_allocator<> alloc(c.mr());
 		return alloc.new_object<search_stream::state>(&c, entries, std::move(context));
 	}
 
@@ -39,7 +39,7 @@ namespace {
 		if (s == nullptr) return;
 		s->conn->abandon(s->op);
 		impl_ref keep = s->conn;// the state lives on the connection's resource
-		std::pmr::polymorphic_allocator<> alloc(keep->mr);
+		std::pmr::polymorphic_allocator<> alloc(keep->mr());
 		alloc.delete_object(s);
 	}
 
@@ -54,9 +54,9 @@ namespace detail {
 			return fail(client_errc::encode_error,
 			  detail::format("{}: time_limit of {} s is outside 0 .. 2^31-1", context, seconds));
 
-		const std::pmr::polymorphic_allocator<> alloc(c.mr);
+		const std::pmr::polymorphic_allocator<> alloc(c.mr());
 		search_request wire(alloc);
-		wire.base_object = p.base.to_string(c.mr);
+		wire.base_object = p.base.to_string(c.mr());
 		wire.scope = p.scope;
 		wire.deref = p.deref;
 		wire.size_limit = p.size_limit;
@@ -64,7 +64,7 @@ namespace detail {
 		wire.types_only = p.types_only;
 		wire.filter = p.filter;
 		wire.attributes.assign(p.attributes.begin(), p.attributes.end());
-		return with_controls(std::move(wire), p.controls, c.mr, context);
+		return with_controls(std::move(wire), p.controls, c.mr(), context);
 	}
 
 	result<ldap::search_stream>
@@ -77,7 +77,7 @@ namespace detail {
 
 		auto *state = new_state(c, mr, context);
 		ldap::search_stream s = connection::impl::make_stream(state);
-		state->deadline = deadline_after(p.timeout ? p.timeout : c.default_timeout);
+		state->deadline = deadline_after(p.timeout ? p.timeout : c.default_timeout());
 		if (auto r = c.submit(*request, &state->op, context); !r) return std::unexpected(std::move(r.error()));
 		return s;
 	}

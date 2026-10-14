@@ -100,12 +100,12 @@ struct paged_search::state
 		finished = true;
 		cookie.clear();
 		try {
-			if (last.empty() || !conn->open) return;
+			if (last.empty() || !conn->is_open()) return;
 			set_page_control(0, std::move(last));
 			const std::string context = op_context("search", params.base) + " (paged results release)";
 			auto request = search_message(*conn, params, context);
 			// Its answer is waited for as long as a page would be.
-			const auto timeout = params.timeout ? params.timeout : conn->default_timeout;
+			const auto timeout = params.timeout ? params.timeout : conn->default_timeout();
 			if (request) conn->send_unanswered(*request, true, deadline_after(timeout), context);
 		} catch (...) {// out of memory: the release is best effort
 		}
@@ -119,7 +119,7 @@ capy::task<result<ldap::paged_search>>
 	if (page_size <= 0)
 		co_return fail(client_errc::encode_error,
 		  detail::format("{}: page size {} is not positive", op_context("search", p.base), page_size));
-	std::pmr::polymorphic_allocator<> alloc(impl_->mr);
+	std::pmr::polymorphic_allocator<> alloc(impl_->mr());
 	auto *st = alloc.new_object<paged_search::state>(
 	  paged_search::state{ impl_ref(impl_), std::move(p), page_size, mr, {}, 0, false, {}, {}, {}, {} });
 	ldap::paged_search out = connection::impl::make_paged(st);
@@ -135,7 +135,7 @@ namespace {
 		if (s == nullptr) return;
 		s->stop();
 		impl_ref keep = s->conn;
-		std::pmr::polymorphic_allocator<> alloc(keep->mr);
+		std::pmr::polymorphic_allocator<> alloc(keep->mr());
 		alloc.delete_object(s);
 	}
 

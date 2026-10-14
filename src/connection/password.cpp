@@ -212,7 +212,7 @@ namespace {
 	{
 		if (user.empty()) co_return fail(client_errc::invalid_dn, context + ": Active Directory needs the user's DN");
 		// A closed connection fails with not_connected below.
-		if (self->open && !self->is_tls())
+		if (self->is_open() && !self->is_tls())
 			co_return fail(client_errc::tls_required,
 			  context + ": Active Directory sets unicodePwd only over TLS (ldaps:// or start_tls())");
 		auto new_value = ad_password_value(new_password);
@@ -248,14 +248,14 @@ namespace {
 		if (old_password && old_password->empty())
 			co_return fail(std::make_error_code(std::errc::invalid_argument),
 			  context + ": empty old password (reset_password() sets one without it)");
-		ldap::password_method m = method.value_or(self->knowledge.password_mode);
+		ldap::password_method m = method.value_or(self->knowledge().password_mode);
 		if (m == ldap::password_method::automatic) {
-			if (!self->knowledge.advertised_password_method) {
+			if (!self->knowledge().advertised_password_method) {
 				auto found = co_await advertised_password_method(self, context);
 				if (!found) co_return std::unexpected(std::move(found.error()));
-				self->knowledge.advertised_password_method = *found;
+				self->knowledge().advertised_password_method = *found;
 			}
-			m = *self->knowledge.advertised_password_method;
+			m = *self->knowledge().advertised_password_method;
 		}
 		if (m == ldap::password_method::active_directory)
 			co_return co_await ad_set_password(std::move(self), user, old_password, new_password, context);

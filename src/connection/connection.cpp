@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
-#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -32,7 +31,7 @@ using detail::no_connection;
 
 // ---------------------------------------------------------------- connection
 
-void detail::set_next_message_id(connection &c, std::int32_t id) noexcept { c.impl_->next_id = id; }
+void detail::set_next_message_id(connection &c, std::int32_t id) noexcept { c.impl_->set_next_message_id(id); }
 
 connection::connection(corosio::io_context &ioc,
   net::transport t,
@@ -61,15 +60,15 @@ connection::~connection()
 	impl_->release();
 }
 
-bool connection::is_open() const noexcept { return impl_ != nullptr && impl_->open; }
+bool connection::is_open() const noexcept { return impl_ != nullptr && impl_->is_open(); }
 
 std::string_view connection::name() const noexcept
 {
 	if (impl_ == nullptr) return {};
-	return impl_->transport.name();
+	return impl_->transport().name();
 }
 
-connection::executor_type connection::executor() const noexcept { return impl_->ex; }
+connection::executor_type connection::executor() const noexcept { return impl_->executor(); }
 
 std::size_t connection::outstanding() const noexcept { return impl_ == nullptr ? 0 : impl_->outstanding(); }
 
@@ -77,17 +76,7 @@ bool connection::is_tls() const noexcept { return impl_ != nullptr && impl_->is_
 
 void connection::close() noexcept
 {
-	if (impl_ == nullptr) return;
-	// Without memory for the error's text, operations fail with
-	// not_enough_memory instead.
-	error closed;
-	try {
-		closed = make_error(client_errc::not_connected, "connection closed");
-	} catch (const std::bad_alloc &) {
-		closed = impl::out_of_memory();
-	}
-	impl_->shut(std::move(closed), false);
-	impl_->transport.close();// also ends a TLS shutdown that unbind() is waiting for
+	if (impl_ != nullptr) impl_->close();
 }
 
 capy::task<result<void>> connection::unbind()
@@ -95,39 +84,22 @@ capy::task<result<void>> connection::unbind()
 	const std::string context = "unbind";
 	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	const impl_ref self(impl_);
-	if (!self->open || self->unbinding) co_return std::unexpected(self->not_connected(context));
+	if (!self->accepts_requests()) co_return std::unexpected(self->not_connected(context));
 	// Nothing may be sent while a BindRequest is outstanding (RFC 4511
 	// section 4.2.1), or during StartTLS until its response is received and
 	// the handshake done (section 4.14.1), an UnbindRequest included: just
 	// close, before anything is changed (StartTLS then fails with
 	// not_connected). Refusing instead would leave the session the caller
 	// wants ended open.
-	if (self->binding || self->upgrading) {
+	if (self->exchange_in_progress()) {
 		self->shut(make_error(client_errc::not_connected, "connection closed"), false);
 		co_return result<void>{};
 	}
 
-	// Outstanding operations are abandoned by the unbind (RFC 4511 section 4.3).
-	self->abandon_all_for_unbind();
-	message request{ 0, unbind_request{} };
-	if (auto r = self->submit(request, nullptr, context); !r) co_return r;
-	// Nothing may follow the UnbindRequest (RFC 4511 section 4.3): an
-	// operation, StartTLS or unbind() started while the writer finishes
-	// fails with not_connected.
-	self->unbinding = true;
-	// Wait for the writer, even if this task is cancelled: closing first
-	// would cut the UnbindRequest off.
-	co_await self->wait_write_idle();
-	std::optional<error> failed = self->failure;
-	self->shut(make_error(client_errc::not_connected, "connection closed"), false, false);
-	// TLS: close_notify, after the reader has stopped (it would otherwise
-	// read the peer's close_notify itself). Best effort and bounded: the
-	// unbind is complete whatever the peer does.
-	if (!failed && self->transport.is_tls() && self->transport.is_open()) {
-		co_await self->wait_reader_idle();
-		(void)co_await self->transport.shutdown(self->tls_shutdown_timeout);
-	}
-	self->transport.close();
+	// Outstanding operations are abandoned by the unbind (RFC 4511 section
+	// 4.3), and nothing may follow the UnbindRequest.
+	if (auto r = self->send_unbind(context); !r) co_return r;
+	std::optional<error> failed = co_await self->finish_unbind();
 	if (failed) co_return std::unexpected(detail::with_context(std::move(*failed), context));
 	co_return result<void>{};
 }
