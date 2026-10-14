@@ -1,6 +1,7 @@
 // Internal: the state of a connection (connection::impl), shared by its
 // operations, and the helpers they share. Coroutine helpers are only
-// declared here: each is defined once, in connection.cpp.
+// declared here: each is defined once, the core (impl's members, binds'
+// serialization, request_response) in core.cpp, the rest in connection.cpp.
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"
@@ -197,8 +198,14 @@ struct connection::impl
 
 	// ---------------------------------------------------------------- refs
 
-	void add_ref() noexcept;
-	void release() noexcept;
+	// Inline: impl_ref copies call them from every module.
+	void add_ref() noexcept { ++refs; }
+	void release() noexcept
+	{
+		if (--refs != 0) return;
+		std::pmr::polymorphic_allocator<> alloc(mr);
+		alloc.delete_object(this);
+	}
 
 	// Held by the writer and reader frames, so the state is released even
 	// if a frame is destroyed without finishing (io_context destroyed).
@@ -399,6 +406,26 @@ namespace detail {
 
 	  private:
 		connection::impl *p_ = nullptr;
+	};
+
+	// Waits until no other bind exchange is in progress (binds are
+	// serialized), then marks this one as in progress; bind_exchange ends it.
+	// A bind already given up on is not sent: a bind cannot be abandoned, so
+	// sending it would only close the connection. The stop is checked after
+	// the wait, right before the bind is sent: a stop that comes once
+	// bind_idle.set() has claimed the waiter, but before it resumes, does
+	// not cancel the wait.
+	boost::capy::task<result<void>> begin_bind(impl_ref c, std::string_view context);
+
+	// Ends the bind exchange begun by begin_bind() and sends the requests
+	// it held.
+	struct bind_exchange
+	{
+		impl_ref c;
+		explicit bind_exchange(impl_ref c_) noexcept : c(std::move(c_)) {}
+		bind_exchange(const bind_exchange &) = delete;
+		bind_exchange &operator=(const bind_exchange &) = delete;
+		~bind_exchange();
 	};
 
 	// Abandons `p` if the operation's task is destroyed (or returns early)
