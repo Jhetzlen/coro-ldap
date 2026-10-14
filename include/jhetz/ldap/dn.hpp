@@ -244,9 +244,7 @@ struct rdn
 
 	rdn() = default;
 	explicit rdn(const allocator_type &alloc) : avas(alloc) {}
-	// Implicit on purpose: a compile-time checked literal is an rdn (`{"uid=jdoe"}`).
-	// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
-	rdn(literal l, const allocator_type &alloc = {});
+	explicit rdn(literal l, const allocator_type &alloc = {});
 	rdn(std::initializer_list<ava> avas_, const allocator_type &alloc = {}) : avas(avas_, alloc) {}
 	rdn(const rdn &) = default;
 	rdn(rdn &&) noexcept = default;
@@ -294,9 +292,7 @@ class dn
 
 	dn() = default;// the empty DN (root DSE)
 	explicit dn(const allocator_type &alloc) : rdns_(alloc) {}
-	// Implicit on purpose: a compile-time checked literal is a dn (`simple_bind({"cn=admin,dc=example,dc=org"}, pw)`).
-	// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
-	dn(literal l, const allocator_type &alloc = {});
+	explicit dn(literal l, const allocator_type &alloc = {});
 	dn(const dn &) = default;
 	dn(dn &&) noexcept = default;
 	dn(const dn &other, const allocator_type &alloc) : rdns_(other.rdns_, alloc) {}

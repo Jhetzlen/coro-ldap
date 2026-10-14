@@ -228,9 +228,7 @@ class attribute
 
 	attribute() = default;
 	explicit attribute(const allocator_type &alloc) : name_(alloc) {}
-	// Implicit on purpose: a compile-time checked literal is an attribute (`{"cn"}`).
-	// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
-	attribute(literal l, const allocator_type &alloc = {}) : name_(l.text, alloc) {}
+	explicit attribute(literal l, const allocator_type &alloc = {}) : name_(l.text, alloc) {}
 	attribute(const attribute &) = default;
 	attribute(attribute &&) noexcept = default;
 	attribute(const attribute &other, const allocator_type &alloc) : name_(other.name_, alloc) {}
