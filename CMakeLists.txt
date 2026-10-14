@@ -29,6 +29,7 @@ option(JHETZ_LDAP_BUILD_BENCH "Build the benchmarks (bench/, not run by ctest)" 
 option(JHETZ_LDAP_WITH_GSSAPI "Add SASL GSSAPI (Kerberos) to jhetz::ldap_net (needs the GSS-API library, MIT krb5's libgssapi_krb5, found with pkg-config)" OFF)
 option(JHETZ_LDAP_BUILD_EXAMPLES "Build the examples (examples/; need JHETZ_LDAP_BUILD_NET)" ON)
 option(JHETZ_LDAP_INSTALL "Generate install rules and the jhetz_ldap CMake package" ${PROJECT_IS_TOP_LEVEL})
+option(JHETZ_LDAP_CLANG_TIDY "Run clang-tidy (.clang-tidy) on our own targets while building them" OFF)
 
 # Minimum compilers: GCC 16, Clang 23, and libstdc++ 16 when it is the
 # standard library (Clang uses the newest GCC's libstdc++ it finds; install
@@ -113,6 +114,19 @@ if(JHETZ_LDAP_COVERAGE)
     endif()
 endif()
 
+# clang-tidy (JHETZ_LDAP_CLANG_TIDY): CXX_CLANG_TIDY on our own targets only,
+# through jhetz_ldap_warnings below, so Corosio, Capy and Catch2 are never
+# checked; the checks and the header filter (include/jhetz/ and src/) are in
+# .clang-tidy. compile_commands.json is exported by default for a standalone
+# run-clang-tidy and clangd (CMake creates the cache entry empty, so an
+# explicit -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF still wins).
+if(PROJECT_IS_TOP_LEVEL AND "${CMAKE_EXPORT_COMPILE_COMMANDS}" STREQUAL "")
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+endif()
+if(JHETZ_LDAP_CLANG_TIDY)
+    find_program(JHETZ_LDAP_CLANG_TIDY_EXE NAMES clang-tidy-23 clang-tidy REQUIRED)
+endif()
+
 # Warnings (and coverage instrumentation) apply to our own targets only.
 # Clang counts __COUNTER__ (used by Catch2's macros, expanded in our test
 # sources) as a C2y extension under -Wpedantic. Clang only: GCC has no such
@@ -120,6 +134,9 @@ endif()
 # warning).
 
 function(jhetz_ldap_warnings target)
+    if(JHETZ_LDAP_CLANG_TIDY)
+        set_target_properties(${target} PROPERTIES CXX_CLANG_TIDY "${JHETZ_LDAP_CLANG_TIDY_EXE}")
+    endif()
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 $<$<BOOL:${JHETZ_LDAP_WERROR}>:/WX>)
     else()

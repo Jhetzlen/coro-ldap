@@ -38,6 +38,7 @@ certificates generated at run time through the OpenSSL API.
 | `JHETZ_LDAP_WERROR` | `ON` (`OFF` as a subproject) | warnings are errors in our own targets (never in Corosio, Capy or Catch2); off when added with `add_subdirectory` or FetchContent, so a newer compiler's new warnings do not break consumers |
 | `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench` (see below; not run by ctest or CI) |
 | `JHETZ_LDAP_COVERAGE` | `OFF` | Clang source-based coverage on our own targets (see [Coverage](#coverage)) |
+| `JHETZ_LDAP_CLANG_TIDY` | `OFF` | run clang-tidy (`.clang-tidy`) on our own targets while building them (see [clang-tidy](#clang-tidy)) |
 
 ## Installing
 
@@ -185,6 +186,29 @@ set `LLVM_PROFDATA`, `LLVM_COV` and `CXX`), on Linux.
 A template that nothing instantiates generates no code, so it is missing
 from the report rather than shown as 0% (uncalled inline functions do show
 up, with zero counts).
+
+## clang-tidy
+
+The checks are in `.clang-tidy` (each disabled check has its reason there);
+`tests/.clang-tidy` and `fuzz/.clang-tidy` inherit it and turn off test-only
+noise. The header filter keeps the reports to our own headers (never Corosio,
+Capy, Catch2). Use Clang for the build directory, with GSSAPI on so
+`sasl_gssapi.cpp` is covered; `compile_commands.json` is written by default.
+`build/tidy` is that directory:
+
+```sh
+cmake -B build/tidy -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug \
+  -DJHETZ_LDAP_WITH_GSSAPI=ON -DJHETZ_LDAP_BUILD_BENCH=ON
+cmake --build build/tidy -j8      # once, for the generated files and the dependencies
+run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|tests|examples|fuzz|bench)/.*'
+```
+
+The fuzz targets are checked through their `*_fuzz_replay` builds. A full
+run takes about five minutes. Alternatively, `-DJHETZ_LDAP_CLANG_TIDY=ON`
+sets `CXX_CLANG_TIDY` on our own targets (through `jhetz_ldap_warnings`), so
+every compile of our sources also runs clang-tidy. A finding that is a false
+positive gets `// NOLINT(check-name): reason` (or `NOLINTNEXTLINE`) rather
+than a disabled check.
 
 ## Fuzz
 

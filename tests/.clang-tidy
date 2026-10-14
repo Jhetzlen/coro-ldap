@@ -1,0 +1,34 @@
+# Unit, network and integration tests: the root .clang-tidy, minus checks that
+# only fire on Catch2 macro expansions or on what tests do on purpose.
+InheritParentConfig: true
+Checks:
+  # Each TEST_CASE/SECTION body is one Catch2 function; long by nature.
+  - -readability-function-cognitive-complexity
+  # REQUIRE(opt) before *opt: the dataflow model does not see Catch2's throw.
+  - -bugprone-unchecked-optional-access
+  # Expected strings are built with operator+ for readability.
+  - -performance-inefficient-string-concatenation
+  # Test vectors and arena storage are plain arrays, passed to C APIs and spans.
+  - -cppcoreguidelines-avoid-c-arrays
+  - -modernize-avoid-c-arrays
+  - -cppcoreguidelines-pro-bounds-array-to-pointer-decay
+  # Namespace-scope fixtures (DNs, strings) throwing at start-up just fail the run.
+  - -bugprone-throwing-static-initialization
+  - -cert-err58-cpp
+  # Right-to-left and mixed-direction UTF-8 test vectors are deliberate.
+  - -misc-misleading-bidirectional
+  # Test locals are not worth const-qualifying one by one.
+  - -misc-const-correctness
+  # Value-semantics tests copy on purpose and check the copy.
+  - -performance-unnecessary-copy-initialization
+  # The allocation-failure tests replace malloc/operator new.
+  - -cppcoreguidelines-no-malloc
+  - -cppcoreguidelines-avoid-non-const-global-variables
+  # Catch2's ResultDisposition flags are or-ed enum values (Catch2's code).
+  - -clang-analyzer-optin.core.EnumCastOutOfRange
+  # Test set-up (setenv, getenv for KRB5/SLAPD paths) runs before any thread.
+  - -concurrency-mt-unsafe
+  # Test helpers return values the test cases do not always look at.
+  - -modernize-use-nodiscard
+  # Helpers taking (text, expected) pairs; swapping shows as a failing test.
+  - -bugprone-easily-swappable-parameters

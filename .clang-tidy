@@ -1,34 +1,105 @@
----
-Checks: "*,
-        -abseil-*,
-        -altera-*,
-        -android-*,
-        -fuchsia-*,
-        -google-*,
-        -llvm*,
-        -modernize-use-trailing-return-type,
-        -zircon-*,
-        -readability-else-after-return,
-        -readability-static-accessed-through-instance,
-        -readability-avoid-const-params-in-decls,
-        -cppcoreguidelines-non-private-member-variables-in-classes,
-        -misc-non-private-member-variables-in-classes,
-        -misc-no-recursion,
-        -misc-use-anonymous-namespace,
-        -misc-use-internal-linkage,
-        readability-identifier-length
-"
+# clang-tidy configuration for coro-ldap (docs/DEVELOPMENT.md, "clang-tidy").
+# Run through -DJHETZ_LDAP_CLANG_TIDY=ON (our own targets only) or
+# run-clang-tidy over build/tidy/compile_commands.json. tests/.clang-tidy and
+# fuzz/.clang-tidy inherit this file and turn off test-only noise.
+#
+# Every disabled check has its reason on the line above it.
+Checks:
+  - -*
+  - bugprone-*
+  - cert-*
+  - clang-analyzer-*
+  - concurrency-*
+  - cppcoreguidelines-*
+  - misc-*
+  - modernize-*
+  - performance-*
+  - portability-*
+  - readability-*
+  # Style: the codebase writes return types in front.
+  - -modernize-use-trailing-return-type
+  # Style: short names (i, n, ec, os, dn, id) are idiomatic here.
+  - -readability-identifier-length
+  # Style: single-statement if/for bodies go without braces; clang-format owns layout.
+  - -readability-braces-around-statements
+  # Style: clang-format decides on trailing commas in braced lists.
+  - -readability-trailing-comma
+  # Style: lower-case literal suffixes (0u, 1ull) are used throughout.
+  - -readability-uppercase-literal-suffix
+  # Style: else after return is kept when both branches read as alternatives.
+  - -readability-else-after-return
+  # Style: x.static_member() through an instance is fine.
+  - -readability-static-accessed-through-instance
+  # Style: top-level const on by-value parameters is not repeated in declarations.
+  - -readability-avoid-const-params-in-decls
+  # Unnamed parameters deliberately mark unused ones (overloads, tags, callbacks).
+  - -readability-named-parameter
+  # 'T member{};' on aggregate members is deliberate: designated initializers
+  # that omit the member stay quiet under -Wmissing-field-initializers.
+  - -readability-redundant-member-init
+  # Messages, controls and requests are aggregates with public members.
+  - -cppcoreguidelines-non-private-member-variables-in-classes
+  - -misc-non-private-member-variables-in-classes
+  # BER, filters and DNs are trees: the recursive walkers are depth-limited.
+  - -misc-no-recursion
+  # Internal linkage is chosen per file (static vs anonymous namespace).
+  - -misc-use-anonymous-namespace
+  - -misc-use-internal-linkage
+  # No IWYU mapping for Capy/Corosio umbrella headers and our detail headers;
+  # the -Werror GCC and Clang builds catch a missing include.
+  - -misc-include-cleaner
+  # BER tags, RFC 4511 result codes, bit masks and test vectors are the numbers
+  # the RFCs name; a constant per number would hide them.
+  - -cppcoreguidelines-avoid-magic-numbers
+  - -readability-magic-numbers
+  # The codec indexes spans and strings after explicit length checks; .at()
+  # or gsl::span would add throws to a non-throwing decoder.
+  - -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access
+  - -cppcoreguidelines-pro-bounds-constant-array-index
+  - -cppcoreguidelines-pro-bounds-pointer-arithmetic
+  # char/std::byte views of buffers and the C APIs (OpenSSL, GSS-API,
+  # sockaddr) need reinterpret_cast.
+  - -cppcoreguidelines-pro-type-reinterpret-cast
+  # No GSL: ownership is RAII (unique_ptr with deleters for the C APIs).
+  - -cppcoreguidelines-owning-memory
+  # Capy tasks are lazy and awaited at once by the caller, whose frame owns
+  # the referenced arguments; by-reference parameters are the Capy idiom.
+  - -cppcoreguidelines-avoid-reference-coroutine-parameters
+  # pmr types: move assignment copies when the allocators differ, so it is
+  # not noexcept (the defaulted ones get the right exception specification).
+  - -cppcoreguidelines-noexcept-move-operations
+  - -performance-noexcept-move-constructor
+  # Small aggregates (ber::tag, test case tables) read better positionally.
+  - -modernize-use-designated-initializers
+  # Linux-only project; every header uses #pragma once.
+  - -portability-avoid-pragma-once
+  # do { } while is fine for retry loops (GSS-API status message loop).
+  - -cppcoreguidelines-avoid-do-while
+  # Short-lived helper classes (encoders, visitors, scope guards) hold a
+  # reference to what they fill; they are never assigned.
+  - -cppcoreguidelines-avoid-const-or-ref-data-members
+  # An enum's underlying type is API and ABI; errc enums feed std::error_code (int).
+  - -performance-enum-size
 WarningsAsErrors: ''
-HeaderFilterRegex: ''
-FormatStyle:     none
+# Our own headers only: never Corosio, Capy, Catch2 or the system headers.
+HeaderFilterRegex: '.*/(include/jhetz|src|tests|fuzz)/.*'
+ExcludeHeaderFilterRegex: '.*/_deps/.*'
+FormatStyle: none
 
 CheckOptions:
-  # Minimum length for normal variables (default is 3)
-  - key:             readability-identifier-length.MinimumVariableNameLength
-    value:           '2'
-  # Minimum length for function parameters (default is 3)
-  - key:             readability-identifier-length.MinimumParameterNameLength
-    value:           '2'
-  # Loop counters (e.g., i, j) already default to 2
-  - key:             readability-identifier-length.MinimumLoopCounterNameLength
-    value:           '2'
+  # The decoders and parsers are long state machines; flag only the worst.
+  readability-function-cognitive-complexity.Threshold: 40
+  readability-function-cognitive-complexity.IgnoreMacros: true
+  # 'x << 16' with a positive literal is not a signedness hazard.
+  bugprone-signed-bitwise.IgnorePositiveIntegerLiterals: true
+  # 'if (ptr)' is the idiom for the C API handles and lookups returning pointers.
+  readability-implicit-bool-conversion.AllowPointerConditions: true
+  # '(void)f()' is the explicit way to drop a result here.
+  bugprone-unused-return-value.AllowCastToVoid: true
+  # pmr move assignment may allocate (see noexcept-move-operations above).
+  bugprone-exception-escape.CheckMoveMemberFunctions: false
+  # Allocator-extended move constructors move member by member.
+  cppcoreguidelines-rvalue-reference-param-not-moved.AllowPartialMove: true
+  # Non-copyable RAII guards do not need move operations spelled out.
+  cppcoreguidelines-special-member-functions.AllowMissingMoveFunctionsWhenCopyIsDeleted: true
+  cppcoreguidelines-special-member-functions.AllowImplicitlyDeletedCopyOrMove: true

@@ -1,0 +1,5 @@
+# Fuzz targets and their replay mains: the root .clang-tidy, except that an
+# exception escaping a replay main is the finding (a crash), as in libFuzzer.
+InheritParentConfig: true
+CheckOptions:
+  bugprone-exception-escape.CheckMain: false

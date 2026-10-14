@@ -73,6 +73,9 @@ ctest --test-dir build/main -j12        # serial ctest is ~4x slower (fuzz repla
 SLAPD=<ol>/usr/bin/slapd SLAPD_SCHEMA_DIR=<ol>/etc/openldap/schema SLAPD_MODULE_PATH=<ol>/usr/lib/openldap \
   tests/integration/run_slapd.sh ctest --test-dir build/main -L integration --output-on-failure
 
+# clang-tidy 23 (.clang-tidy; build/tidy is a Clang build dir, see docs/DEVELOPMENT.md "clang-tidy"):
+run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|tests|examples|fuzz|bench)/.*'
+
 # Formatting: clang-format 23, same as CI
 /usr/bin/clang-format -i <files>
 ```
