@@ -59,11 +59,20 @@ struct stream
 	std::size_t values = 0;
 };
 
+// What make_stream generates (three counts, named at the call site).
+struct stream_shape
+{
+	std::size_t entries = 0;
+	std::size_t attributes = 0;
+	std::size_t values = 0;
+};
+
 // `entries` entries of `attributes` attributes with `values` values each
 // (10 to 60 bytes, like names, mail addresses, descriptions); every 20th entry
 // also carries a 64 KiB jpegPhoto and a 4 KiB userCertificate.
-auto make_stream(std::size_t entries, std::size_t attributes, std::size_t values) -> stream
+auto make_stream(const stream_shape &shape) -> stream
 {
+	const auto [entries, attributes, values] = shape;
 	stream s;
 	std::vector<std::size_t> sizes;
 	for (std::size_t i = 0; i < entries; ++i) {
@@ -197,7 +206,7 @@ auto main(int argc, char **argv) -> int
 		return 2;
 	}
 
-	const auto s = make_stream(entries, attributes, values);
+	const auto s = make_stream({ .entries = entries, .attributes = attributes, .values = values });
 	std::print(
 	  "stream: {} SearchResultEntry PDUs, {} attributes x {} values each (+ jpegPhoto and\n"
 	  "userCertificate every 20th entry), {} values, {:.1f} MiB; best / median of {} runs\n\n",

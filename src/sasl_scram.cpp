@@ -722,6 +722,8 @@ auto sasl_scram_sha256::parse_server_first(std::string_view message) -> result<s
 namespace {
 	// AuthMessage := client-first-message-bare + "," + server-first-message
 	//                + "," + client-final-message-without-proof
+	// RFC 5802 section 3 AuthMessage order, which the two callers follow.
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto auth_message_of(std::string_view first_bare, std::string_view server_first, std::string_view without_proof)
 	  -> std::string
 	{

@@ -108,3 +108,11 @@ CheckOptions:
   cppcoreguidelines-special-member-functions.AllowImplicitlyDeletedCopyOrMove: true
   # Trailing return types on functions only; lambdas keep their deduced return type.
   modernize-use-trailing-return-type.TransformLambdas: none
+  # Mixed integer widths or signedness (size_t/uint32_t, size_t/char) are not
+  # reported as swappable: a swap narrows or changes sign in one direction,
+  # which -Wconversion -Wsign-conversion turn into an error (jhetz_ldap_warnings,
+  # every target). Same-typed adjacent parameters are still reported.
+  bugprone-easily-swappable-parameters.ModelImplicitConversions: false
+  # The check's default names, plus 'what': the label of an error message
+  # (check_text(s, what), quoted(what, text)); a swap only garbles a diagnostic.
+  bugprone-easily-swappable-parameters.IgnoredParameterNames: '"";iterator;Iterator;begin;Begin;end;End;first;First;last;Last;lhs;LHS;rhs;RHS;what'

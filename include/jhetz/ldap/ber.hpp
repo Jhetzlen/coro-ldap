@@ -309,6 +309,8 @@ class reader
 		std::size_t content_size{};
 	};
 
+	// Private, called by reader only, in member order (base, depth, max_depth).
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	reader(std::span<const std::byte> data, std::size_t base, std::size_t depth, std::size_t max_depth) noexcept
 	  : data_(data), base_(base), depth_(depth), max_depth_(max_depth)
 	{}

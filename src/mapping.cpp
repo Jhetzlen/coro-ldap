@@ -28,6 +28,8 @@ namespace detail {
 		return e;
 	}
 
+	// A swap only garbles the context of a diagnostic; one caller (mapping.hpp).
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto entry_context(std::string_view dn, std::string_view attribute) -> std::string
 	{
 		// The DN is the server's text.

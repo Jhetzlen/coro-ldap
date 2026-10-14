@@ -30,6 +30,8 @@ namespace {
 	// `before`, the peer's `text` sanitized and cut to 64 bytes
 	// (detail::append_sanitized), then `after`: an error context naming a
 	// control type or attribute the peer sent.
+	// The arguments are in the order of the text they make.
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto sanitized_context(std::string_view before, std::string_view text, std::string_view after) -> std::string
 	{
 		std::string out(before);
@@ -40,11 +42,14 @@ namespace {
 
 }// namespace
 
+// Public API, RFC 4511 field order; see coro-ldap-bsm.10 review.
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 ldap_result::ldap_result(std::int32_t result_code_,
   std::string_view matched_dn_,
   std::string_view diagnostic_message_,
   std::initializer_list<std::string_view> referral_,
   const allocator_type &alloc)
+  // NOLINTEND(bugprone-easily-swappable-parameters)
   : result_code(result_code_), matched_dn(matched_dn_, alloc), diagnostic_message(diagnostic_message_, alloc),
 	referral(strings(referral_, alloc))
 {}
@@ -237,6 +242,8 @@ search_request::search_request(search_request &&other, const allocator_type &all
 	filter(std::move(other.filter), alloc), attributes(std::move(other.attributes), alloc)
 {}
 
+// Public API, RFC 4511 field order; see coro-ldap-bsm.10 review.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 modify_dn_request::modify_dn_request(std::string_view entry_,
   std::string_view new_rdn_,
   bool delete_old_rdn_,
@@ -309,10 +316,13 @@ auto extended_request::operator=(extended_request &&other) -> extended_request &
 	return *this;
 }
 
+// Public API, RFC 4511 field order; see coro-ldap-bsm.10 review.
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 extended_response::extended_response(const ldap_result &result_,
   std::optional<std::string_view> response_name_,
   std::optional<std::string_view> response_value_,
   const allocator_type &alloc)
+  // NOLINTEND(bugprone-easily-swappable-parameters)
   : result(result_, alloc), response_name(optional_string(response_name_, alloc)),
 	response_value(optional_string(response_value_, alloc))
 {}
@@ -346,6 +356,8 @@ auto extended_response::operator=(extended_response &&other) -> extended_respons
 	return *this;
 }
 
+// Public API, RFC 4511 field order; see coro-ldap-bsm.10 review.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 intermediate_response::intermediate_response(std::optional<std::string_view> response_name_,
   std::optional<std::string_view> response_value_,
   const allocator_type &alloc)
@@ -780,6 +792,8 @@ namespace {
 	// invalid elements (e.g. 8M empty SEQUENCEs) cannot make decode reserve
 	// more than a valid message of the same size would really use. It also
 	// stops at `limit` (what is left of decode_options::max_elements).
+	// Internal, two callers; a swap only changes a reserve() size hint.
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto count_elements(ber::reader r, ber::tag t, std::size_t min_size, std::size_t limit) -> std::size_t
 	{
 		std::size_t n = 0;

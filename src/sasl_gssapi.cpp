@@ -288,6 +288,8 @@ struct sasl_gssapi::state
 	}
 
 	// The server's wrapped offer gives the wrapped reply.
+	// One caller; as gssapi_layer_reply: the server's offer, then our authzid.
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto reply(std::string_view wrapped_offer, std::string_view authz_id) -> result<std::optional<std::string>>
 	{
 		OM_uint32 minor = 0;

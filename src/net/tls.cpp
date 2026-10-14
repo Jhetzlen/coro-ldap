@@ -112,10 +112,13 @@ namespace {
 	// on the terminal for an encrypted key. Encrypted keys are not supported.
 	auto no_password(char *, int, int, void *) -> int { return -1; }
 
+	// One caller; a swapped certificate and key fails the first PEM parse.
+	// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 	auto check_client_credentials(const std::string &cert_pem,
 	  const std::string &key_pem,
 	  const std::string &cert_what,
 	  const std::string &key_what) -> result<void>
+	// NOLINTEND(bugprone-easily-swappable-parameters)
 	{
 		const auto invalid = std::make_error_code(std::errc::invalid_argument);
 		const x509_ptr cert = [&] {

@@ -293,6 +293,8 @@ auto parse_object_class(std::string_view text) -> result<object_class_type>
 	});
 }
 
+// Public API, subschema attribute order (RFC 4512 4.2); see coro-ldap-bsm.10 review.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 auto server_schema::parse(std::span<const std::pmr::string> attribute_types,
   std::span<const std::pmr::string> object_classes) -> server_schema
 {

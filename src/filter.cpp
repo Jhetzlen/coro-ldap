@@ -87,11 +87,12 @@ namespace detail {
 			f.text_ += c;
 		}
 
-		// Value of node i from a range already in the pool.
-		static void set_value_range(filter &f, std::uint32_t i, std::uint32_t off, std::uint32_t len) noexcept
+		// Value of node i from a range already in the pool: (offset, length),
+		// as read_part returns it.
+		static void set_value_range(filter &f, std::uint32_t i, std::pair<std::uint32_t, std::uint32_t> range) noexcept
 		{
-			f.nodes_[i].value_off = off;
-			f.nodes_[i].value_len = len;
+			f.nodes_[i].value_off = range.first;
+			f.nodes_[i].value_len = range.second;
 		}
 
 		static void set_dn_attributes(filter &f, std::uint32_t i, bool on) noexcept { f.nodes_[i].dn_attributes = on; }
@@ -140,9 +141,12 @@ namespace detail {
 		}
 
 		// A single-element filter: `node_kind` with an attribute and a value.
+		// Attribute, then value: the order of the filter text (attr=value).
+		// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 		static auto
 		  leaf(const filter::allocator_type &alloc, kind node_kind, std::string_view attr, std::string_view value = {})
 			-> filter
+		// NOLINTEND(bugprone-easily-swappable-parameters)
 		{
 			filter f(alloc);
 			f.root_ = add_node(f, k(node_kind));
@@ -193,6 +197,8 @@ namespace detail {
 
 		// Copies the subtree of `src` at `top` into `dst` (not linked; returns
 		// its index). `base`: where src's string pool starts in dst's.
+		// Node index, then pool offset; all four callers pass their `base`.
+		// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 		static auto copy_subtree(filter &dst, const filter &src, std::uint32_t top, std::uint32_t base) -> std::uint32_t
 		{
 			std::uint32_t result = npos;
@@ -314,11 +320,14 @@ namespace detail {
 
 		// (a=initial*any*...*final); empty parts are omitted, all empty gives
 		// present (callers pass at least one non-empty part otherwise).
+		// RFC 4511 SubstringFilter order (type, initial, any, final).
+		// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 		static auto substrings(const filter::allocator_type &alloc,
 		  std::string_view attr,
 		  std::string_view initial,
 		  std::string_view any,
 		  std::string_view final_) -> filter
+		// NOLINTEND(bugprone-easily-swappable-parameters)
 		{
 			if (initial.empty() && any.empty() && final_.empty()) {
 				return leaf(alloc, kind::present, attr);
@@ -346,6 +355,8 @@ namespace detail {
 			return f;
 		}
 
+		// Both callers pass the parser's like-named depth_ and elements_.
+		// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 		static void set_limits(filter &f, std::size_t depth, std::size_t elements) noexcept
 		{
 			f.depth_ = depth;
@@ -706,11 +717,15 @@ namespace filters {
 	}
 
 	namespace {
+		// RFC 4515 extensible match text order (attr:rule:=value), as its two
+		// callers attr::matches and rule_matches.
+		// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 		auto extensible(const filter::allocator_type &alloc,
 		  std::string_view attr,
 		  std::string_view rule,
 		  std::string_view value,
 		  bool dn_attributes) -> filter
+		// NOLINTEND(bugprone-easily-swappable-parameters)
 		{
 			if (!rule.empty() && !detail::is_oid(rule)) {
 				throw std::invalid_argument(detail::format("ldap::filters: invalid matching rule \"{}\"", rule));
@@ -1061,7 +1076,7 @@ namespace {
 					}
 					const std::uint8_t k = first ? filter_part_initial : last ? filter_part_final : filter_part_any;
 					const std::uint32_t p = access::add_node(out_, k);
-					access::set_value_range(out_, p, part->first, part->second);
+					access::set_value_range(out_, p, *part);
 					access::link_last(out_, node, p);
 					any_part = true;
 				}
@@ -1083,7 +1098,7 @@ namespace {
 			if (!v) {
 				return std::unexpected(std::move(v.error()));
 			}
-			access::set_value_range(out_, node, v->first, v->second);
+			access::set_value_range(out_, node, *v);
 			return {};
 		}
 
