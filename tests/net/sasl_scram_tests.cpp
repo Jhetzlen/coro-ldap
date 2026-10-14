@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <cstdint>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -608,5 +609,126 @@ TEST_CASE("scram: server-final-message rejections (mutual authentication)", "[sa
 		auto r = m.step("more");
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::unexpected_response);
+	}
+}
+
+TEST_CASE("scram: a configured maximum iteration count", "[sasl][scram]")
+{
+	using access = ldap::detail::scram_test_access;
+	auto mech = [](std::uint32_t max) {
+		return access::with_nonce("user", "pencil", ldap::sasl_scram_options{ .max_iterations = max }, "fixednonce");
+	};
+	SECTION("a higher count is refused, the bound itself accepted")
+	{
+		auto m = mech(10'000);
+		REQUIRE(m.start().has_value());
+		auto r = m.step("r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=10001");
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::unexpected_response);
+		CHECK(r.error().code == ldap::cond::protocol_error);
+		CHECK(r.error().context == "iteration count 10001 is above the maximum of 10000");
+		REQUIRE(m.start().has_value());
+		CHECK(m.step("r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=10000").has_value());
+	}
+	SECTION("a bound outside 4096 .. 2^31-1 is refused by start()")
+	{
+		for (const std::uint32_t max : { 0U, 4095U, 0x8000'0000U }) {
+			CAPTURE(max);
+			auto m = mech(max);
+			auto r = m.start();
+			REQUIRE_FALSE(r.has_value());
+			CHECK(r.error().code == ldap::client_errc::encode_error);
+			CHECK_THAT(std::string(r.error().context), ContainsSubstring("max_iterations"));
+		}
+		auto m = mech(0x7fff'ffff);
+		CHECK(m.start().has_value());
+	}
+}
+
+TEST_CASE("scram: the SaltedPassword is cached per salt and iteration count", "[sasl][scram]")
+{
+	using access = ldap::detail::scram_test_access;
+	auto m = access::with_nonce(
+	  "user", "pencil", ldap::sasl_scram_options{ .offload_above_iterations = 0 }, std::string(rfc_nonce));
+	m.prepare({ .can_offload = true });
+	CHECK(access::cached_iterations(m) == 0);
+
+	// First bind: PBKDF2 is offloaded (offload_above_iterations = 0); the
+	// work gives the RFC's proof, and its SaltedPassword is kept.
+	REQUIRE(response(m.start()) == rfc_client_first);
+	auto work = m.offload_step(rfc_server_first);
+	REQUIRE(work);
+	CHECK(response(work()) == rfc_client_final);
+	CHECK(m.complete(rfc_server_final).has_value());
+	CHECK(access::cached_iterations(m) == 4096);
+
+	// Same salt and count: nothing to offload, step() derives the keys
+	// from the cache.
+	REQUIRE(response(m.start()) == rfc_client_first);
+	CHECK_FALSE(m.offload_step(rfc_server_first));
+	CHECK(response(m.step(rfc_server_first)) == rfc_client_final);
+	CHECK(m.complete(rfc_server_final).has_value());
+
+	// Another salt or count: PBKDF2 again.
+	REQUIRE(m.start().has_value());
+	CHECK(m.offload_step("r=rOprNGfwEbeRWgbNEkqOsrv,s=QSXCR+Q6sek8bf92,i=4096"));
+	REQUIRE(m.start().has_value());
+	CHECK(m.offload_step("r=rOprNGfwEbeRWgbNEkqOsrv,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4097"));
+
+	// The inline path fills the cache too, and replaces it.
+	REQUIRE(m.start().has_value());
+	REQUIRE(m.step("r=rOprNGfwEbeRWgbNEkqOsrv,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=5000").has_value());
+	CHECK(access::cached_iterations(m) == 5000);
+	REQUIRE(m.start().has_value());
+	CHECK_FALSE(m.offload_step("r=rOprNGfwEbeRWgbNEkqOsrv,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=5000"));
+}
+
+TEST_CASE("scram: when PBKDF2 is offloaded", "[sasl][scram]")
+{
+	using access = ldap::detail::scram_test_access;
+	constexpr std::string_view heavy = "r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=16385";
+	constexpr std::string_view light = "r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=16384";
+	SECTION("above offload_above_iterations (16384 by default), when sasl_bind allows it")
+	{
+		auto m = access::with_nonce("user", "pencil", "", "fixednonce");
+		REQUIRE(m.start().has_value());
+		CHECK_FALSE(m.offload_step(heavy));// no prepare(): not allowed
+		m.prepare({ .can_offload = false });// locking_mode::unsafe
+		CHECK_FALSE(m.offload_step(heavy));
+		m.prepare({ .can_offload = true });
+		CHECK_FALSE(m.offload_step(light));
+		CHECK_FALSE(m.offload_step(std::nullopt));
+		CHECK_FALSE(m.offload_step("r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=1000001"));// step() refuses it
+		CHECK_FALSE(m.offload_step("garbage"));
+		CHECK(m.offload_step(heavy));
+		// Once offloaded, the exchange waits for the server-final-message.
+		CHECK_FALSE(m.offload_step(heavy));
+	}
+	SECTION("a step given up on runs on alone, while the next bind goes on inline")
+	{
+		auto m = access::with_nonce(
+		  "user", "pencil", ldap::sasl_scram_options{ .offload_above_iterations = 0 }, std::string(rfc_nonce));
+		m.prepare({ .can_offload = true });
+		REQUIRE(m.start().has_value());
+		auto stale = m.offload_step(rfc_server_first);
+		REQUIRE(stale);
+		// sasl_bind gave up: a new bind, then the old work completes.
+		REQUIRE(response(m.start()) == rfc_client_first);
+		CHECK(access::prepared_password(m) == "pencil");
+		m.prepare({ .can_offload = false });
+		CHECK(response(m.step(rfc_server_first)) == rfc_client_final);
+		CHECK(response(stale()) == rfc_client_final);
+		CHECK(m.complete(rfc_server_final).has_value());
+		// A work that never ran gives the exchange no signature.
+		auto m2 = access::with_nonce(
+		  "user", "pencil", ldap::sasl_scram_options{ .offload_above_iterations = 0 }, std::string(rfc_nonce));
+		m2.prepare({ .can_offload = true });
+		REQUIRE(m2.start().has_value());
+		auto never = m2.offload_step(rfc_server_first);
+		REQUIRE(never);
+		CHECK(access::prepared_password(m2).empty());// moved into the work
+		auto r = m2.complete(rfc_server_final);
+		REQUIRE_FALSE(r.has_value());
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("wrong server signature"));
 	}
 }

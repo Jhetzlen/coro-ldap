@@ -279,14 +279,18 @@ success: the server then considers the connection bound, so `sasl_bind`
 closes it. An end-to-end EXTERNAL test needs a real server
 (#14). Before `start()`, `sasl_bind` calls `prepare(sasl_bind_context)`
 (default: ignored) with the URL's host (empty for ldapi:// and wrapped
-transports), which GSSAPI needs for its default target.
+transports), which GSSAPI needs for its default target, and
+`can_offload`: false under `locking_mode::unsafe`, where an offloaded
+step fails, so that a mechanism for which offloading is optional (SCRAM)
+runs the step inline there rather than fail.
 
 `start()`, `step()` and `complete()` run on the I/O thread. A mechanism
 whose steps may block (GSSAPI: the KDC) overrides `offload_start()` /
 `offload_step(challenge)`, which `sasl_bind` calls in their place: they
 return a `sasl_work` (`std::move_only_function` returning the step's
 `result<std::optional<std::string>>`), empty for "call start() / step()
-here" (the default, so EXTERNAL and SCRAM are unchanged). Non-empty work
+here" (the default, so EXTERNAL is unchanged; SCRAM offloads only
+its costly PBKDF2, below). Non-empty work
 runs on a `std::thread` of its own and wakes the bind through
 a `capy::async_waker` (zero-allocation, `wake()` from any thread, the
 resumption posted to the waiter's executor); the bind waits on it with
@@ -342,12 +346,32 @@ that abort, which closes the connection).
 
 SCRAM-SHA-256 (`sasl_scram.hpp`, RFC 5802 / RFC 7677, in jhetz::ldap_net
 since it needs OpenSSL): `sasl_scram_sha256(username, password,
-authz_id)`. `start()` sends the client-first-message with a fresh
+authz_id)` or `(username, password, sasl_scram_options)`. `start()` sends the client-first-message with a fresh
 18-byte random nonce; `step()` checks the server-first-message (the nonce
-must extend ours, iteration count in [4096, 1'000'000]: PBKDF2 runs on the
-event loop thread, unknown "m="
-extensions refused), runs PBKDF2-HMAC-SHA-256 and returns the
-client-final-message with the proof; `complete()` (or `step()`, when the
+must extend ours, iteration count in [4096, `max_iterations`],
+1'000'000 by default and configurable in `sasl_scram_options`, unknown
+"m=" extensions refused), runs PBKDF2-HMAC-SHA-256 and returns the
+client-final-message with the proof; PBKDF2's cost is the server's
+choice (about 0.45 µs per iteration on a current x86-64 core: 2 ms at
+4096, 0.45 s at 1'000'000), so above `offload_above_iterations` (16'384,
+about 7 ms) `offload_step()` hands it to `sasl_bind` to run on a thread
+of its own (coro-ldap-zzz). Up to it, a thread start (tens of µs) and the
+two extra hops through the scheduler are not worth it, the common server
+defaults (4096, cyrus-sasl's 10'000) stay inline, and with them binds
+under `locking_mode::unsafe_io` (undetectable, where the offloaded
+wakeup may be lost under io_uring); under `unsafe` (`can_offload` false)
+PBKDF2 always runs inline, so SCRAM keeps working there. The offloaded
+work owns a `shared_ptr` block (`derivation`: the prepared password
+moved in, the salt, the count, the AuthMessage; out: the SaltedPassword
+and the ServerSignature) and sets its atomic `done` (release) last; the
+mechanism reads the outputs only once it sees `done` (acquire), in
+`verify()` (the server signature) or the next `start()`, and otherwise
+just drops its reference (a step `sasl_bind` gave up on runs on alone,
+and its block is wiped by whoever releases it last). The SaltedPassword
+is cached per (salt, iteration count) in the object, from either path, so
+a rebind to the same server skips PBKDF2 (and needs no thread); it is
+wiped when replaced and in the destructor, like the password it stands
+for; `complete()` (or `step()`, when the
 server sends its final message as a challenge) compares the "v=" server
 signature with `CRYPTO_memcmp`. A missing or wrong signature, or a server
 "e=" error, fails the bind (`client_errc::unexpected_response`) even if
@@ -365,7 +389,7 @@ only passwords stored in SASLprep form match there. No
 channel binding (GS2 header "n,,"; no -PLUS variant). Key material is
 wiped with `OPENSSL_cleanse` (the password when the object is destroyed;
 its prepared form, our preparation buffers and the derived keys as soon as
-the proof is built; ICU's internal buffers cannot be). Server text quoted
+the proof is built, but the cached SaltedPassword; ICU's internal buffers cannot be). Server text quoted
 in error contexts stays UTF-8: only control characters, ill-formed
 sequences, the bidi controls (Bidi_Control: "Trojan Source" reordering)
 and U+2028/U+2029 (line breaks in some log viewers) are replaced (U+FFFD),

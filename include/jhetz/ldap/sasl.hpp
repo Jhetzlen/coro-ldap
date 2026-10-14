@@ -35,6 +35,13 @@ struct sasl_bind_context
 	// a name or an IP address (without brackets). Empty for ldapi:// and
 	// for transports wrap()ped by the caller.
 	std::string_view host{};
+	// Whether a step can be offloaded (offload_start, offload_step): false
+	// when the io_context is in locking_mode::unsafe, where offloaded work
+	// fails (sasl_work), so that a mechanism whose offloading is optional
+	// (SCRAM's PBKDF2) runs the step inline instead. True otherwise,
+	// unsafe_io included (it cannot be detected). False when prepare() is
+	// called with a default sasl_bind_context.
+	bool can_offload = false;
 };
 
 // A step's credentials computed off the I/O thread (offload_start,

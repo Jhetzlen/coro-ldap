@@ -455,7 +455,8 @@ class connection
 	// considers the connection bound, so it is closed. The same rules as
 	// simple_bind apply otherwise. `mechanism` must outlive the task.
 	// A step the mechanism offloads (sasl_mechanism::offload_start,
-	// offload_step: GSSAPI's calls to the KDC) runs on a thread of its own
+	// offload_step: GSSAPI's calls to the KDC, SCRAM's costly PBKDF2) runs
+	// on a thread of its own
 	// while the task waits, within operation_timeout and the stop token.
 	// Giving up on it fails the bind with capy::error::timeout or canceled
 	// and leaves the step running on its thread (it is not interrupted);

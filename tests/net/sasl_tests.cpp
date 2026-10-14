@@ -6,6 +6,8 @@
 #include "net_test_support.hpp"
 #include "scram_test_access.hpp"
 
+#include <boost/corosio/delay.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
@@ -739,4 +741,83 @@ TEST_CASE("sasl: an offloaded step needs locking_mode::safe", "[net][sasl][offlo
 	m.check_server();
 	REQUIRE(m.log.received.size() == 1);
 	CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));
+}
+
+// A high iteration count runs PBKDF2 on a thread of its own, so the
+// io_context goes on meanwhile: a 1 ms timer ticks between the server's
+// first message and the client's final one (inline, PBKDF2 would block the
+// event loop for that whole time, ~0.1 s here). coro-ldap-zzz.
+TEST_CASE("sasl: SCRAM-SHA-256 runs a costly PBKDF2 off the I/O thread", "[net][sasl][scram][offload]")
+{
+	constexpr std::string_view server_first = "r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=300000";
+	// The expected client-final-message, from step() on the calling thread.
+	auto direct = ldap::detail::scram_test_access::with_nonce("user", "pencil", "", "fixednonce");
+	REQUIRE(direct.start().has_value());
+	auto expected = direct.step(server_first);
+	REQUIRE(expected.has_value());
+	REQUIRE(expected->has_value());
+
+	mock_ldap m;
+	m.serve({ answer({ sasl_resp(1, 14, server_first) }), answer({ sasl_resp(2, 49) }) });
+	auto mech = ldap::detail::scram_test_access::with_nonce("user", "pencil", "", "fixednonce");
+	outcome<ldap::result<void>> bind;
+	spawn(m.ioc, m.conn.sasl_bind(mech), bind);
+	int ticks = 0;// while the server waits for the client-final-message
+	auto ticker = [](const server_log &log, const outcome<ldap::result<void>> &b, int &n) -> capy::task<void> {
+		while (!b.done()) {
+			(void)co_await corosio::delay(1ms);
+			if (log.received.size() == 1) ++n;
+		}
+	};
+	outcome<void> ticked;
+	spawn(m.ioc, ticker(m.log, bind, ticks), ticked);
+	drive_until(m.ioc, [&] { return bind.done() && ticked.done(); });
+	REQUIRE(bind.done());
+	REQUIRE_FALSE(bind.get().has_value());
+	CHECK(bind.get().error().code == ldap::errc::invalid_credentials);
+	CHECK(ticks >= 5);
+	m.check_server();
+	REQUIRE(m.log.received.size() == 2);
+	CHECK(m.log.received[1] == sasl_req(2, "SCRAM-SHA-256", **expected));
+}
+
+// Under locking_mode::unsafe, where an offloaded step cannot run, SCRAM
+// runs PBKDF2 inline whatever the count.
+TEST_CASE("sasl: SCRAM-SHA-256 under locking_mode::unsafe", "[net][sasl][scram][offload]")
+{
+	constexpr std::string_view server_first =
+	  "r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096";
+	constexpr std::string_view server_final = "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=";
+	mock_ldap m(corosio::io_context_options{ .locking = corosio::locking_mode::unsafe });
+	m.serve({ answer({ sasl_resp(1, 14, server_first) }), answer({ sasl_resp(2, 0, server_final) }) });
+	auto mech = ldap::detail::scram_test_access::with_nonce(
+	  "user", "pencil", ldap::sasl_scram_options{ .offload_above_iterations = 0 }, "rOprNGfwEbeRWgbNEkqO");
+	REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 2);
+}
+
+// With offloading allowed, the same exchange goes through the offloaded
+// step, and a rebind with the same salt and count uses the cache.
+TEST_CASE("sasl: SCRAM-SHA-256 offloaded, then cached", "[net][sasl][scram][offload]")
+{
+	constexpr std::string_view client_final =
+	  "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=";
+	constexpr std::string_view server_first =
+	  "r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096";
+	constexpr std::string_view server_final = "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=";
+	mock_ldap m;
+	m.serve({ answer({ sasl_resp(1, 14, server_first) }),
+	  answer({ sasl_resp(2, 0, server_final) }),
+	  answer({ sasl_resp(3, 14, server_first) }),
+	  answer({ sasl_resp(4, 0, server_final) }) });
+	auto mech = ldap::detail::scram_test_access::with_nonce(
+	  "user", "pencil", ldap::sasl_scram_options{ .offload_above_iterations = 0 }, "rOprNGfwEbeRWgbNEkqO");
+	REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
+	CHECK(ldap::detail::scram_test_access::cached_iterations(mech) == 4096);
+	REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 4);
+	CHECK(m.log.received[1] == sasl_req(2, "SCRAM-SHA-256", client_final));
+	CHECK(m.log.received[3] == sasl_req(4, "SCRAM-SHA-256", client_final));
 }

@@ -257,11 +257,17 @@ itself stays dependency-free.
   `sasl_scram_sha256` (`jhetz/ldap/sasl_scram.hpp`, RFC 5802 / 7677:
   username and password, the bind fails unless the server proves it knows
   the password; UTF-8 usernames and passwords prepared with SASLprep, RFC
-  4013, through ICU; no channel binding) are built in,
+  4013, through ICU; no channel binding; `sasl_scram_options` sets the
+  authorization identity, the largest iteration count accepted from the
+  server, `max_iterations`, 1'000'000 by default, and the count above which
+  PBKDF2 runs on a thread of its own, `offload_above_iterations`, 16'384 by
+  default, inline under `locking_mode::unsafe`; the SaltedPassword is
+  cached per salt and count across binds with the same object) are built in,
   `sasl_gssapi` (`jhetz/ldap/sasl_gssapi.hpp`, Kerberos V5, RFC 4752;
   optional, see below) too when built with `JHETZ_LDAP_WITH_GSSAPI`,
   and `sasl_mechanism` is the interface for others (`prepare()` gives a
-  mechanism the URL's host before each bind; a step that may block, such
+  mechanism the URL's host before each bind, and whether a step can be
+  offloaded, `sasl_bind_context::can_offload`; a step that may block, such
   as a network call, is handed to `sasl_bind` with `offload_start()` /
   `offload_step()` and runs on a thread of its own). When the server
   reports success but the mechanism's `complete()` refuses it (e.g. a

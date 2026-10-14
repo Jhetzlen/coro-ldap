@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -344,17 +345,116 @@ namespace {
 		return r != nullptr && n == key_size;
 	}
 
+
+	// The keys of RFC 5802 section 3 from the SaltedPassword: the
+	// client-final-message's proof (base64) and the ServerSignature. False
+	// if OpenSSL fails.
+	//   ClientKey       := HMAC(SaltedPassword, "Client Key")
+	//   StoredKey       := H(ClientKey)
+	//   ClientSignature := HMAC(StoredKey, AuthMessage)
+	//   ClientProof     := ClientKey XOR ClientSignature
+	//   ServerKey       := HMAC(SaltedPassword, "Server Key")
+	//   ServerSignature := HMAC(ServerKey, AuthMessage)
+	[[nodiscard]] bool keys(std::span<const unsigned char, key_size> salted,
+	  std::string_view auth_message,
+	  std::string &proof_b64,
+	  std::span<unsigned char, key_size> server_signature)
+	{
+		wiped<key_size> client_key, stored_key, client_signature, proof, server_key;
+		if (!hmac(salted, "Client Key", client_key.span())
+			|| SHA256(client_key.data(), client_key.size(), stored_key.data()) == nullptr
+			|| !hmac(stored_key.span(), auth_message, client_signature.span())
+			|| !hmac(salted, "Server Key", server_key.span())
+			|| !hmac(server_key.span(), auth_message, server_signature)) {
+			OPENSSL_cleanse(server_signature.data(), server_signature.size());
+			return false;
+		}
+		for (std::size_t k = 0; k < key_size; ++k)
+			proof[k] = static_cast<unsigned char>(client_key[k] ^ client_signature[k]);
+		proof_b64 = base64_encode(proof.span());
+		return true;
+	}
+
+	// SaltedPassword := Hi(Normalize(password), salt, i), PBKDF2-HMAC-SHA-256.
+	[[nodiscard]] bool salted_password(std::string_view password,
+	  std::string_view salt,
+	  std::uint32_t iterations,
+	  std::span<unsigned char, key_size> out)
+	{
+		return PKCS5_PBKDF2_HMAC(password.data(),
+				 static_cast<int>(password.size()),
+				 reinterpret_cast<const unsigned char *>(salt.data()),
+				 static_cast<int>(salt.size()),
+				 static_cast<int>(iterations),
+				 EVP_sha256(),
+				 static_cast<int>(out.size()),
+				 out.data())
+			   == 1;
+	}
+
+	// Moves the text of `from` into `to` without leaving a copy behind in
+	// `from` (a move out of a short (SSO) string copies the characters).
+	void move_wiped(std::string &from, std::string &to)
+	{
+		wipe_string(to);
+		to.assign(from);
+		wipe_string(from);
+	}
+
 }// namespace
 
+// The parsed server-first-message: views into the message, but the salt.
+struct sasl_scram_sha256::server_first
+{
+	std::string_view nonce;
+	std::string salt;
+	std::uint32_t iterations = 0;
+};
+
+// What PBKDF2 and the keys need and give, shared between the mechanism and
+// its offloaded step (offload_step). The step reads the inputs and writes
+// the outputs, then sets `done` (release); the mechanism touches neither
+// until it reads `done` (acquire) as true (collect()), and drops its
+// reference without reading them otherwise (a step sasl_bind gave up on:
+// it runs on with this block). Wiped by its last owner.
+struct sasl_scram_sha256::derivation
+{
+	std::string password;// prepared
+	std::string salt;
+	std::uint32_t iterations = 0;
+	std::string auth_message;
+	std::array<unsigned char, key_size> salted{};
+	std::array<unsigned char, key_size> server_signature{};
+	bool ok = false;// the outputs are valid
+	std::atomic<bool> done{ false };
+
+	derivation() = default;
+	derivation(const derivation &) = delete;
+	derivation &operator=(const derivation &) = delete;
+	~derivation()
+	{
+		wipe_string(password);
+		OPENSSL_cleanse(salted.data(), salted.size());
+		OPENSSL_cleanse(server_signature.data(), server_signature.size());
+	}
+};
+
 sasl_scram_sha256::sasl_scram_sha256(std::string username, std::string password, std::string authz_id)
-  : sasl_scram_sha256(std::move(username), std::move(password), std::move(authz_id), std::nullopt)
+  : sasl_scram_sha256(std::move(username),
+	  std::move(password),
+	  sasl_scram_options{ .authz_id = std::move(authz_id) },
+	  std::nullopt)
+{}
+
+sasl_scram_sha256::sasl_scram_sha256(std::string username, std::string password, sasl_scram_options options)
+  : sasl_scram_sha256(std::move(username), std::move(password), std::move(options), std::nullopt)
 {}
 
 sasl_scram_sha256::sasl_scram_sha256(std::string username,
   std::string password,
-  std::string authz_id,
+  sasl_scram_options options,
   std::optional<std::string> fixed_nonce)
-  : username_(std::move(username)), password_(std::move(password)), authz_id_(std::move(authz_id)),
+  : username_(std::move(username)), password_(std::move(password)), options_(std::move(options)),
 	fixed_nonce_(std::move(fixed_nonce))
 {
 	wipe_string(password);// a short password was copied, not moved
@@ -363,6 +463,7 @@ sasl_scram_sha256::sasl_scram_sha256(std::string username,
 sasl_scram_sha256::~sasl_scram_sha256()
 {
 	wipe();
+	wipe_cache();
 	wipe_string(password_);
 	wipe_string(prepared_password_);
 }
@@ -371,13 +472,45 @@ void sasl_scram_sha256::wipe() noexcept
 {
 	OPENSSL_cleanse(server_signature_.data(), server_signature_.size());
 	have_signature_ = false;
+	pending_.reset();
+}
+
+void sasl_scram_sha256::wipe_cache() noexcept
+{
+	OPENSSL_cleanse(cache_salted_.data(), cache_salted_.size());
+	cache_salt_.clear();
+	cache_iterations_ = 0;
+}
+
+void sasl_scram_sha256::prepare(const sasl_bind_context &context) { can_offload_ = context.can_offload; }
+
+// The outcome of an offloaded step, once it is over: its ServerSignature
+// for verify(), its SaltedPassword for the cache. A step still running
+// (sasl_bind gave up on it) is dropped: this exchange has no signature.
+void sasl_scram_sha256::collect() noexcept
+{
+	if (pending_ == nullptr) return;
+	const std::shared_ptr<derivation> d = std::move(pending_);
+	pending_.reset();
+	if (!d->done.load(std::memory_order_acquire) || !d->ok) return;
+	server_signature_ = d->server_signature;
+	have_signature_ = true;
+	wipe_cache();
+	cache_salted_ = d->salted;
+	cache_salt_ = d->salt;
+	cache_iterations_ = d->iterations;
 }
 
 result<std::optional<std::string>> sasl_scram_sha256::start()
 {
+	collect();// the cache, from an offloaded step of the last bind
 	state_ = state::idle;
 	wipe();
 	wipe_string(prepared_password_);
+	if (options_.max_iterations < min_iterations || options_.max_iterations > static_cast<std::uint32_t>(INT32_MAX))
+		return input_error(
+		  detail::format("max_iterations {} is outside {} .. 2^31-1", options_.max_iterations, min_iterations));
+	const std::string &authz_id = options_.authz_id;
 	// RFC 5802 section 5.1: the username is prepared as a query (unassigned
 	// code points allowed).
 	std::string user;
@@ -389,8 +522,8 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 	// surrogates and code points above U+10FFFF) without control characters
 	// (C0, DEL, C1); every other code point is accepted.
 	{
-		const auto *p = reinterpret_cast<const std::uint8_t *>(authz_id_.data());
-		const auto n = static_cast<std::int64_t>(authz_id_.size());
+		const auto *p = reinterpret_cast<const std::uint8_t *>(authz_id.data());
+		const auto n = static_cast<std::int64_t>(authz_id.size());
 		for (std::int64_t i = 0; i < n;) {
 			UChar32 c = 0;
 			U8_NEXT(p, i, n, c);
@@ -417,7 +550,7 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 	if (auto r = saslprep(password_, "password", prep_kind::stored, prepared_password_); !r)
 		return std::unexpected(std::move(r.error()));
 
-	gs2_header_ = authz_id_.empty() ? "n,," : "n,a=" + escape_saslname(authz_id_) + ",";
+	gs2_header_ = authz_id.empty() ? "n,," : "n,a=" + escape_saslname(authz_id) + ",";
 	client_first_bare_ = "n=" + escape_saslname(user) + ",r=" + client_nonce_;
 	state_ = state::sent_first;
 	return std::optional<std::string>(gs2_header_ + client_first_bare_);
@@ -444,33 +577,28 @@ result<std::optional<std::string>> sasl_scram_sha256::step(std::optional<std::st
 	return refused("a challenge after the exchange ended");
 }
 
-result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_view server_first)
+auto sasl_scram_sha256::parse_server_first(std::string_view message) -> result<server_first>
 {
-	state_ = state::idle;// any failure below ends the exchange
-	// The prepared password is needed only for PBKDF2, below.
-	struct wipe_on_exit
-	{
-		std::string &s;
-		~wipe_on_exit() { wipe_string(s); }
-	} const wipe_password{ prepared_password_ };
 	// server-first-message = [reserved-mext ","] nonce "," salt ","
 	//                        iteration-count ["," extensions]
-	attribute_reader in{ server_first };
+	attribute_reader in{ message };
 	auto a = in.next();
 	if (!a) return malformed("server-first-message");
 	if (a->first == 'm')
 		return refused("server-first-message has a mandatory extension (m=) this client does not support");
 	if (a->first != 'r') return malformed("server-first-message: no nonce (r=)");
-	const std::string_view nonce = a->second;
-	if (nonce.empty() || !printable(nonce)) return malformed("server-first-message: nonce");
-	if (!nonce.starts_with(client_nonce_)) return refused("the server nonce does not start with the client nonce");
-	if (nonce.size() <= client_nonce_.size())
+	server_first out;
+	out.nonce = a->second;
+	if (out.nonce.empty() || !printable(out.nonce)) return malformed("server-first-message: nonce");
+	if (!out.nonce.starts_with(client_nonce_)) return refused("the server nonce does not start with the client nonce");
+	if (out.nonce.size() <= client_nonce_.size())
 		return refused("the server nonce does not extend the client nonce (no server part)");
 
 	a = in.next();
 	if (!a || a->first != 's') return malformed("server-first-message: no salt (s=)");
-	const auto salt = base64_decode(a->second);
+	auto salt = base64_decode(a->second);
 	if (!salt || salt->empty()) return malformed("server-first-message: salt is not valid base64");
+	out.salt = std::move(*salt);
 
 	a = in.next();
 	if (!a || a->first != 'i') return malformed("server-first-message: no iteration count (i=)");
@@ -479,60 +607,109 @@ result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_v
 	if (*iterations < min_iterations)
 		return refused(detail::format(
 		  "iteration count {} is below the minimum of {} (RFC 7677 section 4)", *iterations, min_iterations));
-	if (*iterations > max_iterations)
-		return refused(detail::format("iteration count {} is above the maximum of {}", *iterations, max_iterations));
+	if (*iterations > options_.max_iterations)
+		return refused(
+		  detail::format("iteration count {} is above the maximum of {}", *iterations, options_.max_iterations));
+	out.iterations = *iterations;
 	while (!in.done()) {
 		if (!in.next()) return malformed("server-first-message: extension");
 	}
+	return out;
+}
 
-	// RFC 5802 section 3:
-	//   SaltedPassword  := Hi(Normalize(password), salt, i)
-	//   ClientKey       := HMAC(SaltedPassword, "Client Key")
-	//   StoredKey       := H(ClientKey)
-	//   AuthMessage     := client-first-message-bare + "," +
-	//                      server-first-message + "," +
-	//                      client-final-message-without-proof
-	//   ClientSignature := HMAC(StoredKey, AuthMessage)
-	//   ClientProof     := ClientKey XOR ClientSignature
-	//   ServerKey       := HMAC(SaltedPassword, "Server Key")
-	//   ServerSignature := HMAC(ServerKey, AuthMessage)
+namespace {
+	// AuthMessage := client-first-message-bare + "," + server-first-message
+	//                + "," + client-final-message-without-proof
+	std::string
+	  auth_message_of(std::string_view first_bare, std::string_view server_first, std::string_view without_proof)
+	{
+		std::string out(first_bare);
+		out += ',';
+		out += server_first;
+		out += ',';
+		out += without_proof;
+		return out;
+	}
+}// namespace
+
+result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_view message)
+{
+	state_ = state::idle;// any failure below ends the exchange
+	// The prepared password is needed only for PBKDF2, below.
+	struct wipe_on_exit
+	{
+		std::string &s;
+		~wipe_on_exit() { wipe_string(s); }
+	} const wipe_password{ prepared_password_ };
+	auto parsed = parse_server_first(message);
+	if (!parsed) return std::unexpected(std::move(parsed.error()));
+
 	std::string without_proof = "c=" + base64_encode(gs2_header_) + ",r=";
-	without_proof += nonce;
-	std::string auth_message = client_first_bare_;
-	auth_message += ',';
-	auth_message += server_first;
-	auth_message += ',';
-	auth_message += without_proof;
+	without_proof += parsed->nonce;
+	const std::string auth_message = auth_message_of(client_first_bare_, message, without_proof);
 
-	wiped<key_size> salted, client_key, stored_key, client_signature, proof, server_key;
-	if (PKCS5_PBKDF2_HMAC(prepared_password_.data(),
-		  static_cast<int>(prepared_password_.size()),
-		  reinterpret_cast<const unsigned char *>(salt->data()),
-		  static_cast<int>(salt->size()),
-		  static_cast<int>(*iterations),
-		  EVP_sha256(),
-		  static_cast<int>(salted.size()),
-		  salted.data())
-		!= 1)
-		return library_error("OpenSSL PBKDF2 failed");
-	if (!hmac(salted.span(), "Client Key", client_key.span())
-		|| SHA256(client_key.data(), client_key.size(), stored_key.data()) == nullptr
-		|| !hmac(stored_key.span(), auth_message, client_signature.span())
-		|| !hmac(salted.span(), "Server Key", server_key.span())
-		|| !hmac(server_key.span(), auth_message, server_signature_)) {
+	if (cache_iterations_ != parsed->iterations || cache_salt_ != parsed->salt) {
+		wipe_cache();
+		if (!salted_password(prepared_password_, parsed->salt, parsed->iterations, cache_salted_)) {
+			wipe_cache();
+			return library_error("OpenSSL PBKDF2 failed");
+		}
+		cache_salt_ = std::move(parsed->salt);
+		cache_iterations_ = parsed->iterations;
+	}
+	std::string proof;
+	if (!keys(cache_salted_, auth_message, proof, server_signature_)) {
 		wipe();
 		return library_error("OpenSSL HMAC or SHA-256 failed");
 	}
 	have_signature_ = true;
-	for (std::size_t k = 0; k < key_size; ++k)
-		proof[k] = static_cast<unsigned char>(client_key[k] ^ client_signature[k]);
-
 	state_ = state::sent_final;
-	return std::optional<std::string>(without_proof + ",p=" + base64_encode(proof.span()));
+	return std::optional<std::string>(without_proof + ",p=" + proof);
+}
+
+sasl_work sasl_scram_sha256::offload_step(std::optional<std::string_view> challenge)
+{
+	if (!can_offload_ || state_ != state::sent_first || !challenge) return {};
+	auto parsed = parse_server_first(*challenge);
+	// A malformed message, a cached SaltedPassword or a cheap PBKDF2: step().
+	if (!parsed || parsed->iterations <= options_.offload_above_iterations
+		|| (cache_iterations_ == parsed->iterations && cache_salt_ == parsed->salt))
+		return {};
+
+	std::string without_proof = "c=" + base64_encode(gs2_header_) + ",r=";
+	without_proof += parsed->nonce;
+	auto d = std::make_shared<derivation>();
+	d->auth_message = auth_message_of(client_first_bare_, *challenge, without_proof);
+	d->salt = std::move(parsed->salt);
+	d->iterations = parsed->iterations;
+	move_wiped(prepared_password_, d->password);
+	pending_ = d;
+	state_ = state::sent_final;
+	// The step owns copies of everything it uses (the mechanism may be
+	// destroyed or start another bind while it runs).
+	return [d = std::move(d), without_proof = std::move(without_proof)]() -> result<std::optional<std::string>> {
+		struct done_on_exit
+		{
+			derivation &d;
+			~done_on_exit()
+			{
+				wipe_string(d.password);
+				d.done.store(true, std::memory_order_release);
+			}
+		} const done{ *d };
+		if (!salted_password(d->password, d->salt, d->iterations, d->salted))
+			return library_error("OpenSSL PBKDF2 failed");
+		std::string proof;
+		if (!keys(d->salted, d->auth_message, proof, d->server_signature))
+			return library_error("OpenSSL HMAC or SHA-256 failed");
+		d->ok = true;
+		return std::optional<std::string>(without_proof + ",p=" + proof);
+	};
 }
 
 result<void> sasl_scram_sha256::verify(std::string_view server_final)
 {
+	collect();
 	state_ = state::idle;
 	// server-final-message = (server-error / verifier) ["," extensions]
 	attribute_reader in{ server_final };

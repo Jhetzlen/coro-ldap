@@ -5,6 +5,7 @@
 
 #include "jhetz/ldap/sasl_scram.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
@@ -16,9 +17,21 @@ struct scram_test_access
 	static sasl_scram_sha256
 	  with_nonce(std::string username, std::string password, std::string authz_id, std::string nonce)
 	{
-		return sasl_scram_sha256(
-		  std::move(username), std::move(password), std::move(authz_id), std::optional<std::string>(std::move(nonce)));
+		return with_nonce(std::move(username),
+		  std::move(password),
+		  sasl_scram_options{ .authz_id = std::move(authz_id) },
+		  std::move(nonce));
 	}
+
+	static sasl_scram_sha256
+	  with_nonce(std::string username, std::string password, sasl_scram_options options, std::string nonce)
+	{
+		return sasl_scram_sha256(
+		  std::move(username), std::move(password), std::move(options), std::optional<std::string>(std::move(nonce)));
+	}
+
+	// The iteration count whose SaltedPassword is cached (0: none).
+	static std::uint32_t cached_iterations(const sasl_scram_sha256 &m) { return m.cache_iterations_; }
 
 	// The SASLprep'ed password the mechanism holds (empty when it holds none).
 	static const std::string &prepared_password(const sasl_scram_sha256 &m) { return m.prepared_password_; }

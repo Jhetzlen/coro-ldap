@@ -1321,6 +1321,7 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 	constexpr int max_steps = 32;
 	sasl_bind_context bind_context;
 	if (self->transport.type() == net::transport::kind::tcp) bind_context.host = self->transport.host();
+	bind_context.can_offload = !corosio::detail::get_scheduler(self->ex.context()).scheduler_locking_disabled();
 	mechanism.prepare(bind_context);
 	result<std::optional<std::string>> creds;
 	if (auto work = mechanism.offload_start())
