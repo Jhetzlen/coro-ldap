@@ -64,7 +64,7 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 Build dir `build/main`, configured from the repo root (Ninja, Debug, GCC):
 
 ```bash
-cmake -B build/main -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON -DJHETZ_LDAP_WERROR=ON
+cmake -B build/main -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON
 cmake --build build/main -j
 ctest --test-dir build/main -j12        # serial ctest is ~4x slower (fuzz replays); let the build finish first
 

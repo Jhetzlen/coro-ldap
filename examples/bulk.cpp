@@ -61,7 +61,10 @@ capy::task<int> run(boost::corosio::io_context &ioc, std::string text)
 		running.changed.clear();
 		co_await running.changed.wait();
 	}
-	co_await c->unbind();
+	if (auto unbound = co_await c->unbind(); !unbound) {
+		std::cerr << unbound.error().message() << '\n';
+		co_return 1;
+	}
 	co_return 0;
 }
 

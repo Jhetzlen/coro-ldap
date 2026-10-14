@@ -9,7 +9,7 @@ sketch `api_prototype.cpp` were removed once finished; see the git history.
 Remaining work is tracked in beads (`bd list`).
 
 Definition of done for a change: GCC 16 Debug with
-`-DJHETZ_LDAP_SANITIZE=ON -DJHETZ_LDAP_WERROR=ON` builds without warnings
+`-DJHETZ_LDAP_SANITIZE=ON` (warnings are errors by default) builds without warnings
 and `ctest` is green (network tests also under `--repeat until-fail:10
 -j8`); new parsers of untrusted input get a fuzz target, seeds and a GCC
 replay test; `clang-format --dry-run --Werror` (clang-format 23) is clean;

@@ -21,7 +21,9 @@ endif()
 option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap_net (transports and connect; fetches Corosio and Capy, needs OpenSSL and ICU)"
     ${jhetz_ldap_net_default})
 option(JHETZ_LDAP_SANITIZE "Build all targets with AddressSanitizer and UBSan" OFF)
-option(JHETZ_LDAP_WERROR "Treat warnings in jhetz::ldap code as errors" OFF)
+# On by default for our own builds; off as a subproject (add_subdirectory,
+# FetchContent) so a consumer's newer compiler is not broken by new warnings.
+option(JHETZ_LDAP_WERROR "Treat warnings in jhetz::ldap code as errors" ${PROJECT_IS_TOP_LEVEL})
 option(JHETZ_LDAP_COVERAGE "Instrument our own targets for Clang source-based coverage (llvm-cov)" OFF)
 option(JHETZ_LDAP_BUILD_BENCH "Build the benchmarks (bench/, not run by ctest)" OFF)
 option(JHETZ_LDAP_WITH_GSSAPI "Add SASL GSSAPI (Kerberos) to jhetz::ldap_net (needs the GSS-API library, MIT krb5's libgssapi_krb5, found with pkg-config)" OFF)
