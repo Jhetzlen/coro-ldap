@@ -136,6 +136,9 @@ class writer
 	// Assigning replaces the buffer, so it counts as a reset (see constructed()).
 	auto operator=(const writer &other) -> writer &
 	{
+		if (this == &other) {// the buffer is unchanged: not a reset
+			return *this;
+		}
 		buf_ = other.buf_;
 		++resets_;
 		return *this;

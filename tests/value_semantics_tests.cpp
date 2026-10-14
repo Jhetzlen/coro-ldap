@@ -366,6 +366,10 @@ TEST_CASE("value semantics: ber::writer", "[value_semantics][ber]")
 	target = w;
 	CHECK(hex(target.bytes()) == expected);
 	CHECK(target.get_allocator().resource() == &rb);
+	const ldap::ber::writer &alias = target;
+	target = alias;// self-assignment keeps the bytes
+	CHECK(hex(target.bytes()) == expected);
+	CHECK(target.get_allocator().resource() == &rb);
 	ldap::ber::writer source(w, a);
 	ldap::ber::writer target2(b);
 	target2 = std::move(source);

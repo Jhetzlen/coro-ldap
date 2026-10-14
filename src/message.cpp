@@ -92,6 +92,9 @@ control::control(control &&other, const allocator_type &alloc)
 
 auto control::operator=(const control &other) -> control &
 {
+	if (this == &other) {
+		return *this;
+	}
 	type = other.type;
 	criticality = other.criticality;
 	assign_optional(value, other.value, get_allocator());
@@ -128,6 +131,9 @@ sasl_auth::sasl_auth(sasl_auth &&other, const allocator_type &alloc)
 
 auto sasl_auth::operator=(const sasl_auth &other) -> sasl_auth &
 {
+	if (this == &other) {
+		return *this;
+	}
 	mechanism = other.mechanism;
 	assign_optional(credentials, other.credentials, get_allocator());
 	return *this;
@@ -158,6 +164,9 @@ bind_request::bind_request(bind_request &&other, const allocator_type &alloc)
 
 auto bind_request::operator=(const bind_request &other) -> bind_request &
 {
+	if (this == &other) {
+		return *this;
+	}
 	version = other.version;
 	name = other.name;
 	assign_variant(authentication, other.authentication, get_allocator());
@@ -188,6 +197,9 @@ bind_response::bind_response(bind_response &&other, const allocator_type &alloc)
 
 auto bind_response::operator=(const bind_response &other) -> bind_response &
 {
+	if (this == &other) {
+		return *this;
+	}
 	result = other.result;
 	assign_optional(server_sasl_creds, other.server_sasl_creds, get_allocator());
 	return *this;
@@ -246,6 +258,9 @@ modify_dn_request::modify_dn_request(modify_dn_request &&other, const allocator_
 
 auto modify_dn_request::operator=(const modify_dn_request &other) -> modify_dn_request &
 {
+	if (this == &other) {
+		return *this;
+	}
 	entry = other.entry;
 	new_rdn = other.new_rdn;
 	delete_old_rdn = other.delete_old_rdn;
@@ -279,6 +294,9 @@ extended_request::extended_request(extended_request &&other, const allocator_typ
 
 auto extended_request::operator=(const extended_request &other) -> extended_request &
 {
+	if (this == &other) {
+		return *this;
+	}
 	request_name = other.request_name;
 	assign_optional(request_value, other.request_value, get_allocator());
 	return *this;
@@ -311,6 +329,9 @@ extended_response::extended_response(extended_response &&other, const allocator_
 
 auto extended_response::operator=(const extended_response &other) -> extended_response &
 {
+	if (this == &other) {
+		return *this;
+	}
 	result = other.result;
 	assign_optional(response_name, other.response_name, get_allocator());
 	assign_optional(response_value, other.response_value, get_allocator());
@@ -349,6 +370,9 @@ intermediate_response::intermediate_response(intermediate_response &&other, cons
 
 auto intermediate_response::operator=(const intermediate_response &other) -> intermediate_response &
 {
+	if (this == &other) {
+		return *this;
+	}
 	assign_optional(response_name, other.response_name, alloc_);
 	assign_optional(response_value, other.response_value, alloc_);
 	return *this;
@@ -380,6 +404,9 @@ message::message(message &&other, const allocator_type &alloc)
 
 auto message::operator=(const message &other) -> message &
 {
+	if (this == &other) {
+		return *this;
+	}
 	id = other.id;
 	assign_variant(op, other.op, get_allocator());
 	controls = other.controls;
