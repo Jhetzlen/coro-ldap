@@ -1291,13 +1291,14 @@ result<message_header> peek_message_header(std::span<const std::byte> one_comple
 
 namespace {
 
-	result<void> expect_control(const control &c, std::string_view oid, std::string_view what)
+	// The control's value bytes, once its type is `oid` and it has a value.
+	result<std::span<const std::byte>> expect_control(const control &c, std::string_view oid, std::string_view what)
 	{
 		if (c.type != oid)
 			return fail(client_errc::decode_error,
 			  sanitized_context(detail::format("{}: control type is ", what), c.type, detail::format(", not {}", oid)));
 		if (!c.value) return fail(client_errc::decode_error, detail::format("{}: control has no value", what));
-		return {};
+		return std::as_bytes(std::span(*c.value));
 	}
 
 	control bytes_control(std::string_view oid, bool criticality, const ber::writer &w, std::pmr::memory_resource *mr)
@@ -1355,9 +1356,9 @@ namespace {
 
 result<paged_results> decode_paged_results(const control &c, std::pmr::memory_resource *mr)
 {
-	if (auto done = expect_control(c, paged_results_oid, "paged results"); !done)
-		return std::unexpected(std::move(done.error()));
-	return in_control(read_paged_results(std::as_bytes(std::span(*c.value)), mr), "paged results");
+	auto value = expect_control(c, paged_results_oid, "paged results");
+	if (!value) return std::unexpected(std::move(value.error()));
+	return in_control(read_paged_results(*value, mr), "paged results");
 }
 
 // ---------------------------------------------------------------- server side sorting
@@ -1403,9 +1404,9 @@ namespace {
 
 result<sort_result> decode_sort_result(const control &c, std::pmr::memory_resource *mr)
 {
-	if (auto done = expect_control(c, sort_response_oid, "sort result"); !done)
-		return std::unexpected(std::move(done.error()));
-	return in_control(read_sort_result(std::as_bytes(std::span(*c.value)), mr), "sort result");
+	auto value = expect_control(c, sort_response_oid, "sort result");
+	if (!value) return std::unexpected(std::move(value.error()));
+	return in_control(read_sort_result(*value, mr), "sort result");
 }
 
 // ---------------------------------------------------------------- pre-read / post-read
@@ -1429,8 +1430,9 @@ result<search_result_entry> decode_read_entry(const control &c, const decode_opt
 		return fail(client_errc::decode_error,
 		  sanitized_context("read entry: control type is ", c.type, ", not pre-read or post-read"));
 	const std::string_view name = c.type == pre_read_oid ? "pre-read" : "post-read";
-	if (auto done = expect_control(c, c.type, name); !done) return std::unexpected(std::move(done.error()));
-	return in_control(decoder(options).run_entry(std::as_bytes(std::span(*c.value))), name);
+	auto value = expect_control(c, c.type, name);
+	if (!value) return std::unexpected(std::move(value.error()));
+	return in_control(decoder(options).run_entry(*value), name);
 }
 
 }// namespace jhetz::ldap

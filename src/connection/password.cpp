@@ -250,12 +250,14 @@ namespace {
 			  context + ": empty old password (reset_password() sets one without it)");
 		ldap::password_method m = method.value_or(self->knowledge().password_mode);
 		if (m == ldap::password_method::automatic) {
-			if (!self->knowledge().advertised_password_method) {
+			if (const auto &known = self->knowledge().advertised_password_method) {
+				m = *known;
+			} else {
 				auto found = co_await advertised_password_method(self, context);
 				if (!found) co_return std::unexpected(std::move(found.error()));
 				self->knowledge().advertised_password_method = *found;
+				m = *found;
 			}
-			m = *self->knowledge().advertised_password_method;
 		}
 		if (m == ldap::password_method::active_directory)
 			co_return co_await ad_set_password(std::move(self), user, old_password, new_password, context);

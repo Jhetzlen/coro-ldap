@@ -347,7 +347,7 @@ capy::task<result<transport>>
 		}
 	}
 
-	if (u.scheme() == url_scheme::ldap) {
+	if (!tls) {// ldap://: TLS settings are made for ldaps:// only
 		im.stream = capy::any_stream(&*im.tcp);
 		co_return t;
 	}

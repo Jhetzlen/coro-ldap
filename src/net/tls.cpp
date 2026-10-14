@@ -293,6 +293,8 @@ boost::capy::task<result<void>> tls_handshake(transport::impl &im,
   tls_setup setup,
   deadline_t deadline)
 {
+	// The documented precondition; both callers check for an open TCP transport.
+	if (!im.tcp) co_return fail(std::make_error_code(std::errc::invalid_argument), "tls handshake: no TCP socket");
 	const std::string name = tls_peer_name(host, options);
 	if (options.verification == certificate_verification::full && options.host_matching == host_name_matching::strict
 		&& !is_ip_literal(name))
@@ -316,16 +318,16 @@ boost::capy::task<result<void>> tls_handshake(transport::impl &im,
 			im.tls_context.reset();
 		}
 	} undo{ im };
-	im.tls_context.emplace(std::move(setup.context));
-	im.tls.emplace(&*im.tcp, *im.tls_context);
-	im.tls->set_hostname(name);
-	auto [ec] = co_await bounded(im.tls->handshake(corosio::tls_role::client), deadline);
+	auto &ctx = im.tls_context.emplace(std::move(setup.context));
+	auto &stream = im.tls.emplace(&*im.tcp, ctx);
+	stream.set_hostname(name);
+	auto [ec] = co_await bounded(stream.handshake(corosio::tls_role::client), deadline);
 	if (ec) {
 		std::string context = "tls handshake";
 		if (!setup.failure->reason.empty()) context += ": server certificate: " + setup.failure->reason;
 		co_return fail(ec, std::move(context));
 	}
-	im.stream = boost::capy::any_stream(&*im.tls);
+	im.stream = boost::capy::any_stream(&stream);
 	undo.keep = true;
 	co_return result<void>{};
 }

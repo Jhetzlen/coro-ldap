@@ -157,7 +157,8 @@ capy::task<result<std::optional<std::string>>>
 	  timeout ? std::optional(net::detail::clock::now() + *timeout) : std::nullopt;
 	auto [ec] = co_await net::detail::bounded(shared->done.wait(), deadline);
 	if (ec) co_return fail(ec, "gave up on the mechanism's step (it runs on, on its own thread)");
-	if (shared->thrown) std::rethrow_exception(shared->thrown);
+	// The thread set exactly one of the two: no value means it threw.
+	if (!shared->value) std::rethrow_exception(shared->thrown);
 	co_return std::move(*shared->value);
 }
 
