@@ -55,22 +55,9 @@ std::string detail::op_context(std::string_view op, const dn &d)
 	return text;
 }
 
-namespace {
+namespace detail {
 
-	// Contexts are built as std::string (cold path) and copied into the
-	// error, which lives on the default resource.
-	error with_context(error e, std::string_view prefix)
-	{
-		if (e.context.empty()) {
-			e.context.assign(prefix);
-		} else {
-			e.context.insert(0, ": ");
-			e.context.insert(0, prefix);
-		}
-		return e;
-	}
-
-	constexpr std::array<std::string_view, 21> op_names{ "BindRequest",
+	inline constexpr std::array<std::string_view, 21> op_names{ "BindRequest",
 		"BindResponse",
 		"UnbindRequest",
 		"SearchRequest",
@@ -102,16 +89,14 @@ namespace {
 			if (same[i]) return i;
 		return sizeof...(Ts);
 	}
-	template<class T> constexpr std::size_t op_index = index_in<T>(static_cast<const protocol_op *>(nullptr));
+	template<class T> inline constexpr std::size_t op_index = index_in<T>(static_cast<const protocol_op *>(nullptr));
 
 	// RFC 4511 protocolOp tags of the responses the reader recognizes before
 	// decoding.
-	constexpr ber::tag search_result_done_tag = ber::application(5, true);
-	constexpr ber::tag intermediate_response_tag = ber::application(25, true);
+	inline constexpr ber::tag search_result_done_tag = ber::application(5, true);
+	inline constexpr ber::tag intermediate_response_tag = ber::application(25, true);
 
 	bool same_tag(ber::tag a, ber::tag b) noexcept { return a.cls == b.cls && a.number == b.number; }
-
-	using detail::op_context;
 
 	using clock = std::chrono::steady_clock;
 
@@ -120,6 +105,20 @@ namespace {
 		if (!d) return std::nullopt;
 		return clock::now() + *d;
 	}
+
+}// namespace detail
+
+using detail::clock;
+using detail::deadline_after;
+using detail::intermediate_response_tag;
+using detail::op_context;
+using detail::op_index;
+using detail::op_name;
+using detail::op_names;
+using detail::same_tag;
+using detail::search_result_done_tag;
+
+namespace {
 
 	// Abandoned requests whose late responses are still dropped. Older ones
 	// are forgotten: a response for them would then be unexpected.
@@ -442,7 +441,7 @@ struct connection::impl
 			return fail(client_errc::operation_in_progress, std::string(context) + " during StartTLS");
 		m.id = free_id();
 		auto bytes = encode(m, mr);
-		if (!bytes) return std::unexpected(with_context(std::move(bytes.error()), context));
+		if (!bytes) return std::unexpected(detail::with_context(std::move(bytes.error()), context));
 		if (m.id == max_int) wrapped = true;
 		next_id = m.id == max_int ? 1 : m.id + 1;
 		const bool bind = std::holds_alternative<bind_request>(m.op);
@@ -727,7 +726,7 @@ struct connection::impl
 		auto h = peek_message_header(bytes);
 		if (!h) {
 			buf.consume(size);
-			shut(with_context(std::move(h.error()), detail::format("read {}", transport.name())), true);
+			shut(detail::with_context(std::move(h.error()), detail::format("read {}", transport.name())), true);
 			return;
 		}
 		if (h->id == 0) {
@@ -744,7 +743,7 @@ struct connection::impl
 			auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = p.mr });
 			buf.consume(size);
 			if (!m) {
-				shut(with_context(std::move(m.error()), detail::format("read {}", transport.name())), true);
+				shut(detail::with_context(std::move(m.error()), detail::format("read {}", transport.name())), true);
 				return;
 			}
 			const std::size_t index = m->op.index();
@@ -788,7 +787,7 @@ struct connection::impl
 		{
 			auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = &scratch });
 			if (!m) {
-				fatal = with_context(std::move(m.error()), detail::format("read {}", transport.name()));
+				fatal = detail::with_context(std::move(m.error()), detail::format("read {}", transport.name()));
 			} else if (const auto *x = std::get_if<extended_response>(&m->op); x == nullptr) {
 				fatal = unexpected(std::string(op_name(m->op)) + " with message id 0");
 			} else if (x->response_name && *x->response_name == notice_of_disconnection_oid) {
@@ -839,12 +838,12 @@ struct connection::impl
 			p.queue.pop_front();
 			co_return m;
 		}
-		if (p.failure) co_return std::unexpected(with_context(*p.failure, context));
+		if (p.failure) co_return std::unexpected(detail::with_context(*p.failure, context));
 		co_return std::unexpected(not_connected(context));// closed by close() or unbind()
 	}
 };
 
-namespace {
+namespace detail {
 
 	// A counted reference to the connection state.
 	class impl_ref
@@ -886,7 +885,14 @@ namespace {
 		~registration() { c.abandon(p); }
 	};
 
-	error not_connected(std::string_view context) { return make_error(client_errc::not_connected, context); }
+}// namespace detail
+
+using detail::impl_ref;
+using detail::registration;
+
+namespace {
+
+	error no_connection(std::string_view context) { return make_error(client_errc::not_connected, context); }
 
 	// Waits until no other bind exchange is in progress (binds are
 	// serialized), then marks this one as in progress; bind_exchange ends it.
@@ -1026,7 +1032,7 @@ void connection::close() noexcept
 	impl_->transport.close();// also ends a TLS shutdown that unbind() is waiting for
 }
 
-namespace {
+namespace detail {
 
 	// One request with one response (everything but search): sends it,
 	// waits for the response of index `expect` and returns it. `self` keeps
@@ -1050,6 +1056,12 @@ namespace {
 		registration reg(*self, p);
 		co_return co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout), context);
 	}
+
+}// namespace detail
+
+using detail::request_response;
+
+namespace {
 
 	// Ends a SASL exchange the client gives up on while the server waits for
 	// its next step: until then the server refuses other operations (RFC
@@ -1247,9 +1259,13 @@ namespace {
 		message m{ std::pmr::polymorphic_allocator<>(mr) };
 		m.op = std::move(op);
 		if (auto c = append_controls(controls, m.controls); !c)
-			return std::unexpected(with_context(std::move(c.error()), context));
+			return std::unexpected(detail::with_context(std::move(c.error()), context));
 		return m;
 	}
+
+}// namespace
+
+namespace detail {
 
 	// The SearchRequest for `p`, validated (errors carry `context`).
 	result<message> search_message(connection::impl &c, const search_params &p, const std::string &context)
@@ -1290,12 +1306,15 @@ namespace {
 		return s;
 	}
 
-}// namespace
+}// namespace detail
+
+using detail::search_message;
+using detail::start_search;
 
 capy::task<result<void>> connection::simple_bind(dn name, std::string password)
 {
 	std::string context = op_context("bind", name);
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	if (!name.empty() && password.empty())
 		co_return fail(client_errc::unauthenticated_bind, context + ": empty password (RFC 4513 section 5.1.2)");
 	impl_ref self(impl_);// `this` may be moved from while suspended
@@ -1314,7 +1333,7 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 {
 	std::string context = "sasl bind ";
 	context += mechanism.name();
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	impl_ref self(impl_);
 	if (auto b = co_await begin_bind(self, context); !b) co_return std::unexpected(std::move(b.error()));
 	const bind_exchange exchange{ self };
@@ -1369,7 +1388,7 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 
 capy::task<result<ldap::search_stream>> connection::search_stream(search_params p, std::pmr::memory_resource *mr)
 {
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(op_context("search", p.base)));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(op_context("search", p.base)));
 	co_return start_search(*impl_, p, mr, co_await capy::this_coro::stop_token);
 }
 
@@ -1420,7 +1439,7 @@ namespace mod {
 capy::task<result<response>> connection::add(add_params p)
 {
 	std::string context = op_context("add", p.entry);
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	impl_ref self(impl_);
 	const std::pmr::polymorphic_allocator<> alloc(self->mr);
 	add_request op(alloc);
@@ -1432,7 +1451,7 @@ capy::task<result<response>> connection::add(add_params p)
 	  co_await request_response(self, std::move(*request), op_index<add_response>, context, p.timeout), context);
 }
 
-namespace {
+namespace detail {
 
 	capy::task<result<response>> modify_impl(impl_ref self, modify_params p, std::string context)
 	{
@@ -1446,19 +1465,21 @@ namespace {
 		  co_await request_response(self, std::move(*request), op_index<modify_response>, context, p.timeout), context);
 	}
 
-}// namespace
+}// namespace detail
+
+using detail::modify_impl;
 
 capy::task<result<response>> connection::modify(modify_params p)
 {
 	std::string context = op_context("modify", p.object);
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	co_return co_await modify_impl(impl_ref(impl_), std::move(p), std::move(context));
 }
 
 capy::task<result<response>> connection::del(del_params p)
 {
 	std::string context = op_context("delete", p.entry);
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	impl_ref self(impl_);
 	auto request = with_controls(del_request(p.entry.to_string(self->mr), std::pmr::polymorphic_allocator<>(self->mr)),
 	  p.controls,
@@ -1472,7 +1493,7 @@ capy::task<result<response>> connection::del(del_params p)
 capy::task<result<response>> connection::modify_dn(modify_dn_params p)
 {
 	std::string context = op_context("modify DN", p.entry);
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	if (p.new_rdn.avas.empty()) co_return fail(client_errc::invalid_dn, context + ": empty new RDN");
 	impl_ref self(impl_);
 	const std::pmr::polymorphic_allocator<> alloc(self->mr);
@@ -1490,7 +1511,7 @@ capy::task<result<response>> connection::modify_dn(modify_dn_params p)
 capy::task<result<bool>> connection::compare(compare_params p)
 {
 	std::string context = op_context("compare", p.entry);
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	impl_ref self(impl_);
 	const std::pmr::polymorphic_allocator<> alloc(self->mr);
 	auto request = with_controls(
@@ -1507,7 +1528,7 @@ capy::task<result<bool>> connection::compare(compare_params p)
 	co_return std::unexpected(r.to_error(context));// success (0) is not a valid answer either
 }
 
-namespace {
+namespace detail {
 
 	capy::task<result<extended_result>> extended_impl(impl_ref self, extended_params p)
 	{
@@ -1528,11 +1549,13 @@ namespace {
 		co_return out;
 	}
 
-}// namespace
+}// namespace detail
+
+using detail::extended_impl;
 
 capy::task<result<extended_result>> connection::extended(extended_params p)
 {
-	if (impl_ == nullptr) co_return std::unexpected(not_connected("extended operation " + p.name));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection("extended operation " + p.name));
 	co_return co_await extended_impl(impl_ref(impl_), std::move(p));
 }
 
@@ -1580,6 +1603,10 @@ namespace {
 		return generated;
 	}
 
+}// namespace
+
+namespace detail {
+
 	// `context` names the operation in errors, instead of "extended
 	// operation <oid>".
 	capy::task<result<std::optional<std::string>>>
@@ -1603,7 +1630,9 @@ namespace {
 		co_return std::move(*generated);
 	}
 
-}// namespace
+}// namespace detail
+
+using detail::password_modify_impl;
 
 capy::task<result<std::optional<std::string>>> connection::password_modify(password_modify_params p)
 {
@@ -1612,13 +1641,13 @@ capy::task<result<std::optional<std::string>>> connection::password_modify(passw
 		context += ' ';
 		detail::append_sanitized(context, *p.user, 256);
 	}
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	co_return co_await password_modify_impl(impl_ref(impl_), std::move(p), std::move(context));
 }
 
 // ---------------------------------------------------------------- schema
 
-namespace {
+namespace detail {
 
 	// The one entry of a base-scope search (nullopt if none came back).
 	capy::task<result<std::optional<entry>>> read_one(impl_ref self, search_params p)
@@ -1633,6 +1662,12 @@ namespace {
 			if (!found) found = std::move(**e);
 		}
 	}
+
+}// namespace detail
+
+using detail::read_one;
+
+namespace {
 
 	capy::task<result<server_schema>> load_schema_impl(impl_ref self)
 	{
@@ -1670,7 +1705,7 @@ namespace {
 
 capy::task<result<server_schema>> connection::load_schema()
 {
-	if (impl_ == nullptr) co_return std::unexpected(not_connected("load schema"));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection("load schema"));
 	co_return co_await load_schema_impl(impl_ref(impl_));
 }
 
@@ -1822,7 +1857,7 @@ capy::task<result<void>> connection::change_password(dn user,
   std::optional<ldap::password_method> method)
 {
 	std::string context = op_context("change password", user);
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	co_return co_await set_password(
 	  impl_ref(impl_), std::move(context), std::move(user), std::move(old_password), std::move(new_password), method);
 }
@@ -1831,7 +1866,7 @@ capy::task<result<void>>
   connection::reset_password(dn user, std::string new_password, std::optional<ldap::password_method> method)
 {
 	std::string context = op_context("reset password", user);
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	co_return co_await set_password(
 	  impl_ref(impl_), std::move(context), std::move(user), std::nullopt, std::move(new_password), method);
 }
@@ -1842,7 +1877,7 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
   std::optional<std::chrono::milliseconds> timeout)
 {
 	std::string context = "start tls";
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	impl_ref self(impl_);
 	// StartTLS may only be sent once every response is received (RFC 4513
 	// section 3.1.1). Operations are refused; the answers still due to
@@ -1973,7 +2008,7 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 capy::task<result<void>> connection::unbind()
 {
 	const std::string context = "unbind";
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(context));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
 	const impl_ref self(impl_);
 	if (!self->open || self->unbinding) co_return std::unexpected(self->not_connected(context));
 	// Nothing may be sent while a BindRequest is outstanding (RFC 4511
@@ -2027,7 +2062,7 @@ capy::task<result<void>> connection::unbind()
 		(void)co_await self->transport.shutdown(self->tls_shutdown_timeout);
 	}
 	self->transport.close();
-	if (failed) co_return std::unexpected(with_context(std::move(*failed), context));
+	if (failed) co_return std::unexpected(detail::with_context(std::move(*failed), context));
 	co_return result<void>{};
 }
 
@@ -2062,7 +2097,7 @@ const std::pmr::vector<control> &search_stream::controls() const noexcept
 
 capy::task<result<std::optional<entry>>> search_stream::next()
 {
-	if (state_ == nullptr) co_return std::unexpected(not_connected("search"));
+	if (state_ == nullptr) co_return std::unexpected(no_connection("search"));
 	state &s = *state_;// stable: the stream must not be moved while next() runs
 	if (s.finished) {
 		if (s.error_) co_return std::unexpected(*s.error_);
@@ -2195,7 +2230,7 @@ struct paged_search::state
 capy::task<result<ldap::paged_search>>
   connection::search_paged(search_params p, std::int32_t page_size, std::pmr::memory_resource *mr)
 {
-	if (impl_ == nullptr) co_return std::unexpected(not_connected(op_context("search", p.base)));
+	if (impl_ == nullptr) co_return std::unexpected(no_connection(op_context("search", p.base)));
 	if (page_size <= 0)
 		co_return fail(client_errc::encode_error,
 		  detail::format("{}: page size {} is not positive", op_context("search", p.base), page_size));
@@ -2257,7 +2292,7 @@ const std::pmr::vector<control> &paged_search::controls() const noexcept
 
 capy::task<result<std::optional<entry>>> paged_search::next()
 {
-	if (state_ == nullptr) co_return std::unexpected(not_connected("search"));
+	if (state_ == nullptr) co_return std::unexpected(no_connection("search"));
 	state &s = *state_;
 	if (s.finished) {
 		if (s.error_) co_return std::unexpected(*s.error_);
@@ -2286,7 +2321,7 @@ capy::task<result<std::optional<entry>>> paged_search::next()
 		// The page ended: the next one, if the server gave a cookie.
 		s.controls = s.current.controls();
 		auto pr = find_paged(s.controls);
-		if (!pr) co_return finish(with_context(std::move(pr.error()), op_context("search", s.params.base)));
+		if (!pr) co_return finish(detail::with_context(std::move(pr.error()), op_context("search", s.params.base)));
 		s.cookie = *pr ? std::string((*pr)->cookie) : std::string();
 		if (s.cookie.empty()) {
 			s.finished = true;
