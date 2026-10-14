@@ -368,6 +368,12 @@ struct connection::impl
 	// Requests still to be answered: those waited for, and `due` answers.
 	std::size_t outstanding() const noexcept;
 
+	// Describes the open connection: false after close(), unbind() or a
+	// failure, even though the closed transport still holds its TLS layer.
+	// False during start_tls() too: the TLS layer is in place before its
+	// handshake runs.
+	bool is_tls() const noexcept { return open && !upgrading && transport.is_tls(); }
+
 	// ---------------------------------------------------------------- reader
 
 	void start_reader();

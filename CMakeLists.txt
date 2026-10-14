@@ -202,7 +202,6 @@ if(JHETZ_LDAP_BUILD_NET)
     endif()
 
     add_library(jhetz_ldap_net STATIC
-        src/ad_password.cpp
         src/connection.cpp
         src/connection/bind.cpp
         src/connection/core.cpp
@@ -211,6 +210,7 @@ if(JHETZ_LDAP_BUILD_NET)
         src/connection/paged_search.cpp
         src/connection/operations.cpp
         src/connection/schema_load.cpp
+        src/connection/password.cpp
         src/sasl_scram.cpp
         src/sync.cpp
         src/net/connect.cpp
