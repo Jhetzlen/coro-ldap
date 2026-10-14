@@ -198,7 +198,10 @@ up, with zero counts).
 The checks are in `.clang-tidy` (each disabled check has its reason there);
 `tests/.clang-tidy` and `fuzz/.clang-tidy` inherit it and turn off test-only
 noise. The header filter keeps the reports to our own headers (never Corosio,
-Capy, Catch2). Use Clang for the build directory, with GSSAPI on so
+Capy, Catch2), and the dependencies are SYSTEM includes. Static-analyzer
+reports are placed in the main file (`report-in-main-source-file`, set through
+`ExtraArgs`), so one whose path ends in a dependency header lands on our call
+site, where a NOLINT can silence it. Use Clang for the build directory, with GSSAPI on so
 `sasl_gssapi.cpp` is covered; `compile_commands.json` is written by default.
 `build/tidy` is that directory:
 

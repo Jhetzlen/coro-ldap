@@ -76,6 +76,17 @@ WarningsAsErrors: ''
 # Our own headers only: never Corosio, Capy, Catch2 or the system headers.
 HeaderFilterRegex: '.*/(include/jhetz|src|tests|fuzz)/.*'
 ExcludeHeaderFilterRegex: '.*/_deps/.*'
+# The dependencies are SYSTEM includes, but a static-analyzer report whose
+# path starts in our code is kept even when its final location is in their
+# headers, where no NOLINT can reach it. Report every analyzer finding in the
+# main file instead (with the path in the notes), so a false positive is
+# silenced by a NOLINT on our line. clang-tidy cannot set this global analyzer
+# option through CheckOptions (only checker options), hence the -Xclang pair.
+ExtraArgs:
+  - '-Xclang'
+  - '-analyzer-config'
+  - '-Xclang'
+  - 'report-in-main-source-file=true'
 FormatStyle: none
 
 CheckOptions:

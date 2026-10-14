@@ -832,6 +832,9 @@ auto connection::impl::begin_bind(impl_ref c, std::string_view context) -> capy:
 			co_return fail(ec, context);
 		}
 	}
+	// The analyzer does not model the promise's construction: Capy's env_ is
+	// nullptr-initialised and set by the awaiting caller before the first resume.
+	// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
 	if ((co_await capy::this_coro::stop_token).stop_requested()) {
 		co_return fail(capy::error::canceled, context);
 	}
@@ -858,6 +861,9 @@ namespace detail {
 	  std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<message>>
 	{
 		if (!std::holds_alternative<bind_request>(request.op)
+			// The analyzer does not model the promise's construction: Capy's env_ is
+			// nullptr-initialised and set by the awaiting caller before the first resume.
+			// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
 			&& (co_await capy::this_coro::stop_token).stop_requested()) {
 			co_return fail(capy::error::canceled, context);
 		}
