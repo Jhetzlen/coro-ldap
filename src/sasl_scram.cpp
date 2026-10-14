@@ -592,6 +592,7 @@ auto sasl_scram_sha256::start() -> result<std::optional<std::string>>
 		const auto n = static_cast<std::int64_t>(authz_id.size());
 		for (std::int64_t i = 0; i < n;) {
 			UChar32 c = 0;
+			// NOLINTNEXTLINE(bugprone-inc-dec-in-conditions): ICU's macro, i is read and advanced in sequence
 			U8_NEXT(p, i, n, c);
 			if (c < 0) {
 				return input_error("authorization identity is not valid UTF-8");

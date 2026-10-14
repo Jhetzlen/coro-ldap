@@ -704,6 +704,7 @@ namespace {
 auto run_command(const std::string &command) -> std::pair<int, std::string>
 {
 	std::string out;
+	// NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c): test-only, runs the example with fixed arguments
 	FILE *p = ::popen((command + " 2>&1").c_str(), "r");
 	REQUIRE(p != nullptr);
 	char buf[4096];

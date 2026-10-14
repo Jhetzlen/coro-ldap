@@ -9,6 +9,7 @@ auto main(int argc, char **argv) -> int
 {
 	namespace fuzz = jhetz::ldap::fuzz;
 	const std::string_view texts[] = {
+		// NOLINTNEXTLINE(bugprone-suspicious-missing-comma): one definition, wrapped at the column limit
 		"( 2.5.4.3 NAME ( 'cn' 'commonName' ) DESC 'RFC4519: common name(s) for which the entity is known by' SUP name "
 		")",
 		"( 2.5.4.41 NAME 'name' EQUALITY caseIgnoreMatch SUBSTR caseIgnoreSubstringsMatch SYNTAX "

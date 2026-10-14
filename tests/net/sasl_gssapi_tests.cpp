@@ -27,24 +27,27 @@ using ldap::detail::gssapi_layer_offer;
 namespace {
 
 // Sets an environment variable for the scope of a test, then restores it.
+// Declared before the connection: no other thread (the offloaded steps)
+// runs when it is set or restored, as the io_context waits for them.
 class scoped_env
 {
   public:
 	scoped_env(const char *name, const char *value) : name_(name)
 	{
+		// NOLINTNEXTLINE(concurrency-mt-unsafe): no other thread runs, see above
 		if (const char *old = std::getenv(name)) {
 			old_ = old;
 		}
-		::setenv(name, value, 1);
+		::setenv(name, value, 1);// NOLINT(concurrency-mt-unsafe): no other thread runs
 	}
 	scoped_env(const scoped_env &) = delete;
 	auto operator=(const scoped_env &) -> scoped_env & = delete;
 	~scoped_env()
 	{
 		if (old_) {
-			::setenv(name_, old_->c_str(), 1);
+			::setenv(name_, old_->c_str(), 1);// NOLINT(concurrency-mt-unsafe): no other thread runs
 		} else {
-			::unsetenv(name_);
+			::unsetenv(name_);// NOLINT(concurrency-mt-unsafe): no other thread runs
 		}
 	}
 

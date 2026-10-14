@@ -30,6 +30,7 @@ namespace {
 
 auto env(const char *name) -> std::string
 {
+	// NOLINTNEXTLINE(concurrency-mt-unsafe): nothing in this binary calls setenv while tests run
 	const char *v = std::getenv(name);
 	return v == nullptr ? std::string() : std::string(v);
 }

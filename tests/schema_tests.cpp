@@ -17,6 +17,7 @@ namespace {
 // As OpenLDAP 2.6 serves them from cn=Subschema (core, cosine, nis,
 // inetorgperson, memberof overlay).
 const std::pmr::vector<std::pmr::string> openldap_types{
+	// NOLINTNEXTLINE(bugprone-suspicious-missing-comma): one definition, wrapped at the column limit
 	"( 2.5.4.41 NAME 'name' DESC 'RFC4519: common supertype of name attributes' EQUALITY caseIgnoreMatch SUBSTR "
 	"caseIgnoreSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{32768} )",
 	"( 2.5.4.3 NAME ( 'cn' 'commonName' ) DESC 'RFC4519: common name(s) for which the entity is known by' SUP name )",
@@ -146,6 +147,7 @@ TEST_CASE("schema: unparseable definitions are skipped", "[schema]")
 TEST_CASE("schema: a SYNTAX that is not a numeric OID skips the definition", "[schema]")
 {
 	const std::pmr::vector<std::pmr::string> types{
+		// NOLINTNEXTLINE(bugprone-suspicious-missing-comma): one definition, wrapped at the column limit
 		"( 1.2.1 NAME 'accented' DESC '\\5C caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC' SYNTAX "
 		"'1.3.6.1.4.1.1466.115.121.1.15{64}' )",
 		"( 1.2.2 NAME 'forged' SYNTAX '1.2\x1b[31m\\5C\r\nerror: forged' )",

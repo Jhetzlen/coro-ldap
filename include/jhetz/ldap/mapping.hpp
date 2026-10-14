@@ -125,6 +125,7 @@ struct value_traits<T>
 	{
 		T v{};
 		const char *end = raw.data() + raw.size();
+		// NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): bounded by end, no terminator read
 		const auto [p, ec] = std::from_chars(raw.data(), end, v);
 		if (raw.empty() || ec != std::errc{} || p != end) {
 			return std::unexpected(detail::conversion_error("not an integer", raw));

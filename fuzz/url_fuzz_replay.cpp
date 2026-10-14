@@ -14,6 +14,7 @@ auto main(int argc, char **argv) -> int
 		"ldap://ldap1.example.net:6666/o=University%20of%20Michigan,c=US??sub?(cn=Babs%20Jensen)",
 		"LDAP://ldap1.example.com/c=GB?objectClass?ONE",
 		"ldap://ldap2.example.com/o=Question%3f,c=US?mail",
+		// NOLINTNEXTLINE(bugprone-suspicious-missing-comma): one RFC 4516 URL, split so "???(" is no trigraph
 		"ldap://ldap3.example.com/o=Babsco,c=US???"
 		"(four-octet=%5c00%5c00%5c00%5c04)",
 		"ldap://ldap.example.com/o=An%20Example%5C2C%20Inc.,c=US",

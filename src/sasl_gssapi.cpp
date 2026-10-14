@@ -152,6 +152,7 @@ namespace {
 		const auto n = static_cast<std::int64_t>(s.size());
 		for (std::int64_t i = 0; i < n;) {
 			UChar32 c = 0;
+			// NOLINTNEXTLINE(bugprone-inc-dec-in-conditions): ICU's macro, i is read and advanced in sequence
 			U8_NEXT(p, i, n, c);
 			if (c < 0) {
 				return input_error(std::string(what) + " is not valid UTF-8");
@@ -419,7 +420,7 @@ auto sasl_gssapi::step(std::optional<std::string_view> challenge) -> result<std:
 			s.reset();
 			return fail(client_errc::decode_error, "no token in the server's challenge");
 		}
-		return s.init(*challenge);
+		return s.init(challenge);
 	case state::phase::established: {
 		if (!challenge) {
 			s.reset();

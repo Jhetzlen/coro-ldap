@@ -81,7 +81,7 @@ struct options
 	  "                  [-z sizelimit] [-l timelimit] [--page size] [-Y EXTERNAL [-X authzid]] [-Z]\n"
 	  "                  [--ca-file file] [--cert file --key file] [--insecure]\n"
 	  "                  URL [filter [attribute...]]");
-	std::exit(2);
+	std::exit(2);// NOLINT(concurrency-mt-unsafe): during argument parsing, before any thread starts
 }
 
 auto to_int(std::string_view text, const char *what) -> std::int32_t
@@ -168,6 +168,7 @@ auto parse_args(int argc, char **argv) -> options
 	}
 	o.attributes = std::ranges::to<std::vector<std::string>>(positional | std::views::drop(2));
 	if (o.bind_dn && !o.password) {
+		// NOLINTNEXTLINE(concurrency-mt-unsafe): argument parsing, single-threaded, nothing calls setenv
 		if (const char *env = std::getenv("LDAP_PASSWORD")) {
 			o.password = env;
 		}

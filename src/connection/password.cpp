@@ -224,6 +224,7 @@ namespace {
 			return {};
 		}
 		unsigned code = 0;
+		// NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): bounded to 8 chars, no terminator read
 		const auto [end, ec] = std::from_chars(diagnostic.data(), diagnostic.data() + 8, code, 16);
 		if (ec != std::errc{} || end != diagnostic.data() + 8) {
 			return {};

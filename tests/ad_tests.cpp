@@ -234,6 +234,7 @@ const std::pmr::vector<std::pmr::string> ad_types{
 	"( 1.2.840.113556.1.4.159 NAME 'accountExpires' SYNTAX '1.2.840.113556.1.4.906' SINGLE-VALUE )",
 	"( 1.2.840.113556.1.4.96 NAME 'pwdLastSet' SYNTAX '1.2.840.113556.1.4.906' SINGLE-VALUE )",
 	"( 1.2.840.113556.1.4.1696 NAME 'lastLogonTimestamp' SYNTAX '1.2.840.113556.1.4.906' SINGLE-VALUE )",
+	// NOLINTNEXTLINE(bugprone-suspicious-missing-comma): one definition, wrapped at the column limit
 	"( 1.2.840.113556.1.2.120 NAME 'uSNChanged' SYNTAX '1.2.840.113556.1.4.906' SINGLE-VALUE "
 	"NO-USER-MODIFICATION )",
 	"( 1.2.840.113556.1.4.74 NAME 'maxPwdAge' SYNTAX '1.2.840.113556.1.4.906' SINGLE-VALUE )",

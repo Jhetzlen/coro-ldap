@@ -207,6 +207,9 @@ template<class Self> struct scripted_server
 	}
 
   private:
+	friend Self;
+	scripted_server() = default;
+
 	auto self() -> Self & { return static_cast<Self &>(*this); }
 };
 
