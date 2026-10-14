@@ -204,6 +204,7 @@ if(JHETZ_LDAP_BUILD_NET)
     add_library(jhetz_ldap_net STATIC
         src/ad_password.cpp
         src/connection.cpp
+        src/connection/sasl_offload.cpp
         src/sasl_scram.cpp
         src/sync.cpp
         src/net/connect.cpp

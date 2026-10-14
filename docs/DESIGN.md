@@ -312,7 +312,7 @@ work left, return from `run()` and let the owner destroy the io_context
 (a heap-use-after-free under ASan, coro-ldap-2px.1.1); and the thread
 still runs its own teardown (the closure, libkrb5's thread-local
 destructors) after that. So the threads are not detached: a Capy
-service of the io_context (`offload_threads`, `src/connection.cpp`) owns
+service of the io_context (`offload_threads`, `src/connection/sasl_offload.cpp`) owns
 them and joins them in its `shutdown()`. Capy shuts services down, then
 deletes them, newest first (`execution_context::shutdown()` /
 `destroy()` walk a list that `use_service()` pushes onto the front), and
