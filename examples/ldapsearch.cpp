@@ -367,7 +367,7 @@ auto run(corosio::io_context &ioc, options o) -> capy::task<int>
 }// namespace
 
 auto main(int argc, char **argv) -> int
-{
+try {
 	options o = parse_args(argc, argv);
 	corosio::io_context ioc;
 	int status = 1;
@@ -383,4 +383,10 @@ auto main(int argc, char **argv) -> int
 	  })(run(ioc, std::move(o)));
 	ioc.run();
 	return status;
+} catch (const std::exception &x) {
+	// fputs rather than println, which could throw again.
+	(void)std::fputs("jhetz-ldapsearch: ", stderr);
+	(void)std::fputs(x.what(), stderr);
+	(void)std::fputc('\n', stderr);
+	return 1;
 }

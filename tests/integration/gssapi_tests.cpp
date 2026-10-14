@@ -127,7 +127,8 @@ class sasl_secprops
 				(void)finish(ioc_,
 				  config_.modify({ .object = config_dn, .changes = { ldap::mod::remove("olcSaslSecProps", {}) } }));
 			}
-		} catch (...) {}
+		} catch (...) {// NOLINT(bugprone-empty-catch): best-effort restore, a destructor must not throw
+		}
 	}
 
   private:

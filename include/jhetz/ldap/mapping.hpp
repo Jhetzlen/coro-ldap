@@ -279,6 +279,7 @@ template<auto Ptr> struct field
 	consteval void check() const
 	{
 		if (!detail::is_attribute_description(name)) {
+			// NOLINTNEXTLINE(bugprone-std-exception-baseclass): consteval, fails compilation with this text
 			throw "ldap::field: invalid attribute description";
 		}
 	}
@@ -294,6 +295,7 @@ template<class... S> consteval auto object_class(S... names)
 	object_classes<sizeof...(S)> out{ { names... } };
 	for (const char *n : out.names) {
 		if (!detail::is_oid(n)) {
+			// NOLINTNEXTLINE(bugprone-std-exception-baseclass): consteval, fails compilation with this text
 			throw "ldap::object_class: invalid object class name";
 		}
 	}

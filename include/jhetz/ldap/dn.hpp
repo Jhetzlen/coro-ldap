@@ -231,6 +231,7 @@ struct rdn
 		consteval literal(const char *s) : text(s)
 		{
 			if (!detail::is_rdn(s)) {
+				// NOLINTNEXTLINE(bugprone-std-exception-baseclass): consteval, fails compilation with this text
 				throw "ldap::rdn: not exactly one relative distinguished name";
 			}
 		}
@@ -278,6 +279,7 @@ class dn
 		consteval literal(const char *s) : text(s)
 		{
 			if (!detail::is_dn(s)) {
+				// NOLINTNEXTLINE(bugprone-std-exception-baseclass): consteval, fails compilation with this text
 				throw "ldap::dn: invalid distinguished name";
 			}
 		}

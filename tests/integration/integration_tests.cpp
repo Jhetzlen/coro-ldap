@@ -140,13 +140,15 @@ class anonymous_binds_disallowed
 			if (!m) {
 				why = ": " + std::string(m.error().message());
 			}
-		} catch (...) {}
+		} catch (...) {// NOLINT(bugprone-empty-catch): reported below as restored stays false
+		}
 		if (restored) {
 			return;
 		}
 		try {
 			FAIL_CHECK("could not allow bind_anon again, later tests run with it disallowed" << why);
-		} catch (...) {}
+		} catch (...) {// NOLINT(bugprone-empty-catch): Catch2 aborting the run, see above
+		}
 	}
 
   private:

@@ -217,6 +217,7 @@ class attribute
 		consteval literal(const char *s) : text(s)
 		{
 			if (!detail::is_attribute_description(s)) {
+				// NOLINTNEXTLINE(bugprone-std-exception-baseclass): consteval, fails compilation with this text
 				throw "ldap::attribute: invalid attribute description";
 			}
 		}

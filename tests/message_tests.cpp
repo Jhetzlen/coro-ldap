@@ -7,6 +7,7 @@
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace ber = jhetz::ldap::ber;
@@ -870,4 +871,18 @@ TEST_CASE("RFC 4511 4.1.1: requests never carry message id 0", "[message][rfc]")
 	// Responses may: an unsolicited notification is an ExtendedResponse with id 0.
 	const ldap::message notice{ 0, ldap::extended_response{ {}, ldap::notice_of_disconnection_oid } };
 	CHECK(round_trip(notice) == notice);
+}
+
+// A throwing emplace leaves the op valueless. The id 0 request check reads
+// its index, so encode reports bad_variant_access instead of terminating.
+TEST_CASE("encode of a valueless op with message id 0 throws", "[message]")
+{
+	struct throwing
+	{
+		[[noreturn]] explicit operator ldap::del_request() const { throw std::runtime_error("no del_request"); }
+	};
+	ldap::message m{ 0, ldap::unbind_request{} };
+	CHECK_THROWS_AS(m.op.emplace<ldap::del_request>(throwing{}), std::runtime_error);
+	REQUIRE(m.op.valueless_by_exception());
+	CHECK_THROWS_AS(ldap::encode(m), std::bad_variant_access);
 }

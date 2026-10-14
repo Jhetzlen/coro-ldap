@@ -461,17 +461,21 @@ namespace {
 	}
 
 	// The operations a client sends (RFC 4511 section 4.2 protocolOp requests).
+	template<class T>
+	constexpr bool is_request_v =
+	  std::is_same_v<T, bind_request> || std::is_same_v<T, unbind_request> || std::is_same_v<T, search_request>
+	  || std::is_same_v<T, modify_request> || std::is_same_v<T, add_request> || std::is_same_v<T, del_request>
+	  || std::is_same_v<T, modify_dn_request> || std::is_same_v<T, compare_request>
+	  || std::is_same_v<T, abandon_request> || std::is_same_v<T, extended_request>;
+
+	// Compares protocol_op::index() rather than std::visit, which throws
+	// bad_variant_access on a valueless op (left by a throwing emplace).
 	auto is_request_op(const protocol_op &op) noexcept -> bool
 	{
-		return std::visit(
-		  []<class T>(const T &) {
-			  return std::is_same_v<T, bind_request> || std::is_same_v<T, unbind_request>
-					 || std::is_same_v<T, search_request> || std::is_same_v<T, modify_request>
-					 || std::is_same_v<T, add_request> || std::is_same_v<T, del_request>
-					 || std::is_same_v<T, modify_dn_request> || std::is_same_v<T, compare_request>
-					 || std::is_same_v<T, abandon_request> || std::is_same_v<T, extended_request>;
-		  },
-		  op);
+		const std::size_t index = op.index();// variant_npos when valueless
+		return [index]<std::size_t... I>(std::index_sequence<I...>) -> bool {
+			return ((index == I && is_request_v<std::variant_alternative_t<I, protocol_op>>) || ...);
+		}(std::make_index_sequence<std::variant_size_v<protocol_op>>{});
 	}
 
 	// Checks everything encoding could reject (the filter of a search request

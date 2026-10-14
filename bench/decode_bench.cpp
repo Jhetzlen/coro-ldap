@@ -183,6 +183,7 @@ auto arg(int argc, char **argv, int i, std::size_t fallback) -> std::size_t
 
 }// namespace
 
+// NOLINTNEXTLINE(bugprone-exception-escape): a benchmark, terminating on an exception is fine
 auto main(int argc, char **argv) -> int
 {
 	const std::size_t entries = arg(argc, argv, 1, 1000);

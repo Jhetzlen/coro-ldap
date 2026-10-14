@@ -104,7 +104,7 @@ struct paged_search::state
 		std::string last;
 		try {
 			last = finished ? cookie : server_cookie();
-		} catch (...) {// out of memory: the release is best effort
+		} catch (...) {// NOLINT(bugprone-empty-catch): out of memory, the release is best effort
 		}
 		current = ldap::search_stream{};// abandons the page if it is still running
 		finished = true;
@@ -121,7 +121,7 @@ struct paged_search::state
 			if (request) {
 				conn->send_unanswered(*request, true, deadline_after(timeout), context);
 			}
-		} catch (...) {// out of memory: the release is best effort
+		} catch (...) {// NOLINT(bugprone-empty-catch): out of memory, the release is best effort
 		}
 	}
 };
