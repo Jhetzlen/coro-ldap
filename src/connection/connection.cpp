@@ -21,7 +21,9 @@ namespace jhetz::ldap {
 
 std::string detail::op_context(std::string_view op, const dn &d)
 {
-	if (d.empty()) return detail::format("{} \"\"", op);
+	if (d.empty()) {
+		return detail::format("{} \"\"", op);
+	}
 	std::string text = detail::format("{} ", op);
 	detail::append_sanitized(text, d.to_string(), 256);// as mapping's entry_context
 	return text;
@@ -56,7 +58,9 @@ connection &connection::operator=(connection &&other) noexcept
 
 connection::~connection()
 {
-	if (impl_ == nullptr) return;
+	if (impl_ == nullptr) {
+		return;
+	}
 	close();
 	impl_->release();
 }
@@ -65,7 +69,9 @@ bool connection::is_open() const noexcept { return impl_ != nullptr && impl_->is
 
 std::string_view connection::name() const noexcept
 {
-	if (impl_ == nullptr) return {};
+	if (impl_ == nullptr) {
+		return {};
+	}
 	return impl_->transport().name();
 }
 
@@ -77,15 +83,21 @@ bool connection::is_tls() const noexcept { return impl_ != nullptr && impl_->is_
 
 void connection::close() noexcept
 {
-	if (impl_ != nullptr) impl_->close();
+	if (impl_ != nullptr) {
+		impl_->close();
+	}
 }
 
 capy::task<result<void>> connection::unbind()
 {
 	const std::string context = "unbind";
-	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
+	if (impl_ == nullptr) {
+		co_return std::unexpected(no_connection(context));
+	}
 	const impl_ref self(impl_);
-	if (!self->accepts_requests()) co_return std::unexpected(self->not_connected(context));
+	if (!self->accepts_requests()) {
+		co_return std::unexpected(self->not_connected(context));
+	}
 	// Nothing may be sent while a BindRequest is outstanding (RFC 4511
 	// section 4.2.1), or during StartTLS until its response is received and
 	// the handshake done (section 4.14.1), an UnbindRequest included: just
@@ -106,7 +118,9 @@ capy::task<result<void>> connection::unbind()
 	// exception is known to escape today: defensive).
 	std::optional<error> failed;
 	try {
-		if (auto r = self->send_unbind(context); !r) co_return r;
+		if (auto r = self->send_unbind(context); !r) {
+			co_return r;
+		}
 		failed = co_await self->finish_unbind();
 	} catch (const std::bad_alloc &) {
 		self->shut_out_of_memory();
@@ -122,7 +136,9 @@ capy::task<result<void>> connection::unbind()
 		self->close();
 		throw;
 	}
-	if (failed) co_return std::unexpected(detail::with_context(std::move(*failed), context));
+	if (failed) {
+		co_return std::unexpected(detail::with_context(std::move(*failed), context));
+	}
 	co_return result<void>{};
 }
 
@@ -131,10 +147,11 @@ capy::task<result<void>> connection::unbind()
 capy::task<result<connection>>
   connect(corosio::io_context &ioc, url u, connection_options options, std::pmr::memory_resource *mr)
 {
-	if (options.start_tls && u.scheme() != url_scheme::ldap)
+	if (options.start_tls && u.scheme() != url_scheme::ldap) {
 		co_return fail(client_errc::invalid_url,
 		  detail::format(
 			"connect {}: start_tls needs an ldap:// URL (ldaps:// and ldapi:// are not upgraded)", u.to_string()));
+	}
 	auto t = co_await net::connect(ioc,
 	  std::move(u),
 	  net::connect_options{ .timeout = options.timeout,
@@ -142,11 +159,14 @@ capy::task<result<connection>>
 		.attempt_delay = options.attempt_delay,
 		.tcp_no_delay = options.tcp_no_delay },
 	  mr);
-	if (!t) co_return std::unexpected(std::move(t.error()));
+	if (!t) {
+		co_return std::unexpected(std::move(t.error()));
+	}
 	connection c(ioc, std::move(*t), options, mr);
 	if (options.start_tls) {
-		if (auto r = co_await c.start_tls(options.tls, options.timeout); !r)
+		if (auto r = co_await c.start_tls(options.tls, options.timeout); !r) {
 			co_return std::unexpected(std::move(r.error()));
+		}
 	}
 	co_return std::move(c);
 }
@@ -162,7 +182,9 @@ capy::task<result<connection>>
 {
 	// Not a coroutine: `text` is parsed now, so the task does not refer to it.
 	auto u = url::parse(text, mr);
-	if (!u) return connect_failed(std::move(u.error()));
+	if (!u) {
+		return connect_failed(std::move(u.error()));
+	}
 	return connect(ioc, std::move(*u), std::move(options), mr);
 }
 

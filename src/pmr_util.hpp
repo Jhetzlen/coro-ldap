@@ -21,7 +21,9 @@ using pmr_alloc = std::pmr::polymorphic_allocator<>;
 template<class Opt> auto optional_with(Opt &&src, const pmr_alloc &alloc)
 {
 	using T = typename std::remove_cvref_t<Opt>::value_type;
-	if (!src) return std::optional<T>{};
+	if (!src) {
+		return std::optional<T>{};
+	}
 	return std::optional<T>(std::in_place, std::make_obj_using_allocator<T>(alloc, *std::forward<Opt>(src)));
 }
 
@@ -55,10 +57,11 @@ template<class... T, class Var> void assign_variant(std::variant<T...> &dst, Var
 	std::visit(
 	  [&](auto &&x) {
 		  using U = std::remove_cvref_t<decltype(x)>;
-		  if (auto *d = std::get_if<U>(&dst))
+		  if (auto *d = std::get_if<U>(&dst)) {
 			  *d = std::forward<decltype(x)>(x);
-		  else
+		  } else {
 			  dst.template emplace<U>(std::make_obj_using_allocator<U>(alloc, std::forward<decltype(x)>(x)));
+		  }
 	  },
 	  std::forward<Var>(src));
 }
@@ -66,7 +69,9 @@ template<class... T, class Var> void assign_variant(std::variant<T...> &dst, Var
 // Copy of `s` on `alloc` (string_view -> std::pmr::string, optional aware).
 inline std::optional<std::pmr::string> optional_string(std::optional<std::string_view> s, const pmr_alloc &alloc)
 {
-	if (!s) return std::nullopt;
+	if (!s) {
+		return std::nullopt;
+	}
 	return std::optional<std::pmr::string>(std::in_place, *s, alloc);
 }
 

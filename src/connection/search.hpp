@@ -40,7 +40,9 @@ struct search_stream::state
 	// next()), or null.
 	const message *queued_done() const noexcept
 	{
-		if (op.queue.empty() || !std::holds_alternative<search_result_done>(op.queue.back().op)) return nullptr;
+		if (op.queue.empty() || !std::holds_alternative<search_result_done>(op.queue.back().op)) {
+			return nullptr;
+		}
 		return &op.queue.back();
 	}
 };

@@ -29,7 +29,9 @@ boost::capy::task<int> run(boost::corosio::io_context &ioc, std::string text)
 		std::cerr << people.error().message() << '\n';
 		co_return 1;
 	}
-	for (const ldap::entry &person : *people) std::cout << person.dn << ": " << person.find("cn")->front() << '\n';
+	for (const ldap::entry &person : *people) {
+		std::cout << person.dn << ": " << person.find("cn")->front() << '\n';
+	}
 	co_return 0;
 }
 

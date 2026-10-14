@@ -40,8 +40,11 @@ namespace detail {
 	template<class T, class... Ts> consteval std::size_t index_in(const std::variant<Ts...> *)
 	{
 		constexpr bool same[] = { std::is_same_v<T, Ts>... };
-		for (std::size_t i = 0; i < sizeof...(Ts); ++i)
-			if (same[i]) return i;
+		for (std::size_t i = 0; i < sizeof...(Ts); ++i) {
+			if (same[i]) {
+				return i;
+			}
+		}
 		return sizeof...(Ts);
 	}
 	template<class T> inline constexpr std::size_t op_index = index_in<T>(static_cast<const protocol_op *>(nullptr));
@@ -50,7 +53,9 @@ namespace detail {
 
 	inline std::optional<clock::time_point> deadline_after(std::optional<std::chrono::milliseconds> d)
 	{
-		if (!d) return std::nullopt;
+		if (!d) {
+			return std::nullopt;
+		}
 		return clock::now() + *d;
 	}
 
@@ -114,7 +119,9 @@ class connection::impl
 	void add_ref() noexcept { ++refs; }
 	void release() noexcept
 	{
-		if (--refs != 0) return;
+		if (--refs != 0) {
+			return;
+		}
 		std::pmr::polymorphic_allocator<> alloc(mr_);
 		alloc.delete_object(this);
 	}
@@ -525,7 +532,9 @@ namespace detail {
 		impl_ref() noexcept = default;
 		explicit impl_ref(connection::impl *p) noexcept : p_(p)
 		{
-			if (p_ != nullptr) p_->add_ref();
+			if (p_ != nullptr) {
+				p_->add_ref();
+			}
 		}
 		impl_ref(const impl_ref &o) noexcept : impl_ref(o.p_) {}
 		impl_ref(impl_ref &&o) noexcept : p_(std::exchange(o.p_, nullptr)) {}
@@ -536,7 +545,9 @@ namespace detail {
 		}
 		~impl_ref()
 		{
-			if (p_ != nullptr) p_->release();
+			if (p_ != nullptr) {
+				p_->release();
+			}
 		}
 		connection::impl *operator->() const noexcept { return p_; }
 		connection::impl &operator*() const noexcept { return *p_; }

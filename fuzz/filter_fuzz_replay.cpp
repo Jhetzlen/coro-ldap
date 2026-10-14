@@ -71,12 +71,18 @@ int main(int argc, char **argv)
 		.random_runs = 15'000,
 		.max_random_size = 40,
 		.rng_seed = 0x5EED'1DA9'0000'0003ull };
-	for (auto t : texts) cfg.seeds.push_back(fuzz::to_input(t));
+	for (auto t : texts) {
+		cfg.seeds.push_back(fuzz::to_input(t));
+	}
 	for (auto t : { texts[0], texts[6], texts[1] }) {
 		auto f = ldap::filter::raw(t);
-		if (!f) return 1;
+		if (!f) {
+			return 1;
+		}
 		ldap::ber::writer w;
-		if (!ldap::encode_filter(w, *f)) return 1;
+		if (!ldap::encode_filter(w, *f)) {
+			return 1;
+		}
 		cfg.seeds.push_back(fuzz::to_input(w.bytes()));
 	}
 	return fuzz::replay_main(argc, argv, cfg);

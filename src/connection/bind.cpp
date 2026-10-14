@@ -41,9 +41,13 @@ namespace {
 		message request(std::pmr::polymorphic_allocator<>(self->mr()));
 		request.op = bind_request(3, {}, simple_auth(std::string_view(), self->mr()), self->mr());
 		auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
-		if (!m) co_return;
+		if (!m) {
+			co_return;
+		}
 		const auto &r = std::get<bind_response>(m->op);// checked by the reader
-		if (r.result.result_code != std::to_underlying(errc::sasl_bind_in_progress)) co_return;
+		if (r.result.result_code != std::to_underlying(errc::sasl_bind_in_progress)) {
+			co_return;
+		}
 		std::string text = context + ": connection closed: the SASL exchange could not be aborted: ";
 		text += "saslBindInProgress in answer to a simple bind";
 		self->shut(make_error(client_errc::unexpected_response, text), true);
@@ -54,18 +58,27 @@ namespace {
 capy::task<result<void>> connection::simple_bind(dn name, std::string password)
 {
 	std::string context = op_context("bind", name);
-	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
-	if (!name.empty() && password.empty())
+	if (impl_ == nullptr) {
+		co_return std::unexpected(no_connection(context));
+	}
+	if (!name.empty() && password.empty()) {
 		co_return fail(client_errc::unauthenticated_bind, context + ": empty password (RFC 4513 section 5.1.2)");
+	}
 	impl_ref self(impl_);// `this` may be moved from while suspended
-	if (auto b = co_await impl::begin_bind(self, context); !b) co_return std::unexpected(std::move(b.error()));
+	if (auto b = co_await impl::begin_bind(self, context); !b) {
+		co_return std::unexpected(std::move(b.error()));
+	}
 	const impl::bind_scope exchange{ self };
 	message request(std::pmr::polymorphic_allocator<>(self->mr()));
 	request.op = bind_request(3, name.to_string(self->mr()), simple_auth(password, self->mr()), self->mr());
 	auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
-	if (!m) co_return std::unexpected(std::move(m.error()));
+	if (!m) {
+		co_return std::unexpected(std::move(m.error()));
+	}
 	const auto &r = std::get<bind_response>(m->op);// checked by the reader
-	if (!r.result.is_success()) co_return std::unexpected(r.result.to_error(context));
+	if (!r.result.is_success()) {
+		co_return std::unexpected(r.result.to_error(context));
+	}
 	co_return result<void>{};
 }
 
@@ -73,20 +86,27 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 {
 	std::string context = "sasl bind ";
 	context += mechanism.name();
-	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
+	if (impl_ == nullptr) {
+		co_return std::unexpected(no_connection(context));
+	}
 	impl_ref self(impl_);
-	if (auto b = co_await impl::begin_bind(self, context); !b) co_return std::unexpected(std::move(b.error()));
+	if (auto b = co_await impl::begin_bind(self, context); !b) {
+		co_return std::unexpected(std::move(b.error()));
+	}
 	const impl::bind_scope exchange{ self };
 	constexpr int max_steps = 32;
 	sasl_bind_context bind_context;
-	if (self->transport().type() == net::transport::kind::tcp) bind_context.host = self->transport().host();
+	if (self->transport().type() == net::transport::kind::tcp) {
+		bind_context.host = self->transport().host();
+	}
 	bind_context.can_offload = !corosio::detail::get_scheduler(self->executor().context()).scheduler_locking_disabled();
 	mechanism.prepare(bind_context);
 	result<std::optional<std::string>> creds;
-	if (auto work = mechanism.offload_start())
+	if (auto work = mechanism.offload_start()) {
 		creds = co_await detail::run_offloaded(self->executor(), self->default_timeout(), std::move(work));
-	else
+	} else {
 		creds = mechanism.start();
+	}
 	for (int step = 0;; ++step) {
 		if (!creds || step == max_steps) {
 			auto e = creds ? make_error(client_errc::unexpected_response,
@@ -94,19 +114,27 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 						   : detail::with_context(std::move(creds.error()), context);
 			// Past the first step the server answered saslBindInProgress:
 			// abort the exchange before the held requests are sent.
-			if (step > 0) co_await abort_sasl(self, context);
+			if (step > 0) {
+				co_await abort_sasl(self, context);
+			}
 			co_return std::unexpected(std::move(e));
 		}
 		message request(std::pmr::polymorphic_allocator<>(self->mr()));
 		std::optional<std::string_view> c;
-		if (*creds) c = **creds;
+		if (*creds) {
+			c = **creds;
+		}
 		request.op =
 		  bind_request(3, name.to_string(self->mr()), sasl_auth(mechanism.name(), c, self->mr()), self->mr());
 		auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
-		if (!m) co_return std::unexpected(std::move(m.error()));
+		if (!m) {
+			co_return std::unexpected(std::move(m.error()));
+		}
 		const auto &r = std::get<bind_response>(m->op);
 		std::optional<std::string_view> server_creds;
-		if (r.server_sasl_creds) server_creds = *r.server_sasl_creds;
+		if (r.server_sasl_creds) {
+			server_creds = *r.server_sasl_creds;
+		}
 		if (r.result.is_success()) {
 			if (auto done = mechanism.complete(server_creds); !done) {
 				// The server considers the connection bound, the client does
@@ -118,12 +146,14 @@ capy::task<result<void>> connection::sasl_bind(sasl_mechanism &mechanism, dn nam
 			}
 			co_return result<void>{};
 		}
-		if (r.result.result_code != std::to_underlying(errc::sasl_bind_in_progress))
+		if (r.result.result_code != std::to_underlying(errc::sasl_bind_in_progress)) {
 			co_return std::unexpected(r.result.to_error(context));
-		if (auto work = mechanism.offload_step(server_creds))
+		}
+		if (auto work = mechanism.offload_step(server_creds)) {
 			creds = co_await detail::run_offloaded(self->executor(), self->default_timeout(), std::move(work));
-		else
+		} else {
 			creds = mechanism.step(server_creds);
+		}
 	}
 }
 

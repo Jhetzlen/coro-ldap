@@ -20,8 +20,6 @@ Checks:
   - -modernize-use-trailing-return-type
   # Style: short names (i, n, ec, os, dn, id) are idiomatic here.
   - -readability-identifier-length
-  # Style: single-statement if/for bodies go without braces; clang-format owns layout.
-  - -readability-braces-around-statements
   # Style: clang-format decides on trailing commas in braced lists.
   - -readability-trailing-comma
   # Style: lower-case literal suffixes (0u, 1ull) are used throughout.

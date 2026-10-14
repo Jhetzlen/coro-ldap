@@ -29,35 +29,47 @@ namespace {
 
 		result<token> next()
 		{
-			while (pos_ < s_.size() && is_space(s_[pos_])) ++pos_;
-			if (pos_ == s_.size()) return token{ token::end, {} };
+			while (pos_ < s_.size() && is_space(s_[pos_])) {
+				++pos_;
+			}
+			if (pos_ == s_.size()) {
+				return token{ token::end, {} };
+			}
 			const char c = s_[pos_];
-			if (c == '(') return ++pos_, token{ token::open, {} };
-			if (c == ')') return ++pos_, token{ token::close, {} };
+			if (c == '(') {
+				return ++pos_, token{ token::open, {} };
+			}
+			if (c == ')') {
+				return ++pos_, token{ token::close, {} };
+			}
 			if (c == '\'') {
 				++pos_;
 				std::string out;
 				while (pos_ < s_.size() && s_[pos_] != '\'') {
 					if (s_[pos_] == '\\' && s_.size() - pos_ >= 3) {
 						const std::string_view hex = s_.substr(pos_ + 1, 2);
-						if (hex == "27")
+						if (hex == "27") {
 							out += '\'';
-						else if (hex == "5c" || hex == "5C")
+						} else if (hex == "5c" || hex == "5C") {
 							out += '\\';
-						else
+						} else {
 							return fail(client_errc::decode_error, "schema: bad escape in a quoted string");
+						}
 						pos_ += 3;
 					} else {
 						out += s_[pos_++];
 					}
 				}
-				if (pos_ == s_.size()) return fail(client_errc::decode_error, "schema: unterminated quoted string");
+				if (pos_ == s_.size()) {
+					return fail(client_errc::decode_error, "schema: unterminated quoted string");
+				}
 				++pos_;
 				return token{ token::quoted, std::move(out) };
 			}
 			const std::size_t start = pos_;
-			while (pos_ < s_.size() && !is_space(s_[pos_]) && s_[pos_] != '(' && s_[pos_] != ')' && s_[pos_] != '\'')
+			while (pos_ < s_.size() && !is_space(s_[pos_]) && s_[pos_] != '(' && s_[pos_] != ')' && s_[pos_] != '\'') {
 				++pos_;
+			}
 			return token{ token::word, std::string(s_.substr(start, pos_ - start)) };
 		}
 
@@ -73,7 +85,9 @@ namespace {
 	// swallow the next one (SINGLE-VALUE, say) as its value.
 	bool is_keyword(std::string_view k)
 	{
-		if (k.empty() || !detail::is_alpha(k[0])) return false;
+		if (k.empty() || !detail::is_alpha(k[0])) {
+			return false;
+		}
 		return std::ranges::all_of(k, [](char c) { return detail::is_keychar(c) || c == '_'; });
 	}
 
@@ -81,8 +95,11 @@ namespace {
 	bool is_flag(std::string_view k)
 	{
 		for (auto f :
-		  { "OBSOLETE", "SINGLE-VALUE", "COLLECTIVE", "NO-USER-MODIFICATION", "ABSTRACT", "STRUCTURAL", "AUXILIARY" })
-			if (detail::iequals(k, f)) return true;
+		  { "OBSOLETE", "SINGLE-VALUE", "COLLECTIVE", "NO-USER-MODIFICATION", "ABSTRACT", "STRUCTURAL", "AUXILIARY" }) {
+			if (detail::iequals(k, f)) {
+				return true;
+			}
+		}
 		return false;
 	}
 
@@ -95,8 +112,11 @@ namespace {
 
 		const std::vector<std::string> *get(std::string_view keyword) const
 		{
-			for (const auto &[k, v] : fields)
-				if (detail::iequals(k, keyword)) return &v;
+			for (const auto &[k, v] : fields) {
+				if (detail::iequals(k, keyword)) {
+					return &v;
+				}
+			}
 			return nullptr;
 		}
 		bool has(std::string_view keyword) const { return get(keyword) != nullptr; }
@@ -107,36 +127,68 @@ namespace {
 		auto bad = [](const char *why) { return fail(client_errc::decode_error, detail::format("schema: {}", why)); };
 		lexer lx(text);
 		auto t = lx.next();
-		if (!t) return std::unexpected(std::move(t.error()));
-		if (t->k != token::open) return bad("a definition starts with '('");
+		if (!t) {
+			return std::unexpected(std::move(t.error()));
+		}
+		if (t->k != token::open) {
+			return bad("a definition starts with '('");
+		}
 		t = lx.next();
-		if (!t) return std::unexpected(std::move(t.error()));
-		if (t->k != token::word && t->k != token::quoted) return bad("missing OID");
+		if (!t) {
+			return std::unexpected(std::move(t.error()));
+		}
+		if (t->k != token::word && t->k != token::quoted) {
+			return bad("missing OID");
+		}
 		definition d;
 		d.oid = std::move(t->text);
-		if (!detail::is_oid(d.oid)) return bad("invalid OID");
+		if (!detail::is_oid(d.oid)) {
+			return bad("invalid OID");
+		}
 		std::optional<token> pending;
 		constexpr std::size_t max_fields = 256, max_values = 4096;
 		while (true) {
 			result<token> k = pending ? result<token>(std::move(*pending)) : lx.next();
 			pending.reset();
-			if (!k) return std::unexpected(std::move(k.error()));
-			if (k->k == token::close) break;
-			if (k->k == token::end) return bad("missing ')'");
-			if (k->k != token::word || !is_keyword(k->text)) return bad("expected a keyword");
-			if (d.fields.size() == max_fields) return bad("too many fields");
+			if (!k) {
+				return std::unexpected(std::move(k.error()));
+			}
+			if (k->k == token::close) {
+				break;
+			}
+			if (k->k == token::end) {
+				return bad("missing ')'");
+			}
+			if (k->k != token::word || !is_keyword(k->text)) {
+				return bad("expected a keyword");
+			}
+			if (d.fields.size() == max_fields) {
+				return bad("too many fields");
+			}
 			std::vector<std::string> values;
 			if (!is_flag(k->text)) {
 				auto v = lx.next();
-				if (!v) return std::unexpected(std::move(v.error()));
+				if (!v) {
+					return std::unexpected(std::move(v.error()));
+				}
 				if (v->k == token::open) {
 					while (true) {
 						auto e = lx.next();
-						if (!e) return std::unexpected(std::move(e.error()));
-						if (e->k == token::close) break;
-						if (e->k == token::end || e->k == token::open) return bad("unterminated list");
-						if (e->text == "$") continue;
-						if (values.size() == max_values) return bad("list too long");
+						if (!e) {
+							return std::unexpected(std::move(e.error()));
+						}
+						if (e->k == token::close) {
+							break;
+						}
+						if (e->k == token::end || e->k == token::open) {
+							return bad("unterminated list");
+						}
+						if (e->text == "$") {
+							continue;
+						}
+						if (values.size() == max_values) {
+							return bad("list too long");
+						}
 						values.push_back(std::move(e->text));
 					}
 				} else if (v->k == token::word || v->k == token::quoted) {
@@ -148,8 +200,12 @@ namespace {
 			d.fields.emplace_back(std::move(k->text), std::move(values));
 		}
 		auto rest = lx.next();
-		if (!rest) return std::unexpected(std::move(rest.error()));
-		if (rest->k != token::end) return bad("text after the closing ')'");
+		if (!rest) {
+			return std::unexpected(std::move(rest.error()));
+		}
+		if (rest->k != token::end) {
+			return bad("text after the closing ')'");
+		}
 		return d;
 	}
 
@@ -159,10 +215,16 @@ namespace {
 	std::optional<std::string> strip_length(std::string_view s)
 	{
 		const std::size_t open = s.find('{');
-		if (open == std::string_view::npos) return std::string(s);
+		if (open == std::string_view::npos) {
+			return std::string(s);
+		}
 		const std::string_view len = s.substr(open + 1);
-		if (len.size() < 2 || len.back() != '}') return std::nullopt;
-		if (!std::ranges::all_of(len.substr(0, len.size() - 1), detail::is_digit)) return std::nullopt;
+		if (len.size() < 2 || len.back() != '}') {
+			return std::nullopt;
+		}
+		if (!std::ranges::all_of(len.substr(0, len.size() - 1), detail::is_digit)) {
+			return std::nullopt;
+		}
 		return std::string(s.substr(0, open));
 	}
 
@@ -171,9 +233,13 @@ namespace {
 	std::vector<std::string> valid_names(const std::vector<std::string> *names)
 	{
 		std::vector<std::string> out;
-		if (names != nullptr)
-			for (const auto &n : *names)
-				if (detail::is_descr(n)) out.push_back(n);
+		if (names != nullptr) {
+			for (const auto &n : *names) {
+				if (detail::is_descr(n)) {
+					out.push_back(n);
+				}
+			}
+		}
 		return out;
 	}
 
@@ -191,7 +257,9 @@ namespace {
 		attribute_type a;
 		a.oid = std::move(d.oid);
 		a.names = valid_names(d.get("NAME"));
-		if (const auto *s = d.get("SUP"); s && !s->empty()) a.sup = s->front();
+		if (const auto *s = d.get("SUP"); s && !s->empty()) {
+			a.sup = s->front();
+		}
 		// RFC 4512 section 4.1.2: SYNTAX noidlen, a numericoid with an
 		// optional {len} right after it ("{" 1*DIGIT "}", no space; a spaced
 		// "{len}" already failed as a keyword). Anything else could never
@@ -199,8 +267,9 @@ namespace {
 		// text in a report.
 		if (const auto *s = d.get("SYNTAX"); s && !s->empty()) {
 			a.syntax = strip_length(s->front());
-			if (!a.syntax || !detail::is_numericoid(*a.syntax))
+			if (!a.syntax || !detail::is_numericoid(*a.syntax)) {
 				return fail(client_errc::decode_error, "schema: SYNTAX is not a numeric OID");
+			}
 		}
 		a.single_value = d.has("SINGLE-VALUE");
 		a.no_user_modification = d.has("NO-USER-MODIFICATION");
@@ -241,12 +310,16 @@ server_schema server_schema::parse(std::span<const std::pmr::string> attribute_t
 		auto a = to_attribute_type(std::move(*d));
 		if (!a) {
 			++s.skipped_;
-			for (auto &n : names) s.bad_syntax_.insert(std::move(n));
+			for (auto &n : names) {
+				s.bad_syntax_.insert(std::move(n));
+			}
 			continue;
 		}
 		const std::size_t i = s.attributes_.size();
 		s.attribute_index_.emplace(a->oid, i);
-		for (const auto &n : a->names) s.attribute_index_.emplace(n, i);
+		for (const auto &n : a->names) {
+			s.attribute_index_.emplace(n, i);
+		}
 		s.attributes_.push_back(std::move(*a));
 	}
 	for (const auto &text : object_classes) {
@@ -257,7 +330,9 @@ server_schema server_schema::parse(std::span<const std::pmr::string> attribute_t
 		}
 		const std::size_t i = s.classes_.size();
 		s.class_index_.emplace(c->oid, i);
-		for (const auto &n : c->names) s.class_index_.emplace(n, i);
+		for (const auto &n : c->names) {
+			s.class_index_.emplace(n, i);
+		}
 		s.classes_.push_back(std::move(*c));
 	}
 	return s;
@@ -284,8 +359,12 @@ const std::string *server_schema::syntax_of(const attribute_type &a) const noexc
 {
 	const attribute_type *cur = &a;
 	for (int depth = 0; depth < 32 && cur != nullptr; ++depth) {
-		if (cur->syntax) return &*cur->syntax;
-		if (!cur->sup) return nullptr;
+		if (cur->syntax) {
+			return &*cur->syntax;
+		}
+		if (!cur->sup) {
+			return nullptr;
+		}
 		cur = find_attribute(*cur->sup);
 	}
 	return nullptr;
@@ -299,7 +378,9 @@ std::string schema_report::to_string() const
 {
 	std::string out;
 	for (const auto &i : issues) {
-		if (!out.empty()) out += '\n';
+		if (!out.empty()) {
+			out += '\n';
+		}
 		detail::format_to(out,
 		  "{}{}{}: {}",
 		  i.is_error() ? "error: " : "warning: ",
@@ -321,10 +402,13 @@ namespace {
 	{
 		const attribute_type *cur = &a;
 		for (int depth = 0; depth < 32; ++depth) {
-			if (cur->syntax) return std::nullopt;
-			if (!cur->sup)
+			if (cur->syntax) {
+				return std::nullopt;
+			}
+			if (!cur->sup) {
 				return cur == &a ? "syntax unknown: the server declares no SYNTAX and no SUP for it"
 								 : "syntax unknown: the server declares no SYNTAX for it or its supertypes";
+			}
 			const attribute_type *next = s.find_attribute(*cur->sup);
 			if (next == nullptr) {
 				std::string text = "syntax unknown: SUP ";
@@ -345,9 +429,10 @@ namespace detail {
 
 	void check_object_class(const server_schema &s, std::string_view name, schema_report &out)
 	{
-		if (s.find_object_class(name) == nullptr)
+		if (s.find_object_class(name) == nullptr) {
 			out.issues.push_back(
 			  { schema_issue::kind::unknown_object_class, std::string(name), "not defined on the server" });
+		}
 	}
 
 	void check_field(const server_schema &s,
@@ -365,27 +450,31 @@ namespace detail {
 										 : "not defined on the server" });
 			return;
 		}
-		if (kind != cardinality::multiple && !a->single_value)
+		if (kind != cardinality::multiple && !a->single_value) {
 			out.issues.push_back({ schema_issue::kind::single_member_multi_valued,
 			  std::string(name),
 			  "single-valued member, but the attribute is multi-valued (decoding fails if an entry has several "
 			  "values)" });
-		if (!read_only && a->no_user_modification)
+		}
+		if (!read_only && a->no_user_modification) {
 			out.issues.push_back({ schema_issue::kind::writable_but_no_user_modification,
 			  std::string(name),
 			  "the attribute is NO-USER-MODIFICATION: mark the member ldap::read_only" });
+		}
 		if (!syntaxes.empty()) {
 			const std::string *syn = s.syntax_of(*a);
 			if (syn == nullptr) {
-				if (auto why = broken_sup_chain(s, *a))
+				if (auto why = broken_sup_chain(s, *a)) {
 					out.issues.push_back({ schema_issue::kind::syntax_mismatch, std::string(name), std::move(*why) });
+				}
 			} else if (std::ranges::none_of(syntaxes, [&](const char *x) { return *syn == x; })) {
 				// A numeric OID (parse_attribute_type), but of any length.
 				std::string text = "syntax ";
 				detail::append_sanitized(text, *syn, 64);
 				text += " is not one the member's type reads (";
-				for (std::size_t i = 0; i < syntaxes.size(); ++i)
+				for (std::size_t i = 0; i < syntaxes.size(); ++i) {
 					detail::format_to(text, "{}{}", i ? ", " : "", syntaxes[i]);
+				}
 				text += ')';
 				out.issues.push_back({ schema_issue::kind::syntax_mismatch, std::string(name), std::move(text) });
 			}

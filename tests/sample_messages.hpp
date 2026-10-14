@@ -84,7 +84,9 @@ inline std::vector<message> sample_messages()
 	};
 	std::vector<message> out;
 	std::int32_t id = 1;
-	for (auto &op : ops) out.push_back(message{ id++, std::move(op) });
+	for (auto &op : ops) {
+		out.push_back(message{ id++, std::move(op) });
+	}
 	out.push_back(message{ 0, extended_response{ {}, notice_of_disconnection_oid } });
 	out.push_back(message{ max_int, unbind_request{} });
 	return out;

@@ -32,10 +32,11 @@ namespace detail {
 	{
 		// The DN is the server's text.
 		std::string text = "entry ";
-		if (dn.empty())
+		if (dn.empty()) {
 			text += "\"\"";
-		else
+		} else {
 			detail::append_sanitized(text, dn, 256);
+		}
 		detail::format_to(text, ": attribute {}", attribute);
 		return text;
 	}
@@ -57,11 +58,15 @@ namespace {
 	// Reads `n` digits at `pos`; nullopt if they are not all digits.
 	std::optional<int> digits(std::string_view s, std::size_t &pos, std::size_t n)
 	{
-		if (s.size() - pos < n) return std::nullopt;
+		if (s.size() - pos < n) {
+			return std::nullopt;
+		}
 		int v = 0;
 		for (std::size_t i = 0; i < n; ++i) {
 			const char c = s[pos + i];
-			if (c < '0' || c > '9') return std::nullopt;
+			if (c < '0' || c > '9') {
+				return std::nullopt;
+			}
 			v = v * 10 + (c - '0');
 		}
 		pos += n;
@@ -82,21 +87,29 @@ result<sys_seconds> parse_generalized_time(std::string_view s)
 	const auto month = digits(s, pos, 2);
 	const auto day = digits(s, pos, 2);
 	const auto hour = digits(s, pos, 2);
-	if (!year || !month || !day || !hour) return bad("date and hour");
+	if (!year || !month || !day || !hour) {
+		return bad("date and hour");
+	}
 	std::optional<int> minute, second;
 	if (next_is_digit(s, pos)) {
 		minute = digits(s, pos, 2);
-		if (!minute) return bad("minute");
+		if (!minute) {
+			return bad("minute");
+		}
 		if (next_is_digit(s, pos)) {
 			second = digits(s, pos, 2);
-			if (!second) return bad("second");
+			if (!second) {
+				return bad("second");
+			}
 		}
 	}
 	// A fraction applies to the last unit given (hour, minute or second).
 	seconds fraction{ 0 };
 	if (pos < s.size() && (s[pos] == '.' || s[pos] == ',')) {
 		++pos;
-		if (!next_is_digit(s, pos)) return bad("fraction");
+		if (!next_is_digit(s, pos)) {
+			return bad("fraction");
+		}
 		const seconds unit = second ? seconds(1) : minute ? seconds(60) : seconds(3600);
 		std::int64_t num = 0, den = 1;
 		while (next_is_digit(s, pos)) {
@@ -108,15 +121,20 @@ result<sys_seconds> parse_generalized_time(std::string_view s)
 		}
 		fraction = seconds(unit.count() * num / den);
 	}
-	if (*month < 1 || *month > 12 || *hour > 23 || (minute && *minute > 59) || (second && *second > 60))
+	if (*month < 1 || *month > 12 || *hour > 23 || (minute && *minute > 59) || (second && *second > 60)) {
 		return bad("field out of range");
+	}
 	const year_month_day ymd{ std::chrono::year(*year),
 		std::chrono::month(static_cast<unsigned>(*month)),
 		std::chrono::day(static_cast<unsigned>(*day)) };
-	if (!ymd.ok()) return bad("no such date");
+	if (!ymd.ok()) {
+		return bad("no such date");
+	}
 
 	// g-time-zone: "Z" or a differential (+|-)HH[MM].
-	if (pos >= s.size()) return bad("time zone missing");
+	if (pos >= s.size()) {
+		return bad("time zone missing");
+	}
 	seconds offset{ 0 };
 	if (s[pos] == 'Z') {
 		++pos;
@@ -124,18 +142,24 @@ result<sys_seconds> parse_generalized_time(std::string_view s)
 		const int sign = s[pos] == '-' ? -1 : 1;
 		++pos;
 		const auto oh = digits(s, pos, 2);
-		if (!oh || *oh > 23) return bad("time zone hour");
+		if (!oh || *oh > 23) {
+			return bad("time zone hour");
+		}
 		int om = 0;
 		if (next_is_digit(s, pos)) {
 			const auto m = digits(s, pos, 2);
-			if (!m || *m > 59) return bad("time zone minute");
+			if (!m || *m > 59) {
+				return bad("time zone minute");
+			}
 			om = *m;
 		}
 		offset = seconds(sign * (*oh * 3600 + om * 60));
 	} else {
 		return bad("time zone");
 	}
-	if (pos != s.size()) return bad("trailing characters");
+	if (pos != s.size()) {
+		return bad("trailing characters");
+	}
 
 	// A leap second (60) rolls into the next minute: sys_seconds has no 23:59:60.
 	const sys_seconds local =
@@ -148,8 +172,9 @@ result<std::string> format_generalized_time(sys_seconds t)
 	const sys_days day = floor<days>(t);
 	const year_month_day ymd(day);
 	const int y = static_cast<int>(ymd.year());
-	if (y < 0 || y > 9999)
+	if (y < 0 || y > 9999) {
 		return fail(client_errc::encode_error, detail::format("GeneralizedTime: year {} outside 0000-9999", y));
+	}
 	// Plain integers rather than the chrono formatter ("{:%Y%m%d%H%M%S}Z"),
 	// which costs this file seconds of compile time for the same output.
 	const hh_mm_ss hms(t - day);
@@ -165,7 +190,9 @@ result<std::string> format_generalized_time(sys_seconds t)
 std::string value_traits<sys_seconds>::encode(sys_seconds v)
 {
 	auto s = format_generalized_time(v);
-	if (!s) throw std::out_of_range(std::string(s.error().message()));
+	if (!s) {
+		throw std::out_of_range(std::string(s.error().message()));
+	}
 	return std::move(*s);
 }
 

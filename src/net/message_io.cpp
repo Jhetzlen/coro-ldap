@@ -53,7 +53,9 @@ std::span<std::byte> read_buffer::prepare(std::size_t n)
 			// that costs little next to receiving it, and keeps this a plain
 			// pmr container.
 			std::pmr::vector<std::byte> bigger(std::max(used + n, min_read), buf_.get_allocator());
-			if (used != 0) std::memcpy(bigger.data(), buf_.data() + begin_, used);
+			if (used != 0) {
+				std::memcpy(bigger.data(), buf_.data() + begin_, used);
+			}
 			buf_.swap(bigger);
 		}
 		begin_ = 0;
@@ -65,7 +67,9 @@ std::span<std::byte> read_buffer::prepare(std::size_t n)
 void read_buffer::consume(std::size_t n) noexcept
 {
 	begin_ += std::min(n, end_ - begin_);
-	if (begin_ != end_) return;
+	if (begin_ != end_) {
+		return;
+	}
 	begin_ = end_ = 0;
 	if (buf_.size() > shrink_threshold) {
 		std::pmr::vector<std::byte>(buf_.get_allocator()).swap(buf_);
@@ -83,13 +87,18 @@ capy::task<result<std::size_t>> read_frame(transport &t, read_buffer &buf, std::
 		if (!data.empty()) {
 			// LDAPMessage is a SEQUENCE: reject anything else from its first
 			// octet instead of reading a body of up to max_message_size.
-			if (data[0] != std::byte{ 0x30 })
+			if (data[0] != std::byte{ 0x30 }) {
 				co_return fail(client_errc::decode_error,
 				  where + ": PDU starts with " + hex_byte(data[0]) + ", not a SEQUENCE (0x30)");
+			}
 			auto size = ber::declared_message_size(data, max_message_size);
-			if (!size) co_return std::unexpected(with_context(std::move(size.error()), where));
+			if (!size) {
+				co_return std::unexpected(with_context(std::move(size.error()), where));
+			}
 			declared = *size;
-			if (declared && data.size() >= *declared) co_return *declared;
+			if (declared && data.size() >= *declared) {
+				co_return *declared;
+			}
 			// Room for exactly the rest of this PDU (or, while its header is
 			// incomplete, for min_read bytes in all): asking for more would
 			// reallocate on every short read near the end of a PDU. Free
@@ -102,25 +111,32 @@ capy::task<result<std::size_t>> read_frame(transport &t, read_buffer &buf, std::
 		buf.commit(n);
 		// A read into a non-empty buffer transfers at least one byte unless it
 		// fails; treat a stream that breaks that rule as closed, not as a loop.
-		if (!ec && n == 0) ec = capy::error::eof;
-		if (!ec) continue;
+		if (!ec && n == 0) {
+			ec = capy::error::eof;
+		}
+		if (!ec) {
+			continue;
+		}
 		// A TLS peer that closes without close_notify gives stream_truncated.
 		// Between PDUs no data is lost (LDAP frames every message), so it is
 		// reported like a plain close; inside a PDU it is a truncation. The
 		// original error code is kept either way.
 		const bool closed = ec == capy::cond::eof || ec == capy::cond::stream_truncated;
-		if (n != 0 && closed) continue;// use the bytes; the close shows again on the next read
+		if (n != 0 && closed) {
+			continue;// use the bytes; the close shows again on the next read
+		}
 
 		std::string context = where;
 		if (closed) {
 			const std::size_t have = buf.size();
-			if (have == 0)
+			if (have == 0) {
 				context +=
 				  ec == capy::cond::eof ? ": connection closed" : ": connection closed (without TLS close_notify)";
-			else if (declared)
+			} else if (declared) {
 				ldap::detail::format_to(context, ": connection closed after {} of {} bytes of a PDU", have, *declared);
-			else
+			} else {
 				context += ": connection closed inside a PDU header";
+			}
 		}
 		co_return fail(ec, std::move(context));
 	}
@@ -129,12 +145,16 @@ capy::task<result<std::size_t>> read_frame(transport &t, read_buffer &buf, std::
 capy::task<result<message>> read_message(transport &t, read_buffer &buf, read_options options)
 {
 	auto size = co_await read_frame(t, buf, options.max_message_size);
-	if (!size) co_return std::unexpected(std::move(size.error()));
+	if (!size) {
+		co_return std::unexpected(std::move(size.error()));
+	}
 	// Allocated from options.decode.memory (e.g. a per-response arena of the
 	// connection layer).
 	auto m = decode(buf.data().first(*size), options.decode);
 	buf.consume(*size);
-	if (!m) co_return std::unexpected(with_context(std::move(m.error()), ldap::detail::format("read {}", t.name())));
+	if (!m) {
+		co_return std::unexpected(with_context(std::move(m.error()), ldap::detail::format("read {}", t.name())));
+	}
 	co_return m;
 }
 
@@ -144,7 +164,9 @@ capy::task<result<void>> write_bytes(transport &t, std::span<const std::byte> by
 	if (ec) {
 		std::string context = "write ";
 		context += t.name();
-		if (n != 0) ldap::detail::format_to(context, " ({} of {} bytes written)", n, bytes.size());
+		if (n != 0) {
+			ldap::detail::format_to(context, " ({} of {} bytes written)", n, bytes.size());
+		}
 		co_return fail(ec, std::move(context));
 	}
 	co_return result<void>{};
@@ -153,16 +175,18 @@ capy::task<result<void>> write_bytes(transport &t, std::span<const std::byte> by
 capy::task<result<void>> write_message(transport &t, const message &m, std::pmr::memory_resource *mr)
 {
 	auto bytes = encode(m, mr);
-	if (!bytes)
+	if (!bytes) {
 		co_return std::unexpected(with_context(std::move(bytes.error()), ldap::detail::format("write {}", t.name())));
+	}
 	co_return co_await write_bytes(t, *bytes);
 }
 
 capy::task<result<void>> write_message(transport &t, const message &m, ber::writer &w)
 {
 	w.clear();
-	if (auto e = encode(w, m); !e)
+	if (auto e = encode(w, m); !e) {
 		co_return std::unexpected(with_context(std::move(e.error()), ldap::detail::format("write {}", t.name())));
+	}
 	co_return co_await write_bytes(t, w.bytes());
 }
 

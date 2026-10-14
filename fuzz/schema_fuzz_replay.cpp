@@ -36,6 +36,8 @@ int main(int argc, char **argv)
 		.random_runs = 30'000,
 		.max_random_size = 64,
 		.rng_seed = 0x5EED'0A71'0000'0007ull };
-	for (auto t : texts) cfg.seeds.push_back(fuzz::to_input(t));
+	for (auto t : texts) {
+		cfg.seeds.push_back(fuzz::to_input(t));
+	}
 	return fuzz::replay_main(argc, argv, cfg);
 }

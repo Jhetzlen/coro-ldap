@@ -291,7 +291,9 @@ TEST_CASE("rdn::parse", "[dn][rdn]")
 TEST_CASE("rdn to_string/parse round-trips arbitrary values", "[dn][rdn]")
 {
 	std::string all;
-	for (int c = 0; c < 256; ++c) all += static_cast<char>(c);
+	for (int c = 0; c < 256; ++c) {
+		all += static_cast<char>(c);
+	}
 	for (std::size_t start = 0; start < all.size(); start += 7) {
 		const std::string value = " " + all.substr(start, 13) + " ";
 		const ldap::rdn r{ { ldap::ava{ ldap::attribute{ "cn" }, value },
@@ -440,7 +442,9 @@ TEST_CASE("invalid DNs are rejected", "[dn]")
 TEST_CASE("dn to_string/parse round-trips arbitrary values", "[dn]")
 {
 	std::string all;
-	for (int c = 0; c < 256; ++c) all += static_cast<char>(c);
+	for (int c = 0; c < 256; ++c) {
+		all += static_cast<char>(c);
+	}
 	for (std::size_t start = 0; start < all.size(); start += 7) {
 		const std::string value = all.substr(start, 13) + " ";
 		const auto d = ldap::dn{ "dc=example" }.child(ldap::rdn{

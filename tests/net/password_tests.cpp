@@ -52,8 +52,12 @@ ldap::message root_dse(std::int32_t id,
   std::initializer_list<std::string_view> capabilities = {})
 {
 	ldap::search_result_entry e{ "" };
-	if (extensions.size() != 0) e.attributes.emplace_back("supportedExtension", extensions);
-	if (capabilities.size() != 0) e.attributes.emplace_back("supportedCapabilities", capabilities);
+	if (extensions.size() != 0) {
+		e.attributes.emplace_back("supportedExtension", extensions);
+	}
+	if (capabilities.size() != 0) {
+		e.attributes.emplace_back("supportedCapabilities", capabilities);
+	}
 	return ldap::message{ id, std::move(e) };
 }
 
@@ -143,7 +147,9 @@ capy::task<void> serve_upgrading(corosio::tcp_acceptor &acc,
 		co_return;
 	}
 	co_await serve_script(net::transport::wrap(socket_ref{ &peer }, "server"), std::move(clear), log);
-	if (!log.error.empty()) co_return;
+	if (!log.error.empty()) {
+		co_return;
+	}
 	corosio::openssl_stream tls(&peer, ctx);
 	auto [hec] = co_await tls.handshake(corosio::tls_role::server);
 	if (hec) {
@@ -185,7 +191,9 @@ struct tls_mock
 		auto u = ldap::url::parse(std::string(scheme) + "://127.0.0.1:" + std::to_string(acc.local_endpoint().port()));
 		REQUIRE(u.has_value());
 		auto c = finish(ioc, ldap::connect(ioc, *u, o));
-		if (!c) return std::unexpected(std::move(c.error()));
+		if (!c) {
+			return std::unexpected(std::move(c.error()));
+		}
 		conn = std::move(*c);
 		return {};
 	}
@@ -357,7 +365,9 @@ capy::task<std::string> raw_bytes(corosio::tcp_socket &peer, std::size_t limit =
 	while (true) {
 		auto [ec, n] = co_await peer.read_some(capy::mutable_buffer(buf, sizeof buf));
 		out.append(buf, n);
-		if (ec || n == 0 || (limit != 0 && out.size() >= limit)) co_return out;
+		if (ec || n == 0 || (limit != 0 && out.size() >= limit)) {
+			co_return out;
+		}
 	}
 }
 
@@ -366,10 +376,14 @@ capy::task<std::string> raw_bytes(corosio::tcp_socket &peer, std::size_t limit =
 bool only_tls_handshake_records(std::string_view bytes)
 {
 	while (!bytes.empty()) {
-		if (bytes.size() < 5 || bytes[0] != '\x16') return false;
+		if (bytes.size() < 5 || bytes[0] != '\x16') {
+			return false;
+		}
 		const std::size_t length =
 		  std::size_t{ static_cast<unsigned char>(bytes[3]) } * 256 + static_cast<unsigned char>(bytes[4]);
-		if (bytes.size() < 5 + length) return false;
+		if (bytes.size() < 5 + length) {
+			return false;
+		}
 		bytes.remove_prefix(5 + length);
 	}
 	return true;
@@ -462,7 +476,9 @@ TEST_CASE("change_password: no known method, or a hidden root DSE", "[net][passw
 	CHECK(m.conn.is_open());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 3);
-	for (const auto &r : m.log.received) check_root_dse_search(r);
+	for (const auto &r : m.log.received) {
+		check_root_dse_search(r);
+	}
 }
 
 TEST_CASE("change_password: the root DSE is read again after StartTLS", "[net][password][starttls]")

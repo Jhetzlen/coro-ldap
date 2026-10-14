@@ -45,7 +45,9 @@ capy::task<void> serve_session(net::transport t, std::atomic<int> &requests)
 	net::read_buffer buf;
 	while (true) {
 		auto r = co_await net::read_message(t, buf, as_server);
-		if (!r || std::holds_alternative<ldap::unbind_request>(r->op)) co_return;
+		if (!r || std::holds_alternative<ldap::unbind_request>(r->op)) {
+			co_return;
+		}
 		++requests;
 		std::string out;
 		if (const auto *b = std::get_if<ldap::bind_request>(&r->op)) {
@@ -61,7 +63,9 @@ capy::task<void> serve_session(net::transport t, std::atomic<int> &requests)
 		} else {
 			continue;
 		}
-		if (auto w = co_await net::write_bytes(t, std::as_bytes(std::span(out))); !w) co_return;
+		if (auto w = co_await net::write_bytes(t, std::as_bytes(std::span(out))); !w) {
+			co_return;
+		}
 	}
 }
 
@@ -69,7 +73,9 @@ capy::task<void> accept_loop(corosio::io_context &ioc, corosio::tcp_acceptor &ac
 {
 	while (true) {
 		auto [ec, peer] = co_await acc.accept();
-		if (ec) co_return;
+		if (ec) {
+			co_return;
+		}
 		capy::run_async(ioc.get_executor())(serve_session(net::transport::wrap(std::move(peer), "server"), requests));
 	}
 }
@@ -143,16 +149,22 @@ TEST_CASE("sync: many threads share one connection", "[net][sync]")
 		pool.emplace_back([&c, &failures, t] {
 			for (int i = 0; i < per_thread; ++i) {
 				if (i % 2 == 0) {
-					if (!c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")) ++failures;
+					if (!c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")) {
+						++failures;
+					}
 					continue;
 				}
 				const std::string base = "ou=t" + std::to_string(t) + "i" + std::to_string(i) + ",dc=example,dc=org";
 				auto r = c.search({ .base = *ldap::dn::parse(base) });
-				if (!r || r->size() != 2 || !std::string_view((*r)[1].dn).ends_with(base)) ++failures;
+				if (!r || r->size() != 2 || !std::string_view((*r)[1].dn).ends_with(base)) {
+					++failures;
+				}
 			}
 		});
 	}
-	for (auto &th : pool) th.join();
+	for (auto &th : pool) {
+		th.join();
+	}
 	CHECK(failures == 0);
 	CHECK(srv.requests == threads * per_thread);
 	CHECK(c.is_open());
@@ -247,7 +259,9 @@ struct peer_server
 	// up), then joins.
 	~peer_server()
 	{
-		if (!thread.joinable()) return;
+		if (!thread.joinable()) {
+			return;
+		}
 		capy::run_async(ioc.get_executor())([](corosio::tcp_acceptor &a, corosio::tcp_socket &p) -> capy::task<void> {
 			a.close();
 			p.close();
@@ -289,7 +303,9 @@ struct peer_server
 		  ioc,
 		  [](corosio::tcp_acceptor &a, corosio::tcp_socket &p, capy::task<void> t) -> capy::task<void> {
 			  auto [ec] = co_await a.accept(p);
-			  if (ec) throw std::system_error(ec, "accept");
+			  if (ec) {
+				  throw std::system_error(ec, "accept");
+			  }
 			  co_await std::move(t);
 		  }(acc, peer, std::move(s)),
 		  session);
@@ -338,8 +354,9 @@ struct peer_server
 				// The client hung up: close() sends no close_notify, so between
 				// PDUs that reads as stream_truncated rather than eof.
 				const auto code = r.error().code;
-				if (code != capy::cond::eof && code != capy::cond::stream_truncated)
+				if (code != capy::cond::eof && code != capy::cond::stream_truncated) {
 					log.error = "read over TLS: " + std::string(r.error().message());
+				}
 				co_return;
 			}
 			const bool is_bind = std::holds_alternative<ldap::bind_request>(r->op);
@@ -690,7 +707,9 @@ std::pair<int, std::string> run_command(const std::string &command)
 	FILE *p = ::popen((command + " 2>&1").c_str(), "r");
 	REQUIRE(p != nullptr);
 	char buf[4096];
-	while (std::size_t n = std::fread(buf, 1, sizeof buf, p)) out.append(buf, n);
+	while (std::size_t n = std::fread(buf, 1, sizeof buf, p)) {
+		out.append(buf, n);
+	}
 	const int status = ::pclose(p);
 	return { WIFEXITED(status) ? WEXITSTATUS(status) : -1, out };
 }

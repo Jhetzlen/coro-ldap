@@ -24,19 +24,28 @@ namespace {
 	//   orderingRule [0] MatchingRuleId OPTIONAL, reverseOrder [1] BOOLEAN DEFAULT FALSE }
 	result<control> encode_sort(const server_side_sort &v, std::pmr::memory_resource *mr)
 	{
-		if (v.keys.empty()) return fail(client_errc::encode_error, "server side sort: no sort keys");
-		for (std::size_t i = 0; i < v.keys.size(); ++i)
-			if (v.keys[i].attribute.empty())
+		if (v.keys.empty()) {
+			return fail(client_errc::encode_error, "server side sort: no sort keys");
+		}
+		for (std::size_t i = 0; i < v.keys.size(); ++i) {
+			if (v.keys[i].attribute.empty()) {
 				return fail(
 				  client_errc::encode_error, detail::format("server side sort: key {} has no attribute", i + 1));
+			}
+		}
 		ber::writer w{ ber::writer::allocator_type(mr) };
 		w.constructed(ber::tags::sequence, [&](ber::writer &list) {
-			for (const auto &k : v.keys)
+			for (const auto &k : v.keys) {
 				list.constructed(ber::tags::sequence, [&](ber::writer &key) {
 					key.octet_string(k.attribute);
-					if (!k.ordering_rule.empty()) key.octet_string(k.ordering_rule, ber::context(0));
-					if (k.reverse) key.boolean(true, ber::context(1));
+					if (!k.ordering_rule.empty()) {
+						key.octet_string(k.ordering_rule, ber::context(0));
+					}
+					if (k.reverse) {
+						key.boolean(true, ber::context(1));
+					}
 				});
+			}
 		});
 		return value_control(sort_request_oid, v.critical, w, control::allocator_type(mr));
 	}
@@ -49,7 +58,9 @@ namespace {
 	{
 		ber::writer w{ ber::writer::allocator_type(mr) };
 		w.constructed(ber::tags::sequence, [&](ber::writer &list) {
-			for (const auto &a : attributes) list.octet_string(a);
+			for (const auto &a : attributes) {
+				list.octet_string(a);
+			}
 		});
 		return value_control(oid, critical, w, control::allocator_type(mr));
 	}
@@ -61,7 +72,9 @@ namespace {
 	  find_decoded(const std::pmr::vector<control> &controls, std::string_view oid, Decode decode)
 	{
 		const auto it = std::ranges::find(controls, oid, &control::type);
-		if (it == controls.end()) return std::optional<T>{};
+		if (it == controls.end()) {
+			return std::optional<T>{};
+		}
 		return decode(*it).transform([](T &&v) { return std::optional<T>(std::move(v)); });
 	}
 
@@ -121,7 +134,9 @@ result<void> append_controls(const request_controls &controls, std::pmr::vector<
 {
 	for (const auto &c : controls) {
 		auto wire = to_control(c, out.get_allocator().resource());
-		if (!wire) return std::unexpected(std::move(wire.error()));
+		if (!wire) {
+			return std::unexpected(std::move(wire.error()));
+		}
 		out.push_back(std::move(*wire));
 	}
 	return {};

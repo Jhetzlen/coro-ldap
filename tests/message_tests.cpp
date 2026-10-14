@@ -391,9 +391,13 @@ TEST_CASE("a search request with the deepest allowed filter decodes", "[message]
 {
 	// depth max_filter_depth: (&(&...(cn=a*b*c)...)) with a substrings leaf.
 	std::string text;
-	for (std::size_t i = 1; i < ldap::max_filter_depth; ++i) text += "(&";
+	for (std::size_t i = 1; i < ldap::max_filter_depth; ++i) {
+		text += "(&";
+	}
 	text += "(cn=a*b*c)";
-	for (std::size_t i = 1; i < ldap::max_filter_depth; ++i) text += ")";
+	for (std::size_t i = 1; i < ldap::max_filter_depth; ++i) {
+		text += ")";
+	}
 	const auto m = search_message(raw(text));
 	CHECK(round_trip(m) == m);
 
@@ -532,8 +536,9 @@ TEST_CASE("decode(encode(m)) == m exactly and encode(decode(encode(m))) == encod
 	// Filters written as non-canonical text included: the tree does not
 	// depend on the spelling, so nothing is canonicalized on the way.
 	std::vector<ldap::message> all = ldap::test::sample_messages();
-	for (const char *text : { "cn=x", "(cn=\\41)", "(cn=\\2A)", "(A:DN:=v)", "(a=b**c)" })
+	for (const char *text : { "cn=x", "(cn=\\41)", "(cn=\\2A)", "(A:DN:=v)", "(a=b**c)" }) {
 		all.push_back(search_message(raw(text), 9));
+	}
 	for (const auto &m : all) {
 		INFO("sample id " << m.id << ", op index " << m.op.index());
 		auto first = ldap::encode(m);
@@ -610,7 +615,9 @@ TEST_CASE("regression: a huge AND filter in a search request fails fast", "[mess
 			o.integer(0);
 			o.boolean(false);
 			o.constructed(ber::context(0), [&](ber::writer &a) {
-				for (std::size_t i = 0; i < children; ++i) a.octet_string("a", ber::context(7));
+				for (std::size_t i = 0; i < children; ++i) {
+					a.octet_string("a", ber::context(7));
+				}
 			});
 			o.constructed(ber::tags::sequence, [](ber::writer &) {});
 		});
@@ -638,14 +645,17 @@ TEST_CASE("regression: invalid list elements do not drive the reserve size", "[m
 				o.octet_string("cn=x");
 				o.constructed(ber::tags::sequence, [&](ber::writer &list) {
 					if (bad_attributes) {
-						for (std::size_t i = 0; i < count; ++i)
+						for (std::size_t i = 0; i < count; ++i) {
 							list.constructed(ber::tags::sequence, [](ber::writer &) {});
+						}
 						return;
 					}
 					list.constructed(ber::tags::sequence, [&](ber::writer &pa) {
 						pa.octet_string("cn");
 						pa.constructed(ber::tags::set, [&](ber::writer &vals) {
-							for (std::size_t i = 0; i < count; ++i) vals.null();
+							for (std::size_t i = 0; i < count; ++i) {
+								vals.null();
+							}
 						});
 					});
 				});
@@ -701,17 +711,20 @@ TEST_CASE("regression: many tiny values cannot multiply a message's size in memo
 				o.octet_string("cn=x");
 				o.constructed(ber::tags::sequence, [&](ber::writer &list) {
 					if (many_attributes) {
-						for (std::size_t i = 0; i < count; ++i)
+						for (std::size_t i = 0; i < count; ++i) {
 							list.constructed(ber::tags::sequence, [](ber::writer &pa) {
 								pa.octet_string("");
 								pa.constructed(ber::tags::set, [](ber::writer &) {});
 							});
+						}
 						return;
 					}
 					list.constructed(ber::tags::sequence, [&](ber::writer &pa) {
 						pa.octet_string("cn");
 						pa.constructed(ber::tags::set, [&](ber::writer &vals) {
-							for (std::size_t i = 0; i < count; ++i) vals.octet_string("");
+							for (std::size_t i = 0; i < count; ++i) {
+								vals.octet_string("");
+							}
 						});
 					});
 				});

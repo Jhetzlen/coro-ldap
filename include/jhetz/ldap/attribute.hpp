@@ -24,16 +24,25 @@ namespace detail {
 
 	constexpr unsigned hex_value(char c) noexcept
 	{
-		if (is_digit(c)) return static_cast<unsigned>(c - '0');
-		if (c >= 'a' && c <= 'f') return static_cast<unsigned>(c - 'a' + 10);
+		if (is_digit(c)) {
+			return static_cast<unsigned>(c - '0');
+		}
+		if (c >= 'a' && c <= 'f') {
+			return static_cast<unsigned>(c - 'a' + 10);
+		}
 		return static_cast<unsigned>(c - 'A' + 10);
 	}
 
 	constexpr bool iequals(std::string_view a, std::string_view b) noexcept
 	{
-		if (a.size() != b.size()) return false;
-		for (std::size_t i = 0; i < a.size(); ++i)
-			if (ascii_lower(a[i]) != ascii_lower(b[i])) return false;
+		if (a.size() != b.size()) {
+			return false;
+		}
+		for (std::size_t i = 0; i < a.size(); ++i) {
+			if (ascii_lower(a[i]) != ascii_lower(b[i])) {
+				return false;
+			}
+		}
 		return true;
 	}
 
@@ -53,19 +62,29 @@ namespace detail {
 	{
 		const auto at = [&](std::size_t k) { return static_cast<unsigned char>(s[i + k]); };
 		const unsigned char c = at(0);
-		if (c < 0x80u) return { 1, true };
+		if (c < 0x80u) {
+			return { 1, true };
+		}
 		std::size_t n = 0;
 		unsigned char lo = 0x80u, hi = 0xBFu;// range of the second octet
 		if (c >= 0xC2u && c <= 0xDFu) {
 			n = 2;
 		} else if (c >= 0xE0u && c <= 0xEFu) {
 			n = 3;
-			if (c == 0xE0u) lo = 0xA0u;// overlong
-			if (c == 0xEDu) hi = 0x9Fu;// surrogates
+			if (c == 0xE0u) {
+				lo = 0xA0u;// overlong
+			}
+			if (c == 0xEDu) {
+				hi = 0x9Fu;// surrogates
+			}
 		} else if (c >= 0xF0u && c <= 0xF4u) {
 			n = 4;
-			if (c == 0xF0u) lo = 0x90u;// overlong
-			if (c == 0xF4u) hi = 0x8Fu;// above U+10FFFF
+			if (c == 0xF0u) {
+				lo = 0x90u;// overlong
+			}
+			if (c == 0xF4u) {
+				hi = 0x8Fu;// above U+10FFFF
+			}
 		} else {
 			return { 1, false };
 		}
@@ -73,7 +92,9 @@ namespace detail {
 		std::size_t k = 1;
 		if (avail > 1 && at(1) >= lo && at(1) <= hi) {
 			k = 2;
-			while (k < n && k < avail && at(k) >= 0x80u && at(k) <= 0xBFu) ++k;
+			while (k < n && k < avail && at(k) >= 0x80u && at(k) <= 0xBFu) {
+				++k;
+			}
 		}
 		return { k, k == n };
 	}
@@ -89,9 +110,14 @@ namespace detail {
 	// descr = keystring = ALPHA *(ALPHA / DIGIT / HYPHEN)
 	constexpr bool is_descr(std::string_view s) noexcept
 	{
-		if (s.empty() || !is_alpha(s[0])) return false;
-		for (char c : s)
-			if (!is_keychar(c)) return false;
+		if (s.empty() || !is_alpha(s[0])) {
+			return false;
+		}
+		for (char c : s) {
+			if (!is_keychar(c)) {
+				return false;
+			}
+		}
 		return true;
 	}
 
@@ -103,12 +129,22 @@ namespace detail {
 		std::size_t i = 0;
 		while (true) {
 			const std::size_t start = i;
-			while (i < s.size() && is_digit(s[i])) ++i;
-			if (i == start) return false;
-			if (s[start] == '0' && i - start > 1) return false;
+			while (i < s.size() && is_digit(s[i])) {
+				++i;
+			}
+			if (i == start) {
+				return false;
+			}
+			if (s[start] == '0' && i - start > 1) {
+				return false;
+			}
 			++parts;
-			if (i == s.size()) break;
-			if (s[i] != '.') return false;
+			if (i == s.size()) {
+				break;
+			}
+			if (s[i] != '.') {
+				return false;
+			}
 			++i;
 		}
 		return parts >= 2;
@@ -122,15 +158,25 @@ namespace detail {
 	constexpr bool is_attribute_description(std::string_view s) noexcept
 	{
 		const std::size_t semi = s.find(';');
-		if (!is_oid(s.substr(0, semi))) return false;
-		if (semi == std::string_view::npos) return true;
+		if (!is_oid(s.substr(0, semi))) {
+			return false;
+		}
+		if (semi == std::string_view::npos) {
+			return true;
+		}
 		std::size_t i = semi;
 		while (i < s.size()) {
 			++i;// skip ';'
 			const std::size_t start = i;
-			while (i < s.size() && is_keychar(s[i])) ++i;
-			if (i == start) return false;
-			if (i < s.size() && s[i] != ';') return false;
+			while (i < s.size() && is_keychar(s[i])) {
+				++i;
+			}
+			if (i == start) {
+				return false;
+			}
+			if (i < s.size() && s[i] != ';') {
+				return false;
+			}
 		}
 		return true;
 	}
@@ -164,7 +210,9 @@ class attribute
 	{
 		consteval literal(const char *s) : text(s)
 		{
-			if (!detail::is_attribute_description(s)) throw "ldap::attribute: invalid attribute description";
+			if (!detail::is_attribute_description(s)) {
+				throw "ldap::attribute: invalid attribute description";
+			}
 		}
 		const char *text;
 	};

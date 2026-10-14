@@ -44,14 +44,18 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 	if (a) {
 		const auto *found = s.find_attribute(a->oid);
 		check(found != nullptr, "found != nullptr");
-		for (const auto &n : a->names) check(s.find_attribute(n) != nullptr, "s.find_attribute(n) != nullptr");
+		for (const auto &n : a->names) {
+			check(s.find_attribute(n) != nullptr, "s.find_attribute(n) != nullptr");
+		}
 		(void)s.syntax_of(*found);
 		check(s.find_object_class(c->oid) != nullptr, "s.find_object_class(c->oid) != nullptr");
 		check(s.skipped() == 0, "s.skipped() == 0");
 	} else {
 		check(s.skipped() == (c ? 1u : 2u), "s.skipped() == (c ? 1u : 2u)");
 		check(s.attribute_count() == 0, "s.attribute_count() == 0");
-		if (c) check(s.find_object_class(c->oid) != nullptr, "s.find_object_class(c->oid) != nullptr");
+		if (c) {
+			check(s.find_object_class(c->oid) != nullptr, "s.find_object_class(c->oid) != nullptr");
+		}
 	}
 	return 0;
 }

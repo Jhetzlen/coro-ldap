@@ -108,11 +108,21 @@ namespace {
 
 	int b64_value(char c)
 	{
-		if (c >= 'A' && c <= 'Z') return c - 'A';
-		if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-		if (c >= '0' && c <= '9') return c - '0' + 52;
-		if (c == '+') return 62;
-		if (c == '/') return 63;
+		if (c >= 'A' && c <= 'Z') {
+			return c - 'A';
+		}
+		if (c >= 'a' && c <= 'z') {
+			return c - 'a' + 26;
+		}
+		if (c >= '0' && c <= '9') {
+			return c - '0' + 52;
+		}
+		if (c == '+') {
+			return 62;
+		}
+		if (c == '/') {
+			return 63;
+		}
 		return -1;
 	}
 
@@ -120,26 +130,38 @@ namespace {
 	// stray bits in the last group (RFC 4648 section 3.5 canonical form).
 	std::optional<std::string> base64_decode(std::string_view s)
 	{
-		if (s.size() % 4 != 0) return std::nullopt;
+		if (s.size() % 4 != 0) {
+			return std::nullopt;
+		}
 		std::string out;
 		out.reserve(s.size() / 4 * 3);
 		for (std::size_t i = 0; i < s.size(); i += 4) {
 			const bool last = i + 4 == s.size();
 			std::size_t pad = 0;
-			if (last && s[i + 3] == '=') pad = s[i + 2] == '=' ? 2 : 1;
+			if (last && s[i + 3] == '=') {
+				pad = s[i + 2] == '=' ? 2 : 1;
+			}
 			std::uint32_t v = 0;
 			for (std::size_t k = 0; k < 4; ++k) {
 				int d = 0;
 				if (k < 4 - pad) {
 					d = b64_value(s[i + k]);
-					if (d < 0) return std::nullopt;
+					if (d < 0) {
+						return std::nullopt;
+					}
 				}
 				v = v << 6 | static_cast<std::uint32_t>(d);
 			}
 			out += static_cast<char>(v >> 16 & 0xff);
-			if (pad < 2) out += static_cast<char>(v >> 8 & 0xff);
-			if (pad < 1) out += static_cast<char>(v & 0xff);
-			if ((pad == 1 && (v & 0xff) != 0) || (pad == 2 && (v & 0xffff) != 0)) return std::nullopt;
+			if (pad < 2) {
+				out += static_cast<char>(v >> 8 & 0xff);
+			}
+			if (pad < 1) {
+				out += static_cast<char>(v & 0xff);
+			}
+			if ((pad == 1 && (v & 0xff) != 0) || (pad == 2 && (v & 0xffff) != 0)) {
+				return std::nullopt;
+			}
 		}
 		return out;
 	}
@@ -189,26 +211,37 @@ namespace {
 	{
 		wipe_string(out);
 		const std::string name(what);
-		if (s.empty()) return input_error("empty " + name);
-		if (s.size() > static_cast<std::size_t>(INT32_MAX / 4)) return input_error(name + " is too long");
+		if (s.empty()) {
+			return input_error("empty " + name);
+		}
+		if (s.size() > static_cast<std::size_t>(INT32_MAX / 4)) {
+			return input_error(name + " is too long");
+		}
 
 		// UTF-8 -> UTF-16. u_strFromUTF8 refuses ill-formed UTF-8 (overlong
 		// forms, surrogates, code points above U+10FFFF, truncated sequences).
 		UErrorCode status = U_ZERO_ERROR;
 		int32_t n16 = 0;
 		u_strFromUTF8(nullptr, 0, &n16, s.data(), static_cast<int32_t>(s.size()), &status);
-		if (status == U_INVALID_CHAR_FOUND || status == U_ILLEGAL_CHAR_FOUND)
+		if (status == U_INVALID_CHAR_FOUND || status == U_ILLEGAL_CHAR_FOUND) {
 			return input_error(name + " is not valid UTF-8");
-		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) return icu_failure(name, status);
+		}
+		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) {
+			return icu_failure(name, status);
+		}
 		wiped_buffer<UChar> in(static_cast<std::size_t>(n16));
 		status = U_ZERO_ERROR;
 		u_strFromUTF8(in.v.data(), n16, &n16, s.data(), static_cast<int32_t>(s.size()), &status);
-		if (U_FAILURE(status)) return icu_failure(name, status);
+		if (U_FAILURE(status)) {
+			return icu_failure(name, status);
+		}
 
 		status = U_ZERO_ERROR;
 		const std::unique_ptr<UStringPrepProfile, usprep_closer> profile(
 		  usprep_openByType(USPREP_RFC4013_SASLPREP, &status));
-		if (U_FAILURE(status)) return icu_failure(name, status);
+		if (U_FAILURE(status)) {
+			return icu_failure(name, status);
+		}
 		const int32_t options = kind == prep_kind::stored ? USPREP_DEFAULT : USPREP_ALLOW_UNASSIGNED;
 		auto prepare = [&](UChar *dest, int32_t capacity) {
 			UParseError where{};
@@ -231,17 +264,23 @@ namespace {
 		default:
 			return icu_failure(name, status);
 		}
-		if (nprep == 0) return input_error(name + " is empty after SASLprep");
+		if (nprep == 0) {
+			return input_error(name + " is empty after SASLprep");
+		}
 		wiped_buffer<UChar> prepared(static_cast<std::size_t>(nprep));
 		nprep = prepare(prepared.v.data(), nprep);
-		if (U_FAILURE(status)) return icu_failure(name, status);
+		if (U_FAILURE(status)) {
+			return icu_failure(name, status);
+		}
 
 		// UTF-16 -> UTF-8, straight into `out` (sized once: no copy of the
 		// text is left in a freed buffer).
 		status = U_ZERO_ERROR;
 		int32_t n8 = 0;
 		u_strToUTF8(nullptr, 0, &n8, prepared.v.data(), nprep, &status);
-		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) return icu_failure(name, status);
+		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) {
+			return icu_failure(name, status);
+		}
 		out.resize(static_cast<std::size_t>(n8));
 		status = U_ZERO_ERROR;
 		u_strToUTF8(out.data(), n8, &n8, prepared.v.data(), nprep, &status);
@@ -258,12 +297,13 @@ namespace {
 		std::string out;
 		out.reserve(s.size());
 		for (const char c : s) {
-			if (c == '=')
+			if (c == '=') {
 				out += "=3D";
-			else if (c == ',')
+			} else if (c == ',') {
 				out += "=2C";
-			else
+			} else {
 				out += c;
+			}
 		}
 		return out;
 	}
@@ -289,7 +329,9 @@ namespace {
 		// not of the form ALPHA "=" value (an empty one after a trailing ',').
 		std::optional<std::pair<char, std::string_view>> next()
 		{
-			if (!more) return std::nullopt;
+			if (!more) {
+				return std::nullopt;
+			}
 			const auto comma = rest.find(',');
 			std::string_view a = rest.substr(0, comma);
 			if (comma == std::string_view::npos) {
@@ -298,22 +340,32 @@ namespace {
 			} else {
 				rest = rest.substr(comma + 1);
 			}
-			if (a.size() < 2 || a[1] != '=') return std::nullopt;
+			if (a.size() < 2 || a[1] != '=') {
+				return std::nullopt;
+			}
 			const char n = a[0];
-			if (!((n >= 'a' && n <= 'z') || (n >= 'A' && n <= 'Z'))) return std::nullopt;
+			if (!((n >= 'a' && n <= 'z') || (n >= 'A' && n <= 'Z'))) {
+				return std::nullopt;
+			}
 			return std::pair{ n, a.substr(2) };
 		}
 	};
 
 	std::optional<std::uint32_t> parse_count(std::string_view s)
 	{
-		if (s.empty() || s.size() > 10 || s[0] == '0') return std::nullopt;
+		if (s.empty() || s.size() > 10 || s[0] == '0') {
+			return std::nullopt;
+		}
 		std::uint64_t v = 0;
 		for (const char c : s) {
-			if (c < '0' || c > '9') return std::nullopt;
+			if (c < '0' || c > '9') {
+				return std::nullopt;
+			}
 			v = v * 10 + static_cast<std::uint64_t>(c - '0');
 		}
-		if (v > UINT32_MAX) return std::nullopt;
+		if (v > UINT32_MAX) {
+			return std::nullopt;
+		}
 		return static_cast<std::uint32_t>(v);
 	}
 
@@ -369,8 +421,9 @@ namespace {
 			OPENSSL_cleanse(server_signature.data(), server_signature.size());
 			return false;
 		}
-		for (std::size_t k = 0; k < key_size; ++k)
+		for (std::size_t k = 0; k < key_size; ++k) {
 			proof[k] = static_cast<unsigned char>(client_key[k] ^ client_signature[k]);
+		}
 		proof_b64 = base64_encode(proof.span());
 		return true;
 	}
@@ -489,10 +542,14 @@ void sasl_scram_sha256::prepare(const sasl_bind_context &context) { can_offload_
 // (sasl_bind gave up on it) is dropped: this exchange has no signature.
 void sasl_scram_sha256::collect() noexcept
 {
-	if (pending_ == nullptr) return;
+	if (pending_ == nullptr) {
+		return;
+	}
 	const std::shared_ptr<derivation> d = std::move(pending_);
 	pending_.reset();
-	if (!d->done.load(std::memory_order_acquire) || !d->ok) return;
+	if (!d->done.load(std::memory_order_acquire) || !d->ok) {
+		return;
+	}
 	server_signature_ = d->server_signature;
 	have_signature_ = true;
 	wipe_cache();
@@ -507,15 +564,17 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 	state_ = state::idle;
 	wipe();
 	wipe_string(prepared_password_);
-	if (options_.max_iterations < min_iterations || options_.max_iterations > static_cast<std::uint32_t>(INT32_MAX))
+	if (options_.max_iterations < min_iterations || options_.max_iterations > static_cast<std::uint32_t>(INT32_MAX)) {
 		return input_error(
 		  detail::format("max_iterations {} is outside {} .. 2^31-1", options_.max_iterations, min_iterations));
+	}
 	const std::string &authz_id = options_.authz_id;
 	// RFC 5802 section 5.1: the username is prepared as a query (unassigned
 	// code points allowed).
 	std::string user;
-	if (auto r = saslprep(username_, "username", prep_kind::query, user); !r)
+	if (auto r = saslprep(username_, "username", prep_kind::query, user); !r) {
 		return std::unexpected(std::move(r.error()));
+	}
 	// The authorization identity is a saslname too (UTF-8), but RFC 5802
 	// does not prepare it: it is sent as given (escaped) once checked. It
 	// must be well-formed UTF-8 (RFC 3629: U8_NEXT refuses overlong forms,
@@ -527,19 +586,25 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 		for (std::int64_t i = 0; i < n;) {
 			UChar32 c = 0;
 			U8_NEXT(p, i, n, c);
-			if (c < 0) return input_error("authorization identity is not valid UTF-8");
-			if (c < 0x20 || (c >= 0x7f && c < 0xa0))
+			if (c < 0) {
+				return input_error("authorization identity is not valid UTF-8");
+			}
+			if (c < 0x20 || (c >= 0x7f && c < 0xa0)) {
 				return input_error("authorization identity contains a control character");
+			}
 		}
 	}
 
 	if (fixed_nonce_) {
-		if (fixed_nonce_->empty() || !printable(*fixed_nonce_)) return input_error("invalid fixed nonce");
+		if (fixed_nonce_->empty() || !printable(*fixed_nonce_)) {
+			return input_error("invalid fixed nonce");
+		}
 		client_nonce_ = *fixed_nonce_;
 	} else {
 		wiped<nonce_bytes> raw;
-		if (RAND_bytes(raw.data(), static_cast<int>(raw.size())) != 1)
+		if (RAND_bytes(raw.data(), static_cast<int>(raw.size())) != 1) {
 			return library_error("OpenSSL RAND_bytes failed");
+		}
 		client_nonce_ = base64_encode(raw.span());
 	}
 
@@ -547,8 +612,9 @@ result<std::optional<std::string>> sasl_scram_sha256::start()
 	// no prepared password behind, and saslprep() wipes its own on failure.
 	// RFC 5802 section 2.2: the password is prepared as a stored string
 	// (unassigned code points refused).
-	if (auto r = saslprep(password_, "password", prep_kind::stored, prepared_password_); !r)
+	if (auto r = saslprep(password_, "password", prep_kind::stored, prepared_password_); !r) {
 		return std::unexpected(std::move(r.error()));
+	}
 
 	gs2_header_ = authz_id.empty() ? "n,," : "n,a=" + escape_saslname(authz_id) + ",";
 	client_first_bare_ = "n=" + escape_saslname(user) + ",r=" + client_nonce_;
@@ -560,11 +626,17 @@ result<std::optional<std::string>> sasl_scram_sha256::step(std::optional<std::st
 {
 	switch (state_) {
 	case state::sent_first:
-		if (!challenge) return malformed("server-first-message: no challenge");
+		if (!challenge) {
+			return malformed("server-first-message: no challenge");
+		}
 		return client_final(*challenge);
 	case state::sent_final: {
-		if (!challenge) return malformed("server-final-message: no challenge");
-		if (auto r = verify(*challenge); !r) return std::unexpected(std::move(r.error()));
+		if (!challenge) {
+			return malformed("server-final-message: no challenge");
+		}
+		if (auto r = verify(*challenge); !r) {
+			return std::unexpected(std::move(r.error()));
+		}
 		// RFC 4422 section 5: the server-final-message came as a challenge,
 		// so the response is empty and the server then reports success.
 		return std::optional<std::string>(std::string());
@@ -583,36 +655,58 @@ auto sasl_scram_sha256::parse_server_first(std::string_view message) -> result<s
 	//                        iteration-count ["," extensions]
 	attribute_reader in{ message };
 	auto a = in.next();
-	if (!a) return malformed("server-first-message");
-	if (a->first == 'm')
+	if (!a) {
+		return malformed("server-first-message");
+	}
+	if (a->first == 'm') {
 		return refused("server-first-message has a mandatory extension (m=) this client does not support");
-	if (a->first != 'r') return malformed("server-first-message: no nonce (r=)");
+	}
+	if (a->first != 'r') {
+		return malformed("server-first-message: no nonce (r=)");
+	}
 	server_first out;
 	out.nonce = a->second;
-	if (out.nonce.empty() || !printable(out.nonce)) return malformed("server-first-message: nonce");
-	if (!out.nonce.starts_with(client_nonce_)) return refused("the server nonce does not start with the client nonce");
-	if (out.nonce.size() <= client_nonce_.size())
+	if (out.nonce.empty() || !printable(out.nonce)) {
+		return malformed("server-first-message: nonce");
+	}
+	if (!out.nonce.starts_with(client_nonce_)) {
+		return refused("the server nonce does not start with the client nonce");
+	}
+	if (out.nonce.size() <= client_nonce_.size()) {
 		return refused("the server nonce does not extend the client nonce (no server part)");
+	}
 
 	a = in.next();
-	if (!a || a->first != 's') return malformed("server-first-message: no salt (s=)");
+	if (!a || a->first != 's') {
+		return malformed("server-first-message: no salt (s=)");
+	}
 	auto salt = base64_decode(a->second);
-	if (!salt || salt->empty()) return malformed("server-first-message: salt is not valid base64");
+	if (!salt || salt->empty()) {
+		return malformed("server-first-message: salt is not valid base64");
+	}
 	out.salt = std::move(*salt);
 
 	a = in.next();
-	if (!a || a->first != 'i') return malformed("server-first-message: no iteration count (i=)");
+	if (!a || a->first != 'i') {
+		return malformed("server-first-message: no iteration count (i=)");
+	}
 	const auto iterations = parse_count(a->second);
-	if (!iterations) return malformed("server-first-message: iteration count");
-	if (*iterations < min_iterations)
+	if (!iterations) {
+		return malformed("server-first-message: iteration count");
+	}
+	if (*iterations < min_iterations) {
 		return refused(detail::format(
 		  "iteration count {} is below the minimum of {} (RFC 7677 section 4)", *iterations, min_iterations));
-	if (*iterations > options_.max_iterations)
+	}
+	if (*iterations > options_.max_iterations) {
 		return refused(
 		  detail::format("iteration count {} is above the maximum of {}", *iterations, options_.max_iterations));
+	}
 	out.iterations = *iterations;
 	while (!in.done()) {
-		if (!in.next()) return malformed("server-first-message: extension");
+		if (!in.next()) {
+			return malformed("server-first-message: extension");
+		}
 	}
 	return out;
 }
@@ -642,7 +736,9 @@ result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_v
 		~wipe_on_exit() { wipe_string(s); }
 	} const wipe_password{ prepared_password_ };
 	auto parsed = parse_server_first(message);
-	if (!parsed) return std::unexpected(std::move(parsed.error()));
+	if (!parsed) {
+		return std::unexpected(std::move(parsed.error()));
+	}
 
 	std::string without_proof = "c=" + base64_encode(gs2_header_) + ",r=";
 	without_proof += parsed->nonce;
@@ -669,12 +765,15 @@ result<std::optional<std::string>> sasl_scram_sha256::client_final(std::string_v
 
 sasl_work sasl_scram_sha256::offload_step(std::optional<std::string_view> challenge)
 {
-	if (!can_offload_ || state_ != state::sent_first || !challenge) return {};
+	if (!can_offload_ || state_ != state::sent_first || !challenge) {
+		return {};
+	}
 	auto parsed = parse_server_first(*challenge);
 	// A malformed message, a cached SaltedPassword or a cheap PBKDF2: step().
 	if (!parsed || parsed->iterations <= options_.offload_above_iterations
-		|| (cache_iterations_ == parsed->iterations && cache_salt_ == parsed->salt))
+		|| (cache_iterations_ == parsed->iterations && cache_salt_ == parsed->salt)) {
 		return {};
+	}
 
 	std::string without_proof = "c=" + base64_encode(gs2_header_) + ",r=";
 	without_proof += parsed->nonce;
@@ -697,11 +796,13 @@ sasl_work sasl_scram_sha256::offload_step(std::optional<std::string_view> challe
 				d.done.store(true, std::memory_order_release);
 			}
 		} const done{ *d };
-		if (!salted_password(d->password, d->salt, d->iterations, d->salted))
+		if (!salted_password(d->password, d->salt, d->iterations, d->salted)) {
 			return library_error("OpenSSL PBKDF2 failed");
+		}
 		std::string proof;
-		if (!keys(d->salted, d->auth_message, proof, d->server_signature))
+		if (!keys(d->salted, d->auth_message, proof, d->server_signature)) {
 			return library_error("OpenSSL HMAC or SHA-256 failed");
+		}
 		d->ok = true;
 		return std::optional<std::string>(without_proof + ",p=" + proof);
 	};
@@ -714,18 +815,30 @@ result<void> sasl_scram_sha256::verify(std::string_view server_final)
 	// server-final-message = (server-error / verifier) ["," extensions]
 	attribute_reader in{ server_final };
 	auto a = in.next();
-	if (!a) return malformed("server-final-message");
-	if (a->first == 'e') return refused("the server reported an error: " + quoted(a->second));
-	if (a->first != 'v') return malformed("server-final-message: no server signature (v=)");
+	if (!a) {
+		return malformed("server-final-message");
+	}
+	if (a->first == 'e') {
+		return refused("the server reported an error: " + quoted(a->second));
+	}
+	if (a->first != 'v') {
+		return malformed("server-final-message: no server signature (v=)");
+	}
 	const auto signature = base64_decode(a->second);
-	if (!signature) return malformed("server-final-message: server signature is not valid base64");
+	if (!signature) {
+		return malformed("server-final-message: server signature is not valid base64");
+	}
 	while (!in.done()) {
-		if (!in.next()) return malformed("server-final-message: extension");
+		if (!in.next()) {
+			return malformed("server-final-message: extension");
+		}
 	}
 	const bool match = have_signature_ && signature->size() == key_size
 					   && CRYPTO_memcmp(signature->data(), server_signature_.data(), key_size) == 0;
 	wipe();
-	if (!match) return refused("wrong server signature: the server could not be authenticated");
+	if (!match) {
+		return refused("wrong server signature: the server could not be authenticated");
+	}
 	state_ = state::verified;
 	return {};
 }
@@ -734,12 +847,15 @@ result<void> sasl_scram_sha256::complete(std::optional<std::string_view> server_
 {
 	switch (state_) {
 	case state::sent_final:
-		if (!server_creds || server_creds->empty())
+		if (!server_creds || server_creds->empty()) {
 			return refused("the server reported success without a server signature (v=)");
+		}
 		return verify(*server_creds);
 	case state::verified:
 		state_ = state::idle;
-		if (server_creds && !server_creds->empty()) return refused("unexpected data after the server signature");
+		if (server_creds && !server_creds->empty()) {
+			return refused("unexpected data after the server signature");
+		}
 		return {};
 	case state::idle:
 	case state::sent_first:

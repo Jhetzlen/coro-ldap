@@ -126,8 +126,9 @@ struct value_traits<T>
 		T v{};
 		const char *end = raw.data() + raw.size();
 		const auto [p, ec] = std::from_chars(raw.data(), end, v);
-		if (raw.empty() || ec != std::errc{} || p != end)
+		if (raw.empty() || ec != std::errc{} || p != end) {
 			return std::unexpected(detail::conversion_error("not an integer", raw));
+		}
 		return v;
 	}
 	[[nodiscard]] static std::string encode(T v) { return std::to_string(v); }
@@ -138,8 +139,12 @@ template<> struct value_traits<bool>
 {
 	[[nodiscard]] static result<bool> decode(std::string_view raw)
 	{
-		if (raw == "TRUE") return true;
-		if (raw == "FALSE") return false;
+		if (raw == "TRUE") {
+			return true;
+		}
+		if (raw == "FALSE") {
+			return false;
+		}
 		return std::unexpected(detail::conversion_error("not TRUE or FALSE", raw));
 	}
 	[[nodiscard]] static std::string encode(bool v) { return v ? "TRUE" : "FALSE"; }
@@ -195,14 +200,20 @@ struct value_traits<E>
 {
 	[[nodiscard]] static result<E> decode(std::string_view raw)
 	{
-		for (const auto &[value, name] : enum_names<E>)
-			if (name == raw) return value;
+		for (const auto &[value, name] : enum_names<E>) {
+			if (name == raw) {
+				return value;
+			}
+		}
 		return std::unexpected(detail::conversion_error("not a known name", raw));
 	}
 	[[nodiscard]] static std::string encode(E v)
 	{
-		for (const auto &[value, name] : enum_names<E>)
-			if (value == v) return std::string(name);
+		for (const auto &[value, name] : enum_names<E>) {
+			if (value == v) {
+				return std::string(name);
+			}
+		}
 		return std::to_string(std::to_underlying(v));// not in the table: its number
 	}
 };
@@ -267,7 +278,9 @@ template<auto Ptr> struct field
   private:
 	consteval void check() const
 	{
-		if (!detail::is_attribute_description(name)) throw "ldap::field: invalid attribute description";
+		if (!detail::is_attribute_description(name)) {
+			throw "ldap::field: invalid attribute description";
+		}
 	}
 };
 
@@ -279,8 +292,11 @@ template<std::size_t N> struct object_classes
 template<class... S> consteval auto object_class(S... names)
 {
 	object_classes<sizeof...(S)> out{ { names... } };
-	for (const char *n : out.names)
-		if (!detail::is_oid(n)) throw "ldap::object_class: invalid object class name";
+	for (const char *n : out.names) {
+		if (!detail::is_oid(n)) {
+			throw "ldap::object_class: invalid object class name";
+		}
+	}
 	return out;
 }
 
@@ -314,10 +330,11 @@ concept described = !std::same_as<std::remove_cvref_t<decltype(schema<T>)>, not_
 namespace detail {
 	template<auto A, auto B> consteval bool same_member()
 	{
-		if constexpr (std::same_as<decltype(A), decltype(B)>)
+		if constexpr (std::same_as<decltype(A), decltype(B)>) {
 			return A == B;
-		else
+		} else {
 			return false;
+		}
 	}
 
 	// Index of the field for member `Ptr` in its struct's descriptor.
@@ -380,20 +397,27 @@ namespace detail {
 			out.reserve(n);
 			for (const std::pmr::string &value : values) {
 				auto v = value_traits<E>::decode(value);
-				if (!v) return std::unexpected(std::move(v.error()));
+				if (!v) {
+					return std::unexpected(std::move(v.error()));
+				}
 				out.push_back(std::move(*v));
 			}
 			return out;
 		} else {
-			if (n > 1) return fail(client_errc::too_many_values, std::to_string(n) + " values");
+			if (n > 1) {
+				return fail(client_errc::too_many_values, std::to_string(n) + " values");
+			}
 			if (n == 0) {
-				if constexpr (F::kind == cardinality::optional)
+				if constexpr (F::kind == cardinality::optional) {
 					return M{};
-				else
+				} else {
 					return fail(client_errc::missing_attribute);
+				}
 			}
 			auto v = value_traits<E>::decode(values.front());
-			if (!v) return std::unexpected(std::move(v.error()));
+			if (!v) {
+				return std::unexpected(std::move(v.error()));
+			}
 			return M(std::move(*v));
 		}
 	}
@@ -412,7 +436,9 @@ template<described T> [[nodiscard]] result<T> decode(const entry &e)
 	  [&](const auto &...f) {
 		  (
 			[&] {
-				if (failed) return;
+				if (failed) {
+					return;
+				}
 				auto v =
 				  detail::decode_field<std::remove_cvref_t<decltype(f)>>(detail::values_or_empty(e.find(f.name)));
 				if (!v) {
@@ -424,7 +450,9 @@ template<described T> [[nodiscard]] result<T> decode(const entry &e)
 			...);
 	  },
 	  schema<T>.fields);
-	if (failed) return std::unexpected(std::move(*failed));
+	if (failed) {
+		return std::unexpected(std::move(*failed));
+	}
 	return out;
 }
 
@@ -435,13 +463,19 @@ namespace detail {
 		using E = typename F::element;
 		partial_attribute a(f.name, {}, out.get_allocator());
 		if constexpr (F::kind == cardinality::multiple) {
-			for (const auto &v : m) a.values.emplace_back(value_traits<E>::encode(v));
+			for (const auto &v : m) {
+				a.values.emplace_back(value_traits<E>::encode(v));
+			}
 		} else if constexpr (F::kind == cardinality::optional) {
-			if (m) a.values.emplace_back(value_traits<E>::encode(*m));
+			if (m) {
+				a.values.emplace_back(value_traits<E>::encode(*m));
+			}
 		} else {
 			a.values.emplace_back(value_traits<E>::encode(m));
 		}
-		if (!a.values.empty()) out.push_back(std::move(a));
+		if (!a.values.empty()) {
+			out.push_back(std::move(a));
+		}
 	}
 }// namespace detail
 
@@ -461,7 +495,9 @@ template<described T>
 	std::pmr::vector<partial_attribute> out(mr);
 	if constexpr (d.classes.names.size() > 0) {
 		partial_attribute oc("objectClass", {}, out.get_allocator());
-		for (const char *n : d.classes.names) oc.values.emplace_back(n);
+		for (const char *n : d.classes.names) {
+			oc.values.emplace_back(n);
+		}
 		out.push_back(std::move(oc));
 	}
 	std::apply(
@@ -496,10 +532,14 @@ namespace detail {
 		if constexpr (std::convertible_to<const V &, E>) {
 			out.emplace_back(value_traits<E>::encode(static_cast<E>(v)));
 		} else if constexpr (std::same_as<std::remove_cvref_t<V>, std::optional<E>>) {
-			if (v) out.emplace_back(value_traits<E>::encode(*v));
+			if (v) {
+				out.emplace_back(value_traits<E>::encode(*v));
+			}
 		} else if constexpr (range_of<E, V>) {
 			static_assert(F::kind == cardinality::multiple, "ldap: several values for a single-valued member");
-			for (const auto &x : v) out.emplace_back(value_traits<E>::encode(x));
+			for (const auto &x : v) {
+				out.emplace_back(value_traits<E>::encode(x));
+			}
 		} else {
 			static_assert(false, "ldap: the value's type does not match the member's type");
 		}
@@ -580,7 +620,9 @@ template<described T> [[nodiscard]] filter narrow_filter(filter f)
 		return f;
 	} else {
 		filter out = filters::attr("objectClass") == names[0];
-		for (std::size_t i = 1; i < names.size(); ++i) out = std::move(out) && filters::attr("objectClass") == names[i];
+		for (std::size_t i = 1; i < names.size(); ++i) {
+			out = std::move(out) && filters::attr("objectClass") == names[i];
+		}
 		return std::move(out) && std::move(f);
 	}
 }

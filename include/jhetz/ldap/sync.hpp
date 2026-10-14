@@ -184,8 +184,9 @@ class connection
 	  typename detail::task_value<decltype(make_task(std::declval<ldap::connection &>()))>::type
 	{
 		using R = typename detail::task_value<decltype(make_task(std::declval<ldap::connection &>()))>::type;
-		if (std::this_thread::get_id() == io_thread_id_)
+		if (std::this_thread::get_id() == io_thread_id_) {
 			return std::unexpected(make_error(client_errc::would_deadlock, "sync::connection"));
+		}
 		std::promise<R> done;
 		auto f = done.get_future();
 		// The task is created on the I/O thread too (the connection is only

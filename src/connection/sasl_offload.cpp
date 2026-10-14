@@ -84,7 +84,9 @@ namespace {
 				const std::lock_guard lock(mutex_);
 				for (auto it = workers_.begin(); it != workers_.end();) {
 					const auto next = std::next(it);
-					if (it->ended.load(std::memory_order_acquire)) ended.splice(ended.end(), workers_, it);
+					if (it->ended.load(std::memory_order_acquire)) {
+						ended.splice(ended.end(), workers_, it);
+					}
 					it = next;
 				}
 			}
@@ -93,8 +95,11 @@ namespace {
 
 		static void join(std::list<worker> &workers) noexcept
 		{
-			for (auto &w : workers)
-				if (w.thread.joinable()) w.thread.join();
+			for (auto &w : workers) {
+				if (w.thread.joinable()) {
+					w.thread.join();
+				}
+			}
 			workers.clear();
 		}
 
@@ -131,9 +136,10 @@ capy::task<result<std::optional<std::string>>>
 	// I/O thread, undefined behaviour under locking_mode::unsafe, so the
 	// step fails at once there, as Corosio's resolver does (unsafe_io
 	// cannot be told from safe: documented instead).
-	if (corosio::detail::get_scheduler(ex.context()).scheduler_locking_disabled())
+	if (corosio::detail::get_scheduler(ex.context()).scheduler_locking_disabled()) {
 		co_return fail(std::make_error_code(std::errc::operation_not_supported),
 		  "the mechanism's step runs on a thread of its own, which needs an io_context in locking_mode::safe");
+	}
 	auto shared = std::make_shared<offloaded>(std::move(work));
 	try {
 		auto &threads = ex.context().use_service<offload_threads>();
@@ -156,9 +162,13 @@ capy::task<result<std::optional<std::string>>>
 	const net::detail::deadline_t deadline =
 	  timeout ? std::optional(net::detail::clock::now() + *timeout) : std::nullopt;
 	auto [ec] = co_await net::detail::bounded(shared->done.wait(), deadline);
-	if (ec) co_return fail(ec, "gave up on the mechanism's step (it runs on, on its own thread)");
+	if (ec) {
+		co_return fail(ec, "gave up on the mechanism's step (it runs on, on its own thread)");
+	}
 	// The thread set exactly one of the two: no value means it threw.
-	if (!shared->value) std::rethrow_exception(shared->thrown);
+	if (!shared->value) {
+		std::rethrow_exception(shared->thrown);
+	}
 	co_return std::move(*shared->value);
 }
 

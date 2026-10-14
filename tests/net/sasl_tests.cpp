@@ -61,19 +61,27 @@ class echo_mechanism final : public ldap::sasl_mechanism
 	{
 		hosts.emplace_back("start");
 		challenges.clear();
-		if (fail_start) return ldap::fail(ldap::client_errc::decode_error, "no credentials");
+		if (fail_start) {
+			return ldap::fail(ldap::client_errc::decode_error, "no credentials");
+		}
 		return std::optional<std::string>("hello");
 	}
 	ldap::result<std::optional<std::string>> step(std::optional<std::string_view> c) override
 	{
 		challenges.emplace_back(c.value_or("<none>"));
-		if (c == "bad") return ldap::fail(ldap::client_errc::decode_error, "bad challenge");
+		if (c == "bad") {
+			return ldap::fail(ldap::client_errc::decode_error, "bad challenge");
+		}
 		return std::optional<std::string>("re:" + std::string(c.value_or("")));
 	}
 	ldap::result<void> complete(std::optional<std::string_view> c) override
 	{
-		if (c) final_creds.emplace(*c);
-		if (reject_final) return ldap::fail(ldap::client_errc::decode_error, "server signature mismatch");
+		if (c) {
+			final_creds.emplace(*c);
+		}
+		if (reject_final) {
+			return ldap::fail(ldap::client_errc::decode_error, "server signature mismatch");
+		}
 		return {};
 	}
 };
@@ -102,7 +110,9 @@ struct offload_gate
 			const std::lock_guard lock(mutex);
 			threads.push_back(std::this_thread::get_id());
 		}
-		for (int n = permits.load(); n <= index; n = permits.load()) permits.wait(n);
+		for (int n = permits.load(); n <= index; n = permits.load()) {
+			permits.wait(n);
+		}
 	}
 };
 
@@ -340,7 +350,9 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 	{
 		mock_ldap m;
 		std::vector<step> script;
-		for (std::int32_t id = 1; id <= 32; ++id) script.push_back(answer({ sasl_resp(id, 14, "more") }));
+		for (std::int32_t id = 1; id <= 32; ++id) {
+			script.push_back(answer({ sasl_resp(id, 14, "more") }));
+		}
 		script.push_back(answer({ bind_resp(33) }));
 		m.serve(script);
 		echo_mechanism mech;
@@ -584,7 +596,9 @@ TEST_CASE("sasl: offloaded steps run off the I/O thread", "[net][sasl][offload]"
 	CHECK(mech.gate->finished == 2);
 	const std::lock_guard lock(mech.gate->mutex);
 	REQUIRE(mech.gate->threads.size() == 2);
-	for (auto id : mech.gate->threads) CHECK(id != std::this_thread::get_id());
+	for (auto id : mech.gate->threads) {
+		CHECK(id != std::this_thread::get_id());
+	}
 }
 
 TEST_CASE("sasl: a timeout or cancellation gives up on an offloaded step", "[net][sasl][offload][cancel][timeout]")
@@ -766,7 +780,9 @@ TEST_CASE("sasl: SCRAM-SHA-256 runs a costly PBKDF2 off the I/O thread", "[net][
 	auto ticker = [](const server_log &log, const outcome<ldap::result<void>> &b, int &n) -> capy::task<void> {
 		while (!b.done()) {
 			(void)co_await corosio::delay(1ms);
-			if (log.received.size() == 1) ++n;
+			if (log.received.size() == 1) {
+				++n;
+			}
 		}
 	};
 	outcome<void> ticked;

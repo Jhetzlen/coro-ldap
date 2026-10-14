@@ -159,10 +159,11 @@ struct value_syntaxes<T>
 {
 	static std::span<const char *const> get()
 	{
-		if constexpr (std::signed_integral<T> && std::numeric_limits<T>::digits >= 63)
+		if constexpr (std::signed_integral<T> && std::numeric_limits<T>::digits >= 63) {
 			return detail::int64_syntaxes;
-		else
+		} else {
 			return detail::integer_syntaxes;
+		}
 	}
 };
 template<> struct value_syntaxes<bool>
@@ -221,7 +222,9 @@ namespace detail {
 template<described T> [[nodiscard]] schema_report validate(const server_schema &s)
 {
 	schema_report out;
-	for (const char *oc : schema<T>.classes.names) detail::check_object_class(s, oc, out);
+	for (const char *oc : schema<T>.classes.names) {
+		detail::check_object_class(s, oc, out);
+	}
 	std::apply(
 	  [&](const auto &...f) {
 		  (detail::check_field(s,

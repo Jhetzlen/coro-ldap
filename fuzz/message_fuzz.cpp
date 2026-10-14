@@ -89,7 +89,9 @@ void exercise_control(const ldap::control &c)
 
 void exercise(const ldap::message &m)
 {
-	for (const auto &c : m.controls) exercise_control(c);
+	for (const auto &c : m.controls) {
+		exercise_control(c);
+	}
 	std::visit(
 	  [](const auto &op) {
 		  using T = std::decay_t<decltype(op)>;
@@ -98,7 +100,9 @@ void exercise(const ldap::message &m)
 			  const auto e = ldap::entry::from(ldap::search_result_entry(op, op.get_allocator()));
 			  check(e.get_allocator() == op.get_allocator(), "e.get_allocator() == op.get_allocator()");
 			  check(e.dn == op.object_name, "e.dn == op.object_name");
-			  for (const auto &a : op.attributes) check(e.find(a.type) != nullptr, "e.find(a.type) != nullptr");
+			  for (const auto &a : op.attributes) {
+				  check(e.find(a.type) != nullptr, "e.find(a.type) != nullptr");
+			  }
 		  } else if constexpr (has_result<T>) {
 			  const auto err = op.result.to_error("fuzz");
 			  check(err.code.value() == op.result.result_code, "err.code.value() == op.result.result_code");

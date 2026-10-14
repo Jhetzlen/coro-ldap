@@ -28,9 +28,9 @@ capy::task<> add_modify_delete(ldap::connection &c, in_flight &running, int i)
 		{ "cn", { uid } },
 		{ "sn", { "Bulk" } } },
 	});
-	if (!added)
+	if (!added) {
 		std::cerr << uid << ": " << added.error().message() << '\n';
-	else {
+	} else {
 		auto modified = co_await c.modify({ .object = who, .changes = { ldap::mod::replace("sn", { "Changed" }) } });
 		auto deleted = co_await c.del({ .entry = who });
 		std::cout << uid << ": " << (modified && deleted ? "done" : "modify or delete failed") << '\n';

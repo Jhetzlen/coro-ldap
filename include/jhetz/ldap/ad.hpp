@@ -168,8 +168,12 @@ template<> struct value_traits<ad::filetime_clock::time_point>
 	[[nodiscard]] static result<ad::filetime_clock::time_point> decode(std::string_view raw)
 	{
 		auto ticks = value_traits<std::int64_t>::decode(raw);
-		if (!ticks) return std::unexpected(std::move(ticks.error()));
-		if (*ticks < -1) return std::unexpected(detail::conversion_error("FILETIME date before -1", raw));
+		if (!ticks) {
+			return std::unexpected(std::move(ticks.error()));
+		}
+		if (*ticks < -1) {
+			return std::unexpected(detail::conversion_error("FILETIME date before -1", raw));
+		}
 		return ad::filetime_clock::time_point(ad::filetime_clock::duration(*ticks));
 	}
 	[[nodiscard]] static std::string encode(ad::filetime_clock::time_point v)
@@ -187,7 +191,9 @@ template<> struct value_traits<ad::filetime_clock::duration>
 	[[nodiscard]] static result<ad::filetime_clock::duration> decode(std::string_view raw)
 	{
 		auto ticks = value_traits<std::int64_t>::decode(raw);
-		if (!ticks) return std::unexpected(std::move(ticks.error()));
+		if (!ticks) {
+			return std::unexpected(std::move(ticks.error()));
+		}
 		return ad::filetime_clock::duration(*ticks);
 	}
 	[[nodiscard]] static std::string encode(ad::filetime_clock::duration v) { return std::to_string(v.count()); }

@@ -31,7 +31,9 @@ std::weak_ordering operator<=>(const attribute &a, const attribute &b) noexcept
 	for (std::size_t i = 0; i < n; ++i) {
 		const auto cx = static_cast<unsigned char>(detail::ascii_lower(x[i]));
 		const auto cy = static_cast<unsigned char>(detail::ascii_lower(y[i]));
-		if (cx != cy) return cx < cy ? std::weak_ordering::less : std::weak_ordering::greater;
+		if (cx != cy) {
+			return cx < cy ? std::weak_ordering::less : std::weak_ordering::greater;
+		}
 	}
 	return x.size() <=> y.size();
 }
@@ -64,9 +66,13 @@ namespace {
 	// only differ by trailing zero bytes ("a" / "a\0").
 	std::uint64_t tail8(std::string_view s) noexcept
 	{
-		if (s.size() >= 8) return load8(s.data() + s.size() - 8);
+		if (s.size() >= 8) {
+			return load8(s.data() + s.size() - 8);
+		}
 		std::uint64_t w = 0;
-		for (std::size_t i = 0; i < s.size(); ++i) w |= std::uint64_t{ static_cast<unsigned char>(s[i]) } << (8 * i);
+		for (std::size_t i = 0; i < s.size(); ++i) {
+			w |= std::uint64_t{ static_cast<unsigned char>(s[i]) } << (8 * i);
+		}
 		return w;
 	}
 
@@ -110,8 +116,12 @@ std::size_t hash_value(std::string_view attribute_name) noexcept
 	const std::size_t n = attribute_name.size();
 	std::uint64_t h = seed;
 	std::size_t i = 0;
-	for (; i + 8 <= n; i += 8) h = mix(h, ascii_lower8(load8(attribute_name.data() + i)));
-	if (i != n) h = mix(h, ascii_lower8(tail8(attribute_name)));
+	for (; i + 8 <= n; i += 8) {
+		h = mix(h, ascii_lower8(load8(attribute_name.data() + i)));
+	}
+	if (i != n) {
+		h = mix(h, ascii_lower8(tail8(attribute_name)));
+	}
 	// The length goes in after the data: XORed into the seed it landed in
 	// the same bits as the first word, so "1.1.1.1.1" and "3.1.1.1.1.1"
 	// collided in all 64 bits.
@@ -125,11 +135,16 @@ namespace detail {
 	bool iequals_fast(std::string_view a, std::string_view b) noexcept
 	{
 		const std::size_t n = a.size();
-		if (n != b.size()) return false;
+		if (n != b.size()) {
+			return false;
+		}
 		const auto same = [](std::uint64_t x, std::uint64_t y) { return x == y || ascii_lower8(x) == ascii_lower8(y); };
 		std::size_t i = 0;
-		for (; i + 8 <= n; i += 8)
-			if (!same(load8(a.data() + i), load8(b.data() + i))) return false;
+		for (; i + 8 <= n; i += 8) {
+			if (!same(load8(a.data() + i), load8(b.data() + i))) {
+				return false;
+			}
+		}
 		return i == n || same(tail8(a), tail8(b));
 	}
 

@@ -277,13 +277,17 @@ TEST_CASE("decode errors name the entry and the attribute", "[mapping][decode]")
 			if (!c.values.empty()) {
 				ldap::attribute_values a;
 				a.type = type;
-				for (auto v : c.values) a.values.emplace_back(v);
+				for (auto v : c.values) {
+					a.values.emplace_back(v);
+				}
 				e.attributes.push_back(std::move(a));
 			}
 			auto p = ldap::decode<person>(e);
 			REQUIRE_FALSE(p.has_value());
 			CHECK(p.error().code == c.code);
-			if (c.context != nullptr) CHECK(p.error().context == c.context);
+			if (c.context != nullptr) {
+				CHECK(p.error().context == c.context);
+			}
 			// The code's text appears once in message(), after the context.
 			const std::string message(p.error().message());
 			const std::string code_text = c.code.message();
@@ -344,7 +348,9 @@ TEST_CASE("to_attributes writes objectClass and skips read_only and empty member
 	p.member_of.clear();
 	const auto attrs = ldap::to_attributes(p);
 	std::vector<std::string> names;
-	for (const auto &a : attrs) names.emplace_back(a.type);
+	for (const auto &a : attrs) {
+		names.emplace_back(a.type);
+	}
 	CHECK(names
 		  == std::vector<std::string>{
 			"objectClass", "uid", "cn", "uidNumber", "x-disabled", "jpegPhoto", "telephoneNumber", "x-status" });

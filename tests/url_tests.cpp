@@ -219,8 +219,9 @@ TEST_CASE("URL hosts", "[url]")
 			   "ldap://[::1]:x",
 			   "ldap://[fe80::1%25]",
 			   "ldap://[fe80::1%eth0]",
-			   "ldap://[g::1]" })
+			   "ldap://[g::1]" }) {
 			rejected(bad);
+		}
 	}
 	SECTION("invalid")
 	{
@@ -356,7 +357,9 @@ TEST_CASE("URL percent-encoding round trip of every byte", "[url]")
 	// Every byte value in a DN value, an attribute, a filter value and an
 	// extension value survives to_string -> parse.
 	std::string all;
-	for (int b = 1; b < 256; ++b) all += static_cast<char>(b);
+	for (int b = 1; b < 256; ++b) {
+		all += static_cast<char>(b);
+	}
 	std::string filter_value;
 	for (char c : all) {
 		// Specials, and octets 0x80-0xFF (alone, none is valid UTF-8).

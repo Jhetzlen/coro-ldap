@@ -103,10 +103,14 @@ TEST_CASE("ci_hash / ci_equal fold A-Z only, in every byte position", "[attribut
 				for (int d = 0; d < 256; ++d) {
 					y[pos] = static_cast<char>(d);
 					const bool expected = ldap::detail::iequals(x, y);
-					if (equal(x, y) != expected) ++mismatches;
+					if (equal(x, y) != expected) {
+						++mismatches;
+					}
 					if (expected) {
 						++equal_pairs;
-						if (hash(x) != hash(y)) ++hash_mismatches;
+						if (hash(x) != hash(y)) {
+							++hash_mismatches;
+						}
 					}
 				}
 			}
@@ -128,11 +132,14 @@ TEST_CASE("ci_hash: no full 64-bit collisions among similar OIDs", "[attribute]"
 	CHECK(hash("1.3.6.1.4.1.0.14.1.8") != hash("1.3.6.1.4.1.0.18.1.4"));
 	// 8000 OIDs 1.3.6.1.4.1.a.b.1.c (the weak mix gave 40 collisions).
 	std::vector<std::size_t> hashes;
-	for (int a = 0; a < 20; ++a)
-		for (int b = 0; b < 20; ++b)
-			for (int c = 0; c < 20; ++c)
+	for (int a = 0; a < 20; ++a) {
+		for (int b = 0; b < 20; ++b) {
+			for (int c = 0; c < 20; ++c) {
 				hashes.push_back(
 				  hash("1.3.6.1.4.1." + std::to_string(a) + "." + std::to_string(b) + ".1." + std::to_string(c)));
+			}
+		}
+	}
 	std::ranges::sort(hashes);
 	CHECK(std::ranges::adjacent_find(hashes) == hashes.end());
 }
@@ -154,13 +161,17 @@ TEST_CASE("ci_hash: strings of different lengths do not collide", "[attribute]")
 	// Every byte (bar A-Z, which fold onto a-z) repeated, lengths 1..64:
 	// the length-in-seed hash had 7 collisions here.
 	std::vector<std::size_t> hashes;
-	for (int c = 0; c < 256; ++c)
-		if (c < 'A' || c > 'Z')
-			for (std::size_t n = 1; n <= 64; ++n) hashes.push_back(hash(std::string(n, static_cast<char>(c))));
+	for (int c = 0; c < 256; ++c) {
+		if (c < 'A' || c > 'Z') {
+			for (std::size_t n = 1; n <= 64; ++n) {
+				hashes.push_back(hash(std::string(n, static_cast<char>(c))));
+			}
+		}
+	}
 	CHECK(distinct(std::move(hashes)));
 	// Periodic OID-like strings: "<d>" + ".<e>" * k.
 	hashes.clear();
-	for (char d = '0'; d <= '9'; ++d)
+	for (char d = '0'; d <= '9'; ++d) {
 		for (char e = '0'; e <= '9'; ++e) {
 			std::string s(1, d);
 			for (int k = 1; k <= 24; ++k) {
@@ -168,6 +179,7 @@ TEST_CASE("ci_hash: strings of different lengths do not collide", "[attribute]")
 				hashes.push_back(hash(s));
 			}
 		}
+	}
 	CHECK(distinct(std::move(hashes)));
 }
 
@@ -180,7 +192,9 @@ constexpr std::uint64_t k1 = 0x9E37'79B9'7F4A'7C15ull, k2 = 0xD6E8'FEB8'6659'FD9
 constexpr std::uint64_t inverse(std::uint64_t odd)// mod 2^64, by Newton's iteration
 {
 	std::uint64_t x = odd;
-	for (int i = 0; i < 6; ++i) x *= 2 - odd * x;
+	for (int i = 0; i < 6; ++i) {
+		x *= 2 - odd * x;
+	}
 	return x;
 }
 
@@ -226,19 +240,25 @@ TEST_CASE("ci_hash is seeded: names crafted to collide under a fixed start sprea
 		std::string name = digits + std::string(8, '\0');
 		std::memcpy(name.data() + 8, &w2, 8);
 		// No A-Z, which the hash would fold: names stay as computed.
-		if (std::ranges::any_of(name, [](char c) { return c >= 'A' && c <= 'Z'; })) continue;
+		if (std::ranges::any_of(name, [](char c) { return c >= 'A' && c <= 'Z'; })) {
+			continue;
+		}
 		REQUIRE(mix(mix(h0, word(name)), word(std::string_view(name).substr(8))) == target);
 		names.push_back(std::move(name));
 	}
 
 	std::vector<std::size_t> hashes;
-	for (const auto &n : names) hashes.push_back(ldap::hash_value(n));
+	for (const auto &n : names) {
+		hashes.push_back(ldap::hash_value(n));
+	}
 	std::ranges::sort(hashes);
 	CHECK(std::ranges::adjacent_find(hashes) == hashes.end());
 
 	// And entry::from keeps them apart.
 	ldap::search_result_entry e("cn=x");
-	for (const auto &n : names) e.attributes.emplace_back(n, std::initializer_list<std::string_view>{ "v" });
+	for (const auto &n : names) {
+		e.attributes.emplace_back(n, std::initializer_list<std::string_view>{ "v" });
+	}
 	const auto out = ldap::entry::from(std::move(e));
 	CHECK(out.attributes.size() == names.size());
 	CHECK(out.find(names.back()) != nullptr);

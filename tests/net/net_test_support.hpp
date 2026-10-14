@@ -53,8 +53,12 @@ template<class T> struct outcome
 	bool done() const noexcept { return value.has_value() || error != nullptr; }
 	T &get()
 	{
-		if (error) std::rethrow_exception(error);
-		if (!value) throw std::runtime_error("task did not finish within the time limit");
+		if (error) {
+			std::rethrow_exception(error);
+		}
+		if (!value) {
+			throw std::runtime_error("task did not finish within the time limit");
+		}
 		return *value;
 	}
 };
@@ -66,39 +70,45 @@ template<> struct outcome<void>
 	bool done() const noexcept { return finished || error != nullptr; }
 	void get()
 	{
-		if (error) std::rethrow_exception(error);
-		if (!finished) throw std::runtime_error("task did not finish within the time limit");
+		if (error) {
+			std::rethrow_exception(error);
+		}
+		if (!finished) {
+			throw std::runtime_error("task did not finish within the time limit");
+		}
 	}
 };
 
 template<class T> void spawn(corosio::io_context &ioc, capy::task<T> t, outcome<T> &out)
 {
-	if constexpr (std::is_void_v<T>)
+	if constexpr (std::is_void_v<T>) {
 		capy::run_async(
 		  ioc.get_executor(), [&out] { out.finished = true; }, [&out](std::exception_ptr e) { out.error = e; })(
 		  std::move(t));
-	else
+	} else {
 		capy::run_async(
 		  ioc.get_executor(),
 		  [&out](T v) { out.value.emplace(std::move(v)); },
 		  [&out](std::exception_ptr e) { out.error = e; })(std::move(t));
+	}
 }
 
 // spawn() with a stop token, to cancel the task from the test.
 template<class T> void spawn(corosio::io_context &ioc, std::stop_token st, capy::task<T> t, outcome<T> &out)
 {
-	if constexpr (std::is_void_v<T>)
+	if constexpr (std::is_void_v<T>) {
 		capy::run_async(
 		  ioc.get_executor(),
 		  std::move(st),
 		  [&out] { out.finished = true; },
 		  [&out](std::exception_ptr e) { out.error = e; })(std::move(t));
-	else
+	} else {
 		capy::run_async(
 		  ioc.get_executor(),
 		  std::move(st),
 		  [&out](T v) { out.value.emplace(std::move(v)); },
 		  [&out](std::exception_ptr e) { out.error = e; })(std::move(t));
+	}
 }
 
 // Runs `ioc` until it has no work left, at most io_limit.
@@ -125,10 +135,11 @@ template<class T> T run(corosio::io_context &ioc, capy::task<T> t)
 	outcome<T> out;
 	spawn(ioc, std::move(t), out);
 	drive(ioc);
-	if constexpr (std::is_void_v<T>)
+	if constexpr (std::is_void_v<T>) {
 		out.get();
-	else
+	} else {
 		return std::move(out.get());
+	}
 }
 
 // Runs one task until it finishes and returns its result, without waiting
@@ -138,10 +149,11 @@ template<class T> T finish(corosio::io_context &ioc, capy::task<T> t)
 	outcome<T> out;
 	spawn(ioc, std::move(t), out);
 	drive_until(ioc, [&out] { return out.done(); });
-	if constexpr (std::is_void_v<T>)
+	if constexpr (std::is_void_v<T>) {
 		out.get();
-	else
+	} else {
 		return std::move(out.get());
+	}
 }
 
 // The io_context's frame allocator in the out-of-memory tests: counts the
@@ -167,7 +179,9 @@ class failing_frames final : public std::pmr::memory_resource
 	void *do_allocate(std::size_t bytes, std::size_t align) override
 	{
 		if (++count_ == fail_) {
-			if (other_) throw std::runtime_error("injected frame allocation failure");
+			if (other_) {
+				throw std::runtime_error("injected frame allocation failure");
+			}
 			throw std::bad_alloc();
 		}
 		void *p = std::pmr::new_delete_resource()->allocate(bytes, align);
@@ -224,7 +238,9 @@ inline message bind_response_msg(std::int32_t id, std::string_view diagnostic = 
 inline std::string bytes_of(const message &m)
 {
 	auto b = encode(m);
-	if (!b) throw std::runtime_error("encode failed: " + std::string(b.error().message()));
+	if (!b) {
+		throw std::runtime_error("encode failed: " + std::string(b.error().message()));
+	}
 	return std::string(ldap::detail::as_text(*b));
 }
 
@@ -296,7 +312,9 @@ class test_pki
 
 	static void check(bool ok, const char *what)
 	{
-		if (!ok) throw std::runtime_error(std::string("test PKI: ") + what + " failed");
+		if (!ok) {
+			throw std::runtime_error(std::string("test PKI: ") + what + " failed");
+		}
 	}
 
 	long next_serial() noexcept { return ++serial_; }
@@ -356,7 +374,9 @@ class test_pki
 			add_ext(cert, &ctx, NID_basic_constraints, "CA:FALSE");
 			add_ext(cert, &ctx, NID_key_usage, "critical,digitalSignature");
 			add_ext(cert, &ctx, NID_ext_key_usage, "serverAuth,clientAuth");
-			if (!sans.empty()) add_ext(cert, &ctx, NID_subject_alt_name, sans);
+			if (!sans.empty()) {
+				add_ext(cert, &ctx, NID_subject_alt_name, sans);
+			}
 		}
 		check(X509_sign(cert, issuer_key ? issuer_key : key, EVP_sha256()) > 0, "X509_sign");
 		return cert;
@@ -418,9 +438,13 @@ class temp_path
 	void write(const std::string &contents) const
 	{
 		std::FILE *f = std::fopen(path_.c_str(), "wb");
-		if (f == nullptr) throw std::runtime_error("cannot write " + path_);
+		if (f == nullptr) {
+			throw std::runtime_error("cannot write " + path_);
+		}
 		const bool ok = std::fwrite(contents.data(), 1, contents.size(), f) == contents.size();
-		if (std::fclose(f) != 0 || !ok) throw std::runtime_error("cannot write " + path_);
+		if (std::fclose(f) != 0 || !ok) {
+			throw std::runtime_error("cannot write " + path_);
+		}
 	}
 
   private:

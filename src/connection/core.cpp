@@ -122,10 +122,16 @@ error connection::impl::out_of_memory() noexcept
 
 void connection::impl::shut(error e, bool remember, bool close_transport) noexcept
 {
-	if (!open) return;
+	if (!open) {
+		return;
+	}
 	open = false;
-	if (remember) failure = copy_error(e);
-	if (close_transport) transport_.close();
+	if (remember) {
+		failure = copy_error(e);
+	}
+	if (close_transport) {
+		transport_.close();
+	}
 	outbox.clear();
 	held.clear();
 	abandoned.clear();
@@ -140,7 +146,9 @@ void connection::impl::shut(error e, bool remember, bool close_transport) noexce
 		p->failure = copy_error(e);
 		p->ready.set();
 	}
-	if (reading) reader_stop.request_stop();
+	if (reading) {
+		reader_stop.request_stop();
+	}
 }
 
 void connection::impl::shut_out_of_memory() noexcept { shut(out_of_memory(), true); }
@@ -202,7 +210,9 @@ capy::task<void> connection::impl::writer(impl *self)
 			auto bytes = std::move(self->outbox.front());
 			self->outbox.pop_front();
 			auto w = co_await net::write_bytes(self->transport_, bytes);
-			if (!w) self->shut(std::move(w.error()), true);
+			if (!w) {
+				self->shut(std::move(w.error()), true);
+			}
 		}
 	} catch (const std::bad_alloc &) {
 		self->shut_out_of_memory();
@@ -230,23 +240,34 @@ void connection::impl::enqueue(std::pmr::vector<std::byte> bytes)
 std::int32_t connection::impl::free_id() const
 {
 	std::int32_t id = next_id;
-	if (!wrapped) return id;// ids so far only increased: none is in use
+	if (!wrapped) {
+		return id;// ids so far only increased: none is in use
+	}
 	auto in_use = [this](std::int32_t i) {
 		return pending.contains(i) || std::ranges::contains(abandoned, i, &abandoned_req::id);
 	};
-	while (in_use(id)) id = id == max_int ? 1 : id + 1;
+	while (in_use(id)) {
+		id = id == max_int ? 1 : id + 1;
+	}
 	return id;
 }
 
 result<void> connection::impl::submit(message &m, pending_op *p, std::string_view context)
 {
-	if (!open || unbinding) return std::unexpected(not_connected(context));
-	if (upgrading && !std::holds_alternative<abandon_request>(m.op))
+	if (!open || unbinding) {
+		return std::unexpected(not_connected(context));
+	}
+	if (upgrading && !std::holds_alternative<abandon_request>(m.op)) {
 		return fail(client_errc::operation_in_progress, std::string(context) + " during StartTLS");
+	}
 	m.id = free_id();
 	auto bytes = encode(m, mr_);
-	if (!bytes) return std::unexpected(detail::with_context(std::move(bytes.error()), context));
-	if (m.id == max_int) wrapped = true;
+	if (!bytes) {
+		return std::unexpected(detail::with_context(std::move(bytes.error()), context));
+	}
+	if (m.id == max_int) {
+		wrapped = true;
+	}
 	next_id = m.id == max_int ? 1 : m.id + 1;
 	const bool bind = std::holds_alternative<bind_request>(m.op);
 	if (p != nullptr) {
@@ -257,11 +278,14 @@ result<void> connection::impl::submit(message &m, pending_op *p, std::string_vie
 		p->registered = true;
 	}
 	try {
-		if (p != nullptr) start_reader();
-		if (binding && !bind)
+		if (p != nullptr) {
+			start_reader();
+		}
+		if (binding && !bind) {
 			held.push_back({ m.id, std::move(*bytes) });
-		else
+		} else {
 			enqueue(std::move(*bytes));
+		}
 	} catch (...) {
 		// `p` (in the caller's frame) must not stay registered: its
 		// request is not sent.
@@ -290,12 +314,16 @@ void connection::impl::release_held() noexcept
 
 void connection::impl::abandon(pending_op &p) noexcept
 {
-	if (!p.registered) return;
+	if (!p.registered) {
+		return;
+	}
 	p.registered = false;
 	p.finished = true;
 	pending.erase(p.id);
 	stop_reader_if_idle();
-	if (!open) return;
+	if (!open) {
+		return;
+	}
 	try {
 		if (!p.abandonable) {
 			shut(make_error(client_errc::not_connected,
@@ -340,10 +368,14 @@ void connection::impl::send_unanswered(message &m,
 			return;
 		}
 	} catch (...) {
-		if (!abandoned.empty()) abandoned.pop_back();
+		if (!abandoned.empty()) {
+			abandoned.pop_back();
+		}
 		throw;
 	}
-	if (!open) return;
+	if (!open) {
+		return;
+	}
 	abandoned.back().id = m.id;
 	abandoned.back().due = true;
 	abandoned.back().deadline = deadline;
@@ -351,31 +383,40 @@ void connection::impl::send_unanswered(message &m,
 	due_updated();
 	trim_abandoned();
 	start_reader();
-	if (deadline) start_due_watcher();
+	if (deadline) {
+		start_due_watcher();
+	}
 }
 
 void connection::impl::forget_abandoned(std::pmr::deque<abandoned_req>::iterator a)
 {
 	const bool due = a->due;
-	if (due) --due_answers;
+	if (due) {
+		--due_answers;
+	}
 	abandoned.erase(a);
-	if (due) due_updated();
+	if (due) {
+		due_updated();
+	}
 	stop_reader_if_idle();
 }
 
 void connection::impl::trim_abandoned()
 {
-	if (abandoned.size() <= max_abandoned) return;
+	if (abandoned.size() <= max_abandoned) {
+		return;
+	}
 	auto a = std::ranges::find(abandoned.begin(), std::prev(abandoned.end()), false, &abandoned_req::due);
 	forget_abandoned(a != std::prev(abandoned.end()) ? a : abandoned.begin());
 }
 
 void connection::impl::due_updated()
 {
-	if (due_answers == 0)
+	if (due_answers == 0) {
 		due_idle.set();
-	else
+	} else {
 		due_idle.clear();
+	}
 	due_changed.set();
 }
 
@@ -396,8 +437,11 @@ void connection::impl::start_due_watcher()
 std::optional<clock::time_point> connection::impl::next_due_deadline() const
 {
 	std::optional<clock::time_point> next;
-	for (const auto &a : abandoned)
-		if (a.due && a.deadline && (!next || *a.deadline < *next)) next = a.deadline;
+	for (const auto &a : abandoned) {
+		if (a.due && a.deadline && (!next || *a.deadline < *next)) {
+			next = a.deadline;
+		}
+	}
 	return next;
 }
 
@@ -405,12 +449,16 @@ void connection::impl::expire_due(clock::time_point now)
 {
 	bool changed = false;
 	for (auto &a : abandoned) {
-		if (!a.due || !a.deadline || *a.deadline > now) continue;
+		if (!a.due || !a.deadline || *a.deadline > now) {
+			continue;
+		}
 		a.due = false;
 		--due_answers;
 		changed = true;
 	}
-	if (!changed) return;
+	if (!changed) {
+		return;
+	}
 	due_updated();
 	stop_reader_if_idle();
 }
@@ -421,7 +469,9 @@ capy::task<void> connection::impl::due_watcher(impl *self)
 	try {
 		while (self->open) {
 			const auto next = self->next_due_deadline();
-			if (!next) break;
+			if (!next) {
+				break;
+			}
 			if (clock::now() < *next) {
 				self->due_changed.clear();
 				(void)co_await corosio::timeout(self->due_changed.wait(), *next);
@@ -444,7 +494,9 @@ capy::task<connection::impl::due_wait> connection::impl::wait_due_answers(std::o
 	// send_unanswered() could not start the reader or the due watcher
 	// (bad_alloc), nothing else may (a throw here is the caller's).
 	start_reader();
-	if (!watching && next_due_deadline()) start_due_watcher();
+	if (!watching && next_due_deadline()) {
+		start_due_watcher();
+	}
 	std::error_code ec;
 	if (deadline) {
 		auto [e] = co_await corosio::timeout(due_idle.wait(), *deadline);
@@ -461,7 +513,9 @@ capy::task<connection::impl::due_wait> connection::impl::wait_due_answers(std::o
 	if (ec == capy::cond::timeout) {
 		expire_due(clock::now());
 		left = due_answers;
-		if (left == 0) co_return due_wait{};
+		if (left == 0) {
+			co_return due_wait{};
+		}
 	}
 	// A stop reports the count waited for, not due_answers: the last
 	// answer may have come meanwhile, and "0 releases" would say nothing.
@@ -472,13 +526,19 @@ capy::task<connection::impl::due_wait> connection::impl::wait_due_answers(std::o
 
 result<void> connection::impl::check_start_tls(std::string_view context) const
 {
-	if (!accepts_requests()) return std::unexpected(not_connected(context));
-	if (upgrading)
+	if (!accepts_requests()) {
+		return std::unexpected(not_connected(context));
+	}
+	if (upgrading) {
 		return fail(client_errc::operation_in_progress, std::string(context) + " during an earlier StartTLS");
-	if (binding) return fail(client_errc::operation_in_progress, std::string(context) + " during a bind");
-	if (const std::size_t n = requests_waiting(); n != 0)
+	}
+	if (binding) {
+		return fail(client_errc::operation_in_progress, std::string(context) + " during a bind");
+	}
+	if (const std::size_t n = requests_waiting(); n != 0) {
 		return fail(client_errc::operation_in_progress,
 		  detail::format("{} with {} {} outstanding", context, n, n == 1 ? "request" : "requests"));
+	}
 	return {};
 }
 
@@ -503,7 +563,9 @@ void connection::impl::abandon_all_for_unbind()
 	// unbind() calls shut(): a StartTLS waiting for them then fails with
 	// not_connected instead of being sent after the UnbindRequest (as does
 	// one whose wait times out meanwhile: `unbinding`).
-	for (auto &a : abandoned) a.due = false;
+	for (auto &a : abandoned) {
+		a.due = false;
+	}
 	due_answers = 0;
 	due_changed.set();// the due watcher ends
 	stop_reader_if_idle();
@@ -513,7 +575,9 @@ result<void> connection::impl::send_unbind(std::string_view context)
 {
 	abandon_all_for_unbind();
 	message request{ 0, unbind_request{} };
-	if (auto r = submit(request, nullptr, context); !r) return r;
+	if (auto r = submit(request, nullptr, context); !r) {
+		return r;
+	}
 	unbinding = true;
 	return {};
 }
@@ -560,7 +624,9 @@ capy::task<void> connection::impl::wait_reader_idle()
 
 void connection::impl::start_reader()
 {
-	if (reading) return;// a reader that is stopping restarts itself if needed
+	if (reading) {
+		return;// a reader that is stopping restarts itself if needed
+	}
 	std::stop_source stop;
 	auto task = new_task(&reader);
 	reading = true;
@@ -572,7 +638,9 @@ void connection::impl::start_reader()
 
 void connection::impl::stop_reader_if_idle()
 {
-	if (outstanding() == 0 && reading) reader_stop.request_stop();
+	if (outstanding() == 0 && reading) {
+		reader_stop.request_stop();
+	}
 }
 
 capy::task<void> connection::impl::reader(impl *self)
@@ -584,7 +652,9 @@ capy::task<void> connection::impl::reader(impl *self)
 			if (!size) {
 				// Stopped because nothing is outstanding (bytes already
 				// received stay in buf), or a real failure.
-				if (size.error().code == capy::cond::canceled && self->open) break;
+				if (size.error().code == capy::cond::canceled && self->open) {
+					break;
+				}
 				self->shut(std::move(size.error()), true);
 				break;
 			}
@@ -599,7 +669,9 @@ capy::task<void> connection::impl::reader(impl *self)
 	// with a new stop token. If it cannot start, nothing would read the
 	// responses: closed.
 	try {
-		if (self->open && self->outstanding() != 0) self->start_reader();
+		if (self->open && self->outstanding() != 0) {
+			self->start_reader();
+		}
 	} catch (const std::bad_alloc &) {
 		self->shut_out_of_memory();
 	}
@@ -664,7 +736,9 @@ void connection::impl::route(std::size_t size)
 		// A late response to an abandoned request: dropped. The search's
 		// SearchResultDone (or any response to another request) is its
 		// last.
-		if (!a->search || same_tag(h->op, search_result_done_tag)) forget_abandoned(a);
+		if (!a->search || same_tag(h->op, search_result_done_tag)) {
+			forget_abandoned(a);
+		}
 		return;
 	}
 	shut(unexpected(detail::format("message with id {}, which matches no outstanding request", h->id)), true);
@@ -681,13 +755,17 @@ void connection::impl::notification(std::span<const std::byte> bytes)
 			fatal = unexpected(std::string(op_name(m->op)) + " with message id 0");
 		} else if (x->response_name && *x->response_name == notice_of_disconnection_oid) {
 			error e = x->result.to_error("notice of disconnection");
-			if (x->result.is_success()) e.code = errc::unavailable;// "success" is no error code
+			if (x->result.is_success()) {
+				e.code = errc::unavailable;// "success" is no error code
+			}
 			fatal = std::move(e);
 		}
 		// Other extended responses with id 0 are ignored.
 	}
 	scratch.release();
-	if (fatal) shut(std::move(*fatal), true);
+	if (fatal) {
+		shut(std::move(*fatal), true);
+	}
 }
 
 ldap::search_stream connection::impl::make_stream(search_stream::state *s) noexcept { return ldap::search_stream(s); }
@@ -709,15 +787,21 @@ capy::task<result<message>>
 			auto [e] = co_await p.ready.wait();
 			ec = e;
 		}
-		if (!ec) continue;
+		if (!ec) {
+			continue;
+		}
 		// Cancelled or timed out before the response came.
-		if (!p.queue.empty() || p.finished) break;// it came anyway: use it
+		if (!p.queue.empty() || p.finished) {
+			break;// it came anyway: use it
+		}
 		const bool was_open = open;
 		abandon(p);
 		// The code says canceled or timed out; the context adds what
 		// became of the request.
 		std::string text(context);
-		if (was_open) text += p.abandonable ? " (abandoned)" : " (connection closed)";
+		if (was_open) {
+			text += p.abandonable ? " (abandoned)" : " (connection closed)";
+		}
 		co_return fail(ec, text);
 	}
 	if (!p.queue.empty()) {
@@ -725,7 +809,9 @@ capy::task<result<message>>
 		p.queue.pop_front();
 		co_return m;
 	}
-	if (p.failure) co_return std::unexpected(detail::with_context(*p.failure, context));
+	if (p.failure) {
+		co_return std::unexpected(detail::with_context(*p.failure, context));
+	}
 	co_return std::unexpected(not_connected(context));// closed by close() or unbind()
 }
 
@@ -735,9 +821,13 @@ capy::task<result<void>> connection::impl::begin_bind(impl_ref c, std::string_vi
 {
 	while (c->binding) {
 		auto [ec] = co_await c->bind_idle.wait();
-		if (ec) co_return fail(ec, context);
+		if (ec) {
+			co_return fail(ec, context);
+		}
 	}
-	if ((co_await capy::this_coro::stop_token).stop_requested()) co_return fail(capy::error::canceled, context);
+	if ((co_await capy::this_coro::stop_token).stop_requested()) {
+		co_return fail(capy::error::canceled, context);
+	}
 	c->binding = true;
 	c->bind_idle.clear();
 	co_return result<void>{};
@@ -761,10 +851,13 @@ namespace detail {
 	  std::optional<std::chrono::milliseconds> timeout)
 	{
 		if (!std::holds_alternative<bind_request>(request.op)
-			&& (co_await capy::this_coro::stop_token).stop_requested())
+			&& (co_await capy::this_coro::stop_token).stop_requested()) {
 			co_return fail(capy::error::canceled, context);
+		}
 		pending_op p(self->mr(), false, expect);
-		if (auto r = self->submit(request, &p, context); !r) co_return std::unexpected(std::move(r.error()));
+		if (auto r = self->submit(request, &p, context); !r) {
+			co_return std::unexpected(std::move(r.error()));
+		}
 		registration reg(*self, p);
 		co_return co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout()), context);
 	}

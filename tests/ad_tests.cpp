@@ -269,7 +269,9 @@ TEST_CASE("schema: AD Large Integer validates for int64, filetime and interval m
 	// intervals); the filetime types read 906 only.
 	const auto narrow = ldap::validate<ad_user_narrow>(s);
 	REQUIRE(narrow.issues.size() == 4);
-	for (const auto &issue : narrow.issues) CHECK(issue.what == ldap::schema_issue::kind::syntax_mismatch);
+	for (const auto &issue : narrow.issues) {
+		CHECK(issue.what == ldap::schema_issue::kind::syntax_mismatch);
+	}
 	CHECK(narrow.issues[0].name == "accountExpires");
 	CHECK(narrow.issues[1].name == "uSNChanged");
 	CHECK(narrow.issues[2].detail

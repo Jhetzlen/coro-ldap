@@ -47,7 +47,9 @@ struct no_members
 template<class T, class Members> void check_on(const T &x, std::pmr::memory_resource *r, const Members &members)
 {
 	CHECK(x.get_allocator().resource() == r);
-	for (auto *m : members(x)) CHECK(m == r);
+	for (auto *m : members(x)) {
+		CHECK(m == r);
+	}
 }
 
 // Runs every construction and assignment of T on `sample`, whose strings must
@@ -180,7 +182,9 @@ TEST_CASE("value semantics: bind", "[value_semantics][message]")
 		resources out{ mr(r.name) };
 		if (const auto *s = std::get_if<ldap::sasl_auth>(&r.authentication)) {
 			out.push_back(mr(s->mechanism));
-			if (s->credentials) out.push_back(mr(*s->credentials));
+			if (s->credentials) {
+				out.push_back(mr(*s->credentials));
+			}
 		} else {
 			out.push_back(mr(std::get<ldap::simple_auth>(r.authentication).password));
 		}
@@ -250,15 +254,18 @@ TEST_CASE("value semantics: message and controls", "[value_semantics][message]")
 	const auto message_members = [](const ldap::message &m) {
 		resources out{ std::visit(
 		  [](const auto &op) -> std::pmr::memory_resource * {
-			  if constexpr (requires { op.get_allocator(); })
+			  if constexpr (requires { op.get_allocator(); }) {
 				  return op.get_allocator().resource();
-			  else
+			  } else {
 				  return nullptr;
+			  }
 		  },
 		  m.op) };
 		for (const auto &c : m.controls) {
 			out.push_back(mr(c.type));
-			if (c.value) out.push_back(mr(*c.value));
+			if (c.value) {
+				out.push_back(mr(*c.value));
+			}
 		}
 		return out;
 	};
@@ -324,7 +331,9 @@ TEST_CASE("value semantics: url_extension and url", "[value_semantics][url]")
 	check_value_semantics(*u, [](const ldap::url &v) {
 		resources out{ v.base_dn().value().get_allocator().resource(),
 			v.search_filter().value().get_allocator().resource() };
-		for (const auto &ext : v.extensions()) out.push_back(ext.get_allocator().resource());
+		for (const auto &ext : v.extensions()) {
+			out.push_back(ext.get_allocator().resource());
+		}
 		return out;
 	});
 }

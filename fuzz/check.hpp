@@ -18,8 +18,9 @@ struct checker
 
 	void operator()(bool ok, std::string_view what, std::source_location where = std::source_location::current()) const
 	{
-		if (!ok) [[unlikely]]
+		if (!ok) [[unlikely]] {
 			failed(what, where);
+		}
 	}
 
 	[[noreturn]] void failed(std::string_view what, std::source_location where) const

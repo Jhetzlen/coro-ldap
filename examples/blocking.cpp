@@ -24,5 +24,7 @@ int main(int argc, char **argv)
 		std::cerr << people.error().message() << '\n';
 		return 1;
 	}
-	for (const ldap::entry &person : *people) std::cout << person.dn << ": " << person.find("cn")->front() << '\n';
+	for (const ldap::entry &person : *people) {
+		std::cout << person.dn << ": " << person.find("cn")->front() << '\n';
+	}
 }

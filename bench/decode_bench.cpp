@@ -100,8 +100,11 @@ std::size_t consume(const ldap::message &m)
 {
 	const auto &e = std::get<ldap::search_result_entry>(m.op);
 	std::size_t n = e.object_name.size();
-	for (const auto &a : e.attributes)
-		for (const auto &v : a.values) n += v.size() + static_cast<unsigned char>(v.empty() ? 0 : v[0]);
+	for (const auto &a : e.attributes) {
+		for (const auto &v : a.values) {
+			n += v.size() + static_cast<unsigned char>(v.empty() ? 0 : v[0]);
+		}
+	}
 	return n;
 }
 
@@ -122,14 +125,17 @@ std::size_t pass(const stream &s, mode how, std::vector<std::byte> &buffer)
 {
 	std::size_t sum = 0;
 	if (how == mode::heap) {
-		for (auto pdu : s.pdus) sum += consume(ldap::decode(pdu).value());
+		for (auto pdu : s.pdus) {
+			sum += consume(ldap::decode(pdu).value());
+		}
 		return sum;
 	}
 	std::optional<std::pmr::monotonic_buffer_resource> arena;
-	if (how == mode::arena_with_buffer)
+	if (how == mode::arena_with_buffer) {
 		arena.emplace(buffer.data(), buffer.size());
-	else
+	} else {
 		arena.emplace();
+	}
 	ldap::decode_options options;
 	options.memory = &*arena;
 	for (auto pdu : s.pdus) {
@@ -159,7 +165,9 @@ outcome measure(const stream &s, mode how, int runs)
 		const auto start = std::chrono::steady_clock::now();
 		const auto sum = pass(s, how, buffer);
 		const auto end = std::chrono::steady_clock::now();
-		if (sum != out.checksum) std::abort();
+		if (sum != out.checksum) {
+			std::abort();
+		}
 		times.push_back(std::chrono::duration<double, std::milli>(end - start).count());
 	}
 	std::ranges::sort(times);
@@ -181,7 +189,9 @@ int main(int argc, char **argv)
 	const std::size_t attributes = arg(argc, argv, 2, 30);
 	const std::size_t values = arg(argc, argv, 3, 3);
 	const int runs = static_cast<int>(arg(argc, argv, 4, 15));
-	if (entries == 0 || runs == 0) return 2;
+	if (entries == 0 || runs == 0) {
+		return 2;
+	}
 
 	const auto s = make_stream(entries, attributes, values);
 	std::print(

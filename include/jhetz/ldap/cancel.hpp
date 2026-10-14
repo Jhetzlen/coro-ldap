@@ -61,8 +61,9 @@ template<class T> boost::capy::task<boost::capy::io_result<result<T>>> raceable(
 {
 	result<T> r = co_await std::move(op);
 	std::error_code ec;
-	if (!r && r.error().code == cond::canceled && (co_await boost::capy::this_coro::stop_token).stop_requested())
+	if (!r && r.error().code == cond::canceled && (co_await boost::capy::this_coro::stop_token).stop_requested()) {
 		ec = r.error().code;
+	}
 	co_return boost::capy::io_result<result<T>>{ ec, std::move(r) };
 }
 

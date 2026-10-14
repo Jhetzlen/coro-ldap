@@ -66,7 +66,9 @@ error ldap_result::to_error(std::string_view context) const
 	error e;
 	e.code = std::error_code(result_code, result_category());
 	e.diagnostic.assign(diagnostic_message);
-	if (!matched_dn.empty()) e.matched_dn.emplace(matched_dn);
+	if (!matched_dn.empty()) {
+		e.matched_dn.emplace(matched_dn);
+	}
 	e.referrals.assign(referral.begin(), referral.end());
 	e.context.assign(context);
 	return e;
@@ -449,34 +451,54 @@ namespace {
 	// included), so the writer is only touched once nothing can fail.
 	result<void> precheck(const message &m)
 	{
-		if (m.id < 0) return out_of_range("message id");
+		if (m.id < 0) {
+			return out_of_range("message id");
+		}
 		// RFC 4511 section 4.1.1: id 0 is reserved for unsolicited notifications.
-		if (m.id == 0 && is_request_op(m.op))
+		if (m.id == 0 && is_request_op(m.op)) {
 			return fail(client_errc::encode_error, "message: a request with message id 0");
+		}
 		if (const auto *s = std::get_if<search_request>(&m.op)) {
 			const auto scope = std::to_underlying(s->scope);
 			const auto deref = std::to_underlying(s->deref);
-			if (scope < 0 || scope > 3) return out_of_range("search scope");
-			if (deref < 0 || deref > 3) return out_of_range("derefAliases");
-			if (s->size_limit < 0) return out_of_range("size limit");
-			if (s->time_limit < 0) return out_of_range("time limit");
+			if (scope < 0 || scope > 3) {
+				return out_of_range("search scope");
+			}
+			if (deref < 0 || deref > 3) {
+				return out_of_range("derefAliases");
+			}
+			if (s->size_limit < 0) {
+				return out_of_range("size limit");
+			}
+			if (s->time_limit < 0) {
+				return out_of_range("time limit");
+			}
 			return detail::check_filter(s->filter, {});
 		}
 		if (const auto *b = std::get_if<bind_request>(&m.op)) {
-			if (b->version < 1 || b->version > 127) return out_of_range("bind version");
+			if (b->version < 1 || b->version > 127) {
+				return out_of_range("bind version");
+			}
 		} else if (const auto *a = std::get_if<abandon_request>(&m.op)) {
-			if (a->message_id < 0) return out_of_range("abandoned message id");
+			if (a->message_id < 0) {
+				return out_of_range("abandoned message id");
+			}
 		} else if (const auto *mod = std::get_if<modify_request>(&m.op)) {
 			for (const auto &c : mod->changes) {
 				const auto op = std::to_underlying(c.operation);
-				if (op < 0 || op > 3) return out_of_range("modify operation");
-				if (c.operation == modify_operation::add && c.modification.values.empty())
+				if (op < 0 || op > 3) {
+					return out_of_range("modify operation");
+				}
+				if (c.operation == modify_operation::add && c.modification.values.empty()) {
 					return fail(client_errc::encode_error, "message: modify add change without values");
+				}
 			}
 		} else if (const auto *add = std::get_if<add_request>(&m.op)) {
-			for (const auto &attr : add->attributes)
-				if (attr.values.empty())
+			for (const auto &attr : add->attributes) {
+				if (attr.values.empty()) {
 					return fail(client_errc::encode_error, "message: add request attribute without values");
+				}
+			}
 		}
 		return {};
 	}
@@ -486,10 +508,13 @@ namespace {
 		w.enumerated(r.result_code);
 		w.octet_string(r.matched_dn);
 		w.octet_string(r.diagnostic_message);
-		if (!r.referral.empty())
+		if (!r.referral.empty()) {
 			w.constructed(ber::context(3), [&](ber::writer &ref) {
-				for (const auto &uri : r.referral) ref.octet_string(uri);
+				for (const auto &uri : r.referral) {
+					ref.octet_string(uri);
+				}
 			});
+		}
 	}
 
 	void write_attribute(ber::writer &w, const partial_attribute &a)
@@ -497,7 +522,9 @@ namespace {
 		w.constructed(ber::tags::sequence, [&](ber::writer &pa) {
 			pa.octet_string(a.type);
 			pa.constructed(ber::tags::set, [&](ber::writer &vals) {
-				for (const auto &v : a.values) vals.octet_string(v);
+				for (const auto &v : a.values) {
+					vals.octet_string(v);
+				}
 			});
 		});
 	}
@@ -505,7 +532,9 @@ namespace {
 	void write_attributes(ber::writer &w, const std::pmr::vector<partial_attribute> &attrs)
 	{
 		w.constructed(ber::tags::sequence, [&](ber::writer &list) {
-			for (const auto &a : attrs) write_attribute(list, a);
+			for (const auto &a : attrs) {
+				write_attribute(list, a);
+			}
 		});
 	}
 
@@ -531,7 +560,9 @@ namespace {
 					const auto &sasl = std::get<sasl_auth>(b.authentication);
 					o.constructed(ber::context(3), [&](ber::writer &s) {
 						s.octet_string(sasl.mechanism);
-						if (sasl.credentials) s.octet_string(*sasl.credentials);
+						if (sasl.credentials) {
+							s.octet_string(*sasl.credentials);
+						}
 					});
 				}
 			});
@@ -540,7 +571,9 @@ namespace {
 		{
 			seq(op_tag::bind_response, [&](ber::writer &o) {
 				write_result(o, b.result);
-				if (b.server_sasl_creds) o.octet_string(*b.server_sasl_creds, ber::context(7));
+				if (b.server_sasl_creds) {
+					o.octet_string(*b.server_sasl_creds, ber::context(7));
+				}
 			});
 		}
 		void operator()(const unbind_request &) { w.null(ber::application(op_tag::unbind_request)); }
@@ -555,7 +588,9 @@ namespace {
 				o.boolean(s.types_only);
 				detail::write_filter(o, s.filter);// checked by precheck
 				o.constructed(ber::tags::sequence, [&](ber::writer &attrs) {
-					for (const auto &a : s.attributes) attrs.octet_string(a);
+					for (const auto &a : s.attributes) {
+						attrs.octet_string(a);
+					}
 				});
 			});
 		}
@@ -569,7 +604,9 @@ namespace {
 		void operator()(const search_result_reference &r)
 		{
 			seq(op_tag::search_result_reference, [&](ber::writer &o) {
-				for (const auto &uri : r.uris) o.octet_string(uri);
+				for (const auto &uri : r.uris) {
+					o.octet_string(uri);
+				}
 			});
 		}
 		void operator()(const modify_request &m)
@@ -577,11 +614,12 @@ namespace {
 			seq(op_tag::modify_request, [&](ber::writer &o) {
 				o.octet_string(m.object);
 				o.constructed(ber::tags::sequence, [&](ber::writer &changes) {
-					for (const auto &c : m.changes)
+					for (const auto &c : m.changes) {
 						changes.constructed(ber::tags::sequence, [&](ber::writer &change) {
 							change.enumerated(std::to_underlying(c.operation));
 							write_attribute(change, c.modification);
 						});
+					}
 				});
 			});
 		}
@@ -599,7 +637,9 @@ namespace {
 				o.octet_string(m.entry);
 				o.octet_string(m.new_rdn);
 				o.boolean(m.delete_old_rdn);
-				if (m.new_superior) o.octet_string(*m.new_superior, ber::context(0));
+				if (m.new_superior) {
+					o.octet_string(*m.new_superior, ber::context(0));
+				}
 			});
 		}
 		void operator()(const compare_request &c)
@@ -620,22 +660,32 @@ namespace {
 		{
 			seq(op_tag::extended_request, [&](ber::writer &o) {
 				o.octet_string(e.request_name, ber::context(0));
-				if (e.request_value) o.octet_string(*e.request_value, ber::context(1));
+				if (e.request_value) {
+					o.octet_string(*e.request_value, ber::context(1));
+				}
 			});
 		}
 		void operator()(const extended_response &e)
 		{
 			seq(op_tag::extended_response, [&](ber::writer &o) {
 				write_result(o, e.result);
-				if (e.response_name) o.octet_string(*e.response_name, ber::context(10));
-				if (e.response_value) o.octet_string(*e.response_value, ber::context(11));
+				if (e.response_name) {
+					o.octet_string(*e.response_name, ber::context(10));
+				}
+				if (e.response_value) {
+					o.octet_string(*e.response_value, ber::context(11));
+				}
 			});
 		}
 		void operator()(const intermediate_response &i)
 		{
 			seq(op_tag::intermediate_response, [&](ber::writer &o) {
-				if (i.response_name) o.octet_string(*i.response_name, ber::context(0));
-				if (i.response_value) o.octet_string(*i.response_value, ber::context(1));
+				if (i.response_name) {
+					o.octet_string(*i.response_name, ber::context(0));
+				}
+				if (i.response_value) {
+					o.octet_string(*i.response_value, ber::context(1));
+				}
 			});
 		}
 	};
@@ -649,7 +699,9 @@ namespace {
 	{
 		while (!r.empty()) {
 			auto e = r.read();
-			if (!e) return std::unexpected(std::move(e.error()));
+			if (!e) {
+				return std::unexpected(std::move(e.error()));
+			}
 		}
 		return {};
 	}
@@ -657,7 +709,9 @@ namespace {
 	// Class and number of the next element, without committing.
 	bool next_is(const ber::reader &r, ber::tag t)
 	{
-		if (r.empty()) return false;
+		if (r.empty()) {
+			return false;
+		}
 		auto p = r.peek_tag();
 		return p && p->cls == t.cls && p->number == t.number;
 	}
@@ -672,8 +726,12 @@ namespace {
 		const std::size_t offset = r.offset();
 		auto copy = r;
 		auto v = enumerated ? copy.read_enumerated(t) : copy.read_integer(t);
-		if (!v) return std::unexpected(std::move(v.error()));
-		if (*v < lo || *v > hi) return bad(detail::format("{} {} outside {}..{}", what, *v, lo, hi), offset);
+		if (!v) {
+			return std::unexpected(std::move(v.error()));
+		}
+		if (*v < lo || *v > hi) {
+			return bad(detail::format("{} {} outside {}..{}", what, *v, lo, hi), offset);
+		}
 		r = copy;
 		return static_cast<std::int32_t>(*v);
 	}
@@ -693,7 +751,9 @@ namespace {
 		std::size_t n = 0;
 		while (!r.empty() && n < limit) {
 			auto e = r.read();
-			if (!e || e->t != t || e->size() < min_size) break;
+			if (!e || e->t != t || e->size() < min_size) {
+				break;
+			}
 			++n;
 		}
 		return n;
@@ -719,8 +779,12 @@ namespace {
 		{
 			ber::reader top(bytes, options_.max_depth);
 			auto op = read_search_result_entry(top, ber::application(op_tag::search_result_entry));
-			if (!op) return std::unexpected(std::move(op.error()));
-			if (auto done = top.expect_end(); !done) return std::unexpected(std::move(done.error()));
+			if (!op) {
+				return std::unexpected(std::move(op.error()));
+			}
+			if (auto done = top.expect_end(); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			return std::move(std::get<search_result_entry>(*op));
 		}
 
@@ -728,39 +792,55 @@ namespace {
 		{
 			ber::reader top(bytes, options_.max_depth);
 			auto r = top.enter();
-			if (!r) return std::unexpected(std::move(r.error()));
-			if (auto done = top.expect_end(); !done) return std::unexpected(std::move(done.error()));
+			if (!r) {
+				return std::unexpected(std::move(r.error()));
+			}
+			if (auto done = top.expect_end(); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			message m(a_);
 			auto id = read_ranged(*r, ber::tags::integer, 0, max_int, "message id");
-			if (!id) return std::unexpected(std::move(id.error()));
+			if (!id) {
+				return std::unexpected(std::move(id.error()));
+			}
 			m.id = *id;
 			// RFC 4511 section 4.1.1: id 0 is reserved for unsolicited notifications.
 			if (*id == 0 && !r->empty()) {
 				auto t = r->peek_tag();
-				if (t && t->cls == ber::tag_class::application && is_request(t->number))
+				if (t && t->cls == ber::tag_class::application && is_request(t->number)) {
 					return bad("request with message id 0", r->offset());
+				}
 			}
 			auto op = read_op(*r);
-			if (!op) return std::unexpected(std::move(op.error()));
+			if (!op) {
+				return std::unexpected(std::move(op.error()));
+			}
 			m.op = std::move(*op);// same resource: moved, not copied
 			if (next_is(*r, ber::context(0))) {
 				auto list = r->enter(ber::context(0));
-				if (!list) return std::unexpected(std::move(list.error()));
+				if (!list) {
+					return std::unexpected(std::move(list.error()));
+				}
 				while (!list->empty()) {
 					auto c = read_control(*list);
-					if (!c) return std::unexpected(std::move(c.error()));
+					if (!c) {
+						return std::unexpected(std::move(c.error()));
+					}
 					m.controls.push_back(std::move(*c));
 				}
 			}
-			if (auto done = skip_rest(*r); !done) return std::unexpected(std::move(done.error()));
+			if (auto done = skip_rest(*r); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			return m;
 		}
 
 	  private:
 		result<std::pmr::string> str(ber::reader &r, ber::tag t = ber::tags::octet_string)
 		{
-			if (strings_ == options_.max_elements) [[unlikely]]
+			if (strings_ == options_.max_elements) [[unlikely]] {
 				return too_many_elements(r.offset());
+			}
 			// Counted before reading (a failed read ends the decode anyway),
 			// so the result is returned directly, not copied.
 			++strings_;
@@ -779,9 +859,13 @@ namespace {
 
 		result<std::optional<std::pmr::string>> optional_str(ber::reader &r, ber::tag t)
 		{
-			if (!next_is(r, t)) return std::optional<std::pmr::string>{};
+			if (!next_is(r, t)) {
+				return std::optional<std::pmr::string>{};
+			}
 			auto s = str(r, t);
-			if (!s) return std::unexpected(std::move(s.error()));
+			if (!s) {
+				return std::unexpected(std::move(s.error()));
+			}
 			return std::optional<std::pmr::string>{ std::move(*s) };
 		}
 
@@ -794,20 +878,30 @@ namespace {
 			  std::numeric_limits<std::int32_t>::max(),
 			  "resultCode",
 			  true);
-			if (!code) return std::unexpected(std::move(code.error()));
+			if (!code) {
+				return std::unexpected(std::move(code.error()));
+			}
 			auto matched = str(r);
-			if (!matched) return std::unexpected(std::move(matched.error()));
+			if (!matched) {
+				return std::unexpected(std::move(matched.error()));
+			}
 			auto diag = str(r);
-			if (!diag) return std::unexpected(std::move(diag.error()));
+			if (!diag) {
+				return std::unexpected(std::move(diag.error()));
+			}
 			out.result_code = *code;
 			out.matched_dn = std::move(*matched);
 			out.diagnostic_message = std::move(*diag);
 			if (next_is(r, ber::context(3))) {
 				auto ref = r.enter(ber::context(3));
-				if (!ref) return std::unexpected(std::move(ref.error()));
+				if (!ref) {
+					return std::unexpected(std::move(ref.error()));
+				}
 				while (!ref->empty()) {
 					auto uri = str(*ref);
-					if (!uri) return std::unexpected(std::move(uri.error()));
+					if (!uri) {
+						return std::unexpected(std::move(uri.error()));
+					}
 					out.referral.push_back(std::move(*uri));
 				}
 			}
@@ -817,94 +911,143 @@ namespace {
 		template<class T> result<protocol_op> result_only(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<T>, a_);
-			if (auto done = read_result(*o, std::get<T>(op).result); !done)
+			if (auto done = read_result(*o, std::get<T>(op).result); !done) {
 				return std::unexpected(std::move(done.error()));
-			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			}
+			if (auto done = skip_rest(*o); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			return op;
 		}
 
 		result<void> read_attribute(ber::reader &r, partial_attribute &out)
 		{
 			auto pa = r.enter();
-			if (!pa) return std::unexpected(std::move(pa.error()));
+			if (!pa) {
+				return std::unexpected(std::move(pa.error()));
+			}
 			auto type = str(*pa);
-			if (!type) return std::unexpected(std::move(type.error()));
+			if (!type) {
+				return std::unexpected(std::move(type.error()));
+			}
 			auto vals = pa->enter(ber::tags::set);
-			if (!vals) return std::unexpected(std::move(vals.error()));
+			if (!vals) {
+				return std::unexpected(std::move(vals.error()));
+			}
 			out.type = std::move(*type);
 			out.values.reserve(count_elements(*vals, ber::tags::octet_string, min_value_size, budget()));
 			while (!vals->empty()) {
 				auto v = str(*vals);
-				if (!v) return std::unexpected(std::move(v.error()));
+				if (!v) {
+					return std::unexpected(std::move(v.error()));
+				}
 				out.values.push_back(std::move(*v));
 			}
-			if (auto done = skip_rest(*pa); !done) return std::unexpected(std::move(done.error()));
+			if (auto done = skip_rest(*pa); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			return {};
 		}
 
 		result<void> read_attributes(ber::reader &r, std::pmr::vector<partial_attribute> &out)
 		{
 			auto list = r.enter();
-			if (!list) return std::unexpected(std::move(list.error()));
+			if (!list) {
+				return std::unexpected(std::move(list.error()));
+			}
 			out.reserve(count_elements(*list, ber::tags::sequence, min_attribute_size, budget()));
-			while (!list->empty())
-				if (auto done = read_attribute(*list, out.emplace_back()); !done)
+			while (!list->empty()) {
+				if (auto done = read_attribute(*list, out.emplace_back()); !done) {
 					return std::unexpected(std::move(done.error()));
+				}
+			}
 			return {};
 		}
 
 		result<protocol_op> read_bind_request(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<bind_request>, a_);
 			auto &b = std::get<bind_request>(op);
 			auto version = read_ranged(*o, ber::tags::integer, 1, 127, "bind version");
-			if (!version) return std::unexpected(std::move(version.error()));
+			if (!version) {
+				return std::unexpected(std::move(version.error()));
+			}
 			auto name = str(*o);
-			if (!name) return std::unexpected(std::move(name.error()));
+			if (!name) {
+				return std::unexpected(std::move(name.error()));
+			}
 			b.version = *version;
 			b.name = std::move(*name);
 			const std::size_t auth_at = o->offset();
 			if (next_is(*o, ber::context(0))) {
 				auto password = str(*o, ber::context(0));
-				if (!password) return std::unexpected(std::move(password.error()));
+				if (!password) {
+					return std::unexpected(std::move(password.error()));
+				}
 				std::get<simple_auth>(b.authentication).password = std::move(*password);
 			} else if (next_is(*o, ber::context(3))) {
 				auto s = o->enter(ber::context(3));
-				if (!s) return std::unexpected(std::move(s.error()));
+				if (!s) {
+					return std::unexpected(std::move(s.error()));
+				}
 				auto mechanism = str(*s);
-				if (!mechanism) return std::unexpected(std::move(mechanism.error()));
+				if (!mechanism) {
+					return std::unexpected(std::move(mechanism.error()));
+				}
 				auto credentials = optional_str(*s, ber::tags::octet_string);
-				if (!credentials) return std::unexpected(std::move(credentials.error()));
-				if (auto done = skip_rest(*s); !done) return std::unexpected(std::move(done.error()));
+				if (!credentials) {
+					return std::unexpected(std::move(credentials.error()));
+				}
+				if (auto done = skip_rest(*s); !done) {
+					return std::unexpected(std::move(done.error()));
+				}
 				auto &sasl = b.authentication.emplace<sasl_auth>(a_);
 				sasl.mechanism = std::move(*mechanism);
 				sasl.credentials = std::move(*credentials);
 			} else {
-				if (o->empty()) return bad("bind request without authentication", auth_at);
+				if (o->empty()) {
+					return bad("bind request without authentication", auth_at);
+				}
 				auto choice = o->peek_tag();
-				if (!choice) return std::unexpected(std::move(choice.error()));
+				if (!choice) {
+					return std::unexpected(std::move(choice.error()));
+				}
 				return fail(client_errc::unsupported_operation,
 				  detail::format(
 					"message: bind authentication choice {} at offset {}", ber::to_string(*choice), auth_at));
 			}
-			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			if (auto done = skip_rest(*o); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			return op;
 		}
 
 		result<protocol_op> read_bind_response(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<bind_response>, a_);
 			auto &b = std::get<bind_response>(op);
-			if (auto done = read_result(*o, b.result); !done) return std::unexpected(std::move(done.error()));
+			if (auto done = read_result(*o, b.result); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			auto creds = optional_str(*o, ber::context(7));
-			if (!creds) return std::unexpected(std::move(creds.error()));
-			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			if (!creds) {
+				return std::unexpected(std::move(creds.error()));
+			}
+			if (auto done = skip_rest(*o); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			b.server_sasl_creds = std::move(*creds);
 			return op;
 		}
@@ -912,31 +1055,53 @@ namespace {
 		result<protocol_op> read_search_request(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<search_request>, a_);
 			auto &s = std::get<search_request>(op);
 			auto base = str(*o);
-			if (!base) return std::unexpected(std::move(base.error()));
+			if (!base) {
+				return std::unexpected(std::move(base.error()));
+			}
 			auto scope = read_ranged(*o, ber::tags::enumerated, 0, 3, "search scope", true);
-			if (!scope) return std::unexpected(std::move(scope.error()));
+			if (!scope) {
+				return std::unexpected(std::move(scope.error()));
+			}
 			auto deref = read_ranged(*o, ber::tags::enumerated, 0, 3, "derefAliases", true);
-			if (!deref) return std::unexpected(std::move(deref.error()));
+			if (!deref) {
+				return std::unexpected(std::move(deref.error()));
+			}
 			auto size_limit = read_ranged(*o, ber::tags::integer, 0, max_int, "size limit");
-			if (!size_limit) return std::unexpected(std::move(size_limit.error()));
+			if (!size_limit) {
+				return std::unexpected(std::move(size_limit.error()));
+			}
 			auto time_limit = read_ranged(*o, ber::tags::integer, 0, max_int, "time limit");
-			if (!time_limit) return std::unexpected(std::move(time_limit.error()));
+			if (!time_limit) {
+				return std::unexpected(std::move(time_limit.error()));
+			}
 			auto types_only = o->read_boolean();
-			if (!types_only) return std::unexpected(std::move(types_only.error()));
+			if (!types_only) {
+				return std::unexpected(std::move(types_only.error()));
+			}
 			auto f = decode_filter(*o, options_.filter, a_.resource());
-			if (!f) return std::unexpected(std::move(f.error()));
+			if (!f) {
+				return std::unexpected(std::move(f.error()));
+			}
 			auto attrs = o->enter();
-			if (!attrs) return std::unexpected(std::move(attrs.error()));
+			if (!attrs) {
+				return std::unexpected(std::move(attrs.error()));
+			}
 			while (!attrs->empty()) {
 				auto a = str(*attrs);
-				if (!a) return std::unexpected(std::move(a.error()));
+				if (!a) {
+					return std::unexpected(std::move(a.error()));
+				}
 				s.attributes.push_back(std::move(*a));
 			}
-			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			if (auto done = skip_rest(*o); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			s.base_object = std::move(*base);
 			s.scope = static_cast<search_scope>(*scope);
 			s.deref = static_cast<deref_aliases>(*deref);
@@ -950,26 +1115,38 @@ namespace {
 		result<protocol_op> read_search_result_entry(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<search_result_entry>, a_);
 			auto &e = std::get<search_result_entry>(op);
 			auto name = str(*o);
-			if (!name) return std::unexpected(std::move(name.error()));
+			if (!name) {
+				return std::unexpected(std::move(name.error()));
+			}
 			e.object_name = std::move(*name);
-			if (auto done = read_attributes(*o, e.attributes); !done) return std::unexpected(std::move(done.error()));
-			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			if (auto done = read_attributes(*o, e.attributes); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
+			if (auto done = skip_rest(*o); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			return op;
 		}
 
 		result<protocol_op> read_search_result_reference(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<search_result_reference>, a_);
 			auto &ref = std::get<search_result_reference>(op);
 			while (!o->empty()) {
 				auto uri = str(*o);
-				if (!uri) return std::unexpected(std::move(uri.error()));
+				if (!uri) {
+					return std::unexpected(std::move(uri.error()));
+				}
 				ref.uris.push_back(std::move(*uri));
 			}
 			return op;
@@ -978,65 +1155,103 @@ namespace {
 		result<protocol_op> read_modify_request(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<modify_request>, a_);
 			auto &m = std::get<modify_request>(op);
 			auto object = str(*o);
-			if (!object) return std::unexpected(std::move(object.error()));
+			if (!object) {
+				return std::unexpected(std::move(object.error()));
+			}
 			m.object = std::move(*object);
 			auto changes = o->enter();
-			if (!changes) return std::unexpected(std::move(changes.error()));
+			if (!changes) {
+				return std::unexpected(std::move(changes.error()));
+			}
 			while (!changes->empty()) {
 				auto change = changes->enter();
-				if (!change) return std::unexpected(std::move(change.error()));
+				if (!change) {
+					return std::unexpected(std::move(change.error()));
+				}
 				auto op_code = read_ranged(*change, ber::tags::enumerated, 0, 3, "modify operation", true);
-				if (!op_code) return std::unexpected(std::move(op_code.error()));
+				if (!op_code) {
+					return std::unexpected(std::move(op_code.error()));
+				}
 				const std::size_t attr_at = change->offset();
 				auto &c = m.changes.emplace_back();
 				c.operation = static_cast<modify_operation>(*op_code);
-				if (auto done = read_attribute(*change, c.modification); !done)
+				if (auto done = read_attribute(*change, c.modification); !done) {
 					return std::unexpected(std::move(done.error()));
-				if (c.operation == modify_operation::add && c.modification.values.empty())
+				}
+				if (c.operation == modify_operation::add && c.modification.values.empty()) {
 					return bad("modify add change without values", attr_at);
-				if (auto done = skip_rest(*change); !done) return std::unexpected(std::move(done.error()));
+				}
+				if (auto done = skip_rest(*change); !done) {
+					return std::unexpected(std::move(done.error()));
+				}
 			}
-			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			if (auto done = skip_rest(*o); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			return op;
 		}
 
 		result<protocol_op> read_add_request(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<add_request>, a_);
 			auto &add = std::get<add_request>(op);
 			auto entry = str(*o);
-			if (!entry) return std::unexpected(std::move(entry.error()));
+			if (!entry) {
+				return std::unexpected(std::move(entry.error()));
+			}
 			add.entry = std::move(*entry);
 			const std::size_t attrs_at = o->offset();
-			if (auto done = read_attributes(*o, add.attributes); !done) return std::unexpected(std::move(done.error()));
-			for (const auto &a : add.attributes)
-				if (a.values.empty())
+			if (auto done = read_attributes(*o, add.attributes); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
+			for (const auto &a : add.attributes) {
+				if (a.values.empty()) {
 					return bad(sanitized_context("add request attribute '", a.type, "' without values"), attrs_at);
-			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+				}
+			}
+			if (auto done = skip_rest(*o); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			return op;
 		}
 
 		result<protocol_op> read_modify_dn_request(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<modify_dn_request>, a_);
 			auto &m = std::get<modify_dn_request>(op);
 			auto entry = str(*o);
-			if (!entry) return std::unexpected(std::move(entry.error()));
+			if (!entry) {
+				return std::unexpected(std::move(entry.error()));
+			}
 			auto new_rdn = str(*o);
-			if (!new_rdn) return std::unexpected(std::move(new_rdn.error()));
+			if (!new_rdn) {
+				return std::unexpected(std::move(new_rdn.error()));
+			}
 			auto delete_old = o->read_boolean();
-			if (!delete_old) return std::unexpected(std::move(delete_old.error()));
+			if (!delete_old) {
+				return std::unexpected(std::move(delete_old.error()));
+			}
 			auto superior = optional_str(*o, ber::context(0));
-			if (!superior) return std::unexpected(std::move(superior.error()));
-			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			if (!superior) {
+				return std::unexpected(std::move(superior.error()));
+			}
+			if (auto done = skip_rest(*o); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			m.entry = std::move(*entry);
 			m.new_rdn = std::move(*new_rdn);
 			m.delete_old_rdn = *delete_old;
@@ -1047,19 +1262,33 @@ namespace {
 		result<protocol_op> read_compare_request(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<compare_request>, a_);
 			auto &c = std::get<compare_request>(op);
 			auto entry = str(*o);
-			if (!entry) return std::unexpected(std::move(entry.error()));
+			if (!entry) {
+				return std::unexpected(std::move(entry.error()));
+			}
 			auto ava = o->enter();
-			if (!ava) return std::unexpected(std::move(ava.error()));
+			if (!ava) {
+				return std::unexpected(std::move(ava.error()));
+			}
 			auto desc = str(*ava);
-			if (!desc) return std::unexpected(std::move(desc.error()));
+			if (!desc) {
+				return std::unexpected(std::move(desc.error()));
+			}
 			auto value = str(*ava);
-			if (!value) return std::unexpected(std::move(value.error()));
-			if (auto done = skip_rest(*ava); !done) return std::unexpected(std::move(done.error()));
-			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			if (!value) {
+				return std::unexpected(std::move(value.error()));
+			}
+			if (auto done = skip_rest(*ava); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
+			if (auto done = skip_rest(*o); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			c.entry = std::move(*entry);
 			c.ava.attribute_desc = std::move(*desc);
 			c.ava.assertion_value = std::move(*value);
@@ -1069,14 +1298,22 @@ namespace {
 		result<protocol_op> read_extended_request(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<extended_request>, a_);
 			auto &e = std::get<extended_request>(op);
 			auto name = str(*o, ber::context(0));
-			if (!name) return std::unexpected(std::move(name.error()));
+			if (!name) {
+				return std::unexpected(std::move(name.error()));
+			}
 			auto value = optional_str(*o, ber::context(1));
-			if (!value) return std::unexpected(std::move(value.error()));
-			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			if (!value) {
+				return std::unexpected(std::move(value.error()));
+			}
+			if (auto done = skip_rest(*o); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			e.request_name = std::move(*name);
 			e.request_value = std::move(*value);
 			return op;
@@ -1085,15 +1322,25 @@ namespace {
 		result<protocol_op> read_extended_response(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<extended_response>, a_);
 			auto &e = std::get<extended_response>(op);
-			if (auto done = read_result(*o, e.result); !done) return std::unexpected(std::move(done.error()));
+			if (auto done = read_result(*o, e.result); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			auto name = optional_str(*o, ber::context(10));
-			if (!name) return std::unexpected(std::move(name.error()));
+			if (!name) {
+				return std::unexpected(std::move(name.error()));
+			}
 			auto value = optional_str(*o, ber::context(11));
-			if (!value) return std::unexpected(std::move(value.error()));
-			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			if (!value) {
+				return std::unexpected(std::move(value.error()));
+			}
+			if (auto done = skip_rest(*o); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			e.response_name = std::move(*name);
 			e.response_value = std::move(*value);
 			return op;
@@ -1102,14 +1349,22 @@ namespace {
 		result<protocol_op> read_intermediate_response(ber::reader &r, ber::tag t)
 		{
 			auto o = r.enter(t);
-			if (!o) return std::unexpected(std::move(o.error()));
+			if (!o) {
+				return std::unexpected(std::move(o.error()));
+			}
 			protocol_op op(std::in_place_type<intermediate_response>, a_);
 			auto &i = std::get<intermediate_response>(op);
 			auto name = optional_str(*o, ber::context(0));
-			if (!name) return std::unexpected(std::move(name.error()));
+			if (!name) {
+				return std::unexpected(std::move(name.error()));
+			}
 			auto value = optional_str(*o, ber::context(1));
-			if (!value) return std::unexpected(std::move(value.error()));
-			if (auto done = skip_rest(*o); !done) return std::unexpected(std::move(done.error()));
+			if (!value) {
+				return std::unexpected(std::move(value.error()));
+			}
+			if (auto done = skip_rest(*o); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			i.response_name = std::move(*name);
 			i.response_value = std::move(*value);
 			return op;
@@ -1119,30 +1374,38 @@ namespace {
 		{
 			const std::size_t offset = r.offset();
 			auto peeked = r.peek_tag();
-			if (!peeked) return std::unexpected(std::move(peeked.error()));
+			if (!peeked) {
+				return std::unexpected(std::move(peeked.error()));
+			}
 			const ber::tag t = *peeked;
 			auto unsupported = [&] {
 				return fail(client_errc::unsupported_operation,
 				  detail::format("message: unknown protocolOp {} at offset {}", ber::to_string(t), offset));
 			};
-			if (t.cls != ber::tag_class::application) return unsupported();
+			if (t.cls != ber::tag_class::application) {
+				return unsupported();
+			}
 			// Checked before decoding, so a peer cannot make us parse (for
 			// example) a huge search request filter it may not send at all.
-			if (options_.from == origin::server && is_request(t.number))
+			if (options_.from == origin::server && is_request(t.number)) {
 				return fail(client_errc::unsupported_operation,
 				  detail::format(
 					"message: request operation {} from a server at offset {}", ber::to_string(t), offset));
-			if (options_.from == origin::client && !is_request(t.number))
+			}
+			if (options_.from == origin::client && !is_request(t.number)) {
 				return fail(client_errc::unsupported_operation,
 				  detail::format(
 					"message: response operation {} from a client at offset {}", ber::to_string(t), offset));
+			}
 			switch (t.number) {
 			case op_tag::bind_request:
 				return read_bind_request(r, t);
 			case op_tag::bind_response:
 				return read_bind_response(r, t);
 			case op_tag::unbind_request: {
-				if (auto done = r.read_null(t); !done) return std::unexpected(std::move(done.error()));
+				if (auto done = r.read_null(t); !done) {
+					return std::unexpected(std::move(done.error()));
+				}
 				return protocol_op{ unbind_request{} };
 			}
 			case op_tag::search_request:
@@ -1163,7 +1426,9 @@ namespace {
 				return result_only<add_response>(r, t);
 			case op_tag::del_request: {
 				auto entry = str(r, t);
-				if (!entry) return std::unexpected(std::move(entry.error()));
+				if (!entry) {
+					return std::unexpected(std::move(entry.error()));
+				}
 				protocol_op op(std::in_place_type<del_request>, a_);
 				std::get<del_request>(op).entry = std::move(*entry);
 				return op;
@@ -1180,7 +1445,9 @@ namespace {
 				return result_only<compare_response>(r, t);
 			case op_tag::abandon_request: {
 				auto id = read_ranged(r, t, 0, max_int, "abandoned message id");
-				if (!id) return std::unexpected(std::move(id.error()));
+				if (!id) {
+					return std::unexpected(std::move(id.error()));
+				}
 				return protocol_op{ abandon_request{ *id } };
 			}
 			case op_tag::extended_request:
@@ -1197,20 +1464,30 @@ namespace {
 		result<control> read_control(ber::reader &r)
 		{
 			auto c = r.enter();
-			if (!c) return std::unexpected(std::move(c.error()));
+			if (!c) {
+				return std::unexpected(std::move(c.error()));
+			}
 			control out(a_);
 			auto type = str(*c);
-			if (!type) return std::unexpected(std::move(type.error()));
+			if (!type) {
+				return std::unexpected(std::move(type.error()));
+			}
 			out.type = std::move(*type);
 			if (next_is(*c, ber::tags::boolean)) {
 				auto critical = c->read_boolean();
-				if (!critical) return std::unexpected(std::move(critical.error()));
+				if (!critical) {
+					return std::unexpected(std::move(critical.error()));
+				}
 				out.criticality = *critical;
 			}
 			auto value = optional_str(*c, ber::tags::octet_string);
-			if (!value) return std::unexpected(std::move(value.error()));
+			if (!value) {
+				return std::unexpected(std::move(value.error()));
+			}
 			out.value = std::move(*value);
-			if (auto done = skip_rest(*c); !done) return std::unexpected(std::move(done.error()));
+			if (auto done = skip_rest(*c); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
 			return out;
 		}
 
@@ -1243,19 +1520,27 @@ namespace {
 
 result<void> encode(ber::writer &w, const message &m)
 {
-	if (auto done = precheck(m); !done) return std::unexpected(std::move(done.error()));
+	if (auto done = precheck(m); !done) {
+		return std::unexpected(std::move(done.error()));
+	}
 	w.constructed(ber::tags::sequence, [&](ber::writer &msg) {
 		msg.integer(m.id);
 		std::visit(op_writer{ msg }, m.op);
-		if (!m.controls.empty())
+		if (!m.controls.empty()) {
 			msg.constructed(ber::context(0), [&](ber::writer &list) {
-				for (const auto &c : m.controls)
+				for (const auto &c : m.controls) {
 					list.constructed(ber::tags::sequence, [&](ber::writer &cw) {
 						cw.octet_string(c.type);
-						if (c.criticality) cw.boolean(true);
-						if (c.value) cw.octet_string(*c.value);
+						if (c.criticality) {
+							cw.boolean(true);
+						}
+						if (c.value) {
+							cw.octet_string(*c.value);
+						}
 					});
+				}
 			});
+		}
 	});
 	return {};
 }
@@ -1265,7 +1550,9 @@ result<std::pmr::vector<std::byte>> encode(const message &m, std::pmr::memory_re
 	ber::writer w{ ber::writer::allocator_type(mr) };
 	// Most requests fit; saves the first few doublings of the buffer.
 	w.reserve(256);
-	if (auto done = encode(w, m); !done) return std::unexpected(std::move(done.error()));
+	if (auto done = encode(w, m); !done) {
+		return std::unexpected(std::move(done.error()));
+	}
 	return w.take();
 }
 
@@ -1278,12 +1565,20 @@ result<message_header> peek_message_header(std::span<const std::byte> one_comple
 {
 	ber::reader top(one_complete_message);
 	auto r = top.enter();
-	if (!r) return std::unexpected(std::move(r.error()));
+	if (!r) {
+		return std::unexpected(std::move(r.error()));
+	}
 	auto id = read_ranged(*r, ber::tags::integer, 0, max_int, "message id");
-	if (!id) return std::unexpected(std::move(id.error()));
-	if (r->empty()) return fail(client_errc::decode_error, "LDAPMessage without a protocolOp");
+	if (!id) {
+		return std::unexpected(std::move(id.error()));
+	}
+	if (r->empty()) {
+		return fail(client_errc::decode_error, "LDAPMessage without a protocolOp");
+	}
 	auto op = r->peek_tag();
-	if (!op) return std::unexpected(std::move(op.error()));
+	if (!op) {
+		return std::unexpected(std::move(op.error()));
+	}
 	return message_header{ *id, *op };
 }
 
@@ -1294,10 +1589,13 @@ namespace {
 	// The control's value bytes, once its type is `oid` and it has a value.
 	result<std::span<const std::byte>> expect_control(const control &c, std::string_view oid, std::string_view what)
 	{
-		if (c.type != oid)
+		if (c.type != oid) {
 			return fail(client_errc::decode_error,
 			  sanitized_context(detail::format("{}: control type is ", what), c.type, detail::format(", not {}", oid)));
-		if (!c.value) return fail(client_errc::decode_error, detail::format("{}: control has no value", what));
+		}
+		if (!c.value) {
+			return fail(client_errc::decode_error, detail::format("{}: control has no value", what));
+		}
 		return std::as_bytes(std::span(*c.value));
 	}
 
@@ -1311,7 +1609,9 @@ namespace {
 	template<class T> result<T> in_control(result<T> r, std::string_view name)
 	{
 		return std::move(r).transform_error([name](error &&e) {
-			if (!e.context.empty()) e.context.insert(0, ": ");
+			if (!e.context.empty()) {
+				e.context.insert(0, ": ");
+			}
 			e.context.insert(0, name);
 			return e;
 		});
@@ -1323,7 +1623,9 @@ namespace {
 
 result<control> encode_paged_results(const paged_results &value, bool criticality, std::pmr::memory_resource *mr)
 {
-	if (value.size < 0) return fail(client_errc::encode_error, "paged results: negative size");
+	if (value.size < 0) {
+		return fail(client_errc::encode_error, "paged results: negative size");
+	}
 	ber::writer w{ ber::writer::allocator_type(mr) };
 	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
 		s.integer(value.size);
@@ -1339,13 +1641,23 @@ namespace {
 	{
 		ber::reader r(value);
 		auto s = r.enter();
-		if (!s) return std::unexpected(std::move(s.error()));
-		if (auto done = r.expect_end(); !done) return std::unexpected(std::move(done.error()));
+		if (!s) {
+			return std::unexpected(std::move(s.error()));
+		}
+		if (auto done = r.expect_end(); !done) {
+			return std::unexpected(std::move(done.error()));
+		}
 		auto size = read_ranged(*s, ber::tags::integer, 0, max_int, "size");
-		if (!size) return std::unexpected(std::move(size.error()));
+		if (!size) {
+			return std::unexpected(std::move(size.error()));
+		}
 		auto cookie = s->read_string(ber::tags::octet_string, mr);
-		if (!cookie) return std::unexpected(std::move(cookie.error()));
-		if (auto done = skip_rest(*s); !done) return std::unexpected(std::move(done.error()));
+		if (!cookie) {
+			return std::unexpected(std::move(cookie.error()));
+		}
+		if (auto done = skip_rest(*s); !done) {
+			return std::unexpected(std::move(done.error()));
+		}
 		paged_results out{ paged_results::allocator_type(mr) };
 		out.size = *size;
 		out.cookie = std::move(*cookie);
@@ -1357,7 +1669,9 @@ namespace {
 result<paged_results> decode_paged_results(const control &c, std::pmr::memory_resource *mr)
 {
 	auto value = expect_control(c, paged_results_oid, "paged results");
-	if (!value) return std::unexpected(std::move(value.error()));
+	if (!value) {
+		return std::unexpected(std::move(value.error()));
+	}
 	return in_control(read_paged_results(*value, mr), "paged results");
 }
 
@@ -1368,7 +1682,9 @@ result<control> encode_sort_result(const sort_result &value, bool criticality, s
 	ber::writer w{ ber::writer::allocator_type(mr) };
 	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
 		s.enumerated(value.result_code);
-		if (!value.attribute_type.empty()) s.octet_string(value.attribute_type, ber::context(0));
+		if (!value.attribute_type.empty()) {
+			s.octet_string(value.attribute_type, ber::context(0));
+		}
 	});
 	return bytes_control(sort_response_oid, criticality, w, mr);
 }
@@ -1380,23 +1696,33 @@ namespace {
 	{
 		ber::reader r(value);
 		auto s = r.enter();
-		if (!s) return std::unexpected(std::move(s.error()));
-		if (auto done = r.expect_end(); !done) return std::unexpected(std::move(done.error()));
+		if (!s) {
+			return std::unexpected(std::move(s.error()));
+		}
+		if (auto done = r.expect_end(); !done) {
+			return std::unexpected(std::move(done.error()));
+		}
 		auto code = read_ranged(*s,
 		  ber::tags::enumerated,
 		  std::numeric_limits<std::int32_t>::min(),
 		  std::numeric_limits<std::int32_t>::max(),
 		  "sortResult",
 		  true);
-		if (!code) return std::unexpected(std::move(code.error()));
+		if (!code) {
+			return std::unexpected(std::move(code.error()));
+		}
 		sort_result out{ sort_result::allocator_type(mr) };
 		out.result_code = *code;
 		if (next_is(*s, ber::context(0))) {
 			auto type = s->read_string(ber::context(0), mr);
-			if (!type) return std::unexpected(std::move(type.error()));
+			if (!type) {
+				return std::unexpected(std::move(type.error()));
+			}
 			out.attribute_type = std::move(*type);
 		}
-		if (auto done = skip_rest(*s); !done) return std::unexpected(std::move(done.error()));
+		if (auto done = skip_rest(*s); !done) {
+			return std::unexpected(std::move(done.error()));
+		}
 		return out;
 	}
 
@@ -1405,7 +1731,9 @@ namespace {
 result<sort_result> decode_sort_result(const control &c, std::pmr::memory_resource *mr)
 {
 	auto value = expect_control(c, sort_response_oid, "sort result");
-	if (!value) return std::unexpected(std::move(value.error()));
+	if (!value) {
+		return std::unexpected(std::move(value.error()));
+	}
 	return in_control(read_sort_result(*value, mr), "sort result");
 }
 
@@ -1416,9 +1744,10 @@ result<control> encode_read_entry(std::string_view oid,
   bool criticality,
   std::pmr::memory_resource *mr)
 {
-	if (oid != pre_read_oid && oid != post_read_oid)
+	if (oid != pre_read_oid && oid != post_read_oid) {
 		return fail(
 		  client_errc::encode_error, sanitized_context("read entry control: ", oid, " is not pre-read or post-read"));
+	}
 	ber::writer w{ ber::writer::allocator_type(mr) };
 	op_writer{ w }(entry);
 	return bytes_control(oid, criticality, w, mr);
@@ -1426,12 +1755,15 @@ result<control> encode_read_entry(std::string_view oid,
 
 result<search_result_entry> decode_read_entry(const control &c, const decode_options &options)
 {
-	if (c.type != pre_read_oid && c.type != post_read_oid)
+	if (c.type != pre_read_oid && c.type != post_read_oid) {
 		return fail(client_errc::decode_error,
 		  sanitized_context("read entry: control type is ", c.type, ", not pre-read or post-read"));
+	}
 	const std::string_view name = c.type == pre_read_oid ? "pre-read" : "post-read";
 	auto value = expect_control(c, c.type, name);
-	if (!value) return std::unexpected(std::move(value.error()));
+	if (!value) {
+		return std::unexpected(std::move(value.error()));
+	}
 	return in_control(decoder(options).run_entry(*value), name);
 }
 

@@ -346,18 +346,23 @@ class connection
 	// the search, the entry and the attribute).
 	template<described T> boost::capy::task<result<std::vector<T>>> search_as(search_params request)
 	{
-		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c)
+		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
 			co_return std::unexpected(std::move(c.error()));
+		}
 		request.attributes = attribute_names<T>();
 		request.filter = narrow_filter<T>(std::move(request.filter));
 		const std::string context = detail::op_context("search", request.base);
 		auto entries = co_await search(std::move(request));
-		if (!entries) co_return std::unexpected(std::move(entries.error()));
+		if (!entries) {
+			co_return std::unexpected(std::move(entries.error()));
+		}
 		std::vector<T> out;
 		out.reserve(entries->size());
 		for (const auto &e : *entries) {
 			auto v = ldap::decode<T>(e);
-			if (!v) co_return std::unexpected(detail::with_context(std::move(v.error()), context));
+			if (!v) {
+				co_return std::unexpected(detail::with_context(std::move(v.error()), context));
+			}
 			out.push_back(std::move(*v));
 		}
 		co_return out;
@@ -368,11 +373,14 @@ class connection
 	boost::capy::task<result<response>>
 	  modify(dn object, std::vector<change<T>> changes, request_controls controls = {})
 	{
-		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c)
+		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
 			co_return std::unexpected(std::move(c.error()));
+		}
 		modify_params p{ .object = std::move(object), .controls = std::move(controls) };
 		p.changes.reserve(changes.size());
-		for (auto &c : changes) p.changes.push_back(std::move(c.wire));
+		for (auto &c : changes) {
+			p.changes.push_back(std::move(c.wire));
+		}
 		co_return co_await modify(std::move(p));
 	}
 
@@ -380,8 +388,9 @@ class connection
 	// read_only members, objectClass from the descriptor).
 	template<described T> boost::capy::task<result<response>> add(dn entry, T value, request_controls controls = {})
 	{
-		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c)
+		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
 			co_return std::unexpected(std::move(c.error()));
+		}
 		co_return co_await add(
 		  add_params{ .entry = std::move(entry), .attributes = to_attributes(value), .controls = std::move(controls) });
 	}

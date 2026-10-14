@@ -93,14 +93,20 @@ enum class mode {
 capy::task<std::string> serve_start_tls(corosio::tcp_acceptor &acc, corosio::tls_context ctx, mode m)
 {
 	auto [aec, peer] = co_await acc.accept();
-	if (aec) co_return "accept: " + aec.message();
+	if (aec) {
+		co_return "accept: " + aec.message();
+	}
 	net::transport plain = net::transport::wrap(stream_ref<corosio::tcp_socket>{ &peer }, "server");
 	net::read_buffer buf;
 
 	auto req = co_await net::read_message(plain, buf, as_server);
-	if (!req) co_return "read StartTLS: " + std::string(req.error().message());
+	if (!req) {
+		co_return "read StartTLS: " + std::string(req.error().message());
+	}
 	const auto *x = std::get_if<ldap::extended_request>(&req->op);
-	if (x == nullptr || x->request_name != ldap::start_tls_oid) co_return "expected a StartTLS request";
+	if (x == nullptr || x->request_name != ldap::start_tls_oid) {
+		co_return "expected a StartTLS request";
+	}
 
 	std::string reply;
 	if (m == mode::refuse) {
@@ -109,44 +115,65 @@ capy::task<std::string> serve_start_tls(corosio::tcp_acceptor &acc, corosio::tls
 	} else {
 		reply = bytes_of(ldap::message{
 		  req->id, ldap::extended_response{ ldap::ldap_result{ 0 }, std::string(ldap::start_tls_oid) } });
-		if (m == mode::inject) reply += bytes_of(bind_resp(99));// sent in clear, before the handshake
+		if (m == mode::inject) {
+			reply += bytes_of(bind_resp(99));// sent in clear, before the handshake
+		}
 	}
-	if (auto w = co_await net::write_bytes(plain, std::as_bytes(std::span(reply))); !w)
+	if (auto w = co_await net::write_bytes(plain, std::as_bytes(std::span(reply))); !w) {
 		co_return "write: " + std::string(w.error().message());
-	if (m == mode::inject) co_return "";
+	}
+	if (m == mode::inject) {
+		co_return "";
+	}
 
 	auto answer_one = [](net::transport &t, net::read_buffer &b) -> capy::task<std::string> {
 		auto r = co_await net::read_message(t, b, as_server);
-		if (!r) co_return "read request: " + std::string(r.error().message());
+		if (!r) {
+			co_return "read request: " + std::string(r.error().message());
+		}
 		const std::string out =
 		  std::holds_alternative<ldap::bind_request>(r->op) ? bytes_of(bind_resp(r->id)) : bytes_of(done_msg(r->id));
-		if (auto w = co_await net::write_bytes(t, std::as_bytes(std::span(out))); !w)
+		if (auto w = co_await net::write_bytes(t, std::as_bytes(std::span(out))); !w) {
 			co_return "write response: " + std::string(w.error().message());
+		}
 		co_return "";
 	};
-	if (m == mode::refuse) co_return co_await answer_one(plain, buf);
+	if (m == mode::refuse) {
+		co_return co_await answer_one(plain, buf);
+	}
 
 	corosio::openssl_stream tls(&peer, ctx);
 	auto [hec] = co_await tls.handshake(corosio::tls_role::server);
-	if (hec) co_return "server handshake: " + hec.message();
+	if (hec) {
+		co_return "server handshake: " + hec.message();
+	}
 	net::transport secure = net::transport::wrap(stream_ref<corosio::openssl_stream>{ &tls }, "server tls");
 	net::read_buffer tls_buf;
-	if (auto r = co_await answer_one(secure, tls_buf); !r.empty() || (m != mode::unbind && m != mode::unbind_silent))
+	if (auto r = co_await answer_one(secure, tls_buf); !r.empty() || (m != mode::unbind && m != mode::unbind_silent)) {
 		co_return r;
+	}
 
 	auto unbind = co_await net::read_message(secure, tls_buf, as_server);
-	if (!unbind || !std::holds_alternative<ldap::unbind_request>(unbind->op)) co_return "expected an UnbindRequest";
+	if (!unbind || !std::holds_alternative<ldap::unbind_request>(unbind->op)) {
+		co_return "expected an UnbindRequest";
+	}
 	char byte = 0;
 	auto [rec, n] = co_await tls.read_some(capy::mutable_buffer(&byte, 1));
-	if (rec != capy::cond::eof) co_return "expected close_notify, got: " + rec.message();
+	if (rec != capy::cond::eof) {
+		co_return "expected close_notify, got: " + rec.message();
+	}
 	if (m == mode::unbind) {
 		auto [sec] = co_await tls.shutdown();
-		if (sec) co_return "server shutdown: " + sec.message();
+		if (sec) {
+			co_return "server shutdown: " + sec.message();
+		}
 		co_return "";
 	}
 	while (true) {// silent: wait for the client to hang up
 		auto [pec, k] = co_await peer.read_some(capy::mutable_buffer(&byte, 1));
-		if (pec) co_return "";
+		if (pec) {
+			co_return "";
+		}
 	}
 }
 
@@ -308,7 +335,9 @@ TEST_CASE("start_tls: a failed allocation in the handshake's setup closes the co
 		return true;
 	};
 	std::size_t failing = 1;
-	while (fail_one(failing)) ++failing;
+	while (fail_one(failing)) {
+		++failing;
+	}
 	CHECK(failing > 4);// the wait's frames, net::start_tls's, tls_handshake's, the handshake's, bounded()'s
 }
 
@@ -359,7 +388,9 @@ TEST_CASE("start_tls: another exception in the handshake's setup closes the conn
 		return true;
 	};
 	std::size_t failing = 1;
-	while (fail_one(failing)) ++failing;
+	while (fail_one(failing)) {
+		++failing;
+	}
 	CHECK(failing > 4);
 }
 
@@ -611,12 +642,16 @@ capy::task<std::vector<ldap::message>> silent_start_tls(corosio::tcp_acceptor &a
 {
 	std::vector<ldap::message> got;
 	auto [aec, peer] = co_await acc.accept();
-	if (aec) co_return got;
+	if (aec) {
+		co_return got;
+	}
 	net::transport plain = net::transport::wrap(stream_ref<corosio::tcp_socket>{ &peer }, "server");
 	net::read_buffer buf;
 	for (int i = 0; i < 2; ++i) {
 		auto req = co_await net::read_message(plain, buf, as_server);
-		if (!req) break;
+		if (!req) {
+			break;
+		}
 		got.push_back(std::move(*req));
 	}
 	co_return got;
@@ -708,13 +743,18 @@ namespace {
 std::string kind_of(const ldap::message &m)
 {
 	if (const auto *s = std::get_if<ldap::search_request>(&m.op)) {
-		if (s->base_object.empty() && s->attributes == ldap::string_list{ "subschemaSubentry" }) return "root DSE";
-		if (s->base_object == "cn=Subschema") return "subschema";
+		if (s->base_object.empty() && s->attributes == ldap::string_list{ "subschemaSubentry" }) {
+			return "root DSE";
+		}
+		if (s->base_object == "cn=Subschema") {
+			return "subschema";
+		}
 		return "search";
 	}
 	if (const auto *x = std::get_if<ldap::extended_request>(&m.op);
-	  x != nullptr && x->request_name == ldap::start_tls_oid)
+	  x != nullptr && x->request_name == ldap::start_tls_oid) {
 		return "StartTLS";
+	}
 	return "other";
 }
 
@@ -722,18 +762,21 @@ std::string directory_reply(const ldap::message &req)
 {
 	const std::string kind = kind_of(req);
 	std::string out;
-	if (kind == "root DSE")
+	if (kind == "root DSE") {
 		out += bytes_of(
 		  ldap::message{ req.id, ldap::search_result_entry{ "", { { "subschemaSubentry", { "cn=Subschema" } } } } });
-	if (kind == "subschema")
+	}
+	if (kind == "subschema") {
 		out += bytes_of(ldap::message{ req.id,
 		  ldap::search_result_entry{ "cn=Subschema",
 			{ { "attributeTypes",
 				{ "( 0.9.2342.19200300.100.1.1 NAME 'uid' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} )" } },
 			  { "objectClasses", { "( 2.16.840.1.113730.3.2.2 NAME 'inetOrgPerson' STRUCTURAL )" } } } } });
-	if (kind == "StartTLS")
+	}
+	if (kind == "StartTLS") {
 		return bytes_of(
 		  ldap::message{ req.id, ldap::extended_response{ ldap::ldap_result{ 0 }, std::string(ldap::start_tls_oid) } });
+	}
 	return out + bytes_of(done_msg(req.id));
 }
 
@@ -744,30 +787,42 @@ capy::task<std::string>
   serve_directory(corosio::tcp_acceptor &acc, corosio::tls_context ctx, std::vector<std::string> &log)
 {
 	auto [aec, peer] = co_await acc.accept();
-	if (aec) co_return "accept: " + aec.message();
+	if (aec) {
+		co_return "accept: " + aec.message();
+	}
 	net::transport plain = net::transport::wrap(stream_ref<corosio::tcp_socket>{ &peer }, "server");
 	net::read_buffer buf;
 	while (true) {
 		auto req = co_await net::read_message(plain, buf, as_server);
-		if (!req) co_return "read in clear: " + std::string(req.error().message());
+		if (!req) {
+			co_return "read in clear: " + std::string(req.error().message());
+		}
 		log.push_back(kind_of(*req));
 		const std::string reply = directory_reply(*req);
-		if (auto w = co_await net::write_bytes(plain, std::as_bytes(std::span(reply))); !w)
+		if (auto w = co_await net::write_bytes(plain, std::as_bytes(std::span(reply))); !w) {
 			co_return "write: " + std::string(w.error().message());
-		if (log.back() == "StartTLS") break;
+		}
+		if (log.back() == "StartTLS") {
+			break;
+		}
 	}
 	corosio::openssl_stream tls(&peer, ctx);
 	auto [hec] = co_await tls.handshake(corosio::tls_role::server);
-	if (hec) co_return "server handshake: " + hec.message();
+	if (hec) {
+		co_return "server handshake: " + hec.message();
+	}
 	net::transport secure = net::transport::wrap(stream_ref<corosio::openssl_stream>{ &tls }, "server tls");
 	net::read_buffer tls_buf;
 	while (true) {
 		auto req = co_await net::read_message(secure, tls_buf, as_server);
-		if (!req) co_return "";// the client hung up
+		if (!req) {
+			co_return "";// the client hung up
+		}
 		log.push_back("tls " + kind_of(*req));
 		const std::string reply = directory_reply(*req);
-		if (auto w = co_await net::write_bytes(secure, std::as_bytes(std::span(reply))); !w)
+		if (auto w = co_await net::write_bytes(secure, std::as_bytes(std::span(reply))); !w) {
 			co_return "write over TLS: " + std::string(w.error().message());
+		}
 	}
 }
 

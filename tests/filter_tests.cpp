@@ -47,10 +47,11 @@ ldap::result<ldap::filter> from_ber(std::span<const std::byte> bytes, const ldap
 {
 	ber::reader r(bytes);
 	auto f = ldap::decode_filter(r, limits);
-	if (f)
+	if (f) {
 		CHECK(r.empty());
-	else
+	} else {
 		CHECK(r.offset() == 0);// unchanged on failure
+	}
 	return f;
 }
 
@@ -184,7 +185,9 @@ TEST_CASE("filter builders make one-node trees with unescaped values", "[filter]
 			  == "(&(x=1)(y=2)(z=3)(w=4))");
 		// Long chains stay flat, far below max_filter_depth.
 		ldap::filter all = a;
-		for (int i = 0; i < 200; ++i) all = all && (attr("n") == std::to_string(i));
+		for (int i = 0; i < 200; ++i) {
+			all = all && (attr("n") == std::to_string(i));
+		}
 		CHECK(all.depth() == 2);
 		CHECK(all.elements() == 202);
 		CHECK(to_ber(all).has_value());
@@ -270,14 +273,16 @@ TEST_CASE("combining parsed filters cannot change their meaning", "[filter][buil
 			const std::string pt = text_of(p);
 			const auto or_ = text_of(p || c);
 			const auto and_ = text_of(c && p);
-			if (p.root().kind() == ldap::filter::kind::or_)
+			if (p.root().kind() == ldap::filter::kind::or_) {
 				CHECK(or_ == pt.substr(0, pt.size() - 1) + "(c=3))");
-			else
+			} else {
 				CHECK(or_ == "(|" + pt + "(c=3))");
-			if (p.root().kind() == ldap::filter::kind::and_)
+			}
+			if (p.root().kind() == ldap::filter::kind::and_) {
 				CHECK(and_ == "(&(c=3)" + pt.substr(2));
-			else
+			} else {
 				CHECK(and_ == "(&(c=3)" + pt + ")");
+			}
 			// And the combination is the tree that parsing its text gives.
 			CHECK(raw(or_) == (p || c));
 			CHECK(raw(and_) == (c && p));
@@ -566,9 +571,13 @@ TEST_CASE("filter nesting is bounded", "[filter][limits]")
 {
 	auto nested = [](std::size_t depth, const std::string &open) {
 		std::string t;
-		for (std::size_t i = 1; i < depth; ++i) t += open;
+		for (std::size_t i = 1; i < depth; ++i) {
+			t += open;
+		}
 		t += "(a=b)";
-		for (std::size_t i = 1; i < depth; ++i) t += ")";
+		for (std::size_t i = 1; i < depth; ++i) {
+			t += ")";
+		}
 		return t;
 	};
 	CHECK(raw(nested(ldap::max_filter_depth, "(&")).depth() == ldap::max_filter_depth);
@@ -588,10 +597,14 @@ TEST_CASE("filter nesting is bounded", "[filter][limits]")
 	// Bombs fail quickly without deep recursion.
 	CHECK(ldap::filter::raw(std::string(100'000, '(')).error().code == client_errc::invalid_filter);
 	std::string bomb;
-	for (int i = 0; i < 100'000; ++i) bomb += "(!";
+	for (int i = 0; i < 100'000; ++i) {
+		bomb += "(!";
+	}
 	CHECK(ldap::filter::raw(bomb).error().code == client_errc::invalid_filter);
 	bomb.clear();
-	for (int i = 0; i < 100'000; ++i) bomb += "(&";
+	for (int i = 0; i < 100'000; ++i) {
+		bomb += "(&";
+	}
 	CHECK(ldap::filter::raw(bomb).error().code == client_errc::invalid_filter);
 }
 
@@ -601,7 +614,9 @@ TEST_CASE("builders beyond the limits fail when encoded", "[filter][limits][buil
 	SECTION("depth: fails with invalid_filter, before anything is written")
 	{
 		auto f = attr("a") == "b";
-		for (std::size_t i = 1; i < ldap::max_filter_depth; ++i) f = !std::move(f);
+		for (std::size_t i = 1; i < ldap::max_filter_depth; ++i) {
+			f = !std::move(f);
+		}
 		CHECK(f.depth() == ldap::max_filter_depth);
 		CHECK(to_ber(f).has_value());
 		f = !std::move(f);
@@ -615,7 +630,9 @@ TEST_CASE("builders beyond the limits fail when encoded", "[filter][limits][buil
 	{
 		// No recursion anywhere except encoding, which refuses it first.
 		auto f = attr("a") == "b";
-		for (int i = 0; i < 200'000; ++i) f = !std::move(f);
+		for (int i = 0; i < 200'000; ++i) {
+			f = !std::move(f);
+		}
 		CHECK(f.depth() == 200'001);
 		const auto copy = f;
 		CHECK(copy == f);
@@ -627,16 +644,19 @@ TEST_CASE("builders beyond the limits fail when encoded", "[filter][limits][buil
 		CHECK(text.ends_with("))))"));
 		CHECK(to_ber(f).error().code == client_errc::invalid_filter);
 		auto alternating = attr("a") == "b";
-		for (int i = 0; i < 100'000; ++i)
+		for (int i = 0; i < 100'000; ++i) {
 			alternating =
 			  i % 2 == 0 ? (std::move(alternating) || attr("x") == "1") : (std::move(alternating) && attr("y") == "2");
+		}
 		CHECK(alternating.depth() == 100'001);
 		CHECK(to_ber(alternating).error().code == client_errc::invalid_filter);
 	}
 	SECTION("elements")
 	{
 		auto f = attr("m") == "0";
-		for (std::size_t i = 1; i + 1 < ldap::max_filter_elements; ++i) f = std::move(f) || attr("m") == "1";
+		for (std::size_t i = 1; i + 1 < ldap::max_filter_elements; ++i) {
+			f = std::move(f) || attr("m") == "1";
+		}
 		CHECK(f.elements() == ldap::max_filter_elements);
 		CHECK(to_ber(f).has_value());
 		f = std::move(f) || attr("m") == "2";
@@ -686,12 +706,18 @@ TEST_CASE("building long chains is linear in either direction", "[filter][builde
 	constexpr int n = 100'000;
 	const auto start = std::chrono::steady_clock::now();
 	ldap::filter left = attr("a") == "0";
-	for (int i = 1; i < n; ++i) left = std::move(left) || attr("a") == "1";
+	for (int i = 1; i < n; ++i) {
+		left = std::move(left) || attr("a") == "1";
+	}
 	ldap::filter right = attr("a") == "0";
-	for (int i = 1; i < n; ++i) right = attr("a") == "1" || std::move(right);
+	for (int i = 1; i < n; ++i) {
+		right = attr("a") == "1" || std::move(right);
+	}
 	ldap::filter lvalue_right = attr("a") == "0";
 	const auto leaf = attr("a") == "1";
-	for (int i = 1; i < n; ++i) lvalue_right = leaf || std::move(lvalue_right);
+	for (int i = 1; i < n; ++i) {
+		lvalue_right = leaf || std::move(lvalue_right);
+	}
 	const auto elapsed = std::chrono::steady_clock::now() - start;
 	CHECK(left.elements() == n + 1);
 	CHECK(right.elements() == n + 1);
@@ -705,7 +731,9 @@ TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limit
 {
 	auto and_of = [](std::size_t children) {
 		std::string t = "(&";
-		for (std::size_t i = 0; i < children; ++i) t += "(a=*)";
+		for (std::size_t i = 0; i < children; ++i) {
+			t += "(a=*)";
+		}
 		return t + ")";
 	};
 	// The AND itself counts: 1 + 9,999 children is the maximum.
@@ -724,7 +752,9 @@ TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limit
 	CHECK(ldap::filters::attr("cn").contains("x").elements() == 2);
 	// A substring filter with a huge number of parts is capped like any other.
 	std::string many = "(a=";
-	for (std::size_t i = 0; i < ldap::max_filter_elements; ++i) many += "x*";
+	for (std::size_t i = 0; i < ldap::max_filter_elements; ++i) {
+		many += "x*";
+	}
 	many += "x)";
 	auto capped = ldap::filter::raw(many);
 	REQUIRE_FALSE(capped);
@@ -738,7 +768,9 @@ TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limit
 	auto ber_and_of = [](std::size_t children) {
 		ber::writer w;
 		w.constructed(ber::context(0), [&](ber::writer &a) {
-			for (std::size_t i = 0; i < children; ++i) a.octet_string("a", ber::context(7));
+			for (std::size_t i = 0; i < children; ++i) {
+				a.octet_string("a", ber::context(7));
+			}
 		});
 		return w.take();
 	};
@@ -866,7 +898,9 @@ TEST_CASE("decode_filter rejects BER without an RFC 4515 form", "[filter][decode
 TEST_CASE("equality builder round-trips every byte", "[filter][builder]")
 {
 	std::string all;
-	for (int c = 0; c < 256; ++c) all += static_cast<char>(c);
+	for (int c = 0; c < 256; ++c) {
+		all += static_cast<char>(c);
+	}
 	for (const std::string &v : { all, ""s, "*"s, "\\"s, "()"s, "\0"s }) {
 		const auto f = ldap::filters::attr("cn") == v;
 		auto b = to_ber(f);
@@ -974,7 +1008,9 @@ TEST_CASE("unescape_filter_value", "[filter][escape]")
 	CHECK(r.error().context.find(what) != std::string::npos);
 	// filter::raw rejects the same value (an unescaped '*' would make it a
 	// substring filter there).
-	if (text.find('*') == std::string::npos) CHECK_FALSE(ldap::filter::raw("(cn=" + text + ")").has_value());
+	if (text.find('*') == std::string::npos) {
+		CHECK_FALSE(ldap::filter::raw("(cn=" + text + ")").has_value());
+	}
 }
 
 // ---------------------------------------------------------------- RFC conformance

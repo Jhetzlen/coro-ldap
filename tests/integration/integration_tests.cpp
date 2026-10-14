@@ -68,7 +68,9 @@ ldap::connection open(corosio::io_context &ioc, const std::string &url, const ld
 	auto u = ldap::url::parse(url);
 	REQUIRE(u.has_value());
 	auto c = finish(ioc, ldap::connect(ioc, *u, o));
-	if (!c) FAIL("connect " << url << ": " << c.error().message());
+	if (!c) {
+		FAIL("connect " << url << ": " << c.error().message());
+	}
 	return std::move(*c);
 }
 
@@ -76,7 +78,9 @@ ldap::connection open_admin(corosio::io_context &ioc)
 {
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	auto b = finish(ioc, c.simple_bind(admin, "secret"));
-	if (!b) FAIL("bind: " << b.error().message());
+	if (!b) {
+		FAIL("bind: " << b.error().message());
+	}
 	return c;
 }
 
@@ -107,10 +111,14 @@ class anonymous_binds_disallowed
 	  : ioc_(ioc), config_(open(ioc, env("JHETZ_LDAP_IT_LDAP")))
 	{
 		auto b = finish(ioc_, config_.simple_bind(config_dn, "secret"));
-		if (!b) FAIL("bind as cn=config: " << b.error().message());
+		if (!b) {
+			FAIL("bind as cn=config: " << b.error().message());
+		}
 		auto m = finish(ioc_,
 		  config_.modify({ .object = config_dn, .changes = { ldap::mod::add("olcDisallows", { "bind_anon" }) } }));
-		if (!m) FAIL("disallow bind_anon: " << m.error().message());
+		if (!m) {
+			FAIL("disallow bind_anon: " << m.error().message());
+		}
 	}
 
 	anonymous_binds_disallowed(const anonymous_binds_disallowed &) = delete;
@@ -128,9 +136,13 @@ class anonymous_binds_disallowed
 			  config_.modify(
 				{ .object = config_dn, .changes = { ldap::mod::remove("olcDisallows", { "bind_anon" }) } }));
 			restored = m.has_value();
-			if (!m) why = ": " + std::string(m.error().message());
+			if (!m) {
+				why = ": " + std::string(m.error().message());
+			}
 		} catch (...) {}
-		if (restored) return;
+		if (restored) {
+			return;
+		}
 		try {
 			FAIL_CHECK("could not allow bind_anon again, later tests run with it disallowed" << why);
 		} catch (...) {}
@@ -155,7 +167,9 @@ std::string unique(std::string_view stem)
 
 TEST_CASE("integration: every transport", "[integration]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	SECTION("ldap://")
 	{
@@ -187,7 +201,9 @@ TEST_CASE("integration: every transport", "[integration]")
 
 TEST_CASE("integration: bind success and failure", "[integration]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	auto bad = finish(ioc, c.simple_bind(admin, "wrong"));
@@ -200,7 +216,9 @@ TEST_CASE("integration: bind success and failure", "[integration]")
 
 TEST_CASE("integration: SASL EXTERNAL", "[integration][sasl]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	SECTION("over ldapi:// (peer credentials)")
 	{
@@ -225,7 +243,9 @@ TEST_CASE("integration: SASL EXTERNAL", "[integration][sasl]")
 
 TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	// slapd offers SCRAM-SHA-256 only with cyrus-sasl's scram plugin installed.
@@ -234,8 +254,9 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 	REQUIRE(dse.has_value());
 	REQUIRE(dse->size() == 1);
 	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");
-	if (mechs == nullptr || std::ranges::find(*mechs, "SCRAM-SHA-256") == mechs->end())
+	if (mechs == nullptr || std::ranges::find(*mechs, "SCRAM-SHA-256") == mechs->end()) {
 		SKIP("slapd does not offer SCRAM-SHA-256 (cyrus-sasl scram plugin not installed)");
+	}
 
 	SECTION("the right password")
 	{
@@ -323,7 +344,9 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 
 TEST_CASE("integration: plain, streaming and paged searches", "[integration]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	const ldap::search_params all_users{ .base = people,
@@ -340,7 +363,9 @@ TEST_CASE("integration: plain, streaming and paged searches", "[integration]")
 	while (true) {
 		auto e = finish(ioc, s->next());
 		REQUIRE(e.has_value());
-		if (!*e) break;
+		if (!*e) {
+			break;
+		}
 		++streamed;
 	}
 	CHECK(streamed == 250);
@@ -351,7 +376,9 @@ TEST_CASE("integration: plain, streaming and paged searches", "[integration]")
 	while (true) {
 		auto e = finish(ioc, p->next());
 		REQUIRE(e.has_value());
-		if (!*e) break;
+		if (!*e) {
+			break;
+		}
 		++paged;
 	}
 	CHECK(paged == 250);
@@ -378,16 +405,25 @@ ldap::result<manual_page>
 {
 	params.controls = { std::move(control) };
 	auto s = finish(ioc, c.search_stream(std::move(params)));
-	if (!s) return std::unexpected(std::move(s.error()));
+	if (!s) {
+		return std::unexpected(std::move(s.error()));
+	}
 	manual_page out;
 	while (true) {
 		auto e = finish(ioc, s->next());
-		if (!e) return std::unexpected(std::move(e.error()));
-		if (!*e) break;
+		if (!e) {
+			return std::unexpected(std::move(e.error()));
+		}
+		if (!*e) {
+			break;
+		}
 		++out.entries;
 	}
-	for (const auto &ctl : s->controls())
-		if (ctl.type == ldap::paged_results_oid) out.cookie = std::string(ldap::decode_paged_results(ctl)->cookie);
+	for (const auto &ctl : s->controls()) {
+		if (ctl.type == ldap::paged_results_oid) {
+			out.cookie = std::string(ldap::decode_paged_results(ctl)->cookie);
+		}
+	}
 	return out;
 }
 
@@ -395,7 +431,9 @@ ldap::result<manual_page>
 
 TEST_CASE("integration: a paged search stopped between pages sends a release", "[integration]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto u = env("JHETZ_LDAP_IT_LDAP");
 	u.replace(u.find("127.0.0.1"), 9, "localhost");// the certificate's name, for StartTLS
@@ -441,7 +479,9 @@ TEST_CASE("integration: a paged search stopped between pages sends a release", "
 
 TEST_CASE("integration: large and binary values", "[integration]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAPS"));
 	auto big = finish(ioc,
@@ -458,7 +498,9 @@ TEST_CASE("integration: large and binary values", "[integration]")
 	const auto &bytes = (*photo)[0].find("jpegPhoto")->front();
 	REQUIRE(bytes.size() == 10000);
 	bool same = true;
-	for (std::size_t i = 0; i < bytes.size(); ++i) same = same && static_cast<unsigned char>(bytes[i]) == i % 251;
+	for (std::size_t i = 0; i < bytes.size(); ++i) {
+		same = same && static_cast<unsigned char>(bytes[i]) == i % 251;
+	}
 	CHECK(same);
 }
 
@@ -485,7 +527,9 @@ constexpr auto ldap::schema<person> = ldap::describe(ldap::object_class("inetOrg
 
 TEST_CASE("integration: typed search with the server's schema", "[integration][mapping]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"), trusting({ .schema_check = ldap::schema_check::on_first_use }));
 	auto s = finish(ioc, c.load_schema());
@@ -508,7 +552,9 @@ TEST_CASE("integration: typed search with the server's schema", "[integration][m
 
 TEST_CASE("integration: add, modify, compare, rename and delete", "[integration]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto c = open_admin(ioc);
 	const std::string name = unique("it");
@@ -552,7 +598,9 @@ TEST_CASE("integration: add, modify, compare, rename and delete", "[integration]
 
 TEST_CASE("integration: assertion and pre/post-read controls", "[integration][controls]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto c = open_admin(ioc);
 	const std::string name = unique("ctl");
@@ -627,7 +675,9 @@ TEST_CASE("integration: assertion and pre/post-read controls", "[integration][co
 
 TEST_CASE("integration: the relax rules control", "[integration][controls]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto c = open_admin(ioc);
 	const std::string name = unique("relax");
@@ -659,8 +709,12 @@ TEST_CASE("integration: the relax rules control", "[integration][controls]")
 
 TEST_CASE("integration: server side sort", "[integration][controls]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
-	if (env("JHETZ_LDAP_IT_SORT").empty()) SKIP("slapd without the sssvlv overlay");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	if (env("JHETZ_LDAP_IT_SORT").empty()) {
+		SKIP("slapd without the sssvlv overlay");
+	}
 	corosio::io_context ioc;
 	auto c = open_admin(ioc);
 	auto s = finish(ioc,
@@ -674,7 +728,9 @@ TEST_CASE("integration: server side sort", "[integration][controls]")
 	while (true) {
 		auto e = finish(ioc, s->next());
 		REQUIRE(e.has_value());
-		if (!*e) break;
+		if (!*e) {
+			break;
+		}
 		REQUIRE((*e)->find("uid") != nullptr);
 		uids.emplace_back((*e)->find("uid")->front());
 	}
@@ -724,16 +780,25 @@ ldap::result<uid_page>
 {
 	params.controls.emplace_back(std::move(control));
 	auto s = finish(ioc, c.search_stream(std::move(params)));
-	if (!s) return std::unexpected(std::move(s.error()));
+	if (!s) {
+		return std::unexpected(std::move(s.error()));
+	}
 	uid_page out;
 	while (true) {
 		auto e = finish(ioc, s->next());
-		if (!e) return std::unexpected(std::move(e.error()));
-		if (!*e) break;
+		if (!e) {
+			return std::unexpected(std::move(e.error()));
+		}
+		if (!*e) {
+			break;
+		}
 		out.uids.emplace_back((*e)->find("uid")->front());
 	}
-	for (const auto &ctl : s->controls())
-		if (ctl.type == ldap::paged_results_oid) out.cookie = std::string(ldap::decode_paged_results(ctl)->cookie);
+	for (const auto &ctl : s->controls()) {
+		if (ctl.type == ldap::paged_results_oid) {
+			out.cookie = std::string(ldap::decode_paged_results(ctl)->cookie);
+		}
+	}
 	return out;
 }
 
@@ -743,9 +808,10 @@ ldap::search_params hundred_users(int n, bool sorted)
 	ldap::search_params p{ .base = people,
 		.filter = ldap::filters::attr("uid").starts_with("user" + std::to_string(n)),
 		.attributes = { "uid" } };
-	if (sorted)
+	if (sorted) {
 		p.controls.emplace_back(ldap::server_side_sort{
 		  .keys = { { .attribute = "sn", .ordering_rule = "caseIgnoreOrderingMatch", .reverse = true } } });
+	}
 	return p;
 }
 
@@ -753,7 +819,9 @@ ldap::search_params hundred_users(int n, bool sorted)
 std::vector<std::string> descending_uids(int n, int first, int count)
 {
 	std::vector<std::string> out;
-	for (int i = 0; i < count; ++i) out.emplace_back(std::format("user{}{:02}", n, 99 - first - i));
+	for (int i = 0; i < count; ++i) {
+		out.emplace_back(std::format("user{}{:02}", n, 99 - first - i));
+	}
 	return out;
 }
 
@@ -772,8 +840,12 @@ std::vector<std::string> descending_uids(int n, int first, int count)
 // one connection each, which this checks.
 TEST_CASE("integration: concurrent paged searches with and without sorting", "[integration][controls]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
-	if (env("JHETZ_LDAP_IT_SORT").empty()) SKIP("slapd without the sssvlv overlay");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	if (env("JHETZ_LDAP_IT_SORT").empty()) {
+		SKIP("slapd without the sssvlv overlay");
+	}
 	corosio::io_context ioc;
 
 	SECTION("unsorted on one connection: the older search's cookie is refused")
@@ -835,10 +907,14 @@ TEST_CASE("integration: concurrent paged searches with and without sorting", "[i
 		for (bool more = true; more;) {
 			more = false;
 			for (std::size_t i = 0; i < searches.size(); ++i) {
-				if (searches[i].done()) continue;
+				if (searches[i].done()) {
+					continue;
+				}
 				auto e = finish(ioc, searches[i].next());
 				REQUIRE(e.has_value());
-				if (!*e) continue;
+				if (!*e) {
+					continue;
+				}
 				uids[i].emplace_back((*e)->find("uid")->front());
 				more = true;
 			}
@@ -855,7 +931,9 @@ TEST_CASE("integration: concurrent paged searches with and without sorting", "[i
 
 TEST_CASE("integration: password modify (RFC 3062)", "[integration]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto c = open_admin(ioc);
 	const std::string name = unique("pw");
@@ -899,7 +977,9 @@ TEST_CASE("integration: password modify (RFC 3062)", "[integration]")
 
 TEST_CASE("integration: change_password and reset_password pick RFC 3062", "[integration][password]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto c = open_admin(ioc);
 	const std::string name = unique("pwc");
@@ -940,7 +1020,9 @@ TEST_CASE("integration: change_password and reset_password pick RFC 3062", "[int
 
 TEST_CASE("integration: the sync connection", "[integration][sync]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	SECTION("StartTLS, then writes")
 	{
 		ldap::sync::connection c(trusting());
@@ -1000,7 +1082,9 @@ TEST_CASE("integration: the sync connection", "[integration][sync]")
 
 TEST_CASE("integration: cancellation mid-search", "[integration]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	{
@@ -1041,19 +1125,29 @@ enum class fault {
 capy::task<void> proxy(corosio::io_context &ioc, corosio::tcp_acceptor &acc, std::uint16_t server_port, fault f)
 {
 	auto [aec, client] = co_await acc.accept();
-	if (aec) co_return;
+	if (aec) {
+		co_return;
+	}
 	corosio::tcp_socket server(ioc);
 	auto [cec] = co_await server.connect(corosio::endpoint(corosio::ipv4_address::loopback(), server_port));
-	if (cec) co_return;
+	if (cec) {
+		co_return;
+	}
 	net::transport to_client = net::transport::wrap(std::move(client), "proxy client");
 	net::transport to_server = net::transport::wrap(std::move(server), "proxy server");
 	net::read_buffer from_client, from_server;
 	// One request in, one (broken) answer out.
 	auto req = co_await net::read_frame(to_client, from_client, ldap::ber::default_max_message_size);
-	if (!req) co_return;
-	if (auto w = co_await net::write_bytes(to_server, from_client.data().first(*req)); !w) co_return;
+	if (!req) {
+		co_return;
+	}
+	if (auto w = co_await net::write_bytes(to_server, from_client.data().first(*req)); !w) {
+		co_return;
+	}
 	auto resp = co_await net::read_frame(to_server, from_server, ldap::ber::default_max_message_size);
-	if (!resp) co_return;
+	if (!resp) {
+		co_return;
+	}
 	switch (f) {
 	case fault::truncate:
 		(void)co_await net::write_bytes(to_client, from_server.data().first(*resp / 2));
@@ -1078,7 +1172,9 @@ capy::task<void> proxy(corosio::io_context &ioc, corosio::tcp_acceptor &acc, std
 
 TEST_CASE("integration: a broken server answer closes the connection", "[integration][faults]")
 {
-	if (!have_slapd()) SKIP("no slapd: run under run_slapd.sh");
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
 	const auto server = ldap::url::parse(env("JHETZ_LDAP_IT_LDAP"));
 	REQUIRE(server.has_value());
 	const struct

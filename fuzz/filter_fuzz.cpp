@@ -86,7 +86,9 @@ void check_text(std::string_view text)
 	// Combining keeps a parsed operand's meaning (when (!f) is still within
 	// the limits: f may be at the depth or element limit already).
 	const auto neg = !*f;
-	if (neg.depth() > ldap::max_filter_depth || neg.elements() > ldap::max_filter_elements) return;
+	if (neg.depth() > ldap::max_filter_depth || neg.elements() > ldap::max_filter_elements) {
+		return;
+	}
 	check(std::string(neg.to_string()) == "(!" + std::string(f->to_string()) + ")",
 	  "std::string(neg.to_string()) == \"(!\" + std::string(f->to_string()) + \")\"");
 	const auto operand = must_encode(*f);
@@ -125,7 +127,9 @@ void check_value(std::string_view v)
 		attr("cn").ends_with(v),
 		attr("cn").contains(v),
 		!(eq && attr("sn").present()) || eq };
-	for (const auto &f : all) check_round_trips(f);
+	for (const auto &f : all) {
+		check_round_trips(f);
+	}
 	if (!v.empty()) {
 		check(all[3].root().initial() == v, "all[3].root().initial() == v");
 		check(all[4].root().final() == v, "all[4].root().final() == v");
@@ -135,7 +139,9 @@ void check_value(std::string_view v)
 
 void check_unescape(std::string_view text)
 {
-	if (text.find('*') != std::string_view::npos) return;// a substring filter in raw
+	if (text.find('*') != std::string_view::npos) {
+		return;// a substring filter in raw
+	}
 	const auto u = ldap::unescape_filter_value(text);
 	const auto f = ldap::filter::raw("(cn=" + std::string(text) + ")");
 	check(u.has_value() == f.has_value(), "u.has_value() == f.has_value()");

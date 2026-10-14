@@ -105,7 +105,9 @@ auto g = attr("uidNumber") >= "1000" && attr("sn").approx("smith");
 
 // Text from config or users: parsed once, here.
 ldap::result<ldap::filter> h = ldap::filter::raw("(&(uid=jdoe)(mail=*))");
-if (h) f = std::move(f) && *h;
+if (h) {
+    f = std::move(f) && *h;
+}
 
 f.to_string();   // "(&(objectClass=person)...)" for logs
 ```

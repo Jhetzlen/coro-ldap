@@ -42,9 +42,13 @@ namespace {
 		std::size_t pos = 0;
 		while (true) {
 			const std::size_t b = pem.find(begin, pos);
-			if (b == std::string_view::npos) break;
+			if (b == std::string_view::npos) {
+				break;
+			}
 			const std::size_t e = pem.find(end, b);
-			if (e == std::string_view::npos) break;
+			if (e == std::string_view::npos) {
+				break;
+			}
 			out.emplace_back(pem.substr(b, e + end.size() - b));
 			out.back() += '\n';
 			pos = e + end.size();
@@ -80,7 +84,9 @@ namespace {
 	// truncated length, or a negative one (-1 means "up to the first NUL").
 	bio_ptr pem_bio(const std::string &pem)
 	{
-		if (pem.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return nullptr;
+		if (pem.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+			return nullptr;
+		}
 		return bio_ptr(BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())));
 	}
 
@@ -91,7 +97,9 @@ namespace {
 	bool parses_as_certificate(const std::string &pem)
 	{
 		const bio_ptr bio = pem_bio(pem);
-		if (bio && x509_ptr(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr)) != nullptr) return true;
+		if (bio && x509_ptr(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr)) != nullptr) {
+			return true;
+		}
 		ERR_clear_error();
 		return false;
 	}
@@ -136,23 +144,31 @@ namespace {
 	std::optional<std::string> read_file(const std::filesystem::path &path)
 	{
 		std::ifstream in(path, std::ios::binary);
-		if (!in) return std::nullopt;
+		if (!in) {
+			return std::nullopt;
+		}
 		std::ostringstream s;
 		s << in.rdbuf();
-		if (in.bad()) return std::nullopt;
+		if (in.bad()) {
+			return std::nullopt;
+		}
 		return std::move(s).str();
 	}
 
 	result<void> add_cas(corosio::tls_context &ctx, std::string_view pem, const std::string &what)
 	{
 		const auto certs = split_pem_certificates(pem);
-		if (certs.empty())
+		if (certs.empty()) {
 			return fail(std::make_error_code(std::errc::invalid_argument), what + ": no PEM certificate found");
+		}
 		for (std::size_t i = 0; i < certs.size(); ++i) {
-			if (!parses_as_certificate(certs[i]))
+			if (!parses_as_certificate(certs[i])) {
 				return fail(std::make_error_code(std::errc::invalid_argument),
 				  ldap::detail::format("{}: certificate {} of {} does not parse", what, i + 1, certs.size()));
-			if (auto ec = ctx.add_certificate_authority(certs[i]); ec) return fail(ec, what);
+			}
+			if (auto ec = ctx.add_certificate_authority(certs[i]); ec) {
+				return fail(ec, what);
+			}
 		}
 		return {};
 	}
@@ -177,7 +193,9 @@ namespace {
 
 	result<void> check(std::error_code ec, const std::string &what)
 	{
-		if (ec) return fail(ec, what);
+		if (ec) {
+			return fail(ec, what);
+		}
 		return {};
 	}
 
@@ -188,39 +206,52 @@ result<tls_setup> make_tls_setup(const tls_options &o)
 	tls_setup setup;
 	auto &ctx = setup.context;
 
-	if (has_control_character(o.server_name))
+	if (has_control_character(o.server_name)) {
 		return fail(std::make_error_code(std::errc::invalid_argument), "tls: control character in server_name");
+	}
 
-	if (auto r = check(ctx.set_min_protocol_version(o.min_version), "tls: minimum protocol version"); !r)
+	if (auto r = check(ctx.set_min_protocol_version(o.min_version), "tls: minimum protocol version"); !r) {
 		return std::unexpected(std::move(r.error()));
+	}
 
 	if (o.verification == certificate_verification::full) {
-		if (auto r = check(ctx.set_verify_mode(corosio::tls_verify_mode::peer), "tls: verify mode"); !r)
+		if (auto r = check(ctx.set_verify_mode(corosio::tls_verify_mode::peer), "tls: verify mode"); !r) {
 			return std::unexpected(std::move(r.error()));
+		}
 		const bool custom_trust = !o.ca_file.empty() || !o.ca_dir.empty() || !o.ca_pem.empty();
 		if (!custom_trust) {
-			if (auto r = check(ctx.set_default_verify_paths(), "tls: system trust store"); !r)
+			if (auto r = check(ctx.set_default_verify_paths(), "tls: system trust store"); !r) {
 				return std::unexpected(std::move(r.error()));
+			}
 		}
 		if (!o.ca_file.empty()) {
 			const std::string what = "tls: ca_file " + o.ca_file.string();
 			auto pem = read_file(o.ca_file);
-			if (!pem) return fail(std::make_error_code(std::errc::no_such_file_or_directory), what);
-			if (auto r = add_cas(ctx, *pem, what); !r) return std::unexpected(std::move(r.error()));
+			if (!pem) {
+				return fail(std::make_error_code(std::errc::no_such_file_or_directory), what);
+			}
+			if (auto r = add_cas(ctx, *pem, what); !r) {
+				return std::unexpected(std::move(r.error()));
+			}
 		}
 		if (!o.ca_dir.empty()) {
 			const std::string what = "tls: ca_dir " + o.ca_dir.string();
 			std::error_code ec;
 			const auto status = std::filesystem::status(o.ca_dir, ec);
-			if (!std::filesystem::exists(status))
+			if (!std::filesystem::exists(status)) {
 				return fail(std::make_error_code(std::errc::no_such_file_or_directory), what);
-			if (!std::filesystem::is_directory(status))
+			}
+			if (!std::filesystem::is_directory(status)) {
 				return fail(std::make_error_code(std::errc::not_a_directory), what);
-			if (auto r = check(ctx.add_verify_path(o.ca_dir.string()), what); !r)
+			}
+			if (auto r = check(ctx.add_verify_path(o.ca_dir.string()), what); !r) {
 				return std::unexpected(std::move(r.error()));
+			}
 		}
 		if (!o.ca_pem.empty()) {
-			if (auto r = add_cas(ctx, o.ca_pem, "tls: ca_pem"); !r) return std::unexpected(std::move(r.error()));
+			if (auto r = add_cas(ctx, o.ca_pem, "tls: ca_pem"); !r) {
+				return std::unexpected(std::move(r.error()));
+			}
 		}
 		// Records why verification failed; the handshake error itself only
 		// says "certificate verify failed". Never relaxes the built-in
@@ -229,7 +260,9 @@ result<tls_setup> make_tls_setup(const tls_options &o)
 		// the X509_CHECK_FLAG_* flags, so the check is redone here).
 		ctx.set_verify_callback([failure = setup.failure](bool preverified, corosio::verify_context &vc) {
 			auto *store = static_cast<X509_STORE_CTX *>(vc.native_handle());
-			if (store == nullptr) return preverified;
+			if (store == nullptr) {
+				return preverified;
+			}
 			if (preverified && !failure->strict_host.empty() && X509_STORE_CTX_get_error_depth(store) == 0) {
 				const std::string &host = failure->strict_host;
 				constexpr unsigned flags = X509_CHECK_FLAG_NEVER_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS;
@@ -237,10 +270,11 @@ result<tls_setup> make_tls_setup(const tls_options &o)
 					!= 1) {
 					X509_STORE_CTX_set_error(store, X509_V_ERR_HOSTNAME_MISMATCH);
 					preverified = false;
-					if (failure->reason.empty())
+					if (failure->reason.empty()) {
 						failure->reason =
 						  "hostname mismatch (strict matching: subjectAltName DNS names only, no "
 						  "partial wildcards; certificate depth 0)";
+					}
 				}
 			}
 			if (!preverified && failure->reason.empty()) {
@@ -252,38 +286,51 @@ result<tls_setup> make_tls_setup(const tls_options &o)
 			return preverified;
 		});
 	} else {
-		if (auto r = check(ctx.set_verify_mode(corosio::tls_verify_mode::none), "tls: verify mode"); !r)
+		if (auto r = check(ctx.set_verify_mode(corosio::tls_verify_mode::none), "tls: verify mode"); !r) {
 			return std::unexpected(std::move(r.error()));
+		}
 	}
 
-	if (o.cert_file.empty() != o.key_file.empty())
+	if (o.cert_file.empty() != o.key_file.empty()) {
 		return fail(
 		  std::make_error_code(std::errc::invalid_argument), "tls: cert_file and key_file must be given together");
+	}
 	if (!o.cert_file.empty()) {
 		const std::string cert_what = "tls: cert_file " + o.cert_file.string();
 		const std::string key_what = "tls: key_file " + o.key_file.string();
 		const auto cert_pem = read_file(o.cert_file);
-		if (!cert_pem) return fail(std::make_error_code(std::errc::no_such_file_or_directory), cert_what);
+		if (!cert_pem) {
+			return fail(std::make_error_code(std::errc::no_such_file_or_directory), cert_what);
+		}
 		const auto key_pem = read_file(o.key_file);
-		if (!key_pem) return fail(std::make_error_code(std::errc::no_such_file_or_directory), key_what);
-		if (auto r = check_client_credentials(*cert_pem, *key_pem, cert_what, key_what); !r)
+		if (!key_pem) {
+			return fail(std::make_error_code(std::errc::no_such_file_or_directory), key_what);
+		}
+		if (auto r = check_client_credentials(*cert_pem, *key_pem, cert_what, key_what); !r) {
 			return std::unexpected(std::move(r.error()));
+		}
 		if (auto r =
 			  check(ctx.use_certificate_chain_file(o.cert_file.string()), "tls: cert_file " + o.cert_file.string());
-		  !r)
+		  !r) {
 			return std::unexpected(std::move(r.error()));
+		}
 		if (auto r = check(ctx.use_private_key_file(o.key_file.string(), corosio::tls_file_format::pem),
 			  "tls: key_file " + o.key_file.string());
-		  !r)
+		  !r) {
 			return std::unexpected(std::move(r.error()));
+		}
 	}
 	return setup;
 }
 
 std::string tls_peer_name(std::string_view host, const tls_options &options)
 {
-	if (!options.server_name.empty()) return std::string(options.server_name);
-	if (host.contains(':')) host = host.substr(0, host.find('%'));// IPv6 literal
+	if (!options.server_name.empty()) {
+		return std::string(options.server_name);
+	}
+	if (host.contains(':')) {
+		host = host.substr(0, host.find('%'));// IPv6 literal
+	}
 	return std::string(host);
 }
 
@@ -294,11 +341,14 @@ boost::capy::task<result<void>> tls_handshake(transport::impl &im,
   deadline_t deadline)
 {
 	// The documented precondition; both callers check for an open TCP transport.
-	if (!im.tcp) co_return fail(std::make_error_code(std::errc::invalid_argument), "tls handshake: no TCP socket");
+	if (!im.tcp) {
+		co_return fail(std::make_error_code(std::errc::invalid_argument), "tls handshake: no TCP socket");
+	}
 	const std::string name = tls_peer_name(host, options);
 	if (options.verification == certificate_verification::full && options.host_matching == host_name_matching::strict
-		&& !is_ip_literal(name))
+		&& !is_ip_literal(name)) {
 		setup.failure->strict_host = name;
+	}
 	// im.tls is set before the handshake and kept only if it succeeds:
 	// transport::is_tls() is true during the handshake, so a caller that
 	// needs "TLS protects the stream" must also check that no handshake is
@@ -313,7 +363,9 @@ boost::capy::task<result<void>> tls_handshake(transport::impl &im,
 		bool keep = false;
 		~undo_tls()
 		{
-			if (keep) return;
+			if (keep) {
+				return;
+			}
 			im.tls.reset();
 			im.tls_context.reset();
 		}
@@ -324,7 +376,9 @@ boost::capy::task<result<void>> tls_handshake(transport::impl &im,
 	auto [ec] = co_await bounded(stream.handshake(corosio::tls_role::client), deadline);
 	if (ec) {
 		std::string context = "tls handshake";
-		if (!setup.failure->reason.empty()) context += ": server certificate: " + setup.failure->reason;
+		if (!setup.failure->reason.empty()) {
+			context += ": server certificate: " + setup.failure->reason;
+		}
 		co_return fail(ec, std::move(context));
 	}
 	im.stream = boost::capy::any_stream(&stream);

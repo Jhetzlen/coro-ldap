@@ -32,17 +32,20 @@ class scoped_env
   public:
 	scoped_env(const char *name, const char *value) : name_(name)
 	{
-		if (const char *old = std::getenv(name)) old_ = old;
+		if (const char *old = std::getenv(name)) {
+			old_ = old;
+		}
 		::setenv(name, value, 1);
 	}
 	scoped_env(const scoped_env &) = delete;
 	scoped_env &operator=(const scoped_env &) = delete;
 	~scoped_env()
 	{
-		if (old_)
+		if (old_) {
 			::setenv(name_, old_->c_str(), 1);
-		else
+		} else {
 			::unsetenv(name_);
+		}
 	}
 
   private:

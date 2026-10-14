@@ -26,7 +26,9 @@ void *counted_alloc(std::size_t n) noexcept
 
 void *counted_alloc_or_throw(std::size_t n)
 {
-	if (void *p = counted_alloc(n)) return p;
+	if (void *p = counted_alloc(n)) {
+		return p;
+	}
 	throw std::bad_alloc();
 }
 

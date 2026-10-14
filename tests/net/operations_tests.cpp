@@ -402,7 +402,9 @@ TEST_CASE("operations: server side sort result of a search", "[net][operations][
 	while (true) {
 		auto e = m.run(s->next());
 		REQUIRE(e.has_value());
-		if (!e->has_value()) break;
+		if (!e->has_value()) {
+			break;
+		}
 	}
 	auto ok = ldap::find_sort_result(s->controls());
 	REQUIRE(ok.has_value());
@@ -456,8 +458,12 @@ capy::task<ldap::result<std::vector<std::string>>> drain_paged(ldap::paged_searc
 	std::vector<std::string> dns;
 	while (true) {
 		auto e = co_await s.next();
-		if (!e) co_return std::unexpected(std::move(e.error()));
-		if (!*e) co_return dns;
+		if (!e) {
+			co_return std::unexpected(std::move(e.error()));
+		}
+		if (!*e) {
+			co_return dns;
+		}
 		dns.emplace_back((*e)->dn);
 	}
 }
@@ -968,7 +974,9 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		m.sockets.client.close();// closing a wrapped transport leaves the socket open
 		drive_until(m.ioc, [&m] { return m.server.done(); });
 		CHECK(m.log.received.size() <= 2);
-		if (m.log.received.size() == 2) check_release(m.log.received[1], m.log.received[0], "page2");
+		if (m.log.received.size() == 2) {
+			check_release(m.log.received[1], m.log.received[0], "page2");
+		}
 	}
 }
 
@@ -1471,10 +1479,11 @@ TEST_CASE("operations: a paged search whose unread page failed sends no release"
 	const bool error_result = GENERATE(true, false);
 	INFO((error_result ? "an error result" : "a malformed paged control"));
 	ldap::message page2_done = error_result ? done_msg(2, 51, "", "busy") : done_msg(2);
-	if (error_result)
+	if (error_result) {
 		page2_done.controls = paged_done(2, "page3").controls;// a cookie all the same
-	else
+	} else {
 		page2_done.controls.push_back(ldap::control{ ldap::paged_results_oid, false, "garbage" });
+	}
 
 	mock_ldap m;
 	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
@@ -1927,7 +1936,9 @@ TEST_CASE("operations: a due release answer forgotten past the limit is no longe
 	REQUIRE(m.log.received.size() == 2 * releases + 2);
 
 	std::string answers;// the other releases' answers, in one write
-	for (int i = 1; i < releases; ++i) answers += bytes_of(paged_done(2 * i + 2, ""));
+	for (int i = 1; i < releases; ++i) {
+		answers += bytes_of(paged_done(2 * i + 2, ""));
+	}
 	auto t = m.server_end();
 	REQUIRE(m.run(net::write_bytes(t, std::as_bytes(std::span(answers)))).has_value());
 	drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });

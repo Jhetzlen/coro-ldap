@@ -304,7 +304,9 @@ class filter::substring_iterator
 	substring_iterator &operator++() noexcept
 	{
 		i_ = f_->nodes_[i_].next;
-		if (i_ != filter::npos && f_->nodes_[i_].k != part_any) i_ = filter::npos;
+		if (i_ != filter::npos && f_->nodes_[i_].k != part_any) {
+			i_ = filter::npos;
+		}
 		return *this;
 	}
 	substring_iterator operator++(int) noexcept

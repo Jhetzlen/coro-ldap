@@ -40,12 +40,16 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 	check(ldap::detail::is_rdn(text) == r.has_value(), "ldap::detail::is_rdn(text) == r.has_value()");
 	check(r.has_value() == (d.has_value() && d->rdns().size() == 1),
 	  "r.has_value() == (d.has_value() && d->rdns().size() == 1)");
-	if (!r) check(r.error().code == ldap::client_errc::invalid_dn, "r.error().code == ldap::client_errc::invalid_dn");
+	if (!r) {
+		check(r.error().code == ldap::client_errc::invalid_dn, "r.error().code == ldap::client_errc::invalid_dn");
+	}
 	if (!d) {
 		check(d.error().code == ldap::client_errc::invalid_dn, "d.error().code == ldap::client_errc::invalid_dn");
 		return 0;
 	}
-	if (r) check(*r == d->rdns().front(), "*r == d->rdns().front()");
+	if (r) {
+		check(*r == d->rdns().front(), "*r == d->rdns().front()");
+	}
 	const auto printed = d->to_string();
 	auto back = ldap::dn::parse(printed);
 	check(back.has_value(), "back.has_value()");
@@ -53,7 +57,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 	check(back->to_string() == printed, "back->to_string() == printed");
 
 	std::size_t steps = 0;
-	for (auto p = *d; !p.empty(); p = p.parent()) ++steps;
+	for (auto p = *d; !p.empty(); p = p.parent()) {
+		++steps;
+	}
 	check(steps == d->rdns().size(), "steps == d->rdns().size()");
 
 	for (const auto &part : d->rdns()) {
@@ -61,7 +67,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 		check(again.has_value(), "again.has_value()");
 		check(*again == part, "*again == part");
 	}
-	if (!d->empty()) check(d->parent().child(d->rdns().front()) == *d, "d->parent().child(d->rdns().front()) == *d");
+	if (!d->empty()) {
+		check(d->parent().child(d->rdns().front()) == *d, "d->parent().child(d->rdns().front()) == *d");
+	}
 	check(ldap::dn{}.child(*d) == *d, "ldap::dn{}.child(*d) == *d");
 	check(d->child(ldap::dn{}) == *d, "d->child(ldap::dn{}) == *d");
 	return 0;

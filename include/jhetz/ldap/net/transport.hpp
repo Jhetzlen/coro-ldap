@@ -100,9 +100,12 @@ class transport
 		ops.destroy = [](void *s, std::pmr::memory_resource *r) noexcept {
 			std::pmr::polymorphic_allocator<S>(r).delete_object(static_cast<S *>(s));
 		};
-		if constexpr (requires(S &s) { s.close(); }) ops.close = [](void *s) noexcept { static_cast<S *>(s)->close(); };
-		if constexpr (requires(S &s) { s.cancel(); })
+		if constexpr (requires(S &s) { s.close(); }) {
+			ops.close = [](void *s) noexcept { static_cast<S *>(s)->close(); };
+		}
+		if constexpr (requires(S &s) { s.cancel(); }) {
 			ops.cancel = [](void *s) noexcept { static_cast<S *>(s)->cancel(); };
+		}
 		S *p = alloc.template new_object<S>(std::move(stream));
 		t.set_custom(p, ops);// owns p from here
 		t.stream() = boost::capy::any_stream(p);

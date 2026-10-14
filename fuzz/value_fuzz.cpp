@@ -58,7 +58,9 @@ void filetime_checks(std::string_view text)
 	  "ldap::value_traits<ad::filetime_clock::time_point>::encode(*t) == std::to_string(*n)");
 	check(ad::is_never(*t) == (*n == 0 || *n == std::numeric_limits<std::int64_t>::max()),
 	  "ad::is_never(*t) == (*n == 0 || *n == std::numeric_limits<std::int64_t>::max())");
-	if (*t == ad::never) return;
+	if (*t == ad::never) {
+		return;
+	}
 	const auto sys = std::chrono::clock_cast<std::chrono::system_clock>(*t);
 	check(
 	  std::chrono::clock_cast<ad::filetime_clock>(sys) == *t, "std::chrono::clock_cast<ad::filetime_clock>(sys) == *t");

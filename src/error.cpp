@@ -237,12 +237,18 @@ namespace {
 		if (category == "boost.capy") {
 			// boost::capy::error: eof = 1, stream_truncated = 4 (canceled and
 			// timeout map to generic conditions, below).
-			if (ec.value() == 1 || ec.value() == 4) return cond::connection_lost;
+			if (ec.value() == 1 || ec.value() == 4) {
+				return cond::connection_lost;
+			}
 		}
-		if (category == "corosio.openssl" || category == "corosio.wolfssl") return cond::tls_failure;
+		if (category == "corosio.openssl" || category == "corosio.wolfssl") {
+			return cond::tls_failure;
+		}
 
 		const std::error_condition g = ec.default_error_condition();
-		if (g.category() != std::generic_category()) return std::nullopt;
+		if (g.category() != std::generic_category()) {
+			return std::nullopt;
+		}
 		switch (static_cast<std::errc>(g.value())) {
 		case std::errc::timed_out:
 			return cond::timeout;
@@ -309,7 +315,9 @@ namespace {
 		std::string message(int value) const override
 		{
 			auto text = result_text(value);
-			if (text.empty()) return detail::format("unknown LDAP result code {}", value);
+			if (text.empty()) {
+				return detail::format("unknown LDAP result code {}", value);
+			}
 			return std::string(text);
 		}
 	};
@@ -322,7 +330,9 @@ namespace {
 		std::string message(int value) const override
 		{
 			auto text = client_text(value);
-			if (text.empty()) return detail::format("unknown LDAP client error {}", value);
+			if (text.empty()) {
+				return detail::format("unknown LDAP client error {}", value);
+			}
 			return std::string(text);
 		}
 	};
@@ -335,19 +345,22 @@ namespace {
 		std::string message(int value) const override
 		{
 			auto text = cond_text(value);
-			if (text.empty()) return detail::format("unknown LDAP error condition {}", value);
+			if (text.empty()) {
+				return detail::format("unknown LDAP error condition {}", value);
+			}
 			return std::string(text);
 		}
 
 		bool equivalent(const std::error_code &ec, int condition) const noexcept override
 		{
 			std::optional<cond> c;
-			if (ec.category() == result_category())
+			if (ec.category() == result_category()) {
 				c = result_cond(ec.value());
-			else if (ec.category() == client_category())
+			} else if (ec.category() == client_category()) {
 				c = client_cond(ec.value());
-			else
+			} else {
 				c = foreign_cond(ec);
+			}
 			return c && std::to_underlying(*c) == condition;
 		}
 	};
@@ -406,15 +419,20 @@ namespace detail {
 			std::size_t i = 0;
 			while (i < s.size()) {
 				const auto [n, well_formed] = utf8_sequence_at(s, i);
-				if (n > max_bytes - i) break;// i <= max_bytes here
+				if (n > max_bytes - i) {
+					break;// i <= max_bytes here
+				}
 				const std::string_view seq = s.substr(i, n);
-				if (!well_formed || replaced(code_point(seq)))
+				if (!well_formed || replaced(code_point(seq))) {
 					out += replacement;
-				else
+				} else {
 					out += seq;
+				}
 				i += n;
 			}
-			if (i < s.size()) out += "...";
+			if (i < s.size()) {
+				out += "...";
+			}
 		}
 
 	}// namespace

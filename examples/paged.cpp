@@ -34,7 +34,9 @@ boost::capy::task<int> run(boost::corosio::io_context &ioc, std::string text)
 			std::cerr << person.error().message() << '\n';
 			co_return 1;
 		}
-		if (!*person) co_return 0;
+		if (!*person) {
+			co_return 0;
+		}
 		std::cout << "page " << pages->pages() << ": " << (*person)->find("mail")->front() << '\n';
 	}
 }

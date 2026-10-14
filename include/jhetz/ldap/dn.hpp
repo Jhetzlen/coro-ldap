@@ -71,21 +71,31 @@ namespace detail {
 	template<class F> constexpr std::size_t scan_dn(std::string_view s, F &&on_ava)
 	{
 		constexpr std::size_t ok = std::string_view::npos;
-		if (s.empty()) return ok;
+		if (s.empty()) {
+			return ok;
+		}
 		const std::size_t n = s.size();
 		std::size_t i = 0;
 		bool new_rdn = true;
 		auto skip_spaces = [&] {
-			while (i < n && s[i] == ' ') ++i;
+			while (i < n && s[i] == ' ') {
+				++i;
+			}
 		};
 		while (true) {
 			skip_spaces();
 			const std::size_t type_start = i;
-			while (i < n && (is_keychar(s[i]) || s[i] == '.')) ++i;
+			while (i < n && (is_keychar(s[i]) || s[i] == '.')) {
+				++i;
+			}
 			const std::string_view type = s.substr(type_start, i - type_start);
-			if (!is_oid(type)) return type_start;
+			if (!is_oid(type)) {
+				return type_start;
+			}
 			skip_spaces();
-			if (i == n || s[i] != '=') return i;
+			if (i == n || s[i] != '=') {
+				return i;
+			}
 			++i;
 			skip_spaces();
 
@@ -93,8 +103,12 @@ namespace detail {
 			if (i < n && s[i] == '#') {
 				++i;
 				const std::size_t start = i;
-				while (i < n && is_hex(s[i])) ++i;
-				if (i == start || (i - start) % 2 != 0) return i;
+				while (i < n && is_hex(s[i])) {
+					++i;
+				}
+				if (i == start || (i - start) % 2 != 0) {
+					return i;
+				}
 				tok.raw_value = s.substr(start, i - start);
 				tok.hex = true;
 				skip_spaces();
@@ -120,7 +134,9 @@ namespace detail {
 						++i;
 					} else if (static_cast<unsigned char>(c) >= 0x80u) {
 						const std::size_t len = utf8_sequence_length(s, i);// RFC 4514: UTF-8 only
-						if (len == 0) return i;
+						if (len == 0) {
+							return i;
+						}
 						i += len;
 						end = i;
 					} else {
@@ -131,13 +147,16 @@ namespace detail {
 				tok.raw_value = s.substr(start, end - start);
 			}
 			on_ava(tok);
-			if (i == n) return ok;
-			if (s[i] == ',')
+			if (i == n) {
+				return ok;
+			}
+			if (s[i] == ',') {
 				new_rdn = true;
-			else if (s[i] == '+')
+			} else if (s[i] == '+') {
 				new_rdn = false;
-			else
+			} else {
 				return i;
+			}
 			++i;
 		}
 	}
@@ -152,7 +171,9 @@ namespace detail {
 	{
 		std::size_t rdns = 0;
 		const auto count = [&rdns](const dn_token &t) {
-			if (t.new_rdn) ++rdns;
+			if (t.new_rdn) {
+				++rdns;
+			}
 		};
 		return scan_dn(s, count) == std::string_view::npos && rdns == 1;
 	}
@@ -209,7 +230,9 @@ struct rdn
 	{
 		consteval literal(const char *s) : text(s)
 		{
-			if (!detail::is_rdn(s)) throw "ldap::rdn: not exactly one relative distinguished name";
+			if (!detail::is_rdn(s)) {
+				throw "ldap::rdn: not exactly one relative distinguished name";
+			}
 		}
 		const char *text;
 	};
@@ -253,7 +276,9 @@ class dn
 	{
 		consteval literal(const char *s) : text(s)
 		{
-			if (!detail::is_dn(s)) throw "ldap::dn: invalid distinguished name";
+			if (!detail::is_dn(s)) {
+				throw "ldap::dn: invalid distinguished name";
+			}
 		}
 		const char *text;
 	};

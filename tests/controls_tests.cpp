@@ -64,7 +64,9 @@ TEST_CASE("controls are encoded on the given resource", "[controls][pmr]")
 	REQUIRE(ldap::append_controls({ ldap::paged{ .page_size = 5 }, ldap::proxied_authorization{ "dn:cn=x" } }, out)
 		.has_value());
 	REQUIRE(out.size() == 2);
-	for (const auto &c : out) CHECK(c.get_allocator().resource() == &mr);
+	for (const auto &c : out) {
+		CHECK(c.get_allocator().resource() == &mr);
+	}
 	CHECK(mr.allocations() > 0);
 }
 
@@ -389,7 +391,9 @@ TEST_CASE("new typed controls and their results use the given resource", "[contr
 	  out)
 		.has_value());
 	REQUIRE(out.size() == 4);
-	for (const auto &c : out) CHECK(c.get_allocator().resource() == &mr);
+	for (const auto &c : out) {
+		CHECK(c.get_allocator().resource() == &mr);
+	}
 
 	jhetz::ldap::test::counting_resource decoded;
 	const std::pmr::vector<ldap::control> in{ *ldap::encode_sort_result({ 18, "cn" }),

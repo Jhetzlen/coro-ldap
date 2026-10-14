@@ -73,7 +73,9 @@ struct options
 
 [[noreturn]] void usage(std::string_view problem)
 {
-	if (!problem.empty()) std::println(stderr, "jhetz-ldapsearch: {}", problem);
+	if (!problem.empty()) {
+		std::println(stderr, "jhetz-ldapsearch: {}", problem);
+	}
 	std::println(stderr,
 	  "usage: jhetz-ldapsearch [-D binddn] [-w password] [-b base] [-s base|one|sub|children]\n"
 	  "                  [-z sizelimit] [-l timelimit] [--page size] [-Y EXTERNAL [-X authzid]] [-Z]\n"
@@ -86,8 +88,9 @@ std::int32_t to_int(std::string_view text, const char *what)
 {
 	std::int32_t v = 0;
 	const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), v);
-	if (ec != std::errc{} || end != text.data() + text.size() || v < 0)
+	if (ec != std::errc{} || end != text.data() + text.size() || v < 0) {
 		usage(std::string(what) + " must be a non-negative integer");
+	}
 	return v;
 }
 
@@ -98,62 +101,76 @@ options parse_args(int argc, char **argv)
 	for (int i = 1; i < argc; ++i) {
 		const std::string_view a = argv[i];
 		auto value = [&]() -> std::string {
-			if (i + 1 >= argc) usage(std::string(a) + " needs a value");
+			if (i + 1 >= argc) {
+				usage(std::string(a) + " needs a value");
+			}
 			return argv[++i];
 		};
-		if (a == "-D")
+		if (a == "-D") {
 			o.bind_dn = value();
-		else if (a == "-w")
+		} else if (a == "-w") {
 			o.password = value();
-		else if (a == "-b")
+		} else if (a == "-b") {
 			o.base = value();
-		else if (a == "-s") {
+		} else if (a == "-s") {
 			const std::string s = value();
-			if (s == "base")
+			if (s == "base") {
 				o.scope = ldap::search_scope::base_object;
-			else if (s == "one")
+			} else if (s == "one") {
 				o.scope = ldap::search_scope::single_level;
-			else if (s == "sub")
+			} else if (s == "sub") {
 				o.scope = ldap::search_scope::whole_subtree;
-			else if (s == "children")
+			} else if (s == "children") {
 				o.scope = ldap::search_scope::subordinate_subtree;
-			else
+			} else {
 				usage("unknown scope " + s);
-		} else if (a == "-z")
+			}
+		} else if (a == "-z") {
 			o.size_limit = to_int(value(), "-z");
-		else if (a == "-l")
+		} else if (a == "-l") {
 			o.time_limit = to_int(value(), "-l");
-		else if (a == "--page") {
+		} else if (a == "--page") {
 			o.page_size = to_int(value(), "--page");
-			if (o.page_size == 0) usage("--page must be positive");
-		} else if (a == "--ca-file")
+			if (o.page_size == 0) {
+				usage("--page must be positive");
+			}
+		} else if (a == "--ca-file") {
 			o.ca_file = value();
-		else if (a == "--insecure")
+		} else if (a == "--insecure") {
 			o.insecure = true;
-		else if (a == "--cert")
+		} else if (a == "--cert") {
 			o.cert_file = value();
-		else if (a == "--key")
+		} else if (a == "--key") {
 			o.key_file = value();
-		else if (a == "-Z")
+		} else if (a == "-Z") {
 			o.start_tls = true;
-		else if (a == "-Y") {
+		} else if (a == "-Y") {
 			o.sasl_mech = value();
-			if (*o.sasl_mech != "EXTERNAL") usage("only -Y EXTERNAL is supported");
-		} else if (a == "-X")
+			if (*o.sasl_mech != "EXTERNAL") {
+				usage("only -Y EXTERNAL is supported");
+			}
+		} else if (a == "-X") {
 			o.authz_id = value();
-		else if (a == "-h" || a == "--help")
+		} else if (a == "-h" || a == "--help") {
 			usage({});
-		else if (a.starts_with('-') && a.size() > 1)
+		} else if (a.starts_with('-') && a.size() > 1) {
 			usage("unknown option " + std::string(a));
-		else
+		} else {
 			positional.push_back(a);
+		}
 	}
-	if (positional.empty()) usage("missing URL");
+	if (positional.empty()) {
+		usage("missing URL");
+	}
 	o.url = positional[0];
-	if (positional.size() > 1) o.filter = positional[1];
+	if (positional.size() > 1) {
+		o.filter = positional[1];
+	}
 	o.attributes = std::ranges::to<std::vector<std::string>>(positional | std::views::drop(2));
 	if (o.bind_dn && !o.password) {
-		if (const char *env = std::getenv("LDAP_PASSWORD")) o.password = env;
+		if (const char *env = std::getenv("LDAP_PASSWORD")) {
+			o.password = env;
+		}
 	}
 	return o;
 }
@@ -164,8 +181,12 @@ options parse_args(int argc, char **argv)
 // space, ':' or '<'; no trailing space either (readers may strip it).
 bool ldif_safe(std::string_view v) noexcept
 {
-	if (v.empty()) return true;
-	if (v.front() == ' ' || v.front() == ':' || v.front() == '<' || v.back() == ' ') return false;
+	if (v.empty()) {
+		return true;
+	}
+	if (v.front() == ' ' || v.front() == ':' || v.front() == '<' || v.back() == ' ') {
+		return false;
+	}
 	return std::ranges::none_of(v, [](char c) {
 		const auto b = static_cast<unsigned char>(c);
 		return b == 0 || b == '\n' || b == '\r' || b > 127;
@@ -189,7 +210,9 @@ std::string base64(std::string_view in)
 	}
 	if (const std::size_t rest = in.size() - i; rest > 0) {
 		auto n = static_cast<std::uint32_t>(static_cast<unsigned char>(in[i])) << 16;
-		if (rest == 2) n |= static_cast<std::uint32_t>(static_cast<unsigned char>(in[i + 1])) << 8;
+		if (rest == 2) {
+			n |= static_cast<std::uint32_t>(static_cast<unsigned char>(in[i + 1])) << 8;
+		}
 		out += table[n >> 18];
 		out += table[(n >> 12) & 63];
 		out += rest == 2 ? table[(n >> 6) & 63] : '=';
@@ -200,17 +223,21 @@ std::string base64(std::string_view in)
 
 void print_line(std::string_view type, std::string_view value)
 {
-	if (ldif_safe(value))
+	if (ldif_safe(value)) {
 		std::println("{}: {}", type, value);
-	else
+	} else {
 		std::println("{}:: {}", type, base64(value));
+	}
 }
 
 void print_entry(const ldap::entry &e)
 {
 	print_line("dn", e.dn);
-	for (const auto &a : e.attributes)
-		for (const auto &v : a.values) print_line(a.type.name(), v);
+	for (const auto &a : e.attributes) {
+		for (const auto &v : a.values) {
+			print_line(a.type.name(), v);
+		}
+	}
 	std::println("");
 }
 
@@ -233,15 +260,20 @@ template<class Stream> capy::task<int> print_all(ldap::result<Stream> &s)
 			status = 1;
 			break;
 		}
-		if (!*e) break;
+		if (!*e) {
+			break;
+		}
 		print_entry(**e);
 		++count;
 	}
-	for (const auto &ref : s->references()) std::println("# search reference: {}", ref);
-	if constexpr (requires { s->pages(); })
+	for (const auto &ref : s->references()) {
+		std::println("# search reference: {}", ref);
+	}
+	if constexpr (requires { s->pages(); }) {
 		std::println("# {} entries in {} pages", count, s->pages());
-	else
+	} else {
 		std::println("# {} entries", count);
+	}
 	co_return status;
 }
 
@@ -275,16 +307,19 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 	} else if (u->search_filter()) {
 		params.filter = *u->search_filter();
 	}
-	if (!o.attributes.empty())
+	if (!o.attributes.empty()) {
 		params.attributes.assign(o.attributes.begin(), o.attributes.end());
-	else
+	} else {
 		params.attributes.assign(u->attributes().begin(), u->attributes().end());
+	}
 	params.size_limit = o.size_limit;
 	params.time_limit = std::chrono::seconds(o.time_limit);
 
 	ldap::connection_options copts;
 	copts.tls.ca_file = o.ca_file;
-	if (o.insecure) copts.tls.verification = ldap::net::certificate_verification::insecure_accept_any;
+	if (o.insecure) {
+		copts.tls.verification = ldap::net::certificate_verification::insecure_accept_any;
+	}
 	copts.tls.cert_file = o.cert_file;
 	copts.tls.key_file = o.key_file;
 	copts.start_tls = o.start_tls;
@@ -322,7 +357,9 @@ capy::task<int> run(corosio::io_context &ioc, options o)
 		status = co_await print_all(s);
 	}
 	if (c->is_open()) {
-		if (auto r = co_await c->unbind(); !r) std::println(stderr, "jhetz-ldapsearch: {}", r.error().message());
+		if (auto r = co_await c->unbind(); !r) {
+			std::println(stderr, "jhetz-ldapsearch: {}", r.error().message());
+		}
 	}
 	co_return status;
 }

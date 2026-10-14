@@ -33,7 +33,9 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
   std::optional<std::chrono::milliseconds> timeout)
 {
 	std::string context = "start tls";
-	if (impl_ == nullptr) co_return std::unexpected(no_connection(context));
+	if (impl_ == nullptr) {
+		co_return std::unexpected(no_connection(context));
+	}
 	impl_ref self(impl_);
 	// StartTLS may only be sent once every response is received (RFC 4513
 	// section 3.1.1). Operations are refused; the answers still due to
@@ -44,40 +46,54 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	// zeroes the answers due without waking this wait until it closes).
 	const auto wait_deadline = deadline_after(timeout ? timeout : self->default_timeout());
 	while (true) {
-		if (auto r = self->check_start_tls(context); !r) co_return r;
+		if (auto r = self->check_start_tls(context); !r) {
+			co_return r;
+		}
 		// Checked before the wait too, so misuse fails at once.
-		if (self->transport().type() != net::transport::kind::tcp || self->transport().is_tls())
+		if (self->transport().type() != net::transport::kind::tcp || self->transport().is_tls()) {
 			co_return fail(std::make_error_code(std::errc::invalid_argument),
 			  context + ": needs a plain TCP connection (not ldaps://, ldapi:// or a custom stream)");
-		if (self->answers_due() == 0) break;
+		}
+		if (self->answers_due() == 0) {
+			break;
+		}
 		const auto [ec, left] = co_await self->wait_due_answers(wait_deadline);
 		// Cancelled or timed out: nothing was sent, the connection is usable.
-		if (ec)
+		if (ec) {
 			co_return fail(ec,
 			  detail::format("{} (waiting for the answer{} to {} paged search release{})",
 				context,
 				left == 1 ? "" : "s",
 				left,
 				left == 1 ? "" : "s"));
+		}
 	}
 
 	// The ExtendedRequest; nothing else may be sent until it is answered
 	// and the handshake is done (RFC 4511 section 4.14.1).
 	// Given up on already: not sent, since it could only be given up on by
 	// closing the connection.
-	if ((co_await capy::this_coro::stop_token).stop_requested()) co_return fail(capy::error::canceled, context);
+	if ((co_await capy::this_coro::stop_token).stop_requested()) {
+		co_return fail(capy::error::canceled, context);
+	}
 	message request{ 0, extended_request(start_tls_oid) };
 	pending_op p(self->mr(), false, op_index<extended_response>);
-	if (auto r = self->submit(request, &p, context); !r) co_return r;
+	if (auto r = self->submit(request, &p, context); !r) {
+		co_return r;
+	}
 	const connection::impl::upgrade_scope upgrade(*self);
 	{
 		registration reg(*self, p);
 		// A budget of its own: the wait may have used most of the first one,
 		// and giving up on StartTLS closes the connection.
 		auto m = co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout()), context);
-		if (!m) co_return std::unexpected(std::move(m.error()));
+		if (!m) {
+			co_return std::unexpected(std::move(m.error()));
+		}
 		const auto &x = std::get<extended_response>(m->op);
-		if (!x.result.is_success()) co_return std::unexpected(x.result.to_error(context));// still usable, in clear
+		if (!x.result.is_success()) {
+			co_return std::unexpected(x.result.to_error(context));// still usable, in clear
+		}
 	}
 
 	// From here on the server expects a handshake, so the session cannot go
@@ -91,7 +107,9 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 		// The reader and writer must be idle: the handshake reads and writes
 		// the socket itself. Not cancellable: they stop promptly on their own.
 		co_await self->wait_io_idle();
-		if (!self->is_open()) co_return std::unexpected(self->not_connected(context));
+		if (!self->is_open()) {
+			co_return std::unexpected(self->not_connected(context));
+		}
 		r = co_await self->tls_handshake(std::move(options), timeout);
 	} catch (const std::bad_alloc &) {
 		self->shut_out_of_memory();
@@ -107,7 +125,9 @@ capy::task<result<void>> connection::start_tls(net::tls_options options,
 	}
 	// Closed meanwhile (unbind(), close()): the handshake failed because of
 	// that, or ended over a closed transport; say so, as for the steps above.
-	if (!self->is_open()) co_return std::unexpected(self->not_connected(context));
+	if (!self->is_open()) {
+		co_return std::unexpected(self->not_connected(context));
+	}
 	if (!r) {
 		// Injected bytes or a failed handshake: the stream cannot be trusted.
 		error e = std::move(r.error());

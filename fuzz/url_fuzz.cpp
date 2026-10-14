@@ -23,7 +23,9 @@ namespace {
 
 bool is_uri_char(char c)
 {
-	if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return true;
+	if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+		return true;
+	}
 	return std::string_view("-._~!$&'()*+,;=:@/?%[]").contains(c);
 }
 
@@ -39,7 +41,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 		return 0;
 	}
 	const auto printed = u->to_string();
-	for (char c : printed) check(is_uri_char(c), "is_uri_char(c)");
+	for (char c : printed) {
+		check(is_uri_char(c), "is_uri_char(c)");
+	}
 	auto back = ldap::url::parse(printed);
 	check(back.has_value(), "back.has_value()");
 	check(*back == *u, "*back == *u");
@@ -51,7 +55,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size
 		prefix += u->authority();
 		check(printed.starts_with(prefix), "printed.starts_with(prefix)");
 	}
-	if (u->scheme() == ldap::url_scheme::ldapi)
+	if (u->scheme() == ldap::url_scheme::ldapi) {
 		check(!u->port() && !u->host_is_ipv6(), "!u->port() && !u->host_is_ipv6()");
+	}
 	return 0;
 }

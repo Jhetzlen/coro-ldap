@@ -88,12 +88,18 @@ extern "C" int getaddrinfo(const char *node, const char *service, const struct a
 		return real("127.0.0.1", service, hints, res);
 	}
 	if (name.starts_with("no-ip-")) {
-		if (int rc = real("127.0.0.1", service, hints, res); rc != 0) return rc;
-		for (struct addrinfo *p = *res; p != nullptr; p = p->ai_next) p->ai_family = AF_UNIX;
+		if (int rc = real("127.0.0.1", service, hints, res); rc != 0) {
+			return rc;
+		}
+		for (struct addrinfo *p = *res; p != nullptr; p = p->ai_next) {
+			p->ai_family = AF_UNIX;
+		}
 		return 0;
 	}
 	if (name.starts_with("stop-dns-")) {
-		if (auto *stop = lookup_stop.load(); stop != nullptr) stop->request_stop();
+		if (auto *stop = lookup_stop.load(); stop != nullptr) {
+			stop->request_stop();
+		}
 		std::this_thread::sleep_for(slow_dns_delay);
 		return real("127.0.0.1", service, hints, res);
 	}
@@ -101,13 +107,17 @@ extern "C" int getaddrinfo(const char *node, const char *service, const struct a
 		struct addrinfo v4 = hints != nullptr ? *hints : addrinfo{};
 		v4.ai_family = AF_INET;
 		struct addrinfo *first = nullptr, *second = nullptr;
-		if (int rc = real("127.0.0.2", service, &v4, &first); rc != 0) return rc;
+		if (int rc = real("127.0.0.2", service, &v4, &first); rc != 0) {
+			return rc;
+		}
 		if (int rc = real("127.0.0.1", service, &v4, &second); rc != 0) {
 			freeaddrinfo(first);
 			return rc;
 		}
 		struct addrinfo *tail = first;
-		while (tail->ai_next != nullptr) tail = tail->ai_next;
+		while (tail->ai_next != nullptr) {
+			tail = tail->ai_next;
+		}
 		tail->ai_next = second;// glibc frees the nodes one by one, so chaining is fine
 		*res = first;
 		return 0;
@@ -125,10 +135,15 @@ capy::task<std::string> serve_one(net::transport t)
 {
 	net::read_buffer buf;
 	auto req = co_await net::read_message(t, buf, as_server);
-	if (!req) co_return "server read: " + std::string(req.error().message());
-	if (*req != bind_request_msg(1)) co_return "server: unexpected request";
-	if (auto w = co_await net::write_message(t, bind_response_msg(1, "welcome")); !w)
+	if (!req) {
+		co_return "server read: " + std::string(req.error().message());
+	}
+	if (*req != bind_request_msg(1)) {
+		co_return "server: unexpected request";
+	}
+	if (auto w = co_await net::write_message(t, bind_response_msg(1, "welcome")); !w) {
 		co_return "server write: " + std::string(w.error().message());
+	}
 	auto end = co_await net::read_message(t, buf, as_server);
 	co_return end ? "server: unexpected second request" : "";
 }
@@ -137,11 +152,17 @@ template<class Acceptor>
 capy::task<std::string> accept_and_serve(Acceptor &acc, std::optional<corosio::tls_context> tls = std::nullopt)
 {
 	auto [ec, peer] = co_await acc.accept();
-	if (ec) co_return "accept: " + ec.message();
-	if (!tls) co_return co_await serve_one(net::transport::wrap(std::move(peer), "server"));
+	if (ec) {
+		co_return "accept: " + ec.message();
+	}
+	if (!tls) {
+		co_return co_await serve_one(net::transport::wrap(std::move(peer), "server"));
+	}
 	corosio::openssl_stream stream(std::move(peer), *tls);
 	auto [hec] = co_await stream.handshake(corosio::tls_role::server);
-	if (hec) co_return "server handshake: " + hec.message();
+	if (hec) {
+		co_return "server handshake: " + hec.message();
+	}
 	co_return co_await serve_one(net::transport::wrap(std::move(stream), "server"));
 }
 
@@ -149,11 +170,15 @@ capy::task<std::string> accept_and_serve(Acceptor &acc, std::optional<corosio::t
 capy::task<void> accept_and_stay_silent(corosio::tcp_acceptor &acc)
 {
 	auto [ec, peer] = co_await acc.accept();
-	if (ec) co_return;
+	if (ec) {
+		co_return;
+	}
 	char buf[4096];
 	while (true) {
 		auto [rec, n] = co_await peer.read_some(capy::mutable_buffer(buf, sizeof buf));
-		if (rec) co_return;
+		if (rec) {
+			co_return;
+		}
 	}
 }
 
@@ -169,17 +194,30 @@ capy::task<std::string>
   exchange(corosio::io_context &ioc, std::string text, net::connect_options options = {}, bool expect_tls = false)
 {
 	auto u = ldap::url::parse(text);
-	if (!u) co_return "url: " + std::string(u.error().message());
+	if (!u) {
+		co_return "url: " + std::string(u.error().message());
+	}
 	auto t = co_await net::connect(ioc, *u, options);
-	if (!t) co_return "connect: " + std::string(t.error().message());
-	if (!t->is_open()) co_return "transport not open";
-	if (t->is_tls() != expect_tls) co_return "unexpected is_tls()";
-	if (auto w = co_await net::write_message(*t, bind_request_msg(1)); !w)
+	if (!t) {
+		co_return "connect: " + std::string(t.error().message());
+	}
+	if (!t->is_open()) {
+		co_return "transport not open";
+	}
+	if (t->is_tls() != expect_tls) {
+		co_return "unexpected is_tls()";
+	}
+	if (auto w = co_await net::write_message(*t, bind_request_msg(1)); !w) {
 		co_return "client write: " + std::string(w.error().message());
+	}
 	net::read_buffer buf;
 	auto r = co_await net::read_message(*t, buf);
-	if (!r) co_return "client read: " + std::string(r.error().message());
-	if (*r != bind_response_msg(1, "welcome")) co_return "client: unexpected response";
+	if (!r) {
+		co_return "client read: " + std::string(r.error().message());
+	}
+	if (*r != bind_response_msg(1, "welcome")) {
+		co_return "client: unexpected response";
+	}
 	t->close();
 	CHECK_FALSE(t->is_open());
 	co_return "";
@@ -625,12 +663,20 @@ struct ipv6_server
 	{
 		ipv6_server s;
 		ifaddrs *list = nullptr;
-		if (::getifaddrs(&list) != 0) return s;
+		if (::getifaddrs(&list) != 0) {
+			return s;
+		}
 		for (ifaddrs *i = list; i != nullptr && !s.acc; i = i->ifa_next) {
-			if (i->ifa_addr == nullptr || i->ifa_addr->sa_family != AF_INET6) continue;
-			if ((i->ifa_flags & IFF_UP) == 0 || (i->ifa_flags & IFF_LOOPBACK) != 0) continue;
+			if (i->ifa_addr == nullptr || i->ifa_addr->sa_family != AF_INET6) {
+				continue;
+			}
+			if ((i->ifa_flags & IFF_UP) == 0 || (i->ifa_flags & IFF_LOOPBACK) != 0) {
+				continue;
+			}
 			const auto *sa = reinterpret_cast<const sockaddr_in6 *>(i->ifa_addr);
-			if (!IN6_IS_ADDR_LINKLOCAL(&sa->sin6_addr)) continue;
+			if (!IN6_IS_ADDR_LINKLOCAL(&sa->sin6_addr)) {
+				continue;
+			}
 			corosio::ipv6_address::bytes_type bytes{};
 			std::memcpy(bytes.data(), &sa->sin6_addr, bytes.size());
 			char text[INET6_ADDRSTRLEN] = {};
@@ -690,7 +736,9 @@ TEST_CASE("connect over the IPv6 loopback", "[net][connect][tcp][tls][ipv6]")
 {
 	corosio::io_context ioc;
 	auto v6 = ipv6_server::loopback(ioc);
-	if (!v6.acc) SKIP("no IPv6 loopback");
+	if (!v6.acc) {
+		SKIP("no IPv6 loopback");
+	}
 	exchange_over(ioc, v6);
 }
 
@@ -698,7 +746,9 @@ TEST_CASE("connect to a link-local IPv6 address with a zone", "[net][connect][tc
 {
 	corosio::io_context ioc;
 	auto v6 = ipv6_server::link_local(ioc);
-	if (!v6.acc) SKIP("no usable link-local IPv6 address");
+	if (!v6.acc) {
+		SKIP("no usable link-local IPv6 address");
+	}
 	INFO(v6.url("ldap"));
 	exchange_over(ioc, v6);
 }
@@ -1196,13 +1246,18 @@ TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
 	  ioc,
 	  [](corosio::tcp_acceptor &acc, corosio::tls_context ctx) -> capy::task<std::string> {
 		  auto [ec, peer] = co_await acc.accept();
-		  if (ec) co_return "accept: " + ec.message();
+		  if (ec) {
+			  co_return "accept: " + ec.message();
+		  }
 		  corosio::openssl_stream stream(std::move(peer), ctx);
 		  auto [hec] = co_await stream.handshake(corosio::tls_role::server);
-		  if (hec) co_return "handshake: " + hec.message();
+		  if (hec) {
+			  co_return "handshake: " + hec.message();
+		  }
 		  auto t = net::transport::wrap(std::move(stream), "server");
-		  if (auto w = co_await net::write_message(t, bind_response_msg(1, "bye")); !w)
+		  if (auto w = co_await net::write_message(t, bind_response_msg(1, "bye")); !w) {
 			  co_return std::string(w.error().message());
+		  }
 		  co_return "";// the transport and its socket go away: no close_notify
 	  }(srv.acc, server_context(localhost_cert())),
 	  server);
@@ -1211,12 +1266,18 @@ TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
 	  [](corosio::io_context &io, std::string text) -> capy::task<std::string> {
 		  auto u = ldap::url::parse(text);
 		  auto t = co_await net::connect(io, *u, { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()) } });
-		  if (!t) co_return "connect: " + std::string(t.error().message());
+		  if (!t) {
+			  co_return "connect: " + std::string(t.error().message());
+		  }
 		  net::read_buffer buf;
 		  auto first = co_await net::read_message(*t, buf);
-		  if (!first || *first != bind_response_msg(1, "bye")) co_return "first read failed";
+		  if (!first || *first != bind_response_msg(1, "bye")) {
+			  co_return "first read failed";
+		  }
 		  auto second = co_await net::read_message(*t, buf);
-		  if (second) co_return "second read succeeded";
+		  if (second) {
+			  co_return "second read succeeded";
+		  }
 		  co_return std::string(second.error().context) + " | " + second.error().code.message();
 	  }(ioc, srv.url("ldaps")),
 	  client);
@@ -1237,20 +1298,30 @@ namespace {
 capy::task<std::string> serve_until_close(corosio::tcp_acceptor &acc, corosio::tls_context ctx, bool answer)
 {
 	auto [ec, peer] = co_await acc.accept();
-	if (ec) co_return "accept: " + ec.message();
+	if (ec) {
+		co_return "accept: " + ec.message();
+	}
 	corosio::openssl_stream stream(&peer, ctx);
 	auto [hec] = co_await stream.handshake(corosio::tls_role::server);
-	if (hec) co_return "handshake: " + hec.message();
+	if (hec) {
+		co_return "handshake: " + hec.message();
+	}
 	char buf[256];
 	auto [rec, n] = co_await stream.read_some(capy::mutable_buffer(buf, sizeof buf));
-	if (!rec) co_return "unexpected data";
+	if (!rec) {
+		co_return "unexpected data";
+	}
 	if (answer) {
 		auto [sec] = co_await stream.shutdown();
-		if (sec) co_return "server shutdown: " + sec.message();
+		if (sec) {
+			co_return "server shutdown: " + sec.message();
+		}
 	} else {
 		while (true) {
 			auto [pec, m] = co_await peer.read_some(capy::mutable_buffer(buf, sizeof buf));
-			if (pec) break;
+			if (pec) {
+				break;
+			}
 		}
 	}
 	co_return rec == capy::cond::eof ? "close_notify" : rec.message();
@@ -1261,7 +1332,9 @@ capy::task<std::pair<std::string, bool>>
 {
 	auto u = ldap::url::parse(text);
 	auto t = co_await net::connect(io, *u, { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()) } });
-	if (!t) co_return { "connect: " + std::string(t.error().message()), false };
+	if (!t) {
+		co_return { "connect: " + std::string(t.error().message()), false };
+	}
 	auto r = co_await t->shutdown(bound);
 	co_return { r ? std::string() : std::string(r.error().message()), t->is_open() };
 }

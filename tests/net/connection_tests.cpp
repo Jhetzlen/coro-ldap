@@ -524,10 +524,11 @@ TEST_CASE("connection: a failed allocation in unbind closes the connection", "[n
 			return false;
 		}
 		CHECK(tried == failing);
-		if (other)
+		if (other) {
 			CHECK_THROWS_AS(unbind.get(), std::runtime_error);
-		else
+		} else {
 			CHECK_THROWS_AS(unbind.get(), std::bad_alloc);
+		}
 		CHECK_FALSE(m.conn.is_open());
 		REQUIRE(add.done());// abandoned by the unbind
 		CHECK_FALSE(add.get().has_value());
@@ -546,7 +547,9 @@ TEST_CASE("connection: a failed allocation in unbind closes the connection", "[n
 	for (const bool other : { false, true }) {
 		CAPTURE(other);
 		std::size_t failing = 1;
-		while (fail_one(failing, other)) ++failing;
+		while (fail_one(failing, other)) {
+			++failing;
+		}
 		CHECK(failing > 2);// finish_unbind's, wait_write_idle's, its lambda's
 	}
 }
@@ -566,8 +569,9 @@ TEST_CASE("connection: message ids increase per request", "[net][connection]")
 	CHECK(m.run(m.conn.unbind()).has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 5);
-	for (std::size_t i = 0; i < m.log.received.size(); ++i)
+	for (std::size_t i = 0; i < m.log.received.size(); ++i) {
 		CHECK(m.log.received[i].id == static_cast<std::int32_t>(i + 1));
+	}
 }
 
 // ---------------------------------------------------------------- server misbehaving
@@ -617,7 +621,9 @@ TEST_CASE("connection: protocol violations close the connection", "[net][connect
 			REQUIRE_FALSE(r.has_value());
 			CHECK(r.error().code == c.code);
 			CHECK(r.error().code == ldap::cond::protocol_error);
-			if (c.context != nullptr) CHECK(r.error().context == c.context);
+			if (c.context != nullptr) {
+				CHECK(r.error().context == c.context);
+			}
 			CHECK_FALSE(m.conn.is_open());
 			m.check_server();
 
@@ -1285,7 +1291,9 @@ capy::task<void> serve_shuffled(net::transport t, std::size_t n, std::uint64_t s
 			log.error = "server read: " + std::string(r.error().message());
 			co_return;
 		}
-		if (std::holds_alternative<ldap::abandon_request>(r->op)) continue;
+		if (std::holds_alternative<ldap::abandon_request>(r->op)) {
+			continue;
+		}
 		const auto *sr = std::get_if<ldap::search_request>(&r->op);
 		if (sr == nullptr) {
 			log.error = "server: expected a SearchRequest";
@@ -1326,13 +1334,21 @@ capy::task<void> serve_shuffled(net::transport t, std::size_t n, std::uint64_t s
 capy::task<std::string> checked_search(ldap::connection &c, std::string base)
 {
 	auto d = ldap::dn::parse(base);
-	if (!d) co_return "bad base";
+	if (!d) {
+		co_return "bad base";
+	}
 	auto r = co_await c.search({ .base = std::move(*d) });
-	if (!r) co_return std::string(r.error().message());
-	if (r->size() != 2) co_return "expected 2 entries, got " + std::to_string(r->size());
-	for (const auto &e : *r)
-		if (!std::string_view(e.dn).ends_with("," + base))
+	if (!r) {
+		co_return std::string(r.error().message());
+	}
+	if (r->size() != 2) {
+		co_return "expected 2 entries, got " + std::to_string(r->size());
+	}
+	for (const auto &e : *r) {
+		if (!std::string_view(e.dn).ends_with("," + base)) {
 			co_return "entry " + std::string(e.dn) + " not under " + base;
+		}
+	}
 	co_return "";
 }
 
@@ -1352,22 +1368,26 @@ TEST_CASE("connection: stress with many concurrent operations", "[net][connectio
 		  m.server);
 		std::vector<std::stop_source> stops(ops);
 		std::vector<outcome<std::string>> results(ops);
-		for (std::size_t i = 0; i < ops; ++i)
+		for (std::size_t i = 0; i < ops; ++i) {
 			spawn(m.ioc,
 			  stops[i].get_token(),
 			  checked_search(m.conn, "ou=" + std::to_string(i) + ",dc=example,dc=org"),
 			  results[i]);
+		}
 		// Cancel every 7th operation once all are sent, before the server
 		// answers anything (one stopped before it starts would not be sent).
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() == ops; });
-		for (std::size_t i = 0; i < ops; i += 7) stops[i].request_stop();
+		for (std::size_t i = 0; i < ops; i += 7) {
+			stops[i].request_stop();
+		}
 		drive_until(m.ioc, [&] { return std::ranges::all_of(results, [](const auto &r) { return r.done(); }); });
 		for (std::size_t i = 0; i < ops; ++i) {
 			INFO("operation " << i);
-			if (i % 7 == 0)
+			if (i % 7 == 0) {
 				CHECK_THAT(results[i].get(), ContainsSubstring("canceled"));
-			else
+			} else {
 				CHECK(results[i].get() == "");
+			}
 		}
 		m.check_server();
 		CHECK(m.conn.is_open());
@@ -1390,8 +1410,9 @@ TEST_CASE("connection: mutated server responses", "[net][connection]")
 		   ref_msg(1, { "ldap://r.example.org/" }),
 		   ldap::message{ 1, ldap::intermediate_response{ "1.2.3" } },
 		   entry_msg(1, "uid=b,ou=people,dc=example,dc=org", std::string(300, 'b')),
-		   done_msg(1, 0, "dc=example,dc=org", "ok") })
+		   done_msg(1, 0, "dc=example,dc=org", "ok") }) {
 		wire += bytes_of(msg);
+	}
 
 	std::uint64_t state = 0x9e3779b97f4a7c15u;
 	auto next = [&state](std::size_t bound) {

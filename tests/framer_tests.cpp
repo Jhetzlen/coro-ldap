@@ -16,8 +16,12 @@ namespace {
 std::string frame(std::span<const std::byte> buf, std::size_t max_size = ber::default_max_message_size)
 {
 	auto r = ber::complete_message_size(buf, max_size);
-	if (!r) return std::string(r.error().code.category().name()) + ":" + std::to_string(r.error().code.value());
-	if (!*r) return "need more";
+	if (!r) {
+		return std::string(r.error().code.category().name()) + ":" + std::to_string(r.error().code.value());
+	}
+	if (!*r) {
+		return "need more";
+	}
 	return "size " + std::to_string(**r);
 }
 
@@ -90,8 +94,12 @@ TEST_CASE("declared_message_size needs only the header", "[ber][framer]")
 {
 	auto declared = [](std::span<const std::byte> buf, std::size_t max_size = ber::default_max_message_size) {
 		auto r = ber::declared_message_size(buf, max_size);
-		if (!r) return std::string(r.error().code.category().name()) + ":" + std::to_string(r.error().code.value());
-		if (!*r) return std::string("need more");
+		if (!r) {
+			return std::string(r.error().code.category().name()) + ":" + std::to_string(r.error().code.value());
+		}
+		if (!*r) {
+			return std::string("need more");
+		}
 		return "size " + std::to_string(**r);
 	};
 	CHECK(declared({}) == "need more");
@@ -100,8 +108,9 @@ TEST_CASE("declared_message_size needs only the header", "[ber][framer]")
 	// Known as soon as the header is complete, without any content.
 	CHECK(declared(bytes({ 0x30, 0x0C })) == "size 14");
 	CHECK(declared(bytes({ 0x30, 0x83, 0x01, 0x00, 0x00 })) == "size 65541");
-	for (std::size_t n = 2; n <= bind_request.size(); ++n)
+	for (std::size_t n = 2; n <= bind_request.size(); ++n) {
 		CHECK(declared(std::span(bind_request).first(n)) == "size 14");
+	}
 	// Same errors as complete_message_size, also decided from the header.
 	CHECK(declared(bytes({ 0x30, 0x84, 0x01, 0x00, 0x00, 0x00 })) == too_large);
 	CHECK(declared(bytes({ 0x30, 0x0C }), 13) == too_large);

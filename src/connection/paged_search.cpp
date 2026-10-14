@@ -63,7 +63,9 @@ struct paged_search::state
 	{
 		set_page_control(page_size, std::move(page_cookie));
 		auto s = start_search(*conn, params, mr, stop);
-		if (!s) return std::unexpected(std::move(s.error()));
+		if (!s) {
+			return std::unexpected(std::move(s.error()));
+		}
 		current = std::move(*s);
 		++pages;
 		return {};
@@ -74,12 +76,20 @@ struct paged_search::state
 	// ended, next() has not read it yet).
 	std::string server_cookie() const
 	{
-		if (current.state_ == nullptr) return cookie;
+		if (current.state_ == nullptr) {
+			return cookie;
+		}
 		const message *done = current.state_->queued_done();
-		if (done == nullptr) return cookie;
-		if (!std::get<search_result_done>(done->op).result.is_success()) return {};
+		if (done == nullptr) {
+			return cookie;
+		}
+		if (!std::get<search_result_done>(done->op).result.is_success()) {
+			return {};
+		}
 		auto pr = find_paged(done->controls);
-		if (!pr || !*pr) return {};
+		if (!pr || !*pr) {
+			return {};
+		}
 		return std::string((*pr)->cookie);
 	}
 
@@ -100,13 +110,17 @@ struct paged_search::state
 		finished = true;
 		cookie.clear();
 		try {
-			if (last.empty() || !conn->is_open()) return;
+			if (last.empty() || !conn->is_open()) {
+				return;
+			}
 			set_page_control(0, std::move(last));
 			const std::string context = op_context("search", params.base) + " (paged results release)";
 			auto request = search_message(*conn, params, context);
 			// Its answer is waited for as long as a page would be.
 			const auto timeout = params.timeout ? params.timeout : conn->default_timeout();
-			if (request) conn->send_unanswered(*request, true, deadline_after(timeout), context);
+			if (request) {
+				conn->send_unanswered(*request, true, deadline_after(timeout), context);
+			}
 		} catch (...) {// out of memory: the release is best effort
 		}
 	}
@@ -115,16 +129,20 @@ struct paged_search::state
 capy::task<result<ldap::paged_search>>
   connection::search_paged(search_params p, std::int32_t page_size, std::pmr::memory_resource *mr)
 {
-	if (impl_ == nullptr) co_return std::unexpected(no_connection(op_context("search", p.base)));
-	if (page_size <= 0)
+	if (impl_ == nullptr) {
+		co_return std::unexpected(no_connection(op_context("search", p.base)));
+	}
+	if (page_size <= 0) {
 		co_return fail(client_errc::encode_error,
 		  detail::format("{}: page size {} is not positive", op_context("search", p.base), page_size));
+	}
 	std::pmr::polymorphic_allocator<> alloc(impl_->mr());
 	auto *st = alloc.new_object<paged_search::state>(
 	  paged_search::state{ impl_ref(impl_), std::move(p), page_size, mr, {}, 0, false, {}, {}, {}, {} });
 	ldap::paged_search out = connection::impl::make_paged(st);
-	if (auto r = st->request_page({}, co_await capy::this_coro::stop_token); !r)
+	if (auto r = st->request_page({}, co_await capy::this_coro::stop_token); !r) {
 		co_return std::unexpected(std::move(r.error()));
+	}
 	co_return std::move(out);
 }
 
@@ -132,7 +150,9 @@ namespace {
 
 	void delete_paged(paged_search::state *s) noexcept
 	{
-		if (s == nullptr) return;
+		if (s == nullptr) {
+			return;
+		}
 		s->stop();
 		impl_ref keep = s->conn;
 		std::pmr::polymorphic_allocator<> alloc(keep->mr());
@@ -177,10 +197,14 @@ const std::pmr::vector<control> &paged_search::controls() const noexcept
 
 capy::task<result<std::optional<entry>>> paged_search::next()
 {
-	if (state_ == nullptr) co_return std::unexpected(no_connection("search"));
+	if (state_ == nullptr) {
+		co_return std::unexpected(no_connection("search"));
+	}
 	state &s = *state_;
 	if (s.finished) {
-		if (s.error_) co_return std::unexpected(*s.error_);
+		if (s.error_) {
+			co_return std::unexpected(*s.error_);
+		}
 		co_return std::optional<entry>{};
 	}
 	// `ended`: the error ended the search on the server (an error result,
@@ -191,7 +215,9 @@ capy::task<result<std::optional<entry>>> paged_search::next()
 	// Decided by capy::cond, not ldap::cond::timeout: that also matches the
 	// server's timeLimitExceeded, which ended the search on the server.
 	auto finish = [&s](error e, bool ended = true) -> result<std::optional<entry>> {
-		if (ended && e.code != capy::cond::canceled && e.code != capy::cond::timeout) s.cookie.clear();
+		if (ended && e.code != capy::cond::canceled && e.code != capy::cond::timeout) {
+			s.cookie.clear();
+		}
 		s.finished = true;
 		s.error_ = e;
 		return std::unexpected(std::move(e));
@@ -201,19 +227,26 @@ capy::task<result<std::optional<entry>>> paged_search::next()
 		auto e = co_await s.current.next();
 		const auto &refs = s.current.references();
 		s.references.insert(s.references.end(), refs.begin() + static_cast<std::ptrdiff_t>(seen), refs.end());
-		if (!e) co_return finish(std::move(e.error()));
-		if (*e) co_return std::move(*e);
+		if (!e) {
+			co_return finish(std::move(e.error()));
+		}
+		if (*e) {
+			co_return std::move(*e);
+		}
 		// The page ended: the next one, if the server gave a cookie.
 		s.controls = s.current.controls();
 		auto pr = find_paged(s.controls);
-		if (!pr) co_return finish(detail::with_context(std::move(pr.error()), op_context("search", s.params.base)));
+		if (!pr) {
+			co_return finish(detail::with_context(std::move(pr.error()), op_context("search", s.params.base)));
+		}
 		s.cookie = *pr ? std::string((*pr)->cookie) : std::string();
 		if (s.cookie.empty()) {
 			s.finished = true;
 			co_return std::optional<entry>{};
 		}
-		if (auto r = s.request_page(s.cookie, co_await capy::this_coro::stop_token); !r)
+		if (auto r = s.request_page(s.cookie, co_await capy::this_coro::stop_token); !r) {
 			co_return finish(std::move(r.error()), false);
+		}
 	}
 }
 

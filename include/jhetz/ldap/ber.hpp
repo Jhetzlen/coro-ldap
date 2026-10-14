@@ -58,7 +58,9 @@ struct tag
 // above 30 (a programming error; in a constant expression it fails to compile).
 [[nodiscard]] constexpr tag make_tag(tag_class cls, std::uint8_t number, bool constructed = false)
 {
-	if (number > max_tag_number) throw std::invalid_argument("ber: tag number above 30 needs the high-tag-number form");
+	if (number > max_tag_number) {
+		throw std::invalid_argument("ber: tag number above 30 needs the high-tag-number form");
+	}
 	return tag{ cls, constructed, number };
 }
 
@@ -94,8 +96,9 @@ namespace tags {
 // otherwise be silently turned into the high-tag-number marker 0x1F.
 [[nodiscard]] constexpr std::byte identifier_octet(tag t)
 {
-	if (t.number > max_tag_number)
+	if (t.number > max_tag_number) {
 		throw std::invalid_argument("ber: tag number above 30 needs the high-tag-number form");
+	}
 	return static_cast<std::byte>(
 	  (unsigned{ std::to_underlying(t.cls) } << 6) | (t.constructed ? 0x20u : 0x00u) | (t.number & 0x1Fu));
 }

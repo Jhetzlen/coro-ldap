@@ -42,7 +42,9 @@ struct rng
 std::vector<std::uint8_t> to_u8(std::span<const std::byte> v)
 {
 	std::vector<std::uint8_t> out(v.size());
-	for (std::size_t i = 0; i < v.size(); ++i) out[i] = std::to_integer<std::uint8_t>(v[i]);
+	for (std::size_t i = 0; i < v.size(); ++i) {
+		out[i] = std::to_integer<std::uint8_t>(v[i]);
+	}
 	return out;
 }
 
@@ -136,22 +138,32 @@ void mutate(rng &r, std::vector<std::uint8_t> &v)
 	for (std::size_t i = 0; i < count; ++i) {
 		switch (r.below(6)) {
 		case 0:
-			if (!v.empty()) v[r.below(v.size())] ^= static_cast<std::uint8_t>(1u << r.below(8));
+			if (!v.empty()) {
+				v[r.below(v.size())] ^= static_cast<std::uint8_t>(1u << r.below(8));
+			}
 			break;
 		case 1:
-			if (!v.empty()) v[r.below(v.size())] = interesting[r.below(interesting.size())];
+			if (!v.empty()) {
+				v[r.below(v.size())] = interesting[r.below(interesting.size())];
+			}
 			break;
 		case 2:
 			v.insert(v.begin() + static_cast<std::ptrdiff_t>(r.below(v.size() + 1)), r.byte());
 			break;
 		case 3:
-			if (!v.empty()) v.erase(v.begin() + static_cast<std::ptrdiff_t>(r.below(v.size())));
+			if (!v.empty()) {
+				v.erase(v.begin() + static_cast<std::ptrdiff_t>(r.below(v.size())));
+			}
 			break;
 		case 4:
-			if (!v.empty()) v.resize(r.below(v.size()));
+			if (!v.empty()) {
+				v.resize(r.below(v.size()));
+			}
 			break;
 		default:
-			if (!v.empty()) v[r.below(v.size())] = r.byte();
+			if (!v.empty()) {
+				v[r.below(v.size())] = r.byte();
+			}
 			break;
 		}
 	}
@@ -183,7 +195,9 @@ static int write_seeds(const char *dir)
 
 int main(int argc, char **argv)
 {
-	if (argc == 3 && std::string_view(argv[1]) == "--write-seeds") return write_seeds(argv[2]);
+	if (argc == 3 && std::string_view(argv[1]) == "--write-seeds") {
+		return write_seeds(argv[2]);
+	}
 	if (argc != 1) {
 		std::println(stderr, "usage: {} [--write-seeds DIR]", argv[0]);
 		return 2;
@@ -217,10 +231,14 @@ int main(int argc, char **argv)
 	};
 	for (std::size_t i = 0; i < random_runs; ++i) {
 		std::vector<std::uint8_t> v(r.below(48));
-		for (auto &b : v)
+		for (auto &b : v) {
 			b = r.below(2) == 0 ? ber_like[r.below(ber_like.size())] : static_cast<std::uint8_t>(r.below(8));
-		for (std::size_t k = 0; k < v.size() / 4; ++k)
-			if (!v.empty()) v[r.below(v.size())] = r.byte();
+		}
+		for (std::size_t k = 0; k < v.size() / 4; ++k) {
+			if (!v.empty()) {
+				v[r.below(v.size())] = r.byte();
+			}
+		}
 		run(v);
 		++runs;
 	}

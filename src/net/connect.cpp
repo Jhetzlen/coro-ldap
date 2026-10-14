@@ -38,14 +38,22 @@ namespace jhetz::ldap::net {
 
 std::vector<corosio::endpoint> detail::interleave_families(std::vector<corosio::endpoint> in)
 {
-	if (in.empty()) return in;
+	if (in.empty()) {
+		return in;
+	}
 	const bool first_v6 = in.front().is_v6();
 	std::vector<corosio::endpoint> preferred, other, out;
-	for (auto &ep : in) (ep.is_v6() == first_v6 ? preferred : other).push_back(ep);
+	for (auto &ep : in) {
+		(ep.is_v6() == first_v6 ? preferred : other).push_back(ep);
+	}
 	out.reserve(in.size());
 	for (std::size_t i = 0; i < std::max(preferred.size(), other.size()); ++i) {
-		if (i < preferred.size()) out.push_back(preferred[i]);
-		if (i < other.size()) out.push_back(other[i]);
+		if (i < preferred.size()) {
+			out.push_back(preferred[i]);
+		}
+		if (i < other.size()) {
+			out.push_back(other[i]);
+		}
 	}
 	return out;
 }
@@ -76,8 +84,9 @@ namespace {
 		std::string out = target;
 		out += ": ";
 		out += stage;
-		if (ec == capy::cond::timeout && timeout)
+		if (ec == capy::cond::timeout && timeout) {
 			ldap::detail::format_to(out, ": gave up after the {} ms connect timeout", timeout->count());
+		}
 		return out;
 	}
 
@@ -141,12 +150,16 @@ namespace {
 		capy::run_async(ioc.get_executor())(resolve_detached(ioc, std::move(host), std::move(port), st));
 		auto [wec] = co_await bounded(st->waker.wait(), deadline);
 		std::lock_guard lock(st->mutex);
-		if (st->done) co_return { st->ec, std::move(st->endpoints) };
+		if (st->done) {
+			co_return { st->ec, std::move(st->endpoints) };
+		}
 		// Timed out or cancelled: stop waiting and return now. Cancelling the
 		// resolver only marks the lookup; Corosio completes it (and so the
 		// detached task) when getaddrinfo returns on its thread, and the late
 		// result is dropped with the shared state.
-		if (st->resolver != nullptr) st->resolver->cancel();
+		if (st->resolver != nullptr) {
+			st->resolver->cancel();
+		}
 		co_return { wec ? wec : make_error_code(capy::error::canceled), {} };
 	}
 
@@ -156,9 +169,13 @@ namespace {
 	// would overflow the clock.
 	deadline_t make_deadline(std::optional<std::chrono::milliseconds> timeout, clock::time_point now)
 	{
-		if (!timeout) return std::nullopt;
+		if (!timeout) {
+			return std::nullopt;
+		}
 		const auto room = std::chrono::duration_cast<std::chrono::milliseconds>(clock::time_point::max() - now);
-		if (*timeout >= room) return std::nullopt;
+		if (*timeout >= room) {
+			return std::nullopt;
+		}
 		return now + *timeout;
 	}
 
@@ -175,7 +192,9 @@ namespace {
 			attempt_delay(delay)
 		{
 			sockets.reserve(endpoints.size());
-			for (std::size_t i = 0; i < endpoints.size(); ++i) sockets.emplace_back(ioc);
+			for (std::size_t i = 0; i < endpoints.size(); ++i) {
+				sockets.emplace_back(ioc);
+			}
 		}
 
 		std::vector<corosio::endpoint> endpoints;
@@ -198,7 +217,9 @@ namespace {
 	capy::task<capy::io_result<>> attempt(race_state &st, std::size_t i)
 	{
 		const auto give_up = [&st, i](std::error_code ec) -> capy::io_result<> {
-			if (ec == capy::cond::canceled) st.canceled = true;
+			if (ec == capy::cond::canceled) {
+				st.canceled = true;
+			}
 			st.failed[i].set();
 			st.started[i].set();// never leave the next attempt waiting
 			return { ec };
@@ -206,12 +227,20 @@ namespace {
 		if (i > 0) {
 			// Attempt i-1 sets `started` before it suspends, so this wait
 			// is short; then race its failure against the attempt delay.
-			if (auto [ec] = co_await wait_for(st.started[i - 1]); ec) co_return give_up(ec);
+			if (auto [ec] = co_await wait_for(st.started[i - 1]); ec) {
+				co_return give_up(ec);
+			}
 			deadline_t until = st.start_times[i - 1] + st.attempt_delay;
-			if (st.deadline && *st.deadline < *until) until = st.deadline;
+			if (st.deadline && *st.deadline < *until) {
+				until = st.deadline;
+			}
 			auto [ec] = co_await bounded(wait_for(st.failed[i - 1]), until);
-			if (ec && ec != capy::cond::timeout) co_return give_up(ec);
-			if (st.deadline && clock::now() >= *st.deadline) co_return give_up(make_error_code(capy::error::timeout));
+			if (ec && ec != capy::cond::timeout) {
+				co_return give_up(ec);
+			}
+			if (st.deadline && clock::now() >= *st.deadline) {
+				co_return give_up(make_error_code(capy::error::timeout));
+			}
 		}
 		st.start_times[i] = clock::now();
 		st.started[i].set();
@@ -245,7 +274,9 @@ namespace {
 		for (std::size_t i = 0; i < host.size(); ++i) {
 			const auto c = static_cast<unsigned char>(host[i]);
 			const bool abstract_socket = scheme == url_scheme::ldapi && i == 0 && c == 0;
-			if ((c < 0x20 || c == 0x7F) && !abstract_socket) return true;
+			if ((c < 0x20 || c == 0x7F) && !abstract_socket) {
+				return true;
+			}
 		}
 		return false;
 	}
@@ -259,34 +290,42 @@ capy::task<result<transport>>
 	const std::string server = str(to_string(u.scheme())) + "://" + str(u.authority());
 	const std::string target = quoted("connect", server);
 
-	if (u.host().empty())
+	if (u.host().empty()) {
 		co_return fail(client_errc::invalid_url, target + ": the URL names no host (or, for ldapi, no socket path)");
-	for (const auto &e : u.extensions())
-		if (e.critical)
+	}
+	for (const auto &e : u.extensions()) {
+		if (e.critical) {
 			co_return fail(client_errc::invalid_url, target + ": unsupported critical extension " + str(e.type));
+		}
+	}
 	// Decoded hosts may hold any byte. getaddrinfo, OpenSSL's host name check
 	// and sockaddr_un stop at a NUL, so "evil%00.example.org" would silently
 	// become "evil". Only a leading NUL is meaningful: a Linux abstract socket.
-	if (has_control_character(u.host(), u.scheme()))
+	if (has_control_character(u.host(), u.scheme())) {
 		co_return fail(client_errc::invalid_url, target + ": control character in the host");
+	}
 
-	if (options.timeout && options.timeout->count() <= 0)
+	if (options.timeout && options.timeout->count() <= 0) {
 		co_return fail(make_error_code(capy::error::timeout),
 		  ldap::detail::format("{}: the connect timeout ({} ms) is not positive", target, options.timeout->count()));
+	}
 	const deadline_t deadline = make_deadline(options.timeout, start);
 
 	// ---- ldapi://
 	if (u.scheme() == url_scheme::ldapi) {
-		if (u.host().size() > corosio::local_endpoint::max_path_length)
+		if (u.host().size() > corosio::local_endpoint::max_path_length) {
 			co_return fail(std::make_error_code(std::errc::filename_too_long),
 			  ldap::detail::format(
 				"{}: socket path longer than {} bytes", target, corosio::local_endpoint::max_path_length));
+		}
 		transport t = transport_access::make(transport::kind::local, server, mr);
 		auto &im = transport_access::get(t);
 		im.host = u.host();
 		im.local.emplace(ioc);
 		auto [ec] = co_await bounded(im.local->connect(corosio::local_endpoint(u.host())), deadline);
-		if (ec) co_return fail(ec, stage_context(target, quoted("connect", u.host()), ec, options.timeout));
+		if (ec) {
+			co_return fail(ec, stage_context(target, quoted("connect", u.host()), ec, options.timeout));
+		}
 		im.stream = capy::any_stream(&*im.local);
 		co_return t;
 	}
@@ -307,10 +346,13 @@ capy::task<result<transport>>
 
 	// ---- ldap:// and ldaps://: resolve
 	auto [rec, endpoints] = co_await resolve_bounded(ioc, str(u.host()), std::to_string(u.port_or_default()), deadline);
-	if (rec) co_return fail(rec, stage_context(target, quoted("resolve", u.host()), rec, options.timeout));
-	if (endpoints.empty())
+	if (rec) {
+		co_return fail(rec, stage_context(target, quoted("resolve", u.host()), rec, options.timeout));
+	}
+	if (endpoints.empty()) {
 		co_return fail(
 		  std::make_error_code(std::errc::no_such_device_or_address), target + ": " + quoted("resolve", u.host()));
+	}
 
 	// ---- TCP: Happy Eyeballs (RFC 8305), staggered attempts over every
 	// address, the first to connect wins and the others are cancelled
@@ -320,18 +362,22 @@ capy::task<result<transport>>
 	  std::max<clock::duration>(options.attempt_delay, clock::duration::zero()));
 	std::vector<capy::task<capy::io_result<>>> attempts;
 	attempts.reserve(race.endpoints.size());
-	for (std::size_t i = 0; i < race.endpoints.size(); ++i) attempts.push_back(attempt(race, i));
+	for (std::size_t i = 0; i < race.endpoints.size(); ++i) {
+		attempts.push_back(attempt(race, i));
+	}
 	auto winner = co_await capy::when_any(std::move(attempts));
 	if (winner.index() == 0) {
 		std::error_code ec = race.last;
 		const bool timed_out = deadline && clock::now() >= *deadline;
-		if (timed_out)
+		if (timed_out) {
 			ec = make_error_code(capy::error::timeout);// the whole budget
-		else if (race.canceled || !ec)
+		} else if (race.canceled || !ec) {
 			ec = make_error_code(capy::error::canceled);// stopped by the caller
+		}
 		std::string stage = "tcp connect " + to_text(race.endpoints[race.last_index]);
-		if (race.endpoints.size() > 1)
+		if (race.endpoints.size() > 1) {
 			ldap::detail::format_to(stage, " ({} of {} addresses tried)", race.attempted, race.endpoints.size());
+		}
 		co_return fail(ec, stage_context(target, stage, ec, options.timeout));
 	}
 
@@ -369,26 +415,34 @@ capy::task<result<void>> start_tls(transport &t,
 {
 	std::string context = "start tls ";
 	context += t.name();
-	if (t.type() != transport::kind::tcp || t.is_tls() || !t.is_open())
+	if (t.type() != transport::kind::tcp || t.is_tls() || !t.is_open()) {
 		co_return fail(
 		  std::make_error_code(std::errc::invalid_argument), context + ": needs an open plain TCP transport");
-	if (!pending.empty())
+	}
+	if (!pending.empty()) {
 		co_return fail(client_errc::decode_error,
 		  ldap::detail::format("{}: {} bytes arrived before the TLS handshake (refused: they were not protected)",
 			context,
 			pending.size()));
+	}
 	auto prefixed = [&context](error e) {
 		e.context.insert(0, context + (e.context.empty() ? "" : ": "));
 		return std::unexpected(std::move(e));
 	};
 	auto setup = detail::make_tls_setup(options);
-	if (!setup) co_return prefixed(std::move(setup.error()));
+	if (!setup) {
+		co_return prefixed(std::move(setup.error()));
+	}
 	auto &im = transport_access::get(t);
 	deadline_t deadline;
-	if (timeout) deadline = detail::clock::now() + *timeout;
+	if (timeout) {
+		deadline = detail::clock::now() + *timeout;
+	}
 	try {
 		auto hs = co_await detail::tls_handshake(im, im.host, options, std::move(*setup), deadline);
-		if (!hs) co_return prefixed(std::move(hs.error()));
+		if (!hs) {
+			co_return prefixed(std::move(hs.error()));
+		}
 	} catch (...) {
 		// bad_alloc in the handshake's setup or the handshake: the peer
 		// expects a handshake now (or is in the middle of one), so the

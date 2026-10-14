@@ -23,8 +23,9 @@ namespace {
 		std::pmr::string out(mr);
 		out.reserve(raw.size());
 		if (tok.hex) {
-			for (std::size_t i = 0; i + 1 < raw.size(); i += 2)
+			for (std::size_t i = 0; i + 1 < raw.size(); i += 2) {
 				out += static_cast<char>((detail::hex_value(raw[i]) << 4) | detail::hex_value(raw[i + 1]));
+			}
 			return out;
 		}
 		for (std::size_t i = 0; i < raw.size(); ++i) {
@@ -98,7 +99,9 @@ namespace {
 	{
 		if (a.hex_form) {
 			out += '#';
-			for (char c : a.value) append_hex(out, static_cast<unsigned char>(c));
+			for (char c : a.value) {
+				append_hex(out, static_cast<unsigned char>(c));
+			}
 			return;
 		}
 		append_escaped(out, a.value);
@@ -107,7 +110,9 @@ namespace {
 	void append_rdn(std::pmr::string &out, const rdn &r)
 	{
 		for (std::size_t j = 0; j < r.avas.size(); ++j) {
-			if (j != 0) out += '+';
+			if (j != 0) {
+				out += '+';
+			}
 			out += r.avas[j].type.name();
 			out += '=';
 			append_value(out, r.avas[j]);
@@ -128,7 +133,9 @@ namespace {
 	bool ava_less(const ava &a, const ava &b)
 	{
 		const auto c = a.type <=> b.type;
-		if (c != 0) return c < 0;
+		if (c != 0) {
+			return c < 0;
+		}
 		return std::tie(a.hex_form, a.value) < std::tie(b.hex_form, b.value);
 	}
 
@@ -144,8 +151,12 @@ std::pmr::string escape_dn_value(std::string_view value, std::pmr::memory_resour
 
 bool operator==(const rdn &a, const rdn &b)
 {
-	if (a.avas.size() != b.avas.size()) return false;
-	if (a.avas.size() == 1) return a.avas[0] == b.avas[0];
+	if (a.avas.size() != b.avas.size()) {
+		return false;
+	}
+	if (a.avas.size() == 1) {
+		return a.avas[0] == b.avas[0];
+	}
 	// Sorted pointer copies in a small stack buffer (multi-valued RDNs are
 	// short); unusually long ones fall back to the heap.
 	std::array<std::byte, 2 * 16 * sizeof(const ava *) + 64> buffer;
@@ -156,8 +167,12 @@ bool operator==(const rdn &a, const rdn &b)
 	y.reserve(b.avas.size());
 	// Loops: append_range(avas | views::transform(...)) measured about 13%
 	// slower on this hot path.
-	for (const auto &v : a.avas) x.push_back(&v);
-	for (const auto &v : b.avas) y.push_back(&v);
+	for (const auto &v : a.avas) {
+		x.push_back(&v);
+	}
+	for (const auto &v : b.avas) {
+		y.push_back(&v);
+	}
 	const auto less = [](const ava *p, const ava *q) { return ava_less(*p, *q); };
 	std::ranges::sort(x, less);
 	std::ranges::sort(y, less);
@@ -168,7 +183,9 @@ rdn::rdn(literal l, const allocator_type &alloc) : avas(alloc)
 {
 	auto parsed = parse(l.text, alloc.resource());
 	// Unreachable: the literal was validated at compile time with the same scanner.
-	if (!parsed) throw std::invalid_argument("ldap::rdn: invalid relative distinguished name");
+	if (!parsed) {
+		throw std::invalid_argument("ldap::rdn: invalid relative distinguished name");
+	}
 	avas = std::move(parsed->avas);// same resource: no copy
 }
 
@@ -177,13 +194,22 @@ result<rdn> rdn::parse(std::string_view text, std::pmr::memory_resource *mr)
 	rdn out{ allocator_type(mr) };
 	std::size_t rdns = 0;
 	const std::size_t err = detail::scan_dn(text, [&](const detail::dn_token &tok) {
-		if (tok.new_rdn) ++rdns;
-		if (rdns == 1) append_ava(out, tok, mr);// later RDNs are only counted
+		if (tok.new_rdn) {
+			++rdns;
+		}
+		if (rdns == 1) {
+			append_ava(out, tok, mr);// later RDNs are only counted
+		}
 	});
-	if (err != std::string_view::npos)
+	if (err != std::string_view::npos) {
 		return fail(client_errc::invalid_dn, detail::format("rdn: syntax error at position {}", err));
-	if (rdns == 0) return fail(client_errc::invalid_dn, "rdn: empty");
-	if (rdns > 1) return fail(client_errc::invalid_dn, detail::format("rdn: {} RDNs where one is expected", rdns));
+	}
+	if (rdns == 0) {
+		return fail(client_errc::invalid_dn, "rdn: empty");
+	}
+	if (rdns > 1) {
+		return fail(client_errc::invalid_dn, detail::format("rdn: {} RDNs where one is expected", rdns));
+	}
 	return out;
 }
 
@@ -198,7 +224,9 @@ dn::dn(literal l, const allocator_type &alloc) : rdns_(alloc)
 {
 	auto parsed = parse(l.text, alloc.resource());
 	// Unreachable: the literal was validated at compile time with the same scanner.
-	if (!parsed) throw std::invalid_argument("ldap::dn: invalid distinguished name");
+	if (!parsed) {
+		throw std::invalid_argument("ldap::dn: invalid distinguished name");
+	}
 	rdns_ = std::move(parsed->rdns_);// same resource: no copy
 }
 
@@ -206,11 +234,14 @@ result<dn> dn::parse(std::string_view text, std::pmr::memory_resource *mr)
 {
 	dn out{ allocator_type(mr) };
 	const std::size_t err = detail::scan_dn(text, [&](const detail::dn_token &tok) {
-		if (tok.new_rdn || out.rdns_.empty()) out.rdns_.emplace_back();// uses-allocator: on mr
+		if (tok.new_rdn || out.rdns_.empty()) {
+			out.rdns_.emplace_back();// uses-allocator: on mr
+		}
 		append_ava(out.rdns_.back(), tok, mr);
 	});
-	if (err != std::string_view::npos)
+	if (err != std::string_view::npos) {
 		return fail(client_errc::invalid_dn, detail::format("dn: syntax error at position {}", err));
+	}
 	return out;
 }
 
@@ -218,7 +249,9 @@ std::pmr::string dn::to_string(std::pmr::memory_resource *mr) const
 {
 	std::pmr::string out(mr);
 	for (std::size_t i = 0; i < rdns_.size(); ++i) {
-		if (i != 0) out += ',';
+		if (i != 0) {
+			out += ',';
+		}
 		append_rdn(out, rdns_[i]);
 	}
 	return out;
@@ -239,10 +272,16 @@ dn dn::child(const rdn &r) const
 dn dn::child(rdn &&r) const
 {
 	// Programming errors: the result would not survive to_string()/parse().
-	if (r.avas.empty()) throw std::invalid_argument("ldap::dn::child: empty RDN");
+	if (r.avas.empty()) {
+		throw std::invalid_argument("ldap::dn::child: empty RDN");
+	}
 	for (const auto &a : r.avas) {
-		if (!detail::is_oid(a.type.name())) throw std::invalid_argument("ldap::dn::child: invalid attribute type");
-		if (a.hex_form && a.value.empty()) throw std::invalid_argument("ldap::dn::child: empty #hex value");
+		if (!detail::is_oid(a.type.name())) {
+			throw std::invalid_argument("ldap::dn::child: invalid attribute type");
+		}
+		if (a.hex_form && a.value.empty()) {
+			throw std::invalid_argument("ldap::dn::child: empty #hex value");
+		}
 	}
 	dn out(get_allocator());
 	out.rdns_.reserve(rdns_.size() + 1);

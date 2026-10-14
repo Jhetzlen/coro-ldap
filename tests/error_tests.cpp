@@ -208,7 +208,9 @@ TEST_CASE("ldap::error message sanitizes the server's text and keeps the fields 
 	e.code = ldap::errc::referral;
 	e.diagnostic = "line1\nline2";
 	e.matched_dn = "cn=" + rlo + "x\r\n,dc=example,dc=org";
-	for (int i = 0; i < 10; ++i) e.referrals.emplace_back("ldap://h" + std::to_string(i) + "/\n");
+	for (int i = 0; i < 10; ++i) {
+		e.referrals.emplace_back("ldap://h" + std::to_string(i) + "/\n");
+	}
 	CHECK(std::string(e.message())
 		  == "referral [ldap.result:10]; server: line1" + fffd + "line2; matched DN: cn=" + fffd + "x" + fffd + fffd
 			   + ",dc=example,dc=org; referrals: ldap://h0/" + fffd + " ldap://h1/" + fffd + " ldap://h2/" + fffd
@@ -244,10 +246,13 @@ std::optional<ldap::cond> cond_of(std::error_code ec)
 {
 	std::optional<ldap::cond> found;
 	for (auto c : all_conds) {
-		if (ec != c) continue;
-		if (found)
+		if (ec != c) {
+			continue;
+		}
+		if (found) {
 			FAIL_CHECK(
 			  ec.message() << " matches both " << std::to_underlying(*found) << " and " << std::to_underlying(c));
+		}
 		found = c;
 	}
 	return found;

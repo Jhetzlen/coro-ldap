@@ -25,9 +25,14 @@ using jhetz::ldap::client_errc;
 
 bool same_bytes(std::span<const std::byte> a, std::span<const std::byte> b)
 {
-	if (a.size() != b.size()) return false;
-	for (std::size_t i = 0; i < a.size(); ++i)
-		if (a[i] != b[i]) return false;
+	if (a.size() != b.size()) {
+		return false;
+	}
+	for (std::size_t i = 0; i < a.size(); ++i) {
+		if (a[i] != b[i]) {
+			return false;
+		}
+	}
 	return true;
 }
 
@@ -43,7 +48,9 @@ std::span<const std::byte> content_of(std::span<const std::byte> encoded)
 
 bool minimal_integer(std::span<const std::byte> c)
 {
-	if (c.size() < 2) return true;
+	if (c.size() < 2) {
+		return true;
+	}
 	const auto b0 = std::to_integer<unsigned>(c[0]);
 	const bool high1 = (std::to_integer<unsigned>(c[1]) & 0x80u) != 0;
 	return !((b0 == 0x00u && !high1) || (b0 == 0xFFu && high1));
@@ -66,14 +73,16 @@ void check_typed_reads(const ber::reader &r, ber::tag t, std::span<const std::by
 			auto again = back.read_integer(prim);
 			check(again && *again == *v, "again && *again == *v");
 			const auto re = content_of(w.bytes());
-			if (minimal_integer(content))
+			if (minimal_integer(content)) {
 				check(same_bytes(re, content), "same_bytes(re, content)");
-			else
+			} else {
 				check(re.size() < content.size(), "re.size() < content.size()");
+			}
 		} else {
 			check(copy.offset() == r.offset(), "copy.offset() == r.offset()");
-			if (!t.constructed && !content.empty() && content.size() <= 8)
+			if (!t.constructed && !content.empty() && content.size() <= 8) {
 				check.failed("integer rejected", std::source_location::current());
+			}
 		}
 	}
 	{
@@ -94,8 +103,9 @@ void check_typed_reads(const ber::reader &r, ber::tag t, std::span<const std::by
 			auto again = back.read_boolean(prim);
 			check(again && *again == *v, "again && *again == *v");
 			const auto b = std::to_integer<unsigned>(content[0]);
-			if (b == 0x00u || b == 0xFFu)
+			if (b == 0x00u || b == 0xFFu) {
 				check(same_bytes(content_of(w.bytes()), content), "same_bytes(content_of(w.bytes()), content)");
+			}
 		} else {
 			check(copy.offset() == r.offset(), "copy.offset() == r.offset()");
 		}

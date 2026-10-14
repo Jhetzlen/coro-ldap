@@ -251,7 +251,9 @@ TEST_CASE("schema: lookups fold ASCII case only", "[schema]")
 	const auto *foo = s.find_attribute("foobar");
 	REQUIRE(foo != nullptr);
 	CHECK(foo->oid == "1.1");
-	for (const char *n : { "fooBar", "FOOBAR", "fOoBaR", "FooBar;Lang-EN", "1.1" }) CHECK(s.find_attribute(n) == foo);
+	for (const char *n : { "fooBar", "FOOBAR", "fOoBaR", "FooBar;Lang-EN", "1.1" }) {
+		CHECK(s.find_attribute(n) == foo);
+	}
 	CHECK(s.find_attribute("OTHER")->oid == "1.2");
 	CHECK(s.find_attribute("1.2")->oid == "1.2");
 	CHECK(s.find_attribute("Zz")->oid == "1.3");
@@ -340,7 +342,9 @@ constexpr auto ldap::schema<long_syntax> =
 TEST_CASE("schema: a syntax mismatch quotes the server's SYNTAX cut", "[schema][validate]")
 {
 	std::string oid = "1";
-	for (int i = 0; i < 100; ++i) oid += ".2";
+	for (int i = 0; i < 100; ++i) {
+		oid += ".2";
+	}
 	const std::string desc = "DESC 'caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC \xF0\x9F\x94\x91'";
 	const std::pmr::vector<std::pmr::string> types{ std::pmr::string(
 	  "( 1.2.1 NAME 'longSyntax' " + desc + " SYNTAX " + oid + " SINGLE-VALUE )") };
@@ -474,8 +478,11 @@ TEST_CASE("schema: validate lists every issue", "[schema][validate]")
 	CHECK_FALSE(rep.ok());
 	using k = ldap::schema_issue::kind;
 	auto has = [&](k what, std::string_view name) {
-		for (const auto &i : rep.issues)
-			if (i.what == what && i.name == name) return true;
+		for (const auto &i : rep.issues) {
+			if (i.what == what && i.name == name) {
+				return true;
+			}
+		}
 		return false;
 	};
 	CHECK(has(k::unknown_object_class, "posixAccount"));

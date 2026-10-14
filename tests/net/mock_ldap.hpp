@@ -100,7 +100,9 @@ struct step
 inline step answer(std::initializer_list<ldap::message> replies, bool close_after = false)
 {
 	step s;
-	for (const auto &m : replies) s.replies.push_back(bytes_of(m));
+	for (const auto &m : replies) {
+		s.replies.push_back(bytes_of(m));
+	}
 	s.close_after = close_after;
 	return s;
 }
@@ -174,7 +176,9 @@ struct socket_pair
 	explicit socket_pair(corosio::io_context &ioc) : client(ioc), server(ioc)
 	{
 		const auto ec = corosio::connect_pair(client, server);
-		if (ec) throw std::system_error(ec, "connect_pair");
+		if (ec) {
+			throw std::system_error(ec, "connect_pair");
+		}
 	}
 };
 
@@ -275,14 +279,17 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 	{
 		// The accepted socket inherits it; set before the client connects,
 		// so the window offered from the start is the small one.
-		if (buffers == socket_buffers::small)
+		if (buffers == socket_buffers::small) {
 			acc.set_option(corosio::socket_option::receive_buffer_size(small_socket_buffer));
+		}
 		outcome<void> accepted;
 		spawn(
 		  ioc,
 		  [](corosio::tcp_acceptor &a, corosio::tcp_socket &p) -> capy::task<void> {
 			  auto [ec] = co_await a.accept(p);
-			  if (ec) throw std::system_error(ec, "accept");
+			  if (ec) {
+				  throw std::system_error(ec, "accept");
+			  }
 		  }(acc, peer),
 		  accepted);
 		try {
@@ -342,9 +349,13 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 	capy::task<ldap::connection> connect_small(ldap::connection_options options)
 	{
 		corosio::tcp_socket s(ioc);
-		if (auto ec = s.open(); ec) throw std::system_error(ec, "open");
+		if (auto ec = s.open(); ec) {
+			throw std::system_error(ec, "open");
+		}
 		s.set_option(corosio::socket_option::send_buffer_size(small_socket_buffer));
-		if (auto [ec] = co_await s.connect(acc.local_endpoint()); ec) throw std::system_error(ec, "connect");
+		if (auto [ec] = co_await s.connect(acc.local_endpoint()); ec) {
+			throw std::system_error(ec, "connect");
+		}
 		client_send_buffer = static_cast<std::size_t>(s.get_option<corosio::socket_option::send_buffer_size>().value());
 		const std::string name = url();
 		net::transport t =
@@ -380,8 +391,12 @@ inline capy::task<ldap::result<std::vector<ldap::entry>>> drain_stream(ldap::sea
 	std::vector<ldap::entry> out;
 	while (true) {
 		auto e = co_await s.next();
-		if (!e) co_return std::unexpected(std::move(e.error()));
-		if (!*e) co_return out;
+		if (!e) {
+			co_return std::unexpected(std::move(e.error()));
+		}
+		if (!*e) {
+			co_return out;
+		}
 		out.push_back(std::move(**e));
 	}
 }

@@ -22,7 +22,9 @@ using deadline_t = std::optional<clock::time_point>;
 template<class A>
 boost::capy::task<std::remove_cvref_t<boost::capy::awaitable_result_t<A>>> bounded(A a, deadline_t deadline)
 {
-	if (deadline) co_return co_await boost::corosio::timeout(std::move(a), *deadline);
+	if (deadline) {
+		co_return co_await boost::corosio::timeout(std::move(a), *deadline);
+	}
 	co_return co_await std::move(a);
 }
 

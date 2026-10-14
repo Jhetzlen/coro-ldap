@@ -37,7 +37,9 @@ using input = std::vector<std::uint8_t>;
 inline input to_input(std::span<const std::byte> v)
 {
 	input out(v.size());
-	for (std::size_t i = 0; i < v.size(); ++i) out[i] = std::to_integer<std::uint8_t>(v[i]);
+	for (std::size_t i = 0; i < v.size(); ++i) {
+		out[i] = std::to_integer<std::uint8_t>(v[i]);
+	}
 	return out;
 }
 
@@ -53,23 +55,33 @@ inline void mutate(rng &r, input &v, std::span<const std::uint8_t> interesting)
 	for (std::size_t i = 0; i < count; ++i) {
 		switch (r.below(6)) {
 		case 0:
-			if (!v.empty()) v[r.below(v.size())] ^= static_cast<std::uint8_t>(1u << r.below(8));
+			if (!v.empty()) {
+				v[r.below(v.size())] ^= static_cast<std::uint8_t>(1u << r.below(8));
+			}
 			break;
 		case 1:
-			if (!v.empty()) v[r.below(v.size())] = interesting[r.below(interesting.size())];
+			if (!v.empty()) {
+				v[r.below(v.size())] = interesting[r.below(interesting.size())];
+			}
 			break;
 		case 2:
 			v.insert(v.begin() + static_cast<std::ptrdiff_t>(r.below(v.size() + 1)),
 			  r.below(2) == 0 ? interesting[r.below(interesting.size())] : r.byte());
 			break;
 		case 3:
-			if (!v.empty()) v.erase(v.begin() + static_cast<std::ptrdiff_t>(r.below(v.size())));
+			if (!v.empty()) {
+				v.erase(v.begin() + static_cast<std::ptrdiff_t>(r.below(v.size())));
+			}
 			break;
 		case 4:
-			if (!v.empty()) v.resize(r.below(v.size()));
+			if (!v.empty()) {
+				v.resize(r.below(v.size()));
+			}
 			break;
 		default:
-			if (!v.empty()) v[r.below(v.size())] = r.byte();
+			if (!v.empty()) {
+				v[r.below(v.size())] = r.byte();
+			}
 			break;
 		}
 	}
@@ -112,8 +124,9 @@ struct replay_config
 // inputs built mostly from `interesting` bytes.
 inline int replay_main(int argc, char **argv, const replay_config &cfg)
 {
-	if (argc == 3 && std::string_view(argv[1]) == "--write-seeds")
+	if (argc == 3 && std::string_view(argv[1]) == "--write-seeds") {
 		return write_seeds(argv[2], cfg.seeds, cfg.extension);
+	}
 	if (argc != 1) {
 		std::println(stderr, "usage: {} [--write-seeds DIR]", argv[0]);
 		return 2;
@@ -136,7 +149,9 @@ inline int replay_main(int argc, char **argv, const replay_config &cfg)
 	}
 	for (std::size_t i = 0; i < cfg.random_runs; ++i) {
 		input v(r.below(cfg.max_random_size));
-		for (auto &b : v) b = r.below(4) != 0 ? cfg.interesting[r.below(cfg.interesting.size())] : r.byte();
+		for (auto &b : v) {
+			b = r.below(4) != 0 ? cfg.interesting[r.below(cfg.interesting.size())] : r.byte();
+		}
 		run(v);
 		++runs;
 	}

@@ -68,7 +68,9 @@ struct scripted_stream
 			std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, const capy::io_env *) { return h; }
 			capy::io_result<std::size_t> await_resume()
 			{
-				if (self->next == self->script->size()) return { capy::error::eof, 0 };
+				if (self->next == self->script->size()) {
+					return { capy::error::eof, 0 };
+				}
 				const auto &st = (*self->script)[self->next++];
 				const auto n = capy::buffer_copy(buffers, capy::const_buffer(st.bytes.data(), st.bytes.size()));
 				return { st.ec, n };
@@ -99,7 +101,9 @@ struct short_write_stream
 	template<capy::MutableBufferSequence MB> auto read_some(MB) { return ready{ capy::error::eof, 0 }; }
 	template<capy::ConstBufferSequence CB> auto write_some(CB buffers)
 	{
-		if (budget == 0) return ready{ std::make_error_code(std::errc::broken_pipe), 0 };
+		if (budget == 0) {
+			return ready{ std::make_error_code(std::errc::broken_pipe), 0 };
+		}
 		const std::size_t n = std::min({ capy::buffer_size(buffers), budget, chunk });
 		budget -= n;
 		return ready{ std::error_code{}, n };
@@ -177,7 +181,9 @@ TEST_CASE("read_message: PDUs split across arbitrary read boundaries", "[net][re
 	// The stream hands out `chunk` bytes per read, but every read offers all
 	// the free space of the first min_read buffer (these PDUs all fit in it):
 	// the reader never asks byte by byte by itself.
-	for (auto n : *m.reads) CHECK(n >= net::read_buffer::min_read - wire.size());
+	for (auto n : *m.reads) {
+		CHECK(n >= net::read_buffer::min_read - wire.size());
+	}
 	CHECK(m.buf.capacity() == net::read_buffer::min_read);
 	CHECK(m.reads->size() == (wire.size() + chunk - 1) / chunk);
 }
@@ -485,7 +491,9 @@ TEST_CASE("write_message into a caller's resource or a reused writer", "[net][wr
 	ldap::ber::writer w{ ldap::ber::writer::allocator_type(&counting) };
 	REQUIRE(run(ioc, net::write_message(client, bind_request_msg(2), w)).has_value());
 	const auto grown = counting.allocations();
-	for (int id = 3; id <= 4; ++id) REQUIRE(run(ioc, net::write_message(client, bind_request_msg(id), w)).has_value());
+	for (int id = 3; id <= 4; ++id) {
+		REQUIRE(run(ioc, net::write_message(client, bind_request_msg(id), w)).has_value());
+	}
 	CHECK(counting.allocations() == grown);// reused, no new allocation
 	CHECK(w.get_allocator().resource() == &counting);
 	CHECK(w.bytes() == *ldap::encode(bind_request_msg(4)));// holds the last PDU
@@ -600,8 +608,12 @@ TEST_CASE("read_buffer allocates from the given memory resource", "[net][read_me
 	{
 		counting_resource counting;
 		mock m(7, &counting);
-		for (int i = 1; i <= 3; ++i) m.peer->provide(bytes_of(bind_response_msg(i, std::string(40'000, 'a'))));
-		for (int i = 1; i <= 3; ++i) REQUIRE(m.read().has_value());
+		for (int i = 1; i <= 3; ++i) {
+			m.peer->provide(bytes_of(bind_response_msg(i, std::string(40'000, 'a'))));
+		}
+		for (int i = 1; i <= 3; ++i) {
+			REQUIRE(m.read().has_value());
+		}
 		CHECK(counting.allocations() == 2);// min_read, then one PDU
 		CHECK(m.buf.capacity() == bytes_of(bind_response_msg(1, std::string(40'000, 'a'))).size());
 	}
@@ -621,7 +633,9 @@ TEST_CASE("read_buffer allocates from the given memory resource", "[net][read_me
 		std::vector<std::byte> storage(128 * 1024);
 		std::pmr::monotonic_buffer_resource arena(storage.data(), storage.size(), std::pmr::null_memory_resource());
 		mock m(7, &arena);
-		for (int i = 1; i <= 3; ++i) m.peer->provide(bytes_of(bind_response_msg(i, std::string(40'000, 'a'))));
+		for (int i = 1; i <= 3; ++i) {
+			m.peer->provide(bytes_of(bind_response_msg(i, std::string(40'000, 'a'))));
+		}
 		for (int i = 1; i <= 3; ++i) {
 			auto r = m.read();
 			REQUIRE(r.has_value());
@@ -661,7 +675,9 @@ TEST_CASE("read_message: TLS truncation (no close_notify)", "[net][read_message]
 		  scripted_stream{ std::make_shared<std::vector<scripted_stream::step>>(std::move(steps)) }, "tls");
 		net::read_buffer buf;
 		std::vector<ldap::result<ldap::message>> out;
-		for (int i = 0; i < 2; ++i) out.push_back(run(ioc, net::read_message(t, buf)));
+		for (int i = 0; i < 2; ++i) {
+			out.push_back(run(ioc, net::read_message(t, buf)));
+		}
 		return out;
 	};
 

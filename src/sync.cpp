@@ -38,7 +38,9 @@ result<void> connection::connect(url u)
 				 url where,
 				 connection_options o) -> capy::task<result<void>> {
 			auto r = co_await ldap::connect(ioc, std::move(where), std::move(o));
-			if (!r) co_return std::unexpected(std::move(r.error()));
+			if (!r) {
+				co_return std::unexpected(std::move(r.error()));
+			}
 			target = std::move(*r);
 			co_return result<void>{};
 		}(c, ioc_, std::move(u), options_);
@@ -48,7 +50,9 @@ result<void> connection::connect(url u)
 result<void> connection::connect(std::string_view text)
 {
 	auto u = url::parse(text);
-	if (!u) return std::unexpected(std::move(u.error()));
+	if (!u) {
+		return std::unexpected(std::move(u.error()));
+	}
 	return connect(std::move(*u));
 }
 
@@ -75,12 +79,18 @@ result<std::pmr::vector<entry>>
 				 std::int32_t n,
 				 std::pmr::memory_resource *m) -> capy::task<result<std::pmr::vector<entry>>> {
 			auto s = co_await conn.search_paged(std::move(p), n, m);
-			if (!s) co_return std::unexpected(std::move(s.error()));
+			if (!s) {
+				co_return std::unexpected(std::move(s.error()));
+			}
 			std::pmr::vector<entry> out(m);
 			while (true) {
 				auto e = co_await s->next();
-				if (!e) co_return std::unexpected(std::move(e.error()));
-				if (!*e) co_return out;
+				if (!e) {
+					co_return std::unexpected(std::move(e.error()));
+				}
+				if (!*e) {
+					co_return out;
+				}
 				out.push_back(std::move(**e));
 			}
 		}(c, std::move(request), page_size, mr);

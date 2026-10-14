@@ -141,7 +141,9 @@ TEST_CASE("scram: random client nonces", "[sasl][scram]")
 		REQUIRE_THAT(first, StartsWith("n,,n=user,r="));
 		const std::string nonce = first.substr(std::string_view("n,,n=user,r=").size());
 		CHECK(nonce.size() == 24);
-		for (const char c : nonce) CHECK((c > 0x20 && c < 0x7f && c != ','));
+		for (const char c : nonce) {
+			CHECK((c > 0x20 && c < 0x7f && c != ','));
+		}
 		seen.insert(nonce);
 	}
 	CHECK(seen.size() == 16);
@@ -153,8 +155,9 @@ namespace {
 std::string hex(std::string_view s)
 {
 	std::ostringstream out;
-	for (const char c : s)
+	for (const char c : s) {
 		out << std::hex << (static_cast<unsigned>(static_cast<unsigned char>(c)) | 0x100u) % 0x100u << ' ';
+	}
 	return out.str();
 }
 
@@ -550,7 +553,9 @@ TEST_CASE("scram: server-final-message rejections (mutual authentication)", "[sa
 		CHECK(context(std::string(62, 'x') + "\xE2\x80\xAE") == prefix + "\"" + std::string(62, 'x') + "...\"");
 		// At most 64 bytes of the value, never half a character.
 		std::string e_acute;
-		for (int i = 0; i < 40; ++i) e_acute += "\xC3\xA9";
+		for (int i = 0; i < 40; ++i) {
+			e_acute += "\xC3\xA9";
+		}
 		CHECK(context(e_acute) == prefix + "\"" + e_acute.substr(0, 64) + "...\"");
 		CHECK(context("a" + e_acute) == prefix + "\"a" + e_acute.substr(0, 62) + "...\"");
 		CHECK(context(std::string(64, 'x')) == prefix + "\"" + std::string(64, 'x') + "\"");

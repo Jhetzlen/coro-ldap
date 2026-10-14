@@ -49,7 +49,9 @@ ldap::connection open(corosio::io_context &ioc, const std::string &url, const ld
 	auto u = ldap::url::parse(url);
 	REQUIRE(u.has_value());
 	auto c = finish(ioc, ldap::connect(ioc, *u, o));
-	if (!c) FAIL("connect " << url << ": " << c.error().message());
+	if (!c) {
+		FAIL("connect " << url << ": " << c.error().message());
+	}
 	return std::move(*c);
 }
 
@@ -65,8 +67,9 @@ std::string localhost_url()
 // Skips the test unless slapd and the KDC are set up and slapd offers GSSAPI.
 void require_kerberos()
 {
-	if (env("JHETZ_LDAP_IT_LDAP").empty() || env("JHETZ_LDAP_IT_KRB5_REALM").empty())
+	if (env("JHETZ_LDAP_IT_LDAP").empty() || env("JHETZ_LDAP_IT_KRB5_REALM").empty()) {
 		SKIP("no slapd and KDC: run under run_kdc.sh run_slapd.sh");
+	}
 	corosio::io_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	auto dse =
@@ -74,14 +77,17 @@ void require_kerberos()
 	REQUIRE(dse.has_value());
 	REQUIRE(dse->size() == 1);
 	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");
-	if (mechs == nullptr || std::ranges::find(*mechs, "GSSAPI") == mechs->end())
+	if (mechs == nullptr || std::ranges::find(*mechs, "GSSAPI") == mechs->end()) {
 		SKIP("slapd does not offer GSSAPI (cyrus-sasl's gssapi plugin not installed, or not on SASL_PATH)");
+	}
 }
 
 std::string bind_and_who(corosio::io_context &ioc, ldap::connection &c, ldap::sasl_gssapi &mech)
 {
 	auto r = finish(ioc, c.sasl_bind(mech));
-	if (!r) FAIL("sasl bind: " << r.error().message());
+	if (!r) {
+		FAIL("sasl bind: " << r.error().message());
+	}
 	auto who = finish(ioc, c.who_am_i());
 	REQUIRE(who.has_value());
 	return *who;
@@ -96,13 +102,17 @@ class sasl_secprops
 	  : ioc_(ioc), config_(open(ioc, env("JHETZ_LDAP_IT_LDAP")))
 	{
 		auto b = finish(ioc_, config_.simple_bind(config_dn, "secret"));
-		if (!b) FAIL("bind as cn=config: " << b.error().message());
+		if (!b) {
+			FAIL("bind as cn=config: " << b.error().message());
+		}
 		auto old = finish(ioc_,
 		  config_.search(
 			{ .base = config_dn, .scope = ldap::search_scope::base_object, .attributes = { "olcSaslSecProps" } }));
 		REQUIRE(old.has_value());
 		REQUIRE(old->size() == 1);
-		if (const auto *v = (*old)[0].find("olcSaslSecProps"); v != nullptr && !v->empty()) old_ = std::string((*v)[0]);
+		if (const auto *v = (*old)[0].find("olcSaslSecProps"); v != nullptr && !v->empty()) {
+			old_ = std::string((*v)[0]);
+		}
 		set(value);
 	}
 	sasl_secprops(const sasl_secprops &) = delete;
@@ -110,11 +120,12 @@ class sasl_secprops
 	~sasl_secprops()
 	{
 		try {
-			if (old_)
+			if (old_) {
 				set(*old_);
-			else
+			} else {
 				(void)finish(ioc_,
 				  config_.modify({ .object = config_dn, .changes = { ldap::mod::remove("olcSaslSecProps", {}) } }));
+			}
 		} catch (...) {}
 	}
 
@@ -123,7 +134,9 @@ class sasl_secprops
 	{
 		auto m = finish(ioc_,
 		  config_.modify({ .object = config_dn, .changes = { ldap::mod::replace("olcSaslSecProps", { value }) } }));
-		if (!m) FAIL("set olcSaslSecProps: " << m.error().message());
+		if (!m) {
+			FAIL("set olcSaslSecProps: " << m.error().message());
+		}
 	}
 
 	inline static const ldap::dn config_dn{ "cn=config" };

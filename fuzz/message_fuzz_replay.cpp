@@ -53,9 +53,13 @@ int main(int argc, char **argv)
 		.rng_seed = 0x5EED'1DA9'0000'0002ull };
 	std::size_t i = 0;
 	for (auto m : ldap::test::sample_messages()) {
-		if (i++ % 8 == 0) m.controls = ldap::test::sample_controls();
+		if (i++ % 8 == 0) {
+			m.controls = ldap::test::sample_controls();
+		}
 		auto bytes = ldap::encode(m);
-		if (!bytes) return 1;
+		if (!bytes) {
+			return 1;
+		}
 		cfg.seeds.push_back(fuzz::to_input(*bytes));
 	}
 	return fuzz::replay_main(argc, argv, cfg);

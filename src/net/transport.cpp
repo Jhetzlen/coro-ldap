@@ -25,7 +25,9 @@ transport::~transport() { destroy(); }
 
 void transport::destroy() noexcept
 {
-	if (impl_ == nullptr) return;
+	if (impl_ == nullptr) {
+		return;
+	}
 	impl *im = std::exchange(impl_, nullptr);
 	if (im->custom != nullptr) {
 		im->stream = {};// refers to the custom stream
@@ -59,7 +61,9 @@ bool transport::is_tls() const noexcept { return impl_ && impl_->tls.has_value()
 
 bool transport::is_open() const noexcept
 {
-	if (!impl_) return false;
+	if (!impl_) {
+		return false;
+	}
 	switch (impl_->type) {
 	case kind::tcp:
 		return impl_->tcp && impl_->tcp->is_open();
@@ -87,20 +91,36 @@ const std::pmr::string &transport::host() const noexcept
 
 void transport::cancel() noexcept
 {
-	if (!impl_) return;
-	if (impl_->tcp) impl_->tcp->cancel();
-	if (impl_->local) impl_->local->cancel();
-	if (impl_->custom && impl_->custom_ops.cancel) impl_->custom_ops.cancel(impl_->custom);
+	if (!impl_) {
+		return;
+	}
+	if (impl_->tcp) {
+		impl_->tcp->cancel();
+	}
+	if (impl_->local) {
+		impl_->local->cancel();
+	}
+	if (impl_->custom && impl_->custom_ops.cancel) {
+		impl_->custom_ops.cancel(impl_->custom);
+	}
 }
 
 void transport::close() noexcept
 {
-	if (!impl_) return;
-	if (impl_->tcp) impl_->tcp->close();
-	if (impl_->local) impl_->local->close();
+	if (!impl_) {
+		return;
+	}
+	if (impl_->tcp) {
+		impl_->tcp->close();
+	}
+	if (impl_->local) {
+		impl_->local->close();
+	}
 	if (impl_->custom && !impl_->custom_closed) {
 		impl_->custom_closed = true;
-		if (impl_->custom_ops.close) impl_->custom_ops.close(impl_->custom);
+		if (impl_->custom_ops.close) {
+			impl_->custom_ops.close(impl_->custom);
+		}
 	}
 }
 
@@ -111,10 +131,14 @@ boost::capy::task<result<void>> transport::shutdown(std::optional<std::chrono::m
 		co_return result<void>{};
 	}
 	detail::deadline_t deadline;
-	if (timeout) deadline = detail::clock::now() + *timeout;
+	if (timeout) {
+		deadline = detail::clock::now() + *timeout;
+	}
 	auto [ec] = co_await detail::bounded(impl_->tls->shutdown(), deadline);
 	close();
-	if (ec) co_return fail(ec, "tls shutdown " + std::string(impl_->name));
+	if (ec) {
+		co_return fail(ec, "tls shutdown " + std::string(impl_->name));
+	}
 	co_return result<void>{};
 }
 

@@ -39,11 +39,14 @@ ldap::message large_entry()
 	for (int a = 0; a < 30; ++a) {
 		auto &pa = e.attributes.emplace_back();
 		pa.type = "attribute-number-" + std::to_string(a);
-		for (int v = 0; v < 3; ++v)
+		for (int v = 0; v < 3; ++v) {
 			pa.values.emplace_back(std::string(20 + static_cast<std::size_t>(a), 'a' + static_cast<char>(v)));
+		}
 	}
 	std::string binary(1 << 20, '\0');
-	for (std::size_t i = 0; i < binary.size(); ++i) binary[i] = static_cast<char>(i * 7);
+	for (std::size_t i = 0; i < binary.size(); ++i) {
+		binary[i] = static_cast<char>(i * 7);
+	}
 	e.attributes.emplace_back("jpegPhoto", std::initializer_list<std::string_view>{ binary, binary.substr(1000) });
 	return { 42, std::move(e), { ldap::control{ "1.2.840.113556.1.4.319", false, "cookie-cookie-cookie" } } };
 }

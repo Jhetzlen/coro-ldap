@@ -261,10 +261,11 @@ void octet_string_of_total_size(ber::writer &w, std::size_t total)
 void nest(ber::writer &w, int levels, std::size_t content_size)
 {
 	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
-		if (levels == 0)
+		if (levels == 0) {
 			octet_string_of_total_size(s, content_size);
-		else
+		} else {
 			nest(s, levels - 1, content_size);
+		}
 	});
 }
 
