@@ -2,6 +2,7 @@
 
 #include "jhetz/ldap/net/message_io.hpp"
 
+#include "connection/impl.hpp"
 #include "connection/sasl_offload.hpp"
 #include "format_util.hpp"
 
@@ -50,66 +51,16 @@ std::string detail::op_context(std::string_view op, const dn &d)
 	return text;
 }
 
-namespace detail {
-
-	inline constexpr std::array<std::string_view, 21> op_names{ "BindRequest",
-		"BindResponse",
-		"UnbindRequest",
-		"SearchRequest",
-		"SearchResultEntry",
-		"SearchResultDone",
-		"SearchResultReference",
-		"ModifyRequest",
-		"ModifyResponse",
-		"AddRequest",
-		"AddResponse",
-		"DelRequest",
-		"DelResponse",
-		"ModifyDNRequest",
-		"ModifyDNResponse",
-		"CompareRequest",
-		"CompareResponse",
-		"AbandonRequest",
-		"ExtendedRequest",
-		"ExtendedResponse",
-		"IntermediateResponse" };
-	static_assert(std::variant_size_v<protocol_op> == op_names.size());
-
-	std::string_view op_name(const protocol_op &op) noexcept { return op_names[op.index()]; }
-
-	template<class T, class... Ts> consteval std::size_t index_in(const std::variant<Ts...> *)
-	{
-		constexpr bool same[] = { std::is_same_v<T, Ts>... };
-		for (std::size_t i = 0; i < sizeof...(Ts); ++i)
-			if (same[i]) return i;
-		return sizeof...(Ts);
-	}
-	template<class T> inline constexpr std::size_t op_index = index_in<T>(static_cast<const protocol_op *>(nullptr));
-
-	// RFC 4511 protocolOp tags of the responses the reader recognizes before
-	// decoding.
-	inline constexpr ber::tag search_result_done_tag = ber::application(5, true);
-	inline constexpr ber::tag intermediate_response_tag = ber::application(25, true);
-
-	bool same_tag(ber::tag a, ber::tag b) noexcept { return a.cls == b.cls && a.number == b.number; }
-
-	using clock = std::chrono::steady_clock;
-
-	std::optional<clock::time_point> deadline_after(std::optional<std::chrono::milliseconds> d)
-	{
-		if (!d) return std::nullopt;
-		return clock::now() + *d;
-	}
-
-}// namespace detail
-
 using detail::clock;
 using detail::deadline_after;
+using detail::impl_ref;
 using detail::intermediate_response_tag;
 using detail::op_context;
 using detail::op_index;
 using detail::op_name;
 using detail::op_names;
+using detail::pending_op;
+using detail::registration;
 using detail::same_tag;
 using detail::search_result_done_tag;
 
@@ -123,767 +74,527 @@ namespace {
 
 // ---------------------------------------------------------------- state
 
-namespace detail {
-
-	// One outstanding request: registered with the connection by message id
-	// while it waits for responses. Lives in the operation's coroutine frame
-	// (bind) or in a search_stream's state.
-	struct pending_op
-	{
-		explicit pending_op(std::pmr::memory_resource *mr_, bool search_, std::size_t expect_)
-		  : mr(mr_), search(search_), expect(expect_), queue(mr_)
-		{}
-		pending_op(const pending_op &) = delete;
-		pending_op &operator=(const pending_op &) = delete;
-
-		std::pmr::memory_resource *mr;// responses are decoded into this
-		bool search;// many responses, until a SearchResultDone
-		std::size_t expect;// protocol_op index of the (final) response
-		std::int32_t id = 0;
-		bool registered = false;
-		// False for Bind and StartTLS, which cannot be abandoned (RFC 4511
-		// section 4.11): giving up on them closes the connection instead.
-		bool abandonable = true;
-		std::pmr::deque<message> queue;// on mr, so messages move in without a copy
-		bool finished = false;// final response queued, or failed / abandoned
-		std::optional<error> failure{};// connection failure (without op context)
-		capy::async_event ready{};// set while queue is non-empty or finished
-	};
-
-}// namespace detail
-
-using detail::pending_op;
-
-struct connection::impl
+connection::impl::impl(corosio::io_context &ioc,
+  net::transport t,
+  const connection_options &options,
+  std::pmr::memory_resource *mr_)
+  : ex(ioc.get_executor()), mr(mr_), transport(std::move(t)), buf(mr_), max_message_size(options.max_message_size),
+	max_elements(options.max_elements), default_timeout(options.operation_timeout),
+	tls_shutdown_timeout(options.tls_shutdown_timeout), pending(mr_), abandoned(mr_), outbox(mr_), held(mr_),
+	scratch(mr_)
 {
-	impl(corosio::io_context &ioc, net::transport t, const connection_options &options, std::pmr::memory_resource *mr_)
-	  : ex(ioc.get_executor()), mr(mr_), transport(std::move(t)), buf(mr_), max_message_size(options.max_message_size),
-		max_elements(options.max_elements), default_timeout(options.operation_timeout),
-		tls_shutdown_timeout(options.tls_shutdown_timeout), pending(mr_), abandoned(mr_), outbox(mr_), held(mr_),
-		scratch(mr_)
-	{
-		schema_mode = options.schema_check;
-		password_mode = options.password_method;
-		write_idle.set();
-		reader_idle.set();
-		bind_idle.set();
-		due_idle.set();
-	}
+	schema_mode = options.schema_check;
+	password_mode = options.password_method;
+	write_idle.set();
+	reader_idle.set();
+	bind_idle.set();
+	due_idle.set();
+}
 
-	corosio::io_context::executor_type ex;
-	std::pmr::memory_resource *mr;
-	std::size_t refs = 1;
-	net::transport transport;
-	net::read_buffer buf;
-	std::size_t max_message_size;
-	std::size_t max_elements;
-	std::optional<std::chrono::milliseconds> default_timeout;
-	std::optional<std::chrono::milliseconds> tls_shutdown_timeout;
-	std::int32_t next_id = 1;
-	bool wrapped = false;// next_id went past maxInt: ids may be in use
-	bool open = true;
-	// unbind() sent its UnbindRequest and waits for the writer: still open,
-	// but nothing more may be sent (RFC 4511 section 4.3).
-	bool unbinding = false;
-	std::optional<error> failure{};// why the connection closed, if it failed
-	std::pmr::unordered_map<std::int32_t, pending_op *> pending;
-	struct abandoned_req
-	{
-		std::int32_t id;
-		bool search;
-		// Sent by send_unanswered: an answer is certain (an abandoned
-		// request may or may not be answered), until `deadline`, after
-		// which it is no longer waited for (but still dropped if it comes).
-		bool due = false;
-		std::optional<clock::time_point> deadline{};
-	};
-	std::pmr::deque<abandoned_req> abandoned;
-	// Entries of `abandoned` that are `due`: requests still to be answered
-	// although nothing waits for them. Counted as outstanding, so StartTLS
-	// waits for their answers (RFC 4513 section 3.1.1), and read by the
-	// reader, which runs while there are any.
-	std::size_t due_answers = 0;
-	capy::async_event due_idle{};// set while due_answers is 0 (shut sets it after unbind)
-	// The due watcher: runs while a due answer has a deadline, and stops
-	// counting it once that passes. Woken by `due_changed` when the due
-	// answers change.
-	bool watching = false;
-	capy::async_event due_changed{};
-	// Writer: PDUs waiting to be written, in order.
-	std::pmr::deque<std::pmr::vector<std::byte>> outbox;
-	bool writing = false;
-	capy::async_event write_idle{};// set while the writer is not running
-	// A bind exchange (every step of a SASL bind) is in progress: other
-	// requests are held until it ends, since nothing may be sent while a
-	// BindRequest is outstanding (RFC 4511 section 4.2.1).
-	bool binding = false;
-	capy::async_event bind_idle{};// set while `binding` is false
-	struct held_request
-	{
-		std::int32_t id;
-		std::pmr::vector<std::byte> bytes;
-	};
-	std::pmr::deque<held_request> held;
-	// Reader: runs while `pending` is not empty or answers are due.
-	bool reading = false;
-	std::stop_source reader_stop{};
-	capy::async_event reader_idle{};// set while the reader is not running
-	// StartTLS in progress: no other request may be sent (RFC 4511 4.14.1),
-	// and is_tls() is false (the TLS layer is set before the handshake).
-	bool upgrading = false;
-	// schema_check::on_first_use: the loaded schema and the types checked.
-	ldap::schema_check schema_mode = ldap::schema_check::off;
-	std::shared_ptr<const server_schema> schema{};
-	std::vector<std::type_index> schema_checked{};
-	// change_password / reset_password: the connection's default method, and
-	// the one the root DSE advertised (password_method::automatic), once read.
-	ldap::password_method password_mode = ldap::password_method::automatic;
-	std::optional<ldap::password_method> advertised_password_method{};
-	// Unsolicited notifications are decoded here, then released.
-	std::pmr::monotonic_buffer_resource scratch;
+// ---------------------------------------------------------------- refs
 
-	// ---------------------------------------------------------------- refs
+void connection::impl::add_ref() noexcept { ++refs; }
 
-	void add_ref() noexcept { ++refs; }
-	void release() noexcept
-	{
-		if (--refs != 0) return;
-		std::pmr::polymorphic_allocator<> alloc(mr);
-		alloc.delete_object(this);
-	}
+void connection::impl::release() noexcept
+{
+	if (--refs != 0) return;
+	std::pmr::polymorphic_allocator<> alloc(mr);
+	alloc.delete_object(this);
+}
 
-	// Held by the writer and reader frames, so the state is released even
-	// if a frame is destroyed without finishing (io_context destroyed).
-	struct frame_ref
-	{
-		impl *p;
-		explicit frame_ref(impl *p_) noexcept : p(p_) {}
-		frame_ref(const frame_ref &) = delete;
-		frame_ref &operator=(const frame_ref &) = delete;
-		~frame_ref() { p->release(); }
-	};
+// ---------------------------------------------------------------- failure
 
-	// ---------------------------------------------------------------- failure
-
-	// A copy of `e`, or if there is no memory for it, an out_of_memory():
-	// for paths that must not throw.
-	static error copy_error(const error &e) noexcept
-	{
-		try {
-			return e;
-		} catch (const std::bad_alloc &) {
-			return out_of_memory();
-		}
-	}
-
-	// not_enough_memory without a context, so building and copying it
-	// allocates nothing; operations add their own.
-	static error out_of_memory() noexcept
-	{
-		error e;
-		e.code = std::make_error_code(std::errc::not_enough_memory);
+error connection::impl::copy_error(const error &e) noexcept
+{
+	try {
 		return e;
+	} catch (const std::bad_alloc &) {
+		return out_of_memory();
 	}
+}
 
-	// Closes the transport and fails every outstanding operation with `e`
-	// (they add their own context). `remember`: later operations name it.
-	// `close_transport` false: the caller closes it (unbind, after the TLS
-	// shutdown). Never throws: destructors and the detached tasks call it.
-	void shut(error e, bool remember, bool close_transport = true) noexcept
-	{
-		if (!open) return;
-		open = false;
-		if (remember) failure = copy_error(e);
-		if (close_transport) transport.close();
-		outbox.clear();
-		held.clear();
-		abandoned.clear();
-		due_answers = 0;
-		due_idle.set();// a StartTLS waiting for them fails with not_connected
-		due_changed.set();// the due watcher ends
-		auto waiting = std::move(pending);
-		pending.clear();
-		for (auto &[id, p] : waiting) {
-			p->registered = false;
-			p->finished = true;
-			p->failure = copy_error(e);
-			p->ready.set();
-		}
-		if (reading) reader_stop.request_stop();
+error connection::impl::out_of_memory() noexcept
+{
+	error e;
+	e.code = std::make_error_code(std::errc::not_enough_memory);
+	return e;
+}
+
+void connection::impl::shut(error e, bool remember, bool close_transport) noexcept
+{
+	if (!open) return;
+	open = false;
+	if (remember) failure = copy_error(e);
+	if (close_transport) transport.close();
+	outbox.clear();
+	held.clear();
+	abandoned.clear();
+	due_answers = 0;
+	due_idle.set();// a StartTLS waiting for them fails with not_connected
+	due_changed.set();// the due watcher ends
+	auto waiting = std::move(pending);
+	pending.clear();
+	for (auto &[id, p] : waiting) {
+		p->registered = false;
+		p->finished = true;
+		p->failure = copy_error(e);
+		p->ready.set();
 	}
+	if (reading) reader_stop.request_stop();
+}
 
-	// An allocation failed where no exception may go: in a destructor (an
-	// AbandonRequest, the requests a bind held) or a detached task (the
-	// writer, the reader, the due watcher). What was to be sent or read is
-	// lost, so the connection cannot go on: it is closed, and its
-	// operations fail with not_enough_memory instead of waiting for what
-	// never comes.
-	void shut_out_of_memory() noexcept { shut(out_of_memory(), true); }
+void connection::impl::shut_out_of_memory() noexcept { shut(out_of_memory(), true); }
 
-	error not_connected(std::string_view context) const
-	{
-		std::string text(context);
-		if (failure) {
-			text += ": connection closed by an earlier error: ";
-			text += failure->message();
-		} else if (open && unbinding) {
-			text += ": connection closing (unbind)";
-		} else {
-			text += ": connection closed";
-		}
-		return make_error(client_errc::not_connected, text);
+error connection::impl::not_connected(std::string_view context) const
+{
+	std::string text(context);
+	if (failure) {
+		text += ": connection closed by an earlier error: ";
+		text += failure->message();
+	} else if (open && unbinding) {
+		text += ": connection closing (unbind)";
+	} else {
+		text += ": connection closed";
 	}
+	return make_error(client_errc::not_connected, text);
+}
 
-	// ---------------------------------------------------------------- tasks
+// ---------------------------------------------------------------- tasks
 
-	// The frame of a detached task (writer, reader, due watcher), from the
-	// executor's frame allocator as capy::run_async would use. Made before
-	// the caller sets its flags: a bad_alloc then leaves no flag set without
-	// its task. (capy::run_async allocates its own frame before the task's;
-	// a task frame failing there would leak it, and its work guard.)
-	// Known limitations, outside this library, where an allocation failing
-	// ends the program, whatever the caller catches:
-	// - capy::run_async allocates its own frame (the trampoline) in a
-	//   noexcept constructor;
-	// - corosio::timeout builds its timer (and grows the timer heap) and
-	//   starts its timeout coroutine (a frame) in await_suspend, which
-	//   capy's task calls from a noexcept wrapper (transform_awaiter): the
-	//   due watcher, next_response and start_tls's wait for due answers
-	//   with a deadline, and net::detail::bounded (connect, TLS handshake
-	//   and shutdown with a deadline). Its awaitable's std::stop_source,
-	//   made when the co_await is evaluated (before await_suspend), throws
-	//   bad_alloc normally: caught by the due watcher, propagated by the
-	//   others.
-	capy::task<void> new_task(capy::task<void> (*body)(impl *))
+capy::task<void> connection::impl::new_task(capy::task<void> (*body)(impl *))
+{
+	struct frame_allocator_scope
 	{
-		struct frame_allocator_scope
+		std::pmr::memory_resource *saved = capy::get_current_frame_allocator();
+		explicit frame_allocator_scope(std::pmr::memory_resource *mr) noexcept
 		{
-			std::pmr::memory_resource *saved = capy::get_current_frame_allocator();
-			explicit frame_allocator_scope(std::pmr::memory_resource *mr) noexcept
-			{
-				capy::set_current_frame_allocator(mr);
-			}
-			frame_allocator_scope(const frame_allocator_scope &) = delete;
-			frame_allocator_scope &operator=(const frame_allocator_scope &) = delete;
-			~frame_allocator_scope() { capy::set_current_frame_allocator(saved); }
-		};
-		const frame_allocator_scope scope(ex.context().get_frame_allocator());
-		return body(this);
-	}
-
-	// ---------------------------------------------------------------- writer
-
-	// A bad_alloc in a detached task would end the program (run_async's
-	// default handler): each catches its own and closes the connection.
-	static capy::task<void> writer(impl *self)
-	{
-		const frame_ref ref(self);
-		try {
-			while (self->open && !self->outbox.empty()) {
-				auto bytes = std::move(self->outbox.front());
-				self->outbox.pop_front();
-				auto w = co_await net::write_bytes(self->transport, bytes);
-				if (!w) self->shut(std::move(w.error()), true);
-			}
-		} catch (const std::bad_alloc &) {
-			self->shut_out_of_memory();
+			capy::set_current_frame_allocator(mr);
 		}
-		self->writing = false;
-		self->write_idle.set();
-	}
+		frame_allocator_scope(const frame_allocator_scope &) = delete;
+		frame_allocator_scope &operator=(const frame_allocator_scope &) = delete;
+		~frame_allocator_scope() { capy::set_current_frame_allocator(saved); }
+	};
+	const frame_allocator_scope scope(ex.context().get_frame_allocator());
+	return body(this);
+}
 
-	// Queues `bytes` and starts the writer if it is not running. A throw
-	// (bad_alloc) queues nothing and changes nothing.
-	void enqueue(std::pmr::vector<std::byte> bytes)
-	{
-		if (writing) {
-			outbox.push_back(std::move(bytes));
-			return;
+// ---------------------------------------------------------------- writer
+
+capy::task<void> connection::impl::writer(impl *self)
+{
+	const frame_ref ref(self);
+	try {
+		while (self->open && !self->outbox.empty()) {
+			auto bytes = std::move(self->outbox.front());
+			self->outbox.pop_front();
+			auto w = co_await net::write_bytes(self->transport, bytes);
+			if (!w) self->shut(std::move(w.error()), true);
 		}
-		auto task = new_task(&writer);
+	} catch (const std::bad_alloc &) {
+		self->shut_out_of_memory();
+	}
+	self->writing = false;
+	self->write_idle.set();
+}
+
+void connection::impl::enqueue(std::pmr::vector<std::byte> bytes)
+{
+	if (writing) {
 		outbox.push_back(std::move(bytes));
-		writing = true;
-		write_idle.clear();
-		add_ref();// released by the writer
-		// No stop token: a PDU is always written whole (a cancelled write
-		// would leave half a PDU on the wire).
-		capy::run_async(ex)(std::move(task));
+		return;
 	}
+	auto task = new_task(&writer);
+	outbox.push_back(std::move(bytes));
+	writing = true;
+	write_idle.clear();
+	add_ref();// released by the writer
+	// No stop token: a PDU is always written whole (a cancelled write
+	// would leave half a PDU on the wire).
+	capy::run_async(ex)(std::move(task));
+}
 
-	// The next message id the server cannot still be servicing (RFC 4511
-	// section 4.1.1): after wrapping at maxInt, ids of outstanding or
-	// recently abandoned requests are skipped.
-	std::int32_t free_id() const
-	{
-		std::int32_t id = next_id;
-		if (!wrapped) return id;// ids so far only increased: none is in use
-		auto in_use = [this](std::int32_t i) {
-			return pending.contains(i) || std::ranges::contains(abandoned, i, &abandoned_req::id);
-		};
-		while (in_use(id)) id = id == max_int ? 1 : id + 1;
-		return id;
+std::int32_t connection::impl::free_id() const
+{
+	std::int32_t id = next_id;
+	if (!wrapped) return id;// ids so far only increased: none is in use
+	auto in_use = [this](std::int32_t i) {
+		return pending.contains(i) || std::ranges::contains(abandoned, i, &abandoned_req::id);
+	};
+	while (in_use(id)) id = id == max_int ? 1 : id + 1;
+	return id;
+}
+
+result<void> connection::impl::submit(message &m, pending_op *p, std::string_view context)
+{
+	if (!open || unbinding) return std::unexpected(not_connected(context));
+	if (upgrading && !std::holds_alternative<abandon_request>(m.op))
+		return fail(client_errc::operation_in_progress, std::string(context) + " during StartTLS");
+	m.id = free_id();
+	auto bytes = encode(m, mr);
+	if (!bytes) return std::unexpected(detail::with_context(std::move(bytes.error()), context));
+	if (m.id == max_int) wrapped = true;
+	next_id = m.id == max_int ? 1 : m.id + 1;
+	const bool bind = std::holds_alternative<bind_request>(m.op);
+	if (p != nullptr) {
+		const auto *x = std::get_if<extended_request>(&m.op);
+		p->abandonable = !bind && (x == nullptr || x->request_name != start_tls_oid);
+		p->id = m.id;
+		pending.emplace(m.id, p);
+		p->registered = true;
 	}
-
-	// Gives `m` the next free message id, encodes it and queues it for the
-	// writer. If `p` is given it is registered under that id first (its
-	// response may arrive before the write completes). If encoding fails
-	// nothing is sent and the id is not used up. On a throw (bad_alloc)
-	// nothing is queued and `p` is not registered (the id is used up).
-	result<void> submit(message &m, pending_op *p, std::string_view context)
-	{
-		if (!open || unbinding) return std::unexpected(not_connected(context));
-		if (upgrading && !std::holds_alternative<abandon_request>(m.op))
-			return fail(client_errc::operation_in_progress, std::string(context) + " during StartTLS");
-		m.id = free_id();
-		auto bytes = encode(m, mr);
-		if (!bytes) return std::unexpected(detail::with_context(std::move(bytes.error()), context));
-		if (m.id == max_int) wrapped = true;
-		next_id = m.id == max_int ? 1 : m.id + 1;
-		const bool bind = std::holds_alternative<bind_request>(m.op);
-		if (p != nullptr) {
-			const auto *x = std::get_if<extended_request>(&m.op);
-			p->abandonable = !bind && (x == nullptr || x->request_name != start_tls_oid);
-			p->id = m.id;
-			pending.emplace(m.id, p);
-			p->registered = true;
-		}
-		try {
-			if (p != nullptr) start_reader();
-			if (binding && !bind)
-				held.push_back({ m.id, std::move(*bytes) });
-			else
-				enqueue(std::move(*bytes));
-		} catch (...) {
-			// `p` (in the caller's frame) must not stay registered: its
-			// request is not sent.
-			if (p != nullptr) {
-				pending.erase(m.id);
-				p->registered = false;
-				stop_reader_if_idle();
-			}
-			throw;
-		}
-		return {};
-	}
-
-	// The bind exchange ended: sends the requests it held, in order. Called
-	// from a destructor: if one cannot be queued, the connection is closed
-	// (the held requests fail with not_enough_memory).
-	void release_held() noexcept
-	{
-		try {
-			while (open && !held.empty()) {
-				enqueue(std::move(held.front().bytes));
-				held.pop_front();
-			}
-		} catch (const std::bad_alloc &) {
-			shut_out_of_memory();
-		}
-		held.clear();
-	}
-
-	// Stops waiting for `p`'s responses and tells the server (best effort).
-	// Called from destructors: if the AbandonRequest cannot be built or
-	// queued, the connection is closed (a late response would then match
-	// no request).
-	void abandon(pending_op &p) noexcept
-	{
-		if (!p.registered) return;
-		p.registered = false;
-		p.finished = true;
-		pending.erase(p.id);
-		stop_reader_if_idle();
-		if (!open) return;
-		try {
-			if (!p.abandonable) {
-				shut(make_error(client_errc::not_connected,
-					   "connection closed: a Bind or StartTLS request cannot be abandoned (RFC 4511 section 4.11)"),
-				  true);
-				return;
-			}
-			// Held by a bind exchange, so never sent: nothing to tell the server.
-			auto h = std::ranges::find(held, p.id, &held_request::id);
-			if (h != held.end()) {
-				held.erase(h);
-				return;
-			}
-			abandoned.push_back({ p.id, p.search });
-			trim_abandoned();
-			message m{ 0, abandon_request{ p.id } };
-			(void)submit(m, nullptr, "abandon");// cannot fail to encode
-		} catch (const std::bad_alloc &) {
-			shut_out_of_memory();
-		}
-	}
-
-	// Sends `m` without waiting for an answer: its responses are dropped like
-	// late responses to an abandoned request. `m` must be a request that is
-	// always answered: the answer is counted as `due` until it arrives or
-	// `deadline` passes, and a reader is started to read it. Best effort:
-	// nothing is sent if the connection is closed or cannot send `m` now.
-	// Never suspends.
-	void send_unanswered(message &m, bool search, std::optional<clock::time_point> deadline, std::string_view context)
-	{
-		// Listed before `m` is queued, like abandon(): nothing may fail after
-		// that, or its answer would match no request. Id 0 is never a
-		// request's. submit returns an error, or throws, only with nothing
-		// queued, so the entry is still last then. It may start the writer
-		// inline, whose failed write runs shut() inside it, which clears the
-		// list: hence the guarded pop_back() on a throw, and the !open check
-		// after it. If starting the reader or the due watcher below throws,
-		// the request is sent and its answer still counted as due: the next
-		// reader started reads it, and its deadline is applied once a due
-		// watcher runs again (StartTLS's wait starts both).
-		abandoned.push_back({ 0, search });
-		try {
-			if (!submit(m, nullptr, context)) {
-				abandoned.pop_back();
-				return;
-			}
-		} catch (...) {
-			if (!abandoned.empty()) abandoned.pop_back();
-			throw;
-		}
-		if (!open) return;
-		abandoned.back().id = m.id;
-		abandoned.back().due = true;
-		abandoned.back().deadline = deadline;
-		++due_answers;
-		due_updated();
-		trim_abandoned();
-		start_reader();
-		if (deadline) start_due_watcher();
-	}
-
-	// Forgets an abandoned request: a later response for it is unexpected.
-	void forget_abandoned(std::pmr::deque<abandoned_req>::iterator a)
-	{
-		const bool due = a->due;
-		if (due) --due_answers;
-		abandoned.erase(a);
-		if (due) due_updated();
-		stop_reader_if_idle();
-	}
-
-	// Forgets an abandoned request if there are too many: the oldest whose
-	// answer is not due (those are the least likely to still come), else
-	// the oldest. Never the one just added.
-	void trim_abandoned()
-	{
-		if (abandoned.size() <= max_abandoned) return;
-		auto a = std::ranges::find(abandoned.begin(), std::prev(abandoned.end()), false, &abandoned_req::due);
-		forget_abandoned(a != std::prev(abandoned.end()) ? a : abandoned.begin());
-	}
-
-	// due_answers changed: wakes a StartTLS waiting for 0, and the due
-	// watcher.
-	void due_updated()
-	{
-		if (due_answers == 0)
-			due_idle.set();
+	try {
+		if (p != nullptr) start_reader();
+		if (binding && !bind)
+			held.push_back({ m.id, std::move(*bytes) });
 		else
-			due_idle.clear();
-		due_changed.set();
+			enqueue(std::move(*bytes));
+	} catch (...) {
+		// `p` (in the caller's frame) must not stay registered: its
+		// request is not sent.
+		if (p != nullptr) {
+			pending.erase(m.id);
+			p->registered = false;
+			stop_reader_if_idle();
+		}
+		throw;
 	}
+	return {};
+}
 
-	// ---------------------------------------------------------------- due answers
+void connection::impl::release_held() noexcept
+{
+	try {
+		while (open && !held.empty()) {
+			enqueue(std::move(held.front().bytes));
+			held.pop_front();
+		}
+	} catch (const std::bad_alloc &) {
+		shut_out_of_memory();
+	}
+	held.clear();
+}
 
-	void start_due_watcher()
-	{
-		if (watching) {
-			due_changed.set();// recomputes its next deadline
+void connection::impl::abandon(pending_op &p) noexcept
+{
+	if (!p.registered) return;
+	p.registered = false;
+	p.finished = true;
+	pending.erase(p.id);
+	stop_reader_if_idle();
+	if (!open) return;
+	try {
+		if (!p.abandonable) {
+			shut(make_error(client_errc::not_connected,
+				   "connection closed: a Bind or StartTLS request cannot be abandoned (RFC 4511 section 4.11)"),
+			  true);
 			return;
 		}
-		auto task = new_task(&due_watcher);
-		watching = true;
-		add_ref();// released by the watcher
-		capy::run_async(ex)(std::move(task));
-	}
-
-	// The earliest deadline of a due answer, if any has one.
-	std::optional<clock::time_point> next_due_deadline() const
-	{
-		std::optional<clock::time_point> next;
-		for (const auto &a : abandoned)
-			if (a.due && a.deadline && (!next || *a.deadline < *next)) next = a.deadline;
-		return next;
-	}
-
-	// Due answers whose deadline passed are no longer waited for: their
-	// entries stay (a late answer is still dropped), but they are not
-	// counted, so StartTLS proceeds and the reader can stop.
-	void expire_due(clock::time_point now)
-	{
-		bool changed = false;
-		for (auto &a : abandoned) {
-			if (!a.due || !a.deadline || *a.deadline > now) continue;
-			a.due = false;
-			--due_answers;
-			changed = true;
-		}
-		if (!changed) return;
-		due_updated();
-		stop_reader_if_idle();
-	}
-
-	// Sleeps until the next deadline of a due answer (or a change), then
-	// expires what is past. Ends when no due answer has a deadline, so an
-	// idle connection holds no timer and `io_context::run()` can return.
-	// No stop token: it ends on its own when the due answers do (or when
-	// the connection closes).
-	// Its only allocations are corosio::timeout's. The catch sees the one
-	// made when the co_await is evaluated: the awaitable's std::stop_source
-	// (its shared state, from the global operator new). The timer, the
-	// timer heap's growth and the timeout coroutine's frame are made in an
-	// await_suspend that capy calls from a noexcept wrapper, so one of
-	// those failing ends the program (a known limitation, see new_task).
-	static capy::task<void> due_watcher(impl *self)
-	{
-		const frame_ref ref(self);
-		try {
-			while (self->open) {
-				const auto next = self->next_due_deadline();
-				if (!next) break;
-				if (clock::now() < *next) {
-					self->due_changed.clear();
-					(void)co_await corosio::timeout(self->due_changed.wait(), *next);
-					continue;// a change, or the deadline: look again
-				}
-				self->expire_due(clock::now());
-			}
-		} catch (const std::bad_alloc &) {
-			self->shut_out_of_memory();
-		}
-		self->watching = false;
-	}
-
-	// Requests still to be answered: those waited for, and `due` answers.
-	std::size_t outstanding() const noexcept { return pending.size() + due_answers; }
-
-	// ---------------------------------------------------------------- reader
-
-	void start_reader()
-	{
-		if (reading) return;// a reader that is stopping restarts itself if needed
-		std::stop_source stop;
-		auto task = new_task(&reader);
-		reading = true;
-		reader_idle.clear();
-		reader_stop = std::move(stop);
-		add_ref();// released by the reader
-		capy::run_async(ex, reader_stop.get_token())(std::move(task));
-	}
-
-	void stop_reader_if_idle()
-	{
-		if (outstanding() == 0 && reading) reader_stop.request_stop();
-	}
-
-	static capy::task<void> reader(impl *self)
-	{
-		const frame_ref ref(self);
-		try {
-			while (self->open && self->outstanding() != 0) {
-				auto size = co_await net::read_frame(self->transport, self->buf, self->max_message_size);
-				if (!size) {
-					// Stopped because nothing is outstanding (bytes already
-					// received stay in buf), or a real failure.
-					if (size.error().code == capy::cond::canceled && self->open) break;
-					self->shut(std::move(size.error()), true);
-					break;
-				}
-				self->route(*size);
-			}
-		} catch (const std::bad_alloc &) {
-			self->shut_out_of_memory();// a response may be lost
-		}
-		self->reading = false;
-		self->reader_idle.set();
-		// Stopped while an operation was being registered: start afresh,
-		// with a new stop token. If it cannot start, nothing would read the
-		// responses: closed.
-		try {
-			if (self->open && self->outstanding() != 0) self->start_reader();
-		} catch (const std::bad_alloc &) {
-			self->shut_out_of_memory();
-		}
-	}
-
-	error unexpected(std::string text)
-	{
-		return make_error(client_errc::unexpected_response, detail::format("read {}: {}", transport.name(), text));
-	}
-
-	// Delivers the PDU at the front of buf (`size` bytes) and consumes it.
-	void route(std::size_t size)
-	{
-		const auto bytes = buf.data().first(size);
-		auto h = peek_message_header(bytes);
-		if (!h) {
-			buf.consume(size);
-			shut(detail::with_context(std::move(h.error()), detail::format("read {}", transport.name())), true);
+		// Held by a bind exchange, so never sent: nothing to tell the server.
+		auto h = std::ranges::find(held, p.id, &held_request::id);
+		if (h != held.end()) {
+			held.erase(h);
 			return;
 		}
-		if (h->id == 0) {
-			notification(bytes);
-			buf.consume(size);
+		abandoned.push_back({ p.id, p.search });
+		trim_abandoned();
+		message m{ 0, abandon_request{ p.id } };
+		(void)submit(m, nullptr, "abandon");// cannot fail to encode
+	} catch (const std::bad_alloc &) {
+		shut_out_of_memory();
+	}
+}
+
+void connection::impl::send_unanswered(message &m,
+  bool search,
+  std::optional<clock::time_point> deadline,
+  std::string_view context)
+{
+	// Listed before `m` is queued, like abandon(): nothing may fail after
+	// that, or its answer would match no request. Id 0 is never a
+	// request's. submit returns an error, or throws, only with nothing
+	// queued, so the entry is still last then. It may start the writer
+	// inline, whose failed write runs shut() inside it, which clears the
+	// list: hence the guarded pop_back() on a throw, and the !open check
+	// after it. If starting the reader or the due watcher below throws,
+	// the request is sent and its answer still counted as due: the next
+	// reader started reads it, and its deadline is applied once a due
+	// watcher runs again (StartTLS's wait starts both).
+	abandoned.push_back({ 0, search });
+	try {
+		if (!submit(m, nullptr, context)) {
+			abandoned.pop_back();
 			return;
 		}
-		if (auto it = pending.find(h->id); it != pending.end()) {
-			pending_op &p = *it->second;
-			if (same_tag(h->op, intermediate_response_tag)) {
-				buf.consume(size);// skipped, not decoded
-				return;
+	} catch (...) {
+		if (!abandoned.empty()) abandoned.pop_back();
+		throw;
+	}
+	if (!open) return;
+	abandoned.back().id = m.id;
+	abandoned.back().due = true;
+	abandoned.back().deadline = deadline;
+	++due_answers;
+	due_updated();
+	trim_abandoned();
+	start_reader();
+	if (deadline) start_due_watcher();
+}
+
+void connection::impl::forget_abandoned(std::pmr::deque<abandoned_req>::iterator a)
+{
+	const bool due = a->due;
+	if (due) --due_answers;
+	abandoned.erase(a);
+	if (due) due_updated();
+	stop_reader_if_idle();
+}
+
+void connection::impl::trim_abandoned()
+{
+	if (abandoned.size() <= max_abandoned) return;
+	auto a = std::ranges::find(abandoned.begin(), std::prev(abandoned.end()), false, &abandoned_req::due);
+	forget_abandoned(a != std::prev(abandoned.end()) ? a : abandoned.begin());
+}
+
+void connection::impl::due_updated()
+{
+	if (due_answers == 0)
+		due_idle.set();
+	else
+		due_idle.clear();
+	due_changed.set();
+}
+
+// ---------------------------------------------------------------- due answers
+
+void connection::impl::start_due_watcher()
+{
+	if (watching) {
+		due_changed.set();// recomputes its next deadline
+		return;
+	}
+	auto task = new_task(&due_watcher);
+	watching = true;
+	add_ref();// released by the watcher
+	capy::run_async(ex)(std::move(task));
+}
+
+std::optional<clock::time_point> connection::impl::next_due_deadline() const
+{
+	std::optional<clock::time_point> next;
+	for (const auto &a : abandoned)
+		if (a.due && a.deadline && (!next || *a.deadline < *next)) next = a.deadline;
+	return next;
+}
+
+void connection::impl::expire_due(clock::time_point now)
+{
+	bool changed = false;
+	for (auto &a : abandoned) {
+		if (!a.due || !a.deadline || *a.deadline > now) continue;
+		a.due = false;
+		--due_answers;
+		changed = true;
+	}
+	if (!changed) return;
+	due_updated();
+	stop_reader_if_idle();
+}
+
+capy::task<void> connection::impl::due_watcher(impl *self)
+{
+	const frame_ref ref(self);
+	try {
+		while (self->open) {
+			const auto next = self->next_due_deadline();
+			if (!next) break;
+			if (clock::now() < *next) {
+				self->due_changed.clear();
+				(void)co_await corosio::timeout(self->due_changed.wait(), *next);
+				continue;// a change, or the deadline: look again
 			}
-			auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = p.mr });
-			buf.consume(size);
-			if (!m) {
-				shut(detail::with_context(std::move(m.error()), detail::format("read {}", transport.name())), true);
-				return;
-			}
-			const std::size_t index = m->op.index();
-			const bool final = index == p.expect;
-			const bool streamed =
-			  p.search && (index == op_index<search_result_entry> || index == op_index<search_result_reference>);
-			if (!final && !streamed) {
-				shut(unexpected(detail::format("{} with message id {} in response to a {}",
-					   op_name(m->op),
-					   h->id,
-					   p.search ? std::string_view("SearchRequest") : op_names[p.expect - 1])),
-				  true);
-				return;
-			}
-			p.queue.push_back(std::move(*m));
-			if (final) {
-				p.finished = true;
-				p.registered = false;
-				pending.erase(it);
-				stop_reader_if_idle();
-			}
-			p.ready.set();
-			return;
+			self->expire_due(clock::now());
 		}
+	} catch (const std::bad_alloc &) {
+		self->shut_out_of_memory();
+	}
+	self->watching = false;
+}
+
+std::size_t connection::impl::outstanding() const noexcept { return pending.size() + due_answers; }
+
+// ---------------------------------------------------------------- reader
+
+void connection::impl::start_reader()
+{
+	if (reading) return;// a reader that is stopping restarts itself if needed
+	std::stop_source stop;
+	auto task = new_task(&reader);
+	reading = true;
+	reader_idle.clear();
+	reader_stop = std::move(stop);
+	add_ref();// released by the reader
+	capy::run_async(ex, reader_stop.get_token())(std::move(task));
+}
+
+void connection::impl::stop_reader_if_idle()
+{
+	if (outstanding() == 0 && reading) reader_stop.request_stop();
+}
+
+capy::task<void> connection::impl::reader(impl *self)
+{
+	const frame_ref ref(self);
+	try {
+		while (self->open && self->outstanding() != 0) {
+			auto size = co_await net::read_frame(self->transport, self->buf, self->max_message_size);
+			if (!size) {
+				// Stopped because nothing is outstanding (bytes already
+				// received stay in buf), or a real failure.
+				if (size.error().code == capy::cond::canceled && self->open) break;
+				self->shut(std::move(size.error()), true);
+				break;
+			}
+			self->route(*size);
+		}
+	} catch (const std::bad_alloc &) {
+		self->shut_out_of_memory();// a response may be lost
+	}
+	self->reading = false;
+	self->reader_idle.set();
+	// Stopped while an operation was being registered: start afresh,
+	// with a new stop token. If it cannot start, nothing would read the
+	// responses: closed.
+	try {
+		if (self->open && self->outstanding() != 0) self->start_reader();
+	} catch (const std::bad_alloc &) {
+		self->shut_out_of_memory();
+	}
+}
+
+error connection::impl::unexpected(std::string text)
+{
+	return make_error(client_errc::unexpected_response, detail::format("read {}: {}", transport.name(), text));
+}
+
+void connection::impl::route(std::size_t size)
+{
+	const auto bytes = buf.data().first(size);
+	auto h = peek_message_header(bytes);
+	if (!h) {
 		buf.consume(size);
-		auto a = std::ranges::find(abandoned, h->id, &abandoned_req::id);
-		if (a != abandoned.end()) {
-			// A late response to an abandoned request: dropped. The search's
-			// SearchResultDone (or any response to another request) is its
-			// last.
-			if (!a->search || same_tag(h->op, search_result_done_tag)) forget_abandoned(a);
+		shut(detail::with_context(std::move(h.error()), detail::format("read {}", transport.name())), true);
+		return;
+	}
+	if (h->id == 0) {
+		notification(bytes);
+		buf.consume(size);
+		return;
+	}
+	if (auto it = pending.find(h->id); it != pending.end()) {
+		pending_op &p = *it->second;
+		if (same_tag(h->op, intermediate_response_tag)) {
+			buf.consume(size);// skipped, not decoded
 			return;
 		}
-		shut(unexpected(detail::format("message with id {}, which matches no outstanding request", h->id)), true);
+		auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = p.mr });
+		buf.consume(size);
+		if (!m) {
+			shut(detail::with_context(std::move(m.error()), detail::format("read {}", transport.name())), true);
+			return;
+		}
+		const std::size_t index = m->op.index();
+		const bool final = index == p.expect;
+		const bool streamed =
+		  p.search && (index == op_index<search_result_entry> || index == op_index<search_result_reference>);
+		if (!final && !streamed) {
+			shut(unexpected(detail::format("{} with message id {} in response to a {}",
+				   op_name(m->op),
+				   h->id,
+				   p.search ? std::string_view("SearchRequest") : op_names[p.expect - 1])),
+			  true);
+			return;
+		}
+		p.queue.push_back(std::move(*m));
+		if (final) {
+			p.finished = true;
+			p.registered = false;
+			pending.erase(it);
+			stop_reader_if_idle();
+		}
+		p.ready.set();
+		return;
 	}
-
-	// An unsolicited notification (message id 0, RFC 4511 section 4.4).
-	void notification(std::span<const std::byte> bytes)
-	{
-		std::optional<error> fatal;
-		{
-			auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = &scratch });
-			if (!m) {
-				fatal = detail::with_context(std::move(m.error()), detail::format("read {}", transport.name()));
-			} else if (const auto *x = std::get_if<extended_response>(&m->op); x == nullptr) {
-				fatal = unexpected(std::string(op_name(m->op)) + " with message id 0");
-			} else if (x->response_name && *x->response_name == notice_of_disconnection_oid) {
-				error e = x->result.to_error("notice of disconnection");
-				if (x->result.is_success()) e.code = errc::unavailable;// "success" is no error code
-				fatal = std::move(e);
-			}
-			// Other extended responses with id 0 are ignored.
-		}
-		scratch.release();
-		if (fatal) shut(std::move(*fatal), true);
+	buf.consume(size);
+	auto a = std::ranges::find(abandoned, h->id, &abandoned_req::id);
+	if (a != abandoned.end()) {
+		// A late response to an abandoned request: dropped. The search's
+		// SearchResultDone (or any response to another request) is its
+		// last.
+		if (!a->search || same_tag(h->op, search_result_done_tag)) forget_abandoned(a);
+		return;
 	}
+	shut(unexpected(detail::format("message with id {}, which matches no outstanding request", h->id)), true);
+}
 
-	// search_stream / paged_search constructors are private.
-	static ldap::search_stream make_stream(search_stream::state *s) noexcept { return ldap::search_stream(s); }
-	static ldap::paged_search make_paged(paged_search::state *s) noexcept { return ldap::paged_search(s); }
-
-	// ---------------------------------------------------------------- waiting
-
-	// The next response for `p`, waiting until `deadline` at most. On
-	// cancellation or timeout `p` is abandoned. Errors carry `context`.
-	capy::task<result<message>>
-	  next_response(pending_op &p, std::optional<clock::time_point> deadline, std::string_view context)
+void connection::impl::notification(std::span<const std::byte> bytes)
+{
+	std::optional<error> fatal;
 	{
-		while (p.queue.empty() && !p.finished) {
-			p.ready.clear();
-			std::error_code ec;
-			if (deadline) {
-				auto [e] = co_await corosio::timeout(p.ready.wait(), *deadline);
-				ec = e;
-			} else {
-				auto [e] = co_await p.ready.wait();
-				ec = e;
-			}
-			if (!ec) continue;
-			// Cancelled or timed out before the response came.
-			if (!p.queue.empty() || p.finished) break;// it came anyway: use it
-			const bool was_open = open;
-			abandon(p);
-			// The code says canceled or timed out; the context adds what
-			// became of the request.
-			std::string text(context);
-			if (was_open) text += p.abandonable ? " (abandoned)" : " (connection closed)";
-			co_return fail(ec, text);
+		auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = &scratch });
+		if (!m) {
+			fatal = detail::with_context(std::move(m.error()), detail::format("read {}", transport.name()));
+		} else if (const auto *x = std::get_if<extended_response>(&m->op); x == nullptr) {
+			fatal = unexpected(std::string(op_name(m->op)) + " with message id 0");
+		} else if (x->response_name && *x->response_name == notice_of_disconnection_oid) {
+			error e = x->result.to_error("notice of disconnection");
+			if (x->result.is_success()) e.code = errc::unavailable;// "success" is no error code
+			fatal = std::move(e);
 		}
-		if (!p.queue.empty()) {
-			message m = std::move(p.queue.front());// same resource: moved, not copied
-			p.queue.pop_front();
-			co_return m;
-		}
-		if (p.failure) co_return std::unexpected(detail::with_context(*p.failure, context));
-		co_return std::unexpected(not_connected(context));// closed by close() or unbind()
+		// Other extended responses with id 0 are ignored.
 	}
-};
+	scratch.release();
+	if (fatal) shut(std::move(*fatal), true);
+}
 
-namespace detail {
+ldap::search_stream connection::impl::make_stream(search_stream::state *s) noexcept { return ldap::search_stream(s); }
 
-	// A counted reference to the connection state.
-	class impl_ref
-	{
-	  public:
-		impl_ref() noexcept = default;
-		explicit impl_ref(connection::impl *p) noexcept : p_(p)
-		{
-			if (p_ != nullptr) p_->add_ref();
+ldap::paged_search connection::impl::make_paged(paged_search::state *s) noexcept { return ldap::paged_search(s); }
+
+// ---------------------------------------------------------------- waiting
+
+capy::task<result<message>>
+  connection::impl::next_response(pending_op &p, std::optional<clock::time_point> deadline, std::string_view context)
+{
+	while (p.queue.empty() && !p.finished) {
+		p.ready.clear();
+		std::error_code ec;
+		if (deadline) {
+			auto [e] = co_await corosio::timeout(p.ready.wait(), *deadline);
+			ec = e;
+		} else {
+			auto [e] = co_await p.ready.wait();
+			ec = e;
 		}
-		impl_ref(const impl_ref &o) noexcept : impl_ref(o.p_) {}
-		impl_ref(impl_ref &&o) noexcept : p_(std::exchange(o.p_, nullptr)) {}
-		impl_ref &operator=(impl_ref o) noexcept
-		{
-			std::swap(p_, o.p_);
-			return *this;
-		}
-		~impl_ref()
-		{
-			if (p_ != nullptr) p_->release();
-		}
-		connection::impl *operator->() const noexcept { return p_; }
-		connection::impl &operator*() const noexcept { return *p_; }
-		explicit operator bool() const noexcept { return p_ != nullptr; }
-
-	  private:
-		connection::impl *p_ = nullptr;
-	};
-
-	// Abandons `p` if the operation's task is destroyed (or returns early)
-	// while the request is still outstanding.
-	struct registration
-	{
-		connection::impl &c;
-		pending_op &p;
-		registration(connection::impl &c_, pending_op &p_) noexcept : c(c_), p(p_) {}
-		registration(const registration &) = delete;
-		registration &operator=(const registration &) = delete;
-		~registration() { c.abandon(p); }
-	};
-
-}// namespace detail
-
-using detail::impl_ref;
-using detail::registration;
+		if (!ec) continue;
+		// Cancelled or timed out before the response came.
+		if (!p.queue.empty() || p.finished) break;// it came anyway: use it
+		const bool was_open = open;
+		abandon(p);
+		// The code says canceled or timed out; the context adds what
+		// became of the request.
+		std::string text(context);
+		if (was_open) text += p.abandonable ? " (abandoned)" : " (connection closed)";
+		co_return fail(ec, text);
+	}
+	if (!p.queue.empty()) {
+		message m = std::move(p.queue.front());// same resource: moved, not copied
+		p.queue.pop_front();
+		co_return m;
+	}
+	if (p.failure) co_return std::unexpected(detail::with_context(*p.failure, context));
+	co_return std::unexpected(not_connected(context));// closed by close() or unbind()
+}
 
 namespace {
 
@@ -1029,14 +740,6 @@ void connection::close() noexcept
 
 namespace detail {
 
-	// One request with one response (everything but search): sends it,
-	// waits for the response of index `expect` and returns it. `self` keeps
-	// the state alive across the suspension. One whose stop token is set
-	// already is not sent (sending it would only abandon it at once, and an
-	// update might be applied): it fails with capy::error::canceled. Binds
-	// are checked by begin_bind() instead: a later step of a SASL exchange
-	// is sent, since the server waits for it (abandoning it then closes the
-	// connection).
 	capy::task<result<message>> request_response(impl_ref self,
 	  message request,
 	  std::size_t expect,
@@ -1122,7 +825,6 @@ namespace {
 
 namespace detail {
 
-	// The SearchRequest for `p`, validated (errors carry `context`).
 	result<message> search_message(connection::impl &c, const search_params &p, const std::string &context)
 	{
 		const auto seconds = p.time_limit.count();
@@ -1143,9 +845,6 @@ namespace detail {
 		return with_controls(std::move(wire), p.controls, c.mr, context);
 	}
 
-	// Validates and sends a search; returns its stream. Never suspends.
-	// `stop` is the awaiting task's stop token: if it is set already, the
-	// search is not sent and fails with capy::error::canceled.
 	result<ldap::search_stream>
 	  start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr, const std::stop_token &stop)
 	{
@@ -1462,8 +1161,6 @@ namespace {
 
 namespace detail {
 
-	// `context` names the operation in errors, instead of "extended
-	// operation <oid>".
 	capy::task<result<std::optional<std::string>>>
 	  password_modify_impl(impl_ref self, password_modify_params p, std::string context)
 	{
@@ -1504,7 +1201,6 @@ capy::task<result<std::optional<std::string>>> connection::password_modify(passw
 
 namespace detail {
 
-	// The one entry of a base-scope search (nullopt if none came back).
 	capy::task<result<std::optional<entry>>> read_one(impl_ref self, search_params p)
 	{
 		auto s = start_search(*self, p, std::pmr::get_default_resource(), co_await capy::this_coro::stop_token);

@@ -665,7 +665,7 @@ class connection
 	// operations complete with not_connected. Idempotent.
 	void close() noexcept;
 
-	struct impl;// defined in connection.cpp
+	struct impl;// defined in src/connection/impl.hpp
 
   private:
 	friend class ldap::search_stream;
