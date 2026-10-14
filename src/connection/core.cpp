@@ -39,16 +39,43 @@ namespace jhetz::ldap {
 using detail::clock;
 using detail::deadline_after;
 using detail::impl_ref;
-using detail::intermediate_response_tag;
 using detail::op_index;
-using detail::op_name;
-using detail::op_names;
 using detail::pending_op;
 using detail::registration;
-using detail::same_tag;
-using detail::search_result_done_tag;
 
 namespace {
+
+	constexpr std::array<std::string_view, 21> op_names{ "BindRequest",
+		"BindResponse",
+		"UnbindRequest",
+		"SearchRequest",
+		"SearchResultEntry",
+		"SearchResultDone",
+		"SearchResultReference",
+		"ModifyRequest",
+		"ModifyResponse",
+		"AddRequest",
+		"AddResponse",
+		"DelRequest",
+		"DelResponse",
+		"ModifyDNRequest",
+		"ModifyDNResponse",
+		"CompareRequest",
+		"CompareResponse",
+		"AbandonRequest",
+		"ExtendedRequest",
+		"ExtendedResponse",
+		"IntermediateResponse" };
+	static_assert(std::variant_size_v<protocol_op> == op_names.size());
+
+	std::string_view op_name(const protocol_op &op) noexcept { return op_names[op.index()]; }
+
+	// RFC 4511 protocolOp tags of the responses the reader recognizes before
+	// decoding.
+	constexpr ber::tag search_result_done_tag = ber::application(5, true);
+	constexpr ber::tag intermediate_response_tag = ber::application(25, true);
+
+	bool same_tag(ber::tag a, ber::tag b) noexcept { return a.cls == b.cls && a.number == b.number; }
 
 	// Abandoned requests whose late responses are still dropped. Older ones
 	// are forgotten: a response for them would then be unexpected.

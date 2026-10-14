@@ -14,7 +14,6 @@
 #include <boost/capy/task.hpp>
 #include <boost/corosio/io_context.hpp>
 
-#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -38,31 +37,6 @@ namespace jhetz::ldap {
 
 namespace detail {
 
-	inline constexpr std::array<std::string_view, 21> op_names{ "BindRequest",
-		"BindResponse",
-		"UnbindRequest",
-		"SearchRequest",
-		"SearchResultEntry",
-		"SearchResultDone",
-		"SearchResultReference",
-		"ModifyRequest",
-		"ModifyResponse",
-		"AddRequest",
-		"AddResponse",
-		"DelRequest",
-		"DelResponse",
-		"ModifyDNRequest",
-		"ModifyDNResponse",
-		"CompareRequest",
-		"CompareResponse",
-		"AbandonRequest",
-		"ExtendedRequest",
-		"ExtendedResponse",
-		"IntermediateResponse" };
-	static_assert(std::variant_size_v<protocol_op> == op_names.size());
-
-	inline std::string_view op_name(const protocol_op &op) noexcept { return op_names[op.index()]; }
-
 	template<class T, class... Ts> consteval std::size_t index_in(const std::variant<Ts...> *)
 	{
 		constexpr bool same[] = { std::is_same_v<T, Ts>... };
@@ -71,13 +45,6 @@ namespace detail {
 		return sizeof...(Ts);
 	}
 	template<class T> inline constexpr std::size_t op_index = index_in<T>(static_cast<const protocol_op *>(nullptr));
-
-	// RFC 4511 protocolOp tags of the responses the reader recognizes before
-	// decoding.
-	inline constexpr ber::tag search_result_done_tag = ber::application(5, true);
-	inline constexpr ber::tag intermediate_response_tag = ber::application(25, true);
-
-	inline bool same_tag(ber::tag a, ber::tag b) noexcept { return a.cls == b.cls && a.number == b.number; }
 
 	using clock = std::chrono::steady_clock;
 
