@@ -214,6 +214,8 @@ class attribute
 	// Compile-time checked literal (consteval: invalid text fails to compile).
 	struct literal
 	{
+		// Implicit on purpose: `"..."` converts to the literal, checked at compile time.
+		// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
 		consteval literal(const char *s) : text(s)
 		{
 			if (!detail::is_attribute_description(s)) {
@@ -226,6 +228,8 @@ class attribute
 
 	attribute() = default;
 	explicit attribute(const allocator_type &alloc) : name_(alloc) {}
+	// Implicit on purpose: a compile-time checked literal is an attribute (`{"cn"}`).
+	// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
 	attribute(literal l, const allocator_type &alloc = {}) : name_(l.text, alloc) {}
 	attribute(const attribute &) = default;
 	attribute(attribute &&) noexcept = default;

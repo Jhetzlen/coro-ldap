@@ -395,6 +395,8 @@ namespace filters {
 	  public:
 		using allocator_type = std::pmr::polymorphic_allocator<>;
 
+		// Implicit on purpose: `attr` is the literal-taking builder, like attribute(literal).
+		// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
 		attr(attribute::literal name, const allocator_type &alloc = {}) : name_(name.text, alloc) {}
 		explicit attr(const attribute &name, const allocator_type &alloc = {});
 

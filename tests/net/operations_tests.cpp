@@ -381,7 +381,7 @@ TEST_CASE("operations: server side sort result of a search", "[net][operations][
 {
 	mock_ldap m;
 	ldap::message sorted = done_msg(1);
-	sorted.controls.push_back(*ldap::encode_sort_result({ 0 }));
+	sorted.controls.push_back(*ldap::encode_sort_result(ldap::sort_result{ 0 }));
 	ldap::message unsorted = done_msg(2);
 	unsorted.controls.push_back(*ldap::encode_sort_result({ 18, "cn" }));
 	ldap::message garbage = done_msg(3);

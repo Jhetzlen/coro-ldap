@@ -222,7 +222,7 @@ TEST_CASE("golden: search with paged results control", "[message][golden]")
 
 TEST_CASE("golden: bind response with server SASL credentials", "[message][golden]")
 {
-	check_golden(bind_response_sasl, { 1, ldap::bind_response{ { 14 }, "challenge\0\xff"s } });
+	check_golden(bind_response_sasl, { 1, ldap::bind_response{ ldap::ldap_result{ 14 }, "challenge\0\xff"s } });
 }
 
 TEST_CASE("golden: search result entry with multi-valued and binary attributes", "[message][golden]")

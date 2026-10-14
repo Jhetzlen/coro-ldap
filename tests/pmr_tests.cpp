@@ -243,7 +243,7 @@ TEST_CASE("assignment keeps the target's resource for optional and variant membe
 	// std::variant switching alternatives, std::optional becoming engaged.
 	ldap::message target(a);// holds a bind_request
 	const ldap::message source{ 1,
-		ldap::extended_response{ { 0 }, "1.2.3.4.5.6.7.8.9.10.11.12.13.14", std::string(100, 'v') },
+		ldap::extended_response{ ldap::ldap_result{ 0 }, "1.2.3.4.5.6.7.8.9.10.11.12.13.14", std::string(100, 'v') },
 		{ ldap::control{ "1.2.3.4.5.6.7.8.9.10.11.12.13.14.15", true, std::string(50, 'c') } } };
 	const auto heap_before = heap.allocations();
 	target = source;

@@ -52,6 +52,11 @@
 // - The types have constructors, so they are not aggregates and designated
 //   initializers do not work on them; the value constructors take the fields
 //   in their declaration order (`message{1, del_request{"cn=x"}}`).
+// - A value constructor called with one argument is explicit (no implicit
+//   `"1.2.3"` -> control or `14` -> ldap_result), the multi-argument form is
+//   not, so braced lists keep working: `{ "cn", { "x" } }` as a
+//   partial_attribute, `return { 32, "dc=example,dc=org" };` as an
+//   ldap_result. One argument needs the type: `ldap_result{ 14 }`.
 #pragma once
 
 #include "jhetz/ldap/ber.hpp"
@@ -91,8 +96,9 @@ struct ldap_result
 
 	ldap_result() = default;
 	explicit ldap_result(const allocator_type &alloc) : matched_dn(alloc), diagnostic_message(alloc), referral(alloc) {}
+	explicit ldap_result(std::int32_t result_code_) : ldap_result(result_code_, {}) {}
 	ldap_result(std::int32_t result_code_,
-	  std::string_view matched_dn_ = {},
+	  std::string_view matched_dn_,
 	  std::string_view diagnostic_message_ = {},
 	  std::initializer_list<std::string_view> referral_ = {},
 	  const allocator_type &alloc = {});
@@ -129,8 +135,9 @@ struct control
 
 	control() = default;
 	explicit control(const allocator_type &alloc) : type(alloc) {}
+	explicit control(std::string_view type_) : control(type_, false) {}
 	control(std::string_view type_,
-	  bool criticality_ = false,
+	  bool criticality_,
 	  std::optional<std::string_view> value_ = {},
 	  const allocator_type &alloc = {});
 	control(const control &) = default;
@@ -156,8 +163,9 @@ struct partial_attribute
 
 	partial_attribute() = default;
 	explicit partial_attribute(const allocator_type &alloc) : type(alloc), values(alloc) {}
+	explicit partial_attribute(std::string_view type_) : partial_attribute(type_, {}) {}
 	partial_attribute(std::string_view type_,
-	  std::initializer_list<std::string_view> values_ = {},
+	  std::initializer_list<std::string_view> values_,
 	  const allocator_type &alloc = {});
 	partial_attribute(const partial_attribute &) = default;
 	partial_attribute(partial_attribute &&) noexcept = default;
@@ -219,8 +227,10 @@ template<std::uint8_t Tag> struct result_response
 
 	result_response() = default;
 	explicit result_response(const allocator_type &alloc) : result(alloc) {}
-	result_response(const ldap_result &result_, const allocator_type &alloc = {}) : result(result_, alloc) {}
-	result_response(ldap_result &&result_, const allocator_type &alloc = {}) : result(std::move(result_), alloc) {}
+	explicit result_response(const ldap_result &result_, const allocator_type &alloc = {}) : result(result_, alloc) {}
+	explicit result_response(ldap_result &&result_, const allocator_type &alloc = {})
+	  : result(std::move(result_), alloc)
+	{}
 	result_response(const result_response &) = default;
 	result_response(result_response &&) noexcept = default;
 	result_response(const result_response &other, const allocator_type &alloc) : result(other.result, alloc) {}
@@ -244,7 +254,7 @@ struct simple_auth
 
 	simple_auth() = default;
 	explicit simple_auth(const allocator_type &alloc) : password(alloc) {}
-	simple_auth(std::string_view password_, const allocator_type &alloc = {}) : password(password_, alloc) {}
+	explicit simple_auth(std::string_view password_, const allocator_type &alloc = {}) : password(password_, alloc) {}
 	simple_auth(const simple_auth &) = default;
 	simple_auth(simple_auth &&) noexcept = default;
 	simple_auth(const simple_auth &other, const allocator_type &alloc) : password(other.password, alloc) {}
@@ -267,8 +277,9 @@ struct sasl_auth
 
 	sasl_auth() = default;
 	explicit sasl_auth(const allocator_type &alloc) : mechanism(alloc) {}
+	explicit sasl_auth(std::string_view mechanism_) : sasl_auth(mechanism_, {}) {}
 	sasl_auth(std::string_view mechanism_,
-	  std::optional<std::string_view> credentials_ = {},
+	  std::optional<std::string_view> credentials_,
 	  const allocator_type &alloc = {});
 	sasl_auth(const sasl_auth &) = default;
 	sasl_auth(sasl_auth &&) noexcept = default;
@@ -297,8 +308,9 @@ struct bind_request
 	explicit bind_request(const allocator_type &alloc)
 	  : name(alloc), authentication(std::in_place_type<simple_auth>, alloc)
 	{}
+	explicit bind_request(std::int32_t version_) : bind_request(version_, {}) {}
 	bind_request(std::int32_t version_,
-	  std::string_view name_ = {},
+	  std::string_view name_,
 	  auth_type authentication_ = {},
 	  const allocator_type &alloc = {});
 	bind_request(const bind_request &) = default;
@@ -324,8 +336,9 @@ struct bind_response
 
 	bind_response() = default;
 	explicit bind_response(const allocator_type &alloc) : result(alloc) {}
+	explicit bind_response(const ldap_result &result_) : bind_response(result_, {}) {}
 	bind_response(const ldap_result &result_,
-	  std::optional<std::string_view> server_sasl_creds_ = {},
+	  std::optional<std::string_view> server_sasl_creds_,
 	  const allocator_type &alloc = {});
 	bind_response(const bind_response &) = default;
 	bind_response(bind_response &&) noexcept = default;
@@ -407,8 +420,9 @@ struct search_result_entry
 
 	search_result_entry() = default;
 	explicit search_result_entry(const allocator_type &alloc) : object_name(alloc), attributes(alloc) {}
+	explicit search_result_entry(std::string_view object_name_) : search_result_entry(object_name_, {}) {}
 	search_result_entry(std::string_view object_name_,
-	  std::initializer_list<partial_attribute> attributes_ = {},
+	  std::initializer_list<partial_attribute> attributes_,
 	  const allocator_type &alloc = {})
 	  : object_name(object_name_, alloc), attributes(attributes_, alloc)
 	{}
@@ -444,7 +458,9 @@ struct search_result_reference
 	// A string_list, not an initializer_list<string_view>: with the latter,
 	// `search_result_reference{ { "a", "b" } }` would be one string_view made
 	// from two unrelated pointers.
-	search_result_reference(string_list uris_, const allocator_type &alloc = {}) : uris(std::move(uris_), alloc) {}
+	explicit search_result_reference(string_list uris_, const allocator_type &alloc = {})
+	  : uris(std::move(uris_), alloc)
+	{}
 	search_result_reference(const search_result_reference &) = default;
 	search_result_reference(search_result_reference &&) noexcept = default;
 	search_result_reference(const search_result_reference &other, const allocator_type &alloc) : uris(other.uris, alloc)
@@ -504,8 +520,9 @@ struct modify_request
 
 	modify_request() = default;
 	explicit modify_request(const allocator_type &alloc) : object(alloc), changes(alloc) {}
+	explicit modify_request(std::string_view object_) : modify_request(object_, {}) {}
 	modify_request(std::string_view object_,
-	  std::initializer_list<modify_change> changes_ = {},
+	  std::initializer_list<modify_change> changes_,
 	  const allocator_type &alloc = {})
 	  : object(object_, alloc), changes(changes_, alloc)
 	{}
@@ -539,8 +556,9 @@ struct add_request
 
 	add_request() = default;
 	explicit add_request(const allocator_type &alloc) : entry(alloc), attributes(alloc) {}
+	explicit add_request(std::string_view entry_) : add_request(entry_, {}) {}
 	add_request(std::string_view entry_,
-	  std::initializer_list<partial_attribute> attributes_ = {},
+	  std::initializer_list<partial_attribute> attributes_,
 	  const allocator_type &alloc = {})
 	  : entry(entry_, alloc), attributes(attributes_, alloc)
 	{}
@@ -573,7 +591,7 @@ struct del_request
 
 	del_request() = default;
 	explicit del_request(const allocator_type &alloc) : entry(alloc) {}
-	del_request(std::string_view entry_, const allocator_type &alloc = {}) : entry(entry_, alloc) {}
+	explicit del_request(std::string_view entry_, const allocator_type &alloc = {}) : entry(entry_, alloc) {}
 	del_request(const del_request &) = default;
 	del_request(del_request &&) noexcept = default;
 	del_request(const del_request &other, const allocator_type &alloc) : entry(other.entry, alloc) {}
@@ -673,8 +691,9 @@ struct extended_request
 
 	extended_request() = default;
 	explicit extended_request(const allocator_type &alloc) : request_name(alloc) {}
+	explicit extended_request(std::string_view request_name_) : extended_request(request_name_, {}) {}
 	extended_request(std::string_view request_name_,
-	  std::optional<std::string_view> request_value_ = {},
+	  std::optional<std::string_view> request_value_,
 	  const allocator_type &alloc = {});
 	extended_request(const extended_request &) = default;
 	extended_request(extended_request &&) noexcept = default;
@@ -702,8 +721,9 @@ struct extended_response
 
 	extended_response() = default;
 	explicit extended_response(const allocator_type &alloc) : result(alloc) {}
+	explicit extended_response(const ldap_result &result_) : extended_response(result_, {}) {}
 	extended_response(const ldap_result &result_,
-	  std::optional<std::string_view> response_name_ = {},
+	  std::optional<std::string_view> response_name_,
 	  std::optional<std::string_view> response_value_ = {},
 	  const allocator_type &alloc = {});
 	extended_response(const extended_response &) = default;
@@ -729,8 +749,11 @@ struct intermediate_response
 
 	intermediate_response() = default;
 	explicit intermediate_response(const allocator_type &alloc) : alloc_(alloc) {}
+	explicit intermediate_response(std::optional<std::string_view> response_name_)
+	  : intermediate_response(response_name_, {})
+	{}
 	intermediate_response(std::optional<std::string_view> response_name_,
-	  std::optional<std::string_view> response_value_ = {},
+	  std::optional<std::string_view> response_value_,
 	  const allocator_type &alloc = {});
 	intermediate_response(const intermediate_response &other);
 	intermediate_response(intermediate_response &&) noexcept = default;
@@ -889,7 +912,8 @@ struct paged_results
 
 	paged_results() = default;
 	explicit paged_results(const allocator_type &alloc) : cookie(alloc) {}
-	paged_results(std::int32_t size_, std::string_view cookie_ = {}, const allocator_type &alloc = {})
+	explicit paged_results(std::int32_t size_) : paged_results(size_, {}) {}
+	paged_results(std::int32_t size_, std::string_view cookie_, const allocator_type &alloc = {})
 	  : size(size_), cookie(cookie_, alloc)
 	{}
 	paged_results(const paged_results &) = default;
@@ -941,7 +965,8 @@ struct sort_result
 
 	sort_result() = default;
 	explicit sort_result(const allocator_type &alloc) : attribute_type(alloc) {}
-	sort_result(std::int32_t code_, std::string_view attribute_type_ = {}, const allocator_type &alloc = {})
+	explicit sort_result(std::int32_t code_) : sort_result(code_, {}) {}
+	sort_result(std::int32_t code_, std::string_view attribute_type_, const allocator_type &alloc = {})
 	  : result_code(code_), attribute_type(attribute_type_, alloc)
 	{}
 	sort_result(const sort_result &) = default;

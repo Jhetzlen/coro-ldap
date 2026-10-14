@@ -154,7 +154,7 @@ TEST_CASE("decode ignores unknown trailing SEQUENCE elements (RFC 4511 section 4
 		});
 		auto m = ldap::decode(raw);
 		REQUIRE(m);
-		CHECK(*m == ldap::message{ 7, ldap::bind_response{ { 14 }, "creds" } });
+		CHECK(*m == ldap::message{ 7, ldap::bind_response{ ldap::ldap_result{ 14 }, "creds" } });
 	}
 	SECTION("in LDAPMessage, with and without controls")
 	{
@@ -497,7 +497,7 @@ TEST_CASE("paged results control", "[message][control]")
 	CHECK(ldap::decode_paged_results(c) == p);
 	CHECK_FALSE(ldap::encode_paged_results({})->criticality);
 	CHECK(ldap::decode_paged_results(*ldap::encode_paged_results({})) == ldap::paged_results{});
-	CHECK(code_of(ldap::encode_paged_results({ -1 })) == client_errc::encode_error);
+	CHECK(code_of(ldap::encode_paged_results(ldap::paged_results{ -1 })) == client_errc::encode_error);
 
 	auto value_of = [](auto body) {
 		ber::writer w;

@@ -141,7 +141,7 @@ TEST_CASE("server side sort request control", "[controls][sort]")
 
 TEST_CASE("sort result response control", "[controls][sort]")
 {
-	const auto ok = ldap::encode_sort_result({ 0 });
+	const auto ok = ldap::encode_sort_result(ldap::sort_result{ 0 });
 	REQUIRE(ok.has_value());
 	CHECK(ok->type == ldap::sort_response_oid);
 	CHECK(value_hex(*ok) == "30 03 0A 01 00");
@@ -475,7 +475,7 @@ TEST_CASE("server side sort controls match OpenLDAP", "[controls][sort][openldap
 	REQUIRE(sorted->has_value());
 	CHECK(**sorted == ldap::sort_result{ 0 });
 	// ... which is what encode_sort_result produces.
-	CHECK(ldap::encode_sort_result({ 0 }).value() == done.controls.at(0));
+	CHECK(ldap::encode_sort_result(ldap::sort_result{ 0 }).value() == done.controls.at(0));
 }
 
 TEST_CASE("assertion and pre/post-read controls match OpenLDAP", "[controls][assertion][read_entry][openldap]")
