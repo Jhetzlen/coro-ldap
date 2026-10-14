@@ -163,6 +163,7 @@ add_library(jhetz_ldap STATIC
     src/mapping.cpp
     src/schema.cpp
     src/message.cpp
+    src/operations.cpp
     src/url.cpp
 )
 add_library(jhetz::ldap ALIAS jhetz_ldap)
@@ -318,7 +319,11 @@ if(JHETZ_LDAP_INSTALL)
         # implementation is in jhetz::ldap_net) are left out.
         install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             PATTERN "net" EXCLUDE
+            PATTERN "cancel.hpp" EXCLUDE
             PATTERN "connection.hpp" EXCLUDE
+            PATTERN "connection_options.hpp" EXCLUDE
+            PATTERN "paged_search.hpp" EXCLUDE
+            PATTERN "search_stream.hpp" EXCLUDE
             PATTERN "sasl_scram.hpp" EXCLUDE
             PATTERN "sasl_gssapi.hpp" EXCLUDE
             PATTERN "sync.hpp" EXCLUDE)

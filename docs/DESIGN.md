@@ -173,7 +173,7 @@ The designated-initializer style above is for the step 5 request structs,
 which stay aggregates. The wire model of section 10 is allocator-aware and
 uses constructors instead (`message{1, search_request{base, scope, f, {"cn"}}}`).
 
-Implemented (steps 5a and 6, `connection.hpp`): one aggregate per
+Implemented (steps 5a and 6, `operations.hpp`): one aggregate per
 operation — `search_params`, `add_params`, `modify_params` (changes built
 with `ldap::mod::add / remove / replace / increment`), `del_params`,
 `modify_dn_params` (`new_rdn` as an `ldap::rdn`, optional `new_superior`),
@@ -252,7 +252,7 @@ simple bind and the "continue" signal of `sasl_bind` (#11).
 
 `change_password()` / `reset_password()` pick RFC 3062 or Active
 Directory's `unicodePwd` Modify from the root DSE (`password_method`,
-connection.hpp), cached per connection and dropped by `start_tls()` like
+connection_options.hpp), cached per connection and dropped by `start_tls()` like
 the schema; the AD path refuses a connection without TLS before sending
 (`client_errc::tls_required`). A root DSE the server refuses to read
 fails with the server's own error (e.g. insufficientAccessRights); one
@@ -1024,7 +1024,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   of a SASL exchange are sent, since the server waits for them; for a paged
   search, before each page). unbind() and AbandonRequests, which end or
   give up on work, and a paged search's release are sent regardless.
-- Cancelling from a coroutine (header-only helpers in `connection.hpp`):
+- Cancelling from a coroutine (header-only helpers in `cancel.hpp`):
   `capy::when_any` races only awaitables returning `io_result`, so
   `ldap::raceable(op)` makes an operation's `result<T>` the payload of one.
   Its error code is set only when the operation failed with

@@ -2,7 +2,6 @@
 
 #include "impl.hpp"
 
-#include <initializer_list>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -69,34 +68,6 @@ namespace detail {
 using detail::with_controls;
 
 // ---------------------------------------------------------------- other operations
-
-namespace mod {
-
-	namespace {
-		modify_change change(modify_operation op, std::string_view type, std::initializer_list<std::string_view> values)
-		{
-			return modify_change(op, partial_attribute(type, values));
-		}
-	}// namespace
-
-	modify_change add(std::string_view type, std::initializer_list<std::string_view> values)
-	{
-		return change(modify_operation::add, type, values);
-	}
-	modify_change remove(std::string_view type, std::initializer_list<std::string_view> values)
-	{
-		return change(modify_operation::delete_, type, values);
-	}
-	modify_change replace(std::string_view type, std::initializer_list<std::string_view> values)
-	{
-		return change(modify_operation::replace, type, values);
-	}
-	modify_change increment(std::string_view type, std::string_view delta)
-	{
-		return change(modify_operation::increment, type, { delta });
-	}
-
-}// namespace mod
 
 capy::task<result<response>> connection::add(add_params p)
 {

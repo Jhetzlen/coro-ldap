@@ -76,6 +76,38 @@ if(NOT MSVC)
     set_tests_properties(compile.discarded_child PROPERTIES FAIL_REGULAR_EXPRESSION "error:")
 endif()
 
+# Header self-containment: one generated TU per public header, including
+# only that header (twice: #pragma once), built with our warnings. The
+# codec's headers are built against jhetz::ldap alone, so one that needs
+# Corosio or Capy fails here; jhetz::ldap_net's against jhetz::ldap_net.
+# A new header is picked up when CMake reconfigures (CONFIGURE_DEPENDS).
+file(GLOB_RECURSE jhetz_ldap_public_headers CONFIGURE_DEPENDS
+    RELATIVE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/include/jhetz/ldap/*.hpp)
+set(jhetz_ldap_net_headers
+    jhetz/ldap/cancel.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
+    jhetz/ldap/paged_search.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp
+    jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp)
+set(jhetz_ldap_codec_header_tus)
+set(jhetz_ldap_net_header_tus)
+foreach(header ${jhetz_ldap_public_headers})
+    string(REGEX REPLACE "[/.]" "_" stem ${header})
+    set(tu ${CMAKE_CURRENT_BINARY_DIR}/header_check/${stem}.cpp)
+    file(CONFIGURE OUTPUT ${tu} CONTENT "#include \"${header}\"\n#include \"${header}\"\n")
+    if(header MATCHES "^jhetz/ldap/net/" OR header IN_LIST jhetz_ldap_net_headers)
+        list(APPEND jhetz_ldap_net_header_tus ${tu})
+    else()
+        list(APPEND jhetz_ldap_codec_header_tus ${tu})
+    endif()
+endforeach()
+add_library(jhetz_ldap_header_check OBJECT ${jhetz_ldap_codec_header_tus})
+target_link_libraries(jhetz_ldap_header_check PRIVATE jhetz::ldap)
+jhetz_ldap_warnings(jhetz_ldap_header_check)
+if(JHETZ_LDAP_BUILD_NET)
+    add_library(jhetz_ldap_net_header_check OBJECT ${jhetz_ldap_net_header_tus})
+    target_link_libraries(jhetz_ldap_net_header_check PRIVATE jhetz::ldap_net)
+    jhetz_ldap_warnings(jhetz_ldap_net_header_check)
+endif()
+
 # Each <target>_fuzz_replay runs the libFuzzer entry point of fuzz/<target>.cpp
 # on deterministic inputs, so the fuzz properties are checked by every
 # compiler, without libFuzzer.

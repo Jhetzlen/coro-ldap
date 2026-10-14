@@ -41,28 +41,9 @@
 // not applied): it fails with capy::error::canceled and the connection stays
 // open. unbind() is sent regardless.
 //
-// Cancelling from a coroutine: the per-operation timeout covers the common
-// case. To give up on an operation when something else happens first (a
-// timer, Ctrl-C, a capy::async_event), race it with capy::when_any through
-// raceable(): when_any only takes awaitables returning capy::io_result. The
-// first to complete wins and the others are stopped, so a losing operation
-// is abandoned as above (a losing bind or StartTLS closes the connection):
-//
-//   auto r = co_await capy::when_any(ldap::raceable(c->search(params)),
-//                                    corosio::delay(std::chrono::seconds(5)));
-//   if (r.index() == 1) use(std::get<1>(r));  // the search's result<T>, success or not
-//   else ...                                  // the delay won (2), or our task was stopped (0)
-//
-// To cancel it from a std::stop_source of your own (a "Cancel" button, a
-// parent giving up), await it with with_stop(source.get_token(), op): it then
-// stops on either that token or the awaiting task's. (capy::run(token)(op)
-// replaces the task's token instead, so stopping the task would be ignored.)
-// request_stop() may be called from any thread only while the io_context
-// uses Corosio's default locking_mode::safe; the operation still completes on
-// the connection's executor. Under locking_mode::unsafe_io and unsafe, call
-// it only on the thread running the io_context: posting from another thread
-// is unsupported there (io_uring, for one, then skips the wake, so a run()
-// blocked in the ring would not see the stop).
+// To race an operation against another event (a timer, Ctrl-C) or cancel
+// it from a std::stop_source of your own, see cancel.hpp: raceable() and
+// with_stop().
 //
 // Binds (RFC 4511 section 4.2.1): nothing is sent while a BindRequest is
 // outstanding. Requests started during a bind exchange (all the steps of a
@@ -109,6 +90,8 @@
 #pragma once
 
 #include "jhetz/ldap/ber.hpp"
+#include "jhetz/ldap/cancel.hpp"
+#include "jhetz/ldap/connection_options.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/entry.hpp"
@@ -118,238 +101,28 @@
 #include "jhetz/ldap/message.hpp"
 #include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/transport.hpp"
+#include "jhetz/ldap/operations.hpp"
+#include "jhetz/ldap/paged_search.hpp"
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/schema.hpp"
+#include "jhetz/ldap/search_stream.hpp"
 #include "jhetz/ldap/url.hpp"
 
-#include <boost/capy/ex/run.hpp>
-#include <boost/capy/ex/this_coro.hpp>
-#include <boost/capy/io_result.hpp>
 #include <boost/capy/task.hpp>
 #include <boost/corosio/io_context.hpp>
 
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <initializer_list>
 #include <memory_resource>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <typeindex>
 #include <utility>
 #include <vector>
 
 namespace jhetz::ldap {
-
-// When typed operations check their struct against the server's schema
-// (DESIGN.md section 6).
-enum class schema_check {
-	off,
-	// The first search_as / modify<T> / add(dn, T) for each T loads the
-	// subschema (once per connection) and runs validate<T>; errors in the
-	// report fail the operation with client_errc::schema_mismatch (the
-	// report in the context). The result is cached per connection and T,
-	// and dropped by start_tls() (RFC 4513 section 3.1.5: what was read in
-	// clear is read again over TLS).
-	on_first_use,
-};
-
-// How connection::change_password and reset_password change a password.
-enum class password_method {
-	// Pick from the root DSE, read when first needed (one base search) and
-	// kept for the connection until start_tls() (RFC 4513 section 3.1.5:
-	// what was read in clear is read again over TLS): rfc3062 if its
-	// supportedExtension lists password_modify_oid, else active_directory
-	// if its supportedCapabilities lists active_directory_capability_oid
-	// (Samba AD too), else client_errc::no_password_method. A server
-	// offering both gets rfc3062. A root DSE hidden by access controls
-	// advertises neither: choose the method explicitly then.
-	automatic,
-	// RFC 3062 Password Modify (password_modify()). Never reads the root DSE.
-	rfc3062,
-	// Active Directory: a ModifyRequest of unicodePwd (ad_password_value()),
-	// which needs TLS. Never reads the root DSE.
-	active_directory,
-};
-
-struct connection_options
-{
-	// Budget for the whole connect (resolve, TCP, TLS handshake); see
-	// net::connect_options. nullopt: no limit.
-	std::optional<std::chrono::milliseconds> timeout{ std::chrono::seconds(30) };
-	net::tls_options tls{};
-	// Happy Eyeballs delay between connection attempts (see
-	// net::connect_options::attempt_delay).
-	std::chrono::milliseconds attempt_delay{ 250 };
-	bool tcp_no_delay = true;
-	// unbind() on a TLS connection (ldaps:// or after StartTLS) sends a TLS
-	// close_notify and waits at most this long for the server's before
-	// closing (net::transport::shutdown). nullopt: no limit.
-	std::optional<std::chrono::milliseconds> tls_shutdown_timeout{ std::chrono::seconds(1) };
-	// Largest PDU accepted from the server, checked from its header before
-	// the body is read (client_errc::message_too_large, which closes the
-	// connection). 16 MiB by default: one entry of a large group or with
-	// photos and certificates can legitimately take several MiB.
-	std::size_t max_message_size = ber::default_max_message_size;
-	// Most strings one response may decode to (decode_options::max_elements):
-	// bounds the memory a PDU of many tiny values takes once decoded. More
-	// fail with client_errc::message_too_large, which closes the connection
-	// like any response that does not decode.
-	std::size_t max_elements = default_max_elements;
-	// Default limit for each operation, from sending its request to its
-	// final response (for a search: to the SearchResultDone, across every
-	// next()). On expiry the operation fails with capy::error::timeout and
-	// is abandoned. nullopt: no limit (cancel with a stop token instead).
-	std::optional<std::chrono::milliseconds> operation_timeout{};
-	// ldap::connect() only: upgrade an ldap:// connection with StartTLS
-	// right after connecting (using `tls` and `timeout`), and fail if that
-	// does not work. Not allowed with ldaps:// or ldapi:// (invalid_url).
-	bool start_tls = false;
-	ldap::schema_check schema_check = ldap::schema_check::off;
-	// The method change_password() and reset_password() use unless a call
-	// names one.
-	ldap::password_method password_method = ldap::password_method::automatic;
-};
-
-// A search, as a plain aggregate for designated initializers (DESIGN.md
-// section 3). Values are validated when the request is encoded: a negative
-// size_limit or time_limit, or a time_limit above max_int seconds, fails with
-// encode_error, an empty filter with invalid_filter, before anything is sent.
-struct search_params
-{
-	dn base{};// the empty DN is the root DSE
-	search_scope scope = search_scope::whole_subtree;
-	ldap::filter filter = filters::attr("objectClass").present();
-	// Attribute selectors as sent: descriptions, "*" (all user attributes),
-	// "+" (operational, RFC 3673), "1.1" (none). Empty: all user attributes.
-	string_list attributes{};
-	deref_aliases deref = deref_aliases::never;
-	std::int32_t size_limit = 0;// entries; 0 = no client-requested limit
-	std::chrono::seconds time_limit{ 0 };// 0 = no client-requested limit (sent to the server)
-	bool types_only = false;
-	// Request controls: typed (ldap::paged, ldap::manage_dsa_it, ...) or a
-	// raw ldap::control (controls.hpp).
-	request_controls controls{};
-	// Client-side limit for the whole search (see
-	// connection_options::operation_timeout, which applies if this is
-	// nullopt). Unlike time_limit it is enforced by the client.
-	std::optional<std::chrono::milliseconds> timeout{};
-};
-
-// The other operations (step 6), as plain aggregates like search_params.
-// `controls` and `timeout` mean the same everywhere: request controls, and
-// a client-side limit overriding connection_options::operation_timeout.
-
-// AddRequest (RFC 4511 section 4.7). Every attribute needs at least one
-// value (encode_error otherwise, before anything is sent).
-struct add_params
-{
-	dn entry{};
-	std::pmr::vector<partial_attribute> attributes{};// {"cn", {"Jane Doe"}}, ...
-	request_controls controls{};
-	std::optional<std::chrono::milliseconds> timeout{};
-};
-
-// ModifyRequest (RFC 4511 section 4.6): changes applied in order, atomically.
-// Build them with ldap::mod::add / remove / replace / increment.
-struct modify_params
-{
-	dn object{};
-	std::pmr::vector<modify_change> changes{};
-	request_controls controls{};
-	std::optional<std::chrono::milliseconds> timeout{};
-};
-
-namespace mod {
-	// Adds values (at least one).
-	[[nodiscard]] modify_change add(std::string_view type, std::initializer_list<std::string_view> values);
-	// Deletes the given values, or the whole attribute if none are given.
-	[[nodiscard]] modify_change remove(std::string_view type, std::initializer_list<std::string_view> values = {});
-	// Replaces all values (none: deletes the attribute if present).
-	[[nodiscard]] modify_change replace(std::string_view type, std::initializer_list<std::string_view> values);
-	// Adds `delta` to an integer attribute (RFC 4525 Modify-Increment).
-	[[nodiscard]] modify_change increment(std::string_view type, std::string_view delta = "1");
-}// namespace mod
-
-// DelRequest (RFC 4511 section 4.8): deletes a leaf entry.
-struct del_params
-{
-	dn entry{};
-	request_controls controls{};
-	std::optional<std::chrono::milliseconds> timeout{};
-};
-
-// ModifyDNRequest (RFC 4511 section 4.9): renames an entry (new_rdn) and/or
-// moves it under new_superior. To move without renaming, pass its current
-// RDN (entry.rdns().front()).
-struct modify_dn_params
-{
-	dn entry{};
-	rdn new_rdn{};
-	bool delete_old_rdn = true;// drop the old RDN's values from the entry
-	std::optional<dn> new_superior{};
-	request_controls controls{};
-	std::optional<std::chrono::milliseconds> timeout{};
-};
-
-// CompareRequest (RFC 4511 section 4.10).
-struct compare_params
-{
-	dn entry{};
-	std::string attribute{};
-	std::string value{};
-	request_controls controls{};
-	std::optional<std::chrono::milliseconds> timeout{};
-};
-
-// ExtendedRequest (RFC 4511 section 4.12).
-struct extended_params
-{
-	std::string name{};// requestName, an OID
-	std::optional<std::string> value{};// requestValue, as encoded for that operation
-	request_controls controls{};
-	std::optional<std::chrono::milliseconds> timeout{};
-};
-
-// What a successful operation returns besides success: the controls of the
-// server's response (e.g. a post-read entry, RFC 4527: find_post_read()).
-struct response
-{
-	std::pmr::vector<control> controls{};
-};
-
-struct extended_result
-{
-	std::optional<std::pmr::string> name{};// responseName
-	std::optional<std::pmr::string> value{};// responseValue
-	std::pmr::vector<control> controls{};
-};
-
-// RFC 4532 "Who am I?" extended operation.
-inline constexpr std::string_view who_am_i_oid = "1.3.6.1.4.1.4203.1.11.3";
-
-// RFC 3062 Password Modify extended operation.
-inline constexpr std::string_view password_modify_oid = "1.3.6.1.4.1.4203.1.11.1";
-
-struct password_modify_params
-{
-	// userIdentity: whose password, usually a DN (the server decides the
-	// form). nullopt: the user this connection is bound as.
-	std::optional<std::string> user{};
-	// oldPasswd: servers usually require it when users change their own.
-	std::optional<std::string> old_password{};
-	// newPasswd. nullopt: the server generates one and returns it.
-	std::optional<std::string> new_password{};
-	request_controls controls{};
-	std::optional<std::chrono::milliseconds> timeout{};
-};
-
-// LDAP_CAP_ACTIVE_DIRECTORY_OID: in the root DSE's supportedCapabilities of
-// Active Directory and Samba AD domain controllers.
-inline constexpr std::string_view active_directory_capability_oid = "1.2.840.113556.1.4.800";
 
 // The unicodePwd value Active Directory expects (MS-ADTS 3.1.1.3.1.5): the
 // password in double quotes, encoded UTF-16LE, characters outside the BMP
@@ -362,8 +135,6 @@ inline constexpr std::string_view active_directory_capability_oid = "1.2.840.113
 // the scratch buffers are wiped (see change_password()).
 [[nodiscard]] result<std::string> ad_password_value(std::string_view password);
 
-class search_stream;
-class paged_search;
 class connection;
 
 namespace detail {
@@ -672,127 +443,11 @@ class connection
 	friend class ldap::paged_search;
 	friend void detail::set_next_message_id(connection &, std::int32_t) noexcept;
 
-	// schema_check::on_first_use for one type (see above).
+	// schema_check::on_first_use for one type (connection_options.hpp).
 	boost::capy::task<result<void>> check_schema(std::type_index type,
 	  schema_report (*validate_type)(const server_schema &));
 
 	impl *impl_ = nullptr;// reference counted; allocated from the resource it records
-};
-
-// The entries of one search, read one at a time:
-//
-//   auto s = co_await conn.search_stream({.base = base, .filter = f});
-//   if (!s) return s.error();
-//   while (true) {
-//       ldap::result<std::optional<ldap::entry>> e = co_await s->next();
-//       if (!e) return e.error();   // transport, protocol or server error
-//       if (!*e) break;             // SearchResultDone with success
-//       use(**e);
-//   }
-//
-// Move-only. A default-constructed stream fails with
-// client_errc::not_connected. The stream must not be destroyed or moved
-// while its next() is suspended; a second next() while one is suspended
-// fails with client_errc::operation_in_progress.
-class search_stream
-{
-  public:
-	search_stream() noexcept = default;
-	search_stream(search_stream &&other) noexcept;
-	search_stream &operator=(search_stream &&other) noexcept;
-	search_stream(const search_stream &) = delete;
-	search_stream &operator=(const search_stream &) = delete;
-	// Unfinished: the search is abandoned.
-	~search_stream();
-
-	// The next entry, nullopt at the end (SearchResultDone with success), or
-	// an error: the server's result code (the connection stays usable), a
-	// cancellation or timeout (the search is abandoned, the connection stays
-	// usable) or a connection failure. After the end or an error, next()
-	// returns the same again without I/O.
-	boost::capy::task<result<std::optional<entry>>> next();
-
-	// True once the SearchResultDone (or an error) was read.
-	bool done() const noexcept;
-	// URIs of the SearchResultReference messages received so far, in order,
-	// as sent (one string per URI). They are not chased; reference_urls()
-	// parses them.
-	const string_list &references() const noexcept;
-	// references() parsed as LDAP URLs; URIs that do not parse are left out.
-	[[nodiscard]] std::pmr::vector<url> reference_urls(
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
-	// Controls of the SearchResultDone (e.g. paged results, or the sort
-	// result: find_sort_result()), once done().
-	const std::pmr::vector<control> &controls() const noexcept;
-
-	struct state;// defined in src/connection/search.hpp
-
-  private:
-	friend class connection;
-	friend class connection::impl;
-	friend class paged_search;
-
-	explicit search_stream(state *s) noexcept : state_(s) {}
-
-	state *state_ = nullptr;
-};
-
-// The entries of a paged search, across pages (connection::search_paged):
-// used like search_stream. Move-only; the same rules as search_stream
-// apply.
-//
-// Destroyed before its end, it stops the search on the server: the current
-// page's search is abandoned if it is still running, then the server's
-// paging state is released (RFC 2696 section 3: the same search with page
-// size 0 and the last cookie the server returned, which is the current
-// page's if it already ended, else the previous page's). This is best
-// effort and never waits: the release is queued like an AbandonRequest, and
-// its answer is read and dropped. Until it arrives, for as long as a page
-// would be waited for (search_params::timeout, else
-// connection_options::operation_timeout; no limit without either),
-// outstanding() counts it and start_tls() waits for it; past that deadline
-// a late answer is still dropped (see start_tls for one that comes during
-// StartTLS). Nothing is released after the last page (empty cookie), after
-// an error that ended the search (the server's result, a malformed paged
-// results control, a closed connection), while the first page is running
-// (no cookie yet: only the abandon), during a StartTLS exchange, or once
-// the connection is closed. A page that timed out or was cancelled, or a
-// next page that could not be sent, leaves the paged_search done with the
-// last cookie kept, and its destruction releases the state. Like
-// search_stream, it must be destroyed on the connection's executor.
-class paged_search
-{
-  public:
-	paged_search() noexcept = default;
-	paged_search(paged_search &&other) noexcept;
-	paged_search &operator=(paged_search &&other) noexcept;
-	paged_search(const paged_search &) = delete;
-	paged_search &operator=(const paged_search &) = delete;
-	~paged_search();
-
-	// The next entry, nullopt after the last page, or an error (the
-	// search's, or a malformed paged results control: decode_error).
-	boost::capy::task<result<std::optional<entry>>> next();
-
-	bool done() const noexcept;
-	// Pages requested so far (1 after search_paged()).
-	std::size_t pages() const noexcept;
-	// References of every page so far, in order.
-	const string_list &references() const noexcept;
-	[[nodiscard]] std::pmr::vector<url> reference_urls(
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const;
-	// Controls of the last SearchResultDone, once done().
-	const std::pmr::vector<control> &controls() const noexcept;
-
-	struct state;// defined in src/connection/paged_search.cpp
-
-  private:
-	friend class connection;
-	friend class connection::impl;
-
-	explicit paged_search(state *s) noexcept : state_(s) {}
-
-	state *state_ = nullptr;
 };
 
 // Opens a connection to `u` (net::connect: resolve, TCP, TLS for ldaps://,
@@ -813,47 +468,5 @@ boost::capy::task<result<connection>> connect(boost::corosio::io_context &ioc,
   std::string_view text,
   connection_options options = {},
   std::pmr::memory_resource *mr = std::pmr::get_default_resource());
-
-// Adapts an operation for capy::when_any, which races only awaitables
-// returning capy::io_result: the operation's result<T> becomes the payload
-// of an io_result with no error, so it wins the race once it completes,
-// successfully or not. If it is cancelled (it lost the race, or the awaiting
-// task was stopped) the io_result carries its error code instead and cannot
-// win; the operation was then abandoned, or, for a bind or StartTLS, the
-// connection closed (one stopped before it starts is not sent: nothing is
-// abandoned and the connection stays open). At the operation's index,
-// when_any's result holds the result<T>. Abandon is best effort (RFC 4511
-// section 4.11): an update (add, modify, delete, modify DN) that lost the
-// race may still have been applied by the server; re-read the entry if the
-// outcome matters.
-template<class T> boost::capy::task<boost::capy::io_result<result<T>>> raceable(boost::capy::task<result<T>> op)
-{
-	result<T> r = co_await std::move(op);
-	std::error_code ec;
-	if (!r && r.error().code == cond::canceled && (co_await boost::capy::this_coro::stop_token).stop_requested())
-		ec = r.error().code;
-	co_return boost::capy::io_result<result<T>>{ ec, std::move(r) };
-}
-
-// Awaits `op` with a stop token that is set when either `token` or the
-// awaiting task's own stop token is: either cancels the operation (an LDAP
-// operation then fails with cond::canceled and is abandoned, or, for a bind
-// or StartTLS, closes the connection; one stopped before it starts is not
-// sent: nothing is abandoned and the connection stays open). Abandon is best
-// effort (RFC 4511 section 4.11): a stopped update (add, modify, delete,
-// modify DN) may still have been applied by the server; re-read the entry if
-// the outcome matters.
-// A stop requested after `op` has completed has no effect. `token` may be
-// stopped from any thread only under the io_context's default
-// locking_mode::safe; under unsafe_io and unsafe, only from the thread
-// running the io_context (see "Cancelling from a coroutine" above).
-template<class T> boost::capy::task<T> with_stop(std::stop_token token, boost::capy::task<T> op)
-{
-	std::stop_source either;
-	const auto forward = [&either] { either.request_stop(); };
-	const std::stop_callback on_outer(co_await boost::capy::this_coro::stop_token, forward);
-	const std::stop_callback on_token(std::move(token), forward);
-	co_return co_await boost::capy::run(either.get_token())(std::move(op));
-}
 
 }// namespace jhetz::ldap

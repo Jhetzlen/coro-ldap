@@ -28,6 +28,12 @@ The `net.*` tests need no LDAP server and no fixed ports: they run TCP, TLS
 and Unix socket servers in-process on loopback, with a throwaway CA and
 certificates generated at run time through the OpenSSL API.
 
+Every public header compiles on its own: the build compiles one generated
+file per header in `include/jhetz/ldap/` (targets `jhetz_ldap_header_check`
+for the codec's headers, against `jhetz::ldap` alone, so a codec header that
+needs Corosio or Capy fails, and `jhetz_ldap_net_header_check` for the
+others; the list of `jhetz::ldap_net` headers is in `tests/CMakeLists.txt`).
+
 | Option | Default | |
 |---|---|---|
 | `JHETZ_LDAP_BUILD_TESTS` | `ON` | unit tests and the `*_fuzz_replay` tests |

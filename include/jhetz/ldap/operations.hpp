@@ -1,0 +1,166 @@
+// The requests of ldap::connection's operations (connection.hpp) as plain
+// aggregates for designated initializers (DESIGN.md section 3), the
+// ldap::mod builders of a ModifyRequest's changes, what the operations
+// return besides success, and the OIDs of the extended operations and
+// capabilities the connection knows. Part of jhetz::ldap (the codec): no
+// Corosio or Capy, the requests are encoded when an operation sends them.
+//
+//   co_await c->modify({
+//       .object  = ldap::dn{"uid=jdoe,ou=people,dc=example,dc=org"},
+//       .changes = {ldap::mod::replace("mail", {"jdoe@example.org"}), ldap::mod::increment("loginCount")},
+//   });
+#pragma once
+
+#include "jhetz/ldap/controls.hpp"
+#include "jhetz/ldap/dn.hpp"
+#include "jhetz/ldap/filter.hpp"
+#include "jhetz/ldap/message.hpp"
+
+#include <chrono>
+#include <cstdint>
+#include <initializer_list>
+#include <memory_resource>
+#include <optional>
+#include <string>
+#include <string_view>
+
+namespace jhetz::ldap {
+
+// A search, as a plain aggregate for designated initializers (DESIGN.md
+// section 3). Values are validated when the request is encoded: a negative
+// size_limit or time_limit, or a time_limit above max_int seconds, fails with
+// encode_error, an empty filter with invalid_filter, before anything is sent.
+struct search_params
+{
+	dn base{};// the empty DN is the root DSE
+	search_scope scope = search_scope::whole_subtree;
+	ldap::filter filter = filters::attr("objectClass").present();
+	// Attribute selectors as sent: descriptions, "*" (all user attributes),
+	// "+" (operational, RFC 3673), "1.1" (none). Empty: all user attributes.
+	string_list attributes{};
+	deref_aliases deref = deref_aliases::never;
+	std::int32_t size_limit = 0;// entries; 0 = no client-requested limit
+	std::chrono::seconds time_limit{ 0 };// 0 = no client-requested limit (sent to the server)
+	bool types_only = false;
+	// Request controls: typed (ldap::paged, ldap::manage_dsa_it, ...) or a
+	// raw ldap::control (controls.hpp).
+	request_controls controls{};
+	// Client-side limit for the whole search (see
+	// connection_options::operation_timeout, which applies if this is
+	// nullopt). Unlike time_limit it is enforced by the client.
+	std::optional<std::chrono::milliseconds> timeout{};
+};
+
+// The other operations (step 6), as plain aggregates like search_params.
+// `controls` and `timeout` mean the same everywhere: request controls, and
+// a client-side limit overriding connection_options::operation_timeout.
+
+// AddRequest (RFC 4511 section 4.7). Every attribute needs at least one
+// value (encode_error otherwise, before anything is sent).
+struct add_params
+{
+	dn entry{};
+	std::pmr::vector<partial_attribute> attributes{};// {"cn", {"Jane Doe"}}, ...
+	request_controls controls{};
+	std::optional<std::chrono::milliseconds> timeout{};
+};
+
+// ModifyRequest (RFC 4511 section 4.6): changes applied in order, atomically.
+// Build them with ldap::mod::add / remove / replace / increment.
+struct modify_params
+{
+	dn object{};
+	std::pmr::vector<modify_change> changes{};
+	request_controls controls{};
+	std::optional<std::chrono::milliseconds> timeout{};
+};
+
+namespace mod {
+	// Adds values (at least one).
+	[[nodiscard]] modify_change add(std::string_view type, std::initializer_list<std::string_view> values);
+	// Deletes the given values, or the whole attribute if none are given.
+	[[nodiscard]] modify_change remove(std::string_view type, std::initializer_list<std::string_view> values = {});
+	// Replaces all values (none: deletes the attribute if present).
+	[[nodiscard]] modify_change replace(std::string_view type, std::initializer_list<std::string_view> values);
+	// Adds `delta` to an integer attribute (RFC 4525 Modify-Increment).
+	[[nodiscard]] modify_change increment(std::string_view type, std::string_view delta = "1");
+}// namespace mod
+
+// DelRequest (RFC 4511 section 4.8): deletes a leaf entry.
+struct del_params
+{
+	dn entry{};
+	request_controls controls{};
+	std::optional<std::chrono::milliseconds> timeout{};
+};
+
+// ModifyDNRequest (RFC 4511 section 4.9): renames an entry (new_rdn) and/or
+// moves it under new_superior. To move without renaming, pass its current
+// RDN (entry.rdns().front()).
+struct modify_dn_params
+{
+	dn entry{};
+	rdn new_rdn{};
+	bool delete_old_rdn = true;// drop the old RDN's values from the entry
+	std::optional<dn> new_superior{};
+	request_controls controls{};
+	std::optional<std::chrono::milliseconds> timeout{};
+};
+
+// CompareRequest (RFC 4511 section 4.10).
+struct compare_params
+{
+	dn entry{};
+	std::string attribute{};
+	std::string value{};
+	request_controls controls{};
+	std::optional<std::chrono::milliseconds> timeout{};
+};
+
+// ExtendedRequest (RFC 4511 section 4.12).
+struct extended_params
+{
+	std::string name{};// requestName, an OID
+	std::optional<std::string> value{};// requestValue, as encoded for that operation
+	request_controls controls{};
+	std::optional<std::chrono::milliseconds> timeout{};
+};
+
+// What a successful operation returns besides success: the controls of the
+// server's response (e.g. a post-read entry, RFC 4527: find_post_read()).
+struct response
+{
+	std::pmr::vector<control> controls{};
+};
+
+struct extended_result
+{
+	std::optional<std::pmr::string> name{};// responseName
+	std::optional<std::pmr::string> value{};// responseValue
+	std::pmr::vector<control> controls{};
+};
+
+// RFC 4532 "Who am I?" extended operation.
+inline constexpr std::string_view who_am_i_oid = "1.3.6.1.4.1.4203.1.11.3";
+
+// RFC 3062 Password Modify extended operation.
+inline constexpr std::string_view password_modify_oid = "1.3.6.1.4.1.4203.1.11.1";
+
+struct password_modify_params
+{
+	// userIdentity: whose password, usually a DN (the server decides the
+	// form). nullopt: the user this connection is bound as.
+	std::optional<std::string> user{};
+	// oldPasswd: servers usually require it when users change their own.
+	std::optional<std::string> old_password{};
+	// newPasswd. nullopt: the server generates one and returns it.
+	std::optional<std::string> new_password{};
+	request_controls controls{};
+	std::optional<std::chrono::milliseconds> timeout{};
+};
+
+// LDAP_CAP_ACTIVE_DIRECTORY_OID: in the root DSE's supportedCapabilities of
+// Active Directory and Samba AD domain controllers.
+inline constexpr std::string_view active_directory_capability_oid = "1.2.840.113556.1.4.800";
+
+}// namespace jhetz::ldap

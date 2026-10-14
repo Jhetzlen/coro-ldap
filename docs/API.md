@@ -147,7 +147,22 @@ itself stays dependency-free.
   `write_bytes` sends raw bytes.
 
 - `jhetz/ldap/connection.hpp` (steps 5a, 5b): `ldap::connection`, the
-  client API. `co_await ldap::connect(ioc, url, connection_options, mr)`
+  client API, with `ldap::connect()` and `ad_password_value()`. It includes
+  the headers below, so it is the one to include; each also compiles on
+  its own:
+  - `jhetz/ldap/connection_options.hpp`: `connection_options`,
+    `schema_check`, `password_method`.
+  - `jhetz/ldap/operations.hpp` (part of the codec, `jhetz::ldap`): the
+    request aggregates (`search_params`, `add_params`, `modify_params`,
+    `del_params`, `modify_dn_params`, `compare_params`, `extended_params`,
+    `password_modify_params`), the `ldap::mod` builders, `response`,
+    `extended_result`, and the OIDs `who_am_i_oid`, `password_modify_oid`
+    and `active_directory_capability_oid`.
+  - `jhetz/ldap/search_stream.hpp` and `jhetz/ldap/paged_search.hpp`: the
+    entry streams `search_stream()` and `search_paged()` return.
+  - `jhetz/ldap/cancel.hpp`: `raceable()` and `with_stop()`.
+
+   `co_await ldap::connect(ioc, url, connection_options, mr)`
   wraps `net::connect` (`connection_options`: connect `timeout`, `tls`,
   `tcp_no_delay`, `max_message_size` (16 MiB by default), `max_elements`
   (1,000,000 decoded strings per response by default),
