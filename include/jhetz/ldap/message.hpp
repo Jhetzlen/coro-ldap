@@ -194,7 +194,7 @@ struct attribute_value_assertion
 
 	attribute_value_assertion() = default;
 	explicit attribute_value_assertion(const allocator_type &alloc) : attribute_desc(alloc), assertion_value(alloc) {}
-	// Public API, RFC 4511 field order; see coro-ldap-bsm.10 review.
+	// Public API, RFC 4511 field order; kept by decision (coro-ldap-bsm.30).
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	attribute_value_assertion(std::string_view attribute_desc_,
 	  std::string_view assertion_value_,
