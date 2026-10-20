@@ -282,7 +282,8 @@ class filter::child_range : public std::ranges::view_interface<filter::child_ran
 {
   public:
 	[[nodiscard]] auto begin() const noexcept -> child_iterator { return first_; }
-	[[nodiscard]] static auto end() noexcept -> child_iterator { return {}; }
+	// NOLINTNEXTLINE(readability-convert-member-functions-to-static): range protocol end()
+	[[nodiscard]] auto end() const noexcept -> child_iterator { return {}; }
 	// NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): same result, kept [[nodiscard]] noexcept
 	[[nodiscard]] auto empty() const noexcept -> bool { return first_ == child_iterator{}; }
 
@@ -337,7 +338,8 @@ class filter::substring_range : public std::ranges::view_interface<filter::subst
 {
   public:
 	[[nodiscard]] auto begin() const noexcept -> substring_iterator { return first_; }
-	[[nodiscard]] static auto end() noexcept -> substring_iterator { return {}; }
+	// NOLINTNEXTLINE(readability-convert-member-functions-to-static): range protocol end()
+	[[nodiscard]] auto end() const noexcept -> substring_iterator { return {}; }
 	// NOLINTNEXTLINE(bugprone-derived-method-shadowing-base-method): same result, kept [[nodiscard]] noexcept
 	[[nodiscard]] auto empty() const noexcept -> bool { return first_ == substring_iterator{}; }
 
