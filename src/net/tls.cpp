@@ -1,6 +1,7 @@
 #include "tls.hpp"
 
 #include "../format_util.hpp"
+#include "../scope_util.hpp"
 
 #include <boost/corosio/openssl_stream.hpp>
 
@@ -360,24 +361,10 @@ auto tls_handshake(transport::impl &im,
 	// set_hostname(), the handshake's frame, bounded()'s or the timeout's
 	// stop_source. Back to the plain socket; the connection is unusable
 	// anyway and must be closed (the server expects a handshake now).
-	struct undo_tls
-	{
-		explicit undo_tls(transport::impl &i) noexcept : im(i) {}
-		undo_tls(const undo_tls &) = delete;
-		undo_tls(undo_tls &&) = delete;
-		auto operator=(const undo_tls &) -> undo_tls & = delete;
-		auto operator=(undo_tls &&) -> undo_tls & = delete;
-		transport::impl &im;
-		bool keep = false;
-		~undo_tls()
-		{
-			if (keep) {
-				return;
-			}
-			im.tls.reset();
-			im.tls_context.reset();
-		}
-	} undo{ im };
+	ldap::detail::scope_exit undo_tls{ [&im] {
+		im.tls.reset();
+		im.tls_context.reset();
+	} };
 	const auto &ctx = im.tls_context.emplace(std::move(setup.context));
 	auto &stream = im.tls.emplace(&*im.tcp, ctx);
 	stream.set_hostname(name);
@@ -390,7 +377,7 @@ auto tls_handshake(transport::impl &im,
 		co_return fail(ec, std::move(context));
 	}
 	im.stream = boost::capy::any_stream(&stream);
-	undo.keep = true;
+	undo_tls.release();
 	co_return result<void>{};
 }
 

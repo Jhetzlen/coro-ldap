@@ -3,6 +3,7 @@
 
 #include "format_util.hpp"
 #include "icu_util.hpp"
+#include "scope_util.hpp"
 
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -748,16 +749,7 @@ auto sasl_scram_sha256::client_final(std::string_view message) -> result<std::op
 {
 	state_ = state::idle;// any failure below ends the exchange
 	// The prepared password is needed only for PBKDF2, below.
-	struct wipe_on_exit
-	{
-		explicit wipe_on_exit(std::string &str) noexcept : s(str) {}
-		wipe_on_exit(const wipe_on_exit &) = delete;
-		wipe_on_exit(wipe_on_exit &&) = delete;
-		auto operator=(const wipe_on_exit &) -> wipe_on_exit & = delete;
-		auto operator=(wipe_on_exit &&) -> wipe_on_exit & = delete;
-		~wipe_on_exit() { wipe_string(s); }
-		std::string &s;
-	} const wipe_password{ prepared_password_ };
+	const detail::scope_exit wipe_password{ [this] { wipe_string(prepared_password_); } };
 	auto parsed = parse_server_first(message);
 	if (!parsed) {
 		return std::unexpected(std::move(parsed.error()));
@@ -810,20 +802,10 @@ auto sasl_scram_sha256::offload_step(std::optional<std::string_view> challenge) 
 	// The step owns copies of everything it uses (the mechanism may be
 	// destroyed or start another bind while it runs).
 	return [d = std::move(d), without_proof = std::move(without_proof)] -> result<std::optional<std::string>> {
-		struct done_on_exit
-		{
-			explicit done_on_exit(derivation &der) noexcept : d(der) {}
-			done_on_exit(const done_on_exit &) = delete;
-			done_on_exit(done_on_exit &&) = delete;
-			auto operator=(const done_on_exit &) -> done_on_exit & = delete;
-			auto operator=(done_on_exit &&) -> done_on_exit & = delete;
-			derivation &d;
-			~done_on_exit()
-			{
-				wipe_string(d.password);
-				d.done.store(true, std::memory_order_release);
-			}
-		} const done{ *d };
+		const detail::scope_exit done{ [&d] {
+			wipe_string(d->password);
+			d->done.store(true, std::memory_order_release);
+		} };
 		if (!salted_password(d->password, d->salt, d->iterations, d->salted)) {
 			return library_error("OpenSSL PBKDF2 failed");
 		}

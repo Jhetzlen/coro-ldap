@@ -4,6 +4,7 @@
 // event, and the timeouts tested are the library's own.
 #include "../../src/net/happy_eyeballs.hpp"
 #include "../../src/net/tls.hpp"
+#include "../../src/scope_util.hpp"
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
@@ -1229,22 +1230,13 @@ TEST_CASE("ldaps:// with a CA directory", "[net][connect][tls]")
 	temp_path dir("-certs");
 	std::filesystem::create_directory(dir.str());
 	const auto ca_name = std::format("{:08x}.0", pki().ca_subject_hash());
-	struct remove_contents
+	const std::filesystem::path ca_file = std::filesystem::path(dir.str()) / ca_name;
+	const ldap::detail::scope_exit remove_ca_file{ [&ca_file] {
+		std::error_code ec;
+		std::filesystem::remove(ca_file, ec);
+	} };
 	{
-		explicit remove_contents(std::filesystem::path path) : p(std::move(path)) {}
-		remove_contents(const remove_contents &) = delete;
-		remove_contents(remove_contents &&) = delete;
-		auto operator=(const remove_contents &) -> remove_contents & = delete;
-		auto operator=(remove_contents &&) -> remove_contents & = delete;
-		std::filesystem::path p;
-		~remove_contents()
-		{
-			std::error_code ec;
-			std::filesystem::remove(p, ec);
-		}
-	} ca_file{ std::filesystem::path(dir.str()) / ca_name };
-	{
-		std::ofstream out(ca_file.p, std::ios::binary);
+		std::ofstream out(ca_file, std::ios::binary);
 		out << pki().ca_pem();
 		out.close();
 		REQUIRE_FALSE(out.fail());
@@ -1261,7 +1253,7 @@ TEST_CASE("ldaps:// with a CA directory", "[net][connect][tls]")
 	CHECK_THAT(server.get(), IsEmpty());
 
 	// A directory without that CA: the server's certificate is untrusted.
-	std::filesystem::remove(ca_file.p);
+	std::filesystem::remove(ca_file);
 	tcp_server srv2(ioc);
 	outcome<std::string> server2;
 	spawn(ioc, accept_and_serve(srv2.acc, server_context(localhost_cert())), server2);
