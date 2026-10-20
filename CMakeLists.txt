@@ -206,10 +206,17 @@ if(JHETZ_LDAP_BUILD_NET)
     # always adds its test-suite libraries, unused here), and leave their
     # install rules out of ours, so cmake --install installs jhetz_ldap
     # alone (CMake skips EXCLUDE_FROM_ALL directories' install scripts).
-    # FetchContent_Declare(EXCLUDE_FROM_ALL) would need CMake 3.28.
+    # FetchContent_Declare(EXCLUDE_FROM_ALL) would need CMake 3.28. Only
+    # directories added here: a parent project that made Capy or Corosio
+    # available itself (our MakeAvailable then does nothing, but
+    # <dep>_SOURCE_DIR is set) keeps its own settings for them.
+    get_property(jhetz_ldap_subdirs DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY SUBDIRECTORIES)
     foreach(dep capy corosio)
         if(DEFINED ${dep}_SOURCE_DIR)
-            set_property(DIRECTORY ${${dep}_SOURCE_DIR} PROPERTY EXCLUDE_FROM_ALL ON)
+            cmake_path(ABSOLUTE_PATH ${dep}_SOURCE_DIR NORMALIZE OUTPUT_VARIABLE dep_dir)
+            if(dep_dir IN_LIST jhetz_ldap_subdirs)
+                set_property(DIRECTORY ${dep_dir} PROPERTY EXCLUDE_FROM_ALL ON)
+            endif()
         endif()
     endforeach()
     if(NOT TARGET Boost::corosio_openssl)
