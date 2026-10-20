@@ -52,6 +52,13 @@ namespace {
 		return out;
 	}
 
+	// A task that fails at once, for the forwarders that refuse a request
+	// before modify_dn() would.
+	auto refuse(std::error_code code, std::string context) -> capy::task<result<response>>
+	{
+		co_return fail(code, context);
+	}
+
 }// namespace
 
 namespace detail {
@@ -174,7 +181,10 @@ auto connection::move(dn entry,
   request_controls controls,
   std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<response>>
 {
-	rdn kept = entry.empty() ? rdn{} : entry.rdns().front();
+	if (entry.empty()) {// the root DSE: no RDN to keep
+		return refuse(client_errc::invalid_dn, op_context("modify DN", entry) + ": empty entry, no RDN to keep");
+	}
+	rdn kept = entry.rdns().front();
 	return modify_dn({ .entry = std::move(entry),
 	  .new_rdn = std::move(kept),
 	  .new_superior = std::move(new_parent),

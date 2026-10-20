@@ -251,9 +251,11 @@ TEST_CASE("operations: move and rename build the ModifyDNRequest", "[net][operat
 	auto root = m.run(m.conn.move(ldap::dn{}, ldap::dn{ "ou=alumni,dc=example,dc=org" }));
 	REQUIRE_FALSE(root.has_value());
 	CHECK(root.error().code == client_errc::invalid_dn);
+	CHECK(root.error().context == "modify DN \"\": empty entry, no RDN to keep");
 	auto nameless = m.run(m.conn.rename(jdoe, ldap::rdn{}));
 	REQUIRE_FALSE(nameless.has_value());
 	CHECK(nameless.error().code == client_errc::invalid_dn);
+	CHECK(nameless.error().context == "modify DN uid=jdoe,ou=people,dc=example,dc=org: empty new RDN");
 }
 
 // ---------------------------------------------------------------- compare
