@@ -221,6 +221,41 @@ TEST_CASE("operations: modify DN", "[net][operations]")
 	CHECK(empty.error().code == client_errc::invalid_dn);
 }
 
+TEST_CASE("operations: move and rename build the ModifyDNRequest", "[net][operations]")
+{
+	mock_ldap m;
+	m.serve({ answer({ result_msg<ldap::modify_dn_response>(1) }),
+	  answer({ result_msg<ldap::modify_dn_response>(2) }),
+	  answer({ result_msg<ldap::modify_dn_response>(3, 68, "target exists") }) });
+	// move: same RDN, newSuperior set, deleteoldrdn true.
+	REQUIRE(m.run(m.conn.move(jdoe, ldap::dn{ "ou=alumni,dc=example,dc=org" })).has_value());
+	// rename: new RDN, no newSuperior, deleteoldrdn as asked.
+	REQUIRE(m.run(m.conn.rename(jdoe, ldap::rdn{ "uid=john.doe" }, false)).has_value());
+	auto taken = m.run(m.conn.rename(jdoe, ldap::rdn{ "uid=jane" }));
+	REQUIRE_FALSE(taken.has_value());
+	CHECK(taken.error().code == ldap::errc::entry_already_exists);
+	CHECK(taken.error().context == "modify DN uid=jdoe,ou=people,dc=example,dc=org");
+	m.check_server();
+	REQUIRE(m.log.received.size() == 3);
+	CHECK(m.log.received[0]
+		  == ldap::message{ 1,
+			ldap::modify_dn_request{
+			  "uid=jdoe,ou=people,dc=example,dc=org", "uid=jdoe", true, "ou=alumni,dc=example,dc=org" } });
+	CHECK(
+	  m.log.received[1]
+	  == ldap::message{ 2, ldap::modify_dn_request{ "uid=jdoe,ou=people,dc=example,dc=org", "uid=john.doe", false } });
+	CHECK(m.log.received[2]
+		  == ldap::message{ 3, ldap::modify_dn_request{ "uid=jdoe,ou=people,dc=example,dc=org", "uid=jane", true } });
+
+	// Refused before anything is sent: the empty DN has no RDN to keep.
+	auto root = m.run(m.conn.move(ldap::dn{}, ldap::dn{ "ou=alumni,dc=example,dc=org" }));
+	REQUIRE_FALSE(root.has_value());
+	CHECK(root.error().code == client_errc::invalid_dn);
+	auto nameless = m.run(m.conn.rename(jdoe, ldap::rdn{}));
+	REQUIRE_FALSE(nameless.has_value());
+	CHECK(nameless.error().code == client_errc::invalid_dn);
+}
+
 // ---------------------------------------------------------------- compare
 
 TEST_CASE("operations: compare", "[net][operations]")

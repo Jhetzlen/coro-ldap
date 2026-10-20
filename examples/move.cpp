@@ -1,0 +1,41 @@
+#include "jhetz/ldap/connection.hpp"
+
+#include <boost/capy/ex/run_async.hpp>
+#include <boost/corosio/io_context.hpp>
+
+#include <iostream>
+#include <string>
+
+namespace ldap = jhetz::ldap;
+
+auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task<int>
+{
+	auto c = co_await ldap::connect(ioc, text);
+	if (!c) {
+		std::cerr << c.error().message() << '\n';
+		co_return 1;
+	}
+	auto bound = co_await c->simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret");
+	if (!bound) {
+		std::cerr << bound.error().message() << '\n';
+		co_return 1;
+	}
+	auto moved = co_await c->move(
+	  ldap::dn{ "uid=user001,ou=people,dc=example,dc=org" }, ldap::dn{ "ou=groups,dc=example,dc=org" });
+	if (!moved) {
+		std::cerr << moved.error().message() << '\n';
+		co_return 1;
+	}
+	std::cout << "moved uid=user001 from ou=people to ou=groups\n";
+	co_return 0;
+}
+
+auto main(int argc, char **argv) -> int
+{
+	boost::corosio::io_context ioc;
+	int rc = 1;
+	boost::capy::run_async(ioc.get_executor(), [&](int r) { rc = r; })(
+	  run(ioc, argc > 1 ? argv[1] : "ldap://localhost"));
+	ioc.run();
+	return rc;
+}

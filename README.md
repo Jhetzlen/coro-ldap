@@ -30,9 +30,10 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
 - `ldap://`, `ldaps://`, StartTLS and `ldapi://` (Unix sockets), with Happy
   Eyeballs connection racing
 - Simple bind and SASL EXTERNAL, SCRAM-SHA-256 and GSSAPI (Kerberos, optional)
-- Search (all at once, streamed or paged), add, modify, delete, modify DN,
-  compare, extended operations, Who am I?, Password Modify, and password
-  change / reset that works on both OpenLDAP and Active Directory
+- Search (all at once, streamed or paged), add, modify, delete, modify DN
+  (rename / move), compare, extended operations, Who am I?, Password
+  Modify, and password change / reset that works on both OpenLDAP and
+  Active Directory
 - Controls: paged results, server-side sort, assertion, pre-/post-read,
   proxied authorization, ManageDsaIT, Relax Rules
 - Struct mapping, runtime schema validation, Active Directory time types

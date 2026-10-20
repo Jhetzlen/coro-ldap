@@ -219,7 +219,10 @@ itself stays dependency-free.
   lifetime rules.
   Step 6 adds the other operations: `add`, `modify` (changes from
   `ldap::mod::add / remove / replace / increment`), `del`, `modify_dn`
-  (rename and / or move), `compare` (`result<bool>`), `extended`,
+  (rename and / or move; `move(entry, new_parent)` keeps the RDN and sets
+  newSuperior, `rename(entry, new_rdn, delete_old_rdn = true)` keeps the
+  parent; both build the ModifyDNRequest for `modify_dn`, on
+  `sync::connection` too), `compare` (`result<bool>`), `extended`,
   `who_am_i` (RFC 4532) and `password_modify` (RFC 3062: returns the
   server-generated password, if any), each taking a params aggregate with `.controls`
   and `.timeout`; `search_paged(params, page_size)` follows the Simple

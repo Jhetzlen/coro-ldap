@@ -600,6 +600,50 @@ TEST_CASE("integration: add, modify, compare, rename and delete", "[integration]
 	CHECK(deleted.error().code == ldap::errc::no_such_object);
 }
 
+TEST_CASE("integration: move to another OU and back, then rename", "[integration]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	corosio::io_context ioc;
+	auto c = open_admin(ioc);
+	const std::string name = unique("mv");
+	const ldap::dn groups{ "ou=groups,dc=example,dc=org" };
+	const ldap::dn entry = people.child(*ldap::rdn::parse("uid=" + name));
+	const ldap::dn moved = groups.child(entry.rdns().front());
+	REQUIRE(finish(ioc,
+	  c.add({ .entry = entry,
+		.attributes = { { "objectClass", { "inetOrgPerson" } },
+		  { "uid", { name } },
+		  { "cn", { "Mover" } },
+		  { "sn", { "Déménageur" } } } }))
+		.has_value());
+	const auto exists = [&](const ldap::dn &d) {
+		return finish(ioc, c.search({ .base = d, .scope = ldap::search_scope::base_object })).has_value();
+	};
+
+	REQUIRE(finish(ioc, c.move(entry, groups)).has_value());
+	CHECK_FALSE(exists(entry));
+	CHECK(exists(moved));
+	REQUIRE(finish(ioc, c.move(moved, people)).has_value());
+	CHECK(exists(entry));
+	CHECK_FALSE(exists(moved));
+
+	// Keep the old RDN value: the entry then has both uids.
+	const ldap::rdn new_rdn = *ldap::rdn::parse("uid=" + name + "-r");
+	const ldap::dn renamed = people.child(new_rdn);
+	REQUIRE(finish(ioc, c.rename(entry, new_rdn, false)).has_value());
+	CHECK_FALSE(exists(entry));
+	CHECK(finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name })) == true);
+	CHECK(finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name + "-r" })) == true);
+	auto taken = finish(ioc, c.rename(renamed, ldap::rdn{ "uid=user001" }));// a fixture user
+	REQUIRE_FALSE(taken.has_value());
+	CHECK(taken.error().code == ldap::errc::entry_already_exists);
+	CHECK(std::string_view(taken.error().context) == "modify DN " + std::string(renamed.to_string()));
+
+	REQUIRE(finish(ioc, c.del({ .entry = renamed })).has_value());
+}
+
 TEST_CASE("integration: assertion and pre/post-read controls", "[integration][controls]")
 {
 	if (!have_slapd()) {
@@ -1062,6 +1106,11 @@ TEST_CASE("integration: the sync connection", "[integration][sync]")
 		CHECK(pw->has_value());
 		const ldap::dn renamed = *ldap::dn::parse("uid=" + name + "-r,ou=people,dc=example,dc=org");
 		REQUIRE(c.modify_dn({ .entry = entry, .new_rdn = renamed.rdns().front() }).has_value());
+		const ldap::dn groups{ "ou=groups,dc=example,dc=org" };
+		REQUIRE(c.move(renamed, groups).has_value());
+		REQUIRE(c.move(groups.child(renamed.rdns().front()), renamed.parent()).has_value());
+		REQUIRE(c.rename(renamed, entry.rdns().front()).has_value());
+		REQUIRE(c.rename(entry, renamed.rdns().front()).has_value());
 		REQUIRE(c.del({ .entry = renamed }).has_value());
 		auto gone = c.del({ .entry = renamed });
 		REQUIRE_FALSE(gone.has_value());

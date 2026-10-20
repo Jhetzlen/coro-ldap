@@ -142,6 +142,25 @@ class connection
 	{
 		return call([&](ldap::connection &c) { return c.modify_dn(std::move(request)); });
 	}
+	[[nodiscard]] auto move(dn entry,
+	  dn new_parent,
+	  request_controls controls = {},
+	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<response>
+	{
+		return call([&](ldap::connection &c) {
+			return c.move(std::move(entry), std::move(new_parent), std::move(controls), timeout);
+		});
+	}
+	[[nodiscard]] auto rename(dn entry,
+	  rdn new_rdn,
+	  bool delete_old_rdn = true,
+	  request_controls controls = {},
+	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<response>
+	{
+		return call([&](ldap::connection &c) {
+			return c.rename(std::move(entry), std::move(new_rdn), delete_old_rdn, std::move(controls), timeout);
+		});
+	}
 	[[nodiscard]] auto compare(compare_params request) -> result<bool>
 	{
 		return call([&](ldap::connection &c) { return c.compare(std::move(request)); });

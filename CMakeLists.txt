@@ -271,7 +271,7 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     jhetz_ldap_warnings(jhetz_ldapsearch)
 
     # Small programs showing the main use cases (docs/DEVELOPMENT.md, "Examples").
-    set(jhetz_ldap_examples connect search modify add delete password starttls cancel blocking bulk paged)
+    set(jhetz_ldap_examples connect search modify add delete move password starttls cancel blocking bulk paged)
     if(JHETZ_LDAP_WITH_GSSAPI)
         list(APPEND jhetz_ldap_examples gssapi)
     endif()

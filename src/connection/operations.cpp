@@ -168,6 +168,33 @@ auto connection::modify_dn(modify_dn_params p) -> capy::task<result<response>>
 	  co_await request_response(self, std::move(*request), op_index<modify_dn_response>, context, p.timeout), context);
 }
 
+// Not coroutines: the task of modify_dn() is returned as is.
+auto connection::move(dn entry,
+  dn new_parent,
+  request_controls controls,
+  std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<response>>
+{
+	rdn kept = entry.empty() ? rdn{} : entry.rdns().front();
+	return modify_dn({ .entry = std::move(entry),
+	  .new_rdn = std::move(kept),
+	  .new_superior = std::move(new_parent),
+	  .controls = std::move(controls),
+	  .timeout = timeout });
+}
+
+auto connection::rename(dn entry,
+  rdn new_rdn,
+  bool delete_old_rdn,
+  request_controls controls,
+  std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<response>>
+{
+	return modify_dn({ .entry = std::move(entry),
+	  .new_rdn = std::move(new_rdn),
+	  .delete_old_rdn = delete_old_rdn,
+	  .controls = std::move(controls),
+	  .timeout = timeout });
+}
+
 auto connection::compare(compare_params p) -> capy::task<result<bool>>
 {
 	std::string context = op_context("compare", p.entry);

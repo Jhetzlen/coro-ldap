@@ -569,6 +569,24 @@ TEST_CASE("sync: modify_dn", "[net][sync]")
 	CHECK(got[1] == ldap::message{ 2, ldap::modify_dn_request{ jdoe_str, "uid=jane", true } });
 }
 
+TEST_CASE("sync: move and rename", "[net][sync]")
+{
+	peer_server srv;
+	srv.serve({ answer({ result_msg<ldap::modify_dn_response>(1) }),
+	  answer({ result_msg<ldap::modify_dn_response>(2, 68, "target exists") }) });
+	connected k(srv);
+	REQUIRE(k.c.move(jdoe, ldap::dn{ "ou=alumni,dc=example,dc=org" }).has_value());
+	auto taken = k.c.rename(jdoe, ldap::rdn{ "uid=jane" }, false);
+	REQUIRE_FALSE(taken.has_value());
+	CHECK(taken.error().code == ldap::errc::entry_already_exists);
+	CHECK(taken.error().context == "modify DN uid=jdoe,ou=people,dc=example,dc=org");
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 2);
+	CHECK(got[0]
+		  == ldap::message{ 1, ldap::modify_dn_request{ jdoe_str, "uid=jdoe", true, "ou=alumni,dc=example,dc=org" } });
+	CHECK(got[1] == ldap::message{ 2, ldap::modify_dn_request{ jdoe_str, "uid=jane", false } });
+}
+
 TEST_CASE("sync: compare", "[net][sync]")
 {
 	peer_server srv;

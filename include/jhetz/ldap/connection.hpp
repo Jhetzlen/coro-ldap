@@ -289,6 +289,24 @@ class connection
 	auto modify(modify_params request) -> boost::capy::task<result<response>>;
 	auto del(del_params request) -> boost::capy::task<result<response>>;
 	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
+	// Task-named ModifyDN requests, built for modify_dn() (same context
+	// "modify DN <entry>", same results). move() puts `entry` under
+	// `new_parent` with its RDN unchanged (newSuperior = new_parent;
+	// deleteoldrdn is true, which has no effect when the RDN is kept, RFC
+	// 4511 section 4.9). rename() gives `entry` the RDN `new_rdn` under the
+	// same parent (no newSuperior), dropping the old RDN's values from the
+	// entry unless `delete_old_rdn` is false. An empty `entry` (move) or
+	// `new_rdn` (rename) fails with client_errc::invalid_dn before anything
+	// is sent.
+	auto move(dn entry,
+	  dn new_parent,
+	  request_controls controls = {},
+	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> boost::capy::task<result<response>>;
+	auto rename(dn entry,
+	  rdn new_rdn,
+	  bool delete_old_rdn = true,
+	  request_controls controls = {},
+	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> boost::capy::task<result<response>>;
 	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
 	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
 	// The authorization identity of this connection (RFC 4532): "dn:<dn>",
