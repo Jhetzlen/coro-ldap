@@ -583,19 +583,19 @@ namespace {
 
 	struct op_writer
 	{
-		ber::writer &w;
+		ber::writer *w;// non-null
 
-		template<class F> void seq(std::uint8_t number, F &&body)
+		template<class F> void seq(std::uint8_t number, F &&body) const
 		{
-			w.constructed(ber::application(number), std::forward<F>(body));
+			w->constructed(ber::application(number), std::forward<F>(body));
 		}
 
-		template<std::uint8_t Tag> void operator()(const result_response<Tag> &r)
+		template<std::uint8_t Tag> void operator()(const result_response<Tag> &r) const
 		{
 			seq(Tag, [&](ber::writer &o) { write_result(o, r.result); });
 		}
 
-		void operator()(const bind_request &b)
+		void operator()(const bind_request &b) const
 		{
 			seq(op_tag::bind_request, [&](ber::writer &o) {
 				o.integer(b.version);
@@ -613,7 +613,7 @@ namespace {
 				}
 			});
 		}
-		void operator()(const bind_response &b)
+		void operator()(const bind_response &b) const
 		{
 			seq(op_tag::bind_response, [&](ber::writer &o) {
 				write_result(o, b.result);
@@ -622,8 +622,8 @@ namespace {
 				}
 			});
 		}
-		void operator()(const unbind_request &) { w.null(ber::application(op_tag::unbind_request)); }
-		void operator()(const search_request &s)
+		void operator()(const unbind_request &) const { w->null(ber::application(op_tag::unbind_request)); }
+		void operator()(const search_request &s) const
 		{
 			seq(op_tag::search_request, [&](ber::writer &o) {
 				o.octet_string(s.base_object);
@@ -640,14 +640,14 @@ namespace {
 				});
 			});
 		}
-		void operator()(const search_result_entry &e)
+		void operator()(const search_result_entry &e) const
 		{
 			seq(op_tag::search_result_entry, [&](ber::writer &o) {
 				o.octet_string(e.object_name);
 				write_attributes(o, e.attributes);
 			});
 		}
-		void operator()(const search_result_reference &r)
+		void operator()(const search_result_reference &r) const
 		{
 			seq(op_tag::search_result_reference, [&](ber::writer &o) {
 				for (const auto &uri : r.uris) {
@@ -655,7 +655,7 @@ namespace {
 				}
 			});
 		}
-		void operator()(const modify_request &m)
+		void operator()(const modify_request &m) const
 		{
 			seq(op_tag::modify_request, [&](ber::writer &o) {
 				o.octet_string(m.object);
@@ -669,15 +669,15 @@ namespace {
 				});
 			});
 		}
-		void operator()(const add_request &a)
+		void operator()(const add_request &a) const
 		{
 			seq(op_tag::add_request, [&](ber::writer &o) {
 				o.octet_string(a.entry);
 				write_attributes(o, a.attributes);
 			});
 		}
-		void operator()(const del_request &d) { w.octet_string(d.entry, ber::application(op_tag::del_request)); }
-		void operator()(const modify_dn_request &m)
+		void operator()(const del_request &d) const { w->octet_string(d.entry, ber::application(op_tag::del_request)); }
+		void operator()(const modify_dn_request &m) const
 		{
 			seq(op_tag::modify_dn_request, [&](ber::writer &o) {
 				o.octet_string(m.entry);
@@ -688,7 +688,7 @@ namespace {
 				}
 			});
 		}
-		void operator()(const compare_request &c)
+		void operator()(const compare_request &c) const
 		{
 			seq(op_tag::compare_request, [&](ber::writer &o) {
 				o.octet_string(c.entry);
@@ -698,11 +698,11 @@ namespace {
 				});
 			});
 		}
-		void operator()(const abandon_request &a)
+		void operator()(const abandon_request &a) const
 		{
-			w.integer(a.message_id, ber::application(op_tag::abandon_request));
+			w->integer(a.message_id, ber::application(op_tag::abandon_request));
 		}
-		void operator()(const extended_request &e)
+		void operator()(const extended_request &e) const
 		{
 			seq(op_tag::extended_request, [&](ber::writer &o) {
 				o.octet_string(e.request_name, ber::context(0));
@@ -711,7 +711,7 @@ namespace {
 				}
 			});
 		}
-		void operator()(const extended_response &e)
+		void operator()(const extended_response &e) const
 		{
 			seq(op_tag::extended_response, [&](ber::writer &o) {
 				write_result(o, e.result);
@@ -723,7 +723,7 @@ namespace {
 				}
 			});
 		}
-		void operator()(const intermediate_response &i)
+		void operator()(const intermediate_response &i) const
 		{
 			seq(op_tag::intermediate_response, [&](ber::writer &o) {
 				if (i.response_name) {
@@ -819,13 +819,13 @@ namespace {
 	class decoder
 	{
 	  public:
-		explicit decoder(const decode_options &options) : options_(options), a_(options.memory) {}
+		explicit decoder(const decode_options &options) : options_(&options), a_(options.memory) {}
 
 		// The value of a pre-read / post-read response control: exactly one
 		// SearchResultEntry.
 		auto run_entry(std::span<const std::byte> bytes) -> result<search_result_entry>
 		{
-			ber::reader top(bytes, options_.max_depth);
+			ber::reader top(bytes, options_->max_depth);
 			auto op = read_search_result_entry(top, ber::application(op_tag::search_result_entry));
 			if (!op) {
 				return std::unexpected(std::move(op.error()));
@@ -838,7 +838,7 @@ namespace {
 
 		auto run(std::span<const std::byte> bytes) -> result<message>
 		{
-			ber::reader top(bytes, options_.max_depth);
+			ber::reader top(bytes, options_->max_depth);
 			auto r = top.enter();
 			if (!r) {
 				return std::unexpected(std::move(r.error()));
@@ -886,7 +886,7 @@ namespace {
 	  private:
 		auto str(ber::reader &r, ber::tag t = ber::tags::octet_string) -> result<std::pmr::string>
 		{
-			if (strings_ == options_.max_elements) [[unlikely]] {
+			if (strings_ == options_->max_elements) [[unlikely]] {
 				return too_many_elements(r.offset());
 			}
 			// Counted before reading (a failed read ends the decode anyway),
@@ -899,11 +899,11 @@ namespace {
 		[[nodiscard]] auto too_many_elements(std::size_t offset) const -> std::unexpected<error>
 		{
 			return fail(client_errc::message_too_large,
-			  detail::format("message: more than {} elements at offset {}", options_.max_elements, offset));
+			  detail::format("message: more than {} elements at offset {}", options_->max_elements, offset));
 		}
 
 		// Elements str() may still decode.
-		[[nodiscard]] auto budget() const noexcept -> std::size_t { return options_.max_elements - strings_; }
+		[[nodiscard]] auto budget() const noexcept -> std::size_t { return options_->max_elements - strings_; }
 
 		auto optional_str(ber::reader &r, ber::tag t) -> result<std::optional<std::pmr::string>>
 		{
@@ -1132,7 +1132,7 @@ namespace {
 			if (!types_only) {
 				return std::unexpected(std::move(types_only.error()));
 			}
-			auto f = decode_filter(*o, options_.filter, a_.resource());
+			auto f = decode_filter(*o, options_->filter, a_.resource());
 			if (!f) {
 				return std::unexpected(std::move(f.error()));
 			}
@@ -1435,12 +1435,12 @@ namespace {
 			}
 			// Checked before decoding, so a peer cannot make us parse (for
 			// example) a huge search request filter it may not send at all.
-			if (options_.from == origin::server && is_request(t.number)) {
+			if (options_->from == origin::server && is_request(t.number)) {
 				return fail(client_errc::unsupported_operation,
 				  detail::format(
 					"message: request operation {} from a server at offset {}", ber::to_string(t), offset));
 			}
-			if (options_.from == origin::client && !is_request(t.number)) {
+			if (options_->from == origin::client && !is_request(t.number)) {
 				return fail(client_errc::unsupported_operation,
 				  detail::format(
 					"message: response operation {} from a client at offset {}", ber::to_string(t), offset));
@@ -1559,9 +1559,9 @@ namespace {
 			}
 		}
 
-		const decode_options &options_;
+		const decode_options *options_;// non-null
 		alloc_t a_;
-		std::size_t strings_ = 0;// decoded by str(), against options_.max_elements
+		std::size_t strings_ = 0;// decoded by str(), against options_->max_elements
 	};
 
 }// namespace
@@ -1573,7 +1573,7 @@ auto encode(ber::writer &w, const message &m) -> result<void>
 	}
 	w.constructed(ber::tags::sequence, [&](ber::writer &msg) {
 		msg.integer(m.id);
-		std::visit(op_writer{ msg }, m.op);
+		std::visit(op_writer{ &msg }, m.op);
 		if (!m.controls.empty()) {
 			msg.constructed(ber::context(0), [&](ber::writer &list) {
 				for (const auto &c : m.controls) {
@@ -1800,7 +1800,7 @@ auto encode_read_entry(std::string_view oid,
 		  client_errc::encode_error, sanitized_context("read entry control: ", oid, " is not pre-read or post-read"));
 	}
 	ber::writer w{ ber::writer::allocator_type(mr) };
-	op_writer{ w }(entry);
+	op_writer{ &w }(entry);
 	return bytes_control(oid, criticality, w, mr);
 }
 

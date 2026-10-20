@@ -109,13 +109,13 @@ class anonymous_binds_disallowed
 {
   public:
 	explicit anonymous_binds_disallowed(corosio::io_context &ioc)
-	  : ioc_(ioc), config_(open(ioc, env("JHETZ_LDAP_IT_LDAP")))
+	  : ioc_(&ioc), config_(open(ioc, env("JHETZ_LDAP_IT_LDAP")))
 	{
-		auto b = finish(ioc_, config_.simple_bind(config_dn, "secret"));
+		auto b = finish(*ioc_, config_.simple_bind(config_dn, "secret"));
 		if (!b) {
 			FAIL("bind as cn=config: " << b.error().message());
 		}
-		auto m = finish(ioc_,
+		auto m = finish(*ioc_,
 		  config_.modify({ .object = config_dn, .changes = { ldap::mod::add("olcDisallows", { "bind_anon" }) } }));
 		if (!m) {
 			FAIL("disallow bind_anon: " << m.error().message());
@@ -133,7 +133,7 @@ class anonymous_binds_disallowed
 		bool restored = false;
 		std::string why;
 		try {
-			auto m = finish(ioc_,
+			auto m = finish(*ioc_,
 			  config_.modify(
 				{ .object = config_dn, .changes = { ldap::mod::remove("olcDisallows", { "bind_anon" }) } }));
 			restored = m.has_value();
@@ -153,7 +153,7 @@ class anonymous_binds_disallowed
 
   private:
 	inline static const ldap::dn config_dn{ "cn=config" };
-	corosio::io_context &ioc_;
+	corosio::io_context *ioc_;// non-null
 	ldap::connection config_;
 };
 

@@ -877,7 +877,7 @@ namespace {
 		// `shift`: 1 when the text was wrapped in parentheses, so positions
 		// in errors refer to the caller's text.
 		filter_parser(std::string_view s, std::size_t shift, const filter_limits &limits, filter &out)
-		  : s_(s), shift_(shift), limits_(limits), out_(out)
+		  : s_(s), shift_(shift), limits_(limits), out_(&out)
 		{}
 
 		auto parse() -> result<void>
@@ -889,8 +889,8 @@ namespace {
 			if (i_ != s_.size()) {
 				return error("unexpected characters after the filter");
 			}
-			access::set_root(out_, *root);
-			access::set_limits(out_, depth_, elements_);
+			access::set_root(*out_, *root);
+			access::set_limits(*out_, depth_, elements_);
 			return {};
 		}
 
@@ -926,9 +926,9 @@ namespace {
 
 		auto add(kind k, std::uint32_t parent) -> std::uint32_t
 		{
-			const std::uint32_t n = access::add_node(out_, access::k(k));
+			const std::uint32_t n = access::add_node(*out_, access::k(k));
 			if (parent != npos) {
-				access::link_last(out_, parent, n);
+				access::link_last(*out_, parent, n);
 			}
 			return n;
 		}
@@ -985,7 +985,7 @@ namespace {
 		// Returns (offset, length).
 		auto read_part(bool stars) -> result<std::pair<std::uint32_t, std::uint32_t>>
 		{
-			const std::uint32_t off = access::add_text(out_, {});
+			const std::uint32_t off = access::add_text(*out_, {});
 			std::uint32_t len = 0;
 			while (true) {
 				if (at_end()) {
@@ -996,7 +996,7 @@ namespace {
 					break;
 				}
 				const auto n = read_value_unit(s_, i_, [&](char byte) {
-					access::add_char(out_, byte);
+					access::add_char(*out_, byte);
 					++len;
 				});
 				if (!n) {
@@ -1040,7 +1040,7 @@ namespace {
 				}();
 				i_ += 2;
 				const std::uint32_t node = add(k, parent);
-				access::set_attr(out_, node, attr);
+				access::set_attr(*out_, node, attr);
 				if (auto e = set_value(node); !e) {
 					return std::unexpected(std::move(e.error()));
 				}
@@ -1057,7 +1057,7 @@ namespace {
 			const auto stars = std::ranges::count(s_.substr(i_, s_.find(')', i_) - i_), '*');
 			if (stars == 0) {
 				const std::uint32_t node = add(kind::equality, parent);
-				access::set_attr(out_, node, attr);
+				access::set_attr(*out_, node, attr);
 				if (auto e = set_value(node); !e) {
 					return std::unexpected(std::move(e.error()));
 				}
@@ -1066,11 +1066,11 @@ namespace {
 			if (stars == 1 && s_.substr(i_, 2) == "*)") {
 				++i_;
 				const std::uint32_t node = add(kind::present, parent);
-				access::set_attr(out_, node, attr);
+				access::set_attr(*out_, node, attr);
 				return node;
 			}
 			const std::uint32_t node = add(kind::substrings, parent);
-			access::set_attr(out_, node, attr);
+			access::set_attr(*out_, node, attr);
 			bool first = true;
 			bool any_part = false;
 			while (true) {
@@ -1092,9 +1092,9 @@ namespace {
 						}
 						return filter_part_any;
 					}();
-					const std::uint32_t p = access::add_node(out_, k);
-					access::set_value_range(out_, p, *part);
-					access::link_last(out_, node, p);
+					const std::uint32_t p = access::add_node(*out_, k);
+					access::set_value_range(*out_, p, *part);
+					access::link_last(*out_, node, p);
 					any_part = true;
 				}
 				if (last) {
@@ -1115,7 +1115,7 @@ namespace {
 			if (!v) {
 				return std::unexpected(std::move(v.error()));
 			}
-			access::set_value_range(out_, node, *v);
+			access::set_value_range(*out_, node, *v);
 			return {};
 		}
 
@@ -1160,9 +1160,9 @@ namespace {
 				return error("extensible match needs an attribute or a matching rule", attr_start);
 			}
 			const std::uint32_t node = add(kind::extensible_match, parent);
-			access::set_attr(out_, node, attr);
-			access::set_rule(out_, node, rule);
-			access::set_dn_attributes(out_, node, dn_attributes);
+			access::set_attr(*out_, node, attr);
+			access::set_rule(*out_, node, rule);
+			access::set_dn_attributes(*out_, node, dn_attributes);
 			if (auto e = set_value(node); !e) {
 				return std::unexpected(std::move(e.error()));
 			}
@@ -1172,7 +1172,7 @@ namespace {
 		std::string_view s_;
 		std::size_t shift_;
 		filter_limits limits_;
-		filter &out_;
+		filter *out_;// non-null
 		std::size_t i_ = 0;
 		std::size_t elements_ = 0;
 		std::size_t depth_ = 0;
@@ -1360,7 +1360,7 @@ namespace {
 	class filter_decoder
 	{
 	  public:
-		filter_decoder(const filter_limits &limits, filter &out) : limits_(limits), out_(out) {}
+		filter_decoder(const filter_limits &limits, filter &out) : limits_(limits), out_(&out) {}
 
 		auto decode(ber::reader &r) -> result<void>
 		{
@@ -1368,17 +1368,17 @@ namespace {
 			if (!root) {
 				return std::unexpected(std::move(root.error()));
 			}
-			access::set_root(out_, *root);
-			access::set_limits(out_, depth_, elements_);
+			access::set_root(*out_, *root);
+			access::set_limits(*out_, depth_, elements_);
 			return {};
 		}
 
 	  private:
 		auto add(kind k, std::uint32_t parent) -> std::uint32_t
 		{
-			const std::uint32_t n = access::add_node(out_, access::k(k));
+			const std::uint32_t n = access::add_node(*out_, access::k(k));
 			if (parent != npos) {
-				access::link_last(out_, parent, n);
+				access::link_last(*out_, parent, n);
 			}
 			return n;
 		}
@@ -1415,8 +1415,8 @@ namespace {
 				return std::unexpected(std::move(e.error()));
 			}
 			const std::uint32_t n = add(k, parent);
-			access::set_attr(out_, n, *a);
-			access::set_value(out_, n, detail::as_text(*v));
+			access::set_attr(*out_, n, *a);
+			access::set_value(*out_, n, detail::as_text(*v));
 			return n;
 		}
 
@@ -1436,7 +1436,7 @@ namespace {
 				return std::unexpected(std::move(seq.error()));
 			}
 			const std::uint32_t n = add(kind::substrings, parent);
-			access::set_attr(out_, n, *a);
+			access::set_attr(*out_, n, *a);
 			bool first = true;
 			bool final_seen = false;
 			while (!seq->empty()) {
@@ -1471,9 +1471,9 @@ namespace {
 				if (++elements_ > limits_.max_elements) {
 					return bad(detail::format("more than {} filter elements", limits_.max_elements), item_at);
 				}
-				const std::uint32_t p = access::add_node(out_, k);
-				access::set_value(out_, p, detail::as_text(*s));
-				access::link_last(out_, n, p);
+				const std::uint32_t p = access::add_node(*out_, k);
+				access::set_value(*out_, p, detail::as_text(*s));
+				access::link_last(*out_, n, p);
 				first = false;
 			}
 			if (first) {
@@ -1545,10 +1545,10 @@ namespace {
 				return bad("matching rule 'dn' without dnAttributes has no RFC 4515 form", at);
 			}
 			const std::uint32_t n = add(kind::extensible_match, parent);
-			access::set_attr(out_, n, type);
-			access::set_rule(out_, n, rule);
-			access::set_value(out_, n, detail::as_text(*v));
-			access::set_dn_attributes(out_, n, dn_attributes);
+			access::set_attr(*out_, n, type);
+			access::set_rule(*out_, n, rule);
+			access::set_value(*out_, n, detail::as_text(*v));
+			access::set_dn_attributes(*out_, n, dn_attributes);
 			return n;
 		}
 
@@ -1623,7 +1623,7 @@ namespace {
 					return std::unexpected(std::move(a.error()));
 				}
 				const std::uint32_t n = add(kind::present, parent);
-				access::set_attr(out_, n, *a);
+				access::set_attr(*out_, n, *a);
 				return n;
 			}
 			case 8:
@@ -1637,7 +1637,7 @@ namespace {
 		}
 
 		filter_limits limits_;
-		filter &out_;
+		filter *out_;// non-null
 		std::size_t elements_ = 0;
 		std::size_t depth_ = 0;
 	};

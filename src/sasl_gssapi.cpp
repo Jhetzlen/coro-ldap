@@ -238,11 +238,11 @@ struct sasl_gssapi::state
 	// Clears `busy` at the end of an offloaded step, whatever its outcome.
 	struct busy_scope
 	{
-		state &s;
-		explicit busy_scope(state &s_) noexcept : s(s_) {}
+		state *s;// non-null
+		explicit busy_scope(state &s_) noexcept : s(&s_) {}
 		busy_scope(const busy_scope &) = delete;
 		auto operator=(const busy_scope &) -> busy_scope & = delete;
-		~busy_scope() { s.busy.store(false, std::memory_order_release); }
+		~busy_scope() { s->busy.store(false, std::memory_order_release); }
 	};
 
 	void reset() noexcept

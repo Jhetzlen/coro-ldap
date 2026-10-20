@@ -298,13 +298,13 @@ class connection::impl
 	class upgrade_scope
 	{
 	  public:
-		explicit upgrade_scope(impl &c) noexcept : c_(c) { c_.upgrading = true; }
+		explicit upgrade_scope(impl &c) noexcept : c_(&c) { c_->upgrading = true; }
 		upgrade_scope(const upgrade_scope &) = delete;
 		auto operator=(const upgrade_scope &) -> upgrade_scope & = delete;
-		~upgrade_scope() { c_.upgrading = false; }
+		~upgrade_scope() { c_->upgrading = false; }
 
 	  private:
-		impl &c_;
+		impl *c_;// non-null
 	};
 
 	// Waits until the writer, then the reader, is idle. Not cancellable (it
@@ -595,12 +595,12 @@ namespace detail {
 	// while the request is still outstanding.
 	struct registration
 	{
-		connection::impl &c;
-		pending_op &p;
-		registration(connection::impl &c_, pending_op &p_) noexcept : c(c_), p(p_) {}
+		connection::impl *c;// non-null
+		pending_op *p;// non-null
+		registration(connection::impl &c_, pending_op &p_) noexcept : c(&c_), p(&p_) {}
 		registration(const registration &) = delete;
 		auto operator=(const registration &) -> registration & = delete;
-		~registration() { c.abandon(p); }
+		~registration() { c->abandon(*p); }
 	};
 
 

@@ -67,9 +67,6 @@ Checks:
   - -portability-avoid-pragma-once
   # do { } while is fine for retry loops (GSS-API status message loop).
   - -cppcoreguidelines-avoid-do-while
-  # Short-lived helper classes (encoders, visitors, scope guards) hold a
-  # reference to what they fill; they are never assigned.
-  - -cppcoreguidelines-avoid-const-or-ref-data-members
   # An enum's underlying type is API and ABI; errc enums feed std::error_code (int).
   - -performance-enum-size
 WarningsAsErrors: ''

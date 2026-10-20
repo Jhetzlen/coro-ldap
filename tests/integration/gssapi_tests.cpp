@@ -101,13 +101,13 @@ class sasl_secprops
 {
   public:
 	sasl_secprops(corosio::io_context &ioc, const std::string &value)
-	  : ioc_(ioc), config_(open(ioc, env("JHETZ_LDAP_IT_LDAP")))
+	  : ioc_(&ioc), config_(open(ioc, env("JHETZ_LDAP_IT_LDAP")))
 	{
-		auto b = finish(ioc_, config_.simple_bind(config_dn, "secret"));
+		auto b = finish(*ioc_, config_.simple_bind(config_dn, "secret"));
 		if (!b) {
 			FAIL("bind as cn=config: " << b.error().message());
 		}
-		auto old = finish(ioc_,
+		auto old = finish(*ioc_,
 		  config_.search(
 			{ .base = config_dn, .scope = ldap::search_scope::base_object, .attributes = { "olcSaslSecProps" } }));
 		REQUIRE(old.has_value());
@@ -125,7 +125,7 @@ class sasl_secprops
 			if (old_) {
 				set(*old_);
 			} else {
-				(void)finish(ioc_,
+				(void)finish(*ioc_,
 				  config_.modify({ .object = config_dn, .changes = { ldap::mod::remove("olcSaslSecProps", {}) } }));
 			}
 		} catch (...) {// NOLINT(bugprone-empty-catch): best-effort restore, a destructor must not throw
@@ -135,7 +135,7 @@ class sasl_secprops
   private:
 	void set(const std::string &value)
 	{
-		auto m = finish(ioc_,
+		auto m = finish(*ioc_,
 		  config_.modify({ .object = config_dn, .changes = { ldap::mod::replace("olcSaslSecProps", { value }) } }));
 		if (!m) {
 			FAIL("set olcSaslSecProps: " << m.error().message());
@@ -143,7 +143,7 @@ class sasl_secprops
 	}
 
 	inline static const ldap::dn config_dn{ "cn=config" };
-	corosio::io_context &ioc_;
+	corosio::io_context *ioc_;// non-null
 	ldap::connection config_;
 	std::optional<std::string> old_;
 };
