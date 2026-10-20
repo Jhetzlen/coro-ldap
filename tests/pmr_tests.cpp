@@ -14,9 +14,9 @@
 #include "sample_messages.hpp"
 #include "test_util.hpp"
 
-#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <memory_resource>
 #include <optional>
 #include <string>

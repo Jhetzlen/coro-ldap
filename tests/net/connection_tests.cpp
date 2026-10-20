@@ -13,7 +13,6 @@
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
-#include <algorithm>
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/cond.hpp>
 #include <boost/capy/ex/async_event.hpp>
