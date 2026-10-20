@@ -120,7 +120,7 @@ auto connection::impl::out_of_memory() noexcept -> error
 	return e;
 }
 
-void connection::impl::shut(error e, bool remember, bool close_transport) noexcept
+void connection::impl::shut(const error &e, bool remember, bool close_transport) noexcept
 {
 	if (!open) {
 		return;
@@ -388,7 +388,7 @@ void connection::impl::send_unanswered(message &m,
 	}
 }
 
-void connection::impl::forget_abandoned(std::pmr::deque<abandoned_req>::iterator a)
+void connection::impl::forget_abandoned(const std::pmr::deque<abandoned_req>::iterator &a)
 {
 	const bool due = a->due;
 	if (due) {
@@ -678,7 +678,7 @@ auto connection::impl::reader(impl *self) -> capy::task<void>
 	}
 }
 
-auto connection::impl::unexpected(std::string text) -> error
+auto connection::impl::unexpected(std::string_view text) -> error
 {
 	return make_error(client_errc::unexpected_response, detail::format("read {}: {}", transport_.name(), text));
 }

@@ -867,6 +867,7 @@ auto hundred_users(int n, bool sorted) -> ldap::search_params
 auto descending_uids(int n, int first, int count) -> std::vector<std::string>
 {
 	std::vector<std::string> out;
+	out.reserve(static_cast<std::size_t>(count));
 	for (int i = 0; i < count; ++i) {
 		out.emplace_back(std::format("user{}{:02}", n, 99 - first - i));
 	}

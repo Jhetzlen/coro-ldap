@@ -54,7 +54,7 @@ struct paged_search::state
 			return std::holds_alternative<paged>(c)
 				   || (std::holds_alternative<control>(c) && std::get<control>(c).type == paged_results_oid);
 		});
-		cs.push_back(paged{ .page_size = size, .cookie = std::move(page_cookie) });
+		cs.emplace_back(paged{ .page_size = size, .cookie = std::move(page_cookie) });
 	}
 
 	// Sends the search for the next page (cookie empty for the first);

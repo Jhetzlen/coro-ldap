@@ -1107,7 +1107,7 @@ auto then_stop_ioc(corosio::io_context &ioc, capy::task<entries> op) -> capy::ta
 // stay on the test thread, after the join.
 TEST_CASE("with_stop: stopped from another thread while the io_context runs", "[net][connection][cancel]")
 {
-	const auto stopped_while_running = [](ldap::connection_options options) {
+	const auto stopped_while_running = [](const ldap::connection_options &options) {
 		std::stop_source cancel;
 		outcome<entries> out;
 		mock_ldap m(options);
@@ -1589,6 +1589,7 @@ TEST_CASE("connection: ldap::connect with the URL as text", "[net][connection][c
 	}
 	SECTION("a good URL connects; the text need not outlive the call")
 	{
+		// NOLINTNEXTLINE(performance-string-view-conversions): the temporary string is the point of the test
 		auto task = ldap::connect(ioc, std::string(where), { .timeout = std::chrono::seconds(10) });
 		auto c = finish(ioc, std::move(task));
 		REQUIRE(c.has_value());

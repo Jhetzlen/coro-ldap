@@ -24,9 +24,9 @@ auto parse(std::string_view text) -> ldap::dn
 	return *d;
 }
 
-auto single(std::string type, std::string value) -> ldap::rdn
+auto single(const std::string &type, const std::string &value) -> ldap::rdn
 {
-	return ldap::rdn{ { ldap::ava{ ldap::attribute::unchecked(std::move(type)), std::move(value) } } };
+	return ldap::rdn{ { ldap::ava{ ldap::attribute::unchecked(type), value } } };
 }
 
 }// namespace

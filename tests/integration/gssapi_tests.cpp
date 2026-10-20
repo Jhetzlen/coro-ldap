@@ -100,7 +100,7 @@ auto bind_and_who(corosio::io_context &ioc, ldap::connection &c, ldap::sasl_gssa
 class sasl_secprops
 {
   public:
-	sasl_secprops(corosio::io_context &ioc, std::string value)
+	sasl_secprops(corosio::io_context &ioc, const std::string &value)
 	  : ioc_(ioc), config_(open(ioc, env("JHETZ_LDAP_IT_LDAP")))
 	{
 		auto b = finish(ioc_, config_.simple_bind(config_dn, "secret"));

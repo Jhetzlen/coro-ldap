@@ -215,7 +215,7 @@ class connection
 		boost::capy::run_async(
 		  ioc_.get_executor(),
 		  [&done](R r) { done.set_value(std::move(r)); },
-		  [&done](std::exception_ptr e) { done.set_exception(e); })(
+		  [&done](std::exception_ptr e) { done.set_exception(std::move(e)); })(
 		  [](ldap::connection &c, const F &make) -> boost::capy::task<R> { co_return co_await make(c); }(
 												   conn_, make_task));
 		return f.get();

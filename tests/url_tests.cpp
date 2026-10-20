@@ -379,7 +379,7 @@ TEST_CASE("URL percent-encoding round trip of every byte", "[url]")
 		encoded += hex[(unsigned{ static_cast<unsigned char>(c) } >> 4U) & 0xFU];
 		encoded += hex[unsigned{ static_cast<unsigned char>(c) } & 0xFU];
 	}
-	encoded += "?";
+	encoded += '?';
 	auto pct = [](std::string_view s) {
 		static constexpr char hex[] = "0123456789ABCDEF";
 		std::string out;

@@ -250,6 +250,7 @@ TEST_CASE("ci_hash is seeded: names crafted to collide under a fixed start sprea
 	}
 
 	std::vector<std::size_t> hashes;
+	hashes.reserve(names.size());
 	for (const auto &n : names) {
 		hashes.push_back(ldap::hash_value(n));
 	}

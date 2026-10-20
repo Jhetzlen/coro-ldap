@@ -83,13 +83,14 @@ template<class T> void spawn(corosio::io_context &ioc, capy::task<T> t, outcome<
 {
 	if constexpr (std::is_void_v<T>) {
 		capy::run_async(
-		  ioc.get_executor(), [&out] { out.finished = true; }, [&out](std::exception_ptr e) { out.error = e; })(
-		  std::move(t));
+		  ioc.get_executor(),
+		  [&out] { out.finished = true; },
+		  [&out](std::exception_ptr e) { out.error = std::move(e); })(std::move(t));
 	} else {
 		capy::run_async(
 		  ioc.get_executor(),
 		  [&out](T v) { out.value.emplace(std::move(v)); },
-		  [&out](std::exception_ptr e) { out.error = e; })(std::move(t));
+		  [&out](std::exception_ptr e) { out.error = std::move(e); })(std::move(t));
 	}
 }
 
@@ -101,13 +102,13 @@ template<class T> void spawn(corosio::io_context &ioc, std::stop_token st, capy:
 		  ioc.get_executor(),
 		  std::move(st),
 		  [&out] { out.finished = true; },
-		  [&out](std::exception_ptr e) { out.error = e; })(std::move(t));
+		  [&out](std::exception_ptr e) { out.error = std::move(e); })(std::move(t));
 	} else {
 		capy::run_async(
 		  ioc.get_executor(),
 		  std::move(st),
 		  [&out](T v) { out.value.emplace(std::move(v)); },
-		  [&out](std::exception_ptr e) { out.error = e; })(std::move(t));
+		  [&out](std::exception_ptr e) { out.error = std::move(e); })(std::move(t));
 	}
 }
 

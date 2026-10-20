@@ -377,7 +377,7 @@ try {
 	  [&status](int s) { status = s; },
 	  [](std::exception_ptr e) {
 		  try {
-			  std::rethrow_exception(e);
+			  std::rethrow_exception(std::move(e));
 		  } catch (const std::exception &x) {
 			  std::println(stderr, "jhetz-ldapsearch: {}", x.what());
 		  }

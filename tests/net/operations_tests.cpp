@@ -460,7 +460,7 @@ TEST_CASE("operations: server side sort result of a search", "[net][operations][
 	ldap::message unsorted = done_msg(2);
 	unsorted.controls.push_back(*ldap::encode_sort_result({ 18, "cn" }));
 	ldap::message garbage = done_msg(3);
-	garbage.controls.push_back(ldap::control{ ldap::sort_response_oid, false, "x" });
+	garbage.controls.emplace_back(ldap::sort_response_oid, false, "x");
 	m.serve({ answer({ entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B"),
 				entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"),
 				sorted }),
@@ -615,7 +615,7 @@ TEST_CASE("operations: paged search errors", "[net][operations][paged]")
 	{
 		mock_ldap m;
 		ldap::message done = done_msg(1);
-		done.controls.push_back(ldap::control{ ldap::paged_results_oid, false, "garbage" });
+		done.controls.emplace_back(ldap::paged_results_oid, false, "garbage");
 		m.serve({ answer({ done }) });
 		auto s = m.run(m.conn.search_paged(people_search(), 2));
 		REQUIRE(s.has_value());
@@ -1558,7 +1558,7 @@ TEST_CASE("operations: a paged search whose unread page failed sends no release"
 	if (error_result) {
 		page2_done.controls = paged_done(2, "page3").controls;// a cookie all the same
 	} else {
-		page2_done.controls.push_back(ldap::control{ ldap::paged_results_oid, false, "garbage" });
+		page2_done.controls.emplace_back(ldap::paged_results_oid, false, "garbage");
 	}
 
 	mock_ldap m;

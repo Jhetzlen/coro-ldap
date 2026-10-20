@@ -397,7 +397,7 @@ TEST_CASE("a search request with the deepest allowed filter decodes", "[message]
 	}
 	text += "(cn=a*b*c)";
 	for (std::size_t i = 1; i < ldap::max_filter_depth; ++i) {
-		text += ")";
+		text += ')';
 	}
 	const auto m = search_message(raw(text));
 	CHECK(round_trip(m) == m);

@@ -90,6 +90,7 @@ class transport
 	// a stream without close() cannot be closed by the transport, but
 	// is_open() turns false after close() either way.
 	template<boost::capy::Stream S>
+	// NOLINTNEXTLINE(performance-unnecessary-value-param): false positive, `stream` is moved into the block below
 	[[nodiscard]] static auto wrap(S stream,
 	  std::string_view name = "custom stream",
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> transport

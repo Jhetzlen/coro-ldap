@@ -195,7 +195,7 @@ class connection::impl
 	// (they add their own context). `remember`: later operations name it.
 	// `close_transport` false: the caller closes it (unbind, after the TLS
 	// shutdown). Never throws: destructors and the detached tasks call it.
-	void shut(error e, bool remember, bool close_transport = true) noexcept;
+	void shut(const error &e, bool remember, bool close_transport = true) noexcept;
 
 	// An allocation failed where no exception may go: in a destructor (an
 	// AbandonRequest, the requests a bind held) or a detached task (the
@@ -457,7 +457,7 @@ class connection::impl
 	void release_held() noexcept;
 
 	// Forgets an abandoned request: a later response for it is unexpected.
-	void forget_abandoned(std::pmr::deque<abandoned_req>::iterator a);
+	void forget_abandoned(const std::pmr::deque<abandoned_req>::iterator &a);
 
 	// Forgets an abandoned request if there are too many: the oldest whose
 	// answer is not due (those are the least likely to still come), else
@@ -518,7 +518,7 @@ class connection::impl
 
 	static auto reader(impl *self) -> boost::capy::task<void>;
 
-	auto unexpected(std::string text) -> error;
+	auto unexpected(std::string_view text) -> error;
 
 	// Delivers the PDU at the front of buf (`size` bytes) and consumes it.
 	void route(std::size_t size);

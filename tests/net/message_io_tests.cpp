@@ -679,6 +679,7 @@ TEST_CASE("read_message: TLS truncation (no close_notify)", "[net][read_message]
 		  scripted_stream{ .script = std::make_shared<std::vector<scripted_stream::step>>(std::move(steps)) }, "tls");
 		net::read_buffer buf;
 		std::vector<ldap::result<ldap::message>> out;
+		out.reserve(2);
 		for (int i = 0; i < 2; ++i) {
 			out.push_back(run(ioc, net::read_message(t, buf)));
 		}

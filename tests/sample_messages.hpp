@@ -83,12 +83,13 @@ inline auto sample_messages() -> std::vector<message>
 		intermediate_response{ "1.2.3", "v" },
 	};
 	std::vector<message> out;
+	out.reserve(ops.size() + 2);
 	std::int32_t id = 1;
 	for (auto &op : ops) {
-		out.push_back(message{ id++, std::move(op) });
+		out.emplace_back(id++, std::move(op));
 	}
-	out.push_back(message{ 0, extended_response{ {}, notice_of_disconnection_oid } });
-	out.push_back(message{ max_int, unbind_request{} });
+	out.emplace_back(0, extended_response{ {}, notice_of_disconnection_oid });
+	out.emplace_back(max_int, unbind_request{});
 	return out;
 }
 

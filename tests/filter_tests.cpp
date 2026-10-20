@@ -576,7 +576,7 @@ TEST_CASE("filter nesting is bounded", "[filter][limits]")
 		}
 		t += "(a=b)";
 		for (std::size_t i = 1; i < depth; ++i) {
-			t += ")";
+			t += ')';
 		}
 		return t;
 	};

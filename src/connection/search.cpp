@@ -28,11 +28,11 @@ using detail::start_search;
 
 namespace {
 
-	auto new_state(connection::impl &c, std::pmr::memory_resource *entries, std::string context)
+	auto new_state(connection::impl &c, std::pmr::memory_resource *entries, const std::string &context)
 	  -> search_stream::state *
 	{
 		std::pmr::polymorphic_allocator<> alloc(c.mr());
-		return alloc.new_object<search_stream::state>(&c, entries, std::move(context));
+		return alloc.new_object<search_stream::state>(&c, entries, context);
 	}
 
 	void delete_state(search_stream::state *s) noexcept

@@ -149,6 +149,7 @@ TEST_CASE("sync: many threads share one connection", "[net][sync]")
 	constexpr int per_thread = 25;
 	std::atomic<int> failures{ 0 };
 	std::vector<std::thread> pool;
+	pool.reserve(threads);
 	for (int t = 0; t < threads; ++t) {
 		pool.emplace_back([&c, &failures, t] {
 			for (int i = 0; i < per_thread; ++i) {

@@ -222,7 +222,7 @@ struct mock_ldap : scripted_server<mock_ldap>
 	server_log log{};
 	outcome<void> server{};
 
-	explicit mock_ldap(ldap::connection_options options = {},
+	explicit mock_ldap(const ldap::connection_options &options = {},
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  : conn(ioc, net::transport::wrap(socket_ref{ &sockets.client }, "mock"), options, mr)
 	{
@@ -230,7 +230,7 @@ struct mock_ldap : scripted_server<mock_ldap>
 	}
 
 	// Over an io_context made with `io` (a locking_mode, say).
-	explicit mock_ldap(const corosio::io_context_options &io, ldap::connection_options options = {})
+	explicit mock_ldap(const corosio::io_context_options &io, const ldap::connection_options &options = {})
 	  : ioc(io), conn(ioc, net::transport::wrap(socket_ref{ &sockets.client }, "mock"), options)
 	{
 		log.hang_up = [this] { sockets.server.close(); };
@@ -278,7 +278,8 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 	// socket_buffers::small: the client's SO_SNDBUF as the kernel reports it.
 	std::size_t client_send_buffer = 0;
 
-	explicit tcp_mock_ldap(ldap::connection_options options = {}, socket_buffers buffers = socket_buffers::system)
+	explicit tcp_mock_ldap(const ldap::connection_options &options = {},
+	  socket_buffers buffers = socket_buffers::system)
 	{
 		// The accepted socket inherits it; set before the client connects,
 		// so the window offered from the start is the small one.
