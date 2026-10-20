@@ -610,13 +610,13 @@ namespace detail {
 	  std::pmr::memory_resource *mr,
 	  std::string_view context) -> result<message>;
 
-	auto modify_impl(impl_ref self, modify_params p, std::string context) -> boost::capy::task<result<response>>;
+	auto modify_impl(impl_ref self, modify_params request, std::string context) -> boost::capy::task<result<response>>;
 
-	auto extended_impl(impl_ref self, extended_params p) -> boost::capy::task<result<extended_result>>;
+	auto extended_impl(impl_ref self, extended_params request) -> boost::capy::task<result<extended_result>>;
 
 	// `context` names the operation in errors, instead of "extended
 	// operation <oid>".
-	auto password_modify_impl(impl_ref self, password_modify_params p, std::string context)
+	auto password_modify_impl(impl_ref self, password_modify_params request, std::string context)
 	  -> boost::capy::task<result<std::optional<std::string>>>;
 
 }// namespace detail

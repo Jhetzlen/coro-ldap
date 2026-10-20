@@ -103,18 +103,19 @@ auto connection::add(add_params request) -> capy::task<result<response>>
 
 namespace detail {
 
-	auto modify_impl(impl_ref self, modify_params p, std::string context) -> capy::task<result<response>>
+	auto modify_impl(impl_ref self, modify_params request, std::string context) -> capy::task<result<response>>
 	{
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		modify_request op(alloc);
-		op.object = p.object.to_string(self->mr());
-		op.changes.assign(p.changes.begin(), p.changes.end());
-		auto request = with_controls(std::move(op), p.controls, self->mr(), context);
-		if (!request) {
-			co_return std::unexpected(std::move(request.error()));
+		op.object = request.object.to_string(self->mr());
+		op.changes.assign(request.changes.begin(), request.changes.end());
+		auto msg = with_controls(std::move(op), request.controls, self->mr(), context);
+		if (!msg) {
+			co_return std::unexpected(std::move(msg.error()));
 		}
 		co_return to_response(
-		  co_await request_response(self, std::move(*request), op_index<modify_response>, context, p.timeout), context);
+		  co_await request_response(self, std::move(*msg), op_index<modify_response>, context, request.timeout),
+		  context);
 	}
 
 }// namespace detail
@@ -239,19 +240,20 @@ auto connection::compare(compare_params request) -> capy::task<result<bool>>
 
 namespace detail {
 
-	auto extended_impl(impl_ref self, extended_params p) -> capy::task<result<extended_result>>
+	auto extended_impl(impl_ref self, extended_params request) -> capy::task<result<extended_result>>
 	{
-		const std::string context = "extended operation " + p.name;
+		const std::string context = "extended operation " + request.name;
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		std::optional<std::string_view> value;
-		if (p.value) {
-			value = *p.value;
+		if (request.value) {
+			value = *request.value;
 		}
-		auto request = with_controls(extended_request(p.name, value, alloc), p.controls, self->mr(), context);
-		if (!request) {
-			co_return std::unexpected(std::move(request.error()));
+		auto msg = with_controls(extended_request(request.name, value, alloc), request.controls, self->mr(), context);
+		if (!msg) {
+			co_return std::unexpected(std::move(msg.error()));
 		}
-		auto m = co_await request_response(self, std::move(*request), op_index<extended_response>, context, p.timeout);
+		auto m =
+		  co_await request_response(self, std::move(*msg), op_index<extended_response>, context, request.timeout);
 		if (!m) {
 			co_return std::unexpected(std::move(m.error()));
 		}

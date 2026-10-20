@@ -85,21 +85,21 @@ namespace {
 	// PasswdModifyRequestValue ::= SEQUENCE { userIdentity [0], oldPasswd [1],
 	// newPasswd [2] } (all OCTET STRING OPTIONAL). nullopt when all are
 	// absent: the requestValue is then left out (RFC 3062 section 2).
-	auto encode_password_modify(const password_modify_params &p) -> std::optional<std::string>
+	auto encode_password_modify(const password_modify_params &request) -> std::optional<std::string>
 	{
-		if (!p.user && !p.old_password && !p.new_password) {
+		if (!request.user && !request.old_password && !request.new_password) {
 			return std::nullopt;
 		}
 		ber::writer w;
 		w.constructed(ber::tags::sequence, [&](ber::writer &s) {
-			if (p.user) {
-				s.octet_string(*p.user, ber::context(0));
+			if (request.user) {
+				s.octet_string(*request.user, ber::context(0));
 			}
-			if (p.old_password) {
-				s.octet_string(*p.old_password, ber::context(1));
+			if (request.old_password) {
+				s.octet_string(*request.old_password, ber::context(1));
 			}
-			if (p.new_password) {
-				s.octet_string(*p.new_password, ber::context(2));
+			if (request.new_password) {
+				s.octet_string(*request.new_password, ber::context(2));
 			}
 		});
 		return std::string(detail::as_text(w.bytes()));
@@ -135,14 +135,14 @@ namespace {
 
 namespace detail {
 
-	auto password_modify_impl(impl_ref self, password_modify_params p, std::string context)
+	auto password_modify_impl(impl_ref self, password_modify_params request, std::string context)
 	  -> capy::task<result<std::optional<std::string>>>
 	{
-		extended_params request{ .name = std::string(password_modify_oid),
-			.value = encode_password_modify(p),
-			.controls = std::move(p.controls),
-			.timeout = p.timeout };
-		auto r = co_await extended_impl(std::move(self), std::move(request));
+		extended_params extended{ .name = std::string(password_modify_oid),
+			.value = encode_password_modify(request),
+			.controls = std::move(request.controls),
+			.timeout = request.timeout };
+		auto r = co_await extended_impl(std::move(self), std::move(extended));
 		if (!r) {
 			error e = std::move(r.error());
 			const std::string generic = detail::format("extended operation {}", password_modify_oid);
@@ -267,18 +267,18 @@ namespace {
 		if (!new_value) {
 			co_return std::unexpected(detail::with_context(std::move(new_value.error()), context));
 		}
-		modify_params p{ .object = user };
+		modify_params request{ .object = user };
 		if (old_password) {
 			auto old_value = ad_password_value(*old_password);
 			if (!old_value) {
 				co_return std::unexpected(detail::with_context(std::move(old_value.error()), context));
 			}
-			p.changes.push_back(mod::remove("unicodePwd", { *old_value }));
-			p.changes.push_back(mod::add("unicodePwd", { *new_value }));
+			request.changes.push_back(mod::remove("unicodePwd", { *old_value }));
+			request.changes.push_back(mod::add("unicodePwd", { *new_value }));
 		} else {
-			p.changes.push_back(mod::replace("unicodePwd", { *new_value }));
+			request.changes.push_back(mod::replace("unicodePwd", { *new_value }));
 		}
-		auto r = co_await modify_impl(std::move(self), std::move(p), context + ": modify unicodePwd");
+		auto r = co_await modify_impl(std::move(self), std::move(request), context + ": modify unicodePwd");
 		if (r) {
 			co_return result<void>{};
 		}
@@ -321,11 +321,13 @@ namespace {
 		if (m == ldap::password_method::active_directory) {
 			co_return co_await ad_set_password(std::move(self), user, old_password, new_password, context);
 		}
-		password_modify_params p{ .old_password = std::move(old_password), .new_password = std::move(new_password) };
+		password_modify_params request{ .old_password = std::move(old_password),
+			.new_password = std::move(new_password) };
 		if (!user.empty()) {
-			p.user = std::string(user.to_string());
+			request.user = std::string(user.to_string());
 		}
-		auto r = co_await password_modify_impl(std::move(self), std::move(p), context + ": password modify (RFC 3062)");
+		auto r =
+		  co_await password_modify_impl(std::move(self), std::move(request), context + ": password modify (RFC 3062)");
 		if (!r) {
 			co_return std::unexpected(std::move(r.error()));
 		}
