@@ -71,10 +71,10 @@ auto main(int argc, char **argv) -> int
 		.random_runs = 15'000,
 		.max_random_size = 40,
 		.rng_seed = 0x5EED'1DA9'0000'0003ull };
-	for (auto t : texts) {
+	for (const auto t : texts) {
 		cfg.seeds.push_back(fuzz::to_input(t));
 	}
-	for (auto t : { texts[0], texts[6], texts[1] }) {
+	for (const auto t : { texts[0], texts[6], texts[1] }) {
 		auto f = ldap::filter::raw(t);
 		if (!f) {
 			return 1;

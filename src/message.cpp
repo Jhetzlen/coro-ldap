@@ -1426,7 +1426,7 @@ namespace {
 				return std::unexpected(std::move(peeked.error()));
 			}
 			const ber::tag t = *peeked;
-			auto unsupported = [&] {
+			const auto unsupported = [&] {
 				return fail(client_errc::unsupported_operation,
 				  detail::format("message: unknown protocolOp {} at offset {}", ber::to_string(t), offset));
 			};

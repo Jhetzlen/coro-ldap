@@ -31,7 +31,7 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task
 	co_return 0;
 }
 
-auto main(int argc, char **argv) -> int
+auto main(int argc, char *const *argv) -> int
 {
 	boost::corosio::io_context ioc;
 	int rc = 1;

@@ -483,7 +483,7 @@ auto operator==(const filter &a, const filter &b) noexcept -> bool
 	if (a.empty() || b.empty()) {
 		return a.empty() == b.empty();
 	}
-	auto same_node = [&](const node &x, const node &y) {
+	const auto same_node = [&](const node &x, const node &y) {
 		return x.k == y.k && x.dn_attributes == y.dn_attributes && access::attr_of(a, x) == access::attr_of(b, y)
 			   && access::value_of(a, x) == access::value_of(b, y) && access::rule_of(a, x) == access::rule_of(b, y);
 	};
@@ -549,7 +549,7 @@ namespace {
 	void append_escaped(std::pmr::string &out, std::string_view value)
 	{
 		static constexpr char digits[] = "0123456789abcdef";
-		auto escape = [&](unsigned char u) {
+		const auto escape = [&](unsigned char u) {
 			out += '\\';
 			out += digits[u >> 4];
 			out += digits[u & 0xFu];
@@ -1205,7 +1205,7 @@ auto unescape_filter_value(std::string_view text, std::pmr::memory_resource *mr)
 {
 	std::pmr::string out(mr);
 	out.reserve(text.size());
-	auto error = [&](std::string_view what, std::size_t at) {
+	const auto error = [&](std::string_view what, std::size_t at) {
 		return fail(client_errc::invalid_filter, detail::format("filter value: {} at position {}", what, at));
 	};
 	for (std::size_t i = 0; i < text.size();) {
@@ -1248,7 +1248,7 @@ namespace detail {
 		{
 			const auto &n = access::at(f, i);
 			const std::string_view attr = access::attr_of(f, n);
-			auto ava = [&](std::uint8_t number) {
+			const auto ava = [&](std::uint8_t number) {
 				w.constructed(ber::context(number), [&](ber::writer &c) {
 					c.octet_string(attr);
 					c.octet_string(access::value_of(f, n));
@@ -1491,7 +1491,7 @@ namespace {
 			if (!sub) {
 				return std::unexpected(std::move(sub.error()));
 			}
-			auto next_is = [&](std::uint8_t number) {
+			const auto next_is = [&](std::uint8_t number) {
 				// Checked first: peek_tag() on an empty reader would build an
 				// error (on the default resource) only to drop it.
 				if (sub->empty()) {

@@ -50,13 +50,16 @@ struct search_stream::state
 namespace detail {
 
 	// The SearchRequest for `p`, validated (errors carry `context`).
-	auto search_message(connection::impl &c, const search_params &p, const std::string &context) -> result<message>;
+	auto search_message(const connection::impl &c, const search_params &p, const std::string &context)
+	  -> result<message>;
 
 	// Validates and sends a search; returns its stream. Never suspends.
 	// `stop` is the awaiting task's stop token: if it is set already, the
 	// search is not sent and fails with capy::error::canceled.
-	auto start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr, const std::stop_token &stop)
-	  -> result<ldap::search_stream>;
+	auto start_search(connection::impl &c,
+	  const search_params &p,
+	  std::pmr::memory_resource *mr,
+	  const std::stop_token &stop) -> result<ldap::search_stream>;
 
 	// The one entry of a base-scope search (nullopt if none came back).
 	auto read_one(impl_ref self, search_params p) -> boost::capy::task<result<std::optional<entry>>>;

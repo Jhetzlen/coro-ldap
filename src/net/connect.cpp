@@ -45,7 +45,7 @@ auto detail::interleave_families(std::vector<corosio::endpoint> in) -> std::vect
 	std::vector<corosio::endpoint> preferred;
 	std::vector<corosio::endpoint> other;
 	std::vector<corosio::endpoint> out;
-	for (auto &ep : in) {
+	for (const auto &ep : in) {
 		(ep.is_v6() == first_v6 ? preferred : other).push_back(ep);
 	}
 	out.reserve(in.size());
@@ -117,12 +117,12 @@ namespace {
 		try {
 			corosio::resolver resolver(ioc);
 			{
-				std::scoped_lock lock(st->mutex);
+				const std::scoped_lock lock(st->mutex);
 				st->resolver = &resolver;
 			}
 			auto [rec, found] = co_await resolver.resolve(host, port, corosio::resolve_flags::numeric_service);
 			{
-				std::scoped_lock lock(st->mutex);
+				const std::scoped_lock lock(st->mutex);
 				st->resolver = nullptr;
 			}
 			ec = rec;
@@ -130,14 +130,14 @@ namespace {
 		} catch (...) {
 			// Never leave connect() waiting (it may have no deadline).
 			{
-				std::scoped_lock lock(st->mutex);
+				const std::scoped_lock lock(st->mutex);
 				st->resolver = nullptr;
 			}
 			ec = std::make_error_code(std::errc::not_enough_memory);
 			endpoints.clear();
 		}
 		{
-			std::scoped_lock lock(st->mutex);
+			const std::scoped_lock lock(st->mutex);
 			st->done = true;
 			st->ec = ec;
 			st->endpoints = std::move(endpoints);
@@ -149,10 +149,10 @@ namespace {
 	auto resolve_bounded(corosio::io_context &ioc, std::string host, std::string port, deadline_t deadline)
 	  -> capy::task<capy::io_result<std::vector<corosio::endpoint>>>
 	{
-		auto st = std::make_shared<resolve_state>();
+		const auto st = std::make_shared<resolve_state>();
 		capy::run_async(ioc.get_executor())(resolve_detached(ioc, std::move(host), std::move(port), st));
 		auto [wec] = co_await bounded(st->waker.wait(), deadline);
-		std::scoped_lock lock(st->mutex);
+		const std::scoped_lock lock(st->mutex);
 		if (st->done) {
 			co_return { st->ec, std::move(st->endpoints) };
 		}
@@ -428,7 +428,7 @@ auto start_tls(transport &t,
 			context,
 			pending.size()));
 	}
-	auto prefixed = [&context](error e) {
+	const auto prefixed = [&context](error e) {
 		e.context.insert(0, context + (e.context.empty() ? "" : ": "));
 		return std::unexpected(std::move(e));
 	};

@@ -50,7 +50,7 @@ auto main(int argc, char **argv) -> int
 		.random_runs = 50'000,
 		.max_random_size = 40,
 		.rng_seed = 0x5EED'1DA9'0000'0004ull };
-	for (auto t : texts) {
+	for (const auto t : texts) {
 		cfg.seeds.push_back(fuzz::to_input(t));
 	}
 	return fuzz::replay_main(argc, argv, cfg);

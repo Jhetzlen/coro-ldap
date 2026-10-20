@@ -84,7 +84,7 @@ namespace {
 
 auto parse_generalized_time(std::string_view s) -> result<sys_seconds>
 {
-	auto bad = [&](const char *why) {
+	const auto bad = [&](const char *why) {
 		return std::unexpected(detail::conversion_error(detail::format("not a GeneralizedTime ({})", why), s));
 	};
 	std::size_t pos = 0;

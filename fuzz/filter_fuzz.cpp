@@ -37,7 +37,7 @@ namespace ldap = jhetz::ldap;
 auto must_encode(const ldap::filter &f) -> std::pmr::vector<std::byte>
 {
 	ber::writer w;
-	auto r = ldap::encode_filter(w, f);
+	const auto r = ldap::encode_filter(w, f);
 	check(r.has_value(), "r.has_value()");
 	return w.take();
 }

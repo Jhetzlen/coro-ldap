@@ -105,7 +105,7 @@ namespace {
 	// Percent-encodes every byte for which `keep` is false.
 	template<class Keep> void encode(std::pmr::string &out, std::string_view s, Keep keep)
 	{
-		for (char c : s) {
+		for (const char c : s) {
 			if (keep(c)) {
 				out += c;
 			} else {

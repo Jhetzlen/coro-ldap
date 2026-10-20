@@ -41,7 +41,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 		return 0;
 	}
 	const auto printed = u->to_string();
-	for (char c : printed) {
+	for (const char c : printed) {
 		check(is_uri_char(c), "is_uri_char(c)");
 	}
 	auto back = ldap::url::parse(printed);

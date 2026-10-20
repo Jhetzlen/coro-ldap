@@ -127,7 +127,7 @@ namespace {
 		text += ": ";
 		text += status_text(major, GSS_C_GSS_CODE);
 		if (minor != 0) {
-			if (auto m = status_text(minor, GSS_C_MECH_CODE); !m.empty()) {
+			if (const auto m = status_text(minor, GSS_C_MECH_CODE); !m.empty()) {
 				text += " (";
 				text += m;
 				text += ')';
@@ -380,7 +380,7 @@ auto sasl_gssapi::offload_start() -> sasl_work
 {
 	// A new state for each bind: one whose step sasl_bind gave up on may
 	// still be in use by its thread.
-	auto s = std::make_shared<state>();
+	const auto s = std::make_shared<state>();
 	s->busy.store(true, std::memory_order_relaxed);
 	state_ = s;
 	return [s, options = options_, host = host_]() {
@@ -397,7 +397,7 @@ auto sasl_gssapi::offload_step(std::optional<std::string_view> challenge) -> sas
 		|| !challenge) {
 		return {};
 	}
-	auto s = state_;
+	const auto s = state_;
 	s->busy.store(true, std::memory_order_relaxed);
 	return [s, token = std::string(*challenge)]() {
 		const state::busy_scope scope{ *s };

@@ -20,7 +20,7 @@ struct in_flight
 auto add_modify_delete(ldap::connection &c, in_flight &running, int i) -> capy::task<>
 {
 	auto uid = std::format("bulk{:05}", i);
-	auto who = *ldap::dn::parse(std::format("uid={},ou=people,dc=example,dc=org", uid));
+	const auto who = *ldap::dn::parse(std::format("uid={},ou=people,dc=example,dc=org", uid));
 	auto added = co_await c.add({
 	  .entry = who,
 	  .attributes = { { "objectClass", { "inetOrgPerson" } },
@@ -31,8 +31,9 @@ auto add_modify_delete(ldap::connection &c, in_flight &running, int i) -> capy::
 	if (!added) {
 		std::cerr << uid << ": " << added.error().message() << '\n';
 	} else {
-		auto modified = co_await c.modify({ .object = who, .changes = { ldap::mod::replace("sn", { "Changed" }) } });
-		auto deleted = co_await c.del({ .entry = who });
+		const auto modified =
+		  co_await c.modify({ .object = who, .changes = { ldap::mod::replace("sn", { "Changed" }) } });
+		const auto deleted = co_await c.del({ .entry = who });
 		std::cout << uid << ": " << (modified && deleted ? "done" : "modify or delete failed") << '\n';
 	}
 	--running.count;
@@ -68,7 +69,7 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> capy::task<int>
 	co_return 0;
 }
 
-auto main(int argc, char **argv) -> int
+auto main(int argc, char *const *argv) -> int
 {
 	boost::corosio::io_context ioc;
 	int rc = 1;

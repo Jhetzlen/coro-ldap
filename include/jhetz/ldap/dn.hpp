@@ -77,7 +77,7 @@ namespace detail {
 		const std::size_t n = s.size();
 		std::size_t i = 0;
 		bool new_rdn = true;
-		auto skip_spaces = [&] {
+		const auto skip_spaces = [&] {
 			while (i < n && s[i] == ' ') {
 				++i;
 			}

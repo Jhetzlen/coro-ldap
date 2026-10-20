@@ -379,7 +379,7 @@ auto reader::read_int(tag t, const char *what) -> result<std::int64_t>
 	// Sign-extend from the first octet; unsigned arithmetic avoids UB, and the
 	// final conversion to int64 is modular (well defined since C++20).
 	std::uint64_t v = (octet(c[0]) & 0x80u) != 0 ? ~std::uint64_t{ 0 } : 0;
-	for (std::byte b : c) {
+	for (const std::byte b : c) {
 		v = (v << 8) | octet(b);
 	}
 	pos_ += e->size();

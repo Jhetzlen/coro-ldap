@@ -84,7 +84,7 @@ using detail::with_controls;
 
 auto connection::add(add_params p) -> capy::task<result<response>>
 {
-	std::string context = op_context("add", p.entry);
+	const std::string context = op_context("add", p.entry);
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
@@ -132,7 +132,7 @@ auto connection::modify(modify_params p) -> capy::task<result<response>>
 
 auto connection::del(del_params p) -> capy::task<result<response>>
 {
-	std::string context = op_context("delete", p.entry);
+	const std::string context = op_context("delete", p.entry);
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
@@ -151,7 +151,7 @@ auto connection::del(del_params p) -> capy::task<result<response>>
 
 auto connection::modify_dn(modify_dn_params p) -> capy::task<result<response>>
 {
-	std::string context = op_context("modify DN", p.entry);
+	const std::string context = op_context("modify DN", p.entry);
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
@@ -207,7 +207,7 @@ auto connection::rename(dn entry,
 
 auto connection::compare(compare_params p) -> capy::task<result<bool>>
 {
-	std::string context = op_context("compare", p.entry);
+	const std::string context = op_context("compare", p.entry);
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
@@ -239,7 +239,7 @@ namespace detail {
 
 	auto extended_impl(impl_ref self, extended_params p) -> capy::task<result<extended_result>>
 	{
-		std::string context = "extended operation " + p.name;
+		const std::string context = "extended operation " + p.name;
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		std::optional<std::string_view> value;
 		if (p.value) {

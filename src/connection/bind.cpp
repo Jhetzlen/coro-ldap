@@ -57,7 +57,7 @@ namespace {
 
 auto connection::simple_bind(dn name, std::string password) -> capy::task<result<void>>
 {
-	std::string context = op_context("bind", name);
+	const std::string context = op_context("bind", name);
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}

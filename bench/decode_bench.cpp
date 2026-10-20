@@ -101,7 +101,7 @@ auto make_stream(const stream_shape &shape) -> stream
 		sizes.push_back(bytes.size());
 	}
 	std::size_t offset = 0;
-	for (auto n : sizes) {
+	for (const auto n : sizes) {
 		s.pdus.push_back(std::span<const std::byte>(s.bytes).subspan(offset, n));
 		offset += n;
 	}
@@ -138,7 +138,7 @@ auto pass(const stream &s, mode how, std::vector<std::byte> &buffer) -> std::siz
 {
 	std::size_t sum = 0;
 	if (how == mode::heap) {
-		for (auto pdu : s.pdus) {
+		for (const auto pdu : s.pdus) {
 			sum += consume(ldap::decode(pdu).value());
 		}
 		return sum;
@@ -151,7 +151,7 @@ auto pass(const stream &s, mode how, std::vector<std::byte> &buffer) -> std::siz
 	}
 	ldap::decode_options options;
 	options.memory = &*arena;
-	for (auto pdu : s.pdus) {
+	for (const auto pdu : s.pdus) {
 		{
 			const auto m = ldap::decode(pdu, options).value();
 			sum += consume(m);
@@ -189,7 +189,7 @@ auto measure(const stream &s, mode how, int runs) -> outcome
 	return out;
 }
 
-auto arg(int argc, char **argv, int i, std::size_t fallback) -> std::size_t
+auto arg(int argc, char *const *argv, int i, std::size_t fallback) -> std::size_t
 {
 	return argc > i ? static_cast<std::size_t>(std::strtoull(argv[i], nullptr, 10)) : fallback;
 }
@@ -197,7 +197,7 @@ auto arg(int argc, char **argv, int i, std::size_t fallback) -> std::size_t
 }// namespace
 
 // NOLINTNEXTLINE(bugprone-exception-escape): a benchmark, terminating on an exception is fine
-auto main(int argc, char **argv) -> int
+auto main(int argc, char *const *argv) -> int
 {
 	const std::size_t entries = arg(argc, argv, 1, 1000);
 	const std::size_t attributes = arg(argc, argv, 2, 30);

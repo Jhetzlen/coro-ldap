@@ -188,7 +188,7 @@ void check_arena(std::span<const std::byte> input, const ldap::message &expected
 	{
 		std::optional<ldap::result<ldap::message>> in_arena;
 		{
-			scoped_null_default guard;
+			const scoped_null_default guard;
 			in_arena.emplace(ldap::decode(input, options));
 		}
 		check(in_arena->has_value(), "in_arena->has_value()");

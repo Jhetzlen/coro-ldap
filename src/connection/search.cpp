@@ -50,7 +50,8 @@ namespace {
 
 namespace detail {
 
-	auto search_message(connection::impl &c, const search_params &p, const std::string &context) -> result<message>
+	auto search_message(const connection::impl &c, const search_params &p, const std::string &context)
+	  -> result<message>
 	{
 		const auto seconds = p.time_limit.count();
 		if (seconds < 0 || seconds > max_int) {
@@ -71,10 +72,12 @@ namespace detail {
 		return with_controls(std::move(wire), p.controls, c.mr(), context);
 	}
 
-	auto start_search(connection::impl &c, search_params &p, std::pmr::memory_resource *mr, const std::stop_token &stop)
-	  -> result<ldap::search_stream>
+	auto start_search(connection::impl &c,
+	  const search_params &p,
+	  std::pmr::memory_resource *mr,
+	  const std::stop_token &stop) -> result<ldap::search_stream>
 	{
-		std::string context = op_context("search", p.base);
+		const std::string context = op_context("search", p.base);
 		auto request = search_message(c, p, context);
 		if (!request) {
 			return std::unexpected(std::move(request.error()));
@@ -205,7 +208,7 @@ auto search_stream::next() -> capy::task<result<std::optional<entry>>>
 	{
 		bool &flag;
 		~reset() { flag = false; }
-	} r{ s.in_next };
+	} const r{ s.in_next };
 
 	const impl_ref conn = s.conn;
 	while (true) {

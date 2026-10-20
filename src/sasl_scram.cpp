@@ -250,7 +250,7 @@ namespace {
 			return icu_failure(name, status);
 		}
 		const int32_t options = kind == prep_kind::stored ? USPREP_DEFAULT : USPREP_ALLOW_UNASSIGNED;
-		auto prepare = [&](UChar *dest, int32_t capacity) {
+		const auto prepare = [&](UChar *dest, int32_t capacity) {
 			UParseError where{};
 			status = U_ZERO_ERROR;
 			return usprep_prepare(profile.get(), in.v.data(), n16, dest, capacity, options, &where, &status);
@@ -340,7 +340,7 @@ namespace {
 				return std::nullopt;
 			}
 			const auto comma = rest.find(',');
-			std::string_view a = rest.substr(0, comma);
+			const std::string_view a = rest.substr(0, comma);
 			if (comma == std::string_view::npos) {
 				more = false;
 				rest = {};

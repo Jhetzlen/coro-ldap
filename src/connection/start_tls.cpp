@@ -32,7 +32,7 @@ using detail::registration;
 auto connection::start_tls(net::tls_options options, std::optional<std::chrono::milliseconds> timeout)
   -> capy::task<result<void>>
 {
-	std::string context = "start tls";
+	const std::string context = "start tls";
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}

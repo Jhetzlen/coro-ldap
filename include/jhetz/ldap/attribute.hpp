@@ -121,7 +121,7 @@ namespace detail {
 		if (s.empty() || !is_alpha(s[0])) {
 			return false;
 		}
-		for (char c : s) {
+		for (const char c : s) {
 			if (!is_keychar(c)) {
 				return false;
 			}

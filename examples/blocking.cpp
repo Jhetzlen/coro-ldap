@@ -4,7 +4,7 @@
 
 namespace ldap = jhetz::ldap;
 
-auto main(int argc, char **argv) -> int
+auto main(int argc, char *const *argv) -> int
 {
 	ldap::sync::connection conn;
 	if (auto connected = conn.connect(argc > 1 ? argv[1] : "ldap://localhost"); !connected) {

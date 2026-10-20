@@ -36,7 +36,7 @@ namespace {
 			}
 		}
 		// `where` is the server's text: quoted sanitized (a DN, as entry_context).
-		auto quoted = [&where](std::string text) {
+		const auto quoted = [&where](std::string text) {
 			detail::append_sanitized(text, where, 256);
 			return text;
 		};

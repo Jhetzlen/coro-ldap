@@ -34,6 +34,7 @@ using detail::no_connection;
 
 // ---------------------------------------------------------------- connection
 
+// NOLINTNEXTLINE(misc-const-correctness): it changes the connection's state, through impl_
 void detail::set_next_message_id(connection &c, std::int32_t id) noexcept { c.impl_->set_next_message_id(id); }
 
 connection::connection(corosio::io_context &ioc,
@@ -50,7 +51,7 @@ connection::connection(connection &&other) noexcept : impl_(std::exchange(other.
 auto connection::operator=(connection &&other) noexcept -> connection &
 {
 	if (this != &other) {
-		connection old(std::move(*this));
+		const connection old(std::move(*this));
 		impl_ = std::exchange(other.impl_, nullptr);
 	}
 	return *this;

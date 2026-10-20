@@ -312,7 +312,7 @@ namespace {
 
 		[[nodiscard]] auto message(int value) const -> std::string override
 		{
-			auto text = result_text(value);
+			const auto text = result_text(value);
 			if (text.empty()) {
 				return detail::format("unknown LDAP result code {}", value);
 			}
@@ -327,7 +327,7 @@ namespace {
 
 		[[nodiscard]] auto message(int value) const -> std::string override
 		{
-			auto text = client_text(value);
+			const auto text = client_text(value);
 			if (text.empty()) {
 				return detail::format("unknown LDAP client error {}", value);
 			}
@@ -342,7 +342,7 @@ namespace {
 
 		[[nodiscard]] auto message(int value) const -> std::string override
 		{
-			auto text = cond_text(value);
+			const auto text = cond_text(value);
 			if (text.empty()) {
 				return detail::format("unknown LDAP error condition {}", value);
 			}

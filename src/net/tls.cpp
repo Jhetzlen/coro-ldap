@@ -146,7 +146,7 @@ namespace {
 
 	auto read_file(const std::filesystem::path &path) -> std::optional<std::string>
 	{
-		std::ifstream in(path, std::ios::binary);
+		const std::ifstream in(path, std::ios::binary);
 		if (!in) {
 			return std::nullopt;
 		}
@@ -169,7 +169,7 @@ namespace {
 				return fail(std::make_error_code(std::errc::invalid_argument),
 				  ldap::detail::format("{}: certificate {} of {} does not parse", what, i + 1, certs.size()));
 			}
-			if (auto ec = ctx.add_certificate_authority(certs[i]); ec) {
+			if (const auto ec = ctx.add_certificate_authority(certs[i]); ec) {
 				return fail(ec, what);
 			}
 		}
@@ -373,7 +373,7 @@ auto tls_handshake(transport::impl &im,
 			im.tls_context.reset();
 		}
 	} undo{ .im = im };
-	auto &ctx = im.tls_context.emplace(std::move(setup.context));
+	const auto &ctx = im.tls_context.emplace(std::move(setup.context));
 	auto &stream = im.tls.emplace(&*im.tcp, ctx);
 	stream.set_hostname(name);
 	auto [ec] = co_await bounded(stream.handshake(corosio::tls_role::client), deadline);

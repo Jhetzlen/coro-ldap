@@ -100,7 +100,7 @@ namespace {
 	{
 		if (a.hex_form) {
 			out += '#';
-			for (char c : a.value) {
+			for (const char c : a.value) {
 				append_hex(out, static_cast<unsigned char>(c));
 			}
 			return;

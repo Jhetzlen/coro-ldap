@@ -124,7 +124,9 @@ namespace {
 
 	auto parse_definition(std::string_view text) -> result<definition>
 	{
-		auto bad = [](const char *why) { return fail(client_errc::decode_error, detail::format("schema: {}", why)); };
+		const auto bad = [](const char *why) {
+			return fail(client_errc::decode_error, detail::format("schema: {}", why));
+		};
 		lexer lx(text);
 		auto t = lx.next();
 		if (!t) {

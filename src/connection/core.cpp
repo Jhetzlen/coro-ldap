@@ -243,7 +243,7 @@ auto connection::impl::free_id() const -> std::int32_t
 	if (!wrapped) {
 		return id;// ids so far only increased: none is in use
 	}
-	auto in_use = [this](std::int32_t i) {
+	const auto in_use = [this](std::int32_t i) {
 		return pending.contains(i) || std::ranges::contains(abandoned, i, &abandoned_req::id);
 	};
 	while (in_use(id)) {
@@ -332,7 +332,7 @@ void connection::impl::abandon(pending_op &p) noexcept
 			return;
 		}
 		// Held by a bind exchange, so never sent: nothing to tell the server.
-		auto h = std::ranges::find(held, p.id, &held_request::id);
+		const auto h = std::ranges::find(held, p.id, &held_request::id);
 		if (h != held.end()) {
 			held.erase(h);
 			return;
@@ -406,7 +406,7 @@ void connection::impl::trim_abandoned()
 	if (abandoned.size() <= max_abandoned) {
 		return;
 	}
-	auto a = std::ranges::find(abandoned.begin(), std::prev(abandoned.end()), false, &abandoned_req::due);
+	const auto a = std::ranges::find(abandoned.begin(), std::prev(abandoned.end()), false, &abandoned_req::due);
 	forget_abandoned(a != std::prev(abandoned.end()) ? a : abandoned.begin());
 }
 
@@ -697,7 +697,7 @@ void connection::impl::route(std::size_t size)
 		buf.consume(size);
 		return;
 	}
-	if (auto it = pending.find(h->id); it != pending.end()) {
+	if (const auto it = pending.find(h->id); it != pending.end()) {
 		pending_op &p = *it->second;
 		if (same_tag(h->op, intermediate_response_tag)) {
 			buf.consume(size);// skipped, not decoded
@@ -732,7 +732,7 @@ void connection::impl::route(std::size_t size)
 		return;
 	}
 	buf.consume(size);
-	auto a = std::ranges::find(abandoned, h->id, &abandoned_req::id);
+	const auto a = std::ranges::find(abandoned, h->id, &abandoned_req::id);
 	if (a != abandoned.end()) {
 		// A late response to an abandoned request: dropped. The search's
 		// SearchResultDone (or any response to another request) is its
@@ -871,7 +871,7 @@ namespace detail {
 		if (auto r = self->submit(request, &p, context); !r) {
 			co_return std::unexpected(std::move(r.error()));
 		}
-		registration reg(*self, p);
+		const registration reg(*self, p);
 		co_return co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout()), context);
 	}
 

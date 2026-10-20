@@ -214,7 +214,7 @@ auto paged_search::next() -> capy::task<result<std::optional<entry>>>
 	// hold the paging state of `cookie`, which the destructor releases.
 	// Decided by capy::cond, not ldap::cond::timeout: that also matches the
 	// server's timeLimitExceeded, which ended the search on the server.
-	auto finish = [&s](error e, bool ended = true) -> result<std::optional<entry>> {
+	const auto finish = [&s](error e, bool ended = true) -> result<std::optional<entry>> {
 		if (ended && e.code != capy::cond::canceled && e.code != capy::cond::timeout) {
 			s.cookie.clear();
 		}
