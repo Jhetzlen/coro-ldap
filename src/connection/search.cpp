@@ -204,8 +204,13 @@ auto search_stream::next() -> capy::task<result<std::optional<entry>>>
 	s.in_next = true;
 	struct reset
 	{
-		bool &flag;
+		explicit reset(bool &f) noexcept : flag(f) {}
+		reset(const reset &) = delete;
+		reset(reset &&) = delete;
+		auto operator=(const reset &) -> reset & = delete;
+		auto operator=(reset &&) -> reset & = delete;
 		~reset() { flag = false; }
+		bool &flag;
 	} const r{ s.in_next };
 
 	const impl_ref conn = s.conn;

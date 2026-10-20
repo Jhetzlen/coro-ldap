@@ -82,7 +82,10 @@ namespace detail {
 		  : mr(mr_), search(search_), expect(expect_), queue(mr_)
 		{}
 		pending_op(const pending_op &) = delete;
+		pending_op(pending_op &&) = delete;
 		auto operator=(const pending_op &) -> pending_op & = delete;
+		auto operator=(pending_op &&) -> pending_op & = delete;
+		~pending_op() = default;
 
 		std::pmr::memory_resource *mr;// responses are decoded into this
 		bool search;// many responses, until a SearchResultDone
@@ -109,6 +112,9 @@ namespace detail {
 // The multiplexing core. Its state is private: the operations reach it
 // through the members below, which keep its invariants (message ids, the
 // writer, the reader, the due answers, the bind and StartTLS exclusions).
+// Its members are grouped by concern (each flag beside its event), not
+// packed: one impl per connection, so the padding costs nothing that counts.
+// NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding): grouped by concern, see above
 class connection::impl
 {
   public:
@@ -543,9 +549,16 @@ namespace detail {
 		}
 		impl_ref(const impl_ref &o) noexcept : impl_ref(o.p_) {}
 		impl_ref(impl_ref &&o) noexcept : p_(std::exchange(o.p_, nullptr)) {}
-		auto operator=(impl_ref o) noexcept -> impl_ref &
+		auto operator=(const impl_ref &o) noexcept -> impl_ref &
 		{
-			std::swap(p_, o.p_);
+			impl_ref copy(o);
+			std::swap(p_, copy.p_);
+			return *this;
+		}
+		auto operator=(impl_ref &&o) noexcept -> impl_ref &
+		{
+			impl_ref moved(std::move(o));
+			std::swap(p_, moved.p_);
 			return *this;
 		}
 		~impl_ref()

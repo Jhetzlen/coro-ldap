@@ -98,6 +98,15 @@ class sasl_mechanism
 		(void)challenge;
 		return {};
 	}
+
+  protected:
+	// Copied and moved only as part of a derived mechanism, never sliced
+	// through a sasl_mechanism reference.
+	sasl_mechanism() = default;
+	sasl_mechanism(const sasl_mechanism &) = default;
+	sasl_mechanism(sasl_mechanism &&) = default;
+	auto operator=(const sasl_mechanism &) -> sasl_mechanism & = default;
+	auto operator=(sasl_mechanism &&) -> sasl_mechanism & = default;
 };
 
 // EXTERNAL (RFC 4422 appendix A): the server takes the identity from the

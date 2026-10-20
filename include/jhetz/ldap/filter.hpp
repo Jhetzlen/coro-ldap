@@ -179,12 +179,14 @@ class filter
 	static constexpr std::uint32_t npos = 0xFFFF'FFFFu;
 
 	// Substring parts are child nodes of their substrings node, with these
-	// kinds (never visible as a filter::kind).
-	enum part_kind : std::uint8_t { part_initial = 32, part_any, part_final };
+	// node kinds (never visible as a filter::kind).
+	static constexpr std::uint8_t part_initial = 32;
+	static constexpr std::uint8_t part_any = 33;
+	static constexpr std::uint8_t part_final = 34;
 
 	struct node
 	{
-		std::uint8_t k = 0;// filter::kind, or a part_kind
+		std::uint8_t k = 0;// filter::kind, or a part_* constant
 		bool dn_attributes = false;// extensible match
 		std::uint32_t attr_off = 0;// attribute description (extensible: type, may be empty)
 		std::uint32_t attr_len = 0;

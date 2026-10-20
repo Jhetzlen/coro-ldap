@@ -58,16 +58,12 @@ auto connection::connect(std::string_view text) -> result<void>
 
 auto connection::is_open() const -> bool
 {
-	return const_cast<connection *>(this)
-	  ->call([](ldap::connection &c) -> capy::task<result<bool>> { co_return c.is_open(); })
-	  .value_or(false);
+	return call([](const ldap::connection &c) -> capy::task<result<bool>> { co_return c.is_open(); }).value_or(false);
 }
 
 auto connection::is_tls() const -> bool
 {
-	return const_cast<connection *>(this)
-	  ->call([](ldap::connection &c) -> capy::task<result<bool>> { co_return c.is_tls(); })
-	  .value_or(false);
+	return call([](const ldap::connection &c) -> capy::task<result<bool>> { co_return c.is_tls(); }).value_or(false);
 }
 
 auto connection::search_paged(search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)

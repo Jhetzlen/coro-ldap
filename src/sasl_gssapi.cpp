@@ -25,9 +25,11 @@ namespace {
 	// The Kerberos V5 mechanism, 1.2.840.113554.1.2.2 (RFC 1964), spelled
 	// out rather than taken from gssapi_krb5.h (MIT's gss_mech_krb5,
 	// Heimdal's GSS_KRB5_MECHANISM).
+	// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables): GSS-API takes them non-const, never writes
 	auto krb5_oid_bytes = std::to_array<unsigned char>({ 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02 });
 	gss_OID_desc krb5_oid{ .length = krb5_oid_bytes.size(), .elements = krb5_oid_bytes.data() };
 	gss_OID_set_desc krb5_oid_set{ .count = 1, .elements = &krb5_oid };
+	// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
 	// Owns a GSS-API handle (a pointer type), released with `Release`.
 	template<class H, auto Release> class gss_handle
@@ -93,6 +95,7 @@ namespace {
 	// but does not write through input buffers).
 	auto input(std::string_view s) noexcept -> gss_buffer_desc
 	{
+		// NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): input buffers are never written (see above)
 		return gss_buffer_desc{ .length = s.size(), .value = const_cast<char *>(s.data()) };
 	}
 

@@ -19,7 +19,7 @@ namespace {
 	// "noidlen" like 1.2.3{64}).
 	struct token
 	{
-		enum kind { open, close, quoted, word, end } k;
+		enum class kind { open, close, quoted, word, end } k;
 		std::string text;
 	};
 
@@ -34,14 +34,14 @@ namespace {
 				++pos_;
 			}
 			if (pos_ == s_.size()) {
-				return token{ .k = token::end, .text = {} };
+				return token{ .k = token::kind::end, .text = {} };
 			}
 			const char c = s_[pos_];
 			if (c == '(') {
-				return ++pos_, token{ .k = token::open, .text = {} };
+				return ++pos_, token{ .k = token::kind::open, .text = {} };
 			}
 			if (c == ')') {
-				return ++pos_, token{ .k = token::close, .text = {} };
+				return ++pos_, token{ .k = token::kind::close, .text = {} };
 			}
 			if (c == '\'') {
 				++pos_;
@@ -65,13 +65,13 @@ namespace {
 					return fail(client_errc::decode_error, "schema: unterminated quoted string");
 				}
 				++pos_;
-				return token{ .k = token::quoted, .text = std::move(out) };
+				return token{ .k = token::kind::quoted, .text = std::move(out) };
 			}
 			const std::size_t start = pos_;
 			while (pos_ < s_.size() && !is_space(s_[pos_]) && s_[pos_] != '(' && s_[pos_] != ')' && s_[pos_] != '\'') {
 				++pos_;
 			}
-			return token{ .k = token::word, .text = std::string(s_.substr(start, pos_ - start)) };
+			return token{ .k = token::kind::word, .text = std::string(s_.substr(start, pos_ - start)) };
 		}
 
 	  private:
@@ -130,14 +130,14 @@ namespace {
 		if (!t) {
 			return std::unexpected(std::move(t.error()));
 		}
-		if (t->k != token::open) {
+		if (t->k != token::kind::open) {
 			return bad("a definition starts with '('");
 		}
 		t = lx.next();
 		if (!t) {
 			return std::unexpected(std::move(t.error()));
 		}
-		if (t->k != token::word && t->k != token::quoted) {
+		if (t->k != token::kind::word && t->k != token::kind::quoted) {
 			return bad("missing OID");
 		}
 		definition d;
@@ -154,13 +154,13 @@ namespace {
 			if (!k) {
 				return std::unexpected(std::move(k.error()));
 			}
-			if (k->k == token::close) {
+			if (k->k == token::kind::close) {
 				break;
 			}
-			if (k->k == token::end) {
+			if (k->k == token::kind::end) {
 				return bad("missing ')'");
 			}
-			if (k->k != token::word || !is_keyword(k->text)) {
+			if (k->k != token::kind::word || !is_keyword(k->text)) {
 				return bad("expected a keyword");
 			}
 			if (d.fields.size() == max_fields) {
@@ -172,16 +172,16 @@ namespace {
 				if (!v) {
 					return std::unexpected(std::move(v.error()));
 				}
-				if (v->k == token::open) {
+				if (v->k == token::kind::open) {
 					while (true) {
 						auto e = lx.next();
 						if (!e) {
 							return std::unexpected(std::move(e.error()));
 						}
-						if (e->k == token::close) {
+						if (e->k == token::kind::close) {
 							break;
 						}
-						if (e->k == token::end || e->k == token::open) {
+						if (e->k == token::kind::end || e->k == token::kind::open) {
 							return bad("unterminated list");
 						}
 						if (e->text == "$") {
@@ -192,7 +192,7 @@ namespace {
 						}
 						values.push_back(std::move(e->text));
 					}
-				} else if (v->k == token::word || v->k == token::quoted) {
+				} else if (v->k == token::kind::word || v->k == token::kind::quoted) {
 					values.push_back(std::move(v->text));
 				} else {
 					return bad("missing value");
@@ -204,7 +204,7 @@ namespace {
 		if (!rest) {
 			return std::unexpected(std::move(rest.error()));
 		}
-		if (rest->k != token::end) {
+		if (rest->k != token::kind::end) {
 			return bad("text after the closing ')'");
 		}
 		return d;

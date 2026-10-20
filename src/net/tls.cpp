@@ -362,6 +362,11 @@ auto tls_handshake(transport::impl &im,
 	// anyway and must be closed (the server expects a handshake now).
 	struct undo_tls
 	{
+		explicit undo_tls(transport::impl &i) noexcept : im(i) {}
+		undo_tls(const undo_tls &) = delete;
+		undo_tls(undo_tls &&) = delete;
+		auto operator=(const undo_tls &) -> undo_tls & = delete;
+		auto operator=(undo_tls &&) -> undo_tls & = delete;
 		transport::impl &im;
 		bool keep = false;
 		~undo_tls()
@@ -372,7 +377,7 @@ auto tls_handshake(transport::impl &im,
 			im.tls.reset();
 			im.tls_context.reset();
 		}
-	} undo{ .im = im };
+	} undo{ im };
 	const auto &ctx = im.tls_context.emplace(std::move(setup.context));
 	auto &stream = im.tls.emplace(&*im.tcp, ctx);
 	stream.set_hostname(name);

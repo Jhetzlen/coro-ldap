@@ -199,12 +199,13 @@ class connection
 	void close();
 
   private:
-	// Runs make_task(conn_) on the I/O thread and waits for its result.
-	template<class F>
-	auto call(const F &make_task) -> detail::task_value<decltype(make_task(std::declval<ldap::connection &>()))>::type
+	// Runs make_task(conn_) on the I/O thread and waits for its result;
+	// conn_ is const when called from a const member.
+	template<class Self, class F>
+	auto call(this Self &self, const F &make_task) -> detail::task_value<decltype(make_task(self.conn_))>::type
 	{
-		using R = detail::task_value<decltype(make_task(std::declval<ldap::connection &>()))>::type;
-		if (std::this_thread::get_id() == io_thread_id_) {
+		using R = detail::task_value<decltype(make_task(self.conn_))>::type;
+		if (std::this_thread::get_id() == self.io_thread_id_) {
 			return std::unexpected(make_error(client_errc::would_deadlock, "sync::connection"));
 		}
 		std::promise<R> done;
@@ -212,11 +213,10 @@ class connection
 		// The task is created on the I/O thread too (the connection is only
 		// touched there): a wrapper coroutine builds and awaits it.
 		boost::capy::run_async(
-		  ioc_.get_executor(),
+		  self.ioc_.get_executor(),
 		  [&done](R r) { done.set_value(std::move(r)); },
 		  [&done](std::exception_ptr e) { done.set_exception(std::move(e)); })(
-		  [](ldap::connection &c, const F &make) -> boost::capy::task<R> { co_return co_await make(c); }(
-												   conn_, make_task));
+		  [](auto &c, const F &make) -> boost::capy::task<R> { co_return co_await make(c); }(self.conn_, make_task));
 		return f.get();
 	}
 

@@ -750,8 +750,13 @@ auto sasl_scram_sha256::client_final(std::string_view message) -> result<std::op
 	// The prepared password is needed only for PBKDF2, below.
 	struct wipe_on_exit
 	{
-		std::string &s;
+		explicit wipe_on_exit(std::string &str) noexcept : s(str) {}
+		wipe_on_exit(const wipe_on_exit &) = delete;
+		wipe_on_exit(wipe_on_exit &&) = delete;
+		auto operator=(const wipe_on_exit &) -> wipe_on_exit & = delete;
+		auto operator=(wipe_on_exit &&) -> wipe_on_exit & = delete;
 		~wipe_on_exit() { wipe_string(s); }
+		std::string &s;
 	} const wipe_password{ prepared_password_ };
 	auto parsed = parse_server_first(message);
 	if (!parsed) {
@@ -807,6 +812,11 @@ auto sasl_scram_sha256::offload_step(std::optional<std::string_view> challenge) 
 	return [d = std::move(d), without_proof = std::move(without_proof)] -> result<std::optional<std::string>> {
 		struct done_on_exit
 		{
+			explicit done_on_exit(derivation &der) noexcept : d(der) {}
+			done_on_exit(const done_on_exit &) = delete;
+			done_on_exit(done_on_exit &&) = delete;
+			auto operator=(const done_on_exit &) -> done_on_exit & = delete;
+			auto operator=(done_on_exit &&) -> done_on_exit & = delete;
 			derivation &d;
 			~done_on_exit()
 			{

@@ -1231,6 +1231,11 @@ TEST_CASE("ldaps:// with a CA directory", "[net][connect][tls]")
 	const auto ca_name = std::format("{:08x}.0", pki().ca_subject_hash());
 	struct remove_contents
 	{
+		explicit remove_contents(std::filesystem::path path) : p(std::move(path)) {}
+		remove_contents(const remove_contents &) = delete;
+		remove_contents(remove_contents &&) = delete;
+		auto operator=(const remove_contents &) -> remove_contents & = delete;
+		auto operator=(remove_contents &&) -> remove_contents & = delete;
 		std::filesystem::path p;
 		~remove_contents()
 		{
