@@ -47,7 +47,7 @@ namespace {
 			const std::scoped_lock lock(mutex_);
 			auto &w = workers_.emplace_back();
 			try {
-				w.thread = std::thread([f = std::move(f), &ended = w.ended]() mutable noexcept {
+				w.thread = std::thread([f = std::move(f), &ended = w.ended] mutable noexcept {
 					f();
 					ended.store(true, std::memory_order_release);
 				});
@@ -144,7 +144,7 @@ auto run_offloaded(corosio::io_context::executor_type ex,
 	auto shared = std::make_shared<offloaded>(std::move(work));
 	try {
 		auto &threads = ex.context().use_service<offload_threads>();
-		threads.start([shared, guard = capy::work_guard(ex)]() mutable noexcept {
+		threads.start([shared, guard = capy::work_guard(ex)] mutable noexcept {
 			try {
 				shared->value.emplace(shared->work());
 			} catch (...) {

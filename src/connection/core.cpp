@@ -37,7 +37,6 @@ namespace corosio = boost::corosio;
 namespace jhetz::ldap {
 
 using detail::clock;
-using detail::deadline_after;
 using detail::impl_ref;
 using detail::op_index;
 using detail::pending_op;

@@ -20,7 +20,7 @@ using pmr_alloc = std::pmr::polymorphic_allocator<>;
 // A copy (or move, for an rvalue) of `src` whose contents use `alloc`.
 template<class Opt> auto optional_with(Opt &&src, const pmr_alloc &alloc)
 {
-	using T = typename std::remove_cvref_t<Opt>::value_type;
+	using T = std::remove_cvref_t<Opt>::value_type;
 	if (!src) {
 		return std::optional<T>{};
 	}

@@ -100,7 +100,7 @@ auto parse_args(int argc, char **argv) -> options
 	std::vector<std::string_view> positional;
 	for (int i = 1; i < argc; ++i) {
 		const std::string_view a = argv[i];
-		const auto value = [&]() -> std::string {
+		const auto value = [&] -> std::string {
 			if (i + 1 >= argc) {
 				usage(std::string(a) + " needs a value");
 			}

@@ -203,7 +203,7 @@ TEST_CASE("URL hosts", "[url]")
 		CHECK(parse("ldap://[fe80::1%25a%3Ab]").to_string() == "ldap://[fe80::1%25a%3Ab]");
 		CHECK(parse("ldap://[fe80::1%25a%25b]").to_string() == "ldap://[fe80::1%25a%25b]");
 
-		for (auto bad : { "ldap://[::1",
+		for (const auto *bad : { "ldap://[::1",
 			   "ldap://[]",
 			   "ldap://[1:2:3:4:5:6:7:8:9]",
 			   "ldap://[1::2::3]",

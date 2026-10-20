@@ -383,7 +383,7 @@ auto sasl_gssapi::offload_start() -> sasl_work
 	const auto s = std::make_shared<state>();
 	s->busy.store(true, std::memory_order_relaxed);
 	state_ = s;
-	return [s, options = options_, host = host_]() {
+	return [s, options = options_, host = host_] {
 		const state::busy_scope scope{ *s };
 		return s->begin(options, host);
 	};
@@ -399,7 +399,7 @@ auto sasl_gssapi::offload_step(std::optional<std::string_view> challenge) -> sas
 	}
 	const auto s = state_;
 	s->busy.store(true, std::memory_order_relaxed);
-	return [s, token = std::string(*challenge)]() {
+	return [s, token = std::string(*challenge)] {
 		const state::busy_scope scope{ *s };
 		return s->init(token);
 	};

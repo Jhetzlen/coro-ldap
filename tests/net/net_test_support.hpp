@@ -68,7 +68,7 @@ template<> struct outcome<void>
 	bool finished = false;
 	std::exception_ptr error{};
 	[[nodiscard]] auto done() const noexcept -> bool { return finished || error != nullptr; }
-	void get()
+	void get() const
 	{
 		if (error) {
 			std::rethrow_exception(error);
@@ -222,7 +222,7 @@ struct clear_frame_allocator
 // Other systems refuse such a connect or lack the address.
 inline void skip_unless_linux_loopback()
 {
-#if !defined(__linux__)
+#ifndef __linux__
 	SKIP("needs Linux loopback behaviour (127/8 routed, SYN dropped at a full backlog)");
 #endif
 }

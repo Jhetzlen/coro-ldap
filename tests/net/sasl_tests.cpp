@@ -145,7 +145,7 @@ class offload_mechanism final : public ldap::sasl_mechanism
 	}
 	auto offload_start() -> ldap::sasl_work override
 	{
-		return [g = gate]() -> ldap::result<std::optional<std::string>> {
+		return [g = gate] -> ldap::result<std::optional<std::string>> {
 			g->enter();
 			g->finished.fetch_add(1);
 			return std::optional<std::string>("hello");
@@ -153,7 +153,7 @@ class offload_mechanism final : public ldap::sasl_mechanism
 	}
 	auto offload_step(std::optional<std::string_view> c) -> ldap::sasl_work override
 	{
-		return [g = gate, c = std::string(c.value_or(""))]() -> ldap::result<std::optional<std::string>> {
+		return [g = gate, c = std::string(c.value_or(""))] -> ldap::result<std::optional<std::string>> {
 			g->enter();
 			g->finished.fetch_add(1);
 			return std::optional<std::string>("re:" + c);

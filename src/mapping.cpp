@@ -82,28 +82,28 @@ namespace {
 
 }// namespace
 
-auto parse_generalized_time(std::string_view s) -> result<sys_seconds>
+auto parse_generalized_time(std::string_view text) -> result<sys_seconds>
 {
 	const auto bad = [&](const char *why) {
-		return std::unexpected(detail::conversion_error(detail::format("not a GeneralizedTime ({})", why), s));
+		return std::unexpected(detail::conversion_error(detail::format("not a GeneralizedTime ({})", why), text));
 	};
 	std::size_t pos = 0;
-	const auto year = digits(s, pos, 4);
-	const auto month = digits(s, pos, 2);
-	const auto day = digits(s, pos, 2);
-	const auto hour = digits(s, pos, 2);
+	const auto year = digits(text, pos, 4);
+	const auto month = digits(text, pos, 2);
+	const auto day = digits(text, pos, 2);
+	const auto hour = digits(text, pos, 2);
 	if (!year || !month || !day || !hour) {
 		return bad("date and hour");
 	}
 	std::optional<int> minute;
 	std::optional<int> second;
-	if (next_is_digit(s, pos)) {
-		minute = digits(s, pos, 2);
+	if (next_is_digit(text, pos)) {
+		minute = digits(text, pos, 2);
 		if (!minute) {
 			return bad("minute");
 		}
-		if (next_is_digit(s, pos)) {
-			second = digits(s, pos, 2);
+		if (next_is_digit(text, pos)) {
+			second = digits(text, pos, 2);
 			if (!second) {
 				return bad("second");
 			}
@@ -111,9 +111,9 @@ auto parse_generalized_time(std::string_view s) -> result<sys_seconds>
 	}
 	// A fraction applies to the last unit given (hour, minute or second).
 	seconds fraction{ 0 };
-	if (pos < s.size() && (s[pos] == '.' || s[pos] == ',')) {
+	if (pos < text.size() && (text[pos] == '.' || text[pos] == ',')) {
 		++pos;
-		if (!next_is_digit(s, pos)) {
+		if (!next_is_digit(text, pos)) {
 			return bad("fraction");
 		}
 		const seconds unit = [second, minute] {
@@ -127,9 +127,9 @@ auto parse_generalized_time(std::string_view s) -> result<sys_seconds>
 		}();
 		std::int64_t num = 0;
 		std::int64_t den = 1;
-		while (next_is_digit(s, pos)) {
+		while (next_is_digit(text, pos)) {
 			if (den < 1'000'000'000) {// enough precision; the rest is truncated
-				num = (num * 10) + (s[pos] - '0');
+				num = (num * 10) + (text[pos] - '0');
 				den *= 10;
 			}
 			++pos;
@@ -147,22 +147,22 @@ auto parse_generalized_time(std::string_view s) -> result<sys_seconds>
 	}
 
 	// g-time-zone: "Z" or a differential (+|-)HH[MM].
-	if (pos >= s.size()) {
+	if (pos >= text.size()) {
 		return bad("time zone missing");
 	}
 	seconds offset{ 0 };
-	if (s[pos] == 'Z') {
+	if (text[pos] == 'Z') {
 		++pos;
-	} else if (s[pos] == '+' || s[pos] == '-') {
-		const int sign = s[pos] == '-' ? -1 : 1;
+	} else if (text[pos] == '+' || text[pos] == '-') {
+		const int sign = text[pos] == '-' ? -1 : 1;
 		++pos;
-		const auto oh = digits(s, pos, 2);
+		const auto oh = digits(text, pos, 2);
 		if (!oh || *oh > 23) {
 			return bad("time zone hour");
 		}
 		int om = 0;
-		if (next_is_digit(s, pos)) {
-			const auto m = digits(s, pos, 2);
+		if (next_is_digit(text, pos)) {
+			const auto m = digits(text, pos, 2);
 			if (!m || *m > 59) {
 				return bad("time zone minute");
 			}
@@ -172,7 +172,7 @@ auto parse_generalized_time(std::string_view s) -> result<sys_seconds>
 	} else {
 		return bad("time zone");
 	}
-	if (pos != s.size()) {
+	if (pos != text.size()) {
 		return bad("trailing characters");
 	}
 

@@ -139,7 +139,7 @@ void check_value(std::string_view v)
 
 void check_unescape(std::string_view text)
 {
-	if (text.find('*') != std::string_view::npos) {
+	if (text.contains('*')) {
 		return;// a substring filter in raw
 	}
 	const auto u = ldap::unescape_filter_value(text);

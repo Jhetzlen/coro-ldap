@@ -46,7 +46,6 @@
 #include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <string>
 #include <system_error>
 #include <utility>
 
@@ -80,34 +79,34 @@ constexpr auto slow_dns_delay = std::chrono::milliseconds(1000);
 std::atomic<std::stop_source *> lookup_stop{ nullptr };
 }// namespace
 
-extern "C" auto getaddrinfo(const char *node, const char *service, const struct addrinfo *hints, struct addrinfo **res)
+extern "C" auto getaddrinfo(const char *name, const char *service, const struct addrinfo *req, struct addrinfo **pai)
   -> int
 {
 	using fn = int (*)(const char *, const char *, const struct addrinfo *, struct addrinfo **);
 	static const auto real = reinterpret_cast<fn>(dlsym(RTLD_NEXT, "getaddrinfo"));
-	const std::string_view name = node != nullptr ? node : "";
-	if (name.starts_with("slow-dns-")) {
+	const std::string_view host = name != nullptr ? name : "";
+	if (host.starts_with("slow-dns-")) {
 		std::this_thread::sleep_for(slow_dns_delay);
-		return real("127.0.0.1", service, hints, res);
+		return real("127.0.0.1", service, req, pai);
 	}
-	if (name.starts_with("no-ip-")) {
-		if (int rc = real("127.0.0.1", service, hints, res); rc != 0) {
+	if (host.starts_with("no-ip-")) {
+		if (int rc = real("127.0.0.1", service, req, pai); rc != 0) {
 			return rc;
 		}
-		for (struct addrinfo *p = *res; p != nullptr; p = p->ai_next) {
+		for (struct addrinfo *p = *pai; p != nullptr; p = p->ai_next) {
 			p->ai_family = AF_UNIX;
 		}
 		return 0;
 	}
-	if (name.starts_with("stop-dns-")) {
+	if (host.starts_with("stop-dns-")) {
 		if (auto *stop = lookup_stop.load(); stop != nullptr) {
 			stop->request_stop();
 		}
 		std::this_thread::sleep_for(slow_dns_delay);
-		return real("127.0.0.1", service, hints, res);
+		return real("127.0.0.1", service, req, pai);
 	}
-	if (name.starts_with("two-addr-")) {
-		struct addrinfo v4 = hints != nullptr ? *hints : addrinfo{};
+	if (host.starts_with("two-addr-")) {
+		struct addrinfo v4 = req != nullptr ? *req : addrinfo{};
 		v4.ai_family = AF_INET;
 		struct addrinfo *first = nullptr;
 		struct addrinfo *second = nullptr;
@@ -123,10 +122,10 @@ extern "C" auto getaddrinfo(const char *node, const char *service, const struct 
 			tail = tail->ai_next;
 		}
 		tail->ai_next = second;// glibc frees the nodes one by one, so chaining is fine
-		*res = first;
+		*pai = first;
 		return 0;
 	}
-	return real(node, service, hints, res);
+	return real(name, service, req, pai);
 }
 
 namespace {
@@ -778,7 +777,8 @@ TEST_CASE("URLs connect() refuses", "[net][connect]")
 	REQUIRE_FALSE(no_path.has_value());
 	CHECK(no_path.error().code == client_errc::invalid_url);
 
-	for (auto text : { "ldaps://evil%00.example.org", "ldap://a%0Ab", "ldap://a%7F", "ldapi://%2Ftmp%2Fa%00b" }) {
+	for (const auto *text :
+	  { "ldaps://evil%00.example.org", "ldap://a%0Ab", "ldap://a%7F", "ldapi://%2Ftmp%2Fa%00b" }) {
 		auto control = connect_to(ioc, text);
 		INFO(text);
 		REQUIRE_FALSE(control.has_value());

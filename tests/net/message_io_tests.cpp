@@ -114,8 +114,11 @@ struct short_write_stream
 	{
 		std::error_code ec;
 		std::size_t n;
-		[[nodiscard]] auto await_ready() const noexcept -> bool { return true; }
-		auto await_suspend(std::coroutine_handle<> h, const capy::io_env *) -> std::coroutine_handle<> { return h; }
+		[[nodiscard]] static auto await_ready() noexcept -> bool { return true; }
+		static auto await_suspend(std::coroutine_handle<> h, const capy::io_env *) -> std::coroutine_handle<>
+		{
+			return h;
+		}
 		auto await_resume() -> capy::io_result<std::size_t> { return { ec, n }; }
 	};
 };

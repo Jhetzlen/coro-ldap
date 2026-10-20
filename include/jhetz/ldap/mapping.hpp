@@ -263,9 +263,9 @@ inline constexpr read_only_t read_only{};
 
 template<auto Ptr> struct field
 {
-	using owner = typename detail::member_pointer<decltype(Ptr)>::owner;
-	using member = typename detail::member_pointer<decltype(Ptr)>::type;
-	using element = typename detail::shape<member>::element;
+	using owner = detail::member_pointer<decltype(Ptr)>::owner;
+	using member = detail::member_pointer<decltype(Ptr)>::type;
+	using element = detail::shape<member>::element;
 	static constexpr auto ptr = Ptr;
 	static constexpr cardinality kind = detail::shape<member>::kind;
 	static_assert(mapped_value<element>,
@@ -306,7 +306,7 @@ template<class... S> consteval auto object_class(S... names)
 
 template<std::size_t N, class... F> struct descriptor
 {
-	using owner = typename std::tuple_element_t<0, std::tuple<F...>>::owner;
+	using owner = std::tuple_element_t<0, std::tuple<F...>>::owner;
 	object_classes<N> classes;
 	std::tuple<F...> fields;
 };
@@ -344,7 +344,7 @@ namespace detail {
 	// Index of the field for member `Ptr` in its struct's descriptor.
 	template<auto Ptr> consteval auto field_index() -> std::size_t
 	{
-		using C = typename member_pointer<decltype(Ptr)>::owner;
+		using C = member_pointer<decltype(Ptr)>::owner;
 		static_assert(described<C>, "ldap: this struct has no ldap::schema<T> descriptor");
 		using fields = std::remove_cvref_t<decltype(schema<C>.fields)>;
 		constexpr std::size_t n = std::tuple_size_v<fields>;
@@ -357,7 +357,7 @@ namespace detail {
 
 	template<auto Ptr> constexpr auto field_of() -> const auto &
 	{
-		using C = typename member_pointer<decltype(Ptr)>::owner;
+		using C = member_pointer<decltype(Ptr)>::owner;
 		constexpr std::size_t i = field_index<Ptr>();
 		static_assert(i < std::tuple_size_v<std::remove_cvref_t<decltype(schema<C>.fields)>>,
 		  "ldap: this member is not listed in ldap::schema<T>");
@@ -394,8 +394,8 @@ namespace detail {
 
 	template<class F> auto decode_field(std::span<const std::pmr::string> values) -> result<typename F::member>
 	{
-		using E = typename F::element;
-		using M = typename F::member;
+		using E = F::element;
+		using M = F::member;
 		const std::size_t n = values.size();
 		if constexpr (F::kind == cardinality::multiple) {
 			M out;
@@ -465,7 +465,7 @@ namespace detail {
 	template<class F>
 	void encode_field(const F &f, const typename F::member &m, std::pmr::vector<partial_attribute> &out)
 	{
-		using E = typename F::element;
+		using E = F::element;
 		partial_attribute a(f.name, {}, out.get_allocator());
 		if constexpr (F::kind == cardinality::multiple) {
 			for (const auto &v : m) {
@@ -532,7 +532,7 @@ namespace detail {
 	template<auto Ptr, class V> auto encode_values(const V &v) -> string_list
 	{
 		using F = std::remove_cvref_t<decltype(field_of<Ptr>())>;
-		using E = typename F::element;
+		using E = F::element;
 		string_list out;
 		if constexpr (std::convertible_to<const V &, E>) {
 			out.emplace_back(value_traits<E>::encode(static_cast<E>(v)));
@@ -556,7 +556,7 @@ namespace detail {
 		static_assert(!field_of<Ptr>().read_only, "ldap: this member is read_only in ldap::schema<T>");
 	}
 
-	template<auto Ptr> using owner_of = typename member_pointer<decltype(Ptr)>::owner;
+	template<auto Ptr> using owner_of = member_pointer<decltype(Ptr)>::owner;
 
 	template<auto Ptr> auto make_change(modify_operation op, string_list values) -> change<owner_of<Ptr>>
 	{
@@ -599,7 +599,7 @@ namespace filters {
 	// `filters::field<&person::uid_number>() >= 1000`.
 	template<auto Ptr> class typed_attr
 	{
-		using E = typename std::remove_cvref_t<decltype(detail::field_of<Ptr>())>::element;
+		using E = std::remove_cvref_t<decltype(detail::field_of<Ptr>())>::element;
 
 	  public:
 		[[nodiscard]] auto operator==(const E &v) const -> filter { return a() == value_traits<E>::encode(v); }

@@ -1005,10 +1005,10 @@ TEST_CASE("unescape_filter_value", "[filter][escape]")
 	const auto r = ldap::unescape_filter_value(text);
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == client_errc::invalid_filter);
-	CHECK(r.error().context.find(what) != std::string::npos);
+	CHECK(r.error().context.contains(what));
 	// filter::raw rejects the same value (an unescaped '*' would make it a
 	// substring filter there).
-	if (text.find('*') == std::string::npos) {
+	if (!text.contains('*')) {
 		CHECK_FALSE(ldap::filter::raw("(cn=" + text + ")").has_value());
 	}
 }

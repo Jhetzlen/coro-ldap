@@ -161,17 +161,17 @@ namespace detail {
 
 using detail::password_modify_impl;
 
-auto connection::password_modify(password_modify_params p) -> capy::task<result<std::optional<std::string>>>
+auto connection::password_modify(password_modify_params request) -> capy::task<result<std::optional<std::string>>>
 {
 	std::string context = "password modify";
-	if (p.user) {// usually a DN, often the server's: as op_context
+	if (request.user) {// usually a DN, often the server's: as op_context
 		context += ' ';
-		detail::append_sanitized(context, *p.user, 256);
+		detail::append_sanitized(context, *request.user, 256);
 	}
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
-	co_return co_await password_modify_impl(impl_ref(impl_), std::move(p), std::move(context));
+	co_return co_await password_modify_impl(impl_ref(impl_), std::move(request), std::move(context));
 }
 
 using detail::read_one;

@@ -57,7 +57,7 @@ template<class T, class Members> void check_on(const T &x, std::pmr::memory_reso
 // members must be engaged.
 template<class T, class Members = no_members> void check_value_semantics(const T &sample, Members members = {})
 {
-	using alloc_t = typename T::allocator_type;
+	using alloc_t = T::allocator_type;
 	const T empty{};
 	counting_resource heap;// the default resource while the operations run
 	counting_resource ra;

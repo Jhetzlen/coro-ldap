@@ -3,6 +3,7 @@
 #include "format_util.hpp"
 
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <string>
 #include <utility>
@@ -94,13 +95,10 @@ namespace {
 	// Keywords without an argument.
 	auto is_flag(std::string_view k) -> bool
 	{
-		for (auto f :
-		  { "OBSOLETE", "SINGLE-VALUE", "COLLECTIVE", "NO-USER-MODIFICATION", "ABSTRACT", "STRUCTURAL", "AUXILIARY" }) {
-			if (detail::iequals(k, f)) {
-				return true;
-			}
-		}
-		return false;
+		static constexpr std::array flags{
+			"OBSOLETE", "SINGLE-VALUE", "COLLECTIVE", "NO-USER-MODIFICATION", "ABSTRACT", "STRUCTURAL", "AUXILIARY"
+		};
+		return std::ranges::any_of(flags, [k](const char *f) { return detail::iequals(k, f); });
 	}
 
 	// A definition as an OID and keyword -> values (a list argument gives
@@ -357,7 +355,7 @@ auto server_schema::find_object_class(std::string_view name) const noexcept -> c
 
 auto server_schema::skipped_for_syntax(std::string_view name) const noexcept -> bool
 {
-	return bad_syntax_.find(without_options(name)) != bad_syntax_.end();
+	return bad_syntax_.contains(without_options(name));
 }
 
 auto server_schema::syntax_of(const attribute_type &a) const noexcept -> const std::string *

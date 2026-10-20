@@ -126,19 +126,19 @@ struct paged_search::state
 	}
 };
 
-auto connection::search_paged(search_params p, std::int32_t page_size, std::pmr::memory_resource *mr)
+auto connection::search_paged(search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
   -> capy::task<result<ldap::paged_search>>
 {
 	if (impl_ == nullptr) {
-		co_return std::unexpected(no_connection(op_context("search", p.base)));
+		co_return std::unexpected(no_connection(op_context("search", request.base)));
 	}
 	if (page_size <= 0) {
 		co_return fail(client_errc::encode_error,
-		  detail::format("{}: page size {} is not positive", op_context("search", p.base), page_size));
+		  detail::format("{}: page size {} is not positive", op_context("search", request.base), page_size));
 	}
 	std::pmr::polymorphic_allocator<> alloc(impl_->mr());
 	auto *st = alloc.new_object<paged_search::state>(
-	  paged_search::state{ .conn = impl_ref(impl_), .params = std::move(p), .page_size = page_size, .mr = mr });
+	  paged_search::state{ .conn = impl_ref(impl_), .params = std::move(request), .page_size = page_size, .mr = mr });
 	ldap::paged_search out = connection::impl::make_paged(st);
 	if (auto r = st->request_page({}, co_await capy::this_coro::stop_token); !r) {
 		co_return std::unexpected(std::move(r.error()));

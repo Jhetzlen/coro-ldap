@@ -38,7 +38,6 @@ namespace capy = boost::capy;
 namespace corosio = boost::corosio;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::ContainsSubstring;
-using Catch::Matchers::StartsWith;
 
 namespace {
 

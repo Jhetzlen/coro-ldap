@@ -1275,7 +1275,7 @@ namespace detail {
 					c.constructed(ber::tags::sequence, [&](ber::writer &s) {
 						for (std::uint32_t p = n.first; p != npos; p = access::at(f, p).next) {
 							const auto &part = access::at(f, p);
-							const auto number = [&part]() -> std::uint8_t {
+							const auto number = [&part] -> std::uint8_t {
 								if (part.k == filter_part_initial) {
 									return 0;
 								}
@@ -1382,7 +1382,7 @@ namespace {
 			return n;
 		}
 
-		auto read_attr(ber::reader &r, ber::tag t = ber::tags::octet_string) -> result<std::string_view>
+		static auto read_attr(ber::reader &r, ber::tag t = ber::tags::octet_string) -> result<std::string_view>
 		{
 			const std::size_t at = r.offset();
 			auto s = r.read_octet_string(t);

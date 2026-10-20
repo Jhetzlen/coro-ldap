@@ -362,9 +362,9 @@ auto reader::read_boolean(tag t) -> result<bool>
 	return e->content[0] != std::byte{ 0 };
 }
 
-auto reader::read_int(tag t, const char *what) -> result<std::int64_t>
+auto reader::read_int(tag expected, const char *what) -> result<std::int64_t>
 {
-	auto e = read_primitive(t, what);
+	auto e = read_primitive(expected, what);
 	if (!e) {
 		return std::unexpected(std::move(e.error()));
 	}

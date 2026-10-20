@@ -36,7 +36,6 @@ namespace ldap = jhetz::ldap;
 namespace net = jhetz::ldap::net;
 using namespace jhetz::ldap::test;
 using namespace std::literals;
-using Catch::Matchers::ContainsSubstring;
 using Catch::Matchers::IsEmpty;
 using ldap::client_errc;
 using ldap::password_method;

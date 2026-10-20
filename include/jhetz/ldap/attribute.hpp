@@ -3,6 +3,7 @@
 
 #include "jhetz/ldap/error.hpp"
 
+#include <algorithm>
 #include <compare>
 #include <cstddef>
 #include <functional>
@@ -121,12 +122,7 @@ namespace detail {
 		if (s.empty() || !is_alpha(s[0])) {
 			return false;
 		}
-		for (const char c : s) {
-			if (!is_keychar(c)) {
-				return false;
-			}
-		}
-		return true;
+		return std::ranges::all_of(s, is_keychar);
 	}
 
 	// numericoid = number 1*( DOT number ); number = DIGIT / ( LDIGIT 1*DIGIT )

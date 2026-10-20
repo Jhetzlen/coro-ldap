@@ -800,7 +800,7 @@ auto sasl_scram_sha256::offload_step(std::optional<std::string_view> challenge) 
 	state_ = state::sent_final;
 	// The step owns copies of everything it uses (the mechanism may be
 	// destroyed or start another bind while it runs).
-	return [d = std::move(d), without_proof = std::move(without_proof)]() -> result<std::optional<std::string>> {
+	return [d = std::move(d), without_proof = std::move(without_proof)] -> result<std::optional<std::string>> {
 		struct done_on_exit
 		{
 			derivation &d;

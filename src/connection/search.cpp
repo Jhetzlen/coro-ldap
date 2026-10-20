@@ -19,11 +19,9 @@ namespace capy = boost::capy;
 
 namespace jhetz::ldap {
 
-using detail::deadline_after;
 using detail::impl_ref;
 using detail::no_connection;
 using detail::op_context;
-using detail::search_message;
 using detail::start_search;
 
 namespace {
@@ -97,16 +95,16 @@ namespace detail {
 
 }// namespace detail
 
-auto connection::search_stream(search_params p, std::pmr::memory_resource *mr)
+auto connection::search_stream(search_params request, std::pmr::memory_resource *mr)
   -> capy::task<result<ldap::search_stream>>
 {
 	if (impl_ == nullptr) {
-		co_return std::unexpected(no_connection(op_context("search", p.base)));
+		co_return std::unexpected(no_connection(op_context("search", request.base)));
 	}
 	// The analyzer does not model the promise's construction: Capy's env_ is
 	// nullptr-initialised and set by the awaiting caller before the first resume.
 	// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
-	co_return start_search(*impl_, p, mr, co_await capy::this_coro::stop_token);
+	co_return start_search(*impl_, request, mr, co_await capy::this_coro::stop_token);
 }
 
 auto connection::search(search_params request, std::pmr::memory_resource *mr)

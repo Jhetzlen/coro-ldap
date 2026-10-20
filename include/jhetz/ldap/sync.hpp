@@ -201,10 +201,9 @@ class connection
   private:
 	// Runs make_task(conn_) on the I/O thread and waits for its result.
 	template<class F>
-	auto call(const F &make_task) ->
-	  typename detail::task_value<decltype(make_task(std::declval<ldap::connection &>()))>::type
+	auto call(const F &make_task) -> detail::task_value<decltype(make_task(std::declval<ldap::connection &>()))>::type
 	{
-		using R = typename detail::task_value<decltype(make_task(std::declval<ldap::connection &>()))>::type;
+		using R = detail::task_value<decltype(make_task(std::declval<ldap::connection &>()))>::type;
 		if (std::this_thread::get_id() == io_thread_id_) {
 			return std::unexpected(make_error(client_errc::would_deadlock, "sync::connection"));
 		}

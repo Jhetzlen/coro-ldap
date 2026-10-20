@@ -97,7 +97,7 @@ TEST_CASE("value_traits for integers", "[mapping][traits]")
 	CHECK(T::decode("-42") == -42);
 	CHECK(T::decode("2147483647") == 2147483647);
 	CHECK(T::encode(-7) == "-7");
-	for (auto bad : { "", "+1", " 1", "1 ", "12a", "0x10", "2147483648", "1.5" }) {
+	for (const auto *bad : { "", "+1", " 1", "1 ", "12a", "0x10", "2147483648", "1.5" }) {
 		INFO(bad);
 		auto r = T::decode(bad);
 		REQUIRE_FALSE(r.has_value());
@@ -169,7 +169,7 @@ TEST_CASE("GeneralizedTime", "[mapping][traits][time]")
 		REQUIRE(t.has_value());
 		CHECK(*t == c.expected);
 	}
-	for (auto bad : { "",
+	for (const auto *bad : { "",
 		   "2024",
 		   "20240229",
 		   "2024022912",

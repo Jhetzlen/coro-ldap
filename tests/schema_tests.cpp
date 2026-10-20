@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <optional>
@@ -480,12 +481,7 @@ TEST_CASE("schema: validate lists every issue", "[schema][validate]")
 	CHECK_FALSE(rep.ok());
 	using k = ldap::schema_issue::kind;
 	auto has = [&](k what, std::string_view name) {
-		for (const auto &i : rep.issues) {
-			if (i.what == what && i.name == name) {
-				return true;
-			}
-		}
-		return false;
+		return std::ranges::any_of(rep.issues, [&](const auto &i) { return i.what == what && i.name == name; });
 	};
 	CHECK(has(k::unknown_object_class, "posixAccount"));
 	CHECK(has(k::single_member_multi_valued, "uid"));
