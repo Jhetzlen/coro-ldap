@@ -1,5 +1,6 @@
 // ldap::sync::connection against an in-process LDAP server on loopback TCP that
 // runs on its own thread and io_context and answers requests as they come.
+#include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "mock_ldap.hpp"
@@ -585,6 +586,39 @@ TEST_CASE("sync: move and rename", "[net][sync]")
 	CHECK(got[0]
 		  == ldap::message{ 1, ldap::modify_dn_request{ jdoe_str, "uid=jdoe", true, "ou=alumni,dc=example,dc=org" } });
 	CHECK(got[1] == ldap::message{ 2, ldap::modify_dn_request{ jdoe_str, "uid=jane", false } });
+}
+
+TEST_CASE("sync: move and rename forward their controls and timeout", "[net][sync][timeout]")
+{
+	peer_server srv;
+	srv.serve({ answer({ result_msg<ldap::modify_dn_response>(1) }),
+	  step{},// reads the rename, does not answer
+	  step{} });// reads its AbandonRequest
+	connected k(srv);
+	REQUIRE(k.c
+		.move(jdoe,
+		  ldap::dn{ "ou=alumni,dc=example,dc=org" },
+		  { ldap::manage_dsa_it{ .critical = true } },
+		  std::chrono::milliseconds(5000))
+		.has_value());
+	const auto start = std::chrono::steady_clock::now();
+	auto late =
+	  k.c.rename(jdoe, ldap::rdn{ "uid=jane" }, false, { ldap::manage_dsa_it{} }, std::chrono::milliseconds(50));
+	// Its own timeout, not the connection's 10 s operation_timeout.
+	CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(5));
+	REQUIRE_FALSE(late.has_value());
+	CHECK(late.error().code == ldap::cond::timeout);
+	CHECK(late.error().context == "modify DN uid=jdoe,ou=people,dc=example,dc=org (abandoned)");
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 3);
+	CHECK(got[0]
+		  == ldap::message{ 1,
+			ldap::modify_dn_request{ jdoe_str, "uid=jdoe", true, "ou=alumni,dc=example,dc=org" },
+			{ ldap::control{ ldap::manage_dsa_it_oid, true } } });
+	CHECK(got[1]
+		  == ldap::message{
+			2, ldap::modify_dn_request{ jdoe_str, "uid=jane", false }, { ldap::control{ ldap::manage_dsa_it_oid } } });
+	CHECK(got[2] == ldap::message{ 3, ldap::abandon_request{ 2 } });
 }
 
 TEST_CASE("sync: compare", "[net][sync]")

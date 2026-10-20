@@ -258,6 +258,42 @@ TEST_CASE("operations: move and rename build the ModifyDNRequest", "[net][operat
 	CHECK(nameless.error().context == "modify DN uid=jdoe,ou=people,dc=example,dc=org: empty new RDN");
 }
 
+TEST_CASE("operations: move and rename forward their controls and timeout", "[net][operations][timeout]")
+{
+	mock_ldap m;
+	m.serve({ answer({ result_msg<ldap::modify_dn_response>(1) }),
+	  step{},// reads the rename, does not answer
+	  step{},// reads its AbandonRequest
+	  step{},// reads the move, does not answer
+	  step{} });// reads its AbandonRequest
+	REQUIRE(
+	  m.run(m.conn.move(jdoe, ldap::dn{ "ou=alumni,dc=example,dc=org" }, { ldap::manage_dsa_it{ .critical = true } }))
+		.has_value());
+	auto late = m.run(m.conn.rename(
+	  jdoe, ldap::rdn{ "uid=john.doe" }, false, { ldap::manage_dsa_it{} }, std::chrono::milliseconds(50)));
+	REQUIRE_FALSE(late.has_value());
+	CHECK(late.error().code == ldap::cond::timeout);
+	CHECK(late.error().context == "modify DN uid=jdoe,ou=people,dc=example,dc=org (abandoned)");
+	auto late_move =
+	  m.run(m.conn.move(jdoe, ldap::dn{ "ou=alumni,dc=example,dc=org" }, {}, std::chrono::milliseconds(50)));
+	REQUIRE_FALSE(late_move.has_value());
+	CHECK(late_move.error().code == ldap::cond::timeout);
+	CHECK(late_move.error().context == "modify DN uid=jdoe,ou=people,dc=example,dc=org (abandoned)");
+	m.check_server();
+	REQUIRE(m.log.received.size() == 5);
+	CHECK(m.log.received[0]
+		  == ldap::message{ 1,
+			ldap::modify_dn_request{
+			  "uid=jdoe,ou=people,dc=example,dc=org", "uid=jdoe", true, "ou=alumni,dc=example,dc=org" },
+			{ ldap::control{ ldap::manage_dsa_it_oid, true } } });
+	CHECK(m.log.received[1]
+		  == ldap::message{ 2,
+			ldap::modify_dn_request{ "uid=jdoe,ou=people,dc=example,dc=org", "uid=john.doe", false },
+			{ ldap::control{ ldap::manage_dsa_it_oid } } });
+	CHECK(m.log.received[2] == ldap::message{ 3, ldap::abandon_request{ 2 } });
+	CHECK(m.log.received[4] == ldap::message{ 5, ldap::abandon_request{ 4 } });
+}
+
 // ---------------------------------------------------------------- compare
 
 TEST_CASE("operations: compare", "[net][operations]")
