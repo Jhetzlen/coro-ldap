@@ -10,6 +10,8 @@
 
 #include "jhetz/ldap/net/message_io.hpp"
 
+#include "../net/deadline.hpp"
+
 #include <boost/capy/ex/async_event.hpp>
 #include <boost/capy/task.hpp>
 #include <boost/corosio/io_context.hpp>
@@ -52,12 +54,11 @@ namespace detail {
 
 	using clock = std::chrono::steady_clock;
 
+	// No deadline for nullopt or a timeout too large for the clock
+	// (ldap::no_timeout).
 	inline auto deadline_after(std::optional<std::chrono::milliseconds> d) -> std::optional<clock::time_point>
 	{
-		if (!d) {
-			return std::nullopt;
-		}
-		return clock::now() + *d;
+		return net::detail::deadline_after(d);
 	}
 
 	// The error of an operation on a default-constructed or moved-from

@@ -130,10 +130,7 @@ auto transport::shutdown(std::optional<std::chrono::milliseconds> timeout) -> bo
 		close();
 		co_return result<void>{};
 	}
-	detail::deadline_t deadline;
-	if (timeout) {
-		deadline = detail::clock::now() + *timeout;
-	}
+	const detail::deadline_t deadline = detail::deadline_after(timeout);
 	auto [ec] = co_await detail::bounded(impl_->tls->shutdown(), deadline);
 	close();
 	if (ec) {

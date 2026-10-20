@@ -185,7 +185,7 @@ before anything is sent.
 
 Typed controls (step 6, `controls.hpp`): `request_control` is
 `std::variant<control, paged, manage_dsa_it, relax_rules, proxied_authorization,
-server_side_sort, assertion, pre_read, post_read>`, so the raw wire
+server_side_sort, assertion, pre_read, post_read, sync_request>`, so the raw wire
 `control {type, criticality, value}` stays the escape hatch and existing
 code that passes raw controls compiles unchanged. They are encoded on the
 connection's resource when the request is sent; an invalid one (a sort
@@ -226,11 +226,35 @@ server's bad control fails only the caller who asks for it.
   `find_pre_read()` / `find_post_read()` decode the returned
   SearchResultEntry into an `ldap::entry`, with the message decoder's
   depth and element limits.
+- Content synchronization (RFC 4533, `content_sync.hpp`): the request
+  control `sync_request{.mode, .cookie, .reload_hint, .critical = true}`
+  (critical by default: RFC 4533 allows either, and a server without
+  syncprov would otherwise run a plain search the caller would take for a
+  sync); the Sync State control of each entry (`find_sync_state()` ->
+  `sync_state{state, entry_uuid, cookie}`), the Sync Done control of the
+  SearchResultDone (`find_sync_done()` -> `sync_done{cookie,
+  refresh_deletes}`), and the Sync Info Message, an IntermediateResponse
+  (`decode_sync_info()` -> `sync_info`). The four syncInfoValue
+  alternatives are one flat `sync_info` with a `type`, not a
+  `std::variant`: the cookie, which is what a consumer keeps, is in one
+  place whatever the alternative, and the struct stays allocator-aware
+  (a variant is not). Cookies are `std::optional`: RFC 4533 makes them
+  OPTIONAL and an empty cookie is still sent. Defaults (reloadHint,
+  refreshDone, refreshDeletes) are left out when encoding and accepted
+  either way. `errc::e_sync_refresh_required` (4096) ends a sync search
+  the server cannot continue, typically one whose cookie is too old to
+  resume from (RFC 4533 section 3.8): the search is resent with the cookie
+  of that SearchResultDone's Sync Done control if it has one (the stream
+  keeps the controls of an error result), otherwise with no cookie, a full
+  reload that replaces the local copy. See section 7 for the streaming
+  side.
 
 The response codecs (`encode_` / `decode_sort_result`,
 `encode_` / `decode_read_entry`) live in `message.hpp` next to the paged
-results one, so mock servers and the fuzzers use them too. Request controls
-are only encoded (no decoder: the client never reads them). Errors from
+results one, so mock servers and the fuzzers use them too (the RFC 4533
+ones are in `content_sync.hpp`, with the request control's decoder for
+mock servers). Other request controls are only encoded (no decoder: the
+client never reads them). Errors from
 inside a response control's value name the control (`post-read: ber: ...
 at offset 9`), since their offsets are relative to the value; request
 encoding errors name the control too (`server side sort: key 2 has no
@@ -777,7 +801,7 @@ a caller match none, deliberately (test them by exact code).
 | `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required`, `security_layer_required` | `permission_denied` |
 | `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
 | `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
-| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `assertion_failed`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `no_password_method`, `internal_error` | everything else |
+| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `assertion_failed`, `e_sync_refresh_required`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `no_password_method`, `internal_error` | everything else |
 
 Choices worth knowing: `unauthenticated_bind` is `auth_failed` (an empty
 password on a login form is a failed login); `stronger_auth_required` and
@@ -1075,6 +1099,36 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   Disconnection fails every outstanding operation with its result code
   (`unavailable` if it claims success) and closes the connection; other
   extended responses are ignored.
+- Content synchronization (RFC 4533) is a thin layer over
+  `search_stream::next_item()`, not a stream type of its own: the search
+  carries a `sync_request` and `.intermediate_responses = true`, each
+  `search_entry`'s controls give its Sync State (`find_sync_state()`),
+  each `intermediate` is a Sync Info Message (`decode_sync_info()`), and
+  `search_stream::controls()` gives the Sync Done at the end of a
+  refreshOnly search. The codec functions are what a wrapper would call
+  anyway, they work the same with a mock server, and the consumer (a
+  cache, a replica) decides how to apply present / add / modify / delete
+  and which cookie to persist; a typed-event wrapper can be added later
+  without changing them. Two consequences of riding on an ordinary search:
+  - Timeout: `search_params::timeout` covers the whole stream, and nullopt
+    means the connection's `operation_timeout`, so a refreshAndPersist
+    search would end at that deadline. `ldap::no_timeout`
+    (`milliseconds::max()`) says "no limit for this operation" without
+    changing what nullopt means; the deadline computations saturate (a
+    timeout that would overflow the clock is no deadline), which makes
+    `no_timeout` valid for every operation's `.timeout`, StartTLS and the
+    connect, SASL and TLS shutdown timeouts too. Persist searches end by
+    a stop token or by destroying the stream (an AbandonRequest).
+  - Memory and backpressure: entries are decoded into the search's
+    resource and queued on it until `next_item()` takes them. Nothing
+    bounds that queue (a bound would stall every other operation on the
+    connection, since one reader serves them all), so a consumer slower
+    than the server's changes grows it, and a persist search on a
+    `std::pmr::monotonic_buffer_resource` never gives anything back: give
+    a long-lived persist search the default resource (or a pool resource),
+    keep up with `next_item()`, and use an arena only for a refreshOnly
+    search whose results die with it. `references()` also keeps every
+    reference the search returns, for its whole life.
 - Failure model: a server result error, an encode error, a cancellation or
   a timeout fails one operation and the connection stays usable (except a
   cancelled or timed-out Bind or StartTLS, which closes it). A

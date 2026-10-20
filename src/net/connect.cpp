@@ -166,30 +166,19 @@ namespace {
 		co_return { wec ? wec : make_error_code(capy::error::canceled), {} };
 	}
 
-	// ---------------------------------------------------------------- deadlines
-
-	// No deadline for nullopt, or for a timeout so large that now + timeout
-	// would overflow the clock.
-	auto make_deadline(std::optional<std::chrono::milliseconds> timeout, clock::time_point now) -> deadline_t
-	{
-		if (!timeout) {
-			return std::nullopt;
-		}
-		const auto room = std::chrono::duration_cast<std::chrono::milliseconds>(clock::time_point::max() - now);
-		if (*timeout >= room) {
-			return std::nullopt;
-		}
-		return now + *timeout;
-	}
-
 	// ---------------------------------------------------------------- Happy Eyeballs
 
 	// Shared by the attempts of one connect(), which outlives them (when_any
 	// waits for every child). Attempt i starts once attempt i-1 has failed
-	// or has been running for attempt_delay, whichever comes first.
+	// or has been running for attempt_delay, whichever comes first. The
+	// delay stays in milliseconds: converting a huge one (ldap::no_timeout)
+	// to clock::duration would overflow, and deadline_after saturates.
 	struct race_state
 	{
-		race_state(corosio::io_context &ioc, std::vector<corosio::endpoint> eps, deadline_t d, clock::duration delay)
+		race_state(corosio::io_context &ioc,
+		  std::vector<corosio::endpoint> eps,
+		  deadline_t d,
+		  std::chrono::milliseconds delay)
 		  : endpoints(std::move(eps)), started(endpoints.size()), failed(endpoints.size()),
 			start_times(endpoints.size()), deadline(d), attempt_delay(delay)
 		{
@@ -205,7 +194,7 @@ namespace {
 		std::vector<capy::async_event> failed;
 		std::vector<clock::time_point> start_times;
 		deadline_t deadline;
-		clock::duration attempt_delay;
+		std::chrono::milliseconds attempt_delay;
 		// The attempt that failed last, for the error message.
 		std::error_code last{};
 		std::size_t last_index = 0;
@@ -232,8 +221,10 @@ namespace {
 			if (auto [ec] = co_await wait_for(st.started[i - 1]); ec) {
 				co_return give_up(ec);
 			}
-			deadline_t until = st.start_times[i - 1] + st.attempt_delay;
-			if (st.deadline && *st.deadline < *until) {
+			// No `until` (a delay past the clock's range): wait for the
+			// failure or the overall deadline only.
+			deadline_t until = detail::deadline_after(st.attempt_delay, st.start_times[i - 1]);
+			if (st.deadline && (!until || *st.deadline < *until)) {
 				until = st.deadline;
 			}
 			auto [ec] = co_await bounded(wait_for(st.failed[i - 1]), until);
@@ -311,7 +302,7 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 		co_return fail(make_error_code(capy::error::timeout),
 		  ldap::detail::format("{}: the connect timeout ({} ms) is not positive", target, options.timeout->count()));
 	}
-	const deadline_t deadline = make_deadline(options.timeout, start);
+	const deadline_t deadline = detail::deadline_after(options.timeout, start);
 
 	// ---- ldapi://
 	if (u.scheme() == url_scheme::ldapi) {
@@ -361,7 +352,7 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 	race_state race(ioc,
 	  detail::interleave_families(std::move(endpoints)),
 	  deadline,
-	  std::max<clock::duration>(options.attempt_delay, clock::duration::zero()));
+	  std::max(options.attempt_delay, std::chrono::milliseconds::zero()));
 	std::vector<capy::task<capy::io_result<>>> attempts;
 	attempts.reserve(race.endpoints.size());
 	for (std::size_t i = 0; i < race.endpoints.size(); ++i) {
@@ -436,10 +427,7 @@ auto start_tls(transport &t,
 		co_return prefixed(std::move(setup.error()));
 	}
 	auto &im = transport_access::get(t);
-	deadline_t deadline;
-	if (timeout) {
-		deadline = detail::clock::now() + *timeout;
-	}
+	const deadline_t deadline = detail::deadline_after(timeout);
 	try {
 		auto hs = co_await detail::tls_handshake(im, im.host, options, std::move(*setup), deadline);
 		if (!hs) {

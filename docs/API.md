@@ -6,7 +6,8 @@ rationale is in [`DESIGN.md`](DESIGN.md).
 ## `jhetz::ldap`: the codec
 
 - `jhetz/ldap/error.hpp`: `ldap::error`, `ldap::result<T>` (`std::expected`),
-  `ldap::errc` (RFC 4511 result codes and RFC 4528's `assertion_failed`,
+  `ldap::errc` (RFC 4511 result codes, RFC 4528's `assertion_failed` and RFC
+  4533's `e_sync_refresh_required`,
   category `ldap.result`) and
   `ldap::client_errc` (category `ldap.client`), and the error conditions
   `ldap::cond` (category `ldap.cond`: `not_found`, `auth_failed`, `timeout`,
@@ -33,6 +34,26 @@ rationale is in [`DESIGN.md`](DESIGN.md).
   is allocated from. The types have constructors taking the fields in order
   (`message{1, search_request{base, search_scope::whole_subtree, f, {"cn"}}}`);
   they are not aggregates, so designated initializers do not work on them.
+- `jhetz/ldap/content_sync.hpp`: RFC 4533 content synchronization
+  ("syncrepl") codecs. `sync_request{.mode = sync_mode::refresh_only /
+  refresh_and_persist, .cookie, .reload_hint, .critical = true}` is a
+  request control (`request_control`, controls.hpp); `find_sync_state()`
+  reads an entry's Sync State control (`sync_state{state = present / add /
+  modify / del, entry_uuid, cookie}`, the UUID as 16 octets in
+  `sync_uuid`, `to_string()` giving the entryUUID text),
+  `find_sync_done()` the SearchResultDone's Sync Done control
+  (`sync_done{cookie, refresh_deletes}`), and `decode_sync_info()` a Sync
+  Info Message, an IntermediateResponse (`sync_info{type = new_cookie /
+  refresh_delete / refresh_present / sync_id_set, cookie, refresh_done,
+  refresh_deletes, sync_uuids}`). Each fails with a decode error on a
+  malformed value; the `encode_` functions (and `decode_sync_request()`)
+  are for mock servers. Defaults are left out when encoding and accepted
+  when sent. A server that cannot continue a sync search (a cookie too old
+  to resume from, say) ends it with `errc::e_sync_refresh_required` (RFC
+  4533 section 3.8): resend it with the cookie of that result's Sync Done
+  control (`find_sync_done(s.controls())`, kept on an error result too), or,
+  if it has none, with no cookie for a full reload, discarding the local
+  copy.
 - `jhetz/ldap/filter.hpp`: `ldap::filter`, a typed tree (and / or / not,
   equality, substrings, >=, <=, present, approx, extensible match) holding
   unescaped values. Built by the builders in `ldap::filters`
@@ -182,7 +203,9 @@ itself stays dependency-free.
   and `unbind()`. `search_params` is a plain aggregate for designated
   initializers (`.base`, `.scope`, `.filter`, `.attributes`, `.deref`,
   `.size_limit`, `.time_limit`, `.types_only`, `.controls`, `.timeout`,
-  `.intermediate_responses`).
+  `.intermediate_responses`). `.timeout = ldap::no_timeout` (in any
+  request) lifts the client-side limit for that operation, whatever
+  `operation_timeout` says.
   Multiplexed: any number of operations may be outstanding (concurrent
   tasks on the connection's executor); one writer sends the PDUs in order
   and one reader, running only while something is outstanding, routes
@@ -225,7 +248,16 @@ itself stays dependency-free.
   `search_reference` (`uris` plus `controls`, also appended to
   `references()`) and `intermediate` (only when asked for). `next()` and
   `next_item()` may be mixed on a stream; `next()`, `search()` and
-  `search_paged()` drop the entries' controls and the intermediates. A
+  `search_paged()` drop the entries' controls and the intermediates.
+  Content synchronization (RFC 4533, `content_sync.hpp`) runs on
+  `next_item()`: a search with a `sync_request` control,
+  `.intermediate_responses = true` and, for refreshAndPersist,
+  `.timeout = ldap::no_timeout`; `find_sync_state(entry.controls)`,
+  `decode_sync_info(intermediate)` and `find_sync_done(s.controls())` read
+  it (`examples/syncrepl.cpp`). The entries queue on the stream's resource
+  until read, without backpressure: a long-lived persist search wants the
+  default resource (not a monotonic arena, which never frees) and a
+  reader that keeps up. A
   Notice of Disconnection fails every
   outstanding operation. A server result error fails one operation; a
   transport or protocol error fails all of them once and closes the

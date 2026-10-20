@@ -160,8 +160,7 @@ auto run_offloaded(corosio::io_context::executor_type ex,
 	} catch (const std::system_error &e) {
 		co_return fail(e.code(), "could not start a thread for the mechanism's step");
 	}
-	const net::detail::deadline_t deadline =
-	  timeout ? std::optional(net::detail::clock::now() + *timeout) : std::nullopt;
+	const net::detail::deadline_t deadline = net::detail::deadline_after(timeout);
 	auto [ec] = co_await net::detail::bounded(shared->done.wait(), deadline);
 	if (ec) {
 		co_return fail(ec, "gave up on the mechanism's step (it runs on, on its own thread)");

@@ -30,6 +30,7 @@
 #include <stop_token>
 #include <string>
 #include <unistd.h>
+#include <variant>
 #include <vector>
 
 namespace ldap = jhetz::ldap;
@@ -874,6 +875,160 @@ auto descending_uids(int n, int first, int count) -> std::vector<std::string>
 }
 
 }// namespace
+
+namespace {
+
+// One message of a content synchronization search, as the test needs it.
+struct sync_event
+{
+	std::optional<ldap::sync_state> state{};// an entry's
+	std::string dn{};
+	std::string entry_uuid{};// the entryUUID attribute, if asked for
+	std::optional<ldap::sync_info> info{};// a Sync Info Message
+};
+
+auto next_sync_event(corosio::io_context &ioc, ldap::search_stream &s) -> std::optional<sync_event>
+{
+	auto i = finish(ioc, s.next_item());
+	if (!i) {
+		FAIL("sync search: " << i.error().message());
+	}
+	if (!*i) {
+		return std::nullopt;
+	}
+	sync_event out;
+	if (const auto *e = std::get_if<ldap::search_entry>(&**i)) {
+		auto state = ldap::find_sync_state(e->controls);
+		REQUIRE(state.has_value());
+		REQUIRE(state->has_value());
+		out.state = std::move(**state);
+		out.dn = e->dn;
+		if (const auto *u = e->find("entryUUID")) {
+			out.entry_uuid = u->front();
+		}
+	} else if (const auto *m = std::get_if<ldap::intermediate>(&**i)) {
+		auto info = ldap::decode_sync_info(*m);
+		REQUIRE(info.has_value());
+		out.info = std::move(*info);
+	} else {
+		FAIL("sync search: unexpected reference");
+	}
+	return out;
+}
+
+}// namespace
+
+TEST_CASE("integration: content synchronization (RFC 4533)", "[integration][controls][content_sync]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	if (env("JHETZ_LDAP_IT_SYNCREPL").empty()) {
+		SKIP("slapd without the syncprov overlay");
+	}
+	corosio::io_context ioc;
+	auto c = open_admin(ioc);
+	const std::string name = unique("sync");
+	const ldap::dn base = *ldap::dn::parse("ou=" + name + ",dc=example,dc=org");
+	const ldap::dn first = base.child(ldap::rdn{ "cn=first" });
+	const ldap::dn second = base.child(ldap::rdn{ "cn=second" });
+	REQUIRE(
+	  finish(ioc, c.add({ .entry = base, .attributes = { { "objectClass", { "organizationalUnit" } } } })).has_value());
+	for (const auto &e : { first, second }) {
+		REQUIRE(finish(ioc,
+		  c.add({ .entry = e,
+			.attributes = { { "objectClass", { "person" } },
+			  { "cn", { std::string(e.rdns().front().to_string()).substr(3) } },
+			  { "sn", { "Ærø" } } } }))
+			.has_value());
+	}
+	const auto sync_search = [&](ldap::sync_request request) {
+		return finish(ioc,
+		  c.search_stream({ .base = base,
+			.attributes = { "cn", "sn", "entryUUID" },
+			.controls = { std::move(request) },
+			.timeout = ldap::no_timeout,
+			.intermediate_responses = true }));
+	};
+	const auto dn_of = [](const ldap::dn &d) { return std::string(d.to_string()); };
+
+	// refreshOnly without a cookie: the whole content, then a cookie.
+	auto all = sync_search(ldap::sync_request{});
+	REQUIRE(all.has_value());
+	std::vector<std::string> dns;
+	while (auto ev = next_sync_event(ioc, *all)) {
+		if (ev->state) {
+			CHECK(ev->state->state == ldap::sync_state_type::add);
+			CHECK(ldap::to_string(ev->state->entry_uuid) == ev->entry_uuid);
+			dns.push_back(ev->dn);
+		}
+	}
+	std::ranges::sort(dns);
+	CHECK(dns == std::vector<std::string>{ dn_of(first), dn_of(second), dn_of(base) });
+	auto done = ldap::find_sync_done(all->controls());
+	REQUIRE(done.has_value());
+	REQUIRE(done->has_value());
+	REQUIRE((*done)->cookie.has_value());
+	const std::string cookie((*done)->cookie->begin(), (*done)->cookie->end());
+	CHECK_FALSE(cookie.empty());
+
+	// A change, then refreshOnly from the cookie: only that change.
+	REQUIRE(
+	  finish(ioc, c.modify({ .object = second, .changes = { ldap::mod::replace("sn", { "日本" }) } })).has_value());
+	auto since = sync_search(ldap::sync_request{ .cookie = cookie });
+	REQUIRE(since.has_value());
+	std::vector<std::string> changed;
+	while (auto ev = next_sync_event(ioc, *since)) {
+		if (ev->state && ev->state->state != ldap::sync_state_type::present) {
+			changed.push_back(ev->dn);
+		}
+	}
+	CHECK(changed == std::vector<std::string>{ dn_of(second) });
+	auto resumed = ldap::find_sync_done(since->controls());
+	REQUIRE(resumed.has_value());
+	REQUIRE(resumed->has_value());
+	REQUIRE((*resumed)->cookie.has_value());
+	const std::string next_cookie((*resumed)->cookie->begin(), (*resumed)->cookie->end());
+	CHECK(next_cookie != cookie);
+
+	// refreshAndPersist from the latest cookie: the refresh ends with a
+	// Sync Info Message, then a change made on another connection arrives
+	// while the search runs on (no timeout: the connection's is 10 s).
+	auto persist =
+	  sync_search(ldap::sync_request{ .mode = ldap::sync_mode::refresh_and_persist, .cookie = next_cookie });
+	REQUIRE(persist.has_value());
+	bool refreshed = false;
+	while (!refreshed) {
+		auto ev = next_sync_event(ioc, *persist);
+		REQUIRE(ev.has_value());
+		CHECK_FALSE((ev->state && ev->state->state != ldap::sync_state_type::present));
+		refreshed = ev->info
+					&& (ev->info->type == ldap::sync_info_type::refresh_delete
+						|| ev->info->type == ldap::sync_info_type::refresh_present)
+					&& ev->info->refresh_done;
+	}
+	auto other = open_admin(ioc);
+	REQUIRE(
+	  finish(ioc, other.modify({ .object = first, .changes = { ldap::mod::replace("sn", { "Zoë" }) } })).has_value());
+	std::optional<sync_event> change;
+	while (!change) {
+		auto ev = next_sync_event(ioc, *persist);
+		REQUIRE(ev.has_value());// the persist phase does not end
+		if (ev->state) {
+			change = std::move(ev);
+		}
+	}
+	CHECK(change->dn == dn_of(first));
+	CHECK(
+	  (change->state->state == ldap::sync_state_type::modify || change->state->state == ldap::sync_state_type::add));
+	CHECK(ldap::to_string(change->state->entry_uuid) == change->entry_uuid);
+	CHECK_FALSE(persist->done());
+	*persist = ldap::search_stream{};// abandons the search
+
+	for (const auto &e : { first, second, base }) {
+		REQUIRE(finish(ioc, c.del({ .entry = e })).has_value());
+	}
+}
 
 // slapd keeps one paged search per connection (RFC 2696 section 3 lets a
 // server age out older ones). Without sorting, resuming any but the

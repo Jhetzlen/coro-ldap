@@ -79,6 +79,7 @@ struct connection_options
 	// final response (for a search: to the SearchResultDone, across every
 	// next()). On expiry the operation fails with capy::error::timeout and
 	// is abandoned. nullopt: no limit (cancel with a stop token instead).
+	// An operation's own `timeout` overrides it, ldap::no_timeout for none.
 	std::optional<std::chrono::milliseconds> operation_timeout{};
 	// ldap::connect() only: upgrade an ldap:// connection with StartTLS
 	// right after connecting (using `tls` and `timeout`), and fail if that

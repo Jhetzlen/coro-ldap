@@ -11,13 +11,15 @@
 // Controls the server returns stay wire-level (std::pmr::vector<control>,
 // in connection::response, extended_result and search_stream::controls());
 // find_paged(), find_sort_result(), find_pre_read() and find_post_read()
-// read the typed ones:
+// read the typed ones (and content_sync.hpp's find_sync_state() and
+// find_sync_done() those of RFC 4533, whose sync_request is here too):
 //
 //   auto r = co_await conn.modify({.object = dn, .changes = ...,
 //                                  .controls = {ldap::post_read{.attributes = {"modifyTimestamp"}}}});
 //   if (r) if (auto e = ldap::find_post_read(r->controls); e && *e) use((*e)->find("modifyTimestamp"));
 #pragma once
 
+#include "jhetz/ldap/content_sync.hpp"
 #include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/filter.hpp"
@@ -140,11 +142,12 @@ using request_control = std::variant<control,
   server_side_sort,
   assertion,
   pre_read,
-  post_read>;
+  post_read,
+  sync_request>;
 using request_controls = std::vector<request_control>;
 
 // The wire form of `c`, on `mr`. Fails with encode_error for a negative
-// page size or an invalid sort, invalid_filter for an empty (or too large)
+// page size, an invalid sort or sync mode, invalid_filter for an empty (or too large)
 // assertion filter.
 [[nodiscard]] auto to_control(const request_control &c,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;

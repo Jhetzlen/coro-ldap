@@ -121,6 +121,8 @@ auto to_control(const request_control &c, std::pmr::memory_resource *mr) -> resu
 			  return encode_selection(pre_read_oid, v.attributes, v.critical, mr);
 		  } else if constexpr (std::is_same_v<T, post_read>) {
 			  return encode_selection(post_read_oid, v.attributes, v.critical, mr);
+		  } else if constexpr (std::is_same_v<T, sync_request>) {
+			  return encode_sync_request(v, mr);
 		  } else {
 			  static_assert(std::is_same_v<T, proxied_authorization>);
 			  // controlValue is the authzId itself, not BER (RFC 4370 section 3).

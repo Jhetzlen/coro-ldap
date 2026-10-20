@@ -28,6 +28,15 @@
 
 namespace jhetz::ldap {
 
+// For the `timeout` of a request below: no client-side limit for this
+// operation, whatever connection_options::operation_timeout says (nullopt
+// means "the connection's default" there). For a search that is meant to
+// run until stopped, such as a refreshAndPersist content synchronization
+// (content_sync.hpp): cancel it with a stop token or by destroying its
+// stream. Any timeout too large for the clock (now + timeout overflows)
+// also means no limit.
+inline constexpr std::chrono::milliseconds no_timeout = std::chrono::milliseconds::max();
+
 // A search, as a plain aggregate for designated initializers (DESIGN.md
 // section 3). Values are validated when the request is encoded: a negative
 // size_limit or time_limit, or a time_limit above max_int seconds, fails with
@@ -47,9 +56,11 @@ struct search_params
 	// Request controls: typed (ldap::paged, ldap::manage_dsa_it, ...) or a
 	// raw ldap::control (controls.hpp).
 	request_controls controls{};
-	// Client-side limit for the whole search (see
+	// Client-side limit for the whole search, from sending it to the
+	// SearchResultDone across every next() (see
 	// connection_options::operation_timeout, which applies if this is
-	// nullopt). Unlike time_limit it is enforced by the client.
+	// nullopt; ldap::no_timeout: none). Unlike time_limit it is enforced
+	// by the client.
 	std::optional<std::chrono::milliseconds> timeout{};
 	// Keep the IntermediateResponses (RFC 4511 section 4.13) the server
 	// sends during the search, for search_stream::next_item(). False: they
@@ -61,7 +72,8 @@ struct search_params
 
 // The other operations (step 6), as plain aggregates like search_params.
 // `controls` and `timeout` mean the same everywhere: request controls, and
-// a client-side limit overriding connection_options::operation_timeout.
+// a client-side limit overriding connection_options::operation_timeout
+// (ldap::no_timeout: none).
 
 // AddRequest (RFC 4511 section 4.7). Every attribute needs at least one
 // value (encode_error otherwise, before anything is sent).

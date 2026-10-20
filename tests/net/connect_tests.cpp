@@ -431,6 +431,28 @@ TEST_CASE("Happy Eyeballs: a refused address starts the next attempt at once", "
 	CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(5));
 }
 
+TEST_CASE("Happy Eyeballs: a maximal attempt delay waits for the failure", "[net][connect][tcp][dns][timeout]")
+{
+	skip_unless_linux_loopback();
+	// attempt_delay = milliseconds::max() (ldap::no_timeout) does not
+	// overflow the clock: the next attempt starts when the refused one fails.
+	corosio::io_context ioc;
+	tcp_server good(ioc);
+	outcome<std::string> server;
+	outcome<std::string> client;
+	spawn(ioc, accept_and_serve(good.acc), server);
+	const auto start = std::chrono::steady_clock::now();
+	spawn(ioc,
+	  exchange(ioc,
+		good.url("ldap", "two-addr-e.test"),
+		{ .timeout = std::chrono::seconds(30), .attempt_delay = std::chrono::milliseconds::max() }),
+	  client);
+	drive(ioc);
+	CHECK_THAT(client.get(), IsEmpty());
+	CHECK_THAT(server.get(), IsEmpty());
+	CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(5));
+}
+
 TEST_CASE("Happy Eyeballs: every address fails", "[net][connect][tcp][dns]")
 {
 	skip_unless_linux_loopback();

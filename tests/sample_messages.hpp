@@ -2,6 +2,7 @@
 // and unset. Shared by the unit tests and message_fuzz_replay (seed inputs).
 #pragma once
 
+#include "jhetz/ldap/content_sync.hpp"
 #include "jhetz/ldap/message.hpp"
 
 #include <string>
@@ -16,6 +17,31 @@ inline auto sample_result() -> ldap_result
 }
 
 inline auto raw_filter(std::string_view text) -> filter { return filter::raw(text).value(); }
+
+// A syncUUID of distinct octets.
+inline auto sample_uuid() -> sync_uuid
+{
+	sync_uuid u;
+	for (std::size_t i = 0; i < u.bytes.size(); ++i) {
+		u.bytes[i] = static_cast<std::byte>(0xA0 + i);
+	}
+	return u;
+}
+
+inline auto sample_refresh_present() -> sync_info
+{
+	sync_info out{ sync_info_type::refresh_present, "rid=000,csn=2" };
+	out.refresh_done = false;
+	return out;
+}
+
+inline auto sample_sync_id_set() -> sync_info
+{
+	sync_info out{ sync_info_type::sync_id_set };
+	out.refresh_deletes = true;
+	out.sync_uuids = { sample_uuid(), sync_uuid{} };
+	return out;
+}
 
 inline auto sample_messages() -> std::vector<message>
 {
@@ -81,6 +107,11 @@ inline auto sample_messages() -> std::vector<message>
 		intermediate_response{ "1.2.3" },
 		intermediate_response{ {}, "\x01"s },
 		intermediate_response{ "1.2.3", "v" },
+		// RFC 4533's Sync Info Messages, one per alternative.
+		encode_sync_info(sync_info{ sync_info_type::new_cookie, "rid=000,csn=1" }).value(),
+		encode_sync_info(sync_info{ sync_info_type::refresh_delete }).value(),
+		encode_sync_info(sample_refresh_present()).value(),
+		encode_sync_info(sample_sync_id_set()).value(),
 	};
 	std::vector<message> out;
 	out.reserve(ops.size() + 2);
@@ -99,7 +130,11 @@ inline auto sample_controls() -> std::pmr::vector<control>
 		control{ "1.2.840.113556.1.4.805" },
 		control{ "1.2.3.4", true, "" },
 		encode_sort_result({ 18, "cn" }).value(),
-		encode_read_entry(post_read_oid, search_result_entry{ "cn=x", { { "cn", { "x", "y" } } } }).value() };
+		encode_read_entry(post_read_oid, search_result_entry{ "cn=x", { { "cn", { "x", "y" } } } }).value(),
+		encode_sync_request(sync_request{ .mode = sync_mode::refresh_and_persist, .cookie = "c", .reload_hint = true })
+		  .value(),
+		encode_sync_state(sync_state{ sync_state_type::modify, sample_uuid(), "c" }).value(),
+		encode_sync_done(sync_done{ "c", true }).value() };
 }
 
 }// namespace jhetz::ldap::test

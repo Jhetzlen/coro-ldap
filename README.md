@@ -36,6 +36,8 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
   Active Directory
 - Controls: paged results, server-side sort, assertion, pre-/post-read,
   proxied authorization, ManageDsaIT, Relax Rules
+- Content synchronization (RFC 4533, "syncrepl"): follow a directory's
+  changes with refreshOnly or refreshAndPersist and resume from a cookie
 - Struct mapping, runtime schema validation, Active Directory time types
 - `std::pmr` allocators throughout, so a response can be decoded into an
   arena
@@ -95,7 +97,7 @@ auto main() -> int
 
 More in [`examples/`](examples/): one small program per task (connect,
 search, add, modify, delete, password reset, StartTLS, cancellation, paged
-search, the blocking API, Kerberos), and `ldapsearch.cpp`, a small
+search, following changes with syncrepl, the blocking API, Kerberos), and `ldapsearch.cpp`, a small
 command-line tool.
 
 ## Build

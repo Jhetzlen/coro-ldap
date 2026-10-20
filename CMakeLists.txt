@@ -154,6 +154,7 @@ endfunction()
 add_library(jhetz_ldap STATIC
     src/attribute.cpp
     src/ber.cpp
+    src/content_sync.cpp
     src/controls.cpp
     src/dn.cpp
     src/entry.cpp
@@ -282,7 +283,7 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     jhetz_ldap_warnings(jhetz_ldapsearch)
 
     # Small programs showing the main use cases (docs/DEVELOPMENT.md, "Examples").
-    set(jhetz_ldap_examples connect search modify add delete move password starttls cancel blocking bulk paged)
+    set(jhetz_ldap_examples connect search modify add delete move password starttls cancel blocking bulk paged syncrepl)
     if(JHETZ_LDAP_WITH_GSSAPI)
         list(APPEND jhetz_ldap_examples gssapi)
     endif()

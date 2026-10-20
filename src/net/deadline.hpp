@@ -1,4 +1,5 @@
-// Internal: deadlines for net::connect and the TLS handshake.
+// Internal: deadlines for net::connect, the TLS handshake and shutdown,
+// and the connection's operations.
 #pragma once
 
 #include <boost/capy/concept/io_awaitable.hpp>
@@ -14,6 +15,21 @@ namespace jhetz::ldap::net::detail {
 
 using clock = std::chrono::steady_clock;
 using deadline_t = std::optional<clock::time_point>;
+
+// `timeout` from `now`: no deadline for nullopt, or for a timeout so large
+// that now + timeout would overflow the clock (ldap::no_timeout).
+inline auto deadline_after(std::optional<std::chrono::milliseconds> timeout, clock::time_point now = clock::now())
+  -> deadline_t
+{
+	if (!timeout) {
+		return std::nullopt;
+	}
+	const auto room = std::chrono::duration_cast<std::chrono::milliseconds>(clock::time_point::max() - now);
+	if (*timeout >= room) {
+		return std::nullopt;
+	}
+	return now + *timeout;
+}
 
 // Awaits `a`, cancelled at `deadline` if there is one (the result then
 // compares equal to capy::cond::timeout). Only for operations that stop

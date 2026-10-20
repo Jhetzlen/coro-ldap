@@ -96,6 +96,8 @@ namespace {
 			return "other";
 		case 122:
 			return "assertion failed";
+		case 4096:
+			return "content synchronization refresh required";
 		default:
 			return {};
 		}

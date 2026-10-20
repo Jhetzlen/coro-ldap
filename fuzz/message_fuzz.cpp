@@ -13,9 +13,10 @@
 // - the framer measures the encoding as exactly one complete message;
 // - peek_message_header never crashes, and agrees with decode (id) and with
 //   the re-encoding (id, operation tag) whenever the input decodes;
-// - a paged results, sort result or pre-/post-read control that decodes
-//   re-encodes to an equal value (the entry of a read control allocated
-//   from the message's resource);
+// - a paged results, sort result, pre-/post-read, or RFC 4533 sync
+//   request, state or done control that decodes re-encodes to an equal
+//   value (the entry of a read control allocated from the message's
+//   resource), and so does an RFC 4533 Sync Info Message;
 // - search entries convert to ldap::entry, results to ldap::error, whose
 //   message() is well-formed UTF-8 without C0 controls or DEL;
 // - decode_options::from accepts exactly the responses (origin::server) or the
@@ -23,6 +24,7 @@
 // Also, with the input as (possibly non-canonical) filter text: if it
 // parses, the search request m carrying it encodes, decode(encode(m)) == m
 // and encode(decode(encode(m))) == encode(m).
+#include "jhetz/ldap/content_sync.hpp"
 #include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/message.hpp"
 
@@ -84,6 +86,46 @@ void exercise_control(const ldap::control &c)
 			check(is_decode_failure(e.error()) || e.error().code == ldap::client_errc::message_too_large,
 			  "is_decode_failure(e.error()) || e.error().code == ldap::client_errc::message_too_large");
 		}
+	} else if (c.type == ldap::sync_request_oid) {
+		if (auto r = ldap::decode_sync_request(c)) {
+			const auto again = ldap::encode_sync_request(*r);
+			check(again.has_value(), "again.has_value()");
+			check(ldap::decode_sync_request(*again) == *r, "ldap::decode_sync_request(*again) == *r");
+		} else {
+			check(is_decode_failure(r.error()), "is_decode_failure(r.error())");
+		}
+	} else if (c.type == ldap::sync_state_oid) {
+		if (auto s = ldap::decode_sync_state(c, c.get_allocator().resource())) {
+			check(s->get_allocator() == c.get_allocator(), "s->get_allocator() == c.get_allocator()");
+			const auto again = ldap::encode_sync_state(*s, c.criticality);
+			check(again.has_value(), "again.has_value()");
+			check(ldap::decode_sync_state(*again) == *s, "ldap::decode_sync_state(*again) == *s");
+		} else {
+			check(is_decode_failure(s.error()), "is_decode_failure(s.error())");
+		}
+	} else if (c.type == ldap::sync_done_oid) {
+		if (auto d = ldap::decode_sync_done(c)) {
+			const auto again = ldap::encode_sync_done(*d, c.criticality);
+			check(again.has_value(), "again.has_value()");
+			check(ldap::decode_sync_done(*again) == *d, "ldap::decode_sync_done(*again) == *d");
+		} else {
+			check(is_decode_failure(d.error()), "is_decode_failure(d.error())");
+		}
+	}
+}
+
+void exercise_sync_info(const ldap::intermediate_response &i)
+{
+	if (i.response_name != ldap::sync_info_oid) {
+		return;
+	}
+	if (auto info = ldap::decode_sync_info(i, i.get_allocator().resource())) {
+		check(info->get_allocator() == i.get_allocator(), "info->get_allocator() == i.get_allocator()");
+		const auto again = ldap::encode_sync_info(*info);
+		check(again.has_value(), "again.has_value()");
+		check(ldap::decode_sync_info(*again) == *info, "ldap::decode_sync_info(*again) == *info");
+	} else {
+		check(is_decode_failure(info.error()), "is_decode_failure(info.error())");
 	}
 }
 
@@ -95,7 +137,9 @@ void exercise(const ldap::message &m)
 	std::visit(
 	  [](const auto &op) {
 		  using T = std::decay_t<decltype(op)>;
-		  if constexpr (std::is_same_v<T, ldap::search_result_entry>) {
+		  if constexpr (std::is_same_v<T, ldap::intermediate_response>) {
+			  exercise_sync_info(op);
+		  } else if constexpr (std::is_same_v<T, ldap::search_result_entry>) {
 			  // A copy on op's resource, so the entry is made on it too.
 			  const auto e = ldap::entry::from(ldap::search_result_entry(op, op.get_allocator()));
 			  check(e.get_allocator() == op.get_allocator(), "e.get_allocator() == op.get_allocator()");

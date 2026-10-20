@@ -73,6 +73,10 @@ enum class errc : int {
 	other = 80,
 	// Codes defined by extensions (RFC 4520 IANA registry)
 	assertion_failed = 122,// RFC 4528: the assertion control's filter did not match
+	// RFC 4533 section 3.8: the server cannot continue the sync search; resend
+	// it with the cookie of the result's Sync Done control (find_sync_done),
+	// or with no cookie (a full reload) if there is none.
+	e_sync_refresh_required = 4096,
 };
 
 // Failures detected by the client itself. Values start at 1 (0 is "no

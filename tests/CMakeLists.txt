@@ -17,6 +17,7 @@ add_executable(jhetz_ldap_tests
     attribute_tests.cpp
     ber_reader_tests.cpp
     ber_writer_tests.cpp
+    content_sync_tests.cpp
     controls_tests.cpp
     dn_tests.cpp
     error_tests.cpp
@@ -131,6 +132,7 @@ if(JHETZ_LDAP_BUILD_NET)
     add_executable(jhetz_ldap_net_tests
         net/connect_tests.cpp
         net/connection_tests.cpp
+        net/content_sync_tests.cpp
         net/mapping_ops_tests.cpp
         net/operations_tests.cpp
         net/password_tests.cpp
