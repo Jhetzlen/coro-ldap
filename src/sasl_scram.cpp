@@ -2,6 +2,7 @@
 #include "jhetz/ldap/sasl_scram.hpp"
 
 #include "format_util.hpp"
+#include "icu_util.hpp"
 
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
@@ -28,6 +29,9 @@
 #include <vector>
 
 namespace jhetz::ldap {
+
+using detail::icu_failed;
+
 namespace {
 
 	constexpr std::size_t key_size = 32;// SHA-256 output
@@ -233,20 +237,20 @@ namespace {
 		if (status == U_INVALID_CHAR_FOUND || status == U_ILLEGAL_CHAR_FOUND) {
 			return input_error(name + " is not valid UTF-8");
 		}
-		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status) != 0) {
+		if (status != U_BUFFER_OVERFLOW_ERROR && icu_failed(status)) {
 			return icu_failure(name, status);
 		}
 		wiped_buffer<UChar> in(static_cast<std::size_t>(n16));
 		status = U_ZERO_ERROR;
 		u_strFromUTF8(in.v.data(), n16, &n16, s.data(), static_cast<int32_t>(s.size()), &status);
-		if (U_FAILURE(status) != 0) {
+		if (icu_failed(status)) {
 			return icu_failure(name, status);
 		}
 
 		status = U_ZERO_ERROR;
 		const std::unique_ptr<UStringPrepProfile, usprep_closer> profile(
 		  usprep_openByType(USPREP_RFC4013_SASLPREP, &status));
-		if (U_FAILURE(status) != 0) {
+		if (icu_failed(status)) {
 			return icu_failure(name, status);
 		}
 		const int32_t options = kind == prep_kind::stored ? USPREP_DEFAULT : USPREP_ALLOW_UNASSIGNED;
@@ -276,7 +280,7 @@ namespace {
 		}
 		wiped_buffer<UChar> prepared(static_cast<std::size_t>(nprep));
 		nprep = prepare(prepared.v.data(), nprep);
-		if (U_FAILURE(status) != 0) {
+		if (icu_failed(status)) {
 			return icu_failure(name, status);
 		}
 
@@ -285,13 +289,13 @@ namespace {
 		status = U_ZERO_ERROR;
 		int32_t n8 = 0;
 		u_strToUTF8(nullptr, 0, &n8, prepared.v.data(), nprep, &status);
-		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status) != 0) {
+		if (status != U_BUFFER_OVERFLOW_ERROR && icu_failed(status)) {
 			return icu_failure(name, status);
 		}
 		out.resize(static_cast<std::size_t>(n8));
 		status = U_ZERO_ERROR;
 		u_strToUTF8(out.data(), n8, &n8, prepared.v.data(), nprep, &status);
-		if (U_FAILURE(status) != 0) {
+		if (icu_failed(status)) {
 			wipe_string(out);
 			return icu_failure(name, status);
 		}

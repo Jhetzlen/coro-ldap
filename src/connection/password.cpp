@@ -1,6 +1,7 @@
 #include "jhetz/ldap/connection.hpp"
 
 #include "../format_util.hpp"
+#include "../icu_util.hpp"
 #include "impl.hpp"
 #include "search.hpp"
 
@@ -22,6 +23,9 @@
 namespace capy = boost::capy;
 
 namespace jhetz::ldap {
+
+using detail::icu_failed;
+
 
 using detail::impl_ref;
 using detail::no_connection;
@@ -48,7 +52,7 @@ auto ad_password_value(std::string_view password) -> result<std::string>
 	UErrorCode status = U_ZERO_ERROR;
 	int32_t n = 0;
 	u_strFromUTF8(nullptr, 0, &n, password.data(), static_cast<int32_t>(password.size()), &status);
-	if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status) != 0) {
+	if (status != U_BUFFER_OVERFLOW_ERROR && icu_failed(status)) {
 		return failed(status);
 	}
 	std::vector<UChar> units(static_cast<std::size_t>(n));
@@ -56,7 +60,7 @@ auto ad_password_value(std::string_view password) -> result<std::string>
 	if (n != 0) {
 		u_strFromUTF8(units.data(), n, &n, password.data(), static_cast<int32_t>(password.size()), &status);
 	}
-	if (U_FAILURE(status) != 0) {
+	if (icu_failed(status)) {
 		return failed(status);
 	}
 
