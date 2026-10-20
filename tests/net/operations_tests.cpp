@@ -364,6 +364,87 @@ TEST_CASE("operations: extended operations and who am I", "[net][operations]")
 	CHECK(m.log.received[1] == ldap::message{ 2, ldap::extended_request{ ldap::who_am_i_oid } });
 }
 
+TEST_CASE("operations: extended operations with intermediate responses", "[net][operations][intermediate]")
+{
+	ldap::message with_control{ 1, ldap::intermediate_response{} };
+	with_control.controls.emplace_back("1.2.3.7", false, "c");
+	auto script = [&](std::int32_t id, std::int32_t code = 0) {
+		with_control.id = id;
+		return answer({ ldap::message{ id, ldap::intermediate_response{ "1.2.3.6", "first" } },
+		  with_control,
+		  ldap::message{ id, ldap::intermediate_response{ std::nullopt, "third" } },
+		  ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ code }, "1.2.3.5", "done" } } });
+	};
+
+	SECTION("collected in order for a caller that asks")
+	{
+		mock_ldap m;
+		m.serve({ script(1) });
+		auto x = m.run(m.conn.extended({ .name = "1.2.3.4", .intermediate_responses = true }));
+		REQUIRE(x.has_value());
+		CHECK(x->name == "1.2.3.5");
+		CHECK(x->value == "done");
+		REQUIRE(x->intermediates.size() == 3);
+		CHECK(x->intermediates[0].response_name == "1.2.3.6");
+		CHECK(x->intermediates[0].response_value == "first");
+		CHECK(x->intermediates[0].controls.empty());
+		CHECK_FALSE(x->intermediates[1].response_name.has_value());
+		CHECK_FALSE(x->intermediates[1].response_value.has_value());
+		REQUIRE(x->intermediates[1].controls.size() == 1);
+		CHECK(x->intermediates[1].controls[0] == ldap::control{ "1.2.3.7", false, "c" });
+		CHECK_FALSE(x->intermediates[2].response_name.has_value());
+		CHECK(x->intermediates[2].response_value == "third");
+		CHECK(m.conn.is_open());
+		m.check_server();
+	}
+	SECTION("skipped for a caller that does not")
+	{
+		mock_ldap m;
+		m.serve({ script(1), script(2) });
+		auto x = m.run(m.conn.extended({ .name = "1.2.3.4" }));
+		REQUIRE(x.has_value());
+		CHECK(x->name == "1.2.3.5");
+		CHECK(x->value == "done");
+		CHECK(x->intermediates.empty());
+		auto me = m.run(m.conn.who_am_i());
+		REQUIRE(me.has_value());
+		CHECK(*me == "done");
+		CHECK(m.conn.is_open());
+		m.check_server();
+	}
+	SECTION("a server error still fails the operation")
+	{
+		mock_ldap m;
+		m.serve({ script(1, 53) });
+		auto x = m.run(m.conn.extended({ .name = "1.2.3.4", .intermediate_responses = true }));
+		REQUIRE_FALSE(x.has_value());
+		CHECK(x.error().code == errc::unwilling_to_perform);
+		CHECK(m.conn.is_open());
+		m.check_server();
+	}
+	SECTION("late ones after an abandon are dropped, and so is the final response")
+	{
+		// The server sends them racing the AbandonRequest: an
+		// IntermediateResponse is not the last answer to the abandoned
+		// request, so its ExtendedResponse is still recognized and dropped.
+		mock_ldap m;
+		m.serve({ step{},// reads the extended request, does not answer yet
+		  script(1),// reads its AbandonRequest, answers the abandoned request late
+		  answer({ ldap::message{ 3, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, "dn:x" } } }) });
+		auto x = m.run(m.conn.extended(
+		  { .name = "1.2.3.4", .timeout = std::chrono::milliseconds(50), .intermediate_responses = true }));
+		REQUIRE_FALSE(x.has_value());
+		CHECK(x.error().code == ldap::cond::timeout);
+		auto me = m.run(m.conn.who_am_i());
+		REQUIRE(me.has_value());
+		CHECK(*me == "dn:x");
+		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+	}
+}
+
 TEST_CASE("operations: a response of the wrong type is a protocol error", "[net][operations]")
 {
 	mock_ldap m;

@@ -95,6 +95,9 @@ namespace detail {
 		// False for Bind and StartTLS, which cannot be abandoned (RFC 4511
 		// section 4.11): giving up on them closes the connection instead.
 		bool abandonable = true;
+		// Queue the IntermediateResponses too (decoded on mr); false: the
+		// reader skips them unread.
+		bool intermediates = false;
 		std::pmr::deque<message> queue;// on mr, so messages move in without a copy
 		bool finished = false;// final response queued, or failed / abandoned
 		std::optional<error> failure{};// connection failure (without op context)
@@ -611,12 +614,15 @@ namespace detail {
 	// update might be applied): it fails with capy::error::canceled. Binds
 	// are checked by begin_bind() instead: a later step of a SASL exchange
 	// is sent, since the server waits for it (abandoning it then closes the
-	// connection).
+	// connection). With `intermediates`, the IntermediateResponses that come
+	// before the response are appended to it (on its resource); without,
+	// they are skipped unread.
 	auto request_response(impl_ref self,
 	  message request,
 	  std::size_t expect,
 	  std::string context,
-	  std::optional<std::chrono::milliseconds> timeout) -> boost::capy::task<result<message>>;
+	  std::optional<std::chrono::milliseconds> timeout,
+	  std::pmr::vector<intermediate> *intermediates = nullptr) -> boost::capy::task<result<message>>;
 
 	// Builds a message whose controls are `controls` (encoded on `mr`).
 	auto with_controls(protocol_op op,

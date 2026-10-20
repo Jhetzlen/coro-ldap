@@ -1065,7 +1065,13 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   is sent closes the same way (RFC 4511 section 4.14.1) and fails it.
 - Every response is decoded with `origin::server` and checked against the
   request it answers (the operation, by id). IntermediateResponses are
-  skipped without decoding; id 0 is an unsolicited notification: a Notice of
+  skipped without decoding unless the request opted in
+  (`intermediate_responses` in `search_params` / `extended_params`): then
+  they are decoded into the operation's resource and queued with its other
+  responses (for `search_stream::next_item()` or
+  `extended_result::intermediates`). Late ones to an abandoned request are
+  dropped; only its final response ends the wait for them. Id 0 is an
+  unsolicited notification: a Notice of
   Disconnection fails every outstanding operation with its result code
   (`unavailable` if it claims success) and closes the connection; other
   extended responses are ignored.

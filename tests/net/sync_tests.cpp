@@ -673,6 +673,21 @@ TEST_CASE("sync: extended", "[net][sync]")
 	CHECK(got[1] == ldap::message{ 2, ldap::extended_request{ "1.9.9" } });
 }
 
+TEST_CASE("sync: extended with intermediate responses", "[net][sync][intermediate]")
+{
+	peer_server srv;
+	srv.serve({ answer({ ldap::message{ 1, ldap::intermediate_response{ "1.2.3.6", "first" } },
+	  ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 0 } } } }) });
+	connected k(srv);
+	auto x = k.c.extended({ .name = "1.2.3.4", .intermediate_responses = true });
+	REQUIRE(x.has_value());
+	REQUIRE(x->intermediates.size() == 1);
+	CHECK(x->intermediates[0].response_name == "1.2.3.6");
+	CHECK(x->intermediates[0].response_value == "first");
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 1);
+}
+
 TEST_CASE("sync: password_modify", "[net][sync]")
 {
 	using namespace std::string_literals;

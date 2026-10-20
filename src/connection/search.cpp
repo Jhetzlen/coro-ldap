@@ -8,6 +8,7 @@
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/this_coro.hpp>
 
+#include <concepts>
 #include <memory_resource>
 #include <optional>
 #include <stop_token>
@@ -43,6 +44,82 @@ namespace {
 		impl_ref keep = s->conn;// the state lives on the connection's resource
 		std::pmr::polymorphic_allocator<> alloc(keep->mr());
 		alloc.delete_object(s);
+	}
+
+	// next() (Item = entry: entry controls and IntermediateResponses are
+	// dropped) and next_item() (Item = search_stream::item), without a
+	// coroutine frame of their own. References go to s.references either
+	// way.
+	template<class Item> auto next_of(search_stream::state *sp) -> capy::task<result<std::optional<Item>>>
+	{
+		if (sp == nullptr) {
+			co_return std::unexpected(no_connection("search"));
+		}
+		search_stream::state &s = *sp;// stable: the stream must not be moved while next() runs
+		if (s.finished) {
+			if (s.error_) {
+				co_return std::unexpected(*s.error_);
+			}
+			co_return std::optional<Item>{};
+		}
+		if (s.in_next) {
+			co_return fail(client_errc::operation_in_progress,
+			  s.context + " during an earlier next() or next_item() on this search_stream");
+		}
+		s.in_next = true;
+		const detail::scope_exit reset{ [&s] { s.in_next = false; } };
+
+		const impl_ref conn = s.conn;
+		while (true) {
+			auto m = co_await conn->next_response(s.op, s.deadline, s.context);
+			if (!m) {
+				s.finished = true;
+				s.error_ = m.error();
+				co_return std::unexpected(std::move(m.error()));
+			}
+			constexpr bool items = std::same_as<Item, search_stream::item>;
+			if (auto *e = std::get_if<search_result_entry>(&m->op)) {
+				if constexpr (items) {
+					// On the stream's resource, no copy.
+					co_return std::optional<Item>(std::in_place,
+					  std::in_place_type<search_entry>,
+					  entry::from(std::move(*e)),
+					  std::move(m->controls),
+					  s.op.mr);
+				} else {
+					co_return std::optional<Item>(entry::from(std::move(*e)));// on the stream's resource, no copy
+				}
+			}
+			if (auto *ref = std::get_if<search_result_reference>(&m->op)) {
+				s.references.append_range(ref->uris);
+				if constexpr (items) {
+					co_return std::optional<Item>(std::in_place,
+					  std::in_place_type<search_reference>,
+					  std::move(*ref),
+					  std::move(m->controls),
+					  s.op.mr);
+				} else {
+					continue;
+				}
+			}
+			// Queued only if asked for.
+			if constexpr (items) {
+				if (auto *i = std::get_if<intermediate_response>(&m->op)) {
+					co_return std::optional<Item>(
+					  std::in_place, std::in_place_type<intermediate>, std::move(*i), std::move(m->controls), s.op.mr);
+				}
+			} else if (std::holds_alternative<intermediate_response>(m->op)) {
+				continue;
+			}
+			const auto &d = std::get<search_result_done>(m->op);// checked by the reader
+			s.finished = true;
+			s.controls.assign(m->controls.begin(), m->controls.end());
+			if (!d.result.is_success()) {
+				s.error_ = d.result.to_error(s.context);
+				co_return std::unexpected(*s.error_);
+			}
+			co_return std::optional<Item>{};
+		}
 	}
 
 }// namespace
@@ -88,6 +165,7 @@ namespace detail {
 		auto *state = new_state(c, mr, context);
 		ldap::search_stream s = connection::impl::make_stream(state);
 		state->deadline = deadline_after(p.timeout ? p.timeout : c.default_timeout());
+		state->op.intermediates = p.intermediate_responses;
 		if (auto r = c.submit(*request, &state->op, context); !r) {
 			return std::unexpected(std::move(r.error()));
 		}
@@ -186,50 +264,9 @@ auto search_stream::controls() const noexcept -> const std::pmr::vector<control>
 	return state_ == nullptr ? none : state_->controls;
 }
 
-auto search_stream::next() -> capy::task<result<std::optional<entry>>>
-{
-	if (state_ == nullptr) {
-		co_return std::unexpected(no_connection("search"));
-	}
-	state &s = *state_;// stable: the stream must not be moved while next() runs
-	if (s.finished) {
-		if (s.error_) {
-			co_return std::unexpected(*s.error_);
-		}
-		co_return std::optional<entry>{};
-	}
-	if (s.in_next) {
-		co_return fail(
-		  client_errc::operation_in_progress, s.context + " during an earlier next() on this search_stream");
-	}
-	s.in_next = true;
-	const detail::scope_exit reset{ [&s] { s.in_next = false; } };
+auto search_stream::next() -> capy::task<result<std::optional<entry>>> { return next_of<entry>(state_); }
 
-	const impl_ref conn = s.conn;
-	while (true) {
-		auto m = co_await conn->next_response(s.op, s.deadline, s.context);
-		if (!m) {
-			s.finished = true;
-			s.error_ = m.error();
-			co_return std::unexpected(std::move(m.error()));
-		}
-		if (auto *e = std::get_if<search_result_entry>(&m->op)) {
-			co_return std::optional<entry>(entry::from(std::move(*e)));// on the stream's resource, no copy
-		}
-		if (auto *ref = std::get_if<search_result_reference>(&m->op)) {
-			s.references.append_range(ref->uris);
-			continue;
-		}
-		const auto &d = std::get<search_result_done>(m->op);// checked by the reader
-		s.finished = true;
-		s.controls.assign(m->controls.begin(), m->controls.end());
-		if (!d.result.is_success()) {
-			s.error_ = d.result.to_error(s.context);
-			co_return std::unexpected(*s.error_);
-		}
-		co_return std::optional<entry>{};
-	}
-}
+auto search_stream::next_item() -> capy::task<result<std::optional<item>>> { return next_of<item>(state_); }
 
 auto search_stream::reference_urls(std::pmr::memory_resource *mr) const -> std::pmr::vector<url>
 {

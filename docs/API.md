@@ -156,10 +156,12 @@ itself stays dependency-free.
     request aggregates (`search_params`, `add_params`, `modify_params`,
     `del_params`, `modify_dn_params`, `compare_params`, `extended_params`,
     `password_modify_params`), the `ldap::mod` builders, `response`,
-    `extended_result`, and the OIDs `who_am_i_oid`, `password_modify_oid`
-    and `active_directory_capability_oid`.
+    `intermediate`, `extended_result`, and the OIDs `who_am_i_oid`,
+    `password_modify_oid` and `active_directory_capability_oid`.
   - `jhetz/ldap/search_stream.hpp` and `jhetz/ldap/paged_search.hpp`: the
-    entry streams `search_stream()` and `search_paged()` return.
+    entry streams `search_stream()` and `search_paged()` return, and
+    `search_entry` and `search_reference`, the items of
+    `search_stream::next_item()`.
   - `jhetz/ldap/cancel.hpp`: `raceable()` and `with_stop()`.
 
    `co_await ldap::connect(ioc, url, connection_options, mr)`
@@ -179,7 +181,8 @@ itself stays dependency-free.
   entry at a time (and keeps the search references and the done controls),
   and `unbind()`. `search_params` is a plain aggregate for designated
   initializers (`.base`, `.scope`, `.filter`, `.attributes`, `.deref`,
-  `.size_limit`, `.time_limit`, `.types_only`, `.controls`, `.timeout`).
+  `.size_limit`, `.time_limit`, `.types_only`, `.controls`, `.timeout`,
+  `.intermediate_responses`).
   Multiplexed: any number of operations may be outstanding (concurrent
   tasks on the connection's executor); one writer sends the PDUs in order
   and one reader, running only while something is outstanding, routes
@@ -211,7 +214,19 @@ itself stays dependency-free.
   exchange are held and sent after it, and binds are serialized.
   Every response is decoded with `origin::server` and must answer an
   outstanding request (else `client_errc::unexpected_response`);
-  IntermediateResponses are skipped; a Notice of Disconnection fails every
+  IntermediateResponses (RFC 4511 section 4.13) are skipped unless the
+  request sets `.intermediate_responses` (`search_params`,
+  `extended_params`); `extended()` then collects them in
+  `extended_result::intermediates` as `ldap::intermediate`
+  (`response_name`, `response_value`, `controls`). A search stream's
+  `next_item()` reads every message of the search in the order the server
+  sent it, each with its message's controls (RFC 4533's Sync State control,
+  ...): a `std::variant` of `search_entry` (an `entry` plus `controls`),
+  `search_reference` (`uris` plus `controls`, also appended to
+  `references()`) and `intermediate` (only when asked for). `next()` and
+  `next_item()` may be mixed on a stream; `next()`, `search()` and
+  `search_paged()` drop the entries' controls and the intermediates. A
+  Notice of Disconnection fails every
   outstanding operation. A server result error fails one operation; a
   transport or protocol error fails all of them once and closes the
   connection, and later operations fail with `client_errc::not_connected`

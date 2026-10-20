@@ -287,6 +287,318 @@ TEST_CASE("connection: search_stream keeps the entries before an error", "[net][
 	m.check_server();
 }
 
+TEST_CASE("connection: search_stream yields intermediate responses when asked", "[net][connection][intermediate]")
+{
+	// RFC 4533's syncInfo is an IntermediateResponse with a value; others
+	// carry their data in controls, or have neither name nor value. As in
+	// a sync search, entries and references carry controls too.
+	ldap::message with_control{ 1, ldap::intermediate_response{ "1.2.3.6" } };
+	with_control.controls.emplace_back("1.2.3.7", true, "c");
+	auto entry_b = entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B");
+	entry_b.controls.emplace_back("1.2.3.8", false, "state");
+	auto ref = ref_msg(1, { "ldap://r1.example.org/" });
+	ref.controls.emplace_back("1.2.3.9", false, std::nullopt);
+	auto script = [&] {
+		return answer(
+		  { ldap::message{ 1, ldap::intermediate_response{ "1.3.6.1.4.1.4203.1.9.1.4", std::string("\xa0\x00", 2) } },
+			entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"),
+			ldap::message{ 1, ldap::intermediate_response{} },
+			ref,
+			with_control,
+			entry_b,
+			ldap::message{ 1, ldap::intermediate_response{ std::nullopt, "v" } },
+			ref_msg(1, { "ldap://r2.example.org/", "ldap://r3.example.org/" }),
+			done_msg(1) });
+	};
+	const auto drain_items = [](mock_ldap &m, ldap::search_stream &s) {
+		std::vector<ldap::search_stream::item> items;
+		while (true) {
+			auto i = m.run(s.next_item());
+			REQUIRE(i.has_value());
+			if (!*i) {
+				break;
+			}
+			items.push_back(std::move(**i));
+		}
+		return items;
+	};
+	const ldap::string_list all_refs{ "ldap://r1.example.org/", "ldap://r2.example.org/", "ldap://r3.example.org/" };
+
+	SECTION("next_item() returns every message in order, with its controls")
+	{
+		mock_ldap m;
+		m.serve({ script() });
+		std::pmr::monotonic_buffer_resource arena;
+		auto params = people_search();
+		params.intermediate_responses = true;
+		auto s = m.run(m.conn.search_stream(std::move(params), &arena));
+		REQUIRE(s.has_value());
+		const auto items = drain_items(m, *s);
+		CHECK(s->done());
+		CHECK(s->references() == all_refs);// next_item() keeps them there too
+		REQUIRE(items.size() == 8);
+
+		// Decoded into the stream's resource, controls included.
+		const auto &sync_info = std::get<ldap::intermediate>(items[0]);
+		CHECK(sync_info.response_name == "1.3.6.1.4.1.4203.1.9.1.4");
+		CHECK(sync_info.response_value == std::pmr::string("\xa0\x00", 2));
+		CHECK(sync_info.controls.empty());
+		CHECK(sync_info.get_allocator().resource() == &arena);
+		CHECK(sync_info.response_value->get_allocator().resource() == &arena);
+		CHECK(sync_info.controls.get_allocator().resource() == &arena);
+
+		const auto &a = std::get<ldap::search_entry>(items[1]);
+		CHECK(static_cast<const ldap::entry &>(a) == expected_entry("uid=a,ou=people,dc=example,dc=org", "A"));
+		CHECK(a.controls.empty());
+		CHECK(a.get_allocator().resource() == &arena);
+
+		const auto &empty = std::get<ldap::intermediate>(items[2]);
+		CHECK_FALSE(empty.response_name.has_value());
+		CHECK_FALSE(empty.response_value.has_value());
+		CHECK(empty.controls.empty());
+
+		const auto &r1 = std::get<ldap::search_reference>(items[3]);
+		CHECK(r1.uris == ldap::string_list{ "ldap://r1.example.org/" });
+		CHECK(r1.controls == std::pmr::vector<ldap::control>{ ldap::control{ "1.2.3.9" } });
+		CHECK(r1.uris.get_allocator().resource() == &arena);
+		CHECK(r1.controls[0].get_allocator().resource() == &arena);
+
+		const auto &controlled = std::get<ldap::intermediate>(items[4]);
+		CHECK(controlled.response_name == "1.2.3.6");
+		CHECK_FALSE(controlled.response_value.has_value());
+		REQUIRE(controlled.controls.size() == 1);
+		CHECK(controlled.controls[0] == ldap::control{ "1.2.3.7", true, "c" });
+		CHECK(controlled.controls[0].get_allocator().resource() == &arena);
+
+		const auto &b = std::get<ldap::search_entry>(items[5]);
+		CHECK(static_cast<const ldap::entry &>(b) == expected_entry("uid=b,ou=people,dc=example,dc=org", "B"));
+		REQUIRE(b.controls.size() == 1);
+		CHECK(b.controls[0] == ldap::control{ "1.2.3.8", false, "state" });
+		CHECK(b.controls[0].get_allocator().resource() == &arena);
+		CHECK(b.find("cn") != nullptr);// an entry, with entry's accessors
+
+		// Allocator-aware: a plain copy is on the default resource, the
+		// allocator-extended one on the given one.
+		std::pmr::monotonic_buffer_resource other;
+		const ldap::search_entry b_copy(b, &other);
+		CHECK(b_copy == b);
+		CHECK(b_copy.dn.get_allocator().resource() == &other);
+		CHECK(b_copy.controls[0].get_allocator().resource() == &other);
+		const ldap::search_entry b_plain(b);
+		CHECK(b_plain.controls[0].get_allocator().resource() == std::pmr::get_default_resource());
+		const ldap::search_reference r1_copy(r1, &other);
+		CHECK(r1_copy == r1);
+		CHECK(r1_copy.uris[0].get_allocator().resource() == &other);
+		const ldap::intermediate i_copy(controlled, &other);
+		CHECK(i_copy == controlled);
+		CHECK(i_copy.response_name->get_allocator().resource() == &other);
+		CHECK(i_copy.controls[0].get_allocator().resource() == &other);
+
+		const auto &value_only = std::get<ldap::intermediate>(items[6]);
+		CHECK_FALSE(value_only.response_name.has_value());
+		CHECK(value_only.response_value == "v");
+
+		const auto &r2 = std::get<ldap::search_reference>(items[7]);
+		CHECK(r2.uris == ldap::string_list{ "ldap://r2.example.org/", "ldap://r3.example.org/" });
+		CHECK(r2.controls.empty());
+
+		auto again = m.run(s->next_item());// the end repeats without I/O
+		REQUIRE(again.has_value());
+		CHECK_FALSE(again->has_value());
+		m.check_server();
+	}
+	SECTION("next() drops them on a stream that asked for them")
+	{
+		mock_ldap m;
+		m.serve({ script() });
+		auto params = people_search();
+		params.intermediate_responses = true;
+		auto s = m.run(m.conn.search_stream(std::move(params)));
+		REQUIRE(s.has_value());
+		auto entries = m.run(drain_stream(*s));
+		REQUIRE(entries.has_value());
+		CHECK(*entries
+			  == std::vector{ expected_entry("uid=a,ou=people,dc=example,dc=org", "A"),
+				expected_entry("uid=b,ou=people,dc=example,dc=org", "B") });
+		CHECK(s->references() == all_refs);
+		m.check_server();
+	}
+	SECTION("next() and next_item() mixed: each reads the next message")
+	{
+		mock_ldap m;
+		m.serve({ script() });
+		auto params = people_search();
+		params.intermediate_responses = true;
+		auto s = m.run(m.conn.search_stream(std::move(params)));
+		REQUIRE(s.has_value());
+		auto first = m.run(s->next_item());
+		REQUIRE(first.has_value());
+		REQUIRE(first->has_value());
+		CHECK(std::holds_alternative<ldap::intermediate>(**first));
+		auto a = m.run(s->next());// entry A
+		REQUIRE(a.has_value());
+		REQUIRE(a->has_value());
+		CHECK((*a)->dn == "uid=a,ou=people,dc=example,dc=org");
+		auto b = m.run(s->next());// skips an intermediate, r1, an intermediate
+		REQUIRE(b.has_value());
+		REQUIRE(b->has_value());
+		CHECK((*b)->dn == "uid=b,ou=people,dc=example,dc=org");
+		CHECK(s->references() == ldap::string_list{ "ldap://r1.example.org/" });
+		auto rest = drain_items(m, *s);
+		REQUIRE(rest.size() == 2);
+		CHECK(std::holds_alternative<ldap::intermediate>(rest[0]));
+		CHECK(std::holds_alternative<ldap::search_reference>(rest[1]));
+		CHECK(s->references() == all_refs);
+		m.check_server();
+	}
+	SECTION("without intermediate_responses they are skipped, next_item() included")
+	{
+		mock_ldap m;
+		m.serve({ script() });
+		auto s = m.run(m.conn.search_stream(people_search()));
+		REQUIRE(s.has_value());
+		const auto items = drain_items(m, *s);
+		REQUIRE(items.size() == 4);
+		CHECK(std::get<ldap::search_entry>(items[0]).dn == "uid=a,ou=people,dc=example,dc=org");
+		CHECK(std::get<ldap::search_reference>(items[1]).uris == ldap::string_list{ "ldap://r1.example.org/" });
+		CHECK(std::get<ldap::search_entry>(items[2]).controls.size() == 1);
+		CHECK(std::get<ldap::search_reference>(items[3]).uris.size() == 2);
+		CHECK(m.conn.is_open());
+		m.check_server();
+	}
+	SECTION("search() skips them either way")
+	{
+		mock_ldap m;
+		m.serve({ script() });
+		auto params = people_search();
+		params.intermediate_responses = true;
+		auto r = m.run(m.conn.search(std::move(params)));
+		REQUIRE(r.has_value());
+		CHECK(r->size() == 2);
+		m.check_server();
+	}
+}
+
+TEST_CASE("connection: search items move with an allocator", "[net][connection][intermediate]")
+{
+	// Long enough to be off the small-string buffer, so a steal keeps data().
+	const std::string long_value(64, 'v');
+	const std::string long_oid = "1.3.6.1.4.1.4203.1.9.1.2." + std::string(32, '7');
+	std::pmr::monotonic_buffer_resource a;
+	std::pmr::monotonic_buffer_resource b;
+
+	SECTION("search_entry")
+	{
+		const auto make = [&] {
+			ldap::search_entry e(&a);
+			e.dn = "uid=someone-with-a-long-name,ou=people,dc=example,dc=org";
+			e.attributes.emplace_back(
+			  ldap::attribute{ "description" }, std::initializer_list<std::string_view>{ long_value });
+			e.controls.emplace_back(long_oid, true, long_value);
+			return e;
+		};
+		const auto expected = make();
+
+		auto same = make();
+		const auto *dn = same.dn.data();
+		const auto *value = same.attributes[0].values[0].data();
+		const auto *control_type = same.controls[0].type.data();
+		const auto *control_value = same.controls[0].value->data();
+		const ldap::search_entry stolen(std::move(same), &a);
+		CHECK(stolen == expected);
+		CHECK(stolen.dn.data() == dn);
+		CHECK(stolen.attributes[0].values[0].data() == value);
+		CHECK(stolen.controls[0].type.data() == control_type);
+		CHECK(stolen.controls[0].value->data() == control_value);
+
+		const ldap::search_entry copied(make(), &b);
+		CHECK(copied == expected);
+		CHECK(copied.get_allocator().resource() == &b);
+		CHECK(copied.dn.get_allocator().resource() == &b);
+		CHECK(copied.attributes.get_allocator().resource() == &b);
+		CHECK(copied.attributes[0].values[0].get_allocator().resource() == &b);
+		CHECK(copied.controls.get_allocator().resource() == &b);
+		CHECK(copied.controls[0].type.get_allocator().resource() == &b);
+		CHECK(copied.controls[0].value->get_allocator().resource() == &b);
+	}
+	SECTION("search_reference")
+	{
+		const auto make = [&] {
+			ldap::search_reference r(&a);
+			r.uris.emplace_back("ldap://referral.example.org/ou=people,dc=example,dc=org");
+			r.controls.emplace_back(long_oid, false, long_value);
+			return r;
+		};
+		const auto expected = make();
+
+		auto same = make();
+		const auto *uri = same.uris[0].data();
+		const auto *control_value = same.controls[0].value->data();
+		const ldap::search_reference stolen(std::move(same), &a);
+		CHECK(stolen == expected);
+		CHECK(stolen.uris[0].data() == uri);
+		CHECK(stolen.controls[0].value->data() == control_value);
+
+		const ldap::search_reference copied(make(), &b);
+		CHECK(copied == expected);
+		CHECK(copied.uris.get_allocator().resource() == &b);
+		CHECK(copied.uris[0].get_allocator().resource() == &b);
+		CHECK(copied.controls.get_allocator().resource() == &b);
+		CHECK(copied.controls[0].type.get_allocator().resource() == &b);
+		CHECK(copied.controls[0].value->get_allocator().resource() == &b);
+	}
+	SECTION("intermediate")
+	{
+		const auto make = [&] {
+			ldap::intermediate i(&a);
+			i.response_name.emplace(long_oid, &a);
+			i.response_value.emplace(long_value, &a);
+			i.controls.emplace_back(long_oid, true, long_value);
+			return i;
+		};
+		const auto expected = make();
+
+		auto same = make();
+		const auto *name = same.response_name->data();
+		const auto *value = same.response_value->data();
+		const auto *control_value = same.controls[0].value->data();
+		const ldap::intermediate stolen(std::move(same), &a);
+		CHECK(stolen == expected);
+		CHECK(stolen.response_name->data() == name);
+		CHECK(stolen.response_value->data() == value);
+		CHECK(stolen.controls[0].value->data() == control_value);
+
+		const ldap::intermediate copied(make(), &b);
+		CHECK(copied == expected);
+		CHECK(copied.get_allocator().resource() == &b);
+		CHECK(copied.response_name->get_allocator().resource() == &b);
+		CHECK(copied.response_value->get_allocator().resource() == &b);
+		CHECK(copied.controls.get_allocator().resource() == &b);
+		CHECK(copied.controls[0].type.get_allocator().resource() == &b);
+		CHECK(copied.controls[0].value->get_allocator().resource() == &b);
+	}
+	SECTION("a std::pmr::vector<intermediate> keeps its resource on its elements")
+	{
+		// extended_result::intermediates relies on uses-allocator construction.
+		std::pmr::vector<ldap::intermediate> v(&a);
+		v.emplace_back(ldap::intermediate_response{ long_oid, long_value },
+		  std::pmr::vector<ldap::control>{ ldap::control{ long_oid, false, long_value } });
+		const auto capacity = v.capacity();
+		while (v.capacity() == capacity) {// until it reallocates
+			v.emplace_back(ldap::intermediate{ ldap::intermediate_response{ std::nullopt, long_value }, {} });
+		}
+		for (const auto &i : v) {
+			CHECK(i.get_allocator().resource() == &a);
+			CHECK(i.response_value->get_allocator().resource() == &a);
+			CHECK(i.controls.get_allocator().resource() == &a);
+		}
+		CHECK(v[0].response_name->get_allocator().resource() == &a);
+		REQUIRE(v[0].controls.size() == 1);
+		CHECK(v[0].controls[0] == ldap::control{ long_oid, false, long_value });
+		CHECK(v[0].controls[0].value->get_allocator().resource() == &a);
+	}
+}
+
 TEST_CASE("connection: other operations run while a stream is open", "[net][connection]")
 {
 	mock_ldap m;
@@ -354,12 +666,53 @@ TEST_CASE("connection: a second next() on the same stream is refused", "[net][co
 	auto second = m.run(s->next());
 	REQUIRE_FALSE(second.has_value());
 	CHECK(second.error().code == client_errc::operation_in_progress);
-	CHECK(
-	  second.error().context == "search ou=people,dc=example,dc=org during an earlier next() on this search_stream");
+	CHECK(second.error().context
+		  == "search ou=people,dc=example,dc=org during an earlier next() or next_item() on this search_stream");
 	m.conn.close();
 	drive_until(m.ioc, [&first] { return first.done(); });
 	REQUIRE_FALSE(first.get().has_value());
 	CHECK(first.get().error().code == client_errc::not_connected);
+}
+
+TEST_CASE("connection: next() and next_item() refuse each other while suspended", "[net][connection][intermediate]")
+{
+	const std::string_view busy =
+	  "search ou=people,dc=example,dc=org during an earlier next() or next_item() on this search_stream";
+	mock_ldap m;
+	m.serve({ step{} });// reads the search, does not answer
+	auto s = m.run(m.conn.search_stream(people_search()));
+	REQUIRE(s.has_value());
+
+	SECTION("next_item() during next()")
+	{
+		outcome<ldap::result<std::optional<ldap::entry>>> first;
+		spawn(m.ioc, s->next(), first);
+		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+		CHECK_FALSE(first.done());
+		auto second = m.run(s->next_item());
+		REQUIRE_FALSE(second.has_value());
+		CHECK(second.error().code == client_errc::operation_in_progress);
+		CHECK(second.error().context == busy);
+		m.conn.close();
+		drive_until(m.ioc, [&first] { return first.done(); });
+		REQUIRE_FALSE(first.get().has_value());
+		CHECK(first.get().error().code == client_errc::not_connected);
+	}
+	SECTION("next() during next_item()")
+	{
+		outcome<ldap::result<std::optional<ldap::search_stream::item>>> first;
+		spawn(m.ioc, s->next_item(), first);
+		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
+		CHECK_FALSE(first.done());
+		auto second = m.run(s->next());
+		REQUIRE_FALSE(second.has_value());
+		CHECK(second.error().code == client_errc::operation_in_progress);
+		CHECK(second.error().context == busy);
+		m.conn.close();
+		drive_until(m.ioc, [&first] { return first.done(); });
+		REQUIRE_FALSE(first.get().has_value());
+		CHECK(first.get().error().code == client_errc::not_connected);
+	}
 }
 
 TEST_CASE("connection: moving connections and streams", "[net][connection]")

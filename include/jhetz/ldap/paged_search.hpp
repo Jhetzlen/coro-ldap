@@ -52,7 +52,11 @@ class paged_search
 	~paged_search();
 
 	// The next entry, nullopt after the last page, or an error (the
-	// search's, or a malformed paged results control: decode_error).
+	// search's, or a malformed paged results control: decode_error). Like
+	// search_stream::next(), it drops the controls of the entries and the
+	// IntermediateResponses (search_params::intermediate_responses is
+	// ignored: they are decoded and dropped); there is no next_item(): read
+	// the pages with search_stream and a paged control of your own for those.
 	auto next() -> boost::capy::task<result<std::optional<entry>>>;
 
 	[[nodiscard]] auto done() const noexcept -> bool;

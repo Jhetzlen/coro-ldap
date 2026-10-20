@@ -53,7 +53,11 @@
 // What the server sends is decoded with origin::server, always. Each
 // response must carry the id of an outstanding (or recently abandoned)
 // request and an operation that answers it; anything else is
-// client_errc::unexpected_response. IntermediateResponses are skipped.
+// client_errc::unexpected_response. IntermediateResponses (RFC 4511
+// section 4.13) are skipped unread, unless the request asked for them
+// (search_params / extended_params::intermediate_responses): then they are
+// decoded and returned, by search_stream::next_item() in order with the
+// entries and references, or in extended_result::intermediates.
 // Unsolicited notifications (id 0, RFC 4511 section 4.4): a Notice of
 // Disconnection fails every outstanding operation with the server's result
 // code (errc::unavailable if it sent success) and closes the connection;

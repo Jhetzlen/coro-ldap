@@ -252,8 +252,13 @@ namespace detail {
 		if (!msg) {
 			co_return std::unexpected(std::move(msg.error()));
 		}
-		auto m =
-		  co_await request_response(self, std::move(*msg), op_index<extended_response>, context, request.timeout);
+		extended_result out;
+		auto m = co_await request_response(self,
+		  std::move(*msg),
+		  op_index<extended_response>,
+		  context,
+		  request.timeout,
+		  request.intermediate_responses ? &out.intermediates : nullptr);
 		if (!m) {
 			co_return std::unexpected(std::move(m.error()));
 		}
@@ -261,7 +266,6 @@ namespace detail {
 		if (!x.result.is_success()) {
 			co_return std::unexpected(x.result.to_error(context));
 		}
-		extended_result out;
 		if (x.response_name) {
 			out.name.emplace(*x.response_name);
 		}

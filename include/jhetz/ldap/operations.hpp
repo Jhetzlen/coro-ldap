@@ -23,6 +23,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace jhetz::ldap {
 
@@ -49,6 +51,12 @@ struct search_params
 	// connection_options::operation_timeout, which applies if this is
 	// nullopt). Unlike time_limit it is enforced by the client.
 	std::optional<std::chrono::milliseconds> timeout{};
+	// Keep the IntermediateResponses (RFC 4511 section 4.13) the server
+	// sends during the search, for search_stream::next_item(). False: they
+	// are skipped unread, as everywhere else. Only next_item() returns them;
+	// next(), search() and search_paged() ignore it (they are decoded and
+	// dropped).
+	bool intermediate_responses = false;
 };
 
 // The other operations (step 6), as plain aggregates like search_params.
@@ -125,6 +133,10 @@ struct extended_params
 	std::optional<std::string> value{};// requestValue, as encoded for that operation
 	request_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
+	// Collect the IntermediateResponses (RFC 4511 section 4.13) the server
+	// sends before the ExtendedResponse into extended_result::intermediates.
+	// False: they are skipped unread.
+	bool intermediate_responses = false;
 };
 
 // What a successful operation returns besides success: the controls of the
@@ -134,11 +146,52 @@ struct response
 	std::pmr::vector<control> controls{};
 };
 
+// An IntermediateResponse (RFC 4511 section 4.13: response_name and
+// response_value, both optional) and the controls of its message, for a
+// caller that asked for them (`intermediate_responses` in search_params and
+// extended_params). Its meaning, and so the encoding of responseValue, is
+// the extension's (e.g. RFC 4533's syncInfoValue); some extensions put their
+// data in the controls instead. Allocator-aware like the message model
+// (message.hpp): a plain copy uses the default resource, the
+// allocator-extended copy the given one, assignment keeps the target's.
+// Converting it to an intermediate_response (slicing) drops the controls.
+struct intermediate : intermediate_response
+{
+	using allocator_type = std::pmr::polymorphic_allocator<>;
+
+	std::pmr::vector<control> controls{};
+
+	intermediate() = default;
+	explicit intermediate(const allocator_type &alloc) : intermediate_response(alloc), controls(alloc) {}
+	// Takes the strings of `response` and `controls_` when they are on
+	// `alloc`'s resource, else copies them onto it.
+	intermediate(intermediate_response response, std::pmr::vector<control> controls_, const allocator_type &alloc = {})
+	  : intermediate_response(std::move(response), alloc), controls(std::move(controls_), alloc)
+	{}
+	intermediate(const intermediate &) = default;
+	intermediate(intermediate &&) noexcept = default;
+	intermediate(const intermediate &other, const allocator_type &alloc)
+	  : intermediate_response(other, alloc), controls(other.controls, alloc)
+	{}
+	intermediate(intermediate &&other, const allocator_type &alloc)
+	  : intermediate_response(std::move(other), alloc), controls(std::move(other.controls), alloc)
+	{}
+	auto operator=(const intermediate &) -> intermediate & = default;
+	auto operator=(intermediate &&) -> intermediate & = default;
+	~intermediate() = default;
+
+	friend auto operator==(const intermediate &, const intermediate &) -> bool = default;
+};
+
 struct extended_result
 {
 	std::optional<std::pmr::string> name{};// responseName
 	std::optional<std::pmr::string> value{};// responseValue
 	std::pmr::vector<control> controls{};
+	// The IntermediateResponses received before the ExtendedResponse, in
+	// order; empty unless extended_params::intermediate_responses is set.
+	// Lost when the operation fails.
+	std::pmr::vector<intermediate> intermediates{};
 };
 
 // RFC 4532 "Who am I?" extended operation.

@@ -698,7 +698,7 @@ void connection::impl::route(std::size_t size)
 	}
 	if (const auto it = pending.find(h->id); it != pending.end()) {
 		pending_op &p = *it->second;
-		if (same_tag(h->op, intermediate_response_tag)) {
+		if (!p.intermediates && same_tag(h->op, intermediate_response_tag)) {
 			buf.consume(size);// skipped, not decoded
 			return;
 		}
@@ -711,7 +711,8 @@ void connection::impl::route(std::size_t size)
 		const std::size_t index = m->op.index();
 		const bool final = index == p.expect;
 		const bool streamed =
-		  p.search && (index == op_index<search_result_entry> || index == op_index<search_result_reference>);
+		  (p.search && (index == op_index<search_result_entry> || index == op_index<search_result_reference>))
+		  || (p.intermediates && index == op_index<intermediate_response>);
 		if (!final && !streamed) {
 			shut(unexpected(detail::format("{} with message id {} in response to a {}",
 				   op_name(m->op),
@@ -733,9 +734,13 @@ void connection::impl::route(std::size_t size)
 	buf.consume(size);
 	const auto a = std::ranges::find(abandoned, h->id, &abandoned_req::id);
 	if (a != abandoned.end()) {
-		// A late response to an abandoned request: dropped. The search's
-		// SearchResultDone (or any response to another request) is its
-		// last.
+		// A late response to an abandoned request: dropped. Only a final
+		// response is its last: the search's SearchResultDone, or the
+		// response to another request. IntermediateResponses (any request)
+		// and a search's entries and references may come before it.
+		if (same_tag(h->op, intermediate_response_tag)) {
+			return;
+		}
 		if (!a->search || same_tag(h->op, search_result_done_tag)) {
 			forget_abandoned(a);
 		}
@@ -857,7 +862,8 @@ namespace detail {
 	  message request,
 	  std::size_t expect,
 	  std::string context,
-	  std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<message>>
+	  std::optional<std::chrono::milliseconds> timeout,
+	  std::pmr::vector<intermediate> *intermediates) -> capy::task<result<message>>
 	{
 		if (!std::holds_alternative<bind_request>(request.op)
 			// The analyzer does not model the promise's construction: Capy's env_ is
@@ -867,11 +873,20 @@ namespace detail {
 			co_return fail(capy::error::canceled, context);
 		}
 		pending_op p(self->mr(), false, expect);
+		p.intermediates = intermediates != nullptr;
 		if (auto r = self->submit(request, &p, context); !r) {
 			co_return std::unexpected(std::move(r.error()));
 		}
 		const registration reg(*self, p);
-		co_return co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout()), context);
+		const auto deadline = deadline_after(timeout ? timeout : self->default_timeout());
+		while (true) {
+			auto m = co_await self->next_response(p, deadline, context);
+			if (!m || intermediates == nullptr || !std::holds_alternative<intermediate_response>(m->op)) {
+				co_return m;
+			}
+			// On the vector's resource (uses-allocator construction).
+			intermediates->emplace_back(std::move(std::get<intermediate_response>(m->op)), std::move(m->controls));
+		}
 	}
 
 }// namespace detail
