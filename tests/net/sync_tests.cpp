@@ -15,6 +15,7 @@
 #include <boost/corosio/tls_context.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <atomic>
@@ -35,6 +36,7 @@ namespace net = jhetz::ldap::net;
 namespace capy = boost::capy;
 namespace corosio = boost::corosio;
 using namespace jhetz::ldap::test;
+using Catch::Matchers::IsEmpty;
 
 namespace {
 
@@ -143,7 +145,8 @@ TEST_CASE("sync: many threads share one connection", "[net][sync]")
 	server_thread srv;
 	ldap::sync::connection c;
 	REQUIRE(c.connect(srv.url()).has_value());
-	constexpr int threads = 8, per_thread = 25;
+	constexpr int threads = 8;
+	constexpr int per_thread = 25;
 	std::atomic<int> failures{ 0 };
 	std::vector<std::thread> pool;
 	for (int t = 0; t < threads; ++t) {
@@ -388,7 +391,7 @@ auto hang_up(ldap::sync::connection &c, peer_server &srv) -> std::vector<ldap::m
 {
 	c.close();
 	srv.join();
-	CHECK(srv.log.error == "");
+	CHECK_THAT(srv.log.error, IsEmpty());
 	return srv.log.received;
 }
 

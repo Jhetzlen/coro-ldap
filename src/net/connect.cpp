@@ -42,7 +42,9 @@ auto detail::interleave_families(std::vector<corosio::endpoint> in) -> std::vect
 		return in;
 	}
 	const bool first_v6 = in.front().is_v6();
-	std::vector<corosio::endpoint> preferred, other, out;
+	std::vector<corosio::endpoint> preferred;
+	std::vector<corosio::endpoint> other;
+	std::vector<corosio::endpoint> out;
 	for (auto &ep : in) {
 		(ep.is_v6() == first_v6 ? preferred : other).push_back(ep);
 	}

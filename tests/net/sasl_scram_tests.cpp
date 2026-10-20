@@ -300,11 +300,11 @@ TEST_CASE("scram: SASLprep rejections and input checks", "[sasl][scram]")
 						"\xD7\xA9\xD7\x9C"
 						"1"),
 	  "password " + bidi);
-	CHECK(client_final_for("\xD8\xA7"
-						   "1"
-						   "\xD8\xA8")
-			.size()
-		  > 0);// RTL, digits inside: fine
+	CHECK(
+	  !client_final_for("\xD8\xA7"
+						"1"
+						"\xD8\xA8")
+		.empty());// RTL, digits inside: fine
 
 	// The password is a stored string: unassigned code points (Unicode 3.2) are refused.
 	const std::string unassigned = "password contains a code point unassigned in Unicode 3.2 (RFC 4013 section 2.5)";

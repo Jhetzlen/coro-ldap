@@ -181,20 +181,27 @@ TEST_CASE("ldap::error message sanitizes the server's text and keeps the fields 
 	  "d\xC3\xA9j\xC3\xA0 vu \xE6\x97\xA5\xE6\x9C\xAC \xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x92\xBB";
 	CHECK(shown(text) == text);
 	// CR LF (log line injection), ESC (terminal sequences), NUL, DEL and C1.
-	const std::string nul(1, '\0'), del = "\x7F", csi = "\xC2\x9B";// U+009B
+	const std::string nul(1, '\0');
+	const std::string del = "\x7F";
+	const std::string csi = "\xC2\x9B";// U+009B
 	CHECK(shown("bad\r\n2026-01-01 INFO forged") == "bad" + fffd + fffd + "2026-01-01 INFO forged");
 	CHECK(shown("\x1B[2Jcleared") == fffd + "[2Jcleared");
 	CHECK(shown("a" + nul + "b" + del + "c" + csi + "d") == "a" + fffd + "b" + fffd + "c" + fffd + "d");
 	// Bidi controls (Trojan Source) and LINE / PARAGRAPH SEPARATOR.
-	const std::string rlo = "\xE2\x80\xAE", pdi = "\xE2\x81\xA9", alm = "\xD8\x9C";// U+202E, U+2069, U+061C
-	const std::string ls = "\xE2\x80\xA8", ps = "\xE2\x80\xA9";// U+2028, U+2029
+	const std::string rlo = "\xE2\x80\xAE";// U+202E
+	const std::string pdi = "\xE2\x81\xA9";// U+2069
+	const std::string alm = "\xD8\x9C";// U+061C
+	const std::string ls = "\xE2\x80\xA8";// U+2028
+	const std::string ps = "\xE2\x80\xA9";// U+2029
 	CHECK(shown("ok" + rlo + "deliaf" + pdi + "!") == "ok" + fffd + "deliaf" + fffd + "!");
 	CHECK(shown("a" + ls + "b" + ps + "c" + alm + "d") == "a" + fffd + "b" + fffd + "c" + fffd + "d");
 	// Ill-formed UTF-8: one U+FFFD per maximal subpart, so a truncated
 	// sequence is one, and an overlong form, a surrogate or a stray byte one
 	// per byte.
-	const std::string truncated3 = "\xE2\x80", truncated4 = "\xF0\x9F\x98";
-	const std::string overlong = "\xC0\xAF", surrogate = "\xED\xA0\x80";
+	const std::string truncated3 = "\xE2\x80";
+	const std::string truncated4 = "\xF0\x9F\x98";
+	const std::string overlong = "\xC0\xAF";
+	const std::string surrogate = "\xED\xA0\x80";
 	CHECK(shown("a" + truncated3 + "b" + truncated4) == "a" + fffd + "b" + fffd);
 	CHECK(
 	  shown("a" + overlong + "b" + surrogate + "c\xFF") == "a" + fffd + fffd + "b" + fffd + fffd + fffd + "c" + fffd);

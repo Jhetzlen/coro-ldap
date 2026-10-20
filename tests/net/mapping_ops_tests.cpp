@@ -181,7 +181,7 @@ TEST_CASE("typed: load_schema reads the subschema named by the root DSE", "[net]
 	m.check_server();
 	REQUIRE(m.log.received.size() == 2);
 	const auto &root = std::get<ldap::search_request>(m.log.received[0].op);
-	CHECK(root.base_object == "");
+	CHECK(root.base_object.empty());
 	CHECK(root.scope == ldap::search_scope::base_object);
 	CHECK(root.attributes == ldap::string_list{ "subschemaSubentry" });
 	const auto &sub = std::get<ldap::search_request>(m.log.received[1].op);

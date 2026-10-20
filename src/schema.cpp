@@ -146,7 +146,8 @@ namespace {
 			return bad("invalid OID");
 		}
 		std::optional<token> pending;
-		constexpr std::size_t max_fields = 256, max_values = 4096;
+		constexpr std::size_t max_fields = 256;
+		constexpr std::size_t max_values = 4096;
 		while (true) {
 			result<token> k = pending ? result<token>(std::move(*pending)) : lx.next();
 			pending.reset();

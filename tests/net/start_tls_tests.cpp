@@ -19,6 +19,7 @@
 #include <boost/corosio/tls_context.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <chrono>
@@ -41,6 +42,7 @@ namespace capy = boost::capy;
 namespace corosio = boost::corosio;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::ContainsSubstring;
+using Catch::Matchers::IsEmpty;
 using Catch::Matchers::StartsWith;
 
 namespace {
@@ -222,7 +224,7 @@ TEST_CASE("start_tls: upgrade, then LDAP over TLS", "[net][starttls]")
 	CHECK_FALSE(c.is_open());
 	CHECK_FALSE(c.is_tls());
 	drive(f.ioc);
-	CHECK(f.server.get() == "");
+	CHECK_THAT(f.server.get(), IsEmpty());
 }
 
 TEST_CASE("start_tls: is_tls() is false once the server drops the connection", "[net][starttls]")
@@ -233,7 +235,7 @@ TEST_CASE("start_tls: is_tls() is false once the server drops the connection", "
 	CHECK(c.is_tls());
 	REQUIRE(finish(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
 	drive_until(f.ioc, [&f] { return f.server.done(); });
-	CHECK(f.server.get() == "");
+	CHECK_THAT(f.server.get(), IsEmpty());
 	auto r = finish(f.ioc, c.search({}));
 	REQUIRE_FALSE(r.has_value());
 	CHECK_FALSE(c.is_open());
@@ -431,7 +433,7 @@ TEST_CASE("start_tls: connection_options::start_tls upgrades right after connect
 	CHECK(finish(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
 	c.close();
 	drive(f.ioc);
-	CHECK(f.server.get() == "");
+	CHECK_THAT(f.server.get(), IsEmpty());
 }
 
 TEST_CASE("start_tls: unbind ends the TLS session with close_notify", "[net][starttls]")
@@ -445,7 +447,7 @@ TEST_CASE("start_tls: unbind ends the TLS session with close_notify", "[net][sta
 	CHECK_FALSE(c.is_open());
 	CHECK_FALSE(c.is_tls());
 	drive(f.ioc);
-	CHECK(f.server.get() == "");
+	CHECK_THAT(f.server.get(), IsEmpty());
 }
 
 TEST_CASE("start_tls: unbind waits for the server's close_notify at most tls_shutdown_timeout",
@@ -460,7 +462,7 @@ TEST_CASE("start_tls: unbind waits for the server's close_notify at most tls_shu
 	const auto elapsed = std::chrono::steady_clock::now() - start;
 	CHECK_FALSE(c.is_open());
 	drive(f.ioc);
-	CHECK(f.server.get() == "");
+	CHECK_THAT(f.server.get(), IsEmpty());
 	CHECK(elapsed >= std::chrono::milliseconds(150));
 	CHECK(elapsed < std::chrono::seconds(10));
 }
@@ -481,7 +483,7 @@ TEST_CASE("start_tls: the server refuses", "[net][starttls]")
 	CHECK(finish(f.ioc, c.search({})).has_value());
 	c.close();
 	drive(f.ioc);
-	CHECK(f.server.get() == "");
+	CHECK_THAT(f.server.get(), IsEmpty());
 }
 
 TEST_CASE("start_tls: bytes before the handshake are refused", "[net][starttls]")
@@ -499,7 +501,7 @@ TEST_CASE("start_tls: bytes before the handshake are refused", "[net][starttls]"
 	REQUIRE_FALSE(later.has_value());
 	CHECK(later.error().code == ldap::client_errc::not_connected);
 	drive(f.ioc);
-	CHECK(f.server.get() == "");
+	CHECK_THAT(f.server.get(), IsEmpty());
 }
 
 TEST_CASE("start_tls: certificate verification failures", "[net][starttls]")
@@ -554,7 +556,8 @@ TEST_CASE("start_tls: the refusal counts the outstanding requests", "[net][start
 {
 	mock_ldap m;
 	m.serve({ step{}, step{} });// reads both searches, never answers
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> first, second;
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> first;
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> second;
 	spawn(m.ioc, m.conn.search({}), first);
 	spawn(m.ioc, m.conn.search({}), second);
 	drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
@@ -631,7 +634,7 @@ TEST_CASE("RFC 4511 4.14.1: requests are refused while StartTLS is in progress",
 	CHECK(finish(f.ioc, c.simple_bind(ldap::dn{}, "")).has_value());
 	c.close();
 	drive(f.ioc);
-	CHECK(f.server.get() == "");
+	CHECK_THAT(f.server.get(), IsEmpty());
 }
 
 namespace {
@@ -721,7 +724,7 @@ TEST_CASE("start_tls: stopped before it starts, it is not sent", "[net][starttls
 	CHECK_FALSE(c.is_tls());
 	c.close();
 	drive_until(f.ioc, [&server] { return server.done(); });
-	CHECK(server.get().empty());
+	CHECK_THAT(server.get(), IsEmpty());
 }
 
 namespace {
@@ -844,7 +847,7 @@ TEST_CASE("RFC 4513 3.1.5: the schema read in clear is read again after StartTLS
 	REQUIRE(finish(f.ioc, c.search_as<tls_account>({})).has_value());
 	c.close();
 	drive_until(f.ioc, [&server] { return server.done(); });
-	CHECK(server.get() == "");
+	CHECK_THAT(server.get(), IsEmpty());
 	CHECK(log
 		  == std::vector<std::string>{
 			"root DSE", "subschema", "search", "StartTLS", "tls root DSE", "tls subschema", "tls search" });

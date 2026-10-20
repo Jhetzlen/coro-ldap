@@ -24,6 +24,7 @@
 #include <openssl/err.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
@@ -56,6 +57,7 @@ namespace corosio = boost::corosio;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::ContainsSubstring;
 using Catch::Matchers::EndsWith;
+using Catch::Matchers::IsEmpty;
 using Catch::Matchers::StartsWith;
 using ldap::client_errc;
 
@@ -107,7 +109,8 @@ extern "C" auto getaddrinfo(const char *node, const char *service, const struct 
 	if (name.starts_with("two-addr-")) {
 		struct addrinfo v4 = hints != nullptr ? *hints : addrinfo{};
 		v4.ai_family = AF_INET;
-		struct addrinfo *first = nullptr, *second = nullptr;
+		struct addrinfo *first = nullptr;
+		struct addrinfo *second = nullptr;
 		if (int rc = real("127.0.0.2", service, &v4, &first); rc != 0) {
 			return rc;
 		}
@@ -274,12 +277,13 @@ TEST_CASE("connect ldap:// to a loopback server and exchange messages", "[net][c
 {
 	corosio::io_context ioc;
 	tcp_server srv(ioc);
-	outcome<std::string> server, client;
+	outcome<std::string> server;
+	outcome<std::string> client;
 	spawn(ioc, accept_and_serve(srv.acc), server);
 	spawn(ioc, exchange(ioc, srv.url("ldap")), client);
 	drive(ioc);
-	CHECK(client.get() == "");
-	CHECK(server.get() == "");
+	CHECK_THAT(client.get(), IsEmpty());
+	CHECK_THAT(server.get(), IsEmpty());
 }
 
 TEST_CASE("connect timeout semantics", "[net][connect][tcp][timeout]")
@@ -288,12 +292,13 @@ TEST_CASE("connect timeout semantics", "[net][connect][tcp][timeout]")
 	for (auto limit : { std::optional<std::chrono::milliseconds>{}, std::optional(std::chrono::milliseconds::max()) }) {
 		corosio::io_context ioc;
 		tcp_server srv(ioc);
-		outcome<std::string> server, client;
+		outcome<std::string> server;
+		outcome<std::string> client;
 		spawn(ioc, accept_and_serve(srv.acc), server);
 		spawn(ioc, exchange(ioc, srv.url("ldap"), { .timeout = limit }), client);
 		drive(ioc);
-		CHECK(client.get() == "");
-		CHECK(server.get() == "");
+		CHECK_THAT(client.get(), IsEmpty());
+		CHECK_THAT(server.get(), IsEmpty());
 	}
 	// Zero or negative: fails at once, before any traffic.
 	for (auto limit : { std::chrono::milliseconds(0), std::chrono::milliseconds(-5) }) {
@@ -341,12 +346,13 @@ TEST_CASE("connect timeout holds while the name lookup blocks", "[net][connect][
 	// A slow lookup within the budget still succeeds.
 	corosio::io_context ioc;
 	tcp_server srv(ioc);
-	outcome<std::string> server, client;
+	outcome<std::string> server;
+	outcome<std::string> client;
 	spawn(ioc, accept_and_serve(srv.acc), server);
 	spawn(ioc, exchange(ioc, srv.url("ldap", "slow-dns-b.test"), { .timeout = std::chrono::seconds(10) }), client);
 	drive(ioc);
-	CHECK(client.get() == "");
-	CHECK(server.get() == "");
+	CHECK_THAT(client.get(), IsEmpty());
+	CHECK_THAT(server.get(), IsEmpty());
 }
 
 namespace {
@@ -385,7 +391,8 @@ TEST_CASE("Happy Eyeballs: a black-holed first address costs the attempt delay",
 	tcp_server good(ioc);
 	blackhole hole(ioc, "127.0.0.2", good.port);
 
-	outcome<std::string> server, client;
+	outcome<std::string> server;
+	outcome<std::string> client;
 	spawn(ioc, accept_and_serve(good.acc), server);
 	const auto start = std::chrono::steady_clock::now();
 	spawn(ioc,
@@ -395,8 +402,8 @@ TEST_CASE("Happy Eyeballs: a black-holed first address costs the attempt delay",
 	  client);
 	drive(ioc);
 	const auto elapsed = std::chrono::steady_clock::now() - start;
-	CHECK(client.get() == "");
-	CHECK(server.get() == "");
+	CHECK_THAT(client.get(), IsEmpty());
+	CHECK_THAT(server.get(), IsEmpty());
 	INFO("connected after " << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count() << " ms");
 	CHECK(elapsed >= std::chrono::milliseconds(150));// the second attempt waited for the delay
 	CHECK(elapsed < std::chrono::seconds(5));
@@ -409,7 +416,8 @@ TEST_CASE("Happy Eyeballs: a refused address starts the next attempt at once", "
 	// so 127.0.0.1 does not wait out the (long) attempt delay.
 	corosio::io_context ioc;
 	tcp_server good(ioc);
-	outcome<std::string> server, client;
+	outcome<std::string> server;
+	outcome<std::string> client;
 	spawn(ioc, accept_and_serve(good.acc), server);
 	const auto start = std::chrono::steady_clock::now();
 	spawn(ioc,
@@ -418,8 +426,8 @@ TEST_CASE("Happy Eyeballs: a refused address starts the next attempt at once", "
 		{ .timeout = std::chrono::seconds(30), .attempt_delay = std::chrono::seconds(20) }),
 	  client);
 	drive(ioc);
-	CHECK(client.get() == "");
-	CHECK(server.get() == "");
+	CHECK_THAT(client.get(), IsEmpty());
+	CHECK_THAT(server.get(), IsEmpty());
 	CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(5));
 }
 
@@ -491,12 +499,13 @@ TEST_CASE("connect ldap://localhost resolves the name", "[net][connect][tcp]")
 	corosio::io_context ioc;
 	tcp_server srv(
 	  ioc);// IPv4 only: if localhost resolves to ::1 first, that attempt is refused and 127.0.0.1 is tried next
-	outcome<std::string> server, client;
+	outcome<std::string> server;
+	outcome<std::string> client;
 	spawn(ioc, accept_and_serve(srv.acc), server);
 	spawn(ioc, exchange(ioc, srv.url("ldap", "localhost")), client);
 	drive(ioc);
-	CHECK(client.get() == "");
-	CHECK(server.get() == "");
+	CHECK_THAT(client.get(), IsEmpty());
+	CHECK_THAT(server.get(), IsEmpty());
 }
 
 TEST_CASE("transport identity after connect", "[net][connect][tcp]")
@@ -711,23 +720,25 @@ void exchange_over(corosio::io_context &ioc, ipv6_server &v6)
 {
 	SECTION("ldap://")
 	{
-		outcome<std::string> server, client;
+		outcome<std::string> server;
+		outcome<std::string> client;
 		spawn(ioc, accept_and_serve(*v6.acc), server);
 		spawn(ioc, exchange(ioc, v6.url("ldap")), client);
 		drive(ioc);
-		CHECK(client.get() == "");
-		CHECK(server.get() == "");
+		CHECK_THAT(client.get(), IsEmpty());
+		CHECK_THAT(server.get(), IsEmpty());
 	}
 	SECTION("ldaps://: the certificate's iPAddress matches (without the zone)")
 	{
 		const auto leaf = pki().issue("ipv6", "IP:" + v6.address);
-		outcome<std::string> server, client;
+		outcome<std::string> server;
+		outcome<std::string> client;
 		spawn(ioc, accept_and_serve(*v6.acc, server_context(leaf)), server);
 		spawn(
 		  ioc, exchange(ioc, v6.url("ldaps"), { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()) } }, true), client);
 		drive(ioc);
-		CHECK(client.get() == "");
-		CHECK(server.get() == "");
+		CHECK_THAT(client.get(), IsEmpty());
+		CHECK_THAT(server.get(), IsEmpty());
 	}
 }
 
@@ -795,12 +806,13 @@ TEST_CASE("connect ldapi:// to a Unix domain socket", "[net][connect][ldapi]")
 	REQUIRE_FALSE(acc.listen());
 
 	const std::string url = "ldapi://" + percent_encode(sock.str());
-	outcome<std::string> server, client;
+	outcome<std::string> server;
+	outcome<std::string> client;
 	spawn(ioc, accept_and_serve(acc), server);
 	spawn(ioc, exchange(ioc, url), client);
 	drive(ioc);
-	CHECK(client.get() == "");
-	CHECK(server.get() == "");
+	CHECK_THAT(client.get(), IsEmpty());
+	CHECK_THAT(server.get(), IsEmpty());
 }
 
 TEST_CASE("ldapi:// errors", "[net][connect][ldapi]")
@@ -836,7 +848,8 @@ TEST_CASE("ldaps:// with the CA configured", "[net][connect][tls]")
 {
 	corosio::io_context ioc;
 	tcp_server srv(ioc);
-	outcome<std::string> server, client;
+	outcome<std::string> server;
+	outcome<std::string> client;
 
 	SECTION("CA as PEM text, IP address certificate")
 	{
@@ -867,8 +880,8 @@ TEST_CASE("ldaps:// with the CA configured", "[net][connect][tls]")
 		  client);
 	}
 	drive(ioc);
-	CHECK(client.get() == "");
-	CHECK(server.get() == "");
+	CHECK_THAT(client.get(), IsEmpty());
+	CHECK_THAT(server.get(), IsEmpty());
 }
 
 TEST_CASE("ldaps:// verification failures", "[net][connect][tls]")
@@ -963,8 +976,8 @@ TEST_CASE("ldaps:// host name matching", "[net][connect][tls][rfc]")
 					outcome<std::string> client;
 					spawn(ioc, exchange(ioc, srv.url("ldaps"), o, true), client);
 					drive(ioc);
-					CHECK(client.get() == "");
-					CHECK(server.get() == "");
+					CHECK_THAT(client.get(), IsEmpty());
+					CHECK_THAT(server.get(), IsEmpty());
 				} else {
 					auto t = connect_to(ioc, srv.url("ldaps"), o);
 					REQUIRE_FALSE(t.has_value());
@@ -984,7 +997,8 @@ TEST_CASE("ldaps:// insecure opt-out accepts an untrusted certificate", "[net][c
 	corosio::io_context ioc;
 	tcp_server srv(ioc);
 	const auto leaf = pki().issue("other.example", "DNS:other.example");// untrusted and for another name
-	outcome<std::string> server, client;
+	outcome<std::string> server;
+	outcome<std::string> client;
 	spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
 	spawn(ioc,
 	  exchange(ioc,
@@ -993,8 +1007,8 @@ TEST_CASE("ldaps:// insecure opt-out accepts an untrusted certificate", "[net][c
 		true),
 	  client);
 	drive(ioc);
-	CHECK(client.get() == "");
-	CHECK(server.get() == "");
+	CHECK_THAT(client.get(), IsEmpty());
+	CHECK_THAT(server.get(), IsEmpty());
 }
 
 TEST_CASE("ldaps:// client certificate", "[net][connect][tls]")
@@ -1006,11 +1020,13 @@ TEST_CASE("ldaps:// client certificate", "[net][connect][tls]")
 	REQUIRE_FALSE(ctx.add_certificate_authority(pki().ca_pem()));
 
 	const auto client_leaf = pki().issue("client", "DNS:client.example");
-	temp_path cert(".crt"), key(".key");
+	temp_path cert(".crt");
+	temp_path key(".key");
 	cert.write(client_leaf.cert_pem);
 	key.write(client_leaf.key_pem);
 
-	outcome<std::string> server, client;
+	outcome<std::string> server;
+	outcome<std::string> client;
 	SECTION("presented")
 	{
 		spawn(ioc, accept_and_serve(srv.acc, ctx), server);
@@ -1021,8 +1037,8 @@ TEST_CASE("ldaps:// client certificate", "[net][connect][tls]")
 			true),
 		  client);
 		drive(ioc);
-		CHECK(client.get() == "");
-		CHECK(server.get() == "");
+		CHECK_THAT(client.get(), IsEmpty());
+		CHECK_THAT(server.get(), IsEmpty());
 	}
 	SECTION("missing")
 	{
@@ -1104,7 +1120,10 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	// Client certificate and key are parsed and matched before connecting too.
 	const auto one = pki().issue("client-one", "DNS:client-one");
 	const auto two = pki().issue("client-two", "DNS:client-two");
-	temp_path cert_one(".crt"), key_one(".key"), key_two(".key"), junk(".pem");
+	temp_path cert_one(".crt");
+	temp_path key_one(".key");
+	temp_path key_two(".key");
+	temp_path junk(".pem");
 	cert_one.write(one.cert_pem);
 	key_one.write(one.key_pem);
 	key_two.write(two.key_pem);
@@ -1194,7 +1213,8 @@ TEST_CASE("TLS configuration errors leave the OpenSSL error queue empty", "[net]
 	CHECK(ERR_peek_error() == 0);
 
 	const auto leaf = pki().issue("client-locked", "DNS:client-locked");
-	temp_path cert(".crt"), encrypted(".key");
+	temp_path cert(".crt");
+	temp_path encrypted(".key");
 	cert.write(leaf.cert_pem);
 	encrypted.write(test_pki::encrypted_key_pem(leaf.key_pem, "passphrase"));
 	auto locked = net::detail::make_tls_setup({ .cert_file = cert.str(), .key_file = encrypted.str() });
@@ -1227,12 +1247,13 @@ TEST_CASE("ldaps:// with a CA directory", "[net][connect][tls]")
 
 	corosio::io_context ioc;
 	tcp_server srv(ioc);
-	outcome<std::string> server, client;
+	outcome<std::string> server;
+	outcome<std::string> client;
 	spawn(ioc, accept_and_serve(srv.acc, server_context(localhost_cert())), server);
 	spawn(ioc, exchange(ioc, srv.url("ldaps"), { .tls = { .ca_dir = dir.str() } }, true), client);
 	drive(ioc);
-	CHECK(client.get() == "");
-	CHECK(server.get() == "");
+	CHECK_THAT(client.get(), IsEmpty());
+	CHECK_THAT(server.get(), IsEmpty());
 
 	// A directory without that CA: the server's certificate is untrusted.
 	std::filesystem::remove(ca_file.p);
@@ -1254,7 +1275,8 @@ TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
 	// close_notify. Between PDUs that reads as a plain close.
 	corosio::io_context ioc;
 	tcp_server srv(ioc);
-	outcome<std::string> server, client;
+	outcome<std::string> server;
+	outcome<std::string> client;
 	spawn(
 	  ioc,
 	  [](corosio::tcp_acceptor &acc, corosio::tls_context ctx) -> capy::task<std::string> {
@@ -1295,7 +1317,7 @@ TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
 	  }(ioc, srv.url("ldaps")),
 	  client);
 	drive(ioc);
-	CHECK(server.get() == "");
+	CHECK_THAT(server.get(), IsEmpty());
 	const std::string result = client.get();
 	INFO(result);
 	// Corosio reports the missing close_notify as cond::stream_truncated.
@@ -1364,7 +1386,7 @@ TEST_CASE("transport shutdown: TLS close_notify both ways", "[net][connect][tls]
 	spawn(ioc, connect_and_shutdown(ioc, srv.url("ldaps"), std::chrono::seconds(10)), client);
 	drive(ioc);
 	CHECK(server.get() == "close_notify");
-	CHECK(client.get().first == "");
+	CHECK_THAT(client.get().first, IsEmpty());
 	CHECK_FALSE(client.get().second);// closed
 }
 

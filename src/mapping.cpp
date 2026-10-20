@@ -95,7 +95,8 @@ auto parse_generalized_time(std::string_view s) -> result<sys_seconds>
 	if (!year || !month || !day || !hour) {
 		return bad("date and hour");
 	}
-	std::optional<int> minute, second;
+	std::optional<int> minute;
+	std::optional<int> second;
 	if (next_is_digit(s, pos)) {
 		minute = digits(s, pos, 2);
 		if (!minute) {
@@ -116,7 +117,8 @@ auto parse_generalized_time(std::string_view s) -> result<sys_seconds>
 			return bad("fraction");
 		}
 		const seconds unit = second ? seconds(1) : minute ? seconds(60) : seconds(3600);
-		std::int64_t num = 0, den = 1;
+		std::int64_t num = 0;
+		std::int64_t den = 1;
 		while (next_is_digit(s, pos)) {
 			if (den < 1'000'000'000) {// enough precision; the rest is truncated
 				num = num * 10 + (s[pos] - '0');

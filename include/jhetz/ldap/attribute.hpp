@@ -72,7 +72,9 @@ namespace detail {
 			return { .length = 1, .well_formed = true };
 		}
 		std::size_t n = 0;
-		unsigned char lo = 0x80u, hi = 0xBFu;// range of the second octet
+		// The range of the second octet.
+		unsigned char lo = 0x80u;
+		unsigned char hi = 0xBFu;
 		if (c >= 0xC2u && c <= 0xDFu) {
 			n = 2;
 		} else if (c >= 0xE0u && c <= 0xEFu) {

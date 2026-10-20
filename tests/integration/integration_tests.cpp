@@ -1190,7 +1190,8 @@ auto proxy(corosio::io_context &ioc, corosio::tcp_acceptor &acc, std::uint16_t s
 	}
 	net::transport to_client = net::transport::wrap(std::move(client), "proxy client");
 	net::transport to_server = net::transport::wrap(std::move(server), "proxy server");
-	net::read_buffer from_client, from_server;
+	net::read_buffer from_client;
+	net::read_buffer from_server;
 	// One request in, one (broken) answer out.
 	auto req = co_await net::read_frame(to_client, from_client, ldap::ber::default_max_message_size);
 	if (!req) {

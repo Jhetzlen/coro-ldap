@@ -419,7 +419,11 @@ namespace {
 	  std::string &proof_b64,
 	  std::span<unsigned char, key_size> server_signature) -> bool
 	{
-		wiped<key_size> client_key, stored_key, client_signature, proof, server_key;
+		wiped<key_size> client_key;
+		wiped<key_size> stored_key;
+		wiped<key_size> client_signature;
+		wiped<key_size> proof;
+		wiped<key_size> server_key;
 		if (!hmac(salted, "Client Key", client_key.span())
 			|| SHA256(client_key.data(), client_key.size(), stored_key.data()) == nullptr
 			|| !hmac(stored_key.span(), auth_message, client_signature.span())

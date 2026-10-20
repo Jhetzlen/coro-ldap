@@ -10,6 +10,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <chrono>
@@ -32,6 +33,7 @@
 namespace ldap = jhetz::ldap;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::ContainsSubstring;
+using Catch::Matchers::IsEmpty;
 using Catch::Matchers::StartsWith;
 using ldap::client_errc;
 using ldap::errc;
@@ -348,7 +350,7 @@ TEST_CASE("operations: extended operations and who am I", "[net][operations]")
 	CHECK(*me == "dn:cn=admin,dc=example,dc=org");
 	auto anon = m.run(m.conn.who_am_i());
 	REQUIRE(anon.has_value());
-	CHECK(*anon == "");
+	CHECK(anon->empty());
 
 	auto unknown = m.run(m.conn.extended({ .name = "1.9.9" }));
 	REQUIRE_FALSE(unknown.has_value());
@@ -1326,7 +1328,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		CHECK(unbind.get().has_value());
 		CHECK(add.done());
 		server.get();
-		CHECK(drained.error == "");
+		CHECK_THAT(drained.error, IsEmpty());
 		REQUIRE(drained.received.size() == 2);
 		CHECK(std::holds_alternative<ldap::add_request>(drained.received[0].op));
 		CHECK(std::holds_alternative<ldap::unbind_request>(drained.received[1].op));

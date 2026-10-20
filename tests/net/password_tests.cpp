@@ -16,6 +16,7 @@
 #include <boost/corosio/tls_context.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <unistd.h>
@@ -36,6 +37,7 @@ namespace net = jhetz::ldap::net;
 using namespace jhetz::ldap::test;
 using namespace std::literals;
 using Catch::Matchers::ContainsSubstring;
+using Catch::Matchers::IsEmpty;
 using ldap::client_errc;
 using ldap::password_method;
 
@@ -81,7 +83,7 @@ void check_root_dse_search(const ldap::message &m)
 {
 	const auto *s = std::get_if<ldap::search_request>(&m.op);
 	REQUIRE(s != nullptr);
-	CHECK(s->base_object == "");
+	CHECK(s->base_object.empty());
 	CHECK(s->scope == ldap::search_scope::base_object);
 	CHECK(s->attributes == ldap::string_list{ "supportedExtension", "supportedCapabilities" });
 }
@@ -203,7 +205,7 @@ struct tls_mock
 	void check_server()
 	{
 		drive_until(ioc, [this] { return server.done(); });
-		CHECK(log.error == "");
+		CHECK_THAT(log.error, IsEmpty());
 		CHECK(server.done());
 	}
 };

@@ -28,6 +28,7 @@
 #include <poll.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
@@ -56,6 +57,7 @@ namespace capy = boost::capy;
 namespace corosio = boost::corosio;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::ContainsSubstring;
+using Catch::Matchers::IsEmpty;
 using Catch::Matchers::StartsWith;
 using ldap::client_errc;
 using ldap::errc;
@@ -1150,7 +1152,8 @@ TEST_CASE("connection: concurrent searches with interleaved responses", "[net][c
 		done_msg(2),
 		entry_msg(1, "uid=a3,ou=people,dc=example,dc=org", "A3"),
 		done_msg(1) }) });
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> a, b;
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> a;
+	outcome<ldap::result<std::pmr::vector<ldap::entry>>> b;
 	spawn(m.ioc, m.conn.search(people_search()), a);
 	spawn(m.ioc, m.conn.search({ .base = ldap::dn{ "ou=groups,dc=example,dc=org" } }), b);
 	drive_until(m.ioc, [&] { return a.done() && b.done(); });
@@ -1392,7 +1395,7 @@ TEST_CASE("connection: stress with many concurrent operations", "[net][connectio
 			if (i % 7 == 0) {
 				CHECK_THAT(results[i].get(), ContainsSubstring("canceled"));
 			} else {
-				CHECK(results[i].get() == "");
+				CHECK_THAT(results[i].get(), IsEmpty());
 			}
 		}
 		m.check_server();
@@ -1425,7 +1428,9 @@ TEST_CASE("connection: mutated server responses", "[net][connection]")
 		state = state * 6364136223846793005u + 1442695040888963407u;
 		return static_cast<std::size_t>((state >> 33) % bound);
 	};
-	std::size_t ok = 0, server_error = 0, broken = 0;
+	std::size_t ok = 0;
+	std::size_t server_error = 0;
+	std::size_t broken = 0;
 	corosio::io_context ioc;
 	for (int i = 0; i < 1500; ++i) {
 		std::string bytes = wire;
@@ -1667,7 +1672,8 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 		mock_ldap m;
 		m.serve({ answer({ bind_resp(1) }), answer({ done_msg(2) }), answer({ done_msg(3) }) });
 		outcome<ldap::result<void>> bind;
-		outcome<ldap::result<std::pmr::vector<ldap::entry>>> first, second;
+		outcome<ldap::result<std::pmr::vector<ldap::entry>>> first;
+		outcome<ldap::result<std::pmr::vector<ldap::entry>>> second;
 		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
 		spawn(m.ioc, m.conn.search(people_search()), first);
 		spawn(m.ioc, m.conn.search({}), second);
@@ -1707,7 +1713,8 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 	{
 		mock_ldap m;
 		m.serve({ answer({ bind_resp(1) }), answer({ bind_resp(2) }) });
-		outcome<ldap::result<void>> first, second;
+		outcome<ldap::result<void>> first;
+		outcome<ldap::result<void>> second;
 		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), first);
 		spawn(m.ioc, m.conn.simple_bind(ldap::dn{}, ""), second);
 		drive_until(m.ioc, [&] { return first.done() && second.done(); });
@@ -1716,13 +1723,14 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 		m.check_server();
 		REQUIRE(m.log.received.size() == 2);
 		CHECK(std::get<ldap::bind_request>(m.log.received[0].op).name == "cn=admin,dc=example,dc=org");
-		CHECK(std::get<ldap::bind_request>(m.log.received[1].op).name == "");
+		CHECK(std::get<ldap::bind_request>(m.log.received[1].op).name.empty());
 	}
 	SECTION("a bind cancelled while waiting for the first")
 	{
 		mock_ldap m;
 		m.serve({ step{}, step{} });// reads the first bind, never answers
-		outcome<ldap::result<void>> first, second;
+		outcome<ldap::result<void>> first;
+		outcome<ldap::result<void>> second;
 		std::stop_source stop;
 		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), first);
 		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
@@ -1745,7 +1753,8 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 		// resumption runs, so the wait itself is not cancelled.
 		mock_ldap m;
 		m.serve({ answer({ bind_resp(1) }), answer({ done_msg(2) }) });
-		outcome<ldap::result<void>> first, second;
+		outcome<ldap::result<void>> first;
+		outcome<ldap::result<void>> second;
 		std::stop_source stop;
 		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), first);
 		spawn(m.ioc, stop.get_token(), m.conn.simple_bind(ldap::dn{}, ""), second);

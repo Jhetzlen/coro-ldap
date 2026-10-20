@@ -191,7 +191,9 @@ TEST_CASE("read_message: PDUs split across arbitrary read boundaries", "[net][re
 TEST_CASE("read_message: several PDUs in one read are kept for later calls", "[net][read_message]")
 {
 	mock m;
-	const auto a = bind_response_msg(1), b = bind_response_msg(2, "two"), c = bind_response_msg(3, "three");
+	const auto a = bind_response_msg(1);
+	const auto b = bind_response_msg(2, "two");
+	const auto c = bind_response_msg(3, "three");
 	m.peer->provide(bytes_of(a) + bytes_of(b) + bytes_of(c));
 	auto ra = m.read();
 	REQUIRE(ra.has_value());
@@ -210,7 +212,8 @@ TEST_CASE("read_message: several PDUs in one read are kept for later calls", "[n
 TEST_CASE("read_message: leftover bytes of the next PDU", "[net][read_message]")
 {
 	mock m;
-	const auto first = bind_response_msg(1), second = bind_response_msg(2, std::string(500, 'y'));
+	const auto first = bind_response_msg(1);
+	const auto second = bind_response_msg(2, std::string(500, 'y'));
 	const auto second_bytes = bytes_of(second);
 	m.peer->provide(bytes_of(first) + second_bytes.substr(0, 100));
 	auto r1 = m.read();

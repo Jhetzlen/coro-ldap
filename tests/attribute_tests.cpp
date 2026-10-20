@@ -94,10 +94,13 @@ TEST_CASE("ci_hash / ci_equal fold A-Z only, in every byte position", "[attribut
 	const ldap::detail::ci_hash hash;
 	const ldap::detail::ci_equal equal;
 	const std::string base = "abcdefghijklmnopqrstuvwxyz";
-	std::size_t mismatches = 0, hash_mismatches = 0, equal_pairs = 0;
+	std::size_t mismatches = 0;
+	std::size_t hash_mismatches = 0;
+	std::size_t equal_pairs = 0;
 	for (std::size_t len : { 1u, 2u, 7u, 8u, 9u, 15u, 16u, 17u, 25u }) {
 		for (std::size_t pos : { std::size_t{ 0 }, len / 2, len - 1 }) {
-			std::string x = base.substr(0, len), y = x;
+			std::string x = base.substr(0, len);
+			std::string y = x;
 			for (int c = 0; c < 256; ++c) {
 				x[pos] = static_cast<char>(c);
 				for (int d = 0; d < 256; ++d) {
