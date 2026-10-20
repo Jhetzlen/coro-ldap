@@ -10,6 +10,7 @@
 #include <ranges>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -43,7 +44,7 @@ namespace {
 		return out;
 	}
 
-	constexpr char hex_digits[] = "0123456789abcdef";
+	constexpr std::string_view hex_digits = "0123456789abcdef";
 
 	void append_hex(std::pmr::string &out, unsigned char c)
 	{

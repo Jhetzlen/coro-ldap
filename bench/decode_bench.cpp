@@ -15,6 +15,7 @@
 #include "jhetz/ldap/message.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -219,15 +220,16 @@ auto main(int argc, char *const *argv) -> int
 	  runs);
 	std::println(
 	  "{:<44} {:>9} {:>9} {:>13} {:>11} {:>12}", "mode", "best ms", "median", "heap allocs", "per entry", "heap MiB");
-	const struct
+	struct named_mode
 	{
 		const char *name;
 		mode how;
-	} modes[] = {
-		{ .name = "default resource (heap)", .how = mode::heap },
-		{ .name = "monotonic arena, 256 KiB buffer, release()", .how = mode::arena_with_buffer },
-		{ .name = "monotonic arena, no buffer, release()", .how = mode::arena_without_buffer },
 	};
+	const auto modes = std::to_array<named_mode>({
+	  { .name = "default resource (heap)", .how = mode::heap },
+	  { .name = "monotonic arena, 256 KiB buffer, release()", .how = mode::arena_with_buffer },
+	  { .name = "monotonic arena, no buffer, release()", .how = mode::arena_without_buffer },
+	});
 	for (const auto &m : modes) {
 		const auto o = measure(s, m.how, runs);
 		std::println("{:<44} {:9.2f} {:9.2f} {:13} {:11.1f} {:12.1f}",

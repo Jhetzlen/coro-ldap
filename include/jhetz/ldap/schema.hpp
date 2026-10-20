@@ -26,6 +26,7 @@
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/mapping.hpp"
 
+#include <array>
 #include <cstddef>
 #include <initializer_list>
 #include <limits>
@@ -140,13 +141,12 @@ template<class T> struct value_syntaxes
 };
 
 namespace detail {
-	inline constexpr const char *integer_syntaxes[] = { syntax::integer, syntax::numeric_string };
-	inline constexpr const char *int64_syntaxes[] = { syntax::integer,
-		syntax::numeric_string,
-		syntax::ad_large_integer };
-	inline constexpr const char *dn_syntaxes[] = { syntax::dn, syntax::name_and_optional_uid };
-	inline constexpr const char *bool_syntaxes[] = { syntax::boolean };
-	inline constexpr const char *time_syntaxes[] = { syntax::generalized_time };
+	inline constexpr auto integer_syntaxes = std::to_array<const char *>({ syntax::integer, syntax::numeric_string });
+	inline constexpr auto int64_syntaxes =
+	  std::to_array<const char *>({ syntax::integer, syntax::numeric_string, syntax::ad_large_integer });
+	inline constexpr auto dn_syntaxes = std::to_array<const char *>({ syntax::dn, syntax::name_and_optional_uid });
+	inline constexpr auto bool_syntaxes = std::to_array<const char *>({ syntax::boolean });
+	inline constexpr auto time_syntaxes = std::to_array<const char *>({ syntax::generalized_time });
 }// namespace detail
 
 // Integers read INTEGER and NumericString; signed integers of 64 bits or

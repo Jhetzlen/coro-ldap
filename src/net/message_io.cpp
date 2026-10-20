@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -31,7 +32,7 @@ namespace {
 
 	auto hex_byte(std::byte b) -> std::string
 	{
-		constexpr char digits[] = "0123456789abcdef";
+		constexpr std::string_view digits = "0123456789abcdef";
 		const auto v = std::to_integer<unsigned>(b);
 		return { '0', 'x', digits[v >> 4], digits[v & 0xFu] };
 	}

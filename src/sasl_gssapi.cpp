@@ -9,6 +9,7 @@
 #include <unicode/utf8.h>
 #include <unicode/utypes.h>
 
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -24,8 +25,8 @@ namespace {
 	// The Kerberos V5 mechanism, 1.2.840.113554.1.2.2 (RFC 1964), spelled
 	// out rather than taken from gssapi_krb5.h (MIT's gss_mech_krb5,
 	// Heimdal's GSS_KRB5_MECHANISM).
-	unsigned char krb5_oid_bytes[] = { 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02 };
-	gss_OID_desc krb5_oid{ .length = sizeof krb5_oid_bytes, .elements = krb5_oid_bytes };
+	auto krb5_oid_bytes = std::to_array<unsigned char>({ 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02 });
+	gss_OID_desc krb5_oid{ .length = krb5_oid_bytes.size(), .elements = krb5_oid_bytes.data() };
 	gss_OID_set_desc krb5_oid_set{ .count = 1, .elements = &krb5_oid };
 
 	// Owns a GSS-API handle (a pointer type), released with `Release`.

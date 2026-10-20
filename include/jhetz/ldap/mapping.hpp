@@ -535,6 +535,8 @@ namespace detail {
 		using E = F::element;
 		string_list out;
 		if constexpr (std::convertible_to<const V &, E>) {
+			// NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay): a string literal converts to E
+			// through its pointer
 			out.emplace_back(value_traits<E>::encode(static_cast<E>(v)));
 		} else if constexpr (std::same_as<std::remove_cvref_t<V>, std::optional<E>>) {
 			if (v) {

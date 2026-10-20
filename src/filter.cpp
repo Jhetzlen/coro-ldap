@@ -8,6 +8,7 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace jhetz::ldap {
@@ -548,7 +549,7 @@ namespace {
 	// UTF-8).
 	void append_escaped(std::pmr::string &out, std::string_view value)
 	{
-		static constexpr char digits[] = "0123456789abcdef";
+		static constexpr std::string_view digits = "0123456789abcdef";
 		const auto escape = [&](unsigned char u) {
 			out += '\\';
 			out += digits[u >> 4];

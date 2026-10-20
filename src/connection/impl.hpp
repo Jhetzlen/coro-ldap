@@ -14,6 +14,7 @@
 #include <boost/capy/task.hpp>
 #include <boost/corosio/io_context.hpp>
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -39,7 +40,7 @@ namespace detail {
 
 	template<class T, class... Ts> consteval auto index_in(const std::variant<Ts...> *) -> std::size_t
 	{
-		constexpr bool same[] = { std::is_same_v<T, Ts>... };
+		constexpr std::array<bool, sizeof...(Ts)> same{ std::is_same_v<T, Ts>... };
 		for (std::size_t i = 0; i < sizeof...(Ts); ++i) {
 			if (same[i]) {
 				return i;

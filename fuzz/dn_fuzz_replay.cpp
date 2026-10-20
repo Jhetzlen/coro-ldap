@@ -3,22 +3,23 @@
 // Seeds: the RFC 4514 section 4 examples and escaping edge cases.
 #include "replay.hpp"
 
+#include <array>
 #include <string_view>
 
 auto main(int argc, char **argv) -> int
 {
 	namespace fuzz = jhetz::ldap::fuzz;
-	const std::string_view texts[] = {
-		"UID=jsmith,DC=example,DC=net",
-		"OU=Sales+CN=J.  Smith,DC=example,DC=net",
-		R"(CN=James \"Jim\" Smith\, III,DC=example,DC=net)",
-		"CN=Before\\0dAfter,DC=example,DC=net",
-		"1.3.6.1.4.1.1466.0=#04024869,DC=example,DC=com",
-		R"(CN=Lu\C4\8Di\C4\87)",
-		R"(cn=\ lead\#x\ ,dc=x)",
-		"cn = a + sn = b , dc = c",
-		"",
-	};
+	const auto texts = std::to_array<std::string_view>({
+	  "UID=jsmith,DC=example,DC=net",
+	  "OU=Sales+CN=J.  Smith,DC=example,DC=net",
+	  R"(CN=James \"Jim\" Smith\, III,DC=example,DC=net)",
+	  "CN=Before\\0dAfter,DC=example,DC=net",
+	  "1.3.6.1.4.1.1466.0=#04024869,DC=example,DC=com",
+	  R"(CN=Lu\C4\8Di\C4\87)",
+	  R"(cn=\ lead\#x\ ,dc=x)",
+	  "cn = a + sn = b , dc = c",
+	  "",
+	});
 	fuzz::replay_config cfg{ .name = "dn_fuzz_replay",
 		.extension = ".txt",
 		.seeds = {},

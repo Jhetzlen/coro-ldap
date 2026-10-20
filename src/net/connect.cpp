@@ -190,9 +190,8 @@ namespace {
 	struct race_state
 	{
 		race_state(corosio::io_context &ioc, std::vector<corosio::endpoint> eps, deadline_t d, clock::duration delay)
-		  : endpoints(std::move(eps)), started(std::make_unique<capy::async_event[]>(endpoints.size())),
-			failed(std::make_unique<capy::async_event[]>(endpoints.size())), start_times(endpoints.size()), deadline(d),
-			attempt_delay(delay)
+		  : endpoints(std::move(eps)), started(endpoints.size()), failed(endpoints.size()),
+			start_times(endpoints.size()), deadline(d), attempt_delay(delay)
 		{
 			sockets.reserve(endpoints.size());
 			for (std::size_t i = 0; i < endpoints.size(); ++i) {
@@ -202,8 +201,8 @@ namespace {
 
 		std::vector<corosio::endpoint> endpoints;
 		std::vector<corosio::tcp_socket> sockets;
-		std::unique_ptr<capy::async_event[]> started;
-		std::unique_ptr<capy::async_event[]> failed;
+		std::vector<capy::async_event> started;
+		std::vector<capy::async_event> failed;
 		std::vector<clock::time_point> start_times;
 		deadline_t deadline;
 		clock::duration attempt_delay;

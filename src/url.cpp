@@ -4,6 +4,7 @@
 #include "pmr_util.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -530,8 +531,8 @@ auto url::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<
 		return bad("fragment ('#') not allowed", path_begin + hash);
 	}
 
-	std::string_view parts[5];
-	std::size_t offsets[5] = {};
+	std::array<std::string_view, 5> parts{};
+	std::array<std::size_t, 5> offsets{};
 	std::size_t count = 0;
 	{
 		std::size_t start = 0;

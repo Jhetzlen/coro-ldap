@@ -4,32 +4,33 @@
 #include "jhetz/ldap/filter.hpp"
 #include "replay.hpp"
 
+#include <array>
 #include <string_view>
 
 auto main(int argc, char **argv) -> int
 {
 	namespace ldap = jhetz::ldap;
 	namespace fuzz = jhetz::ldap::fuzz;
-	const std::string_view texts[] = {
-		"(&(objectClass=person)(|(uid=jdoe)(mail=j*@*.org))(!(disabled=TRUE)))",
-		"(cn=Jo*hn*Sm*ith)",
-		"(uidNumber>=1000)",
-		"(uidNumber<=2000)",
-		"(sn~=smyth)",
-		"(mail=*)",
-		"(cn:dn:2.5.13.5:=John)",
-		"(:caseExactMatch:=x\\2ay)",
-		"(:DN:2.4.6.8.10:=Dino)",
-		"(o=Parens R Us \\28for all your parenthetical needs\\29)",
-		R"((bin=\00\00\00\04))",
-		"(cn;lang-en=\\c4\\8d)",
-		"(2.5.4.3=x)",
-		"(&)",
-		"(|)",
-		"(!(&(|)))",
-		"uid=jdoe",
-		"(&(&(&(&(&(&(&(&(a=b)))))))))",
-	};
+	const auto texts = std::to_array<std::string_view>({
+	  "(&(objectClass=person)(|(uid=jdoe)(mail=j*@*.org))(!(disabled=TRUE)))",
+	  "(cn=Jo*hn*Sm*ith)",
+	  "(uidNumber>=1000)",
+	  "(uidNumber<=2000)",
+	  "(sn~=smyth)",
+	  "(mail=*)",
+	  "(cn:dn:2.5.13.5:=John)",
+	  "(:caseExactMatch:=x\\2ay)",
+	  "(:DN:2.4.6.8.10:=Dino)",
+	  "(o=Parens R Us \\28for all your parenthetical needs\\29)",
+	  R"((bin=\00\00\00\04))",
+	  "(cn;lang-en=\\c4\\8d)",
+	  "(2.5.4.3=x)",
+	  "(&)",
+	  "(|)",
+	  "(!(&(|)))",
+	  "uid=jdoe",
+	  "(&(&(&(&(&(&(&(&(a=b)))))))))",
+	});
 	fuzz::replay_config cfg{ .name = "filter_fuzz_replay",
 		.extension = ".txt",
 		.seeds = {},

@@ -22,6 +22,7 @@
 #include "check.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -120,13 +121,13 @@ void check_value(std::string_view v)
 	const auto unescaped = ldap::unescape_filter_value(escaped);
 	check(unescaped.has_value() && *unescaped == v, "unescaped.has_value() && *unescaped == v");
 
-	const ldap::filter all[] = { attr("cn") >= v,
-		attr("cn;x-1") <= v,
-		attr("2.5.4.3").approx(v),
-		attr("cn").starts_with(v),
-		attr("cn").ends_with(v),
-		attr("cn").contains(v),
-		!(eq && attr("sn").present()) || eq };
+	const auto all = std::to_array<ldap::filter>({ attr("cn") >= v,
+	  attr("cn;x-1") <= v,
+	  attr("2.5.4.3").approx(v),
+	  attr("cn").starts_with(v),
+	  attr("cn").ends_with(v),
+	  attr("cn").contains(v),
+	  !(eq && attr("sn").present()) || eq });
 	for (const auto &f : all) {
 		check_round_trips(f);
 	}

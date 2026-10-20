@@ -196,7 +196,7 @@ auto ldif_safe(std::string_view v) noexcept -> bool
 
 auto base64(std::string_view in) -> std::string
 {
-	static constexpr char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	static constexpr std::string_view table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 	std::string out;
 	out.reserve((in.size() + 2) / 3 * 4);
 	std::size_t i = 0;
