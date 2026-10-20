@@ -450,7 +450,7 @@ template<described T> [[nodiscard]] auto decode(const entry &e) -> result<T>
 					failed = detail::with_context(std::move(v.error()), detail::entry_context(e.dn, f.name));
 					return;
 				}
-				out.*(std::remove_cvref_t<decltype(f)>::ptr) = std::move(*v);
+				out.*std::remove_cvref_t<decltype(f)>::ptr = std::move(*v);
 			}(),
 			...);
 	  },
@@ -507,7 +507,7 @@ template<described T>
 	}
 	std::apply(
 	  [&](const auto &...f) {
-		  ((f.read_only ? void() : detail::encode_field(f, value.*(std::remove_cvref_t<decltype(f)>::ptr), out)), ...);
+		  ((f.read_only ? void() : detail::encode_field(f, value.*std::remove_cvref_t<decltype(f)>::ptr, out)), ...);
 	  },
 	  d.fields);
 	return out;

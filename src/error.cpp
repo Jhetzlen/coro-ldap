@@ -234,12 +234,10 @@ namespace {
 	auto foreign_cond(const std::error_code &ec) noexcept -> std::optional<cond>
 	{
 		const std::string_view category = ec.category().name();
-		if (category == "boost.capy") {
-			// boost::capy::error: eof = 1, stream_truncated = 4 (canceled and
-			// timeout map to generic conditions, below).
-			if (ec.value() == 1 || ec.value() == 4) {
-				return cond::connection_lost;
-			}
+		// boost::capy::error: eof = 1, stream_truncated = 4 (canceled and
+		// timeout map to generic conditions, below).
+		if (category == "boost.capy" && (ec.value() == 1 || ec.value() == 4)) {
+			return cond::connection_lost;
 		}
 		if (category == "corosio.openssl" || category == "corosio.wolfssl") {
 			return cond::tls_failure;

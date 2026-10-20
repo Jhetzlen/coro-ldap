@@ -69,7 +69,7 @@ namespace {
 			if (c < '0' || c > '9') {
 				return std::nullopt;
 			}
-			v = v * 10 + (c - '0');
+			v = (v * 10) + (c - '0');
 		}
 		pos += n;
 		return v;
@@ -116,12 +116,20 @@ auto parse_generalized_time(std::string_view s) -> result<sys_seconds>
 		if (!next_is_digit(s, pos)) {
 			return bad("fraction");
 		}
-		const seconds unit = second ? seconds(1) : minute ? seconds(60) : seconds(3600);
+		const seconds unit = [second, minute] {
+			if (second) {
+				return seconds(1);
+			}
+			if (minute) {
+				return seconds(60);
+			}
+			return seconds(3600);
+		}();
 		std::int64_t num = 0;
 		std::int64_t den = 1;
 		while (next_is_digit(s, pos)) {
 			if (den < 1'000'000'000) {// enough precision; the rest is truncated
-				num = num * 10 + (s[pos] - '0');
+				num = (num * 10) + (s[pos] - '0');
 				den *= 10;
 			}
 			++pos;
@@ -160,7 +168,7 @@ auto parse_generalized_time(std::string_view s) -> result<sys_seconds>
 			}
 			om = *m;
 		}
-		offset = seconds(sign * (*oh * 3600 + om * 60));
+		offset = seconds(sign * ((*oh * 3600) + (om * 60)));
 	} else {
 		return bad("time zone");
 	}

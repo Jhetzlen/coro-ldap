@@ -233,20 +233,20 @@ namespace {
 		if (status == U_INVALID_CHAR_FOUND || status == U_ILLEGAL_CHAR_FOUND) {
 			return input_error(name + " is not valid UTF-8");
 		}
-		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) {
+		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status) != 0) {
 			return icu_failure(name, status);
 		}
 		wiped_buffer<UChar> in(static_cast<std::size_t>(n16));
 		status = U_ZERO_ERROR;
 		u_strFromUTF8(in.v.data(), n16, &n16, s.data(), static_cast<int32_t>(s.size()), &status);
-		if (U_FAILURE(status)) {
+		if (U_FAILURE(status) != 0) {
 			return icu_failure(name, status);
 		}
 
 		status = U_ZERO_ERROR;
 		const std::unique_ptr<UStringPrepProfile, usprep_closer> profile(
 		  usprep_openByType(USPREP_RFC4013_SASLPREP, &status));
-		if (U_FAILURE(status)) {
+		if (U_FAILURE(status) != 0) {
 			return icu_failure(name, status);
 		}
 		const int32_t options = kind == prep_kind::stored ? USPREP_DEFAULT : USPREP_ALLOW_UNASSIGNED;
@@ -276,7 +276,7 @@ namespace {
 		}
 		wiped_buffer<UChar> prepared(static_cast<std::size_t>(nprep));
 		nprep = prepare(prepared.v.data(), nprep);
-		if (U_FAILURE(status)) {
+		if (U_FAILURE(status) != 0) {
 			return icu_failure(name, status);
 		}
 
@@ -285,13 +285,13 @@ namespace {
 		status = U_ZERO_ERROR;
 		int32_t n8 = 0;
 		u_strToUTF8(nullptr, 0, &n8, prepared.v.data(), nprep, &status);
-		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) {
+		if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status) != 0) {
 			return icu_failure(name, status);
 		}
 		out.resize(static_cast<std::size_t>(n8));
 		status = U_ZERO_ERROR;
 		u_strToUTF8(out.data(), n8, &n8, prepared.v.data(), nprep, &status);
-		if (U_FAILURE(status)) {
+		if (U_FAILURE(status) != 0) {
 			wipe_string(out);
 			return icu_failure(name, status);
 		}
@@ -351,7 +351,7 @@ namespace {
 				return std::nullopt;
 			}
 			const char n = a[0];
-			if (!((n >= 'a' && n <= 'z') || (n >= 'A' && n <= 'Z'))) {
+			if ((n < 'a' || n > 'z') && (n < 'A' || n > 'Z')) {
 				return std::nullopt;
 			}
 			return std::pair{ n, a.substr(2) };
@@ -368,7 +368,7 @@ namespace {
 			if (c < '0' || c > '9') {
 				return std::nullopt;
 			}
-			v = v * 10 + static_cast<std::uint64_t>(c - '0');
+			v = (v * 10) + static_cast<std::uint64_t>(c - '0');
 		}
 		if (v > UINT32_MAX) {
 			return std::nullopt;

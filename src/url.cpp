@@ -128,7 +128,7 @@ namespace {
 			const std::size_t start = i;
 			unsigned value = 0;
 			while (i < s.size() && is_digit(s[i]) && i - start < 3) {
-				value = value * 10 + static_cast<unsigned>(s[i++] - '0');
+				value = (value * 10) + static_cast<unsigned>(s[i++] - '0');
 			}
 			const std::size_t len = i - start;
 			if (len == 0 || value > 255 || (len > 1 && s[start] == '0')) {
@@ -507,7 +507,7 @@ auto url::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<
 				if (!is_digit(port_text[i])) {
 					return bad("invalid port", port_offset + i);
 				}
-				value = value * 10 + static_cast<std::uint32_t>(port_text[i] - '0');
+				value = (value * 10) + static_cast<std::uint32_t>(port_text[i] - '0');
 				if (value > 65535) {
 					return bad("port above 65535", port_offset);
 				}

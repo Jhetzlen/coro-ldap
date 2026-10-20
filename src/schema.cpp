@@ -481,7 +481,7 @@ namespace detail {
 				detail::append_sanitized(text, *syn, 64);
 				text += " is not one the member's type reads (";
 				for (std::size_t i = 0; i < syntaxes.size(); ++i) {
-					detail::format_to(text, "{}{}", i ? ", " : "", syntaxes[i]);
+					detail::format_to(text, "{}{}", i != 0 ? ", " : "", syntaxes[i]);
 				}
 				text += ')';
 				out.issues.push_back({ .what = schema_issue::kind::syntax_mismatch,

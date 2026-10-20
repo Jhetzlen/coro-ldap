@@ -638,7 +638,7 @@ TEST_CASE("builders beyond the limits fail when encoded", "[filter][limits][buil
 		CHECK(copy == f);
 		CHECK_FALSE(copy == !f);
 		const auto text = f.to_string();
-		CHECK(text.size() == 200'000uz * 3 + 5);
+		CHECK(text.size() == (200'000uz * 3) + 5);
 		CHECK(text.starts_with("(!(!(!"));
 		CHECK(text.substr(200'000uz * 2).starts_with("(a=b))))"));
 		CHECK(text.ends_with("))))"));

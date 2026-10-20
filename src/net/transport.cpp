@@ -57,7 +57,7 @@ auto transport::stream() noexcept -> boost::capy::any_stream & { return impl_->s
 
 auto transport::type() const noexcept -> transport::kind { return impl_ ? impl_->type : kind::none; }
 
-auto transport::is_tls() const noexcept -> bool { return impl_ && impl_->tls.has_value(); }
+auto transport::is_tls() const noexcept -> bool { return impl_ != nullptr && impl_->tls.has_value(); }
 
 auto transport::is_open() const noexcept -> bool
 {

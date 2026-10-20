@@ -597,7 +597,7 @@ auto filter::to_string(std::pmr::memory_resource *mr) const -> std::pmr::string
 	if (empty()) {
 		return out;
 	}
-	out.reserve(text_.size() + 4 * elements_);
+	out.reserve(text_.size() + (4 * elements_));
 	access::walk(
 	  *this,
 	  root_,
@@ -1028,7 +1028,15 @@ namespace {
 				if (i_ + 1 >= s_.size() || s_[i_ + 1] != '=') {
 					return error("expected '='", i_ + 1);
 				}
-				const kind k = c == '~' ? kind::approx : c == '>' ? kind::greater_or_equal : kind::less_or_equal;
+				const kind k = [c] {
+					if (c == '~') {
+						return kind::approx;
+					}
+					if (c == '>') {
+						return kind::greater_or_equal;
+					}
+					return kind::less_or_equal;
+				}();
 				i_ += 2;
 				const std::uint32_t node = add(k, parent);
 				access::set_attr(out_, node, attr);
@@ -1074,7 +1082,15 @@ namespace {
 					if (++elements_ > limits_.max_elements) {
 						return too_many_elements();
 					}
-					const std::uint8_t k = first ? filter_part_initial : last ? filter_part_final : filter_part_any;
+					const std::uint8_t k = [first, last] {
+						if (first) {
+							return filter_part_initial;
+						}
+						if (last) {
+							return filter_part_final;
+						}
+						return filter_part_any;
+					}();
 					const std::uint32_t p = access::add_node(out_, k);
 					access::set_value_range(out_, p, *part);
 					access::link_last(out_, node, p);
@@ -1259,9 +1275,15 @@ namespace detail {
 					c.constructed(ber::tags::sequence, [&](ber::writer &s) {
 						for (std::uint32_t p = n.first; p != npos; p = access::at(f, p).next) {
 							const auto &part = access::at(f, p);
-							const std::uint8_t number = part.k == filter_part_initial ? 0
-														: part.k == filter_part_any	  ? 1
-																					  : 2;
+							const auto number = [&part]() -> std::uint8_t {
+								if (part.k == filter_part_initial) {
+									return 0;
+								}
+								if (part.k == filter_part_any) {
+									return 1;
+								}
+								return 2;
+							}();
 							s.octet_string(access::value_of(f, part), ber::context(number));
 						}
 					});
@@ -1558,7 +1580,15 @@ namespace {
 				if (!sub) {
 					return std::unexpected(std::move(sub.error()));
 				}
-				const kind k = t->number == 0 ? kind::and_ : t->number == 1 ? kind::or_ : kind::not_;
+				const kind k = [number = t->number] {
+					if (number == 0) {
+						return kind::and_;
+					}
+					if (number == 1) {
+						return kind::or_;
+					}
+					return kind::not_;
+				}();
 				const std::uint32_t n = add(k, parent);
 				if (k == kind::not_) {
 					auto child = node(*sub, depth + 1, n);

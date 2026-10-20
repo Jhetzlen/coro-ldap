@@ -382,7 +382,7 @@ auto only_tls_handshake_records(std::string_view bytes) -> bool
 			return false;
 		}
 		const std::size_t length =
-		  std::size_t{ static_cast<unsigned char>(bytes[3]) } * 256 + static_cast<unsigned char>(bytes[4]);
+		  (std::size_t{ static_cast<unsigned char>(bytes[3]) } * 256) + static_cast<unsigned char>(bytes[4]);
 		if (bytes.size() < 5 + length) {
 			return false;
 		}

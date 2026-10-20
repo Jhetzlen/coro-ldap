@@ -121,7 +121,7 @@ TEST_CASE("ci_hash / ci_equal fold A-Z only, in every byte position", "[attribut
 	}
 	CHECK(mismatches == 0);
 	CHECK(hash_mismatches == 0);
-	CHECK(equal_pairs == 9uz * 3 * (256 + 2 * 26));// each byte with itself, A-Z with a-z both ways
+	CHECK(equal_pairs == 9uz * 3 * (256 + (2 * 26)));// each byte with itself, A-Z with a-z both ways
 	CHECK_FALSE(equal("ab", "abc"));
 	CHECK(equal("", ""));
 	CHECK(hash("") == hash(std::string_view()));
@@ -195,7 +195,7 @@ constexpr auto inverse(std::uint64_t odd) -> std::uint64_t// mod 2^64, by Newton
 {
 	std::uint64_t x = odd;
 	for (int i = 0; i < 6; ++i) {
-		x *= 2 - odd * x;
+		x *= 2 - (odd * x);
 	}
 	return x;
 }

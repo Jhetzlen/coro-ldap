@@ -215,7 +215,7 @@ TEST_CASE("schema: SYNTAX lengths are {digits} attached to the OID; other words 
 	};
 	const auto s = ldap::server_schema::parse(bad, bad);
 	CHECK(s.attribute_count() == 0);
-	CHECK(s.skipped() == 2 * bad.size() - 6);// the SYNTAX failures are not the object class grammar's
+	CHECK(s.skipped() == (2 * bad.size()) - 6);// the SYNTAX failures are not the object class grammar's
 	CHECK(s.object_class_count() == 6);
 	CHECK(s.skipped_for_syntax("n5"));
 	CHECK_FALSE(s.skipped_for_syntax("n4"));// failed as a keyword: not a SYNTAX failure

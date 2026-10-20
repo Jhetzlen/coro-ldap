@@ -353,7 +353,7 @@ TEST_CASE("read_message: large PDUs and buffer bounds", "[net][read_message]")
 	// allocation is released.
 	CHECK(m.buf.empty());
 	CHECK(m.buf.capacity() == 0);
-	CHECK(m.reads->size() == 1 + (wire.size() - net::read_buffer::min_read + 64uz * 1024 - 1) / (64uz * 1024));
+	CHECK(m.reads->size() == 1 + ((wire.size() - net::read_buffer::min_read + (64uz * 1024) - 1) / (64uz * 1024)));
 	auto small = m.read();
 	REQUIRE(small.has_value());
 	CHECK(*small == bind_response_msg(6));

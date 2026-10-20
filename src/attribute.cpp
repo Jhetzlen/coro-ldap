@@ -46,8 +46,8 @@ namespace {
 	{
 		constexpr std::uint64_t ones = 0x0101'0101'0101'0101ull;
 		const std::uint64_t low7 = w & (0x7F * ones);
-		const std::uint64_t ge_a = low7 + (0x80 - 'A') * ones;// bit 7 set where low7 >= 'A'
-		const std::uint64_t gt_z = low7 + (0x7F - 'Z') * ones;// bit 7 set where low7 > 'Z'
+		const std::uint64_t ge_a = low7 + ((0x80 - 'A') * ones);// bit 7 set where low7 >= 'A'
+		const std::uint64_t gt_z = low7 + ((0x7F - 'Z') * ones);// bit 7 set where low7 > 'Z'
 		const std::uint64_t upper = ge_a & ~gt_z & ~w & (0x80 * ones);
 		return w | (upper >> 2);// 0x80 >> 2 == 'a' - 'A'
 	}

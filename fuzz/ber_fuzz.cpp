@@ -53,7 +53,7 @@ auto minimal_integer(std::span<const std::byte> c) -> bool
 	}
 	const auto b0 = std::to_integer<unsigned>(c[0]);
 	const bool high1 = (std::to_integer<unsigned>(c[1]) & 0x80u) != 0;
-	return !((b0 == 0x00u && !high1) || (b0 == 0xFFu && high1));
+	return (b0 != 0x00u || high1) && (b0 != 0xFFu || !high1);
 }
 
 void walk(ber::reader r);

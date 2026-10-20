@@ -1319,7 +1319,7 @@ auto serve_shuffled(net::transport t, std::size_t n, std::uint64_t seed, server_
 	}
 	std::uint64_t state = seed;
 	auto next = [&state](std::size_t bound) {
-		state = state * 6364136223846793005u + 1442695040888963407u;
+		state = (state * 6364136223846793005u) + 1442695040888963407u;
 		return static_cast<std::size_t>((state >> 33) % bound);
 	};
 	std::vector<std::size_t> live(n);
@@ -1426,7 +1426,7 @@ TEST_CASE("connection: mutated server responses", "[net][connection]")
 
 	std::uint64_t state = 0x9e3779b97f4a7c15u;
 	auto next = [&state](std::size_t bound) {
-		state = state * 6364136223846793005u + 1442695040888963407u;
+		state = (state * 6364136223846793005u) + 1442695040888963407u;
 		return static_cast<std::size_t>((state >> 33) % bound);
 	};
 	std::size_t ok = 0;

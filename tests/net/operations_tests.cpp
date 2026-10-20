@@ -1970,7 +1970,7 @@ TEST_CASE("operations: a due release answer outlives older abandoned requests", 
 	std::vector<step> script{
 		answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }), step{}
 	};// reads the release, does not answer yet
-	script.resize(script.size() + 2uz * abandoned_searches);// each search and its AbandonRequest
+	script.resize(script.size() + (2uz * abandoned_searches));// each search and its AbandonRequest
 	m.serve(std::move(script));
 	release_after_one_page(m);
 	for (int i = 0; i < abandoned_searches; ++i) {
@@ -1978,7 +1978,7 @@ TEST_CASE("operations: a due release answer outlives older abandoned requests", 
 		REQUIRE(s.has_value());
 	}// each one abandoned
 	drive_until(m.ioc, [&m] { return m.server.done(); });
-	REQUIRE(m.log.received.size() == 2 + 2 * abandoned_searches);
+	REQUIRE(m.log.received.size() == 2 + (2 * abandoned_searches));
 	CHECK(m.conn.outstanding() == 1);
 
 	server_sends(m, paged_done(2, ""));// still known: dropped
@@ -1996,7 +1996,7 @@ TEST_CASE("operations: a due release answer forgotten past the limit is no longe
 	mock_ldap m;
 	std::vector<step> script;
 	for (int i = 0; i < releases; ++i) {
-		script.push_back(answer({ paged_done(2 * i + 1, "page2") }));
+		script.push_back(answer({ paged_done((2 * i) + 1, "page2") }));
 		script.push_back(step{});// reads the release, does not answer yet
 	}
 	script.resize(script.size() + 2);// a search and its AbandonRequest
@@ -2013,11 +2013,11 @@ TEST_CASE("operations: a due release answer forgotten past the limit is no longe
 	}// abandoned: the first release (id 2) is forgotten
 	CHECK(m.conn.outstanding() == releases - 1);
 	drive_until(m.ioc, [&m] { return m.server.done(); });
-	REQUIRE(m.log.received.size() == 2 * releases + 2);
+	REQUIRE(m.log.received.size() == (2 * releases) + 2);
 
 	std::string answers;// the other releases' answers, in one write
 	for (int i = 1; i < releases; ++i) {
-		answers += bytes_of(paged_done(2 * i + 2, ""));
+		answers += bytes_of(paged_done((2 * i) + 2, ""));
 	}
 	auto t = m.server_end();
 	REQUIRE(m.run(net::write_bytes(t, std::as_bytes(std::span(answers)))).has_value());

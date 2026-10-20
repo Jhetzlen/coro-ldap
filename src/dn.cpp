@@ -162,7 +162,7 @@ auto operator==(const rdn &a, const rdn &b) -> bool
 	// short); unusually long ones fall back to the heap. The buffer is raw
 	// storage the resource hands out uninitialised: zeroing it is wasted work.
 	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init): raw arena storage
-	std::array<std::byte, 2uz * 16 * sizeof(const ava *) + 64> buffer;
+	std::array<std::byte, (2uz * 16 * sizeof(const ava *)) + 64> buffer;
 	std::pmr::monotonic_buffer_resource scratch(buffer.data(), buffer.size());
 	std::pmr::vector<const ava *> x(&scratch);
 	std::pmr::vector<const ava *> y(&scratch);

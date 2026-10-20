@@ -82,7 +82,8 @@ auto make_stream(const stream_shape &shape) -> stream
 			auto &pa = e.attributes.emplace_back();
 			pa.type = "attribute" + std::to_string(a);
 			for (std::size_t v = 0; v < values; ++v) {
-				pa.values.emplace_back(10 + (i * 7 + a * 13 + v * 29) % 51, static_cast<char>('a' + (a + v) % 26));
+				pa.values.emplace_back(
+				  10 + (((i * 7) + (a * 13) + (v * 29)) % 51), static_cast<char>('a' + ((a + v) % 26)));
 				++s.values;
 			}
 		}
