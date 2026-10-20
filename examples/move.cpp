@@ -20,13 +20,13 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task
 		std::cerr << bound.error().message() << '\n';
 		co_return 1;
 	}
-	auto moved = co_await c->move(
-	  ldap::dn{ "uid=user001,ou=people,dc=example,dc=org" }, ldap::dn{ "ou=groups,dc=example,dc=org" });
+	auto moved =
+	  co_await c->move(ldap::dn{ "uid=jane,ou=people,dc=example,dc=org" }, ldap::dn{ "ou=alumni,dc=example,dc=org" });
 	if (!moved) {
 		std::cerr << moved.error().message() << '\n';
 		co_return 1;
 	}
-	std::cout << "moved uid=user001 from ou=people to ou=groups\n";
+	std::cout << "moved uid=jane from ou=people to ou=alumni\n";
 	co_return 0;
 }
 

@@ -4,7 +4,8 @@
 dc=example,dc=org with ou=people (250 inetOrgPerson / posixAccount users,
 user000 .. user249, enough for several pages; and uid=jörg, not a
 posixAccount, with a non-ASCII password for SCRAM), ou=groups (staff with 10
-members, big with 2000 member values) and a user with a 10000-byte binary
+members, big with 2000 member values), an empty ou=alumni (the target of
+examples/move.cpp) and a user with a 10000-byte binary
 jpegPhoto whose bytes are i % 251 (the tests check them).
 """
 import base64
@@ -18,6 +19,7 @@ def entry(dn, *lines):
 entry("dc=example,dc=org", "objectClass: dcObject", "objectClass: organization", "dc: example", "o: Example")
 entry("ou=people,dc=example,dc=org", "objectClass: organizationalUnit", "ou: people")
 entry("ou=groups,dc=example,dc=org", "objectClass: organizationalUnit", "ou: groups")
+entry("ou=alumni,dc=example,dc=org", "objectClass: organizationalUnit", "ou: alumni")
 for i in range(250):
     uid = "user%03d" % i
     entry("uid=%s,ou=people,dc=example,dc=org" % uid,

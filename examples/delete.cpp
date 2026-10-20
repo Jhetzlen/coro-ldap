@@ -20,12 +20,12 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task
 		std::cerr << bound.error().message() << '\n';
 		co_return 1;
 	}
-	auto deleted = co_await c->del({ .entry = ldap::dn{ "uid=jane,ou=people,dc=example,dc=org" } });
+	auto deleted = co_await c->del({ .entry = ldap::dn{ "uid=jane,ou=alumni,dc=example,dc=org" } });
 	if (!deleted) {
 		std::cerr << deleted.error().message() << '\n';
 		co_return 1;
 	}
-	std::cout << "deleted uid=jane,ou=people,dc=example,dc=org\n";
+	std::cout << "deleted uid=jane,ou=alumni,dc=example,dc=org\n";
 	co_return 0;
 }
 

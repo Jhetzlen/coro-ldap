@@ -85,8 +85,8 @@ URL (`ldap://localhost`).
 | `search.cpp` | search `ou=people` with a filter, print each DN and `cn` |
 | `modify.cpp` | replace a user's `mail` |
 | `add.cpp` | add the user `uid=jane` |
-| `delete.cpp` | delete the user `uid=jane` |
-| `move.cpp` | move `uid=user001` from `ou=people` to `ou=groups` (`connection::move`; `rename` changes the RDN instead) |
+| `move.cpp` | move `uid=jane` from `ou=people` to `ou=alumni` (`connection::move`; `rename` changes the RDN instead) |
+| `delete.cpp` | delete the user `uid=jane` from `ou=alumni` (run `add`, `move`, then `delete`) |
 | `password.cpp` | reset a user's password (RFC 3062 or Active Directory, from the root DSE) |
 | `starttls.cpp` | connect with StartTLS, then bind |
 | `cancel.cpp` | search the whole tree; Ctrl-C gives up on it (`capy::when_any` with `ldap::raceable`) |
