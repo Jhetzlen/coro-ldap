@@ -62,7 +62,8 @@ package (`JHETZ_LDAP_INSTALL`, on when this is the top-level project).
 `jhetz::ldap_net` is part of the package only when Capy and Corosio were
 found as installed packages (on `CMAKE_PREFIX_PATH`; configure prefers them
 to fetching): a fetched Corosio does not export its targets. Without it the
-package is the codec only, without the networking headers. With `net`, the
+package is the codec only, without the networking headers; fetched
+dependencies are never installed with it. With `net`, the
 package finds ICU (`find_dependency(ICU COMPONENTS uc data)`), which the
 static `jhetz::ldap_net` needs at link time. Corosio at the
 pinned commit needs help to install against an installed Capy;

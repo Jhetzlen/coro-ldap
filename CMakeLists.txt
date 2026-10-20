@@ -202,10 +202,14 @@ if(JHETZ_LDAP_BUILD_NET)
         set(${var} OFF)
     endforeach()
     FetchContent_MakeAvailable(capy corosio)
-    # Capy always adds its own test-suite libraries; nothing here uses them.
-    foreach(target boost_capy_test_suite boost_capy_test_suite_main)
-        if(TARGET ${target})
-            set_target_properties(${target} PROPERTIES EXCLUDE_FROM_ALL ON)
+    # Fetched (not found as packages): build only the targets we link (Capy
+    # always adds its test-suite libraries, unused here), and leave their
+    # install rules out of ours, so cmake --install installs jhetz_ldap
+    # alone (CMake skips EXCLUDE_FROM_ALL directories' install scripts).
+    # FetchContent_Declare(EXCLUDE_FROM_ALL) would need CMake 3.28.
+    foreach(dep capy corosio)
+        if(DEFINED ${dep}_SOURCE_DIR)
+            set_property(DIRECTORY ${${dep}_SOURCE_DIR} PROPERTY EXCLUDE_FROM_ALL ON)
         endif()
     endforeach()
     if(NOT TARGET Boost::corosio_openssl)
