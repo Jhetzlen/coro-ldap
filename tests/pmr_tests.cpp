@@ -14,6 +14,7 @@
 #include "sample_messages.hpp"
 #include "test_util.hpp"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 
 #include <memory_resource>
@@ -353,7 +354,7 @@ TEST_CASE("copies of arena objects go to the default resource", "[pmr]")
 		m_copy.emplace(*m);
 	}
 	// The arena (and its buffer contents) are gone; the copies are not.
-	std::fill(std::begin(storage), std::end(storage), std::byte{ 0xAA });
+	std::ranges::fill(storage, std::byte{ 0xAA });
 	CHECK(d_copy->to_string() == "cn=a value that is long enough,dc=example,dc=org");
 	CHECK(f_copy->to_string() == "(cn=a value that is long enough*)");
 	CHECK(*m_copy == ldap::test::sample_messages()[12]);

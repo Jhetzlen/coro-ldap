@@ -579,10 +579,11 @@ TEST_CASE("operations: paged search follows the cookie", "[net][operations][page
 	// Each page is the same search with the page size and the last cookie.
 	REQUIRE(m.log.received.size() == 3);
 	const char *cookies[] = { "", "page2", "page3" };
+	std::int32_t id = 0;
 	for (std::size_t i = 0; i < 3; ++i) {
 		INFO("page " << i);
 		const auto &req = m.log.received[i];
-		CHECK(req.id == static_cast<std::int32_t>(i + 1));
+		CHECK(req.id == ++id);
 		CHECK(req.op == m.log.received[0].op);
 		REQUIRE(req.controls.size() == 1);
 		auto p = ldap::decode_paged_results(req.controls[0]);

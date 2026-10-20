@@ -65,9 +65,9 @@ TEST_CASE("RFC 4514 section 4 examples", "[dn]")
 	}
 	SECTION("escaped specials")
 	{
-		const auto d = parse("CN=James \\\"Jim\\\" Smith\\, III,DC=example,DC=net");
+		const auto d = parse(R"(CN=James \"Jim\" Smith\, III,DC=example,DC=net)");
 		CHECK(d.rdns()[0].avas[0].value == "James \"Jim\" Smith, III");
-		CHECK(d.to_string() == "CN=James \\\"Jim\\\" Smith\\, III,DC=example,DC=net");
+		CHECK(d.to_string() == R"(CN=James \"Jim\" Smith\, III,DC=example,DC=net)");
 	}
 	SECTION("hex-escaped control character")
 	{
@@ -85,7 +85,7 @@ TEST_CASE("RFC 4514 section 4 examples", "[dn]")
 	}
 	SECTION("UTF-8 via hex pairs")
 	{
-		const auto d = parse("CN=Lu\\C4\\8Di\\C4\\87");
+		const auto d = parse(R"(CN=Lu\C4\8Di\C4\87)");
 		CHECK(d.rdns()[0].avas[0].value == "Lu\xc4\x8di\xc4\x87");
 		CHECK(d.to_string() == "CN=Lu\xc4\x8di\xc4\x87");
 		CHECK(parse(d.to_string()) == d);

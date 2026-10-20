@@ -375,7 +375,7 @@ struct blackhole
 	{
 		auto [aec, a] = corosio::make_ipv4_address(addr);
 		REQUIRE_FALSE(aec);
-		return corosio::tcp_acceptor(ioc, corosio::endpoint(a, port), 0);
+		return { ioc, corosio::endpoint(a, port), 0 };
 	}
 };
 

@@ -148,6 +148,7 @@ template<> struct value_traits<bool>
 		}
 		return std::unexpected(detail::conversion_error("not TRUE or FALSE", raw));
 	}
+	// NOLINTNEXTLINE(modernize-use-string-view): value_traits::encode returns std::string (concept mapped_value)
 	[[nodiscard]] static auto encode(bool v) -> std::string { return v ? "TRUE" : "FALSE"; }
 };
 

@@ -13,7 +13,7 @@ namespace mod {
 		auto change(modify_operation op, std::string_view type, std::initializer_list<std::string_view> values)
 		  -> modify_change
 		{
-			return modify_change(op, partial_attribute(type, values));
+			return { op, partial_attribute(type, values) };
 		}
 	}// namespace
 

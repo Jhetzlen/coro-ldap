@@ -43,7 +43,7 @@ inline auto to_input(std::span<const std::byte> v) -> input
 	return out;
 }
 
-inline auto to_input(std::string_view s) -> input { return input(s.begin(), s.end()); }
+inline auto to_input(std::string_view s) -> input { return { s.begin(), s.end() }; }
 
 inline void run(const input &in) { LLVMFuzzerTestOneInput(in.data(), in.size()); }
 

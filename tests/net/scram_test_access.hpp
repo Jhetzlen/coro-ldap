@@ -26,8 +26,9 @@ struct scram_test_access
 	static auto with_nonce(std::string username, std::string password, sasl_scram_options options, std::string nonce)
 	  -> sasl_scram_sha256
 	{
-		return sasl_scram_sha256(
-		  std::move(username), std::move(password), std::move(options), std::optional<std::string>(std::move(nonce)));
+		return {
+			std::move(username), std::move(password), std::move(options), std::optional<std::string>(std::move(nonce))
+		};
 	}
 
 	// The iteration count whose SaltedPassword is cached (0: none).

@@ -21,7 +21,7 @@ auto main(int argc, char **argv) -> int
 		"(:caseExactMatch:=x\\2ay)",
 		"(:DN:2.4.6.8.10:=Dino)",
 		"(o=Parens R Us \\28for all your parenthetical needs\\29)",
-		"(bin=\\00\\00\\00\\04)",
+		R"((bin=\00\00\00\04))",
 		"(cn;lang-en=\\c4\\8d)",
 		"(2.5.4.3=x)",
 		"(&)",

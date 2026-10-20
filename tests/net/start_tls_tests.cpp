@@ -29,6 +29,7 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <variant>
@@ -743,7 +744,7 @@ constexpr auto ldap::schema<tls_account> =
 namespace {
 
 // What a directory request is, for the schema test's log.
-auto kind_of(const ldap::message &m) -> std::string
+auto kind_of(const ldap::message &m) -> std::string_view
 {
 	if (const auto *s = std::get_if<ldap::search_request>(&m.op)) {
 		if (s->base_object.empty() && s->attributes == ldap::string_list{ "subschemaSubentry" }) {
@@ -763,7 +764,7 @@ auto kind_of(const ldap::message &m) -> std::string
 
 auto directory_reply(const ldap::message &req) -> std::string
 {
-	const std::string kind = kind_of(req);
+	const std::string_view kind = kind_of(req);
 	std::string out;
 	if (kind == "root DSE") {
 		out += bytes_of(
@@ -800,7 +801,7 @@ auto serve_directory(corosio::tcp_acceptor &acc, corosio::tls_context ctx, std::
 		if (!req) {
 			co_return "read in clear: " + std::string(req.error().message());
 		}
-		log.push_back(kind_of(*req));
+		log.emplace_back(kind_of(*req));
 		const std::string reply = directory_reply(*req);
 		if (auto w = co_await net::write_bytes(plain, std::as_bytes(std::span(reply))); !w) {
 			co_return "write: " + std::string(w.error().message());
@@ -821,7 +822,7 @@ auto serve_directory(corosio::tcp_acceptor &acc, corosio::tls_context ctx, std::
 		if (!req) {
 			co_return "";// the client hung up
 		}
-		log.push_back("tls " + kind_of(*req));
+		log.push_back("tls " + std::string(kind_of(*req)));
 		const std::string reply = directory_reply(*req);
 		if (auto w = co_await net::write_bytes(secure, std::as_bytes(std::span(reply))); !w) {
 			co_return "write over TLS: " + std::string(w.error().message());

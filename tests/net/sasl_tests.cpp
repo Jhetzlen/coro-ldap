@@ -107,7 +107,7 @@ struct offload_gate
 	{
 		const int index = started.fetch_add(1);
 		{
-			const std::lock_guard lock(mutex);
+			const std::scoped_lock lock(mutex);
 			threads.push_back(std::this_thread::get_id());
 		}
 		for (int n = permits.load(); n <= index; n = permits.load()) {
@@ -594,7 +594,7 @@ TEST_CASE("sasl: offloaded steps run off the I/O thread", "[net][sasl][offload]"
 	CHECK(m.log.received[0] == sasl_req(1, "X-SLOW", "hello"));
 	CHECK(m.log.received[1] == sasl_req(2, "X-SLOW", "re:c1"));
 	CHECK(mech.gate->finished == 2);
-	const std::lock_guard lock(mech.gate->mutex);
+	const std::scoped_lock lock(mech.gate->mutex);
 	REQUIRE(mech.gate->threads.size() == 2);
 	for (auto id : mech.gate->threads) {
 		CHECK(id != std::this_thread::get_id());

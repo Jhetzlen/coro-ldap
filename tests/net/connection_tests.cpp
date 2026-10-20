@@ -13,6 +13,7 @@
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
+#include <algorithm>
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/cond.hpp>
 #include <boost/capy/ex/async_event.hpp>
@@ -573,8 +574,9 @@ TEST_CASE("connection: message ids increase per request", "[net][connection]")
 	CHECK(m.run(m.conn.unbind()).has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 5);
-	for (std::size_t i = 0; i < m.log.received.size(); ++i) {
-		CHECK(m.log.received[i].id == static_cast<std::int32_t>(i + 1));
+	std::int32_t id = 0;
+	for (const auto &msg : m.log.received) {
+		CHECK(msg.id == ++id);
 	}
 }
 
@@ -1312,7 +1314,7 @@ auto serve_shuffled(net::transport t, std::size_t n, std::uint64_t seed, server_
 		std::vector<std::string> q{ bytes_of(entry_msg(r->id, "uid=x," + base, "X")),
 			bytes_of(entry_msg(r->id, "uid=y," + base, "Y")),
 			bytes_of(done_msg(r->id)) };
-		std::reverse(q.begin(), q.end());// popped from the back
+		std::ranges::reverse(q);// popped from the back
 		queues.push_back(std::move(q));
 		log.received.push_back(std::move(*r));
 	}

@@ -117,12 +117,12 @@ namespace {
 		try {
 			corosio::resolver resolver(ioc);
 			{
-				std::lock_guard lock(st->mutex);
+				std::scoped_lock lock(st->mutex);
 				st->resolver = &resolver;
 			}
 			auto [rec, found] = co_await resolver.resolve(host, port, corosio::resolve_flags::numeric_service);
 			{
-				std::lock_guard lock(st->mutex);
+				std::scoped_lock lock(st->mutex);
 				st->resolver = nullptr;
 			}
 			ec = rec;
@@ -130,14 +130,14 @@ namespace {
 		} catch (...) {
 			// Never leave connect() waiting (it may have no deadline).
 			{
-				std::lock_guard lock(st->mutex);
+				std::scoped_lock lock(st->mutex);
 				st->resolver = nullptr;
 			}
 			ec = std::make_error_code(std::errc::not_enough_memory);
 			endpoints.clear();
 		}
 		{
-			std::lock_guard lock(st->mutex);
+			std::scoped_lock lock(st->mutex);
 			st->done = true;
 			st->ec = ec;
 			st->endpoints = std::move(endpoints);
@@ -152,7 +152,7 @@ namespace {
 		auto st = std::make_shared<resolve_state>();
 		capy::run_async(ioc.get_executor())(resolve_detached(ioc, std::move(host), std::move(port), st));
 		auto [wec] = co_await bounded(st->waker.wait(), deadline);
-		std::lock_guard lock(st->mutex);
+		std::scoped_lock lock(st->mutex);
 		if (st->done) {
 			co_return { st->ec, std::move(st->endpoints) };
 		}

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <compare>
 #include <cstddef>
 #include <memory_resource>
 #include <ranges>
@@ -133,8 +134,8 @@ namespace {
 	auto ava_less(const ava &a, const ava &b) -> bool
 	{
 		const auto c = a.type <=> b.type;
-		if (c != 0) {
-			return c < 0;
+		if (std::is_neq(c)) {
+			return std::is_lt(c);
 		}
 		return std::tie(a.hex_form, a.value) < std::tie(b.hex_form, b.value);
 	}

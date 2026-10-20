@@ -24,7 +24,7 @@ namespace {
 	{
 		// Not ranges::to: string_view -> pmr::string is explicit, so it would
 		// build each element as a nested range on the default resource first.
-		return string_list(list.begin(), list.end(), alloc);
+		return { list.begin(), list.end(), alloc };
 	}
 
 	// `before`, the peer's `text` sanitized and cut to 64 bytes
@@ -1651,7 +1651,7 @@ namespace {
 	auto bytes_control(std::string_view oid, bool criticality, const ber::writer &w, std::pmr::memory_resource *mr)
 	  -> control
 	{
-		return control(oid, criticality, detail::as_text(w.bytes()), control::allocator_type(mr));
+		return { oid, criticality, detail::as_text(w.bytes()), control::allocator_type(mr) };
 	}
 
 	// Errors from inside a control value name the control: their offsets

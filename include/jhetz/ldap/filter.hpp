@@ -254,7 +254,7 @@ class filter::child_iterator
 	using iterator_category = std::forward_iterator_tag;
 
 	child_iterator() = default;
-	auto operator*() const noexcept -> filter::view { return filter::view(f_, i_); }
+	auto operator*() const noexcept -> filter::view { return { f_, i_ }; }
 	auto operator++() noexcept -> child_iterator &
 	{
 		i_ = f_->nodes_[i_].next;
@@ -347,7 +347,7 @@ class filter::substring_range : public std::ranges::view_interface<filter::subst
 	substring_iterator first_;
 };
 
-inline auto filter::root() const noexcept -> filter::view { return view(this, root_); }
+inline auto filter::root() const noexcept -> filter::view { return { this, root_ }; }
 
 // RFC 4515 section 3 escaping: `*` `(` `)` `\` and NUL become \2a \28 \29 \5c
 // \00, and octets that are not part of valid UTF-8 become \xx (the string

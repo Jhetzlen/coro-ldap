@@ -17,7 +17,7 @@ namespace {
 	auto value_control(std::string_view oid, bool critical, const ber::writer &w, const control::allocator_type &alloc)
 	  -> control
 	{
-		return control(oid, critical, detail::as_text(w.bytes()), alloc);
+		return { oid, critical, detail::as_text(w.bytes()), alloc };
 	}
 
 	// SortKeyList ::= SEQUENCE OF SEQUENCE { attributeType AttributeDescription,

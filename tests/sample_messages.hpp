@@ -21,7 +21,7 @@ inline auto sample_messages() -> std::vector<message>
 {
 	using namespace std::string_literals;
 	const std::string_view dn = "uid=jdoe,ou=people,dc=example,dc=org";
-	search_request typed_only{ "", search_scope::subordinate_subtree, raw_filter("(bin=\\00\\ff\\2a)"), { "*", "+" } };
+	search_request typed_only{ "", search_scope::subordinate_subtree, raw_filter(R"((bin=\00\ff\2a))"), { "*", "+" } };
 	typed_only.deref = deref_aliases::always;
 	typed_only.size_limit = max_int;
 	typed_only.time_limit = max_int;

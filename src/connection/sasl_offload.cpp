@@ -44,7 +44,7 @@ namespace {
 		template<class F> void start(F f)
 		{
 			reap();
-			const std::lock_guard lock(mutex_);
+			const std::scoped_lock lock(mutex_);
 			auto &w = workers_.emplace_back();
 			try {
 				w.thread = std::thread([f = std::move(f), &ended = w.ended]() mutable noexcept {
@@ -63,7 +63,7 @@ namespace {
 		{
 			std::list<worker> all;
 			{
-				const std::lock_guard lock(mutex_);
+				const std::scoped_lock lock(mutex_);
 				all.swap(workers_);
 			}
 			join(all);
@@ -81,7 +81,7 @@ namespace {
 		{
 			std::list<worker> ended;
 			{
-				const std::lock_guard lock(mutex_);
+				const std::scoped_lock lock(mutex_);
 				for (auto it = workers_.begin(); it != workers_.end();) {
 					const auto next = std::next(it);
 					if (it->ended.load(std::memory_order_acquire)) {
