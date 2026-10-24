@@ -1,7 +1,8 @@
 #!/bin/sh
 # Installs Capy and Corosio as packages, then jhetz_ldap against them, into
 # a fresh prefix, and builds tests/install/consumer with find_package; then
-# the same for a codec-only install (no Corosio needed by consumers).
+# the same for a codec-only install (no Corosio needed by consumers; ICU is,
+# found by the package config).
 #
 #   tests/install/check_install.sh WORK_DIR
 #

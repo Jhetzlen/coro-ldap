@@ -31,7 +31,8 @@ add_executable(jhetz_ldap_tests
     url_tests.cpp
     value_semantics_tests.cpp
 )
-target_link_libraries(jhetz_ldap_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)
+# ICU::uc for its headers: attribute_tests.cpp checks src/icu_util.hpp.
+target_link_libraries(jhetz_ldap_tests PRIVATE jhetz::ldap ICU::uc Catch2::Catch2WithMain)
 jhetz_ldap_warnings(jhetz_ldap_tests)
 catch_discover_tests(jhetz_ldap_tests)
 

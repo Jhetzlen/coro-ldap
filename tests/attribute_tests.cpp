@@ -1,10 +1,14 @@
 #include "jhetz/ldap/attribute.hpp"
 #include "jhetz/ldap/entry.hpp"
 
+#include "../src/icu_util.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <format>
@@ -26,6 +30,109 @@ static_assert(ldap::detail::is_attribute_description("userCertificate;binary"));
 static_assert(ldap::detail::is_attribute_description("2.5.4.3;lang-en;x-1"));
 static_assert(!ldap::detail::is_attribute_description("cn;"));
 static_assert(!ldap::detail::is_attribute_description("1cn"));
+
+namespace {
+
+// The code point of the well-formed n-octet UTF-8 sequence at the start of s.
+auto decode_utf8(std::string_view s, std::size_t n) -> UChar32
+{
+	const auto at = [&](std::size_t k) { return std::uint32_t{ static_cast<unsigned char>(s[k]) }; };
+	if (n == 1) {
+		return static_cast<UChar32>(at(0));
+	}
+	std::uint32_t c = at(0) & (0x7Fu >> n);
+	for (std::size_t k = 1; k < n; ++k) {
+		c = (c << 6u) | (at(k) & 0x3Fu);
+	}
+	return static_cast<UChar32>(c);
+}
+
+// The length of the maximal subpart (Unicode section 3.9) at the start of
+// the ill-formed s, from the compile-time check: the longest prefix (at
+// least one octet) that some continuation octets complete into a
+// well-formed sequence. From two octets on, 0x80 octets complete any prefix
+// that can be completed.
+auto maximal_subpart(std::string_view s) -> std::size_t
+{
+	std::size_t best = 1;
+	for (std::size_t k = 2; k <= std::min<std::size_t>(4, s.size()); ++k) {
+		std::array<char, 4> padded{ '\x80', '\x80', '\x80', '\x80' };
+		std::copy_n(s.begin(), k, padded.begin());
+		if (ldap::detail::constexpr_utf8_sequence_length({ padded.data(), padded.size() }, 0) < k) {
+			break;
+		}
+		best = k;
+	}
+	return best;
+}
+
+}// namespace
+
+// detail::utf8_sequence_length uses ICU at run time and a hand-rolled
+// check in constant evaluation (the consteval DN literals): both must agree
+// on every input. Every 1-, 2- and 3-octet string, and the 4-octet ones
+// built from the octets at the edges of the UTF-8 ranges. detail::utf8_next
+// (ICU's U8_NEXT) is checked against it too: the length and code point of a
+// well-formed sequence, and the maximal subpart of an ill-formed one.
+TEST_CASE("utf8_sequence_length: the compile-time check matches ICU", "[attribute][utf8]")
+{
+	std::size_t mismatches = 0;
+	std::size_t step_mismatches = 0;
+	const auto compare = [&](std::string_view s) {
+		const std::size_t expected = ldap::detail::constexpr_utf8_sequence_length(s, 0);
+		if (expected != ldap::detail::utf8_sequence_length(s, 0)) {
+			++mismatches;
+		}
+		const auto [c, n] = ldap::detail::utf8_next(s, 0);
+		const bool step_ok =
+		  expected != 0 ? n == expected && c == decode_utf8(s, expected) : c < 0 && n == maximal_subpart(s);
+		if (!step_ok) {
+			++step_mismatches;
+		}
+	};
+	std::string s;
+	for (unsigned a = 0; a < 0x100; ++a) {
+		s.assign(1, static_cast<char>(a));
+		compare(s);
+		for (unsigned b = 0; b < 0x100; ++b) {
+			s.assign({ static_cast<char>(a), static_cast<char>(b) });
+			compare(s);
+			if (a < 0xC2) {
+				continue;// ASCII, a stray continuation or an invalid lead: one octet decides
+			}
+			for (unsigned c = 0; c < 0x100; ++c) {
+				s.assign({ static_cast<char>(a), static_cast<char>(b), static_cast<char>(c) });
+				compare(s);
+			}
+		}
+	}
+	const std::vector<unsigned> edges{ 0x00, 0x7F, 0x80, 0x8F, 0x90, 0x9F, 0xA0, 0xBF, 0xC0, 0xFF };
+	for (unsigned a = 0xC0; a < 0x100; ++a) {
+		for (const unsigned b : edges) {
+			for (const unsigned c : edges) {
+				for (const unsigned d : edges) {
+					s.assign(
+					  { static_cast<char>(a), static_cast<char>(b), static_cast<char>(c), static_cast<char>(d) });
+					compare(s);
+				}
+			}
+		}
+	}
+	CHECK(mismatches == 0);
+	CHECK(step_mismatches == 0);
+
+	// At compile time (the path the DN literals take).
+	static_assert(ldap::detail::utf8_sequence_length("\xC3\xA9", 0) == 2);
+	static_assert(ldap::detail::utf8_sequence_length("\xF4\x8F\xBF\xBF", 0) == 4);// U+10FFFF
+	static_assert(ldap::detail::utf8_sequence_length("\xF4\x90\x80\x80", 0) == 0);// above U+10FFFF
+	static_assert(ldap::detail::utf8_sequence_length("\xED\xA0\x80", 0) == 0);// surrogate
+	static_assert(ldap::detail::utf8_sequence_length("\xC0\xAF", 0) == 0);// overlong
+	static_assert(ldap::detail::utf8_sequence_length("\xF0\x9F\x98", 0) == 0);// truncated
+	// And at run time, through ICU.
+	CHECK(ldap::detail::utf8_sequence_length("\xF0\x9F\x98\x80", 0) == 4);
+	CHECK(ldap::detail::utf8_sequence_length("\xF0\x9F\x98", 0) == 0);
+	CHECK(ldap::detail::utf8_sequence_length("\xF5\x80\x80\x80", 0) == 0);
+}
 
 TEST_CASE("valid attribute descriptions", "[attribute]")
 {

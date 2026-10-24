@@ -53,24 +53,25 @@ namespace detail {
 		return true;
 	}
 
-	// The UTF-8 sequence starting at s[i] (RFC 3629; RFC 4512 UTF1 / UTFMB:
-	// no overlong forms, surrogates or code points above U+10FFFF). If it is
-	// well-formed, its length; if not, the length of its maximal subpart
-	// (Unicode section 3.9: the longest prefix of a well-formed sequence, at
-	// least one octet), which one U+FFFD replaces in a decoder following the
-	// Unicode recommendation (ICU's U8_NEXT, WHATWG). Precondition:
-	// i < s.size().
-	struct utf8_sequence
-	{
-		std::size_t length;
-		bool well_formed;
-	};
-	constexpr auto utf8_sequence_at(std::string_view s, std::size_t i) noexcept -> utf8_sequence
+	// Length of the well-formed UTF-8 sequence starting at s[i] (RFC 3629;
+	// RFC 4512 UTF1 / UTFMB: no overlong forms, surrogates or code points
+	// above U+10FFFF), or 0 if there is none. Precondition: i < s.size().
+	// Defined in src/attribute.cpp with ICU (U8_NEXT).
+	auto icu_utf8_sequence_length(std::string_view s, std::size_t i) noexcept -> std::size_t;
+
+	// The same check, hand-rolled, for compile time only: utf8_sequence_length
+	// uses it in constant evaluation (the consteval ldap::dn / ldap::rdn /
+	// attribute literals go through detail::scan_dn), where ICU's functions
+	// cannot run. ICU's U8_NEXT macro would be constexpr-friendly but needs
+	// <unicode/utf8.h>, which the public headers do not include (ICU is a
+	// private dependency of jhetz::ldap). Its answers match ICU's for every
+	// input (tests/attribute_tests.cpp, "utf8_sequence_length").
+	constexpr auto constexpr_utf8_sequence_length(std::string_view s, std::size_t i) noexcept -> std::size_t
 	{
 		const auto at = [&](std::size_t k) { return static_cast<unsigned char>(s[i + k]); };
 		const unsigned char c = at(0);
 		if (c < 0x80u) {
-			return { .length = 1, .well_formed = true };
+			return 1;
 		}
 		std::size_t n = 0;
 		// The range of the second octet.
@@ -95,25 +96,28 @@ namespace detail {
 				hi = 0x8Fu;// above U+10FFFF
 			}
 		} else {
-			return { .length = 1, .well_formed = false };
+			return 0;
 		}
-		const std::size_t avail = s.size() - i;
-		std::size_t k = 1;
-		if (avail > 1 && at(1) >= lo && at(1) <= hi) {
-			k = 2;
-			while (k < n && k < avail && at(k) >= 0x80u && at(k) <= 0xBFu) {
-				++k;
+		if (s.size() - i < n || at(1) < lo || at(1) > hi) {
+			return 0;
+		}
+		for (std::size_t k = 2; k < n; ++k) {
+			if (at(k) < 0x80u || at(k) > 0xBFu) {
+				return 0;
 			}
 		}
-		return { .length = k, .well_formed = k == n };
+		return n;
 	}
 
-	// Length of the valid UTF-8 sequence starting at s[i], or 0 if there is
-	// none (see utf8_sequence_at). Precondition: i < s.size().
+	// Length of the well-formed UTF-8 sequence starting at s[i], or 0 if
+	// there is none: ICU at run time, the hand-rolled check above in constant
+	// evaluation. Precondition: i < s.size().
 	constexpr auto utf8_sequence_length(std::string_view s, std::size_t i) noexcept -> std::size_t
 	{
-		const utf8_sequence q = utf8_sequence_at(s, i);
-		return q.well_formed ? q.length : 0;
+		if consteval {
+			return constexpr_utf8_sequence_length(s, i);
+		}
+		return icu_utf8_sequence_length(s, i);
 	}
 
 	// descr = keystring = ALPHA *(ALPHA / DIGIT / HYPHEN)

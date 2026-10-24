@@ -1024,6 +1024,9 @@ TEST_CASE("RFC 4515 3: printed filters are valid UTF-8", "[filter][rfc]")
 	CHECK(ldap::escape_filter_value("\xff") == "\\ff");
 	CHECK(ldap::escape_filter_value("a\xc3") == "a\\c3");// truncated sequence
 	CHECK(ldap::escape_filter_value("\xc3\xa9") == "\xc3\xa9");// valid UTF-8 is kept
+	CHECK(ldap::escape_filter_value("\xf4\x90\x80\x80") == "\\f4\\90\\80\\80");// above U+10FFFF
+	CHECK(ldap::escape_filter_value("\xed\xbf\xbf") == "\\ed\\bf\\bf");// surrogate
+	CHECK(ldap::escape_filter_value("\xf4\x8f\xbf\xbf") == "\xf4\x8f\xbf\xbf");// U+10FFFF is kept
 	CHECK(text_of(attr("cn") == "\x80") == "(cn=\\80)");
 	CHECK(text_of(attr("cn").starts_with("\xfe")) == "(cn=\\fe*)");
 	CHECK(text_of(raw("(cn=\\ff)")) == "(cn=\\ff)");
@@ -1036,6 +1039,11 @@ TEST_CASE("RFC 4515 3: filter text with invalid UTF-8 is rejected", "[filter][pa
 	  "(cn=a\xc3)",// truncated sequence
 	  "(cn=\xc0\xaf)",// overlong '/'
 	  "(cn=\xed\xa0\x80)",// UTF-16 surrogate
+	  "(cn=\xf4\x90\x80\x80)",// above U+10FFFF
+	  "(cn=\xf5\x80\x80\x80)",// lead octet above U+10FFFF
+	  "(cn=\xe0\x9f\xbf)",// overlong 3-octet form
+	  "(cn=\xf0\x8f\xbf\xbf)",// overlong 4-octet form
+	  "(cn=\xf0\x9f\x98)",// truncated 4-octet sequence
 	  "(cn=\x80*)");
 	INFO(hex(std::as_bytes(std::span(bad))));
 	auto r = ldap::filter::raw(bad);

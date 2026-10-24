@@ -1,6 +1,7 @@
 #include "jhetz/ldap/attribute.hpp"
 
 #include "format_util.hpp"
+#include "icu_util.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -146,6 +147,12 @@ namespace detail {
 			}
 		}
 		return i == n || same(tail8(a), tail8(b));
+	}
+
+	auto icu_utf8_sequence_length(std::string_view s, std::size_t i) noexcept -> std::size_t
+	{
+		const utf8_step step = utf8_next(s, i);
+		return step.code_point < 0 ? 0 : step.length;
 	}
 
 }// namespace detail

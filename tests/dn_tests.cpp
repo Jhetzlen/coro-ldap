@@ -37,6 +37,12 @@ static_assert(ldap::detail::is_dn("cn=x,dc=example,dc=org"));
 static_assert(ldap::detail::is_dn("OU=Sales+CN=J.  Smith,DC=example,DC=net"));
 static_assert(!ldap::detail::is_dn("cn"));
 static_assert(!ldap::detail::is_dn("cn=x,"));
+// UTF-8 at compile time (the hand-rolled check; ICU at run time).
+static_assert(ldap::detail::is_dn("cn=caf\xc3\xa9,dc=\xf0\x9f\x98\x80"));
+static_assert(!ldap::detail::is_dn("cn=\xed\xa0\x80"));
+static_assert(!ldap::detail::is_dn("cn=\xf4\x90\x80\x80"));
+static_assert(!ldap::detail::is_dn("cn=\xc0\xaf"));
+static_assert(!ldap::detail::is_dn("cn=\xf0\x9f\x98"));
 static_assert(ldap::detail::is_rdn("uid=jdoe"));
 static_assert(ldap::detail::is_rdn("OU=Sales + CN=J.  Smith"));
 static_assert(ldap::detail::is_rdn("cn=a\\,b"));// an escaped comma is part of the value
@@ -465,6 +471,12 @@ TEST_CASE("RFC 4514 2: printed DNs are valid UTF-8", "[dn][rfc]")
 	CHECK(parse("cn=\\ff").to_string() == "cn=\\ff");
 	CHECK(ldap::dn{}.child(single("cn", "a\xc3")).to_string() == "cn=a\\c3");// truncated sequence
 	CHECK(parse("cn=\\c3\\a9").to_string() == "cn=\xc3\xa9");// valid UTF-8 is kept
+	// Each octet of an ill-formed sequence is escaped; U+10FFFF and
+	// noncharacters are well-formed and kept.
+	CHECK(ldap::dn{}.child(single("cn", "\xf4\x90\x80\x80")).to_string() == "cn=\\f4\\90\\80\\80");
+	CHECK(ldap::dn{}.child(single("cn", "\xed\xa0\x80")).to_string() == "cn=\\ed\\a0\\80");
+	CHECK(
+	  ldap::dn{}.child(single("cn", "\xf4\x8f\xbf\xbf\xef\xbf\xbf")).to_string() == "cn=\xf4\x8f\xbf\xbf\xef\xbf\xbf");
 }
 
 TEST_CASE("RFC 4514 3: DN text with invalid UTF-8 is rejected", "[dn][rfc]")
@@ -473,7 +485,12 @@ TEST_CASE("RFC 4514 3: DN text with invalid UTF-8 is rejected", "[dn][rfc]")
 	  "cn=\xff",
 	  "cn=a\xc3,dc=x",// truncated sequence
 	  "cn=\xc0\xaf",// overlong '/'
-	  "cn=\xed\xa0\x80");// UTF-16 surrogate
+	  "cn=\xed\xa0\x80",// UTF-16 surrogate
+	  "cn=\xf4\x90\x80\x80",// above U+10FFFF
+	  "cn=\xf5\x80\x80\x80",// lead octet above U+10FFFF
+	  "cn=\xe0\x9f\xbf",// overlong 3-octet form
+	  "cn=\xf0\x8f\xbf\xbf",// overlong 4-octet form
+	  "cn=\x80");// stray continuation octet
 	auto d = ldap::dn::parse(bad);
 	REQUIRE_FALSE(d.has_value());
 	CHECK(d.error().code == client_errc::invalid_dn);

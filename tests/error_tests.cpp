@@ -207,6 +207,20 @@ TEST_CASE("ldap::error message sanitizes the server's text and keeps the fields 
 	CHECK(shown("a" + truncated3 + "b" + truncated4) == "a" + fffd + "b" + fffd);
 	CHECK(
 	  shown("a" + overlong + "b" + surrogate + "c\xFF") == "a" + fffd + fffd + "b" + fffd + fffd + fffd + "c" + fffd);
+	// Above U+10FFFF (F4 90.., F5..): one U+FFFD per octet; a truncated
+	// sequence cut by the end of the text: one.
+	CHECK(shown("a\xF4\x90\x80\x80"
+				"b\xF5\x80")
+		  == "a" + fffd + fffd + fffd + fffd + "b" + fffd + fffd);
+	CHECK(shown("a\xF4\x8F\xBF") == "a" + fffd);
+	// The edges of the replaced sets: U+009F (C1) and U+2069 (Bidi_Control)
+	// go, the characters next to them are kept, and so are U+10FFFF, the
+	// noncharacters and other format characters (ZWSP, BOM, U+206A).
+	CHECK(shown("\xC2\x9F\xC2\xA0") == fffd + "\xC2\xA0");
+	const std::string kept =
+	  "\xE2\x80\xA7\xE2\x80\xAF\xE2\x81\xA5\xE2\x81\xAA\xE2\x80\x8B\xEF\xBB\xBF"
+	  "\xEF\xBF\xBE\xEF\xBF\xBF\xF4\x8F\xBF\xBF\xD8\x9B\xE2\x80\x8D";
+	CHECK(shown(kept) == kept);
 	// Cut at 256 bytes, never inside a character.
 	CHECK(shown(std::string(256, 'x')) == std::string(256, 'x'));
 	CHECK(shown(std::string(10'000, 'x')) == std::string(256, 'x') + "...");

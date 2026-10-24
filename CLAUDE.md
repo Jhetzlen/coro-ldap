@@ -87,7 +87,7 @@ Fuzzers (`build/fuzz`, Clang, `-DJHETZ_LDAP_BUILD_FUZZERS=ON`), the bench
 
 coro-ldap is a C++23 LDAP client library with two CMake targets:
 
-- **`jhetz::ldap`**: the codec, with no dependencies: BER, LDAP messages and controls, DN, filter, URL, schema, and the entry-to-struct mapping.
+- **`jhetz::ldap`**: the codec, whose only dependency is ICU (UTF-8 decoding, character properties): BER, LDAP messages and controls, DN, filter, URL, schema, and the entry-to-struct mapping.
 - **`jhetz::ldap_net`**: the async `ldap::connection` on Corosio/Capy coroutines, with multiplexed operations, OpenSSL TLS (ldaps://, StartTLS), ldapi://, and SASL (EXTERNAL, SCRAM-SHA-256), using ICU for SASLprep.
 - **`ldap::sync::connection`** (`sync.hpp`): a blocking facade over the async connection.
 

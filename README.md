@@ -43,8 +43,8 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
 - Struct mapping, runtime schema validation, Active Directory time types
 - `std::pmr` allocators throughout, so a response can be decoded into an
   arena
-- A dependency-free codec library (BER, messages, DN, filter, URL) usable
-  on its own
+- A codec library (BER, messages, DN, filter, URL) usable on its own; its
+  only dependency is ICU
 
 Linux only.
 
@@ -104,9 +104,9 @@ command-line tool.
 
 ## Build
 
-Requirements: CMake 3.25+, GCC 16+ or Clang 23+ with libstdc++ 16+, and for
-the network library the OpenSSL and ICU development files (Debian:
-`libssl-dev libicu-dev`, Arch: `openssl icu`). Catch2, Corosio and Capy are
+Requirements: CMake 3.25+, GCC 16+ or Clang 23+ with libstdc++ 16+, the ICU
+60+ development files, and for the network library OpenSSL's (Debian:
+`libicu-dev libssl-dev`, Arch: `icu openssl`). Catch2, Corosio and Capy are
 fetched by CMake.
 
 ```sh

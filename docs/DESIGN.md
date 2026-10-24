@@ -40,7 +40,7 @@ this document is updated.
 | 3 | Schema checking | Both compile-time (descriptor) and optional runtime validation against the server schema |
 | 4 | Sync API | Async core; thin blocking facade in its own header (see below) |
 | 5 | Language | C++23. A C++26 upgrade happens on a branch |
-| 6 | Unicode | Full UTF-8; ICU (normalization, stringprep profiles) is the Unicode dependency |
+| 6 | Unicode | Full UTF-8; ICU (UTF-8 decoding, character properties, normalization, stringprep profiles) is the Unicode dependency, of the codec too: no hand-rolled Unicode code at run time |
 
 Namespace is `jhetz::ldap`; examples below assume `namespace ldap = jhetz::ldap;`.
 
@@ -1360,15 +1360,21 @@ and its destructor joins the thread.
   at configure time); MSVC 17.8+. No workarounds for older compilers.
 - Corosio and Capy pinned by commit (FetchContent), used only by
   `jhetz_ldap_net` (option `JHETZ_LDAP_BUILD_NET`, off in fuzz builds);
-  it also needs OpenSSL. The codec library `jhetz_ldap` has no dependencies.
-- ICU (decision 6; `find_package(ICU COMPONENTS uc data)`) for Unicode
-  normalization and the stringprep profiles. Today only `jhetz_ldap_net`
-  links it (SASLprep for SCRAM), privately; the installed package config
-  finds it as a dependency of `net`.
+  it also needs OpenSSL.
+- ICU (decision 6; `find_package(ICU COMPONENTS uc data)`) for Unicode,
+  linked privately by both libraries (the public headers do not include
+  ICU's); the installed package config always finds it. The codec
+  (`jhetz_ldap`) decodes and validates UTF-8 with it (`U8_NEXT`) and asks
+  it for character properties (General_Category, Bidi_Control: what
+  `ldap::error::message()` replaces); `jhetz_ldap_net` uses its stringprep
+  (SASLprep for SCRAM). One hand-rolled piece is left on purpose: the
+  UTF-8 check of compile-time DN literals (`detail::scan_dn` in constant
+  evaluation, `constexpr_utf8_sequence_length` in attribute.hpp), since ICU's
+  functions cannot run there and its `U8_NEXT` macro would need ICU's
+  headers in the public ones; a test checks it answers as ICU does.
 - Optional: the GSS-API library (MIT krb5) for SASL GSSAPI, with
   `JHETZ_LDAP_WITH_GSSAPI` (pkg-config `krb5-gssapi`), privately linked
-  by `jhetz_ldap_net`. LDAPprep matching (RFC 4518) in the
-  codec will make it a dependency of `jhetz_ldap` too.
+  by `jhetz_ldap_net`.
 - Coverage: Clang source-based coverage (`JHETZ_LDAP_COVERAGE`, llvm-cov),
   scoped to our own targets like the warnings; `tests/coverage/run_coverage.sh`
   runs it (docs/DEVELOPMENT.md, "Coverage"). Local only, not in CI.

@@ -3,11 +3,11 @@
 #include "jhetz/ldap/sasl_gssapi.hpp"
 
 #include "format_util.hpp"
+#include "icu_util.hpp"
 
 #include <gssapi/gssapi.h>
 
-#include <unicode/utf8.h>
-#include <unicode/utypes.h>
+#include <unicode/uchar.h>
 
 #include <array>
 #include <atomic>
@@ -149,21 +149,18 @@ namespace {
 
 	// Well-formed UTF-8 (RFC 3629: U8_NEXT refuses overlong forms,
 	// surrogates and code points above U+10FFFF) without control characters
-	// (C0, DEL, C1). Every other code point is accepted.
+	// (general category Cc: C0, DEL, C1). Every other code point is accepted.
 	auto check_text(std::string_view s, std::string_view what) -> result<void>
 	{
-		const auto *p = reinterpret_cast<const std::uint8_t *>(s.data());
-		const auto n = static_cast<std::int64_t>(s.size());
-		for (std::int64_t i = 0; i < n;) {
-			UChar32 c = 0;
-			// NOLINTNEXTLINE(bugprone-inc-dec-in-conditions): ICU's macro, i is read and advanced in sequence
-			U8_NEXT(p, i, n, c);
+		for (std::size_t i = 0; i < s.size();) {
+			const auto [c, n] = detail::utf8_next(s, i);
 			if (c < 0) {
 				return input_error(std::string(what) + " is not valid UTF-8");
 			}
-			if (c < 0x20 || (c >= 0x7f && c < 0xa0)) {
+			if (u_charType(c) == U_CONTROL_CHAR) {
 				return input_error(std::string(what) + " contains a control character");
 			}
+			i += n;
 		}
 		return {};
 	}

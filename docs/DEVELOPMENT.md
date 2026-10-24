@@ -10,9 +10,9 @@ target). Standalone CMake project (CMake 3.25+, GCC 16+ or Clang 23+;
 Clang needs libstdc++ 16+ too, so install g++-16 next to it; configure
 stops with an error on anything older; libc++ is neither supported nor
 checked, so use libstdc++). Catch2 v3, and for `jhetz::ldap_net` Corosio
-and Capy, are fetched from GitHub; `jhetz::ldap_net` also needs the
-OpenSSL and ICU development files (`libssl-dev libicu-dev`; Arch:
-`openssl icu`).
+and Capy, are fetched from GitHub. Both libraries need the ICU 60+ development
+files (`libicu-dev`; Arch: `icu`), and `jhetz::ldap_net` OpenSSL's too
+(`libssl-dev`; Arch: `openssl`).
 
 ```sh
 cmake -B build/main -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON
@@ -37,7 +37,7 @@ others; the list of `jhetz::ldap_net` headers is in `tests/CMakeLists.txt`).
 | Option | Default | |
 |---|---|---|
 | `JHETZ_LDAP_BUILD_TESTS` | `ON` | unit tests and the `*_fuzz_replay` tests |
-| `JHETZ_LDAP_BUILD_NET` | `ON` (`OFF` with fuzzers) | `jhetz::ldap_net` and its tests; fetches Corosio + Capy, needs OpenSSL and ICU |
+| `JHETZ_LDAP_BUILD_NET` | `ON` (`OFF` with fuzzers) | `jhetz::ldap_net` and its tests; fetches Corosio + Capy, needs OpenSSL |
 | `JHETZ_LDAP_WITH_GSSAPI` | `OFF` | SASL GSSAPI (Kerberos) in `jhetz::ldap_net`, its tests and example; needs the GSS-API library (pkg-config `krb5-gssapi`). The installed package then has the component `gssapi` |
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
@@ -63,9 +63,9 @@ package (`JHETZ_LDAP_INSTALL`, on when this is the top-level project).
 found as installed packages (on `CMAKE_PREFIX_PATH`; configure prefers them
 to fetching): a fetched Corosio does not export its targets. Without it the
 package is the codec only, without the networking headers; fetched
-dependencies are never installed with it. With `net`, the
-package finds ICU (`find_dependency(ICU COMPONENTS uc data)`), which the
-static `jhetz::ldap_net` needs at link time. Corosio at the
+dependencies are never installed with it. The package finds ICU
+(`find_dependency(ICU 60 COMPONENTS uc data)`), which the static libraries
+need at link time, codec-only too. Corosio at the
 pinned commit needs help to install against an installed Capy;
 `tests/install/check_install.sh WORK_DIR` does the whole sequence (Capy,
 Corosio, jhetz_ldap, then a consumer in `tests/install/consumer/`, also

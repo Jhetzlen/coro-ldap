@@ -3,6 +3,9 @@
 #include "jhetz/ldap/attribute.hpp"
 
 #include "format_util.hpp"
+#include "icu_util.hpp"
+
+#include <unicode/uchar.h>
 
 #include <cstddef>
 #include <optional>
@@ -389,28 +392,14 @@ namespace detail {
 
 	namespace {
 
-		// The code point of a well-formed UTF-8 sequence.
-		constexpr auto code_point(std::string_view seq) noexcept -> char32_t
+		// What append_sanitized replaces besides ill-formed UTF-8: control
+		// characters (General_Category Cc: C0, DEL, C1), Bidi_Control, and
+		// LINE / PARAGRAPH SEPARATOR (the only characters of Zl and Zp).
+		auto replaced(UChar32 c) noexcept -> bool
 		{
-			const auto b = [&](std::size_t k) { return char32_t{ static_cast<unsigned char>(seq[k]) }; };
-			switch (seq.size()) {
-			case 1:
-				return b(0);
-			case 2:
-				return (b(0) & 0x1Fu) << 6 | (b(1) & 0x3Fu);
-			case 3:
-				return (b(0) & 0x0Fu) << 12 | (b(1) & 0x3Fu) << 6 | (b(2) & 0x3Fu);
-			default:
-				return (b(0) & 0x07u) << 18 | (b(1) & 0x3Fu) << 12 | (b(2) & 0x3Fu) << 6 | (b(3) & 0x3Fu);
-			}
-		}
-
-		// C0, DEL, C1, Bidi_Control and U+2028/U+2029 (append_sanitized).
-		constexpr auto replaced(char32_t c) noexcept -> bool
-		{
-			return c < 0x20 || (c >= 0x7F && c < 0xA0) || c == 0x061C || c == 0x200E || c == 0x200F
-				   || (c >= 0x2028 && c <= 0x202E)// U+2028, U+2029, U+202A-U+202E
-				   || (c >= 0x2066 && c <= 0x2069);
+			const auto type = static_cast<UCharCategory>(u_charType(c));
+			return type == U_CONTROL_CHAR || type == U_LINE_SEPARATOR || type == U_PARAGRAPH_SEPARATOR
+				   || u_hasBinaryProperty(c, UCHAR_BIDI_CONTROL) != 0;
 		}
 
 		template<class String> void append_sanitized_to(String &out, std::string_view s, std::size_t max_bytes)
@@ -418,15 +407,14 @@ namespace detail {
 			constexpr std::string_view replacement = "\xEF\xBF\xBD";// U+FFFD
 			std::size_t i = 0;
 			while (i < s.size()) {
-				const auto [n, well_formed] = utf8_sequence_at(s, i);
+				const auto [c, n] = utf8_next(s, i);
 				if (n > max_bytes - i) {
 					break;// i <= max_bytes here
 				}
-				const std::string_view seq = s.substr(i, n);
-				if (!well_formed || replaced(code_point(seq))) {
+				if (c < 0 || replaced(c)) {
 					out += replacement;
 				} else {
-					out += seq;
+					out += s.substr(i, n);
 				}
 				i += n;
 			}

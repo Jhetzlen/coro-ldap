@@ -13,9 +13,9 @@
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 
+#include <unicode/uchar.h>
 #include <unicode/usprep.h>
 #include <unicode/ustring.h>
-#include <unicode/utf8.h>
 #include <unicode/utypes.h>
 
 #include <algorithm>
@@ -632,21 +632,16 @@ auto sasl_scram_sha256::start() -> result<std::optional<std::string>>
 	// does not prepare it: it is sent as given (escaped) once checked. It
 	// must be well-formed UTF-8 (RFC 3629: U8_NEXT refuses overlong forms,
 	// surrogates and code points above U+10FFFF) without control characters
-	// (C0, DEL, C1); every other code point is accepted.
-	{
-		const auto *p = reinterpret_cast<const std::uint8_t *>(authz_id.data());
-		const auto n = static_cast<std::int64_t>(authz_id.size());
-		for (std::int64_t i = 0; i < n;) {
-			UChar32 c = 0;
-			// NOLINTNEXTLINE(bugprone-inc-dec-in-conditions): ICU's macro, i is read and advanced in sequence
-			U8_NEXT(p, i, n, c);
-			if (c < 0) {
-				return input_error("authorization identity is not valid UTF-8");
-			}
-			if (c < 0x20 || (c >= 0x7f && c < 0xa0)) {
-				return input_error("authorization identity contains a control character");
-			}
+	// (general category Cc: C0, DEL, C1); every other code point is accepted.
+	for (std::size_t i = 0; i < authz_id.size();) {
+		const auto [c, n] = detail::utf8_next(authz_id, i);
+		if (c < 0) {
+			return input_error("authorization identity is not valid UTF-8");
 		}
+		if (u_charType(c) == U_CONTROL_CHAR) {
+			return input_error("authorization identity contains a control character");
+		}
+		i += n;
 	}
 
 	// gs2-cbind-flag (RFC 5802 sections 6 and 7), and with "p" the prefix

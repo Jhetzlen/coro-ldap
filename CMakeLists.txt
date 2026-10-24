@@ -11,14 +11,14 @@ project(jhetz_ldap VERSION 0.1.0 LANGUAGES CXX)
 
 option(JHETZ_LDAP_BUILD_TESTS "Build the jhetz::ldap unit tests" ON)
 option(JHETZ_LDAP_BUILD_FUZZERS "Build the libFuzzer targets (Clang only)" OFF)
-# jhetz::ldap_net needs Corosio + Capy (fetched), OpenSSL and ICU. The fuzzers
+# jhetz::ldap_net needs Corosio + Capy (fetched) and OpenSSL. The fuzzers
 # only exercise the codec, so a fuzz build leaves it off by default.
 if(JHETZ_LDAP_BUILD_FUZZERS)
     set(jhetz_ldap_net_default OFF)
 else()
     set(jhetz_ldap_net_default ON)
 endif()
-option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap_net (transports and connect; fetches Corosio and Capy, needs OpenSSL and ICU)"
+option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap_net (transports and connect; fetches Corosio and Capy, needs OpenSSL)"
     ${jhetz_ldap_net_default})
 option(JHETZ_LDAP_SANITIZE "Build all targets with AddressSanitizer and UBSan" OFF)
 # On by default for our own builds; off as a subproject (add_subdirectory,
@@ -151,6 +151,16 @@ function(jhetz_ldap_warnings target)
     endif()
 endfunction()
 
+# ICU is the Unicode dependency (DESIGN.md decision 6), of the codec too:
+# UTF-8 decoding and character properties in jhetz::ldap, SASLprep for SCRAM
+# (usprep) in jhetz::ldap_net. `data` too, for a static ICU (libicuuc.so
+# already pulls in libicudata). ICU 60+: U8_NEXT's maximal-subpart
+# behaviour (Unicode section 3.9) dates from ICU 60.
+find_package(ICU 60 COMPONENTS uc data)
+if(NOT ICU_FOUND)
+    message(FATAL_ERROR "jhetz::ldap needs ICU 60+ (e.g. apt install libicu-dev)")
+endif()
+
 add_library(jhetz_ldap STATIC
     src/attribute.cpp
     src/ber.cpp
@@ -175,6 +185,8 @@ target_include_directories(jhetz_ldap PUBLIC
 )
 set_target_properties(jhetz_ldap PROPERTIES EXPORT_NAME ldap)
 target_compile_features(jhetz_ldap PUBLIC cxx_std_23)
+# PRIVATE: the public headers do not include ICU's.
+target_link_libraries(jhetz_ldap PRIVATE ICU::uc ICU::data)
 jhetz_ldap_warnings(jhetz_ldap)
 
 if(JHETZ_LDAP_BUILD_NET)
@@ -224,15 +236,6 @@ if(JHETZ_LDAP_BUILD_NET)
         message(FATAL_ERROR "jhetz::ldap_net needs OpenSSL (e.g. apt install libssl-dev), "
             "or configure with -DJHETZ_LDAP_BUILD_NET=OFF")
     endif()
-    # ICU is the Unicode dependency (DESIGN.md decision 6): SASLprep for
-    # SCRAM (usprep). `data` too, for a static ICU (libicuuc.so already
-    # pulls in libicudata).
-    find_package(ICU COMPONENTS uc data)
-    if(NOT ICU_FOUND)
-        message(FATAL_ERROR "jhetz::ldap_net needs ICU (e.g. apt install libicu-dev), "
-            "or configure with -DJHETZ_LDAP_BUILD_NET=OFF")
-    endif()
-
     add_library(jhetz_ldap_net STATIC
         src/connection/connection.cpp
         src/connection/start_tls.cpp
