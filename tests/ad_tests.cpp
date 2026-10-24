@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <ratio>
 #include <string>
 #include <vector>
 
@@ -83,11 +84,19 @@ TEST_CASE("filetime_clock: conversions at the limits", "[ad][clock]")
 	CHECK(clock_cast<system_clock>(*traits::decode("-1")) == sys_days(1601y / January / 1) - ticks{ 1 });
 	CHECK(clock_cast<system_clock>(*traits::decode("0")) == sys_days(1601y / January / 1));
 	CHECK(clock_cast<ad::filetime_clock>(clock_cast<system_clock>(ad::pwd_set_now)) == ad::pwd_set_now);
-	// Every system_clock::time_point is in from_sys' range.
-	CHECK(clock_cast<ad::filetime_clock>(system_clock::time_point::max())
-		  == filetime(floor<ticks>(system_clock::duration::max()) + offset));
-	CHECK(clock_cast<ad::filetime_clock>(system_clock::time_point::min())
-		  == filetime(floor<ticks>(system_clock::duration::min()) + offset));
+	// from_sys' domain ends at sys_time<ticks>::max() - offset whatever
+	// system_clock's period. With nanoseconds (libstdc++) every
+	// system_clock::time_point is in it; with MSVC's 100 ns ticks or
+	// libc++'s microseconds only those up to that bound are.
+	if constexpr (std::ratio_less_equal_v<system_clock::period, std::nano>) {
+		CHECK(clock_cast<ad::filetime_clock>(system_clock::time_point::max())
+			  == filetime(floor<ticks>(system_clock::duration::max()) + offset));
+		CHECK(clock_cast<ad::filetime_clock>(system_clock::time_point::min())
+			  == filetime(floor<ticks>(system_clock::duration::min()) + offset));
+	} else {
+		const auto top = floor<system_clock::duration>(sys_time<ticks>::max() - offset);
+		CHECK(clock_cast<ad::filetime_clock>(top) == filetime(floor<ticks>(top.time_since_epoch()) + offset));
+	}
 }
 
 TEST_CASE("filetime_clock: utc_clock and zoned_time", "[ad][clock]")
@@ -97,7 +106,9 @@ TEST_CASE("filetime_clock: utc_clock and zoned_time", "[ad][clock]")
 	// The toolchain's tzdb (libstdc++ reads the system's zoneinfo).
 	const zoned_time paris{ "Europe/Paris", clock_cast<system_clock>(t) };
 	CHECK(floor<seconds>(paris.get_local_time()) == local_days(2024y / January / 1) + 1h);
-	CHECK(paris.get_info().abbrev == "CET");
+	// The offset, not the abbreviation: "CET" in the IANA data, but other
+	// tzdb sources (MSVC's, through ICU) may spell it "GMT+1".
+	CHECK(paris.get_info().offset == 1h);
 }
 
 TEST_CASE("filetime value_traits: ticks, sentinels and errors", "[ad][traits]")

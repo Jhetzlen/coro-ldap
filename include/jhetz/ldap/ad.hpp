@@ -116,9 +116,9 @@ struct filetime_clock
 	// Converting is defined for every decoded date, but arithmetic on a date
 	// near the top of the range (t + days(n), t - lockout_duration) can
 	// overflow, like on any std::chrono value. The result keeps the 100 ns
-	// ticks; assigning it to a system_clock::time_point (nanoseconds)
-	// overflows after 2262, ad::never included, so keep the ticks or floor
-	// to seconds.
+	// ticks; assigning it to a system_clock::time_point may not fit (with
+	// libstdc++'s nanoseconds it overflows after 2262, ad::never included),
+	// so keep the ticks or floor to seconds.
 	template<class D>
 	[[nodiscard]] static constexpr auto to_sys(const std::chrono::time_point<filetime_clock, D> &t)
 	  -> std::chrono::sys_time<std::common_type_t<D, std::chrono::seconds>>
@@ -127,12 +127,16 @@ struct filetime_clock
 		  t.time_since_epoch() - unix_epoch_offset);
 	}
 
-	// Rounds down to a tick (a system_clock::time_point has nanoseconds, and
-	// FILETIME dates in nanoseconds would overflow 64 bits after 1893).
-	// Defined while the result fits: t no later than time_point::max()
-	// (year 30828) and, for durations coarser than a tick, within the
-	// +/-29227 years from 1970 their tick count can hold. Every
-	// system_clock::time_point (years 1677-2262) is in range.
+	// Rounds down to a tick (system_clock's period is implementation-
+	// defined: nanoseconds in libstdc++, microseconds in libc++, 100 ns in
+	// MSVC's STL). Defined for t <= time_point::max() - unix_epoch_offset
+	// (as a sys_time in ticks, year 30828: the result is then at most
+	// ad::never) and t >= the lowest sys_time in ticks (about year -27258),
+	// whatever D is; beyond, the result or the conversion of t to ticks
+	// overflows. The mirror of to_sys' domain. Whether every
+	// system_clock::time_point is in range depends on the period: yes with
+	// nanoseconds (years 1677-2262), no with MSVC's 100 ns ticks or libc++'s
+	// microseconds, whose time_point::max() is beyond year 30828.
 	template<class D> [[nodiscard]] static constexpr auto from_sys(const std::chrono::sys_time<D> &t) -> time_point
 	{
 		return time_point(std::chrono::floor<duration>(t.time_since_epoch()) + unix_epoch_offset);
