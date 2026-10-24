@@ -11,6 +11,11 @@ FetchContent_MakeAvailable(Catch2)
 
 list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
 include(Catch)
+# Windows: list the tests when ctest runs, not right after the build, so the
+# DLLs (ICU, OpenSSL) only need to be on PATH for ctest.
+if(WIN32)
+    set(CMAKE_CATCH_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+endif()
 
 add_executable(jhetz_ldap_tests
     ad_tests.cpp

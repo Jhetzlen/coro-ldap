@@ -23,7 +23,15 @@ option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap_net (transports and connect; fetc
 option(JHETZ_LDAP_SANITIZE "Build all targets with AddressSanitizer and UBSan" OFF)
 # On by default for our own builds; off as a subproject (add_subdirectory,
 # FetchContent) so a consumer's newer compiler is not broken by new warnings.
-option(JHETZ_LDAP_WERROR "Treat warnings in jhetz::ldap code as errors" ${PROJECT_IS_TOP_LEVEL})
+# Off by default on MSVC and clang-cl too (/W4 still shows the warnings): the
+# Windows port has not had its first clean build yet. Turn the default on
+# once it has (-DJHETZ_LDAP_WERROR=ON meanwhile).
+if(PROJECT_IS_TOP_LEVEL AND NOT MSVC)
+    set(jhetz_ldap_werror_default ON)
+else()
+    set(jhetz_ldap_werror_default OFF)
+endif()
+option(JHETZ_LDAP_WERROR "Treat warnings in jhetz::ldap code as errors" ${jhetz_ldap_werror_default})
 option(JHETZ_LDAP_COVERAGE "Instrument our own targets for Clang source-based coverage (llvm-cov)" OFF)
 option(JHETZ_LDAP_BUILD_BENCH "Build the benchmarks (bench/, not run by ctest)" OFF)
 option(JHETZ_LDAP_WITH_GSSAPI "Add SASL GSSAPI (Kerberos) to jhetz::ldap_net (needs the GSS-API library, MIT krb5's libgssapi_krb5, found with pkg-config)" OFF)
@@ -34,9 +42,10 @@ option(JHETZ_LDAP_CLANG_TIDY "Run clang-tidy (.clang-tidy) on our own targets wh
 # Minimum compilers: GCC 16, Clang 23, and libstdc++ 16 when it is the
 # standard library (Clang uses the newest GCC's libstdc++ it finds; install
 # g++-16 next to clang++-23, or pass --gcc-install-dir), for the C++23 library
-# additions older versions lack (std::print, std::ranges::to, ...). Linux is
-# the supported platform; Apple Clang (macOS) is rejected, MSVC is not checked
-# here.
+# additions older versions lack (std::print, std::ranges::to, ...), or MSVC
+# 19.40 (Visual Studio 2022 17.10). Linux is the supported platform; the
+# Windows port (MSVC, clang-cl, MinGW) is code-only so far and not tested
+# here. Apple Clang (macOS) is rejected.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
     message(FATAL_ERROR "jhetz::ldap does not support Apple Clang (macOS is not a supported platform)")
 endif()
@@ -45,6 +54,10 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_L
 endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 23)
     message(FATAL_ERROR "jhetz::ldap needs Clang 23 or newer (found ${CMAKE_CXX_COMPILER_VERSION})")
+endif()
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19.40)
+    message(FATAL_ERROR "jhetz::ldap needs MSVC 19.40 (Visual Studio 2022 17.10) or newer "
+        "(found ${CMAKE_CXX_COMPILER_VERSION})")
 endif()
 include(CheckCXXSourceCompiles)
 # Re-run the probe on every configure: a cached failure would otherwise keep
@@ -74,6 +87,10 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 # Global flags: set before any dependency is fetched so Catch2 is built the
 # same way (mixing sanitized and unsanitized code causes false positives).
 if(JHETZ_LDAP_SANITIZE)
+    if(MINGW)
+        message(FATAL_ERROR "JHETZ_LDAP_SANITIZE is not supported with MinGW (no AddressSanitizer runtime); "
+            "use MSVC or clang-cl")
+    endif()
     if(MSVC)
         # /fsanitize=address is incompatible with the /RTC1 runtime checks
         # CMake puts in the default Debug flags (error D8016), so drop them.
@@ -90,6 +107,10 @@ if(JHETZ_LDAP_SANITIZE)
 endif()
 
 if(JHETZ_LDAP_BUILD_FUZZERS)
+    # clang-cl reports Clang, but the -fsanitize flags below are GCC-style.
+    if(WIN32)
+        message(FATAL_ERROR "JHETZ_LDAP_BUILD_FUZZERS is not supported on Windows (fuzz on Linux)")
+    endif()
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         message(FATAL_ERROR "JHETZ_LDAP_BUILD_FUZZERS requires Clang (libFuzzer)")
     endif()
@@ -127,7 +148,12 @@ if(JHETZ_LDAP_CLANG_TIDY)
     find_program(JHETZ_LDAP_CLANG_TIDY_EXE NAMES clang-tidy-23 clang-tidy REQUIRED)
 endif()
 
-# Warnings (and coverage instrumentation) apply to our own targets only.
+# Warnings (and coverage instrumentation) apply to our own targets only, and
+# so do the Windows settings: UTF-8 sources and execution charset (/utf-8:
+# the sources and tests hold UTF-8 literals), big object files (Corosio's
+# templates exceed the default section count), no CRT "deprecated" warnings
+# for the standard C functions (getenv, ...), and a lean <windows.h> without
+# the min/max macros for anything that pulls in Winsock.
 # Clang counts __COUNTER__ (used by Catch2's macros, expanded in our test
 # sources) as a C2y extension under -Wpedantic. Clang only: GCC has no such
 # warning (it accepts the unknown -Wno- flag, then notes it next to any other
@@ -137,9 +163,15 @@ function(jhetz_ldap_warnings target)
     if(JHETZ_LDAP_CLANG_TIDY)
         set_target_properties(${target} PROPERTIES CXX_CLANG_TIDY "${JHETZ_LDAP_CLANG_TIDY_EXE}")
     endif()
+    if(WIN32)
+        target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
     if(MSVC)
-        target_compile_options(${target} PRIVATE /W4 $<$<BOOL:${JHETZ_LDAP_WERROR}>:/WX>)
+        target_compile_options(${target} PRIVATE /W4 /utf-8 /bigobj $<$<BOOL:${JHETZ_LDAP_WERROR}>:/WX>)
     else()
+        if(MINGW)
+            target_compile_options(${target} PRIVATE -Wa,-mbig-obj)
+        endif()
         target_compile_options(${target} PRIVATE
             -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow
             $<$<CXX_COMPILER_ID:Clang>:-Wno-c2y-extensions>
@@ -159,7 +191,8 @@ endfunction()
 # behaviour (Unicode section 3.9) dates from ICU 60.
 find_package(ICU 60 COMPONENTS uc data)
 if(NOT ICU_FOUND)
-    message(FATAL_ERROR "jhetz::ldap needs ICU 60+ (e.g. apt install libicu-dev)")
+    message(FATAL_ERROR "jhetz::ldap needs ICU 60+ (e.g. apt install libicu-dev; on Windows "
+        "vcpkg install icu and configure with -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake)")
 endif()
 
 add_library(jhetz_ldap STATIC
@@ -235,8 +268,8 @@ if(JHETZ_LDAP_BUILD_NET)
         endif()
     endforeach()
     if(NOT TARGET Boost::corosio_openssl)
-        message(FATAL_ERROR "jhetz::ldap_net needs OpenSSL (e.g. apt install libssl-dev), "
-            "or configure with -DJHETZ_LDAP_BUILD_NET=OFF")
+        message(FATAL_ERROR "jhetz::ldap_net needs OpenSSL (e.g. apt install libssl-dev; on Windows "
+            "vcpkg install openssl with the vcpkg toolchain file), or configure with -DJHETZ_LDAP_BUILD_NET=OFF")
     endif()
     add_library(jhetz_ldap_net STATIC
         src/connection/connection.cpp
@@ -267,6 +300,9 @@ if(JHETZ_LDAP_BUILD_NET)
     # should work too, untested). The installed package config finds it
     # the same way.
     if(JHETZ_LDAP_WITH_GSSAPI)
+        if(WIN32)
+            message(FATAL_ERROR "JHETZ_LDAP_WITH_GSSAPI is not supported on Windows (SSPI is not implemented)")
+        endif()
         find_package(PkgConfig)
         if(PkgConfig_FOUND)
             pkg_search_module(JHETZ_LDAP_GSSAPI IMPORTED_TARGET krb5-gssapi heimdal-gssapi)
