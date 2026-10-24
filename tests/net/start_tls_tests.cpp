@@ -214,16 +214,27 @@ TEST_CASE("start_tls: upgrade, then LDAP over TLS", "[net][starttls]")
 	f.serve(mode::upgrade);
 	auto c = f.connect();
 	CHECK_FALSE(c.is_tls());
+	CHECK(c.peer_certificate().empty());
+	CHECK_FALSE(c.channel_bindings().default_type.has_value());
 	auto r = finish(f.ioc, c.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }));
 	REQUIRE(r.has_value());
 	CHECK(c.is_tls());
 	CHECK(c.is_open());
+	// The handshake's certificate and channel bindings (TLS 1.3).
+	const auto der = c.peer_certificate();
+	CHECK(std::vector<std::byte>(der.begin(), der.end()) == certificate_der(localhost_cert().cert_pem));
+	const auto bindings = c.channel_bindings();
+	CHECK(bindings.default_type == ldap::channel_binding_type::tls_exporter);
+	CHECK(bindings.tls_exporter.size() == 32);
+	CHECK(bindings.tls_server_end_point.size() == 32);// ECDSA with SHA-256
 	auto b = finish(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
 	CHECK(b.has_value());
 	c.close();
 	// is_tls() describes the open connection: false once closed.
 	CHECK_FALSE(c.is_open());
 	CHECK_FALSE(c.is_tls());
+	CHECK(c.peer_certificate().empty());
+	CHECK(c.channel_bindings().tls_exporter.empty());
 	drive(f.ioc);
 	CHECK_THAT(f.server.get(), IsEmpty());
 }
@@ -519,6 +530,9 @@ TEST_CASE("start_tls: certificate verification failures", "[net][starttls]")
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("tls handshake: server certificate: "));
 		CHECK_FALSE(c.is_open());
 		CHECK_FALSE(c.is_tls());
+		// The failed handshake recorded nothing.
+		CHECK(c.peer_certificate().empty());
+		CHECK_FALSE(c.channel_bindings().default_type.has_value());
 		drive(f.ioc);
 		CHECK_THAT(f.server.get(), StartsWith("server handshake: "));
 	}

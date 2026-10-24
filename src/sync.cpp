@@ -1,6 +1,8 @@
 #include "jhetz/ldap/sync.hpp"
 
+#include <cstddef>
 #include <utility>
+#include <vector>
 
 namespace capy = boost::capy;
 
@@ -64,6 +66,14 @@ auto connection::is_open() const -> bool
 auto connection::is_tls() const -> bool
 {
 	return call([](const ldap::connection &c) -> capy::task<result<bool>> { co_return c.is_tls(); }).value_or(false);
+}
+
+auto connection::peer_certificate() const -> std::vector<std::byte>
+{
+	return call([](const ldap::connection &c) -> capy::task<result<std::vector<std::byte>>> {
+		const auto der = c.peer_certificate();
+		co_return std::vector<std::byte>(der.begin(), der.end());
+	}).value_or(std::vector<std::byte>{});
 }
 
 auto connection::search_paged(search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)

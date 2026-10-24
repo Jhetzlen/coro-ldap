@@ -82,6 +82,22 @@ auto connection::outstanding() const noexcept -> std::size_t { return impl_ == n
 
 auto connection::is_tls() const noexcept -> bool { return impl_ != nullptr && impl_->is_tls(); }
 
+auto connection::peer_certificate() const noexcept -> std::span<const std::byte>
+{
+	if (!is_tls()) {
+		return {};
+	}
+	return impl_->transport().peer_certificate();
+}
+
+auto connection::channel_bindings() const noexcept -> ldap::channel_bindings
+{
+	if (!is_tls()) {
+		return {};
+	}
+	return impl_->transport().channel_bindings();
+}
+
 void connection::close() noexcept
 {
 	if (impl_ != nullptr) {

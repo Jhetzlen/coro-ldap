@@ -7,7 +7,8 @@
 # slapd listens on ldap://127.0.0.1:$PORT, ldaps://localhost:$((PORT+1))
 # and an ldapi:// socket in a temporary directory, with a test CA, a
 # server certificate (localhost, 127.0.0.1) and a client certificate for
-# SASL EXTERNAL, and authz-regexp for SASL SCRAM-SHA-256; the data is
+# SASL EXTERNAL, and authz-regexp for SASL SCRAM-SHA-256 and, with channel
+# binding (sasl-cbinding tls-endpoint), SCRAM-SHA-256-PLUS; the data is
 # make_fixture.py's. Needs slapd and openssl. Under run_kdc.sh (a
 # throwaway Kerberos KDC), slapd also offers SASL GSSAPI as
 # ldap/localhost, with its keytab (KRB5_KTNAME) and realm.
@@ -53,6 +54,24 @@ openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=localh
 	-keyout server.key -out server.csr 2>/dev/null
 openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 \
 	-extfile server.ext -out server.pem 2>/dev/null
+# A server certificate for the same names signed with Ed25519, by an
+# Ed25519 intermediate CA under ca.pem (the file holds both): a test
+# switches slapd to it through cn=config (channel binding: RFC 5929 has
+# no tls-server-end-point for an Ed25519 signature, OpenLDAP hashes it
+# with SHA-256).
+cat > ca-ed25519.ext <<EXT
+basicConstraints = critical, CA:TRUE, pathlen:0
+keyUsage = critical, keyCertSign, cRLSign
+EXT
+openssl req -newkey ed25519 -nodes -subj "/CN=jhetz-ldap integration Ed25519 CA" \
+	-keyout ca-ed25519.key -out ca-ed25519.csr 2>/dev/null
+openssl x509 -req -in ca-ed25519.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 \
+	-extfile ca-ed25519.ext -out ca-ed25519.pem 2>/dev/null
+openssl req -newkey ed25519 -nodes -subj "/CN=localhost" \
+	-keyout server-ed25519.key -out server-ed25519.csr 2>/dev/null
+openssl x509 -req -in server-ed25519.csr -CA ca-ed25519.pem -CAkey ca-ed25519.key -CAcreateserial -days 2 \
+	-extfile server.ext -out server-ed25519-leaf.pem 2>/dev/null
+cat server-ed25519-leaf.pem ca-ed25519.pem > server-ed25519.pem
 cat > client.ext <<EXT
 basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature
@@ -122,10 +141,13 @@ sizelimit 1000
 # SASL SCRAM-SHA-256 (cyrus-sasl's scram plugin, if installed): the
 # username is a uid, checked against the entry's cleartext userPassword.
 authz-regexp "^uid=([^,]+)(,cn=[^,]+)?,cn=scram-sha-256,cn=auth\$" "uid=\$1,ou=people,dc=example,dc=org"
+# SCRAM-SHA-256-PLUS over TLS, channel binding tls-server-end-point.
+sasl-cbinding tls-endpoint
+authz-regexp "^uid=([^,]+)(,cn=[^,]+)?,cn=scram-sha-256-plus,cn=auth\$" "uid=\$1,ou=people,dc=example,dc=org"
 $gssapi
 
-# cn=config, writable by cn=config / secret: a test toggles settings at
-# run time (olcDisallows) and restores them.
+# cn=config, writable by cn=config / secret: tests toggle settings at run
+# time (olcDisallows, the server certificate) and restore them.
 database config
 rootpw secret
 
@@ -161,6 +183,10 @@ export JHETZ_LDAP_IT_LDAPI="$socket_url"
 export JHETZ_LDAP_IT_CA="$dir/ca.pem"
 export JHETZ_LDAP_IT_CLIENT_CERT="$dir/client.pem"
 export JHETZ_LDAP_IT_CLIENT_KEY="$dir/client.key"
+export JHETZ_LDAP_IT_SERVER_CERT="$dir/server.pem"
+export JHETZ_LDAP_IT_SERVER_KEY="$dir/server.key"
+export JHETZ_LDAP_IT_SERVER_ED25519_CERT="$dir/server-ed25519.pem"
+export JHETZ_LDAP_IT_SERVER_ED25519_KEY="$dir/server-ed25519.key"
 if [[ -n "$sort_available" ]]; then export JHETZ_LDAP_IT_SORT=1; fi
 if [[ -n "$syncrepl_available" ]]; then export JHETZ_LDAP_IT_SYNCREPL=1; fi
 "$@"

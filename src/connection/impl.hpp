@@ -194,6 +194,13 @@ class connection::impl
 	// handshake runs.
 	auto is_tls() const noexcept -> bool { return open && !upgrading && transport_.is_tls(); }
 
+	// For sasl_bind (bind.cpp): the channel bindings for a new
+	// authentication, without tls-exporter once one used it (RFC 9266
+	// section 4.1, net::detail::authentication_channel_bindings), and the
+	// mark that one did, kept until the TLS session ends.
+	auto authentication_channel_bindings() const noexcept -> ldap::channel_bindings;
+	void mark_tls_exporter_used() noexcept;
+
 	// Requests still to be answered: those waited for, and `due` answers.
 	auto outstanding() const noexcept -> std::size_t;
 

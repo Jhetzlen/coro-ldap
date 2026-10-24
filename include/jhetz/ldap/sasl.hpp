@@ -18,10 +18,13 @@
 // to run on a thread of its own instead (offload_start, offload_step).
 #pragma once
 
+#include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/error.hpp"
 
+#include <cstddef>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -42,6 +45,17 @@ struct sasl_bind_context
 	// unsafe_io included (it cannot be detected). False when prepare() is
 	// called with a default sasl_bind_context.
 	bool can_offload = false;
+	// Whether TLS protects the connection (connection::is_tls()).
+	bool tls = false;
+	// The connection's TLS channel bindings (channel_binding.hpp), e.g. for
+	// SCRAM-SHA-256-PLUS: views valid only during prepare(), like the rest
+	// of the context. Empty when !tls; tls-exporter empty once a bind used
+	// it (sasl_mechanism::channel_binding_used, which by default says a
+	// mechanism given tls-exporter data used it).
+	channel_bindings bindings{};
+	// The server's certificate (DER, connection::peer_certificate()), a
+	// view valid only during prepare(); empty when !tls.
+	std::span<const std::byte> peer_certificate{};
 };
 
 // A step's credentials computed off the I/O thread (offload_start,
@@ -99,6 +113,23 @@ class sasl_mechanism
 		return {};
 	}
 
+	// After start() (or offload_start()'s work) succeeded: the channel
+	// binding type whose data (sasl_bind_context::bindings) the exchange
+	// authenticates, nullopt for none. tls-exporter MUST NOT be used for
+	// more than one authentication on a TLS connection (RFC 9266 section
+	// 4.1): when this says tls_exporter and the bind was given tls-exporter
+	// data, sasl_bind counts the bind as that one use, whatever its
+	// outcome, and later binds on the connection get no tls-exporter data
+	// (channel_bindings, with default_type falling back to
+	// tls-server-end-point or none). Default: tls_exporter, fail-closed: a
+	// mechanism that does not say what it used counts as having used it. A
+	// mechanism that binds to nothing, or to another type, overrides it
+	// (the library's mechanisms report exactly what they used).
+	[[nodiscard]] virtual auto channel_binding_used() const noexcept -> std::optional<channel_binding_type>
+	{
+		return channel_binding_type::tls_exporter;
+	}
+
   protected:
 	// Copied and moved only as part of a derived mechanism, never sliced
 	// through a sasl_mechanism reference.
@@ -127,6 +158,11 @@ class sasl_external final : public sasl_mechanism
 	[[nodiscard]] auto step(std::optional<std::string_view>) -> result<std::optional<std::string>> override
 	{
 		return fail(client_errc::unexpected_response, "the server sent a challenge to a single-step mechanism");
+	}
+	// Binds to no channel: the TLS layer below carries the identity.
+	[[nodiscard]] auto channel_binding_used() const noexcept -> std::optional<channel_binding_type> override
+	{
+		return std::nullopt;
 	}
 
   private:

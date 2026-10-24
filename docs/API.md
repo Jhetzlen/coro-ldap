@@ -322,7 +322,7 @@ itself stays dependency-free.
   `sasl_scram_sha256` (`jhetz/ldap/sasl_scram.hpp`, RFC 5802 / 7677:
   username and password, the bind fails unless the server proves it knows
   the password; UTF-8 usernames and passwords prepared with SASLprep, RFC
-  4013, through ICU; no channel binding; `sasl_scram_options` sets the
+  4013, through ICU; `sasl_scram_options` sets channel binding, the
   authorization identity, the largest iteration count accepted from the
   server, `max_iterations`, 1'000'000 by default, and the count above which
   PBKDF2 runs on a thread of its own, `offload_above_iterations`, 16'384 by
@@ -331,13 +331,63 @@ itself stays dependency-free.
   `sasl_gssapi` (`jhetz/ldap/sasl_gssapi.hpp`, Kerberos V5, RFC 4752;
   optional, see below) too when built with `JHETZ_LDAP_WITH_GSSAPI`,
   and `sasl_mechanism` is the interface for others (`prepare()` gives a
-  mechanism the URL's host before each bind, and whether a step can be
-  offloaded, `sasl_bind_context::can_offload`; a step that may block, such
+  mechanism the URL's host before each bind, whether a step can be
+  offloaded, `sasl_bind_context::can_offload`, and the TLS channel
+  bindings; a step that may block, such
   as a network call, is handed to `sasl_bind` with `offload_start()` /
   `offload_step()` and runs on a thread of its own). When the server
   reports success but the mechanism's `complete()` refuses it (e.g. a
   wrong SCRAM server signature), `sasl_bind` returns the error and closes
   the connection, since the server considers it bound.
+- TLS channel bindings (`jhetz/ldap/channel_binding.hpp`, RFC 5056):
+  `connection::peer_certificate()` is the server's certificate (DER) and
+  `connection::channel_bindings()` the connection's tls-server-end-point
+  (RFC 5929 section 4.1: the certificate's hash with its signature's hash
+  function, SHA-256 for MD5 and SHA-1; absent for Ed25519) and
+  tls-exporter (RFC 9266; TLS 1.3, or TLS 1.2 with the extended master
+  secret) bytes, with `default_type` tls-exporter on TLS 1.3; on TLS 1.2
+  tls-server-end-point, or tls-exporter when the certificate has none
+  (Ed25519, Ed448) and the extended master secret was negotiated; all
+  empty unless `is_tls()` (the sync facade has `peer_certificate()` too,
+  copied). tls-unique is not provided. `sasl_bind` hands them to the
+  mechanism (`sasl_bind_context::tls` and `bindings`). RFC 9266 section
+  4.1: tls-exporter MUST NOT be used for more than one authentication on
+  a TLS connection, so once a bind used it (the mechanism's
+  `channel_binding_used()` says tls_exporter after `start()`; failed
+  binds count; the default implementation says tls_exporter, so a
+  mechanism that does not override it consumes tls-exporter whenever it
+  is given the data and its `start()` succeeds, while EXTERNAL, GSSAPI
+  and SCRAM report exactly what they used), later binds get no
+  tls-exporter data: SCRAM-SHA-256-PLUS then defaults to
+  tls-server-end-point, and fails with
+  `client_errc::tls_required` before sending anything when that is
+  absent or tls_exporter was asked for. `connection::channel_bindings()`
+  keeps reporting tls-exporter (it describes the connection).
+  SCRAM-SHA-256-PLUS:
+  `sasl_scram_options{ .channel_binding = scram_channel_binding::plus }`
+  (mechanism "SCRAM-SHA-256-PLUS", GS2 header "p=<type>,,", c= carrying
+  the binding data; `binding_type` overrides the connection's default;
+  `client_errc::tls_required` before anything is sent without TLS or
+  without data of that type). `scram_channel_binding::not_offered`, for a
+  server whose supportedSASLMechanisms lacks -PLUS
+  (`scram_channel_binding_for(mechanisms)` picks plus or not_offered),
+  sends "y,," over TLS so that a server that does support -PLUS detects
+  the downgrade (RFC 5802 section 6); `none`, the default, keeps "n,,".
+  OpenLDAP's slapd (`sasl-cbinding tls-endpoint`) uses its own form,
+  "p=ldap" with "tls-server-end-point:<hash>" as data:
+  `binding_form = scram_channel_binding_form::openldap` speaks it
+  (tls-server-end-point implied, hashed as OpenLDAP does: SHA-256 for
+  RSASSA-PSS, Ed25519 and Ed448 too; `binding_type = tls_exporter` with
+  it and `channel_binding = plus` fails `start()` with
+  `client_errc::encode_error`). The client turns off TLS 1.2
+  renegotiation after a handshake in which the server sent a certificate
+  (RFC 9266 section 4.2), so the recorded certificate and bindings stay
+  the connection's; without a server certificate nothing is recorded and
+  renegotiation is left at OpenSSL's default. Compatibility: a server
+  that starts a TLS 1.2 renegotiation (a HelloRequest, e.g. to ask for a
+  client certificate later) is refused on every ldaps:// and StartTLS
+  connection, whether channel binding is used or not, and the connection
+  fails (an error comparing equal to `cond::tls_failure`).
 - SASL GSSAPI (`sasl_gssapi`, option `JHETZ_LDAP_WITH_GSSAPI`, off by
   default; needs the GSS-API library, MIT krb5's `libgssapi_krb5`, found
   with pkg-config: Debian `libkrb5-dev`, Arch `krb5`): Kerberos binds with
@@ -486,5 +536,5 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: other SASL mechanisms (SCRAM-SHA-256-PLUS, GSS-SPNEGO, GSSAPI
-security layers and channel binding), a connection pool.
+Not yet: other SASL mechanisms (GSS-SPNEGO), GSSAPI security layers and
+channel binding, tls-unique, a connection pool.

@@ -1,5 +1,7 @@
 #include "tls.hpp"
 
+#include "channel_binding.hpp"
+
 #include "../format_util.hpp"
 #include "../scope_util.hpp"
 
@@ -9,6 +11,7 @@
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
+#include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
@@ -195,12 +198,131 @@ namespace {
 		return true;
 	}
 
+	// The verify callback's way to the client's SSL (verify_state).
+	void record_ssl(verify_state &state, const X509_STORE_CTX *store) noexcept
+	{
+		state.ssl = static_cast<SSL *>(X509_STORE_CTX_get_ex_data(store, SSL_get_ex_data_X509_STORE_CTX_idx()));
+	}
+
+	// The verify callback of certificate_verification::full: records why
+	// verification failed (the handshake error itself only says
+	// "certificate verify failed"). Never relaxes the built-in verdict; with
+	// strict_host set it also rejects a leaf that only OpenSSL's lenient
+	// host matching accepted (Corosio has no option for the
+	// X509_CHECK_FLAG_* flags, so the check is redone here).
+	auto verify_full(verify_state &state, bool preverified, X509_STORE_CTX *store) -> bool
+	{
+		if (store == nullptr) {
+			return preverified;
+		}
+		record_ssl(state, store);
+		if (preverified && !state.strict_host.empty() && X509_STORE_CTX_get_error_depth(store) == 0) {
+			const std::string &host = state.strict_host;
+			constexpr unsigned flags = X509_CHECK_FLAG_NEVER_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS;
+			if (X509_check_host(X509_STORE_CTX_get_current_cert(store), host.data(), host.size(), flags, nullptr)
+				!= 1) {
+				X509_STORE_CTX_set_error(store, X509_V_ERR_HOSTNAME_MISMATCH);
+				preverified = false;
+				if (state.reason.empty()) {
+					state.reason =
+					  "hostname mismatch (strict matching: subjectAltName DNS names only, no "
+					  "partial wildcards; certificate depth 0)";
+				}
+			}
+		}
+		if (!preverified && state.reason.empty()) {
+			const int err = X509_STORE_CTX_get_error(store);
+			state.reason = X509_verify_cert_error_string(err);
+			ldap::detail::format_to(state.reason, " (certificate depth {})", X509_STORE_CTX_get_error_depth(store));
+		}
+		return preverified;
+	}
+
+	// The verify callback without verification: only reaches the session
+	// (verify_state). Accepts everything, so that OpenSSL goes on to the
+	// leaf whatever it finds wrong higher up the chain (the verdict is
+	// ignored in this mode anyway).
+	auto verify_none(verify_state &state, const X509_STORE_CTX *store) noexcept -> bool
+	{
+		if (store != nullptr) {
+			record_ssl(state, store);
+		}
+		return true;
+	}
+
 	auto check(std::error_code ec, const std::string &what) -> result<void>
 	{
 		if (ec) {
 			return fail(ec, what);
 		}
 		return {};
+	}
+
+	// The trust anchors of certificate_verification::full: the system's,
+	// or ca_file, ca_dir and ca_pem.
+	auto load_trust(corosio::tls_context &ctx, const tls_options &o) -> result<void>
+	{
+		const bool custom_trust = !o.ca_file.empty() || !o.ca_dir.empty() || !o.ca_pem.empty();
+		if (!custom_trust) {
+			return check(ctx.set_default_verify_paths(), "tls: system trust store");
+		}
+		if (!o.ca_file.empty()) {
+			const std::string what = "tls: ca_file " + o.ca_file.string();
+			auto pem = read_file(o.ca_file);
+			if (!pem) {
+				return fail(std::make_error_code(std::errc::no_such_file_or_directory), what);
+			}
+			if (auto r = add_cas(ctx, *pem, what); !r) {
+				return r;
+			}
+		}
+		if (!o.ca_dir.empty()) {
+			const std::string what = "tls: ca_dir " + o.ca_dir.string();
+			std::error_code ec;
+			const auto status = std::filesystem::status(o.ca_dir, ec);
+			if (!std::filesystem::exists(status)) {
+				return fail(std::make_error_code(std::errc::no_such_file_or_directory), what);
+			}
+			if (!std::filesystem::is_directory(status)) {
+				return fail(std::make_error_code(std::errc::not_a_directory), what);
+			}
+			if (auto r = check(ctx.add_verify_path(o.ca_dir.string()), what); !r) {
+				return r;
+			}
+		}
+		if (!o.ca_pem.empty()) {
+			return add_cas(ctx, o.ca_pem, "tls: ca_pem");
+		}
+		return {};
+	}
+
+	// The client certificate and key, if any.
+	auto load_client_credentials(corosio::tls_context &ctx, const tls_options &o) -> result<void>
+	{
+		if (o.cert_file.empty() != o.key_file.empty()) {
+			return fail(
+			  std::make_error_code(std::errc::invalid_argument), "tls: cert_file and key_file must be given together");
+		}
+		if (o.cert_file.empty()) {
+			return {};
+		}
+		const std::string cert_what = "tls: cert_file " + o.cert_file.string();
+		const std::string key_what = "tls: key_file " + o.key_file.string();
+		const auto cert_pem = read_file(o.cert_file);
+		if (!cert_pem) {
+			return fail(std::make_error_code(std::errc::no_such_file_or_directory), cert_what);
+		}
+		const auto key_pem = read_file(o.key_file);
+		if (!key_pem) {
+			return fail(std::make_error_code(std::errc::no_such_file_or_directory), key_what);
+		}
+		if (auto r = check_client_credentials(*cert_pem, *key_pem, cert_what, key_what); !r) {
+			return r;
+		}
+		if (auto r = check(ctx.use_certificate_chain_file(o.cert_file.string()), cert_what); !r) {
+			return r;
+		}
+		return check(ctx.use_private_key_file(o.key_file.string(), corosio::tls_file_format::pem), key_what);
 	}
 
 }// namespace
@@ -222,107 +344,23 @@ auto make_tls_setup(const tls_options &o) -> result<tls_setup>
 		if (auto r = check(ctx.set_verify_mode(corosio::tls_verify_mode::peer), "tls: verify mode"); !r) {
 			return std::unexpected(std::move(r.error()));
 		}
-		const bool custom_trust = !o.ca_file.empty() || !o.ca_dir.empty() || !o.ca_pem.empty();
-		if (!custom_trust) {
-			if (auto r = check(ctx.set_default_verify_paths(), "tls: system trust store"); !r) {
-				return std::unexpected(std::move(r.error()));
-			}
+		if (auto r = load_trust(ctx, o); !r) {
+			return std::unexpected(std::move(r.error()));
 		}
-		if (!o.ca_file.empty()) {
-			const std::string what = "tls: ca_file " + o.ca_file.string();
-			auto pem = read_file(o.ca_file);
-			if (!pem) {
-				return fail(std::make_error_code(std::errc::no_such_file_or_directory), what);
-			}
-			if (auto r = add_cas(ctx, *pem, what); !r) {
-				return std::unexpected(std::move(r.error()));
-			}
-		}
-		if (!o.ca_dir.empty()) {
-			const std::string what = "tls: ca_dir " + o.ca_dir.string();
-			std::error_code ec;
-			const auto status = std::filesystem::status(o.ca_dir, ec);
-			if (!std::filesystem::exists(status)) {
-				return fail(std::make_error_code(std::errc::no_such_file_or_directory), what);
-			}
-			if (!std::filesystem::is_directory(status)) {
-				return fail(std::make_error_code(std::errc::not_a_directory), what);
-			}
-			if (auto r = check(ctx.add_verify_path(o.ca_dir.string()), what); !r) {
-				return std::unexpected(std::move(r.error()));
-			}
-		}
-		if (!o.ca_pem.empty()) {
-			if (auto r = add_cas(ctx, o.ca_pem, "tls: ca_pem"); !r) {
-				return std::unexpected(std::move(r.error()));
-			}
-		}
-		// Records why verification failed; the handshake error itself only
-		// says "certificate verify failed". Never relaxes the built-in
-		// verdict; with strict_host set it also rejects a leaf that only
-		// OpenSSL's lenient host matching accepted (Corosio has no option for
-		// the X509_CHECK_FLAG_* flags, so the check is redone here).
-		ctx.set_verify_callback([failure = setup.failure](bool preverified, corosio::verify_context &vc) {
-			auto *store = static_cast<X509_STORE_CTX *>(vc.native_handle());
-			if (store == nullptr) {
-				return preverified;
-			}
-			if (preverified && !failure->strict_host.empty() && X509_STORE_CTX_get_error_depth(store) == 0) {
-				const std::string &host = failure->strict_host;
-				constexpr unsigned flags = X509_CHECK_FLAG_NEVER_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS;
-				if (X509_check_host(X509_STORE_CTX_get_current_cert(store), host.data(), host.size(), flags, nullptr)
-					!= 1) {
-					X509_STORE_CTX_set_error(store, X509_V_ERR_HOSTNAME_MISMATCH);
-					preverified = false;
-					if (failure->reason.empty()) {
-						failure->reason =
-						  "hostname mismatch (strict matching: subjectAltName DNS names only, no "
-						  "partial wildcards; certificate depth 0)";
-					}
-				}
-			}
-			if (!preverified && failure->reason.empty()) {
-				const int err = X509_STORE_CTX_get_error(store);
-				failure->reason = X509_verify_cert_error_string(err);
-				ldap::detail::format_to(
-				  failure->reason, " (certificate depth {})", X509_STORE_CTX_get_error_depth(store));
-			}
-			return preverified;
+		ctx.set_verify_callback([state = setup.state](bool preverified, corosio::verify_context &vc) {
+			return verify_full(*state, preverified, static_cast<X509_STORE_CTX *>(vc.native_handle()));
 		});
 	} else {
 		if (auto r = check(ctx.set_verify_mode(corosio::tls_verify_mode::none), "tls: verify mode"); !r) {
 			return std::unexpected(std::move(r.error()));
 		}
+		ctx.set_verify_callback([state = setup.state](bool, corosio::verify_context &vc) {
+			return verify_none(*state, static_cast<X509_STORE_CTX *>(vc.native_handle()));
+		});
 	}
 
-	if (o.cert_file.empty() != o.key_file.empty()) {
-		return fail(
-		  std::make_error_code(std::errc::invalid_argument), "tls: cert_file and key_file must be given together");
-	}
-	if (!o.cert_file.empty()) {
-		const std::string cert_what = "tls: cert_file " + o.cert_file.string();
-		const std::string key_what = "tls: key_file " + o.key_file.string();
-		const auto cert_pem = read_file(o.cert_file);
-		if (!cert_pem) {
-			return fail(std::make_error_code(std::errc::no_such_file_or_directory), cert_what);
-		}
-		const auto key_pem = read_file(o.key_file);
-		if (!key_pem) {
-			return fail(std::make_error_code(std::errc::no_such_file_or_directory), key_what);
-		}
-		if (auto r = check_client_credentials(*cert_pem, *key_pem, cert_what, key_what); !r) {
-			return std::unexpected(std::move(r.error()));
-		}
-		if (auto r =
-			  check(ctx.use_certificate_chain_file(o.cert_file.string()), "tls: cert_file " + o.cert_file.string());
-		  !r) {
-			return std::unexpected(std::move(r.error()));
-		}
-		if (auto r = check(ctx.use_private_key_file(o.key_file.string(), corosio::tls_file_format::pem),
-			  "tls: key_file " + o.key_file.string());
-		  !r) {
-			return std::unexpected(std::move(r.error()));
-		}
+	if (auto r = load_client_credentials(ctx, o); !r) {
+		return std::unexpected(std::move(r.error()));
 	}
 	return setup;
 }
@@ -351,7 +389,7 @@ auto tls_handshake(transport::impl &im,
 	const std::string name = tls_peer_name(host, options);
 	if (options.verification == certificate_verification::full && options.host_matching == host_name_matching::strict
 		&& !is_ip_literal(name)) {
-		setup.failure->strict_host = name;
+		setup.state->strict_host = name;
 	}
 	// im.tls is set before the handshake and kept only if it succeeds:
 	// transport::is_tls() is true during the handshake, so a caller that
@@ -362,6 +400,7 @@ auto tls_handshake(transport::impl &im,
 	// stop_source. Back to the plain socket; the connection is unusable
 	// anyway and must be closed (the server expects a handshake now).
 	ldap::detail::scope_exit undo_tls{ [&im] {
+		clear_tls_session(im);
 		im.tls.reset();
 		im.tls_context.reset();
 	} };
@@ -371,11 +410,15 @@ auto tls_handshake(transport::impl &im,
 	auto [ec] = co_await bounded(stream.handshake(corosio::tls_role::client), deadline);
 	if (ec) {
 		std::string context = "tls handshake";
-		if (!setup.failure->reason.empty()) {
-			context += ": server certificate: " + setup.failure->reason;
+		if (!setup.state->reason.empty()) {
+			context += ": server certificate: " + setup.state->reason;
 		}
 		co_return fail(ec, std::move(context));
 	}
+	// The session outlives the handshake (it is the stream's), but the
+	// pointer is not kept: everything needed is read now, and renegotiation,
+	// which would change it, is turned off.
+	record_tls_session(im, std::exchange(setup.state->ssl, nullptr));
 	im.stream = boost::capy::any_stream(&stream);
 	undo_tls.release();
 	co_return result<void>{};

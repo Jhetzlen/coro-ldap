@@ -416,6 +416,24 @@ class test_pki
 	long serial_ = 0;
 };
 
+// The DER encoding of the first certificate in `pem`, e.g. to compare with
+// connection::peer_certificate().
+inline auto certificate_der(const std::string &pem) -> std::vector<std::byte>
+{
+	std::unique_ptr<BIO, decltype(&BIO_free)> bio(BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())), &BIO_free);
+	REQUIRE(bio != nullptr);
+	std::unique_ptr<X509, decltype(&X509_free)> cert(
+	  PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr), &X509_free);
+	REQUIRE(cert != nullptr);
+	unsigned char *der = nullptr;
+	const int n = i2d_X509(cert.get(), &der);
+	REQUIRE(n > 0);
+	const auto *b = reinterpret_cast<const std::byte *>(der);
+	std::vector<std::byte> out(b, b + n);
+	OPENSSL_free(der);
+	return out;
+}
+
 // ---------------------------------------------------------------- files
 
 // A path in the temp directory, unique to this process and call, removed

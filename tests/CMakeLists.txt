@@ -131,6 +131,7 @@ endforeach()
 if(JHETZ_LDAP_BUILD_NET)
     add_executable(jhetz_ldap_net_tests
         net/connect_tests.cpp
+        net/channel_binding_tests.cpp
         net/connection_tests.cpp
         net/content_sync_tests.cpp
         net/mapping_ops_tests.cpp

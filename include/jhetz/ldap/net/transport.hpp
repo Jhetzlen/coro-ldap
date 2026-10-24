@@ -48,6 +48,7 @@
 // Moving one is fine, the parts stay where they are.
 #pragma once
 
+#include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/error.hpp"
 
 #include <boost/capy/concept/stream.hpp>
@@ -55,10 +56,12 @@
 #include <boost/capy/task.hpp>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -127,6 +130,18 @@ class transport
 	// The URL's host for transports from net::connect() (the socket path for
 	// ldapi://); empty for wrap()ped streams. StartTLS verifies against it.
 	[[nodiscard]] auto host() const noexcept -> const std::pmr::string &;
+
+	// The server's certificate (DER), as received in the TLS handshake;
+	// empty when !is_tls(). A view into the transport's block: valid while
+	// the transport (or the one it was moved to) lives, until a StartTLS
+	// handshake is redone.
+	[[nodiscard]] auto peer_certificate() const noexcept -> std::span<const std::byte>;
+	// The TLS channel bindings of the connection (channel_binding.hpp),
+	// computed once the handshake succeeded; empty when !is_tls(). Views
+	// valid as long as peer_certificate()'s. tls-exporter stays here after
+	// an authentication used it; connection::sasl_bind withholds it then
+	// (RFC 9266 section 4.1).
+	[[nodiscard]] auto channel_bindings() const noexcept -> ldap::channel_bindings;
 
 	// Cancels pending operations; they complete with an error comparing equal
 	// to boost::capy::cond::canceled. The connection stays open.

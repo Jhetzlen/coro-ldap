@@ -95,6 +95,7 @@
 
 #include "jhetz/ldap/ber.hpp"
 #include "jhetz/ldap/cancel.hpp"
+#include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/connection_options.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/dn.hpp"
@@ -120,6 +121,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <typeindex>
@@ -195,6 +197,19 @@ class connection
 	// included). False whenever is_open() is: before connecting, after
 	// unbind() or close(), and once a failure closed the connection.
 	[[nodiscard]] auto is_tls() const noexcept -> bool;
+	// The server's certificate (DER) as received in the TLS handshake (not
+	// verified unless tls_options asked for it); empty unless is_tls(). A
+	// view into the connection's state, valid until the connection is
+	// destroyed or assigned to, or start_tls() runs again.
+	[[nodiscard]] auto peer_certificate() const noexcept -> std::span<const std::byte>;
+	// The TLS channel bindings (RFC 5056, channel_binding.hpp:
+	// tls-server-end-point, tls-exporter) of the connection; empty unless
+	// is_tls(). Views valid as long as peer_certificate()'s. sasl_bind
+	// passes them to the mechanism (sasl_bind_context), but without
+	// tls-exporter once a bind used it (RFC 9266 section 4.1: one
+	// authentication per TLS connection; channel_binding.hpp). This
+	// accessor keeps reporting it: it describes the connection.
+	[[nodiscard]] auto channel_bindings() const noexcept -> ldap::channel_bindings;
 
 	// Simple bind (RFC 4511 section 4.2, RFC 4513 section 5.1). An empty name
 	// and password is an anonymous bind. A name with an empty password would
@@ -211,7 +226,8 @@ class connection
 	// SASL bind (RFC 4513 section 5.2): sends one BindRequest per step of
 	// `mechanism` while the server answers saslBindInProgress (at most 32
 	// steps, then the bind fails with unexpected_response), after
-	// mechanism.prepare() with the URL's host (sasl_bind_context). `name` is
+	// mechanism.prepare() with the URL's host, whether TLS protects the
+	// connection and its channel bindings (sasl_bind_context). `name` is
 	// usually empty (the mechanism carries the identity). A server error
 	// (e.g. errc::inappropriate_authentication) or a mechanism error fails
 	// the bind; the connection stays usable (anonymous). A mechanism error

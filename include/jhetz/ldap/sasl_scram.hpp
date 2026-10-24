@@ -12,9 +12,53 @@
 // Part of jhetz::ldap_net (the implementation needs OpenSSL and ICU), not
 // of the codec library jhetz::ldap.
 //
+// Channel binding (RFC 5802 sections 6 and 7, RFC 5056, RFC 9266), chosen
+// with sasl_scram_options::channel_binding:
+// - scram_channel_binding::none (the default): GS2 header "n,," ("n,a=
+//   <authzid>," with an authorization identity), mechanism SCRAM-SHA-256.
+//   The client does not claim channel binding support.
+// - scram_channel_binding::plus: mechanism SCRAM-SHA-256-PLUS, GS2 header
+//   "p=<type>,,", and the client-final-message's c= is the base64 of the
+//   GS2 header followed by the connection's channel binding data, which
+//   ties the authentication to this TLS connection: a man in the middle
+//   holding a certificate the client accepted cannot relay it.
+//   sasl_scram_options::binding_type picks the type; by default the
+//   connection's (channel_bindings::default_type): tls-exporter on TLS 1.3
+//   (RFC 9266 section 3); on TLS 1.2 tls-server-end-point (this library
+//   has no tls-unique, RFC 5802's default there: see channel_binding.hpp),
+//   or tls-exporter when the certificate has no tls-server-end-point
+//   (Ed25519, Ed448) and the extended master secret was negotiated.
+//   OpenLDAP's slapd ("sasl-cbinding tls-endpoint" or "tls-unique") does
+//   not speak the RFC 5802 form: it expects "p=ldap,," and the data
+//   prefixed with its type name, and knows no tls-exporter. For it, set
+//   sasl_scram_options::binding_form to scram_channel_binding_form::openldap
+//   (tls-server-end-point, hashed as OpenLDAP does). start() fails with
+//   client_errc::tls_required (cond::access_denied) when TLS does not
+//   protect the connection or it has no binding data of that type (e.g.
+//   tls-exporter on TLS 1.2 without the extended master secret).
+//   RFC 9266 section 4.1: tls-exporter MUST NOT be used for more than one
+//   authentication on a TLS connection. connection::sasl_bind enforces it:
+//   once a bind used tls-exporter (failed attempts included, once start()
+//   succeeded), later binds on the connection are given no
+//   tls-exporter data, so the default type becomes tls-server-end-point
+//   when the connection has it, and a bind with no other type (or an
+//   explicit binding_type tls_exporter) fails start() with
+//   client_errc::tls_required, before anything is sent. Another
+//   connection has its own tls-exporter. (tls-server-end-point has no
+//   such limit: it names the server's certificate, not the connection.)
+// - scram_channel_binding::not_offered: the client supports channel
+//   binding but the server did not advertise SCRAM-SHA-256-PLUS. Mechanism
+//   SCRAM-SHA-256 with the GS2 header "y,," on a TLS connection that has
+//   channel binding data ("n,," otherwise): a server that does support
+//   SCRAM-SHA-256-PLUS on that connection then refuses the bind, which
+//   detects a man in the middle that removed -PLUS from the mechanism list
+//   (RFC 5802 section 6).
+// The caller knows which mechanisms the server offers (supportedSASLMechanisms
+// of the root DSE); scram_channel_binding_for() turns that list into plus
+// or not_offered. Reading it without TLS is fine: removing -PLUS from it
+// leads to "y", which such a server refuses.
+//
 // Scope and limits:
-// - No channel binding: the GS2 header is "n,," ("n,a=<authzid>," with an
-//   authorization identity). SCRAM-SHA-256-PLUS is not provided.
 // - Usernames and passwords are UTF-8 and are prepared with SASLprep (RFC
 //   4013, with ICU), as RFC 5802 requires: soft hyphens and the like are
 //   mapped to nothing, non-ASCII spaces to U+0020, the text is normalized
@@ -69,6 +113,13 @@
 //   made of the password are the caller's to wipe.
 //
 // Errors (contexts never contain the password, nor name the mechanism):
+// - client_errc::tls_required (cond::access_denied): channel binding
+//   (scram_channel_binding::plus) on a connection without TLS, or without
+//   binding data of the chosen type (tls-exporter after an earlier bind
+//   used it included).
+// - client_errc::encode_error (cond::invalid_input): binding_form openldap
+//   with binding_type tls_exporter and channel_binding plus, which
+//   OpenLDAP's form does not have.
 // - client_errc::encode_error (cond::invalid_input): an empty username or
 //   password (also after SASLprep), invalid UTF-8, a character SASLprep
 //   prohibits (e.g. a control character) or that is unassigned, a bidi
@@ -96,6 +147,7 @@
 // which sasl_bind returns as errc::invalid_credentials (cond::auth_failed).
 #pragma once
 
+#include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/sasl.hpp"
 
 #include <array>
@@ -111,12 +163,67 @@ namespace detail {
 	struct scram_test_access;// defined by the tests only
 }
 
+// The client's channel binding choice (gs2-cbind-flag, RFC 5802 section 7;
+// see the header comment).
+enum class scram_channel_binding : std::uint8_t {
+	none,// "n": SCRAM-SHA-256, no channel binding support claimed
+	not_offered,// "y" over TLS ("n" otherwise): SCRAM-SHA-256, the server did not advertise -PLUS
+	plus,// "p=<type>": SCRAM-SHA-256-PLUS
+};
+
+// The form of the channel binding with scram_channel_binding::plus.
+enum class scram_channel_binding_form : std::uint8_t {
+	// RFC 5802 section 7: "p=<type name>", c= over the GS2 header and the
+	// binding data. The type is sasl_scram_options::binding_type, or the
+	// connection's default.
+	rfc5802,
+	// OpenLDAP's (libldap and slapd's "sasl-cbinding", through 2.6 at
+	// least), which does not follow RFC 5802 section 7: "p=ldap", and c=
+	// over the GS2 header and "<type name>:" then the data (the generic
+	// form of RFC 5056 section 2.1, which GSS-API uses). The type is
+	// tls-server-end-point (OpenLDAP has no tls-exporter; binding_type
+	// tls_exporter is refused) and its hash is OpenLDAP's: the hash named
+	// by the certificate's signature algorithm, SHA-256 for RSASSA-PSS,
+	// Ed25519 and Ed448 too (where RFC 5929 takes the PSS hash, or has
+	// none).
+	openldap,
+};
+
+// plus if `server_mechanisms` (e.g. the root DSE's supportedSASLMechanisms
+// values) holds SCRAM-SHA-256-PLUS, else not_offered. The comparison is
+// case-sensitive: SASL mechanism names are upper case (RFC 4422 section
+// 3.1).
+template<class Range>
+[[nodiscard]] auto scram_channel_binding_for(const Range &server_mechanisms) -> scram_channel_binding
+{
+	for (const auto &m : server_mechanisms) {
+		if (std::string_view(m) == "SCRAM-SHA-256-PLUS") {
+			return scram_channel_binding::plus;
+		}
+	}
+	return scram_channel_binding::not_offered;
+}
+
 // Tuning of sasl_scram_sha256 (see the header comment).
 struct sasl_scram_options
 {
 	// An identity to act as ("dn:...", "u:..."); empty: the authenticated
 	// identity itself.
 	std::string authz_id{};
+	// Channel binding, and with it the mechanism name (SCRAM-SHA-256 or
+	// SCRAM-SHA-256-PLUS). none keeps the plain SCRAM-SHA-256 exchange.
+	scram_channel_binding channel_binding = scram_channel_binding::none;
+	// With scram_channel_binding::plus, the channel binding type; nullopt:
+	// the connection's default (channel_bindings::default_type), or
+	// tls-server-end-point in the openldap form.
+	std::optional<channel_binding_type> binding_type{};
+	// With scram_channel_binding::plus, the form: RFC 5802's (the default),
+	// or openldap for a slapd with "sasl-cbinding tls-endpoint", which
+	// refuses the RFC form ("Unsupported channel bindings type").
+	// openldap with binding_type tls_exporter fails start() with
+	// client_errc::encode_error when channel_binding is plus (otherwise
+	// the form is not used).
+	scram_channel_binding_form binding_form = scram_channel_binding_form::rfc5802;
 	// The largest iteration count accepted from the server: PBKDF2's cost,
 	// which the server chooses. In [sasl_scram_sha256::min_iterations,
 	// 2^31-1]. Servers use 4096 to a few hundred thousand.
@@ -146,11 +253,18 @@ class sasl_scram_sha256 final : public sasl_mechanism
 	sasl_scram_sha256(const sasl_scram_sha256 &) = delete;
 	auto operator=(const sasl_scram_sha256 &) -> sasl_scram_sha256 & = delete;
 
-	[[nodiscard]] auto name() const noexcept -> std::string_view override { return "SCRAM-SHA-256"; }
+	// "SCRAM-SHA-256", or "SCRAM-SHA-256-PLUS" with
+	// scram_channel_binding::plus.
+	[[nodiscard]] auto name() const noexcept -> std::string_view override
+	{
+		return options_.channel_binding == scram_channel_binding::plus ? "SCRAM-SHA-256-PLUS" : "SCRAM-SHA-256";
+	}
 	// Notes whether sasl_bind can run a step on another thread
-	// (sasl_bind_context::can_offload).
+	// (sasl_bind_context::can_offload), whether TLS protects the connection
+	// and its channel binding data (copied: start() uses it).
 	void prepare(const sasl_bind_context &context) override;
 	// client-first-message: GS2 header, n=<username>, r=<client nonce>.
+	// The channel binding data is the last prepare()'s (none without one).
 	[[nodiscard]] auto start() -> result<std::optional<std::string>> override;
 	// After the client-first-message: the server-first-message gives the
 	// client-final-message (c=, r=, p=<proof>), PBKDF2 included. After the
@@ -165,6 +279,15 @@ class sasl_scram_sha256 final : public sasl_mechanism
 	[[nodiscard]] auto offload_step(std::optional<std::string_view> challenge) -> sasl_work override;
 	// Verifies the server-final-message ("v=") unless step() already did.
 	[[nodiscard]] auto complete(std::optional<std::string_view> server_creds) -> result<void> override;
+	// With scram_channel_binding::plus, after a start() that succeeded: the
+	// type bound to ("p=<type>"); nullopt otherwise.
+	[[nodiscard]] auto channel_binding_used() const noexcept -> std::optional<channel_binding_type> override
+	{
+		if (options_.channel_binding != scram_channel_binding::plus || state_ == state::idle) {
+			return std::nullopt;
+		}
+		return binding_type_;
+	}
 
   private:
 	friend struct detail::scram_test_access;
@@ -192,8 +315,16 @@ class sasl_scram_sha256 final : public sasl_mechanism
 	sasl_scram_options options_;
 	std::optional<std::string> fixed_nonce_;
 	bool can_offload_ = false;// from prepare()
+	bool tls_ = false;// from prepare(): TLS protects the connection
+	// From prepare(): the channel binding type and data used with
+	// scram_channel_binding::plus or not_offered (nullopt: none available).
+	std::optional<channel_binding_type> binding_type_;
+	std::string binding_data_;
 	state state_ = state::idle;
 	std::string gs2_header_;
+	// cbind-input (RFC 5802 section 7): the GS2 header, then the channel
+	// binding data with "p="; c= carries its base64.
+	std::string cbind_input_;
 	std::string client_nonce_;
 	std::string client_first_bare_;
 	std::array<unsigned char, 32> server_signature_{};

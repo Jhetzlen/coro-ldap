@@ -40,6 +40,7 @@
 #include <boost/capy/task.hpp>
 #include <boost/corosio/io_context.hpp>
 
+#include <cstddef>
 #include <exception>
 #include <future>
 #include <memory>
@@ -80,6 +81,9 @@ class connection
 	// protects the open connection (false after unbind() or close()).
 	auto is_open() const -> bool;
 	auto is_tls() const -> bool;
+	// As ldap::connection::peer_certificate(), copied: the server's
+	// certificate (DER), empty unless is_tls().
+	auto peer_certificate() const -> std::vector<std::byte>;
 	// The executor of the I/O thread, e.g. to run coroutines next to the
 	// facade. Blocking methods called from there fail with would_deadlock.
 	auto executor() const noexcept -> ldap::connection::executor_type { return ioc_.get_executor(); }

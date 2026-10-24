@@ -1,6 +1,8 @@
 #include "jhetz/ldap/connection.hpp"
 
 #include "../format_util.hpp"
+#include "../net/channel_binding.hpp"
+#include "../net/transport_impl.hpp"
 #include "impl.hpp"
 #include "sasl_offload.hpp"
 
@@ -25,6 +27,16 @@ using detail::op_index;
 using detail::request_response;
 
 // ---------------------------------------------------------------- binds
+
+auto connection::impl::authentication_channel_bindings() const noexcept -> ldap::channel_bindings
+{
+	return net::detail::authentication_channel_bindings(net::transport_access::get(transport_));
+}
+
+void connection::impl::mark_tls_exporter_used() noexcept
+{
+	net::transport_access::get(transport_).tls_exporter_used = true;
+}
 
 namespace {
 	// Ends a SASL exchange the client gives up on while the server waits for
@@ -100,12 +112,23 @@ auto connection::sasl_bind(sasl_mechanism &mechanism, dn name) -> capy::task<res
 		bind_context.host = self->transport().host();
 	}
 	bind_context.can_offload = !corosio::detail::get_scheduler(self->executor().context()).scheduler_locking_disabled();
+	if (self->is_tls()) {
+		bind_context.tls = true;
+		bind_context.bindings = self->authentication_channel_bindings();
+		bind_context.peer_certificate = self->transport().peer_certificate();
+	}
 	mechanism.prepare(bind_context);
 	result<std::optional<std::string>> creds;
 	if (auto work = mechanism.offload_start()) {
 		creds = co_await detail::run_offloaded(self->executor(), self->default_timeout(), std::move(work));
 	} else {
 		creds = mechanism.start();
+	}
+	// RFC 9266 section 4.1: tls-exporter serves one authentication on the
+	// connection, this one, whatever its outcome; later binds go without.
+	if (creds && mechanism.channel_binding_used() == channel_binding_type::tls_exporter
+		&& !bind_context.bindings.tls_exporter.empty()) {
+		self->mark_tls_exporter_used();
 	}
 	for (int step = 0;; ++step) {
 		if (!creds || step == max_steps) {

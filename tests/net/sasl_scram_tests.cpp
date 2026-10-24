@@ -7,6 +7,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <openssl/evp.h>
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <set>
@@ -14,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace ldap = jhetz::ldap;
 using Catch::Matchers::ContainsSubstring;
@@ -736,4 +742,299 @@ TEST_CASE("scram: when PBKDF2 is offloaded", "[sasl][scram]")
 		REQUIRE_FALSE(r.has_value());
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("wrong server signature"));
 	}
+}
+
+// ---------------------------------------------------------------- channel binding
+
+namespace {
+
+// Made-up channel binding data: 0x00..0x1f for tls-exporter, 0x40..0x5f for
+// tls-server-end-point.
+auto binding_bytes(unsigned char first) -> std::array<std::byte, 32>
+{
+	std::array<std::byte, 32> out{};
+	for (std::size_t i = 0; i < out.size(); ++i) {
+		out[i] = static_cast<std::byte>(first + i);
+	}
+	return out;
+}
+
+const auto exporter_bytes = binding_bytes(0x00);
+const auto end_point_bytes = binding_bytes(0x40);
+
+// A TLS 1.3 connection's context: both types, tls-exporter by default.
+auto tls13_context() -> ldap::sasl_bind_context
+{
+	return {
+		.tls = true,
+		.bindings = { .tls_server_end_point = end_point_bytes,
+		  .tls_exporter = exporter_bytes,
+		  .default_type = ldap::channel_binding_type::tls_exporter },
+	};
+}
+
+auto plus_mech(std::optional<ldap::channel_binding_type> type = std::nullopt, std::string authz = {})
+  -> ldap::sasl_scram_sha256
+{
+	return ldap::detail::scram_test_access::with_nonce("user",
+	  "pencil",
+	  ldap::sasl_scram_options{
+		.authz_id = std::move(authz), .channel_binding = ldap::scram_channel_binding::plus, .binding_type = type },
+	  std::string(rfc_nonce));
+}
+
+}// namespace
+
+TEST_CASE("scram: channel binding type names and lookup", "[sasl][scram][rfc]")
+{
+	CHECK(ldap::to_string(ldap::channel_binding_type::tls_server_end_point) == "tls-server-end-point");
+	CHECK(ldap::to_string(ldap::channel_binding_type::tls_exporter) == "tls-exporter");
+	const auto b = tls13_context().bindings;
+	CHECK(b.get(ldap::channel_binding_type::tls_exporter).data() == exporter_bytes.data());
+	CHECK(b.get(ldap::channel_binding_type::tls_server_end_point).data() == end_point_bytes.data());
+	CHECK(ldap::channel_bindings{}.get(ldap::channel_binding_type::tls_exporter).empty());
+}
+
+// Expected messages computed independently with Python (hashlib PBKDF2,
+// hmac), as for the RFC 7677 vector, with the same server-first-message.
+TEST_CASE("scram: SCRAM-SHA-256-PLUS with tls-exporter (the TLS 1.3 default)", "[sasl][scram][rfc]")
+{
+	auto m = plus_mech();
+	CHECK(m.name() == "SCRAM-SHA-256-PLUS");
+	m.prepare(tls13_context());
+	CHECK(response(m.start()) == "p=tls-exporter,,n=user,r=rOprNGfwEbeRWgbNEkqO");
+	// c= is base64("p=tls-exporter,," + the 32 binding bytes).
+	CHECK(response(m.step(rfc_server_first))
+		  == "c=cD10bHMtZXhwb3J0ZXIsLAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f,r=rOprNGfwEbeRWgbNEkqO%"
+			 "hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=QC6CS20quADQRb3mT99YUH+n3VJxUvzuK0K0E1Vrs2M=");
+	CHECK(m.complete("v=2GiAgapEppLVlUXbxUDksL3VgYHzuqiK5tR4mhJGgvs=").has_value());
+
+	SECTION("a server signature without the channel binding does not verify")
+	{
+		REQUIRE(m.start().has_value());
+		REQUIRE(m.step(rfc_server_first).has_value());
+		CHECK_FALSE(m.complete(rfc_server_final).has_value());
+	}
+}
+
+TEST_CASE("scram: SCRAM-SHA-256-PLUS with a chosen type and an authorization identity", "[sasl][scram]")
+{
+	SECTION("tls-server-end-point")
+	{
+		auto m = plus_mech(ldap::channel_binding_type::tls_server_end_point);
+		m.prepare(tls13_context());
+		CHECK(response(m.start()) == "p=tls-server-end-point,,n=user,r=rOprNGfwEbeRWgbNEkqO");
+		CHECK(response(m.step(rfc_server_first))
+			  == "c=cD10bHMtc2VydmVyLWVuZC1wb2ludCwsQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8=,r="
+				 "rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=AqWo5j1XjTONdqex+E6+ISq8k6GxB7j9Zi6bOl2AvZQ=");
+		CHECK(m.complete("v=klvPHhmVhKZ9ZFLJlcG5J4/mqf4YCvQaHs6zuzrtDEM=").has_value());
+	}
+	SECTION("the default of a TLS 1.2 connection")
+	{
+		auto m = plus_mech();
+		auto context = tls13_context();
+		context.bindings.default_type = ldap::channel_binding_type::tls_server_end_point;
+		m.prepare(context);
+		CHECK(response(m.start()) == "p=tls-server-end-point,,n=user,r=rOprNGfwEbeRWgbNEkqO");
+	}
+	SECTION("authorization identity: c= covers the whole GS2 header, then the data")
+	{
+		auto m = plus_mech(std::nullopt, "u:bob");
+		m.prepare(tls13_context());
+		CHECK(response(m.start()) == "p=tls-exporter,a=u:bob,n=user,r=rOprNGfwEbeRWgbNEkqO");
+		CHECK(response(m.step(rfc_server_first))
+			  == "c=cD10bHMtZXhwb3J0ZXIsYT11OmJvYiwAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHw==,r="
+				 "rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=XcLlu+D6e/PhthMD19Digt1aFaDMy6sDUyAbVXlA0Gc=");
+		CHECK(m.complete("v=7SZxWla9Ww6bwZIORGwWV5iiRcpv+7EpEPXSe8HShq4=").has_value());
+	}
+}
+
+namespace {
+
+// A self-signed Ed25519 certificate (openssl req -x509 -newkey ed25519
+// -subj /CN=cb), DER in base64. RFC 5929 defines no tls-server-end-point
+// for it; OpenLDAP hashes it with SHA-256.
+constexpr std::string_view ed25519_cert_base64 =
+  "MIIBMDCB46ADAgECAhQk0rbaLVxVJgoTihG0BKqTDrm1GTAFBgMrZXAwDTELMAkGA1UEAwwCY2IwIBcNMjYxMDIwMTgzODIwWhgPMjEyNjA5MjYxODM4"
+  "MjBaMA0xCzAJBgNVBAMMAmNiMCowBQYDK2VwAyEAwv4L6JzqVY43rKfTvk6Jl40HjJa9+WK9aQ2MNszQOiWjUzBRMB0GA1UdDgQWBBRK6BJVCeKlyh6h"
+  "1eXAjaEaieNZGTAfBgNVHSMEGDAWgBRK6BJVCeKlyh6h1eXAjaEaieNZGTAPBgNVHRMBAf8EBTADAQH/MAUGAytlcANBAMhuKRhYFLmuYOht0wFI5KET"
+  "zTA1UxDgjfvwr4mTYV43WH6pDN81G8jATq30XxHlKmuyzPjDyguItuJsuhES+Q4=";
+
+auto ed25519_cert() -> std::vector<std::byte>
+{
+	std::vector<std::byte> out(ed25519_cert_base64.size());
+	const int n = EVP_DecodeBlock(reinterpret_cast<unsigned char *>(out.data()),
+	  reinterpret_cast<const unsigned char *>(ed25519_cert_base64.data()),
+	  static_cast<int>(ed25519_cert_base64.size()));
+	REQUIRE(n > 0);
+	out.resize(static_cast<std::size_t>(n) - static_cast<std::size_t>(std::ranges::count(ed25519_cert_base64, '=')));
+	return out;
+}
+
+auto openldap_mech(std::optional<ldap::channel_binding_type> type = std::nullopt) -> ldap::sasl_scram_sha256
+{
+	return ldap::detail::scram_test_access::with_nonce("user",
+	  "pencil",
+	  ldap::sasl_scram_options{ .channel_binding = ldap::scram_channel_binding::plus,
+		.binding_type = type,
+		.binding_form = ldap::scram_channel_binding_form::openldap },
+	  std::string(rfc_nonce));
+}
+
+}// namespace
+
+TEST_CASE("scram: SCRAM-SHA-256-PLUS in OpenLDAP's form", "[sasl][scram]")
+{
+	// "p=ldap,," and c= = base64("p=ldap,," + "tls-server-end-point:" +
+	// SHA-256 of the certificate), as libldap and slapd's sasl-cbinding do.
+	// Values from Python (hashlib, hmac). The connection's own bindings
+	// (made-up bytes, tls-exporter by default) are not used.
+	const auto der = ed25519_cert();
+	auto context = tls13_context();
+	context.peer_certificate = der;
+	SECTION("tls-server-end-point by default, hashed as OpenLDAP does")
+	{
+		auto m = openldap_mech();
+		CHECK(m.name() == "SCRAM-SHA-256-PLUS");
+		m.prepare(context);
+		CHECK(response(m.start()) == "p=ldap,,n=user,r=rOprNGfwEbeRWgbNEkqO");
+		CHECK(response(m.step(rfc_server_first))
+			  == "c=cD1sZGFwLCx0bHMtc2VydmVyLWVuZC1wb2ludDo6ZPVXeS9XQPXuzGhzkzw7ceGsnSe+5cv74nm7Ht4sVQ==,r="
+				 "rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=vO/A/5gChteZ26X/VYwuLVTsirPjYb6x0r1uBPg+6qA=");
+		CHECK(m.complete("v=/Xn90LUqWmwTHeeQRY34qVpDcxOaW7QAvAVr7SppjoU=").has_value());
+	}
+	SECTION("tls-server-end-point chosen explicitly")
+	{
+		auto m = openldap_mech(ldap::channel_binding_type::tls_server_end_point);
+		m.prepare(context);
+		CHECK(response(m.start()) == "p=ldap,,n=user,r=rOprNGfwEbeRWgbNEkqO");
+		CHECK_THAT(response(m.step(rfc_server_first)),
+		  StartsWith("c=cD1sZGFwLCx0bHMtc2VydmVyLWVuZC1wb2ludDo6ZPVXeS9XQPXuzGhzkzw7ceGsnSe+5cv74nm7Ht4sVQ==,"));
+	}
+	SECTION("tls-exporter is refused before the password is prepared")
+	{
+		auto m = openldap_mech(ldap::channel_binding_type::tls_exporter);
+		m.prepare(context);
+		auto r = m.start();
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::encode_error);
+		CHECK(r.error().code == ldap::cond::invalid_input);
+		CHECK(r.error().context == "OpenLDAP's channel binding form has no tls-exporter");
+		CHECK(ldap::detail::scram_test_access::prepared_password(m).empty());
+	}
+	SECTION("no peer certificate: no binding data")
+	{
+		auto m = openldap_mech();
+		m.prepare(tls13_context());
+		auto r = m.start();
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::tls_required);
+		CHECK(r.error().context == "the TLS connection has no tls-server-end-point channel binding data");
+	}
+	SECTION("the form does not change none or not_offered")
+	{
+		auto m = ldap::detail::scram_test_access::with_nonce("user",
+		  "pencil",
+		  ldap::sasl_scram_options{ .channel_binding = ldap::scram_channel_binding::not_offered,
+			.binding_form = ldap::scram_channel_binding_form::openldap },
+		  std::string(rfc_nonce));
+		CHECK(m.name() == "SCRAM-SHA-256");
+		m.prepare(context);
+		CHECK(response(m.start()) == "y,,n=user,r=rOprNGfwEbeRWgbNEkqO");
+	}
+}
+
+TEST_CASE("scram: SCRAM-SHA-256-PLUS needs TLS and binding data", "[sasl][scram]")
+{
+	auto check_refused = [](ldap::sasl_scram_sha256 &m, std::string_view context) {
+		auto r = m.start();
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::tls_required);
+		CHECK(r.error().code == ldap::cond::access_denied);
+		CHECK(r.error().context == context);
+		CHECK(ldap::detail::scram_test_access::prepared_password(m).empty());
+	};
+	SECTION("never prepared")
+	{
+		auto m = plus_mech();
+		check_refused(m, "channel binding needs a TLS-protected connection");
+	}
+	SECTION("not TLS")
+	{
+		auto m = plus_mech();
+		m.prepare(ldap::sasl_bind_context{ .host = "localhost" });
+		check_refused(m, "channel binding needs a TLS-protected connection");
+	}
+	SECTION("TLS without the chosen type (tls-exporter on TLS 1.2 without the extended master secret)")
+	{
+		auto m = plus_mech(ldap::channel_binding_type::tls_exporter);
+		m.prepare(ldap::sasl_bind_context{ .tls = true,
+		  .bindings = { .tls_server_end_point = end_point_bytes,
+			.default_type = ldap::channel_binding_type::tls_server_end_point } });
+		check_refused(m, "the TLS connection has no tls-exporter channel binding data");
+	}
+	SECTION("TLS without any binding data")
+	{
+		auto m = plus_mech();
+		m.prepare(ldap::sasl_bind_context{ .tls = true });
+		check_refused(m, "the TLS connection has no channel binding data");
+	}
+	SECTION("a later prepare() on a TLS connection makes it work")
+	{
+		auto m = plus_mech();
+		m.prepare(ldap::sasl_bind_context{});
+		check_refused(m, "channel binding needs a TLS-protected connection");
+		m.prepare(tls13_context());
+		CHECK(response(m.start()) == "p=tls-exporter,,n=user,r=rOprNGfwEbeRWgbNEkqO");
+	}
+}
+
+TEST_CASE("scram: the client supports channel binding, the server did not offer -PLUS", "[sasl][scram][rfc]")
+{
+	auto not_offered = [] {
+		return ldap::detail::scram_test_access::with_nonce("user",
+		  "pencil",
+		  ldap::sasl_scram_options{ .channel_binding = ldap::scram_channel_binding::not_offered },
+		  std::string(rfc_nonce));
+	};
+	SECTION("over TLS: y,, (RFC 5802 section 6), c=eSws")
+	{
+		auto m = not_offered();
+		CHECK(m.name() == "SCRAM-SHA-256");
+		m.prepare(tls13_context());
+		CHECK(response(m.start()) == "y,,n=user,r=rOprNGfwEbeRWgbNEkqO");
+		CHECK(response(m.step(rfc_server_first))
+			  == "c=eSws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=FoqiHTtQEDE8lz1CdaEe3tK4mS+"
+				 "iMDTl77SPyDS53DY=");
+		CHECK(m.complete("v=dI4KpiQJwBr1+V+K6U1dA6l6I4I9DUNXWND4pcpRU3U=").has_value());
+	}
+	SECTION("without TLS, or without binding data: n,, as before")
+	{
+		auto m = not_offered();
+		m.prepare(ldap::sasl_bind_context{});
+		to_client_final(m);
+		CHECK(m.complete(rfc_server_final).has_value());
+		m.prepare(ldap::sasl_bind_context{ .tls = true });
+		to_client_final(m);
+	}
+	SECTION("none (the default) sends n,, over TLS too")
+	{
+		auto m = rfc_mech();
+		m.prepare(tls13_context());
+		to_client_final(m);
+		CHECK(m.complete(rfc_server_final).has_value());
+	}
+}
+
+TEST_CASE("scram: scram_channel_binding_for picks from the server's mechanisms", "[sasl][scram]")
+{
+	using ldap::scram_channel_binding;
+	CHECK(ldap::scram_channel_binding_for(std::vector<std::string>{ "EXTERNAL", "SCRAM-SHA-256", "SCRAM-SHA-256-PLUS" })
+		  == scram_channel_binding::plus);
+	CHECK(ldap::scram_channel_binding_for(std::vector<std::string>{ "EXTERNAL", "SCRAM-SHA-256" })
+		  == scram_channel_binding::not_offered);
+	CHECK(ldap::scram_channel_binding_for(std::vector<std::string_view>{}) == scram_channel_binding::not_offered);
+	// Case-sensitive: RFC 4422 mechanism names are upper case.
+	CHECK(ldap::scram_channel_binding_for(std::vector<std::string_view>{ "scram-sha-256-plus" })
+		  == scram_channel_binding::not_offered);
 }

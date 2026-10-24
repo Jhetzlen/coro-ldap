@@ -144,6 +144,12 @@ class sasl_gssapi final : public sasl_mechanism
 	[[nodiscard]] auto offload_step(std::optional<std::string_view> challenge) -> sasl_work override;
 	// Succeeds only once the security layer reply was sent.
 	[[nodiscard]] auto complete(std::optional<std::string_view> server_creds) -> result<void> override;
+	// Binds to no TLS channel (no channel bindings in the Kerberos
+	// exchange): nullopt.
+	[[nodiscard]] auto channel_binding_used() const noexcept -> std::optional<channel_binding_type> override
+	{
+		return std::nullopt;
+	}
 
   private:
 	struct state;// GSS-API handles; gssapi.h stays out of this header

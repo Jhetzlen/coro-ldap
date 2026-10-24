@@ -5,6 +5,8 @@
 #include "icu_util.hpp"
 #include "scope_util.hpp"
 
+#include "net/channel_binding.hpp"
+
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -551,7 +553,37 @@ void sasl_scram_sha256::wipe_cache() noexcept
 	cache_iterations_ = 0;
 }
 
-void sasl_scram_sha256::prepare(const sasl_bind_context &context) { can_offload_ = context.can_offload; }
+void sasl_scram_sha256::prepare(const sasl_bind_context &context)
+{
+	can_offload_ = context.can_offload;
+	tls_ = context.tls;
+	binding_type_.reset();
+	binding_data_.clear();
+	if (!tls_) {
+		return;
+	}
+	const bool plus = options_.channel_binding == scram_channel_binding::plus;
+	if (plus && options_.binding_form == scram_channel_binding_form::openldap) {
+		// tls-server-end-point with OpenLDAP's hash; an explicit
+		// tls-exporter is refused by start().
+		binding_type_ = options_.binding_type.value_or(channel_binding_type::tls_server_end_point);
+		if (binding_type_ == channel_binding_type::tls_server_end_point) {
+			const auto hash = net::detail::openldap_tls_server_end_point(context.peer_certificate);
+			binding_data_.assign(reinterpret_cast<const char *>(hash.data()), hash.size());
+		}
+		return;
+	}
+	// not_offered only asks whether the client could bind to this channel
+	// (any type); plus binds with the type chosen, or the default.
+	binding_type_ = context.bindings.default_type;
+	if (plus && options_.binding_type) {
+		binding_type_ = options_.binding_type;
+	}
+	if (binding_type_) {
+		const auto data = context.bindings.get(*binding_type_);
+		binding_data_.assign(reinterpret_cast<const char *>(data.data()), data.size());
+	}
+}
 
 // The outcome of an offloaded step, once it is over: its ServerSignature
 // for verify(), its SaltedPassword for the cache. A step still running
@@ -584,6 +616,11 @@ auto sasl_scram_sha256::start() -> result<std::optional<std::string>>
 		return input_error(
 		  detail::format("max_iterations {} is outside {} .. 2^31-1", options_.max_iterations, min_iterations));
 	}
+	const bool openldap_form = options_.binding_form == scram_channel_binding_form::openldap;
+	if (options_.channel_binding == scram_channel_binding::plus && openldap_form
+		&& options_.binding_type == channel_binding_type::tls_exporter) {
+		return input_error("OpenLDAP's channel binding form has no tls-exporter");
+	}
 	const std::string &authz_id = options_.authz_id;
 	// RFC 5802 section 5.1: the username is prepared as a query (unassigned
 	// code points allowed).
@@ -612,6 +649,39 @@ auto sasl_scram_sha256::start() -> result<std::optional<std::string>>
 		}
 	}
 
+	// gs2-cbind-flag (RFC 5802 sections 6 and 7), and with "p" the prefix
+	// of the binding data in cbind-input (OpenLDAP's form only).
+	std::string flag = "n";
+	std::string data_prefix;
+	switch (options_.channel_binding) {
+	case scram_channel_binding::none:
+		break;
+	case scram_channel_binding::not_offered:
+		if (!binding_data_.empty()) {
+			flag = "y";
+		}
+		break;
+	case scram_channel_binding::plus: {
+		if (!tls_) {
+			return fail(client_errc::tls_required, "channel binding needs a TLS-protected connection");
+		}
+		if (!binding_type_) {
+			return fail(client_errc::tls_required, "the TLS connection has no channel binding data");
+		}
+		const std::string type(to_string(*binding_type_));
+		if (binding_data_.empty()) {
+			return fail(client_errc::tls_required, "the TLS connection has no " + type + " channel binding data");
+		}
+		if (openldap_form) {
+			flag = "p=ldap";
+			data_prefix = type + ":";
+		} else {
+			flag = "p=" + type;
+		}
+		break;
+	}
+	}
+
 	if (fixed_nonce_) {
 		if (fixed_nonce_->empty() || !printable(*fixed_nonce_)) {
 			return input_error("invalid fixed nonce");
@@ -633,7 +703,12 @@ auto sasl_scram_sha256::start() -> result<std::optional<std::string>>
 		return std::unexpected(std::move(r.error()));
 	}
 
-	gs2_header_ = authz_id.empty() ? "n,," : "n,a=" + escape_saslname(authz_id) + ",";
+	gs2_header_ = flag + (authz_id.empty() ? std::string(",,") : ",a=" + escape_saslname(authz_id) + ",");
+	cbind_input_ = gs2_header_;
+	if (options_.channel_binding == scram_channel_binding::plus) {
+		cbind_input_ += data_prefix;
+		cbind_input_ += binding_data_;
+	}
 	client_first_bare_ = "n=" + escape_saslname(user) + ",r=" + client_nonce_;
 	state_ = state::sent_first;
 	return std::optional<std::string>(gs2_header_ + client_first_bare_);
@@ -755,7 +830,7 @@ auto sasl_scram_sha256::client_final(std::string_view message) -> result<std::op
 		return std::unexpected(std::move(parsed.error()));
 	}
 
-	std::string without_proof = "c=" + base64_encode(gs2_header_) + ",r=";
+	std::string without_proof = "c=" + base64_encode(cbind_input_) + ",r=";
 	without_proof += parsed->nonce;
 	const std::string auth_message = auth_message_of(client_first_bare_, message, without_proof);
 
@@ -790,7 +865,7 @@ auto sasl_scram_sha256::offload_step(std::optional<std::string_view> challenge) 
 		return {};
 	}
 
-	std::string without_proof = "c=" + base64_encode(gs2_header_) + ",r=";
+	std::string without_proof = "c=" + base64_encode(cbind_input_) + ",r=";
 	without_proof += parsed->nonce;
 	auto d = std::make_shared<derivation>();
 	d->auth_message = auth_message_of(client_first_bare_, *challenge, without_proof);

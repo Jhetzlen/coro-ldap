@@ -59,6 +59,26 @@ auto transport::type() const noexcept -> transport::kind { return impl_ ? impl_-
 
 auto transport::is_tls() const noexcept -> bool { return impl_ != nullptr && impl_->tls.has_value(); }
 
+auto transport::peer_certificate() const noexcept -> std::span<const std::byte>
+{
+	if (!is_tls()) {
+		return {};
+	}
+	return impl_->peer_certificate;
+}
+
+auto transport::channel_bindings() const noexcept -> ldap::channel_bindings
+{
+	if (!is_tls()) {
+		return {};
+	}
+	return {
+		.tls_server_end_point = impl_->tls_server_end_point,
+		.tls_exporter = impl_->tls_exporter,
+		.default_type = impl_->default_channel_binding,
+	};
+}
+
 auto transport::is_open() const noexcept -> bool
 {
 	if (!impl_) {

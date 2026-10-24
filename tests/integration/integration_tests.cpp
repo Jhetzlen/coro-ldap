@@ -20,12 +20,15 @@
 #include <boost/corosio/tcp_socket.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -47,6 +50,16 @@ auto env(const char *name) -> std::string
 	// NOLINTNEXTLINE(concurrency-mt-unsafe): nothing in this binary calls setenv while tests run
 	const char *v = std::getenv(name);
 	return v == nullptr ? std::string() : std::string(v);
+}
+
+// The contents of the file at `path`; fails the test when it cannot be read.
+auto read_text(const std::string &path) -> std::string
+{
+	std::ifstream in(path, std::ios::binary);
+	if (!in) {
+		FAIL("cannot read " << path);
+	}
+	return { std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>() };
 }
 
 // Set by run_slapd.sh; each test starts with
@@ -96,6 +109,10 @@ class scram_giving_up final : public ldap::sasl_mechanism
 	auto step(std::optional<std::string_view>) -> ldap::result<std::optional<std::string>> override
 	{
 		return ldap::fail(ldap::client_errc::unexpected_response, "giving up");
+	}
+	[[nodiscard]] auto channel_binding_used() const noexcept -> std::optional<ldap::channel_binding_type> override
+	{
+		return scram.channel_binding_used();
 	}
 
   private:
@@ -153,6 +170,64 @@ class anonymous_binds_disallowed
 	}
 
   private:
+	inline static const ldap::dn config_dn{ "cn=config" };
+	corosio::io_context *ioc_;// non-null
+	ldap::connection config_;
+};
+
+// slapd serves `cert_file` and `key_file` (olcTLSCertificateFile,
+// olcTLSCertificateKeyFile through cn=config: slapd builds a new TLS
+// context for later connections) while this lives, then run_slapd.sh's
+// certificate again. A failed restore fails the test.
+class server_certificate_swapped
+{
+  public:
+	server_certificate_swapped(corosio::io_context &ioc, const std::string &cert_file, const std::string &key_file)
+	  : ioc_(&ioc), config_(open(ioc, env("JHETZ_LDAP_IT_LDAP")))
+	{
+		auto b = finish(*ioc_, config_.simple_bind(config_dn, "secret"));
+		if (!b) {
+			FAIL("bind as cn=config: " << b.error().message());
+		}
+		if (auto m = set(cert_file, key_file); !m) {
+			FAIL("switch the server certificate: " << m.error().message());
+		}
+	}
+
+	server_certificate_swapped(const server_certificate_swapped &) = delete;
+	auto operator=(const server_certificate_swapped &) -> server_certificate_swapped & = delete;
+
+	// As ~anonymous_binds_disallowed.
+	~server_certificate_swapped()
+	{
+		bool restored = false;
+		std::string why;
+		try {
+			auto m = set(env("JHETZ_LDAP_IT_SERVER_CERT"), env("JHETZ_LDAP_IT_SERVER_KEY"));
+			restored = m.has_value();
+			if (!m) {
+				why = ": " + std::string(m.error().message());
+			}
+		} catch (...) {// NOLINT(bugprone-empty-catch): reported below as restored stays false
+		}
+		if (restored) {
+			return;
+		}
+		try {
+			FAIL_CHECK("could not restore the server certificate, later tests run with another one" << why);
+		} catch (...) {// NOLINT(bugprone-empty-catch): Catch2 aborting the run, see above
+		}
+	}
+
+  private:
+	auto set(const std::string &cert_file, const std::string &key_file) -> ldap::result<ldap::response>
+	{
+		return finish(*ioc_,
+		  config_.modify({ .object = config_dn,
+			.changes = { ldap::mod::replace("olcTLSCertificateFile", { cert_file }),
+			  ldap::mod::replace("olcTLSCertificateKeyFile", { key_file }) } }));
+	}
+
 	inline static const ldap::dn config_dn{ "cn=config" };
 	corosio::io_context *ioc_;// non-null
 	ldap::connection config_;
@@ -345,6 +420,122 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 }
 
 // ---------------------------------------------------------------- search
+
+TEST_CASE("integration: SASL SCRAM-SHA-256-PLUS (channel binding)", "[integration][sasl][scram][channel_binding]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	corosio::io_context ioc;
+	// run_slapd.sh sets "sasl-cbinding tls-endpoint": slapd then offers
+	// SCRAM-SHA-256-PLUS over TLS, with tls-server-end-point in OpenLDAP's
+	// own form ("p=ldap", data "tls-server-end-point:<hash>"), not RFC
+	// 5802's (scram_channel_binding_form::openldap).
+	const bool over_start_tls = GENERATE(false, true);
+	ldap::connection_options o = trusting();
+	o.start_tls = over_start_tls;
+	auto c = open(ioc, env(over_start_tls ? "JHETZ_LDAP_IT_LDAP" : "JHETZ_LDAP_IT_LDAPS"), o);
+	REQUIRE(c.is_tls());
+	CHECK_FALSE(c.peer_certificate().empty());
+	auto dse =
+	  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "supportedSASLMechanisms" } }));
+	REQUIRE(dse.has_value());
+	REQUIRE(dse->size() == 1);
+	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");
+	if (mechs == nullptr || std::ranges::find(*mechs, "SCRAM-SHA-256-PLUS") == mechs->end()) {
+		SKIP("slapd does not offer SCRAM-SHA-256-PLUS (no scram plugin, or no sasl-cbinding)");
+	}
+	CHECK(ldap::scram_channel_binding_for(*mechs) == ldap::scram_channel_binding::plus);
+	// tls-server-end-point is implied, whatever the TLS version.
+	const ldap::sasl_scram_options plus{
+		.channel_binding = ldap::scram_channel_binding::plus,
+		.binding_form = ldap::scram_channel_binding_form::openldap,
+	};
+
+	SECTION("tls-server-end-point binds")
+	{
+		ldap::sasl_scram_sha256 mech("user007", "pw-user007", plus);
+		CHECK(mech.name() == "SCRAM-SHA-256-PLUS");
+		auto r = finish(ioc, c.sasl_bind(mech));
+		if (!r) {
+			FAIL(r.error().message());
+		}
+		CHECK(finish(ioc, c.who_am_i()) == "dn:uid=user007,ou=people,dc=example,dc=org");
+	}
+	SECTION("the RFC 5802 form is refused by slapd")
+	{
+		ldap::sasl_scram_options rfc = plus;
+		rfc.binding_type = ldap::channel_binding_type::tls_server_end_point;
+		rfc.binding_form = ldap::scram_channel_binding_form::rfc5802;
+		ldap::sasl_scram_sha256 mech("user007", "pw-user007", rfc);
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK_THAT(std::string(r.error().message()), ContainsSubstring("Unsupported channel bindings type"));
+		CHECK(c.is_open());
+	}
+	SECTION("a wrong password")
+	{
+		ldap::sasl_scram_sha256 mech("user007", "wrong", plus);
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::auth_failed);
+	}
+	SECTION("y,, to a server that supports -PLUS is refused (RFC 5802 section 6)")
+	{
+		// What a client that saw a list stripped of -PLUS by a man in the middle sends.
+		ldap::sasl_scram_sha256 mech("user007",
+		  "pw-user007",
+		  ldap::sasl_scram_options{ .channel_binding = ldap::scram_channel_binding::not_offered });
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::auth_failed);
+		CHECK(c.is_open());
+	}
+	SECTION("plain SCRAM-SHA-256 (n,,) still binds over TLS")
+	{
+		ldap::sasl_scram_sha256 mech("user007", "pw-user007");
+		REQUIRE(finish(ioc, c.sasl_bind(mech)).has_value());
+	}
+}
+
+TEST_CASE("integration: SCRAM-SHA-256-PLUS with an Ed25519 server certificate",
+  "[integration][sasl][scram][channel_binding]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	corosio::io_context ioc;
+	// RFC 5929 has no tls-server-end-point for Ed25519; OpenLDAP (and so
+	// scram_channel_binding_form::openldap) hashes it with SHA-256.
+	const server_certificate_swapped swapped(
+	  ioc, env("JHETZ_LDAP_IT_SERVER_ED25519_CERT"), env("JHETZ_LDAP_IT_SERVER_ED25519_KEY"));
+	const bool over_start_tls = GENERATE(false, true);
+	ldap::connection_options o = trusting();
+	o.start_tls = over_start_tls;
+	auto c = open(ioc, env(over_start_tls ? "JHETZ_LDAP_IT_LDAP" : "JHETZ_LDAP_IT_LDAPS"), o);
+	REQUIRE(c.is_tls());
+	const auto der = c.peer_certificate();
+	REQUIRE(std::vector<std::byte>(der.begin(), der.end())
+			== certificate_der(read_text(env("JHETZ_LDAP_IT_SERVER_ED25519_CERT"))));
+	CHECK(c.channel_bindings().tls_server_end_point.empty());
+	auto dse =
+	  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "supportedSASLMechanisms" } }));
+	REQUIRE(dse.has_value());
+	REQUIRE(dse->size() == 1);
+	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");
+	if (mechs == nullptr || std::ranges::find(*mechs, "SCRAM-SHA-256-PLUS") == mechs->end()) {
+		SKIP("slapd does not offer SCRAM-SHA-256-PLUS (no scram plugin, or no sasl-cbinding)");
+	}
+	ldap::sasl_scram_sha256 mech("user007",
+	  "pw-user007",
+	  { .channel_binding = ldap::scram_channel_binding::plus,
+		.binding_form = ldap::scram_channel_binding_form::openldap });
+	auto r = finish(ioc, c.sasl_bind(mech));
+	if (!r) {
+		FAIL(r.error().message());
+	}
+	CHECK(finish(ioc, c.who_am_i()) == "dn:uid=user007,ou=people,dc=example,dc=org");
+}
 
 TEST_CASE("integration: plain, streaming and paged searches", "[integration]")
 {

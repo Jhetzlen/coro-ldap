@@ -248,6 +248,7 @@ if(JHETZ_LDAP_BUILD_NET)
         src/sync.cpp
         src/net/connect.cpp
         src/net/message_io.cpp
+        src/net/channel_binding.cpp
         src/net/tls.cpp
         src/net/transport.cpp
     )

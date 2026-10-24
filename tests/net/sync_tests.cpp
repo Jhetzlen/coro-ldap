@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <future>
@@ -456,18 +457,22 @@ TEST_CASE("sync: start_tls upgrades, then is_tls()", "[net][sync][starttls]")
 {
 	test_pki pki("jhetz-ldap sync StartTLS test CA");
 	peer_server srv;
-	srv.serve_start_tls(pki.issue("localhost", "DNS:localhost,IP:127.0.0.1"));
+	const auto leaf = pki.issue("localhost", "DNS:localhost,IP:127.0.0.1");
+	srv.serve_start_tls(leaf);
 	connected k(srv);
 	CHECK_FALSE(k.c.is_tls());
+	CHECK(k.c.peer_certificate().empty());
 	auto r = k.c.start_tls({ .ca_pem = std::pmr::string(pki.ca_pem()) }, std::chrono::seconds(10));
 	REQUIRE(r.has_value());
 	CHECK(k.c.is_tls());
 	CHECK(k.c.is_open());
+	CHECK(k.c.peer_certificate() == certificate_der(leaf.cert_pem));
 	CHECK(k.c.simple_bind(*ldap::dn::parse(admin), "secret").has_value());
 	const auto &got = hang_up(k.c, srv);
 	// is_tls() describes the open connection: false once closed.
 	CHECK_FALSE(k.c.is_open());
 	CHECK_FALSE(k.c.is_tls());
+	CHECK(k.c.peer_certificate().empty());
 	REQUIRE(got.size() == 2);
 	CHECK(got[0] == ldap::message{ 1, ldap::extended_request{ ldap::start_tls_oid } });
 	CHECK(got[1] == bind_request_msg(2));

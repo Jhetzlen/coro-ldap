@@ -411,8 +411,9 @@ username (a query), as RFC 5802 sections 2.2 and 5.1 say; invalid UTF-8 is
 refused. The authz_id must be valid UTF-8 and is not prepared. The
 prepared username and the authz_id are escaped ("=2C", "=3D"). cyrus-sasl
 (slapd) does not SASLprep the userPassword it derives the keys from, so
-only passwords stored in SASLprep form match there. No
-channel binding (GS2 header "n,,"; no -PLUS variant). Key material is
+only passwords stored in SASLprep form match there. Channel binding
+(RFC 5802 sections 6 and 7, below) is opt-in: by default the GS2 header
+is "n,,", as before. Key material is
 wiped with `OPENSSL_cleanse` (the password when the object is destroyed;
 its prepared form, our preparation buffers and the derived keys as soon as
 the proof is built, but the cached SaltedPassword; ICU's internal buffers cannot be). Server text quoted
@@ -422,6 +423,106 @@ and U+2028/U+2029 (line breaks in some log viewers) are replaced (U+FFFD),
 and it is cut on a code point boundary. Contexts do not name the
 mechanism (`sasl_bind` prefixes "sasl bind SCRAM-SHA-256"). Tested with the RFC 7677 vector and against
 slapd with cyrus-sasl's scram plugin.
+
+TLS channel bindings and SCRAM-SHA-256-PLUS (coro-ldap-cm2;
+`channel_binding.hpp`, RFC 5056). Corosio's `openssl_stream` does not
+expose its `SSL`, so `tls_handshake()` (src/net/tls.cpp) installs a
+verify callback in both verification modes (in the insecure mode it
+accepts everything, so that OpenSSL walks down to the leaf whatever is
+wrong higher up) which records the session from the X509 store's
+ex_data; once the handshake succeeded, `record_tls_session()`
+(src/net/channel_binding.cpp) reads from it the peer certificate (DER),
+tls-server-end-point (RFC 5929 section 4.1, hash from
+`X509_get_signature_info`: MD5 and SHA-1 become SHA-256, no single hash
+function (Ed25519, Ed448) means none) and tls-exporter (RFC 9266 section
+2: `SSL_export_keying_material`, label "EXPORTER-Channel-Binding", a
+zero-length context, which differs from no context in TLS 1.2, 32 bytes;
+only on TLS 1.3 or with the extended master secret), and the pointer is
+dropped. The bytes live in the transport's block (pmr vectors, cleared
+with the TLS layer), and `transport::peer_certificate()` /
+`channel_bindings()` and their `connection` counterparts return views,
+empty unless `is_tls()`. Computing them eagerly costs a hash and an HKDF
+per handshake and keeps no `SSL*` around. Default type: tls-exporter on
+TLS 1.3 (RFC 9266 section 3); on TLS 1.2 tls-server-end-point (RFC 5802
+names tls-unique, which this library does not implement: undefined for
+TLS 1.3 and open to the triple handshake attack without the extended
+master secret; tls-server-end-point is what servers support widely), or
+tls-exporter when the certificate has no tls-server-end-point (Ed25519,
+Ed448) and the extended master secret was negotiated. The
+caller chooses the type with `sasl_scram_options::binding_type`.
+`sasl_bind` passes `tls` and the bindings in `sasl_bind_context`;
+`sasl_scram_sha256::prepare()` copies the chosen type's bytes (the
+context is valid during the call only). RFC 9266 section 4.1:
+tls-exporter MUST NOT be used for more than one authentication mechanism
+instance on a TLS connection. Enforced fail-closed in `sasl_bind`: after
+a successful `start()`, a mechanism whose `channel_binding_used()` (a
+virtual of `sasl_mechanism`, last in its vtable) is tls_exporter, while
+the bind was given tls-exporter data, sets `tls_exporter_used` in the transport's block,
+whatever the bind's outcome (each attempt is an instance); later binds
+get the bindings from `authentication_channel_bindings()`, with
+tls-exporter empty and the default type tls-server-end-point or none, so
+SCRAM-PLUS falls back to tls-server-end-point or fails `start()` with
+`tls_required` before sending anything. The default
+`channel_binding_used()` returns tls_exporter: a mechanism that reads the
+bindings but does not say what it used (a third-party -PLUS mechanism, a
+wrapper around `sasl_scram_sha256` that does not forward it) consumes
+tls-exporter rather than bypass the rule. The library's mechanisms report
+exactly what they used: SCRAM, with `scram_channel_binding::plus` once
+`start()` succeeded, the type it actually bound to ("p=<type>": the
+explicit `binding_type` option, or else the connection's default type),
+nullopt otherwise;
+EXTERNAL and GSSAPI nullopt. The flag is cleared with the TLS
+session (`clear_tls_session()`). `channel_bindings()` (transport and
+connection) still reports tls-exporter: it describes the connection, and
+the accessor is not an authentication; a caller that authenticates with
+it by other means owns the rule. The GS2 flag comes from
+`sasl_scram_options::channel_binding`: `none` ("n", default, unchanged
+behaviour), `plus` (mechanism name SCRAM-SHA-256-PLUS, "p=<type>",
+c= = base64(GS2 header + data); without TLS or data `start()` fails with
+`client_errc::tls_required` before anything is sent and before the
+password is prepared) and `not_offered` ("y" over TLS with binding data,
+"n" otherwise): the client cannot learn the server's mechanisms inside
+the mechanism (no I/O there), so the caller says what the server
+advertised; `scram_channel_binding_for(supportedSASLMechanisms)` maps the
+root DSE's list. Reading that list in clear is fine: a man in the middle
+that removes -PLUS makes the client send "y", which a server supporting
+-PLUS refuses (checked against slapd). OpenLDAP (libldap and slapd's
+`sasl-cbinding`, 2.5 through 2.7) does not follow RFC 5802 here: its
+cyrus-sasl channel binding is named "ldap" and its data is
+"tls-server-end-point:<hash>" (RFC 5056's prefixed form, what GSS-API
+takes), so slapd refuses "p=tls-server-end-point" ("Unsupported channel
+bindings type") and expects "p=ldap,," with c= covering the prefixed
+data; `sasl_scram_options::binding_form =
+scram_channel_binding_form::openldap` is an opt-in for that form, the RFC
+form stays the default. slapd knows tls-endpoint and tls-unique, not
+tls-exporter, so the openldap form implies tls-server-end-point (an
+explicit tls_exporter fails `start()` with `encode_error`), and its hash
+follows libldap's `tlso_session_endpoint`: the digest named by the
+signature algorithm's OID (`OBJ_find_sigid_algs`), SHA-256 when it names
+none or a weak one, so SHA-256 for RSASSA-PSS, Ed25519 and Ed448, where
+RFC 5929 takes the PSS hash or has none. `prepare()` computes it from
+`sasl_bind_context::peer_certificate`
+(`openldap_tls_server_end_point()`). Renegotiation: `record_tls_session()`
+sets `SSL_OP_NO_RENEGOTIATION` on the session (a no-op on TLS 1.3), so a
+server's TLS 1.2 HelloRequest gets a no_renegotiation alert; RFC 9266
+section 4.2 leaves tls-exporter undefined where renegotiation is enabled,
+and a renegotiation could change the certificate recorded at the
+handshake. It does so only when it got the session, that is when the
+verify callback ran (the server sent a certificate); otherwise nothing
+is recorded and renegotiation stays at OpenSSL's default. Compatibility:
+this applies to every ldaps:// and StartTLS connection, channel binding
+used or not, so a server that renegotiates TLS 1.2 (e.g. to ask for a
+client certificate after the handshake) fails the connection with an
+error comparing equal to `cond::tls_failure`. The OpenSSL calls there and
+in the end-point hashes bracket their work with `ERR_set_mark()` /
+`ERR_pop_to_mark()`, so the application's thread error queue is left as
+it was. GSSAPI channel bindings (coro-ldap-ipb) can use the same
+`sasl_bind_context::bindings` (tls-server-end-point, prefixed, as
+`application_data`). Tested: the hash choice for ECDSA (SHA-224/256/384,
+SHA-1), RSA (SHA-512, SHA-1, MD5), RSASSA-PSS (SHA-384), Ed25519;
+deterministic SCRAM-PLUS exchanges with Python-computed values; ldaps://
+against an in-process server (TLS 1.3 and 1.2) whose own SSL gives the
+expected tls-exporter; slapd over ldaps:// and StartTLS.
 
 GSSAPI (`sasl_gssapi.hpp`, RFC 4752, Kerberos V5; in jhetz::ldap_net only
 with the CMake option `JHETZ_LDAP_WITH_GSSAPI`, off by default): an

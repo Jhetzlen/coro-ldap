@@ -18,22 +18,32 @@
 #include <string>
 #include <string_view>
 
+struct ssl_st;// OpenSSL's SSL
+
 namespace jhetz::ldap::net::detail {
 
-// Shared with the verify callback: why it rejected the peer, e.g.
-// "hostname mismatch (certificate depth 0)" (empty if it did not), and the
-// DNS name to match strictly (host_name_matching::strict; empty for an IP
-// literal or legacy matching), set by tls_handshake().
-struct verify_failure
+// Shared between tls_handshake() and the verify callback, which runs
+// during every handshake that receives a certificate, whatever the
+// verification mode.
+struct verify_state
 {
+	// Why the callback rejected the peer, e.g. "hostname mismatch
+	// (certificate depth 0)"; empty if it did not.
 	std::string reason{};
+	// The DNS name to match strictly (host_name_matching::strict), set by
+	// tls_handshake(); empty for an IP literal or legacy matching.
 	std::string strict_host{};
+	// The client's OpenSSL session. Corosio's openssl_stream does not expose
+	// its SSL, but the verify callback reaches it (the store's ex_data).
+	// Owned by the stream: only dereferenced by tls_handshake(), right after
+	// the handshake succeeded (record_tls_session), which then resets it.
+	ssl_st *ssl = nullptr;
 };
 
 struct tls_setup
 {
 	boost::corosio::tls_context context{};
-	std::shared_ptr<verify_failure> failure = std::make_shared<verify_failure>();
+	std::shared_ptr<verify_state> state = std::make_shared<verify_state>();
 };
 
 // Builds the client context from `options`: verification mode and trust
@@ -52,8 +62,12 @@ auto tls_peer_name(std::string_view host, const tls_options &options) -> std::st
 // used for SNI and verification is options.server_name if set, else `host`
 // without an IPv6 zone. On success im.tls and im.tls_context are set and
 // im.stream points at the TLS layer; on an error or a throw (bad_alloc)
-// neither is, and im.stream is unchanged. Errors have the context "tls
-// handshake" (plus ": server certificate: <reason>" when verification failed).
+// neither is, and im.stream is unchanged. On success the peer certificate
+// and the channel bindings are recorded in im (record_tls_session), and
+// renegotiation is off, when the verify callback ran (the server sent a
+// certificate); otherwise nothing is recorded and renegotiation is left
+// as it was. Errors have the context "tls handshake" (plus ":
+// server certificate: <reason>" when verification failed).
 auto tls_handshake(transport::impl &im,
   std::string_view host,
   const tls_options &options,
