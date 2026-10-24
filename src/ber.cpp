@@ -164,7 +164,7 @@ void writer::integer(std::int64_t value, tag t)
 	// the top bit set.
 	const auto u = static_cast<std::uint64_t>(value);
 	std::array<std::byte, 8> octets{};
-	for (std::size_t i = 0; i < 8; ++i) {
+	for (std::size_t i = 0; i < octets.size(); ++i) {
 		octets[i] = static_cast<std::byte>((u >> (octet_bits * (octets.size() - 1 - i))) & 0xFFu);
 	}
 	std::size_t start = 0;

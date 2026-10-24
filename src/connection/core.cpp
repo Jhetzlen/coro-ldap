@@ -175,7 +175,7 @@ void connection::impl::close() noexcept
 	} catch (const std::bad_alloc &) {
 		closed = out_of_memory();
 	}
-	shut(std::move(closed), false);
+	shut(closed, false);
 	transport_.close();// also ends a TLS shutdown that unbind() is waiting for
 }
 
@@ -209,7 +209,7 @@ auto connection::impl::writer(impl *self) -> capy::task<void>
 			self->outbox.pop_front();
 			auto w = co_await net::write_bytes(self->transport_, bytes);
 			if (!w) {
-				self->shut(std::move(w.error()), true);
+				self->shut(w.error(), true);
 			}
 		}
 	} catch (const std::bad_alloc &) {
@@ -654,7 +654,7 @@ auto connection::impl::reader(impl *self) -> capy::task<void>
 				if (size.error().code == capy::cond::canceled && self->open) {
 					break;
 				}
-				self->shut(std::move(size.error()), true);
+				self->shut(size.error(), true);
 				break;
 			}
 			self->route(*size);
@@ -768,7 +768,7 @@ void connection::impl::notification(std::span<const std::byte> bytes)
 	}
 	scratch.release();
 	if (fatal) {
-		shut(std::move(*fatal), true);
+		shut(*fatal, true);
 	}
 }
 

@@ -23,10 +23,9 @@
 namespace jhetz::ldap {
 namespace {
 
-	// The Kerberos V5 mechanism, 1.2.840.113554.1.2.2 (RFC 1964), spelled
-	// out rather than taken from gssapi_krb5.h (MIT's gss_mech_krb5,
-	// Heimdal's GSS_KRB5_MECHANISM).
-	// 1.2.840.113554.1.2.2 (RFC 1964), DER-encoded.
+	// The Kerberos V5 mechanism, 1.2.840.113554.1.2.2 (RFC 1964), DER-encoded
+	// and spelled out rather than taken from gssapi_krb5.h (MIT's
+	// gss_mech_krb5, Heimdal's GSS_KRB5_MECHANISM).
 	constexpr auto krb5_oid_der =
 	  std::to_array<unsigned char>({ 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02 });
 	// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables): GSS-API takes them non-const, never writes

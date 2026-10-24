@@ -30,18 +30,15 @@ namespace detail {
 		return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 	}
 
-	// The value of the hex digits 'a' and 'A'.
-	inline constexpr int hex_letter_value = 10;
-
 	constexpr auto hex_value(char c) noexcept -> unsigned
 	{
 		if (is_digit(c)) {
 			return static_cast<unsigned>(c - '0');
 		}
 		if (c >= 'a' && c <= 'f') {
-			return static_cast<unsigned>(c - 'a' + hex_letter_value);
+			return static_cast<unsigned>(c - 'a' + 10);
 		}
-		return static_cast<unsigned>(c - 'A' + hex_letter_value);
+		return static_cast<unsigned>(c - 'A' + 10);
 	}
 
 	constexpr auto iequals(std::string_view a, std::string_view b) noexcept -> bool

@@ -140,7 +140,7 @@ struct connect_options
 {
 	// The defaults of timeout and attempt_delay.
 	static constexpr std::chrono::milliseconds default_timeout = std::chrono::seconds(30);
-	static constexpr std::chrono::milliseconds default_attempt_delay{ 250 };
+	static constexpr std::chrono::milliseconds default_attempt_delay = std::chrono::milliseconds(250);
 
 	// Budget for the whole connect: resolve, every TCP attempt and the TLS
 	// handshake together, from the start of the call. nullopt: no limit.
