@@ -3,6 +3,7 @@
 #pragma once
 
 #include "jhetz/ldap/message.hpp"
+#include "platform.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -31,8 +32,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <unistd.h>
 
 namespace jhetz::ldap::test {
 
@@ -445,7 +444,7 @@ class temp_path
 	{
 		static std::atomic<int> counter{ 0 };
 		path_ = (std::filesystem::temp_directory_path()
-				 / ("jhetz-ldap-" + std::to_string(::getpid()) + "-" + std::to_string(counter++) + suffix))
+				 / ("jhetz-ldap-" + std::to_string(process_id()) + "-" + std::to_string(counter++) + suffix))
 				  .string();
 	}
 	temp_path(const temp_path &) = delete;

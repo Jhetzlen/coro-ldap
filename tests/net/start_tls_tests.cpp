@@ -35,8 +35,6 @@
 #include <variant>
 #include <vector>
 
-#include <unistd.h>
-
 namespace ldap = jhetz::ldap;
 namespace net = jhetz::ldap::net;
 namespace capy = boost::capy;
@@ -320,8 +318,7 @@ TEST_CASE("start_tls: a failed allocation in the handshake's setup closes the co
 		while (m.ioc.poll() != 0) {}// parks the reader and the server's read
 		m.ioc.restart();
 		frames.fail_at(failing);
-		REQUIRE(::write(m.peer.native_handle(), accepted_bytes.data(), accepted_bytes.size())
-				== static_cast<ssize_t>(accepted_bytes.size()));
+		REQUIRE(raw_send(m.peer.native_handle(), accepted_bytes));
 		drive_until(m.ioc, [&] { return tls.done() || sent.done(); });
 		while (m.ioc.poll() != 0) {}// the rest of the handshake's first step
 		m.ioc.restart();
@@ -378,8 +375,7 @@ TEST_CASE("start_tls: another exception in the handshake's setup closes the conn
 		while (m.ioc.poll() != 0) {}// parks the reader and the server's read
 		m.ioc.restart();
 		frames.fail_at(failing, true);
-		REQUIRE(::write(m.peer.native_handle(), accepted_bytes.data(), accepted_bytes.size())
-				== static_cast<ssize_t>(accepted_bytes.size()));
+		REQUIRE(raw_send(m.peer.native_handle(), accepted_bytes));
 		drive_until(m.ioc, [&] { return tls.done() || sent.done(); });
 		while (m.ioc.poll() != 0) {}// the rest of the handshake's first step
 		m.ioc.restart();

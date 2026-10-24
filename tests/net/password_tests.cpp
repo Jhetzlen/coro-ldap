@@ -19,8 +19,6 @@
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
-#include <unistd.h>
-
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -409,7 +407,7 @@ TEST_CASE("change_password: Active Directory during StartTLS is refused before s
 	while (m.ioc.poll() != 0) {}// parks the reader and the server's read
 	m.ioc.restart();
 	const std::string accepted = bytes_of(start_tls_ok(1));
-	REQUIRE(::write(m.peer.native_handle(), accepted.data(), accepted.size()) == static_cast<ssize_t>(accepted.size()));
+	REQUIRE(raw_send(m.peer.native_handle(), accepted));
 	// The ClientHello arrives: the client waits for the server's answer.
 	drive_until(m.ioc, [&hello] { return hello.done(); });
 	REQUIRE(hello.done());

@@ -25,7 +25,6 @@
 #include <boost/corosio/tcp_acceptor.hpp>
 #include <boost/corosio/tcp_socket.hpp>
 
-#include <poll.h>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
@@ -1924,10 +1923,7 @@ TEST_CASE("connection: ldap::connect with the URL as text", "[net][connection][c
 	corosio::tcp_acceptor acc(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1);
 	const std::string where = "ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port());
 	// A connection the kernel completed and the acceptor has not taken.
-	auto pending = [&acc] {
-		::pollfd p{ .fd = acc.native_handle(), .events = POLLIN, .revents = 0 };
-		return ::poll(&p, 1, 0) == 1;
-	};
+	auto pending = [&acc] { return poll_readable(acc.native_handle()); };
 
 	SECTION("a bad URL fails with url::parse's error before connecting")
 	{

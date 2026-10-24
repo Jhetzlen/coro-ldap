@@ -38,16 +38,16 @@ class scoped_env
 		if (const char *old = std::getenv(name)) {
 			old_ = old;
 		}
-		::setenv(name, value, 1);// NOLINT(concurrency-mt-unsafe): no other thread runs
+		set_env(name, value);
 	}
 	scoped_env(const scoped_env &) = delete;
 	auto operator=(const scoped_env &) -> scoped_env & = delete;
 	~scoped_env()
 	{
 		if (old_) {
-			::setenv(name_, old_->c_str(), 1);// NOLINT(concurrency-mt-unsafe): no other thread runs
+			set_env(name_, old_->c_str());
 		} else {
-			::unsetenv(name_);// NOLINT(concurrency-mt-unsafe): no other thread runs
+			unset_env(name_);
 		}
 	}
 

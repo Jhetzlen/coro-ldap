@@ -28,8 +28,6 @@
 #include <variant>
 #include <vector>
 
-#include <unistd.h>
-
 namespace ldap = jhetz::ldap;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::ContainsSubstring;
@@ -1900,8 +1898,7 @@ void server_writes_now(mock_ldap &m, std::initializer_list<ldap::message> msgs)
 {
 	for (const auto &msg : msgs) {
 		const std::string bytes = bytes_of(msg);
-		REQUIRE(
-		  ::write(m.sockets.server.native_handle(), bytes.data(), bytes.size()) == static_cast<ssize_t>(bytes.size()));
+		REQUIRE(raw_send(m.sockets.server.native_handle(), bytes));
 	}
 }
 

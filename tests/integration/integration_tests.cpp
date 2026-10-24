@@ -32,7 +32,6 @@
 #include <optional>
 #include <stop_token>
 #include <string>
-#include <unistd.h>
 #include <variant>
 #include <vector>
 
@@ -237,7 +236,7 @@ class server_certificate_swapped
 auto unique(std::string_view stem) -> std::string
 {
 	static int counter = 0;
-	return std::string(stem) + "-" + std::to_string(::getpid()) + "-" + std::to_string(counter++);
+	return std::string(stem) + "-" + std::to_string(process_id()) + "-" + std::to_string(counter++);
 }
 
 }// namespace
