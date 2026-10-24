@@ -432,8 +432,8 @@ struct tls_fixture
 	corosio::tcp_acceptor acc{ ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 16 };
 	std::shared_ptr<server_view> view = std::make_shared<server_view>();
 	outcome<std::string> server;
-	temp_path cert{ ".crt" };
-	temp_path key{ ".key" };
+	temp_path cert{ u8".crt" };
+	temp_path key{ u8".key" };
 
 	explicit tls_fixture(std::optional<corosio::tls_version> max_version = std::nullopt,
 	  const server_identity &id = ecdsa_identity())
@@ -452,8 +452,8 @@ struct tls_fixture
 		if (verification == net::certificate_verification::full) {
 			o.tls.ca_pem = std::pmr::string(pki().ca_pem());
 		}
-		o.tls.cert_file = cert.str();
-		o.tls.key_file = key.str();
+		o.tls.cert_file = cert.path();
+		o.tls.key_file = key.path();
 		auto t = finish(ioc, net::connect(ioc, *u, o));
 		REQUIRE(t.has_value());
 		// With TLS 1.3 the client's handshake may end before the server's.

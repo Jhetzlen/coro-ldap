@@ -4,10 +4,12 @@
 //
 // Enumerated again for every context, like OpenSSL re-reading its files
 // off Windows. Each root is kept only if its extended key usage property
-// allows serverAuth (or restricts nothing), it has no
+// allows serverAuth (or restricts nothing), its disallowed extended key
+// usage property does not list serverAuth, it has no
 // CERT_DISALLOWED_FILETIME_PROP_ID property, and it is not in the
 // "Disallowed" store (by SHA-1 thumbprint). The "CA" store (intermediates)
-// never provides anchors.
+// never provides anchors. A store that cannot be enumerated to the end
+// fails: no silent partial set.
 #include "trust_store.hpp"
 
 #include <windows.h>
@@ -37,6 +39,24 @@ namespace {
 
 	auto is_not_found(DWORD error) -> bool { return error == static_cast<DWORD>(CRYPT_E_NOT_FOUND); }
 
+	// Room for a decoded structure of `size` bytes: max_align_t elements, as
+	// it holds a CERT_ENHKEY_USAGE and the pointers and strings it points to.
+	auto aligned_buffer(DWORD size) -> std::vector<std::max_align_t>
+	{
+		return std::vector<std::max_align_t>((size + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t));
+	}
+
+	auto lists_server_auth(const CERT_ENHKEY_USAGE &usage) -> bool
+	{
+		for (DWORD i = 0; i < usage.cUsageIdentifier; ++i) {
+			const char *oid = usage.rgpszUsageIdentifier[i];
+			if (oid != nullptr && std::string_view(oid) == szOID_PKIX_KP_SERVER_AUTH) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	// The certificate's extended key usage *property* (the store's
 	// restriction, not the certificate's extension) allows serverAuth.
 	// CertGetEnhancedKeyUsage with CERT_FIND_PROP_ONLY_ENHKEY_USAGE_FLAG:
@@ -52,9 +72,7 @@ namespace {
 		if (size < sizeof(CERT_ENHKEY_USAGE)) {
 			return false;
 		}
-		// max_align_t elements: the buffer holds a CERT_ENHKEY_USAGE and the
-		// pointers and strings it points to.
-		std::vector<std::max_align_t> buffer((size + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t));
+		std::vector<std::max_align_t> buffer = aligned_buffer(size);
 		auto *usage = reinterpret_cast<PCERT_ENHKEY_USAGE>(buffer.data());
 		SetLastError(0);
 		if (CertGetEnhancedKeyUsage(cert, CERT_FIND_PROP_ONLY_ENHKEY_USAGE_FLAG, usage, &size) == FALSE) {
@@ -63,13 +81,40 @@ namespace {
 		if (usage->cUsageIdentifier == 0) {
 			return is_not_found(GetLastError());
 		}
-		for (DWORD i = 0; i < usage->cUsageIdentifier; ++i) {
-			const char *oid = usage->rgpszUsageIdentifier[i];
-			if (oid != nullptr && std::string_view(oid) == szOID_PKIX_KP_SERVER_AUTH) {
-				return true;
-			}
+		return lists_server_auth(*usage);
+	}
+
+	// The root program disables a use of a root by listing it in the
+	// CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID property (an ASN.1 encoded
+	// enhanced key usage). True when it lists serverAuth, or when it is
+	// there but cannot be read or decoded (fail closed); no property is
+	// false.
+	auto server_auth_disallowed(PCCERT_CONTEXT cert) -> bool
+	{
+		DWORD size = 0;
+		if (CertGetCertificateContextProperty(cert, CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID, nullptr, &size) == FALSE) {
+			return !is_not_found(GetLastError());
 		}
-		return false;
+		std::vector<BYTE> encoded(size);
+		if (CertGetCertificateContextProperty(cert, CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID, encoded.data(), &size)
+			== FALSE) {
+			return true;
+		}
+		DWORD decoded_size = 0;
+		if (CryptDecodeObjectEx(
+			  X509_ASN_ENCODING, X509_ENHANCED_KEY_USAGE, encoded.data(), size, 0, nullptr, nullptr, &decoded_size)
+			  == FALSE
+			|| decoded_size < sizeof(CERT_ENHKEY_USAGE)) {
+			return true;
+		}
+		std::vector<std::max_align_t> buffer = aligned_buffer(decoded_size);
+		auto *usage = reinterpret_cast<PCERT_ENHKEY_USAGE>(buffer.data());
+		if (CryptDecodeObjectEx(
+			  X509_ASN_ENCODING, X509_ENHANCED_KEY_USAGE, encoded.data(), size, 0, nullptr, usage, &decoded_size)
+			== FALSE) {
+			return true;
+		}
+		return lists_server_auth(*usage);
 	}
 
 	// Marked disallowed (the property's FILETIME is when; any value
@@ -105,7 +150,7 @@ namespace {
 		const BYTE *der = cert->pbCertEncoded;
 		return {
 			.der = std::vector<unsigned char>(der, der + cert->cbCertEncoded),
-			.server_auth = server_auth_allowed(cert),
+			.server_auth = server_auth_allowed(cert) && !server_auth_disallowed(cert),
 			.distrusted = has_disallowed_filetime(cert) || in_store(disallowed, cert),
 		};
 	}
@@ -143,6 +188,11 @@ auto load_system_trust(boost::corosio::tls_context &ctx) -> result<void>
 			CertFreeCertificateContext(cert);
 		}
 		throw;
+	}
+	// The loop ends on null: at the end of the store, or on a failure that
+	// would leave the set partial.
+	if (const DWORD error = GetLastError(); !is_not_found(error) && error != static_cast<DWORD>(ERROR_NO_MORE_FILES)) {
+		return fail({ static_cast<int>(error), std::system_category() }, what + ": cannot enumerate the ROOT store");
 	}
 	return add_trust_anchors(ctx, trust_anchors_pem(certs), what);
 }

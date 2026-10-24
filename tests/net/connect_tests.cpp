@@ -823,7 +823,7 @@ TEST_CASE("URLs connect() refuses", "[net][connect]")
 TEST_CASE("connect ldapi:// to a Unix domain socket", "[net][connect][ldapi]")
 {
 	corosio::io_context ioc;
-	temp_path sock(".sock");
+	temp_path sock(u8".sock");
 	corosio::local_stream_acceptor acc(ioc);
 	REQUIRE_FALSE(acc.open());
 	REQUIRE_FALSE(acc.bind(corosio::local_endpoint(sock.str()), corosio::bind_option::unlink_existing));
@@ -842,7 +842,7 @@ TEST_CASE("connect ldapi:// to a Unix domain socket", "[net][connect][ldapi]")
 TEST_CASE("ldapi:// errors", "[net][connect][ldapi]")
 {
 	corosio::io_context ioc;
-	temp_path missing(".sock");// never created
+	temp_path missing(u8".sock");// never created
 	auto t = connect_to(ioc, "ldapi://" + percent_encode(missing.str()));
 	REQUIRE_FALSE(t.has_value());
 	CHECK(t.error().code == std::errc::no_such_file_or_directory);
@@ -850,9 +850,7 @@ TEST_CASE("ldapi:// errors", "[net][connect][ldapi]")
 
 	// The decoded path is quoted sanitized: U+2028 becomes U+FFFD, the
 	// accented letter stays.
-	temp_path odd(
-	  "-x\xE2\x80\xA8"
-	  "caf\xC3\xA9.sock");// never created
+	temp_path odd(u8"-x\u2028caf\u00e9.sock");// never created
 	auto sanitized = connect_to(ioc, "ldapi://" + percent_encode(odd.str()));
 	REQUIRE_FALSE(sanitized.has_value());
 	CHECK(sanitized.error().code == std::errc::no_such_file_or_directory);
@@ -886,10 +884,10 @@ TEST_CASE("ldaps:// with the CA configured", "[net][connect][tls]")
 	{
 		// Our CA second in the file: every certificate of a bundle is used.
 		test_pki other("unrelated CA");
-		temp_path bundle(".pem");
+		temp_path bundle(u8".pem");
 		bundle.write(other.ca_pem() + pki().ca_pem());
 		spawn(ioc, accept_and_serve(srv.acc, server_context(localhost_cert())), server);
-		spawn(ioc, exchange(ioc, srv.url("ldaps", "localhost"), { .tls = { .ca_file = bundle.str() } }, true), client);
+		spawn(ioc, exchange(ioc, srv.url("ldaps", "localhost"), { .tls = { .ca_file = bundle.path() } }, true), client);
 		drive(ioc);
 	}
 	SECTION("server_name for a certificate that does not name the address")
@@ -1044,8 +1042,8 @@ TEST_CASE("ldaps:// client certificate", "[net][connect][tls]")
 	REQUIRE_FALSE(ctx.add_certificate_authority(pki().ca_pem()));
 
 	const auto client_leaf = pki().issue("client", "DNS:client.example");
-	temp_path cert(".crt");
-	temp_path key(".key");
+	temp_path cert(u8".crt");
+	temp_path key(u8".key");
 	cert.write(client_leaf.cert_pem);
 	key.write(client_leaf.key_pem);
 
@@ -1057,7 +1055,7 @@ TEST_CASE("ldaps:// client certificate", "[net][connect][tls]")
 		spawn(ioc,
 		  exchange(ioc,
 			srv.url("ldaps"),
-			{ .tls = { .ca_pem = std::pmr::string(pki().ca_pem()), .cert_file = cert.str(), .key_file = key.str() } },
+			{ .tls = { .ca_pem = std::pmr::string(pki().ca_pem()), .cert_file = cert.path(), .key_file = key.path() } },
 			true),
 		  client);
 		drive(ioc);
@@ -1067,8 +1065,8 @@ TEST_CASE("ldaps:// client certificate", "[net][connect][tls]")
 	SECTION("presented, from files with non-ASCII names")
 	{
 		// Read through std::filesystem::path and handed to Corosio in memory.
-		temp_path cert_utf8("-cl\u00e9-\u8a3c\u660e.crt");
-		temp_path key_utf8("-cl\u00e9-\u9375.key");
+		temp_path cert_utf8(u8"-cl\u00e9-\u8a3c\u660e.crt");
+		temp_path key_utf8(u8"-cl\u00e9-\u9375.key");
 		cert_utf8.write(client_leaf.cert_pem);
 		key_utf8.write(client_leaf.key_pem);
 		spawn(ioc, accept_and_serve(srv.acc, ctx), server);
@@ -1076,8 +1074,8 @@ TEST_CASE("ldaps:// client certificate", "[net][connect][tls]")
 		  exchange(ioc,
 			srv.url("ldaps"),
 			{ .tls = { .ca_pem = std::pmr::string(pki().ca_pem()),
-				.cert_file = cert_utf8.str(),
-				.key_file = key_utf8.str() } },
+				.cert_file = cert_utf8.path(),
+				.key_file = key_utf8.path() } },
 			true),
 		  client);
 		drive(ioc);
@@ -1146,9 +1144,9 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	CHECK(bad_cert.error().code == std::errc::invalid_argument);
 	CHECK_THAT(std::string(bad_cert.error().context), EndsWith("tls: ca_pem: certificate 2 of 2 does not parse"));
 
-	temp_path bad_file(".pem");
+	temp_path bad_file(u8".pem");
 	bad_file.write(broken);
-	auto bad_ca_file = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_file = bad_file.str() } });
+	auto bad_ca_file = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_file = bad_file.path() } });
 	REQUIRE_FALSE(bad_ca_file.has_value());
 	CHECK_THAT(std::string(bad_ca_file.error().context), EndsWith(": certificate 1 of 1 does not parse"));
 
@@ -1157,36 +1155,36 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	CHECK(no_dir.error().code == std::errc::no_such_file_or_directory);
 	CHECK_THAT(std::string(no_dir.error().context), EndsWith("tls: ca_dir /nonexistent/certs"));
 
-	auto file_dir = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_dir = bad_file.str() } });
+	auto file_dir = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_dir = bad_file.path() } });
 	REQUIRE_FALSE(file_dir.has_value());
 	CHECK(file_dir.error().code == std::errc::not_a_directory);
 
 	// Client certificate and key are parsed and matched before connecting too.
 	const auto one = pki().issue("client-one", "DNS:client-one");
 	const auto two = pki().issue("client-two", "DNS:client-two");
-	temp_path cert_one(".crt");
-	temp_path key_one(".key");
-	temp_path key_two(".key");
-	temp_path junk(".pem");
+	temp_path cert_one(u8".crt");
+	temp_path key_one(u8".key");
+	temp_path key_two(u8".key");
+	temp_path junk(u8".pem");
 	cert_one.write(one.cert_pem);
 	key_one.write(one.key_pem);
 	key_two.write(two.key_pem);
 	junk.write("not pem at all\n");
 
 	auto junk_cert =
-	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = junk.str(), .key_file = key_one.str() } });
+	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = junk.path(), .key_file = key_one.path() } });
 	REQUIRE_FALSE(junk_cert.has_value());
 	CHECK(junk_cert.error().code == std::errc::invalid_argument);
 	CHECK_THAT(std::string(junk_cert.error().context), EndsWith(": no parseable PEM certificate"));
 
 	auto junk_key =
-	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = junk.str() } });
+	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.path(), .key_file = junk.path() } });
 	REQUIRE_FALSE(junk_key.has_value());
 	CHECK(junk_key.error().code == std::errc::invalid_argument);
 	CHECK_THAT(std::string(junk_key.error().context), ContainsSubstring(": no parseable PEM private key"));
 
 	auto mismatch =
-	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = key_two.str() } });
+	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.path(), .key_file = key_two.path() } });
 	REQUIRE_FALSE(mismatch.has_value());
 	CHECK(mismatch.error().code == std::errc::invalid_argument);
 	CHECK_THAT(
@@ -1194,30 +1192,30 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 
 	// Each file is read before connecting: a missing one is named.
 	auto no_cert = connect_to(
-	  ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = "/nonexistent/client.crt", .key_file = key_one.str() } });
+	  ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = "/nonexistent/client.crt", .key_file = key_one.path() } });
 	REQUIRE_FALSE(no_cert.has_value());
 	CHECK(no_cert.error().code == std::errc::no_such_file_or_directory);
 	CHECK(
 	  std::string(no_cert.error().context) == "connect ldaps://127.0.0.1:1: tls: cert_file /nonexistent/client.crt");
 
 	auto no_key = connect_to(
-	  ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = "/nonexistent/client.key" } });
+	  ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.path(), .key_file = "/nonexistent/client.key" } });
 	REQUIRE_FALSE(no_key.has_value());
 	CHECK(no_key.error().code == std::errc::no_such_file_or_directory);
 	CHECK(std::string(no_key.error().context) == "connect ldaps://127.0.0.1:1: tls: key_file /nonexistent/client.key");
 	// The context names the path in UTF-8.
 	auto no_utf8_key = connect_to(ioc,
 	  "ldaps://127.0.0.1:1",
-	  { .tls = { .cert_file = cert_one.str(), .key_file = std::filesystem::path(u8"/nonexistent/cl\u00e9.key") } });
+	  { .tls = { .cert_file = cert_one.path(), .key_file = std::filesystem::path(u8"/nonexistent/cl\u00e9.key") } });
 	REQUIRE_FALSE(no_utf8_key.has_value());
 	CHECK(std::string(no_utf8_key.error().context)
 		  == "connect ldaps://127.0.0.1:1: tls: key_file /nonexistent/cl\u00e9.key");
 
 	// An encrypted key is refused without prompting for its passphrase.
-	temp_path encrypted(".key");
+	temp_path encrypted(u8".key");
 	encrypted.write(test_pki::encrypted_key_pem(one.key_pem, "passphrase"));
 	auto locked =
-	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = encrypted.str() } });
+	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.path(), .key_file = encrypted.path() } });
 	REQUIRE_FALSE(locked.has_value());
 	CHECK(locked.error().code == std::errc::invalid_argument);
 	CHECK(std::string(locked.error().context)
@@ -1225,7 +1223,7 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 			   + ": no parseable PEM private key (encrypted keys are not supported)");
 
 	// A CA file without any PEM certificate.
-	auto empty_ca_file = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_file = junk.str() } });
+	auto empty_ca_file = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_file = junk.path() } });
 	REQUIRE_FALSE(empty_ca_file.has_value());
 	CHECK(empty_ca_file.error().code == std::errc::invalid_argument);
 	CHECK(std::string(empty_ca_file.error().context)
@@ -1233,7 +1231,7 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 
 	// A valid pair passes the checks and fails only when connecting.
 	auto valid =
-	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.str(), .key_file = key_one.str() } });
+	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .cert_file = cert_one.path(), .key_file = key_one.path() } });
 	REQUIRE_FALSE(valid.has_value());
 	CHECK_THAT(std::string(valid.error().context), ContainsSubstring("tcp connect"));
 
@@ -1257,18 +1255,18 @@ TEST_CASE("TLS configuration errors leave the OpenSSL error queue empty", "[net]
 	CHECK_THAT(std::string(bad_ca.error().context), EndsWith("certificate 2 of 2 does not parse"));
 	CHECK(ERR_peek_error() == 0);
 
-	temp_path junk(".pem");
+	temp_path junk(u8".pem");
 	junk.write("not pem at all\n");
-	auto junk_cert = net::detail::make_tls_setup({ .cert_file = junk.str(), .key_file = junk.str() });
+	auto junk_cert = net::detail::make_tls_setup({ .cert_file = junk.path(), .key_file = junk.path() });
 	REQUIRE_FALSE(junk_cert.has_value());
 	CHECK(ERR_peek_error() == 0);
 
 	const auto leaf = pki().issue("client-locked", "DNS:client-locked");
-	temp_path cert(".crt");
-	temp_path encrypted(".key");
+	temp_path cert(u8".crt");
+	temp_path encrypted(u8".key");
 	cert.write(leaf.cert_pem);
 	encrypted.write(test_pki::encrypted_key_pem(leaf.key_pem, "passphrase"));
-	auto locked = net::detail::make_tls_setup({ .cert_file = cert.str(), .key_file = encrypted.str() });
+	auto locked = net::detail::make_tls_setup({ .cert_file = cert.path(), .key_file = encrypted.path() });
 	REQUIRE_FALSE(locked.has_value());
 	CHECK(ERR_peek_error() == 0);
 }
@@ -1321,10 +1319,10 @@ TEST_CASE("ldaps:// with a CA directory", "[net][connect][tls]")
 {
 	// A c_rehash-style directory: the CA under "<subject hash>.0". Only the
 	// directory is trusted (no system store), and the server's CA is in it.
-	temp_path dir("-certs");
-	std::filesystem::create_directory(dir.str());
+	temp_path dir(u8"-certs");
+	std::filesystem::create_directory(dir.path());
 	const auto ca_name = std::format("{:08x}.0", pki().ca_subject_hash());
-	const std::filesystem::path ca_file = std::filesystem::path(dir.str()) / ca_name;
+	const std::filesystem::path ca_file = dir.path() / ca_name;
 	const ldap::detail::scope_exit remove_ca_file{ [&ca_file] {
 		std::error_code ec;
 		std::filesystem::remove(ca_file, ec);
@@ -1341,7 +1339,7 @@ TEST_CASE("ldaps:// with a CA directory", "[net][connect][tls]")
 	outcome<std::string> server;
 	outcome<std::string> client;
 	spawn(ioc, accept_and_serve(srv.acc, server_context(localhost_cert())), server);
-	spawn(ioc, exchange(ioc, srv.url("ldaps"), { .tls = { .ca_dir = dir.str() } }, true), client);
+	spawn(ioc, exchange(ioc, srv.url("ldaps"), { .tls = { .ca_dir = dir.path() } }, true), client);
 	drive(ioc);
 	CHECK_THAT(client.get(), IsEmpty());
 	CHECK_THAT(server.get(), IsEmpty());
@@ -1351,7 +1349,7 @@ TEST_CASE("ldaps:// with a CA directory", "[net][connect][tls]")
 	tcp_server srv2(ioc);
 	outcome<std::string> server2;
 	spawn(ioc, accept_and_serve(srv2.acc, server_context(localhost_cert())), server2);
-	auto t = connect_to(ioc, srv2.url("ldaps"), { .tls = { .ca_dir = dir.str() } });
+	auto t = connect_to(ioc, srv2.url("ldaps"), { .tls = { .ca_dir = dir.path() } });
 	REQUIRE_FALSE(t.has_value());
 	CHECK(t.error().code == ldap::cond::tls_failure);
 	CHECK_THAT(std::string(t.error().context),

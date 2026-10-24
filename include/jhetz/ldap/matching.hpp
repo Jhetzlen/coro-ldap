@@ -1,10 +1,10 @@
 // Matching rules (RFC 4517 section 4.2) with LDAP string preparation
 // (LDAPprep, RFC 4518), DESIGN.md section 1.
 //
-//   ldap::case_ignore_match("Strauß  Johann", "STRAUSS johann")   // true_value
-//   ldap::match("caseExactMatch", "Jane", "jane")                 // false_value
+//   ldap::case_ignore_match("Strau\u00DF  Johann", "STRAUSS johann")   // true_value
+//   ldap::match("caseExactMatch", "Jane", "jane")                      // false_value
 //   ldap::distinguished_name_match(ldap::dn{"CN=Jane Doe,DC=Example"},
-//     ldap::dn{"cn=jane  doe,dc=example"})                         // true_value
+//     ldap::dn{"cn=jane  doe,dc=example"})                             // true_value
 //
 // dn's operator== stays byte-exact after unescaping; these functions are the
 // explicit, server-like comparison. Every matching rule evaluates to
@@ -71,9 +71,9 @@ struct prep_options
 //   2.1 Transcode: the UTF-8 is decoded; ill-formed UTF-8 fails.
 //   2.2 Map: soft hyphens, joiners, variation selectors, controls and other
 //       format characters to nothing; tabs, line breaks and every other
-//       separator to SPACE; with case_fold, table B.2 case folding (so "ß"
-//       becomes "ss" and "İ" becomes "i" + U+0307, whatever the locale).
-//   2.3 Normalize: NFKC ("ﬁ" is "fi", "e" + U+0301 is "é").
+//       separator to SPACE; with case_fold, table B.2 case folding (so U+00DF
+//       becomes "ss" and U+0130 becomes "i" + U+0307, whatever the locale).
+//   2.3 Normalize: NFKC (U+FB01 is "fi", "e" + U+0301 is U+00E9).
 //   2.4 Prohibit: code points unassigned in Unicode 3.2, private use,
 //       non-characters, surrogates, display-changing or deprecated
 //       characters (table C.8) and U+FFFD fail.

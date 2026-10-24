@@ -55,9 +55,11 @@ endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 23)
     message(FATAL_ERROR "jhetz::ldap needs Clang 23 or newer (found ${CMAKE_CXX_COMPILER_VERSION})")
 endif()
-if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 19.40)
-    message(FATAL_ERROR "jhetz::ldap needs MSVC 19.40 (Visual Studio 2022 17.10) or newer "
-        "(found ${CMAKE_CXX_COMPILER_VERSION})")
+# MSVC_VERSION covers clang-cl too: it uses the MSVC STL of the toolset it
+# emulates, and reports that toolset's version.
+if(MSVC AND MSVC_VERSION LESS 1940)
+    message(FATAL_ERROR "jhetz::ldap needs MSVC 19.40 (Visual Studio 2022 17.10) or newer, or clang-cl on "
+        "that toolset (found MSVC_VERSION ${MSVC_VERSION})")
 endif()
 include(CheckCXXSourceCompiles)
 # Re-run the probe on every configure: a cached failure would otherwise keep

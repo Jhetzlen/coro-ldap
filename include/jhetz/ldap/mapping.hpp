@@ -601,9 +601,9 @@ namespace detail {
 	}
 }// namespace detail
 
-// Replaces all values of the member's attribute with `v` (an element, an
-// optional element — nullopt removes the attribute — or, for a vector
-// member, a range of elements).
+// Replaces all values of the member's attribute with `v`: an element, an
+// optional element (nullopt removes the attribute) or, for a vector
+// member, a range of elements.
 template<auto Ptr, class V> [[nodiscard]] auto replace(const V &v) -> change<detail::owner_of<Ptr>>
 {
 	return detail::make_change<Ptr>(modify_operation::replace, detail::encode_values<Ptr>(v));

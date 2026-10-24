@@ -262,19 +262,20 @@ namespace {
 		return out;
 	}
 
-	// A leading NUL in an ldapi path names a Linux abstract socket; Windows'
-	// AF_UNIX has none, so there it is a control character like any other.
-#ifdef _WIN32
-	constexpr bool abstract_sockets = false;
+	// A leading NUL in an ldapi path names a Linux abstract socket; elsewhere
+	// (Windows' AF_UNIX) there is none, so it is a control character like
+	// any other.
+#ifdef __linux__
+	constexpr bool has_abstract_sockets = true;
 #else
-	constexpr bool abstract_sockets = true;
+	constexpr bool has_abstract_sockets = false;
 #endif
 
 	auto has_control_character(std::string_view host, url_scheme scheme) -> bool
 	{
 		for (std::size_t i = 0; i < host.size(); ++i) {
 			const auto c = static_cast<unsigned char>(host[i]);
-			const bool abstract_socket = abstract_sockets && scheme == url_scheme::ldapi && i == 0 && c == 0;
+			const bool abstract_socket = has_abstract_sockets && scheme == url_scheme::ldapi && i == 0 && c == 0;
 			if ((c < 0x20 || c == 0x7F) && !abstract_socket) {
 				return true;
 			}

@@ -20,9 +20,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <ios>
 #include <memory>
 #include <memory_resource>
 #include <new>
@@ -30,6 +31,7 @@
 #include <stdexcept>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -436,16 +438,18 @@ inline auto certificate_der(const std::string &pem) -> std::vector<std::byte>
 // ---------------------------------------------------------------- files
 
 // A path in the temp directory, unique to this process and call, removed
-// when the object goes away. Short enough for sockaddr_un.
+// when the object goes away. Short enough for sockaddr_un. The suffix is
+// UTF-8 and the path is built from it as such, not through the ANSI code
+// page on Windows.
 class temp_path
 {
   public:
-	explicit temp_path(const char *suffix)
+	explicit temp_path(std::u8string_view suffix)
 	{
 		static std::atomic<int> counter{ 0 };
-		path_ = (std::filesystem::temp_directory_path()
-				 / ("jhetz-ldap-" + std::to_string(process_id()) + "-" + std::to_string(counter++) + suffix))
-				  .string();
+		path_ = std::filesystem::temp_directory_path()
+				/ ("jhetz-ldap-" + std::to_string(process_id()) + "-" + std::to_string(counter++));
+		path_ += suffix;
 	}
 	temp_path(const temp_path &) = delete;
 	auto operator=(const temp_path &) -> temp_path & = delete;
@@ -454,22 +458,26 @@ class temp_path
 		std::error_code ec;
 		std::filesystem::remove(path_, ec);
 	}
-	[[nodiscard]] auto str() const noexcept -> const std::string & { return path_; }
+	[[nodiscard]] auto path() const noexcept -> const std::filesystem::path & { return path_; }
+	// The path as UTF-8 text (for URLs and messages).
+	[[nodiscard]] auto str() const -> std::string
+	{
+		const std::u8string text = path_.u8string();
+		return { text.begin(), text.end() };
+	}
 
 	void write(const std::string &contents) const
 	{
-		std::FILE *f = std::fopen(path_.c_str(), "wb");
-		if (f == nullptr) {
-			throw std::runtime_error("cannot write " + path_);
-		}
-		const bool ok = std::fwrite(contents.data(), 1, contents.size(), f) == contents.size();
-		if (std::fclose(f) != 0 || !ok) {
-			throw std::runtime_error("cannot write " + path_);
+		std::ofstream out(path_, std::ios::binary);
+		out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+		out.close();
+		if (!out) {
+			throw std::runtime_error("cannot write " + str());
 		}
 	}
 
   private:
-	std::string path_{};
+	std::filesystem::path path_{};
 };
 
 // RFC 3986 percent-encoding of everything but unreserved characters.
