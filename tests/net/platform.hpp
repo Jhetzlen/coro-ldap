@@ -1,11 +1,13 @@
 // The few OS calls the tests make outside Corosio: the process id, a raw
-// write to a socket, a readiness poll and the environment. POSIX on Linux,
-// the CRT and Winsock on Windows.
+// write to a socket, a readiness poll, the environment and running a
+// command. POSIX on Linux, the CRT and Winsock on Windows.
 #pragma once
 
 #include <boost/corosio/detail/native_handle.hpp>
 
+#include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <string_view>
 
 #ifdef _WIN32
@@ -14,6 +16,7 @@
 #include <process.h>
 #else
 #include <poll.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -73,6 +76,70 @@ inline void unset_env(const char *name)
 #else
 	(void)::unsetenv(name);// NOLINT(concurrency-mt-unsafe): see above
 #endif
+}
+
+// `arg` quoted as one word for the shell run_command uses: single quotes
+// for sh, double quotes for cmd.exe (and the CRT's argv parsing).
+[[nodiscard]] inline auto shell_quote(std::string_view arg) -> std::string
+{
+	std::string out;
+#ifdef _WIN32
+	out += '"';
+	for (const char c : arg) {
+		if (c == '"') {
+			out += '\\';
+		}
+		out += c;
+	}
+	out += '"';
+#else
+	out += '\'';
+	for (const char c : arg) {
+		if (c == '\'') {
+			out += "'\\''";
+		} else {
+			out += c;
+		}
+	}
+	out += '\'';
+#endif
+	return out;
+}
+
+struct command_result
+{
+	int status{};// the exit code; -1 when the command could not run or did not exit normally
+	std::string output{};// stdout and stderr
+};
+
+// Runs `command` through the shell (sh, or cmd.exe on Windows) and returns
+// its exit code and output. Quote the words with shell_quote.
+[[nodiscard]] inline auto run_command(const std::string &command) -> command_result
+{
+#ifdef _WIN32
+	// cmd /c strips the first and last quote of a line that starts with one:
+	// the extra pair keeps the command's own quotes. Text mode: CRLF reads
+	// as LF.
+	FILE *p = ::_popen(("\"" + command + " 2>&1\"").c_str(), "rt");
+#else
+	// NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c): test-only, runs fixed commands
+	FILE *p = ::popen((command + " 2>&1").c_str(), "r");
+#endif
+	if (p == nullptr) {
+		return { .status = -1 };
+	}
+	command_result r;
+	char buf[4096];
+	while (const std::size_t n = std::fread(buf, 1, sizeof buf, p)) {
+		r.output.append(buf, n);
+	}
+#ifdef _WIN32
+	r.status = ::_pclose(p);// the exit code itself
+#else
+	const int status = ::pclose(p);
+	r.status = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+	return r;
 }
 
 }// namespace jhetz::ldap::test

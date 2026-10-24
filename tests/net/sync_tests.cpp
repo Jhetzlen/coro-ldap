@@ -776,45 +776,27 @@ TEST_CASE("sync: close without an UnbindRequest", "[net][sync]")
 }
 
 #ifdef JHETZ_LDAPSEARCH
-#include <sys/wait.h>
-
-namespace {
-
-// Runs a command, returns its exit status and output (stdout and stderr).
-auto run_command(const std::string &command) -> std::pair<int, std::string>
-{
-	std::string out;
-	// NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c): test-only, runs the example with fixed arguments
-	FILE *p = ::popen((command + " 2>&1").c_str(), "r");
-	REQUIRE(p != nullptr);
-	char buf[4096];
-	while (std::size_t n = std::fread(buf, 1, sizeof buf, p)) {
-		out.append(buf, n);
-	}
-	const int status = ::pclose(p);
-	return { WIFEXITED(status) ? WEXITSTATUS(status) : -1, out };
-}
-
-}// namespace
-
+// JHETZ_LDAPSEARCH is the CLI's $<TARGET_FILE>: the full path, with .exe on
+// Windows. Commands go through platform.hpp's run_command (sh or cmd.exe).
 TEST_CASE("jhetz-ldapsearch against the in-process server", "[net][cli]")
 {
 	server_thread srv;
-	const std::string cli = JHETZ_LDAPSEARCH;
+	const std::string cli = shell_quote(JHETZ_LDAPSEARCH);
 	const std::string url = std::string(srv.url().to_string());
 
-	auto [status, out] = run_command(
-	  cli + " -D cn=admin,dc=example,dc=org -w secret --page 5 '" + url + "/ou=people,dc=example,dc=org' '(uid=*)' cn");
+	auto [status, out] =
+	  run_command(cli + " -D cn=admin,dc=example,dc=org -w secret --page 5 "
+				  + shell_quote(url + "/ou=people,dc=example,dc=org") + " " + shell_quote("(uid=*)") + " cn");
 	CHECK(status == 0);
 	CHECK_THAT(out, Catch::Matchers::ContainsSubstring("dn: uid=x,ou=people,dc=example,dc=org\ncn: X\n"));
 	CHECK_THAT(out, Catch::Matchers::ContainsSubstring("dn: uid=y,ou=people,dc=example,dc=org"));
 	CHECK_THAT(out, Catch::Matchers::ContainsSubstring("# 2 entries in 1 pages"));
 
-	auto [bad_status, bad_out] = run_command(cli + " -D cn=admin,dc=example,dc=org -w wrong " + url);
+	auto [bad_status, bad_out] = run_command(cli + " -D cn=admin,dc=example,dc=org -w wrong " + shell_quote(url));
 	CHECK(bad_status == 1);
 	CHECK_THAT(bad_out, Catch::Matchers::ContainsSubstring("invalid credentials"));
 
-	auto [usage_status, usage_out] = run_command(cli + " -Y PLAIN " + url);
+	auto [usage_status, usage_out] = run_command(cli + " -Y PLAIN " + shell_quote(url));
 	CHECK(usage_status == 2);
 	CHECK_THAT(usage_out, Catch::Matchers::ContainsSubstring("only -Y EXTERNAL is supported"));
 }
