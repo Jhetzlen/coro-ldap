@@ -549,6 +549,12 @@ template<class T> struct change
 };
 
 namespace detail {
+	// For static_assert in a discarded if-constexpr branch: dependent, so
+	// only an instantiation that reaches it fails (a plain
+	// static_assert(false) there needs P2593, not in every supported
+	// compiler).
+	template<class> inline constexpr bool dependent_false = false;
+
 	template<class E, class V>
 	concept range_of =
 	  std::ranges::input_range<V> && std::same_as<std::remove_cvref_t<std::ranges::range_value_t<V>>, E>;
@@ -574,7 +580,7 @@ namespace detail {
 				out.emplace_back(value_traits<E>::encode(x));
 			}
 		} else {
-			static_assert(false, "ldap: the value's type does not match the member's type");
+			static_assert(dependent_false<V>, "ldap: the value's type does not match the member's type");
 		}
 		return out;
 	}

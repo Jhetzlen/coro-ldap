@@ -6,16 +6,18 @@
 //
 // ldap://   resolve the host, connect with Happy Eyeballs (below), TCP_NODELAY on.
 // ldaps://  the same, then a TLS client handshake (tls_options below).
-// ldapi://  connect to the Unix domain socket named by the URL's host part.
-//           Linux only (the supported platform, through Corosio's
-//           local_stream_socket). The path must fit in
+// ldapi://  connect to the Unix domain socket named by the URL's host part,
+//           through Corosio's local_stream_socket. The path must fit in
 //           sockaddr_un (corosio::local_endpoint::max_path_length bytes).
+//           Windows (AF_UNIX, Windows 10 1803+): code-only so far; Winsock
+//           reads sun_path in the ANSI code page, so a path outside it
+//           (non-ASCII on most systems) may not reach the right file.
 //
 // URLs connect() rejects with client_errc::invalid_url: an empty host (RFC
 // 4516 leaves the server to client configuration; there is no portable
 // default ldapi socket either), a host with control characters once decoded
 // (`%00` would truncate it in C APIs; a leading NUL in an ldapi path, a Linux
-// abstract socket, is allowed), and a URL with a critical extension (none is
+// abstract socket, is allowed on Linux only), and a URL with a critical extension (none is
 // supported, RFC 4516 section 2.1). The DN and later parts are ignored.
 //
 // Errors are ldap::error with the underlying error_code kept as is (system
