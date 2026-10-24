@@ -1063,6 +1063,26 @@ TEST_CASE("ldaps:// client certificate", "[net][connect][tls]")
 		CHECK_THAT(client.get(), IsEmpty());
 		CHECK_THAT(server.get(), IsEmpty());
 	}
+	SECTION("presented, from files with non-ASCII names")
+	{
+		// Read through std::filesystem::path and handed to Corosio in memory.
+		temp_path cert_utf8("-cl\u00e9-\u8a3c\u660e.crt");
+		temp_path key_utf8("-cl\u00e9-\u9375.key");
+		cert_utf8.write(client_leaf.cert_pem);
+		key_utf8.write(client_leaf.key_pem);
+		spawn(ioc, accept_and_serve(srv.acc, ctx), server);
+		spawn(ioc,
+		  exchange(ioc,
+			srv.url("ldaps"),
+			{ .tls = { .ca_pem = std::pmr::string(pki().ca_pem()),
+				.cert_file = cert_utf8.str(),
+				.key_file = key_utf8.str() } },
+			true),
+		  client);
+		drive(ioc);
+		CHECK_THAT(client.get(), IsEmpty());
+		CHECK_THAT(server.get(), IsEmpty());
+	}
 	SECTION("missing")
 	{
 		spawn(ioc, accept_and_serve(srv.acc, ctx), server);
@@ -1184,6 +1204,13 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	REQUIRE_FALSE(no_key.has_value());
 	CHECK(no_key.error().code == std::errc::no_such_file_or_directory);
 	CHECK(std::string(no_key.error().context) == "connect ldaps://127.0.0.1:1: tls: key_file /nonexistent/client.key");
+	// The context names the path in UTF-8.
+	auto no_utf8_key = connect_to(ioc,
+	  "ldaps://127.0.0.1:1",
+	  { .tls = { .cert_file = cert_one.str(), .key_file = std::filesystem::path(u8"/nonexistent/cl\u00e9.key") } });
+	REQUIRE_FALSE(no_utf8_key.has_value());
+	CHECK(std::string(no_utf8_key.error().context)
+		  == "connect ldaps://127.0.0.1:1: tls: key_file /nonexistent/cl\u00e9.key");
 
 	// An encrypted key is refused without prompting for its passphrase.
 	temp_path encrypted(".key");

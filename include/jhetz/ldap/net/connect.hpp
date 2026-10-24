@@ -111,7 +111,11 @@ struct tls_options
 	// used (OpenSSL honours SSL_CERT_FILE and SSL_CERT_DIR). Setting any of
 	// them replaces the system store; they may be combined.
 	std::filesystem::path ca_file{};// PEM file with one or more CA certificates
-	std::filesystem::path ca_dir{};// directory hashed with `openssl rehash`
+	// Directory hashed with `openssl rehash`. OpenSSL reads it lazily through
+	// char paths: on Windows keep its path ASCII (files are opened by UTF-8
+	// name but looked up with the ANSI stat()). The other files take any
+	// name: they are read through std::filesystem::path.
+	std::filesystem::path ca_dir{};
 	std::pmr::string ca_pem{};// CA certificates as PEM text
 
 	// Client certificate (mutual TLS / SASL EXTERNAL): PEM chain + PEM key.

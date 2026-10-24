@@ -153,6 +153,19 @@ namespace {
 		return {};
 	}
 
+	// A path as UTF-8, for error contexts and OpenSSL's char paths:
+	// path::string() is in the ANSI code page on Windows (it throws or
+	// mangles there), u8string() is the path's own bytes on Linux.
+	auto path_text(const std::filesystem::path &path) -> std::string
+	{
+		const std::u8string u8 = path.u8string();
+		std::string out(u8.size(), '\0');
+		std::ranges::transform(u8, out.begin(), [](char8_t c) { return static_cast<char>(c); });
+		return out;
+	}
+
+	// Through std::filesystem::path (wide on Windows), so any file name
+	// opens; the contents then go to Corosio in memory, never as a char path.
 	auto read_file(const std::filesystem::path &path) -> std::optional<std::string>
 	{
 		const std::ifstream in(path, std::ios::binary);
@@ -313,7 +326,7 @@ namespace {
 			return check(ctx.set_default_verify_paths(), "tls: system trust store");
 		}
 		if (!o.ca_file.empty()) {
-			const std::string what = "tls: ca_file " + o.ca_file.string();
+			const std::string what = "tls: ca_file " + path_text(o.ca_file);
 			auto pem = read_file(o.ca_file);
 			if (!pem) {
 				return fail(std::make_error_code(std::errc::no_such_file_or_directory), what);
@@ -323,7 +336,7 @@ namespace {
 			}
 		}
 		if (!o.ca_dir.empty()) {
-			const std::string what = "tls: ca_dir " + o.ca_dir.string();
+			const std::string what = "tls: ca_dir " + path_text(o.ca_dir);
 			std::error_code ec;
 			const auto status = std::filesystem::status(o.ca_dir, ec);
 			if (!std::filesystem::exists(status)) {
@@ -332,7 +345,11 @@ namespace {
 			if (!std::filesystem::is_directory(status)) {
 				return fail(std::make_error_code(std::errc::not_a_directory), what);
 			}
-			if (auto r = check(ctx.add_verify_path(o.ca_dir.string()), what); !r) {
+			// OpenSSL looks the hashed names up lazily, with char paths
+			// (SSL_CTX_load_verify_locations), so the directory goes as a
+			// path, in UTF-8: on Windows OpenSSL opens files by UTF-8 name
+			// but stat()s them in the ANSI code page (see connect.hpp).
+			if (auto r = check(ctx.add_verify_path(path_text(o.ca_dir)), what); !r) {
 				return r;
 			}
 		}
@@ -352,8 +369,8 @@ namespace {
 		if (o.cert_file.empty()) {
 			return {};
 		}
-		const std::string cert_what = "tls: cert_file " + o.cert_file.string();
-		const std::string key_what = "tls: key_file " + o.key_file.string();
+		const std::string cert_what = "tls: cert_file " + path_text(o.cert_file);
+		const std::string key_what = "tls: key_file " + path_text(o.key_file);
 		const auto cert_pem = read_file(o.cert_file);
 		if (!cert_pem) {
 			return fail(std::make_error_code(std::errc::no_such_file_or_directory), cert_what);
@@ -365,10 +382,10 @@ namespace {
 		if (auto r = check_client_credentials(*cert_pem, *key_pem, cert_what, key_what); !r) {
 			return r;
 		}
-		if (auto r = check(ctx.use_certificate_chain_file(o.cert_file.string()), cert_what); !r) {
+		if (auto r = check(ctx.use_certificate_chain(*cert_pem), cert_what); !r) {
 			return r;
 		}
-		return check(ctx.use_private_key_file(o.key_file.string(), corosio::tls_file_format::pem), key_what);
+		return check(ctx.use_private_key(*key_pem, corosio::tls_file_format::pem), key_what);
 	}
 
 }// namespace
