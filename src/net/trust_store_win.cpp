@@ -5,11 +5,18 @@
 // Enumerated again for every context, like OpenSSL re-reading its files
 // off Windows. Each root is kept only if its extended key usage property
 // allows serverAuth (or restricts nothing), its disallowed extended key
-// usage property does not list serverAuth, it has no
-// CERT_DISALLOWED_FILETIME_PROP_ID property, and it is not in the
-// "Disallowed" store (by SHA-1 thumbprint). The "CA" store (intermediates)
-// never provides anchors. A store that cannot be enumerated to the end
-// fails: no silent partial set.
+// usage property does not list serverAuth, it has no NotBefore restriction
+// on serverAuth (below), it has no CERT_DISALLOWED_FILETIME_PROP_ID
+// property, and it is not in the "Disallowed" store (by SHA-1 thumbprint).
+// The "CA" store (intermediates) never provides anchors. A store that
+// cannot be enumerated to the end fails: no silent partial set.
+//
+// NotBefore: the root program stops trusting certificates a root issues
+// after a date with the CERT_NOT_BEFORE_FILETIME_PROP_ID property, for the
+// uses CERT_NOT_BEFORE_ENHKEY_USAGE_PROP_ID lists (all uses when it is
+// absent). OpenSSL cannot trust a root only for certificates issued before
+// a date, so such a root is not an anchor for TLS servers at all (fail
+// closed); pass it in ca_file to trust it anyway.
 #include "trust_store.hpp"
 
 #include <windows.h>
@@ -18,6 +25,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -84,37 +92,67 @@ namespace {
 		return lists_server_auth(*usage);
 	}
 
-	// The root program disables a use of a root by listing it in the
-	// CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID property (an ASN.1 encoded
-	// enhanced key usage). True when it lists serverAuth, or when it is
-	// there but cannot be read or decoded (fail closed); no property is
-	// false.
-	auto server_auth_disallowed(PCCERT_CONTEXT cert) -> bool
+	// wincrypt.h's CERT_NOT_BEFORE_FILETIME_PROP_ID and
+	// CERT_NOT_BEFORE_ENHKEY_USAGE_PROP_ID, which older SDKs lack.
+	constexpr DWORD not_before_filetime_prop_id = 126;
+	constexpr DWORD not_before_enhkey_usage_prop_id = 127;
+
+	// What an ASN.1 encoded enhanced key usage property says about serverAuth.
+	enum class usage_property : std::uint8_t {
+		absent,
+		lists_server_auth,
+		omits_server_auth,
+		unreadable,// there, but cannot be read or decoded
+	};
+
+	auto read_usage_property(PCCERT_CONTEXT cert, DWORD id) -> usage_property
 	{
 		DWORD size = 0;
-		if (CertGetCertificateContextProperty(cert, CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID, nullptr, &size) == FALSE) {
-			return !is_not_found(GetLastError());
+		if (CertGetCertificateContextProperty(cert, id, nullptr, &size) == FALSE) {
+			return is_not_found(GetLastError()) ? usage_property::absent : usage_property::unreadable;
 		}
 		std::vector<BYTE> encoded(size);
-		if (CertGetCertificateContextProperty(cert, CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID, encoded.data(), &size)
-			== FALSE) {
-			return true;
+		if (CertGetCertificateContextProperty(cert, id, encoded.data(), &size) == FALSE) {
+			return usage_property::unreadable;
 		}
 		DWORD decoded_size = 0;
 		if (CryptDecodeObjectEx(
 			  X509_ASN_ENCODING, X509_ENHANCED_KEY_USAGE, encoded.data(), size, 0, nullptr, nullptr, &decoded_size)
 			  == FALSE
 			|| decoded_size < sizeof(CERT_ENHKEY_USAGE)) {
-			return true;
+			return usage_property::unreadable;
 		}
 		std::vector<std::max_align_t> buffer = aligned_buffer(decoded_size);
 		auto *usage = reinterpret_cast<PCERT_ENHKEY_USAGE>(buffer.data());
 		if (CryptDecodeObjectEx(
 			  X509_ASN_ENCODING, X509_ENHANCED_KEY_USAGE, encoded.data(), size, 0, nullptr, usage, &decoded_size)
 			== FALSE) {
-			return true;
+			return usage_property::unreadable;
 		}
-		return lists_server_auth(*usage);
+		return lists_server_auth(*usage) ? usage_property::lists_server_auth : usage_property::omits_server_auth;
+	}
+
+	// The root program disables a use of a root by listing it in the
+	// CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID property. True when it lists
+	// serverAuth, or when it is there but cannot be read (fail closed); no
+	// property is false.
+	auto server_auth_disallowed(PCCERT_CONTEXT cert) -> bool
+	{
+		const usage_property p = read_usage_property(cert, CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID);
+		return p == usage_property::lists_server_auth || p == usage_property::unreadable;
+	}
+
+	// A NotBefore date (header) applies to serverAuth: the date property is
+	// there (whatever its value, or when it cannot be read), and the usage
+	// property is absent (all uses), lists serverAuth or cannot be read.
+	auto server_auth_not_before(PCCERT_CONTEXT cert) -> bool
+	{
+		DWORD size = 0;
+		if (CertGetCertificateContextProperty(cert, not_before_filetime_prop_id, nullptr, &size) == FALSE
+			&& is_not_found(GetLastError())) {
+			return false;
+		}
+		return read_usage_property(cert, not_before_enhkey_usage_prop_id) != usage_property::omits_server_auth;
 	}
 
 	// Marked disallowed (the property's FILETIME is when; any value
@@ -150,7 +188,7 @@ namespace {
 		const BYTE *der = cert->pbCertEncoded;
 		return {
 			.der = std::vector<unsigned char>(der, der + cert->cbCertEncoded),
-			.server_auth = server_auth_allowed(cert) && !server_auth_disallowed(cert),
+			.server_auth = server_auth_allowed(cert) && !server_auth_disallowed(cert) && !server_auth_not_before(cert),
 			.distrusted = has_disallowed_filetime(cert) || in_store(disallowed, cert),
 		};
 	}

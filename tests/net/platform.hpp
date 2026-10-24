@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -87,18 +88,23 @@ inline void unset_env(const char *name)
 }
 
 // `arg` quoted as one word for the shell run_command uses: single quotes
-// for sh, double quotes for cmd.exe (and the CRT's argv parsing).
+// for sh; double quotes for cmd.exe and the CRT's argv parsing, with the
+// backslashes that end the word doubled so the closing quote stays one.
+// cmd.exe cannot quote '"' and expands '%' even inside quotes: on Windows
+// an argument with either throws std::invalid_argument (the tests pass
+// paths, URLs and filters without them).
 [[nodiscard]] inline auto shell_quote(std::string_view arg) -> std::string
 {
 	std::string out;
 #ifdef _WIN32
-	out += '"';
-	for (const char c : arg) {
-		if (c == '"') {
-			out += '\\';
-		}
-		out += c;
+	if (arg.find_first_of("\"%") != std::string_view::npos) {
+		throw std::invalid_argument("shell_quote: cmd.exe cannot quote '\"' or '%'");
 	}
+	out += '"';
+	out += arg;
+	// Backslashes are literal except before a quote, as the closing one.
+	const std::size_t last = arg.find_last_not_of('\\');
+	out.append(arg.size() - (last == std::string_view::npos ? 0 : last + 1), '\\');
 	out += '"';
 #else
 	out += '\'';
@@ -223,15 +229,12 @@ class blocking_socket
   public:
 	blocking_socket() = default;
 	explicit blocking_socket(raw_socket_handle s) : handle_(s) {}
-	blocking_socket(blocking_socket &&other) noexcept
-	  : handle_(std::exchange(other.handle_, invalid_raw_socket)), closed_(std::exchange(other.closed_, false))
-	{}
+	blocking_socket(blocking_socket &&other) noexcept : handle_(std::exchange(other.handle_, invalid_raw_socket)) {}
 	auto operator=(blocking_socket &&other) noexcept -> blocking_socket &
 	{
 		if (this != &other) {
 			close();
 			handle_ = std::exchange(other.handle_, invalid_raw_socket);
-			closed_ = std::exchange(other.closed_, false);
 		}
 		return *this;
 	}
@@ -243,24 +246,11 @@ class blocking_socket
 	// when that failed.
 	[[nodiscard]] static auto listen_loopback(int backlog) -> blocking_socket
 	{
-#ifdef _WIN32
-		static const bool started = [] {
-			WSADATA data{};
-			return ::WSAStartup(MAKEWORD(2, 2), &data) == 0;// never cleaned up: the process ends
-		}();
-		if (!started) {
-			return {};
-		}
-		blocking_socket s(::WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_NO_HANDLE_INHERIT));
-#else
-		blocking_socket s(::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0));
-#endif
+		blocking_socket s = open_tcp();
 		if (!s.valid()) {
 			return {};
 		}
-		sockaddr_in addr{};
-		addr.sin_family = AF_INET;
-		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		const sockaddr_in addr = loopback(0);
 		if (::bind(s.handle_, reinterpret_cast<const sockaddr *>(&addr), sizeof addr) != 0
 			|| ::listen(s.handle_, backlog) != 0) {
 			return {};
@@ -268,7 +258,21 @@ class blocking_socket
 		return s;
 	}
 
-	[[nodiscard]] auto valid() const -> bool { return handle_ != invalid_raw_socket && !closed_; }
+	// A connection to 127.0.0.1:`port`; not valid() when that failed.
+	[[nodiscard]] static auto connect_loopback(std::uint16_t port) -> blocking_socket
+	{
+		blocking_socket s = open_tcp();
+		if (!s.valid()) {
+			return {};
+		}
+		const sockaddr_in addr = loopback(port);
+		if (::connect(s.handle_, reinterpret_cast<const sockaddr *>(&addr), sizeof addr) != 0) {
+			return {};
+		}
+		return s;
+	}
+
+	[[nodiscard]] auto valid() const -> bool { return handle_ != invalid_raw_socket; }
 	[[nodiscard]] auto handle() const -> raw_socket_handle { return handle_; }
 
 	// The local port, 0 when it cannot be read.
@@ -286,8 +290,7 @@ class blocking_socket
 		return ntohs(addr.sin_port);
 	}
 
-	// Waits for a connection on a listener; not valid() when that failed
-	// (or interrupt() ran).
+	// Waits for a connection on a listener; not valid() when that failed.
 	[[nodiscard]] auto accept() const -> blocking_socket
 	{
 #ifdef _WIN32
@@ -301,27 +304,51 @@ class blocking_socket
 #endif
 	}
 
-	// Wakes a thread blocked in accept() on this listener (or reading this
-	// socket); the socket is unusable after. Winsock does not wake a blocked
-	// accept on shutdown, only on closesocket, so the socket is closed there
-	// (the handle stays as it is for the blocked thread).
-	void interrupt()// NOLINT(readability-make-member-function-const): the Winsock branch sets closed_
+	// Wakes a thread blocked in accept() on this listener, or about to
+	// call it: connects to it and hangs up, so that accept returns a
+	// connection that ends at once. The same on both platforms (Winsock
+	// does not wake accept on shutdown), and the listener stays open: close
+	// it only once that thread is done, or its handle could be reused under
+	// an accept that has not started yet.
+	void wake_accept() const
 	{
-		if (!valid()) {
-			return;
+		if (const std::uint16_t p = port(); p != 0) {
+			(void)connect_loopback(p);// closes at once
 		}
-#ifdef _WIN32
-		(void)::closesocket(handle_);
-		closed_ = true;
-#else
-		shutdown_both(handle_);
-#endif
 	}
 
   private:
+	// A TCP socket, not inheritable. On Windows: started Winsock, and
+	// overlapped, which SO_RCVTIMEO needs to time a blocking recv out.
+	[[nodiscard]] static auto open_tcp() -> blocking_socket
+	{
+#ifdef _WIN32
+		static const bool started = [] {
+			WSADATA data{};
+			return ::WSAStartup(MAKEWORD(2, 2), &data) == 0;// never cleaned up: the process ends
+		}();
+		if (!started) {
+			return {};
+		}
+		return blocking_socket(::WSASocketW(
+		  AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT));
+#else
+		return blocking_socket(::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0));
+#endif
+	}
+
+	[[nodiscard]] static auto loopback(std::uint16_t port) -> sockaddr_in
+	{
+		sockaddr_in addr{};
+		addr.sin_family = AF_INET;
+		addr.sin_port = htons(port);
+		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		return addr;
+	}
+
 	void close()
 	{
-		if (handle_ != invalid_raw_socket && !closed_) {
+		if (handle_ != invalid_raw_socket) {
 #ifdef _WIN32
 			(void)::closesocket(handle_);
 #else
@@ -329,11 +356,9 @@ class blocking_socket
 #endif
 		}
 		handle_ = invalid_raw_socket;
-		closed_ = false;
 	}
 
 	raw_socket_handle handle_ = invalid_raw_socket;
-	bool closed_ = false;// interrupt() closed it already (Winsock)
 };
 
 }// namespace jhetz::ldap::test

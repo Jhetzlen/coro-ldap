@@ -784,20 +784,31 @@ TEST_CASE("jhetz-ldapsearch against the in-process server", "[net][cli]")
 	const std::string cli = shell_quote(JHETZ_LDAPSEARCH);
 	const std::string url = std::string(srv.url().to_string());
 
-	auto [status, out] =
-	  run_command(cli + " -D cn=admin,dc=example,dc=org -w secret --page 5 "
-				  + shell_quote(url + "/ou=people,dc=example,dc=org") + " " + shell_quote("(uid=*)") + " cn");
-	CHECK(status == 0);
-	CHECK_THAT(out, Catch::Matchers::ContainsSubstring("dn: uid=x,ou=people,dc=example,dc=org\ncn: X\n"));
-	CHECK_THAT(out, Catch::Matchers::ContainsSubstring("dn: uid=y,ou=people,dc=example,dc=org"));
-	CHECK_THAT(out, Catch::Matchers::ContainsSubstring("# 2 entries in 1 pages"));
-
-	auto [bad_status, bad_out] = run_command(cli + " -D cn=admin,dc=example,dc=org -w wrong " + shell_quote(url));
-	CHECK(bad_status == 1);
-	CHECK_THAT(bad_out, Catch::Matchers::ContainsSubstring("invalid credentials"));
-
-	auto [usage_status, usage_out] = run_command(cli + " -Y PLAIN " + shell_quote(url));
-	CHECK(usage_status == 2);
-	CHECK_THAT(usage_out, Catch::Matchers::ContainsSubstring("only -Y EXTERNAL is supported"));
+	// status is -1 when popen failed or the command did not exit (a signal).
+	{
+		auto [status, out] =
+		  run_command(cli + " -D cn=admin,dc=example,dc=org -w secret --page 5 "
+					  + shell_quote(url + "/ou=people,dc=example,dc=org") + " " + shell_quote("(uid=*)") + " cn");
+		INFO("search output: " << out);
+		REQUIRE(status != -1);
+		CHECK(status == 0);
+		CHECK_THAT(out, Catch::Matchers::ContainsSubstring("dn: uid=x,ou=people,dc=example,dc=org\ncn: X\n"));
+		CHECK_THAT(out, Catch::Matchers::ContainsSubstring("dn: uid=y,ou=people,dc=example,dc=org"));
+		CHECK_THAT(out, Catch::Matchers::ContainsSubstring("# 2 entries in 1 pages"));
+	}
+	{
+		auto [status, out] = run_command(cli + " -D cn=admin,dc=example,dc=org -w wrong " + shell_quote(url));
+		INFO("wrong password output: " << out);
+		REQUIRE(status != -1);
+		CHECK(status == 1);
+		CHECK_THAT(out, Catch::Matchers::ContainsSubstring("invalid credentials"));
+	}
+	{
+		auto [status, out] = run_command(cli + " -Y PLAIN " + shell_quote(url));
+		INFO("usage error output: " << out);
+		REQUIRE(status != -1);
+		CHECK(status == 2);
+		CHECK_THAT(out, Catch::Matchers::ContainsSubstring("only -Y EXTERNAL is supported"));
+	}
 }
 #endif

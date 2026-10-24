@@ -26,13 +26,13 @@
 #include <openssl/x509.h>
 
 #include <array>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <functional>
 #include <latch>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -954,16 +954,23 @@ class raw_tls_server
 	raw_tls_server(const raw_tls_server &) = delete;
 	auto operator=(const raw_tls_server &) -> raw_tls_server & = delete;
 
-	// Unblocks the thread (accept, read) if a test failed half way.
+	// Unblocks the thread (accept, read) if a test failed half way. The
+	// listener and the connection close only after the join, or under the
+	// lock (serve), so no handle is reused under a call still to come.
 	~raw_tls_server()
 	{
-		listener_.interrupt();
-		if (const raw_socket_handle s = conn_.load(); s != invalid_raw_socket) {
-			shutdown_both(s);
+		if (!thread_.joinable()) {
+			return;
 		}
-		if (thread_.joinable()) {
-			thread_.join();
+		{
+			const std::scoped_lock lock(conn_mutex_);
+			stopping_ = true;
+			if (conn_ != invalid_raw_socket) {
+				shutdown_both(conn_);
+			}
 		}
+		listener_.wake_accept();
+		thread_.join();
 	}
 
 	[[nodiscard]] auto url() const -> std::string { return "ldaps://127.0.0.1:" + std::to_string(port_); }
@@ -990,7 +997,13 @@ class raw_tls_server
 		if (!conn.valid()) {
 			return "accept failed";
 		}
-		conn_.store(conn.handle());
+		{
+			const std::scoped_lock lock(conn_mutex_);
+			if (stopping_) {
+				return "stopped before the handshake";
+			}
+			conn_ = conn.handle();
+		}
 		std::string out;
 		{
 			const std::unique_ptr<SSL, ssl_free> ssl(SSL_new(ctx_.get()));
@@ -1002,13 +1015,18 @@ class raw_tls_server
 				out = run(ssl.get());
 			}
 		}
-		conn_.store(invalid_raw_socket);
+		{
+			const std::scoped_lock lock(conn_mutex_);
+			conn_ = invalid_raw_socket;
+		}
 		return out;// conn closes here
 	}
 
 	std::unique_ptr<SSL_CTX, ssl_ctx_free> ctx_{};
 	blocking_socket listener_{};
-	std::atomic<raw_socket_handle> conn_{ invalid_raw_socket };
+	std::mutex conn_mutex_{};
+	raw_socket_handle conn_ = invalid_raw_socket;// open while set; guarded by conn_mutex_
+	bool stopping_ = false;// the destructor runs; guarded by conn_mutex_
 	std::uint16_t port_ = 0;
 	std::thread thread_{};
 	std::string result_{};

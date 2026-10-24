@@ -28,8 +28,10 @@ struct system_certificate
 {
 	std::vector<unsigned char> der{};
 	// The store's extended key usage property allows TLS server
-	// authentication (or restricts nothing), and its disallowed extended
-	// key usage property does not list it.
+	// authentication (or restricts nothing), its disallowed extended key
+	// usage property does not list it, and no NotBefore date applies to it
+	// (CERT_NOT_BEFORE_FILETIME_PROP_ID: OpenSSL cannot trust a root for
+	// certificates issued before a date only, so it is not trusted).
 	bool server_auth = true;
 	// Distrusted: marked disallowed (CERT_DISALLOWED_FILETIME_PROP_ID) or
 	// also in the "Disallowed" store.
