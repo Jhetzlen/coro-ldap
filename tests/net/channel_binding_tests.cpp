@@ -42,11 +42,6 @@
 #include <variant>
 #include <vector>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 namespace ldap = jhetz::ldap;
 namespace net = jhetz::ldap::net;
 namespace capy = boost::capy;
@@ -949,16 +944,10 @@ class raw_tls_server
 		REQUIRE(key != nullptr);
 		REQUIRE(SSL_CTX_use_PrivateKey(ctx_.get(), key.get()) == 1);
 
-		listener_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
-		REQUIRE(listener_ >= 0);
-		sockaddr_in addr{};
-		addr.sin_family = AF_INET;
-		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-		REQUIRE(::bind(listener_, reinterpret_cast<const sockaddr *>(&addr), sizeof addr) == 0);
-		REQUIRE(::listen(listener_, 1) == 0);
-		socklen_t len = sizeof addr;
-		REQUIRE(::getsockname(listener_, reinterpret_cast<sockaddr *>(&addr), &len) == 0);
-		port_ = ntohs(addr.sin_port);
+		listener_ = blocking_socket::listen_loopback(1);
+		REQUIRE(listener_.valid());
+		port_ = listener_.port();
+		REQUIRE(port_ != 0);
 		thread_ = std::thread([this, run = std::move(run)] { result_ = serve(run); });
 	}
 
@@ -968,14 +957,13 @@ class raw_tls_server
 	// Unblocks the thread (accept, read) if a test failed half way.
 	~raw_tls_server()
 	{
-		::shutdown(listener_, SHUT_RDWR);
-		if (const int fd = conn_.load(); fd >= 0) {
-			::shutdown(fd, SHUT_RDWR);
+		listener_.interrupt();
+		if (const raw_socket_handle s = conn_.load(); s != invalid_raw_socket) {
+			shutdown_both(s);
 		}
 		if (thread_.joinable()) {
 			thread_.join();
 		}
-		::close(listener_);
 	}
 
 	[[nodiscard]] auto url() const -> std::string { return "ldaps://127.0.0.1:" + std::to_string(port_); }
@@ -998,15 +986,15 @@ class raw_tls_server
 
 	auto serve(const script &run) -> std::string
 	{
-		const int fd = ::accept4(listener_, nullptr, nullptr, SOCK_CLOEXEC);
-		if (fd < 0) {
+		blocking_socket conn = listener_.accept();
+		if (!conn.valid()) {
 			return "accept failed";
 		}
-		conn_.store(fd);
+		conn_.store(conn.handle());
 		std::string out;
 		{
 			const std::unique_ptr<SSL, ssl_free> ssl(SSL_new(ctx_.get()));
-			if (ssl == nullptr || SSL_set_fd(ssl.get(), fd) != 1) {
+			if (ssl == nullptr || SSL_set_fd(ssl.get(), openssl_fd(conn.handle())) != 1) {
 				out = "SSL_new failed";
 			} else if (SSL_accept(ssl.get()) != 1) {
 				out = "server handshake: " + openssl_error();
@@ -1014,14 +1002,13 @@ class raw_tls_server
 				out = run(ssl.get());
 			}
 		}
-		conn_.store(-1);
-		::close(fd);
-		return out;
+		conn_.store(invalid_raw_socket);
+		return out;// conn closes here
 	}
 
 	std::unique_ptr<SSL_CTX, ssl_ctx_free> ctx_{};
-	int listener_ = -1;
-	std::atomic<int> conn_{ -1 };
+	blocking_socket listener_{};
+	std::atomic<raw_socket_handle> conn_{ invalid_raw_socket };
 	std::uint16_t port_ = 0;
 	std::thread thread_{};
 	std::string result_{};
@@ -1038,12 +1025,11 @@ auto wait_for_close(SSL *ssl) -> std::string
 
 // Reads the raw socket, past any TLS records, until the peer closes it, or
 // for 10 s at most (a client that never closes fails the test, not hangs it).
-void drain_until_close(int fd)
+void drain_until_close(raw_socket_handle s)
 {
-	const timeval limit{ .tv_sec = 10, .tv_usec = 0 };
-	::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &limit, sizeof limit);
+	set_receive_timeout(s, 10);
 	std::array<char, 256> buf{};
-	while (::recv(fd, buf.data(), buf.size(), 0) > 0) {}
+	while (receive_some(s, buf) > 0) {}
 }
 
 // Reads one LDAP request (small enough for one read) and answers it if it
@@ -1161,7 +1147,7 @@ TEST_CASE("channel binding: the client refuses TLS 1.2 renegotiation", "[net][tl
 		// the connection, and Corosio fails a pending read on a reset
 		// without reading the handshake_failure alert queued before it.
 		// Read until the client closes, so the server's close sends a FIN.
-		drain_until_close(SSL_get_fd(ssl));
+		drain_until_close(socket_of_openssl_fd(SSL_get_fd(ssl)));
 		return out;
 	});
 	auto c = connect_raw(ioc, srv);
