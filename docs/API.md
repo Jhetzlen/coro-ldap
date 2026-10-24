@@ -501,7 +501,16 @@ itself needs only ICU.
   typed filters `filters::field<&T::m>() == v`, and on the connection
   `search_as<T>`, `modify<T>(dn, changes)` and `add(dn, value)`. Mistakes
   (unmapped or read_only member, wrong value type, invalid names) fail to
-  compile; `tests/compile/` checks each.
+  compile; `tests/compile/` checks each. Encoding can fail (breaking
+  change, coro-ldap-vcp): `value_traits<T>::encode` returns `std::string`
+  or `result<std::string>` (`detail::encode_value` takes both); the
+  string traits reject ill-formed UTF-8, enums a value without a name and
+  `sys_seconds` a year outside 0000-9999, all as `encode_error`.
+  `to_attributes` returns `result<...>` and `change<T>::wire` is a
+  `result<modify_change>`; `modify<T>` and `add(dn, value)` return the
+  error before sending anything, and a typed filter on such a value is the
+  empty filter (fails with `invalid_filter` when sent).
+
 - `jhetz/ldap/ad.hpp`: Active Directory's Large Integer syntax
   (1.2.840.113556.1.4.906) as std::chrono types. `ad::filetime_clock` is a
   C++20 Clock for FILETIME (100 ns ticks since 1601-01-01 UTC;

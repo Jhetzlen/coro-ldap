@@ -408,31 +408,45 @@ class connection
 	}
 
 	// modify<T>: changes built with ldap::replace / add / remove<&T::member>.
+	// A change whose value did not encode fails the call with its error
+	// ("modify uid=jdoe,...: replace mail: not valid UTF-8 (...)") before
+	// anything is sent.
 	template<described T>
 	auto modify(dn object, std::vector<change<T>> changes, request_controls controls = {})
 	  -> boost::capy::task<result<response>>
 	{
-		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
-			co_return std::unexpected(std::move(c.error()));
-		}
 		modify_params p{ .object = std::move(object), .controls = std::move(controls) };
 		p.changes.reserve(changes.size());
 		for (auto &c : changes) {
-			p.changes.push_back(std::move(c.wire));
+			if (!c.wire) {
+				co_return std::unexpected(
+				  detail::with_context(std::move(c.wire.error()), detail::op_context("modify", p.object)));
+			}
+			p.changes.push_back(std::move(*c.wire));
+		}
+		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
+			co_return std::unexpected(std::move(c.error()));
 		}
 		co_return co_await modify(std::move(p));
 	}
 
 	// add(dn, value): the attributes of ldap::to_attributes(value) (no
-	// read_only members, objectClass from the descriptor).
+	// read_only members, objectClass from the descriptor). A member that
+	// does not encode fails the call ("add uid=jdoe,...: attribute mail:
+	// ...") before anything is sent.
 	template<described T>
 	auto add(dn entry, T value, request_controls controls = {}) -> boost::capy::task<result<response>>
 	{
+		auto attributes = to_attributes(value);
+		if (!attributes) {
+			co_return std::unexpected(
+			  detail::with_context(std::move(attributes.error()), detail::op_context("add", entry)));
+		}
 		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
 			co_return std::unexpected(std::move(c.error()));
 		}
-		co_return co_await add(
-		  add_params{ .entry = std::move(entry), .attributes = to_attributes(value), .controls = std::move(controls) });
+		co_return co_await add(add_params{
+		  .entry = std::move(entry), .attributes = std::move(*attributes), .controls = std::move(controls) });
 	}
 
 	// StartTLS (RFC 4511 section 4.14): upgrades a plain ldap:// connection to

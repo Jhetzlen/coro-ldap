@@ -135,7 +135,39 @@ TEST_CASE("typed: modify<T> and add(dn, T)", "[net][mapping]")
 			  { { "objectClass", { "inetOrgPerson" } }, { "uid", { "jdoe" } }, { "uidNumber", { "2000" } } } } });
 }
 
+// A value that does not encode fails modify<T> and add(dn, T) before
+// anything is sent, the schema check included.
+TEST_CASE("typed: modify<T> and add(dn, T) fail before sending on a value that does not encode", "[net][mapping]")
+{
+	mock_ldap m({ .schema_check = ldap::schema_check::on_first_use });
+	m.serve({});
+	const ldap::dn who{ "uid=jdoe,ou=people,dc=example,dc=org" };
+
+	auto mod = m.run(m.conn.modify<account>(who,
+	  { ldap::replace<&account::uid_number>(std::int64_t{ 2000 }),
+		ldap::replace<&account::mail>("jdoe\xFF@example.org"),
+		ldap::replace<&account::uid>("j\xC3") }));
+	REQUIRE_FALSE(mod.has_value());
+	CHECK(mod.error().code == ldap::client_errc::encode_error);
+	CHECK(
+	  std::string(mod.error().context)
+	  == "modify uid=jdoe,ou=people,dc=example,dc=org: replace mail: not valid UTF-8 (ill-formed sequence at offset "
+		 "4)");
+
+	auto add = m.run(m.conn.add(who, account{ .uid = "jdoe\xED\xA0\x80", .mail = std::nullopt, .groups = {} }));
+	REQUIRE_FALSE(add.has_value());
+	CHECK(add.error().code == ldap::client_errc::encode_error);
+	CHECK(
+	  std::string(add.error().context)
+	  == "add uid=jdoe,ou=people,dc=example,dc=org: attribute uid: not valid UTF-8 (ill-formed sequence at offset 4)");
+
+	CHECK(m.conn.is_open());
+	m.check_server();
+	CHECK(m.log.received.empty());
+}
+
 // ---------------------------------------------------------------- schema
+
 
 namespace {
 

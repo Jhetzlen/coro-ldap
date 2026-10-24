@@ -201,18 +201,31 @@ TEST_CASE("string value_traits take only well-formed UTF-8", "[mapping][traits][
 			CHECK(std::string_view(p.error().context) == expected);
 			CHECK(ldap::detail::invalid_utf8_offset(bad.raw) == bad.offset);
 			CHECK_FALSE(ldap::detail::is_valid_utf8(bad.raw));
+			// Encoding checks the same, as encode_error.
+			const auto es = ldap::value_traits<std::string>::encode(std::string(bad.raw));
+			REQUIRE_FALSE(es.has_value());
+			CHECK(es.error().code == ldap::client_errc::encode_error);
+			CHECK(std::string_view(es.error().context) == expected);
+			const auto ep = ldap::value_traits<std::pmr::string>::encode(std::pmr::string(bad.raw));
+			REQUIRE_FALSE(ep.has_value());
+			CHECK(ep.error().code == ldap::client_errc::encode_error);
+			CHECK(std::string_view(ep.error().context) == expected);
 		}
 	}
-	// Encoding does not check: the caller's string goes out as is.
-	CHECK(ldap::value_traits<std::string>::encode("\xFF") == "\xFF");
+	CHECK(ldap::value_traits<std::string>::encode("caf\xC3\xA9") == "caf\xC3\xA9");
 }
+
 
 TEST_CASE("value_traits for enums with a name table", "[mapping][traits]")
 {
 	CHECK(ldap::value_traits<status>::decode("retired") == status::retired);
 	CHECK_FALSE(ldap::value_traits<status>::decode("Retired").has_value());
 	CHECK(ldap::value_traits<status>::encode(status::locked) == "locked");
-	CHECK(ldap::value_traits<status>::encode(static_cast<status>(9)) == "9");
+	// A value without a name: decode could not read it back.
+	auto unknown = ldap::value_traits<status>::encode(static_cast<status>(9));
+	REQUIRE_FALSE(unknown.has_value());
+	CHECK(unknown.error().code == ldap::client_errc::encode_error);
+	CHECK(std::string_view(unknown.error().context) == "value 9 is not in ldap::enum_names");
 }
 
 TEST_CASE("GeneralizedTime", "[mapping][traits][time]")
@@ -267,7 +280,13 @@ TEST_CASE("GeneralizedTime", "[mapping][traits][time]")
 	CHECK(ldap::format_generalized_time(noon + 5min + 7s) == "20240229120507Z");
 	CHECK(ldap::format_generalized_time(sys_seconds{}) == "19700101000000Z");
 	CHECK_FALSE(ldap::format_generalized_time(sys_days(10000y / January / 1)).has_value());
-	CHECK_THROWS_AS(ldap::value_traits<sys_seconds>::encode(sys_days(10000y / January / 1)), std::out_of_range);
+	// Out of range is encode_error, no exception.
+	auto far = ldap::value_traits<sys_seconds>::encode(sys_days(10000y / January / 1));
+	REQUIRE_FALSE(far.has_value());
+	CHECK(far.error().code == ldap::client_errc::encode_error);
+	CHECK(std::string_view(far.error().context) == "GeneralizedTime: year 10000 outside 0000-9999");
+	CHECK_FALSE(ldap::value_traits<sys_seconds>::encode(sys_days(-1y / December / 31)).has_value());
+	CHECK(ldap::value_traits<sys_seconds>::encode(sys_seconds{}) == "19700101000000Z");
 	// Round trip.
 	const sys_seconds t = sys_days(1999y / December / 31) + 23h + 59min + 58s;
 	CHECK(ldap::parse_generalized_time(*ldap::format_generalized_time(t)) == t);
@@ -455,8 +474,11 @@ TEST_CASE("to_attributes writes objectClass and skips read_only and empty member
 	auto p = *ldap::decode<person>(full_entry());
 	p.mail.reset();
 	p.member_of.clear();
-	const auto attrs = ldap::to_attributes(p);
+	const auto encoded = ldap::to_attributes(p);
+	REQUIRE(encoded.has_value());
+	const auto &attrs = *encoded;
 	std::vector<std::string> names;
+	names.reserve(attrs.size());
 	for (const auto &a : attrs) {
 		names.emplace_back(a.type);
 	}
@@ -481,8 +503,52 @@ TEST_CASE("to_attributes writes objectClass and skips read_only and empty member
 	CHECK(back->state == p.state);
 
 	const auto dev = ldap::to_attributes(device{ .object_class = { "top", "device" }, .cn = "printer" });
-	REQUIRE(dev.size() == 2);
-	CHECK(dev[0] == ldap::partial_attribute{ "objectClass", { "top", "device" } });
+	REQUIRE(dev.has_value());
+	REQUIRE(dev->size() == 2);
+	CHECK((*dev)[0] == ldap::partial_attribute{ "objectClass", { "top", "device" } });
+}
+
+TEST_CASE("to_attributes fails on a member that does not encode", "[mapping][encode]")
+{
+	auto p = *ldap::decode<person>(full_entry());
+	SECTION("invalid UTF-8 in a required string")
+	{
+		p.cn = "Jos\xC3";
+		auto attrs = ldap::to_attributes(p);
+		REQUIRE_FALSE(attrs.has_value());
+		CHECK(attrs.error().code == ldap::client_errc::encode_error);
+		CHECK(
+		  std::string_view(attrs.error().context) == "attribute cn: not valid UTF-8 (ill-formed sequence at offset 3)");
+	}
+	SECTION("invalid UTF-8 in an optional string")
+	{
+		p.mail = "\xFF@example.org";
+		auto attrs = ldap::to_attributes(p);
+		REQUIRE_FALSE(attrs.has_value());
+		CHECK(std::string_view(attrs.error().context)
+			  == "attribute mail: not valid UTF-8 (ill-formed sequence at offset 0)");
+	}
+	SECTION("invalid UTF-8 in one value of a multi-valued string")
+	{
+		p.telephone = { "1", "2\xED\xA0\x80" };// a surrogate
+		auto attrs = ldap::to_attributes(p);
+		REQUIRE_FALSE(attrs.has_value());
+		CHECK(std::string_view(attrs.error().context)
+			  == "attribute telephoneNumber: not valid UTF-8 (ill-formed sequence at offset 1)");
+	}
+	SECTION("an enum value without a name")
+	{
+		p.state = static_cast<status>(7);
+		auto attrs = ldap::to_attributes(p);
+		REQUIRE_FALSE(attrs.has_value());
+		CHECK(attrs.error().code == ldap::client_errc::encode_error);
+		CHECK(std::string_view(attrs.error().context) == "attribute x-status: value 7 is not in ldap::enum_names");
+	}
+	SECTION("a read_only member is not encoded")
+	{
+		p.created = sys_days(10000y / January / 1);
+		CHECK(ldap::to_attributes(p).has_value());
+	}
 }
 
 TEST_CASE("descriptor helpers", "[mapping]")
@@ -520,6 +586,31 @@ TEST_CASE("typed changes encode with the member's value_traits", "[mapping][modi
 		  == ldap::modify_change{ op::delete_, { "memberOf", { "cn=admins,dc=example,dc=org" } } });
 }
 
+TEST_CASE("a typed change carries the encode error of its value", "[mapping][modify]")
+{
+	const auto check_failed = [](const ldap::change<person> &c, std::string_view context) {
+		REQUIRE_FALSE(c.wire.has_value());
+		CHECK(c.wire.error().code == ldap::client_errc::encode_error);
+		CHECK(std::string_view(c.wire.error().context) == context);
+	};
+	check_failed(
+	  ldap::replace<&person::cn>("\xC0\xAF"), "replace cn: not valid UTF-8 (ill-formed sequence at offset 0)");
+	check_failed(ldap::replace<&person::mail>(std::optional<std::string>("a\xFF")),
+	  "replace mail: not valid UTF-8 (ill-formed sequence at offset 1)");
+	check_failed(ldap::add<&person::telephone>(std::vector<std::string>{ "1", "\xF8" }),
+	  "add telephoneNumber: not valid UTF-8 (ill-formed sequence at offset 0)");
+	check_failed(ldap::add<&person::telephone>(std::string("x\xE2\x82")),
+	  "add telephoneNumber: not valid UTF-8 (ill-formed sequence at offset 1)");
+	check_failed(ldap::remove<&person::telephone>(std::string("\x80")),
+	  "delete telephoneNumber: not valid UTF-8 (ill-formed sequence at offset 0)");
+	check_failed(
+	  ldap::replace<&person::state>(static_cast<status>(5)), "replace x-status: value 5 is not in ldap::enum_names");
+	// Full UTF-8 goes through.
+	CHECK(ldap::replace<&person::cn>("Jos\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC \xF0\x9F\x98\x80").wire
+		  == ldap::modify_change{
+			ldap::modify_operation::replace, { "cn", { "Jos\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC \xF0\x9F\x98\x80" } } });
+}
+
 TEST_CASE("typed filters and object class narrowing", "[mapping][filter]")
 {
 	CHECK((ldap::filters::field<&person::uid>() == "jdoe").to_string() == "(uid=jdoe)");
@@ -528,8 +619,123 @@ TEST_CASE("typed filters and object class narrowing", "[mapping][filter]")
 	CHECK((ldap::filters::field<&person::state>() == status::active).to_string() == "(x-status=active)");
 	CHECK(ldap::filters::field<&person::mail>().present().to_string() == "(mail=*)");
 	CHECK((ldap::filters::field<&person::uid>() == "a*b").to_string() == "(uid=a\\2ab)");// values are escaped
+	CHECK((ldap::filters::field<&person::cn>() == "Jos\xC3\xA9").to_string() == "(cn=Jos\xC3\xA9)");
+
 
 	const auto f = ldap::narrow_filter<person>(ldap::filters::attr("uid") == "jdoe");
 	CHECK(f.to_string() == "(&(objectClass=inetOrgPerson)(objectClass=posixAccount)(uid=jdoe))");
 	CHECK(ldap::narrow_filter<device>(ldap::filters::attr("cn") == "x").to_string() == "(cn=x)");
+}
+
+TEST_CASE("a typed filter on a value that does not encode is the empty filter", "[mapping][filter]")
+{
+	using ldap::filters::field;
+	const ldap::filter bad[] = {
+		field<&person::uid>() == "\xFF",
+		field<&person::cn>() >= "a\xC3",
+		field<&person::cn>() <= "\xED\xA0\x80",
+		field<&person::cn>().approx("\x80"),
+		field<&person::state>() == static_cast<status>(9),
+	};
+	for (const auto &f : bad) {
+		CHECK(f.empty());
+		// It stays empty through && || !, and does not encode.
+		const auto combined = !(f && (field<&person::uid>() == "jdoe")) || (field<&person::uid>() == "x");
+		CHECK(combined.empty());
+		ldap::ber::writer w;
+		const auto r = ldap::encode_filter(w, combined);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::invalid_filter);
+	}
+}
+
+// ---------------------------------------------------------------- custom value_traits
+
+namespace {
+
+// A trait whose encode cannot fail returns std::string.
+struct celsius
+{
+	int degrees = 0;
+};
+
+// A trait whose encode can fail returns result<std::string>.
+struct even
+{
+	int value = 0;
+};
+
+struct reading
+{
+	celsius temperature;
+	std::optional<even> count;
+};
+
+}// namespace
+
+template<> struct ldap::value_traits<celsius>
+{
+	[[nodiscard]] static auto decode(std::string_view raw) -> ldap::result<celsius>
+	{
+		auto v = ldap::value_traits<int>::decode(raw);
+		if (!v) {
+			return std::unexpected(std::move(v.error()));
+		}
+		return celsius{ *v };
+	}
+	[[nodiscard]] static auto encode(const celsius &c) -> std::string { return std::to_string(c.degrees); }
+};
+
+template<> struct ldap::value_traits<even>
+{
+	[[nodiscard]] static auto decode(std::string_view raw) -> ldap::result<even>
+	{
+		auto v = ldap::value_traits<int>::decode(raw);
+		if (!v) {
+			return std::unexpected(std::move(v.error()));
+		}
+		return even{ *v };
+	}
+	[[nodiscard]] static auto encode(const even &e) -> ldap::result<std::string>
+	{
+		if (e.value % 2 != 0) {
+			return ldap::fail(ldap::client_errc::encode_error, "odd");
+		}
+		return std::to_string(e.value);
+	}
+};
+
+template<>
+constexpr auto ldap::schema<reading> = ldap::describe(ldap::object_class("device"),
+  ldap::field<&reading::temperature>("x-temperature"),
+  ldap::field<&reading::count>("x-count"));
+
+TEST_CASE("custom value_traits may return std::string or result<std::string>", "[mapping][traits]")
+{
+	STATIC_REQUIRE(ldap::mapped_value<celsius>);
+	STATIC_REQUIRE(ldap::mapped_value<even>);
+	CHECK(ldap::detail::encode_value(celsius{ -5 }) == "-5");
+	CHECK(ldap::detail::encode_value(even{ 4 }) == "4");
+	REQUIRE_FALSE(ldap::detail::encode_value(even{ 3 }).has_value());
+
+	using op = ldap::modify_operation;
+	CHECK(ldap::replace<&reading::temperature>(celsius{ 21 }).wire
+		  == ldap::modify_change{ op::replace, { "x-temperature", { "21" } } });
+	CHECK(ldap::replace<&reading::count>(even{ 2 }).wire == ldap::modify_change{ op::replace, { "x-count", { "2" } } });
+	const auto odd = ldap::replace<&reading::count>(even{ 3 });
+	REQUIRE_FALSE(odd.wire.has_value());
+	CHECK(std::string_view(odd.wire.error().context) == "replace x-count: odd");
+
+	CHECK((ldap::filters::field<&reading::temperature>() >= celsius{ 30 }).to_string() == "(x-temperature>=30)");
+	CHECK((ldap::filters::field<&reading::count>() == even{ 1 }).empty());
+
+	const auto ok = ldap::to_attributes(reading{ .temperature = { 7 }, .count = even{ 8 } });
+	REQUIRE(ok.has_value());
+	CHECK(*ok
+		  == std::pmr::vector<ldap::partial_attribute>{
+			{ "objectClass", { "device" } }, { "x-temperature", { "7" } }, { "x-count", { "8" } } });
+	const auto failed = ldap::to_attributes(reading{ .temperature = { 7 }, .count = even{ 9 } });
+	REQUIRE_FALSE(failed.has_value());
+	CHECK(failed.error().code == ldap::client_errc::encode_error);
+	CHECK(std::string_view(failed.error().context) == "attribute x-count: odd");
 }

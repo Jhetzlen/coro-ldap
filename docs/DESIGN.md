@@ -730,21 +730,57 @@ Value conversion is an extension point, like `std::formatter`:
 ```cpp
 template<> struct jhetz::ldap::value_traits<my_type> {
     static auto decode(std::string_view raw) -> ldap::result<my_type>;  // conversion_failed on bad input
-    static auto encode(const my_type &v) -> std::string;
+    static auto encode(const my_type &v) -> std::string;               // or ldap::result<std::string>
 };
 ```
+
+`encode` returns `std::string` (or a type convertible to it) when every
+value can be written, and `ldap::result<std::string>` when some cannot
+(`encode_error`). Both forms satisfy `mapped_value<T>`, so a trait written
+for the infallible form compiles unchanged; `detail::encode_value(v)`
+normalizes either to `result<std::string>`, and the library calls only
+that. A value that does not encode stops the typed write before anything
+is sent:
+
+- `replace / add / remove<&T::m>(v)` still return `change<T>`, so brace
+  lists compose; its `wire` is a `result<modify_change>` holding the error,
+  with the change as context (`replace mail: not valid UTF-8 (...)`).
+  `modify<T>` returns the first such error, prefixed with `modify <dn>`,
+  before the schema check and before sending.
+- `to_attributes(value)` returns `result<std::pmr::vector<partial_attribute>>`
+  (context `attribute mail`), and `add(dn, T)` returns its error prefixed
+  with `add <dn>`, again before anything is sent.
+- The typed filter operators (`==`, `>=`, `<=`, `approx`) keep returning
+  `filter`: on an encode failure they return the empty filter, which is
+  already poison (section 2: it stays empty through `&&`, `||` and `!`, and
+  encoding it fails with `invalid_filter` before sending). There is no
+  `result<filter>` overload; the encode error's text is not carried, only
+  the failure.
+
+This was a breaking change (coro-ldap-vcp): before it `encode` returned
+`std::string` only, `to_attributes` returned the vector itself, and
+`change<T>::wire` was a plain `modify_change`, so ill-formed UTF-8 in a
+string member went to the server (which answered
+`invalidAttributeSyntax`), an enum value without a name went out as its
+number, and an out-of-range `sys_seconds` threw `std::out_of_range`.
 
 Built-in: `std::string`, `std::pmr::string` (the value must be
 well-formed UTF-8, RFC 3629 as RFC 4512's UTF8 rule: no overlong forms,
 surrogates, code points above U+10FFFF, truncated sequences or stray
-continuation octets, else `conversion_failed`; encoding writes the
-caller's string unchecked, since `encode` cannot fail), integers
+continuation octets, else `conversion_failed`; encoding checks the same
+and fails with `encode_error`, "not valid UTF-8 (ill-formed sequence at
+offset N)"), integers
 (decimal, range checked), `bool` (TRUE / FALSE), `ldap::dn`, `ldap::binary`
 (`std::vector<std::byte>`, a single binary value; `std::vector<ldap::binary>`
 for several), `std::chrono::sys_seconds` (GeneralizedTime: every RFC 4517
 form decodes — minutes and seconds optional, fractions of the last unit,
-`Z` or an offset; it encodes as `YYYYMMDDHHMMSSZ`), and enums with an
-`ldap::enum_names<E>` table. Map binary attributes (userPassword and the
+`Z` or an offset; it encodes as `YYYYMMDDHHMMSSZ`, and a time outside
+years 0000-9999 is `encode_error`), and enums with an
+`ldap::enum_names<E>` table (a value not in the table is `encode_error`,
+so what is written always decodes back). The string, `sys_seconds` and
+enum traits return `result<std::string>`; integers, `bool`, `dn`,
+`binary` and the AD FILETIME traits return `std::string`. Map binary
+attributes (userPassword and the
 other Octet String attributes, jpegPhoto, userCertificate, objectGUID,
 objectSid) to `ldap::binary`: a string member fails on their values, and
 `validate<T>` reports it on a binary syntax (section 6).
@@ -811,7 +847,8 @@ type decides:
 
 Typed filters encode these like any value
 (`filters::field<&user::account_expires>() <= t`); on an untyped attribute,
-use `value_traits<ad::filetime_clock::time_point>::encode(t)`. AD compares
+use `value_traits<ad::filetime_clock::time_point>::encode(t)`, which returns
+a plain `std::string` (every tick count encodes). AD compares
 the numbers, so "never" as 0 sorts below every date: expired accounts are
 `(&(accountExpires>=1)(accountExpires<=now))`. An equality filter on
 `ad::never` encodes 9223372036854775807 only and misses accounts stored as
@@ -856,6 +893,10 @@ Compile-time guarantees (all implemented, each with a compile test in
 Errors name the entry and attribute: `search ou=people,dc=example,dc=org:
 entry uid=b,ou=people,dc=example,dc=org: attribute uidNumber: not an
 integer: "x"`. A mapping error fails `search_as` but not the connection.
+Encode errors read the same way: `modify uid=jdoe,ou=people,dc=example,dc=org:
+replace mail: not valid UTF-8 (ill-formed sequence at offset 4)`, `add
+uid=jdoe,...: attribute uid: ...`.
+
 
 The untyped `ldap::entry` (dn + attribute → values) stays available for
 exploring unknown data; `ldap::decode<T>(entry)` converts one explicitly.

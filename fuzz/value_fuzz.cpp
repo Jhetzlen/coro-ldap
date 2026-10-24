@@ -36,8 +36,11 @@ template<class T> void round_trip(std::string_view text)
 		  "v.error().code == ldap::client_errc::conversion_failed");
 		return;
 	}
-	const std::string encoded = ldap::value_traits<T>::encode(*v);
-	auto again = ldap::value_traits<T>::decode(encoded);
+	// What decodes encodes (decode and encode take the same UTF-8, names and
+	// years).
+	const auto encoded = ldap::detail::encode_value(*v);
+	check(encoded.has_value(), "encoded.has_value()");
+	auto again = ldap::value_traits<T>::decode(*encoded);
 	check(again.has_value(), "again.has_value()");
 	check(*again == *v, "*again == *v");
 }

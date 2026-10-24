@@ -2,7 +2,6 @@
 
 #include "format_util.hpp"
 
-#include <stdexcept>
 #include <string>
 
 namespace jhetz::ldap {
@@ -21,6 +20,38 @@ namespace detail {
 	{
 		return make_error(
 		  client_errc::conversion_failed, detail::format("not valid UTF-8 (ill-formed sequence at offset {})", offset));
+	}
+
+	auto utf8_encode_error(std::size_t offset) -> error
+	{
+		return make_error(
+		  client_errc::encode_error, detail::format("not valid UTF-8 (ill-formed sequence at offset {})", offset));
+	}
+
+	auto enum_encode_error(std::intmax_t value) -> error
+	{
+		return make_error(client_errc::encode_error, detail::format("value {} is not in ldap::enum_names", value));
+	}
+
+	auto change_context(modify_operation op, std::string_view attribute) -> std::string
+	{
+		// The RFC 4511 section 4.6 operation names.
+		std::string_view name;
+		switch (op) {
+		case modify_operation::add:
+			name = "add";
+			break;
+		case modify_operation::delete_:
+			name = "delete";
+			break;
+		case modify_operation::replace:
+			name = "replace";
+			break;
+		case modify_operation::increment:
+			name = "increment";
+			break;
+		}
+		return detail::format("{} {}", name, attribute);
 	}
 
 	auto with_context(error e, std::string_view prefix) -> error
@@ -238,13 +269,5 @@ auto format_generalized_time(sys_seconds t) -> result<std::string>
 	  hms.seconds().count());
 }
 
-auto value_traits<sys_seconds>::encode(sys_seconds v) -> std::string
-{
-	auto s = format_generalized_time(v);
-	if (!s) {
-		throw std::out_of_range(std::string(s.error().message()));
-	}
-	return std::move(*s);
-}
 
 }// namespace jhetz::ldap

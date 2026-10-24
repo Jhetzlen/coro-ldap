@@ -46,14 +46,22 @@
 //
 //   template<> struct jhetz::ldap::value_traits<my_type> {
 //       static ldap::result<my_type> decode(std::string_view raw);  // conversion_failed on bad input
-//       static std::string encode(const my_type &v);
+//       static std::string encode(const my_type &v);                // or ldap::result<std::string>
 //   };
 //
-// Built in: std::string, std::pmr::string (well-formed UTF-8 only),
-// integers (decimal, range checked), bool (TRUE / FALSE, RFC 4517),
+// encode returns std::string (or anything convertible to it) when every
+// value can be written, or ldap::result<std::string> when some cannot
+// (encode_error). detail::encode_value(v) takes both forms and returns
+// result<std::string>. A failed encode stops the typed write before
+// anything is sent: add<T> (to_attributes) and modify<T> (the change)
+// return the error, and a typed filter becomes the empty filter, which
+// fails with invalid_filter (see filters::typed_attr).
+//
+// Built in: std::string, std::pmr::string (well-formed UTF-8 only, both
+// ways), integers (decimal, range checked), bool (TRUE / FALSE, RFC 4517),
 // ldap::dn, ldap::binary, std::chrono::sys_seconds (GeneralizedTime, RFC
-// 4517 section 3.3.13) and enums that have an ldap::enum_names table. ad.hpp adds Active Directory's
-// FILETIME dates and intervals.
+// 4517 section 3.3.13) and enums that have an ldap::enum_names table. ad.hpp
+// adds Active Directory's FILETIME dates and intervals.
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"
@@ -90,13 +98,35 @@ using binary = std::vector<std::byte>;
 // Undefined for types without a conversion: using one does not compile.
 template<class T> struct value_traits;
 
+namespace detail {
+	// What value_traits<T>::encode returns.
+	template<class T> using encode_result_t = decltype(value_traits<T>::encode(std::declval<const T &>()));
+
+	template<class R>
+	concept encode_return =
+	  std::same_as<std::remove_cvref_t<R>, result<std::string>> || std::convertible_to<R, std::string>;
+}// namespace detail
+
+// encode returns std::string (or a type convertible to it) or
+// result<std::string>.
 template<class T>
 concept mapped_value = requires(std::string_view raw, const T &v) {
 	{ value_traits<T>::decode(raw) } -> std::same_as<result<T>>;
-	{ value_traits<T>::encode(v) } -> std::convertible_to<std::string>;
+	{ value_traits<T>::encode(v) } -> detail::encode_return;
 };
 
 namespace detail {
+	// value_traits<T>::encode(v) as a result, whichever form the trait
+	// returns.
+	template<mapped_value T> [[nodiscard]] auto encode_value(const T &v) -> result<std::string>
+	{
+		if constexpr (std::same_as<std::remove_cvref_t<encode_result_t<T>>, result<std::string>>) {
+			return value_traits<T>::encode(v);
+		} else {
+			return std::string(value_traits<T>::encode(v));
+		}
+	}
+
 	// "not an integer: \"12a\"" (the value is quoted, sanitized and cut at 64
 	// bytes, see append_sanitized in src/format_util.hpp).
 	auto conversion_error(std::string_view what, std::string_view raw) -> error;
@@ -104,6 +134,21 @@ namespace detail {
 	// conversion_failed "not valid UTF-8 (ill-formed sequence at offset N)",
 	// N counted from 0; the value itself is not quoted.
 	auto utf8_conversion_error(std::size_t offset) -> error;
+
+	// The same text as encode_error: a string member to be written.
+	auto utf8_encode_error(std::size_t offset) -> error;
+
+	// encode_error "value N is not in ldap::enum_names".
+	auto enum_encode_error(std::intmax_t value) -> error;
+
+	// `text` itself, or utf8_encode_error when it is not well-formed UTF-8.
+	inline auto checked_utf8(std::string_view text) -> result<std::string>
+	{
+		if (const std::size_t bad = invalid_utf8_offset(text); bad != std::string_view::npos) {
+			return std::unexpected(utf8_encode_error(bad));
+		}
+		return std::string(text);
+	}
 }// namespace detail
 
 // Text: the value must be well-formed UTF-8 (RFC 3629, as RFC 4512 UTF8
@@ -111,7 +156,8 @@ namespace detail {
 // conversion_failed. Map binary attributes (userPassword and the other
 // Octet String ones, jpegPhoto, userCertificate, objectGUID, ...) to
 // ldap::binary instead; validate<T> reports a string member on a binary
-// syntax. Encoding does not check: the caller's text goes out as is.
+// syntax. Encoding checks the same: ill-formed UTF-8 is encode_error, with
+// the offset, and nothing is sent.
 template<> struct value_traits<std::string>
 {
 	[[nodiscard]] static auto decode(std::string_view raw) -> result<std::string>
@@ -121,7 +167,7 @@ template<> struct value_traits<std::string>
 		}
 		return std::string(raw);
 	}
-	[[nodiscard]] static auto encode(const std::string &v) -> std::string { return v; }
+	[[nodiscard]] static auto encode(const std::string &v) -> result<std::string> { return detail::checked_utf8(v); }
 };
 
 template<> struct value_traits<std::pmr::string>
@@ -133,7 +179,10 @@ template<> struct value_traits<std::pmr::string>
 		}
 		return std::pmr::string(raw);
 	}
-	[[nodiscard]] static auto encode(const std::pmr::string &v) -> std::string { return std::string(v); }
+	[[nodiscard]] static auto encode(const std::pmr::string &v) -> result<std::string>
+	{
+		return detail::checked_utf8(v);
+	}
 };
 
 namespace detail {
@@ -206,9 +255,11 @@ template<> struct value_traits<std::chrono::sys_seconds>
 	{
 		return parse_generalized_time(raw);
 	}
-	// A time outside years 0000-9999 cannot be written: throws
-	// std::out_of_range (a programming error, like a bad DN literal).
-	[[nodiscard]] static auto encode(std::chrono::sys_seconds v) -> std::string;
+	// A time outside years 0000-9999 cannot be written: encode_error.
+	[[nodiscard]] static auto encode(std::chrono::sys_seconds v) -> result<std::string>
+	{
+		return format_generalized_time(v);
+	}
 };
 
 // Enums map to names through a table:
@@ -216,7 +267,8 @@ template<> struct value_traits<std::chrono::sys_seconds>
 //   template<> constexpr auto jhetz::ldap::enum_names<color> = std::to_array<std::pair<color, std::string_view>>(
 //       {{color::red, "red"}, {color::green, "green"}});
 //
-// Names are matched exactly; an unknown name is conversion_failed.
+// Names are matched exactly; an unknown name is conversion_failed, and
+// encoding a value that is not in the table is encode_error.
 struct no_enum_names
 {
 };
@@ -235,14 +287,14 @@ struct value_traits<E>
 		}
 		return std::unexpected(detail::conversion_error("not a known name", raw));
 	}
-	[[nodiscard]] static auto encode(E v) -> std::string
+	[[nodiscard]] static auto encode(E v) -> result<std::string>
 	{
 		for (const auto &[value, name] : enum_names<E>) {
 			if (value == v) {
 				return std::string(name);
 			}
 		}
-		return std::to_string(std::to_underlying(v));// not in the table: its number
+		return std::unexpected(detail::enum_encode_error(static_cast<std::intmax_t>(std::to_underlying(v))));
 	}
 };
 
@@ -488,21 +540,45 @@ template<described T> [[nodiscard]] auto decode(const entry &e) -> result<T>
 }
 
 namespace detail {
-	template<class F>
-	void encode_field(const F &f, const typename F::member &m, std::pmr::vector<partial_attribute> &out)
+	// Appends the encoded `v` to `values`; false, with `failed` set (the
+	// attribute as context), when it does not encode.
+	template<class E>
+	auto append_encoded(const E &v,
+	  std::string_view name,
+	  std::pmr::vector<std::pmr::string> &values,
+	  std::optional<error> &failed) -> bool
 	{
-		using E = F::element;
+		auto s = encode_value(v);
+		if (!s) {
+			failed = with_context(std::move(s.error()), std::string("attribute ").append(name));
+			return false;
+		}
+		values.emplace_back(*s);
+		return true;
+	}
+
+	template<class F>
+	void encode_field(const F &f,
+	  const typename F::member &m,
+	  std::pmr::vector<partial_attribute> &out,
+	  std::optional<error> &failed)
+	{
+		if (failed || f.read_only) {
+			return;
+		}
 		partial_attribute a(f.name, {}, out.get_allocator());
 		if constexpr (F::kind == cardinality::multiple) {
 			for (const auto &v : m) {
-				a.values.emplace_back(value_traits<E>::encode(v));
+				if (!append_encoded(v, f.name, a.values, failed)) {
+					return;
+				}
 			}
 		} else if constexpr (F::kind == cardinality::optional) {
-			if (m) {
-				a.values.emplace_back(value_traits<E>::encode(*m));
+			if (m && !append_encoded(*m, f.name, a.values, failed)) {
+				return;
 			}
-		} else {
-			a.values.emplace_back(value_traits<E>::encode(m));
+		} else if (!append_encoded(m, f.name, a.values, failed)) {
+			return;
 		}
 		if (!a.values.empty()) {
 			out.push_back(std::move(a));
@@ -513,10 +589,12 @@ namespace detail {
 // The attributes to add for `value`: every described member except
 // read_only ones and empty optionals / vectors, plus objectClass with the
 // descriptor's object classes when it declares some. Without declared
-// object classes the descriptor must map objectClass itself.
+// object classes the descriptor must map objectClass itself. Fails with the
+// first member that does not encode (encode_error, context "attribute
+// mail").
 template<described T>
 [[nodiscard]] auto to_attributes(const T &value, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
-  -> std::pmr::vector<partial_attribute>
+  -> result<std::pmr::vector<partial_attribute>>
 {
 	constexpr auto &d = schema<T>;
 	constexpr bool has_object_class_field =
@@ -531,21 +609,27 @@ template<described T>
 		}
 		out.push_back(std::move(oc));
 	}
+	std::optional<error> failed;
 	std::apply(
 	  [&](const auto &...f) {
-		  ((f.read_only ? void() : detail::encode_field(f, value.*std::remove_cvref_t<decltype(f)>::ptr, out)), ...);
+		  (detail::encode_field(f, value.*std::remove_cvref_t<decltype(f)>::ptr, out, failed), ...);
 	  },
 	  d.fields);
+	if (failed) {
+		return std::unexpected(std::move(*failed));
+	}
 	return out;
 }
 
 // ---------------------------------------------------------------- typed changes
 
 // A ModifyRequest change for a member of T, built by ldap::add / remove /
-// replace below; connection::modify<T> takes them.
+// replace below; connection::modify<T> takes them. A value that does not
+// encode leaves the error in `wire` (context "replace mail"), which
+// modify<T> returns before sending anything.
 template<class T> struct change
 {
-	modify_change wire;
+	result<modify_change> wire;
 };
 
 namespace detail {
@@ -559,28 +643,47 @@ namespace detail {
 	concept range_of =
 	  std::ranges::input_range<V> && std::same_as<std::remove_cvref_t<std::ranges::range_value_t<V>>, E>;
 
+	// Appends the encoded `v` to `out`, or returns its error.
+	template<class E> auto append_value(const E &v, string_list &out) -> std::optional<error>
+	{
+		auto s = encode_value(v);
+		if (!s) {
+			return std::move(s.error());
+		}
+		out.emplace_back(*s);
+		return std::nullopt;
+	}
+
 	// The values `v` stands for, for member `Ptr`: one element, an optional
 	// element (0 or 1), or, for a multi-valued member, a range of elements.
-	template<auto Ptr, class V> auto encode_values(const V &v) -> string_list
+	// Fails with the first value that does not encode.
+	template<auto Ptr, class V> auto encode_values(const V &v) -> result<string_list>
 	{
 		using F = std::remove_cvref_t<decltype(field_of<Ptr>())>;
 		using E = F::element;
 		string_list out;
+		std::optional<error> failed;
 		if constexpr (std::convertible_to<const V &, E>) {
 			// A string literal converts to E through its pointer.
 			// NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay)
-			out.emplace_back(value_traits<E>::encode(static_cast<E>(v)));
+			failed = append_value(static_cast<E>(v), out);
 		} else if constexpr (std::same_as<std::remove_cvref_t<V>, std::optional<E>>) {
 			if (v) {
-				out.emplace_back(value_traits<E>::encode(*v));
+				failed = append_value(*v, out);
 			}
 		} else if constexpr (range_of<E, V>) {
 			static_assert(F::kind == cardinality::multiple, "ldap: several values for a single-valued member");
 			for (const auto &x : v) {
-				out.emplace_back(value_traits<E>::encode(x));
+				failed = append_value(x, out);
+				if (failed) {
+					break;
+				}
 			}
 		} else {
 			static_assert(dependent_false<V>, "ldap: the value's type does not match the member's type");
+		}
+		if (failed) {
+			return std::unexpected(std::move(*failed));
 		}
 		return out;
 	}
@@ -592,11 +695,18 @@ namespace detail {
 
 	template<auto Ptr> using owner_of = member_pointer<decltype(Ptr)>::owner;
 
-	template<auto Ptr> auto make_change(modify_operation op, string_list values) -> change<owner_of<Ptr>>
+	// "replace mail": the context of a change's encode error.
+	auto change_context(modify_operation op, std::string_view attribute) -> std::string;
+
+	template<auto Ptr> auto make_change(modify_operation op, result<string_list> values) -> change<owner_of<Ptr>>
 	{
 		check_writable<Ptr>();
+		if (!values) {
+			return { std::unexpected(
+			  with_context(std::move(values.error()), change_context(op, field_of<Ptr>().name))) };
+		}
 		partial_attribute a(field_of<Ptr>().name);
-		a.values = std::move(values);
+		a.values = std::move(*values);
 		return { modify_change(op, a) };
 	}
 }// namespace detail
@@ -618,7 +728,7 @@ template<auto Ptr, class V> [[nodiscard]] auto add(const V &v) -> change<detail:
 // Removes the whole attribute, or only the given values.
 template<auto Ptr> [[nodiscard]] auto remove() -> change<detail::owner_of<Ptr>>
 {
-	return detail::make_change<Ptr>(modify_operation::delete_, {});
+	return detail::make_change<Ptr>(modify_operation::delete_, string_list{});
 }
 template<auto Ptr, class V> [[nodiscard]] auto remove(const V &v) -> change<detail::owner_of<Ptr>>
 {
@@ -630,21 +740,48 @@ template<auto Ptr, class V> [[nodiscard]] auto remove(const V &v) -> change<deta
 namespace filters {
 
 	// Filters on a described member, with values of its type:
-	// `filters::field<&person::uid_number>() >= 1000`.
+	// `filters::field<&person::uid_number>() >= 1000`. A value that does not
+	// encode (ill-formed UTF-8, an enum value without a name, ...) gives the
+	// empty filter, which stays empty through && || ! and fails with
+	// invalid_filter before anything is sent (filter.hpp); the encode error
+	// itself is not carried.
 	template<auto Ptr> class typed_attr
 	{
 		using E = std::remove_cvref_t<decltype(detail::field_of<Ptr>())>::element;
 
 	  public:
-		[[nodiscard]] auto operator==(const E &v) const -> filter { return a() == value_traits<E>::encode(v); }
-		[[nodiscard]] auto operator>=(const E &v) const -> filter { return a() >= value_traits<E>::encode(v); }
-		[[nodiscard]] auto operator<=(const E &v) const -> filter { return a() <= value_traits<E>::encode(v); }
-		[[nodiscard]] auto approx(const E &v) const -> filter { return a().approx(value_traits<E>::encode(v)); }
+		[[nodiscard]] auto operator==(const E &v) const -> filter
+		{
+			return make(v, [](std::string_view s) { return a() == s; });
+		}
+		[[nodiscard]] auto operator>=(const E &v) const -> filter
+		{
+			return make(v, [](std::string_view s) { return a() >= s; });
+		}
+		[[nodiscard]] auto operator<=(const E &v) const -> filter
+		{
+			return make(v, [](std::string_view s) { return a() <= s; });
+		}
+		[[nodiscard]] auto approx(const E &v) const -> filter
+		{
+			return make(v, [](std::string_view s) { return a().approx(s); });
+		}
 		[[nodiscard]] auto present() const -> filter { return a().present(); }
 
 	  private:
 		static auto a() -> attr { return attr(detail::field_of<Ptr>().name); }
+
+		// build(encoded v), or the empty filter when v does not encode.
+		template<class Build> static auto make(const E &v, Build build) -> filter
+		{
+			const auto s = detail::encode_value(v);
+			if (!s) {
+				return {};
+			}
+			return build(*s);
+		}
 	};
+
 
 	template<auto Ptr> [[nodiscard]] auto field() -> typed_attr<Ptr> { return {}; }
 

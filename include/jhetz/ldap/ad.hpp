@@ -63,7 +63,9 @@
 //                      unlocks". Negating it overflows: test for it first.
 //
 // Filters: a typed filter on a mapped member encodes the value
-// (filters::field<&T::m>() <= t). On an untyped attribute, encode it:
+// (filters::field<&T::m>() <= t). On an untyped attribute, encode it; the
+// two FILETIME traits return a plain std::string, as every value encodes
+// (the string, enum and sys_seconds traits return result<std::string>):
 // filters::attr("accountExpires") <= ldap::value_traits<ad::filetime_clock::time_point>::encode(t).
 // AD compares the numbers, so 0 ("never") is below every date:
 // "accounts that expired" is (&(accountExpires>=1)(accountExpires<=now)).
