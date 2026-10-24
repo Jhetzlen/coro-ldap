@@ -4,6 +4,7 @@
 
 #include "format_util.hpp"
 #include "icu_util.hpp"
+#include "scope_util.hpp"
 
 #include <gssapi/gssapi.h>
 
@@ -232,15 +233,12 @@ struct sasl_gssapi::state
 	cred_handle credentials;
 	context_handle context;
 
-	// Clears `busy` at the end of an offloaded step, whatever its outcome.
-	struct busy_scope
+	// Clears `busy` when the returned guard goes out of scope: at the end of
+	// an offloaded step, whatever its outcome.
+	[[nodiscard]] auto busy_scope() noexcept
 	{
-		state *s;// non-null
-		explicit busy_scope(state &s_) noexcept : s(&s_) {}
-		busy_scope(const busy_scope &) = delete;
-		auto operator=(const busy_scope &) -> busy_scope & = delete;
-		~busy_scope() { s->busy.store(false, std::memory_order_release); }
-	};
+		return detail::scope_exit{ [this] noexcept { busy.store(false, std::memory_order_release); } };
+	}
 
 	void reset() noexcept
 	{
@@ -385,7 +383,7 @@ auto sasl_gssapi::offload_start() -> sasl_work
 	s->busy.store(true, std::memory_order_relaxed);
 	state_ = s;
 	return [s, options = options_, host = host_] {
-		const state::busy_scope scope{ *s };
+		const auto scope = s->busy_scope();
 		return s->begin(options, host);
 	};
 }
@@ -401,7 +399,7 @@ auto sasl_gssapi::offload_step(std::optional<std::string_view> challenge) -> sas
 	const auto s = state_;
 	s->busy.store(true, std::memory_order_relaxed);
 	return [s, token = std::string(*challenge)] {
-		const state::busy_scope scope{ *s };
+		const auto scope = s->busy_scope();
 		return s->init(token);
 	};
 }

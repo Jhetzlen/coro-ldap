@@ -25,7 +25,6 @@ using detail::impl_ref;
 using detail::no_connection;
 using detail::op_index;
 using detail::pending_op;
-using detail::registration;
 
 // ---------------------------------------------------------------- StartTLS
 
@@ -81,9 +80,9 @@ auto connection::start_tls(net::tls_options options, std::optional<std::chrono::
 	if (auto r = self->submit(request, &p, context); !r) {
 		co_return r;
 	}
-	const connection::impl::upgrade_scope upgrade(*self);
+	const auto upgrade = self->upgrade_scope();
 	{
-		registration reg(*self, p);
+		const auto reg = detail::registration(*self, p);
 		// A budget of its own: the wait may have used most of the first one,
 		// and giving up on StartTLS closes the connection.
 		auto m = co_await self->next_response(p, deadline_after(timeout ? timeout : self->default_timeout()), context);

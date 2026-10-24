@@ -11,6 +11,7 @@
 #include "jhetz/ldap/net/message_io.hpp"
 
 #include "../net/deadline.hpp"
+#include "../scope_util.hpp"
 
 #include <boost/capy/ex/async_event.hpp>
 #include <boost/capy/task.hpp>
@@ -303,20 +304,14 @@ class connection::impl
 	// timeout the count still due. A throw (bad_alloc) is the caller's.
 	auto wait_due_answers(std::optional<detail::clock::time_point> deadline) -> boost::capy::task<due_wait>;
 
-	// StartTLS's ExtendedRequest is sent: while this lives, no other request
-	// may be sent (RFC 4511 section 4.14.1), and is_tls() is false (the TLS
-	// layer is set before the handshake).
-	class upgrade_scope
+	// StartTLS's ExtendedRequest is sent: while the returned guard lives, no
+	// other request may be sent (RFC 4511 section 4.14.1), and is_tls() is
+	// false (the TLS layer is set before the handshake).
+	[[nodiscard]] auto upgrade_scope() noexcept
 	{
-	  public:
-		explicit upgrade_scope(impl &c) noexcept : c_(&c) { c_->upgrading = true; }
-		upgrade_scope(const upgrade_scope &) = delete;
-		auto operator=(const upgrade_scope &) -> upgrade_scope & = delete;
-		~upgrade_scope() { c_->upgrading = false; }
-
-	  private:
-		impl *c_;// non-null
-	};
+		upgrading = true;
+		return detail::scope_exit{ [this] noexcept { upgrading = false; } };
+	}
 
 	// Waits until the writer, then the reader, is idle. Not cancellable (it
 	// runs under an empty stop token): the writer and the reader stop
@@ -403,7 +398,7 @@ class connection::impl
 	bool reading = false;
 	std::stop_source reader_stop{};
 	boost::capy::async_event reader_idle{};// set while the reader is not running
-	// StartTLS in progress (upgrade_scope): no other request may be sent
+	// StartTLS in progress (upgrade_scope()): no other request may be sent
 	// (RFC 4511 4.14.1), and is_tls() is false (the TLS layer is set before
 	// the handshake).
 	bool upgrading = false;
@@ -602,18 +597,13 @@ class connection::impl::bind_scope
 
 namespace detail {
 
-	// Abandons `p` if the operation's task is destroyed (or returns early)
-	// while the request is still outstanding.
-	struct registration
+	// Abandons `p` when the returned guard goes out of scope: the
+	// operation's task is destroyed (or returns early) while the request is
+	// still outstanding.
+	[[nodiscard]] inline auto registration(connection::impl &c, pending_op &p) noexcept
 	{
-		connection::impl *c;// non-null
-		pending_op *p;// non-null
-		registration(connection::impl &c_, pending_op &p_) noexcept : c(&c_), p(&p_) {}
-		registration(const registration &) = delete;
-		auto operator=(const registration &) -> registration & = delete;
-		~registration() { c->abandon(*p); }
-	};
-
+		return scope_exit{ [&c, &p] noexcept { c.abandon(p); } };
+	}
 
 	// One request with one response (everything but search): sends it,
 	// waits for the response of index `expect` and returns it. `self` keeps

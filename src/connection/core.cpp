@@ -40,7 +40,6 @@ using detail::clock;
 using detail::impl_ref;
 using detail::op_index;
 using detail::pending_op;
-using detail::registration;
 
 namespace {
 
@@ -877,7 +876,7 @@ namespace detail {
 		if (auto r = self->submit(request, &p, context); !r) {
 			co_return std::unexpected(std::move(r.error()));
 		}
-		const registration reg(*self, p);
+		const auto reg = detail::registration(*self, p);
 		const auto deadline = deadline_after(timeout ? timeout : self->default_timeout());
 		while (true) {
 			auto m = co_await self->next_response(p, deadline, context);
