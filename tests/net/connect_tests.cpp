@@ -40,16 +40,18 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
+#include <utility>
 
+#ifdef __linux__
 #include <arpa/inet.h>
 #include <dlfcn.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <system_error>
-#include <utility>
+#endif
 
 namespace ldap = jhetz::ldap;
 namespace net = jhetz::ldap::net;
@@ -76,9 +78,22 @@ using ldap::client_errc;
 //   stop-dns-*   requests stop on lookup_stop (from the lookup's thread),
 //                then answers 127.0.0.1 after slow_dns_delay: a connect
 //                stopped while the lookup runs
+// The interposer needs Linux symbol interposition (RTLD_NEXT); elsewhere the
+// tests that use these names skip (skip_unless_dns_seam).
+namespace {
+std::atomic<std::stop_source *> lookup_stop{ nullptr };
+
+void skip_unless_dns_seam()
+{
+#ifndef __linux__
+	SKIP("needs the getaddrinfo interposer (Linux symbol interposition)");
+#endif
+}
+}// namespace
+
+#ifdef __linux__
 namespace {
 constexpr auto slow_dns_delay = std::chrono::milliseconds(1000);
-std::atomic<std::stop_source *> lookup_stop{ nullptr };
 }// namespace
 
 extern "C" auto getaddrinfo(const char *name, const char *service, const struct addrinfo *req, struct addrinfo **pai)
@@ -129,6 +144,7 @@ extern "C" auto getaddrinfo(const char *name, const char *service, const struct 
 	}
 	return real(name, service, req, pai);
 }
+#endif
 
 namespace {
 
@@ -316,6 +332,7 @@ TEST_CASE("connect timeout semantics", "[net][connect][tcp][timeout]")
 
 TEST_CASE("connect timeout holds while the name lookup blocks", "[net][connect][timeout][dns]")
 {
+	skip_unless_dns_seam();
 	// Timestamped when connect() returns, not when the io_context runs out
 	// of work: Corosio keeps the context busy until getaddrinfo returns.
 	std::chrono::steady_clock::duration elapsed{};
@@ -384,6 +401,7 @@ struct blackhole
 
 TEST_CASE("Happy Eyeballs: a black-holed first address costs the attempt delay", "[net][connect][tcp][timeout][dns]")
 {
+	skip_unless_dns_seam();
 	skip_unless_linux_loopback();
 	// two-addr-* resolves to 127.0.0.2 first, then 127.0.0.1. The attempt on
 	// 127.0.0.2 hangs; 127.0.0.1 is tried 200 ms later, side by side, and
@@ -412,6 +430,7 @@ TEST_CASE("Happy Eyeballs: a black-holed first address costs the attempt delay",
 
 TEST_CASE("Happy Eyeballs: a refused address starts the next attempt at once", "[net][connect][tcp][dns]")
 {
+	skip_unless_dns_seam();
 	skip_unless_linux_loopback();
 	// Nothing listens on 127.0.0.2:<port>: that attempt is refused at once,
 	// so 127.0.0.1 does not wait out the (long) attempt delay.
@@ -434,6 +453,7 @@ TEST_CASE("Happy Eyeballs: a refused address starts the next attempt at once", "
 
 TEST_CASE("Happy Eyeballs: a maximal attempt delay waits for the failure", "[net][connect][tcp][dns][timeout]")
 {
+	skip_unless_dns_seam();
 	skip_unless_linux_loopback();
 	// attempt_delay = milliseconds::max() (ldap::no_timeout) does not
 	// overflow the clock: the next attempt starts when the refused one fails.
@@ -456,6 +476,7 @@ TEST_CASE("Happy Eyeballs: a maximal attempt delay waits for the failure", "[net
 
 TEST_CASE("Happy Eyeballs: every address fails", "[net][connect][tcp][dns]")
 {
+	skip_unless_dns_seam();
 	skip_unless_linux_loopback();
 	corosio::io_context ioc;
 	std::string url;
@@ -472,6 +493,7 @@ TEST_CASE("Happy Eyeballs: every address fails", "[net][connect][tcp][dns]")
 
 TEST_CASE("Happy Eyeballs: the budget covers every attempt", "[net][connect][tcp][timeout][dns]")
 {
+	skip_unless_dns_seam();
 	skip_unless_linux_loopback();
 	corosio::io_context ioc;
 	tcp_server srv(ioc, 0);
@@ -605,6 +627,7 @@ TEST_CASE("unresolvable host", "[net][connect][tcp]")
 
 TEST_CASE("a lookup with no usable address", "[net][connect][tcp][dns]")
 {
+	skip_unless_dns_seam();
 	corosio::io_context ioc;
 	auto t = connect_to(ioc, "ldap://no-ip-a.test:1");
 	REQUIRE_FALSE(t.has_value());
@@ -614,6 +637,7 @@ TEST_CASE("a lookup with no usable address", "[net][connect][tcp][dns]")
 
 TEST_CASE("connect stopped during the name lookup", "[net][connect][cancel][dns]")
 {
+	skip_unless_dns_seam();
 	// The stop comes while getaddrinfo still runs: connect returns at once,
 	// the late answer is dropped.
 	std::chrono::steady_clock::duration elapsed{};
@@ -689,9 +713,10 @@ struct ipv6_server
 		return s;
 	}
 
+#ifdef __linux__
 	// The first link-local address of an up, non-loopback interface (glibc
 	// only accepts a zone on a link-local address, so [::1%25lo] cannot be
-	// used).
+	// used). Found with getifaddrs, so Linux only.
 	static auto link_local(corosio::io_context &ioc) -> ipv6_server
 	{
 		ipv6_server s;
@@ -719,6 +744,7 @@ struct ipv6_server
 		::freeifaddrs(list);
 		return s;
 	}
+#endif
 
 	auto url(const char *scheme) const -> std::string
 	{
@@ -779,6 +805,9 @@ TEST_CASE("connect over the IPv6 loopback", "[net][connect][tcp][tls][ipv6]")
 
 TEST_CASE("connect to a link-local IPv6 address with a zone", "[net][connect][tcp][tls][ipv6]")
 {
+#ifndef __linux__
+	SKIP("finds the link-local address with getifaddrs (Linux only)");
+#else
 	corosio::io_context ioc;
 	auto v6 = ipv6_server::link_local(ioc);
 	if (!v6.acc) {
@@ -786,6 +815,7 @@ TEST_CASE("connect to a link-local IPv6 address with a zone", "[net][connect][tc
 	}
 	INFO(v6.url("ldap"));
 	exchange_over(ioc, v6);
+#endif
 }
 
 TEST_CASE("URLs connect() refuses", "[net][connect]")
@@ -839,13 +869,30 @@ TEST_CASE("connect ldapi:// to a Unix domain socket", "[net][connect][ldapi]")
 	CHECK_THAT(server.get(), IsEmpty());
 }
 
+namespace {
+
+// What a connect to a socket path nobody created fails with: ENOENT on Linux.
+// Windows' AF_UNIX reports WSAECONNREFUSED or ENOENT depending on the
+// version, so either condition is accepted there.
+auto is_missing_socket(std::error_code ec) -> bool
+{
+#ifdef __linux__
+	return ec == std::errc::no_such_file_or_directory;
+#else
+	return ec == std::errc::no_such_file_or_directory || ec == std::errc::connection_refused;
+#endif
+}
+
+}// namespace
+
 TEST_CASE("ldapi:// errors", "[net][connect][ldapi]")
 {
 	corosio::io_context ioc;
 	temp_path missing(u8".sock");// never created
 	auto t = connect_to(ioc, "ldapi://" + percent_encode(missing.str()));
 	REQUIRE_FALSE(t.has_value());
-	CHECK(t.error().code == std::errc::no_such_file_or_directory);
+	INFO(t.error().code.message());
+	CHECK(is_missing_socket(t.error().code));
 	CHECK_THAT(std::string(t.error().context), ContainsSubstring(": connect " + missing.str()));
 
 	// The decoded path is quoted sanitized: U+2028 becomes U+FFFD, the
@@ -853,7 +900,8 @@ TEST_CASE("ldapi:// errors", "[net][connect][ldapi]")
 	temp_path odd(u8"-x\u2028caf\u00e9.sock");// never created
 	auto sanitized = connect_to(ioc, "ldapi://" + percent_encode(odd.str()));
 	REQUIRE_FALSE(sanitized.has_value());
-	CHECK(sanitized.error().code == std::errc::no_such_file_or_directory);
+	INFO(sanitized.error().code.message());
+	CHECK(is_missing_socket(sanitized.error().code));
 	std::string shown = odd.str();
 	shown.replace(shown.find("\xE2\x80\xA8"), 3, "\xEF\xBF\xBD");
 	CHECK_THAT(std::string(sanitized.error().context), StartsWith("connect ldapi://"));
