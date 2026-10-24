@@ -3,3 +3,7 @@
 InheritParentConfig: true
 CheckOptions:
   bugprone-exception-escape.CheckMain: false
+Checks:
+  # Test vectors and sizes are the point of a replay or a fuzz target.
+  - -cppcoreguidelines-avoid-magic-numbers
+  - -readability-magic-numbers

@@ -802,21 +802,24 @@ namespace {
 		constexpr char32_t one = 0x80;
 		constexpr char32_t two = 0x800;
 		constexpr char32_t three = 0x10000;
+		// A continuation octet is 10xxxxxx; the lead octet of a sequence
+		// with `extra` continuation octets is 110xxxxx, 1110xxxx or 11110xxx.
+		constexpr unsigned continuation_bits = 6;
+		constexpr char32_t continuation_tag = 0x80;
+		constexpr char32_t continuation_mask = 0x3F;
+		constexpr std::array<char32_t, 3> lead_tags{ 0xC0, 0xE0, 0xF0 };
 		const auto octet = [&out](char32_t v) { out += static_cast<char>(static_cast<unsigned char>(v)); };
 		if (c < one) {
 			octet(c);
-		} else if (c < two) {
-			octet(0xC0u | (c >> 6u));
-			octet(0x80u | (c & 0x3Fu));
-		} else if (c < three) {
-			octet(0xE0u | (c >> 12u));
-			octet(0x80u | ((c >> 6u) & 0x3Fu));
-			octet(0x80u | (c & 0x3Fu));
-		} else {
-			octet(0xF0u | (c >> 18u));
-			octet(0x80u | ((c >> 12u) & 0x3Fu));
-			octet(0x80u | ((c >> 6u) & 0x3Fu));
-			octet(0x80u | (c & 0x3Fu));
+			return;
+		}
+		std::size_t extra = 1;
+		if (c >= two) {
+			extra = c < three ? 2 : 3;
+		}
+		octet(lead_tags[extra - 1] | (c >> (continuation_bits * extra)));
+		for (std::size_t k = extra; k-- > 0;) {
+			octet(continuation_tag | ((c >> (continuation_bits * k)) & continuation_mask));
 		}
 	}
 

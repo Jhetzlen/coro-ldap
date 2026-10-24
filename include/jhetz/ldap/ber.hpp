@@ -45,6 +45,13 @@ enum class tag_class : std::uint8_t { universal = 0, application = 1, context = 
 // number form follows", which LDAP never needs and this codec rejects.
 inline constexpr std::uint8_t max_tag_number = 30;
 
+// The identifier octet's fields (X.690 section 8.1.2): the class in bits
+// 8-7, the constructed flag in bit 6, the tag number in bits 5-1 (all ones
+// for the high-tag-number form).
+inline constexpr unsigned identifier_class_shift = 6;
+inline constexpr unsigned identifier_constructed_bit = 0x20u;
+inline constexpr unsigned identifier_number_mask = 0x1Fu;
+
 struct tag
 {
 	tag_class cls = tag_class::universal;
@@ -99,8 +106,9 @@ namespace tags {
 	if (t.number > max_tag_number) {
 		throw std::invalid_argument("ber: tag number above 30 needs the high-tag-number form");
 	}
-	return static_cast<std::byte>(
-	  (unsigned{ std::to_underlying(t.cls) } << 6) | (t.constructed ? 0x20u : 0x00u) | (t.number & 0x1Fu));
+	return static_cast<std::byte>((unsigned{ std::to_underlying(t.cls) } << identifier_class_shift)
+								  | (t.constructed ? identifier_constructed_bit : 0x00u)
+								  | (t.number & identifier_number_mask));
 }
 
 // Human readable form, e.g. "[UNIVERSAL 16 constructed]", for error context.

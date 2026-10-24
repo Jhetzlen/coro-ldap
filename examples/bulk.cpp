@@ -11,6 +11,9 @@
 namespace ldap = jhetz::ldap;
 namespace capy = boost::capy;
 
+constexpr int operations = 10'000;
+constexpr int window = 64;
+
 struct in_flight
 {
 	int count = 0;
@@ -53,8 +56,8 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> capy::task<int>
 		co_return 1;
 	}
 	in_flight running;
-	for (int i = 0; i < 10'000 || running.count > 0;) {
-		if (i < 10'000 && running.count < 64) {
+	for (int i = 0; i < operations || running.count > 0;) {
+		if (i < operations && running.count < window) {
 			++running.count;
 			capy::run_async(ioc.get_executor())(add_modify_delete(*c, running, i++));
 			continue;

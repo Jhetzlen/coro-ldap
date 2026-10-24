@@ -49,7 +49,7 @@ namespace {
 	void append_hex(std::pmr::string &out, unsigned char c)
 	{
 		out += hex_digits[c >> 4];
-		out += hex_digits[c & 0xFu];
+		out += hex_digits[c & detail::nibble_mask];
 	}
 
 	// RFC 4514 section 2.4 escaping of a string value, shared by to_string()
@@ -85,7 +85,7 @@ namespace {
 			default:
 				break;
 			}
-			if (u < 0x20u || u == 0x7Fu) {
+			if (detail::is_ascii_control(u)) {
 				out += '\\';
 				append_hex(out, u);
 			} else if ((c == ' ' && (i == 0 || i + 1 == v.size())) || (c == '#' && i == 0)) {

@@ -1,0 +1,6 @@
+# Benchmarks: the root .clang-tidy, minus the magic-number checks: the
+# synthetic workload's sizes and value lengths are its parameters.
+InheritParentConfig: true
+Checks:
+  - -cppcoreguidelines-avoid-magic-numbers
+  - -readability-magic-numbers

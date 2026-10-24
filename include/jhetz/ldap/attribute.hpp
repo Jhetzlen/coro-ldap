@@ -4,6 +4,7 @@
 #include "jhetz/ldap/error.hpp"
 
 #include <algorithm>
+#include <array>
 #include <compare>
 #include <cstddef>
 #include <functional>
@@ -29,15 +30,18 @@ namespace detail {
 		return is_digit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 	}
 
+	// The value of the hex digits 'a' and 'A'.
+	inline constexpr int hex_letter_value = 10;
+
 	constexpr auto hex_value(char c) noexcept -> unsigned
 	{
 		if (is_digit(c)) {
 			return static_cast<unsigned>(c - '0');
 		}
 		if (c >= 'a' && c <= 'f') {
-			return static_cast<unsigned>(c - 'a' + 10);
+			return static_cast<unsigned>(c - 'a' + hex_letter_value);
 		}
-		return static_cast<unsigned>(c - 'A' + 10);
+		return static_cast<unsigned>(c - 'A' + hex_letter_value);
 	}
 
 	constexpr auto iequals(std::string_view a, std::string_view b) noexcept -> bool
@@ -71,6 +75,64 @@ namespace detail {
 		return invalid_utf8_offset(s) == std::string_view::npos;
 	}
 
+	// Well-formed UTF-8 (Unicode section 3.9, table 3-7): an octet below
+	// 0x80 stands alone; a lead octet in [lead_first, lead_last] starts a
+	// sequence of `length` octets whose second is in [second_first,
+	// second_last] (excluding overlongs, surrogates and code points above
+	// U+10FFFF) and whose others are continuation octets.
+	inline constexpr unsigned char utf8_continuation_first = 0x80u;
+	inline constexpr unsigned char utf8_continuation_last = 0xBFu;
+	struct utf8_lead_range
+	{
+		unsigned char lead_first = 0;
+		unsigned char lead_last = 0;
+		std::size_t length = 0;
+		unsigned char second_first = 0;
+		unsigned char second_last = 0;
+	};
+	inline constexpr std::array utf8_lead_ranges{
+		utf8_lead_range{ .lead_first = 0xC2u,
+		  .lead_last = 0xDFu,
+		  .length = 2,
+		  .second_first = 0x80u,
+		  .second_last = 0xBFu },
+		utf8_lead_range{ .lead_first = 0xE0u,
+		  .lead_last = 0xE0u,
+		  .length = 3,
+		  .second_first = 0xA0u,
+		  .second_last = 0xBFu },
+		utf8_lead_range{ .lead_first = 0xE1u,
+		  .lead_last = 0xECu,
+		  .length = 3,
+		  .second_first = 0x80u,
+		  .second_last = 0xBFu },
+		utf8_lead_range{ .lead_first = 0xEDu,
+		  .lead_last = 0xEDu,
+		  .length = 3,
+		  .second_first = 0x80u,
+		  .second_last = 0x9Fu },
+		utf8_lead_range{ .lead_first = 0xEEu,
+		  .lead_last = 0xEFu,
+		  .length = 3,
+		  .second_first = 0x80u,
+		  .second_last = 0xBFu },
+		utf8_lead_range{ .lead_first = 0xF0u,
+		  .lead_last = 0xF0u,
+		  .length = 4,
+		  .second_first = 0x90u,
+		  .second_last = 0xBFu },
+		utf8_lead_range{ .lead_first = 0xF1u,
+		  .lead_last = 0xF3u,
+		  .length = 4,
+		  .second_first = 0x80u,
+		  .second_last = 0xBFu },
+		utf8_lead_range{ .lead_first = 0xF4u,
+		  .lead_last = 0xF4u,
+		  .length = 4,
+		  .second_first = 0x80u,
+		  .second_last = 0x8Fu },
+	};
+
 	// The same check, hand-rolled, for compile time only: utf8_sequence_length
 	// uses it in constant evaluation (the consteval ldap::dn / ldap::rdn /
 	// attribute literals go through detail::scan_dn), where ICU's functions
@@ -82,43 +144,24 @@ namespace detail {
 	{
 		const auto at = [&](std::size_t k) { return static_cast<unsigned char>(s[i + k]); };
 		const unsigned char c = at(0);
-		if (c < 0x80u) {
+		if (c < utf8_continuation_first) {
 			return 1;
 		}
-		std::size_t n = 0;
-		// The range of the second octet.
-		unsigned char lo = 0x80u;
-		unsigned char hi = 0xBFu;
-		if (c >= 0xC2u && c <= 0xDFu) {
-			n = 2;
-		} else if (c >= 0xE0u && c <= 0xEFu) {
-			n = 3;
-			if (c == 0xE0u) {
-				lo = 0xA0u;// overlong
+		for (const auto &r : utf8_lead_ranges) {
+			if (c < r.lead_first || c > r.lead_last) {
+				continue;
 			}
-			if (c == 0xEDu) {
-				hi = 0x9Fu;// surrogates
-			}
-		} else if (c >= 0xF0u && c <= 0xF4u) {
-			n = 4;
-			if (c == 0xF0u) {
-				lo = 0x90u;// overlong
-			}
-			if (c == 0xF4u) {
-				hi = 0x8Fu;// above U+10FFFF
-			}
-		} else {
-			return 0;
-		}
-		if (s.size() - i < n || at(1) < lo || at(1) > hi) {
-			return 0;
-		}
-		for (std::size_t k = 2; k < n; ++k) {
-			if (at(k) < 0x80u || at(k) > 0xBFu) {
+			if (s.size() - i < r.length || at(1) < r.second_first || at(1) > r.second_last) {
 				return 0;
 			}
+			for (std::size_t k = 2; k < r.length; ++k) {
+				if (at(k) < utf8_continuation_first || at(k) > utf8_continuation_last) {
+					return 0;
+				}
+			}
+			return r.length;
 		}
-		return n;
+		return 0;
 	}
 
 	// Length of the well-formed UTF-8 sequence starting at s[i], or 0 if

@@ -185,7 +185,8 @@ struct value_syntaxes<T>
 {
 	static auto get() -> std::span<const char *const>
 	{
-		if constexpr (std::signed_integral<T> && std::numeric_limits<T>::digits >= 63) {
+		if constexpr (std::signed_integral<T>
+					  && std::numeric_limits<T>::digits >= std::numeric_limits<std::int64_t>::digits) {
 			return detail::int64_syntaxes;
 		} else {
 			return detail::integer_syntaxes;

@@ -34,7 +34,7 @@ namespace {
 	{
 		constexpr std::string_view digits = "0123456789abcdef";
 		const auto v = std::to_integer<unsigned>(b);
-		return { '0', 'x', digits[v >> 4], digits[v & 0xFu] };
+		return { '0', 'x', digits[v >> 4], digits[v & ldap::detail::nibble_mask] };
 	}
 
 }// namespace
@@ -88,7 +88,7 @@ auto read_frame(transport &t, read_buffer &buf, std::size_t max_message_size) ->
 		if (!data.empty()) {
 			// LDAPMessage is a SEQUENCE: reject anything else from its first
 			// octet instead of reading a body of up to max_message_size.
-			if (data[0] != std::byte{ 0x30 }) {
+			if (data[0] != ber::identifier_octet(ber::tags::sequence)) {
 				co_return fail(client_errc::decode_error,
 				  where + ": PDU starts with " + hex_byte(data[0]) + ", not a SEQUENCE (0x30)");
 			}

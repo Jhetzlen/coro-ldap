@@ -30,5 +30,8 @@ Checks:
   - -concurrency-mt-unsafe
   # Test helpers return values the test cases do not always look at.
   - -modernize-use-nodiscard
+  # Test vectors keep their literal numbers (expected sizes, codes, bytes).
+  - -cppcoreguidelines-avoid-magic-numbers
+  - -readability-magic-numbers
   # Helpers taking (text, expected) pairs; swapping shows as a failing test.
   - -bugprone-easily-swappable-parameters

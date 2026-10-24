@@ -227,7 +227,8 @@ struct sasl_scram_options
 	// The largest iteration count accepted from the server: PBKDF2's cost,
 	// which the server chooses. In [sasl_scram_sha256::min_iterations,
 	// 2^31-1]. Servers use 4096 to a few hundred thousand.
-	std::uint32_t max_iterations = 1'000'000;
+	static constexpr std::uint32_t default_max_iterations = 1'000'000;
+	std::uint32_t max_iterations = default_max_iterations;
 	// PBKDF2 with more iterations than this runs on a thread of its own
 	// (when sasl_bind can offload it); up to it, on the I/O thread. 0:
 	// always offloaded; max_iterations or more: never.

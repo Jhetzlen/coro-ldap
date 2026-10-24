@@ -218,6 +218,31 @@ struct attribute_value_assertion
 	friend auto operator==(const attribute_value_assertion &, const attribute_value_assertion &) -> bool = default;
 };
 
+// Application tag numbers of the protocolOp CHOICE (RFC 4511 section 4.2).
+namespace detail::op_tag {
+	inline constexpr std::uint8_t bind_request = 0;
+	inline constexpr std::uint8_t bind_response = 1;
+	inline constexpr std::uint8_t unbind_request = 2;
+	inline constexpr std::uint8_t search_request = 3;
+	inline constexpr std::uint8_t search_result_entry = 4;
+	inline constexpr std::uint8_t search_result_done = 5;
+	inline constexpr std::uint8_t modify_request = 6;
+	inline constexpr std::uint8_t modify_response = 7;
+	inline constexpr std::uint8_t add_request = 8;
+	inline constexpr std::uint8_t add_response = 9;
+	inline constexpr std::uint8_t del_request = 10;
+	inline constexpr std::uint8_t del_response = 11;
+	inline constexpr std::uint8_t modify_dn_request = 12;
+	inline constexpr std::uint8_t modify_dn_response = 13;
+	inline constexpr std::uint8_t compare_request = 14;
+	inline constexpr std::uint8_t compare_response = 15;
+	inline constexpr std::uint8_t abandon_request = 16;
+	inline constexpr std::uint8_t search_result_reference = 19;
+	inline constexpr std::uint8_t extended_request = 23;
+	inline constexpr std::uint8_t extended_response = 24;
+	inline constexpr std::uint8_t intermediate_response = 25;
+}// namespace detail::op_tag
+
 // An operation that is just an LDAPResult: SearchResultDone, ModifyResponse,
 // AddResponse, DelResponse, ModifyDNResponse, CompareResponse (aliases
 // below). `Tag` is the [APPLICATION n] number, which makes each a distinct type.
@@ -446,7 +471,7 @@ struct search_result_entry
 };
 
 // [APPLICATION 5]
-using search_result_done = result_response<5>;
+using search_result_done = result_response<detail::op_tag::search_result_done>;
 
 // [APPLICATION 19] SEQUENCE OF URI
 struct search_result_reference
@@ -546,7 +571,7 @@ struct modify_request
 };
 
 // [APPLICATION 7]
-using modify_response = result_response<7>;
+using modify_response = result_response<detail::op_tag::modify_response>;
 
 // [APPLICATION 8]
 struct add_request
@@ -582,7 +607,7 @@ struct add_request
 };
 
 // [APPLICATION 9]
-using add_response = result_response<9>;
+using add_response = result_response<detail::op_tag::add_response>;
 
 // [APPLICATION 10] LDAPDN (primitive)
 struct del_request
@@ -608,7 +633,7 @@ struct del_request
 };
 
 // [APPLICATION 11]
-using del_response = result_response<11>;
+using del_response = result_response<detail::op_tag::del_response>;
 
 // [APPLICATION 12]
 struct modify_dn_request
@@ -641,7 +666,7 @@ struct modify_dn_request
 };
 
 // [APPLICATION 13]
-using modify_dn_response = result_response<13>;
+using modify_dn_response = result_response<detail::op_tag::modify_dn_response>;
 
 // [APPLICATION 14]
 struct compare_request
@@ -674,7 +699,7 @@ struct compare_request
 };
 
 // [APPLICATION 15]. compare_true (6) / compare_false (5) are the normal outcomes.
-using compare_response = result_response<15>;
+using compare_response = result_response<detail::op_tag::compare_response>;
 
 // [APPLICATION 16] MessageID (primitive). No strings, so not allocator-aware.
 struct abandon_request

@@ -81,11 +81,18 @@ namespace {
 	// in a word's high bytes down past the next word, so OIDs differing
 	// only there ("1.3.6.1.4.1.0.14.1.8" / "...0.18.1.4") collided in all
 	// 64 bits. Portable (no 128-bit product).
+	// 2^64 / golden ratio, and a multiplier from Pelle Evensen's moremur.
+	constexpr std::uint64_t mix_multiplier_1 = 0x9E37'79B9'7F4A'7C15ull;
+	constexpr std::uint64_t mix_multiplier_2 = 0xD6E8'FEB8'6659'FD93ull;
+	// MurmurHash3's fmix64: its first multiplier and its shift.
+	constexpr std::uint64_t finish_multiplier = 0xFF51'AFD7'ED55'8CCDull;
+	constexpr unsigned finish_shift = 33;
+
 	constexpr auto mix(std::uint64_t h, std::uint64_t w) noexcept -> std::uint64_t
 	{
-		h = (h ^ w) * 0x9E37'79B9'7F4A'7C15ull;
+		h = (h ^ w) * mix_multiplier_1;
 		h ^= h >> 32;
-		h *= 0xD6E8'FEB8'6659'FD93ull;
+		h *= mix_multiplier_2;
 		return h ^ (h >> 32);
 	}
 
@@ -127,8 +134,8 @@ auto hash_value(std::string_view attribute_name) noexcept -> std::size_t
 	// the same bits as the first word, so "1.1.1.1.1" and "3.1.1.1.1.1"
 	// collided in all 64 bits.
 	h ^= n;
-	h *= 0xFF51'AFD7'ED55'8CCDull;
-	return static_cast<std::size_t>(h ^ (h >> 33));
+	h *= finish_multiplier;
+	return static_cast<std::size_t>(h ^ (h >> finish_shift));
 }
 
 namespace detail {

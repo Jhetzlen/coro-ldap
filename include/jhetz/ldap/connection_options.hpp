@@ -55,11 +55,11 @@ struct connection_options
 {
 	// Budget for the whole connect (resolve, TCP, TLS handshake); see
 	// net::connect_options. nullopt: no limit.
-	std::optional<std::chrono::milliseconds> timeout{ std::chrono::seconds(30) };
+	std::optional<std::chrono::milliseconds> timeout{ net::connect_options::default_timeout };
 	net::tls_options tls{};
 	// Happy Eyeballs delay between connection attempts (see
 	// net::connect_options::attempt_delay).
-	std::chrono::milliseconds attempt_delay{ 250 };
+	std::chrono::milliseconds attempt_delay{ net::connect_options::default_attempt_delay };
 	bool tcp_no_delay = true;
 	// unbind() on a TLS connection (ldaps:// or after StartTLS) sends a TLS
 	// close_notify and waits at most this long for the server's before

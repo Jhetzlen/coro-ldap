@@ -98,7 +98,7 @@ namespace jhetz::ldap::ad {
 struct filetime_clock
 {
 	using rep = std::int64_t;
-	using period = std::ratio<1, 10'000'000>;
+	using period = std::ratio_divide<std::micro, std::ratio<10>>;// 100 ns
 	using duration = std::chrono::duration<rep, period>;
 	using time_point = std::chrono::time_point<filetime_clock>;
 	static constexpr bool is_steady = false;

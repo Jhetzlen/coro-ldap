@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -101,7 +102,7 @@ namespace {
 		return out;
 	}
 
-	constexpr auto hex_digit(unsigned v) noexcept -> char { return "0123456789ABCDEF"[v & 0xFu]; }
+	constexpr auto hex_digit(unsigned v) noexcept -> char { return "0123456789ABCDEF"[v & detail::nibble_mask]; }
 
 	// Percent-encodes every byte for which `keep` is false.
 	template<class Keep> void encode(std::pmr::string &out, std::string_view s, Keep keep)
@@ -150,6 +151,8 @@ namespace {
 	// one or more zero groups, optionally ending in an IPv4 address (two groups).
 	auto is_ipv6(std::string_view s) noexcept -> bool
 	{
+		constexpr int ipv6_groups = 8;
+		constexpr std::size_t max_group_digits = 4;
 		const std::size_t n = s.size();
 		std::size_t i = 0;
 		int groups = 0;
@@ -165,7 +168,7 @@ namespace {
 		}
 		while (true) {
 			const std::size_t start = i;
-			while (i < n && is_hex(s[i]) && i - start < 5) {
+			while (i < n && is_hex(s[i]) && i - start <= max_group_digits) {
 				++i;
 			}
 			if (i < n && s[i] == '.') {
@@ -176,7 +179,7 @@ namespace {
 				break;
 			}
 			const std::size_t len = i - start;
-			if (len == 0 || len > 4) {
+			if (len == 0 || len > max_group_digits) {
 				return false;
 			}
 			++groups;
@@ -200,7 +203,7 @@ namespace {
 				return false;// trailing single ':'
 			}
 		}
-		return compressed ? groups <= 7 : groups == 8;
+		return compressed ? groups < ipv6_groups : groups == ipv6_groups;
 	}
 
 	// ------------------------------------------------------------ parts
@@ -509,7 +512,7 @@ auto url::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<
 					return bad("invalid port", port_offset + i);
 				}
 				value = (value * 10) + static_cast<std::uint32_t>(port_text[i] - '0');
-				if (value > 65535) {
+				if (value > std::numeric_limits<std::uint16_t>::max()) {
 					return bad("port above 65535", port_offset);
 				}
 			}
@@ -531,13 +534,15 @@ auto url::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<
 		return bad("fragment ('#') not allowed", path_begin + hash);
 	}
 
-	std::array<std::string_view, 5> parts{};
-	std::array<std::size_t, 5> offsets{};
+	// dn, attributes, scope, filter and extensions.
+	constexpr std::size_t max_path_parts = 5;
+	std::array<std::string_view, max_path_parts> parts{};
+	std::array<std::size_t, max_path_parts> offsets{};
 	std::size_t count = 0;
 	{
 		std::size_t start = 0;
 		while (true) {
-			if (count == 5) {
+			if (count == max_path_parts) {
 				return bad("more than four '?'", path_begin + start - 1);
 			}
 			const std::size_t q = path.find('?', start);

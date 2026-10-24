@@ -18,12 +18,20 @@ namespace {
 
 	auto octet(std::byte b) noexcept -> unsigned { return std::to_integer<unsigned>(b); }
 
+	constexpr unsigned octet_bits = 8;
+
+	// Bits 5-1 all ones: the tag number follows in the high-tag-number form.
+	auto is_high_tag_number(unsigned id) noexcept -> bool
+	{
+		return (id & identifier_number_mask) == identifier_number_mask;
+	}
+
 	// Caller has checked that the number is not 31 (high-tag-number form).
 	auto tag_from_identifier(unsigned id) noexcept -> tag
 	{
-		return tag{ .cls = static_cast<tag_class>(id >> 6),
-			.constructed = (id & 0x20u) != 0,
-			.number = static_cast<std::uint8_t>(id & 0x1Fu) };
+		return tag{ .cls = static_cast<tag_class>(id >> identifier_class_shift),
+			.constructed = (id & identifier_constructed_bit) != 0,
+			.number = static_cast<std::uint8_t>(id & identifier_number_mask) };
 	}
 
 	struct raw_header
@@ -43,7 +51,7 @@ namespace {
 		}
 
 		const unsigned id = octet(buf[0]);
-		if ((id & 0x1Fu) == 0x1Fu) {
+		if (is_high_tag_number(id)) {
 			return fail(client_errc::unsupported_tag, detail::format("ber: high-tag-number form at offset {}", base));
 		}
 		const tag t = tag_from_identifier(id);
@@ -83,7 +91,7 @@ namespace {
 	// Precondition: length >= 0x80 (short-form lengths have no length octets).
 	auto length_octet_count(std::size_t length) noexcept -> unsigned
 	{
-		return static_cast<unsigned>(std::bit_width(length) + 7) / 8;
+		return (static_cast<unsigned>(std::bit_width(length)) + octet_bits - 1) / octet_bits;
 	}
 
 	// Writes the `count` low octets of `length` through `out`, most significant first.
@@ -157,10 +165,10 @@ void writer::integer(std::int64_t value, tag t)
 	const auto u = static_cast<std::uint64_t>(value);
 	std::array<std::byte, 8> octets{};
 	for (std::size_t i = 0; i < 8; ++i) {
-		octets[i] = static_cast<std::byte>((u >> (8 * (7 - i))) & 0xFFu);
+		octets[i] = static_cast<std::byte>((u >> (octet_bits * (octets.size() - 1 - i))) & 0xFFu);
 	}
 	std::size_t start = 0;
-	while (start < 7) {
+	while (start + 1 < octets.size()) {
 		const unsigned b = octet(octets[start]);
 		const bool next_high = (octet(octets[start + 1]) & 0x80u) != 0;
 		if ((b == 0x00u && !next_high) || (b == 0xFFu && next_high)) {
@@ -235,7 +243,7 @@ auto reader::fast_header(header &out) const noexcept -> bool
 		return false;
 	}
 	const unsigned id = octet(rest[0]);
-	if ((id & 0x1Fu) == 0x1Fu) {
+	if (is_high_tag_number(id)) {
 		return false;
 	}
 	const unsigned first = octet(rest[1]);
@@ -294,7 +302,7 @@ auto reader::peek_tag() const -> result<tag>
 		return fail(client_errc::decode_error, detail::format("ber: unexpected end of input at offset {}", offset()));
 	}
 	const unsigned id = octet(data_[pos_]);
-	if ((id & 0x1Fu) == 0x1Fu) {
+	if (is_high_tag_number(id)) {
 		return fail(client_errc::unsupported_tag, detail::format("ber: high-tag-number form at offset {}", offset()));
 	}
 	return tag_from_identifier(id);

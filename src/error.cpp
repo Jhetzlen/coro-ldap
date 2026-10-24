@@ -18,88 +18,89 @@ namespace {
 
 	auto result_text(int value) noexcept -> std::string_view
 	{
-		switch (value) {
-		case 0:
+		if (value == 0) {
 			return "success";
-		case 1:
+		}
+		switch (static_cast<errc>(value)) {
+		case errc::operations_error:
 			return "operations error";
-		case 2:
+		case errc::protocol_error:
 			return "protocol error";
-		case 3:
+		case errc::time_limit_exceeded:
 			return "time limit exceeded";
-		case 4:
+		case errc::size_limit_exceeded:
 			return "size limit exceeded";
-		case 5:
+		case errc::compare_false:
 			return "compare false";
-		case 6:
+		case errc::compare_true:
 			return "compare true";
-		case 7:
+		case errc::auth_method_not_supported:
 			return "authentication method not supported";
-		case 8:
+		case errc::stronger_auth_required:
 			return "stronger authentication required";
-		case 10:
+		case errc::referral:
 			return "referral";
-		case 11:
+		case errc::admin_limit_exceeded:
 			return "administrative limit exceeded";
-		case 12:
+		case errc::unavailable_critical_extension:
 			return "unavailable critical extension";
-		case 13:
+		case errc::confidentiality_required:
 			return "confidentiality required";
-		case 14:
+		case errc::sasl_bind_in_progress:
 			return "SASL bind in progress";
-		case 16:
+		case errc::no_such_attribute:
 			return "no such attribute";
-		case 17:
+		case errc::undefined_attribute_type:
 			return "undefined attribute type";
-		case 18:
+		case errc::inappropriate_matching:
 			return "inappropriate matching";
-		case 19:
+		case errc::constraint_violation:
 			return "constraint violation";
-		case 20:
+		case errc::attribute_or_value_exists:
 			return "attribute or value exists";
-		case 21:
+		case errc::invalid_attribute_syntax:
 			return "invalid attribute syntax";
-		case 32:
+		case errc::no_such_object:
 			return "no such object";
-		case 33:
+		case errc::alias_problem:
 			return "alias problem";
-		case 34:
+		case errc::invalid_dn_syntax:
 			return "invalid DN syntax";
-		case 36:
+		case errc::alias_dereferencing_problem:
 			return "alias dereferencing problem";
-		case 48:
+		case errc::inappropriate_authentication:
 			return "inappropriate authentication";
-		case 49:
+		case errc::invalid_credentials:
 			return "invalid credentials";
-		case 50:
+		case errc::insufficient_access_rights:
 			return "insufficient access rights";
-		case 51:
+		case errc::busy:
 			return "busy";
-		case 52:
+		case errc::unavailable:
 			return "unavailable";
-		case 53:
+		case errc::unwilling_to_perform:
 			return "unwilling to perform";
-		case 54:
+		case errc::loop_detect:
 			return "loop detected";
-		case 64:
+		case errc::naming_violation:
 			return "naming violation";
-		case 65:
+		case errc::object_class_violation:
 			return "object class violation";
-		case 66:
+		case errc::not_allowed_on_non_leaf:
 			return "not allowed on non-leaf";
-		case 67:
+		case errc::not_allowed_on_rdn:
 			return "not allowed on RDN";
-		case 68:
+		case errc::entry_already_exists:
 			return "entry already exists";
-		case 69:
+		case errc::object_class_mods_prohibited:
 			return "object class modifications prohibited";
-		case 71:
+		case errc::affects_multiple_dsas:
 			return "affects multiple DSAs";
-		case 80:
+		case errc::other:
 			return "other";
-		case 122:
+		case errc::assertion_failed:
 			return "assertion failed";
-		case 4096:
+		case errc::e_sync_refresh_required:
 			return "content synchronization refresh required";
 		default:
 			return {};

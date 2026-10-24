@@ -276,7 +276,7 @@ namespace {
 		for (std::size_t i = 0; i < host.size(); ++i) {
 			const auto c = static_cast<unsigned char>(host[i]);
 			const bool abstract_socket = has_abstract_sockets && scheme == url_scheme::ldapi && i == 0 && c == 0;
-			if ((c < 0x20 || c == 0x7F) && !abstract_socket) {
+			if (ldap::detail::is_ascii_control(c) && !abstract_socket) {
 				return true;
 			}
 		}

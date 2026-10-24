@@ -87,6 +87,14 @@ namespace {
 
 	constexpr std::string_view b64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+	// Each base64 character carries six bits: a group of three octets is
+	// four characters.
+	constexpr unsigned b64_bits = 6;
+	constexpr std::uint32_t b64_mask = 0x3F;
+
+	// The character for bits [6 * k, 6 * k + 6) of `v`.
+	auto b64_char(std::uint32_t v, unsigned k) -> char { return b64_alphabet[v >> (b64_bits * k) & b64_mask]; }
+
 	auto base64_encode(std::span<const unsigned char> data) -> std::string
 	{
 		const std::size_t n = data.size();
@@ -95,21 +103,21 @@ namespace {
 		std::size_t i = 0;
 		for (; i + 3 <= n; i += 3) {
 			const std::uint32_t v = std::uint32_t{ data[i] } << 16 | std::uint32_t{ data[i + 1] } << 8 | data[i + 2];
-			out += b64_alphabet[v >> 18 & 63];
-			out += b64_alphabet[v >> 12 & 63];
-			out += b64_alphabet[v >> 6 & 63];
-			out += b64_alphabet[v & 63];
+			out += b64_char(v, 3);
+			out += b64_char(v, 2);
+			out += b64_char(v, 1);
+			out += b64_char(v, 0);
 		}
 		if (n - i == 1) {
 			const std::uint32_t v = std::uint32_t{ data[i] } << 16;
-			out += b64_alphabet[v >> 18 & 63];
-			out += b64_alphabet[v >> 12 & 63];
+			out += b64_char(v, 3);
+			out += b64_char(v, 2);
 			out += "==";
 		} else if (n - i == 2) {
 			const std::uint32_t v = std::uint32_t{ data[i] } << 16 | std::uint32_t{ data[i + 1] } << 8;
-			out += b64_alphabet[v >> 18 & 63];
-			out += b64_alphabet[v >> 12 & 63];
-			out += b64_alphabet[v >> 6 & 63];
+			out += b64_char(v, 3);
+			out += b64_char(v, 2);
+			out += b64_char(v, 1);
 			out += '=';
 		}
 		return out;
@@ -120,24 +128,11 @@ namespace {
 		return base64_encode(std::span(reinterpret_cast<const unsigned char *>(s.data()), s.size()));
 	}
 
+	// The value of a base64 character, -1 for any other.
 	auto b64_value(char c) -> int
 	{
-		if (c >= 'A' && c <= 'Z') {
-			return c - 'A';
-		}
-		if (c >= 'a' && c <= 'z') {
-			return c - 'a' + 26;
-		}
-		if (c >= '0' && c <= '9') {
-			return c - '0' + 52;
-		}
-		if (c == '+') {
-			return 62;
-		}
-		if (c == '/') {
-			return 63;
-		}
-		return -1;
+		const auto at = b64_alphabet.find(c);
+		return at == std::string_view::npos ? -1 : static_cast<int>(at);
 	}
 
 	// Strict decoding: length a multiple of 4, padding only at the end, no
@@ -164,7 +159,7 @@ namespace {
 						return std::nullopt;
 					}
 				}
-				v = v << 6 | static_cast<std::uint32_t>(d);
+				v = v << b64_bits | static_cast<std::uint32_t>(d);
 			}
 			out += static_cast<char>(v >> 16 & 0xff);
 			if (pad < 2) {
@@ -173,7 +168,8 @@ namespace {
 			if (pad < 1) {
 				out += static_cast<char>(v & 0xff);
 			}
-			if ((pad == 1 && (v & 0xff) != 0) || (pad == 2 && (v & 0xffff) != 0)) {
+			// The padded octets' bits must be zero.
+			if (pad != 0 && (v & ((std::uint32_t{ 1 } << (8 * pad)) - 1)) != 0) {
 				return std::nullopt;
 			}
 		}
@@ -327,7 +323,7 @@ namespace {
 	{
 		return std::ranges::none_of(s, [](char ch) {
 			const auto c = static_cast<unsigned char>(ch);
-			return c < 0x21 || c > 0x7e || c == ',';
+			return c <= ' ' || c >= detail::ascii_delete || c == ',';
 		});
 	}
 
@@ -367,7 +363,8 @@ namespace {
 
 	auto parse_count(std::string_view s) -> std::optional<std::uint32_t>
 	{
-		if (s.empty() || s.size() > 10 || s[0] == '0') {
+		constexpr std::size_t max_digits = 10;// UINT32_MAX is 4294967295
+		if (s.empty() || s.size() > max_digits || s[0] == '0') {
 			return std::nullopt;
 		}
 		std::uint64_t v = 0;

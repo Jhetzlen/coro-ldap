@@ -138,15 +138,19 @@ struct tls_options
 
 struct connect_options
 {
+	// The defaults of timeout and attempt_delay.
+	static constexpr std::chrono::milliseconds default_timeout = std::chrono::seconds(30);
+	static constexpr std::chrono::milliseconds default_attempt_delay{ 250 };
+
 	// Budget for the whole connect: resolve, every TCP attempt and the TLS
 	// handshake together, from the start of the call. nullopt: no limit.
 	// Zero or negative: fails at once with boost::capy::error::timeout.
-	std::optional<std::chrono::milliseconds> timeout{ std::chrono::seconds(30) };
+	std::optional<std::chrono::milliseconds> timeout{ default_timeout };
 	tls_options tls{};
 	// Happy Eyeballs "Connection Attempt Delay" (RFC 8305 section 5, which
 	// recommends 250 ms): how long an attempt runs alone before the next
 	// address is tried in parallel. Zero: every address at once.
-	std::chrono::milliseconds attempt_delay{ 250 };
+	std::chrono::milliseconds attempt_delay{ default_attempt_delay };
 	// TCP_NODELAY on TCP transports: LDAP sends small requests and waits for
 	// the answer, which Nagle's algorithm would delay.
 	bool tcp_no_delay = true;

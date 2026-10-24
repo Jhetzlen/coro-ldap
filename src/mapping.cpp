@@ -63,6 +63,14 @@ namespace {
 
 	using namespace std::chrono;
 
+	// GeneralizedTime's field limits (RFC 4517 section 3.3.13); 60 is a leap
+	// second.
+	constexpr int max_year = 9999;
+	constexpr int max_month = 12;
+	constexpr int max_hour = 23;
+	constexpr int max_minute = 59;
+	constexpr int max_second = 60;
+
 	// Reads `n` digits at `pos`; nullopt if they are not all digits.
 	auto digits(std::string_view s, std::size_t &pos, std::size_t n) -> std::optional<int>
 	{
@@ -127,14 +135,14 @@ auto parse_generalized_time(std::string_view text) -> result<sys_seconds>
 				return seconds(1);
 			}
 			if (minute) {
-				return seconds(60);
+				return seconds(minutes(1));
 			}
-			return seconds(3600);
+			return seconds(hours(1));
 		}();
 		std::int64_t num = 0;
 		std::int64_t den = 1;
 		while (next_is_digit(text, pos)) {
-			if (den < 1'000'000'000) {// enough precision; the rest is truncated
+			if (den < std::nano::den) {// enough precision; the rest is truncated
 				num = (num * 10) + (text[pos] - '0');
 				den *= 10;
 			}
@@ -142,7 +150,8 @@ auto parse_generalized_time(std::string_view text) -> result<sys_seconds>
 		}
 		fraction = seconds(unit.count() * num / den);
 	}
-	if (*month < 1 || *month > 12 || *hour > 23 || (minute && *minute > 59) || (second && *second > 60)) {
+	if (*month < 1 || *month > max_month || *hour > max_hour || (minute && *minute > max_minute)
+		|| (second && *second > max_second)) {
 		return bad("field out of range");
 	}
 	const year_month_day ymd{ std::chrono::year(*year),
@@ -163,18 +172,18 @@ auto parse_generalized_time(std::string_view text) -> result<sys_seconds>
 		const int sign = text[pos] == '-' ? -1 : 1;
 		++pos;
 		const auto oh = digits(text, pos, 2);
-		if (!oh || *oh > 23) {
+		if (!oh || *oh > max_hour) {
 			return bad("time zone hour");
 		}
 		int om = 0;
 		if (next_is_digit(text, pos)) {
 			const auto m = digits(text, pos, 2);
-			if (!m || *m > 59) {
+			if (!m || *m > max_minute) {
 				return bad("time zone minute");
 			}
 			om = *m;
 		}
-		offset = seconds(sign * ((*oh * 3600) + (om * 60)));
+		offset = sign * (hours(*oh) + minutes(om));
 	} else {
 		return bad("time zone");
 	}
@@ -193,7 +202,7 @@ auto format_generalized_time(sys_seconds t) -> result<std::string>
 	const sys_days day = floor<days>(t);
 	const year_month_day ymd(day);
 	const int y = static_cast<int>(ymd.year());
-	if (y < 0 || y > 9999) {
+	if (y < 0 || y > max_year) {
 		return fail(client_errc::encode_error, detail::format("GeneralizedTime: year {} outside 0000-9999", y));
 	}
 	// Plain integers rather than the chrono formatter ("{:%Y%m%d%H%M%S}Z"),

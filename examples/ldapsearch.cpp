@@ -190,13 +190,16 @@ auto ldif_safe(std::string_view v) noexcept -> bool
 	}
 	return std::ranges::none_of(v, [](char c) {
 		const auto b = static_cast<unsigned char>(c);
-		return b == 0 || b == '\n' || b == '\r' || b > 127;
+		return b == 0 || b == '\n' || b == '\r' || b >= 0x80;
 	});
 }
 
 auto base64(std::string_view in) -> std::string
 {
 	static constexpr std::string_view table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	// Six bits per character.
+	constexpr unsigned bits = 6;
+	constexpr std::uint32_t mask = 0x3F;
 	std::string out;
 	out.reserve((in.size() + 2) / 3 * 4);
 	std::size_t i = 0;
@@ -204,19 +207,19 @@ auto base64(std::string_view in) -> std::string
 		const auto n = static_cast<std::uint32_t>(static_cast<unsigned char>(in[i])) << 16
 					   | static_cast<std::uint32_t>(static_cast<unsigned char>(in[i + 1])) << 8
 					   | static_cast<unsigned char>(in[i + 2]);
-		out += table[n >> 18];
-		out += table[(n >> 12) & 63];
-		out += table[(n >> 6) & 63];
-		out += table[n & 63];
+		out += table[n >> (3 * bits)];
+		out += table[(n >> (2 * bits)) & mask];
+		out += table[(n >> bits) & mask];
+		out += table[n & mask];
 	}
 	if (const std::size_t rest = in.size() - i; rest > 0) {
 		auto n = static_cast<std::uint32_t>(static_cast<unsigned char>(in[i])) << 16;
 		if (rest == 2) {
 			n |= static_cast<std::uint32_t>(static_cast<unsigned char>(in[i + 1])) << 8;
 		}
-		out += table[n >> 18];
-		out += table[(n >> 12) & 63];
-		out += rest == 2 ? table[(n >> 6) & 63] : '=';
+		out += table[n >> (3 * bits)];
+		out += table[(n >> (2 * bits)) & mask];
+		out += rest == 2 ? table[(n >> bits) & mask] : '=';
 		out += '=';
 	}
 	return out;

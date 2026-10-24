@@ -201,10 +201,8 @@ namespace {
 
 	auto has_control_character(std::string_view s) noexcept -> bool
 	{
-		return std::ranges::any_of(s, [](char c) {
-			const auto b = static_cast<unsigned char>(c);
-			return b < 0x20 || b == 0x7F;
-		});
+		return std::ranges::any_of(
+		  s, [](char c) { return ldap::detail::is_ascii_control(static_cast<unsigned char>(c)); });
 	}
 
 	auto is_ip_literal(const std::string &name) -> bool

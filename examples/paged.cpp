@@ -8,6 +8,8 @@
 
 namespace ldap = jhetz::ldap;
 
+constexpr int page_size = 100;
+
 auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task<int>
 {
 	auto c = co_await ldap::connect(ioc, text);
@@ -23,7 +25,7 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task
 		.controls = { ldap::server_side_sort{
 		  .keys = { { .attribute = "mail", .ordering_rule = "caseIgnoreOrderingMatch" } } } },
 	  },
-	  100);
+	  page_size);
 	if (!pages) {
 		std::cerr << pages.error().message() << '\n';
 		co_return 1;

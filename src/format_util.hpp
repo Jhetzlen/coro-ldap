@@ -14,6 +14,15 @@
 
 namespace jhetz::ldap::detail {
 
+// The low four bits of an octet: one hex digit.
+inline constexpr unsigned nibble_mask = 0xFu;
+
+// DEL, the last ASCII character.
+inline constexpr unsigned char ascii_delete = 0x7Fu;
+
+// An ASCII control character: C0 (below ' ') or DEL.
+constexpr auto is_ascii_control(unsigned char c) noexcept -> bool { return c < ' ' || c == ascii_delete; }
+
 auto vformat(std::string_view fmt, std::format_args args) -> std::string;
 void vformat_to(std::string &out, std::string_view fmt, std::format_args args);
 

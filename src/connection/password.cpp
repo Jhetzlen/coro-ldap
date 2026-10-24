@@ -219,29 +219,38 @@ namespace {
 			choose_password_method));
 	}
 
+	// The Win32 error codes of a failed password change.
+	enum class win32_error : unsigned {
+		access_denied = 0x5,// ERROR_ACCESS_DENIED
+		invalid_password = 0x56,// ERROR_INVALID_PASSWORD
+		password_restriction = 0x52D,// ERROR_PASSWORD_RESTRICTION
+		account_locked_out = 0x775,// ERROR_ACCOUNT_LOCKED_OUT
+	};
+
 	// Active Directory starts its diagnosticMessage with the Win32 error in
 	// hex ("0000052D: Constraint violation - ..."): the common ones of a
 	// password change, explained ("" for the others).
 	auto ad_password_explanation(std::string_view diagnostic) -> std::string_view
 	{
-		if (diagnostic.size() < 9 || diagnostic[8] != ':') {
+		constexpr std::size_t code_digits = 8;
+		if (diagnostic.size() <= code_digits || diagnostic[code_digits] != ':') {
 			return {};
 		}
 		unsigned code = 0;
 		// NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): bounded to 8 chars, no terminator read
-		const auto [end, ec] = std::from_chars(diagnostic.data(), diagnostic.data() + 8, code, 16);
-		if (ec != std::errc{} || end != diagnostic.data() + 8) {
+		const auto [end, ec] = std::from_chars(diagnostic.data(), diagnostic.data() + code_digits, code, 16);
+		if (ec != std::errc{} || end != diagnostic.data() + code_digits) {
 			return {};
 		}
-		switch (code) {
-		case 0x5:// ERROR_ACCESS_DENIED
+		switch (static_cast<win32_error>(code)) {
+		case win32_error::access_denied:
 			return "not allowed to set this user's password";
-		case 0x56:// ERROR_INVALID_PASSWORD
+		case win32_error::invalid_password:
 			return "the old password is wrong";
-		case 0x52D:// ERROR_PASSWORD_RESTRICTION
+		case win32_error::password_restriction:
 			return "the new password does not meet the password policy (length, complexity, history or minimum "
 				   "age)";
-		case 0x775:// ERROR_ACCOUNT_LOCKED_OUT
+		case win32_error::account_locked_out:
 			return "the account is locked out";
 		default:
 			return {};

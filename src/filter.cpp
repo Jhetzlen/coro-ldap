@@ -553,7 +553,7 @@ namespace {
 		const auto escape = [&](unsigned char u) {
 			out += '\\';
 			out += digits[u >> 4];
-			out += digits[u & 0xFu];
+			out += digits[u & detail::nibble_mask];
 		};
 		for (std::size_t i = 0; i < value.size(); ++i) {
 			const char c = value[i];
@@ -1224,6 +1224,24 @@ auto unescape_filter_value(std::string_view text, std::pmr::memory_resource *mr)
 
 // ---------------------------------------------------------------- tree -> BER
 
+namespace {
+
+	// The Filter CHOICE's context tag numbers (RFC 4511 section 4.5.1).
+	namespace filter_choice {
+		constexpr std::uint8_t and_ = 0;
+		constexpr std::uint8_t or_ = 1;
+		constexpr std::uint8_t not_ = 2;
+		constexpr std::uint8_t equality_match = 3;
+		constexpr std::uint8_t substrings = 4;
+		constexpr std::uint8_t greater_or_equal = 5;
+		constexpr std::uint8_t less_or_equal = 6;
+		constexpr std::uint8_t present = 7;
+		constexpr std::uint8_t approx_match = 8;
+		constexpr std::uint8_t extensible_match = 9;
+	}// namespace filter_choice
+
+}// namespace
+
 namespace detail {
 
 	auto check_filter(const filter &f, const filter_limits &limits) -> result<void>
@@ -1258,20 +1276,22 @@ namespace detail {
 			switch (static_cast<filter::kind>(n.k)) {
 			case filter::kind::and_:
 			case filter::kind::or_:
-				w.constructed(ber::context(n.k == access::k(filter::kind::and_) ? 0 : 1), [&](ber::writer &c) {
-					for (std::uint32_t child = n.first; child != npos; child = access::at(f, child).next) {
-						write_node(c, f, child);
-					}
-				});
+				w.constructed(
+				  ber::context(n.k == access::k(filter::kind::and_) ? filter_choice::and_ : filter_choice::or_),
+				  [&](ber::writer &c) {
+					  for (std::uint32_t child = n.first; child != npos; child = access::at(f, child).next) {
+						  write_node(c, f, child);
+					  }
+				  });
 				return;
 			case filter::kind::not_:
-				w.constructed(ber::context(2), [&](ber::writer &c) { write_node(c, f, n.first); });
+				w.constructed(ber::context(filter_choice::not_), [&](ber::writer &c) { write_node(c, f, n.first); });
 				return;
 			case filter::kind::equality:
-				ava(3);
+				ava(filter_choice::equality_match);
 				return;
 			case filter::kind::substrings:
-				w.constructed(ber::context(4), [&](ber::writer &c) {
+				w.constructed(ber::context(filter_choice::substrings), [&](ber::writer &c) {
 					c.octet_string(attr);
 					c.constructed(ber::tags::sequence, [&](ber::writer &s) {
 						for (std::uint32_t p = n.first; p != npos; p = access::at(f, p).next) {
@@ -1291,19 +1311,19 @@ namespace detail {
 				});
 				return;
 			case filter::kind::greater_or_equal:
-				ava(5);
+				ava(filter_choice::greater_or_equal);
 				return;
 			case filter::kind::less_or_equal:
-				ava(6);
+				ava(filter_choice::less_or_equal);
 				return;
 			case filter::kind::present:
-				w.octet_string(attr, ber::context(7));
+				w.octet_string(attr, ber::context(filter_choice::present));
 				return;
 			case filter::kind::approx:
-				ava(8);
+				ava(filter_choice::approx_match);
 				return;
 			case filter::kind::extensible_match:
-				w.constructed(ber::context(9), [&](ber::writer &c) {
+				w.constructed(ber::context(filter_choice::extensible_match), [&](ber::writer &c) {
 					const std::string_view rule = access::rule_of(f, n);
 					if (!rule.empty()) {
 						c.octet_string(rule, ber::context(1));
@@ -1574,18 +1594,18 @@ namespace {
 				  detail::format("filter: unknown filter choice {} at offset {}", ber::to_string(*t), at));
 			}
 			switch (t->number) {
-			case 0:
-			case 1:
-			case 2: {
+			case filter_choice::and_:
+			case filter_choice::or_:
+			case filter_choice::not_: {
 				auto sub = r.enter(*t);
 				if (!sub) {
 					return std::unexpected(std::move(sub.error()));
 				}
 				const kind k = [number = t->number] {
-					if (number == 0) {
+					if (number == filter_choice::and_) {
 						return kind::and_;
 					}
-					if (number == 1) {
+					if (number == filter_choice::or_) {
 						return kind::or_;
 					}
 					return kind::not_;
@@ -1609,15 +1629,15 @@ namespace {
 				}
 				return n;
 			}
-			case 3:
+			case filter_choice::equality_match:
 				return ava(r, *t, kind::equality, parent);
-			case 4:
+			case filter_choice::substrings:
 				return substrings(r, *t, parent);
-			case 5:
+			case filter_choice::greater_or_equal:
 				return ava(r, *t, kind::greater_or_equal, parent);
-			case 6:
+			case filter_choice::less_or_equal:
 				return ava(r, *t, kind::less_or_equal, parent);
-			case 7: {
+			case filter_choice::present: {
 				auto a = read_attr(r, *t);
 				if (!a) {
 					return std::unexpected(std::move(a.error()));
@@ -1626,9 +1646,9 @@ namespace {
 				access::set_attr(*out_, n, *a);
 				return n;
 			}
-			case 8:
+			case filter_choice::approx_match:
 				return ava(r, *t, kind::approx, parent);
-			case 9:
+			case filter_choice::extensible_match:
 				return extensible(r, *t, parent);
 			default:
 				return fail(client_errc::unexpected_tag,

@@ -42,10 +42,6 @@ Checks:
   # No IWYU mapping for Capy/Corosio umbrella headers and our detail headers;
   # the -Werror GCC and Clang builds catch a missing include.
   - -misc-include-cleaner
-  # BER tags, RFC 4511 result codes, bit masks and test vectors are the numbers
-  # the RFCs name; a constant per number would hide them.
-  - -cppcoreguidelines-avoid-magic-numbers
-  - -readability-magic-numbers
   # The codec indexes spans and strings after explicit length checks; .at()
   # or gsl::span would add throws to a non-throwing decoder.
   - -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access
@@ -94,6 +90,14 @@ CheckOptions:
   bugprone-signed-bitwise.IgnorePositiveIntegerLiterals: true
   # 'if (ptr)' is the idiom for the C API handles and lookups returning pointers.
   readability-implicit-bool-conversion.AllowPointerConditions: true
+  # Magic numbers (tests, fuzz and bench turn the checks off): 0-4, the
+  # decimal radix, powers of two (bit masks, shift widths, 8 bits per octet,
+  # buffer and arena sizes) and the 0xFF octet mask read as themselves;
+  # anything else gets a named constant.
+  readability-magic-numbers.IgnoredIntegerValues: '1;2;3;4;10;255'
+  readability-magic-numbers.IgnorePowersOf2IntegerValues: true
+  cppcoreguidelines-avoid-magic-numbers.IgnoredIntegerValues: '1;2;3;4;10;255'
+  cppcoreguidelines-avoid-magic-numbers.IgnorePowersOf2IntegerValues: true
   # '(void)f()' is the explicit way to drop a result here.
   bugprone-unused-return-value.AllowCastToVoid: true
   # pmr move assignment may allocate (see noexcept-move-operations above).

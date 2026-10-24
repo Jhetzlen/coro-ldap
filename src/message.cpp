@@ -435,30 +435,18 @@ auto message::operator=(message &&other) -> message &
 
 namespace {
 
-	// Application tag numbers of the protocolOp CHOICE (RFC 4511 section 4.2).
-	namespace op_tag {
-		constexpr std::uint8_t bind_request = 0;
-		constexpr std::uint8_t bind_response = 1;
-		constexpr std::uint8_t unbind_request = 2;
-		constexpr std::uint8_t search_request = 3;
-		constexpr std::uint8_t search_result_entry = 4;
-		constexpr std::uint8_t search_result_done = 5;
-		constexpr std::uint8_t modify_request = 6;
-		constexpr std::uint8_t modify_response = 7;
-		constexpr std::uint8_t add_request = 8;
-		constexpr std::uint8_t add_response = 9;
-		constexpr std::uint8_t del_request = 10;
-		constexpr std::uint8_t del_response = 11;
-		constexpr std::uint8_t modify_dn_request = 12;
-		constexpr std::uint8_t modify_dn_response = 13;
-		constexpr std::uint8_t compare_request = 14;
-		constexpr std::uint8_t compare_response = 15;
-		constexpr std::uint8_t abandon_request = 16;
-		constexpr std::uint8_t search_result_reference = 19;
-		constexpr std::uint8_t extended_request = 23;
-		constexpr std::uint8_t extended_response = 24;
-		constexpr std::uint8_t intermediate_response = 25;
-	}// namespace op_tag
+	namespace op_tag = detail::op_tag;
+
+	// Context tag numbers of operation fields (RFC 4511 sections 4.2.2 and
+	// 4.12).
+	namespace field_tag {
+		constexpr std::uint8_t server_sasl_creds = 7;// BindResponse
+		constexpr std::uint8_t response_name = 10;// ExtendedResponse
+		constexpr std::uint8_t response_value = 11;
+	}// namespace field_tag
+
+	// BindRequest's version INTEGER (1 .. 127) (RFC 4511 section 4.2).
+	constexpr std::int64_t max_bind_version = 127;
 
 	auto bad(std::string_view what, std::size_t offset) -> std::unexpected<error>
 	{
@@ -519,7 +507,7 @@ namespace {
 			return detail::check_filter(s->filter, {});
 		}
 		if (const auto *b = std::get_if<bind_request>(&m.op)) {
-			if (b->version < 1 || b->version > 127) {
+			if (b->version < 1 || b->version > max_bind_version) {
 				return out_of_range("bind version");
 			}
 		} else if (const auto *a = std::get_if<abandon_request>(&m.op)) {
@@ -618,7 +606,7 @@ namespace {
 			seq(op_tag::bind_response, [&](ber::writer &o) {
 				write_result(o, b.result);
 				if (b.server_sasl_creds) {
-					o.octet_string(*b.server_sasl_creds, ber::context(7));
+					o.octet_string(*b.server_sasl_creds, ber::context(field_tag::server_sasl_creds));
 				}
 			});
 		}
@@ -716,10 +704,10 @@ namespace {
 			seq(op_tag::extended_response, [&](ber::writer &o) {
 				write_result(o, e.result);
 				if (e.response_name) {
-					o.octet_string(*e.response_name, ber::context(10));
+					o.octet_string(*e.response_name, ber::context(field_tag::response_name));
 				}
 				if (e.response_value) {
-					o.octet_string(*e.response_value, ber::context(11));
+					o.octet_string(*e.response_value, ber::context(field_tag::response_value));
 				}
 			});
 		}
@@ -1024,7 +1012,7 @@ namespace {
 			}
 			protocol_op op(std::in_place_type<bind_request>, a_);
 			auto &b = std::get<bind_request>(op);
-			auto version = read_ranged(*o, ber::tags::integer, 1, 127, "bind version");
+			auto version = read_ranged(*o, ber::tags::integer, 1, max_bind_version, "bind version");
 			if (!version) {
 				return std::unexpected(std::move(version.error()));
 			}
@@ -1089,7 +1077,7 @@ namespace {
 			if (auto done = read_result(*o, b.result); !done) {
 				return std::unexpected(std::move(done.error()));
 			}
-			auto creds = optional_str(*o, ber::context(7));
+			auto creds = optional_str(*o, ber::context(field_tag::server_sasl_creds));
 			if (!creds) {
 				return std::unexpected(std::move(creds.error()));
 			}
@@ -1378,11 +1366,11 @@ namespace {
 			if (auto done = read_result(*o, e.result); !done) {
 				return std::unexpected(std::move(done.error()));
 			}
-			auto name = optional_str(*o, ber::context(10));
+			auto name = optional_str(*o, ber::context(field_tag::response_name));
 			if (!name) {
 				return std::unexpected(std::move(name.error()));
 			}
-			auto value = optional_str(*o, ber::context(11));
+			auto value = optional_str(*o, ber::context(field_tag::response_value));
 			if (!value) {
 				return std::unexpected(std::move(value.error()));
 			}
