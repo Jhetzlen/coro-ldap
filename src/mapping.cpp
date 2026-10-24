@@ -94,6 +94,57 @@ namespace {
 		return pos < s.size() && s[pos] >= '0' && s[pos] <= '9';
 	}
 
+	// The fraction whose digits start at `pos` (after '.' or ','), of
+	// `unit`, the last unit given; past nanoseconds the digits are read and
+	// truncated. The error is the reason for parse_generalized_time.
+	auto read_fraction(std::string_view text, std::size_t &pos, seconds unit) -> std::expected<seconds, const char *>
+	{
+		if (!next_is_digit(text, pos)) {
+			return std::unexpected("fraction");
+		}
+		std::int64_t num = 0;
+		std::int64_t den = 1;
+		while (next_is_digit(text, pos)) {
+			if (den < std::nano::den) {// enough precision; the rest is truncated
+				num = (num * 10) + (text[pos] - '0');
+				den *= 10;
+			}
+			++pos;
+		}
+		return seconds(unit.count() * num / den);
+	}
+
+	// g-time-zone at `pos`: "Z" or a differential (+|-)HH[MM], as the offset
+	// from UTC. The error is the reason for parse_generalized_time.
+	auto read_time_zone(std::string_view text, std::size_t &pos) -> std::expected<seconds, const char *>
+	{
+		if (pos >= text.size()) {
+			return std::unexpected("time zone missing");
+		}
+		if (text[pos] == 'Z') {
+			++pos;
+			return seconds{ 0 };
+		}
+		if (text[pos] != '+' && text[pos] != '-') {
+			return std::unexpected("time zone");
+		}
+		const int sign = text[pos] == '-' ? -1 : 1;
+		++pos;
+		const auto oh = digits(text, pos, 2);
+		if (!oh || *oh > max_hour) {
+			return std::unexpected("time zone hour");
+		}
+		int om = 0;
+		if (next_is_digit(text, pos)) {
+			const auto m = digits(text, pos, 2);
+			if (!m || *m > max_minute) {
+				return std::unexpected("time zone minute");
+			}
+			om = *m;
+		}
+		return sign * (hours(*oh) + minutes(om));
+	}
+
 }// namespace
 
 auto parse_generalized_time(std::string_view text) -> result<sys_seconds>
@@ -127,9 +178,6 @@ auto parse_generalized_time(std::string_view text) -> result<sys_seconds>
 	seconds fraction{ 0 };
 	if (pos < text.size() && (text[pos] == '.' || text[pos] == ',')) {
 		++pos;
-		if (!next_is_digit(text, pos)) {
-			return bad("fraction");
-		}
 		const seconds unit = [second, minute] {
 			if (second) {
 				return seconds(1);
@@ -139,16 +187,11 @@ auto parse_generalized_time(std::string_view text) -> result<sys_seconds>
 			}
 			return seconds(hours(1));
 		}();
-		std::int64_t num = 0;
-		std::int64_t den = 1;
-		while (next_is_digit(text, pos)) {
-			if (den < std::nano::den) {// enough precision; the rest is truncated
-				num = (num * 10) + (text[pos] - '0');
-				den *= 10;
-			}
-			++pos;
+		const auto f = read_fraction(text, pos, unit);
+		if (!f) {
+			return bad(f.error());
 		}
-		fraction = seconds(unit.count() * num / den);
+		fraction = *f;
 	}
 	if (*month < 1 || *month > max_month || *hour > max_hour || (minute && *minute > max_minute)
 		|| (second && *second > max_second)) {
@@ -161,31 +204,9 @@ auto parse_generalized_time(std::string_view text) -> result<sys_seconds>
 		return bad("no such date");
 	}
 
-	// g-time-zone: "Z" or a differential (+|-)HH[MM].
-	if (pos >= text.size()) {
-		return bad("time zone missing");
-	}
-	seconds offset{ 0 };
-	if (text[pos] == 'Z') {
-		++pos;
-	} else if (text[pos] == '+' || text[pos] == '-') {
-		const int sign = text[pos] == '-' ? -1 : 1;
-		++pos;
-		const auto oh = digits(text, pos, 2);
-		if (!oh || *oh > max_hour) {
-			return bad("time zone hour");
-		}
-		int om = 0;
-		if (next_is_digit(text, pos)) {
-			const auto m = digits(text, pos, 2);
-			if (!m || *m > max_minute) {
-				return bad("time zone minute");
-			}
-			om = *m;
-		}
-		offset = sign * (hours(*oh) + minutes(om));
-	} else {
-		return bad("time zone");
+	const auto offset = read_time_zone(text, pos);
+	if (!offset) {
+		return bad(offset.error());
 	}
 	if (pos != text.size()) {
 		return bad("trailing characters");
@@ -194,7 +215,7 @@ auto parse_generalized_time(std::string_view text) -> result<sys_seconds>
 	// A leap second (60) rolls into the next minute: sys_seconds has no 23:59:60.
 	const sys_seconds local =
 	  sys_days(ymd) + hours(*hour) + minutes(minute.value_or(0)) + seconds(second.value_or(0)) + fraction;
-	return local - offset;
+	return local - *offset;
 }
 
 auto format_generalized_time(sys_seconds t) -> result<std::string>

@@ -65,6 +65,70 @@ namespace detail {
 		bool new_rdn = true;// false: joined to the previous AVA with '+'
 	};
 
+	// The length of the value unit at s[i], which is not ',', '+' or ' ': an
+	// escape, a UTF-8 sequence (RFC 4514: UTF-8 only) or one character; 0 if
+	// none may start there.
+	constexpr auto dn_value_unit_length(std::string_view s, std::size_t i) noexcept -> std::size_t
+	{
+		const std::size_t n = s.size();
+		const char c = s[i];
+		if (c == '\\') {
+			if (i + 1 < n && is_dn_escapable(s[i + 1])) {
+				return 2;
+			}
+			if (i + 2 < n && is_hex(s[i + 1]) && is_hex(s[i + 2])) {
+				return 3;
+			}
+			return 0;
+		}
+		if (c == '"' || c == ';' || c == '<' || c == '>' || c == '\0') {
+			return 0;
+		}
+		if (static_cast<unsigned char>(c) >= 0x80u) {
+			return utf8_sequence_length(s, i);
+		}
+		return 1;
+	}
+
+	// The `#hexstring` value whose digits start at s[i]: advances `i` past
+	// them and sets tok's value. npos, or the offset of the error.
+	constexpr auto scan_dn_hex_value(std::string_view s, std::size_t &i, dn_token &tok) noexcept -> std::size_t
+	{
+		const std::size_t start = i;
+		while (i < s.size() && is_hex(s[i])) {
+			++i;
+		}
+		if (i == start || (i - start) % 2 != 0) {
+			return i;
+		}
+		tok.raw_value = s.substr(start, i - start);
+		tok.hex = true;
+		return std::string_view::npos;
+	}
+
+	// The string value starting at s[i]: advances `i` to the ',' or '+'
+	// ending it (or the end) and sets tok's value, without its unescaped
+	// trailing spaces. npos, or the offset of the error.
+	constexpr auto scan_dn_string_value(std::string_view s, std::size_t &i, dn_token &tok) noexcept -> std::size_t
+	{
+		const std::size_t start = i;
+		std::size_t end = i;// end of the value without unescaped trailing spaces
+		while (i < s.size() && s[i] != ',' && s[i] != '+') {
+			if (s[i] == ' ') {
+				++i;
+				continue;
+			}
+			const std::size_t len = dn_value_unit_length(s, i);
+			if (len == 0) {
+				return i;
+			}
+			i += len;
+			end = i;
+		}
+		tok.raw_value = s.substr(start, end - start);
+		return std::string_view::npos;
+	}
+
 	// Scans RFC 4514 text and calls `on_ava(dn_token)` for every AVA in
 	// order. Returns npos on success, otherwise the offset of the error.
 	// constexpr, so the same code validates literals at compile time.
@@ -102,49 +166,12 @@ namespace detail {
 			dn_token tok{ .type = type, .raw_value = {}, .hex = false, .new_rdn = new_rdn };
 			if (i < n && s[i] == '#') {
 				++i;
-				const std::size_t start = i;
-				while (i < n && is_hex(s[i])) {
-					++i;
+				if (const std::size_t error = scan_dn_hex_value(s, i, tok); error != ok) {
+					return error;
 				}
-				if (i == start || (i - start) % 2 != 0) {
-					return i;
-				}
-				tok.raw_value = s.substr(start, i - start);
-				tok.hex = true;
 				skip_spaces();
-			} else {
-				const std::size_t start = i;
-				std::size_t end = i;// end of the value without unescaped trailing spaces
-				while (i < n) {
-					const char c = s[i];
-					if (c == '\\') {
-						if (i + 1 < n && is_dn_escapable(s[i + 1])) {
-							i += 2;
-						} else if (i + 2 < n && is_hex(s[i + 1]) && is_hex(s[i + 2])) {
-							i += 3;
-						} else {
-							return i;
-						}
-						end = i;
-					} else if (c == ',' || c == '+') {
-						break;
-					} else if (c == '"' || c == ';' || c == '<' || c == '>' || c == '\0') {
-						return i;
-					} else if (c == ' ') {
-						++i;
-					} else if (static_cast<unsigned char>(c) >= 0x80u) {
-						const std::size_t len = utf8_sequence_length(s, i);// RFC 4514: UTF-8 only
-						if (len == 0) {
-							return i;
-						}
-						i += len;
-						end = i;
-					} else {
-						++i;
-						end = i;
-					}
-				}
-				tok.raw_value = s.substr(start, end - start);
+			} else if (const std::size_t error = scan_dn_string_value(s, i, tok); error != ok) {
+				return error;
 			}
 			on_ava(tok);
 			if (i == n) {

@@ -120,37 +120,73 @@ namespace {
 		[[nodiscard]] auto has(std::string_view keyword) const -> bool { return get(keyword) != nullptr; }
 	};
 
+	auto schema_error(const char *why) -> std::unexpected<error>
+	{
+		return fail(client_errc::decode_error, detail::format("schema: {}", why));
+	}
+
+	// A keyword's argument: one word or quoted string, or a parenthesised
+	// list of them ('$' separators dropped), appended to `values`.
+	auto read_values(lexer &lx, std::vector<std::string> &values) -> result<void>
+	{
+		constexpr std::size_t max_values = 4096;
+		auto v = lx.next();
+		if (!v) {
+			return std::unexpected(std::move(v.error()));
+		}
+		if (v->k == token::kind::word || v->k == token::kind::quoted) {
+			values.push_back(std::move(v->text));
+			return {};
+		}
+		if (v->k != token::kind::open) {
+			return schema_error("missing value");
+		}
+		while (true) {
+			auto e = lx.next();
+			if (!e) {
+				return std::unexpected(std::move(e.error()));
+			}
+			if (e->k == token::kind::close) {
+				return {};
+			}
+			if (e->k == token::kind::end || e->k == token::kind::open) {
+				return schema_error("unterminated list");
+			}
+			if (e->text == "$") {
+				continue;
+			}
+			if (values.size() == max_values) {
+				return schema_error("list too long");
+			}
+			values.push_back(std::move(e->text));
+		}
+	}
+
 	auto parse_definition(std::string_view text) -> result<definition>
 	{
-		const auto bad = [](const char *why) {
-			return fail(client_errc::decode_error, detail::format("schema: {}", why));
-		};
 		lexer lx(text);
 		auto t = lx.next();
 		if (!t) {
 			return std::unexpected(std::move(t.error()));
 		}
 		if (t->k != token::kind::open) {
-			return bad("a definition starts with '('");
+			return schema_error("a definition starts with '('");
 		}
 		t = lx.next();
 		if (!t) {
 			return std::unexpected(std::move(t.error()));
 		}
 		if (t->k != token::kind::word && t->k != token::kind::quoted) {
-			return bad("missing OID");
+			return schema_error("missing OID");
 		}
 		definition d;
 		d.oid = std::move(t->text);
 		if (!detail::is_oid(d.oid)) {
-			return bad("invalid OID");
+			return schema_error("invalid OID");
 		}
-		std::optional<token> pending;
 		constexpr std::size_t max_fields = 256;
-		constexpr std::size_t max_values = 4096;
 		while (true) {
-			result<token> k = pending ? result<token>(std::move(*pending)) : lx.next();
-			pending.reset();
+			auto k = lx.next();
 			if (!k) {
 				return std::unexpected(std::move(k.error()));
 			}
@@ -158,44 +194,18 @@ namespace {
 				break;
 			}
 			if (k->k == token::kind::end) {
-				return bad("missing ')'");
+				return schema_error("missing ')'");
 			}
 			if (k->k != token::kind::word || !is_keyword(k->text)) {
-				return bad("expected a keyword");
+				return schema_error("expected a keyword");
 			}
 			if (d.fields.size() == max_fields) {
-				return bad("too many fields");
+				return schema_error("too many fields");
 			}
 			std::vector<std::string> values;
 			if (!is_flag(k->text)) {
-				auto v = lx.next();
-				if (!v) {
-					return std::unexpected(std::move(v.error()));
-				}
-				if (v->k == token::kind::open) {
-					while (true) {
-						auto e = lx.next();
-						if (!e) {
-							return std::unexpected(std::move(e.error()));
-						}
-						if (e->k == token::kind::close) {
-							break;
-						}
-						if (e->k == token::kind::end || e->k == token::kind::open) {
-							return bad("unterminated list");
-						}
-						if (e->text == "$") {
-							continue;
-						}
-						if (values.size() == max_values) {
-							return bad("list too long");
-						}
-						values.push_back(std::move(e->text));
-					}
-				} else if (v->k == token::kind::word || v->k == token::kind::quoted) {
-					values.push_back(std::move(v->text));
-				} else {
-					return bad("missing value");
+				if (auto r = read_values(lx, values); !r) {
+					return std::unexpected(std::move(r.error()));
 				}
 			}
 			d.fields.emplace_back(std::move(k->text), std::move(values));
@@ -205,7 +215,7 @@ namespace {
 			return std::unexpected(std::move(rest.error()));
 		}
 		if (rest->k != token::kind::end) {
-			return bad("text after the closing ')'");
+			return schema_error("text after the closing ')'");
 		}
 		return d;
 	}

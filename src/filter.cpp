@@ -1069,6 +1069,14 @@ namespace {
 				access::set_attr(*out_, node, attr);
 				return node;
 			}
+			return parse_substrings(attr, value_start, parent);
+		}
+
+		// A substrings item from `value_start` (after '='), whose value has
+		// unescaped '*' and is not just "*".
+		auto parse_substrings(std::string_view attr, std::size_t value_start, std::uint32_t parent)
+		  -> result<std::uint32_t>
+		{
 			const std::uint32_t node = add(kind::substrings, parent);
 			access::set_attr(*out_, node, attr);
 			bool first = true;

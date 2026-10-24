@@ -408,6 +408,227 @@ auto url::has_critical_extension() const noexcept -> bool
 	return std::ranges::any_of(extensions_, &url_extension::critical);
 }
 
+namespace {
+
+	auto parse_scheme(std::string_view scheme) -> std::optional<url_scheme>
+	{
+		if (iequals(scheme, "ldap")) {
+			return url_scheme::ldap;
+		}
+		if (iequals(scheme, "ldaps")) {
+			return url_scheme::ldaps;
+		}
+		if (iequals(scheme, "ldapi")) {
+			return url_scheme::ldapi;
+		}
+		return std::nullopt;
+	}
+
+	// An authority's host, decoded, and its port text if a ':' follows it.
+	struct authority_parts
+	{
+		std::pmr::string host{};
+		bool host_is_ipv6 = false;
+		bool has_port = false;
+		std::string_view port_text{};
+		std::size_t port_offset = 0;// of port_text in the URL
+	};
+
+	// "[" IPv6address ["%25" ZoneID] "]" [":" port] (RFC 3986, RFC 6874),
+	// the authority starting at offset `begin` in the URL.
+	auto parse_ip_literal(std::string_view authority, std::size_t begin, std::pmr::memory_resource *mr)
+	  -> result<authority_parts>
+	{
+		authority_parts out{ .host = std::pmr::string(mr), .host_is_ipv6 = true };
+		const std::size_t close = authority.find(']');
+		if (close == std::string_view::npos) {
+			return bad("missing ']' after IPv6 address", begin);
+		}
+		const std::string_view literal = authority.substr(1, close - 1);
+		if (!literal.empty() && (literal[0] == 'v' || literal[0] == 'V')) {
+			return bad("IPvFuture addresses are not supported", begin + 1);
+		}
+		// RFC 6874: IPv6address "%25" ZoneID
+		const std::size_t zone = literal.find("%25");
+		const std::string_view address = literal.substr(0, zone);
+		if (!is_ipv6(address)) {
+			return bad("invalid IPv6 address", begin + 1);
+		}
+		out.host.assign(address);
+		if (zone != std::string_view::npos) {
+			const std::string_view zone_id = literal.substr(zone + 3);
+			if (zone_id.empty()) {
+				return bad("empty IPv6 zone", begin + 1 + zone);
+			}
+			auto z = decode(zone_id, begin + 1 + zone + 3, "IPv6 zone", is_unreserved, mr);
+			if (!z) {
+				return std::unexpected(std::move(z.error()));
+			}
+			out.host += '%';
+			out.host += *z;
+		}
+		const std::string_view rest = authority.substr(close + 1);
+		if (!rest.empty()) {
+			if (rest[0] != ':') {
+				return bad("unexpected character after ']'", begin + close + 1);
+			}
+			out.has_port = true;
+			out.port_text = rest.substr(1);
+			out.port_offset = begin + close + 2;
+		}
+		return out;
+	}
+
+	// reg-name [":" port], the authority starting at offset `begin` in the URL.
+	auto parse_reg_name(std::string_view authority, std::size_t begin, std::pmr::memory_resource *mr)
+	  -> result<authority_parts>
+	{
+		const std::size_t colon = authority.find(':');
+		const std::string_view host = authority.substr(0, colon);
+		if (const auto at = host.find('@'); at != std::string_view::npos) {
+			return bad("userinfo ('@') not allowed", begin + at);
+		}
+		auto h = decode(host, begin, "host", is_reg_name_char, mr);
+		if (!h) {
+			return std::unexpected(std::move(h.error()));
+		}
+		authority_parts out{ .host = std::move(*h) };
+		if (colon != std::string_view::npos) {
+			out.has_port = true;
+			out.port_text = authority.substr(colon + 1);
+			out.port_offset = begin + colon + 1;
+		}
+		return out;
+	}
+
+	// RFC 3986: port = *DIGIT; an empty port means the default (nullopt).
+	auto parse_port(std::string_view text, std::size_t offset) -> result<std::optional<std::uint16_t>>
+	{
+		if (text.empty()) {
+			return std::nullopt;
+		}
+		std::uint32_t value = 0;
+		for (std::size_t i = 0; i < text.size(); ++i) {
+			if (!is_digit(text[i])) {
+				return bad("invalid port", offset + i);
+			}
+			value = (value * 10) + static_cast<std::uint32_t>(text[i] - '0');
+			if (value > std::numeric_limits<std::uint16_t>::max()) {
+				return bad("port above 65535", offset);
+			}
+		}
+		if (value == 0) {
+			return bad("port 0", offset);
+		}
+		return static_cast<std::uint16_t>(value);
+	}
+
+	// The path's '?'-separated parts: dn, attributes, scope, filter and
+	// extensions, each with its offset in the URL.
+	constexpr std::size_t max_path_parts = 5;
+	struct path_parts
+	{
+		std::array<std::string_view, max_path_parts> text{};
+		std::array<std::size_t, max_path_parts> offset{};
+		std::size_t count = 0;
+
+		// Part `i` if it is present and not empty, else nullptr.
+		[[nodiscard]] auto given(std::size_t i) const -> const std::string_view *
+		{
+			return i < count && !text[i].empty() ? &text[i] : nullptr;
+		}
+	};
+
+	// `path` starts at offset `begin` in the URL.
+	auto split_path(std::string_view path, std::size_t begin) -> result<path_parts>
+	{
+		path_parts out;
+		std::size_t start = 0;
+		while (true) {
+			if (out.count == max_path_parts) {
+				return bad("more than four '?'", begin + start - 1);
+			}
+			const std::size_t q = path.find('?', start);
+			out.text[out.count] = path.substr(start, q == std::string_view::npos ? q : q - start);
+			out.offset[out.count] = begin + start;
+			++out.count;
+			if (q == std::string_view::npos) {
+				return out;
+			}
+			start = q + 1;
+		}
+	}
+
+	auto parse_attributes(std::string_view part,
+	  std::size_t offset,
+	  std::pmr::memory_resource *mr,
+	  std::pmr::vector<std::pmr::string> &out) -> result<void>
+	{
+		return split(part, offset, ',', [&](std::string_view piece, std::size_t off) -> result<void> {
+			if (piece.empty()) {
+				return bad("empty attribute", off);
+			}
+			auto a = decode(piece, off, "attribute", is_lenient_part_char, mr);
+			if (!a) {
+				return std::unexpected(std::move(a.error()));
+			}
+			if (a->empty()) {
+				return bad("empty attribute", off);
+			}
+			out.push_back(std::move(*a));
+			return {};
+		});
+	}
+
+	auto parse_scope(std::string_view part, std::size_t offset, std::pmr::memory_resource *mr) -> result<search_scope>
+	{
+		auto s = decode(part, offset, "scope", is_lenient_part_char, mr);
+		if (!s) {
+			return std::unexpected(std::move(s.error()));
+		}
+		if (iequals(*s, "base")) {
+			return search_scope::base_object;
+		}
+		if (iequals(*s, "one")) {
+			return search_scope::single_level;
+		}
+		if (iequals(*s, "sub")) {
+			return search_scope::whole_subtree;
+		}
+		return bad("scope is not base, one or sub", offset);
+	}
+
+	// One extension: ["!"] type ["=" value].
+	auto parse_extension(std::string_view piece, std::size_t off, std::pmr::memory_resource *mr)
+	  -> result<url_extension>
+	{
+		url_extension e{ url::allocator_type(mr) };
+		if (!piece.empty() && piece[0] == '!') {
+			e.critical = true;
+			piece.remove_prefix(1);
+			++off;
+		}
+		const std::size_t eq = piece.find('=');
+		auto type = decode(piece.substr(0, eq), off, "extension type", is_lenient_part_char, mr);
+		if (!type) {
+			return std::unexpected(std::move(type.error()));
+		}
+		if (!detail::is_oid(*type)) {
+			return bad("extension type is not a descriptor or numeric OID", off);
+		}
+		e.type = std::move(*type);
+		if (eq != std::string_view::npos) {
+			auto value = decode(piece.substr(eq + 1), off + eq + 1, "extension value", is_lenient_part_char, mr);
+			if (!value) {
+				return std::unexpected(std::move(value.error()));
+			}
+			e.value.emplace(std::move(*value));
+		}
+		return e;
+	}
+
+}// namespace
+
 auto url::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<url>
 {
 	url u{ allocator_type(mr) };
@@ -417,16 +638,11 @@ auto url::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<
 	if (sep == std::string_view::npos) {
 		return bad("missing \"://\" after the scheme", 0);
 	}
-	const std::string_view scheme = text.substr(0, sep);
-	if (iequals(scheme, "ldap")) {
-		u.scheme_ = url_scheme::ldap;
-	} else if (iequals(scheme, "ldaps")) {
-		u.scheme_ = url_scheme::ldaps;
-	} else if (iequals(scheme, "ldapi")) {
-		u.scheme_ = url_scheme::ldapi;
-	} else {
+	const auto scheme = parse_scheme(text.substr(0, sep));
+	if (!scheme) {
 		return bad("scheme is not ldap, ldaps or ldapi", 0);
 	}
+	u.scheme_ = *scheme;
 
 	// ---- authority: up to the first '/', or the end
 	const std::size_t auth_begin = sep + 3;
@@ -437,90 +653,25 @@ auto url::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<
 	}
 	const std::string_view authority =
 	  text.substr(auth_begin, auth_end == std::string_view::npos ? std::string_view::npos : auth_end - auth_begin);
-
-	std::string_view port_text;
-	std::size_t port_offset = 0;
-	bool has_port = false;
-	if (!authority.empty() && authority[0] == '[') {
-		if (u.scheme_ == url_scheme::ldapi) {
-			return bad("IP literal in an ldapi URL", auth_begin);
-		}
-		const std::size_t close = authority.find(']');
-		if (close == std::string_view::npos) {
-			return bad("missing ']' after IPv6 address", auth_begin);
-		}
-		const std::string_view literal = authority.substr(1, close - 1);
-		if (!literal.empty() && (literal[0] == 'v' || literal[0] == 'V')) {
-			return bad("IPvFuture addresses are not supported", auth_begin + 1);
-		}
-		// RFC 6874: IPv6address "%25" ZoneID
-		const std::size_t zone = literal.find("%25");
-		const std::string_view address = literal.substr(0, zone);
-		if (!is_ipv6(address)) {
-			return bad("invalid IPv6 address", auth_begin + 1);
-		}
-		u.host_.assign(address);
-		if (zone != std::string_view::npos) {
-			const std::string_view zone_id = literal.substr(zone + 3);
-			if (zone_id.empty()) {
-				return bad("empty IPv6 zone", auth_begin + 1 + zone);
-			}
-			auto z = decode(zone_id, auth_begin + 1 + zone + 3, "IPv6 zone", is_unreserved, mr);
-			if (!z) {
-				return std::unexpected(std::move(z.error()));
-			}
-			u.host_ += '%';
-			u.host_ += *z;
-		}
-		u.host_is_ipv6_ = true;
-		const std::string_view rest = authority.substr(close + 1);
-		if (!rest.empty()) {
-			if (rest[0] != ':') {
-				return bad("unexpected character after ']'", auth_begin + close + 1);
-			}
-			has_port = true;
-			port_text = rest.substr(1);
-			port_offset = auth_begin + close + 2;
-		}
-	} else {
-		const std::size_t colon = authority.find(':');
-		const std::string_view host = authority.substr(0, colon);
-		if (const auto at = host.find('@'); at != std::string_view::npos) {
-			return bad("userinfo ('@') not allowed", auth_begin + at);
-		}
-		auto h = decode(host, auth_begin, "host", is_reg_name_char, mr);
-		if (!h) {
-			return std::unexpected(std::move(h.error()));
-		}
-		u.host_ = std::move(*h);
-		if (colon != std::string_view::npos) {
-			has_port = true;
-			port_text = authority.substr(colon + 1);
-			port_offset = auth_begin + colon + 1;
-		}
+	const bool ip_literal = !authority.empty() && authority[0] == '[';
+	if (ip_literal && u.scheme_ == url_scheme::ldapi) {
+		return bad("IP literal in an ldapi URL", auth_begin);
 	}
-
-	if (has_port) {
+	auto parts = ip_literal ? parse_ip_literal(authority, auth_begin, mr) : parse_reg_name(authority, auth_begin, mr);
+	if (!parts) {
+		return std::unexpected(std::move(parts.error()));
+	}
+	u.host_ = std::move(parts->host);
+	u.host_is_ipv6_ = parts->host_is_ipv6;
+	if (parts->has_port) {
 		if (u.scheme_ == url_scheme::ldapi) {
-			return bad("port not allowed in an ldapi URL", port_offset - 1);
+			return bad("port not allowed in an ldapi URL", parts->port_offset - 1);
 		}
-		// RFC 3986: port = *DIGIT; an empty port means the default.
-		if (!port_text.empty()) {
-			std::uint32_t value = 0;
-			for (std::size_t i = 0; i < port_text.size(); ++i) {
-				if (!is_digit(port_text[i])) {
-					return bad("invalid port", port_offset + i);
-				}
-				value = (value * 10) + static_cast<std::uint32_t>(port_text[i] - '0');
-				if (value > std::numeric_limits<std::uint16_t>::max()) {
-					return bad("port above 65535", port_offset);
-				}
-			}
-			if (value == 0) {
-				return bad("port 0", port_offset);
-			}
-			u.port_ = static_cast<std::uint16_t>(value);
+		auto port = parse_port(parts->port_text, parts->port_offset);
+		if (!port) {
+			return std::unexpected(std::move(port.error()));
 		}
+		u.port_ = *port;
 	}
 
 	if (auth_end == std::string_view::npos) {
@@ -533,119 +684,62 @@ auto url::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<
 	if (const auto hash = path.find('#'); hash != std::string_view::npos) {
 		return bad("fragment ('#') not allowed", path_begin + hash);
 	}
-
-	// dn, attributes, scope, filter and extensions.
-	constexpr std::size_t max_path_parts = 5;
-	std::array<std::string_view, max_path_parts> parts{};
-	std::array<std::size_t, max_path_parts> offsets{};
-	std::size_t count = 0;
-	{
-		std::size_t start = 0;
-		while (true) {
-			if (count == max_path_parts) {
-				return bad("more than four '?'", path_begin + start - 1);
-			}
-			const std::size_t q = path.find('?', start);
-			parts[count] = path.substr(start, q == std::string_view::npos ? q : q - start);
-			offsets[count] = path_begin + start;
-			++count;
-			if (q == std::string_view::npos) {
-				break;
-			}
-			start = q + 1;
-		}
+	auto split_parts = split_path(path, path_begin);
+	if (!split_parts) {
+		return std::unexpected(std::move(split_parts.error()));
 	}
+	const path_parts &p = *split_parts;
 
 	// dn
 	{
-		auto text_dn = decode(parts[0], offsets[0], "DN", is_lenient_part_char, mr);
+		auto text_dn = decode(p.text[0], p.offset[0], "DN", is_lenient_part_char, mr);
 		if (!text_dn) {
 			return std::unexpected(std::move(text_dn.error()));
 		}
 		auto d = dn::parse(*text_dn, mr);
 		if (!d) {
-			return bad(detail::format("invalid DN ({})", d.error().context), offsets[0]);
+			return bad(detail::format("invalid DN ({})", d.error().context), p.offset[0]);
 		}
 		u.dn_ = std::move(*d);
 	}
 
 	// attributes
-	if (count > 1 && !parts[1].empty()) {
-		auto r = split(parts[1], offsets[1], ',', [&](std::string_view piece, std::size_t off) -> result<void> {
-			if (piece.empty()) {
-				return bad("empty attribute", off);
-			}
-			auto a = decode(piece, off, "attribute", is_lenient_part_char, mr);
-			if (!a) {
-				return std::unexpected(std::move(a.error()));
-			}
-			if (a->empty()) {
-				return bad("empty attribute", off);
-			}
-			u.attributes_.push_back(std::move(*a));
-			return {};
-		});
-		if (!r) {
+	if (const auto *part = p.given(1)) {
+		if (auto r = parse_attributes(*part, p.offset[1], mr, u.attributes_); !r) {
 			return std::unexpected(std::move(r.error()));
 		}
 	}
 
 	// scope
-	if (count > 2 && !parts[2].empty()) {
-		auto s = decode(parts[2], offsets[2], "scope", is_lenient_part_char, mr);
+	if (const auto *part = p.given(2)) {
+		auto s = parse_scope(*part, p.offset[2], mr);
 		if (!s) {
 			return std::unexpected(std::move(s.error()));
 		}
-		if (iequals(*s, "base")) {
-			u.scope_ = search_scope::base_object;
-		} else if (iequals(*s, "one")) {
-			u.scope_ = search_scope::single_level;
-		} else if (iequals(*s, "sub")) {
-			u.scope_ = search_scope::whole_subtree;
-		} else {
-			return bad("scope is not base, one or sub", offsets[2]);
-		}
+		u.scope_ = *s;
 	}
 
 	// filter
-	if (count > 3 && !parts[3].empty()) {
-		auto f = decode(parts[3], offsets[3], "filter", is_lenient_part_char, mr);
+	if (const auto *part = p.given(3)) {
+		auto f = decode(*part, p.offset[3], "filter", is_lenient_part_char, mr);
 		if (!f) {
 			return std::unexpected(std::move(f.error()));
 		}
 		auto parsed = filter::raw(*f, mr);
 		if (!parsed) {
-			return bad(detail::format("invalid filter ({})", parsed.error().context), offsets[3]);
+			return bad(detail::format("invalid filter ({})", parsed.error().context), p.offset[3]);
 		}
 		u.filter_ = std::move(*parsed);
 	}
 
 	// extensions
-	if (count > 4 && !parts[4].empty()) {
-		auto r = split(parts[4], offsets[4], ',', [&](std::string_view piece, std::size_t off) -> result<void> {
-			url_extension e{ allocator_type(mr) };
-			if (!piece.empty() && piece[0] == '!') {
-				e.critical = true;
-				piece.remove_prefix(1);
-				++off;
+	if (const auto *part = p.given(4)) {
+		auto r = split(*part, p.offset[4], ',', [&](std::string_view piece, std::size_t off) -> result<void> {
+			auto e = parse_extension(piece, off, mr);
+			if (!e) {
+				return std::unexpected(std::move(e.error()));
 			}
-			const std::size_t eq = piece.find('=');
-			auto type = decode(piece.substr(0, eq), off, "extension type", is_lenient_part_char, mr);
-			if (!type) {
-				return std::unexpected(std::move(type.error()));
-			}
-			if (!detail::is_oid(*type)) {
-				return bad("extension type is not a descriptor or numeric OID", off);
-			}
-			e.type = std::move(*type);
-			if (eq != std::string_view::npos) {
-				auto value = decode(piece.substr(eq + 1), off + eq + 1, "extension value", is_lenient_part_char, mr);
-				if (!value) {
-					return std::unexpected(std::move(value.error()));
-				}
-				e.value.emplace(std::move(*value));
-			}
-			u.extensions_.push_back(std::move(e));
+			u.extensions_.push_back(std::move(*e));
 			return {};
 		});
 		if (!r) {

@@ -94,6 +94,23 @@ auto to_int(std::string_view text, const char *what) -> std::int32_t
 	return v;
 }
 
+auto to_scope(const std::string &s) -> ldap::search_scope
+{
+	if (s == "base") {
+		return ldap::search_scope::base_object;
+	}
+	if (s == "one") {
+		return ldap::search_scope::single_level;
+	}
+	if (s == "sub") {
+		return ldap::search_scope::whole_subtree;
+	}
+	if (s == "children") {
+		return ldap::search_scope::subordinate_subtree;
+	}
+	usage("unknown scope " + s);
+}
+
 auto parse_args(int argc, char **argv) -> options
 {
 	options o;
@@ -113,18 +130,7 @@ auto parse_args(int argc, char **argv) -> options
 		} else if (a == "-b") {
 			o.base = value();
 		} else if (a == "-s") {
-			const std::string s = value();
-			if (s == "base") {
-				o.scope = ldap::search_scope::base_object;
-			} else if (s == "one") {
-				o.scope = ldap::search_scope::single_level;
-			} else if (s == "sub") {
-				o.scope = ldap::search_scope::whole_subtree;
-			} else if (s == "children") {
-				o.scope = ldap::search_scope::subordinate_subtree;
-			} else {
-				usage("unknown scope " + s);
-			}
+			o.scope = to_scope(value());
 		} else if (a == "-z") {
 			o.size_limit = to_int(value(), "-z");
 		} else if (a == "-l") {
