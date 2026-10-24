@@ -80,8 +80,8 @@ enum class sync_mode : std::uint8_t {
 	refresh_and_persist = 3,// the current content, then every change, until abandoned
 };
 
-// The request control, for search_params::controls (a request_control,
-// controls.hpp). `cookie` is the one the server last sent (Sync State,
+// The request control, for search_params::controls (search_controls,
+// controls.hpp; RFC 4533 section 2.2 allows it on a search only). `cookie` is the one the server last sent (Sync State,
 // Sync Info or Sync Done), to resume from there; nullopt starts from
 // nothing (the whole content). `reload_hint` (reloadHint, DEFAULT FALSE)
 // asks for the full content when the cookie is too old for an incremental

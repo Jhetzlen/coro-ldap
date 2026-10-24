@@ -7,7 +7,15 @@
 //       .controls = {ldap::manage_dsa_it{}, ldap::control{"1.2.3.4", true, "raw"}},
 //   });
 //
-// ldap::control itself is the escape hatch for anything not typed here.
+// Each operation's params take its own list (search_controls,
+// add_controls, ...): the raw control and the typed controls whose
+// specification allows them on that operation (the table control_rule_of,
+// below), so pre_read on an add or paged on a modify does not compile. A
+// list shared by several operations is a request_controls, converted with
+// controls_for<add_controls>(list), which fails at run time instead.
+//
+// ldap::control itself is the escape hatch for anything not typed here,
+// allowed everywhere.
 // Controls the server returns stay wire-level (std::pmr::vector<control>,
 // in connection::response, extended_result and search_stream::controls());
 // find_paged(), find_sort_result(), find_pre_read() and find_post_read()
@@ -25,11 +33,14 @@
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
 
+#include <concepts>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -134,6 +145,166 @@ struct post_read
 	bool critical = false;
 };
 
+// ---------------------------------------------------------------- per-operation lists
+
+// The request messages a typed control can go on, by RFC 4511 operation:
+// searchRequest, addRequest, modifyRequest, modDNRequest, delRequest,
+// compareRequest, extendedReq. Bind, unbind and abandon take no typed
+// control here.
+enum class operation_kind : std::uint8_t {
+	search,
+	add,
+	modify,
+	modify_dn,
+	del,
+	compare,
+	extended,
+};
+
+// "search", "add", "modify", "modify DN", "delete", "compare", "extended
+// operation": the operation as error contexts name it.
+[[nodiscard]] constexpr auto operation_name(operation_kind op) noexcept -> std::string_view
+{
+	switch (op) {
+	case operation_kind::search:
+		return "search";
+	case operation_kind::add:
+		return "add";
+	case operation_kind::modify:
+		return "modify";
+	case operation_kind::modify_dn:
+		return "modify DN";
+	case operation_kind::del:
+		return "delete";
+	case operation_kind::compare:
+		return "compare";
+	case operation_kind::extended:
+		return "extended operation";
+	}
+	return "operation";
+}
+
+// A set of operation_kind, for the table below.
+struct operation_set
+{
+	std::uint8_t bits = 0;
+
+	[[nodiscard]] constexpr auto contains(operation_kind op) const noexcept -> bool
+	{
+		return (bits & (1U << std::to_underlying(op))) != 0;
+	}
+};
+
+// The set of the given operations.
+template<std::same_as<operation_kind>... Op>
+[[nodiscard]] constexpr auto operation_set_of(Op... op) noexcept -> operation_set
+{
+	return { .bits = static_cast<std::uint8_t>((0U | ... | (1U << std::to_underlying(op)))) };
+}
+
+// One row of the applicability table: the control's name in errors, the
+// specification that sets where it applies, and the operations it applies
+// to.
+struct control_rule
+{
+	std::string_view name;
+	std::string_view source;
+	operation_set operations;
+};
+
+// The applicability table: where each typed request control may be sent,
+// as its specification says. The per-operation lists below are checked
+// against it at compile time, and controls_for() checks a shared
+// request_controls against it at run time.
+template<class T>
+inline constexpr control_rule control_rule_of = [] {
+	static_assert(sizeof(T) == 0, "ldap::control_rule_of: not a typed request control");
+	return control_rule{};
+}();
+
+namespace detail {
+	inline constexpr operation_set all_operations = operation_set_of(operation_kind::search,
+	  operation_kind::add,
+	  operation_kind::modify,
+	  operation_kind::modify_dn,
+	  operation_kind::del,
+	  operation_kind::compare,
+	  operation_kind::extended);
+}// namespace detail
+
+// The raw control: the caller knows where it applies.
+template<>
+inline constexpr control_rule control_rule_of<control> = { .name = "control",
+	.source = "raw",
+	.operations = detail::all_operations };
+// RFC 2696 section 2: "included in the searchRequest and searchResultDone
+// messages".
+template<>
+inline constexpr control_rule control_rule_of<paged> = { .name = "paged",
+	.source = "RFC 2696 section 2",
+	.operations = operation_set_of(operation_kind::search) };
+// RFC 3296 section 3: "when issuing an add, compare, delete, modify,
+// modifyDN, search request or an extended operation for which the control
+// is defined".
+template<>
+inline constexpr control_rule control_rule_of<manage_dsa_it> = { .name = "manage_dsa_it",
+	.source = "RFC 3296 section 3",
+	.operations = detail::all_operations };
+// draft-zeilenga-ldap-relax-03 section 2: "appropriate for all LDAP update
+// requests, including add, delete, modify, and modifyDN".
+template<>
+inline constexpr control_rule control_rule_of<relax_rules> = { .name = "relax_rules",
+	.source = "draft-zeilenga-ldap-relax section 2",
+	.operations =
+	  operation_set_of(operation_kind::add, operation_kind::modify, operation_kind::modify_dn, operation_kind::del) };
+// RFC 4370 section 3: "any search, compare, modify, add, delete, or modify
+// Distinguished Name (DN) or extended operation request message", except
+// an extension that changes authentication, authorization or data
+// confidentiality such as StartTLS (not told apart by type here).
+template<>
+inline constexpr control_rule control_rule_of<proxied_authorization> = { .name = "proxied_authorization",
+	.source = "RFC 4370 section 3",
+	.operations = detail::all_operations };
+// RFC 2891 section 1.1: "included in the searchRequest message".
+template<>
+inline constexpr control_rule control_rule_of<server_side_sort> = { .name = "server_side_sort",
+	.source = "RFC 2891 section 1.1",
+	.operations = operation_set_of(operation_kind::search) };
+// RFC 4528 section 3: "appropriate for both LDAP interrogation and update
+// operations [RFC4511], including Add, Compare, Delete, Modify, ModifyDN
+// (rename), and Search. It is inappropriate for Abandon, Bind, Unbind, and
+// StartTLS operations." StartTLS is the only extended operation it
+// excludes, so the others are allowed.
+template<>
+inline constexpr control_rule control_rule_of<assertion> = { .name = "assertion",
+	.source = "RFC 4528 section 3",
+	.operations = detail::all_operations };
+// RFC 4527 section 3.1: "appropriate for the modifyRequest, delRequest,
+// and modDNRequest LDAP messages".
+template<>
+inline constexpr control_rule control_rule_of<pre_read> = { .name = "pre_read",
+	.source = "RFC 4527 section 3.1",
+	.operations = operation_set_of(operation_kind::modify, operation_kind::modify_dn, operation_kind::del) };
+// RFC 4527 section 3.2: "appropriate for the addRequest, modifyRequest,
+// and modDNRequest LDAP messages".
+template<>
+inline constexpr control_rule control_rule_of<post_read> = { .name = "post_read",
+	.source = "RFC 4527 section 3.2",
+	.operations = operation_set_of(operation_kind::add, operation_kind::modify, operation_kind::modify_dn) };
+// RFC 4533 section 2.2: "only applicable to the SearchRequest Message".
+template<>
+inline constexpr control_rule control_rule_of<sync_request> = { .name = "sync_request",
+	.source = "RFC 4533 section 2.2",
+	.operations = operation_set_of(operation_kind::search) };
+
+// Whether control type T may be sent on `op` (the table above).
+template<class T> [[nodiscard]] constexpr auto applies_to(operation_kind op) noexcept -> bool
+{
+	return control_rule_of<T>.operations.contains(op);
+}
+
+// Any typed control or a raw one: a shared list, to convert with
+// controls_for() for an operation.
 using request_control = std::variant<control,
   paged,
   manage_dsa_it,
@@ -146,14 +317,179 @@ using request_control = std::variant<control,
   sync_request>;
 using request_controls = std::vector<request_control>;
 
-// The wire form of `c`, on `mr`. Fails with encode_error for a negative
-// page size, an invalid sort or sync mode, invalid_filter for an empty (or too large)
-// assertion filter.
-[[nodiscard]] auto to_control(const request_control &c,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
+// A list of the controls `Op` takes: the raw control and the typed ones
+// the table allows there, so a typed control sent where its specification
+// does not allow it does not compile:
+//
+//   ldap::add_params{.controls = {ldap::pre_read{}}};// error: no add_controls from pre_read
+//
+// The named lists below derive from it so errors name them.
+template<operation_kind Op, class... Typed> struct controls_of : std::vector<std::variant<control, Typed...>>
+{
+	using std::vector<std::variant<control, Typed...>>::vector;
+	static constexpr operation_kind operation = Op;
+};
 
-// Appends the wire form of every control to `out`.
-[[nodiscard]] auto append_controls(const request_controls &controls, std::pmr::vector<control> &out) -> result<void>;
+struct search_controls
+  : controls_of<operation_kind::search,
+	  paged,
+	  manage_dsa_it,
+	  proxied_authorization,
+	  server_side_sort,
+	  assertion,
+	  sync_request>
+{
+	using controls_of::controls_of;
+};
+struct add_controls
+  : controls_of<operation_kind::add, manage_dsa_it, relax_rules, proxied_authorization, assertion, post_read>
+{
+	using controls_of::controls_of;
+};
+struct modify_controls
+  : controls_of<operation_kind::modify,
+	  manage_dsa_it,
+	  relax_rules,
+	  proxied_authorization,
+	  assertion,
+	  pre_read,
+	  post_read>
+{
+	using controls_of::controls_of;
+};
+struct modify_dn_controls
+  : controls_of<operation_kind::modify_dn,
+	  manage_dsa_it,
+	  relax_rules,
+	  proxied_authorization,
+	  assertion,
+	  pre_read,
+	  post_read>
+{
+	using controls_of::controls_of;
+};
+struct del_controls
+  : controls_of<operation_kind::del, manage_dsa_it, relax_rules, proxied_authorization, assertion, pre_read>
+{
+	using controls_of::controls_of;
+};
+struct compare_controls : controls_of<operation_kind::compare, manage_dsa_it, proxied_authorization, assertion>
+{
+	using controls_of::controls_of;
+};
+struct extended_controls : controls_of<operation_kind::extended, manage_dsa_it, proxied_authorization, assertion>
+{
+	using controls_of::controls_of;
+};
+
+namespace detail {
+	template<class T, class Variant> inline constexpr bool has_alternative = false;
+	template<class T, class... A>
+	inline constexpr bool has_alternative<T, std::variant<A...>> = (std::same_as<T, A> || ...);
+
+	// List holds exactly the alternatives of request_control that the
+	// table allows on List::operation.
+	template<class List, class Full> inline constexpr bool matches_table = false;
+	template<class List, class... All>
+	inline constexpr bool matches_table<List, std::variant<All...>> =
+	  ((applies_to<All>(List::operation) == has_alternative<All, typename List::value_type>) && ...);
+
+	template<class List> inline constexpr bool within_request_control = false;
+	template<operation_kind Op, class... Typed>
+	inline constexpr bool within_request_control<controls_of<Op, Typed...>> =
+	  (has_alternative<Typed, request_control> && ...);
+
+	template<class List>
+	concept operation_controls =
+	  matches_table<List, request_control> && within_request_control<typename List::controls_of>;
+
+	// encode_error "<name> is not valid on <operation> (<source>)".
+	[[nodiscard]] auto inapplicable_control(const control_rule &rule, operation_kind op) -> error;
+}// namespace detail
+
+static_assert(detail::operation_controls<search_controls>, "search_controls does not match the table");
+static_assert(detail::operation_controls<add_controls>, "add_controls does not match the table");
+static_assert(detail::operation_controls<modify_controls>, "modify_controls does not match the table");
+static_assert(detail::operation_controls<modify_dn_controls>, "modify_dn_controls does not match the table");
+static_assert(detail::operation_controls<del_controls>, "del_controls does not match the table");
+static_assert(detail::operation_controls<compare_controls>, "compare_controls does not match the table");
+static_assert(detail::operation_controls<extended_controls>, "extended_controls does not match the table");
+
+// `controls` as the list of operation Ops::operation, for a list built
+// once and reused: fails with encode_error ("pre_read is not valid on add
+// (RFC 4527 section 3.1)") at the first control the operation does not
+// take.
+template<detail::operation_controls Ops>
+[[nodiscard]] auto controls_for(const request_controls &controls) -> result<Ops>
+{
+	Ops out;
+	out.reserve(controls.size());
+	for (const auto &c : controls) {
+		const bool taken = std::visit(
+		  [&out](const auto &v) {
+			  using T = std::remove_cvref_t<decltype(v)>;
+			  if constexpr (detail::has_alternative<T, typename Ops::value_type>) {
+				  out.emplace_back(v);
+				  return true;
+			  } else {
+				  return false;
+			  }
+		  },
+		  c);
+		if (!taken) {
+			return std::unexpected(std::visit(
+			  [](const auto &v) {
+				  return detail::inapplicable_control(
+					control_rule_of<std::remove_cvref_t<decltype(v)>>, Ops::operation);
+			  },
+			  c));
+		}
+	}
+	return out;
+}
+
+// ---------------------------------------------------------------- encoding
+
+// The wire form of a control, on `mr`. Fail with encode_error for a
+// negative page size, an invalid sort or sync mode, invalid_filter for an
+// empty (or too large) assertion filter.
+[[nodiscard]] auto to_control(const control &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+  -> result<control>;
+[[nodiscard]] auto to_control(const paged &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+  -> result<control>;
+[[nodiscard]] auto to_control(const manage_dsa_it &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+  -> result<control>;
+[[nodiscard]] auto to_control(const relax_rules &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+  -> result<control>;
+[[nodiscard]] auto to_control(const proxied_authorization &c,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
+[[nodiscard]] auto to_control(const server_side_sort &c,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
+[[nodiscard]] auto to_control(const assertion &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+  -> result<control>;
+[[nodiscard]] auto to_control(const pre_read &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+  -> result<control>;
+[[nodiscard]] auto to_control(const post_read &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+  -> result<control>;
+[[nodiscard]] auto to_control(const sync_request &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+  -> result<control>;
+
+// Appends the wire form of every control of a list (an operation's, or
+// request_controls) to `out`, on its resource; stops at the first that
+// fails.
+template<class... Typed>
+[[nodiscard]] auto append_controls(const std::vector<std::variant<control, Typed...>> &controls,
+  std::pmr::vector<control> &out) -> result<void>
+{
+	for (const auto &c : controls) {
+		auto wire = std::visit([&out](const auto &v) { return to_control(v, out.get_allocator().resource()); }, c);
+		if (!wire) {
+			return std::unexpected(std::move(wire.error()));
+		}
+		out.push_back(std::move(*wire));
+	}
+	return {};
+}
 
 // The paged results control among `controls` (e.g. a SearchResultDone's),
 // nullopt if there is none, or decode_error if it is malformed.

@@ -53,9 +53,9 @@ struct search_params
 	std::int32_t size_limit = 0;// entries; 0 = no client-requested limit
 	std::chrono::seconds time_limit{ 0 };// 0 = no client-requested limit (sent to the server)
 	bool types_only = false;
-	// Request controls: typed (ldap::paged, ldap::manage_dsa_it, ...) or a
-	// raw ldap::control (controls.hpp).
-	request_controls controls{};
+	// Request controls: the typed ones a search takes (ldap::paged,
+	// ldap::server_side_sort, ...) or a raw ldap::control (controls.hpp).
+	search_controls controls{};
 	// Client-side limit for the whole search, from sending it to the
 	// SearchResultDone across every next() (see
 	// connection_options::operation_timeout, which applies if this is
@@ -73,7 +73,9 @@ struct search_params
 // The other operations (step 6), as plain aggregates like search_params.
 // `controls` and `timeout` mean the same everywhere: request controls, and
 // a client-side limit overriding connection_options::operation_timeout
-// (ldap::no_timeout: none).
+// (ldap::no_timeout: none). Each `controls` is its operation's list
+// (add_controls, ...: controls.hpp), which takes only the typed controls
+// whose specification allows them there, plus raw ldap::control.
 
 // AddRequest (RFC 4511 section 4.7). Every attribute needs at least one
 // value (encode_error otherwise, before anything is sent).
@@ -81,7 +83,7 @@ struct add_params
 {
 	dn entry{};
 	std::pmr::vector<partial_attribute> attributes{};// {"cn", {"Jane Doe"}}, ...
-	request_controls controls{};
+	add_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
 };
 
@@ -91,7 +93,7 @@ struct modify_params
 {
 	dn object{};
 	std::pmr::vector<modify_change> changes{};
-	request_controls controls{};
+	modify_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
 };
 
@@ -111,7 +113,7 @@ namespace mod {
 struct del_params
 {
 	dn entry{};
-	request_controls controls{};
+	del_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
 };
 
@@ -124,7 +126,7 @@ struct modify_dn_params
 	rdn new_rdn{};
 	bool delete_old_rdn = true;// drop the old RDN's values from the entry
 	std::optional<dn> new_superior{};
-	request_controls controls{};
+	modify_dn_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
 };
 
@@ -134,7 +136,7 @@ struct compare_params
 	dn entry{};
 	std::string attribute{};
 	std::string value{};
-	request_controls controls{};
+	compare_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
 };
 
@@ -143,7 +145,7 @@ struct extended_params
 {
 	std::string name{};// requestName, an OID
 	std::optional<std::string> value{};// requestValue, as encoded for that operation
-	request_controls controls{};
+	extended_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
 	// Collect the IntermediateResponses (RFC 4511 section 4.13) the server
 	// sends before the ExtendedResponse into extended_result::intermediates.
@@ -221,7 +223,7 @@ struct password_modify_params
 	std::optional<std::string> old_password{};
 	// newPasswd. nullopt: the server generates one and returns it.
 	std::optional<std::string> new_password{};
-	request_controls controls{};
+	extended_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
 };
 

@@ -50,7 +50,7 @@ struct paged_search::state
 	void set_page_control(std::int32_t size, std::string page_cookie)
 	{
 		auto &cs = params.controls;
-		std::erase_if(cs, [](const request_control &c) {
+		std::erase_if(cs, [](const search_controls::value_type &c) {
 			return std::holds_alternative<paged>(c)
 				   || (std::holds_alternative<control>(c) && std::get<control>(c).type == paged_results_oid);
 		});

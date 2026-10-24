@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <string>
-#include <type_traits>
 #include <utility>
 
 namespace jhetz::ldap {
@@ -92,57 +91,74 @@ namespace {
 
 }// namespace
 
-auto to_control(const request_control &c, std::pmr::memory_resource *mr) -> result<control>
+auto to_control(const control &c, std::pmr::memory_resource *mr) -> result<control>
 {
-	return std::visit(
-	  [mr](const auto &v) -> result<control> {
-		  using T = std::decay_t<decltype(v)>;
-		  const control::allocator_type alloc(mr);
-		  if constexpr (std::is_same_v<T, control>) {
-			  return control(v, alloc);
-		  } else if constexpr (std::is_same_v<T, paged>) {
-			  return encode_paged_results(paged_results(v.page_size, v.cookie, alloc), v.critical, mr);
-		  } else if constexpr (std::is_same_v<T, manage_dsa_it>) {
-			  return control(manage_dsa_it_oid, v.critical, std::nullopt, alloc);
-		  } else if constexpr (std::is_same_v<T, relax_rules>) {
-			  return control(relax_rules_oid, v.critical, std::nullopt, alloc);
-		  } else if constexpr (std::is_same_v<T, server_side_sort>) {
-			  return encode_sort(v, mr);
-		  } else if constexpr (std::is_same_v<T, assertion>) {
-			  // controlValue is the Filter itself (RFC 4528 section 3).
-			  ber::writer w{ ber::writer::allocator_type(mr) };
-			  return encode_filter(w, v.filter)
-				.transform_error([](error e) {
-					e.context.insert(0, e.context.empty() ? "assertion" : "assertion: ");
-					return e;
-				})
-				.transform([&] { return value_control(assertion_oid, v.critical, w, alloc); });
-		  } else if constexpr (std::is_same_v<T, pre_read>) {
-			  return encode_selection(pre_read_oid, v.attributes, v.critical, mr);
-		  } else if constexpr (std::is_same_v<T, post_read>) {
-			  return encode_selection(post_read_oid, v.attributes, v.critical, mr);
-		  } else if constexpr (std::is_same_v<T, sync_request>) {
-			  return encode_sync_request(v, mr);
-		  } else {
-			  static_assert(std::is_same_v<T, proxied_authorization>);
-			  // controlValue is the authzId itself, not BER (RFC 4370 section 3).
-			  return control(proxied_authorization_oid, true, v.authz_id, alloc);
-		  }
-	  },
-	  c);
+	return control(c, control::allocator_type(mr));
 }
 
-auto append_controls(const request_controls &controls, std::pmr::vector<control> &out) -> result<void>
+auto to_control(const paged &c, std::pmr::memory_resource *mr) -> result<control>
 {
-	for (const auto &c : controls) {
-		auto wire = to_control(c, out.get_allocator().resource());
-		if (!wire) {
-			return std::unexpected(std::move(wire.error()));
-		}
-		out.push_back(std::move(*wire));
-	}
-	return {};
+	return encode_paged_results(paged_results(c.page_size, c.cookie, control::allocator_type(mr)), c.critical, mr);
 }
+
+auto to_control(const manage_dsa_it &c, std::pmr::memory_resource *mr) -> result<control>
+{
+	return control(manage_dsa_it_oid, c.critical, std::nullopt, control::allocator_type(mr));
+}
+
+auto to_control(const relax_rules &c, std::pmr::memory_resource *mr) -> result<control>
+{
+	return control(relax_rules_oid, c.critical, std::nullopt, control::allocator_type(mr));
+}
+
+auto to_control(const proxied_authorization &c, std::pmr::memory_resource *mr) -> result<control>
+{
+	// controlValue is the authzId itself, not BER; always critical (RFC 4370
+	// section 3).
+	return control(proxied_authorization_oid, true, c.authz_id, control::allocator_type(mr));
+}
+
+auto to_control(const server_side_sort &c, std::pmr::memory_resource *mr) -> result<control>
+{
+	return encode_sort(c, mr);
+}
+
+auto to_control(const assertion &c, std::pmr::memory_resource *mr) -> result<control>
+{
+	// controlValue is the Filter itself (RFC 4528 section 3).
+	ber::writer w{ ber::writer::allocator_type(mr) };
+	return encode_filter(w, c.filter)
+	  .transform_error([](error e) {
+		  e.context.insert(0, e.context.empty() ? "assertion" : "assertion: ");
+		  return e;
+	  })
+	  .transform([&] { return value_control(assertion_oid, c.critical, w, control::allocator_type(mr)); });
+}
+
+auto to_control(const pre_read &c, std::pmr::memory_resource *mr) -> result<control>
+{
+	return encode_selection(pre_read_oid, c.attributes, c.critical, mr);
+}
+
+auto to_control(const post_read &c, std::pmr::memory_resource *mr) -> result<control>
+{
+	return encode_selection(post_read_oid, c.attributes, c.critical, mr);
+}
+
+auto to_control(const sync_request &c, std::pmr::memory_resource *mr) -> result<control>
+{
+	return encode_sync_request(c, mr);
+}
+
+namespace detail {
+
+	auto inapplicable_control(const control_rule &rule, operation_kind op) -> error
+	{
+		return make_error(client_errc::encode_error,
+		  detail::format("{} is not valid on {} ({})", rule.name, operation_name(op), rule.source));
+	}
+
+}// namespace detail
 
 auto find_paged(const std::pmr::vector<control> &controls, std::pmr::memory_resource *mr)
   -> result<std::optional<paged_results>>

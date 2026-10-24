@@ -10,6 +10,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <variant>
 
 namespace ldap = jhetz::ldap;
 using jhetz::ldap::test::from_hex;
@@ -57,11 +59,76 @@ TEST_CASE("typed request controls encode to their wire form", "[controls]")
 	CHECK(negative.error().code == ldap::client_errc::encode_error);
 }
 
+// The applicability table (controls.hpp), row by row against the RFCs.
+using ldap::applies_to;
+using enum ldap::operation_kind;
+static_assert(
+  applies_to<ldap::paged>(search) && !applies_to<ldap::paged>(modify) && !applies_to<ldap::paged>(extended));
+static_assert(applies_to<ldap::server_side_sort>(search) && !applies_to<ldap::server_side_sort>(compare));
+static_assert(applies_to<ldap::sync_request>(search) && !applies_to<ldap::sync_request>(add));
+static_assert(applies_to<ldap::pre_read>(modify) && applies_to<ldap::pre_read>(del)
+			  && applies_to<ldap::pre_read>(modify_dn) && !applies_to<ldap::pre_read>(add)
+			  && !applies_to<ldap::pre_read>(search));
+static_assert(applies_to<ldap::post_read>(add) && applies_to<ldap::post_read>(modify)
+			  && applies_to<ldap::post_read>(modify_dn) && !applies_to<ldap::post_read>(del)
+			  && !applies_to<ldap::post_read>(compare));
+static_assert(applies_to<ldap::relax_rules>(add) && applies_to<ldap::relax_rules>(del)
+			  && applies_to<ldap::relax_rules>(modify) && applies_to<ldap::relax_rules>(modify_dn)
+			  && !applies_to<ldap::relax_rules>(search) && !applies_to<ldap::relax_rules>(compare)
+			  && !applies_to<ldap::relax_rules>(extended));
+static_assert(
+  applies_to<ldap::assertion>(compare) && applies_to<ldap::assertion>(search) && applies_to<ldap::assertion>(extended));
+static_assert(applies_to<ldap::manage_dsa_it>(extended) && applies_to<ldap::proxied_authorization>(extended));
+static_assert(applies_to<ldap::control>(search) && applies_to<ldap::control>(extended));
+static_assert(!std::is_convertible_v<ldap::pre_read, ldap::add_controls::value_type>);
+static_assert(!std::is_convertible_v<ldap::post_read, ldap::del_controls::value_type>);
+static_assert(!std::is_convertible_v<ldap::paged, ldap::modify_controls::value_type>);
+static_assert(std::is_convertible_v<ldap::control, ldap::compare_controls::value_type>);
+
+TEST_CASE("controls_for checks a shared list against the operation", "[controls]")
+{
+	const ldap::request_controls shared{ ldap::manage_dsa_it{},
+		ldap::control{ "1.2.3", false },
+		ldap::assertion{ .filter = ldap::filters::attr("cn") == "x" } };
+	const auto compare = ldap::controls_for<ldap::compare_controls>(shared);
+	REQUIRE(compare.has_value());
+	REQUIRE(compare->size() == 3);
+	CHECK(std::holds_alternative<ldap::manage_dsa_it>((*compare)[0]));
+	CHECK(std::get<ldap::control>((*compare)[1]).type == "1.2.3");
+	CHECK(std::holds_alternative<ldap::assertion>((*compare)[2]));
+
+	const auto add = ldap::controls_for<ldap::add_controls>(
+	  ldap::request_controls{ ldap::post_read{}, ldap::pre_read{ .attributes = { "cn" } } });
+	REQUIRE_FALSE(add.has_value());
+	CHECK(add.error().code == ldap::client_errc::encode_error);
+	CHECK(std::string(add.error().context) == "pre_read is not valid on add (RFC 4527 section 3.1)");
+
+	const auto del = ldap::controls_for<ldap::del_controls>(ldap::request_controls{ ldap::post_read{} });
+	REQUIRE_FALSE(del.has_value());
+	CHECK(std::string(del.error().context) == "post_read is not valid on delete (RFC 4527 section 3.2)");
+
+	const auto mod = ldap::controls_for<ldap::modify_dn_controls>(ldap::request_controls{ ldap::paged{} });
+	REQUIRE_FALSE(mod.has_value());
+	CHECK(std::string(mod.error().context) == "paged is not valid on modify DN (RFC 2696 section 2)");
+
+	const auto search = ldap::controls_for<ldap::search_controls>(ldap::request_controls{ ldap::relax_rules{} });
+	REQUIRE_FALSE(search.has_value());
+	CHECK(std::string(search.error().context)
+		  == "relax_rules is not valid on search (draft-zeilenga-ldap-relax section 2)");
+
+	const auto ext = ldap::controls_for<ldap::extended_controls>(ldap::request_controls{ ldap::sync_request{} });
+	REQUIRE_FALSE(ext.has_value());
+	CHECK(std::string(ext.error().context) == "sync_request is not valid on extended operation (RFC 4533 section 2.2)");
+
+	CHECK(ldap::controls_for<ldap::search_controls>({}).value().empty());
+}
+
 TEST_CASE("controls are encoded on the given resource", "[controls][pmr]")
 {
 	jhetz::ldap::test::counting_resource mr;
 	std::pmr::vector<ldap::control> out(&mr);
-	REQUIRE(ldap::append_controls({ ldap::paged{ .page_size = 5 }, ldap::proxied_authorization{ "dn:cn=x" } }, out)
+	REQUIRE(ldap::append_controls(
+	  ldap::search_controls{ ldap::paged{ .page_size = 5 }, ldap::proxied_authorization{ "dn:cn=x" } }, out)
 		.has_value());
 	REQUIRE(out.size() == 2);
 	for (const auto &c : out) {
@@ -384,7 +451,7 @@ TEST_CASE("new typed controls and their results use the given resource", "[contr
 {
 	jhetz::ldap::test::counting_resource mr;
 	std::pmr::vector<ldap::control> out(&mr);
-	REQUIRE(ldap::append_controls({ ldap::server_side_sort{ .keys = { { .attribute = "cn" } } },
+	REQUIRE(ldap::append_controls(ldap::request_controls{ ldap::server_side_sort{ .keys = { { .attribute = "cn" } } },
 									ldap::assertion{ .filter = ldap::filters::attr("cn") == "x" },
 									ldap::pre_read{ .attributes = { "cn" } },
 									ldap::post_read{} },
@@ -484,7 +551,7 @@ TEST_CASE("assertion and pre/post-read controls match OpenLDAP", "[controls][ass
 	ldap::message modify{ 2,
 		ldap::modify_request{ cap_dn,
 		  { ldap::modify_change{ ldap::modify_operation::replace, ldap::partial_attribute{ "sn", { nihon } } } } } };
-	REQUIRE(ldap::append_controls({ ldap::assertion{ .filter = ldap::filters::attr("sn") == aero },
+	REQUIRE(ldap::append_controls(ldap::modify_controls{ ldap::assertion{ .filter = ldap::filters::attr("sn") == aero },
 									ldap::pre_read{ .attributes = { "sn" } },
 									ldap::post_read{ .attributes = { "sn" } } },
 	  modify.controls)

@@ -622,11 +622,22 @@ namespace detail {
 	  std::optional<std::chrono::milliseconds> timeout,
 	  std::pmr::vector<intermediate> *intermediates = nullptr) -> boost::capy::task<result<message>>;
 
-	// Builds a message whose controls are `controls` (encoded on `mr`).
-	auto with_controls(protocol_op op,
-	  const request_controls &controls,
-	  std::pmr::memory_resource *mr,
-	  std::string_view context) -> result<message>;
+	// A message of `op` carrying `controls`, already encoded on `mr`.
+	auto with_controls(protocol_op op, std::pmr::vector<control> controls, std::pmr::memory_resource *mr) -> message;
+
+	// A message of `op` carrying an operation's `controls` (search_controls,
+	// add_controls, ...), encoded on `mr`; an encoding error is prefixed
+	// with `context`.
+	template<class List>
+	auto build_request(protocol_op op, const List &controls, std::pmr::memory_resource *mr, std::string_view context)
+	  -> result<message>
+	{
+		std::pmr::vector<control> wire(mr);
+		if (auto c = append_controls(controls, wire); !c) {
+			return std::unexpected(detail::with_context(std::move(c.error()), context));
+		}
+		return with_controls(std::move(op), std::move(wire), mr);
+	}
 
 	auto modify_impl(impl_ref self, modify_params request, std::string context) -> boost::capy::task<result<response>>;
 

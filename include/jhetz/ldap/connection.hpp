@@ -282,7 +282,7 @@ class connection
 	// A search in pages of `page_size` entries (Simple Paged Results, RFC
 	// 2696): when a page ends, the next page is requested with the server's
 	// cookie, until the cookie is empty. A paged control already in
-	// `request.controls` is replaced. A server that ignores the
+	// `request.controls` (typed, or raw with paged_results_oid) is replaced. A server that ignores the
 	// (non-critical) control returns everything as one page, which works the
 	// same. Each page is one search on the wire, with its own message id
 	// and its own `request.timeout`. Destroyed early, the paged_search
@@ -320,18 +320,18 @@ class connection
 	// is sent.
 	auto move(dn entry,
 	  dn new_parent,
-	  request_controls controls = {},
+	  modify_dn_controls controls = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> boost::capy::task<result<response>>;
 	auto rename(dn entry,
 	  rdn new_rdn,
 	  bool delete_old_rdn = true,
-	  request_controls controls = {},
+	  modify_dn_controls controls = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> boost::capy::task<result<response>>;
 	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
 	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
 	// The authorization identity of this connection (RFC 4532): "dn:<dn>",
 	// "u:<user>", or "" when anonymous.
-	auto who_am_i(request_controls controls = {}) -> boost::capy::task<result<std::string>>;
+	auto who_am_i(extended_controls controls = {}) -> boost::capy::task<result<std::string>>;
 	// Changes a password (RFC 3062). Returns the password the server
 	// generated (genPasswd) when new_password was not given, else nullopt.
 	// Passwords never appear in error contexts.
@@ -420,7 +420,7 @@ class connection
 	// ("modify uid=jdoe,...: replace mail: not valid UTF-8 (...)") before
 	// anything is sent.
 	template<described T>
-	auto modify(dn object, std::vector<change<T>> changes, request_controls controls = {})
+	auto modify(dn object, std::vector<change<T>> changes, modify_controls controls = {})
 	  -> boost::capy::task<result<response>>
 	{
 		modify_params p{ .object = std::move(object), .controls = std::move(controls) };
@@ -442,8 +442,7 @@ class connection
 	// read_only members, objectClass from the descriptor). A member that
 	// does not encode fails the call ("add uid=jdoe,...: attribute mail:
 	// ...") before anything is sent.
-	template<described T>
-	auto add(dn entry, T value, request_controls controls = {}) -> boost::capy::task<result<response>>
+	template<described T> auto add(dn entry, T value, add_controls controls = {}) -> boost::capy::task<result<response>>
 	{
 		auto attributes = to_attributes(value);
 		if (!attributes) {

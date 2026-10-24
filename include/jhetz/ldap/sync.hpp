@@ -122,7 +122,7 @@ class connection
 	{
 		return call([&](ldap::connection &c) { return c.add(std::move(request)); });
 	}
-	template<described T> [[nodiscard]] auto add(dn entry, T value, request_controls controls = {}) -> result<response>
+	template<described T> [[nodiscard]] auto add(dn entry, T value, add_controls controls = {}) -> result<response>
 	{
 		return call(
 		  [&](ldap::connection &c) { return c.add(std::move(entry), std::move(value), std::move(controls)); });
@@ -132,7 +132,7 @@ class connection
 		return call([&](ldap::connection &c) { return c.modify(std::move(request)); });
 	}
 	template<described T>
-	[[nodiscard]] auto modify(dn object, std::vector<change<T>> changes, request_controls controls = {})
+	[[nodiscard]] auto modify(dn object, std::vector<change<T>> changes, modify_controls controls = {})
 	  -> result<response>
 	{
 		return call(
@@ -148,7 +148,7 @@ class connection
 	}
 	[[nodiscard]] auto move(dn entry,
 	  dn new_parent,
-	  request_controls controls = {},
+	  modify_dn_controls controls = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<response>
 	{
 		return call([&](ldap::connection &c) {
@@ -158,7 +158,7 @@ class connection
 	[[nodiscard]] auto rename(dn entry,
 	  rdn new_rdn,
 	  bool delete_old_rdn = true,
-	  request_controls controls = {},
+	  modify_dn_controls controls = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<response>
 	{
 		return call([&](ldap::connection &c) {
@@ -173,7 +173,7 @@ class connection
 	{
 		return call([&](ldap::connection &c) { return c.extended(std::move(request)); });
 	}
-	[[nodiscard]] auto who_am_i(request_controls controls = {}) -> result<std::string>
+	[[nodiscard]] auto who_am_i(extended_controls controls = {}) -> result<std::string>
 	{
 		return call([&](ldap::connection &c) { return c.who_am_i(std::move(controls)); });
 	}

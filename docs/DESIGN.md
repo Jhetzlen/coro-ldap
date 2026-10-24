@@ -204,9 +204,11 @@ auto r = co_await conn.search({
 });
 ```
 
-Controls are typed (`ldap::paged`, `ldap::server_side_sort`, …) in a
-`std::variant` (`ldap::request_control`), with the wire
-`ldap::control{type, criticality, value}` as the escape hatch.
+Controls are typed (`ldap::paged`, `ldap::server_side_sort`, …), with the
+wire `ldap::control{type, criticality, value}` as the escape hatch. Each
+operation takes only the typed controls its specification allows there:
+`.controls` is a per-operation list (`search_controls`, `add_controls`, …),
+so `pre_read` on an add does not compile.
 
 The designated-initializer style above is for the step 5 request structs,
 which stay aggregates. The wire model of section 10 is allocator-aware and
@@ -220,13 +222,45 @@ with `ldap::mod::add / remove / replace / increment`), `del_params`,
 client-side `.timeout`. Values are checked when the request is encoded,
 before anything is sent.
 
-Typed controls (step 6, `controls.hpp`): `request_control` is
-`std::variant<control, paged, manage_dsa_it, relax_rules, proxied_authorization,
-server_side_sort, assertion, pre_read, post_read, sync_request>`, so the raw wire
-`control {type, criticality, value}` stays the escape hatch and existing
-code that passes raw controls compiles unchanged. They are encoded on the
-connection's resource when the request is sent; an invalid one (a sort
-without keys, an empty assertion filter) fails before anything is sent.
+Typed controls (step 6, `controls.hpp`): `paged`, `manage_dsa_it`,
+`relax_rules`, `proxied_authorization`, `server_side_sort`, `assertion`,
+`pre_read`, `post_read` and `sync_request`, plus the raw wire
+`control {type, criticality, value}` as the escape hatch. Where each may be
+sent is fixed by its specification, so it is checked at compile time
+(goal 1) from one table, `control_rule_of<T>` (name, source, operations;
+`applies_to<T>(operation_kind)` reads it):
+
+| control | operations | source |
+|---|---|---|
+| `paged` | search | RFC 2696 section 2 |
+| `server_side_sort` | search | RFC 2891 section 1.1 |
+| `sync_request` | search | RFC 4533 section 2.2 |
+| `pre_read` | modify, modify DN, delete | RFC 4527 section 3.1 |
+| `post_read` | add, modify, modify DN | RFC 4527 section 3.2 |
+| `relax_rules` | add, modify, modify DN, delete | draft-zeilenga-ldap-relax section 2 |
+| `assertion` | all seven | RFC 4528 section 3 (not bind, unbind, abandon, StartTLS) |
+| `manage_dsa_it` | all seven | RFC 3296 section 3 |
+| `proxied_authorization` | all seven | RFC 4370 section 3 (not StartTLS-like extensions) |
+| raw `control` | all seven | the caller's responsibility |
+
+The seven are search, add, modify, modify DN, delete, compare and extended
+(`operation_kind`); bind takes no typed control. Each params struct's
+`.controls` is its operation's list, `search_controls`, `add_controls`,
+`modify_controls`, `modify_dn_controls`, `del_controls`, `compare_controls`
+or `extended_controls` (also `password_modify_params` and `who_am_i`): a
+named struct deriving from `std::vector<std::variant<control, allowed...>>`,
+so a misplaced control is a compile error naming the list. Static asserts in
+the header check that each list holds exactly what the table allows, so
+they cannot drift apart. A list built once for several operations is a
+`request_controls` (a vector of `request_control`, every alternative), and
+`controls_for<add_controls>(list)` converts it, failing with encode_error
+("pre_read is not valid on add (RFC 4527 section 3.1)") instead. Rejected:
+one variant everywhere with a run-time check before sending (smaller, but
+misuse stays a run-time error). Each typed control has its own non-template
+`to_control` overload; `append_controls` visits a list. Controls are encoded
+on the connection's resource when the request is sent; an invalid one (a
+sort without keys, an empty assertion filter) fails before anything is
+sent.
 Response controls stay wire-level (`std::pmr::vector<control>`, in
 `response`, `extended_result`, `search_stream::controls()`,
 `paged_search::controls()`), and a `find_*` function reads each typed one

@@ -49,7 +49,8 @@ target_link_libraries(jhetz_ldap_alloc_tests PRIVATE jhetz::ldap Catch2::Catch2W
 jhetz_ldap_warnings(jhetz_ldap_alloc_tests)
 catch_discover_tests(jhetz_ldap_alloc_tests)
 
-# Compile tests for the mapping's compile-time checks (DESIGN.md section 4):
+# Compile tests for the mapping's compile-time checks (DESIGN.md section 4)
+# and the per-operation request controls (section 3):
 # each file in compile/ is compiled with -fsyntax-only and must fail with the
 # expected diagnostic (matched in the C locale); ok.cpp must compile, so the
 # failures are not due to the command line. discarded_child.cpp compiles but
@@ -82,6 +83,12 @@ if(NOT MSVC)
     # not count; PASS_REGULAR_EXPRESSION ignores the exit code, so fail on errors.
     jhetz_ldap_compile_test(discarded_child "discarded_child\\.cpp:10:[0-9]+: warning: ignoring return value")
     set_tests_properties(compile.discarded_child PROPERTIES FAIL_REGULAR_EXPRESSION "error:")
+    # Typed request controls on an operation their specification does not
+    # allow (controls.hpp's table, DESIGN.md section 3).
+    jhetz_ldap_compile_test(pre_read_on_add "pre_read_on_add\\.cpp:3:[0-9]+: error: .*add_controls")
+    jhetz_ldap_compile_test(post_read_on_delete "post_read_on_delete\\.cpp:3:[0-9]+: error: .*del_controls")
+    jhetz_ldap_compile_test(paged_on_modify "paged_on_modify\\.cpp:3:[0-9]+: error: .*modify_controls")
+    jhetz_ldap_compile_test(relax_rules_on_search "relax_rules_on_search\\.cpp:3:[0-9]+: error: .*search_controls")
 endif()
 
 # Header self-containment: one generated TU per public header, including

@@ -145,7 +145,7 @@ namespace detail {
 		wire.types_only = p.types_only;
 		wire.filter = p.filter;
 		wire.attributes.assign(p.attributes.begin(), p.attributes.end());
-		return with_controls(std::move(wire), p.controls, c.mr(), context);
+		return build_request(std::move(wire), p.controls, c.mr(), context);
 	}
 
 	auto start_search(connection::impl &c,

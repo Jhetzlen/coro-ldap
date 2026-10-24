@@ -37,7 +37,7 @@ rationale is in [`DESIGN.md`](DESIGN.md).
 - `jhetz/ldap/content_sync.hpp`: RFC 4533 content synchronization
   ("syncrepl") codecs. `sync_request{.mode = sync_mode::refresh_only /
   refresh_and_persist, .cookie, .reload_hint, .critical = true}` is a
-  request control (`request_control`, controls.hpp); `find_sync_state()`
+  search request control (`search_controls`, controls.hpp); `find_sync_state()`
   reads an entry's Sync State control (`sync_state{state = present / add /
   modify / del, entry_uuid, cookie}`, the UUID as 16 octets in
   `sync_uuid`, `to_string()` giving the entryUUID text),
@@ -305,7 +305,7 @@ itself needs only ICU.
   `sync::connection` too), `compare` (`result<bool>`), `extended`,
   `who_am_i` (RFC 4532) and `password_modify` (RFC 3062: returns the
   server-generated password, if any), each taking a params aggregate with `.controls`
-  and `.timeout`; `search_paged(params, page_size)` follows the Simple
+  (that operation's control list, see controls.hpp below) and `.timeout`; `search_paged(params, page_size)` follows the Simple
   Paged Results cookie across pages (destroyed early, it abandons the
   current page and releases the server's paging state with a page size 0
   request, RFC 2696 section 3, unless the search already ended; the
@@ -459,14 +459,25 @@ itself needs only ICU.
   under `unsafe` the bind fails with `std::errc::operation_not_supported`
   before anything is sent; `unsafe_io` is unsupported).
   `examples/gssapi.cpp` binds with StartTLS and the default ticket.
-- `jhetz/ldap/controls.hpp`: typed request controls in a `std::variant`
-  (`ldap::paged`, `manage_dsa_it`, `relax_rules`
-  (draft-zeilenga-ldap-relax, critical by default), `proxied_authorization`,
-  `server_side_sort` (RFC 2891), `assertion` (RFC 4528, critical by default;
-  a false one fails with `errc::assertion_failed`), `pre_read` /
-  `post_read` (RFC 4527), or a raw `ldap::control`), `to_control` /
-  `append_controls` to encode them, and readers for the typed response
-  controls of a `std::pmr::vector<control>` (`response::controls`,
+- `jhetz/ldap/controls.hpp`: typed request controls (`ldap::paged`
+  (RFC 2696), `manage_dsa_it` (RFC 3296), `relax_rules`
+  (draft-zeilenga-ldap-relax, critical by default), `proxied_authorization`
+  (RFC 4370), `server_side_sort` (RFC 2891), `assertion` (RFC 4528, critical
+  by default; a false one fails with `errc::assertion_failed`), `pre_read` /
+  `post_read` (RFC 4527), `sync_request` (RFC 4533)) or a raw `ldap::control`.
+  Each operation's params take its own list: `search_controls`,
+  `add_controls`, `modify_controls`, `modify_dn_controls`, `del_controls`,
+  `compare_controls` and `extended_controls` (also `password_modify_params`,
+  `who_am_i`), each a `std::vector` of a `std::variant` of the raw control
+  and the typed controls the table `control_rule_of<T>` allows there
+  (`applies_to<T>(operation_kind)`, each row citing its RFC section), so a
+  misplaced typed control does not compile; the raw control is allowed
+  everywhere. A list shared by several operations is a `request_controls`
+  (every alternative), converted with `controls_for<add_controls>(list)`:
+  encode_error "pre_read is not valid on add (RFC 4527 section 3.1)" for a
+  control the operation does not take. `to_control` (one overload per
+  control) and `append_controls` (any of these lists) encode them, and
+  readers for the typed response controls of a `std::pmr::vector<control>` (`response::controls`,
   `search_stream::controls()`, ...): `find_paged`, `find_sort_result`
   (`sort_result{result_code, attribute_type}`), `find_pre_read` /
   `find_post_read` (the entry as an `ldap::entry`). Each returns nullopt when
