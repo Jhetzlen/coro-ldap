@@ -152,8 +152,9 @@ function(jhetz_ldap_warnings target)
 endfunction()
 
 # ICU is the Unicode dependency (DESIGN.md decision 6), of the codec too:
-# UTF-8 decoding and character properties in jhetz::ldap, SASLprep for SCRAM
-# (usprep) in jhetz::ldap_net. `data` too, for a static ICU (libicuuc.so
+# UTF-8 decoding, character properties and LDAPprep for the matching
+# rules (RFC 4518, usprep) in jhetz::ldap, SASLprep for SCRAM (usprep) in
+# jhetz::ldap_net. `data` too, for a static ICU (libicuuc.so
 # already pulls in libicudata). ICU 60+: U8_NEXT's maximal-subpart
 # behaviour (Unicode section 3.9) dates from ICU 60.
 find_package(ICU 60 COMPONENTS uc data)
@@ -172,6 +173,7 @@ add_library(jhetz_ldap STATIC
     src/filter.cpp
     src/format_util.cpp
     src/mapping.cpp
+    src/matching.cpp
     src/schema.cpp
     src/message.cpp
     src/operations.cpp

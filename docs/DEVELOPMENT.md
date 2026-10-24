@@ -230,6 +230,7 @@ than a disabled check.
 | `filter_fuzz` | text / bytes | `filter::raw` text -> BER -> equal tree -> same BER, and `to_string` -> `raw` -> equal tree (a fixed point); every builder's text parses back to its tree (escaping) and `attr("cn") == v` carries `v` exactly; decodable BER filters round-trip; `!f` holds exactly `f`'s BER |
 | `dn_fuzz` | text | `parse(to_string(d)) == d`; the literal validator agrees with `parse` |
 | `url_fuzz` | text | `parse(to_string(u)) == u` and `to_string` is canonical; printed URLs contain only RFC 3986 characters |
+| `matching_fuzz` | text (two values, split at an offset in the first byte) | `prepare_string` fails only with `string_prep_failed` and is idempotent (one SPACE more for a value starting with a combining mark); a value matches itself exactly when it prepares; equality rules are symmetric and caseExactMatch TRUE implies caseIgnoreMatch TRUE; orderings are never TRUE both ways; a parsed DN never fails to match itself |
 
 ```sh
 cmake -B build/fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \

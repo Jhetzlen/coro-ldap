@@ -6,8 +6,9 @@
 //   ldap::schema_report rep = ldap::validate<person>(*s);
 //   if (!rep.ok()) std::puts(rep.to_string().c_str());   // every issue, not just the first
 //
-// Parsing keeps, for attributeTypes: the OID, every NAME, SUP, SYNTAX (the
-// OID, without a {length}), SINGLE-VALUE and NO-USER-MODIFICATION; for
+// Parsing keeps, for attributeTypes: the OID, every NAME, SUP, EQUALITY,
+// SYNTAX (the OID, without a {length}), SINGLE-VALUE and
+// NO-USER-MODIFICATION; for
 // objectClasses: the OID and every NAME. Everything else is skipped.
 // Definitions that do not parse are skipped and counted, never fatal (the
 // text comes from the server, so the parser must accept anything without
@@ -46,6 +47,9 @@ struct attribute_type
 	std::string oid{};
 	std::vector<std::string> names{};
 	std::optional<std::string> sup{};// supertype (name or OID)
+	// equality matching rule (name or OID, as the server wrote it); see
+	// matching.hpp
+	std::optional<std::string> equality{};
 	std::optional<std::string> syntax{};// syntax OID, {length} removed
 	bool single_value = false;
 	bool no_user_modification = false;
@@ -83,6 +87,12 @@ class server_schema
 	// temporary attribute is rejected.
 	[[nodiscard]] auto syntax_of(const attribute_type &a) const noexcept -> const std::string *;
 	auto syntax_of(const attribute_type &&) const -> const std::string * = delete;
+	// The attribute's EQUALITY matching rule, or its supertypes' (RFC 4512
+	// section 4.1.2: a subtype without one inherits its supertype's), with
+	// the same SUP walk as syntax_of; nullptr if none declares one or a SUP
+	// is not found. Valid while a and the schema live.
+	[[nodiscard]] auto equality_of(const attribute_type &a) const noexcept -> const std::string *;
+	auto equality_of(const attribute_type &&) const -> const std::string * = delete;
 	// An attribute type definition by this NAME or OID (options ignored)
 	// parsed, but was skipped because its SYNTAX is not a numeric OID: the
 	// server defines it, the library cannot use it. Case-insensitive, no

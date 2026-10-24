@@ -161,6 +161,8 @@ namespace {
 			return "the server requires a SASL security layer";
 		case client_errc::internal_error:
 			return "a library the client uses failed";
+		case client_errc::string_prep_failed:
+			return "string preparation (RFC 4518) failed";
 		}
 		return {};
 	}
@@ -220,6 +222,7 @@ namespace {
 		case client_errc::invalid_attribute:
 		case client_errc::encode_error:
 		case client_errc::invalid_url:
+		case client_errc::string_prep_failed:
 			return cond::invalid_input;
 		case client_errc::not_connected:
 			return cond::connection_lost;

@@ -19,7 +19,8 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
   passwords never appear in errors, and every input from the server is
   bounded and decoded defensively (the codec is fuzzed).
 - **Unicode-correct.** UTF-8 everywhere: DNs, filters, values, SASL user
-  names and passwords (SASLprep through ICU).
+  names and passwords (SASLprep through ICU), and server-like value and DN
+  comparison (LDAPprep, RFC 4518).
 - **Errors as values.** Every operation returns `ldap::result<T>`, a
   `std::expected` with the error and a readable context, and error
   conditions group causes by meaning (`ldap::cond::auth_failed`, `timeout`,
@@ -41,10 +42,15 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
 - Content synchronization (RFC 4533, "syncrepl"): follow a directory's
   changes with refreshOnly or refreshAndPersist and resume from a cookie
 - Struct mapping, runtime schema validation, Active Directory time types
+- Matching rules as a server applies them (RFC 4517 with RFC 4518 string
+  preparation: case folding, NFKC, insignificant spaces): caseIgnoreMatch,
+  caseExactMatch and the other string, integer and octet rules, and DN
+  comparison by each attribute's equality rule from the server schema
+  (`ldap::dn`'s own `==` stays exact)
 - `std::pmr` allocators throughout, so a response can be decoded into an
   arena
-- A codec library (BER, messages, DN, filter, URL) usable on its own; its
-  only dependency is ICU
+- A codec library (BER, messages, DN, filter, URL, matching rules) usable on
+  its own; its only dependency is ICU
 
 Linux only.
 

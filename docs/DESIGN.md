@@ -58,11 +58,41 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
 
 - `dn`: parsed RDN sequence (RFC 4514), `parent()`, `child(rdn)` /
   `child(dn)` (prepend one RDN or a relative DN: `base.child(ldap::rdn{"uid=x"})`
-  is `uid=x,<base>`), `rdns()`, `to_string()`. Comparison is syntactic:
-  attribute types case-insensitive, values exact after unescaping, AVA order
-  inside a multi-valued RDN not significant. No matching-rule normalization
-  (so `cn=A` ≠ `cn=a`), and no hash yet. Parsing is lenient like OpenLDAP:
-  spaces around `,` `+` `=` are ignored and unescaped trailing spaces dropped.
+  is `uid=x,<base>`), `rdns()`, `to_string()`. `operator==` is syntactic
+  and stays so: attribute types case-insensitive, values exact after
+  unescaping, AVA order inside a multi-valued RDN not significant, so
+  `cn=A` ≠ `cn=a` there; no hash yet. Server-like comparison is explicit,
+  in `matching.hpp` (below). Parsing is lenient like OpenLDAP: spaces
+  around `,` `+` `=` are ignored and unescaped trailing spaces dropped.
+- Matching rules (`matching.hpp`): RFC 4517 rules named after the RFC
+  (`case_ignore_match`, `case_exact_match`, the IA5, numericString,
+  telephoneNumber, ordering, substrings, integer, boolean and octetString
+  rules, and `match(rule, value, assertion)` by NAME or OID) on values
+  prepared by LDAPprep (RFC 4518, `prepare_string`): UTF-8 decoding, then
+  ICU's RFC 4518 StringPrep profiles for map (with table B.2 case folding
+  for the case-ignore rules), NFKC, prohibit (Unicode 3.2 unassigned, private
+  use, non-characters, surrogates, table C.8; U+FFFD, which ICU's profiles
+  let through, is checked by the library) and bidi (ignored), then the
+  insignificant space, numericString or telephoneNumber handling of section
+  2.6 (errata 1757 and 1758 applied), with Appendix A's combining marks.
+  Results are `match_result` (TRUE, FALSE, Undefined): a value that fails
+  preparation or the rule's syntax gives Undefined, never FALSE. Syntaxes
+  are checked on the value as given, before preparation (an empty
+  Directory String, a fullwidth digit in a Numeric String are Undefined).
+  `distinguished_name_match(a, b)` (RFC 4517 section 4.2.15) compares DNs
+  with each attribute's equality rule: caseIgnoreMatch for all, the server
+  schema's EQUALITY (inherited through SUP), or a caller's per-attribute
+  lookup (which must return text it does not own: a lookup returning a
+  `std::string` by value does not compile), caseIgnoreMatch when none is
+  known; `#hex` values are BER-decoded and transcoded (BMPString,
+  UniversalString; INTEGER of any magnitude) first, and DN-valued AVAs are
+  compared as DNs with the same rules (nesting bounded). Types are resolved
+  to OIDs through the schema, then RFC 4519's names (`cn`, `commonName` and
+  `2.5.4.3` are one type without a schema too); RDNs that differ only in a
+  name nothing resolves are Undefined, not FALSE. Each RDN's AVAs are
+  sorted by resolved type and merged, so a large multi-valued RDN costs
+  n log n. `dn`'s `==` is not affected: it stays byte-exact, cheap and
+  independent of a schema.
 - `rdn`: one (possibly multi-valued) RDN, with its own literal
   (`ldap::rdn{"uid=x"}`), `rdn::parse()` and `to_string()`; text holding more
   than one RDN is rejected.
@@ -842,7 +872,7 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`; connection: `unexpected_response`, `not_connected`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `no_password_method`, `gssapi_failure`, `security_layer_required`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock`; environment: `internal_error` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `no_password_method`, `gssapi_failure`, `security_layer_required`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock`; environment: `internal_error` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 `error`'s strings are `std::pmr::string` but always on the default
@@ -919,7 +949,7 @@ a caller match none, deliberately (test them by exact code).
 | `busy_or_unavailable` | `busy`, `unavailable` | | `connection_refused`, `host_unreachable`, `network_unreachable`, `network_down` |
 | `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required`, `security_layer_required` | `permission_denied` |
 | `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
-| `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
+| `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url`, `string_prep_failed` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
 | none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `assertion_failed`, `e_sync_refresh_required`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `no_password_method`, `internal_error` | everything else |
 
 Choices worth knowing: `unauthenticated_bind` is `auth_failed` (an empty
@@ -954,11 +984,14 @@ literal, allocation failure) may throw.
 connection and check descriptors against it.
 
 Parsing is minimal, only what the checks below need:
-- `attributeTypes`: `NAME` (all aliases), `SUP`, `SYNTAX`, `SINGLE-VALUE`,
-  `NO-USER-MODIFICATION`. `SUP` is followed to inherit `SYNTAX`, because many
-  common attributes (`cn`, `sn`, …) only declare `SUP name`.
+- `attributeTypes`: `NAME` (all aliases), `SUP`, `EQUALITY`, `SYNTAX`,
+  `SINGLE-VALUE`, `NO-USER-MODIFICATION`. `SUP` is followed to inherit
+  `SYNTAX` and `EQUALITY`, because many common attributes (`cn`, `sn`, …)
+  only declare `SUP name`. `EQUALITY` drives
+  `distinguished_name_match(a, b, schema)` (section 1).
 - `objectClasses`: `NAME` only.
-- Everything else (matching rules, `MUST`/`MAY`, DIT content rules, extensions)
+- Everything else (`ORDERING`, `SUBSTR`, matching rule definitions,
+  `MUST`/`MAY`, DIT content rules, extensions)
   is skipped. Unparseable definitions are skipped, not fatal.
 
 ```cpp

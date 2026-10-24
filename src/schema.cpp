@@ -261,6 +261,9 @@ namespace {
 		if (const auto *s = d.get("SUP"); s && !s->empty()) {
 			a.sup = s->front();
 		}
+		if (const auto *s = d.get("EQUALITY"); s && !s->empty()) {
+			a.equality = s->front();
+		}
 		// RFC 4512 section 4.1.2: SYNTAX noidlen, a numericoid with an
 		// optional {len} right after it ("{" 1*DIGIT "}", no space; a spaced
 		// "{len}" already failed as a keyword). Anything else could never
@@ -358,19 +361,39 @@ auto server_schema::skipped_for_syntax(std::string_view name) const noexcept -> 
 	return bad_syntax_.contains(without_options(name));
 }
 
+namespace {
+
+	// The first definition on a's SUP chain (a itself first) that has
+	// `field`; nullptr if none does, a SUP is not found, or the chain is
+	// longer than 32 (a cycle).
+	auto inherited(const server_schema &s,
+	  const attribute_type &a,
+	  std::optional<std::string> attribute_type::*field) noexcept -> const std::string *
+	{
+		constexpr int max_depth = 32;
+		const attribute_type *cur = &a;
+		for (int depth = 0; depth < max_depth && cur != nullptr; ++depth) {
+			if (const auto &v = cur->*field) {
+				return &*v;
+			}
+			if (!cur->sup) {
+				return nullptr;
+			}
+			cur = s.find_attribute(*cur->sup);
+		}
+		return nullptr;
+	}
+
+}// namespace
+
 auto server_schema::syntax_of(const attribute_type &a) const noexcept -> const std::string *
 {
-	const attribute_type *cur = &a;
-	for (int depth = 0; depth < 32 && cur != nullptr; ++depth) {
-		if (cur->syntax) {
-			return &*cur->syntax;
-		}
-		if (!cur->sup) {
-			return nullptr;
-		}
-		cur = find_attribute(*cur->sup);
-	}
-	return nullptr;
+	return inherited(*this, a, &attribute_type::syntax);
+}
+
+auto server_schema::equality_of(const attribute_type &a) const noexcept -> const std::string *
+{
+	return inherited(*this, a, &attribute_type::equality);
 }
 
 // ---------------------------------------------------------------- report

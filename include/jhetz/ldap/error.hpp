@@ -108,6 +108,7 @@ enum class client_errc : int {
 	gssapi_failure,// a GSS-API (Kerberos) call failed during a SASL GSSAPI bind
 	security_layer_required,// the server requires a SASL security layer (integrity, confidentiality)
 	internal_error,// a library the client uses failed (OpenSSL, ICU), not the caller's input
+	string_prep_failed,// RFC 4518 string preparation refused the value (ill-formed UTF-8, prohibited code point)
 };
 
 // Error conditions: what an error means, across categories (DESIGN.md

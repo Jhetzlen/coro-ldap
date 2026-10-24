@@ -80,15 +80,48 @@ rationale is in [`DESIGN.md`](DESIGN.md).
   `unescape_filter_value(text)` returns `result<std::pmr::string>`, failing
   with `invalid_filter` on what `filter::raw` would reject in a value.
 - `jhetz/ldap/dn.hpp`: `ldap::dn` (RFC 4514 parse / `to_string`, multi-valued
-  RDNs, `parent()`, `child()`, compile-time checked literals). Syntax only: no
-  matching-rule normalization of values. `ldap::rdn` has its own literal and
-  `rdn::parse()` / `to_string()` for exactly one RDN (`cn=a+sn=b` is one RDN,
-  `cn=a,dc=b` is rejected). DNs are built from parts with `child()`:
+  RDNs, `parent()`, `child()`, compile-time checked literals). Its `==` is
+  syntactic (values exact after unescaping, `cn=A` != `cn=a`); compare as a
+  server does with `distinguished_name_match` (`matching.hpp`). `ldap::rdn`
+  has its own literal and `rdn::parse()` / `to_string()` for exactly one RDN
+  (`cn=a+sn=b` is one RDN, `cn=a,dc=b` is rejected). DNs are built from parts with `child()`:
   `base.child(ldap::rdn{"uid=jdoe"})` is `uid=jdoe,<base>`, and
   `base.child(ldap::dn{"uid=jdoe,ou=people"})` prepends a relative DN
   (`uid=jdoe,ou=people,<base>`); the result uses `base`'s resource.
   `escape_dn_value(v)` gives the RFC 4514 text of one attribute value,
   exactly as `to_string()` writes it, for DN text built elsewhere.
+- `jhetz/ldap/matching.hpp`: RFC 4517 matching rules on values prepared by
+  LDAPprep (RFC 4518). Each rule is a function named after it, taking the
+  attribute value and the assertion value and returning `match_result`
+  (`true_value`, `false_value`, `undefined`): `case_ignore_match`,
+  `case_exact_match`, `case_ignore_ia5_match`, `case_exact_ia5_match`,
+  `numeric_string_match`, `telephone_number_match`, the ordering rules
+  (`case_ignore_ordering_match`, `case_exact_ordering_match`,
+  `numeric_string_ordering_match`, `octet_string_ordering_match`,
+  `integer_ordering_match`: TRUE if the value is less than the assertion),
+  the substrings rules (`case_ignore_substrings_match(value,
+  substring_assertion{.initial, .any, .final})` and the case exact, IA5,
+  numericString and telephoneNumber ones), `octet_string_match`,
+  `integer_match` and `boolean_match`. `match(rule, value, assertion)` takes
+  the rule by NAME or OID (substrings rules then take RFC 4517's Substring
+  Assertion text, `ja*doe`); an unknown rule is Undefined, and
+  `is_known_matching_rule()` says which are implemented. A value that is not
+  valid UTF-8, holds a prohibited code point or one unassigned in Unicode
+  3.2 (RFC 4518's repertoire), or is not of the rule's syntax makes the match
+  Undefined. `prepare_string(value, prep_options{.case_fold, .handling,
+  .input})` gives the prepared string itself (`result<std::pmr::string>`,
+  `client_errc::string_prep_failed` naming the failed step).
+  `distinguished_name_match(a, b)` compares DNs (RFC 4517 section 4.2.15)
+  with caseIgnoreMatch for every attribute; `distinguished_name_match(a, b,
+  schema)` uses each type's EQUALITY from a `server_schema` (inherited
+  through SUP, caseIgnoreMatch when none); `distinguished_name_match(a, b,
+  lookup)` takes a callable on `const ldap::attribute &` returning a rule
+  NAME or OID, or an empty string for caseIgnoreMatch, as a
+  `std::string_view`, a `const char *` or a reference to a string (a
+  `std::string` by value does not compile). Every overload treats a type's
+  names and OID as one (the schema's, then RFC 4519's: `cn`, `commonName`,
+  `2.5.4.3`); RDNs that differ only in a type name nothing resolves compare
+  Undefined.
 - `jhetz/ldap/attribute.hpp`: `ldap::attribute`, an attribute description with
   case-insensitive equality, ordering and `std::hash`.
 - `jhetz/ldap/entry.hpp`: `ldap::entry`, the untyped search result entry
@@ -481,7 +514,8 @@ itself needs only ICU.
   -9223372036854775808). `std::int64_t` members read any 906 attribute raw.
 - `jhetz/ldap/schema.hpp` (#13): runtime schema validation. A lenient
   RFC 4512 parser for the subschema's attributeTypes / objectClasses,
-  `server_schema`, `validate<T>(schema)` listing every issue (unknown
+  `server_schema` (`syntax_of()` and `equality_of()` follow SUP to the
+  inherited SYNTAX and EQUALITY), `validate<T>(schema)` listing every issue (unknown
   attribute or object class, syntax the member's type cannot read, a
   writable member on a NO-USER-MODIFICATION attribute; single member on a
   multi-valued attribute as a warning), `connection::load_schema()` and
