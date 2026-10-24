@@ -101,7 +101,7 @@ The `bd prime` memories have the details. In short:
 - Text handling is full UTF-8 everywhere. Never ship an ASCII-only restriction; implement the RFC preparation instead.
 - ICU is the Unicode dependency.
 - Don't use `std::optional<T&>`; lookups return pointers (null means not found).
-- Linux only.
+- Linux is the tested platform. Windows is code-ported but unverified (no Windows toolchain here; the user builds it): keep `_WIN32` branches compiling, check them with a mingw-w64 syntax check, and see docs/DEVELOPMENT.md "Windows". No macOS.
 - `examples/` holds bare one-action files of about 15-30 lines, with no helpers.
 - Format with `/usr/bin/clang-format` (v23).
 - Don't touch CI (`.github/workflows`, `gh run`) unless asked.

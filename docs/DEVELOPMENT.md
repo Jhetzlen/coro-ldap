@@ -5,8 +5,10 @@ Building, testing, fuzzing and benchmarking jhetz::ldap. The basics are in the
 
 ## Build and test
 
-Linux only (configure rejects Apple Clang, even for the codec-only
-target). Standalone CMake project (CMake 3.25+, GCC 16+ or Clang 23+;
+Linux is the tested platform. Windows (MSVC, clang-cl, MinGW-w64) is
+ported in the code but has not been built or tested by us yet: see
+[Windows](#windows). macOS is not supported (configure rejects Apple Clang,
+even for the codec-only target). Standalone CMake project (CMake 3.25+, GCC 16+ or Clang 23+;
 Clang needs libstdc++ 16+ too, so install g++-16 next to it; configure
 stops with an error on anything older; libc++ is neither supported nor
 checked, so use libstdc++). Catch2 v3, and for `jhetz::ldap_net` Corosio
@@ -41,10 +43,128 @@ others; the list of `jhetz::ldap_net` headers is in `tests/CMakeLists.txt`).
 | `JHETZ_LDAP_WITH_GSSAPI` | `OFF` | SASL GSSAPI (Kerberos) in `jhetz::ldap_net`, its tests and example; needs the GSS-API library (pkg-config `krb5-gssapi`). The installed package then has the component `gssapi` |
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
-| `JHETZ_LDAP_WERROR` | `ON` (`OFF` as a subproject) | warnings are errors in our own targets (never in Corosio, Capy or Catch2); off when added with `add_subdirectory` or FetchContent, so a newer compiler's new warnings do not break consumers |
+| `JHETZ_LDAP_WERROR` | `ON` (`OFF` as a subproject, and on MSVC / clang-cl) | warnings are errors in our own targets (never in Corosio, Capy or Catch2); off when added with `add_subdirectory` or FetchContent, so a newer compiler's new warnings do not break consumers. Off on MSVC and clang-cl until the first clean Windows build (`/W4` still shows the warnings; `-DJHETZ_LDAP_WERROR=ON` adds `/WX`; coro-ldap-2we) |
 | `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench` (see below; not run by ctest or CI) |
 | `JHETZ_LDAP_COVERAGE` | `OFF` | Clang source-based coverage on our own targets (see [Coverage](#coverage)) |
 | `JHETZ_LDAP_CLANG_TIDY` | `OFF` | run clang-tidy (`.clang-tidy`) on our own targets while building them (see [clang-tidy](#clang-tidy)) |
+
+## Windows
+
+Status: the code has been ported to Windows (Winsock through Corosio, the
+CryptoAPI trust store, wide file paths, MSVC-safe code and CMake), but no
+Windows build has run here: there is no Windows toolchain in the
+development setup, so the port is checked only by syntax checks against the
+mingw-w64 headers. Expect a first build to turn up warnings and small
+errors; reports are welcome.
+
+Compilers: MSVC 19.40 (Visual Studio 2022 17.10) or newer, clang-cl on such
+a toolset (configure checks `MSVC_VERSION` for both), or MinGW-w64 with GCC
+16+. Clang's GNU driver aimed at `x86_64-pc-windows-msvc` (`clang++
+--target=...`, not clang-cl) gets no check of the MSVC STL's version: CMake
+does not set `MSVC` for it and the libstdc++ probe passes vacuously, so an
+old Visual Studio STL shows up only as compile errors.
+
+### Build with vcpkg
+
+From a "x64 Native Tools Command Prompt for VS 2022", with vcpkg cloned and
+bootstrapped in `%VCPKG_ROOT%`:
+
+```bat
+%VCPKG_ROOT%\vcpkg install icu openssl --triplet x64-windows
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug ^
+  -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake ^
+  -DVCPKG_TARGET_TRIPLET=x64-windows
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+Catch2, Corosio and Capy are fetched as on Linux. The tests are listed when
+ctest runs them (`DISCOVERY_MODE PRE_TEST`), so the ICU and OpenSSL DLLs
+must be found at test time only: vcpkg's toolchain copies them next to the
+executables, or put `%VCPKG_ROOT%\installed\x64-windows\debug\bin` (`bin`
+for Release) on `PATH`. Use the dynamic triplet: with a static ICU
+(`x64-windows-static`) consumers must compile with
+`U_STATIC_IMPLEMENTATION`, which the build does not set yet (pass
+`-DCMAKE_CXX_FLAGS=/DU_STATIC_IMPLEMENTATION` to try it; untested).
+
+What the build does on Windows, for our own targets only: `/W4 /utf-8
+/bigobj` on MSVC and clang-cl (`-Wa,-mbig-obj` on MinGW),
+`_CRT_SECURE_NO_WARNINGS`, `NOMINMAX` and `WIN32_LEAN_AND_MEAN`, and
+`jhetz_ldap_net` links `crypt32`. Warnings are not errors on MSVC and
+clang-cl by default (`/WX` is off until the first clean build;
+`-DJHETZ_LDAP_WERROR=ON` turns it on; coro-ldap-2we tracks the switch).
+Corosio's and Capy's targets get none of these flags, so no `/bigobj`
+either: if MSVC stops on C1128 (too many sections) in one of their files,
+add `/bigobj` to `CMAKE_CXX_FLAGS`. The `compile.*` tests (the mapping's
+compile-time diagnostics) are not registered with MSVC or clang-cl.
+
+### Behaviour that differs on Windows
+
+- Default trust store: with no `ca_file`, `ca_dir` or `ca_pem`, the anchors
+  come from the CryptoAPI `ROOT` system store, enumerated again for every
+  connection (OpenSSL reads no Windows store). A root is skipped when its
+  extended key usage property excludes serverAuth, its disallowed usage
+  property lists serverAuth, it has a `CERT_DISALLOWED_FILETIME_PROP_ID`,
+  or it is also in the `Disallowed` store; the `CA` (intermediate) store
+  never provides anchors. A store that cannot be enumerated to the end
+  fails the connect rather than give a partial set.
+- NotBefore: the root program can stop trusting what a root issues after a
+  date (`CERT_NOT_BEFORE_FILETIME_PROP_ID`, for the uses
+  `CERT_NOT_BEFORE_ENHKEY_USAGE_PROP_ID` lists, or all). OpenSSL cannot
+  trust a root only for certificates issued before a date, so when the date
+  applies to serverAuth the root is not used at all (fail closed). Pass it
+  in `ca_file` to trust it anyway.
+- AuthRoot gap: Windows downloads most Microsoft-trusted roots on demand
+  (AuthRoot auto-update) while CryptoAPI builds a chain. A root no
+  CryptoAPI client has needed yet is not in `ROOT`, so a server chaining to
+  it fails to verify here although Windows' own clients accept it. Install
+  the root or pass `ca_file` meanwhile. Verifying the chain with CryptoAPI
+  itself (`CertGetCertificateChain` with the SSL policy, as wldap32 does)
+  would close the gap and add Windows' revocation checks: coro-ldap-1q5.
+- ldapi:// uses Windows' AF_UNIX, which needs Windows 10 1803 or later.
+  Abstract socket names (a leading NUL, `ldapi://%00name`) are Linux only:
+  elsewhere the URL is rejected as `invalid_url`. Winsock reads `sun_path`
+  in the ANSI code page, so a socket path outside it (non-ASCII on most
+  systems) may not reach the right file.
+- `tls_options::ca_dir` is read lazily by OpenSSL through char paths: keep
+  its path ASCII on Windows. The other TLS files go through
+  `std::filesystem::path` and take any name.
+- `ad::filetime_clock` works for any `system_clock` period (MSVC's is
+  100 ns); `from_sys` is defined up to `time_point::max()` minus the
+  1601-to-1970 offset, as documented in `ad.hpp`.
+
+### Linux only
+
+- SASL GSSAPI: configure stops on `JHETZ_LDAP_WITH_GSSAPI` (SSPI is not
+  implemented).
+- The integration tests (`run_slapd.sh`, `run_kdc.sh`), coverage
+  (`run_coverage.sh`, Clang only and rejected for clang-cl) and the
+  fuzzers (configure stops on `JHETZ_LDAP_BUILD_FUZZERS`). The
+  `*_fuzz_replay` tests do run on Windows.
+- `JHETZ_LDAP_SANITIZE` is ASan only on MSVC and clang-cl (no UBSan) and is
+  refused with MinGW (no ASan runtime).
+- A few `net.*` tests need Linux interfaces (the `getaddrinfo` interposer,
+  `getifaddrs` for a link-local address) and skip elsewhere.
+
+### Open questions for the first Windows build
+
+- `/W4` warnings: none has been seen yet. Fix them, then default
+  `JHETZ_LDAP_WERROR` back on (coro-ldap-2we).
+- C1128 in Corosio's or Capy's sources without `/bigobj` (above).
+- AF_UNIX: which error a connect to a missing socket path gives (the ldapi
+  test accepts any "no such file" or "connection refused" condition), and
+  whether Corosio's `local_endpoint` and Windows agree on paths near
+  `max_path_length`.
+- Abstract addresses: Windows' AF_UNIX has been said to accept them;
+  connect() refuses them off Linux until that is checked.
+- Time zones: `std::chrono::locate_zone` on MSVC uses ICU's tzdb, whose
+  abbreviations may differ from IANA's (`ad_tests` checks the offset, not
+  "CET").
+- Static ICU (`U_STATIC_IMPLEMENTATION`, above) and a static OpenSSL's
+  extra system libraries.
+- The Winsock test sockets (`tests/net/platform.hpp`): overlapped, so that
+  `SO_RCVTIMEO` bounds a blocking `recv`; the CLI test's `cmd.exe` quoting
+  (`shell_quote` refuses `"` and `%`).
 
 ## Installing
 

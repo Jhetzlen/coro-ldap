@@ -1127,7 +1127,10 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   only on link-local and multicast addresses, so `[::1%25lo]` fails to
   resolve.
 - TLS: verification is on by default (Corosio's own default is off), with
-  the system trust store, SNI, host name checks (IP literals against iPAddress
+  the system trust store (OpenSSL's; on Windows the filtered CryptoAPI ROOT
+  store, copied into OpenSSL per connection: roots fetched on demand by
+  AuthRoot are missed and a NotBefore date on serverAuth drops the root;
+  CryptoAPI chain verification is coro-ldap-1q5), SNI, host name checks (IP literals against iPAddress
   entries, zone stripped) and TLS 1.2 minimum. Options: `ca_file`, `ca_dir`,
   `ca_pem`, client `cert_file` + `key_file`, `server_name`; the only opt-out
   is `certificate_verification::insecure_accept_any`. Configuration errors
@@ -1419,8 +1422,19 @@ and its destructor joins the thread.
 
 - C++23: `std::expected`, deducing `this`, `std::print`, the C++23 ranges
   additions.
-- Compilers: GCC 16+; Clang 23+ with libstdc++ 16+ (CMake checks all three
-  at configure time); MSVC 17.8+. No workarounds for older compilers.
+- Compilers: GCC 16+; Clang 23+ with libstdc++ 16+; MSVC 19.40+ (Visual
+  Studio 2022 17.10), or clang-cl on that toolset (CMake checks each at
+  configure time). No workarounds for older compilers.
+- Platforms: Linux is tested. Windows is ported in the code only (no
+  Windows build has run yet; docs/DEVELOPMENT.md, "Windows"): Winsock and
+  AF_UNIX (Windows 10 1803+) through Corosio, the CryptoAPI ROOT store as
+  the default trust anchors (`src/net/trust_store_win.cpp`, the only
+  Windows-specific source; CMake picks it instead of
+  `trust_store_default.cpp`), file names through `std::filesystem::path`.
+  Linux only: abstract ldapi:// sockets, SASL GSSAPI (no SSPI), the
+  integration tests, coverage and the fuzzers. `/WX` is off by default on
+  MSVC and clang-cl until the first clean build (coro-ldap-2we). macOS is
+  not supported.
 - Corosio and Capy pinned by commit (FetchContent), used only by
   `jhetz_ldap_net` (option `JHETZ_LDAP_BUILD_NET`, off in fuzz builds);
   it also needs OpenSSL.

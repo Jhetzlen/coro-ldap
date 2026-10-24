@@ -52,7 +52,10 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
 - A codec library (BER, messages, DN, filter, URL, matching rules) usable on
   its own; its only dependency is ICU
 
-Linux only.
+Linux is the tested platform. Windows (MSVC, clang-cl, MinGW-w64) is ported
+in the code but not yet built or tested by us; see
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#windows) for its status, a vcpkg
+recipe and what stays Linux only. macOS is not supported.
 
 ## Example
 
@@ -113,7 +116,8 @@ command-line tool.
 Requirements: CMake 3.25+, GCC 16+ or Clang 23+ with libstdc++ 16+, the ICU
 60+ development files, and for the network library OpenSSL's (Debian:
 `libicu-dev libssl-dev`, Arch: `icu openssl`). Catch2, Corosio and Capy are
-fetched by CMake.
+fetched by CMake. On Windows: MSVC 19.40+ (or clang-cl) with ICU and
+OpenSSL from vcpkg ([recipe](docs/DEVELOPMENT.md#build-with-vcpkg)).
 
 ```sh
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -134,5 +138,5 @@ or add it with `add_subdirectory` / FetchContent and link the same targets.
 
 - [`docs/API.md`](docs/API.md): what each header provides, in detail
 - [`docs/DESIGN.md`](docs/DESIGN.md): design notes and rationale
-- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): build options, installing,
-  integration tests against slapd, coverage, fuzzing, benchmark
+- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): build options, Windows,
+  installing, integration tests against slapd, coverage, fuzzing, benchmark
