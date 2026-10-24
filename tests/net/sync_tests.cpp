@@ -1,5 +1,6 @@
 // ldap::sync::connection against an in-process LDAP server on loopback TCP that
 // runs on its own thread and io_context and answers requests as they come.
+#include "../../src/net/tls.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/sync.hpp"
@@ -341,6 +342,9 @@ struct peer_server
 			log.error = "write: " + std::string(w.error().message());
 			co_return;
 		}
+		// This thread's first handshake may meet the client's (the
+		// connection's I/O thread): see prime_corosio_openssl().
+		net::detail::prime_corosio_openssl();
 		corosio::tls_context ctx;
 		if (ctx.use_certificate(leaf.cert_pem, corosio::tls_file_format::pem)
 			|| ctx.use_private_key(leaf.key_pem, corosio::tls_file_format::pem)) {

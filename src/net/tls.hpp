@@ -46,6 +46,24 @@ struct tls_setup
 	std::shared_ptr<verify_state> state = std::make_shared<verify_state>();
 };
 
+// Works around a Corosio race (coro-ldap-cx0): openssl_native_context
+// allocates its process-wide SSL_CTX ex_data slot (sni_ctx_data_index)
+// lazily and without synchronisation, when the first SSL_CTX is built, at a
+// tls_context's first handshake. Two threads doing that at once can each
+// allocate a slot and store their context data under one the other then
+// overwrites; Corosio's verify trampoline later finds no data and returns
+// OpenSSL's verdict without calling our verify callback (no peer
+// certificate, no channel bindings, no strict host check). This runs one
+// throwaway client handshake, on a thread of its own, against a stream
+// that fails at once: building its SSL_CTX allocates the slot. A mutex
+// makes every caller wait until that is done, so no first use can race it.
+// make_tls_setup() calls it; any other thread that uses Corosio's OpenSSL
+// streams while ours may run (the tests' servers) calls it before its first
+// handshake. Returns false if the warm-up could not run (no thread,
+// bad_alloc); the next call tries again, and tls_handshake() still fails
+// closed meanwhile.
+auto prime_corosio_openssl() noexcept -> bool;
+
 // Builds the client context from `options`: verification mode and trust
 // anchors, client certificate, minimum version, server_name check. Every
 // file is read and every certificate parsed here. Errors have contexts
@@ -64,10 +82,13 @@ auto tls_peer_name(std::string_view host, const tls_options &options) -> std::st
 // im.stream points at the TLS layer; on an error or a throw (bad_alloc)
 // neither is, and im.stream is unchanged. On success the peer certificate
 // and the channel bindings are recorded in im (record_tls_session), and
-// renegotiation is off, when the verify callback ran (the server sent a
-// certificate); otherwise nothing is recorded and renegotiation is left
-// as it was. Errors have the context "tls handshake" (plus ":
-// server certificate: <reason>" when verification failed).
+// renegotiation is off. A handshake that succeeded without running the
+// verify callback (no certificate, or the Corosio race above) fails with
+// client_errc::internal_error: it would have no peer data and, under full
+// verification, no strict host check. That branch has no deterministic
+// test: the race is not reproducible on demand and every certificate-based
+// handshake runs the callback. Errors have the context "tls handshake"
+// (plus ": server certificate: <reason>" when verification failed).
 auto tls_handshake(transport::impl &im,
   std::string_view host,
   const tls_options &options,

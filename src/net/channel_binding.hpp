@@ -42,8 +42,9 @@ inline constexpr std::size_t tls_exporter_size = 32;
 // records describes the connection for its lifetime and tls-exporter is
 // defined (RFC 9266 section 4.2). Leaves what it cannot compute empty, and
 // OpenSSL's error queue as it found it (ERR_set_mark / ERR_pop_to_mark).
-// A null `ssl` (the verify callback did not run: no server certificate)
-// only clears im: nothing is recorded and renegotiation is not turned off.
+// tls_handshake() never passes a null `ssl` (it fails closed when the
+// verify callback did not run); a null one is handled defensively by
+// only clearing im.
 void record_tls_session(transport::impl &im, ssl_st *ssl);
 
 // Clears what record_tls_session() set, and tls_exporter_used.

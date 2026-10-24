@@ -5,6 +5,9 @@
 #include "../format_util.hpp"
 #include "../scope_util.hpp"
 
+#include <boost/capy/ex/run_async.hpp>
+#include <boost/capy/io_task.hpp>
+#include <boost/corosio/io_context.hpp>
 #include <boost/corosio/openssl_stream.hpp>
 
 #include <openssl/bio.h>
@@ -22,11 +25,13 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -250,6 +255,47 @@ namespace {
 		return true;
 	}
 
+	// The stream under prime_corosio_openssl()'s handshake: every read and
+	// write fails at once, so the handshake ends at its ClientHello.
+	struct dead_stream
+	{
+		auto read_some(const auto & /*buffers*/) -> boost::capy::io_task<std::size_t>
+		{
+			co_return { std::make_error_code(std::errc::not_connected), 0 };
+		}
+		auto write_some(const auto & /*buffers*/) -> boost::capy::io_task<std::size_t>
+		{
+			co_return { std::make_error_code(std::errc::not_connected), 0 };
+		}
+	};
+
+	// One client handshake on a fresh tls_context over a dead_stream: its
+	// first step builds the SSL_CTX, which allocates Corosio's ex_data slot.
+	// The handshake's failure is expected. On a thread of its own, so that
+	// the caller's thread (running another io_context, inside a coroutine)
+	// keeps its Capy and Corosio thread-local state.
+	auto run_throwaway_handshake() noexcept -> bool
+	{
+		bool ran = false;
+		try {
+			std::thread([&ran] {
+				try {
+					corosio::io_context ioc;
+					const corosio::tls_context ctx;
+					corosio::openssl_stream stream(dead_stream{}, ctx);
+					boost::capy::run_async(ioc.get_executor())(stream.handshake(corosio::tls_role::client));
+					ioc.run();
+					ran = true;
+				} catch (...) {
+					return;// bad_alloc: tls_handshake() still fails closed
+				}
+			}).join();
+		} catch (...) {
+			return false;// no thread (std::system_error)
+		}
+		return ran;
+	}
+
 	auto check(std::error_code ec, const std::string &what) -> result<void>
 	{
 		if (ec) {
@@ -327,8 +373,27 @@ namespace {
 
 }// namespace
 
+auto prime_corosio_openssl() noexcept -> bool
+{
+	// Concurrent callers wait for the warm-up under the lock; a failed one
+	// (no thread, bad_alloc) is retried by the next caller.
+	static std::mutex mutex;
+	static bool primed = false;
+	try {
+		const std::scoped_lock lock(mutex);
+		if (!primed) {
+			primed = run_throwaway_handshake();
+		}
+		return primed;
+	} catch (...) {
+		return false;// the lock failed (std::system_error)
+	}
+}
+
 auto make_tls_setup(const tls_options &o) -> result<tls_setup>
 {
+	// Before any of our tls_contexts reaches its first handshake (see tls.hpp).
+	prime_corosio_openssl();
 	tls_setup setup;
 	auto &ctx = setup.context;
 
@@ -414,6 +479,14 @@ auto tls_handshake(transport::impl &im,
 			context += ": server certificate: " + setup.state->reason;
 		}
 		co_return fail(ec, std::move(context));
+	}
+	// Fail closed if the verify callback never ran: without it there is no
+	// session to record (peer certificate, channel bindings, renegotiation
+	// off) and, under full verification, the strict host check was skipped.
+	// Every certificate-based handshake runs it, so this means Corosio
+	// skipped it (the ex_data race prime_corosio_openssl() works around).
+	if (setup.state->ssl == nullptr) {
+		co_return fail(client_errc::internal_error, "tls handshake: the certificate verify callback did not run");
 	}
 	// The session outlives the handshake (it is the stream's), but the
 	// pointer is not kept: everything needed is read now, and renegotiation,

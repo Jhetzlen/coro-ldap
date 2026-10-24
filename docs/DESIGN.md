@@ -507,9 +507,27 @@ sets `SSL_OP_NO_RENEGOTIATION` on the session (a no-op on TLS 1.3), so a
 server's TLS 1.2 HelloRequest gets a no_renegotiation alert; RFC 9266
 section 4.2 leaves tls-exporter undefined where renegotiation is enabled,
 and a renegotiation could change the certificate recorded at the
-handshake. It does so only when it got the session, that is when the
-verify callback ran (the server sent a certificate); otherwise nothing
-is recorded and renegotiation stays at OpenSSL's default. Compatibility:
+handshake. The session comes from the verify callback, which every
+certificate-based handshake runs; a handshake that succeeded without it
+fails (`client_errc::internal_error`, "the certificate verify callback
+did not run") rather than go on without peer data, renegotiation
+protection or, under full verification, the strict host check (no
+deterministic test covers that branch: the race below cannot be forced,
+and every certificate-based handshake runs the callback). Corosio
+race (coro-ldap-cx0, to be reported upstream): `openssl_native_context`
+allocates its process-wide SSL_CTX ex_data slot (`sni_ctx_data_index`)
+lazily and unsynchronised when the first SSL_CTX is built, so two
+threads handshaking for the first time at once can each allocate one;
+the context whose slot lost then has no data, and Corosio's verify
+trampoline skips our callback. `make_tls_setup()` first calls
+`prime_corosio_openssl()` (src/net/tls.cpp), which runs one throwaway client handshake over a stream that fails at
+once, on a thread of its own, which builds an SSL_CTX and so allocates
+the slot before any of our contexts can; concurrent callers wait for it
+under a mutex, and a warm-up that could not run (no thread) is retried by
+the next caller.
+Other threads of the process that use Corosio's OpenSSL streams directly
+are not covered unless they call it too (the tests' threaded servers
+do). Compatibility:
 this applies to every ldaps:// and StartTLS connection, channel binding
 used or not, so a server that renegotiates TLS 1.2 (e.g. to ask for a
 client certificate after the handshake) fails the connection with an

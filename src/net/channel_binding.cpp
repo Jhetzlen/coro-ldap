@@ -152,7 +152,7 @@ void record_tls_session(transport::impl &im, ssl_st *ssl)
 {
 	clear_tls_session(im);
 	if (ssl == nullptr) {
-		return;
+		return;// defensive: tls_handshake() fails closed before this
 	}
 	// Errors left by what follows are dropped, the caller's are kept.
 	const auto mark = openssl_error_mark();

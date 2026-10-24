@@ -15,6 +15,7 @@
 #include <boost/corosio/tls_context.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <openssl/err.h>
@@ -28,7 +29,9 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
+#include <latch>
 #include <memory>
 #include <optional>
 #include <span>
@@ -50,6 +53,7 @@ namespace capy = boost::capy;
 namespace corosio = boost::corosio;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::ContainsSubstring;
+using Catch::Matchers::IsEmpty;
 using Catch::Matchers::StartsWith;
 
 namespace {
@@ -1172,4 +1176,76 @@ TEST_CASE("channel binding: the client refuses TLS 1.2 renegotiation", "[net][tl
 	CHECK(second.error().code == ldap::cond::tls_failure);
 	CHECK_FALSE(c.is_open());
 	CHECK(srv.result() == "refused: no renegotiation");
+}
+
+// coro-ldap-cx0: Corosio allocates its SSL_CTX ex_data slot when the
+// process builds its first SSL_CTX, without synchronisation; threads doing
+// that at once could leave a context without its data, and Corosio then
+// skipped our verify callback (no peer certificate). The library primes the
+// slot once (prime_corosio_openssl()) before its first tls_context, and
+// fails a handshake whose verify callback did not run. The servers are
+// plain OpenSSL, so the clients' contexts are the process's only Corosio
+// ones. Meaningful in a fresh process (ctest runs each test case alone):
+// without the workaround a TSan build reports the race in most runs (the
+// threads must overlap), other builds lose a certificate only rarely.
+TEST_CASE("channel binding: concurrent first TLS handshakes all record the peer", "[net][tls][channel_binding]")
+{
+	struct client_result
+	{
+		std::string error{};
+		bytes certificate{};
+	};
+	constexpr std::size_t clients = 8;
+	const bytes der = certificate_der(server_leaf().cert_pem);
+	const std::string ca_pem = pki().ca_pem();
+	std::vector<std::unique_ptr<raw_tls_server>> servers;
+	servers.reserve(clients);
+	for (std::size_t i = 0; i < clients; ++i) {
+		servers.push_back(std::make_unique<raw_tls_server>(ecdsa_identity(), 0, wait_for_close));
+	}
+	std::vector<client_result> results(clients);
+	std::latch start(static_cast<std::ptrdiff_t>(clients));
+	// No Catch2 assertion on these threads: results are checked after join.
+	// A thread that throws before arriving counts down in the catch, so the
+	// others are not left waiting at the latch.
+	auto client = [&start, &ca_pem](const std::string &url, client_result &out) {
+		bool arrived = false;
+		try {
+			corosio::io_context ioc;
+			net::connect_options o;
+			o.tls.verification = net::certificate_verification::full;
+			o.tls.ca_pem = std::pmr::string(ca_pem);
+			const auto u = ldap::url::parse(url);
+			arrived = true;
+			start.arrive_and_wait();
+			if (!u) {
+				out.error = "url";
+				return;
+			}
+			auto t = finish(ioc, net::connect(ioc, *u, o));
+			if (!t) {
+				out.error = std::string(t.error().context) + ": " + t.error().code.message();
+				return;
+			}
+			out.certificate = to_bytes(t->peer_certificate());
+		} catch (const std::exception &e) {
+			if (!arrived) {
+				start.count_down();
+			}
+			out.error = e.what();
+		}
+	};
+	{
+		std::vector<std::jthread> threads;
+		threads.reserve(clients);
+		for (std::size_t i = 0; i < clients; ++i) {
+			threads.emplace_back(client, servers[i]->url(), std::ref(results[i]));
+		}
+	}
+	for (std::size_t i = 0; i < clients; ++i) {
+		CAPTURE(i);
+		CHECK_THAT(results[i].error, IsEmpty());
+		CHECK(results[i].certificate == der);
+		CHECK_THAT(servers[i]->result(), IsEmpty());
+	}
 }
