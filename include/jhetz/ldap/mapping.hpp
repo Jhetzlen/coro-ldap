@@ -34,9 +34,13 @@
 //   std::vector<T>    zero or more values
 // (std::vector<std::byte>, ldap::binary, is a single binary value; use
 // std::vector<ldap::binary> for several.) A value that does not convert is
-// conversion_failed. Errors name the entry and the attribute in their
-// context: "entry uid=x,ou=people,dc=example,dc=org: attribute uidNumber:
-// not an integer: \"12a\"".
+// conversion_failed, and one bad value fails the whole decode<T> (and so the
+// whole search_as<T>). A string member (std::string, std::pmr::string) takes
+// only well-formed UTF-8, so binary attributes (userPassword, jpegPhoto,
+// userCertificate, ...) map to ldap::binary; validate<T> reports a string
+// member on a binary syntax (schema.hpp). Errors name the entry and the
+// attribute in their context: "entry uid=x,ou=people,dc=example,dc=org:
+// attribute uidNumber: not an integer: \"12a\"".
 //
 // value_traits<T> is the extension point, like std::formatter:
 //
@@ -45,10 +49,10 @@
 //       static std::string encode(const my_type &v);
 //   };
 //
-// Built in: std::string, std::pmr::string, integers (decimal, range
-// checked), bool (TRUE / FALSE, RFC 4517), ldap::dn, ldap::binary,
-// std::chrono::sys_seconds (GeneralizedTime, RFC 4517 section 3.3.13) and
-// enums that have an ldap::enum_names table. ad.hpp adds Active Directory's
+// Built in: std::string, std::pmr::string (well-formed UTF-8 only),
+// integers (decimal, range checked), bool (TRUE / FALSE, RFC 4517),
+// ldap::dn, ldap::binary, std::chrono::sys_seconds (GeneralizedTime, RFC
+// 4517 section 3.3.13) and enums that have an ldap::enum_names table. ad.hpp adds Active Directory's
 // FILETIME dates and intervals.
 #pragma once
 
@@ -96,17 +100,39 @@ namespace detail {
 	// "not an integer: \"12a\"" (the value is quoted, sanitized and cut at 64
 	// bytes, see append_sanitized in src/format_util.hpp).
 	auto conversion_error(std::string_view what, std::string_view raw) -> error;
+
+	// conversion_failed "not valid UTF-8 (ill-formed sequence at offset N)",
+	// N counted from 0; the value itself is not quoted.
+	auto utf8_conversion_error(std::size_t offset) -> error;
 }// namespace detail
 
+// Text: the value must be well-formed UTF-8 (RFC 3629, as RFC 4512 UTF8
+// requires of Directory String and the other string syntaxes), else
+// conversion_failed. Map binary attributes (userPassword and the other
+// Octet String ones, jpegPhoto, userCertificate, objectGUID, ...) to
+// ldap::binary instead; validate<T> reports a string member on a binary
+// syntax. Encoding does not check: the caller's text goes out as is.
 template<> struct value_traits<std::string>
 {
-	[[nodiscard]] static auto decode(std::string_view raw) -> result<std::string> { return std::string(raw); }
+	[[nodiscard]] static auto decode(std::string_view raw) -> result<std::string>
+	{
+		if (const std::size_t bad = detail::invalid_utf8_offset(raw); bad != std::string_view::npos) {
+			return std::unexpected(detail::utf8_conversion_error(bad));
+		}
+		return std::string(raw);
+	}
 	[[nodiscard]] static auto encode(const std::string &v) -> std::string { return v; }
 };
 
 template<> struct value_traits<std::pmr::string>
 {
-	[[nodiscard]] static auto decode(std::string_view raw) -> result<std::pmr::string> { return std::pmr::string(raw); }
+	[[nodiscard]] static auto decode(std::string_view raw) -> result<std::pmr::string>
+	{
+		if (const std::size_t bad = detail::invalid_utf8_offset(raw); bad != std::string_view::npos) {
+			return std::unexpected(detail::utf8_conversion_error(bad));
+		}
+		return std::pmr::string(raw);
+	}
 	[[nodiscard]] static auto encode(const std::pmr::string &v) -> std::string { return std::string(v); }
 };
 

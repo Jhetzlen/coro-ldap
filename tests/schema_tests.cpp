@@ -5,9 +5,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ldap = jhetz::ldap;
@@ -368,7 +371,7 @@ struct broken_sup
 	std::vector<std::int64_t> child;
 	std::vector<std::int64_t> orphan;
 	std::vector<std::int64_t> parent;
-	std::vector<std::string> child_text;// strings read any syntax: not checked
+	std::vector<std::string> child_text;// a string's unknown syntax: not reported
 };
 
 }// namespace
@@ -425,7 +428,7 @@ struct no_syntax
 {
 	std::vector<std::int64_t> bare;
 	std::vector<std::int64_t> child;
-	std::vector<std::string> bare_text;// strings read any syntax: not checked
+	std::vector<std::string> bare_text;// a string's unknown syntax: not reported
 };
 
 }// namespace
@@ -499,4 +502,111 @@ TEST_CASE("schema: validate lists every issue", "[schema][validate]")
 	CHECK_THAT(text, ContainsSubstring("error: attribute mail: syntax 1.3.6.1.4.1.1466.115.121.1.26 is not one"));
 	CHECK_THAT(text, ContainsSubstring("warning: attribute cn: single-valued member"));
 	CHECK_THAT(text, ContainsSubstring("mark the member ldap::read_only"));
+}
+
+namespace {
+
+// String members on the binary syntaxes, which they refuse; a string on
+// Directory String passes.
+struct binary_as_text
+{
+	std::optional<std::string> password;// userPassword: Octet String
+	std::vector<std::pmr::string> photo;// jpegPhoto: JPEG
+	std::string certificate;// userCertificate: Certificate
+	std::optional<std::string> revocation;// certificateRevocationList: Certificate List
+	std::optional<std::string> pair;// crossCertificatePair: Certificate Pair
+	std::optional<std::string> fax;// x-fax: Fax
+	std::optional<std::string> sound;// audio: Audio
+	std::optional<std::string> blob;// x-blob: Binary
+	std::optional<std::string> description;// description: Directory String
+};
+
+struct binary_as_binary
+{
+	std::optional<ldap::binary> password;
+	std::vector<ldap::binary> photo;
+	ldap::binary certificate;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<binary_as_text> = ldap::describe(ldap::object_class("top"),
+  ldap::field<&binary_as_text::password>("userPassword"),
+  ldap::field<&binary_as_text::photo>("jpegPhoto"),
+  ldap::field<&binary_as_text::certificate>("userCertificate"),
+  ldap::field<&binary_as_text::revocation>("certificateRevocationList"),
+  ldap::field<&binary_as_text::pair>("crossCertificatePair"),
+  ldap::field<&binary_as_text::fax>("x-fax"),
+  ldap::field<&binary_as_text::sound>("audio"),
+  ldap::field<&binary_as_text::blob>("x-blob"),
+  ldap::field<&binary_as_text::description>("description"));
+
+template<>
+constexpr auto ldap::schema<binary_as_binary> = ldap::describe(ldap::object_class("top"),
+  ldap::field<&binary_as_binary::password>("userPassword"),
+  ldap::field<&binary_as_binary::photo>("jpegPhoto"),
+  ldap::field<&binary_as_binary::certificate>("userCertificate"));
+
+// The binary syntaxes (RFC 4517, RFC 4523, RFC 2252) hold octets, not UTF-8
+// text: a std::string or std::pmr::string member on one is a
+// syntax_mismatch (it would fail to decode), whatever its shape; ldap::binary
+// members pass. Definitions carry UTF-8 descriptions.
+TEST_CASE("schema: a string member on a binary syntax is a syntax mismatch", "[schema][validate]")
+{
+	const std::pmr::vector<std::pmr::string> types{
+		// NOLINTNEXTLINE(bugprone-suspicious-missing-comma): one definition, wrapped at the column limit
+		"( 2.5.4.35 NAME 'userPassword' DESC 'mot de passe \xC3\xA0 v\xC3\xA9rifier' EQUALITY octetStringMatch "
+		"SYNTAX 1.3.6.1.4.1.1466.115.121.1.40{128} )",
+		"( 0.9.2342.19200300.100.1.60 NAME 'jpegPhoto' DESC '\xE5\x86\x99\xE7\x9C\x9F' SYNTAX "
+		"1.3.6.1.4.1.1466.115.121.1.28 )",
+		"( 2.5.4.36 NAME 'userCertificate' SYNTAX 1.3.6.1.4.1.1466.115.121.1.8 )",
+		"( 2.5.4.39 NAME 'certificateRevocationList' SYNTAX 1.3.6.1.4.1.1466.115.121.1.9 )",
+		"( 2.5.4.40 NAME 'crossCertificatePair' SYNTAX 1.3.6.1.4.1.1466.115.121.1.10 )",
+		"( 1.2.9 NAME 'x-fax' SYNTAX 1.3.6.1.4.1.1466.115.121.1.23 )",
+		"( 0.9.2342.19200300.100.1.55 NAME 'audio' SYNTAX 1.3.6.1.4.1.1466.115.121.1.4{250000} )",
+		"( 1.2.10 NAME 'x-blob' SYNTAX 1.3.6.1.4.1.1466.115.121.1.5 )",
+		"( 2.5.4.13 NAME 'description' DESC 'caf\xC3\xA9' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{1024} )",
+	};
+	const std::pmr::vector<std::pmr::string> classes{ "( 2.5.6.0 NAME 'top' ABSTRACT )" };
+	const auto s = ldap::server_schema::parse(types, classes);
+	REQUIRE(s.skipped() == 0);
+
+	const auto rep = ldap::validate<binary_as_text>(s);
+	CHECK_FALSE(rep.ok());
+	using k = ldap::schema_issue::kind;
+	auto mismatch = [&](std::string_view name) -> const ldap::schema_issue * {
+		const auto it = std::ranges::find_if(
+		  rep.issues, [&](const auto &i) { return i.what == k::syntax_mismatch && i.name == name; });
+		return it == rep.issues.end() ? nullptr : &*it;
+	};
+	const std::vector<std::pair<std::string_view, const char *>> refused{
+		{ "userPassword", ldap::syntax::octet_string },
+		{ "jpegPhoto", ldap::syntax::jpeg },
+		{ "userCertificate", ldap::syntax::certificate },
+		{ "certificateRevocationList", ldap::syntax::certificate_list },
+		{ "crossCertificatePair", ldap::syntax::certificate_pair },
+		{ "x-fax", ldap::syntax::fax },
+		{ "audio", ldap::syntax::audio },
+		{ "x-blob", ldap::syntax::binary },
+	};
+	for (const auto &[name, oid] : refused) {
+		INFO(name);
+		const auto *issue = mismatch(name);
+		REQUIRE(issue != nullptr);
+		CHECK(issue->detail
+			  == std::string("syntax ") + oid
+				   + " is one the member's type refuses: its values are binary, map the member to ldap::binary");
+	}
+	CHECK(mismatch("description") == nullptr);
+	// The single members on multi-valued attributes are warnings only.
+	const auto errors = std::ranges::count_if(rep.issues, [](const auto &i) { return i.is_error(); });
+	CHECK(static_cast<std::size_t>(errors) == refused.size());
+	CHECK_THAT(rep.to_string(),
+	  ContainsSubstring("error: attribute userPassword: syntax 1.3.6.1.4.1.1466.115.121.1.40 is one the member's "
+						"type refuses"));
+
+	const auto binary = ldap::validate<binary_as_binary>(s);
+	CHECK(binary.ok());
+	CHECK(std::ranges::none_of(binary.issues, [](const auto &i) { return i.what == k::syntax_mismatch; }));
 }

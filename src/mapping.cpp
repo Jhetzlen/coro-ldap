@@ -17,6 +17,12 @@ namespace detail {
 		return make_error(client_errc::conversion_failed, text);
 	}
 
+	auto utf8_conversion_error(std::size_t offset) -> error
+	{
+		return make_error(
+		  client_errc::conversion_failed, detail::format("not valid UTF-8 (ill-formed sequence at offset {})", offset));
+	}
+
 	auto with_context(error e, std::string_view prefix) -> error
 	{
 		if (e.context.empty()) {

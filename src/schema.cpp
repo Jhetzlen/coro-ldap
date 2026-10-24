@@ -467,6 +467,7 @@ namespace detail {
 	  cardinality kind,
 	  bool read_only,
 	  std::span<const char *const> syntaxes,
+	  std::span<const char *const> rejected,
 	  schema_report &out)
 	{
 		const attribute_type *a = s.find_attribute(name);
@@ -507,6 +508,22 @@ namespace detail {
 					detail::format_to(text, "{}{}", i != 0 ? ", " : "", syntaxes[i]);
 				}
 				text += ')';
+				out.issues.push_back({ .what = schema_issue::kind::syntax_mismatch,
+				  .name = std::string(name),
+				  .detail = std::move(text) });
+			}
+		} else if (!rejected.empty()) {
+			// Any syntax but these. A syntax that cannot be determined is not
+			// reported: the member's type reads almost any.
+			const std::string *syn = s.syntax_of(*a);
+			const auto is = [&](const char *x) { return syn != nullptr && *syn == x; };
+			if (std::ranges::any_of(rejected, is)) {
+				std::string text = "syntax ";
+				detail::append_sanitized(text, *syn, 64);
+				text += " is one the member's type refuses";
+				if (std::ranges::any_of(detail::binary_syntaxes, is)) {
+					text += ": its values are binary, map the member to ldap::binary";
+				}
 				out.issues.push_back({ .what = schema_issue::kind::syntax_mismatch,
 				  .name = std::string(name),
 				  .detail = std::move(text) });

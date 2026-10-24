@@ -155,6 +155,30 @@ namespace detail {
 		return step.code_point < 0 ? 0 : step.length;
 	}
 
+	auto invalid_utf8_offset(std::string_view s) noexcept -> std::size_t
+	{
+		constexpr std::uint64_t high_bits = 0x8080'8080'8080'8080ull;
+		constexpr std::size_t word = 8;
+		const std::size_t n = s.size();
+		std::size_t i = 0;
+		// Try a block of eight ASCII octets at the start and after an ASCII
+		// octet only: in non-ASCII text (CJK, ...) it would fail every time.
+		bool ascii = true;
+		while (i < n) {
+			if (ascii && i + word <= n && (load8(s.data() + i) & high_bits) == 0) {
+				i += word;
+				continue;
+			}
+			const utf8_step step = utf8_next(s, i);
+			if (step.code_point < 0) {
+				return i;
+			}
+			i += step.length;
+			ascii = step.length == 1;
+		}
+		return std::string_view::npos;
+	}
+
 }// namespace detail
 
 }// namespace jhetz::ldap

@@ -59,6 +59,18 @@ namespace detail {
 	// Defined in src/attribute.cpp with ICU (U8_NEXT).
 	auto icu_utf8_sequence_length(std::string_view s, std::size_t i) noexcept -> std::size_t;
 
+	// Offset of the first octet of s that does not start a well-formed UTF-8
+	// sequence (the same rule as icu_utf8_sequence_length), or
+	// std::string_view::npos if all of s is well-formed. ASCII runs are
+	// skipped eight octets at a time (tried at the start and after an ASCII
+	// octet). Defined in src/attribute.cpp with ICU.
+	auto invalid_utf8_offset(std::string_view s) noexcept -> std::size_t;
+
+	inline auto is_valid_utf8(std::string_view s) noexcept -> bool
+	{
+		return invalid_utf8_offset(s) == std::string_view::npos;
+	}
+
 	// The same check, hand-rolled, for compile time only: utf8_sequence_length
 	// uses it in constant evaluation (the consteval ldap::dn / ldap::rdn /
 	// attribute literals go through detail::scan_dn), where ICU's functions

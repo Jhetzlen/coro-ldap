@@ -491,8 +491,12 @@ itself needs only ICU.
   ldap::field<&T::m>("attr", ldap::read_only)...)`) maps members to
   attributes; the member type decides cardinality (`T`,
   `std::optional<T>`, `std::vector<T>`); `value_traits<T>` converts values
-  (strings, integers, bool, `dn`, `binary`, `sys_seconds` as
-  GeneralizedTime, enums with an `enum_names` table). `decode<T>(entry)`,
+  (strings, which must be well-formed UTF-8 or the decode is
+  `conversion_failed`, and one bad value fails the whole `decode<T>` and
+  so the whole `search_as<T>`; integers, bool, `dn`, `binary` for binary
+  attributes such as userPassword (Octet String), jpegPhoto and
+  userCertificate, `sys_seconds` as GeneralizedTime, enums with an
+  `enum_names` table). `decode<T>(entry)`,
   `to_attributes(value)`, typed changes `replace / add / remove<&T::m>(v)`,
   typed filters `filters::field<&T::m>() == v`, and on the connection
   `search_as<T>`, `modify<T>(dn, changes)` and `add(dn, value)`. Mistakes
@@ -520,6 +524,10 @@ itself needs only ICU.
   writable member on a NO-USER-MODIFICATION attribute; single member on a
   multi-valued attribute as a warning), `connection::load_schema()` and
   `connection_options::schema_check = schema_check::on_first_use`.
+  Breaking: a `std::string` or `std::pmr::string` member on a binary
+  syntax (Octet String, JPEG, Fax, Certificate, Certificate List,
+  Certificate Pair, Audio, Binary; see `value_rejected_syntaxes`) is a
+  `syntax_mismatch`: map userPassword and the like to `ldap::binary`.
 - `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.

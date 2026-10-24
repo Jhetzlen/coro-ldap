@@ -28,8 +28,15 @@ this document is updated.
   usernames and passwords, error contexts. No ASCII-only restriction,
   documented or not: text is prepared as the RFCs say (SASLprep, RFC 4013,
   for SASL; LDAPprep, RFC 4518, for matching), and invalid UTF-8 in text is
-  a clear error. Binary values (`ldap::binary`, `jpegPhoto`, `;binary`) and
-  `\xx`-escaped octets stay raw bytes.
+  a clear error. For attribute values the check is where they become text:
+  the struct mapping decodes a value into `std::string` or
+  `std::pmr::string` only if it is well-formed UTF-8, else
+  `conversion_failed` ("not valid UTF-8 (ill-formed sequence at offset
+  N)", N counted from 0, the value is not quoted), and `validate<T>`
+  reports a string member on a binary syntax; the wire layer (`ldap::entry`,
+  `partial_attribute`) keeps values as raw octets (section 10). Binary
+  values (`ldap::binary`, `jpegPhoto`, `;binary`) and `\xx`-escaped octets
+  stay raw bytes.
 
 ## Decisions
 
@@ -713,7 +720,10 @@ Field shape decides cardinality:
 | `std::optional<T>` | optional, single value | more than one value |
 | `std::vector<T>` | zero or more values | a value fails to convert |
 
-(A value that fails to convert is `conversion_failed` for every shape.)
+(A value that fails to convert is `conversion_failed` for every shape:
+for `std::vector<T>` the first bad value fails the whole member. One bad
+value fails the whole `decode<T>`, and so the whole `search_as<T>`: the
+first entry that does not decode fails the call.)
 
 Value conversion is an extension point, like `std::formatter`:
 
@@ -724,14 +734,20 @@ template<> struct jhetz::ldap::value_traits<my_type> {
 };
 ```
 
-Built-in: `std::string`, `std::pmr::string`, integers (decimal, range
-checked), `bool` (TRUE / FALSE), `ldap::dn`, `ldap::binary`
+Built-in: `std::string`, `std::pmr::string` (the value must be
+well-formed UTF-8, RFC 3629 as RFC 4512's UTF8 rule: no overlong forms,
+surrogates, code points above U+10FFFF, truncated sequences or stray
+continuation octets, else `conversion_failed`; encoding writes the
+caller's string unchecked, since `encode` cannot fail), integers
+(decimal, range checked), `bool` (TRUE / FALSE), `ldap::dn`, `ldap::binary`
 (`std::vector<std::byte>`, a single binary value; `std::vector<ldap::binary>`
 for several), `std::chrono::sys_seconds` (GeneralizedTime: every RFC 4517
 form decodes — minutes and seconds optional, fractions of the last unit,
 `Z` or an offset; it encodes as `YYYYMMDDHHMMSSZ`), and enums with an
-`ldap::enum_names<E>` table. A `syntaxes` member for runtime validation
-comes with #13.
+`ldap::enum_names<E>` table. Map binary attributes (userPassword and the
+other Octet String attributes, jpegPhoto, userCertificate, objectGUID,
+objectSid) to `ldap::binary`: a string member fails on their values, and
+`validate<T>` reports it on a binary syntax (section 6).
 
 Active Directory's Large Integer syntax (`1.2.840.113556.1.4.906`, `ad.hpp`)
 holds FILETIME dates (accountExpires, pwdLastSet, lastLogonTimestamp,
@@ -1048,8 +1064,22 @@ INTEGER / NumericString, and also AD Large Integer
 it gets a `syntax_mismatch` rather than a conversion failure on the first
 large or negative value; `ad::filetime_clock` time points and durations →
 AD Large Integer only; bool → Boolean, dn → DN / NameAndOptionalUID,
-sys_seconds → GeneralizedTime; strings and binary accept any syntax), or a
-`syntaxes` member of `value_traits<T>`. `connection::load_schema()` reads
+sys_seconds → GeneralizedTime; binary accepts any syntax), or a
+`syntaxes` member of `value_traits<T>`. A type that accepts any syntax
+can refuse some with `value_rejected_syntaxes<T>`: `std::string` and
+`std::pmr::string` refuse the binary syntaxes, whose values are octets
+rather than UTF-8 text and would fail to decode (section 4). They are
+Octet String (`syntax::octet_string`, 1.3.6.1.4.1.1466.115.121.1.40, the
+syntax of userPassword), Fax (.23) and JPEG (.28) from RFC 4517,
+Certificate (.8), Certificate List (.9) and Certificate Pair (.10) from
+RFC 4523, and Audio (.4) and Binary (.5) from RFC 2252 (dropped by RFC
+4517, still declared by servers). A string member on one of them is a
+`syntax_mismatch` ("syntax ... is one the member's type refuses: its
+values are binary, map the member to ldap::binary"); a string member
+whose syntax cannot be determined is not reported. This is a breaking
+change: string members used to pass validation on any syntax, so a
+descriptor that maps userPassword to `std::string` now fails
+`validate<T>` and `schema_check::on_first_use`; map it to `ldap::binary`. `connection::load_schema()` reads
 the root DSE's `subschemaSubentry` (default `cn=Subschema`). The parser
 has a fuzz target (`schema_fuzz`) with OpenLDAP and AD seeds.
 

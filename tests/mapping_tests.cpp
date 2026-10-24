@@ -5,7 +5,9 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,6 +17,7 @@
 namespace ldap = jhetz::ldap;
 using Catch::Matchers::ContainsSubstring;
 using namespace std::chrono;
+using namespace std::string_view_literals;
 
 namespace {
 
@@ -131,6 +134,77 @@ TEST_CASE("value_traits for bool, strings, DNs and binary", "[mapping][traits]")
 	const ldap::binary raw{ std::byte{ 0 }, std::byte{ 0xff } };
 	CHECK(ldap::value_traits<ldap::binary>::decode(std::string_view("\x00\xff", 2)) == raw);
 	CHECK(ldap::value_traits<ldap::binary>::encode(raw) == std::string("\x00\xff", 2));
+	// Binary takes any octets, ill-formed UTF-8 included.
+	std::string all_octets;
+	for (int i = 0; i < 256; ++i) {
+		all_octets += static_cast<char>(i);
+	}
+	const auto all = ldap::value_traits<ldap::binary>::decode(all_octets);
+	REQUIRE(all.has_value());
+	REQUIRE(all->size() == 256);
+	CHECK(std::to_integer<int>((*all)[255]) == 255);
+	CHECK(ldap::value_traits<ldap::binary>::encode(*all) == all_octets);
+}
+
+TEST_CASE("string value_traits take only well-formed UTF-8", "[mapping][traits][utf8]")
+{
+	// Well-formed: ASCII, 2-, 3- and 4-octet sequences, the extremes of
+	// each length, and long values that cross the 8-octet ASCII fast path.
+	for (std::string_view good : { ""sv,
+		   "plain ascii"sv,
+		   "J\xC3\xBCrgen M\xC3\xBCller"sv,// Jürgen Müller
+		   "\xE6\x9D\xB1\xE4\xBA\xAC"sv,// 東京
+		   "\xF0\x9F\x98\x80"sv,// U+1F600
+		   "\xC2\x80\xDF\xBF\xE0\xA0\x80\xED\x9F\xBF\xEE\x80\x80\xEF\xBF\xBF\xF0\x90\x80\x80\xF4\x8F\xBF\xBF"sv,
+		   "0123456789abcdef\xC3\xA9"
+		   "0123456789abcdef"sv }) {
+		INFO(good.size());
+		const auto s = ldap::value_traits<std::string>::decode(good);
+		REQUIRE(s.has_value());
+		CHECK(*s == good);
+		const auto p = ldap::value_traits<std::pmr::string>::decode(good);
+		REQUIRE(p.has_value());
+		CHECK(*p == good);
+	}
+
+	struct bad_t
+	{
+		const char *name;
+		std::string_view raw;
+		std::size_t offset;
+	};
+	const std::string long_prefix(20, 'a');
+	const std::string long_bad = long_prefix + "\xFF" + long_prefix;
+	for (const bad_t &bad :
+	  std::initializer_list<bad_t>{ { .name = "overlong 2-octet", .raw = "\xC0\x80"sv, .offset = 0 },
+		{ .name = "overlong 3-octet", .raw = "ab\xE0\x80\xAF"sv, .offset = 2 },
+		{ .name = "overlong 4-octet", .raw = "\xF0\x80\x80\xAF"sv, .offset = 0 },
+		{ .name = "surrogate", .raw = "x\xED\xA0\x80"sv, .offset = 1 },
+		{ .name = "above U+10FFFF", .raw = "\xF4\x90\x80\x80"sv, .offset = 0 },
+		{ .name = "truncated 2-octet", .raw = "J\xC3"sv, .offset = 1 },
+		{ .name = "truncated 4-octet", .raw = "\xF0\x9F\x98"sv, .offset = 0 },
+		{ .name = "truncated before ASCII", .raw = "\xE6\x9Dz"sv, .offset = 0 },
+		{ .name = "stray continuation", .raw = "abc\x80"sv, .offset = 3 },
+		{ .name = "0xFF", .raw = "\xFF"sv, .offset = 0 },
+		{ .name = "after a long ASCII run", .raw = long_bad, .offset = 20 } }) {
+		DYNAMIC_SECTION(bad.name)
+		{
+			const std::string expected =
+			  "not valid UTF-8 (ill-formed sequence at offset " + std::to_string(bad.offset) + ")";
+			const auto s = ldap::value_traits<std::string>::decode(bad.raw);
+			REQUIRE_FALSE(s.has_value());
+			CHECK(s.error().code == ldap::client_errc::conversion_failed);
+			CHECK(std::string_view(s.error().context) == expected);
+			const auto p = ldap::value_traits<std::pmr::string>::decode(bad.raw);
+			REQUIRE_FALSE(p.has_value());
+			CHECK(p.error().code == ldap::client_errc::conversion_failed);
+			CHECK(std::string_view(p.error().context) == expected);
+			CHECK(ldap::detail::invalid_utf8_offset(bad.raw) == bad.offset);
+			CHECK_FALSE(ldap::detail::is_valid_utf8(bad.raw));
+		}
+	}
+	// Encoding does not check: the caller's string goes out as is.
+	CHECK(ldap::value_traits<std::string>::encode("\xFF") == "\xFF");
 }
 
 TEST_CASE("value_traits for enums with a name table", "[mapping][traits]")
@@ -279,6 +353,24 @@ TEST_CASE("decode errors name the entry and the attribute", "[mapping][decode]")
 		  .values = { "yesterday" },
 		  .code = ldap::client_errc::conversion_failed,
 		  .context = nullptr },
+		{ .name = "ill-formed UTF-8 in a required string",
+		  .attribute = "cn",
+		  .values = { "J\xC3" },
+		  .code = ldap::client_errc::conversion_failed,
+		  .context = "entry uid=jdoe,ou=people,dc=example,dc=org: attribute cn: not valid UTF-8 (ill-formed "
+					 "sequence at offset 1)" },
+		{ .name = "ill-formed UTF-8 in an optional string",
+		  .attribute = "mail",
+		  .values = { "\xC0\xAF@example.org" },
+		  .code = ldap::client_errc::conversion_failed,
+		  .context = "entry uid=jdoe,ou=people,dc=example,dc=org: attribute mail: not valid UTF-8 (ill-formed "
+					 "sequence at offset 0)" },
+		{ .name = "ill-formed UTF-8 in an element of a string vector",
+		  .attribute = "telephoneNumber",
+		  .values = { "+1 555 0100", "+1 \x80 0101" },
+		  .code = ldap::client_errc::conversion_failed,
+		  .context = "entry uid=jdoe,ou=people,dc=example,dc=org: attribute telephoneNumber: not valid UTF-8 "
+					 "(ill-formed sequence at offset 3)" },
 		{ .name = "unknown enum name",
 		  .attribute = "x-status",
 		  .values = { "gone" },

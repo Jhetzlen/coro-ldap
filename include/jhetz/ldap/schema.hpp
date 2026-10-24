@@ -118,8 +118,8 @@ class server_schema
 
 // ---------------------------------------------------------------- syntaxes
 
-// Syntax OIDs used by the built-in value_traits: RFC 4517, and Active
-// Directory's Large Integer.
+// Syntax OIDs used by the built-in value_traits and value_syntaxes: RFC
+// 4517, RFC 4523, RFC 2252 and Active Directory's Large Integer.
 namespace syntax {
 	inline constexpr const char *boolean = "1.3.6.1.4.1.1466.115.121.1.7";
 	inline constexpr const char *dn = "1.3.6.1.4.1.1466.115.121.1.12";
@@ -132,11 +132,27 @@ namespace syntax {
 	// decimal): FILETIME dates such as accountExpires, intervals such as
 	// maxPwdAge, and counters such as uSNChanged. See ad.hpp.
 	inline constexpr const char *ad_large_integer = "1.2.840.113556.1.4.906";
+
+	// Binary syntaxes: their values are octets, not UTF-8 text, so a string
+	// member rejects them (value_rejected_syntaxes). Octet String, Fax and
+	// JPEG are RFC 4517 (3.3.25, 3.3.12, 3.3.17); Certificate, Certificate
+	// List and Certificate Pair are RFC 4523 (section 2); Audio and Binary
+	// are RFC 2252 (section 4.3.2; RFC 4517 dropped them, servers still
+	// declare them).
+	inline constexpr const char *audio = "1.3.6.1.4.1.1466.115.121.1.4";
+	inline constexpr const char *binary = "1.3.6.1.4.1.1466.115.121.1.5";
+	inline constexpr const char *certificate = "1.3.6.1.4.1.1466.115.121.1.8";
+	inline constexpr const char *certificate_list = "1.3.6.1.4.1.1466.115.121.1.9";
+	inline constexpr const char *certificate_pair = "1.3.6.1.4.1.1466.115.121.1.10";
+	inline constexpr const char *fax = "1.3.6.1.4.1.1466.115.121.1.23";
+	inline constexpr const char *jpeg = "1.3.6.1.4.1.1466.115.121.1.28";
+	inline constexpr const char *octet_string = "1.3.6.1.4.1.1466.115.121.1.40";
 }// namespace syntax
 
-// The syntaxes a value type accepts, for validate<T>. Empty: any (strings
-// and binary values can hold whatever an attribute has). Specialize, or give
-// value_traits<T> a `syntaxes` member (a range of const char*).
+// The syntaxes a value type accepts, for validate<T>. Empty: any (binary
+// values can hold whatever an attribute has; strings take any syntax but
+// those value_rejected_syntaxes lists). Specialize, or give value_traits<T>
+// a `syntaxes` member (a range of const char*).
 template<class T> struct value_syntaxes
 {
 	static auto get() -> std::span<const char *const>
@@ -189,6 +205,37 @@ template<> struct value_syntaxes<std::chrono::sys_seconds>
 	static auto get() -> std::span<const char *const> { return detail::time_syntaxes; }
 };
 
+// The syntaxes a value type refuses, for validate<T>: checked only when
+// value_syntaxes<T> is empty (any syntax but these). Empty by default.
+// Strings refuse the binary syntaxes: their values are not UTF-8 text, so a
+// string member would fail to decode them (value_traits<std::string>); map
+// such attributes (userPassword, jpegPhoto, userCertificate, ...) to
+// ldap::binary.
+template<class T> struct value_rejected_syntaxes
+{
+	static auto get() -> std::span<const char *const> { return {}; }
+};
+
+namespace detail {
+	inline constexpr auto binary_syntaxes = std::to_array<const char *>({ syntax::audio,
+	  syntax::binary,
+	  syntax::certificate,
+	  syntax::certificate_list,
+	  syntax::certificate_pair,
+	  syntax::fax,
+	  syntax::jpeg,
+	  syntax::octet_string });
+}// namespace detail
+
+template<> struct value_rejected_syntaxes<std::string>
+{
+	static auto get() -> std::span<const char *const> { return detail::binary_syntaxes; }
+};
+template<> struct value_rejected_syntaxes<std::pmr::string>
+{
+	static auto get() -> std::span<const char *const> { return detail::binary_syntaxes; }
+};
+
 // ---------------------------------------------------------------- report
 
 struct schema_issue
@@ -224,6 +271,7 @@ namespace detail {
 	  cardinality kind,
 	  bool read_only,
 	  std::span<const char *const> syntaxes,
+	  std::span<const char *const> rejected,
 	  schema_report &out);
 	void check_object_class(const server_schema &s, std::string_view name, schema_report &out);
 }// namespace detail
@@ -242,6 +290,7 @@ template<described T> [[nodiscard]] auto validate(const server_schema &s) -> sch
 			 std::remove_cvref_t<decltype(f)>::kind,
 			 f.read_only,
 			 value_syntaxes<typename std::remove_cvref_t<decltype(f)>::element>::get(),
+			 value_rejected_syntaxes<typename std::remove_cvref_t<decltype(f)>::element>::get(),
 			 out),
 			...);
 	  },
