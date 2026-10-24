@@ -31,9 +31,6 @@ Checks:
   # 'T member{};' on aggregate members is deliberate: designated initializers
   # that omit the member stay quiet under -Wmissing-field-initializers.
   - -readability-redundant-member-init
-  # Messages, controls and requests are aggregates with public members.
-  - -cppcoreguidelines-non-private-member-variables-in-classes
-  - -misc-non-private-member-variables-in-classes
   # BER, filters and DNs are trees: the recursive walkers are depth-limited.
   - -misc-no-recursion
   # Internal linkage is chosen per file (static vs anonymous namespace).
@@ -98,6 +95,11 @@ CheckOptions:
   readability-magic-numbers.IgnorePowersOf2IntegerValues: true
   cppcoreguidelines-avoid-magic-numbers.IgnoredIntegerValues: '1;2;3;4;10;255'
   cppcoreguidelines-avoid-magic-numbers.IgnorePowersOf2IntegerValues: true
+  # Messages, controls and requests are structs with all-public data (some
+  # with allocator-extended constructors): only a class mixing public data
+  # with private or protected members is reported.
+  misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic: true
+  cppcoreguidelines-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic: true
   # '(void)f()' is the explicit way to drop a result here.
   bugprone-unused-return-value.AllowCastToVoid: true
   # pmr move assignment may allocate (see noexcept-move-operations above).

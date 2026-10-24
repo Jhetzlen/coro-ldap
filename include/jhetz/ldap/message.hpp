@@ -771,8 +771,13 @@ struct intermediate_response
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
+	// The RFC fields are the API, public as in the other message types; the
+	// private allocator only remembers the resource, which absent optional
+	// members cannot carry.
+	// NOLINTBEGIN(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
 	std::optional<std::pmr::string> response_name{};// [0]
 	std::optional<std::pmr::string> response_value{};// [1]
+	// NOLINTEND(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
 
 	intermediate_response() = default;
 	explicit intermediate_response(const allocator_type &alloc) : alloc_(alloc) {}

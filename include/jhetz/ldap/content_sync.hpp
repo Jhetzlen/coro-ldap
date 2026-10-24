@@ -125,9 +125,14 @@ struct sync_state
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
+	// The RFC fields are the API, public as in the other message types; the
+	// private allocator only remembers the resource, which absent optional
+	// members cannot carry.
+	// NOLINTBEGIN(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
 	sync_state_type state = sync_state_type::present;
 	sync_uuid entry_uuid{};
 	std::optional<std::pmr::string> cookie{};
+	// NOLINTEND(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
 
 	sync_state() = default;
 	explicit sync_state(const allocator_type &alloc) : alloc_(alloc) {}
@@ -180,8 +185,13 @@ struct sync_done
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
+	// The RFC fields are the API, public as in the other message types; the
+	// private allocator only remembers the resource, which absent optional
+	// members cannot carry.
+	// NOLINTBEGIN(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
 	std::optional<std::pmr::string> cookie{};
 	bool refresh_deletes = false;
+	// NOLINTEND(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
 
 	sync_done() = default;
 	explicit sync_done(const allocator_type &alloc) : alloc_(alloc) {}
