@@ -289,7 +289,16 @@ if(JHETZ_LDAP_BUILD_NET)
         src/net/channel_binding.cpp
         src/net/tls.cpp
         src/net/transport.cpp
+        src/net/trust_store.cpp
     )
+    # Default verification's trust anchors (src/net/trust_store.hpp): the
+    # CryptoAPI ROOT store on Windows, OpenSSL's default paths elsewhere.
+    if(WIN32)
+        target_sources(jhetz_ldap_net PRIVATE src/net/trust_store_win.cpp)
+        target_link_libraries(jhetz_ldap_net PRIVATE crypt32)
+    else()
+        target_sources(jhetz_ldap_net PRIVATE src/net/trust_store_default.cpp)
+    endif()
     add_library(jhetz::ldap_net ALIAS jhetz_ldap_net)
     set_target_properties(jhetz_ldap_net PROPERTIES EXPORT_NAME ldap_net)
     target_link_libraries(jhetz_ldap_net PUBLIC jhetz_ldap Boost::corosio Boost::corosio_openssl

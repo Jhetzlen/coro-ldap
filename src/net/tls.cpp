@@ -1,6 +1,7 @@
 #include "tls.hpp"
 
 #include "channel_binding.hpp"
+#include "trust_store.hpp"
 
 #include "../format_util.hpp"
 #include "../scope_util.hpp"
@@ -323,7 +324,7 @@ namespace {
 	{
 		const bool custom_trust = !o.ca_file.empty() || !o.ca_dir.empty() || !o.ca_pem.empty();
 		if (!custom_trust) {
-			return check(ctx.set_default_verify_paths(), "tls: system trust store");
+			return load_system_trust(ctx);
 		}
 		if (!o.ca_file.empty()) {
 			const std::string what = "tls: ca_file " + path_text(o.ca_file);
