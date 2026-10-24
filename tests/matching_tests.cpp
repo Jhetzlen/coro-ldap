@@ -608,16 +608,18 @@ const std::string exact_rule = "caseExactMatch";
 constexpr auto returns_view = [](const ldap::attribute &) -> std::string_view { return "caseExactMatch"; };
 constexpr auto returns_pointer = [](const ldap::attribute &) -> const char * { return nullptr; };
 const auto returns_reference = [](const ldap::attribute &) -> const std::string & { return exact_rule; };
-const auto returns_string = [](const ldap::attribute &) -> std::string { return "caseExactMatch"; };
-const auto returns_pmr_string = [](const ldap::attribute &) -> std::pmr::string { return "caseExactMatch"; };
-const auto returns_rvalue_reference = [](const ldap::attribute &) -> const std::string && {
+// Only checked by the concept, so these are types rather than unused variables.
+using returns_string = decltype([](const ldap::attribute &) -> std::string { return "caseExactMatch"; });
+using returns_pmr_string = decltype([](const ldap::attribute &) -> std::pmr::string { return "caseExactMatch"; });
+using returns_rvalue_reference = decltype([](const ldap::attribute &) -> const std::string && {
 	return static_cast<const std::string &&>(exact_rule);
-};
+});
 const auto returns_mutable_pointer = [](const ldap::attribute &) -> char * { return nullptr; };
-const auto mutable_lambda = [n = 0](const ldap::attribute &) mutable -> std::string_view {
+// The capture keeps the lambda from converting to a function pointer, which a const object could still call.
+using mutable_lambda = decltype([n = 0](const ldap::attribute &) mutable -> std::string_view {
 	++n;
-	return {};
-};
+	return n == 1 ? "caseExactMatch" : "caseIgnoreMatch";
+});
 
 struct non_const_lookup
 {
@@ -634,12 +636,12 @@ TEST_CASE("distinguishedNameMatch: the rule lookup must not return owned text", 
 	static_assert(dn_lookup_accepted<decltype(returns_view)>);
 	static_assert(dn_lookup_accepted<decltype(returns_pointer)>);
 	static_assert(dn_lookup_accepted<decltype(returns_reference)>);
-	static_assert(!dn_lookup_accepted<decltype(returns_string)>);
-	static_assert(!dn_lookup_accepted<decltype(returns_pmr_string)>);
-	static_assert(!dn_lookup_accepted<decltype(returns_rvalue_reference)>);
+	static_assert(!dn_lookup_accepted<returns_string>);
+	static_assert(!dn_lookup_accepted<returns_pmr_string>);
+	static_assert(!dn_lookup_accepted<returns_rvalue_reference>);
 	static_assert(dn_lookup_accepted<decltype(returns_mutable_pointer)>);
 	// It is called through a const reference.
-	static_assert(!dn_lookup_accepted<decltype(mutable_lambda)>);
+	static_assert(!dn_lookup_accepted<mutable_lambda>);
 	static_assert(!dn_lookup_accepted<non_const_lookup>);
 	CHECK(ldap::distinguished_name_match(parse("uid=Jane"), parse("uid=jane"), returns_view) == no);
 	CHECK(ldap::distinguished_name_match(parse("uid=Jane"), parse("uid=jane"), returns_reference) == no);
