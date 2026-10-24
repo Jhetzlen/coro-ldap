@@ -215,7 +215,6 @@ TEST_CASE("string value_traits take only well-formed UTF-8", "[mapping][traits][
 	CHECK(ldap::value_traits<std::string>::encode("caf\xC3\xA9") == "caf\xC3\xA9");
 }
 
-
 TEST_CASE("value_traits for enums with a name table", "[mapping][traits]")
 {
 	CHECK(ldap::value_traits<status>::decode("retired") == status::retired);
@@ -620,7 +619,6 @@ TEST_CASE("typed filters and object class narrowing", "[mapping][filter]")
 	CHECK(ldap::filters::field<&person::mail>().present().to_string() == "(mail=*)");
 	CHECK((ldap::filters::field<&person::uid>() == "a*b").to_string() == "(uid=a\\2ab)");// values are escaped
 	CHECK((ldap::filters::field<&person::cn>() == "Jos\xC3\xA9").to_string() == "(cn=Jos\xC3\xA9)");
-
 
 	const auto f = ldap::narrow_filter<person>(ldap::filters::attr("uid") == "jdoe");
 	CHECK(f.to_string() == "(&(objectClass=inetOrgPerson)(objectClass=posixAccount)(uid=jdoe))");

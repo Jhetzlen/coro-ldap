@@ -123,7 +123,8 @@ namespace detail {
 		if constexpr (std::same_as<std::remove_cvref_t<encode_result_t<T>>, result<std::string>>) {
 			return value_traits<T>::encode(v);
 		} else {
-			return std::string(value_traits<T>::encode(v));
+			std::string s = value_traits<T>::encode(v);
+			return s;
 		}
 	}
 
@@ -223,7 +224,7 @@ template<> struct value_traits<bool>
 		}
 		return std::unexpected(detail::conversion_error("not TRUE or FALSE", raw));
 	}
-	// NOLINTNEXTLINE(modernize-use-string-view): value_traits::encode returns std::string (concept mapped_value)
+	// NOLINTNEXTLINE(modernize-use-string-view): mapped_value wants std::string or result<std::string>, not a view
 	[[nodiscard]] static auto encode(bool v) -> std::string { return v ? "TRUE" : "FALSE"; }
 };
 
@@ -347,7 +348,8 @@ template<auto Ptr> struct field
 	static constexpr auto ptr = Ptr;
 	static constexpr cardinality kind = detail::shape<member>::kind;
 	static_assert(mapped_value<element>,
-	  "ldap::field: no ldap::value_traits for this member's value type (specialize value_traits<T>)");
+	  "ldap::field: this member's value type needs an ldap::value_traits<T> whose decode(std::string_view) "
+	  "returns result<T> and whose encode(const T&) returns std::string or result<std::string>");
 
 	const char *name;
 	bool read_only = false;
@@ -781,7 +783,6 @@ namespace filters {
 			return build(*s);
 		}
 	};
-
 
 	template<auto Ptr> [[nodiscard]] auto field() -> typed_attr<Ptr> { return {}; }
 

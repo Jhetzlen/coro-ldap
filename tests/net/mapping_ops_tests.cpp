@@ -137,7 +137,8 @@ TEST_CASE("typed: modify<T> and add(dn, T)", "[net][mapping]")
 
 // A value that does not encode fails modify<T> and add(dn, T) before
 // anything is sent, the schema check included.
-TEST_CASE("typed: modify<T> and add(dn, T) fail before sending on a value that does not encode", "[net][mapping]")
+TEST_CASE("typed: modify<T>, add(dn, T) and search_as fail before sending on a value that does not encode",
+  "[net][mapping]")
 {
 	mock_ldap m({ .schema_check = ldap::schema_check::on_first_use });
 	m.serve({});
@@ -161,13 +162,21 @@ TEST_CASE("typed: modify<T> and add(dn, T) fail before sending on a value that d
 	  std::string(add.error().context)
 	  == "add uid=jdoe,ou=people,dc=example,dc=org: attribute uid: not valid UTF-8 (ill-formed sequence at offset 4)");
 
+	// A typed filter on a value that does not encode is the empty (poison)
+	// filter: search_as rejects it before the schema load.
+	auto found = m.run(m.conn.search_as<account>({ .base = ldap::dn{ "ou=people,dc=example,dc=org" },
+	  .filter =
+		ldap::filters::field<&account::uid>() == std::string("j\xC3") && ldap::filters::attr("mail").present() }));
+	REQUIRE_FALSE(found.has_value());
+	CHECK(found.error().code == ldap::client_errc::invalid_filter);
+	CHECK(std::string(found.error().context) == "search ou=people,dc=example,dc=org: filter: empty");
+
 	CHECK(m.conn.is_open());
 	m.check_server();
 	CHECK(m.log.received.empty());
 }
 
 // ---------------------------------------------------------------- schema
-
 
 namespace {
 

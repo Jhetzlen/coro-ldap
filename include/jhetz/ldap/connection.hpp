@@ -383,14 +383,22 @@ class connection
 	// object classes, if it declares some. Each entry is decoded to T; the
 	// first entry that does not decode fails the whole call (its error names
 	// the search, the entry and the attribute).
+	//
+	// An empty filter (the poison a typed filter operator gives when a value
+	// does not encode) fails with invalid_filter before the schema check, so
+	// nothing is sent.
 	template<described T> auto search_as(search_params request) -> boost::capy::task<result<std::vector<T>>>
 	{
+		const std::string context = detail::op_context("search", request.base);
+		if (request.filter.empty()) {
+			co_return std::unexpected(
+			  detail::with_context(make_error(client_errc::invalid_filter, "filter: empty"), context));
+		}
 		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
 			co_return std::unexpected(std::move(c.error()));
 		}
 		request.attributes = attribute_names<T>();
 		request.filter = narrow_filter<T>(std::move(request.filter));
-		const std::string context = detail::op_context("search", request.base);
 		auto entries = co_await search(std::move(request));
 		if (!entries) {
 			co_return std::unexpected(std::move(entries.error()));

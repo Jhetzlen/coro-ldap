@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <memory_resource>
 #include <string>
 #include <string_view>
 
@@ -36,8 +37,9 @@ template<class T> void round_trip(std::string_view text)
 		  "v.error().code == ldap::client_errc::conversion_failed");
 		return;
 	}
-	// What decodes encodes (decode and encode take the same UTF-8, names and
-	// years).
+	// What decodes encodes: strings check the same UTF-8 both ways and the
+	// other types are canonical. Not sys_seconds: a decoded offset can push
+	// the year out of 0000-9999 (checked in LLVMFuzzerTestOneInput).
 	const auto encoded = ldap::detail::encode_value(*v);
 	check(encoded.has_value(), "encoded.has_value()");
 	auto again = ldap::value_traits<T>::decode(*encoded);
@@ -88,6 +90,8 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 		check(s.error().code == ldap::client_errc::encode_error, "s.error().code == ldap::client_errc::encode_error");
 	}
 
+	round_trip<std::string>(text);
+	round_trip<std::pmr::string>(text);
 	round_trip<std::int64_t>(text);
 	round_trip<std::uint8_t>(text);
 	round_trip<bool>(text);

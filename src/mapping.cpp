@@ -269,5 +269,4 @@ auto format_generalized_time(sys_seconds t) -> result<std::string>
 	  hms.seconds().count());
 }
 
-
 }// namespace jhetz::ldap
