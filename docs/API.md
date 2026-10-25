@@ -102,7 +102,16 @@ rationale is in [`DESIGN.md`](DESIGN.md).
   the substrings rules (`case_ignore_substrings_match(value,
   substring_assertion{.initial, .any, .final})` and the case exact, IA5,
   numericString and telephoneNumber ones), `octet_string_match`,
-  `integer_match` and `boolean_match`. `match(rule, value, assertion)` takes
+  `integer_match`, `boolean_match` and `bit_string_match`;
+  `object_identifier_match(a, b[, schema])` (descriptors resolved through
+  the schema, then RFC 4519's names; an unresolved descriptor against
+  anything but itself is Undefined), `unique_member_match(a, b[, schema])`
+  (a DN with an optional `#'0101'B` UID), `generalized_time_match` and
+  `generalized_time_ordering_match` (exact instants in UTC, fractions of
+  any length, a leap second its own instant), `uuid_match` and
+  `uuid_ordering_match` (RFC 4530, RFC 4122 text in either case),
+  `case_ignore_list_match` and `case_ignore_list_substrings_match` (Postal
+  Address lines; no substring spans two lines). `match(rule, value, assertion)` takes
   the rule by NAME or OID (substrings rules then take RFC 4517's Substring
   Assertion text, `ja*doe`); an unknown rule is Undefined, and
   `is_known_matching_rule()` says which are implemented. A value that is not

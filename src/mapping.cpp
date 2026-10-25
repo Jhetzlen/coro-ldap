@@ -1,6 +1,7 @@
 #include "jhetz/ldap/mapping.hpp"
 
 #include "format_util.hpp"
+#include "generalized_time.hpp"
 
 #include <string>
 
@@ -125,36 +126,30 @@ namespace {
 		return pos < s.size() && s[pos] >= '0' && s[pos] <= '9';
 	}
 
-	// The fraction whose digits start at `pos` (after '.' or ','), of
-	// `unit`, the last unit given; past nanoseconds the digits are read and
-	// truncated. The error is the reason for parse_generalized_time.
-	auto read_fraction(std::string_view text, std::size_t &pos, seconds unit) -> std::expected<seconds, const char *>
+	// The fraction's digits starting at `pos` (after '.' or ','). The error
+	// is the reason for parse_generalized_time.
+	auto read_fraction(std::string_view text, std::size_t &pos) -> std::expected<std::string_view, const char *>
 	{
-		if (!next_is_digit(text, pos)) {
-			return std::unexpected("fraction");
-		}
-		std::int64_t num = 0;
-		std::int64_t den = 1;
+		const std::size_t start = pos;
 		while (next_is_digit(text, pos)) {
-			if (den < std::nano::den) {// enough precision; the rest is truncated
-				num = (num * 10) + (text[pos] - '0');
-				den *= 10;
-			}
 			++pos;
 		}
-		return seconds(unit.count() * num / den);
+		if (pos == start) {
+			return std::unexpected("fraction");
+		}
+		return text.substr(start, pos - start);
 	}
 
 	// g-time-zone at `pos`: "Z" or a differential (+|-)HH[MM], as the offset
 	// from UTC. The error is the reason for parse_generalized_time.
-	auto read_time_zone(std::string_view text, std::size_t &pos) -> std::expected<seconds, const char *>
+	auto read_time_zone(std::string_view text, std::size_t &pos) -> std::expected<minutes, const char *>
 	{
 		if (pos >= text.size()) {
 			return std::unexpected("time zone missing");
 		}
 		if (text[pos] == 'Z') {
 			++pos;
-			return seconds{ 0 };
+			return minutes{ 0 };
 		}
 		if (text[pos] != '+' && text[pos] != '-') {
 			return std::unexpected("time zone");
@@ -176,77 +171,97 @@ namespace {
 		return sign * (hours(*oh) + minutes(om));
 	}
 
+	// `fraction` (decimal digits) of `unit`, truncated to whole seconds;
+	// digits past nanoseconds are ignored.
+	auto fraction_seconds(std::string_view fraction, seconds unit) -> seconds
+	{
+		std::int64_t num = 0;
+		std::int64_t den = 1;
+		for (const char c : fraction) {
+			if (den >= std::nano::den) {// enough precision; the rest is truncated
+				break;
+			}
+			num = (num * 10) + (c - '0');
+			den *= 10;
+		}
+		return seconds(unit.count() * num / den);
+	}
+
 }// namespace
+
+namespace detail {
+
+	auto parse_generalized_time_fields(std::string_view text) -> std::expected<generalized_time_fields, const char *>
+	{
+		std::size_t pos = 0;
+		const auto year = digits(text, pos, 4);
+		const auto month = digits(text, pos, 2);
+		const auto day = digits(text, pos, 2);
+		const auto hour = digits(text, pos, 2);
+		if (!year || !month || !day || !hour) {
+			return std::unexpected("date and hour");
+		}
+		generalized_time_fields f{ .hour = *hour };
+		if (next_is_digit(text, pos)) {
+			f.minute = digits(text, pos, 2);
+			if (!f.minute) {
+				return std::unexpected("minute");
+			}
+			if (next_is_digit(text, pos)) {
+				f.second = digits(text, pos, 2);
+				if (!f.second) {
+					return std::unexpected("second");
+				}
+			}
+		}
+		if (pos < text.size() && (text[pos] == '.' || text[pos] == ',')) {
+			++pos;
+			const auto digits_read = read_fraction(text, pos);
+			if (!digits_read) {
+				return std::unexpected(digits_read.error());
+			}
+			f.fraction = *digits_read;
+		}
+		if (*month < 1 || *month > max_month || *hour > max_hour || (f.minute && *f.minute > max_minute)
+			|| (f.second && *f.second > max_second)) {
+			return std::unexpected("field out of range");
+		}
+		f.date = year_month_day{ std::chrono::year(*year),
+			std::chrono::month(static_cast<unsigned>(*month)),
+			std::chrono::day(static_cast<unsigned>(*day)) };
+		if (!f.date.ok()) {
+			return std::unexpected("no such date");
+		}
+		const auto offset = read_time_zone(text, pos);
+		if (!offset) {
+			return std::unexpected(offset.error());
+		}
+		f.offset = *offset;
+		if (pos != text.size()) {
+			return std::unexpected("trailing characters");
+		}
+		return f;
+	}
+
+}// namespace detail
 
 auto parse_generalized_time(std::string_view text) -> result<sys_seconds>
 {
-	const auto bad = [&](const char *why) {
-		return std::unexpected(detail::conversion_error(detail::format("not a GeneralizedTime ({})", why), text));
-	};
-	std::size_t pos = 0;
-	const auto year = digits(text, pos, 4);
-	const auto month = digits(text, pos, 2);
-	const auto day = digits(text, pos, 2);
-	const auto hour = digits(text, pos, 2);
-	if (!year || !month || !day || !hour) {
-		return bad("date and hour");
-	}
-	std::optional<int> minute;
-	std::optional<int> second;
-	if (next_is_digit(text, pos)) {
-		minute = digits(text, pos, 2);
-		if (!minute) {
-			return bad("minute");
-		}
-		if (next_is_digit(text, pos)) {
-			second = digits(text, pos, 2);
-			if (!second) {
-				return bad("second");
-			}
-		}
+	const auto f = detail::parse_generalized_time_fields(text);
+	if (!f) {
+		return std::unexpected(detail::conversion_error(detail::format("not a GeneralizedTime ({})", f.error()), text));
 	}
 	// A fraction applies to the last unit given (hour, minute or second).
-	seconds fraction{ 0 };
-	if (pos < text.size() && (text[pos] == '.' || text[pos] == ',')) {
-		++pos;
-		const seconds unit = [second, minute] {
-			if (second) {
-				return seconds(1);
-			}
-			if (minute) {
-				return seconds(minutes(1));
-			}
-			return seconds(hours(1));
-		}();
-		const auto f = read_fraction(text, pos, unit);
-		if (!f) {
-			return bad(f.error());
-		}
-		fraction = *f;
+	seconds unit = hours(1);
+	if (f->second) {
+		unit = seconds(1);
+	} else if (f->minute) {
+		unit = minutes(1);
 	}
-	if (*month < 1 || *month > max_month || *hour > max_hour || (minute && *minute > max_minute)
-		|| (second && *second > max_second)) {
-		return bad("field out of range");
-	}
-	const year_month_day ymd{ std::chrono::year(*year),
-		std::chrono::month(static_cast<unsigned>(*month)),
-		std::chrono::day(static_cast<unsigned>(*day)) };
-	if (!ymd.ok()) {
-		return bad("no such date");
-	}
-
-	const auto offset = read_time_zone(text, pos);
-	if (!offset) {
-		return bad(offset.error());
-	}
-	if (pos != text.size()) {
-		return bad("trailing characters");
-	}
-
 	// A leap second (60) rolls into the next minute: sys_seconds has no 23:59:60.
-	const sys_seconds local =
-	  sys_days(ymd) + hours(*hour) + minutes(minute.value_or(0)) + seconds(second.value_or(0)) + fraction;
-	return local - *offset;
+	const sys_seconds local = sys_days(f->date) + hours(f->hour) + minutes(f->minute.value_or(0))
+							  + seconds(f->second.value_or(0)) + fraction_seconds(f->fraction, unit);
+	return local - f->offset;
 }
 
 auto format_generalized_time(sys_seconds t) -> result<std::string>

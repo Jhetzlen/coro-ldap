@@ -5,6 +5,7 @@
 #include "jhetz/ldap/ber.hpp"
 #include "jhetz/ldap/schema.hpp"
 
+#include "generalized_time.hpp"
 #include "icu_util.hpp"
 
 #include <unicode/umachine.h>
@@ -14,12 +15,14 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <memory>
 #include <memory_resource>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -570,47 +573,63 @@ namespace {
 		return std::string_view::npos;
 	}
 
-	auto string_substrings(const string_rule &rule, std::string_view value, const substring_assertion &assertion)
-	  -> match_result
+	// A substring assertion's parts, prepared for a rule.
+	struct prepared_assertion
 	{
-		std::pmr::string v;
-		if (!prepare_for(value, rule, prep_input::value, v)) {
-			return match_result::undefined;
+		bool has_initial = false;
+		bool has_final = false;
+		std::pmr::string initial{};
+		std::pmr::string final{};
+		std::vector<std::pmr::string> any{};
+	};
+
+	// false if the match must be Undefined.
+	auto prepare_assertion(const string_rule &rule, const substring_assertion &assertion, prepared_assertion &out)
+	  -> bool
+	{
+		out.has_initial = !assertion.initial.empty();
+		out.has_final = !assertion.final.empty();
+		if (out.has_initial && !prepare_for(assertion.initial, rule, prep_input::initial_substring, out.initial)) {
+			return false;
 		}
-		std::pmr::string initial;
-		std::pmr::string final;
-		if (!assertion.initial.empty()
-			&& !prepare_for(assertion.initial, rule, prep_input::initial_substring, initial)) {
-			return match_result::undefined;
+		if (out.has_final && !prepare_for(assertion.final, rule, prep_input::final_substring, out.final)) {
+			return false;
 		}
-		if (!assertion.final.empty() && !prepare_for(assertion.final, rule, prep_input::final_substring, final)) {
-			return match_result::undefined;
-		}
-		std::vector<std::pmr::string> any;
 		for (const auto part : assertion.any) {
 			if (part.empty()) {
 				continue;
 			}
-			if (!prepare_for(part, rule, prep_input::any_substring, any.emplace_back())) {
-				return match_result::undefined;
+			if (!prepare_for(part, rule, prep_input::any_substring, out.any.emplace_back())) {
+				return false;
 			}
+		}
+		return true;
+	}
+
+	auto string_substrings(const string_rule &rule, std::string_view value, const substring_assertion &assertion)
+	  -> match_result
+	{
+		std::pmr::string v;
+		prepared_assertion p;
+		if (!prepare_for(value, rule, prep_input::value, v) || !prepare_assertion(rule, assertion, p)) {
+			return match_result::undefined;
 		}
 		// Leftmost matches: initial at the start, final at the end, each any
 		// part at its first place after the previous one. Valid UTF-8 needles
 		// only match whole characters.
 		const std::string_view text = v;
-		if (!assertion.initial.empty() && !text.starts_with(initial)) {
+		if (p.has_initial && !text.starts_with(p.initial)) {
 			return match_result::false_value;
 		}
-		std::size_t pos = assertion.initial.empty() ? 0 : initial.size();
+		std::size_t pos = p.has_initial ? p.initial.size() : 0;
 		std::size_t end = text.size();
-		if (!assertion.final.empty()) {
-			if (end - pos < final.size() || !text.ends_with(final)) {
+		if (p.has_final) {
+			if (end - pos < p.final.size() || !text.ends_with(p.final)) {
 				return match_result::false_value;
 			}
-			end -= final.size();
+			end -= p.final.size();
 		}
-		for (const auto &part : any) {
+		for (const auto &part : p.any) {
 			const std::size_t at = find_first(text.substr(0, end), part, pos);
 			if (at == std::string_view::npos) {
 				return match_result::false_value;
@@ -618,6 +637,43 @@ namespace {
 			pos = at + part.size();
 		}
 		return match_result::true_value;
+	}
+
+	// caseIgnoreListSubstringsMatch on the prepared lines (not empty): each
+	// part inside one line, initial in the first and final in the last, each
+	// at its leftmost place.
+	auto list_substrings(const std::vector<std::pmr::string> &lines, const prepared_assertion &p) -> match_result
+	{
+		const std::size_t last = lines.size() - 1;
+		if (p.has_initial && !std::string_view(lines.front()).starts_with(p.initial)) {
+			return match_result::false_value;
+		}
+		if (p.has_final && !std::string_view(lines[last]).ends_with(p.final)) {
+			return match_result::false_value;
+		}
+		// Where the parts of line k may end: before final in the last line.
+		const auto end_of = [&](std::size_t k) {
+			return k == last && p.has_final ? lines[last].size() - p.final.size() : lines[k].size();
+		};
+		std::size_t line = 0;
+		std::size_t pos = p.has_initial ? p.initial.size() : 0;
+		for (const auto &part : p.any) {
+			while (true) {
+				if (line > last) {
+					return match_result::false_value;
+				}
+				const std::string_view text = std::string_view(lines[line]).substr(0, end_of(line));
+				const std::size_t at = pos > text.size() ? std::string_view::npos : find_first(text, part, pos);
+				if (at != std::string_view::npos) {
+					pos = at + part.size();
+					break;
+				}
+				++line;
+				pos = 0;
+			}
+		}
+		// Initial and final in one line must not overlap.
+		return to_result(line < last || pos <= end_of(last));
 	}
 
 	// ------------------------------------------------------------ Integer
@@ -719,6 +775,150 @@ namespace {
 		return distinguished_name_match(*da, *db);
 	}
 
+	// ------------------------------------------------------------ Bit String, UUID
+
+	// RFC 4517 section 3.3.2: BitString = SQUOTE *binary-digit SQUOTE "B"
+	// (the "B" in either case: ABNF strings are case-insensitive); `bits` is
+	// the digits.
+	auto parse_bit_string(std::string_view s, std::string_view &bits) noexcept -> bool
+	{
+		constexpr std::size_t delimiters = 3;// ' ' B
+		if (s.size() < delimiters || s.front() != '\'' || s[s.size() - 2] != '\''
+			|| (s.back() != 'B' && s.back() != 'b')) {
+			return false;
+		}
+		bits = s.substr(1, s.size() - delimiters);
+		return std::ranges::all_of(bits, [](char c) { return c == '0' || c == '1'; });
+	}
+
+	// RFC 4122 section 3: 8-4-4-4-12 hex digits (either case on input).
+	constexpr std::size_t uuid_octets = 16;
+	using uuid_value = std::array<unsigned char, uuid_octets>;
+
+	auto parse_uuid(std::string_view s, uuid_value &out) noexcept -> bool
+	{
+		constexpr std::size_t text_size = 36;
+		constexpr auto hyphens_at = std::to_array<std::size_t>({ 8, 13, 18, 23 });
+		constexpr unsigned nibble_bits = 4;
+		if (s.size() != text_size) {
+			return false;
+		}
+		std::size_t octet = 0;
+		for (std::size_t i = 0; i < s.size();) {
+			if (std::ranges::contains(hyphens_at, i)) {
+				if (s[i] != '-') {
+					return false;
+				}
+				++i;
+				continue;
+			}
+			if (!detail::is_hex(s[i]) || !detail::is_hex(s[i + 1])) {
+				return false;
+			}
+			out.at(octet++) =
+			  static_cast<unsigned char>((detail::hex_value(s[i]) << nibble_bits) | detail::hex_value(s[i + 1]));
+			i += 2;
+		}
+		return true;
+	}
+
+	// ------------------------------------------------------------ Generalized Time
+
+	// An instant in UTC, exactly: the minute, the second in it (60 for a
+	// leap second) and the decimal digits of the fraction of a second, with
+	// no trailing zero. Ordered as instants.
+	struct utc_instant
+	{
+		std::int64_t minute = 0;
+		int second = 0;
+		std::string fraction{};
+
+		auto operator<=>(const utc_instant &) const = default;
+	};
+
+	// A Generalized Time value (RFC 4517 section 3.3.13) as an instant;
+	// false if not of the syntax.
+	auto to_instant(std::string_view text, utc_instant &out) -> bool
+	{
+		constexpr int seconds_per_minute = 60;
+		constexpr int seconds_per_hour = 3600;
+		constexpr int decimal_base = 10;
+		const auto f = detail::parse_generalized_time_fields(text);
+		if (!f) {
+			return false;
+		}
+		// The differential is subtracted from the local time (section
+		// 3.3.13); minutes and seconds absent are zero (section 4.2.16).
+		const std::chrono::minutes local = std::chrono::sys_days(f->date).time_since_epoch()
+										   + std::chrono::hours(f->hour) + std::chrono::minutes(f->minute.value_or(0));
+		std::int64_t minute = static_cast<std::int64_t>((local - f->offset).count());
+		int second = f->second.value_or(0);
+		std::string fraction(f->fraction);
+		if (!fraction.empty() && !f->second) {
+			// A fraction of an hour or a minute: times 3600 or 60, exactly
+			// (decimal digits times an integer). The carry out of the
+			// leftmost digit is whole seconds, below the unit; the digits
+			// stay the fraction of a second.
+			const int unit = f->minute ? seconds_per_minute : seconds_per_hour;
+			int carry = 0;
+			for (auto &c : std::views::reverse(fraction)) {
+				const int v = ((c - '0') * unit) + carry;
+				c = static_cast<char>('0' + (v % decimal_base));
+				carry = v / decimal_base;
+			}
+			minute += carry / seconds_per_minute;
+			second = carry % seconds_per_minute;
+		}
+		while (fraction.ends_with('0')) {
+			fraction.pop_back();
+		}
+		out = { .minute = minute, .second = second, .fraction = std::move(fraction) };
+		return true;
+	}
+
+	// ------------------------------------------------------------ Postal Address
+
+	// RFC 4517 section 3.3.28: lines separated by "$", "\24" and "\5C" (hex
+	// digits in either case) for "$" and "\", no empty line. false if not
+	// of the syntax.
+	auto parse_postal_address(std::string_view s, std::vector<std::string> &lines) -> bool
+	{
+		lines.emplace_back();
+		for (std::size_t i = 0; i < s.size(); ++i) {
+			const char c = s[i];
+			if (c == '$') {
+				if (lines.back().empty()) {
+					return false;
+				}
+				lines.emplace_back();
+			} else if (c == '\\') {
+				const std::string_view esc = s.substr(i + 1, 2);
+				if (esc == "24") {
+					lines.back() += '$';
+				} else if (detail::iequals(esc, "5C")) {
+					lines.back() += '\\';
+				} else {
+					return false;
+				}
+				i += 2;
+			} else {
+				lines.back() += c;
+			}
+		}
+		return !lines.back().empty();
+	}
+
+	// The rules that can take a schema, without one (match()). ava_match
+	// recognizes them to pass the DN's schema and nesting depth.
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): attribute value, assertion value
+	auto oid_from_text(std::string_view a, std::string_view b) -> match_result { return object_identifier_match(a, b); }
+
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): attribute value, assertion value
+	auto unique_member_from_text(std::string_view a, std::string_view b) -> match_result
+	{
+		return unique_member_match(a, b);
+	}
+
 	// ------------------------------------------------------------ rule table
 
 	enum class rule_kind : std::uint8_t { equality, ordering, substrings };
@@ -731,7 +931,7 @@ namespace {
 		match_result (*fn)(std::string_view, std::string_view);
 	};
 
-	// RFC 4517 section 4.2 (and 4.2.15 for distinguishedNameMatch).
+	// RFC 4517 section 4.2 (and 4.2.15 for distinguishedNameMatch), RFC 4530.
 	constexpr auto rules = std::to_array<rule_entry>({
 	  { .name = "caseIgnoreMatch", .oid = "2.5.13.2", .kind = rule_kind::equality, .fn = case_ignore_match },
 	  { .name = "caseExactMatch", .oid = "2.5.13.5", .kind = rule_kind::equality, .fn = case_exact_match },
@@ -786,6 +986,22 @@ namespace {
 		.oid = "2.5.13.21",
 		.kind = rule_kind::substrings,
 		.fn = substrings_from_text<telephone_number_substrings_match> },
+	  { .name = "objectIdentifierMatch", .oid = "2.5.13.0", .kind = rule_kind::equality, .fn = oid_from_text },
+	  { .name = "bitStringMatch", .oid = "2.5.13.16", .kind = rule_kind::equality, .fn = bit_string_match },
+	  { .name = "uniqueMemberMatch", .oid = "2.5.13.23", .kind = rule_kind::equality, .fn = unique_member_from_text },
+	  { .name = "generalizedTimeMatch", .oid = "2.5.13.27", .kind = rule_kind::equality, .fn = generalized_time_match },
+	  { .name = "generalizedTimeOrderingMatch",
+		.oid = "2.5.13.28",
+		.kind = rule_kind::ordering,
+		.fn = generalized_time_ordering_match },
+	  { .name = "caseIgnoreListMatch", .oid = "2.5.13.11", .kind = rule_kind::equality, .fn = case_ignore_list_match },
+	  { .name = "caseIgnoreListSubstringsMatch",
+		.oid = "2.5.13.12",
+		.kind = rule_kind::substrings,
+		.fn = substrings_from_text<case_ignore_list_substrings_match> },
+	  // RFC 4530 section 2.
+	  { .name = "uuidMatch", .oid = "1.3.6.1.1.16.2", .kind = rule_kind::equality, .fn = uuid_match },
+	  { .name = "uuidOrderingMatch", .oid = "1.3.6.1.1.16.3", .kind = rule_kind::ordering, .fn = uuid_ordering_match },
 	});
 
 	auto find_rule(std::string_view rule) noexcept -> const rule_entry *
@@ -1102,6 +1318,66 @@ namespace {
 		return it != rfc4519_types.end() && detail::iequals(it->name, name) ? it->oid : std::string_view{};
 	}
 
+	// ------------------------------------------------------------ OID
+
+	// A value of the OID syntax (RFC 4512 section 1.4) as far as it can be
+	// resolved: a numericoid, or a descriptor's OID from the schema (an
+	// attribute type, then an object class) or RFC 4519; else the
+	// descriptor itself, unresolved.
+	struct oid_key
+	{
+		std::string_view text;
+		bool resolved = false;
+	};
+
+	// false if `v` is not of the OID syntax.
+	auto resolve_oid(std::string_view v, const server_schema *schema, oid_key &out) noexcept -> bool
+	{
+		if (detail::is_numericoid(v)) {
+			out = { .text = v, .resolved = true };
+			return true;
+		}
+		if (!detail::is_descr(v)) {
+			return false;
+		}
+		if (schema != nullptr) {
+			if (const attribute_type *t = schema->find_attribute(v)) {
+				out = { .text = t->oid, .resolved = true };
+				return true;
+			}
+			if (const object_class_type *c = schema->find_object_class(v)) {
+				out = { .text = c->oid, .resolved = true };
+				return true;
+			}
+		}
+		if (const std::string_view oid = rfc4519_oid(v); !oid.empty()) {
+			out = { .text = oid, .resolved = true };
+			return true;
+		}
+		out = { .text = v, .resolved = false };
+		return true;
+	}
+
+	// objectIdentifierMatch (RFC 4517 section 4.2.26).
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): attribute value, assertion value
+	auto oid_match(std::string_view a, std::string_view b, const server_schema *schema) -> match_result
+	{
+		oid_key ka;
+		oid_key kb;
+		if (!resolve_oid(a, schema, ka) || !resolve_oid(b, schema, kb)) {
+			return match_result::undefined;
+		}
+		if (ka.resolved && kb.resolved) {
+			return to_result(ka.text == kb.text);
+		}
+		// A descriptor nothing resolves is the same OID as itself; against
+		// anything else it is not recognized (Undefined).
+		if (!ka.resolved && !kb.resolved && detail::iequals(ka.text, kb.text)) {
+			return match_result::true_value;
+		}
+		return match_result::undefined;
+	}
+
 	// An AVA's attribute type as far as it can be identified: the OID of its
 	// definition (resolved), or the name itself when neither the schema nor
 	// RFC 4519 knows it. Two resolved keys name the same type exactly when
@@ -1165,21 +1441,74 @@ namespace {
 
 	auto dn_match(const dn &a, const dn &b, const dn_context &ctx) -> match_result;
 
-	// distinguishedNameMatch on two AVA values, with the outer DN's context.
-	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): attribute value, assertion value
-	auto nested_dn_match(std::string_view a, std::string_view b, const dn_context &ctx) -> match_result
+	// distinguishedNameMatch on DNs inside an AVA value, with the outer DN's
+	// context, one level deeper.
+	auto nested_dn_match(const dn &a, const dn &b, const dn_context &ctx) -> match_result
 	{
 		if (ctx.depth >= max_dn_nesting) {
 			return match_result::undefined;
 		}
+		dn_context inner = ctx;
+		++inner.depth;
+		return dn_match(a, b, inner);
+	}
+
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): attribute value, assertion value
+	auto nested_dn_match(std::string_view a, std::string_view b, const dn_context &ctx) -> match_result
+	{
 		const auto da = dn::parse(a);
 		const auto db = dn::parse(b);
 		if (!da || !db) {
 			return match_result::undefined;
 		}
-		dn_context inner = ctx;
-		++inner.depth;
-		return dn_match(*da, *db, inner);
+		return nested_dn_match(*da, *db, ctx);
+	}
+
+	// A value of the Name And Optional UID syntax (RFC 4517 section 3.3.21).
+	struct name_and_uid
+	{
+		dn name{};
+		std::string_view uid{};// the Bit String's digits
+		bool has_uid = false;
+	};
+
+	// false if `v` is not of the syntax. The DN may hold "#" unescaped: the
+	// last "#" starts the UID when a Bit String follows it and a DN precedes
+	// it; otherwise the whole value is the DN.
+	auto parse_name_and_uid(std::string_view v, name_and_uid &out) -> bool
+	{
+		if (const std::size_t sharp = v.rfind("#'"); sharp != std::string_view::npos) {
+			std::string_view bits;
+			if (parse_bit_string(v.substr(sharp + 1), bits)) {
+				if (auto d = dn::parse(v.substr(0, sharp))) {
+					out = { .name = std::move(*d), .uid = bits, .has_uid = true };
+					return true;
+				}
+			}
+		}
+		auto d = dn::parse(v);
+		if (!d) {
+			return false;
+		}
+		out = { .name = std::move(*d), .uid = {}, .has_uid = false };
+		return true;
+	}
+
+	// uniqueMemberMatch (RFC 4517 section 4.2.31), the DNs compared by
+	// `dn_rule`.
+	template<class F>
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): attribute value, assertion value
+	auto unique_member(std::string_view a, std::string_view b, const F &dn_rule) -> match_result
+	{
+		name_and_uid na;
+		name_and_uid nb;
+		if (!parse_name_and_uid(a, na) || !parse_name_and_uid(b, nb)) {
+			return match_result::undefined;
+		}
+		// bitStringMatch: the same bits, the same number of them.
+		const bool same_uid = na.has_uid == nb.has_uid && na.uid == nb.uid;
+		const match_result names = dn_rule(na.name, nb.name);
+		return same_uid ? names : match_result::false_value;
 	}
 
 	// The equality rule the lookup gives `type`; null for a rule match() does
@@ -1221,6 +1550,12 @@ namespace {
 		}
 		if (e->fn == dn_from_text) {
 			return nested_dn_match(vx, vy, ctx);
+		}
+		if (e->fn == oid_from_text) {
+			return oid_match(vx, vy, ctx.schema);
+		}
+		if (e->fn == unique_member_from_text) {
+			return unique_member(vx, vy, [&ctx](const dn &na, const dn &nb) { return nested_dn_match(na, nb, ctx); });
 		}
 		return e->fn(vx, vy);
 	}
@@ -1468,6 +1803,126 @@ auto boolean_match(std::string_view attribute_value, std::string_view assertion_
 		return match_result::undefined;
 	}
 	return to_result(detail::iequals(attribute_value, assertion_value));
+}
+
+auto object_identifier_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result
+{
+	return oid_match(attribute_value, assertion_value, nullptr);
+}
+
+auto object_identifier_match(std::string_view attribute_value,
+  std::string_view assertion_value,
+  const server_schema &schema) -> match_result
+{
+	return oid_match(attribute_value, assertion_value, &schema);
+}
+
+auto bit_string_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result
+{
+	std::string_view a;
+	std::string_view b;
+	if (!parse_bit_string(attribute_value, a) || !parse_bit_string(assertion_value, b)) {
+		return match_result::undefined;
+	}
+	return to_result(a == b);
+}
+
+auto unique_member_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result
+{
+	return unique_member(
+	  attribute_value, assertion_value, [](const dn &a, const dn &b) { return distinguished_name_match(a, b); });
+}
+
+auto unique_member_match(std::string_view attribute_value,
+  std::string_view assertion_value,
+  const server_schema &schema) -> match_result
+{
+	return unique_member(attribute_value, assertion_value, [&schema](const dn &a, const dn &b) {
+		return distinguished_name_match(a, b, schema);
+	});
+}
+
+auto generalized_time_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result
+{
+	utc_instant a;
+	utc_instant b;
+	if (!to_instant(attribute_value, a) || !to_instant(assertion_value, b)) {
+		return match_result::undefined;
+	}
+	return to_result(a == b);
+}
+
+auto generalized_time_ordering_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result
+{
+	utc_instant a;
+	utc_instant b;
+	if (!to_instant(attribute_value, a) || !to_instant(assertion_value, b)) {
+		return match_result::undefined;
+	}
+	return to_result(a < b);
+}
+
+auto uuid_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result
+{
+	uuid_value a{};
+	uuid_value b{};
+	if (!parse_uuid(attribute_value, a) || !parse_uuid(assertion_value, b)) {
+		return match_result::undefined;
+	}
+	return to_result(a == b);
+}
+
+auto uuid_ordering_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result
+{
+	// octetStringOrderingMatch on the 16 octets: most significant bit first.
+	uuid_value a{};
+	uuid_value b{};
+	if (!parse_uuid(attribute_value, a) || !parse_uuid(assertion_value, b)) {
+		return match_result::undefined;
+	}
+	return to_result(a < b);
+}
+
+namespace {
+
+	// The lines of a Postal Address value, each prepared for caseIgnoreMatch
+	// as a value; false if not of the syntax or a line does not prepare.
+	auto prepared_lines(std::string_view value, std::vector<std::pmr::string> &out) -> bool
+	{
+		std::vector<std::string> lines;
+		if (!parse_postal_address(value, lines)) {
+			return false;
+		}
+		out.resize(lines.size());
+		for (std::size_t i = 0; i < lines.size(); ++i) {
+			if (!prepare_for(lines[i], case_ignore, prep_input::value, out[i])) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+}// namespace
+
+auto case_ignore_list_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result
+{
+	std::vector<std::pmr::string> a;
+	std::vector<std::pmr::string> b;
+	if (!prepared_lines(attribute_value, a) || !prepared_lines(assertion_value, b)) {
+		return match_result::undefined;
+	}
+	return to_result(a == b);
+}
+
+auto case_ignore_list_substrings_match(std::string_view attribute_value, const substring_assertion &assertion)
+  -> match_result
+{
+	std::vector<std::pmr::string> lines;
+	prepared_assertion p;
+	if (!prepared_lines(attribute_value, lines) || !prepare_assertion(case_ignore, assertion, p)) {
+		return match_result::undefined;
+	}
+	return list_substrings(lines, p);
 }
 
 // The rule, then the attribute value and the assertion value (RFC 4511

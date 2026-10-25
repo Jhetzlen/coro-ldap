@@ -73,8 +73,11 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
   around `,` `+` `=` are ignored and unescaped trailing spaces dropped.
 - Matching rules (`matching.hpp`): RFC 4517 rules named after the RFC
   (`case_ignore_match`, `case_exact_match`, the IA5, numericString,
-  telephoneNumber, ordering, substrings, integer, boolean and octetString
-  rules, and `match(rule, value, assertion)` by NAME or OID) on values
+  telephoneNumber, ordering, substrings, integer, boolean, octetString,
+  bitString, objectIdentifier, uniqueMember, generalizedTime (exact UTC
+  instants, sharing mapping.cpp's GeneralizedTime parser through
+  `src/generalized_time.hpp`), caseIgnoreList and RFC 4530 uuid rules,
+  and `match(rule, value, assertion)` by NAME or OID) on values
   prepared by LDAPprep (RFC 4518, `prepare_string`): UTF-8 decoding, then
   ICU's RFC 4518 StringPrep profiles for map (with table B.2 case folding
   for the case-ignore rules), NFKC, prohibit (Unicode 3.2 unassigned, private

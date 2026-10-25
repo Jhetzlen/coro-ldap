@@ -377,11 +377,18 @@ TEST_CASE("match by rule NAME or OID", "[matching]")
 	CHECK(ldap::match("caseIgnoreOrderingMatch", "a", "B") == yes);
 	CHECK(ldap::match("distinguishedNameMatch", "CN=Jane,DC=Example", "cn=jane,dc=example") == yes);
 	CHECK(ldap::match("distinguishedNameMatch", "not a dn", "cn=jane") == undefined);
-	CHECK(ldap::match("generalizedTimeMatch", "20240101000000Z", "20240101000000Z") == undefined);
+	CHECK(ldap::match("generalizedTimeMatch", "20240101000000Z", "202401010000Z") == yes);
+	CHECK(ldap::match("2.5.13.0", "cn", "2.5.4.3") == yes);
+	CHECK(
+	  ldap::match("uuidMatch", "597ae2f6-16a6-1027-98f4-d28b5365dc14", "597AE2F6-16A6-1027-98F4-D28B5365DC14") == yes);
+	CHECK(ldap::match("caseIgnoreListSubstringsMatch", "1234 Main St.$Anytown", "*main*TOWN") == yes);
+	CHECK(ldap::match("wordMatch", "a", "a") == undefined);
 	CHECK(ldap::match("noSuchMatch", "a", "a") == undefined);
 	CHECK(ldap::is_known_matching_rule("caseIgnoreMatch"));
 	CHECK(ldap::is_known_matching_rule("1.3.6.1.4.1.1466.109.114.2"));
-	CHECK_FALSE(ldap::is_known_matching_rule("uniqueMemberMatch"));
+	CHECK(ldap::is_known_matching_rule("uniqueMemberMatch"));
+	CHECK(ldap::is_known_matching_rule("1.3.6.1.1.16.3"));
+	CHECK_FALSE(ldap::is_known_matching_rule("directoryStringFirstComponentMatch"));
 	// Substrings rules take the Substring Assertion syntax (RFC 4517 3.3.30).
 	CHECK(ldap::match("caseIgnoreSubstringsMatch", "Jane Doe", "ja*d*E") == yes);
 	CHECK(ldap::match("caseIgnoreSubstringsMatch", "Jane Doe", "*doe") == yes);
@@ -391,6 +398,263 @@ TEST_CASE("match by rule NAME or OID", "[matching]")
 	CHECK(ldap::match("caseIgnoreSubstringsMatch", "Jane", "Jane") == undefined);// no ASTERISK
 	CHECK(ldap::match("caseIgnoreSubstringsMatch", "Jane", "J**e") == undefined);// zero-length substring
 	CHECK(ldap::match("caseIgnoreSubstringsMatch", "Jane", "J\\41*") == undefined);// only \2A and \5C
+}
+
+// ---------------------------------------------------------------- other syntaxes
+
+TEST_CASE("objectIdentifierMatch without a schema", "[matching][rfc]")
+{
+	// Two numericoids compare exactly (RFC 4512: no leading zeros).
+	CHECK(ldap::object_identifier_match("2.5.4.3", "2.5.4.3") == yes);
+	CHECK(ldap::object_identifier_match("2.5.4.3", "2.5.4.4") == no);
+	CHECK(ldap::object_identifier_match("1.2.3.4", "1.2.3.40") == no);
+	// The same descriptor, in any case.
+	CHECK(ldap::object_identifier_match("fooBar", "FOOBAR") == yes);
+	// RFC 4519's attribute type names resolve without a schema.
+	CHECK(ldap::object_identifier_match("cn", "2.5.4.3") == yes);
+	CHECK(ldap::object_identifier_match("commonName", "CN") == yes);
+	CHECK(ldap::object_identifier_match("sn", "cn") == no);
+	CHECK(ldap::object_identifier_match("2.5.4.4", "surname") == yes);
+	// A descriptor nothing resolves: Undefined against anything else
+	// (RFC 4517 section 4.2.26).
+	CHECK(ldap::object_identifier_match("fooBar", "bazQux") == undefined);
+	CHECK(ldap::object_identifier_match("fooBar", "1.2.3.4") == undefined);
+	CHECK(ldap::object_identifier_match("cn", "fooBar") == undefined);
+	// Not of the OID syntax.
+	CHECK(ldap::object_identifier_match("2.5.04.3", "2.5.04.3") == undefined);
+	CHECK(ldap::object_identifier_match("2", "2") == undefined);
+	CHECK(ldap::object_identifier_match("cn;lang-en", "cn") == undefined);
+	CHECK(ldap::object_identifier_match(" cn", "cn") == undefined);
+	CHECK(ldap::object_identifier_match("", "") == undefined);
+	CHECK(ldap::object_identifier_match("1cn", "1cn") == undefined);
+}
+
+TEST_CASE("objectIdentifierMatch with a schema", "[matching][schema]")
+{
+	const std::pmr::vector<std::pmr::string> types{
+		"( 1.3.6.1.4.1.99999.1 NAME ( 'fooType' 'fooAlias' ) SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+	};
+	const std::pmr::vector<std::pmr::string> classes{
+		"( 2.5.6.6 NAME 'person' SUP top STRUCTURAL MUST ( sn $ cn ) )",
+	};
+	const auto s = ldap::server_schema::parse(types, classes);
+	REQUIRE(s.skipped() == 0);
+	CHECK(ldap::object_identifier_match("fooType", "1.3.6.1.4.1.99999.1", s) == yes);
+	CHECK(ldap::object_identifier_match("FOOALIAS", "fooType", s) == yes);
+	CHECK(ldap::object_identifier_match("person", "2.5.6.6", s) == yes);
+	CHECK(ldap::object_identifier_match("person", "fooType", s) == no);
+	CHECK(ldap::object_identifier_match("cn", "2.5.4.3", s) == yes);// RFC 4519, not in the schema
+	CHECK(ldap::object_identifier_match("unknownName", "2.5.6.6", s) == undefined);
+	// Without the schema, the aliases are not known to be one OID.
+	CHECK(ldap::object_identifier_match("fooAlias", "fooType") == undefined);
+	CHECK(ldap::object_identifier_match("person", "2.5.6.6") == undefined);
+
+	// distinguished_name_match passes its schema to an OID-valued AVA.
+	const std::pmr::vector<std::pmr::string> oid_types{
+		"( 1.3.6.1.4.1.99999.5 NAME 'oidType' EQUALITY objectIdentifierMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )",
+		"( 1.3.6.1.4.1.99999.1 NAME ( 'fooType' 'fooAlias' ) SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+	};
+	const auto so = ldap::server_schema::parse(oid_types, {});
+	REQUIRE(so.skipped() == 0);
+	CHECK(ldap::distinguished_name_match(parse("oidType=fooAlias"), parse("oidType=1.3.6.1.4.1.99999.1"), so) == yes);
+	CHECK(ldap::distinguished_name_match(parse("oidType=fooAlias"), parse("oidType=cn"), so) == no);
+	CHECK(ldap::distinguished_name_match(parse("oidType=a b"), parse("oidType=a b"), so) == undefined);
+}
+
+TEST_CASE("bitStringMatch", "[matching]")
+{
+	CHECK(ldap::bit_string_match("'0101111101'B", "'0101111101'B") == yes);// RFC 4517 3.3.2
+	CHECK(ldap::bit_string_match("'0101'B", "'0101'b") == yes);
+	CHECK(ldap::bit_string_match("''B", "''B") == yes);
+	CHECK(ldap::bit_string_match("'0101'B", "'01010'B") == no);// no named bits: the length counts
+	CHECK(ldap::bit_string_match("'0102'B", "'0102'B") == undefined);
+	CHECK(ldap::bit_string_match("'0101'", "'0101'") == undefined);
+	CHECK(ldap::bit_string_match("0101", "0101") == undefined);
+	CHECK(ldap::bit_string_match("'B", "'B") == undefined);
+}
+
+TEST_CASE("uniqueMemberMatch", "[matching][dn][rfc]")
+{
+	// RFC 4517 section 3.3.21's example: the DN holds a #hex value.
+	constexpr std::string_view example = "1.3.6.1.4.1.1466.0=#04024869,O=Test,C=GB#'0101'B";
+	CHECK(ldap::unique_member_match(example, example) == yes);
+	CHECK(ldap::unique_member_match(example, "1.3.6.1.4.1.1466.0=#04024869,o=TEST,c=gb#'0101'B") == yes);
+	CHECK(ldap::unique_member_match(example, "1.3.6.1.4.1.1466.0=#04024869,O=Test,C=GB#'0111'B") == no);
+	CHECK(ldap::unique_member_match(example, "1.3.6.1.4.1.1466.0=#04024869,O=Test,C=GB") == no);
+	CHECK(ldap::unique_member_match("cn=Jane Doe,o=Test", "CN=jane  doe,O=test") == yes);
+	CHECK(ldap::unique_member_match("cn=Jane,o=Test", "cn=John,o=Test") == no);
+	// A UID on one side only is FALSE (RFC 4517 4.2.31), also when the DNs
+	// compare Undefined.
+	CHECK(ldap::unique_member_match("cn=Jane#'1'B", "cn=Jane") == no);
+	CHECK(ldap::unique_member_match("foo=a#'1'B", "2.5.4.3=a") == no);
+	CHECK(ldap::unique_member_match("foo=a#'1'B", "2.5.4.3=a#'1'B") == undefined);
+	CHECK(ldap::unique_member_match("cn=Jane#'0'B", "cn=Jane#'00'B") == no);
+	// "#" in the DN, unescaped: the last "#" followed by a Bit String.
+	CHECK(ldap::unique_member_match("cn=a#b#'1'B", "cn=A#B#'1'B") == yes);
+	CHECK(ldap::unique_member_match("cn=a#'1'B#'0'B", "cn=A#'1'B#'0'B") == yes);
+	// Text after the last "#" that is no Bit String belongs to the DN.
+	CHECK(ldap::unique_member_match("cn=a#'12'B", "cn=A#'12'B") == yes);
+	CHECK(ldap::unique_member_match("", "") == yes);// the empty DN
+	CHECK(ldap::unique_member_match("not a dn", "cn=a") == undefined);
+	CHECK(ldap::unique_member_match("not a dn#'1'B", "not a dn#'1'B") == undefined);
+	CHECK(ldap::match("uniqueMemberMatch", "cn=Jane#'1'B", "CN=JANE#'1'B") == yes);
+
+	// And inside a DN: a uniqueMember-valued AVA.
+	CHECK(ldap::distinguished_name_match(parse(R"(cn=x+uniqueMember=cn\=A#'1'B)"),
+			parse(R"(cn=x+uniqueMember=CN\=a#'1'B)"),
+			[](const ldap::attribute &t) -> std::string_view {
+				return t == ldap::attribute{ "uniqueMember" } ? "uniqueMemberMatch" : "";
+			})
+		  == yes);
+}
+
+TEST_CASE("generalizedTimeMatch and generalizedTimeOrderingMatch", "[matching][rfc]")
+{
+	const auto eq = [](std::string_view a, std::string_view b) { return ldap::generalized_time_match(a, b); };
+	const auto lt = [](std::string_view a, std::string_view b) { return ldap::generalized_time_ordering_match(a, b); };
+	// RFC 4517 section 3.3.13: both are 10:32 AM UTC, December 16, 1994.
+	CHECK(eq("199412161032Z", "199412160532-0500") == yes);
+	CHECK(eq("199412160532-0500", "199412161032Z") == yes);
+	CHECK(eq("199412161032Z", "199412161032+0000") == yes);
+	CHECK(eq("199412161032Z", "1994121615+0428") == yes);
+	CHECK(eq("199412161532+05", "199412161032Z") == yes);
+	CHECK(eq("199412170032+1400", "199412161032Z") == yes);
+	CHECK(eq("199412170032+1400", "199412171032Z") == no);
+	// Minutes and seconds absent are zero (section 4.2.16).
+	CHECK(eq("1994121610Z", "199412161000Z") == yes);
+	CHECK(eq("1994121610Z", "19941216100000Z") == yes);
+	CHECK(eq("1994121610Z", "19941216100001Z") == no);
+	// A fraction of the last unit given, exactly, "." or ",".
+	CHECK(eq("1994121610.5Z", "199412161030Z") == yes);
+	CHECK(eq("199412161030.5Z", "19941216103030Z") == yes);
+	CHECK(eq("19941216103030.5Z", "19941216103030,50Z") == yes);
+	CHECK(eq("19941216103030.5Z", "19941216103030Z") == no);
+	CHECK(eq("19941216103030.000Z", "19941216103030Z") == yes);
+	CHECK(eq("1994121610.0001Z", "19941216100000.36Z") == yes);// 0.0001 h = 0.36 s
+	CHECK(eq("199412161030.0000001Z", "19941216103000.000006Z") == yes);
+	CHECK(eq("19941216103030.0000000001Z", "19941216103030.0000000002Z") == no);// past nanoseconds
+	CHECK(lt("19941216103030.0000000001Z", "19941216103030.0000000002Z") == yes);
+	CHECK(lt("19941216103030.5Z", "19941216103030.49Z") == no);
+	CHECK(lt("19941216103030.49Z", "19941216103030.5Z") == yes);
+	// Ordering: instants in UTC.
+	CHECK(lt("199412161032Z", "199412160533-0500") == yes);
+	CHECK(lt("199412160533-0500", "199412161032Z") == no);
+	CHECK(lt("199412161032Z", "199412161032Z") == no);
+	CHECK(lt("19991231235959Z", "20000101000000+0100") == no);// 1999-12-31 23:00 UTC
+	CHECK(lt("19991231225959Z", "20000101000000+0100") == yes);
+	// A leap second is its own instant: after second 59, before the next minute.
+	CHECK(eq("19981231235960Z", "19990101000000Z") == no);
+	CHECK(lt("19981231235959.9Z", "19981231235960Z") == yes);
+	CHECK(lt("19981231235960.5Z", "19990101000000Z") == yes);
+	CHECK(eq("19990101005960+0100", "19981231235960Z") == yes);
+	// Years 0000 to 9999, February 29 only in leap years.
+	CHECK(lt("00000101000000Z", "99991231235959Z") == yes);
+	CHECK(eq("20000229000000Z", "20000229000000Z") == yes);
+	CHECK(eq("19000229000000Z", "19000229000000Z") == undefined);
+	// Not of the syntax.
+	for (const std::string_view bad : { "",
+		   "1994121610",
+		   "199412161032",
+		   "19941216Z",
+		   "199413161032Z",
+		   "199412321032Z",
+		   "199412162432Z",
+		   "199412161060Z",
+		   "19941216103061Z",
+		   "1994121610.Z",
+		   "1994121610.5",
+		   "199412161032-2400",
+		   "199412161032-0560",
+		   "199412161032z",
+		   "199412161032Z ",
+		   "19941216 1032Z",
+		   "1994121610329Z" }) {
+		INFO(bad);
+		CHECK(eq(bad, bad) == undefined);
+		CHECK(lt(bad, "199412161032Z") == undefined);
+	}
+	CHECK(ldap::match("generalizedTimeOrderingMatch", "199412161032Z", "199412161033Z") == yes);
+	CHECK(ldap::match("2.5.13.28", "199412161033Z", "199412161032Z") == no);
+}
+
+TEST_CASE("uuidMatch and uuidOrderingMatch (RFC 4530)", "[matching][rfc]")
+{
+	constexpr std::string_view u = "597ae2f6-16a6-1027-98f4-d28b5365dc14";// RFC 4530 2.1
+	CHECK(ldap::uuid_match(u, u) == yes);
+	CHECK(ldap::uuid_match(u, "597AE2F6-16a6-1027-98F4-D28B5365DC14") == yes);
+	CHECK(ldap::uuid_match(u, "597ae2f6-16a6-1027-98f4-d28b5365dc15") == no);
+	CHECK(ldap::uuid_ordering_match(u, "597ae2f6-16a6-1027-98f4-d28b5365dc15") == yes);
+	CHECK(ldap::uuid_ordering_match("597ae2f6-16a6-1027-98f4-d28b5365dc15", u) == no);
+	CHECK(ldap::uuid_ordering_match(u, u) == no);
+	// Octet order: "A" and "a" are the same octet, after "9".
+	CHECK(
+	  ldap::uuid_ordering_match("9fffffff-ffff-ffff-ffff-ffffffffffff", "A0000000-0000-0000-0000-000000000000") == yes);
+	for (const std::string_view bad : { "",
+		   "597ae2f616a6102798f4d28b5365dc14",
+		   "{597ae2f6-16a6-1027-98f4-d28b5365dc14}",
+		   "597ae2f6-16a6-1027-98f4-d28b5365dc1",
+		   "597ae2f6-16a6-1027-98f4-d28b5365dc145",
+		   "597ae2f6-16a61-027-98f4-d28b5365dc14",
+		   "597ae2g6-16a6-1027-98f4-d28b5365dc14",
+		   "urn:uuid:597ae2f6-16a6-1027-98f4-d28b5365dc14" }) {
+		INFO(bad);
+		CHECK(ldap::uuid_match(bad, bad) == undefined);
+		CHECK(ldap::uuid_ordering_match(u, bad) == undefined);
+	}
+	// entryUUID's rule in a DN.
+	CHECK(ldap::distinguished_name_match(parse("entryUUID=597AE2F6-16A6-1027-98F4-D28B5365DC14"),
+			parse(std::string("entryUUID=") + std::string(u)),
+			[](const ldap::attribute &) -> std::string_view { return "uuidMatch"; })
+		  == yes);
+}
+
+TEST_CASE("caseIgnoreListMatch and caseIgnoreListSubstringsMatch", "[matching][rfc]")
+{
+	// RFC 4517 section 3.3.28's examples.
+	constexpr std::string_view a = "1234 Main St.$Anytown, CA 12345$USA";
+	constexpr std::string_view b = R"(\241,000,000 Sweepstakes$PO Box 1000000$Anytown, CA 12345$USA)";
+	CHECK(ldap::case_ignore_list_match(a, a) == yes);
+	CHECK(ldap::case_ignore_list_match(a, "1234  MAIN st.$anytown,  ca 12345 $ usa") == yes);
+	CHECK(ldap::case_ignore_list_match(a, "1234 Main St.$Anytown, CA 12345") == no);// line count
+	CHECK(ldap::case_ignore_list_match(a, "1234 Main St.$Anytown, CA 12345$USB") == no);
+	CHECK(ldap::case_ignore_list_match(a, "1234 Main St.Anytown, CA 12345$USA") == no);
+	CHECK(ldap::case_ignore_list_match(b, "$1,000,000 Sweepstakes$PO Box 1000000$Anytown, CA 12345$USA") == undefined);
+	CHECK(ldap::case_ignore_list_match(b, R"(\241,000,000 SWEEPSTAKES$po box 1000000$Anytown, CA 12345$USA)") == yes);
+	CHECK(ldap::case_ignore_list_match(R"(a\5Cb$c)", R"(A\5cB$C)") == yes);
+	CHECK(ldap::case_ignore_list_match("Straße", "STRASSE") == yes);
+	// Not of the syntax: an empty line, a "\" not escaping "$" or "\".
+	CHECK(ldap::case_ignore_list_match("a$$b", "a$$b") == undefined);
+	CHECK(ldap::case_ignore_list_match("a$", "a$") == undefined);
+	CHECK(ldap::case_ignore_list_match("", "") == undefined);
+	CHECK(ldap::case_ignore_list_match(R"(a\b)", R"(a\b)") == undefined);
+	CHECK(ldap::case_ignore_list_match(R"(a\2)", R"(a\2)") == undefined);
+	CHECK(ldap::case_ignore_list_match("\xFF", "\xFF") == undefined);
+
+	const auto sub = [](std::string_view value, std::string_view assertion) {
+		return ldap::match("caseIgnoreListSubstringsMatch", value, assertion);
+	};
+	CHECK(sub(a, "1234*") == yes);
+	CHECK(sub(a, "1234 main*usa") == yes);
+	CHECK(sub(a, "1234 main st. anytown*") == no);// the line separator is no character of the string
+	CHECK(sub(a, "1234*main*anytown*usa") == yes);
+	CHECK(sub(a, "*St.*") == yes);
+	CHECK(sub(a, "*St.Anytown*") == no);// a substring never spans two lines
+	CHECK(sub(a, "*St.$Anytown*") == no);
+	CHECK(sub(a, "*12345*") == yes);
+	CHECK(sub(a, "*usa") == yes);
+	CHECK(sub(a, "*ca 12345") == no);// final is in the last line
+	CHECK(sub(a, "Anytown*") == no);// initial is in the first line
+	CHECK(sub(a, "*anytown*main*") == no);// in order
+	CHECK(sub(a, "*main*st*usa") == yes);
+	CHECK(sub(b, "$1*") == yes);
+	CHECK(sub("abc", "ab*bc") == no);// initial and final overlap in one line
+	CHECK(sub("abc$abc", "ab*bc") == yes);
+	CHECK(sub("abcbc", "ab*bc") == yes);
+	CHECK(sub(a, "*") == yes);
+	CHECK(sub("a$$b", "*") == undefined);
+	CHECK(sub(a, "x") == undefined);// no ASTERISK
+	const std::array<std::string_view, 2> any{ "main", "anytown" };
+	CHECK(ldap::case_ignore_list_substrings_match(a, { .initial = "1234", .any = any, .final = "USA" }) == yes);
 }
 
 // ---------------------------------------------------------------- DNs
@@ -760,4 +1024,12 @@ TEST_CASE("schema: EQUALITY is parsed and inherited", "[matching][schema]")
 	const auto *no_rule = s.find_attribute("noRule");
 	REQUIRE(no_rule != nullptr);
 	CHECK(s.equality_of(*no_rule) == nullptr);
+}
+
+TEST_CASE("uniqueMemberMatch with a schema: the DNs by its rules", "[matching][dn][schema]")
+{
+	const auto s = ldap::server_schema::parse(schema_types, {});
+	CHECK(ldap::unique_member_match("exactCode=AB#'1'B", "exactCode=ab#'1'B", s) == no);
+	CHECK(ldap::unique_member_match("exactCode=AB#'1'B", "1.3.6.1.4.1.99999.1=AB#'1'B", s) == yes);
+	CHECK(ldap::unique_member_match("exactCode=AB#'1'B", "exactCode=AB#'0'B", s) == no);
 }

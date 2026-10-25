@@ -18,6 +18,12 @@
 //   with distinguishedNameMatch for every type (AVA values nested as DNs);
 // - distinguishedNameMatch is symmetric, also with a lookup that gives the
 //   names of one type different rules.
+// - objectIdentifierMatch, uniqueMemberMatch, generalizedTimeMatch,
+//   uuidMatch, bitStringMatch and caseIgnoreListMatch are symmetric; their
+//   ordering rules are never TRUE both ways nor TRUE for a value against
+//   itself or for equal instants; a value never fails to match itself
+//   (TRUE or Undefined), and objectIdentifierMatch is TRUE on a value
+//   against itself exactly when it is of the OID syntax.
 #include "jhetz/ldap/matching.hpp"
 
 #include "check.hpp"
@@ -105,6 +111,16 @@ void self_checks(std::string_view s)
 		}
 		check(ldap::match(rule, s, "*") == expected, "match(rule, s, *) == expected");
 	}
+	check((ldap::object_identifier_match(s, s) == match_result::true_value) == jhetz::ldap::detail::is_oid(s),
+	  "object_identifier_match(s, s) TRUE exactly for an OID");
+	for (const auto *const rule : { "generalizedTimeMatch", "uuidMatch", "bitStringMatch", "caseIgnoreListMatch" }) {
+		check(ldap::match(rule, s, s) != match_result::false_value, "match(rule, s, s) != FALSE");
+	}
+	for (const auto *const rule : { "generalizedTimeOrderingMatch", "uuidOrderingMatch" }) {
+		check(ldap::match(rule, s, s) != match_result::true_value, "ordering(s, s) != TRUE");
+	}
+	check(ldap::unique_member_match(s, s) != match_result::false_value, "unique_member_match(s, s) != FALSE");
+	(void)ldap::match("caseIgnoreListSubstringsMatch", s, "*" + std::string(s.substr(0, s.size() / 2)) + "*");
 	if (const auto d = ldap::dn::parse(s)) {
 		check(ldap::distinguished_name_match(*d, *d) != match_result::false_value,
 		  "distinguished_name_match(*d, *d) != match_result::false_value");
@@ -134,6 +150,25 @@ void pair_checks(std::string_view a, std::string_view b)
 	check(ldap::numeric_string_match(a, b) == ldap::numeric_string_match(b, a), "numeric_string_match symmetric");
 	check(ldap::telephone_number_match(a, b) == ldap::telephone_number_match(b, a), "telephone_number_match symmetric");
 	check(ldap::boolean_match(a, b) == ldap::boolean_match(b, a), "boolean_match symmetric");
+	for (const auto *const rule : { "objectIdentifierMatch",
+		   "uniqueMemberMatch",
+		   "generalizedTimeMatch",
+		   "uuidMatch",
+		   "bitStringMatch",
+		   "caseIgnoreListMatch" }) {
+		check(ldap::match(rule, a, b) == ldap::match(rule, b, a), "equality rule symmetric");
+	}
+	for (const auto *const rule : { "generalizedTimeOrderingMatch", "uuidOrderingMatch" }) {
+		const auto before = ldap::match(rule, a, b);
+		const auto after = ldap::match(rule, b, a);
+		check(before != match_result::true_value || after != match_result::true_value, "not a < b and b < a");
+	}
+	const auto same_time = ldap::generalized_time_match(a, b);
+	check(
+	  same_time != match_result::true_value || ldap::generalized_time_ordering_match(a, b) == match_result::false_value,
+	  "equal instants are not ordered");
+	const std::array<std::string_view, 1> any_list{ b };
+	(void)ldap::case_ignore_list_substrings_match(a, { .initial = b, .any = any_list, .final = b });
 	const std::array<std::string_view, 1> any{ b };
 	(void)ldap::case_ignore_substrings_match(a, { .initial = b, .any = any, .final = b });
 	const auto da = ldap::dn::parse(a);

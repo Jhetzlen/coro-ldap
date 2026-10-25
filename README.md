@@ -45,7 +45,9 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
 - Struct mapping, runtime schema validation, Active Directory time types
 - Matching rules as a server applies them (RFC 4517 with RFC 4518 string
   preparation: case folding, NFKC, insignificant spaces): caseIgnoreMatch,
-  caseExactMatch and the other string, integer and octet rules, and DN
+  caseExactMatch and the other string, integer and octet rules,
+  objectIdentifierMatch, uniqueMemberMatch, generalizedTimeMatch,
+  caseIgnoreListMatch, uuidMatch (RFC 4530), and DN
   comparison by each attribute's equality rule from the server schema
   (`ldap::dn`'s own `==` stays exact)
 - `std::pmr` allocators throughout, so a response can be decoded into an

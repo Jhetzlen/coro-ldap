@@ -172,10 +172,84 @@ struct substring_assertion
   -> match_result;
 [[nodiscard]] auto boolean_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result;
 
+// objectIdentifierMatch (2.5.13.0, RFC 4517 section 4.2.26): TRUE if both
+// values name the same OID. Values are of the OID syntax (RFC 4512 section
+// 1.4: a numericoid such as "2.5.4.3", no leading zeros, or a descriptor
+// such as "cn"). A descriptor is resolved to its OID through the schema
+// (an attribute type, then an object class), then RFC 4519's attribute type
+// names (`cn`, `commonName`); two numericoids compare exactly, two
+// descriptors that are the same name (ASCII case-insensitive) are TRUE.
+// Undefined if a value is not of the syntax, or if a descriptor nothing
+// resolves is compared with anything but itself (it may be another name of
+// the same OID: RFC 4517 makes an unrecognized descriptor Undefined).
+[[nodiscard]] auto object_identifier_match(std::string_view attribute_value, std::string_view assertion_value)
+  -> match_result;
+[[nodiscard]] auto object_identifier_match(std::string_view attribute_value,
+  std::string_view assertion_value,
+  const server_schema &schema) -> match_result;
+
+// bitStringMatch (2.5.13.16, RFC 4517 section 4.2.1) on the Bit String
+// syntax (section 3.3.2: `'0101'B`, the "B" in either case): the same bits,
+// the same number of them (the syntax has no named bit list).
+[[nodiscard]] auto bit_string_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result;
+
+// uniqueMemberMatch (2.5.13.23, RFC 4517 section 4.2.31) on the Name And
+// Optional UID syntax (section 3.3.21: an RFC 4514 DN, then optionally "#"
+// and a Bit String, `cn=Jane,o=Test#'0101'B`): the DNs match by
+// distinguishedNameMatch (as distinguished_name_match(a, b), or with the
+// schema's rules), and either neither value has a UID or both have the
+// same one (bitStringMatch). FALSE if either part is FALSE (a UID on one
+// side only is FALSE), else Undefined if the DNs compare Undefined. The DN
+// may hold "#" itself, unescaped: a value ending in "#" and a Bit String
+// whose text before the "#" parses as a DN has a UID (the last "#").
+[[nodiscard]] auto unique_member_match(std::string_view attribute_value, std::string_view assertion_value)
+  -> match_result;
+[[nodiscard]] auto unique_member_match(std::string_view attribute_value,
+  std::string_view assertion_value,
+  const server_schema &schema) -> match_result;
+
+// generalizedTimeMatch (2.5.13.27) and generalizedTimeOrderingMatch
+// (2.5.13.28), RFC 4517 sections 4.2.16 and 4.2.17, on the Generalized Time
+// syntax (section 3.3.13: `199412160532-0500`, minutes and seconds
+// optional, a fraction of the last unit given after "." or ",", "Z" or a
+// differential; no such date as February 31). The values are compared as
+// instants in UTC, exactly: "199412161032Z" is "199412160532-0500",
+// "1994121610.5Z" is "199412161030Z", a fraction of any length counts, and
+// a leap second (second 60) is its own instant, after second 59 and before
+// the next minute. Undefined for a value not of the syntax.
+[[nodiscard]] auto generalized_time_match(std::string_view attribute_value, std::string_view assertion_value)
+  -> match_result;
+[[nodiscard]] auto generalized_time_ordering_match(std::string_view attribute_value, std::string_view assertion_value)
+  -> match_result;
+
+// uuidMatch (1.3.6.1.1.16.2) and uuidOrderingMatch (1.3.6.1.1.16.3), RFC
+// 4530 sections 2.2 and 2.3: values in RFC 4122's string form
+// (`597ae2f6-16a6-1027-98f4-d28b5365dc14`, hex digits in either case),
+// compared as their 16 octets like octetStringMatch and
+// octetStringOrderingMatch. Undefined for any other form.
+[[nodiscard]] auto uuid_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result;
+[[nodiscard]] auto uuid_ordering_match(std::string_view attribute_value, std::string_view assertion_value)
+  -> match_result;
+
+// caseIgnoreListMatch (2.5.13.11, RFC 4517 section 4.2.9): values of the
+// Postal Address syntax (section 3.3.28: lines separated by "$", "\24" and
+// "\5C" for "$" and "\" in a line, no empty line), TRUE if they have the
+// same number of lines and the lines match by position by caseIgnoreMatch.
+// caseIgnoreListSubstringsMatch (2.5.13.12, section 4.2.10): the assertion
+// matched by caseIgnoreSubstringsMatch against the lines, with no substring
+// spanning two lines (initial in the first line, final in the last).
+// Undefined if a value or a line is not of the syntax or fails preparation.
+[[nodiscard]] auto case_ignore_list_match(std::string_view attribute_value, std::string_view assertion_value)
+  -> match_result;
+[[nodiscard]] auto case_ignore_list_substrings_match(std::string_view attribute_value,
+  const substring_assertion &assertion) -> match_result;
+
 // A rule by NAME (case-insensitive) or OID, as in an attribute type's
 // EQUALITY or an extensible match (RFC 4517 section 4.2): every rule above,
 // and distinguishedNameMatch (2.5.13.1, values in RFC 4514 form, compared as
-// distinguished_name_match(a, b) below). For the substrings rules the
+// distinguished_name_match(a, b) below). Rules that can use a schema
+// (objectIdentifierMatch, uniqueMemberMatch) are applied without one here;
+// call their schema overloads for that. For the substrings rules the
 // assertion value is in the Substring Assertion syntax (RFC 4517 section
 // 3.3.30: `initial*any*final`, "*" and "\" escaped as \2A and \5C). An
 // unknown rule, or one this library does not implement, gives Undefined
@@ -242,8 +316,9 @@ namespace detail {
 // not know or that declares none. An RFC 4519 name the schema does not list
 // (`userid` when it lists only `uid`) takes the rule of its OID's
 // definition. A rule match() does not implement gives
-// Undefined. Types are the same when they name the same definition in the
-// schema.
+// Undefined. An objectIdentifierMatch value resolves its descriptors through
+// the schema, and a uniqueMemberMatch value's DN uses the schema's rules. Types are the same when they name the same
+// definition in the schema.
 [[nodiscard]] auto distinguished_name_match(const dn &attribute_value,
   const dn &assertion_value,
   const server_schema &schema) -> match_result;
