@@ -164,6 +164,14 @@ namespace {
 
 	auto parse_definition(std::string_view text) -> result<definition>
 	{
+		// RFC 4512 section 4.1: a definition is ASCII but for its qdstrings
+		// (NAME, DESC), which are UTF-8 (QUTF8, section 1.4); the \27 and
+		// \5C escapes are ASCII, so the whole text must be UTF-8. A
+		// definition that is not fails like any other syntax error.
+		if (const std::size_t bad = detail::invalid_utf8_offset(text); bad != std::string_view::npos) {
+			return fail(client_errc::decode_error,
+			  detail::format("schema: not valid UTF-8 (ill-formed sequence at offset {})", bad));
+		}
 		lexer lx(text);
 		auto t = lx.next();
 		if (!t) {

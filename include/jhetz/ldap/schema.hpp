@@ -20,7 +20,9 @@
 // keystring or X- extension name (a "{len}" spaced from the OID is one) is
 // skipped (the names of those skipped for their SYNTAX are remembered, see
 // skipped_for_syntax); NAMEs that are not valid descriptors are dropped
-// (they could never be looked up).
+// (they could never be looked up). A definition that is not well-formed
+// UTF-8 is skipped too: RFC 4512 qdstrings (NAME, DESC) are UTF-8 and the
+// rest of the grammar is ASCII.
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"

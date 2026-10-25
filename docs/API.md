@@ -313,7 +313,8 @@ itself needs only ICU.
   newSuperior, `rename(entry, new_rdn, delete_old_rdn = true)` keeps the
   parent; both build the ModifyDNRequest for `modify_dn`, on
   `sync::connection` too), `compare` (`result<bool>`), `extended`,
-  `who_am_i` (RFC 4532) and `password_modify` (RFC 3062: returns the
+  `who_am_i` (RFC 4532; an authzId that is not UTF-8 is
+  conversion_failed) and `password_modify` (RFC 3062: returns the
   server-generated password, if any), each taking a params aggregate
   with `.controls` (that operation's control list, see controls.hpp
   below) and `.timeout` (`extended` refuses the StartTLS name with
@@ -553,8 +554,9 @@ itself needs only ICU.
   the negative intervals (maxPwdAge, lockoutDuration; `ad::forever` for
   -9223372036854775808). `std::int64_t` members read any 906 attribute raw.
 - `jhetz/ldap/schema.hpp` (#13): runtime schema validation. A lenient
-  RFC 4512 parser for the subschema's attributeTypes / objectClasses,
-  `server_schema` (`syntax_of()` and `equality_of()` follow SUP to the
+  RFC 4512 parser for the subschema's attributeTypes / objectClasses
+  (a definition that does not parse, or is not UTF-8, is skipped and
+  counted), `server_schema` (`syntax_of()` and `equality_of()` follow SUP to the
   inherited SYNTAX and EQUALITY), `validate<T>(schema)` listing every issue (unknown
   attribute or object class, syntax the member's type cannot read, a
   writable member on a NO-USER-MODIFICATION attribute; single member on a

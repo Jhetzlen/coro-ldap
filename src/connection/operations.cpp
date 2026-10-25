@@ -1,4 +1,5 @@
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/mapping.hpp"
 
 #include "impl.hpp"
 
@@ -295,7 +296,17 @@ auto connection::who_am_i(extended_controls controls) -> capy::task<result<std::
 	if (!r) {
 		co_return std::unexpected(std::move(r.error()));
 	}
-	co_return r->value ? std::string(*r->value) : std::string();
+	if (!r->value) {
+		co_return std::string();
+	}
+	// The authzId is an LDAPString (RFC 4532 section 2.2, RFC 4511 section
+	// 4.1.2): UTF-8, checked as the mapping checks a decoded string.
+	if (const std::size_t bad = detail::invalid_utf8_offset(*r->value); bad != std::string_view::npos) {
+		error e = detail::utf8_conversion_error(bad);
+		e.context.insert(0, "who_am_i authzId: ");
+		co_return std::unexpected(std::move(e));
+	}
+	co_return std::string(*r->value);
 }
 
 }// namespace jhetz::ldap

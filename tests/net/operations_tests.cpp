@@ -362,6 +362,28 @@ TEST_CASE("operations: extended operations and who am I", "[net][operations]")
 	CHECK(m.log.received[1] == ldap::message{ 2, ldap::extended_request{ ldap::who_am_i_oid } });
 }
 
+// The authzId is an LDAPString (RFC 4532 section 2.2): UTF-8, checked as
+// a mapped string value is; the connection stays usable.
+TEST_CASE("operations: who am I with an authzId that is not UTF-8", "[net][operations]")
+{
+	mock_ldap m;
+	m.serve(
+	  { answer({ ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, "u:caf\xE9" } } }),
+		answer({ ldap::message{
+		  2, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, "u:caf\xC3\xA9 \xE6\x97\xA5" } } }) });
+
+	auto bad = m.run(m.conn.who_am_i());
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(bad.error().code == client_errc::conversion_failed);
+	CHECK(bad.error().context == "who_am_i authzId: not valid UTF-8 (ill-formed sequence at offset 5)");
+	CHECK(m.conn.is_open());
+
+	auto good = m.run(m.conn.who_am_i());
+	REQUIRE(good.has_value());
+	CHECK(*good == "u:caf\xC3\xA9 \xE6\x97\xA5");
+	m.check_server();
+}
+
 TEST_CASE("operations: extended() refuses StartTLS before sending", "[net][operations]")
 {
 	mock_ldap m;

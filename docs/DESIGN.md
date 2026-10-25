@@ -36,7 +36,12 @@ this document is updated.
   reports a string member on a binary syntax; the wire layer (`ldap::entry`,
   `partial_attribute`) keeps values as raw octets (section 10). Binary
   values (`ldap::binary`, `jpegPhoto`, `;binary`) and `\xx`-escaped octets
-  stay raw bytes.
+  stay raw bytes. Other server text is checked the same way where the API
+  turns it into a string: `who_am_i()` fails with `conversion_failed` on
+  an authzId that is not UTF-8 (an LDAPString), and a schema definition
+  that is not UTF-8 (RFC 4512 qdstrings) is skipped like any other that
+  does not parse. The genPasswd of `password_modify` is an OCTET STRING
+  and stays raw.
 
 ## Decisions
 

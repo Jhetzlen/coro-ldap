@@ -332,7 +332,9 @@ class connection
 	// with encode_error before anything is sent; use start_tls().
 	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
 	// The authorization identity of this connection (RFC 4532): "dn:<dn>",
-	// "u:<user>", or "" when anonymous.
+	// "u:<user>", or "" when anonymous. An authzId that is not well-formed
+	// UTF-8 (an LDAPString, RFC 4511 section 4.1.2) fails with
+	// conversion_failed, as a mapped string value does.
 	auto who_am_i(extended_controls controls = {}) -> boost::capy::task<result<std::string>>;
 	// Changes a password (RFC 3062). Returns the password the server
 	// generated (genPasswd) when new_password was not given, else nullopt.

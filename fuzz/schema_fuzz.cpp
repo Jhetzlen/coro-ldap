@@ -3,9 +3,10 @@
 //
 // For any input it must not crash, and:
 // - a rejected definition fails with decode_error;
-// - an accepted one has a non-empty OID, and a SYNTAX that is a numeric
-//   OID (the input's noidlen without its "{" 1*DIGIT "}", the only length
-//   accepted; a length apart from the OID fails as a keyword);
+// - an accepted one is well-formed UTF-8 (RFC 4512 qdstrings), has a
+//   non-empty OID, and a SYNTAX that is a numeric OID (the input's noidlen
+//   without its "{" 1*DIGIT "}", the only length accepted; a length apart
+//   from the OID fails as a keyword);
 // - the object class grammar is the same, but SYNTAX is not checked;
 // - server_schema::parse of the input (as both an attribute type and an
 //   object class) finds what parsed by OID and every NAME, and counts
@@ -30,6 +31,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 	if (!a) {
 		check(a.error().code == ldap::client_errc::decode_error, "a.error().code == ldap::client_errc::decode_error");
 	} else {
+		check(ldap::detail::is_valid_utf8(text), "ldap::detail::is_valid_utf8(text)");
 		check(!a->oid.empty(), "!a->oid.empty()");
 		check(!a->syntax || ldap::detail::is_numericoid(*a->syntax),
 		  "!a->syntax || ldap::detail::is_numericoid(*a->syntax)");

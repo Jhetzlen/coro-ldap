@@ -144,6 +144,39 @@ TEST_CASE("schema: unparseable definitions are skipped", "[schema]")
 	CHECK(ldap::parse_attribute_type("( 1.2 name 'lower' single-value )")->single_value);
 }
 
+// RFC 4512 qdstrings (NAME, DESC) are UTF-8 (QUTF8) and the rest of the
+// grammar is ASCII: a definition that is not well-formed UTF-8 is skipped
+// like any other that does not parse, the rest of the schema kept.
+TEST_CASE("schema: a definition that is not UTF-8 is skipped", "[schema][rfc]")
+{
+	const std::pmr::vector<std::pmr::string> types{
+		"( 1.2.3 NAME 'ok' DESC 'Größe, 日本' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+		"( 1.2.4 NAME 'badDesc' DESC 'caf\xE9' )",// Latin-1, not UTF-8
+		"( 1.2.5 NAME 'overlong' DESC '\xC0\xAF' )",
+		"( 1.2.6 NAME 'surrogate' DESC '\xED\xA0\x80' )",
+		"( 1.2.7 NAME 'truncated' DESC '\xE6\x97' )",
+		"( 1.2.8 NAME 'bad\xFFname' )",
+		"( 1.2.9 NAME 'badSup' SUP cn\x80 )",
+	};
+	const std::pmr::vector<std::pmr::string> classes{
+		"( 2.5.6.0 NAME 'top' DESC 'top \xE2\x80\x94 the root' ABSTRACT )",
+		"( 1.2.10 NAME 'badClass' DESC '\xF5\x80\x80\x80' )",
+	};
+	const auto s = ldap::server_schema::parse(types, classes);
+	CHECK(s.attribute_count() == 1);
+	CHECK(s.find_attribute("ok") != nullptr);
+	CHECK(s.find_attribute("badDesc") == nullptr);
+	CHECK(s.find_object_class("top") != nullptr);
+	CHECK(s.find_object_class("badClass") == nullptr);
+	CHECK(s.skipped() == 7);
+
+	const auto bad = ldap::parse_attribute_type("( 1.2.4 NAME 'badDesc' DESC 'caf\xE9' )");
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(bad.error().code == ldap::client_errc::decode_error);
+	CHECK(bad.error().context == "schema: not valid UTF-8 (ill-formed sequence at offset 32)");
+	CHECK_FALSE(ldap::parse_object_class("( 1.2.10 NAME 'x' DESC '\xF5\x80\x80\x80' )").has_value());
+}
+
 // RFC 4512 section 4.1.2: SYNTAX is a noidlen, a numericoid with an
 // optional {len}. Anything else is the server's own text (it could never
 // match a syntax the mapping knows): the definition is skipped, and the
