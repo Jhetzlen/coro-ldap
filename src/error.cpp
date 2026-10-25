@@ -98,6 +98,8 @@ namespace {
 			return "affects multiple DSAs";
 		case errc::other:
 			return "other";
+		case errc::virtual_list_view_error:
+			return "virtual list view error";
 		case errc::assertion_failed:
 			return "assertion failed";
 		case errc::e_sync_refresh_required:

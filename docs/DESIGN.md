@@ -232,7 +232,8 @@ before anything is sent.
 
 Typed controls (step 6, `controls.hpp`): `paged`, `manage_dsa_it`,
 `relax_rules`, `proxied_authorization`, `server_side_sort`, `assertion`,
-`pre_read`, `post_read`, `sync_request` and `matched_values`, plus the raw wire
+`pre_read`, `post_read`, `sync_request`, `matched_values` and
+`virtual_list_view`, plus the raw wire
 `control {type, criticality, value}` as the escape hatch. Where each may be
 sent is fixed by its specification, so it is checked at compile time
 (goal 1) from one table, `control_rule_of<T>` (name, source, operations;
@@ -244,6 +245,7 @@ sent is fixed by its specification, so it is checked at compile time
 | `server_side_sort` | search | RFC 2891 section 1.1 |
 | `sync_request` | search | RFC 4533 section 2.2 |
 | `matched_values` | search | RFC 3876 section 2 |
+| `virtual_list_view` | search | draft-ietf-ldapext-ldapv3-vlv-09 section 6.1 |
 | `pre_read` | modify, modify DN, delete | RFC 4527 section 3.1 |
 | `post_read` | add, modify, modify DN | RFC 4527 section 3.2 |
 | `relax_rules` | add, modify, modify DN, delete | draft-zeilenga-ldap-relax-03 section 2 |
@@ -323,6 +325,34 @@ server's bad control fails only the caller who asks for it.
   `max_filter_elements` budget). OpenLDAP implements it in slapd itself;
   it leaves out an attribute with no matching value, where RFC 3876 returns
   it with an empty set.
+- Virtual List View (draft-ietf-ldapext-ldapv3-vlv-09):
+  `virtual_list_view{.before_count, .after_count, .target, .context_id,
+  .critical}`, the target a `std::variant` of `vlv_by_offset{.offset,
+  .content_count}` and `vlv_greater_than_or_equal{.value}` (the CHOICE
+  byOffset / greaterThanOrEqual; the default is offset 1 of an unknown
+  count, the first entry). The contextID is a `std::optional<std::string>`:
+  the server's value goes back unchanged, an empty one included. Section
+  6.1 requires a sort control on the same SearchRequest, so
+  `append_controls` refuses a typed `virtual_list_view` without a sort
+  request control among the encoded ones (typed or raw), encode_error
+  before sending; a raw VLV control is not checked, as raw controls never
+  are. The SearchResultDone's VirtualListViewResponse is
+  `find_vlv_response()` -> `vlv_response{target_position, content_count,
+  result_code, context_id}` (the codec `encode_` / `decode_vlv_response`
+  is in `message.hpp` next to the sort result one), and resultCode 76 is
+  `errc::virtual_list_view_error` (section 6.2.1, no condition), whose
+  reason is the response's `result_code`. Unknown virtualListViewResult
+  values are kept: OpenLDAP 2.7 reports an offset beyond the list as 77,
+  not offsetRangeError (61). There is no connection helper (a
+  `search_paged`-like `search_vlv`): a window is one ordinary search,
+  stateless on the client, and what a caller needs besides the entries is
+  the response control, also when the search fails with 76, which
+  `search_stream` already gives (`controls()` keeps the SearchResultDone's
+  controls after an error); a helper would add a result type for no new
+  behaviour. OpenLDAP's sssvlv keeps each list's state until the
+  connection closes and refuses a new list past `sssvlv-maxperconn`
+  (default 5) per connection with busy (51), so a client scrolling one
+  list sends the contextID back.
 - Pre-read / post-read (RFC 4527): `pre_read{.attributes}` on modify /
   delete / modify DN, `post_read{.attributes}` on add / modify / modify DN
   (sections 3.1 and 3.2: nothing to pre-read before an add, nothing to
@@ -354,10 +384,12 @@ server's bad control fails only the caller who asks for it.
   side.
 
 The response codecs (`encode_` / `decode_sort_result`,
-`encode_` / `decode_read_entry`) live in `message.hpp` next to the paged
+`encode_` / `decode_vlv_response`, `encode_` / `decode_read_entry`) live
+in `message.hpp` next to the paged
 results one, so mock servers and the fuzzers use them too (the RFC 4533
 ones are in `content_sync.hpp`, with the request control's decoder for
-mock servers, and so is the matched values one, in `controls.hpp`).
+mock servers, and so are the matched values and VLV ones, in
+`controls.hpp`).
 Other request controls are only encoded (no decoder: the client never
 reads them). Errors from
 inside a response control's value name the control (`post-read: ber: ...
@@ -1075,7 +1107,7 @@ a caller match none, deliberately (test them by exact code).
 | `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required`, `security_layer_required` | `permission_denied` |
 | `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
 | `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url`, `string_prep_failed` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
-| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `assertion_failed`, `e_sync_refresh_required`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `no_password_method`, `internal_error` | everything else |
+| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `virtual_list_view_error`, `assertion_failed`, `e_sync_refresh_required`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `no_password_method`, `internal_error` | everything else |
 
 Choices worth knowing: `unauthenticated_bind` is `auth_failed` (an empty
 password on a login form is a failed login); `stronger_auth_required` and

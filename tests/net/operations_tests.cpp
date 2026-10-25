@@ -673,6 +673,74 @@ TEST_CASE("operations: matched values on a search", "[net][operations][controls]
 	CHECK(m.log.received.size() == 1);
 }
 
+TEST_CASE("operations: a virtual list view window", "[net][operations][controls]")
+{
+	mock_ldap m;
+	ldap::message window = done_msg(1);
+	window.controls.push_back(*ldap::encode_sort_result(ldap::sort_result{ 0 }));
+	window.controls.push_back(*ldap::encode_vlv_response({ 2, 3, 0, "ctx" }));
+	ldap::message out_of_range = done_msg(2, 76, "", "offset out of range");
+	out_of_range.controls.push_back(*ldap::encode_vlv_response({ 0, 3, 61, "ctx" }));
+	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"),
+				entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B"),
+				window }),
+	  answer({ out_of_range }) });
+
+	const ldap::server_side_sort by_cn{ .keys = { { .attribute = "cn" } } };
+	const ldap::virtual_list_view around_second{ .before_count = 1, .target = ldap::vlv_by_offset{ .offset = 2 } };
+	auto s = m.run(m.conn.search_stream(
+	  { .base = ldap::dn{ "ou=people,dc=example,dc=org" }, .controls = { by_cn, around_second } }));
+	REQUIRE(s.has_value());
+	std::vector<std::string> dns;
+	while (true) {
+		auto e = m.run(s->next());
+		REQUIRE(e.has_value());
+		if (!e->has_value()) {
+			break;
+		}
+		dns.emplace_back((*e)->dn);
+	}
+	CHECK(dns == std::vector<std::string>{ "uid=a,ou=people,dc=example,dc=org", "uid=b,ou=people,dc=example,dc=org" });
+	auto r = ldap::find_vlv_response(s->controls());
+	REQUIRE(r.has_value());
+	REQUIRE(r->has_value());
+	CHECK(**r == ldap::vlv_response{ 2, 3, 0, "ctx" });
+
+	// The next window sends the server's count and contextID back; the
+	// server refuses it with resultCode 76 and says why in the response
+	// control, which the stream keeps with the error.
+	const ldap::virtual_list_view beyond{ .target =
+											ldap::vlv_by_offset{ .offset = 9, .content_count = (*r)->content_count },
+		.context_id = std::string(*(*r)->context_id) };
+	auto s2 =
+	  m.run(m.conn.search_stream({ .base = ldap::dn{ "ou=people,dc=example,dc=org" }, .controls = { by_cn, beyond } }));
+	REQUIRE(s2.has_value());
+	auto failed = m.run(s2->next());
+	REQUIRE_FALSE(failed.has_value());
+	CHECK(failed.error().code == errc::virtual_list_view_error);
+	CHECK(failed.error().diagnostic == "offset out of range");
+	auto why = ldap::find_vlv_response(s2->controls());
+	REQUIRE(why.has_value());
+	REQUIRE(why->has_value());
+	CHECK((*why)->result_code == 61);
+	CHECK(m.conn.is_open());
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 2);
+	REQUIRE(m.log.received[0].controls.size() == 2);
+	CHECK(m.log.received[0].controls[0] == ldap::to_control(by_cn).value());
+	CHECK(ldap::decode_virtual_list_view(m.log.received[0].controls[1]).value() == around_second);
+	CHECK(ldap::decode_virtual_list_view(m.log.received[1].controls.at(1)).value() == beyond);
+
+	// Without a sort control nothing is sent.
+	auto alone = m.run(m.conn.search({ .controls = { around_second } }));
+	REQUIRE_FALSE(alone.has_value());
+	CHECK(alone.error().code == client_errc::encode_error);
+	CHECK_THAT(
+	  std::string(alone.error().context), ContainsSubstring("virtual_list_view needs a server_side_sort control"));
+	CHECK(m.log.received.size() == 2);
+}
+
 // ---------------------------------------------------------------- paged search
 
 namespace {

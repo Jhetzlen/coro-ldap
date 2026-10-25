@@ -70,6 +70,9 @@ static_assert(applies_to<ldap::sync_request>(search) && !applies_to<ldap::sync_r
 static_assert(applies_to<ldap::matched_values>(search) && !applies_to<ldap::matched_values>(modify)
 			  && !applies_to<ldap::matched_values>(compare) && !applies_to<ldap::matched_values>(extended));
 static_assert(!std::is_convertible_v<ldap::matched_values, ldap::compare_controls::value_type>);
+static_assert(applies_to<ldap::virtual_list_view>(search) && !applies_to<ldap::virtual_list_view>(modify)
+			  && !applies_to<ldap::virtual_list_view>(extended));
+static_assert(!std::is_convertible_v<ldap::virtual_list_view, ldap::del_controls::value_type>);
 static_assert(applies_to<ldap::pre_read>(modify) && applies_to<ldap::pre_read>(del)
 			  && applies_to<ldap::pre_read>(modify_dn) && !applies_to<ldap::pre_read>(add)
 			  && !applies_to<ldap::pre_read>(search));
@@ -381,7 +384,7 @@ TEST_CASE("matched values request control", "[controls][matched_values]")
 TEST_CASE("matched values items RFC 3876 excludes", "[controls][matched_values]")
 {
 	using ldap::filters::attr;
-	const auto refused = [](ldap::matched_values v) {
+	const auto refused = [](const ldap::matched_values &v) {
 		auto c = ldap::to_control(v);
 		REQUIRE_FALSE(c.has_value());
 		return c.error();
@@ -495,6 +498,239 @@ TEST_CASE("decode_matched_values", "[controls][matched_values]")
 	CHECK(context_of(with_value(ldap::matched_values_oid, "30 03 87 02 63")).starts_with("matched values: ber: "));
 	CHECK(
 	  context_of(with_value(ldap::matched_values_oid, "30 04 04 02 63 6E")).starts_with("matched values: filter: "));
+}
+
+// ---------------------------------------------------------------- virtual list view (draft-ietf-ldapext-ldapv3-vlv-09)
+
+namespace {
+
+// The 8-byte contextID slapd's sssvlv returned in the captures below.
+constexpr std::string_view sssvlv_context_hex = "A0 1D 00 78 F7 7F 00 00";
+auto sssvlv_context() -> std::string
+{
+	const auto b = from_hex(sssvlv_context_hex);
+	return std::string(ldap::detail::as_text(b));
+}
+
+}// namespace
+
+TEST_CASE("virtual list view request control", "[controls][vlv]")
+{
+	const auto first = ldap::to_control(ldap::virtual_list_view{});
+	REQUIRE(first.has_value());
+	CHECK(first->type == ldap::vlv_request_oid);
+	CHECK(first->type == "2.16.840.1.113730.3.4.9");
+	CHECK_FALSE(first->criticality);
+	// beforeCount 0, afterCount 0, byOffset [0] { offset 1, contentCount 0 }: the first entry.
+	CHECK(value_hex(*first) == "30 0E 02 01 00 02 01 00 A0 06 02 01 01 02 01 00");
+
+	// What libldap sends for ldapsearch -E 'vlv=1/1/5/0', then for the next
+	// window with the server's count and contextID.
+	const auto by_offset = ldap::to_control(
+	  ldap::virtual_list_view{ .before_count = 1, .after_count = 1, .target = ldap::vlv_by_offset{ .offset = 5 } });
+	REQUIRE(by_offset.has_value());
+	CHECK(value_hex(*by_offset) == "30 0E 02 01 01 02 01 01 A0 06 02 01 05 02 01 00");
+	const auto next = ldap::to_control(ldap::virtual_list_view{ .before_count = 1,
+	  .after_count = 1,
+	  .target = ldap::vlv_by_offset{ .offset = 6, .content_count = 250 },
+	  .context_id = sssvlv_context(),
+	  .critical = true });
+	REQUIRE(next.has_value());
+	CHECK(next->criticality);
+	CHECK(value_hex(*next)
+		  == "30 19 02 01 01 02 01 01 A0 07 02 01 06 02 02 00 FA 04 08 " + std::string(sssvlv_context_hex));
+
+	// greaterThanOrEqual [1] AssertionValue (ldapsearch -E 'vlv=0/4:10200'),
+	// UTF-8 passed through, and an empty contextID is still sent.
+	const auto typedown = ldap::to_control(
+	  ldap::virtual_list_view{ .after_count = 4, .target = ldap::vlv_greater_than_or_equal{ .value = "10200" } });
+	REQUIRE(typedown.has_value());
+	CHECK(value_hex(*typedown) == "30 0D 02 01 00 02 01 04 81 05 31 30 32 30 30");
+	const auto utf8 = ldap::to_control(ldap::virtual_list_view{
+	  .target = ldap::vlv_greater_than_or_equal{ .value = "\xC3\x85" }, .context_id = std::string() });
+	REQUIRE(utf8.has_value());
+	CHECK(value_hex(*utf8) == "30 0C 02 01 00 02 01 00 81 02 C3 85 04 00");
+
+	const auto refused = [](const ldap::virtual_list_view &v) {
+		auto c = ldap::to_control(v);
+		REQUIRE_FALSE(c.has_value());
+		CHECK(c.error().code == ldap::client_errc::encode_error);
+		return std::string(c.error().context);
+	};
+	CHECK(refused({ .before_count = -1 }) == "virtual list view: beforeCount -1 is negative");
+	CHECK(refused({ .after_count = -2 }) == "virtual list view: afterCount -2 is negative");
+	CHECK(
+	  refused({ .target = ldap::vlv_by_offset{ .offset = 0 } }) == "virtual list view: offset 0 outside 1..2147483647");
+	CHECK(refused({ .target = ldap::vlv_by_offset{ .offset = 1, .content_count = -1 } })
+		  == "virtual list view: contentCount -1 is negative");
+}
+
+TEST_CASE("decode_virtual_list_view", "[controls][vlv]")
+{
+	const ldap::virtual_list_view all[] = {
+		{},
+		{ .before_count = 9,
+		  .after_count = 10,
+		  .target = ldap::vlv_by_offset{ .offset = 53424, .content_count = 78564 },
+		  .context_id = sssvlv_context(),
+		  .critical = true },
+		{ .after_count = 19, .target = ldap::vlv_greater_than_or_equal{ .value = "B" } },
+		{ .target = ldap::vlv_greater_than_or_equal{}, .context_id = std::string() },
+	};
+	for (const auto &v : all) {
+		const auto c = ldap::to_control(v);
+		REQUIRE(c.has_value());
+		CHECK(ldap::decode_virtual_list_view(*c).value() == v);
+	}
+	// Unknown trailing elements are skipped.
+	CHECK(ldap::decode_virtual_list_view(
+			with_value(ldap::vlv_request_oid, "30 14 02 01 00 02 01 00 A0 09 02 01 01 02 01 00 01 01 00 02 01 07"))
+			.value()
+		  == ldap::virtual_list_view{});
+
+	const auto context_of = [](const ldap::control &bad) {
+		auto r = ldap::decode_virtual_list_view(bad);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::protocol_error);
+		return std::string(r.error().context);
+	};
+	CHECK(
+	  context_of(ldap::control{ "1.2.3" }) == "virtual list view: control type is 1.2.3, not 2.16.840.1.113730.3.4.9");
+	CHECK(context_of(ldap::control{ ldap::vlv_request_oid }) == "virtual list view: control has no value");
+	CHECK(context_of(with_value(ldap::vlv_request_oid, "30 0E 02 01 00 02 01 00 A0 06 02 01 00 02 01 00"))
+		  == "virtual list view: offset 0 outside 1..2147483647 at offset 10");
+	CHECK(context_of(with_value(ldap::vlv_request_oid, "30 0E 02 01 FF 02 01 00 A0 06 02 01 01 02 01 00"))
+		  == "virtual list view: beforeCount -1 outside 0..2147483647 at offset 2");
+	CHECK(context_of(with_value(ldap::vlv_request_oid, "30 08 02 01 00 02 01 00 82 00"))
+		  == "virtual list view: target: expected [CONTEXT 0] or [CONTEXT 1] at offset 8");
+	CHECK(context_of(with_value(ldap::vlv_request_oid, "30 06 02 01 00 02 01 00"))
+		  == "virtual list view: target: expected [CONTEXT 0] or [CONTEXT 1] at offset 8");
+	CHECK(context_of(with_value(ldap::vlv_request_oid, "30 08 02 01 00 02 01 00 81 00 00"))
+		.starts_with("virtual list view: ber: "));
+	CHECK(context_of(with_value(ldap::vlv_request_oid, "30 07 02 01 00 02 01 00 81"))
+		.starts_with("virtual list view: ber: "));
+}
+
+TEST_CASE("virtual list view response control", "[controls][vlv]")
+{
+	// slapd's answer to 1/1/5/0 over 250 sorted entries.
+	const ldap::vlv_response at5{ 5, 250, 0, sssvlv_context() };
+	const auto c = ldap::encode_vlv_response(at5);
+	REQUIRE(c.has_value());
+	CHECK(c->type == ldap::vlv_response_oid);
+	CHECK(c->type == "2.16.840.1.113730.3.4.10");
+	CHECK(value_hex(*c) == "30 14 02 01 05 02 02 00 FA 0A 01 00 04 08 " + std::string(sssvlv_context_hex));
+	const auto back = ldap::decode_vlv_response(*c);
+	REQUIRE(back.has_value());
+	CHECK(*back == at5);
+	CHECK(back->is_success());
+	REQUIRE(back->context_id.has_value());
+	CHECK(std::string_view(*back->context_id) == sssvlv_context());
+
+	// No entry >= the value: targetPosition is contentCount + 1 (section 5).
+	const auto past = ldap::decode_vlv_response(with_value(
+	  ldap::vlv_response_oid, "30 15 02 02 00 FB 02 02 00 FA 0A 01 00 04 08 " + std::string(sssvlv_context_hex)));
+	REQUIRE(past.has_value());
+	CHECK(past->target_position == 251);
+	CHECK(past->content_count == 250);
+	// An offset beyond the list: slapd's resultCode 76 comes with
+	// virtualListViewResult 77, not the draft's offsetRangeError (61).
+	const auto range = ldap::decode_vlv_response(with_value(
+	  ldap::vlv_response_oid, "30 14 02 01 00 02 02 00 FA 0A 01 4D 04 08 " + std::string(sssvlv_context_hex)));
+	REQUIRE(range.has_value());
+	CHECK(range->result_code == 77);
+	CHECK_FALSE(range->is_success());
+
+	// No contextID, an empty one, unknown trailing elements, unknown codes.
+	CHECK(value_hex(ldap::encode_vlv_response({ 1, 10 }, true).value()) == "30 09 02 01 01 02 01 0A 0A 01 00");
+	const auto none = ldap::decode_vlv_response(with_value(ldap::vlv_response_oid, "30 09 02 01 01 02 01 0A 0A 01 3C"));
+	REQUIRE(none.has_value());
+	CHECK(*none == ldap::vlv_response{ 1, 10, 60 });
+	CHECK_FALSE(none->context_id.has_value());
+	const auto empty =
+	  ldap::decode_vlv_response(with_value(ldap::vlv_response_oid, "30 0E 02 01 01 02 01 0A 0A 01 00 04 00 01 01 FF"));
+	REQUIRE(empty.has_value());
+	CHECK(*empty == ldap::vlv_response{ 1, 10, 0, "" });
+	CHECK(value_hex(ldap::encode_vlv_response(*empty).value()) == "30 0B 02 01 01 02 01 0A 0A 01 00 04 00");
+
+	auto negative = ldap::encode_vlv_response({ -1, 10 });
+	REQUIRE_FALSE(negative.has_value());
+	CHECK(negative.error().code == ldap::client_errc::encode_error);
+	CHECK(negative.error().context == "vlv response: targetPosition -1 or contentCount 10 is negative");
+
+	const auto context_of = [](const ldap::control &bad) {
+		auto r = ldap::decode_vlv_response(bad);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::protocol_error);
+		return std::string(r.error().context);
+	};
+	CHECK(context_of(ldap::control{ "1.2.3" }) == "vlv response: control type is 1.2.3, not 2.16.840.1.113730.3.4.10");
+	CHECK(context_of(ldap::control{ ldap::vlv_response_oid }) == "vlv response: control has no value");
+	CHECK(context_of(with_value(ldap::vlv_response_oid, "30 09 02 01 FF 02 01 0A 0A 01 00"))
+		  == "vlv response: message: targetPosition -1 outside 0..2147483647 at offset 2");
+	CHECK(context_of(with_value(ldap::vlv_response_oid, "30 06 02 01 01 02 01 0A")).starts_with("vlv response: ber: "));
+	CHECK(context_of(with_value(ldap::vlv_response_oid, "30 09 02 01 01 02 01 0A 02 01 00"))
+		  == "vlv response: ber: reading ENUMERATED: expected [UNIVERSAL 10], got [UNIVERSAL 2] at offset 8");
+	CHECK(context_of(with_value(ldap::vlv_response_oid, "30 09 02 01 01 02 01 0A 0A 01 00 00"))
+		.starts_with("vlv response: ber: "));
+}
+
+TEST_CASE("find_vlv_response", "[controls][vlv][pmr]")
+{
+	const std::pmr::vector<ldap::control> none{ *ldap::encode_sort_result(ldap::sort_result{ 0 }) };
+	CHECK_FALSE(ldap::find_vlv_response(none).value().has_value());
+
+	jhetz::ldap::test::counting_resource mr;
+	const std::pmr::vector<ldap::control> some{ *ldap::encode_sort_result(ldap::sort_result{ 0 }),
+		*ldap::encode_vlv_response({ 3, 100, 0, "ctx" }) };
+	auto r = ldap::find_vlv_response(some, &mr);
+	REQUIRE(r.has_value());
+	REQUIRE(r->has_value());
+	CHECK(**r == ldap::vlv_response{ 3, 100, 0, "ctx" });
+	CHECK((*r)->get_allocator().resource() == &mr);
+	CHECK((*r)->context_id->get_allocator().resource() == &mr);
+
+	const std::pmr::vector<ldap::control> bad{ ldap::control{ ldap::vlv_response_oid, false, "x" } };
+	auto b = ldap::find_vlv_response(bad);
+	REQUIRE_FALSE(b.has_value());
+	CHECK(b.error().code == ldap::cond::protocol_error);
+
+	// Allocator-extended copies keep the given resource, plain copies use the default one.
+	jhetz::ldap::test::counting_resource other;
+	const ldap::vlv_response copied(**r, ldap::vlv_response::allocator_type(&other));
+	CHECK(copied == **r);
+	CHECK(copied.context_id->get_allocator().resource() == &other);
+	const ldap::vlv_response plain(copied);// NOLINT(performance-unnecessary-copy-initialization): the copy is tested
+	CHECK(plain.get_allocator().resource() == std::pmr::get_default_resource());
+	ldap::vlv_response assigned{ ldap::vlv_response::allocator_type(&other) };
+	assigned = **r;
+	CHECK(assigned == **r);
+	CHECK(assigned.context_id->get_allocator().resource() == &other);
+}
+
+TEST_CASE("a virtual list view needs a sort control", "[controls][vlv]")
+{
+	const ldap::server_side_sort by_uid_number{ .keys = { { .attribute = "uidNumber" } } };
+	std::pmr::vector<ldap::control> out;
+	auto alone = ldap::append_controls(ldap::search_controls{ ldap::virtual_list_view{} }, out);
+	REQUIRE_FALSE(alone.has_value());
+	CHECK(alone.error().code == ldap::client_errc::encode_error);
+	CHECK(std::string(alone.error().context)
+		  == "virtual_list_view needs a server_side_sort control on the same search (draft-ietf-ldapext-ldapv3-vlv-09 "
+			 "section 6.1)");
+
+	// The order does not matter, and a raw sort control counts.
+	out.clear();
+	CHECK(ldap::append_controls(ldap::search_controls{ ldap::virtual_list_view{}, by_uid_number }, out).has_value());
+	CHECK(out.size() == 2);
+	out.clear();
+	CHECK(ldap::append_controls(
+	  ldap::request_controls{ ldap::control{ ldap::sort_request_oid, true, "raw" }, ldap::virtual_list_view{} }, out)
+		.has_value());
+	// A raw VLV control is not checked.
+	out.clear();
+	CHECK(ldap::append_controls(ldap::search_controls{ ldap::control{ ldap::vlv_request_oid, false, "raw" } }, out)
+		.has_value());
 }
 
 // ---------------------------------------------------------------- pre-read / post-read (RFC 4527)
@@ -729,6 +965,45 @@ TEST_CASE("server side sort controls match OpenLDAP", "[controls][sort][openldap
 	CHECK(**sorted == ldap::sort_result{ 0 });
 	// ... which is what encode_sort_result produces.
 	CHECK(ldap::encode_sort_result(ldap::sort_result{ 0 }).value() == done.controls.at(0));
+}
+
+TEST_CASE("virtual list view controls match OpenLDAP", "[controls][vlv][openldap]")
+{
+	// ldapsearch -E '!sss=uidNumber' -E 'vlv=1/1/5/0': libldap's SearchRequest, byte for byte.
+	ldap::message search{ 2,
+		ldap::search_request{ "ou=people,dc=example,dc=org",
+		  ldap::search_scope::whole_subtree,
+		  ldap::filters::attr("objectClass") == "posixAccount",
+		  { "uid" } } };
+	REQUIRE(ldap::append_controls(
+	  ldap::search_controls{ ldap::server_side_sort{ .keys = { { .attribute = "uidNumber" } }, .critical = true },
+		ldap::virtual_list_view{ .before_count = 1, .after_count = 1, .target = ldap::vlv_by_offset{ .offset = 5 } } },
+	  search.controls)
+		.has_value());
+	CHECK(message_hex(search)
+		  == "30 81 B2 02 01 02 63 50 04 1B 6F 75 3D 70 65 6F 70 6C 65 2C 64 63 3D 65 78 61 6D 70 6C 65 2C 64 63 3D 6F 72"
+			 " 67 0A 01 02 0A 01 00 02 01 00 02 01 00 01 01 00 A3 1B 04 0B 6F 62 6A 65 63 74 43 6C 61 73 73 04 0C 70 6F"
+			 " 73 69 78 41 63 63 6F 75 6E 74 30 05 04 03 75 69 64"
+			 " A0 5B"
+			 " 30 2C 04 16 31 2E 32 2E 38 34 30 2E 31 31 33 35 35 36 2E 31 2E 34 2E 34 37 33 01 01 FF"
+			 " 04 0F 30 0D 30 0B 04 09 75 69 64 4E 75 6D 62 65 72"
+			 " 30 2B 04 17 32 2E 31 36 2E 38 34 30 2E 31 2E 31 31 33 37 33 30 2E 33 2E 34 2E 39"
+			 " 04 10 30 0E 02 01 01 02 01 01 A0 06 02 01 05 02 01 00");
+
+	// slapd's SearchResultDone: the sort result, then the VLV response.
+	const auto done = decoded(
+	  "30 63 02 01 02 65 07 0A 01 00 04 00 04 00 A0 55 30 1F 04 16 31 2E 32 2E 38 34 30 2E 31 31 33 35 35 36 2E 31 2E"
+	  " 34 2E 34 37 34 04 05 30 03 0A 01 00 30 32 04 18 32 2E 31 36 2E 38 34 30 2E 31 2E 31 31 33 37 33 30 2E 33 2E 34"
+	  " 2E 31 30 04 16 30 14 02 01 05 02 02 00 FA 0A 01 00 04 08 A0 1D 00 78 F7 7F 00 00");
+	auto sorted = ldap::find_sort_result(done.controls);
+	REQUIRE(sorted.has_value());
+	REQUIRE(sorted->has_value());
+	CHECK((*sorted)->is_success());
+	auto window = ldap::find_vlv_response(done.controls);
+	REQUIRE(window.has_value());
+	REQUIRE(window->has_value());
+	CHECK(**window == ldap::vlv_response{ 5, 250, 0, sssvlv_context() });
+	CHECK(ldap::encode_vlv_response(**window).value() == done.controls.at(1));
 }
 
 TEST_CASE("assertion and pre/post-read controls match OpenLDAP", "[controls][assertion][read_entry][openldap]")

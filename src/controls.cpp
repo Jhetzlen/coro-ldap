@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <utility>
@@ -230,6 +232,151 @@ namespace {
 		return out;
 	}
 
+	// ---------------------------------------------------------------- virtual list view
+
+	constexpr std::string_view vlv_name = "virtual list view";
+	constexpr std::int64_t max_int = std::numeric_limits<std::int32_t>::max();
+
+	// VirtualListViewRequest ::= SEQUENCE { beforeCount INTEGER (0..maxInt),
+	//   afterCount INTEGER (0..maxInt), target CHOICE { byOffset [0] SEQUENCE {
+	//   offset INTEGER (1 .. maxInt), contentCount INTEGER (0 .. maxInt) },
+	//   greaterThanOrEqual [1] AssertionValue }, contextID OCTET STRING OPTIONAL }
+	auto encode_vlv(const virtual_list_view &v, std::pmr::memory_resource *mr) -> result<control>
+	{
+		const auto negative = [](std::string_view field, std::int32_t value) {
+			return fail(client_errc::encode_error, detail::format("{}: {} {} is negative", vlv_name, field, value));
+		};
+		if (v.before_count < 0) {
+			return negative("beforeCount", v.before_count);
+		}
+		if (v.after_count < 0) {
+			return negative("afterCount", v.after_count);
+		}
+		if (const auto *o = std::get_if<vlv_by_offset>(&v.target)) {
+			if (o->offset < 1) {
+				return fail(client_errc::encode_error,
+				  detail::format("{}: offset {} outside 1..{}", vlv_name, o->offset, max_int));
+			}
+			if (o->content_count < 0) {
+				return negative("contentCount", o->content_count);
+			}
+		}
+		ber::writer w{ ber::writer::allocator_type(mr) };
+		w.constructed(ber::tags::sequence, [&](ber::writer &s) {
+			s.integer(v.before_count);
+			s.integer(v.after_count);
+			if (const auto *o = std::get_if<vlv_by_offset>(&v.target)) {
+				s.constructed(ber::context(0, true), [&](ber::writer &by) {
+					by.integer(o->offset);
+					by.integer(o->content_count);
+				});
+			} else {
+				s.octet_string(std::get<vlv_greater_than_or_equal>(v.target).value, ber::context(1));
+			}
+			if (v.context_id) {
+				s.octet_string(*v.context_id);
+			}
+		});
+		return value_control(vlv_request_oid, v.critical, w, control::allocator_type(mr));
+	}
+
+	// An INTEGER in lo..maxInt.
+	auto read_count(ber::reader &r, std::int64_t lo, std::string_view what) -> result<std::int32_t>
+	{
+		const std::size_t at = r.offset();
+		auto v = r.read_integer();
+		if (!v) {
+			return std::unexpected(std::move(v.error()));
+		}
+		if (*v < lo || *v > max_int) {
+			return fail(client_errc::decode_error,
+			  detail::format("{} {} outside {}..{} at offset {}", what, *v, lo, max_int, at));
+		}
+		return static_cast<std::int32_t>(*v);
+	}
+
+	// RFC 4511 section 4: unrecognized trailing SEQUENCE elements are
+	// ignored, but must be well-formed.
+	auto skip_rest(ber::reader &r) -> result<void>
+	{
+		while (!r.empty()) {
+			if (auto e = r.read(); !e) {
+				return std::unexpected(std::move(e.error()));
+			}
+		}
+		return {};
+	}
+
+	auto next_is(const ber::reader &r, ber::tag t) -> bool
+	{
+		if (r.empty()) {
+			return false;
+		}
+		auto p = r.peek_tag();
+		return p && p->cls == t.cls && p->number == t.number && p->constructed == t.constructed;
+	}
+
+	auto read_vlv(std::span<const std::byte> value) -> result<virtual_list_view>
+	{
+		ber::reader r(value);
+		auto s = r.enter();
+		if (!s) {
+			return std::unexpected(std::move(s.error()));
+		}
+		if (auto done = r.expect_end(); !done) {
+			return std::unexpected(std::move(done.error()));
+		}
+		virtual_list_view out;
+		auto before = read_count(*s, 0, "beforeCount");
+		if (!before) {
+			return std::unexpected(std::move(before.error()));
+		}
+		auto after = read_count(*s, 0, "afterCount");
+		if (!after) {
+			return std::unexpected(std::move(after.error()));
+		}
+		out.before_count = *before;
+		out.after_count = *after;
+		if (next_is(*s, ber::context(0, true))) {
+			auto by = s->enter(ber::context(0, true));
+			if (!by) {
+				return std::unexpected(std::move(by.error()));
+			}
+			auto offset = read_count(*by, 1, "offset");
+			if (!offset) {
+				return std::unexpected(std::move(offset.error()));
+			}
+			auto count = read_count(*by, 0, "contentCount");
+			if (!count) {
+				return std::unexpected(std::move(count.error()));
+			}
+			if (auto done = skip_rest(*by); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
+			out.target = vlv_by_offset{ .offset = *offset, .content_count = *count };
+		} else if (next_is(*s, ber::context(1))) {
+			auto v = s->read_octet_string(ber::context(1));
+			if (!v) {
+				return std::unexpected(std::move(v.error()));
+			}
+			out.target = vlv_greater_than_or_equal{ .value = std::string(detail::as_text(*v)) };
+		} else {
+			return fail(client_errc::decode_error,
+			  detail::format("target: expected [CONTEXT 0] or [CONTEXT 1] at offset {}", s->offset()));
+		}
+		if (next_is(*s, ber::tags::octet_string)) {
+			auto id = s->read_octet_string();
+			if (!id) {
+				return std::unexpected(std::move(id.error()));
+			}
+			out.context_id = std::string(detail::as_text(*id));
+		}
+		if (auto done = skip_rest(*s); !done) {
+			return std::unexpected(std::move(done.error()));
+		}
+		return out;
+	}
+
 }// namespace
 
 auto to_control(const control &c, std::pmr::memory_resource *mr) -> result<control>
@@ -371,7 +518,35 @@ auto decode_matched_values(const control &c, std::pmr::memory_resource *mr) -> r
 	return out;
 }
 
+auto to_control(const virtual_list_view &c, std::pmr::memory_resource *mr) -> result<control>
+{
+	return encode_vlv(c, mr);
+}
+
+auto decode_virtual_list_view(const control &c) -> result<virtual_list_view>
+{
+	auto value = control_value(c, vlv_request_oid, vlv_name);
+	if (!value) {
+		return std::unexpected(std::move(value.error()));
+	}
+	auto out = in_control(read_vlv(*value), vlv_name);
+	if (out) {
+		out->critical = c.criticality;
+	}
+	return out;
+}
+
 namespace detail {
+
+	auto check_vlv_sort(const std::pmr::vector<control> &wire) -> result<void>
+	{
+		if (std::ranges::contains(wire, sort_request_oid, &control::type)) {
+			return {};
+		}
+		return fail(client_errc::encode_error,
+		  "virtual_list_view needs a server_side_sort control on the same search "
+		  "(draft-ietf-ldapext-ldapv3-vlv-09 section 6.1)");
+	}
 
 	auto inapplicable_control(const control_rule &rule, operation_kind op) -> error
 	{
@@ -394,6 +569,13 @@ auto find_sort_result(const std::pmr::vector<control> &controls, std::pmr::memor
 {
 	return find_decoded<sort_result>(
 	  controls, sort_response_oid, [mr](const control &c) { return decode_sort_result(c, mr); });
+}
+
+auto find_vlv_response(const std::pmr::vector<control> &controls, std::pmr::memory_resource *mr)
+  -> result<std::optional<vlv_response>>
+{
+	return find_decoded<vlv_response>(
+	  controls, vlv_response_oid, [mr](const control &c) { return decode_vlv_response(c, mr); });
 }
 
 auto find_pre_read(const std::pmr::vector<control> &controls, std::pmr::memory_resource *mr)

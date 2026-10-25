@@ -1031,6 +1031,86 @@ struct sort_result
 [[nodiscard]] auto decode_sort_result(const control &c,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<sort_result>;
 
+// Virtual List View (draft-ietf-ldapext-ldapv3-vlv-09). The request
+// control is built from ldap::virtual_list_view (controls.hpp); this is the
+// response control, VirtualListViewResponse, which the server attaches to
+// the SearchResultDone when it serviced the request (section 6.2), also
+// when the search fails with errc::virtual_list_view_error (76).
+inline constexpr std::string_view vlv_request_oid = "2.16.840.1.113730.3.4.9";
+inline constexpr std::string_view vlv_response_oid = "2.16.840.1.113730.3.4.10";
+
+struct vlv_response
+{
+	using allocator_type = std::pmr::polymorphic_allocator<>;
+
+	// The RFC fields are the API, public as in the other message types; the
+	// private allocator only remembers the resource, which an absent
+	// contextID cannot carry.
+	// NOLINTBEGIN(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
+	// targetPosition: the list offset of the target entry, 1 for the first.
+	// contentCount + 1 when no entry is greater than or equal to a
+	// vlv_greater_than_or_equal value (section 5). Possibly approximate.
+	std::int32_t target_position = 0;
+	// contentCount: the server's estimate of the number of entries in the
+	// list; send it back in the next vlv_by_offset (section 6.2).
+	std::int32_t content_count = 0;
+	// virtualListViewResult: 0 (success) or the result code saying why the
+	// view failed. The draft lists operationsError (1), protocolError (3),
+	// timeLimitExceeded (3), adminLimitExceeded (11), inappropriateMatching
+	// (18), insufficientAccessRights (50), unwillingToPerform (53),
+	// sortControlMissing (60), offsetRangeError (61) and other (80), the
+	// values as it gives them. Unknown values are kept, as for resultCode
+	// (OpenLDAP 2.7 reports an offset beyond the list as 77). Meaningful only
+	// when the search's resultCode is 76 (section 6.2.1).
+	std::int32_t result_code = 0;
+	// contextID: return it unchanged in the next request for the same list
+	// (virtual_list_view::context_id); nullopt when absent (an empty one is
+	// still a contextID).
+	std::optional<std::pmr::string> context_id{};
+	// NOLINTEND(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
+
+	vlv_response() = default;
+	explicit vlv_response(const allocator_type &alloc) : alloc_(alloc) {}
+	vlv_response(std::int32_t target_position_,
+	  std::int32_t content_count_,
+	  std::int32_t result_code_ = 0,
+	  std::optional<std::string_view> context_id_ = std::nullopt,
+	  const allocator_type &alloc = {});
+	vlv_response(const vlv_response &other);
+	vlv_response(vlv_response &&) noexcept = default;
+	vlv_response(const vlv_response &other, const allocator_type &alloc);
+	vlv_response(vlv_response &&other, const allocator_type &alloc);
+	auto operator=(const vlv_response &other) -> vlv_response &;
+	auto operator=(vlv_response &&other) -> vlv_response &;
+	~vlv_response() = default;
+
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return alloc_; }
+
+	[[nodiscard]] auto is_success() const noexcept -> bool { return result_code == 0; }
+
+	friend auto operator==(const vlv_response &a, const vlv_response &b) -> bool
+	{
+		return a.target_position == b.target_position && a.content_count == b.content_count
+			   && a.result_code == b.result_code && a.context_id == b.context_id;
+	}
+
+  private:
+	allocator_type alloc_{};
+};
+
+// The response control (as a server sends it; for mock servers and tests).
+// Fails with encode_error for a negative targetPosition or contentCount.
+// Allocated from `mr`.
+[[nodiscard]] auto encode_vlv_response(const vlv_response &value,
+  bool criticality = false,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
+// Fails with decode_error if `c` is not a VLV response control or its value
+// is missing or malformed (a negative targetPosition or contentCount,
+// trailing bytes after the SEQUENCE; unknown trailing SEQUENCE elements are
+// skipped). Allocated from `mr`.
+[[nodiscard]] auto decode_vlv_response(const control &c,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<vlv_response>;
+
 // Pre-Read and Post-Read (RFC 4527). The request controls (an attribute
 // selection) are built from ldap::pre_read / ldap::post_read (controls.hpp);
 // the response control of either carries the entry as it was before / is

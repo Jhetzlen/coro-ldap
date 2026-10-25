@@ -1776,6 +1776,137 @@ auto decode_sort_result(const control &c, std::pmr::memory_resource *mr) -> resu
 	return in_control(read_sort_result(*value, mr), "sort result");
 }
 
+// ---------------------------------------------------------------- virtual list view
+
+// Public API, VirtualListViewResponse field order (draft-ietf-ldapext-ldapv3-vlv-09 section 6.2).
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+vlv_response::vlv_response(std::int32_t target_position_,
+  std::int32_t content_count_,
+  std::int32_t result_code_,
+  std::optional<std::string_view> context_id_,
+  const allocator_type &alloc)
+  // NOLINTEND(bugprone-easily-swappable-parameters)
+  : target_position(target_position_), content_count(content_count_), result_code(result_code_),
+	context_id(detail::optional_string(context_id_, alloc)), alloc_(alloc)
+{}
+
+// A plain copy uses the default resource, like the pmr containers.
+vlv_response::vlv_response(const vlv_response &other) : vlv_response(other, allocator_type{}) {}
+
+vlv_response::vlv_response(const vlv_response &other, const allocator_type &alloc)
+  : target_position(other.target_position), content_count(other.content_count), result_code(other.result_code),
+	context_id(detail::optional_with(other.context_id, alloc)), alloc_(alloc)
+{}
+
+vlv_response::vlv_response(vlv_response &&other, const allocator_type &alloc)
+  : target_position(other.target_position), content_count(other.content_count), result_code(other.result_code),
+	context_id(detail::optional_with(std::move(other.context_id), alloc)), alloc_(alloc)
+{}
+
+auto vlv_response::operator=(const vlv_response &other) -> vlv_response &
+{
+	if (this == &other) {
+		return *this;
+	}
+	target_position = other.target_position;
+	content_count = other.content_count;
+	result_code = other.result_code;
+	detail::assign_optional(context_id, other.context_id, alloc_);
+	return *this;
+}
+
+auto vlv_response::operator=(vlv_response &&other) -> vlv_response &
+{
+	if (this == &other) {
+		return *this;
+	}
+	target_position = other.target_position;
+	content_count = other.content_count;
+	result_code = other.result_code;
+	detail::assign_optional(context_id, std::move(other.context_id), alloc_);
+	return *this;
+}
+
+auto encode_vlv_response(const vlv_response &value, bool criticality, std::pmr::memory_resource *mr) -> result<control>
+{
+	if (value.target_position < 0 || value.content_count < 0) {
+		return fail(client_errc::encode_error,
+		  detail::format("vlv response: targetPosition {} or contentCount {} is negative",
+			value.target_position,
+			value.content_count));
+	}
+	ber::writer w{ ber::writer::allocator_type(mr) };
+	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
+		s.integer(value.target_position);
+		s.integer(value.content_count);
+		s.enumerated(value.result_code);
+		if (value.context_id) {
+			s.octet_string(*value.context_id);
+		}
+	});
+	return bytes_control(vlv_response_oid, criticality, w, mr);
+}
+
+namespace {
+
+	// VirtualListViewResponse ::= SEQUENCE { targetPosition INTEGER (0 .. maxInt),
+	//   contentCount INTEGER (0 .. maxInt), virtualListViewResult ENUMERATED,
+	//   contextID OCTET STRING OPTIONAL }
+	auto read_vlv_response(std::span<const std::byte> value, std::pmr::memory_resource *mr) -> result<vlv_response>
+	{
+		ber::reader r(value);
+		auto s = r.enter();
+		if (!s) {
+			return std::unexpected(std::move(s.error()));
+		}
+		if (auto done = r.expect_end(); !done) {
+			return std::unexpected(std::move(done.error()));
+		}
+		auto position = read_ranged(*s, ber::tags::integer, 0, max_int, "targetPosition");
+		if (!position) {
+			return std::unexpected(std::move(position.error()));
+		}
+		auto count = read_ranged(*s, ber::tags::integer, 0, max_int, "contentCount");
+		if (!count) {
+			return std::unexpected(std::move(count.error()));
+		}
+		auto code = read_ranged(*s,
+		  ber::tags::enumerated,
+		  std::numeric_limits<std::int32_t>::min(),
+		  std::numeric_limits<std::int32_t>::max(),
+		  "virtualListViewResult",
+		  true);
+		if (!code) {
+			return std::unexpected(std::move(code.error()));
+		}
+		vlv_response out{ vlv_response::allocator_type(mr) };
+		out.target_position = *position;
+		out.content_count = *count;
+		out.result_code = *code;
+		if (next_is(*s, ber::tags::octet_string)) {
+			auto id = s->read_string(ber::tags::octet_string, mr);
+			if (!id) {
+				return std::unexpected(std::move(id.error()));
+			}
+			out.context_id.emplace(std::move(*id));
+		}
+		if (auto done = skip_rest(*s); !done) {
+			return std::unexpected(std::move(done.error()));
+		}
+		return out;
+	}
+
+}// namespace
+
+auto decode_vlv_response(const control &c, std::pmr::memory_resource *mr) -> result<vlv_response>
+{
+	auto value = expect_control(c, vlv_response_oid, "vlv response");
+	if (!value) {
+		return std::unexpected(std::move(value.error()));
+	}
+	return in_control(read_vlv_response(*value, mr), "vlv response");
+}
+
 // ---------------------------------------------------------------- pre-read / post-read
 
 auto encode_read_entry(std::string_view oid,

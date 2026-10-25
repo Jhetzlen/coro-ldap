@@ -138,7 +138,14 @@ inline auto sample_controls() -> std::pmr::vector<control>
 		encode_sync_done(sync_done{ "c", true }).value(),
 		to_control(matched_values{ .values_return_filter = { filters::attr("mail").ends_with("@example.org"),
 									 raw_filter("(cn:caseExactMatch:=x)") } })
-		  .value() };
+		  .value(),
+		to_control(virtual_list_view{ .before_count = 9,
+					 .after_count = 10,
+					 .target = vlv_by_offset{ .offset = 53424, .content_count = 78564 },
+					 .context_id = "c" })
+		  .value(),
+		to_control(virtual_list_view{ .target = vlv_greater_than_or_equal{ "B" } }).value(),
+		encode_vlv_response(vlv_response{ 5, 250, 0, "c" }).value() };
 }
 
 }// namespace jhetz::ldap::test

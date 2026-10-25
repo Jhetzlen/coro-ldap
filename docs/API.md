@@ -6,8 +6,9 @@ rationale is in [`DESIGN.md`](DESIGN.md).
 ## `jhetz::ldap`: the codec
 
 - `jhetz/ldap/error.hpp`: `ldap::error`, `ldap::result<T>` (`std::expected`),
-  `ldap::errc` (RFC 4511 result codes, RFC 4528's `assertion_failed` and RFC
-  4533's `e_sync_refresh_required`,
+  `ldap::errc` (RFC 4511 result codes, RFC 4528's `assertion_failed`, RFC
+  4533's `e_sync_refresh_required` and the VLV draft's
+  `virtual_list_view_error`,
   category `ldap.result`) and
   `ldap::client_errc` (category `ldap.client`), and the error conditions
   `ldap::cond` (category `ldap.cond`: `not_found`, `auth_failed`, `timeout`,
@@ -482,7 +483,12 @@ itself needs only ICU.
   and dnAttributes, which RFC 3876 excludes, fail with invalid_filter when
   encoded; `parse_values_return_filter("((mail=*)(cn=x))")` reads the RFC
   3876 string form, `decode_matched_values` reads the control back for mock
-  servers)) or a raw `ldap::control`.
+  servers), `virtual_list_view` (draft-ietf-ldapext-ldapv3-vlv-09:
+  `.before_count`, `.after_count`, `.target` = `vlv_by_offset{.offset,
+  .content_count}` or `vlv_greater_than_or_equal{.value}`, `.context_id`;
+  needs a `server_side_sort` on the same search, else encode_error before
+  sending; `decode_virtual_list_view` for mock servers)) or a raw
+  `ldap::control`.
   Each operation's params take its own list: `search_controls`,
   `add_controls`, `modify_controls`, `modify_dn_controls`, `del_controls`,
   `compare_controls` and `extended_controls` (also `password_modify_params`,
@@ -501,13 +507,22 @@ itself needs only ICU.
   readers for the typed response controls of a `std::pmr::vector<control>`
   (`response::controls`,
   `search_stream::controls()`, ...): `find_paged`, `find_sort_result`
-  (`sort_result{result_code, attribute_type}`), `find_pre_read` /
+  (`sort_result{result_code, attribute_type}`), `find_vlv_response`
+  (`vlv_response{target_position, content_count, result_code,
+  context_id}`), `find_pre_read` /
   `find_post_read` (the entry as an `ldap::entry`). Each returns nullopt when
   the control is absent and an error when it is malformed. The response
   control codecs (`encode_` / `decode_sort_result`, `encode_` /
-  `decode_read_entry`) are in `message.hpp`, for mock servers. The sort
-  result comes with the SearchResultDone, so it needs `search_stream`
-  (`search()` returns only the entries). RFC 2891 section 2 says a server
+  `decode_vlv_response`, `encode_` / `decode_read_entry`) are in
+  `message.hpp`, for mock servers. The sort result and the VLV response
+  come with the SearchResultDone, so they need `search_stream`
+  (`search()` returns only the entries); its `controls()` keep them when
+  the search fails, e.g. with `errc::virtual_list_view_error` (76), whose
+  reason is the VLV response's `result_code` (OpenLDAP 2.7: 77 for an
+  offset beyond the list). OpenLDAP's sssvlv keeps each VLV list's state
+  until the connection closes and answers a new list past
+  `sssvlv-maxperconn` (default 5) per connection with busy (51): send the
+  contextID back. RFC 2891 section 2 says a server
   that cannot sort SHOULD fail a critical sort and should return the
   entries unsorted for a non-critical one, with a SortResult, though
   scenario 6 lets it omit the SortResult when the search fails or returns

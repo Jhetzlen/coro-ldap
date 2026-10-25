@@ -13,9 +13,9 @@
 // - the framer measures the encoding as exactly one complete message;
 // - peek_message_header never crashes, and agrees with decode (id) and with
 //   the re-encoding (id, operation tag) whenever the input decodes;
-// - a paged results, sort result, pre-/post-read, matched values, or RFC
-//   4533 sync request, state or done control that decodes re-encodes to an
-//   equal value (the entry of a read control allocated from the message's
+// - a paged results, sort result, pre-/post-read, matched values, VLV
+//   request or response, or RFC 4533 sync request, state or done control
+//   that decodes re-encodes to an equal value (the entry of a read control allocated from the message's
 //   resource), and so does an RFC 4533 Sync Info Message;
 // - search entries convert to ldap::entry, results to ldap::error, whose
 //   message() is well-formed UTF-8 without C0 controls or DEL;
@@ -93,6 +93,24 @@ void exercise_control(const ldap::control &c)
 			const auto again = ldap::to_control(*v);
 			check(again.has_value(), "again.has_value()");
 			check(ldap::decode_matched_values(*again) == *v, "ldap::decode_matched_values(*again) == *v");
+		} else {
+			check(is_decode_failure(v.error()), "is_decode_failure(v.error())");
+		}
+	} else if (c.type == ldap::vlv_request_oid) {
+		if (auto v = ldap::decode_virtual_list_view(c)) {
+			check(v->critical == c.criticality, "v->critical == c.criticality");
+			const auto again = ldap::to_control(*v);
+			check(again.has_value(), "again.has_value()");
+			check(ldap::decode_virtual_list_view(*again) == *v, "ldap::decode_virtual_list_view(*again) == *v");
+		} else {
+			check(is_decode_failure(v.error()), "is_decode_failure(v.error())");
+		}
+	} else if (c.type == ldap::vlv_response_oid) {
+		if (auto v = ldap::decode_vlv_response(c, c.get_allocator().resource())) {
+			check(v->get_allocator() == c.get_allocator(), "v->get_allocator() == c.get_allocator()");
+			const auto again = ldap::encode_vlv_response(*v, c.criticality);
+			check(again.has_value(), "again.has_value()");
+			check(ldap::decode_vlv_response(*again) == *v, "ldap::decode_vlv_response(*again) == *v");
 		} else {
 			check(is_decode_failure(v.error()), "is_decode_failure(v.error())");
 		}

@@ -56,6 +56,7 @@ TEST_CASE("ldap::errc keeps RFC 4511 resultCode numbers", "[error]")
 	STATIC_REQUIRE(std::to_underlying(ldap::errc::object_class_mods_prohibited) == 69);
 	STATIC_REQUIRE(std::to_underlying(ldap::errc::affects_multiple_dsas) == 71);
 	STATIC_REQUIRE(std::to_underlying(ldap::errc::other) == 80);
+	STATIC_REQUIRE(std::to_underlying(ldap::errc::virtual_list_view_error) == 76);
 	STATIC_REQUIRE(std::to_underlying(ldap::errc::assertion_failed) == 122);
 	STATIC_REQUIRE(std::to_underlying(ldap::errc::e_sync_refresh_required) == 4096);
 }
@@ -101,10 +102,11 @@ TEST_CASE("every errc and client_errc has a real message", "[error]")
 		ldap::errc::object_class_mods_prohibited,
 		ldap::errc::affects_multiple_dsas,
 		ldap::errc::other,
+		ldap::errc::virtual_list_view_error,
 		ldap::errc::assertion_failed,
 		ldap::errc::e_sync_refresh_required,
 	};
-	STATIC_REQUIRE(std::size(all) == 40);
+	STATIC_REQUIRE(std::size(all) == 41);
 	for (auto e : all) {
 		const auto text = std::error_code(e).message();
 		INFO("errc " << std::to_underlying(e) << ": " << text);
@@ -341,10 +343,11 @@ TEST_CASE("every errc maps to its documented condition", "[error][cond]")
 		{ errc::object_class_mods_prohibited, std::nullopt },
 		{ errc::affects_multiple_dsas, std::nullopt },
 		{ errc::other, std::nullopt },
+		{ errc::virtual_list_view_error, std::nullopt },
 		{ errc::assertion_failed, std::nullopt },
 		{ errc::e_sync_refresh_required, std::nullopt },
 	};
-	CHECK(table.size() == 40);// every non-success resultCode
+	CHECK(table.size() == 41);// every non-success resultCode
 	for (const auto &[e, expected] : table) {
 		INFO("errc " << std::to_underlying(e) << " " << std::error_code(e).message());
 		CHECK(cond_of(e) == expected);

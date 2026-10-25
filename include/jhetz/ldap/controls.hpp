@@ -19,8 +19,8 @@
 // the typed ones (pre_read_oid on an add, ...) is sent as given.
 // Controls the server returns stay wire-level (std::pmr::vector<control>,
 // in connection::response, extended_result and search_stream::controls());
-// find_paged(), find_sort_result(), find_pre_read() and find_post_read()
-// read the typed ones (and content_sync.hpp's find_sync_state() and
+// find_paged(), find_sort_result(), find_vlv_response(), find_pre_read()
+// and find_post_read() read the typed ones (and content_sync.hpp's find_sync_state() and
 // find_sync_done() those of RFC 4533, whose sync_request is here too):
 //
 //   auto r = co_await conn.modify({.object = dn, .changes = ...,
@@ -195,6 +195,60 @@ struct matched_values
 // `mr`.
 [[nodiscard]] auto decode_matched_values(const control &c,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<matched_values>;
+
+// Virtual List View (draft-ietf-ldapext-ldapv3-vlv-09, OID vlv_request_oid):
+// return a window of a sorted search's entries, `before_count` entries
+// before the target entry and `after_count` after it, for a UI scrolling
+// through a large list. The search must also carry a server_side_sort
+// (section 6.1), whose first key orders the list: without one the request
+// fails with encode_error before anything is sent (a raw control with
+// sort_request_oid counts). The target is
+// - vlv_by_offset{.offset, .content_count}: the entry at offset / content
+//   count of the list, offset 1 being the first entry and offset ==
+//   content_count the last; content_count 0 means "the server's count"
+//   (section 5);
+// - vlv_greater_than_or_equal{.value}: the first entry whose primary sort
+//   key is >= value in the sort order ("typedown").
+// `context_id` is the contextID of the server's last response for this
+// list, returned unchanged (nullopt if it sent none). The server answers
+// with a VLV response control on the SearchResultDone (find_vlv_response):
+// the target's position, its content count and, when the search fails with
+// errc::virtual_list_view_error (76), why. search() drops those controls,
+// so read the window with search_stream(), whose controls() keep them even
+// after an error. OpenLDAP serves it with the sssvlv overlay, which keeps
+// each list's state until the connection closes and, past
+// sssvlv-maxperconn lists per connection (default 5), refuses a request
+// without a contextID it knows with busy (51): send the contextID back.
+// Fails with encode_error for a negative count or an offset below 1.
+struct vlv_by_offset
+{
+	std::int32_t offset = 1;// INTEGER (1 .. maxInt)
+	std::int32_t content_count = 0;// INTEGER (0 .. maxInt)
+
+	friend auto operator==(const vlv_by_offset &, const vlv_by_offset &) -> bool = default;
+};
+struct vlv_greater_than_or_equal
+{
+	std::string value{};// AssertionValue, per the primary sort key's ORDERING rule
+
+	friend auto operator==(const vlv_greater_than_or_equal &, const vlv_greater_than_or_equal &) -> bool = default;
+};
+struct virtual_list_view
+{
+	std::int32_t before_count = 0;// beforeCount
+	std::int32_t after_count = 0;// afterCount
+	std::variant<vlv_by_offset, vlv_greater_than_or_equal> target{};// byOffset [0] / greaterThanOrEqual [1]
+	std::optional<std::string> context_id{};// contextID
+	bool critical = false;
+
+	friend auto operator==(const virtual_list_view &, const virtual_list_view &) -> bool = default;
+};
+
+// The request control as a server reads it (for mock servers and tests):
+// `critical` is the control's criticality. Fails with decode_error if `c`
+// is not a VLV request control or its value is missing or malformed (a
+// count out of range, an unknown target).
+[[nodiscard]] auto decode_virtual_list_view(const control &c) -> result<virtual_list_view>;
 
 // ---------------------------------------------------------------- per-operation lists
 
@@ -374,6 +428,13 @@ inline constexpr control_rule control_rule_of<matched_values> = { .name = "match
 	.source = "RFC 3876 section 2",
 	.operations = operation_set_of(operation_kind::search) };
 
+// draft-ietf-ldapext-ldapv3-vlv-09 section 6.1: "This control is included
+// in the SearchRequest message".
+template<>
+inline constexpr control_rule control_rule_of<virtual_list_view> = { .name = "virtual_list_view",
+	.source = "draft-ietf-ldapext-ldapv3-vlv-09 section 6.1",
+	.operations = operation_set_of(operation_kind::search) };
+
 // Whether control type T may be sent on `op` (the table above).
 template<class T> [[nodiscard]] constexpr auto applies_to(operation_kind op) noexcept -> bool
 {
@@ -392,7 +453,8 @@ using request_control = std::variant<control,
   pre_read,
   post_read,
   sync_request,
-  matched_values>;
+  matched_values,
+  virtual_list_view>;
 using request_controls = std::vector<request_control>;
 
 // A list of the controls `Op` takes: the raw control and the typed ones
@@ -416,7 +478,8 @@ struct search_controls
 	  server_side_sort,
 	  assertion,
 	  sync_request,
-	  matched_values>
+	  matched_values,
+	  virtual_list_view>
 {
 	using controls_of::controls_of;
 };
@@ -531,8 +594,8 @@ template<detail::operation_controls Ops>
 // ---------------------------------------------------------------- encoding
 
 // The wire form of a control, on `mr`. Fail with encode_error for a
-// negative page size, an invalid sort or sync mode, or a matched values
-// control without items, invalid_filter for an empty (or too large)
+// negative page size, an invalid sort or sync mode, a matched values
+// control without items, a negative VLV count or an offset below 1, invalid_filter for an empty (or too large)
 // assertion filter or a matched values item RFC 3876 excludes.
 [[nodiscard]] auto to_control(const control &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
   -> result<control>;
@@ -556,20 +619,37 @@ template<detail::operation_controls Ops>
   -> result<control>;
 [[nodiscard]] auto to_control(const matched_values &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
   -> result<control>;
+[[nodiscard]] auto to_control(const virtual_list_view &c,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
+
+namespace detail {
+	// encode_error unless `wire` holds a sort request control: a list with a
+	// virtual_list_view needs one (draft-ietf-ldapext-ldapv3-vlv-09 section
+	// 6.1).
+	[[nodiscard]] auto check_vlv_sort(const std::pmr::vector<control> &wire) -> result<void>;
+}// namespace detail
 
 // Appends the wire form of every control of a list (an operation's, or
 // request_controls) to `out`, on its resource; stops at the first that
-// fails.
+// fails. A virtual_list_view without a sort request control (typed or raw)
+// in `out` fails too.
 template<class... Typed>
 [[nodiscard]] auto append_controls(const std::vector<std::variant<control, Typed...>> &controls,
   std::pmr::vector<control> &out) -> result<void>
 {
+	bool vlv = false;
 	for (const auto &c : controls) {
+		if constexpr ((std::same_as<Typed, virtual_list_view> || ...)) {
+			vlv = vlv || std::holds_alternative<virtual_list_view>(c);
+		}
 		auto wire = std::visit([&out](const auto &v) { return to_control(v, out.get_allocator().resource()); }, c);
 		if (!wire) {
 			return std::unexpected(std::move(wire.error()));
 		}
 		out.push_back(std::move(*wire));
+	}
+	if (vlv) {
+		return detail::check_vlv_sort(out);
 	}
 	return {};
 }
@@ -585,6 +665,12 @@ template<class... Typed>
 // must handle it, as "not known to be sorted".
 [[nodiscard]] auto find_sort_result(const std::pmr::vector<control> &controls,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::optional<sort_result>>;
+
+// The VLV response control among `controls` (a SearchResultDone's, kept
+// by search_stream::controls() also when the search failed), nullopt if
+// there is none, or decode_error if it is malformed.
+[[nodiscard]] auto find_vlv_response(const std::pmr::vector<control> &controls,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::optional<vlv_response>>;
 
 // The entry of the pre-read response control (of a modify, delete or modify
 // DN response) / post-read response control (of an add, modify or modify DN

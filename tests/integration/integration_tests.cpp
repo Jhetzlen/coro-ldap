@@ -1071,6 +1071,146 @@ TEST_CASE("integration: server side sort", "[integration][controls]")
 
 namespace {
 
+// One virtual list view window over the posixAccounts sorted by uidNumber
+// (user000 .. user249): the uids, the VLV response, or the search's error.
+// `context` is sent as the contextID and replaced by the response's: slapd
+// keeps a sort state per contextID and refuses new ones (busy) once a
+// connection holds sssvlv-maxperconn of them, so a client scrolling one list
+// sends it back.
+struct vlv_window
+{
+	std::vector<std::string> uids{};
+	std::optional<ldap::vlv_response> response{};
+	std::optional<ldap::error> error{};
+};
+
+auto vlv_window_of(corosio::io_context &ioc,
+  ldap::connection &c,
+  std::optional<std::string> &context,
+  ldap::virtual_list_view vlv) -> vlv_window
+{
+	vlv.context_id = context;
+	auto s = finish(ioc,
+	  c.search_stream({ .base = people,
+		.filter = ldap::filters::attr("objectClass") == "posixAccount",
+		.attributes = { "uid" },
+		.controls = {
+		  ldap::server_side_sort{ .keys = { { .attribute = "uidNumber" } }, .critical = true }, std::move(vlv) } }));
+	REQUIRE(s.has_value());
+	vlv_window out;
+	while (true) {
+		auto e = finish(ioc, s->next());
+		if (!e) {
+			out.error = std::move(e.error());
+			break;
+		}
+		if (!*e) {
+			break;
+		}
+		out.uids.emplace_back((*e)->find("uid")->front());
+	}
+	auto r = ldap::find_vlv_response(s->controls());
+	REQUIRE(r.has_value());
+	if (*r) {
+		out.response = std::move(**r);
+		context.reset();
+		if (out.response->context_id) {
+			context.emplace(*out.response->context_id);
+		}
+	}
+	return out;
+}
+
+}// namespace
+
+TEST_CASE("integration: virtual list view", "[integration][controls]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	if (env("JHETZ_LDAP_IT_SORT").empty()) {
+		SKIP("slapd without the sssvlv overlay");
+	}
+	corosio::io_context ioc;
+	auto c = open_admin(ioc);
+	using uids = std::vector<std::string>;
+	std::optional<std::string> context;
+
+	// The 100th entry and two on each side, the server's count unknown.
+	auto mid = vlv_window_of(ioc,
+	  c,
+	  context,
+	  { .before_count = 2, .after_count = 2, .target = ldap::vlv_by_offset{ .offset = 100 }, .critical = true });
+	REQUIRE_FALSE(mid.error.has_value());
+	CHECK(mid.uids == uids{ "user097", "user098", "user099", "user100", "user101" });
+	REQUIRE(mid.response.has_value());
+	CHECK(mid.response->is_success());
+	CHECK(mid.response->target_position == 100);
+	CHECK(mid.response->content_count == 250);
+
+	// The next window, with the server's count and contextID sent back.
+	CHECK(context.has_value());// sssvlv sends one
+	auto next = vlv_window_of(ioc,
+	  c,
+	  context,
+	  { .before_count = 2,
+		.after_count = 2,
+		.target = ldap::vlv_by_offset{ .offset = 102, .content_count = mid.response->content_count } });
+	REQUIRE_FALSE(next.error.has_value());
+	CHECK(next.uids == uids{ "user099", "user100", "user101", "user102", "user103" });
+	CHECK(next.response->target_position == 102);
+
+	// The first and the last entries: offset 1, and offset == contentCount.
+	auto first = vlv_window_of(ioc, c, context, { .after_count = 1 });
+	CHECK(first.uids == uids{ "user000", "user001" });
+	auto last = vlv_window_of(
+	  ioc, c, context, { .before_count = 1, .target = ldap::vlv_by_offset{ .offset = 250, .content_count = 250 } });
+	CHECK(last.uids == uids{ "user248", "user249" });
+
+	// Typedown: the first uidNumber >= 10200 is user200's.
+	auto typed =
+	  vlv_window_of(ioc, c, context, { .after_count = 4, .target = ldap::vlv_greater_than_or_equal{ "10200" } });
+	REQUIRE_FALSE(typed.error.has_value());
+	CHECK(typed.uids == uids{ "user200", "user201", "user202", "user203", "user204" });
+	CHECK(typed.response->target_position == 201);
+	// No entry that large: targetPosition is contentCount + 1, and the
+	// window ends with the list.
+	auto past = vlv_window_of(
+	  ioc, c, context, { .before_count = 1, .after_count = 1, .target = ldap::vlv_greater_than_or_equal{ "99999" } });
+	REQUIRE_FALSE(past.error.has_value());
+	CHECK(past.uids == uids{ "user249" });
+	CHECK(past.response->target_position == 251);
+
+	// An offset beyond the list fails the search with 76; the response
+	// control says why (slapd: 77, not the draft's offsetRangeError).
+	auto beyond = vlv_window_of(
+	  ioc, c, context, { .after_count = 4, .target = ldap::vlv_by_offset{ .offset = 500, .content_count = 250 } });
+	REQUIRE(beyond.error.has_value());
+	CHECK(beyond.error->code == ldap::errc::virtual_list_view_error);
+	REQUIRE(beyond.response.has_value());
+	CHECK_FALSE(beyond.response->is_success());
+	INFO("virtualListViewResult " << beyond.response->result_code);
+	CHECK(c.is_open());
+
+	// search() works too (it drops the response control).
+	auto plain = finish(ioc,
+	  c.search({ .base = people,
+		.filter = ldap::filters::attr("objectClass") == "posixAccount",
+		.attributes = { "uid" },
+		.controls = { ldap::server_side_sort{ .keys = { { .attribute = "uidNumber", .reverse = true } } },
+		  ldap::virtual_list_view{ .after_count = 2 } } }));
+	REQUIRE(plain.has_value());
+	REQUIRE(plain->size() == 3);
+	CHECK(plain->front().find("uid")->front() == "user249");
+
+	// Without the sort control the client refuses, before sending.
+	auto unsorted = finish(ioc, c.search({ .base = people, .controls = { ldap::virtual_list_view{} } }));
+	REQUIRE_FALSE(unsorted.has_value());
+	CHECK(unsorted.error().code == ldap::client_errc::encode_error);
+}
+
+namespace {
+
 // One page of `params` by hand, with `control` added: the uids it returned
 // and the cookie of its paged results control.
 struct uid_page

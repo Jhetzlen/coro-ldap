@@ -72,6 +72,10 @@ enum class errc : int {
 	// 72-79 unused
 	other = 80,
 	// Codes defined by extensions (RFC 4520 IANA registry)
+	// draft-ietf-ldapext-ldapv3-vlv-09 section 6.2.1: the search failed
+	// because of its virtual_list_view control; the VLV response control
+	// (find_vlv_response) says why.
+	virtual_list_view_error = 76,
 	assertion_failed = 122,// RFC 4528: the assertion control's filter did not match
 	// RFC 4533 section 3.8: the server cannot continue the sync search; resend
 	// it with the cookie of the result's Sync Done control (find_sync_done),
