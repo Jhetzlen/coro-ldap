@@ -879,33 +879,40 @@ namespace {
 	// ------------------------------------------------------------ Postal Address
 
 	// RFC 4517 section 3.3.28: lines separated by "$", "\24" and "\5C" (hex
-	// digits in either case) for "$" and "\", no empty line. false if not
-	// of the syntax.
-	auto parse_postal_address(std::string_view s, std::vector<std::string> &lines) -> bool
+	// digits in either case) for "$" and "\", no empty line. The lines go
+	// unescaped into `text`, one after the other, and `ends` gets the end
+	// offset of each. false if not of the syntax.
+	auto parse_postal_address(std::string_view s, std::string &text, std::vector<std::size_t> &ends) -> bool
 	{
-		lines.emplace_back();
+		text.reserve(s.size());
+		std::size_t line_start = 0;
 		for (std::size_t i = 0; i < s.size(); ++i) {
 			const char c = s[i];
 			if (c == '$') {
-				if (lines.back().empty()) {
+				if (text.size() == line_start) {
 					return false;
 				}
-				lines.emplace_back();
+				ends.push_back(text.size());
+				line_start = text.size();
 			} else if (c == '\\') {
 				const std::string_view esc = s.substr(i + 1, 2);
 				if (esc == "24") {
-					lines.back() += '$';
+					text += '$';
 				} else if (detail::iequals(esc, "5C")) {
-					lines.back() += '\\';
+					text += '\\';
 				} else {
 					return false;
 				}
 				i += 2;
 			} else {
-				lines.back() += c;
+				text += c;
 			}
 		}
-		return !lines.back().empty();
+		if (text.size() == line_start) {
+			return false;
+		}
+		ends.push_back(text.size());
+		return true;
 	}
 
 	// The rules that can take a schema, without one (match()). ava_match
@@ -1223,9 +1230,10 @@ namespace {
 
 	// ------------------------------------------------------------ AVA types
 
-	// The attribute types of RFC 4519 by every name it gives them (section
-	// 4's registrations, and section 2's X.500 names "stateOrProvinceName"
-	// and "streetAddress"), so that `cn`, `commonName` and `2.5.4.3` are one
+	// The attribute types of RFC 4512 (sections 3.3, 3.4, 4.2 and 5.1) and
+	// RFC 4519 by every name they give them (RFC 4519 section 4's
+	// registrations, and section 2's X.500 names "stateOrProvinceName" and
+	// "streetAddress"), so that `cn`, `commonName` and `2.5.4.3` are one
 	// type without a schema. Sorted by name, case-insensitively.
 	struct type_name
 	{
@@ -1233,30 +1241,47 @@ namespace {
 		std::string_view oid;
 	};
 
-	constexpr auto rfc4519_types = std::to_array<type_name>({
+	constexpr auto builtin_types = std::to_array<type_name>({
+	  { .name = "aliasedObjectName", .oid = "2.5.4.1" },
+	  { .name = "altServer", .oid = "1.3.6.1.4.1.1466.101.120.6" },
+	  { .name = "attributeTypes", .oid = "2.5.21.5" },
 	  { .name = "businessCategory", .oid = "2.5.4.15" },
 	  { .name = "c", .oid = "2.5.4.6" },
 	  { .name = "cn", .oid = "2.5.4.3" },
 	  { .name = "commonName", .oid = "2.5.4.3" },
 	  { .name = "countryName", .oid = "2.5.4.6" },
+	  { .name = "createTimestamp", .oid = "2.5.18.1" },
+	  { .name = "creatorsName", .oid = "2.5.18.3" },
 	  { .name = "dc", .oid = "0.9.2342.19200300.100.1.25" },
 	  { .name = "description", .oid = "2.5.4.13" },
 	  { .name = "destinationIndicator", .oid = "2.5.4.27" },
 	  { .name = "distinguishedName", .oid = "2.5.4.49" },
+	  { .name = "dITContentRules", .oid = "2.5.21.2" },
+	  { .name = "dITStructureRules", .oid = "2.5.21.1" },
 	  { .name = "dnQualifier", .oid = "2.5.4.46" },
 	  { .name = "domainComponent", .oid = "0.9.2342.19200300.100.1.25" },
 	  { .name = "enhancedSearchGuide", .oid = "2.5.4.47" },
 	  { .name = "facsimileTelephoneNumber", .oid = "2.5.4.23" },
 	  { .name = "generationQualifier", .oid = "2.5.4.44" },
 	  { .name = "givenName", .oid = "2.5.4.42" },
+	  { .name = "governingStructureRule", .oid = "2.5.21.10" },
 	  { .name = "houseIdentifier", .oid = "2.5.4.51" },
 	  { .name = "initials", .oid = "2.5.4.43" },
 	  { .name = "internationalISDNNumber", .oid = "2.5.4.25" },
 	  { .name = "l", .oid = "2.5.4.7" },
+	  { .name = "ldapSyntaxes", .oid = "1.3.6.1.4.1.1466.101.120.16" },
 	  { .name = "localityName", .oid = "2.5.4.7" },
+	  { .name = "matchingRules", .oid = "2.5.21.4" },
+	  { .name = "matchingRuleUse", .oid = "2.5.21.8" },
 	  { .name = "member", .oid = "2.5.4.31" },
+	  { .name = "modifiersName", .oid = "2.5.18.4" },
+	  { .name = "modifyTimestamp", .oid = "2.5.18.2" },
 	  { .name = "name", .oid = "2.5.4.41" },
+	  { .name = "nameForms", .oid = "2.5.21.7" },
+	  { .name = "namingContexts", .oid = "1.3.6.1.4.1.1466.101.120.5" },
 	  { .name = "o", .oid = "2.5.4.10" },
+	  { .name = "objectClass", .oid = "2.5.4.0" },
+	  { .name = "objectClasses", .oid = "2.5.21.6" },
 	  { .name = "organizationalUnitName", .oid = "2.5.4.11" },
 	  { .name = "organizationName", .oid = "2.5.4.10" },
 	  { .name = "ou", .oid = "2.5.4.11" },
@@ -1276,6 +1301,13 @@ namespace {
 	  { .name = "stateOrProvinceName", .oid = "2.5.4.8" },
 	  { .name = "street", .oid = "2.5.4.9" },
 	  { .name = "streetAddress", .oid = "2.5.4.9" },
+	  { .name = "structuralObjectClass", .oid = "2.5.21.9" },
+	  { .name = "subschemaSubentry", .oid = "2.5.18.10" },
+	  { .name = "supportedControl", .oid = "1.3.6.1.4.1.1466.101.120.13" },
+	  { .name = "supportedExtension", .oid = "1.3.6.1.4.1.1466.101.120.7" },
+	  { .name = "supportedFeatures", .oid = "1.3.6.1.4.1.4203.1.3.5" },
+	  { .name = "supportedLDAPVersion", .oid = "1.3.6.1.4.1.1466.101.120.15" },
+	  { .name = "supportedSASLMechanisms", .oid = "1.3.6.1.4.1.1466.101.120.14" },
 	  { .name = "surname", .oid = "2.5.4.4" },
 	  { .name = "telephoneNumber", .oid = "2.5.4.20" },
 	  { .name = "teletexTerminalIdentifier", .oid = "2.5.4.22" },
@@ -1287,6 +1319,30 @@ namespace {
 	  { .name = "userPassword", .oid = "2.5.4.35" },
 	  { .name = "x121Address", .oid = "2.5.4.24" },
 	  { .name = "x500UniqueIdentifier", .oid = "2.5.4.45" },
+	});
+
+	// The object classes of RFC 4512 (top, alias, subschema,
+	// extensibleObject) and RFC 4519 section 3, for objectIdentifierMatch
+	// without a schema. Sorted the same way.
+	constexpr auto builtin_classes = std::to_array<type_name>({
+	  { .name = "alias", .oid = "2.5.6.1" },
+	  { .name = "applicationProcess", .oid = "2.5.6.11" },
+	  { .name = "country", .oid = "2.5.6.2" },
+	  { .name = "dcObject", .oid = "1.3.6.1.4.1.1466.344" },
+	  { .name = "device", .oid = "2.5.6.14" },
+	  { .name = "extensibleObject", .oid = "1.3.6.1.4.1.1466.101.120.111" },
+	  { .name = "groupOfNames", .oid = "2.5.6.9" },
+	  { .name = "groupOfUniqueNames", .oid = "2.5.6.17" },
+	  { .name = "locality", .oid = "2.5.6.3" },
+	  { .name = "organization", .oid = "2.5.6.4" },
+	  { .name = "organizationalPerson", .oid = "2.5.6.7" },
+	  { .name = "organizationalRole", .oid = "2.5.6.8" },
+	  { .name = "organizationalUnit", .oid = "2.5.6.5" },
+	  { .name = "person", .oid = "2.5.6.6" },
+	  { .name = "residentialPerson", .oid = "2.5.6.10" },
+	  { .name = "subschema", .oid = "2.5.20.1" },
+	  { .name = "top", .oid = "2.5.6.0" },
+	  { .name = "uidObject", .oid = "1.3.6.1.1.3.1" },
 	});
 
 	// A-Z folded, then octet order.
@@ -1303,26 +1359,25 @@ namespace {
 		return a.size() <=> b.size();
 	}
 
-	static_assert(std::ranges::is_sorted(
-	  rfc4519_types,
-	  [](std::string_view a, std::string_view b) { return std::is_lt(ci_compare(a, b)); },
-	  &type_name::name));
+	constexpr auto ci_less = [](std::string_view a, std::string_view b) { return std::is_lt(ci_compare(a, b)); };
 
-	auto rfc4519_oid(std::string_view name) noexcept -> std::string_view
+	static_assert(std::ranges::is_sorted(builtin_types, ci_less, &type_name::name));
+	static_assert(std::ranges::is_sorted(builtin_classes, ci_less, &type_name::name));
+
+	// The OID `name` has in `table`, or empty.
+	template<std::size_t N>
+	auto builtin_oid(const std::array<type_name, N> &table, std::string_view name) noexcept -> std::string_view
 	{
-		const auto *const it = std::ranges::lower_bound(
-		  rfc4519_types,
-		  name,
-		  [](std::string_view a, std::string_view b) { return std::is_lt(ci_compare(a, b)); },
-		  &type_name::name);
-		return it != rfc4519_types.end() && detail::iequals(it->name, name) ? it->oid : std::string_view{};
+		const auto *const it = std::ranges::lower_bound(table, name, ci_less, &type_name::name);
+		return it != table.end() && detail::iequals(it->name, name) ? it->oid : std::string_view{};
 	}
 
 	// ------------------------------------------------------------ OID
 
 	// A value of the OID syntax (RFC 4512 section 1.4) as far as it can be
 	// resolved: a numericoid, or a descriptor's OID from the schema (an
-	// attribute type, then an object class) or RFC 4519; else the
+	// attribute type, then an object class), else from the built-in names
+	// of RFC 4512 and RFC 4519 (again a type, then a class); else the
 	// descriptor itself, unresolved.
 	struct oid_key
 	{
@@ -1350,9 +1405,11 @@ namespace {
 				return true;
 			}
 		}
-		if (const std::string_view oid = rfc4519_oid(v); !oid.empty()) {
-			out = { .text = oid, .resolved = true };
-			return true;
+		for (const std::string_view oid : { builtin_oid(builtin_types, v), builtin_oid(builtin_classes, v) }) {
+			if (!oid.empty()) {
+				out = { .text = oid, .resolved = true };
+				return true;
+			}
 		}
 		out = { .text = v, .resolved = false };
 		return true;
@@ -1367,21 +1424,20 @@ namespace {
 		if (!resolve_oid(a, schema, ka) || !resolve_oid(b, schema, kb)) {
 			return match_result::undefined;
 		}
-		if (ka.resolved && kb.resolved) {
-			return to_result(ka.text == kb.text);
+		// A descriptor that is "not recognized" makes the rule Undefined
+		// (RFC 4517 section 4.2.26), even against itself: TRUE needs "the
+		// same object identifier", which an unknown name does not give.
+		if (!ka.resolved || !kb.resolved) {
+			return match_result::undefined;
 		}
-		// A descriptor nothing resolves is the same OID as itself; against
-		// anything else it is not recognized (Undefined).
-		if (!ka.resolved && !kb.resolved && detail::iequals(ka.text, kb.text)) {
-			return match_result::true_value;
-		}
-		return match_result::undefined;
+		return to_result(ka.text == kb.text);
 	}
 
 	// An AVA's attribute type as far as it can be identified: the OID of its
 	// definition (resolved), or the name itself when neither the schema nor
-	// RFC 4519 knows it. Two resolved keys name the same type exactly when
-	// equal; a name that is not resolved might be another name of any type.
+	// the built-in RFC 4512 and RFC 4519 names know it. Two resolved keys
+	// name the same type exactly when equal; a name that is not resolved
+	// might be another name of any type.
 	struct type_key
 	{
 		std::string_view text;
@@ -1420,7 +1476,7 @@ namespace {
 			if (detail::is_numericoid(name)) {
 				return { .text = name, .resolved = true };
 			}
-			if (const std::string_view oid = rfc4519_oid(name); !oid.empty()) {
+			if (const std::string_view oid = builtin_oid(builtin_types, name); !oid.empty()) {
 				return { .text = oid, .resolved = true };
 			}
 			return { .text = name, .resolved = false };
@@ -1889,15 +1945,19 @@ namespace {
 	// as a value; false if not of the syntax or a line does not prepare.
 	auto prepared_lines(std::string_view value, std::vector<std::pmr::string> &out) -> bool
 	{
-		std::vector<std::string> lines;
-		if (!parse_postal_address(value, lines)) {
+		std::string text;
+		std::vector<std::size_t> ends;
+		if (!parse_postal_address(value, text, ends)) {
 			return false;
 		}
-		out.resize(lines.size());
-		for (std::size_t i = 0; i < lines.size(); ++i) {
-			if (!prepare_for(lines[i], case_ignore, prep_input::value, out[i])) {
+		out.resize(ends.size());
+		std::size_t start = 0;
+		for (std::size_t i = 0; i < ends.size(); ++i) {
+			const std::string_view line = std::string_view{ text }.substr(start, ends[i] - start);
+			if (!prepare_for(line, case_ignore, prep_input::value, out[i])) {
 				return false;
 			}
+			start = ends[i];
 		}
 		return true;
 	}
@@ -1963,9 +2023,10 @@ auto distinguished_name_match(const dn &attribute_value, const dn &assertion_val
 		const auto &s = *static_cast<const server_schema *>(context);
 		const attribute_type *t = s.find_attribute(type.name());
 		if (t == nullptr) {
-			// An RFC 4519 name the schema does not list (`userid`) is the
-			// type of its OID, as for type identity (dn_context::key_of).
-			if (const std::string_view oid = rfc4519_oid(type.name()); !oid.empty()) {
+			// A built-in name (RFC 4512, RFC 4519) the schema does not list
+			// (`userid`) is the type of its OID, as for type identity
+			// (dn_context::key_of).
+			if (const std::string_view oid = builtin_oid(builtin_types, type.name()); !oid.empty()) {
 				t = s.find_attribute(oid);
 			}
 		}

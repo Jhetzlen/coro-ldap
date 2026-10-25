@@ -104,8 +104,9 @@ rationale is in [`DESIGN.md`](DESIGN.md).
   numericString and telephoneNumber ones), `octet_string_match`,
   `integer_match`, `boolean_match` and `bit_string_match`;
   `object_identifier_match(a, b[, schema])` (descriptors resolved through
-  the schema, then RFC 4519's names; an unresolved descriptor against
-  anything but itself is Undefined), `unique_member_match(a, b[, schema])`
+  the schema, then the attribute type and object class names of RFC 4512
+  and RFC 4519, a type first; an unresolved descriptor is Undefined, even
+  against itself), `unique_member_match(a, b[, schema])`
   (a DN with an optional `#'0101'B` UID), `generalized_time_match` and
   `generalized_time_ordering_match` (exact instants in UTC, fractions of
   any length, a leap second its own instant), `uuid_match` and
@@ -128,9 +129,9 @@ rationale is in [`DESIGN.md`](DESIGN.md).
   NAME or OID, or an empty string for caseIgnoreMatch, as a
   `std::string_view`, a `const char *` or a reference to a string (a
   `std::string` by value does not compile). Every overload treats a type's
-  names and OID as one (the schema's, then RFC 4519's: `cn`, `commonName`,
-  `2.5.4.3`); RDNs that differ only in a type name nothing resolves compare
-  Undefined.
+  names and OID as one (the schema's, then RFC 4512's and RFC 4519's:
+  `cn`, `commonName`, `2.5.4.3`); RDNs that differ only in a type name
+  nothing resolves compare Undefined.
 - `jhetz/ldap/attribute.hpp`: `ldap::attribute`, an attribute description with
   case-insensitive equality, ordering and `std::hash`.
 - `jhetz/ldap/entry.hpp`: `ldap::entry`, the untyped search result entry

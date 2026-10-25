@@ -408,15 +408,31 @@ TEST_CASE("objectIdentifierMatch without a schema", "[matching][rfc]")
 	CHECK(ldap::object_identifier_match("2.5.4.3", "2.5.4.3") == yes);
 	CHECK(ldap::object_identifier_match("2.5.4.3", "2.5.4.4") == no);
 	CHECK(ldap::object_identifier_match("1.2.3.4", "1.2.3.40") == no);
-	// The same descriptor, in any case.
-	CHECK(ldap::object_identifier_match("fooBar", "FOOBAR") == yes);
 	// RFC 4519's attribute type names resolve without a schema.
 	CHECK(ldap::object_identifier_match("cn", "2.5.4.3") == yes);
 	CHECK(ldap::object_identifier_match("commonName", "CN") == yes);
 	CHECK(ldap::object_identifier_match("sn", "cn") == no);
 	CHECK(ldap::object_identifier_match("2.5.4.4", "surname") == yes);
-	// A descriptor nothing resolves: Undefined against anything else
+	// So do RFC 4512's attribute types and the object classes of RFC 4512
+	// and RFC 4519 section 3.
+	CHECK(ldap::object_identifier_match("objectClass", "2.5.4.0") == yes);
+	CHECK(ldap::object_identifier_match("subschemaSubentry", "2.5.18.10") == yes);
+	CHECK(ldap::object_identifier_match("supportedSASLMechanisms", "1.3.6.1.4.1.1466.101.120.14") == yes);
+	CHECK(ldap::object_identifier_match("top", "2.5.6.0") == yes);
+	CHECK(ldap::object_identifier_match("TOP", "top") == yes);
+	CHECK(ldap::object_identifier_match("extensibleObject", "1.3.6.1.4.1.1466.101.120.111") == yes);
+	CHECK(ldap::object_identifier_match("person", "2.5.6.6") == yes);
+	CHECK(ldap::object_identifier_match("organizationalPerson", "2.5.6.7") == yes);
+	CHECK(ldap::object_identifier_match("groupOfNames", "2.5.6.9") == yes);
+	CHECK(ldap::object_identifier_match("groupOfUniqueNames", "2.5.6.17") == yes);
+	CHECK(ldap::object_identifier_match("dcObject", "1.3.6.1.4.1.1466.344") == yes);
+	CHECK(ldap::object_identifier_match("uidObject", "1.3.6.1.1.3.1") == yes);
+	CHECK(ldap::object_identifier_match("person", "organizationalPerson") == no);
+	CHECK(ldap::object_identifier_match("top", "objectClass") == no);
+	// A descriptor nothing resolves is Undefined, even against itself
 	// (RFC 4517 section 4.2.26).
+	CHECK(ldap::object_identifier_match("fooBar", "FOOBAR") == undefined);
+	CHECK(ldap::object_identifier_match("fooBar", "fooBar") == undefined);
 	CHECK(ldap::object_identifier_match("fooBar", "bazQux") == undefined);
 	CHECK(ldap::object_identifier_match("fooBar", "1.2.3.4") == undefined);
 	CHECK(ldap::object_identifier_match("cn", "fooBar") == undefined);
@@ -447,7 +463,24 @@ TEST_CASE("objectIdentifierMatch with a schema", "[matching][schema]")
 	CHECK(ldap::object_identifier_match("unknownName", "2.5.6.6", s) == undefined);
 	// Without the schema, the aliases are not known to be one OID.
 	CHECK(ldap::object_identifier_match("fooAlias", "fooType") == undefined);
-	CHECK(ldap::object_identifier_match("person", "2.5.6.6") == undefined);
+	CHECK(ldap::object_identifier_match("fooType", "fooType") == undefined);
+
+	// A descriptor naming both an attribute type and an object class
+	// resolves to the attribute type, in the schema as in the built-in names.
+	const std::pmr::vector<std::pmr::string> dual_types{
+		"( 1.3.6.1.4.1.99999.7 NAME 'dual' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+		"( 1.3.6.1.4.1.99999.8 NAME 'top' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+	};
+	const std::pmr::vector<std::pmr::string> dual_classes{
+		"( 1.3.6.1.4.1.99999.9 NAME 'dual' SUP top AUXILIARY )",
+	};
+	const auto sd = ldap::server_schema::parse(dual_types, dual_classes);
+	REQUIRE(sd.skipped() == 0);
+	CHECK(ldap::object_identifier_match("dual", "1.3.6.1.4.1.99999.7", sd) == yes);
+	CHECK(ldap::object_identifier_match("dual", "1.3.6.1.4.1.99999.9", sd) == no);
+	CHECK(
+	  ldap::object_identifier_match("top", "1.3.6.1.4.1.99999.8", sd) == yes);// the schema's type, not RFC 4512's class
+	CHECK(ldap::object_identifier_match("top", "2.5.6.0", sd) == no);
 
 	// distinguished_name_match passes its schema to an OID-valued AVA.
 	const std::pmr::vector<std::pmr::string> oid_types{
@@ -498,6 +531,12 @@ TEST_CASE("uniqueMemberMatch", "[matching][dn][rfc]")
 	CHECK(ldap::unique_member_match("not a dn", "cn=a") == undefined);
 	CHECK(ldap::unique_member_match("not a dn#'1'B", "not a dn#'1'B") == undefined);
 	CHECK(ldap::match("uniqueMemberMatch", "cn=Jane#'1'B", "CN=JANE#'1'B") == yes);
+	// An escaped "#" belongs to the DN's value, never starts the UID.
+	CHECK(ldap::unique_member_match(R"(cn=a\#'1'B)", R"(cn=A\#'1'B)") == yes);
+	CHECK(ldap::unique_member_match(R"(cn=a\#'1'B)", R"(cn=a\23'1'B)") == yes);
+	CHECK(ldap::unique_member_match(R"(cn=a\#'1'B)", "cn=a#'1'B") == no);
+	CHECK(ldap::unique_member_match(R"(cn=a\#'1'B#'0'B)", R"(cn=A\#'1'B#'0'B)") == yes);
+	CHECK(ldap::unique_member_match(R"(cn=a\#'1'B#'0'B)", R"(cn=a\#'1'B#'1'B)") == no);
 
 	// And inside a DN: a uniqueMember-valued AVA.
 	CHECK(ldap::distinguished_name_match(parse(R"(cn=x+uniqueMember=cn\=A#'1'B)"),
@@ -549,6 +588,15 @@ TEST_CASE("generalizedTimeMatch and generalizedTimeOrderingMatch", "[matching][r
 	CHECK(eq("19990101005960+0100", "19981231235960Z") == yes);
 	// Years 0000 to 9999, February 29 only in leap years.
 	CHECK(lt("00000101000000Z", "99991231235959Z") == yes);
+	// The extreme differentials at the extreme years: the instant may fall
+	// in year -1 or 10000.
+	CHECK(eq("00000101000000+2359", "00000101000000+2359") == yes);
+	CHECK(lt("00000101000000+2359", "00000101000000Z") == yes);
+	CHECK(eq("00000101235900+2359", "00000101000000Z") == yes);
+	CHECK(eq("99991231235959-2359", "99991231235959-2359") == yes);
+	CHECK(lt("99991231235959Z", "99991231235959-2359") == yes);
+	CHECK(eq("99991231000000-2359", "99991231235900Z") == yes);
+	CHECK(lt("00000101000000-2359", "99991231235959+2359") == yes);
 	CHECK(eq("20000229000000Z", "20000229000000Z") == yes);
 	CHECK(eq("19000229000000Z", "19000229000000Z") == undefined);
 	// Not of the syntax.

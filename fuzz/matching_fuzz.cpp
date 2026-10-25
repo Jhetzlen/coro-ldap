@@ -111,8 +111,16 @@ void self_checks(std::string_view s)
 		}
 		check(ldap::match(rule, s, "*") == expected, "match(rule, s, *) == expected");
 	}
-	check((ldap::object_identifier_match(s, s) == match_result::true_value) == jhetz::ldap::detail::is_oid(s),
-	  "object_identifier_match(s, s) TRUE exactly for an OID");
+	// TRUE for a numericoid, TRUE or Undefined for a descriptor (Undefined
+	// when it names nothing known), Undefined for anything else.
+	const match_result oid_self = ldap::object_identifier_match(s, s);
+	if (jhetz::ldap::detail::is_numericoid(s)) {
+		check(oid_self == match_result::true_value, "object_identifier_match(s, s) TRUE for a numericoid");
+	} else if (jhetz::ldap::detail::is_descr(s)) {
+		check(oid_self != match_result::false_value, "object_identifier_match(s, s) not FALSE for a descriptor");
+	} else {
+		check(oid_self == match_result::undefined, "object_identifier_match(s, s) Undefined for a non-OID");
+	}
 	for (const auto *const rule : { "generalizedTimeMatch", "uuidMatch", "bitStringMatch", "caseIgnoreListMatch" }) {
 		check(ldap::match(rule, s, s) != match_result::false_value, "match(rule, s, s) != FALSE");
 	}

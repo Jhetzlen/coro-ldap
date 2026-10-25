@@ -175,13 +175,15 @@ struct substring_assertion
 // objectIdentifierMatch (2.5.13.0, RFC 4517 section 4.2.26): TRUE if both
 // values name the same OID. Values are of the OID syntax (RFC 4512 section
 // 1.4: a numericoid such as "2.5.4.3", no leading zeros, or a descriptor
-// such as "cn"). A descriptor is resolved to its OID through the schema
-// (an attribute type, then an object class), then RFC 4519's attribute type
-// names (`cn`, `commonName`); two numericoids compare exactly, two
-// descriptors that are the same name (ASCII case-insensitive) are TRUE.
-// Undefined if a value is not of the syntax, or if a descriptor nothing
-// resolves is compared with anything but itself (it may be another name of
-// the same OID: RFC 4517 makes an unrecognized descriptor Undefined).
+// such as "cn", ASCII case-insensitive). A descriptor is resolved to its
+// OID through the schema, then through the names RFC 4512 and RFC 4519
+// define (attribute types such as `cn`, `commonName`, `objectClass`;
+// object classes such as `top`, `person`, `groupOfNames`). In both steps an
+// attribute type comes first: a descriptor that names both an attribute
+// type and an object class resolves to the attribute type's OID.
+// Undefined if a value is not of the syntax, or if either value is a
+// descriptor nothing resolves, even compared with itself (RFC 4517: a
+// descriptor that is not recognized makes the rule Undefined).
 [[nodiscard]] auto object_identifier_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
 [[nodiscard]] auto object_identifier_match(std::string_view attribute_value,
@@ -301,8 +303,8 @@ namespace detail {
 // small nesting depth (Undefined deeper).
 //
 // Types: a name (ASCII case-insensitive) or a numeric OID is resolved to its
-// definition's OID through the schema (if any), then the names RFC 4519
-// gives the user schema (`cn`, `commonName` and `2.5.4.3` are one type, as
+// definition's OID through the schema (if any), then the attribute type
+// names RFC 4512 and RFC 4519 define (`cn`, `commonName` and `2.5.4.3` are one type, as
 // are `sn` and `surname`, `uid` and `userid`, ...). Two resolved types are
 // the same type exactly when their OIDs are. A name that cannot be resolved
 // might be another name of any type: if the RDNs differ only in such types
@@ -313,9 +315,9 @@ namespace detail {
 
 // Schema-driven: each type's EQUALITY (inherited from its supertypes, see
 // server_schema::equality_of), caseIgnoreMatch for a type the schema does
-// not know or that declares none. An RFC 4519 name the schema does not list
-// (`userid` when it lists only `uid`) takes the rule of its OID's
-// definition. A rule match() does not implement gives
+// not know or that declares none. An RFC 4512 or RFC 4519 name the schema
+// does not list (`userid` when it lists only `uid`) takes the rule of its
+// OID's definition. A rule match() does not implement gives
 // Undefined. An objectIdentifierMatch value resolves its descriptors through
 // the schema, and a uniqueMemberMatch value's DN uses the schema's rules. Types are the same when they name the same
 // definition in the schema.
