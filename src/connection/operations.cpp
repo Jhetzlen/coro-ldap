@@ -238,6 +238,12 @@ namespace detail {
 	auto extended_impl(impl_ref self, extended_params request) -> capy::task<result<extended_result>>
 	{
 		const std::string context = "extended operation " + request.name;
+		if (request.name == start_tls_oid) {
+			// RFC 4511 section 4.14: StartTLS changes the transport, which
+			// start_tls() drives; RFC 4370 section 3 keeps proxied
+			// authorization off it, and start_tls() sends no control.
+			co_return std::unexpected(make_error(client_errc::encode_error, context + ": use start_tls()"));
+		}
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		std::optional<std::string_view> value;
 		if (request.value) {

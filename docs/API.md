@@ -313,9 +313,11 @@ itself needs only ICU.
   parent; both build the ModifyDNRequest for `modify_dn`, on
   `sync::connection` too), `compare` (`result<bool>`), `extended`,
   `who_am_i` (RFC 4532) and `password_modify` (RFC 3062: returns the
-  server-generated password, if any), each taking a params aggregate with `.controls`
-  (that operation's control list, see controls.hpp below) and `.timeout`; `search_paged(params, page_size)` follows the Simple
-  Paged Results cookie across pages (destroyed early, it abandons the
+  server-generated password, if any), each taking a params aggregate
+  with `.controls` (that operation's control list, see controls.hpp
+  below) and `.timeout` (`extended` refuses the StartTLS name with
+  encode_error before sending: use `start_tls`);
+  `search_paged(params, page_size)` follows the Simple Paged Results cookie across pages (destroyed early, it abandons the
   current page and releases the server's paging state with a page size 0
   request, RFC 2696 section 3, unless the search already ended; the
   release's answer is read and dropped, and counted by `outstanding()`
@@ -480,13 +482,17 @@ itself needs only ICU.
   `who_am_i`), each a `std::vector` of a `std::variant` of the raw control
   and the typed controls the table `control_rule_of<T>` allows there
   (`applies_to<T>(operation_kind)`, each row citing its RFC section), so a
-  misplaced typed control does not compile; the raw control is allowed
-  everywhere. A list shared by several operations is a `request_controls`
+  misplaced typed control does not compile (`assertion` and
+  `manage_dsa_it` are not on `extended_controls`: RFC 4528 and RFC 3296
+  section 3 allow them only on extended operations whose document defines
+  them); the raw control is allowed everywhere and not checked, even with
+  the OID of a typed control. A list shared by several operations is a `request_controls`
   (every alternative), converted with `controls_for<add_controls>(list)`:
   encode_error "pre_read is not valid on add (RFC 4527 section 3.1)" for a
   control the operation does not take. `to_control` (one overload per
   control) and `append_controls` (any of these lists) encode them, and
-  readers for the typed response controls of a `std::pmr::vector<control>` (`response::controls`,
+  readers for the typed response controls of a `std::pmr::vector<control>`
+  (`response::controls`,
   `search_stream::controls()`, ...): `find_paged`, `find_sort_result`
   (`sort_result{result_code, attribute_type}`), `find_pre_read` /
   `find_post_read` (the entry as an `ldap::entry`). Each returns nullopt when

@@ -240,14 +240,18 @@ sent is fixed by its specification, so it is checked at compile time
 | `sync_request` | search | RFC 4533 section 2.2 |
 | `pre_read` | modify, modify DN, delete | RFC 4527 section 3.1 |
 | `post_read` | add, modify, modify DN | RFC 4527 section 3.2 |
-| `relax_rules` | add, modify, modify DN, delete | draft-zeilenga-ldap-relax section 2 |
-| `assertion` | all seven | RFC 4528 section 3 (not bind, unbind, abandon, StartTLS) |
-| `manage_dsa_it` | all seven | RFC 3296 section 3 |
+| `relax_rules` | add, modify, modify DN, delete | draft-zeilenga-ldap-relax-03 section 2 |
+| `assertion` | all but extended | RFC 4528 section 3 (other operations only where their document says how; RFC 3062 and RFC 4532 do not) |
+| `manage_dsa_it` | all but extended | RFC 3296 section 3 (an extended operation only "for which the control is defined") |
 | `proxied_authorization` | all seven | RFC 4370 section 3 (not StartTLS-like extensions) |
-| raw `control` | all seven | the caller's responsibility |
+| raw `control` | all seven | the caller's responsibility, not checked |
 
 The seven are search, add, modify, modify DN, delete, compare and extended
-(`operation_kind`); bind takes no typed control. Each params struct's
+(`operation_kind`); bind takes no typed control, and `extended()` refuses
+the StartTLS name (encode_error before sending; `start_tls()` sends no
+control), so no typed control goes on StartTLS. A raw control is never
+checked, even with the OID of a typed one (`pre_read_oid` on an add is
+sent as given). Each params struct's
 `.controls` is its operation's list, `search_controls`, `add_controls`,
 `modify_controls`, `modify_dn_controls`, `del_controls`, `compare_controls`
 or `extended_controls` (also `password_modify_params` and `who_am_i`): a

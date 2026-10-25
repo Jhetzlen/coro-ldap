@@ -15,7 +15,8 @@
 // controls_for<add_controls>(list), which fails at run time instead.
 //
 // ldap::control itself is the escape hatch for anything not typed here,
-// allowed everywhere.
+// allowed everywhere. It is not checked: a raw control whose OID is one of
+// the typed ones (pre_read_oid on an add, ...) is sent as given.
 // Controls the server returns stay wire-level (std::pmr::vector<control>,
 // in connection::response, extended_result and search_stream::controls());
 // find_paged(), find_sort_result(), find_pre_read() and find_post_read()
@@ -34,7 +35,9 @@
 #include "jhetz/ldap/message.hpp"
 
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -160,6 +163,8 @@ enum class operation_kind : std::uint8_t {
 	compare,
 	extended,
 };
+// The number of operation_kind values: operation_set has a bit for each.
+inline constexpr std::size_t operation_kind_count = std::to_underlying(operation_kind::extended) + 1;
 
 // "search", "add", "modify", "modify DN", "delete", "compare", "extended
 // operation": the operation as error contexts name it.
@@ -188,6 +193,9 @@ enum class operation_kind : std::uint8_t {
 struct operation_set
 {
 	std::uint8_t bits = 0;
+
+	static_assert(operation_kind_count <= std::numeric_limits<decltype(bits)>::digits,
+	  "ldap::operation_set: widen bits for the new operation_kind");
 
 	[[nodiscard]] constexpr auto contains(operation_kind op) const noexcept -> bool
 	{
@@ -218,7 +226,8 @@ struct control_rule
 // request_controls against it at run time.
 template<class T>
 inline constexpr control_rule control_rule_of = [] {
-	static_assert(sizeof(T) == 0, "ldap::control_rule_of: not a typed request control");
+	static_assert(sizeof(T) == 0,
+	  "ldap::control_rule_of: no row in control_rule_of for this request control; add one citing its specification");
 	return control_rule{};
 }();
 
@@ -230,6 +239,13 @@ namespace detail {
 	  operation_kind::del,
 	  operation_kind::compare,
 	  operation_kind::extended);
+	// Every operation but the extended one.
+	inline constexpr operation_set interrogation_and_update = operation_set_of(operation_kind::search,
+	  operation_kind::add,
+	  operation_kind::modify,
+	  operation_kind::modify_dn,
+	  operation_kind::del,
+	  operation_kind::compare);
 }// namespace detail
 
 // The raw control: the caller knows where it applies.
@@ -243,24 +259,28 @@ template<>
 inline constexpr control_rule control_rule_of<paged> = { .name = "paged",
 	.source = "RFC 2696 section 2",
 	.operations = operation_set_of(operation_kind::search) };
-// RFC 3296 section 3: "when issuing an add, compare, delete, modify,
-// modifyDN, search request or an extended operation for which the control
-// is defined".
+// RFC 3296 section 3: "A client MAY specify the following control when
+// issuing an add, compare, delete, modify, modifyDN, search request or an
+// extended operation for which the control is defined." No extended
+// operation typed here defines it (RFC 3062, RFC 4532 do not), so it is not
+// on extended_controls; a raw control sends it on one that does.
 template<>
 inline constexpr control_rule control_rule_of<manage_dsa_it> = { .name = "manage_dsa_it",
 	.source = "RFC 3296 section 3",
-	.operations = detail::all_operations };
+	.operations = detail::interrogation_and_update };
 // draft-zeilenga-ldap-relax-03 section 2: "appropriate for all LDAP update
 // requests, including add, delete, modify, and modifyDN".
 template<>
 inline constexpr control_rule control_rule_of<relax_rules> = { .name = "relax_rules",
-	.source = "draft-zeilenga-ldap-relax section 2",
+	.source = "draft-zeilenga-ldap-relax-03 section 2",
 	.operations =
 	  operation_set_of(operation_kind::add, operation_kind::modify, operation_kind::modify_dn, operation_kind::del) };
 // RFC 4370 section 3: "any search, compare, modify, add, delete, or modify
 // Distinguished Name (DN) or extended operation request message", except
 // an extension that changes authentication, authorization or data
-// confidentiality such as StartTLS (not told apart by type here).
+// confidentiality such as StartTLS: connection::extended() refuses the
+// StartTLS name (start_tls() takes no controls), so no typed control goes
+// on it.
 template<>
 inline constexpr control_rule control_rule_of<proxied_authorization> = { .name = "proxied_authorization",
 	.source = "RFC 4370 section 3",
@@ -272,13 +292,15 @@ inline constexpr control_rule control_rule_of<server_side_sort> = { .name = "ser
 	.operations = operation_set_of(operation_kind::search) };
 // RFC 4528 section 3: "appropriate for both LDAP interrogation and update
 // operations [RFC4511], including Add, Compare, Delete, Modify, ModifyDN
-// (rename), and Search. It is inappropriate for Abandon, Bind, Unbind, and
-// StartTLS operations." StartTLS is the only extended operation it
-// excludes, so the others are allowed.
+// (rename), and Search." and "Other documents may specify how this
+// control applies to other LDAP operations. In doing so, they must state
+// how the target entry is determined." No extended operation typed here
+// does (RFC 3062, RFC 4532 do not, and OpenLDAP rejects it there), so it
+// is not on extended_controls; a raw control sends it on one that does.
 template<>
 inline constexpr control_rule control_rule_of<assertion> = { .name = "assertion",
 	.source = "RFC 4528 section 3",
-	.operations = detail::all_operations };
+	.operations = detail::interrogation_and_update };
 // RFC 4527 section 3.1: "appropriate for the modifyRequest, delRequest,
 // and modDNRequest LDAP messages".
 template<>
@@ -377,7 +399,7 @@ struct compare_controls : controls_of<operation_kind::compare, manage_dsa_it, pr
 {
 	using controls_of::controls_of;
 };
-struct extended_controls : controls_of<operation_kind::extended, manage_dsa_it, proxied_authorization, assertion>
+struct extended_controls : controls_of<operation_kind::extended, proxied_authorization>
 {
 	using controls_of::controls_of;
 };
@@ -403,7 +425,8 @@ namespace detail {
 	concept operation_controls =
 	  matches_table<List, request_control> && within_request_control<typename List::controls_of>;
 
-	// encode_error "<name> is not valid on <operation> (<source>)".
+	// encode_error "<name> is not valid on <operation> (<source>)", with
+	// "an extended operation".
 	[[nodiscard]] auto inapplicable_control(const control_rule &rule, operation_kind op) -> error;
 }// namespace detail
 

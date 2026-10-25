@@ -282,9 +282,9 @@ class connection
 	// A search in pages of `page_size` entries (Simple Paged Results, RFC
 	// 2696): when a page ends, the next page is requested with the server's
 	// cookie, until the cookie is empty. A paged control already in
-	// `request.controls` (typed, or raw with paged_results_oid) is replaced. A server that ignores the
-	// (non-critical) control returns everything as one page, which works the
-	// same. Each page is one search on the wire, with its own message id
+	// `request.controls` (typed, or raw with paged_results_oid) is
+	// replaced. A server that ignores the (non-critical) control returns
+	// everything as one page, which works the same. Each page is one search on the wire, with its own message id
 	// and its own `request.timeout`. Destroyed early, the paged_search
 	// abandons the current page and releases the server's paging state
 	// (see paged_search). Several may run at once on one connection (RFC
@@ -328,6 +328,8 @@ class connection
 	  modify_dn_controls controls = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> boost::capy::task<result<response>>;
 	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
+	// Any extended operation but StartTLS: its name (start_tls_oid) fails
+	// with encode_error before anything is sent; use start_tls().
 	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
 	// The authorization identity of this connection (RFC 4532): "dn:<dn>",
 	// "u:<user>", or "" when anonymous.

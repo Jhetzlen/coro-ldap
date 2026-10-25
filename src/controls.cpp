@@ -154,8 +154,9 @@ namespace detail {
 
 	auto inapplicable_control(const control_rule &rule, operation_kind op) -> error
 	{
+		const std::string_view article = op == operation_kind::extended ? "an " : "";
 		return make_error(client_errc::encode_error,
-		  detail::format("{} is not valid on {} ({})", rule.name, operation_name(op), rule.source));
+		  detail::format("{} is not valid on {}{} ({})", rule.name, article, operation_name(op), rule.source));
 	}
 
 }// namespace detail

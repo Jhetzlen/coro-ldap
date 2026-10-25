@@ -89,6 +89,7 @@ if(NOT MSVC)
     jhetz_ldap_compile_test(post_read_on_delete "post_read_on_delete\\.cpp:3:[0-9]+: error: .*del_controls")
     jhetz_ldap_compile_test(paged_on_modify "paged_on_modify\\.cpp:3:[0-9]+: error: .*modify_controls")
     jhetz_ldap_compile_test(relax_rules_on_search "relax_rules_on_search\\.cpp:3:[0-9]+: error: .*search_controls")
+    jhetz_ldap_compile_test(assertion_on_extended "assertion_on_extended\\.cpp:3:[0-9]+: error: .*extended_controls")
 endif()
 
 # Header self-containment: one generated TU per public header, including

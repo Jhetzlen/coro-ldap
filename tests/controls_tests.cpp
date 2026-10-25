@@ -76,14 +76,19 @@ static_assert(applies_to<ldap::relax_rules>(add) && applies_to<ldap::relax_rules
 			  && applies_to<ldap::relax_rules>(modify) && applies_to<ldap::relax_rules>(modify_dn)
 			  && !applies_to<ldap::relax_rules>(search) && !applies_to<ldap::relax_rules>(compare)
 			  && !applies_to<ldap::relax_rules>(extended));
-static_assert(
-  applies_to<ldap::assertion>(compare) && applies_to<ldap::assertion>(search) && applies_to<ldap::assertion>(extended));
-static_assert(applies_to<ldap::manage_dsa_it>(extended) && applies_to<ldap::proxied_authorization>(extended));
+// RFC 4528 section 3 and RFC 3296 section 3: on an extended operation only
+// where its document defines them, which none typed here does.
+static_assert(applies_to<ldap::assertion>(compare) && applies_to<ldap::assertion>(search)
+			  && !applies_to<ldap::assertion>(extended));
+static_assert(applies_to<ldap::manage_dsa_it>(search) && !applies_to<ldap::manage_dsa_it>(extended));
+static_assert(applies_to<ldap::proxied_authorization>(extended));
 static_assert(applies_to<ldap::control>(search) && applies_to<ldap::control>(extended));
 static_assert(!std::is_convertible_v<ldap::pre_read, ldap::add_controls::value_type>);
 static_assert(!std::is_convertible_v<ldap::post_read, ldap::del_controls::value_type>);
 static_assert(!std::is_convertible_v<ldap::paged, ldap::modify_controls::value_type>);
 static_assert(std::is_convertible_v<ldap::control, ldap::compare_controls::value_type>);
+static_assert(!std::is_convertible_v<ldap::assertion, ldap::extended_controls::value_type>);
+static_assert(!std::is_convertible_v<ldap::manage_dsa_it, ldap::extended_controls::value_type>);
 
 TEST_CASE("controls_for checks a shared list against the operation", "[controls]")
 {
@@ -114,11 +119,17 @@ TEST_CASE("controls_for checks a shared list against the operation", "[controls]
 	const auto search = ldap::controls_for<ldap::search_controls>(ldap::request_controls{ ldap::relax_rules{} });
 	REQUIRE_FALSE(search.has_value());
 	CHECK(std::string(search.error().context)
-		  == "relax_rules is not valid on search (draft-zeilenga-ldap-relax section 2)");
+		  == "relax_rules is not valid on search (draft-zeilenga-ldap-relax-03 section 2)");
 
 	const auto ext = ldap::controls_for<ldap::extended_controls>(ldap::request_controls{ ldap::sync_request{} });
 	REQUIRE_FALSE(ext.has_value());
-	CHECK(std::string(ext.error().context) == "sync_request is not valid on extended operation (RFC 4533 section 2.2)");
+	CHECK(
+	  std::string(ext.error().context) == "sync_request is not valid on an extended operation (RFC 4533 section 2.2)");
+
+	const auto shared_ext = ldap::controls_for<ldap::extended_controls>(shared);
+	REQUIRE_FALSE(shared_ext.has_value());
+	CHECK(std::string(shared_ext.error().context)
+		  == "manage_dsa_it is not valid on an extended operation (RFC 3296 section 3)");
 
 	CHECK(ldap::controls_for<ldap::search_controls>({}).value().empty());
 }

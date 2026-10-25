@@ -18,11 +18,13 @@ auto main() -> int
 	const ldap::del_params del{ .controls = { ldap::pre_read{}, ldap::control{ "1.2.3", false } } };
 	const ldap::modify_params modify{ .controls = { ldap::pre_read{}, ldap::post_read{}, ldap::assertion{} } };
 	const ldap::search_params search{ .controls = { ldap::paged{ .page_size = 10 }, ldap::server_side_sort{} } };
+	const ldap::extended_params extended{ .controls = { ldap::proxied_authorization{ "dn:cn=x" } } };
 	(void)f;
 	(void)g;
 	(void)add;
 	(void)del;
 	(void)modify;
 	(void)search;
+	(void)extended;
 	return static_cast<int>(changes.size());
 }

@@ -81,11 +81,12 @@ enum class sync_mode : std::uint8_t {
 };
 
 // The request control, for search_params::controls (search_controls,
-// controls.hpp; RFC 4533 section 2.2 allows it on a search only). `cookie` is the one the server last sent (Sync State,
-// Sync Info or Sync Done), to resume from there; nullopt starts from
-// nothing (the whole content). `reload_hint` (reloadHint, DEFAULT FALSE)
-// asks for the full content when the cookie is too old for an incremental
-// refresh, instead of an e-syncRefreshRequired error (errc 4096). RFC 4533
+// controls.hpp; RFC 4533 section 2.2 allows it on a search only).
+// `cookie` is the one the server last sent (Sync State, Sync Info or Sync
+// Done), to resume from there; nullopt starts from nothing (the whole
+// content). `reload_hint` (reloadHint, DEFAULT FALSE) asks for the full
+// content when the cookie is too old for an incremental refresh, instead
+// of an e-syncRefreshRequired error (errc 4096). RFC 4533
 // lets the control be critical or not; critical by default here, so a
 // server without content synchronization refuses the search
 // (unavailable_critical_extension) instead of running it as a plain one.

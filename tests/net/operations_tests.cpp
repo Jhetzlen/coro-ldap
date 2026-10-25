@@ -362,6 +362,24 @@ TEST_CASE("operations: extended operations and who am I", "[net][operations]")
 	CHECK(m.log.received[1] == ldap::message{ 2, ldap::extended_request{ ldap::who_am_i_oid } });
 }
 
+TEST_CASE("operations: extended() refuses StartTLS before sending", "[net][operations]")
+{
+	mock_ldap m;
+	m.serve({ answer({ ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 0 } } } }) });
+	auto tls = m.run(m.conn.extended(
+	  { .name = std::string(ldap::start_tls_oid), .controls = { ldap::proxied_authorization{ "dn:cn=x" } } }));
+	REQUIRE_FALSE(tls.has_value());
+	CHECK(tls.error().code == client_errc::encode_error);
+	CHECK(tls.error().context == "extended operation 1.3.6.1.4.1.1466.20037: use start_tls()");
+	CHECK(m.log.received.empty());
+	CHECK(m.conn.is_open());
+	// The id was not used up.
+	CHECK(m.run(m.conn.extended({ .name = "1.2.3.4" })).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 1);
+	CHECK(m.log.received[0] == ldap::message{ 1, ldap::extended_request{ "1.2.3.4" } });
+}
+
 TEST_CASE("operations: extended operations with intermediate responses", "[net][operations][intermediate]")
 {
 	ldap::message with_control{ 1, ldap::intermediate_response{} };
