@@ -399,6 +399,17 @@ auto cond_category() noexcept -> const std::error_category &
 
 namespace detail {
 
+	auto with_context(error e, std::string_view prefix) -> error
+	{
+		if (e.context.empty()) {
+			e.context.assign(prefix);
+		} else {
+			e.context.insert(0, ": ");
+			e.context.insert(0, prefix);
+		}
+		return e;
+	}
+
 	namespace {
 
 		// What append_sanitized replaces besides ill-formed UTF-8: control

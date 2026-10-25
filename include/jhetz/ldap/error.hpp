@@ -219,6 +219,12 @@ template<class T> using result = std::expected<T, error>;
 	return std::unexpected(make_error(code, context));
 }
 
+namespace detail {
+	// `e` with `prefix` in front of its context ("prefix: context", or just
+	// "prefix" for an empty one).
+	[[nodiscard]] auto with_context(error e, std::string_view prefix) -> error;
+}// namespace detail
+
 }// namespace jhetz::ldap
 
 template<> struct std::is_error_code_enum<jhetz::ldap::errc> : std::true_type

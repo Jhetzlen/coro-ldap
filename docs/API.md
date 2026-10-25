@@ -637,28 +637,39 @@ itself needs only ICU.
 - `jhetz/ldap/client.hpp` (3pf, DESIGN.md section 11): `ldap::client`, a
   pool of multiplexed connections opened lazily. `client(ioc,
   client_options{.servers, .connection, .setup, .max_connections = 1,
-  .idle_check, .max_lifetime, .acquire_timeout, .backoff,
-  .failback_after, .observer})`; `acquire() -> task<result<lease>>`, the
-  lease giving the full `connection` API (`(*lease)->search(...)`),
-  shared with other leases on the same connection; the lease returns the
-  connection when destroyed or `release()`d. `servers` fail over in
-  priority order with a per-server jittered exponential backoff
-  (`backoff_options{initial, max, multiplier}`), and an idle connection to
-  a lower-priority server goes back to the primary after
-  `failback_after`. `session_setup` (`simple_bind_setup(dn, password)`,
+  .idle_check, .probe_timeout, .max_lifetime, .acquire_timeout,
+  .backoff, .failback_after, .observer})`; `acquire(acquire_options{})
+  -> task<result<lease>>`, the lease giving the full `connection` API
+  (`(*lease)->search(...)`), shared with other leases on the same
+  connection unless acquired with `{.exclusive = true}` (an idle or new
+  connection nobody else uses while it is held: for bind, `start_tls()`,
+  `unbind()`); the lease returns the connection when destroyed or
+  `release()`d. `servers` fail over in priority order with a per-server
+  jittered exponential backoff (`backoff_options{initial, max,
+  multiplier, auth_failure_min}`), and an idle connection to a
+  lower-priority server goes back to the primary after `failback_after`.
+  `session_setup` (`simple_bind_setup(dn, password)`,
   `sasl_bind_setup(factory, dn)`, or any `task<result<void>>(connection
-  &)`) runs on every new connection after connect and StartTLS; an
-  auth failure stops reconnecting to that server until its backoff ends.
-  An idle connection is probed (root DSE, `1.1`) after `idle_check`;
-  `max_lifetime` and a lease that re-bound (`connection::bind_count()`)
-  close a connection when it is returned. `client_observer` hooks
-  (`on_connect`, `on_disconnect` with a `disconnect_reason`, `on_retry`,
-  `on_probe`, `on_acquire_wait`) do nothing by default. `close()`,
+  &)`) runs on every new connection after connect and StartTLS; an auth
+  failure backs that server off for at least `auth_failure_min`, during
+  which acquires fail at once with the stored error instead of binding
+  again. An idle connection is probed (root DSE, `1.1`) after
+  `idle_check`, within `probe_timeout`; a connection older than
+  `max_lifetime`, or whose `connection::bind_count()` changed (a bind
+  done or in progress), is no longer handed out and closes once its last
+  lease returns, and does not count against `max_connections` meanwhile.
+  `client_observer` hooks (`on_connect`, `on_disconnect` with a
+  `disconnect_reason`, `on_retry`, `on_probe`, `on_acquire_wait`) do
+  nothing by default, and none runs after `close()`. `close()`,
   `connections()`.
 - `client_errc::not_sent` (connection.hpp, "Sent or not"): the operation
   failed before its request reached the writer (connection closed before
   it was submitted, still queued, or held behind a bind), so the server
   never saw it. It matches `cond::connection_lost`, like `not_connected`.
+  A behaviour change: a request held behind a bind when a Notice of
+  Disconnection (or any failure) closes the connection now fails with
+  `not_sent` (`cond::connection_lost`), no longer with the notice's own
+  code (`unavailable` or `busy`: `cond::busy_or_unavailable`).
 - `examples/ldapsearch.cpp` (target `jhetz_ldapsearch`, binary
   `jhetz-ldapsearch`, option `JHETZ_LDAP_BUILD_EXAMPLES`): connect,
   StartTLS (`-Z`), simple bind (`-D dn -w pw`) or SASL EXTERNAL

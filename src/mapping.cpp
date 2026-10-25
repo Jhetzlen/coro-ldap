@@ -55,17 +55,6 @@ namespace detail {
 		return detail::format("{} {}", name, attribute);
 	}
 
-	auto with_context(error e, std::string_view prefix) -> error
-	{
-		if (e.context.empty()) {
-			e.context.assign(prefix);
-		} else {
-			e.context.insert(0, ": ");
-			e.context.insert(0, prefix);
-		}
-		return e;
-	}
-
 	// A swap only garbles the context of a diagnostic; one caller (mapping.hpp).
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto entry_context(std::string_view dn, std::string_view attribute) -> std::string

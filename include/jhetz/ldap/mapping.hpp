@@ -443,8 +443,6 @@ namespace detail {
 		  "ldap: this member is not listed in ldap::schema<T>");
 		return std::get<i>(schema<C>.fields);
 	}
-
-	auto with_context(error e, std::string_view prefix) -> error;
 }// namespace detail
 
 // The attribute names of T's descriptor, in order (what search_as requests).

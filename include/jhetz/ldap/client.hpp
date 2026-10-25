@@ -13,63 +13,89 @@
 //   if (!lease) ...                         // every server failed, or acquire_timeout
 //   auto people = co_await (*lease)->search({.base = ldap::dn{"ou=people,dc=example,dc=org"}});
 //
-// Leases share connections. A lease gives the full ldap::connection API on
-// one pooled connection, and several leases may use the same connection at
-// once: their operations are multiplexed on it (connection.hpp), which is
-// why max_connections defaults to 1. acquire() hands out an idle
-// connection (no lease) first, then opens a new one while fewer than
-// max_connections exist, and only then shares the connection with the
-// fewest leases: N connections give N-way isolation (a slow paged search,
-// a StartTLS, a long SASL exchange) before any sharing. Because leases
-// share, whatever a lease changes on its connection is seen by the others
-// sharing it: a bind changes the identity of all of them (the connection is
-// then closed once its last lease returns, see "Bind identity" below),
-// start_tls() fails with operation_in_progress while another lease has an
-// operation outstanding, and unbind() or close() ends the connection for
-// everyone. Use a client per identity, and keep binds to session_setup.
+// Leases share connections by default. A lease gives the full
+// ldap::connection API on one pooled connection, and several shared leases
+// may use the same connection at once: their operations are multiplexed on
+// it (connection.hpp), which is why max_connections defaults to 1.
+// acquire() hands out an idle connection (no lease) first, then opens a new
+// one while fewer than max_connections exist, and only then shares the
+// connection with the fewest leases: N connections give N-way isolation (a
+// slow paged search, a long SASL exchange) before any sharing. Because
+// shared leases share, what one changes on its connection the others see:
+// a bind changes the identity of all of them, start_tls() fails with
+// operation_in_progress while another lease has an operation outstanding,
+// and unbind() or close() ends the connection for everyone. So call bind,
+// start_tls() and unbind() only on an exclusive lease
+// (acquire({.exclusive = true})): an idle or new connection that no other
+// lease shares while it is held. A connection whose bind_count() changed
+// (a bind done, failed, or still in progress) is never handed out again,
+// to anyone: it leaves the pool once its last lease returns (see "Bind
+// identity"). Mind that a failed bind leaves the connection anonymous: on
+// a shared lease the others sharing it silently drop to the anonymous
+// identity until they return it. Use a client per identity, and keep binds
+// to session_setup.
 //
 // Servers and failover: `servers` is in priority order. A new connection
 // tries each server whose backoff has ended, in that order. A server that
 // fails (connect, StartTLS, or session_setup) is not tried again until a
 // backoff delay has passed: full jitter, uniform in [0, d] with d =
 // min(backoff.max, backoff.initial * backoff.multiplier^(failures - 1)),
-// reset by a success. acquire() waits for the earliest backoff to end, up to
+// reset by a success. Concurrent attempts failing together count as one
+// failure. acquire() waits for the earliest backoff to end, up to
 // acquire_timeout, and then fails with the last server's error. A failure
-// that retrying cannot fix (cond::auth_failed, cond::invalid_input, e.g.
-// wrong credentials or a bad URL) also stops this acquire() from trying that
-// server again, so a wrong password costs one bind per server per backoff
-// period, not a retry storm (or an Active Directory account lockout). A
-// connection to a lower-priority server that is idle, at least
-// failback_after old, while a higher-priority server's backoff has ended,
-// is closed when acquire() finds it, so the next connection goes back to
-// the primary (failing over again if the primary still fails).
+// that retrying cannot fix (cond::invalid_input: a bad URL, a setup that
+// cannot work) stops this acquire() from trying that server again. An
+// authentication failure (cond::auth_failed, e.g. a wrong password) does
+// more: its backoff is at least backoff.auth_failure_min and at least half
+// of d (no jitter down to 0), every acquire() already running stops trying
+// that server, and every acquire() started during that backoff fails at
+// once with the stored error (unless another server or a pooled connection
+// serves it) instead of binding again. So a wrong password costs at most
+// one bind per server per backoff period (plus the attempts already in
+// flight, up to max_connections), not a retry storm; this limits the rate
+// of failed binds, it cannot keep a password that stays wrong from locking
+// an account (Active Directory) in the end. A connection to a
+// lower-priority server that is idle, at least failback_after old, while a
+// higher-priority server this acquire() may try has ended its backoff, is
+// closed when acquire() finds it, so the next connection goes back to the
+// primary (failing over again if the primary still fails).
 //
 // Health: there is no background timer (it would keep io_context::run()
 // from returning). acquire() drops pooled connections found closed, and
 // probes an idle connection unused for longer than idle_check with a root
 // DSE base search for the attribute "1.1" (no attributes) before handing it
-// out: one that does not answer (a server error is an answer) is closed and
-// replaced. A connection older than max_lifetime is closed instead of being
-// pooled again when its last lease returns (or when acquire() finds it
-// idle).
+// out, within probe_timeout: one that does not answer (a server error is an
+// answer) is closed and replaced. A connection older than max_lifetime is
+// no longer handed out (acquire() opens a replacement instead), and leaves
+// the pool once its last lease returns.
 //
 // Bind identity: session_setup runs on every new connection, after connect
 // and StartTLS (connection_options::start_tls). The client records the
-// connection's bind_count() after it; a lease returned with a different
-// count (the caller bound again) gets its connection closed once no lease
-// uses it, and no later acquire() hands it out.
+// connection's bind_count() after it; once the count differs (a lease bound
+// again, or is binding), no acquire() hands the connection out, and it is
+// closed once no lease uses it.
+//
+// Retired connections (closed, re-bound, too old, failed back) do not count
+// against max_connections while their last leases drain: acquire() opens a
+// replacement at once, so the pool may briefly hold more connections.
 //
 // Closing: a connection leaving the pool while open is unbound (a detached
 // unbind() on the executor) if no lease holds it, else closed. close()
-// closes every pooled connection (leased ones included: their operations
-// fail with not_connected) and fails later acquire() calls; the destructor
-// calls it.
+// closes every pooled connection, leased ones included (their outstanding
+// operations fail with not_connected, or not_sent for requests not written
+// yet, see connection.hpp "Sent or not"), and fails waiting and later
+// acquire() calls with not_connected; the destructor calls it. No observer
+// hook runs once close() has returned.
 //
-// Threading: like connection, a client belongs to the executor of its
-// io_context; acquire() and the leases (their connections, their
+// Threading and lifetime: like connection, a client belongs to the executor
+// of its io_context; acquire() and the leases (their connections, their
 // destruction) must be used on it. The io_context must outlive the client
-// and its leases. A lease may outlive its client: its connection stays
-// usable until close() or the lease returns.
+// and its leases. The memory resource must outlive the work the client
+// leaves on the io_context (a detached unbind() may still run after the
+// client and its leases are gone): keep it until io_context::run() returns.
+// A lease may outlive its client, but the client's destruction closes its
+// connection (close()): its operations then fail, and destroying the lease
+// later is safe.
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"
@@ -122,9 +148,14 @@ struct backoff_options
 	static constexpr std::chrono::milliseconds default_max{ 30'000 };
 	static constexpr double default_multiplier = 2.0;
 
+	static constexpr std::chrono::milliseconds default_auth_failure_min{ 5'000 };
+
 	std::chrono::milliseconds initial{ default_initial };// cap after the first failure
 	std::chrono::milliseconds max{ default_max };// cap for any number of failures
 	double multiplier = default_multiplier;// cap growth per failure; below 1 counts as 1
+	// The shortest backoff after an authentication failure (whose delay is
+	// also at least half the cap: no jitter down to 0).
+	std::chrono::milliseconds auth_failure_min{ default_auth_failure_min };
 };
 
 // Why a connection left the pool (client_observer::on_disconnect).
@@ -139,7 +170,8 @@ enum class disconnect_reason {
 
 // Hooks for metrics and logs; every one does nothing by default. Called on
 // the client's executor, synchronously: they must not throw, and should
-// not block.
+// not block. None is called once client::close() has returned. A hook may
+// call client::close().
 class client_observer
 {
   public:
@@ -188,6 +220,7 @@ struct client_options
 	static constexpr std::chrono::milliseconds default_idle_check{ 60'000 };
 	static constexpr std::chrono::milliseconds default_acquire_timeout{ 30'000 };
 	static constexpr std::chrono::milliseconds default_failback_after{ 300'000 };
+	static constexpr std::chrono::milliseconds default_probe_timeout{ 5'000 };
 
 	// In priority order. Empty: acquire() fails with invalid_url.
 	std::vector<url> servers{};
@@ -203,8 +236,12 @@ struct client_options
 	// out; nullopt: never (a dead connection is then found by the lease's
 	// first operation).
 	std::optional<std::chrono::milliseconds> idle_check{ default_idle_check };
-	// Close a connection this old when its last lease returns; nullopt: no
-	// limit.
+	// Bounds the idle check, within what is left of acquire_timeout; no
+	// answer by then: the connection is replaced. ldap::no_timeout: only
+	// acquire_timeout bounds it.
+	std::chrono::milliseconds probe_timeout{ default_probe_timeout };
+	// A connection this old is no longer handed out, and leaves the pool
+	// once its last lease returns; nullopt: no limit.
 	std::optional<std::chrono::milliseconds> max_lifetime{};
 	// Bounds each acquire(): waiting for backoffs and for other acquires,
 	// connecting, setting up and probing. On expiry acquire() fails with the
@@ -216,8 +253,18 @@ struct client_options
 	// How old an idle connection to a lower-priority server must be before
 	// acquire() closes it to go back to a higher-priority one.
 	std::chrono::milliseconds failback_after{ default_failback_after };
-	// Not owned; must outlive the client. Null: none.
+	// Not owned; must outlive the client, or its close(). Null: none.
 	client_observer *observer = nullptr;
+};
+
+// How acquire() picks the connection.
+struct acquire_options
+{
+	// An idle connection or a new one, which no other lease shares while
+	// this one holds it: for bind, start_tls() and unbind() (see the header
+	// comment). It waits (within acquire_timeout) when every connection is
+	// leased and max_connections are open.
+	bool exclusive = false;
 };
 
 class client;
@@ -237,8 +284,9 @@ namespace detail {
 }// namespace detail
 
 // The use of one pooled connection, until the lease is destroyed,
-// reassigned or released. Not exclusive: other leases may share the
-// connection (see the header comment). Destroy it on the client's executor.
+// reassigned or released. Shared unless acquired with
+// acquire_options::exclusive: other leases may then use the connection too
+// (see the header comment). Destroy it on the client's executor.
 class lease
 {
   public:
@@ -291,17 +339,21 @@ class client
 
 	// A lease on a pooled connection: an idle one (probed first if unused for
 	// longer than idle_check), else a new one while fewer than
-	// max_connections exist, else the open one with the fewest leases (see
-	// the header comment). Waits at most acquire_timeout. Fails with the
-	// last server's error (its context names the server: "acquire
-	// ldap://ldap1.example.org: ..."), capy::error::timeout when it waited
-	// for other acquires that long, capy::error::canceled if the task's stop
-	// token is set, and client_errc::not_connected once close() was called
-	// (or on a moved-from client).
-	auto acquire() -> boost::capy::task<result<lease>>;
+	// max_connections exist, else (unless `options.exclusive`) the open one
+	// with the fewest leases (see the header comment). Waits at most
+	// acquire_timeout. Fails with the last server's error (its context names
+	// the server: "acquire ldap://ldap1.example.org: ..."), the stored error
+	// of a server backing off after an authentication failure,
+	// capy::error::timeout when it waited for other acquires that long,
+	// capy::error::canceled if the task's stop token is set, and
+	// client_errc::not_connected once close() was called (or on a moved-from
+	// client). The task does not refer to *this: the client may be moved or
+	// destroyed while it runs (destroying it fails it with not_connected).
+	auto acquire(acquire_options options = {}) -> boost::capy::task<result<lease>>;
 
-	// Connections in the pool, open or being closed once their last lease
-	// returns (not those still being opened). For tests and diagnostics.
+	// Connections in the pool, open or retired and waiting for their last
+	// lease to return (not those still being opened). For tests and
+	// diagnostics.
 	[[nodiscard]] auto connections() const noexcept -> std::size_t;
 
 	// Closes every pooled connection and fails later and waiting acquire()

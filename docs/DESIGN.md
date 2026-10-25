@@ -1531,10 +1531,18 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   failure's context and diagnostic: the server never saw it, so an update
   may be retried elsewhere. `not_sent` matches `cond::connection_lost` like
   `not_connected`, so callers testing the condition are unaffected.
+  A behaviour change of 3pf.2: a request held behind a bind when a Notice
+  of Disconnection closes the connection used to fail with the notice's
+  code (`unavailable` or `busy`, `cond::busy_or_unavailable`); it now
+  fails with `not_sent` (`cond::connection_lost`). Requests the writer
+  had taken keep the notice's code.
   Exceptions: an allocation failure stays `not_enough_memory`; `unbind()`'s
-  abandoned operations get `not_connected` (their PDUs were queued before
-  the UnbindRequest and may still go out); a default-constructed or
-  moved-from connection keeps `not_connected`.
+  abandoned operations get `not_connected` (their requests were written
+  or queued before the UnbindRequest, which follows them out, so the
+  server may have seen them); a default-constructed or moved-from
+  connection keeps `not_connected`. An `unbind()` during a bind or
+  StartTLS exchange sends nothing and just closes (below), so the requests
+  held behind that bind fail with `not_sent`.
   `unbind()` fails the outstanding operations with `not_connected` (the
   server abandons them too), waits until the UnbindRequest is written even
   if cancelled, then closes. Nothing may follow the UnbindRequest (RFC 4511
@@ -1719,13 +1727,15 @@ decision left open.
 
 - One type, `ldap::client` (the name `naming-connection` reserved), built
   from `client_options{servers, connection, setup, max_connections = 1,
-  idle_check = 60 s, max_lifetime, acquire_timeout = 30 s, backoff,
-  failback_after = 5 min, observer}` on one io_context, whose executor
-  everything runs on, as for `connection`. Connections are opened lazily
-  by `acquire()`, up to `max_connections`; nothing runs in the background
-  (no timer keeps `io_context::run()` alive).
-- **Leases share connections** (the open choice of the decision:
-  "exclusive or shared"). `acquire() -> task<result<lease>>`; a lease
+  idle_check = 60 s, probe_timeout = 5 s, max_lifetime, acquire_timeout =
+  30 s, backoff, failback_after = 5 min, observer}` on one io_context,
+  whose executor everything runs on, as for `connection`. Connections are
+  opened lazily by `acquire()`, up to `max_connections`; nothing runs in
+  the background (no timer keeps `io_context::run()` alive).
+- **Leases share connections by default** (the open choice of the
+  decision: "exclusive or shared"; the 3pf.6 review kept shared as the
+  default and added exclusive). `acquire(acquire_options{.exclusive})
+  -> task<result<lease>>`; a lease
   gives the whole `connection` API, and several leases may hold the same
   connection, their operations multiplexed on it. Why: the decision's
   default of one connection rests on multiplexing covering throughput,
@@ -1738,61 +1748,95 @@ decision left open.
   on its connection, the others see. A bind changes their identity (hence
   the rule below), StartTLS fails with `operation_in_progress` while
   another lease has an operation outstanding, `unbind()` / `close()` end
-  it for all. The header says to use one client per identity and keep
-  binds to the setup; per-identity sub-pools are a later bead.
+  it for all; a failed bind silently drops them all to anonymous. Hence
+  `acquire({.exclusive = true})`: an idle connection, else a new one
+  while a slot is free, else it waits; no other acquire (shared or
+  exclusive) gets that connection while the exclusive lease holds it.
+  Bind, `start_tls()` and `unbind()` belong on exclusive leases. The
+  header says to use one client per identity and keep binds to the
+  setup; per-identity sub-pools are a later bead. (`acquire()` is not a
+  coroutine: it copies the shared state into the task, so the client may
+  be moved or destroyed before the task runs.)
 - Servers, in priority order. A connection attempt tries every server
   whose backoff has ended, in order. Connect, StartTLS (`connect` does it
   for `connection_options::start_tls`) and `session_setup` together are
   the attempt: any failure counts against the server. Backoff per server,
   full jitter: uniform in `[0, d]`, `d = min(max, initial *
   multiplier^(failures - 1))` (`detail::backoff_delay`; a multiplier below
-  1 counts as 1), reset by a success. `acquire()` loops: when no server
+  1 counts as 1), reset by a success. A failure episode counts once: an
+  attempt that fails after a concurrent attempt to the same server
+  recorded a failure since it began (`server_state::episode`) adds
+  nothing to the backoff. `acquire()` loops: when no server
   can be tried, it waits for the earliest backoff to end (or for a change:
   a connection pooled, returned, removed, an attempt ending, `close()`),
   bounded by `acquire_timeout`; when the earliest backoff ends after the
   deadline it fails at once with the last error (or the backing-off
   server's last error, its context marked "backing off"). With no
   `acquire_timeout` it retries until it succeeds, is stopped, or the
-  client closes.
-- `cond::auth_failed` (and `cond::invalid_input`: a bad URL, a setup that
-  cannot work) excludes the server for the rest of that `acquire()`, and
-  its backoff keeps later acquires away until it ends: a wrong password
-  costs one bind per server per backoff period, no retry storm or AD
-  lockout. Every server excluded: `acquire()` fails at once with the last
-  error.
+  client closes. Nothing starts after the deadline: no attempt, no probe,
+  and so no server is penalised for an acquire that ran out of time.
+- `cond::invalid_input` (a bad URL, a setup that cannot work) excludes the
+  server for the rest of that `acquire()`. `cond::auth_failed` does more,
+  against a lockout storm (3pf.6): its backoff is `max(auth_failure_min =
+  5 s, backoff_delay(..., 0.5 + 0.5 * jitter))` (equal jitter: never
+  below half the cap); each server counts its auth failures
+  (`server_state::auth_failures`), and an acquire that sees the count
+  change since it began, or starts while the server backs off after an
+  auth failure, excludes that server with the stored error. So
+  concurrent acquires waiting for the failed attempt fail fast, and new
+  ones fail at once, instead of binding again when the backoff ends; the
+  first acquire after the backoff binds once. A wrong password costs at
+  most one bind per server per backoff period, plus the attempts already
+  in flight (up to `max_connections`). That limits the rate; a password
+  that stays wrong can still lock an AD account in the end. Every server
+  excluded: `acquire()` fails at once with the last (or stored) error.
 - Return to the primary: an idle connection to a lower-priority server
   that is `failback_after` old, while a higher-priority server's backoff
-  has ended, is closed when `acquire()` finds it, and the new attempt
-  starts from the primary again (falling back again if it still fails).
+  has ended (and that this acquire has not excluded), is closed when
+  `acquire()` finds it, and the new attempt starts from the primary again
+  (falling back again if it still fails).
   Only idle connections: closing a leased one would cut its operations,
   and keeping it retired would hold a slot with nothing to replace it.
-- Health: `acquire()` first drops idle connections found closed (and
-  older than `max_lifetime`), retires leased ones found closed, then
-  probes the idle connection it picked if unused for `idle_check` or
-  longer: a root DSE base search for `1.1`, within what is left of
-  `acquire_timeout` (else `operation_timeout`). An answer, a server error
+- Health: `acquire()` first retires every connection, leased or not,
+  found closed, re-bound (below) or older than `max_lifetime`, and drops
+  the retired ones no lease holds; then it probes the idle connection it
+  picked if unused for `idle_check` or longer: a root DSE base search for
+  `1.1`, within `probe_timeout` (default 5 s; `no_timeout` for none)
+  capped by what is left of `acquire_timeout`. An answer, a server error
   included, passes; a transport failure or timeout retires and replaces
   the connection. A connection is "unused" since its setup or its last
-  lease's return. `max_lifetime` is checked when the last lease returns
-  (and on acquire, for idle ones).
+  lease's return. So under constant load an expired connection is
+  replaced, not shared on for ever.
 - Bind identity: `connection::bind_count()` (new, public: bind exchanges
   begun, whatever their outcome, since a failed bind leaves the connection
-  anonymous) is recorded after the setup; a lease returned with another
-  count retires the connection (`disconnect_reason::rebound`), closed once
-  its last lease returns. A retired connection still leased counts against
-  `max_connections` until then.
+  anonymous) is recorded after the setup; once the count differs (a bind
+  done, failed, or still in progress on some lease) the connection is
+  retired (`disconnect_reason::rebound`): never handed out again, closed
+  once its last lease returns.
+- Retired connections (any reason) do not count against
+  `max_connections`: a replacement opens at once, so the pool may hold
+  more connections than the limit while retired ones drain. Counting them
+  would let one lease sitting on a dead connection block every acquire
+  until it returns.
 - Leaving the pool: an open connection no lease holds is unbound by a
   detached `unbind()` task on the executor (so the server sees a clean
   UnbindRequest), one still leased (only at `close()`) is closed.
-  `close()` (and the destructor) closes every pooled connection, fails
-  waiting and later `acquire()` calls with `not_connected`; leases may
-  outlive the client (they hold the shared state), returning to nothing.
+  `close()` (and the destructor) closes every pooled connection, leased
+  ones included (their outstanding operations fail with `not_connected`,
+  or `not_sent` for requests not yet written), fails waiting and later
+  `acquire()` calls with `not_connected`, and then drops the observer: no
+  hook runs after `close()`, so the observer need only outlive it (a hook
+  may itself call `close()`; acquire re-checks after each hook). Leases
+  may outlive the client (they hold the shared state), but their
+  connections are closed with it; they return to nothing. The detached
+  unbind tasks may outlive the client and its leases: the memory
+  resource must outlive the io_context's pending work.
 - `client_observer`: virtual hooks, no-ops by default, called
   synchronously on the executor: `on_connect(server, outcome)` after each
   attempt, `on_retry(server, error, delay)` when a server enters backoff,
   `on_disconnect(server, reason)` when a connection leaves the pool,
   `on_probe(server, outcome)`, `on_acquire_wait(waited)` once per acquire
-  that had to wait. No logging dependency.
+  that had to wait. None after `close()`. No logging dependency.
 - Setup helpers: `simple_bind_setup(dn, password)` and
   `sasl_bind_setup(factory, dn)`, the factory making a fresh mechanism per
   connection (a null one fails with `invalid_argument`, so the server is

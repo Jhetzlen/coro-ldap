@@ -77,7 +77,9 @@
 // behind a bind) when the connection closes fails with client_errc::not_sent
 // instead of the failure's own code; its context still names that failure.
 // The server never saw such a request, so even an update may be retried on
-// another connection. Once the writer has taken the request, the failure's
+// another connection. So a request held behind a bind when a Notice of
+// Disconnection arrives fails with not_sent, not with the notice's code
+// (unavailable or busy). Once the writer has taken the request, the failure's
 // own code is reported (not_connected after close(), a transport error, ...):
 // the server may have seen it. not_sent matches cond::connection_lost, like
 // not_connected, so code testing the condition needs no change. Exceptions:

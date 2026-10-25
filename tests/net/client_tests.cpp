@@ -17,6 +17,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -204,7 +205,10 @@ struct pool_fixture
 		pool.emplace(ioc, std::move(options));
 		ldap::detail::set_jitter(*pool, [] { return 1.0; });
 	}
-	auto acquire() -> ldap::result<ldap::lease> { return finish(ioc, pool->acquire()); }
+	auto acquire(ldap::acquire_options how = {}) -> ldap::result<ldap::lease>
+	{
+		return finish(ioc, pool->acquire(how));
+	}
 };
 
 }// namespace
@@ -418,12 +422,13 @@ TEST_CASE("client: an authentication failure stops reconnecting to that server",
 		CHECK(first.error().code == ldap::cond::auth_failed);
 		CHECK_THAT(std::string(first.error().context), ContainsSubstring("session setup"));
 		CHECK(f.obs.waits.empty());
-		// Within the backoff, a new acquire does not bind again: it waits
-		// for the backoff (longer than acquire_timeout here) and fails with
-		// the server's error.
+		// Within the backoff, a new acquire does not bind again: it fails at
+		// once with the stored error.
 		auto second = f.acquire();
 		REQUIRE_FALSE(second.has_value());
 		CHECK(second.error().code == ldap::errc::invalid_credentials);
+		CHECK_THAT(std::string(second.error().context), ContainsSubstring("authentication failure"));
+		CHECK(f.obs.waits.empty());
 		CHECK(s.accepted() == 1);
 	}
 	SECTION("every server refuses: acquire() fails once each was tried")
@@ -453,7 +458,6 @@ TEST_CASE("client: the idle check", "[net][client][probe]")
 		f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = milliseconds(0), .observer = &f.obs });
 		auto l = f.acquire();
 		REQUIRE(l.has_value());
-		const ldap::connection *first = &l->get();
 		l->release();
 		s.drop(0);
 		auto again = f.acquire();
@@ -461,7 +465,6 @@ TEST_CASE("client: the idle check", "[net][client][probe]")
 		CHECK((*again)->is_open());
 		CHECK(s.accepted() == 2);
 		CHECK(f.pool->connections() == 1);
-		(void)first;
 		CHECK(f.obs.events
 			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
 				"probe " + text(s.url()) + " failed",
@@ -697,4 +700,431 @@ TEST_CASE("client: a lease outlives its client", "[net][client]")
 	CHECK(static_cast<bool>(kept));
 	CHECK_FALSE(kept->is_open());
 	CHECK(text(kept.server()) == text(s.url()));
+}
+
+TEST_CASE("client: a connection whose identity changed is not shared", "[net][client][identity]")
+{
+	const ldap::dn jdoe{ "uid=jdoe,ou=people,dc=example,dc=org" };
+	SECTION("a bind in progress")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }), step{} }, bind_ok() });// the second bind is never answered
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .acquire_timeout = milliseconds(5'000) });
+		auto a = f.acquire();
+		REQUIRE(a.has_value());
+		outcome<ldap::result<void>> bound;
+		spawn(f.ioc, (*a)->simple_bind(jdoe, "pw"), bound);
+		drive_until(f.ioc, [&s] { return s.log(0).received.size() == 2; });
+		auto b = f.acquire();
+		REQUIRE(b.has_value());
+		CHECK(&b->get() != &a->get());
+		CHECK(s.accepted() == 2);
+		f.pool->close();
+		drive_until(f.ioc, [&bound] { return bound.done(); });
+	}
+	SECTION("a bind done")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }), answer({ bind_resp(2) }) }, bind_ok() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .acquire_timeout = milliseconds(5'000) });
+		auto a = f.acquire();
+		REQUIRE(a.has_value());
+		REQUIRE(finish(f.ioc, (*a)->simple_bind(jdoe, "pw")).has_value());
+		auto b = f.acquire();
+		REQUIRE(b.has_value());
+		CHECK(&b->get() != &a->get());
+		CHECK(s.accepted() == 2);
+	}
+}
+
+TEST_CASE("client: a dead leased connection does not hold its slot", "[net][client][pool]")
+{
+	pool_fixture f;
+	auto &s = f.server({ bind_ok(), bind_ok() });
+	f.make({ .servers = { s.url() }, .setup = admin_setup(), .acquire_timeout = milliseconds(5'000) });
+	auto held = f.acquire();
+	REQUIRE(held.has_value());
+	s.drop(0);
+	auto r = finish(f.ioc, (*held)->search(people_search()));
+	REQUIRE_FALSE(r.has_value());
+	CHECK_FALSE((*held)->is_open());
+	auto other = f.acquire();// max_connections is 1, and `held` still holds the dead one
+	REQUIRE(other.has_value());
+	CHECK((*other)->is_open());
+	CHECK(s.accepted() == 2);
+}
+
+TEST_CASE("client: a wrong password binds once for concurrent acquires", "[net][client][auth]")
+{
+	pool_fixture f;
+	const auto refuse = [] { return std::vector<step>{ answer({ bind_resp(1, 49, "bad password") }) }; };
+	auto &s = f.server({ refuse(), refuse(), refuse(), refuse(), refuse(), refuse() });
+	f.make({ .servers = { s.url() },
+	  .setup = admin_setup(),
+	  .acquire_timeout = milliseconds(10'000),
+	  .backoff = { .initial = milliseconds(20), .max = milliseconds(20) } });
+	constexpr std::size_t n = 5;
+	std::vector<outcome<ldap::result<ldap::lease>>> out(n);
+	for (auto &o : out) {
+		spawn(f.ioc, f.pool->acquire(), o);
+	}
+	drive_until(f.ioc, [&out] { return std::ranges::all_of(out, [](const auto &o) { return o.done(); }); });
+	for (auto &o : out) {
+		REQUIRE_FALSE(o.get().has_value());
+		CHECK(o.get().error().code == ldap::errc::invalid_credentials);
+	}
+	CHECK(s.accepted() == 1);
+	finish(f.ioc, sleep_for(milliseconds(40)));// longer than the backoff's cap
+	auto later = f.acquire();// still within the server's auth backoff: no new bind
+	REQUIRE_FALSE(later.has_value());
+	CHECK(later.error().code == ldap::errc::invalid_credentials);
+	CHECK(s.accepted() == 1);
+}
+
+TEST_CASE("client: authentication failures back off", "[net][client][auth]")
+{
+	const auto refuse = [] { return std::vector<step>{ answer({ bind_resp(1, 49, "bad password") }) }; };
+	SECTION("at least auth_failure_min and half the cap, without jitter down to 0")
+	{
+		pool_fixture f;
+		auto &s = f.server({ refuse() });
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .backoff = { .initial = milliseconds(100), .max = milliseconds(100), .auth_failure_min = milliseconds(70) },
+		  .observer = &f.obs });
+		ldap::detail::set_jitter(*f.pool, [] { return 0.0; });
+		REQUIRE_FALSE(f.acquire().has_value());
+		CHECK(f.obs.events.back() == "retry " + text(s.url()) + " 70ms");
+		auto &t = f.server({ refuse() });
+		f.make({ .servers = { t.url() },
+		  .setup = admin_setup(),
+		  .backoff = { .initial = milliseconds(400), .max = milliseconds(400), .auth_failure_min = milliseconds(70) },
+		  .observer = &f.obs });
+		ldap::detail::set_jitter(*f.pool, [] { return 0.0; });
+		REQUIRE_FALSE(f.acquire().has_value());
+		CHECK(f.obs.events.back() == "retry " + text(t.url()) + " 200ms");// half the cap
+	}
+	SECTION("concurrent attempts failing together count once")
+	{
+		pool_fixture f;
+		auto &s = f.server({ refuse(), refuse(), refuse() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .max_connections = 3, .observer = &f.obs });
+		constexpr std::size_t n = 3;
+		std::vector<outcome<ldap::result<ldap::lease>>> out(n);
+		for (auto &o : out) {
+			spawn(f.ioc, f.pool->acquire(), o);
+		}
+		drive_until(f.ioc, [&out] { return std::ranges::all_of(out, [](const auto &o) { return o.done(); }); });
+		for (auto &o : out) {
+			REQUIRE_FALSE(o.get().has_value());
+			CHECK(o.get().error().code == ldap::errc::invalid_credentials);
+		}
+		CHECK(s.accepted() == 3);// all in flight before the first failed
+		CHECK(std::ranges::count_if(f.obs.events, [](const std::string &e) { return e.starts_with("retry "); }) == 1);
+	}
+	SECTION("a bind is tried again once the backoff ends")
+	{
+		pool_fixture f;
+		auto &s = f.server({ refuse(), bind_ok() });
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .backoff = { .initial = milliseconds(30), .max = milliseconds(30), .auth_failure_min = milliseconds(30) } });
+		REQUIRE_FALSE(f.acquire().has_value());
+		finish(f.ioc, sleep_for(milliseconds(40)));
+		auto l = f.acquire();
+		REQUIRE(l.has_value());
+		CHECK(s.accepted() == 2);
+	}
+}
+
+TEST_CASE("client: exclusive leases", "[net][client][exclusive]")
+{
+	SECTION("never shared while held")
+	{
+		pool_fixture f;
+		auto &s = f.server({ bind_ok(), bind_ok() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .max_connections = 2 });
+		auto e = f.acquire({ .exclusive = true });
+		REQUIRE(e.has_value());
+		auto a = f.acquire();
+		auto b = f.acquire();
+		REQUIRE(a.has_value());
+		REQUIRE(b.has_value());
+		CHECK(&a->get() != &e->get());
+		CHECK(&b->get() == &a->get());// shares the shared one, not the exclusive one
+		CHECK(s.accepted() == 2);
+		e->release();
+		auto c = f.acquire();// idle again: handed out first
+		REQUIRE(c.has_value());
+		CHECK(&c->get() != &a->get());
+	}
+	SECTION("an exclusive acquire does not take a shared connection")
+	{
+		pool_fixture f;
+		auto &s = f.server({ bind_ok() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .acquire_timeout = milliseconds(5'000) });
+		auto a = f.acquire();
+		REQUIRE(a.has_value());
+		outcome<ldap::result<ldap::lease>> e;
+		spawn(f.ioc, f.pool->acquire({ .exclusive = true }), e);
+		finish(f.ioc, sleep_for(milliseconds(20)));
+		CHECK_FALSE(e.done());// waits: the only connection is leased
+		const ldap::connection *conn = &a->get();
+		a->release();
+		drive_until(f.ioc, [&e] { return e.done(); });
+		REQUIRE(e.get().has_value());
+		CHECK(&e.get()->get() == conn);
+		CHECK(s.accepted() == 1);
+	}
+	SECTION("a shared acquire waits while the connection is held exclusively")
+	{
+		pool_fixture f;
+		auto &s = f.server({ bind_ok() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .acquire_timeout = milliseconds(50) });
+		auto e = f.acquire({ .exclusive = true });
+		REQUIRE(e.has_value());
+		auto a = f.acquire();
+		REQUIRE_FALSE(a.has_value());
+		CHECK(a.error().code == ldap::cond::timeout);
+		e->release();
+		auto b = f.acquire();
+		REQUIRE(b.has_value());
+		CHECK(s.accepted() == 1);
+	}
+}
+
+TEST_CASE("client: max_lifetime under load", "[net][client][pool]")
+{
+	pool_fixture f;
+	auto &s = f.server({ { answer({ bind_resp(1) }), step{}, client_hangs_up() }, bind_ok() });
+	f.make({ .servers = { s.url() }, .setup = admin_setup(), .max_lifetime = milliseconds(30), .observer = &f.obs });
+	auto a = f.acquire();
+	REQUIRE(a.has_value());
+	finish(f.ioc, sleep_for(milliseconds(40)));
+	auto b = f.acquire();// `a` still holds the expired one: not shared, replaced
+	REQUIRE(b.has_value());
+	CHECK(&b->get() != &a->get());
+	CHECK(s.accepted() == 2);
+	CHECK(f.pool->connections() == 2);// the old one drains
+	a->release();
+	CHECK(f.pool->connections() == 1);
+	CHECK(f.obs.events.back() == "disconnect " + text(s.url()) + " max_lifetime");
+}
+
+TEST_CASE("client: the probe's own bound", "[net][client][probe]")
+{
+	SECTION("a black-holed connection is replaced after probe_timeout")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }), step{} }, bind_ok() });// reads the probe, never answers
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .idle_check = milliseconds(0),
+		  .probe_timeout = milliseconds(50),
+		  .acquire_timeout = milliseconds(10'000),
+		  .observer = &f.obs });
+		auto l = f.acquire();
+		REQUIRE(l.has_value());
+		l->release();
+		const auto start = std::chrono::steady_clock::now();
+		auto again = f.acquire();
+		REQUIRE(again.has_value());
+		CHECK(std::chrono::steady_clock::now() - start < milliseconds(5'000));
+		CHECK(s.accepted() == 2);
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
+				"probe " + text(s.url()) + " failed",
+				"disconnect " + text(s.url()) + " probe_failed",
+				"connect " + text(s.url()) + " ok" });
+	}
+	SECTION("no server is tried or penalised once acquire_timeout ran out in the probe")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }), step{} }, bind_ok() });
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .idle_check = milliseconds(0),
+		  .probe_timeout = milliseconds(5'000),
+		  .acquire_timeout = milliseconds(50),
+		  .observer = &f.obs });
+		auto l = f.acquire();
+		REQUIRE(l.has_value());
+		l->release();
+		auto again = f.acquire();
+		REQUIRE_FALSE(again.has_value());
+		CHECK(again.error().code == ldap::cond::timeout);
+		CHECK(s.accepted() == 1);
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
+				"probe " + text(s.url()) + " failed",
+				"disconnect " + text(s.url()) + " probe_failed" });
+	}
+}
+
+TEST_CASE("client: acquire() stopped by its stop token", "[net][client][cancel]")
+{
+	SECTION("while connecting")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { step{} } });// reads the bind, never answers
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		std::stop_source stop;
+		outcome<ldap::result<ldap::lease>> a;
+		spawn(f.ioc, stop.get_token(), f.pool->acquire(), a);
+		drive_until(f.ioc, [&s] { return s.accepted() == 1 && !s.log(0).received.empty(); });
+		stop.request_stop();
+		drive_until(f.ioc, [&a] { return a.done(); });
+		REQUIRE_FALSE(a.get().has_value());
+		CHECK(a.get().error().code == ldap::cond::canceled);
+		CHECK(f.obs.events.empty());// not the server's fault: no backoff
+	}
+	SECTION("while probing")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }), step{} } });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = milliseconds(0), .observer = &f.obs });
+		auto l = f.acquire();
+		REQUIRE(l.has_value());
+		l->release();
+		std::stop_source stop;
+		outcome<ldap::result<ldap::lease>> a;
+		spawn(f.ioc, stop.get_token(), f.pool->acquire(), a);
+		drive_until(f.ioc, [&s] { return s.log(0).received.size() == 2; });
+		stop.request_stop();
+		drive_until(f.ioc, [&a] { return a.done(); });
+		REQUIRE_FALSE(a.get().has_value());
+		CHECK(a.get().error().code == ldap::cond::canceled);
+		CHECK(f.pool->connections() == 1);// the connection stays
+		CHECK(f.obs.events.back() == "probe " + text(s.url()) + " failed");
+	}
+	SECTION("while waiting for a backoff")
+	{
+		pool_fixture f;
+		auto &s = f.server({ hang_up_at_once() });
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .acquire_timeout = std::nullopt,
+		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
+		std::stop_source stop;
+		outcome<ldap::result<ldap::lease>> a;
+		spawn(f.ioc, stop.get_token(), f.pool->acquire(), a);
+		drive_until(f.ioc, [&s] { return s.accepted() == 1; });
+		finish(f.ioc, sleep_for(milliseconds(20)));
+		CHECK_FALSE(a.done());
+		stop.request_stop();
+		drive_until(f.ioc, [&a] { return a.done(); });
+		REQUIRE_FALSE(a.get().has_value());
+		CHECK(a.get().error().code == ldap::cond::canceled);
+	}
+}
+
+TEST_CASE("client: closed during acquire()", "[net][client][close]")
+{
+	SECTION("close() while connecting")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { step{} } });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		outcome<ldap::result<ldap::lease>> a;
+		spawn(f.ioc, f.pool->acquire(), a);
+		drive_until(f.ioc, [&s] { return s.accepted() == 1 && !s.log(0).received.empty(); });
+		f.pool->close();
+		finish(f.ioc, sleep_for(milliseconds(20)));// the bind goes on: nothing has closed it yet
+		f.servers.front().drop(0);
+		drive_until(f.ioc, [&a] { return a.done(); });
+		REQUIRE_FALSE(a.get().has_value());
+		CHECK(a.get().error().code == ldap::client_errc::not_connected);
+	}
+	SECTION("the client destroyed before acquire()'s task starts")
+	{
+		pool_fixture f;
+		auto &s = f.server({ hang_up_at_once() });
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .acquire_timeout = std::nullopt,
+		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
+		outcome<ldap::result<ldap::lease>> a;
+		auto task = f.pool->acquire();
+		f.pool.reset();// acquire() holds its own state, not the client
+		spawn(f.ioc, std::move(task), a);
+		drive_until(f.ioc, [&a] { return a.done(); });
+		REQUIRE_FALSE(a.get().has_value());
+		CHECK(a.get().error().code == ldap::client_errc::not_connected);
+		CHECK(s.accepted() == 0);
+	}
+	SECTION("the client destroyed while acquire() waits for a backoff")
+	{
+		pool_fixture f;
+		auto &s = f.server({ hang_up_at_once() });
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .acquire_timeout = std::nullopt,
+		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
+		outcome<ldap::result<ldap::lease>> a;
+		spawn(f.ioc, f.pool->acquire(), a);
+		drive_until(f.ioc, [&s] { return s.accepted() == 1; });
+		finish(f.ioc, sleep_for(milliseconds(20)));
+		f.pool.reset();
+		drive_until(f.ioc, [&a] { return a.done(); });
+		REQUIRE_FALSE(a.get().has_value());
+		CHECK(a.get().error().code == ldap::client_errc::not_connected);
+	}
+}
+
+namespace {
+
+// Closes the client from its first on_connect hook; records every call.
+struct closing_recorder final : ldap::client_observer
+{
+	std::optional<ldap::client> *pool = nullptr;
+	std::size_t calls = 0;
+
+	void on_connect(const ldap::url &, const ldap::result<void> &) override
+	{
+		++calls;
+		(*pool)->close();
+	}
+	void on_disconnect(const ldap::url &, ldap::disconnect_reason) override { ++calls; }
+	void on_retry(const ldap::url &, const ldap::error &, milliseconds) override { ++calls; }
+	void on_probe(const ldap::url &, const ldap::result<void> &) override { ++calls; }
+	void on_acquire_wait(milliseconds) override { ++calls; }
+};
+
+}// namespace
+
+TEST_CASE("client: no observer hook after close()", "[net][client][close]")
+{
+	SECTION("close() from a hook")
+	{
+		pool_fixture f;
+		auto &s = f.server({ bind_ok() });
+		closing_recorder obs;
+		obs.pool = &f.pool;
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &obs });
+		auto l = f.acquire();
+		REQUIRE_FALSE(l.has_value());
+		CHECK(l.error().code == ldap::client_errc::not_connected);
+		CHECK(f.pool->connections() == 0);
+		CHECK(obs.calls == 2);// on_connect, and close()'s on_disconnect
+	}
+	SECTION("a waiting acquire() ends after close() without calling on_acquire_wait")
+	{
+		pool_fixture f;
+		auto &s = f.server({ hang_up_at_once() });
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .acquire_timeout = std::nullopt,
+		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) },
+		  .observer = &f.obs });
+		outcome<ldap::result<ldap::lease>> a;
+		spawn(f.ioc, f.pool->acquire(), a);
+		drive_until(f.ioc, [&s] { return s.accepted() == 1; });
+		finish(f.ioc, sleep_for(milliseconds(20)));
+		f.pool->close();
+		const auto seen = f.obs.events.size();
+		drive_until(f.ioc, [&a] { return a.done(); });
+		REQUIRE_FALSE(a.get().has_value());
+		CHECK(f.obs.events.size() == seen);
+		CHECK(f.obs.waits.empty());
+	}
 }
