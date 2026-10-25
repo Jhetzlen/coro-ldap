@@ -702,7 +702,10 @@ namespace detail {
 // request_controls) to `out`, on its resource; stops at the first that
 // fails. A virtual_list_view without a sort request control (typed or raw)
 // in `out` fails too, and so does a transaction_specification with a
-// proxied authorization control (typed or raw) in `out`.
+// proxied authorization control (typed or raw) in `out`. Only a typed
+// transaction_specification triggers that check: a raw control with
+// transaction_specification_oid next to a proxied authorization control is
+// sent unchecked.
 template<class... Typed>
 [[nodiscard]] auto append_controls(const std::vector<std::variant<control, Typed...>> &controls,
   std::pmr::vector<control> &out) -> result<void>

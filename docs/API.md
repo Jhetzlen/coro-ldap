@@ -334,18 +334,23 @@ itself needs only ICU.
   `find_update_controls(response::message_id)`, and `controls`); a refused
   End Transaction has the context "end transaction: update message N" when
   the server names the update. `begin_transaction(extended_controls)`
-  returns the helper `ldap::transaction` (`[[nodiscard]]`, move-only):
+  returns the helper `ldap::transaction` (move-only):
   `add` / `modify` / `del` / `modify_dn` attach the control (a request that
-  already carries one, or carries proxied authorization, fails with
-  encode_error before sending), `commit()` -> `result<commit_result>` (an
-  error names the failing operation: "commit transaction: update message 3
-  (add uid=...)"), `abort()`, `identifier()`, `is_open()`; commit and
+  already carries one, typed or raw, or carries proxied authorization,
+  fails with encode_error before sending), `commit()` ->
+  `result<commit_result>` (an error names the failing operation: "commit
+  transaction: update message 3 (add uid=...)"), `abort()`, `identifier()`, `is_open()`; commit and
   abort settle it whatever the outcome (later calls fail with
-  `std::errc::invalid_argument`), and one destroyed while open queues an
-  End Transaction (abort) without waiting. `sync::connection` forwards
+  `std::errc::invalid_argument`); `commit()` while an update is still in
+  flight fails with `client_errc::operation_in_progress`, sends nothing and
+  leaves it open (await every update first). One destroyed while the server
+  may still hold it (open, or a commit / abort whose End Transaction got no
+  answer: stopped before sending, or given up on) queues an End
+  Transaction (abort) without waiting. `sync::connection` forwards
   `start_transaction` and `end_transaction`, and its `begin_transaction()`
   returns a `sync::transaction`, which aborts synchronously when destroyed
-  open. The Aborted Transaction Notice is not routed: the next use fails.
+  open, waiting five seconds at most for the answer. The Aborted
+  Transaction Notice is not routed: the next use fails.
   An update cancelled or timed out inside a transaction may be part of it:
   abort. The codecs (`end_transaction_request`, `update_controls`,
   `end_transaction_response`, `encode_` / `decode_end_transaction_request`

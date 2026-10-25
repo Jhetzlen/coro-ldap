@@ -2,6 +2,7 @@
 // (mock_ldap.hpp): the connection's primitives (start_transaction,
 // end_transaction, the transaction_specification control) and the
 // ldap::transaction helper.
+#include "jhetz/ldap/cancel.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/transaction.hpp"
@@ -12,6 +13,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -354,6 +356,111 @@ TEST_CASE("transaction: answers RFC 5805 section 2 does not allow", "[net][trans
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == errc::no_such_object);
 	CHECK(refused.error().context == "commit transaction");
+	CHECK(m.conn.is_open());
+	m.check_server();
+}
+
+TEST_CASE("transaction: an End Transaction never sent leaves it to the destructor", "[net][transaction][cancel]")
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }),
+	  answer({ ended(2, 0, {}) }),// the destructor's abort: dropped
+	  answer({ ext_resp(3, 0, std::nullopt, "dn:cn=admin,dc=example,dc=org") }),
+	  answer({ started(4) }),
+	  answer({ ended(5, 0, {}) }) });
+	{
+		auto t = m.run(m.conn.begin_transaction());
+		REQUIRE(t.has_value());
+		std::stop_source stop;
+		stop.request_stop();
+		auto a = m.run(ldap::with_stop(stop.get_token(), t->abort()));
+		REQUIRE_FALSE(a.has_value());
+		CHECK(a.error().code == ldap::cond::canceled);
+		CHECK_FALSE(t->is_open());// settled for the API...
+		CHECK(m.log.received.size() == 1);// ...but nothing was sent
+	}
+	// ...so the destructor still aborts it on the server.
+	CHECK(m.conn.outstanding() == 1);
+	REQUIRE(m.run(m.conn.who_am_i()).has_value());
+
+	// Once the server answered, the destructor sends nothing more.
+	{
+		auto t = m.run(m.conn.begin_transaction());
+		REQUIRE(t.has_value());
+		REQUIRE(m.run(t->abort()).has_value());
+	}
+	CHECK(m.conn.outstanding() == 0);
+	m.check_server();
+	REQUIRE(m.log.received.size() == 5);
+	CHECK(m.log.received[1].id == 2);
+	CHECK(end_request_of(m.log.received[1]) == ldap::end_transaction_request{ false, txn_id });
+	CHECK(end_request_of(m.log.received[4]) == ldap::end_transaction_request{ false, txn_id });
+}
+
+TEST_CASE("transaction: commit refuses while an update is in flight", "[net][transaction]")
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }),
+	  step{},// the add: answered with the abort below
+	  answer({ result_msg<ldap::add_response>(2), ended(3, 0, {}) }) });
+
+	auto t = m.run(m.conn.begin_transaction());
+	REQUIRE(t.has_value());
+	outcome<ldap::result<ldap::response>> add;
+	spawn(m.ioc, t->add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } }), add);
+	drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+	CHECK_FALSE(add.done());
+
+	auto early = m.run(t->commit());
+	REQUIRE_FALSE(early.has_value());
+	CHECK(early.error().code == client_errc::operation_in_progress);
+	CHECK(early.error().context == "commit transaction: 1 update(s) still in flight: await every update first");
+	CHECK(t->is_open());// nothing sent: still open
+
+	REQUIRE(m.run(t->abort()).has_value());
+	REQUIRE(add.done());
+	CHECK(add.get().has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 3);
+	CHECK(end_request_of(m.log.received[2]) == ldap::end_transaction_request{ false, txn_id });
+}
+
+TEST_CASE("transaction: a raw transaction specification is refused too", "[net][transaction]")
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }), answer({ ended(2, 0, {}) }) });
+
+	auto t = m.run(m.conn.begin_transaction());
+	REQUIRE(t.has_value());
+	auto raw = m.run(t->del({ .entry = jdoe, .controls = { spec_control() } }));
+	REQUIRE_FALSE(raw.has_value());
+	CHECK(raw.error().code == client_errc::encode_error);
+	CHECK(raw.error().context
+		  == "delete uid=jdoe,ou=people,dc=example,dc=org: the request already carries a transaction_specification");
+	REQUIRE(m.run(t->commit()).has_value());
+	m.check_server();
+	CHECK(m.log.received.size() == 2);
+}
+
+TEST_CASE("transaction: an Aborted Transaction Notice is ignored", "[net][transaction]")
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }),
+	  answer({ ldap::message{ 0,
+				 ldap::extended_response{
+				   ldap::ldap_result{ 51, "", "busy" }, std::string(ldap::aborted_transaction_notice_oid), txn_id } },
+		result_msg<ldap::add_response>(2) }),
+	  answer({ ended(3, 80, {}) }) });
+
+	auto t = m.run(m.conn.begin_transaction());
+	REQUIRE(t.has_value());
+	REQUIRE(m.run(t->add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } })).has_value());
+	CHECK(t->is_open());
+	CHECK(m.conn.is_open());
+	// The commit then fails with the server's error.
+	auto c = m.run(t->commit());
+	REQUIRE_FALSE(c.has_value());
+	CHECK(c.error().code == errc::other);
 	CHECK(m.conn.is_open());
 	m.check_server();
 }

@@ -373,21 +373,32 @@ server's bad control fails only the caller who asks for it.
   transaction a protocol error: `append_controls` refuses a typed
   `transaction_specification` next to a proxied authorization control
   (typed or raw) with encode_error before sending (it goes on Start
-  Transaction instead). A refused End Transaction carries the server's
+  Transaction instead); a raw control with the specification's OID is not
+  checked there (the helper refuses it like a typed one). A refused End
+  Transaction carries the server's
   code, its context naming the update at fault (txnEndRes.messageID, "end
   transaction: update message 5"); no structured field was added to
   `ldap::error` for it, as the helper reads the id itself. The helper,
-  `ldap::transaction` (`transaction.hpp`, `[[nodiscard]]`, move-only, made
+  `ldap::transaction` (`transaction.hpp`, move-only, made
   by `connection::begin_transaction()`), is built only from those
   primitives: its `add` / `modify` / `del` / `modify_dn` append the control
   and record each accepted update's context by message id, so `commit()`
   (-> `commit_result`, i.e. `end_transaction_result`) names the failing
   operation ("commit transaction: update message 3 (modify DN uid=...)");
-  `abort()` sends commit FALSE. Both settle the transaction whatever the
-  outcome. Destroyed while open, it queues a fire-and-forget End
-  Transaction (abort) on the writer queue, its answer counted as due and
-  dropped like a paged search's release; `sync::transaction` aborts
-  synchronously in its destructor instead (queued, from the I/O thread).
+  `abort()` sends commit FALSE. Both settle the transaction (the API
+  state) whatever the outcome, but the state keeps a separate "needs
+  abort" flag, cleared only once the server answered an End Transaction:
+  an End Transaction that was never sent (task stopped before it started,
+  StartTLS in progress) or was given up on leaves the server's transaction
+  alive, and OpenLDAP holds one per connection. Destroyed while that flag
+  holds, it queues a fire-and-forget End Transaction (abort) on the writer
+  queue, its answer counted as due and dropped like a paged search's
+  release; `sync::transaction` aborts synchronously in its destructor
+  instead (queued, from the I/O thread), racing the answer against a
+  five-second delay so that it returns without a default timeout too.
+  The helper counts its updates in flight and `commit()` refuses with
+  `operation_in_progress` while any is: the End Transaction could
+  otherwise reach the server before an update it should cover.
   The transaction state holds a counted reference to the connection's
   state (a pool lease can own it later, 3pf). Not in v1: routing the
   Aborted Transaction Notice (section 2.4; it is ignored like other

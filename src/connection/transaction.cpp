@@ -8,6 +8,7 @@
 #include "impl.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
@@ -43,7 +44,11 @@ namespace {
 		std::pmr::vector<control> controls{};
 	};
 
-	auto end_exchange(impl_ref self, std::string identifier, bool commit, std::string context)
+	// `answered`, if given, is set once the server has answered the request,
+	// whether or not the answer is one section 2.3 allows: the transaction
+	// is then over on the server. It stays false when the request was not
+	// sent, or was given up on (timeout, cancellation, connection failure).
+	auto end_exchange(impl_ref self, std::string identifier, bool commit, std::string context, bool *answered)
 	  -> capy::task<result<end_reply>>
 	{
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
@@ -60,6 +65,9 @@ namespace {
 		auto m = co_await request_response(self, std::move(*msg), op_index<extended_response>, context, std::nullopt);
 		if (!m) {
 			co_return std::unexpected(std::move(m.error()));
+		}
+		if (answered != nullptr) {
+			*answered = true;
 		}
 		auto &x = std::get<extended_response>(m->op);
 		end_reply out;
@@ -137,7 +145,7 @@ auto connection::end_transaction(std::pmr::string identifier, bool commit) -> ca
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
-	auto reply = co_await end_exchange(impl_ref(impl_), std::string(identifier), commit, context);
+	auto reply = co_await end_exchange(impl_ref(impl_), std::string(identifier), commit, context, nullptr);
 	if (!reply) {
 		co_return std::unexpected(std::move(reply.error()));
 	}
@@ -165,7 +173,15 @@ struct transaction::state
 	impl_ref conn;
 	std::pmr::string identifier;
 	std::pmr::vector<update> updates;
+	// Updates sent and not yet answered: commit() refuses while there are.
+	std::size_t in_flight = 0;
+	// The API state: neither commit() nor abort() was called.
 	bool open = true;
+	// The server may still hold the transaction: no End Transaction it
+	// answered yet. The destructor aborts it while this holds, even after
+	// a commit() or abort() whose request was not sent (stopped before it
+	// started, StartTLS in progress) or was given up on.
+	bool needs_abort = true;
 };
 
 namespace {
@@ -179,7 +195,7 @@ namespace {
 		// late response to an abandoned request (RFC 5805 section 3.4: an
 		// End Transaction is always answered).
 		try {
-			if (s->open && s->conn->is_open()) {
+			if (s->needs_abort && s->conn->is_open()) {
 				const std::string context = std::string(end_context) + " (abort, transaction destroyed)";
 				const std::pmr::polymorphic_allocator<> alloc(s->conn->mr());
 				const std::pmr::string value =
@@ -209,13 +225,23 @@ namespace {
 		return std::nullopt;
 	}
 
+	// Whether `c` is a transaction specification control, typed or raw.
+	template<class Control> auto is_specification(const Control &c) -> bool
+	{
+		if (std::holds_alternative<transaction_specification>(c)) {
+			return true;
+		}
+		const auto *raw = std::get_if<control>(&c);
+		return raw != nullptr && raw->type == transaction_specification_oid;
+	}
+
 	// The update `request` with the transaction specification control, or
-	// encode_error if it carries one already.
+	// encode_error if it carries one already (typed or raw: two would be
+	// sent).
 	template<class Params>
 	auto specified(Params &request, const transaction::state &s, std::string_view context) -> std::optional<error>
 	{
-		if (std::ranges::any_of(
-			  request.controls, [](const auto &c) { return std::holds_alternative<transaction_specification>(c); })) {
+		if (std::ranges::any_of(request.controls, [](const auto &c) { return is_specification(c); })) {
 			return make_error(client_errc::encode_error,
 			  std::string(context) + ": the request already carries a transaction_specification");
 		}
@@ -234,6 +260,8 @@ namespace {
 		if (auto e = specified(request, *s, context)) {
 			co_return std::unexpected(std::move(*e));
 		}
+		++s->in_flight;
+		const detail::scope_exit answered([s] noexcept { --s->in_flight; });
 		auto r = co_await run(s->conn, std::move(request), context);
 		if (r) {
 			s->updates.push_back(
@@ -311,8 +339,18 @@ auto transaction::commit() -> capy::task<result<commit_result>>
 		co_return std::unexpected(std::move(*e));
 	}
 	state *s = state_;
+	if (s->in_flight != 0) {
+		// The server would commit without them, or refuse the commit,
+		// depending on which it reads first.
+		co_return fail(client_errc::operation_in_progress,
+		  detail::format("{}: {} update(s) still in flight: await every update first", context, s->in_flight));
+	}
 	s->open = false;// settled, whatever the outcome
-	auto reply = co_await end_exchange(s->conn, std::string(s->identifier), true, context);
+	bool answered = false;
+	auto reply = co_await end_exchange(s->conn, std::string(s->identifier), true, context, &answered);
+	if (answered) {
+		s->needs_abort = false;
+	}
 	if (!reply) {
 		co_return std::unexpected(std::move(reply.error()));
 	}
@@ -337,7 +375,11 @@ auto transaction::abort() -> capy::task<result<void>>
 	}
 	state *s = state_;
 	s->open = false;
-	auto reply = co_await end_exchange(s->conn, std::string(s->identifier), false, context);
+	bool answered = false;
+	auto reply = co_await end_exchange(s->conn, std::string(s->identifier), false, context, &answered);
+	if (answered) {
+		s->needs_abort = false;
+	}
 	if (!reply) {
 		co_return std::unexpected(std::move(reply.error()));
 	}

@@ -776,6 +776,28 @@ TEST_CASE("sync: transactions", "[net][sync][transaction]")
 	CHECK(end_of(got[6]) == ldap::end_transaction_request{ false, "t3" });
 }
 
+TEST_CASE("sync: a transaction's destructor waits for the abort's answer only so long", "[net][sync][transaction]")
+{
+	peer_server srv;
+	srv.serve({ answer({ ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, "t1" } } }),
+	  step{},// the abort, never answered
+	  step{},// its abandon
+	  step{} });// the abort queued again by the ldap::transaction's destructor
+	ldap::sync::connection c;// no default timeout
+	REQUIRE(c.connect(srv.url()).has_value());
+	const auto started = std::chrono::steady_clock::now();
+	{
+		auto t = c.begin_transaction();
+		REQUIRE(t.has_value());
+	}
+	CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(30));
+	const auto &got = hang_up(c, srv);
+	REQUIRE(got.size() == 4);
+	CHECK(std::holds_alternative<ldap::extended_request>(got[1].op));
+	CHECK(std::holds_alternative<ldap::abandon_request>(got[2].op));
+	CHECK(std::holds_alternative<ldap::extended_request>(got[3].op));
+}
+
 TEST_CASE("sync: change_password and reset_password", "[net][sync][password]")
 {
 	peer_server srv;

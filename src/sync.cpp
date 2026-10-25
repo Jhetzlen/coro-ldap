@@ -1,5 +1,10 @@
 #include "jhetz/ldap/sync.hpp"
+#include "jhetz/ldap/cancel.hpp"
 
+#include <boost/capy/when_any.hpp>
+#include <boost/corosio/delay.hpp>
+
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <string>
@@ -134,11 +139,19 @@ namespace {
 		return make_error(client_errc::not_connected, std::string(what) + ": no transaction (moved from)");
 	}
 
+	// How long finish() waits at most for the server's answer to its abort,
+	// so that a sync::transaction's destructor returns even without a
+	// default timeout and with a server that never answers.
+	constexpr std::chrono::seconds abort_wait_limit{ 5 };
+
 	// Aborts `t` if it is still open, then destroys it, on the I/O thread.
+	// If the abort is not answered within abort_wait_limit it is abandoned,
+	// and the ldap::transaction's destructor queues another without waiting.
 	auto finish(std::unique_ptr<ldap::transaction> t) -> capy::task<result<void>>
 	{
 		if (t->is_open()) {
-			(void)co_await t->abort();// the outcome does not matter here
+			// The outcome does not matter here.
+			(void)co_await capy::when_any(ldap::raceable(t->abort()), boost::corosio::delay(abort_wait_limit));
 		}
 		co_return result<void>{};
 	}

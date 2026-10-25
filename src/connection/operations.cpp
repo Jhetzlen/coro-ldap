@@ -126,15 +126,14 @@ namespace detail {
 
 }// namespace detail
 
-using detail::modify_impl;
-
+// Not a coroutine: the task of detail::modify_impl() is returned as is.
 auto connection::modify(modify_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("modify", request.object);
 	if (impl_ == nullptr) {
-		co_return std::unexpected(no_connection(context));
+		return refuse(client_errc::not_connected, std::move(context));
 	}
-	co_return co_await modify_impl(impl_ref(impl_), std::move(request), std::move(context));
+	return detail::modify_impl(impl_ref(impl_), std::move(request), std::move(context));
 }
 
 namespace detail {

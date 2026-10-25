@@ -26,12 +26,19 @@
 //
 // Settling: commit() and abort() end the transaction, whatever their
 // outcome; afterwards its operations fail with std::errc::invalid_argument.
-// A transaction destroyed while still open is aborted: an End Transaction
-// (abort) is queued without waiting for its answer, which is dropped (best
-// effort, as when a paged search is released: nothing is sent if the
-// connection is closed or in StartTLS). An update that timed out or was
-// cancelled may or may not be part of the transaction (its abandon is best
-// effort): abort then, rather than commit an unknown set of updates. A
+// Await every update before commit(): while one is still in flight,
+// commit() fails with client_errc::operation_in_progress and the
+// transaction stays open (the server could otherwise read the End
+// Transaction before that update). A transaction destroyed while the server
+// may still hold it is aborted: an End Transaction (abort) is queued
+// without waiting for its answer, which is dropped (best effort, as when a
+// paged search is released: nothing is sent if the connection is closed or
+// in StartTLS). That holds while it is open, and also after a commit() or
+// abort() whose End Transaction the server did not answer (not sent
+// because the task was stopped, or given up on). An update that timed out
+// or was cancelled may or may not be part of the transaction (its abandon
+// is best effort): abort then, rather than commit an unknown set of
+// updates. A
 // commit whose answer is lost (connection failure, timeout, cancellation)
 // has an unknown outcome: re-read the entries if it matters. RFC 5805
 // section 3.5: a bind or unbind aborts every transaction of the connection
@@ -59,7 +66,9 @@ class connection;
 // by their response::message_id.
 using commit_result = end_transaction_result;
 
-class [[nodiscard]] transaction
+// Not [[nodiscard]] as a class: begin_transaction() returns it inside a
+// result, which is [[nodiscard]] on its own.
+class transaction
 {
   public:
 	// Not started: every operation fails with client_errc::not_connected.
@@ -68,7 +77,7 @@ class [[nodiscard]] transaction
 	auto operator=(transaction &&other) noexcept -> transaction &;
 	transaction(const transaction &) = delete;
 	auto operator=(const transaction &) -> transaction & = delete;
-	// Still open: aborts it without waiting (see above).
+	// Not ended on the server (see above): aborts it without waiting.
 	~transaction();
 
 	// The transaction identifier the server returned; empty if not started.
@@ -89,7 +98,9 @@ class [[nodiscard]] transaction
 	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
 
 	// End Transaction with commit TRUE: every update the server took is
-	// applied, or none. A refusal is the server's result code with the
+	// applied, or none. Fails with client_errc::operation_in_progress,
+	// sending nothing and leaving the transaction open, while an update of
+	// this transaction is still awaiting its answer. A refusal is the server's result code with the
 	// context "commit transaction", followed when the server names the
 	// update at fault (txnEndRes.messageID) by ": update message N (add
 	// uid=jdoe,...)", the operation this transaction sent with that id.

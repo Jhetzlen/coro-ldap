@@ -929,11 +929,27 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 		auto r = finish(ioc, c.search({ .base = d, .scope = ldap::search_scope::base_object }));
 		return r.has_value();
 	};
+	// Absent, and not merely unreadable.
+	const auto not_exists = [&](const ldap::dn &d) {
+		auto r = finish(ioc, c.search({ .base = d, .scope = ldap::search_scope::base_object }));
+		return !r.has_value() && r.error().code == ldap::errc::no_such_object;
+	};
 
+	auto dse =
+	  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "supportedExtension" } }));
+	REQUIRE(dse.has_value());
+	REQUIRE(dse->size() == 1);
+	const auto *extensions = (*dse)[0].find("supportedExtension");
+	if (extensions == nullptr || !std::ranges::contains(*extensions, ldap::start_transaction_oid)) {
+		SKIP("slapd does not advertise Start Transaction (" << ldap::start_transaction_oid << ")");
+	}
 	auto t = finish(ioc, c.begin_transaction());
-	if (!t) {
+	if (!t
+		&& (t.error().code == ldap::errc::protocol_error
+			|| t.error().code == ldap::errc::unavailable_critical_extension)) {
 		SKIP("slapd without transactions: " << t.error().message());
 	}
+	REQUIRE(t.has_value());
 	const std::string a = unique("txa");
 	const std::string b = unique("txb");
 	auto first = finish(ioc, t->add(person(a)));
@@ -942,7 +958,7 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 	REQUIRE(second.has_value());
 	CHECK(second->message_id != first->message_id);
 	// Deferred: nothing is applied before the commit.
-	CHECK_FALSE(exists(person(a).entry));
+	CHECK(not_exists(person(a).entry));
 	auto done = finish(ioc, t->commit());
 	REQUIRE(done.has_value());
 	CHECK(exists(person(a).entry));
@@ -963,7 +979,7 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 	CHECK_THAT(std::string(refused.error().context),
 	  ContainsSubstring(
 		"update message " + std::to_string(dup->message_id) + " (add uid=" + a + ",ou=people,dc=example,dc=org)"));
-	CHECK_FALSE(exists(person(fresh).entry));
+	CHECK(not_exists(person(fresh).entry));
 
 	// Abort, explicit and by destruction: nothing applied, the connection
 	// stays usable.
@@ -976,6 +992,14 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 		REQUIRE(w.has_value());
 		REQUIRE(finish(ioc, w->del({ .entry = person(b).entry })).has_value());
 	}
+	// The destructor's abort is queued, not awaited, and slapd allows one
+	// transaction per connection: wait until its answer has arrived (it is
+	// counted as outstanding until then) before the next Start Transaction.
+	// slapd may answer the who_am_i first, hence the loop.
+	for (int i = 0; i < 100 && c.outstanding() != 0; ++i) {
+		REQUIRE(finish(ioc, c.who_am_i()).has_value());
+	}
+	REQUIRE(c.outstanding() == 0);
 	CHECK(exists(person(a).entry));
 	CHECK(exists(person(b).entry));
 
@@ -989,8 +1013,8 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 		REQUIRE(d.has_value());
 	}
 	REQUIRE(finish(ioc, c.end_transaction(*id)).has_value());
-	CHECK_FALSE(exists(person(a).entry));
-	CHECK_FALSE(exists(person(b).entry));
+	CHECK(not_exists(person(a).entry));
+	CHECK(not_exists(person(b).entry));
 }
 
 TEST_CASE("integration: matched values", "[integration][controls]")

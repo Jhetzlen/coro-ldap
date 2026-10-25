@@ -252,10 +252,13 @@ class connection
 // ldap::transaction (transaction.hpp) for a sync::connection: each method
 // runs the async one on the connection's I/O thread and waits for it, with
 // the same results. Destroyed while still open, it aborts the transaction
-// and waits for the server's answer (ignored); from the I/O thread itself it
-// queues the abort without waiting, as ldap::transaction does. Must not
-// outlive its sync::connection. Move-only.
-class [[nodiscard]] transaction
+// and waits for the server's answer (ignored), five seconds at most even
+// without a default timeout (the abort is then abandoned and queued again
+// without waiting); from the I/O thread itself it queues the abort without
+// waiting, as ldap::transaction does. Must not outlive its
+// sync::connection. Move-only. Not [[nodiscard]] as a class: it comes
+// inside a result, which is [[nodiscard]] on its own.
+class transaction
 {
   public:
 	transaction(transaction &&other) noexcept;
