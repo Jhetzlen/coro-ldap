@@ -285,6 +285,7 @@ if(JHETZ_LDAP_BUILD_NET)
         src/connection/schema_load.cpp
         src/connection/password.cpp
         src/connection/transaction.cpp
+        src/client/client.cpp
         src/sasl_scram.cpp
         src/sync.cpp
         src/net/connect.cpp
@@ -388,6 +389,7 @@ if(JHETZ_LDAP_INSTALL)
         install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             PATTERN "net" EXCLUDE
             PATTERN "cancel.hpp" EXCLUDE
+            PATTERN "client.hpp" EXCLUDE
             PATTERN "connection.hpp" EXCLUDE
             PATTERN "connection_options.hpp" EXCLUDE
             PATTERN "paged_search.hpp" EXCLUDE

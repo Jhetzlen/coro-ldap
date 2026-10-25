@@ -1587,7 +1587,8 @@ and its destructor joins the thread.
   connection on the I/O thread, drops the work guard and joins, which
   waits for a detached getaddrinfo, or an offloaded SASL step (GSSAPI),
   still running; destroying the io_context then joins that step's
-  thread. No connection pool yet.
+  thread. The connection pool is `ldap::client` (section 11); its
+  blocking facade, `sync::client`, is still to come (3pf.5).
 - Calling a blocking method from inside the facade's own I/O thread would
   deadlock; it returns `client_errc::would_deadlock` instead.
 - The facade exposes exactly the same request, entry, error and mapping types;
@@ -1709,6 +1710,103 @@ same codec serve the client and a mock server for tests.
   an RFC rule; both sides refuse it so encode and decode accept the same set.
 - `ldap_result::to_error()` turns a result into `ldap::error` with the
   server's diagnostic, matched DN and referrals.
+
+## 11. Connection pool (`ldap::client`, implemented, 3pf)
+
+`jhetz/ldap/client.hpp`, `src/client/client.cpp`. Decided 2026-10-25 (the
+3pf notes); this section records what was built and the choices the
+decision left open.
+
+- One type, `ldap::client` (the name `naming-connection` reserved), built
+  from `client_options{servers, connection, setup, max_connections = 1,
+  idle_check = 60 s, max_lifetime, acquire_timeout = 30 s, backoff,
+  failback_after = 5 min, observer}` on one io_context, whose executor
+  everything runs on, as for `connection`. Connections are opened lazily
+  by `acquire()`, up to `max_connections`; nothing runs in the background
+  (no timer keeps `io_context::run()` alive).
+- **Leases share connections** (the open choice of the decision:
+  "exclusive or shared"). `acquire() -> task<result<lease>>`; a lease
+  gives the whole `connection` API, and several leases may hold the same
+  connection, their operations multiplexed on it. Why: the decision's
+  default of one connection rests on multiplexing covering throughput,
+  which exclusive leases would defeat (every concurrent task would queue
+  for the one connection); and N connections are for isolation, which
+  `acquire()` provides by preferring, in order, an idle connection (no
+  lease; the highest-priority server, then the most recently used), a new
+  connection while fewer than `max_connections` exist, and only then the
+  open connection with the fewest leases. The price: what a lease changes
+  on its connection, the others see. A bind changes their identity (hence
+  the rule below), StartTLS fails with `operation_in_progress` while
+  another lease has an operation outstanding, `unbind()` / `close()` end
+  it for all. The header says to use one client per identity and keep
+  binds to the setup; per-identity sub-pools are a later bead.
+- Servers, in priority order. A connection attempt tries every server
+  whose backoff has ended, in order. Connect, StartTLS (`connect` does it
+  for `connection_options::start_tls`) and `session_setup` together are
+  the attempt: any failure counts against the server. Backoff per server,
+  full jitter: uniform in `[0, d]`, `d = min(max, initial *
+  multiplier^(failures - 1))` (`detail::backoff_delay`; a multiplier below
+  1 counts as 1), reset by a success. `acquire()` loops: when no server
+  can be tried, it waits for the earliest backoff to end (or for a change:
+  a connection pooled, returned, removed, an attempt ending, `close()`),
+  bounded by `acquire_timeout`; when the earliest backoff ends after the
+  deadline it fails at once with the last error (or the backing-off
+  server's last error, its context marked "backing off"). With no
+  `acquire_timeout` it retries until it succeeds, is stopped, or the
+  client closes.
+- `cond::auth_failed` (and `cond::invalid_input`: a bad URL, a setup that
+  cannot work) excludes the server for the rest of that `acquire()`, and
+  its backoff keeps later acquires away until it ends: a wrong password
+  costs one bind per server per backoff period, no retry storm or AD
+  lockout. Every server excluded: `acquire()` fails at once with the last
+  error.
+- Return to the primary: an idle connection to a lower-priority server
+  that is `failback_after` old, while a higher-priority server's backoff
+  has ended, is closed when `acquire()` finds it, and the new attempt
+  starts from the primary again (falling back again if it still fails).
+  Only idle connections: closing a leased one would cut its operations,
+  and keeping it retired would hold a slot with nothing to replace it.
+- Health: `acquire()` first drops idle connections found closed (and
+  older than `max_lifetime`), retires leased ones found closed, then
+  probes the idle connection it picked if unused for `idle_check` or
+  longer: a root DSE base search for `1.1`, within what is left of
+  `acquire_timeout` (else `operation_timeout`). An answer, a server error
+  included, passes; a transport failure or timeout retires and replaces
+  the connection. A connection is "unused" since its setup or its last
+  lease's return. `max_lifetime` is checked when the last lease returns
+  (and on acquire, for idle ones).
+- Bind identity: `connection::bind_count()` (new, public: bind exchanges
+  begun, whatever their outcome, since a failed bind leaves the connection
+  anonymous) is recorded after the setup; a lease returned with another
+  count retires the connection (`disconnect_reason::rebound`), closed once
+  its last lease returns. A retired connection still leased counts against
+  `max_connections` until then.
+- Leaving the pool: an open connection no lease holds is unbound by a
+  detached `unbind()` task on the executor (so the server sees a clean
+  UnbindRequest), one still leased (only at `close()`) is closed.
+  `close()` (and the destructor) closes every pooled connection, fails
+  waiting and later `acquire()` calls with `not_connected`; leases may
+  outlive the client (they hold the shared state), returning to nothing.
+- `client_observer`: virtual hooks, no-ops by default, called
+  synchronously on the executor: `on_connect(server, outcome)` after each
+  attempt, `on_retry(server, error, delay)` when a server enters backoff,
+  `on_disconnect(server, reason)` when a connection leaves the pool,
+  `on_probe(server, outcome)`, `on_acquire_wait(waited)` once per acquire
+  that had to wait. No logging dependency.
+- Setup helpers: `simple_bind_setup(dn, password)` and
+  `sasl_bind_setup(factory, dn)`, the factory making a fresh mechanism per
+  connection (a null one fails with `invalid_argument`, so the server is
+  not retried in that acquire).
+- Retry of operations (3pf.4, not yet): read forwarders that retry once
+  on another connection; writes only when `client_errc::not_sent` says the
+  server never saw them (section 7, "Sent or not").
+- Tests (`tests/net/client_tests.cpp`): loopback servers each running one
+  script per accepted connection; backoff on real delays of 30 to 60 ms
+  with the jitter fixed by `detail::set_jitter` (tests only). One slapd
+  test drops a connection through a relay and acquires again.
+- Later (beads): the read forwarders (3pf.4), `sync::client` (3pf.5),
+  referral policy (3pf.1), a background prober, DNS SRV, weighted or
+  round-robin selection, per-identity sub-pools.
 
 ## Resolved
 

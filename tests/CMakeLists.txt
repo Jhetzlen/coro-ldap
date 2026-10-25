@@ -104,7 +104,7 @@ file(GLOB_RECURSE jhetz_ldap_public_headers CONFIGURE_DEPENDS
 # install() EXCLUDE patterns spell the same list (checked by
 # tests/install/check_install.sh).
 set(jhetz_ldap_net_headers
-    jhetz/ldap/cancel.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
+    jhetz/ldap/cancel.hpp jhetz/ldap/client.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
     jhetz/ldap/paged_search.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp jhetz/ldap/transaction.hpp
     jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp)
 set(jhetz_ldap_codec_header_tus)
@@ -148,6 +148,7 @@ if(JHETZ_LDAP_BUILD_NET)
     add_executable(jhetz_ldap_net_tests
         net/connect_tests.cpp
         net/channel_binding_tests.cpp
+        net/client_tests.cpp
         net/connection_tests.cpp
         net/content_sync_tests.cpp
         net/mapping_ops_tests.cpp

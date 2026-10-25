@@ -225,6 +225,13 @@ class connection
 	// authentication per TLS connection; channel_binding.hpp). This
 	// accessor keeps reporting it: it describes the connection.
 	[[nodiscard]] auto channel_bindings() const noexcept -> ldap::channel_bindings;
+	// The bind exchanges begun on this connection (simple or SASL, each
+	// counted once when its first BindRequest is about to be sent, whatever
+	// its outcome: a failed bind leaves the connection anonymous, which
+	// changes its identity too). 0 for a connection never bound, or
+	// default-constructed. ldap::client compares it to tell whether a lease
+	// re-bound its connection.
+	[[nodiscard]] auto bind_count() const noexcept -> std::uint64_t;
 
 	// Simple bind (RFC 4511 section 4.2, RFC 4513 section 5.1). An empty name
 	// and password is an anonymous bind. A name with an empty password would

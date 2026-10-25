@@ -863,6 +863,7 @@ auto connection::impl::begin_bind(impl_ref c, std::string_view context) -> capy:
 		co_return fail(capy::error::canceled, context);
 	}
 	c->binding = true;
+	++c->binds_begun;
 	c->bind_idle.clear();
 	co_return result<void>{};
 }

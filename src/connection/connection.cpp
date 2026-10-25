@@ -80,6 +80,8 @@ auto connection::executor() const noexcept -> connection::executor_type { return
 
 auto connection::outstanding() const noexcept -> std::size_t { return impl_ == nullptr ? 0 : impl_->outstanding(); }
 
+auto connection::bind_count() const noexcept -> std::uint64_t { return impl_ == nullptr ? 0 : impl_->bind_count(); }
+
 auto connection::is_tls() const noexcept -> bool { return impl_ != nullptr && impl_->is_tls(); }
 
 auto connection::peer_certificate() const noexcept -> std::span<const std::byte>

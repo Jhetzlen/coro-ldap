@@ -634,6 +634,31 @@ itself needs only ICU.
   types (`connect` takes a `url` or its text, as `ldap::connect` does).
   Callable from any number of threads; a call from its own I/O
   thread fails with `client_errc::would_deadlock`.
+- `jhetz/ldap/client.hpp` (3pf, DESIGN.md section 11): `ldap::client`, a
+  pool of multiplexed connections opened lazily. `client(ioc,
+  client_options{.servers, .connection, .setup, .max_connections = 1,
+  .idle_check, .max_lifetime, .acquire_timeout, .backoff,
+  .failback_after, .observer})`; `acquire() -> task<result<lease>>`, the
+  lease giving the full `connection` API (`(*lease)->search(...)`),
+  shared with other leases on the same connection; the lease returns the
+  connection when destroyed or `release()`d. `servers` fail over in
+  priority order with a per-server jittered exponential backoff
+  (`backoff_options{initial, max, multiplier}`), and an idle connection to
+  a lower-priority server goes back to the primary after
+  `failback_after`. `session_setup` (`simple_bind_setup(dn, password)`,
+  `sasl_bind_setup(factory, dn)`, or any `task<result<void>>(connection
+  &)`) runs on every new connection after connect and StartTLS; an
+  auth failure stops reconnecting to that server until its backoff ends.
+  An idle connection is probed (root DSE, `1.1`) after `idle_check`;
+  `max_lifetime` and a lease that re-bound (`connection::bind_count()`)
+  close a connection when it is returned. `client_observer` hooks
+  (`on_connect`, `on_disconnect` with a `disconnect_reason`, `on_retry`,
+  `on_probe`, `on_acquire_wait`) do nothing by default. `close()`,
+  `connections()`.
+- `client_errc::not_sent` (connection.hpp, "Sent or not"): the operation
+  failed before its request reached the writer (connection closed before
+  it was submitted, still queued, or held behind a bind), so the server
+  never saw it. It matches `cond::connection_lost`, like `not_connected`.
 - `examples/ldapsearch.cpp` (target `jhetz_ldapsearch`, binary
   `jhetz-ldapsearch`, option `JHETZ_LDAP_BUILD_EXAMPLES`): connect,
   StartTLS (`-Z`), simple bind (`-D dn -w pw`) or SASL EXTERNAL
@@ -676,4 +701,5 @@ LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
 Not yet: other SASL mechanisms (GSS-SPNEGO), GSSAPI security layers and
-channel binding, tls-unique, a connection pool.
+channel binding, tls-unique, the pool's blocking facade (`sync::client`)
+and its retrying read forwarders.

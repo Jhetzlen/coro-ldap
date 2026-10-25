@@ -6,6 +6,7 @@
 // Without those variables every test is skipped (ctest reports the run as
 // skipped). The data is make_fixture.py's.
 #include "../net/net_test_support.hpp"
+#include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <format>
 #include <fstream>
 #include <iterator>
@@ -1923,4 +1925,145 @@ TEST_CASE("integration: a broken server answer closes the connection", "[integra
 			CHECK(p.done());
 		}
 	}
+}
+
+// ---------------------------------------------------------------- ldap::client
+
+namespace {
+
+// Forwards to a socket owned by the relay, so the relay can still close it
+// (transport::close() does nothing on a wrapped stream).
+struct relay_socket
+{
+	corosio::tcp_socket *s;
+	template<capy::MutableBufferSequence MB> auto read_some(MB buffers) { return s->read_some(buffers); }
+	template<capy::ConstBufferSequence CB> auto write_some(CB buffers) { return s->write_some(buffers); }
+};
+
+// A TCP relay to slapd, PDU by PDU, whose connections the test can cut: what
+// the client sees when the server (or a middlebox) drops a connection.
+class relay
+{
+  public:
+	relay(corosio::io_context &ioc, std::uint16_t target)
+	  : ioc_(ioc), acc_(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8), target_(target)
+	{
+		spawn(ioc_, accept_loop(), accepting_);
+	}
+	relay(const relay &) = delete;
+	auto operator=(const relay &) -> relay & = delete;
+	~relay() { shut_down(); }
+
+	[[nodiscard]] auto url() const -> std::string
+	{
+		return "ldap://127.0.0.1:" + std::to_string(acc_.local_endpoint().port());
+	}
+	[[nodiscard]] auto relayed() const -> std::size_t { return relayed_; }
+	// Drops the n-th relayed connection, on both sides.
+	void cut(std::size_t n)
+	{
+		pairs_.at(n).client.close();
+		pairs_.at(n).server.close();
+	}
+	void shut_down()
+	{
+		acc_.close();
+		for (auto &p : pairs_) {
+			p.client.close();
+			p.server.close();
+		}
+	}
+
+  private:
+	struct pair
+	{
+		corosio::tcp_socket client;
+		corosio::tcp_socket server;
+	};
+
+	auto accept_loop() -> capy::task<void>
+	{
+		while (true) {
+			auto &p = pairs_.emplace_back(corosio::tcp_socket(ioc_), corosio::tcp_socket(ioc_));
+			if (auto [ec] = co_await acc_.accept(p.client); ec) {
+				co_return;
+			}
+			if (auto [ec] = co_await p.server.connect(corosio::endpoint(corosio::ipv4_address::loopback(), target_));
+			  ec) {
+				co_return;
+			}
+			++relayed_;
+			spawn(ioc_, pump(p.client, p.server), pumps_.emplace_back());
+			spawn(ioc_, pump(p.server, p.client), pumps_.emplace_back());
+		}
+	}
+
+	static auto pump(corosio::tcp_socket &from, corosio::tcp_socket &to) -> capy::task<void>
+	{
+		net::transport in = net::transport::wrap(relay_socket{ &from }, "relay in");
+		net::transport out = net::transport::wrap(relay_socket{ &to }, "relay out");
+		net::read_buffer buf;
+		while (true) {
+			auto n = co_await net::read_frame(in, buf, ldap::ber::default_max_message_size);
+			if (!n) {
+				break;
+			}
+			auto w = co_await net::write_bytes(out, buf.data().first(*n));
+			buf.consume(*n);
+			if (!w) {
+				break;
+			}
+		}
+		from.close();
+		to.close();
+	}
+
+	corosio::io_context &ioc_;
+	corosio::tcp_acceptor acc_;
+	std::uint16_t target_;
+	std::deque<pair> pairs_{};
+	std::deque<outcome<void>> pumps_{};
+	outcome<void> accepting_{};
+	std::size_t relayed_ = 0;
+};
+
+}// namespace
+
+TEST_CASE("integration: ldap::client replaces a connection the server dropped", "[integration][client]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	const auto server = ldap::url::parse(env("JHETZ_LDAP_IT_LDAP"));
+	REQUIRE(server.has_value());
+	corosio::io_context ioc;
+	relay r(ioc, *server->port());
+	{
+		auto u = ldap::url::parse(r.url());
+		REQUIRE(u.has_value());
+		ldap::client pool(ioc,
+		  { .servers = { *u },
+			.connection = trusting(),
+			.setup = ldap::simple_bind_setup(admin, "secret"),
+			.idle_check = std::chrono::milliseconds(0) });
+		{
+			auto l = finish(ioc, pool.acquire());
+			REQUIRE(l.has_value());
+			CHECK(finish(ioc, (*l)->who_am_i()) == "dn:cn=admin,dc=example,dc=org");
+		}
+		r.cut(0);
+		{
+			// The idle check finds the connection dead: a new one, set up again.
+			auto l = finish(ioc, pool.acquire());
+			REQUIRE(l.has_value());
+			CHECK(r.relayed() == 2);
+			CHECK(finish(ioc, (*l)->who_am_i()) == "dn:cn=admin,dc=example,dc=org");
+			auto entries = finish(ioc, (*l)->search({ .base = people, .scope = ldap::search_scope::base_object }));
+			REQUIRE(entries.has_value());
+			CHECK(entries->size() == 1);
+		}
+		CHECK(pool.connections() == 1);
+	}
+	r.shut_down();
+	drive(ioc);
 }

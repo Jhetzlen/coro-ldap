@@ -210,6 +210,9 @@ class connection::impl
 	// Requests still to be answered: those waited for, and `due` answers.
 	auto outstanding() const noexcept -> std::size_t;
 
+	// Bind exchanges begun (connection::bind_count()).
+	auto bind_count() const noexcept -> std::uint64_t { return binds_begun; }
+
 	// Answers still due to requests nothing waits for (send_unanswered).
 	auto answers_due() const noexcept -> std::size_t { return due_answers; }
 
@@ -401,6 +404,7 @@ class connection::impl
 	// requests are held until it ends, since nothing may be sent while a
 	// BindRequest is outstanding (RFC 4511 section 4.2.1).
 	bool binding = false;
+	std::uint64_t binds_begun = 0;// bind exchanges begun (sent), whatever their outcome
 	boost::capy::async_event bind_idle{};// set while `binding` is false
 	struct held_request
 	{
