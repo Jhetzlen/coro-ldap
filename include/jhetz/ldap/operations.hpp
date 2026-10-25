@@ -153,10 +153,15 @@ struct extended_params
 	bool intermediate_responses = false;
 };
 
-// What a successful operation returns besides success: the controls of the
-// server's response (e.g. a post-read entry, RFC 4527: find_post_read()).
+// What a successful operation returns besides success: the message id of
+// its request and the controls of the server's response (e.g. a post-read
+// entry, RFC 4527: find_post_read()). In a transaction (RFC 5805) the
+// update is only accepted, and its response controls come with the End
+// Transaction response, matched by message_id
+// (end_transaction_result::find_update_controls).
 struct response
 {
+	std::int32_t message_id = 0;// messageID of the request (and of this response)
 	std::pmr::vector<control> controls{};
 };
 
@@ -225,6 +230,23 @@ struct password_modify_params
 	std::optional<std::string> new_password{};
 	extended_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
+};
+
+// What connection::end_transaction() returns when the server reports
+// success (RFC 5805 section 2.3): when committing, every update was
+// applied, and `updates_controls` holds the response controls the updates
+// would have had outside the transaction (pre-read and post-read entries),
+// each under its update's message id (response::message_id); `controls` are
+// those of the End Transaction response itself.
+struct end_transaction_result
+{
+	std::pmr::vector<update_controls> updates_controls{};
+	std::pmr::vector<control> controls{};
+
+	// The response controls of the update whose request had `message_id`,
+	// null if the server returned none for it.
+	[[nodiscard]] auto find_update_controls(std::int32_t message_id) const noexcept
+	  -> const std::pmr::vector<control> *;
 };
 
 // LDAP_CAP_ACTIVE_DIRECTORY_OID: in the root DSE's supportedCapabilities of

@@ -1,0 +1,359 @@
+// LDAP transactions (RFC 5805) against the scripted mock server
+// (mock_ldap.hpp): the connection's primitives (start_transaction,
+// end_transaction, the transaction_specification control) and the
+// ldap::transaction helper.
+#include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/controls.hpp"
+#include "jhetz/ldap/transaction.hpp"
+#include "mock_ldap.hpp"
+#include "net_test_support.hpp"
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <variant>
+
+namespace ldap = jhetz::ldap;
+using namespace jhetz::ldap::test;
+using ldap::client_errc;
+using ldap::errc;
+
+namespace {
+
+const ldap::dn jdoe{ "uid=jdoe,ou=people,dc=example,dc=org" };
+const ldap::dn group{ "cn=staff,ou=groups,dc=example,dc=org" };
+constexpr std::string_view txn_id = "txn-1";
+
+auto ext_resp(std::int32_t id,
+  std::int32_t code = 0,
+  std::optional<std::string_view> name = std::nullopt,
+  std::optional<std::string_view> value = std::nullopt) -> ldap::message
+{
+	return ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ code }, name, value } };
+}
+
+auto started(std::int32_t id) -> ldap::message { return ext_resp(id, 0, std::nullopt, txn_id); }
+
+// An End Transaction response carrying `value` as its txnEndRes.
+auto ended(std::int32_t id, std::int32_t code, const ldap::end_transaction_response &value) -> ldap::message
+{
+	const auto v = ldap::encode_end_transaction_response(value);
+	REQUIRE(v.has_value());
+	if (!v->has_value()) {
+		return ext_resp(id, code);
+	}
+	return ext_resp(id, code, std::nullopt, std::string_view(**v));
+}
+
+template<class Response> auto result_msg(std::int32_t id, std::int32_t code = 0) -> ldap::message
+{
+	return ldap::message{ id, Response{ ldap::ldap_result{ code } } };
+}
+
+auto spec_control() -> ldap::control { return ldap::control{ ldap::transaction_specification_oid, true, txn_id }; }
+
+// The End Transaction request the server received.
+auto end_request_of(const ldap::message &m) -> ldap::end_transaction_request
+{
+	const auto *x = std::get_if<ldap::extended_request>(&m.op);
+	REQUIRE(x != nullptr);
+	CHECK(x->request_name == ldap::end_transaction_oid);
+	REQUIRE(x->request_value.has_value());
+	CHECK(m.controls.empty());// RFC 5805 section 4: no control on End Transaction
+	auto r = ldap::decode_end_transaction_request(*x->request_value);
+	REQUIRE(r.has_value());
+	return *r;
+}
+
+auto post_read_entry() -> ldap::control
+{
+	return ldap::encode_read_entry(ldap::post_read_oid,
+	  ldap::search_result_entry{ jdoe.to_string(), { ldap::partial_attribute{ "uid", { "jdoe" } } } })
+	  .value();
+}
+
+}// namespace
+
+TEST_CASE("transaction: deferred updates and their response controls at commit", "[net][transaction]")
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }),
+	  answer({ result_msg<ldap::add_response>(2) }),
+	  answer({ result_msg<ldap::modify_response>(3) }),
+	  answer({ ended(4, 0, { std::nullopt, { ldap::update_controls{ 2, { post_read_entry() } } } }) }) });
+
+	auto t = m.run(m.conn.begin_transaction());
+	REQUIRE(t.has_value());
+	CHECK(t->is_open());
+	CHECK(t->identifier() == txn_id);
+	auto a = m.run(t->add({ .entry = jdoe,
+	  .attributes = { { "objectClass", { "inetOrgPerson" } }, { "uid", { "jdoe" } } },
+	  .controls = { ldap::post_read{ .attributes = { "uid" } } } }));
+	REQUIRE(a.has_value());
+	CHECK(a->message_id == 2);
+	CHECK(a->controls.empty());// deferred: the post-read entry comes with the commit
+	auto mod = m.run(t->modify({ .object = group, .changes = { ldap::mod::add("member", { "uid=jdoe" }) } }));
+	REQUIRE(mod.has_value());
+	CHECK(mod->message_id == 3);
+
+	auto done = m.run(t->commit());
+	REQUIRE(done.has_value());
+	CHECK_FALSE(t->is_open());
+	const auto *controls = done->find_update_controls(a->message_id);
+	REQUIRE(controls != nullptr);
+	auto e = ldap::find_post_read(*controls);
+	REQUIRE(e.has_value());
+	REQUIRE(e->has_value());
+	CHECK((*e)->dn == jdoe.to_string());
+	CHECK(done->find_update_controls(mod->message_id) == nullptr);
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 4);
+	CHECK(m.log.received[0] == ldap::message{ 1, ldap::extended_request{ ldap::start_transaction_oid } });
+	// Each update carries the specification after its own controls.
+	REQUIRE(m.log.received[1].controls.size() == 2);
+	CHECK(m.log.received[1].controls[0].type == ldap::post_read_oid);
+	CHECK(m.log.received[1].controls[1] == spec_control());
+	CHECK(m.log.received[2].controls == std::pmr::vector<ldap::control>{ spec_control() });
+	CHECK(end_request_of(m.log.received[3]) == ldap::end_transaction_request{ true, txn_id });
+}
+
+TEST_CASE("transaction: the primitives", "[net][transaction]")
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }),
+	  answer({ result_msg<ldap::del_response>(2) }),
+	  answer({ ended(3, 0, {}) }),
+	  answer({ started(4) }),
+	  answer({ ended(5, 68, ldap::end_transaction_response{ 7 }) }) });
+
+	auto id = m.run(m.conn.start_transaction({ ldap::proxied_authorization{ "u:jdoe" } }));
+	REQUIRE(id.has_value());
+	CHECK(*id == txn_id);
+	auto d =
+	  m.run(m.conn.del({ .entry = jdoe, .controls = { ldap::transaction_specification{ .identifier = "txn-1" } } }));
+	REQUIRE(d.has_value());
+	CHECK(d->message_id == 2);
+	auto ok = m.run(m.conn.end_transaction(*id));
+	REQUIRE(ok.has_value());
+	CHECK(ok->updates_controls.empty());
+
+	auto again = m.run(m.conn.start_transaction());
+	REQUIRE(again.has_value());
+	auto refused = m.run(m.conn.end_transaction(*again));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == errc::entry_already_exists);
+	CHECK(refused.error().context == "end transaction: update message 7");
+	CHECK(m.conn.is_open());
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 5);
+	// RFC 5805 section 4.4: proxied authorization goes on Start Transaction.
+	CHECK(m.log.received[0]
+		  == ldap::message{ 1,
+			ldap::extended_request{ ldap::start_transaction_oid },
+			{ ldap::control{ ldap::proxied_authorization_oid, true, "u:jdoe" } } });
+	CHECK(m.log.received[1].controls == std::pmr::vector<ldap::control>{ spec_control() });
+	CHECK(end_request_of(m.log.received[2]) == ldap::end_transaction_request{ true, txn_id });
+}
+
+TEST_CASE("transaction: a failed commit names the update at fault", "[net][transaction]")
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }),
+	  answer({ result_msg<ldap::add_response>(2) }),
+	  answer({ result_msg<ldap::modify_dn_response>(3) }),
+	  answer({ ended(4, 68, ldap::end_transaction_response{ 3 }) }),
+	  answer({ started(5) }),
+	  answer({ ended(6, 51, ldap::end_transaction_response{ 9 }) }),
+	  answer({ started(7) }),
+	  answer({ ended(8, 80, {}) }) });
+
+	auto t = m.run(m.conn.begin_transaction());
+	REQUIRE(t.has_value());
+	REQUIRE(m.run(t->add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } })).has_value());
+	REQUIRE(m.run(t->modify_dn({ .entry = jdoe, .new_rdn = ldap::rdn{ "uid=john" } })).has_value());
+	auto c = m.run(t->commit());
+	REQUIRE_FALSE(c.has_value());
+	CHECK(c.error().code == errc::entry_already_exists);
+	CHECK(c.error().context == "commit transaction: update message 3 (modify DN uid=jdoe,ou=people,dc=example,dc=org)");
+	CHECK_FALSE(t->is_open());
+
+	// An id this transaction did not send, and no id at all.
+	auto u = m.run(m.conn.begin_transaction());
+	REQUIRE(u.has_value());
+	auto unknown = m.run(u->commit());
+	REQUIRE_FALSE(unknown.has_value());
+	CHECK(unknown.error().context == "commit transaction: update message 9");
+	auto v = m.run(m.conn.begin_transaction());
+	REQUIRE(v.has_value());
+	auto plain = m.run(v->commit());
+	REQUIRE_FALSE(plain.has_value());
+	CHECK(plain.error().code == errc::other);
+	CHECK(plain.error().context == "commit transaction");
+	CHECK(m.conn.is_open());
+	m.check_server();
+}
+
+TEST_CASE("transaction: abort, and a settled transaction refuses more", "[net][transaction]")
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }), answer({ result_msg<ldap::del_response>(2) }), answer({ ended(3, 0, {}) }) });
+
+	auto t = m.run(m.conn.begin_transaction());
+	REQUIRE(t.has_value());
+	REQUIRE(m.run(t->del({ .entry = jdoe })).has_value());
+	auto a = m.run(t->abort());
+	REQUIRE(a.has_value());
+	CHECK_FALSE(t->is_open());
+
+	auto late = m.run(t->del({ .entry = jdoe }));
+	REQUIRE_FALSE(late.has_value());
+	CHECK(late.error().code == std::errc::invalid_argument);
+	CHECK(late.error().context
+		  == "delete uid=jdoe,ou=people,dc=example,dc=org: the transaction is already committed or aborted");
+	CHECK(m.run(t->commit()).error().code == std::errc::invalid_argument);
+	CHECK(m.run(t->abort()).error().code == std::errc::invalid_argument);
+
+	// Not started: not connected.
+	ldap::transaction none;
+	CHECK_FALSE(none.is_open());
+	CHECK(none.identifier().empty());
+	CHECK(m.run(none.commit()).error().code == client_errc::not_connected);
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 3);
+	CHECK(end_request_of(m.log.received[2]) == ldap::end_transaction_request{ false, txn_id });
+}
+
+TEST_CASE("transaction: destroyed while open, it is aborted without waiting", "[net][transaction]")
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }),
+	  answer({ result_msg<ldap::add_response>(2) }),
+	  answer({ ended(3, 0, {}) }),// the abort's answer: dropped
+	  answer({ ext_resp(4, 0, std::nullopt, "dn:cn=admin,dc=example,dc=org") }) });
+	{
+		auto t = m.run(m.conn.begin_transaction());
+		REQUIRE(t.has_value());
+		ldap::transaction moved = std::move(*t);
+		CHECK_FALSE(t->is_open());// moved from
+		REQUIRE(m.run(moved.add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } })).has_value());
+	}
+	CHECK(m.conn.outstanding() == 1);// the abort's answer is due
+	auto me = m.run(m.conn.who_am_i());
+	REQUIRE(me.has_value());
+	CHECK(m.conn.outstanding() == 0);
+	CHECK(m.conn.is_open());
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 4);
+	CHECK(m.log.received[2].id == 3);
+	CHECK(end_request_of(m.log.received[2]) == ldap::end_transaction_request{ false, txn_id });
+
+	// Committed or aborted, or on a closed connection: nothing is sent.
+	{
+		ldap::transaction moved_from;
+		auto t = ldap::transaction{};
+		moved_from = std::move(t);
+	}
+	m.conn.close();
+	CHECK(m.log.received.size() == 4);
+}
+
+TEST_CASE("transaction: rejected updates leave it open", "[net][transaction]")
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }),
+	  answer({ result_msg<ldap::add_response>(2, 53) }),
+	  answer({ result_msg<ldap::add_response>(3) }),
+	  answer({ ended(4, 0, {}) }) });
+
+	auto t = m.run(m.conn.begin_transaction());
+	REQUIRE(t.has_value());
+	auto refused = m.run(t->add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } }));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == errc::unwilling_to_perform);
+	CHECK(refused.error().context == "add uid=jdoe,ou=people,dc=example,dc=org");
+	CHECK(t->is_open());
+	REQUIRE(m.run(t->add({ .entry = group, .attributes = { { "cn", { "staff" } } } })).has_value());
+
+	// A specification already in the request, and proxied authorization,
+	// fail before anything is sent (RFC 5805 section 4.4).
+	auto twice = m.run(t->del({ .entry = jdoe, .controls = { ldap::transaction_specification{ .identifier = "x" } } }));
+	REQUIRE_FALSE(twice.has_value());
+	CHECK(twice.error().code == client_errc::encode_error);
+	CHECK(twice.error().context
+		  == "delete uid=jdoe,ou=people,dc=example,dc=org: the request already carries a transaction_specification");
+	auto proxied = m.run(t->modify({ .object = jdoe,
+	  .changes = { ldap::mod::replace("mail", { "j@example.org" }) },
+	  .controls = { ldap::proxied_authorization{ "u:jdoe" } } }));
+	REQUIRE_FALSE(proxied.has_value());
+	CHECK(proxied.error().code == client_errc::encode_error);
+	CHECK(proxied.error().context
+		  == "modify uid=jdoe,ou=people,dc=example,dc=org: proxied_authorization is not valid on an update in a "
+			 "transaction: put it on the Start Transaction request (RFC 5805 section 4.4)");
+	auto raw = m.run(m.conn.add({ .entry = jdoe,
+	  .attributes = { { "uid", { "jdoe" } } },
+	  .controls = { ldap::control{ ldap::proxied_authorization_oid, true, "u:jdoe" },
+		ldap::transaction_specification{ .identifier = "txn-1" } } }));
+	REQUIRE_FALSE(raw.has_value());
+	CHECK(raw.error().code == client_errc::encode_error);
+	CHECK(t->is_open());
+
+	REQUIRE(m.run(t->commit()).has_value());
+	m.check_server();
+	CHECK(m.log.received.size() == 4);// nothing sent for the refused requests
+}
+
+TEST_CASE("transaction: answers RFC 5805 section 2 does not allow", "[net][transaction]")
+{
+	mock_ldap m;
+	m.serve({ answer({ ext_resp(1, 2, std::nullopt, std::nullopt) }),
+	  answer({ ext_resp(2, 0, "1.3.6.1.1.21.1", txn_id) }),
+	  answer({ ext_resp(3, 0) }),
+	  answer({ started(4) }),
+	  answer({ ext_resp(5, 0, "1.3.6.1.1.21.3") }),
+	  answer({ started(6) }),
+	  answer({ ext_resp(7, 0, std::nullopt, "not BER") }),
+	  answer({ started(8) }),
+	  answer({ ext_resp(9, 32, std::nullopt, "not BER") }) });
+
+	auto unsupported = m.run(m.conn.begin_transaction());
+	REQUIRE_FALSE(unsupported.has_value());
+	CHECK(unsupported.error().code == errc::protocol_error);
+	CHECK(unsupported.error().context == "start transaction");
+	auto named = m.run(m.conn.start_transaction());
+	REQUIRE_FALSE(named.has_value());
+	CHECK(named.error().code == client_errc::decode_error);
+	CHECK(named.error().context == "start transaction: the response has a responseName (RFC 5805 section 2.1)");
+	auto no_id = m.run(m.conn.start_transaction());
+	REQUIRE_FALSE(no_id.has_value());
+	CHECK(
+	  no_id.error().context == "start transaction: the response has no transaction identifier (RFC 5805 section 2.1)");
+
+	auto t = m.run(m.conn.begin_transaction());
+	REQUIRE(t.has_value());
+	auto end_named = m.run(t->commit());
+	REQUIRE_FALSE(end_named.has_value());
+	CHECK(end_named.error().context == "commit transaction: the response has a responseName (RFC 5805 section 2.3)");
+	auto u = m.run(m.conn.begin_transaction());
+	REQUIRE(u.has_value());
+	auto malformed = m.run(u->commit());
+	REQUIRE_FALSE(malformed.has_value());
+	CHECK(malformed.error().code == client_errc::decode_error);
+	CHECK(malformed.error().context.starts_with("commit transaction: txnEndRes: "));
+	// A refusal with a malformed txnEndRes keeps the server's code.
+	auto v = m.run(m.conn.begin_transaction());
+	REQUIRE(v.has_value());
+	auto refused = m.run(v->commit());
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == errc::no_such_object);
+	CHECK(refused.error().context == "commit transaction");
+	CHECK(m.conn.is_open());
+	m.check_server();
+}

@@ -1,6 +1,9 @@
 #include "jhetz/ldap/sync.hpp"
 
 #include <cstddef>
+#include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -101,6 +104,153 @@ auto connection::search_paged(search_params request, std::int32_t page_size, std
 			}
 		}(c, std::move(request), page_size, mr);
 	});
+}
+
+auto connection::begin_transaction(extended_controls controls) -> result<transaction>
+{
+	// The ldap::transaction is made, and later destroyed, on the I/O thread.
+	auto t = call([&](ldap::connection &c) {
+		return
+		  [](ldap::connection &conn, extended_controls cs) -> capy::task<result<std::unique_ptr<ldap::transaction>>> {
+			  auto r = co_await conn.begin_transaction(std::move(cs));
+			  if (!r) {
+				  co_return std::unexpected(std::move(r.error()));
+			  }
+			  co_return std::make_unique<ldap::transaction>(std::move(*r));
+		  }(c, std::move(controls));
+	});
+	if (!t) {
+		return std::unexpected(std::move(t.error()));
+	}
+	return transaction(*this, std::move(*t));
+}
+
+// ---------------------------------------------------------------- transaction
+
+namespace {
+
+	auto moved_from(std::string_view what) -> error
+	{
+		return make_error(client_errc::not_connected, std::string(what) + ": no transaction (moved from)");
+	}
+
+	// Aborts `t` if it is still open, then destroys it, on the I/O thread.
+	auto finish(std::unique_ptr<ldap::transaction> t) -> capy::task<result<void>>
+	{
+		if (t->is_open()) {
+			(void)co_await t->abort();// the outcome does not matter here
+		}
+		co_return result<void>{};
+	}
+
+	// ldap::transaction's accessors, read on the I/O thread.
+	auto identifier_of(const ldap::transaction *t) -> capy::task<result<std::string>>
+	{
+		co_return std::string(t->identifier());
+	}
+	auto is_open_of(const ldap::transaction *t) -> capy::task<result<bool>> { co_return t->is_open(); }
+
+}// namespace
+
+transaction::transaction(connection &c, std::unique_ptr<ldap::transaction> t) noexcept : conn_(&c), txn_(std::move(t))
+{}
+
+transaction::transaction(transaction &&other) noexcept
+  : conn_(std::exchange(other.conn_, nullptr)), txn_(std::move(other.txn_))
+{}
+
+auto transaction::operator=(transaction &&other) noexcept -> transaction &
+{
+	if (this != &other) {
+		settle();
+		conn_ = std::exchange(other.conn_, nullptr);
+		txn_ = std::move(other.txn_);
+	}
+	return *this;
+}
+
+transaction::~transaction() { settle(); }
+
+void transaction::settle() noexcept
+{
+	if (!txn_) {
+		return;
+	}
+	try {
+		if (conn_->call([this](ldap::connection &) { return finish(std::move(txn_)); })) {
+			return;
+		}
+	} catch (...) {// NOLINT(bugprone-empty-catch): the abort is best effort
+	}
+	// On the I/O thread (would_deadlock): the ldap::transaction queues its
+	// abort without waiting.
+	txn_.reset();
+}
+
+auto transaction::identifier() const -> std::string
+{
+	if (!txn_) {
+		return {};
+	}
+	const ldap::transaction *t = txn_.get();
+	return conn_->call([t](const ldap::connection &) { return identifier_of(t); }).value_or(std::string{});
+}
+
+auto transaction::is_open() const -> bool
+{
+	if (!txn_) {
+		return false;
+	}
+	const ldap::transaction *t = txn_.get();
+	return conn_->call([t](const ldap::connection &) { return is_open_of(t); }).value_or(false);
+}
+
+auto transaction::add(add_params request) -> result<response>
+{
+	if (!txn_) {
+		return std::unexpected(moved_from("add"));
+	}
+	return conn_->call([&](ldap::connection &) { return txn_->add(std::move(request)); });
+}
+
+auto transaction::modify(modify_params request) -> result<response>
+{
+	if (!txn_) {
+		return std::unexpected(moved_from("modify"));
+	}
+	return conn_->call([&](ldap::connection &) { return txn_->modify(std::move(request)); });
+}
+
+auto transaction::del(del_params request) -> result<response>
+{
+	if (!txn_) {
+		return std::unexpected(moved_from("delete"));
+	}
+	return conn_->call([&](ldap::connection &) { return txn_->del(std::move(request)); });
+}
+
+auto transaction::modify_dn(modify_dn_params request) -> result<response>
+{
+	if (!txn_) {
+		return std::unexpected(moved_from("modify DN"));
+	}
+	return conn_->call([&](ldap::connection &) { return txn_->modify_dn(std::move(request)); });
+}
+
+auto transaction::commit() -> result<commit_result>
+{
+	if (!txn_) {
+		return std::unexpected(moved_from("commit transaction"));
+	}
+	return conn_->call([this](ldap::connection &) { return txn_->commit(); });
+}
+
+auto transaction::abort() -> result<void>
+{
+	if (!txn_) {
+		return std::unexpected(moved_from("abort transaction"));
+	}
+	return conn_->call([this](ldap::connection &) { return txn_->abort(); });
 }
 
 auto connection::unbind() -> result<void>

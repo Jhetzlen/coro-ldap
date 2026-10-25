@@ -90,6 +90,7 @@ if(NOT MSVC)
     jhetz_ldap_compile_test(paged_on_modify "paged_on_modify\\.cpp:3:[0-9]+: error: .*modify_controls")
     jhetz_ldap_compile_test(relax_rules_on_search "relax_rules_on_search\\.cpp:3:[0-9]+: error: .*search_controls")
     jhetz_ldap_compile_test(assertion_on_extended "assertion_on_extended\\.cpp:3:[0-9]+: error: .*extended_controls")
+    jhetz_ldap_compile_test(transaction_specification_on_search "transaction_specification_on_search\\.cpp:3:[0-9]+: error: .*search_controls")
 endif()
 
 # Header self-containment: one generated TU per public header, including
@@ -104,7 +105,7 @@ file(GLOB_RECURSE jhetz_ldap_public_headers CONFIGURE_DEPENDS
 # tests/install/check_install.sh).
 set(jhetz_ldap_net_headers
     jhetz/ldap/cancel.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
-    jhetz/ldap/paged_search.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp
+    jhetz/ldap/paged_search.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp jhetz/ldap/transaction.hpp
     jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp)
 set(jhetz_ldap_codec_header_tus)
 set(jhetz_ldap_net_header_tus)
@@ -152,6 +153,7 @@ if(JHETZ_LDAP_BUILD_NET)
         net/mapping_ops_tests.cpp
         net/operations_tests.cpp
         net/password_tests.cpp
+        net/transaction_tests.cpp
         net/sasl_scram_tests.cpp
         net/sasl_tests.cpp
         net/start_tls_tests.cpp

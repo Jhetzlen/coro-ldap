@@ -639,7 +639,13 @@ namespace detail {
 		return with_controls(std::move(op), std::move(wire), mr);
 	}
 
+	// The update operations once the connection is known (impl_ != nullptr);
+	// `context` names the operation in errors.
+	auto add_impl(impl_ref self, add_params request, std::string context) -> boost::capy::task<result<response>>;
 	auto modify_impl(impl_ref self, modify_params request, std::string context) -> boost::capy::task<result<response>>;
+	auto del_impl(impl_ref self, del_params request, std::string context) -> boost::capy::task<result<response>>;
+	auto modify_dn_impl(impl_ref self, modify_dn_params request, std::string context)
+	  -> boost::capy::task<result<response>>;
 
 	auto extended_impl(impl_ref self, extended_params request) -> boost::capy::task<result<extended_result>>;
 

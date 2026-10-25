@@ -37,9 +37,11 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
   (rename / move), compare, extended operations, Who am I?, Password
   Modify, and password change / reset that works on both OpenLDAP and
   Active Directory
+- Transactions (RFC 5805): group updates so they apply all together or not
+  at all, with `ldap::transaction` (commit, abort, aborted on destruction)
 - Controls: paged results, server-side sort, virtual list view,
   assertion, pre-/post-read, matched values, proxied authorization,
-  ManageDsaIT, Relax Rules, each accepted only on the operations its RFC
+  ManageDsaIT, Relax Rules, transaction specification, each accepted only on the operations its RFC
   allows (pre-read on an add does not compile)
 - Content synchronization (RFC 4533, "syncrepl"): follow a directory's
   changes with refreshOnly or refreshAndPersist and resume from a cookie

@@ -728,6 +728,54 @@ TEST_CASE("sync: password_modify", "[net][sync]")
 			  "bad\x82\x03new"s } });
 }
 
+TEST_CASE("sync: transactions", "[net][sync][transaction]")
+{
+	const auto ext = [](std::int32_t id, std::optional<std::string_view> value = std::nullopt) {
+		return ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, value } };
+	};
+	peer_server srv;
+	srv.serve({ answer({ ext(1, "t1") }),
+	  answer({ result_msg<ldap::del_response>(2) }),
+	  answer({ ext(3) }),
+	  answer({ ext(4, "t2") }),
+	  answer({ ext(5) }),// the destructor's abort, waited for
+	  answer({ ext(6, "t3") }),
+	  answer({ ext(7) }) });
+	connected k(srv);
+	auto t = k.c.begin_transaction();
+	REQUIRE(t.has_value());
+	CHECK(t->identifier() == "t1");
+	CHECK(t->is_open());
+	auto d = t->del({ .entry = jdoe });
+	REQUIRE(d.has_value());
+	CHECK(d->message_id == 2);
+	auto done = t->commit();
+	REQUIRE(done.has_value());
+	CHECK_FALSE(t->is_open());
+	{
+		auto open = k.c.begin_transaction();
+		REQUIRE(open.has_value());
+		ldap::sync::transaction moved = std::move(*open);
+		CHECK_FALSE(open->is_open());
+		CHECK(open->identifier().empty());
+		CHECK(open->commit().error().code == ldap::client_errc::not_connected);
+	}
+	auto id = k.c.start_transaction();
+	REQUIRE(id.has_value());
+	CHECK(*id == "t3");
+	REQUIRE(k.c.end_transaction(*id, false).has_value());
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 7);
+	CHECK(got[1].controls
+		  == std::pmr::vector<ldap::control>{ ldap::control{ ldap::transaction_specification_oid, true, "t1" } });
+	const auto end_of = [](const ldap::message &m) {
+		return ldap::decode_end_transaction_request(*std::get<ldap::extended_request>(m.op).request_value).value();
+	};
+	CHECK(end_of(got[2]) == ldap::end_transaction_request{ true, "t1" });
+	CHECK(end_of(got[4]) == ldap::end_transaction_request{ false, "t2" });
+	CHECK(end_of(got[6]) == ldap::end_transaction_request{ false, "t3" });
+}
+
 TEST_CASE("sync: change_password and reset_password", "[net][sync][password]")
 {
 	peer_server srv;

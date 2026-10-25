@@ -4,6 +4,7 @@
 #include "format_util.hpp"
 #include "pmr_util.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <string>
 #include <utility>
@@ -824,6 +825,66 @@ namespace {
 			return std::move(std::get<search_result_entry>(*op));
 		}
 
+		// txnEndRes (RFC 5805 section 2.3).
+		auto run_end_transaction(std::span<const std::byte> bytes) -> result<end_transaction_response>
+		{
+			ber::reader top(bytes, options_->max_depth);
+			auto r = top.enter();
+			if (!r) {
+				return std::unexpected(std::move(r.error()));
+			}
+			if (auto done = top.expect_end(); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
+			end_transaction_response out(a_);
+			if (next_is(*r, ber::tags::integer)) {
+				auto id = read_ranged(*r, ber::tags::integer, 0, max_int, "messageID");
+				if (!id) {
+					return std::unexpected(std::move(id.error()));
+				}
+				out.message_id = *id;
+			}
+			if (next_is(*r, ber::tags::sequence)) {
+				auto list = r->enter();
+				if (!list) {
+					return std::unexpected(std::move(list.error()));
+				}
+				while (!list->empty()) {
+					auto u = list->enter();
+					if (!u) {
+						return std::unexpected(std::move(u.error()));
+					}
+					update_controls item(a_);
+					auto id = read_ranged(*u, ber::tags::integer, 0, max_int, "updateControls messageID");
+					if (!id) {
+						return std::unexpected(std::move(id.error()));
+					}
+					item.message_id = *id;
+					// Controls ::= SEQUENCE OF control Control (RFC 4511
+					// section 4.1.11), here with its universal tag.
+					auto controls = u->enter();
+					if (!controls) {
+						return std::unexpected(std::move(controls.error()));
+					}
+					while (!controls->empty()) {
+						auto c = read_control(*controls);
+						if (!c) {
+							return std::unexpected(std::move(c.error()));
+						}
+						item.controls.push_back(std::move(*c));
+					}
+					if (auto done = skip_rest(*u); !done) {
+						return std::unexpected(std::move(done.error()));
+					}
+					out.updates_controls.push_back(std::move(item));
+				}
+			}
+			if (auto done = skip_rest(*r); !done) {
+				return std::unexpected(std::move(done.error()));
+			}
+			return out;
+		}
+
 		auto run(std::span<const std::byte> bytes) -> result<message>
 		{
 			ber::reader top(bytes, options_->max_depth);
@@ -1554,6 +1615,25 @@ namespace {
 
 }// namespace
 
+namespace {
+
+	void write_control_list(ber::writer &list, const std::pmr::vector<control> &controls)
+	{
+		for (const auto &c : controls) {
+			list.constructed(ber::tags::sequence, [&](ber::writer &cw) {
+				cw.octet_string(c.type);
+				if (c.criticality) {
+					cw.boolean(true);
+				}
+				if (c.value) {
+					cw.octet_string(*c.value);
+				}
+			});
+		}
+	}
+
+}// namespace
+
 auto encode(ber::writer &w, const message &m) -> result<void>
 {
 	if (auto done = precheck(m); !done) {
@@ -1563,19 +1643,7 @@ auto encode(ber::writer &w, const message &m) -> result<void>
 		msg.integer(m.id);
 		std::visit(op_writer{ &msg }, m.op);
 		if (!m.controls.empty()) {
-			msg.constructed(ber::context(0), [&](ber::writer &list) {
-				for (const auto &c : m.controls) {
-					list.constructed(ber::tags::sequence, [&](ber::writer &cw) {
-						cw.octet_string(c.type);
-						if (c.criticality) {
-							cw.boolean(true);
-						}
-						if (c.value) {
-							cw.octet_string(*c.value);
-						}
-					});
-				}
-			});
+			msg.constructed(ber::context(0), [&](ber::writer &list) { write_control_list(list, m.controls); });
 		}
 	});
 	return {};
@@ -1935,6 +2003,95 @@ auto decode_read_entry(const control &c, const decode_options &options) -> resul
 		return std::unexpected(std::move(value.error()));
 	}
 	return in_control(decoder(options).run_entry(*value), name);
+}
+
+// ---------------------------------------------------------------- transactions (RFC 5805)
+
+auto encode_end_transaction_request(const end_transaction_request &value, std::pmr::memory_resource *mr)
+  -> std::pmr::string
+{
+	ber::writer w{ ber::writer::allocator_type(mr) };
+	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
+		if (!value.commit) {
+			s.boolean(false);
+		}
+		s.octet_string(value.identifier);
+	});
+	return std::pmr::string(detail::as_text(w.bytes()), std::pmr::polymorphic_allocator<>(mr));
+}
+
+auto decode_end_transaction_request(std::string_view value, std::pmr::memory_resource *mr)
+  -> result<end_transaction_request>
+{
+	constexpr std::string_view name = "txnEndReq";
+	const auto in_value = [name](error e) {
+		e.context.insert(0, e.context.empty() ? std::string(name) : detail::format("{}: ", name));
+		return e;
+	};
+	ber::reader top(std::as_bytes(std::span(value)));
+	auto r = top.enter();
+	if (!r) {
+		return std::unexpected(in_value(std::move(r.error())));
+	}
+	if (auto done = top.expect_end(); !done) {
+		return std::unexpected(in_value(std::move(done.error())));
+	}
+	end_transaction_request out{ std::pmr::polymorphic_allocator<>(mr) };
+	if (next_is(*r, ber::tags::boolean)) {
+		auto commit = r->read_boolean();
+		if (!commit) {
+			return std::unexpected(in_value(std::move(commit.error())));
+		}
+		out.commit = *commit;
+	}
+	auto id = r->read_string(ber::tags::octet_string, mr);
+	if (!id) {
+		return std::unexpected(in_value(std::move(id.error())));
+	}
+	out.identifier = std::move(*id);
+	if (auto done = skip_rest(*r); !done) {
+		return std::unexpected(in_value(std::move(done.error())));
+	}
+	return out;
+}
+
+auto encode_end_transaction_response(const end_transaction_response &value, std::pmr::memory_resource *mr)
+  -> result<std::optional<std::pmr::string>>
+{
+	const auto out_of_range = [](std::int32_t id) { return id < 0; };
+	if ((value.message_id && out_of_range(*value.message_id))
+		|| std::ranges::any_of(value.updates_controls, out_of_range, &update_controls::message_id)) {
+		return fail(client_errc::encode_error, "txnEndRes: negative message id");
+	}
+	if (!value.message_id && value.updates_controls.empty()) {
+		return std::optional<std::pmr::string>{};
+	}
+	ber::writer w{ ber::writer::allocator_type(mr) };
+	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
+		if (value.message_id) {
+			s.integer(*value.message_id);
+		}
+		if (!value.updates_controls.empty()) {
+			s.constructed(ber::tags::sequence, [&](ber::writer &list) {
+				for (const auto &u : value.updates_controls) {
+					list.constructed(ber::tags::sequence, [&](ber::writer &item) {
+						item.integer(u.message_id);
+						item.constructed(ber::tags::sequence,
+						  [&](ber::writer &controls) { write_control_list(controls, u.controls); });
+					});
+				}
+			});
+		}
+	});
+	return std::optional<std::pmr::string>{
+		std::in_place, detail::as_text(w.bytes()), std::pmr::polymorphic_allocator<>(mr)
+	};
+}
+
+auto decode_end_transaction_response(std::string_view value, const decode_options &options)
+  -> result<end_transaction_response>
+{
+	return in_control(decoder(options).run_end_transaction(std::as_bytes(std::span(value))), "txnEndRes");
 }
 
 }// namespace jhetz::ldap

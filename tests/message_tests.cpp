@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -885,4 +886,90 @@ TEST_CASE("encode of a valueless op with message id 0 throws", "[message]")
 	CHECK_THROWS_AS(m.op.emplace<ldap::del_request>(throwing{}), std::runtime_error);
 	REQUIRE(m.op.valueless_by_exception());
 	CHECK_THROWS_AS(ldap::encode(m), std::bad_variant_access);
+}
+
+// ---------------------------------------------------------------- transactions (RFC 5805)
+
+TEST_CASE("End Transaction request value (RFC 5805 section 2.3)", "[message][transaction]")
+{
+	const auto hex_of = [](const std::pmr::string &s) { return hex(ldap::test::bytes_of(s)); };
+	// commit DEFAULT TRUE is left out; FALSE is written.
+	CHECK(hex_of(ldap::encode_end_transaction_request({ true, "tx1" })) == "30 05 04 03 74 78 31");
+	CHECK(hex_of(ldap::encode_end_transaction_request({ false, "tx1" })) == "30 08 01 01 00 04 03 74 78 31");
+
+	const auto decoded = [](std::string_view hex_value) {
+		const auto b = ldap::test::from_hex(hex_value);
+		return ldap::decode_end_transaction_request(ldap::detail::as_text(b));
+	};
+	CHECK(decoded("30 05 04 03 74 78 31") == ldap::end_transaction_request{ true, "tx1" });
+	CHECK(decoded("30 08 01 01 FF 04 03 74 78 31") == ldap::end_transaction_request{ true, "tx1" });
+	CHECK(decoded("30 08 01 01 00 04 03 74 78 31") == ldap::end_transaction_request{ false, "tx1" });
+	// Unknown trailing elements are skipped; an empty identifier is kept.
+	CHECK(decoded("30 04 04 00 05 00") == ldap::end_transaction_request{ true, "" });
+	// No identifier, trailing bytes, not a SEQUENCE.
+	CHECK(code_of(decoded("30 03 01 01 00")) == client_errc::decode_error);
+	CHECK(code_of(decoded("30 02 04 00 00")) == client_errc::decode_error);
+	CHECK(code_of(decoded("04 00")) == client_errc::unexpected_tag);
+	CHECK(decoded("30 03 01 01 00").error().context.starts_with("txnEndReq: "));
+}
+
+TEST_CASE("End Transaction response value (RFC 5805 section 2.3)", "[message][transaction]")
+{
+	const auto hex_of = [](const ldap::result<std::optional<std::pmr::string>> &s) {
+		REQUIRE(s.has_value());
+		REQUIRE(s->has_value());
+		return hex(ldap::test::bytes_of(**s));
+	};
+	// Both fields absent: no responseValue at all.
+	const auto none = ldap::encode_end_transaction_response({});
+	REQUIRE(none.has_value());
+	CHECK_FALSE(none->has_value());
+	CHECK(hex_of(ldap::encode_end_transaction_response(ldap::end_transaction_response{ 5 })) == "30 03 02 01 05");
+	const ldap::end_transaction_response full{ 5,
+		{ ldap::update_controls{ 3, { ldap::control{ ldap::post_read_oid, false, "x" } } } } };
+	constexpr std::string_view full_hex =
+	  "30 21 02 01 05 30 1C 30 1A 02 01 03 30 15 30 13 04 0E 31 2E 33 2E 36 2E 31 2E 31 2E 31 33 2E 32 04 01 78";
+	CHECK(hex_of(ldap::encode_end_transaction_response(full)) == full_hex);
+	CHECK(code_of(ldap::encode_end_transaction_response(ldap::end_transaction_response{ -1 }))
+		  == client_errc::encode_error);
+	CHECK(code_of(ldap::encode_end_transaction_response({ std::nullopt, { ldap::update_controls{ -2 } } }))
+		  == client_errc::encode_error);
+
+	const auto decoded = [](std::string_view hex_value, const ldap::decode_options &options = {}) {
+		const auto b = ldap::test::from_hex(hex_value);
+		return ldap::decode_end_transaction_response(ldap::detail::as_text(b), options);
+	};
+	CHECK(decoded(full_hex) == full);
+	CHECK(decoded("30 03 02 01 05") == ldap::end_transaction_response{ 5 });
+	CHECK(decoded("30 00") == ldap::end_transaction_response{});
+	// updatesControls without a messageID; an empty Controls list.
+	CHECK(decoded("30 09 30 07 30 05 02 01 07 30 00")
+		  == ldap::end_transaction_response{ std::nullopt, { ldap::update_controls{ 7 } } });
+	// Unknown trailing elements are skipped.
+	CHECK(decoded("30 05 02 01 05 05 00") == ldap::end_transaction_response{ 5 });
+
+	const auto context_of = [&](std::string_view hex_value) {
+		auto r = decoded(hex_value);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::protocol_error);
+		return std::string(r.error().context);
+	};
+	CHECK(context_of("30 03 02 01 FF") == "txnEndRes: message: messageID -1 outside 0..2147483647 at offset 2");
+	CHECK(context_of("30 03 02 01 05 00").starts_with("txnEndRes: ber: "));// trailing bytes
+	// updateControls without its Controls, a control that is not a Control.
+	CHECK(context_of("30 07 30 05 30 03 02 01 07").starts_with("txnEndRes: "));
+	CHECK(context_of("30 0B 30 09 30 07 02 01 07 30 02 04 00").starts_with("txnEndRes: "));
+	CHECK(context_of("30 0B 30 09 30 07 02 01 07 30 02 30 00").starts_with("txnEndRes: "));
+
+	// The strings count against max_elements.
+	const auto limited = decoded(full_hex, { .max_elements = 1 });
+	REQUIRE_FALSE(limited.has_value());
+	CHECK(limited.error().code == client_errc::message_too_large);
+
+	// On a caller's resource.
+	std::pmr::monotonic_buffer_resource arena;
+	const auto on_arena = decoded(full_hex, { .memory = &arena });
+	REQUIRE(on_arena.has_value());
+	CHECK(on_arena->get_allocator().resource() == &arena);
+	CHECK(on_arena->updates_controls.at(0).controls.at(0).get_allocator().resource() == &arena);
 }

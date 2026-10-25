@@ -232,8 +232,8 @@ before anything is sent.
 
 Typed controls (step 6, `controls.hpp`): `paged`, `manage_dsa_it`,
 `relax_rules`, `proxied_authorization`, `server_side_sort`, `assertion`,
-`pre_read`, `post_read`, `sync_request`, `matched_values` and
-`virtual_list_view`, plus the raw wire
+`pre_read`, `post_read`, `sync_request`, `matched_values`,
+`virtual_list_view` and `transaction_specification`, plus the raw wire
 `control {type, criticality, value}` as the escape hatch. Where each may be
 sent is fixed by its specification, so it is checked at compile time
 (goal 1) from one table, `control_rule_of<T>` (name, source, operations;
@@ -249,6 +249,7 @@ sent is fixed by its specification, so it is checked at compile time
 | `pre_read` | modify, modify DN, delete | RFC 4527 section 3.1 |
 | `post_read` | add, modify, modify DN | RFC 4527 section 3.2 |
 | `relax_rules` | add, modify, modify DN, delete | draft-zeilenga-ldap-relax-03 section 2 |
+| `transaction_specification` | add, modify, modify DN, delete | RFC 5805 section 2.2 (Password Modify too, but `extended_controls` is shared by every extended operation: a raw control there) |
 | `assertion` | all but extended | RFC 4528 section 3 (other operations only where their document says how; RFC 3062 and RFC 4532 do not) |
 | `manage_dsa_it` | all but extended | RFC 3296 section 3 (an extended operation only "for which the control is defined") |
 | `proxied_authorization` | all seven | RFC 4370 section 3 (not StartTLS-like extensions) |
@@ -353,6 +354,51 @@ server's bad control fails only the caller who asks for it.
   connection closes and refuses a new list past `sssvlv-maxperconn`
   (default 5) per connection with busy (51), so a client scrolling one
   list sends the contextID back.
+- Transactions (RFC 5805): primitives first, a thin helper on top. The
+  primitives are the typed control `transaction_specification{.identifier}`
+  (always critical, section 2.2), `connection::start_transaction(controls)`
+  -> `result<std::pmr::string>` (the identifier, section 2.1) and
+  `end_transaction(identifier, commit = true)` ->
+  `result<end_transaction_result>` (section 2.3), whose `updates_controls`
+  are the decoded txnEndRes updatesControls, `{message_id, controls}` each,
+  looked up with `find_update_controls(message_id)`. That id is the
+  update's own: `response` gained `message_id` (breaking: `response` is no
+  longer `{controls}` alone, so positional `response{controls}` must
+  become `{.controls = ...}`), since a deferred update's pre-/post-read
+  controls only come back at the End Transaction, matched by id. Decoding
+  is strict where the RFC is: a Start or End Transaction response with a
+  responseName, or a successful Start without an identifier, fails with
+  decode_error; commit DEFAULT TRUE is left out when encoding and accepted
+  either way. Section 4.4 makes proxied authorization on an update of a
+  transaction a protocol error: `append_controls` refuses a typed
+  `transaction_specification` next to a proxied authorization control
+  (typed or raw) with encode_error before sending (it goes on Start
+  Transaction instead). A refused End Transaction carries the server's
+  code, its context naming the update at fault (txnEndRes.messageID, "end
+  transaction: update message 5"); no structured field was added to
+  `ldap::error` for it, as the helper reads the id itself. The helper,
+  `ldap::transaction` (`transaction.hpp`, `[[nodiscard]]`, move-only, made
+  by `connection::begin_transaction()`), is built only from those
+  primitives: its `add` / `modify` / `del` / `modify_dn` append the control
+  and record each accepted update's context by message id, so `commit()`
+  (-> `commit_result`, i.e. `end_transaction_result`) names the failing
+  operation ("commit transaction: update message 3 (modify DN uid=...)");
+  `abort()` sends commit FALSE. Both settle the transaction whatever the
+  outcome. Destroyed while open, it queues a fire-and-forget End
+  Transaction (abort) on the writer queue, its answer counted as due and
+  dropped like a paged search's release; `sync::transaction` aborts
+  synchronously in its destructor instead (queued, from the I/O thread).
+  The transaction state holds a counted reference to the connection's
+  state (a pool lease can own it later, 3pf). Not in v1: routing the
+  Aborted Transaction Notice (section 2.4; it is ignored like other
+  unsolicited notifications, and the next use fails, section 3.3), and a
+  `with_transaction(fn)` helper. A cancelled or timed-out update in a
+  transaction may or may not be part of it, so the caller aborts; a commit
+  whose answer is lost has an unknown outcome. The txnEndReq and txnEndRes
+  codecs (`encode_` / `decode_end_transaction_request` / `_response`) are
+  in `message.hpp` for mock servers and the message fuzzer. OpenLDAP 2.7's
+  slapd supports transactions on back-mdb without configuration; the
+  integration tests run them there.
 - Pre-read / post-read (RFC 4527): `pre_read{.attributes}` on modify /
   delete / modify DN, `post_read{.attributes}` on add / modify / modify DN
   (sections 3.1 and 3.2: nothing to pre-read before an add, nothing to
@@ -403,7 +449,8 @@ pin the encodings and decodings against bytes captured between OpenLDAP
 values, and the integration tests run them against slapd.
 
 Results (step 6): success returns the operation's value — `response`
-(the response controls) for add / modify / delete / modify DN, `bool` for
+(the request's message id and the response controls) for add / modify /
+delete / modify DN, `bool` for
 compare, `extended_result` for extended operations, the authzId string for
 `who_am_i()` (RFC 4532), the generated password (if any) for
 `password_modify()` (RFC 3062; passwords never appear in error contexts).

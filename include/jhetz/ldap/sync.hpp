@@ -52,6 +52,8 @@
 
 namespace jhetz::ldap::sync {
 
+class transaction;
+
 namespace detail {
 	template<class> struct task_value;
 	template<class R> struct task_value<boost::capy::task<R>>
@@ -198,11 +200,26 @@ class connection
 		  [&](ldap::connection &c) { return c.reset_password(std::move(user), std::move(new_password), method); });
 	}
 
+	// LDAP transactions (RFC 5805), as ldap::connection's.
+	[[nodiscard]] auto start_transaction(extended_controls controls = {}) -> result<std::pmr::string>
+	{
+		return call([&](ldap::connection &c) { return c.start_transaction(std::move(controls)); });
+	}
+	[[nodiscard]] auto end_transaction(std::pmr::string identifier, bool commit = true)
+	  -> result<end_transaction_result>
+	{
+		return call([&](ldap::connection &c) { return c.end_transaction(std::move(identifier), commit); });
+	}
+	// start_transaction() wrapped in a sync::transaction (below).
+	[[nodiscard]] auto begin_transaction(extended_controls controls = {}) -> result<transaction>;
+
 	[[nodiscard]] auto unbind() -> result<void>;
 	// Closes the connection at once (no UnbindRequest).
 	void close();
 
   private:
+	friend class transaction;
+
 	// Runs make_task(conn_) on the I/O thread and waits for its result;
 	// conn_ is const when called from a const member.
 	template<class Self, class F>
@@ -230,6 +247,45 @@ class connection
 	std::optional<boost::capy::work_guard<boost::corosio::io_context::executor_type>> guard_;
 	std::thread io_thread_;
 	std::thread::id io_thread_id_;
+};
+
+// ldap::transaction (transaction.hpp) for a sync::connection: each method
+// runs the async one on the connection's I/O thread and waits for it, with
+// the same results. Destroyed while still open, it aborts the transaction
+// and waits for the server's answer (ignored); from the I/O thread itself it
+// queues the abort without waiting, as ldap::transaction does. Must not
+// outlive its sync::connection. Move-only.
+class [[nodiscard]] transaction
+{
+  public:
+	transaction(transaction &&other) noexcept;
+	auto operator=(transaction &&other) noexcept -> transaction &;
+	transaction(const transaction &) = delete;
+	auto operator=(const transaction &) -> transaction & = delete;
+	~transaction();
+
+	// A copy of ldap::transaction::identifier(); empty once moved from.
+	[[nodiscard]] auto identifier() const -> std::string;
+	[[nodiscard]] auto is_open() const -> bool;
+
+	[[nodiscard]] auto add(add_params request) -> result<response>;
+	[[nodiscard]] auto modify(modify_params request) -> result<response>;
+	[[nodiscard]] auto del(del_params request) -> result<response>;
+	[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<response>;
+	[[nodiscard]] auto commit() -> result<commit_result>;
+	[[nodiscard]] auto abort() -> result<void>;
+
+  private:
+	friend class connection;
+	transaction(connection &c, std::unique_ptr<ldap::transaction> t) noexcept;
+
+	// Ends the ldap::transaction on the I/O thread, aborting it first if
+	// still open.
+	void settle() noexcept;
+
+	connection *conn_ = nullptr;
+	// Touched only on the I/O thread (null once moved from).
+	std::unique_ptr<ldap::transaction> txn_;
 };
 
 }// namespace jhetz::ldap::sync

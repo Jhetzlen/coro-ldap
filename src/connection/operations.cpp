@@ -49,6 +49,7 @@ namespace {
 			return std::unexpected(r.to_error(context));
 		}
 		response out;
+		out.message_id = m->id;
 		out.controls.assign(m->controls.begin(), m->controls.end());
 		return out;
 	}
@@ -78,23 +79,32 @@ using detail::build_request;
 
 // ---------------------------------------------------------------- other operations
 
+namespace detail {
+
+	auto add_impl(impl_ref self, add_params request, std::string context) -> capy::task<result<response>>
+	{
+		const std::pmr::polymorphic_allocator<> alloc(self->mr());
+		add_request op(alloc);
+		op.entry = request.entry.to_string(self->mr());
+		op.attributes.assign(request.attributes.begin(), request.attributes.end());
+		auto msg = build_request(std::move(op), request.controls, self->mr(), context);
+		if (!msg) {
+			co_return std::unexpected(std::move(msg.error()));
+		}
+		co_return to_response(
+		  co_await request_response(self, std::move(*msg), op_index<add_response>, context, request.timeout), context);
+	}
+
+}// namespace detail
+
+// Not a coroutine: the task of detail::add_impl() is returned as is.
 auto connection::add(add_params request) -> capy::task<result<response>>
 {
-	const std::string context = op_context("add", request.entry);
+	std::string context = op_context("add", request.entry);
 	if (impl_ == nullptr) {
-		co_return std::unexpected(no_connection(context));
+		return refuse(client_errc::not_connected, std::move(context));
 	}
-	impl_ref self(impl_);
-	const std::pmr::polymorphic_allocator<> alloc(self->mr());
-	add_request op(alloc);
-	op.entry = request.entry.to_string(self->mr());
-	op.attributes.assign(request.attributes.begin(), request.attributes.end());
-	auto msg = build_request(std::move(op), request.controls, self->mr(), context);
-	if (!msg) {
-		co_return std::unexpected(std::move(msg.error()));
-	}
-	co_return to_response(
-	  co_await request_response(self, std::move(*msg), op_index<add_response>, context, request.timeout), context);
+	return detail::add_impl(impl_ref(impl_), std::move(request), std::move(context));
 }
 
 namespace detail {
@@ -127,50 +137,64 @@ auto connection::modify(modify_params request) -> capy::task<result<response>>
 	co_return co_await modify_impl(impl_ref(impl_), std::move(request), std::move(context));
 }
 
+namespace detail {
+
+	auto del_impl(impl_ref self, del_params request, std::string context) -> capy::task<result<response>>
+	{
+		auto msg =
+		  build_request(del_request(request.entry.to_string(self->mr()), std::pmr::polymorphic_allocator<>(self->mr())),
+			request.controls,
+			self->mr(),
+			context);
+		if (!msg) {
+			co_return std::unexpected(std::move(msg.error()));
+		}
+		co_return to_response(
+		  co_await request_response(self, std::move(*msg), op_index<del_response>, context, request.timeout), context);
+	}
+
+	auto modify_dn_impl(impl_ref self, modify_dn_params request, std::string context) -> capy::task<result<response>>
+	{
+		if (request.new_rdn.avas.empty()) {
+			co_return fail(client_errc::invalid_dn, context + ": empty new RDN");
+		}
+		const std::pmr::polymorphic_allocator<> alloc(self->mr());
+		modify_dn_request op(alloc);
+		op.entry = request.entry.to_string(self->mr());
+		op.new_rdn = dn{}.child(request.new_rdn).to_string(self->mr());// an RDN prints as a one-RDN DN
+		op.delete_old_rdn = request.delete_old_rdn;
+		if (request.new_superior) {
+			op.new_superior = request.new_superior->to_string(self->mr());
+		}
+		auto msg = build_request(std::move(op), request.controls, self->mr(), context);
+		if (!msg) {
+			co_return std::unexpected(std::move(msg.error()));
+		}
+		co_return to_response(
+		  co_await request_response(self, std::move(*msg), op_index<modify_dn_response>, context, request.timeout),
+		  context);
+	}
+
+}// namespace detail
+
+// Not a coroutine: the task of detail::del_impl() is returned as is.
 auto connection::del(del_params request) -> capy::task<result<response>>
 {
-	const std::string context = op_context("delete", request.entry);
+	std::string context = op_context("delete", request.entry);
 	if (impl_ == nullptr) {
-		co_return std::unexpected(no_connection(context));
+		return refuse(client_errc::not_connected, std::move(context));
 	}
-	impl_ref self(impl_);
-	auto msg =
-	  build_request(del_request(request.entry.to_string(self->mr()), std::pmr::polymorphic_allocator<>(self->mr())),
-		request.controls,
-		self->mr(),
-		context);
-	if (!msg) {
-		co_return std::unexpected(std::move(msg.error()));
-	}
-	co_return to_response(
-	  co_await request_response(self, std::move(*msg), op_index<del_response>, context, request.timeout), context);
+	return detail::del_impl(impl_ref(impl_), std::move(request), std::move(context));
 }
 
+// Not a coroutine: the task of detail::modify_dn_impl() is returned as is.
 auto connection::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 {
-	const std::string context = op_context("modify DN", request.entry);
+	std::string context = op_context("modify DN", request.entry);
 	if (impl_ == nullptr) {
-		co_return std::unexpected(no_connection(context));
+		return refuse(client_errc::not_connected, std::move(context));
 	}
-	if (request.new_rdn.avas.empty()) {
-		co_return fail(client_errc::invalid_dn, context + ": empty new RDN");
-	}
-	impl_ref self(impl_);
-	const std::pmr::polymorphic_allocator<> alloc(self->mr());
-	modify_dn_request op(alloc);
-	op.entry = request.entry.to_string(self->mr());
-	op.new_rdn = dn{}.child(request.new_rdn).to_string(self->mr());// an RDN prints as a one-RDN DN
-	op.delete_old_rdn = request.delete_old_rdn;
-	if (request.new_superior) {
-		op.new_superior = request.new_superior->to_string(self->mr());
-	}
-	auto msg = build_request(std::move(op), request.controls, self->mr(), context);
-	if (!msg) {
-		co_return std::unexpected(std::move(msg.error()));
-	}
-	co_return to_response(
-	  co_await request_response(self, std::move(*msg), op_index<modify_dn_response>, context, request.timeout),
-	  context);
+	return detail::modify_dn_impl(impl_ref(impl_), std::move(request), std::move(context));
 }
 
 // Not coroutines: the task of modify_dn() is returned as is.

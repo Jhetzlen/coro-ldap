@@ -220,14 +220,18 @@ itself needs only ICU.
   - `jhetz/ldap/operations.hpp` (part of the codec, `jhetz::ldap`): the
     request aggregates (`search_params`, `add_params`, `modify_params`,
     `del_params`, `modify_dn_params`, `compare_params`, `extended_params`,
-    `password_modify_params`), the `ldap::mod` builders, `response`,
-    `intermediate`, `extended_result`, and the OIDs `who_am_i_oid`,
+    `password_modify_params`), the `ldap::mod` builders, `response`
+    (`{message_id, controls}`; breaking: `message_id` is new and comes
+    first, as in the LDAPMessage), `intermediate`, `extended_result`,
+    `end_transaction_result`, and the OIDs `who_am_i_oid`,
     `password_modify_oid` and `active_directory_capability_oid`.
   - `jhetz/ldap/search_stream.hpp` and `jhetz/ldap/paged_search.hpp`: the
     entry streams `search_stream()` and `search_paged()` return, and
     `search_entry` and `search_reference`, the items of
     `search_stream::next_item()`.
   - `jhetz/ldap/cancel.hpp`: `raceable()` and `with_stop()`.
+  - `jhetz/ldap/transaction.hpp`: `ldap::transaction` and
+    `commit_result` (RFC 5805, below).
 
    `co_await ldap::connect(ioc, url, connection_options, mr)`
   wraps `net::connect` (`connection_options`: connect `timeout`, `tls`,
@@ -320,6 +324,32 @@ itself needs only ICU.
   with `.controls` (that operation's control list, see controls.hpp
   below) and `.timeout` (`extended` refuses the StartTLS name with
   encode_error before sending: use `start_tls`);
+  transactions (RFC 5805): `start_transaction(extended_controls)` ->
+  `result<std::pmr::string>` (the identifier; proxied authorization goes
+  here, section 4.4), updates carrying
+  `ldap::transaction_specification{.identifier}`, and
+  `end_transaction(identifier, commit = true)` ->
+  `result<end_transaction_result>` (`updates_controls`, the decoded
+  updatesControls `{message_id, controls}`, with
+  `find_update_controls(response::message_id)`, and `controls`); a refused
+  End Transaction has the context "end transaction: update message N" when
+  the server names the update. `begin_transaction(extended_controls)`
+  returns the helper `ldap::transaction` (`[[nodiscard]]`, move-only):
+  `add` / `modify` / `del` / `modify_dn` attach the control (a request that
+  already carries one, or carries proxied authorization, fails with
+  encode_error before sending), `commit()` -> `result<commit_result>` (an
+  error names the failing operation: "commit transaction: update message 3
+  (add uid=...)"), `abort()`, `identifier()`, `is_open()`; commit and
+  abort settle it whatever the outcome (later calls fail with
+  `std::errc::invalid_argument`), and one destroyed while open queues an
+  End Transaction (abort) without waiting. `sync::connection` forwards
+  `start_transaction` and `end_transaction`, and its `begin_transaction()`
+  returns a `sync::transaction`, which aborts synchronously when destroyed
+  open. The Aborted Transaction Notice is not routed: the next use fails.
+  An update cancelled or timed out inside a transaction may be part of it:
+  abort. The codecs (`end_transaction_request`, `update_controls`,
+  `end_transaction_response`, `encode_` / `decode_end_transaction_request`
+  / `_response`, the OIDs) are in `message.hpp`;
   `search_paged(params, page_size)` follows the Simple Paged Results cookie across pages (destroyed early, it abandons the
   current page and releases the server's paging state with a page size 0
   request, RFC 2696 section 3, unless the search already ended; the
@@ -487,7 +517,11 @@ itself needs only ICU.
   `.before_count`, `.after_count`, `.target` = `vlv_by_offset{.offset,
   .content_count}` or `vlv_greater_than_or_equal{.value}`, `.context_id`;
   needs a `server_side_sort` on the same search, else encode_error before
-  sending; `decode_virtual_list_view` for mock servers)) or a raw
+  sending; `decode_virtual_list_view` for mock servers),
+  `transaction_specification` (RFC 5805: `.identifier`, always critical,
+  on add, modify, modify DN and delete; with a proxied authorization
+  control, typed or raw, encode_error before sending;
+  `decode_transaction_specification` for mock servers)) or a raw
   `ldap::control`.
   Each operation's params take its own list: `search_controls`,
   `add_controls`, `modify_controls`, `modify_dn_controls`, `del_controls`,

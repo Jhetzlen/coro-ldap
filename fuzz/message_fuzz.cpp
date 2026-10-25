@@ -14,9 +14,12 @@
 // - peek_message_header never crashes, and agrees with decode (id) and with
 //   the re-encoding (id, operation tag) whenever the input decodes;
 // - a paged results, sort result, pre-/post-read, matched values, VLV
-//   request or response, or RFC 4533 sync request, state or done control
-//   that decodes re-encodes to an equal value (the entry of a read control allocated from the message's
-//   resource), and so does an RFC 4533 Sync Info Message;
+//   request or response, RFC 5805 transaction specification, or RFC 4533
+//   sync request, state or done control that decodes re-encodes to an equal
+//   value (the entry of a read control allocated from the message's
+//   resource), and so do an RFC 4533 Sync Info Message, an RFC 5805
+//   txnEndReq (End Transaction request value) and txnEndRes (any extended
+//   response value);
 // - search entries convert to ldap::entry, results to ldap::error, whose
 //   message() is well-formed UTF-8 without C0 controls or DEL;
 // - decode_options::from accepts exactly the responses (origin::server) or the
@@ -142,6 +145,20 @@ void exercise_control(const ldap::control &c)
 	}
 }
 
+void exercise_transaction_specification(const ldap::control &c)
+{
+	if (c.type != ldap::transaction_specification_oid) {
+		return;
+	}
+	if (auto t = ldap::decode_transaction_specification(c)) {
+		const auto again = ldap::to_control(*t);
+		check(again.has_value(), "again.has_value()");
+		check(*again == c, "*again == c");
+	} else {
+		check(is_decode_failure(t.error()), "is_decode_failure(t.error())");
+	}
+}
+
 void exercise_sync_info(const ldap::intermediate_response &i)
 {
 	if (i.response_name != ldap::sync_info_oid) {
@@ -157,16 +174,57 @@ void exercise_sync_info(const ldap::intermediate_response &i)
 	}
 }
 
+// RFC 5805: a txnEndRes in any extended response's value, a txnEndReq in an
+// End Transaction request's.
+void exercise_transaction(const std::optional<std::pmr::string> &value, bool request)
+{
+	if (!value) {
+		return;
+	}
+	if (request) {
+		if (auto r = ldap::decode_end_transaction_request(*value, value->get_allocator().resource())) {
+			check(r->get_allocator() == value->get_allocator(), "r->get_allocator() == value->get_allocator()");
+			const auto again = ldap::encode_end_transaction_request(*r);
+			check(
+			  ldap::decode_end_transaction_request(again) == *r, "ldap::decode_end_transaction_request(again) == *r");
+		} else {
+			check(is_decode_failure(r.error()), "is_decode_failure(r.error())");
+		}
+		return;
+	}
+	ldap::decode_options options;
+	options.memory = value->get_allocator().resource();
+	if (auto r = ldap::decode_end_transaction_response(*value, options)) {
+		check(r->get_allocator() == value->get_allocator(), "r->get_allocator() == value->get_allocator()");
+		const auto again = ldap::encode_end_transaction_response(*r);
+		check(again.has_value(), "again.has_value()");
+		if (*again) {
+			check(ldap::decode_end_transaction_response(**again) == *r,
+			  "ldap::decode_end_transaction_response(**again) == *r");
+		} else {
+			check(*r == ldap::end_transaction_response{}, "*r == ldap::end_transaction_response{}");
+		}
+	} else {
+		check(is_decode_failure(r.error()) || r.error().code == ldap::client_errc::message_too_large,
+		  "is_decode_failure(r.error()) || r.error().code == ldap::client_errc::message_too_large");
+	}
+}
+
 void exercise(const ldap::message &m)
 {
 	for (const auto &c : m.controls) {
 		exercise_control(c);
+		exercise_transaction_specification(c);
 	}
 	std::visit(
 	  [](const auto &op) {
 		  using T = std::decay_t<decltype(op)>;
 		  if constexpr (std::is_same_v<T, ldap::intermediate_response>) {
 			  exercise_sync_info(op);
+		  } else if constexpr (std::is_same_v<T, ldap::extended_request>) {
+			  if (op.request_name == ldap::end_transaction_oid) {
+				  exercise_transaction(op.request_value, true);
+			  }
 		  } else if constexpr (std::is_same_v<T, ldap::search_result_entry>) {
 			  // A copy on op's resource, so the entry is made on it too.
 			  const auto e = ldap::entry::from(ldap::search_result_entry(op, op.get_allocator()));
@@ -176,6 +234,9 @@ void exercise(const ldap::message &m)
 				  check(e.find(a.type) != nullptr, "e.find(a.type) != nullptr");
 			  }
 		  } else if constexpr (has_result<T>) {
+			  if constexpr (std::is_same_v<T, ldap::extended_response>) {
+				  exercise_transaction(op.response_value, false);
+			  }
 			  const auto err = op.result.to_error("fuzz");
 			  check(err.code.value() == op.result.result_code, "err.code.value() == op.result.result_code");
 			  // The server's text is sanitized: well-formed UTF-8, no C0 or DEL.

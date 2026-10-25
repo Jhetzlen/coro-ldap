@@ -911,6 +911,88 @@ TEST_CASE("integration: assertion and pre/post-read controls", "[integration][co
 	CHECK(*(*last)->find("sn") == ldap::string_list{ after_sn });
 }
 
+TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	corosio::io_context ioc;
+	auto c = open_admin(ioc);
+	const auto person = [](const std::string &uid) -> ldap::add_params {
+		return { .entry = *ldap::dn::parse("uid=" + uid + ",ou=people,dc=example,dc=org"),
+			.attributes = { { "objectClass", { "inetOrgPerson" } },
+			  { "uid", { uid } },
+			  { "cn", { "T" } },
+			  { "sn", { "\xC3\x86" } } } };
+	};
+	const auto exists = [&](const ldap::dn &d) {
+		auto r = finish(ioc, c.search({ .base = d, .scope = ldap::search_scope::base_object }));
+		return r.has_value();
+	};
+
+	auto t = finish(ioc, c.begin_transaction());
+	if (!t) {
+		SKIP("slapd without transactions: " << t.error().message());
+	}
+	const std::string a = unique("txa");
+	const std::string b = unique("txb");
+	auto first = finish(ioc, t->add(person(a)));
+	REQUIRE(first.has_value());
+	auto second = finish(ioc, t->add(person(b)));
+	REQUIRE(second.has_value());
+	CHECK(second->message_id != first->message_id);
+	// Deferred: nothing is applied before the commit.
+	CHECK_FALSE(exists(person(a).entry));
+	auto done = finish(ioc, t->commit());
+	REQUIRE(done.has_value());
+	CHECK(exists(person(a).entry));
+	CHECK(exists(person(b).entry));
+
+	// A conflicting update fails the whole commit, which names it; the
+	// other update is not applied either.
+	auto u = finish(ioc, c.begin_transaction());
+	REQUIRE(u.has_value());
+	const std::string fresh = unique("txc");
+	REQUIRE(finish(ioc, u->add(person(fresh))).has_value());
+	auto dup = finish(ioc, u->add(person(a)));
+	REQUIRE(dup.has_value());
+	auto refused = finish(ioc, u->commit());
+	REQUIRE_FALSE(refused.has_value());
+	INFO(refused.error().message());
+	CHECK(refused.error().code == ldap::errc::entry_already_exists);
+	CHECK_THAT(std::string(refused.error().context),
+	  ContainsSubstring(
+		"update message " + std::to_string(dup->message_id) + " (add uid=" + a + ",ou=people,dc=example,dc=org)"));
+	CHECK_FALSE(exists(person(fresh).entry));
+
+	// Abort, explicit and by destruction: nothing applied, the connection
+	// stays usable.
+	auto v = finish(ioc, c.begin_transaction());
+	REQUIRE(v.has_value());
+	REQUIRE(finish(ioc, v->del({ .entry = person(a).entry })).has_value());
+	REQUIRE(finish(ioc, v->abort()).has_value());
+	{
+		auto w = finish(ioc, c.begin_transaction());
+		REQUIRE(w.has_value());
+		REQUIRE(finish(ioc, w->del({ .entry = person(b).entry })).has_value());
+	}
+	CHECK(exists(person(a).entry));
+	CHECK(exists(person(b).entry));
+
+	// The primitives, deleting both in one transaction.
+	auto id = finish(ioc, c.start_transaction());
+	REQUIRE(id.has_value());
+	for (const auto &uid : { a, b }) {
+		auto d = finish(ioc,
+		  c.del({ .entry = person(uid).entry,
+			.controls = { ldap::transaction_specification{ .identifier = std::string(*id) } } }));
+		REQUIRE(d.has_value());
+	}
+	REQUIRE(finish(ioc, c.end_transaction(*id)).has_value());
+	CHECK_FALSE(exists(person(a).entry));
+	CHECK_FALSE(exists(person(b).entry));
+}
+
 TEST_CASE("integration: matched values", "[integration][controls]")
 {
 	if (!have_slapd()) {

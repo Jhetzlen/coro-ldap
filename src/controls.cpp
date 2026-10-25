@@ -507,6 +507,7 @@ auto parse_values_return_filter(std::string_view text, std::pmr::memory_resource
 {
 	// `at`: where the item starts in `text`, so positions in the filter's
 	// errors refer to the whole text.
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): local, two callers
 	const auto item = [&](std::string_view t, std::size_t index, std::size_t at) -> result<filter> {
 		auto f = filter::raw(t, mr);
 		if (!f) {
@@ -596,7 +597,36 @@ auto decode_virtual_list_view(const control &c) -> result<virtual_list_view>
 	return out;
 }
 
+auto to_control(const transaction_specification &c, std::pmr::memory_resource *mr) -> result<control>
+{
+	return control(transaction_specification_oid, true, c.identifier, control::allocator_type(mr));
+}
+
+auto decode_transaction_specification(const control &c) -> result<transaction_specification>
+{
+	constexpr std::string_view name = "transaction specification";
+	auto value = control_value(c, transaction_specification_oid, name);
+	if (!value) {
+		return std::unexpected(std::move(value.error()));
+	}
+	if (!c.criticality) {
+		return fail(
+		  client_errc::decode_error, detail::format("{}: control is not critical (RFC 5805 section 2.2)", name));
+	}
+	return transaction_specification{ .identifier = std::string(detail::as_text(*value)) };
+}
+
 namespace detail {
+
+	auto check_transaction_proxy(const std::pmr::vector<control> &wire) -> result<void>
+	{
+		if (!std::ranges::contains(wire, proxied_authorization_oid, &control::type)) {
+			return {};
+		}
+		return fail(client_errc::encode_error,
+		  "proxied_authorization is not valid on an update in a transaction: put it on the Start Transaction "
+		  "request (RFC 5805 section 4.4)");
+	}
 
 	auto check_vlv_sort(const std::pmr::vector<control> &wire) -> result<void>
 	{

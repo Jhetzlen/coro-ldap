@@ -111,6 +111,7 @@
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/schema.hpp"
 #include "jhetz/ldap/search_stream.hpp"
+#include "jhetz/ldap/transaction.hpp"
 #include "jhetz/ldap/url.hpp"
 
 #include <boost/capy/task.hpp>
@@ -340,6 +341,27 @@ class connection
 	// generated (genPasswd) when new_password was not given, else nullopt.
 	// Passwords never appear in error contexts.
 	auto password_modify(password_modify_params request) -> boost::capy::task<result<std::optional<std::string>>>;
+
+	// LDAP transactions (RFC 5805; transaction.hpp has the helper and the
+	// rules). start_transaction() sends a Start Transaction request (section
+	// 2.1) and returns the transaction identifier; `controls` may carry
+	// proxied_authorization, to run the whole transaction as another
+	// identity (section 4.4). Updates carrying a transaction_specification
+	// control with that identifier are then part of the transaction, and
+	// end_transaction() settles it (section 2.3): `commit` true applies
+	// every update or none, false aborts. A refusal is the server's result
+	// code with the context "start transaction" / "end transaction", the
+	// latter followed by ": update message N" when the server names the
+	// update at fault (txnEndRes.messageID; response::message_id is the id
+	// of each update). On success end_transaction() returns the updates'
+	// response controls (end_transaction_result). An answer that does not
+	// follow section 2 (a responseName, no identifier, a malformed
+	// txnEndRes) fails with decode_error. begin_transaction() is
+	// start_transaction() wrapped in an ldap::transaction.
+	auto start_transaction(extended_controls controls = {}) -> boost::capy::task<result<std::pmr::string>>;
+	auto end_transaction(std::pmr::string identifier, bool commit = true)
+	  -> boost::capy::task<result<end_transaction_result>>;
+	auto begin_transaction(extended_controls controls = {}) -> boost::capy::task<result<transaction>>;
 
 	// Password changes that work on OpenLDAP and Active Directory alike:
 	// `method` (nullopt: connection_options::password_method) picks how (see

@@ -284,6 +284,7 @@ if(JHETZ_LDAP_BUILD_NET)
         src/connection/operations.cpp
         src/connection/schema_load.cpp
         src/connection/password.cpp
+        src/connection/transaction.cpp
         src/sasl_scram.cpp
         src/sync.cpp
         src/net/connect.cpp
@@ -391,6 +392,7 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "connection_options.hpp" EXCLUDE
             PATTERN "paged_search.hpp" EXCLUDE
             PATTERN "search_stream.hpp" EXCLUDE
+            PATTERN "transaction.hpp" EXCLUDE
             PATTERN "sasl_scram.hpp" EXCLUDE
             PATTERN "sasl_gssapi.hpp" EXCLUDE
             PATTERN "sync.hpp" EXCLUDE)

@@ -1076,3 +1076,69 @@ TEST_CASE("assertion and pre/post-read controls match OpenLDAP", "[controls][ass
 	const auto refused = decoded("30 0C 02 01 02 67 07 0A 01 7A 04 00 04 00");
 	CHECK(std::get<ldap::modify_response>(refused.op).result.to_error().code == ldap::errc::assertion_failed);
 }
+
+// ---------------------------------------------------------------- transaction specification (RFC 5805)
+
+static_assert(
+  applies_to<ldap::transaction_specification>(add) && applies_to<ldap::transaction_specification>(modify)
+  && applies_to<ldap::transaction_specification>(modify_dn) && applies_to<ldap::transaction_specification>(del)
+  && !applies_to<ldap::transaction_specification>(search) && !applies_to<ldap::transaction_specification>(compare)
+  && !applies_to<ldap::transaction_specification>(extended));
+static_assert(!std::is_convertible_v<ldap::transaction_specification, ldap::extended_controls::value_type>);
+
+TEST_CASE("transaction specification control", "[controls][transaction]")
+{
+	// Always critical; the value is the identifier itself (RFC 5805 section 2.2).
+	const auto c = ldap::to_control(ldap::transaction_specification{ .identifier = std::string("t\0x", 3) });
+	REQUIRE(c.has_value());
+	CHECK(*c == ldap::control{ "1.3.6.1.1.21.2", true, std::string_view("t\0x", 3) });
+	CHECK(ldap::decode_transaction_specification(*c)
+		  == ldap::transaction_specification{ .identifier = std::string("t\0x", 3) });
+
+	const auto context_of = [](const ldap::control &bad) {
+		auto r = ldap::decode_transaction_specification(bad);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::decode_error);
+		return std::string(r.error().context);
+	};
+	CHECK(context_of(ldap::control{ ldap::transaction_specification_oid, false, "t" })
+		  == "transaction specification: control is not critical (RFC 5805 section 2.2)");
+	CHECK(context_of(ldap::control{ ldap::transaction_specification_oid, true })
+		  == "transaction specification: control has no value");
+	CHECK(context_of(ldap::control{ "1.2.3", true, "t" })
+		  == "transaction specification: control type is 1.2.3, not 1.3.6.1.1.21.2");
+
+	// The shared list converts for an update only.
+	const ldap::request_controls shared{ ldap::transaction_specification{ .identifier = "t" } };
+	CHECK(ldap::controls_for<ldap::del_controls>(shared).has_value());
+	const auto on_search = ldap::controls_for<ldap::search_controls>(shared);
+	REQUIRE_FALSE(on_search.has_value());
+	CHECK(on_search.error().context == "transaction_specification is not valid on search (RFC 5805 section 2.2)");
+}
+
+TEST_CASE("transaction specification refuses proxied authorization (RFC 5805 section 4.4)", "[controls][transaction]")
+{
+	constexpr std::string_view refused =
+	  "proxied_authorization is not valid on an update in a transaction: put it on "
+	  "the Start Transaction request (RFC 5805 section 4.4)";
+	const auto encoded = [](const ldap::modify_controls &list) {
+		std::pmr::vector<ldap::control> wire;
+		return ldap::append_controls(list, wire);
+	};
+	const ldap::transaction_specification spec{ .identifier = "t" };
+	const auto typed = encoded({ spec, ldap::proxied_authorization{ "u:jdoe" } });
+	REQUIRE_FALSE(typed.has_value());
+	CHECK(typed.error().code == ldap::client_errc::encode_error);
+	CHECK(typed.error().context == refused);
+	// A raw proxied authorization control counts, before or after.
+	const auto raw = encoded({ ldap::control{ ldap::proxied_authorization_oid, true, "u:jdoe" }, spec });
+	REQUIRE_FALSE(raw.has_value());
+	CHECK(raw.error().context == refused);
+	// Each alone is fine; so is a raw transaction specification (unchecked,
+	// like every raw control).
+	CHECK(encoded({ spec, ldap::assertion{ .filter = ldap::filters::attr("cn") == "x" } }).has_value());
+	CHECK(encoded({ ldap::proxied_authorization{ "u:jdoe" } }).has_value());
+	CHECK(encoded(
+	  { ldap::control{ ldap::transaction_specification_oid, true, "t" }, ldap::proxied_authorization{ "u:jdoe" } })
+		.has_value());
+}

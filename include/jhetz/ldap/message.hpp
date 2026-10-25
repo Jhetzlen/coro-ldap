@@ -1134,4 +1134,144 @@ inline constexpr std::string_view post_read_oid = "1.3.6.1.1.13.2";
 [[nodiscard]] auto decode_read_entry(const control &c, const decode_options &options = {})
   -> result<search_result_entry>;
 
+// ---------------------------------------------------------------- transactions (RFC 5805)
+
+// Start Transaction (section 2.1: no requestValue; the response's value is
+// the transaction identifier), the Transaction Specification control
+// (section 2.2, ldap::transaction_specification in controls.hpp), End
+// Transaction (section 2.3) and the Aborted Transaction Notice (section 2.4,
+// an unsolicited notification whose value is the identifier).
+inline constexpr std::string_view start_transaction_oid = "1.3.6.1.1.21.1";
+inline constexpr std::string_view transaction_specification_oid = "1.3.6.1.1.21.2";
+inline constexpr std::string_view end_transaction_oid = "1.3.6.1.1.21.3";
+inline constexpr std::string_view aborted_transaction_notice_oid = "1.3.6.1.1.21.4";
+
+// txnEndReq ::= SEQUENCE { commit BOOLEAN DEFAULT TRUE, identifier OCTET STRING }
+struct end_transaction_request
+{
+	using allocator_type = std::pmr::polymorphic_allocator<>;
+
+	bool commit = true;// FALSE: abort the transaction
+	std::pmr::string identifier{};
+
+	end_transaction_request() = default;
+	explicit end_transaction_request(const allocator_type &alloc) : identifier(alloc) {}
+	end_transaction_request(bool commit_, std::string_view identifier_, const allocator_type &alloc = {})
+	  : commit(commit_), identifier(identifier_, alloc)
+	{}
+	end_transaction_request(const end_transaction_request &) = default;
+	end_transaction_request(end_transaction_request &&) noexcept = default;
+	end_transaction_request(const end_transaction_request &other, const allocator_type &alloc)
+	  : commit(other.commit), identifier(other.identifier, alloc)
+	{}
+	end_transaction_request(end_transaction_request &&other, const allocator_type &alloc)
+	  : commit(other.commit), identifier(std::move(other.identifier), alloc)
+	{}
+	auto operator=(const end_transaction_request &) -> end_transaction_request & = default;
+	auto operator=(end_transaction_request &&) -> end_transaction_request & = default;
+	~end_transaction_request() = default;
+
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return identifier.get_allocator(); }
+
+	friend auto operator==(const end_transaction_request &, const end_transaction_request &) -> bool = default;
+};
+
+// The requestValue of an End Transaction request; commit TRUE, the DEFAULT,
+// is left out. Allocated from `mr`.
+[[nodiscard]] auto encode_end_transaction_request(const end_transaction_request &value,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> std::pmr::string;
+// The requestValue as a server reads it (for mock servers and tests): an
+// absent commit is TRUE. Fails with decode_error if it is malformed
+// (unknown trailing SEQUENCE elements are skipped). Allocated from `mr`.
+[[nodiscard]] auto decode_end_transaction_request(std::string_view value,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<end_transaction_request>;
+
+// updateControls ::= SEQUENCE { messageID MessageID, controls Controls }:
+// the response controls an update of the transaction would have had
+// outside it (a pre-read or post-read entry), and the message id of that
+// update's request (its response::message_id).
+struct update_controls
+{
+	using allocator_type = std::pmr::polymorphic_allocator<>;
+
+	std::int32_t message_id = 0;
+	std::pmr::vector<control> controls{};
+
+	update_controls() = default;
+	explicit update_controls(const allocator_type &alloc) : controls(alloc) {}
+	explicit update_controls(std::int32_t message_id_) : message_id(message_id_) {}
+	update_controls(std::int32_t message_id_,
+	  std::initializer_list<control> controls_,
+	  const allocator_type &alloc = {})
+	  : message_id(message_id_), controls(controls_, alloc)
+	{}
+	update_controls(const update_controls &) = default;
+	update_controls(update_controls &&) noexcept = default;
+	update_controls(const update_controls &other, const allocator_type &alloc)
+	  : message_id(other.message_id), controls(other.controls, alloc)
+	{}
+	update_controls(update_controls &&other, const allocator_type &alloc)
+	  : message_id(other.message_id), controls(std::move(other.controls), alloc)
+	{}
+	auto operator=(const update_controls &) -> update_controls & = default;
+	auto operator=(update_controls &&) -> update_controls & = default;
+	~update_controls() = default;
+
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return controls.get_allocator(); }
+
+	friend auto operator==(const update_controls &, const update_controls &) -> bool = default;
+};
+
+// txnEndRes ::= SEQUENCE { messageID MessageID OPTIONAL,
+//   updatesControls SEQUENCE OF updateControls OPTIONAL }
+struct end_transaction_response
+{
+	using allocator_type = std::pmr::polymorphic_allocator<>;
+
+	// The message id of the update a non-success End Transaction response
+	// is about; absent on success, or when the failure is no single
+	// update's (section 2.3).
+	std::optional<std::int32_t> message_id{};
+	// updatesControls; empty = absent.
+	std::pmr::vector<update_controls> updates_controls{};
+
+	end_transaction_response() = default;
+	explicit end_transaction_response(const allocator_type &alloc) : updates_controls(alloc) {}
+	explicit end_transaction_response(std::optional<std::int32_t> message_id_) : message_id(message_id_) {}
+	end_transaction_response(std::optional<std::int32_t> message_id_,
+	  std::initializer_list<update_controls> updates_controls_,
+	  const allocator_type &alloc = {})
+	  : message_id(message_id_), updates_controls(updates_controls_, alloc)
+	{}
+	end_transaction_response(const end_transaction_response &) = default;
+	end_transaction_response(end_transaction_response &&) noexcept = default;
+	end_transaction_response(const end_transaction_response &other, const allocator_type &alloc)
+	  : message_id(other.message_id), updates_controls(other.updates_controls, alloc)
+	{}
+	end_transaction_response(end_transaction_response &&other, const allocator_type &alloc)
+	  : message_id(other.message_id), updates_controls(std::move(other.updates_controls), alloc)
+	{}
+	auto operator=(const end_transaction_response &) -> end_transaction_response & = default;
+	auto operator=(end_transaction_response &&) -> end_transaction_response & = default;
+	~end_transaction_response() = default;
+
+	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return updates_controls.get_allocator(); }
+
+	friend auto operator==(const end_transaction_response &, const end_transaction_response &) -> bool = default;
+};
+
+// The responseValue of an End Transaction response (as a server sends it;
+// for mock servers and tests), nullopt when both fields are absent: the
+// responseValue is then left out (section 2.3). Fails with encode_error
+// for a message id outside 0..maxInt. Allocated from `mr`.
+[[nodiscard]] auto encode_end_transaction_response(const end_transaction_response &value,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::optional<std::pmr::string>>;
+// Fails with decode_error if `value` is malformed: a message id outside
+// 0..maxInt, a control that is not an RFC 4511 Control, trailing bytes
+// after the SEQUENCE (unknown trailing SEQUENCE elements are skipped), or
+// message_too_large beyond options.max_elements strings. Allocated from
+// options.memory (options.from and options.filter do not matter).
+[[nodiscard]] auto decode_end_transaction_response(std::string_view value, const decode_options &options = {})
+  -> result<end_transaction_response>;
+
 }// namespace jhetz::ldap

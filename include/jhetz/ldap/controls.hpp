@@ -34,6 +34,7 @@
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
 
+#include <algorithm>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -250,6 +251,31 @@ struct virtual_list_view
 // count out of range, an unknown target).
 [[nodiscard]] auto decode_virtual_list_view(const control &c) -> result<virtual_list_view>;
 
+// Transaction Specification (RFC 5805 section 2.2, OID
+// transaction_specification_oid): process this update (add, delete, modify,
+// modify DN) as part of the transaction `identifier`, the identifier
+// connection::start_transaction() returned. Always critical (section 2.2).
+// The server answers the update at once with success (or the reason it
+// refuses it) and defers the update until connection::end_transaction();
+// its response controls (pre-read, post-read) come back then, in
+// end_transaction_result::updates_controls. Proxied authorization does not
+// go with it (section 4.4: put it on the Start Transaction request): a list
+// with both fails with encode_error before anything is sent (a raw control
+// with proxied_authorization_oid counts). ldap::transaction (transaction.hpp)
+// attaches it for you. Password Modify (RFC 3062) is an update too, but
+// extended_controls does not take it: send a raw control there.
+struct transaction_specification
+{
+	std::string identifier{};
+
+	friend auto operator==(const transaction_specification &, const transaction_specification &) -> bool = default;
+};
+
+// The control as a server reads it (for mock servers and tests). Fails with
+// decode_error if `c` is not a transaction specification control, is not
+// critical, or has no value.
+[[nodiscard]] auto decode_transaction_specification(const control &c) -> result<transaction_specification>;
+
 // ---------------------------------------------------------------- per-operation lists
 
 // The request messages a typed control can go on, by RFC 4511 operation:
@@ -435,6 +461,17 @@ inline constexpr control_rule control_rule_of<virtual_list_view> = { .name = "vi
 	.source = "draft-ietf-ldapext-ldapv3-vlv-09 section 6.1",
 	.operations = operation_set_of(operation_kind::search) };
 
+// RFC 5805 section 2.2: "appropriate for update requests including Add,
+// Delete, Modify, and ModifyDN (Rename) requests [RFC4511], as well as the
+// Password Modify requests [RFC3062]". Password Modify is an extended
+// operation, and extended_controls is shared by every extended operation,
+// so it is not there; a raw control sends it on one.
+template<>
+inline constexpr control_rule control_rule_of<transaction_specification> = { .name = "transaction_specification",
+	.source = "RFC 5805 section 2.2",
+	.operations =
+	  operation_set_of(operation_kind::add, operation_kind::modify, operation_kind::modify_dn, operation_kind::del) };
+
 // Whether control type T may be sent on `op` (the table above).
 template<class T> [[nodiscard]] constexpr auto applies_to(operation_kind op) noexcept -> bool
 {
@@ -454,7 +491,8 @@ using request_control = std::variant<control,
   post_read,
   sync_request,
   matched_values,
-  virtual_list_view>;
+  virtual_list_view,
+  transaction_specification>;
 using request_controls = std::vector<request_control>;
 
 // A list of the controls `Op` takes: the raw control and the typed ones
@@ -484,7 +522,13 @@ struct search_controls
 	using controls_of::controls_of;
 };
 struct add_controls
-  : controls_of<operation_kind::add, manage_dsa_it, relax_rules, proxied_authorization, assertion, post_read>
+  : controls_of<operation_kind::add,
+	  manage_dsa_it,
+	  relax_rules,
+	  proxied_authorization,
+	  assertion,
+	  post_read,
+	  transaction_specification>
 {
 	using controls_of::controls_of;
 };
@@ -495,7 +539,8 @@ struct modify_controls
 	  proxied_authorization,
 	  assertion,
 	  pre_read,
-	  post_read>
+	  post_read,
+	  transaction_specification>
 {
 	using controls_of::controls_of;
 };
@@ -506,12 +551,19 @@ struct modify_dn_controls
 	  proxied_authorization,
 	  assertion,
 	  pre_read,
-	  post_read>
+	  post_read,
+	  transaction_specification>
 {
 	using controls_of::controls_of;
 };
 struct del_controls
-  : controls_of<operation_kind::del, manage_dsa_it, relax_rules, proxied_authorization, assertion, pre_read>
+  : controls_of<operation_kind::del,
+	  manage_dsa_it,
+	  relax_rules,
+	  proxied_authorization,
+	  assertion,
+	  pre_read,
+	  transaction_specification>
 {
 	using controls_of::controls_of;
 };
@@ -621,27 +673,43 @@ template<detail::operation_controls Ops>
   -> result<control>;
 [[nodiscard]] auto to_control(const virtual_list_view &c,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
+// Always critical (RFC 5805 section 2.2); the value is the identifier.
+[[nodiscard]] auto to_control(const transaction_specification &c,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
 
 namespace detail {
 	// encode_error unless `wire` holds a sort request control: a list with a
 	// virtual_list_view needs one (draft-ietf-ldapext-ldapv3-vlv-09 section
 	// 6.1).
 	[[nodiscard]] auto check_vlv_sort(const std::pmr::vector<control> &wire) -> result<void>;
+	// encode_error if `wire` holds a proxied authorization control: a list
+	// with a transaction_specification may not have one (RFC 5805 section
+	// 4.4).
+	[[nodiscard]] auto check_transaction_proxy(const std::pmr::vector<control> &wire) -> result<void>;
+
+	// Whether a list holds a control of type T (false if it cannot).
+	template<class T, class... A> [[nodiscard]] auto holds_any(const std::vector<std::variant<A...>> &controls) -> bool
+	{
+		if constexpr ((std::same_as<T, A> || ...)) {
+			return std::ranges::any_of(controls, [](const auto &c) { return std::holds_alternative<T>(c); });
+		} else {
+			return false;
+		}
+	}
 }// namespace detail
 
 // Appends the wire form of every control of a list (an operation's, or
 // request_controls) to `out`, on its resource; stops at the first that
 // fails. A virtual_list_view without a sort request control (typed or raw)
-// in `out` fails too.
+// in `out` fails too, and so does a transaction_specification with a
+// proxied authorization control (typed or raw) in `out`.
 template<class... Typed>
 [[nodiscard]] auto append_controls(const std::vector<std::variant<control, Typed...>> &controls,
   std::pmr::vector<control> &out) -> result<void>
 {
-	bool vlv = false;
+	const bool vlv = detail::holds_any<virtual_list_view>(controls);
+	const bool transaction = detail::holds_any<transaction_specification>(controls);
 	for (const auto &c : controls) {
-		if constexpr ((std::same_as<Typed, virtual_list_view> || ...)) {
-			vlv = vlv || std::holds_alternative<virtual_list_view>(c);
-		}
 		auto wire = std::visit([&out](const auto &v) { return to_control(v, out.get_allocator().resource()); }, c);
 		if (!wire) {
 			return std::unexpected(std::move(wire.error()));
@@ -649,7 +717,12 @@ template<class... Typed>
 		out.push_back(std::move(*wire));
 	}
 	if (vlv) {
-		return detail::check_vlv_sort(out);
+		if (auto ok = detail::check_vlv_sort(out); !ok) {
+			return ok;
+		}
+	}
+	if (transaction) {
+		return detail::check_transaction_proxy(out);
 	}
 	return {};
 }

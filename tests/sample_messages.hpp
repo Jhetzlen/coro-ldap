@@ -113,6 +113,14 @@ inline auto sample_messages() -> std::vector<message>
 		encode_sync_info(sync_info{ sync_info_type::refresh_delete }).value(),
 		encode_sync_info(sample_refresh_present()).value(),
 		encode_sync_info(sample_sync_id_set()).value(),
+		// RFC 5805's End Transaction request and response values.
+		extended_request{ end_transaction_oid, encode_end_transaction_request({ false, "txn" }) },
+		extended_response{ ldap_result{ 68 },
+		  {},
+		  encode_end_transaction_response(
+			end_transaction_response{ 3, { update_controls{ 2, { control{ "1.2.3", false, "v" } } } } })
+			.value()
+			.value() },
 	};
 	std::vector<message> out;
 	out.reserve(ops.size() + 2);
@@ -145,7 +153,8 @@ inline auto sample_controls() -> std::pmr::vector<control>
 					 .context_id = "c" })
 		  .value(),
 		to_control(virtual_list_view{ .target = vlv_greater_than_or_equal{ "B" } }).value(),
-		encode_vlv_response(vlv_response{ 5, 250, 0, "c" }).value() };
+		encode_vlv_response(vlv_response{ 5, 250, 0, "c" }).value(),
+		to_control(transaction_specification{ .identifier = "txn" }).value() };
 }
 
 }// namespace jhetz::ldap::test
