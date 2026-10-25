@@ -267,7 +267,7 @@ namespace {
 		if (user.empty()) {
 			co_return fail(client_errc::invalid_dn, context + ": Active Directory needs the user's DN");
 		}
-		// A closed connection fails with not_connected below.
+		// A closed connection fails with not_sent below.
 		if (self->is_open() && !self->is_tls()) {
 			co_return fail(client_errc::tls_required,
 			  context + ": Active Directory sets unicodePwd only over TLS (ldaps:// or start_tls())");

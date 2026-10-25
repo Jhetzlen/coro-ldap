@@ -111,6 +111,17 @@ auto connection::impl::copy_error(const error &e) noexcept -> error
 	}
 }
 
+auto connection::impl::unsent_error(const error &e) noexcept -> error
+{
+	error u = copy_error(e);
+	// An allocation failure stays one (DESIGN.md section 7: the operations
+	// fail with not_enough_memory, what was to be sent is lost).
+	if (u.code != std::errc::not_enough_memory) {
+		u.code = client_errc::not_sent;
+	}
+	return u;
+}
+
 auto connection::impl::out_of_memory() noexcept -> error
 {
 	error e;
@@ -141,7 +152,7 @@ void connection::impl::shut(const error &e, bool remember, bool close_transport)
 	for (auto &[id, p] : waiting) {
 		p->registered = false;
 		p->finished = true;
-		p->failure = copy_error(e);
+		p->failure = p->sent ? copy_error(e) : unsent_error(e);
 		p->ready.set();
 	}
 	if (reading) {
@@ -163,6 +174,13 @@ auto connection::impl::not_connected(std::string_view context) const -> error
 		text += ": connection closed";
 	}
 	return make_error(client_errc::not_connected, text);
+}
+
+auto connection::impl::not_sent(std::string_view context) const -> error
+{
+	error e = not_connected(context);
+	e.code = client_errc::not_sent;
+	return e;
 }
 
 void connection::impl::close() noexcept
@@ -205,8 +223,11 @@ auto connection::impl::writer(impl *self) -> capy::task<void>
 	const frame_ref ref(self);
 	try {
 		while (self->open && !self->outbox.empty()) {
-			auto bytes = std::move(self->outbox.front());
+			auto [id, bytes] = std::move(self->outbox.front());
 			self->outbox.pop_front();
+			if (const auto p = self->pending.find(id); p != self->pending.end()) {
+				p->second->sent = true;
+			}
 			auto w = co_await net::write_bytes(self->transport_, bytes);
 			if (!w) {
 				self->shut(w.error(), true);
@@ -219,14 +240,14 @@ auto connection::impl::writer(impl *self) -> capy::task<void>
 	self->write_idle.set();
 }
 
-void connection::impl::enqueue(std::pmr::vector<std::byte> bytes)
+void connection::impl::enqueue(std::int32_t id, std::pmr::vector<std::byte> bytes)
 {
 	if (writing) {
-		outbox.push_back(std::move(bytes));
+		outbox.push_back({ .id = id, .bytes = std::move(bytes) });
 		return;
 	}
 	auto task = new_task(&writer);
-	outbox.push_back(std::move(bytes));
+	outbox.push_back({ .id = id, .bytes = std::move(bytes) });
 	writing = true;
 	write_idle.clear();
 	add_ref();// released by the writer
@@ -253,7 +274,7 @@ auto connection::impl::free_id() const -> std::int32_t
 auto connection::impl::submit(message &m, pending_op *p, std::string_view context) -> result<void>
 {
 	if (!open || unbinding) {
-		return std::unexpected(not_connected(context));
+		return std::unexpected(not_sent(context));
 	}
 	if (upgrading && !std::holds_alternative<abandon_request>(m.op)) {
 		return fail(client_errc::operation_in_progress, std::string(context) + " during StartTLS");
@@ -282,7 +303,7 @@ auto connection::impl::submit(message &m, pending_op *p, std::string_view contex
 		if (binding && !bind) {
 			held.push_back({ .id = m.id, .bytes = std::move(*bytes) });
 		} else {
-			enqueue(std::move(*bytes));
+			enqueue(m.id, std::move(*bytes));
 		}
 	} catch (...) {
 		// `p` (in the caller's frame) must not stay registered: its
@@ -301,7 +322,7 @@ void connection::impl::release_held() noexcept
 {
 	try {
 		while (open && !held.empty()) {
-			enqueue(std::move(held.front().bytes));
+			enqueue(held.front().id, std::move(held.front().bytes));
 			held.pop_front();
 		}
 	} catch (const std::bad_alloc &) {
@@ -526,7 +547,7 @@ auto connection::impl::wait_due_answers(std::optional<clock::time_point> deadlin
 auto connection::impl::check_start_tls(std::string_view context) const -> result<void>
 {
 	if (!accepts_requests()) {
-		return std::unexpected(not_connected(context));
+		return std::unexpected(not_sent(context));
 	}
 	if (upgrading) {
 		return fail(client_errc::operation_in_progress, std::string(context) + " during an earlier StartTLS");

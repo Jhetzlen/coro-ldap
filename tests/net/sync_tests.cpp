@@ -139,7 +139,7 @@ TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 	CHECK_FALSE(c.is_open());
 	auto after = c.search({});
 	REQUIRE_FALSE(after.has_value());
-	CHECK(after.error().code == ldap::client_errc::not_connected);
+	CHECK(after.error().code == ldap::client_errc::not_sent);
 }
 
 TEST_CASE("sync: many threads share one connection", "[net][sync]")
@@ -836,7 +836,7 @@ TEST_CASE("sync: close without an UnbindRequest", "[net][sync]")
 	CHECK_FALSE(k.c.is_open());
 	auto after = k.c.who_am_i();
 	REQUIRE_FALSE(after.has_value());
-	CHECK(after.error().code == ldap::client_errc::not_connected);
+	CHECK(after.error().code == ldap::client_errc::not_sent);
 	k.c.close();// again: nothing happens
 	// The server saw the bind, then the connection end: an UnbindRequest
 	// would show in the log and as an error (peer_server::serve).

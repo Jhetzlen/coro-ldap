@@ -309,7 +309,7 @@ itself needs only ICU.
   Notice of Disconnection fails every
   outstanding operation. A server result error fails one operation; a
   transport or protocol error fails all of them once and closes the
-  connection, and later operations fail with `client_errc::not_connected`
+  connection, and later operations fail with `client_errc::not_sent`
   naming the first error. The header documents the memory, threading and
   lifetime rules.
   Step 6 adds the other operations: `add`, `modify` (changes from

@@ -113,6 +113,11 @@ enum class client_errc : int {
 	security_layer_required,// the server requires a SASL security layer (integrity, confidentiality)
 	internal_error,// a library the client uses failed (OpenSSL, ICU), not the caller's input
 	string_prep_failed,// RFC 4518 string preparation refused the value (ill-formed UTF-8, prohibited code point)
+	// The connection closed (or was closed) before the request was handed to
+	// its writer: the server never saw it, so even an update may be retried
+	// on another connection. Matches cond::connection_lost, like
+	// not_connected.
+	not_sent,
 };
 
 // Error conditions: what an error means, across categories (DESIGN.md

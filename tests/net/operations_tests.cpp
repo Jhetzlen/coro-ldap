@@ -1497,7 +1497,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		m.conn.close();
 		drive_until(m.ioc, [&tls] { return tls.done(); });
 		REQUIRE_FALSE(tls.get().has_value());
-		CHECK(tls.get().error().code == client_errc::not_connected);
+		CHECK(tls.get().error().code == client_errc::not_sent);
 		CHECK(tls.get().error().context == "start tls: connection closed");
 		CHECK(m.conn.outstanding() == 0);
 	}
@@ -1515,7 +1515,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		CHECK(m.run(m.conn.unbind()).has_value());
 		drive_until(m.ioc, [&tls] { return tls.done(); });
 		REQUIRE_FALSE(tls.get().has_value());
-		CHECK(tls.get().error().code == client_errc::not_connected);
+		CHECK(tls.get().error().code == client_errc::not_sent);
 		m.check_server();
 		REQUIRE(m.log.received.size() == 3);
 		CHECK(std::holds_alternative<ldap::unbind_request>(m.log.received[2].op));
@@ -1541,7 +1541,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		spawn(m.ioc, m.conn.unbind(), unbind);
 		drive_until(m.ioc, [&tls] { return tls.done(); });
 		REQUIRE_FALSE(tls.get().has_value());
-		CHECK(tls.get().error().code == client_errc::not_connected);
+		CHECK(tls.get().error().code == client_errc::not_sent);
 		CHECK(tls.get().error().context == "start tls: connection closing (unbind)");
 		CHECK_FALSE(unbind.done());
 
@@ -2088,7 +2088,7 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 		CHECK(end.error().context == base);
 		auto later = m.run(m.conn.search(people_search()));
 		REQUIRE_FALSE(later.has_value());
-		CHECK(later.error().code == client_errc::not_connected);
+		CHECK(later.error().code == client_errc::not_sent);
 		CHECK_THAT(std::string(later.error().context),
 		  StartsWith(std::string(base) + ": connection closed by an earlier error: "));
 	}

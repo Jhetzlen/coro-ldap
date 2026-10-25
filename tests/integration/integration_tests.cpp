@@ -1917,7 +1917,7 @@ TEST_CASE("integration: a broken server answer closes the connection", "[integra
 			CHECK_FALSE(conn.is_open());
 			auto later = finish(ioc, conn.simple_bind(admin, "secret"));
 			REQUIRE_FALSE(later.has_value());
-			CHECK(later.error().code == ldap::client_errc::not_connected);
+			CHECK(later.error().code == ldap::client_errc::not_sent);
 			conn.close();
 			drive(ioc);
 			CHECK(p.done());

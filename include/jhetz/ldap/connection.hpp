@@ -69,8 +69,22 @@
 // (nothing is sent) and a cancellation or timeout. A transport error, a
 // malformed or oversized PDU, an unexpected response or a Notice of
 // Disconnection fails every outstanding operation, exactly once, and closes
-// the connection: every later operation fails with
-// client_errc::not_connected, naming the original error.
+// the connection: every later operation fails with client_errc::not_sent,
+// naming the original error.
+//
+// Sent or not: an operation whose request the writer never took (refused
+// because the connection is closed, still queued behind other PDUs, or held
+// behind a bind) when the connection closes fails with client_errc::not_sent
+// instead of the failure's own code; its context still names that failure.
+// The server never saw such a request, so even an update may be retried on
+// another connection. Once the writer has taken the request, the failure's
+// own code is reported (not_connected after close(), a transport error, ...):
+// the server may have seen it. not_sent matches cond::connection_lost, like
+// not_connected, so code testing the condition needs no change. Exceptions:
+// an allocation failure stays std::errc::not_enough_memory, unbind()'s
+// abandoned operations fail with not_connected (their requests were queued
+// before the UnbindRequest), and a default-constructed or moved-from
+// connection keeps not_connected.
 //
 // Memory: entries returned by search() and search_stream are decoded
 // straight into the memory resource given to that call (default: the
@@ -523,13 +537,14 @@ class connection
 	// result does not depend on it). Outstanding
 	// operations and open streams fail with not_connected (an unbind
 	// abandons them on the server too). Nothing is sent after the
-	// UnbindRequest: an operation, start_tls() or unbind() started while it
-	// is being written fails with not_connected. The connection is closed
-	// even if the write fails or the task is cancelled.
+	// UnbindRequest: an operation or start_tls() started while it is being
+	// written fails with not_sent, an unbind() with not_connected. The
+	// connection is closed even if the write fails or the task is cancelled.
 	auto unbind() -> boost::capy::task<result<void>>;
 
 	// Closes the transport at once, without an UnbindRequest. Outstanding
-	// operations complete with not_connected. Idempotent.
+	// operations complete with not_connected (not_sent for those whose
+	// request was not written yet, see "Sent or not" above). Idempotent.
 	void close() noexcept;
 
 	class impl;// defined in src/connection/impl.hpp

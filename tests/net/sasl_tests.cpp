@@ -308,7 +308,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
 		CHECK_FALSE(m.conn.is_open());
 		REQUIRE_FALSE(search.get().has_value());
-		CHECK(search.get().error().code == ldap::client_errc::unexpected_response);
+		CHECK(search.get().error().code == ldap::client_errc::not_sent);// held behind the bind
 		CHECK_THAT(std::string(search.get().error().context), ContainsSubstring("could not be aborted"));
 		m.sockets.client.close();// closing a wrapped transport leaves the socket open
 		m.check_server();
@@ -329,7 +329,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		CHECK_FALSE(m.conn.is_open());
 		auto later = m.run(m.conn.who_am_i());
 		REQUIRE_FALSE(later.has_value());
-		CHECK(later.error().code == ldap::client_errc::not_connected);
+		CHECK(later.error().code == ldap::client_errc::not_sent);
 		CHECK_THAT(std::string(later.error().context), ContainsSubstring("server signature mismatch"));
 	}
 	SECTION("EXTERNAL given a challenge")
@@ -427,7 +427,7 @@ TEST_CASE("sasl: an abort without an answer closes the connection", "[net][sasl]
 		CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
 		CHECK_FALSE(m.conn.is_open());
 		REQUIRE_FALSE(search.get().has_value());
-		CHECK(search.get().error().code == ldap::client_errc::not_connected);
+		CHECK(search.get().error().code == ldap::client_errc::not_sent);
 		CHECK_THAT(std::string(search.get().error().context), ContainsSubstring("cannot be abandoned"));
 		m.sockets.client.close();// closing a wrapped transport leaves the socket open
 		m.check_server();

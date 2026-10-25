@@ -166,6 +166,8 @@ namespace {
 			return "a library the client uses failed";
 		case client_errc::string_prep_failed:
 			return "string preparation (RFC 4518) failed";
+		case client_errc::not_sent:
+			return "request not sent: the connection closed before it was written";
 		}
 		return {};
 	}
@@ -228,6 +230,7 @@ namespace {
 		case client_errc::string_prep_failed:
 			return cond::invalid_input;
 		case client_errc::not_connected:
+		case client_errc::not_sent:
 			return cond::connection_lost;
 		case client_errc::unauthenticated_bind:
 		case client_errc::gssapi_failure:

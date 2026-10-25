@@ -337,7 +337,7 @@ TEST_CASE("start_tls: a failed allocation in the handshake's setup closes the co
 		CHECK_FALSE(m.conn.is_tls());
 		auto later = m.run(m.conn.search({}));
 		REQUIRE_FALSE(later.has_value());
-		CHECK(later.error().code == ldap::client_errc::not_connected);
+		CHECK(later.error().code == ldap::client_errc::not_sent);
 		CHECK_THAT(std::string(later.error().context), ContainsSubstring(": connection closed by an earlier error: "));
 		// Nothing was sent after the StartTLS response but the start of the
 		// ClientHello, when the allocation failed after its first write.
@@ -391,7 +391,7 @@ TEST_CASE("start_tls: another exception in the handshake's setup closes the conn
 		CHECK_FALSE(m.conn.is_tls());
 		auto later = m.run(m.conn.search({}));
 		REQUIRE_FALSE(later.has_value());
-		CHECK(later.error().code == ldap::client_errc::not_connected);
+		CHECK(later.error().code == ldap::client_errc::not_sent);
 		CHECK_THAT(std::string(later.error().context), ContainsSubstring("StartTLS aborted by an exception"));
 		drive_until(m.ioc, [&sent] { return sent.done(); });
 		CHECK((sent.get() == -1 || sent.get() == 0x16));
@@ -507,7 +507,7 @@ TEST_CASE("start_tls: bytes before the handshake are refused", "[net][starttls]"
 	CHECK_FALSE(c.is_tls());
 	auto later = finish(f.ioc, c.search({}));
 	REQUIRE_FALSE(later.has_value());
-	CHECK(later.error().code == ldap::client_errc::not_connected);
+	CHECK(later.error().code == ldap::client_errc::not_sent);
 	drive(f.ioc);
 	CHECK_THAT(f.server.get(), IsEmpty());
 }

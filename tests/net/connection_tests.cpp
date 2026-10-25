@@ -776,7 +776,7 @@ TEST_CASE("connection: unbind", "[net][connection]")
 
 	auto after = m.run(m.conn.search({}));
 	REQUIRE_FALSE(after.has_value());
-	CHECK(after.error().code == client_errc::not_connected);
+	CHECK(after.error().code == client_errc::not_sent);
 	CHECK(after.error().context == "search \"\": connection closed");
 	auto twice = m.run(m.conn.unbind());
 	REQUIRE_FALSE(twice.has_value());
@@ -820,11 +820,11 @@ TEST_CASE("RFC 4511 4.3: requests started while unbind waits for the writer are 
 
 	auto s = m.run(m.conn.search(people_search()));
 	REQUIRE_FALSE(s.has_value());
-	CHECK(s.error().code == client_errc::not_connected);
+	CHECK(s.error().code == client_errc::not_sent);
 	CHECK(s.error().context == "search ou=people,dc=example,dc=org: connection closing (unbind)");
 	auto t = m.run(m.conn.start_tls());
 	REQUIRE_FALSE(t.has_value());
-	CHECK(t.error().code == client_errc::not_connected);
+	CHECK(t.error().code == client_errc::not_sent);
 	CHECK(t.error().context == "start tls: connection closing (unbind)");
 	auto u = m.run(m.conn.unbind());
 	REQUIRE_FALSE(u.has_value());
@@ -890,7 +890,7 @@ TEST_CASE("connection: a failed allocation in unbind closes the connection", "[n
 		CHECK_FALSE(add.get().has_value());
 		auto later = m.run(m.conn.search(people_search()));
 		REQUIRE_FALSE(later.has_value());
-		CHECK(later.error().code == client_errc::not_connected);
+		CHECK(later.error().code == client_errc::not_sent);
 		CHECK_THAT(std::string(later.error().context),
 		  ContainsSubstring(other ? ": connection closed by an earlier error: connection closed: unbind aborted"
 								  : ": connection closed by an earlier error: "));
@@ -990,7 +990,7 @@ TEST_CASE("connection: protocol violations close the connection", "[net][connect
 
 			auto later = m.run(m.conn.search({}));
 			REQUIRE_FALSE(later.has_value());
-			CHECK(later.error().code == client_errc::not_connected);
+			CHECK(later.error().code == client_errc::not_sent);
 			CHECK_THAT(
 			  std::string(later.error().context), StartsWith("search \"\": connection closed by an earlier error: "));
 		}
@@ -1067,7 +1067,7 @@ TEST_CASE("connection: server closing mid-search", "[net][connection]")
 		CHECK(st->done());
 		auto later = m.run(m.conn.simple_bind(ldap::dn{}, ""));
 		REQUIRE_FALSE(later.has_value());
-		CHECK(later.error().code == client_errc::not_connected);
+		CHECK(later.error().code == client_errc::not_sent);
 		CHECK(later.error().code == ldap::cond::connection_lost);
 		CHECK_THAT(std::string(later.error().context), ContainsSubstring("connection closed after 10 of"));
 	}
@@ -1583,6 +1583,105 @@ TEST_CASE("connection: a disconnect fails every outstanding operation once", "[n
 	CHECK(m.log.received.size() == 1);
 }
 
+// client_errc::not_sent: the request never reached the writer, so the
+// server never saw it (ldap::client may retry it elsewhere, updates
+// included). It still matches cond::connection_lost.
+TEST_CASE("connection: requests the writer never took fail with not_sent", "[net][connection][not_sent]")
+{
+	SECTION("the connection is closed before the request is submitted")
+	{
+		mock_ldap m;
+		m.conn.close();
+		auto s = m.run(m.conn.search(people_search()));
+		REQUIRE_FALSE(s.has_value());
+		CHECK(s.error().code == client_errc::not_sent);
+		CHECK(s.error().code == ldap::cond::connection_lost);
+		CHECK(s.error().context == "search ou=people,dc=example,dc=org: connection closed");
+		auto d = m.run(m.conn.del({ .entry = ldap::dn{ "uid=a,ou=people,dc=example,dc=org" } }));
+		REQUIRE_FALSE(d.has_value());
+		CHECK(d.error().code == client_errc::not_sent);
+		auto b = m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
+		REQUIRE_FALSE(b.has_value());
+		CHECK(b.error().code == client_errc::not_sent);
+		auto st = m.run(m.conn.search_stream(people_search()));
+		REQUIRE_FALSE(st.has_value());
+		CHECK(st.error().code == client_errc::not_sent);
+	}
+	SECTION("after a failure closed the connection, the failure is named")
+	{
+		mock_ldap m;
+		m.serve({ step{ .read_request = true, .replies = {}, .close_after = true } });
+		auto first = m.run(m.conn.search(people_search()));
+		REQUIRE_FALSE(first.has_value());
+		CHECK(first.error().code != client_errc::not_sent);// it was sent
+		CHECK(first.error().code == ldap::cond::connection_lost);
+		auto later = m.run(m.conn.modify({ .object = ldap::dn{ "uid=a,ou=people,dc=example,dc=org" } }));
+		REQUIRE_FALSE(later.has_value());
+		CHECK(later.error().code == client_errc::not_sent);
+		CHECK_THAT(std::string(later.error().context), ContainsSubstring("connection closed by an earlier error"));
+		m.check_server();
+		CHECK(m.log.received.size() == 1);
+	}
+	SECTION("a request held behind a bind that fails by losing the connection")
+	{
+		mock_ldap m;
+		// Reads the bind, then hangs up: the update held behind it is never sent.
+		m.serve({ step{ .read_request = true, .replies = {}, .close_after = true } });
+		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<ldap::response>> held;
+		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
+		spawn(m.ioc, m.conn.del({ .entry = ldap::dn{ "uid=a,ou=people,dc=example,dc=org" } }), held);
+		drive_until(m.ioc, [&] { return bind.done() && held.done(); });
+		REQUIRE_FALSE(bind.get().has_value());
+		CHECK(bind.get().error().code != client_errc::not_sent);
+		CHECK(bind.get().error().code == ldap::cond::connection_lost);
+		REQUIRE_FALSE(held.get().has_value());
+		CHECK(held.get().error().code == client_errc::not_sent);
+		CHECK(held.get().error().code == ldap::cond::connection_lost);
+		// The context still says what closed the connection.
+		CHECK(held.get().error().context == "delete uid=a,ou=people,dc=example,dc=org: read mock: connection closed");
+		m.check_server();
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+	}
+	SECTION("a request held behind a bind given up on (timeout closes the connection)")
+	{
+		mock_ldap m({ .operation_timeout = std::chrono::milliseconds(50) });
+		m.serve({ step{}, step{} });// reads the bind, never answers
+		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<ldap::response>> held;
+		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
+		spawn(m.ioc,
+		  m.conn.add({ .entry = ldap::dn{ "uid=a,ou=people,dc=example,dc=org" }, .attributes = { { "cn", { "a" } } } }),
+		  held);
+		drive_until(m.ioc, [&] { return bind.done() && held.done(); });
+		REQUIRE_FALSE(bind.get().has_value());
+		CHECK(bind.get().error().code == ldap::cond::timeout);
+		REQUIRE_FALSE(held.get().has_value());
+		CHECK(held.get().error().code == client_errc::not_sent);
+		m.sockets.client.close();// closing a wrapped transport leaves the socket open
+		drive_until(m.ioc, [&m] { return m.server.done(); });
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+	}
+	SECTION("a request queued behind a PDU the writer is still writing")
+	{
+		tcp_mock_ldap m({}, socket_buffers::small);
+		REQUIRE(m.buffered_at_most() < oversized_add_value);
+		outcome<ldap::result<ldap::response>> add;
+		outcome<ldap::result<std::pmr::vector<ldap::entry>>> queued;
+		spawn(m.ioc, m.conn.add(oversized_add()), add);
+		spawn(m.ioc, m.conn.search(people_search()), queued);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 2; });
+		m.conn.close();
+		drive_until(m.ioc, [&] { return add.done() && queued.done(); });
+		REQUIRE_FALSE(add.get().has_value());
+		CHECK(add.get().error().code == client_errc::not_connected);// the writer had it: maybe seen
+		REQUIRE_FALSE(queued.get().has_value());
+		CHECK(queued.get().error().code == client_errc::not_sent);
+	}
+}
+
 TEST_CASE("connection: a notice of disconnection fails every outstanding operation", "[net][connection][mux]")
 {
 	mock_ldap m;
@@ -1600,12 +1699,13 @@ TEST_CASE("connection: a notice of disconnection fails every outstanding operati
 	CHECK(bind.get().error().code == errc::busy);
 	CHECK(bind.get().error().diagnostic == "too busy");
 	CHECK(bind.get().error().context == "bind cn=admin,dc=example,dc=org: notice of disconnection");
-	CHECK(search.get().error().code == errc::busy);
+	CHECK(search.get().error().code == client_errc::not_sent);// held behind the bind
+	CHECK(search.get().error().diagnostic == "too busy");
 	CHECK(search.get().error().context == "search ou=people,dc=example,dc=org: notice of disconnection");
 	CHECK_FALSE(m.conn.is_open());
 	auto later = m.run(m.conn.search({}));
 	REQUIRE_FALSE(later.has_value());
-	CHECK(later.error().code == client_errc::not_connected);
+	CHECK(later.error().code == client_errc::not_sent);
 	CHECK_THAT(std::string(later.error().context), ContainsSubstring("notice of disconnection"));
 }
 

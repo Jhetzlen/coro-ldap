@@ -1087,7 +1087,7 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `no_password_method`, `gssapi_failure`, `security_layer_required`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock`; environment: `internal_error` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `no_password_method`, `gssapi_failure`, `security_layer_required`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock`; environment: `internal_error` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 `error`'s strings are `std::pmr::string` but always on the default
@@ -1134,7 +1134,9 @@ with `dn::parse` / `url::parse`. `dn.hpp` and `url.hpp` also include
 Connection errors (step 5a, `client_errc`): `unexpected_response` (a
 response with another message id or an operation that does not answer the
 request), `not_connected` (closed by `unbind`, `close` or an earlier
-failure, which the context names), `operation_in_progress` (the connection
+failure, which the context names), `not_sent` (the connection closed
+before the request reached the writer: the server never saw it, see
+"Sent or not" in section 7), `operation_in_progress` (the connection
 is busy; nothing is queued), `unauthenticated_bind` (a name with an empty
 password), `tls_required` (an Active Directory password change on a
 connection without TLS), `no_password_method` (the root DSE advertises
@@ -1158,7 +1160,7 @@ a caller match none, deliberately (test them by exact code).
 | `auth_failed` | `invalid_credentials`, `inappropriate_authentication`, `auth_method_not_supported` | `unauthenticated_bind`, `gssapi_failure` | |
 | `timeout` | `time_limit_exceeded` | | `timed_out`, `capy::error::timeout` |
 | `canceled` | | | `operation_canceled`, `capy::error::canceled` |
-| `connection_lost` | | `not_connected` | `connection_reset`, `connection_aborted`, `broken_pipe`, `not_connected`; Capy `eof`, `stream_truncated` |
+| `connection_lost` | | `not_connected`, `not_sent` | `connection_reset`, `connection_aborted`, `broken_pipe`, `not_connected`; Capy `eof`, `stream_truncated` |
 | `tls_failure` | | | any `corosio.openssl` (or `corosio.wolfssl`) code |
 | `protocol_error` | `protocol_error` | `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `integer_overflow`, `unexpected_tag`, `unsupported_operation`, `unexpected_response` | |
 | `busy_or_unavailable` | `busy`, `unavailable` | | `connection_refused`, `host_unreachable`, `network_unreachable`, `network_down` |
@@ -1519,13 +1521,27 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   transport error, a malformed or oversized PDU, an unexpected response or
   a Notice of Disconnection fails every outstanding operation exactly once
   (each with its own context) and closes the transport; the error is
-  remembered, so later operations fail with `not_connected` naming it.
+  remembered, so later operations fail with `not_sent` naming it.
+  Sent or not (for `ldap::client`'s retry rule, 3pf): each pending
+  operation has a `sent` bit, set when the writer takes its PDU from the
+  outbox (it may then have reached the server). An operation still queued
+  in the outbox or held behind a bind when the connection closes, or
+  refused by `submit` because it is closed already (StartTLS's checks too),
+  fails with `client_errc::not_sent` instead of the failure's code, with the
+  failure's context and diagnostic: the server never saw it, so an update
+  may be retried elsewhere. `not_sent` matches `cond::connection_lost` like
+  `not_connected`, so callers testing the condition are unaffected.
+  Exceptions: an allocation failure stays `not_enough_memory`; `unbind()`'s
+  abandoned operations get `not_connected` (their PDUs were queued before
+  the UnbindRequest and may still go out); a default-constructed or
+  moved-from connection keeps `not_connected`.
   `unbind()` fails the outstanding operations with `not_connected` (the
   server abandons them too), waits until the UnbindRequest is written even
   if cancelled, then closes. Nothing may follow the UnbindRequest (RFC 4511
   section 4.3): while it is written, the connection is still open but
-  every new request, a StartTLS (including one whose wait for due answers
-  ends then) and another `unbind()` fail with `not_connected`.
+  every new request and a StartTLS (including one whose wait for due
+  answers ends then) fail with `not_sent`, another `unbind()` with
+  `not_connected`.
   An allocation that fails where no exception can go (a destructor sending
   an AbandonRequest or the requests a bind held; the writer, reader or due
   watcher task) closes the connection: what was to be sent or read is

@@ -102,6 +102,11 @@ namespace detail {
 		bool intermediates = false;
 		std::pmr::deque<message> queue;// on mr, so messages move in without a copy
 		bool finished = false;// final response queued, or failed / abandoned
+		// The writer took the request's bytes (it may have written them, so
+		// the server may have seen it). False while it is queued for the
+		// writer or held by a bind: a failure closing the connection then
+		// fails the operation with client_errc::not_sent instead.
+		bool sent = false;
 		std::optional<error> failure{};// connection failure (without op context)
 		boost::capy::async_event ready{};// set while queue is non-empty or finished
 	};
@@ -225,6 +230,9 @@ class connection::impl
 	void shut_out_of_memory() noexcept;
 
 	auto not_connected(std::string_view context) const -> error;
+	// not_connected's error with client_errc::not_sent: a request refused
+	// because the connection is closed was never sent.
+	auto not_sent(std::string_view context) const -> error;
 
 	// connection::close(): shuts the connection ("connection closed") and
 	// closes the transport, which also ends a TLS shutdown unbind() waits for.
@@ -379,8 +387,14 @@ class connection::impl
 	// answers change.
 	bool watching = false;
 	boost::capy::async_event due_changed{};
-	// Writer: PDUs waiting to be written, in order.
-	std::pmr::deque<std::pmr::vector<std::byte>> outbox;
+	// Writer: PDUs waiting to be written, in order, each with its message id
+	// (the writer marks the pending_op of that id as sent when it takes it).
+	struct queued_pdu
+	{
+		std::int32_t id;
+		std::pmr::vector<std::byte> bytes;
+	};
+	std::pmr::deque<queued_pdu> outbox;
 	bool writing = false;
 	boost::capy::async_event write_idle{};// set while the writer is not running
 	// A bind exchange (every step of a SASL bind) is in progress: other
@@ -423,6 +437,12 @@ class connection::impl
 	// for paths that must not throw.
 	static auto copy_error(const error &e) noexcept -> error;
 
+	// The failure `e` of a request the writer never took: a copy of `e`
+	// (its context says what closed the connection) with the code
+	// client_errc::not_sent. Except an allocation failure (`e`, or the
+	// copy's), which stays std::errc::not_enough_memory.
+	static auto unsent_error(const error &e) noexcept -> error;
+
 	// not_enough_memory without a context, so building and copying it
 	// allocates nothing; operations add their own.
 	static auto out_of_memory() noexcept -> error;
@@ -455,9 +475,10 @@ class connection::impl
 	// default handler): each catches its own and closes the connection.
 	static auto writer(impl *self) -> boost::capy::task<void>;
 
-	// Queues `bytes` and starts the writer if it is not running. A throw
-	// (bad_alloc) queues nothing and changes nothing.
-	void enqueue(std::pmr::vector<std::byte> bytes);
+	// Queues `bytes` (the request of message id `id`) and starts the writer
+	// if it is not running. A throw (bad_alloc) queues nothing and changes
+	// nothing.
+	void enqueue(std::int32_t id, std::pmr::vector<std::byte> bytes);
 
 	// The next message id the server cannot still be servicing (RFC 4511
 	// section 4.1.1): after wrapping at maxInt, ids of outstanding or

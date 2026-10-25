@@ -113,7 +113,7 @@ TEST_CASE("every errc and client_errc has a real message", "[error]")
 		CHECK_FALSE(text.empty());
 		CHECK_FALSE(text.contains("unknown"));
 	}
-	for (int v = 1; v <= std::to_underlying(ldap::client_errc::string_prep_failed); ++v) {
+	for (int v = 1; v <= std::to_underlying(ldap::client_errc::not_sent); ++v) {
 		const auto text = std::error_code(static_cast<ldap::client_errc>(v)).message();
 		INFO("client_errc " << v << ": " << text);
 		CHECK_FALSE(text.empty());
@@ -388,11 +388,12 @@ TEST_CASE("every client_errc maps to its documented condition", "[error][cond]")
 		{ client_errc::security_layer_required, cond::access_denied },
 		{ client_errc::internal_error, std::nullopt },
 		{ client_errc::string_prep_failed, cond::invalid_input },
+		{ client_errc::not_sent, cond::connection_lost },
 	};
 	// Every value, in order: a new client_errc must be added here. The
 	// static_casts to std::size_t are deliberate: std::to_underlying gives
 	// int and would make signed/unsigned comparisons.
-	REQUIRE(table.size() == static_cast<std::size_t>(client_errc::string_prep_failed));
+	REQUIRE(table.size() == static_cast<std::size_t>(client_errc::not_sent));
 	for (std::size_t i = 0; i < table.size(); ++i) {
 		const auto &[e, expected] = table[i];
 		INFO("client_errc " << std::to_underlying(e) << " " << std::error_code(e).message());
