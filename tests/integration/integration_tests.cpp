@@ -911,6 +911,72 @@ TEST_CASE("integration: assertion and pre/post-read controls", "[integration][co
 	CHECK(*(*last)->find("sn") == ldap::string_list{ after_sn });
 }
 
+TEST_CASE("integration: matched values", "[integration][controls]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	corosio::io_context ioc;
+	auto c = open_admin(ioc);
+	using ldap::filters::attr;
+
+	// One member of cn=big's 2000.
+	const char member[] = "uid=member0042,ou=elsewhere,dc=example,dc=org";
+	auto big = finish(ioc,
+	  c.search({ .base = ldap::dn{ "cn=big,ou=groups,dc=example,dc=org" },
+		.scope = ldap::search_scope::base_object,
+		.attributes = { "member", "cn" },
+		.controls = {
+		  ldap::matched_values{ .values_return_filter = { attr("member") == member }, .critical = true } } }));
+	REQUIRE(big.has_value());
+	REQUIRE(big->size() == 1);
+	REQUIRE(big->front().find("member") != nullptr);
+	CHECK(*big->front().find("member") == ldap::string_list{ member });
+	// RFC 3876 returns cn with no values; slapd leaves it out.
+	CHECK(big->front().find("cn") == nullptr);
+
+	// Several items in the RFC 3876 string form, UTF-8 values.
+	const char sn[] = "\xC3\x85ngstr\xC3\xB6m";// Ångström
+	auto items = ldap::parse_values_return_filter("((sn=*ngstr*)(cn=nobody)(objectClass=inetOrgPerson))");
+	REQUIRE(items.has_value());
+	auto jorg = finish(ioc,
+	  c.search({ .base = ldap::dn{ "uid=j\xC3\xB6rg,ou=people,dc=example,dc=org" },
+		.scope = ldap::search_scope::base_object,
+		.attributes = { "sn", "cn", "objectClass" },
+		.controls = { ldap::matched_values{ .values_return_filter = std::move(*items) } } }));
+	REQUIRE(jorg.has_value());
+	REQUIRE(jorg->size() == 1);
+	REQUIRE(jorg->front().find("sn") != nullptr);
+	CHECK(*jorg->front().find("sn") == ldap::string_list{ sn });
+	CHECK(jorg->front().find("cn") == nullptr);
+	CHECK(*jorg->front().find("objectClass") == ldap::string_list{ "inetOrgPerson" });
+
+	// An extensible match picks the matching rule: caseExactMatch keeps
+	// "User 001" but not "user 001"; the entries themselves are unaffected.
+	const auto cn_exact = [&](const char *value) {
+		auto r = finish(ioc,
+		  c.search({ .base = people,
+			.filter = attr("uid") == "user001",
+			.attributes = { "cn", "uid" },
+			.controls = { ldap::matched_values{
+			  .values_return_filter = { ldap::filter::raw(std::string("(cn:caseExactMatch:=") + value + ")").value(),
+				attr("uid").present() } } } }));
+		REQUIRE(r.has_value());
+		REQUIRE(r->size() == 1);
+		CHECK(r->front().find("uid") != nullptr);
+		return r->front().find("cn") != nullptr;
+	};
+	CHECK(cn_exact("User 001"));
+	CHECK_FALSE(cn_exact("user 001"));
+
+	// The client refuses what RFC 3876 excludes, before sending.
+	auto refused = finish(ioc,
+	  c.search({ .base = people,
+		.controls = { ldap::matched_values{ .values_return_filter = { attr("cn") == "x" && attr("sn") == "y" } } } }));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::client_errc::invalid_filter);
+}
+
 TEST_CASE("integration: the relax rules control", "[integration][controls]")
 {
 	if (!have_slapd()) {

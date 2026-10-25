@@ -3,6 +3,7 @@
 #pragma once
 
 #include "jhetz/ldap/content_sync.hpp"
+#include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/message.hpp"
 
 #include <string>
@@ -134,7 +135,10 @@ inline auto sample_controls() -> std::pmr::vector<control>
 		encode_sync_request(sync_request{ .mode = sync_mode::refresh_and_persist, .cookie = "c", .reload_hint = true })
 		  .value(),
 		encode_sync_state(sync_state{ sync_state_type::modify, sample_uuid(), "c" }).value(),
-		encode_sync_done(sync_done{ "c", true }).value() };
+		encode_sync_done(sync_done{ "c", true }).value(),
+		to_control(matched_values{ .values_return_filter = { filters::attr("mail").ends_with("@example.org"),
+									 raw_filter("(cn:caseExactMatch:=x)") } })
+		  .value() };
 }
 
 }// namespace jhetz::ldap::test

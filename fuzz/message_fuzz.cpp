@@ -13,9 +13,9 @@
 // - the framer measures the encoding as exactly one complete message;
 // - peek_message_header never crashes, and agrees with decode (id) and with
 //   the re-encoding (id, operation tag) whenever the input decodes;
-// - a paged results, sort result, pre-/post-read, or RFC 4533 sync
-//   request, state or done control that decodes re-encodes to an equal
-//   value (the entry of a read control allocated from the message's
+// - a paged results, sort result, pre-/post-read, matched values, or RFC
+//   4533 sync request, state or done control that decodes re-encodes to an
+//   equal value (the entry of a read control allocated from the message's
 //   resource), and so does an RFC 4533 Sync Info Message;
 // - search entries convert to ldap::entry, results to ldap::error, whose
 //   message() is well-formed UTF-8 without C0 controls or DEL;
@@ -25,6 +25,7 @@
 // parses, the search request m carrying it encodes, decode(encode(m)) == m
 // and encode(decode(encode(m))) == encode(m).
 #include "jhetz/ldap/content_sync.hpp"
+#include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/message.hpp"
 
@@ -85,6 +86,15 @@ void exercise_control(const ldap::control &c)
 		} else {
 			check(is_decode_failure(e.error()) || e.error().code == ldap::client_errc::message_too_large,
 			  "is_decode_failure(e.error()) || e.error().code == ldap::client_errc::message_too_large");
+		}
+	} else if (c.type == ldap::matched_values_oid) {
+		if (auto v = ldap::decode_matched_values(c, c.get_allocator().resource())) {
+			check(v->critical == c.criticality, "v->critical == c.criticality");
+			const auto again = ldap::to_control(*v);
+			check(again.has_value(), "again.has_value()");
+			check(ldap::decode_matched_values(*again) == *v, "ldap::decode_matched_values(*again) == *v");
+		} else {
+			check(is_decode_failure(v.error()), "is_decode_failure(v.error())");
 		}
 	} else if (c.type == ldap::sync_request_oid) {
 		if (auto r = ldap::decode_sync_request(c)) {

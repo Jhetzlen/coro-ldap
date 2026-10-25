@@ -12,6 +12,7 @@
 #include <string_view>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
 namespace ldap = jhetz::ldap;
 using jhetz::ldap::test::from_hex;
@@ -66,6 +67,9 @@ static_assert(
   applies_to<ldap::paged>(search) && !applies_to<ldap::paged>(modify) && !applies_to<ldap::paged>(extended));
 static_assert(applies_to<ldap::server_side_sort>(search) && !applies_to<ldap::server_side_sort>(compare));
 static_assert(applies_to<ldap::sync_request>(search) && !applies_to<ldap::sync_request>(add));
+static_assert(applies_to<ldap::matched_values>(search) && !applies_to<ldap::matched_values>(modify)
+			  && !applies_to<ldap::matched_values>(compare) && !applies_to<ldap::matched_values>(extended));
+static_assert(!std::is_convertible_v<ldap::matched_values, ldap::compare_controls::value_type>);
 static_assert(applies_to<ldap::pre_read>(modify) && applies_to<ldap::pre_read>(del)
 			  && applies_to<ldap::pre_read>(modify_dn) && !applies_to<ldap::pre_read>(add)
 			  && !applies_to<ldap::pre_read>(search));
@@ -320,6 +324,177 @@ TEST_CASE("assertion control", "[controls][assertion]")
 	REQUIRE_FALSE(empty.has_value());
 	CHECK(empty.error().code == ldap::client_errc::invalid_filter);
 	CHECK(empty.error().context == "assertion: filter: empty");
+}
+
+// ---------------------------------------------------------------- matched values (RFC 3876)
+
+TEST_CASE("matched values request control", "[controls][matched_values]")
+{
+	using ldap::filters::attr;
+	const auto c = ldap::to_control(ldap::matched_values{ .values_return_filter = { attr("mail") == "x" } });
+	REQUIRE(c.has_value());
+	CHECK(c->type == ldap::matched_values_oid);
+	CHECK(c->type == "1.2.826.0.1.3344810.2.3");
+	CHECK_FALSE(c->criticality);
+	// SEQUENCE { equalityMatch [3] { "mail", "x" } }
+	CHECK(value_hex(*c) == "30 0B A3 09 04 04 6D 61 69 6C 04 01 78");
+
+	// Every SimpleFilterItem choice, in order: [3] .. [9], the extensible
+	// match as SimpleMatchingAssertion (rule [1], type [2], value [3]).
+	const auto all = ldap::to_control(ldap::matched_values{ .values_return_filter = { attr("cn") == "a",
+															  ldap::filter::raw("(cn=a*b)").value(),
+															  attr("n") >= "1",
+															  attr("n") <= "2",
+															  attr("cn").present(),
+															  attr("cn").approx("c"),
+															  ldap::filter::raw("(cn:2.5.13.5:=d)").value() },
+	  .critical = true });
+	REQUIRE(all.has_value());
+	CHECK(all->criticality);
+	CHECK(value_hex(*all)
+		  == "30 47 A3 07 04 02 63 6E 04 01 61 A4 0C 04 02 63 6E 30 06 80 01 61 82 01 62 A5 06 04 01 6E 04 01 31"
+			 " A6 06 04 01 6E 04 01 32 87 02 63 6E A8 07 04 02 63 6E 04 01 63"
+			 " A9 11 81 08 32 2E 35 2E 31 33 2E 35 82 02 63 6E 83 01 64");
+	// ... and decodes back to the same items, with the criticality.
+	const auto back = ldap::decode_matched_values(*all);
+	REQUIRE(back.has_value());
+	CHECK(back->critical);
+	CHECK(*back
+		  == ldap::matched_values{ .values_return_filter = {
+									 attr("cn") == "a",
+									 ldap::filter::raw("(cn=a*b)").value(),
+									 attr("n") >= "1",
+									 attr("n") <= "2",
+									 attr("cn").present(),
+									 attr("cn").approx("c"),
+									 ldap::filter::raw("(cn:2.5.13.5:=d)").value(),
+								   },
+			.critical = true });
+
+	// UTF-8 values pass through unchanged.
+	const auto utf8 =
+	  ldap::to_control(ldap::matched_values{ .values_return_filter = { attr("sn") == "\xC3\x85ngstr\xC3\xB6m" } });
+	REQUIRE(utf8.has_value());
+	CHECK(value_hex(*utf8) == "30 12 A3 10 04 02 73 6E 04 0A C3 85 6E 67 73 74 72 C3 B6 6D");
+}
+
+TEST_CASE("matched values items RFC 3876 excludes", "[controls][matched_values]")
+{
+	using ldap::filters::attr;
+	const auto refused = [](ldap::matched_values v) {
+		auto c = ldap::to_control(v);
+		REQUIRE_FALSE(c.has_value());
+		return c.error();
+	};
+	const auto none = refused({});
+	CHECK(none.code == ldap::client_errc::encode_error);
+	CHECK(none.context == "matched values: no filter items");
+
+	const auto both =
+	  refused({ .values_return_filter = { attr("cn") == "x", attr("cn") == "x" && attr("sn") == "y" } });
+	CHECK(both.code == ldap::client_errc::invalid_filter);
+	CHECK(both.context == "matched values: item 2 is (&...), not a simple filter item (RFC 3876 section 2)");
+	CHECK(refused({ .values_return_filter = { attr("cn") == "x" || attr("sn") == "y" } }).context
+		  == "matched values: item 1 is (|...), not a simple filter item (RFC 3876 section 2)");
+	CHECK(refused({ .values_return_filter = { !(attr("cn") == "x") } }).context
+		  == "matched values: item 1 is (!...), not a simple filter item (RFC 3876 section 2)");
+	CHECK(refused({ .values_return_filter = { ldap::filter::raw("(&)").value() } }).context
+		  == "matched values: item 1 is (&...), not a simple filter item (RFC 3876 section 2)");
+	// SimpleMatchingAssertion has no dnAttributes.
+	const auto dn = refused({ .values_return_filter = { ldap::filter::raw("(ou:dn:=people)").value() } });
+	CHECK(dn.code == ldap::client_errc::invalid_filter);
+	CHECK(dn.context
+		  == "matched values: item 1 is an extensible match with dnAttributes, not a simple filter item (RFC 3876 "
+			 "section 2)");
+	const auto empty = refused({ .values_return_filter = { attr("cn") == "x", ldap::filter{} } });
+	CHECK(empty.code == ldap::client_errc::invalid_filter);
+	CHECK(empty.context == "matched values: item 2 is empty");
+	// Without dnAttributes an extensible match is fine.
+	CHECK(
+	  ldap::to_control(ldap::matched_values{ .values_return_filter = { ldap::filter::raw("(ou:=people)").value() } })
+		.has_value());
+}
+
+TEST_CASE("parse_values_return_filter", "[controls][matched_values]")
+{
+	using ldap::filters::attr;
+	// RFC 3876 section 5, example 1.
+	const auto example = ldap::parse_values_return_filter("((mail=*hotmail.com)(telephoneNumber=*))");
+	REQUIRE(example.has_value());
+	REQUIRE(example->size() == 2);
+	CHECK((*example)[0] == attr("mail").ends_with("hotmail.com"));
+	CHECK((*example)[1] == attr("telephoneNumber").present());
+	// Example 2, and a single item without the outer parentheses.
+	CHECK(ldap::parse_values_return_filter("((attributeTypes=1.2.3.4.5))").value()
+		  == std::vector{ attr("attributeTypes") == "1.2.3.4.5" });
+	CHECK(ldap::parse_values_return_filter("(attributeTypes=1.2.3.4.5)").value()
+		  == std::vector{ attr("attributeTypes") == "1.2.3.4.5" });
+	// Escaped parentheses in values, UTF-8, extensible match.
+	const auto escaped = ldap::parse_values_return_filter("((cn=a\\29b\\28)(sn=\xC3\x85*)(cn:caseExactMatch:=x))");
+	REQUIRE(escaped.has_value());
+	REQUIRE(escaped->size() == 3);
+	CHECK((*escaped)[0] == (attr("cn") == "a)b("));
+	CHECK((*escaped)[1] == attr("sn").starts_with("\xC3\x85"));
+	CHECK((*escaped)[2] == ldap::filter::raw("(cn:caseExactMatch:=x)").value());
+
+	// What libldap sends for that list (ldapsearch -E 'mv=((mail=*example*)(cn:caseExactMatch:=x))').
+	const auto libldap = ldap::parse_values_return_filter("((mail=*example*)(cn:caseExactMatch:=x))");
+	REQUIRE(libldap.has_value());
+	const auto wire = ldap::to_control(ldap::matched_values{ .values_return_filter = *libldap });
+	REQUIRE(wire.has_value());
+	CHECK(value_hex(*wire)
+		  == "30 2C A4 11 04 04 6D 61 69 6C 30 09 81 07 65 78 61 6D 70 6C 65 A9 17 81 0E 63 61 73 65 45 78 61 63 74 4D"
+			 " 61 74 63 68 82 02 63 6E 83 01 78");
+
+	const auto fails = [](std::string_view text) {
+		auto r = ldap::parse_values_return_filter(text);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::invalid_filter);
+		return std::string(r.error().context);
+	};
+	CHECK(fails("((cn=x)(&(a=b)(c=d)))")
+		  == "matched values: item 2 is (&...), not a simple filter item (RFC 3876 section 2)");
+	CHECK(fails("(|(a=b)(c=d))") == "matched values: item 1 is (|...), not a simple filter item (RFC 3876 section 2)");
+	CHECK(fails("((ou:dn:=x))")
+		  == "matched values: item 1 is an extensible match with dnAttributes, not a simple filter item (RFC 3876 "
+			 "section 2)");
+	CHECK(fails("(())").starts_with("matched values: item 1: filter: "));
+	CHECK(fails("((cn=x)") == "matched values: unbalanced parentheses at position 1");
+	CHECK(fails("((cn=x)(sn=y)") == "matched values: unbalanced parentheses at position 7");
+	CHECK(fails("((cn=x)sn=y)") == "matched values: expected '(' at position 7");
+	CHECK(fails("((cn=x)(sn=y)x") == "matched values: no closing parenthesis at position 14");
+	CHECK(fails("((cn=x)(sn=y\\)") == "matched values: unbalanced parentheses at position 7");
+	CHECK(fails("").starts_with("matched values: item 1: filter: "));
+}
+
+TEST_CASE("decode_matched_values", "[controls][matched_values]")
+{
+	const auto c = with_value(ldap::matched_values_oid, "30 0B A3 09 04 04 6D 61 69 6C 04 01 78");
+	const auto v = ldap::decode_matched_values(c);
+	REQUIRE(v.has_value());
+	CHECK_FALSE(v->critical);
+	CHECK(*v == ldap::matched_values{ .values_return_filter = { ldap::filters::attr("mail") == "x" } });
+
+	const auto context_of = [](const ldap::control &bad) {
+		auto r = ldap::decode_matched_values(bad);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::protocol_error);
+		return std::string(r.error().context);
+	};
+	CHECK(context_of(ldap::control{ "1.2.3" }) == "matched values: control type is 1.2.3, not 1.2.826.0.1.3344810.2.3");
+	CHECK(context_of(ldap::control{ ldap::matched_values_oid }) == "matched values: control has no value");
+	CHECK(context_of(with_value(ldap::matched_values_oid, "30 00")) == "matched values: no filter items");
+	// (&(cn=x)) and an explicit dnAttributes TRUE are not SimpleFilterItems.
+	CHECK(context_of(with_value(ldap::matched_values_oid, "30 0B A0 09 A3 07 04 02 63 6E 04 01 78"))
+		  == "matched values: item 1 is (&...), not a simple filter item (RFC 3876 section 2) at offset 2");
+	CHECK(context_of(with_value(ldap::matched_values_oid, "30 10 87 02 63 6E A9 0A 82 02 63 6E 83 01 78 84 01 FF"))
+		  == "matched values: item 2 is an extensible match with dnAttributes, not a simple filter item (RFC 3876 "
+			 "section 2) at offset 6");
+	CHECK(context_of(with_value(ldap::matched_values_oid, "30 04 87 02 63 6E 00"))
+		  == "matched values: ber: 1 unexpected trailing bytes at offset 6");
+	CHECK(context_of(with_value(ldap::matched_values_oid, "30 03 87 02 63")).starts_with("matched values: ber: "));
+	CHECK(
+	  context_of(with_value(ldap::matched_values_oid, "30 04 04 02 63 6E")).starts_with("matched values: filter: "));
 }
 
 // ---------------------------------------------------------------- pre-read / post-read (RFC 4527)

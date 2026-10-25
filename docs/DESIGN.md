@@ -232,7 +232,7 @@ before anything is sent.
 
 Typed controls (step 6, `controls.hpp`): `paged`, `manage_dsa_it`,
 `relax_rules`, `proxied_authorization`, `server_side_sort`, `assertion`,
-`pre_read`, `post_read` and `sync_request`, plus the raw wire
+`pre_read`, `post_read`, `sync_request` and `matched_values`, plus the raw wire
 `control {type, criticality, value}` as the escape hatch. Where each may be
 sent is fixed by its specification, so it is checked at compile time
 (goal 1) from one table, `control_rule_of<T>` (name, source, operations;
@@ -243,6 +243,7 @@ sent is fixed by its specification, so it is checked at compile time
 | `paged` | search | RFC 2696 section 2 |
 | `server_side_sort` | search | RFC 2891 section 1.1 |
 | `sync_request` | search | RFC 4533 section 2.2 |
+| `matched_values` | search | RFC 3876 section 2 |
 | `pre_read` | modify, modify DN, delete | RFC 4527 section 3.1 |
 | `post_read` | add, modify, modify DN | RFC 4527 section 3.2 |
 | `relax_rules` | add, modify, modify DN, delete | draft-zeilenga-ldap-relax-03 section 2 |
@@ -302,6 +303,26 @@ server's bad control fails only the caller who asks for it.
   ignored the condition would apply an update the caller meant to be
   conditional. A false assertion fails the operation with
   `errc::assertion_failed` (122).
+- Matched values (RFC 3876): `matched_values{.values_return_filter,
+  .critical}`, the ValuesReturnFilter as a `std::vector<ldap::filter>`,
+  one filter per SimpleFilterItem. Reusing `ldap::filter` keeps one
+  builder, parser and encoder for the assertion grammar: a
+  SimpleFilterItem has the Filter CHOICE's tags, and its
+  SimpleMatchingAssertion is a MatchingRuleAssertion without dnAttributes,
+  so each item is written by `encode_filter`. What RFC 3876 excludes (and,
+  or, not, dnAttributes) is refused when the control is encoded
+  (invalid_filter "matched values: item 2 is (&...), not a simple filter
+  item (RFC 3876 section 2)"), as is an empty item, and an empty list
+  (encode_error: the ASN.1 allows one, but it would select no value at
+  all, like `server_side_sort` without keys). A dedicated item type was
+  rejected: it would duplicate the filter builders for no stronger check
+  than the run-time one. `parse_values_return_filter()` reads the string
+  form of RFC 3876 section 5 (`((mail=*@example.org)(cn=*))`, or one item
+  alone), item by item with `filter::raw`, and `decode_matched_values()`
+  reads the control back for mock servers (the items share one
+  `max_filter_elements` budget). OpenLDAP implements it in slapd itself;
+  it leaves out an attribute with no matching value, where RFC 3876 returns
+  it with an empty set.
 - Pre-read / post-read (RFC 4527): `pre_read{.attributes}` on modify /
   delete / modify DN, `post_read{.attributes}` on add / modify / modify DN
   (sections 3.1 and 3.2: nothing to pre-read before an add, nothing to
@@ -336,8 +357,9 @@ The response codecs (`encode_` / `decode_sort_result`,
 `encode_` / `decode_read_entry`) live in `message.hpp` next to the paged
 results one, so mock servers and the fuzzers use them too (the RFC 4533
 ones are in `content_sync.hpp`, with the request control's decoder for
-mock servers). Other request controls are only encoded (no decoder: the
-client never reads them). Errors from
+mock servers, and so is the matched values one, in `controls.hpp`).
+Other request controls are only encoded (no decoder: the client never
+reads them). Errors from
 inside a response control's value name the control (`post-read: ber: ...
 at offset 9`), since their offsets are relative to the value; request
 encoding errors name the control too (`server side sort: key 2 has no

@@ -148,6 +148,54 @@ struct post_read
 	bool critical = false;
 };
 
+// Matched Values (RFC 3876, OID matched_values_oid): return, of the
+// attributes a search returns, only the values that match at least one
+// item of `values_return_filter` (the ValuesReturnFilter, RFC 3876 section
+// 2), e.g. one member of a large group:
+//
+//   .controls = {ldap::matched_values{.values_return_filter = {attr("member") == member_dn}}}
+//
+// Each item is one simple filter: equality, substrings, >=, <=, present,
+// approx or extensible match (SimpleFilterItem). RFC 3876 excludes and,
+// or and not, and an extensible match with dnAttributes
+// (SimpleMatchingAssertion has none); such an item, an empty one, or an
+// empty list fails with invalid_filter (encode_error for the empty list)
+// when encoded. parse_values_return_filter() reads the string form of RFC
+// 3876 section 5, "((mail=*@example.org)(telephoneNumber=*))". The
+// selection applies to the entries' values only, never to which entries
+// match; per RFC 3876 section 2 an attribute with no matching value comes
+// back with no values (OpenLDAP 2.7 leaves it out). typesOnly and the
+// "1.1" attribute list make it a no-op. Non-critical by default: a server
+// without it ignores it and returns every value (OpenLDAP supports it
+// natively).
+inline constexpr std::string_view matched_values_oid = "1.2.826.0.1.3344810.2.3";
+struct matched_values
+{
+	std::vector<ldap::filter> values_return_filter{};
+	bool critical = false;
+
+	friend auto operator==(const matched_values &, const matched_values &) -> bool = default;
+};
+
+// The items of a ValuesReturnFilter in the string form of RFC 3876 section
+// 5: "(" 1*simpleFilterItem ")", each item an RFC 4515 filter of the kinds
+// matched_values takes, e.g. "((mail=*@example.org)(cn:caseExactMatch:=Jo))".
+// A single item without the outer parentheses ("(mail=*)") is read as a
+// list of one. Fails with invalid_filter: text that does not parse, an item
+// RFC 3876 excludes (and, or, not, dnAttributes), or no item. The filters
+// are allocated from `mr`.
+[[nodiscard]] auto parse_values_return_filter(std::string_view text,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::vector<ldap::filter>>;
+
+// The request control as a server reads it (for mock servers and tests):
+// `critical` is the control's criticality. Fails with decode_error if `c`
+// is not a matched values control, its value is missing or malformed, the
+// list is empty, an item is not a SimpleFilterItem, or the items have more
+// than max_filter_elements elements in all. The filters are allocated from
+// `mr`.
+[[nodiscard]] auto decode_matched_values(const control &c,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<matched_values>;
+
 // ---------------------------------------------------------------- per-operation lists
 
 // The request messages a typed control can go on, by RFC 4511 operation:
@@ -319,6 +367,13 @@ inline constexpr control_rule control_rule_of<sync_request> = { .name = "sync_re
 	.source = "RFC 4533 section 2.2",
 	.operations = operation_set_of(operation_kind::search) };
 
+// RFC 3876 section 2: "It only has meaning for the Search operation, and
+// SHOULD only be added to the Search operation by the client."
+template<>
+inline constexpr control_rule control_rule_of<matched_values> = { .name = "matched_values",
+	.source = "RFC 3876 section 2",
+	.operations = operation_set_of(operation_kind::search) };
+
 // Whether control type T may be sent on `op` (the table above).
 template<class T> [[nodiscard]] constexpr auto applies_to(operation_kind op) noexcept -> bool
 {
@@ -336,7 +391,8 @@ using request_control = std::variant<control,
   assertion,
   pre_read,
   post_read,
-  sync_request>;
+  sync_request,
+  matched_values>;
 using request_controls = std::vector<request_control>;
 
 // A list of the controls `Op` takes: the raw control and the typed ones
@@ -359,7 +415,8 @@ struct search_controls
 	  proxied_authorization,
 	  server_side_sort,
 	  assertion,
-	  sync_request>
+	  sync_request,
+	  matched_values>
 {
 	using controls_of::controls_of;
 };
@@ -474,8 +531,9 @@ template<detail::operation_controls Ops>
 // ---------------------------------------------------------------- encoding
 
 // The wire form of a control, on `mr`. Fail with encode_error for a
-// negative page size, an invalid sort or sync mode, invalid_filter for an
-// empty (or too large) assertion filter.
+// negative page size, an invalid sort or sync mode, or a matched values
+// control without items, invalid_filter for an empty (or too large)
+// assertion filter or a matched values item RFC 3876 excludes.
 [[nodiscard]] auto to_control(const control &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
   -> result<control>;
 [[nodiscard]] auto to_control(const paged &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
@@ -495,6 +553,8 @@ template<detail::operation_controls Ops>
 [[nodiscard]] auto to_control(const post_read &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
   -> result<control>;
 [[nodiscard]] auto to_control(const sync_request &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+  -> result<control>;
+[[nodiscard]] auto to_control(const matched_values &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
   -> result<control>;
 
 // Appends the wire form of every control of a list (an operation's, or

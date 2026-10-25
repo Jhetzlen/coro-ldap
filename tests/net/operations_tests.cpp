@@ -636,6 +636,43 @@ TEST_CASE("operations: server side sort result of a search", "[net][operations][
 	CHECK(m.log.received.size() == 3);
 }
 
+TEST_CASE("operations: matched values on a search", "[net][operations][controls]")
+{
+	mock_ldap m;
+	// The server returns only the matching member value.
+	m.serve({ answer({ ldap::message{ 1,
+						 ldap::search_result_entry{ "cn=staff,ou=groups,dc=example,dc=org",
+						   { ldap::partial_attribute{ "member", { jdoe.to_string() } } } } },
+	  done_msg(1) }) });
+	const ldap::matched_values only_jdoe{ .values_return_filter = {
+											ldap::filters::attr("member") == jdoe.to_string() } };
+	auto r = m.run(m.conn.search({ .base = ldap::dn{ "cn=staff,ou=groups,dc=example,dc=org" },
+	  .scope = ldap::search_scope::base_object,
+	  .attributes = { "member" },
+	  .controls = { only_jdoe } }));
+	REQUIRE(r.has_value());
+	REQUIRE(r->size() == 1);
+	CHECK(*r->front().find("member") == ldap::string_list{ jdoe.to_string() });
+	m.check_server();
+
+	// The server reads back what was sent.
+	REQUIRE(m.log.received.size() == 1);
+	REQUIRE(m.log.received[0].controls.size() == 1);
+	const auto &sent = m.log.received[0].controls[0];
+	CHECK(sent == ldap::to_control(only_jdoe).value());
+	CHECK(ldap::decode_matched_values(sent).value() == only_jdoe);
+
+	// An item RFC 3876 excludes fails before anything is sent.
+	auto bad = m.run(m.conn.search(
+	  { .controls = { ldap::matched_values{ .values_return_filter = { ldap::filters::attr("member") == jdoe.to_string()
+																	  || ldap::filters::attr("cn") == "x" } } } }));
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(bad.error().code == client_errc::invalid_filter);
+	CHECK_THAT(std::string(bad.error().context),
+	  ContainsSubstring("matched values: item 1 is (|...), not a simple filter item (RFC 3876 section 2)"));
+	CHECK(m.log.received.size() == 1);
+}
+
 // ---------------------------------------------------------------- paged search
 
 namespace {

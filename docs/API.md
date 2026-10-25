@@ -477,7 +477,12 @@ itself needs only ICU.
   (draft-zeilenga-ldap-relax, critical by default), `proxied_authorization`
   (RFC 4370), `server_side_sort` (RFC 2891), `assertion` (RFC 4528, critical
   by default; a false one fails with `errc::assertion_failed`), `pre_read` /
-  `post_read` (RFC 4527), `sync_request` (RFC 4533)) or a raw `ldap::control`.
+  `post_read` (RFC 4527), `sync_request` (RFC 4533), `matched_values` (RFC
+  3876: `.values_return_filter`, one `ldap::filter` per item; and, or, not
+  and dnAttributes, which RFC 3876 excludes, fail with invalid_filter when
+  encoded; `parse_values_return_filter("((mail=*)(cn=x))")` reads the RFC
+  3876 string form, `decode_matched_values` reads the control back for mock
+  servers)) or a raw `ldap::control`.
   Each operation's params take its own list: `search_controls`,
   `add_controls`, `modify_controls`, `modify_dn_controls`, `del_controls`,
   `compare_controls` and `extended_controls` (also `password_modify_params`,
