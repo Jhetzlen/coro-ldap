@@ -1055,8 +1055,9 @@ struct vlv_response
 	// list; send it back in the next vlv_by_offset (section 6.2).
 	std::int32_t content_count = 0;
 	// virtualListViewResult: 0 (success) or the result code saying why the
-	// view failed. The draft lists operationsError (1), protocolError (3),
-	// timeLimitExceeded (3), adminLimitExceeded (11), inappropriateMatching
+	// view failed. The draft lists operationsError (1), protocolError (3:
+	// a typo in the draft, RFC 4511's protocolError is 2), timeLimitExceeded
+	// (3), adminLimitExceeded (11), inappropriateMatching
 	// (18), insufficientAccessRights (50), unwillingToPerform (53),
 	// sortControlMissing (60), offsetRangeError (61) and other (80), the
 	// values as it gives them. Unknown values are kept, as for resultCode

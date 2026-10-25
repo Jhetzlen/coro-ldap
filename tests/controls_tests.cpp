@@ -468,6 +468,9 @@ TEST_CASE("parse_values_return_filter", "[controls][matched_values]")
 	CHECK(fails("((cn=x)(sn=y)x") == "matched values: no closing parenthesis at position 14");
 	CHECK(fails("((cn=x)(sn=y\\)") == "matched values: unbalanced parentheses at position 7");
 	CHECK(fails("").starts_with("matched values: item 1: filter: "));
+	// Positions in an item's errors count from the start of the whole text.
+	CHECK(fails("(=y)") == "matched values: item 1: filter: invalid attribute description at position 1");
+	CHECK(fails("((cn=x)(=y))") == "matched values: item 2: filter: invalid attribute description at position 8");
 }
 
 TEST_CASE("decode_matched_values", "[controls][matched_values]")
@@ -493,6 +496,11 @@ TEST_CASE("decode_matched_values", "[controls][matched_values]")
 	CHECK(context_of(with_value(ldap::matched_values_oid, "30 10 87 02 63 6E A9 0A 82 02 63 6E 83 01 78 84 01 FF"))
 		  == "matched values: item 2 is an extensible match with dnAttributes, not a simple filter item (RFC 3876 "
 			 "section 2) at offset 6");
+	// SimpleMatchingAssertion has no dnAttributes field: an explicit FALSE
+	// is refused too.
+	CHECK(context_of(with_value(ldap::matched_values_oid, "30 0C A9 0A 82 02 63 6E 83 01 78 84 01 00"))
+		  == "matched values: item 1 is an extensible match with dnAttributes, not a simple filter item (RFC 3876 "
+			 "section 2) at offset 2");
 	CHECK(context_of(with_value(ldap::matched_values_oid, "30 04 87 02 63 6E 00"))
 		  == "matched values: ber: 1 unexpected trailing bytes at offset 6");
 	CHECK(context_of(with_value(ldap::matched_values_oid, "30 03 87 02 63")).starts_with("matched values: ber: "));

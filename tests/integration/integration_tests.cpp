@@ -1158,6 +1158,7 @@ TEST_CASE("integration: virtual list view", "[integration][controls]")
 		.target = ldap::vlv_by_offset{ .offset = 102, .content_count = mid.response->content_count } });
 	REQUIRE_FALSE(next.error.has_value());
 	CHECK(next.uids == uids{ "user099", "user100", "user101", "user102", "user103" });
+	REQUIRE(next.response.has_value());
 	CHECK(next.response->target_position == 102);
 
 	// The first and the last entries: offset 1, and offset == contentCount.
@@ -1172,6 +1173,7 @@ TEST_CASE("integration: virtual list view", "[integration][controls]")
 	  vlv_window_of(ioc, c, context, { .after_count = 4, .target = ldap::vlv_greater_than_or_equal{ "10200" } });
 	REQUIRE_FALSE(typed.error.has_value());
 	CHECK(typed.uids == uids{ "user200", "user201", "user202", "user203", "user204" });
+	REQUIRE(typed.response.has_value());
 	CHECK(typed.response->target_position == 201);
 	// No entry that large: targetPosition is contentCount + 1, and the
 	// window ends with the list.
@@ -1179,6 +1181,7 @@ TEST_CASE("integration: virtual list view", "[integration][controls]")
 	  ioc, c, context, { .before_count = 1, .after_count = 1, .target = ldap::vlv_greater_than_or_equal{ "99999" } });
 	REQUIRE_FALSE(past.error.has_value());
 	CHECK(past.uids == uids{ "user249" });
+	REQUIRE(past.response.has_value());
 	CHECK(past.response->target_position == 251);
 
 	// An offset beyond the list fails the search with 76; the response

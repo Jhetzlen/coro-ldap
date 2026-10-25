@@ -69,7 +69,7 @@ enum class errc : int {
 	object_class_mods_prohibited = 69,
 	// 70 reserved for CLDAP
 	affects_multiple_dsas = 71,
-	// 72-79 unused
+	// 72-75 and 77-79 unused (76, virtual_list_view_error, is an extension's, below)
 	other = 80,
 	// Codes defined by extensions (RFC 4520 IANA registry)
 	// draft-ietf-ldapext-ldapv3-vlv-09 section 6.2.1: the search failed

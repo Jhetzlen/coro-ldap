@@ -5,6 +5,7 @@
 #include "jhetz/ldap/ber.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -126,6 +127,10 @@ namespace {
 	// ---------------------------------------------------------------- matched values (RFC 3876)
 
 	constexpr std::string_view matched_values_name = "matched values";
+	// Filter CHOICE tag of extensibleMatch, and MatchingRuleAssertion's
+	// dnAttributes tag (RFC 4511 section 4.5.1).
+	constexpr std::uint8_t extensible_match_tag = 9;
+	constexpr std::uint8_t dn_attributes_tag = 4;
 
 	// Whether `f` is a SimpleFilterItem (RFC 3876 section 2): one leaf, and
 	// an extensible match without dnAttributes. `code` is the error's
@@ -195,6 +200,36 @@ namespace {
 		return value_control(matched_values_oid, v.critical, w, control::allocator_type(mr));
 	}
 
+	// Whether the next element is an extensibleMatch [9] carrying a
+	// dnAttributes [4] element, even FALSE: SimpleMatchingAssertion (RFC 3876
+	// section 2) has no such field, so a value that has one is not a
+	// SimpleFilterItem, whatever its value.
+	auto has_dn_attributes_field(ber::reader r) -> bool
+	{
+		constexpr ber::tag extensible = ber::context(extensible_match_tag, true);
+		if (r.empty()) {
+			return false;
+		}
+		const auto t = r.peek_tag();
+		if (!t || t->cls != extensible.cls || t->number != extensible.number || !t->constructed) {
+			return false;
+		}
+		auto inner = r.enter(extensible);
+		if (!inner) {
+			return false;// decode_filter reports it
+		}
+		while (!inner->empty()) {
+			auto e = inner->read();
+			if (!e) {
+				return false;
+			}
+			if (e->t.cls == ber::tag_class::context && e->t.number == dn_attributes_tag) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	auto read_matched_values(std::span<const std::byte> value, std::pmr::memory_resource *mr) -> result<matched_values>
 	{
 		ber::reader r(value);
@@ -211,6 +246,13 @@ namespace {
 			// The items share one element budget, as one filter would.
 			const filter_limits limits{ .max_depth = max_filter_depth, .max_elements = max_filter_elements - elements };
 			const std::size_t at = s->offset();
+			if (has_dn_attributes_field(*s)) {
+				return fail(client_errc::decode_error,
+				  detail::format("item {} is an extensible match with dnAttributes, not a simple filter item (RFC "
+								 "3876 section 2) at offset {}",
+					out.values_return_filter.size() + 1,
+					at));
+			}
 			auto f = decode_filter(*s, limits, mr);
 			if (!f) {
 				return std::unexpected(std::move(f.error()));
@@ -230,6 +272,24 @@ namespace {
 			return fail(client_errc::decode_error, "no filter items");
 		}
 		return out;
+	}
+
+	// Adds `by` to the " at position N" that ends a filter parse error.
+	void shift_position(std::pmr::string &context, std::size_t by)
+	{
+		constexpr std::string_view marker = " at position ";
+		const auto at = context.rfind(marker);
+		if (by == 0 || at == std::pmr::string::npos) {
+			return;
+		}
+		const std::string_view digits = std::string_view(context).substr(at + marker.size());
+		std::size_t n = 0;
+		const auto [end, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), n);
+		if (ec != std::errc{} || end != digits.data() + digits.size()) {
+			return;
+		}
+		context.resize(at + marker.size());
+		context += std::to_string(n + by);
 	}
 
 	// ---------------------------------------------------------------- virtual list view
@@ -445,9 +505,12 @@ auto to_control(const matched_values &c, std::pmr::memory_resource *mr) -> resul
 
 auto parse_values_return_filter(std::string_view text, std::pmr::memory_resource *mr) -> result<std::vector<filter>>
 {
-	const auto item = [&](std::string_view t, std::size_t index) -> result<filter> {
+	// `at`: where the item starts in `text`, so positions in the filter's
+	// errors refer to the whole text.
+	const auto item = [&](std::string_view t, std::size_t index, std::size_t at) -> result<filter> {
 		auto f = filter::raw(t, mr);
 		if (!f) {
+			shift_position(f.error().context, at);
 			f.error().context.insert(0, detail::format("{}: item {}: ", matched_values_name, index + 1));
 			return f;
 		}
@@ -459,7 +522,7 @@ auto parse_values_return_filter(std::string_view text, std::pmr::memory_resource
 	std::vector<filter> out;
 	// One item without the outer parentheses.
 	if (!text.starts_with("((")) {
-		auto f = item(text, 0);
+		auto f = item(text, 0, 0);
 		if (!f) {
 			return std::unexpected(std::move(f.error()));
 		}
@@ -492,15 +555,12 @@ auto parse_values_return_filter(std::string_view text, std::pmr::memory_resource
 			return fail(client_errc::invalid_filter,
 			  detail::format("{}: unbalanced parentheses at position {}", matched_values_name, pos + 1));
 		}
-		auto f = item(inner.substr(pos, end - pos + 1), out.size());
+		auto f = item(inner.substr(pos, end - pos + 1), out.size(), pos + 1);
 		if (!f) {
 			return std::unexpected(std::move(f.error()));
 		}
 		out.push_back(std::move(*f));
 		pos = end + 1;
-	}
-	if (out.empty()) {
-		return fail(client_errc::invalid_filter, detail::format("{}: no filter items", matched_values_name));
 	}
 	return out;
 }
