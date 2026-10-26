@@ -315,15 +315,17 @@ namespace detail {
 		}
 
 		// A new connection may be opened now: a slot is free, and a server
-		// not excluded has ended its backoff (and is not already retried
-		// after an authentication failure).
-		[[nodiscard]] auto can_open(const std::vector<bool> &excluded, clock::time_point now) const noexcept -> bool
+		// not excluded (nor `skip`) has ended its backoff (and is not
+		// already retried after an authentication failure).
+		[[nodiscard]] auto can_open(const std::vector<bool> &excluded,
+		  clock::time_point now,
+		  std::optional<std::size_t> skip = std::nullopt) const noexcept -> bool
 		{
 			if (!has_free_slot()) {
 				return false;
 			}
 			for (std::size_t i = 0; i < servers.size(); ++i) {
-				if (!excluded[i] && servers[i].retry_at <= now && !servers[i].auth_retrying) {
+				if (!excluded[i] && i != skip && servers[i].retry_at <= now && !servers[i].auth_retrying) {
 					return true;
 				}
 			}
@@ -491,14 +493,16 @@ namespace detail {
 		// one never takes an idle connection: it shares one already shared,
 		// else gets null (it opens a new connection if it may, else waits).
 		// Call prune() first: it retires the connections that must not be
-		// handed out.
-		[[nodiscard]] auto pick(bool exclusive, bool openable, clock::time_point now) const
-		  -> std::shared_ptr<pooled_connection>
+		// handed out. `avoid`: connections to that server are left out.
+		[[nodiscard]] auto pick(bool exclusive,
+		  bool openable,
+		  clock::time_point now,
+		  std::optional<std::size_t> avoid = std::nullopt) const -> std::shared_ptr<pooled_connection>
 		{
 			std::shared_ptr<pooled_connection> idle;
 			std::shared_ptr<pooled_connection> shared;
 			for (const auto &c : pool) {
-				if (c->retired || c->probing || c->exclusive || retire_reason(*c, now)) {
+				if (c->retired || c->probing || c->exclusive || c->server == avoid || retire_reason(*c, now)) {
 					continue;
 				}
 				if (c->leases == 0) {
@@ -522,18 +526,38 @@ namespace detail {
 			return shared;
 		}
 
+		// pick(), for an acquire() that prefers other servers to `avoid` (a
+		// read forwarder's retry after busy or unavailable there): a
+		// connection to another server, else null to open one while another
+		// server may be tried now (try_servers() tries `avoid` last), else
+		// as pick(), `avoid` included.
+		[[nodiscard]] auto pick_avoiding(bool exclusive,
+		  const std::vector<bool> &excluded,
+		  clock::time_point now,
+		  std::optional<std::size_t> avoid) const -> std::shared_ptr<pooled_connection>
+		{
+			if (avoid) {
+				const bool elsewhere = can_open(excluded, now, avoid);
+				if (auto c = pick(exclusive, elsewhere, now, avoid); c || elsewhere) {
+					return c;
+				}
+			}
+			return pick(exclusive, can_open(excluded, now), now);
+		}
+
 		// `c` (idle) goes to a lower-priority server, is failback_after old,
-		// and a higher-priority server this acquire() may try has ended its
-		// backoff.
+		// and a higher-priority server this acquire() may try (not `avoid`)
+		// has ended its backoff.
 		[[nodiscard]] auto should_fail_back(const pooled_connection &c,
 		  const std::vector<bool> &excluded,
-		  clock::time_point now) const noexcept -> bool
+		  clock::time_point now,
+		  std::optional<std::size_t> avoid) const noexcept -> bool
 		{
 			if (c.leases != 0 || c.server == 0 || now - c.created < options.failback_after) {
 				return false;
 			}
 			for (std::size_t i = 0; i < c.server; ++i) {
-				if (!excluded[i] && servers[i].retry_at <= now) {
+				if (!excluded[i] && i != avoid && servers[i].retry_at <= now) {
 					return true;
 				}
 			}
@@ -642,19 +666,35 @@ namespace detail {
 			});
 		}
 
+		// The k-th server try_servers() tries: priority order, `avoid` last.
+		[[nodiscard]] static auto
+		  nth_server(std::size_t k, std::size_t count, std::optional<std::size_t> avoid) noexcept -> std::size_t
+		{
+			if (!avoid) {
+				return k;
+			}
+			if (k + 1 == count) {
+				return *avoid;
+			}
+			return k < *avoid ? k : k + 1;
+		}
+
 		// One pass over the servers whose backoff has ended, in priority
-		// order, until one connects: that connection, pooled with one lease
-		// (exclusive or not), or null if none did (`last` is then the last
-		// failure) or `deadline` passed (no attempt starts after it). Fails
-		// only when it must not go on: the client closed, or the task
-		// stopped.
+		// order (`avoid` last), until one connects: that connection, pooled
+		// with one lease (exclusive or not), or null if none did (`last` is
+		// then the last failure) or `deadline` passed (no attempt starts
+		// after it). Fails only when it must not go on: the client closed,
+		// or the task stopped.
 		static auto try_servers(std::shared_ptr<client_state> self,
 		  net::detail::deadline_t deadline,
 		  bool exclusive,
 		  std::vector<bool> &excluded,
-		  std::optional<error> &last) -> capy::task<result<std::shared_ptr<pooled_connection>>>
+		  std::optional<error> &last,
+		  std::optional<std::size_t> avoid) -> capy::task<result<std::shared_ptr<pooled_connection>>>
 		{
-			for (std::size_t i = 0; i < self->servers.size(); ++i) {
+			const std::size_t count = self->servers.size();
+			for (std::size_t k = 0; k < count; ++k) {
+				const std::size_t i = nth_server(k, count, avoid);
 				if (self->closed) {// an observer hook may close the client
 					co_return fail(client_errc::not_connected, "acquire: client closed");
 				}
@@ -784,16 +824,17 @@ namespace detail {
 		static auto from_pool(std::shared_ptr<client_state> self,
 		  net::detail::deadline_t deadline,
 		  bool exclusive,
-		  const std::vector<bool> &excluded) -> capy::task<result<std::optional<std::shared_ptr<pooled_connection>>>>
+		  const std::vector<bool> &excluded,
+		  std::optional<std::size_t> avoid) -> capy::task<result<std::optional<std::shared_ptr<pooled_connection>>>>
 		{
 			using found = std::optional<std::shared_ptr<pooled_connection>>;
 			const auto now = clock::now();
 			self->prune(now);
-			auto c = self->pick(exclusive, self->can_open(excluded, now), now);
+			auto c = self->pick_avoiding(exclusive, excluded, now, avoid);
 			if (!c) {
 				co_return found{};
 			}
-			if (self->should_fail_back(*c, excluded, now)) {
+			if (self->should_fail_back(*c, excluded, now, avoid)) {
 				self->retire(c, disconnect_reason::failback);
 				co_return found{ nullptr };
 			}
@@ -901,9 +942,10 @@ namespace detail {
 		  bool exclusive,
 		  std::vector<bool> &excluded,
 		  std::optional<error> &last,
-		  std::optional<clock::time_point> &wake) -> capy::task<result<std::shared_ptr<pooled_connection>>>
+		  std::optional<clock::time_point> &wake,
+		  std::optional<std::size_t> avoid) -> capy::task<result<std::shared_ptr<pooled_connection>>>
 		{
-			auto r = co_await try_servers(self, deadline, exclusive, excluded, last);
+			auto r = co_await try_servers(self, deadline, exclusive, excluded, last, avoid);
 			if (!r || *r) {
 				co_return r;
 			}
@@ -925,7 +967,11 @@ namespace detail {
 			return exclusive_waiting != 0 && !pick(false, false, now) && pick(true, false, now);
 		}
 
-		static auto acquire(std::shared_ptr<client_state> self, acquire_options how) -> capy::task<result<lease>>
+		// `avoid`: a server to use only when no other serves (see
+		// pick_avoiding); its backoff is left as is.
+		static auto acquire(std::shared_ptr<client_state> self,
+		  acquire_options how,
+		  std::optional<std::size_t> avoid = std::nullopt) -> capy::task<result<lease>>
 		{
 			constexpr std::string_view context = "acquire";
 			if (auto bad = self->unusable_options(); bad) {
@@ -964,7 +1010,7 @@ namespace detail {
 				}
 				self->exclude_auth_failures(excluded, auth_seen, last, clock::now());
 				const std::uint64_t seen = self->version;
-				auto pooled = co_await from_pool(self, deadline, how.exclusive, excluded);
+				auto pooled = co_await from_pool(self, deadline, how.exclusive, excluded, avoid);
 				if (!pooled) {
 					co_return std::unexpected(std::move(pooled.error()));
 				}
@@ -979,7 +1025,7 @@ namespace detail {
 				}
 				std::optional<clock::time_point> wake;
 				if (self->has_free_slot()) {
-					auto r = co_await open_new(self, deadline, how.exclusive, excluded, last, wake);
+					auto r = co_await open_new(self, deadline, how.exclusive, excluded, last, wake, avoid);
 					if (!r) {
 						co_return std::unexpected(std::move(r.error()));
 					}
@@ -1018,22 +1064,25 @@ namespace detail {
 		// `held`'s operation failed with `e` (retryable): no acquire() hands
 		// that connection out again. A closed one is retired by prune() (and
 		// release()); an open one (busy, unavailable) is retired here.
-		void set_aside(const lease &held, const error &e) noexcept
+		// Returns the server the retry avoids: the one that answered busy
+		// or unavailable (a connection lost goes by the usual order).
+		auto set_aside(const lease &held, const error &e) noexcept -> std::optional<std::size_t>
 		{
 			const auto &c = held.conn_;
-			if (closed || c->retired || !c->conn.is_open() || std::ranges::find(pool, c) == pool.end()) {
-				return;
+			const bool refused = e.code == cond::busy_or_unavailable;
+			if (!closed && !c->retired && c->conn.is_open() && std::ranges::find(pool, c) != pool.end()) {
+				retire(c, refused ? disconnect_reason::busy_or_unavailable : disconnect_reason::closed);
 			}
-			retire(c,
-			  e.code == cond::busy_or_unavailable ? disconnect_reason::busy_or_unavailable : disconnect_reason::closed);
+			return refused ? std::optional<std::size_t>{ c->server } : std::nullopt;
 		}
 
 		// search(), compare(), who_am_i(): `op` on a shared lease, retried
 		// once after a retryable failure.
 		template<class T, class Op> static auto read(std::shared_ptr<client_state> self, Op op) -> capy::task<result<T>>
 		{
+			std::optional<std::size_t> avoid;
 			for (bool retried = false;; retried = true) {
-				auto held = co_await acquire(self, {});
+				auto held = co_await acquire(self, {}, avoid);
 				if (!held) {
 					co_return std::unexpected(std::move(held.error()));
 				}
@@ -1041,7 +1090,7 @@ namespace detail {
 				if (r || retried || !retryable(r.error())) {
 					co_return r;
 				}
-				self->set_aside(*held, r.error());
+				avoid = self->set_aside(*held, r.error());
 			}
 		}
 
@@ -1050,8 +1099,9 @@ namespace detail {
 		  search_params request,
 		  std::pmr::memory_resource *mr) -> capy::task<result<ldap::search_stream>>
 		{
+			std::optional<std::size_t> avoid;
 			for (bool retried = false;; retried = true) {
-				auto held = co_await acquire(self, {});
+				auto held = co_await acquire(self, {}, avoid);
 				if (!held) {
 					co_return std::unexpected(std::move(held.error()));
 				}
@@ -1060,7 +1110,7 @@ namespace detail {
 					if (retried || !retryable(s.error())) {
 						co_return std::unexpected(std::move(s.error()));
 					}
-					self->set_aside(*held, s.error());
+					avoid = self->set_aside(*held, s.error());
 					continue;
 				}
 				auto first = co_await first_outcome(*s);
@@ -1068,7 +1118,7 @@ namespace detail {
 					co_return std::unexpected(std::move(first.error()));
 				}
 				if (*first && !retried && retryable(**first)) {
-					self->set_aside(*held, **first);
+					avoid = self->set_aside(*held, **first);
 					continue;
 				}
 				keep_alive(*s, std::make_shared<lease>(std::move(*held)));

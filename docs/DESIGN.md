@@ -1913,11 +1913,22 @@ decision left open.
   Notice of Disconnection). The retry runs on another connection: the
   failed one, if still open (busy, unavailable), is retired with the new
   `disconnect_reason::busy_or_unavailable`, so the retry's `acquire()`
-  opens a new one (to whichever server failover picks) even with
-  `max_connections = 1`, where avoiding it without retiring it would
-  leave nothing to retry on. Anything else (a server result code, a
-  timeout, a cancellation) and the retry's own outcome are returned as
-  is; an `acquire()` failure is returned (each is bounded by
+  opens a new one even with `max_connections = 1`, where avoiding it
+  without retiring it would leave nothing to retry on. After busy or
+  unavailable the retry's `acquire()` also avoids that server (3pf.14),
+  since a server-wide refusal (AD MaxActiveQueries, a backend down, a
+  shutdown) would fail the same way after a reconnect and bind:
+  `pick_avoiding` takes a connection to another server, else opens one
+  while another server may be tried now (`try_servers` tries the avoided
+  server last, `nth_server`), else falls back to `pick` with that server
+  included. The avoidance is for that one acquire only: the server's
+  backoff and failure count are untouched (it answered), and
+  `should_fail_back` does not count it as a server to return to. With a
+  single server the retry reconnects to it as before (slapd answers busy
+  per connection, past `conn_max_pending`, so a fresh connection does
+  help there). A lost connection is retried in the usual order.
+  Anything else (a server result code, a timeout, a cancellation) and
+  the retry's own outcome are returned as is; an `acquire()` failure is returned (each is bounded by
   `acquire_timeout`, so the worst case is two acquires plus two
   operation timeouts). `search` collects the entries before handing any
   over, so it is retried whatever it received. `search_stream` returns

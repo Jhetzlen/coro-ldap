@@ -1647,6 +1647,49 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 				"disconnect " + text(s.url()) + " busy_or_unavailable",
 				"connect " + text(s.url()) + " ok" });
 	}
+	SECTION("compare(): busy on the first server, the retry goes to the second")
+	{
+		pool_fixture f;
+		auto &a = f.server({ { answer({ bind_resp(1) }), answer({ compare_msg(2, 51) }) }, found_after_bind() });
+		auto &b = f.server({ { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) } });
+		f.make({ .servers = { a.url(), b.url() }, .setup = admin_setup(), .max_connections = 2, .observer = &f.obs });
+		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
+		REQUIRE(r.has_value());
+		CHECK(*r);
+		CHECK(a.accepted() == 1);
+		CHECK(b.accepted() == 1);
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(a.url()) + " ok",
+				"disconnect " + text(a.url()) + " busy_or_unavailable",
+				"connect " + text(b.url()) + " ok" });// no backoff for the first server
+		// Only the retry avoided it: with the connection to the second
+		// server held, a new connection goes to the first again.
+		auto held = f.acquire({ .exclusive = true });
+		REQUIRE(held.has_value());
+		CHECK(text(held->server()) == text(b.url()));
+		auto next = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE(next.has_value());
+		CHECK(next->size() == 1);
+		CHECK(a.accepted() == 2);
+	}
+	SECTION("compare(): busy on the first server, the second down: back to the first")
+	{
+		pool_fixture f;
+		auto &a = f.server({ { answer({ bind_resp(1) }), answer({ compare_msg(2, 51) }) },
+		  { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) } });
+		const auto down = refused_url(f.ioc);
+		f.make({ .servers = { a.url(), down }, .setup = admin_setup(), .observer = &f.obs });
+		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
+		REQUIRE(r.has_value());
+		CHECK(*r);
+		CHECK(a.accepted() == 2);
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(a.url()) + " ok",
+				"disconnect " + text(a.url()) + " busy_or_unavailable",
+				"connect " + text(down) + " failed",
+				"retry " + text(down) + " 100ms",
+				"connect " + text(a.url()) + " ok" });
+	}
 	SECTION("who_am_i(): the server dropped the idle connection")
 	{
 		pool_fixture f;
