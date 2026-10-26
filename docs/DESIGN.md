@@ -1896,14 +1896,41 @@ decision left open.
   `sasl_bind_setup(factory, dn)`, the factory making a fresh mechanism per
   connection (a null one fails with `invalid_argument`, so the server is
   not retried in that acquire).
-- Retry of operations (3pf.4, not yet): read forwarders that retry once
-  on another connection; writes only when `client_errc::not_sent` says the
-  server never saw them (section 7, "Sent or not").
+- Read forwarders (3pf.4): `client::search`, `search_stream`, `compare`
+  and `who_am_i`, the `connection` names and shapes. Each acquires a
+  shared lease, runs the operation, and retries once after
+  `cond::connection_lost` (`not_sent` included) or
+  `cond::busy_or_unavailable` (result codes busy and unavailable, a
+  Notice of Disconnection). The retry runs on another connection: the
+  failed one, if still open (busy, unavailable), is retired with the new
+  `disconnect_reason::busy_or_unavailable`, so the retry's `acquire()`
+  opens a new one (to whichever server failover picks) even with
+  `max_connections = 1`, where avoiding it without retiring it would
+  leave nothing to retry on. Anything else (a server result code, a
+  timeout, a cancellation) and the retry's own outcome are returned as
+  is; an `acquire()` failure is returned (each is bounded by
+  `acquire_timeout`, so the worst case is two acquires plus two
+  operation timeouts). `search` collects the entries before handing any
+  over, so it is retried whatever it received. `search_stream` returns
+  once the search has a first message or has ended
+  (`detail::first_outcome`: waits on the pending op without taking the
+  message, honouring the search's deadline and the stop token), retried
+  only when the search failed retryably before any message; the stream
+  then owns the lease (`search_stream::state::owner`, released after the
+  abandon when the stream is destroyed), and errors from its `next()` are
+  never retried, so nothing is retried once an entry may have been
+  delivered. Cost: it waits for the first message, so a refreshAndPersist
+  search with nothing to send returns at its first change. Writes and
+  extended operations stay lease-only and are never retried by the
+  client: one failing with `client_errc::not_sent` was never seen by the
+  server (section 7, "Sent or not") and the caller may retry it. The
+  observer has no hook for an operation's retry (the retirement shows as
+  `on_disconnect`, a new connection as `on_connect`).
 - Tests (`tests/net/client_tests.cpp`): loopback servers each running one
   script per accepted connection; backoff on real delays of 30 to 60 ms
   with the jitter fixed by `detail::set_jitter` (tests only). One slapd
   test drops a connection through a relay and acquires again.
-- Later (beads): the read forwarders (3pf.4), `sync::client` (3pf.5),
+- Later (beads): `sync::client` (3pf.5),
   referral policy (3pf.1), a background prober, DNS SRV, weighted or
   round-robin selection, per-identity sub-pools.
 

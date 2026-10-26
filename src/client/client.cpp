@@ -2,6 +2,7 @@
 
 #include "jhetz/ldap/cancel.hpp"
 
+#include "../connection/search.hpp"
 #include "../net/deadline.hpp"
 #include "../scope_util.hpp"
 
@@ -1002,6 +1003,75 @@ namespace detail {
 				}
 			}
 		}
+
+		// ---------------------------------------------------------------- read forwarders
+
+		// A read forwarder's failure it retries once, on another connection.
+		[[nodiscard]] static auto retryable(const error &e) noexcept -> bool
+		{
+			return e.code == cond::connection_lost || e.code == cond::busy_or_unavailable;
+		}
+
+		// `held`'s operation failed with `e` (retryable): no acquire() hands
+		// that connection out again. A closed one is retired by prune() (and
+		// release()); an open one (busy, unavailable) is retired here.
+		void set_aside(const lease &held, const error &e) noexcept
+		{
+			const auto &c = held.conn_;
+			if (closed || c->retired || !c->conn.is_open() || std::ranges::find(pool, c) == pool.end()) {
+				return;
+			}
+			retire(c,
+			  e.code == cond::busy_or_unavailable ? disconnect_reason::busy_or_unavailable : disconnect_reason::closed);
+		}
+
+		// search(), compare(), who_am_i(): `op` on a shared lease, retried
+		// once after a retryable failure.
+		template<class T, class Op> static auto read(std::shared_ptr<client_state> self, Op op) -> capy::task<result<T>>
+		{
+			for (bool retried = false;; retried = true) {
+				auto held = co_await acquire(self, {});
+				if (!held) {
+					co_return std::unexpected(std::move(held.error()));
+				}
+				auto r = co_await op(**held);
+				if (r || retried || !retryable(r.error())) {
+					co_return r;
+				}
+				self->set_aside(*held, r.error());
+			}
+		}
+
+		// search_stream(): retried once if it fails before its first message.
+		static auto read_stream(std::shared_ptr<client_state> self,
+		  search_params request,
+		  std::pmr::memory_resource *mr) -> capy::task<result<ldap::search_stream>>
+		{
+			for (bool retried = false;; retried = true) {
+				auto held = co_await acquire(self, {});
+				if (!held) {
+					co_return std::unexpected(std::move(held.error()));
+				}
+				auto s = co_await (*held)->search_stream(request, mr);
+				if (!s) {
+					if (retried || !retryable(s.error())) {
+						co_return std::unexpected(std::move(s.error()));
+					}
+					self->set_aside(*held, s.error());
+					continue;
+				}
+				auto first = co_await first_outcome(*s);
+				if (!first) {// stopped
+					co_return std::unexpected(std::move(first.error()));
+				}
+				if (*first && !retried && retryable(**first)) {
+					self->set_aside(*held, **first);
+					continue;
+				}
+				keep_alive(*s, std::make_shared<lease>(std::move(*held)));
+				co_return std::move(*s);
+			}
+		}
 	};
 
 	void set_jitter(const client &c, std::function<double()> unit) { c.state_->jitter = std::move(unit); }
@@ -1075,6 +1145,52 @@ auto client::acquire(acquire_options options) -> capy::task<result<lease>>
 		return acquire_refused();
 	}
 	return detail::client_state::acquire(state_, options);
+}
+
+namespace {
+
+	template<class T> auto read_refused(std::string context) -> capy::task<result<T>>
+	{
+		co_return fail(client_errc::not_connected, context + ": client moved from");
+	}
+
+}// namespace
+
+// Not coroutines either: the tasks hold their own copy of the state.
+auto client::search(search_params request, std::pmr::memory_resource *mr) -> capy::task<result<std::pmr::vector<entry>>>
+{
+	if (state_ == nullptr) {
+		return read_refused<std::pmr::vector<entry>>(detail::op_context("search", request.base));
+	}
+	return detail::client_state::read<std::pmr::vector<entry>>(
+	  state_, [request = std::move(request), mr](connection &c) { return c.search(request, mr); });
+}
+
+auto client::search_stream(search_params request, std::pmr::memory_resource *mr)
+  -> capy::task<result<ldap::search_stream>>
+{
+	if (state_ == nullptr) {
+		return read_refused<ldap::search_stream>(detail::op_context("search", request.base));
+	}
+	return detail::client_state::read_stream(state_, std::move(request), mr);
+}
+
+auto client::compare(compare_params request) -> capy::task<result<bool>>
+{
+	if (state_ == nullptr) {
+		return read_refused<bool>(detail::op_context("compare", request.entry));
+	}
+	return detail::client_state::read<bool>(
+	  state_, [request = std::move(request)](connection &c) { return c.compare(request); });
+}
+
+auto client::who_am_i(extended_controls controls) -> capy::task<result<std::string>>
+{
+	if (state_ == nullptr) {
+		return read_refused<std::string>("who_am_i");
+	}
+	return detail::client_state::read<std::string>(
+	  state_, [controls = std::move(controls)](connection &c) { return c.who_am_i(controls); });
 }
 
 auto client::connections() const noexcept -> std::size_t { return state_ == nullptr ? 0 : state_->pool.size(); }

@@ -203,6 +203,7 @@ URL (`ldap://localhost`).
 |---|---|
 | `connect.cpp` | connect and simple bind |
 | `search.cpp` | search `ou=people` with a filter, print each DN and `cn` |
+| `pool.cpp` | the same search through an `ldap::client` pool (`client::search`: a shared lease, retried once on another connection) |
 | `modify.cpp` | replace a user's `mail` |
 | `add.cpp` | add the user `uid=jane` |
 | `move.cpp` | move `uid=jane` from `ou=people` to `ou=alumni` (`connection::move`; `rename` changes the RDN instead) |

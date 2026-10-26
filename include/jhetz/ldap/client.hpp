@@ -12,6 +12,7 @@
 //   auto lease = co_await pool.acquire();   // result<ldap::lease>
 //   if (!lease) ...                         // every server failed, or acquire_timeout
 //   auto people = co_await (*lease)->search({.base = ldap::dn{"ou=people,dc=example,dc=org"}});
+//   auto again = co_await pool.search({.base = ...});   // a shared lease for one search, retried once
 //
 // Leases share connections by default. A lease gives the full
 // ldap::connection API on one pooled connection, and several shared leases
@@ -192,6 +193,9 @@ enum class disconnect_reason {
 	rebound,// a lease bound it again
 	failback,// to a lower-priority server, closed to return to a higher-priority one
 	client_closed,// client::close() or the client's destructor
+	// A read forwarder's operation got busy or unavailable on it, and was
+	// retried on another connection (see client::search).
+	busy_or_unavailable,
 };
 
 // Hooks for metrics and logs; every one does nothing by default. Called on
@@ -385,6 +389,47 @@ class client
 	// client). The task does not refer to *this: the client may be moved or
 	// destroyed while it runs (destroying it fails it with not_connected).
 	auto acquire(acquire_options options = {}) -> boost::capy::task<result<lease>>;
+
+	// Read forwarders: each acquires a shared lease (acquire()), runs the
+	// connection's operation of the same name on it, and returns the lease.
+	// An operation failing with cond::connection_lost (client_errc::not_sent
+	// included) or cond::busy_or_unavailable (the result codes busy and
+	// unavailable, a Notice of Disconnection) is retried once, on another
+	// connection: the one it failed on is no longer handed out (if still
+	// open, it is retired with disconnect_reason::busy_or_unavailable and
+	// leaves the pool once its last lease returns), so the retry's acquire()
+	// takes another pooled connection or opens a new one, to whichever
+	// server failover picks. Any other error, a server result code included
+	// (no_such_object, ...), a timeout or a cancellation, is returned as is,
+	// and so is the retry's outcome. Each acquire() is bounded by
+	// acquire_timeout and fails as acquire() does (that error is returned,
+	// also for the retry's); the operations are bounded by their own
+	// timeouts (search_params::timeout, ..., else
+	// connection_options::operation_timeout). The task's stop token stops
+	// the acquire() and the operation. Read-only operations only: run
+	// updates and extended operations on a lease (they are never retried by
+	// the client; one failing with client_errc::not_sent was never seen by
+	// the server and may be retried by the caller). Like acquire(), the
+	// tasks do not refer to *this.
+	//
+	// search(): the entries reach the caller only once the search ends, so
+	// it is retried whatever it had received.
+	auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+	  -> boost::capy::task<result<std::pmr::vector<entry>>>;
+	// search_stream(): returns once the search has a first message (an
+	// entry, a reference, an intermediate response) or has ended, and is
+	// retried only if it fails (as above) before any message. The stream
+	// holds the lease until it is destroyed; its next() and next_item()
+	// errors are never retried, so a stream is never retried once its first
+	// entry may have been delivered. A search ended with a code that is not
+	// retried (no_such_object, ...) or a passed deadline is reported by
+	// next(), as for connection::search_stream(). Mind that it waits for
+	// that first message: a refreshAndPersist search with nothing to send
+	// returns at its first change.
+	auto search_stream(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+	  -> boost::capy::task<result<ldap::search_stream>>;
+	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
+	auto who_am_i(extended_controls controls = {}) -> boost::capy::task<result<std::string>>;
 
 	// Connections in the pool, open or retired and waiting for their last
 	// lease to return (not those still being opened). For tests and

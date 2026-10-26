@@ -5,25 +5,31 @@
 #include "impl.hpp"
 #include "search.hpp"
 
+#include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/this_coro.hpp>
+#include <boost/corosio/timeout.hpp>
 
 #include <concepts>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <variant>
 #include <vector>
 
 namespace capy = boost::capy;
+namespace corosio = boost::corosio;
 
 namespace jhetz::ldap {
 
 using detail::impl_ref;
 using detail::no_connection;
 using detail::op_context;
+using detail::pending_op;
 using detail::start_search;
 
 namespace {
@@ -41,9 +47,12 @@ namespace {
 			return;
 		}
 		s->conn->abandon(s->op);
+		std::shared_ptr<void> owner = std::move(s->owner);// released last
 		impl_ref keep = s->conn;// the state lives on the connection's resource
 		std::pmr::polymorphic_allocator<> alloc(keep->mr());
 		alloc.delete_object(s);
+		keep = {};
+		owner.reset();
 	}
 
 	// next() (Item = entry: entry controls and IntermediateResponses are
@@ -231,6 +240,55 @@ namespace detail {
 				found = std::move(**e);
 			}
 		}
+	}
+
+	void keep_alive(ldap::search_stream &s, std::shared_ptr<void> owner) noexcept
+	{
+		if (auto *state = connection::impl::stream_state(s)) {
+			state->owner = std::move(owner);
+		}
+	}
+
+	auto first_outcome(ldap::search_stream &stream) -> capy::task<result<std::optional<error>>>
+	{
+		using outcome = std::optional<error>;
+		auto *sp = connection::impl::stream_state(stream);
+		if (sp == nullptr) {
+			co_return outcome{ no_connection("search") };
+		}
+		search_stream::state &s = *sp;// stable: the caller holds the stream
+		pending_op &p = s.op;
+		const impl_ref conn = s.conn;
+		// As connection::impl::next_response, without taking the message.
+		while (p.queue.empty() && !p.finished) {
+			p.ready.clear();
+			std::error_code ec;
+			if (s.deadline) {
+				auto [e] = co_await corosio::timeout(p.ready.wait(), *s.deadline);
+				ec = e;
+			} else {
+				auto [e] = co_await p.ready.wait();
+				ec = e;
+			}
+			if (!ec || !p.queue.empty() || p.finished) {
+				continue;
+			}
+			if (ec == capy::cond::timeout) {
+				co_return outcome{};// next() reports it (and abandons the search)
+			}
+			co_return fail(ec, s.context);// stopped: destroying the stream abandons the search
+		}
+		if (!p.queue.empty()) {
+			const auto *done = std::get_if<search_result_done>(&p.queue.front().op);
+			if (done != nullptr && !done->result.is_success()) {
+				co_return outcome{ done->result.to_error(s.context) };
+			}
+			co_return outcome{};
+		}
+		if (p.failure) {
+			co_return outcome{ detail::with_context(*p.failure, s.context) };
+		}
+		co_return outcome{ conn->not_connected(s.context) };
 	}
 
 }// namespace detail

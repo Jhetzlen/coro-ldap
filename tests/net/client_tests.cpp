@@ -139,6 +139,8 @@ auto reason_name(ldap::disconnect_reason r) -> std::string_view
 		return "failback";
 	case ldap::disconnect_reason::client_closed:
 		return "client_closed";
+	case ldap::disconnect_reason::busy_or_unavailable:
+		return "busy_or_unavailable";
 	}
 	return "?";
 }
@@ -1538,5 +1540,189 @@ TEST_CASE("client: no observer hook after close()", "[net][client][close]")
 		REQUIRE_FALSE(a.get().has_value());
 		CHECK(f.obs.events.size() == seen);
 		CHECK(f.obs.waits.empty());
+	}
+}
+
+namespace {
+
+// Answers the setup's bind, reads one request and hangs up without an answer.
+auto lost_after_bind() -> std::vector<step>
+{
+	return { answer({ bind_resp(1) }), step{ .read_request = true, .replies = {}, .close_after = true } };
+}
+
+// Answers the setup's bind, then the search with one entry.
+auto found_after_bind() -> std::vector<step>
+{
+	return { answer({ bind_resp(1) }),
+		answer({ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "John"), done_msg(2) }) };
+}
+
+auto compare_msg(std::int32_t id, std::int32_t code) -> ldap::message
+{
+	return ldap::message{ id, ldap::compare_response{ ldap::ldap_result{ code } } };
+}
+
+auto jdoe_compare() -> ldap::compare_params
+{
+	return { .entry = ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" }, .attribute = "cn", .value = "John" };
+}
+
+}// namespace
+
+TEST_CASE("client: read forwarders retry once on another connection", "[net][client][retry]")
+{
+	SECTION("search(): the connection is lost")
+	{
+		pool_fixture f;
+		auto &s = f.server({ lost_after_bind(), found_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		auto r = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE(r.has_value());
+		REQUIRE(r->size() == 1);
+		CHECK(r->front() == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "John"));
+		REQUIRE(s.accepted() == 2);
+		CHECK(s.log(0).received.size() == 2);// the bind, the search
+		REQUIRE(s.log(1).received.size() == 2);
+		CHECK(std::holds_alternative<ldap::search_request>(s.log(1).received[1].op));
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
+				"disconnect " + text(s.url()) + " closed",
+				"connect " + text(s.url()) + " ok" });
+		CHECK(f.pool->connections() == 1);// the lease returned
+	}
+	SECTION("compare(): the server is busy")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }), answer({ compare_msg(2, 51) }) },
+		  { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) } });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
+		REQUIRE(r.has_value());
+		CHECK(*r);
+		CHECK(s.accepted() == 2);// another connection, although the first stayed open
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
+				"disconnect " + text(s.url()) + " busy_or_unavailable",
+				"connect " + text(s.url()) + " ok" });
+	}
+	SECTION("who_am_i(): the server dropped the idle connection")
+	{
+		pool_fixture f;
+		auto &s = f.server({ bind_ok(),
+		  { answer({ bind_resp(1) }),
+			answer({ ldap::message{
+			  2, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, "dn:" + std::string(admin) } } }) } });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt });
+		REQUIRE(f.acquire().has_value());// pooled, then returned
+		s.drop(0);// the client cannot tell yet
+		auto r = finish(f.ioc, f.pool->who_am_i());
+		REQUIRE(r.has_value());
+		CHECK(*r == "dn:" + std::string(admin));
+		CHECK(s.accepted() == 2);
+	}
+	SECTION("search_stream(): lost before its first message")
+	{
+		pool_fixture f;
+		auto &s = f.server({ lost_after_bind(), found_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .acquire_timeout = milliseconds(200) });
+		auto stream = finish(f.ioc, f.pool->search_stream(people_search()));
+		REQUIRE(stream.has_value());
+		CHECK(s.accepted() == 2);
+		// The stream holds its lease: an exclusive acquire() finds no
+		// connection free.
+		auto busy = f.acquire({ .exclusive = true });
+		REQUIRE_FALSE(busy.has_value());
+		CHECK(busy.error().code == ldap::cond::timeout);
+		auto entries = finish(f.ioc, drain_stream(*stream));
+		REQUIRE(entries.has_value());
+		REQUIRE(entries->size() == 1);
+		CHECK(entries->front() == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "John"));
+		stream = ldap::search_stream{};// returns the lease
+		auto mine = f.acquire({ .exclusive = true });
+		REQUIRE(mine.has_value());
+		CHECK(s.accepted() == 2);
+	}
+}
+
+TEST_CASE("client: when read forwarders do not retry", "[net][client][retry]")
+{
+	SECTION("a stream after its first entry")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }),
+							   answer({ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "John") }, true) },
+		  found_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto stream = finish(f.ioc, f.pool->search_stream(people_search()));
+		REQUIRE(stream.has_value());
+		auto first = finish(f.ioc, stream->next());
+		REQUIRE(first.has_value());
+		CHECK(first->has_value());
+		auto second = finish(f.ioc, stream->next());
+		REQUIRE_FALSE(second.has_value());
+		CHECK(second.error().code == ldap::cond::connection_lost);
+		CHECK(s.accepted() == 1);
+	}
+	SECTION("a server result code")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }),
+							   answer({ done_msg(2, 32, "", "no such entry") }),
+							   answer({ done_msg(3, 32, "", "no such entry") }) },
+		  found_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto r = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::no_such_object);
+		auto stream = finish(f.ioc, f.pool->search_stream(people_search()));
+		REQUIRE(stream.has_value());// next() reports it, as connection::search_stream()
+		auto e = finish(f.ioc, stream->next());
+		REQUIRE_FALSE(e.has_value());
+		CHECK(e.error().code == ldap::errc::no_such_object);
+		CHECK(s.accepted() == 1);
+		CHECK(s.log(0).received.size() == 3);
+	}
+	SECTION("only once")
+	{
+		pool_fixture f;
+		auto &s = f.server({ lost_after_bind(), lost_after_bind(), found_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto r = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::connection_lost);
+		CHECK(s.accepted() == 2);
+		auto stream = finish(f.ioc, f.pool->search_stream(people_search()));// the third connection
+		REQUIRE(stream.has_value());
+		CHECK(s.accepted() == 3);
+	}
+	SECTION("acquire() fails: its error, not retried")
+	{
+		pool_fixture f;
+		const auto down = refused_url(f.ioc);
+		f.make({ .servers = { down },
+		  .acquire_timeout = milliseconds(100),
+		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) },
+		  .observer = &f.obs });
+		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::busy_or_unavailable);// connection refused
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("acquire " + text(down)));
+		CHECK(retries(f.obs) == 1);
+	}
+	SECTION("stopped by the stop token")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }), step{} }, found_after_bind() });// never answers the search
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		std::stop_source stop;
+		outcome<ldap::result<ldap::search_stream>> a;
+		spawn(f.ioc, stop.get_token(), f.pool->search_stream(people_search()), a);
+		drive_until(f.ioc, [&s] { return s.accepted() == 1 && s.log(0).received.size() == 2; });
+		stop.request_stop();
+		drive_until(f.ioc, [&a] { return a.done(); });
+		REQUIRE_FALSE(a.get().has_value());
+		CHECK(a.get().error().code == ldap::cond::canceled);
+		CHECK(s.accepted() == 1);
 	}
 }

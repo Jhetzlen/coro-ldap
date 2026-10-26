@@ -8,6 +8,7 @@
 
 #include <boost/capy/task.hpp>
 
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stop_token>
@@ -35,6 +36,9 @@ struct search_stream::state
 	std::optional<error> error_{};
 	string_list references{};
 	std::pmr::vector<control> controls{};
+	// Released once the stream is destroyed, after the search is abandoned:
+	// ldap::client's lease on the connection (detail::keep_alive).
+	std::shared_ptr<void> owner{};
 
 	// The SearchResultDone already queued (received, not yet read by
 	// next()), or null.
@@ -63,6 +67,19 @@ namespace detail {
 
 	// The one entry of a base-scope search (nullopt if none came back).
 	auto read_one(impl_ref self, search_params p) -> boost::capy::task<result<std::optional<entry>>>;
+
+	// For ldap::client: `owner` lives until `s` is destroyed (after its
+	// search is abandoned). Ignored on a default-constructed or moved-from
+	// stream.
+	void keep_alive(ldap::search_stream &s, std::shared_ptr<void> owner) noexcept;
+
+	// For ldap::client: waits until the search has a message for next() or
+	// has ended, without taking anything. Returns the error next() would
+	// return before any message (a connection failure, a SearchResultDone
+	// with another code than success), else nullopt: a message is ready,
+	// the search ended with success, or its deadline passed (next() then
+	// reports the timeout). Fails only when the awaiting task is stopped.
+	auto first_outcome(ldap::search_stream &s) -> boost::capy::task<result<std::optional<error>>>;
 
 }// namespace detail
 

@@ -279,6 +279,8 @@ class connection::impl
 
 	// search_stream / paged_search constructors are private.
 	static auto make_stream(search_stream::state *s) noexcept -> ldap::search_stream;
+	// A stream's state (null for a default-constructed or moved-from one).
+	static auto stream_state(ldap::search_stream &s) noexcept -> search_stream::state * { return s.state_; }
 	static auto make_paged(paged_search::state *s) noexcept -> ldap::paged_search;
 
 	// ---------------------------------------------------------------- binds

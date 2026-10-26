@@ -661,7 +661,12 @@ itself needs only ICU.
   `client_observer` hooks (`on_connect`, `on_disconnect` with a
   `disconnect_reason`, `on_retry`, `on_probe`, `on_acquire_wait`) do
   nothing by default, and none runs after `close()`. `close()`,
-  `connections()`.
+  `connections()`. Read forwarders `search(params, mr)`,
+  `search_stream(params, mr)`, `compare(params)` and
+  `who_am_i(controls)` run the operation on a shared lease and retry it
+  once on another connection after `cond::connection_lost` or
+  `cond::busy_or_unavailable` (a stream only before its first message;
+  it holds the lease until destroyed); writes go through a lease.
 - `client_errc::not_sent` (connection.hpp, "Sent or not"): the operation
   failed before its request reached the writer (connection closed before
   it was submitted, still queued, or held behind a bind), so the server
