@@ -27,19 +27,19 @@
 // ones never take an idle connection: they share one already shared, else
 // open a new one (a slot free, a server to try) or wait (even with every
 // server excluded: then they do not fail while that idle connection
-// exists), so shared load cannot starve it. Because shared leases share, what one changes on its
-// connection the others see: a bind changes the identity of all of them,
-// start_tls() fails with operation_in_progress while another lease has an
-// operation outstanding, and unbind() or close() ends the connection for
-// everyone. So call bind, start_tls() and unbind() only on an exclusive
-// lease (acquire({.exclusive = true})): an idle or new connection that no
-// other lease shares while it is held. A connection whose bind_count() changed
-// (a bind done, failed, or still in progress) is never handed out again,
-// to anyone: it leaves the pool once its last lease returns (see "Bind
-// identity"). Mind that a failed bind leaves the connection anonymous: on
-// a shared lease the others sharing it silently drop to the anonymous
-// identity until they return it. Use a client per identity, and keep binds
-// to session_setup.
+// exists), so shared load cannot starve it. Because shared leases share,
+// what one changes on its connection the others see: a bind changes the
+// identity of all of them, start_tls() fails with operation_in_progress
+// while another lease has an operation outstanding, and unbind() or close()
+// ends the connection for everyone. So call bind, start_tls() and unbind()
+// only on an exclusive lease (acquire({.exclusive = true})): an idle or new
+// connection that no other lease shares while it is held. A connection
+// whose bind_count() changed (a bind done, failed, or still in progress) is
+// never handed out again, to anyone: it leaves the pool once its last lease
+// returns (see "Bind identity"). Mind that a failed bind leaves the
+// connection anonymous: on a shared lease the others sharing it silently
+// drop to the anonymous identity until they return it. Use a client per
+// identity, and keep binds to session_setup.
 //
 // Servers and failover: `servers` is in priority order. A new connection
 // tries each server whose backoff has ended, in that order. A server that
@@ -53,12 +53,13 @@
 // first): only then is it excused (no backoff, no on_connect). The one
 // bind let through after an authentication backoff (below) that ends
 // without the server's verdict on the password (cut short, late or not,
-// stopped, or any other error) starts that authentication backoff again,
-// with the stored error. acquire() waits for the earliest backoff to end,
-// up to acquire_timeout, and then fails with the last server's error (or
-// shares an open connection, see above). A failure that retrying cannot fix
-// (cond::invalid_input: a bad URL, a setup that cannot work) stops this
-// acquire() from trying that server again. An authentication failure
+// stopped, its acquire() task destroyed, or any other error) starts that
+// authentication backoff again, with the stored error. acquire() waits
+// for the earliest backoff to end, up to acquire_timeout, and then fails
+// with the last server's error (or shares an open connection, see above).
+// A failure that retrying cannot fix (cond::invalid_input: a bad URL, a
+// setup that cannot work) stops this acquire() from trying that server
+// again. An authentication failure
 // (cond::auth_failed, e.g. a wrong password) does more: its backoff is at
 // least backoff.auth_failure_min and at least half of d (no jitter down to
 // 0), every acquire() already running stops trying that server, and every
@@ -223,7 +224,12 @@ class client_observer
 		(void)reason;
 	}
 	// `server` failed with `failure` and will not be tried again for `delay`
-	// (its backoff).
+	// (its backoff). When the one bind let through after an authentication
+	// backoff ends without a verdict (cut short, stopped, another error) and
+	// that backoff starts again, `failure` is the stored authentication
+	// error, the reason the server backs off, not what ended the bind. Not
+	// called when that bind's acquire() task is destroyed (the backoff still
+	// starts again).
 	virtual void on_retry(const url &server, const error &failure, std::chrono::milliseconds delay)
 	{
 		(void)server;

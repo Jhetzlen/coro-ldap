@@ -25,6 +25,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -147,6 +148,7 @@ struct recorder final : ldap::client_observer
 {
 	std::vector<std::string> events{};
 	std::vector<milliseconds> waits{};
+	std::vector<std::error_code> retry_failures{};// on_retry's `failure`
 
 	void on_connect(const ldap::url &server, const ldap::result<void> &outcome) override
 	{
@@ -156,8 +158,9 @@ struct recorder final : ldap::client_observer
 	{
 		events.push_back("disconnect " + text(server) + " " + std::string(reason_name(reason)));
 	}
-	void on_retry(const ldap::url &server, const ldap::error &, milliseconds delay) override
+	void on_retry(const ldap::url &server, const ldap::error &failure, milliseconds delay) override
 	{
+		retry_failures.push_back(failure.code);
 		events.push_back("retry " + text(server) + " " + std::to_string(delay.count()) + "ms");
 	}
 	void on_probe(const ldap::url &server, const ldap::result<void> &outcome) override
@@ -1280,6 +1283,7 @@ TEST_CASE("client: an attempt that had most of acquire_timeout and did not finis
 		REQUIRE_FALSE(f.acquire().has_value());// cut short
 		CHECK(s.accepted() == 2);
 		CHECK(f.obs.events.back() == "retry " + text(s.url()) + " 200ms");
+		CHECK(f.obs.retry_failures.back() == ldap::errc::invalid_credentials);
 		auto later = f.acquire();// backing off again: fails at once, no bind
 		REQUIRE_FALSE(later.has_value());
 		CHECK(later.error().code == ldap::errc::invalid_credentials);
@@ -1315,6 +1319,7 @@ TEST_CASE("client: the bind after an authentication backoff ends without a verdi
 		CHECK(cut.error().code == ldap::errc::invalid_credentials);
 		CHECK(s.accepted() == 2);
 		CHECK(f.obs.events.back() == "retry " + text(s.url()) + " 3000ms");// no on_connect
+		CHECK(f.obs.retry_failures.back() == ldap::errc::invalid_credentials);// the stored error, not the timeout
 		auto later = f.acquire();// backing off again: fails at once, no bind
 		REQUIRE_FALSE(later.has_value());
 		CHECK(later.error().code == ldap::errc::invalid_credentials);
@@ -1339,6 +1344,7 @@ TEST_CASE("client: the bind after an authentication backoff ends without a verdi
 		REQUIRE_FALSE(a.get().has_value());
 		CHECK(a.get().error().code == ldap::cond::canceled);
 		CHECK(f.obs.events.back() == "retry " + text(s.url()) + " 200ms");// no on_connect
+		CHECK(f.obs.retry_failures.back() == ldap::errc::invalid_credentials);// the stored error, not canceled
 		auto later = f.acquire();
 		REQUIRE_FALSE(later.has_value());
 		CHECK(later.error().code == ldap::errc::invalid_credentials);
@@ -1361,6 +1367,7 @@ TEST_CASE("client: the bind after an authentication backoff ends without a verdi
 		CHECK(timed_out.error().code == ldap::errc::invalid_credentials);
 		CHECK(s.accepted() == 2);
 		CHECK(f.obs.events.back() == "retry " + text(s.url()) + " 200ms");
+		CHECK(f.obs.retry_failures.back() == ldap::errc::invalid_credentials);
 		auto later = f.acquire();
 		REQUIRE_FALSE(later.has_value());
 		CHECK(later.error().code == ldap::errc::invalid_credentials);

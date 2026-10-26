@@ -175,6 +175,21 @@ namespace detail {
 			return std::uniform_real_distribution<double>(0.0, 1.0)(rng);
 		}
 
+		// try_servers()' attempt on server `i` ended, or its task was
+		// destroyed. `settled`: server_failed() or server_succeeded()
+		// handled it (or the client closed).
+		void attempt_ended(std::size_t i, bool auth_retry, bool settled) noexcept
+		{
+			--opening;
+			if (auth_retry) {
+				servers[i].auth_retrying = false;
+				if (!settled) {
+					restart_auth_backoff(i);
+				}
+			}
+			notify();
+		}
+
 		// Server `i` failed with `e` in an attempt begun at failure episode
 		// `episode`; `auth_retry`: the one attempt let through after an
 		// authentication backoff.
@@ -195,16 +210,8 @@ namespace detail {
 			}
 			++s.episode;
 			++s.failures;
-			milliseconds delay{};
-			if (auth) {
-				// Half the cap at least, and auth_failure_min: a wrong password
-				// must not be retried soon (account lockouts).
-				constexpr double half = 0.5;
-				delay = std::max(options.backoff.auth_failure_min,
-				  backoff_delay(options.backoff, s.failures, half + (half * jitter_unit())));
-			} else {
-				delay = backoff_delay(options.backoff, s.failures, jitter_unit());
-			}
+			const milliseconds delay =
+			  auth ? auth_delay(s.failures, jitter_unit()) : backoff_delay(options.backoff, s.failures, jitter_unit());
 			if (auth_failed) {
 				++s.auth_failures;
 			}
@@ -214,8 +221,42 @@ namespace detail {
 			}
 			s.auth_backoff = auth;
 			if (auto *o = observer()) {
-				o->on_retry(s.address, e, delay);
+				// Unproven: the stored authentication error, why the server
+				// backs off; `e` (canceled, a timeout) is not the server's.
+				o->on_retry(s.address, unproven && s.last_error ? *s.last_error : e, delay);
 			}
+		}
+
+		// The backoff after an authentication failure: half the cap at least,
+		// and auth_failure_min: a wrong password must not be retried soon
+		// (account lockouts). `unit` is the jitter, in [0, 1].
+		[[nodiscard]] auto auth_delay(std::size_t failures, double unit) const noexcept -> milliseconds
+		{
+			constexpr double half = 0.5;
+			return std::max(
+			  options.backoff.auth_failure_min, backoff_delay(options.backoff, failures, half + (half * unit)));
+		}
+
+		// The one attempt let through after an authentication backoff ended
+		// unsettled: its acquire() task was destroyed (not stopped) while it
+		// ran. As server_failed() for an unproven attempt (the backoff starts
+		// again, its stored error and auth_failures unchanged), but noexcept
+		// and with no observer hook: it runs from a destructor.
+		void restart_auth_backoff(std::size_t i) noexcept
+		{
+			auto &s = servers[i];
+			if (!s.auth_backoff) {
+				return;
+			}
+			double unit = 1.0;
+			try {
+				unit = jitter_unit();
+			} catch (...) {
+				unit = 1.0;// the jitter source failed: the longest delay
+			}
+			++s.episode;
+			++s.failures;
+			s.retry_at = clock::now() + auth_delay(s.failures, unit);
 		}
 
 		void server_succeeded(std::size_t i) noexcept
@@ -626,17 +667,19 @@ namespace detail {
 				const bool auth_retry = server.auth_backoff;
 				server.auth_retrying = auth_retry;
 				++self->opening;
-				const scope_exit done{ [&self, &server, auth_retry] noexcept {
-					--self->opening;
-					if (auth_retry) {
-						server.auth_retrying = false;
-					}
-					self->notify();
+				// Set once server_failed() or server_succeeded() handled the
+				// attempt, or the client closed. An auth retry left unsettled
+				// (the task destroyed mid-attempt) restarts its backoff, else
+				// the next acquire() would bind again at once.
+				bool settled = false;
+				const scope_exit done{ [&self, i, auth_retry, &settled] noexcept {
+					self->attempt_ended(i, auth_retry, settled);
 				} };
 				const bool late = self->begun_late(deadline, now);
 				bool cut_short = false;
 				auto r = co_await open_one(self, i, deadline, cut_short);
 				const std::string context = "acquire " + server.name;
+				settled = true;// every path below handles the attempt
 				if (self->closed) {
 					if (r) {
 						r->close();

@@ -1816,7 +1816,14 @@ decision left open.
   the attempt was excused or stopped), so a slow server or a caller
   bounding `acquire()` itself cannot turn the one-bind-per-backoff limit
   into one bind per acquire (3pf.10; 3pf.8 covered only an attempt cut
-  short early).
+  short early). `on_retry` then gets the stored auth error, the reason
+  the server backs off, not the cancellation or timeout that ended the
+  bind: an observer classifying failures by cause sees an auth backoff,
+  not a server fault (3pf.12). An acquire task destroyed (not stopped)
+  during that bind restarts the backoff too, from the `try_servers`
+  scope guard (`restart_auth_backoff`: noexcept, no observer hook,
+  jitter failure taken as 1), so the next acquire does not bind again at
+  once.
 - `cond::invalid_input` (a bad URL, a setup that cannot work) excludes the
   server for the rest of that `acquire()`. `cond::auth_failed` does more,
   against a lockout storm (3pf.6): its backoff is `max(auth_failure_min =
