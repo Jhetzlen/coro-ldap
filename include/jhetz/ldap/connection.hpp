@@ -136,6 +136,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -163,6 +164,11 @@ class connection;
 namespace detail {
 	// For tests only: the message id the next request tries first.
 	void set_next_message_id(connection &c, std::int32_t id) noexcept;
+	// For ldap::client: `hook` runs once, on the connection's executor, when
+	// the connection closes (an error, close(), unbind(), its destruction).
+	// Replaces an earlier hook. Ignored on a default-constructed or
+	// moved-from connection.
+	void set_close_hook(connection &c, std::move_only_function<void() noexcept> hook) noexcept;
 	// An operation's error context: "search ou=people,dc=example,dc=org",
 	// `search ""` for the root DSE. The DN is often the server's text (an
 	// entry's DN, a referral's): sanitized and cut at 256 bytes, as an
@@ -562,6 +568,7 @@ class connection
 	friend class ldap::search_stream;
 	friend class ldap::paged_search;
 	friend void detail::set_next_message_id(connection &, std::int32_t) noexcept;
+	friend void detail::set_close_hook(connection &, std::move_only_function<void() noexcept>) noexcept;
 
 	// schema_check::on_first_use for one type (connection_options.hpp).
 	auto check_schema(std::type_index type, schema_report (*validate_type)(const server_schema &))

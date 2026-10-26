@@ -17,10 +17,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <optional>
 #include <random>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -117,6 +119,9 @@ namespace detail {
 		// The backoff follows an authentication failure (last_error): new
 		// acquires fail with it at once until retry_at.
 		bool auth_backoff = false;
+		// The one attempt let through once that backoff ended is running:
+		// other acquires fail with last_error meanwhile.
+		bool auth_retrying = false;
 	};
 
 	struct client_state
@@ -136,6 +141,10 @@ namespace detail {
 		std::vector<server_state> servers{};
 		std::vector<std::shared_ptr<pooled_connection>> pool{};
 		std::size_t opening = 0;// connection attempts in progress (they count against max_connections)
+		// Their stop sources (copies share the stop state): close() stops them.
+		std::vector<std::stop_source> attempts{};
+		// Exclusive acquires waiting: shared ones leave idle connections to them.
+		std::size_t exclusive_waiting = 0;
 		// Set on every change an acquire() may wait for (a connection pooled,
 		// returned, removed, probed; an attempt ended; close()); `version`
 		// counts them, so a waiter sees the changes made while it was busy.
@@ -172,7 +181,8 @@ namespace detail {
 		{
 			auto &s = servers[i];
 			const bool auth = e.code == cond::auth_failed;
-			if (s.episode != episode && (!auth || s.auth_backoff)) {
+			// After a success (failures reset) any failure counts.
+			if (s.failures != 0 && s.episode != episode && (!auth || s.auth_backoff)) {
 				return;// a concurrent attempt recorded this failure already
 			}
 			++s.episode;
@@ -199,6 +209,7 @@ namespace detail {
 		void server_succeeded(std::size_t i) noexcept
 		{
 			auto &s = servers[i];
+			++s.episode;// attempts begun before it do not join a later failure's episode
 			s.failures = 0;
 			s.retry_at = {};
 			s.last_error.reset();
@@ -217,9 +228,9 @@ namespace detail {
 
 		// Excludes, for one acquire(), the servers whose last attempt failed
 		// to authenticate since it began (`seen`: their counts then), or
-		// which are still backing off after such a failure; `last` becomes
-		// the stored error, which acquire() fails with if nothing else
-		// serves it.
+		// which are still backing off after such a failure, or whose one
+		// attempt after that backoff is running; `last` becomes the stored
+		// error, which acquire() fails with if nothing else serves it.
 		void exclude_auth_failures(std::vector<bool> &excluded,
 		  const std::vector<std::uint64_t> &seen,
 		  std::optional<error> &last,
@@ -228,7 +239,7 @@ namespace detail {
 			for (std::size_t i = 0; i < servers.size(); ++i) {
 				const auto &s = servers[i];
 				if (excluded[i] || !s.auth_backoff || !s.last_error
-					|| (s.auth_failures == seen[i] && s.retry_at <= now)) {
+					|| (s.auth_failures == seen[i] && s.retry_at <= now && !s.auth_retrying)) {
 					continue;
 				}
 				excluded[i] = true;
@@ -247,6 +258,22 @@ namespace detail {
 				}
 			}
 			return next;
+		}
+
+		// A new connection may be opened now: a slot is free, and a server
+		// not excluded has ended its backoff (and is not already retried
+		// after an authentication failure).
+		[[nodiscard]] auto can_open(const std::vector<bool> &excluded, clock::time_point now) const noexcept -> bool
+		{
+			if (!has_free_slot()) {
+				return false;
+			}
+			for (std::size_t i = 0; i < servers.size(); ++i) {
+				if (!excluded[i] && servers[i].retry_at <= now && !servers[i].auth_retrying) {
+					return true;
+				}
+			}
+			return false;
 		}
 
 		// acquire() gives up while every server backs off: the error of the
@@ -299,6 +326,22 @@ namespace detail {
 		}
 
 		[[nodiscard]] auto has_free_slot() const noexcept -> bool { return live() < options.max_connections; }
+
+		// When the first connection that may be handed out passes
+		// max_lifetime: acquire() waiting for a slot looks again then.
+		[[nodiscard]] auto next_expiry() const noexcept -> std::optional<clock::time_point>
+		{
+			std::optional<clock::time_point> next;
+			if (!options.max_lifetime) {
+				return next;
+			}
+			for (const auto &c : pool) {
+				if (!c->retired && (!next || c->created + *options.max_lifetime < *next)) {
+					next = c->created + *options.max_lifetime;
+				}
+			}
+			return next;
+		}
 
 		// Ends a connection that left the pool: unbound if open and no lease
 		// holds it (a detached task on the executor), else closed.
@@ -375,9 +418,13 @@ namespace detail {
 		}
 
 		// The connection to hand out (see client::acquire), or null to open
-		// a new one (or wait, if no slot is free). Call prune() first: it
-		// retires the connections that must not be handed out.
-		[[nodiscard]] auto pick(bool exclusive, clock::time_point now) const -> std::shared_ptr<pooled_connection>
+		// a new one (or wait). `openable`: a new connection may be opened
+		// now (can_open); if not, a shared acquire shares an open connection
+		// rather than wait or fail. While exclusive acquires wait, a shared
+		// one shares rather than take an idle connection. Call prune()
+		// first: it retires the connections that must not be handed out.
+		[[nodiscard]] auto pick(bool exclusive, bool openable, clock::time_point now) const
+		  -> std::shared_ptr<pooled_connection>
 		{
 			std::shared_ptr<pooled_connection> idle;
 			std::shared_ptr<pooled_connection> shared;
@@ -394,10 +441,13 @@ namespace detail {
 					shared = c;
 				}
 			}
+			if (!exclusive && shared && exclusive_waiting != 0) {
+				return shared;
+			}
 			if (idle) {
 				return idle;
 			}
-			if (exclusive || has_free_slot()) {
+			if (exclusive || openable) {
 				return nullptr;
 			}
 			return shared;
@@ -462,6 +512,11 @@ namespace detail {
 				}
 				shut_down(*c);
 			}
+			// Stop the connection attempts in progress: waiting acquires fail
+			// at once.
+			for (const auto &attempt : std::exchange(attempts, {})) {
+				attempt.request_stop();
+			}
 			// The observer need only outlive close(): no hook runs after it.
 			options.observer = nullptr;
 			notify();
@@ -487,18 +542,35 @@ namespace detail {
 			co_return std::move(*c);
 		}
 
-		// connect_and_set_up within `deadline`.
-		static auto open_one(std::shared_ptr<client_state> self, std::size_t i, net::detail::deadline_t deadline)
-		  -> capy::task<result<connection>>
+		// connect_and_set_up within `deadline`, stopped by close().
+		// `cut_short`: set if the deadline ended it (not the server's fault).
+		static auto
+		  open_one(std::shared_ptr<client_state> self, std::size_t i, net::detail::deadline_t deadline, bool &cut_short)
+			-> capy::task<result<connection>>
 		{
+			const std::stop_source stop;
+			self->attempts.push_back(stop);
+			const scope_exit unregister{ [&self, &stop] noexcept { std::erase(self->attempts, stop); } };
+			auto attempt = with_stop(stop.get_token(), connect_and_set_up(self, i));
 			if (!deadline) {
-				co_return co_await connect_and_set_up(std::move(self), i);
+				co_return co_await std::move(attempt);
 			}
-			auto [ec, r] = co_await corosio::timeout(raceable(connect_and_set_up(std::move(self), i)), *deadline);
-			if (ec) {
-				co_return fail(ec, "acquire_timeout expired");
+			auto [ec, r] = co_await corosio::timeout(raceable(std::move(attempt)), *deadline);
+			if (ec) {// the deadline, or the acquire's own stop token
+				cut_short = ec == capy::cond::timeout;
+				co_return fail(ec, cut_short ? "acquire_timeout expired" : "acquire");
 			}
 			co_return std::move(r);
+		}
+
+		// Tells waiting acquires when `c` closes, whatever closes it.
+		static void watch_close(const std::shared_ptr<client_state> &self, connection &c) noexcept
+		{
+			detail::set_close_hook(c, [state = std::weak_ptr<client_state>(self)] noexcept {
+				if (const auto s = state.lock()) {
+					s->notify();
+				}
+			});
 		}
 
 		// One pass over the servers whose backoff has ended, in priority
@@ -521,22 +593,34 @@ namespace detail {
 				if (deadline && now >= *deadline) {
 					co_return nullptr;
 				}
-				if (excluded[i] || self->servers[i].retry_at > now) {
+				auto &server = self->servers[i];
+				if (excluded[i] || server.retry_at > now || server.auth_retrying) {
 					continue;
 				}
-				const std::uint64_t episode = self->servers[i].episode;
+				const std::uint64_t episode = server.episode;
+				// After an authentication backoff, one attempt only.
+				const bool auth_retry = server.auth_backoff;
+				server.auth_retrying = auth_retry;
 				++self->opening;
-				const scope_exit done{ [&self] noexcept {
+				const scope_exit done{ [&self, &server, auth_retry] noexcept {
 					--self->opening;
+					if (auth_retry) {
+						server.auth_retrying = false;
+					}
 					self->notify();
 				} };
-				auto r = co_await open_one(self, i, deadline);
-				const std::string context = "acquire " + self->servers[i].name;
+				bool cut_short = false;
+				auto r = co_await open_one(self, i, deadline, cut_short);
+				const std::string context = "acquire " + server.name;
 				if (self->closed) {
 					if (r) {
 						r->close();
 					}
 					co_return fail(client_errc::not_connected, context + ": client closed");
+				}
+				if (!r && cut_short) {// the deadline passed: nothing more is tried
+					last = detail::with_context(std::move(r.error()), context);
+					co_return nullptr;
 				}
 				if (r) {
 					self->server_succeeded(i);
@@ -548,6 +632,7 @@ namespace detail {
 					p->last_used = p->created;
 					p->binds = p->conn.bind_count();
 					p->exclusive = exclusive;
+					watch_close(self, p->conn);
 					self->pool.push_back(p);
 					if (auto *o = self->observer()) {
 						o->on_connect(self->servers[i].address, result<void>{});
@@ -575,10 +660,12 @@ namespace detail {
 
 		// The idle check: a root DSE base search for no attributes, within
 		// probe_timeout and what is left before `deadline`. A server error
-		// is an answer too.
+		// is an answer too. `cut_short`: set if `deadline` ended it first
+		// (the outcome is unknown: no on_probe).
 		static auto probe(std::shared_ptr<client_state> self,
 		  std::shared_ptr<pooled_connection> c,
-		  net::detail::deadline_t deadline) -> capy::task<result<void>>
+		  net::detail::deadline_t deadline,
+		  bool &cut_short) -> capy::task<result<void>>
 		{
 			c->probing = true;
 			++c->leases;// so that nothing removes it meanwhile
@@ -588,12 +675,18 @@ namespace detail {
 				self->notify();
 			} };
 			milliseconds timeout = self->options.probe_timeout;
+			bool capped = false;
 			if (deadline) {
-				timeout = std::min(
-				  timeout, std::max(milliseconds(0), std::chrono::ceil<milliseconds>(*deadline - clock::now())));
+				const auto left = std::max(milliseconds(0), std::chrono::ceil<milliseconds>(*deadline - clock::now()));
+				capped = left < timeout;
+				timeout = std::min(timeout, left);
 			}
 			auto r = co_await c->conn.search(
 			  { .base = dn{}, .scope = search_scope::base_object, .attributes = { "1.1" }, .timeout = timeout });
+			if (capped && !r && r.error().code == cond::timeout) {
+				cut_short = true;
+				co_return std::unexpected(std::move(r.error()));
+			}
 			result<void> outcome;
 			if (!r && r.error().code.category() != result_category()) {
 				outcome = std::unexpected(std::move(r.error()));
@@ -616,7 +709,7 @@ namespace detail {
 			using found = std::optional<std::shared_ptr<pooled_connection>>;
 			const auto now = clock::now();
 			self->prune(now);
-			auto c = self->pick(exclusive, now);
+			auto c = self->pick(exclusive, self->can_open(excluded, now), now);
 			if (!c) {
 				co_return found{};
 			}
@@ -628,7 +721,11 @@ namespace detail {
 				if (deadline && now >= *deadline) {
 					co_return found{};// no time left to probe it: acquire() gives up
 				}
-				auto p = co_await probe(self, c, deadline);
+				bool cut_short = false;
+				auto p = co_await probe(self, c, deadline, cut_short);
+				if (cut_short) {
+					co_return found{};// no time left: acquire() gives up, the connection stays
+				}
 				if (!p && p.error().code == cond::canceled && (co_await capy::this_coro::stop_token).stop_requested()) {
 					co_return fail(capy::error::canceled, "acquire");// the connection stays
 				}
@@ -675,6 +772,30 @@ namespace detail {
 			co_return ec == capy::cond::timeout ? std::error_code{} : ec;
 		}
 
+		// The earliest of `times` (nullopt: none).
+		[[nodiscard]] static auto earliest(std::initializer_list<std::optional<clock::time_point>> times) noexcept
+		  -> std::optional<clock::time_point>
+		{
+			std::optional<clock::time_point> first;
+			for (const auto &t : times) {
+				if (t && (!first || *t < *first)) {
+					first = t;
+				}
+			}
+			return first;
+		}
+
+		// wait_for_change(), counted in exclusive_waiting for an exclusive
+		// acquire (until it resumes, or its task is destroyed).
+		static auto wait(std::shared_ptr<client_state> self, std::optional<clock::time_point> until, bool exclusive)
+		  -> capy::task<std::error_code>
+		{
+			const std::size_t counted = exclusive ? 1 : 0;
+			self->exclusive_waiting += counted;
+			const scope_exit done{ [&self, counted] noexcept { self->exclusive_waiting -= counted; } };
+			co_return co_await self->wait_for_change(until);
+		}
+
 		// Options acquire() cannot work with.
 		[[nodiscard]] auto unusable_options() const -> std::optional<error>
 		{
@@ -689,9 +810,11 @@ namespace detail {
 		}
 
 		// acquire() with a slot free: try_servers(), then, if no server
-		// connected, `wake` is when the earliest backoff ends. Fails as
-		// try_servers() does, and with the last error once every server is
-		// excluded (each failed in a way retrying cannot fix).
+		// connected, `wake` is when the earliest backoff ends (nullopt once
+		// every server is excluded: each failed in a way retrying cannot
+		// fix, and a shared acquire may share an open connection then).
+		// Fails as try_servers() does, and with the last error once every
+		// server is excluded and nothing can be shared.
 		static auto open_new(std::shared_ptr<client_state> self,
 		  net::detail::deadline_t deadline,
 		  bool exclusive,
@@ -704,7 +827,7 @@ namespace detail {
 				co_return r;
 			}
 			wake = self->next_retry(excluded);
-			if (!wake) {
+			if (!wake && (exclusive || !self->pick(false, false, clock::now()))) {
 				co_return std::unexpected(self->give_up(excluded, std::move(last), false));
 			}
 			co_return nullptr;
@@ -758,6 +881,9 @@ namespace detail {
 					if (*r) {
 						co_return lease(self, std::move(*r));
 					}
+					if (!wake) {
+						continue;// every server excluded: share an open connection
+					}
 				}
 				if (self->version != seen) {
 					continue;// something changed meanwhile: look again
@@ -766,10 +892,11 @@ namespace detail {
 					co_return std::unexpected(self->give_up(excluded, std::move(last), wake.has_value()));
 				}
 				waited = true;
-				if (deadline && (!wake || *deadline < *wake)) {
-					wake = deadline;
-				}
-				if (const auto ec = co_await self->wait_for_change(wake); ec) {
+				// Looks again at the latest when the earliest backoff ends, when
+				// a held connection passes max_lifetime (freeing its slot; one
+				// closing notifies, see watch_close), or at the deadline.
+				const auto until = earliest({ wake, self->next_expiry(), deadline });
+				if (const auto ec = co_await wait(self, until, how.exclusive); ec) {
 					co_return fail(ec, context);
 				}
 			}

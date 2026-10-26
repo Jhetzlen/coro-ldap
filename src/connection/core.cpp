@@ -158,6 +158,10 @@ void connection::impl::shut(const error &e, bool remember, bool close_transport)
 	if (reading) {
 		reader_stop.request_stop();
 	}
+	if (close_hook) {
+		auto hook = std::exchange(close_hook, nullptr);
+		hook();
+	}
 }
 
 void connection::impl::shut_out_of_memory() noexcept { shut(out_of_memory(), true); }

@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -182,6 +183,9 @@ class connection::impl
 	// Tests only (detail::set_next_message_id): the id the next request gets,
 	// to reach maxInt without sending 2^31 requests.
 	void set_next_message_id(std::int32_t id) noexcept { next_id = id; }
+
+	// detail::set_close_hook: `hook` runs once, when shut() closes the connection.
+	void set_close_hook(std::move_only_function<void() noexcept> hook) noexcept { close_hook = std::move(hook); }
 
 	// ---------------------------------------------------------------- state
 
@@ -361,6 +365,7 @@ class connection::impl
 	std::optional<std::chrono::milliseconds> default_timeout_;
 	std::optional<std::chrono::milliseconds> tls_shutdown_timeout;
 	std::int32_t next_id = 1;
+	std::move_only_function<void() noexcept> close_hook{};// set_close_hook
 	bool wrapped = false;// next_id went past maxInt: ids may be in use
 	bool open = true;
 	// unbind() sent its UnbindRequest and waits for the writer: still open,

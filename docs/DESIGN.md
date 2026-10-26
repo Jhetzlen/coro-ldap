@@ -1752,6 +1752,9 @@ decision left open.
   `acquire({.exclusive = true})`: an idle connection, else a new one
   while a slot is free, else it waits; no other acquire (shared or
   exclusive) gets that connection while the exclusive lease holds it.
+  While an exclusive acquire waits (`client_state::exclusive_waiting`),
+  shared acquires share an open connection rather than take an idle one,
+  so shared load cannot starve it (3pf.7).
   Bind, `start_tls()` and `unbind()` belong on exclusive leases. The
   header says to use one client per identity and keep binds to the
   setup; per-identity sub-pools are a later bead. (`acquire()` is not a
@@ -1766,15 +1769,26 @@ decision left open.
   1 counts as 1), reset by a success. A failure episode counts once: an
   attempt that fails after a concurrent attempt to the same server
   recorded a failure since it began (`server_state::episode`) adds
-  nothing to the backoff. `acquire()` loops: when no server
-  can be tried, it waits for the earliest backoff to end (or for a change:
-  a connection pooled, returned, removed, an attempt ending, `close()`),
-  bounded by `acquire_timeout`; when the earliest backoff ends after the
-  deadline it fails at once with the last error (or the backing-off
-  server's last error, its context marked "backing off"). With no
+  nothing to the backoff; a success bumps the episode too, and once the
+  failures are reset any failure is recorded (3pf.7). `acquire()` loops:
+  when no server can be tried, a shared acquire shares an open connection
+  if there is one (3pf.7: sharing beats failing while servers back off,
+  or after an auth failure while bound connections live), else it waits
+  for the earliest backoff to end (or for a change: a connection pooled,
+  returned, removed or closed, an attempt ending, `close()`; and, while
+  it waits for a slot, the first `max_lifetime` expiry), bounded by
+  `acquire_timeout`. A pooled connection reports its closing, however it
+  happens, through `detail::set_close_hook` (a hook the connection runs
+  once from `shut()`), so a waiter wakes when a leased connection dies.
+  When the earliest backoff ends after the deadline it fails at once with
+  the last error (or the backing-off server's last error, its context
+  marked "backing off"). With no
   `acquire_timeout` it retries until it succeeds, is stopped, or the
   client closes. Nothing starts after the deadline: no attempt, no probe,
-  and so no server is penalised for an acquire that ran out of time.
+  and so no server is penalised for an acquire that ran out of time; an
+  attempt that the deadline cuts short is not a failure either (no
+  backoff, no `on_connect`), nor is a probe it cuts short (the connection
+  stays, no `on_probe`).
 - `cond::invalid_input` (a bad URL, a setup that cannot work) excludes the
   server for the rest of that `acquire()`. `cond::auth_failed` does more,
   against a lockout storm (3pf.6): its backoff is `max(auth_failure_min =
@@ -1785,10 +1799,14 @@ decision left open.
   auth failure, excludes that server with the stored error. So
   concurrent acquires waiting for the failed attempt fail fast, and new
   ones fail at once, instead of binding again when the backoff ends; the
-  first acquire after the backoff binds once. A wrong password costs at
-  most one bind per server per backoff period, plus the attempts already
-  in flight (up to `max_connections`). That limits the rate; a password
-  that stays wrong can still lock an AD account in the end. Every server
+  first acquire after the backoff binds once, and while it runs
+  (`server_state::auth_retrying`) the others fail with the stored error.
+  A wrong password costs at most one bind per server per backoff period,
+  plus, the first time, the attempts already in flight (up to
+  `max_connections`). After the password is fixed on the server, the
+  client's acquires still fail fast until the backoff ends (at least
+  `auth_failure_min`). That limits the rate; a password that stays wrong
+  can still lock an AD account in the end. Every server
   excluded: `acquire()` fails at once with the last (or stored) error.
 - Return to the primary: an idle connection to a lower-priority server
   that is `failback_after` old, while a higher-priority server's backoff
@@ -1823,8 +1841,10 @@ decision left open.
   UnbindRequest), one still leased (only at `close()`) is closed.
   `close()` (and the destructor) closes every pooled connection, leased
   ones included (their outstanding operations fail with `not_connected`,
-  or `not_sent` for requests not yet written), fails waiting and later
-  `acquire()` calls with `not_connected`, and then drops the observer: no
+  or `not_sent` for requests not yet written), stops the attempts in
+  progress (each runs under its own stop source, `with_stop`), fails
+  waiting and later `acquire()` calls with `not_connected`, and then
+  drops the observer: no
   hook runs after `close()`, so the observer need only outlive it (a hook
   may itself call `close()`; acquire re-checks after each hook). Leases
   may outlive the client (they hold the shared state), but their

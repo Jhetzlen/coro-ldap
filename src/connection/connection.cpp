@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory_resource>
 #include <new>
 #include <optional>
@@ -36,6 +37,14 @@ using detail::no_connection;
 
 // NOLINTNEXTLINE(misc-const-correctness): it changes the connection's state, through impl_
 void detail::set_next_message_id(connection &c, std::int32_t id) noexcept { c.impl_->set_next_message_id(id); }
+
+// NOLINTNEXTLINE(misc-const-correctness): it changes the connection's state, through impl_
+void detail::set_close_hook(connection &c, std::move_only_function<void() noexcept> hook) noexcept
+{
+	if (c.impl_ != nullptr) {
+		c.impl_->set_close_hook(std::move(hook));
+	}
+}
 
 connection::connection(corosio::io_context &ioc,
   net::transport t,

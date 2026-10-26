@@ -20,14 +20,18 @@
 // acquire() hands out an idle connection (no lease) first, then opens a new
 // one while fewer than max_connections exist, and only then shares the
 // connection with the fewest leases: N connections give N-way isolation (a
-// slow paged search, a long SASL exchange) before any sharing. Because
-// shared leases share, what one changes on its connection the others see:
-// a bind changes the identity of all of them, start_tls() fails with
-// operation_in_progress while another lease has an operation outstanding,
-// and unbind() or close() ends the connection for everyone. So call bind,
-// start_tls() and unbind() only on an exclusive lease
-// (acquire({.exclusive = true})): an idle or new connection that no other
-// lease shares while it is held. A connection whose bind_count() changed
+// slow paged search, a long SASL exchange) before any sharing. It also
+// shares one, rather than wait or fail, when no new connection may be opened
+// now (every server backing off, or excluded for this acquire(), e.g. after
+// an authentication failure). While an exclusive acquire() waits, shared
+// ones share an open connection rather than take an idle one, so shared load
+// cannot starve it. Because shared leases share, what one changes on its
+// connection the others see: a bind changes the identity of all of them,
+// start_tls() fails with operation_in_progress while another lease has an
+// operation outstanding, and unbind() or close() ends the connection for
+// everyone. So call bind, start_tls() and unbind() only on an exclusive
+// lease (acquire({.exclusive = true})): an idle or new connection that no
+// other lease shares while it is held. A connection whose bind_count() changed
 // (a bind done, failed, or still in progress) is never handed out again,
 // to anyone: it leaves the pool once its last lease returns (see "Bind
 // identity"). Mind that a failed bind leaves the connection anonymous: on
@@ -41,33 +45,44 @@
 // backoff delay has passed: full jitter, uniform in [0, d] with d =
 // min(backoff.max, backoff.initial * backoff.multiplier^(failures - 1)),
 // reset by a success. Concurrent attempts failing together count as one
-// failure. acquire() waits for the earliest backoff to end, up to
-// acquire_timeout, and then fails with the last server's error. A failure
-// that retrying cannot fix (cond::invalid_input: a bad URL, a setup that
-// cannot work) stops this acquire() from trying that server again. An
-// authentication failure (cond::auth_failed, e.g. a wrong password) does
-// more: its backoff is at least backoff.auth_failure_min and at least half
-// of d (no jitter down to 0), every acquire() already running stops trying
-// that server, and every acquire() started during that backoff fails at
-// once with the stored error (unless another server or a pooled connection
-// serves it) instead of binding again. So a wrong password costs at most
-// one bind per server per backoff period (plus the attempts already in
-// flight, up to max_connections), not a retry storm; this limits the rate
-// of failed binds, it cannot keep a password that stays wrong from locking
-// an account (Active Directory) in the end. A connection to a
-// lower-priority server that is idle, at least failback_after old, while a
-// higher-priority server this acquire() may try has ended its backoff, is
-// closed when acquire() finds it, so the next connection goes back to the
-// primary (failing over again if the primary still fails).
+// failure. An attempt cut short by acquire_timeout is not a failure (no
+// backoff, no on_connect). acquire() waits for the earliest backoff to end,
+// up to acquire_timeout, and then fails with the last server's error (or
+// shares an open connection, see above). A failure that retrying cannot fix
+// (cond::invalid_input: a bad URL, a setup that cannot work) stops this
+// acquire() from trying that server again. An authentication failure
+// (cond::auth_failed, e.g. a wrong password) does more: its backoff is at
+// least backoff.auth_failure_min and at least half of d (no jitter down to
+// 0), every acquire() already running stops trying that server, and every
+// acquire() started during that backoff fails at once with the stored error
+// (unless another server or a pooled connection serves it) instead of
+// binding again. Once the backoff ends, one acquire() binds again; the
+// others fail with the stored error while it runs. So a wrong password costs
+// at most one bind per server per backoff period (plus, the first time, the
+// attempts already in flight, up to max_connections), not a retry storm;
+// this limits the rate of failed binds, it cannot keep a password that stays
+// wrong from locking an account (Active Directory) in the end. Mind that it
+// works both ways: once the service password is fixed on the server, this
+// client's acquire() still fails at once until the backoff ends, at least
+// auth_failure_min after the last failed bind, unless a pooled connection
+// serves it. A connection to a lower-priority server that is idle, at least
+// failback_after old, while a higher-priority server this acquire() may try
+// has ended its backoff, is closed when acquire() finds it, so the next
+// connection goes back to the primary (failing over again if the primary
+// still fails).
 //
 // Health: there is no background timer (it would keep io_context::run()
 // from returning). acquire() drops pooled connections found closed, and
 // probes an idle connection unused for longer than idle_check with a root
 // DSE base search for the attribute "1.1" (no attributes) before handing it
 // out, within probe_timeout: one that does not answer (a server error is an
-// answer) is closed and replaced. A connection older than max_lifetime is
-// no longer handed out (acquire() opens a replacement instead), and leaves
-// the pool once its last lease returns.
+// answer) is closed and replaced. A probe cut short by acquire_timeout (what
+// is left of it being shorter than probe_timeout) proves nothing: the
+// connection stays, and acquire() fails with the timeout. A connection
+// older than max_lifetime is no longer handed out (acquire() opens a
+// replacement instead), and leaves the pool once its last lease returns.
+// An acquire() waiting for a slot looks again when a leased connection
+// closes or passes max_lifetime.
 //
 // Bind identity: session_setup runs on every new connection, after connect
 // and StartTLS (connection_options::start_tls). The client records the
@@ -83,9 +98,10 @@
 // unbind() on the executor) if no lease holds it, else closed. close()
 // closes every pooled connection, leased ones included (their outstanding
 // operations fail with not_connected, or not_sent for requests not written
-// yet, see connection.hpp "Sent or not"), and fails waiting and later
-// acquire() calls with not_connected; the destructor calls it. No observer
-// hook runs once close() has returned.
+// yet, see connection.hpp "Sent or not"), stops the connection attempts in
+// progress (connect, StartTLS, session_setup), and fails waiting and later
+// acquire() calls with not_connected at once; the destructor calls it. No
+// observer hook runs once close() has returned.
 //
 // Threading and lifetime: like connection, a client belongs to the executor
 // of its io_context; acquire() and the leases (their connections, their
@@ -183,7 +199,9 @@ class client_observer
 	virtual ~client_observer() = default;
 
 	// A connection attempt to `server` ended: connected and set up, or the
-	// error (of connect, StartTLS or session_setup).
+	// error (of connect, StartTLS or session_setup). Not called for an
+	// attempt cut short by acquire_timeout or stopped (close(), the
+	// acquire's stop token).
 	virtual void on_connect(const url &server, const result<void> &outcome)
 	{
 		(void)server;
@@ -204,6 +222,7 @@ class client_observer
 		(void)delay;
 	}
 	// The idle check of a connection to `server` ended: answered, or not.
+	// Not called for one cut short by acquire_timeout.
 	virtual void on_probe(const url &server, const result<void> &outcome)
 	{
 		(void)server;
@@ -338,12 +357,12 @@ class client
 	[[nodiscard]] auto executor() const noexcept -> executor_type;
 
 	// A lease on a pooled connection: an idle one (probed first if unused for
-	// longer than idle_check), else a new one while fewer than
-	// max_connections exist, else (unless `options.exclusive`) the open one
-	// with the fewest leases (see the header comment). Waits at most
-	// acquire_timeout. Fails with the last server's error (its context names
-	// the server: "acquire ldap://ldap1.example.org: ..."), the stored error
-	// of a server backing off after an authentication failure,
+	// longer than idle_check), else a new one while fewer than max_connections
+	// exist and a server may be tried now, else (unless `options.exclusive`)
+	// the open one with the fewest leases (see the header comment). Waits at
+	// most acquire_timeout. Fails with the last server's error (its context
+	// names the server: "acquire ldap://ldap1.example.org: ..."), the stored
+	// error of a server backing off after an authentication failure,
 	// capy::error::timeout when it waited for other acquires that long,
 	// capy::error::canceled if the task's stop token is set, and
 	// client_errc::not_connected once close() was called (or on a moved-from
@@ -356,8 +375,9 @@ class client
 	// diagnostics.
 	[[nodiscard]] auto connections() const noexcept -> std::size_t;
 
-	// Closes every pooled connection and fails later and waiting acquire()
-	// calls with not_connected. Idempotent.
+	// Closes every pooled connection, stops the connection attempts in
+	// progress, and fails later and waiting acquire() calls with
+	// not_connected. Idempotent.
 	void close() noexcept;
 
   private:
