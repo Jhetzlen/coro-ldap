@@ -3,6 +3,7 @@
 // script on the n-th connection (mock_ldap.hpp's serve_script), then stops
 // accepting, so a later connect is refused. Backoff runs on short real
 // delays, with the jitter fixed by detail::set_jitter.
+#include "../counting_resource.hpp"
 #include "jhetz/ldap/client.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -23,6 +24,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <system_error>
@@ -731,6 +733,45 @@ TEST_CASE("client: a lease outlives its client", "[net][client]")
 	CHECK(static_cast<bool>(kept));
 	CHECK_FALSE(kept->is_open());
 	CHECK(text(kept.server()) == text(s.url()));
+}
+
+namespace {
+
+// A client on `ioc` with one pooled idle connection, made through
+// io_context::run(), which leaves the context stopped as a program's run()
+// does. The connection's peer is `listener`'s backlog: nothing runs on the
+// server side.
+auto pool_after_run(corosio::io_context &ioc, const corosio::tcp_acceptor &listener, std::pmr::memory_resource *mr)
+  -> std::optional<ldap::client>
+{
+	auto u = ldap::url::parse("ldap://127.0.0.1:" + std::to_string(listener.local_endpoint().port()));
+	REQUIRE(u.has_value());
+	std::optional<ldap::client> pool;
+	pool.emplace(ioc, ldap::client_options{ .servers = { *u } }, mr);
+	outcome<ldap::result<ldap::lease>> a;
+	spawn(ioc, pool->acquire(), a);
+	ioc.run();// no restart()
+	REQUIRE(a.get().has_value());
+	REQUIRE(ioc.stopped());
+	return pool;// `a`'s lease returns the connection
+}
+
+}// namespace
+
+TEST_CASE("client: destroyed after io_context::run() returned", "[net][client][close]")
+{
+	// It closes its idle connection, as a connection's destructor does: a
+	// detached unbind() would never run, and examples/pool.cpp with the
+	// client in main() then leaks its socket (LeakSanitizer).
+	counting_resource mr;
+	corosio::io_context ioc;
+	const corosio::tcp_acceptor listener(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8);
+	auto pool = pool_after_run(ioc, listener, &mr);
+	REQUIRE(pool->connections() == 1);
+	pool.reset();
+	CHECK(mr.outstanding() == 0);// freed now, not by a task
+	ioc.restart();
+	CHECK(ioc.poll() == 0);// no work left on the io_context
 }
 
 TEST_CASE("client: a connection whose identity changed is not shared", "[net][client][identity]")

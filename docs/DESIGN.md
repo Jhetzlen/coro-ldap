@@ -1885,7 +1885,16 @@ decision left open.
   may outlive the client (they hold the shared state), but their
   connections are closed with it; they return to nothing. The detached
   unbind tasks may outlive the client and its leases: the memory
-  resource must outlive the io_context's pending work.
+  resource must outlive the io_context's pending work. Once the
+  io_context is stopped (`io_context::stopped()`: its `run()` returned,
+  no `restart()` since), a connection leaving the pool is closed, not
+  unbound (3pf.13): a task posted then would never run, and a client
+  destroyed after `run()` returned (in `main()`, say) leaked it, its
+  connection and socket (LeakSanitizer, `examples/pool.cpp` with the
+  client in `main()`). Closed is what a `connection` or a
+  `sync::connection` does when destroyed: no UnbindRequest, nothing left
+  on the io_context. Unbinding cleanly at `close()` still works while
+  the executor runs (from a task, as `examples/pool.cpp` does).
 - `client_observer`: virtual hooks, no-ops by default, called
   synchronously on the executor: `on_connect(server, outcome)` after each
   attempt, `on_retry(server, error, delay)` when a server enters backoff,

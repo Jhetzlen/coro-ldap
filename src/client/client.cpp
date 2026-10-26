@@ -408,13 +408,16 @@ namespace detail {
 		}
 
 		// Ends a connection that left the pool: unbound if open and no lease
-		// holds it (a detached task on the executor), else closed.
+		// holds it (a detached task on the executor), else closed. Closed
+		// too once the io_context is stopped (its run() returned): a task
+		// posted then would never run, and its frame and connection would
+		// leak; as a connection's destructor, nothing is sent.
 		void shut_down(pooled_connection &c) const noexcept
 		{
 			if (!c.conn.is_open()) {
 				return;
 			}
-			if (c.leases != 0) {
+			if (c.leases != 0 || ioc->stopped()) {
 				c.conn.close();
 				return;
 			}

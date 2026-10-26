@@ -106,7 +106,11 @@
 // replacement at once, so the pool may briefly hold more connections.
 //
 // Closing: a connection leaving the pool while open is unbound (a detached
-// unbind() on the executor) if no lease holds it, else closed. close()
+// unbind() on the executor) if no lease holds it, else closed. Once the
+// io_context is stopped (io_context::stopped(): its run() returned, as for
+// a client destroyed at the end of main()), it is closed, as a connection's
+// destructor does: a task posted then would never run. So call close() (or
+// destroy the client) from a task on the executor to unbind cleanly. close()
 // closes every pooled connection, leased ones included (their outstanding
 // operations fail with not_connected, or not_sent for requests not written
 // yet, see connection.hpp "Sent or not"), stops the connection attempts in
