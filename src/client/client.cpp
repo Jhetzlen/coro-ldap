@@ -440,7 +440,9 @@ namespace detail {
 		// a new one (or wait). `openable`: a new connection may be opened
 		// now (can_open); if not, a shared acquire shares an open connection
 		// rather than wait or fail. While exclusive acquires wait, a shared
-		// one shares rather than take an idle connection. Call prune()
+		// one never takes an idle connection: it shares one already shared,
+		// else gets null (it opens a new connection if it may, else waits).
+		// Call prune()
 		// first: it retires the connections that must not be handed out.
 		[[nodiscard]] auto pick(bool exclusive, bool openable, clock::time_point now) const
 		  -> std::shared_ptr<pooled_connection>
@@ -460,8 +462,8 @@ namespace detail {
 					shared = c;
 				}
 			}
-			if (!exclusive && shared && exclusive_waiting != 0) {
-				return shared;
+			if (!exclusive && exclusive_waiting != 0) {
+				return shared;// the idle one is left to the waiter
 			}
 			if (idle) {
 				return idle;

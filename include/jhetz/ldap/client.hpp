@@ -24,7 +24,8 @@
 // shares one, rather than wait or fail, when no new connection may be opened
 // now (every server backing off, or excluded for this acquire(), e.g. after
 // an authentication failure). While an exclusive acquire() waits, shared
-// ones share an open connection rather than take an idle one, so shared load
+// ones never take an idle connection: they share one already shared, else
+// open a new one (a slot free, a server to try) or wait, so shared load
 // cannot starve it. Because shared leases share, what one changes on its
 // connection the others see: a bind changes the identity of all of them,
 // start_tls() fails with operation_in_progress while another lease has an

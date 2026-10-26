@@ -1753,8 +1753,10 @@ decision left open.
   while a slot is free, else it waits; no other acquire (shared or
   exclusive) gets that connection while the exclusive lease holds it.
   While an exclusive acquire waits (`client_state::exclusive_waiting`),
-  shared acquires share an open connection rather than take an idle one,
-  so shared load cannot starve it (3pf.7).
+  shared acquires never take an idle connection: they share one already
+  shared, else open a new one (a slot free, a server to try) or wait, so
+  shared load cannot starve it (3pf.7; 3pf.9 for the case with no other
+  shared connection, e.g. `max_connections = 1`).
   Bind, `start_tls()` and `unbind()` belong on exclusive leases. The
   header says to use one client per identity and keep binds to the
   setup; per-identity sub-pools are a later bead. (`acquire()` is not a

@@ -1051,6 +1051,30 @@ TEST_CASE("client: exclusive leases", "[net][client][exclusive]")
 		CHECK(&e.get()->get() == freed);
 		CHECK(s.accepted() == 2);
 	}
+	SECTION("a waiting exclusive acquire gets the only connection")
+	{
+		pool_fixture f;
+		auto &s = f.server({ bind_ok() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .acquire_timeout = milliseconds(5'000) });
+		auto a = f.acquire();
+		REQUIRE(a.has_value());
+		outcome<ldap::result<ldap::lease>> e;
+		spawn(f.ioc, f.pool->acquire({ .exclusive = true }), e);
+		finish(f.ioc, sleep_for(milliseconds(20)));
+		CHECK_FALSE(e.done());// waits: the only connection is shared
+		const ldap::connection *conn = &a->get();
+		outcome<ldap::result<ldap::lease>> b;
+		spawn(f.ioc, release_then_acquire(*f.pool, *a), b);// before the waiter resumes
+		drive_until(f.ioc, [&e] { return e.done(); });
+		REQUIRE(e.get().has_value());
+		CHECK(&e.get()->get() == conn);
+		CHECK_FALSE(b.done());// left the idle connection to the waiter, waits for it
+		e.get()->release();
+		drive_until(f.ioc, [&b] { return b.done(); });
+		REQUIRE(b.get().has_value());
+		CHECK(&b.get()->get() == conn);
+		CHECK(s.accepted() == 1);
+	}
 }
 
 TEST_CASE("client: max_lifetime under load", "[net][client][pool]")
