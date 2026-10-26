@@ -49,9 +49,11 @@
 // failure. An attempt cut short by acquire_timeout is a failure too (a
 // hung server must not block failover) unless it began with less than half
 // of acquire_timeout left (the acquire waited, or tried other servers,
-// first): only then is it excused (no backoff, no on_connect). Cut short
-// while retrying a server after an authentication failure (below), it
-// starts that authentication backoff again. acquire() waits for the earliest backoff to end,
+// first): only then is it excused (no backoff, no on_connect). The one
+// bind let through after an authentication backoff (below) that ends
+// without the server's verdict on the password (cut short, late or not,
+// stopped, or any other error) starts that authentication backoff again,
+// with the stored error. acquire() waits for the earliest backoff to end,
 // up to acquire_timeout, and then fails with the last server's error (or
 // shares an open connection, see above). A failure that retrying cannot fix
 // (cond::invalid_input: a bad URL, a setup that cannot work) stops this

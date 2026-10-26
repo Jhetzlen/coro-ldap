@@ -1801,11 +1801,17 @@ decision left open.
   `acquire_timeout < probe_timeout` was always cut short, so a dead idle
   connection was never replaced. The half is scale-free and leans to
   penalising: with `acquire_timeout` below the connect or operation
-  timeouts, the first attempt of an acquire always counts. Cut short while
-  retrying after an authentication backoff, an attempt proves nothing
-  about the credentials: that backoff starts again (auth delay, stored
-  auth error kept, `auth_failures` unchanged), so a slow server cannot
-  turn the one-bind-per-backoff limit into one bind per acquire.
+  timeouts, the first attempt of an acquire always counts. The one attempt
+  let through after an authentication backoff (`auth_retry` in
+  `try_servers`) that ends without the server's verdict on the
+  credentials proves nothing about them: cut short (late or not), stopped
+  by the acquire's stop token, or failed otherwise (`operation_timeout`
+  on the bind, a reset). That backoff then starts again (auth delay,
+  stored auth error kept, `auth_failures` unchanged; no `on_connect` when
+  the attempt was excused or stopped), so a slow server or a caller
+  bounding `acquire()` itself cannot turn the one-bind-per-backoff limit
+  into one bind per acquire (3pf.10; 3pf.8 covered only an attempt cut
+  short early).
 - `cond::invalid_input` (a bad URL, a setup that cannot work) excludes the
   server for the rest of that `acquire()`. `cond::auth_failed` does more,
   against a lockout storm (3pf.6): its backoff is `max(auth_failure_min =

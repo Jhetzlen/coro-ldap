@@ -1249,6 +1249,87 @@ TEST_CASE("client: an attempt that had most of acquire_timeout and did not finis
 	}
 }
 
+TEST_CASE("client: the bind after an authentication backoff ends without a verdict: that backoff starts again",
+  "[net][client][auth]")
+{
+	SECTION("begun late and cut short by acquire_timeout")
+	{
+		pool_fixture f;
+		auto &hung = f.server({ { step{} }, { step{} } });// reads the bind, never answers
+		auto &s = f.server({ refuse(), { step{} }, refuse() });// then slow to answer binds
+		f.make({ .servers = { hung.url(), s.url() },
+		  .connection = { .operation_timeout = milliseconds(250) },
+		  .setup = admin_setup(),
+		  .acquire_timeout = milliseconds(400),
+		  .backoff = { .initial = milliseconds(300),
+			.max = milliseconds(60'000),
+			.multiplier = 10.0,
+			.auth_failure_min = milliseconds(300) },
+		  .observer = &f.obs });
+		auto refused = f.acquire();// `hung` times out, then `s` refuses the password
+		REQUIRE_FALSE(refused.has_value());
+		CHECK(refused.error().code == ldap::errc::invalid_credentials);
+		finish(f.ioc, sleep_for(milliseconds(350)));// both backoffs end
+		// `hung` times out again (backing off 3 s now), so the bind to `s`
+		// begins with about 150 ms (under half) left and is cut short.
+		auto cut = f.acquire();// fails with the stored error: `s` backs off again
+		REQUIRE_FALSE(cut.has_value());
+		CHECK(cut.error().code == ldap::errc::invalid_credentials);
+		CHECK(s.accepted() == 2);
+		CHECK(f.obs.events.back() == "retry " + text(s.url()) + " 3000ms");// no on_connect
+		auto later = f.acquire();// backing off again: fails at once, no bind
+		REQUIRE_FALSE(later.has_value());
+		CHECK(later.error().code == ldap::errc::invalid_credentials);
+		CHECK(s.accepted() == 2);
+	}
+	SECTION("the acquire stopped by its stop token")
+	{
+		pool_fixture f;
+		auto &s = f.server({ refuse(), { step{} }, refuse() });
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .backoff = { .initial = milliseconds(200), .max = milliseconds(200), .auth_failure_min = milliseconds(200) },
+		  .observer = &f.obs });
+		REQUIRE_FALSE(f.acquire().has_value());
+		finish(f.ioc, sleep_for(milliseconds(250)));// the backoff ends: one bind is let through
+		std::stop_source stop;
+		outcome<ldap::result<ldap::lease>> a;
+		spawn(f.ioc, stop.get_token(), f.pool->acquire(), a);
+		drive_until(f.ioc, [&s] { return s.accepted() == 2 && !s.log(1).received.empty(); });
+		stop.request_stop();
+		drive_until(f.ioc, [&a] { return a.done(); });
+		REQUIRE_FALSE(a.get().has_value());
+		CHECK(a.get().error().code == ldap::cond::canceled);
+		CHECK(f.obs.events.back() == "retry " + text(s.url()) + " 200ms");// no on_connect
+		auto later = f.acquire();
+		REQUIRE_FALSE(later.has_value());
+		CHECK(later.error().code == ldap::errc::invalid_credentials);
+		CHECK(s.accepted() == 2);
+	}
+	SECTION("another error: operation_timeout ends the bind")
+	{
+		pool_fixture f;
+		auto &s = f.server({ refuse(), { step{} }, refuse() });
+		f.make({ .servers = { s.url() },
+		  .connection = { .operation_timeout = milliseconds(50) },
+		  .setup = admin_setup(),
+		  .acquire_timeout = milliseconds(5'000),
+		  .backoff = { .initial = milliseconds(200), .max = milliseconds(200), .auth_failure_min = milliseconds(200) },
+		  .observer = &f.obs });
+		REQUIRE_FALSE(f.acquire().has_value());
+		finish(f.ioc, sleep_for(milliseconds(250)));
+		auto timed_out = f.acquire();// not the ordinary backoff: no bind again within this acquire
+		REQUIRE_FALSE(timed_out.has_value());
+		CHECK(timed_out.error().code == ldap::errc::invalid_credentials);
+		CHECK(s.accepted() == 2);
+		CHECK(f.obs.events.back() == "retry " + text(s.url()) + " 200ms");
+		auto later = f.acquire();
+		REQUIRE_FALSE(later.has_value());
+		CHECK(later.error().code == ldap::errc::invalid_credentials);
+		CHECK(s.accepted() == 2);
+	}
+}
+
 TEST_CASE("client: acquire() stopped by its stop token", "[net][client][cancel]")
 {
 	SECTION("while connecting")

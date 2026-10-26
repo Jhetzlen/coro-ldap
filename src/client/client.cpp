@@ -176,15 +176,18 @@ namespace detail {
 		}
 
 		// Server `i` failed with `e` in an attempt begun at failure episode
-		// `episode`; `cut_short`: acquire_timeout ended it (see begun_late).
-		void server_failed(std::size_t i, const error &e, std::uint64_t episode, bool cut_short)
+		// `episode`; `auth_retry`: the one attempt let through after an
+		// authentication backoff.
+		void server_failed(std::size_t i, const error &e, std::uint64_t episode, bool auth_retry)
 		{
 			auto &s = servers[i];
 			const bool auth_failed = e.code == cond::auth_failed;
-			// The bind let through after an authentication backoff, cut
-			// short: it proves nothing about the credentials, so that backoff
-			// starts again, with its stored error.
-			const bool unproven = cut_short && s.auth_backoff;
+			// That attempt ended without the server's verdict on the
+			// credentials (cut short, stopped, another error): it proves
+			// nothing, so the authentication backoff starts again, with its
+			// stored error and auth_failures unchanged. At most one bind per
+			// backoff period, however the bind ends.
+			const bool unproven = auth_retry && !auth_failed && s.auth_backoff;
 			const bool auth = auth_failed || unproven;
 			// After a success (failures reset) any failure counts.
 			if (s.failures != 0 && s.episode != episode && (!auth || s.auth_backoff)) {
@@ -642,6 +645,9 @@ namespace detail {
 				}
 				if (!r && cut_short && late) {// excused; the deadline passed: nothing more is tried
 					last = detail::with_context(std::move(r.error()), context);
+					if (auth_retry) {// no on_connect, but the auth backoff starts again
+						self->server_failed(i, *last, episode, true);
+					}
 					co_return nullptr;
 				}
 				if (r) {
@@ -666,12 +672,15 @@ namespace detail {
 				}
 				error e = detail::with_context(std::move(r.error()), context);
 				if (e.code == cond::canceled && (co_await capy::this_coro::stop_token).stop_requested()) {
+					if (auth_retry) {// no on_connect, but the auth backoff starts again
+						self->server_failed(i, e, episode, true);
+					}
 					co_return std::unexpected(std::move(e));// not the server's fault
 				}
 				if (auto *o = self->observer()) {
 					o->on_connect(self->servers[i].address, std::unexpected(e));
 				}
-				self->server_failed(i, e, episode, cut_short);
+				self->server_failed(i, e, episode, auth_retry);
 				if (e.code == cond::auth_failed || e.code == cond::invalid_input) {
 					excluded[i] = true;// retrying cannot help: not again in this acquire()
 				}
