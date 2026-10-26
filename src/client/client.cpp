@@ -176,11 +176,16 @@ namespace detail {
 		}
 
 		// Server `i` failed with `e` in an attempt begun at failure episode
-		// `episode`.
-		void server_failed(std::size_t i, const error &e, std::uint64_t episode)
+		// `episode`; `cut_short`: acquire_timeout ended it (see begun_late).
+		void server_failed(std::size_t i, const error &e, std::uint64_t episode, bool cut_short)
 		{
 			auto &s = servers[i];
-			const bool auth = e.code == cond::auth_failed;
+			const bool auth_failed = e.code == cond::auth_failed;
+			// The bind let through after an authentication backoff, cut
+			// short: it proves nothing about the credentials, so that backoff
+			// starts again, with its stored error.
+			const bool unproven = cut_short && s.auth_backoff;
+			const bool auth = auth_failed || unproven;
 			// After a success (failures reset) any failure counts.
 			if (s.failures != 0 && s.episode != episode && (!auth || s.auth_backoff)) {
 				return;// a concurrent attempt recorded this failure already
@@ -194,12 +199,16 @@ namespace detail {
 				constexpr double half = 0.5;
 				delay = std::max(options.backoff.auth_failure_min,
 				  backoff_delay(options.backoff, s.failures, half + (half * jitter_unit())));
-				++s.auth_failures;
 			} else {
 				delay = backoff_delay(options.backoff, s.failures, jitter_unit());
 			}
+			if (auth_failed) {
+				++s.auth_failures;
+			}
 			s.retry_at = clock::now() + delay;
-			s.last_error = e;
+			if (!unproven) {
+				s.last_error = e;
+			}
 			s.auth_backoff = auth;
 			if (auto *o = observer()) {
 				o->on_retry(s.address, e, delay);
@@ -292,6 +301,16 @@ namespace detail {
 			error e = *first->last_error;
 			e.context += " (backing off: acquire_timeout ends first)";
 			return e;
+		}
+
+		// An attempt or probe that acquire_timeout (`deadline`) cuts short
+		// is excused, not counted as the server's or the connection's
+		// failure, only if it began (at `begun`) with less than half of
+		// acquire_timeout left: the acquire spent the rest waiting, or on
+		// other servers. One that had more and still did not finish fails.
+		[[nodiscard]] auto begun_late(net::detail::deadline_t deadline, clock::time_point begun) const noexcept -> bool
+		{
+			return deadline && options.acquire_timeout && (*deadline - begun) * 2 < *options.acquire_timeout;
 		}
 
 		// ---------------------------------------------------------------- pool
@@ -543,7 +562,7 @@ namespace detail {
 		}
 
 		// connect_and_set_up within `deadline`, stopped by close().
-		// `cut_short`: set if the deadline ended it (not the server's fault).
+		// `cut_short`: set if the deadline ended it.
 		static auto
 		  open_one(std::shared_ptr<client_state> self, std::size_t i, net::detail::deadline_t deadline, bool &cut_short)
 			-> capy::task<result<connection>>
@@ -609,6 +628,7 @@ namespace detail {
 					}
 					self->notify();
 				} };
+				const bool late = self->begun_late(deadline, now);
 				bool cut_short = false;
 				auto r = co_await open_one(self, i, deadline, cut_short);
 				const std::string context = "acquire " + server.name;
@@ -618,7 +638,7 @@ namespace detail {
 					}
 					co_return fail(client_errc::not_connected, context + ": client closed");
 				}
-				if (!r && cut_short) {// the deadline passed: nothing more is tried
+				if (!r && cut_short && late) {// excused; the deadline passed: nothing more is tried
 					last = detail::with_context(std::move(r.error()), context);
 					co_return nullptr;
 				}
@@ -649,7 +669,7 @@ namespace detail {
 				if (auto *o = self->observer()) {
 					o->on_connect(self->servers[i].address, std::unexpected(e));
 				}
-				self->server_failed(i, e, episode);
+				self->server_failed(i, e, episode, cut_short);
 				if (e.code == cond::auth_failed || e.code == cond::invalid_input) {
 					excluded[i] = true;// retrying cannot help: not again in this acquire()
 				}
@@ -661,7 +681,8 @@ namespace detail {
 		// The idle check: a root DSE base search for no attributes, within
 		// probe_timeout and what is left before `deadline`. A server error
 		// is an answer too. `cut_short`: set if `deadline` ended it first
-		// (the outcome is unknown: no on_probe).
+		// and it is excused (begun_late; the outcome is unknown: no
+		// on_probe); not excused, it fails.
 		static auto probe(std::shared_ptr<client_state> self,
 		  std::shared_ptr<pooled_connection> c,
 		  net::detail::deadline_t deadline,
@@ -676,14 +697,15 @@ namespace detail {
 			} };
 			milliseconds timeout = self->options.probe_timeout;
 			bool capped = false;
+			const auto begun = clock::now();
 			if (deadline) {
-				const auto left = std::max(milliseconds(0), std::chrono::ceil<milliseconds>(*deadline - clock::now()));
+				const auto left = std::max(milliseconds(0), std::chrono::ceil<milliseconds>(*deadline - begun));
 				capped = left < timeout;
 				timeout = std::min(timeout, left);
 			}
 			auto r = co_await c->conn.search(
 			  { .base = dn{}, .scope = search_scope::base_object, .attributes = { "1.1" }, .timeout = timeout });
-			if (capped && !r && r.error().code == cond::timeout) {
+			if (capped && !r && r.error().code == cond::timeout && self->begun_late(deadline, begun)) {
 				cut_short = true;
 				co_return std::unexpected(std::move(r.error()));
 			}

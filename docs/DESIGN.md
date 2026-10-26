@@ -1785,10 +1785,25 @@ decision left open.
   marked "backing off"). With no
   `acquire_timeout` it retries until it succeeds, is stopped, or the
   client closes. Nothing starts after the deadline: no attempt, no probe,
-  and so no server is penalised for an acquire that ran out of time; an
-  attempt that the deadline cuts short is not a failure either (no
-  backoff, no `on_connect`), nor is a probe it cuts short (the connection
-  stays, no `on_probe`).
+  and so no server is penalised for an acquire that ran out of time. An
+  attempt or probe the deadline cuts short is excused (no backoff, no
+  `on_connect`; the probed connection stays, no `on_probe`) only if it
+  began with less than half of `acquire_timeout` left
+  (`client_state::begun_late`): the acquire spent the rest waiting or on
+  other servers. One that had more and still did not finish is the
+  server's failure (backoff, `on_connect`) or the connection's (retired,
+  `probe_failed`). 3pf.8: excusing every cut-short attempt (1d48497) let
+  a hung primary block failover for ever, since the defaults (connect
+  timeout 30 s = `acquire_timeout`, no `operation_timeout`) make the
+  deadline fire first on every acquire; likewise a probe with
+  `acquire_timeout < probe_timeout` was always cut short, so a dead idle
+  connection was never replaced. The half is scale-free and leans to
+  penalising: with `acquire_timeout` below the connect or operation
+  timeouts, the first attempt of an acquire always counts. Cut short while
+  retrying after an authentication backoff, an attempt proves nothing
+  about the credentials: that backoff starts again (auth delay, stored
+  auth error kept, `auth_failures` unchanged), so a slow server cannot
+  turn the one-bind-per-backoff limit into one bind per acquire.
 - `cond::invalid_input` (a bad URL, a setup that cannot work) excludes the
   server for the rest of that `acquire()`. `cond::auth_failed` does more,
   against a lockout storm (3pf.6): its backoff is `max(auth_failure_min =

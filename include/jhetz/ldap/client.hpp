@@ -45,8 +45,12 @@
 // backoff delay has passed: full jitter, uniform in [0, d] with d =
 // min(backoff.max, backoff.initial * backoff.multiplier^(failures - 1)),
 // reset by a success. Concurrent attempts failing together count as one
-// failure. An attempt cut short by acquire_timeout is not a failure (no
-// backoff, no on_connect). acquire() waits for the earliest backoff to end,
+// failure. An attempt cut short by acquire_timeout is a failure too (a
+// hung server must not block failover) unless it began with less than half
+// of acquire_timeout left (the acquire waited, or tried other servers,
+// first): only then is it excused (no backoff, no on_connect). Cut short
+// while retrying a server after an authentication failure (below), it
+// starts that authentication backoff again. acquire() waits for the earliest backoff to end,
 // up to acquire_timeout, and then fails with the last server's error (or
 // shares an open connection, see above). A failure that retrying cannot fix
 // (cond::invalid_input: a bad URL, a setup that cannot work) stops this
@@ -76,9 +80,10 @@
 // probes an idle connection unused for longer than idle_check with a root
 // DSE base search for the attribute "1.1" (no attributes) before handing it
 // out, within probe_timeout: one that does not answer (a server error is an
-// answer) is closed and replaced. A probe cut short by acquire_timeout (what
-// is left of it being shorter than probe_timeout) proves nothing: the
-// connection stays, and acquire() fails with the timeout. A connection
+// answer) is closed and replaced, also when acquire_timeout cuts the probe
+// short, unless the probe began with less than half of acquire_timeout left:
+// that proves nothing, the connection stays, and acquire() fails with the
+// timeout. A connection
 // older than max_lifetime is no longer handed out (acquire() opens a
 // replacement instead), and leaves the pool once its last lease returns.
 // An acquire() waiting for a slot looks again when a leased connection
@@ -200,8 +205,8 @@ class client_observer
 
 	// A connection attempt to `server` ended: connected and set up, or the
 	// error (of connect, StartTLS or session_setup). Not called for an
-	// attempt cut short by acquire_timeout or stopped (close(), the
-	// acquire's stop token).
+	// attempt stopped (close(), the acquire's stop token) or excused when
+	// acquire_timeout cut it short (it began with less than half of it left).
 	virtual void on_connect(const url &server, const result<void> &outcome)
 	{
 		(void)server;
@@ -222,7 +227,8 @@ class client_observer
 		(void)delay;
 	}
 	// The idle check of a connection to `server` ended: answered, or not.
-	// Not called for one cut short by acquire_timeout.
+	// Not called for one excused when acquire_timeout cut it short (it
+	// began with less than half of it left).
 	virtual void on_probe(const url &server, const result<void> &outcome)
 	{
 		(void)server;

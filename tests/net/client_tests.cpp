@@ -1097,10 +1097,33 @@ TEST_CASE("client: the probe's own bound", "[net][client][probe]")
 				"disconnect " + text(s.url()) + " probe_failed",
 				"connect " + text(s.url()) + " ok" });
 	}
-	SECTION("a probe cut short by acquire_timeout neither closes the connection nor tries a server")
+	SECTION("a probe begun late and cut short by acquire_timeout neither closes the connection nor tries a server")
 	{
 		pool_fixture f;
 		auto &s = f.server({ { answer({ bind_resp(1) }), step{} }, bind_ok() });
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .idle_check = milliseconds(0),
+		  .probe_timeout = milliseconds(5'000),
+		  .acquire_timeout = milliseconds(200),
+		  .observer = &f.obs });
+		auto l = f.acquire({ .exclusive = true });
+		REQUIRE(l.has_value());
+		outcome<ldap::result<ldap::lease>> again;
+		spawn(f.ioc, f.pool->acquire(), again);// waits for the exclusive lease
+		finish(f.ioc, sleep_for(milliseconds(150)));
+		l->release();// the probe begins with about 50 ms (under half) left
+		drive_until(f.ioc, [&again] { return again.done(); });
+		REQUIRE_FALSE(again.get().has_value());
+		CHECK(again.get().error().code == ldap::cond::timeout);
+		CHECK(s.accepted() == 1);
+		CHECK(f.pool->connections() == 1);// unknown, not dead: it stays
+		CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
+	}
+	SECTION("a probe that had most of acquire_timeout and got no answer fails")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }), step{} } });
 		f.make({ .servers = { s.url() },
 		  .setup = admin_setup(),
 		  .idle_check = milliseconds(0),
@@ -1110,28 +1133,96 @@ TEST_CASE("client: the probe's own bound", "[net][client][probe]")
 		auto l = f.acquire();
 		REQUIRE(l.has_value());
 		l->release();
-		auto again = f.acquire();
-		REQUIRE_FALSE(again.has_value());
-		CHECK(again.error().code == ldap::cond::timeout);
-		CHECK(s.accepted() == 1);
-		CHECK(f.pool->connections() == 1);// unknown, not dead: it stays
-		CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
+		REQUIRE_FALSE(f.acquire().has_value());
+		CHECK(f.pool->connections() == 0);// replaced by the next acquire
+		REQUIRE(f.obs.events.size() >= 3);
+		CHECK(f.obs.events[1] == "probe " + text(s.url()) + " failed");
+		CHECK(f.obs.events[2] == "disconnect " + text(s.url()) + " probe_failed");
 	}
 }
 
-TEST_CASE("client: an attempt cut short by acquire_timeout is not the server's fault", "[net][client][timeout]")
+TEST_CASE("client: an attempt begun late and cut short by acquire_timeout is not the server's fault",
+  "[net][client][timeout]")
 {
 	pool_fixture f;
-	auto &s = f.server({ { step{} } });// reads the bind, never answers
+	auto &s = f.server({ hang_up_at_once(), { step{} } });// then reads the bind, never answers
 	f.make({ .servers = { s.url() },
 	  .setup = admin_setup(),
-	  .acquire_timeout = milliseconds(50),
-	  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) },
+	  .acquire_timeout = milliseconds(200),
+	  .backoff = { .initial = milliseconds(150), .max = milliseconds(150) },
 	  .observer = &f.obs });
-	auto l = f.acquire();
+	auto l = f.acquire();// waits out the backoff, then begins with about 50 ms (under half) left
 	REQUIRE_FALSE(l.has_value());
 	CHECK(l.error().code == ldap::cond::timeout);
-	CHECK(f.obs.events.empty());// no failed on_connect, no backoff
+	CHECK(s.accepted() == 2);
+	// Only the first failure: no failed on_connect, no backoff for the second.
+	CHECK(f.obs.events
+		  == std::vector<std::string>{ "connect " + text(s.url()) + " failed", "retry " + text(s.url()) + " 150ms" });
+}
+
+TEST_CASE("client: an attempt that had most of acquire_timeout and did not finish fails", "[net][client][timeout]")
+{
+	SECTION("a server that never answers the bind: the next acquire fails over")
+	{
+		pool_fixture f;
+		auto &hung = f.server({ { step{} }, { step{} } });// accepts, reads the bind, never answers
+		auto &up = f.server({ bind_ok() });
+		// The defaults' ratio: the connect timeout no shorter than
+		// acquire_timeout, no operation_timeout.
+		f.make({ .servers = { hung.url(), up.url() },
+		  .connection = { .timeout = milliseconds(100) },
+		  .setup = admin_setup(),
+		  .acquire_timeout = milliseconds(100),
+		  .backoff = { .initial = milliseconds(60'000), .max = milliseconds(60'000) },
+		  .observer = &f.obs });
+		auto first = f.acquire();
+		REQUIRE_FALSE(first.has_value());
+		CHECK(first.error().code == ldap::cond::timeout);
+		CHECK(f.obs.events
+			  == std::vector<std::string>{
+				"connect " + text(hung.url()) + " failed", "retry " + text(hung.url()) + " 60000ms" });
+		auto second = f.acquire();
+		REQUIRE(second.has_value());
+		CHECK(text(second->server()) == text(up.url()));
+		CHECK(hung.accepted() == 1);
+	}
+	SECTION("acquire_timeout shorter than the connect timeout")
+	{
+		pool_fixture f;
+		auto &hung = f.server({ { step{} }, { step{} } });
+		auto &up = f.server({ bind_ok() });
+		f.make({ .servers = { hung.url(), up.url() },
+		  .connection = { .timeout = milliseconds(10'000), .operation_timeout = milliseconds(10'000) },
+		  .setup = admin_setup(),
+		  .acquire_timeout = milliseconds(60),
+		  .backoff = { .initial = milliseconds(60'000), .max = milliseconds(60'000) } });
+		REQUIRE_FALSE(f.acquire().has_value());
+		auto second = f.acquire();
+		REQUIRE(second.has_value());
+		CHECK(text(second->server()) == text(up.url()));
+		CHECK(hung.accepted() == 1);
+	}
+	SECTION("after a wrong password: the authentication backoff starts again, no bind per acquire")
+	{
+		pool_fixture f;
+		auto &s = f.server({ refuse(), { step{} }, refuse() });// then slow to answer binds
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .acquire_timeout = milliseconds(100),
+		  .backoff = { .initial = milliseconds(200), .max = milliseconds(200), .auth_failure_min = milliseconds(200) },
+		  .observer = &f.obs });
+		auto refused = f.acquire();
+		REQUIRE_FALSE(refused.has_value());
+		CHECK(refused.error().code == ldap::errc::invalid_credentials);
+		finish(f.ioc, sleep_for(milliseconds(250)));// the backoff ends: one bind is let through
+		REQUIRE_FALSE(f.acquire().has_value());// cut short
+		CHECK(s.accepted() == 2);
+		CHECK(f.obs.events.back() == "retry " + text(s.url()) + " 200ms");
+		auto later = f.acquire();// backing off again: fails at once, no bind
+		REQUIRE_FALSE(later.has_value());
+		CHECK(later.error().code == ldap::errc::invalid_credentials);
+		CHECK(s.accepted() == 2);
+	}
 }
 
 TEST_CASE("client: acquire() stopped by its stop token", "[net][client][cancel]")
