@@ -1756,7 +1756,12 @@ decision left open.
   shared acquires never take an idle connection: they share one already
   shared, else open a new one (a slot free, a server to try) or wait, so
   shared load cannot starve it (3pf.7; 3pf.9 for the case with no other
-  shared connection, e.g. `max_connections = 1`).
+  shared connection, e.g. `max_connections = 1`). With every server
+  excluded such a shared acquire waits too rather than fail while the
+  idle connection exists (`waits_for_exclusive`), and an exclusive
+  acquire that waited and ends without a lease (stopped, timed out,
+  destroyed) calls `notify()`, so the shared ones it held back look
+  again at once (3pf.11).
   Bind, `start_tls()` and `unbind()` belong on exclusive leases. The
   header says to use one client per identity and keep binds to the
   setup; per-identity sub-pools are a later bead. (`acquire()` is not a

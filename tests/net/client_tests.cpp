@@ -185,6 +185,16 @@ auto release_then_acquire(ldap::client &pool, ldap::lease &held) -> capy::task<l
 	co_return co_await pool.acquire();
 }
 
+// release_then_acquire(), stopping `stop` in between: an acquire() woken
+// by the return is stopped before it resumes.
+auto release_stop_then_acquire(ldap::client &pool, ldap::lease &held, std::stop_source &stop)
+  -> capy::task<ldap::result<ldap::lease>>
+{
+	held.release();
+	stop.request_stop();
+	co_return co_await pool.acquire();
+}
+
 auto retries(const recorder &r) -> std::ptrdiff_t
 {
 	return std::ranges::count_if(r.events, [](const std::string &e) { return e.starts_with("retry "); });
@@ -1075,6 +1085,32 @@ TEST_CASE("client: exclusive leases", "[net][client][exclusive]")
 		CHECK(&b.get()->get() == conn);
 		CHECK(s.accepted() == 1);
 	}
+	SECTION("a waiting exclusive acquire stopped before it takes the only connection leaves it to a shared one")
+	{
+		pool_fixture f;
+		auto &s = f.server({ bind_ok() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .acquire_timeout = milliseconds(5'000) });
+		auto a = f.acquire();
+		REQUIRE(a.has_value());
+		std::stop_source stop;
+		outcome<ldap::result<ldap::lease>> e;
+		spawn(f.ioc, stop.get_token(), f.pool->acquire({ .exclusive = true }), e);
+		finish(f.ioc, sleep_for(milliseconds(20)));
+		CHECK_FALSE(e.done());
+		const ldap::connection *conn = &a->get();
+		const auto start = std::chrono::steady_clock::now();
+		outcome<ldap::result<ldap::lease>> b;
+		spawn(f.ioc, release_stop_then_acquire(*f.pool, *a, stop), b);// b waits for the waiter
+		drive_until(f.ioc, [&b, &e] { return b.done() && e.done(); });
+		REQUIRE(e.done());
+		REQUIRE_FALSE(e.get().has_value());
+		CHECK(e.get().error().code == ldap::cond::canceled);
+		REQUIRE(b.done());
+		REQUIRE(b.get().has_value());
+		CHECK(&b.get()->get() == conn);
+		CHECK(std::chrono::steady_clock::now() - start < milliseconds(2'500));// not at acquire_timeout
+		CHECK(s.accepted() == 1);
+	}
 }
 
 TEST_CASE("client: max_lifetime under load", "[net][client][pool]")
@@ -1152,12 +1188,12 @@ TEST_CASE("client: the probe's own bound", "[net][client][probe]")
 		  .setup = admin_setup(),
 		  .idle_check = milliseconds(0),
 		  .probe_timeout = milliseconds(5'000),
-		  .acquire_timeout = milliseconds(50),
+		  .acquire_timeout = milliseconds(400),
 		  .observer = &f.obs });
 		auto l = f.acquire();
 		REQUIRE(l.has_value());
 		l->release();
-		REQUIRE_FALSE(f.acquire().has_value());
+		REQUIRE_FALSE(f.acquire().has_value());// the probe begins at once
 		CHECK(f.pool->connections() == 0);// replaced by the next acquire
 		REQUIRE(f.obs.events.size() >= 3);
 		CHECK(f.obs.events[1] == "probe " + text(s.url()) + " failed");
@@ -1172,16 +1208,18 @@ TEST_CASE("client: an attempt begun late and cut short by acquire_timeout is not
 	auto &s = f.server({ hang_up_at_once(), { step{} } });// then reads the bind, never answers
 	f.make({ .servers = { s.url() },
 	  .setup = admin_setup(),
-	  .acquire_timeout = milliseconds(200),
-	  .backoff = { .initial = milliseconds(150), .max = milliseconds(150) },
+	  .acquire_timeout = milliseconds(400),
+	  .backoff = { .initial = milliseconds(250), .max = milliseconds(250) },
 	  .observer = &f.obs });
-	auto l = f.acquire();// waits out the backoff, then begins with about 50 ms (under half) left
+	// Waits out the backoff, then begins with about 150 ms (under half) left:
+	// excused if it begins before the deadline, at most 150 ms late.
+	auto l = f.acquire();
 	REQUIRE_FALSE(l.has_value());
 	CHECK(l.error().code == ldap::cond::timeout);
 	CHECK(s.accepted() == 2);
 	// Only the first failure: no failed on_connect, no backoff for the second.
 	CHECK(f.obs.events
-		  == std::vector<std::string>{ "connect " + text(s.url()) + " failed", "retry " + text(s.url()) + " 150ms" });
+		  == std::vector<std::string>{ "connect " + text(s.url()) + " failed", "retry " + text(s.url()) + " 250ms" });
 }
 
 TEST_CASE("client: an attempt that had most of acquire_timeout and did not finish fails", "[net][client][timeout]")
