@@ -10,8 +10,9 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
   [Corosio](https://github.com/cppalliance/corosio) /
   [Capy](https://github.com/cppalliance/capy). One connection carries any
   number of concurrent operations, and each one can be cancelled or timed
-  out without dropping the connection. A blocking facade
-  (`ldap::sync::connection`) covers code that is not coroutine-based.
+  out without dropping the connection. Blocking facades
+  (`ldap::sync::connection`, and `ldap::sync::client` for the pool)
+  cover code that is not coroutine-based.
 - **Type-safe.** Filters are built as typed trees (`attr("uid") == v`), not
   pasted strings, DN literals are checked at compile time, and entries map
   to your own structs. Many mistakes fail to compile.

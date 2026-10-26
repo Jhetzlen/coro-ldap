@@ -118,6 +118,9 @@
 // acquire() calls with not_connected at once; the destructor calls it. No
 // observer hook runs once close() has returned.
 //
+// For code without coroutines, sync::client (sync.hpp) owns an io_context
+// and its thread, and wraps a client in blocking calls.
+//
 // Threading and lifetime: like connection, a client belongs to the executor
 // of its io_context; acquire() and the leases (their connections, their
 // destruction) must be used on it. The io_context must outlive the client

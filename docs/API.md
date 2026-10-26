@@ -667,6 +667,26 @@ itself needs only ICU.
   once on another connection after `cond::connection_lost` or
   `cond::busy_or_unavailable` (a stream only before its first message;
   it holds the lease until destroyed); writes go through a lease.
+- `jhetz/ldap/sync.hpp` (3pf.5): `ldap::sync::client`, the blocking
+  facade over `ldap::client`. `sync::client(client_options, mr)` owns an
+  io_context and an I/O thread, where the `ldap::client` lives (session
+  setup and observer hooks run there). `acquire(acquire_options{}) ->
+  result<sync::lease>`; a `sync::lease` has `sync::connection`'s
+  operations (bind, search, `search_paged`, `search_as`, add, modify,
+  ..., `begin_transaction`, `unbind`, `close`), run on the leased
+  connection, plus `server()`, `release()` and `operator bool`. The
+  forwarders `search`, `compare` and `who_am_i` block and retry as the
+  async ones; no `search_stream` (no blocking stream, as for
+  `sync::connection`). `close()` (from any thread, the I/O thread
+  included) fails waiting and later `acquire()` calls with
+  `not_connected`; `connections()`, `executor()`. A call from the I/O
+  thread fails with `would_deadlock` (context `"sync::client"`). The
+  destructor closes the pool (idle connections unbound) and joins the
+  I/O thread; a lease may outlive the client (its connection is closed,
+  its operations fail with `cond::connection_lost`) and keeps the I/O
+  thread until it is destroyed or released.
+  `detail::io_thread` and `detail::connection_api` are the machinery
+  `sync::connection` and `sync::lease` share.
 - `client_errc::not_sent` (connection.hpp, "Sent or not"): the operation
   failed before its request reached the writer (connection closed before
   it was submitted, still queued, or held behind a bind), so the server
@@ -717,5 +737,4 @@ LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
 Not yet: other SASL mechanisms (GSS-SPNEGO), GSSAPI security layers and
-channel binding, tls-unique, the pool's blocking facade (`sync::client`)
-and its retrying read forwarders.
+channel binding, tls-unique.

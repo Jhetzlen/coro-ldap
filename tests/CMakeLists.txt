@@ -159,6 +159,7 @@ if(JHETZ_LDAP_BUILD_NET)
         net/sasl_tests.cpp
         net/start_tls_tests.cpp
         net/sync_tests.cpp
+        net/sync_client_tests.cpp
         net/message_io_tests.cpp
     )
     if(JHETZ_LDAP_WITH_GSSAPI)

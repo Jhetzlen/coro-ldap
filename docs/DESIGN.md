@@ -1596,7 +1596,14 @@ and its destructor joins the thread.
   waits for a detached getaddrinfo, or an offloaded SASL step (GSSAPI),
   still running; destroying the io_context then joins that step's
   thread. The connection pool is `ldap::client` (section 11); its
-  blocking facade, `sync::client`, is still to come (3pf.5).
+  blocking facade is `sync::client` (section 11).
+- The machinery is shared (3pf.5): `sync::detail::io_thread` (the
+  io_context, the work guard, the thread, and `run(make_task)`, the
+  post-and-wait with the would_deadlock check) and
+  `sync::detail::connection_api<Derived>`, a CRTP base holding every
+  blocking `connection` operation in terms of `Derived::call(make_task)`.
+  `sync::connection` and `sync::lease` derive from it, so the two cannot
+  drift apart; `sync::transaction` holds the `io_thread` it runs on.
 - Calling a blocking method from inside the facade's own I/O thread would
   deadlock; it returns `client_errc::would_deadlock` instead.
 - The facade exposes exactly the same request, entry, error and mapping types;
@@ -1955,8 +1962,35 @@ decision left open.
   script per accepted connection; backoff on real delays of 30 to 60 ms
   with the jitter fixed by `detail::set_jitter` (tests only). One slapd
   test drops a connection through a relay and acquires again.
-- Later (beads): `sync::client` (3pf.5),
-  referral policy (3pf.1), a background prober, DNS SRV, weighted or
+- Blocking facade (3pf.5, `jhetz/ldap/sync.hpp`): `sync::client(options,
+  mr)` owns a `detail::client_core`, the `io_thread` (section 7) and the
+  `ldap::client` made, used and destroyed on it, shared through a
+  `shared_ptr` by the facade and its `sync::lease`s (each holding an
+  aliasing pointer to the core's `io_thread`, its `ldap::lease`, touched
+  only on that thread, and a copy of its server URL). `acquire()` and the
+  read forwarders `search`, `compare`, `who_am_i` post to the I/O thread
+  and wait, as `sync::connection` does; the retry is `ldap::client`'s.
+  `sync::lease` exposes `sync::connection`'s operations
+  (`detail::connection_api`) on the leased connection. No blocking
+  `search_stream`: `sync::connection` has no blocking stream either.
+  Lifetime: the destructor closes the `ldap::client` on the I/O thread
+  and drops its share of the core. The last owner (the client, or the
+  last lease alive) destroys the `ldap::client` there and joins: the
+  work guard dropped, the detached unbinds of the idle connections run
+  before `run()` returns, so destruction unbinds cleanly (the io_context
+  is never stopped while the client lives: 3pf.13's close-instead path
+  does not apply). A lease outliving its client therefore stays safe,
+  like an `ldap::lease` outliving its `ldap::client`: its connection was
+  closed (operations fail with `cond::connection_lost`), and destroying
+  or releasing it later joins the thread. Rejected: making the client's
+  destructor invalidate the leases (a registry and a lock, and a
+  dangling `sync::lease` on a use after destruction), or forbidding
+  leases to outlive the client (a crash for an easy mistake). `close()`
+  from the I/O thread closes at once (it is not blocking there), so an
+  observer hook or a coroutine on `executor()` may call it. Neither
+  the client nor its last lease may be destroyed on the I/O thread
+  (that would join itself), as for `sync::connection`.
+- Later (beads): referral policy (3pf.1), a background prober, DNS SRV, weighted or
   round-robin selection, per-identity sub-pools.
 
 ## Resolved

@@ -213,6 +213,7 @@ URL (`ldap://localhost`).
 | `cancel.cpp` | search the whole tree; Ctrl-C gives up on it (`capy::when_any` with `ldap::raceable`) |
 | `paged.cpp` | page through `ou=people` 100 entries at a time, sorted by `mail` (RFC 2696 paging, RFC 2891 server-side sort) |
 | `blocking.cpp` | the same search with the blocking `ldap::sync::connection` |
+| `blocking_pool.cpp` | the same search through the blocking pool `ldap::sync::client` |
 | `gssapi.cpp` | StartTLS, then a Kerberos bind with the default ticket (`sasl_gssapi`; built with `JHETZ_LDAP_WITH_GSSAPI`) |
 
 `examples/ldapsearch.cpp` (see [API.md](API.md)) is a fuller command-line tool. To try an
