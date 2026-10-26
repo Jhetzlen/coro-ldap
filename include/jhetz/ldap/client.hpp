@@ -418,8 +418,11 @@ class client
 	// the acquire() and the operation. Read-only operations only: run
 	// updates and extended operations on a lease (they are never retried by
 	// the client; one failing with client_errc::not_sent was never seen by
-	// the server and may be retried by the caller). Like acquire(), the
-	// tasks do not refer to *this.
+	// the server and may be retried by the caller). Each call may land on
+	// any pooled connection, so a request control bound to one connection
+	// (the paged-results cookie of an earlier page, anything tied to the
+	// session) needs a lease, not the forwarders. Like acquire(), the tasks
+	// do not refer to *this.
 	//
 	// search(): the entries reach the caller only once the search ends, so
 	// it is retried whatever it had received.

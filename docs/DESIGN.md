@@ -1823,7 +1823,9 @@ decision left open.
   during that bind restarts the backoff too, from the `try_servers`
   scope guard (`restart_auth_backoff`: noexcept, no observer hook,
   jitter failure taken as 1), so the next acquire does not bind again at
-  once.
+  once; so does `server_failed()` throwing for it (a throwing jitter
+  source, an allocation): `settled` is set only once it has returned
+  (3pf.15).
 - `cond::invalid_input` (a bad URL, a setup that cannot work) excludes the
   server for the rest of that `acquire()`. `cond::auth_failed` does more,
   against a lockout storm (3pf.6): its backoff is `max(auth_failure_min =
@@ -1945,7 +1947,10 @@ decision left open.
   client: one failing with `client_errc::not_sent` was never seen by the
   server (section 7, "Sent or not") and the caller may retry it. The
   observer has no hook for an operation's retry (the retirement shows as
-  `on_disconnect`, a new connection as `on_connect`).
+  `on_disconnect`, a new connection as `on_connect`). Each call may land
+  on any pooled connection, so connection-bound request controls (a
+  paged-results cookie from an earlier page, anything tied to the
+  session) need a lease (3pf.15).
 - Tests (`tests/net/client_tests.cpp`): loopback servers each running one
   script per accepted connection; backoff on real delays of 30 to 60 ms
   with the jitter fixed by `detail::set_jitter` (tests only). One slapd

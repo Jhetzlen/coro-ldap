@@ -713,8 +713,9 @@ namespace detail {
 				++self->opening;
 				// Set once server_failed() or server_succeeded() handled the
 				// attempt, or the client closed. An auth retry left unsettled
-				// (the task destroyed mid-attempt) restarts its backoff, else
-				// the next acquire() would bind again at once.
+				// (the task destroyed mid-attempt, server_failed() throwing)
+				// restarts its backoff, else the next acquire() would bind
+				// again at once.
 				bool settled = false;
 				const scope_exit done{ [&self, i, auth_retry, &settled] noexcept {
 					self->attempt_ended(i, auth_retry, settled);
@@ -722,9 +723,13 @@ namespace detail {
 				const bool late = self->begun_late(deadline, now);
 				bool cut_short = false;
 				auto r = co_await open_one(self, i, deadline, cut_short);
+				// Each path below sets `settled` once server_failed() or
+				// server_succeeded() has returned: one throwing (the jitter
+				// source, an allocation) leaves an auth retry unsettled, and
+				// the guard restarts its backoff.
 				const std::string context = "acquire " + server.name;
-				settled = true;// every path below handles the attempt
 				if (self->closed) {
+					settled = true;
 					if (r) {
 						r->close();
 					}
@@ -735,10 +740,12 @@ namespace detail {
 					if (auth_retry) {// no on_connect, but the auth backoff starts again
 						self->server_failed(i, *last, episode, true);
 					}
+					settled = true;
 					co_return nullptr;
 				}
 				if (r) {
 					self->server_succeeded(i);
+					settled = true;
 					auto p = std::make_shared<pooled_connection>();
 					p->conn = std::move(*r);
 					p->server = i;
@@ -762,12 +769,14 @@ namespace detail {
 					if (auth_retry) {// no on_connect, but the auth backoff starts again
 						self->server_failed(i, e, episode, true);
 					}
+					settled = true;
 					co_return std::unexpected(std::move(e));// not the server's fault
 				}
 				if (auto *o = self->observer()) {
 					o->on_connect(self->servers[i].address, std::unexpected(e));
 				}
 				self->server_failed(i, e, episode, auth_retry);
+				settled = true;
 				if (e.code == cond::auth_failed || e.code == cond::invalid_input) {
 					excluded[i] = true;// retrying cannot help: not again in this acquire()
 				}

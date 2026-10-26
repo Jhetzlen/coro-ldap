@@ -26,6 +26,7 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -1416,6 +1417,26 @@ TEST_CASE("client: the bind after an authentication backoff ends without a verdi
 		CHECK(later.error().code == ldap::errc::invalid_credentials);
 		CHECK(s.accepted() == 2);
 	}
+	SECTION("recording that failure throws (the jitter source)")
+	{
+		pool_fixture f;
+		auto &s = f.server({ refuse(), { step{} }, refuse() });
+		f.make({ .servers = { s.url() },
+		  .connection = { .operation_timeout = milliseconds(50) },
+		  .setup = admin_setup(),
+		  .acquire_timeout = milliseconds(5'000),
+		  .backoff = {
+			.initial = milliseconds(200), .max = milliseconds(200), .auth_failure_min = milliseconds(200) } });
+		REQUIRE_FALSE(f.acquire().has_value());
+		finish(f.ioc, sleep_for(milliseconds(250)));
+		ldap::detail::set_jitter(*f.pool, []() -> double { throw std::runtime_error("no jitter"); });
+		CHECK_THROWS_AS(f.acquire(), std::runtime_error);// server_failed() throws for the timed-out bind
+		ldap::detail::set_jitter(*f.pool, [] { return 1.0; });
+		auto later = f.acquire();// the backoff started again all the same: no bind
+		REQUIRE_FALSE(later.has_value());
+		CHECK(later.error().code == ldap::errc::invalid_credentials);
+		CHECK(s.accepted() == 2);
+	}
 }
 
 TEST_CASE("client: acquire() stopped by its stop token", "[net][client][cancel]")
@@ -1604,6 +1625,12 @@ auto compare_msg(std::int32_t id, std::int32_t code) -> ldap::message
 	return ldap::message{ id, ldap::compare_response{ ldap::ldap_result{ code } } };
 }
 
+// Answers the setup's bind, then the search with busy.
+auto busy_search() -> std::vector<step>
+{
+	return { answer({ bind_resp(1) }), answer({ done_msg(2, 51, "", "too many operations") }) };
+}
+
 auto jdoe_compare() -> ldap::compare_params
 {
 	return { .entry = ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" }, .attribute = "cn", .value = "John" };
@@ -1727,6 +1754,37 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		REQUIRE(mine.has_value());
 		CHECK(s.accepted() == 2);
 	}
+	SECTION("search(): the server is busy")
+	{
+		pool_fixture f;
+		auto &s = f.server({ busy_search(), found_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		auto r = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE(r.has_value());
+		REQUIRE(r->size() == 1);
+		CHECK(s.accepted() == 2);
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
+				"disconnect " + text(s.url()) + " busy_or_unavailable",
+				"connect " + text(s.url()) + " ok" });
+	}
+	SECTION("search_stream(): a SearchResultDone busy before any entry")
+	{
+		pool_fixture f;
+		auto &s = f.server({ busy_search(), found_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		auto stream = finish(f.ioc, f.pool->search_stream(people_search()));
+		REQUIRE(stream.has_value());
+		auto entries = finish(f.ioc, drain_stream(*stream));
+		REQUIRE(entries.has_value());
+		REQUIRE(entries->size() == 1);
+		CHECK(entries->front() == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "John"));
+		CHECK(s.accepted() == 2);
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
+				"disconnect " + text(s.url()) + " busy_or_unavailable",
+				"connect " + text(s.url()) + " ok" });
+	}
 }
 
 TEST_CASE("client: when read forwarders do not retry", "[net][client][retry]")
@@ -1780,6 +1838,52 @@ TEST_CASE("client: when read forwarders do not retry", "[net][client][retry]")
 		REQUIRE(stream.has_value());
 		CHECK(s.accepted() == 3);
 	}
+	SECTION("search_stream(): the retry fails before any message too: next() reports it")
+	{
+		pool_fixture f;
+		auto &s = f.server({ busy_search(),
+		  { answer({ bind_resp(1) }), answer({ done_msg(2, 52, "", "shutting down") }) },
+		  found_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto stream = finish(f.ioc, f.pool->search_stream(people_search()));
+		REQUIRE(stream.has_value());// the second error is the stream's
+		auto e = finish(f.ioc, stream->next());
+		REQUIRE_FALSE(e.has_value());
+		CHECK(e.error().code == ldap::errc::unavailable);
+		CHECK(s.accepted() == 2);
+	}
+	SECTION("search_stream(): its deadline passes before any message")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }), step{}, step{} }, found_after_bind() });// never answers
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto request = people_search();
+		request.timeout = milliseconds(50);
+		auto stream = finish(f.ioc, f.pool->search_stream(request));
+		REQUIRE(stream.has_value());// not retried: next() reports the timeout
+		auto e = finish(f.ioc, stream->next());
+		REQUIRE_FALSE(e.has_value());
+		CHECK(e.error().code == ldap::cond::timeout);
+		CHECK(s.accepted() == 1);
+		drive_until(f.ioc, [&s] { return s.log(0).received.size() == 3; });
+		REQUIRE(s.log(0).received.size() == 3);
+		CHECK(std::holds_alternative<ldap::abandon_request>(s.log(0).received[2].op));
+	}
+	SECTION("search_stream(): the client destroyed while its stream is open")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }),
+		  answer({ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "John") }) } });// then nothing
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto stream = finish(f.ioc, f.pool->search_stream(people_search()));
+		REQUIRE(stream.has_value());
+		f.pool.reset();// closes the stream's connection
+		auto entries = finish(f.ioc, drain_stream(*stream));
+		REQUIRE_FALSE(entries.has_value());
+		CHECK(entries.error().code == ldap::cond::connection_lost);
+		*stream = ldap::search_stream{};// returns its lease to a closed pool
+		CHECK(s.accepted() == 1);
+	}
 	SECTION("acquire() fails: its error, not retried")
 	{
 		pool_fixture f;
@@ -1797,7 +1901,8 @@ TEST_CASE("client: when read forwarders do not retry", "[net][client][retry]")
 	SECTION("stopped by the stop token")
 	{
 		pool_fixture f;
-		auto &s = f.server({ { answer({ bind_resp(1) }), step{} }, found_after_bind() });// never answers the search
+		auto &s =
+		  f.server({ { answer({ bind_resp(1) }), step{}, step{} }, found_after_bind() });// never answers the search
 		f.make({ .servers = { s.url() }, .setup = admin_setup() });
 		std::stop_source stop;
 		outcome<ldap::result<ldap::search_stream>> a;
@@ -1807,6 +1912,11 @@ TEST_CASE("client: when read forwarders do not retry", "[net][client][retry]")
 		drive_until(f.ioc, [&a] { return a.done(); });
 		REQUIRE_FALSE(a.get().has_value());
 		CHECK(a.get().error().code == ldap::cond::canceled);
+		drive_until(f.ioc, [&s] { return s.log(0).received.size() == 3; });
+		REQUIRE(s.log(0).received.size() == 3);// the search was abandoned
+		CHECK(std::holds_alternative<ldap::abandon_request>(s.log(0).received[2].op));
+		auto mine = f.acquire({ .exclusive = true });// the lease came back
+		REQUIRE(mine.has_value());
 		CHECK(s.accepted() == 1);
 	}
 }
