@@ -2,6 +2,7 @@
 // scripted in-process servers on one io_context (mock_ldap.hpp's
 // serve_script over socket pairs), with a test connector that maps a URL's
 // host to one of them.
+#include "../../src/connection/referral_chase_impl.hpp"
 #include "jhetz/ldap/referral_chase.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -861,6 +862,40 @@ TEST_CASE("make_same_policy_connector: no TLS downgrade, the referred host check
 		auto s = plan("ldaps://b.example.org", example, false, options);
 		REQUIRE(s);
 		CHECK_FALSE(s->options.start_tls);
+	}
+}
+
+TEST_CASE("referral connections: the TLS client certificate goes with the client's setup only", "[net][referral]")
+{
+	ldap::connection_options options;
+	options.tls.cert_file = "client.pem";
+	options.tls.key_file = "client.key";
+	auto target = ldap::url::parse("ldaps://b.example.org/ou=b");
+	REQUIRE(target.has_value());
+	SECTION("anonymous: left out")
+	{
+		const ldap::detail::referral_identity anonymous{ .identity = 0 };
+		for (const bool origin_tls : { false, true }) {
+			auto p = ldap::detail::referral_plan(*target, origin_tls, options, anonymous);
+			REQUIRE(p);
+			CHECK(p->options.tls.cert_file.empty());
+			CHECK(p->options.tls.key_file.empty());
+			CHECK(p->server.scheme() == ldap::url_scheme::ldaps);
+		}
+	}
+	SECTION("with the client's setup: kept")
+	{
+		const ldap::detail::referral_identity same{ .identity = 1, .client_certificate = true };
+		auto p = ldap::detail::referral_plan(*target, true, options, same);
+		REQUIRE(p);
+		CHECK(p->options.tls.cert_file == "client.pem");
+		CHECK(p->options.tls.key_file == "client.key");
+	}
+	SECTION("make_same_policy_connector: the caller's options, kept")
+	{
+		auto p = plan("ldaps://b.example.org", { "example.org" }, true, options);
+		REQUIRE(p);
+		CHECK(p->options.tls.cert_file == "client.pem");
 	}
 }
 

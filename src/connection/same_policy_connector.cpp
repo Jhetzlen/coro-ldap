@@ -233,12 +233,15 @@ namespace {
 	auto connect_to(std::shared_ptr<connector_state> st, url target, std::size_t depth)
 	  -> capy::task<result<connection *>>
 	{
-		auto plan = connect_plan(target, st->origin_tls, st->options);
-		if (!plan) {
+		if (!usable_host(target)) {
 			co_return nullptr;
 		}
 		auto chosen = st->choose(target, depth);
 		if (!chosen) {
+			co_return nullptr;
+		}
+		auto plan = detail::referral_plan(target, st->origin_tls, st->options, *chosen);
+		if (!plan) {
 			co_return nullptr;
 		}
 		const url &server = plan->server;
@@ -287,6 +290,19 @@ namespace detail {
 		return connect_plan(target, origin_tls, options);
 	}
 
+	auto referral_plan(const url &target,
+	  bool origin_tls,
+	  const connection_options &options,
+	  const referral_identity &chosen) -> std::optional<referral_connect_plan>
+	{
+		auto plan = connect_plan(target, origin_tls, options);
+		if (plan && !chosen.client_certificate) {
+			plan->options.tls.cert_file.clear();
+			plan->options.tls.key_file.clear();
+		}
+		return plan;
+	}
+
 	auto referral_server_allowed(const url &target,
 	  std::span<const std::string> allowed,
 	  std::optional<std::uint16_t> origin_port) -> bool
@@ -325,7 +341,7 @@ auto make_same_policy_connector(corosio::io_context &ioc,
 		if (!server_allowed(target, allowed, origin_port)) {
 			return std::nullopt;
 		}
-		return detail::referral_identity{ .setup = setup };
+		return detail::referral_identity{ .setup = setup, .client_certificate = true };
 	};
 	return detail::make_policy_connector(
 	  ioc, origin.is_tls(), std::move(options), std::move(choose), std::pmr::get_default_resource());

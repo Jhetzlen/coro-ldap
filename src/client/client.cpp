@@ -1201,7 +1201,7 @@ namespace detail {
 				case referral_binding::anonymous:
 					return referral_identity{ .identity = 0 };
 				case referral_binding::same_setup:
-					return referral_identity{ .identity = 1, .setup = self->options.setup };
+					return referral_identity{ .identity = 1, .setup = self->options.setup, .client_certificate = true };
 				case referral_binding::refuse:
 					break;
 				}

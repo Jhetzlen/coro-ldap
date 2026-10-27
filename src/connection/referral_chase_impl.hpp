@@ -61,12 +61,23 @@ auto chase_compare(connection &origin,
 
 // How a referred connection is bound: `setup` runs on each new one;
 // `identity` tells the kept connections apart (one per server and
-// identity).
+// identity). `client_certificate`: the TLS client certificate of the
+// connector's options (tls_options::cert_file, key_file) is presented;
+// else it is left out, so a connection meant to be anonymous does not
+// authenticate by TLS (mutual TLS, a server mapping the certificate to an
+// identity, SASL EXTERNAL).
 struct referral_identity
 {
 	std::size_t identity = 0;
 	session_setup setup{};
+	bool client_certificate = false;
 };
+
+// The URL and options a policy connector connects to `target` with, as
+// `chosen` binds it: nullopt when its host cannot be used.
+[[nodiscard]] auto
+  referral_plan(const url &target, bool origin_tls, const connection_options &options, const referral_identity &chosen)
+	-> std::optional<referral_connect_plan>;
 
 // Decides for a URL that passed the connector's fixed rules (no ldapi://,
 // a plausible host, see make_same_policy_connector): nullopt skips it.

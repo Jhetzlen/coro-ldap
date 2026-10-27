@@ -142,7 +142,8 @@
 // ldapi:// (a server's URL must not reach a local socket), nor a host
 // with bytes no host name has. Only an authorizer returning same_setup
 // sends the client's session_setup (its credentials) to a referred
-// server, the library never does by itself; same_setup_for_domains()
+// server, and presents its TLS client certificate (tls_options::cert_file)
+// there; the library never does by itself; same_setup_for_domains()
 // builds one that does so for the hosts of the domains named.
 // No TLS downgrade: when the pooled connection is TLS-protected, an ldaps://
 // target is opened as such and an ldap:// one with StartTLS (a failed
@@ -336,8 +337,12 @@ struct referral_hop
 // How a referred server is contacted.
 enum class referral_binding : std::uint8_t {
 	refuse,// not at all: the URI is skipped (referral_outcome::skipped_policy)
-	anonymous,// connected, not bound
-	same_setup,// connected and set up with client_options::setup: the client's credentials
+	// Connected, not bound, and without the client's TLS certificate
+	// (connection_options::tls cert_file and key_file are left out).
+	anonymous,
+	// Connected and set up with client_options::setup: the client's
+	// credentials, its TLS certificate included.
+	same_setup,
 };
 
 // Decides for each referred server. Called on the client's executor; an

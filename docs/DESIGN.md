@@ -2110,7 +2110,14 @@ decision left open.
   {refuse, anonymous, same_setup}` decides per URI; empty refuses all.
   It is asked only for URLs that pass the connector's fixed rules (no
   ldapi://, a plausible host), and `same_setup` is the only way the
-  client's credentials reach a referred server. `same_setup_for_domains(
+  client's credentials reach a referred server: its TLS client
+  certificate (`tls.cert_file` / `key_file`) included, which an
+  `anonymous` connection does not present (`referral_identity::
+  client_certificate`, applied by `detail::referral_plan`), since a
+  server may authenticate a TLS connection by its certificate alone
+  (mutual TLS, certificate mapping, SASL EXTERNAL). `make_same_policy_
+  connector` keeps it: its options are the caller's, given for the
+  referred connections. `same_setup_for_domains(
   domains)` applies `make_same_policy_connector`'s allow-list rules
   (`detail::referral_server_allowed`, the port rule against the pooled
   connection's server). An enum rather than a returned setup: the
