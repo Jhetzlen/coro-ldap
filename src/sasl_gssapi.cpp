@@ -6,6 +6,8 @@
 #include "icu_util.hpp"
 #include "scope_util.hpp"
 
+#include "net/channel_binding.hpp"
+
 #include <gssapi/gssapi.h>
 
 #include <unicode/uchar.h>
@@ -16,9 +18,11 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace jhetz::ldap {
 namespace {
@@ -216,6 +220,25 @@ namespace detail {
 		return reply;
 	}
 
+	auto gssapi_channel_binding_data(const sasl_bind_context &context,
+	  gssapi_channel_binding binding,
+	  gssapi_channel_binding_form form) -> std::string
+	{
+		if (binding == gssapi_channel_binding::none || !context.tls) {
+			return {};
+		}
+		std::vector<std::byte> openldap_hash;
+		std::span<const std::byte> hash = context.bindings.tls_server_end_point;
+		if (form == gssapi_channel_binding_form::openldap) {
+			openldap_hash = net::detail::openldap_tls_server_end_point(context.peer_certificate);
+			hash = openldap_hash;
+		}
+		if (hash.empty()) {
+			return {};
+		}
+		return prefixed_channel_binding(channel_binding_type::tls_server_end_point, hash);
+	}
+
 }// namespace detail
 
 struct sasl_gssapi::state
@@ -234,6 +257,9 @@ struct sasl_gssapi::state
 	name_handle target;
 	cred_handle credentials;
 	context_handle context;
+	// The channel bindings' application data (empty: none), the same for
+	// every gss_init_sec_context call of the exchange.
+	std::string bindings;
 
 	// Clears `busy` when the returned guard goes out of scope: at the end of
 	// an offloaded step, whatever its outcome.
@@ -257,6 +283,14 @@ struct sasl_gssapi::state
 		gss_buffer_desc in = input(token.value_or(std::string_view()));
 		output_buffer out;
 		OM_uint32 flags = 0;
+		// RFC 2744 section 3.11 (gss_channel_bindings_struct): no
+		// addresses (GSS_C_AF_UNSPEC, as cyrus-sasl's gssapi plugin and
+		// Windows leave them), the TLS binding as application data.
+		gss_channel_bindings_struct channel{ .initiator_addrtype = GSS_C_AF_UNSPEC,
+			.initiator_address = { .length = 0, .value = nullptr },
+			.acceptor_addrtype = GSS_C_AF_UNSPEC,
+			.acceptor_address = { .length = 0, .value = nullptr },
+			.application_data = input(bindings) };
 		const OM_uint32 major = gss_init_sec_context(&minor,
 		  credentials.get(),
 		  context.in_out(),
@@ -264,7 +298,7 @@ struct sasl_gssapi::state
 		  &krb5_oid,
 		  GSS_C_MUTUAL_FLAG | GSS_C_SEQUENCE_FLAG,
 		  0,
-		  GSS_C_NO_CHANNEL_BINDINGS,
+		  bindings.empty() ? GSS_C_NO_CHANNEL_BINDINGS : &channel,
 		  token ? &in : GSS_C_NO_BUFFER,
 		  nullptr,
 		  &out.desc,
@@ -375,7 +409,11 @@ sasl_gssapi::~sasl_gssapi() = default;
 sasl_gssapi::sasl_gssapi(sasl_gssapi &&) noexcept = default;
 auto sasl_gssapi::operator=(sasl_gssapi &&) noexcept -> sasl_gssapi & = default;
 
-void sasl_gssapi::prepare(const sasl_bind_context &context) { host_.assign(context.host); }
+void sasl_gssapi::prepare(const sasl_bind_context &context)
+{
+	host_.assign(context.host);
+	bindings_ = detail::gssapi_channel_binding_data(context, options_.channel_binding, options_.binding_form);
+}
 
 auto sasl_gssapi::offload_start() -> sasl_work
 {
@@ -383,6 +421,7 @@ auto sasl_gssapi::offload_start() -> sasl_work
 	// still be in use by its thread.
 	const auto s = std::make_shared<state>();
 	s->busy.store(true, std::memory_order_relaxed);
+	s->bindings = bindings_;
 	state_ = s;
 	return [s, options = options_, host = host_] {
 		const auto scope = s->busy_scope();

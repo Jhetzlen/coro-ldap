@@ -2,7 +2,9 @@
 // messages, and the failures that happen before anything is sent. The
 // Kerberos exchange itself is tested against slapd and a throwaway KDC
 // (tests/integration/gssapi_tests.cpp, run_kdc.sh).
+#include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/sasl_gssapi.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -10,7 +12,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <openssl/evp.h>
+
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <optional>
@@ -249,5 +254,83 @@ TEST_CASE("gssapi: offloaded steps", "[net][sasl][gssapi]")
 		ldap::sasl_gssapi mech;
 		CHECK_FALSE(mech.offload_step("token"sv));
 		CHECK_FALSE(mech.offload_step(std::nullopt));
+	}
+}
+
+TEST_CASE("gssapi: the channel bindings' application data", "[net][sasl][gssapi][channel_binding]")
+{
+	using ldap::detail::gssapi_channel_binding_data;
+	using enum ldap::gssapi_channel_binding;
+	using enum ldap::gssapi_channel_binding_form;
+	const std::array<std::byte, 3> hash{ std::byte{ 0x01 }, std::byte{ 0x00 }, std::byte{ 0xfe } };
+	ldap::sasl_bind_context tls{ .host = "dc1.example.org", .tls = true };
+	tls.bindings.tls_server_end_point = hash;
+
+	SECTION("over TLS: \"tls-server-end-point:\" and the connection's RFC 5929 hash")
+	{
+		CHECK(gssapi_channel_binding_data(tls, tls_server_end_point, rfc5929)
+			  == std::string("tls-server-end-point:\x01\x00\xfe", 24));
+	}
+	SECTION("none, or no TLS: no bindings")
+	{
+		CHECK(gssapi_channel_binding_data(tls, none, rfc5929).empty());
+		CHECK(gssapi_channel_binding_data(tls, none, openldap).empty());
+		auto plain = tls;
+		plain.tls = false;
+		CHECK(gssapi_channel_binding_data(plain, tls_server_end_point, rfc5929).empty());
+		CHECK(gssapi_channel_binding_data(plain, tls_server_end_point, openldap).empty());
+	}
+	SECTION("a certificate without a tls-server-end-point hash: no bindings")
+	{
+		auto ed = tls;
+		ed.bindings.tls_server_end_point = {};
+		CHECK(gssapi_channel_binding_data(ed, tls_server_end_point, rfc5929).empty());
+	}
+	SECTION("the openldap form hashes the peer certificate itself")
+	{
+		test_pki pki;// ECDSA P-256 with SHA-256: SHA-256 in both forms
+		const auto der = certificate_der(pki.issue("dc1.example.org", "DNS:dc1.example.org").cert_pem);
+		tls.peer_certificate = der;
+		std::array<unsigned char, EVP_MAX_MD_SIZE> md{};
+		unsigned int n = 0;
+		REQUIRE(EVP_Digest(der.data(), der.size(), md.data(), &n, EVP_sha256(), nullptr) == 1);
+		const auto out = gssapi_channel_binding_data(tls, tls_server_end_point, openldap);
+		CHECK(out
+			  == "tls-server-end-point:"
+				   + std::string(reinterpret_cast<const char *>(md.data()), static_cast<std::size_t>(n)));
+		const std::array<std::byte, 2> junk{ std::byte{ 0x30 }, std::byte{ 0x00 } };
+		tls.peer_certificate = junk;
+		CHECK(gssapi_channel_binding_data(tls, tls_server_end_point, openldap).empty());
+	}
+}
+
+TEST_CASE("gssapi: channel_binding_used says whether the exchange binds", "[net][sasl][gssapi][channel_binding]")
+{
+	const scoped_env config("KRB5_CONFIG", "/dev/null");
+	const scoped_env cache("KRB5CCNAME", "FILE:/nonexistent/jhetz-ldap-test-ccache");
+	const scoped_env keytab("KRB5_CLIENT_KTNAME", "FILE:/nonexistent/jhetz-ldap-test-keytab");
+	const std::array<std::byte, 2> hash{ std::byte{ 0xaa }, std::byte{ 0xbb } };
+	ldap::sasl_bind_context tls{ .host = "dc1.example.org", .tls = true };
+	tls.bindings.tls_server_end_point = hash;
+
+	SECTION("over TLS: tls-server-end-point, and gss_init_sec_context takes the bindings")
+	{
+		ldap::sasl_gssapi mech;
+		mech.prepare(tls);
+		CHECK(mech.channel_binding_used() == ldap::channel_binding_type::tls_server_end_point);
+		// No credentials: the call fails after taking the bindings.
+		auto r = mech.start();
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
+		CHECK_THAT(std::string(r.error().context), StartsWith("gss_init_sec_context: "));
+		// The next bind, without TLS, has none.
+		mech.prepare({ .host = "dc1.example.org" });
+		CHECK_FALSE(mech.channel_binding_used().has_value());
+	}
+	SECTION("gssapi_channel_binding::none: none over TLS")
+	{
+		ldap::sasl_gssapi mech({ .channel_binding = ldap::gssapi_channel_binding::none });
+		mech.prepare(tls);
+		CHECK_FALSE(mech.channel_binding_used().has_value());
 	}
 }

@@ -666,7 +666,8 @@ exactly what they used: SCRAM, with `scram_channel_binding::plus` once
 `start()` succeeded, the type it actually bound to ("p=<type>": the
 explicit `binding_type` option, or else the connection's default type),
 nullopt otherwise;
-EXTERNAL and GSSAPI nullopt. The flag is cleared with the TLS
+EXTERNAL nullopt, GSSAPI tls-server-end-point when it sends channel
+bindings (nullopt otherwise). The flag is cleared with the TLS
 session (`clear_tls_session()`). `channel_bindings()` (transport and
 connection) still reports tls-exporter: it describes the connection, and
 the accessor is not an authentication; a caller that authenticates with
@@ -729,7 +730,7 @@ client certificate after the handshake) fails the connection with an
 error comparing equal to `cond::tls_failure`. The OpenSSL calls there and
 in the end-point hashes bracket their work with `ERR_set_mark()` /
 `ERR_pop_to_mark()`, so the application's thread error queue is left as
-it was. GSSAPI channel bindings (coro-ldap-ipb) can use the same
+it was. GSSAPI channel bindings (coro-ldap-ipb, below) use the same
 `sasl_bind_context::bindings` (tls-server-end-point, prefixed, as
 `application_data`). Tested: the hash choice for ECDSA (SHA-224/256/384,
 SHA-1), RSA (SHA-512, SHA-1, MD5), RSASSA-PSS (SHA-384), Ed25519;
@@ -749,7 +750,8 @@ ccache; otherwise `gss_acquire_cred` for that name, which looks through
 the cache collection) and `authz_id`. `start()` and `step()` run
 `gss_init_sec_context` (Kerberos OID 1.2.840.113554.1.2.2, written out
 so the code builds against MIT and Heimdal headers; mutual authentication
-and sequencing requested; no channel bindings) until the context is
+and sequencing requested; channel bindings over TLS, below) until the
+context is
 established, the last output token sent even if empty; a context without
 mutual authentication is refused. The next challenge is the server's
 wrapped security layer offer (`gss_unwrap`, exactly 4 octets: layer mask,
@@ -784,11 +786,46 @@ every LDAP PDU) are not provided; TLS is the protection. Active Directory
 notes: its "LDAP server signing requirements" policy, when it requires
 signing, refuses no-layer SASL binds over plain LDAP
 (strongerAuthRequired, 00002028), so use TLS there; its "LDAP channel
-binding" policy, when "Always", refuses them over TLS too, since no
-channel bindings (tls-server-end-point) are sent. Tested without a KDC
-(the layer messages, input checks, GSS-API errors before anything is
-sent) and end to end against slapd (cyrus-sasl's gssapi plugin) and a
-throwaway MIT KDC (`tests/integration/run_kdc.sh`).
+binding" policy (LdapEnforceChannelBinding), when "Always", refuses them
+over TLS without channel bindings. Channel bindings (coro-ldap-ipb):
+`prepare()` computes the `gss_channel_bindings_struct`'s application data
+once per bind (`detail::gssapi_channel_binding_data`, a pure function):
+over TLS, "tls-server-end-point:" followed by the connection's RFC 5929
+hash (`sasl_bind_context::bindings`, the hash SCRAM-PLUS uses), or with
+`gssapi_channel_binding_form::openldap` OpenLDAP's hash of
+`peer_certificate` (`openldap_tls_server_end_point()`, as SCRAM's openldap
+form); the prefix is `prefixed_channel_binding()` (channel_binding.hpp,
+RFC 5056 section 2.1: "channel bindings MUST start with the channel
+binding unique prefix followed by a colon"). The addresses are
+GSS_C_AF_UNSPEC and empty (RFC 2744 section 3.11), and every
+`gss_init_sec_context` call of the exchange gets the same struct. Why
+this form: Windows' clients pass Schannel's
+SECPKG_ATTR_ENDPOINT_BINDINGS, whose data "begins with
+tls-server-end-point:" (Microsoft's SEC_CHANNEL_BINDINGS documentation),
+and AD checks that; OpenLDAP's libldap builds the same bytes
+(`ldap_pvt_sasl_cbinding`, "tls-server-end-point:" + hash) and cyrus-sasl's
+gssapi plugin passes them as `application_data` with zeroed addresses;
+OpenJDK's JDK-8245527 (AD channel binding for JNDI/GSS) does the same.
+Kerberos then carries the MD5 of the struct in the authenticator checksum
+(RFC 4121 section 4.1.1.2). On by default (`gssapi_channel_binding::
+tls_server_end_point`): an acceptor given no bindings (slapd without
+`sasl-cbinding`, AD with the policy "Never") ignores the client's, and
+the opt-out `gssapi_channel_binding::none` is for a server whose
+acceptor holds other bindings (a TLS-terminating proxy in front). No
+bindings without TLS, nor for a certificate without tls-server-end-point
+(Ed25519, Ed448, in the RFC form): the bind goes on unbound rather than
+fail, since a server enforcing the policy refuses it anyway. Not
+tls-exporter: neither AD nor slapd takes it for GSSAPI. MIT krb5 1.19+
+signals the bindings to the acceptor (KERB_AP_OPTIONS_CBT) only with
+krb5.conf's `client_aware_gss_bindings`; that is the user's
+configuration. GSS-SPNEGO is not implemented (it would take the same
+bindings: MIT passes them through SPNEGO since 1.19). Tested without a
+KDC (the layer messages, input checks, GSS-API errors before anything is
+sent, the bindings' bytes, `gss_init_sec_context` accepting the struct)
+and end to end against slapd (cyrus-sasl's gssapi plugin) and a
+throwaway MIT KDC (`tests/integration/run_kdc.sh`); bindings against AD
+(or slapd with `sasl-cbinding`) are not tested end to end
+(coro-ldap-c2u).
 
 Referrals and continuation references are returned, never chased by a
 connection: `error::referrals` and `search_stream::references()` keep the

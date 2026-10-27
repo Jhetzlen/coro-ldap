@@ -55,9 +55,41 @@
 //   to require signing it refuses binds over plain ldap:// that do not sign
 //   (errc::stronger_auth_required, diagnostic 00002028): use TLS, which
 //   satisfies the policy.
-// - No channel binding (GSS_C_NO_CHANNEL_BINDINGS): an Active Directory
-//   whose "LDAP channel binding" policy is "Always" refuses the bind over
-//   TLS.
+// - Channel binding (RFC 5056, RFC 5929 section 4), chosen with
+//   sasl_gssapi_options::channel_binding: over TLS (ldaps:// or StartTLS),
+//   gss_init_sec_context is given a gss_channel_bindings_struct with no
+//   addresses (GSS_C_AF_UNSPEC, empty) and the application data
+//   "tls-server-end-point:" followed by the hash of the server's
+//   certificate (prefixed_channel_binding, channel_binding.hpp). Kerberos
+//   puts its MD5 into the authenticator's checksum (RFC 4121 section
+//   4.1.1.2), and the server compares it with the hash of the certificate
+//   it sent: a man in the middle that terminates TLS with a certificate of
+//   its own cannot relay the bind. This is the form Active Directory checks
+//   for its "LDAP channel binding" policy (LdapEnforceChannelBinding: with
+//   "Always" it refuses a bind over TLS without it; with "When supported"
+//   it refuses a wrong one): Windows' own clients pass Schannel's
+//   SECPKG_ATTR_ENDPOINT_BINDINGS, which begins with "tls-server-end-point:"
+//   (Microsoft's SEC_CHANNEL_BINDINGS documentation; OpenJDK's
+//   JDK-8245527 does the same for AD), and OpenLDAP's libldap with
+//   cyrus-sasl's gssapi plugin sends the same bytes ("sasl-cbinding
+//   tls-endpoint": ldap_pvt_sasl_cbinding builds the prefixed data,
+//   gssapi.c passes it as application_data, addresses zeroed). MIT krb5
+//   1.19 and later also tells the server that the client binds
+//   (Microsoft's KERB_AP_OPTIONS_CBT) when krb5.conf sets
+//   client_aware_gss_bindings: an acceptor given bindings then requires
+//   them. The hash is RFC 5929's
+//   (channel_bindings::tls_server_end_point), or OpenLDAP's
+//   (sasl_gssapi_options::binding_form openldap, for a slapd with
+//   "sasl-cbinding tls-endpoint" and an RSASSA-PSS, Ed25519 or Ed448
+//   certificate: see sasl_scram.hpp). Without TLS, or when the certificate
+//   has no tls-server-end-point (RFC 5929 has none for Ed25519 and Ed448),
+//   no bindings are sent (GSS_C_NO_CHANNEL_BINDINGS), and the bind goes on.
+//   A server whose acceptor is given no bindings (slapd without
+//   sasl-cbinding, AD with the policy "Never") ignores them; one given
+//   others (TLS terminated by a proxy in front of the server, whose
+//   certificate the client sees) refuses the bind (GSS_S_BAD_BINDINGS):
+//   gssapi_channel_binding::none turns them off. tls-exporter (RFC 9266)
+//   is not used: neither Active Directory nor OpenLDAP knows it.
 // - Names are UTF-8 and passed to the GSS-API library as given (Kerberos
 //   principals are byte strings; UTF-8 is what MIT krb5 and Active
 //   Directory use). The target, principal and authorization identity must
@@ -89,6 +121,7 @@
 // inappropriateAuthentication (errc, cond::auth_failed).
 #pragma once
 
+#include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/sasl.hpp"
 
@@ -99,6 +132,23 @@
 #include <string_view>
 
 namespace jhetz::ldap {
+
+// Whether the Kerberos exchange is bound to the TLS channel (see the header
+// comment).
+enum class gssapi_channel_binding : std::uint8_t {
+	tls_server_end_point,// over TLS: "tls-server-end-point:<hash>" (RFC 5929)
+	none,// GSS_C_NO_CHANNEL_BINDINGS, even over TLS
+};
+
+// The hash of gssapi_channel_binding::tls_server_end_point.
+enum class gssapi_channel_binding_form : std::uint8_t {
+	// RFC 5929 section 4.1, as Active Directory computes it.
+	rfc5929,
+	// OpenLDAP's (scram_channel_binding_form::openldap's hash): differs
+	// only for RSASSA-PSS, Ed25519 and Ed448 certificates, where a slapd
+	// with "sasl-cbinding tls-endpoint" expects SHA-256.
+	openldap,
+};
 
 struct sasl_gssapi_options
 {
@@ -114,6 +164,11 @@ struct sasl_gssapi_options
 	// An identity to act as ("dn:...", "u:..."), sent in the security layer
 	// reply. Empty: the authenticated identity itself.
 	std::string authz_id{};
+	// Channel binding over TLS; none for a server that refuses the
+	// connection's (behind a TLS-terminating proxy).
+	gssapi_channel_binding channel_binding = gssapi_channel_binding::tls_server_end_point;
+	// The hash of the tls-server-end-point binding.
+	gssapi_channel_binding_form binding_form = gssapi_channel_binding_form::rfc5929;
 };
 
 class sasl_gssapi final : public sasl_mechanism
@@ -127,7 +182,7 @@ class sasl_gssapi final : public sasl_mechanism
 	auto operator=(const sasl_gssapi &) -> sasl_gssapi & = delete;
 
 	[[nodiscard]] auto name() const noexcept -> std::string_view override { return "GSSAPI"; }
-	// Keeps the host, for the default target.
+	// Keeps the host, for the default target, and the channel bindings.
 	void prepare(const sasl_bind_context &context) override;
 	// The first token of the Kerberos exchange (an AP-REQ). Blocks while
 	// the KDC is contacted: sasl_bind calls offload_start() instead.
@@ -144,17 +199,21 @@ class sasl_gssapi final : public sasl_mechanism
 	[[nodiscard]] auto offload_step(std::optional<std::string_view> challenge) -> sasl_work override;
 	// Succeeds only once the security layer reply was sent.
 	[[nodiscard]] auto complete(std::optional<std::string_view> server_creds) -> result<void> override;
-	// Binds to no TLS channel (no channel bindings in the Kerberos
-	// exchange): nullopt.
+	// tls_server_end_point when the exchange carries channel bindings,
+	// else nullopt (never tls-exporter).
 	[[nodiscard]] auto channel_binding_used() const noexcept -> std::optional<channel_binding_type> override
 	{
-		return std::nullopt;
+		if (bindings_.empty()) {
+			return std::nullopt;
+		}
+		return channel_binding_type::tls_server_end_point;
 	}
 
   private:
 	struct state;// GSS-API handles; gssapi.h stays out of this header
 	sasl_gssapi_options options_;
 	std::string host_;
+	std::string bindings_;// the application data; empty: no bindings
 	std::shared_ptr<state> state_;// shared with an offloaded step
 };
 
@@ -186,6 +245,15 @@ namespace detail {
 	// well-formed UTF-8 or holds a control character.
 	[[nodiscard]] auto gssapi_layer_reply(const gssapi_layer_offer &offer, std::string_view authz_id)
 	  -> result<std::string>;
+
+	// The application data of the channel bindings for a bind on a
+	// connection described by `context` (its tls, bindings and
+	// peer_certificate): "tls-server-end-point:" and the hash of the
+	// `form`, or empty (no bindings) for gssapi_channel_binding::none, no
+	// TLS, or no hash.
+	[[nodiscard]] auto gssapi_channel_binding_data(const sasl_bind_context &context,
+	  gssapi_channel_binding binding,
+	  gssapi_channel_binding_form form) -> std::string;
 
 }// namespace detail
 

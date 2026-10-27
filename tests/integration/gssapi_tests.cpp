@@ -8,6 +8,7 @@
 // maps a principal to the entry of the same uid. Skipped without them, or
 // when slapd does not offer GSSAPI (cyrus-sasl's gssapi plugin missing).
 #include "../net/net_test_support.hpp"
+#include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl_gssapi.hpp"
 
@@ -185,14 +186,25 @@ TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 	}
 	SECTION("over StartTLS and ldaps://")
 	{
+		// With tls-server-end-point channel bindings, which slapd's
+		// acceptor checks (run_slapd.sh: "sasl-cbinding tls-endpoint"; its
+		// test certificate hashes the same in both forms).
 		auto o = trusting();
 		o.start_tls = true;
 		auto tls = open(ioc, localhost_url(), o);
 		REQUIRE(tls.is_tls());
 		ldap::sasl_gssapi mech;
 		CHECK(bind_and_who(ioc, tls, mech) == user007);
+		CHECK(mech.channel_binding_used() == ldap::channel_binding_type::tls_server_end_point);
 		auto ldaps = open(ioc, env("JHETZ_LDAP_IT_LDAPS"));
 		CHECK(bind_and_who(ioc, ldaps, mech) == user007);
+		ldap::sasl_gssapi openldap_form({ .binding_form = ldap::gssapi_channel_binding_form::openldap });
+		CHECK(bind_and_who(ioc, ldaps, openldap_form) == user007);
+		// Without bindings: MIT's acceptor takes an initiator that sends
+		// none (unless it announced them, KERB_AP_OPTIONS_CBT).
+		ldap::sasl_gssapi unbound({ .channel_binding = ldap::gssapi_channel_binding::none });
+		CHECK(bind_and_who(ioc, ldaps, unbound) == user007);
+		CHECK_FALSE(unbound.channel_binding_used().has_value());
 	}
 	SECTION("an unknown service principal")
 	{

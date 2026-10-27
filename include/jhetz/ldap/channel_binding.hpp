@@ -51,6 +51,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace jhetz::ldap {
@@ -99,5 +100,24 @@ struct channel_bindings
 		return {};
 	}
 };
+
+// The channel bindings of type `t` with their unique prefix: the type's
+// registered name, a colon, then `data` (RFC 5056 section 2.1: "channel
+// bindings MUST start with the channel binding unique prefix followed by a
+// colon"). The form GSS-API's application_data carries (sasl_gssapi):
+// Windows SSPI gives tls-server-end-point this way (SEC_CHANNEL_BINDINGS
+// from QueryContextAttributes SECPKG_ATTR_ENDPOINT_BINDINGS begins with
+// "tls-server-end-point:"), and OpenLDAP's libldap builds it for cyrus-sasl
+// (ldap_pvt_sasl_cbinding). SCRAM's RFC 5802 form has no prefix.
+[[nodiscard]] inline auto prefixed_channel_binding(channel_binding_type t, std::span<const std::byte> data)
+  -> std::string
+{
+	std::string out(to_string(t));
+	out += ':';
+	for (const std::byte b : data) {
+		out += static_cast<char>(b);
+	}
+	return out;
+}
 
 }// namespace jhetz::ldap

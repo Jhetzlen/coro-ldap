@@ -489,7 +489,8 @@ itself needs only ICU.
   binds count; the default implementation says tls_exporter, so a
   mechanism that does not override it consumes tls-exporter whenever it
   is given the data and its `start()` succeeds, while EXTERNAL, GSSAPI
-  and SCRAM report exactly what they used), later binds get no
+  (tls-server-end-point when it binds, never tls-exporter) and SCRAM
+  report exactly what they used), later binds get no
   tls-exporter data: SCRAM-SHA-256-PLUS then defaults to
   tls-server-end-point, and fails with
   `client_errc::tls_required` before sending anything when that is
@@ -535,8 +536,21 @@ itself needs only ICU.
   `client_errc::security_layer_required`. Active Directory: with the
   "LDAP server signing requirements" policy set to require signing, AD
   refuses unsigned SASL binds over plain ldap:// (`stronger_auth_required`,
-  `00002028`), so use TLS there; there is no channel binding, so an AD
-  whose "LDAP channel binding" policy is "Always" refuses it over TLS.
+  `00002028`), so use TLS there. Channel binding: over TLS the Kerberos
+  exchange is bound to the server's certificate (RFC 5929
+  tls-server-end-point, given to `gss_init_sec_context` as
+  `application_data` "tls-server-end-point:<hash>" with no addresses, the
+  form Windows SSPI and OpenLDAP/cyrus-sasl use), which an AD whose "LDAP
+  channel binding" policy is "Always" requires; a man in the middle with
+  a certificate of its own cannot relay the bind. No bindings without TLS
+  or when the certificate has no tls-server-end-point (Ed25519, Ed448).
+  `sasl_gssapi_options::channel_binding = gssapi_channel_binding::none`
+  turns it off (a server behind a TLS-terminating proxy refuses the
+  client's bindings), and `binding_form =
+  gssapi_channel_binding_form::openldap` takes OpenLDAP's hash (a slapd
+  with `sasl-cbinding tls-endpoint` and an RSASSA-PSS or EdDSA
+  certificate). `prefixed_channel_binding(type, data)`
+  (`channel_binding.hpp`) gives RFC 5056's prefixed form.
   GSS-API failures (no ticket, unknown service principal, unreachable
   KDC) are `client_errc::gssapi_failure` (`cond::auth_failed`), the
   context quoting GSS-API's major and minor status messages; never
@@ -810,5 +824,5 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: other SASL mechanisms (GSS-SPNEGO), GSSAPI security layers and
-channel binding, tls-unique.
+Not yet: other SASL mechanisms (GSS-SPNEGO), GSSAPI security layers,
+tls-unique.

@@ -5,6 +5,7 @@
 // SCRAM-SHA-256-PLUS carrying it in c=, TLS 1.2 without the extended master
 // secret, an Ed25519 server certificate, and renegotiation refused.
 #include "../../src/net/channel_binding.hpp"
+#include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/sasl_scram.hpp"
@@ -28,6 +29,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <functional>
 #include <latch>
@@ -279,6 +281,28 @@ TEST_CASE("channel binding: OpenLDAP's tls-server-end-point hash choice", "[net]
 		const std::array<std::byte, 3> junk{ std::byte{ 0x30 }, std::byte{ 0x01 }, std::byte{ 0x00 } };
 		CHECK(openldap_tls_server_end_point(junk).empty());
 		CHECK(openldap_tls_server_end_point({}).empty());
+	}
+}
+
+TEST_CASE("channel binding: the prefixed form of RFC 5056 section 2.1", "[net][channel_binding][rfc]")
+{
+	// "<unique prefix>:" then the data, byte for byte (GSS-API's
+	// application_data, as Windows SSPI and OpenLDAP's libldap form it).
+	const std::array<std::byte, 4> data{ std::byte{ 0x00 }, std::byte{ 0x3a }, std::byte{ 0x80 }, std::byte{ 0xff } };
+	CHECK(ldap::prefixed_channel_binding(ldap::channel_binding_type::tls_server_end_point, data)
+		  == std::string("tls-server-end-point:\x00\x3a\x80\xff", 25));
+	CHECK(ldap::prefixed_channel_binding(ldap::channel_binding_type::tls_exporter, data)
+		  == std::string("tls-exporter:\x00\x3a\x80\xff", 17));
+	CHECK(
+	  ldap::prefixed_channel_binding(ldap::channel_binding_type::tls_server_end_point, {}) == "tls-server-end-point:");
+	SECTION("over a SHA-256 hash: the 21-byte prefix and 32 bytes")
+	{
+		const auto der = self_signed(ec_key("P-256").get(), EVP_sha256());
+		const auto hash = net::detail::tls_server_end_point(der);
+		const auto out = ldap::prefixed_channel_binding(ldap::channel_binding_type::tls_server_end_point, hash);
+		REQUIRE(out.size() == 21 + 32);
+		CHECK(out.starts_with("tls-server-end-point:"));
+		CHECK(std::memcmp(out.data() + 21, digest(der, EVP_sha256()).data(), 32) == 0);
 	}
 }
 
