@@ -724,8 +724,13 @@ namespace detail {
 		// order (`avoid` last), until one connects: that connection, pooled
 		// with one lease (exclusive or not), or null if none did (`last` is
 		// then the last failure) or `deadline` passed (no attempt starts
-		// after it). Fails only when it must not go on: the client closed,
-		// or the task stopped.
+		// after it). Also null, without trying `avoid`, when its turn comes
+		// and pick_avoiding() would now hand out a pooled connection:
+		// acquire() takes that one. That case follows the other servers'
+		// attempts in this pass, whose ends bumped the pool's version, so
+		// acquire() looks at the pool again at once instead of waiting.
+		// Fails only when it must not go on: the client closed, or the task
+		// stopped.
 		static auto try_servers(std::shared_ptr<client_state> self,
 		  net::detail::deadline_t deadline,
 		  bool exclusive,
@@ -748,8 +753,9 @@ namespace detail {
 					continue;
 				}
 				// The avoided server comes last: once the others failed, a pooled
-				// connection acquire() would now hand out (one to that server,
-				// idle or shareable) serves rather than a new one to it.
+				// connection acquire() would now hand out (to that server, or to
+				// another that became idle or shareable during this pass's
+				// attempts) serves rather than a new one to it.
 				if (i == avoid && self->pick_avoiding(exclusive, excluded, now, avoid)) {
 					co_return nullptr;
 				}

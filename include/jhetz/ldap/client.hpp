@@ -414,15 +414,16 @@ class client
 	// takes another pooled connection or opens a new one. After busy or
 	// unavailable it prefers the other servers: a pooled connection to one
 	// of them, else a new connection to the first of them, in priority
-	// order, that may be tried now, and only then that server again (so a
-	// single server is retried as before); its backoff is not touched (it
-	// answered). After a lost connection it goes by priority order, as
-	// acquire() does. Any other error, a server result code included
-	// (no_such_object, ...), a timeout or a cancellation, is returned as is,
-	// and so is the retry's outcome. Each acquire() is bounded by
-	// acquire_timeout and fails as acquire() does (that error is returned,
-	// also for the retry's); the operations are bounded by their own
-	// timeouts (search_params::timeout, ..., else
+	// order, that may be tried now, and only then that server again (a
+	// pooled connection to it first, before a new one; so a single server
+	// is retried as before); its backoff is not touched (it answered).
+	// After a lost connection it goes by priority order, as acquire() does.
+	// Any other error, a server result code included (no_such_object, ...),
+	// a timeout or a cancellation, is returned as is, and so is the retry's
+	// outcome. Each acquire() is bounded by acquire_timeout and fails as
+	// acquire() does (that error is returned, also for the retry's); the
+	// operations are bounded by their own timeouts
+	// (search_params::timeout, ..., else
 	// connection_options::operation_timeout). The task's stop token stops
 	// the acquire() and the operation. Read-only operations only: run
 	// updates and extended operations on a lease (they are never retried by
