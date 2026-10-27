@@ -1532,10 +1532,8 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   only on link-local and multicast addresses, so `[::1%25lo]` fails to
   resolve.
 - TLS: verification is on by default (Corosio's own default is off), with
-  the system trust store (OpenSSL's; on Windows the filtered CryptoAPI ROOT
-  store, copied into OpenSSL per connection: roots fetched on demand by
-  AuthRoot are missed and a NotBefore date on serverAuth drops the root;
-  CryptoAPI chain verification is coro-ldap-1q5), SNI, host name checks (IP literals against iPAddress
+  the system trust store (OpenSSL's; on Windows CryptoAPI's verdict on the
+  chain, below), SNI, host name checks (IP literals against iPAddress
   entries, zone stripped) and TLS 1.2 minimum. Options: `ca_file`, `ca_dir`,
   `ca_pem`, client `cert_file` + `key_file`, `server_name`; the only opt-out
   is `certificate_verification::insecure_accept_any`. Configuration errors
@@ -1549,6 +1547,37 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   OpenSSL's defaults for old certificates.
   CA bundles are split by us because Corosio loads only the first
   certificate of a bundle (worth reporting upstream).
+- Windows default verification (coro-ldap-1q5; unverified, no Windows
+  build yet): with no `ca_file`, `ca_dir` or `ca_pem`, the verify
+  callback hands the server's chain (the leaf, then what the server sent)
+  to CryptoAPI as wldap32 does: `CertGetCertificateChain` for serverAuth
+  with the sent certificates in a memory store, then
+  `CertVerifyCertificateChainPolicy(CERT_CHAIN_POLICY_SSL,
+  AUTHTYPE_SERVER)`. CryptoAPI's verdict replaces OpenSSL's on the chain
+  rather than adding to it: the point is the roots AuthRoot fetches on
+  demand, which OpenSSL (with the filtered ROOT store copied into it) does
+  not have, so requiring both would keep that gap; and Windows applies
+  its own root program rules (distrust, NotBefore dates, name
+  constraints) itself. So OpenSSL's errors are let through, except a host
+  name or IP address mismatch, and the leaf's final callback (OpenSSL
+  calls it last, after every error and the host name check) asks
+  CryptoAPI; a handshake that never reached it fails closed. The host
+  name stays OpenSSL's, with `host_matching` as on Linux (the SSL policy
+  gets SECURITY_FLAG_IGNORE_CERT_CN_INVALID and no server name): one
+  matching rule on every platform, no second UTF-16 or IDN conversion of
+  the name. Revocation: CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT,
+  soft-fail (CERT_CHAIN_POLICY_IGNORE_ALL_REV_UNKNOWN_FLAGS: an
+  unreachable CRL or OCSP responder is accepted, a revoked certificate
+  is not): stricter than OpenSSL, which checks none, without making
+  offline networks fail. The network retrieval is bounded by what is left
+  of the connect's or StartTLS's deadline
+  (CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT); it blocks the io thread
+  meanwhile, as CryptoAPI has no asynchronous interface. Custom anchors
+  stay OpenSSL's alone (they replace the system store), and
+  `insecure_accept_any` never asks CryptoAPI. A rejection reads
+  `tls handshake: server certificate: Windows certificate chain:
+  <reason> (0x<HRESULT>)`. The callback logic is tested on Linux with a
+  stand-in for CryptoAPI (`verify_state::system_chain`).
 - StartTLS (implemented, step 7): `net::start_tls(transport, read_buffer,
   tls_options, timeout)` builds a reference-mode `openssl_stream` over the
   socket the transport owns, with the same `detail::make_tls_setup` /
@@ -1876,10 +1905,10 @@ and its destructor joins the thread.
   configure time). No workarounds for older compilers.
 - Platforms: Linux is tested. Windows is ported in the code only (no
   Windows build has run yet; docs/DEVELOPMENT.md, "Windows"): Winsock and
-  AF_UNIX (Windows 10 1803+) through Corosio, the CryptoAPI ROOT store as
-  the default trust anchors (`src/net/trust_store_win.cpp`, the only
-  Windows-specific source; CMake picks it instead of
-  `trust_store_default.cpp`), file names through `std::filesystem::path`.
+  AF_UNIX (Windows 10 1803+) through Corosio, CryptoAPI for default
+  verification (`src/net/trust_store_win.cpp`, the only Windows-specific
+  source; CMake picks it instead of `trust_store_default.cpp`; below),
+  file names through `std::filesystem::path`.
   Linux only: abstract ldapi:// sockets, SASL GSSAPI (no SSPI), the
   integration tests, coverage and the fuzzers. `/WX` is off by default on
   MSVC and clang-cl until the first clean build (coro-ldap-2we). macOS is

@@ -109,11 +109,13 @@ struct tls_options
 
 	// Trust anchors. If none of the three is set, the system default store is
 	// used: OpenSSL's (it honours SSL_CERT_FILE and SSL_CERT_DIR), or on
-	// Windows the CryptoAPI ROOT store, read for every connect, without the
-	// roots restricted from server authentication or distrusted (the
-	// Disallowed store). Windows fetches many roots only on demand (AuthRoot
-	// auto-update): one never fetched is missing, pass ca_file for it.
-	// Setting any of them replaces the system store; they may be combined.
+	// Windows CryptoAPI: the server's chain is verified as Windows' own
+	// clients verify it (CertGetCertificateChain with the SSL policy: the
+	// roots Windows fetches on demand, its distrust and NotBefore rules, and
+	// revocation, soft-fail: an unreachable CRL or OCSP responder is not an
+	// error, a revoked certificate is); the host name is matched as
+	// elsewhere (host_matching). Setting any of them replaces the system
+	// store, CryptoAPI included; they may be combined.
 	std::filesystem::path ca_file{};// PEM file with one or more CA certificates
 	// Directory hashed with `openssl rehash`. OpenSSL reads it lazily through
 	// char paths: on Windows keep its path ASCII (files are opened by UTF-8

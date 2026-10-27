@@ -14,9 +14,13 @@
 #include <boost/capy/task.hpp>
 #include <boost/corosio/tls_context.hpp>
 
+#include <chrono>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 struct ssl_st;// OpenSSL's SSL
 
@@ -38,6 +42,19 @@ struct verify_state
 	// Owned by the stream: only dereferenced by tls_handshake(), right after
 	// the handshake succeeded (record_tls_session), which then resets it.
 	ssl_st *ssl = nullptr;
+	// Default verification where the platform verifies the chain
+	// (platform_verifies_chain(), Windows): OpenSSL's verdict on the chain
+	// is replaced by this function's (verify_system_chain, trust_store.hpp),
+	// run once at the leaf; its host name verdict is kept. Set by
+	// make_tls_setup(); null otherwise (tests may set a stand-in).
+	using chain_verifier = auto (*)(std::span<const std::vector<unsigned char>> chain,
+	  std::optional<std::chrono::milliseconds> timeout) -> result<void>;
+	chain_verifier system_chain = nullptr;
+	// verify_system_chain ran and accepted the chain.
+	bool system_chain_verified = false;
+	// The handshake's deadline (tls_handshake()), which bounds
+	// verify_system_chain's network retrieval.
+	deadline_t deadline{};
 };
 
 struct tls_setup
@@ -85,7 +102,8 @@ auto tls_peer_name(std::string_view host, const tls_options &options) -> std::st
 // renegotiation is off. A handshake that succeeded without running the
 // verify callback (no certificate, or the Corosio race above) fails with
 // client_errc::internal_error: it would have no peer data and, under full
-// verification, no strict host check. That branch has no deterministic
+// verification, no strict host check; so does one under system chain
+// verification (verify_state::system_chain) that never reached it. That branch has no deterministic
 // test: the race is not reproducible on demand and every certificate-based
 // handshake runs the callback. Errors have the context "tls handshake"
 // (plus ": server certificate: <reason>" when verification failed).

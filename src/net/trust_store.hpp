@@ -6,17 +6,21 @@
 // connection, filtered (system_certificate below), each passed to Corosio as
 // PEM.
 //
-// Known gap: Windows downloads most Microsoft-trusted roots on demand
-// (AuthRoot auto-update) while CryptoAPI builds a chain; a root that was
-// never fetched is not in ROOT yet, so a server chaining to it fails to
-// verify here although CryptoAPI clients accept it. Install the root (or
-// pass ca_file) meanwhile.
+// On Windows, default verification also hands the server's chain to
+// CryptoAPI (verify_system_chain), whose verdict replaces OpenSSL's on
+// the chain: CryptoAPI fetches the AuthRoot roots Windows downloads on
+// demand (a root never fetched is not in ROOT yet), and applies Windows'
+// root program and revocation checks. The ROOT anchors still go to
+// OpenSSL, which then builds and checks the chain as elsewhere; only its
+// host name verdict is kept.
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
 
 #include <boost/corosio/tls_context.hpp>
 
+#include <chrono>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -55,5 +59,28 @@ auto add_trust_anchors(boost::corosio::tls_context &ctx, std::span<const std::st
 // "tls: system trust store[: ...]". Defined in trust_store_default.cpp, or
 // trust_store_win.cpp on Windows (CMake picks one).
 auto load_system_trust(boost::corosio::tls_context &ctx) -> result<void>;
+
+// Whether default verification (certificate_verification::full without
+// ca_file, ca_dir or ca_pem) verifies the server's chain with
+// verify_system_chain, whose verdict replaces OpenSSL's on the chain:
+// true on Windows (CryptoAPI), false elsewhere (OpenSSL decides, with
+// load_system_trust's anchors).
+auto platform_verifies_chain() noexcept -> bool;
+
+// Verifies the server certificate chain `chain` (DER: the leaf, then the
+// other certificates the server sent) for TLS server authentication with
+// the platform's chain engine and SSL policy (Windows:
+// CertGetCertificateChain for serverAuth, revocation checked for every
+// certificate but the root, then CertVerifyCertificateChainPolicy with
+// CERT_CHAIN_POLICY_SSL; a revocation status that cannot be determined,
+// e.g. an unreachable CRL, is not an error, a revoked certificate is). The
+// host name is not checked: it stays OpenSSL's (host_name_matching).
+// `timeout` bounds the network retrieval CryptoAPI may do (AuthRoot
+// roots, intermediates, CRLs, OCSP), all of it together; nullopt leaves
+// Windows' defaults. Blocks the calling thread meanwhile. Errors have the
+// context "Windows certificate chain: <why>". Not available off Windows
+// (std::errc::function_not_supported).
+auto verify_system_chain(std::span<const std::vector<unsigned char>> chain,
+  std::optional<std::chrono::milliseconds> timeout) -> result<void>;
 
 }// namespace jhetz::ldap::net::detail

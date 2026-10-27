@@ -32,17 +32,21 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <optional>
+#include <span>
 #include <stop_token>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 #ifdef __linux__
 #include <arpa/inet.h>
@@ -1595,6 +1599,144 @@ TEST_CASE("TLS peer name: server_name, else the host without an IPv6 zone", "[ne
 	CHECK(tls_peer_name("::1", {}) == "::1");
 	CHECK(tls_peer_name("fe80::1%eth0", {}) == "fe80::1");
 	CHECK(tls_peer_name("fe80::1%eth0", { .server_name = "ldap.example.org" }) == "ldap.example.org");
+}
+
+namespace {
+
+// A stand-in for the platform's chain verification (verify_state::
+// system_chain: CryptoAPI on Windows), which records its calls.
+struct platform_chain_calls
+{
+	int calls = 0;
+	std::vector<std::vector<unsigned char>> chain{};
+	std::optional<std::chrono::milliseconds> timeout{};
+};
+auto platform_calls() -> platform_chain_calls &
+{
+	static platform_chain_calls instance;
+	return instance;
+}
+auto platform_accepts(std::span<const std::vector<unsigned char>> chain,
+  std::optional<std::chrono::milliseconds> timeout) -> ldap::result<void>
+{
+	auto &c = platform_calls();
+	++c.calls;
+	c.chain.assign(chain.begin(), chain.end());
+	c.timeout = timeout;
+	return {};
+}
+auto platform_rejects(std::span<const std::vector<unsigned char>> chain,
+  std::optional<std::chrono::milliseconds> timeout) -> ldap::result<void>
+{
+	std::ignore = platform_accepts(chain, timeout);
+	return ldap::fail(std::make_error_code(std::errc::permission_denied), "Windows certificate chain: revoked");
+}
+
+// ldap:// then tls_handshake() with default verification and `verifier`
+// as the platform's; "" on success, else the error's context.
+auto handshake_with_platform_chain(corosio::io_context &ioc,
+  std::string text,
+  net::detail::verify_state::chain_verifier verifier,
+  net::detail::deadline_t deadline = std::nullopt) -> capy::task<std::string>
+{
+	auto u = ldap::url::parse(text);
+	if (!u) {
+		co_return "url";
+	}
+	auto t = co_await net::connect(ioc, *u);
+	if (!t) {
+		co_return "connect: " + std::string(t.error().message());
+	}
+	auto setup = net::detail::make_tls_setup({});
+	if (!setup) {
+		co_return "setup: " + std::string(setup.error().message());
+	}
+	setup->state->system_chain = verifier;
+	auto &im = net::transport_access::get(*t);
+	auto h = co_await net::detail::tls_handshake(im, "127.0.0.1", {}, std::move(*setup), deadline);
+	if (!h) {
+		co_return std::string(h.error().context);
+	}
+	if (auto w = co_await net::write_message(*t, bind_request_msg(1)); !w) {
+		co_return "client write: " + std::string(w.error().message());
+	}
+	net::read_buffer buf;
+	auto r = co_await net::read_message(*t, buf);
+	if (!r || *r != bind_response_msg(1, "welcome")) {
+		co_return "client read";
+	}
+	co_return "";
+}
+
+}// namespace
+
+// Windows' default verification (coro-ldap-1q5): CryptoAPI's verdict on the
+// chain replaces OpenSSL's, and OpenSSL's host name verdict is kept. Off
+// Windows make_tls_setup() never sets a platform verifier, so a stand-in
+// runs the same callback logic here.
+TEST_CASE("TLS with the platform verifying the chain", "[net][connect][tls]")
+{
+	CHECK(net::detail::make_tls_setup({}).value().state->system_chain == nullptr);
+	CHECK(net::detail::make_tls_setup({ .ca_pem = std::pmr::string(pki().ca_pem()) }).value().state->system_chain
+		  == nullptr);
+	CHECK(net::detail::make_tls_setup({ .verification = net::certificate_verification::insecure_accept_any })
+			.value()
+			.state->system_chain
+		  == nullptr);
+
+	corosio::io_context ioc;
+	tcp_server srv(ioc);
+	outcome<std::string> server;
+	outcome<std::string> client;
+	platform_calls() = {};
+
+	SECTION("a chain OpenSSL cannot anchor, accepted by the platform")
+	{
+		spawn(ioc, accept_and_serve(srv.acc, server_context(localhost_cert())), server);
+		spawn(ioc,
+		  handshake_with_platform_chain(ioc, srv.url("ldap"), platform_accepts, net::detail::clock::now() + io_limit),
+		  client);
+		drive(ioc);
+		CHECK_THAT(client.get(), IsEmpty());
+		CHECK_THAT(server.get(), IsEmpty());
+		CHECK(platform_calls().calls == 1);
+		REQUIRE(platform_calls().chain.size() == 1);// the server sends its leaf only
+		const auto der = certificate_der(localhost_cert().cert_pem);
+		CHECK(std::ranges::equal(platform_calls().chain.front(), der, [](unsigned char a, std::byte b) {
+			return a == std::to_integer<unsigned char>(b);
+		}));
+		REQUIRE(platform_calls().timeout.has_value());
+		CHECK(*platform_calls().timeout > std::chrono::milliseconds(0));
+		CHECK(*platform_calls().timeout <= io_limit);
+	}
+	SECTION("no deadline: no timeout")
+	{
+		spawn(ioc, accept_and_serve(srv.acc, server_context(localhost_cert())), server);
+		spawn(ioc, handshake_with_platform_chain(ioc, srv.url("ldap"), platform_accepts), client);
+		drive(ioc);
+		CHECK_THAT(client.get(), IsEmpty());
+		CHECK(platform_calls().calls == 1);
+		CHECK_FALSE(platform_calls().timeout.has_value());
+	}
+	SECTION("the platform rejects the chain")
+	{
+		spawn(ioc, accept_and_serve(srv.acc, server_context(localhost_cert())), server);
+		spawn(ioc, handshake_with_platform_chain(ioc, srv.url("ldap"), platform_rejects), client);
+		drive(ioc);
+		CHECK(client.get() == "tls handshake: server certificate: Windows certificate chain: revoked");
+		CHECK_THAT(server.get(), StartsWith("server handshake: "));
+		CHECK(platform_calls().calls == 1);
+	}
+	SECTION("OpenSSL's host name verdict is kept")
+	{
+		const auto leaf = pki().issue("localhost", "DNS:localhost");
+		spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
+		spawn(ioc, handshake_with_platform_chain(ioc, srv.url("ldap"), platform_accepts), client);
+		drive(ioc);
+		CHECK_THAT(client.get(),
+		  ContainsSubstring("tls handshake: server certificate: IP address mismatch", Catch::CaseSensitive::No));
+		CHECK(platform_calls().calls == 0);
+	}
 }
 
 TEST_CASE("net::start_tls needs an open plain TCP transport", "[net][starttls]")

@@ -51,7 +51,7 @@ others; the list of `jhetz::ldap_net` headers is in `tests/CMakeLists.txt`).
 ## Windows
 
 Status: the code has been ported to Windows (Winsock through Corosio, the
-CryptoAPI trust store, wide file paths, MSVC-safe code and CMake), but no
+CryptoAPI trust store and chain verification, wide file paths, MSVC-safe code and CMake), but no
 Windows build has run here: there is no Windows toolchain in the
 development setup, so the port is checked only by syntax checks against the
 mingw-w64 headers. Expect a first build to turn up warnings and small
@@ -100,27 +100,26 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
 
 ### Behaviour that differs on Windows
 
-- Default trust store: with no `ca_file`, `ca_dir` or `ca_pem`, the anchors
-  come from the CryptoAPI `ROOT` system store, enumerated again for every
-  connection (OpenSSL reads no Windows store). A root is skipped when its
-  extended key usage property excludes serverAuth, its disallowed usage
-  property lists serverAuth, it has a `CERT_DISALLOWED_FILETIME_PROP_ID`,
-  or it is also in the `Disallowed` store; the `CA` (intermediate) store
-  never provides anchors. A store that cannot be enumerated to the end
-  fails the connect rather than give a partial set.
-- NotBefore: the root program can stop trusting what a root issues after a
-  date (`CERT_NOT_BEFORE_FILETIME_PROP_ID`, for the uses
-  `CERT_NOT_BEFORE_ENHKEY_USAGE_PROP_ID` lists, or all). OpenSSL cannot
-  trust a root only for certificates issued before a date, so when the date
-  applies to serverAuth the root is not used at all (fail closed). Pass it
-  in `ca_file` to trust it anyway.
-- AuthRoot gap: Windows downloads most Microsoft-trusted roots on demand
-  (AuthRoot auto-update) while CryptoAPI builds a chain. A root no
-  CryptoAPI client has needed yet is not in `ROOT`, so a server chaining to
-  it fails to verify here although Windows' own clients accept it. Install
-  the root or pass `ca_file` meanwhile. Verifying the chain with CryptoAPI
-  itself (`CertGetCertificateChain` with the SSL policy, as wldap32 does)
-  would close the gap and add Windows' revocation checks: coro-ldap-1q5.
+- Default verification: with no `ca_file`, `ca_dir` or `ca_pem`, the
+  server's chain is verified by CryptoAPI (`CertGetCertificateChain` and
+  `CertVerifyCertificateChainPolicy` with the SSL policy, as wldap32
+  does), whose verdict replaces OpenSSL's on the chain: the roots Windows
+  fetches on demand (AuthRoot auto-update) are found, and Windows' own
+  distrust, NotBefore and name constraint rules apply. The host name is
+  still matched by OpenSSL, with `host_matching` as on Linux. Revocation
+  is checked for every certificate but the root, soft-fail: a CRL or OCSP
+  responder that cannot be reached in time is not an error, a revoked
+  certificate is. The fetches are bounded by what is left of the connect
+  or StartTLS timeout, and block the io thread meanwhile. A rejection's
+  context ends in `Windows certificate chain: <reason> (0x<HRESULT>)`.
+  DESIGN.md has the reasoning.
+- The `ROOT` store is still copied into OpenSSL per connection (a root is
+  skipped when its extended key usage property excludes serverAuth, its
+  disallowed usage property lists serverAuth, it has a
+  `CERT_DISALLOWED_FILETIME_PROP_ID` or a `CERT_NOT_BEFORE_FILETIME_PROP_ID`
+  applying to serverAuth, or it is also in the `Disallowed` store), and a
+  store that cannot be enumerated to the end fails the connect; with
+  CryptoAPI deciding on the chain, that copy no longer decides anything.
 - ldapi:// uses Windows' AF_UNIX, which needs Windows 10 1803 or later.
   Abstract socket names (a leading NUL, `ldapi://%00name`) are Linux only:
   elsewhere the URL is rejected as `invalid_url`. Winsock reads `sun_path`
@@ -168,6 +167,22 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
   "CET").
 - Static ICU (`U_STATIC_IMPLEMENTATION`, above) and a static OpenSSL's
   extra system libraries.
+- CryptoAPI chain verification (coro-ldap-1q5), syntax-checked only:
+  that `ldaps://` to a public server chaining to a root not yet in `ROOT`
+  connects (AuthRoot fetched); that the `[tls]` tests pass, in particular
+  "untrusted CA with the default (system) trust store" now failing with
+  `Windows certificate chain: untrusted root (CERT_E_UNTRUSTEDROOT, ...)`;
+  that a revoked server certificate fails with `CRYPT_E_REVOKED` while an
+  unreachable CRL distribution point passes (the SSL policy honouring
+  `CERT_CHAIN_POLICY_IGNORE_ALL_REV_UNKNOWN_FLAGS`); that
+  `SECURITY_FLAG_IGNORE_CERT_CN_INVALID` with a null `pwszServerName`
+  skips the name check (a certificate for another name passes CryptoAPI
+  and fails OpenSSL's host check); that OpenSSL always reaches the leaf's
+  final verify callback after letting chain errors through (a handshake
+  failing with "the system certificate chain check did not run" would
+  mean not); how long a connect blocks with no network for the AuthRoot,
+  AIA and CRL fetches, within the timeout; and whether the
+  `CERT_CHAIN_PARA_HAS_EXTRA_FIELDS` layout matches on MSVC.
 - The Winsock test sockets (`tests/net/platform.hpp`): overlapped, so that
   `SO_RCVTIMEO` bounds a blocking `recv`; the CLI test's `cmd.exe` quoting
   (`shell_quote` refuses `"` and `%`).

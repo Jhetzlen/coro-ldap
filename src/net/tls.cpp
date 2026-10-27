@@ -21,6 +21,7 @@
 #include <openssl/x509v3.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -221,18 +222,96 @@ namespace {
 		state.ssl = static_cast<SSL *>(X509_STORE_CTX_get_ex_data(store, SSL_get_ex_data_X509_STORE_CTX_idx()));
 	}
 
+	// The errors OpenSSL reports on the host name (Corosio's set_hostname):
+	// kept when the platform verifies the chain.
+	auto is_name_mismatch(int err) noexcept -> bool
+	{
+		return err == X509_V_ERR_HOSTNAME_MISMATCH || err == X509_V_ERR_IP_ADDRESS_MISMATCH;
+	}
+
+	// The server's chain as DER: the leaf, then every other certificate it
+	// sent (the store's untrusted stack, which on a client holds the peer's
+	// chain). Empty if the leaf cannot be encoded.
+	auto peer_chain_der(const X509_STORE_CTX *store) -> std::vector<std::vector<unsigned char>>
+	{
+		std::vector<std::vector<unsigned char>> out;
+		const auto add = [&out](X509 *cert) {
+			const int size = i2d_X509(cert, nullptr);
+			if (size <= 0) {
+				return false;
+			}
+			std::vector<unsigned char> der(static_cast<std::size_t>(size));
+			unsigned char *p = der.data();
+			if (i2d_X509(cert, &p) != size) {
+				return false;
+			}
+			out.push_back(std::move(der));
+			return true;
+		};
+		X509 *leaf = X509_STORE_CTX_get0_cert(store);
+		if (leaf == nullptr || !add(leaf)) {
+			ERR_clear_error();
+			return {};
+		}
+		if (STACK_OF(X509) *sent = X509_STORE_CTX_get0_untrusted(store); sent != nullptr) {
+			for (int i = 0; i < sk_X509_num(sent); ++i) {
+				X509 *cert = sk_X509_value(sent, i);
+				if (cert != nullptr && X509_cmp(cert, leaf) != 0) {
+					add(cert);
+				}
+			}
+		}
+		ERR_clear_error();
+		return out;
+	}
+
+	// What is left of `deadline`, at least 1 ms; nullopt without one.
+	auto time_left(const deadline_t &deadline) -> std::optional<std::chrono::milliseconds>
+	{
+		if (!deadline) {
+			return std::nullopt;
+		}
+		const auto left = std::chrono::ceil<std::chrono::milliseconds>(*deadline - clock::now());
+		return std::max(left, std::chrono::milliseconds(1));
+	}
+
+	// The platform's verdict on the chain (verify_state::system_chain), at
+	// the leaf's final callback, once: OpenSSL calls it last, after every
+	// error at any depth and after the host name check.
+	auto verify_chain_with_platform(verify_state &state, X509_STORE_CTX *store) -> bool
+	{
+		state.system_chain_verified = false;
+		auto r = state.system_chain(peer_chain_der(store), time_left(state.deadline));
+		if (!r) {
+			X509_STORE_CTX_set_error(store, X509_V_ERR_CERT_REJECTED);
+			if (state.reason.empty()) {
+				state.reason.assign(r.error().context);
+			}
+			return false;
+		}
+		state.system_chain_verified = true;
+		return true;
+	}
+
 	// The verify callback of certificate_verification::full: records why
 	// verification failed (the handshake error itself only says
 	// "certificate verify failed"). Never relaxes the built-in verdict; with
 	// strict_host set it also rejects a leaf that only OpenSSL's lenient
 	// host matching accepted (Corosio has no option for the
-	// X509_CHECK_FLAG_* flags, so the check is redone here).
+	// X509_CHECK_FLAG_* flags, so the check is redone here). When the
+	// platform verifies the chain (verify_state::system_chain), OpenSSL's
+	// errors other than a host name mismatch are let through and the leaf's
+	// final callback asks the platform instead (tls_handshake() fails a
+	// handshake that never got there).
 	auto verify_full(verify_state &state, bool preverified, X509_STORE_CTX *store) -> bool
 	{
 		if (store == nullptr) {
 			return preverified;
 		}
 		record_ssl(state, store);
+		if (state.system_chain != nullptr && !preverified && !is_name_mismatch(X509_STORE_CTX_get_error(store))) {
+			return true;
+		}
 		if (preverified && !state.strict_host.empty() && X509_STORE_CTX_get_error_depth(store) == 0) {
 			const std::string &host = state.strict_host;
 			constexpr unsigned flags = X509_CHECK_FLAG_NEVER_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS;
@@ -246,6 +325,9 @@ namespace {
 					  "partial wildcards; certificate depth 0)";
 				}
 			}
+		}
+		if (preverified && state.system_chain != nullptr && X509_STORE_CTX_get_error_depth(store) == 0) {
+			preverified = verify_chain_with_platform(state, store);
 		}
 		if (!preverified && state.reason.empty()) {
 			const int err = X509_STORE_CTX_get_error(store);
@@ -316,12 +398,17 @@ namespace {
 		return {};
 	}
 
+	// ca_file, ca_dir or ca_pem replace the system's trust anchors.
+	auto has_custom_trust(const tls_options &o) -> bool
+	{
+		return !o.ca_file.empty() || !o.ca_dir.empty() || !o.ca_pem.empty();
+	}
+
 	// The trust anchors of certificate_verification::full: the system's,
 	// or ca_file, ca_dir and ca_pem.
 	auto load_trust(corosio::tls_context &ctx, const tls_options &o) -> result<void>
 	{
-		const bool custom_trust = !o.ca_file.empty() || !o.ca_dir.empty() || !o.ca_pem.empty();
-		if (!custom_trust) {
+		if (!has_custom_trust(o)) {
 			return load_system_trust(ctx);
 		}
 		if (!o.ca_file.empty()) {
@@ -428,6 +515,11 @@ auto make_tls_setup(const tls_options &o) -> result<tls_setup>
 		if (auto r = load_trust(ctx, o); !r) {
 			return std::unexpected(std::move(r.error()));
 		}
+		// The platform's own chain verification (Windows: CryptoAPI) for the
+		// system trust store only: custom anchors are OpenSSL's alone.
+		if (!has_custom_trust(o) && platform_verifies_chain()) {
+			setup.state->system_chain = verify_system_chain;
+		}
 		ctx.set_verify_callback([state = setup.state](bool preverified, corosio::verify_context &vc) {
 			return verify_full(*state, preverified, static_cast<X509_STORE_CTX *>(vc.native_handle()));
 		});
@@ -472,6 +564,7 @@ auto tls_handshake(transport::impl &im,
 		&& !is_ip_literal(name)) {
 		setup.state->strict_host = name;
 	}
+	setup.state->deadline = deadline;
 	// im.tls is set before the handshake and kept only if it succeeds:
 	// transport::is_tls() is true during the handshake, so a caller that
 	// needs "TLS protects the stream" must also check that no handshake is
@@ -503,6 +596,11 @@ auto tls_handshake(transport::impl &im,
 	// skipped it (the ex_data race prime_corosio_openssl() works around).
 	if (setup.state->ssl == nullptr) {
 		co_return fail(client_errc::internal_error, "tls handshake: the certificate verify callback did not run");
+	}
+	// Fail closed if OpenSSL's errors were let through for the platform's
+	// verdict but the leaf's final callback, which asks for it, never ran.
+	if (setup.state->system_chain != nullptr && !setup.state->system_chain_verified) {
+		co_return fail(client_errc::internal_error, "tls handshake: the system certificate chain check did not run");
 	}
 	// The session outlives the handshake (it is the stream's), but the
 	// pointer is not kept: everything needed is read now, and renegotiation,

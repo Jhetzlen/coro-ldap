@@ -300,9 +300,13 @@ if(JHETZ_LDAP_BUILD_NET)
         src/net/trust_store.cpp
     )
     # Default verification's trust anchors (src/net/trust_store.hpp): the
-    # CryptoAPI ROOT store on Windows, OpenSSL's default paths elsewhere.
+    # CryptoAPI ROOT store and chain verification on Windows, OpenSSL's
+    # default paths elsewhere.
     if(WIN32)
         target_sources(jhetz_ldap_net PRIVATE src/net/trust_store_win.cpp)
+        # CERT_CHAIN_PARA's dwUrlRetrievalTimeout (verify_system_chain).
+        set_source_files_properties(src/net/trust_store_win.cpp PROPERTIES
+            COMPILE_DEFINITIONS CERT_CHAIN_PARA_HAS_EXTRA_FIELDS)
         target_link_libraries(jhetz_ldap_net PRIVATE crypt32)
     else()
         target_sources(jhetz_ldap_net PRIVATE src/net/trust_store_default.cpp)
