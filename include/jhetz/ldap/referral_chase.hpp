@@ -45,11 +45,14 @@
 // returned is at depth 1); RFC 4511 asks clients that count hops to handle
 // at least ten, the default. max_targets bounds the connector calls of one
 // chase. The original request's timeout (search_params / compare_params
-// ::timeout) is the budget of the whole chase, measured from the call: each
-// request sent to a target gets what is left of it, and once it is spent the
-// remaining URIs are limit_reached. Without a timeout each request has its
-// connection's operation_timeout and the chase has no overall limit. The
-// connector's own work is not bounded by it.
+// ::timeout) is the budget of the whole chase, measured from the call. The
+// connector's task is cancelled (through its stop token) when the budget
+// runs out while it works, and that URI is then failed with a timeout
+// error; each request sent to a target gets what is left of the budget once
+// the connector returned; once it is spent the remaining URIs are
+// limit_reached. A connector that ignores cancellation is bounded only by
+// itself (its connection is then not used). Without a timeout each request
+// has its connection's operation_timeout and the chase has no overall limit.
 //
 // Loops (RFC 4511: clients "MUST NOT repeatedly contact the same server for
 // the same request with the same parameters"): a URI whose server (scheme,
@@ -206,6 +209,7 @@ auto chase_compare(connection &origin,
 // credentials, or look at connection::name() to choose); empty: the
 // connection stays anonymous. The library never sends the origin's
 // credentials by itself. A connect, StartTLS or setup failure fails the URI.
+// Its connect, StartTLS and setup stop when the chase's budget is spent.
 // The connections close when the last copy of the connector is destroyed
 // (without an UnbindRequest), so keep it as long as the results need no
 // more of them; `ioc` must outlive it.

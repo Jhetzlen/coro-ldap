@@ -398,7 +398,8 @@ itself needs only ICU.
   same for a compare (`chased_compare{value, referrals}`). The URIs of one
   reference are alternatives, tried in order; `referral_policy` bounds the
   depth (`max_hops`, 10 by default as RFC 4511 asks) and the connector calls
-  (`max_targets`, 64); the request's `timeout` bounds the whole chase. Loops
+  (`max_targets`, 64); the request's `timeout` bounds the whole chase, the
+  connector's work included (cancelled when the budget is spent). Loops
   (the same server, DN, scope and filter, the origin's own request
   included) are skipped. Writes are never chased.
   `make_same_policy_connector(ioc, origin, options, allowed_hosts, setup)`

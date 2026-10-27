@@ -827,7 +827,10 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   scope, filter), seeded with the origin's request when its `name()` is a
   URL, and checked before the connector is asked (RFC 4511: never contact
   the same server for the same request twice). The request's timeout is
-  the budget of the whole chase. Results: every URI considered gets a
+  the budget of the whole chase: the connector's task runs under it
+  (`corosio::timeout`, so a pending connect or setup bind is cancelled
+  when it is spent) and each request to a target gets what is left after
+  the connector returned. Results: every URI considered gets a
   `referral_attempt` (followed, skipped_policy, skipped_loop,
   limit_reached, unparseable, failed with the error). A continuation
   reference that cannot be followed never fails the search but clears

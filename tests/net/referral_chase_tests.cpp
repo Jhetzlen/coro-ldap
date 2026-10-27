@@ -8,6 +8,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <boost/corosio/delay.hpp>
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -91,6 +94,8 @@ struct world
 	std::vector<std::string> refused{};
 	// Hosts the connector fails for.
 	std::vector<std::string> unreachable{};
+	// Hosts the connector works on until it is cancelled.
+	std::vector<std::string> hanging{};
 	// Runs at each connector call.
 	std::function<void()> on_ask{};
 
@@ -127,6 +132,10 @@ struct world
 		asked.emplace_back(host, depth);
 		if (on_ask) {
 			on_ask();
+		}
+		if (std::ranges::find(hanging, host) != hanging.end()) {
+			auto [ec] = co_await corosio::delay(std::chrono::minutes(1));
+			co_return ldap::fail(ec ? ec : make_error_code(std::errc::timed_out), "hanging " + host);
 		}
 		if (std::ranges::find(unreachable, host) != unreachable.end()) {
 			co_return ldap::fail(make_error_code(std::errc::connection_refused), "connect " + host);
@@ -571,6 +580,52 @@ TEST_CASE("chase_search: a cancellation stops the chase", "[net][referral]")
 	// Stopped before the request to b was sent, and c never asked for.
 	CHECK(w.asked == std::vector<std::pair<std::string, std::size_t>>{ { "b.example", 1 } });
 	CHECK(w.servers["b.example"]->log.received.empty());
+	w.check_servers();
+}
+
+TEST_CASE("chase_search: the timeout bounds the whole chase, the connector included", "[net][referral]")
+{
+	using std::chrono::steady_clock;
+	world w;
+	w.add("b.example");
+	auto request = search();
+	// Long enough for the origin's search even on a loaded machine.
+	request.timeout = std::chrono::seconds(1);
+
+	SECTION("a connector still working when it is spent is cancelled")
+	{
+		w.serve("a.example",
+		  { answer({ entry_msg(1, "uid=jdoe,ou=a,dc=example,dc=org", "A"),
+			ref_msg(1, { "ldap://slow.example/ou=s,dc=example,dc=org" }),
+			ref_msg(1, { "ldap://b.example/ou=b,dc=example,dc=org" }),
+			done_msg(1) }) });
+		w.hanging = { "slow.example" };
+		const auto start = steady_clock::now();
+		auto r = w.run(ldap::chase_search(w.origin.conn, request, w.connector()));
+		CHECK(steady_clock::now() - start < std::chrono::seconds(30));
+		REQUIRE(r.has_value());
+		CHECK_FALSE(r->complete);
+		CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=a,dc=example,dc=org" });
+		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed, referral_outcome::limit_reached });
+		REQUIRE(r->referrals[0].failure);
+		CHECK(r->referrals[0].failure->code == ldap::cond::timeout);
+		CHECK(w.asked == std::vector<std::pair<std::string, std::size_t>>{ { "slow.example", 1 } });
+	}
+	SECTION("a connector that returns after it is spent: nothing is sent")
+	{
+		w.serve("a.example",
+		  { answer({ entry_msg(1, "uid=jdoe,ou=a,dc=example,dc=org", "A"),
+			ref_msg(1, { "ldap://b.example/ou=b,dc=example,dc=org" }),
+			done_msg(1) }) });
+		// Blocks the thread: the deadline cannot cancel it.
+		w.on_ask = [] { std::this_thread::sleep_for(std::chrono::milliseconds(1100)); };
+		auto r = w.run(ldap::chase_search(w.origin.conn, request, w.connector()));
+		REQUIRE(r.has_value());
+		CHECK_FALSE(r->complete);
+		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::limit_reached });
+		CHECK(w.asked.size() == 1);
+		CHECK(w.servers["b.example"]->log.received.empty());
+	}
 	w.check_servers();
 }
 

@@ -9,6 +9,7 @@
 
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/this_coro.hpp>
+#include <boost/capy/io_result.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -21,6 +22,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -185,9 +187,41 @@ namespace {
 			}
 			return std::chrono::ceil<std::chrono::milliseconds>(*deadline - clock::now());
 		}
+
+		[[nodiscard]] auto spent() const -> bool
+		{
+			const auto left = remaining();
+			return left && left->count() <= 0;
+		}
 	};
 
 	auto canceled() -> error { return make_error(capy::error::canceled, "referral chase"); }
+
+	// The connector's answer as an io_result, for corosio::timeout: its
+	// cancellation shows in the code (the deadline is then reported as
+	// such), the answer itself in the payload.
+	auto as_io_result(capy::task<result<connection *>> asked)
+	  -> capy::task<capy::io_result<std::optional<result<connection *>>>>
+	{
+		auto c = co_await std::move(asked);
+		std::error_code ec;
+		if (!c && c.error().code == cond::canceled) {
+			ec = make_error_code(capy::error::canceled);
+		}
+		co_return { ec, std::move(c) };
+	}
+
+	// Asks the connector for `server`'s connection, cancelled when the
+	// chase's budget is spent (then a timeout error).
+	auto ask(chase_state &st, const url &server, std::size_t depth) -> capy::task<result<connection *>>
+	{
+		auto [ec, c] = co_await net::detail::bounded(as_io_result(st.connector(server, depth)), st.deadline);
+		if (c) {
+			co_return std::move(*c);
+		}
+		co_return fail(
+		  ec ? ec : make_error_code(capy::error::timeout), "referral connector: the chase's timeout was spent");
+	}
 
 	// A URI that passed the checks made before the connector is asked: its
 	// server, the request for it, and that request's loop key.
@@ -225,13 +259,9 @@ namespace {
 			st.record(uri, kind, depth, referral_outcome::unparseable, std::move(request.error()));
 			return std::nullopt;
 		}
-		const auto left = st.remaining();
-		if (st.targets >= st.policy.max_targets || (left && left->count() <= 0)) {
+		if (st.targets >= st.policy.max_targets || st.spent()) {
 			st.record(uri, kind, depth, referral_outcome::limit_reached);
 			return std::nullopt;
-		}
-		if (left) {
-			request->timeout = *left;
 		}
 		visit_key key = request_key(*u, *request);
 		return prepared<Params>{ .server = std::move(*u), .request = std::move(*request), .key = std::move(key) };
@@ -268,7 +298,7 @@ namespace {
 			++st.targets;
 			connection *target = nullptr;
 			if (st.connector) {
-				auto c = co_await st.connector(p->server, depth);
+				auto c = co_await ask(st, p->server, depth);
 				if (!c) {
 					if (stop.stop_requested()) {
 						co_return std::unexpected(std::move(c.error()));
@@ -282,6 +312,14 @@ namespace {
 			if (target == nullptr) {
 				st.record(uri, kind, depth, referral_outcome::skipped_policy);
 				continue;
+			}
+			// What the connector left of the budget bounds the request.
+			if (const auto left = st.remaining()) {
+				if (left->count() <= 0) {
+					st.record(uri, kind, depth, referral_outcome::limit_reached);
+					continue;
+				}
+				p->request.timeout = *left;
 			}
 			st.visited.push_back(std::move(p->key));
 			auto v = co_await op(*target, p->request);
