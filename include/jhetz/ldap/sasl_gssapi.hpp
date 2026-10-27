@@ -82,34 +82,38 @@
 //   master's mechanism selection (lib/server.c mech_permitted) also asks
 //   of every mechanism and no plugin declares, so, from the sources, a
 //   slapd with it offers no SASL mechanism at all. Active Directory is the
-//   server that checks them. With bindings the client also says that it
-//   binds (Microsoft's KERB_AP_OPTIONS_CBT in the authenticator): it
-//   passes GSS_C_CHANNEL_BOUND_FLAG, which MIT krb5 1.19 and later honour
-//   (Heimdal since a 2024 change on its master; older ones ignore it.
-//   MIT's krb5.conf client_aware_channel_bindings sets it for every
-//   request), so an
-//   acceptor given bindings refuses a missing or wrong one, AD with "When
-//   supported" too. The hash is RFC 5929's
-//   (channel_bindings::tls_server_end_point), or OpenLDAP's
+//   server that checks them. With bindings the client also passes
+//   GSS_C_CHANNEL_BOUND_FLAG, on which MIT krb5 1.19 and later (Heimdal
+//   since a 2024 change on its master; older ones ignore it) put
+//   Microsoft's KERB_AP_OPTIONS_CBT in the authenticator, as MIT's
+//   krb5.conf client_aware_channel_bindings does for every request. It is
+//   a signal, on which AD and MIT report the context as channel bound, not
+//   a protection: an acceptor given bindings refuses a wrong one with or
+//   without it (MIT, Heimdal), and it only makes a missing one refused,
+//   while the client sets it only together with bindings. The hash is RFC
+//   5929's (channel_bindings::tls_server_end_point), or OpenLDAP's
 //   (sasl_gssapi_options::binding_form openldap, the bytes libldap builds,
 //   for a slapd that checks them, see above: they differ only for an
-//   RSASSA-PSS, Ed25519 or Ed448 certificate, see sasl_scram.hpp). Without TLS no bindings are sent
-//   (GSS_C_NO_CHANNEL_BINDINGS). Over TLS without a hash (RFC 5929 has none
-//   for Ed25519 and Ed448 certificates; the openldap form, none for a
-//   certificate it cannot parse), start() fails with
-//   client_errc::tls_required (cond::access_denied) before anything is
-//   sent, as SCRAM-SHA-256-PLUS does: the certificate is chosen by whoever
-//   terminates TLS, so going on without bindings would let a man in the
-//   middle that the certificate check let through present an Ed25519
-//   certificate and relay the unbound bind, which an acceptor given
-//   bindings accepts unless the client announced that it binds (AD with
+//   RSASSA-PSS, Ed25519 or Ed448 certificate, see sasl_scram.hpp).
+//   Without TLS no bindings are sent (GSS_C_NO_CHANNEL_BINDINGS). Over TLS
+//   without a hash (RFC 5929's: none for a certificate whose signature
+//   algorithm has no single hash function, e.g. Ed25519, Ed448, ML-DSA or
+//   SLH-DSA, or one OpenSSL does not know; the openldap form's: none for a
+//   certificate it cannot parse or whose signature algorithm OpenSSL does
+//   not know; neither when the server sent no certificate), start() fails
+//   with client_errc::tls_required (cond::access_denied) before anything
+//   is sent, as SCRAM-SHA-256-PLUS does: the certificate is chosen by
+//   whoever terminates TLS, so going on without bindings would let a man
+//   in the middle that the certificate check let through present an
+//   Ed25519 certificate and relay the unbound bind, which an acceptor
+//   given bindings accepts (no bindings, no KERB_AP_OPTIONS_CBT: AD with
 //   "When supported" too). gssapi_channel_binding::none is the explicit
 //   opt-out. A server whose acceptor is given no bindings (slapd, AD with
-//   the policy "Never") ignores them; one given
-//   others (TLS terminated by a proxy in front of the server, whose
-//   certificate the client sees) refuses the bind (GSS_S_BAD_BINDINGS):
-//   gssapi_channel_binding::none turns them off. tls-exporter (RFC 9266)
-//   is not used: neither Active Directory nor OpenLDAP knows it.
+//   the policy "Never") ignores them; one given others (TLS terminated by
+//   a proxy in front of the server, whose certificate the client sees)
+//   refuses the bind (GSS_S_BAD_BINDINGS): gssapi_channel_binding::none
+//   turns them off. tls-exporter (RFC 9266) is not used: neither Active
+//   Directory nor OpenLDAP knows it.
 // - Names are UTF-8 and passed to the GSS-API library as given (Kerberos
 //   principals are byte strings; UTF-8 is what MIT krb5 and Active
 //   Directory use). The target, principal and authorization identity must

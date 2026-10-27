@@ -291,7 +291,7 @@ TEST_CASE("gssapi: the channel bindings' application data", "[net][sasl][gssapi]
 		auto ed = tls;
 		ed.bindings.tls_server_end_point = {};
 		no_hash(gssapi_channel_binding_data(ed, tls_server_end_point, rfc5929),
-		  "RFC 5929 defines none for Ed25519 and Ed448 certificates");
+		  "no hash for the server's certificate, e.g. Ed25519 or Ed448, or no certificate");
 		CHECK(gssapi_channel_binding_data(ed, none, rfc5929) == "");
 	}
 	SECTION("the openldap form hashes the peer certificate itself")
@@ -309,7 +309,8 @@ TEST_CASE("gssapi: the channel bindings' application data", "[net][sasl][gssapi]
 		const std::array<std::byte, 2> junk{ std::byte{ 0x30 }, std::byte{ 0x00 } };
 		tls.peer_certificate = junk;
 		no_hash(gssapi_channel_binding_data(tls, tls_server_end_point, openldap),
-		  "the server's certificate could not be parsed");
+		  "no OpenLDAP hash for the server's certificate: not parsed, or an unknown signature algorithm, or no "
+		  "certificate");
 		CHECK(gssapi_channel_binding_data(tls, none, openldap) == "");
 	}
 }

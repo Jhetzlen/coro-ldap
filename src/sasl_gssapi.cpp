@@ -43,10 +43,12 @@ namespace {
 	// both as 2048. As a req_flag of gss_init_sec_context it makes the
 	// initiator put Microsoft's KERB_AP_OPTIONS_CBT in the authenticator
 	// (MIT init_sec_context.c: AP_OPTS_CBT_FLAG; Heimdal's master since
-	// 2024, ba8c3dbc62: channel_bound),
-	// so an acceptor given bindings refuses a missing or wrong one (MIT
-	// accept_sec_context.c process_checksum). Older libraries ignore the bit
-	// (MIT masks req_flags, Heimdal tests the flags it knows).
+	// 2024, ba8c3dbc62: channel_bound). A signal only: an acceptor refuses a
+	// wrong binding with or without it (MIT accept_sec_context.c
+	// process_checksum), and it changes the outcome only for an initiator
+	// that sends no bindings, while this one sets it only with bindings. AD
+	// and MIT then report the context as channel bound. Older libraries
+	// ignore the bit (MIT masks req_flags, Heimdal tests the flags it knows).
 	constexpr OM_uint32 channel_bound_flag = 2048;
 
 	// Owns a GSS-API handle (a pointer type), released with `Release`.
@@ -250,10 +252,10 @@ namespace detail {
 		if (hash.empty()) {
 			return fail(client_errc::tls_required,
 			  form == gssapi_channel_binding_form::rfc5929
-				? "the TLS connection has no tls-server-end-point channel binding data (RFC 5929 defines none for "
-				  "Ed25519 and Ed448 certificates)"
-				: "the TLS connection has no tls-server-end-point channel binding data (the server's certificate "
-				  "could not be parsed)");
+				? "the TLS connection has no tls-server-end-point channel binding data (no hash for the server's "
+				  "certificate, e.g. Ed25519 or Ed448, or no certificate)"
+				: "the TLS connection has no tls-server-end-point channel binding data (no OpenLDAP hash for the "
+				  "server's certificate: not parsed, or an unknown signature algorithm, or no certificate)");
 		}
 		return prefixed_channel_binding(channel_binding_type::tls_server_end_point, hash);
 	}

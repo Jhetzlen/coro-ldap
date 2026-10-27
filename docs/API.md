@@ -543,17 +543,19 @@ itself needs only ICU.
   form Windows SSPI uses and OpenLDAP's libldap builds), which an AD
   whose "LDAP channel binding" policy is "Always" requires; a man in the
   middle with a certificate of its own cannot relay the bind. With
-  bindings the client also asserts them (`GSS_C_CHANNEL_BOUND_FLAG`, so
-  MIT krb5 1.19+ sends KERB_AP_OPTIONS_CBT, as krb5.conf's
-  `client_aware_channel_bindings` would): an acceptor given bindings then
-  refuses a missing or wrong one. slapd does
-  not check GSSAPI bindings: cyrus-sasl 2.1.28, its latest release,
-  passes none to Kerberos; its unreleased master passes them only with
-  `sasl-secprops ...,nonstdcbind` (beside `sasl-cbinding tls-endpoint`),
-  a flag that, from the sources, also disables every SASL mechanism in
-  that master's mechanism selection. No bindings without TLS.
-  Over TLS without a hash (an Ed25519 or Ed448 certificate in the RFC
-  form, one the openldap form cannot parse) `start()` fails with
+  bindings the client also passes `GSS_C_CHANNEL_BOUND_FLAG` (MIT krb5
+  1.19+ then sends KERB_AP_OPTIONS_CBT, as krb5.conf's
+  `client_aware_channel_bindings` would), a signal on which AD and MIT
+  report the context as channel bound: an acceptor refuses a wrong
+  binding with or without it. slapd does not check GSSAPI bindings:
+  cyrus-sasl 2.1.28, its latest release, passes none to Kerberos; its
+  unreleased master passes them only with `sasl-secprops ...,nonstdcbind`
+  (beside `sasl-cbinding tls-endpoint`), a flag that, from the sources,
+  also disables every SASL mechanism in that master's mechanism
+  selection. No bindings without TLS. Over TLS without a hash (a
+  certificate without one, e.g. Ed25519, Ed448 or ML-DSA in the RFC
+  form, one the openldap form cannot parse or whose signature algorithm
+  OpenSSL does not know, or no server certificate) `start()` fails with
   `client_errc::tls_required` before anything is sent, as SCRAM-PLUS
   does: the certificate is the TLS peer's choice, so falling back to no
   bindings would be a downgrade a man in the middle could pick.
