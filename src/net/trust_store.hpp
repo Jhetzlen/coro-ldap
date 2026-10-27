@@ -12,7 +12,10 @@
 // demand (a root never fetched is not in ROOT yet), and applies Windows'
 // root program and revocation checks. The ROOT anchors still go to
 // OpenSSL, which then builds and checks the chain as elsewhere; only its
-// host name verdict is kept.
+// verdicts on the leaf alone are kept (tls.cpp fatal_with_platform_chain:
+// the host name, the leaf's key size and its purpose), and CryptoAPI is
+// given OpenSSL's security level for the rest of the chain
+// (strong_sign_for_level).
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -67,20 +70,49 @@ auto load_system_trust(boost::corosio::tls_context &ctx) -> result<void>;
 // load_system_trust's anchors).
 auto platform_verifies_chain() noexcept -> bool;
 
+// CryptoAPI's strong signature lists (CERT_STRONG_SIGN_SERIALIZED_INFO,
+// given to CertGetCertificateChain) for OpenSSL's security level
+// `security_level` (the X509_VERIFY_PARAM auth level OpenSSL checks the
+// server's chain against: SSL_get_security_level, 2 by default since
+// OpenSSL 3.2), so that CryptoAPI's verdict on the chain is not weaker than
+// OpenSSL's CA_KEY_TOO_SMALL and CA_MD_TOO_WEAK checks it replaces. Level
+// n requires the security bits of OpenSSL's table (crypto/x509/x509_vfy.c
+// minbits_table: 80, 112, 128, 192, 256; above 5 as 5), which OpenSSL rates
+// as: RSA keys of 1024, 2048, 3072, 7680, 15360 bits
+// (ossl_ifc_ffc_compute_security_bits), EC curves of twice the bits
+// (OpenSSL rates a curve at half its size), and signature hashes of twice
+// the bits (half the digest size; SHA-1 counts 63, below every level, in
+// crypto/x509/x509_set.c). So level 2 is
+// "RSA/2048;ECDSA/224" and the RSA and ECDSA signatures with SHA-256,
+// SHA-384 or SHA-512. Stricter than OpenSSL only where CNG has no name:
+// SHA-224, DSA and EdDSA signatures are not listed, so they count as weak.
+// nullopt at level 0 or below (OpenSSL checks nothing then).
+struct strong_sign_lists
+{
+	// pwszCNGSignHashAlgids: "RSA/SHA256;ECDSA/SHA256;...".
+	std::wstring sign_hash_algids{};
+	// pwszCNGPubKeyMinBitLengths: "RSA/2048;ECDSA/224".
+	std::wstring min_key_bits{};
+};
+auto strong_sign_for_level(int security_level) -> std::optional<strong_sign_lists>;
+
 // Verifies the server certificate chain `chain` (DER: the leaf, then the
 // other certificates the server sent) for TLS server authentication with
 // the platform's chain engine and SSL policy (Windows:
 // CertGetCertificateChain for serverAuth, revocation checked for every
 // certificate but the root, then CertVerifyCertificateChainPolicy with
 // CERT_CHAIN_POLICY_SSL; a revocation status that cannot be determined,
-// e.g. an unreachable CRL, is not an error, a revoked certificate is). The
-// host name is not checked: it stays OpenSSL's (host_name_matching).
+// e.g. an unreachable CRL, is not an error, a revoked certificate is).
+// Signatures and keys below OpenSSL's `security_level` are rejected
+// (strong_sign_for_level). The host name is not checked: it stays
+// OpenSSL's (host_name_matching).
 // `timeout` bounds the network retrieval CryptoAPI may do (AuthRoot
 // roots, intermediates, CRLs, OCSP), all of it together; nullopt leaves
 // Windows' defaults. Blocks the calling thread meanwhile. Errors have the
 // context "Windows certificate chain: <why>". Not available off Windows
 // (std::errc::function_not_supported).
 auto verify_system_chain(std::span<const std::vector<unsigned char>> chain,
+  int security_level,
   std::optional<std::chrono::milliseconds> timeout) -> result<void>;
 
 }// namespace jhetz::ldap::net::detail

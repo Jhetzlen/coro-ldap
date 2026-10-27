@@ -106,7 +106,9 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
   does), whose verdict replaces OpenSSL's on the chain: the roots Windows
   fetches on demand (AuthRoot auto-update) are found, and Windows' own
   distrust, NotBefore and name constraint rules apply. The host name is
-  still matched by OpenSSL, with `host_matching` as on Linux. Revocation
+  still matched by OpenSSL, with `host_matching` as on Linux, and so are
+  the leaf's key size and purpose; CryptoAPI holds the rest of the chain
+  to OpenSSL's security level (a `CERT_STRONG_SIGN_PARA`). Revocation
   is checked for every certificate but the root, soft-fail: a CRL or OCSP
   responder that cannot be reached in time is not an error, a revoked
   certificate is. The fetches are bounded by what is left of the connect
@@ -180,7 +182,11 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
   and fails OpenSSL's host check); that OpenSSL always reaches the leaf's
   final verify callback after letting chain errors through (a handshake
   failing with "the system certificate chain check did not run" would
-  mean not); how long a connect blocks with no network for the AuthRoot,
+  mean not); that the strong signature lists reject a SHA-1-signed
+  intermediate and an RSA-1024 CA at the default security level 2
+  (`CERT_TRUST_HAS_WEAK_SIGNATURE`) but not a SHA-1 self-signed root (its
+  own signature, which OpenSSL does not check either) nor the
+  RSA-PSS-signed chains CNG names `RSA`; how long a connect blocks with no network for the AuthRoot,
   AIA and CRL fetches, within the timeout; and whether the
   `CERT_CHAIN_PARA_HAS_EXTRA_FIELDS` layout matches on MSVC.
 - The Winsock test sockets (`tests/net/platform.hpp`): overlapped, so that

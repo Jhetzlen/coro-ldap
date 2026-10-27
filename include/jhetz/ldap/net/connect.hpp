@@ -113,9 +113,10 @@ struct tls_options
 	// clients verify it (CertGetCertificateChain with the SSL policy: the
 	// roots Windows fetches on demand, its distrust and NotBefore rules, and
 	// revocation, soft-fail: an unreachable CRL or OCSP responder is not an
-	// error, a revoked certificate is); the host name is matched as
-	// elsewhere (host_matching). Setting any of them replaces the system
-	// store, CryptoAPI included; they may be combined.
+	// error, a revoked certificate is), held to OpenSSL's security level;
+	// the host name is matched as elsewhere (host_matching). Setting any of
+	// them replaces the system store, CryptoAPI included; they may be
+	// combined.
 	std::filesystem::path ca_file{};// PEM file with one or more CA certificates
 	// Directory hashed with `openssl rehash`. OpenSSL reads it lazily through
 	// char paths: on Windows keep its path ASCII (files are opened by UTF-8

@@ -222,13 +222,6 @@ namespace {
 		state.ssl = static_cast<SSL *>(X509_STORE_CTX_get_ex_data(store, SSL_get_ex_data_X509_STORE_CTX_idx()));
 	}
 
-	// The errors OpenSSL reports on the host name (Corosio's set_hostname):
-	// kept when the platform verifies the chain.
-	auto is_name_mismatch(int err) noexcept -> bool
-	{
-		return err == X509_V_ERR_HOSTNAME_MISMATCH || err == X509_V_ERR_IP_ADDRESS_MISMATCH;
-	}
-
 	// The server's chain as DER: the leaf, then every other certificate it
 	// sent (the store's untrusted stack, which on a client holds the peer's
 	// chain). Empty if the leaf cannot be encoded.
@@ -281,7 +274,8 @@ namespace {
 	auto verify_chain_with_platform(verify_state &state, X509_STORE_CTX *store) -> bool
 	{
 		state.system_chain_verified = false;
-		auto r = state.system_chain(peer_chain_der(store), time_left(state.deadline));
+		const int security_level = X509_VERIFY_PARAM_get_auth_level(X509_STORE_CTX_get0_param(store));
+		auto r = state.system_chain(peer_chain_der(store), security_level, time_left(state.deadline));
 		if (!r) {
 			X509_STORE_CTX_set_error(store, X509_V_ERR_CERT_REJECTED);
 			if (state.reason.empty()) {
@@ -300,16 +294,17 @@ namespace {
 	// host matching accepted (Corosio has no option for the
 	// X509_CHECK_FLAG_* flags, so the check is redone here). When the
 	// platform verifies the chain (verify_state::system_chain), OpenSSL's
-	// errors other than a host name mismatch are let through and the leaf's
-	// final callback asks the platform instead (tls_handshake() fails a
-	// handshake that never got there).
+	// errors other than fatal_with_platform_chain's are let through and the
+	// leaf's final callback asks the platform instead (tls_handshake() fails
+	// a handshake that never got there).
 	auto verify_full(verify_state &state, bool preverified, X509_STORE_CTX *store) -> bool
 	{
 		if (store == nullptr) {
 			return preverified;
 		}
 		record_ssl(state, store);
-		if (state.system_chain != nullptr && !preverified && !is_name_mismatch(X509_STORE_CTX_get_error(store))) {
+		if (state.system_chain != nullptr && !preverified
+			&& !fatal_with_platform_chain(X509_STORE_CTX_get_error(store), X509_STORE_CTX_get_error_depth(store))) {
 			return true;
 		}
 		if (preverified && !state.strict_host.empty() && X509_STORE_CTX_get_error_depth(store) == 0) {
@@ -475,6 +470,22 @@ namespace {
 	}
 
 }// namespace
+
+// OpenSSL's own pair (X509_STORE_CTX_get_error, _get_error_depth).
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+auto fatal_with_platform_chain(int error, int depth) noexcept -> bool
+{
+	switch (error) {
+	case X509_V_ERR_HOSTNAME_MISMATCH:
+	case X509_V_ERR_IP_ADDRESS_MISMATCH:
+	case X509_V_ERR_EE_KEY_TOO_SMALL:
+		return true;
+	case X509_V_ERR_INVALID_PURPOSE:
+		return depth == 0;
+	default:
+		return false;
+	}
+}
 
 auto prime_corosio_openssl() noexcept -> bool
 {

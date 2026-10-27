@@ -1559,9 +1559,33 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   not have, so requiring both would keep that gap; and Windows applies
   its own root program rules (distrust, NotBefore dates, name
   constraints) itself. So OpenSSL's errors are let through, except a host
-  name or IP address mismatch, and the leaf's final callback (OpenSSL
-  calls it last, after every error and the host name check) asks
-  CryptoAPI; a handshake that never reached it fails closed. The host
+  name or IP address mismatch and the two checks on the leaf alone, which
+  no chain CryptoAPI builds can change and the SSL policy does not redo
+  (or not all of): the leaf's key below the security level
+  (`EE_KEY_TOO_SMALL`) and its purpose (`INVALID_PURPOSE` at depth 0:
+  OpenSSL's sslserver purpose also checks the keyUsage and nsCertType,
+  the SSL policy only the extended key usage, and the TLS stack here is
+  OpenSSL, not Schannel, which would check the keyUsage itself). The
+  leaf's final callback (OpenSSL calls it last, after every error and the
+  host name check) asks CryptoAPI; a handshake that never reached it
+  fails closed. OpenSSL's security level (`SSL_get_security_level`, 2 by
+  default since OpenSSL 3.2) also checks the CA keys and the signature
+  hashes (`CA_KEY_TOO_SMALL`, `CA_MD_TOO_WEAK`), which depend on the
+  chain built, and CryptoAPI checks neither by default; so the callback
+  passes the level on, and `CertGetCertificateChain` gets a
+  `CERT_STRONG_SIGN_PARA` with the same floor
+  (`detail::strong_sign_for_level`): level n needs OpenSSL's
+  `minbits_table` bits b (80, 112, 128, 192, 256), so RSA keys of 1024,
+  2048, 3072, 7680 or 15360 bits (the sizes OpenSSL rates at b), ECDSA
+  curves of 2b bits and SHA-2 hashes of 2b bits (SHA-1 is below every
+  level, as in OpenSSL 3). Level 2 is `RSA/2048;ECDSA/224` with RSA or
+  ECDSA over SHA-256, SHA-384 or SHA-512; a chain the engine flags
+  `CERT_TRUST_HAS_WEAK_SIGNATURE` is rejected ("a signature or key below
+  OpenSSL's security level 2"). Parity is exact for RSA and ECDSA with
+  SHA-2 at OpenSSL's standard sizes; Windows is stricter where CNG has no
+  name (SHA-224, DSA, EdDSA) and for odd RSA sizes OpenSSL rates by
+  formula, never weaker. CRL and OCSP signatures are not held to it
+  (OpenSSL checks no revocation). The host
   name stays OpenSSL's, with `host_matching` as on Linux (the SSL policy
   gets SECURITY_FLAG_IGNORE_CERT_CN_INVALID and no server name): one
   matching rule on every platform, no second UTF-16 or IDN conversion of

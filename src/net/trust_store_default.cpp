@@ -17,6 +17,7 @@ auto load_system_trust(boost::corosio::tls_context &ctx) -> result<void>
 auto platform_verifies_chain() noexcept -> bool { return false; }
 
 auto verify_system_chain(std::span<const std::vector<unsigned char>> /*chain*/,
+  int /*security_level*/,
   std::optional<std::chrono::milliseconds> /*timeout*/) -> result<void>
 {
 	return fail(std::make_error_code(std::errc::function_not_supported),

@@ -24,7 +24,7 @@
 // verify_system_chain: the server's chain through CryptoAPI, as wldap32
 // and Schannel clients verify it (see trust_store.hpp). Needs
 // CERT_CHAIN_PARA_HAS_EXTRA_FIELDS (set for this file by CMake) for
-// CERT_CHAIN_PARA::dwUrlRetrievalTimeout.
+// CERT_CHAIN_PARA::dwUrlRetrievalTimeout and pStrongSignPara.
 #include "trust_store.hpp"
 
 #include "../format_util.hpp"
@@ -326,6 +326,7 @@ namespace {
 auto platform_verifies_chain() noexcept -> bool { return true; }
 
 auto verify_system_chain(std::span<const std::vector<unsigned char>> chain,
+  int security_level,
   std::optional<std::chrono::milliseconds> timeout) -> result<void>
 {
 	if (chain.empty()) {
@@ -368,6 +369,24 @@ auto verify_system_chain(std::span<const std::vector<unsigned char>> chain,
 	para.RequestedUsage.dwType = USAGE_MATCH_TYPE_AND;
 	para.RequestedUsage.Usage.cUsageIdentifier = static_cast<DWORD>(server_auth.size());
 	para.RequestedUsage.Usage.rgpszUsageIdentifier = server_auth.data();
+	// OpenSSL's security level for the signatures and keys of the chain
+	// (trust_store.hpp strong_sign_for_level): without pStrongSignPara the
+	// chain engine checks neither. dwFlags 0: CRL and OCSP signatures are
+	// not held to it (OpenSSL checks no revocation at all), and
+	// dwStrongSignFlags 0 checks the leaf's key length too.
+	auto strong = strong_sign_for_level(security_level);
+	CERT_STRONG_SIGN_SERIALIZED_INFO strong_info{};
+	CERT_STRONG_SIGN_PARA strong_para{};
+	if (strong) {
+		strong_info.dwFlags = 0;
+		strong_info.pwszCNGSignHashAlgids = strong->sign_hash_algids.data();
+		strong_info.pwszCNGPubKeyMinBitLengths = strong->min_key_bits.data();
+		strong_para.cbSize = sizeof(strong_para);
+		strong_para.dwInfoChoice = CERT_STRONG_SIGN_SERIALIZED_INFO_CHOICE;
+		// pSerializedInfo shares an anonymous union with pvInfo and pszOID.
+		strong_para.pSerializedInfo = &strong_info;// NOLINT(cppcoreguidelines-pro-type-union-access)
+		para.pStrongSignPara = &strong_para;
+	}
 	DWORD flags = CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT;
 	if (timeout) {
 		// Every URL retrieval together (AuthRoot, AIA, CRL, OCSP), within
@@ -385,6 +404,14 @@ auto verify_system_chain(std::span<const std::vector<unsigned char>> chain,
 		return chain_error(GetLastError(), "CertGetCertificateChain failed");
 	}
 	const chain_ptr built(raw_chain);
+	// Checked here rather than left to the SSL policy, whose mapping of it
+	// to an error Microsoft does not document.
+	if ((built->TrustStatus.dwErrorStatus & CERT_TRUST_HAS_WEAK_SIGNATURE) != 0) {
+		return fail(std::make_error_code(std::errc::permission_denied),
+		  ldap::detail::format("Windows certificate chain: a signature or key below OpenSSL's security level {} "
+							   "(CERT_TRUST_HAS_WEAK_SIGNATURE)",
+			security_level));
+	}
 
 	SSL_EXTRA_CERT_CHAIN_POLICY_PARA ssl{};
 	// cbSize shares an anonymous union with cbStruct in the SDK's struct.

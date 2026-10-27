@@ -322,7 +322,7 @@ class test_pki
 	explicit test_pki(const char *ca_name = "jhetz-ldap test CA")
 	{
 		ca_key_.reset(generate_key());
-		ca_cert_.reset(make_cert(ca_key_.get(), ca_name, nullptr, nullptr, true, {}, next_serial()));
+		ca_cert_.reset(make_cert(ca_key_.get(), ca_name, nullptr, nullptr, true, {}, {}, next_serial()));
 		ca_pem_ = to_pem(ca_cert_.get());
 	}
 
@@ -354,12 +354,17 @@ class test_pki
 		return from_bio(bio);
 	}
 
-	// A leaf certificate for `subject_alt_names` ("DNS:localhost,IP:127.0.0.1").
-	auto issue(const char *cn, const std::string &subject_alt_names) -> issued
+	// A leaf certificate for `subject_alt_names` ("DNS:localhost,IP:127.0.0.1"),
+	// with the extended key usage `extended_key_usage`.
+	auto issue(const char *cn,
+	  const std::string &subject_alt_names,
+	  const std::string &extended_key_usage = "serverAuth,clientAuth") -> issued
 	{
 		std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(generate_key(), &EVP_PKEY_free);
 		std::unique_ptr<X509, decltype(&X509_free)> cert(
-		  make_cert(key.get(), cn, ca_cert_.get(), ca_key_.get(), false, subject_alt_names, next_serial()), &X509_free);
+		  make_cert(
+			key.get(), cn, ca_cert_.get(), ca_key_.get(), false, subject_alt_names, extended_key_usage, next_serial()),
+		  &X509_free);
 		return { .cert_pem = to_pem(cert.get()), .key_pem = key_to_pem(key.get()) };
 	}
 
@@ -409,6 +414,7 @@ class test_pki
 	  EVP_PKEY *issuer_key,
 	  bool ca,
 	  const std::string &sans,
+	  const std::string &extended_key_usage,
 	  long serial) -> X509 *
 	{
 		X509 *cert = X509_new();
@@ -436,7 +442,7 @@ class test_pki
 			add_ext(cert, &ctx, NID_authority_key_identifier, "keyid:always");
 			add_ext(cert, &ctx, NID_basic_constraints, "CA:FALSE");
 			add_ext(cert, &ctx, NID_key_usage, "critical,digitalSignature");
-			add_ext(cert, &ctx, NID_ext_key_usage, "serverAuth,clientAuth");
+			add_ext(cert, &ctx, NID_ext_key_usage, extended_key_usage);
 			if (!sans.empty()) {
 				add_ext(cert, &ctx, NID_subject_alt_name, sans);
 			}

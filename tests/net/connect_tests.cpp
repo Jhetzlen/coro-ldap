@@ -24,6 +24,8 @@
 #include <boost/corosio/tcp_socket.hpp>
 
 #include <openssl/err.h>
+#include <openssl/ssl.h>
+#include <openssl/x509_vfy.h>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
@@ -37,6 +39,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stop_token>
@@ -1609,6 +1612,7 @@ struct platform_chain_calls
 {
 	int calls = 0;
 	std::vector<std::vector<unsigned char>> chain{};
+	int security_level = -1;
 	std::optional<std::chrono::milliseconds> timeout{};
 };
 auto platform_calls() -> platform_chain_calls &
@@ -1617,18 +1621,21 @@ auto platform_calls() -> platform_chain_calls &
 	return instance;
 }
 auto platform_accepts(std::span<const std::vector<unsigned char>> chain,
+  int security_level,
   std::optional<std::chrono::milliseconds> timeout) -> ldap::result<void>
 {
 	auto &c = platform_calls();
 	++c.calls;
 	c.chain.assign(chain.begin(), chain.end());
+	c.security_level = security_level;
 	c.timeout = timeout;
 	return {};
 }
 auto platform_rejects(std::span<const std::vector<unsigned char>> chain,
+  int security_level,
   std::optional<std::chrono::milliseconds> timeout) -> ldap::result<void>
 {
-	std::ignore = platform_accepts(chain, timeout);
+	std::ignore = platform_accepts(chain, security_level, timeout);
 	return ldap::fail(std::make_error_code(std::errc::permission_denied), "Windows certificate chain: revoked");
 }
 
@@ -1708,6 +1715,10 @@ TEST_CASE("TLS with the platform verifying the chain", "[net][connect][tls]")
 		REQUIRE(platform_calls().timeout.has_value());
 		CHECK(*platform_calls().timeout > std::chrono::milliseconds(0));
 		CHECK(*platform_calls().timeout <= io_limit);
+		// OpenSSL's security level, for the platform to hold the chain to.
+		const std::unique_ptr<SSL_CTX, decltype(&SSL_CTX_free)> probe(SSL_CTX_new(TLS_client_method()), &SSL_CTX_free);
+		REQUIRE(probe != nullptr);
+		CHECK(platform_calls().security_level == SSL_CTX_get_security_level(probe.get()));
 	}
 	SECTION("no deadline: no timeout")
 	{
@@ -1737,6 +1748,59 @@ TEST_CASE("TLS with the platform verifying the chain", "[net][connect][tls]")
 		  ContainsSubstring("tls handshake: server certificate: IP address mismatch", Catch::CaseSensitive::No));
 		CHECK(platform_calls().calls == 0);
 	}
+	SECTION("OpenSSL's verdict on the leaf's purpose is kept")
+	{
+		// No serverAuth in the extended key usage: whatever the platform
+		// says about the chain, the leaf is not for a TLS server.
+		const auto leaf = pki().issue("localhost", "DNS:localhost,IP:127.0.0.1", "clientAuth");
+		spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
+		spawn(ioc, handshake_with_platform_chain(ioc, srv.url("ldap"), platform_accepts), client);
+		drive(ioc);
+		CHECK(
+		  client.get() == "tls handshake: server certificate: unsuitable certificate purpose (certificate depth 0)");
+		CHECK(platform_calls().calls == 0);
+	}
+}
+
+TEST_CASE("TLS with the platform verifying the chain: the OpenSSL errors kept", "[net][connect][tls]")
+{
+	using net::detail::fatal_with_platform_chain;
+	// The host name and the checks on the leaf alone.
+	CHECK(fatal_with_platform_chain(X509_V_ERR_HOSTNAME_MISMATCH, 0));
+	CHECK(fatal_with_platform_chain(X509_V_ERR_IP_ADDRESS_MISMATCH, 0));
+	CHECK(fatal_with_platform_chain(X509_V_ERR_EE_KEY_TOO_SMALL, 0));
+	CHECK(fatal_with_platform_chain(X509_V_ERR_INVALID_PURPOSE, 0));
+	// The chain's, which the platform decides (with OpenSSL's security
+	// level for the CA keys and signatures).
+	CHECK_FALSE(fatal_with_platform_chain(X509_V_ERR_INVALID_PURPOSE, 1));
+	CHECK_FALSE(fatal_with_platform_chain(X509_V_ERR_CA_KEY_TOO_SMALL, 1));
+	CHECK_FALSE(fatal_with_platform_chain(X509_V_ERR_CA_MD_TOO_WEAK, 0));
+	CHECK_FALSE(fatal_with_platform_chain(X509_V_ERR_CA_MD_TOO_WEAK, 1));
+	CHECK_FALSE(fatal_with_platform_chain(X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY, 0));
+	CHECK_FALSE(fatal_with_platform_chain(X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN, 1));
+	CHECK_FALSE(fatal_with_platform_chain(X509_V_ERR_CERT_HAS_EXPIRED, 0));
+	CHECK_FALSE(fatal_with_platform_chain(X509_V_ERR_PERMITTED_VIOLATION, 0));
+}
+
+TEST_CASE("TLS with the platform verifying the chain: OpenSSL's security level for CryptoAPI", "[net][connect][tls]")
+{
+	using net::detail::strong_sign_for_level;
+	CHECK_FALSE(strong_sign_for_level(0).has_value());
+	CHECK_FALSE(strong_sign_for_level(-1).has_value());
+	const std::wstring all_sha2 = L"RSA/SHA256;ECDSA/SHA256;RSA/SHA384;ECDSA/SHA384;RSA/SHA512;ECDSA/SHA512";
+	const auto check_level = [](int level, const std::wstring &hashes, const std::wstring &keys) {
+		CAPTURE(level);
+		const auto lists = strong_sign_for_level(level);
+		REQUIRE(lists.has_value());
+		CHECK((lists->sign_hash_algids == hashes));
+		CHECK((lists->min_key_bits == keys));
+	};
+	check_level(1, all_sha2, L"RSA/1024;ECDSA/160");
+	check_level(2, all_sha2, L"RSA/2048;ECDSA/224");
+	check_level(3, all_sha2, L"RSA/3072;ECDSA/256");
+	check_level(4, L"RSA/SHA384;ECDSA/SHA384;RSA/SHA512;ECDSA/SHA512", L"RSA/7680;ECDSA/384");
+	check_level(5, L"RSA/SHA512;ECDSA/SHA512", L"RSA/15360;ECDSA/512");
+	check_level(6, L"RSA/SHA512;ECDSA/SHA512", L"RSA/15360;ECDSA/512");
 }
 
 TEST_CASE("net::start_tls needs an open plain TCP transport", "[net][starttls]")

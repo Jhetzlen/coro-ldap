@@ -45,9 +45,11 @@ struct verify_state
 	// Default verification where the platform verifies the chain
 	// (platform_verifies_chain(), Windows): OpenSSL's verdict on the chain
 	// is replaced by this function's (verify_system_chain, trust_store.hpp),
-	// run once at the leaf; its host name verdict is kept. Set by
+	// run once at the leaf with OpenSSL's security level; its verdicts on
+	// the leaf alone are kept (fatal_with_platform_chain). Set by
 	// make_tls_setup(); null otherwise (tests may set a stand-in).
 	using chain_verifier = auto (*)(std::span<const std::vector<unsigned char>> chain,
+	  int security_level,
 	  std::optional<std::chrono::milliseconds> timeout) -> result<void>;
 	chain_verifier system_chain = nullptr;
 	// verify_system_chain ran and accepted the chain.
@@ -56,6 +58,17 @@ struct verify_state
 	// verify_system_chain's network retrieval.
 	deadline_t deadline{};
 };
+
+// Whether OpenSSL's verify error `error` (X509_V_ERR_*) at certificate
+// depth `depth` still fails the handshake when the platform verifies the
+// chain (verify_state::system_chain); the others are let through for the
+// platform to decide. Kept: the host name and IP address mismatches, and
+// the checks on the leaf alone, which no chain the platform builds can
+// change and CryptoAPI does not redo (or not all of): its key below the
+// security level (EE_KEY_TOO_SMALL) and its purpose (INVALID_PURPOSE at
+// depth 0: OpenSSL's sslserver purpose also checks the keyUsage and
+// nsCertType, the SSL policy only the extended key usage).
+auto fatal_with_platform_chain(int error, int depth) noexcept -> bool;
 
 struct tls_setup
 {
