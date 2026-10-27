@@ -840,10 +840,18 @@ all-zero binding checksum; AD with "When supported" too). `none` is the
 explicit opt-out; there is no lenient "if available" value, since the
 only certificates without a hash are EdDSA ones (`none`, or the openldap
 form, which hashes them with SHA-256) and unparseable ones. Not
-tls-exporter: neither AD nor slapd takes it for GSSAPI. MIT krb5 1.19+
-signals the bindings to the acceptor (KERB_AP_OPTIONS_CBT) only with
-krb5.conf's `client_aware_gss_bindings`; that is the user's
-configuration. GSS-SPNEGO is not implemented (it would take the same
+tls-exporter: neither AD nor slapd takes it for GSSAPI. With bindings
+the client also asserts them (coro-ldap-52i): `gss_init_sec_context`
+gets GSS_C_CHANNEL_BOUND_FLAG (2048, spelled out like the mechanism OID:
+MIT declares it in gssapi_ext.h, which Heimdal lacks), and MIT krb5 1.19+
+(init_sec_context.c, `cbt_flag` to AP_OPTS_CBT_FLAG) then puts
+KERB_AP_OPTIONS_CBT in the authenticator, as krb5.conf's
+`client_aware_channel_bindings` does for every request; Heimdal does the
+same since 2024 (master), and older libraries mask the bit out. An
+acceptor given bindings then refuses a missing or wrong one
+(accept_sec_context.c `check_cbt`, AD with "When supported"); one given
+none ignores it, and `none` sends neither, so a server behind a
+TLS-terminating proxy still binds. GSS-SPNEGO is not implemented (it would take the same
 bindings: MIT passes them through SPNEGO since 1.19). Tested without a
 KDC (the layer messages, input checks, GSS-API errors before anything is
 sent, the bindings' bytes, `gss_init_sec_context` accepting the struct)

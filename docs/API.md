@@ -542,7 +542,11 @@ itself needs only ICU.
   `application_data` "tls-server-end-point:<hash>" with no addresses, the
   form Windows SSPI uses and OpenLDAP's libldap builds), which an AD
   whose "LDAP channel binding" policy is "Always" requires; a man in the
-  middle with a certificate of its own cannot relay the bind. slapd does
+  middle with a certificate of its own cannot relay the bind. With
+  bindings the client also asserts them (`GSS_C_CHANNEL_BOUND_FLAG`, so
+  MIT krb5 1.19+ sends KERB_AP_OPTIONS_CBT, as krb5.conf's
+  `client_aware_channel_bindings` would): an acceptor given bindings then
+  refuses a missing or wrong one. slapd does
   not check GSSAPI bindings: cyrus-sasl 2.1.28, its latest release,
   passes none to Kerberos; its unreleased master passes them only with
   `sasl-secprops ...,nonstdcbind` (beside `sasl-cbinding tls-endpoint`),

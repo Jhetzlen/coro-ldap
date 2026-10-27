@@ -38,6 +38,17 @@ namespace {
 	gss_OID_set_desc krb5_oid_set{ .count = 1, .elements = &krb5_oid };
 	// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
+	// GSS_C_CHANNEL_BOUND_FLAG, spelled out too: MIT krb5 1.19 and later
+	// define it in gssapi_ext.h (which Heimdal lacks), Heimdal in gssapi.h,
+	// both as 2048. As a req_flag of gss_init_sec_context it makes the
+	// initiator put Microsoft's KERB_AP_OPTIONS_CBT in the authenticator
+	// (MIT init_sec_context.c: AP_OPTS_CBT_FLAG; Heimdal's master since
+	// 2024, ba8c3dbc62: channel_bound),
+	// so an acceptor given bindings refuses a missing or wrong one (MIT
+	// accept_sec_context.c process_checksum). Older libraries ignore the bit
+	// (MIT masks req_flags, Heimdal tests the flags it knows).
+	constexpr OM_uint32 channel_bound_flag = 2048;
+
 	// Owns a GSS-API handle (a pointer type), released with `Release`.
 	template<class H, auto Release> class gss_handle
 	{
@@ -304,7 +315,8 @@ struct sasl_gssapi::state
 		  context.in_out(),
 		  target.get(),
 		  &krb5_oid,
-		  GSS_C_MUTUAL_FLAG | GSS_C_SEQUENCE_FLAG,
+		  // With bindings, the client says it binds (channel_bound_flag).
+		  GSS_C_MUTUAL_FLAG | GSS_C_SEQUENCE_FLAG | (bindings.empty() ? 0 : channel_bound_flag),
 		  0,
 		  bindings.empty() ? GSS_C_NO_CHANNEL_BINDINGS : &channel,
 		  token ? &in : GSS_C_NO_BUFFER,

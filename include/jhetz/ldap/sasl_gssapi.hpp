@@ -82,11 +82,14 @@
 //   master's mechanism selection (lib/server.c mech_permitted) also asks
 //   of every mechanism and no plugin declares, so, from the sources, a
 //   slapd with it offers no SASL mechanism at all. Active Directory is the
-//   server that checks them. MIT krb5
-//   1.19 and later also tells the server that the client binds
-//   (Microsoft's KERB_AP_OPTIONS_CBT) when krb5.conf sets
-//   client_aware_gss_bindings: an acceptor given bindings then requires
-//   them. The hash is RFC 5929's
+//   server that checks them. With bindings the client also says that it
+//   binds (Microsoft's KERB_AP_OPTIONS_CBT in the authenticator): it
+//   passes GSS_C_CHANNEL_BOUND_FLAG, which MIT krb5 1.19 and later honour
+//   (Heimdal since a 2024 change on its master; older ones ignore it.
+//   MIT's krb5.conf client_aware_channel_bindings sets it for every
+//   request), so an
+//   acceptor given bindings refuses a missing or wrong one, AD with "When
+//   supported" too. The hash is RFC 5929's
 //   (channel_bindings::tls_server_end_point), or OpenLDAP's
 //   (sasl_gssapi_options::binding_form openldap, the bytes libldap builds,
 //   for a slapd that checks them, see above: they differ only for an
