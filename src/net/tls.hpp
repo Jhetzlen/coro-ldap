@@ -52,7 +52,10 @@ struct verify_state
 	  int security_level,
 	  std::optional<std::chrono::milliseconds> timeout) -> result<void>;
 	chain_verifier system_chain = nullptr;
-	// verify_system_chain ran and accepted the chain.
+	// verify_system_chain ran and accepted the chain. The callback then
+	// resets the store's error to X509_V_OK (also after the errors it lets
+	// through later), so SSL_get_verify_result() reports success; nothing
+	// reads it today.
 	bool system_chain_verified = false;
 	// The handshake's deadline (tls_handshake()), which bounds
 	// verify_system_chain's revocation retrieval (only: trust_store.hpp).

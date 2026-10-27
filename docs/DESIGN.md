@@ -1566,9 +1566,15 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   OpenSSL's sslserver purpose also checks the keyUsage and nsCertType,
   the SSL policy only the extended key usage, and the TLS stack here is
   OpenSSL, not Schannel, which would check the keyUsage itself). The
-  leaf's final callback (OpenSSL calls it last, after every error and the
-  host name check) asks CryptoAPI; a handshake that never reached it
-  fails closed. OpenSSL's security level (`SSL_get_security_level`, 2 by
+  leaf's final callback (OpenSSL calls it after the chain build, the
+  purpose, security level and host name checks, and the signature and
+  validity checks; only the name constraint, RFC 3779 and policy checks
+  come later, and CryptoAPI does those itself) asks CryptoAPI; a
+  handshake that never reached it fails closed. On acceptance the store's
+  error, still the last one let through, is reset to `X509_V_OK`, so
+  `SSL_get_verify_result()` does not report a verified connection as
+  failed. An exception in the callback (bad_alloc) fails verification
+  rather than unwinding through OpenSSL's C frames. OpenSSL's security level (`SSL_get_security_level`, 2 by
   default since OpenSSL 3.2) also checks the CA keys and the signature
   hashes (`CA_KEY_TOO_SMALL`, `CA_MD_TOO_WEAK`), which depend on the
   chain built, and CryptoAPI checks neither by default; so the callback

@@ -92,9 +92,11 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 	}
 	auto c = ldap::parse_object_class(text);
 	// Same grammar; only an attribute type's SYNTAX is checked, and only an
-	// object class's SUP, MUST and MAY take an unparenthesised list.
-	check(!a ? !c || a.error().context == "schema: SYNTAX is not a numeric OID" || text.contains('$') : c.has_value(),
-	  "!a ? !c || a.error().context == \"schema: SYNTAX is not a numeric OID\" || text.contains('$') : "
+	// object class's SUP, MUST and MAY take an unparenthesised list ("a$b"),
+	// whose "$" the attribute type finds where a keyword should be.
+	const bool unparenthesised_list = !a && text.contains('$') && a.error().context == "schema: expected a keyword";
+	check(!a ? !c || a.error().context == "schema: SYNTAX is not a numeric OID" || unparenthesised_list : c.has_value(),
+	  "!a ? !c || a.error().context == \"schema: SYNTAX is not a numeric OID\" || unparenthesised_list : "
 	  "c.has_value()");
 	if (c) {
 		for (const auto *list : { &c->sup, &c->must, &c->may }) {

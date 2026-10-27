@@ -269,8 +269,15 @@ namespace {
 	}
 
 	// The platform's verdict on the chain (verify_state::system_chain), at
-	// the leaf's final callback, once: OpenSSL calls it last, after every
-	// error at any depth and after the host name check.
+	// the leaf's final callback, once. OpenSSL (X509_verify_cert's
+	// verify_chain) calls it after the chain build, the purpose, security
+	// level and host name checks, and the signature and validity checks of
+	// every certificate; only the name constraint, RFC 3779 and policy
+	// checks come after it, and their errors are let through (CryptoAPI
+	// checks name constraints and policies itself). On acceptance the
+	// store's error, still the last one let through (e.g.
+	// UNABLE_TO_GET_ISSUER_CERT_LOCALLY), is reset to X509_V_OK, so that
+	// SSL_get_verify_result() reports the verified connection as such.
 	auto verify_chain_with_platform(verify_state &state, X509_STORE_CTX *store) -> bool
 	{
 		state.system_chain_verified = false;
@@ -284,6 +291,7 @@ namespace {
 			return false;
 		}
 		state.system_chain_verified = true;
+		X509_STORE_CTX_set_error(store, X509_V_OK);
 		return true;
 	}
 
@@ -305,6 +313,12 @@ namespace {
 		record_ssl(state, store);
 		if (state.system_chain != nullptr && !preverified
 			&& !fatal_with_platform_chain(X509_STORE_CTX_get_error(store), X509_STORE_CTX_get_error_depth(store))) {
+			// After the platform accepted (the checks that follow the
+			// leaf's final callback), its verdict stands for
+			// SSL_get_verify_result() too.
+			if (state.system_chain_verified) {
+				X509_STORE_CTX_set_error(store, X509_V_OK);
+			}
 			return true;
 		}
 		if (preverified && !state.strict_host.empty() && X509_STORE_CTX_get_error_depth(store) == 0) {
@@ -330,6 +344,30 @@ namespace {
 			ldap::detail::format_to(state.reason, " (certificate depth {})", X509_STORE_CTX_get_error_depth(store));
 		}
 		return preverified;
+	}
+
+	// verify_full as OpenSSL calls it, through Corosio's trampoline: an
+	// exception (bad_alloc from the chain's DER, the platform's error text
+	// or the reason) must not unwind through their C frames, so it fails
+	// verification instead (fail closed).
+	auto verify_full_noexcept(verify_state &state, bool preverified, X509_STORE_CTX *store) noexcept -> bool
+	{
+		try {
+			return verify_full(state, preverified, store);
+		} catch (...) {
+			state.system_chain_verified = false;
+			if (store != nullptr) {
+				X509_STORE_CTX_set_error(store, X509_V_ERR_UNSPECIFIED);
+			}
+		}
+		try {
+			if (state.reason.empty()) {
+				state.reason = "internal error in the certificate verify callback";
+			}
+		} catch (...) {
+			return false;// no reason then; the handshake still fails
+		}
+		return false;
 	}
 
 	// The verify callback without verification: only reaches the session
@@ -532,7 +570,7 @@ auto make_tls_setup(const tls_options &o) -> result<tls_setup>
 			setup.state->system_chain = verify_system_chain;
 		}
 		ctx.set_verify_callback([state = setup.state](bool preverified, corosio::verify_context &vc) {
-			return verify_full(*state, preverified, static_cast<X509_STORE_CTX *>(vc.native_handle()));
+			return verify_full_noexcept(*state, preverified, static_cast<X509_STORE_CTX *>(vc.native_handle()));
 		});
 	} else {
 		if (auto r = check(ctx.set_verify_mode(corosio::tls_verify_mode::none), "tls: verify mode"); !r) {
