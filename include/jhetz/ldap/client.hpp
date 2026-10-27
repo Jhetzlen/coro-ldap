@@ -148,9 +148,14 @@
 // No TLS downgrade: when the pooled connection is TLS-protected, an ldaps://
 // target is opened as such and an ldap:// one with StartTLS (a failed
 // StartTLS fails that URI); otherwise client_options::connection applies
-// as given; the certificate is checked against the referred host
-// (connection_options::tls::server_name cleared). These are
-// make_same_policy_connector's rules, with `authorize` for its allow-list.
+// as given. The certificate is checked against the referred host
+// (connection_options::tls::server_name cleared), as the client's TLS
+// settings say: only with certificate_verification::full (and strict
+// host_matching for the strict name rules) is a referred server
+// authenticated before same_setup sends it the client's credentials; a
+// client configured with insecure_accept_any sends them to whatever
+// answers. These are make_same_policy_connector's rules, with `authorize`
+// for its allow-list.
 // Referred connections are not pooled: each chase opens its own (one per
 // server and binding, reused within the chase), runs the setup chosen on
 // them, and closes them (without an UnbindRequest) when it ends. So they
@@ -327,9 +332,17 @@ class client_observer
 };
 
 // A referred server a chase would contact (referral_options::authorize).
+// `target` is the URL as the server sent it: its host is percent-decoded,
+// but not lowercased, nor converted to its ASCII form (IDNA), and a
+// trailing dot is kept, while the chase connects to the ASCII form. So a
+// hand-written authorizer must not compare the host as a raw string
+// (same_setup_for_domains compares the ASCII forms, case-insensitively),
+// and must check the scheme and the port itself: the connection goes to
+// whatever port the URL names (same_setup_for_domains allows only the
+// usual ones unless told otherwise).
 struct referral_hop
 {
-	url target{};// the URL as the server sent it (its scheme, host and port name the server)
+	url target{};// its scheme, host and port name the server
 	std::size_t depth = 1;// 1: returned by the pooled connection's server
 	url origin{};// the pooled connection's server (lease::server())
 };
@@ -345,8 +358,11 @@ enum class referral_binding : std::uint8_t {
 	same_setup,
 };
 
-// Decides for each referred server. Called on the client's executor; an
-// exception it throws fails the operation.
+// Decides for each referred server. Called on the client's executor. An
+// exception it throws propagates out of the operation (search(),
+// compare(), chase_search(), chase_compare(); sync::client rethrows it)
+// as an exception, not as an error result; the chase's referred
+// connections are closed and the lease is returned.
 using referral_authorizer = std::function<referral_binding(const referral_hop &hop)>;
 
 // An authorizer giving same_setup to the hosts of `domains` and refusing

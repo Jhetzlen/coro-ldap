@@ -62,9 +62,10 @@
 // references still waiting are not parsed (their URIs are counted in
 // `unlisted`, and they clear `complete`). Over max_hops nothing is parsed:
 // a reference gets one limit_reached entry, for its first URI, even if it
-// is a loop (telling would cost a parse and a copy of the request). The attempt list keeps at most max_attempts
-// entries; the URIs considered beyond them are counted in `unlisted` too, so a server streaming references cannot make
-// the list grow without bound.
+// is a loop (telling would cost a parse and a copy of the request). The
+// attempt list keeps at most max_attempts entries; the URIs considered
+// beyond them are counted in `unlisted` too, so a server streaming
+// references cannot make the list grow without bound.
 //
 // Loops (RFC 4511: clients "MUST NOT repeatedly contact the same server for
 // the same request with the same parameters"): a URI whose server (scheme,

@@ -2371,6 +2371,60 @@ TEST_CASE("client: referrals and the read forwarders' retry", "[net][client][ref
 	}
 }
 
+TEST_CASE("client: an authorizer's exception propagates", "[net][client][referral]")
+{
+	pool_fixture f;
+	auto &b = f.server({});
+	auto &a = f.server({ { answer({ bind_resp(1) }),
+	  answer({ search_referral(2, ref_to(b, "ou=b,dc=example,dc=org")) }),
+	  answer({ compare_msg(3, 6) }) } });
+	f.make({ .servers = { a.url() },
+	  .setup = admin_setup(),
+	  .referrals = { .follow_referrals = true, .authorize = [](const ldap::referral_hop &) -> ldap::referral_binding {
+						throw std::runtime_error("authorizer");
+					} } });
+	CHECK_THROWS_AS(finish(f.ioc, f.pool->search(people_search())), std::runtime_error);
+	CHECK(b.accepted() == 0);
+	// The lease came back, its connection still pooled and usable.
+	auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
+	REQUIRE(r.has_value());
+	CHECK(*r);
+	CHECK(a.accepted() == 1);
+	CHECK(f.pool->connections() == 1);
+}
+
+TEST_CASE("client: one referred connection per server and binding", "[net][client][referral]")
+{
+	pool_fixture f;
+	// Two connections to b: anonymous for ou=b (searched twice), then bound
+	// for ou=c.
+	auto &b = f.server({ { answer({ entry_msg(1, b_dn, "B"), done_msg(1) }),
+						   answer({ entry_msg(2, "uid=jdoe,ou=d,dc=example,dc=org", "D"), done_msg(2) }) },
+	  { answer({ bind_resp(1) }), answer({ entry_msg(2, "uid=jdoe,ou=c,dc=example,dc=org", "C"), done_msg(2) }) } });
+	auto &a = f.server({ { answer({ bind_resp(1) }),
+	  answer({ ref_msg(2, { ref_to(b, "ou=b,dc=example,dc=org") }),
+		ref_msg(2, { ref_to(b, "ou=c,dc=example,dc=org") }),
+		ref_msg(2, { ref_to(b, "ou=d,dc=example,dc=org") }),
+		done_msg(2) }) } });
+	f.make({ .servers = { a.url() },
+	  .setup = admin_setup(),
+	  .referrals = { .follow_references = true, .authorize = [](const ldap::referral_hop &hop) {
+						return hop.target.base_dn() == ldap::dn{ "ou=c,dc=example,dc=org" }
+								 ? ldap::referral_binding::same_setup
+								 : ldap::referral_binding::anonymous;
+					} } });
+	auto r = finish(f.ioc, f.pool->chase_search(people_search()));
+	REQUIRE(r.has_value());
+	CHECK(r->complete);
+	CHECK(r->entries.size() == 3);
+	REQUIRE(b.accepted() == 2);
+	REQUIRE(b.log(0).received.size() == 2);// anonymous: no bind, both searches
+	CHECK(std::holds_alternative<ldap::search_request>(b.log(0).received[0].op));
+	CHECK(std::holds_alternative<ldap::search_request>(b.log(0).received[1].op));
+	REQUIRE(b.log(1).received.size() == 2);
+	CHECK(std::get<ldap::bind_request>(b.log(1).received[0].op).name == "cn=admin,dc=example,dc=org");
+}
+
 TEST_CASE("client: close() stops a chase", "[net][client][referral][close]")
 {
 	pool_fixture f;
