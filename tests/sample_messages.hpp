@@ -119,7 +119,6 @@ inline auto sample_messages() -> std::vector<message>
 		  {},
 		  encode_end_transaction_response(
 			end_transaction_response{ 3, { update_controls{ 2, { control{ "1.2.3", false, "v" } } } } })
-			.value()
 			.value() },
 	};
 	std::vector<message> out;

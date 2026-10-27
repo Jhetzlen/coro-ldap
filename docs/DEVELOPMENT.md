@@ -340,9 +340,21 @@ run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|tests|
 The fuzz targets are checked through their `*_fuzz_replay` builds. A full
 run takes about five minutes. Alternatively, `-DJHETZ_LDAP_CLANG_TIDY=ON`
 sets `CXX_CLANG_TIDY` on our own targets (through `jhetz_ldap_warnings`), so
-every compile of our sources also runs clang-tidy. A finding that is a false
-positive gets `// NOLINT(check-name): reason` (or `NOLINTNEXTLINE`) rather
-than a disabled check.
+every compile of our sources also runs clang-tidy:
+
+```sh
+cmake -B build/tidy-werror -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug \
+  -DJHETZ_LDAP_CLANG_TIDY=ON -DJHETZ_LDAP_WITH_GSSAPI=ON
+cmake --build build/tidy-werror -j6
+```
+
+The tree is clean: `.clang-tidy` sets `WarningsAsErrors: '*'` (inherited by
+`tests/.clang-tidy` and `fuzz/.clang-tidy`), so every finding is an error,
+run-clang-tidy exits non-zero on one and a `-DJHETZ_LDAP_CLANG_TIDY=ON`
+build fails on it. The default build (option `OFF`) does not run
+clang-tidy. A finding that is a false positive gets
+`// NOLINT(check-name): reason` (or `NOLINTNEXTLINE`) rather than a
+disabled check.
 
 ## Fuzz
 

@@ -62,7 +62,9 @@ Checks:
   - -cppcoreguidelines-avoid-do-while
   # An enum's underlying type is API and ABI; errc enums feed std::error_code (int).
   - -performance-enum-size
-WarningsAsErrors: ''
+# The tree is clean: every finding is an error (fix it, or NOLINT a false
+# positive with its reason).
+WarningsAsErrors: '*'
 # Our own headers only: never Corosio, Capy, Catch2 or the system headers.
 HeaderFilterRegex: '.*/(include/jhetz|src|tests|fuzz)/.*'
 ExcludeHeaderFilterRegex: '.*/_deps/.*'

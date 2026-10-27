@@ -1454,7 +1454,7 @@ TEST_CASE("client: the bind after an authentication backoff ends without a verdi
 			.initial = milliseconds(200), .max = milliseconds(200), .auth_failure_min = milliseconds(200) } });
 		REQUIRE_FALSE(f.acquire().has_value());
 		finish(f.ioc, sleep_for(milliseconds(250)));
-		ldap::detail::set_jitter(*f.pool, []() -> double { throw std::runtime_error("no jitter"); });
+		ldap::detail::set_jitter(*f.pool, [] -> double { throw std::runtime_error("no jitter"); });
 		CHECK_THROWS_AS(f.acquire(), std::runtime_error);// server_failed() throws for the timed-out bind
 		ldap::detail::set_jitter(*f.pool, [] { return 1.0; });
 		auto later = f.acquire();// the backoff started again all the same: no bind
