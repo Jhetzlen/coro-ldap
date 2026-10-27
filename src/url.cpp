@@ -104,9 +104,26 @@ namespace {
 		return out;
 	}
 
-	// decode(), then RFC 4516 section 2: the percent-decoded parts are UTF-8
-	// (the attributes, filter and extension values are LDAPStrings). A DN is
-	// checked by dn::parse, a scope is base/one/sub.
+	// Where the n-th byte decode() made of `s` starts in `s`: at its '%'
+	// when it was percent-encoded. `s` is one decode() accepted.
+	auto encoded_offset(std::string_view s, std::size_t n) noexcept -> std::size_t
+	{
+		constexpr std::size_t triplet = 3;// "%XX"
+		std::size_t i = 0;
+		for (std::size_t k = 0; k < n && i < s.size(); ++k) {
+			i += s[i] == '%' ? triplet : 1;
+		}
+		return i;
+	}
+
+	// decode(), then RFC 4516 section 2: the percent-decoded text is UTF-8,
+	// an ill-formed sequence reported at its URL offset. For the parts that
+	// are UTF-8 text and checked nowhere else: the attributes (RFC 4511
+	// AttributeSelectors, which the URL keeps as given), the filter (its
+	// values, RFC 4515; checked before filter::raw, whose error gives a
+	// position in the decoded filter rather than in the URL) and the
+	// extension values. A DN is checked by dn::parse, a scope is
+	// base/one/sub, an extension type (an OID) by detail::is_oid.
 	template<class Allowed>
 	auto decode_utf8(std::string_view s,
 	  std::size_t offset,
@@ -119,9 +136,8 @@ namespace {
 			return out;
 		}
 		if (const std::size_t bad_at = detail::invalid_utf8_offset(*out); bad_at != std::string_view::npos) {
-			return bad(
-			  detail::format("ill-formed UTF-8 in {} (decoded byte {}; RFC 4516 parts are UTF-8)", what, bad_at),
-			  offset);
+			return bad(detail::format("ill-formed UTF-8 in {} (RFC 4516 parts are UTF-8)", what),
+			  offset + encoded_offset(s, bad_at));
 		}
 		return out;
 	}
@@ -633,7 +649,7 @@ namespace {
 			++off;
 		}
 		const std::size_t eq = piece.find('=');
-		auto type = decode_utf8(piece.substr(0, eq), off, "extension type", is_lenient_part_char, mr);
+		auto type = decode(piece.substr(0, eq), off, "extension type", is_lenient_part_char, mr);
 		if (!type) {
 			return std::unexpected(std::move(type.error()));
 		}

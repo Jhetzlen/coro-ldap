@@ -349,7 +349,8 @@ cmake --build build/tidy-werror -j6
 ```
 
 The tree is clean: `.clang-tidy` sets `WarningsAsErrors: '*'` (inherited by
-`tests/.clang-tidy` and `fuzz/.clang-tidy`), so every finding is an error,
+`tests/.clang-tidy`, `fuzz/.clang-tidy` and `bench/.clang-tidy`), so every
+finding is an error,
 run-clang-tidy exits non-zero on one and a `-DJHETZ_LDAP_CLANG_TIDY=ON`
 build fails on it. The default build (option `OFF`) does not run
 clang-tidy. A finding that is a false positive gets

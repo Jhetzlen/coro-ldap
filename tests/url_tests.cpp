@@ -380,7 +380,26 @@ TEST_CASE("URL parts must be UTF-8 after percent-decoding", "[url]")
 		  "ldap://h/dc=x????"
 		  "!1.2.3=a\xE2\x82",
 		  "extension value");
-		utf8_error("ldap://h/dc=x????%FE", "extension type");
+		// The type is an OID: any non-ASCII byte fails that check.
+		rejected("ldap://h/dc=x????%FE");
+		rejected("ldap://h/dc=x????\xC3\xA9");
+	}
+	SECTION("the error gives the URL offset of the ill-formed byte")
+	{
+		// After "%C3%A9" (one decoded character, six URL bytes) the bad %FF
+		// is at URL offset 26, decoded byte 7 of the filter.
+		auto u = ldap::url::parse("ldap://h/??sub?(cn=a%C3%A9%FF)");
+		REQUIRE_FALSE(u.has_value());
+		CHECK(
+		  std::string(u.error().context) == "url: ill-formed UTF-8 in filter (RFC 4516 parts are UTF-8) at offset 26");
+		auto raw = ldap::url::parse("ldap://h/dc=x?cn,a\xC3");// truncated, unencoded
+		REQUIRE_FALSE(raw.has_value());
+		CHECK(std::string(raw.error().context)
+			  == "url: ill-formed UTF-8 in attribute (RFC 4516 parts are UTF-8) at offset 18");
+		auto value = ldap::url::parse("ldap://h/dc=x????x=%41%FF");
+		REQUIRE_FALSE(value.has_value());
+		CHECK(std::string(value.error().context)
+			  == "url: ill-formed UTF-8 in extension value (RFC 4516 parts are UTF-8) at offset 22");
 	}
 	SECTION("the DN, through dn::parse")
 	{
