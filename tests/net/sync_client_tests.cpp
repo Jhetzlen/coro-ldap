@@ -9,6 +9,7 @@
 
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/work_guard.hpp>
+#include <boost/corosio/delay.hpp>
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/ipv4_address.hpp>
 #include <boost/corosio/tcp_acceptor.hpp>
@@ -17,6 +18,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -42,9 +44,11 @@ using std::chrono::milliseconds;
 namespace {
 
 // Accepts connections one after another and runs the n-th script on the
-// n-th, then stops accepting (a later connect is refused). stop() ends the
-// sessions still running and joins the server's thread: only then may the
-// test read the logs.
+// n-th, then stops accepting (a later connect is refused). stop() lets the
+// sessions finish (the client, gone by then, may have written its last
+// request, the UnbindRequest of a detached unbind(), without the server
+// having read it yet), ends those still running after session_grace, and
+// joins the server's thread: only then may the test read the logs.
 class threaded_script_server
 {
   public:
@@ -71,6 +75,11 @@ class threaded_script_server
 			return;
 		}
 		capy::run_async(ioc_.get_executor())([](threaded_script_server &s) -> capy::task<void> {
+			const auto give_up = std::chrono::steady_clock::now() + session_grace;
+			while (!std::ranges::all_of(s.sessions_, [](const outcome<void> &o) { return o.done(); })
+				   && std::chrono::steady_clock::now() < give_up) {
+				(void)co_await corosio::delay(milliseconds(1));
+			}
 			s.acc_.close();
 			for (auto &p : s.peers_) {
 				p.close();
@@ -82,6 +91,9 @@ class threaded_script_server
 	}
 
   private:
+	// How long stop() waits for the sessions to end by themselves.
+	static constexpr milliseconds session_grace{ 5'000 };
+
 	auto accept_loop() -> capy::task<void>
 	{
 		for (auto &script : scripts_) {
