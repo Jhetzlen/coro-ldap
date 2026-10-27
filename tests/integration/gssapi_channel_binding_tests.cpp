@@ -127,6 +127,12 @@ TEST_CASE("kerberos: GSSAPI channel bindings against an MIT acceptor", "[integra
 		const auto a = accept(first_token(mech, hash), ours);
 		CHECK(mech.channel_binding_used() == ldap::channel_binding_type::tls_server_end_point);
 		CHECK(a.major == GSS_S_COMPLETE);
+		// MIT sets GSS_C_CHANNEL_BOUND_FLAG in ret_flags whenever the
+		// bindings match, whether or not the initiator asserted
+		// KERB_AP_OPTIONS_CBT: the bit reflects the match, so this does not
+		// show that the client passes the flag with bindings (an acceptor
+		// cannot observe it then). Only the last section (no bindings, the
+		// acceptor given some) constrains the client's flag.
 		CHECK((a.flags & channel_bound_flag) != 0);
 		CHECK(mech.step(a.token).has_value());
 	}
