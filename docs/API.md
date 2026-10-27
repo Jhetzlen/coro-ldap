@@ -698,7 +698,12 @@ itself needs only ICU.
   inherited SYNTAX and EQUALITY), `validate<T>(schema)` listing every issue (unknown
   attribute or object class, syntax the member's type cannot read, a
   writable member on a NO-USER-MODIFICATION attribute; single member on a
-  multi-valued attribute as a warning), `connection::load_schema()` and
+  multi-valued attribute as a warning; MUST attributes of the declared
+  object classes and their superclasses that no required, writable member
+  maps as warnings: `must_attribute_not_mapped`,
+  `must_attribute_not_required`, `unknown_superclass`),
+  `object_class_type` with `sup`, `kind` (`object_class_kind`), `must`
+  and `may`, `connection::load_schema()` and
   `connection_options::schema_check = schema_check::on_first_use`.
   Breaking: a `std::string` or `std::pmr::string` member on a binary
   syntax (Octet String, JPEG, Fax, Certificate, Certificate List,

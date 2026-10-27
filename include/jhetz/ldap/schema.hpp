@@ -8,8 +8,8 @@
 //
 // Parsing keeps, for attributeTypes: the OID, every NAME, SUP, EQUALITY,
 // SYNTAX (the OID, without a {length}), SINGLE-VALUE and
-// NO-USER-MODIFICATION; for
-// objectClasses: the OID and every NAME. Everything else is skipped.
+// NO-USER-MODIFICATION; for objectClasses: the OID, every NAME, SUP, the
+// kind, MUST and MAY. Everything else is skipped.
 // Definitions that do not parse are skipped and counted, never fatal (the
 // text comes from the server, so the parser must accept anything without
 // harm: there is a fuzz target). Lenient where real servers are: quoted
@@ -20,7 +20,8 @@
 // keystring or X- extension name (a "{len}" spaced from the OID is one) is
 // skipped (the names of those skipped for their SYNTAX are remembered, see
 // skipped_for_syntax); NAMEs that are not valid descriptors are dropped
-// (they could never be looked up). A definition that is not well-formed
+// (they could never be looked up), and so are SUP, MUST and MAY entries of
+// an object class that are not oids (descriptors or numeric OIDs). A definition that is not well-formed
 // UTF-8 is skipped too: RFC 4512 qdstrings (NAME, DESC) are UTF-8 and the
 // rest of the grammar is ASCII.
 #pragma once
@@ -57,10 +58,20 @@ struct attribute_type
 	bool no_user_modification = false;
 };
 
+// RFC 4512 section 4.1.1 ObjectClassDescription kind: STRUCTURAL when the
+// definition gives none.
+enum class object_class_kind { abstract, structural, auxiliary };
+
+// RFC 4512 section 4.1.1, in its field order. sup, must and may hold the
+// oids as the server wrote them (names or numeric OIDs).
 struct object_class_type
 {
 	std::string oid{};
 	std::vector<std::string> names{};
+	std::vector<std::string> sup{};// superclasses
+	object_class_kind kind = object_class_kind::structural;
+	std::vector<std::string> must{};// required attribute types
+	std::vector<std::string> may{};// allowed attribute types
 };
 
 // One definition each (an attributeTypes / objectClasses value); errors are
@@ -252,11 +263,24 @@ struct schema_issue
 		syntax_mismatch,
 		writable_but_no_user_modification,// error
 		single_member_multi_valued,// warning: only fails if an entry really has several values
+		// warning: a MUST attribute of a declared object class or of one of
+		// its superclasses that no member maps (add(dn, T) does not send it)
+		must_attribute_not_mapped,
+		// warning: a MUST attribute mapped only by std::optional, std::vector
+		// or read_only members (add(dn, T) may not send it)
+		must_attribute_not_required,
+		// warning: a superclass (SUP) of a declared object class that is not
+		// defined on the server: the MUSTs it would add are not checked
+		unknown_superclass,
 	};
 	kind what;
 	std::string name;// the attribute or object class
 	std::string detail;
-	[[nodiscard]] auto is_error() const noexcept -> bool { return what != kind::single_member_multi_valued; }
+	[[nodiscard]] auto is_error() const noexcept -> bool
+	{
+		return what != kind::single_member_multi_valued && what != kind::must_attribute_not_mapped
+			   && what != kind::must_attribute_not_required && what != kind::unknown_superclass;
+	}
 };
 
 struct schema_report
@@ -277,9 +301,34 @@ namespace detail {
 	  std::span<const char *const> rejected,
 	  schema_report &out);
 	void check_object_class(const server_schema &s, std::string_view name, schema_report &out);
+
+	// What add(dn, T) does with one member, for check_must.
+	struct field_use
+	{
+		std::string_view name;
+		cardinality kind;
+		bool read_only;
+	};
+	void check_must(const server_schema &s,
+	  std::span<const char *const> classes,
+	  std::span<const field_use> fields,
+	  schema_report &out);
 }// namespace detail
 
 // Checks T's descriptor against the server's schema; lists every issue.
+//
+// With declared object classes, also checks their MUST attributes, and
+// those of their superclasses (SUP followed, RFC 4512 section 2.4), against
+// the members: each must be mapped by a required (T), writable member, or
+// add(dn, T) may leave it out and the server refuse the entry
+// (objectClassViolation). Those are warnings, never errors: the descriptor
+// may be a read projection (search_as), the entry's RDN supplies its
+// attribute values at add time (RFC 4511 section 4.7), and some servers fill
+// MUSTs in themselves (Active Directory: objectCategory, instanceType,
+// nTSecurityDescriptor). Not reported: objectClass (add sends the declared
+// classes) and NO-USER-MODIFICATION attributes (a client must not send
+// them, RFC 4511 section 4.7). Subtypes do not count (a cn member does not
+// map a MUST name); attribute options do (cn;lang-en maps cn).
 template<described T> [[nodiscard]] auto validate(const server_schema &s) -> schema_report
 {
 	schema_report out;
@@ -298,6 +347,15 @@ template<described T> [[nodiscard]] auto validate(const server_schema &s) -> sch
 			...);
 	  },
 	  schema<T>.fields);
+	if constexpr (schema<T>.classes.names.size() > 0) {
+		const auto fields = std::apply(
+		  [](const auto &...f) {
+			  return std::array<detail::field_use, sizeof...(f)>{ detail::field_use{
+				.name = f.name, .kind = std::remove_cvref_t<decltype(f)>::kind, .read_only = f.read_only }... };
+		  },
+		  schema<T>.fields);
+		detail::check_must(s, schema<T>.classes.names, fields, out);
+	}
 	return out;
 }
 

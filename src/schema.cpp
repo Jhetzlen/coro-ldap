@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -247,19 +249,32 @@ namespace {
 		return std::string(s.substr(0, open));
 	}
 
-	// Keeps the NAMEs that are valid descriptors (RFC 4512 section 1.4);
-	// others could never be looked up, so they are dropped.
-	auto valid_names(const std::vector<std::string> *names) -> std::vector<std::string>
+	// Keeps the values that `valid` accepts; others could never be looked
+	// up, so they are dropped.
+	template<class Pred> auto kept(const std::vector<std::string> *values, Pred valid) -> std::vector<std::string>
 	{
 		std::vector<std::string> out;
-		if (names != nullptr) {
-			for (const auto &n : *names) {
-				if (detail::is_descr(n)) {
+		if (values != nullptr) {
+			for (const auto &n : *values) {
+				if (valid(n)) {
 					out.push_back(n);
 				}
 			}
 		}
 		return out;
+	}
+
+	// The NAMEs that are valid descriptors (RFC 4512 section 1.4).
+	auto valid_names(const std::vector<std::string> *names) -> std::vector<std::string>
+	{
+		return kept(names, [](const std::string &n) { return detail::is_descr(n); });
+	}
+
+	// The oids (descr / numericoid, RFC 4512 section 1.4) of a SUP, MUST or
+	// MAY list.
+	auto valid_oids(const std::vector<std::string> *oids) -> std::vector<std::string>
+	{
+		return kept(oids, [](const std::string &n) { return detail::is_oid(n); });
 	}
 
 	// "cn;lang-en" -> "cn".
@@ -311,6 +326,25 @@ auto parse_object_class(std::string_view text) -> result<object_class_type>
 		object_class_type c;
 		c.oid = std::move(d.oid);
 		c.names = valid_names(d.get("NAME"));
+		c.sup = valid_oids(d.get("SUP"));
+		// RFC 4512 4.1.1: one kind, STRUCTURAL by default; the first wins
+		// if a server writes several.
+		for (const auto &[k, v] : d.fields) {
+			if (detail::iequals(k, "ABSTRACT")) {
+				c.kind = object_class_kind::abstract;
+				break;
+			}
+			if (detail::iequals(k, "STRUCTURAL")) {
+				c.kind = object_class_kind::structural;
+				break;
+			}
+			if (detail::iequals(k, "AUXILIARY")) {
+				c.kind = object_class_kind::auxiliary;
+				break;
+			}
+		}
+		c.must = valid_oids(d.get("MUST"));
+		c.may = valid_oids(d.get("MAY"));
 		return c;
 	});
 }
@@ -428,7 +462,9 @@ auto schema_report::to_string() const -> std::string
 		detail::format_to(out,
 		  "{}{}{}: {}",
 		  i.is_error() ? "error: " : "warning: ",
-		  i.what == schema_issue::kind::unknown_object_class ? "object class " : "attribute ",
+		  i.what == schema_issue::kind::unknown_object_class || i.what == schema_issue::kind::unknown_superclass
+			? "object class "
+			: "attribute ",
 		  i.name,
 		  i.detail);
 	}
@@ -465,6 +501,118 @@ namespace {
 			cur = next;
 		}
 		return "syntax unknown: the SUP chain is longer than 32 (a cycle?)";
+	}
+
+}// namespace
+
+namespace {
+
+	auto class_name(const object_class_type &c) -> std::string_view
+	{
+		return c.names.empty() ? std::string_view(c.oid) : std::string_view(c.names.front());
+	}
+
+	// A class whose MUSTs apply, and the declared class it was reached
+	// from (empty for a declared class).
+	struct reached_class
+	{
+		const object_class_type *c;
+		std::string_view from;
+	};
+
+	// The declared classes (those the server defines), then their
+	// superclasses breadth first, each once (a SUP cycle ends). A SUP the
+	// server does not define is reported once, as unknown_superclass.
+	auto with_superclasses(const server_schema &s, std::span<const char *const> classes, schema_report &out)
+	  -> std::vector<reached_class>
+	{
+		std::vector<reached_class> all;
+		const auto seen = [&](const object_class_type *c) {
+			return std::ranges::any_of(all, [c](const reached_class &r) { return r.c == c; });
+		};
+		for (const char *name : classes) {
+			if (const object_class_type *c = s.find_object_class(name); c != nullptr && !seen(c)) {
+				all.push_back({ .c = c, .from = {} });
+			}
+		}
+		std::vector<std::string_view> unknown;
+		for (std::size_t i = 0; i < all.size(); ++i) {
+			const reached_class r = all[i];
+			const std::string_view declared = r.from.empty() ? class_name(*r.c) : r.from;
+			for (const auto &sup : r.c->sup) {
+				if (const object_class_type *c = s.find_object_class(sup); c != nullptr) {
+					if (!seen(c)) {
+						all.push_back({ .c = c, .from = declared });
+					}
+					continue;
+				}
+				if (std::ranges::any_of(unknown, [&](std::string_view u) { return detail::iequals(u, sup); })) {
+					continue;
+				}
+				unknown.push_back(sup);
+				out.issues.push_back({ .what = schema_issue::kind::unknown_superclass,
+				  .name = sup,
+				  .detail = detail::format(
+					"a superclass of {} not defined on the server: the MUST attributes it would add are not checked",
+					declared) });
+			}
+		}
+		return all;
+	}
+
+	// How the members map a MUST attribute (a: its definition, or nullptr).
+	struct must_mapping
+	{
+		bool mapped = false;
+		bool required = false;
+		std::string_view why;// for mapped but not required
+	};
+
+	auto mapping_of(const server_schema &s,
+	  const attribute_type *a,
+	  std::string_view must,
+	  std::span<const detail::field_use> fields) -> must_mapping
+	{
+		must_mapping out;
+		for (const detail::field_use &f : fields) {
+			const attribute_type *fa = s.find_attribute(f.name);
+			const bool same = a != nullptr && fa != nullptr ? fa == a : detail::iequals(without_options(f.name), must);
+			if (!same) {
+				continue;
+			}
+			out.mapped = true;
+			if (f.read_only) {
+				out.why = "read_only: add(dn, T) never sends it";
+			} else if (f.kind == cardinality::optional) {
+				out.why = "a std::optional: add(dn, T) sends nothing when it is empty";
+			} else if (f.kind == cardinality::multiple) {
+				out.why = "a std::vector: add(dn, T) sends nothing when it is empty";
+			} else {
+				out.required = true;
+				return out;
+			}
+		}
+		return out;
+	}
+
+	void report_must(const reached_class &r, std::string_view must, const must_mapping &m, schema_report &out)
+	{
+		if (m.required) {
+			return;
+		}
+		std::string text = detail::format("required (MUST) by object class {}", class_name(*r.c));
+		if (!r.from.empty()) {
+			detail::format_to(text, " (a superclass of {})", r.from);
+		}
+		if (m.mapped) {
+			detail::format_to(text, ", but its member is {}", m.why);
+		} else {
+			text += ", but no member maps it: add(dn, T) fails unless the entry's RDN or the server supplies it";
+		}
+		out.issues.push_back({ .what = m.mapped ? schema_issue::kind::must_attribute_not_required
+												: schema_issue::kind::must_attribute_not_mapped,
+		  .name = std::string(must),
+		  .detail = std::move(text) });
 	}
 
 }// namespace
@@ -545,6 +693,38 @@ namespace detail {
 				out.issues.push_back({ .what = schema_issue::kind::syntax_mismatch,
 				  .name = std::string(name),
 				  .detail = std::move(text) });
+			}
+		}
+	}
+
+	void check_must(const server_schema &s,
+	  std::span<const char *const> classes,
+	  std::span<const field_use> fields,
+	  schema_report &out)
+	{
+		const std::vector<reached_class> all = with_superclasses(s, classes, out);
+		// Each attribute once: by its definition, or by its name if the
+		// server does not define it.
+		std::vector<const attribute_type *> done_types;
+		std::vector<std::string_view> done_names;
+		for (const reached_class &r : all) {
+			for (const auto &m : r.c->must) {
+				if (detail::iequals(m, "objectClass")) {
+					continue;// add sends the declared classes
+				}
+				const attribute_type *a = s.find_attribute(m);
+				if (a != nullptr) {
+					if (a->no_user_modification || std::ranges::contains(done_types, a)) {
+						continue;// the server's to provide (RFC 4511 4.7), or done
+					}
+					done_types.push_back(a);
+				} else {
+					if (std::ranges::any_of(done_names, [&](std::string_view n) { return detail::iequals(n, m); })) {
+						continue;
+					}
+					done_names.push_back(m);
+				}
+				report_must(r, m, mapping_of(s, a, m, fields), out);
 			}
 		}
 	}

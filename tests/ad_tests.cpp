@@ -252,10 +252,40 @@ const std::pmr::vector<std::pmr::string> ad_types{
 	"( 1.2.840.113556.1.4.60 NAME 'lockoutDuration' SYNTAX '1.2.840.113556.1.4.906' SINGLE-VALUE )",
 	"( 1.2.840.113556.1.4.61 NAME 'lockOutObservationWindow' SYNTAX '1.2.840.113556.1.4.906' SINGLE-VALUE )",
 };
+// MAY lists cut; AD's top requires attributes the server fills in itself.
 const std::pmr::vector<std::pmr::string> ad_classes{
-	"( 1.2.840.113556.1.5.9 NAME 'user' SUP organizationalPerson STRUCTURAL )",
-	"( 1.2.840.113556.1.5.67 NAME 'domainDNS' SUP top STRUCTURAL )",
+	"( 2.5.6.0 NAME 'top' ABSTRACT MUST (objectClass $ instanceType $ nTSecurityDescriptor $ objectCategory ) )",
+	"( 2.5.6.6 NAME 'person' SUP top STRUCTURAL MUST (cn ) MAY (sn $ userPassword ) )",
+	"( 2.5.6.7 NAME 'organizationalPerson' SUP person STRUCTURAL MAY (c $ l ) )",
+	"( 1.2.840.113556.1.5.9 NAME 'user' SUP organizationalPerson STRUCTURAL MAY (accountExpires $ pwdLastSet ) )",
+	"( 1.2.840.113556.1.5.67 NAME 'domainDNS' SUP top STRUCTURAL MAY (maxPwdAge ) )",
 };
+
+// The issues but the MUST warnings (validate<T> reports the MUSTs of the
+// declared classes and their superclasses that no required member maps).
+auto without_must(const ldap::schema_report &rep) -> std::vector<ldap::schema_issue>
+{
+	std::vector<ldap::schema_issue> out;
+	for (const auto &i : rep.issues) {
+		if (i.what != ldap::schema_issue::kind::must_attribute_not_mapped
+			&& i.what != ldap::schema_issue::kind::must_attribute_not_required) {
+			out.push_back(i);
+		}
+	}
+	return out;
+}
+
+// The names of the MUST warnings, in report order.
+auto must_names(const ldap::schema_report &rep) -> std::vector<std::string>
+{
+	std::vector<std::string> out;
+	for (const auto &i : rep.issues) {
+		if (i.what == ldap::schema_issue::kind::must_attribute_not_mapped) {
+			out.push_back(i.name);
+		}
+	}
+	return out;
+}
 
 auto make_entry(std::string_view dn, std::initializer_list<ldap::partial_attribute> attrs) -> ldap::entry
 {
@@ -273,23 +303,33 @@ TEST_CASE("schema: AD Large Integer validates for int64, filetime and interval m
 
 	const auto raw = ldap::validate<ad_user_raw>(s);
 	CHECK(raw.ok());
-	CHECK(raw.issues.empty());
-	CHECK(ldap::validate<ad_user>(s).issues.empty());
-	CHECK(ldap::validate<ad_domain>(s).issues.empty());
+	CHECK(without_must(raw).empty());
+	const auto user = ldap::validate<ad_user>(s);
+	CHECK(user.ok());
+	CHECK(without_must(user).empty());
+	// person's cn (the RDN supplies it), and top's attributes AD fills in
+	// itself: warnings only.
+	CHECK(
+	  must_names(user) == std::vector<std::string>{ "cn", "instanceType", "nTSecurityDescriptor", "objectCategory" });
+	const auto domain = ldap::validate<ad_domain>(s);
+	CHECK(domain.ok());
+	CHECK(without_must(domain).empty());
+	CHECK(must_names(domain) == std::vector<std::string>{ "instanceType", "nTSecurityDescriptor", "objectCategory" });
 
 	// int32 and unsigned members cannot hold 906 values (dates, negative
 	// intervals); the filetime types read 906 only.
-	const auto narrow = ldap::validate<ad_user_narrow>(s);
-	REQUIRE(narrow.issues.size() == 4);
-	for (const auto &issue : narrow.issues) {
+	const auto narrow_report = ldap::validate<ad_user_narrow>(s);
+	const auto narrow = without_must(narrow_report);
+	REQUIRE(narrow.size() == 4);
+	for (const auto &issue : narrow) {
 		CHECK(issue.what == ldap::schema_issue::kind::syntax_mismatch);
 	}
-	CHECK(narrow.issues[0].name == "accountExpires");
-	CHECK(narrow.issues[1].name == "uSNChanged");
-	CHECK(narrow.issues[2].detail
+	CHECK(narrow[0].name == "accountExpires");
+	CHECK(narrow[1].name == "uSNChanged");
+	CHECK(narrow[2].detail
 		  == std::string("syntax 1.3.6.1.4.1.1466.115.121.1.27 is not one the member's type reads (")
 			   + ldap::syntax::ad_large_integer + ")");
-	CHECK(narrow.issues[3].name == "userAccountControl");
+	CHECK(narrow[3].name == "userAccountControl");
 }
 
 TEST_CASE("mapping AD users and domain policy", "[ad][mapping]")

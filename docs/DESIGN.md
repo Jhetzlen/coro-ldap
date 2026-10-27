@@ -1373,9 +1373,13 @@ Parsing is minimal, only what the checks below need:
   `SYNTAX` and `EQUALITY`, because many common attributes (`cn`, `sn`, …)
   only declare `SUP name`. `EQUALITY` drives
   `distinguished_name_match(a, b, schema)` (section 1).
-- `objectClasses`: `NAME` only.
+- `objectClasses`: `NAME`, `SUP`, the kind (`ABSTRACT`, `STRUCTURAL`,
+  `AUXILIARY`; STRUCTURAL when none is given, RFC 4512 4.1.1), `MUST` and
+  `MAY` (`object_class_type`, in the RFC's field order). `SUP` is followed
+  to inherit `MUST` (RFC 4512 2.4); entries that are not oids are dropped,
+  like NAMEs that are not descriptors.
 - Everything else (`ORDERING`, `SUBSTR`, matching rule definitions,
-  `MUST`/`MAY`, DIT content rules, extensions)
+  DIT content rules, extensions)
   is skipped. Unparseable definitions are skipped, not fatal.
 
 ```cpp
@@ -1396,6 +1400,32 @@ Checks:
   (for example an `int` field on a DirectoryString attribute);
 - writability: a non-`read_only` field on a `NO-USER-MODIFICATION`
   attribute (`createTimestamp`) is reported.
+- required attributes (warnings): with declared object classes, each
+  `MUST` attribute of those classes and of their superclasses (every `SUP`
+  followed, breadth first, each class once, so a cycle ends; ABSTRACT,
+  STRUCTURAL and AUXILIARY alike) must be mapped by a required (`T`),
+  writable member. One that no member maps is
+  `must_attribute_not_mapped`; one mapped only by `std::optional`,
+  `std::vector` or `read_only` members (add(dn, T) sends nothing for an
+  empty one, never a read_only one) is `must_attribute_not_required`; a
+  superclass the server does not define is `unknown_superclass` (its
+  MUSTs cannot be checked). Each attribute is reported once, for the first
+  class that requires it. Matching resolves both sides through the schema:
+  an alias (`surname` for `sn`), the OID, or an option (`cn;lang-en`)
+  maps the attribute, a subtype does not (`cn` does not map a MUST `name`;
+  RFC 4512 requires the type itself). Not reported: `objectClass` (`top`'s
+  MUST: add sends the declared classes) and NO-USER-MODIFICATION
+  attributes (RFC 4511 4.7: a client must not send them, the server
+  provides them). These are warnings, not errors, so
+  `schema_check::on_first_use` never fails on them: a descriptor may be a
+  read projection with classes only to narrow search_as; at add time the
+  entry's RDN supplies its attribute values (RFC 4511 4.7: the attributes
+  "along with those from the RDN" make up the entry), which a check per
+  type cannot see; and Active Directory fills in MUSTs of its own (`top`
+  requires instanceType, nTSecurityDescriptor and objectCategory, which a
+  client does not send). `MAY` is parsed but not checked: a member outside
+  every class's MUST and MAY can still be legal (operational attributes,
+  DIT content rules, extensibleObject).
 
 With `schema_check::on_first_use`, the first typed operation for `T` runs
 `validate<T>` and fails with `client_errc::schema_mismatch` if the report has
@@ -1423,8 +1453,8 @@ SYNTAX, or loops, or because no definition on the chain declares a SYNTAX
 (against RFC 4512 4.1.2; slapd refuses one), is a `syntax_mismatch` error ("syntax unknown: ..."), not
 a silent pass; the names of definitions skipped for their SYNTAX are
 remembered, so a member mapped to one is told so rather than "not
-defined on the server". The cardinality check is a
-warning (`schema_issue::is_error() == false`), the others are errors.
+defined on the server". The cardinality and MUST checks are
+warnings (`schema_issue::is_error() == false`), the others are errors.
 Syntaxes per type come from `value_syntaxes<T>` (built in: integers →
 INTEGER / NumericString, and also AD Large Integer
 (`syntax::ad_large_integer`, 1.2.840.113556.1.4.906) for signed integers of
@@ -2269,6 +2299,3 @@ decision left open.
 - Per-search memory limits (across many entries) are left to the caller:
   `search_stream` hands entries over one at a time, and `max_message_size`
   with `max_elements` bound each one.
-
-- Should `MUST` attributes of the declared object classes be checked against
-  required (`T`) fields? Needs `MUST`/`MAY` parsing, so deferred.

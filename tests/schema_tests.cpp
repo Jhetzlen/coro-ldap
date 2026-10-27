@@ -48,6 +48,8 @@ const std::pmr::vector<std::pmr::string> openldap_classes{
 	"( 2.5.6.0 NAME 'top' DESC 'top of the superclass chain' ABSTRACT MUST objectClass )",
 	"( 2.5.6.6 NAME 'person' DESC 'RFC2256: a person' SUP top STRUCTURAL MUST ( sn $ cn ) MAY ( userPassword $ "
 	"telephoneNumber $ seeAlso $ description ) )",
+	"( 2.5.6.7 NAME 'organizationalPerson' DESC 'RFC2256: an organizational person' SUP person STRUCTURAL MAY ( "
+	"title $ x121Address $ registeredAddress $ destinationIndicator $ ou $ st $ l ) )",
 	"( 2.16.840.1.113730.3.2.2 NAME 'inetOrgPerson' DESC 'RFC2798: Internet Organizational Person' SUP "
 	"organizationalPerson STRUCTURAL MAY ( audio $ businessCategory $ carLicense $ mail $ uid ) )",
 };
@@ -74,7 +76,7 @@ TEST_CASE("schema: parse OpenLDAP definitions", "[schema]")
 	const auto s = ldap::server_schema::parse(openldap_types, openldap_classes);
 	CHECK(s.skipped() == 0);
 	CHECK(s.attribute_count() == openldap_types.size());
-	CHECK(s.object_class_count() == 3);
+	CHECK(s.object_class_count() == 4);
 
 	const auto *cn = s.find_attribute("commonName");
 	REQUIRE(cn != nullptr);
@@ -503,11 +505,16 @@ TEST_CASE("schema: validate a matching descriptor", "[schema][validate]")
 	const auto s = ldap::server_schema::parse(openldap_types, openldap_classes);
 	const auto rep = ldap::validate<good_person>(s);
 	CHECK(rep.ok());
-	// uid is multi-valued on the server but a single member here: a warning only.
-	REQUIRE(rep.issues.size() == 1);
+	// uid is multi-valued on the server but a single member here, person's
+	// sn is not mapped and its cn is a vector: warnings only.
+	REQUIRE(rep.issues.size() == 3);
 	CHECK(rep.issues[0].what == ldap::schema_issue::kind::single_member_multi_valued);
 	CHECK(rep.issues[0].name == "uid");
-	CHECK_FALSE(rep.issues[0].is_error());
+	CHECK(rep.issues[1].what == ldap::schema_issue::kind::must_attribute_not_mapped);
+	CHECK(rep.issues[1].name == "sn");
+	CHECK(rep.issues[2].what == ldap::schema_issue::kind::must_attribute_not_required);
+	CHECK(rep.issues[2].name == "cn");
+	CHECK(std::ranges::none_of(rep.issues, &ldap::schema_issue::is_error));
 }
 
 TEST_CASE("schema: validate lists every issue", "[schema][validate]")
@@ -529,7 +536,8 @@ TEST_CASE("schema: validate lists every issue", "[schema][validate]")
 	// mail and userPassword are single members on multi-valued attributes too.
 	CHECK(has(k::single_member_multi_valued, "mail"));
 	CHECK(has(k::single_member_multi_valued, "userPassword"));
-	CHECK(rep.issues.size() == 9);
+	CHECK(has(k::must_attribute_not_mapped, "sn"));// person's, through organizationalPerson
+	CHECK(rep.issues.size() == 10);
 	const std::string text = rep.to_string();
 	CHECK_THAT(text, ContainsSubstring("error: object class posixAccount: not defined on the server"));
 	CHECK_THAT(text, ContainsSubstring("error: attribute mail: syntax 1.3.6.1.4.1.1466.115.121.1.26 is not one"));
@@ -642,4 +650,270 @@ TEST_CASE("schema: a string member on a binary syntax is a syntax mismatch", "[s
 	const auto binary = ldap::validate<binary_as_binary>(s);
 	CHECK(binary.ok());
 	CHECK(std::ranges::none_of(binary.issues, [](const auto &i) { return i.what == k::syntax_mismatch; }));
+}
+
+// ---------------------------------------------------------------- MUST / MAY
+
+namespace {
+
+// OpenLDAP's core.schema, nis.schema and inetorgperson.schema, as
+// cn=Subschema serves them (MAY lists cut).
+const std::pmr::vector<std::pmr::string> core_types{
+	// NOLINTNEXTLINE(bugprone-suspicious-missing-comma): one definition, wrapped at the column limit
+	"( 2.5.4.0 NAME 'objectClass' DESC 'RFC4512: object classes of the entity' EQUALITY objectIdentifierMatch "
+	"SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )",
+	"( 2.5.4.41 NAME 'name' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{32768} )",
+	"( 2.5.4.3 NAME ( 'cn' 'commonName' ) SUP name )",
+	"( 2.5.4.4 NAME ( 'sn' 'surname' ) SUP name )",
+	"( 0.9.2342.19200300.100.1.1 NAME ( 'uid' 'userid' ) SYNTAX 1.3.6.1.4.1.1466.115.121.1.15{256} )",
+	"( 0.9.2342.19200300.100.1.3 NAME ( 'mail' 'rfc822Mailbox' ) SYNTAX 1.3.6.1.4.1.1466.115.121.1.26{256} )",
+	"( 1.3.6.1.1.1.1.0 NAME 'uidNumber' SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+	"( 1.3.6.1.1.1.1.1 NAME 'gidNumber' SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+	"( 1.3.6.1.1.1.1.3 NAME 'homeDirectory' SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 SINGLE-VALUE )",
+	// NOLINTNEXTLINE(bugprone-suspicious-missing-comma): one definition, wrapped at the column limit
+	"( 2.5.18.1 NAME 'createTimestamp' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE NO-USER-MODIFICATION "
+	"USAGE directoryOperation )",
+};
+const std::pmr::vector<std::pmr::string> core_classes{
+	"( 2.5.6.0 NAME 'top' DESC 'top of the superclass chain' ABSTRACT MUST objectClass )",
+	// NOLINTNEXTLINE(bugprone-suspicious-missing-comma): one definition, wrapped at the column limit
+	"( 2.5.6.6 NAME 'person' DESC 'RFC2256: a person' SUP top STRUCTURAL MUST ( sn $ cn ) MAY ( userPassword $ "
+	"telephoneNumber $ seeAlso $ description ) )",
+	"( 2.5.6.7 NAME 'organizationalPerson' DESC 'RFC2256: an organizational person' SUP person STRUCTURAL MAY ( "
+	"title $ ou $ st $ l ) )",
+	"( 2.16.840.1.113730.3.2.2 NAME 'inetOrgPerson' DESC 'RFC2798: Internet Organizational Person' SUP "
+	"organizationalPerson STRUCTURAL MAY ( audio $ businessCategory $ carLicense $ mail $ uid ) )",
+	"( 1.3.6.1.1.1.2.0 NAME 'posixAccount' DESC 'Abstraction of an account with POSIX attributes' SUP top AUXILIARY "
+	"MUST ( cn $ uid $ uidNumber $ gidNumber $ homeDirectory ) MAY ( userPassword $ loginShell $ gecos $ "
+	"description ) )",
+	"( 2.5.6.9 NAME 'groupOfNames' DESC 'RFC2256: a group of names (DNs)' SUP top STRUCTURAL MUST ( member $ cn ) "
+	"MAY ( businessCategory $ seeAlso $ owner $ ou $ o $ description ) )",
+};
+
+auto core_schema() -> ldap::server_schema { return ldap::server_schema::parse(core_types, core_classes); }
+
+// The MUST issues of a report, as (kind, name) in report order.
+auto must_issues(const ldap::schema_report &rep) -> std::vector<std::pair<ldap::schema_issue::kind, std::string>>
+{
+	std::vector<std::pair<ldap::schema_issue::kind, std::string>> out;
+	for (const auto &i : rep.issues) {
+		if (i.what == ldap::schema_issue::kind::must_attribute_not_mapped
+			|| i.what == ldap::schema_issue::kind::must_attribute_not_required
+			|| i.what == ldap::schema_issue::kind::unknown_superclass) {
+			out.emplace_back(i.what, i.name);
+		}
+	}
+	return out;
+}
+
+// Every MUST of inetOrgPerson and posixAccount (and their superclasses)
+// mapped by a required member: sn by its alias, cn with an option.
+struct posix_user
+{
+	std::string uid;
+	std::string cn;
+	std::string sn;
+	std::int64_t uid_number = 0;
+	std::int64_t gid_number = 0;
+	std::string home;
+	std::optional<std::string> mail;
+	std::chrono::sys_seconds created{};
+};
+
+// person's sn not mapped, cn optional, uidNumber read_only, gidNumber a
+// vector; homeDirectory only by its OID.
+struct partial_user
+{
+	std::string uid;
+	std::optional<std::string> cn;
+	std::int64_t uid_number = 0;
+	std::vector<std::int64_t> gid_number;
+	std::string home;
+};
+
+// No object class declared: nothing to check MUSTs against.
+struct no_classes
+{
+	std::string cn;
+};
+
+// A subtype does not map its supertype: name is not mapped by cn.
+struct named_thing
+{
+	std::string cn;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<posix_user> = ldap::describe(ldap::object_class("inetOrgPerson", "posixAccount"),
+  ldap::field<&posix_user::uid>("uid"),
+  ldap::field<&posix_user::cn>("cn;lang-en"),
+  ldap::field<&posix_user::sn>("surname"),
+  ldap::field<&posix_user::uid_number>("uidNumber"),
+  ldap::field<&posix_user::gid_number>("gidNumber"),
+  ldap::field<&posix_user::home>("homeDirectory"),
+  ldap::field<&posix_user::mail>("mail"),
+  ldap::field<&posix_user::created>("createTimestamp", ldap::read_only));
+
+template<>
+constexpr auto ldap::schema<partial_user> = ldap::describe(ldap::object_class("inetOrgPerson", "posixAccount"),
+  ldap::field<&partial_user::uid>("uid"),
+  ldap::field<&partial_user::cn>("cn"),
+  ldap::field<&partial_user::uid_number>("uidNumber", ldap::read_only),
+  ldap::field<&partial_user::gid_number>("gidNumber"),
+  ldap::field<&partial_user::home>("1.3.6.1.1.1.1.3"));
+
+template<> constexpr auto ldap::schema<no_classes> = ldap::describe(ldap::field<&no_classes::cn>("cn"));
+
+template<>
+constexpr auto ldap::schema<named_thing> =
+  ldap::describe(ldap::object_class("namedThing"), ldap::field<&named_thing::cn>("cn"));
+
+TEST_CASE("schema: object class SUP, kind, MUST and MAY", "[schema]")
+{
+	const auto s = core_schema();
+	CHECK(s.skipped() == 0);
+
+	const auto *top = s.find_object_class("top");
+	REQUIRE(top != nullptr);
+	CHECK(top->sup.empty());
+	CHECK(top->kind == ldap::object_class_kind::abstract);
+	CHECK(top->must == std::vector<std::string>{ "objectClass" });
+	CHECK(top->may.empty());
+
+	const auto *person = s.find_object_class("person");
+	REQUIRE(person != nullptr);
+	CHECK(person->sup == std::vector<std::string>{ "top" });
+	CHECK(person->kind == ldap::object_class_kind::structural);
+	CHECK(person->must == std::vector<std::string>{ "sn", "cn" });
+	CHECK(person->may == std::vector<std::string>{ "userPassword", "telephoneNumber", "seeAlso", "description" });
+
+	const auto *posix = s.find_object_class("posixAccount");
+	REQUIRE(posix != nullptr);
+	CHECK(posix->kind == ldap::object_class_kind::auxiliary);
+	CHECK(posix->must == std::vector<std::string>{ "cn", "uid", "uidNumber", "gidNumber", "homeDirectory" });
+
+	// No kind: STRUCTURAL (RFC 4512 4.1.1). Several superclasses, numeric
+	// OIDs, keywords in any case, no space before ')' (as AD writes them).
+	// Entries that are not oids are dropped.
+	auto c = ldap::parse_object_class(
+	  "( 1.2.3 NAME 'mixed' sup ( top $ 2.5.6.6 ) must (cn $ 2.5.4.4 $ 'bad name' $ 1.2.) may 'x-y')");
+	REQUIRE(c.has_value());
+	CHECK(c->kind == ldap::object_class_kind::structural);
+	CHECK(c->sup == std::vector<std::string>{ "top", "2.5.6.6" });
+	CHECK(c->must == std::vector<std::string>{ "cn", "2.5.4.4" });
+	CHECK(c->may == std::vector<std::string>{ "x-y" });
+	// Several kinds (against the grammar): the first wins.
+	auto twice = ldap::parse_object_class("( 1.2.4 AUXILIARY ABSTRACT )");
+	REQUIRE(twice.has_value());
+	CHECK(twice->kind == ldap::object_class_kind::auxiliary);
+	// MUST without a value is malformed, like any keyword.
+	CHECK_FALSE(ldap::parse_object_class("( 1.2.5 MUST )").has_value());
+}
+
+TEST_CASE("schema: MUST attributes mapped by required members", "[schema][validate]")
+{
+	const auto s = core_schema();
+	const auto rep = ldap::validate<posix_user>(s);
+	INFO(rep.to_string());
+	CHECK(rep.ok());
+	// objectClass (top's MUST) is what add sends from the declared classes;
+	// cn and sn are mapped through an option and an alias.
+	CHECK(must_issues(rep).empty());
+	// Only the multi-valued warnings are left (uid, cn, sn, mail, home).
+	CHECK(std::ranges::all_of(
+	  rep.issues, [](const auto &i) { return i.what == ldap::schema_issue::kind::single_member_multi_valued; }));
+}
+
+TEST_CASE("schema: MUST attributes not mapped, or mapped by members add may leave out", "[schema][validate]")
+{
+	const auto s = core_schema();
+	const auto rep = ldap::validate<partial_user>(s);
+	INFO(rep.to_string());
+	// Warnings: the RDN or the server may supply them, and a read
+	// projection does not add entries.
+	CHECK(rep.ok());
+	using k = ldap::schema_issue::kind;
+	// Each attribute once, the declared classes first, then their
+	// superclasses (breadth first): cn, required by posixAccount and
+	// person, is reported for posixAccount.
+	CHECK(must_issues(rep)
+		  == std::vector<std::pair<k, std::string>>{ { k::must_attribute_not_required, "cn" },
+			{ k::must_attribute_not_required, "uidNumber" },
+			{ k::must_attribute_not_required, "gidNumber" },
+			{ k::must_attribute_not_mapped, "sn" } });
+	const std::string text = rep.to_string();
+	CHECK_THAT(text,
+	  ContainsSubstring("warning: attribute sn: required (MUST) by object class person (a superclass of "
+						"inetOrgPerson), but no member maps it: add(dn, T) fails unless the entry's RDN or the server "
+						"supplies it"));
+	CHECK_THAT(text,
+	  ContainsSubstring("warning: attribute cn: required (MUST) by object class posixAccount, but its member is a "
+						"std::optional: add(dn, T) sends nothing when it is empty"));
+	CHECK_THAT(text,
+	  ContainsSubstring("warning: attribute uidNumber: required (MUST) by object class posixAccount, but its member "
+						"is read_only: add(dn, T) never sends it"));
+	CHECK_THAT(text,
+	  ContainsSubstring("warning: attribute gidNumber: required (MUST) by object class posixAccount, but its member "
+						"is a std::vector: add(dn, T) sends nothing when it is empty"));
+}
+
+TEST_CASE("schema: MUST checks follow the RFC 4512 rules", "[schema][validate]")
+{
+	using k = ldap::schema_issue::kind;
+
+	SECTION("no declared object class: nothing to check")
+	{
+		CHECK(must_issues(ldap::validate<no_classes>(core_schema())).empty());
+	}
+	SECTION("a subtype does not map its supertype")
+	{
+		const std::pmr::vector<std::pmr::string> classes{ "( 1.9 NAME 'namedThing' MUST name )" };
+		const auto rep = ldap::validate<named_thing>(ldap::server_schema::parse(core_types, classes));
+		CHECK(must_issues(rep) == std::vector<std::pair<k, std::string>>{ { k::must_attribute_not_mapped, "name" } });
+	}
+	SECTION("a NO-USER-MODIFICATION MUST is the server's; objectClass is sent")
+	{
+		const std::pmr::vector<std::pmr::string> classes{
+			"( 1.9 NAME 'namedThing' MUST ( createTimestamp $ objectClass $ 2.5.4.3 ) )"
+		};
+		CHECK(must_issues(ldap::validate<named_thing>(ldap::server_schema::parse(core_types, classes))).empty());
+	}
+	SECTION("a MUST the server does not define is matched by name, once")
+	{
+		const std::pmr::vector<std::pmr::string> classes{
+			"( 1.9 NAME 'namedThing' SUP ( other $ third ) MUST ( cn $ x-Unknown ) )",
+			"( 1.10 NAME 'other' MUST X-UNKNOWN )",
+			"( 1.11 NAME 'third' MUST ( x-unknown $ cn ) )",
+		};
+		const auto rep = ldap::validate<named_thing>(ldap::server_schema::parse(core_types, classes));
+		CHECK(
+		  must_issues(rep) == std::vector<std::pair<k, std::string>>{ { k::must_attribute_not_mapped, "x-Unknown" } });
+	}
+	SECTION("superclasses: a cycle ends, an unknown one is reported once")
+	{
+		const std::pmr::vector<std::pmr::string> classes{
+			"( 1.9 NAME 'namedThing' SUP ( loopA $ missing ) )",
+			"( 1.10 NAME 'loopA' SUP ( loopB $ missing ) )",
+			"( 1.11 NAME 'loopB' SUP ( loopA $ namedThing ) MUST sn )",
+		};
+		const auto rep = ldap::validate<named_thing>(ldap::server_schema::parse(core_types, classes));
+		CHECK(rep.ok());
+		CHECK(must_issues(rep)
+			  == std::vector<std::pair<k, std::string>>{
+				{ k::unknown_superclass, "missing" }, { k::must_attribute_not_mapped, "sn" } });
+		const std::string text = rep.to_string();
+		CHECK_THAT(text,
+		  ContainsSubstring("warning: object class missing: a superclass of namedThing not defined on the server: "
+							"the MUST attributes it would add are not checked"));
+		CHECK_THAT(text, ContainsSubstring("by object class loopB (a superclass of namedThing)"));
+	}
+	SECTION("an undefined declared class is an error, with no MUST to check")
+	{
+		const auto rep = ldap::validate<named_thing>(core_schema());
+		CHECK_FALSE(rep.ok());
+		CHECK(rep.issues[0].what == k::unknown_object_class);
+		CHECK(must_issues(rep).empty());
+	}
 }

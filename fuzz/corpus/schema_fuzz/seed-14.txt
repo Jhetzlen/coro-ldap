@@ -1,0 +1,1 @@
+( 1.2.6 NAME 'self' SUP ( self $ missing $ 1.2.6 ) AUXILIARY MUST ( self $ 1.2.6 $ objectClass ) MAY x )

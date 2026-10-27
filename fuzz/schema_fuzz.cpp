@@ -7,14 +7,20 @@
 //   non-empty OID, and a SYNTAX that is a numeric OID (the input's noidlen
 //   without its "{" 1*DIGIT "}", the only length accepted; a length apart
 //   from the OID fails as a keyword);
-// - the object class grammar is the same, but SYNTAX is not checked;
+// - the object class grammar is the same, but SYNTAX is not checked; an
+//   accepted object class's SUP, MUST and MAY entries are oids;
 // - server_schema::parse of the input (as both an attribute type and an
 //   object class) finds what parsed by OID and every NAME, and counts
-//   what did not as skipped; syntax_of terminates.
+//   what did not as skipped; syntax_of terminates, and so does the MUST
+//   check of validate<T> (a SUP naming the class itself is a cycle) with
+//   the class declared and a member for each of its names, whose issues
+//   are warnings named by the MUST or SUP entries.
 #include "jhetz/ldap/schema.hpp"
 
 #include "check.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -40,6 +46,12 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 	// Same grammar; only an attribute type's SYNTAX is checked.
 	check(!a ? !c || a.error().context == "schema: SYNTAX is not a numeric OID" : c.has_value(),
 	  "!a ? !c || a.error().context == \"schema: SYNTAX is not a numeric OID\" : c.has_value()");
+	if (c) {
+		for (const auto *list : { &c->sup, &c->must, &c->may }) {
+			check(std::ranges::all_of(*list, [](const std::string &o) { return ldap::detail::is_oid(o); }),
+			  "every SUP, MUST and MAY entry is an oid");
+		}
+	}
 
 	const std::pmr::vector<std::pmr::string> values{ std::pmr::string(text) };
 	const auto s = ldap::server_schema::parse(values, values);
@@ -57,6 +69,26 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 		check(s.attribute_count() == 0, "s.attribute_count() == 0");
 		if (c) {
 			check(s.find_object_class(c->oid) != nullptr, "s.find_object_class(c->oid) != nullptr");
+		}
+	}
+	if (c) {
+		// The MUST check, the class declared, a required member per NAME
+		// (an attribute of the same name, if one parsed) and an optional one
+		// for the OID.
+		const std::array<const char *, 1> classes{ c->oid.c_str() };
+		std::vector<ldap::detail::field_use> fields;
+		for (const auto &n : c->names) {
+			fields.push_back({ .name = n, .kind = ldap::cardinality::required, .read_only = false });
+		}
+		fields.push_back({ .name = c->oid, .kind = ldap::cardinality::optional, .read_only = false });
+		ldap::schema_report rep;
+		ldap::detail::check_must(s, classes, fields, rep);
+		for (const auto &i : rep.issues) {
+			check(!i.is_error(), "!i.is_error()");
+			const auto named = [&](
+								 const std::vector<std::string> &list) { return std::ranges::contains(list, i.name); };
+			check(i.what == ldap::schema_issue::kind::unknown_superclass ? named(c->sup) : named(c->must),
+			  "a MUST issue names a MUST entry, a superclass issue a SUP entry");
 		}
 	}
 	return 0;
