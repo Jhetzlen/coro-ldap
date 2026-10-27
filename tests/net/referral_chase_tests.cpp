@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
@@ -462,6 +463,35 @@ TEST_CASE("chase_search: loops are not followed", "[net][referral]")
 	w.check_servers();
 }
 
+TEST_CASE("chase_search: a loop is recognized before the limits", "[net][referral]")
+{
+	world w;
+	// The origin's own search, as a reference back to it.
+	const std::pmr::string loop = "ldap://a.example/dc=example,dc=org??sub?(uid=jdoe)";
+
+	SECTION("max_targets reached within the reference")
+	{
+		w.serve("a.example",
+		  { answer({ entry_msg(1, "uid=jdoe,ou=a,dc=example,dc=org", "A"),
+			ref_msg(1, { "ldap://down.example/ou=d,dc=example,dc=org", loop }),
+			done_msg(1) }) });
+		w.unreachable = { "down.example" };
+		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_targets = 1 }));
+		REQUIRE(r.has_value());
+		CHECK(r->complete);
+		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed, referral_outcome::skipped_loop });
+	}
+	SECTION("over max_hops")
+	{
+		w.serve("a.example", { answer({ ref_msg(1, { loop }), done_msg(1) }) });
+		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_hops = 0 }));
+		REQUIRE(r.has_value());
+		CHECK(r->complete);
+		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::skipped_loop });
+	}
+	w.check_servers();
+}
+
 TEST_CASE("chase_search: referral results", "[net][referral]")
 {
 	world w;
@@ -531,6 +561,8 @@ TEST_CASE("chase_search: referral results", "[net][referral]")
 		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector()));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == errc::no_such_object);
+		// The attempts are counted in the context.
+		CHECK(r.error().context.starts_with("referral chase (URIs: 1 skipped_policy, 1 failed)"));
 	}
 	SECTION("none followed and none failed: the referral")
 	{
@@ -685,12 +717,13 @@ namespace {
 auto plan(std::string_view target,
   std::vector<std::string> allowed,
   bool origin_tls = false,
-  const ldap::connection_options &options = {}) -> std::optional<ldap::detail::referral_connect_plan>
+  const ldap::connection_options &options = {},
+  std::optional<std::uint16_t> origin_port = std::nullopt) -> std::optional<ldap::detail::referral_connect_plan>
 {
 	auto u = ldap::url::parse(target);
 	INFO(target);
 	REQUIRE(u.has_value());
-	return ldap::detail::same_policy_plan(*u, origin_tls, options, allowed);
+	return ldap::detail::same_policy_plan(*u, origin_tls, options, allowed, origin_port);
 }
 
 }// namespace
@@ -711,7 +744,7 @@ TEST_CASE("make_same_policy_connector: the host allow-list", "[net][referral]")
 	SECTION("empty: everything is refused") { CHECK_FALSE(plan("ldap://example.org", {})); }
 	SECTION("internationalized names compare in their ASCII form (RFC 4513 section 3.1.3.1)")
 	{
-		auto p = plan("ldap://B%C3%9CCHER.example:1389/dc=x", { "xn--bcher-kva.example" });
+		auto p = plan("ldap://B%C3%9CCHER.example:1389/dc=x", { "xn--bcher-kva.example:1389" });
 		REQUIRE(p);
 		// Connected to under the ASCII name, the port kept.
 		CHECK(p->server.host() == "xn--bcher-kva.example");
@@ -730,11 +763,62 @@ TEST_CASE("make_same_policy_connector: the host allow-list", "[net][referral]")
 		CHECK(plan("ldap://[FE80::1]", { "[fe80::1]" }));
 		CHECK_FALSE(plan("ldap://[::1]", { "1" }));
 	}
+	SECTION("bytes no host name has are refused, whatever the suffix")
+	{
+		CHECK(plan("ldap://_ldap.example.org", example));
+		for (const auto *text : { "ldap://evil.test%00.example.org",
+			   "ldap://evil.test%2F.example.org",
+			   "ldap://evil.test%20.example.org",
+			   "ldap://evil.test%25.example.org",
+			   "ldap://evil.test%3A1.example.org",
+			   "ldap://evil.test%0A.example.org" }) {
+			CHECK_FALSE(plan(text, example));
+		}
+	}
 	SECTION("ldapi and URLs without a host are refused")
 	{
 		CHECK_FALSE(
 		  plan("ldapi://%2Fvar%2Frun%2Fslapd%2Fldapi", { "%2Fvar%2Frun%2Fslapd%2Fldapi", "/var/run/slapd/ldapi" }));
 		CHECK_FALSE(plan("ldap:///dc=example,dc=org", { "" }));
+	}
+}
+
+TEST_CASE("make_same_policy_connector: ports", "[net][referral]")
+{
+	const std::vector<std::string> example{ "example.org" };
+	SECTION("the scheme's default port")
+	{
+		CHECK(plan("ldap://b.example.org:389", example));
+		CHECK(plan("ldaps://b.example.org", example));
+		CHECK(plan("ldaps://b.example.org:636", example));
+		CHECK_FALSE(plan("ldaps://b.example.org:389", example));
+		CHECK_FALSE(plan("ldap://b.example.org:1389", example));
+	}
+	SECTION("the origin's port")
+	{
+		CHECK(plan("ldap://b.example.org:1389", example, false, {}, 1389));
+		CHECK_FALSE(plan("ldap://b.example.org:1390", example, false, {}, 1389));
+	}
+	SECTION("a port an entry names, on top of the usual ones")
+	{
+		const std::vector<std::string> with_port{ "example.org:1389" };
+		CHECK(plan("ldap://b.example.org:1389", with_port));
+		CHECK(plan("ldap://b.example.org", with_port));
+		CHECK_FALSE(plan("ldap://b.example.org:1390", with_port));
+		CHECK_FALSE(plan("ldap://b.other.test:1389", with_port));
+		CHECK(plan("ldap://10.0.0.1:1389", { "10.0.0.1:1389" }));
+		CHECK(plan("ldap://[::1]:1389", { "[::1]:1389" }));
+		CHECK_FALSE(plan("ldap://[::1]:1389", { "::1" }));
+		CHECK(plan("ldap://[::1]", { "::1" }));
+	}
+	SECTION("an entry that cannot be read allows nothing")
+	{
+		for (const auto *entry :
+		  { "example.org:", "example.org:x", "example.org:0", "example.org:65536", "[::1", "[::1]x" }) {
+			INFO(entry);
+			CHECK_FALSE(plan("ldap://b.example.org", { entry }));
+			CHECK_FALSE(plan("ldap://[::1]", { entry }));
+		}
 	}
 }
 
@@ -807,7 +891,7 @@ TEST_CASE("make_same_policy_connector: connects, sets up once, reuses", "[net][r
 	auto connector = ldap::make_same_policy_connector(w.ioc,
 	  w.origin.conn,
 	  options,
-	  { "127.0.0.1" },
+	  { "127.0.0.1:" + std::to_string(acc.local_endpoint().port()) },
 	  ldap::simple_bind_setup(ldap::dn{ "cn=reader,dc=example,dc=org" }, "secret"));
 
 	auto r = w.run(ldap::chase_search(w.origin.conn, search(), connector));
@@ -829,4 +913,187 @@ TEST_CASE("make_same_policy_connector: connects, sets up once, reuses", "[net][r
 	peer.close();
 	acc.close();
 	drive(w.ioc);
+}
+
+namespace {
+
+// Loopback TCP servers for make_same_policy_connector: accepts connections
+// one after another, running the next script on each.
+struct tcp_targets
+{
+	corosio::io_context &ioc;
+	corosio::tcp_acceptor acc;
+	std::deque<corosio::tcp_socket> peers{};
+	std::deque<server_log> logs{};
+	outcome<void> served{};
+
+	tcp_targets(corosio::io_context &io, std::vector<std::vector<step>> scripts)
+	  : ioc(io), acc{ io, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1 }
+	{
+		for (std::size_t i = 0; i < scripts.size(); ++i) {
+			auto &p = peers.emplace_back(ioc);
+			logs.emplace_back().hang_up = [&p] { p.close(); };
+		}
+		spawn(ioc, serve_all(std::move(scripts)), served);
+	}
+	tcp_targets(const tcp_targets &) = delete;
+	auto operator=(const tcp_targets &) -> tcp_targets & = delete;
+	~tcp_targets()
+	{
+		for (auto &p : peers) {
+			p.close();
+		}
+		acc.close();
+		drive(ioc);
+	}
+
+	auto serve_all(std::vector<std::vector<step>> scripts) -> capy::task<void>
+	{
+		for (std::size_t i = 0; i < scripts.size(); ++i) {
+			auto [ec] = co_await acc.accept(peers[i]);
+			if (ec) {
+				throw std::system_error(ec, "accept");
+			}
+			co_await serve_script(
+			  net::transport::wrap(socket_ref{ &peers[i] }, "peer"), std::move(scripts[i]), logs[i]);
+		}
+	}
+
+	auto port() const -> std::uint16_t { return acc.local_endpoint().port(); }
+	auto url(std::string_view dn) const -> std::pmr::string
+	{
+		return std::pmr::string("ldap://127.0.0.1:" + std::to_string(port()) + "/") + std::pmr::string(dn);
+	}
+	auto allowed() const -> std::vector<std::string> { return { "127.0.0.1:" + std::to_string(port()) }; }
+
+	// Every script ran to its end without errors.
+	void check()
+	{
+		drive_until(ioc, [this] { return served.done(); });
+		served.get();
+		for (const auto &l : logs) {
+			CHECK(l.error.empty());
+		}
+	}
+};
+
+auto extended_msg(std::int32_t id, std::int32_t code) -> ldap::message
+{
+	return ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ code }, std::nullopt, std::nullopt } };
+}
+
+auto reader_setup() -> ldap::session_setup
+{
+	return ldap::simple_bind_setup(ldap::dn{ "cn=reader,dc=example,dc=org" }, "secret");
+}
+
+auto with_timeout() -> ldap::connection_options
+{
+	ldap::connection_options options;
+	options.timeout = std::chrono::seconds(10);
+	options.operation_timeout = std::chrono::seconds(10);
+	return options;
+}
+
+}// namespace
+
+TEST_CASE("make_same_policy_connector: a refused StartTLS fails the URI", "[net][referral]")
+{
+	world w;
+	// The server can only refuse StartTLS (it does not speak TLS).
+	tcp_targets t(w.ioc, { { answer({ extended_msg(1, 2) }) } });
+	w.serve("a.example", { answer({ ref_msg(1, { t.url("ou=b,dc=example,dc=org") }), done_msg(1) }) });
+	auto options = with_timeout();
+	options.start_tls = true;// what a TLS origin sets for an ldap:// target
+	auto connector = ldap::make_same_policy_connector(w.ioc, w.origin.conn, options, t.allowed(), reader_setup());
+
+	auto r = w.run(ldap::chase_search(w.origin.conn, search(), connector));
+	REQUIRE(r.has_value());
+	CHECK_FALSE(r->complete);
+	CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed });
+	CHECK(r->referrals[0].failure.has_value());
+	// Only the StartTLS request: no bind, no search in the clear.
+	t.check();
+	REQUIRE(t.logs[0].received.size() == 1);
+	CHECK(std::holds_alternative<ldap::extended_request>(t.logs[0].received[0].op));
+	w.check_servers();
+	connector = {};
+}
+
+TEST_CASE("make_same_policy_connector: a failed setup fails the URI", "[net][referral]")
+{
+	world w;
+	tcp_targets t(w.ioc, { { answer({ bind_resp(1, 49, "bad password") }) } });
+	w.serve("a.example", { answer({ ref_msg(1, { t.url("ou=b,dc=example,dc=org") }), done_msg(1) }) });
+	auto connector =
+	  ldap::make_same_policy_connector(w.ioc, w.origin.conn, with_timeout(), t.allowed(), reader_setup());
+
+	auto r = w.run(ldap::chase_search(w.origin.conn, search(), connector));
+	REQUIRE(r.has_value());
+	CHECK_FALSE(r->complete);
+	CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed });
+	REQUIRE(r->referrals[0].failure);
+	CHECK(r->referrals[0].failure->code == errc::invalid_credentials);
+	t.check();
+	REQUIRE(t.logs[0].received.size() == 1);
+	CHECK(std::holds_alternative<ldap::bind_request>(t.logs[0].received[0].op));
+	w.check_servers();
+	connector = {};
+}
+
+TEST_CASE("make_same_policy_connector: a failed connect fails the URI", "[net][referral]")
+{
+	world w;
+	// A port nothing listens on: bound, then closed.
+	std::uint16_t port = 0;
+	{
+		corosio::tcp_acceptor closed{ w.ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1 };
+		port = closed.local_endpoint().port();
+		closed.close();
+	}
+	const std::string server = "127.0.0.1:" + std::to_string(port);
+	w.serve("a.example",
+	  { answer({ ref_msg(1, { std::pmr::string("ldap://" + server + "/ou=b,dc=example,dc=org") }), done_msg(1) }) });
+	auto connector = ldap::make_same_policy_connector(w.ioc, w.origin.conn, with_timeout(), { server });
+
+	auto r = w.run(ldap::chase_search(w.origin.conn, search(), connector));
+	REQUIRE(r.has_value());
+	CHECK_FALSE(r->complete);
+	CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed });
+	REQUIRE(r->referrals[0].failure);
+	CHECK(r->referrals[0].failure->code == std::errc::connection_refused);
+	w.check_servers();
+	connector = {};
+}
+
+TEST_CASE("make_same_policy_connector: a closed connection is reopened", "[net][referral]")
+{
+	world w;
+	// The first connection answers one search and hangs up; the second one
+	// is opened (and set up) for the URI after the one that found it closed.
+	tcp_targets t(w.ioc,
+	  { { answer({ bind_resp(1) }),
+		  answer({ entry_msg(2, "uid=jdoe,ou=b,dc=example,dc=org", "B"), done_msg(2) }, true) },
+		{ answer({ bind_resp(1) }), answer({ entry_msg(2, "uid=jdoe,ou=d,dc=example,dc=org", "D"), done_msg(2) }) } });
+	w.serve("a.example",
+	  { answer({ ref_msg(1, { t.url("ou=b,dc=example,dc=org") }),
+		ref_msg(1, { t.url("ou=c,dc=example,dc=org") }),
+		ref_msg(1, { t.url("ou=d,dc=example,dc=org") }),
+		done_msg(1) }) });
+	auto connector =
+	  ldap::make_same_policy_connector(w.ioc, w.origin.conn, with_timeout(), t.allowed(), reader_setup());
+
+	auto r = w.run(ldap::chase_search(w.origin.conn, search(), connector));
+	REQUIRE(r.has_value());
+	CHECK_FALSE(r->complete);
+	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=b,dc=example,dc=org", "uid=jdoe,ou=d,dc=example,dc=org" });
+	// c's search went to the closed connection and failed with it.
+	CHECK(outcomes(r->referrals)
+		  == std::vector{ referral_outcome::followed, referral_outcome::failed, referral_outcome::followed });
+	t.check();
+	REQUIRE(t.logs[1].received.size() == 2);
+	CHECK(std::holds_alternative<ldap::bind_request>(t.logs[1].received[0].op));
+	CHECK(std::get<ldap::search_request>(t.logs[1].received[1].op).base_object == "ou=d,dc=example,dc=org");
+	w.check_servers();
+	connector = {};
 }

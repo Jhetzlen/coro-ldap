@@ -5,6 +5,7 @@
 #include "../net/host_name.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -12,6 +13,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -21,6 +23,8 @@ namespace corosio = boost::corosio;
 namespace jhetz::ldap {
 namespace {
 
+	constexpr unsigned char first_non_ascii = 0x80;
+
 	// Dotted decimal: an IPv4 literal, which matches only itself (a suffix
 	// match would let "0.0.1" allow "10.0.0.1").
 	auto is_ipv4_literal(std::string_view host) -> bool
@@ -28,36 +32,125 @@ namespace {
 		return !host.empty() && std::ranges::all_of(host, [](char c) { return (c >= '0' && c <= '9') || c == '.'; });
 	}
 
-	// `host` (a URL's, decoded) is in the allow-list.
-	auto host_allowed(const url &target, std::span<const std::string> allowed) -> bool
+	// RFC 3986 reg-name as a host name may use it, decoded: ASCII letters,
+	// digits, '-', '.' and '_' (internal names), and UTF-8 for an
+	// internationalized name (IDNA checks it). Nothing else is passed on to
+	// DNS or the certificate check: no NUL or other control, space, '%',
+	// '/' or ':' a percent-encoding could have smuggled in.
+	auto plausible_name(std::string_view host) -> bool
+	{
+		return std::ranges::all_of(host, [](char c) {
+			const auto u = static_cast<unsigned char>(c);
+			return u >= first_non_ascii || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+				   || c == '-' || c == '.' || c == '_';
+		});
+	}
+
+	// An IPv6 address as a URL holds it (no zone identifier).
+	auto plausible_ipv6(std::string_view host) -> bool
+	{
+		return !host.empty() && std::ranges::all_of(host, [](char c) {
+			return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || c == ':' || c == '.';
+		});
+	}
+
+	// An allow-list entry: a host, and the one port it allows besides the
+	// usual ones, if it names one ("example.org", "example.org:1389",
+	// "10.0.0.1:1389", "[::1]:1389"; "::1" is an address without a port).
+	struct allowed_entry
+	{
+		std::string_view host{};
+		std::optional<std::uint16_t> port{};
+	};
+
+	auto parse_port(std::string_view text) -> std::optional<std::uint16_t>
+	{
+		std::uint16_t port = 0;
+		const auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), port);
+		if (text.empty() || ec != std::errc{} || ptr != text.data() + text.size() || port == 0) {
+			return std::nullopt;
+		}
+		return port;
+	}
+
+	// nullopt for an entry that cannot be read (it then allows nothing).
+	auto split_entry(std::string_view e) -> std::optional<allowed_entry>
+	{
+		if (e.starts_with('[')) {
+			const auto close = e.find(']');
+			if (close == std::string_view::npos) {
+				return std::nullopt;
+			}
+			const auto rest = e.substr(close + 1);
+			allowed_entry out{ .host = e.substr(1, close - 1) };
+			if (rest.empty()) {
+				return out;
+			}
+			if (!rest.starts_with(':')) {
+				return std::nullopt;
+			}
+			out.port = parse_port(rest.substr(1));
+			if (!out.port) {
+				return std::nullopt;
+			}
+			return out;
+		}
+		const auto colon = e.find(':');
+		if (colon == std::string_view::npos || e.find(':', colon + 1) != std::string_view::npos) {
+			return allowed_entry{ .host = e };
+		}
+		const auto port = parse_port(e.substr(colon + 1));
+		if (!port) {
+			return std::nullopt;
+		}
+		return allowed_entry{ .host = e.substr(0, colon), .port = port };
+	}
+
+	auto default_port(url_scheme scheme) -> std::uint16_t
+	{
+		return scheme == url_scheme::ldaps ? url::default_ldaps_port : url::default_ldap_port;
+	}
+
+	// `entry` names `name` (the target's host in ASCII form): the same
+	// address for an IP address, else the same name or a subdomain of it.
+	auto host_matches(std::string_view name, bool ip, std::string_view entry) -> bool
+	{
+		if (ip) {
+			return net::detail::ascii_host_name(entry) == name;
+		}
+		if (entry.starts_with('.')) {
+			entry.remove_prefix(1);
+		}
+		const auto suffix = net::detail::ascii_host_name(entry);
+		if (!suffix || suffix->empty() || is_ipv4_literal(*suffix)) {
+			return false;
+		}
+		return name == *suffix
+			   || (name.size() > suffix->size() && name.ends_with(*suffix)
+				   && name[name.size() - suffix->size() - 1] == '.');
+	}
+
+	// `target`'s server (a URL's host, decoded, and its port) is in the
+	// allow-list. Its port must be the scheme's default or the origin's,
+	// unless an entry matching the host names it.
+	auto server_allowed(const url &target,
+	  std::span<const std::string> allowed,
+	  std::optional<std::uint16_t> origin_port) -> bool
 	{
 		const std::string_view host = target.host();
-		if (target.host_is_ipv6() || is_ipv4_literal(host)) {
-			const auto lowered = net::detail::ascii_host_name(host);
-			return lowered && std::ranges::any_of(allowed, [&lowered](const std::string &entry) {
-				std::string_view e = entry;
-				if (e.starts_with('[') && e.ends_with(']')) {
-					e = e.substr(1, e.size() - 2);
-				}
-				return net::detail::ascii_host_name(e) == lowered;
-			});
+		const bool ip = target.host_is_ipv6() || is_ipv4_literal(host);
+		if (target.host_is_ipv6() ? !plausible_ipv6(host) : !plausible_name(host)) {
+			return false;
 		}
 		const auto name = net::detail::ascii_host_name(host);
 		if (!name || name->empty()) {
 			return false;
 		}
-		return std::ranges::any_of(allowed, [&name](const std::string &entry) {
-			std::string_view e = entry;
-			if (e.starts_with('.')) {
-				e.remove_prefix(1);
-			}
-			const auto suffix = net::detail::ascii_host_name(e);
-			if (!suffix || suffix->empty() || is_ipv4_literal(*suffix)) {
-				return false;
-			}
-			return *name == *suffix
-				   || (name->size() > suffix->size() && name->ends_with(*suffix)
-					   && (*name)[name->size() - suffix->size() - 1] == '.');
+		const std::uint16_t port = target.port_or_default();
+		const bool usual_port = port == default_port(target.scheme()) || port == origin_port;
+		return std::ranges::any_of(allowed, [&](const std::string &text) {
+			const auto entry = split_entry(text);
+			return entry && (usual_port || entry->port == port) && host_matches(*name, ip, entry->host);
 		});
 	}
 
@@ -93,6 +186,7 @@ namespace {
 	{
 		corosio::io_context *ioc;
 		bool origin_tls;
+		std::optional<std::uint16_t> origin_port;
 		connection_options options;
 		std::vector<std::string> allowed;
 		session_setup setup;
@@ -101,7 +195,7 @@ namespace {
 
 	auto connect_to(std::shared_ptr<connector_state> st, url target) -> capy::task<result<connection *>>
 	{
-		auto plan = detail::same_policy_plan(target, st->origin_tls, st->options, st->allowed);
+		auto plan = detail::same_policy_plan(target, st->origin_tls, st->options, st->allowed, st->origin_port);
 		if (!plan) {
 			co_return nullptr;
 		}
@@ -138,10 +232,11 @@ namespace detail {
 	auto same_policy_plan(const url &target,
 	  bool origin_tls,
 	  const connection_options &options,
-	  std::span<const std::string> allowed_host_suffixes) -> std::optional<referral_connect_plan>
+	  std::span<const std::string> allowed_host_suffixes,
+	  std::optional<std::uint16_t> origin_port) -> std::optional<referral_connect_plan>
 	{
 		if (target.scheme() == url_scheme::ldapi || target.host().empty()
-			|| !host_allowed(target, allowed_host_suffixes)) {
+			|| !server_allowed(target, allowed_host_suffixes, origin_port)) {
 			return std::nullopt;
 		}
 		auto server = connect_url(target);
@@ -166,8 +261,13 @@ auto make_same_policy_connector(corosio::io_context &ioc,
   std::vector<std::string> allowed_host_suffixes,
   session_setup setup) -> referral_connector
 {
+	std::optional<std::uint16_t> origin_port;
+	if (const auto u = url::parse(origin.name()); u && u->scheme() != url_scheme::ldapi) {
+		origin_port = u->port_or_default();
+	}
 	auto st = std::make_shared<connector_state>(connector_state{ .ioc = &ioc,
 	  .origin_tls = origin.is_tls(),
+	  .origin_port = origin_port,
 	  .options = std::move(options),
 	  .allowed = std::move(allowed_host_suffixes),
 	  .setup = std::move(setup) });

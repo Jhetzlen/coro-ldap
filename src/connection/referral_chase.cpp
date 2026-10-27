@@ -4,6 +4,7 @@
 
 #include "jhetz/ldap/matching.hpp"
 
+#include "../format_util.hpp"
 #include "../net/deadline.hpp"
 #include "../net/host_name.hpp"
 
@@ -12,6 +13,7 @@
 #include <boost/capy/io_result.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -223,7 +225,7 @@ namespace {
 
 	// Asks the connector for `server`'s connection, cancelled when the
 	// chase's budget is spent (then a timeout error).
-	auto ask(chase_state &st, const url &server, std::size_t depth) -> capy::task<result<connection *>>
+	auto ask(const chase_state &st, const url &server, std::size_t depth) -> capy::task<result<connection *>>
 	{
 		auto [ec, c] = co_await net::detail::bounded(as_io_result(st.connector(server, depth)), st.deadline);
 		if (c) {
@@ -268,10 +270,10 @@ namespace {
 		return prepared<Params>{ .server = std::move(*u), .request = std::move(*request), .key = std::move(key) };
 	}
 
-	// Tries the URIs of one reference in order until one is followed. Over
-	// a limit, the URI is limit_reached and the reference's other URIs are
-	// not looked at (they would be over it too). Fails only when the chase
-	// is cancelled.
+	// Tries the URIs of one reference in order until one is followed. A URI
+	// over a limit (and not a loop) is limit_reached, and the reference's
+	// other URIs are not looked at (they would be over it too). Fails only
+	// when the chase is cancelled.
 	template<class Params, class Value, class Op>
 	auto follow(chase_state &st,
 	  std::span<const std::pmr::string> uris,
@@ -289,19 +291,20 @@ namespace {
 			if (stop.stop_requested()) {
 				co_return std::unexpected(canceled());
 			}
-			// The cheap checks first: nothing is parsed or built over a limit.
-			if (depth > st.policy.max_hops || st.exhausted()) {
-				st.record(uri, kind, depth, referral_outcome::limit_reached);
-				break;
-			}
 			auto p = prepare(st, uri, kind, depth, base);
 			if (!p) {
 				continue;
 			}
+			// A loop before the limits: a reference that is only a loop
+			// leaves the search complete, over a limit or not.
 			if (st.visited_before(p->key)) {
 				st.record(uri, kind, depth, referral_outcome::skipped_loop);
 				out.loop = true;
 				continue;
+			}
+			if (depth > st.policy.max_hops || st.exhausted()) {
+				st.record(uri, kind, depth, referral_outcome::limit_reached);
+				break;
 			}
 			++st.targets;
 			connection *target = nullptr;
@@ -379,6 +382,55 @@ namespace {
 		return st;
 	}
 
+	auto outcome_name(referral_outcome o) -> std::string_view
+	{
+		switch (o) {
+		case referral_outcome::followed:
+			return "followed";
+		case referral_outcome::skipped_policy:
+			return "skipped_policy";
+		case referral_outcome::skipped_loop:
+			return "skipped_loop";
+		case referral_outcome::limit_reached:
+			return "limit_reached";
+		case referral_outcome::unparseable:
+			return "unparseable";
+		case referral_outcome::failed:
+			return "failed";
+		}
+		return "unknown";
+	}
+
+	// The error of a referral result that could not be followed, its
+	// context counting what became of the URIs (the attempt list itself is
+	// not returned with an error).
+	auto with_attempts(error e, const chase_state &st) -> error
+	{
+		if (st.attempts.empty() && st.unlisted == 0) {
+			return e;
+		}
+		constexpr std::array all{ referral_outcome::followed,
+			referral_outcome::skipped_policy,
+			referral_outcome::skipped_loop,
+			referral_outcome::limit_reached,
+			referral_outcome::unparseable,
+			referral_outcome::failed };
+		std::string summary = "referral chase (URIs:";
+		const char *sep = " ";
+		for (const auto o : all) {
+			const auto n = std::ranges::count(st.attempts, o, &referral_attempt::outcome);
+			if (n > 0) {
+				ldap::detail::format_to(summary, "{}{} {}", sep, n, outcome_name(o));
+				sep = ", ";
+			}
+		}
+		if (st.unlisted > 0) {
+			ldap::detail::format_to(summary, "{}{} unlisted", sep, st.unlisted);
+		}
+		summary += ')';
+		return detail::with_context(std::move(e), summary);
+	}
+
 	// A continuation reference waiting to be followed: its URIs, and the
 	// request that got it, shared by the references of one run (not a copy
 	// each: a reference costs the server a few dozen bytes).
@@ -414,7 +466,8 @@ auto chase_search(connection &origin,
 				co_return std::unexpected(std::move(f.error()));
 			}
 			if (!f->target) {
-				co_return std::unexpected(f->last_failure ? std::move(*f->last_failure) : std::move(r.error()));
+				co_return std::unexpected(
+				  with_attempts(f->last_failure ? std::move(*f->last_failure) : std::move(r.error()), st));
 			}
 			first = std::move(f->target);
 		}
@@ -484,7 +537,8 @@ auto chase_compare(connection &origin, compare_params request, referral_connecto
 		co_return std::unexpected(std::move(f.error()));
 	}
 	if (!f->target) {
-		co_return std::unexpected(f->last_failure ? std::move(*f->last_failure) : std::move(r.error()));
+		co_return std::unexpected(
+		  with_attempts(f->last_failure ? std::move(*f->last_failure) : std::move(r.error()), st));
 	}
 	co_return chased_compare{ .value = f->target->value, .referrals = std::move(st.attempts), .unlisted = st.unlisted };
 }

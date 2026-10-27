@@ -841,9 +841,11 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   reference that cannot be followed never fails the search but clears
   `chased_search::complete` (partial results are never a plain success;
   one skipped only as a loop does not, its server already answered that
-  search). A referral result that cannot be followed fails the call (the
-  last failure, else the referral itself): there is nothing partial to
-  return. A cancellation stops the chase. Writes are never chased: a
+  search; loops are checked before the limits, but references left
+  unexamined once the chase stopped clear it). A referral result that
+  cannot be followed fails the call (the last failure, else the referral
+  itself): there is nothing partial to return; the error's context counts
+  the attempts' outcomes, the list itself is not returned. A cancellation stops the chase. Writes are never chased: a
   referral result means the update was not performed (4.1.10), and
   re-sending it elsewhere is the caller's decision (`referral_target`
   builds it).
@@ -852,7 +854,11 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   point the client at a local socket), hosts outside the allow-list
   refused (empty by default: nothing is followed until hosts are named; a
   name matches an entry or its subdomains, IP addresses only themselves,
-  IDNs compared in ASCII form as RFC 4513 section 3.1.3.1 asks), no TLS
+  IDNs compared in ASCII form as RFC 4513 section 3.1.3.1 asks; a host
+  with a decoded control, space, '%' or '/' is refused before any lookup),
+  only the scheme's default port or the origin's unless an entry names the
+  port (`host:port`: the setup's credentials go to whatever listens on the
+  port a server names, so another port of an allowed host is opt-in), no TLS
   downgrade (a TLS origin makes ldap:// targets use StartTLS, and a failed
   StartTLS fails the URI), the certificate checked against the referred
   host (RFC 4513 section 3.1.3: `server_name` cleared, IDNs connected to

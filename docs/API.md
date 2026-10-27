@@ -394,7 +394,7 @@ itself needs only ICU.
   continuation reference could not be followed (partial results are never
   a plain success; such a reference never fails the search). A referral
   result that cannot be followed fails the call (the last error, else the
-  referral). `chase_compare(conn, params, connector, policy)` does the
+  referral; its context counts the attempts' outcomes). `chase_compare(conn, params, connector, policy)` does the
   same for a compare (`chased_compare{value, referrals, unlisted}`). The URIs of one
   reference are alternatives, tried in order; `referral_policy` bounds the
   depth (`max_hops`, 10 by default as RFC 4511 asks), the connector calls
@@ -408,8 +408,10 @@ itself needs only ICU.
   `make_same_policy_connector(ioc, origin, options, allowed_hosts, setup)`
   builds a connector keeping the origin's policy: ldapi:// and hosts
   outside `allowed_hosts` (a name and its subdomains, IDNs in ASCII form;
-  IP addresses exactly; empty by default, so nothing is followed) are
-  skipped, a TLS origin makes ldap:// targets use StartTLS (failure fails
+  IP addresses exactly; empty by default, so nothing is followed), hosts
+  with bytes no host name has, and ports other than the scheme's default
+  and the origin's (unless an entry names it: `host:port`, `[::1]:port`)
+  are skipped, a TLS origin makes ldap:// targets use StartTLS (failure fails
   the URI), the certificate is checked against the referred host, and
   each new connection is bound only by `setup` (a `session_setup`, e.g.
   `simple_bind_setup`; none: anonymous). Its connections are reused per

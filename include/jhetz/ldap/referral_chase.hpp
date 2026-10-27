@@ -30,6 +30,9 @@
 // chased one hop deeper). When none does, the operation fails: with the
 // last error a target or the connector returned, else with the original
 // referral error (every URI skipped, unparseable, a loop or over a limit).
+// The attempt list is not returned then: the error's context counts the
+// outcomes instead ("referral chase (URIs: 1 failed, 2 skipped_policy)"),
+// and when the error is the original referral, its URIs are in `referrals`.
 // Writes are never chased (a referral result means the update was not
 // performed); referral_target builds them for a caller that wants to.
 //
@@ -172,7 +175,8 @@ struct chased_search
 	// URIs (skipped, unparseable, over a limit, failed, or left unexamined
 	// when the chase stopped): the entries are then partial. A reference
 	// skipped only as a loop leaves it true (its server already got that
-	// search).
+	// search; loops are recognized before the limits are checked), but one
+	// left unexamined clears it (whether it was a loop is not known).
 	bool complete = true;
 };
 
@@ -212,7 +216,15 @@ auto chase_compare(connection &origin,
 //   with UseSTD3ASCIIRules for an internationalized name, then ASCII
 //   case-insensitively; one trailing dot ignored). An IP address matches
 //   only an entry that is the same address text. Empty (the default):
-//   every URI is skipped.
+//   every URI is skipped. A host with bytes no host name has (a decoded
+//   NUL or other control, space, '%', '/', ...; non-ASCII is left to IDNA)
+//   or an IPv6 zone identifier is skipped too;
+// - a port other than the scheme's default (389, 636) and the origin's
+//   (when its name() is a URL), unless an entry for that host names it:
+//   `host:port`, `10.0.0.1:port`, `[::1]:port` (a bare IPv6 address takes
+//   no port). An entry with a port allows that port on top of the usual
+//   ones: the setup's credentials go to whatever listens on the port a
+//   server's URL names, so other ports are opt-in.
 // No TLS downgrade: when `origin` is TLS-protected (is_tls(), read here,
 // once), an ldaps:// target is opened as such and an ldap:// one with
 // StartTLS (connection_options::start_tls); a failed StartTLS fails the URI
@@ -247,7 +259,8 @@ namespace detail {
 	[[nodiscard]] auto same_policy_plan(const url &target,
 	  bool origin_tls,
 	  const connection_options &options,
-	  std::span<const std::string> allowed_host_suffixes) -> std::optional<referral_connect_plan>;
+	  std::span<const std::string> allowed_host_suffixes,
+	  std::optional<std::uint16_t> origin_port = std::nullopt) -> std::optional<referral_connect_plan>;
 }// namespace detail
 
 }// namespace jhetz::ldap
