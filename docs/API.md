@@ -542,8 +542,12 @@ itself needs only ICU.
   `application_data` "tls-server-end-point:<hash>" with no addresses, the
   form Windows SSPI and OpenLDAP/cyrus-sasl use), which an AD whose "LDAP
   channel binding" policy is "Always" requires; a man in the middle with
-  a certificate of its own cannot relay the bind. No bindings without TLS
-  or when the certificate has no tls-server-end-point (Ed25519, Ed448).
+  a certificate of its own cannot relay the bind. No bindings without TLS.
+  Over TLS without a hash (an Ed25519 or Ed448 certificate in the RFC
+  form, one the openldap form cannot parse) `start()` fails with
+  `client_errc::tls_required` before anything is sent, as SCRAM-PLUS
+  does: the certificate is the TLS peer's choice, so falling back to no
+  bindings would be a downgrade a man in the middle could pick.
   `sasl_gssapi_options::channel_binding = gssapi_channel_binding::none`
   turns it off (a server behind a TLS-terminating proxy refuses the
   client's bindings), and `binding_form =

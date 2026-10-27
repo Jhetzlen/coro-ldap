@@ -81,10 +81,18 @@
 //   (channel_bindings::tls_server_end_point), or OpenLDAP's
 //   (sasl_gssapi_options::binding_form openldap, for a slapd with
 //   "sasl-cbinding tls-endpoint" and an RSASSA-PSS, Ed25519 or Ed448
-//   certificate: see sasl_scram.hpp). Without TLS, or when the certificate
-//   has no tls-server-end-point (RFC 5929 has none for Ed25519 and Ed448),
-//   no bindings are sent (GSS_C_NO_CHANNEL_BINDINGS), and the bind goes on.
-//   A server whose acceptor is given no bindings (slapd without
+//   certificate: see sasl_scram.hpp). Without TLS no bindings are sent
+//   (GSS_C_NO_CHANNEL_BINDINGS). Over TLS without a hash (RFC 5929 has none
+//   for Ed25519 and Ed448 certificates; the openldap form, none for a
+//   certificate it cannot parse), start() fails with
+//   client_errc::tls_required (cond::access_denied) before anything is
+//   sent, as SCRAM-SHA-256-PLUS does: the certificate is chosen by whoever
+//   terminates TLS, so going on without bindings would let a man in the
+//   middle that the certificate check let through present an Ed25519
+//   certificate and relay the unbound bind, which an acceptor given
+//   bindings accepts unless the client announced that it binds (AD with
+//   "When supported" too). gssapi_channel_binding::none is the explicit
+//   opt-out. A server whose acceptor is given no bindings (slapd without
 //   sasl-cbinding, AD with the policy "Never") ignores them; one given
 //   others (TLS terminated by a proxy in front of the server, whose
 //   certificate the client sees) refuses the bind (GSS_S_BAD_BINDINGS):
@@ -136,7 +144,9 @@ namespace jhetz::ldap {
 // Whether the Kerberos exchange is bound to the TLS channel (see the header
 // comment).
 enum class gssapi_channel_binding : std::uint8_t {
-	tls_server_end_point,// over TLS: "tls-server-end-point:<hash>" (RFC 5929)
+	// Over TLS: "tls-server-end-point:<hash>" (RFC 5929); start() fails
+	// with client_errc::tls_required when the connection has no such hash.
+	tls_server_end_point,
 	none,// GSS_C_NO_CHANNEL_BINDINGS, even over TLS
 };
 
@@ -214,6 +224,9 @@ class sasl_gssapi final : public sasl_mechanism
 	sasl_gssapi_options options_;
 	std::string host_;
 	std::string bindings_;// the application data; empty: no bindings
+	// Why the TLS connection cannot be bound (start() fails with it);
+	// empty: it can be, or no bindings are wanted.
+	std::string binding_error_;
 	std::shared_ptr<state> state_;// shared with an offloaded step
 };
 
@@ -249,11 +262,11 @@ namespace detail {
 	// The application data of the channel bindings for a bind on a
 	// connection described by `context` (its tls, bindings and
 	// peer_certificate): "tls-server-end-point:" and the hash of the
-	// `form`, or empty (no bindings) for gssapi_channel_binding::none, no
-	// TLS, or no hash.
+	// `form`, or empty (no bindings) for gssapi_channel_binding::none or no
+	// TLS. client_errc::tls_required over TLS without a hash.
 	[[nodiscard]] auto gssapi_channel_binding_data(const sasl_bind_context &context,
 	  gssapi_channel_binding binding,
-	  gssapi_channel_binding_form form) -> std::string;
+	  gssapi_channel_binding_form form) -> result<std::string>;
 
 }// namespace detail
 

@@ -812,9 +812,19 @@ tls_server_end_point`): an acceptor given no bindings (slapd without
 `sasl-cbinding`, AD with the policy "Never") ignores the client's, and
 the opt-out `gssapi_channel_binding::none` is for a server whose
 acceptor holds other bindings (a TLS-terminating proxy in front). No
-bindings without TLS, nor for a certificate without tls-server-end-point
-(Ed25519, Ed448, in the RFC form): the bind goes on unbound rather than
-fail, since a server enforcing the policy refuses it anyway. Not
+bindings without TLS. Over TLS a certificate without tls-server-end-point
+(Ed25519, Ed448 in the RFC form; one the openldap form cannot parse)
+fails `start()` with `client_errc::tls_required` before anything is sent
+(as SCRAM-PLUS, coro-ldap-2y3), never an unbound bind: the certificate is
+chosen by whoever terminates TLS, so a man in the middle that the
+certificate check let through could present an Ed25519 one and relay the
+unbound AP-REQ, which an acceptor given bindings still accepts unless the
+client announced that it binds (MIT accept_sec_context.c
+process_checksum and Heimdal's _gsskrb5_verify_8003_checksum take an
+all-zero binding checksum; AD with "When supported" too). `none` is the
+explicit opt-out; there is no lenient "if available" value, since the
+only certificates without a hash are EdDSA ones (use the openldap form for
+a slapd, which hashes them with SHA-256) and unparseable ones. Not
 tls-exporter: neither AD nor slapd takes it for GSSAPI. MIT krb5 1.19+
 signals the bindings to the acceptor (KERB_AP_OPTIONS_CBT) only with
 krb5.conf's `client_aware_gss_bindings`; that is the user's

@@ -222,7 +222,7 @@ namespace detail {
 
 	auto gssapi_channel_binding_data(const sasl_bind_context &context,
 	  gssapi_channel_binding binding,
-	  gssapi_channel_binding_form form) -> std::string
+	  gssapi_channel_binding_form form) -> result<std::string>
 	{
 		if (binding == gssapi_channel_binding::none || !context.tls) {
 			return {};
@@ -233,8 +233,16 @@ namespace detail {
 			openldap_hash = net::detail::openldap_tls_server_end_point(context.peer_certificate);
 			hash = openldap_hash;
 		}
+		// Never a silent fallback to no bindings: the certificate is the
+		// TLS peer's choice, so a man in the middle could pick one without
+		// a hash (coro-ldap-2y3). gssapi_channel_binding::none opts out.
 		if (hash.empty()) {
-			return {};
+			return fail(client_errc::tls_required,
+			  form == gssapi_channel_binding_form::rfc5929
+				? "the TLS connection has no tls-server-end-point channel binding data (RFC 5929 defines none for "
+				  "Ed25519 and Ed448 certificates)"
+				: "the TLS connection has no tls-server-end-point channel binding data (the server's certificate "
+				  "could not be parsed)");
 		}
 		return prefixed_channel_binding(channel_binding_type::tls_server_end_point, hash);
 	}
@@ -412,11 +420,21 @@ auto sasl_gssapi::operator=(sasl_gssapi &&) noexcept -> sasl_gssapi & = default;
 void sasl_gssapi::prepare(const sasl_bind_context &context)
 {
 	host_.assign(context.host);
-	bindings_ = detail::gssapi_channel_binding_data(context, options_.channel_binding, options_.binding_form);
+	bindings_.clear();
+	binding_error_.clear();
+	if (auto data = detail::gssapi_channel_binding_data(context, options_.channel_binding, options_.binding_form)) {
+		bindings_ = std::move(*data);
+	} else {
+		binding_error_.assign(std::string_view(data.error().context));
+	}
 }
 
 auto sasl_gssapi::offload_start() -> sasl_work
 {
+	// Nothing to offload: start() fails on the I/O thread.
+	if (!binding_error_.empty()) {
+		return {};
+	}
 	// A new state for each bind: one whose step sasl_bind gave up on may
 	// still be in use by its thread.
 	const auto s = std::make_shared<state>();
@@ -445,7 +463,14 @@ auto sasl_gssapi::offload_step(std::optional<std::string_view> challenge) -> sas
 	};
 }
 
-auto sasl_gssapi::start() -> result<std::optional<std::string>> { return offload_start()(); }
+auto sasl_gssapi::start() -> result<std::optional<std::string>>
+{
+	if (!binding_error_.empty()) {
+		state_ = std::make_shared<state>();// as offload_start(): this bind's state, idle
+		return fail(client_errc::tls_required, binding_error_);
+	}
+	return offload_start()();
+}
 
 auto sasl_gssapi::step(std::optional<std::string_view> challenge) -> result<std::optional<std::string>>
 {

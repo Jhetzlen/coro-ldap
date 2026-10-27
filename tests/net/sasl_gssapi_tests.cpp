@@ -265,6 +265,12 @@ TEST_CASE("gssapi: the channel bindings' application data", "[net][sasl][gssapi]
 	const std::array<std::byte, 3> hash{ std::byte{ 0x01 }, std::byte{ 0x00 }, std::byte{ 0xfe } };
 	ldap::sasl_bind_context tls{ .host = "dc1.example.org", .tls = true };
 	tls.bindings.tls_server_end_point = hash;
+	const auto no_hash = [](const ldap::result<std::string> &r, std::string_view why) {
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::tls_required);
+		CHECK(std::string(r.error().context)
+			  == "the TLS connection has no tls-server-end-point channel binding data (" + std::string(why) + ")");
+	};
 
 	SECTION("over TLS: \"tls-server-end-point:\" and the connection's RFC 5929 hash")
 	{
@@ -273,18 +279,20 @@ TEST_CASE("gssapi: the channel bindings' application data", "[net][sasl][gssapi]
 	}
 	SECTION("none, or no TLS: no bindings")
 	{
-		CHECK(gssapi_channel_binding_data(tls, none, rfc5929).empty());
-		CHECK(gssapi_channel_binding_data(tls, none, openldap).empty());
+		CHECK(gssapi_channel_binding_data(tls, none, rfc5929) == "");
+		CHECK(gssapi_channel_binding_data(tls, none, openldap) == "");
 		auto plain = tls;
 		plain.tls = false;
-		CHECK(gssapi_channel_binding_data(plain, tls_server_end_point, rfc5929).empty());
-		CHECK(gssapi_channel_binding_data(plain, tls_server_end_point, openldap).empty());
+		CHECK(gssapi_channel_binding_data(plain, tls_server_end_point, rfc5929) == "");
+		CHECK(gssapi_channel_binding_data(plain, tls_server_end_point, openldap) == "");
 	}
-	SECTION("a certificate without a tls-server-end-point hash: no bindings")
+	SECTION("a certificate without a tls-server-end-point hash: refused, unless none")
 	{
 		auto ed = tls;
 		ed.bindings.tls_server_end_point = {};
-		CHECK(gssapi_channel_binding_data(ed, tls_server_end_point, rfc5929).empty());
+		no_hash(gssapi_channel_binding_data(ed, tls_server_end_point, rfc5929),
+		  "RFC 5929 defines none for Ed25519 and Ed448 certificates");
+		CHECK(gssapi_channel_binding_data(ed, none, rfc5929) == "");
 	}
 	SECTION("the openldap form hashes the peer certificate itself")
 	{
@@ -300,7 +308,9 @@ TEST_CASE("gssapi: the channel bindings' application data", "[net][sasl][gssapi]
 				   + std::string(reinterpret_cast<const char *>(md.data()), static_cast<std::size_t>(n)));
 		const std::array<std::byte, 2> junk{ std::byte{ 0x30 }, std::byte{ 0x00 } };
 		tls.peer_certificate = junk;
-		CHECK(gssapi_channel_binding_data(tls, tls_server_end_point, openldap).empty());
+		no_hash(gssapi_channel_binding_data(tls, tls_server_end_point, openldap),
+		  "the server's certificate could not be parsed");
+		CHECK(gssapi_channel_binding_data(tls, none, openldap) == "");
 	}
 }
 
@@ -332,5 +342,37 @@ TEST_CASE("gssapi: channel_binding_used says whether the exchange binds", "[net]
 		ldap::sasl_gssapi mech({ .channel_binding = ldap::gssapi_channel_binding::none });
 		mech.prepare(tls);
 		CHECK_FALSE(mech.channel_binding_used().has_value());
+	}
+	SECTION("over TLS without a hash: start() fails, no fallback to no bindings")
+	{
+		auto ed = tls;// an Ed25519 certificate: no RFC 5929 hash
+		ed.bindings.tls_server_end_point = {};
+		ldap::sasl_gssapi mech;
+		mech.prepare(ed);
+		CHECK_FALSE(mech.offload_start());// nothing to offload: start() fails inline
+		auto r = mech.start();
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::tls_required);
+		CHECK_THAT(std::string(r.error().context),
+		  StartsWith("the TLS connection has no tls-server-end-point channel binding data"));
+		CHECK_FALSE(mech.channel_binding_used().has_value());
+		CHECK_FALSE(mech.step("token"sv).has_value());// no exchange started
+		// The next bind, on a connection with a hash, binds again.
+		mech.prepare(tls);
+		CHECK(mech.channel_binding_used() == ldap::channel_binding_type::tls_server_end_point);
+		r = mech.start();
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
+	}
+	SECTION("over TLS without a hash, with none: no bindings, the bind goes on")
+	{
+		auto ed = tls;
+		ed.bindings.tls_server_end_point = {};
+		ldap::sasl_gssapi mech({ .channel_binding = ldap::gssapi_channel_binding::none });
+		mech.prepare(ed);
+		CHECK_FALSE(mech.channel_binding_used().has_value());
+		auto r = mech.start();
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::gssapi_failure);// the GSS-API call was made
 	}
 }
