@@ -1604,6 +1604,16 @@ and its destructor joins the thread.
   blocking `connection` operation in terms of `Derived::call(make_task)`.
   `sync::connection` and `sync::lease` derive from it, so the two cannot
   drift apart; `sync::transaction` holds the `io_thread` it runs on.
+- The noexcept paths that end objects of the I/O thread (the
+  destructors of `sync::connection` and of the client's core,
+  `sync::transaction`'s abort, `sync::lease::release()`) go through
+  `io_thread::hand_over(make_task, what)` (3pf.18): if the post fails
+  (out of memory) before `make_task` ran on the I/O thread, it writes
+  `what` to stderr and terminates. Falling back to the calling thread
+  would race the I/O thread on the `ldap::client` or `ldap::connection`
+  (undefined behaviour), and joining with the connection still open
+  would hang (its reader keeps the io_context busy). A failure once
+  `make_task` ran is left to the I/O thread and ignored.
 - Calling a blocking method from inside the facade's own I/O thread would
   deadlock; it returns `client_errc::would_deadlock` instead.
 - The facade exposes exactly the same request, entry, error and mapping types;

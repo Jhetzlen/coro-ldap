@@ -6,6 +6,8 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdio>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <string>
@@ -20,6 +22,18 @@ namespace jhetz::ldap::sync {
 // ---------------------------------------------------------------- io_thread
 
 namespace detail {
+
+	void fatal(const char *facade, const char *what) noexcept
+	{
+		(void)std::fputs("jhetz::ldap::", stderr);
+		(void)std::fputs(facade, stderr);
+		(void)std::fputs(": ", stderr);
+		(void)std::fputs(what, stderr);
+		(void)std::fputs("\n", stderr);
+		std::terminate();
+	}
+
+	auto done() -> capy::task<result<void>> { co_return result<void>{}; }
 
 	io_thread::io_thread(const char *facade) : facade_(facade)
 	{
@@ -97,16 +111,15 @@ connection::~connection()
 	// Close on the I/O thread, then let the io_context run out of work:
 	// operations still running finish with not_connected, a detached name
 	// lookup or offloaded SASL step finishes, and run() returns. The
-	// io_context's destructor then joins that step's thread.
-	try {
-		(void)io_.run([this] -> capy::task<result<void>> {
-			return [](ldap::connection &c) -> capy::task<result<void>> {
-				c = ldap::connection{};
-				co_return result<void>{};
-			}(conn_);
-		});
-	} catch (...) {// NOLINT(bugprone-empty-catch): out of memory; joining still closes nothing
-	}
+	// io_context's destructor then joins that step's thread. Out of memory
+	// for the post: terminates (joining with the connection still open
+	// would hang, its reader keeping the io_context busy).
+	io_.hand_over(
+	  [this] {
+		  conn_ = ldap::connection{};
+		  return detail::done();
+	  },
+	  "out of memory closing the connection on the I/O thread");
 	io_.join();
 }
 
@@ -196,15 +209,15 @@ void transaction::settle() noexcept
 	if (!txn_) {
 		return;
 	}
-	try {
-		if (io_->run([this] { return finish(std::move(txn_)); })) {
-			return;
-		}
-	} catch (...) {// NOLINT(bugprone-empty-catch): the abort is best effort
+	if (io_->on_this_thread()) {
+		// The ldap::transaction queues its abort without waiting.
+		txn_.reset();
+		return;
 	}
-	// On the I/O thread (would_deadlock): the ldap::transaction queues its
-	// abort without waiting.
-	txn_.reset();
+	// finish() takes txn_ on the I/O thread; a failure after that (the
+	// abort is best effort) is ignored there. Out of memory for the post:
+	// terminates, as txn_ must not be destroyed on this thread.
+	io_->hand_over([this] { return finish(std::move(txn_)); }, "out of memory ending a transaction on the I/O thread");
 }
 
 auto transaction::identifier() const -> std::string
@@ -304,19 +317,18 @@ namespace detail {
 
 		// Closes the ldap::client (idle connections unbound by detached
 		// tasks) and destroys it, then lets those tasks finish and joins.
+		// Out of memory for the post: terminates (the ldap::client is not
+		// closed if sync::client::close() failed too, and its connections
+		// would keep the io_context busy: joining would hang).
 		~client_core()
 		{
-			try {
-				(void)io.run([this] -> capy::task<result<void>> { return reset(*this); });
-			} catch (...) {// NOLINT(bugprone-empty-catch): out of memory; joining still ends the thread
-			}
+			io.hand_over(
+			  [this] {
+				  pool.reset();
+				  return done();
+			  },
+			  "out of memory destroying the ldap::client on the I/O thread");
 			io.join();
-		}
-
-		static auto reset(client_core &core) -> capy::task<result<void>>
-		{
-			core.pool.reset();
-			co_return result<void>{};
 		}
 
 		static auto close(client_core &core) -> capy::task<result<void>>
@@ -338,12 +350,6 @@ namespace detail {
 			}
 			url server = l->server();
 			co_return std::pair{ std::move(*l), std::move(server) };
-		}
-
-		auto release_lease(ldap::lease &held) -> capy::task<result<void>>
-		{
-			held.release();
-			co_return result<void>{};
 		}
 
 		auto connections_of(const ldap::client &pool) -> capy::task<result<std::size_t>>
@@ -386,11 +392,14 @@ void lease::release() noexcept
 	if (io_->on_this_thread()) {
 		held_.release();
 	} else {
-		try {
-			(void)io_->run([this] { return detail::release_lease(held_); });
-		} catch (...) {// out of memory for the task: return it here, best effort (as transaction::settle)
-			held_.release();
-		}
+		// Out of memory for the post: terminates, as held_ must not be
+		// returned to the ldap::client from this thread.
+		io_->hand_over(
+		  [this] {
+			  held_.release();
+			  return detail::done();
+		  },
+		  "out of memory returning a lease's connection on the I/O thread");
 	}
 	server_ = url{};
 	// May be the I/O thread's last owner: its client_core then joins it.

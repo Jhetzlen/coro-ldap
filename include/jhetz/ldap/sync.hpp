@@ -75,6 +75,14 @@ namespace detail {
 		using type = R;
 	};
 
+	// Writes "jhetz::ldap::<facade>: <what>" to stderr and calls
+	// std::terminate(): what a noexcept path of the facades does when it
+	// can neither finish its job on the I/O thread nor give it up safely.
+	[[noreturn]] void fatal(const char *facade, const char *what) noexcept;
+
+	// A task doing nothing, for a make_task that did its work at once.
+	[[nodiscard]] auto done() -> boost::capy::task<result<void>>;
+
 	// An io_context and the one thread running it (kept alive by a work
 	// guard until join()): what the blocking facades share.
 	class io_thread
@@ -114,6 +122,33 @@ namespace detail {
 			  [&done](std::exception_ptr e) { done.set_exception(std::move(e)); })(
 			  [](const F &make) -> boost::capy::task<R> { co_return co_await make(); }(make_task));
 			return f.get();
+		}
+
+		// run(make_task) for a noexcept path (a destructor, release()) that
+		// hands objects of the I/O thread over to it: make_task, called on
+		// the I/O thread, takes them (closes, destroys or moves them). If
+		// that fails before make_task was called (out of memory for the
+		// post), nothing else may touch those objects from this thread (the
+		// I/O thread may be using them: a data race), and waiting for what
+		// make_task would have ended may never return: fatal() with `what`.
+		// A failure once make_task was called (an exception in it, or in
+		// its task) leaves the objects to the I/O thread, and is ignored.
+		// From the I/O thread it does nothing (would_deadlock).
+		template<class F> void hand_over(const F &make_task, const char *what) const noexcept
+		{
+			bool taken = false;
+			try {
+				(void)run([&] {
+					taken = true;
+					return make_task();
+				});
+			} catch (...) {
+				// `taken` was set on the I/O thread before the exception was
+				// stored in the promise, or never: no race reading it here.
+				if (!taken) {
+					fatal(facade_, what);
+				}
+			}
 		}
 
 		// Drops the work guard and waits for the thread: run() returns once
