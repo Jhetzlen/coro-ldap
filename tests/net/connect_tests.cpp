@@ -1639,12 +1639,25 @@ auto platform_rejects(std::span<const std::vector<unsigned char>> chain,
 	return ldap::fail(std::make_error_code(std::errc::permission_denied), "Windows certificate chain: revoked");
 }
 
+// A stand-in platform that fails with an exception (bad_alloc while
+// building its error text, say).
+auto platform_throws(std::span<const std::vector<unsigned char>> chain,
+  int security_level,
+  std::optional<std::chrono::milliseconds> timeout) -> ldap::result<void>
+{
+	std::ignore = platform_accepts(chain, security_level, timeout);
+	throw std::bad_alloc();
+}
+
 // ldap:// then tls_handshake() with default verification and `verifier`
-// as the platform's; "" on success, else the error's context.
+// as the platform's; "" on success, else the error's context. A non-empty
+// `client_ciphers` is the client's cipher list (e.g. "DEFAULT:@SECLEVEL=3"
+// for another security level).
 auto handshake_with_platform_chain(corosio::io_context &ioc,
   std::string text,
   net::detail::verify_state::chain_verifier verifier,
-  net::detail::deadline_t deadline = std::nullopt) -> capy::task<std::string>
+  net::detail::deadline_t deadline = std::nullopt,
+  std::string client_ciphers = {}) -> capy::task<std::string>
 {
 	auto u = ldap::url::parse(text);
 	if (!u) {
@@ -1659,6 +1672,9 @@ auto handshake_with_platform_chain(corosio::io_context &ioc,
 		co_return "setup: " + std::string(setup.error().message());
 	}
 	setup->state->system_chain = verifier;
+	if (!client_ciphers.empty() && setup->context.set_ciphersuites(client_ciphers)) {
+		co_return "ciphers";
+	}
 	auto &im = net::transport_access::get(*t);
 	auto h = co_await net::detail::tls_handshake(im, "127.0.0.1", {}, std::move(*setup), deadline);
 	if (!h) {
@@ -1759,6 +1775,39 @@ TEST_CASE("TLS with the platform verifying the chain", "[net][connect][tls]")
 		CHECK(
 		  client.get() == "tls handshake: server certificate: unsuitable certificate purpose (certificate depth 0)");
 		CHECK(platform_calls().calls == 0);
+	}
+	SECTION("OpenSSL's verdict on the leaf's key size is kept")
+	{
+		// An RSA-2048 leaf (112 security bits) and the client at security
+		// level 3 (128 bits): EE_KEY_TOO_SMALL, whatever the platform says.
+		// (A server at level 2 cannot load an RSA-1024 key, and Corosio sets
+		// a cipher list's level only after loading the certificate.)
+		const auto leaf = pki().issue("localhost", "DNS:localhost,IP:127.0.0.1", "serverAuth", 2048);
+		spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
+		spawn(ioc,
+		  handshake_with_platform_chain(ioc, srv.url("ldap"), platform_accepts, std::nullopt, "DEFAULT:@SECLEVEL=3"),
+		  client);
+		drive(ioc);
+		CHECK(client.get() == "tls handshake: server certificate: EE certificate key too weak (certificate depth 0)");
+		CHECK(platform_calls().calls == 0);
+	}
+	SECTION("the same leaf at the default level: the platform is asked")
+	{
+		const auto leaf = pki().issue("localhost", "DNS:localhost,IP:127.0.0.1", "serverAuth", 2048);
+		spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
+		spawn(ioc, handshake_with_platform_chain(ioc, srv.url("ldap"), platform_accepts), client);
+		drive(ioc);
+		CHECK_THAT(client.get(), IsEmpty());
+		CHECK(platform_calls().calls == 1);
+	}
+	SECTION("an exception in the platform's verification fails closed")
+	{
+		spawn(ioc, accept_and_serve(srv.acc, server_context(localhost_cert())), server);
+		spawn(ioc, handshake_with_platform_chain(ioc, srv.url("ldap"), platform_throws), client);
+		drive(ioc);
+		CHECK(client.get() == "tls handshake: server certificate: internal error in the certificate verify callback");
+		CHECK_THAT(server.get(), StartsWith("server handshake: "));
+		CHECK(platform_calls().calls == 1);
 	}
 }
 

@@ -1588,9 +1588,13 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   ECDSA over SHA-256, SHA-384 or SHA-512; a chain the engine flags
   `CERT_TRUST_HAS_WEAK_SIGNATURE` is rejected ("a signature or key below
   OpenSSL's security level 2"). Parity is exact for RSA and ECDSA with
-  SHA-2 at OpenSSL's standard sizes; Windows is stricter where CNG has no
-  name (SHA-224, DSA, EdDSA) and for odd RSA sizes OpenSSL rates by
-  formula, never weaker. CRL and OCSP signatures are not held to it
+  SHA-2 at OpenSSL's standard sizes; Windows is stricter for what the
+  lists leave out (SHA-224 and SHA-3 hashes, which OpenSSL rates at half
+  the digest size, so SHA3-256 passes level 2; DSA signatures, which CNG
+  names but the lists omit; EdDSA) and for RSA sizes between the standard
+  ones, which OpenSSL rates by formula (RSA-2040 is 112 bits, level 2)
+  but `RSA/2048` refuses, the leaf's key included although OpenSSL's
+  `EE_KEY_TOO_SMALL` would pass it; never weaker. CRL and OCSP signatures are not held to it
   (OpenSSL checks no revocation). The host
   name stays OpenSSL's, with `host_matching` as on Linux (the SSL policy
   gets SECURITY_FLAG_IGNORE_CERT_CN_INVALID and no server name): one

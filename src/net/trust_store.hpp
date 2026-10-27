@@ -84,8 +84,14 @@ auto platform_verifies_chain() noexcept -> bool;
 // the bits (half the digest size; SHA-1 counts 63, below every level, in
 // crypto/x509/x509_set.c). So level 2 is
 // "RSA/2048;ECDSA/224" and the RSA and ECDSA signatures with SHA-256,
-// SHA-384 or SHA-512. Stricter than OpenSSL only where CNG has no name:
-// SHA-224, DSA and EdDSA signatures are not listed, so they count as weak.
+// SHA-384 or SHA-512. Stricter than OpenSSL only where a list leaves
+// something out: SHA-224 and SHA-3 hashes and DSA and EdDSA signatures are
+// not listed (CNG names DSA, the lists simply omit it), so CryptoAPI counts
+// them as weak although OpenSSL accepts e.g. SHA3-256 (128 bits) at level
+// 2; and RSA sizes between OpenSSL's standard ones, which OpenSSL rates by
+// formula (RSA-2040 is 112 bits, enough for level 2) but the list's
+// minimum (RSA/2048) refuses, the leaf's key included, although OpenSSL's
+// EE_KEY_TOO_SMALL would pass it.
 // nullopt at level 0 or below (OpenSSL checks nothing then).
 struct strong_sign_lists
 {

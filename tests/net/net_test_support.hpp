@@ -17,6 +17,7 @@
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>
+#include <openssl/rsa.h>
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
@@ -355,12 +356,16 @@ class test_pki
 	}
 
 	// A leaf certificate for `subject_alt_names` ("DNS:localhost,IP:127.0.0.1"),
-	// with the extended key usage `extended_key_usage`.
+	// with the extended key usage `extended_key_usage`; its key is an RSA
+	// key of `rsa_bits` bits, or EC P-256 with 0.
 	auto issue(const char *cn,
 	  const std::string &subject_alt_names,
-	  const std::string &extended_key_usage = "serverAuth,clientAuth") -> issued
+	  const std::string &extended_key_usage = "serverAuth,clientAuth",
+	  unsigned rsa_bits = 0) -> issued
 	{
-		std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(generate_key(), &EVP_PKEY_free);
+		std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(
+		  rsa_bits == 0 ? generate_key() : EVP_RSA_gen(rsa_bits), &EVP_PKEY_free);
+		check(key != nullptr, "EVP_RSA_gen");
 		std::unique_ptr<X509, decltype(&X509_free)> cert(
 		  make_cert(
 			key.get(), cn, ca_cert_.get(), ca_key_.get(), false, subject_alt_names, extended_key_usage, next_serial()),
@@ -441,7 +446,11 @@ class test_pki
 		} else {
 			add_ext(cert, &ctx, NID_authority_key_identifier, "keyid:always");
 			add_ext(cert, &ctx, NID_basic_constraints, "CA:FALSE");
-			add_ext(cert, &ctx, NID_key_usage, "critical,digitalSignature");
+			add_ext(cert,
+			  &ctx,
+			  NID_key_usage,
+			  EVP_PKEY_get_base_id(key) == EVP_PKEY_RSA ? "critical,digitalSignature,keyEncipherment"
+														: "critical,digitalSignature");
 			add_ext(cert, &ctx, NID_ext_key_usage, extended_key_usage);
 			if (!sans.empty()) {
 				add_ext(cert, &ctx, NID_subject_alt_name, sans);
