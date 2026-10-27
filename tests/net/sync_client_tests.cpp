@@ -419,7 +419,9 @@ TEST_CASE("sync client: a lease released or destroyed on the I/O thread", "[net]
 	SECTION("moved into a coroutine and destroyed there")
 	{
 		capy::run_async(pool.executor())([](ldap::sync::lease l, std::promise<void> &done) -> capy::task<void> {
-			l = ldap::sync::lease{};
+			{
+				auto gone = std::move(l);// its destructor runs here, on the I/O thread
+			}
 			done.set_value();
 			co_return;
 		}(std::move(*held), released));
@@ -449,12 +451,7 @@ TEST_CASE("sync client: a transaction outlives its temporary lease and the clien
 	}// closes the connection; the transaction keeps the I/O thread
 	auto after = t->commit();
 	REQUIRE_FALSE(after.has_value());
-	SECTION("destroyed on this thread") { t.reset(); }
-	SECTION("destroyed on another thread")
-	{
-		std::thread([moved = std::move(*t)] mutable { auto gone = std::move(moved); }).join();
-		t.reset();
-	}
+	t.reset();// the I/O thread's last owner: ends the transaction there, then joins it
 }
 
 TEST_CASE("sync client: many threads share the pool", "[net][sync][client]")

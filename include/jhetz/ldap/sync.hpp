@@ -194,9 +194,14 @@ namespace detail {
 // it may outlive the lease and the client without dangling; but keep the
 // lease while using it: `pool.acquire()->begin_transaction()` releases
 // the lease at the end of the statement, and the transaction then runs on
-// a connection back in the pool, which other leases may share (and which
-// the client's destruction closes). Move-only. Not [[nodiscard]] as a class: it comes inside a result, which
-// is [[nodiscard]] on its own.
+// a connection back in the pool, which other leases may share, and which
+// the pool may unbind or close under it (max_lifetime, a failed idle
+// check, failback, the client's destruction). As the last owner of the
+// I/O thread (the client, the leases and the other transactions gone), it
+// must not be destroyed or move-assigned on that thread: it would join
+// itself, and std::terminate() is called with a message on stderr.
+// Move-only. Not [[nodiscard]] as a class: it comes inside a result,
+// which is [[nodiscard]] on its own.
 class transaction
 {
   public:
@@ -480,13 +485,14 @@ namespace detail {
 // while another thread is inside one of its methods. A lease may outlive
 // its sync::client: the client's destruction closes the leased connection
 // (operations then fail with cond::connection_lost), and the I/O thread
-// keeps running until the last lease (or a transaction made by one) is
-// destroyed or released. On the I/O thread, release() and the destructor
-// return the connection without waiting; but there they must not end the
-// last owner of the I/O thread (the client, every other lease and their
-// transactions gone): it would join itself, and std::terminate() is
-// called with a message on stderr. Move-only. Not [[nodiscard]] as a class: it comes inside a
-// result, which is [[nodiscard]] on its own.
+// keeps running until the last lease is released or destroyed and the
+// last transaction made by one is destroyed. On the I/O thread, release()
+// and the destructor return the connection without waiting; but there
+// they must not end the last owner of the I/O thread (the client, every
+// other lease and their transactions gone): it would join itself, and
+// std::terminate() is called with a message on stderr. Move-only. Not
+// [[nodiscard]] as a class: it comes inside a result, which is
+// [[nodiscard]] on its own.
 class lease : public detail::connection_api<lease>
 {
   public:
@@ -547,12 +553,13 @@ class lease : public detail::connection_api<lease>
 // Lifetime: the destructor closes the ldap::client on the I/O thread
 // (client::close(): idle connections are unbound, leased ones closed, the
 // attempts in progress stopped), then lets the I/O thread run out of
-// work, which the unbinds are, and joins it, unless leases are still
-// alive: those keep the I/O thread (and the closed ldap::client) until the
-// last one is destroyed or released, which joins it (see sync::lease). So
-// destroying a sync::client with leases outstanding is safe, and their
-// operations fail from then on. The memory resource must outlive the I/O
-// thread (the client, its last lease and their transactions); the observer
+// work, which the unbinds are, and joins it, unless leases or
+// transactions made by leases are still alive: those keep the I/O thread
+// (and the closed ldap::client) until the last of them is released or
+// destroyed, which joins it (see sync::lease). So destroying a
+// sync::client with leases outstanding is safe, and their operations fail
+// from then on. The memory resource must outlive the I/O thread (the
+// client, its last lease and their transactions); the observer
 // (client_options::observer) need only outlive close(), the destructor's
 // at the latest. Do not destroy a sync::client while another thread is
 // inside one of its methods, nor on its I/O thread unless a lease (or a
@@ -570,7 +577,8 @@ class client
 	explicit client(client_options options, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 	client(const client &) = delete;
 	auto operator=(const client &) -> client & = delete;
-	// close(), then joins the I/O thread unless leases are still alive.
+	// close(), then joins the I/O thread unless leases (or transactions
+	// made by leases) are still alive.
 	~client();
 
 	// The executor of the I/O thread (the ldap::client's), e.g. to run
