@@ -211,6 +211,10 @@ TEST_CASE("connection: requests that cannot be encoded are not sent", "[net][con
 	CHECK(too_long.error().code == client_errc::encode_error);
 	CHECK_THAT(std::string(too_long.error().context), StartsWith("search \"\": time_limit"));
 
+	auto negative_time = m.run(m.conn.search({ .time_limit = std::chrono::seconds(-1) }));
+	REQUIRE_FALSE(negative_time.has_value());
+	CHECK(negative_time.error().code == client_errc::encode_error);
+
 	auto empty_filter = m.run(m.conn.search({ .filter = ldap::filter{} }));
 	REQUIRE_FALSE(empty_filter.has_value());
 	CHECK(empty_filter.error().code == client_errc::invalid_filter);
@@ -760,6 +764,175 @@ TEST_CASE("connection: moving connections and streams", "[net][connection]")
 	}
 }
 
+// Every operation of a moved-from connection fails at once with
+// not_connected, and its accessors answer as for a closed one.
+TEST_CASE("connection: operations on a moved-from connection", "[net][connection]")
+{
+	mock_ldap m;
+	m.serve({});
+	const ldap::connection moved = std::move(m.conn);
+	CHECK(moved.executor() == m.ioc.get_executor());
+	ldap::connection &c = m.conn;
+	CHECK_FALSE(c.is_open());
+	CHECK(c.name().empty());
+	CHECK(c.outstanding() == 0);
+	CHECK(c.bind_count() == 0);
+	CHECK_FALSE(c.is_tls());
+	CHECK(c.peer_certificate().empty());
+	CHECK(c.channel_bindings().tls_server_end_point.empty());
+	c.close();// does nothing
+
+	const ldap::dn who{ "uid=jdoe,ou=people,dc=example,dc=org" };
+	const auto refused = [](const auto &r, std::string_view context) {
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::not_connected);
+		CHECK(std::string_view(r.error().context) == context);
+	};
+	refused(m.run(c.simple_bind(who, "secret")), "bind uid=jdoe,ou=people,dc=example,dc=org");
+	ldap::sasl_external external;
+	refused(m.run(c.sasl_bind(external)), "sasl bind EXTERNAL");
+	refused(m.run(c.unbind()), "unbind");
+	refused(m.run(c.load_schema()), "load schema");
+	refused(m.run(c.add({ .entry = who })), "add uid=jdoe,ou=people,dc=example,dc=org");
+	refused(m.run(c.modify({ .object = who })), "modify uid=jdoe,ou=people,dc=example,dc=org");
+	refused(m.run(c.del({ .entry = who })), "delete uid=jdoe,ou=people,dc=example,dc=org");
+	refused(m.run(c.modify_dn({ .entry = who, .new_rdn = ldap::rdn{ "uid=j" } })),
+	  "modify DN uid=jdoe,ou=people,dc=example,dc=org");
+	refused(m.run(c.compare({ .entry = who, .attribute = "uid", .value = "jdoe" })),
+	  "compare uid=jdoe,ou=people,dc=example,dc=org");
+	refused(m.run(c.extended({ .name = "1.2.3" })), "extended operation 1.2.3");
+	refused(m.run(c.search_stream({})), "search \"\"");
+	refused(m.run(c.search_paged({}, 10)), "search \"\"");
+	refused(m.run(c.start_transaction()), "start transaction");
+	refused(m.run(c.end_transaction(std::pmr::string("txn"))), "end transaction");
+	refused(m.run(c.begin_transaction()), "start transaction");
+	refused(m.run(c.reset_password(who, "new")), "reset password uid=jdoe,ou=people,dc=example,dc=org");
+	refused(m.run(c.password_modify({})), "password modify");
+	auto change = m.run(c.change_password(who, "old", "new"));
+	REQUIRE_FALSE(change.has_value());
+	CHECK(change.error().code == client_errc::not_connected);
+	auto who_am_i = m.run(c.who_am_i());
+	REQUIRE_FALSE(who_am_i.has_value());
+	CHECK(who_am_i.error().code == client_errc::not_connected);
+	CHECK(m.log.received.empty());
+}
+
+// A closed connection refuses what starts with a search or a bind: not
+// sent.
+TEST_CASE("connection: load_schema and sasl_bind on a closed connection", "[net][connection]")
+{
+	mock_ldap m;
+	m.serve({});
+	m.conn.close();
+	auto s = m.run(m.conn.load_schema());
+	REQUIRE_FALSE(s.has_value());
+	CHECK(s.error().code == client_errc::not_sent);
+	CHECK_THAT(std::string(s.error().context), StartsWith("load schema"));
+	ldap::sasl_external external;
+	auto b = m.run(m.conn.sasl_bind(external));
+	REQUIRE_FALSE(b.has_value());
+	CHECK(b.error().code == client_errc::not_sent);
+	CHECK(m.log.received.empty());
+}
+
+// The search_stream and paged_search accessors of a default (moved-from)
+// object, and a self move-assignment, which keeps the search.
+TEST_CASE("connection: default and self-assigned streams", "[net][connection]")
+{
+	ldap::search_stream none;
+	CHECK(none.done());
+	CHECK(none.references().empty());
+	CHECK(none.controls().empty());
+	CHECK(none.reference_urls().empty());
+	corosio::io_context ioc;
+	auto item = finish(ioc, none.next_item());
+	REQUIRE_FALSE(item.has_value());
+	CHECK(item.error().code == client_errc::not_connected);
+
+	ldap::paged_search no_pages;
+	CHECK(no_pages.done());
+	CHECK(no_pages.pages() == 0);
+	CHECK(no_pages.references().empty());
+	CHECK(no_pages.reference_urls().empty());
+	CHECK(no_pages.controls().empty());
+	auto page = finish(ioc, no_pages.next());
+	REQUIRE_FALSE(page.has_value());
+	CHECK(page.error().code == client_errc::not_connected);
+
+	mock_ldap m;
+	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1) }) });
+	auto s = m.run(m.conn.search_stream(people_search()));
+	REQUIRE(s.has_value());
+	ldap::search_stream &alias = *s;
+	*s = std::move(alias);
+	auto entries = m.run(drain_stream(*s));
+	REQUIRE(entries.has_value());
+	CHECK(entries->size() == 1);
+	m.check_server();
+}
+
+// A stream that ended with an error repeats it; one that ended with
+// references gives them as URLs.
+TEST_CASE("connection: search_stream after its end", "[net][connection]")
+{
+	SECTION("an error is returned again by every next()")
+	{
+		mock_ldap m;
+		m.serve({ answer({ done_msg(1, 32, "dc=example,dc=org", "no such entry") }) });
+		auto s = m.run(m.conn.search_stream(people_search()));
+		REQUIRE(s.has_value());
+		auto first = m.run(s->next());
+		REQUIRE_FALSE(first.has_value());
+		CHECK(first.error().code == errc::no_such_object);
+		CHECK(s->done());
+		auto again = m.run(s->next_item());
+		REQUIRE_FALSE(again.has_value());
+		CHECK(again.error().code == errc::no_such_object);
+		m.check_server();
+	}
+	SECTION("references as URLs, an invalid one left out")
+	{
+		mock_ldap m;
+		m.serve({ answer({ ref_msg(1, { "ldap://a.example.org/dc=example,dc=org", "not a url" }), done_msg(1) }) });
+		auto s = m.run(m.conn.search_stream(people_search()));
+		REQUIRE(s.has_value());
+		auto entries = m.run(drain_stream(*s));
+		REQUIRE(entries.has_value());
+		CHECK(entries->empty());
+		CHECK(s->references().size() == 2);
+		const auto urls = s->reference_urls();
+		REQUIRE(urls.size() == 1);
+		CHECK(urls[0].host() == "a.example.org");
+		m.check_server();
+	}
+}
+
+// Requests whose controls do not encode are not sent (an assertion with
+// the empty filter), and do not use up a message id.
+TEST_CASE("connection: update and compare requests whose controls do not encode", "[net][connection]")
+{
+	mock_ldap m;
+	m.serve({ answer({ ldap::message{ 1, ldap::del_response{ ldap::ldap_result{ 0, "", "" } } } }) });
+	const ldap::dn who{ "uid=jdoe,ou=people,dc=example,dc=org" };
+	const auto not_encoded = [](const auto &r) {
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::invalid_filter);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("assertion"));
+	};
+	not_encoded(m.run(m.conn.add({ .entry = who, .controls = { ldap::assertion{} } })));
+	not_encoded(m.run(m.conn.modify({ .object = who, .controls = { ldap::assertion{} } })));
+	not_encoded(m.run(m.conn.del({ .entry = who, .controls = { ldap::assertion{} } })));
+	not_encoded(
+	  m.run(m.conn.modify_dn({ .entry = who, .new_rdn = ldap::rdn{ "uid=j" }, .controls = { ldap::assertion{} } })));
+	not_encoded(
+	  m.run(m.conn.compare({ .entry = who, .attribute = "uid", .value = "jdoe", .controls = { ldap::assertion{} } })));
+	CHECK(m.log.received.empty());
+	CHECK(m.run(m.conn.del({ .entry = who })).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 1);
+	CHECK(m.log.received[0].id == 1);
+}
+
 // ---------------------------------------------------------------- unbind
 
 TEST_CASE("connection: unbind", "[net][connection]")
@@ -1112,6 +1285,17 @@ TEST_CASE("connection: unsolicited notifications and intermediate responses", "[
 		CHECK(r->size() == 1);
 		CHECK(m.conn.is_open());
 		m.check_server();
+	}
+	SECTION("a notification that does not decode closes the connection, naming the transport")
+	{
+		mock_ldap m;
+		// An LDAPMessage with id 0 whose protocolOp is an OCTET STRING.
+		m.serve({ step{ .replies = { std::string("\x30\x05\x02\x01\x00\x04\x00", 7) } } });
+		auto r = m.run(m.conn.search(people_search()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::unsupported_operation);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("read mock"));
+		CHECK_FALSE(m.conn.is_open());
 	}
 }
 

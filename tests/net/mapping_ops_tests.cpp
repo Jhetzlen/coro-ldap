@@ -293,3 +293,99 @@ TEST_CASE("typed: schema_check::on_first_use", "[net][mapping][schema]")
 	m.check_server();
 	CHECK(m.log.received.size() == 4);
 }
+
+TEST_CASE("typed: load_schema without a subschemaSubentry, or failing", "[net][mapping][schema]")
+{
+	SECTION("the root DSE search fails")
+	{
+		mock_ldap m;
+		m.serve({ answer({ done_msg(1, 50, "", "no access") }) });
+		auto s = m.run(m.conn.load_schema());
+		REQUIRE_FALSE(s.has_value());
+		CHECK(s.error().code == ldap::errc::insufficient_access_rights);
+		CHECK_THAT(std::string(s.error().context), Catch::Matchers::StartsWith("load schema: "));
+		m.check_server();
+	}
+	SECTION("no root DSE entry: cn=Subschema, whose search fails")
+	{
+		mock_ldap m;
+		m.serve({ answer({ done_msg(1) }), answer({ done_msg(2, 32, "", "no subschema") }) });
+		auto s = m.run(m.conn.load_schema());
+		REQUIRE_FALSE(s.has_value());
+		CHECK(s.error().code == ldap::errc::no_such_object);
+		CHECK_THAT(std::string(s.error().context), Catch::Matchers::StartsWith("load schema: "));
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(std::get<ldap::search_request>(m.log.received[1].op).base_object == "cn=Subschema");
+	}
+	SECTION("a root DSE without subschemaSubentry, a subschema entry without definitions")
+	{
+		mock_ldap m;
+		m.serve({ answer({ ldap::message{ 1, ldap::search_result_entry{ "", { { "namingContexts", { "dc=x" } } } } },
+					done_msg(1) }),
+		  answer({ ldap::message{ 2, ldap::search_result_entry{ "cn=Subschema", { { "cn", { "Subschema" } } } } },
+			done_msg(2) }) });
+		auto s = m.run(m.conn.load_schema());
+		REQUIRE(s.has_value());
+		CHECK(s->attribute_count() == 0);
+		CHECK(s->object_class_count() == 0);
+		CHECK(s->skipped() == 0);
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(std::get<ldap::search_request>(m.log.received[1].op).base_object == "cn=Subschema");
+	}
+}
+
+namespace {
+
+struct mismatched_entry
+{
+	std::int64_t uid = 0;// uid is a DirectoryString: syntax error
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<mismatched_entry> =
+  ldap::describe(ldap::object_class("inetOrgPerson"), ldap::field<&mismatched_entry::uid>("uid"));
+
+// schema_check::on_first_use: a schema that cannot be loaded, or a type
+// that does not match it, fails modify<T> and add(dn, T) before they are
+// sent.
+TEST_CASE("typed: modify<T> and add(dn, T) with schema_check::on_first_use", "[net][mapping][schema]")
+{
+	const ldap::dn who{ "uid=jdoe,ou=people,dc=example,dc=org" };
+	SECTION("the schema does not load")
+	{
+		mock_ldap m({ .schema_check = ldap::schema_check::on_first_use });
+		m.serve({ answer({ done_msg(1, 50) }) });
+		auto mod = m.run(m.conn.modify<account>(who, { ldap::replace<&account::mail>("j@example.org") }));
+		REQUIRE_FALSE(mod.has_value());
+		CHECK(mod.error().code == ldap::errc::insufficient_access_rights);
+		m.check_server();
+		CHECK(m.log.received.size() == 1);
+	}
+	SECTION("the type does not match")
+	{
+		mock_ldap m({ .schema_check = ldap::schema_check::on_first_use });
+		m.serve({ answer({ root_dse(1), done_msg(1) }), answer({ subschema(2), done_msg(2) }) });
+		auto mod = m.run(m.conn.modify<mismatched>(who, { ldap::replace<&mismatched::uid>(std::int64_t{ 7 }) }));
+		REQUIRE_FALSE(mod.has_value());
+		CHECK(mod.error().code == ldap::client_errc::schema_mismatch);
+		auto add = m.run(m.conn.add(who, mismatched_entry{ .uid = 7 }));
+		REQUIRE_FALSE(add.has_value());
+		CHECK(add.error().code == ldap::client_errc::schema_mismatch);
+		m.check_server();
+		CHECK(m.log.received.size() == 2);// the schema, loaded once
+	}
+	SECTION("a moved-from connection: no schema to check, not connected")
+	{
+		mock_ldap m({ .schema_check = ldap::schema_check::on_first_use });
+		m.serve({});
+		const ldap::connection moved = std::move(m.conn);
+		auto add = m.run(m.conn.add(who, account{ .uid = "jdoe", .mail = std::nullopt, .groups = {} }));
+		REQUIRE_FALSE(add.has_value());
+		CHECK(add.error().code == ldap::client_errc::not_connected);
+		CHECK(m.log.received.empty());
+	}
+}

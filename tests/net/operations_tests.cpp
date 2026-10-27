@@ -1111,6 +1111,10 @@ TEST_CASE("operations: a paged search that ended sends no release", "[net][opera
 			auto dns = m.run(drain_paged(*s));
 			REQUIRE(dns.has_value());
 			CHECK(dns->size() == 2);
+			// Past the end: no more entries, nothing sent.
+			auto after = m.run(s->next());
+			REQUIRE(after.has_value());
+			CHECK_FALSE(after->has_value());
 		}
 		auto b = m.run(bind_admin(m.conn));
 		CHECK(b.has_value());
@@ -1149,6 +1153,10 @@ TEST_CASE("operations: a paged search that ended sends no release", "[net][opera
 			auto r = m.run(drain_paged(*s));
 			REQUIRE_FALSE(r.has_value());
 			CHECK(r.error().code == errc::busy);
+			// The error again, nothing sent.
+			auto again = m.run(s->next());
+			REQUIRE_FALSE(again.has_value());
+			CHECK(again.error().code == errc::busy);
 		}
 		auto b = m.run(bind_admin(m.conn));
 		CHECK(b.has_value());
@@ -1278,6 +1286,44 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 			check_release(m.log.received[1], m.log.received[0], "page2");
 		}
 	}
+}
+
+// Two releases with deadlines: the second is sent while the due watcher
+// already waits for the first, which recomputes its next deadline.
+TEST_CASE("operations: two paged search releases due at once", "[net][operations][paged][timeout]")
+{
+	mock_ldap m;
+	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "a2") }),
+	  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), paged_done(2, "b2") }),
+	  step{},// reads the first release, answers later
+	  answer({ paged_done(3, ""), paged_done(4, "") }) });
+	ldap::search_params p = people_search();
+	p.timeout = std::chrono::seconds(30);
+	{
+		auto a = m.run(m.conn.search_paged(p, 1));
+		REQUIRE(a.has_value());
+		auto b = m.run(m.conn.search_paged(p, 1));
+		REQUIRE(b.has_value());
+		auto ea = m.run(a->next());
+		REQUIRE(ea.has_value());
+		REQUIRE(ea->has_value());
+		auto eb = m.run(b->next());
+		REQUIRE(eb.has_value());
+		REQUIRE(eb->has_value());
+		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+		*a = ldap::paged_search{};
+		CHECK(m.conn.outstanding() == 1);
+		drive_until(m.ioc, [&m] { return m.log.received.size() == 3; });
+		*b = ldap::paged_search{};
+		CHECK(m.conn.outstanding() == 2);
+	}
+	drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+	CHECK(m.conn.outstanding() == 0);
+	CHECK(m.conn.is_open());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 4);
+	check_release(m.log.received[2], m.log.received[0], "a2");
+	check_release(m.log.received[3], m.log.received[1], "b2");
 }
 
 // RFC 4513 section 3.1.1: StartTLS is not sent while a response is still
