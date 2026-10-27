@@ -1,5 +1,7 @@
 #include "jhetz/ldap/url.hpp"
 
+#include "jhetz/ldap/attribute.hpp"
+
 #include "format_util.hpp"
 #include "pmr_util.hpp"
 
@@ -98,6 +100,28 @@ namespace {
 			} else {
 				return bad(detail::format("character not allowed in {}", what), offset + i);
 			}
+		}
+		return out;
+	}
+
+	// decode(), then RFC 4516 section 2: the percent-decoded parts are UTF-8
+	// (the attributes, filter and extension values are LDAPStrings). A DN is
+	// checked by dn::parse, a scope is base/one/sub.
+	template<class Allowed>
+	auto decode_utf8(std::string_view s,
+	  std::size_t offset,
+	  const char *what,
+	  Allowed allowed,
+	  std::pmr::memory_resource *mr) -> result<std::pmr::string>
+	{
+		auto out = decode(s, offset, what, allowed, mr);
+		if (!out) {
+			return out;
+		}
+		if (const std::size_t bad_at = detail::invalid_utf8_offset(*out); bad_at != std::string_view::npos) {
+			return bad(
+			  detail::format("ill-formed UTF-8 in {} (decoded byte {}; RFC 4516 parts are UTF-8)", what, bad_at),
+			  offset);
 		}
 		return out;
 	}
@@ -568,7 +592,7 @@ namespace {
 			if (piece.empty()) {
 				return bad("empty attribute", off);
 			}
-			auto a = decode(piece, off, "attribute", is_lenient_part_char, mr);
+			auto a = decode_utf8(piece, off, "attribute", is_lenient_part_char, mr);
 			if (!a) {
 				return std::unexpected(std::move(a.error()));
 			}
@@ -609,7 +633,7 @@ namespace {
 			++off;
 		}
 		const std::size_t eq = piece.find('=');
-		auto type = decode(piece.substr(0, eq), off, "extension type", is_lenient_part_char, mr);
+		auto type = decode_utf8(piece.substr(0, eq), off, "extension type", is_lenient_part_char, mr);
 		if (!type) {
 			return std::unexpected(std::move(type.error()));
 		}
@@ -618,7 +642,7 @@ namespace {
 		}
 		e.type = std::move(*type);
 		if (eq != std::string_view::npos) {
-			auto value = decode(piece.substr(eq + 1), off + eq + 1, "extension value", is_lenient_part_char, mr);
+			auto value = decode_utf8(piece.substr(eq + 1), off + eq + 1, "extension value", is_lenient_part_char, mr);
 			if (!value) {
 				return std::unexpected(std::move(value.error()));
 			}
@@ -721,7 +745,7 @@ auto url::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<
 
 	// filter
 	if (const auto *part = p.given(3)) {
-		auto f = decode(*part, p.offset[3], "filter", is_lenient_part_char, mr);
+		auto f = decode_utf8(*part, p.offset[3], "filter", is_lenient_part_char, mr);
 		if (!f) {
 			return std::unexpected(std::move(f.error()));
 		}

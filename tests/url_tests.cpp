@@ -341,6 +341,54 @@ TEST_CASE("URL parts after the host", "[url]")
 	}
 }
 
+TEST_CASE("URL parts must be UTF-8 after percent-decoding", "[url]")
+{
+	// RFC 4516 section 2: the percent-decoded attributes, filter and
+	// extensions are UTF-8; an ill-formed sequence is rejected, encoded or not.
+	auto utf8_error = [](std::string_view text, std::string_view what) {
+		auto u = ldap::url::parse(text);
+		INFO(text);
+		REQUIRE_FALSE(u.has_value());
+		CHECK(u.error().code == client_errc::invalid_url);
+		CHECK(u.error().context.starts_with("url: ill-formed UTF-8 in "s + std::string(what)));
+	};
+	SECTION("well-formed UTF-8 is accepted in every part")
+	{
+		const auto u = parse("ldap://h/dc=x?%C3%A9,\xC3\xA9?sub?(cn=J%C3%BCrgen)?x=%E2%82%AC,y=\xF0\x9F\x98\x80");
+		CHECK(u.attributes() == strings{ "\xC3\xA9", "\xC3\xA9" });
+		CHECK(u.search_filter()->root().value() == "J\xC3\xBCrgen");
+		CHECK(u.extensions()[0].value == "\xE2\x82\xAC");
+		CHECK(u.extensions()[1].value == "\xF0\x9F\x98\x80");
+	}
+	SECTION("attributes")
+	{
+		utf8_error("ldap://h/dc=x?cn,%FF", "attribute");
+		utf8_error("ldap://h/dc=x?\xC3", "attribute");// truncated
+		utf8_error("ldap://h/dc=x?%C0%AF", "attribute");// overlong
+		utf8_error("ldap://h/dc=x?%ED%A0%80", "attribute");// surrogate
+	}
+	SECTION("filter")
+	{
+		utf8_error("ldap://h/dc=x??sub?(cn=%FF)", "filter");
+		utf8_error("ldap://h/dc=x??sub?(cn=\x80)", "filter");
+		utf8_error("ldap://h/dc=x??sub?(cn=%F4%90%80%80)", "filter");// above U+10FFFF
+	}
+	SECTION("extensions")
+	{
+		utf8_error("ldap://h/dc=x????x=%FF", "extension value");
+		utf8_error(
+		  "ldap://h/dc=x????"
+		  "!1.2.3=a\xE2\x82",
+		  "extension value");
+		utf8_error("ldap://h/dc=x????%FE", "extension type");
+	}
+	SECTION("the DN, through dn::parse")
+	{
+		rejected("ldap://h/cn=%FF");
+		rejected("ldap://h/cn=\xC3");
+	}
+}
+
 TEST_CASE("URL schemes and structure errors", "[url]")
 {
 	rejected("");
@@ -354,8 +402,9 @@ TEST_CASE("URL schemes and structure errors", "[url]")
 
 TEST_CASE("URL percent-encoding round trip of every byte", "[url]")
 {
-	// Every byte value in a DN value, an attribute, a filter value and an
-	// extension value survives to_string -> parse.
+	// Every byte value in a DN value and a filter value (escaped), and every
+	// UTF-8 text in an attribute and an extension value, survives
+	// to_string -> parse.
 	std::string all;
 	for (int b = 1; b < 256; ++b) {
 		all += static_cast<char>(b);
@@ -390,13 +439,16 @@ TEST_CASE("URL percent-encoding round trip of every byte", "[url]")
 		}
 		return out;
 	};
-	encoded += pct(all) + "??" + pct("(cn=" + filter_value + ")") + "?x=" + pct(all);
+	// The attributes and extension values are UTF-8 (RFC 4516 section 2):
+	// every ASCII byte, and multi-byte sequences of each length.
+	const std::string text = all.substr(0, 0x7F) + "\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80";
+	encoded += pct(text) + "??" + pct("(cn=" + filter_value + ")") + "?x=" + pct(text);
 	const auto u = parse(encoded);
 	CHECK(u.base_dn()->rdns()[0].avas[0].value == std::string_view(all));
-	CHECK(u.attributes() == strings{ std::pmr::string(all) });
+	CHECK(u.attributes() == strings{ std::pmr::string(text) });
 	CHECK(u.search_filter()->to_string() == std::string_view("(cn=" + filter_value + ")"));
 	CHECK(u.search_filter()->root().value() == std::string_view(all));
-	CHECK(u.extensions()[0].value == std::string_view(all));
+	CHECK(u.extensions()[0].value == std::string_view(text));
 }
 
 TEST_CASE("URL allocations go through the given memory resource", "[url][pmr]")

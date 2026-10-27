@@ -31,7 +31,9 @@
 // must be 1..65535. Characters outside RFC 3986 are rejected, except that
 // unencoded spaces and bytes >= 0x80 are accepted in the DN, attribute, scope,
 // filter and extension parts (some servers send them); a '#' (fragment) is
-// always rejected. Errors are client_errc::invalid_url with the reason and
+// always rejected. After percent-decoding, the attribute, filter and
+// extension parts must be well-formed UTF-8 (RFC 4516 section 2), like the
+// DN (dn::parse). Errors are client_errc::invalid_url with the reason and
 // offset in the context.
 //
 // Comparison is syntactic on the decoded parts: host names are compared
