@@ -57,12 +57,14 @@
 // request has its connection's operation_timeout and the chase has no
 // overall limit.
 // Once max_targets is reached or the budget spent the chase stops: the URI
-// at hand is limit_reached, and the continuation references still waiting
-// are not parsed (their URIs are counted in `unlisted`, and they clear
-// `complete`). Over max_hops, a reference gets one limit_reached entry,
-// not one per URI. The attempt list keeps at most max_attempts entries;
-// the URIs considered beyond them are counted in `unlisted` too, so a
-// server streaming references cannot make the list grow without bound.
+// at hand is limit_reached (the rest of its reference is not looked at;
+// its URIs before it were parsed only to tell loops), and the continuation
+// references still waiting are not parsed (their URIs are counted in
+// `unlisted`, and they clear `complete`). Over max_hops nothing is parsed:
+// a reference gets one limit_reached entry, for its first URI, even if it
+// is a loop (telling would cost a parse and a copy of the request). The attempt list keeps at most max_attempts
+// entries; the URIs considered beyond them are counted in `unlisted` too, so a server streaming references cannot make
+// the list grow without bound.
 //
 // Loops (RFC 4511: clients "MUST NOT repeatedly contact the same server for
 // the same request with the same parameters"): a URI whose server (scheme,
@@ -175,8 +177,9 @@ struct chased_search
 	// URIs (skipped, unparseable, over a limit, failed, or left unexamined
 	// when the chase stopped): the entries are then partial. A reference
 	// skipped only as a loop leaves it true (its server already got that
-	// search; loops are recognized before the limits are checked), but one
-	// left unexamined clears it (whether it was a loop is not known).
+	// search; loops are recognized before max_targets and the budget are
+	// checked), but one over max_hops or left unexamined clears it (whether
+	// it was a loop is not known).
 	bool complete = true;
 };
 
@@ -223,8 +226,10 @@ auto chase_compare(connection &origin,
 //   (when its name() is a URL), unless an entry for that host names it:
 //   `host:port`, `10.0.0.1:port`, `[::1]:port` (a bare IPv6 address takes
 //   no port). An entry with a port allows that port on top of the usual
-//   ones: the setup's credentials go to whatever listens on the port a
-//   server's URL names, so other ports are opt-in.
+//   ones, for the hosts the entry matches: `example.org:1389` allows port
+//   1389 on `example.org` and on its subdomains too. The setup's
+//   credentials go to whatever listens on the port a server's URL names,
+//   so other ports are opt-in.
 // No TLS downgrade: when `origin` is TLS-protected (is_tls(), read here,
 // once), an ldaps:// target is opened as such and an ldap:// one with
 // StartTLS (connection_options::start_tls); a failed StartTLS fails the URI

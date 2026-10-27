@@ -316,18 +316,23 @@ TEST_CASE("chase_search: many references cost little once the limits are reached
 	w.check_servers();
 }
 
-TEST_CASE("chase_search: over max_hops, one entry per reference", "[net][referral]")
+TEST_CASE("chase_search: over max_hops, one entry per reference, nothing parsed", "[net][referral]")
 {
 	world w;
 	w.serve("a.example",
 	  { answer({ ref_msg(1, { "ldap://b.example/ou=b,dc=example,dc=org", "ldap://c.example/ou=c,dc=example,dc=org" }),
+		ref_msg(1, { "not a url", "ldap://c.example/ou=c,dc=example,dc=org" }),
 		done_msg(1) }) });
 	auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_hops = 0 }));
 	REQUIRE(r.has_value());
 	CHECK_FALSE(r->complete);
-	REQUIRE(r->referrals.size() == 1);
+	REQUIRE(r->referrals.size() == 2);
 	CHECK(r->referrals[0].uri == "ldap://b.example/ou=b,dc=example,dc=org");
 	CHECK(r->referrals[0].outcome == referral_outcome::limit_reached);
+	// Not unparseable: over max_hops the URI is not parsed.
+	CHECK(r->referrals[1].uri == "not a url");
+	CHECK(r->referrals[1].outcome == referral_outcome::limit_reached);
+	CHECK(w.asked.empty());
 	w.check_servers();
 }
 
@@ -463,7 +468,7 @@ TEST_CASE("chase_search: loops are not followed", "[net][referral]")
 	w.check_servers();
 }
 
-TEST_CASE("chase_search: a loop is recognized before the limits", "[net][referral]")
+TEST_CASE("chase_search: a loop is recognized before max_targets, not over max_hops", "[net][referral]")
 {
 	world w;
 	// The origin's own search, as a reference back to it.
@@ -481,13 +486,13 @@ TEST_CASE("chase_search: a loop is recognized before the limits", "[net][referra
 		CHECK(r->complete);
 		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed, referral_outcome::skipped_loop });
 	}
-	SECTION("over max_hops")
+	SECTION("over max_hops: not parsed, so not known to be a loop")
 	{
 		w.serve("a.example", { answer({ ref_msg(1, { loop }), done_msg(1) }) });
 		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_hops = 0 }));
 		REQUIRE(r.has_value());
-		CHECK(r->complete);
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::skipped_loop });
+		CHECK_FALSE(r->complete);
+		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::limit_reached });
 	}
 	w.check_servers();
 }
@@ -692,18 +697,22 @@ TEST_CASE("chase_search: the timeout bounds the whole chase, the connector inclu
 		CHECK(r->referrals[0].failure->code == ldap::cond::timeout);
 		CHECK(w.asked == std::vector<std::pair<std::string, std::size_t>>{ { "slow.example", 1 } });
 	}
-	SECTION("a connector that returns after it is spent: nothing is sent")
+	SECTION("a connector that returns after it is spent: nothing is sent, the reference stops")
 	{
+		w.add("c.example");
 		w.serve("a.example",
 		  { answer({ entry_msg(1, "uid=jdoe,ou=a,dc=example,dc=org", "A"),
-			ref_msg(1, { "ldap://b.example/ou=b,dc=example,dc=org" }),
+			ref_msg(1, { "ldap://b.example/ou=b,dc=example,dc=org", "ldap://c.example/ou=c,dc=example,dc=org" }),
 			done_msg(1) }) });
 		// Blocks the thread: the deadline cannot cancel it.
 		w.on_ask = [] { std::this_thread::sleep_for(std::chrono::milliseconds(1100)); };
 		auto r = w.run(ldap::chase_search(w.origin.conn, request, w.connector()));
 		REQUIRE(r.has_value());
 		CHECK_FALSE(r->complete);
+		// One limit_reached entry: c, the reference's other URI, is not
+		// looked at.
 		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::limit_reached });
+		CHECK(r->unlisted == 0);
 		CHECK(w.asked.size() == 1);
 		CHECK(w.servers["b.example"]->log.received.empty());
 	}
@@ -1069,11 +1078,14 @@ TEST_CASE("make_same_policy_connector: a failed connect fails the URI", "[net][r
 TEST_CASE("make_same_policy_connector: a closed connection is reopened", "[net][referral]")
 {
 	world w;
-	// The first connection answers one search and hangs up; the second one
-	// is opened (and set up) for the URI after the one that found it closed.
+	// The first connection answers one search, then hangs up on the next
+	// one (c's: it was still open when c was sent, whatever the order the
+	// chase and the reader run in); the second one is opened (and set up)
+	// for the URI after the one that found it closed.
 	tcp_targets t(w.ioc,
 	  { { answer({ bind_resp(1) }),
-		  answer({ entry_msg(2, "uid=jdoe,ou=b,dc=example,dc=org", "B"), done_msg(2) }, true) },
+		  answer({ entry_msg(2, "uid=jdoe,ou=b,dc=example,dc=org", "B"), done_msg(2) }),
+		  answer({}, true) },
 		{ answer({ bind_resp(1) }), answer({ entry_msg(2, "uid=jdoe,ou=d,dc=example,dc=org", "D"), done_msg(2) }) } });
 	w.serve("a.example",
 	  { answer({ ref_msg(1, { t.url("ou=b,dc=example,dc=org") }),
@@ -1091,6 +1103,8 @@ TEST_CASE("make_same_policy_connector: a closed connection is reopened", "[net][
 	CHECK(outcomes(r->referrals)
 		  == std::vector{ referral_outcome::followed, referral_outcome::failed, referral_outcome::followed });
 	t.check();
+	REQUIRE(t.logs[0].received.size() == 3);
+	CHECK(std::get<ldap::search_request>(t.logs[0].received[2].op).base_object == "ou=c,dc=example,dc=org");
 	REQUIRE(t.logs[1].received.size() == 2);
 	CHECK(std::holds_alternative<ldap::bind_request>(t.logs[1].received[0].op));
 	CHECK(std::get<ldap::search_request>(t.logs[1].received[1].op).base_object == "ou=d,dc=example,dc=org");

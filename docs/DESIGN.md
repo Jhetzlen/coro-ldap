@@ -841,7 +841,8 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   reference that cannot be followed never fails the search but clears
   `chased_search::complete` (partial results are never a plain success;
   one skipped only as a loop does not, its server already answered that
-  search; loops are checked before the limits, but references left
+  search; loops are checked before `max_targets` and the budget, but
+  references over `max_hops`, which are not parsed at all, and those left
   unexamined once the chase stopped clear it). A referral result that
   cannot be followed fails the call (the last failure, else the referral
   itself): there is nothing partial to return; the error's context counts
@@ -857,7 +858,8 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   IDNs compared in ASCII form as RFC 4513 section 3.1.3.1 asks; a host
   with a decoded control, space, '%' or '/' is refused before any lookup),
   only the scheme's default port or the origin's unless an entry names the
-  port (`host:port`: the setup's credentials go to whatever listens on the
+  port (`host:port`, which allows it on the hosts the entry matches, its
+  subdomains included: the setup's credentials go to whatever listens on the
   port a server names, so another port of an allowed host is opt-in), no TLS
   downgrade (a TLS origin makes ldap:// targets use StartTLS, and a failed
   StartTLS fails the URI), the certificate checked against the referred

@@ -270,10 +270,13 @@ namespace {
 		return prepared<Params>{ .server = std::move(*u), .request = std::move(*request), .key = std::move(key) };
 	}
 
-	// Tries the URIs of one reference in order until one is followed. A URI
-	// over a limit (and not a loop) is limit_reached, and the reference's
-	// other URIs are not looked at (they would be over it too). Fails only
-	// when the chase is cancelled.
+	// Tries the URIs of one reference in order until one is followed. Over
+	// max_hops nothing is parsed: the reference's first URI is limit_reached
+	// (a loop there too: telling would cost a parse and a copy of the
+	// request per reference). A URI over max_targets or the budget (and not
+	// a loop) is limit_reached. Either way the reference's other URIs are
+	// not looked at (they would be over it too). Fails only when the chase
+	// is cancelled.
 	template<class Params, class Value, class Op>
 	auto follow(chase_state &st,
 	  std::span<const std::pmr::string> uris,
@@ -291,18 +294,22 @@ namespace {
 			if (stop.stop_requested()) {
 				co_return std::unexpected(canceled());
 			}
+			if (depth > st.policy.max_hops) {
+				st.record(uri, kind, depth, referral_outcome::limit_reached);
+				break;
+			}
 			auto p = prepare(st, uri, kind, depth, base);
 			if (!p) {
 				continue;
 			}
-			// A loop before the limits: a reference that is only a loop
-			// leaves the search complete, over a limit or not.
+			// A loop before max_targets and the budget: a reference that is
+			// only a loop leaves the search complete, over them or not.
 			if (st.visited_before(p->key)) {
 				st.record(uri, kind, depth, referral_outcome::skipped_loop);
 				out.loop = true;
 				continue;
 			}
-			if (depth > st.policy.max_hops || st.exhausted()) {
+			if (st.exhausted()) {
 				st.record(uri, kind, depth, referral_outcome::limit_reached);
 				break;
 			}
@@ -326,9 +333,9 @@ namespace {
 			}
 			// What the connector left of the budget bounds the request.
 			if (const auto left = st.remaining()) {
-				if (left->count() <= 0) {
+				if (left->count() <= 0) {// the reference stops here, as above
 					st.record(uri, kind, depth, referral_outcome::limit_reached);
-					continue;
+					break;
 				}
 				p->request.timeout = *left;
 			}

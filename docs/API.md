@@ -410,7 +410,8 @@ itself needs only ICU.
   outside `allowed_hosts` (a name and its subdomains, IDNs in ASCII form;
   IP addresses exactly; empty by default, so nothing is followed), hosts
   with bytes no host name has, and ports other than the scheme's default
-  and the origin's (unless an entry names it: `host:port`, `[::1]:port`)
+  and the origin's (unless an entry names it: `host:port`, `[::1]:port`;
+  `example.org:1389` allows that port on the subdomains too)
   are skipped, a TLS origin makes ldap:// targets use StartTLS (failure fails
   the URI), the certificate is checked against the referred host, and
   each new connection is bound only by `setup` (a `session_setup`, e.g.
