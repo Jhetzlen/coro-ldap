@@ -2,9 +2,11 @@
 // referral (RFC 4511 section 4.1.10) or a search continuation reference
 // (section 4.5.3), from the LDAP URL the server returned and the request
 // that got it. Part of jhetz::ldap (the codec): these only build requests,
-// they never send anything. For the updates they let a caller build the
-// request to send elsewhere itself (a referral result means the update was
-// not performed, section 4.1.10).
+// they never send anything. chase_search and chase_compare
+// (referral_chase.hpp, jhetz::ldap_net) use them to follow referrals; for
+// the updates, which are never chased, they let a caller build the request
+// to send elsewhere itself (a referral result means the update was not
+// performed, section 4.1.10).
 //
 //   auto refs = ldap::url::parse_list(err.referrals);
 //   for (const ldap::url &u : refs) {

@@ -286,10 +286,12 @@ if(JHETZ_LDAP_BUILD_NET)
         src/connection/schema_load.cpp
         src/connection/password.cpp
         src/connection/transaction.cpp
+        src/connection/referral_chase.cpp
         src/client/client.cpp
         src/sasl_scram.cpp
         src/sync.cpp
         src/net/connect.cpp
+        src/net/host_name.cpp
         src/net/message_io.cpp
         src/net/channel_binding.cpp
         src/net/tls.cpp
@@ -394,6 +396,7 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "connection.hpp" EXCLUDE
             PATTERN "connection_options.hpp" EXCLUDE
             PATTERN "paged_search.hpp" EXCLUDE
+            PATTERN "referral_chase.hpp" EXCLUDE
             PATTERN "search_stream.hpp" EXCLUDE
             PATTERN "transaction.hpp" EXCLUDE
             PATTERN "sasl_scram.hpp" EXCLUDE

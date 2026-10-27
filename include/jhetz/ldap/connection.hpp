@@ -296,9 +296,10 @@ class connection
 	// Runs a search to its end and returns the entries in the order received,
 	// allocated from `mr` (see "Memory" above). Search result references
 	// (continuation references) are not returned here: use search_stream()
-	// to see them (referral handling is step 6). A result code other than
-	// success fails the whole call, size_limit_exceeded included; the
-	// entries received before it are lost (search_stream() keeps them).
+	// to see them, or chase_search (referral_chase.hpp) to follow them. A
+	// result code other than success fails the whole call,
+	// size_limit_exceeded included; the entries received before it are lost
+	// (search_stream() keeps them).
 	auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> boost::capy::task<result<std::pmr::vector<entry>>>;
 
@@ -333,7 +334,8 @@ class connection
 	// The other operations. Result codes: success returns the value; any
 	// other code is an error (`ldap_result::to_error`, with the operation as
 	// context), referral included (errc::referral, the URIs in
-	// error::referrals; referrals are not chased, see url::parse_list).
+	// error::referrals; referrals are not chased, see url::parse_list and
+	// chase_compare in referral_chase.hpp).
 	// compare() maps compareTrue / compareFalse to true / false.
 	auto add(add_params request) -> boost::capy::task<result<response>>;
 	auto modify(modify_params request) -> boost::capy::task<result<response>>;

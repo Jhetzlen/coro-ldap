@@ -377,8 +377,30 @@ itself needs only ICU.
   answers that page with the latest sorted paged search's entries
   instead, which the client cannot detect; there, give each concurrent
   paged search its own connection. Referrals are returned (in
-  `error::referrals` and `search_stream::references()`), never chased;
-  `url::parse_list` parses them.
+  `error::referrals` and `search_stream::references()`), never chased by
+  the connection; `url::parse_list` parses them, and
+  `jhetz/ldap/referral_chase.hpp` (below) follows them on request.
+- `jhetz/ldap/referral_chase.hpp`: opt-in referral chasing.
+  `co_await ldap::chase_search(conn, params, connector, policy, mr)` runs
+  the search, then follows a referral result and the continuation
+  references (RFC 4511 sections 4.1.10, 4.5.3) through `connector`, a
+  `referral_connector` (`std::function` returning
+  `task<result<connection *>>` for a URL and its depth; null skips it), which
+  decides which servers may be contacted and how their connections are
+  bound. It returns `chased_search{entries, referrals, complete}`: the
+  entries of every server reached, one `referral_attempt` per URI tried
+  (`followed`, `skipped_policy`, `skipped_loop`, `limit_reached`,
+  `unparseable`, `failed` with its error), and `complete == false` when a
+  continuation reference could not be followed (partial results are never
+  a plain success; such a reference never fails the search). A referral
+  result that cannot be followed fails the call (the last error, else the
+  referral). `chase_compare(conn, params, connector, policy)` does the
+  same for a compare (`chased_compare{value, referrals}`). The URIs of one
+  reference are alternatives, tried in order; `referral_policy` bounds the
+  depth (`max_hops`, 10 by default as RFC 4511 asks) and the connector calls
+  (`max_targets`, 64); the request's `timeout` bounds the whole chase. Loops
+  (the same server, DN, scope and filter, the origin's own request
+  included) are skipped. Writes are never chased.
 - Password changes that work on OpenLDAP and Active Directory alike:
   `change_password(user, old, new)` (a user's own) and
   `reset_password(user, new)` (an administrator's), on `connection` and

@@ -106,7 +106,7 @@ file(GLOB_RECURSE jhetz_ldap_public_headers CONFIGURE_DEPENDS
 # tests/install/check_install.sh).
 set(jhetz_ldap_net_headers
     jhetz/ldap/cancel.hpp jhetz/ldap/client.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
-    jhetz/ldap/paged_search.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp jhetz/ldap/transaction.hpp
+    jhetz/ldap/paged_search.hpp jhetz/ldap/referral_chase.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp jhetz/ldap/transaction.hpp
     jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp)
 set(jhetz_ldap_codec_header_tus)
 set(jhetz_ldap_net_header_tus)
@@ -155,6 +155,7 @@ if(JHETZ_LDAP_BUILD_NET)
         net/mapping_ops_tests.cpp
         net/operations_tests.cpp
         net/password_tests.cpp
+        net/referral_chase_tests.cpp
         net/transaction_tests.cpp
         net/sasl_scram_tests.cpp
         net/sasl_tests.cpp
