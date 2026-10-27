@@ -70,18 +70,27 @@
 //   it refuses a wrong one): Windows' own clients pass Schannel's
 //   SECPKG_ATTR_ENDPOINT_BINDINGS, which begins with "tls-server-end-point:"
 //   (Microsoft's SEC_CHANNEL_BINDINGS documentation; OpenJDK's
-//   JDK-8245527 does the same for AD), and OpenLDAP's libldap with
-//   cyrus-sasl's gssapi plugin sends the same bytes ("sasl-cbinding
-//   tls-endpoint": ldap_pvt_sasl_cbinding builds the prefixed data,
-//   gssapi.c passes it as application_data, addresses zeroed). MIT krb5
+//   JDK-8245527 does the same for AD). OpenLDAP's libldap builds the same
+//   bytes ("sasl-cbinding tls-endpoint": ldap_pvt_sasl_cbinding), but
+//   cyrus-sasl's gssapi plugin ignores them in its latest release, 2.1.28
+//   (GSS_C_NO_CHANNEL_BINDINGS on both sides): slapd does not check GSSAPI
+//   bindings. Its unreleased master passes them as application_data
+//   (addresses zeroed) only with the security property
+//   SASL_SEC_NONSTD_CBIND (OpenLDAP's "sasl-secprops ...,nonstdcbind" in
+//   slapd, SASL_SECPROPS for libldap, beside "sasl-cbinding tls-endpoint";
+//   only in an OpenLDAP built against such a cyrus-sasl), a flag the same
+//   master's mechanism selection (lib/server.c mech_permitted) also asks
+//   of every mechanism and no plugin declares, so, from the sources, a
+//   slapd with it offers no SASL mechanism at all. Active Directory is the
+//   server that checks them. MIT krb5
 //   1.19 and later also tells the server that the client binds
 //   (Microsoft's KERB_AP_OPTIONS_CBT) when krb5.conf sets
 //   client_aware_gss_bindings: an acceptor given bindings then requires
 //   them. The hash is RFC 5929's
 //   (channel_bindings::tls_server_end_point), or OpenLDAP's
-//   (sasl_gssapi_options::binding_form openldap, for a slapd with
-//   "sasl-cbinding tls-endpoint" and an RSASSA-PSS, Ed25519 or Ed448
-//   certificate: see sasl_scram.hpp). Without TLS no bindings are sent
+//   (sasl_gssapi_options::binding_form openldap, the bytes libldap builds,
+//   for a slapd that checks them, see above: they differ only for an
+//   RSASSA-PSS, Ed25519 or Ed448 certificate, see sasl_scram.hpp). Without TLS no bindings are sent
 //   (GSS_C_NO_CHANNEL_BINDINGS). Over TLS without a hash (RFC 5929 has none
 //   for Ed25519 and Ed448 certificates; the openldap form, none for a
 //   certificate it cannot parse), start() fails with
@@ -92,8 +101,8 @@
 //   certificate and relay the unbound bind, which an acceptor given
 //   bindings accepts unless the client announced that it binds (AD with
 //   "When supported" too). gssapi_channel_binding::none is the explicit
-//   opt-out. A server whose acceptor is given no bindings (slapd without
-//   sasl-cbinding, AD with the policy "Never") ignores them; one given
+//   opt-out. A server whose acceptor is given no bindings (slapd, AD with
+//   the policy "Never") ignores them; one given
 //   others (TLS terminated by a proxy in front of the server, whose
 //   certificate the client sees) refuses the bind (GSS_S_BAD_BINDINGS):
 //   gssapi_channel_binding::none turns them off. tls-exporter (RFC 9266)
@@ -155,8 +164,9 @@ enum class gssapi_channel_binding_form : std::uint8_t {
 	// RFC 5929 section 4.1, as Active Directory computes it.
 	rfc5929,
 	// OpenLDAP's (scram_channel_binding_form::openldap's hash): differs
-	// only for RSASSA-PSS, Ed25519 and Ed448 certificates, where a slapd
-	// with "sasl-cbinding tls-endpoint" expects SHA-256.
+	// only for RSASSA-PSS, Ed25519 and Ed448 certificates, which libldap
+	// hashes with SHA-256 (a slapd checks GSSAPI bindings only with
+	// cyrus-sasl's SASL_SEC_NONSTD_CBIND: see the header comment).
 	openldap,
 };
 

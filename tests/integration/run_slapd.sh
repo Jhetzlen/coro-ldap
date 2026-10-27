@@ -142,6 +142,10 @@ sizelimit 1000
 # username is a uid, checked against the entry's cleartext userPassword.
 authz-regexp "^uid=([^,]+)(,cn=[^,]+)?,cn=scram-sha-256,cn=auth\$" "uid=\$1,ou=people,dc=example,dc=org"
 # SCRAM-SHA-256-PLUS over TLS, channel binding tls-server-end-point.
+# GSSAPI ignores it: cyrus-sasl 2.1.28's gssapi plugin passes no channel
+# bindings; its unreleased master needs "sasl-secprops ...,nonstdcbind",
+# which this slapd may not parse and which, from cyrus's sources, would
+# also turn off every SASL mechanism (sasl_gssapi.hpp), so it is not set.
 sasl-cbinding tls-endpoint
 authz-regexp "^uid=([^,]+)(,cn=[^,]+)?,cn=scram-sha-256-plus,cn=auth\$" "uid=\$1,ou=people,dc=example,dc=org"
 $gssapi

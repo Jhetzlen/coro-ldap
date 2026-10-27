@@ -803,13 +803,28 @@ this form: Windows' clients pass Schannel's
 SECPKG_ATTR_ENDPOINT_BINDINGS, whose data "begins with
 tls-server-end-point:" (Microsoft's SEC_CHANNEL_BINDINGS documentation),
 and AD checks that; OpenLDAP's libldap builds the same bytes
-(`ldap_pvt_sasl_cbinding`, "tls-server-end-point:" + hash) and cyrus-sasl's
-gssapi plugin passes them as `application_data` with zeroed addresses;
-OpenJDK's JDK-8245527 (AD channel binding for JNDI/GSS) does the same.
+(`ldap_pvt_sasl_cbinding`, "tls-server-end-point:" + hash); OpenJDK's
+JDK-8245527 (AD channel binding for JNDI/GSS) does the same. slapd does
+not check them (coro-ldap-2hr): cyrus-sasl's gssapi plugin passes
+GSS_C_NO_CHANNEL_BINDINGS to `gss_accept_sec_context` and
+`gss_init_sec_context` in 2.1.28, its latest release (Arch's package
+too); its unreleased master (commit 8735185, "don't enable GSSAPI
+channel bindings by default") passes the SASL channel binding as
+`application_data`, addresses zeroed, only when the security flags hold
+SASL_SEC_NONSTD_CBIND (OpenLDAP's secprops `nonstdcbind`, compiled in
+only against a sasl.h that defines it; Arch's libldap 2.7 does not know
+it, and slapd refuses a `sasl-secprops` it cannot parse). That same
+master's `mech_permitted` (lib/server.c, and lib/client.c on the client
+side) refuses a mechanism whose plugin lacks a requested flag, and no
+plugin declares SASL_SEC_NONSTD_CBIND, so, read from the sources, a
+slapd with `nonstdcbind` offers no SASL mechanism at all (not run).
+run_slapd.sh therefore does not set it, and no integration test can see
+slapd refuse a wrong binding; the bindings are checked end to end by AD
+only.
 Kerberos then carries the MD5 of the struct in the authenticator checksum
 (RFC 4121 section 4.1.1.2). On by default (`gssapi_channel_binding::
-tls_server_end_point`): an acceptor given no bindings (slapd without
-`sasl-cbinding`, AD with the policy "Never") ignores the client's, and
+tls_server_end_point`): an acceptor given no bindings (slapd, AD with
+the policy "Never") ignores the client's, and
 the opt-out `gssapi_channel_binding::none` is for a server whose
 acceptor holds other bindings (a TLS-terminating proxy in front). No
 bindings without TLS. Over TLS a certificate without tls-server-end-point
@@ -823,8 +838,8 @@ client announced that it binds (MIT accept_sec_context.c
 process_checksum and Heimdal's _gsskrb5_verify_8003_checksum take an
 all-zero binding checksum; AD with "When supported" too). `none` is the
 explicit opt-out; there is no lenient "if available" value, since the
-only certificates without a hash are EdDSA ones (use the openldap form for
-a slapd, which hashes them with SHA-256) and unparseable ones. Not
+only certificates without a hash are EdDSA ones (`none`, or the openldap
+form, which hashes them with SHA-256) and unparseable ones. Not
 tls-exporter: neither AD nor slapd takes it for GSSAPI. MIT krb5 1.19+
 signals the bindings to the acceptor (KERB_AP_OPTIONS_CBT) only with
 krb5.conf's `client_aware_gss_bindings`; that is the user's
@@ -832,10 +847,10 @@ configuration. GSS-SPNEGO is not implemented (it would take the same
 bindings: MIT passes them through SPNEGO since 1.19). Tested without a
 KDC (the layer messages, input checks, GSS-API errors before anything is
 sent, the bindings' bytes, `gss_init_sec_context` accepting the struct)
-and end to end against slapd (cyrus-sasl's gssapi plugin) and a
-throwaway MIT KDC (`tests/integration/run_kdc.sh`); bindings against AD
-(or slapd with `sasl-cbinding`) are not tested end to end
-(coro-ldap-c2u).
+and end to end against slapd (cyrus-sasl's gssapi plugin, which ignores
+the bindings: the binds over TLS only show that sending them does no
+harm) and a throwaway MIT KDC (`tests/integration/run_kdc.sh`); bindings
+are not checked end to end, which needs AD (coro-ldap-c2u).
 
 Referrals and continuation references are returned, never chased by a
 connection: `error::referrals` and `search_stream::references()` keep the

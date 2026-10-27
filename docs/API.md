@@ -540,9 +540,14 @@ itself needs only ICU.
   exchange is bound to the server's certificate (RFC 5929
   tls-server-end-point, given to `gss_init_sec_context` as
   `application_data` "tls-server-end-point:<hash>" with no addresses, the
-  form Windows SSPI and OpenLDAP/cyrus-sasl use), which an AD whose "LDAP
-  channel binding" policy is "Always" requires; a man in the middle with
-  a certificate of its own cannot relay the bind. No bindings without TLS.
+  form Windows SSPI uses and OpenLDAP's libldap builds), which an AD
+  whose "LDAP channel binding" policy is "Always" requires; a man in the
+  middle with a certificate of its own cannot relay the bind. slapd does
+  not check GSSAPI bindings: cyrus-sasl 2.1.28, its latest release,
+  passes none to Kerberos; its unreleased master passes them only with
+  `sasl-secprops ...,nonstdcbind` (beside `sasl-cbinding tls-endpoint`),
+  a flag that, from the sources, also disables every SASL mechanism in
+  that master's mechanism selection. No bindings without TLS.
   Over TLS without a hash (an Ed25519 or Ed448 certificate in the RFC
   form, one the openldap form cannot parse) `start()` fails with
   `client_errc::tls_required` before anything is sent, as SCRAM-PLUS
@@ -551,8 +556,8 @@ itself needs only ICU.
   `sasl_gssapi_options::channel_binding = gssapi_channel_binding::none`
   turns it off (a server behind a TLS-terminating proxy refuses the
   client's bindings), and `binding_form =
-  gssapi_channel_binding_form::openldap` takes OpenLDAP's hash (a slapd
-  with `sasl-cbinding tls-endpoint` and an RSASSA-PSS or EdDSA
+  gssapi_channel_binding_form::openldap` takes OpenLDAP's hash (for a
+  slapd that checks them; it differs for an RSASSA-PSS or EdDSA
   certificate). `prefixed_channel_binding(type, data)`
   (`channel_binding.hpp`) gives RFC 5056's prefixed form.
   GSS-API failures (no ticket, unknown service principal, unreachable

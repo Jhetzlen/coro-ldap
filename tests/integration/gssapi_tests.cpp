@@ -187,8 +187,12 @@ TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 	SECTION("over StartTLS and ldaps://")
 	{
 		// With tls-server-end-point channel bindings, which slapd's
-		// acceptor checks (run_slapd.sh: "sasl-cbinding tls-endpoint"; its
-		// test certificate hashes the same in both forms).
+		// acceptor ignores: cyrus-sasl 2.1.28's gssapi plugin passes it
+		// GSS_C_NO_CHANNEL_BINDINGS ("sasl-cbinding tls-endpoint" is for
+		// SCRAM-SHA-256-PLUS), and its unreleased master passes them only
+		// with the secprops flag nonstdcbind, which run_slapd.sh cannot set
+		// (sasl_gssapi.hpp). So this shows that sending bindings does no
+		// harm, not that they are right: a wrong binding is not refused.
 		auto o = trusting();
 		o.start_tls = true;
 		auto tls = open(ioc, localhost_url(), o);
@@ -200,8 +204,7 @@ TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 		CHECK(bind_and_who(ioc, ldaps, mech) == user007);
 		ldap::sasl_gssapi openldap_form({ .binding_form = ldap::gssapi_channel_binding_form::openldap });
 		CHECK(bind_and_who(ioc, ldaps, openldap_form) == user007);
-		// Without bindings: MIT's acceptor takes an initiator that sends
-		// none (unless it announced them, KERB_AP_OPTIONS_CBT).
+		// Without bindings: an acceptor given none takes it.
 		ldap::sasl_gssapi unbound({ .channel_binding = ldap::gssapi_channel_binding::none });
 		CHECK(bind_and_who(ioc, ldaps, unbound) == user007);
 		CHECK_FALSE(unbound.channel_binding_used().has_value());
