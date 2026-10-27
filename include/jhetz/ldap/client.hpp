@@ -110,13 +110,19 @@
 // io_context is stopped (io_context::stopped(): its run() returned, as for
 // a client destroyed at the end of main()), it is closed, as a connection's
 // destructor does: a task posted then would never run. So call close() (or
-// destroy the client) from a task on the executor to unbind cleanly. close()
-// closes every pooled connection, leased ones included (their outstanding
-// operations fail with not_connected, or not_sent for requests not written
-// yet, see connection.hpp "Sent or not"), stops the connection attempts in
-// progress (connect, StartTLS, session_setup), and fails waiting and later
-// acquire() calls with not_connected at once; the destructor calls it. No
-// observer hook runs once close() has returned.
+// destroy the client) from a task on the executor to unbind cleanly. But
+// stopped() is false, and the unbind is still posted, while the io_context
+// was restart()ed and not run since, or once run_one(), run_for() or poll()
+// returned with work outstanding: that task runs only if the io_context is
+// run again, else it and its connection leak. So restart() it just before
+// running it again, not right after run() returns.
+//
+// close() closes every pooled connection, leased ones included (their
+// outstanding operations fail with not_connected, or not_sent for requests
+// not written yet, see connection.hpp "Sent or not"), stops the connection
+// attempts in progress (connect, StartTLS, session_setup), and fails
+// waiting and later acquire() calls with not_connected at once; the
+// destructor calls it. No observer hook runs once close() has returned.
 //
 // For code without coroutines, sync::client (sync.hpp) owns an io_context
 // and its thread, and wraps a client in blocking calls.

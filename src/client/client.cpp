@@ -209,17 +209,21 @@ namespace detail {
 			if (s.failures != 0 && s.episode != episode && (!auth || s.auth_backoff)) {
 				return;// a concurrent attempt recorded this failure already
 			}
+			// What may throw (the jitter source, copying the error) goes
+			// first: a throw leaves the counts as they were, and the
+			// unsettled attempt's restart_auth_backoff() counts it once.
+			const double unit = jitter_unit();
+			if (!unproven) {
+				s.last_error = e;
+			}
 			++s.episode;
 			++s.failures;
 			const milliseconds delay =
-			  auth ? auth_delay(s.failures, jitter_unit()) : backoff_delay(options.backoff, s.failures, jitter_unit());
+			  auth ? auth_delay(s.failures, unit) : backoff_delay(options.backoff, s.failures, unit);
 			if (auth_failed) {
 				++s.auth_failures;
 			}
 			s.retry_at = clock::now() + delay;
-			if (!unproven) {
-				s.last_error = e;
-			}
 			s.auth_backoff = auth;
 			if (auto *o = observer()) {
 				// Unproven: the stored authentication error, why the server
@@ -742,6 +746,12 @@ namespace detail {
 				auto &server = self->servers[i];
 				if (excluded[i] || server.retry_at > now || server.auth_retrying) {
 					continue;
+				}
+				// The avoided server comes last: once the others failed, a pooled
+				// connection acquire() would now hand out (one to that server,
+				// idle or shareable) serves rather than a new one to it.
+				if (i == avoid && self->pick_avoiding(exclusive, excluded, now, avoid)) {
+					co_return nullptr;
 				}
 				const std::uint64_t episode = server.episode;
 				// After an authentication backoff, one attempt only.

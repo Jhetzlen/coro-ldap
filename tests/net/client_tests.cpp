@@ -1717,6 +1717,133 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 				"retry " + text(down) + " 100ms",
 				"connect " + text(a.url()) + " ok" });
 	}
+	SECTION("compare(): busy on the first server, the second down: a pooled connection to the first serves")
+	{
+		pool_fixture f;
+		auto &a = f.server({ { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) },
+		  { answer({ bind_resp(1) }), answer({ compare_msg(2, 51) }) } });
+		const auto down = refused_url(f.ioc);
+		f.make({ .servers = { a.url(), down },
+		  .setup = admin_setup(),
+		  .max_connections = 2,
+		  .idle_check = std::nullopt,
+		  .observer = &f.obs });
+		auto first = f.acquire({ .exclusive = true });
+		auto second = f.acquire({ .exclusive = true });
+		REQUIRE(first.has_value());
+		REQUIRE(second.has_value());
+		first->release();
+		finish(f.ioc, sleep_for(milliseconds(5)));
+		second->release();// the most recently used: compare() takes it
+		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
+		REQUIRE(r.has_value());
+		CHECK(*r);
+		CHECK(a.accepted() == 2);// the retry took the idle first connection, opened none
+		CHECK(a.log(0).received.size() == 2);// the bind, the compare
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(a.url()) + " ok",
+				"connect " + text(a.url()) + " ok",
+				"disconnect " + text(a.url()) + " busy_or_unavailable",
+				"connect " + text(down) + " failed",
+				"retry " + text(down) + " 100ms" });
+	}
+	SECTION("compare(): busy on the first server, the retry takes a pooled connection to the second")
+	{
+		pool_fixture f;
+		auto &a = f.server({ { answer({ bind_resp(1) }), answer({ compare_msg(2, 51) }) },
+		  { answer({ bind_resp(1) }), answer({ compare_msg(2, 51) }) } });
+		auto &b =
+		  f.server({ { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }), answer({ compare_msg(3, 6) }) } });
+		f.make({ .servers = { a.url(), b.url() },
+		  .setup = admin_setup(),
+		  .max_connections = 3,
+		  .idle_check = std::nullopt,
+		  .observer = &f.obs });
+		// The first compare() leaves an idle connection to the second server.
+		REQUIRE(finish(f.ioc, f.pool->compare(jdoe_compare())).has_value());
+		{
+			auto to_b = f.acquire({ .exclusive = true });// the idle one
+			auto to_a = f.acquire({ .exclusive = true });// a new one, to the first server
+			REQUIRE(to_b.has_value());
+			REQUIRE(to_a.has_value());
+			CHECK(text(to_b->server()) == text(b.url()));
+			CHECK(text(to_a->server()) == text(a.url()));
+		}
+		f.obs.events.clear();
+		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));// the first server's, preferred
+		REQUIRE(r.has_value());
+		CHECK(*r);
+		CHECK(a.accepted() == 2);
+		CHECK(b.accepted() == 1);// no new connection
+		CHECK(b.log(0).received.size() == 3);// the bind, both compares
+		CHECK(f.obs.events == std::vector<std::string>{ "disconnect " + text(a.url()) + " busy_or_unavailable" });
+	}
+	SECTION("compare(): busy, the pool full: the retry shares a connection to the same server")
+	{
+		// max_connections is 1. The test's shared lease binds again while
+		// compare() waits on the same connection: another acquire() retires
+		// it and opens the only other connection, so when the busy answer
+		// comes the pool is full (the busy connection already retired) and
+		// the retry shares that connection rather than wait for a slot.
+		pool_fixture f;
+		const ldap::dn jdoe{ "uid=jdoe,ou=people,dc=example,dc=org" };
+		auto &a = f.server({ { answer({ bind_resp(1) }),
+							   step{},// reads the compare, answers it after the bind below
+							   answer({ compare_msg(2, 51), bind_resp(3) }) },
+		  { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) } });
+		const auto other = refused_url(f.ioc);
+		f.make(
+		  { .servers = { a.url(), other }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
+		auto mine = f.acquire();
+		REQUIRE(mine.has_value());
+		outcome<ldap::result<bool>> compared;
+		spawn(f.ioc, f.pool->compare(jdoe_compare()), compared);// shares `mine`'s connection
+		drive_until(f.ioc, [&a] { return a.log(0).received.size() == 2; });
+		outcome<ldap::result<void>> bound;
+		const auto binds = (*mine)->bind_count();
+		spawn(f.ioc, (*mine)->simple_bind(jdoe, "pw"), bound);
+		drive_until(f.ioc, [&] { return (*mine)->bind_count() != binds; });// binding: no longer handed out
+		outcome<ldap::result<ldap::lease>> opener;
+		spawn(f.ioc, f.pool->acquire(), opener);
+		drive_until(f.ioc, [&] { return compared.done() && bound.done() && opener.done(); });
+		REQUIRE(opener.get().has_value());
+		CHECK(text(opener.get()->server()) == text(a.url()));
+		REQUIRE(compared.get().has_value());
+		CHECK(*compared.get());
+		CHECK(a.accepted() == 2);
+		CHECK(a.log(1).received.size() == 2);// the bind, the retried compare
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(a.url()) + " ok", "connect " + text(a.url()) + " ok" });
+	}
+	SECTION("compare(): busy on the second of three servers: the third, then the second")
+	{
+		pool_fixture f;
+		auto &a = f.server({ hang_up_at_once(), hang_up_at_once() });
+		auto &b = f.server({ { answer({ bind_resp(1) }), answer({ compare_msg(2, 51) }) },
+		  { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) } });
+		const auto c = refused_url(f.ioc);
+		f.make({ .servers = { a.url(), b.url(), c },
+		  .setup = admin_setup(),
+		  .max_connections = 2,
+		  .idle_check = std::nullopt,
+		  .backoff = { .initial = milliseconds(50), .max = milliseconds(1000) },
+		  .observer = &f.obs });
+		REQUIRE(f.acquire().has_value());// the first server fails: to the second, then idle
+		finish(f.ioc, sleep_for(milliseconds(100)));// the first server's backoff ends
+		f.obs.events.clear();
+		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
+		REQUIRE(r.has_value());
+		CHECK(*r);
+		CHECK(a.accepted() == 2);
+		CHECK(b.accepted() == 2);
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "disconnect " + text(b.url()) + " busy_or_unavailable",
+				"connect " + text(a.url()) + " failed",
+				"retry " + text(a.url()) + " 100ms",
+				"connect " + text(c) + " failed",
+				"retry " + text(c) + " 50ms",
+				"connect " + text(b.url()) + " ok" });
+	}
 	SECTION("who_am_i(): the server dropped the idle connection")
 	{
 		pool_fixture f;
