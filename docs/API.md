@@ -685,7 +685,7 @@ itself needs only ICU.
   pool of multiplexed connections opened lazily. `client(ioc,
   client_options{.servers, .connection, .setup, .max_connections = 1,
   .idle_check, .probe_timeout, .max_lifetime, .acquire_timeout,
-  .backoff, .failback_after, .observer})`; `acquire(acquire_options{})
+  .backoff, .failback_after, .observer, .referrals})`; `acquire(acquire_options{})
   -> task<result<lease>>`, the lease giving the full `connection` API
   (`(*lease)->search(...)`), shared with other leases on the same
   connection unless acquired with `{.exclusive = true}` (an idle or new
@@ -714,6 +714,27 @@ itself needs only ICU.
   once on another connection after `cond::connection_lost` or
   `cond::busy_or_unavailable` (a stream only before its first message;
   it holds the lease until destroyed); writes go through a lease.
+  Referrals (3pf.1): `client_options::referrals` (`referral_options{
+  .follow_referrals, .follow_references, .authorize, .limits}`) chases
+  nothing by default. `follow_referrals` chases referral results of
+  `search()` and `compare()`, `follow_references` the continuation
+  references of `search()`, as `chase_search` / `chase_compare` do, from
+  the pooled connection, within `limits` (a `referral_policy`).
+  `authorize`, a `std::function<referral_binding(const referral_hop &)>`
+  (`referral_hop{target, depth, origin}`), returns `refuse`, `anonymous`
+  or `same_setup` (bind with the client's `session_setup`) per URI;
+  empty: nothing is contacted. `same_setup_for_domains(domains)` builds
+  one from `make_same_policy_connector`'s allow-list rules. ldapi:// and
+  implausible hosts are refused before `authorize` is asked; a TLS pooled
+  connection makes ldap:// targets use StartTLS (no downgrade). Referred
+  connections belong to one call (closed when it ends, not pooled). Only
+  the pooled connection's own failure is retried, never a referred
+  server's. `chase_search(params, mr) -> task<result<chased_search>>`
+  and `chase_compare(params) -> task<result<chased_compare>>` return what
+  the chase did (`search()` returns only the entries, even when some
+  references were not followed); `client_observer::on_referral(server,
+  attempt)` hears of each URI. Writes (leases), `search_stream()` and
+  `who_am_i()` never chase.
 - `jhetz/ldap/sync.hpp` (3pf.5): `ldap::sync::client`, the blocking
   facade over `ldap::client`. `sync::client(client_options, mr)` owns an
   io_context and an I/O thread, where the `ldap::client` lives (session
@@ -723,7 +744,9 @@ itself needs only ICU.
   ..., `begin_transaction`, `unbind`, `close`), run on the leased
   connection, plus `server()`, `release()` and `operator bool`. The
   forwarders `search`, `compare` and `who_am_i` block and retry as the
-  async ones; no `search_stream` (no blocking stream, as for
+  async ones, and `chase_search` / `chase_compare` mirror the async
+  client's (referrals as `client_options::referrals` says; the
+  authorizer and `on_referral` run on the I/O thread); no `search_stream` (no blocking stream, as for
   `sync::connection`). `close()` (from any thread, the I/O thread
   included) fails waiting and later `acquire()` calls with
   `not_connected`; `connections()`, `executor()`. A call from the I/O

@@ -868,9 +868,12 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   (anonymous without one). Its connections are kept per server for later
   URIs and closed with the connector.
 
-A follow-up under 3pf is a `client_options::referrals` policy for the
-pool (separate switches for referral results and references, opt-in
-write following, an authorize callback, an observer hook).
+The pool's policy, `client_options::referrals` (3pf.1), is built on the
+same pieces: see section 11, "Referrals". The plain types of a chase
+(`referral_policy`, `referral_outcome`, `referral_attempt`,
+`chased_search`, `chased_compare`) live in `referral.hpp` (codec) so that
+`client.hpp` can name them; `referral_chase.hpp` includes `client.hpp`
+for `session_setup`, so the other way round would be circular.
 
 Paged search (step 6): `connection::search_paged(params, page_size)`
 returns a `paged_search` that yields entries across pages, requesting the
@@ -1826,7 +1829,7 @@ decision left open.
 - One type, `ldap::client` (the name `naming-connection` reserved), built
   from `client_options{servers, connection, setup, max_connections = 1,
   idle_check = 60 s, probe_timeout = 5 s, max_lifetime, acquire_timeout =
-  30 s, backoff, failback_after = 5 min, observer}` on one io_context,
+  30 s, backoff, failback_after = 5 min, observer, referrals}` on one io_context,
   whose executor everything runs on, as for `connection`. Connections are
   opened lazily by `acquire()`, up to `max_connections`; nothing runs in
   the background (no timer keeps `io_context::run()` alive).
@@ -2086,8 +2089,64 @@ decision left open.
   `std::thread::join()` throwing inside a noexcept destructor; the same
   holds for `sync::connection` (3pf.19). A non-last lease released or
   destroyed there returns its connection without waiting.
-- Later (beads): a pool referral policy (3pf.1, on top of `chase_search`), a background prober, DNS SRV, weighted or
-  round-robin selection, per-identity sub-pools.
+- Referrals (3pf.1): `client_options::referrals` (`referral_options{
+  follow_referrals, follow_references, authorize, limits}`), off by
+  default: an authorizer alone chases nothing, and the read forwarders
+  behave as before (a referral result is an error, `search()` drops
+  continuation references). Separate switches, because following
+  continuation references sends the search to more servers on every call,
+  while a referral result is one redirection of a call that would
+  otherwise fail. With a switch on, `search()` and `compare()` run
+  `detail::chase_search` / `chase_compare` (the free functions' code with
+  `chase_settings`: the two switches and an `on_attempt` hook) on the
+  shared lease; `client::chase_search()` / `chase_compare()` always do,
+  and return the chase (`complete`, `referrals`, `unlisted`): `search()`
+  returns only the entries, as `connection::search()` drops references,
+  so the forwarder that hides partial results is the one that already
+  did. A reference not followed because `follow_references` is off is
+  counted in `unlisted` and clears `complete`, without an attempt entry
+  or a parse.
+  `authorize(referral_hop{target, depth, origin}) -> referral_binding
+  {refuse, anonymous, same_setup}` decides per URI; empty refuses all.
+  It is asked only for URLs that pass the connector's fixed rules (no
+  ldapi://, a plausible host), and `same_setup` is the only way the
+  client's credentials reach a referred server. `same_setup_for_domains(
+  domains)` applies `make_same_policy_connector`'s allow-list rules
+  (`detail::referral_server_allowed`, the port rule against the pooled
+  connection's server). An enum rather than a returned setup: the
+  identities a chase can use are the client's own or none, which keeps
+  the "the library never forwards credentials on its own" rule easy to
+  audit; another identity per domain is a later extension. The connector
+  is `detail::make_policy_connector`, `make_same_policy_connector` with a
+  chooser in place of the allow-list (both share the fixed rules, the
+  TLS policy and the per-server reuse, keyed by server and binding), from
+  `client_options::connection` and the pooled connection's `is_tls()`: no
+  downgrade. Referred connections are per call, not pooled (the
+  conservative choice): they are opened by the chase, set up as chosen,
+  reused within it, and closed (no UnbindRequest) when it ends. Pooling
+  them would mean pools per referred server and identity, with their own
+  backoff and auth guard, for servers the client was never configured
+  with; the cost of not doing so is a connect and bind per chase that
+  reaches a server, and no backoff for a referred server refusing the
+  credentials (bounded by `max_targets` per call). Retry: only a
+  retryable failure of the pooled connection's own operation is retried
+  (`chase_result::origin_failed`); a referred server's failure (busy
+  there, a lost referred connection) or the chase's is returned as is,
+  and the pooled connection is not retired for it (it answered). Writes:
+  no `follow_writes` in v1. The client has no write forwarders (writes
+  run on leases, whose `connection` returns a referral result as is), so
+  a switch would have nothing to apply to; a referral result means the
+  update was not performed (RFC 4511 4.1.10), and `referral_target(url,
+  add_params ...)` builds the request for a caller who decides to resend
+  it. `search_stream()` and `who_am_i()` never chase: a stream hands its
+  references out as they come, and merging chased entries into it would
+  change what `next()` means. `client_observer::on_referral(server,
+  attempt)` is called for each attempt as it is decided (also beyond
+  `max_attempts`), never for references left unexamined or switched off.
+  `sync::client` mirrors `chase_search()` / `chase_compare()`; its
+  `search()` and `compare()` chase through `ldap::client`'s.
+- Later (beads): a background prober, DNS SRV, weighted or round-robin
+  selection, per-identity sub-pools, pooled referred connections.
 
 ## Resolved
 

@@ -597,6 +597,13 @@ class client
 	  -> result<std::pmr::vector<entry>>;
 	[[nodiscard]] auto compare(compare_params request) -> result<bool>;
 	[[nodiscard]] auto who_am_i(extended_controls controls = {}) -> result<std::string>;
+	// As ldap::client's, chasing referrals as client_options::referrals
+	// says, with what the chase did (search() and compare() chase too, see
+	// "Referrals" in client.hpp). The authorizer and the observer's
+	// on_referral run on the I/O thread.
+	[[nodiscard]] auto chase_search(search_params request,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<chased_search>;
+	[[nodiscard]] auto chase_compare(compare_params request) -> result<chased_compare>;
 
 	// As ldap::client::connections(), from any thread (read at once on
 	// the I/O thread).

@@ -2,6 +2,7 @@
 
 #include "jhetz/ldap/cancel.hpp"
 
+#include "../connection/referral_chase_impl.hpp"
 #include "../connection/search.hpp"
 #include "../net/deadline.hpp"
 #include "../scope_util.hpp"
@@ -60,6 +61,18 @@ auto sasl_bind_setup(sasl_mechanism_factory factory, dn name) -> session_setup
 {
 	return [factory = std::move(factory), name = std::move(name)](connection &c) -> capy::task<result<void>> {
 		return sasl_setup_run(c, factory ? factory() : nullptr, name);
+	};
+}
+
+auto same_setup_for_domains(std::vector<std::string> domains) -> referral_authorizer
+{
+	return [domains = std::move(domains)](const referral_hop &hop) {
+		std::optional<std::uint16_t> origin_port;
+		if (hop.origin.scheme() != url_scheme::ldapi) {
+			origin_port = hop.origin.port_or_default();
+		}
+		return detail::referral_server_allowed(hop.target, domains, origin_port) ? referral_binding::same_setup
+																				 : referral_binding::refuse;
 	};
 }
 
@@ -1132,8 +1145,16 @@ namespace detail {
 			return refused ? std::optional<std::size_t>{ c->server } : std::nullopt;
 		}
 
-		// search(), compare(), who_am_i(): `op` on a shared lease, retried
-		// once after a retryable failure.
+		// An operation's outcome: a result (the pooled connection's own), or
+		// a chase's (whose failure may be a referred server's).
+		template<class T> static auto value_of(result<T> &r) -> result<T> & { return r; }
+		template<class T> static auto value_of(chase_result<T> &r) -> result<T> & { return r.value; }
+		template<class T> static auto origin_failed(const result<T> & /*r*/) -> bool { return true; }
+		template<class T> static auto origin_failed(const chase_result<T> &r) -> bool { return r.origin_failed; }
+
+		// search(), compare(), who_am_i() and the chases: `op` on a shared
+		// lease, retried once after a retryable failure of the pooled
+		// connection's own operation.
 		template<class T, class Op> static auto read(std::shared_ptr<client_state> self, Op op) -> capy::task<result<T>>
 		{
 			std::optional<std::size_t> avoid;
@@ -1142,12 +1163,99 @@ namespace detail {
 				if (!held) {
 					co_return std::unexpected(std::move(held.error()));
 				}
-				auto r = co_await op(**held);
-				if (r || retried || !retryable(r.error())) {
-					co_return r;
+				auto r = co_await op(*held);
+				auto &v = value_of(r);
+				if (v || retried || !origin_failed(r) || !retryable(v.error())) {
+					co_return std::move(v);
 				}
-				avoid = self->set_aside(*held, r.error());
+				avoid = self->set_aside(*held, v.error());
 			}
+		}
+
+		// ---------------------------------------------------------------- referrals
+
+		[[nodiscard]] auto chases() const noexcept -> bool
+		{
+			return options.referrals.follow_referrals || options.referrals.follow_references;
+		}
+
+		// The connector of a chase from `held`'s connection: the fixed rules
+		// and the TLS policy of make_same_policy_connector, with
+		// referral_options::authorize deciding which servers and how to bind.
+		static auto connector_for(const std::shared_ptr<client_state> &self, const lease &held) -> referral_connector
+		{
+			auto choose = [self, origin = held.server()](
+							const url &target, std::size_t depth) -> std::optional<referral_identity> {
+				const auto &authorize = self->options.referrals.authorize;
+				if (!authorize) {
+					return std::nullopt;
+				}
+				switch (authorize(referral_hop{ .target = target, .depth = depth, .origin = origin })) {
+				case referral_binding::anonymous:
+					return referral_identity{ .identity = 0 };
+				case referral_binding::same_setup:
+					return referral_identity{ .identity = 1, .setup = self->options.setup };
+				case referral_binding::refuse:
+					break;
+				}
+				return std::nullopt;
+			};
+			return make_policy_connector(
+			  *self->ioc, held->is_tls(), self->options.connection, std::move(choose), self->mr);
+		}
+
+		// The switches of client_options::referrals, and the observer's hook.
+		static auto settings_for(const std::shared_ptr<client_state> &self, const lease &held) -> chase_settings
+		{
+			return { .referrals = self->options.referrals.follow_referrals,
+				.references = self->options.referrals.follow_references,
+				.on_attempt = [self, server = held.server()](const referral_attempt &a) {
+					if (auto *o = self->observer()) {
+						o->on_referral(server, a);
+					}
+				} };
+		}
+
+		static auto chase_search(const std::shared_ptr<client_state> &self,
+		  search_params request,
+		  std::pmr::memory_resource *mr) -> capy::task<result<chased_search>>
+		{
+			return read<chased_search>(self, [self, request = std::move(request), mr](const lease &held) {
+				return detail::chase_search(*held,
+				  request,
+				  connector_for(self, held),
+				  self->options.referrals.limits,
+				  mr,
+				  settings_for(self, held));
+			});
+		}
+
+		static auto chase_compare(const std::shared_ptr<client_state> &self, compare_params request)
+		  -> capy::task<result<chased_compare>>
+		{
+			return read<chased_compare>(self, [self, request = std::move(request)](const lease &held) {
+				return detail::chase_compare(
+				  *held, request, connector_for(self, held), self->options.referrals.limits, settings_for(self, held));
+			});
+		}
+
+		// search() and compare() when they chase: the chase's value only.
+		static auto entries_of(capy::task<result<chased_search>> chase) -> capy::task<result<std::pmr::vector<entry>>>
+		{
+			auto r = co_await std::move(chase);
+			if (!r) {
+				co_return std::unexpected(std::move(r.error()));
+			}
+			co_return std::move(r->entries);
+		}
+
+		static auto answer_of(capy::task<result<chased_compare>> chase) -> capy::task<result<bool>>
+		{
+			auto r = co_await std::move(chase);
+			if (!r) {
+				co_return std::unexpected(std::move(r.error()));
+			}
+			co_return r->value;
 		}
 
 		// search_stream(): retried once if it fails before its first message.
@@ -1271,8 +1379,11 @@ auto client::search(search_params request, std::pmr::memory_resource *mr) -> cap
 	if (state_ == nullptr) {
 		return read_refused<std::pmr::vector<entry>>(detail::op_context("search", request.base));
 	}
+	if (state_->chases()) {
+		return detail::client_state::entries_of(detail::client_state::chase_search(state_, std::move(request), mr));
+	}
 	return detail::client_state::read<std::pmr::vector<entry>>(
-	  state_, [request = std::move(request), mr](connection &c) { return c.search(request, mr); });
+	  state_, [request = std::move(request), mr](const lease &held) { return held->search(request, mr); });
 }
 
 auto client::search_stream(search_params request, std::pmr::memory_resource *mr)
@@ -1289,8 +1400,27 @@ auto client::compare(compare_params request) -> capy::task<result<bool>>
 	if (state_ == nullptr) {
 		return read_refused<bool>(detail::op_context("compare", request.entry));
 	}
+	if (state_->chases()) {
+		return detail::client_state::answer_of(detail::client_state::chase_compare(state_, std::move(request)));
+	}
 	return detail::client_state::read<bool>(
-	  state_, [request = std::move(request)](connection &c) { return c.compare(request); });
+	  state_, [request = std::move(request)](const lease &held) { return held->compare(request); });
+}
+
+auto client::chase_search(search_params request, std::pmr::memory_resource *mr) -> capy::task<result<chased_search>>
+{
+	if (state_ == nullptr) {
+		return read_refused<chased_search>(detail::op_context("search", request.base));
+	}
+	return detail::client_state::chase_search(state_, std::move(request), mr);
+}
+
+auto client::chase_compare(compare_params request) -> capy::task<result<chased_compare>>
+{
+	if (state_ == nullptr) {
+		return read_refused<chased_compare>(detail::op_context("compare", request.entry));
+	}
+	return detail::client_state::chase_compare(state_, std::move(request));
 }
 
 auto client::who_am_i(extended_controls controls) -> capy::task<result<std::string>>
@@ -1299,7 +1429,7 @@ auto client::who_am_i(extended_controls controls) -> capy::task<result<std::stri
 		return read_refused<std::string>("who_am_i");
 	}
 	return detail::client_state::read<std::string>(
-	  state_, [controls = std::move(controls)](connection &c) { return c.who_am_i(controls); });
+	  state_, [controls = std::move(controls)](const lease &held) { return held->who_am_i(controls); });
 }
 
 auto client::connections() const noexcept -> std::size_t { return state_ == nullptr ? 0 : state_->pool.size(); }

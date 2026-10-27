@@ -124,6 +124,49 @@
 // waiting and later acquire() calls with not_connected at once; the
 // destructor calls it. No observer hook runs once close() has returned.
 //
+// Referrals (client_options::referrals): off by default, as for a
+// connection, nothing is chased: search() and compare() return a referral
+// result as an error (errc::referral, the URIs in error::referrals) and
+// search() drops continuation references. Opting in, follow_referrals
+// chases referral results (RFC 4511 section 4.1.10) of search() and
+// compare(), follow_references the continuation references (section 4.5.3)
+// of search(), as ldap::chase_search and ldap::chase_compare
+// (referral_chase.hpp) do, from the pooled connection the operation ran
+// on, within `limits`. The URIs of a reference are alternatives, loops are
+// skipped, the request's timeout bounds the whole chase: see
+// referral_chase.hpp. Which servers may be contacted, and how their
+// connections are bound, is `authorize`'s call (empty: none, every URI
+// skipped_policy), asked once per URI that passes the fixed rules: never
+// ldapi:// (a server's URL must not reach a local socket), nor a host
+// with bytes no host name has. Only an authorizer returning same_setup
+// sends the client's session_setup (its credentials) to a referred
+// server, the library never does by itself; same_setup_for_domains()
+// builds one that does so for the hosts of the domains named.
+// No TLS downgrade: when the pooled connection is TLS-protected, an ldaps://
+// target is opened as such and an ldap:// one with StartTLS (a failed
+// StartTLS fails that URI); otherwise client_options::connection applies
+// as given; the certificate is checked against the referred host
+// (connection_options::tls::server_name cleared). These are
+// make_same_policy_connector's rules, with `authorize` for its allow-list.
+// Referred connections are not pooled: each chase opens its own (one per
+// server and binding, reused within the chase), runs the setup chosen on
+// them, and closes them (without an UnbindRequest) when it ends. So they
+// get neither the pool's backoff nor its authentication-failure guard: a
+// referred server refusing the client's credentials is bound again by the
+// next chase that reaches it. A failure of the pooled connection's own
+// operation is retried once as usual (the whole chase starts again on
+// another connection); a referred server's failure or the chase's is
+// returned as is, never retried. search() returns the entries only: one
+// whose continuation references were not all followed (refused, over a
+// limit, failed, or follow_references off) still succeeds with what it
+// got, as connection::search() does; chase_search() tells (complete,
+// referrals, unlisted). client_observer::on_referral hears of each URI.
+// Writes are never chased: they run on leases, where a referral result is
+// returned as is (a referral means the update was not performed, section
+// 4.1.10; referral_target builds the request for another server).
+// search_stream() and who_am_i() never chase either: the stream hands out
+// its references (search_stream::references(), next_item()).
+//
 // For code without coroutines, sync::client (sync.hpp) owns an io_context
 // and its thread, and wraps a client in blocking calls.
 //
@@ -142,6 +185,7 @@
 #include "jhetz/ldap/connection_options.hpp"
 #include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/error.hpp"
+#include "jhetz/ldap/referral.hpp"
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/url.hpp"
 
@@ -150,6 +194,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <memory_resource>
@@ -265,6 +310,61 @@ class client_observer
 	// another acquire() was opening or probing) for `waited` in all; called
 	// once it ends, successfully or not.
 	virtual void on_acquire_wait(std::chrono::milliseconds waited) { (void)waited; }
+	// A chase from a connection to `server` decided what became of one URI
+	// of a referral or continuation reference (client_options::referrals),
+	// as it went: each URI chased_search::referrals lists, and those beyond
+	// referral_policy::max_attempts. Not called for the references left
+	// unexamined, or not followed (follow_references off): those are only
+	// counted (chased_search::unlisted).
+	virtual void on_referral(const url &server, const referral_attempt &attempt)
+	{
+		(void)server;
+		(void)attempt;
+	}
+};
+
+// A referred server a chase would contact (referral_options::authorize).
+struct referral_hop
+{
+	url target{};// the URL as the server sent it (its scheme, host and port name the server)
+	std::size_t depth = 1;// 1: returned by the pooled connection's server
+	url origin{};// the pooled connection's server (lease::server())
+};
+
+// How a referred server is contacted.
+enum class referral_binding : std::uint8_t {
+	refuse,// not at all: the URI is skipped (referral_outcome::skipped_policy)
+	anonymous,// connected, not bound
+	same_setup,// connected and set up with client_options::setup: the client's credentials
+};
+
+// Decides for each referred server. Called on the client's executor; an
+// exception it throws fails the operation.
+using referral_authorizer = std::function<referral_binding(const referral_hop &hop)>;
+
+// An authorizer giving same_setup to the hosts of `domains` and refusing
+// the others, by make_same_policy_connector's allow-list rules
+// (referral_chase.hpp): a name matches an entry equal to it or of which it
+// is a subdomain, compared in ASCII form (IDNA); an IP address only the
+// same address; the port must be the scheme's default or the pooled
+// connection's server's, unless the entry names it (`example.org:1389`,
+// which allows it on the subdomains too; `[::1]:1389`). Empty: refuses
+// everything.
+[[nodiscard]] auto same_setup_for_domains(std::vector<std::string> domains) -> referral_authorizer;
+
+// Referral chasing by the read forwarders (see "Referrals" in the header
+// comment). The default chases nothing.
+struct referral_options
+{
+	// Chase referral results (RFC 4511 section 4.1.10) of search() and
+	// compare().
+	bool follow_referrals = false;
+	// Follow the continuation references (section 4.5.3) of search().
+	bool follow_references = false;
+	// Which servers to contact, and how to bind; empty: none.
+	referral_authorizer authorize{};
+	// Depth, connector calls and attempts listed, per chase.
+	referral_policy limits{};
 };
 
 struct client_options
@@ -307,6 +407,8 @@ struct client_options
 	std::chrono::milliseconds failback_after{ default_failback_after };
 	// Not owned; must outlive the client, or its close(). Null: none.
 	client_observer *observer = nullptr;
+	// Off by default: see "Referrals" in the header comment.
+	referral_options referrals{};
 };
 
 // How acquire() picks the connection.
@@ -452,6 +554,21 @@ class client
 	  -> boost::capy::task<result<ldap::search_stream>>;
 	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
 	auto who_am_i(extended_controls controls = {}) -> boost::capy::task<result<std::string>>;
+	//
+	// search() and compare() chase referrals as client_options::referrals
+	// says (see "Referrals" in the header comment); search_stream() and
+	// who_am_i() never do.
+
+	// search() and compare() with what the chase did: as ldap::chase_search
+	// and ldap::chase_compare (referral_chase.hpp) on a shared lease, with
+	// client_options::referrals' switches, authorize and limits, and the
+	// read forwarders' retry. With follow_references off, the references
+	// received are counted in `unlisted` and clear `complete`; with
+	// follow_referrals off, a referral result fails the call
+	// (errc::referral) as it does search().
+	auto chase_search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
+	  -> boost::capy::task<result<chased_search>>;
+	auto chase_compare(compare_params request) -> boost::capy::task<result<chased_compare>>;
 
 	// Connections in the pool, open or retired and waiting for their last
 	// lease to return (not those still being opened). For tests and

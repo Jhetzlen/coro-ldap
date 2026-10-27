@@ -446,6 +446,16 @@ auto client::who_am_i(extended_controls controls) -> result<std::string>
 	return core_->io.run([&] { return core_->pool->who_am_i(std::move(controls)); });
 }
 
+auto client::chase_search(search_params request, std::pmr::memory_resource *mr) -> result<chased_search>
+{
+	return core_->io.run([&] { return core_->pool->chase_search(std::move(request), mr); });
+}
+
+auto client::chase_compare(compare_params request) -> result<chased_compare>
+{
+	return core_->io.run([&] { return core_->pool->chase_compare(std::move(request)); });
+}
+
 auto client::connections() const -> std::size_t
 {
 	if (core_->io.on_this_thread()) {

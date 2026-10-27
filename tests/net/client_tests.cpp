@@ -28,6 +28,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <variant>
@@ -173,6 +174,30 @@ struct recorder final : ldap::client_observer
 		events.push_back("probe " + text(server) + (outcome ? " ok" : " failed"));
 	}
 	void on_acquire_wait(milliseconds waited) override { waits.push_back(waited); }
+	void on_referral(const ldap::url &server, const ldap::referral_attempt &attempt) override
+	{
+		events.push_back(
+		  "referral " + text(server) + " " + attempt.uri + " " + std::string(outcome_name(attempt.outcome)));
+	}
+
+	static auto outcome_name(ldap::referral_outcome o) -> std::string_view
+	{
+		switch (o) {
+		case ldap::referral_outcome::followed:
+			return "followed";
+		case ldap::referral_outcome::skipped_policy:
+			return "skipped_policy";
+		case ldap::referral_outcome::skipped_loop:
+			return "skipped_loop";
+		case ldap::referral_outcome::limit_reached:
+			return "limit_reached";
+		case ldap::referral_outcome::unparseable:
+			return "unparseable";
+		case ldap::referral_outcome::failed:
+			return "failed";
+		}
+		return "?";
+	}
 };
 
 auto admin_setup() -> ldap::session_setup
@@ -2046,4 +2071,324 @@ TEST_CASE("client: when read forwarders do not retry", "[net][client][retry]")
 		REQUIRE(mine.has_value());
 		CHECK(s.accepted() == 1);
 	}
+}
+
+// ---------------------------------------------------------------- referrals
+
+namespace {
+
+// `srv`'s URL with `dn`, as a referral names it.
+auto ref_to(const ldap_server &srv, std::string_view dn) -> std::pmr::string
+{
+	return std::pmr::string(text(srv.url()) + "/" + std::string(dn));
+}
+
+// The allow-list entry for `srv` (its port is not the default one).
+auto domain_of(const ldap_server &srv) -> std::string
+{
+	return "127.0.0.1:" + std::to_string(srv.url().port_or_default());
+}
+
+auto search_referral(std::int32_t id, const std::pmr::string &uri) -> ldap::message
+{
+	return ldap::message{ id, ldap::search_result_done{ ldap::ldap_result{ 10, "", "", { uri } } } };
+}
+
+auto compare_referral(std::int32_t id, const std::pmr::string &uri) -> ldap::message
+{
+	return ldap::message{ id, ldap::compare_response{ ldap::ldap_result{ 10, "", "", { uri } } } };
+}
+
+constexpr std::string_view b_dn = "uid=jdoe,ou=b,dc=example,dc=org";
+
+}// namespace
+
+TEST_CASE("client: referrals are not chased by default", "[net][client][referral]")
+{
+	pool_fixture f;
+	auto &b = f.server({});
+	auto &a = f.server({ { answer({ bind_resp(1) }),
+	  answer({ search_referral(2, ref_to(b, "ou=b,dc=example,dc=org")) }),
+	  answer({ entry_msg(3, "uid=jdoe,ou=people,dc=example,dc=org", "John"),
+		ref_msg(3, { ref_to(b, "ou=b,dc=example,dc=org") }),
+		done_msg(3) }),
+	  answer({ entry_msg(4, "uid=jdoe,ou=people,dc=example,dc=org", "John"),
+		ref_msg(4, { ref_to(b, "ou=b,dc=example,dc=org") }),
+		done_msg(4) }) } });
+	// An authorizer alone does not turn chasing on.
+	f.make({ .servers = { a.url() },
+	  .setup = admin_setup(),
+	  .observer = &f.obs,
+	  .referrals = { .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+
+	auto referral = finish(f.ioc, f.pool->search(people_search()));
+	REQUIRE_FALSE(referral.has_value());
+	CHECK(referral.error().code == ldap::errc::referral);
+	REQUIRE(referral.error().referrals.size() == 1);
+
+	auto refs = finish(f.ioc, f.pool->search(people_search()));
+	REQUIRE(refs.has_value());
+	CHECK(refs->size() == 1);// the reference is dropped, as connection::search() does
+
+	// chase_search() says so.
+	auto chased = finish(f.ioc, f.pool->chase_search(people_search()));
+	REQUIRE(chased.has_value());
+	CHECK(chased->entries.size() == 1);
+	CHECK_FALSE(chased->complete);
+	CHECK(chased->unlisted == 1);
+	CHECK(chased->referrals.empty());
+
+	CHECK(b.accepted() == 0);
+	CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(a.url()) + " ok" });
+}
+
+TEST_CASE("client: following referral results", "[net][client][referral]")
+{
+	SECTION("search(): the referred server is bound with the client's setup")
+	{
+		pool_fixture f;
+		auto &b = f.server({ { answer({ bind_resp(1) }), answer({ entry_msg(2, b_dn, "B"), done_msg(2) }) } });
+		const auto uri = ref_to(b, "ou=b,dc=example,dc=org");
+		auto &a = f.server({ { answer({ bind_resp(1) }), answer({ search_referral(2, uri) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .observer = &f.obs,
+		  .referrals = { .follow_referrals = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+		auto r = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE(r.has_value());
+		REQUIRE(r->size() == 1);
+		CHECK(r->front() == expected_entry(b_dn, "B"));
+		REQUIRE(b.accepted() == 1);
+		REQUIRE(b.log(0).received.size() == 2);
+		const auto &bind = std::get<ldap::bind_request>(b.log(0).received[0].op);
+		CHECK(bind.name == "cn=admin,dc=example,dc=org");
+		const auto &sent = std::get<ldap::search_request>(b.log(0).received[1].op);
+		CHECK(sent.base_object == "ou=b,dc=example,dc=org");
+		CHECK(sent.filter == people_search().filter);
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(a.url()) + " ok",
+				"referral " + text(a.url()) + " " + std::string(uri) + " followed" });
+		CHECK(f.pool->connections() == 1);// the referred connection is not pooled
+	}
+	SECTION("compare(): anonymous")
+	{
+		pool_fixture f;
+		auto &b = f.server({ { answer({ compare_msg(1, 6) }) } });
+		const auto uri = ref_to(b, "uid=jdoe,ou=b,dc=example,dc=org");
+		auto &a = f.server({ { answer({ bind_resp(1) }), answer({ compare_referral(2, uri) }) } });
+		std::vector<ldap::referral_hop> asked;
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .follow_referrals = true, .authorize = [&asked](const ldap::referral_hop &hop) {
+							asked.push_back(hop);
+							return ldap::referral_binding::anonymous;
+						} } });
+		auto r = finish(f.ioc, f.pool->chase_compare(jdoe_compare()));
+		REQUIRE(r.has_value());
+		CHECK(r->value);
+		REQUIRE(r->referrals.size() == 1);
+		CHECK(r->referrals[0].outcome == ldap::referral_outcome::followed);
+		REQUIRE(asked.size() == 1);
+		CHECK(text(asked[0].origin) == text(a.url()));
+		CHECK(asked[0].depth == 1);
+		CHECK(asked[0].target.host() == "127.0.0.1");
+		REQUIRE(b.log(0).received.size() == 1);// no bind
+		CHECK(std::get<ldap::compare_request>(b.log(0).received[0].op).entry == "uid=jdoe,ou=b,dc=example,dc=org");
+	}
+	SECTION("refused: the referral is the error")
+	{
+		pool_fixture f;
+		auto &b = f.server({});
+		auto &a = f.server({ { answer({ bind_resp(1) }), answer({ compare_referral(2, ref_to(b, "ou=b")) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .observer = &f.obs,
+		  .referrals = { .follow_referrals = true, .authorize = ldap::same_setup_for_domains({ "example.org" }) } });
+		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::referral);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("1 skipped_policy"));
+		CHECK(b.accepted() == 0);
+		CHECK(f.obs.events.back()
+			  == "referral " + text(a.url()) + " " + std::string(ref_to(b, "ou=b")) + " skipped_policy");
+	}
+	SECTION("without an authorizer nothing is contacted")
+	{
+		pool_fixture f;
+		auto &b = f.server({});
+		auto &a = f.server({ { answer({ bind_resp(1) }), answer({ compare_referral(2, ref_to(b, "ou=b")) }) } });
+		f.make({ .servers = { a.url() }, .setup = admin_setup(), .referrals = { .follow_referrals = true } });
+		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::referral);
+		CHECK(b.accepted() == 0);
+	}
+	SECTION("ldapi:// is never asked about")
+	{
+		pool_fixture f;
+		const std::pmr::string local = "ldapi://%2Fvar%2Frun%2Fslapd.sock/ou=b";
+		auto &a = f.server({ { answer({ bind_resp(1) }), answer({ compare_referral(2, local) }) } });
+		std::size_t asked = 0;
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .follow_referrals = true, .authorize = [&asked](const ldap::referral_hop &) {
+							++asked;
+							return ldap::referral_binding::same_setup;
+						} } });
+		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::referral);
+		CHECK(asked == 0);
+	}
+}
+
+TEST_CASE("client: following continuation references", "[net][client][referral]")
+{
+	SECTION("followed: every entry, complete")
+	{
+		pool_fixture f;
+		auto &b = f.server({ { answer({ bind_resp(1) }), answer({ entry_msg(2, b_dn, "B"), done_msg(2) }) } });
+		const auto uri = ref_to(b, "ou=b,dc=example,dc=org");
+		auto &a = f.server({ { answer({ bind_resp(1) }),
+		  answer(
+			{ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "John"), ref_msg(2, { uri }), done_msg(2) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .follow_references = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+		auto r = finish(f.ioc, f.pool->chase_search(people_search()));
+		REQUIRE(r.has_value());
+		CHECK(r->complete);
+		REQUIRE(r->entries.size() == 2);
+		CHECK(r->entries[1] == expected_entry(b_dn, "B"));
+		REQUIRE(r->referrals.size() == 1);
+		CHECK(r->referrals[0].kind == ldap::reference_kind::continuation_reference);
+	}
+	SECTION("references only: a referral result stays an error")
+	{
+		pool_fixture f;
+		auto &b = f.server({});
+		auto &a = f.server(
+		  { { answer({ bind_resp(1) }), answer({ search_referral(2, ref_to(b, "ou=b,dc=example,dc=org")) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .follow_references = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+		auto r = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::referral);
+		CHECK(b.accepted() == 0);
+	}
+	SECTION("referral results only: a reference is counted, not followed")
+	{
+		pool_fixture f;
+		auto &b = f.server({});
+		auto &a = f.server({ { answer({ bind_resp(1) }),
+		  answer({ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "John"),
+			ref_msg(2, { ref_to(b, "ou=b,dc=example,dc=org"), ref_to(b, "ou=c,dc=example,dc=org") }),
+			done_msg(2) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .follow_referrals = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+		auto r = finish(f.ioc, f.pool->chase_search(people_search()));
+		REQUIRE(r.has_value());
+		CHECK(r->entries.size() == 1);
+		CHECK_FALSE(r->complete);
+		CHECK(r->unlisted == 2);
+		CHECK(b.accepted() == 0);
+	}
+	SECTION("not followed: search() still returns the entries it got")
+	{
+		pool_fixture f;
+		auto &a = f.server({ { answer({ bind_resp(1) }),
+		  answer({ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "John"),
+			ref_msg(2, { "ldap://elsewhere.example/ou=b,dc=example,dc=org" }),
+			done_msg(2) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .observer = &f.obs,
+		  .referrals = { .follow_references = true, .authorize = ldap::same_setup_for_domains({ "example.org" }) } });
+		auto r = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE(r.has_value());
+		CHECK(r->size() == 1);
+		CHECK(f.obs.events.back()
+			  == "referral " + text(a.url()) + " ldap://elsewhere.example/ou=b,dc=example,dc=org skipped_policy");
+	}
+	SECTION("the limits apply")
+	{
+		pool_fixture f;
+		auto &b = f.server({});
+		auto &a = f.server({ { answer({ bind_resp(1) }),
+		  answer({ ref_msg(2, { ref_to(b, "ou=b,dc=example,dc=org") }), done_msg(2) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .follow_references = true,
+			.authorize = ldap::same_setup_for_domains({ domain_of(b) }),
+			.limits = { .max_hops = 0 } } });
+		auto r = finish(f.ioc, f.pool->chase_search(people_search()));
+		REQUIRE(r.has_value());
+		CHECK_FALSE(r->complete);
+		REQUIRE(r->referrals.size() == 1);
+		CHECK(r->referrals[0].outcome == ldap::referral_outcome::limit_reached);
+		CHECK(b.accepted() == 0);
+	}
+}
+
+TEST_CASE("client: referrals and the read forwarders' retry", "[net][client][referral][retry]")
+{
+	SECTION("the pooled connection's own failure is retried, the chase with it")
+	{
+		pool_fixture f;
+		auto &b = f.server({ { answer({ bind_resp(1) }), answer({ entry_msg(2, b_dn, "B"), done_msg(2) }) } });
+		const auto uri = ref_to(b, "ou=b,dc=example,dc=org");
+		auto &a = f.server({ lost_after_bind(), { answer({ bind_resp(1) }), answer({ search_referral(2, uri) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .follow_referrals = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+		auto r = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE(r.has_value());
+		REQUIRE(r->size() == 1);
+		CHECK(r->front() == expected_entry(b_dn, "B"));
+		CHECK(a.accepted() == 2);
+	}
+	SECTION("a referred server's failure is not")
+	{
+		pool_fixture f;
+		auto &b = f.server({ { answer({ bind_resp(1) }), answer({ done_msg(2, 51, "", "too many operations") }) } });
+		auto &a = f.server(
+		  { { answer({ bind_resp(1) }), answer({ search_referral(2, ref_to(b, "ou=b,dc=example,dc=org")) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .observer = &f.obs,
+		  .referrals = { .follow_referrals = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+		auto r = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::busy_or_unavailable);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("1 failed"));
+		CHECK(a.accepted() == 1);
+		CHECK(b.accepted() == 1);
+		CHECK(f.pool->connections() == 1);// not retired: it answered
+		CHECK(f.obs.events.front() == "connect " + text(a.url()) + " ok");
+		CHECK(std::ranges::none_of(f.obs.events, [](const std::string &e) { return e.starts_with("disconnect"); }));
+	}
+}
+
+TEST_CASE("client: same_setup_for_domains", "[net][client][referral]")
+{
+	const auto hop = [](std::string_view target, std::string_view origin) {
+		auto t = ldap::url::parse(target);
+		auto o = ldap::url::parse(origin);
+		REQUIRE(t.has_value());
+		REQUIRE(o.has_value());
+		return ldap::referral_hop{ .target = *t, .origin = *o };
+	};
+	const auto authorize = ldap::same_setup_for_domains({ "example.org", "10.0.0.1:1389" });
+	const auto same = ldap::referral_binding::same_setup;
+	const auto refuse = ldap::referral_binding::refuse;
+	CHECK(authorize(hop("ldap://example.org/ou=b", "ldap://a.example.org")) == same);
+	CHECK(authorize(hop("ldaps://ldap.eu.example.org/ou=b", "ldap://a.example.org")) == same);
+	CHECK(authorize(hop("ldap://badexample.org/ou=b", "ldap://a.example.org")) == refuse);
+	CHECK(authorize(hop("ldap://b.example.org:1389/ou=b", "ldap://a.example.org")) == refuse);
+	CHECK(authorize(hop("ldap://b.example.org:1389/ou=b", "ldap://a.example.org:1389")) == same);// the origin's port
+	CHECK(authorize(hop("ldap://10.0.0.1:1389/ou=b", "ldap://a.example.org")) == same);
+	CHECK(authorize(hop("ldap://10.0.0.2/ou=b", "ldap://a.example.org")) == refuse);
+	CHECK(ldap::same_setup_for_domains({})(hop("ldap://example.org/ou=b", "ldap://a.example.org")) == refuse);
 }

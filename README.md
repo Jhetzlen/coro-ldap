@@ -46,8 +46,9 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
 - A connection pool, `ldap::client`: several servers with failover and
   jittered backoff, connections opened lazily and shared by leases (one
   multiplexed connection by default) or held exclusively, a bind (or any
-  setup) replayed on every new connection, an idle check, and observer
-  hooks
+  setup) replayed on every new connection, an idle check, observer
+  hooks, and opt-in referral chasing for its reads (an authorize callback
+  decides which servers get which binding)
 - Transactions (RFC 5805): group updates so they apply all together or not
   at all, with `ldap::transaction` (commit, abort, aborted on destruction)
 - Controls: paged results, server-side sort, virtual list view,

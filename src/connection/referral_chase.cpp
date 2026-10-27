@@ -7,6 +7,7 @@
 #include "../format_util.hpp"
 #include "../net/deadline.hpp"
 #include "../net/host_name.hpp"
+#include "referral_chase_impl.hpp"
 
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/this_coro.hpp>
@@ -159,6 +160,7 @@ namespace {
 		referral_connector connector;
 		referral_policy policy;
 		std::optional<clock::time_point> deadline;
+		detail::chase_settings settings{};
 		std::vector<referral_attempt> attempts{};
 		// URIs considered beyond policy.max_attempts, or not examined.
 		std::size_t unlisted = 0;
@@ -171,15 +173,22 @@ namespace {
 		  referral_outcome outcome,
 		  std::optional<error> failure = std::nullopt)
 		{
-			if (attempts.size() >= policy.max_attempts) {
+			const bool listed = attempts.size() < policy.max_attempts;
+			if (!listed) {
 				++unlisted;
-				return;
+				if (!settings.on_attempt) {
+					return;
+				}
 			}
-			attempts.push_back({ .uri = std::string(uri),
-			  .kind = kind,
-			  .depth = depth,
-			  .outcome = outcome,
-			  .failure = std::move(failure) });
+			referral_attempt a{
+				.uri = std::string(uri), .kind = kind, .depth = depth, .outcome = outcome, .failure = std::move(failure)
+			};
+			if (settings.on_attempt) {
+				settings.on_attempt(a);
+			}
+			if (listed) {
+				attempts.push_back(std::move(a));
+			}
 		}
 
 		[[nodiscard]] auto visited_before(const visit_key &k) const -> bool
@@ -350,7 +359,7 @@ namespace {
 			if (stop.stop_requested()) {
 				co_return std::unexpected(std::move(v.error()));
 			}
-			if (v.error().code != errc::referral) {
+			if (v.error().code != errc::referral || !st.settings.referrals) {
 				out.last_failure = v.error();
 				st.record(uri, kind, depth, referral_outcome::failed, std::move(v.error()));
 				continue;
@@ -377,12 +386,16 @@ namespace {
 	// The chase's state for `request` on `origin`: its budget, and the
 	// origin's own request as visited when its name is a URL.
 	template<class Params>
-	auto start(connection &origin, const Params &request, referral_connector &&connector, referral_policy policy)
-	  -> chase_state
+	auto start(connection &origin,
+	  const Params &request,
+	  referral_connector &&connector,
+	  referral_policy policy,
+	  detail::chase_settings &&settings) -> chase_state
 	{
 		chase_state st{ .connector = std::move(connector),
 			.policy = policy,
-			.deadline = net::detail::deadline_after(request.timeout) };
+			.deadline = net::detail::deadline_after(request.timeout),
+			.settings = std::move(settings) };
 		if (auto u = url::parse(origin.name())) {
 			st.visited.push_back(request_key(*u, request));
 		}
@@ -450,104 +463,172 @@ namespace {
 
 }// namespace
 
+namespace {
+
+	using search_reached = reached<search_params, search_run>;
+
+	// The search on the origin, and the chase of its referral result: what
+	// was reached, or the failure (origin_failed: the origin's own).
+	auto first_search(connection &origin, chase_state &st, search_params request, const search_op &op)
+	  -> capy::task<detail::chase_result<search_reached>>
+	{
+		auto r = co_await op(origin, request);
+		if (r) {
+			co_return { .value = search_reached{ .request = std::move(request), .value = std::move(*r) } };
+		}
+		if (r.error().code != errc::referral || !st.settings.referrals) {
+			co_return { .value = std::unexpected(std::move(r.error())), .origin_failed = true };
+		}
+		auto f = co_await follow<search_params, search_run>(
+		  st, std::span<const std::pmr::string>(r.error().referrals), reference_kind::referral, 1, request, op);
+		if (!f) {
+			co_return { .value = std::unexpected(std::move(f.error())) };
+		}
+		if (!f->target) {
+			co_return { .value = std::unexpected(
+						  with_attempts(f->last_failure ? std::move(*f->last_failure) : std::move(r.error()), st)) };
+		}
+		co_return { .value = std::move(*f->target) };
+	}
+
+	// The continuation references waiting, and the result being built.
+	struct reference_queue
+	{
+		chase_state *st;
+		chased_search *out;
+		std::deque<pending_reference> queue{};
+
+		// Takes the entries of `r`, and queues its references (or, when they
+		// are not followed, counts them).
+		void take(search_reached &r)
+		{
+			for (auto &e : r.value.entries) {
+				out->entries.push_back(std::move(e));
+			}
+			if (r.value.references.empty()) {
+				return;
+			}
+			if (!st->settings.references) {
+				for (const auto &uris : r.value.references) {
+					st->unlisted += uris.size();
+				}
+				out->complete = false;
+				return;
+			}
+			const auto shared = std::make_shared<const search_params>(std::move(r.request));
+			for (auto &uris : r.value.references) {
+				queue.push_back({ .uris = std::move(uris), .depth = r.depth + 1, .request = shared });
+			}
+		}
+
+		// The chase stops: what is left is counted, not examined.
+		void drop_rest()
+		{
+			for (const auto &ref : queue) {
+				st->unlisted += ref.uris.size();
+			}
+			queue.clear();
+			out->complete = false;
+		}
+	};
+
+}// namespace
+
+namespace detail {
+
+	auto chase_search(connection &origin,
+	  search_params request,
+	  referral_connector connector,
+	  referral_policy policy,
+	  std::pmr::memory_resource *mr,
+	  chase_settings settings) -> capy::task<chase_result<chased_search>>
+	{
+		chase_state st = start(origin, request, std::move(connector), policy, std::move(settings));
+		const search_op op{ mr };
+
+		auto first = co_await first_search(origin, st, std::move(request), op);
+		if (!first.value) {
+			co_return { .value = std::unexpected(std::move(first.value.error())),
+				.origin_failed = first.origin_failed };
+		}
+		chased_search out{ .entries = std::pmr::vector<entry>(mr) };
+		reference_queue refs{ .st = &st, .out = &out };
+		refs.take(*first.value);
+		while (!refs.queue.empty()) {
+			if (st.exhausted()) {
+				refs.drop_rest();
+				break;
+			}
+			pending_reference ref = std::move(refs.queue.front());
+			refs.queue.pop_front();
+			auto f = co_await follow<search_params, search_run>(st,
+			  std::span<const std::pmr::string>(ref.uris),
+			  reference_kind::continuation_reference,
+			  ref.depth,
+			  *ref.request,
+			  op);
+			if (!f) {
+				co_return { .value = std::unexpected(std::move(f.error())) };
+			}
+			if (f->target) {
+				refs.take(*f->target);
+			} else if (!f->loop) {
+				out.complete = false;
+			}
+		}
+		out.referrals = std::move(st.attempts);
+		out.unlisted = st.unlisted;
+		co_return { .value = std::move(out) };
+	}
+
+	auto chase_compare(connection &origin,
+	  compare_params request,
+	  referral_connector connector,
+	  referral_policy policy,
+	  chase_settings settings) -> capy::task<chase_result<chased_compare>>
+	{
+		chase_state st = start(origin, request, std::move(connector), policy, std::move(settings));
+		auto r = co_await origin.compare(request);
+		if (r) {
+			co_return { .value = chased_compare{ .value = *r } };
+		}
+		if (r.error().code != errc::referral || !st.settings.referrals) {
+			co_return { .value = std::unexpected(std::move(r.error())), .origin_failed = true };
+		}
+		auto f = co_await follow<compare_params, bool>(st,
+		  std::span<const std::pmr::string>(r.error().referrals),
+		  reference_kind::referral,
+		  1,
+		  request,
+		  compare_op{});
+		if (!f) {
+			co_return { .value = std::unexpected(std::move(f.error())) };
+		}
+		if (!f->target) {
+			co_return { .value = std::unexpected(
+						  with_attempts(f->last_failure ? std::move(*f->last_failure) : std::move(r.error()), st)) };
+		}
+		co_return { .value = chased_compare{
+					  .value = f->target->value, .referrals = std::move(st.attempts), .unlisted = st.unlisted } };
+	}
+
+}// namespace detail
+
 auto chase_search(connection &origin,
   search_params request,
   referral_connector connector,
   referral_policy policy,
   std::pmr::memory_resource *mr) -> capy::task<result<chased_search>>
 {
-	chase_state st = start(origin, request, std::move(connector), policy);
-	const search_op op{ mr };
-
-	std::optional<reached<search_params, search_run>> first;
-	{
-		auto r = co_await op(origin, request);
-		if (r) {
-			first.emplace(reached<search_params, search_run>{ .request = std::move(request), .value = std::move(*r) });
-		} else if (r.error().code != errc::referral) {
-			co_return std::unexpected(std::move(r.error()));
-		} else {
-			auto f = co_await follow<search_params, search_run>(
-			  st, std::span<const std::pmr::string>(r.error().referrals), reference_kind::referral, 1, request, op);
-			if (!f) {
-				co_return std::unexpected(std::move(f.error()));
-			}
-			if (!f->target) {
-				co_return std::unexpected(
-				  with_attempts(f->last_failure ? std::move(*f->last_failure) : std::move(r.error()), st));
-			}
-			first = std::move(f->target);
-		}
-	}
-
-	chased_search out{ .entries = std::pmr::vector<entry>(mr) };
-	std::deque<pending_reference> queue;
-	const auto take = [&out, &queue](reached<search_params, search_run> &r) {
-		for (auto &e : r.value.entries) {
-			out.entries.push_back(std::move(e));
-		}
-		if (r.value.references.empty()) {
-			return;
-		}
-		const auto shared = std::make_shared<const search_params>(std::move(r.request));
-		for (auto &uris : r.value.references) {
-			queue.push_back({ .uris = std::move(uris), .depth = r.depth + 1, .request = shared });
-		}
-	};
-	take(*first);
-	while (!queue.empty()) {
-		if (st.exhausted()) {
-			// The chase stops: what is left is counted, not examined.
-			for (const auto &ref : queue) {
-				st.unlisted += ref.uris.size();
-			}
-			queue.clear();
-			out.complete = false;
-			break;
-		}
-		pending_reference ref = std::move(queue.front());
-		queue.pop_front();
-		auto f = co_await follow<search_params, search_run>(st,
-		  std::span<const std::pmr::string>(ref.uris),
-		  reference_kind::continuation_reference,
-		  ref.depth,
-		  *ref.request,
-		  op);
-		if (!f) {
-			co_return std::unexpected(std::move(f.error()));
-		}
-		if (f->target) {
-			take(*f->target);
-		} else if (!f->loop) {
-			out.complete = false;
-		}
-	}
-	out.referrals = std::move(st.attempts);
-	out.unlisted = st.unlisted;
-	co_return out;
+	auto r = co_await detail::chase_search(origin, std::move(request), std::move(connector), policy, mr, {});
+	co_return std::move(r.value);
 }
 
 auto chase_compare(connection &origin, compare_params request, referral_connector connector, referral_policy policy)
   -> capy::task<result<chased_compare>>
 {
-	chase_state st = start(origin, request, std::move(connector), policy);
-	auto r = co_await origin.compare(request);
-	if (r) {
-		co_return chased_compare{ .value = *r };
-	}
-	if (r.error().code != errc::referral) {
-		co_return std::unexpected(std::move(r.error()));
-	}
-	auto f = co_await follow<compare_params, bool>(
-	  st, std::span<const std::pmr::string>(r.error().referrals), reference_kind::referral, 1, request, compare_op{});
-	if (!f) {
-		co_return std::unexpected(std::move(f.error()));
-	}
-	if (!f->target) {
-		co_return std::unexpected(
-		  with_attempts(f->last_failure ? std::move(*f->last_failure) : std::move(r.error()), st));
-	}
-	co_return chased_compare{ .value = f->target->value, .referrals = std::move(st.attempts), .unlisted = st.unlisted };
+	auto r = co_await detail::chase_compare(origin, std::move(request), std::move(connector), policy, {});
+	co_return std::move(r.value);
 }
 
 }// namespace jhetz::ldap

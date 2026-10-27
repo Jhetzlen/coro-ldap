@@ -3,12 +3,14 @@
 #include "jhetz/ldap/referral_chase.hpp"
 
 #include "../net/host_name.hpp"
+#include "referral_chase_impl.hpp"
 
 #include <algorithm>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -130,6 +132,23 @@ namespace {
 				   && name[name.size() - suffix->size() - 1] == '.');
 	}
 
+	// `target`'s host in ASCII form, if it may be contacted at all: not
+	// ldapi://, a host with only the bytes a host name has (no IPv6 zone),
+	// and one that converts.
+	auto usable_host(const url &target) -> std::optional<std::string>
+	{
+		const std::string_view host = target.host();
+		if (target.scheme() == url_scheme::ldapi || host.empty()
+			|| (target.host_is_ipv6() ? !plausible_ipv6(host) : !plausible_name(host))) {
+			return std::nullopt;
+		}
+		auto name = net::detail::ascii_host_name(host);
+		if (!name || name->empty()) {
+			return std::nullopt;
+		}
+		return name;
+	}
+
 	// `target`'s server (a URL's host, decoded, and its port) is in the
 	// allow-list. Its port must be the scheme's default or the origin's,
 	// unless an entry matching the host names it.
@@ -137,15 +156,11 @@ namespace {
 	  std::span<const std::string> allowed,
 	  std::optional<std::uint16_t> origin_port) -> bool
 	{
-		const std::string_view host = target.host();
-		const bool ip = target.host_is_ipv6() || is_ipv4_literal(host);
-		if (target.host_is_ipv6() ? !plausible_ipv6(host) : !plausible_name(host)) {
+		const auto name = usable_host(target);
+		if (!name) {
 			return false;
 		}
-		const auto name = net::detail::ascii_host_name(host);
-		if (!name || name->empty()) {
-			return false;
-		}
+		const bool ip = target.host_is_ipv6() || is_ipv4_literal(target.host());
 		const std::uint16_t port = target.port_or_default();
 		const bool usual_port = port == default_port(target.scheme()) || port == origin_port;
 		return std::ranges::any_of(allowed, [&](const std::string &text) {
@@ -174,11 +189,34 @@ namespace {
 		return std::move(*u);
 	}
 
+	// The connect plan for `target`, without the allow-list: nullopt when
+	// its host cannot be used (usable_host).
+	auto connect_plan(const url &target, bool origin_tls, const connection_options &options)
+	  -> std::optional<detail::referral_connect_plan>
+	{
+		if (!usable_host(target)) {
+			return std::nullopt;
+		}
+		auto server = connect_url(target);
+		if (!server) {
+			return std::nullopt;
+		}
+		detail::referral_connect_plan plan{ .server = std::move(*server), .options = options };
+		plan.options.tls.server_name.clear();
+		if (target.scheme() == url_scheme::ldaps) {
+			plan.options.start_tls = false;
+		} else if (origin_tls) {
+			plan.options.start_tls = true;
+		}
+		return plan;
+	}
+
 	struct pooled
 	{
 		url_scheme scheme;
 		std::string host;
 		std::uint16_t port;
+		std::size_t identity;
 		std::unique_ptr<connection> conn;
 	};
 
@@ -186,42 +224,50 @@ namespace {
 	{
 		corosio::io_context *ioc;
 		bool origin_tls;
-		std::optional<std::uint16_t> origin_port;
 		connection_options options;
-		std::vector<std::string> allowed;
-		session_setup setup;
+		detail::referral_chooser choose;
+		std::pmr::memory_resource *mr;
 		std::vector<pooled> connections{};
 	};
 
-	auto connect_to(std::shared_ptr<connector_state> st, url target) -> capy::task<result<connection *>>
+	auto connect_to(std::shared_ptr<connector_state> st, url target, std::size_t depth)
+	  -> capy::task<result<connection *>>
 	{
-		auto plan = detail::same_policy_plan(target, st->origin_tls, st->options, st->allowed, st->origin_port);
+		auto plan = connect_plan(target, st->origin_tls, st->options);
 		if (!plan) {
 			co_return nullptr;
 		}
+		auto chosen = st->choose(target, depth);
+		if (!chosen) {
+			co_return nullptr;
+		}
 		const url &server = plan->server;
-		// The plan's host converts: the allow-list check did.
+		// The plan's host converts: usable_host checked.
 		const std::string host = net::detail::ascii_host_name(server.host()).value_or(std::string(server.host()));
-		const auto same = [&server, &host](const pooled &p) {
-			return p.scheme == server.scheme() && p.host == host && p.port == server.port_or_default();
+		const auto same = [&server, &host, &chosen](const pooled &p) {
+			return p.scheme == server.scheme() && p.host == host && p.port == server.port_or_default()
+				   && p.identity == chosen->identity;
 		};
 		std::erase_if(st->connections, [](const pooled &p) { return !p.conn->is_open(); });
 		if (const auto it = std::ranges::find_if(st->connections, same); it != st->connections.end()) {
 			co_return it->conn.get();
 		}
-		auto c = co_await ldap::connect(*st->ioc, server, std::move(plan->options));
+		auto c = co_await ldap::connect(*st->ioc, server, std::move(plan->options), st->mr);
 		if (!c) {
 			co_return std::unexpected(std::move(c.error()));
 		}
 		auto conn = std::make_unique<connection>(std::move(*c));
-		if (st->setup) {
-			if (auto s = co_await st->setup(*conn); !s) {
+		if (chosen->setup) {
+			if (auto s = co_await chosen->setup(*conn); !s) {
 				co_return std::unexpected(std::move(s.error()));
 			}
 		}
 		connection *out = conn.get();
-		st->connections.push_back(
-		  { .scheme = server.scheme(), .host = host, .port = server.port_or_default(), .conn = std::move(conn) });
+		st->connections.push_back({ .scheme = server.scheme(),
+		  .host = host,
+		  .port = server.port_or_default(),
+		  .identity = chosen->identity,
+		  .conn = std::move(conn) });
 		co_return out;
 	}
 
@@ -235,22 +281,31 @@ namespace detail {
 	  std::span<const std::string> allowed_host_suffixes,
 	  std::optional<std::uint16_t> origin_port) -> std::optional<referral_connect_plan>
 	{
-		if (target.scheme() == url_scheme::ldapi || target.host().empty()
-			|| !server_allowed(target, allowed_host_suffixes, origin_port)) {
+		if (!server_allowed(target, allowed_host_suffixes, origin_port)) {
 			return std::nullopt;
 		}
-		auto server = connect_url(target);
-		if (!server) {
-			return std::nullopt;
-		}
-		referral_connect_plan plan{ .server = std::move(*server), .options = options };
-		plan.options.tls.server_name.clear();
-		if (target.scheme() == url_scheme::ldaps) {
-			plan.options.start_tls = false;
-		} else if (origin_tls) {
-			plan.options.start_tls = true;
-		}
-		return plan;
+		return connect_plan(target, origin_tls, options);
+	}
+
+	auto referral_server_allowed(const url &target,
+	  std::span<const std::string> allowed,
+	  std::optional<std::uint16_t> origin_port) -> bool
+	{
+		return server_allowed(target, allowed, origin_port);
+	}
+
+	auto make_policy_connector(corosio::io_context &ioc,
+	  bool origin_tls,
+	  connection_options options,
+	  referral_chooser choose,
+	  std::pmr::memory_resource *mr) -> referral_connector
+	{
+		auto st = std::make_shared<connector_state>(connector_state{ .ioc = &ioc,
+		  .origin_tls = origin_tls,
+		  .options = std::move(options),
+		  .choose = std::move(choose),
+		  .mr = mr });
+		return [st = std::move(st)](const url &target, std::size_t depth) { return connect_to(st, target, depth); };
 	}
 
 }// namespace detail
@@ -265,13 +320,15 @@ auto make_same_policy_connector(corosio::io_context &ioc,
 	if (const auto u = url::parse(origin.name()); u && u->scheme() != url_scheme::ldapi) {
 		origin_port = u->port_or_default();
 	}
-	auto st = std::make_shared<connector_state>(connector_state{ .ioc = &ioc,
-	  .origin_tls = origin.is_tls(),
-	  .origin_port = origin_port,
-	  .options = std::move(options),
-	  .allowed = std::move(allowed_host_suffixes),
-	  .setup = std::move(setup) });
-	return [st = std::move(st)](const url &target, std::size_t /*depth*/) { return connect_to(st, target); };
+	auto choose = [allowed = std::move(allowed_host_suffixes), origin_port, setup = std::move(setup)](
+					const url &target, std::size_t /*depth*/) -> std::optional<detail::referral_identity> {
+		if (!server_allowed(target, allowed, origin_port)) {
+			return std::nullopt;
+		}
+		return detail::referral_identity{ .setup = setup };
+	};
+	return detail::make_policy_connector(
+	  ioc, origin.is_tls(), std::move(options), std::move(choose), std::pmr::get_default_resource());
 }
 
 }// namespace jhetz::ldap

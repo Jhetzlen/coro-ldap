@@ -499,3 +499,38 @@ TEST_CASE("sync client: many threads share the pool", "[net][sync][client]")
 	CHECK(pool.connections() >= 1);
 	CHECK(pool.connections() <= max_connections);
 }
+
+TEST_CASE("sync client: chasing referrals", "[net][sync][client][referral]")
+{
+	threaded_script_server b({ { answer({ bind_resp(1) }), answer({ entry_msg(2, jdoe, "B"), done_msg(2) }) },
+	  { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) } });
+	const std::pmr::string search_uri(text(b.url()) + "/ou=b,dc=example,dc=org");
+	const std::pmr::string compare_uri(text(b.url()) + "/" + std::string(jdoe));
+	threaded_script_server a({ { answer({ bind_resp(1) }),
+	  answer({ ref_msg(2, { search_uri }), done_msg(2) }),
+	  answer({ ldap::message{ 3, ldap::compare_response{ ldap::ldap_result{ 10, "", "", { compare_uri } } } } }),
+	  unbind_read() } });
+	{
+		auto options = options_for(a.url());
+		options.referrals = { .follow_referrals = true,
+			.follow_references = true,
+			.authorize = ldap::same_setup_for_domains({ "127.0.0.1:" + std::to_string(b.url().port_or_default()) }) };
+		ldap::sync::client pool(std::move(options));
+		auto found = pool.chase_search(people_search());
+		REQUIRE(found.has_value());
+		CHECK(found->complete);
+		REQUIRE(found->entries.size() == 1);
+		CHECK(found->entries.front() == expected_entry(jdoe, "B"));
+		auto same = pool.chase_compare({ .entry = jdoe_dn, .attribute = "cn", .value = "B" });
+		REQUIRE(same.has_value());
+		CHECK(same->value);
+		REQUIRE(same->referrals.size() == 1);
+		CHECK(same->referrals[0].outcome == ldap::referral_outcome::followed);
+	}
+	a.stop();
+	b.stop();
+	CHECK_THAT(a.log(0).error, IsEmpty());
+	CHECK_THAT(b.log(0).error, IsEmpty());
+	CHECK_THAT(b.log(1).error, IsEmpty());
+	CHECK(b.accepted() == 2);// a connection per chase
+}
