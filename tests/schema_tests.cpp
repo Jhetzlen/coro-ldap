@@ -812,6 +812,44 @@ TEST_CASE("schema: object class SUP, kind, MUST and MAY", "[schema]")
 	CHECK_FALSE(ldap::parse_object_class("( 1.2.5 MUST )").has_value());
 }
 
+TEST_CASE("schema: an oidlist's '$' needs no spaces (RFC 4512 1.4)", "[schema]")
+{
+	// oidlist = oid *( WSP DOLLAR WSP oid ), WSP = 0*SPACE.
+	for (const char *text : { "( 1.1 NAME 'x' SUP (top$2.5.6.6) MUST (sn$cn) MAY (a$b$c) )",
+		   "( 1.1 NAME 'x' SUP ( top $2.5.6.6 ) MUST ( sn $cn ) MAY ( a $b $c ) )",
+		   "( 1.1 NAME 'x' SUP ( top$ 2.5.6.6 ) MUST ( sn$ cn ) MAY ( a$ b$ c ) )",
+		   "( 1.1 NAME 'x' SUP(top $ 2.5.6.6)MUST(sn $ cn)MAY(a $ b$c))" }) {
+		INFO(text);
+		auto c = ldap::parse_object_class(text);
+		REQUIRE(c.has_value());
+		CHECK(c->sup == std::vector<std::string>{ "top", "2.5.6.6" });
+		CHECK(c->must == std::vector<std::string>{ "sn", "cn" });
+		CHECK(c->may == std::vector<std::string>{ "a", "b", "c" });
+	}
+	// In a quoted string, '$' is text.
+	auto a = ldap::parse_attribute_type("( 1.2 NAME ( 'y' 'z' ) DESC 'costs $5 (a$b)' SUP name X-X ( 'p$q' ) )");
+	REQUIRE(a.has_value());
+	CHECK(a->names == std::vector<std::string>{ "y", "z" });
+	CHECK(a->sup == "name");
+	// Outside a list, '$' is no value and no keyword: the definition is
+	// skipped, not cut short.
+	const std::pmr::vector<std::pmr::string> bad{
+		"( 1.3 NAME 'b1' SUP top$person )", "( 1.4 NAME 'b2' MUST $ )", "( 1.5 NAME 'b3' MUST ( sn ) $ )"
+	};
+	const auto s = ldap::server_schema::parse({}, bad);
+	CHECK(s.skipped() == bad.size());
+	CHECK(s.object_class_count() == 0);
+	// A schema with no spaces around '$': validate<T> sees every MUST.
+	const std::pmr::vector<std::pmr::string> classes{ "( 1.9 NAME 'namedThing' SUP (top$base) MUST (sn$cn) )",
+		"( 2.5.6.0 NAME 'top' ABSTRACT MUST objectClass )",
+		"( 1.10 NAME 'base' MUST (description$name) )" };
+	using k = ldap::schema_issue::kind;
+	CHECK(must_issues(ldap::validate<named_thing>(ldap::server_schema::parse(core_types, classes)))
+		  == std::vector<std::pair<k, std::string>>{ { k::must_attribute_not_mapped, "sn" },
+			{ k::must_attribute_not_mapped, "description" },
+			{ k::must_attribute_not_mapped, "name" } });
+}
+
 TEST_CASE("schema: MUST attributes mapped by required members", "[schema][validate]")
 {
 	const auto s = core_schema();

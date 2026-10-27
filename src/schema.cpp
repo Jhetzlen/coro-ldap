@@ -16,12 +16,14 @@ namespace {
 
 	auto is_space(char c) -> bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
-	// RFC 4512 section 4.1 definitions: "(", ")", 'quoted strings' (with
-	// \27 and \5C escapes) and bare words (keywords, OIDs, descriptors,
-	// "noidlen" like 1.2.3{64}).
+	// RFC 4512 section 4.1 definitions: "(", ")", "$", 'quoted strings'
+	// (with \27 and \5C escapes) and bare words (keywords, OIDs,
+	// descriptors, "noidlen" like 1.2.3{64}). "$" ends a word: an oidlist
+	// is oid *( WSP DOLLAR WSP oid ) with WSP = 0*SPACE (section 1.4), so
+	// "(sn$cn)" is two oids.
 	struct token
 	{
-		enum class kind { open, close, quoted, word, end } k;
+		enum class kind { open, close, dollar, quoted, word, end } k;
 		std::string text;
 	};
 
@@ -44,6 +46,9 @@ namespace {
 			}
 			if (c == ')') {
 				return ++pos_, token{ .k = token::kind::close, .text = {} };
+			}
+			if (c == '$') {
+				return ++pos_, token{ .k = token::kind::dollar, .text = {} };
 			}
 			if (c == '\'') {
 				++pos_;
@@ -70,7 +75,8 @@ namespace {
 				return token{ .k = token::kind::quoted, .text = std::move(out) };
 			}
 			const std::size_t start = pos_;
-			while (pos_ < s_.size() && !is_space(s_[pos_]) && s_[pos_] != '(' && s_[pos_] != ')' && s_[pos_] != '\'') {
+			while (pos_ < s_.size() && !is_space(s_[pos_]) && s_[pos_] != '(' && s_[pos_] != ')' && s_[pos_] != '$'
+				   && s_[pos_] != '\'') {
 				++pos_;
 			}
 			return token{ .k = token::kind::word, .text = std::string(s_.substr(start, pos_ - start)) };
@@ -84,7 +90,7 @@ namespace {
 	// A keyword: RFC 4512 keystring (ALPHA *( ALPHA / DIGIT / "-" )) or an
 	// extension's xstring ("X-" 1*( ALPHA / "-" / "_" ), as eDirectory's
 	// X-NDS_SYNTAX). Anything else (a "{256}" spaced from SYNTAX's OID, a
-	// stray "$" or OID) fails the definition: taken as a keyword, it would
+	// stray "$" (a token of its own) or OID) fails the definition: taken as a keyword, it would
 	// swallow the next one (SINGLE-VALUE, say) as its value.
 	auto is_keyword(std::string_view k) -> bool
 	{
@@ -154,7 +160,7 @@ namespace {
 			if (e->k == token::kind::end || e->k == token::kind::open) {
 				return schema_error("unterminated list");
 			}
-			if (e->text == "$") {
+			if (e->k == token::kind::dollar) {
 				continue;
 			}
 			if (values.size() == max_values) {

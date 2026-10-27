@@ -13,7 +13,8 @@
 // Definitions that do not parse are skipped and counted, never fatal (the
 // text comes from the server, so the parser must accept anything without
 // harm: there is a fuzz target). Lenient where real servers are: quoted
-// OIDs (Active Directory), keywords in any case, missing spaces before ')'.
+// OIDs (Active Directory), keywords in any case, missing spaces before ')'
+// (and around a list's "$": RFC 4512 allows none, "(sn$cn)").
 // A definition whose OID is not a valid OID, whose SYNTAX is not a numeric
 // OID with an optional "{" digits "}" right after it (RFC 4512 noidlen: no
 // descriptor, no space, no other text), or with a keyword that is not a
@@ -21,8 +22,9 @@
 // skipped (the names of those skipped for their SYNTAX are remembered, see
 // skipped_for_syntax); NAMEs that are not valid descriptors are dropped
 // (they could never be looked up), and so are SUP, MUST and MAY entries of
-// an object class that are not oids (descriptors or numeric OIDs). A definition that is not well-formed
-// UTF-8 is skipped too: RFC 4512 qdstrings (NAME, DESC) are UTF-8 and the
+// an object class that are not oids (descriptors or numeric OIDs); neither
+// counts in skipped(), which counts definitions. A definition that is not
+// well-formed UTF-8 is skipped too: RFC 4512 qdstrings (NAME, DESC) are UTF-8 and the
 // rest of the grammar is ASCII.
 #pragma once
 
