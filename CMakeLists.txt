@@ -212,6 +212,7 @@ add_library(jhetz_ldap STATIC
     src/schema.cpp
     src/message.cpp
     src/operations.cpp
+    src/referral.cpp
     src/url.cpp
 )
 add_library(jhetz::ldap ALIAS jhetz_ldap)

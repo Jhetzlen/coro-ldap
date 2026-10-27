@@ -6,7 +6,11 @@
 //   the same again (to_string is canonical);
 // - the printed text contains no byte outside RFC 3986 (no space, control,
 //   non-ASCII, '#', '"', '\\', ...): it is always fully encoded;
-// - authority() is a prefix of what follows "://" when the port is explicit.
+// - authority() is a prefix of what follows "://" when the port is explicit;
+// - referral_target refuses exactly the URLs with a critical extension, and
+//   for a continuation reference those without a DN too; otherwise the
+//   search's base is the URL's DN when it has one.
+#include "jhetz/ldap/referral.hpp"
 #include "jhetz/ldap/url.hpp"
 
 #include "check.hpp"
@@ -57,6 +61,17 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 	}
 	if (u->scheme() == ldap::url_scheme::ldapi) {
 		check(!u->port() && !u->host_is_ipv6(), "!u->port() && !u->host_is_ipv6()");
+	}
+
+	const bool has_dn = u->base_dn() && !u->base_dn()->empty();
+	for (const auto kind : { ldap::reference_kind::referral, ldap::reference_kind::continuation_reference }) {
+		const auto t = ldap::referral_target(*u, ldap::search_params{}, kind);
+		const bool refused =
+		  u->has_critical_extension() || (kind == ldap::reference_kind::continuation_reference && !has_dn);
+		check(t.has_value() != refused, "t.has_value() != refused");
+		if (t && has_dn) {
+			check(t->base == *u->base_dn(), "t->base == *u->base_dn()");
+		}
 	}
 	return 0;
 }

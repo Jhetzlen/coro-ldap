@@ -33,6 +33,7 @@ add_executable(jhetz_ldap_tests
     message_golden_tests.cpp
     message_tests.cpp
     pmr_tests.cpp
+    referral_tests.cpp
     schema_tests.cpp
     url_tests.cpp
     value_semantics_tests.cpp

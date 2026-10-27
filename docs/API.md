@@ -145,6 +145,15 @@ rationale is in [`DESIGN.md`](DESIGN.md).
   `!` marker), all percent-decoded; `parse()` / `to_string()` round-trip.
   Absent and empty DN / scope / filter stay distinct, as referrals need.
   Allocator-aware (`std::pmr`, see below).
+- `jhetz/ldap/referral.hpp`: `referral_target(url, request)`, the request
+  that progresses an operation at a referral's target (RFC 4511 section
+  4.1.10), for a search, a compare and each update; build only, nothing is
+  sent. An absent (or empty) DN, an absent scope or filter keep the
+  original's; the URL's attribute list is ignored. With
+  `reference_kind::continuation_reference` (section 4.5.3) the URL must
+  name a DN, and a singleLevel search without a scope becomes baseObject. A
+  URL with a critical extension (RFC 4516 section 2: none is implemented)
+  fails with `invalid_url`.
 
 ## `jhetz::ldap_net`: transports and connecting
 
