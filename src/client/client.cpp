@@ -679,6 +679,43 @@ namespace detail {
 			return k < *avoid ? k : k + 1;
 		}
 
+		// try_servers()' new connection to server `i`, pooled with one lease
+		// (exclusive or not). Fails if on_connect closed the client.
+		static auto adopt(const std::shared_ptr<client_state> &self,
+		  std::size_t i,
+		  connection conn,
+		  bool exclusive,
+		  const std::string &context) -> result<std::shared_ptr<pooled_connection>>
+		{
+			auto p = std::make_shared<pooled_connection>();
+			p->conn = std::move(conn);
+			p->server = i;
+			p->leases = 1;
+			p->created = clock::now();
+			p->last_used = p->created;
+			p->binds = p->conn.bind_count();
+			p->exclusive = exclusive;
+			watch_close(self, p->conn);
+			self->pool.push_back(p);
+			if (auto *o = self->observer()) {
+				o->on_connect(self->servers[i].address, result<void>{});
+			}
+			if (self->closed) {// closed by the hook: close() closed `p` too
+				return fail(client_errc::not_connected, context + ": client closed");
+			}
+			return p;
+		}
+
+		// try_servers()' attempt on server `i` failed with `e`, the
+		// server's failure: on_connect, then server_failed().
+		void connect_failed(std::size_t i, const error &e, std::uint64_t episode, bool auth_retry)
+		{
+			if (auto *o = observer()) {
+				o->on_connect(servers[i].address, std::unexpected(e));
+			}
+			server_failed(i, e, episode, auth_retry);
+		}
+
 		// One pass over the servers whose backoff has ended, in priority
 		// order (`avoid` last), until one connects: that connection, pooled
 		// with one lease (exclusive or not), or null if none did (`last` is
@@ -746,23 +783,7 @@ namespace detail {
 				if (r) {
 					self->server_succeeded(i);
 					settled = true;
-					auto p = std::make_shared<pooled_connection>();
-					p->conn = std::move(*r);
-					p->server = i;
-					p->leases = 1;
-					p->created = clock::now();
-					p->last_used = p->created;
-					p->binds = p->conn.bind_count();
-					p->exclusive = exclusive;
-					watch_close(self, p->conn);
-					self->pool.push_back(p);
-					if (auto *o = self->observer()) {
-						o->on_connect(self->servers[i].address, result<void>{});
-					}
-					if (self->closed) {// closed by the hook: close() closed `p` too
-						co_return fail(client_errc::not_connected, context + ": client closed");
-					}
-					co_return p;
+					co_return adopt(self, i, std::move(*r), exclusive, context);
 				}
 				error e = detail::with_context(std::move(r.error()), context);
 				if (e.code == cond::canceled && (co_await capy::this_coro::stop_token).stop_requested()) {
@@ -772,10 +793,7 @@ namespace detail {
 					settled = true;
 					co_return std::unexpected(std::move(e));// not the server's fault
 				}
-				if (auto *o = self->observer()) {
-					o->on_connect(self->servers[i].address, std::unexpected(e));
-				}
-				self->server_failed(i, e, episode, auth_retry);
+				self->connect_failed(i, e, episode, auth_retry);
 				settled = true;
 				if (e.code == cond::auth_failed || e.code == cond::invalid_input) {
 					excluded[i] = true;// retrying cannot help: not again in this acquire()
@@ -939,30 +957,48 @@ namespace detail {
 			return std::nullopt;
 		}
 
-		// acquire() with a slot free: try_servers(), then, if no server
-		// connected, `wake` is when the earliest backoff ends (nullopt once
-		// every server is excluded: each failed in a way retrying cannot
-		// fix, and a shared acquire may share an open connection then, or
-		// wait for the idle one left to an exclusive waiter). Fails as
-		// try_servers() does, and with the last error once every server is
-		// excluded and nothing can be shared or waited for.
+		// What open_new() leaves acquire() to do.
+		struct opened
+		{
+			std::shared_ptr<pooled_connection> conn{};// to hand out
+			// Every server excluded, but an open connection may be shared
+			// (or the idle one left to an exclusive waiter is): look again.
+			bool look_again = false;
+			// When the earliest backoff ends (nullopt: no slot was free, or
+			// every server is excluded).
+			std::optional<clock::time_point> wake{};
+		};
+
+		// acquire() found nothing to hand out in the pool. With a slot free:
+		// try_servers(), then, if no server connected, `wake` is when the
+		// earliest backoff ends (nullopt once every server is excluded: each
+		// failed in a way retrying cannot fix, and a shared acquire may
+		// share an open connection then, or wait for the idle one left to
+		// an exclusive waiter). Fails as try_servers() does, and with the
+		// last error once every server is excluded and nothing can be
+		// shared or waited for.
 		static auto open_new(std::shared_ptr<client_state> self,
 		  net::detail::deadline_t deadline,
 		  bool exclusive,
 		  std::vector<bool> &excluded,
 		  std::optional<error> &last,
-		  std::optional<clock::time_point> &wake,
-		  std::optional<std::size_t> avoid) -> capy::task<result<std::shared_ptr<pooled_connection>>>
+		  std::optional<std::size_t> avoid) -> capy::task<result<opened>>
 		{
-			auto r = co_await try_servers(self, deadline, exclusive, excluded, last, avoid);
-			if (!r || *r) {
-				co_return r;
+			if (!self->has_free_slot()) {
+				co_return opened{};
 			}
-			wake = self->next_retry(excluded);
+			auto r = co_await try_servers(self, deadline, exclusive, excluded, last, avoid);
+			if (!r) {
+				co_return std::unexpected(std::move(r.error()));
+			}
+			if (*r) {
+				co_return opened{ .conn = std::move(*r) };
+			}
+			const auto wake = self->next_retry(excluded);
 			if (!wake && (exclusive || (!self->pick(false, false, clock::now()) && !self->waits_for_exclusive()))) {
 				co_return std::unexpected(self->give_up(excluded, std::move(last), false));
 			}
-			co_return nullptr;
+			co_return opened{ .look_again = !wake && !self->waits_for_exclusive(), .wake = wake };
 		}
 
 		// A shared acquire that cannot open a connection has nothing to
@@ -1006,7 +1042,7 @@ namespace detail {
 					self->notify();
 				}
 			} };
-			auto hand_out = [&self, &leased](std::shared_ptr<pooled_connection> c) {
+			const auto hand_out = [&self, &leased](std::shared_ptr<pooled_connection> c) {
 				leased = true;
 				return lease(self, std::move(c));
 			};
@@ -1032,22 +1068,17 @@ namespace detail {
 				if (deadline && clock::now() >= *deadline) {// nothing is tried after the deadline
 					co_return std::unexpected(self->give_up(excluded, std::move(last), false));
 				}
-				std::optional<clock::time_point> wake;
-				if (self->has_free_slot()) {
-					auto r = co_await open_new(self, deadline, how.exclusive, excluded, last, wake, avoid);
-					if (!r) {
-						co_return std::unexpected(std::move(r.error()));
-					}
-					if (*r) {
-						co_return hand_out(std::move(*r));
-					}
-					if (!wake && !self->waits_for_exclusive()) {
-						continue;// every server excluded: share an open connection
-					}
+				auto r = co_await open_new(self, deadline, how.exclusive, excluded, last, avoid);
+				if (!r) {
+					co_return std::unexpected(std::move(r.error()));
 				}
-				if (self->version != seen) {
-					continue;// something changed meanwhile: look again
+				if (r->conn) {
+					co_return hand_out(std::move(r->conn));
 				}
+				if (r->look_again || self->version != seen) {
+					continue;// an open connection to share, or something changed meanwhile
+				}
+				const auto wake = r->wake;
 				if (deadline && (clock::now() >= *deadline || (wake && *wake > *deadline))) {
 					co_return std::unexpected(self->give_up(excluded, std::move(last), wake.has_value()));
 				}
