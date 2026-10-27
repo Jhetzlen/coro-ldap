@@ -26,6 +26,7 @@ auto main(int argc, char **argv) -> int
 	  "( 1.2.6 NAME 'self' SUP ( self $ missing $ 1.2.6 ) AUXILIARY MUST ( self $ 1.2.6 $ objectClass ) MAY x )",
 	  "( 1.2.7 NAME ( 'a' 'b' ) sup b must ( a $ 'b' $ 1. ) )",
 	  "( 1.2.8 NAME 'tight' SUP (top$person) MUST (sn$cn) MAY ( a$ b $c ) )",
+	  "( 1.2.9 NAME 'bare' SUP top$person MUST sn$cn MAY a $ 'b' $c X-A x$y )",
 	  "( 1.2 NAME 'it\\27s' DESC 'back\\5cslash' )",
 	  "(1.2 NAME 'tight' SINGLE-VALUE)",
 	  "( 1.2.4 NAME 'named' SYNTAX directoryString )",

@@ -14,7 +14,11 @@
 // text comes from the server, so the parser must accept anything without
 // harm: there is a fuzz target). Lenient where real servers are: quoted
 // OIDs (Active Directory), keywords in any case, missing spaces before ')'
-// (and around a list's "$": RFC 4512 allows none, "(sn$cn)").
+// (and around a list's "$": RFC 4512 allows none, "(sn$cn)"), and an
+// object class's SUP, MUST or MAY list without parentheses, "MUST cn$sn"
+// or "MUST cn $ sn" read as "MUST ( cn $ sn )". Anywhere else (NAME, an
+// X- value, an attribute type's SUP), a "$" outside parentheses and
+// quotes fails the definition.
 // A definition whose OID is not a valid OID, whose SYNTAX is not a numeric
 // OID with an optional "{" digits "}" right after it (RFC 4512 noidlen: no
 // descriptor, no space, no other text), or with a keyword that is not a

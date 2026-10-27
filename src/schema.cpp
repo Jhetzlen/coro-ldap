@@ -83,6 +83,20 @@ namespace {
 			return token{ .k = token::kind::word, .text = std::string(s_.substr(start, pos_ - start)) };
 		}
 
+		// Consumes a "$" that comes next (after spaces), if one does.
+		auto skip_dollar() -> bool
+		{
+			std::size_t p = pos_;
+			while (p < s_.size() && is_space(s_[p])) {
+				++p;
+			}
+			if (p == s_.size() || s_[p] != '$') {
+				return false;
+			}
+			pos_ = p + 1;
+			return true;
+		}
+
 	  private:
 		std::string_view s_;
 		std::size_t pos_ = 0;
@@ -134,9 +148,25 @@ namespace {
 		return fail(client_errc::decode_error, detail::format("schema: {}", why));
 	}
 
+	// The keywords whose argument is an oidlist (RFC 4512 4.1.1 SUP, MUST
+	// and MAY of an object class), for which an unparenthesised "a$b" is
+	// read as the list "( a $ b )".
+	auto is_oidlist_keyword(std::string_view k) -> bool
+	{
+		return detail::iequals(k, "SUP") || detail::iequals(k, "MUST") || detail::iequals(k, "MAY");
+	}
+
+	// Which definition parse_definition reads: an object class's SUP is
+	// an oidlist (oids), an attribute type's one oid.
+	enum class definition_kind { attribute_type, object_class };
+
 	// A keyword's argument: one word or quoted string, or a parenthesised
-	// list of them ('$' separators dropped), appended to `values`.
-	auto read_values(lexer &lx, std::vector<std::string> &values) -> result<void>
+	// list of them ('$' separators dropped), appended to `values`. With
+	// `oidlist`, a word followed by "$" starts an unparenthesised list,
+	// "cn$sn" or "cn $ sn" (RFC 4512 4.1 parenthesises a list of several
+	// oids; this is a convenience for servers that do not), each "$"
+	// followed by a word or quoted string.
+	auto read_values(lexer &lx, std::vector<std::string> &values, bool oidlist) -> result<void>
 	{
 		constexpr std::size_t max_values = 4096;
 		auto v = lx.next();
@@ -145,6 +175,19 @@ namespace {
 		}
 		if (v->k == token::kind::word || v->k == token::kind::quoted) {
 			values.push_back(std::move(v->text));
+			while (oidlist && lx.skip_dollar()) {
+				auto e = lx.next();
+				if (!e) {
+					return std::unexpected(std::move(e.error()));
+				}
+				if (e->k != token::kind::word && e->k != token::kind::quoted) {
+					return schema_error("'$' without an oid after it");
+				}
+				if (values.size() == max_values) {
+					return schema_error("list too long");
+				}
+				values.push_back(std::move(e->text));
+			}
 			return {};
 		}
 		if (v->k != token::kind::open) {
@@ -171,7 +214,7 @@ namespace {
 		}
 	}
 
-	auto parse_definition(std::string_view text) -> result<definition>
+	auto parse_definition(std::string_view text, definition_kind kind) -> result<definition>
 	{
 		// RFC 4512 section 4.1: a definition is ASCII but for its qdstrings
 		// (NAME, DESC), which are UTF-8 (QUTF8, section 1.4); the \27 and
@@ -221,7 +264,8 @@ namespace {
 			}
 			std::vector<std::string> values;
 			if (!is_flag(k->text)) {
-				if (auto r = read_values(lx, values); !r) {
+				const bool oidlist = kind == definition_kind::object_class && is_oidlist_keyword(k->text);
+				if (auto r = read_values(lx, values, oidlist); !r) {
 					return std::unexpected(std::move(r.error()));
 				}
 			}
@@ -324,12 +368,12 @@ namespace {
 
 auto parse_attribute_type(std::string_view text) -> result<attribute_type>
 {
-	return parse_definition(text).and_then(to_attribute_type);
+	return parse_definition(text, definition_kind::attribute_type).and_then(to_attribute_type);
 }
 
 auto parse_object_class(std::string_view text) -> result<object_class_type>
 {
-	return parse_definition(text).transform([](definition &&d) {
+	return parse_definition(text, definition_kind::object_class).transform([](definition &&d) {
 		object_class_type c;
 		c.oid = std::move(d.oid);
 		c.names = valid_names(d.get("NAME"));
@@ -363,7 +407,7 @@ auto server_schema::parse(std::span<const std::pmr::string> attribute_types,
 {
 	server_schema s;
 	for (const auto &text : attribute_types) {
-		auto d = parse_definition(text);
+		auto d = parse_definition(text, definition_kind::attribute_type);
 		if (!d) {
 			++s.skipped_;
 			continue;

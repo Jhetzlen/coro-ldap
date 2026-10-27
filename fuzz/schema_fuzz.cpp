@@ -7,8 +7,11 @@
 //   non-empty OID, and a SYNTAX that is a numeric OID (the input's noidlen
 //   without its "{" 1*DIGIT "}", the only length accepted; a length apart
 //   from the OID fails as a keyword);
-// - the object class grammar is the same, but SYNTAX is not checked; an
-//   accepted object class's SUP, MUST and MAY entries are oids;
+// - the object class grammar is the same, but SYNTAX is not checked and
+//   SUP, MUST and MAY also take an unparenthesised "a$b" list: what parses
+//   as an attribute type parses as an object class, and what parses only
+//   as an object class failed SYNTAX or has a "$"; an accepted object
+//   class's SUP, MUST and MAY entries are oids;
 // - server_schema::parse of the input (as both an attribute type and an
 //   object class) finds what parsed by OID and every NAME, and counts
 //   what did not as skipped; syntax_of terminates, and so does the MUST
@@ -88,9 +91,11 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 		  "!a->syntax || ldap::detail::is_numericoid(*a->syntax)");
 	}
 	auto c = ldap::parse_object_class(text);
-	// Same grammar; only an attribute type's SYNTAX is checked.
-	check(!a ? !c || a.error().context == "schema: SYNTAX is not a numeric OID" : c.has_value(),
-	  "!a ? !c || a.error().context == \"schema: SYNTAX is not a numeric OID\" : c.has_value()");
+	// Same grammar; only an attribute type's SYNTAX is checked, and only an
+	// object class's SUP, MUST and MAY take an unparenthesised list.
+	check(!a ? !c || a.error().context == "schema: SYNTAX is not a numeric OID" || text.contains('$') : c.has_value(),
+	  "!a ? !c || a.error().context == \"schema: SYNTAX is not a numeric OID\" || text.contains('$') : "
+	  "c.has_value()");
 	if (c) {
 		for (const auto *list : { &c->sup, &c->must, &c->may }) {
 			check(std::ranges::all_of(*list, [](const std::string &o) { return ldap::detail::is_oid(o); }),

@@ -1,0 +1,1 @@
+( 1.2.9 NAME 'bare' SUP top$person MUST sn$cn MAY a $ 'b' $c )

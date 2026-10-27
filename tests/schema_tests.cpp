@@ -831,11 +831,31 @@ TEST_CASE("schema: an oidlist's '$' needs no spaces (RFC 4512 1.4)", "[schema]")
 	REQUIRE(a.has_value());
 	CHECK(a->names == std::vector<std::string>{ "y", "z" });
 	CHECK(a->sup == "name");
-	// Outside a list, '$' is no value and no keyword: the definition is
-	// skipped, not cut short.
-	const std::pmr::vector<std::pmr::string> bad{
-		"( 1.3 NAME 'b1' SUP top$person )", "( 1.4 NAME 'b2' MUST $ )", "( 1.5 NAME 'b3' MUST ( sn ) $ )"
-	};
+	// An object class's SUP, MUST and MAY without parentheses: "a$b" (or
+	// "a $ b") is read as the list "( a $ b )".
+	for (const char *text : { "( 1.1 NAME 'x' SUP top$2.5.6.6 MUST sn$cn MAY a$b$c )",
+		   "( 1.1 NAME 'x' SUP top $ 2.5.6.6 MUST sn $cn MAY a$ b $ 'c' )",
+		   "( 1.1 NAME 'x' SUP top$2.5.6.6 MUST sn$cn MAY a$b$c)" }) {
+		INFO(text);
+		auto c = ldap::parse_object_class(text);
+		REQUIRE(c.has_value());
+		CHECK(c->sup == std::vector<std::string>{ "top", "2.5.6.6" });
+		CHECK(c->must == std::vector<std::string>{ "sn", "cn" });
+		CHECK(c->may == std::vector<std::string>{ "a", "b", "c" });
+		CHECK(c->kind == ldap::object_class_kind::structural);
+	}
+	// Elsewhere, '$' outside a list is no value and no keyword: the
+	// definition is skipped, not cut short. So is an unparenthesised list
+	// with a '$' that no oid follows.
+	const std::pmr::vector<std::pmr::string> bad{ "( 1.3 NAME 'b1' MUST cn$ )",
+		"( 1.4 NAME 'b2' MUST $ )",
+		"( 1.5 NAME 'b3' MUST ( sn ) $ )",
+		"( 1.6 NAME x$y )",
+		"( 1.7 NAME 'b7' X-FOO bar$baz )",
+		"( 1.8 NAME 'b8' MUST cn $ $ sn )",
+		"( 1.9 NAME 'b9' MAY cn$(sn) )" };
+	CHECK_FALSE(ldap::parse_attribute_type("( 1.3 NAME 'at' SUP name$cn )").has_value());
+	CHECK_FALSE(ldap::parse_attribute_type("( 1.3 NAME 'at' X-A b$c )").has_value());
 	const auto s = ldap::server_schema::parse({}, bad);
 	CHECK(s.skipped() == bad.size());
 	CHECK(s.object_class_count() == 0);

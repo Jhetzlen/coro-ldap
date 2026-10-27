@@ -1437,7 +1437,13 @@ Implemented (#13, `schema.hpp`): `parse_attribute_type` /
 with `\27` / `\5C` escapes, bare words; keywords without an argument are
 known flags, every other keyword takes one value or a `( a $ b )` list).
 Lenient with real servers (quoted OIDs as Active Directory sends them,
-keywords in any case, no space before `)`); a definition whose OID is not
+keywords in any case, no space before `)` or around a list's `$`, and an
+object class's `SUP`, `MUST` or `MAY` list written without parentheses,
+`MUST cn$sn` read as `MUST ( cn $ sn )`: RFC 4512 parenthesises a list,
+no known server omits them, and reading the words apart would fail the
+class, which `validate<T>` then reports as an unknown class); a `$`
+outside parentheses and quotes anywhere else (`NAME`, an `X-` value, an
+attribute type's single-oid `SUP`) fails the definition; a definition whose OID is not
 an OID, or whose `SYNTAX` is not a numeric OID with an optional `{len}` of
 digits right after it (RFC 4512 `noidlen`: `1.2.3{64}`; it could never
 match, and would put the server's text in a report), is skipped, and so is
