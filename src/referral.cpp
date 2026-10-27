@@ -62,8 +62,6 @@ auto referral_target(const url &target, search_params original, reference_kind k
 	}
 	if (const auto scope = target.scope()) {
 		original.scope = *scope;
-	} else if (reference && original.scope == search_scope::single_level) {
-		original.scope = search_scope::base_object;
 	}
 	if (const auto &f = target.search_filter()) {
 		original.filter = *f;

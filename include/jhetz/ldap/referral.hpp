@@ -21,11 +21,11 @@
 //   reference cannot be followed (invalid_url). An empty <dn> (`ldap://host/`)
 //   counts as absent: RFC 4516 section 3 defaults a missing DN to the
 //   zero-length one, which section 4.1.10 overrides for referrals.
-// - Search scope: the URL's <scope> if present. Absent: the original
-//   search's, except that a continuation reference returned for a
-//   singleLevel search is followed with baseObject (section 4.5.3: "If the
-//   originating search scope was singleLevel, the <scope> part of the LDAP
-//   URL will be 'base'"; the reference names the subordinate entry itself).
+// - Search scope: the URL's <scope> if present, else the original
+//   search's, for a continuation reference too (section 4.5.3: "In the
+//   absence of a <scope> part, the scope of the original Search request is
+//   assumed"). A server answering a singleLevel search is the one to put
+//   "base" in the URL (same section); the client does not guess it.
 // - Search filter: the URL's <filter> if present, else the original's.
 // - Everything else is the original request's: the attribute list (section
 //   4.1.10 names only the DN, scope and filter as taken from the URL; the
@@ -47,7 +47,7 @@
 
 namespace jhetz::ldap {
 
-// Where a URL came from: what to do with an absent DN and scope depends on it.
+// Where a URL came from: what to do with an absent DN depends on it.
 enum class reference_kind : std::uint8_t {
 	referral,// the referral field of an LDAPResult (RFC 4511 section 4.1.10)
 	continuation_reference,// a SearchResultReference (section 4.5.3)

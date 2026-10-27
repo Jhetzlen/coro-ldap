@@ -80,15 +80,23 @@ TEST_CASE("referral_target: UTF-8 in the DN and filter", "[referral]")
 
 TEST_CASE("referral_target: continuation references", "[referral]")
 {
-	SECTION("singleLevel without a scope becomes baseObject (RFC 4511 section 4.5.3)")
+	SECTION("without a scope, the original's: singleLevel stays singleLevel (RFC 4511 section 4.5.3)")
 	{
 		auto t = ldap::referral_target(url("ldap://h/uid=jdoe,ou=people,dc=example,dc=org"),
 		  original_search(),
 		  reference_kind::continuation_reference);
 		REQUIRE(t.has_value());
 		CHECK(t->base == ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" });
-		CHECK(t->scope == search_scope::base_object);
+		CHECK(t->scope == search_scope::single_level);
 		CHECK(t->filter == original_search().filter);
+	}
+	SECTION("the server's \"base\" for a singleLevel search is used as given")
+	{
+		auto t = ldap::referral_target(url("ldap://h/uid=jdoe,ou=people,dc=example,dc=org??base"),
+		  original_search(),
+		  reference_kind::continuation_reference);
+		REQUIRE(t.has_value());
+		CHECK(t->scope == search_scope::base_object);
 	}
 	SECTION("a referral keeps singleLevel")
 	{

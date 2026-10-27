@@ -151,7 +151,7 @@ rationale is in [`DESIGN.md`](DESIGN.md).
   sent. An absent (or empty) DN, an absent scope or filter keep the
   original's; the URL's attribute list is ignored. With
   `reference_kind::continuation_reference` (section 4.5.3) the URL must
-  name a DN, and a singleLevel search without a scope becomes baseObject. A
+  name a DN; an absent scope is the original's there too. A
   URL with a critical extension (RFC 4516 section 2: none is implemented)
   fails with `invalid_url`.
 

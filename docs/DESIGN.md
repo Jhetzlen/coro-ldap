@@ -806,9 +806,10 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   makes no sense for these operations. The URL's attribute list is ignored (4.1.10 names
   only DN, scope and filter as taken from the URL). Section 4.5.3: a
   continuation reference must carry a DN (refused otherwise, since the
-  original base would search the same subtree again elsewhere), and a
-  singleLevel search continued without a scope uses baseObject (the
-  reference names the subordinate entry itself). RFC 4516 section 2: a
+  original base would search the same subtree again elsewhere), and
+  without a scope it keeps the original's ("the scope of the original
+  Search request is assumed"; the server, which knows the search was
+  singleLevel, is the one to write "base" in the URL). RFC 4516 section 2: a
   critical extension refuses the URL (none is implemented), others are
   ignored.
 - `chase_search` / `chase_compare` (`referral_chase.hpp`, `jhetz::ldap_net`)
