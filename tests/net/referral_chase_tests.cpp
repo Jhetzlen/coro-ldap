@@ -913,6 +913,58 @@ TEST_CASE("referral connections: the TLS client certificate goes with the client
 	}
 }
 
+TEST_CASE("client chases: the authorizer's binding picks the setup and the client certificate",
+  "[net][referral][client]")
+{
+	ldap::connection_options options;
+	options.tls.cert_file = "client.pem";
+	options.tls.key_file = "client.key";
+	auto target = ldap::url::parse("ldaps://b.example.org/ou=b");
+	REQUIRE(target.has_value());
+	const auto setup = ldap::simple_bind_setup(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret");
+	SECTION("anonymous: no setup, no certificate")
+	{
+		const auto chosen = ldap::detail::client_referral_identity(ldap::referral_binding::anonymous, setup);
+		REQUIRE(chosen);
+		CHECK_FALSE(chosen->setup);
+		CHECK_FALSE(chosen->client_certificate);
+		auto p = ldap::detail::referral_plan(*target, true, options, *chosen);
+		REQUIRE(p);
+		CHECK(p->options.tls.cert_file.empty());
+		CHECK(p->options.tls.key_file.empty());
+	}
+	SECTION("same_setup: the client's setup and certificate")
+	{
+		const auto chosen = ldap::detail::client_referral_identity(ldap::referral_binding::same_setup, setup);
+		REQUIRE(chosen);
+		CHECK(chosen->setup);
+		CHECK(chosen->client_certificate);
+		auto p = ldap::detail::referral_plan(*target, true, options, *chosen);
+		REQUIRE(p);
+		CHECK(p->options.tls.cert_file == "client.pem");
+		CHECK(p->options.tls.key_file == "client.key");
+	}
+	SECTION("same_setup with no setup: the certificate still, as the pooled connections have it")
+	{
+		const auto chosen = ldap::detail::client_referral_identity(ldap::referral_binding::same_setup, {});
+		REQUIRE(chosen);
+		CHECK_FALSE(chosen->setup);
+		CHECK(chosen->client_certificate);
+	}
+	SECTION("anonymous and same_setup are kept apart")
+	{
+		const auto anonymous = ldap::detail::client_referral_identity(ldap::referral_binding::anonymous, setup);
+		const auto same = ldap::detail::client_referral_identity(ldap::referral_binding::same_setup, setup);
+		REQUIRE(anonymous);
+		REQUIRE(same);
+		CHECK(anonymous->identity != same->identity);
+	}
+	SECTION("refuse: nothing")
+	{
+		CHECK_FALSE(ldap::detail::client_referral_identity(ldap::referral_binding::refuse, setup));
+	}
+}
+
 TEST_CASE("make_same_policy_connector: connects, sets up once, reuses", "[net][referral]")
 {
 	world w;

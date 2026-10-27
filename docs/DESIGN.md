@@ -1981,9 +1981,14 @@ decision left open.
   `close()` (and the destructor) closes every pooled connection, leased
   ones included (their outstanding operations fail with `not_connected`,
   or `not_sent` for requests not yet written), stops the attempts in
-  progress (each runs under its own stop source, `with_stop`), fails
-  waiting and later `acquire()` calls with `not_connected`, and then
-  drops the observer: no
+  progress (each runs under its own stop source, `with_stop`) and the
+  referral chases running (`chases_running`, their stop sources, 3pf.22:
+  the chase fails with `not_connected` and is not retried, the authorizer
+  is not asked again, and no referred server is connected to or set up
+  after it; the connector re-checks the stop token after its chooser, so
+  this holds when the authorizer itself calls `close()`), fails waiting
+  and later `acquire()` calls with `not_connected`, and then drops the
+  observer: no
   hook runs after `close()`, so the observer need only outlive it (a hook
   may itself call `close()`; acquire re-checks after each hook). Leases
   may outlive the client (they hold the shared state), but their
@@ -2116,8 +2121,8 @@ decision left open.
   `anonymous` connection does not present (`referral_identity::
   client_certificate`, applied by `detail::referral_plan`), since a
   server may authenticate a TLS connection by its certificate alone
-  (mutual TLS, certificate mapping, SASL EXTERNAL).
-  `make_same_policy_connector` follows the same rule with its own setup
+  (mutual TLS, certificate mapping, SASL EXTERNAL); the mapping is
+  `detail::client_referral_identity`. `make_same_policy_connector` follows the same rule with its own setup
   (3pf.27, `detail::same_policy_identity`): its options' certificate is
   presented only when a setup is given, so an empty setup is anonymous at
   the TLS layer too, even with the origin's options passed as they are
@@ -2136,7 +2141,9 @@ decision left open.
   `client_options::connection` and the pooled connection's `is_tls()`: no
   downgrade. Referred connections are per call, not pooled (the
   conservative choice): they are opened by the chase, set up as chosen,
-  reused within it, and closed (no UnbindRequest) when it ends. Pooling
+  reused within it, and closed (no UnbindRequest) when it ends; `close()`
+  stops the chases running (see "Leaving the pool": `not_connected`, not
+  retried, no authorizer call or referred connection after it). Pooling
   them would mean pools per referred server and identity, with their own
   backoff and auth guard, for servers the client was never configured
   with; the cost of not doing so is a connect and bind per chase that

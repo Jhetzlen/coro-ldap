@@ -98,6 +98,20 @@ namespace detail {
 		return milliseconds(static_cast<milliseconds::rep>(cap * unit));
 	}
 
+	auto client_referral_identity(referral_binding binding, const session_setup &client_setup)
+	  -> std::optional<referral_identity>
+	{
+		switch (binding) {
+		case referral_binding::anonymous:
+			return referral_identity{ .identity = 0 };
+		case referral_binding::same_setup:
+			return referral_identity{ .identity = 1, .setup = client_setup, .client_certificate = true };
+		case referral_binding::refuse:
+			break;
+		}
+		return std::nullopt;
+	}
+
 	// One connection of the pool.
 	struct pooled_connection
 	{
@@ -1197,15 +1211,8 @@ namespace detail {
 				if (!authorize || self->closed) {
 					return std::nullopt;
 				}
-				switch (authorize(referral_hop{ .target = target, .depth = depth, .origin = origin })) {
-				case referral_binding::anonymous:
-					return referral_identity{ .identity = 0 };
-				case referral_binding::same_setup:
-					return referral_identity{ .identity = 1, .setup = self->options.setup, .client_certificate = true };
-				case referral_binding::refuse:
-					break;
-				}
-				return std::nullopt;
+				return client_referral_identity(
+				  authorize(referral_hop{ .target = target, .depth = depth, .origin = origin }), self->options.setup);
 			};
 			return make_policy_connector(
 			  *self->ioc, held->is_tls(), self->options.connection, std::move(choose), self->mr);

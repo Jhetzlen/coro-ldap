@@ -78,6 +78,14 @@ struct referral_identity
 // Empty: the connection is anonymous, at the TLS layer too.
 [[nodiscard]] auto same_policy_identity(session_setup setup) -> referral_identity;
 
+// ldap::client's chases: how referral_options::authorize's answer binds a
+// referred connection, `client_setup` being client_options::setup.
+// `anonymous`: no setup and no client certificate; `same_setup`: the
+// client's setup and its TLS client certificate, as its pooled connections
+// have them (even with no setup); `refuse`: nullopt.
+[[nodiscard]] auto client_referral_identity(referral_binding binding, const session_setup &client_setup)
+  -> std::optional<referral_identity>;
+
 // The URL and options a policy connector connects to `target` with, as
 // `chosen` binds it: nullopt when its host cannot be used.
 [[nodiscard]] auto

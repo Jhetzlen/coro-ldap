@@ -2458,7 +2458,7 @@ TEST_CASE("client: close() stops a chase", "[net][client][referral][close]")
 		spawn(f.ioc, f.pool->chase_search(people_search()), r);
 		drive_until(f.ioc, [&r] { return r.done(); });
 		finish(f.ioc, sleep_for(milliseconds(20)));
-		CHECK((b.accepted() == 0 || b.log(0).received.empty()));
+		CHECK(b.accepted() == 0);
 	}
 	REQUIRE_FALSE(r.get().has_value());
 	CHECK(r.get().error().code == ldap::client_errc::not_connected);

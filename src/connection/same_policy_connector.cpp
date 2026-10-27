@@ -5,6 +5,9 @@
 #include "../net/host_name.hpp"
 #include "referral_chase_impl.hpp"
 
+#include <boost/capy/error.hpp>
+#include <boost/capy/ex/this_coro.hpp>
+
 #include <algorithm>
 #include <charconv>
 #include <cstddef>
@@ -239,6 +242,15 @@ namespace {
 		auto chosen = st->choose(target, depth);
 		if (!chosen) {
 			co_return nullptr;
+		}
+		// The chooser may have stopped the chase (ldap::client's close()
+		// from its authorizer): nothing is contacted then, whatever connect
+		// would do with a stopped token.
+		// The analyzer does not model the promise's construction: Capy's env_ is
+		// nullptr-initialised and set by the awaiting caller before the first resume.
+		// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
+		if ((co_await capy::this_coro::stop_token).stop_requested()) {
+			co_return std::unexpected(make_error(capy::error::canceled, "referral connect"));
 		}
 		auto plan = detail::referral_plan(target, st->origin_tls, st->options, *chosen);
 		if (!plan) {
