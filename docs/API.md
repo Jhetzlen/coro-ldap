@@ -415,7 +415,8 @@ itself needs only ICU.
   are skipped, a TLS origin makes ldap:// targets use StartTLS (failure fails
   the URI), the certificate is checked against the referred host, and
   each new connection is bound only by `setup` (a `session_setup`, e.g.
-  `simple_bind_setup`; none: anonymous). Its connections are reused per
+  `simple_bind_setup`; none: anonymous, and the TLS client certificate of
+  `options` is presented only with a setup). Its connections are reused per
   server and closed with the connector.
 - Password changes that work on OpenLDAP and Active Directory alike:
   `change_password(user, old, new)` (a user's own) and

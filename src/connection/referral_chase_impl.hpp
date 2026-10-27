@@ -73,6 +73,11 @@ struct referral_identity
 	bool client_certificate = false;
 };
 
+// make_same_policy_connector's binding: `setup` on each connection, with
+// the TLS client certificate of its options only when there is a setup.
+// Empty: the connection is anonymous, at the TLS layer too.
+[[nodiscard]] auto same_policy_identity(session_setup setup) -> referral_identity;
+
 // The URL and options a policy connector connects to `target` with, as
 // `chosen` binds it: nullopt when its host cannot be used.
 [[nodiscard]] auto

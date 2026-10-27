@@ -891,11 +891,25 @@ TEST_CASE("referral connections: the TLS client certificate goes with the client
 		CHECK(p->options.tls.cert_file == "client.pem");
 		CHECK(p->options.tls.key_file == "client.key");
 	}
-	SECTION("make_same_policy_connector: the caller's options, kept")
+	SECTION("make_same_policy_connector without a setup: left out")
 	{
-		auto p = plan("ldaps://b.example.org", { "example.org" }, true, options);
+		const auto chosen = ldap::detail::same_policy_identity({});
+		CHECK_FALSE(chosen.client_certificate);
+		CHECK_FALSE(chosen.setup);
+		auto p = ldap::detail::referral_plan(*target, true, options, chosen);
+		REQUIRE(p);
+		CHECK(p->options.tls.cert_file.empty());
+		CHECK(p->options.tls.key_file.empty());
+	}
+	SECTION("make_same_policy_connector with a setup: kept")
+	{
+		const auto chosen = ldap::detail::same_policy_identity(ldap::simple_bind_setup(ldap::dn{ "cn=x" }, "pw"));
+		CHECK(chosen.client_certificate);
+		CHECK(chosen.setup);
+		auto p = ldap::detail::referral_plan(*target, true, options, chosen);
 		REQUIRE(p);
 		CHECK(p->options.tls.cert_file == "client.pem");
+		CHECK(p->options.tls.key_file == "client.key");
 	}
 }
 

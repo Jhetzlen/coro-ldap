@@ -175,9 +175,14 @@ auto chase_compare(connection &origin,
 // cleared, and an internationalized name is connected to in its ASCII form.
 // Binding: `setup` runs on each new connection (simple_bind_setup,
 // sasl_bind_setup, or any session_setup; it may bind with other
-// credentials, or look at connection::name() to choose); empty: the
-// connection stays anonymous. The library never sends the origin's
-// credentials by itself. A connect, StartTLS or setup failure fails the URI.
+// credentials, or look at connection::name() to choose), and the TLS client
+// certificate of `options.tls` (cert_file, key_file) is presented only
+// with a setup. Empty: the connection stays anonymous, at the TLS layer
+// too: no certificate is presented, so no server authenticates it by one
+// (mutual TLS, a certificate mapped to an identity, SASL EXTERNAL), even
+// with the origin's options passed as they are. The library never sends
+// the origin's credentials by itself. A connect, StartTLS or setup failure
+// fails the URI.
 // Its connect, StartTLS and setup stop when the chase's budget is spent.
 // The connections close when the last copy of the connector is destroyed
 // (without an UnbindRequest), so keep it as long as the results need no

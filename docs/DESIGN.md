@@ -865,7 +865,8 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   StartTLS fails the URI), the certificate checked against the referred
   host (RFC 4513 section 3.1.3: `server_name` cleared, IDNs connected to
   in ASCII form), and binding only through the caller's `session_setup`
-  (anonymous without one). Its connections are kept per server for later
+  (anonymous without one, the TLS client certificate of `options` left
+  out too). Its connections are kept per server for later
   URIs and closed with the connector.
 
 The pool's policy, `client_options::referrals` (3pf.1), is built on the
@@ -2115,9 +2116,14 @@ decision left open.
   `anonymous` connection does not present (`referral_identity::
   client_certificate`, applied by `detail::referral_plan`), since a
   server may authenticate a TLS connection by its certificate alone
-  (mutual TLS, certificate mapping, SASL EXTERNAL). `make_same_policy_
-  connector` keeps it: its options are the caller's, given for the
-  referred connections. `same_setup_for_domains(
+  (mutual TLS, certificate mapping, SASL EXTERNAL).
+  `make_same_policy_connector` follows the same rule with its own setup
+  (3pf.27, `detail::same_policy_identity`): its options' certificate is
+  presented only when a setup is given, so an empty setup is anonymous at
+  the TLS layer too, even with the origin's options passed as they are
+  (the header's own example); a caller who wants the certificate alone
+  (SASL EXTERNAL implied by TLS) passes a setup, `sasl_bind_setup` with
+  EXTERNAL or one that does nothing. `same_setup_for_domains(
   domains)` applies `make_same_policy_connector`'s allow-list rules
   (`detail::referral_server_allowed`, the port rule against the pooled
   connection's server). An enum rather than a returned setup: the

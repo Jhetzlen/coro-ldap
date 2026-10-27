@@ -303,6 +303,12 @@ namespace detail {
 		return plan;
 	}
 
+	auto same_policy_identity(session_setup setup) -> referral_identity
+	{
+		const bool bound = static_cast<bool>(setup);
+		return { .setup = std::move(setup), .client_certificate = bound };
+	}
+
 	auto referral_server_allowed(const url &target,
 	  std::span<const std::string> allowed,
 	  std::optional<std::uint16_t> origin_port) -> bool
@@ -341,7 +347,7 @@ auto make_same_policy_connector(corosio::io_context &ioc,
 		if (!server_allowed(target, allowed, origin_port)) {
 			return std::nullopt;
 		}
-		return detail::referral_identity{ .setup = setup, .client_certificate = true };
+		return detail::same_policy_identity(setup);
 	};
 	return detail::make_policy_connector(
 	  ioc, origin.is_tls(), std::move(options), std::move(choose), std::pmr::get_default_resource());
