@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -518,6 +519,9 @@ namespace {
 		return c.names.empty() ? std::string_view(c.oid) : std::string_view(c.names.front());
 	}
 
+	// Names folded as lookups fold them (ASCII case only).
+	using ci_set = std::unordered_set<std::string_view, detail::ci_hash, detail::ci_equal>;
+
 	// A class whose MUSTs apply, and the declared class it was reached
 	// from (empty for a declared class).
 	struct reached_class
@@ -532,30 +536,28 @@ namespace {
 	auto with_superclasses(const server_schema &s, std::span<const char *const> classes, schema_report &out)
 	  -> std::vector<reached_class>
 	{
+		// Hashed: a server's schema may chain thousands of classes.
 		std::vector<reached_class> all;
-		const auto seen = [&](const object_class_type *c) {
-			return std::ranges::any_of(all, [c](const reached_class &r) { return r.c == c; });
-		};
+		std::unordered_set<const object_class_type *> seen;
 		for (const char *name : classes) {
-			if (const object_class_type *c = s.find_object_class(name); c != nullptr && !seen(c)) {
+			if (const object_class_type *c = s.find_object_class(name); c != nullptr && seen.insert(c).second) {
 				all.push_back({ .c = c, .from = {} });
 			}
 		}
-		std::vector<std::string_view> unknown;
+		ci_set unknown;
 		for (std::size_t i = 0; i < all.size(); ++i) {
 			const reached_class r = all[i];
 			const std::string_view declared = r.from.empty() ? class_name(*r.c) : r.from;
 			for (const auto &sup : r.c->sup) {
 				if (const object_class_type *c = s.find_object_class(sup); c != nullptr) {
-					if (!seen(c)) {
+					if (seen.insert(c).second) {
 						all.push_back({ .c = c, .from = declared });
 					}
 					continue;
 				}
-				if (std::ranges::any_of(unknown, [&](std::string_view u) { return detail::iequals(u, sup); })) {
+				if (!unknown.insert(sup).second) {
 					continue;
 				}
-				unknown.push_back(sup);
 				out.issues.push_back({ .what = schema_issue::kind::unknown_superclass,
 				  .name = sup,
 				  .detail = detail::format(
@@ -709,26 +711,31 @@ namespace detail {
 	  schema_report &out)
 	{
 		const std::vector<reached_class> all = with_superclasses(s, classes, out);
+		// objectClass (RFC 4512 3.3, OID 2.5.4.0) by any of its names: add
+		// sends the declared classes.
+		const attribute_type *object_class = s.find_attribute("objectClass");
+		const auto is_object_class = [&](std::string_view m, const attribute_type *a) {
+			if (a != nullptr) {
+				return a == object_class || a->oid == "2.5.4.0";
+			}
+			return detail::iequals(m, "objectClass") || m == "2.5.4.0";
+		};
 		// Each attribute once: by its definition, or by its name if the
 		// server does not define it.
-		std::vector<const attribute_type *> done_types;
-		std::vector<std::string_view> done_names;
+		std::unordered_set<const attribute_type *> done_types;
+		ci_set done_names;
 		for (const reached_class &r : all) {
 			for (const auto &m : r.c->must) {
-				if (detail::iequals(m, "objectClass")) {
-					continue;// add sends the declared classes
-				}
 				const attribute_type *a = s.find_attribute(m);
+				if (is_object_class(m, a)) {
+					continue;
+				}
 				if (a != nullptr) {
-					if (a->no_user_modification || std::ranges::contains(done_types, a)) {
+					if (a->no_user_modification || !done_types.insert(a).second) {
 						continue;// the server's to provide (RFC 4511 4.7), or done
 					}
-					done_types.push_back(a);
-				} else {
-					if (std::ranges::any_of(done_names, [&](std::string_view n) { return detail::iequals(n, m); })) {
-						continue;
-					}
-					done_names.push_back(m);
+				} else if (!done_names.insert(m).second) {
+					continue;
 				}
 				report_must(r, m, mapping_of(s, a, m, fields), out);
 			}

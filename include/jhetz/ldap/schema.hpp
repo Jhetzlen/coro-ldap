@@ -327,8 +327,8 @@ namespace detail {
 // may be a read projection (search_as), the entry's RDN supplies its
 // attribute values at add time (RFC 4511 section 4.7), and some servers fill
 // MUSTs in themselves (Active Directory: objectCategory, instanceType,
-// nTSecurityDescriptor). Not reported: objectClass (add sends the declared
-// classes) and NO-USER-MODIFICATION attributes (a client must not send
+// nTSecurityDescriptor). Not reported: objectClass, by any of its names or
+// its OID 2.5.4.0 (add sends the declared classes), and NO-USER-MODIFICATION attributes (a client must not send
 // them, RFC 4511 section 4.7). Subtypes do not count (a cn member does not
 // map a MUST name); attribute options do (cn;lang-en maps cn).
 template<described T> [[nodiscard]] auto validate(const server_schema &s) -> schema_report

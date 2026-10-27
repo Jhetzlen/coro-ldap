@@ -918,6 +918,20 @@ TEST_CASE("schema: MUST checks follow the RFC 4512 rules", "[schema][validate]")
 		};
 		CHECK(must_issues(ldap::validate<named_thing>(ldap::server_schema::parse(core_types, classes))).empty());
 	}
+	SECTION("objectClass is sent whatever its spelling: OID or another NAME")
+	{
+		std::pmr::vector<std::pmr::string> types = core_types;
+		types.front() = "( 2.5.4.0 NAME ( 'objectClass' 'oc' ) SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )";
+		const std::pmr::vector<std::pmr::string> classes{
+			"( 1.9 NAME 'namedThing' SUP top MUST ( 2.5.4.0 $ OC ) )",
+			"( 2.5.6.0 NAME 'top' ABSTRACT MUST 2.5.4.0 )",
+		};
+		CHECK(must_issues(ldap::validate<named_thing>(ldap::server_schema::parse(types, classes))).empty());
+		// Not defined on the server: its OID and RFC 4512 name still are it,
+		// an alias is not known.
+		CHECK(must_issues(ldap::validate<named_thing>(ldap::server_schema::parse({}, classes)))
+			  == std::vector<std::pair<k, std::string>>{ { k::must_attribute_not_mapped, "OC" } });
+	}
 	SECTION("a MUST the server does not define is matched by name, once")
 	{
 		const std::pmr::vector<std::pmr::string> classes{
@@ -954,4 +968,38 @@ TEST_CASE("schema: MUST checks follow the RFC 4512 rules", "[schema][validate]")
 		CHECK(rep.issues[0].what == k::unknown_object_class);
 		CHECK(must_issues(rep).empty());
 	}
+}
+
+TEST_CASE("schema: MUST checks scale with long SUP chains and MUST lists", "[schema][validate]")
+{
+	// A server schema is the server's: 20000 classes chained by SUP, each
+	// with a MUST the members map (cn) and one of 4000 the server does
+	// not define, all also in the declared class's MUST list. Linear
+	// lookups made this seconds (minutes under ASan).
+	constexpr std::size_t chain = 20'000;
+	constexpr std::size_t names = 4'000;
+	std::pmr::vector<std::pmr::string> classes;
+	std::string list = "( 1.9 NAME 'namedThing' SUP c1 MUST ( cn";
+	for (std::size_t i = 0; i < names; ++i) {
+		list += " $ m" + std::to_string(i);
+	}
+	classes.emplace_back(list + " ) )");
+	for (std::size_t i = 1; i < chain; ++i) {
+		classes.emplace_back("( 1.10." + std::to_string(i) + " NAME 'c" + std::to_string(i) + "' SUP ( c"
+							 + std::to_string(i + 1) + " $ namedThing ) MUST ( cn $ M" + std::to_string(i % names)
+							 + " ) )");
+	}
+	const auto s = ldap::server_schema::parse(core_types, classes);
+	REQUIRE(s.object_class_count() == chain);
+	const auto start = std::chrono::steady_clock::now();
+	const auto issues = must_issues(ldap::validate<named_thing>(s));
+	const auto took = std::chrono::steady_clock::now() - start;
+	using k = ldap::schema_issue::kind;
+	// c<chain> is not defined, then each m<i> is reported once, for
+	// namedThing.
+	REQUIRE(issues.size() == names + 1);
+	CHECK(issues.front() == std::pair<k, std::string>{ k::unknown_superclass, "c" + std::to_string(chain) });
+	CHECK(issues[1] == std::pair<k, std::string>{ k::must_attribute_not_mapped, "m0" });
+	CHECK(issues.back() == std::pair<k, std::string>{ k::must_attribute_not_mapped, "m" + std::to_string(names - 1) });
+	CHECK(took < std::chrono::seconds(10));
 }

@@ -1413,8 +1413,9 @@ Checks:
   class that requires it. Matching resolves both sides through the schema:
   an alias (`surname` for `sn`), the OID, or an option (`cn;lang-en`)
   maps the attribute, a subtype does not (`cn` does not map a MUST `name`;
-  RFC 4512 requires the type itself). Not reported: `objectClass` (`top`'s
-  MUST: add sends the declared classes) and NO-USER-MODIFICATION
+  RFC 4512 requires the type itself). Not reported: `objectClass`, by any
+  of its names or its OID 2.5.4.0 (`top`'s MUST: add sends the declared
+  classes) and NO-USER-MODIFICATION
   attributes (RFC 4511 4.7: a client must not send them, the server
   provides them). These are warnings, not errors, so
   `schema_check::on_first_use` never fails on them: a descriptor may be a

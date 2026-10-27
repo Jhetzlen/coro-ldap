@@ -178,7 +178,6 @@ class connection::impl
 		}
 	};
 	auto knowledge() noexcept -> server_knowledge & { return knowledge_; }
-	auto knowledge() const noexcept -> const server_knowledge & { return knowledge_; }
 
 	// Tests only (detail::set_next_message_id): the id the next request gets,
 	// to reach maxInt without sending 2^31 requests.
@@ -587,12 +586,7 @@ namespace detail {
 		}
 		impl_ref(const impl_ref &o) noexcept : impl_ref(o.p_) {}
 		impl_ref(impl_ref &&o) noexcept : p_(std::exchange(o.p_, nullptr)) {}
-		auto operator=(const impl_ref &o) noexcept -> impl_ref &
-		{
-			impl_ref copy(o);
-			std::swap(p_, copy.p_);
-			return *this;
-		}
+		auto operator=(const impl_ref &) -> impl_ref & = delete;// unused
 		auto operator=(impl_ref &&o) noexcept -> impl_ref &
 		{
 			impl_ref moved(std::move(o));
@@ -607,7 +601,6 @@ namespace detail {
 		}
 		auto operator->() const noexcept -> connection::impl * { return p_; }
 		auto operator*() const noexcept -> connection::impl & { return *p_; }
-		explicit operator bool() const noexcept { return p_ != nullptr; }
 
 	  private:
 		connection::impl *p_ = nullptr;

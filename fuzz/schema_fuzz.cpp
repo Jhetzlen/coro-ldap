@@ -14,7 +14,11 @@
 //   what did not as skipped; syntax_of terminates, and so does the MUST
 //   check of validate<T> (a SUP naming the class itself is a cycle) with
 //   the class declared and a member for each of its names, whose issues
-//   are warnings named by the MUST or SUP entries.
+//   are warnings named by the MUST or SUP entries;
+// - split at its newlines, as several definitions (a schema with SUP
+//   chains, cycles and shared MUSTs), the MUST check with every class
+//   declared terminates, and its issues are warnings named by a MUST or
+//   SUP entry of a class that parsed.
 #include "jhetz/ldap/schema.hpp"
 
 #include "check.hpp"
@@ -22,6 +26,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,6 +34,46 @@
 constexpr jhetz::ldap::fuzz::checker check{ "schema_fuzz" };
 
 namespace ldap = jhetz::ldap;
+
+namespace {
+
+// The input split at its newlines, as several definitions.
+void check_multi(std::string_view text)
+{
+	if (!text.contains('\n')) {
+		return;
+	}
+	std::pmr::vector<std::pmr::string> lines;
+	std::vector<ldap::object_class_type> parsed;
+	for (const auto line : std::views::split(text, '\n')) {
+		lines.emplace_back(std::string_view(line));
+		if (auto lc = ldap::parse_object_class(lines.back())) {
+			parsed.push_back(std::move(*lc));
+		}
+	}
+	const auto multi = ldap::server_schema::parse(lines, lines);
+	std::vector<const char *> declared;
+	std::vector<ldap::detail::field_use> fields;
+	for (const auto &pc : parsed) {
+		declared.push_back(pc.oid.c_str());
+		for (const auto &n : pc.names) {
+			fields.push_back({ .name = n, .kind = ldap::cardinality::multiple, .read_only = false });
+		}
+	}
+	ldap::schema_report rep;
+	ldap::detail::check_must(multi, declared, fields, rep);
+	for (const auto &i : rep.issues) {
+		check(!i.is_error(), "!i.is_error()");
+		const bool superclass = i.what == ldap::schema_issue::kind::unknown_superclass;
+		check(std::ranges::any_of(parsed,
+				[&](const ldap::object_class_type &pc) {
+					return std::ranges::contains(superclass ? pc.sup : pc.must, i.name);
+				}),
+		  "a MUST issue names a parsed class's MUST entry, a superclass issue a SUP entry");
+	}
+}
+
+}// namespace
 
 extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size) -> int
 {
@@ -91,5 +136,6 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 			  "a MUST issue names a MUST entry, a superclass issue a SUP entry");
 		}
 	}
+	check_multi(text);
 	return 0;
 }

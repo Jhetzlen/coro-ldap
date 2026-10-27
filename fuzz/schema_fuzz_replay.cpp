@@ -32,12 +32,18 @@ auto main(int argc, char **argv) -> int
 	  "( 1.2.10 NAME 'spacelen' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 {256} SINGLE-VALUE )",
 	  "( 1.2.11 NAME 'junklen' SYNTAX '1.3.6.1.4.1.1466.115.121.1.15{\r\nforged' X-NDS_SYNTAX '1' )",
 	  "( 1.2.3 NAME 'unterminated )",
+	  // Several definitions, one per line: a SUP chain into a cycle, an
+	  // unknown superclass, MUSTs shared and objectClass by OID and alias.
+	  "( 2.5.4.0 NAME ( 'objectClass' 'oc' ) SYNTAX 1.3.6.1.4.1.1466.115.121.1.38 )\n"
+	  "( 2.5.6.0 NAME 'top' ABSTRACT MUST 2.5.4.0 )\n"
+	  "( 1.3 NAME 'a' SUP (top$b) MUST (oc$cn$sn) )\n"
+	  "( 1.4 NAME 'b' SUP ( a $ gone ) MUST ( SN $ 1.5 ) MAY cn )",
 	  "",
 	});
 	fuzz::replay_config cfg{ .name = "schema_fuzz_replay",
 		.extension = ".txt",
 		.seeds = {},
-		.interesting = { '(', ')', '\'', '$', '{', '}', ' ', '\\', '.', '1', 'N', 'S', 'X', '-' },
+		.interesting = { '(', ')', '\'', '$', '\n', '{', '}', ' ', '\\', '.', '1', 'N', 'S', 'X', '-' },
 		.mutation_runs = 100'000,
 		.random_runs = 30'000,
 		.max_random_size = 64,
