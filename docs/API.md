@@ -387,7 +387,7 @@ itself needs only ICU.
   `referral_connector` (`std::function` returning
   `task<result<connection *>>` for a URL and its depth; null skips it), which
   decides which servers may be contacted and how their connections are
-  bound. It returns `chased_search{entries, referrals, complete}`: the
+  bound. It returns `chased_search{entries, referrals, unlisted, complete}`: the
   entries of every server reached, one `referral_attempt` per URI tried
   (`followed`, `skipped_policy`, `skipped_loop`, `limit_reached`,
   `unparseable`, `failed` with its error), and `complete == false` when a
@@ -395,11 +395,14 @@ itself needs only ICU.
   a plain success; such a reference never fails the search). A referral
   result that cannot be followed fails the call (the last error, else the
   referral). `chase_compare(conn, params, connector, policy)` does the
-  same for a compare (`chased_compare{value, referrals}`). The URIs of one
+  same for a compare (`chased_compare{value, referrals, unlisted}`). The URIs of one
   reference are alternatives, tried in order; `referral_policy` bounds the
-  depth (`max_hops`, 10 by default as RFC 4511 asks) and the connector calls
-  (`max_targets`, 64); the request's `timeout` bounds the whole chase, the
-  connector's work included (cancelled when the budget is spent). Loops
+  depth (`max_hops`, 10 by default as RFC 4511 asks), the connector calls
+  (`max_targets`, 64; once reached the chase stops, and the references still
+  waiting are only counted in `unlisted`) and the attempt list
+  (`max_attempts`, 256; the rest counted in `unlisted`); the request's
+  `timeout` bounds the whole chase, the connector's work included
+  (cancelled when the budget is spent). Loops
   (the same server, DN, scope and filter, the origin's own request
   included) are skipped. Writes are never chased.
   `make_same_policy_connector(ioc, origin, options, allowed_hosts, setup)`

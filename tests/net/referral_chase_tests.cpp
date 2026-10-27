@@ -272,14 +272,61 @@ TEST_CASE("chase_search: nested references, one hop deeper each", "[net][referra
 		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed, referral_outcome::limit_reached });
 		CHECK(w.asked.size() == 1);
 	}
-	SECTION("over max_targets: partial")
+	SECTION("over max_targets: partial, the rest counted, not examined")
 	{
 		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_targets = 1 }));
 		REQUIRE(r.has_value());
 		CHECK_FALSE(r->complete);
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed, referral_outcome::limit_reached });
+		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed });
+		CHECK(r->unlisted == 1);
 		CHECK(w.asked.size() == 1);
 	}
+	w.check_servers();
+}
+
+TEST_CASE("chase_search: many references cost little once the limits are reached", "[net][referral]")
+{
+	world w;
+	constexpr int references = 1000;
+	step s;
+	for (const auto *bad : { "https://x.example/", "not a url", "ldap://x.example" }) {
+		s.replies.push_back(bytes_of(ref_msg(1, { bad })));
+	}
+	for (int i = 0; i < references; ++i) {
+		s.replies.push_back(bytes_of(ref_msg(1, { "ldap://no.example/ou=n" + std::pmr::string(std::to_string(i)) })));
+	}
+	s.replies.push_back(bytes_of(done_msg(1)));
+	w.serve("a.example", { std::move(s) });
+	w.refused = { "no.example" };
+
+	auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_targets = 2, .max_attempts = 4 }));
+	REQUIRE(r.has_value());
+	CHECK_FALSE(r->complete);
+	// Three unparseable and one skipped listed; the second skipped one
+	// counted over max_attempts, the other references once max_targets
+	// was reached.
+	CHECK(outcomes(r->referrals)
+		  == std::vector{ referral_outcome::unparseable,
+			referral_outcome::unparseable,
+			referral_outcome::unparseable,
+			referral_outcome::skipped_policy });
+	CHECK(r->unlisted == 1 + (references - 2));
+	CHECK(w.asked.size() == 2);
+	w.check_servers();
+}
+
+TEST_CASE("chase_search: over max_hops, one entry per reference", "[net][referral]")
+{
+	world w;
+	w.serve("a.example",
+	  { answer({ ref_msg(1, { "ldap://b.example/ou=b,dc=example,dc=org", "ldap://c.example/ou=c,dc=example,dc=org" }),
+		done_msg(1) }) });
+	auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_hops = 0 }));
+	REQUIRE(r.has_value());
+	CHECK_FALSE(r->complete);
+	REQUIRE(r->referrals.size() == 1);
+	CHECK(r->referrals[0].uri == "ldap://b.example/ou=b,dc=example,dc=org");
+	CHECK(r->referrals[0].outcome == referral_outcome::limit_reached);
 	w.check_servers();
 }
 
@@ -606,7 +653,9 @@ TEST_CASE("chase_search: the timeout bounds the whole chase, the connector inclu
 		REQUIRE(r.has_value());
 		CHECK_FALSE(r->complete);
 		CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=a,dc=example,dc=org" });
-		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed, referral_outcome::limit_reached });
+		// b's reference is left unexamined: the chase stopped.
+		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::failed });
+		CHECK(r->unlisted == 1);
 		REQUIRE(r->referrals[0].failure);
 		CHECK(r->referrals[0].failure->code == ldap::cond::timeout);
 		CHECK(w.asked == std::vector<std::pair<std::string, std::size_t>>{ { "slow.example", 1 } });

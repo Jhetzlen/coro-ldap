@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -157,6 +158,8 @@ namespace {
 		referral_policy policy;
 		std::optional<clock::time_point> deadline;
 		std::vector<referral_attempt> attempts{};
+		// URIs considered beyond policy.max_attempts, or not examined.
+		std::size_t unlisted = 0;
 		std::vector<visit_key> visited{};
 		std::size_t targets = 0;
 
@@ -166,6 +169,10 @@ namespace {
 		  referral_outcome outcome,
 		  std::optional<error> failure = std::nullopt)
 		{
+			if (attempts.size() >= policy.max_attempts) {
+				++unlisted;
+				return;
+			}
 			attempts.push_back({ .uri = std::string(uri),
 			  .kind = kind,
 			  .depth = depth,
@@ -193,6 +200,9 @@ namespace {
 			const auto left = remaining();
 			return left && left->count() <= 0;
 		}
+
+		// max_targets reached or the budget spent: the chase stops.
+		[[nodiscard]] auto exhausted() const -> bool { return targets >= policy.max_targets || spent(); }
 	};
 
 	auto canceled() -> error { return make_error(capy::error::canceled, "referral chase"); }
@@ -232,17 +242,12 @@ namespace {
 		visit_key key{};
 	};
 
-	// The checks made before the connector is asked for `uri`: the hop
-	// limit, the URL, the request for it, the target limit and the budget.
-	// nullopt (the attempt recorded) when one fails.
+	// The URL and the request for `uri`; nullopt (the attempt recorded)
+	// when either cannot be had.
 	template<class Params>
 	auto prepare(chase_state &st, std::string_view uri, reference_kind kind, std::size_t depth, const Params &base)
 	  -> std::optional<prepared<Params>>
 	{
-		if (depth > st.policy.max_hops) {
-			st.record(uri, kind, depth, referral_outcome::limit_reached);
-			return std::nullopt;
-		}
 		auto u = url::parse(uri);
 		if (!u) {
 			st.record(uri, kind, depth, referral_outcome::unparseable, std::move(u.error()));
@@ -259,16 +264,14 @@ namespace {
 			st.record(uri, kind, depth, referral_outcome::unparseable, std::move(request.error()));
 			return std::nullopt;
 		}
-		if (st.targets >= st.policy.max_targets || st.spent()) {
-			st.record(uri, kind, depth, referral_outcome::limit_reached);
-			return std::nullopt;
-		}
 		visit_key key = request_key(*u, *request);
 		return prepared<Params>{ .server = std::move(*u), .request = std::move(*request), .key = std::move(key) };
 	}
 
-	// Tries the URIs of one reference in order until one is followed. Fails
-	// only when the chase is cancelled.
+	// Tries the URIs of one reference in order until one is followed. Over
+	// a limit, the URI is limit_reached and the reference's other URIs are
+	// not looked at (they would be over it too). Fails only when the chase
+	// is cancelled.
 	template<class Params, class Value, class Op>
 	auto follow(chase_state &st,
 	  std::span<const std::pmr::string> uris,
@@ -285,6 +288,11 @@ namespace {
 		for (const auto &uri : uris) {
 			if (stop.stop_requested()) {
 				co_return std::unexpected(canceled());
+			}
+			// The cheap checks first: nothing is parsed or built over a limit.
+			if (depth > st.policy.max_hops || st.exhausted()) {
+				st.record(uri, kind, depth, referral_outcome::limit_reached);
+				break;
 			}
 			auto p = prepare(st, uri, kind, depth, base);
 			if (!p) {
@@ -371,12 +379,14 @@ namespace {
 		return st;
 	}
 
-	// A continuation reference waiting to be followed.
+	// A continuation reference waiting to be followed: its URIs, and the
+	// request that got it, shared by the references of one run (not a copy
+	// each: a reference costs the server a few dozen bytes).
 	struct pending_reference
 	{
 		string_list uris{};
 		std::size_t depth = 0;
-		search_params request{};
+		std::shared_ptr<const search_params> request{};
 	};
 
 }// namespace
@@ -416,19 +426,32 @@ auto chase_search(connection &origin,
 		for (auto &e : r.value.entries) {
 			out.entries.push_back(std::move(e));
 		}
+		if (r.value.references.empty()) {
+			return;
+		}
+		const auto shared = std::make_shared<const search_params>(std::move(r.request));
 		for (auto &uris : r.value.references) {
-			queue.push_back({ .uris = std::move(uris), .depth = r.depth + 1, .request = r.request });
+			queue.push_back({ .uris = std::move(uris), .depth = r.depth + 1, .request = shared });
 		}
 	};
 	take(*first);
 	while (!queue.empty()) {
+		if (st.exhausted()) {
+			// The chase stops: what is left is counted, not examined.
+			for (const auto &ref : queue) {
+				st.unlisted += ref.uris.size();
+			}
+			queue.clear();
+			out.complete = false;
+			break;
+		}
 		pending_reference ref = std::move(queue.front());
 		queue.pop_front();
 		auto f = co_await follow<search_params, search_run>(st,
 		  std::span<const std::pmr::string>(ref.uris),
 		  reference_kind::continuation_reference,
 		  ref.depth,
-		  ref.request,
+		  *ref.request,
 		  op);
 		if (!f) {
 			co_return std::unexpected(std::move(f.error()));
@@ -440,6 +463,7 @@ auto chase_search(connection &origin,
 		}
 	}
 	out.referrals = std::move(st.attempts);
+	out.unlisted = st.unlisted;
 	co_return out;
 }
 
@@ -462,7 +486,7 @@ auto chase_compare(connection &origin, compare_params request, referral_connecto
 	if (!f->target) {
 		co_return std::unexpected(f->last_failure ? std::move(*f->last_failure) : std::move(r.error()));
 	}
-	co_return chased_compare{ .value = f->target->value, .referrals = std::move(st.attempts) };
+	co_return chased_compare{ .value = f->target->value, .referrals = std::move(st.attempts), .unlisted = st.unlisted };
 }
 
 }// namespace jhetz::ldap

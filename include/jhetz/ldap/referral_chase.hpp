@@ -49,10 +49,17 @@
 // connector's task is cancelled (through its stop token) when the budget
 // runs out while it works, and that URI is then failed with a timeout
 // error; each request sent to a target gets what is left of the budget once
-// the connector returned; once it is spent the remaining URIs are
-// limit_reached. A connector that ignores cancellation is bounded only by
-// itself (its connection is then not used). Without a timeout each request
-// has its connection's operation_timeout and the chase has no overall limit.
+// the connector returned. A connector that ignores cancellation is bounded
+// only by itself (its connection is then not used). Without a timeout each
+// request has its connection's operation_timeout and the chase has no
+// overall limit.
+// Once max_targets is reached or the budget spent the chase stops: the URI
+// at hand is limit_reached, and the continuation references still waiting
+// are not parsed (their URIs are counted in `unlisted`, and they clear
+// `complete`). Over max_hops, a reference gets one limit_reached entry,
+// not one per URI. The attempt list keeps at most max_attempts entries;
+// the URIs considered beyond them are counted in `unlisted` too, so a
+// server streaming references cannot make the list grow without bound.
 //
 // Loops (RFC 4511: clients "MUST NOT repeatedly contact the same server for
 // the same request with the same parameters"): a URI whose server (scheme,
@@ -115,12 +122,16 @@ struct referral_policy
 	// able to handle at least ten nested referrals".
 	static constexpr std::size_t default_max_hops = 10;
 	static constexpr std::size_t default_max_targets = 64;
+	static constexpr std::size_t default_max_attempts = 256;
 
 	// Deepest URL followed: 1 follows only what the origin returned; 0
 	// follows nothing.
 	std::size_t max_hops = default_max_hops;
 	// Most URIs handed to the connector in one chase.
 	std::size_t max_targets = default_max_targets;
+	// Most referral_attempt entries in a result (chased_*::referrals); the
+	// URIs considered beyond them are only counted (chased_*::unlisted).
+	std::size_t max_attempts = default_max_attempts;
 };
 
 // What became of one URI of a referral or continuation reference.
@@ -136,8 +147,8 @@ enum class referral_outcome : std::uint8_t {
 };
 
 // One URI that was considered, in the order the chase got to it. URIs not
-// tried because an earlier alternative of the same reference was followed
-// are not listed.
+// tried because an earlier alternative of the same reference was followed,
+// or was over a limit, are not listed.
 struct referral_attempt
 {
 	std::string uri{};// as the server sent it
@@ -153,10 +164,15 @@ struct chased_search
 	// those of each continuation reference followed, in the order followed.
 	std::pmr::vector<entry> entries{};
 	std::vector<referral_attempt> referrals{};
+	// URIs not in `referrals`: those beyond referral_policy::max_attempts,
+	// and those of the references left unexamined when the chase stopped
+	// (max_targets reached or the timeout spent).
+	std::size_t unlisted = 0;
 	// False if some continuation reference was not followed by any of its
-	// URIs (skipped, unparseable, over a limit or failed): the entries are
-	// then partial. A reference skipped only as a loop leaves it true (its
-	// server already got that search).
+	// URIs (skipped, unparseable, over a limit, failed, or left unexamined
+	// when the chase stopped): the entries are then partial. A reference
+	// skipped only as a loop leaves it true (its server already got that
+	// search).
 	bool complete = true;
 };
 
@@ -164,6 +180,7 @@ struct chased_compare
 {
 	bool value = false;// compareTrue: true, compareFalse: false
 	std::vector<referral_attempt> referrals{};
+	std::size_t unlisted = 0;// URIs beyond referral_policy::max_attempts
 };
 
 // connection::search, chasing referral results and continuation references

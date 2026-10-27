@@ -830,7 +830,12 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   the budget of the whole chase: the connector's task runs under it
   (`corosio::timeout`, so a pending connect or setup bind is cancelled
   when it is spent) and each request to a target gets what is left after
-  the connector returned. Results: every URI considered gets a
+  the connector returned. A server's references cost little to send, so
+  the chase keeps its own cost per reference small: the queue holds the
+  URIs and a shared pointer to the request that got them (built for a URI
+  only when it is tried), once `max_targets` or the budget is spent the
+  references still waiting are counted (`unlisted`) without being parsed,
+  and the attempt list is capped (`max_attempts`). Results: every URI considered gets a
   `referral_attempt` (followed, skipped_policy, skipped_loop,
   limit_reached, unparseable, failed with the error). A continuation
   reference that cannot be followed never fails the search but clears
