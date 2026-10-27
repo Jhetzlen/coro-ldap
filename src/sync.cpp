@@ -47,9 +47,13 @@ namespace detail {
 	void io_thread::join() noexcept
 	{
 		guard_.reset();
-		if (thread_.joinable()) {
-			thread_.join();
+		if (!thread_.joinable()) {
+			return;
 		}
+		if (on_this_thread()) {
+			fatal(facade_, "destroyed on its own I/O thread (it would join itself)");
+		}
+		thread_.join();
 	}
 
 	auto
@@ -184,24 +188,24 @@ namespace {
 
 }// namespace
 
-transaction::transaction(const detail::io_thread &io, std::unique_ptr<ldap::transaction> t) noexcept
-  : io_(&io), txn_(std::move(t))
+transaction::transaction(std::shared_ptr<const detail::io_thread> io, std::unique_ptr<ldap::transaction> t) noexcept
+  : io_(std::move(io)), txn_(std::move(t))
 {}
 
-transaction::transaction(transaction &&other) noexcept
-  : io_(std::exchange(other.io_, nullptr)), txn_(std::move(other.txn_))
-{}
+transaction::transaction(transaction &&other) noexcept : io_(std::move(other.io_)), txn_(std::move(other.txn_)) {}
 
 auto transaction::operator=(transaction &&other) noexcept -> transaction &
 {
 	if (this != &other) {
 		settle();
-		io_ = std::exchange(other.io_, nullptr);
+		io_ = std::move(other.io_);
 		txn_ = std::move(other.txn_);
 	}
 	return *this;
 }
 
+// io_, destroyed after settle(), may be the last owner of a client's core:
+// its destructor then joins the I/O thread.
 transaction::~transaction() { settle(); }
 
 void transaction::settle() noexcept
@@ -444,6 +448,9 @@ auto client::who_am_i(extended_controls controls) -> result<std::string>
 
 auto client::connections() const -> std::size_t
 {
+	if (core_->io.on_this_thread()) {
+		return core_->pool ? core_->pool->connections() : 0;
+	}
 	return core_->io.run([this] { return detail::connections_of(*core_->pool); }).value_or(0);
 }
 

@@ -153,8 +153,9 @@ namespace detail {
 
 		// Drops the work guard and waits for the thread: run() returns once
 		// the work left on the io_context (operations ending, a detached
-		// unbind, a name lookup) is done. Idempotent. Not from the I/O
-		// thread.
+		// unbind, a name lookup) is done. Idempotent. From the I/O thread
+		// itself (the facade's last owner destroyed there: it would join
+		// itself), fatal().
 		void join() noexcept;
 
 	  private:
@@ -187,9 +188,14 @@ namespace detail {
 // transaction and waits for the server's answer (ignored), five seconds at
 // most even without a default timeout (the abort is then abandoned and
 // queued again without waiting); from the I/O thread itself it queues the
-// abort without waiting, as ldap::transaction does. Must not outlive its
-// sync::connection, or its sync::lease (nor that lease's release()).
-// Move-only. Not [[nodiscard]] as a class: it comes inside a result, which
+// abort without waiting, as ldap::transaction does. Made by a
+// sync::connection, it must not outlive it. Made by a sync::lease, it
+// shares the ownership of the client's I/O thread as the lease does, so
+// it may outlive the lease and the client without dangling; but keep the
+// lease while using it: `pool.acquire()->begin_transaction()` releases
+// the lease at the end of the statement, and the transaction then runs on
+// a connection back in the pool, which other leases may share (and which
+// the client's destruction closes). Move-only. Not [[nodiscard]] as a class: it comes inside a result, which
 // is [[nodiscard]] on its own.
 class transaction
 {
@@ -213,13 +219,15 @@ class transaction
 
   private:
 	template<class> friend class detail::connection_api;
-	transaction(const detail::io_thread &io, std::unique_ptr<ldap::transaction> t) noexcept;
+	transaction(std::shared_ptr<const detail::io_thread> io, std::unique_ptr<ldap::transaction> t) noexcept;
 
 	// Ends the ldap::transaction on the I/O thread, aborting it first if
 	// still open.
 	void settle() noexcept;
 
-	const detail::io_thread *io_ = nullptr;
+	// The I/O thread it runs on: owning (the client's core) when made by a
+	// sync::lease, not owning when made by a sync::connection.
+	std::shared_ptr<const detail::io_thread> io_{};
 	// Touched only on the I/O thread (null once moved from).
 	std::unique_ptr<ldap::transaction> txn_;
 };
@@ -230,7 +238,8 @@ namespace detail {
 	// and sync::lease. `Derived` provides
 	//   call(make_task): runs make_task(c) on the I/O thread with its
 	//     ldap::connection c (const from a const member) and waits for it;
-	//   runner(): its io_thread.
+	//   runner(): its io_thread, as the shared_ptr a sync::transaction
+	//     keeps.
 	template<class Derived> class connection_api
 	{
 	  public:
@@ -420,6 +429,9 @@ class connection : public detail::connection_api<connection>
 	explicit connection(connection_options options = {});
 	connection(const connection &) = delete;
 	auto operator=(const connection &) -> connection & = delete;
+	// Closes the connection on the I/O thread and joins it. Not on the I/O
+	// thread itself: it would join itself, and std::terminate() is called
+	// with a message on stderr.
 	~connection();
 
 	// Connects (and with options.start_tls, upgrades). Replaces (closes) a
@@ -443,7 +455,11 @@ class connection : public detail::connection_api<connection>
 	{
 		return self.io_.run([&] { return make_task(self.conn_); });
 	}
-	[[nodiscard]] auto runner() const noexcept -> const detail::io_thread & { return io_; }
+	// Not owning: a transaction must not outlive its sync::connection.
+	[[nodiscard]] auto runner() const noexcept -> std::shared_ptr<const detail::io_thread>
+	{
+		return { std::shared_ptr<const detail::io_thread>{}, &io_ };
+	}
 
 	connection_options options_;
 	detail::io_thread io_{ "sync::connection" };
@@ -464,11 +480,12 @@ namespace detail {
 // while another thread is inside one of its methods. A lease may outlive
 // its sync::client: the client's destruction closes the leased connection
 // (operations then fail with cond::connection_lost), and the I/O thread
-// keeps running until the last lease is destroyed or released. Not from
-// the I/O thread: there, release() and the destructor return the
-// connection without waiting, but must not end the last owner of the I/O
-// thread (the client and every other lease gone), which would join
-// itself. Move-only. Not [[nodiscard]] as a class: it comes inside a
+// keeps running until the last lease (or a transaction made by one) is
+// destroyed or released. On the I/O thread, release() and the destructor
+// return the connection without waiting; but there they must not end the
+// last owner of the I/O thread (the client, every other lease and their
+// transactions gone): it would join itself, and std::terminate() is
+// called with a message on stderr. Move-only. Not [[nodiscard]] as a class: it comes inside a
 // result, which is [[nodiscard]] on its own.
 class lease : public detail::connection_api<lease>
 {
@@ -506,7 +523,7 @@ class lease : public detail::connection_api<lease>
 		}
 		return self.io_->run([&] { return make_task(std::forward_like<Self &>(self.held_.get())); });
 	}
-	[[nodiscard]] auto runner() const noexcept -> const detail::io_thread & { return *io_; }
+	[[nodiscard]] auto runner() const noexcept -> std::shared_ptr<const detail::io_thread> { return io_; }
 
 	// Shares the ownership of the client's I/O thread (an aliasing pointer
 	// to its client_core); null iff the lease holds nothing.
@@ -535,10 +552,13 @@ class lease : public detail::connection_api<lease>
 // last one is destroyed or released, which joins it (see sync::lease). So
 // destroying a sync::client with leases outstanding is safe, and their
 // operations fail from then on. The memory resource must outlive the I/O
-// thread (the client and its last lease); the observer
+// thread (the client, its last lease and their transactions); the observer
 // (client_options::observer) need only outlive close(), the destructor's
-// at the latest. Do not destroy a sync::client while another thread is inside one
-// of its methods, nor from its I/O thread.
+// at the latest. Do not destroy a sync::client while another thread is
+// inside one of its methods, nor on its I/O thread unless a lease (or a
+// transaction made by one) outlives it there: the last owner of the I/O
+// thread destroyed on it would join itself, and std::terminate() is
+// called with a message on stderr.
 //
 // No search_stream(): as sync::connection, the facade has no blocking
 // stream; use search(), or a lease's search_paged().
@@ -570,7 +590,8 @@ class client
 	[[nodiscard]] auto compare(compare_params request) -> result<bool>;
 	[[nodiscard]] auto who_am_i(extended_controls controls = {}) -> result<std::string>;
 
-	// As ldap::client::connections(); 0 from the I/O thread.
+	// As ldap::client::connections(), from any thread (read at once on
+	// the I/O thread).
 	[[nodiscard]] auto connections() const -> std::size_t;
 
 	// As ldap::client::close(), and waits for it: closes every pooled

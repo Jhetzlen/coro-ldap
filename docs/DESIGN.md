@@ -1603,7 +1603,11 @@ and its destructor joins the thread.
   `sync::detail::connection_api<Derived>`, a CRTP base holding every
   blocking `connection` operation in terms of `Derived::call(make_task)`.
   `sync::connection` and `sync::lease` derive from it, so the two cannot
-  drift apart; `sync::transaction` holds the `io_thread` it runs on.
+  drift apart; `sync::transaction` holds the `io_thread` it runs on (a
+  `shared_ptr`, owning the client's core when made by a `sync::lease`,
+  so that it cannot dangle once the lease and the client are gone, as a
+  lease outliving its client cannot; not owning when made by a
+  `sync::connection`, which it must not outlive).
 - The noexcept paths that end objects of the I/O thread (the
   destructors of `sync::connection` and of the client's core,
   `sync::transaction`'s abort, `sync::lease::release()`) go through
@@ -1997,9 +2001,14 @@ decision left open.
   dangling `sync::lease` on a use after destruction), or forbidding
   leases to outlive the client (a crash for an easy mistake). `close()`
   from the I/O thread closes at once (it is not blocking there), so an
-  observer hook or a coroutine on `executor()` may call it. Neither
-  the client nor its last lease may be destroyed on the I/O thread
-  (that would join itself), as for `sync::connection`.
+  observer hook or a coroutine on `executor()` may call it, and
+  `connections()` reads the count at once there. The last owner of the
+  core (the client, or the last lease or lease-made transaction) must not
+  be destroyed on the I/O thread: it would join itself, and
+  `io_thread::join()` terminates with a message on stderr instead of
+  `std::thread::join()` throwing inside a noexcept destructor; the same
+  holds for `sync::connection` (3pf.19). A non-last lease released or
+  destroyed there returns its connection without waiting.
 - Later (beads): referral policy (3pf.1), a background prober, DNS SRV, weighted or
   round-robin selection, per-identity sub-pools.
 

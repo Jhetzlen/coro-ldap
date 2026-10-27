@@ -285,7 +285,7 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 		ldap::result<ldap::sync::lease> acquired{};
 		ldap::result<std::string> forwarded{};
 		ldap::result<std::string> on_lease{};
-		std::size_t connections = 1;
+		std::size_t connections = 0;
 	};
 	std::promise<from_io_thread> got;
 	capy::run_async(pool.executor())(
@@ -306,7 +306,7 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 		CHECK(e->code == ldap::client_errc::would_deadlock);
 		CHECK(e->context == "sync::client");
 	}
-	CHECK(r.connections == 0);
+	CHECK(r.connections == 1);// read at once on the I/O thread
 	// Everything still works from other threads.
 	CHECK(pool.who_am_i() == "dn:cn=me");
 	CHECK(held->who_am_i() == "dn:cn=me");
@@ -397,6 +397,64 @@ TEST_CASE("sync client: destroyed while a lease is outstanding", "[net][sync][cl
 	srv.stop();
 	CHECK_THAT(srv.log(0).error, IsEmpty());
 	CHECK(srv.log(0).received.size() == 1);// the bind only
+}
+
+TEST_CASE("sync client: a lease released or destroyed on the I/O thread", "[net][sync][client]")
+{
+	server_thread srv;
+	ldap::sync::client pool({ .servers = { srv.url() }, .max_connections = 1 });
+	auto held = pool.acquire({ .exclusive = true });
+	REQUIRE(held.has_value());
+	REQUIRE(held->who_am_i().has_value());
+	std::promise<void> released;
+	SECTION("released")
+	{
+		capy::run_async(pool.executor())([](ldap::sync::lease &l, std::promise<void> &done) -> capy::task<void> {
+			l.release();// not the last owner: returns the connection without waiting
+			done.set_value();
+			co_return;
+		}(*held, released));
+		released.get_future().wait();
+	}
+	SECTION("moved into a coroutine and destroyed there")
+	{
+		capy::run_async(pool.executor())([](ldap::sync::lease l, std::promise<void> &done) -> capy::task<void> {
+			l = ldap::sync::lease{};
+			done.set_value();
+			co_return;
+		}(std::move(*held), released));
+		released.get_future().wait();
+	}
+	CHECK_FALSE(static_cast<bool>(*held));
+	CHECK(pool.connections() == 1);
+	// The only connection is back in the pool: an exclusive lease gets it.
+	auto again = pool.acquire({ .exclusive = true });
+	REQUIRE(again.has_value());
+	CHECK(again->who_am_i() == "dn:cn=me");
+	CHECK(pool.connections() == 1);
+}
+
+TEST_CASE("sync client: a transaction outlives its temporary lease and the client", "[net][sync][client][transaction]")
+{
+	server_thread srv;
+	std::optional<ldap::sync::transaction> t;
+	{
+		ldap::sync::client pool({ .servers = { srv.url() } });
+		// The lease is released at the end of the statement; the transaction
+		// shares the client's core, so it keeps the I/O thread.
+		auto made = pool.acquire()->begin_transaction();
+		REQUIRE(made.has_value());
+		t.emplace(std::move(*made));
+		CHECK(t->is_open());
+	}// closes the connection; the transaction keeps the I/O thread
+	auto after = t->commit();
+	REQUIRE_FALSE(after.has_value());
+	SECTION("destroyed on this thread") { t.reset(); }
+	SECTION("destroyed on another thread")
+	{
+		std::thread([moved = std::move(*t)] mutable { auto gone = std::move(moved); }).join();
+		t.reset();
+	}
 }
 
 TEST_CASE("sync client: many threads share the pool", "[net][sync][client]")
