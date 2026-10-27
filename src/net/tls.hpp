@@ -55,7 +55,7 @@ struct verify_state
 	// verify_system_chain ran and accepted the chain.
 	bool system_chain_verified = false;
 	// The handshake's deadline (tls_handshake()), which bounds
-	// verify_system_chain's network retrieval.
+	// verify_system_chain's revocation retrieval (only: trust_store.hpp).
 	deadline_t deadline{};
 };
 

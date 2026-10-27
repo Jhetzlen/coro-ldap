@@ -114,9 +114,15 @@ struct tls_options
 	// roots Windows fetches on demand, its distrust and NotBefore rules, and
 	// revocation, soft-fail: an unreachable CRL or OCSP responder is not an
 	// error, a revoked certificate is), held to OpenSSL's security level;
-	// the host name is matched as elsewhere (host_matching). Setting any of
-	// them replaces the system store, CryptoAPI included; they may be
-	// combined.
+	// the host name is matched as elsewhere (host_matching). CryptoAPI is
+	// synchronous: during the handshake it blocks the thread running the
+	// io_context, and so every other operation on it, while it fetches
+	// what it needs. The connect or StartTLS timeout bounds only its
+	// revocation fetches (CRL, OCSP: all together, at most 20 s even
+	// without a timeout); intermediates (AIA) and on-demand roots have
+	// Windows' own per-URL timeout and can make the handshake overrun it.
+	// Setting any of them replaces the system store, CryptoAPI included;
+	// they may be combined.
 	std::filesystem::path ca_file{};// PEM file with one or more CA certificates
 	// Directory hashed with `openssl rehash`. OpenSSL reads it lazily through
 	// char paths: on Windows keep its path ASCII (files are opened by UTF-8

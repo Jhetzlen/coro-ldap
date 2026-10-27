@@ -387,14 +387,15 @@ auto verify_system_chain(std::span<const std::vector<unsigned char>> chain,
 		strong_para.pSerializedInfo = &strong_info;// NOLINT(cppcoreguidelines-pro-type-union-access)
 		para.pStrongSignPara = &strong_para;
 	}
-	DWORD flags = CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT;
-	if (timeout) {
-		// Every URL retrieval together (AuthRoot, AIA, CRL, OCSP), within
-		// what is left of the connect's or StartTLS's budget.
-		para.dwUrlRetrievalTimeout = static_cast<DWORD>(
-		  std::clamp<std::chrono::milliseconds::rep>(timeout->count(), 1, std::numeric_limits<DWORD>::max()));
-		flags |= CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT;
-	}
+	// The revocation retrieval, every CRL and OCSP URL together
+	// (CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT), within what is left of
+	// the connect's or StartTLS's deadline and at most
+	// max_revocation_retrieval, with a deadline or without. Microsoft
+	// documents dwUrlRetrievalTimeout for revocation only: AIA
+	// intermediates and AuthRoot roots are fetched with the chain engine's
+	// own per-URL timeout (trust_store.hpp).
+	para.dwUrlRetrievalTimeout = static_cast<DWORD>(revocation_retrieval_budget(timeout).count());
+	const DWORD flags = CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT | CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT;
 	PCCERT_CHAIN_CONTEXT raw_chain = nullptr;
 	// HCCE_CURRENT_USER (null): the user's and the machine's stores, with
 	// AuthRoot auto-update, as Schannel clients use.

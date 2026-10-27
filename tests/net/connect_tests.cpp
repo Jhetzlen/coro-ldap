@@ -1782,6 +1782,20 @@ TEST_CASE("TLS with the platform verifying the chain: the OpenSSL errors kept", 
 	CHECK_FALSE(fatal_with_platform_chain(X509_V_ERR_PERMITTED_VIOLATION, 0));
 }
 
+TEST_CASE("TLS with the platform verifying the chain: the revocation budget", "[net][connect][tls]")
+{
+	using net::detail::max_revocation_retrieval;
+	using net::detail::revocation_retrieval_budget;
+	using std::chrono::milliseconds;
+	CHECK(max_revocation_retrieval == std::chrono::seconds(20));
+	// What is left of the deadline, at most the cap; the cap without one.
+	CHECK(revocation_retrieval_budget(milliseconds(5000)) == milliseconds(5000));
+	CHECK(revocation_retrieval_budget(std::chrono::minutes(2)) == max_revocation_retrieval);
+	CHECK(revocation_retrieval_budget(std::nullopt) == max_revocation_retrieval);
+	CHECK(revocation_retrieval_budget(milliseconds(0)) == milliseconds(1));
+	CHECK(revocation_retrieval_budget(milliseconds(-5)) == milliseconds(1));
+}
+
 TEST_CASE("TLS with the platform verifying the chain: OpenSSL's security level for CryptoAPI", "[net][connect][tls]")
 {
 	using net::detail::strong_sign_for_level;

@@ -1593,10 +1593,26 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   soft-fail (CERT_CHAIN_POLICY_IGNORE_ALL_REV_UNKNOWN_FLAGS: an
   unreachable CRL or OCSP responder is accepted, a revoked certificate
   is not): stricter than OpenSSL, which checks none, without making
-  offline networks fail. The network retrieval is bounded by what is left
-  of the connect's or StartTLS's deadline
-  (CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT); it blocks the io thread
-  meanwhile, as CryptoAPI has no asynchronous interface. Custom anchors
+  offline networks fail. Only the revocation retrieval is bounded, every
+  CRL and OCSP URL together (CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT
+  with `dwUrlRetrievalTimeout`): by what is left of the connect's or
+  StartTLS's deadline, and at most 20 s (`max_revocation_retrieval`),
+  with a deadline or without, since soft-fail makes a longer wait
+  pointless. Microsoft documents `CERT_CHAIN_PARA::dwUrlRetrievalTimeout`
+  for revocation only: the intermediates fetched from AIA URLs and the
+  AuthRoot roots and lists are fetched with the chain engine's own
+  per-URL timeout (Windows' default), so a connect can overrun its
+  deadline by that much per such URL. Bounding them would take a chain
+  engine of our own per call (`CERT_CHAIN_ENGINE_CONFIG::
+  dwUrlRetrievalTimeout`, also per URL), losing the shared
+  `HCCE_CURRENT_USER` engine whose AuthRoot behaviour is the point;
+  `CERT_CHAIN_DISABLE_AIA` or cache-only retrieval would refuse the
+  servers that rely on AIA or a root not fetched yet. The whole call
+  blocks the io thread, and so every other operation on that io_context,
+  as CryptoAPI has no asynchronous interface and the OpenSSL verify
+  callback cannot suspend (moving it to a worker thread would need the
+  verdict computed before the callback asks). `tls_options` says so.
+  Custom anchors
   stay OpenSSL's alone (they replace the system store), and
   `insecure_accept_any` never asks CryptoAPI. A rejection reads
   `tls handshake: server certificate: Windows certificate chain:

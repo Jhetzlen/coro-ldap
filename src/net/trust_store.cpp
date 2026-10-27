@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <string_view>
@@ -79,6 +80,12 @@ auto add_trust_anchors(boost::corosio::tls_context &ctx, std::span<const std::st
 		}
 	}
 	return {};
+}
+
+auto revocation_retrieval_budget(std::optional<std::chrono::milliseconds> timeout) noexcept -> std::chrono::milliseconds
+{
+	return std::clamp(
+	  timeout.value_or(max_revocation_retrieval), std::chrono::milliseconds(1), max_revocation_retrieval);
 }
 
 auto strong_sign_for_level(int security_level) -> std::optional<strong_sign_lists>

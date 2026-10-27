@@ -111,8 +111,11 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
   to OpenSSL's security level (a `CERT_STRONG_SIGN_PARA`). Revocation
   is checked for every certificate but the root, soft-fail: a CRL or OCSP
   responder that cannot be reached in time is not an error, a revoked
-  certificate is. The fetches are bounded by what is left of the connect
-  or StartTLS timeout, and block the io thread meanwhile. A rejection's
+  certificate is. The revocation fetches together are bounded by what is
+  left of the connect or StartTLS timeout and at most 20 s; AIA and
+  AuthRoot fetches have Windows' own per-URL timeout, and can make a
+  connect overrun its timeout. CryptoAPI blocks the io thread throughout
+  (every other operation on that io_context waits). A rejection's
   context ends in `Windows certificate chain: <reason> (0x<HRESULT>)`.
   DESIGN.md has the reasoning.
 - The `ROOT` store is still copied into OpenSSL per connection (a root is
@@ -186,8 +189,11 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
   intermediate and an RSA-1024 CA at the default security level 2
   (`CERT_TRUST_HAS_WEAK_SIGNATURE`) but not a SHA-1 self-signed root (its
   own signature, which OpenSSL does not check either) nor the
-  RSA-PSS-signed chains CNG names `RSA`; how long a connect blocks with no network for the AuthRoot,
-  AIA and CRL fetches, within the timeout; and whether the
+  RSA-PSS-signed chains CNG names `RSA`; how long a connect blocks with
+  no network for the AuthRoot, AIA and CRL fetches (revocation within the
+  timeout and 20 s, AIA and AuthRoot per URL; whether
+  `dwUrlRetrievalTimeout` limits those too, which Microsoft does not
+  document); and whether the
   `CERT_CHAIN_PARA_HAS_EXTRA_FIELDS` layout matches on MSVC.
 - The Winsock test sockets (`tests/net/platform.hpp`): overlapped, so that
   `SO_RCVTIMEO` bounds a blocking `recv`; the CLI test's `cmd.exe` quoting

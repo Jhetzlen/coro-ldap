@@ -106,11 +106,28 @@ auto strong_sign_for_level(int security_level) -> std::optional<strong_sign_list
 // Signatures and keys below OpenSSL's `security_level` are rejected
 // (strong_sign_for_level). The host name is not checked: it stays
 // OpenSSL's (host_name_matching).
-// `timeout` bounds the network retrieval CryptoAPI may do (AuthRoot
-// roots, intermediates, CRLs, OCSP), all of it together; nullopt leaves
-// Windows' defaults. Blocks the calling thread meanwhile. Errors have the
-// context "Windows certificate chain: <why>". Not available off Windows
-// (std::errc::function_not_supported).
+// `timeout` (what is left of the deadline; nullopt: none) bounds only the
+// revocation retrieval, every CRL and OCSP URL together
+// (revocation_retrieval_budget). The intermediates CryptoAPI fetches from
+// AIA URLs and the roots and lists of AuthRoot auto-update are fetched
+// with the chain engine's own per-URL timeout (Windows' default; Microsoft
+// documents CERT_CHAIN_PARA::dwUrlRetrievalTimeout for revocation only),
+// so the call can take longer than `timeout`: the revocation budget plus
+// that timeout per such URL. Blocks the calling thread throughout. Errors
+// have the context "Windows certificate chain: <why>". Not available off
+// Windows (std::errc::function_not_supported).
+// The cap on verify_system_chain's revocation retrieval: revocation is
+// soft-fail, so waiting longer only delays the same verdict, with the
+// thread blocked.
+inline constexpr std::chrono::milliseconds max_revocation_retrieval = std::chrono::seconds(20);
+
+// verify_system_chain's budget for the revocation retrieval, every URL
+// together (CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT): `timeout`, what is
+// left of the deadline, at most max_revocation_retrieval, which also
+// applies without a deadline (nullopt); at least 1 ms.
+auto revocation_retrieval_budget(std::optional<std::chrono::milliseconds> timeout) noexcept
+  -> std::chrono::milliseconds;
+
 auto verify_system_chain(std::span<const std::vector<unsigned char>> chain,
   int security_level,
   std::optional<std::chrono::milliseconds> timeout) -> result<void>;
