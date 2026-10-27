@@ -1997,12 +1997,8 @@ TEST_CASE("connection: ldap::connect, bind, search and unbind over TCP", "[net][
 TEST_CASE("connection: ldap::connect failures", "[net][connection]")
 {
 	corosio::io_context ioc;
-	std::uint16_t port = 0;
-	{
-		corosio::tcp_acceptor acc(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1);
-		port = acc.local_endpoint().port();
-	}// closed: nothing listens there now
-	auto u = ldap::url::parse("ldap://127.0.0.1:" + std::to_string(port));
+	const refused_port closed;// nothing listens there
+	auto u = ldap::url::parse(closed.url());
 	REQUIRE(u.has_value());
 	auto c = run(ioc, ldap::connect(ioc, *u));
 	REQUIRE_FALSE(c.has_value());

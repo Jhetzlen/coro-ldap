@@ -10,7 +10,10 @@
 #include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/task.hpp>
+#include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/io_context.hpp>
+#include <boost/corosio/ipv4_address.hpp>
+#include <boost/corosio/tcp_socket.hpp>
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -20,6 +23,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -32,6 +36,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -46,52 +51,71 @@ using namespace std::chrono_literals;
 // milliseconds, and nothing sleeps.
 inline constexpr std::chrono::seconds io_limit{ 20 };
 
-// Starts `t` on `ioc`. The result (or exception) is stored in `out`.
+// outcome::get() of a task still running: drive_until() returned without
+// it, so either nothing was left to resume it or io_limit passed.
+inline constexpr std::string_view unfinished_task =
+  "task did not finish: the io_context ran out of work (nothing left to resume it) or io_limit passed";
+
+// What a task started by spawn() ended with: its result, or its exception.
+// The completion handlers share `state`, so a task that ends after its
+// outcome is gone (a test that failed, or gave up while the task still
+// ran) writes into that state rather than into a destroyed stack frame.
 template<class T> struct outcome
 {
-	std::optional<T> value{};
-	std::exception_ptr error{};
-	[[nodiscard]] auto done() const noexcept -> bool { return value.has_value() || error != nullptr; }
+	struct shared
+	{
+		std::optional<T> value{};
+		std::exception_ptr error{};
+	};
+	std::shared_ptr<shared> state = std::make_shared<shared>();
+
+	[[nodiscard]] auto done() const noexcept -> bool { return state->value.has_value() || state->error != nullptr; }
 	auto get() -> T &
 	{
-		if (error) {
-			std::rethrow_exception(error);
+		if (state->error) {
+			std::rethrow_exception(state->error);
 		}
-		if (!value) {
-			throw std::runtime_error("task did not finish within the time limit");
+		if (!state->value) {
+			throw std::runtime_error(std::string(unfinished_task));
 		}
-		return *value;
+		return *state->value;
 	}
 };
 
 template<> struct outcome<void>
 {
-	bool finished = false;
-	std::exception_ptr error{};
-	[[nodiscard]] auto done() const noexcept -> bool { return finished || error != nullptr; }
+	struct shared
+	{
+		bool finished = false;
+		std::exception_ptr error{};
+	};
+	std::shared_ptr<shared> state = std::make_shared<shared>();
+
+	[[nodiscard]] auto done() const noexcept -> bool { return state->finished || state->error != nullptr; }
 	void get() const
 	{
-		if (error) {
-			std::rethrow_exception(error);
+		if (state->error) {
+			std::rethrow_exception(state->error);
 		}
-		if (!finished) {
-			throw std::runtime_error("task did not finish within the time limit");
+		if (!state->finished) {
+			throw std::runtime_error(std::string(unfinished_task));
 		}
 	}
 };
 
+// Starts `t` on `ioc`. The result (or exception) is stored in `out`.
 template<class T> void spawn(corosio::io_context &ioc, capy::task<T> t, outcome<T> &out)
 {
 	if constexpr (std::is_void_v<T>) {
 		capy::run_async(
 		  ioc.get_executor(),
-		  [&out] { out.finished = true; },
-		  [&out](std::exception_ptr e) { out.error = std::move(e); })(std::move(t));
+		  [s = out.state] { s->finished = true; },
+		  [s = out.state](std::exception_ptr e) { s->error = std::move(e); })(std::move(t));
 	} else {
 		capy::run_async(
 		  ioc.get_executor(),
-		  [&out](T v) { out.value.emplace(std::move(v)); },
-		  [&out](std::exception_ptr e) { out.error = std::move(e); })(std::move(t));
+		  [s = out.state](T v) { s->value.emplace(std::move(v)); },
+		  [s = out.state](std::exception_ptr e) { s->error = std::move(e); })(std::move(t));
 	}
 }
 
@@ -102,14 +126,14 @@ template<class T> void spawn(corosio::io_context &ioc, std::stop_token st, capy:
 		capy::run_async(
 		  ioc.get_executor(),
 		  std::move(st),
-		  [&out] { out.finished = true; },
-		  [&out](std::exception_ptr e) { out.error = std::move(e); })(std::move(t));
+		  [s = out.state] { s->finished = true; },
+		  [s = out.state](std::exception_ptr e) { s->error = std::move(e); })(std::move(t));
 	} else {
 		capy::run_async(
 		  ioc.get_executor(),
 		  std::move(st),
-		  [&out](T v) { out.value.emplace(std::move(v)); },
-		  [&out](std::exception_ptr e) { out.error = std::move(e); })(std::move(t));
+		  [s = out.state](T v) { s->value.emplace(std::move(v)); },
+		  [s = out.state](std::exception_ptr e) { s->error = std::move(e); })(std::move(t));
 	}
 }
 
@@ -157,6 +181,37 @@ template<class T> auto finish(corosio::io_context &ioc, capy::task<T> t) -> T
 		return std::move(out.get());
 	}
 }
+
+// A loopback port nothing listens on, held while this lives: a TCP socket
+// bound to it that never listens, so a connect there is refused at once,
+// and no other socket can bind the port meanwhile. A port freed by closing
+// its acceptor is not enough: a test process running in parallel may bind
+// it for a scripted server, which then accepts the connect the test
+// expected refused (and the scripted connection that process's own client
+// expected).
+class refused_port
+{
+  public:
+	refused_port()
+	{
+		if (const auto ec = socket_.open(); ec) {
+			throw std::system_error(ec, "refused_port: open");
+		}
+		if (const auto ec = socket_.bind(corosio::endpoint(corosio::ipv4_address::loopback(), 0)); ec) {
+			throw std::system_error(ec, "refused_port: bind");
+		}
+	}
+	[[nodiscard]] auto port() const -> std::uint16_t { return socket_.local_endpoint().port(); }
+	// "<scheme>://127.0.0.1:<port>".
+	[[nodiscard]] auto url(std::string_view scheme = "ldap") const -> std::string
+	{
+		return std::string(scheme) + "://127.0.0.1:" + std::to_string(port());
+	}
+
+  private:
+	corosio::io_context ioc_{};
+	corosio::tcp_socket socket_{ ioc_ };
+};
 
 // The io_context's frame allocator in the out-of-memory tests: counts the
 // coroutine frames allocated from it (every run_async's and its task's, and

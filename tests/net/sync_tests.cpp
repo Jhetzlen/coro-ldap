@@ -124,15 +124,10 @@ TEST_CASE("sync: a blocking call from the I/O thread fails with would_deadlock",
 
 TEST_CASE("sync: connect failures and destruction without unbind", "[net][sync]")
 {
-	std::uint16_t port = 0;
 	{
-		corosio::io_context ioc;
-		corosio::tcp_acceptor acc(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1);
-		port = acc.local_endpoint().port();
-	}
-	{
+		const refused_port closed;// nothing listens there
 		ldap::sync::connection c;
-		auto r = c.connect(*ldap::url::parse("ldap://127.0.0.1:" + std::to_string(port)));
+		auto r = c.connect(*ldap::url::parse(closed.url()));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == std::errc::connection_refused);
 	}

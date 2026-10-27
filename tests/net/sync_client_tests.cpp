@@ -104,10 +104,12 @@ class threaded_script_server
 			}
 			auto &log = logs_.emplace_back();
 			log.hang_up = [&peer] { peer.close(); };
+			// Counted first: the session may run its whole script before
+			// spawn() returns, and the client thread check accepted() then.
+			++accepted_;
 			spawn(ioc_,
 			  serve_script(net::transport::wrap(socket_ref{ &peer }, "server"), script, log),
 			  sessions_.emplace_back());
-			++accepted_;
 		}
 		acc_.close();
 	}
@@ -124,18 +126,6 @@ class threaded_script_server
 	std::atomic<std::size_t> accepted_{ 0 };
 	std::thread thread_{};
 };
-
-// A URL nothing listens on: connects are refused at once.
-auto refused_url() -> ldap::url
-{
-	std::uint16_t port = 0;
-	{
-		corosio::io_context ioc;
-		corosio::tcp_acceptor a(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1);
-		port = a.local_endpoint().port();
-	}
-	return *ldap::url::parse("ldap://127.0.0.1:" + std::to_string(port));
-}
 
 auto text(const ldap::url &u) -> std::string { return std::string(std::string_view(u.to_string())); }
 
@@ -349,7 +339,8 @@ struct first_retry final : ldap::client_observer
 TEST_CASE("sync client: close() while another thread waits in acquire()", "[net][sync][client][close]")
 {
 	first_retry obs;
-	ldap::sync::client pool({ .servers = { refused_url() },
+	const refused_port down;
+	ldap::sync::client pool({ .servers = { *ldap::url::parse(down.url()) },
 	  .acquire_timeout = std::nullopt,// retries until close()
 	  .backoff = { .initial = std::chrono::seconds(10), .max = std::chrono::seconds(10) },
 	  .observer = &obs });

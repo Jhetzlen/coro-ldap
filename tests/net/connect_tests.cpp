@@ -574,11 +574,8 @@ TEST_CASE("transport identity after connect", "[net][connect][tcp]")
 TEST_CASE("connection refused", "[net][connect][tcp]")
 {
 	corosio::io_context ioc;
-	std::string url;
-	{
-		tcp_server srv(ioc);// take a free port, then release it
-		url = srv.url("ldap");
-	}
+	const refused_port closed;// nothing listens there
+	const std::string url = closed.url();
 	auto t = connect_to(ioc, url);
 	REQUIRE_FALSE(t.has_value());
 	CHECK(t.error().code == std::errc::connection_refused);

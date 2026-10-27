@@ -113,19 +113,6 @@ class ldap_server
 	outcome<void> accepting_{};
 };
 
-// A URL nothing listens on: connects are refused at once.
-auto refused_url(corosio::io_context &ioc) -> ldap::url
-{
-	std::uint16_t port = 0;
-	{
-		corosio::tcp_acceptor a(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1);
-		port = a.local_endpoint().port();
-	}
-	auto u = ldap::url::parse("ldap://127.0.0.1:" + std::to_string(port));
-	REQUIRE(u.has_value());
-	return *u;
-}
-
 auto text(const ldap::url &u) -> std::string { return std::string(std::string_view(u.to_string())); }
 
 auto reason_name(ldap::disconnect_reason r) -> std::string_view
@@ -239,6 +226,7 @@ struct pool_fixture
 {
 	corosio::io_context ioc{};
 	std::deque<ldap_server> servers{};
+	std::deque<refused_port> refused{};
 	std::optional<ldap::client> pool{};
 	recorder obs{};
 
@@ -257,6 +245,14 @@ struct pool_fixture
 	auto server(std::vector<std::vector<step>> scripts) -> ldap_server &
 	{
 		return servers.emplace_back(ioc, std::move(scripts));
+	}
+	// A URL nothing listens on while the fixture lives: connects are
+	// refused at once (see refused_port).
+	auto refused_url() -> ldap::url
+	{
+		auto u = ldap::url::parse(refused.emplace_back().url());
+		REQUIRE(u.has_value());
+		return *u;
 	}
 	// The client, with the jitter fixed at 1 (each backoff is its cap).
 	void make(ldap::client_options options)
@@ -296,7 +292,7 @@ TEST_CASE("client: options it cannot use", "[net][client]")
 	auto none = f.acquire();
 	REQUIRE_FALSE(none.has_value());
 	CHECK(none.error().code == ldap::client_errc::invalid_url);
-	f.make({ .servers = { refused_url(f.ioc) }, .max_connections = 0 });
+	f.make({ .servers = { f.refused_url() }, .max_connections = 0 });
 	auto zero = f.acquire();
 	REQUIRE_FALSE(zero.has_value());
 	CHECK(zero.error().code == std::errc::invalid_argument);
@@ -309,7 +305,7 @@ TEST_CASE("client: options it cannot use", "[net][client]")
 TEST_CASE("client: fails over to the next server", "[net][client][failover]")
 {
 	pool_fixture f;
-	const auto down = refused_url(f.ioc);
+	const auto down = f.refused_url();
 	auto &up = f.server({ bind_ok() });
 	f.make({ .servers = { down, up.url() },
 	  .setup = admin_setup(),
@@ -1729,7 +1725,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		pool_fixture f;
 		auto &a = f.server({ { answer({ bind_resp(1) }), answer({ compare_msg(2, 51) }) },
 		  { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) } });
-		const auto down = refused_url(f.ioc);
+		const auto down = f.refused_url();
 		f.make({ .servers = { a.url(), down }, .setup = admin_setup(), .observer = &f.obs });
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
@@ -1747,7 +1743,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		pool_fixture f;
 		auto &a = f.server({ { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) },
 		  { answer({ bind_resp(1) }), answer({ compare_msg(2, 51) }) } });
-		const auto down = refused_url(f.ioc);
+		const auto down = f.refused_url();
 		f.make({ .servers = { a.url(), down },
 		  .setup = admin_setup(),
 		  .max_connections = 2,
@@ -1816,7 +1812,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 							   step{},// reads the compare, answers it after the bind below
 							   answer({ compare_msg(2, 51), bind_resp(3) }) },
 		  { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) } });
-		const auto other = refused_url(f.ioc);
+		const auto other = f.refused_url();
 		f.make(
 		  { .servers = { a.url(), other }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
 		auto mine = f.acquire();
@@ -1846,7 +1842,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		auto &a = f.server({ hang_up_at_once(), hang_up_at_once() });
 		auto &b = f.server({ { answer({ bind_resp(1) }), answer({ compare_msg(2, 51) }) },
 		  { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) } });
-		const auto c = refused_url(f.ioc);
+		const auto c = f.refused_url();
 		f.make({ .servers = { a.url(), b.url(), c },
 		  .setup = admin_setup(),
 		  .max_connections = 2,
@@ -2039,7 +2035,7 @@ TEST_CASE("client: when read forwarders do not retry", "[net][client][retry]")
 	SECTION("acquire() fails: its error, not retried")
 	{
 		pool_fixture f;
-		const auto down = refused_url(f.ioc);
+		const auto down = f.refused_url();
 		f.make({ .servers = { down },
 		  .acquire_timeout = milliseconds(100),
 		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) },

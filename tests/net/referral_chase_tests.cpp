@@ -1088,14 +1088,8 @@ TEST_CASE("make_same_policy_connector: a failed setup fails the URI", "[net][ref
 TEST_CASE("make_same_policy_connector: a failed connect fails the URI", "[net][referral]")
 {
 	world w;
-	// A port nothing listens on: bound, then closed.
-	std::uint16_t port = 0;
-	{
-		corosio::tcp_acceptor closed{ w.ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1 };
-		port = closed.local_endpoint().port();
-		closed.close();
-	}
-	const std::string server = "127.0.0.1:" + std::to_string(port);
+	const refused_port closed;// nothing listens there
+	const std::string server = "127.0.0.1:" + std::to_string(closed.port());
 	w.serve("a.example",
 	  { answer({ ref_msg(1, { std::pmr::string("ldap://" + server + "/ou=b,dc=example,dc=org") }), done_msg(1) }) });
 	auto connector = ldap::make_same_policy_connector(w.ioc, w.origin.conn, with_timeout(), { server });
