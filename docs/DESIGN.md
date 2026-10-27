@@ -2128,7 +2128,7 @@ decision left open.
   the TLS layer too, even with the origin's options passed as they are
   (the header's own example); a caller who wants the certificate alone
   (SASL EXTERNAL implied by TLS) passes a setup, `sasl_bind_setup` with
-  EXTERNAL or one that does nothing. `same_setup_for_domains(
+  EXTERNAL or `no_bind_setup()` (does nothing). `same_setup_for_domains(
   domains)` applies `make_same_policy_connector`'s allow-list rules
   (`detail::referral_server_allowed`, the port rule against the pooled
   connection's server). An enum rather than a returned setup: the

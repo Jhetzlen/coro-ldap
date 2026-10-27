@@ -180,8 +180,11 @@ auto chase_compare(connection &origin,
 // with a setup. Empty: the connection stays anonymous, at the TLS layer
 // too: no certificate is presented, so no server authenticates it by one
 // (mutual TLS, a certificate mapped to an identity, SASL EXTERNAL), even
-// with the origin's options passed as they are. The library never sends
-// the origin's credentials by itself. A connect, StartTLS or setup failure
+// with the origin's options passed as they are. To present the
+// certificate, pass a setup: sasl_bind_setup with an EXTERNAL mechanism
+// (binds as the identity the certificate maps to), or no_bind_setup()
+// (presents it without a bind, for a server that maps it by itself). The
+// library never sends the origin's credentials by itself. A connect, StartTLS or setup failure
 // fails the URI.
 // Its connect, StartTLS and setup stop when the chase's budget is spent.
 // The connections close when the last copy of the connector is destroyed

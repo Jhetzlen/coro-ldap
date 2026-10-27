@@ -155,6 +155,12 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
   test accepts any "no such file" or "connection refused" condition), and
   whether Corosio's `local_endpoint` and Windows agree on paths near
   `max_path_length`.
+- Refused connects: Winsock retries the SYN after an RST (about a second,
+  `TcpMaxConnectRetransmissions`) before failing with `WSAECONNREFUSED`,
+  where Linux fails at once. The tests that connect to `refused_port`
+  (`tests/net/net_test_support.hpp`) with a short timeout (e.g. the
+  client's `acquire_timeout` of 100 ms) may then see a timeout instead of
+  the refusal; unverified.
 - Abstract addresses: Windows' AF_UNIX has been said to accept them;
   connect() refuses them off Linux until that is checked.
 - Time zones: `std::chrono::locate_zone` on MSVC uses ICU's tzdb, whose

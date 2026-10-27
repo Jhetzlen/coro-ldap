@@ -183,8 +183,11 @@ template<class T> auto finish(corosio::io_context &ioc, capy::task<T> t) -> T
 }
 
 // A loopback port nothing listens on, held while this lives: a TCP socket
-// bound to it that never listens, so a connect there is refused at once,
-// and no other socket can bind the port meanwhile. A port freed by closing
+// bound to it that never listens, so a connect there is refused (at once
+// on Linux, by the RST; Winsock instead retries the SYN after an RST for
+// about a second before WSAECONNREFUSED, so a test with a shorter timeout
+// may see the timeout there, see docs/DEVELOPMENT.md "Windows"), and no
+// other socket can bind the port meanwhile. A port freed by closing
 // its acceptor is not enough: a test process running in parallel may bind
 // it for a scripted server, which then accepts the connect the test
 // expected refused (and the scripted connection that process's own client

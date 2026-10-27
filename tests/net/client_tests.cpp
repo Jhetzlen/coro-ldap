@@ -458,6 +458,14 @@ TEST_CASE("client: helpers building a session setup", "[net][client][setup]")
 		CHECK(l.error().code == std::errc::invalid_argument);// invalid_input: not retried
 		CHECK_THAT(std::string(l.error().context), ContainsSubstring("session setup"));
 	}
+	SECTION("no_bind_setup() succeeds without a request")
+	{
+		pool_fixture f;
+		const auto &s = f.server({ { step{ .read_request = false, .replies = {}, .close_after = false } } });
+		f.make({ .servers = { s.url() }, .setup = ldap::no_bind_setup() });
+		auto l = f.acquire();
+		CHECK(l.has_value());
+	}
 }
 
 TEST_CASE("client: an authentication failure stops reconnecting to that server", "[net][client][auth]")

@@ -911,6 +911,16 @@ TEST_CASE("referral connections: the TLS client certificate goes with the client
 		CHECK(p->options.tls.cert_file == "client.pem");
 		CHECK(p->options.tls.key_file == "client.key");
 	}
+	SECTION("make_same_policy_connector with no_bind_setup(): kept")
+	{
+		const auto chosen = ldap::detail::same_policy_identity(ldap::no_bind_setup());
+		CHECK(chosen.client_certificate);
+		CHECK(chosen.setup);
+		auto p = ldap::detail::referral_plan(*target, true, options, chosen);
+		REQUIRE(p);
+		CHECK(p->options.tls.cert_file == "client.pem");
+		CHECK(p->options.tls.key_file == "client.key");
+	}
 }
 
 TEST_CASE("client chases: the authorizer's binding picks the setup and the client certificate",

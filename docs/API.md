@@ -416,8 +416,10 @@ itself needs only ICU.
   the URI), the certificate is checked against the referred host, and
   each new connection is bound only by `setup` (a `session_setup`, e.g.
   `simple_bind_setup`; none: anonymous, and the TLS client certificate of
-  `options` is presented only with a setup). Its connections are reused per
-  server and closed with the connector.
+  `options` is presented only with a setup: to keep it, pass
+  `sasl_bind_setup` with an EXTERNAL mechanism, or `no_bind_setup()`, which
+  presents it without binding). Its connections are reused per server and
+  closed with the connector.
 - Password changes that work on OpenLDAP and Active Directory alike:
   `change_password(user, old, new)` (a user's own) and
   `reset_password(user, new)` (an administrator's), on `connection` and
@@ -697,7 +699,8 @@ itself needs only ICU.
   multiplier, auth_failure_min}`), and an idle connection to a
   lower-priority server goes back to the primary after `failback_after`.
   `session_setup` (`simple_bind_setup(dn, password)`,
-  `sasl_bind_setup(factory, dn)`, or any `task<result<void>>(connection
+  `sasl_bind_setup(factory, dn)`, `no_bind_setup()` (does nothing: the
+  connection keeps its TLS identity), or any `task<result<void>>(connection
   &)`) runs on every new connection after connect and StartTLS; an auth
   failure backs that server off for at least `auth_failure_min`, during
   which acquires fail at once with the stored error instead of binding

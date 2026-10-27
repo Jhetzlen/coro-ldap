@@ -234,6 +234,13 @@ using sasl_mechanism_factory = std::function<std::unique_ptr<sasl_mechanism>()>;
 // std::errc::invalid_argument.
 [[nodiscard]] auto sasl_bind_setup(sasl_mechanism_factory factory, dn name = {}) -> session_setup;
 
+// A session_setup that does nothing: the connection keeps the identity its
+// transport gives it (none, or the TLS client certificate a server may map
+// to an identity, as with SASL EXTERNAL implied by TLS). Unlike an empty
+// session_setup, it counts as a setup where one decides whether the client
+// certificate is presented (make_same_policy_connector).
+[[nodiscard]] auto no_bind_setup() -> session_setup;
+
 // The delay before a failed server is tried again (see the header comment).
 struct backoff_options
 {

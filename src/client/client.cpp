@@ -64,6 +64,11 @@ auto sasl_bind_setup(sasl_mechanism_factory factory, dn name) -> session_setup
 	};
 }
 
+auto no_bind_setup() -> session_setup
+{
+	return [](connection &) -> capy::task<result<void>> { co_return result<void>{}; };
+}
+
 auto same_setup_for_domains(std::vector<std::string> domains) -> referral_authorizer
 {
 	return [domains = std::move(domains)](const referral_hop &hop) {
