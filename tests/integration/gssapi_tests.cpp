@@ -192,7 +192,8 @@ TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 		// SCRAM-SHA-256-PLUS), and its unreleased master passes them only
 		// with the secprops flag nonstdcbind, which run_slapd.sh cannot set
 		// (sasl_gssapi.hpp). So this shows that sending bindings does no
-		// harm, not that they are right: a wrong binding is not refused.
+		// harm, not that they are right: a wrong binding is not refused
+		// (gssapi_channel_binding_tests.cpp checks them, with an MIT acceptor).
 		auto o = trusting();
 		o.start_tls = true;
 		auto tls = open(ioc, localhost_url(), o);

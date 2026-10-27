@@ -184,6 +184,14 @@ if(JHETZ_LDAP_BUILD_NET)
         jhetz_ldap_warnings(jhetz_ldap_gssapi_integration_tests)
         add_test(NAME integration.gssapi COMMAND jhetz_ldap_gssapi_integration_tests)
         set_tests_properties(integration.gssapi PROPERTIES LABELS "integration;kerberos" SKIP_RETURN_CODE 4)
+        # The channel bindings against an in-process MIT acceptor: needs the
+        # KDC only (run_kdc.sh), not slapd; skipped without it.
+        add_executable(jhetz_ldap_gssapi_channel_binding_tests integration/gssapi_channel_binding_tests.cpp)
+        target_link_libraries(jhetz_ldap_gssapi_channel_binding_tests
+            PRIVATE jhetz::ldap_net PkgConfig::JHETZ_LDAP_GSSAPI Catch2::Catch2WithMain)
+        jhetz_ldap_warnings(jhetz_ldap_gssapi_channel_binding_tests)
+        add_test(NAME kerberos.channel_binding COMMAND jhetz_ldap_gssapi_channel_binding_tests)
+        set_tests_properties(kerberos.channel_binding PROPERTIES LABELS "integration;kerberos" SKIP_RETURN_CODE 4)
     endif()
 
     # sync_tests.cpp runs the CLI against its in-process server.

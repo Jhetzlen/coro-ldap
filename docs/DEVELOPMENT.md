@@ -277,6 +277,16 @@ plugin slapd does not offer GSSAPI: either way the test is skipped. The
 KDC listens on 127.0.0.1, port `JHETZ_LDAP_IT_KDC_PORT` (3750). Not in
 CI.
 
+`kerberos.channel_binding` (same labels) checks the GSSAPI channel
+bindings against an in-process MIT acceptor (`gss_accept_sec_context`)
+rather than slapd, whose acceptor is given none: it needs the KDC only.
+
+```sh
+tests/integration/run_kdc.sh ctest --test-dir build/gssapi -L kerberos --output-on-failure
+```
+
+(`integration.gssapi` is skipped there, without slapd.)
+
 A plugin outside cyrus-sasl's directory is found through `SASL_PATH`, a
 colon-separated list of directories replacing the default one, so list
 that one too. To use the plugin without installing it (Arch), extract the

@@ -819,8 +819,8 @@ side) refuses a mechanism whose plugin lacks a requested flag, and no
 plugin declares SASL_SEC_NONSTD_CBIND, so, read from the sources, a
 slapd with `nonstdcbind` offers no SASL mechanism at all (not run).
 run_slapd.sh therefore does not set it, and no integration test can see
-slapd refuse a wrong binding; the bindings are checked end to end by AD
-only.
+slapd refuse a wrong binding. The bindings are checked end to end against
+an in-process MIT acceptor instead (`kerberos.channel_binding`, below).
 Kerberos then carries the MD5 of the struct in the authenticator checksum
 (RFC 4121 section 4.1.1.2). On by default (`gssapi_channel_binding::
 tls_server_end_point`): an acceptor given no bindings (slapd, AD with
@@ -857,8 +857,14 @@ KDC (the layer messages, input checks, GSS-API errors before anything is
 sent, the bindings' bytes, `gss_init_sec_context` accepting the struct)
 and end to end against slapd (cyrus-sasl's gssapi plugin, which ignores
 the bindings: the binds over TLS only show that sending them does no
-harm) and a throwaway MIT KDC (`tests/integration/run_kdc.sh`); bindings
-are not checked end to end, which needs AD (coro-ldap-c2u).
+harm) and a throwaway MIT KDC (`tests/integration/run_kdc.sh`). The
+bindings are checked end to end without slapd (`kerberos.channel_binding`,
+under run_kdc.sh only, coro-ldap-oil): `start()`'s AP-REQ goes straight
+to `gss_accept_sec_context`, which accepts it when given no bindings or
+the same ones (then with GSS_C_CHANNEL_BOUND_FLAG in its `ret_flags`),
+refuses it with GSS_S_BAD_BINDINGS when given others, and accepts
+`none`'s while given bindings (no CBT asserted). Against AD itself it is
+not tested (coro-ldap-c2u).
 
 Referrals and continuation references are returned, never chased by a
 connection: `error::referrals` and `search_stream::references()` keep the
