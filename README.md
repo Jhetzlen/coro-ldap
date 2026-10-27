@@ -38,6 +38,11 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
   (rename / move), compare, extended operations, Who am I?, Password
   Modify, and password change / reset that works on both OpenLDAP and
   Active Directory
+- Opt-in referral chasing for search and compare: continuation references
+  and referral results followed through a connector you control (host
+  allow-list, no TLS downgrade, your own bind), with loop detection, hop
+  limits and a per-URL report; partial results are flagged, never a plain
+  success
 - A connection pool, `ldap::client`: several servers with failover and
   jittered backoff, connections opened lazily and shared by leases (one
   multiplexed connection by default) or held exclusively, a bind (or any
@@ -120,7 +125,7 @@ auto main() -> int
 
 More in [`examples/`](examples/): one small program per task (connect,
 search, add, modify, delete, password reset, StartTLS, cancellation, paged
-search, following changes with syncrepl, the blocking API, Kerberos), and `ldapsearch.cpp`, a small
+search, following referrals, following changes with syncrepl, the blocking API, Kerberos), and `ldapsearch.cpp`, a small
 command-line tool.
 
 ## Build

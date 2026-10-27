@@ -63,9 +63,19 @@
 // Threading: the connections the connector returns must belong to the
 // origin's executor, and every task here runs on it. `origin`, and the
 // connections the connector returns, must outlive the task.
+//
+// make_same_policy_connector (below) builds a connector that keeps the
+// origin's security: no TLS downgrade, an allow-list of hosts, the
+// certificate checked against the referred host, and a bind only through
+// the caller's session_setup:
+//
+//   auto connector = ldap::make_same_policy_connector(ioc, conn, options, {"example.org"},
+//       ldap::simple_bind_setup(ldap::dn{"cn=reader,dc=example,dc=org"}, password));
 #pragma once
 
+#include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/connection_options.hpp"
 #include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/operations.hpp"
@@ -73,12 +83,14 @@
 #include "jhetz/ldap/url.hpp"
 
 #include <boost/capy/task.hpp>
+#include <boost/corosio/io_context.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -90,7 +102,8 @@ namespace jhetz::ldap {
 // skips the URI (a policy refusal); an error is that URI's failure. The
 // connector decides trust and binding: open a connection or reuse one,
 // bind it as the caller sees fit, or refuse. It must outlive the chase
-// task's use of the connection it returns.
+// task's use of the connection it returns. make_same_policy_connector
+// builds one.
 using referral_connector = std::function<boost::capy::task<result<connection *>>(const url &target, std::size_t depth)>;
 
 struct referral_policy
@@ -166,5 +179,54 @@ auto chase_compare(connection &origin,
   compare_params request,
   referral_connector connector,
   referral_policy policy = {}) -> boost::capy::task<result<chased_compare>>;
+
+// A connector that opens connections to referred servers with the origin's
+// security policy, and keeps them for its later calls (one per scheme, host
+// and port; reopened once closed). It returns null (skips the URI) for:
+// - an ldapi:// URL (a server's URL must not reach a local socket), or one
+//   without a host;
+// - a host outside `allowed_host_suffixes`: a name matches an entry equal
+//   to it or of which it is a subdomain (`example.org` allows
+//   `example.org` and `ldap.eu.example.org`, not `badexample.org`), both
+//   compared in their ASCII form (RFC 4513 section 3.1.3.1: IDNA ToASCII
+//   with UseSTD3ASCIIRules for an internationalized name, then ASCII
+//   case-insensitively; one trailing dot ignored). An IP address matches
+//   only an entry that is the same address text. Empty (the default):
+//   every URI is skipped.
+// No TLS downgrade: when `origin` is TLS-protected (is_tls(), read here,
+// once), an ldaps:// target is opened as such and an ldap:// one with
+// StartTLS (connection_options::start_tls); a failed StartTLS fails the URI
+// (the error, never a plain connection). Otherwise `options` apply as given
+// (an ldaps:// target is still TLS). The server certificate is checked as
+// `options.tls` says, against the referred host (RFC 4513 section 3.1.3: the
+// reference identity is the host the URL names): tls_options::server_name is
+// cleared, and an internationalized name is connected to in its ASCII form.
+// Binding: `setup` runs on each new connection (simple_bind_setup,
+// sasl_bind_setup, or any session_setup; it may bind with other
+// credentials, or look at connection::name() to choose); empty: the
+// connection stays anonymous. The library never sends the origin's
+// credentials by itself. A connect, StartTLS or setup failure fails the URI.
+// The connections close when the last copy of the connector is destroyed
+// (without an UnbindRequest), so keep it as long as the results need no
+// more of them; `ioc` must outlive it.
+[[nodiscard]] auto make_same_policy_connector(boost::corosio::io_context &ioc,
+  const connection &origin,
+  connection_options options,
+  std::vector<std::string> allowed_host_suffixes,
+  session_setup setup = {}) -> referral_connector;
+
+namespace detail {
+	// For tests: the URL and options make_same_policy_connector connects
+	// to `target` with, or nullopt when it skips it.
+	struct referral_connect_plan
+	{
+		url server{};
+		connection_options options{};
+	};
+	[[nodiscard]] auto same_policy_plan(const url &target,
+	  bool origin_tls,
+	  const connection_options &options,
+	  std::span<const std::string> allowed_host_suffixes) -> std::optional<referral_connect_plan>;
+}// namespace detail
 
 }// namespace jhetz::ldap

@@ -18,4 +18,7 @@ namespace jhetz::ldap::net::detail {
 // (internal names with '_' stay usable). IP literals pass through lowered.
 [[nodiscard]] auto ascii_host_name(std::string_view host) -> std::optional<std::string>;
 
+// No octet of `s` is outside ASCII.
+[[nodiscard]] auto is_ascii(std::string_view s) noexcept -> bool;
+
 }// namespace jhetz::ldap::net::detail

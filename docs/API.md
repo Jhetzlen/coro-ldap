@@ -401,6 +401,15 @@ itself needs only ICU.
   (`max_targets`, 64); the request's `timeout` bounds the whole chase. Loops
   (the same server, DN, scope and filter, the origin's own request
   included) are skipped. Writes are never chased.
+  `make_same_policy_connector(ioc, origin, options, allowed_hosts, setup)`
+  builds a connector keeping the origin's policy: ldapi:// and hosts
+  outside `allowed_hosts` (a name and its subdomains, IDNs in ASCII form;
+  IP addresses exactly; empty by default, so nothing is followed) are
+  skipped, a TLS origin makes ldap:// targets use StartTLS (failure fails
+  the URI), the certificate is checked against the referred host, and
+  each new connection is bound only by `setup` (a `session_setup`, e.g.
+  `simple_bind_setup`; none: anonymous). Its connections are reused per
+  server and closed with the connector.
 - Password changes that work on OpenLDAP and Active Directory alike:
   `change_password(user, old, new)` (a user's own) and
   `reset_password(user, new)` (an administrator's), on `connection` and

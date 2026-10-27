@@ -71,12 +71,17 @@ namespace {
 
 }// namespace
 
+auto is_ascii(std::string_view s) noexcept -> bool
+{
+	return std::ranges::all_of(s, [](char c) { return static_cast<unsigned char>(c) < first_non_ascii; });
+}
+
 auto ascii_host_name(std::string_view host) -> std::optional<std::string>
 {
 	if (host.ends_with('.')) {
 		host.remove_suffix(1);
 	}
-	if (std::ranges::all_of(host, [](char c) { return static_cast<unsigned char>(c) < first_non_ascii; })) {
+	if (is_ascii(host)) {
 		return lowered(host);
 	}
 	auto ascii = to_ascii(host);

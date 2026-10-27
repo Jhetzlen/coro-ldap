@@ -790,10 +790,70 @@ channel bindings (tls-server-end-point) are sent. Tested without a KDC
 sent) and end to end against slapd (cyrus-sasl's gssapi plugin) and a
 throwaway MIT KDC (`tests/integration/run_kdc.sh`).
 
-Referrals and continuation references are returned, never chased:
-`error::referrals` and `search_stream::references()` keep the URIs as
-sent; `url::parse_list()` / `reference_urls()` parse them, leaving out
-those that are not LDAP URLs.
+Referrals and continuation references are returned, never chased by a
+connection: `error::referrals` and `search_stream::references()` keep the
+URIs as sent; `url::parse_list()` / `reference_urls()` parse them, leaving
+out those that are not LDAP URLs.
+
+Referral chasing is opt-in (coro-ldap-d8n), in three layers:
+
+- `referral_target(url, request)` (`referral.hpp`, the codec) builds the
+  request that progresses an operation at a referral's target, for a search,
+  a compare and each update; it sends nothing. RFC 4511 section 4.1.10: an
+  absent DN, scope or filter keeps the original's. An empty DN
+  (`ldap://host/`) counts as absent too: RFC 4516 section 3 defaults a
+  missing DN to "", which 4.1.10 overrides; a referral to the root DSE
+  makes no sense for these operations. The URL's attribute list is ignored (4.1.10 names
+  only DN, scope and filter as taken from the URL). Section 4.5.3: a
+  continuation reference must carry a DN (refused otherwise, since the
+  original base would search the same subtree again elsewhere), and a
+  singleLevel search continued without a scope uses baseObject (the
+  reference names the subordinate entry itself). RFC 4516 section 2: a
+  critical extension refuses the URL (none is implemented), others are
+  ignored.
+- `chase_search` / `chase_compare` (`referral_chase.hpp`, `jhetz::ldap_net`)
+  run the operation on a connection and follow what it returned through a
+  caller-supplied `referral_connector` (URL and depth to `connection *`;
+  null skips): the library never decides on its own whom to trust or which
+  credentials to present. One reference's URIs are alternatives (RFC
+  4511: "any supported URI may be used"), tried in order until one is
+  followed. A referral result is chased depth first, with fallback to the
+  next alternative; continuation references breadth first and
+  sequentially (no fan-out: one connection at a time, deterministic
+  order). The hop limit defaults to 10, not lower: RFC 4511 requires a
+  counting client to handle at least ten nested referrals. Loop detection
+  is on (scheme, host in ASCII form, port, DN by distinguishedNameMatch,
+  scope, filter), seeded with the origin's request when its `name()` is a
+  URL, and checked before the connector is asked (RFC 4511: never contact
+  the same server for the same request twice). The request's timeout is
+  the budget of the whole chase. Results: every URI considered gets a
+  `referral_attempt` (followed, skipped_policy, skipped_loop,
+  limit_reached, unparseable, failed with the error). A continuation
+  reference that cannot be followed never fails the search but clears
+  `chased_search::complete` (partial results are never a plain success;
+  one skipped only as a loop does not, its server already answered that
+  search). A referral result that cannot be followed fails the call (the
+  last failure, else the referral itself): there is nothing partial to
+  return. A cancellation stops the chase. Writes are never chased: a
+  referral result means the update was not performed (4.1.10), and
+  re-sending it elsewhere is the caller's decision (`referral_target`
+  builds it).
+- `make_same_policy_connector(ioc, origin, options, allowed_hosts, setup)`
+  is the connector most callers want: ldapi:// refused (a server must not
+  point the client at a local socket), hosts outside the allow-list
+  refused (empty by default: nothing is followed until hosts are named; a
+  name matches an entry or its subdomains, IP addresses only themselves,
+  IDNs compared in ASCII form as RFC 4513 section 3.1.3.1 asks), no TLS
+  downgrade (a TLS origin makes ldap:// targets use StartTLS, and a failed
+  StartTLS fails the URI), the certificate checked against the referred
+  host (RFC 4513 section 3.1.3: `server_name` cleared, IDNs connected to
+  in ASCII form), and binding only through the caller's `session_setup`
+  (anonymous without one). Its connections are kept per server for later
+  URIs and closed with the connector.
+
+A follow-up under 3pf is a `client_options::referrals` policy for the
+pool (separate switches for referral results and references, opt-in
+write following, an authorize callback, an observer hook).
 
 Paged search (step 6): `connection::search_paged(params, page_size)`
 returns a `paged_search` that yields entries across pages, requesting the
@@ -2009,7 +2069,7 @@ decision left open.
   `std::thread::join()` throwing inside a noexcept destructor; the same
   holds for `sync::connection` (3pf.19). A non-last lease released or
   destroyed there returns its connection without waiting.
-- Later (beads): referral policy (3pf.1), a background prober, DNS SRV, weighted or
+- Later (beads): a pool referral policy (3pf.1, on top of `chase_search`), a background prober, DNS SRV, weighted or
   round-robin selection, per-identity sub-pools.
 
 ## Resolved
