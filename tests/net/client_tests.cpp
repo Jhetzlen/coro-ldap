@@ -2371,6 +2371,53 @@ TEST_CASE("client: referrals and the read forwarders' retry", "[net][client][ref
 	}
 }
 
+TEST_CASE("client: close() stops a chase", "[net][client][referral][close]")
+{
+	pool_fixture f;
+	auto &c = f.server({});
+	auto &b = f.server({ { step{} } });// reads the bind, never answers
+	auto &a = f.server({ { answer({ bind_resp(1) }),
+	  answer({ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "John"),
+		ref_msg(2, { ref_to(b, "ou=b,dc=example,dc=org") }),
+		ref_msg(2, { ref_to(c, "ou=c,dc=example,dc=org") }),
+		done_msg(2) }) } });
+	std::size_t asked = 0;
+	bool close_when_asked = false;
+	f.make({ .servers = { a.url() },
+	  .setup = admin_setup(),
+	  .observer = &f.obs,
+	  .referrals = {
+		.follow_references = true, .authorize = [&f, &asked, &close_when_asked](const ldap::referral_hop &) {
+			++asked;
+			if (close_when_asked) {
+				f.pool->close();
+			}
+			return ldap::referral_binding::same_setup;
+		} } });
+	outcome<ldap::result<ldap::chased_search>> r;
+	SECTION("while a referred server is being set up")
+	{
+		spawn(f.ioc, f.pool->chase_search(people_search()), r);
+		drive_until(f.ioc, [&b] { return b.accepted() == 1 && !b.log(0).received.empty(); });// the bind at b
+		f.pool->close();
+		drive_until(f.ioc, [&r] { return r.done(); });
+	}
+	SECTION("from the authorizer: the server it allowed is not contacted")
+	{
+		close_when_asked = true;
+		spawn(f.ioc, f.pool->chase_search(people_search()), r);
+		drive_until(f.ioc, [&r] { return r.done(); });
+		finish(f.ioc, sleep_for(milliseconds(20)));
+		CHECK((b.accepted() == 0 || b.log(0).received.empty()));
+	}
+	REQUIRE_FALSE(r.get().has_value());
+	CHECK(r.get().error().code == ldap::client_errc::not_connected);
+	CHECK(asked == 1);// not asked about c
+	CHECK(c.accepted() == 0);
+	CHECK(a.accepted() == 1);// not retried
+	CHECK(std::ranges::none_of(f.obs.events, [](const std::string &e) { return e.starts_with("referral"); }));
+}
+
 TEST_CASE("client: same_setup_for_domains", "[net][client][referral]")
 {
 	const auto hop = [](std::string_view target, std::string_view origin) {

@@ -120,9 +120,11 @@
 // close() closes every pooled connection, leased ones included (their
 // outstanding operations fail with not_connected, or not_sent for requests
 // not written yet, see connection.hpp "Sent or not"), stops the connection
-// attempts in progress (connect, StartTLS, session_setup), and fails
-// waiting and later acquire() calls with not_connected at once; the
-// destructor calls it. No observer hook runs once close() has returned.
+// attempts in progress (connect, StartTLS, session_setup) and the referral
+// chases running (no referred server is authorized, connected to or set up
+// after it: the chase fails with not_connected), and fails waiting and
+// later acquire() calls with not_connected at once; the destructor calls
+// it. No observer hook runs once close() has returned.
 //
 // Referrals (client_options::referrals): off by default, as for a
 // connection, nothing is chased: search() and compare() return a referral

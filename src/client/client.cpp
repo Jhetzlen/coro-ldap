@@ -157,6 +157,8 @@ namespace detail {
 		std::size_t opening = 0;// connection attempts in progress (they count against max_connections)
 		// Their stop sources (copies share the stop state): close() stops them.
 		std::vector<std::stop_source> attempts{};
+		// Those of the referral chases running: close() stops them too.
+		std::vector<std::stop_source> chases_running{};
 		// Exclusive acquires waiting: shared ones leave idle connections to them.
 		std::size_t exclusive_waiting = 0;
 		// Set on every change an acquire() may wait for (a connection pooled,
@@ -626,6 +628,11 @@ namespace detail {
 			// at once.
 			for (const auto &attempt : std::exchange(attempts, {})) {
 				attempt.request_stop();
+			}
+			// And the referral chases: no referred server is asked about,
+			// connected to or set up once the client is closed.
+			for (const auto &chase : std::exchange(chases_running, {})) {
+				chase.request_stop();
 			}
 			// The observer need only outlive close(): no hook runs after it.
 			options.observer = nullptr;
@@ -1187,7 +1194,7 @@ namespace detail {
 			auto choose = [self, origin = held.server()](
 							const url &target, std::size_t depth) -> std::optional<referral_identity> {
 				const auto &authorize = self->options.referrals.authorize;
-				if (!authorize) {
+				if (!authorize || self->closed) {
 					return std::nullopt;
 				}
 				switch (authorize(referral_hop{ .target = target, .depth = depth, .origin = origin })) {
@@ -1216,17 +1223,40 @@ namespace detail {
 				} };
 		}
 
+		// `chase`, stopped by close(): it then fails with not_connected (not
+		// retried), whatever it was doing (the pooled connection's operation,
+		// or a referred server's connect, setup or operation).
+		template<class T>
+		static auto stopped_by_close(std::shared_ptr<client_state> self, capy::task<chase_result<T>> chase)
+		  -> capy::task<chase_result<T>>
+		{
+			const std::stop_source stop;
+			if (self->closed) {
+				stop.request_stop();
+			} else {
+				self->chases_running.push_back(stop);
+			}
+			const scope_exit unregister{ [&self, &stop] noexcept { std::erase(self->chases_running, stop); } };
+			auto r = co_await with_stop(stop.get_token(), std::move(chase));
+			if (!r.value && self->closed) {
+				r.value = fail(client_errc::not_connected, "referral chase: client closed");
+				r.origin_failed = false;
+			}
+			co_return r;
+		}
+
 		static auto chase_search(const std::shared_ptr<client_state> &self,
 		  search_params request,
 		  std::pmr::memory_resource *mr) -> capy::task<result<chased_search>>
 		{
 			return read<chased_search>(self, [self, request = std::move(request), mr](const lease &held) {
-				return detail::chase_search(*held,
-				  request,
-				  connector_for(self, held),
-				  self->options.referrals.limits,
-				  mr,
-				  settings_for(self, held));
+				return stopped_by_close(self,
+				  detail::chase_search(*held,
+					request,
+					connector_for(self, held),
+					self->options.referrals.limits,
+					mr,
+					settings_for(self, held)));
 			});
 		}
 
@@ -1234,8 +1264,12 @@ namespace detail {
 		  -> capy::task<result<chased_compare>>
 		{
 			return read<chased_compare>(self, [self, request = std::move(request)](const lease &held) {
-				return detail::chase_compare(
-				  *held, request, connector_for(self, held), self->options.referrals.limits, settings_for(self, held));
+				return stopped_by_close(self,
+				  detail::chase_compare(*held,
+					request,
+					connector_for(self, held),
+					self->options.referrals.limits,
+					settings_for(self, held)));
 			});
 		}
 
