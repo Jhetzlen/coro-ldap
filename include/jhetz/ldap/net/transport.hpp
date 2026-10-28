@@ -50,6 +50,7 @@
 
 #include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/error.hpp"
+#include "jhetz/ldap/sasl.hpp"
 
 #include <boost/capy/concept/stream.hpp>
 #include <boost/capy/io/any_stream.hpp>
@@ -116,9 +117,15 @@ class transport
 		return t;
 	}
 
-	// The stream to read from and write to (TLS-decrypted for ldaps).
-	// Precondition: kind() != kind::none.
+	// The stream to read from and write to (TLS-decrypted for ldaps; the
+	// SASL security layer's plaintext once one is installed, see
+	// security_layer()). Precondition: kind() != kind::none.
 	auto stream() noexcept -> boost::capy::any_stream &;
+	// The SASL security layer (RFC 4422 section 3.7) under the PDUs, which
+	// connection::sasl_bind installs when a mechanism negotiated one: from
+	// then on stream() wraps what is written and unwraps what is read, in
+	// buffers framed by a four-octet length. none without one.
+	[[nodiscard]] auto security_layer() const noexcept -> sasl_protection;
 
 	[[nodiscard]] auto type() const noexcept -> kind;
 	[[nodiscard]] auto is_tls() const noexcept -> bool;

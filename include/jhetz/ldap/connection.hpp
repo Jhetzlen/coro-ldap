@@ -220,6 +220,17 @@ class connection
 	// included). False whenever is_open() is: before connecting, after
 	// unbind() or close(), and once a failure closed the connection.
 	[[nodiscard]] auto is_tls() const noexcept -> bool;
+	// The SASL security layer (RFC 4422 section 3.7) protecting the open
+	// connection: set by a sasl_bind whose mechanism negotiated integrity
+	// or confidentiality (sasl_mechanism::take_security_layer, e.g.
+	// sasl_gssapi_options::security_layer), from the first octet after its
+	// successful BindResponse, for every later PDU both ways, until the
+	// connection closes (a later bind, failed or not, leaves it in place,
+	// RFC 4513 section 5.2.1.4). none otherwise, and once closed. While one
+	// is in effect start_tls() fails with
+	// client_errc::security_layer_in_effect, and so does a bind that
+	// negotiates another.
+	[[nodiscard]] auto security_layer() const noexcept -> sasl_protection;
 	// The server's certificate (DER) as received in the TLS handshake (not
 	// verified unless tls_options asked for it); empty unless is_tls(). A
 	// view into the connection's state, valid until the connection is

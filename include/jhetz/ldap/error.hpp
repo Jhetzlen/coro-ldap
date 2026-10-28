@@ -118,6 +118,13 @@ enum class client_errc : int {
 	// on another connection. Matches cond::connection_lost, like
 	// not_connected.
 	not_sent,
+	// The server does not offer the SASL security layer asked for
+	// (sasl_gssapi_options::security_layer). Matches cond::access_denied.
+	security_layer_unavailable,
+	// Refused while a SASL security layer is in effect: StartTLS (TLS would
+	// have to go below the layer, RFC 4513 section 5.2.1.6), or a second
+	// layer. Matches no condition.
+	security_layer_in_effect,
 };
 
 // Error conditions: what an error means, across categories (DESIGN.md

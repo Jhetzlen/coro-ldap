@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -51,6 +52,10 @@ namespace {
 	// ignore the bit (MIT masks req_flags, Heimdal tests the flags it knows).
 	constexpr OM_uint32 channel_bound_flag = 2048;
 
+	// The req_flags a security layer needs: integrity and confidentiality
+	// (the server's offer decides which is used).
+	constexpr OM_uint32 layer_flags = OM_uint32{ GSS_C_INTEG_FLAG } | OM_uint32{ GSS_C_CONF_FLAG };
+
 	// Owns a GSS-API handle (a pointer type), released with `Release`.
 	template<class H, auto Release> class gss_handle
 	{
@@ -69,6 +74,14 @@ namespace {
 		}
 		// For a call that updates the handle in place (gss_init_sec_context).
 		auto in_out() noexcept -> H * { return &h_; }
+		// Hands the handle over (to another owner); null from then on.
+		[[nodiscard]] auto release() noexcept -> H { return std::exchange(h_, nullptr); }
+		// Takes ownership of `h`.
+		void adopt(H h) noexcept
+		{
+			reset();
+			h_ = h;
+		}
 		void reset() noexcept
 		{
 			if (h_ == nullptr) {
@@ -196,6 +209,93 @@ namespace {
 		return {};
 	}
 
+	// The supplementary statuses of a buffer replayed, too old or out of
+	// order (RFC 2744 section 3.9.1): with GSS_C_SEQUENCE_FLAG gss_unwrap
+	// reports them without failing; the layer refuses such a buffer.
+	constexpr OM_uint32 sequence_problems =
+	  GSS_S_DUPLICATE_TOKEN | GSS_S_OLD_TOKEN | GSS_S_UNSEQ_TOKEN | GSS_S_GAP_TOKEN;
+
+	// The integrity or confidentiality layer of RFC 4752 section 3.1 over
+	// the bind's security context, which it owns: gss_wrap and gss_unwrap
+	// of every buffer.
+	class gssapi_layer final : public sasl_security_layer
+	{
+	  public:
+		// One caller (sasl_gssapi::state::reply), which names each argument.
+		// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+		gssapi_layer(gss_ctx_id_t context, bool confidentiality, std::size_t max_wrap_input, std::size_t max_received)
+		  : confidentiality_(confidentiality), max_wrap_input_(max_wrap_input), max_received_(max_received)
+		{
+			context_.adopt(context);
+		}
+
+		[[nodiscard]] auto protection() const noexcept -> sasl_protection override
+		{
+			return confidentiality_ ? sasl_protection::confidentiality : sasl_protection::integrity;
+		}
+		[[nodiscard]] auto max_wrap_input() const noexcept -> std::size_t override { return max_wrap_input_; }
+		[[nodiscard]] auto max_received() const noexcept -> std::size_t override { return max_received_; }
+
+		[[nodiscard]] auto wrap(std::span<const std::byte> plaintext, std::pmr::vector<std::byte> &out)
+		  -> result<void> override
+		{
+			OM_uint32 minor = 0;
+			gss_buffer_desc in = input(as_text(plaintext));
+			output_buffer wrapped;
+			int conf_state = 0;
+			const OM_uint32 major = gss_wrap(
+			  &minor, context_.get(), confidentiality_ ? 1 : 0, GSS_C_QOP_DEFAULT, &in, &conf_state, &wrapped.desc);
+			if (GSS_ERROR(major) != 0) {
+				return gss_failure("gss_wrap", major, minor);
+			}
+			if (confidentiality_ && conf_state == 0) {
+				return fail(client_errc::gssapi_failure, "gss_wrap: no confidentiality applied");
+			}
+			append(out, wrapped.view());
+			return {};
+		}
+
+		[[nodiscard]] auto unwrap(std::span<const std::byte> buffer, std::pmr::vector<std::byte> &out)
+		  -> result<void> override
+		{
+			OM_uint32 minor = 0;
+			gss_buffer_desc in = input(as_text(buffer));
+			output_buffer plain;
+			int conf_state = 0;
+			const OM_uint32 major = gss_unwrap(&minor, context_.get(), &in, &plain.desc, &conf_state, nullptr);
+			if (GSS_ERROR(major) != 0) {
+				return gss_failure("gss_unwrap", major, minor);
+			}
+			if ((major & sequence_problems) != 0) {
+				return fail(client_errc::gssapi_failure,
+				  "gss_unwrap: a buffer replayed or out of sequence: " + status_text(major, GSS_C_GSS_CODE));
+			}
+			// The layer selected applies both ways: a server buffer without
+			// confidentiality would be a downgrade.
+			if (confidentiality_ && conf_state == 0) {
+				return refused("a buffer without confidentiality on a confidentiality layer");
+			}
+			append(out, plain.view());
+			return {};
+		}
+
+	  private:
+		static auto as_text(std::span<const std::byte> b) noexcept -> std::string_view
+		{
+			return { reinterpret_cast<const char *>(b.data()), b.size() };
+		}
+		static void append(std::pmr::vector<std::byte> &out, std::string_view bytes)
+		{
+			const auto *p = reinterpret_cast<const std::byte *>(bytes.data());
+			out.insert(out.end(), p, p + bytes.size());
+		}
+
+		context_handle context_;
+		bool confidentiality_;
+		std::size_t max_wrap_input_;
+		std::size_t max_received_;
+	};
+
 }// namespace
 
 namespace detail {
@@ -213,22 +313,75 @@ namespace detail {
 			.max_size = (std::uint32_t{ byte(1) } << 16) | (std::uint32_t{ byte(2) } << 8) | std::uint32_t{ byte(3) } };
 	}
 
-	auto gssapi_layer_reply(const gssapi_layer_offer &offer, std::string_view authz_id) -> result<std::string>
+	auto gssapi_select_layer(const gssapi_layer_offer &offer, gssapi_security_layer requested, bool tls)
+	  -> result<std::uint8_t>
 	{
-		if ((offer.layers & gssapi_no_layer) == 0) {
-			if ((offer.layers & (unsigned{ gssapi_integrity } | unsigned{ gssapi_confidentiality })) != 0) {
-				return fail(client_errc::security_layer_required,
-				  "the server requires integrity or confidentiality protection, which this client does not "
-				  "provide (use TLS, and a server policy that accepts no security layer over it)");
-			}
+		const bool none = (offer.layers & gssapi_no_layer) != 0;
+		const bool integrity = (offer.layers & gssapi_integrity) != 0;
+		const bool confidentiality = (offer.layers & gssapi_confidentiality) != 0;
+		if (!none && !integrity && !confidentiality) {
 			return refused("the server offers no security layer, not even none");
+		}
+		std::uint8_t layer = gssapi_no_layer;
+		switch (requested) {
+		case gssapi_security_layer::none:
+			if (!none) {
+				return fail(client_errc::security_layer_required,
+				  "the server requires integrity or confidentiality protection, which the options do not ask for "
+				  "(use TLS, and a server policy that accepts no security layer over it, or set security_layer)");
+			}
+			break;
+		case gssapi_security_layer::integrity:
+			if (!integrity && !confidentiality) {
+				return fail(client_errc::security_layer_unavailable,
+				  "the server offers neither integrity nor confidentiality protection");
+			}
+			layer = integrity ? gssapi_integrity : gssapi_confidentiality;
+			break;
+		case gssapi_security_layer::confidentiality:
+			if (!confidentiality) {
+				return fail(
+				  client_errc::security_layer_unavailable, "the server does not offer confidentiality protection");
+			}
+			layer = gssapi_confidentiality;
+			break;
+		case gssapi_security_layer::best_offered:
+			if (tls && none) {
+				break;
+			}
+			if (confidentiality) {
+				layer = gssapi_confidentiality;
+			} else if (integrity) {
+				layer = gssapi_integrity;
+			}
+			break;
+		}
+		if (layer != gssapi_no_layer && offer.max_size == 0) {
+			return refused("the server offers a security layer with a maximum buffer size of 0");
+		}
+		return layer;
+	}
+
+	auto gssapi_layer_reply(std::uint8_t layer, std::uint32_t max_size, std::string_view authz_id)
+	  -> result<std::string>
+	{
+		if (layer == gssapi_no_layer) {
+			// No security layer, and so no maximum buffer size: 0 (RFC 4752
+			// section 3.1: "which MAY be 0 if a security layer is not selected").
+			max_size = 0;
+		} else if (max_size == 0 || max_size > gssapi_max_buffer_limit) {
+			return input_error(
+			  detail::format("maximum buffer size {} out of range (1 to {})", max_size, gssapi_max_buffer_limit));
 		}
 		if (auto c = check_text(authz_id, "authorization identity"); !c) {
 			return std::unexpected(std::move(c.error()));
 		}
-		// No security layer, and so no maximum buffer size: 0 (RFC 4752
-		// section 3.1: "which MAY be 0 if a security layer is not selected").
-		std::string reply{ static_cast<char>(gssapi_no_layer), '\0', '\0', '\0' };
+		constexpr unsigned byte_bits = 8;
+		constexpr std::uint32_t byte_mask = 0xff;
+		std::string reply{ static_cast<char>(layer),
+			static_cast<char>((max_size >> (2 * byte_bits)) & byte_mask),
+			static_cast<char>((max_size >> byte_bits) & byte_mask),
+			static_cast<char>(max_size & byte_mask) };
 		reply += authz_id;
 		return reply;
 	}
@@ -281,6 +434,17 @@ struct sasl_gssapi::state
 	// The channel bindings' application data (empty: none), the same for
 	// every gss_init_sec_context call of the exchange.
 	std::string bindings;
+	// The security layer to select, and the maximum buffer size to
+	// announce with one (sasl_gssapi_options), and whether TLS is below.
+	gssapi_security_layer requested_layer = gssapi_security_layer::none;
+	std::uint32_t max_receive_size = 0;
+	bool tls = false;
+	// The flags of the established context (gss_init_sec_context's
+	// ret_flags).
+	OM_uint32 context_flags = 0;
+	// The layer reply() selected (integrity or confidentiality), owning the
+	// context, until take_security_layer() hands it over.
+	std::unique_ptr<sasl_security_layer> layer;
 
 	// Clears `busy` when the returned guard goes out of scope: at the end of
 	// an offloaded step, whatever its outcome.
@@ -292,6 +456,8 @@ struct sasl_gssapi::state
 	void reset() noexcept
 	{
 		at = phase::idle;
+		context_flags = 0;
+		layer.reset();
 		context.reset();
 		credentials.reset();
 		target.reset();
@@ -317,8 +483,10 @@ struct sasl_gssapi::state
 		  context.in_out(),
 		  target.get(),
 		  &krb5_oid,
-		  // With bindings, the client says it binds (channel_bound_flag).
-		  GSS_C_MUTUAL_FLAG | GSS_C_SEQUENCE_FLAG | (bindings.empty() ? 0 : channel_bound_flag),
+		  // With bindings, the client says it binds (channel_bound_flag);
+		  // with a layer to select, integrity and confidentiality.
+		  GSS_C_MUTUAL_FLAG | GSS_C_SEQUENCE_FLAG | (bindings.empty() ? 0 : channel_bound_flag)
+			| (requested_layer == gssapi_security_layer::none ? OM_uint32{ 0 } : layer_flags),
 		  0,
 		  bindings.empty() ? GSS_C_NO_CHANNEL_BINDINGS : &channel,
 		  token ? &in : GSS_C_NO_BUFFER,
@@ -339,12 +507,14 @@ struct sasl_gssapi::state
 				  "gss_init_sec_context: no mutual authentication (the server was not authenticated)");
 			}
 			at = phase::established;
+			context_flags = flags;
 		}
 		// RFC 4752 section 3.1: the output token, possibly empty.
 		return std::optional<std::string>(std::string(out.view()));
 	}
 
-	// The server's wrapped offer gives the wrapped reply.
+	// The server's wrapped offer gives the wrapped reply; with a layer
+	// selected, `layer` takes over the context.
 	// One caller; as gssapi_layer_reply: the server's offer, then our authzid.
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto reply(std::string_view wrapped_offer, std::string_view authz_id) -> result<std::optional<std::string>>
@@ -360,7 +530,19 @@ struct sasl_gssapi::state
 		if (!offer) {
 			return std::unexpected(std::move(offer.error()));
 		}
-		auto text = detail::gssapi_layer_reply(*offer, authz_id);
+		auto selected = detail::gssapi_select_layer(*offer, requested_layer, tls);
+		if (!selected) {
+			return std::unexpected(std::move(selected.error()));
+		}
+		std::size_t max_wrap_input = 0;
+		if (*selected != detail::gssapi_no_layer) {
+			auto limit = wrap_limit(*selected == detail::gssapi_confidentiality, offer->max_size);
+			if (!limit) {
+				return std::unexpected(std::move(limit.error()));
+			}
+			max_wrap_input = *limit;
+		}
+		auto text = detail::gssapi_layer_reply(*selected, max_receive_size, authz_id);
 		if (!text) {
 			return std::unexpected(std::move(text.error()));
 		}
@@ -371,8 +553,37 @@ struct sasl_gssapi::state
 		if (GSS_ERROR(major) != 0) {
 			return gss_failure("gss_wrap", major, minor);
 		}
+		std::string out(wrapped.view());
+		if (*selected != detail::gssapi_no_layer) {
+			layer = std::make_unique<gssapi_layer>(
+			  context.release(), *selected == detail::gssapi_confidentiality, max_wrap_input, max_receive_size);
+		}
 		at = phase::replied;
-		return std::optional<std::string>(std::string(wrapped.view()));
+		return std::optional<std::string>(std::move(out));
+	}
+
+	// The most plaintext one gss_wrap turns into at most `max_size` octets
+	// (the server's maximum buffer size), with the context's flags checked
+	// for the layer.
+	auto wrap_limit(bool confidentiality, std::uint32_t max_size) const -> result<std::size_t>
+	{
+		const OM_uint32 needed = confidentiality ? GSS_C_CONF_FLAG : GSS_C_INTEG_FLAG;
+		if ((context_flags & needed) == 0) {
+			return fail(client_errc::gssapi_failure,
+			  confidentiality ? "the security context provides no confidentiality"
+							  : "the security context provides no integrity");
+		}
+		OM_uint32 minor = 0;
+		OM_uint32 max_input = 0;
+		const OM_uint32 major =
+		  gss_wrap_size_limit(&minor, context.get(), confidentiality ? 1 : 0, GSS_C_QOP_DEFAULT, max_size, &max_input);
+		if (GSS_ERROR(major) != 0) {
+			return gss_failure("gss_wrap_size_limit", major, minor);
+		}
+		if (max_input == 0) {
+			return refused(detail::format("the server's maximum buffer size, {}, leaves no room for data", max_size));
+		}
+		return std::size_t{ max_input };
 	}
 
 	// The first token: names imported, credentials acquired (for a given
@@ -397,6 +608,13 @@ struct sasl_gssapi::state
 		if (auto c = check_text(options.authz_id, "authorization identity"); !c) {
 			return std::unexpected(std::move(c.error()));
 		}
+		if (options.security_layer != gssapi_security_layer::none
+			&& (options.max_receive_size == 0 || options.max_receive_size > gssapi_max_buffer_limit)) {
+			return input_error(detail::format(
+			  "max_receive_size {} out of range (1 to {})", options.max_receive_size, gssapi_max_buffer_limit));
+		}
+		requested_layer = options.security_layer;
+		max_receive_size = options.max_receive_size;
 
 		if (auto n = import_name(target_name, GSS_C_NT_HOSTBASED_SERVICE, target); !n) {
 			return std::unexpected(std::move(n.error()));
@@ -434,6 +652,7 @@ auto sasl_gssapi::operator=(sasl_gssapi &&) noexcept -> sasl_gssapi & = default;
 void sasl_gssapi::prepare(const sasl_bind_context &context)
 {
 	host_.assign(context.host);
+	tls_ = context.tls;
 	bindings_.clear();
 	binding_error_.clear();
 	if (auto data = detail::gssapi_channel_binding_data(context, options_.channel_binding, options_.binding_form)) {
@@ -454,6 +673,7 @@ auto sasl_gssapi::offload_start() -> sasl_work
 	const auto s = std::make_shared<state>();
 	s->busy.store(true, std::memory_order_relaxed);
 	s->bindings = bindings_;
+	s->tls = tls_;
 	state_ = s;
 	return [s, options = options_, host = host_] {
 		const auto scope = s->busy_scope();
@@ -532,7 +752,7 @@ auto sasl_gssapi::complete(std::optional<std::string_view> server_creds) -> resu
 		return refused("success while the previous step still runs");
 	}
 	const bool replied = s.at == state::phase::replied;
-	// No security layer: the context is not used after the bind.
+	// The context is not used after the bind (a layer took it over).
 	s.reset();
 	if (!replied) {
 		return refused("the server reported success before the security layer negotiation");
@@ -541,6 +761,14 @@ auto sasl_gssapi::complete(std::optional<std::string_view> server_creds) -> resu
 		return refused("unexpected server credentials with the success");
 	}
 	return {};
+}
+
+auto sasl_gssapi::take_security_layer() -> std::unique_ptr<sasl_security_layer>
+{
+	if (state_ == nullptr || state_->busy.load(std::memory_order_acquire)) {
+		return nullptr;
+	}
+	return std::move(state_->layer);
 }
 
 }// namespace jhetz::ldap

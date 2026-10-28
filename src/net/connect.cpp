@@ -421,6 +421,10 @@ auto start_tls(transport &t,
 		co_return fail(
 		  std::make_error_code(std::errc::invalid_argument), context + ": needs an open plain TCP transport");
 	}
+	if (t.security_layer() != sasl_protection::none) {
+		co_return fail(client_errc::security_layer_in_effect,
+		  context + ": a SASL security layer is in effect (TLS would have to go below it, RFC 4513 section 5.2.1.6)");
+	}
 	if (!pending.empty()) {
 		co_return fail(client_errc::decode_error,
 		  ldap::detail::format("{}: {} bytes arrived before the TLS handshake (refused: they were not protected)",

@@ -1,6 +1,7 @@
 #include "jhetz/ldap/net/message_io.hpp"
 
 #include "../format_util.hpp"
+#include "sasl_layer.hpp"
 
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/cond.hpp>
@@ -128,7 +129,10 @@ auto read_frame(transport &t, read_buffer &buf, std::size_t max_message_size) ->
 		}
 
 		std::string context = where;
-		if (closed) {
+		if (const auto layer = detail::security_layer_error(t); !layer.empty()) {
+			context += ": ";
+			context += layer;
+		} else if (closed) {
 			const std::size_t have = buf.size();
 			if (have == 0) {
 				context +=
@@ -167,6 +171,10 @@ auto write_bytes(transport &t, std::span<const std::byte> bytes) -> capy::task<r
 		context += t.name();
 		if (n != 0) {
 			ldap::detail::format_to(context, " ({} of {} bytes written)", n, bytes.size());
+		}
+		if (const auto layer = detail::security_layer_error(t); !layer.empty()) {
+			context += ": ";
+			context += layer;
 		}
 		co_return fail(ec, std::move(context));
 	}

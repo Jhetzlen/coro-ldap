@@ -755,16 +755,21 @@ context is
 established, the last output token sent even if empty; a context without
 mutual authentication is refused. The next challenge is the server's
 wrapped security layer offer (`gss_unwrap`, exactly 4 octets: layer mask,
-max size); the client always answers "no security layer" (`0x01`), max
-size 0, then the authz_id, wrapped without confidentiality (`gss_wrap`,
-conf_flag 0), as RFC 4752 section 3.1 says. An offer without the "none"
-bit fails with `client_errc::security_layer_required` (the exchange is
+max size); the client answers with the layer it selects
+(`detail::gssapi_select_layer` for `sasl_gssapi_options::security_layer`,
+default none), its maximum buffer size (0 without a layer, else
+`max_receive_size`), then the authz_id, wrapped without confidentiality
+(`gss_wrap`, conf_flag 0), as RFC 4752 section 3.1 says. With the
+default, an offer without the "none" bit fails with
+`client_errc::security_layer_required`, and a layer asked for but not
+offered fails with `security_layer_unavailable` (the exchange is
 aborted, the connection stays usable). `complete()` refuses a success
 that comes before that reply (the server was not authenticated, so
-`sasl_bind` closes the connection), and releases the context: with no
-layer nothing uses it after the bind. The layer messages are pure
-functions (`detail::parse_gssapi_layer_offer`, `gssapi_layer_reply`),
-unit tested without Kerberos. GSS-API handles (names, credentials,
+`sasl_bind` closes the connection), and releases the context; with a
+layer, the context went to the layer (`take_security_layer()`) at the
+reply. The layer messages are pure functions
+(`detail::parse_gssapi_layer_offer`, `gssapi_select_layer`,
+`gssapi_layer_reply`), unit tested without Kerberos. GSS-API handles (names, credentials,
 context, buffers) are owned by small RAII types; `gssapi.h` stays out of
 the public header (pimpl). `gss_acquire_cred` and every
 `gss_init_sec_context` call run off the I/O thread (`offload_start`,
@@ -781,8 +786,47 @@ Failures are `client_errc::gssapi_failure`
 (`cond::auth_failed`) with the call's name and `gss_display_status`'s
 major and minor messages (sanitized, as server text is), never tokens.
 Names are UTF-8, checked (well-formed, no control characters) and given
-to GSS-API as is. Security layers (integrity, confidentiality: wrapping
-every LDAP PDU) are not provided; TLS is the protection. Active Directory
+to GSS-API as is. Security layers (coro-ldap-c83, opt-in: the default
+stays "none", TLS being the recommended protection): with
+`security_layer` integrity, confidentiality or best_offered (the
+strongest offered; over TLS none when offered, TLS protecting the
+connection already), `gss_init_sec_context` also asks for
+GSS_C_INTEG_FLAG and GSS_C_CONF_FLAG, the selected layer must be in the
+context's ret_flags, and `gss_wrap_size_limit` turns the server's maximum
+buffer size into the most plaintext per buffer (0 fails the bind). The
+layer (`sasl_security_layer` in sasl.hpp, generic: a DIGEST-style
+mechanism could give its own) wraps with conf_flag set for
+confidentiality and refuses, on unwrap, a buffer that fails, one with a
+sequence status (duplicate, old, unsequenced, gap: GSS_C_SEQUENCE_FLAG
+is requested) and, on a confidentiality layer, one not encrypted (a
+downgrade). The seam is the transport: `sasl_bind` takes the layer from
+the mechanism after each step (`take_security_layer()`) and arms the
+connection with it; the reader, routing the next BindResponse, installs
+it if that is a success (`net::detail::install_security_layer`) before it
+reads another byte, moving whatever followed the response in the
+read_buffer into the layer (RFC 4513 section 5.2.1.4: the layer starts at
+the first octet after it), and drops it otherwise. From then on
+`transport::stream()` returns a `sasl_layer_stream` over the old stream
+(TLS-decrypted, so the layer sits on top of TLS, RFC 4513 section
+5.2.1.6): `read_frame`, `write_bytes`, unbind and everything else are
+unchanged. A write in flight keeps the stream it began on (the bind
+holds every other request, so only a BindRequest can be). The stream
+frames each buffer with a four-octet big-endian length (RFC 4422 section
+3.7), cuts writes to `max_wrap_input()`, refuses a length above
+`max_received()` before reading the body (`message_too_large`: RFC 4422
+"SHOULD close the connection"), keeps a partial buffer across a
+cancelled read, and its failures keep their context ("read <name>: SASL
+security layer: gss_unwrap: ..."). The knowledge cached from the server
+is forgotten (RFC 4513 section 5.2.1.6). `start_tls()` with a layer
+fails (`security_layer_in_effect`: TLS would have to go below the layer,
+which this library does not do), and so does a second layer (a bind
+that negotiates one; one without a layer leaves it in place, RFC 4513
+section 5.2.1.4). Tested with a made-up XOR layer through socket pairs
+(framing, chunking, oversized and broken buffers, bytes after the
+BindResponse, a refused bind) and end to end against an in-process MIT
+acceptor speaking LDAP (`kerberos.security_layer`: integrity,
+confidentiality with a 64-octet server maximum, best_offered, a layer not
+offered). Active Directory
 notes: its "LDAP server signing requirements" policy, when it requires
 signing, refuses no-layer SASL binds over plain LDAP
 (strongerAuthRequired, 00002028), so use TLS there; its "LDAP channel
@@ -1254,7 +1298,7 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `no_password_method`, `gssapi_failure`, `security_layer_required`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock`; environment: `internal_error` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `no_password_method`, `gssapi_failure`, `security_layer_required`, `security_layer_unavailable`, `security_layer_in_effect`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock`; environment: `internal_error` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 `error`'s strings are `std::pmr::string` but always on the default
@@ -1310,8 +1354,10 @@ connection without TLS), `no_password_method` (the root DSE advertises
 no password-change method this library knows), `gssapi_failure` (a GSS-API
 call failed in a SASL GSSAPI bind: the context quotes GSS-API's major and
 minor status messages), `security_layer_required` (the server accepts a
-SASL GSSAPI bind only with a security layer, which the client does not
-provide). Server errors carry the operation as context
+SASL GSSAPI bind only with a security layer, which the options do not
+ask for), `security_layer_unavailable` (the server does not offer the
+layer asked for), `security_layer_in_effect` (StartTLS or a second layer
+while a SASL layer is in effect). Server errors carry the operation as context
 (`search ou=people,dc=example,dc=org`) and leave the connection usable;
 transport and protocol errors close it.
 
@@ -1331,7 +1377,7 @@ a caller match none, deliberately (test them by exact code).
 | `tls_failure` | | | any `corosio.openssl` (or `corosio.wolfssl`) code |
 | `protocol_error` | `protocol_error` | `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `integer_overflow`, `unexpected_tag`, `unsupported_operation`, `unexpected_response` | |
 | `busy_or_unavailable` | `busy`, `unavailable` | | `connection_refused`, `host_unreachable`, `network_unreachable`, `network_down` |
-| `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required`, `security_layer_required` | `permission_denied` |
+| `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required`, `security_layer_required`, `security_layer_unavailable` | `permission_denied` |
 | `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
 | `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url`, `string_prep_failed` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
 | none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `virtual_list_view_error`, `assertion_failed`, `e_sync_refresh_required`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `no_password_method`, `internal_error` | everything else |

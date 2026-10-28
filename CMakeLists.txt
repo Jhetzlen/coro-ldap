@@ -294,6 +294,7 @@ if(JHETZ_LDAP_BUILD_NET)
         src/net/connect.cpp
         src/net/host_name.cpp
         src/net/message_io.cpp
+        src/net/sasl_layer.cpp
         src/net/channel_binding.cpp
         src/net/tls.cpp
         src/net/transport.cpp

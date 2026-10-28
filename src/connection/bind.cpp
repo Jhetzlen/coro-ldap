@@ -65,6 +65,23 @@ namespace {
 		self->shut(make_error(client_errc::unexpected_response, text), true);
 	}
 
+	// After a step: the layer the exchange negotiated, if this step's
+	// BindRequest is its last, takes effect with that request's success.
+	// One layer at a time.
+	auto arm_security_layer(connection::impl &c, sasl_mechanism &mechanism) -> result<void>
+	{
+		auto layer = mechanism.take_security_layer();
+		if (layer == nullptr) {
+			return {};
+		}
+		if (c.security_layer() != sasl_protection::none) {
+			return fail(client_errc::security_layer_in_effect,
+			  "the exchange negotiated a SASL security layer while one is in effect (only one is supported)");
+		}
+		c.arm_security_layer(std::move(layer));
+		return {};
+	}
+
 }// namespace
 
 auto connection::simple_bind(dn name, std::string password) -> capy::task<result<void>>
@@ -131,6 +148,11 @@ auto connection::sasl_bind(sasl_mechanism &mechanism, dn name) -> capy::task<res
 		self->mark_tls_exporter_used();
 	}
 	for (int step = 0;; ++step) {
+		if (creds) {
+			if (auto armed = arm_security_layer(*self, mechanism); !armed) {
+				creds = std::unexpected(std::move(armed.error()));
+			}
+		}
 		if (!creds || step == max_steps) {
 			auto e = creds ? make_error(client_errc::unexpected_response,
 							   detail::format("{}: still in progress after {} steps", context, max_steps))

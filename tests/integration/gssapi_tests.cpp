@@ -263,4 +263,43 @@ TEST_CASE("integration: SASL GSSAPI with a server that requires a security layer
 		ldap::sasl_gssapi mech;
 		CHECK(bind_and_who(ioc, c, mech) == user007);
 	}
+	SECTION("plain LDAP with integrity, then confidentiality: every later PDU through the layer")
+	{
+		for (auto layer : { ldap::gssapi_security_layer::integrity, ldap::gssapi_security_layer::confidentiality }) {
+			auto c = open(ioc, localhost_url());
+			// A small maximum: the entries come in many buffers.
+			ldap::sasl_gssapi mech({ .security_layer = layer, .max_receive_size = 512 });
+			CHECK(bind_and_who(ioc, c, mech) == user007);
+			CHECK(c.security_layer()
+				  == (layer == ldap::gssapi_security_layer::integrity ? ldap::sasl_protection::integrity
+																	  : ldap::sasl_protection::confidentiality));
+			auto all = finish(ioc, c.search({ .base = ldap::dn{ "dc=example,dc=org" } }));
+			REQUIRE(all.has_value());
+			CHECK(all->size() > 1);
+			auto tls = finish(ioc, c.start_tls());
+			REQUIRE_FALSE(tls.has_value());
+			CHECK(tls.error().code == ldap::client_errc::security_layer_in_effect);
+			CHECK(finish(ioc, c.who_am_i()) == user007);
+			CHECK(finish(ioc, c.unbind()).has_value());
+		}
+	}
+	SECTION("best offered over StartTLS: no layer")
+	{
+		auto o = trusting();
+		o.start_tls = true;
+		auto c = open(ioc, localhost_url(), o);
+		ldap::sasl_gssapi mech({ .security_layer = ldap::gssapi_security_layer::best_offered });
+		CHECK(bind_and_who(ioc, c, mech) == user007);
+		CHECK(c.security_layer() == ldap::sasl_protection::none);
+	}
+}
+
+TEST_CASE("integration: SASL GSSAPI security layers with slapd's default policy", "[integration][sasl][gssapi]")
+{
+	require_kerberos();
+	corosio::io_context ioc;
+	auto c = open(ioc, localhost_url());
+	ldap::sasl_gssapi mech({ .security_layer = ldap::gssapi_security_layer::best_offered });
+	CHECK(bind_and_who(ioc, c, mech) == user007);
+	CHECK(c.security_layer() == ldap::sasl_protection::confidentiality);
 }

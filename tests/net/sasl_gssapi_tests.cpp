@@ -79,47 +79,116 @@ TEST_CASE("gssapi: the server's security layer offer", "[net][sasl][gssapi]")
 		  == "security layer offer of 3 bytes, not 4");
 }
 
-TEST_CASE("gssapi: the client's security layer reply", "[net][sasl][gssapi]")
+TEST_CASE("gssapi: the security layer selected", "[net][sasl][gssapi]")
 {
-	SECTION("no security layer, maximum size 0, whatever else is offered")
+	using ldap::gssapi_security_layer;
+	using ldap::detail::gssapi_select_layer;
+	constexpr std::uint8_t none = ldap::detail::gssapi_no_layer;
+	constexpr std::uint8_t integrity = ldap::detail::gssapi_integrity;
+	constexpr std::uint8_t confidentiality = ldap::detail::gssapi_confidentiality;
+	const auto offer = [](std::uint8_t layers) { return gssapi_layer_offer{ .layers = layers, .max_size = 0x10000 }; };
+
+	SECTION("none: no security layer, whatever else is offered")
 	{
 		for (std::uint8_t layers : std::to_array<std::uint8_t>({ 1, 3, 5, 7, 0xff })) {
 			INFO("layers " << int{ layers });
-			CHECK(ldap::detail::gssapi_layer_reply({ layers, 0x10000 }, "") == "\x01\x00\x00\x00"sv);
+			CHECK(gssapi_select_layer(offer(layers), gssapi_security_layer::none, false) == none);
+			CHECK(gssapi_select_layer(offer(layers), gssapi_security_layer::none, true) == none);
 		}
 	}
-	SECTION("with an authorization identity, UTF-8")
-	{
-		CHECK(ldap::detail::gssapi_layer_reply({ 7, 0 }, "dn:uid=j\xC3\xB6rg,ou=people,dc=example,dc=org")
-			  == "\x01\x00\x00\x00"
-				 "dn:uid=j\xC3\xB6rg,ou=people,dc=example,dc=org"sv);
-		CHECK(ldap::detail::gssapi_layer_reply({ 1, 0 }, "u:\xE6\x97\xA5\xE6\x9C\xAC\xF0\x9F\x98\x80")
-			  == "\x01\x00\x00\x00u:\xE6\x97\xA5\xE6\x9C\xAC\xF0\x9F\x98\x80"sv);
-	}
-	SECTION("a server that requires integrity or confidentiality")
+	SECTION("none, from a server that requires integrity or confidentiality")
 	{
 		for (std::uint8_t layers : std::to_array<std::uint8_t>({ 2, 4, 6, 0xfe })) {
 			INFO("layers " << int{ layers });
-			auto r = ldap::detail::gssapi_layer_reply({ .layers = layers, .max_size = 0x10000 }, "");
+			auto r = gssapi_select_layer(offer(layers), gssapi_security_layer::none, false);
 			REQUIRE_FALSE(r.has_value());
 			CHECK(r.error().code == ldap::client_errc::security_layer_required);
 			CHECK(r.error().code == ldap::cond::access_denied);
 			CHECK_THAT(std::string(r.error().context), ContainsSubstring("use TLS"));
+			CHECK_THAT(std::string(r.error().context), ContainsSubstring("security_layer"));
 		}
+	}
+	SECTION("integrity: integrity, else confidentiality")
+	{
+		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::integrity, false) == integrity);
+		CHECK(gssapi_select_layer(offer(2), gssapi_security_layer::integrity, true) == integrity);
+		CHECK(gssapi_select_layer(offer(5), gssapi_security_layer::integrity, false) == confidentiality);
+		auto r = gssapi_select_layer(offer(1), gssapi_security_layer::integrity, false);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::security_layer_unavailable);
+		CHECK(r.error().code == ldap::cond::access_denied);
+	}
+	SECTION("confidentiality only")
+	{
+		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::confidentiality, false) == confidentiality);
+		CHECK(gssapi_select_layer(offer(4), gssapi_security_layer::confidentiality, true) == confidentiality);
+		for (std::uint8_t layers : std::to_array<std::uint8_t>({ 1, 2, 3 })) {
+			auto r = gssapi_select_layer(offer(layers), gssapi_security_layer::confidentiality, false);
+			REQUIRE_FALSE(r.has_value());
+			CHECK(r.error().code == ldap::client_errc::security_layer_unavailable);
+			CHECK(std::string(r.error().context) == "the server does not offer confidentiality protection");
+		}
+	}
+	SECTION("best offered: the strongest, but none over TLS when offered")
+	{
+		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::best_offered, false) == confidentiality);
+		CHECK(gssapi_select_layer(offer(3), gssapi_security_layer::best_offered, false) == integrity);
+		CHECK(gssapi_select_layer(offer(1), gssapi_security_layer::best_offered, false) == none);
+		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::best_offered, true) == none);
+		CHECK(gssapi_select_layer(offer(6), gssapi_security_layer::best_offered, true) == confidentiality);
+		CHECK(gssapi_select_layer(offer(2), gssapi_security_layer::best_offered, true) == integrity);
 	}
 	SECTION("an offer of nothing")
 	{
 		for (std::uint8_t layers : std::to_array<std::uint8_t>({ 0, 8, 0xf0 })) {
-			auto r = ldap::detail::gssapi_layer_reply({ .layers = layers, .max_size = 0 }, "");
-			REQUIRE_FALSE(r.has_value());
-			CHECK(r.error().code == ldap::client_errc::unexpected_response);
+			for (auto requested : { gssapi_security_layer::none, gssapi_security_layer::best_offered }) {
+				auto r = gssapi_select_layer({ .layers = layers, .max_size = 0 }, requested, false);
+				REQUIRE_FALSE(r.has_value());
+				CHECK(r.error().code == ldap::client_errc::unexpected_response);
+			}
 		}
+	}
+	SECTION("a layer offered with a maximum buffer size of 0")
+	{
+		CHECK(gssapi_select_layer({ .layers = 7, .max_size = 0 }, gssapi_security_layer::none, false) == none);
+		auto r = gssapi_select_layer({ .layers = 7, .max_size = 0 }, gssapi_security_layer::integrity, false);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::unexpected_response);
+	}
+}
+
+TEST_CASE("gssapi: the client's security layer reply", "[net][sasl][gssapi]")
+{
+	using ldap::detail::gssapi_layer_reply;
+	SECTION("no security layer: maximum size 0, whatever is given")
+	{
+		CHECK(gssapi_layer_reply(1, 0x10000, "") == "\x01\x00\x00\x00"sv);
+		CHECK(gssapi_layer_reply(1, 0, "") == "\x01\x00\x00\x00"sv);
+	}
+	SECTION("a layer: its maximum size, network byte order")
+	{
+		CHECK(gssapi_layer_reply(2, 0x10000, "") == "\x02\x01\x00\x00"sv);
+		CHECK(gssapi_layer_reply(4, 0xffffff, "") == "\x04\xff\xff\xff"sv);
+		CHECK(gssapi_layer_reply(4, 0x0102, "u:x") == "\x04\x00\x01\x02u:x"sv);
+		for (std::uint32_t bad : { 0U, 0x1000000U, 0xffffffffU }) {
+			auto r = gssapi_layer_reply(2, bad, "");
+			REQUIRE_FALSE(r.has_value());
+			CHECK(r.error().code == ldap::client_errc::encode_error);
+		}
+	}
+	SECTION("with an authorization identity, UTF-8")
+	{
+		CHECK(gssapi_layer_reply(1, 0, "dn:uid=j\xC3\xB6rg,ou=people,dc=example,dc=org")
+			  == "\x01\x00\x00\x00"
+				 "dn:uid=j\xC3\xB6rg,ou=people,dc=example,dc=org"sv);
+		CHECK(gssapi_layer_reply(1, 0, "u:\xE6\x97\xA5\xE6\x9C\xAC\xF0\x9F\x98\x80")
+			  == "\x01\x00\x00\x00u:\xE6\x97\xA5\xE6\x9C\xAC\xF0\x9F\x98\x80"sv);
 	}
 	SECTION("an authorization identity that is not valid UTF-8, or has a control character")
 	{
 		for (auto bad :
 		  { "dn:\xC3"sv, "dn:\xC0\xAF"sv, "dn:\xED\xA0\x80"sv, "dn:a\nb"sv, "dn:a\0b"sv, "dn:\xC2\x85"sv }) {
-			auto r = ldap::detail::gssapi_layer_reply({ .layers = 1, .max_size = 0 }, bad);
+			auto r = gssapi_layer_reply(1, 0, bad);
 			REQUIRE_FALSE(r.has_value());
 			CHECK(r.error().code == ldap::client_errc::encode_error);
 		}
@@ -154,6 +223,10 @@ TEST_CASE("gssapi: invalid names are refused before anything is sent", "[net][sa
 	refused({ .target = "ldap@\xFF" }, "target is not valid UTF-8");
 	refused({ .principal = "jdoe\r\n@EXAMPLE.ORG" }, "principal contains a control character");
 	refused({ .authz_id = "dn:\xE2\x82" }, "authorization identity is not valid UTF-8");
+	refused({ .security_layer = ldap::gssapi_security_layer::integrity, .max_receive_size = 0 },
+	  "max_receive_size 0 out of range (1 to 16777215)");
+	refused({ .security_layer = ldap::gssapi_security_layer::best_offered, .max_receive_size = 0x1000000 },
+	  "max_receive_size 16777216 out of range (1 to 16777215)");
 	m.check_server();
 	CHECK(m.log.received.empty());
 }

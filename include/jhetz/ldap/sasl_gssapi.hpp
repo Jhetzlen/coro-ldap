@@ -45,16 +45,32 @@
 //   (dns_canonicalize_hostname, rdns).
 // - Mutual authentication is required: the bind fails unless the server
 //   proved its identity (it holds the service principal's key).
-// - Security layer (RFC 4752 section 3.1): the client always chooses "no
-//   security layer", with a maximum buffer size of 0, so the rest of the
-//   session is neither signed nor sealed by SASL. Use it over TLS (ldaps://
-//   or StartTLS) unless the network is trusted. A server that does not
-//   offer "no security layer" (only integrity or confidentiality) fails the
+// - Security layer (RFC 4752 section 3.1, sasl_gssapi_options::
+//   security_layer): by default the client chooses "no security layer",
+//   with a maximum buffer size of 0, so the rest of the session is neither
+//   signed nor sealed by SASL. Use it over TLS (ldaps:// or StartTLS)
+//   unless the network is trusted. A server that does not offer "no
+//   security layer" (only integrity or confidentiality) then fails the
 //   bind with client_errc::security_layer_required. Active Directory
 //   offers it, but with the "LDAP server signing requirements" policy set
 //   to require signing it refuses binds over plain ldap:// that do not sign
 //   (errc::stronger_auth_required, diagnostic 00002028): use TLS, which
-//   satisfies the policy.
+//   satisfies the policy, or ask for a layer. With integrity,
+//   confidentiality or best_offered the client selects that layer from the
+//   server's offer, announces max_receive_size as its maximum buffer size,
+//   and connection::sasl_bind installs it right after the successful
+//   BindResponse: every later PDU, both ways, goes in gss_wrap'd buffers
+//   (with confidentiality: encrypted) after a four-octet length (RFC 4422
+//   section 3.7), outgoing PDUs cut to fit the server's maximum buffer
+//   size (gss_wrap_size_limit), incoming buffers larger than
+//   max_receive_size closing the connection, as do a buffer that fails
+//   gss_unwrap, one replayed or out of sequence, or one without
+//   confidentiality on a confidentiality layer. connection::
+//   security_layer() reports it. The security context then lives as long
+//   as the connection. With a layer in effect, start_tls() fails (TLS
+//   would have to go below the layer) and so does a bind that negotiates
+//   another (client_errc::security_layer_in_effect); a bind without a
+//   layer leaves it in place (RFC 4513 section 5.2.1.4).
 // - Channel binding (RFC 5056, RFC 5929 section 4), chosen with
 //   sasl_gssapi_options::channel_binding: over TLS (ldaps:// or StartTLS),
 //   gss_init_sec_context is given a gss_channel_bindings_struct with no
@@ -120,7 +136,8 @@
 //   be well-formed UTF-8 without control characters (C0, DEL, C1).
 // - Every GSS-API handle (names, credentials, the security context, output
 //   buffers) is released when no longer needed: the security context when
-//   the bind succeeds (no security layer: nothing uses it afterwards), when
+//   the bind succeeds without a security layer (nothing uses it
+//   afterwards; with one, the layer owns it until the connection goes), when
 //   the mechanism fails, at the next start(), or with the object; those of
 //   a call sasl_bind gave up on, by its thread once it ends.
 //
@@ -133,7 +150,8 @@
 //   minor status messages: "gss_init_sec_context: Unspecified GSS failure.
 //   Minor code may provide more information (Server ldap/x@EXAMPLE.ORG not
 //   found in Kerberos database)".
-// - client_errc::security_layer_required (cond::access_denied): see above.
+// - client_errc::security_layer_required, security_layer_unavailable
+//   (cond::access_denied): see above.
 // - client_errc::encode_error (cond::invalid_input): no target (no host to
 //   default to), or a target, principal or authorization identity that is
 //   not well-formed UTF-8 or holds a control character.
@@ -177,6 +195,29 @@ enum class gssapi_channel_binding_form : std::uint8_t {
 	openldap,
 };
 
+// The SASL security layer to negotiate (RFC 4752 section 3.1): the client
+// selects one of the layers the server offers.
+enum class gssapi_security_layer : std::uint8_t {
+	// No security layer (the default). A server that does not offer it
+	// fails the bind with client_errc::security_layer_required.
+	none,
+	// Integrity: every later PDU is signed (gss_wrap without
+	// confidentiality). Confidentiality instead when the server offers only
+	// that; client_errc::security_layer_unavailable when it offers neither.
+	integrity,
+	// Confidentiality: every later PDU is signed and encrypted.
+	// client_errc::security_layer_unavailable when the server does not
+	// offer it.
+	confidentiality,
+	// The strongest layer the server offers (confidentiality, integrity,
+	// none), except over TLS, which protects the connection already: no
+	// layer there when the server offers that.
+	best_offered,
+};
+
+// The largest maximum buffer size RFC 4752 can express (three octets).
+inline constexpr std::uint32_t gssapi_max_buffer_limit = 0xff'ffff;
+
 struct sasl_gssapi_options
 {
 	// The service to authenticate to, a host-based service name
@@ -196,6 +237,14 @@ struct sasl_gssapi_options
 	gssapi_channel_binding channel_binding = gssapi_channel_binding::tls_server_end_point;
 	// The hash of the tls-server-end-point binding.
 	gssapi_channel_binding_form binding_form = gssapi_channel_binding_form::rfc5929;
+	// The security layer to select (see the header comment).
+	gssapi_security_layer security_layer = gssapi_security_layer::none;
+	// With a security layer: the maximum buffer size announced to the
+	// server, the largest protected buffer accepted from it (1 to
+	// gssapi_max_buffer_limit; else start() fails with
+	// client_errc::encode_error). A larger one closes the connection. LDAP
+	// PDUs larger than it still pass, in several buffers.
+	std::uint32_t max_receive_size = 65536;
 };
 
 class sasl_gssapi final : public sasl_mechanism
@@ -226,6 +275,10 @@ class sasl_gssapi final : public sasl_mechanism
 	[[nodiscard]] auto offload_step(std::optional<std::string_view> challenge) -> sasl_work override;
 	// Succeeds only once the security layer reply was sent.
 	[[nodiscard]] auto complete(std::optional<std::string_view> server_creds) -> result<void> override;
+	// After the step that sent the security layer reply, when it selected
+	// integrity or confidentiality: the layer, which owns the security
+	// context from then on. Null otherwise.
+	[[nodiscard]] auto take_security_layer() -> std::unique_ptr<sasl_security_layer> override;
 	// tls_server_end_point when the exchange carries channel bindings,
 	// else nullopt (never tls-exporter).
 	[[nodiscard]] auto channel_binding_used() const noexcept -> std::optional<channel_binding_type> override
@@ -240,6 +293,7 @@ class sasl_gssapi final : public sasl_mechanism
 	struct state;// GSS-API handles; gssapi.h stays out of this header
 	sasl_gssapi_options options_;
 	std::string host_;
+	bool tls_ = false;// the connection is TLS (prepare())
 	std::string bindings_;// the application data; empty: no bindings
 	// Why the TLS connection cannot be bound (start() fails with it);
 	// empty: it can be, or no bindings are wanted.
@@ -268,12 +322,22 @@ namespace detail {
 	// and the size in network byte order. Else client_errc::decode_error.
 	[[nodiscard]] auto parse_gssapi_layer_offer(std::string_view message) -> result<gssapi_layer_offer>;
 
-	// The client's reply (to be wrapped): "no security layer", maximum size
-	// 0, then `authz_id`. client_errc::security_layer_required if the offer
-	// lacks "no security layer" but has another layer, unexpected_response
-	// if it has none at all, encode_error for an `authz_id` that is not
-	// well-formed UTF-8 or holds a control character.
-	[[nodiscard]] auto gssapi_layer_reply(const gssapi_layer_offer &offer, std::string_view authz_id)
+	// The layer (one of the bits above) to select from `offer` for
+	// `requested`, on a TLS connection when `tls`. unexpected_response if
+	// the offer has no layer at all, not even none;
+	// security_layer_required for gssapi_security_layer::none without
+	// "no security layer" offered; security_layer_unavailable when the
+	// layer asked for is not offered; unexpected_response for a layer
+	// selected from an offer whose maximum size is 0.
+	[[nodiscard]] auto gssapi_select_layer(const gssapi_layer_offer &offer, gssapi_security_layer requested, bool tls)
+	  -> result<std::uint8_t>;
+
+	// The client's reply (to be wrapped): `layer`, then the maximum size
+	// `max_size` (0 for gssapi_no_layer, whatever is given; else 1 to
+	// gssapi_max_buffer_limit) in network byte order, then `authz_id`.
+	// encode_error for a maximum size out of range, or an `authz_id` that
+	// is not well-formed UTF-8 or holds a control character.
+	[[nodiscard]] auto gssapi_layer_reply(std::uint8_t layer, std::uint32_t max_size, std::string_view authz_id)
 	  -> result<std::string>;
 
 	// The application data of the channel bindings for a bind on a

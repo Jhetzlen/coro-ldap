@@ -3,6 +3,8 @@
 
 #include "jhetz/ldap/net/transport.hpp"
 
+#include "sasl_layer.hpp"
+
 #include <boost/capy/io/any_stream.hpp>
 #include <boost/corosio/local_stream_socket.hpp>
 #include <boost/corosio/openssl_stream.hpp>
@@ -17,8 +19,8 @@
 
 namespace jhetz::ldap::net {
 
-// Members are destroyed in reverse order: the type-erased view first, then
-// the TLS layer (which refers to the socket), then the sockets.
+// Members are destroyed in reverse order: the SASL layer's view and the
+// layer, then the type-erased view, then the TLS layer (which refers to the socket), then the sockets.
 struct transport::impl
 {
 	explicit impl(std::pmr::memory_resource *r)
@@ -52,6 +54,11 @@ struct transport::impl
 	transport::custom_ops custom_ops{};
 	bool custom_closed = false;
 	boost::capy::any_stream stream{};
+	// The SASL security layer over `stream` (detail::install_security_layer),
+	// and the view of it that stream() returns once it is set. Declared
+	// after `stream`, which the layer refers to, so destroyed before it.
+	std::optional<detail::sasl_layer_stream> sasl_layer{};
+	boost::capy::any_stream layered{};
 };
 
 struct transport_access

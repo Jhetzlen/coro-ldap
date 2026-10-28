@@ -29,6 +29,8 @@ void transport::destroy() noexcept
 		return;
 	}
 	impl *im = std::exchange(impl_, nullptr);
+	im->layered = {};// refers to the SASL layer, which refers to `stream`
+	im->sasl_layer.reset();
 	if (im->custom != nullptr) {
 		im->stream = {};// refers to the custom stream
 		im->custom_ops.destroy(im->custom, im->mr);
@@ -53,7 +55,15 @@ void transport::set_custom(void *stream, custom_ops ops) noexcept
 	impl_->custom_ops = ops;
 }
 
-auto transport::stream() noexcept -> boost::capy::any_stream & { return impl_->stream; }
+auto transport::stream() noexcept -> boost::capy::any_stream &
+{
+	return impl_->sasl_layer ? impl_->layered : impl_->stream;
+}
+
+auto transport::security_layer() const noexcept -> sasl_protection
+{
+	return impl_ != nullptr && impl_->sasl_layer ? impl_->sasl_layer->protection() : sasl_protection::none;
+}
 
 auto transport::type() const noexcept -> transport::kind { return impl_ ? impl_->type : kind::none; }
 

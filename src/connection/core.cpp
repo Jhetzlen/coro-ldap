@@ -4,6 +4,7 @@
 #include "jhetz/ldap/net/message_io.hpp"
 
 #include "../format_util.hpp"
+#include "../net/sasl_layer.hpp"
 #include "impl.hpp"
 
 #include <boost/capy/cond.hpp>
@@ -559,6 +560,11 @@ auto connection::impl::check_start_tls(std::string_view context) const -> result
 	if (binding) {
 		return fail(client_errc::operation_in_progress, std::string(context) + " during a bind");
 	}
+	if (transport_.security_layer() != sasl_protection::none) {
+		return fail(client_errc::security_layer_in_effect,
+		  std::string(context)
+			+ " with a SASL security layer in effect (TLS would have to go below it, RFC 4513 section 5.2.1.6)");
+	}
 	if (const std::size_t n = requests_waiting(); n != 0) {
 		return fail(client_errc::operation_in_progress,
 		  detail::format("{} with {} {} outstanding", context, n, n == 1 ? "request" : "requests"));
@@ -745,6 +751,9 @@ void connection::impl::route(std::size_t size)
 			  true);
 			return;
 		}
+		if (final && index == op_index<bind_response> && armed_layer && !take_armed_layer(*m)) {
+			return;
+		}
 		p.queue.push_back(std::move(*m));
 		if (final) {
 			p.finished = true;
@@ -771,6 +780,22 @@ void connection::impl::route(std::size_t size)
 		return;
 	}
 	shut(unexpected(detail::format("message with id {}, which matches no outstanding request", h->id)), true);
+}
+
+auto connection::impl::take_armed_layer(const message &m) -> bool
+{
+	auto layer = std::move(armed_layer);
+	if (!std::get<bind_response>(m.op).result.is_success()) {
+		return true;
+	}
+	if (auto r = net::detail::install_security_layer(transport_, buf, std::move(layer)); !r) {
+		shut(detail::with_context(std::move(r.error()), detail::format("read {}", transport_.name())), true);
+		return false;
+	}
+	// RFC 4513 section 5.2.1.6: what was learnt before the layer is
+	// forgotten (it came unprotected).
+	knowledge_.forget();
+	return true;
 }
 
 void connection::impl::notification(std::span<const std::byte> bytes)
@@ -874,6 +899,7 @@ auto connection::impl::begin_bind(impl_ref c, std::string_view context) -> capy:
 
 connection::impl::bind_scope::~bind_scope()
 {
+	c_->armed_layer.reset();
 	c_->binding = false;
 	c_->bind_idle.set();
 	c_->release_held();

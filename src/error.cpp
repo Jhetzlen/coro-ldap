@@ -168,6 +168,10 @@ namespace {
 			return "string preparation (RFC 4518) failed";
 		case client_errc::not_sent:
 			return "request not sent: the connection closed before it was written";
+		case client_errc::security_layer_unavailable:
+			return "the server does not offer the SASL security layer asked for";
+		case client_errc::security_layer_in_effect:
+			return "not possible while a SASL security layer is in effect";
 		}
 		return {};
 	}
@@ -237,6 +241,7 @@ namespace {
 			return cond::auth_failed;
 		case client_errc::tls_required:
 		case client_errc::security_layer_required:
+		case client_errc::security_layer_unavailable:
 			return cond::access_denied;
 		default:
 			return std::nullopt;

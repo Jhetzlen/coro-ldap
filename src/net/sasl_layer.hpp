@@ -1,0 +1,125 @@
+// Internal: the SASL security layer stream (RFC 4422 section 3.7) that
+// connection::sasl_bind puts between the LDAP PDUs and the transport's
+// stream once a mechanism negotiated integrity or confidentiality
+// (sasl.hpp, sasl_security_layer). transport::stream() then returns it, so
+// read_frame, write_bytes and everything above them are unchanged.
+#pragma once
+
+#include "jhetz/ldap/error.hpp"
+#include "jhetz/ldap/net/message_io.hpp"
+#include "jhetz/ldap/net/transport.hpp"
+#include "jhetz/ldap/sasl.hpp"
+
+#include <boost/capy/buffers.hpp>
+#include <boost/capy/buffers/buffer_copy.hpp>
+#include <boost/capy/concept/const_buffer_sequence.hpp>
+#include <boost/capy/concept/mutable_buffer_sequence.hpp>
+#include <boost/capy/io/any_stream.hpp>
+#include <boost/capy/io_task.hpp>
+
+#include <algorithm>
+#include <cstddef>
+#include <memory>
+#include <memory_resource>
+#include <span>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <vector>
+
+namespace jhetz::ldap::net::detail {
+
+// The length field before each protected buffer: four octets, network
+// byte order (RFC 4422 section 3.7).
+inline constexpr std::size_t sasl_length_size = 4;
+
+// A capy::Stream over `inner` (the transport's own stream, TLS-decrypted
+// for ldaps:// or StartTLS: the SASL layer goes on top of TLS, RFC 4513
+// section 5.2.1.6). write_some() protects at most max_wrap_input() octets
+// into one buffer, writes it whole after its length, and reports the
+// plaintext octets taken. read_some() delivers plaintext, reading and
+// unwrapping whole buffers as needed; a length above max_received() fails
+// (client_errc::message_too_large) before the buffer is read. Bytes
+// received but not unwrapped stay across a cancelled read. One read and
+// one write may be in flight at once, as on any transport stream.
+//
+// Errors are error codes (capy's stream contract); the context of the
+// last failure that came from the layer itself (an oversized buffer, a
+// wrap or unwrap error) is kept in last_error() for read_frame and
+// write_bytes to add.
+class sasl_layer_stream
+{
+  public:
+	sasl_layer_stream(boost::capy::any_stream &inner,
+	  std::unique_ptr<sasl_security_layer> layer,
+	  std::pmr::memory_resource *mr);
+
+	// Bytes read from the inner stream before the layer took effect (those
+	// after the final BindResponse): the start of the protected stream.
+	void feed(std::span<const std::byte> bytes);
+
+	template<boost::capy::MutableBufferSequence MB> auto read_some(MB buffers) -> boost::capy::io_task<std::size_t>
+	{
+		if (boost::capy::buffer_size(buffers) == 0) {
+			co_return { std::error_code{}, 0 };
+		}
+		auto [ec] = co_await fill();
+		if (ec) {
+			co_return { ec, 0 };
+		}
+		const auto n = boost::capy::buffer_copy(
+		  buffers, boost::capy::const_buffer(plain_.data() + plain_pos_, plain_.size() - plain_pos_));
+		plain_pos_ += n;
+		co_return { std::error_code{}, n };
+	}
+
+	template<boost::capy::ConstBufferSequence CB> auto write_some(CB buffers) -> boost::capy::io_task<std::size_t>
+	{
+		const std::size_t n = std::min(boost::capy::buffer_size(buffers), layer_->max_wrap_input());
+		if (n == 0) {
+			co_return { std::error_code{}, 0 };
+		}
+		staged_.resize(n);
+		boost::capy::buffer_copy(boost::capy::mutable_buffer(staged_.data(), n), buffers, n);
+		if (auto ec = protect(); ec) {
+			co_return { ec, 0 };
+		}
+		auto [ec] = co_await flush();
+		co_return { ec, ec ? 0 : n };
+	}
+
+	[[nodiscard]] auto protection() const noexcept -> sasl_protection { return layer_->protection(); }
+	[[nodiscard]] auto last_error() const noexcept -> const std::string & { return error_; }
+
+  private:
+	// Until plaintext is waiting: reads and unwraps buffers.
+	auto fill() -> boost::capy::io_task<>;
+	// Wraps staged_ into out_, with its length.
+	auto protect() -> std::error_code;
+	// Writes out_ whole.
+	auto flush() -> boost::capy::io_task<>;
+	// Unwraps the buffer at the front of in_ if it is complete; whether it
+	// was. Fails on an oversized length or an unwrap error.
+	auto unwrap_front(bool &done) -> std::error_code;
+
+	boost::capy::any_stream *inner_;
+	std::unique_ptr<sasl_security_layer> layer_;
+	std::pmr::vector<std::byte> in_;// received, not yet unwrapped
+	std::pmr::vector<std::byte> plain_;// unwrapped, delivered up to plain_pos_
+	std::size_t plain_pos_ = 0;
+	std::pmr::vector<std::byte> staged_;// the plaintext of the write in flight
+	std::pmr::vector<std::byte> out_;// its protected buffer, length first
+	std::string error_;
+};
+
+// Installs `layer` on `t` (RFC 4513 section 5.2.1.4: from the first octet
+// after the final BindResponse): the bytes already in `buf` past that
+// response move into the layer, `buf` is emptied, and t.stream() returns
+// the layer from now on. A write in flight keeps the stream it started on.
+// client_errc::security_layer_in_effect if `t` has a layer already.
+auto install_security_layer(transport &t, read_buffer &buf, std::unique_ptr<sasl_security_layer> layer) -> result<void>;
+
+// The context of the last failure of `t`'s layer (empty: none, or no layer).
+auto security_layer_error(const transport &t) noexcept -> std::string_view;
+
+}// namespace jhetz::ldap::net::detail

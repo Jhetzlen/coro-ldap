@@ -210,6 +210,17 @@ class connection::impl
 	auto authentication_channel_bindings() const noexcept -> ldap::channel_bindings;
 	void mark_tls_exporter_used() noexcept;
 
+	// The SASL security layer in effect (connection::security_layer()).
+	auto security_layer() const noexcept -> sasl_protection
+	{
+		return open ? transport_.security_layer() : sasl_protection::none;
+	}
+	// For sasl_bind: `layer` takes effect if the next BindResponse is a
+	// success (route() installs it, from the first octet after that
+	// response, RFC 4513 section 5.2.1.4); any other BindResponse, or the
+	// end of the bind exchange, drops it.
+	void arm_security_layer(std::unique_ptr<sasl_security_layer> layer) noexcept { armed_layer = std::move(layer); }
+
 	// Requests still to be answered: those waited for, and `due` answers.
 	auto outstanding() const noexcept -> std::size_t;
 
@@ -427,6 +438,9 @@ class connection::impl
 	// the handshake).
 	bool upgrading = false;
 	server_knowledge knowledge_{};
+	// arm_security_layer(): installed by route() on the next successful
+	// BindResponse.
+	std::unique_ptr<sasl_security_layer> armed_layer{};
 	// Unsolicited notifications are decoded here, then released.
 	std::pmr::monotonic_buffer_resource scratch;
 
@@ -566,6 +580,11 @@ class connection::impl
 
 	// Delivers the PDU at the front of buf (`size` bytes) and consumes it.
 	void route(std::size_t size);
+
+	// route() of a final BindResponse `m` (consumed from buf already):
+	// installs the armed security layer if `m` is a success, else drops
+	// it. False if the connection was shut.
+	auto take_armed_layer(const message &m) -> bool;
 
 	// An unsolicited notification (message id 0, RFC 4511 section 4.4).
 	void notification(std::span<const std::byte> bytes);

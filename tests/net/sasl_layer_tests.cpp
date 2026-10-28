@@ -1,0 +1,433 @@
+// SASL security layers (sasl.hpp, sasl_security_layer; src/net/sasl_layer.hpp)
+// with a made-up layer: the framing on the transport (lengths, chunking,
+// partial reads, oversized buffers), and connection::sasl_bind installing
+// a layer right after the successful BindResponse. GSSAPI's own layer is
+// tested end to end against an MIT acceptor
+// (tests/integration/gssapi_layer_tests.cpp).
+#include "../../src/net/sasl_layer.hpp"
+#include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/net/message_io.hpp"
+#include "jhetz/ldap/sasl.hpp"
+#include "mock_ldap.hpp"
+#include "net_test_support.hpp"
+
+#include <boost/capy/read.hpp>
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <memory_resource>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace ldap = jhetz::ldap;
+namespace net = jhetz::ldap::net;
+using namespace jhetz::ldap::test;
+using Catch::Matchers::ContainsSubstring;
+
+namespace {
+
+constexpr auto marker = std::byte{ 0xa5 };
+constexpr auto key = std::byte{ 0x5a };
+
+// Wraps a buffer as the marker followed by the bytes XORed with the key;
+// unwrap checks the marker. Counts its calls.
+class xor_layer final : public ldap::sasl_security_layer
+{
+  public:
+	struct counts
+	{
+		int wraps = 0;
+		int unwraps = 0;
+		std::vector<std::size_t> wrapped_sizes{};
+	};
+
+	explicit xor_layer(std::size_t max_wrap_input = std::size_t{ 1 } << 20,
+	  std::size_t max_received = std::size_t{ 1 } << 20,
+	  std::shared_ptr<counts> c = std::make_shared<counts>())
+	  : max_wrap_input_(max_wrap_input), max_received_(max_received), counts_(std::move(c))
+	{}
+
+	[[nodiscard]] auto protection() const noexcept -> ldap::sasl_protection override
+	{
+		return ldap::sasl_protection::integrity;
+	}
+	[[nodiscard]] auto max_wrap_input() const noexcept -> std::size_t override { return max_wrap_input_; }
+	[[nodiscard]] auto max_received() const noexcept -> std::size_t override { return max_received_; }
+	[[nodiscard]] auto wrap(std::span<const std::byte> plaintext, std::pmr::vector<std::byte> &out)
+	  -> ldap::result<void> override
+	{
+		++counts_->wraps;
+		counts_->wrapped_sizes.push_back(plaintext.size());
+		out.push_back(marker);
+		for (auto b : plaintext) {
+			out.push_back(b ^ key);
+		}
+		return {};
+	}
+	[[nodiscard]] auto unwrap(std::span<const std::byte> buffer, std::pmr::vector<std::byte> &out)
+	  -> ldap::result<void> override
+	{
+		++counts_->unwraps;
+		if (buffer.empty() || buffer[0] != marker) {
+			return ldap::fail(ldap::client_errc::decode_error, "bad marker");
+		}
+		for (auto b : buffer.subspan(1)) {
+			out.push_back(b ^ key);
+		}
+		return {};
+	}
+
+  private:
+	std::size_t max_wrap_input_;
+	std::size_t max_received_;
+	std::shared_ptr<counts> counts_;
+};
+
+// A protected buffer of `plaintext` as xor_layer writes it, after its length.
+auto frame(std::string_view plaintext) -> std::string
+{
+	const std::size_t n = plaintext.size() + 1;
+	std::string out{
+		static_cast<char>(n >> 24), static_cast<char>(n >> 16), static_cast<char>(n >> 8), static_cast<char>(n)
+	};
+	out += static_cast<char>(marker);
+	for (char c : plaintext) {
+		out += static_cast<char>(static_cast<std::byte>(c) ^ key);
+	}
+	return out;
+}
+
+auto as_bytes(const std::string &s) -> std::span<const std::byte> { return std::as_bytes(std::span(s)); }
+
+// A one-step mechanism whose exchange negotiates an xor_layer.
+class layer_mechanism final : public ldap::sasl_mechanism
+{
+  public:
+	std::size_t max_wrap_input = std::size_t{ 1 } << 20;
+	std::shared_ptr<xor_layer::counts> counts = std::make_shared<xor_layer::counts>();
+	bool negotiates = true;
+
+	[[nodiscard]] auto name() const noexcept -> std::string_view override { return "X-LAYER"; }
+	auto start() -> ldap::result<std::optional<std::string>> override
+	{
+		pending = negotiates;
+		return std::optional<std::string>("hi");
+	}
+	auto step(std::optional<std::string_view>) -> ldap::result<std::optional<std::string>> override
+	{
+		return ldap::fail(ldap::client_errc::unexpected_response, "one step");
+	}
+	auto take_security_layer() -> std::unique_ptr<ldap::sasl_security_layer> override
+	{
+		if (!std::exchange(pending, false)) {
+			return nullptr;
+		}
+		return std::make_unique<xor_layer>(max_wrap_input, std::size_t{ 1 } << 20, counts);
+	}
+	[[nodiscard]] auto channel_binding_used() const noexcept -> std::optional<ldap::channel_binding_type> override
+	{
+		return std::nullopt;
+	}
+
+	bool pending = false;// start() ran: the next take_security_layer() gives one
+};
+
+auto sasl_ok(std::int32_t id) -> ldap::message
+{
+	return ldap::message{ id, ldap::bind_response{ ldap::ldap_result{ 0 } } };
+}
+
+// Two transports over a socket pair, the client's with an xor_layer.
+struct layered_pair
+{
+	corosio::io_context ioc{};
+	socket_pair sockets{ ioc };
+	net::transport client = net::transport::wrap(socket_ref{ &sockets.client }, "client");
+	net::transport server = net::transport::wrap(socket_ref{ &sockets.server }, "server");
+	net::read_buffer client_buf{};
+	net::read_buffer server_buf{};
+	std::shared_ptr<xor_layer::counts> counts = std::make_shared<xor_layer::counts>();
+
+	explicit layered_pair(std::size_t max_wrap_input = 1 << 20, std::size_t max_received = 1 << 20)
+	{
+		auto r = net::detail::install_security_layer(
+		  client, client_buf, std::make_unique<xor_layer>(max_wrap_input, max_received, counts));
+		REQUIRE(r.has_value());
+	}
+	layered_pair(const layered_pair &) = delete;
+	auto operator=(const layered_pair &) -> layered_pair & = delete;
+	~layered_pair()
+	{
+		sockets.client.close();
+		sockets.server.close();
+		drive(ioc);
+	}
+
+	// Reads exactly `n` raw bytes on the server's end.
+	auto read_raw(std::size_t n) -> std::string
+	{
+		return finish(ioc, [](net::transport &t, std::size_t want) -> capy::task<std::string> {
+			std::string out(want, '\0');
+			auto [ec, k] = co_await capy::read(t.stream(), capy::mutable_buffer(out.data(), out.size()));
+			if (ec) {
+				throw std::system_error(ec, "server read");
+			}
+			out.resize(k);
+			co_return out;
+		}(server, n));
+	}
+	void write_raw(const std::string &bytes)
+	{
+		auto w = finish(ioc, net::write_bytes(server, as_bytes(bytes)));
+		REQUIRE(w.has_value());
+	}
+};
+
+}// namespace
+
+TEST_CASE("sasl layer: outgoing PDUs are wrapped and framed", "[net][sasl][sasl_layer]")
+{
+	const auto pdu = bytes_of(bind_request_msg(1));
+	REQUIRE(pdu.size() > 25);
+
+	SECTION("one buffer when the PDU fits")
+	{
+		layered_pair p;
+		REQUIRE(finish(p.ioc, net::write_bytes(p.client, as_bytes(pdu))).has_value());
+		CHECK(p.read_raw(pdu.size() + 5) == frame(pdu));
+		CHECK(p.counts->wraps == 1);
+		CHECK(p.client.security_layer() == ldap::sasl_protection::integrity);
+	}
+	SECTION("cut to the peer's maximum")
+	{
+		layered_pair p(10);
+		REQUIRE(finish(p.ioc, net::write_bytes(p.client, as_bytes(pdu))).has_value());
+		std::string expected;
+		for (std::size_t at = 0; at < pdu.size(); at += 10) {
+			expected += frame(std::string_view(pdu).substr(at, 10));
+		}
+		CHECK(p.read_raw(expected.size()) == expected);
+		CHECK(std::cmp_equal(p.counts->wraps, (pdu.size() + 9) / 10));
+		for (auto n : p.counts->wrapped_sizes) {
+			CHECK(n <= 10);
+		}
+	}
+}
+
+TEST_CASE("sasl layer: incoming buffers are unwrapped", "[net][sasl][sasl_layer]")
+{
+	const auto one = bytes_of(bind_response_msg(1, "first"));
+	const auto two = bytes_of(bind_response_msg(2, "second"));
+
+	SECTION("two PDUs in one buffer")
+	{
+		layered_pair p;
+		p.write_raw(frame(one + two));
+		CHECK(finish(p.ioc, net::read_message(p.client, p.client_buf)) == bind_response_msg(1, "first"));
+		CHECK(finish(p.ioc, net::read_message(p.client, p.client_buf)) == bind_response_msg(2, "second"));
+		CHECK(p.counts->unwraps == 1);
+	}
+	SECTION("one PDU over several buffers, an empty one among them, written a byte at a time")
+	{
+		layered_pair p;
+		const std::string wire = frame(one.substr(0, 3)) + frame("") + frame(one.substr(3));
+		outcome<ldap::result<ldap::message>> read;
+		spawn(p.ioc, net::read_message(p.client, p.client_buf), read);
+		for (char c : wire) {
+			p.write_raw(std::string(1, c));
+		}
+		drive_until(p.ioc, [&read] { return read.done(); });
+		CHECK(read.get() == bind_response_msg(1, "first"));
+		CHECK(p.counts->unwraps == 3);
+	}
+	SECTION("bytes read before the layer took effect are its start")
+	{
+		corosio::io_context ioc;
+		socket_pair sockets(ioc);
+		auto client = net::transport::wrap(socket_ref{ &sockets.client }, "client");
+		net::read_buffer buf;
+		const std::string first = frame(one);
+		const std::string bytes = first.substr(0, 7);
+		std::span<std::byte> space = buf.prepare(bytes.size());
+		std::ranges::copy(as_bytes(bytes), space.begin());
+		buf.commit(bytes.size());
+		REQUIRE(net::detail::install_security_layer(client, buf, std::make_unique<xor_layer>()).has_value());
+		CHECK(buf.empty());
+		auto server = net::transport::wrap(socket_ref{ &sockets.server }, "server");
+		REQUIRE(finish(ioc, net::write_bytes(server, as_bytes(first.substr(7)))).has_value());
+		CHECK(finish(ioc, net::read_message(client, buf)) == bind_response_msg(1, "first"));
+		// A second layer is refused.
+		auto again = net::detail::install_security_layer(client, buf, std::make_unique<xor_layer>());
+		REQUIRE_FALSE(again.has_value());
+		CHECK(again.error().code == ldap::client_errc::security_layer_in_effect);
+		sockets.client.close();
+		sockets.server.close();
+		drive(ioc);
+	}
+}
+
+TEST_CASE("sasl layer: an oversized or broken buffer fails the read", "[net][sasl][sasl_layer]")
+{
+	SECTION("a length above the maximum, refused before its body")
+	{
+		layered_pair p(1 << 20, 100);
+		p.write_raw(std::string("\x00\x00\x00\x65", 4));// 101, and no body
+		auto r = finish(p.ioc, net::read_message(p.client, p.client_buf));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::message_too_large);
+		CHECK(std::string(r.error().context)
+			  == "read client: SASL security layer: a protected buffer of 101 bytes, more than the 100 accepted");
+		CHECK(p.counts->unwraps == 0);
+	}
+	SECTION("the maximum itself is accepted")
+	{
+		layered_pair p(1 << 20, 100);
+		const auto pdu = bytes_of(bind_response_msg(1, std::string(70, 'x')));
+		const auto wire = frame(pdu);
+		REQUIRE(wire.size() - 4 <= 100);
+		p.write_raw(wire);
+		CHECK(finish(p.ioc, net::read_message(p.client, p.client_buf)).has_value());
+	}
+	SECTION("a buffer the layer refuses")
+	{
+		layered_pair p;
+		p.write_raw(std::string("\x00\x00\x00\x02\x01\x02", 6));
+		auto r = finish(p.ioc, net::read_message(p.client, p.client_buf));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::decode_error);
+		CHECK(std::string(r.error().context) == "read client: SASL security layer: bad marker");
+	}
+	SECTION("the connection closed inside a buffer")
+	{
+		layered_pair p;
+		p.write_raw(frame("abc").substr(0, 5));
+		p.sockets.server.close();
+		auto r = finish(p.ioc, net::read_message(p.client, p.client_buf));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == capy::cond::eof);
+	}
+}
+
+namespace {
+
+// The server's side of a bind that installs the xor_layer: reads the
+// BindRequest, answers it (`extra`, raw, in the same write: the start of
+// the protected stream), installs the layer on its end, then answers one
+// search with an entry and its done.
+auto serve_layered_bind(net::transport t, std::string extra, std::string &error) -> capy::task<void>
+{
+	net::read_buffer buf;
+	auto bind = co_await net::read_message(t, buf, as_server);
+	if (!bind) {
+		error = "bind read: " + std::string(bind.error().message());
+		co_return;
+	}
+	const std::string reply = bytes_of(sasl_ok(bind->id)) + extra;
+	if (auto w = co_await net::write_bytes(t, as_bytes(reply)); !w) {
+		error = "bind write";
+		co_return;
+	}
+	if (auto l = net::detail::install_security_layer(t, buf, std::make_unique<xor_layer>()); !l) {
+		error = "install";
+		co_return;
+	}
+	auto search = co_await net::read_message(t, buf, as_server);
+	if (!search) {
+		error = "search read: " + std::string(search.error().message());
+		co_return;
+	}
+	for (const auto &m : { entry_msg(search->id, "uid=jdoe,ou=people,dc=example,dc=org", "J"), done_msg(search->id) }) {
+		if (auto w = co_await net::write_message(t, m); !w) {
+			error = "search write";
+			co_return;
+		}
+	}
+}
+
+}// namespace
+
+TEST_CASE("sasl layer: sasl_bind installs the negotiated layer", "[net][sasl][sasl_layer]")
+{
+	mock_ldap m;
+	std::string error;
+	layer_mechanism mech;
+
+	SECTION("after the success, for every later PDU; a search held behind the bind goes wrapped")
+	{
+		// An unsolicited extended response (ignored) right behind the
+		// BindResponse, wrapped: the first octet after it is protected.
+		const auto notice = bytes_of(ldap::message{ 0, ldap::extended_response{ ldap::ldap_result{ 0 }, "1.2.3.4" } });
+		outcome<void> server;
+		spawn(m.ioc, serve_layered_bind(m.server_end(), frame(notice), error), server);
+		CHECK(m.conn.security_layer() == ldap::sasl_protection::none);
+		outcome<ldap::result<void>> bind;
+		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
+		outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+		spawn(m.ioc, m.conn.search(people_search()), search);
+		drive_until(m.ioc, [&] { return server.done() && search.done(); });
+		REQUIRE(bind.get().has_value());
+		REQUIRE(search.get().has_value());
+		CHECK(search.get()->size() == 1);
+		CHECK(error.empty());
+		CHECK(m.conn.security_layer() == ldap::sasl_protection::integrity);
+		CHECK(mech.counts->wraps >= 1);// the search
+		CHECK(mech.counts->unwraps >= 2);// the notice, the entry and done
+
+		// StartTLS would have to go below the layer.
+		auto tls = finish(m.ioc, m.conn.start_tls());
+		REQUIRE_FALSE(tls.has_value());
+		CHECK(tls.error().code == ldap::client_errc::security_layer_in_effect);
+		CHECK_THAT(std::string(tls.error().context), ContainsSubstring("RFC 4513 section 5.2.1.6"));
+		// A second layer is refused before anything is sent.
+		layer_mechanism second;
+		auto again = finish(m.ioc, m.conn.sasl_bind(second));
+		REQUIRE_FALSE(again.has_value());
+		CHECK(again.error().code == ldap::client_errc::security_layer_in_effect);
+		CHECK(m.conn.is_open());
+		CHECK(m.conn.security_layer() == ldap::sasl_protection::integrity);
+	}
+	SECTION("a refused bind installs nothing")
+	{
+		m.serve({ answer({ bind_resp(1, 49) }), answer({ done_msg(2) }) });
+		auto r = finish(m.ioc, m.conn.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::invalid_credentials);
+		CHECK(m.conn.security_layer() == ldap::sasl_protection::none);
+		// The next PDUs go unprotected: the scripted server reads them as is.
+		CHECK(finish(m.ioc, m.conn.search(people_search())).has_value());
+		m.check_server();
+		CHECK(mech.counts->wraps == 0);
+	}
+	SECTION("a mechanism that negotiates no layer installs nothing")
+	{
+		mech.negotiates = false;
+		m.serve({ answer({ sasl_ok(1) }), answer({ done_msg(2) }) });
+		REQUIRE(finish(m.ioc, m.conn.sasl_bind(mech)).has_value());
+		CHECK(m.conn.security_layer() == ldap::sasl_protection::none);
+		CHECK(finish(m.ioc, m.conn.search(people_search())).has_value());
+		m.check_server();
+	}
+	SECTION("an outgoing PDU larger than the server's maximum goes in several buffers")
+	{
+		mech.max_wrap_input = 16;
+		outcome<void> server;
+		spawn(m.ioc, serve_layered_bind(m.server_end(), "", error), server);
+		REQUIRE(finish(m.ioc, m.conn.sasl_bind(mech)).has_value());
+		auto s = finish(m.ioc, m.conn.search(people_search()));
+		REQUIRE(s.has_value());
+		CHECK(error.empty());
+		CHECK(mech.counts->wraps > 1);
+		for (auto n : mech.counts->wrapped_sizes) {
+			CHECK(n <= 16);
+		}
+		drive_until(m.ioc, [&] { return server.done(); });
+	}
+}

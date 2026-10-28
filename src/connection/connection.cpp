@@ -93,6 +93,11 @@ auto connection::bind_count() const noexcept -> std::uint64_t { return impl_ == 
 
 auto connection::is_tls() const noexcept -> bool { return impl_ != nullptr && impl_->is_tls(); }
 
+auto connection::security_layer() const noexcept -> sasl_protection
+{
+	return impl_ == nullptr ? sasl_protection::none : impl_->security_layer();
+}
+
 auto connection::peer_certificate() const noexcept -> std::span<const std::byte>
 {
 	if (!is_tls()) {

@@ -529,14 +529,22 @@ itself needs only ICU.
   target is `ldap@<the URL's host>` unless `options.target` names
   another (connect with the server's DNS name, not an address; ldapi://
   needs an explicit target); mutual authentication is required; an
-  optional `authz_id`. The client always chooses "no security layer"
+  optional `authz_id`. By default the client chooses "no security layer"
   (maximum buffer size 0), so SASL neither signs nor seals the session:
   use it over ldaps:// or StartTLS unless the network is trusted. A
-  server that requires integrity or confidentiality fails the bind with
-  `client_errc::security_layer_required`. Active Directory: with the
-  "LDAP server signing requirements" policy set to require signing, AD
-  refuses unsigned SASL binds over plain ldap:// (`stronger_auth_required`,
-  `00002028`), so use TLS there. Channel binding: over TLS the Kerberos
+  server that requires integrity or confidentiality then fails the bind
+  with `client_errc::security_layer_required`. `options.security_layer`
+  (`integrity`, `confidentiality`, `best_offered`: the strongest offered,
+  none over TLS when offered) selects a layer instead, with
+  `options.max_receive_size` (default 64 KiB) as the largest protected
+  buffer accepted: from the successful BindResponse on, every PDU is
+  `gss_wrap`ped both ways (`connection::security_layer()` says which);
+  a layer not offered fails with `security_layer_unavailable`; with a
+  layer in effect `start_tls()` fails with `security_layer_in_effect`.
+  Active Directory: with the "LDAP server signing requirements" policy
+  set to require signing, AD refuses unsigned SASL binds over plain
+  ldap:// (`stronger_auth_required`, `00002028`): use TLS there, or ask
+  for integrity. Channel binding: over TLS the Kerberos
   exchange is bound to the server's certificate (RFC 5929
   tls-server-end-point, given to `gss_init_sec_context` as
   `application_data` "tls-server-end-point:<hash>" with no addresses, the

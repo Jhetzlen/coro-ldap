@@ -22,11 +22,15 @@
 #include "jhetz/ldap/error.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
+#include <memory>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace jhetz::ldap {
 
@@ -70,6 +74,56 @@ struct sasl_bind_context
 // std::errc::operation_not_supported before the work runs; unsafe_io (which
 // cannot be detected) is unsupported, its wakeup may be lost.
 using sasl_work = std::move_only_function<result<std::optional<std::string>>()>;
+
+// The protection a SASL security layer gives the rest of the session (RFC
+// 4422 section 3.7): none, integrity (every PDU signed), or
+// confidentiality (signed and sealed).
+enum class sasl_protection : std::uint8_t {
+	none,
+	integrity,
+	confidentiality,
+};
+
+// A SASL security layer (RFC 4422 section 3.7), negotiated by a mechanism
+// (sasl_mechanism::take_security_layer) and installed by
+// connection::sasl_bind under the LDAP PDUs, both ways, from the first octet
+// after the bind's final BindResponse with success (RFC 4513 section
+// 5.2.1.4) until the connection closes. The connection does the framing:
+// each protected buffer goes on the wire after a four-octet length in
+// network byte order; outgoing PDUs are cut into pieces of at most
+// max_wrap_input() octets, and an incoming length above max_received()
+// closes the connection before the buffer is read (RFC 4422: "the receiver
+// SHOULD close the connection, as this might be a sign of an attack").
+// The layer only protects and checks buffers; it runs on the connection's
+// I/O thread and must not block. One layer serves one connection.
+class sasl_security_layer
+{
+  public:
+	virtual ~sasl_security_layer() = default;
+
+	[[nodiscard]] virtual auto protection() const noexcept -> sasl_protection = 0;
+	// The most plaintext one wrap() takes: what keeps the protected buffer
+	// within the peer's maximum buffer size. At least 1.
+	[[nodiscard]] virtual auto max_wrap_input() const noexcept -> std::size_t = 0;
+	// The largest protected buffer accepted from the peer (the maximum
+	// buffer size this side announced).
+	[[nodiscard]] virtual auto max_received() const noexcept -> std::size_t = 0;
+	// Appends the protected form of `plaintext` (at most max_wrap_input()
+	// octets, possibly none) to `out`, without the length.
+	[[nodiscard]] virtual auto wrap(std::span<const std::byte> plaintext, std::pmr::vector<std::byte> &out)
+	  -> result<void> = 0;
+	// Checks (and decrypts) one protected buffer from the peer and appends
+	// its plaintext to `out`. An error closes the connection.
+	[[nodiscard]] virtual auto unwrap(std::span<const std::byte> buffer, std::pmr::vector<std::byte> &out)
+	  -> result<void> = 0;
+
+  protected:
+	sasl_security_layer() = default;
+	sasl_security_layer(const sasl_security_layer &) = default;
+	sasl_security_layer(sasl_security_layer &&) = default;
+	auto operator=(const sasl_security_layer &) -> sasl_security_layer & = default;
+	auto operator=(sasl_security_layer &&) -> sasl_security_layer & = default;
+};
 
 // sasl_bind prefixes an error's context with "sasl bind <name>", so a
 // mechanism's own contexts should not name the mechanism.
@@ -129,6 +183,17 @@ class sasl_mechanism
 	{
 		return channel_binding_type::tls_exporter;
 	}
+
+	// After each step (start(), step() or their offloaded work) succeeded:
+	// the security layer the exchange negotiated, if the BindRequest that
+	// step's credentials go in is the last one. sasl_bind takes it (calling
+	// this once per step) and installs it when the server answers that
+	// BindRequest with success (RFC 4513 section 5.2.1.4), before complete()
+	// runs: a complete() that fails then closes the connection, as it always
+	// does. Any other answer drops it. A layer while one is in effect
+	// fails the bind with client_errc::security_layer_in_effect (the
+	// exchange is aborted). Default: none (nullptr).
+	[[nodiscard]] virtual auto take_security_layer() -> std::unique_ptr<sasl_security_layer> { return nullptr; }
 
   protected:
 	// Copied and moved only as part of a derived mechanism, never sliced
