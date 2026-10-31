@@ -129,7 +129,7 @@ auto read_frame(transport &t, read_buffer &buf, std::size_t max_message_size) ->
 		}
 
 		std::string context = where;
-		if (const auto layer = detail::security_layer_error(t); !layer.empty()) {
+		if (const auto layer = detail::security_layer_read_error(t); !layer.empty()) {
 			context += ": ";
 			context += layer;
 		} else if (closed) {
@@ -172,7 +172,7 @@ auto write_bytes(transport &t, std::span<const std::byte> bytes) -> capy::task<r
 		if (n != 0) {
 			ldap::detail::format_to(context, " ({} of {} bytes written)", n, bytes.size());
 		}
-		if (const auto layer = detail::security_layer_error(t); !layer.empty()) {
+		if (const auto layer = detail::security_layer_write_error(t); !layer.empty()) {
 			context += ": ";
 			context += layer;
 		}

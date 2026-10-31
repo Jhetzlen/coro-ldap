@@ -57,8 +57,10 @@
 //   (errc::stronger_auth_required, diagnostic 00002028): use TLS, which
 //   satisfies the policy, or ask for a layer. With integrity,
 //   confidentiality or best_offered the client selects that layer from the
-//   server's offer, announces max_receive_size as its maximum buffer size,
-//   and connection::sasl_bind installs it right after the successful
+//   server's offer, announces max_receive_size as its maximum buffer size
+//   (the security context must provide that protection and sequence
+//   detection, GSS_C_SEQUENCE_FLAG, as RFC 4752 section 3.1 requires:
+//   client_errc::gssapi_failure otherwise), and connection::sasl_bind installs it right after the successful
 //   BindResponse: every later PDU, both ways, goes in gss_wrap'd buffers
 //   (with confidentiality: encrypted) after a four-octet length (RFC 4422
 //   section 3.7), outgoing PDUs cut to fit the server's maximum buffer

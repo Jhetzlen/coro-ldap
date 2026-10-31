@@ -221,12 +221,18 @@ namespace {
 	class gssapi_layer final : public sasl_security_layer
 	{
 	  public:
+		// Takes over `context` once allocated (make_unique allocates before
+		// it constructs: a bad_alloc leaves the context with its owner).
 		// One caller (sasl_gssapi::state::reply), which names each argument.
-		// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-		gssapi_layer(gss_ctx_id_t context, bool confidentiality, std::size_t max_wrap_input, std::size_t max_received)
+		// NOLINTBEGIN(bugprone-easily-swappable-parameters)
+		gssapi_layer(context_handle &context,
+		  bool confidentiality,
+		  std::size_t max_wrap_input,
+		  std::size_t max_received)
+		  // NOLINTEND(bugprone-easily-swappable-parameters)
 		  : confidentiality_(confidentiality), max_wrap_input_(max_wrap_input), max_received_(max_received)
 		{
-			context_.adopt(context);
+			context_.adopt(context.release());
 		}
 
 		[[nodiscard]] auto protection() const noexcept -> sasl_protection override
@@ -556,7 +562,7 @@ struct sasl_gssapi::state
 		std::string out(wrapped.view());
 		if (*selected != detail::gssapi_no_layer) {
 			layer = std::make_unique<gssapi_layer>(
-			  context.release(), *selected == detail::gssapi_confidentiality, max_wrap_input, max_receive_size);
+			  context, *selected == detail::gssapi_confidentiality, max_wrap_input, max_receive_size);
 		}
 		at = phase::replied;
 		return std::optional<std::string>(std::move(out));
@@ -564,7 +570,9 @@ struct sasl_gssapi::state
 
 	// The most plaintext one gss_wrap turns into at most `max_size` octets
 	// (the server's maximum buffer size), with the context's flags checked
-	// for the layer.
+	// for the layer: the protection selected, and sequence detection, without
+	// which gss_unwrap reports no replayed or reordered buffer for the layer
+	// to refuse (sequence_problems).
 	auto wrap_limit(bool confidentiality, std::uint32_t max_size) const -> result<std::size_t>
 	{
 		const OM_uint32 needed = confidentiality ? GSS_C_CONF_FLAG : GSS_C_INTEG_FLAG;
@@ -572,6 +580,10 @@ struct sasl_gssapi::state
 			return fail(client_errc::gssapi_failure,
 			  confidentiality ? "the security context provides no confidentiality"
 							  : "the security context provides no integrity");
+		}
+		if ((context_flags & GSS_C_SEQUENCE_FLAG) == 0) {
+			return fail(client_errc::gssapi_failure,
+			  "the security context provides no sequence detection (replayed or reordered buffers would pass)");
 		}
 		OM_uint32 minor = 0;
 		OM_uint32 max_input = 0;

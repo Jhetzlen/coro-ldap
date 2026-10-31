@@ -37,16 +37,21 @@ inline constexpr std::size_t sasl_length_size = 4;
 // for ldaps:// or StartTLS: the SASL layer goes on top of TLS, RFC 4513
 // section 5.2.1.6). write_some() protects at most max_wrap_input() octets
 // into one buffer, writes it whole after its length, and reports the
-// plaintext octets taken. read_some() delivers plaintext, reading and
-// unwrapping whole buffers as needed; a length above max_received() fails
+// plaintext octets taken (none when the buffer could not be written whole:
+// a part of one delivers nothing); a layer whose max_wrap_input() is 0
+// fails the write (client_errc::encode_error) rather than loop.
+// read_some() delivers plaintext, reading and unwrapping whole buffers as
+// needed; a length above max_received() fails
 // (client_errc::message_too_large) before the buffer is read. Bytes
 // received but not unwrapped stay across a cancelled read. One read and
 // one write may be in flight at once, as on any transport stream.
 //
 // Errors are error codes (capy's stream contract); the context of the
-// last failure that came from the layer itself (an oversized buffer, a
-// wrap or unwrap error) is kept in last_error() for read_frame and
-// write_bytes to add.
+// last read's and the last write's failure, when it came from the layer
+// (an oversized buffer, a wrap or unwrap error, a protected buffer cut
+// short), is kept in last_read_error() and last_write_error() for
+// read_frame and write_bytes to add: each side's own, empty when the
+// inner stream's error says it all.
 class sasl_layer_stream
 {
   public:
@@ -60,6 +65,7 @@ class sasl_layer_stream
 
 	template<boost::capy::MutableBufferSequence MB> auto read_some(MB buffers) -> boost::capy::io_task<std::size_t>
 	{
+		read_error_.clear();
 		if (boost::capy::buffer_size(buffers) == 0) {
 			co_return { std::error_code{}, 0 };
 		}
@@ -75,8 +81,13 @@ class sasl_layer_stream
 
 	template<boost::capy::ConstBufferSequence CB> auto write_some(CB buffers) -> boost::capy::io_task<std::size_t>
 	{
-		const std::size_t n = std::min(boost::capy::buffer_size(buffers), layer_->max_wrap_input());
+		write_error_.clear();
+		const std::size_t size = boost::capy::buffer_size(buffers);
+		const std::size_t n = std::min(size, layer_->max_wrap_input());
 		if (n == 0) {
+			if (size != 0) {
+				co_return { refuse_empty_wrap(), 0 };
+			}
 			co_return { std::error_code{}, 0 };
 		}
 		staged_.resize(n);
@@ -89,7 +100,8 @@ class sasl_layer_stream
 	}
 
 	[[nodiscard]] auto protection() const noexcept -> sasl_protection { return layer_->protection(); }
-	[[nodiscard]] auto last_error() const noexcept -> const std::string & { return error_; }
+	[[nodiscard]] auto last_read_error() const noexcept -> const std::string & { return read_error_; }
+	[[nodiscard]] auto last_write_error() const noexcept -> const std::string & { return write_error_; }
 
   private:
 	// Until plaintext is waiting: reads and unwraps buffers.
@@ -98,18 +110,21 @@ class sasl_layer_stream
 	auto protect() -> std::error_code;
 	// Writes out_ whole.
 	auto flush() -> boost::capy::io_task<>;
+	// A layer that takes no plaintext (max_wrap_input() 0): encode_error.
+	auto refuse_empty_wrap() -> std::error_code;
 	// Unwraps the buffer at the front of in_ if it is complete; whether it
 	// was. Fails on an oversized length or an unwrap error.
 	auto unwrap_front(bool &done) -> std::error_code;
 
 	boost::capy::any_stream *inner_;
 	std::unique_ptr<sasl_security_layer> layer_;
-	std::pmr::vector<std::byte> in_;// received, not yet unwrapped
+	read_buffer in_;// received, not yet unwrapped
 	std::pmr::vector<std::byte> plain_;// unwrapped, delivered up to plain_pos_
 	std::size_t plain_pos_ = 0;
 	std::pmr::vector<std::byte> staged_;// the plaintext of the write in flight
 	std::pmr::vector<std::byte> out_;// its protected buffer, length first
-	std::string error_;
+	std::string read_error_;
+	std::string write_error_;
 };
 
 // Installs `layer` on `t` (RFC 4513 section 5.2.1.4: from the first octet
@@ -119,7 +134,9 @@ class sasl_layer_stream
 // client_errc::security_layer_in_effect if `t` has a layer already.
 auto install_security_layer(transport &t, read_buffer &buf, std::unique_ptr<sasl_security_layer> layer) -> result<void>;
 
-// The context of the last failure of `t`'s layer (empty: none, or no layer).
-auto security_layer_error(const transport &t) noexcept -> std::string_view;
+// The context of the last read's or write's failure on `t`, when it came
+// from the layer (empty: none, or no layer).
+auto security_layer_read_error(const transport &t) noexcept -> std::string_view;
+auto security_layer_write_error(const transport &t) noexcept -> std::string_view;
 
 }// namespace jhetz::ldap::net::detail

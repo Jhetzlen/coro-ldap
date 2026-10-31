@@ -103,7 +103,8 @@ class sasl_security_layer
 
 	[[nodiscard]] virtual auto protection() const noexcept -> sasl_protection = 0;
 	// The most plaintext one wrap() takes: what keeps the protected buffer
-	// within the peer's maximum buffer size. At least 1.
+	// within the peer's maximum buffer size. At least 1: with 0, every
+	// write fails (client_errc::encode_error).
 	[[nodiscard]] virtual auto max_wrap_input() const noexcept -> std::size_t = 0;
 	// The largest protected buffer accepted from the peer (the maximum
 	// buffer size this side announced).

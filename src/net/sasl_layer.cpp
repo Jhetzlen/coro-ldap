@@ -36,34 +36,43 @@ namespace {
 sasl_layer_stream::sasl_layer_stream(capy::any_stream &inner,
   std::unique_ptr<sasl_security_layer> layer,
   std::pmr::memory_resource *mr)
-  : inner_(&inner), layer_(std::move(layer)), in_(mr), plain_(mr), staged_(mr), out_(mr)
+  : inner_(&inner), layer_(std::move(layer)), in_(read_buffer::allocator_type(mr)), plain_(mr), staged_(mr), out_(mr)
 {}
 
-void sasl_layer_stream::feed(std::span<const std::byte> bytes) { in_.insert(in_.end(), bytes.begin(), bytes.end()); }
+void sasl_layer_stream::feed(std::span<const std::byte> bytes)
+{
+	if (bytes.empty()) {
+		return;
+	}
+	std::ranges::copy(bytes, in_.prepare(bytes.size()).begin());
+	in_.commit(bytes.size());
+}
 
 auto sasl_layer_stream::unwrap_front(bool &done) -> std::error_code
 {
 	done = false;
-	if (in_.size() < sasl_length_size) {
+	const auto data = in_.data();
+	if (data.size() < sasl_length_size) {
 		return {};
 	}
-	const std::size_t length = read_length(in_);
+	const std::size_t length = read_length(data);
 	if (length > layer_->max_received()) {
-		error_ = ldap::detail::format("SASL security layer: a protected buffer of {} bytes, more than the {} accepted",
-		  length,
-		  layer_->max_received());
+		read_error_ =
+		  ldap::detail::format("SASL security layer: a protected buffer of {} bytes, more than the {} accepted",
+			length,
+			layer_->max_received());
 		return client_errc::message_too_large;
 	}
-	if (in_.size() - sasl_length_size < length) {
+	if (data.size() - sasl_length_size < length) {
 		return {};
 	}
 	plain_.clear();
 	plain_pos_ = 0;
-	auto r = layer_->unwrap(std::span(in_).subspan(sasl_length_size, length), plain_);
-	in_.erase(in_.begin(), in_.begin() + static_cast<std::ptrdiff_t>(sasl_length_size + length));
+	auto r = layer_->unwrap(data.subspan(sasl_length_size, length), plain_);
+	in_.consume(sasl_length_size + length);
 	if (!r) {
-		error_ = "SASL security layer: ";
-		error_ += r.error().context;
+		read_error_ = "SASL security layer: ";
+		read_error_ += r.error().context;
 		return r.error().code;
 	}
 	done = true;
@@ -80,14 +89,15 @@ auto sasl_layer_stream::fill() -> capy::io_task<>
 		if (done) {
 			continue;// an empty buffer delivers nothing: the next one
 		}
+		// The buffer's rest (prepare() gives at least that, without
+		// zero-filling it again on every short read), or a chunk.
 		std::size_t want = read_chunk;
 		if (in_.size() >= sasl_length_size) {
-			want = std::max(want, sasl_length_size + read_length(in_) - in_.size());
+			want = std::max(want, sasl_length_size + read_length(in_.data()) - in_.size());
 		}
-		const std::size_t had = in_.size();
-		in_.resize(had + want);
-		auto [ec, n] = co_await inner_->read_some(capy::mutable_buffer(in_.data() + had, want));
-		in_.resize(had + n);
+		const auto space = in_.prepare(want);
+		auto [ec, n] = co_await inner_->read_some(capy::mutable_buffer(space.data(), space.size()));
+		in_.commit(n);
 		if (n != 0) {
 			continue;// use the bytes; an error shows again on the next read
 		}
@@ -103,13 +113,13 @@ auto sasl_layer_stream::protect() -> std::error_code
 {
 	out_.assign(sasl_length_size, std::byte{ 0 });
 	if (auto r = layer_->wrap(staged_, out_); !r) {
-		error_ = "SASL security layer: ";
-		error_ += r.error().context;
+		write_error_ = "SASL security layer: ";
+		write_error_ += r.error().context;
 		return r.error().code;
 	}
 	const std::uint64_t length = out_.size() - sasl_length_size;
 	if (length > max_length) {
-		error_ = "SASL security layer: a protected buffer too large for its length field";
+		write_error_ = "SASL security layer: a protected buffer too large for its length field";
 		return client_errc::encode_error;
 	}
 	for (std::size_t i = 0; i < sasl_length_size; ++i) {
@@ -121,8 +131,17 @@ auto sasl_layer_stream::protect() -> std::error_code
 auto sasl_layer_stream::flush() -> capy::io_task<>
 {
 	auto [ec, n] = co_await capy::write(*inner_, capy::const_buffer(out_.data(), out_.size()));
-	(void)n;
+	if (ec && n != 0) {
+		write_error_ =
+		  ldap::detail::format("SASL security layer: a protected buffer cut after {} of its {} octets", n, out_.size());
+	}
 	co_return { ec };
+}
+
+auto sasl_layer_stream::refuse_empty_wrap() -> std::error_code
+{
+	write_error_ = "SASL security layer: the layer takes no plaintext (max_wrap_input() is 0)";
+	return client_errc::encode_error;
 }
 
 auto install_security_layer(transport &t, read_buffer &buf, std::unique_ptr<sasl_security_layer> layer) -> result<void>
@@ -143,13 +162,22 @@ auto install_security_layer(transport &t, read_buffer &buf, std::unique_ptr<sasl
 	return {};
 }
 
-auto security_layer_error(const transport &t) noexcept -> std::string_view
+auto security_layer_read_error(const transport &t) noexcept -> std::string_view
 {
 	if (t.type() == transport::kind::none) {
 		return {};
 	}
 	const auto &im = transport_access::get(t);
-	return im.sasl_layer ? std::string_view(im.sasl_layer->last_error()) : std::string_view();
+	return im.sasl_layer ? std::string_view(im.sasl_layer->last_read_error()) : std::string_view();
+}
+
+auto security_layer_write_error(const transport &t) noexcept -> std::string_view
+{
+	if (t.type() == transport::kind::none) {
+		return {};
+	}
+	const auto &im = transport_access::get(t);
+	return im.sasl_layer ? std::string_view(im.sasl_layer->last_write_error()) : std::string_view();
 }
 
 }// namespace jhetz::ldap::net::detail

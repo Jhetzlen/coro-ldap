@@ -22,6 +22,7 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -225,6 +226,16 @@ TEST_CASE("sasl layer: outgoing PDUs are wrapped and framed", "[net][sasl][sasl_
 			CHECK(n <= 10);
 		}
 	}
+	SECTION("a layer that takes no plaintext fails the write instead of looping")
+	{
+		layered_pair p(0);
+		auto w = finish(p.ioc, net::write_bytes(p.client, as_bytes(pdu)));
+		REQUIRE_FALSE(w.has_value());
+		CHECK(w.error().code == ldap::client_errc::encode_error);
+		CHECK(std::string(w.error().context)
+			  == "write client: SASL security layer: the layer takes no plaintext (max_wrap_input() is 0)");
+		CHECK(p.counts->wraps == 0);
+	}
 }
 
 TEST_CASE("sasl layer: incoming buffers are unwrapped", "[net][sasl][sasl_layer]")
@@ -277,6 +288,59 @@ TEST_CASE("sasl layer: incoming buffers are unwrapped", "[net][sasl][sasl_layer]
 		sockets.server.close();
 		drive(ioc);
 	}
+}
+
+TEST_CASE("sasl layer: a cancelled read keeps the partial buffer", "[net][sasl][sasl_layer]")
+{
+	// The reader is stopped whenever nothing is outstanding, possibly
+	// inside a protected buffer: a whole buffer, then half of the next,
+	// arrive before the stop; the rest after it.
+	const auto pdu = bytes_of(bind_response_msg(1, "first"));
+	const std::string second = frame(std::string_view(pdu).substr(3));
+	const std::size_t half = second.size() / 2;
+	layered_pair p;
+	std::stop_source stop;
+	outcome<ldap::result<ldap::message>> cancelled;
+	spawn(p.ioc, stop.get_token(), net::read_message(p.client, p.client_buf), cancelled);
+	p.write_raw(frame(std::string_view(pdu).substr(0, 3)) + second.substr(0, half));
+	while (p.ioc.poll() != 0) {}// the reader parks inside the second buffer
+	p.ioc.restart();
+	CHECK(p.counts->unwraps == 1);
+	stop.request_stop();
+	drive_until(p.ioc, [&cancelled] { return cancelled.done(); });
+	REQUIRE_FALSE(cancelled.get().has_value());
+	CHECK(cancelled.get().error().code == capy::cond::canceled);
+	p.write_raw(second.substr(half));
+	CHECK(finish(p.ioc, net::read_message(p.client, p.client_buf)) == bind_response_msg(1, "first"));
+	CHECK(p.counts->unwraps == 2);
+}
+
+TEST_CASE("sasl layer: a write failure keeps its own context", "[net][sasl][sasl_layer]")
+{
+	// The read's layer error does not annotate a later write failure, and a
+	// protected buffer cut short says so (no plaintext counted: a part of a
+	// buffer delivers none).
+	layered_pair p(1 << 20, 100);
+	p.write_raw(std::string("\x00\x00\x00\x65", 4));
+	auto r = finish(p.ioc, net::read_message(p.client, p.client_buf));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::client_errc::message_too_large);
+
+	const std::string big(std::size_t{ 1 } << 20, 'x');
+	outcome<ldap::result<void>> write;
+	spawn(p.ioc, net::write_bytes(p.client, as_bytes(big)), write);
+	while (p.ioc.poll() != 0) {}// the writer parks on a full socket
+	p.ioc.restart();
+	REQUIRE_FALSE(write.done());
+	CHECK(p.read_raw(16).size() == 16);
+	p.sockets.server.close();
+	drive_until(p.ioc, [&write] { return write.done(); });
+	REQUIRE_FALSE(write.get().has_value());
+	const std::string context(write.get().error().context);
+	CHECK_THAT(context, !ContainsSubstring("accepted"));
+	CHECK_THAT(
+	  context, Catch::Matchers::StartsWith("write client: SASL security layer: a protected buffer cut after "));
+	CHECK_THAT(context, ContainsSubstring(" of its 1048581 octets"));
 }
 
 TEST_CASE("sasl layer: an oversized or broken buffer fails the read", "[net][sasl][sasl_layer]")
