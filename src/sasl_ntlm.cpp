@@ -171,7 +171,8 @@ namespace detail {
 		}
 		const wiped_string pw(std::move(*unicode_password));
 		wipe_string(*unicode_password);// what a move out of a short string leaves
-		const wiped_key nt_hash(md4(std::as_bytes(std::span(pw.s))));
+		wiped_key nt_hash;
+		md4(std::as_bytes(std::span(pw.s)), nt_hash.k);// in place: no temporary copy
 		auto upper_user = ntlm_uppercase_unicode(user);
 		if (!upper_user) {
 			return input_error("the user name is not valid UTF-8");

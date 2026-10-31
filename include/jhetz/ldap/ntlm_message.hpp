@@ -211,9 +211,13 @@ inline constexpr std::size_t ntlm_authenticate_header_size = 88;
 // ill-formed UTF-8.
 [[nodiscard]] auto ntlm_uppercase_unicode(std::string_view utf8) -> result<std::string>;
 
-// MD4 (RFC 1320) of `data`. NTOWFv2's MD4(UNICODE(Passwd)) needs it, and
-// OpenSSL 3 has MD4 only in its legacy provider, often not available:
-// this one is self-contained, so NTLM works whatever OpenSSL loads.
-[[nodiscard]] auto md4(std::span<const std::byte> data) noexcept -> ntlm_key;
+// MD4 (RFC 1320) of `data`, into `out`. NTOWFv2's MD4(UNICODE(Passwd))
+// needs it, and OpenSSL 3 has MD4 only in its legacy provider, often not
+// available: this one is self-contained, so NTLM works whatever OpenSSL
+// loads. Its working memory (the chaining state, each block's message
+// words, the padded tail) is zeroed before it returns, and the digest goes
+// straight into `out`, so no copy of the NT hash is left behind; values
+// the compiler keeps in registers or spill slots are out of its reach.
+void md4(std::span<const std::byte> data, ntlm_key &out) noexcept;
 
 }// namespace jhetz::ldap::detail

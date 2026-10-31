@@ -31,7 +31,14 @@ auto hex_of(std::string_view s) -> std::string { return hex(std::as_bytes(std::s
 
 auto hex_of(const detail::ntlm_key &k) -> std::string { return hex(std::as_bytes(std::span(k))); }
 
-auto md4_hex(std::string_view s) -> std::string { return hex_of(detail::md4(std::as_bytes(std::span(s)))); }
+auto md4_of(std::span<const std::byte> data) -> detail::ntlm_key
+{
+	detail::ntlm_key out{};
+	detail::md4(data, out);
+	return out;
+}
+
+auto md4_hex(std::string_view s) -> std::string { return hex_of(md4_of(std::as_bytes(std::span(s)))); }
 
 // The CHALLENGE_MESSAGE of MS-NLMP section 4.2.4.3 (NTLMv2 authentication).
 const std::string spec_challenge = str(
@@ -98,7 +105,7 @@ TEST_CASE("ntlm: the NT hash of MS-NLMP section 4.2.2.1.2", "[ntlm][rfc]")
 {
 	auto pw = detail::ntlm_unicode("Password");
 	REQUIRE(pw.has_value());
-	CHECK(hex_of(detail::md4(std::as_bytes(std::span(*pw)))) == "A4 F4 9C 40 65 10 BD CA B6 82 4E E7 C3 0F D8 52");
+	CHECK(hex_of(md4_of(std::as_bytes(std::span(*pw)))) == "A4 F4 9C 40 65 10 BD CA B6 82 4E E7 C3 0F D8 52");
 }
 
 TEST_CASE("ntlm: UTF-8 to UTF-16LE, and the user name's uppercase", "[ntlm]")

@@ -994,7 +994,12 @@ backslash, a UPN goes as the user name with no domain, and
 `sasl_ntlm_options::domain` overrides both. The password is wiped with
 `OPENSSL_cleanse` in the destructor, its UTF-16 form, the NT hash and
 NTOWFv2 once used (NTOWFv2 is computed in `start()` and wiped in
-`step()`, the SessionBaseKey after the MIC). Tested: the MS-NLMP section
+`step()`, the SessionBaseKey after the MIC). `detail::md4` writes the NT
+hash straight into its caller's wiped buffer and zeroes its own working
+memory (the chaining state, each block's message words, the padded
+tail) through volatile stores, the codec having no `OPENSSL_cleanse`;
+what the compiler keeps in registers or spill slots is beyond its
+reach, as in any C or C++ hash. Tested: the MS-NLMP section
 4.2.4 NTLMv2 vectors (NTOWFv2, the NTProofStr and temp, SessionBaseKey,
 LMv2) and the section 4.2.4.3 CHALLENGE_MESSAGE, RFC 1320's MD4 suite,
 malformed CHALLENGE_MESSAGEs, and binds against the scripted mock server

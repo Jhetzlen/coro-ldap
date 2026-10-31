@@ -233,9 +233,36 @@ namespace {
 
 	// ---------------------------------------------------------------- MD4 (RFC 1320)
 
+	// Zeroes `n` octets at `p` through a volatile pointer, so the stores are
+	// kept even when nothing reads the memory again (the codec has no
+	// OPENSSL_cleanse).
+	void wipe_bytes(void *p, std::size_t n) noexcept
+	{
+		for (volatile unsigned char &b : std::span(static_cast<volatile unsigned char *>(p), n)) {
+			b = 0;
+		}
+	}
+
+	template<typename T, std::size_t N> void wipe_array(std::array<T, N> &a) noexcept
+	{
+		wipe_bytes(a.data(), sizeof a);
+	}
+
+	// The chaining state, wiped when it goes out of scope: for NTOWFv2 it
+	// ends as the NT hash, and each block() reads the password's UTF-16.
 	struct md4_state
 	{
-		std::array<std::uint32_t, 4> abcd{ 0x6745'2301u, 0xEFCD'AB89u, 0x98BA'DCFEu, 0x1032'5476u };
+		// RFC 1320 section 3.3, words A, B, C, D.
+		static constexpr std::array<std::uint32_t, 4> initial_abcd{ 0x6745'2301u,
+			0xEFCD'AB89u,
+			0x98BA'DCFEu,
+			0x1032'5476u };
+		std::array<std::uint32_t, 4> abcd = initial_abcd;
+
+		md4_state() = default;
+		md4_state(const md4_state &) = delete;
+		auto operator=(const md4_state &) -> md4_state & = delete;
+		~md4_state() { wipe_array(abcd); }
 
 		static constexpr std::size_t block_size = 64;
 		static constexpr std::uint32_t round2_constant = 0x5A82'7999u;
@@ -299,6 +326,9 @@ namespace {
 			abcd[1] += bb;
 			abcd[2] += c;
 			abcd[3] += d;
+			// The message words; a, bb, c, d and t live in registers (or
+			// spill slots the compiler picks), which C++ cannot reach.
+			wipe_array(x);
 		}
 	};
 
@@ -510,7 +540,7 @@ auto ntlm_uppercase_unicode(std::string_view utf8) -> result<std::string>
 	});
 }
 
-auto md4(std::span<const std::byte> data) noexcept -> ntlm_key
+void md4(std::span<const std::byte> data, ntlm_key &out) noexcept
 {
 	md4_state st;
 	const auto *bytes = reinterpret_cast<const unsigned char *>(data.data());
@@ -535,13 +565,12 @@ auto md4(std::span<const std::byte> data) noexcept -> ntlm_key
 	for (std::size_t b = 0; b < total; b += md4_state::block_size) {
 		st.block(std::span<const unsigned char, md4_state::block_size>(tail.data() + b, md4_state::block_size));
 	}
-	ntlm_key out{};
+	wipe_array(tail);
 	for (std::size_t i = 0; i < st.abcd.size(); ++i) {
 		for (std::size_t k = 0; k < 4; ++k) {
 			out[(4 * i) + k] = static_cast<unsigned char>((st.abcd[i] >> (byte_bits * k)) & byte_mask);
 		}
 	}
-	return out;
 }
 
 }// namespace jhetz::ldap::detail
