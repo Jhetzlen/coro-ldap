@@ -591,4 +591,78 @@ void md4(std::span<const std::byte> data, ntlm_key &out) noexcept
 	}
 }
 
+// ---------------------------------------------------------------- RC4 (MS-NLMP section 6)
+
+ntlm_rc4::ntlm_rc4(std::span<const unsigned char> key) noexcept
+{
+	for (std::size_t k = 0; k < s_.size(); ++k) {
+		s_[k] = static_cast<unsigned char>(k);
+	}
+	// The key-scheduling algorithm: j = j + S[i] + key[i mod keylength].
+	unsigned char j = 0;
+	for (std::size_t k = 0; k < s_.size(); ++k) {
+		j = static_cast<unsigned char>(j + s_[k] + (key.empty() ? 0 : key[k % key.size()]));
+		std::swap(s_[k], s_[j]);
+	}
+}
+
+ntlm_rc4::~ntlm_rc4()
+{
+	wipe_array(s_);
+	wipe_bytes(&i_, sizeof i_);
+	wipe_bytes(&j_, sizeof j_);
+}
+
+void ntlm_rc4::apply(std::span<unsigned char> data) noexcept
+{
+	for (unsigned char &b : data) {
+		i_ = static_cast<unsigned char>(i_ + 1);
+		j_ = static_cast<unsigned char>(j_ + s_[i_]);
+		std::swap(s_[i_], s_[j_]);
+		b ^= s_[static_cast<unsigned char>(s_[i_] + s_[j_])];
+	}
+}
+
+void ntlm_rc4::apply(std::span<std::byte> data) noexcept
+{
+	apply(std::span(reinterpret_cast<unsigned char *>(data.data()), data.size()));
+}
+
+// ---------------------------------------------------------------- NTLMSSP_MESSAGE_SIGNATURE
+
+void encode_ntlm_signature(const ntlm_message_signature &signature,
+  std::span<std::byte, ntlm_signature_size> out) noexcept
+{
+	const auto put = [&](std::size_t at, std::uint32_t v) {
+		for (std::size_t i = 0; i < 4; ++i) {
+			out[at + i] = static_cast<std::byte>((v >> (byte_bits * i)) & byte_mask);
+		}
+	};
+	put(0, signature.version);
+	for (std::size_t i = 0; i < ntlm_checksum_size; ++i) {
+		out[4 + i] = static_cast<std::byte>(signature.checksum[i]);
+	}
+	put(ntlm_signature_seq_num_offset, signature.seq_num);
+}
+
+auto parse_ntlm_protected_buffer(std::span<const std::byte> buffer) -> result<ntlm_protected_buffer>
+{
+	constexpr std::string_view kind = "NTLM protected buffer";
+	if (buffer.size() < ntlm_signature_size) {
+		return malformed(kind, detail::format("{} octets, shorter than its 16-octet signature", buffer.size()));
+	}
+	const std::string_view s(reinterpret_cast<const char *>(buffer.data()), ntlm_signature_size);
+	ntlm_protected_buffer out{
+		.signature = { .version = get32(s, 0), .checksum = {}, .seq_num = get32(s, ntlm_signature_seq_num_offset) },
+		.message = buffer.subspan(ntlm_signature_size)
+	};
+	if (out.signature.version != ntlm_signature_version) {
+		return malformed(kind, detail::format("signature Version {}, not 1", out.signature.version));
+	}
+	for (std::size_t i = 0; i < ntlm_checksum_size; ++i) {
+		out.signature.checksum[i] = static_cast<unsigned char>(s[4 + i]);
+	}
+	return out;
+}
+
 }// namespace jhetz::ldap::detail

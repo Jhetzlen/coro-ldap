@@ -1,7 +1,9 @@
 // The messages of the NT LAN Manager authentication protocol (MS-NLMP,
 // [MS-NLMP] section 2.2), which sasl_ntlm (sasl_ntlm.hpp) sends and reads:
 // NEGOTIATE_MESSAGE, CHALLENGE_MESSAGE, AUTHENTICATE_MESSAGE and the AV_PAIR
-// list of TargetInfo, with MD4 (RFC 1320) for NTOWFv2. Part of the codec
+// list of TargetInfo, with MD4 (RFC 1320) for NTOWFv2, and for session
+// security (MS-NLMP section 3.4, sasl_ntlm's SASL security layer) RC4 and
+// the NTLMSSP_MESSAGE_SIGNATURE of a protected buffer. Part of the codec
 // (jhetz::ldap, no dependency but ICU), so the CHALLENGE_MESSAGE parser can
 // be fuzzed with the other parsers; the keyed hashes (HMAC-MD5, MD5) need
 // OpenSSL and are in sasl_ntlm.hpp. Everything here is internal (detail),
@@ -230,5 +232,75 @@ inline constexpr std::size_t ntlm_authenticate_header_size = 88;
 // straight into `out`, so no copy of the NT hash is left behind; values
 // the compiler keeps in registers or spill slots are out of its reach.
 void md4(std::span<const std::byte> data, ntlm_key &out) noexcept;
+
+// RC4 (MS-NLMP section 6, RC4Init, RC4 and RC4K; the keystream of RFC
+// 6229's test vectors), for NTLM's key exchange and session security. OpenSSL
+// 3 has RC4 only in its legacy provider, as MD4: this one is
+// self-contained. The state (the permutation and its two indices) is the
+// handle MS-NLMP keeps across messages, one per direction; it is zeroed
+// when the object goes, through volatile stores as md4's. Neither copyable
+// nor movable: no stray copy of a keystream state.
+class ntlm_rc4
+{
+  public:
+	// RC4Init(key): `key` is 1 to 256 octets (NTLM's are 16); an empty key
+	// leaves the state as for a single zero octet.
+	explicit ntlm_rc4(std::span<const unsigned char> key) noexcept;
+	~ntlm_rc4();
+	ntlm_rc4(const ntlm_rc4 &) = delete;
+	ntlm_rc4(ntlm_rc4 &&) = delete;
+	auto operator=(const ntlm_rc4 &) -> ntlm_rc4 & = delete;
+	auto operator=(ntlm_rc4 &&) -> ntlm_rc4 & = delete;
+
+	// RC4(handle, data): XORs the next data.size() keystream octets into
+	// `data`, in place (encryption and decryption alike).
+	void apply(std::span<unsigned char> data) noexcept;
+	void apply(std::span<std::byte> data) noexcept;
+
+  private:
+	static constexpr std::size_t state_size = 256;
+	std::array<unsigned char, state_size> s_{};
+	unsigned char i_ = 0;
+	unsigned char j_ = 0;
+};
+
+// NTLMSSP_MESSAGE_SIGNATURE with extended session security (MS-NLMP section
+// 2.2.2.9.2): Version (1), Checksum (8 octets: the first eight of an
+// HMAC-MD5, RC4-encrypted with key exchange) and SeqNum, 16 octets.
+inline constexpr std::size_t ntlm_signature_size = 16;
+inline constexpr std::uint32_t ntlm_signature_version = 1;
+inline constexpr std::size_t ntlm_checksum_size = 8;
+// Where SeqNum is in the signature: the MAC is over ConcatenationOf(SeqNum,
+// Message), so in a protected buffer (the signature, then the message) the
+// octets from here on are exactly what it covers.
+inline constexpr std::size_t ntlm_signature_seq_num_offset = 12;
+
+struct ntlm_message_signature
+{
+	std::uint32_t version = ntlm_signature_version;
+	std::array<unsigned char, ntlm_checksum_size> checksum{};
+	std::uint32_t seq_num = 0;
+	friend auto operator==(const ntlm_message_signature &, const ntlm_message_signature &) -> bool = default;
+};
+
+// The signature's 16 octets, little-endian integers.
+void encode_ntlm_signature(const ntlm_message_signature &signature,
+  std::span<std::byte, ntlm_signature_size> out) noexcept;
+
+// A protected buffer of an NTLM security layer as LDAP carries it (after
+// the SASL four-octet length, RFC 4422 section 3.7, which MS-ADTS section
+// 5.1.2.1 follows): the 16-octet signature, then the message, sealed with
+// confidentiality, as it is with integrity only (as Samba's ntlmssp_wrap
+// lays it out, and Windows' EncryptMessage with the token buffer first).
+struct ntlm_protected_buffer
+{
+	ntlm_message_signature signature{};
+	std::span<const std::byte> message{};
+};
+
+// Splits a protected buffer: at least 16 octets, and the signature's
+// Version 1. client_errc::decode_error otherwise ("NTLM protected buffer:
+// ..."). The checksum and the sequence number are the caller's to check.
+[[nodiscard]] auto parse_ntlm_protected_buffer(std::span<const std::byte> buffer) -> result<ntlm_protected_buffer>;
 
 }// namespace jhetz::ldap::detail

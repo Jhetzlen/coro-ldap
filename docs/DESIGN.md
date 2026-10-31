@@ -945,11 +945,12 @@ jhetz::ldap_net, with HMAC-MD5, MD5 and `RAND_bytes` from OpenSSL. MD4 is
 a self-contained RFC 1320 implementation, since OpenSSL 3 has it only in
 its legacy provider, often not loaded. The NEGOTIATE_MESSAGE asks for
 Unicode, the target name, NTLM with extended session security,
-TargetInfo, a Version and 128-bit keys (flags 0x22880205); no SIGN, SEAL,
-ALWAYS_SIGN nor KEY_EXCH, so there is no security layer (AD refuses one
-over TLS anyway) and the exported session key is the SessionBaseKey
-(KeyExchangeKey for NTLMv2, no key exchange, MS-NLMP section 3.4.5.1),
-which keys the MIC without RC4. NTLMv2 only: a CHALLENGE_MESSAGE without
+TargetInfo, a Version and 128-bit keys (flags 0x22880205); without a
+security layer (the default) no SIGN, SEAL, ALWAYS_SIGN nor KEY_EXCH, and
+the exported session key is the SessionBaseKey (KeyExchangeKey for
+NTLMv2, no key exchange, MS-NLMP section 3.4.5.1), which keys the MIC
+without RC4 (the wire bytes are those of the bind before the layer
+existed). NTLMv2 only: a CHALLENGE_MESSAGE without
 NTLMSSP_NEGOTIATE_UNICODE, NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY or
 a TargetInfo is refused (`unexpected_response`) before any response is
 computed. The parser checks every field's offset and length against the
@@ -1013,6 +1014,76 @@ malformed CHALLENGE_MESSAGEs, and binds against the scripted mock server
 that recomputes the NTProofStr and the MIC as a domain controller would,
 with Unicode names and passwords, the channel bindings (against a
 Python-computed hash) and the refusals. Not tested against AD itself.
+
+NTLM's security layer (coro-ldap-ite.1; MS-NLMP section 3.4, with
+extended session security, key exchange and 128-bit keys only) is opt-in:
+`sasl_ntlm_options::security_layer` is a `sasl_protection`, none by
+default, integrity (signing) or confidentiality (signing and sealing),
+for AD's "LDAP server signing requirements" on plain ldap://. It adds
+NTLMSSP_NEGOTIATE_SIGN and KEY_EXCH (0x62880215), and SEAL for
+confidentiality (0x62880235); a CHALLENGE_MESSAGE that does not grant
+SIGN, KEY_EXCH and 128 (and SEAL) fails `step()` with
+`security_layer_unavailable` before the AUTHENTICATE_MESSAGE, as GSSAPI's
+selection does. The client then picks a random ExportedSessionKey
+(`RAND_bytes`), sends RC4K(SessionBaseKey, it) as
+EncryptedRandomSessionKey, keys the MIC with it, and derives the four
+keys (SIGNKEY, SEALKEY: MD5 of the key and the magic constant with its
+NUL, client-to-server and server-to-client; with NEGOTIATE_128 SEALKEY
+starts from the whole key), which `detail::ntlm_security_layer`
+(`take_security_layer()` after the AUTHENTICATE step) keeps with two RC4
+handles initialized with the sealing keys, and two sequence numbers from
+0, each kept across buffers. wrap() is MS-NLMP's SEAL (section 3.4.3):
+the checksum HMAC_MD5(SigningKey, ConcatenationOf(SeqNum, Message))[0..7]
+over the plaintext, the message RC4-sealed, then the checksum
+RC4-encrypted with the same handle (key exchange; with integrity only the
+message stays in clear and only the checksum goes through RC4). The
+protected buffer is the 16-octet NTLMSSP_MESSAGE_SIGNATURE (Version 1,
+Checksum, SeqNum, section 2.2.2.9.2) followed by the message, inside the
+four-octet SASL length of `sasl_layer_stream`: MS-ADTS section 5.1.2.1
+says AD processes the data "into buffers of protected data as per
+[RFC2222]", and the signature-then-data order is Samba's (`ntlmssp_wrap`
+in auth/ntlmssp/ntlmssp_sign.c), what Windows' wldap32 sends through
+EncryptMessage with its token buffer first. The SeqNum field ends the
+signature, so in the buffer the MAC's input (SeqNum then the message) is
+contiguous and wrap() hashes it in place; unwrap() hashes the expected
+SeqNum and the unsealed message, and compares the checksum with
+`CRYPTO_memcmp`: a buffer with another sequence number (replayed,
+reordered, dropped) or a checksum that does not verify fails with
+`unexpected_response`, a malformed one with `decode_error`, and the
+connection closes; past 2^32 buffers in a direction it refuses rather
+than let the sequence number wrap. GSS-SPNEGO has no RFC 4752 layer
+negotiation, so no maximum buffer size is exchanged: the client accepts
+buffers up to `max_receive_size` (16 MiB by default; AD's MaxReceiveBuffer
+is 10 MB) and sends at most 128 KiB per buffer (Samba's
+`gensec_max_input_size` default), longer PDUs cut across buffers as for
+GSSAPI. AD refuses a SASL layer over TLS (MS-ADTS section 5.1.1.1.2), so
+with TLS `start()` fails with `security_layer_unavailable` before anything
+is sent; and the layer stands in for TLS, so `require_tls` is not
+consulted with one (one option to set, not two; integrity still leaves the
+PDUs readable). AD may refuse a later bind on a layered connection
+(unwillingToPerform without LDAP_CAP_ACTIVE_DIRECTORY_LDAP_INTEG_OID,
+MS-ADTS section 5.1.1.1.2); the library's rule (a bind without a layer
+leaves it in place, a second layer is `security_layer_in_effect`) is
+unchanged. RC4 is self-contained in the codec (`detail::ntlm_rc4`, RFC
+6229's vectors), as MD4 is, because OpenSSL 3 keeps it in the legacy
+provider; its state is zeroed through volatile stores when it goes. The
+ExportedSessionKey is drawn into a wiped buffer, the
+EncryptedRandomSessionKey encrypted in place from a copy, the four
+derived keys go into a wiped `ntlm_session_keys` (their MD5 input in a
+wiped string) and are copied into the layer, which wipes its signing keys
+and RC4 states when the connection drops it; each MAC is wiped after
+use. The protected buffer's signature parser is in the codec and fuzzed
+(`ntlm_fuzz`, with RC4); the checksum and sequence checks need OpenSSL's
+HMAC-MD5 and are unit-tested. Tested: MS-NLMP 4.2.4.2.3 (the
+EncryptedRandomSessionKey) and 4.2.4.4 (the client-to-server sealing and
+signing keys, the sealed "Plaintext" and its signature), a golden exchange
+and three buffers (two client buffers through one handle, the server's
+through the other) from `tests/net/ntlm_golden.py`, tampered, replayed,
+dropped and malformed buffers, the flags-not-granted and TLS refusals,
+and a bind and search through the in-process mock domain controller,
+whose own layer (written in the test from MS-NLMP and OpenSSL) decrypts
+the EncryptedRandomSessionKey, checks the MIC and unwraps the client's
+buffers. Not tested against AD itself.
 
 Referrals and continuation references are returned, never chased by a
 connection: `error::referrals` and `search_stream::references()` keep the

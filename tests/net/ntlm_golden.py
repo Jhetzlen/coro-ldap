@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Prints the golden NTLMv2 messages of sasl_ntlm_tests.cpp's "a golden
-AUTHENTICATE_MESSAGE from an independent implementation".
+AUTHENTICATE_MESSAGE from an independent implementation", then those of "a
+golden security layer from an independent implementation": the exchange
+with signing, sealing and key exchange over plain ldap:// (no channel
+bindings), and protected buffers both ways (MS-NLMP 3.4).
 
 Written from MS-NLMP alone, stdlib only (hashlib, hmac, struct), none of the
 library's code: the NEGOTIATE_MESSAGE, a domain controller's
@@ -14,6 +17,9 @@ the NEGOTIATE flags and its zero Version, the AUTHENTICATE NegotiateFlags
 ((client & server) | VERSION), the "DOMAIN\\user" split at the first
 backslash, the client's AV_PAIR order (the server's pairs, then MsvAvFlags,
 MsvAvChannelBindings, MsvAvTargetName, MsvAvEOL) and the payload order.
+With the security layer, also the ExportedSessionKey (random in the library,
+fixed here and in the test) and the protected buffer's layout (the 16-octet
+signature, then the sealed message, as Samba's ntlmssp_wrap).
 """
 import hashlib
 import hmac
@@ -223,3 +229,119 @@ cxx("NEGOTIATE", negotiate)
 cxx("CHALLENGE", challenge)
 cxx("AUTHENTICATE", auth)
 print("// MIC", mic.hex(), "NTProofStr", nt_proof.hex(), "bindings", bindings.hex())
+
+
+# ==== With a security layer: confidentiality over plain ldap://.
+
+SIGN, SEAL, KEY_EXCH = 0x10, 0x20, 0x40000000
+
+
+class RC4:
+    """RC4Init / RC4 (MS-NLMP 6): the handle keeps its state across calls."""
+
+    def __init__(self, key: bytes):
+        self.s = list(range(256))
+        j = 0
+        for i in range(256):
+            j = (j + self.s[i] + key[i % len(key)]) & 0xFF
+            self.s[i], self.s[j] = self.s[j], self.s[i]
+        self.i = self.j = 0
+
+    def __call__(self, data: bytes) -> bytes:
+        out = bytearray()
+        for b in data:
+            self.i = (self.i + 1) & 0xFF
+            self.j = (self.j + self.s[self.i]) & 0xFF
+            self.s[self.i], self.s[self.j] = self.s[self.j], self.s[self.i]
+            out.append(b ^ self.s[(self.s[self.i] + self.s[self.j]) & 0xFF])
+        return bytes(out)
+
+
+# RFC 6229 section 2, the 40-bit key's keystream at offset 0.
+assert RC4(bytes.fromhex("0102030405"))(b"\0" * 16).hex() == "b2396305f03dc027ccc3524a0a1118a8"
+
+layer_client_flags = client_flags | SIGN | SEAL | KEY_EXCH
+negotiate2 = (b"NTLMSSP\0" + struct.pack("<II", 1, layer_client_flags) + fields(0, 40) + fields(0, 40)
+              + version(0, 0, 0))
+layer_dc_flags = dc_flags | SIGN | SEAL | KEY_EXCH
+challenge2 = (b"NTLMSSP\0" + struct.pack("<I", 2) + fields(len(target_name), 56) + struct.pack("<I", layer_dc_flags)
+              + server_challenge + b"\0" * 8 + fields(len(server_info), 56 + len(target_name))
+              + version(10, 0, 20348) + target_name + server_info)
+# No TLS: MsvAvChannelBindings is Z(16).
+client_info2 = (server_pairs + av(FLAGS, struct.pack("<I", MSV_AV_FLAGS_MIC)) + av(CHANNEL_BINDINGS, b"\0" * 16)
+                + av(TARGET_NAME, u16(spn)) + av(EOL, b""))
+temp2 = (b"\x01\x01" + b"\0" * 6 + struct.pack("<Q", server_time) + client_challenge + b"\0" * 4 + client_info2
+         + b"\0" * 4)
+nt_proof2 = hmac_md5(key, server_challenge + temp2)
+session_base_key2 = hmac_md5(key, nt_proof2)
+# KXKEY for NTLMv2 is the SessionBaseKey (3.4.5.1); with
+# NTLMSSP_NEGOTIATE_KEY_EXCH, EncryptedRandomSessionKey =
+# RC4K(KeyExchangeKey, ExportedSessionKey) (3.1.5.1.2).
+exported2 = bytes.fromhex("00112233445566778899aabbccddeeff")
+encrypted_key = RC4(session_base_key2)(exported2)
+auth_flags2 = (layer_client_flags & layer_dc_flags) | VERSION
+payload2 = [u16(domain), u16(user), u16(workstation), lm_response, nt_proof2 + temp2, encrypted_key]
+at = 88
+fields2 = []
+for p in payload2:
+    fields2.append(fields(len(p), at))
+    at += len(p)
+dom2, usr2, ws2, lm2, nt2, rsk2 = fields2
+
+
+def authenticate2(mic_value):
+    return (b"NTLMSSP\0" + struct.pack("<I", 3) + lm2 + nt2 + dom2 + usr2 + ws2 + rsk2
+            + struct.pack("<I", auth_flags2) + version(0, 0, 0) + mic_value + b"".join(payload2))
+
+
+# The MIC is keyed with the ExportedSessionKey.
+mic2 = hmac_md5(exported2, negotiate2 + challenge2 + authenticate2(b"\0" * 16))
+auth2 = authenticate2(mic2)
+
+
+def subkey(magic: str) -> bytes:
+    """SIGNKEY / SEALKEY with extended session security and
+    NTLMSSP_NEGOTIATE_128 (3.4.5.2, 3.4.5.3): the magic constant with its
+    NUL."""
+    return hashlib.md5(exported2 + magic.encode("ascii") + b"\0").digest()
+
+
+client_sign = subkey("session key to client-to-server signing key magic constant")
+client_seal = subkey("session key to client-to-server sealing key magic constant")
+server_sign = subkey("session key to server-to-client signing key magic constant")
+server_seal = subkey("session key to server-to-client sealing key magic constant")
+
+
+def wrap(handle, sign_key, seq_num, message):
+    """SEAL (3.4.3) with MAC (3.4.4.2, key exchange): the message sealed,
+    then the checksum, with the same handle; the signature, then the sealed
+    message."""
+    checksum = hmac_md5(sign_key, struct.pack("<I", seq_num) + message)[:8]
+    sealed = handle(message)
+    return struct.pack("<I", 1) + handle(checksum) + struct.pack("<I", seq_num) + sealed
+
+
+# MS-NLMP 4.2.4.4: the client's first buffer for "Plaintext" with
+# RandomSessionKey 55*16.
+_seal = RC4(hashlib.md5(b"\x55" * 16 + b"session key to client-to-server sealing key magic constant\0").digest())
+_sign = hashlib.md5(b"\x55" * 16 + b"session key to client-to-server signing key magic constant\0").digest()
+assert wrap(_seal, _sign, 0, u16("Plaintext")).hex() == (
+    "010000007fb38ec5c55d497600000000" "54e50165bf1936dc996020c1811b0f06fb5f")
+
+# Two client PDUs (a Who am I? request, an UnbindRequest) through one
+# handle, and the server's answer through the other.
+who_am_i = bytes.fromhex("301e02010377198017") + b"1.3.6.1.4.1.4203.1.11.3"
+unbind = bytes.fromhex("30050201044200")
+answer = bytes.fromhex("3014020103780f0a0100040004008b06") + b"u:jdoe"
+client_handle = RC4(client_seal)
+server_handle = RC4(server_seal)
+buffer0 = wrap(client_handle, client_sign, 0, who_am_i)
+buffer1 = wrap(client_handle, client_sign, 1, unbind)
+server0 = wrap(server_handle, server_sign, 0, answer)
+
+cxx("layer NEGOTIATE", negotiate2)
+cxx("layer CHALLENGE", challenge2)
+cxx("layer AUTHENTICATE", auth2)
+cxx("client buffer 0 (Who am I?)", buffer0)
+cxx("client buffer 1 (Unbind)", buffer1)
+cxx("server buffer 0 (the answer)", server0)

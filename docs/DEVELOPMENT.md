@@ -411,7 +411,7 @@ disabled check.
 | `dn_fuzz` | text | `parse(to_string(d)) == d`; the literal validator agrees with `parse` |
 | `url_fuzz` | text | `parse(to_string(u)) == u` and `to_string` is canonical; printed URLs contain only RFC 3986 characters |
 | `matching_fuzz` | text (two values, split at an offset in the first byte) | `prepare_string` fails only with `string_prep_failed` and is idempotent (one SPACE more for a value starting with a combining mark); a value matches itself exactly when it prepares; equality rules are symmetric and caseExactMatch TRUE implies caseIgnoreMatch TRUE; orderings are never TRUE both ways; a parsed DN never fails to match itself; the OID, uniqueMember, generalizedTime, uuid, bitString and caseIgnoreList rules are symmetric and never FALSE on a value against itself |
-| `ntlm_fuzz` | bytes | the MS-NLMP CHALLENGE_MESSAGE and AUTHENTICATE_MESSAGE parsers fail only with `decode_error`; accepted messages re-encode to messages that parse equal; the client's TargetInfo built from a CHALLENGE_MESSAGE's AV_PAIRs parses back with one MsvAvFlags (MIC bit set) and one MsvAvChannelBindings |
+| `ntlm_fuzz` | bytes | the MS-NLMP CHALLENGE_MESSAGE and AUTHENTICATE_MESSAGE parsers fail only with `decode_error`; accepted messages re-encode to messages that parse equal; the client's TargetInfo built from a CHALLENGE_MESSAGE's AV_PAIRs parses back with one MsvAvFlags (MIC bit set) and one MsvAvChannelBindings; a security layer's protected buffer is refused only with `decode_error`, an accepted one's signature re-encodes to its first 16 octets; RC4 applied twice is the identity |
 
 ```sh
 cmake -B build/fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -486,4 +486,8 @@ script is in the file. The NTLMv2 golden NEGOTIATE, CHALLENGE and
 AUTHENTICATE messages of `tests/net/sasl_ntlm_tests.cpp` come from
 `tests/net/ntlm_golden.py` (written from MS-NLMP, stdlib only; run it with
 `python3 -I`); the test comment lists the client choices it copies from the
-library.
+library. Its second part gives the golden security-layer exchange
+(signing, sealing and key exchange over plain ldap://, a fixed
+ExportedSessionKey) and three protected buffers, both directions, of
+"a golden security layer from an independent implementation"; the script
+also asserts MS-NLMP 4.2.4.4's sealed buffer and an RFC 6229 RC4 vector.

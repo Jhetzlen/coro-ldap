@@ -2,7 +2,7 @@
 // run under ctest with any compiler, without libFuzzer.
 // Seeds: the CHALLENGE_MESSAGE of MS-NLMP section 4.2.4.3, a domain
 // controller's with MsvAvFlags and MsvAvTimestamp, and an
-// AUTHENTICATE_MESSAGE.
+// AUTHENTICATE_MESSAGE, and MS-NLMP section 4.2.4.4's protected buffer.
 #include "jhetz/ldap/ntlm_message.hpp"
 
 #include "replay.hpp"
@@ -21,6 +21,9 @@ auto main(int argc, char **argv) -> int
 	  "NTLMSSP\0\x02\0\0\0\x0c\0\x0c\0\x38\0\0\0\x33\x82\x8a\xe2\x01\x23\x45\x67\x89\xab\xcd\xef"
 	  "\0\0\0\0\0\0\0\0\x24\0\x24\0\x44\0\0\0\x06\0\x70\x17\0\0\0\x0f"
 	  "S\0e\0r\0v\0e\0r\0\x02\0\x0c\0D\0o\0m\0a\0i\0n\0\x01\0\x0c\0S\0e\0r\0v\0e\0r\0\0\0\0\0"sv,
+	  // MS-NLMP section 4.2.4.4: the signature, then the sealed data.
+	  "\x01\0\0\0\x7f\xb3\x8e\xc5\xc5\x5d\x49\x76\0\0\0\0"
+	  "\x54\xe5\x01\x65\xbf\x19\x36\xdc\x99\x60\x20\xc1\x81\x1b\x0f\x06\xfb\x5f"sv,
 	});
 	const detail::ntlm_challenge_message dc{ .target_name = std::string("E\0X\0", 4),
 		.negotiate_flags = detail::ntlmssp_negotiate_unicode | detail::ntlmssp_negotiate_extended_sessionsecurity

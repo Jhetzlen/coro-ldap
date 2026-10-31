@@ -614,10 +614,24 @@ itself needs only ICU.
   typed (no normalization). NTLMv2 only: a server that does not offer it
   (no NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY, no TargetInfo, no
   Unicode) fails the bind with `client_errc::unexpected_response`. The
-  AUTHENTICATE_MESSAGE carries a MIC (keyed with the SessionBaseKey) and
-  MsvAvFlags with the MIC bit; the timestamp is the server's. No signing
-  or sealing is negotiated: SASL does not protect the session, TLS does.
-  `options.require_tls` (default true) fails the bind with
+  AUTHENTICATE_MESSAGE carries a MIC (keyed with the ExportedSessionKey)
+  and MsvAvFlags with the MIC bit; the timestamp is the server's. By
+  default no signing or sealing is negotiated: SASL does not protect the
+  session, TLS does. `options.security_layer` (a `sasl_protection`:
+  `integrity` signs every later PDU, `confidentiality` signs and seals it;
+  MS-NLMP section 3.4, RC4 and HMAC-MD5 with key exchange and 128-bit
+  keys) negotiates an NTLM security layer for plain ldap://, where AD's
+  "LDAP server signing requirements" policy demands one:
+  `connection::sasl_bind` installs it after the successful BindResponse
+  (`connection::security_layer()` reports it), and a buffer that fails its
+  checksum or sequence number closes the connection. Only without TLS (AD
+  refuses a SASL layer over TLS): over ldaps:// or StartTLS `start()`
+  fails with `client_errc::security_layer_unavailable`, as does a
+  CHALLENGE_MESSAGE that does not grant SIGN, KEY_EXCH and 128 (and SEAL
+  for confidentiality). With a layer, `require_tls` is not consulted (the
+  layer stands in for it). `options.max_receive_size` (16 MiB) bounds
+  the server's buffers.
+  `options.require_tls` (default true, without a layer) fails the bind with
   `client_errc::tls_required` on a plain ldap:// connection before
   anything is sent. NTLM does not authenticate the server, so only TLS's
   certificate check says whom the client talks to; with `require_tls =
@@ -893,4 +907,4 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: Kerberos through GSS-SPNEGO, NTLM signing and sealing, tls-unique.
+Not yet: Kerberos through GSS-SPNEGO, tls-unique.

@@ -9,13 +9,23 @@
 // - the client's TargetInfo built from its AV_PAIRs (MsvAvFlags with the
 //   MIC bit, MsvAvChannelBindings) parses back as that list, with
 //   MsvAvFlags and MsvAvChannelBindings once each and the MIC bit set;
-// - an accepted AUTHENTICATE_MESSAGE re-encodes to one that parses equal.
+// - an accepted AUTHENTICATE_MESSAGE re-encodes to one that parses equal;
+// - a protected buffer of the NTLM security layer (its signature, then the
+//   message) is refused only with decode_error ("NTLM protected buffer:
+//   "); an accepted one's signature re-encodes to its first 16 octets and
+//   the message is the rest;
+// - RC4 keyed with the input's first octets, applied twice from a fresh
+//   state, gives the input back. (The checksum and sequence number checks
+//   need OpenSSL's HMAC-MD5, in jhetz::ldap_net: the unit tests cover them.)
 #include "jhetz/ldap/ntlm_message.hpp"
 
 #include "check.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -27,6 +37,29 @@ namespace detail = jhetz::ldap::detail;
 extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size) -> int
 {
 	const std::string_view bytes(reinterpret_cast<const char *>(data), size);
+
+	const auto raw = std::as_bytes(std::span(data, size));
+	auto protected_buffer = detail::parse_ntlm_protected_buffer(raw);
+	if (!protected_buffer) {
+		check(protected_buffer.error().code == ldap::client_errc::decode_error, "protected: decode_error");
+		check(protected_buffer.error().context.starts_with("NTLM protected buffer: "),
+		  "context starts with NTLM protected buffer");
+	} else {
+		std::array<std::byte, detail::ntlm_signature_size> sig{};
+		detail::encode_ntlm_signature(protected_buffer->signature, sig);
+		check(std::ranges::equal(sig, raw.first(detail::ntlm_signature_size)), "signature re-encodes");
+		check(protected_buffer->message.data() == raw.data() + detail::ntlm_signature_size
+				&& protected_buffer->message.size() == size - detail::ntlm_signature_size,
+		  "message is the rest");
+	}
+	{
+		const auto key = std::span(data, std::min<std::size_t>(size, detail::ntlm_key_size));
+		std::string text(bytes);
+		const auto text_bytes = std::span(reinterpret_cast<unsigned char *>(text.data()), text.size());
+		detail::ntlm_rc4(key).apply(text_bytes);
+		detail::ntlm_rc4(key).apply(text_bytes);
+		check(text == bytes, "RC4 twice is the identity");
+	}
 
 	auto c = detail::parse_ntlm_challenge(bytes);
 	if (!c) {

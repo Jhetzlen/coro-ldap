@@ -293,3 +293,82 @@ TEST_CASE("ntlm: NEGOTIATE_MESSAGE and AUTHENTICATE_MESSAGE", "[ntlm]")
 	REQUIRE_FALSE(short_auth.has_value());
 	CHECK_THAT(std::string(short_auth.error().context), ContainsSubstring("AUTHENTICATE_MESSAGE: 87 octets"));
 }
+
+namespace {
+
+// RC4's keystream: RC4 over zeros.
+auto keystream(std::string_view key_hex, std::size_t n) -> std::vector<std::byte>
+{
+	const auto key = from_hex(key_hex);
+	detail::ntlm_rc4 rc4(std::span(reinterpret_cast<const unsigned char *>(key.data()), key.size()));
+	std::vector<std::byte> out(n);
+	rc4.apply(out);
+	return out;
+}
+
+auto at(const std::vector<std::byte> &s, std::size_t offset) -> std::string
+{
+	return hex(std::span(s).subspan(offset, 16));
+}
+
+}// namespace
+
+TEST_CASE("ntlm: RC4, the RFC 6229 test vectors", "[ntlm][rfc]")
+{
+	// RFC 6229 section 2: the keystream at offsets 0, 16, 240 and 256.
+	const auto k40 = keystream("0102030405", 272);
+	CHECK(at(k40, 0) == "B2 39 63 05 F0 3D C0 27 CC C3 52 4A 0A 11 18 A8");
+	CHECK(at(k40, 16) == "69 82 94 4F 18 FC 82 D5 89 C4 03 A4 7A 0D 09 19");
+	CHECK(at(k40, 240) == "28 CB 11 32 C9 6C E2 86 42 1D CA AD B8 B6 9E AE");
+	CHECK(at(k40, 256) == "1C FC F6 2B 03 ED DB 64 1D 77 DF CF 7F 8D 8C 93");
+	const auto k128 = keystream("0102030405060708090a0b0c0d0e0f10", 272);
+	CHECK(at(k128, 0) == "9A C7 CC 9A 60 9D 1E F7 B2 93 28 99 CD E4 1B 97");
+	CHECK(at(k128, 16) == "52 48 C4 95 90 14 12 6A 6E 8A 84 F1 1D 1A 9E 1C");
+	CHECK(at(k128, 240) == "06 59 02 E4 B6 20 F6 CC 36 C8 58 9F 66 43 2F 2B");
+	CHECK(at(k128, 256) == "D3 9D 56 6B C6 BC E3 01 07 68 15 15 49 F3 87 3F");
+	const auto k256 = keystream("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20", 272);
+	CHECK(at(k256, 0) == "EA A6 BD 25 88 0B F9 3D 3F 5D 1E 4C A2 61 1D 91");
+	CHECK(at(k256, 256) == "02 E1 E7 05 6B 0F 62 39 00 49 64 22 94 3E 97 B6");
+	const auto other = keystream("ebb46227c6cc8b37641910833222772a", 272);
+	CHECK(at(other, 0) == "72 0C 94 B6 3E DF 44 E1 31 D9 50 CA 21 1A 5A 30");
+	CHECK(at(other, 256) == "48 47 D8 1D A4 94 2D BC 24 9D EF C4 8C 92 2B 9F");
+
+	// The state runs on across calls: two pieces give the same keystream.
+	const auto key = from_hex("0102030405");
+	detail::ntlm_rc4 pieces(std::span(reinterpret_cast<const unsigned char *>(key.data()), key.size()));
+	std::vector<std::byte> a(7);
+	std::vector<std::byte> b(9);
+	pieces.apply(a);
+	pieces.apply(b);
+	a.insert(a.end(), b.begin(), b.end());
+	CHECK(hex(a) == at(k40, 0));
+}
+
+TEST_CASE("ntlm: the NTLMSSP_MESSAGE_SIGNATURE of a protected buffer", "[ntlm]")
+{
+	const detail::ntlm_message_signature sig{
+		.version = 1, .checksum = { 0x7f, 0xb3, 0x8e, 0xc5, 0xc5, 0x5d, 0x49, 0x76 }, .seq_num = 0x0102'0304
+	};
+	std::vector<std::byte> buffer(16);
+	detail::encode_ntlm_signature(sig, std::span(buffer).first<16>());
+	CHECK(hex(buffer) == "01 00 00 00 7F B3 8E C5 C5 5D 49 76 04 03 02 01");
+	buffer.push_back(std::byte{ 0x42 });
+	auto parsed = detail::parse_ntlm_protected_buffer(buffer);
+	REQUIRE(parsed.has_value());
+	CHECK(parsed->signature == sig);
+	CHECK(hex(parsed->message) == "42");
+
+	auto short_buffer = detail::parse_ntlm_protected_buffer(std::span(buffer).first(15));
+	REQUIRE_FALSE(short_buffer.has_value());
+	CHECK(short_buffer.error().code == ldap::client_errc::decode_error);
+	CHECK(short_buffer.error().context == "NTLM protected buffer: 15 octets, shorter than its 16-octet signature");
+	buffer[0] = std::byte{ 2 };
+	auto version = detail::parse_ntlm_protected_buffer(buffer);
+	REQUIRE_FALSE(version.has_value());
+	CHECK(version.error().context == "NTLM protected buffer: signature Version 2, not 1");
+	// The signature alone: an empty message.
+	buffer[0] = std::byte{ 1 };
+	auto empty = detail::parse_ntlm_protected_buffer(std::span(buffer).first(16));
+	REQUIRE(empty.has_value());
+	CHECK(empty->message.empty());
+}

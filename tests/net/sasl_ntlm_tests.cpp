@@ -1,7 +1,12 @@
 // SASL NTLM (sasl_ntlm.hpp): the MS-NLMP section 4.2.4 NTLMv2 test
 // vectors, the mechanism's checks and channel binding, and binds against
 // the scripted mock server, which checks the NTProofStr and the MIC as a
-// domain controller would.
+// domain controller would; the security layer (signing and sealing, MS-NLMP
+// section 3.4): the section 4.2.4.4 vector, a golden exchange and buffers,
+// tampering and replays, and a bind and search through a mock domain
+// controller whose own layer (dc_layer, written here from MS-NLMP) unwraps
+// and checks the client's buffers.
+#include "../../src/net/sasl_layer.hpp"
 #include "../test_util.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/ntlm_message.hpp"
@@ -12,9 +17,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -33,12 +43,15 @@ struct ntlm_test_access
 	{
 		return { std::move(username), std::move(password), std::move(options), client_challenge };
 	}
+	// A fixed ExportedSessionKey instead of a random one.
+	static void set_session_key(sasl_ntlm &mech, const ntlm_key &key) { mech.fixed_session_key_ = key; }
 };
 
 }// namespace jhetz::ldap::detail
 
 namespace ldap = jhetz::ldap;
 namespace detail = jhetz::ldap::detail;
+namespace net = jhetz::ldap::net;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::ContainsSubstring;
 
@@ -634,4 +647,621 @@ TEST_CASE("ntlm: input checks", "[sasl][ntlm]")
 	ldap::sasl_ntlm no_password("CORP\\jdoe", "", plain);
 	no_password.prepare({});
 	CHECK(no_password.start().has_value());
+}
+
+// ---------------------------------------------------------------- security layer
+
+namespace {
+
+constexpr std::uint32_t layer_flags =
+  detail::ntlmssp_negotiate_sign | detail::ntlmssp_negotiate_seal | detail::ntlmssp_negotiate_key_exch;
+
+auto le32(std::uint32_t v) -> std::string
+{
+	std::string out;
+	for (unsigned i = 0; i < 4; ++i) {
+		out += static_cast<char>((v >> (8 * i)) & 0xFFu);
+	}
+	return out;
+}
+
+auto get_le32(std::string_view s) -> std::uint32_t
+{
+	std::uint32_t v = 0;
+	for (std::size_t i = 4; i > 0; --i) {
+		v = v << 8 | static_cast<unsigned char>(s[i - 1]);
+	}
+	return v;
+}
+
+auto bytes_str(std::span<const std::byte> b) -> std::string
+{
+	return { reinterpret_cast<const char *>(b.data()), b.size() };
+}
+
+auto uchars(std::string &s) -> std::span<unsigned char>
+{
+	return { reinterpret_cast<unsigned char *>(s.data()), s.size() };
+}
+
+// The domain controller's side, from OpenSSL and MS-NLMP directly (no
+// library code but ntlm_rc4, which the RFC 6229 vectors check): MD5,
+// HMAC-MD5, and SIGNKEY / SEALKEY with the magic constants.
+auto dc_md5(std::string_view data) -> detail::ntlm_key
+{
+	detail::ntlm_key out{};
+	unsigned int n = 0;
+	REQUIRE(EVP_Digest(data.data(), data.size(), out.data(), &n, EVP_md5(), nullptr) == 1);
+	return out;
+}
+
+auto dc_hmac(std::span<const unsigned char> key, std::string_view data) -> detail::ntlm_key
+{
+	detail::ntlm_key out{};
+	unsigned int n = 0;
+	REQUIRE(HMAC(EVP_md5(),
+			  key.data(),
+			  static_cast<int>(key.size()),
+			  reinterpret_cast<const unsigned char *>(data.data()),
+			  data.size(),
+			  out.data(),
+			  &n)
+			!= nullptr);
+	return out;
+}
+
+auto dc_subkey(const detail::ntlm_key &exported, std::string_view direction, std::string_view kind) -> detail::ntlm_key
+{
+	return dc_md5(key_str(exported) + "session key to " + std::string(direction) + " " + std::string(kind)
+				  + " key magic constant" + std::string(1, '\0'));
+}
+
+// What a domain controller's layer does: wraps with the server-to-client
+// keys, unwraps and checks with the client-to-server ones, each direction
+// with its RC4 handle and sequence number. Logs the protected buffers.
+class dc_layer final : public ldap::sasl_security_layer
+{
+  public:
+	struct log
+	{
+		std::vector<std::string> received{};
+		std::vector<std::string> sent{};
+	};
+
+	dc_layer(const detail::ntlm_key &exported,
+	  ldap::sasl_protection protection,
+	  std::shared_ptr<log> l = std::make_shared<log>())
+	  : protection_(protection), send_sign_(dc_subkey(exported, "server-to-client", "signing")),
+		receive_sign_(dc_subkey(exported, "client-to-server", "signing")),
+		send_(dc_subkey(exported, "server-to-client", "sealing")),
+		receive_(dc_subkey(exported, "client-to-server", "sealing")), log_(std::move(l))
+	{}
+
+	[[nodiscard]] auto protection() const noexcept -> ldap::sasl_protection override { return protection_; }
+	[[nodiscard]] auto max_wrap_input() const noexcept -> std::size_t override { return std::size_t{ 1 } << 20; }
+	[[nodiscard]] auto max_received() const noexcept -> std::size_t override { return std::size_t{ 1 } << 20; }
+
+	[[nodiscard]] auto wrap(std::span<const std::byte> plaintext, std::pmr::vector<std::byte> &out)
+	  -> ldap::result<void> override
+	{
+		std::string message = bytes_str(plaintext);
+		const std::string seq = le32(send_seq_++);
+		const auto mac = dc_hmac(send_sign_, seq + message);
+		std::string checksum(reinterpret_cast<const char *>(mac.data()), 8);
+		if (protection_ == ldap::sasl_protection::confidentiality) {
+			send_.apply(uchars(message));
+		}
+		send_.apply(uchars(checksum));
+		const std::string buffer = le32(1) + checksum + seq + message;
+		log_->sent.push_back(buffer);
+		const auto b = std::as_bytes(std::span(buffer));
+		out.insert(out.end(), b.begin(), b.end());
+		return {};
+	}
+
+	[[nodiscard]] auto unwrap(std::span<const std::byte> buffer, std::pmr::vector<std::byte> &out)
+	  -> ldap::result<void> override
+	{
+		const std::string b = bytes_str(buffer);
+		log_->received.push_back(b);
+		if (b.size() < 16 || get_le32(b) != 1) {
+			return ldap::fail(ldap::client_errc::decode_error, "dc: not a signature");
+		}
+		std::string checksum = b.substr(4, 8);
+		const std::uint32_t seq = get_le32(b.substr(12, 4));
+		std::string message = b.substr(16);
+		if (protection_ == ldap::sasl_protection::confidentiality) {
+			receive_.apply(uchars(message));
+		}
+		receive_.apply(uchars(checksum));
+		if (seq != receive_seq_++) {
+			return ldap::fail(ldap::client_errc::unexpected_response, "dc: wrong sequence number");
+		}
+		const auto mac = dc_hmac(receive_sign_, le32(seq) + message);
+		if (checksum != std::string(reinterpret_cast<const char *>(mac.data()), 8)) {
+			return ldap::fail(ldap::client_errc::unexpected_response, "dc: wrong checksum");
+		}
+		const auto m = std::as_bytes(std::span(message));
+		out.insert(out.end(), m.begin(), m.end());
+		return {};
+	}
+
+  private:
+	ldap::sasl_protection protection_;
+	detail::ntlm_key send_sign_;
+	detail::ntlm_key receive_sign_;
+	detail::ntlm_rc4 send_;
+	detail::ntlm_rc4 receive_;
+	std::uint32_t send_seq_ = 0;
+	std::uint32_t receive_seq_ = 0;
+	std::shared_ptr<log> log_;
+};
+
+// The library's client layer for `exported`.
+auto client_layer(const detail::ntlm_key &exported, ldap::sasl_protection protection)
+  -> std::unique_ptr<detail::ntlm_security_layer>
+{
+	detail::ntlm_session_keys keys;
+	REQUIRE(detail::ntlm_derive_session_keys(exported, keys).has_value());
+	return std::make_unique<detail::ntlm_security_layer>(keys, protection, std::size_t{ 1 } << 20);
+}
+
+auto wrap_with(ldap::sasl_security_layer &layer, std::string_view plaintext) -> std::string
+{
+	std::pmr::vector<std::byte> out;
+	REQUIRE(layer.wrap(std::as_bytes(std::span(plaintext)), out).has_value());
+	return bytes_str(out);
+}
+
+auto unwrap_with(ldap::sasl_security_layer &layer, std::string_view buffer) -> ldap::result<std::string>
+{
+	std::pmr::vector<std::byte> out;
+	if (auto r = layer.unwrap(std::as_bytes(std::span(buffer)), out); !r) {
+		return std::unexpected(std::move(r.error()));
+	}
+	return bytes_str(out);
+}
+
+constexpr detail::ntlm_key spec_random_session_key{ 0x55,
+	0x55,
+	0x55,
+	0x55,
+	0x55,
+	0x55,
+	0x55,
+	0x55,
+	0x55,
+	0x55,
+	0x55,
+	0x55,
+	0x55,
+	0x55,
+	0x55,
+	0x55 };
+
+constexpr detail::ntlm_key
+  test_session_key{ 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF };
+
+}// namespace
+
+TEST_CASE("ntlm: the session security vectors of MS-NLMP section 4.2.4", "[sasl][ntlm][rfc]")
+{
+	// 4.2.4.2.3 Encrypted Session Key: RC4K(KeyExchangeKey,
+	// RandomSessionKey), the KeyExchangeKey being 4.2.4.1.2's SessionBaseKey.
+	const auto session_base_key = from_hex("8D E4 0C CA DB C1 4A 82 F1 5C B0 AD 0D E9 5C A3");
+	detail::ntlm_key encrypted = spec_random_session_key;
+	detail::ntlm_rc4(std::span(reinterpret_cast<const unsigned char *>(session_base_key.data()), 16)).apply(encrypted);
+	CHECK(hex_of(encrypted) == "C5 DA D2 54 4F C9 79 90 94 CE 1C E9 0B C9 D0 3E");
+
+	// 4.2.4.4 GSS_WrapEx: SEALKEY, SIGNKEY of the RandomSessionKey.
+	detail::ntlm_session_keys keys;
+	REQUIRE(detail::ntlm_derive_session_keys(spec_random_session_key, keys).has_value());
+	CHECK(hex_of(keys.client_sealing_key) == "59 F6 00 97 3C C4 96 0A 25 48 0A 7C 19 6E 4C 58");
+	CHECK(hex_of(keys.client_signing_key) == "47 88 DC 86 1B 47 82 F3 5D 43 FD 98 FE 1A 2D 39");
+	// The server-to-client keys follow the same formula (no spec vector):
+	// as the mock domain controller derives them.
+	CHECK(keys.server_signing_key == dc_subkey(spec_random_session_key, "server-to-client", "signing"));
+	CHECK(keys.server_sealing_key == dc_subkey(spec_random_session_key, "server-to-client", "sealing"));
+
+	// The sealed "Plaintext" (UNICODE) and its signature, SeqNum 0: the
+	// signature first, then the data.
+	const std::string plaintext = u16("Plaintext");
+	ldap::sasl_protection protection = ldap::sasl_protection::confidentiality;
+	detail::ntlm_security_layer sealing(keys, protection, 1024);
+	CHECK(sealing.protection() == protection);
+	CHECK(sealing.max_received() == 1024);
+	CHECK(sealing.max_wrap_input() == 131'072 - 16);
+	CHECK(hex_of(wrap_with(sealing, plaintext))
+		  == "01 00 00 00 7F B3 8E C5 C5 5D 49 76 00 00 00 00 "
+			 "54 E5 01 65 BF 19 36 DC 99 60 20 C1 81 1B 0F 06 FB 5F");
+
+	// Integrity only: the message in clear, the checksum (4.2.4.4's
+	// HMAC_MD5(SigningKey, ConcatenationOf(SeqNum, Message))[0..7],
+	// 70 35 28 51 F2 56 43 09) RC4-encrypted with a fresh handle.
+	protection = ldap::sasl_protection::integrity;
+	detail::ntlm_security_layer signing(keys, protection, 1024);
+	std::string checksum = str("70 35 28 51 F2 56 43 09");
+	detail::ntlm_rc4(keys.client_sealing_key).apply(uchars(checksum));
+	CHECK(hex_of(wrap_with(signing, plaintext)) == hex_of(le32(1) + checksum + le32(0) + plaintext));
+}
+
+TEST_CASE("ntlm: a golden security layer from an independent implementation", "[sasl][ntlm][rfc]")
+{
+	// The output of tests/net/ntlm_golden.py's second part (see the golden
+	// AUTHENTICATE_MESSAGE test for what it copies from the library): the
+	// same user, password, workstation, target, challenges and timestamp,
+	// no TLS (MsvAvChannelBindings Z(16)), confidentiality (SIGN, SEAL,
+	// KEY_EXCH), the ExportedSessionKey 00 11 .. FF; then two client
+	// buffers through one handle and the server's through the other.
+	const std::string negotiate =
+	  str("4e544c4d53535000010000003502886200000000280000000000000028000000000000000000000f");
+	const std::string challenge = str(
+	  "4e544c4d53535000020000000e000e0038000000358289e20123456789abcdef00000000000000003000300046000000"
+	  "0a007c4f0000000f4500580041004d0050004c00450002000c0044006f006d00610069006e0001000c00530065007200"
+	  "76006500720007000800706f5e4d3c2bdb0100000000");
+	const std::string authenticate = str(
+	  "4e544c4d53535000030000001800180070000000a800a800880000000800080058000000080008006000000008000800"
+	  "68000000100010003001000035028862000000000000000f9d3996e670b82d4880f07eb71c21fae643004f0052005000"
+	  "6a00f60072006700570053003000310000000000000000000000000000000000000000000000000016bbee80e7babb4c"
+	  "50865c80b662ceeb0101000000000000706f5e4d3c2bdb01aaaaaaaaaaaaaaaa0000000002000c0044006f006d006100"
+	  "69006e0001000c0053006500720076006500720007000800706f5e4d3c2bdb0106000400020000000a00100000000000"
+	  "000000000000000000000000090028006c006400610070002f006400630031002e006500780061006d0070006c006500"
+	  "2e006f00720067000000000000000000c9aad552e8cb224de9c0d0bfb5f496ad");
+	const std::string client0 =
+	  str("0100000000628de40a324257000000006ddb2dd6982411c1ba03715eaa0043eff5f6b1cd43b3c8a5d73508ea4cf487b8");
+	const std::string client1 = str("010000006ef72d99b526a86a010000001acad06ca50462");
+	const std::string server0 = str("01000000ff8e048cbe7d224f0000000021171bc7e7f69eaa710ca502d5fc7a2c6fd664332b1d");
+	const std::string who_am_i = str("301e02010377198017") + "1.3.6.1.4.1.4203.1.11.3";
+	const std::string unbind = str("30050201044200");
+	const std::string answer = str("3014020103780f0a0100040004008b06") + "u:jdoe";
+	CHECK(hex_of(dc_challenge(dc_flags | layer_flags)) == hex_of(challenge));
+
+	// require_tls stays true: the layer stands in for it.
+	auto mech = detail::ntlm_test_access::with_challenge("CORP\\j\xC3\xB6rg",
+	  "p\xC3\xA4sswort\xE2\x82\xAC",
+	  { .workstation = "WS01", .security_layer = ldap::sasl_protection::confidentiality },
+	  spec_client_challenge);
+	detail::ntlm_test_access::set_session_key(mech, test_session_key);
+	mech.prepare({ .host = "dc1.example.org" });
+	auto first = mech.start();
+	REQUIRE(first.has_value());
+	REQUIRE(first->has_value());
+	CHECK(hex_of(**first) == hex_of(negotiate));
+	CHECK(mech.take_security_layer() == nullptr);
+	auto second = mech.step(challenge);
+	REQUIRE(second.has_value());
+	REQUIRE(second->has_value());
+	CHECK(hex_of(**second) == hex_of(authenticate));
+	auto layer = mech.take_security_layer();
+	REQUIRE(layer != nullptr);
+	CHECK(mech.take_security_layer() == nullptr);// once
+	CHECK(mech.complete(std::nullopt).has_value());
+	CHECK(layer->protection() == ldap::sasl_protection::confidentiality);
+	CHECK(layer->max_received() == 0x0100'0000);
+	CHECK(hex_of(wrap_with(*layer, who_am_i)) == hex_of(client0));
+	CHECK(hex_of(wrap_with(*layer, unbind)) == hex_of(client1));
+	auto plain_answer = unwrap_with(*layer, server0);
+	REQUIRE(plain_answer.has_value());
+	CHECK(hex_of(*plain_answer) == hex_of(answer));
+
+	// A new bind starts afresh: no layer until its AUTHENTICATE_MESSAGE.
+	REQUIRE(mech.start().has_value());
+	CHECK(mech.take_security_layer() == nullptr);
+}
+
+TEST_CASE("ntlm: protected buffers both ways, tampered, replayed or reordered", "[sasl][ntlm]")
+{
+	for (const auto protection : { ldap::sasl_protection::integrity, ldap::sasl_protection::confidentiality }) {
+		CAPTURE(protection);
+		auto client = client_layer(test_session_key, protection);
+		dc_layer dc(test_session_key, protection);
+
+		// Round trips, the handles and sequence numbers running on.
+		for (const std::string_view m :
+		  { std::string_view("first PDU"), std::string_view(), std::string_view("third") }) {
+			const std::string wrapped = wrap_with(*client, m);
+			CHECK(wrapped.size() == 16 + m.size());
+			CHECK((wrapped.substr(16) == m) == (protection == ldap::sasl_protection::integrity || m.empty()));
+			auto at_dc = unwrap_with(dc, wrapped);
+			REQUIRE(at_dc.has_value());
+			CHECK(*at_dc == m);
+			auto back = unwrap_with(*client, wrap_with(dc, std::string(m) + "!"));
+			REQUIRE(back.has_value());
+			CHECK(*back == std::string(m) + "!");
+		}
+		// Appended to what `out` holds already.
+		std::pmr::vector<std::byte> out(3, std::byte{ 0x42 });
+		const std::string pdu = wrap_with(dc, "more");
+		REQUIRE(client->unwrap(std::as_bytes(std::span(pdu)), out).has_value());
+		CHECK(bytes_str(out) == "BBBmore");
+
+		const auto refused = [](ldap::result<std::string> r, std::string_view context) {
+			REQUIRE_FALSE(r.has_value());
+			CHECK(r.error().code == ldap::client_errc::unexpected_response);
+			CHECK(r.error().context == context);
+		};
+		const std::string bad_checksum =
+		  "NTLM: a buffer whose checksum does not verify (changed in transit, or not the server's)";
+		SECTION("a changed message")
+		{
+			std::string b = wrap_with(dc, "payload");
+			b[18] = static_cast<char>(static_cast<unsigned char>(b[18]) ^ 1U);
+			refused(unwrap_with(*client, b), bad_checksum);
+		}
+		SECTION("a changed checksum")
+		{
+			std::string b = wrap_with(dc, "payload");
+			b[4] = static_cast<char>(static_cast<unsigned char>(b[4]) ^ 0x80U);
+			refused(unwrap_with(*client, b), bad_checksum);
+		}
+		SECTION("a buffer of the client's own (the other direction's keys)")
+		{
+			refused(unwrap_with(*client, wrap_with(*client, "payload")),
+			  "NTLM: a buffer with sequence number 3, 4 expected (replayed, reordered or dropped)");
+		}
+		SECTION("a replayed buffer")
+		{
+			const std::string b = wrap_with(dc, "payload");
+			REQUIRE(unwrap_with(*client, b).has_value());
+			refused(unwrap_with(*client, b),
+			  "NTLM: a buffer with sequence number 4, 5 expected (replayed, reordered or dropped)");
+		}
+		SECTION("a dropped buffer")
+		{
+			(void)wrap_with(dc, "dropped");
+			refused(unwrap_with(*client, wrap_with(dc, "next")),
+			  "NTLM: a buffer with sequence number 5, 4 expected (replayed, reordered or dropped)");
+		}
+		SECTION("a changed sequence number")
+		{
+			(void)wrap_with(dc, "dropped");
+			std::string b = wrap_with(dc, "next");
+			b.replace(12, 4, le32(4));
+			refused(unwrap_with(*client, b), bad_checksum);
+		}
+		SECTION("a malformed buffer")
+		{
+			auto r = unwrap_with(*client, std::string(15, '\x01'));
+			REQUIRE_FALSE(r.has_value());
+			CHECK(r.error().code == ldap::client_errc::decode_error);
+			std::string b = wrap_with(dc, "payload");
+			b[0] = '\x02';
+			auto v = unwrap_with(*client, b);
+			REQUIRE_FALSE(v.has_value());
+			CHECK(v.error().context == "NTLM protected buffer: signature Version 2, not 1");
+		}
+		SECTION("the server's buffers do not verify as the client's")
+		{
+			dc_layer other(test_session_key, protection);
+			auto r = unwrap_with(other, wrap_with(dc, "payload"));
+			REQUIRE_FALSE(r.has_value());
+		}
+	}
+}
+
+TEST_CASE("ntlm: a security layer the server does not grant", "[net][sasl][ntlm]")
+{
+	const auto refused = [](ldap::sasl_protection protection, std::uint32_t flags, std::string_view why) {
+		mock_ldap m;
+		m.serve({ answer({ sasl_resp(1, 14, dc_challenge(flags)) }), answer({ bind_resp(2) }) });
+		ldap::sasl_ntlm mech("CORP\\jdoe", "secret", { .security_layer = protection });
+		auto r = m.run(m.conn.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::security_layer_unavailable);
+		CHECK(r.error().code == ldap::cond::access_denied);
+		CHECK(std::string(r.error().context) == "sasl bind GSS-SPNEGO: " + std::string(why));
+		CHECK(m.conn.is_open());
+		CHECK(m.conn.security_layer() == ldap::sasl_protection::none);
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[1] == abort_req(2));
+	};
+	refused(ldap::sasl_protection::confidentiality,
+	  dc_flags | detail::ntlmssp_negotiate_sign | detail::ntlmssp_negotiate_key_exch,
+	  "the server does not grant the confidentiality security layer (no NTLMSSP_NEGOTIATE_SEAL in the "
+	  "CHALLENGE_MESSAGE)");
+	refused(ldap::sasl_protection::integrity,
+	  dc_flags | detail::ntlmssp_negotiate_key_exch,
+	  "the server does not grant the integrity security layer (no NTLMSSP_NEGOTIATE_SIGN in the CHALLENGE_MESSAGE)");
+	refused(ldap::sasl_protection::integrity,
+	  (dc_flags | detail::ntlmssp_negotiate_sign) & ~detail::ntlmssp_negotiate_128,
+	  "the server does not grant the integrity security layer (no NTLMSSP_NEGOTIATE_KEY_EXCH, "
+	  "NTLMSSP_NEGOTIATE_128 in the CHALLENGE_MESSAGE)");
+	// Integrity does not need sealing.
+	mock_ldap m;
+	m.serve({ answer({ sasl_resp(
+				1, 14, dc_challenge(dc_flags | detail::ntlmssp_negotiate_sign | detail::ntlmssp_negotiate_key_exch)) }),
+	  answer({ sasl_resp(2, 0) }) });
+	ldap::sasl_ntlm mech("CORP\\jdoe", "secret", { .security_layer = ldap::sasl_protection::integrity });
+	REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
+	CHECK(m.conn.security_layer() == ldap::sasl_protection::integrity);
+	REQUIRE(m.log.received.size() == 2);
+	auto auth = detail::parse_ntlm_authenticate(sasl_creds(m.log.received[1]));
+	REQUIRE(auth.has_value());
+	// SIGN, KEY_EXCH and the rest both sides set.
+	CHECK(auth->negotiate_flags == 0x6288'0215u);
+	CHECK(auth->encrypted_random_session_key.size() == 16);
+}
+
+TEST_CASE("ntlm: a security layer only without TLS", "[sasl][ntlm]")
+{
+	const auto hash = cert_hash();
+	ldap::sasl_ntlm mech("CORP\\jdoe", "secret", { .security_layer = ldap::sasl_protection::integrity });
+	mech.prepare({ .host = "dc1",
+	  .tls = true,
+	  .bindings = { .tls_server_end_point = hash, .default_type = ldap::channel_binding_type::tls_server_end_point } });
+	auto r = mech.start();
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::client_errc::security_layer_unavailable);
+	CHECK(r.error().context
+		  == "a SASL security layer cannot be used over TLS (Active Directory refuses one there; "
+			 "sasl_ntlm_options::security_layer)");
+
+	// Without TLS require_tls (true here) is not consulted, and the
+	// NEGOTIATE_MESSAGE asks for SIGN and KEY_EXCH (and SEAL).
+	mech.prepare({ .host = "dc1" });
+	auto integrity = mech.start();
+	REQUIRE(integrity.has_value());
+	REQUIRE(integrity->has_value());
+	CHECK(get_le32(std::string_view(**integrity).substr(12, 4)) == 0x6288'0215u);
+	ldap::sasl_ntlm sealing("CORP\\jdoe", "secret", { .security_layer = ldap::sasl_protection::confidentiality });
+	sealing.prepare({});
+	auto confidentiality = sealing.start();
+	REQUIRE(confidentiality.has_value());
+	REQUIRE(confidentiality->has_value());
+	CHECK(get_le32(std::string_view(**confidentiality).substr(12, 4)) == 0x6288'0235u);
+
+	ldap::sasl_ntlm small(
+	  "CORP\\jdoe", "secret", { .security_layer = ldap::sasl_protection::integrity, .max_receive_size = 15 });
+	small.prepare({});
+	auto too_small = small.start();
+	REQUIRE_FALSE(too_small.has_value());
+	CHECK(too_small.error().code == ldap::client_errc::encode_error);
+	CHECK(too_small.error().context == "max_receive_size 15 out of range (16 to 4294967295)");
+}
+
+namespace {
+
+auto creds_of(const ldap::message &m) -> std::optional<std::string>
+{
+	const auto *req = std::get_if<ldap::bind_request>(&m.op);
+	if (req == nullptr) {
+		return std::nullopt;
+	}
+	const auto *sasl = std::get_if<ldap::sasl_auth>(&req->authentication);
+	if (sasl == nullptr || sasl->mechanism != "GSS-SPNEGO" || !sasl->credentials) {
+		return std::nullopt;
+	}
+	return std::string(*sasl->credentials);
+}
+
+// What the mock domain controller learns from the AUTHENTICATE_MESSAGE:
+// the ExportedSessionKey (EncryptedRandomSessionKey decrypted with the
+// SessionBaseKey), after checking the NTProofStr and the MIC keyed with it.
+auto dc_exported_key(std::string_view negotiate,
+  std::string_view challenge,
+  std::string_view authenticate,
+  std::string &error) -> detail::ntlm_key
+{
+	auto auth = detail::parse_ntlm_authenticate(authenticate);
+	auto key = ntowfv2("secret", "jdoe", "CORP");
+	if (!auth || !key || auth->nt_challenge_response.size() < 48 || auth->encrypted_random_session_key.size() != 16) {
+		error = "dc: a malformed AUTHENTICATE_MESSAGE";
+		return {};
+	}
+	const std::string temp = auth->nt_challenge_response.substr(16);
+	const auto proof = dc_hmac(*key, key_str(spec_server_challenge) + temp);
+	if (auth->nt_challenge_response.substr(0, 16) != key_str(proof)) {
+		error = "dc: wrong NTProofStr";
+		return {};
+	}
+	const auto session_base_key = dc_hmac(*key, key_str(proof));
+	std::string exported = auth->encrypted_random_session_key;
+	detail::ntlm_rc4(session_base_key).apply(uchars(exported));
+	std::string zeroed(authenticate);
+	zeroed.replace(detail::ntlm_authenticate_mic_offset, 16, 16, '\0');
+	const auto mic = dc_hmac(uchars(exported), std::string(negotiate) + std::string(challenge) + zeroed);
+	if (key_str(auth->mic) != key_str(mic)) {
+		error = "dc: wrong MIC";
+		return {};
+	}
+	detail::ntlm_key out{};
+	std::ranges::copy(uchars(exported), out.begin());
+	return out;
+}
+
+// A domain controller: the NTLM exchange, success, then its layer on its
+// end, and one search answered (an entry and its done) through it.
+auto serve_ntlm_layer(net::transport t,
+  ldap::sasl_protection protection,
+  std::shared_ptr<dc_layer::log> log,
+  std::string &error) -> capy::task<void>
+{
+	net::read_buffer buf;
+	const std::string challenge = dc_challenge(dc_flags | layer_flags);
+	auto first = co_await net::read_message(t, buf, as_server);
+	const auto negotiate = first ? creds_of(*first) : std::nullopt;
+	if (!negotiate) {
+		error = "dc: no NEGOTIATE_MESSAGE";
+		co_return;
+	}
+	if (!co_await net::write_message(t, sasl_resp(first->id, 14, challenge))) {
+		error = "dc: write";
+		co_return;
+	}
+	auto second = co_await net::read_message(t, buf, as_server);
+	const auto authenticate = second ? creds_of(*second) : std::nullopt;
+	if (!authenticate) {
+		error = "dc: no AUTHENTICATE_MESSAGE";
+		co_return;
+	}
+	const auto exported = dc_exported_key(*negotiate, challenge, *authenticate, error);
+	if (!error.empty()) {
+		co_return;
+	}
+	if (!co_await net::write_message(t, sasl_resp(second->id, 0))) {
+		error = "dc: write";
+		co_return;
+	}
+	if (!net::detail::install_security_layer(t, buf, std::make_unique<dc_layer>(exported, protection, log))) {
+		error = "dc: install";
+		co_return;
+	}
+	auto search = co_await net::read_message(t, buf, as_server);
+	if (!search) {
+		error = "dc: search read: " + std::string(search.error().message());
+		co_return;
+	}
+	if (!std::holds_alternative<ldap::search_request>(search->op)) {
+		error = "dc: not a search";
+		co_return;
+	}
+	for (const auto &m :
+	  { entry_msg(search->id, "uid=jdoe,ou=people,dc=example,dc=org", "Jdoe Sealed"), done_msg(search->id) }) {
+		if (!co_await net::write_message(t, m)) {
+			error = "dc: search write";
+			co_return;
+		}
+	}
+}
+
+}// namespace
+
+TEST_CASE("ntlm: a bind with a security layer, then a search through it", "[net][sasl][ntlm]")
+{
+	for (const auto protection : { ldap::sasl_protection::integrity, ldap::sasl_protection::confidentiality }) {
+		CAPTURE(protection);
+		mock_ldap m;
+		std::string error;
+		auto log = std::make_shared<dc_layer::log>();
+		outcome<void> server;
+		spawn(m.ioc, serve_ntlm_layer(m.server_end(), protection, log, error), server);
+		ldap::sasl_ntlm mech("CORP\\jdoe", "secret", { .security_layer = protection });
+		auto bound = m.run(m.conn.sasl_bind(mech));
+		REQUIRE(bound.has_value());
+		CHECK(m.conn.security_layer() == protection);
+		auto found = m.run(m.conn.search(people_search()));
+		drive_until(m.ioc, [&] { return server.done(); });
+		CHECK(error.empty());
+		REQUIRE(found.has_value());
+		REQUIRE(found->size() == 1);
+		CHECK((*found)[0].dn == "uid=jdoe,ou=people,dc=example,dc=org");
+
+		// The server checked the search's buffer(s) and sent two of its own;
+		// sealed, neither side's text shows on the wire.
+		REQUIRE_FALSE(log->received.empty());
+		REQUIRE(log->sent.size() == 2);
+		const bool sealed = protection == ldap::sasl_protection::confidentiality;
+		std::string received;
+		for (const auto &b : log->received) {
+			received += b.substr(16);
+		}
+		CHECK(received.contains("ou=people") != sealed);
+		CHECK(log->sent[0].contains("Jdoe Sealed") != sealed);
+
+		// StartTLS would go below the layer.
+		auto tls = m.run(m.conn.start_tls());
+		REQUIRE_FALSE(tls.has_value());
+		CHECK(tls.error().code == ldap::client_errc::security_layer_in_effect);
+	}
 }

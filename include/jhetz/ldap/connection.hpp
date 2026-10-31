@@ -223,7 +223,8 @@ class connection
 	// The SASL security layer (RFC 4422 section 3.7) protecting the open
 	// connection: set by a sasl_bind whose mechanism negotiated integrity
 	// or confidentiality (sasl_mechanism::take_security_layer, e.g.
-	// sasl_gssapi_options::security_layer), from the first octet after its
+	// sasl_gssapi_options::security_layer or
+	// sasl_ntlm_options::security_layer), from the first octet after its
 	// successful BindResponse, for every later PDU both ways, until the
 	// connection closes (a later bind, failed or not, leaves it in place,
 	// RFC 4513 section 5.2.1.4). none otherwise, and once closed. While one
