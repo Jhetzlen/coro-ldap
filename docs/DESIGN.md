@@ -914,9 +914,10 @@ that sends no bindings, which this one never asserts it for. On a match
 AD and MIT report the context as channel bound (MIT sets
 GSS_C_CHANNEL_BOUND_FLAG in the acceptor's `ret_flags`); an acceptor
 given none ignores it, and `none` sends neither, so a server behind a
-TLS-terminating proxy still binds. GSS-SPNEGO is not implemented (it
-would take the same bindings: MIT passes them through SPNEGO since
-1.19). Tested without a
+TLS-terminating proxy still binds. Kerberos through GSS-SPNEGO is not
+implemented (it would take the same bindings: MIT passes them through
+SPNEGO since 1.19); `sasl_ntlm` (below) sends raw NTLMSSP under that
+mechanism name. Tested without a
 KDC (the layer messages, input checks, GSS-API errors before anything is
 sent, the bindings' bytes, `gss_init_sec_context` accepting the struct)
 and end to end against slapd (cyrus-sasl's gssapi plugin, which ignores
@@ -929,6 +930,77 @@ the same ones (then with GSS_C_CHANNEL_BOUND_FLAG in its `ret_flags`),
 refuses it with GSS_S_BAD_BINDINGS when given others, and accepts
 `none`'s while given bindings (no CBT asserted). Against AD itself it is
 not tested (coro-ldap-c2u).
+
+NTLM (`sasl_ntlm.hpp`, coro-ldap-ite; MS-NLMP is the authority for the
+names, the field order and the flags): an NTLMv2 password bind for
+Active Directory where Kerberos is not available, as Samba's libads,
+python-ldap3 and Rust's ldap3 do it. The SASL mechanism is GSS-SPNEGO
+carrying raw NTLMSSP messages, not SPNEGO tokens, which AD accepts
+(MS-ADTS section 3.1.1.3.4.5.2): two BindRequests, NEGOTIATE_MESSAGE then
+AUTHENTICATE_MESSAGE, the CHALLENGE_MESSAGE in the saslBindInProgress
+between them. The messages and MD4 are in the codec
+(`ntlm_message.hpp`, `jhetz::ldap::detail`, so the CHALLENGE_MESSAGE
+parser is fuzzed with the others: `ntlm_fuzz`); the mechanism is in
+jhetz::ldap_net, with HMAC-MD5, MD5 and `RAND_bytes` from OpenSSL. MD4 is
+a self-contained RFC 1320 implementation, since OpenSSL 3 has it only in
+its legacy provider, often not loaded. The NEGOTIATE_MESSAGE asks for
+Unicode, the target name, NTLM with extended session security,
+TargetInfo, a Version and 128-bit keys (flags 0x22880205); no SIGN, SEAL,
+ALWAYS_SIGN nor KEY_EXCH, so there is no security layer (AD refuses one
+over TLS anyway) and the exported session key is the SessionBaseKey
+(KeyExchangeKey for NTLMv2, no key exchange, MS-NLMP section 3.4.5.1),
+which keys the MIC without RC4. NTLMv2 only: a CHALLENGE_MESSAGE without
+NTLMSSP_NEGOTIATE_UNICODE, NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY or
+a TargetInfo is refused (`unexpected_response`) before any response is
+computed. The parser checks every field's offset and length against the
+message (64-bit sums, so no wraparound), the AV_PAIR list up to MsvAvEOL
+(what follows it is ignored), each pair within the field, and the sizes
+and uniqueness of MsvAvFlags and MsvAvTimestamp (`decode_error`
+otherwise). The client's TargetInfo is the server's AV_PAIRs without any
+MsvAvChannelBindings or MsvAvTargetName, MsvAvFlags with the MIC bit
+(0x2) or'ed in (appended when the server sent none), then
+MsvAvChannelBindings, then MsvAvTargetName (the SPN,
+`sasl_ntlm_options::target`, default "ldap/<host>", none without a
+host). NTOWFv2, the NTProofStr, the LmChallengeResponse and the
+SessionBaseKey follow MS-NLMP section 3.3.2; the time is the server's
+MsvAvTimestamp, and then the LmChallengeResponse is Z(24) (section
+3.1.5.1.2), else the current FILETIME with the LMv2 response. The MIC is
+HMAC-MD5 over the three messages with its own field zero, written into
+the encoded AUTHENTICATE_MESSAGE at offset 72 (the Version is always
+sent, so the MIC is always there; its flags are those both sides set,
+plus NTLMSSP_NEGOTIATE_VERSION). Channel binding over TLS:
+MsvAvChannelBindings is the MD5 of a gss_channel_bindings_struct with no
+addresses and the application data "tls-server-end-point:<hash>"
+(`prefixed_channel_binding`, the hash SCRAM-PLUS and GSSAPI use),
+flattened as Windows hashes its SEC_CHANNEL_BINDINGS (five little-endian
+32-bit words, the last the data's length, then the data); Z(16) without
+TLS or with `ntlm_channel_binding::none`. Over TLS without a hash,
+`start()` fails with `tls_required` (as GSSAPI, coro-ldap-2y3: never an
+unbound bind a man in the middle could pick). `channel_binding_used()`
+says tls_server_end_point when the exchange carried bindings, never
+tls-exporter. `require_tls` (true by default) fails `start()` with
+`tls_required` on a connection without TLS, before anything is sent:
+NTLM does not authenticate the server (the client gets no proof that the
+server knows the hash), and after an unsigned bind on plain ldap:// every
+PDU is in clear and the bound connection can be taken over; AD with
+"LDAP server signing requirements" set to require signing refuses it
+(`stronger_auth_required`, 00002028). Text is UTF-8, sent as UTF-16LE
+(ill-formed UTF-8 refused); NTOWFv2 hashes the password's UTF-16 as is
+(no normalization, as Windows) and uppercases the user name code point
+by code point with ICU's `u_toupper` (simple mappings) in the BMP only,
+as Windows' RtlUpcaseUnicodeString maps each UTF-16 unit on its own; the
+domain is not uppercased. "DOMAIN\user" is split at its first
+backslash, a UPN goes as the user name with no domain, and
+`sasl_ntlm_options::domain` overrides both. The password is wiped with
+`OPENSSL_cleanse` in the destructor, its UTF-16 form, the NT hash and
+NTOWFv2 once used (NTOWFv2 is computed in `start()` and wiped in
+`step()`, the SessionBaseKey after the MIC). Tested: the MS-NLMP section
+4.2.4 NTLMv2 vectors (NTOWFv2, the NTProofStr and temp, SessionBaseKey,
+LMv2) and the section 4.2.4.3 CHALLENGE_MESSAGE, RFC 1320's MD4 suite,
+malformed CHALLENGE_MESSAGEs, and binds against the scripted mock server
+that recomputes the NTProofStr and the MIC as a domain controller would,
+with Unicode names and passwords, the channel bindings (against a
+Python-computed hash) and the refusals. Not tested against AD itself.
 
 Referrals and continuation references are returned, never chased by a
 connection: `error::referrals` and `search_stream::references()` keep the

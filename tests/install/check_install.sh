@@ -59,7 +59,7 @@ cmake --build "$work/build/ldap-codec" >/dev/null
 cmake --install "$work/build/ldap-codec" >/dev/null
 # The net-only headers, as excluded in the root CMakeLists.txt's install().
 for h in net cancel.hpp client.hpp connection.hpp connection_options.hpp paged_search.hpp referral_chase.hpp search_stream.hpp \
-	sasl_scram.hpp sasl_gssapi.hpp sync.hpp transaction.hpp; do
+	sasl_ntlm.hpp sasl_scram.hpp sasl_gssapi.hpp sync.hpp transaction.hpp; do
 	if [ -e "$work/prefix-codec/include/jhetz/ldap/$h" ]; then
 		echo "unexpected: $h installed without jhetz::ldap_net"
 		exit 1

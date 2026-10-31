@@ -440,8 +440,8 @@ itself needs only ICU.
   method never reads the root DSE. Passwords never appear in errors.
   Password memory is not wiped (simple binds, `password_modify`, these
   two, `ad_password_value`): the password goes through `std::string`
-  copies the library cannot all reach. Only `sasl_scram_sha256` wipes
-  what it holds.
+  copies the library cannot all reach. Only `sasl_scram_sha256` and
+  `sasl_ntlm` wipe what they hold.
 - StartTLS (step 7): `connection::start_tls(tls_options)` upgrades a plain
   ldap:// connection in place (refused while operations are outstanding;
   it first waits for the answers due to paged search releases; bytes
@@ -460,8 +460,10 @@ itself needs only ICU.
   PBKDF2 runs on a thread of its own, `offload_above_iterations`, 16'384 by
   default, inline under `locking_mode::unsafe`; the SaltedPassword is
   cached per salt and count across binds with the same object) are built in,
-  `sasl_gssapi` (`jhetz/ldap/sasl_gssapi.hpp`, Kerberos V5, RFC 4752;
-  optional, see below) too when built with `JHETZ_LDAP_WITH_GSSAPI`,
+  `sasl_ntlm` (`jhetz/ldap/sasl_ntlm.hpp`, NTLMv2 for Active Directory,
+  see below), `sasl_gssapi` (`jhetz/ldap/sasl_gssapi.hpp`, Kerberos V5,
+  RFC 4752; optional, see below) too when built with
+  `JHETZ_LDAP_WITH_GSSAPI`,
   and `sasl_mechanism` is the interface for others (`prepare()` gives a
   mechanism the URL's host before each bind, whether a step can be
   offloaded, `sasl_bind_context::can_offload`, and the TLS channel
@@ -598,6 +600,42 @@ itself needs only ICU.
   under `unsafe` the bind fails with `std::errc::operation_not_supported`
   before anything is sent; `unsafe_io` is unsupported).
   `examples/gssapi.cpp` binds with StartTLS and the default ticket.
+- SASL NTLM (`sasl_ntlm`, `jhetz/ldap/sasl_ntlm.hpp`, MS-NLMP NTLMv2):
+  `sasl_ntlm(username, password, sasl_ntlm_options)` binds to Active
+  Directory with a user's own password where Kerberos is not available.
+  The mechanism is "GSS-SPNEGO" with raw NTLMSSP messages (two
+  BindRequests: NEGOTIATE, then AUTHENTICATE answering the server's
+  CHALLENGE), as AD accepts it. The username is "DOMAIN\user",
+  "user@dns.domain" (a UPN, no domain) or "user" with
+  `options.domain`; `options.workstation` and `options.target` (the SPN in
+  MsvAvTargetName, default "ldap/<the URL's host>") are optional. UTF-8
+  throughout, sent as UTF-16LE; the user name is uppercased for NTOWFv2
+  as Windows does (ICU simple case mapping), the password is hashed as
+  typed (no normalization). NTLMv2 only: a server that does not offer it
+  (no NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY, no TargetInfo, no
+  Unicode) fails the bind with `client_errc::unexpected_response`. The
+  AUTHENTICATE_MESSAGE carries a MIC (keyed with the SessionBaseKey) and
+  MsvAvFlags with the MIC bit; the timestamp is the server's. No signing
+  or sealing is negotiated: SASL does not protect the session, TLS does.
+  `options.require_tls` (default true) fails the bind with
+  `client_errc::tls_required` on a plain ldap:// connection before
+  anything is sent. NTLM does not authenticate the server, so only TLS's
+  certificate check says whom the client talks to; with `require_tls =
+  false` on plain ldap:// the bind works where the server allows it, but
+  every PDU after it is in clear and unsigned (an active attacker can take
+  over the connection, and a recorded exchange can be attacked offline),
+  and AD with "LDAP server signing requirements" set to require signing
+  refuses it (`errc::stronger_auth_required`, diagnostic `00002028`).
+  Channel binding over TLS: MsvAvChannelBindings is the MD5 of the
+  gss_channel_bindings_struct with "tls-server-end-point:<hash>" as
+  application data, as Windows sends it and as AD's "LDAP server channel
+  binding token requirements" policy checks it; without a hash (an
+  Ed25519 or Ed448 certificate) `start()` fails with
+  `client_errc::tls_required`; `options.channel_binding =
+  ntlm_channel_binding::none` sends Z(16) instead (a TLS-terminating
+  proxy). The password and the keys derived from it are wiped
+  (`OPENSSL_cleanse`). A wrong password is `errc::invalid_credentials`.
+  `examples/ntlm.cpp` binds over ldaps://.
 - `jhetz/ldap/controls.hpp`: typed request controls (`ldap::paged`
   (RFC 2696), `manage_dsa_it` (RFC 3296), `relax_rules`
   (draft-zeilenga-ldap-relax, critical by default), `proxied_authorization`
@@ -855,5 +893,4 @@ unless a resource is given.
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.
 
-Not yet: other SASL mechanisms (GSS-SPNEGO), GSSAPI security layers,
-tls-unique.
+Not yet: Kerberos through GSS-SPNEGO, NTLM signing and sealing, tls-unique.

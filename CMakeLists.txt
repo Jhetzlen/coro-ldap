@@ -209,6 +209,7 @@ add_library(jhetz_ldap STATIC
     src/format_util.cpp
     src/mapping.cpp
     src/matching.cpp
+    src/ntlm_message.cpp
     src/schema.cpp
     src/message.cpp
     src/operations.cpp
@@ -289,6 +290,7 @@ if(JHETZ_LDAP_BUILD_NET)
         src/connection/referral_chase.cpp
         src/connection/same_policy_connector.cpp
         src/client/client.cpp
+        src/sasl_ntlm.cpp
         src/sasl_scram.cpp
         src/sync.cpp
         src/net/connect.cpp
@@ -347,7 +349,7 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     jhetz_ldap_warnings(jhetz_ldapsearch)
 
     # Small programs showing the main use cases (docs/DEVELOPMENT.md, "Examples").
-    set(jhetz_ldap_examples connect search pool modify add delete move password starttls cancel blocking blocking_pool bulk paged syncrepl typed_crud referrals)
+    set(jhetz_ldap_examples connect search pool modify add delete move password starttls cancel blocking blocking_pool bulk paged syncrepl typed_crud referrals ntlm)
     if(JHETZ_LDAP_WITH_GSSAPI)
         list(APPEND jhetz_ldap_examples gssapi)
     endif()
@@ -405,6 +407,7 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "referral_chase.hpp" EXCLUDE
             PATTERN "search_stream.hpp" EXCLUDE
             PATTERN "transaction.hpp" EXCLUDE
+            PATTERN "sasl_ntlm.hpp" EXCLUDE
             PATTERN "sasl_scram.hpp" EXCLUDE
             PATTERN "sasl_gssapi.hpp" EXCLUDE
             PATTERN "sync.hpp" EXCLUDE)

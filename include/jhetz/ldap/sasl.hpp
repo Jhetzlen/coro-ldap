@@ -8,6 +8,7 @@
 //   if (auto r = co_await conn.sasl_bind(mech); !r) ...
 //
 // SCRAM-SHA-256 is sasl_scram_sha256 (sasl_scram.hpp, in jhetz::ldap_net),
+// NTLM for Active Directory sasl_ntlm (sasl_ntlm.hpp, in jhetz::ldap_net),
 // GSSAPI (Kerberos) sasl_gssapi (sasl_gssapi.hpp, in jhetz::ldap_net when
 // built with JHETZ_LDAP_WITH_GSSAPI). Implement sasl_mechanism to add
 // another. A mechanism object serves one bind at a time.

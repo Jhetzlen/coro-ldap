@@ -249,6 +249,7 @@ URL (`ldap://localhost`).
 | `blocking_pool.cpp` | the same search through the blocking pool `ldap::sync::client` |
 | `referrals.cpp` | search `dc=example,dc=org` and follow its referrals to hosts under `example.org` (`chase_search` with `make_same_policy_connector`) |
 | `gssapi.cpp` | StartTLS, then a Kerberos bind with the default ticket (`sasl_gssapi`; built with `JHETZ_LDAP_WITH_GSSAPI`) |
+| `ntlm.cpp` | an NTLMv2 bind to Active Directory with a user name and password over ldaps:// (`sasl_ntlm`, SASL GSS-SPNEGO; TLS required by default) |
 
 `examples/ldapsearch.cpp` (see [API.md](API.md)) is a fuller command-line tool. To try an
 example against the throwaway slapd of the integration tests:
@@ -410,6 +411,7 @@ disabled check.
 | `dn_fuzz` | text | `parse(to_string(d)) == d`; the literal validator agrees with `parse` |
 | `url_fuzz` | text | `parse(to_string(u)) == u` and `to_string` is canonical; printed URLs contain only RFC 3986 characters |
 | `matching_fuzz` | text (two values, split at an offset in the first byte) | `prepare_string` fails only with `string_prep_failed` and is idempotent (one SPACE more for a value starting with a combining mark); a value matches itself exactly when it prepares; equality rules are symmetric and caseExactMatch TRUE implies caseIgnoreMatch TRUE; orderings are never TRUE both ways; a parsed DN never fails to match itself; the OID, uniqueMember, generalizedTime, uuid, bitString and caseIgnoreList rules are symmetric and never FALSE on a value against itself |
+| `ntlm_fuzz` | bytes | the MS-NLMP CHALLENGE_MESSAGE and AUTHENTICATE_MESSAGE parsers fail only with `decode_error`; accepted messages re-encode to messages that parse equal; the client's TargetInfo built from a CHALLENGE_MESSAGE's AV_PAIRs parses back with one MsvAvFlags (MIC bit set) and one MsvAvChannelBindings |
 
 ```sh
 cmake -B build/fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \

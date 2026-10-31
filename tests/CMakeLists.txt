@@ -29,6 +29,7 @@ add_executable(jhetz_ldap_tests
     filter_tests.cpp
     mapping_tests.cpp
     matching_tests.cpp
+    ntlm_message_tests.cpp
     framer_tests.cpp
     message_golden_tests.cpp
     message_tests.cpp
@@ -107,7 +108,7 @@ file(GLOB_RECURSE jhetz_ldap_public_headers CONFIGURE_DEPENDS
 set(jhetz_ldap_net_headers
     jhetz/ldap/cancel.hpp jhetz/ldap/client.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
     jhetz/ldap/paged_search.hpp jhetz/ldap/referral_chase.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp jhetz/ldap/transaction.hpp
-    jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp)
+    jhetz/ldap/sasl_ntlm.hpp jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp)
 set(jhetz_ldap_codec_header_tus)
 set(jhetz_ldap_net_header_tus)
 foreach(header ${jhetz_ldap_public_headers})
@@ -132,7 +133,7 @@ endif()
 # Each <target>_fuzz_replay runs the libFuzzer entry point of fuzz/<target>.cpp
 # on deterministic inputs, so the fuzz properties are checked by every
 # compiler, without libFuzzer.
-foreach(target ber_fuzz message_fuzz filter_fuzz dn_fuzz url_fuzz value_fuzz schema_fuzz matching_fuzz)
+foreach(target ber_fuzz message_fuzz filter_fuzz dn_fuzz url_fuzz value_fuzz schema_fuzz matching_fuzz ntlm_fuzz)
     add_executable(${target}_replay
         ${PROJECT_SOURCE_DIR}/fuzz/${target}.cpp
         ${PROJECT_SOURCE_DIR}/fuzz/${target}_replay.cpp
@@ -157,6 +158,7 @@ if(JHETZ_LDAP_BUILD_NET)
         net/password_tests.cpp
         net/referral_chase_tests.cpp
         net/transaction_tests.cpp
+        net/sasl_ntlm_tests.cpp
         net/sasl_scram_tests.cpp
         net/sasl_tests.cpp
         net/sasl_layer_tests.cpp
