@@ -205,7 +205,10 @@ inline constexpr std::size_t ntlm_authenticate_header_size = 88;
 // reallocated, and nothing is moved or returned by value, so the only copy
 // is the one in `out` (also a partial one on failure), for the caller to
 // wipe. `out` should be empty with no capacity of its own: a buffer it
-// already holds is released by the reserve without being wiped.
+// already holds is not wiped first. One too small is freed by the reserve
+// as it is; a large enough one is kept, its old bytes past the new size()
+// still there (harmless when the caller wipes the whole capacity, as
+// wipe_string does).
 [[nodiscard]] auto ntlm_unicode(std::string_view utf8, std::string &out) -> result<void>;
 
 // UNICODE(Uppercase(s)), the user name of NTOWFv2: each code point of the

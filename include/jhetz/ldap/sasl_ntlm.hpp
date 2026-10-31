@@ -75,8 +75,10 @@
 // - The password is kept (to allow later binds with the same object) and
 //   wiped with OPENSSL_cleanse when the object is destroyed, as are its
 //   UTF-16 form, the NT hash, NTOWFv2 and the SessionBaseKey once used:
-//   each is built in place in its wiped buffer, never returned or moved
-//   by value (which would leave an unwiped copy behind). OpenSSL's HMAC
+//   each is built in place in its wiped buffer, or copied into one and
+//   its source cleansed at once (step()'s copy of NTOWFv2 and the
+//   exported session key), never returned or moved by value (which would
+//   leave an unwiped copy behind). OpenSSL's HMAC
 //   working state, registers and spill slots are beyond the library's
 //   reach.
 //
