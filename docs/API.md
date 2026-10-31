@@ -538,8 +538,12 @@ itself needs only ICU.
   none over TLS when offered) selects a layer instead, with
   `options.max_receive_size` (default 64 KiB) as the largest protected
   buffer accepted: from the successful BindResponse on, every PDU is
-  `gss_wrap`ped both ways (`connection::security_layer()` says which);
-  a layer not offered fails with `security_layer_unavailable`; with a
+  `gss_wrap`ped both ways (`connection::security_layer()` says which).
+  The security context must provide the layer's protection and sequence
+  detection (`GSS_C_SEQUENCE_FLAG` in its ret_flags, RFC 4752 section
+  3.1), `gssapi_failure` otherwise, and a replayed or out-of-sequence
+  buffer closes the connection; a layer not offered fails with
+  `security_layer_unavailable`; with a
   layer in effect `start_tls()` fails with `security_layer_in_effect`.
   Active Directory: with the "LDAP server signing requirements" policy
   set to require signing, AD refuses unsigned SASL binds over plain

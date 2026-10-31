@@ -39,12 +39,12 @@ inline constexpr std::size_t sasl_length_size = 4;
 // into one buffer, writes it whole after its length, and reports the
 // plaintext octets taken (none when the buffer could not be written whole:
 // a part of one delivers nothing); a layer whose max_wrap_input() is 0
-// fails the write (client_errc::encode_error) rather than loop.
-// read_some() delivers plaintext, reading and unwrapping whole buffers as
-// needed; a length above max_received() fails
-// (client_errc::message_too_large) before the buffer is read. Bytes
-// received but not unwrapped stay across a cancelled read. One read and
-// one write may be in flight at once, as on any transport stream.
+// fails the write (client_errc::encode_error) rather than loop. read_some()
+// delivers plaintext, reading and unwrapping whole buffers as needed; a
+// length above max_received() fails (client_errc::message_too_large) before
+// the buffer is read. Bytes received but not unwrapped stay across a
+// cancelled read. One read and one write may be in flight at once, as on
+// any transport stream.
 //
 // Errors are error codes (capy's stream contract); the context of the
 // last read's and the last write's failure, when it came from the layer

@@ -157,6 +157,30 @@ TEST_CASE("gssapi: the security layer selected", "[net][sasl][gssapi]")
 	}
 }
 
+TEST_CASE("gssapi: the context flags a security layer needs", "[net][sasl][gssapi]")
+{
+	using ldap::detail::gssapi_check_context_flags;
+	using ldap::detail::gssapi_context_flags;
+	constexpr gssapi_context_flags all{ .integrity = true, .confidentiality = true, .sequence = true };
+	CHECK(gssapi_check_context_flags(all, false).has_value());
+	CHECK(gssapi_check_context_flags(all, true).has_value());
+	CHECK(gssapi_check_context_flags({ .integrity = true, .sequence = true }, false).has_value());
+	CHECK(gssapi_check_context_flags({ .confidentiality = true, .sequence = true }, true).has_value());
+	const auto refused = [](const gssapi_context_flags &flags, bool confidentiality, std::string_view why) {
+		auto r = gssapi_check_context_flags(flags, confidentiality);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
+		CHECK(r.error().context == why);
+	};
+	refused({ .confidentiality = true, .sequence = true }, false, "the security context provides no integrity");
+	refused({ .integrity = true, .sequence = true }, true, "the security context provides no confidentiality");
+	// RFC 4752 section 3.1: no layer without sequence detection.
+	constexpr std::string_view no_sequence =
+	  "the security context provides no sequence detection (replayed or reordered buffers would pass)";
+	refused({ .integrity = true, .confidentiality = true }, false, no_sequence);
+	refused({ .integrity = true, .confidentiality = true }, true, no_sequence);
+}
+
 TEST_CASE("gssapi: the client's security layer reply", "[net][sasl][gssapi]")
 {
 	using ldap::detail::gssapi_layer_reply;

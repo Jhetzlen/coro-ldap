@@ -368,6 +368,20 @@ namespace detail {
 		return layer;
 	}
 
+	auto gssapi_check_context_flags(const gssapi_context_flags &flags, bool confidentiality) -> result<void>
+	{
+		if (!(confidentiality ? flags.confidentiality : flags.integrity)) {
+			return fail(client_errc::gssapi_failure,
+			  confidentiality ? "the security context provides no confidentiality"
+							  : "the security context provides no integrity");
+		}
+		if (!flags.sequence) {
+			return fail(client_errc::gssapi_failure,
+			  "the security context provides no sequence detection (replayed or reordered buffers would pass)");
+		}
+		return {};
+	}
+
 	auto gssapi_layer_reply(std::uint8_t layer, std::uint32_t max_size, std::string_view authz_id)
 	  -> result<std::string>
 	{
@@ -575,15 +589,11 @@ struct sasl_gssapi::state
 	// to refuse (sequence_problems).
 	auto wrap_limit(bool confidentiality, std::uint32_t max_size) const -> result<std::size_t>
 	{
-		const OM_uint32 needed = confidentiality ? GSS_C_CONF_FLAG : GSS_C_INTEG_FLAG;
-		if ((context_flags & needed) == 0) {
-			return fail(client_errc::gssapi_failure,
-			  confidentiality ? "the security context provides no confidentiality"
-							  : "the security context provides no integrity");
-		}
-		if ((context_flags & GSS_C_SEQUENCE_FLAG) == 0) {
-			return fail(client_errc::gssapi_failure,
-			  "the security context provides no sequence detection (replayed or reordered buffers would pass)");
+		const detail::gssapi_context_flags provided{ .integrity = (context_flags & GSS_C_INTEG_FLAG) != 0,
+			.confidentiality = (context_flags & GSS_C_CONF_FLAG) != 0,
+			.sequence = (context_flags & GSS_C_SEQUENCE_FLAG) != 0 };
+		if (auto c = detail::gssapi_check_context_flags(provided, confidentiality); !c) {
+			return std::unexpected(std::move(c.error()));
 		}
 		OM_uint32 minor = 0;
 		OM_uint32 max_input = 0;

@@ -60,8 +60,9 @@
 //   server's offer, announces max_receive_size as its maximum buffer size
 //   (the security context must provide that protection and sequence
 //   detection, GSS_C_SEQUENCE_FLAG, as RFC 4752 section 3.1 requires:
-//   client_errc::gssapi_failure otherwise), and connection::sasl_bind installs it right after the successful
-//   BindResponse: every later PDU, both ways, goes in gss_wrap'd buffers
+//   client_errc::gssapi_failure otherwise), and connection::sasl_bind
+//   installs it right after the successful BindResponse: every later
+//   PDU, both ways, goes in gss_wrap'd buffers
 //   (with confidentiality: encrypted) after a four-octet length (RFC 4422
 //   section 3.7), outgoing PDUs cut to fit the server's maximum buffer
 //   size (gss_wrap_size_limit), incoming buffers larger than
@@ -333,6 +334,24 @@ namespace detail {
 	// selected from an offer whose maximum size is 0.
 	[[nodiscard]] auto gssapi_select_layer(const gssapi_layer_offer &offer, gssapi_security_layer requested, bool tls)
 	  -> result<std::uint8_t>;
+
+	// What the established security context provides, from
+	// gss_init_sec_context's ret_flags (GSS_C_INTEG_FLAG, GSS_C_CONF_FLAG,
+	// GSS_C_SEQUENCE_FLAG).
+	struct gssapi_context_flags
+	{
+		bool integrity = false;
+		bool confidentiality = false;
+		bool sequence = false;
+	};
+
+	// Whether a context with `flags` can carry the selected layer (a
+	// confidentiality layer when `confidentiality`, else integrity): that
+	// protection and sequence detection (RFC 4752 section 3.1: without it
+	// gss_unwrap reports no replayed or reordered buffer for the layer to
+	// refuse). client_errc::gssapi_failure otherwise.
+	[[nodiscard]] auto gssapi_check_context_flags(const gssapi_context_flags &flags, bool confidentiality)
+	  -> result<void>;
 
 	// The client's reply (to be wrapped): `layer`, then the maximum size
 	// `max_size` (0 for gssapi_no_layer, whatever is given; else 1 to

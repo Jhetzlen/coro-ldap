@@ -795,8 +795,9 @@ GSS_C_INTEG_FLAG and GSS_C_CONF_FLAG, the selected layer and
 GSS_C_SEQUENCE_FLAG must be in the context's ret_flags (RFC 4752 section
 3.1 has a client requesting a layer set sequence_req_flag; without
 sequence detection `gss_unwrap` would report no replayed or reordered
-buffer for the layer to refuse), and `gss_wrap_size_limit` turns the server's maximum
-buffer size into the most plaintext per buffer (0 fails the bind). The
+buffer for the layer to refuse), and `gss_wrap_size_limit` turns the
+server's maximum buffer size into the most plaintext per buffer (0 fails
+the bind). The
 layer (`sasl_security_layer` in sasl.hpp, generic: a DIGEST-style
 mechanism could give its own) wraps with conf_flag set for
 confidentiality and refuses, on unwrap, a buffer that fails, one with a
