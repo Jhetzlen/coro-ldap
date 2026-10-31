@@ -377,6 +377,53 @@ TEST_CASE("ntlm: TLS is required by default", "[net][sasl][ntlm]")
 	CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));
 }
 
+TEST_CASE("ntlm: a golden AUTHENTICATE_MESSAGE from an independent implementation", "[sasl][ntlm][rfc]")
+{
+	// The three messages were computed by a standalone Python script written
+	// from MS-NLMP alone (stdlib hashlib/hmac, its own RFC 1320 MD4 checked
+	// against RFC 1320's and MS-NLMP 4.2.4.1.1's vectors), none of this
+	// library's code: user "CORP\jörg", password "pässwort€", workstation
+	// "WS01", MsvAvTargetName "ldap/dc1.example.org", ClientChallenge AA*8,
+	// the server's MsvAvTimestamp 0x01DB2B3C4D5E6F70 (so LmChallengeResponse
+	// is Z(24)), MsvAvChannelBindings over tls-server-end-point 00 01 .. 1F.
+	// Where MS-NLMP leaves a choice (the payload order, the client's AV_PAIR
+	// order), the script makes this library's. It anchors the MIC (offset
+	// 72, HMAC_MD5(ExportedSessionKey, NEGOTIATE || CHALLENGE ||
+	// AUTHENTICATE with a zero MIC)), which the 4.2.4 vectors do not cover.
+	const std::string negotiate =
+	  str("4e544c4d53535000010000000502882200000000280000000000000028000000000000000000000f");
+	const std::string challenge = str(
+	  "4e544c4d53535000020000000e000e0038000000058289a20123456789abcdef00000000000000003000300046000000"
+	  "0a007c4f0000000f4500580041004d0050004c00450002000c0044006f006d00610069006e0001000c00530065007200"
+	  "76006500720007000800706f5e4d3c2bdb0100000000");
+	const std::string authenticate = str(
+	  "4e544c4d53535000030000001800180070000000a800a800880000000800080058000000080008006000000008000800"
+	  "68000000000000003001000005028822000000000000000f3431f2819f9924d547cca6a5d7d8da4f43004f0052005000"
+	  "6a00f60072006700570053003000310000000000000000000000000000000000000000000000000081e0a00d437f04e2"
+	  "9c8c6c576fe4a3460101000000000000706f5e4d3c2bdb01aaaaaaaaaaaaaaaa0000000002000c0044006f006d006100"
+	  "69006e0001000c0053006500720076006500720007000800706f5e4d3c2bdb0106000400020000000a0010008f1214c9"
+	  "c9cab8dc3bf866da9aba57a7090028006c006400610070002f006400630031002e006500780061006d0070006c006500"
+	  "2e006f00720067000000000000000000");
+	// The same CHALLENGE as the other tests build.
+	CHECK(hex_of(dc_challenge()) == hex_of(challenge));
+
+	const auto hash = cert_hash();
+	auto mech = detail::ntlm_test_access::with_challenge(
+	  "CORP\\j\xC3\xB6rg", "p\xC3\xA4sswort\xE2\x82\xAC", { .workstation = "WS01" }, spec_client_challenge);
+	mech.prepare({ .host = "dc1.example.org",
+	  .tls = true,
+	  .bindings = { .tls_server_end_point = hash, .default_type = ldap::channel_binding_type::tls_server_end_point } });
+	auto first = mech.start();
+	REQUIRE(first.has_value());
+	REQUIRE(first->has_value());
+	CHECK(hex_of(**first) == hex_of(negotiate));
+	auto second = mech.step(challenge);
+	REQUIRE(second.has_value());
+	REQUIRE(second->has_value());
+	CHECK(hex_of(**second) == hex_of(authenticate));
+	CHECK(mech.complete(std::nullopt).has_value());
+}
+
 TEST_CASE("ntlm: channel binding over TLS", "[sasl][ntlm]")
 {
 	const auto hash = cert_hash();

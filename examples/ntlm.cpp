@@ -4,18 +4,19 @@
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/corosio/io_context.hpp>
 
+#include <cstdlib>
 #include <iostream>
 
 namespace ldap = jhetz::ldap;
 
-auto run(boost::corosio::io_context &ioc, char *const *argv) -> boost::capy::task<int>
+auto run(boost::corosio::io_context &ioc, char *const *argv, const char *password) -> boost::capy::task<int>
 {
 	auto c = co_await ldap::connect(ioc, argv[1]);
 	if (!c) {
 		std::cerr << c.error().message() << '\n';
 		co_return 1;
 	}
-	ldap::sasl_ntlm ntlm(argv[2], argv[3]);
+	ldap::sasl_ntlm ntlm(argv[2], password);
 	auto bound = co_await c->sasl_bind(ntlm);
 	if (!bound) {
 		std::cerr << bound.error().message() << '\n';
@@ -32,13 +33,15 @@ auto run(boost::corosio::io_context &ioc, char *const *argv) -> boost::capy::tas
 
 auto main(int argc, char *const *argv) -> int
 {
-	if (argc != 4) {
-		std::cerr << "usage: ntlm ldaps://dc1.example.org 'EXAMPLE\\jdoe' password\n";
+	// NOLINTNEXTLINE(concurrency-mt-unsafe): single-threaded, nothing calls setenv
+	const char *password = std::getenv("LDAP_PASSWORD");
+	if (argc != 3 || password == nullptr) {
+		std::cerr << "usage: LDAP_PASSWORD=... ntlm ldaps://dc1.example.org 'EXAMPLE\\jdoe'\n";
 		return 2;
 	}
 	boost::corosio::io_context ioc;
 	int rc = 1;
-	boost::capy::run_async(ioc.get_executor(), [&](int r) { rc = r; })(run(ioc, argv));
+	boost::capy::run_async(ioc.get_executor(), [&](int r) { rc = r; })(run(ioc, argv, password));
 	ioc.run();
 	return rc;
 }
