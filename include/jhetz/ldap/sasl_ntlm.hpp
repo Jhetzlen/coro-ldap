@@ -149,8 +149,10 @@ class sasl_ntlm final : public sasl_mechanism
   public:
 	// `username`: "DOMAIN\user", "user@dns.domain" or "user" (see the
 	// header comment). The inputs are checked by start(), so the
-	// constructor cannot fail. The moved-from `password` argument is wiped
-	// too.
+	// constructor cannot fail. The `password` parameter is wiped once moved
+	// from (a short password's bytes would stay in its buffer). A string
+	// the caller moves into it is the caller's to wipe: moving out of a
+	// short string leaves its bytes behind.
 	sasl_ntlm(std::string username, std::string password, sasl_ntlm_options options = {});
 	~sasl_ntlm() override;
 

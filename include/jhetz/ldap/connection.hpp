@@ -432,7 +432,7 @@ class connection
 	// binds and ad_password_value(): the password passes through
 	// std::string copies (the arguments, the request's values, the encoded
 	// PDU in the connection's buffers) that the library cannot wipe all of.
-	// Only sasl_scram wipes what it holds.
+	// Only sasl_scram_sha256 and sasl_ntlm wipe what they hold.
 	auto change_password(dn user,
 	  std::string old_password,
 	  std::string new_password,

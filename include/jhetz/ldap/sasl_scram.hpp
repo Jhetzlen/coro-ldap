@@ -245,7 +245,10 @@ class sasl_scram_sha256 final : public sasl_mechanism
 	// with authz-regexp). `authz_id`: an identity to act as ("dn:...",
 	// "u:..."), empty: the authenticated identity itself. The inputs are
 	// checked by start(), so the constructors cannot fail.
-	// The moved-from `password` argument is wiped too.
+	// The `password` parameter is wiped once moved from (a short
+	// password's bytes would stay in its buffer). A string the caller moves
+	// into it is the caller's to wipe: moving out of a short string leaves
+	// its bytes behind.
 	sasl_scram_sha256(std::string username, std::string password, std::string authz_id = {});
 	sasl_scram_sha256(std::string username, std::string password, sasl_scram_options options);
 	~sasl_scram_sha256() override;

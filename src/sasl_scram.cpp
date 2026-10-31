@@ -512,11 +512,17 @@ sasl_scram_sha256::sasl_scram_sha256(std::string username, std::string password,
 	  std::move(password),
 	  sasl_scram_options{ .authz_id = std::move(authz_id) },
 	  std::nullopt)
-{}
+{
+	// This body runs after the target constructor: its moved-from argument,
+	// which may keep a short password in its buffer, is wiped here.
+	wipe_string(password);
+}
 
 sasl_scram_sha256::sasl_scram_sha256(std::string username, std::string password, sasl_scram_options options)
   : sasl_scram_sha256(std::move(username), std::move(password), std::move(options), std::nullopt)
-{}
+{
+	wipe_string(password);// as above
+}
 
 sasl_scram_sha256::sasl_scram_sha256(std::string username,
   std::string password,
