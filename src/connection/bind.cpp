@@ -50,6 +50,8 @@ namespace {
 	// error) the connection is already closed: a bind cannot be abandoned.
 	auto abort_sasl(impl_ref self, const std::string &context) -> capy::task<void>
 	{
+		// The anonymous bind's success installs no layer the exchange negotiated.
+		self->disarm_security_layer();
 		message request(std::pmr::polymorphic_allocator<>(self->mr()));
 		request.op = bind_request(3, {}, simple_auth(std::string_view(), self->mr()), self->mr());
 		auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
@@ -148,7 +150,9 @@ auto connection::sasl_bind(sasl_mechanism &mechanism, dn name) -> capy::task<res
 		self->mark_tls_exporter_used();
 	}
 	for (int step = 0;; ++step) {
-		if (creds) {
+		// Not at the limit: these credentials are never sent, and abort_sasl's
+		// anonymous bind must not install their layer.
+		if (creds && step < max_steps) {
 			if (auto armed = arm_security_layer(*self, mechanism); !armed) {
 				creds = std::unexpected(std::move(armed.error()));
 			}

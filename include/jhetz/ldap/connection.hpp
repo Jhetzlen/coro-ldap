@@ -276,7 +276,8 @@ class connection
 	// aborts the exchange with an anonymous simple bind (RFC 4511 section
 	// 4.2.1), before any held request is sent. A BindResponse to it ends
 	// the exchange, even a refusal (a server that disallows anonymous
-	// binds), and the connection stays usable (anonymous). The exception is
+	// binds), and the connection stays usable (anonymous, and with no SASL
+	// security layer, even one the mechanism negotiated). The exception is
 	// saslBindInProgress, which cannot answer a simple bind (RFC 4511
 	// section 4.2.2): then the connection is closed with
 	// unexpected_response, as it is for an answer that is not a

@@ -220,6 +220,7 @@ class connection::impl
 	// response, RFC 4513 section 5.2.1.4); any other BindResponse, or the
 	// end of the bind exchange, drops it.
 	void arm_security_layer(std::unique_ptr<sasl_security_layer> layer) noexcept { armed_layer = std::move(layer); }
+	void disarm_security_layer() noexcept { armed_layer.reset(); }
 
 	// Requests still to be answered: those waited for, and `due` answers.
 	auto outstanding() const noexcept -> std::size_t;

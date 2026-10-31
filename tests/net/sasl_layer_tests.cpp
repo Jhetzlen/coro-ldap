@@ -114,6 +114,7 @@ class layer_mechanism final : public ldap::sasl_mechanism
 	std::size_t max_wrap_input = std::size_t{ 1 } << 20;
 	std::shared_ptr<xor_layer::counts> counts = std::make_shared<xor_layer::counts>();
 	bool negotiates = true;
+	bool endless = false;// every step answers and negotiates a layer
 
 	[[nodiscard]] auto name() const noexcept -> std::string_view override { return "X-LAYER"; }
 	auto start() -> ldap::result<std::optional<std::string>> override
@@ -123,7 +124,11 @@ class layer_mechanism final : public ldap::sasl_mechanism
 	}
 	auto step(std::optional<std::string_view>) -> ldap::result<std::optional<std::string>> override
 	{
-		return ldap::fail(ldap::client_errc::unexpected_response, "one step");
+		if (!endless) {
+			return ldap::fail(ldap::client_errc::unexpected_response, "one step");
+		}
+		pending = negotiates;
+		return std::optional<std::string>("more");
 	}
 	auto take_security_layer() -> std::unique_ptr<ldap::sasl_security_layer> override
 	{
@@ -402,6 +407,29 @@ TEST_CASE("sasl layer: sasl_bind installs the negotiated layer", "[net][sasl][sa
 		CHECK(r.error().code == ldap::errc::invalid_credentials);
 		CHECK(m.conn.security_layer() == ldap::sasl_protection::none);
 		// The next PDUs go unprotected: the scripted server reads them as is.
+		CHECK(finish(m.ioc, m.conn.search(people_search())).has_value());
+		m.check_server();
+		CHECK(mech.counts->wraps == 0);
+	}
+	SECTION("an exchange given up after the last step installs nothing")
+	{
+		// The 33rd credentials, with a layer, are never sent: the anonymous
+		// bind that aborts the exchange succeeds and the connection stays
+		// unprotected, like the server's end.
+		mech.endless = true;
+		std::vector<step> script;
+		constexpr std::int32_t steps = 32;
+		for (std::int32_t id = 1; id <= steps; ++id) {
+			script.push_back(answer({ bind_resp(id, 14) }));
+		}
+		script.push_back(answer({ bind_resp(steps + 1) }));
+		script.push_back(answer({ done_msg(steps + 2) }));
+		m.serve(std::move(script));
+		auto r = finish(m.ioc, m.conn.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::unexpected_response);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("still in progress after 32 steps"));
+		CHECK(m.conn.security_layer() == ldap::sasl_protection::none);
 		CHECK(finish(m.ioc, m.conn.search(people_search())).has_value());
 		m.check_server();
 		CHECK(mech.counts->wraps == 0);
