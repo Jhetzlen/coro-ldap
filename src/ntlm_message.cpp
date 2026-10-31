@@ -216,9 +216,13 @@ namespace {
 		put16(out, trail_base + (v & surrogate_mask));
 	}
 
-	template<class Map> auto to_utf16le(std::string_view utf8, Map map) -> result<std::string>
+	// Into `out`, whose buffer is reserved once for the longest possible
+	// result (two octets per UTF-8 octet: a 1 to 3 octet sequence gives one
+	// UTF-16 unit, a 4 octet one two), so it is never reallocated and no
+	// freed buffer keeps a copy.
+	template<class Map> auto to_utf16le(std::string_view utf8, Map map, std::string &out) -> result<void>
 	{
-		std::string out;
+		out.clear();
 		out.reserve(utf8.size() * 2);
 		for (std::size_t i = 0; i < utf8.size();) {
 			const auto [c, n] = utf8_next(utf8, i);
@@ -227,6 +231,15 @@ namespace {
 			}
 			append_utf16le(out, static_cast<std::uint32_t>(map(c)));
 			i += n;
+		}
+		return {};
+	}
+
+	template<class Map> auto to_utf16le(std::string_view utf8, Map map) -> result<std::string>
+	{
+		std::string out;
+		if (auto r = to_utf16le(utf8, map, out); !r) {
+			return std::unexpected(std::move(r.error()));
 		}
 		return out;
 	}
@@ -526,6 +539,11 @@ auto parse_ntlm_authenticate(std::string_view message) -> result<ntlm_authentica
 auto ntlm_unicode(std::string_view utf8) -> result<std::string>
 {
 	return to_utf16le(utf8, [](UChar32 c) { return c; });
+}
+
+auto ntlm_unicode(std::string_view utf8, std::string &out) -> result<void>
+{
+	return to_utf16le(utf8, [](UChar32 c) { return c; }, out);
 }
 
 auto ntlm_uppercase_unicode(std::string_view utf8) -> result<std::string>

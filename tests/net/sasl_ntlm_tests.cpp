@@ -59,10 +59,43 @@ auto key_str(std::span<const unsigned char> k) -> std::string
 	return { reinterpret_cast<const char *>(k.data()), k.size() };
 }
 
-auto u16(std::string_view utf8) -> std::string { return *detail::ntlm_unicode(utf8); }
-
 constexpr detail::ntlm_challenge spec_server_challenge{ 0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF };
 constexpr detail::ntlm_challenge spec_client_challenge{ 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA };
+
+auto u16(std::string_view utf8) -> std::string { return *detail::ntlm_unicode(utf8); }
+
+// The out-parameter computations as values, for the checks.
+auto hmac_md5(std::span<const unsigned char> key, std::string_view data) -> ldap::result<detail::ntlm_key>
+{
+	detail::ntlm_key out{};
+	if (auto r = detail::ntlm_hmac_md5(key, data, out); !r) {
+		return std::unexpected(std::move(r.error()));
+	}
+	return out;
+}
+
+auto ntowfv2(std::string_view password, std::string_view user, std::string_view domain)
+  -> ldap::result<detail::ntlm_key>
+{
+	detail::ntlm_key out{};
+	if (auto r = detail::ntowfv2(password, user, domain, out); !r) {
+		return std::unexpected(std::move(r.error()));
+	}
+	return out;
+}
+
+auto compute_response(const detail::ntlm_key &key, std::string_view server_name, bool server_timestamp)
+  -> ldap::result<detail::ntlm_responses>
+{
+	detail::ntlm_responses out;
+	if (auto r = detail::ntlm_compute_response(
+		  key, spec_server_challenge, spec_client_challenge, 0, server_name, server_timestamp, out);
+	  !r) {
+		return std::unexpected(std::move(r.error()));
+	}
+	return out;
+}
+
 
 // MS-NLMP section 4.2.4's AV_PAIRs: MsvAvNbDomainName "Domain",
 // MsvAvNbComputerName "Server".
@@ -141,19 +174,19 @@ auto dc_verify(std::string_view negotiate,
 {
 	auto auth = detail::parse_ntlm_authenticate(authenticate);
 	REQUIRE(auth.has_value());
-	auto key = detail::ntowfv2(password, user, domain);
+	auto key = ntowfv2(password, user, domain);
 	REQUIRE(key.has_value());
 	const std::string &nt = auth->nt_challenge_response;
 	REQUIRE(nt.size() > 16 + 28 + 4);
 	const std::string temp = nt.substr(16);
-	auto proof = detail::ntlm_hmac_md5(*key, key_str(spec_server_challenge) + temp);
+	auto proof = hmac_md5(*key, key_str(spec_server_challenge) + temp);
 	REQUIRE(proof.has_value());
 	CHECK(hex_of(nt.substr(0, 16)) == hex_of(*proof));
-	auto session = detail::ntlm_hmac_md5(*key, key_str(*proof));
+	auto session = hmac_md5(*key, key_str(*proof));
 	REQUIRE(session.has_value());
 	std::string zeroed(authenticate);
 	zeroed.replace(detail::ntlm_authenticate_mic_offset, 16, 16, '\0');
-	auto mic = detail::ntlm_hmac_md5(*session, std::string(negotiate) + std::string(challenge) + zeroed);
+	auto mic = hmac_md5(*session, std::string(negotiate) + std::string(challenge) + zeroed);
 	REQUIRE(mic.has_value());
 	CHECK(hex_of(auth->mic) == hex_of(*mic));
 	// temp: 01 01 Z(6) Time ClientChallenge Z(4) ServerName Z(4).
@@ -199,15 +232,15 @@ const ldap::sasl_ntlm_options plain{ .require_tls = false };
 TEST_CASE("ntlm: the NTLMv2 test vectors of MS-NLMP section 4.2.4", "[sasl][ntlm][rfc]")
 {
 	// 4.2.4.1.1 NTOWFv2() and LMOWFv2().
-	auto key = detail::ntowfv2("Password", "User", "Domain");
+	auto key = ntowfv2("Password", "User", "Domain");
 	REQUIRE(key.has_value());
 	CHECK(hex_of(*key) == "0C 86 8A 40 3B FD 7A 93 A3 00 1E F2 2E F0 2E 3F");
 	// The user name is uppercased, the domain is not.
-	CHECK(detail::ntowfv2("Password", "USER", "Domain") == key);
-	CHECK(detail::ntowfv2("Password", "User", "DOMAIN") != key);
+	CHECK(ntowfv2("Password", "USER", "Domain") == key);
+	CHECK(ntowfv2("Password", "User", "DOMAIN") != key);
 
 	const std::string server_name = detail::encode_ntlm_av_pairs(spec_pairs());
-	auto r = detail::ntlm_compute_response(*key, spec_server_challenge, spec_client_challenge, 0, server_name, false);
+	auto r = compute_response(*key, server_name, false);
 	REQUIRE(r.has_value());
 	// 4.2.4.2.2 NTLMv2 Response: the NTProofStr, then temp.
 	CHECK(hex_of(r->nt_challenge_response.substr(0, 16)) == "68 CD 0A B8 51 E5 1C 96 AA BC 92 7B EB EF 6A 1C");
@@ -221,8 +254,7 @@ TEST_CASE("ntlm: the NTLMv2 test vectors of MS-NLMP section 4.2.4", "[sasl][ntlm
 	  hex_of(r->lm_challenge_response) == "86 C3 50 97 AC 9C EC 10 25 54 76 4A 57 CC CC 19 AA AA AA AA AA AA AA AA");
 
 	// With the server's MsvAvTimestamp the LmChallengeResponse is Z(24).
-	auto with_time =
-	  detail::ntlm_compute_response(*key, spec_server_challenge, spec_client_challenge, 0, server_name, true);
+	auto with_time = compute_response(*key, server_name, true);
 	REQUIRE(with_time.has_value());
 	CHECK(with_time->lm_challenge_response == std::string(24, '\0'));
 	CHECK(with_time->nt_challenge_response == r->nt_challenge_response);
@@ -280,9 +312,9 @@ TEST_CASE("ntlm: an NTLMv2 bind checked by the server", "[net][sasl][ntlm]")
 
 	SECTION("a wrong password does not verify")
 	{
-		auto wrong = detail::ntowfv2("passwort", "j\xC3\xB6rg", "EXAMPLE");
+		auto wrong = ntowfv2("passwort", "j\xC3\xB6rg", "EXAMPLE");
 		REQUIRE(wrong.has_value());
-		auto proof = detail::ntlm_hmac_md5(*wrong, key_str(spec_server_challenge) + temp);
+		auto proof = hmac_md5(*wrong, key_str(spec_server_challenge) + temp);
 		REQUIRE(proof.has_value());
 		CHECK(auth->nt_challenge_response.substr(0, 16) != key_str(*proof));
 	}
@@ -344,9 +376,9 @@ TEST_CASE("ntlm: user names, domains and random client challenges", "[net][sasl]
 		REQUIRE(auth.has_value());
 		REQUIRE(auth->lm_challenge_response.size() == 24);
 		CHECK(auth->lm_challenge_response.substr(16) == std::string(8, '\xAA'));
-		auto key = detail::ntowfv2("secret", "jdoe", "CORP");
+		auto key = ntowfv2("secret", "jdoe", "CORP");
 		REQUIRE(key.has_value());
-		auto lm = detail::ntlm_hmac_md5(*key, key_str(spec_server_challenge) + std::string(8, '\xAA'));
+		auto lm = hmac_md5(*key, key_str(spec_server_challenge) + std::string(8, '\xAA'));
 		REQUIRE(lm.has_value());
 		CHECK(auth->lm_challenge_response.substr(0, 16) == key_str(*lm));
 		// A FILETIME after 2020-01-01 (132223104000000000).

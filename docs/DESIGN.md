@@ -994,13 +994,19 @@ backslash, a UPN goes as the user name with no domain, and
 `sasl_ntlm_options::domain` overrides both. The password is wiped with
 `OPENSSL_cleanse` in the destructor, its UTF-16 form, the NT hash and
 NTOWFv2 once used (NTOWFv2 is computed in `start()` and wiped in
-`step()`, the SessionBaseKey after the MIC). `detail::md4` writes the NT
-hash straight into its caller's wiped buffer and zeroes its own working
-memory (the chaining state, each block's message words, the padded
-tail) through volatile stores, the codec having no `OPENSSL_cleanse`;
-what the compiler keeps in registers or spill slots is beyond its
-reach, as in any C or C++ hash. Tested: the MS-NLMP section
-4.2.4 NTLMv2 vectors (NTOWFv2, the NTProofStr and temp, SessionBaseKey,
+`step()`, the SessionBaseKey after the MIC). None of them is returned or
+moved by value, which would leave an unwiped copy in the callee's frame
+or in a moved-from short string: `ntlm_unicode(utf8, out)` converts the
+password into its wiped string (reserved once, never reallocated),
+`detail::ntowfv2`, `ntlm_hmac_md5` and `ntlm_compute_response` write
+NTOWFv2 and the SessionBaseKey into their caller's buffers, and
+`detail::md4` writes the NT hash straight into its caller's wiped
+buffer and zeroes its own working memory (the chaining state, each
+block's message words, the padded tail) through volatile stores, the
+codec having no `OPENSSL_cleanse`; OpenSSL's HMAC working state and
+what the compiler keeps in registers or spill slots are beyond its
+reach, as in any C or C++ hash. Tested: the MS-NLMP section 4.2.4
+NTLMv2 vectors (NTOWFv2, the NTProofStr and temp, SessionBaseKey,
 LMv2) and the section 4.2.4.3 CHALLENGE_MESSAGE, RFC 1320's MD4 suite,
 malformed CHALLENGE_MESSAGEs, and binds against the scripted mock server
 that recomputes the NTProofStr and the MIC as a domain controller would,

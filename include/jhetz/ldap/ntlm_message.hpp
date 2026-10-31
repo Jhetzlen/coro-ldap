@@ -200,6 +200,14 @@ inline constexpr std::size_t ntlm_authenticate_header_size = 88;
 // derives the NT hash from the password's UTF-16 as typed).
 [[nodiscard]] auto ntlm_unicode(std::string_view utf8) -> result<std::string>;
 
+// ntlm_unicode(utf8) into `out`, for a secret (the password): `out`'s
+// buffer is reserved once for the longest possible result, so it is never
+// reallocated, and nothing is moved or returned by value, so the only copy
+// is the one in `out` (also a partial one on failure), for the caller to
+// wipe. `out` should be empty with no capacity of its own: a buffer it
+// already holds is released by the reserve without being wiped.
+[[nodiscard]] auto ntlm_unicode(std::string_view utf8, std::string &out) -> result<void>;
+
 // UNICODE(Uppercase(s)), the user name of NTOWFv2: each code point of the
 // Basic Multilingual Plane by its simple (one-to-one) uppercase mapping
 // (ICU's u_toupper, UnicodeData's Simple_Uppercase_Mapping), then UTF-16LE.

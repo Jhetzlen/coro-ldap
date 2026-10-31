@@ -74,7 +74,11 @@
 //   given.
 // - The password is kept (to allow later binds with the same object) and
 //   wiped with OPENSSL_cleanse when the object is destroyed, as are its
-//   UTF-16 form and the derived keys once used.
+//   UTF-16 form, the NT hash, NTOWFv2 and the SessionBaseKey once used:
+//   each is built in place in its wiped buffer, never returned or moved
+//   by value (which would leave an unwiped copy behind). OpenSSL's HMAC
+//   working state, registers and spill slots are beyond the library's
+//   reach.
 //
 // Errors (contexts never contain the password, nor name the mechanism:
 // sasl_bind prefixes "sasl bind GSS-SPNEGO"):
@@ -214,17 +218,21 @@ namespace detail {
 
 	// The NTLMv2 computations of MS-NLMP section 3.3.2, exposed for the
 	// tests (the section 4.2.4 test vectors). client_errc::internal_error
-	// when OpenSSL fails.
+	// when OpenSSL fails. Each writes its keys into the caller's `out`
+	// rather than returning them, as md4 does: a key returned in a result
+	// is a copy of a local, left behind unwiped in the callee's frame.
 
-	// HMAC_MD5(key, data).
-	[[nodiscard]] auto ntlm_hmac_md5(std::span<const unsigned char> key, std::string_view data) -> result<ntlm_key>;
+	// HMAC_MD5(key, data), into `out`.
+	[[nodiscard]] auto ntlm_hmac_md5(std::span<const unsigned char> key, std::string_view data, ntlm_key &out)
+	  -> result<void>;
 
 	// NTOWFv2(Passwd, User, UserDom) = HMAC_MD5(MD4(UNICODE(Passwd)),
-	// UNICODE(ConcatenationOf(Uppercase(User), UserDom))), from UTF-8.
-	// client_errc::encode_error for ill-formed UTF-8.
+	// UNICODE(ConcatenationOf(Uppercase(User), UserDom))), from UTF-8, into
+	// `out`. The password's UTF-16 and the NT hash are wiped before it
+	// returns. client_errc::encode_error for ill-formed UTF-8.
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): MS-NLMP's NTOWFv2(Passwd, User, UserDom)
-	[[nodiscard]] auto ntowfv2(std::string_view password, std::string_view user, std::string_view domain)
-	  -> result<ntlm_key>;
+	[[nodiscard]] auto ntowfv2(std::string_view password, std::string_view user, std::string_view domain, ntlm_key &out)
+	  -> result<void>;
 
 	// What ComputeResponse gives (MS-NLMP section 3.3.2):
 	// NtChallengeResponse (NTProofStr, then the temp structure),
@@ -238,15 +246,18 @@ namespace detail {
 
 	// ComputeResponse with ResponseKeyNT = ResponseKeyLM = `response_key`
 	// (NTOWFv2), `time` (a FILETIME) and `server_name` (the AV_PAIR list
-	// the client sends, encode_ntlm_av_pairs). `server_timestamp`: `time`
-	// is the server's MsvAvTimestamp, and then the LmChallengeResponse is
-	// Z(24) (MS-NLMP section 3.1.5.1.2), the LMv2 response otherwise.
+	// the client sends, encode_ntlm_av_pairs), into `out` (the
+	// SessionBaseKey is the caller's to wipe, also on failure).
+	// `server_timestamp`: `time` is the server's MsvAvTimestamp, and then
+	// the LmChallengeResponse is Z(24) (MS-NLMP section 3.1.5.1.2), the LMv2
+	// response otherwise.
 	[[nodiscard]] auto ntlm_compute_response(const ntlm_key &response_key,
 	  const ntlm_challenge &server_challenge,
 	  const ntlm_challenge &client_challenge,
 	  std::uint64_t time,
 	  std::string_view server_name,
-	  bool server_timestamp) -> result<ntlm_responses>;
+	  bool server_timestamp,
+	  ntlm_responses &out) -> result<void>;
 
 	// The MsvAvChannelBindings value: MD5 of a gss_channel_bindings_struct
 	// with no addresses (initiator and acceptor address types and lengths

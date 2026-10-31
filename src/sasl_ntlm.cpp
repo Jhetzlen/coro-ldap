@@ -72,13 +72,14 @@ namespace {
 		s.clear();
 	}
 
-	// A string holding key material or the password's UTF-16, wiped when
-	// it goes out of scope.
+	// A string holding the password's UTF-16, wiped when it goes out of
+	// scope. It is filled in place (ntlm_unicode's out-parameter form), never
+	// moved from another string, which would leave the short-string bytes
+	// behind in the source.
 	struct wiped_string
 	{
 		std::string s;
 		wiped_string() = default;
-		explicit wiped_string(std::string v) noexcept : s(std::move(v)) {}
 		wiped_string(const wiped_string &) = delete;
 		auto operator=(const wiped_string &) -> wiped_string & = delete;
 		~wiped_string() { wipe_string(s); }
@@ -145,9 +146,8 @@ namespace {
 
 namespace detail {
 
-	auto ntlm_hmac_md5(std::span<const unsigned char> key, std::string_view data) -> result<ntlm_key>
+	auto ntlm_hmac_md5(std::span<const unsigned char> key, std::string_view data, ntlm_key &out) -> result<void>
 	{
-		ntlm_key out{};
 		unsigned int n = 0;
 		const unsigned char *r = HMAC(EVP_md5(),
 		  key.data(),
@@ -159,18 +159,17 @@ namespace detail {
 		if (r == nullptr || n != out.size()) {
 			return library_error("OpenSSL HMAC-MD5 failed");
 		}
-		return out;
+		return {};
 	}
 
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): MS-NLMP's NTOWFv2(Passwd, User, UserDom)
-	auto ntowfv2(std::string_view password, std::string_view user, std::string_view domain) -> result<ntlm_key>
+	auto ntowfv2(std::string_view password, std::string_view user, std::string_view domain, ntlm_key &out)
+	  -> result<void>
 	{
-		auto unicode_password = ntlm_unicode(password);
-		if (!unicode_password) {
+		wiped_string pw;
+		if (!ntlm_unicode(password, pw.s)) {// in place: no copy to wipe
 			return input_error("the password is not valid UTF-8");
 		}
-		const wiped_string pw(std::move(*unicode_password));
-		wipe_string(*unicode_password);// what a move out of a short string leaves
 		wiped_key nt_hash;
 		md4(std::as_bytes(std::span(pw.s)), nt_hash.k);// in place: no temporary copy
 		auto upper_user = ntlm_uppercase_unicode(user);
@@ -181,7 +180,7 @@ namespace detail {
 		if (!unicode_domain) {
 			return input_error("the domain is not valid UTF-8");
 		}
-		return ntlm_hmac_md5(nt_hash.k, *upper_user + *unicode_domain);
+		return ntlm_hmac_md5(nt_hash.k, *upper_user + *unicode_domain, out);
 	}
 
 	auto ntlm_compute_response(const ntlm_key &response_key,
@@ -189,7 +188,8 @@ namespace detail {
 	  const ntlm_challenge &client_challenge,
 	  std::uint64_t time,
 	  std::string_view server_name,
-	  bool server_timestamp) -> result<ntlm_responses>
+	  bool server_timestamp,
+	  ntlm_responses &out) -> result<void>
 	{
 		constexpr std::size_t z6 = 6;
 		constexpr std::size_t z4 = 4;
@@ -204,33 +204,31 @@ namespace detail {
 		temp += server_name;
 		temp.append(z4, '\0');
 
-		ntlm_responses out;
 		// NTProofStr = HMAC_MD5(ResponseKeyNT, ConcatenationOf(ServerChallenge, temp))
-		auto proof = ntlm_hmac_md5(response_key, std::string(as_chars(server_challenge)) + temp);
-		if (!proof) {
-			return std::unexpected(std::move(proof.error()));
+		ntlm_key proof{};// not secret: it goes on the wire
+		if (auto r = ntlm_hmac_md5(response_key, std::string(as_chars(server_challenge)) + temp, proof); !r) {
+			return r;
 		}
-		out.nt_challenge_response = std::string(as_chars(*proof)) + temp;
-		// SessionBaseKey = HMAC_MD5(ResponseKeyNT, NTProofStr)
-		auto session = ntlm_hmac_md5(response_key, as_chars(*proof));
-		if (!session) {
-			return std::unexpected(std::move(session.error()));
+		out.nt_challenge_response = std::string(as_chars(proof)) + temp;
+		// SessionBaseKey = HMAC_MD5(ResponseKeyNT, NTProofStr), straight
+		// into the caller's storage
+		if (auto r = ntlm_hmac_md5(response_key, as_chars(proof), out.session_base_key); !r) {
+			return r;
 		}
-		out.session_base_key = *session;
-		OPENSSL_cleanse(session->data(), session->size());
 		if (server_timestamp) {
 			out.lm_challenge_response.assign(z24, '\0');
-			return out;
+			return {};
 		}
 		// LmChallengeResponse = ConcatenationOf(HMAC_MD5(ResponseKeyLM,
 		//   ConcatenationOf(ServerChallenge, ClientChallenge)), ClientChallenge)
-		auto lm = ntlm_hmac_md5(
-		  response_key, std::string(as_chars(server_challenge)) + std::string(as_chars(client_challenge)));
-		if (!lm) {
-			return std::unexpected(std::move(lm.error()));
+		ntlm_key lm{};// not secret: it goes on the wire
+		if (auto r = ntlm_hmac_md5(
+			  response_key, std::string(as_chars(server_challenge)) + std::string(as_chars(client_challenge)), lm);
+		  !r) {
+			return r;
 		}
-		out.lm_challenge_response = std::string(as_chars(*lm)) + std::string(as_chars(client_challenge));
-		return out;
+		out.lm_challenge_response = std::string(as_chars(lm)) + std::string(as_chars(client_challenge));
+		return {};
 	}
 
 	auto ntlm_channel_bindings_hash(std::string_view application_data) -> result<ntlm_key>
@@ -341,12 +339,10 @@ auto sasl_ntlm::start() -> result<std::optional<std::string>>
 		return input_error("the target is longer than 65535 octets in UTF-16");
 	}
 	// The password last: NTOWFv2 needs only it, the user and the domain.
-	auto key = detail::ntowfv2(password_, user, domain);
-	if (!key) {
-		return std::unexpected(std::move(key.error()));
+	if (auto r = detail::ntowfv2(password_, user, domain, response_key_); !r) {
+		wipe();
+		return std::unexpected(std::move(r.error()));
 	}
-	response_key_ = *key;
-	OPENSSL_cleanse(key->data(), key->size());
 	negotiate_ = detail::encode_ntlm_negotiate(client_flags, client_version);
 	state_ = state::sent_negotiate;
 	return std::optional<std::string>(negotiate_);
@@ -397,23 +393,25 @@ auto sasl_ntlm::step(std::optional<std::string_view> challenge) -> result<std::o
 		return library_error("OpenSSL RAND_bytes failed");
 	}
 	const auto info = detail::ntlm_client_target_info(c.target_info, true, bindings, target_);
-	auto responses = detail::ntlm_compute_response(response_key.k,
+	detail::ntlm_responses responses;
+	auto computed = detail::ntlm_compute_response(response_key.k,
 	  c.server_challenge,
 	  client_challenge,
 	  time,
 	  detail::encode_ntlm_av_pairs(info),
-	  server_time.has_value());
-	if (!responses) {
-		return std::unexpected(std::move(responses.error()));
-	}
+	  server_time.has_value(),
+	  responses);
 	// No key exchange: the exported session key is the KeyExchangeKey,
 	// which NTLMv2 makes the SessionBaseKey (MS-NLMP section 3.4.5.1).
-	const wiped_key exported(responses->session_base_key);
-	OPENSSL_cleanse(responses->session_base_key.data(), responses->session_base_key.size());
+	const wiped_key exported(responses.session_base_key);
+	OPENSSL_cleanse(responses.session_base_key.data(), responses.session_base_key.size());
+	if (!computed) {
+		return std::unexpected(std::move(computed.error()));
+	}
 
 	const detail::ntlm_authenticate_message message{
-		.lm_challenge_response = std::move(responses->lm_challenge_response),
-		.nt_challenge_response = std::move(responses->nt_challenge_response),
+		.lm_challenge_response = std::move(responses.lm_challenge_response),
+		.nt_challenge_response = std::move(responses.nt_challenge_response),
 		.domain_name = domain_,
 		.user_name = user_,
 		.workstation = workstation_,
@@ -429,12 +427,12 @@ auto sasl_ntlm::step(std::optional<std::string_view> challenge) -> result<std::o
 	}
 	// MIC = HMAC_MD5(ExportedSessionKey, ConcatenationOf(NEGOTIATE_MESSAGE,
 	//   CHALLENGE_MESSAGE, AUTHENTICATE_MESSAGE)), its own field zero.
-	auto mic = detail::ntlm_hmac_md5(exported.k, negotiate_ + std::string(*challenge) + *authenticate);
-	if (!mic) {
-		return std::unexpected(std::move(mic.error()));
+	ntlm_key mic{};// not secret: it goes on the wire
+	if (auto r = detail::ntlm_hmac_md5(exported.k, negotiate_ + std::string(*challenge) + *authenticate, mic); !r) {
+		return std::unexpected(std::move(r.error()));
 	}
 	std::ranges::copy(
-	  as_chars(*mic), authenticate->begin() + static_cast<std::ptrdiff_t>(detail::ntlm_authenticate_mic_offset));
+	  as_chars(mic), authenticate->begin() + static_cast<std::ptrdiff_t>(detail::ntlm_authenticate_mic_offset));
 	negotiate_.clear();
 	state_ = state::sent_authenticate;
 	return std::optional<std::string>(std::move(*authenticate));

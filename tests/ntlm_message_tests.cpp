@@ -119,6 +119,18 @@ TEST_CASE("ntlm: UTF-8 to UTF-16LE, and the user name's uppercase", "[ntlm]")
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::encode_error);
 		CHECK_FALSE(detail::ntlm_uppercase_unicode(bad).has_value());
+		std::string into;
+		auto in_place = detail::ntlm_unicode(bad, into);
+		REQUIRE_FALSE(in_place.has_value());
+		CHECK(in_place.error().code == ldap::client_errc::encode_error);
+	}
+	// The in-place form (the password's), reserved once for the longest
+	// result: the four-octet sequence gives four octets too.
+	for (const std::string_view text : { "", "Ab", "p\xC3\xA4sswort\xE2\x82\xAC", "\xF0\x9F\x98\x80" }) {
+		std::string into;
+		REQUIRE(detail::ntlm_unicode(text, into).has_value());
+		CHECK(into == detail::ntlm_unicode(text));
+		CHECK(into.capacity() >= text.size() * 2);
 	}
 
 	CHECK(detail::ntlm_uppercase_unicode("User") == detail::ntlm_unicode("USER"));
