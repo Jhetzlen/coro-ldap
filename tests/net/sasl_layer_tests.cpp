@@ -5,6 +5,7 @@
 // tested end to end against an MIT acceptor
 // (tests/integration/gssapi_layer_tests.cpp).
 #include "../../src/net/sasl_layer.hpp"
+#include "../counting_resource.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/sasl.hpp"
@@ -12,6 +13,7 @@
 #include "net_test_support.hpp"
 
 #include <boost/capy/read.hpp>
+#include <boost/capy/test/stream.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -25,6 +27,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -80,6 +83,7 @@ class xor_layer final : public ldap::sasl_security_layer
 		if (buffer.empty() || buffer[0] != marker) {
 			return ldap::fail(ldap::client_errc::decode_error, "bad marker");
 		}
+		out.reserve(out.size() + buffer.size() - 1);
 		for (auto b : buffer.subspan(1)) {
 			out.push_back(b ^ key);
 		}
@@ -288,6 +292,39 @@ TEST_CASE("sasl layer: incoming buffers are unwrapped", "[net][sasl][sasl_layer]
 		sockets.server.close();
 		drive(ioc);
 	}
+}
+
+TEST_CASE("sasl layer: a big buffer read in small pieces grows the read buffer once", "[net][sasl][sasl_layer]")
+{
+	// TCP-sized reads of a 64 KiB buffer: the layer's read buffer asks for
+	// exactly the buffer's rest once its length is in, so it grows once to
+	// the buffer's size instead of on every short read of its last 16 KiB.
+	corosio::io_context ioc;
+	ldap::test::counting_resource counting;
+	auto [a, b] = capy::test::make_stream_pair();
+	constexpr std::size_t segment = 1448;
+	a.set_max_read_size(segment);
+	auto client = net::transport::wrap(std::move(a), "client", &counting);
+	net::read_buffer buf;
+	REQUIRE(net::detail::install_security_layer(client, buf, std::make_unique<xor_layer>()).has_value());
+	const std::string plaintext(std::size_t{ 64 } * 1024, 'p');
+	b.provide(frame(plaintext));
+
+	const auto allocations = counting.allocations();
+	const auto bytes = counting.bytes();
+	auto got = run(ioc, [](net::transport &t, std::size_t want) -> capy::task<std::string> {
+		std::string out(want, '\0');
+		auto [ec, n] = co_await capy::read(t.stream(), capy::mutable_buffer(out.data(), out.size()));
+		if (ec) {
+			throw std::system_error(ec, "read");
+		}
+		out.resize(n);
+		co_return out;
+	}(client, plaintext.size()));
+	CHECK(got == plaintext);
+	// The read buffer's first 16 KiB, its one growth, the plaintext.
+	CHECK(counting.allocations() - allocations <= 3);
+	CHECK(counting.bytes() - bytes < 2 * (plaintext.size() + net::read_buffer::min_read));
 }
 
 TEST_CASE("sasl layer: a cancelled read keeps the partial buffer", "[net][sasl][sasl_layer]")

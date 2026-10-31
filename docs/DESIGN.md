@@ -818,14 +818,17 @@ frames each buffer with a four-octet big-endian length (RFC 4422 section
 3.7), cuts writes to `max_wrap_input()`, refuses a length above
 `max_received()` before reading the body (`message_too_large`: RFC 4422
 "SHOULD close the connection"), keeps a partial buffer across a
-cancelled read (its received bytes in a `read_buffer`: no zero-fill per
-short read, no memmove per buffer), fails a write on a layer whose
-`max_wrap_input()` is 0 (`encode_error`, rather than loop), and its
-failures keep their context, each direction its own ("read <name>: SASL
-security layer: gss_unwrap: ...", "write <name> (N of M bytes written):
-SASL security layer: a protected buffer cut after K of its L octets":
-the count is in plaintext octets whose buffers went out whole). The knowledge cached from the server
-is forgotten (RFC 4513 section 5.2.1.6). `start_tls()` with a layer
+cancelled read (its received bytes in a `read_buffer` that, as in
+`read_frame`, asks for exactly the rest of a buffer once its length is
+in: it grows at most once per buffer, with no copy or zero-fill per
+short read, and no front erase per buffer), fails a write on a layer
+whose `max_wrap_input()` is 0 (`encode_error`, rather than loop), and
+its failures keep their context, each direction its own ("read <name>:
+SASL security layer: gss_unwrap: ...", "write <name> (N of M bytes
+written): SASL security layer: a protected buffer cut after K of its L
+octets": the count is in plaintext octets whose buffers went out whole).
+The knowledge cached from the server is forgotten (RFC 4513 section
+5.2.1.6). `start_tls()` with a layer
 fails (`security_layer_in_effect`: TLS would have to go below the layer,
 which this library does not do), and so does a second layer (a bind
 that negotiates one; one without a layer leaves it in place, RFC 4513

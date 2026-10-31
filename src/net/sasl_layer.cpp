@@ -15,8 +15,8 @@ namespace capy = boost::capy;
 namespace jhetz::ldap::net::detail {
 namespace {
 
-	// What one read of the inner stream asks for at least: a buffer's rest,
-	// or this much while its length is incomplete.
+	// What the read buffer holds room for at least while a buffer's length
+	// is incomplete (then: the buffer's rest).
 	constexpr std::size_t read_chunk = std::size_t{ 16 } * 1024;
 
 	constexpr unsigned byte_bits = 8;
@@ -89,12 +89,14 @@ auto sasl_layer_stream::fill() -> capy::io_task<>
 		if (done) {
 			continue;// an empty buffer delivers nothing: the next one
 		}
-		// The buffer's rest (prepare() gives at least that, without
-		// zero-filling it again on every short read), or a chunk.
-		std::size_t want = read_chunk;
-		if (in_.size() >= sasl_length_size) {
-			want = std::max(want, sasl_length_size + read_length(in_.data()) - in_.size());
-		}
+		// Room for exactly the rest of this buffer (or, while its length is
+		// incomplete, for read_chunk bytes in all), as in read_frame: asking
+		// for more would reallocate and copy the partial buffer on every
+		// short read near its end. prepare() hands all its free space, so
+		// the next buffers still fill what is beyond.
+		const std::size_t have = in_.size();
+		const std::size_t want =
+		  have >= sasl_length_size ? sasl_length_size + read_length(in_.data()) - have : read_chunk - have;
 		const auto space = in_.prepare(want);
 		auto [ec, n] = co_await inner_->read_some(capy::mutable_buffer(space.data(), space.size()));
 		in_.commit(n);
