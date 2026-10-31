@@ -48,17 +48,21 @@ namespace {
 	  | detail::ntlmssp_negotiate_version | detail::ntlmssp_negotiate_128;
 
 	// What a security layer adds (MS-NLMP section 3.4): signing with key
-	// exchange, and sealing for confidentiality.
+	// exchange, and sealing for confidentiality; NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+	// too, which "MUST be set in the NEGOTIATE_MESSAGE" (section 2.2.2.5,
+	// flag M) and which SIGN and SEAL override.
+	constexpr std::uint32_t signing_flags =
+	  detail::ntlmssp_negotiate_always_sign | detail::ntlmssp_negotiate_sign | detail::ntlmssp_negotiate_key_exch;
+
 	auto requested_flags(sasl_protection layer) -> std::uint32_t
 	{
 		switch (layer) {
 		case sasl_protection::none:
 			break;
 		case sasl_protection::integrity:
-			return client_flags | detail::ntlmssp_negotiate_sign | detail::ntlmssp_negotiate_key_exch;
+			return client_flags | signing_flags;
 		case sasl_protection::confidentiality:
-			return client_flags | detail::ntlmssp_negotiate_sign | detail::ntlmssp_negotiate_seal
-				   | detail::ntlmssp_negotiate_key_exch;
+			return client_flags | signing_flags | detail::ntlmssp_negotiate_seal;
 		}
 		return client_flags;
 	}
@@ -415,9 +419,13 @@ namespace detail {
 			server_handle_.apply(covered.subspan(4));
 		}
 		auto checksum = parsed->signature.checksum;
-		server_handle_.apply(checksum);
 		ntlm_key mac{};
-		const scope_exit wipe_mac([&mac] { OPENSSL_cleanse(mac.data(), mac.size()); });
+		// The decrypted checksum is the server's MAC: wiped with the computed one.
+		const scope_exit wipe_macs([&mac, &checksum] {
+			OPENSSL_cleanse(mac.data(), mac.size());
+			OPENSSL_cleanse(checksum.data(), checksum.size());
+		});
+		server_handle_.apply(checksum);
 		if (auto r = ntlm_hmac_md5(server_signing_key_, as_chars(covered), mac); !r) {
 			out.resize(base);
 			return r;

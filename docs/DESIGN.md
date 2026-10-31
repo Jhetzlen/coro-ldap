@@ -1020,11 +1020,12 @@ extended session security, key exchange and 128-bit keys only) is opt-in:
 `sasl_ntlm_options::security_layer` is a `sasl_protection`, none by
 default, integrity (signing) or confidentiality (signing and sealing),
 for AD's "LDAP server signing requirements" on plain ldap://. It adds
-NTLMSSP_NEGOTIATE_SIGN and KEY_EXCH (0x62880215), and SEAL for
-confidentiality (0x62880235); a CHALLENGE_MESSAGE that does not grant
-SIGN, KEY_EXCH and 128 (and SEAL) fails `step()` with
-`security_layer_unavailable` before the AUTHENTICATE_MESSAGE, as GSSAPI's
-selection does. The client then picks a random ExportedSessionKey
+NTLMSSP_NEGOTIATE_SIGN, KEY_EXCH and ALWAYS_SIGN (which MS-NLMP 2.2.2.5
+says MUST be set in the NEGOTIATE_MESSAGE, SIGN overriding it;
+0x62888215), and SEAL for confidentiality (0x62888235); a
+CHALLENGE_MESSAGE that does not grant SIGN, KEY_EXCH and 128 (and SEAL)
+fails `step()` with `security_layer_unavailable` before the
+AUTHENTICATE_MESSAGE, as GSSAPI's selection does. The client then picks a random ExportedSessionKey
 (`RAND_bytes`), sends RC4K(SessionBaseKey, it) as
 EncryptedRandomSessionKey, keys the MIC with it, and derives the four
 keys (SIGNKEY, SEALKEY: MD5 of the key and the magic constant with its
@@ -1072,9 +1073,10 @@ EncryptedRandomSessionKey encrypted in place from a copy, the four
 derived keys go into a wiped `ntlm_session_keys` (their MD5 input in a
 wiped string) and are copied into the layer, which wipes its signing keys
 and RC4 states when the connection drops it; each MAC is wiped after
-use. The protected buffer's signature parser is in the codec and fuzzed
-(`ntlm_fuzz`, with RC4); the checksum and sequence checks need OpenSSL's
-HMAC-MD5 and are unit-tested. Tested: MS-NLMP 4.2.4.2.3 (the
+use (unwrap()'s computed one and the server's, once decrypted). The
+protected buffer's signature parser is in the codec and fuzzed (`ntlm_fuzz`,
+with RC4); the checksum and sequence checks need OpenSSL's HMAC-MD5 and
+are unit-tested. Tested: MS-NLMP 4.2.4.2.3 (the
 EncryptedRandomSessionKey) and 4.2.4.4 (the client-to-server sealing and
 signing keys, the sealed "Plaintext" and its signature), a golden exchange
 and three buffers (two client buffers through one handle, the server's

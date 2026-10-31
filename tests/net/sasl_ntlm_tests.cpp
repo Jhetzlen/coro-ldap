@@ -890,18 +890,18 @@ TEST_CASE("ntlm: a golden security layer from an independent implementation", "[
 	// The output of tests/net/ntlm_golden.py's second part (see the golden
 	// AUTHENTICATE_MESSAGE test for what it copies from the library): the
 	// same user, password, workstation, target, challenges and timestamp,
-	// no TLS (MsvAvChannelBindings Z(16)), confidentiality (SIGN, SEAL,
-	// KEY_EXCH), the ExportedSessionKey 00 11 .. FF; then two client
+	// no TLS (MsvAvChannelBindings Z(16)), confidentiality (ALWAYS_SIGN, SIGN,
+	// SEAL, KEY_EXCH), the ExportedSessionKey 00 11 .. FF; then two client
 	// buffers through one handle and the server's through the other.
 	const std::string negotiate =
-	  str("4e544c4d53535000010000003502886200000000280000000000000028000000000000000000000f");
+	  str("4e544c4d53535000010000003582886200000000280000000000000028000000000000000000000f");
 	const std::string challenge = str(
 	  "4e544c4d53535000020000000e000e0038000000358289e20123456789abcdef00000000000000003000300046000000"
 	  "0a007c4f0000000f4500580041004d0050004c00450002000c0044006f006d00610069006e0001000c00530065007200"
 	  "76006500720007000800706f5e4d3c2bdb0100000000");
 	const std::string authenticate = str(
 	  "4e544c4d53535000030000001800180070000000a800a800880000000800080058000000080008006000000008000800"
-	  "68000000100010003001000035028862000000000000000f9d3996e670b82d4880f07eb71c21fae643004f0052005000"
+	  "68000000100010003001000035828862000000000000000f1a80c2321ae73df95f2fd245d2e3abd443004f0052005000"
 	  "6a00f60072006700570053003000310000000000000000000000000000000000000000000000000016bbee80e7babb4c"
 	  "50865c80b662ceeb0101000000000000706f5e4d3c2bdb01aaaaaaaaaaaaaaaa0000000002000c0044006f006d006100"
 	  "69006e0001000c0053006500720076006500720007000800706f5e4d3c2bdb0106000400020000000a00100000000000"
@@ -1078,8 +1078,8 @@ TEST_CASE("ntlm: a security layer the server does not grant", "[net][sasl][ntlm]
 	REQUIRE(m.log.received.size() == 2);
 	auto auth = detail::parse_ntlm_authenticate(sasl_creds(m.log.received[1]));
 	REQUIRE(auth.has_value());
-	// SIGN, KEY_EXCH and the rest both sides set.
-	CHECK(auth->negotiate_flags == 0x6288'0215u);
+	// ALWAYS_SIGN, SIGN, KEY_EXCH and the rest both sides set.
+	CHECK(auth->negotiate_flags == 0x6288'8215u);
 	CHECK(auth->encrypted_random_session_key.size() == 16);
 }
 
@@ -1098,18 +1098,18 @@ TEST_CASE("ntlm: a security layer only without TLS", "[sasl][ntlm]")
 			 "sasl_ntlm_options::security_layer)");
 
 	// Without TLS require_tls (true here) is not consulted, and the
-	// NEGOTIATE_MESSAGE asks for SIGN and KEY_EXCH (and SEAL).
+	// NEGOTIATE_MESSAGE asks for ALWAYS_SIGN, SIGN and KEY_EXCH (and SEAL).
 	mech.prepare({ .host = "dc1" });
 	auto integrity = mech.start();
 	REQUIRE(integrity.has_value());
 	REQUIRE(integrity->has_value());
-	CHECK(get_le32(std::string_view(**integrity).substr(12, 4)) == 0x6288'0215u);
+	CHECK(get_le32(std::string_view(**integrity).substr(12, 4)) == 0x6288'8215u);
 	ldap::sasl_ntlm sealing("CORP\\jdoe", "secret", { .security_layer = ldap::sasl_protection::confidentiality });
 	sealing.prepare({});
 	auto confidentiality = sealing.start();
 	REQUIRE(confidentiality.has_value());
 	REQUIRE(confidentiality->has_value());
-	CHECK(get_le32(std::string_view(**confidentiality).substr(12, 4)) == 0x6288'0235u);
+	CHECK(get_le32(std::string_view(**confidentiality).substr(12, 4)) == 0x6288'8235u);
 
 	ldap::sasl_ntlm small(
 	  "CORP\\jdoe", "secret", { .security_layer = ldap::sasl_protection::integrity, .max_receive_size = 15 });

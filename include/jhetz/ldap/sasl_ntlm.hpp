@@ -32,7 +32,9 @@
 //   ALWAYS_SIGN nor KEY_EXCH), so the session after the bind is protected
 //   only by TLS, if any. With sasl_protection::integrity the NEGOTIATE_MESSAGE
 //   adds NTLMSSP_NEGOTIATE_SIGN and NTLMSSP_NEGOTIATE_KEY_EXCH (with 128-bit
-//   keys, NTLMSSP_NEGOTIATE_128, always asked for), with confidentiality
+//   keys, NTLMSSP_NEGOTIATE_128, always asked for) and
+//   NTLMSSP_NEGOTIATE_ALWAYS_SIGN (MS-NLMP section 2.2.2.5: it MUST be set
+//   in the NEGOTIATE_MESSAGE; SIGN overrides it), with confidentiality
 //   NTLMSSP_NEGOTIATE_SEAL too; a CHALLENGE_MESSAGE that does not grant
 //   them all fails the bind with client_errc::security_layer_unavailable
 //   (cond::access_denied) before the AUTHENTICATE_MESSAGE is sent. The

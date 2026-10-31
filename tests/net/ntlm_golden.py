@@ -260,7 +260,9 @@ class RC4:
 # RFC 6229 section 2, the 40-bit key's keystream at offset 0.
 assert RC4(bytes.fromhex("0102030405"))(b"\0" * 16).hex() == "b2396305f03dc027ccc3524a0a1118a8"
 
-layer_client_flags = client_flags | SIGN | SEAL | KEY_EXCH
+# NTLMSSP_NEGOTIATE_ALWAYS_SIGN MUST be set in the NEGOTIATE_MESSAGE
+# (MS-NLMP 2.2.2.5 flag M); SIGN and SEAL override it.
+layer_client_flags = client_flags | ALWAYS_SIGN | SIGN | SEAL | KEY_EXCH
 negotiate2 = (b"NTLMSSP\0" + struct.pack("<II", 1, layer_client_flags) + fields(0, 40) + fields(0, 40)
               + version(0, 0, 0))
 layer_dc_flags = dc_flags | SIGN | SEAL | KEY_EXCH
