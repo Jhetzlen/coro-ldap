@@ -482,4 +482,8 @@ costs about 0.3 ms of that.
 
 `tests/message_golden_tests.cpp` compares the codec with encodings produced
 by an independent implementation (ldap3 2.9.1 / pyasn1 0.6.4); the generating
-script is in the file.
+script is in the file. The NTLMv2 golden NEGOTIATE, CHALLENGE and
+AUTHENTICATE messages of `tests/net/sasl_ntlm_tests.cpp` come from
+`tests/net/ntlm_golden.py` (written from MS-NLMP, stdlib only; run it with
+`python3 -I`); the test comment lists the client choices it copies from the
+library.

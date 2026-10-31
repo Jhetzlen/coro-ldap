@@ -411,17 +411,30 @@ TEST_CASE("ntlm: TLS is required by default", "[net][sasl][ntlm]")
 
 TEST_CASE("ntlm: a golden AUTHENTICATE_MESSAGE from an independent implementation", "[sasl][ntlm][rfc]")
 {
-	// The three messages were computed by a standalone Python script written
-	// from MS-NLMP alone (stdlib hashlib/hmac, its own RFC 1320 MD4 checked
-	// against RFC 1320's and MS-NLMP 4.2.4.1.1's vectors), none of this
-	// library's code: user "CORP\jörg", password "pässwort€", workstation
-	// "WS01", MsvAvTargetName "ldap/dc1.example.org", ClientChallenge AA*8,
-	// the server's MsvAvTimestamp 0x01DB2B3C4D5E6F70 (so LmChallengeResponse
-	// is Z(24)), MsvAvChannelBindings over tls-server-end-point 00 01 .. 1F.
-	// Where MS-NLMP leaves a choice (the payload order, the client's AV_PAIR
-	// order), the script makes this library's. It anchors the MIC (offset
-	// 72, HMAC_MD5(ExportedSessionKey, NEGOTIATE || CHALLENGE ||
-	// AUTHENTICATE with a zero MIC)), which the 4.2.4 vectors do not cover.
+	// The three messages are the output of tests/net/ntlm_golden.py (run it
+	// with python3 -I), a standalone script written from MS-NLMP alone
+	// (stdlib hashlib/hmac, its own RFC 1320 MD4 checked against RFC 1320's
+	// and MS-NLMP 4.2.4.1.1's vectors), none of this library's code: user
+	// "CORP\jörg", password "pässwort€", workstation "WS01", MsvAvTargetName
+	// "ldap/dc1.example.org", ClientChallenge AA*8, the server's
+	// MsvAvTimestamp 0x01DB2B3C4D5E6F70 (so LmChallengeResponse is Z(24)),
+	// MsvAvChannelBindings over tls-server-end-point 00 01 .. 1F.
+	// Where MS-NLMP leaves the choice to the client, the script copies this
+	// library's, so the vector does not anchor these:
+	// - the NEGOTIATE_MESSAGE's flags and its zero Version;
+	// - the AUTHENTICATE_MESSAGE's NegotiateFlags, (client & server) |
+	//   VERSION (so no NEGOTIATE_56);
+	// - "DOMAIN\user" split at the first backslash;
+	// - the client's AV_PAIR order (2.2.2.1 allows any, MsvAvEOL last): the
+	//   server's pairs, then MsvAvFlags, MsvAvChannelBindings,
+	//   MsvAvTargetName;
+	// - the payload order (2.2.1.3 allows any): DomainName, UserName,
+	//   Workstation, LmChallengeResponse, NtChallengeResponse.
+	// The rest follows the spec's formulas: NTOWFv2, temp (with its trailing
+	// Z(4)), the NTProofStr, the LM Z(24), the SessionBaseKey, the
+	// gss_channel_bindings_struct MD5 and the MIC (offset 72,
+	// HMAC_MD5(ExportedSessionKey, NEGOTIATE || CHALLENGE || AUTHENTICATE
+	// with a zero MIC)), which the 4.2.4 vectors do not cover.
 	const std::string negotiate =
 	  str("4e544c4d53535000010000000502882200000000280000000000000028000000000000000000000f");
 	const std::string challenge = str(
