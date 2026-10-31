@@ -50,10 +50,10 @@
 //   with a maximum buffer size of 0, so the rest of the session is neither
 //   signed nor sealed by SASL. Use it over TLS (ldaps:// or StartTLS)
 //   unless the network is trusted. A server that does not offer "no
-//   security layer" (only integrity or confidentiality) then fails the
-//   bind with client_errc::security_layer_required. Active Directory
-//   offers it, but with the "LDAP server signing requirements" policy set
-//   to require signing it refuses binds over plain ldap:// that do not sign
+//   security layer" (only integrity or confidentiality) then fails the bind
+//   with client_errc::security_layer_required. Active Directory offers it,
+//   but with the "LDAP server signing requirements" policy set to require
+//   signing it refuses binds over plain ldap:// that do not sign
 //   (errc::stronger_auth_required, diagnostic 00002028): use TLS, which
 //   satisfies the policy, or ask for a layer. With integrity,
 //   confidentiality or best_offered the client selects that layer from the
@@ -61,19 +61,18 @@
 //   (the security context must provide that protection and sequence
 //   detection, GSS_C_SEQUENCE_FLAG, as RFC 4752 section 3.1 requires:
 //   client_errc::gssapi_failure otherwise), and connection::sasl_bind
-//   installs it right after the successful BindResponse: every later
-//   PDU, both ways, goes in gss_wrap'd buffers
-//   (with confidentiality: encrypted) after a four-octet length (RFC 4422
-//   section 3.7), outgoing PDUs cut to fit the server's maximum buffer
-//   size (gss_wrap_size_limit), incoming buffers larger than
-//   max_receive_size closing the connection, as do a buffer that fails
-//   gss_unwrap, one replayed or out of sequence, or one without
-//   confidentiality on a confidentiality layer. connection::
-//   security_layer() reports it. The security context then lives as long
-//   as the connection. With a layer in effect, start_tls() fails (TLS
-//   would have to go below the layer) and so does a bind that negotiates
-//   another (client_errc::security_layer_in_effect); a bind without a
-//   layer leaves it in place (RFC 4513 section 5.2.1.4).
+//   installs it right after the successful BindResponse: every later PDU,
+//   both ways, goes in gss_wrap'd buffers (with confidentiality: encrypted)
+//   after a four-octet length (RFC 4422 section 3.7), outgoing PDUs cut to
+//   fit the server's maximum buffer size (gss_wrap_size_limit), incoming
+//   buffers larger than max_receive_size closing the connection, as do a
+//   buffer that fails gss_unwrap, one replayed or out of sequence, or one
+//   without confidentiality on a confidentiality layer.
+//   connection::security_layer() reports it. The security context then
+//   lives as long as the connection. With a layer in effect, start_tls()
+//   fails (TLS would have to go below the layer) and so does a bind that
+//   negotiates another (client_errc::security_layer_in_effect); a bind
+//   without a layer leaves it in place (RFC 4513 section 5.2.1.4).
 // - Channel binding (RFC 5056, RFC 5929 section 4), chosen with
 //   sasl_gssapi_options::channel_binding: over TLS (ldaps:// or StartTLS),
 //   gss_init_sec_context is given a gss_channel_bindings_struct with no

@@ -797,19 +797,18 @@ GSS_C_SEQUENCE_FLAG must be in the context's ret_flags (RFC 4752 section
 sequence detection `gss_unwrap` would report no replayed or reordered
 buffer for the layer to refuse), and `gss_wrap_size_limit` turns the
 server's maximum buffer size into the most plaintext per buffer (0 fails
-the bind). The
-layer (`sasl_security_layer` in sasl.hpp, generic: a DIGEST-style
-mechanism could give its own) wraps with conf_flag set for
+the bind). The layer (`sasl_security_layer` in sasl.hpp, generic: a
+DIGEST-style mechanism could give its own) wraps with conf_flag set for
 confidentiality and refuses, on unwrap, a buffer that fails, one with a
 sequence status (duplicate, old, unsequenced, gap: GSS_C_SEQUENCE_FLAG
 is requested) and, on a confidentiality layer, one not encrypted (a
 downgrade). The seam is the transport: `sasl_bind` takes the layer from
 the mechanism after each step (`take_security_layer()`) and arms the
 connection with it; the reader, routing the next BindResponse, installs
-it if that is a success (`net::detail::install_security_layer`) before it
-reads another byte, moving whatever followed the response in the
-read_buffer into the layer (RFC 4513 section 5.2.1.4: the layer starts at
-the first octet after it), and drops it otherwise. From then on
+it if that is a success (`net::detail::install_security_layer`) before
+it reads another byte, moving whatever followed the response in the
+read_buffer into the layer (RFC 4513 section 5.2.1.4: the layer starts
+at the first octet after it), and drops it otherwise. From then on
 `transport::stream()` returns a `sasl_layer_stream` over the old stream
 (TLS-decrypted, so the layer sits on top of TLS, RFC 4513 section
 5.2.1.6): `read_frame`, `write_bytes`, unbind and everything else are
@@ -829,16 +828,15 @@ SASL security layer: gss_unwrap: ...", "write <name> (N of M bytes
 written): SASL security layer: a protected buffer cut after K of its L
 octets": the count is in plaintext octets whose buffers went out whole).
 The knowledge cached from the server is forgotten (RFC 4513 section
-5.2.1.6). `start_tls()` with a layer
-fails (`security_layer_in_effect`: TLS would have to go below the layer,
-which this library does not do), and so does a second layer (a bind
-that negotiates one; one without a layer leaves it in place, RFC 4513
-section 5.2.1.4). Tested with a made-up XOR layer through socket pairs
-(framing, chunking, oversized and broken buffers, bytes after the
-BindResponse, a refused bind) and end to end against an in-process MIT
-acceptor speaking LDAP (`kerberos.security_layer`: integrity,
-confidentiality with a 64-octet server maximum, best_offered, a layer not
-offered). Active Directory
+5.2.1.6). `start_tls()` with a layer fails (`security_layer_in_effect`:
+TLS would have to go below the layer, which this library does not do),
+and so does a second layer (a bind that negotiates one; one without a
+layer leaves it in place, RFC 4513 section 5.2.1.4). Tested with a
+made-up XOR layer through socket pairs (framing, chunking, oversized and
+broken buffers, bytes after the BindResponse, a refused bind) and end to
+end against an in-process MIT acceptor speaking LDAP
+(`kerberos.security_layer`: integrity, confidentiality with a 64-octet
+server maximum, best_offered, a layer not offered). Active Directory
 notes: its "LDAP server signing requirements" policy, when it requires
 signing, refuses no-layer SASL binds over plain LDAP
 (strongerAuthRequired, 00002028), so use TLS there; its "LDAP channel

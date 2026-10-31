@@ -543,13 +543,12 @@ itself needs only ICU.
   detection (`GSS_C_SEQUENCE_FLAG` in its ret_flags, RFC 4752 section
   3.1), `gssapi_failure` otherwise, and a replayed or out-of-sequence
   buffer closes the connection; a layer not offered fails with
-  `security_layer_unavailable`; with a
-  layer in effect `start_tls()` fails with `security_layer_in_effect`.
-  Active Directory: with the "LDAP server signing requirements" policy
-  set to require signing, AD refuses unsigned SASL binds over plain
-  ldap:// (`stronger_auth_required`, `00002028`): use TLS there, or ask
-  for integrity. Channel binding: over TLS the Kerberos
-  exchange is bound to the server's certificate (RFC 5929
+  `security_layer_unavailable`; with a layer in effect `start_tls()` fails
+  with `security_layer_in_effect`. Active Directory: with the "LDAP server
+  signing requirements" policy set to require signing, AD refuses unsigned
+  SASL binds over plain ldap:// (`stronger_auth_required`, `00002028`):
+  use TLS there, or ask for integrity. Channel binding: over TLS the
+  Kerberos exchange is bound to the server's certificate (RFC 5929
   tls-server-end-point, given to `gss_init_sec_context` as
   `application_data` "tls-server-end-point:<hash>" with no addresses, the
   form Windows SSPI uses and OpenLDAP's libldap builds), which an AD
