@@ -603,13 +603,21 @@ auto sasl_ntlm::step(std::optional<std::string_view> challenge) -> result<std::o
 		return std::unexpected(std::move(granted.error()));
 	}
 
-	ntlm_key bindings{};// Z(16) without channel binding
+	// Over TLS the hash, or with ntlm_channel_binding::none no
+	// MsvAvChannelBindings at all: a server whose channel binding check is
+	// optional (Samba's `ldap server require strong auth` other than yes,
+	// as Windows' "When supported") lets an exchange without the pair
+	// through but refuses an explicit Z(16), which does not match its
+	// bindings. Without TLS, Z(16), as Windows sends it.
+	std::optional<ntlm_key> bindings;
 	if (!binding_data_.empty()) {
 		auto h = detail::ntlm_channel_bindings_hash(binding_data_);
 		if (!h) {
 			return std::unexpected(std::move(h.error()));
 		}
 		bindings = *h;
+	} else if (!tls_) {
+		bindings.emplace();
 	}
 	const auto server_time = detail::ntlm_timestamp(c.target_info);
 	const std::uint64_t time = server_time.value_or(now_filetime());

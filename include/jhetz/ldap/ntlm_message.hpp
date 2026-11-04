@@ -179,11 +179,13 @@ inline constexpr std::size_t ntlm_authenticate_header_size = 88;
 // 3.1.5.1.2): the server's AV_PAIRs in their order, without any
 // MsvAvChannelBindings or MsvAvTargetName of its own; MsvAvFlags with
 // msv_av_flags_mic or'ed in when `mic` (added after the server's pairs when
-// it sent none); then MsvAvChannelBindings (`channel_bindings`, Z(16) for
-// none); then MsvAvTargetName when `target_name` (UTF-16LE) is not empty.
+// it sent none); then MsvAvChannelBindings (`channel_bindings`: Z(16) for
+// an unbound exchange without TLS; nullopt leaves the pair out, as a
+// client that does not bind does over TLS); then MsvAvTargetName when
+// `target_name` (UTF-16LE) is not empty.
 [[nodiscard]] auto ntlm_client_target_info(std::span<const ntlm_av_pair> server,
   bool mic,
-  const ntlm_key &channel_bindings,
+  const std::optional<ntlm_key> &channel_bindings,
   std::string_view target_name) -> std::vector<ntlm_av_pair>;
 
 // Encodes an AUTHENTICATE_MESSAGE: the fixed part with Version and MIC

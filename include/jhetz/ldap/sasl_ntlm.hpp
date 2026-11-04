@@ -97,7 +97,11 @@
 //   without one, e.g. Ed25519 or Ed448, or no server certificate) start()
 //   fails with client_errc::tls_required rather than bind without it.
 //   ntlm_channel_binding::none opts out (a server behind a TLS-terminating
-//   proxy). Without TLS the value is 16 zero octets (Z(16)).
+//   proxy): over TLS the AUTHENTICATE_MESSAGE then carries no
+//   MsvAvChannelBindings at all, which a DC whose check is optional lets
+//   through, where Samba refuses an explicit Z(16) as bindings that do not
+//   match (a DC requiring channel binding refuses both). Without TLS the
+//   value is 16 zero octets (Z(16)), as Windows sends it.
 // - The NTProofStr covers the client's TargetInfo: the server's AV_PAIRs,
 //   MsvAvFlags with the MIC bit, MsvAvChannelBindings and MsvAvTargetName
 //   (the service principal name, "ldap/<host>" by default). The MIC
@@ -183,7 +187,7 @@ enum class ntlm_channel_binding : std::uint8_t {
 	// Over TLS: MsvAvChannelBindings over "tls-server-end-point:<hash>";
 	// start() fails with client_errc::tls_required without the hash.
 	tls_server_end_point,
-	none,// Z(16), even over TLS
+	none,// no MsvAvChannelBindings over TLS (Z(16) without TLS)
 };
 
 struct sasl_ntlm_options
@@ -276,7 +280,7 @@ class sasl_ntlm final : public sasl_mechanism
 	std::string host_;// from prepare()
 	bool tls_ = false;// from prepare()
 	// The channel bindings' application data ("tls-server-end-point:"
-	// and the hash); empty: Z(16).
+	// and the hash); empty: none (Z(16) without TLS, no pair over TLS).
 	std::string binding_data_;
 	// Why the TLS connection cannot be bound (start() fails with it).
 	std::string binding_error_;

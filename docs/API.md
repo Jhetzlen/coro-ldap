@@ -646,8 +646,9 @@ itself needs only ICU.
   binding token requirements" policy checks it; without a hash (an
   Ed25519 or Ed448 certificate) `start()` fails with
   `client_errc::tls_required`; `options.channel_binding =
-  ntlm_channel_binding::none` sends Z(16) instead (a TLS-terminating
-  proxy). The password and the keys derived from it are wiped
+  ntlm_channel_binding::none` leaves MsvAvChannelBindings out instead (a
+  TLS-terminating proxy; Samba refuses an explicit Z(16) over TLS even
+  when it does not require channel binding). The password and the keys derived from it are wiped
   (`OPENSSL_cleanse`). A wrong password is `errc::invalid_credentials`.
   `examples/ntlm.cpp` binds over ldaps://.
 - `jhetz/ldap/controls.hpp`: typed request controls (`ldap::paged`

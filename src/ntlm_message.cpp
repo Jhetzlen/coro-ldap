@@ -442,7 +442,7 @@ auto ntlm_timestamp(std::span<const ntlm_av_pair> pairs) -> std::optional<std::u
 
 auto ntlm_client_target_info(std::span<const ntlm_av_pair> server,
   bool mic,
-  const ntlm_key &channel_bindings,
+  const std::optional<ntlm_key> &channel_bindings,
   std::string_view target_name) -> std::vector<ntlm_av_pair>
 {
 	std::vector<ntlm_av_pair> out;
@@ -466,8 +466,10 @@ auto ntlm_client_target_info(std::span<const ntlm_av_pair> server,
 		put32(flags, msv_av_flags_mic);
 		out.push_back({ .av_id = ntlm_av_id::msv_av_flags, .value = std::move(flags) });
 	}
-	out.push_back({ .av_id = ntlm_av_id::msv_av_channel_bindings,
-	  .value = std::string(reinterpret_cast<const char *>(channel_bindings.data()), channel_bindings.size()) });
+	if (channel_bindings) {
+		out.push_back({ .av_id = ntlm_av_id::msv_av_channel_bindings,
+		  .value = std::string(reinterpret_cast<const char *>(channel_bindings->data()), channel_bindings->size()) });
+	}
 	if (!target_name.empty()) {
 		out.push_back({ .av_id = ntlm_av_id::msv_av_target_name, .value = std::string(target_name) });
 	}

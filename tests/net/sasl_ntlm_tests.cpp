@@ -517,10 +517,14 @@ TEST_CASE("ntlm: channel binding over TLS", "[sasl][ntlm]")
 		CHECK(hex_of(exchange(mech, tls)) == with(str(expected_bindings_hash), "ldap/dc1.example.org"));
 		CHECK(mech.channel_binding_used() == ldap::channel_binding_type::tls_server_end_point);
 	}
-	SECTION("ntlm_channel_binding::none: Z(16)")
+	SECTION("ntlm_channel_binding::none: no MsvAvChannelBindings (Samba refuses an explicit Z(16) over TLS)")
 	{
 		ldap::sasl_ntlm mech("CORP\\jdoe", "secret", { .channel_binding = ldap::ntlm_channel_binding::none });
-		CHECK(hex_of(exchange(mech, tls)) == with(std::string(16, '\0'), "ldap/dc1.example.org"));
+		auto pairs = spec_pairs();
+		pairs.push_back(timestamp_pair(server_time));
+		pairs.push_back(mic_flags());
+		pairs.push_back(target_pair("ldap/dc1.example.org"));
+		CHECK(hex_of(exchange(mech, tls)) == hex_of(detail::encode_ntlm_av_pairs(pairs)));
 		CHECK(mech.channel_binding_used() == std::nullopt);
 	}
 	SECTION("no tls-server-end-point hash: refused before anything is sent")

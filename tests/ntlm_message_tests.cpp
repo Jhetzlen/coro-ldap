@@ -251,6 +251,12 @@ TEST_CASE("ntlm: the client's TargetInfo", "[ntlm]")
 	CHECK(info[2].av_id == detail::ntlm_av_id::msv_av_channel_bindings);
 	info = detail::ntlm_client_target_info(server, false, bindings, {});
 	CHECK(info[0].value == str("01000000"));
+
+	// No channel bindings: no MsvAvChannelBindings.
+	info = detail::ntlm_client_target_info(server, true, std::nullopt, spn);
+	REQUIRE(info.size() == 3);
+	CHECK(info[1] == spec_pairs[0]);
+	CHECK(info[2] == detail::ntlm_av_pair{ .av_id = detail::ntlm_av_id::msv_av_target_name, .value = spn });
 }
 
 TEST_CASE("ntlm: NEGOTIATE_MESSAGE and AUTHENTICATE_MESSAGE", "[ntlm]")

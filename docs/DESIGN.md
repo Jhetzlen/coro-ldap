@@ -978,7 +978,11 @@ addresses and the application data "tls-server-end-point:<hash>"
 (`prefixed_channel_binding`, the hash SCRAM-PLUS and GSSAPI use),
 flattened as Windows hashes its SEC_CHANNEL_BINDINGS (five little-endian
 32-bit words, the last the data's length, then the data); Z(16) without
-TLS or with `ntlm_channel_binding::none`. Over TLS without a hash,
+TLS; with `ntlm_channel_binding::none` over TLS no MsvAvChannelBindings at
+all (Samba's NTLMSSP server, with channel binding optional, lets only an
+exchange without the pair through: "explicit 16 zeros in
+MsvChannelBindings are not enough", auth/ntlmssp/ntlmssp_server.c; found
+by `integration.samba_ad`, coro-ldap-ite.2). Over TLS without a hash,
 `start()` fails with `tls_required` (as GSSAPI, coro-ldap-2y3: never an
 unbound bind a man in the middle could pick). `channel_binding_used()`
 says tls_server_end_point when the exchange carried bindings, never
