@@ -1,22 +1,21 @@
-// Value semantics of the allocator-aware types (DESIGN.md section 8): plain
-// and allocator-extended copy and move construction, copy and move
-// assignment, each checked for the value and for the resource the result and
-// its members allocate from:
-// - a plain copy goes to the default resource, a plain move keeps the source's;
-// - an allocator-extended copy or move uses the given resource;
-// - assignment keeps the target's resource, also across resources
-//   (polymorphic_allocator does not propagate), and for optional members that
-//   become engaged.
+// Value semantics of the allocator-aware types: value_semantics.hpp's checks
+// on a sample of each.
 #include "counting_resource.hpp"
+#include "jhetz/ldap/attribute.hpp"
 #include "jhetz/ldap/ber.hpp"
+#include "jhetz/ldap/content_sync.hpp"
+#include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
+#include "jhetz/ldap/operations.hpp"
 #include "jhetz/ldap/url.hpp"
 #include "test_util.hpp"
+#include "value_semantics.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstddef>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -27,115 +26,13 @@
 #include <vector>
 
 namespace ldap = jhetz::ldap;
+using jhetz::ldap::test::check_value_semantics;
 using jhetz::ldap::test::counting_resource;
 using jhetz::ldap::test::hex;
-using jhetz::ldap::test::scoped_default_resource;
+using jhetz::ldap::test::mr;
+using jhetz::ldap::test::resources;
 
 namespace {
-
-using resources = std::vector<std::pmr::memory_resource *>;
-
-auto mr(const std::pmr::string &s) -> std::pmr::memory_resource * { return s.get_allocator().resource(); }
-
-// Resources of the members that get_allocator() does not stand for (optional
-// members, nested elements). The default: none.
-struct no_members
-{
-	template<class T> auto operator()(const T &) const -> resources { return {}; }
-};
-
-template<class T, class Members> void check_on(const T &x, std::pmr::memory_resource *r, const Members &members)
-{
-	CHECK(x.get_allocator().resource() == r);
-	for (auto *m : members(x)) {
-		CHECK(m == r);
-	}
-}
-
-// Runs every construction and assignment of T on `sample`, whose strings must
-// be long enough to allocate (no small-string optimisation) and whose optional
-// members must be engaged.
-template<class T, class Members = no_members> void check_value_semantics(const T &sample, Members members = {})
-{
-	using alloc_t = T::allocator_type;
-	const T empty{};
-	counting_resource heap;// the default resource while the operations run
-	counting_resource ra;
-	counting_resource rb;
-	counting_resource rs;// sources that die before their targets
-	const alloc_t a(&ra);
-	const alloc_t b(&rb);
-	scoped_default_resource guard(&heap);
-
-	// Allocator-extended copy.
-	const T src(sample, a);
-	CHECK(src == sample);
-	check_on(src, &ra, members);
-	const T copy_b(src, b);
-	CHECK(copy_b == sample);
-	check_on(copy_b, &rb, members);
-
-	// Allocator-extended move, on the same resource and on another one.
-	T tmp(src, a);
-	const T moved_same(std::move(tmp), a);
-	CHECK(moved_same == sample);
-	check_on(moved_same, &ra, members);
-	std::optional<T> moved_other;
-	{
-		T s(src, alloc_t(&rs));
-		moved_other.emplace(std::move(s), b);
-	}
-	CHECK(*moved_other == sample);
-	check_on(*moved_other, &rb, members);
-
-	// Copy assignment keeps the target's resource: into empty optional members,
-	// into engaged ones, from itself, and back to empty.
-	T target(b);
-	target = src;
-	CHECK(target == sample);
-	check_on(target, &rb, members);
-	target = src;
-	CHECK(target == sample);
-	check_on(target, &rb, members);
-	const T &alias = target;
-	target = alias;
-	CHECK(target == sample);
-	check_on(target, &rb, members);
-	target = T(a);
-	CHECK(target == empty);
-	CHECK(target.get_allocator().resource() == &rb);
-
-	// Move assignment from another resource copies into the target's.
-	T moved_into(b);
-	{
-		T s(src, alloc_t(&rs));
-		moved_into = std::move(s);
-	}
-	CHECK(moved_into == sample);
-	check_on(moved_into, &rb, members);
-	{
-		T s(src, alloc_t(&rs));
-		moved_into = std::move(s);// into engaged optional members
-	}
-	CHECK(moved_into == sample);
-	check_on(moved_into, &rb, members);
-	moved_into = T(a);
-	CHECK(moved_into == empty);
-	CHECK(moved_into.get_allocator().resource() == &rb);
-
-	// Nothing kept memory of a dead source, nothing went to the default resource.
-	CHECK(rs.outstanding() == 0);
-	CHECK(heap.allocations() == 0);
-
-	// A plain copy goes to the default resource, a plain move keeps the source's.
-	const T plain(src);
-	CHECK(plain == sample);
-	check_on(plain, &heap, members);
-	T to_move(src, a);
-	const T plain_moved(std::move(to_move));
-	CHECK(plain_moved == sample);
-	check_on(plain_moved, &ra, members);
-}
 
 const std::string_view long_dn = "uid=a-user-with-a-long-name,ou=people,dc=example,dc=org";
 const std::string_view long_value = "a value long enough to allocate";
@@ -175,6 +72,9 @@ TEST_CASE("value semantics: shared parts", "[value_semantics][message]")
 
 TEST_CASE("value semantics: bind", "[value_semantics][message]")
 {
+	const ldap::sasl_auth mechanism_only("SCRAM-SHA-256-PLUS-LONG");
+	CHECK(mechanism_only.mechanism == "SCRAM-SHA-256-PLUS-LONG");
+	CHECK_FALSE(mechanism_only.credentials.has_value());
 	check_value_semantics(ldap::simple_auth{ "a password long enough to allocate" });
 	check_value_semantics(
 	  sample_sasl(), [](const ldap::sasl_auth &s) { return resources{ mr(s.credentials.value()) }; });
@@ -227,6 +127,12 @@ TEST_CASE("value semantics: update operations", "[value_semantics][message]")
 	  [](const ldap::modify_request &r) { return resources{ mr(r.changes.at(0).modification.type) }; });
 	check_value_semantics(ldap::add_request{ long_dn, { { "a-long-attribute-type", { long_value } } } },
 	  [](const ldap::add_request &r) { return resources{ mr(r.attributes.at(0).values.at(0)) }; });
+	const ldap::modify_request no_changes(long_dn);
+	CHECK(no_changes.object == long_dn);
+	CHECK(no_changes.changes.empty());
+	const ldap::add_request no_attributes(long_dn);
+	CHECK(no_attributes.entry == long_dn);
+	CHECK(no_attributes.attributes.empty());
 	check_value_semantics(ldap::del_request{ long_dn });
 	check_value_semantics(sample_modify_dn(),
 	  [](const ldap::modify_dn_request &r) { return resources{ mr(r.new_rdn), mr(r.new_superior.value()) }; });
@@ -324,10 +230,19 @@ TEST_CASE("value semantics: url_extension and url", "[value_semantics][url]")
 	x = std::move(no_value);
 	CHECK_FALSE(x.value.has_value());
 	CHECK(x.type == "bindname");
+	x = ldap::url_extension{ "a-long-extension-type", long_value, true };
+	const ldap::url_extension bare{ "bindname" };
+	x = bare;
+	CHECK(x == bare);
 
 	const auto u = ldap::url::parse(
 	  "ldap://a-long-host-name.example.org:389/dc=example,dc=org?cn,mail?sub?(uid=someone)?!bindname=cn=manager");
 	REQUIRE(u.has_value());
+	// Self-move-assignment leaves the URL as it was.
+	ldap::url same_url = *u;
+	ldap::url &alias_url = same_url;
+	same_url = std::move(alias_url);
+	CHECK(same_url == *u);
 	check_value_semantics(*u, [](const ldap::url &v) {
 		resources out{ v.base_dn().value().get_allocator().resource(),
 			v.search_filter().value().get_allocator().resource() };
@@ -414,4 +329,67 @@ TEST_CASE("filter iterators: postfix increment", "[value_semantics][filter]")
 	CHECK(*si == "y");
 	si++;
 	CHECK(si == any.end());
+}
+
+namespace {
+
+// Self-move-assignment leaves `sample` as it was.
+template<class T> void check_self_move(const T &sample)
+{
+	T x = sample;
+	T &same = x;
+	x = std::move(same);
+	CHECK(x == sample);
+}
+
+}// namespace
+
+TEST_CASE("value semantics: ava and attribute", "[value_semantics][dn][attribute]")
+{
+	check_value_semantics(ldap::ava{ ldap::attribute{ "a-long-attribute-type-name" }, long_value },
+	  [](const ldap::ava &x) { return resources{ x.type.get_allocator().resource(), mr(x.value) }; });
+	CHECK(ldap::attribute{}.empty());
+	CHECK_FALSE(ldap::attribute{ "cn" }.empty());
+}
+
+TEST_CASE("value semantics: content synchronization", "[value_semantics][content_sync]")
+{
+	ldap::sync_uuid uuid;
+	uuid.bytes[0] = std::byte{ 0x12 };
+	const std::string_view cookie = "rid=001,csn=20261104120000.000000Z#000000#000#000000";
+	check_value_semantics(ldap::sync_state{ ldap::sync_state_type::modify, uuid, cookie },
+	  [](const ldap::sync_state &x) { return resources{ mr(x.cookie.value()) }; });
+	check_value_semantics(
+	  ldap::sync_done{ cookie, true }, [](const ldap::sync_done &x) { return resources{ mr(x.cookie.value()) }; });
+	ldap::sync_info info{ ldap::sync_info_type::sync_id_set, cookie };
+	info.refresh_deletes = true;
+	info.sync_uuids = { uuid, ldap::sync_uuid{} };
+	check_value_semantics(info, [](const ldap::sync_info &x) { return resources{ mr(x.cookie.value()) }; });
+	check_self_move(ldap::sync_state{ ldap::sync_state_type::modify, uuid, cookie });
+	check_self_move(ldap::sync_done{ cookie, true });
+	check_self_move(info);
+}
+
+TEST_CASE("value semantics: virtual list view and transactions", "[value_semantics][message]")
+{
+	check_value_semantics(ldap::vlv_response{ 3, 120, 0, "a-context-id-long-enough-to-allocate" },
+	  [](const ldap::vlv_response &x) { return resources{ mr(x.context_id.value()) }; });
+	check_self_move(ldap::vlv_response{ 3, 120, 0, "a-context-id-long-enough-to-allocate" });
+	check_value_semantics(ldap::end_transaction_request{ false, "a-transaction-identifier-long-enough" },
+	  [](const ldap::end_transaction_request &x) { return resources{ mr(x.identifier) }; });
+	const ldap::update_controls updates{ 7, { sample_control() } };
+	check_value_semantics(
+	  updates, [](const ldap::update_controls &x) { return resources{ mr(x.controls.at(0).value.value()) }; });
+	check_value_semantics(
+	  ldap::end_transaction_response{ 9, { updates } }, [](const ldap::end_transaction_response &x) {
+		  return resources{ x.updates_controls.at(0).get_allocator().resource(),
+			  mr(x.updates_controls.at(0).controls.at(0).type) };
+	  });
+}
+
+TEST_CASE("value semantics: intermediate", "[value_semantics][message]")
+{
+	check_value_semantics(
+	  ldap::intermediate{ ldap::intermediate_response{ "1.3.6.1.4.1.4203.1.9.1.4", long_value }, { sample_control() } },
+	  [](const ldap::intermediate &x) { return resources{ mr(x.response_value.value()), mr(x.controls.at(0).type) }; });
 }

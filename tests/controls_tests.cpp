@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstddef>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -96,6 +97,22 @@ static_assert(!std::is_convertible_v<ldap::paged, ldap::modify_controls::value_t
 static_assert(std::is_convertible_v<ldap::control, ldap::compare_controls::value_type>);
 static_assert(!std::is_convertible_v<ldap::assertion, ldap::extended_controls::value_type>);
 static_assert(!std::is_convertible_v<ldap::manage_dsa_it, ldap::extended_controls::value_type>);
+
+TEST_CASE("the applicability table at run time", "[controls]")
+{
+	const std::vector<ldap::operation_kind> ops{ search, add, modify, modify_dn, del, compare, extended };
+	const std::vector<std::string_view> names{
+		"search", "add", "modify", "modify DN", "delete", "compare", "extended operation"
+	};
+	for (std::size_t i = 0; i < ops.size(); ++i) {
+		CHECK(ldap::operation_name(ops[i]) == names[i]);
+		CHECK(applies_to<ldap::matched_values>(ops[i]) == (ops[i] == search));
+	}
+	const auto set = ldap::operation_set_of(ops[2], ops[5]);
+	CHECK(set.contains(modify));
+	CHECK(set.contains(compare));
+	CHECK_FALSE(set.contains(search));
+}
 
 TEST_CASE("controls_for checks a shared list against the operation", "[controls]")
 {

@@ -8,6 +8,7 @@
 // still queued, so a reader woken by the peer resumes a null handle. Its
 // provide()-before-read use in message_io_tests.cpp never parks a reader.
 #include "../counting_resource.hpp"
+#include "../value_semantics.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "mock_ldap.hpp"
@@ -61,6 +62,20 @@ using Catch::Matchers::StartsWith;
 using ldap::client_errc;
 using ldap::errc;
 
+
+TEST_CASE("connection: search_entry and search_reference value semantics", "[net][connection][value_semantics]")
+{
+	const std::string_view long_value = "a value long enough to allocate";
+	ldap::entry e;
+	e.dn = "uid=a-user-with-a-long-name,ou=people,dc=example,dc=org";
+	e.attributes.push_back(ldap::attribute_values(ldap::attribute("description"), { long_value }));
+	check_value_semantics(ldap::search_entry{ e, { ldap::control{ "1.2.840.113556.1.4.319", true, long_value } } },
+	  [](const ldap::search_entry &x) { return resources{ mr(x.dn), mr(x.controls.at(0).value.value()) }; });
+	check_value_semantics(
+	  ldap::search_reference{ ldap::search_result_reference{ ldap::string_list{ "ldap://a-long-host.example.org/" } },
+		{ ldap::control{ "1.2.840.113556.1.4.319", true, long_value } } },
+	  [](const ldap::search_reference &x) { return resources{ mr(x.uris.at(0)), mr(x.controls.at(0).type) }; });
+}
 
 // ---------------------------------------------------------------- bind
 
