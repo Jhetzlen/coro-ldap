@@ -10,7 +10,10 @@
 #include "net_test_support.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <coroutine>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stop_token>
@@ -20,6 +23,9 @@
 #include <variant>
 
 namespace ldap = jhetz::ldap;
+namespace net = jhetz::ldap::net;
+namespace capy = boost::capy;
+namespace corosio = boost::corosio;
 using namespace jhetz::ldap::test;
 using ldap::client_errc;
 using ldap::errc;
@@ -76,6 +82,50 @@ auto post_read_entry() -> ldap::control
 	return ldap::encode_read_entry(ldap::post_read_oid,
 	  ldap::search_result_entry{ jdoe.to_string(), { ldap::partial_attribute{ "uid", { "jdoe" } } } })
 	  .value();
+}
+
+// A socket's write_some, or, once *broken, a broken_pipe completing at once
+// (with no suspension, so a writer started inline fails inline).
+template<class Inner> struct breakable_write
+{
+	std::optional<Inner> inner;
+
+	[[nodiscard]] auto await_ready() -> bool { return !inner || inner->await_ready(); }
+	auto await_suspend(std::coroutine_handle<> h, const capy::io_env *env) { return inner->await_suspend(h, env); }
+	auto await_resume() -> capy::io_result<std::size_t>
+	{
+		if (!inner) {
+			return { std::make_error_code(std::errc::broken_pipe), 0 };
+		}
+		return inner->await_resume();
+	}
+};
+
+// The client end of a socket pair whose writes fail once *broken is set.
+struct breakable_stream
+{
+	corosio::local_stream_socket *s;
+	const bool *broken;
+
+	template<capy::MutableBufferSequence MB> auto read_some(MB buffers) { return s->read_some(buffers); }
+	template<capy::ConstBufferSequence CB> auto write_some(CB buffers)
+	{
+		breakable_write<decltype(s->write_some(buffers))> w;
+		if (!*broken) {
+			w.inner.emplace(s->write_some(buffers));
+		}
+		return w;
+	}
+};
+
+// Destroys `t` inside a coroutine on the connection's io_context, where
+// the writer an abort starts runs inline.
+auto destroy_on_context(ldap::transaction t) -> capy::task<void>
+{
+	{
+		const ldap::transaction gone = std::move(t);
+	}
+	co_return;
 }
 
 }// namespace
@@ -463,4 +513,40 @@ TEST_CASE("transaction: an Aborted Transaction Notice is ignored", "[net][transa
 	CHECK(c.error().code == errc::other);
 	CHECK(m.conn.is_open());
 	m.check_server();
+}
+
+// The destructor's abort starts the writer inline (on the io_context), and
+// its write fails at once: the connection is shut inside submit(), and the
+// abort is not counted as due.
+TEST_CASE("transaction: destroyed while the abort's write fails inline", "[net][transaction]")
+{
+	corosio::io_context ioc;
+	socket_pair sockets{ ioc };
+	bool broken = false;
+	ldap::connection conn(
+	  ioc, net::transport::wrap(breakable_stream{ .s = &sockets.client, .broken = &broken }, "breakable"));
+	server_log log;
+	outcome<void> server;
+	spawn(ioc,
+	  serve_script(net::transport::wrap(socket_ref{ &sockets.server }, "server"), { answer({ started(1) }) }, log),
+	  server);
+	auto t = finish(ioc, conn.begin_transaction());
+	REQUIRE(t.has_value());
+	REQUIRE(t->is_open());
+	drive_until(ioc, [&server] { return server.done(); });
+	CHECK(log.error.empty());
+
+	broken = true;
+	finish(ioc, destroy_on_context(std::move(*t)));
+	CHECK_FALSE(conn.is_open());
+	CHECK(conn.outstanding() == 0);
+	CHECK(log.received.size() == 1);
+	const auto me = finish(ioc, conn.who_am_i());
+	REQUIRE_FALSE(me.has_value());
+	CHECK(me.error().code == client_errc::not_sent);
+	CHECK_THAT(std::string(me.error().context), Catch::Matchers::ContainsSubstring("write breakable"));
+
+	sockets.client.close();
+	sockets.server.close();
+	drive(ioc);
 }
