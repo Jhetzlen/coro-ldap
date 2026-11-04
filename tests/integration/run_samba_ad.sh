@@ -38,32 +38,46 @@ repo="$(cd "$here/../.." && pwd)"
 port="${JHETZ_LDAP_IT_SAMBA_PORT:-4389}"
 image=coro-ldap-samba-ad
 
+# A signal ends the script once the docker command it interrupted returns
+# (the CLI catches SIGINT and may exit as if it had failed).
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
 if ! command -v docker > /dev/null || ! docker info > /dev/null 2>&1; then
 	echo "run_samba_ad.sh: docker not available: running without Samba" >&2
 	exec "$@"
 fi
+
+# The cleanup removes the containers with this run's label. docker run
+# and docker exec run in their own session (setsid), out of the
+# terminal's process group: Ctrl-C does not reach them (the CLI would
+# cancel a container still being created, leaving it behind, and both
+# catch SIGINT, so the script would go on), and the trap, which bash runs
+# once they return, ends the script. No signal cuts the cleanup short.
+label="coro-ldap-it=samba-ad-$$-$RANDOM$RANDOM"
+dir=""
+cleanup() {
+	trap '' INT TERM HUP
+	docker ps -aq --filter "label=$label" | xargs -r docker rm -f > /dev/null 2>&1 || true
+	if [[ -n "$dir" ]]; then rm -rf "$dir"; fi
+}
+trap cleanup EXIT
 
 docker build -q -t "$image" "$here/samba-ad" > /dev/null
 
 mkdir -p "$repo/build"
 dir="$(mktemp -d "$repo/build/samba-ad.XXXXXX")"
 containers=()
-cleanup() {
-	if ((${#containers[@]})); then
-		docker rm -f "${containers[@]}" > /dev/null 2>&1 || true
-	fi
-	rm -rf "$dir"
-}
-trap cleanup EXIT
 
 # start NAME STRONG_AUTH LDAP_PORT LDAPS_PORT
 start() {
 	local name="coro-ldap-samba-ad-$$-$1"
-	docker run -d --rm --name "$name" --hostname dc1.coro.test \
+	containers+=("$name")
+	setsid -w docker run -d --rm --name "$name" --label "$label" --hostname dc1.coro.test \
 		-p "127.0.0.1:$3:389" -p "127.0.0.1:$4:636" "$image" \
 		samba --foreground --no-process-group --debug-stdout \
 		"--option=ldap server require strong auth = $2" > /dev/null
-	containers+=("$name")
 }
 start strict yes "$port" $((port + 1))
 start relaxed no $((port + 2)) $((port + 3))
@@ -73,7 +87,7 @@ start relaxed no $((port + 2)) $((port + 3))
 for name in "${containers[@]}"; do
 	ready=""
 	for _ in $(seq 300); do
-		if docker exec "$name" ldbsearch -H ldap://127.0.0.1 -s base -b "" dnsHostName > /dev/null 2>&1; then
+		if setsid -w docker exec "$name" ldbsearch -H ldap://127.0.0.1 -s base -b "" dnsHostName > /dev/null 2>&1; then
 			ready=1
 			break
 		fi

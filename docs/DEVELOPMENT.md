@@ -303,7 +303,9 @@ the host network (slapd listens on 127.0.0.1 only, as without Docker) and
 a temporary directory mounted at the same path as its `TMPDIR`, so the
 certificate paths and the ldapi:// socket are the same on the host, where
 the command runs. Without a working `docker` the command runs without
-slapd, so the test is skipped.
+slapd, so the test is skipped. Both Docker harnesses (this one and
+`run_samba_ad.sh`) assume rootful Docker on Linux: `--network host` and
+`--user uid:gid` need the containers on the host's network and its uids.
 
 SASL GSSAPI (built with `JHETZ_LDAP_WITH_GSSAPI`) has its own test,
 `integration.gssapi` (labels `integration` and `kerberos`), run with a
@@ -348,8 +350,9 @@ tests/integration/run_kdc.sh ctest --test-dir build/gssapi -L kerberos --output-
 
 With a local slapd, a plugin outside cyrus-sasl's directory is found
 through `SASL_PATH`, a colon-separated list of directories replacing the
-default one, so list that one too. To use the plugin without installing it (Arch), extract the
-package into a scratch directory, as for a local slapd:
+default one, so list that one too. To use the plugin without installing
+it (Arch), extract the package into a scratch directory, as for a local
+slapd:
 
 ```sh
 mkdir -p /tmp/sasl-gssapi

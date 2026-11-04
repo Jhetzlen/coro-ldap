@@ -31,6 +31,8 @@ module_path="${SLAPD_MODULE_PATH:-/usr/lib/ldap}"
 port="${JHETZ_LDAP_IT_PORT:-3389}"
 tls_port=$((port + 1))
 
+# The ldapi:// socket goes in it: keep TMPDIR short, a socket path has
+# at most 107 bytes (sun_path is 108 with its terminating NUL on Linux).
 dir="$(mktemp -d "${TMPDIR:-/tmp}/jldap.XXXXXX")"
 pid=""
 cleanup() {
