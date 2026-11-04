@@ -7,7 +7,8 @@
 #include "../scope_util.hpp"
 
 #include <boost/capy/ex/run_async.hpp>
-#include <boost/capy/io_task.hpp>
+#include <boost/capy/results.hpp>
+#include <boost/capy/task.hpp>
 #include <boost/corosio/io_context.hpp>
 #include <boost/corosio/openssl_stream.hpp>
 
@@ -386,11 +387,11 @@ namespace {
 	// write fails at once, so the handshake ends at its ClientHello.
 	struct dead_stream
 	{
-		auto read_some(const auto & /*buffers*/) -> boost::capy::io_task<std::size_t>
+		auto read_some(const auto & /*buffers*/) -> boost::capy::task<boost::capy::results<std::size_t>>
 		{
 			co_return { std::make_error_code(std::errc::not_connected), 0 };
 		}
-		auto write_some(const auto & /*buffers*/) -> boost::capy::io_task<std::size_t>
+		auto write_some(const auto & /*buffers*/) -> boost::capy::task<boost::capy::results<std::size_t>>
 		{
 			co_return { std::make_error_code(std::errc::not_connected), 0 };
 		}

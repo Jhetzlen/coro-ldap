@@ -2,7 +2,7 @@
 // and the connection's operations.
 #pragma once
 
-#include <boost/capy/concept/io_awaitable.hpp>
+#include <boost/capy/concept/context_awaitable.hpp>
 #include <boost/capy/task.hpp>
 #include <boost/corosio/timeout.hpp>
 

@@ -79,7 +79,7 @@ auto sasl_layer_stream::unwrap_front(bool &done) -> std::error_code
 	return {};
 }
 
-auto sasl_layer_stream::fill() -> capy::io_task<>
+auto sasl_layer_stream::fill() -> capy::task<capy::results<>>
 {
 	while (plain_pos_ == plain_.size()) {
 		bool done = false;
@@ -130,7 +130,7 @@ auto sasl_layer_stream::protect() -> std::error_code
 	return {};
 }
 
-auto sasl_layer_stream::flush() -> capy::io_task<>
+auto sasl_layer_stream::flush() -> capy::task<capy::results<>>
 {
 	auto [ec, n] = co_await capy::write(*inner_, capy::const_buffer(out_.data(), out_.size()));
 	if (ec && n != 0) {

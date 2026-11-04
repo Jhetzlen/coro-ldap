@@ -284,7 +284,7 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 		// The accepted socket inherits it; set before the client connects,
 		// so the window offered from the start is the small one.
 		if (buffers == socket_buffers::small) {
-			acc.set_option(corosio::socket_option::receive_buffer_size(small_socket_buffer));
+			REQUIRE_FALSE(acc.set_option(corosio::socket_option::receive_buffer_size(small_socket_buffer)));
 		}
 		outcome<void> accepted;
 		spawn(
@@ -343,8 +343,9 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 	// include the bookkeeping, so the data they hold is less).
 	auto buffered_at_most() const -> std::size_t
 	{
-		const auto received = peer.get_option<corosio::socket_option::receive_buffer_size>().value();
-		return client_send_buffer + static_cast<std::size_t>(received);
+		const auto [ec, received] = peer.get_option<corosio::socket_option::receive_buffer_size>();
+		REQUIRE_FALSE(ec);
+		return client_send_buffer + static_cast<std::size_t>(received.value());
 	}
 
   private:
@@ -356,11 +357,17 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 		if (auto ec = s.open(); ec) {
 			throw std::system_error(ec, "open");
 		}
-		s.set_option(corosio::socket_option::send_buffer_size(small_socket_buffer));
+		if (auto ec = s.set_option(corosio::socket_option::send_buffer_size(small_socket_buffer)); ec) {
+			throw std::system_error(ec, "SO_SNDBUF");
+		}
 		if (auto [ec] = co_await s.connect(acc.local_endpoint()); ec) {
 			throw std::system_error(ec, "connect");
 		}
-		client_send_buffer = static_cast<std::size_t>(s.get_option<corosio::socket_option::send_buffer_size>().value());
+		const auto [sec, sent] = s.get_option<corosio::socket_option::send_buffer_size>();
+		if (sec) {
+			throw std::system_error(sec, "SO_SNDBUF");
+		}
+		client_send_buffer = static_cast<std::size_t>(sent.value());
 		const std::string name = url();
 		net::transport t =
 		  net::transport_access::make(net::transport::kind::tcp, name, std::pmr::get_default_resource());

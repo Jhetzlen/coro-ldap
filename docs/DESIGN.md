@@ -1957,7 +1957,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   search, before each page). unbind() and AbandonRequests, which end or
   give up on work, and a paged search's release are sent regardless.
 - Cancelling from a coroutine (header-only helpers in `cancel.hpp`):
-  `capy::when_any` races only awaitables returning `io_result`, so
+  `capy::when_any` races only awaitables returning `results`, so
   `ldap::raceable(op)` makes an operation's `result<T>` the payload of one.
   Its error code is set only when the operation failed with
   `cond::canceled` while its stop token was set (it lost, or the awaiting

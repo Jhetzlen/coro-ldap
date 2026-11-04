@@ -82,7 +82,7 @@ class ldap_server
 	void reset(std::size_t n)
 	{
 		auto &p = peers_.at(n);
-		p.set_option(corosio::socket_option::linger(true, 0));
+		REQUIRE_FALSE(p.set_option(corosio::socket_option::linger(true, 0)));
 		p.close();
 	}
 	void shut_down()

@@ -509,8 +509,9 @@ mock servers and direct mechanism calls.
   (`src/sasl_scram.cpp`): only on OpenSSL's own allocation failure, an
   internal error, or a provider configuration without SHA-256 or a random
   generator.
-- `TCP_NODELAY` failing (`src/net/connect.cpp`): `setsockopt` on a
-  connected TCP socket fails only for a kernel reason.
+- `TCP_NODELAY` failing (`src/net/connect.cpp`): Corosio's `set_option`
+  returns `setsockopt`'s error code, which on a connected TCP socket is set
+  only for a kernel reason.
 - Resolver failures caught in `resolve_detached` (`src/net/connect.cpp`,
   the catch-all giving `not_enough_memory`): Corosio's resolver and its
   lookup allocate with the global `operator new`, not the frame allocator

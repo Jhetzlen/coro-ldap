@@ -641,13 +641,13 @@ auto connection::impl::wait_io_idle() -> capy::task<void>
 auto connection::impl::wait_write_idle() -> capy::task<void>
 {
 	(void)co_await capy::run(std::stop_token{})(
-	  [](impl &c) -> capy::task<capy::io_result<>> { co_return co_await c.write_idle.wait(); }(*this));
+	  [](impl &c) -> capy::task<capy::results<>> { co_return co_await c.write_idle.wait(); }(*this));
 }
 
 auto connection::impl::wait_reader_idle() -> capy::task<void>
 {
 	(void)co_await capy::run(std::stop_token{})(
-	  [](impl &c) -> capy::task<capy::io_result<>> { co_return co_await c.reader_idle.wait(); }(*this));
+	  [](impl &c) -> capy::task<capy::results<>> { co_return co_await c.reader_idle.wait(); }(*this));
 }
 
 // ---------------------------------------------------------------- reader

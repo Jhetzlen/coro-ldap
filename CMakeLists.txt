@@ -237,13 +237,13 @@ if(JHETZ_LDAP_BUILD_NET)
     # SYSTEM: our warning flags must not fire on their headers.
     FetchContent_Declare(capy
         GIT_REPOSITORY https://github.com/cppalliance/capy.git
-        GIT_TAG a372a6b054261f29497ac0d19c2a9533f9eaad40
+        GIT_TAG bdadc6adef8c8eb79da6454373175bb1428be524
         SYSTEM
         FIND_PACKAGE_ARGS NAMES boost_capy CONFIG
     )
     FetchContent_Declare(corosio
         GIT_REPOSITORY https://github.com/cppalliance/corosio.git
-        GIT_TAG 54e28fd40cf7ee6cc18365dd81ad5615c38908cc
+        GIT_TAG fd8e95a7125047d5385068a4c640da8232b9588e
         SYSTEM
         FIND_PACKAGE_ARGS NAMES boost_corosio CONFIG
     )

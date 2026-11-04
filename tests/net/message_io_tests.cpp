@@ -6,7 +6,7 @@
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
-#include <boost/capy/ex/io_env.hpp>
+#include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/test/stream.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -65,8 +65,11 @@ struct scripted_stream
 			scripted_stream *self;
 			MB buffers;
 			[[nodiscard]] auto await_ready() const noexcept -> bool { return true; }
-			auto await_suspend(std::coroutine_handle<> h, const capy::io_env *) -> std::coroutine_handle<> { return h; }
-			auto await_resume() -> capy::io_result<std::size_t>
+			auto await_suspend(std::coroutine_handle<> h, const capy::await_context *) -> std::coroutine_handle<>
+			{
+				return h;
+			}
+			auto await_resume() -> capy::results<std::size_t>
 			{
 				if (self->next == self->script->size()) {
 					return { capy::error::eof, 0 };
@@ -84,8 +87,11 @@ struct scripted_stream
 		{
 			std::size_t n;
 			[[nodiscard]] auto await_ready() const noexcept -> bool { return true; }
-			auto await_suspend(std::coroutine_handle<> h, const capy::io_env *) -> std::coroutine_handle<> { return h; }
-			auto await_resume() -> capy::io_result<std::size_t> { return { std::error_code{}, n }; }
+			auto await_suspend(std::coroutine_handle<> h, const capy::await_context *) -> std::coroutine_handle<>
+			{
+				return h;
+			}
+			auto await_resume() -> capy::results<std::size_t> { return { std::error_code{}, n }; }
 		};
 		return awaitable{ capy::buffer_size(buffers) };
 	}
@@ -115,11 +121,11 @@ struct short_write_stream
 		std::error_code ec;
 		std::size_t n;
 		[[nodiscard]] static auto await_ready() noexcept -> bool { return true; }
-		static auto await_suspend(std::coroutine_handle<> h, const capy::io_env *) -> std::coroutine_handle<>
+		static auto await_suspend(std::coroutine_handle<> h, const capy::await_context *) -> std::coroutine_handle<>
 		{
 			return h;
 		}
-		auto await_resume() -> capy::io_result<std::size_t> { return { ec, n }; }
+		auto await_resume() -> capy::results<std::size_t> { return { ec, n }; }
 	};
 };
 

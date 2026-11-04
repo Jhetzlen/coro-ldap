@@ -407,7 +407,7 @@ struct blackhole
 	corosio::tcp_socket filler;
 	blackhole(corosio::io_context &ioc, const char *addr, std::uint16_t port) : acc(make(ioc, addr, port)), filler(ioc)
 	{
-		auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::io_result<>> {
+		auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::results<>> {
 			co_return co_await s.connect(ep);
 		}(filler, acc.local_endpoint()));
 		REQUIRE_FALSE(fec);
@@ -522,7 +522,7 @@ TEST_CASE("Happy Eyeballs: the budget covers every attempt", "[net][connect][tcp
 	tcp_server srv(ioc, 0);
 	blackhole first(ioc, "127.0.0.2", srv.port);
 	corosio::tcp_socket filler(ioc);
-	auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::io_result<>> {
+	auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::results<>> {
 		co_return co_await s.connect(ep);
 	}(filler, corosio::endpoint(corosio::ipv4_address::loopback(), srv.port)));
 	REQUIRE_FALSE(fec);
@@ -722,7 +722,7 @@ TEST_CASE("connect timeout while the TCP handshake cannot complete", "[net][conn
 	corosio::io_context ioc;
 	tcp_server srv(ioc, 0);
 	corosio::tcp_socket filler(ioc);
-	auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::io_result<>> {
+	auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::results<>> {
 		co_return co_await s.connect(ep);
 	}(filler, corosio::endpoint(corosio::ipv4_address::loopback(), srv.port)));
 	REQUIRE_FALSE(fec);
@@ -982,7 +982,9 @@ TEST_CASE("connect ldapi:// to a Unix domain socket", "[net][connect][ldapi]")
 	temp_path sock(u8".sock");
 	corosio::local_stream_acceptor acc(ioc);
 	REQUIRE_FALSE(acc.open());
-	REQUIRE_FALSE(acc.bind(corosio::local_endpoint(sock.str()), corosio::bind_option::unlink_existing));
+	const auto [pec, path] = corosio::make_local_endpoint(sock.str());
+	REQUIRE_FALSE(pec);
+	REQUIRE_FALSE(acc.bind(path, corosio::bind_option::unlink_existing));
 	REQUIRE_FALSE(acc.listen());
 
 	const std::string url = "ldapi://" + percent_encode(sock.str());
@@ -1036,6 +1038,8 @@ TEST_CASE("ldapi:// errors", "[net][connect][ldapi]")
 	auto too_long = connect_to(ioc, "ldapi://" + percent_encode("/" + std::string(200, 'x')));
 	REQUIRE_FALSE(too_long.has_value());
 	CHECK(too_long.error().code == std::errc::filename_too_long);
+	CHECK_THAT(std::string(too_long.error().context),
+	  EndsWith(": socket path longer than " + std::to_string(corosio::local_endpoint::max_path_length) + " bytes"));
 }
 
 // ---------------------------------------------------------------- TLS
@@ -1681,7 +1685,7 @@ TEST_CASE("transport shutdown: plain and wrapped transports just close", "[net][
 	CHECK_FALSE(t.is_open());
 	// capy::test::stream::close() ran: the peer reads end of file.
 	char byte = 0;
-	auto [ec, n] = run(ioc, [](capy::test::stream &s, char &c) -> capy::task<capy::io_result<std::size_t>> {
+	auto [ec, n] = run(ioc, [](capy::test::stream &s, char &c) -> capy::task<capy::results<std::size_t>> {
 		co_return co_await s.read_some(capy::mutable_buffer(&c, 1));
 	}(b, byte));
 	CHECK(ec == capy::cond::eof);

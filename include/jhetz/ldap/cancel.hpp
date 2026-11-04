@@ -7,7 +7,7 @@
 // The per-operation timeout covers the common case. To give up on an
 // operation when something else happens first (a timer, Ctrl-C, a
 // capy::async_event), race it with capy::when_any through raceable(): when_any only takes awaitables returning
-// capy::io_result. The first to complete wins and the others are stopped, so a losing operation is abandoned (a losing
+// capy::results. The first to complete wins and the others are stopped, so a losing operation is abandoned (a losing
 // bind or StartTLS closes the connection):
 //
 //   auto r = co_await capy::when_any(ldap::raceable(c->search(params)),
@@ -36,7 +36,7 @@
 
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/this_coro.hpp>
-#include <boost/capy/io_result.hpp>
+#include <boost/capy/results.hpp>
 #include <boost/capy/task.hpp>
 
 #include <stop_token>
@@ -46,10 +46,10 @@
 namespace jhetz::ldap {
 
 // Adapts an operation for capy::when_any, which races only awaitables
-// returning capy::io_result: the operation's result<T> becomes the payload
-// of an io_result with no error, so it wins the race once it completes,
+// returning capy::results: the operation's result<T> becomes the payload
+// of a capy::results with no error, so it wins the race once it completes,
 // successfully or not. If it is cancelled (it lost the race, or the awaiting
-// task was stopped) the io_result carries its error code instead and cannot
+// task was stopped) the results carry its error code instead and cannot
 // win; the operation was then abandoned, or, for a bind or StartTLS, the
 // connection closed (one stopped before it starts is not sent: nothing is
 // abandoned and the connection stays open). At the operation's index,
@@ -57,14 +57,14 @@ namespace jhetz::ldap {
 // section 4.11): an update (add, modify, delete, modify DN) that lost the
 // race may still have been applied by the server; re-read the entry if the
 // outcome matters.
-template<class T> auto raceable(boost::capy::task<result<T>> op) -> boost::capy::task<boost::capy::io_result<result<T>>>
+template<class T> auto raceable(boost::capy::task<result<T>> op) -> boost::capy::task<boost::capy::results<result<T>>>
 {
 	result<T> r = co_await std::move(op);
 	std::error_code ec;
 	if (!r && r.error().code == cond::canceled && (co_await boost::capy::this_coro::stop_token).stop_requested()) {
 		ec = r.error().code;
 	}
-	co_return boost::capy::io_result<result<T>>{ ec, std::move(r) };
+	co_return boost::capy::results<result<T>>{ ec, std::move(r) };
 }
 
 // Awaits `op` with a stop token that is set when either `token` or the

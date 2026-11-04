@@ -91,11 +91,11 @@ template<class Inner> struct breakable_write
 	std::optional<Inner> inner;
 
 	[[nodiscard]] auto await_ready() -> bool { return !inner || inner->await_ready(); }
-	auto await_suspend(std::coroutine_handle<> h, const capy::io_env *env) -> decltype(auto)
+	auto await_suspend(std::coroutine_handle<> h, const capy::await_context *env) -> decltype(auto)
 	{
 		return inner->await_suspend(h, env);
 	}
-	auto await_resume() -> capy::io_result<std::size_t>
+	auto await_resume() -> capy::results<std::size_t>
 	{
 		if (!inner) {
 			return { std::make_error_code(std::errc::broken_pipe), 0 };

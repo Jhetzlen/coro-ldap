@@ -147,7 +147,7 @@ namespace {
 
 	// Resolves with a deadline that holds even while getaddrinfo blocks.
 	auto resolve_bounded(corosio::io_context &ioc, std::string host, std::string port, deadline_t deadline)
-	  -> capy::task<capy::io_result<std::vector<corosio::endpoint>>>
+	  -> capy::task<capy::results<std::vector<corosio::endpoint>>>
 	{
 		const auto st = std::make_shared<resolve_state>();
 		capy::run_async(ioc.get_executor())(resolve_detached(ioc, std::move(host), std::move(port), st));
@@ -202,12 +202,12 @@ namespace {
 		bool canceled = false;// a wait or connect was stopped by the caller
 	};
 
-	auto wait_for(capy::async_event &e) -> capy::task<capy::io_result<>> { co_return co_await e.wait(); }
+	auto wait_for(capy::async_event &e) -> capy::task<capy::results<>> { co_return co_await e.wait(); }
 
 	// One connection attempt of the race; succeeds only if it connected.
-	auto attempt(race_state &st, std::size_t i) -> capy::task<capy::io_result<>>
+	auto attempt(race_state &st, std::size_t i) -> capy::task<capy::results<>>
 	{
-		const auto give_up = [&st, i](std::error_code ec) -> capy::io_result<> {
+		const auto give_up = [&st, i](std::error_code ec) -> capy::results<> {
 			if (ec == capy::cond::canceled) {
 				st.canceled = true;
 			}
@@ -315,8 +315,9 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 
 	// ---- ldapi://
 	if (u.scheme() == url_scheme::ldapi) {
-		if (u.host().size() > corosio::local_endpoint::max_path_length) {
-			co_return fail(std::make_error_code(std::errc::filename_too_long),
+		auto [pec, socket_path] = corosio::make_local_endpoint(u.host());
+		if (pec) {
+			co_return fail(pec,
 			  ldap::detail::format(
 				"{}: socket path longer than {} bytes", target, corosio::local_endpoint::max_path_length));
 		}
@@ -324,7 +325,7 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 		auto &im = transport_access::get(t);
 		im.host = u.host();
 		im.local.emplace(ioc);
-		auto [ec] = co_await bounded(im.local->connect(corosio::local_endpoint(u.host())), deadline);
+		auto [ec] = co_await bounded(im.local->connect(socket_path), deadline);
 		if (ec) {
 			co_return fail(ec, stage_context(target, quoted("connect", u.host()), ec, options.timeout));
 		}
@@ -362,7 +363,7 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 	  detail::interleave_families(std::move(endpoints)),
 	  deadline,
 	  std::max(options.attempt_delay, std::chrono::milliseconds::zero()));
-	std::vector<capy::task<capy::io_result<>>> attempts;
+	std::vector<capy::task<capy::results<>>> attempts;
 	attempts.reserve(race.endpoints.size());
 	for (std::size_t i = 0; i < race.endpoints.size(); ++i) {
 		attempts.push_back(attempt(race, i));
@@ -388,10 +389,8 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 	im.host = u.host();
 	im.tcp.emplace(std::move(race.sockets[std::get<1>(winner)]));
 	if (options.tcp_no_delay) {
-		try {
-			im.tcp->set_option(corosio::socket_option::no_delay(true));
-		} catch (const std::system_error &e) {
-			co_return fail(e.code(), target + ": set TCP_NODELAY");
+		if (const auto ec = im.tcp->set_option(corosio::socket_option::no_delay(true)); ec) {
+			co_return fail(ec, target + ": set TCP_NODELAY");
 		}
 	}
 

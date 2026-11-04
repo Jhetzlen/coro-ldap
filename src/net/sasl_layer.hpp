@@ -15,7 +15,8 @@
 #include <boost/capy/concept/const_buffer_sequence.hpp>
 #include <boost/capy/concept/mutable_buffer_sequence.hpp>
 #include <boost/capy/io/any_stream.hpp>
-#include <boost/capy/io_task.hpp>
+#include <boost/capy/results.hpp>
+#include <boost/capy/task.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -63,7 +64,8 @@ class sasl_layer_stream
 	// after the final BindResponse): the start of the protected stream.
 	void feed(std::span<const std::byte> bytes);
 
-	template<boost::capy::MutableBufferSequence MB> auto read_some(MB buffers) -> boost::capy::io_task<std::size_t>
+	template<boost::capy::MutableBufferSequence MB>
+	auto read_some(MB buffers) -> boost::capy::task<boost::capy::results<std::size_t>>
 	{
 		read_error_.clear();
 		if (boost::capy::buffer_size(buffers) == 0) {
@@ -79,7 +81,8 @@ class sasl_layer_stream
 		co_return { std::error_code{}, n };
 	}
 
-	template<boost::capy::ConstBufferSequence CB> auto write_some(CB buffers) -> boost::capy::io_task<std::size_t>
+	template<boost::capy::ConstBufferSequence CB>
+	auto write_some(CB buffers) -> boost::capy::task<boost::capy::results<std::size_t>>
 	{
 		write_error_.clear();
 		const std::size_t size = boost::capy::buffer_size(buffers);
@@ -105,11 +108,11 @@ class sasl_layer_stream
 
   private:
 	// Until plaintext is waiting: reads and unwraps buffers.
-	auto fill() -> boost::capy::io_task<>;
+	auto fill() -> boost::capy::task<boost::capy::results<>>;
 	// Wraps staged_ into out_, with its length.
 	auto protect() -> std::error_code;
 	// Writes out_ whole.
-	auto flush() -> boost::capy::io_task<>;
+	auto flush() -> boost::capy::task<boost::capy::results<>>;
 	// A layer that takes no plaintext (max_wrap_input() 0): encode_error.
 	auto refuse_empty_wrap() -> std::error_code;
 	// Unwraps the buffer at the front of in_ if it is complete; whether it

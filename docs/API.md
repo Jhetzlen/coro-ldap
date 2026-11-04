@@ -273,7 +273,7 @@ itself needs only ICU.
   the connection stays usable; so does a stream destroyed before its end.
   To give up on an operation when another event comes first,
   `capy::when_any(ldap::raceable(c.search(p)), corosio::delay(5s))` races
-  it (`raceable` makes its `result<T>` the payload of a `capy::io_result`,
+  it (`raceable` makes its `result<T>` the payload of a `capy::results`,
   as `when_any` requires; the first to complete wins, the other is
   stopped, so a losing operation is abandoned; one stopped before it
   starts is not sent). `ldap::with_stop(token, op)` cancels it on a

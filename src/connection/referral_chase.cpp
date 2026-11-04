@@ -11,7 +11,7 @@
 
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/this_coro.hpp>
-#include <boost/capy/io_result.hpp>
+#include <boost/capy/results.hpp>
 
 #include <algorithm>
 #include <array>
@@ -218,11 +218,11 @@ namespace {
 
 	auto canceled() -> error { return make_error(capy::error::canceled, "referral chase"); }
 
-	// The connector's answer as an io_result, for corosio::timeout: its
+	// The connector's answer as a capy::results, for corosio::timeout: its
 	// cancellation shows in the code (the deadline is then reported as
 	// such), the answer itself in the payload.
-	auto as_io_result(capy::task<result<connection *>> asked)
-	  -> capy::task<capy::io_result<std::optional<result<connection *>>>>
+	auto as_results(capy::task<result<connection *>> asked)
+	  -> capy::task<capy::results<std::optional<result<connection *>>>>
 	{
 		auto c = co_await std::move(asked);
 		std::error_code ec;
@@ -236,7 +236,7 @@ namespace {
 	// chase's budget is spent (then a timeout error).
 	auto ask(const chase_state &st, const url &server, std::size_t depth) -> capy::task<result<connection *>>
 	{
-		auto [ec, c] = co_await net::detail::bounded(as_io_result(st.connector(server, depth)), st.deadline);
+		auto [ec, c] = co_await net::detail::bounded(as_results(st.connector(server, depth)), st.deadline);
 		if (c) {
 			co_return std::move(*c);
 		}
