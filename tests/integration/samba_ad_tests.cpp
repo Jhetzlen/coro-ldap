@@ -14,14 +14,19 @@
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/ad.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/sasl_ntlm.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdlib>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace ldap = jhetz::ldap;
 namespace corosio = boost::corosio;
@@ -51,8 +56,13 @@ const ldap::dn administrator{ "CN=Administrator,CN=Users,DC=coro,DC=test" };
 const std::string administrator_password = "Adm1n-Passw0rd";
 const ldap::dn pwchange{ "CN=pwchange,CN=Users,DC=coro,DC=test" };
 
+const std::string alice_password = "Al1ce-Passw0rd";
+const std::string jorg_password = "Jörg-𝄞-Pässw0rd";// U+1D11E, outside the BMP
+
 auto strict_ldap() -> std::string { return env("JHETZ_LDAP_IT_SAMBA_LDAP"); }
 auto strict_ldaps() -> std::string { return env("JHETZ_LDAP_IT_SAMBA_LDAPS"); }
+auto relaxed_ldap() -> std::string { return env("JHETZ_LDAP_IT_SAMBA_RELAXED_LDAP"); }
+auto relaxed_ldaps() -> std::string { return env("JHETZ_LDAP_IT_SAMBA_RELAXED_LDAPS"); }
 
 // Trusts Samba's CA and matches its certificate's CN.
 auto samba_tls(ldap::connection_options o = {}) -> ldap::connection_options
@@ -257,4 +267,226 @@ TEST_CASE("samba ad: a password change on plain ldap:// is refused before sendin
 	}
 	CHECK(c.is_open());
 	CHECK(try_bind(ioc, pwchange, "Plain-Passw0rd").has_value());
+}
+
+// ---------------------------------------------------------------- SASL NTLM binds
+
+namespace {
+
+// To `url` over ldaps://, or over ldap:// and StartTLS.
+auto open_tls_to(corosio::io_context &ioc, const std::string &ldaps, const std::string &ldap, bool start_tls)
+  -> ldap::connection
+{
+	if (start_tls) {
+		auto o = samba_tls();
+		o.start_tls = true;
+		return open(ioc, ldap, o);
+	}
+	return open(ioc, ldaps);
+}
+
+// Binds with `mech`, then asks who the connection is bound as.
+auto ntlm_bind(corosio::io_context &ioc, ldap::connection &c, ldap::sasl_mechanism &mech) -> ldap::result<std::string>
+{
+	auto r = finish(ioc, c.sasl_bind(mech));
+	if (!r) {
+		return std::unexpected(std::move(r.error()));
+	}
+	return finish(ioc, c.who_am_i());
+}
+
+// sasl_ntlm given the tls-server-end-point hash of another certificate (the
+// connection's with one bit flipped): what a man in the middle relaying
+// the bind to the DC over its own TLS connection would send.
+class ntlm_wrong_binding final : public ldap::sasl_mechanism
+{
+  public:
+	ntlm_wrong_binding(std::string username, std::string password) : ntlm_(std::move(username), std::move(password)) {}
+
+	[[nodiscard]] auto name() const noexcept -> std::string_view override { return ntlm_.name(); }
+	void prepare(const ldap::sasl_bind_context &context) override
+	{
+		binding_.assign(context.bindings.tls_server_end_point.begin(), context.bindings.tls_server_end_point.end());
+		REQUIRE_FALSE(binding_.empty());
+		binding_[0] ^= std::byte{ 1 };
+		ldap::sasl_bind_context other = context;
+		other.bindings.tls_server_end_point = binding_;
+		ntlm_.prepare(other);
+	}
+	auto start() -> ldap::result<std::optional<std::string>> override { return ntlm_.start(); }
+	auto step(std::optional<std::string_view> challenge) -> ldap::result<std::optional<std::string>> override
+	{
+		return ntlm_.step(challenge);
+	}
+	auto complete(std::optional<std::string_view> server_creds) -> ldap::result<void> override
+	{
+		return ntlm_.complete(server_creds);
+	}
+	[[nodiscard]] auto channel_binding_used() const noexcept -> std::optional<ldap::channel_binding_type> override
+	{
+		return ntlm_.channel_binding_used();
+	}
+
+  private:
+	ldap::sasl_ntlm ntlm_;
+	std::vector<std::byte> binding_;
+};
+
+}// namespace
+
+TEST_CASE("samba ad: sasl_ntlm binds over TLS with channel binding", "[samba_ad][ntlm]")
+{
+	require_samba();
+	corosio::io_context ioc;
+	const bool start_tls = GENERATE(false, true);
+	CAPTURE(start_tls);
+	// The strict DC: channel bindings required over TLS.
+	auto c = open_tls_to(ioc, strict_ldaps(), strict_ldap(), start_tls);
+	const struct
+	{
+		const char *name;
+		std::string username;
+		const std::string *password;
+		std::string who;
+	} cases[] = {
+		{ .name = "UPN", .username = "alice@coro.test", .password = &alice_password, .who = "u:CORO\\alice" },
+		{ .name = "DOMAIN\\user", .username = "CORO\\alice", .password = &alice_password, .who = "u:CORO\\alice" },
+		{ .name = "a bare user name (the server's domain)",
+		  .username = "alice",
+		  .password = &alice_password,
+		  .who = "u:CORO\\alice" },
+		{ .name = "a non-ASCII UPN, a non-BMP password",
+		  .username = "jörg@coro.test",
+		  .password = &jorg_password,
+		  .who = "u:CORO\\jörg" },
+		{ .name = "a non-ASCII DOMAIN\\user, a non-BMP password",
+		  .username = "CORO\\jörg",
+		  .password = &jorg_password,
+		  .who = "u:CORO\\jörg" },
+		{ .name = "a non-ASCII user name in other case (uppercased by NTOWFv2)",
+		  .username = "CORO\\JÖRG",
+		  .password = &jorg_password,
+		  .who = "u:CORO\\jörg" },
+	};
+	for (const auto &t : cases) {
+		DYNAMIC_SECTION(t.name)
+		{
+			ldap::sasl_ntlm mech(t.username, *t.password);
+			auto who = ntlm_bind(ioc, c, mech);
+			if (!who) {
+				FAIL(who.error().message());
+			}
+			CHECK(*who == t.who);
+			CHECK(mech.channel_binding_used() == ldap::channel_binding_type::tls_server_end_point);
+		}
+	}
+	SECTION("a wrong password: invalidCredentials")
+	{
+		ldap::sasl_ntlm mech("CORO\\alice", "Wrong-Passw0rd");
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		INFO(r.error().message());
+		CHECK(r.error().code == ldap::errc::invalid_credentials);
+		// SEC_E_LOGON_DENIED (0x8009030C), "data 52e" (ERROR_LOGON_FAILURE),
+		// in Windows' format.
+		CHECK_THAT(std::string(r.error().diagnostic), StartsWith("8009030C"));
+		CHECK_THAT(std::string(r.error().diagnostic), ContainsSubstring("data 52e"));
+	}
+}
+
+TEST_CASE("samba ad: sasl_ntlm channel binding policy", "[samba_ad][ntlm]")
+{
+	require_samba();
+	corosio::io_context ioc;
+	const bool start_tls = GENERATE(false, true);
+	CAPTURE(start_tls);
+	// A refused binding is invalidCredentials with SEC_E_BAD_BINDINGS
+	// (0x80090346) in Windows' diagnostic format.
+	const auto bad_bindings = [](const ldap::result<void> &r) {
+		REQUIRE_FALSE(r.has_value());
+		INFO(r.error().message());
+		CHECK(r.error().code == ldap::errc::invalid_credentials);
+		CHECK_THAT(std::string(r.error().diagnostic), StartsWith("80090346"));
+	};
+	SECTION("required (strict): a wrong binding is refused")
+	{
+		auto c = open_tls_to(ioc, strict_ldaps(), strict_ldap(), start_tls);
+		ntlm_wrong_binding mech("CORO\\alice", alice_password);
+		bad_bindings(finish(ioc, c.sasl_bind(mech)));
+	}
+	SECTION("required (strict): none is refused")
+	{
+		auto c = open_tls_to(ioc, strict_ldaps(), strict_ldap(), start_tls);
+		ldap::sasl_ntlm mech("CORO\\alice", alice_password, { .channel_binding = ldap::ntlm_channel_binding::none });
+		bad_bindings(finish(ioc, c.sasl_bind(mech)));
+	}
+	SECTION("not required (relaxed): none (no MsvAvChannelBindings) is accepted")
+	{
+		auto c = open_tls_to(ioc, relaxed_ldaps(), relaxed_ldap(), start_tls);
+		ldap::sasl_ntlm mech("CORO\\alice", alice_password, { .channel_binding = ldap::ntlm_channel_binding::none });
+		auto who = ntlm_bind(ioc, c, mech);
+		if (!who) {
+			FAIL(who.error().message());
+		}
+		CHECK(*who == "u:CORO\\alice");
+		CHECK_FALSE(mech.channel_binding_used().has_value());
+	}
+	// Samba checks the bindings a client sends even with `ldap server
+	// require strong auth = no` (only their absence is let through),
+	// where Windows' LdapEnforceChannelBinding = 0 checks none.
+	SECTION("not required (relaxed): a wrong binding is still refused")
+	{
+		auto c = open_tls_to(ioc, relaxed_ldaps(), relaxed_ldap(), start_tls);
+		ntlm_wrong_binding mech("CORO\\alice", alice_password);
+		bad_bindings(finish(ioc, c.sasl_bind(mech)));
+	}
+	SECTION("not required (relaxed): a correct binding is accepted")
+	{
+		auto c = open_tls_to(ioc, relaxed_ldaps(), relaxed_ldap(), start_tls);
+		ldap::sasl_ntlm mech("CORO\\alice", alice_password);
+		auto who = ntlm_bind(ioc, c, mech);
+		if (!who) {
+			FAIL(who.error().message());
+		}
+		CHECK(*who == "u:CORO\\alice");
+	}
+}
+
+TEST_CASE("samba ad: sasl_ntlm without a security layer on plain ldap://", "[samba_ad][ntlm]")
+{
+	require_samba();
+	corosio::io_context ioc;
+	SECTION("require_tls (the default): refused before anything is sent")
+	{
+		auto c = open(ioc, strict_ldap());
+		ldap::sasl_ntlm mech("CORO\\alice", alice_password);
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::tls_required);
+		CHECK(r.error().diagnostic.empty());
+		CHECK(c.is_open());
+	}
+	SECTION("signing required (strict): strongerAuthRequired")
+	{
+		auto c = open(ioc, strict_ldap());
+		ldap::sasl_ntlm mech("CORO\\alice", alice_password, { .require_tls = false });
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		INFO(r.error().message());
+		CHECK(r.error().code == ldap::errc::stronger_auth_required);
+		// Windows says "00002028: LdapErr: ... The server requires binds to
+		// turn on integrity checking ..."; Samba has no Win32 code here.
+		CHECK(std::string(r.error().diagnostic) == "SASL:[GSS-SPNEGO]: Sign or Seal are required.");
+	}
+	SECTION("signing not required (relaxed): accepted")
+	{
+		auto c = open(ioc, relaxed_ldap());
+		ldap::sasl_ntlm mech("CORO\\alice", alice_password, { .require_tls = false });
+		auto who = ntlm_bind(ioc, c, mech);
+		if (!who) {
+			FAIL(who.error().message());
+		}
+		CHECK(*who == "u:CORO\\alice");
+		CHECK(c.security_layer() == ldap::sasl_protection::none);
+	}
 }

@@ -380,6 +380,15 @@ What it covers:
   policy refuses (`constraint_violation`, `0000052D`, also for a reset)
   and a wrong old password (`constraint_violation`, `00000056`); on plain
   ldap:// `client_errc::tls_required` before the modify is sent.
+- `sasl_ntlm` binds over ldaps:// and StartTLS: a UPN, `DOMAIN\user`, a
+  bare user name, a non-ASCII user (`jörg`, also in upper case) with a
+  non-BMP password, a wrong password (`invalid_credentials`, `8009030C`
+  data 52e); channel binding: accepted when correct, a wrong binding
+  refused (`invalid_credentials`, `80090346`) by both DCs,
+  `ntlm_channel_binding::none` refused by the strict DC and accepted by
+  the relaxed one; on plain ldap:// `tls_required` before sending,
+  `stronger_auth_required` from the strict DC with `require_tls = false`,
+  accepted by the relaxed one.
 
 What Samba does not emulate, compared with Windows AD:
 
@@ -389,6 +398,16 @@ What Samba does not emulate, compared with Windows AD:
   check_password_restrictions: The old password specified doesn't
   match!`), Windows follows it with `AtrErr: DSID-...` details. The
   library reads only the code.
+- `strongerAuthRequired` for an unsigned bind on plain ldap:// comes
+  with `SASL:[GSS-SPNEGO]: Sign or Seal are required.`, not Windows'
+  `00002028: LdapErr: ...`. The bind failures (`8009030C`, `80090346`)
+  are in Windows' format.
+- Channel bindings a client sends are checked even with `require strong
+  auth = no`, where Windows' LdapEnforceChannelBinding = 0 checks none;
+  only a client sending no MsvAvChannelBindings passes Samba's optional
+  check (an explicit Z(16) does not, hence `ntlm_channel_binding::none`
+  leaves the pair out). The MsvAvTargetName (`ldap/127.0.0.1` here) is
+  not checked.
 - Group Policy, the registry settings themselves (`LDAPServerIntegrity`,
   `LdapEnforceChannelBinding`) and their per-DC reload: Samba reads
   `ldap server require strong auth` at start, so each policy is a

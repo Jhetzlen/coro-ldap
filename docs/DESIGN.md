@@ -1020,7 +1020,11 @@ LMv2) and the section 4.2.4.3 CHALLENGE_MESSAGE, RFC 1320's MD4 suite,
 malformed CHALLENGE_MESSAGEs, and binds against the scripted mock server
 that recomputes the NTProofStr and the MIC as a domain controller would,
 with Unicode names and passwords, the channel bindings (against a
-Python-computed hash) and the refusals. Not tested against AD itself.
+Python-computed hash) and the refusals; and against Samba AD DCs
+(`integration.samba_ad`, run_samba_ad.sh): UPN, DOMAIN\user and
+non-ASCII binds with a non-BMP password over ldaps:// and StartTLS,
+channel binding required and optional, and plain ldap://. Not tested
+against Windows AD itself.
 
 NTLM's security layer (coro-ldap-ite.1; MS-NLMP section 3.4, with
 extended session security, key exchange and 128-bit keys only) is opt-in:
