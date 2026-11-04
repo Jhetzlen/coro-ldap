@@ -19,6 +19,7 @@
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -29,6 +30,10 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+#ifdef __linux__
+#include <sys/mman.h>
+#endif
 
 namespace ldap = jhetz::ldap;
 namespace net = jhetz::ldap::net;
@@ -260,6 +265,23 @@ TEST_CASE("ad_password_value: quoted UTF-16LE, full Unicode", "[net][password]")
 		CHECK(r.error().code == client_errc::encode_error);
 		CHECK(std::string(r.error().context) == "Active Directory password value: the password is not valid UTF-8");
 	}
+}
+
+TEST_CASE("ad_password_value: a password over the length limit", "[net][password]")
+{
+#ifdef __linux__
+	// One byte over the limit, over a reserved, never touched mapping.
+	constexpr std::size_t size = (INT32_MAX / 2) - 1;
+	void *p = mmap(nullptr, size, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+	REQUIRE(p != MAP_FAILED);
+	auto r = ldap::ad_password_value(std::string_view(static_cast<const char *>(p), size));
+	munmap(p, size);
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == client_errc::encode_error);
+	CHECK(std::string(r.error().context) == "Active Directory password value: the password is too long");
+#else
+	SKIP("needs mmap");
+#endif
 }
 
 // ---------------------------------------------------------------- automatic

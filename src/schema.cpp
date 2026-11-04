@@ -466,16 +466,18 @@ auto server_schema::skipped_for_syntax(std::string_view name) const noexcept -> 
 
 namespace {
 
+	// Longest SUP chain followed; a longer one is taken for a cycle.
+	constexpr int max_sup_depth = 32;
+
 	// The first definition on a's SUP chain (a itself first) that has
 	// `field`; nullptr if none does, a SUP is not found, or the chain is
-	// longer than 32 (a cycle).
+	// longer than max_sup_depth (a cycle).
 	auto inherited(const server_schema &s,
 	  const attribute_type &a,
 	  std::optional<std::string> attribute_type::*field) noexcept -> const std::string *
 	{
-		constexpr int max_depth = 32;
 		const attribute_type *cur = &a;
-		for (int depth = 0; depth < max_depth && cur != nullptr; ++depth) {
+		for (int depth = 0; depth < max_sup_depth && cur != nullptr; ++depth) {
 			if (const auto &v = cur->*field) {
 				return &*v;
 			}
@@ -529,13 +531,10 @@ namespace {
 	// ends without any SYNTAX (RFC 4512 4.1.2 requires a SYNTAX or a SUP;
 	// slapd refuses such a definition, AD always gives SYNTAX). The syntax
 	// cannot be checked then, which is an error, not a silent pass.
-	auto broken_sup_chain(const server_schema &s, const attribute_type &a) -> std::optional<std::string>
+	auto broken_sup_chain(const server_schema &s, const attribute_type &a) -> std::string
 	{
 		const attribute_type *cur = &a;
-		for (int depth = 0; depth < 32; ++depth) {
-			if (cur->syntax) {
-				return std::nullopt;
-			}
+		for (int depth = 0; depth < max_sup_depth; ++depth) {
 			if (!cur->sup) {
 				return cur == &a ? "syntax unknown: the server declares no SYNTAX and no SUP for it"
 								 : "syntax unknown: the server declares no SYNTAX for it or its supertypes";
@@ -551,7 +550,7 @@ namespace {
 			}
 			cur = next;
 		}
-		return "syntax unknown: the SUP chain is longer than 32 (a cycle?)";
+		return detail::format("syntax unknown: the SUP chain is longer than {} (a cycle?)", max_sup_depth);
 	}
 
 }// namespace
@@ -712,11 +711,9 @@ namespace detail {
 		if (!syntaxes.empty()) {
 			const std::string *syn = s.syntax_of(*a);
 			if (syn == nullptr) {
-				if (auto why = broken_sup_chain(s, *a)) {
-					out.issues.push_back({ .what = schema_issue::kind::syntax_mismatch,
-					  .name = std::string(name),
-					  .detail = std::move(*why) });
-				}
+				out.issues.push_back({ .what = schema_issue::kind::syntax_mismatch,
+				  .name = std::string(name),
+				  .detail = broken_sup_chain(s, *a) });
 			} else if (std::ranges::none_of(syntaxes, [&](const char *x) { return *syn == x; })) {
 				// A numeric OID (parse_attribute_type), but of any length.
 				std::string text = "syntax ";

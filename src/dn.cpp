@@ -185,12 +185,7 @@ auto operator==(const rdn &a, const rdn &b) -> bool
 
 rdn::rdn(literal l, const allocator_type &alloc) : avas(alloc)
 {
-	auto parsed = parse(l.text, alloc.resource());
-	// Unreachable: the literal was validated at compile time with the same scanner.
-	if (!parsed) {
-		throw std::invalid_argument("ldap::rdn: invalid relative distinguished name");
-	}
-	avas = std::move(parsed->avas);// same resource: no copy
+	avas = std::move(parse(l.text, alloc.resource()).value().avas);// same resource: no copy
 }
 
 auto rdn::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<rdn>
@@ -226,12 +221,7 @@ auto rdn::to_string(std::pmr::memory_resource *mr) const -> std::pmr::string
 
 dn::dn(literal l, const allocator_type &alloc) : rdns_(alloc)
 {
-	auto parsed = parse(l.text, alloc.resource());
-	// Unreachable: the literal was validated at compile time with the same scanner.
-	if (!parsed) {
-		throw std::invalid_argument("ldap::dn: invalid distinguished name");
-	}
-	rdns_ = std::move(parsed->rdns_);// same resource: no copy
+	rdns_ = std::move(parse(l.text, alloc.resource()).value().rdns_);// same resource: no copy
 }
 
 auto dn::parse(std::string_view text, std::pmr::memory_resource *mr) -> result<dn>

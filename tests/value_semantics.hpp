@@ -76,6 +76,9 @@ template<class T, class Members = no_members> void check_value_semantics(const T
 	{
 		T s(src, alloc_t(&rs));
 		moved_other.emplace(std::move(s), b);
+		s = src;
+		CHECK(s == sample);
+		check_on(s, &rs, members);
 	}
 	CHECK(*moved_other == sample);
 	check_on(*moved_other, &rb, members);

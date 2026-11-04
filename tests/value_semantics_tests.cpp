@@ -352,6 +352,13 @@ TEST_CASE("value semantics: ava and attribute", "[value_semantics][dn][attribute
 	CHECK_FALSE(ldap::attribute{ "cn" }.empty());
 }
 
+TEST_CASE("value semantics: filter self-move", "[value_semantics][filter]")
+{
+	const auto f = ldap::filter::raw("(&(a=1)(cn=init*x*fin))");
+	REQUIRE(f.has_value());
+	check_self_move(*f);
+}
+
 TEST_CASE("value semantics: content synchronization", "[value_semantics][content_sync]")
 {
 	ldap::sync_uuid uuid;

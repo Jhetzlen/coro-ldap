@@ -207,9 +207,6 @@ namespace {
 	auto has_dn_attributes_field(ber::reader r) -> bool
 	{
 		constexpr ber::tag extensible = ber::context(extensible_match_tag, true);
-		if (r.empty()) {
-			return false;
-		}
 		const auto t = r.peek_tag();
 		if (!t || t->cls != extensible.cls || t->number != extensible.number || !t->constructed) {
 			return false;

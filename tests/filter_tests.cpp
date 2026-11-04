@@ -809,7 +809,7 @@ TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limit
 		CHECK(t.error().context.contains("more than 10000 filter elements"));
 	}
 	{
-		// Substring parts count while decoding too.
+		// Decoding counts substring parts as elements.
 		const auto parts = to_ber(raw("(a=1*2*3)"));
 		REQUIRE(parts.has_value());
 		auto t = from_ber(*parts, { .max_elements = 3 });

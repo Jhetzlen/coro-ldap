@@ -40,6 +40,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <span>
@@ -76,11 +77,12 @@ using ldap::client_errc;
 //
 // getaddrinfo is interposed for this test binary (Corosio calls it on a pool
 // thread; the real one is reached through RTLD_NEXT, via the sanitizer's own
-// interceptor when there is one). Names outside these two test prefixes go
+// interceptor when there is one). Names outside these test prefixes go
 // to the real resolver unchanged.
 //   slow-dns-*   answers 127.0.0.1 after slow_dns_delay: a lookup that no
 //                timeout can interrupt
 //   two-addr-*   answers 127.0.0.2, then 127.0.0.1 (same port)
+//   three-addr-* answers 127.0.0.2, 127.0.0.3, then 127.0.0.1 (same port)
 //   no-ip-*      succeeds with only non-IP (AF_UNIX) entries, which the
 //                resolver drops: a lookup with no usable address
 //   stop-dns-*   requests stop on lookup_stop (from the lookup's thread),
@@ -130,25 +132,38 @@ extern "C" auto getaddrinfo(const char *name, const char *service, const struct 
 		std::this_thread::sleep_for(slow_dns_delay);
 		return real("127.0.0.1", service, req, pai);
 	}
-	if (host.starts_with("two-addr-")) {
+	// The IPv4 answers for `addresses`, in order, chained into one list.
+	const auto chained = [&](std::initializer_list<const char *> addresses) -> int {
 		struct addrinfo v4 = req != nullptr ? *req : addrinfo{};
 		v4.ai_family = AF_INET;
 		struct addrinfo *first = nullptr;
-		struct addrinfo *second = nullptr;
-		if (int rc = real("127.0.0.2", service, &v4, &first); rc != 0) {
-			return rc;
+		struct addrinfo *tail = nullptr;
+		for (const char *a : addresses) {
+			struct addrinfo *next = nullptr;
+			if (int rc = real(a, service, &v4, &next); rc != 0) {
+				if (first != nullptr) {
+					freeaddrinfo(first);
+				}
+				return rc;
+			}
+			if (first == nullptr) {
+				first = next;
+			} else {
+				tail->ai_next = next;// glibc frees the nodes one by one, so chaining is fine
+			}
+			tail = next;
+			while (tail->ai_next != nullptr) {
+				tail = tail->ai_next;
+			}
 		}
-		if (int rc = real("127.0.0.1", service, &v4, &second); rc != 0) {
-			freeaddrinfo(first);
-			return rc;
-		}
-		struct addrinfo *tail = first;
-		while (tail->ai_next != nullptr) {
-			tail = tail->ai_next;
-		}
-		tail->ai_next = second;// glibc frees the nodes one by one, so chaining is fine
 		*pai = first;
 		return 0;
+	};
+	if (host.starts_with("two-addr-")) {
+		return chained({ "127.0.0.2", "127.0.0.1" });
+	}
+	if (host.starts_with("three-addr-")) {
+		return chained({ "127.0.0.2", "127.0.0.3", "127.0.0.1" });
 	}
 	return real(name, service, req, pai);
 }
@@ -535,7 +550,7 @@ TEST_CASE("Happy Eyeballs: the budget ends while the next attempt waits", "[net]
 	const auto start = std::chrono::steady_clock::now();
 	auto t = connect_to(ioc,
 	  good.url("ldap", "two-addr-f.test"),
-	  { .timeout = std::chrono::milliseconds(300), .attempt_delay = std::chrono::seconds(20) });
+	  { .timeout = std::chrono::milliseconds(500), .attempt_delay = std::chrono::seconds(20) });
 	REQUIRE_FALSE(t.has_value());
 	CHECK(t.error().code == capy::cond::timeout);
 	CHECK_THAT(std::string(t.error().context), ContainsSubstring(": tcp connect 127.0.0.2:"));
@@ -564,7 +579,7 @@ TEST_CASE("Happy Eyeballs: stopped while the next attempt waits", "[net][connect
 	REQUIRE(u.has_value());
 	std::stop_source stop;
 	outcome<void> stopper;
-	spawn(ioc, stop_after(stop, std::chrono::milliseconds(100)), stopper);
+	spawn(ioc, stop_after(stop, std::chrono::milliseconds(500)), stopper);
 	outcome<ldap::result<net::transport>> out;
 	const auto start = std::chrono::steady_clock::now();
 	spawn(ioc,
@@ -576,6 +591,58 @@ TEST_CASE("Happy Eyeballs: stopped while the next attempt waits", "[net][connect
 	REQUIRE_FALSE(t.has_value());
 	CHECK(t.error().code == capy::cond::canceled);
 	CHECK_THAT(std::string(t.error().context), ContainsSubstring("(1 of 2 addresses tried)"));
+	CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(10));
+}
+
+TEST_CASE("Happy Eyeballs: stopped while the third attempt waits for the second to start",
+  "[net][connect][tcp][cancel][dns]")
+{
+	skip_unless_dns_seam();
+	skip_unless_linux_loopback();
+	// three-addr-* resolves to 127.0.0.2, 127.0.0.3, then 127.0.0.1. The
+	// second attempt waits for the first one's failure (or the 20 s delay),
+	// the third for the second one to start: the stop ends both waits.
+	corosio::io_context ioc;
+	tcp_server good(ioc);
+	blackhole first(ioc, "127.0.0.2", good.port);
+	blackhole second(ioc, "127.0.0.3", good.port);
+	auto u = ldap::url::parse(good.url("ldap", "three-addr-a.test"));
+	REQUIRE(u.has_value());
+	std::stop_source stop;
+	outcome<void> stopper;
+	spawn(ioc, stop_after(stop, std::chrono::milliseconds(500)), stopper);
+	outcome<ldap::result<net::transport>> out;
+	const auto start = std::chrono::steady_clock::now();
+	spawn(ioc,
+	  stop.get_token(),
+	  net::connect(ioc, *u, { .timeout = std::chrono::seconds(30), .attempt_delay = std::chrono::seconds(20) }),
+	  out);
+	drive_until(ioc, [&out] { return out.done(); });
+	auto &t = out.get();
+	REQUIRE_FALSE(t.has_value());
+	CHECK(t.error().code == capy::cond::canceled);
+	CHECK_THAT(std::string(t.error().context), ContainsSubstring(": tcp connect 127.0.0.2:"));
+	CHECK_THAT(std::string(t.error().context), EndsWith("(1 of 3 addresses tried)"));
+	CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(10));
+}
+
+TEST_CASE("Happy Eyeballs: the budget ends while the third attempt waits for the second to start",
+  "[net][connect][tcp][timeout][dns]")
+{
+	skip_unless_dns_seam();
+	skip_unless_linux_loopback();
+	corosio::io_context ioc;
+	tcp_server good(ioc);
+	blackhole first(ioc, "127.0.0.2", good.port);
+	blackhole second(ioc, "127.0.0.3", good.port);
+	const auto start = std::chrono::steady_clock::now();
+	auto t = connect_to(ioc,
+	  good.url("ldap", "three-addr-b.test"),
+	  { .timeout = std::chrono::milliseconds(500), .attempt_delay = std::chrono::seconds(20) });
+	REQUIRE_FALSE(t.has_value());
+	CHECK(t.error().code == capy::cond::timeout);
+	CHECK_THAT(std::string(t.error().context), ContainsSubstring(": tcp connect 127.0.0.2:"));
+	CHECK_THAT(std::string(t.error().context), ContainsSubstring("(1 of 3 addresses tried)"));
 	CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(10));
 }
 

@@ -488,13 +488,19 @@ up, with zero counts).
 
 ### Accepted gaps
 
-Failure paths left uncovered on purpose: reaching them would take a
-fault-injection seam in production code (globals, macros, or a hook in
-every OpenSSL and ICU call), and each only forwards the failure. Paths
-reachable through the seams that exist are tested instead: allocation
-failure through the io_context's frame allocator (`failing_frames`) and the
-memory resources, protocol misuse through the mock servers and direct
-mechanism calls.
+Paths left uncovered on purpose, of three kinds:
+
+- failure paths that only a fault-injection seam in production code
+  (globals, macros, or a hook in every OpenSSL and ICU call) would reach,
+  each only forwarding the failure;
+- size limits that only an input too large to allocate in a test would
+  reach;
+- guards that the callers or a compile-time check rule out.
+
+Paths reachable through the seams that exist are tested instead:
+allocation failure through the io_context's frame allocator
+(`failing_frames`) and the memory resources, protocol misuse through the
+mock servers and direct mechanism calls.
 
 - ICU failures in SASLprep (`src/sasl_scram.cpp`, `icu_failure`): ICU
   fails only on its own allocation failure, an internal error, or ICU data
@@ -514,35 +520,18 @@ mechanism calls.
   without an LDAPResult"): unreachable, since the reader refuses a response
   of another operation first (tested: a SearchResultEntry answering a
   bind, in `tests/net/connection_tests.cpp`).
-- Input size limits of more than 512 MiB: a password over 1 GiB for
-  `ad_password_value` (`src/connection/password.cpp`) and a SASLprep input
-  over 512 MiB (`src/sasl_scram.cpp`); a test would allocate that much.
+- A SASLprep input over 512 MiB (`src/sasl_scram.cpp`): a test would
+  allocate that much.
 - A protected buffer longer than its 4-byte length field
   (`src/net/sasl_layer.cpp`, `protect`): one `wrap` would have to return
   more than 4 GiB.
-- The `invalid_argument` of the `ldap::dn` and `ldap::rdn` literal
-  constructors (`src/dn.cpp`) and the literals' consteval `throw`
-  (`include/jhetz/ldap/dn.hpp`): the text is validated at compile time by
-  the same scanner.
-- The second "empty attribute" check of a URL's attribute list
-  (`src/url.cpp`, `parse_attributes`): a non-empty piece never decodes to
-  an empty string.
+- The consteval `throw` of the `ldap::dn` and `ldap::rdn` literals
+  (`include/jhetz/ldap/dn.hpp`): it runs only at compile time.
 - `scope_name(search_scope::subordinate_subtree)` (`src/url.cpp`): `parse()`
   never produces that scope and `url` has no setter for it.
-- Fallbacks after a switch over every enumerator, for values outside the
-  enumeration: `to_string(url_scheme)` and `url::port_or_default`
-  (`src/url.cpp`), `outcome_name` (`src/connection/referral_chase.cpp`),
-  `operation_name` (`include/jhetz/ldap/controls.hpp`).
-- The "unlisted" count in a failed chase's context (`with_attempts`,
-  `src/connection/referral_chase.cpp`): it is called only for the origin's
-  referral result, before any continuation reference is counted.
-- `broken_sup_chain` finding a SYNTAX (`src/schema.cpp`): it is called only
-  when `syntax_of()` found none in the chain.
-- `has_dn_attributes_field` on an empty reader (`src/controls.cpp`): its
-  one caller loops while the reader is not empty.
-- A Happy Eyeballs attempt stopped while it waits for the previous one to
-  start (`src/net/connect.cpp`, `attempt`): the previous attempt sets
-  `started` before it first suspends, so that wait never suspends.
+- `outcome_name`'s fallback after a switch over every enumerator
+  (`src/connection/referral_chase.cpp`), for a value outside the
+  enumeration: the chase records only enumerators.
 
 ## clang-tidy
 

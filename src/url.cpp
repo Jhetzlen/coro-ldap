@@ -417,12 +417,12 @@ url::url(url &&other, const allocator_type &alloc)
 auto to_string(url_scheme s) noexcept -> std::string_view
 {
 	switch (s) {
-	case url_scheme::ldap:
-		return "ldap";
 	case url_scheme::ldaps:
 		return "ldaps";
 	case url_scheme::ldapi:
 		return "ldapi";
+	case url_scheme::ldap:
+		break;
 	}
 	return "ldap";
 }
@@ -438,7 +438,7 @@ auto url::port_or_default() const noexcept -> std::uint16_t
 	case url_scheme::ldaps:
 		return default_ldaps_port;
 	case url_scheme::ldapi:
-		return 0;
+		break;
 	}
 	return 0;
 }
@@ -611,9 +611,6 @@ namespace {
 			auto a = decode_utf8(piece, off, "attribute", is_lenient_part_char, mr);
 			if (!a) {
 				return std::unexpected(std::move(a.error()));
-			}
-			if (a->empty()) {
-				return bad("empty attribute", off);
 			}
 			out.push_back(std::move(*a));
 			return {};

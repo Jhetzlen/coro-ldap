@@ -216,8 +216,8 @@ namespace {
 			return { ec };
 		};
 		if (i > 0) {
-			// Attempt i-1 sets `started` before it suspends, so this wait
-			// is short; then race its failure against the attempt delay.
+			// Waits for attempt i-1 to start, then races its failure
+			// against the attempt delay.
 			if (auto [ec] = co_await wait_for(st.started[i - 1]); ec) {
 				co_return give_up(ec);
 			}

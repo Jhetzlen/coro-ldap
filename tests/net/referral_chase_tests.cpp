@@ -605,6 +605,21 @@ TEST_CASE("chase_search: referral results", "[net][referral]")
 		CHECK(r.error().context.starts_with("referral chase (URIs: 1 limit_reached, 1 failed)"));
 		CHECK(w.asked == std::vector<std::pair<std::string, std::size_t>>{ { "b.example", 1 } });
 	}
+	SECTION("over max_attempts: the other URIs counted as unlisted")
+	{
+		w.serve("a.example",
+		  { answer({ done_msg(1,
+			10,
+			"",
+			"",
+			{ "ldap://b.example/ou=people,dc=example,dc=org", "ldap://c.example/ou=people,dc=example,dc=org" }) }) });
+		w.unreachable = { "b.example", "c.example" };
+		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_attempts = 1 }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == std::errc::connection_refused);
+		CHECK(r.error().context.starts_with("referral chase (URIs: 1 failed, 1 unlisted)"));
+		CHECK(w.asked.size() == 2);
+	}
 	SECTION("an unparseable URI")
 	{
 		w.serve("a.example", { answer({ done_msg(1, 10, "", "", { "foo://x", "ldap://c.example" }) }) });
@@ -634,6 +649,22 @@ TEST_CASE("chase_search: referral results", "[net][referral]")
 		REQUIRE(r.has_value());
 		CHECK(r->complete);
 		CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=people,dc=example,dc=org" });
+	}
+	SECTION("a target that does not answer: its search ends at the request's timeout")
+	{
+		w.serve(
+		  "a.example", { answer({ done_msg(1, 10, "", "", { "ldap://b.example/ou=people,dc=example,dc=org" }) }) });
+		// Reads the search, then the Abandon sent when it times out.
+		w.serve("b.example", { answer({}), answer({}) });
+		auto request = search();
+		request.timeout = std::chrono::seconds(1);
+		const auto start = std::chrono::steady_clock::now();
+		auto r = w.run(ldap::chase_search(w.origin.conn, request, w.connector()));
+		CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(10));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::timeout);
+		CHECK(r.error().context.starts_with("referral chase (URIs: 1 failed)"));
+		REQUIRE(w.servers["b.example"]->searches().size() == 1);
 	}
 	SECTION("other errors are returned as they are")
 	{

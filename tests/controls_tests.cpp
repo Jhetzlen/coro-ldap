@@ -109,6 +109,7 @@ TEST_CASE("the applicability table at run time", "[controls]")
 		CHECK(ldap::operation_name(ops[i]) == names[i]);
 		CHECK(applies_to<ldap::matched_values>(ops[i]) == (ops[i] == search));
 	}
+	CHECK(ldap::operation_name(static_cast<ldap::operation_kind>(200)) == "operation");
 	const auto set = ldap::operation_set_of(ops[2], ops[5]);
 	CHECK(set.contains(modify));
 	CHECK(set.contains(compare));
