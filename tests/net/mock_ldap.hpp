@@ -262,6 +262,39 @@ enum class socket_buffers { system, small };
 // rmem_max; setting them also turns autotuning off.
 inline constexpr int small_socket_buffer = 64 * 1024;
 
+// What ldap::connect does for ldap://, but on a socket whose SO_SNDBUF is
+// small_socket_buffer, set before it connects to `to`. `name` is the
+// transport's name; `send_buffer` receives the SO_SNDBUF the kernel reports.
+// Errors are thrown.
+inline auto connect_small_tcp(corosio::io_context &ioc,
+  corosio::endpoint to,
+  std::string name,
+  ldap::connection_options options,
+  std::size_t *send_buffer) -> capy::task<ldap::connection>
+{
+	corosio::tcp_socket s(ioc);
+	if (auto ec = s.open(); ec) {
+		throw std::system_error(ec, "open");
+	}
+	if (auto ec = s.set_option(corosio::socket_option::send_buffer_size(small_socket_buffer)); ec) {
+		throw std::system_error(ec, "SO_SNDBUF");
+	}
+	if (auto [ec] = co_await s.connect(to); ec) {
+		throw std::system_error(ec, "connect");
+	}
+	const auto [sec, sent] = s.get_option<corosio::socket_option::send_buffer_size>();
+	if (sec) {
+		throw std::system_error(sec, "SO_SNDBUF");
+	}
+	*send_buffer = static_cast<std::size_t>(sent.value());
+	net::transport t = net::transport_access::make(net::transport::kind::tcp, name, std::pmr::get_default_resource());
+	auto &im = net::transport_access::get(t);
+	im.host = "127.0.0.1";
+	im.tcp.emplace(std::move(s));
+	im.stream = capy::any_stream(&*im.tcp);
+	co_return ldap::connection(ioc, std::move(t), options);
+}
+
 // mock_ldap over loopback TCP: the transport is plain TCP, so start_tls()
 // sends its request (the server can only refuse it: it does not speak TLS).
 // The connection is made by ldap::connect, or with socket_buffers::small
@@ -349,33 +382,9 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 	}
 
   private:
-	// What ldap::connect does for ldap://, but on a socket whose send buffer
-	// is set before it connects.
 	auto connect_small(ldap::connection_options options) -> capy::task<ldap::connection>
 	{
-		corosio::tcp_socket s(ioc);
-		if (auto ec = s.open(); ec) {
-			throw std::system_error(ec, "open");
-		}
-		if (auto ec = s.set_option(corosio::socket_option::send_buffer_size(small_socket_buffer)); ec) {
-			throw std::system_error(ec, "SO_SNDBUF");
-		}
-		if (auto [ec] = co_await s.connect(acc.local_endpoint()); ec) {
-			throw std::system_error(ec, "connect");
-		}
-		const auto [sec, sent] = s.get_option<corosio::socket_option::send_buffer_size>();
-		if (sec) {
-			throw std::system_error(sec, "SO_SNDBUF");
-		}
-		client_send_buffer = static_cast<std::size_t>(sent.value());
-		const std::string name = url();
-		net::transport t =
-		  net::transport_access::make(net::transport::kind::tcp, name, std::pmr::get_default_resource());
-		auto &im = net::transport_access::get(t);
-		im.host = "127.0.0.1";
-		im.tcp.emplace(std::move(s));
-		im.stream = capy::any_stream(&*im.tcp);
-		co_return ldap::connection(ioc, std::move(t), options);
+		return connect_small_tcp(ioc, acc.local_endpoint(), url(), std::move(options), &client_send_buffer);
 	}
 };
 

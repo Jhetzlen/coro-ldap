@@ -5,7 +5,6 @@
 // delays, with the jitter fixed by detail::set_jitter.
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/client.hpp"
-#include "jhetz/ldap/mapping.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -46,21 +45,6 @@ using std::chrono::milliseconds;
 
 namespace {
 
-// For the typed write forwarders.
-struct person
-{
-	std::string uid;
-	std::string cn;
-};
-
-}// namespace
-
-template<>
-constexpr auto ldap::schema<person> =
-  ldap::describe(ldap::object_class("person"), ldap::field<&person::uid>("uid"), ldap::field<&person::cn>("cn"));
-
-namespace {
-
 // The server hangs up as soon as it accepts the connection.
 auto hang_up_at_once() -> std::vector<step>
 {
@@ -96,7 +80,16 @@ class ldap_server
 		REQUIRE(u.has_value());
 		return *u;
 	}
+	[[nodiscard]] auto endpoint() const -> corosio::endpoint { return { corosio::ipv4_address::loopback(), port_ }; }
 	[[nodiscard]] auto accepted() const -> std::size_t { return logs_.size(); }
+	// The SO_RCVBUF of the server's end of the n-th connection, as the
+	// kernel reports it.
+	[[nodiscard]] auto receive_buffer(std::size_t n) const -> std::size_t
+	{
+		const auto [ec, received] = peers_.at(n).get_option<corosio::socket_option::receive_buffer_size>();
+		REQUIRE_FALSE(ec);
+		return static_cast<std::size_t>(received.value());
+	}
 	[[nodiscard]] auto log(std::size_t n) -> server_log & { return logs_.at(n); }
 	[[nodiscard]] auto session(std::size_t n) -> outcome<void> & { return sessions_.at(n); }
 	// The server closes the n-th connection.
@@ -2584,8 +2577,6 @@ TEST_CASE("client: move assignment, executor() and a moved-from client's reads",
 	refused(finish(f.ioc, f.pool->modify_dn({ .entry = jdoe, .new_rdn = ldap::rdn{ "uid=j" } })).error(), modify_dn);
 	refused(finish(f.ioc, f.pool->move(jdoe, ldap::dn{ "ou=staff,dc=example,dc=org" })).error(), modify_dn);
 	refused(finish(f.ioc, f.pool->rename(jdoe, ldap::rdn{ "uid=j" })).error(), modify_dn);
-	refused(finish(f.ioc, f.pool->add(jdoe, person{ .uid = "jdoe", .cn = "John" })).error(), add);
-	refused(finish(f.ioc, f.pool->modify<person>(jdoe, { ldap::replace<&person::cn>("J") })).error(), modify);
 	refused(finish(f.ioc, f.pool->acquire()).error(), "acquire");
 	f.pool->close();// nothing to close
 
@@ -2765,16 +2756,27 @@ auto written(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic
 	return ldap::message{ id, Response{ ldap::ldap_result{ code, "", diagnostic } } };
 }
 
-// An AddRequest bigger than what the kernel holds of it while the server
-// does not read: the client's send buffer (autotuned up to tcp_wmem's
-// maximum, 4 MiB by default) and the server's small receive buffer
-// (socket_buffers::small).
-constexpr std::size_t unsendable_add_value = std::size_t{ 8 } << 20;
-
-auto unsendable_add() -> ldap::add_params
+// connect_small_tcp() as a pooled connection's connector.
+auto open_small(corosio::io_context &ioc,
+  corosio::endpoint to,
+  std::string name,
+  ldap::connection_options options,
+  std::size_t *send_buffer) -> capy::task<ldap::result<ldap::connection>>
 {
-	return { .entry = ldap::dn{ "uid=big,ou=people,dc=example,dc=org" },
-		.attributes = { ldap::partial_attribute{ "description", { std::string(unsendable_add_value, 'x') } } } };
+	co_return co_await connect_small_tcp(ioc, to, std::move(name), std::move(options), send_buffer);
+}
+
+// Opens the pooled connections of `pool` with connect_small_tcp() to
+// `server`; `send_buffer` receives their SO_SNDBUF.
+void connect_small(const ldap::client &pool, const ldap_server &server, std::size_t *send_buffer)
+{
+	ldap::detail::set_connector(pool,
+	  [to = server.endpoint(), send_buffer](corosio::io_context &ioc,
+		const ldap::url &u,
+		ldap::connection_options options,
+		std::pmr::memory_resource * /*mr*/) {
+		  return open_small(ioc, to, std::string(u.to_string()), std::move(options), send_buffer);
+	  });
 }
 
 }// namespace
@@ -2788,9 +2790,7 @@ TEST_CASE("client: write forwarders run on a shared lease", "[net][client][write
 	  answer({ written<ldap::del_response>(4) }),
 	  answer({ written<ldap::modify_dn_response>(5) }),
 	  answer({ written<ldap::modify_dn_response>(6) }),
-	  answer({ written<ldap::modify_dn_response>(7) }),
-	  answer({ written<ldap::add_response>(8) }),
-	  answer({ written<ldap::modify_response>(9) }) } });
+	  answer({ written<ldap::modify_dn_response>(7) }) } });
 	f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
 	const ldap::dn staff{ "ou=staff,dc=example,dc=org" };
 	auto held = f.acquire();// shared with every write below
@@ -2804,15 +2804,13 @@ TEST_CASE("client: write forwarders run on a shared lease", "[net][client][write
 	CHECK(finish(f.ioc, f.pool->modify_dn({ .entry = jdoe_dn(), .new_rdn = ldap::rdn{ "uid=j" } })).has_value());
 	CHECK(finish(f.ioc, f.pool->move(jdoe_dn(), staff)).has_value());
 	CHECK(finish(f.ioc, f.pool->rename(jdoe_dn(), ldap::rdn{ "uid=j" }, false)).has_value());
-	CHECK(finish(f.ioc, f.pool->add(jdoe_dn(), person{ .uid = "jdoe", .cn = "John" })).has_value());
-	CHECK(finish(f.ioc, f.pool->modify<person>(jdoe_dn(), { ldap::replace<&person::cn>("J") })).has_value());
 	CHECK(s.accepted() == 1);
 	CHECK(f.pool->connections() == 1);
 	held->release();
 
 	using op = ldap::modify_operation;
 	const auto &got = s.log(0).received;
-	REQUIRE(got.size() == 9);
+	REQUIRE(got.size() == 7);
 	CHECK(
 	  got[1]
 	  == ldap::message{ 2, ldap::add_request{ jdoe_text, { { "objectClass", { "person" } }, { "cn", { "John" } } } } });
@@ -2822,11 +2820,6 @@ TEST_CASE("client: write forwarders run on a shared lease", "[net][client][write
 	CHECK(got[5]
 		  == ldap::message{ 6, ldap::modify_dn_request{ jdoe_text, "uid=jdoe", true, "ou=staff,dc=example,dc=org" } });
 	CHECK(got[6] == ldap::message{ 7, ldap::modify_dn_request{ jdoe_text, "uid=j", false, std::nullopt } });
-	CHECK(got[7]
-		  == ldap::message{ 8,
-			ldap::add_request{
-			  jdoe_text, { { "objectClass", { "person" } }, { "uid", { "jdoe" } }, { "cn", { "John" } } } } });
-	CHECK(got[8] == ldap::message{ 9, ldap::modify_request{ jdoe_text, { { op::replace, { "cn", { "J" } } } } } });
 	CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
 }
 
@@ -2925,8 +2918,6 @@ TEST_CASE("client: when write forwarders do not retry", "[net][client][write][re
 	}
 }
 
-// A write queued behind another lease's request on a shared connection,
-// that connection closed before the writer took it: client_errc::not_sent.
 TEST_CASE("client: a write never sent is retried once on another connection", "[net][client][write][retry]")
 {
 	pool_fixture f;
@@ -2935,17 +2926,21 @@ TEST_CASE("client: a write never sent is retried once on another connection", "[
 	  f.server({ bind_ok(), { answer({ bind_resp(1) }), answer({ written<ldap::add_response>(2) }) }, bind_ok() },
 		socket_buffers::small);
 	f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
+	std::size_t send_buffer = 0;
+	connect_small(*f.pool, s, &send_buffer);
 	auto held = f.acquire();
 	REQUIRE(held.has_value());
+	REQUIRE(send_buffer + s.receive_buffer(0) < oversized_add_value);
 	outcome<ldap::result<ldap::response>> big;
 	outcome<ldap::result<ldap::response>> queued;
-	spawn(f.ioc, (*held)->add(unsendable_add()), big);
-	spawn(f.ioc, f.pool->add(jdoe_add()), queued);// shares the connection: queued behind it
+	spawn(f.ioc, (*held)->add(oversized_add()), big);
+	spawn(f.ioc, f.pool->add(jdoe_add()), queued);// queued behind `big` on the same connection
 	drive_until(f.ioc, [&held] { return (*held)->outstanding() == 2; });
+	CHECK_FALSE(big.done());
 	(*held)->close();
 	drive_until(f.ioc, [&] { return big.done() && queued.done(); });
 	REQUIRE_FALSE(big.get().has_value());
-	CHECK(big.get().error().code == ldap::client_errc::not_connected);// the writer had it: maybe seen
+	CHECK(big.get().error().code == ldap::client_errc::not_connected);
 	REQUIRE(queued.get().has_value());
 	CHECK(queued.get()->message_id == 2);
 	CHECK(s.accepted() == 2);

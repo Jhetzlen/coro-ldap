@@ -2110,10 +2110,8 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 	const auto server = ldap::url::parse(env("JHETZ_LDAP_IT_LDAP"));
 	REQUIRE(server.has_value());
 	corosio::io_context ioc;
-	ldap::client pool(ioc,
-	  { .servers = { *server },
-		.connection = trusting({ .schema_check = ldap::schema_check::on_first_use }),
-		.setup = ldap::simple_bind_setup(admin, "secret") });
+	ldap::client pool(
+	  ioc, { .servers = { *server }, .connection = trusting(), .setup = ldap::simple_bind_setup(admin, "secret") });
 	const std::string name = unique("pool");
 	const ldap::dn entry = people.child(*ldap::rdn::parse("uid=" + name));
 	const ldap::dn groups{ "ou=groups,dc=example,dc=org" };
@@ -2152,10 +2150,10 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 	CHECK_FALSE(exists(back));
 	CHECK(exists(renamed));
 
-	// The typed forms, with the schema check on the pooled connection.
-	REQUIRE(
-	  finish(ioc, pool.modify<person>(renamed, { ldap::replace<&person::mail>("typed@example.org") })).has_value());
-	CHECK(finish(ioc, pool.compare({ .entry = renamed, .attribute = "mail", .value = "typed@example.org" })) == true);
+	REQUIRE(finish(
+	  ioc, pool.modify({ .object = renamed, .changes = { ldap::mod::replace("mail", { "plain@example.org" }) } }))
+		.has_value());
+	CHECK(finish(ioc, pool.compare({ .entry = renamed, .attribute = "mail", .value = "plain@example.org" })) == true);
 
 	REQUIRE(finish(ioc, pool.del({ .entry = renamed })).has_value());
 	auto gone = finish(ioc, pool.del({ .entry = renamed }));

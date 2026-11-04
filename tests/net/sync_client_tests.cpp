@@ -2,7 +2,6 @@
 // loopback TCP running on their own thread and io_context: scripted ones
 // (one script per accepted connection, mock_ldap.hpp's serve_script) and
 // server_thread.hpp's, which answers whatever comes.
-#include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -41,21 +40,6 @@ namespace corosio = boost::corosio;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::IsEmpty;
 using std::chrono::milliseconds;
-
-namespace {
-
-// For the typed write forwarders.
-struct person
-{
-	std::string uid;
-	std::string cn;
-};
-
-}// namespace
-
-template<>
-constexpr auto ldap::schema<person> =
-  ldap::describe(ldap::object_class("person"), ldap::field<&person::uid>("uid"), ldap::field<&person::cn>("cn"));
 
 namespace {
 
@@ -304,8 +288,6 @@ TEST_CASE("sync client: the write forwarders", "[net][sync][client][write]")
 		  answer({ ok(5, ldap::modify_dn_response{ ldap::ldap_result{ 0 } }) }),
 		  answer({ ok(6, ldap::modify_dn_response{ ldap::ldap_result{ 0 } }) }),
 		  answer({ ok(7, ldap::modify_dn_response{ ldap::ldap_result{ 0 } }) }),
-		  answer({ ok(8, ldap::add_response{ ldap::ldap_result{ 0 } }) }),
-		  answer({ ok(9, ldap::modify_response{ ldap::ldap_result{ 0 } }) }),
 		  unbind_read() } });
 		{
 			ldap::sync::client pool(options_for(srv.url()));
@@ -317,27 +299,18 @@ TEST_CASE("sync client: the write forwarders", "[net][sync][client][write]")
 			CHECK(pool.modify_dn({ .entry = jdoe_dn, .new_rdn = ldap::rdn{ "uid=j" } }).has_value());
 			CHECK(pool.move(jdoe_dn, ldap::dn{ "ou=staff,dc=example,dc=org" }).has_value());
 			CHECK(pool.rename(jdoe_dn, ldap::rdn{ "uid=j" }, false).has_value());
-			CHECK(pool.add(jdoe_dn, person{ .uid = "jdoe", .cn = "John" }).has_value());
-			CHECK(pool.modify<person>(jdoe_dn, { ldap::replace<&person::cn>("J") }).has_value());
 			CHECK(pool.connections() == 1);
 		}
 		srv.stop();
 		CHECK_THAT(srv.log(0).error, IsEmpty());
 		const auto &got = srv.log(0).received;
-		REQUIRE(got.size() == 10);
+		REQUIRE(got.size() == 8);
 		CHECK(std::holds_alternative<ldap::add_request>(got[1].op));
 		CHECK(std::holds_alternative<ldap::modify_request>(got[2].op));
 		CHECK(got[3] == ldap::message{ 4, ldap::del_request{ jdoe } });
 		CHECK(got[5]
 			  == ldap::message{ 6, ldap::modify_dn_request{ jdoe, "uid=jdoe", true, "ou=staff,dc=example,dc=org" } });
 		CHECK(got[6] == ldap::message{ 7, ldap::modify_dn_request{ jdoe, "uid=j", false, std::nullopt } });
-		CHECK(got[7]
-			  == ldap::message{ 8,
-				ldap::add_request{
-				  jdoe, { { "objectClass", { "person" } }, { "uid", { "jdoe" } }, { "cn", { "John" } } } } });
-		CHECK(got[8]
-			  == ldap::message{
-				9, ldap::modify_request{ jdoe, { { ldap::modify_operation::replace, { "cn", { "J" } } } } } });
 	}
 	SECTION("a server result code, with its diagnostic")
 	{

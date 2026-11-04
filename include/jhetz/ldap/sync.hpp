@@ -54,7 +54,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <functional>
 #include <future>
 #include <memory>
 #include <memory_resource>
@@ -624,19 +623,6 @@ class client
 	  bool delete_old_rdn = true,
 	  modify_dn_controls controls = {},
 	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<response>;
-	template<described T> [[nodiscard]] auto add(dn entry, T value, add_controls controls = {}) -> result<response>
-	{
-		return write(
-		  [&](ldap::client &pool) { return pool.add(std::move(entry), std::move(value), std::move(controls)); });
-	}
-	template<described T>
-	[[nodiscard]] auto modify(dn object, std::vector<change<T>> changes, modify_controls controls = {})
-	  -> result<response>
-	{
-		return write([&](ldap::client &pool) {
-			return pool.modify<T>(std::move(object), std::move(changes), std::move(controls));
-		});
-	}
 
 	// As ldap::client::connections(), from any thread (read at once on
 	// the I/O thread).
@@ -649,11 +635,6 @@ class client
 	void close() noexcept;
 
   private:
-	// Runs make_task(pool) on the I/O thread with the ldap::client and
-	// waits for its result.
-	[[nodiscard]] auto write(const std::function<boost::capy::task<result<response>>(ldap::client &pool)> &make_task)
-	  -> result<response>;
-
 	std::shared_ptr<detail::client_core> core_;
 };
 

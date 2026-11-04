@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdio>
 #include <exception>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -457,29 +456,24 @@ auto client::chase_compare(compare_params request) -> result<chased_compare>
 	return core_->io.run([&] { return core_->pool->chase_compare(std::move(request)); });
 }
 
-auto client::write(const std::function<capy::task<result<response>>(ldap::client &pool)> &make_task) -> result<response>
-{
-	return core_->io.run([&] { return make_task(*core_->pool); });
-}
-
 auto client::add(add_params request) -> result<response>
 {
-	return write([&](ldap::client &pool) { return pool.add(std::move(request)); });
+	return core_->io.run([&] { return core_->pool->add(std::move(request)); });
 }
 
 auto client::modify(modify_params request) -> result<response>
 {
-	return write([&](ldap::client &pool) { return pool.modify(std::move(request)); });
+	return core_->io.run([&] { return core_->pool->modify(std::move(request)); });
 }
 
 auto client::del(del_params request) -> result<response>
 {
-	return write([&](ldap::client &pool) { return pool.del(std::move(request)); });
+	return core_->io.run([&] { return core_->pool->del(std::move(request)); });
 }
 
 auto client::modify_dn(modify_dn_params request) -> result<response>
 {
-	return write([&](ldap::client &pool) { return pool.modify_dn(std::move(request)); });
+	return core_->io.run([&] { return core_->pool->modify_dn(std::move(request)); });
 }
 
 auto client::move(dn entry,
@@ -487,9 +481,8 @@ auto client::move(dn entry,
   modify_dn_controls controls,
   std::optional<std::chrono::milliseconds> timeout) -> result<response>
 {
-	return write([&](ldap::client &pool) {
-		return pool.move(std::move(entry), std::move(new_parent), std::move(controls), timeout);
-	});
+	return core_->io.run(
+	  [&] { return core_->pool->move(std::move(entry), std::move(new_parent), std::move(controls), timeout); });
 }
 
 auto client::rename(dn entry,
@@ -498,8 +491,8 @@ auto client::rename(dn entry,
   modify_dn_controls controls,
   std::optional<std::chrono::milliseconds> timeout) -> result<response>
 {
-	return write([&](ldap::client &pool) {
-		return pool.rename(std::move(entry), std::move(new_rdn), delete_old_rdn, std::move(controls), timeout);
+	return core_->io.run([&] {
+		return core_->pool->rename(std::move(entry), std::move(new_rdn), delete_old_rdn, std::move(controls), timeout);
 	});
 }
 

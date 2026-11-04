@@ -188,6 +188,7 @@ namespace detail {
 		bool closed = false;
 		std::minstd_rand rng;
 		std::function<double()> jitter{};// tests: replaces rng
+		pool_connector connector{};// tests: replaces ldap::connect
 
 		// ---------------------------------------------------------------- events
 
@@ -668,7 +669,10 @@ namespace detail {
 		static auto connect_and_set_up(std::shared_ptr<client_state> self, std::size_t i)
 		  -> capy::task<result<connection>>
 		{
-			auto c = co_await ldap::connect(*self->ioc, self->servers[i].address, self->options.connection, self->mr);
+			auto c =
+			  self->connector
+				? co_await self->connector(*self->ioc, self->servers[i].address, self->options.connection, self->mr)
+				: co_await ldap::connect(*self->ioc, self->servers[i].address, self->options.connection, self->mr);
 			if (!c) {
 				co_return std::unexpected(std::move(c.error()));
 			}
@@ -1211,14 +1215,14 @@ namespace detail {
 		// add(), modify(), del(), modify_dn() and the like: `op` on a shared
 		// lease, retried once, on another connection, only if its request
 		// never reached the writer.
-		static auto write(std::shared_ptr<client_state> self, write_operation op) -> capy::task<result<response>>
+		template<class Op> static auto write(std::shared_ptr<client_state> self, Op op) -> capy::task<result<response>>
 		{
 			for (bool retried = false;; retried = true) {
 				auto held = co_await acquire(self, {}, std::nullopt);
 				if (!held) {
 					co_return std::unexpected(std::move(held.error()));
 				}
-				auto r = co_await op(held->get());
+				auto r = co_await op(*held);
 				if (r || retried || r.error().code != client_errc::not_sent) {
 					co_return std::move(r);
 				}
@@ -1370,6 +1374,8 @@ namespace detail {
 
 	void set_jitter(const client &c, std::function<double()> unit) { c.state_->jitter = std::move(unit); }
 
+	void set_connector(const client &c, pool_connector open) { c.state_->connector = std::move(open); }
+
 }// namespace detail
 
 // ---------------------------------------------------------------- lease
@@ -1509,36 +1515,40 @@ auto client::who_am_i(extended_controls controls) -> capy::task<result<std::stri
 	  state_, [controls = std::move(controls)](const lease &held) { return held->who_am_i(controls); });
 }
 
-auto client::write(std::string context, detail::write_operation op) -> capy::task<result<response>>
-{
-	if (state_ == nullptr) {
-		return read_refused<response>(std::move(context));
-	}
-	return detail::client_state::write(state_, std::move(op));
-}
-
 auto client::add(add_params request) -> capy::task<result<response>>
 {
-	std::string context = detail::op_context("add", request.entry);
-	return write(std::move(context), [request = std::move(request)](connection &c) { return c.add(request); });
+	if (state_ == nullptr) {
+		return read_refused<response>(detail::op_context("add", request.entry));
+	}
+	return detail::client_state::write(
+	  state_, [request = std::move(request)](const lease &held) { return held->add(request); });
 }
 
 auto client::modify(modify_params request) -> capy::task<result<response>>
 {
-	std::string context = detail::op_context("modify", request.object);
-	return write(std::move(context), [request = std::move(request)](connection &c) { return c.modify(request); });
+	if (state_ == nullptr) {
+		return read_refused<response>(detail::op_context("modify", request.object));
+	}
+	return detail::client_state::write(
+	  state_, [request = std::move(request)](const lease &held) { return held->modify(request); });
 }
 
 auto client::del(del_params request) -> capy::task<result<response>>
 {
-	std::string context = detail::op_context("delete", request.entry);
-	return write(std::move(context), [request = std::move(request)](connection &c) { return c.del(request); });
+	if (state_ == nullptr) {
+		return read_refused<response>(detail::op_context("delete", request.entry));
+	}
+	return detail::client_state::write(
+	  state_, [request = std::move(request)](const lease &held) { return held->del(request); });
 }
 
 auto client::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 {
-	std::string context = detail::op_context("modify DN", request.entry);
-	return write(std::move(context), [request = std::move(request)](connection &c) { return c.modify_dn(request); });
+	if (state_ == nullptr) {
+		return read_refused<response>(detail::op_context("modify DN", request.entry));
+	}
+	return detail::client_state::write(
+	  state_, [request = std::move(request)](const lease &held) { return held->modify_dn(request); });
 }
 
 auto client::move(dn entry,
@@ -1546,10 +1556,12 @@ auto client::move(dn entry,
   modify_dn_controls controls,
   std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<response>>
 {
-	std::string context = detail::op_context("modify DN", entry);
-	return write(std::move(context),
+	if (state_ == nullptr) {
+		return read_refused<response>(detail::op_context("modify DN", entry));
+	}
+	return detail::client_state::write(state_,
 	  [entry = std::move(entry), new_parent = std::move(new_parent), controls = std::move(controls), timeout](
-		connection &c) { return c.move(entry, new_parent, controls, timeout); });
+		const lease &held) { return held->move(entry, new_parent, controls, timeout); });
 }
 
 auto client::rename(dn entry,
@@ -1558,10 +1570,12 @@ auto client::rename(dn entry,
   modify_dn_controls controls,
   std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<response>>
 {
-	std::string context = detail::op_context("modify DN", entry);
-	return write(std::move(context),
+	if (state_ == nullptr) {
+		return read_refused<response>(detail::op_context("modify DN", entry));
+	}
+	return detail::client_state::write(state_,
 	  [entry = std::move(entry), new_rdn = std::move(new_rdn), delete_old_rdn, controls = std::move(controls), timeout](
-		connection &c) { return c.rename(entry, new_rdn, delete_old_rdn, controls, timeout); });
+		const lease &held) { return held->rename(entry, new_rdn, delete_old_rdn, controls, timeout); });
 }
 
 auto client::connections() const noexcept -> std::size_t { return state_ == nullptr ? 0 : state_->pool.size(); }
