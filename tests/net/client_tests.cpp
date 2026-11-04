@@ -799,9 +799,8 @@ auto pool_after_run(corosio::io_context &ioc, const corosio::tcp_acceptor &liste
 
 TEST_CASE("client: destroyed after io_context::run() returned", "[net][client][close]")
 {
-	// It closes its idle connection, as a connection's destructor does: a
-	// detached unbind() would never run, and examples/pool.cpp with the
-	// client in main() then leaks its socket (LeakSanitizer).
+	// It closes its idle connection, as a connection's destructor does,
+	// instead of posting an unbind() that would never run.
 	counting_resource mr;
 	corosio::io_context ioc;
 	const corosio::tcp_acceptor listener(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8);
@@ -811,6 +810,23 @@ TEST_CASE("client: destroyed after io_context::run() returned", "[net][client][c
 	CHECK(mr.outstanding() == 0);// freed now, not by a task
 	ioc.restart();
 	CHECK(ioc.poll() == 0);// no work left on the io_context
+}
+
+TEST_CASE("client: an unbind posted to an io_context that never runs again", "[net][client][close]")
+{
+	// restart()ed, so the unbind is posted; destroying the io_context
+	// destroys the task, its connection and its socket.
+	counting_resource mr;
+	{
+		corosio::io_context ioc;
+		const corosio::tcp_acceptor listener(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8);
+		auto pool = pool_after_run(ioc, listener, &mr);
+		REQUIRE(pool->connections() == 1);
+		ioc.restart();
+		pool.reset();
+		CHECK(mr.outstanding() != 0);// held by the posted task
+	}
+	CHECK(mr.outstanding() == 0);
 }
 
 TEST_CASE("client: a connection whose identity changed is not shared", "[net][client][identity]")

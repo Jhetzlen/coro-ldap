@@ -542,9 +542,8 @@ deletes them, newest first (`execution_context::shutdown()` /
 `destroy()` walk a list that `use_service()` pushes onto the front), and
 the io_context's constructor makes the scheduler (`Backend::construct`)
 and the services it needs before any `offload_threads`: oldest first,
-the timer service (which the scheduler's constructor makes), the
-scheduler, the thread pool, then the services made on use, such as
-`offload_threads`. So the join runs while the scheduler is alive and
+the scheduler, the thread pool, then the services made on use, such as
+the timer service (made with the first timer) and `offload_threads`. So the join runs while the scheduler is alive and
 nothing of the thread outlives the io_context. The cost:
 destroying the io_context (and so `sync::connection`'s destructor)
 waits for a step still running, as long as krb5's own timeouts. A
@@ -2445,10 +2444,14 @@ decision left open.
   resource must outlive the io_context's pending work. Once the
   io_context is stopped (`io_context::stopped()`: its `run()` returned,
   no `restart()` since), a connection leaving the pool is closed, not
-  unbound (3pf.13): a task posted then would never run, and a client
-  destroyed after `run()` returned (in `main()`, say) leaked it, its
-  connection and socket (LeakSanitizer, `examples/pool.cpp` with the
-  client in `main()`). Closed is what a `connection` or a
+  unbound (3pf.13): a task posted then would never run. Corosio before
+  232c79f leaked such a task, its connection and socket when the
+  io_context was destroyed (LeakSanitizer, `examples/pool.cpp` with the
+  client in `main()`); Corosio now destroys it with the io_context
+  (tested: a client destroyed after `restart()`, the io_context never
+  run again), but the rule stays: the connection is freed at once, its
+  memory resource need not outlive the io_context, and no task is left
+  that can only be destroyed. Closed is what a `connection` or a
   `sync::connection` does when destroyed: no UnbindRequest, nothing left
   on the io_context. Unbinding cleanly at `close()` still works while
   the executor runs (from a task, as `examples/pool.cpp` does).

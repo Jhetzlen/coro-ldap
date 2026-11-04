@@ -115,7 +115,8 @@
 // stopped() is false, and the unbind is still posted, while the io_context
 // was restart()ed and not run since, or once run_one(), run_for() or poll()
 // returned with work outstanding: that task runs only if the io_context is
-// run again, else it and its connection leak. So restart() it just before
+// run again, else it and its connection are destroyed with the io_context,
+// the socket closed without an UnbindRequest. So restart() it just before
 // running it again, not right after run() returns.
 //
 // close() closes every pooled connection, leased ones included (their
