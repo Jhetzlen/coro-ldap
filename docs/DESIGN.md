@@ -1086,9 +1086,10 @@ not two; the PDUs are sealed with either level, see above). AD may refuse
 a later bind on a layered connection (unwillingToPerform without
 LDAP_CAP_ACTIVE_DIRECTORY_LDAP_INTEG_OID, MS-ADTS section 5.1.1.1.2); the
 library's rule (a bind without a layer leaves it in place, a second layer
-is `security_layer_in_effect`) is unchanged. RC4 is self-contained in the codec (`detail::ntlm_rc4`, RFC
-6229's vectors), as MD4 is, because OpenSSL 3 keeps it in the legacy
-provider; its state is zeroed through volatile stores when it goes. The
+is `security_layer_in_effect`) is unchanged. RC4 is self-contained in the
+codec (`detail::ntlm_rc4`, RFC 6229's vectors), as MD4 is, because OpenSSL
+3 keeps it in the legacy provider; its state is zeroed through volatile
+stores when it goes. The
 ExportedSessionKey is drawn into a wiped buffer, the
 EncryptedRandomSessionKey encrypted in place from a copy, the four
 derived keys go into a wiped `ntlm_session_keys` (their MD5 input in a
