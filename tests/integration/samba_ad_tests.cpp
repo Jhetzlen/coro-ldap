@@ -718,9 +718,7 @@ TEST_CASE("samba ad: the NTLM security layer on plain ldap://, entries over 128 
 	REQUIRE(values != nullptr);
 	REQUIRE(values->size() == 1);
 	CHECK((*values)[0].size() == photo.size());
-	// Compared through the first differing offset: Catch2 3.7.1's TextFlow
-	// throws std::length_error wrapping a 300 KB binary string (0xff and ESC
-	// octets), which would hide a real mismatch and end the test case.
+	// Compares by the first differing offset, not the 300 KB strings.
 	const std::string_view got((*values)[0]);
 	const auto first_difference = static_cast<std::size_t>(std::ranges::mismatch(got, photo).in1 - got.begin());
 	INFO("first differing octet: " << first_difference);
