@@ -799,8 +799,7 @@ auto pool_after_run(corosio::io_context &ioc, const corosio::tcp_acceptor &liste
 
 TEST_CASE("client: destroyed after io_context::run() returned", "[net][client][close]")
 {
-	// It closes its idle connection, as a connection's destructor does,
-	// instead of posting an unbind() that would never run.
+	// It closes its idle connection; nothing is posted.
 	counting_resource mr;
 	corosio::io_context ioc;
 	const corosio::tcp_acceptor listener(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8);

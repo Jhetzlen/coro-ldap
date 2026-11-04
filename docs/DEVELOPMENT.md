@@ -68,7 +68,8 @@ old Visual Studio STL shows up only as compile errors.
 
 Without root, from Arch's packages (headers only; `build/main` configured
 first, for the fetched Capy, Corosio and Catch2; OpenSSL's and ICU's
-headers are the host's):
+headers are the host's; needs curl, bsdtar and clang; run from the
+repository root):
 
 ```sh
 M=$PWD/build/mingw; mkdir -p $M/root $M/deps
@@ -76,7 +77,7 @@ for p in extra/any/mingw-w64-headers extra/any/mingw-w64-winpthreads extra/x86_6
   curl -sfL https://archlinux.org/packages/$p/download/ | bsdtar -xf - -C $M/root usr/x86_64-w64-mingw32/include
 done
 ln -sfn /usr/include/openssl $M/deps/openssl; ln -sfn /usr/include/unicode $M/deps/unicode
-I=$M/root/usr/x86_64-w64-mingw32/include; C=$I/c++/$(ls $I/c++); D=$PWD/build/main/_deps
+I=$M/root/usr/x86_64-w64-mingw32/include; C=$I/c++/$(ls $I/c++ | tail -1); D=$PWD/build/main/_deps
 for f in $(ls src/*.cpp src/*/*.cpp tests/*.cpp tests/net/*.cpp examples/*.cpp fuzz/*_replay.cpp bench/*.cpp \
            | grep -v -e trust_store_default -e sasl_gssapi); do
   clang++ --target=x86_64-w64-mingw32 -std=c++23 -fsyntax-only -nostdinc++ -nostdlibinc \

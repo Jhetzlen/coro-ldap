@@ -1332,8 +1332,7 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	CHECK(bad_cert.error().code == std::errc::invalid_argument);
 	CHECK_THAT(std::string(bad_cert.error().context), EndsWith("tls: ca_pem: certificate 2 does not parse"));
 
-	// A certificate cut short after a good one: Corosio would fail it at
-	// handshake time.
+	// A certificate cut short after a good one.
 	std::string truncated = pki().ca_pem();
 	truncated += "-----BEGIN CERTIFICATE-----\n";
 	truncated += pki().ca_pem().substr(28, 64);
