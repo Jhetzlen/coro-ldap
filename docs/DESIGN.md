@@ -1078,15 +1078,15 @@ buffers up to `max_receive_size` (16 MiB by default; AD's MaxReceiveBuffer
 is 10 MB) and sends at most 128 KiB per buffer (Samba's
 `gensec_max_input_size` default), longer PDUs cut across buffers as for
 GSSAPI (against Samba: buffers of at most 128 KiB both ways, a PDU cut
-across them accepted, `integration.samba_ad`). AD refuses a SASL layer over TLS (MS-ADTS section 5.1.1.1.2), so
-with TLS `start()` fails with `security_layer_unavailable` before anything
-is sent; and the layer stands in for TLS, so `require_tls` is not
-consulted with one (one option to set, not two; the PDUs are sealed with
-either level, see above). AD may refuse a later bind on a layered connection
-(unwillingToPerform without LDAP_CAP_ACTIVE_DIRECTORY_LDAP_INTEG_OID,
-MS-ADTS section 5.1.1.1.2); the library's rule (a bind without a layer
-leaves it in place, a second layer is `security_layer_in_effect`) is
-unchanged. RC4 is self-contained in the codec (`detail::ntlm_rc4`, RFC
+across them accepted, `integration.samba_ad`). AD refuses a SASL layer
+over TLS (MS-ADTS section 5.1.1.1.2), so with TLS `start()` fails with
+`security_layer_unavailable` before anything is sent; and the layer stands
+in for TLS, so `require_tls` is not consulted with one (one option to set,
+not two; the PDUs are sealed with either level, see above). AD may refuse
+a later bind on a layered connection (unwillingToPerform without
+LDAP_CAP_ACTIVE_DIRECTORY_LDAP_INTEG_OID, MS-ADTS section 5.1.1.1.2); the
+library's rule (a bind without a layer leaves it in place, a second layer
+is `security_layer_in_effect`) is unchanged. RC4 is self-contained in the codec (`detail::ntlm_rc4`, RFC
 6229's vectors), as MD4 is, because OpenSSL 3 keeps it in the legacy
 provider; its state is zeroed through volatile stores when it goes. The
 ExportedSessionKey is drawn into a wiped buffer, the

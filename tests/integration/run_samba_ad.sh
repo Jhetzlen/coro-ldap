@@ -100,10 +100,18 @@ for name in "${containers[@]}"; do
 	fi
 done
 for p in "$port" $((port + 1)) $((port + 2)) $((port + 3)); do
+	ready=""
 	for _ in $(seq 100); do
-		if (exec 3<> "/dev/tcp/127.0.0.1/$p") 2> /dev/null; then break; fi
+		if (exec 3<> "/dev/tcp/127.0.0.1/$p") 2> /dev/null; then
+			ready=1
+			break
+		fi
 		sleep 0.1
 	done
+	if [[ -z "$ready" ]]; then
+		echo "run_samba_ad.sh: nothing accepts on 127.0.0.1:$p (JHETZ_LDAP_IT_SAMBA_PORT=$port)" >&2
+		exit 1
+	fi
 done
 docker cp -q "${containers[0]}:/var/lib/samba/private/tls/ca.pem" "$dir/ca.pem"
 

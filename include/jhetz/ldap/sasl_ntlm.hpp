@@ -57,7 +57,9 @@
 //   that is only signed (Samba's force_wrap_seal, which follows Windows'
 //   LDAP), so integrity differs from confidentiality only in the flags it
 //   negotiates, and connection::security_layer() reports confidentiality
-//   for both. Each direction has its own RC4 handle, kept across
+//   for both. Samba before the fix of its bug 13427 (4.7/4.8, 2018) also
+//   expects NTLMSSP_NEGOTIATE_SEAL in the flags, so integrity fails there
+//   after the bind. Each direction has its own RC4 handle, kept across
 //   buffers, and its own sequence number from 0; a buffer whose
 //   checksum or sequence number is not the expected one (tampered with,
 //   replayed, reordered or dropped) closes the connection, as does one

@@ -518,7 +518,13 @@ class recording_relay
 	}
 	recording_relay(const recording_relay &) = delete;
 	auto operator=(const recording_relay &) -> recording_relay & = delete;
-	~recording_relay() { shut_down(); }
+	// Driven after shut_down(), so the pumps finish even when a REQUIRE
+	// left the test early.
+	~recording_relay()
+	{
+		shut_down();
+		drive(ioc_);
+	}
 
 	[[nodiscard]] auto url() const -> std::string
 	{
@@ -647,6 +653,21 @@ auto longest(const std::vector<std::string_view> &buffers) -> std::size_t
 	return n;
 }
 
+// The NegotiateFlags of the NTLM NEGOTIATE_MESSAGE in `bytes` (the first
+// BindRequest's credentials, sent in clear; MS-NLMP section 2.2.1.1).
+auto negotiate_flags(std::string_view bytes) -> std::uint32_t
+{
+	constexpr std::string_view signature("NTLMSSP\0\x01\0\0\0", 12);
+	const auto at = bytes.find(signature);
+	REQUIRE(at != std::string_view::npos);
+	REQUIRE(bytes.size() - at >= 16);
+	std::uint32_t flags = 0;
+	for (std::size_t k = 0; k < 4; ++k) {
+		flags |= static_cast<std::uint32_t>(static_cast<unsigned char>(bytes[at + 12 + k])) << (8 * k);
+	}
+	return flags;
+}
+
 const ldap::dn large{ "CN=large,CN=Users,DC=coro,DC=test" };
 
 }// namespace
@@ -704,6 +725,13 @@ TEST_CASE("samba ad: the NTLM security layer on plain ldap://, entries over 128 
 
 	// Two BindRequests and two BindResponses in clear, then only protected
 	// buffers, each a signature then the (sealed) message.
+	// Integrity asks for signing only, so the sealing on the wire is the
+	// DC's force_wrap_seal (and the client's matching it), not a SEAL the
+	// client negotiated.
+	const auto flags = negotiate_flags(relay.from_client());
+	CHECK((flags & ldap::detail::ntlmssp_negotiate_sign) != 0);
+	CHECK(
+	  ((flags & ldap::detail::ntlmssp_negotiate_seal) != 0) == (protection == ldap::sasl_protection::confidentiality));
 	const auto up = sasl_buffers(relay.from_client(), 2);
 	const auto down = sasl_buffers(relay.from_server(), 2);
 	check_signatures(up);
