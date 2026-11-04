@@ -142,6 +142,16 @@ foreach(target ber_fuzz message_fuzz filter_fuzz dn_fuzz url_fuzz value_fuzz sch
     jhetz_ldap_warnings(${target}_replay)
     add_test(NAME ${target}_replay COMMAND ${target}_replay)
 endforeach()
+# The NTLM security layer's target needs OpenSSL's HMAC-MD5 (jhetz::ldap_net).
+if(JHETZ_LDAP_BUILD_NET)
+    add_executable(ntlm_layer_fuzz_replay
+        ${PROJECT_SOURCE_DIR}/fuzz/ntlm_layer_fuzz.cpp
+        ${PROJECT_SOURCE_DIR}/fuzz/ntlm_layer_fuzz_replay.cpp
+    )
+    target_link_libraries(ntlm_layer_fuzz_replay PRIVATE jhetz::ldap_net)
+    jhetz_ldap_warnings(ntlm_layer_fuzz_replay)
+    add_test(NAME ntlm_layer_fuzz_replay COMMAND ntlm_layer_fuzz_replay)
+endif()
 
 # Transport and connect tests (jhetz::ldap_net): in-process servers on
 # loopback and Unix domain sockets, Capy mock streams. ctest names start with

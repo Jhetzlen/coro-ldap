@@ -1075,8 +1075,10 @@ wiped string) and are copied into the layer, which wipes its signing keys
 and RC4 states when the connection drops it; each MAC is wiped after
 use (unwrap()'s computed one and the server's, once decrypted). The
 protected buffer's signature parser is in the codec and fuzzed (`ntlm_fuzz`,
-with RC4); the checksum and sequence checks need OpenSSL's HMAC-MD5 and
-are unit-tested. Tested: MS-NLMP 4.2.4.2.3 (the
+with RC4); the checksum, sequence and unsealing checks need OpenSSL's
+HMAC-MD5, in jhetz::ldap_net: `ntlm_layer_fuzz` (built when the fuzz
+build turns `JHETZ_LDAP_BUILD_NET` on, its replay with the net tests)
+fuzzes unwrap() and the round trip both ways. Tested: MS-NLMP 4.2.4.2.3 (the
 EncryptedRandomSessionKey) and 4.2.4.4 (the client-to-server sealing and
 signing keys, the sealed "Plaintext" and its signature), a golden exchange
 and three buffers (two client buffers through one handle, the server's
@@ -2177,7 +2179,7 @@ and its destructor joins the thread.
   MSVC and clang-cl until the first clean build (coro-ldap-2we). macOS is
   not supported.
 - Corosio and Capy pinned by commit (FetchContent), used only by
-  `jhetz_ldap_net` (option `JHETZ_LDAP_BUILD_NET`, off in fuzz builds);
+  `jhetz_ldap_net` (option `JHETZ_LDAP_BUILD_NET`, off by default in fuzz builds);
   it also needs OpenSSL.
 - ICU (decision 6; `find_package(ICU COMPONENTS uc data)`) for Unicode,
   linked privately by both libraries (the public headers do not include

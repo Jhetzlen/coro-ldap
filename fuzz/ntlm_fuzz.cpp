@@ -16,7 +16,8 @@
 //   the message is the rest;
 // - RC4 keyed with the input's first octets, applied twice from a fresh
 //   state, gives the input back. (The checksum and sequence number checks
-//   need OpenSSL's HMAC-MD5, in jhetz::ldap_net: the unit tests cover them.)
+//   need OpenSSL's HMAC-MD5, in jhetz::ldap_net: ntlm_layer_fuzz covers
+//   them.)
 #include "jhetz/ldap/ntlm_message.hpp"
 
 #include "check.hpp"

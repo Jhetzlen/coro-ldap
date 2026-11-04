@@ -412,6 +412,7 @@ disabled check.
 | `url_fuzz` | text | `parse(to_string(u)) == u` and `to_string` is canonical; printed URLs contain only RFC 3986 characters |
 | `matching_fuzz` | text (two values, split at an offset in the first byte) | `prepare_string` fails only with `string_prep_failed` and is idempotent (one SPACE more for a value starting with a combining mark); a value matches itself exactly when it prepares; equality rules are symmetric and caseExactMatch TRUE implies caseIgnoreMatch TRUE; orderings are never TRUE both ways; a parsed DN never fails to match itself; the OID, uniqueMember, generalizedTime, uuid, bitString and caseIgnoreList rules are symmetric and never FALSE on a value against itself |
 | `ntlm_fuzz` | bytes | the MS-NLMP CHALLENGE_MESSAGE and AUTHENTICATE_MESSAGE parsers fail only with `decode_error`; accepted messages re-encode to messages that parse equal; the client's TargetInfo built from a CHALLENGE_MESSAGE's AV_PAIRs parses back with one MsvAvFlags (MIC bit set) and one MsvAvChannelBindings; a security layer's protected buffer is refused only with `decode_error`, an accepted one's signature re-encodes to its first 16 octets; RC4 applied twice is the identity |
+| `ntlm_layer_fuzz` (needs `JHETZ_LDAP_BUILD_NET`) | bytes (a protected buffer, and a message) | for integrity and confidentiality: the client layer's `unwrap()` of the input fails only with `decode_error` or `unexpected_response` and leaves `out` unchanged, and accepts only a genuine server buffer (a fresh server layer wraps the plaintext back into the input); the input wrapped by the client and unwrapped by a server layer (the keys swapped), then back, round-trips twice (sequence numbers 0 and 1), appending to `out`; a wrapped buffer with one bit flipped is refused, `out` unchanged |
 
 ```sh
 cmake -B build/fuzz -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -429,13 +430,17 @@ UBSAN_OPTIONS=halt_on_error=1 build/fuzz/fuzzers/message_fuzz -max_total_time=60
 Sanitized and fuzz builds use `-fno-sanitize-recover=all`, so any UBSan
 finding aborts and fails the test or fuzz run.
 
-A fuzz build leaves `JHETZ_LDAP_BUILD_NET` off by default: the fuzzers only
-cover the codec and URLs.
+A fuzz build leaves `JHETZ_LDAP_BUILD_NET` off by default: the fuzzers then
+cover the codec and URLs. `ntlm_layer_fuzz` needs OpenSSL's HMAC-MD5 from
+`jhetz::ldap_net`, so it is built only with `-DJHETZ_LDAP_BUILD_NET=ON`
+(which fetches Corosio and Capy); its `ntlm_layer_fuzz_replay` is built
+with the net tests.
 
 Without libFuzzer, the `<target>_replay` tests (part of `ctest`) run the same
 entry points on deterministic generated and mutated inputs (about 300,000 for
-`ber_fuzz`, 200,000 for `message_fuzz` and `url_fuzz`, 150,000 for `dn_fuzz`
-and 45,000 for the slower `filter_fuzz`).
+`ber_fuzz`, 200,000 for `message_fuzz` and `url_fuzz`, 150,000 for `dn_fuzz`,
+45,000 for the slower `filter_fuzz`, and 12,000 for `ntlm_layer_fuzz`, whose
+inputs each take about twenty HMAC-MD5s and RC4 key schedules).
 
 ## Benchmark
 
