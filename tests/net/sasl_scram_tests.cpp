@@ -623,6 +623,56 @@ TEST_CASE("scram: server-final-message rejections (mutual authentication)", "[sa
 	}
 }
 
+// With no exchange running (state::idle: before start(), or after a failed
+// step), a challenge or the server's success is refused, not taken as the
+// next message of an exchange; start() begins a new one.
+TEST_CASE("scram: step() and complete() with no exchange running", "[sasl][scram]")
+{
+	auto refused_with = [](const ldap::error &e, std::string_view what) {
+		CHECK(e.code == ldap::client_errc::unexpected_response);
+		CHECK_THAT(std::string(e.context), ContainsSubstring(std::string(what)));
+	};
+	constexpr std::string_view after_end = "a challenge after the exchange ended";
+	constexpr std::string_view before_complete = "before the exchange was complete";
+
+	SECTION("before start()")
+	{
+		auto m = rfc_mech();
+		auto r = m.step(rfc_server_first);
+		REQUIRE_FALSE(r.has_value());
+		refused_with(r.error(), after_end);
+		auto c = m.complete(rfc_server_final);
+		REQUIRE_FALSE(c.has_value());
+		refused_with(c.error(), before_complete);
+		to_client_final(m);// a new exchange still works
+		CHECK(m.complete(rfc_server_final).has_value());
+	}
+	SECTION("after a refused server-first-message")
+	{
+		auto m = rfc_mech();
+		REQUIRE(m.start().has_value());
+		REQUIRE_FALSE(m.step("garbage").has_value());
+		auto r = m.step(rfc_server_first);
+		REQUIRE_FALSE(r.has_value());
+		refused_with(r.error(), after_end);
+		auto c = m.complete(rfc_server_final);
+		REQUIRE_FALSE(c.has_value());
+		refused_with(c.error(), before_complete);
+	}
+	SECTION("after a wrong server signature")
+	{
+		auto m = rfc_mech();
+		to_client_final(m);
+		REQUIRE_FALSE(m.step("v=7rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=").has_value());
+		auto r = m.step(rfc_server_final);
+		REQUIRE_FALSE(r.has_value());
+		refused_with(r.error(), after_end);
+		auto c = m.complete(std::nullopt);
+		REQUIRE_FALSE(c.has_value());
+		refused_with(c.error(), before_complete);
+	}
+}
+
 TEST_CASE("scram: a configured maximum iteration count", "[sasl][scram]")
 {
 	using access = ldap::detail::scram_test_access;

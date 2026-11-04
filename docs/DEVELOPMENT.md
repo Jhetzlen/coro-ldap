@@ -362,6 +362,33 @@ A template that nothing instantiates generates no code, so it is missing
 from the report rather than shown as 0% (uncalled inline functions do show
 up, with zero counts).
 
+### Accepted gaps
+
+Failure paths left uncovered on purpose: reaching them would take a
+fault-injection seam in production code (globals, macros, or a hook in
+every OpenSSL and ICU call), and each only forwards the failure. Paths
+reachable through the seams that exist are tested instead: allocation
+failure through the io_context's frame allocator (`failing_frames`) and the
+memory resources, protocol misuse through the mock servers and direct
+mechanism calls.
+
+- ICU failures in SASLprep (`src/sasl_scram.cpp`, `icu_failure`): ICU
+  fails only on its own allocation failure or an internal error.
+- OpenSSL failures of PBKDF2, HMAC, SHA-256 and `RAND_bytes`
+  (`src/sasl_scram.cpp`): only on OpenSSL's own allocation failure or an
+  internal error.
+- `TCP_NODELAY` failing (`src/net/connect.cpp`): `setsockopt` on a
+  connected TCP socket fails only for a kernel reason.
+- Resolver failures caught in `resolve_detached` (`src/net/connect.cpp`,
+  the catch-all giving `not_enough_memory`): Corosio's resolver and its
+  lookup allocate with the global `operator new`, not the frame allocator
+  nor `connect()`'s memory resource, and getaddrinfo's own errors arrive
+  as an error code.
+- `result_of`'s `logic_error` (`src/connection/operations.cpp`, "response
+  without an LDAPResult"): unreachable, since the reader refuses a response
+  of another operation first (tested: a SearchResultEntry answering a
+  bind, in `tests/net/connection_tests.cpp`).
+
 ## clang-tidy
 
 The checks are in `.clang-tidy` (each disabled check has its reason there);
