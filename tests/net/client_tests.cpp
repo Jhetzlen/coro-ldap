@@ -2497,3 +2497,162 @@ TEST_CASE("client: same_setup_for_domains", "[net][client][referral]")
 	CHECK(authorize(hop("ldap://10.0.0.2/ou=b", "ldap://a.example.org")) == refuse);
 	CHECK(ldap::same_setup_for_domains({})(hop("ldap://example.org/ou=b", "ldap://a.example.org")) == refuse);
 }
+
+// ---------------------------------------------------------------- the rest of the API
+
+TEST_CASE("client: move assignment, executor() and a moved-from client's reads", "[net][client]")
+{
+	pool_fixture f;
+	auto &s = f.server({ bind_ok() });
+	f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+	CHECK(f.pool->executor() == f.ioc.get_executor());
+	REQUIRE(f.acquire().has_value());// pooled, then returned
+	ldap::client other(f.ioc, {});
+	other = std::move(*f.pool);// takes the pool and its connection
+	CHECK(other.executor() == f.ioc.get_executor());
+	CHECK(other.connections() == 1);
+	CHECK(f.pool->connections() == 0);
+
+	// The moved-from client refuses every read without contacting anything.
+	const auto refused = [](const ldap::error &e, std::string_view context) {
+		CHECK(e.code == ldap::client_errc::not_connected);
+		CHECK(std::string_view(e.context) == std::string(context) + ": client moved from");
+	};
+	const std::string search = "search ou=people,dc=example,dc=org";
+	const std::string compare = "compare uid=jdoe,ou=people,dc=example,dc=org";
+	refused(finish(f.ioc, f.pool->search(people_search())).error(), search);
+	refused(finish(f.ioc, f.pool->search_stream(people_search())).error(), search);
+	refused(finish(f.ioc, f.pool->compare(jdoe_compare())).error(), compare);
+	refused(finish(f.ioc, f.pool->chase_search(people_search())).error(), search);
+	refused(finish(f.ioc, f.pool->chase_compare(jdoe_compare())).error(), compare);
+	refused(finish(f.ioc, f.pool->who_am_i()).error(), "who_am_i");
+	refused(finish(f.ioc, f.pool->acquire()).error(), "acquire");
+	f.pool->close();// nothing to close
+
+	// The pool works from its new owner, on the same connection.
+	auto l = finish(f.ioc, other.acquire());
+	REQUIRE(l.has_value());
+	CHECK(s.accepted() == 1);
+	// Assigned over, a client is closed first, as by its destructor.
+	other = ldap::client(f.ioc, {});
+	CHECK_FALSE((*l)->is_open());
+	CHECK(other.connections() == 0);
+	CHECK(f.obs.events
+		  == std::vector<std::string>{
+			"connect " + text(s.url()) + " ok", "disconnect " + text(s.url()) + " client_closed" });
+	l->release();
+	drive_until(f.ioc, [&s] { return s.session(0).done(); });
+	CHECK(s.log(0).received.size() == 1);// the bind only
+}
+
+TEST_CASE("client: a read fails as its acquire() does", "[net][client][retry]")
+{
+	pool_fixture f;
+	f.make({ .servers = { f.refused_url() }, .max_connections = 0 });
+	const auto unusable = [](const ldap::error &e) { CHECK(e.code == std::errc::invalid_argument); };
+	unusable(finish(f.ioc, f.pool->search(people_search())).error());
+	unusable(finish(f.ioc, f.pool->search_stream(people_search())).error());
+	unusable(finish(f.ioc, f.pool->compare(jdoe_compare())).error());
+	unusable(finish(f.ioc, f.pool->who_am_i()).error());
+}
+
+TEST_CASE("client: search_stream() refused at once by the pooled connection", "[net][client][retry]")
+{
+	SECTION("not retried when retrying cannot help")
+	{
+		pool_fixture f;
+		auto &s = f.server({ bind_ok() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		auto p = people_search();
+		p.time_limit = std::chrono::seconds(-1);
+		auto r = finish(f.ioc, f.pool->search_stream(std::move(p)));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::encode_error);
+		CHECK(s.accepted() == 1);
+		CHECK(f.pool->connections() == 1);// still pooled
+		CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
+	}
+	SECTION("retried on another connection when the shared one is unbinding")
+	{
+		// A lease holder's unbind() ends the shared connection for everyone:
+		// while its UnbindRequest is being written the connection is still
+		// open, so acquire() hands it out, but it takes no more requests
+		// (not_sent: the connection is lost).
+		pool_fixture f;
+		auto &s =
+		  f.server({ { answer({ bind_resp(1) }), step{ .read_request = true, .replies = {}, .close_after = true } },
+			found_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
+		auto mine = f.acquire();
+		REQUIRE(mine.has_value());
+		outcome<ldap::result<void>> unbound;
+		outcome<ldap::result<ldap::search_stream>> stream;
+		spawn(f.ioc, (*mine)->unbind(), unbound);
+		spawn(f.ioc, f.pool->search_stream(people_search()), stream);// after the unbind has begun
+		drive_until(f.ioc, [&] { return unbound.done() && stream.done(); });
+		REQUIRE(unbound.get().has_value());
+		REQUIRE(stream.get().has_value());
+		auto entries = finish(f.ioc, drain_stream(*stream.get()));
+		REQUIRE(entries.has_value());
+		REQUIRE(entries->size() == 1);
+		CHECK(entries->front() == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "John"));
+		CHECK(s.accepted() == 2);
+		REQUIRE(s.log(0).received.size() == 2);
+		CHECK(std::holds_alternative<ldap::unbind_request>(s.log(0).received[1].op));
+		REQUIRE(s.log(1).received.size() == 2);
+		CHECK(std::holds_alternative<ldap::search_request>(s.log(1).received[1].op));
+		mine->release();
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
+				"connect " + text(s.url()) + " ok",
+				"disconnect " + text(s.url()) + " closed" });
+	}
+}
+
+TEST_CASE("client: an observer overriding only on_connect", "[net][client][observer]")
+{
+	// The other hooks are client_observer's own, which do nothing: each
+	// runs below (on_retry, on_acquire_wait, on_probe, on_referral and
+	// on_disconnect, in that order).
+	struct connects_only final : ldap::client_observer
+	{
+		std::vector<std::string> events{};
+		void on_connect(const ldap::url &server, const ldap::result<void> &outcome) override
+		{
+			events.push_back("connect " + text(server) + (outcome ? " ok" : " failed"));
+		}
+	};
+	pool_fixture f;
+	const auto down = f.refused_url();
+	auto &b = f.server({ { answer({ bind_resp(1) }), answer({ entry_msg(2, b_dn, "B"), done_msg(2) }) } });
+	const auto uri = ref_to(b, "ou=b,dc=example,dc=org");
+	auto &a = f.server({ { answer({ bind_resp(1) }), answer({ done_msg(2) }), answer({ search_referral(3, uri) }) } });
+	connects_only obs;
+	f.make({ .servers = { down, a.url() },
+	  .setup = admin_setup(),
+	  .idle_check = milliseconds(0),
+	  .acquire_timeout = milliseconds(100),
+	  .backoff = { .initial = milliseconds(60'000), .max = milliseconds(60'000) },
+	  .observer = &obs,
+	  .referrals = { .follow_referrals = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+	auto held = f.acquire({ .exclusive = true });// the first server refused: on_retry
+	REQUIRE(held.has_value());
+	CHECK(text(held->server()) == text(a.url()));
+	auto none = f.acquire();// the only slot leased exclusively: on_acquire_wait
+	REQUIRE_FALSE(none.has_value());
+	CHECK(none.error().code == ldap::cond::timeout);
+	held->release();
+	// The idle connection is probed (on_probe), then the referral followed
+	// (on_referral).
+	auto r = finish(f.ioc, f.pool->search(people_search()));
+	REQUIRE(r.has_value());
+	REQUIRE(r->size() == 1);
+	CHECK(r->front() == expected_entry(b_dn, "B"));
+	f.pool->close();// on_disconnect
+	CHECK(f.pool->connections() == 0);
+	CHECK(obs.events
+		  == std::vector<std::string>{ "connect " + text(down) + " failed", "connect " + text(a.url()) + " ok" });
+	REQUIRE(a.log(0).received.size() == 3);
+	CHECK(std::get<ldap::search_request>(a.log(0).received[1].op).base_object.empty());// the probe
+	CHECK(b.accepted() == 1);
+}
