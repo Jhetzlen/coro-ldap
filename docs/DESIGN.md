@@ -479,7 +479,10 @@ the schema; the AD path refuses a connection without TLS before sending
 fails with the server's own error (e.g. insufficientAccessRights); one
 that returns no entry, or advertises neither method, fails with
 `client_errc::no_password_method`. Both errors name the option that skips
-the lookup. Password memory is not wiped on these paths, nor in simple
+the lookup. Tested against the scripted mock (`tests/net/password_tests.cpp`)
+and a Samba AD DC (`integration.samba_ad`, run_samba_ad.sh): detection,
+reset, change, a non-BMP password, and the 0000052D and 00000056
+explanations from Samba's diagnostics. Password memory is not wiped on these paths, nor in simple
 binds and `password_modify()`: the password passes through `std::string`
 copies (the caller's, the request's values, the encoded PDU in the
 connection's pmr buffers) that cannot all be reached, and wiping one of

@@ -189,6 +189,14 @@ if(JHETZ_LDAP_BUILD_NET)
     jhetz_ldap_warnings(jhetz_ldap_integration_tests)
     add_test(NAME integration COMMAND jhetz_ldap_integration_tests)
     set_tests_properties(integration PROPERTIES LABELS integration SKIP_RETURN_CODE 4)
+    # Against Samba AD DCs in Docker (tests/integration/run_samba_ad.sh
+    # starts them and sets JHETZ_LDAP_IT_SAMBA_*): label "samba_ad", skipped
+    # without them.
+    add_executable(jhetz_ldap_samba_ad_tests integration/samba_ad_tests.cpp)
+    target_link_libraries(jhetz_ldap_samba_ad_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
+    jhetz_ldap_warnings(jhetz_ldap_samba_ad_tests)
+    add_test(NAME integration.samba_ad COMMAND jhetz_ldap_samba_ad_tests)
+    set_tests_properties(integration.samba_ad PROPERTIES LABELS "integration;samba_ad" SKIP_RETURN_CODE 4)
     # SASL GSSAPI against slapd and a throwaway KDC (run_kdc.sh around
     # run_slapd.sh): skipped without them.
     if(JHETZ_LDAP_WITH_GSSAPI)
