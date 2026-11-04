@@ -64,6 +64,36 @@ a toolset (configure checks `MSVC_VERSION` for both), or MinGW-w64 with GCC
 does not set `MSVC` for it and the libstdc++ probe passes vacuously, so an
 old Visual Studio STL shows up only as compile errors.
 
+### Syntax check with mingw-w64
+
+Without root, from Arch's packages (headers only; `build/main` configured
+first, for the fetched Capy, Corosio and Catch2; OpenSSL's and ICU's
+headers are the host's):
+
+```sh
+M=$PWD/build/mingw; mkdir -p $M/root $M/deps
+for p in extra/any/mingw-w64-headers extra/any/mingw-w64-winpthreads extra/x86_64/mingw-w64-gcc; do
+  curl -sfL https://archlinux.org/packages/$p/download/ | bsdtar -xf - -C $M/root usr/x86_64-w64-mingw32/include
+done
+ln -sfn /usr/include/openssl $M/deps/openssl; ln -sfn /usr/include/unicode $M/deps/unicode
+I=$M/root/usr/x86_64-w64-mingw32/include; C=$I/c++/$(ls $I/c++); D=$PWD/build/main/_deps
+for f in $(ls src/*.cpp src/*/*.cpp tests/*.cpp tests/net/*.cpp examples/*.cpp fuzz/*_replay.cpp bench/*.cpp \
+           | grep -v -e trust_store_default -e sasl_gssapi); do
+  clang++ --target=x86_64-w64-mingw32 -std=c++23 -fsyntax-only -nostdinc++ -nostdlibinc \
+    -isystem $C -isystem $C/x86_64-w64-mingw32 -isystem $C/backward -isystem $I -isystem $M/deps \
+    -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX -DWIN32_LEAN_AND_MEAN -DCERT_CHAIN_PARA_HAS_EXTRA_FIELDS \
+    -DBOOST_CAPY_NO_LIB -DBOOST_CAPY_STATIC_LINK -DBOOST_COROSIO_HAS_OPENSSL \
+    -DBOOST_COROSIO_NO_LIB -DBOOST_COROSIO_STATIC_LINK -DJHETZ_LDAPSEARCH='"jhetz-ldapsearch.exe"' \
+    -Iinclude -isystem $D/corosio-src/include -isystem $D/capy-src/include \
+    -isystem $D/catch2-src/src -isystem $D/catch2-build/generated-includes \
+    -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wno-c2y-extensions $f || echo "FAIL $f"
+done
+```
+
+`sasl_gssapi.cpp` is left out (Linux only, below), and
+`trust_store_default.cpp`, which Windows builds replace with
+`trust_store_win.cpp`.
+
 ### Build with vcpkg
 
 From a "x64 Native Tools Command Prompt for VS 2022", with vcpkg cloned and
