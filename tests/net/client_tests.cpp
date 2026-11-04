@@ -2558,10 +2558,15 @@ TEST_CASE("client: a read fails as its acquire() does", "[net][client][retry]")
 {
 	pool_fixture f;
 	f.make({ .servers = { f.refused_url() }, .max_connections = 0 });
-	const auto unusable = [](const ldap::error &e) { CHECK(e.code == std::errc::invalid_argument); };
+	const auto unusable = [](const ldap::error &e) {
+		CHECK(e.code == std::errc::invalid_argument);
+		CHECK(std::string_view(e.context) == "acquire: client_options::max_connections is 0");
+	};
 	unusable(finish(f.ioc, f.pool->search(people_search())).error());
 	unusable(finish(f.ioc, f.pool->search_stream(people_search())).error());
 	unusable(finish(f.ioc, f.pool->compare(jdoe_compare())).error());
+	unusable(finish(f.ioc, f.pool->chase_search(people_search())).error());
+	unusable(finish(f.ioc, f.pool->chase_compare(jdoe_compare())).error());
 	unusable(finish(f.ioc, f.pool->who_am_i()).error());
 }
 
@@ -2658,23 +2663,28 @@ TEST_CASE("client: an observer overriding only on_connect", "[net][client][obser
 	f.make({ .servers = { down, a.url() },
 	  .setup = admin_setup(),
 	  .idle_check = milliseconds(0),
-	  .acquire_timeout = milliseconds(100),
+	  .acquire_timeout = milliseconds(10'000),
 	  .backoff = { .initial = milliseconds(60'000), .max = milliseconds(60'000) },
 	  .observer = &obs,
 	  .referrals = { .follow_referrals = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
 	auto held = f.acquire({ .exclusive = true });// the first server refused: on_retry
 	REQUIRE(held.has_value());
 	CHECK(text(held->server()) == text(a.url()));
-	auto none = f.acquire();// the only slot leased exclusively: on_acquire_wait
-	REQUIRE_FALSE(none.has_value());
-	CHECK(none.error().code == ldap::cond::timeout);
+	outcome<ldap::result<ldap::lease>> waiting;
+	spawn(f.ioc, f.pool->acquire(), waiting);// the only slot leased exclusively: it waits
+	f.ioc.poll();
+	f.ioc.restart();
+	REQUIRE_FALSE(waiting.done());
 	held->release();
-	// The idle connection is probed (on_probe), then the referral followed
+	drive_until(f.ioc, [&waiting] { return waiting.done(); });
+	REQUIRE(waiting.get().has_value());// on_acquire_wait; the idle connection probed (on_probe)
+	// The search shares the leased connection and follows the referral
 	// (on_referral).
 	auto r = finish(f.ioc, f.pool->search(people_search()));
 	REQUIRE(r.has_value());
 	REQUIRE(r->size() == 1);
 	CHECK(r->front() == expected_entry(b_dn, "B"));
+	waiting.get()->release();
 	f.pool->close();// on_disconnect
 	CHECK(f.pool->connections() == 0);
 	CHECK(obs.events

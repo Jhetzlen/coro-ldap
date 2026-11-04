@@ -1817,7 +1817,7 @@ TEST_CASE("integration: transactions through the sync connection", "[integration
 		SKIP("slapd without transactions: " << t.error().message());
 	}
 	REQUIRE(t.has_value());
-	CHECK(t->is_open());// slapd's identifier is empty: one transaction per connection
+	CHECK(t->is_open());
 
 	// add, modify and modify DN, applied together at the commit.
 	const std::string name = unique("stx");
@@ -1862,6 +1862,7 @@ TEST_CASE("integration: transactions through the sync connection", "[integration
 	CHECK(state(renamed).has_value());
 	auto w = c.begin_transaction();
 	REQUIRE(w.has_value());
+	CHECK(w->identifier().empty());// slapd's: one transaction per connection
 	REQUIRE(w->del({ .entry = renamed }).has_value());
 	REQUIRE(w->commit().has_value());
 	CHECK(absent(renamed));

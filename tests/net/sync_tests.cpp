@@ -738,8 +738,9 @@ TEST_CASE("sync: a transaction's add, modify and modify DN, then abort", "[net][
 	const std::pmr::vector<ldap::control> spec{ ldap::control{ ldap::transaction_specification_oid, true, "t1" } };
 	CHECK(got[1].op == ldap::protocol_op{ ldap::add_request{ jdoe_str, { { "uid", { "jdoe" } } } } });
 	CHECK(got[1].controls == spec);
-	REQUIRE(std::holds_alternative<ldap::modify_request>(got[2].op));
-	CHECK(std::get<ldap::modify_request>(got[2].op).object == group.to_string());
+	CHECK(got[2].op
+		  == ldap::protocol_op{ ldap::modify_request{
+			group.to_string(), { ldap::modify_change{ ldap::modify_operation::add, { "member", { jdoe_str } } } } } });
 	CHECK(got[2].controls == spec);
 	CHECK(got[3].op == ldap::protocol_op{ ldap::modify_dn_request{ jdoe_str, "uid=john" } });
 	CHECK(got[3].controls == spec);

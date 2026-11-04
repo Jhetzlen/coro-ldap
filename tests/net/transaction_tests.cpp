@@ -254,6 +254,29 @@ TEST_CASE("transaction: a failed commit names the update at fault", "[net][trans
 	m.check_server();
 }
 
+TEST_CASE("transaction: an empty identifier", "[net][transaction]")
+{
+	mock_ldap m;
+	m.serve({ answer({ ext_resp(1, 0, std::nullopt, "") }),
+	  answer({ result_msg<ldap::del_response>(2) }),
+	  answer({ ended(3, 0, {}) }) });
+
+	auto t = m.run(m.conn.begin_transaction());
+	REQUIRE(t.has_value());
+	CHECK(t->is_open());
+	CHECK(t->identifier().empty());
+	REQUIRE(m.run(t->del({ .entry = jdoe })).has_value());
+	REQUIRE(m.run(t->commit()).has_value());
+	CHECK_FALSE(t->is_open());
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 3);
+	const ldap::control empty_spec{ ldap::transaction_specification_oid, true, "" };
+	REQUIRE(empty_spec.value.has_value());
+	CHECK(m.log.received[1].controls == std::pmr::vector<ldap::control>{ empty_spec });
+	CHECK(end_request_of(m.log.received[2]) == ldap::end_transaction_request{ true, "" });
+}
+
 TEST_CASE("transaction: abort, and a settled transaction refuses more", "[net][transaction]")
 {
 	mock_ldap m;
