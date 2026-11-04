@@ -32,7 +32,8 @@
 // what one changes on its connection the others see: a bind changes the
 // identity of all of them, start_tls() fails with operation_in_progress
 // while another lease has an operation outstanding, and unbind() or close()
-// ends the connection for everyone. So call bind, start_tls() and unbind()
+// ends the connection for everyone (from the moment unbind() begins, the
+// connection is not handed out again). So call bind, start_tls() and unbind()
 // only on an exclusive lease (acquire({.exclusive = true})): an idle or new
 // connection that no other lease shares while it is held. A connection
 // whose bind_count() changed (a bind done, failed, or still in progress) is
@@ -260,7 +261,7 @@ struct backoff_options
 
 // Why a connection left the pool (client_observer::on_disconnect).
 enum class disconnect_reason {
-	closed,// found closed (the server or an error closed it, or a lease's unbind() or close())
+	closed,// found closed or being unbound (the server or an error closed it, or a lease's unbind() or close())
 	probe_failed,// the idle check got no answer
 	max_lifetime,// older than client_options::max_lifetime
 	rebound,// a lease bound it again

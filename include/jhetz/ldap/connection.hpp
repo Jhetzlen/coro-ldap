@@ -169,6 +169,9 @@ namespace detail {
 	// Replaces an earlier hook. Ignored on a default-constructed or
 	// moved-from connection.
 	void set_close_hook(connection &c, std::move_only_function<void() noexcept> hook) noexcept;
+	// For ldap::client: the connection takes requests (open, no unbind()
+	// under way). False on a default-constructed or moved-from connection.
+	[[nodiscard]] auto accepts_requests(const connection &c) noexcept -> bool;
 	// An operation's error context: "search ou=people,dc=example,dc=org",
 	// `search ""` for the root DSE. The DN is often the server's text (an
 	// entry's DN, a referral's): sanitized and cut at 256 bytes, as an
@@ -584,6 +587,7 @@ class connection
 	friend class ldap::paged_search;
 	friend void detail::set_next_message_id(connection &, std::int32_t) noexcept;
 	friend void detail::set_close_hook(connection &, std::move_only_function<void() noexcept>) noexcept;
+	friend auto detail::accepts_requests(const connection &) noexcept -> bool;
 
 	// schema_check::on_first_use for one type (connection_options.hpp).
 	auto check_schema(std::type_index type, schema_report (*validate_type)(const server_schema &))

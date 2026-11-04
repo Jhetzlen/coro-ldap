@@ -46,6 +46,11 @@ void detail::set_close_hook(connection &c, std::move_only_function<void() noexce
 	}
 }
 
+auto detail::accepts_requests(const connection &c) noexcept -> bool
+{
+	return c.impl_ != nullptr && c.impl_->accepts_requests();
+}
+
 connection::connection(corosio::io_context &ioc,
   net::transport t,
   const connection_options &options,

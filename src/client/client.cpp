@@ -409,7 +409,7 @@ namespace detail {
 		[[nodiscard]] auto retire_reason(const pooled_connection &c, clock::time_point now) const noexcept
 		  -> std::optional<disconnect_reason>
 		{
-			if (!c.conn.is_open()) {
+			if (!detail::accepts_requests(c.conn)) {// closed, or being unbound
 				return disconnect_reason::closed;
 			}
 			if (c.conn.bind_count() != c.binds) {// bound again, or binding
@@ -1157,15 +1157,17 @@ namespace detail {
 		}
 
 		// `held`'s operation failed with `e` (retryable): no acquire() hands
-		// that connection out again. A closed one is retired by prune() (and
-		// release()); an open one (busy, unavailable) is retired here.
+		// that connection out again. A closed one (or one being unbound) is
+		// retired by prune() (and release()); one still taking requests
+		// (busy, unavailable) is retired here.
 		// Returns the server the retry avoids: the one that answered busy
 		// or unavailable (a connection lost goes by the usual order).
 		auto set_aside(const lease &held, const error &e) noexcept -> std::optional<std::size_t>
 		{
 			const auto &c = held.conn_;
 			const bool refused = e.code == cond::busy_or_unavailable;
-			if (!closed && !c->retired && c->conn.is_open() && std::ranges::find(pool, c) != pool.end()) {
+			if (!closed && !c->retired && detail::accepts_requests(c->conn)
+				&& std::ranges::find(pool, c) != pool.end()) {
 				retire(c, refused ? disconnect_reason::busy_or_unavailable : disconnect_reason::closed);
 			}
 			return refused ? std::optional<std::size_t>{ c->server } : std::nullopt;
@@ -1304,7 +1306,8 @@ namespace detail {
 			co_return r->value;
 		}
 
-		// search_stream(): retried once if it fails before its first message.
+		// search_stream(): retried once if it fails before its first message,
+		// at once or as its first outcome.
 		static auto read_stream(std::shared_ptr<client_state> self,
 		  search_params request,
 		  std::pmr::memory_resource *mr) -> capy::task<result<ldap::search_stream>>
@@ -1316,20 +1319,22 @@ namespace detail {
 					co_return std::unexpected(std::move(held.error()));
 				}
 				auto s = co_await (*held)->search_stream(request, mr);
-				if (!s) {
-					if (retried || !retryable(s.error())) {
-						co_return std::unexpected(std::move(s.error()));
+				std::optional<error> failed;
+				if (s) {
+					auto first = co_await first_outcome(*s);
+					if (!first) {// stopped
+						co_return std::unexpected(std::move(first.error()));
 					}
-					avoid = self->set_aside(*held, s.error());
+					failed = std::move(*first);
+				} else {
+					failed = s.error();
+				}
+				if (failed && !retried && retryable(*failed)) {
+					avoid = self->set_aside(*held, *failed);
 					continue;
 				}
-				auto first = co_await first_outcome(*s);
-				if (!first) {// stopped
-					co_return std::unexpected(std::move(first.error()));
-				}
-				if (*first && !retried && retryable(**first)) {
-					avoid = self->set_aside(*held, **first);
-					continue;
+				if (!s) {
+					co_return std::unexpected(std::move(s.error()));
 				}
 				keep_alive(*s, std::make_shared<lease>(std::move(*held)));
 				co_return std::move(*s);

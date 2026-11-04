@@ -12,6 +12,7 @@
 #include <boost/corosio/delay.hpp>
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/ipv4_address.hpp>
+#include <boost/corosio/socket_option.hpp>
 #include <boost/corosio/tcp_acceptor.hpp>
 #include <boost/corosio/tcp_socket.hpp>
 
@@ -77,6 +78,13 @@ class ldap_server
 	[[nodiscard]] auto session(std::size_t n) -> outcome<void> & { return sessions_.at(n); }
 	// The server closes the n-th connection.
 	void drop(std::size_t n) { peers_.at(n).close(); }
+	// The server resets the n-th connection (SO_LINGER 0: an RST, not a FIN).
+	void reset(std::size_t n)
+	{
+		auto &p = peers_.at(n);
+		p.set_option(corosio::socket_option::linger(true, 0));
+		p.close();
+	}
 	void shut_down()
 	{
 		acc_.close();
@@ -2556,7 +2564,39 @@ TEST_CASE("client: a read fails as its acquire() does", "[net][client][retry]")
 	unusable(finish(f.ioc, f.pool->who_am_i()).error());
 }
 
-TEST_CASE("client: search_stream() refused at once by the pooled connection", "[net][client][retry]")
+TEST_CASE("client: a shared connection being unbound is not handed out", "[net][client]")
+{
+	// acquire() during another lease's unbind() opens a new connection.
+	pool_fixture f;
+	auto &s = f.server({ { answer({ bind_resp(1) }), step{ .read_request = true, .replies = {}, .close_after = true } },
+	  found_after_bind() });
+	f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
+	auto mine = f.acquire();
+	REQUIRE(mine.has_value());
+	outcome<ldap::result<void>> unbound;
+	outcome<ldap::result<ldap::lease>> other;
+	spawn(f.ioc, (*mine)->unbind(), unbound);
+	REQUIRE((*mine)->is_open());// the UnbindRequest is not written yet
+	spawn(f.ioc, f.pool->acquire(), other);
+	drive_until(f.ioc, [&] { return unbound.done() && other.done(); });
+	REQUIRE(unbound.get().has_value());
+	REQUIRE(other.get().has_value());
+	auto r = finish(f.ioc, (*other.get())->search(people_search()));
+	REQUIRE(r.has_value());
+	REQUIRE(r->size() == 1);
+	CHECK(r->front() == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "John"));
+	CHECK(s.accepted() == 2);
+	REQUIRE(s.log(0).received.size() == 2);
+	CHECK(std::holds_alternative<ldap::unbind_request>(s.log(0).received[1].op));
+	mine->release();
+	CHECK(f.pool->connections() == 1);// the new one only
+	CHECK(f.obs.events
+		  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
+			"connect " + text(s.url()) + " ok",
+			"disconnect " + text(s.url()) + " closed" });
+}
+
+TEST_CASE("client: search_stream() failing before its first message", "[net][client][retry]")
 {
 	SECTION("not retried when retrying cannot help")
 	{
@@ -2572,40 +2612,26 @@ TEST_CASE("client: search_stream() refused at once by the pooled connection", "[
 		CHECK(f.pool->connections() == 1);// still pooled
 		CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
 	}
-	SECTION("retried on another connection when the shared one is unbinding")
+	SECTION("retried on another connection when the idle one was reset by the server")
 	{
-		// A lease holder's unbind() ends the shared connection for everyone:
-		// while its UnbindRequest is being written the connection is still
-		// open, so acquire() hands it out, but it takes no more requests
-		// (not_sent: the connection is lost).
 		pool_fixture f;
-		auto &s =
-		  f.server({ { answer({ bind_resp(1) }), step{ .read_request = true, .replies = {}, .close_after = true } },
-			found_after_bind() });
+		auto &s = f.server({ bind_ok(), found_after_bind() });
 		f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
-		auto mine = f.acquire();
-		REQUIRE(mine.has_value());
-		outcome<ldap::result<void>> unbound;
-		outcome<ldap::result<ldap::search_stream>> stream;
-		spawn(f.ioc, (*mine)->unbind(), unbound);
-		spawn(f.ioc, f.pool->search_stream(people_search()), stream);// after the unbind has begun
-		drive_until(f.ioc, [&] { return unbound.done() && stream.done(); });
-		REQUIRE(unbound.get().has_value());
-		REQUIRE(stream.get().has_value());
-		auto entries = finish(f.ioc, drain_stream(*stream.get()));
+		REQUIRE(f.acquire().has_value());// pooled, then returned
+		s.reset(0);// the client cannot tell yet
+		auto stream = finish(f.ioc, f.pool->search_stream(people_search()));
+		REQUIRE(stream.has_value());
+		auto entries = finish(f.ioc, drain_stream(*stream));
 		REQUIRE(entries.has_value());
 		REQUIRE(entries->size() == 1);
 		CHECK(entries->front() == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "John"));
 		CHECK(s.accepted() == 2);
-		REQUIRE(s.log(0).received.size() == 2);
-		CHECK(std::holds_alternative<ldap::unbind_request>(s.log(0).received[1].op));
 		REQUIRE(s.log(1).received.size() == 2);
 		CHECK(std::holds_alternative<ldap::search_request>(s.log(1).received[1].op));
-		mine->release();
 		CHECK(f.obs.events
 			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
-				"connect " + text(s.url()) + " ok",
-				"disconnect " + text(s.url()) + " closed" });
+				"disconnect " + text(s.url()) + " closed",
+				"connect " + text(s.url()) + " ok" });
 	}
 }
 

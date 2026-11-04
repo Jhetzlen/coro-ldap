@@ -2289,7 +2289,11 @@ decision left open.
   on its connection, the others see. A bind changes their identity (hence
   the rule below), StartTLS fails with `operation_in_progress` while
   another lease has an operation outstanding, `unbind()` / `close()` end
-  it for all; a failed bind silently drops them all to anonymous. Hence
+  it for all. A connection whose `unbind()` has begun takes no more
+  requests although `is_open()` stays true until the UnbindRequest is
+  written: the pool tests `detail::accepts_requests()`, so it is retired
+  (`closed`) and never handed out again. A failed bind silently drops
+  them all to anonymous. Hence
   `acquire({.exclusive = true})`: an idle connection, else a new one
   while a slot is free, else it waits; no other acquire (shared or
   exclusive) gets that connection while the exclusive lease holds it.
