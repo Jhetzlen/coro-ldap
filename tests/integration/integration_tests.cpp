@@ -1795,6 +1795,78 @@ TEST_CASE("integration: the sync connection", "[integration][sync]")
 	}
 }
 
+TEST_CASE("integration: transactions through the sync connection", "[integration][sync][transaction]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	ldap::sync::connection c(trusting());
+	REQUIRE(c.connect(*ldap::url::parse(env("JHETZ_LDAP_IT_LDAP"))).has_value());
+	REQUIRE(c.simple_bind(admin, "secret").has_value());
+	const auto state = [&c](const ldap::dn &d) {
+		return c.search({ .base = d, .scope = ldap::search_scope::base_object, .attributes = { "mail" } });
+	};
+	const auto absent = [&](const ldap::dn &d) {
+		auto r = state(d);
+		return !r.has_value() && r.error().code == ldap::errc::no_such_object;
+	};
+	auto t = c.begin_transaction();
+	if (!t
+		&& (t.error().code == ldap::errc::protocol_error
+			|| t.error().code == ldap::errc::unavailable_critical_extension)) {
+		SKIP("slapd without transactions: " << t.error().message());
+	}
+	REQUIRE(t.has_value());
+	CHECK(t->is_open());// slapd's identifier is empty: one transaction per connection
+
+	// add, modify and modify DN, applied together at the commit.
+	const std::string name = unique("stx");
+	const ldap::dn entry = *ldap::dn::parse("uid=" + name + ",ou=people,dc=example,dc=org");
+	const ldap::dn renamed = *ldap::dn::parse("uid=" + name + "-r,ou=people,dc=example,dc=org");
+	REQUIRE(
+	  t->add({ .entry = entry,
+			   .attributes = { { "objectClass", { "inetOrgPerson" } },
+				 { "uid", { name } },
+				 { "cn", { "Transaktion" } },
+				 { "sn", { "Zoë" } } } })
+		.has_value());
+	REQUIRE(t->modify({ .object = entry, .changes = { ldap::mod::add("mail", { "stx@example.org" }) } }).has_value());
+	REQUIRE(t->modify_dn({ .entry = entry, .new_rdn = renamed.rdns().front() }).has_value());
+	CHECK(absent(entry));// deferred
+	REQUIRE(t->commit().has_value());
+	CHECK_FALSE(t->is_open());
+	CHECK(absent(entry));
+	auto after = state(renamed);
+	REQUIRE(after.has_value());
+	REQUIRE(after->size() == 1);
+	CHECK(*(*after)[0].find("mail") == ldap::string_list{ "stx@example.org" });
+
+	// abort(): nothing applied.
+	auto u = c.begin_transaction();
+	REQUIRE(u.has_value());
+	REQUIRE(u->del({ .entry = renamed }).has_value());
+	REQUIRE(u->abort().has_value());
+	CHECK(state(renamed).has_value());
+
+	// Move-assigned over, an open transaction is aborted and its answer
+	// waited for: slapd allows one transaction per connection, and the
+	// next Start Transaction succeeds.
+	auto v = c.begin_transaction();
+	REQUIRE(v.has_value());
+	REQUIRE(v->del({ .entry = renamed }).has_value());
+	*v = std::move(*u);// u's is settled already: nothing more is sent for it
+	CHECK_FALSE(v->is_open());
+	auto refused = u->del({ .entry = renamed });
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::client_errc::not_connected);
+	CHECK(state(renamed).has_value());
+	auto w = c.begin_transaction();
+	REQUIRE(w.has_value());
+	REQUIRE(w->del({ .entry = renamed }).has_value());
+	REQUIRE(w->commit().has_value());
+	CHECK(absent(renamed));
+}
+
 // ---------------------------------------------------------------- cancellation
 
 TEST_CASE("integration: cancellation mid-search", "[integration]")

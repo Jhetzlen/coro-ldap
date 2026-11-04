@@ -697,6 +697,106 @@ TEST_CASE("sync: transactions", "[net][sync][transaction]")
 	CHECK(end_of(got[6]) == ldap::end_transaction_request{ false, "t3" });
 }
 
+TEST_CASE("sync: a transaction's add, modify and modify DN, then abort", "[net][sync][transaction]")
+{
+	const auto ext = [](std::int32_t id, std::optional<std::string_view> value = std::nullopt) {
+		return ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, value } };
+	};
+	const ldap::dn group{ "cn=staff,ou=groups,dc=example,dc=org" };
+	peer_server srv;
+	srv.serve({ answer({ ext(1, "t1") }),
+	  answer({ result_msg<ldap::add_response>(2) }),
+	  answer({ result_msg<ldap::modify_response>(3, 50, "no write access") }),
+	  answer({ result_msg<ldap::modify_dn_response>(4) }),
+	  answer({ ext(5) }) });
+	connected k(srv);
+	auto t = k.c.begin_transaction();
+	REQUIRE(t.has_value());
+	auto a = t->add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } });
+	REQUIRE(a.has_value());
+	CHECK(a->message_id == 2);
+	auto m = t->modify({ .object = group, .changes = { ldap::mod::add("member", { jdoe_str }) } });
+	REQUIRE_FALSE(m.has_value());
+	CHECK(m.error().code == ldap::errc::insufficient_access_rights);
+	CHECK(m.error().diagnostic == "no write access");
+	auto r = t->modify_dn({ .entry = jdoe, .new_rdn = ldap::rdn{ "uid=john" } });
+	REQUIRE(r.has_value());
+	CHECK(r->message_id == 4);
+	REQUIRE(t->abort().has_value());
+	CHECK_FALSE(t->is_open());
+	// Settled: refused without a request, as ldap::transaction does.
+	auto again = t->abort();
+	REQUIRE_FALSE(again.has_value());
+	CHECK(again.error().code == std::errc::invalid_argument);
+	CHECK(again.error().context == "abort transaction: the transaction is already committed or aborted");
+	auto late = t->add({ .entry = jdoe });
+	REQUIRE_FALSE(late.has_value());
+	CHECK(late.error().code == std::errc::invalid_argument);
+
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 5);
+	const std::pmr::vector<ldap::control> spec{ ldap::control{ ldap::transaction_specification_oid, true, "t1" } };
+	CHECK(got[1].op == ldap::protocol_op{ ldap::add_request{ jdoe_str, { { "uid", { "jdoe" } } } } });
+	CHECK(got[1].controls == spec);
+	REQUIRE(std::holds_alternative<ldap::modify_request>(got[2].op));
+	CHECK(std::get<ldap::modify_request>(got[2].op).object == group.to_string());
+	CHECK(got[2].controls == spec);
+	CHECK(got[3].op == ldap::protocol_op{ ldap::modify_dn_request{ jdoe_str, "uid=john" } });
+	CHECK(got[3].controls == spec);
+	CHECK(ldap::decode_end_transaction_request(*std::get<ldap::extended_request>(got[4].op).request_value).value()
+		  == ldap::end_transaction_request{ false, "t1" });
+}
+
+TEST_CASE("sync: a move-assigned transaction aborts the one it replaces", "[net][sync][transaction]")
+{
+	const auto ext = [](std::int32_t id, std::optional<std::string_view> value = std::nullopt) {
+		return ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, value } };
+	};
+	peer_server srv;
+	srv.serve({ answer({ ext(1, "t1") }),
+	  answer({ ext(2, "t2") }),
+	  answer({ ext(3) }),// t1's abort, waited for by the assignment
+	  answer({ result_msg<ldap::del_response>(4) }),
+	  answer({ ext(5) }) });// t2's commit
+	connected k(srv);
+	auto u = k.c.begin_transaction();
+	REQUIRE(u.has_value());
+	auto v = k.c.begin_transaction();
+	REQUIRE(v.has_value());
+	*u = std::move(*v);
+	CHECK(u->identifier() == "t2");
+	CHECK(u->is_open());
+	CHECK(u->del({ .entry = jdoe }).has_value());
+	// Every operation of the moved-from one is refused without a request.
+	const auto refused = [](const ldap::error &e, std::string_view what) {
+		CHECK(e.code == ldap::client_errc::not_connected);
+		CHECK(std::string_view(e.context) == std::string(what) + ": no transaction (moved from)");
+	};
+	CHECK_FALSE(v->is_open());
+	CHECK(v->identifier().empty());
+	refused(v->add({ .entry = jdoe }).error(), "add");
+	refused(v->modify({ .object = jdoe }).error(), "modify");
+	refused(v->del({ .entry = jdoe }).error(), "delete");
+	refused(v->modify_dn({ .entry = jdoe, .new_rdn = ldap::rdn{ "uid=john" } }).error(), "modify DN");
+	refused(v->commit().error(), "commit transaction");
+	refused(v->abort().error(), "abort transaction");
+	// Assigning a moved-from one ends u's transaction too: t2 committed
+	// first, so nothing is sent.
+	REQUIRE(u->commit().has_value());
+	*u = std::move(*v);
+	CHECK_FALSE(u->is_open());
+
+	const auto &got = hang_up(k.c, srv);
+	REQUIRE(got.size() == 5);
+	const auto end_of = [](const ldap::message &m) {
+		return ldap::decode_end_transaction_request(*std::get<ldap::extended_request>(m.op).request_value).value();
+	};
+	CHECK(end_of(got[2]) == ldap::end_transaction_request{ false, "t1" });
+	CHECK(got[3].controls
+		  == std::pmr::vector<ldap::control>{ ldap::control{ ldap::transaction_specification_oid, true, "t2" } });
+	CHECK(end_of(got[4]) == ldap::end_transaction_request{ true, "t2" });
+}
+
 TEST_CASE("sync: a transaction's destructor waits for the abort's answer only so long", "[net][sync][transaction]")
 {
 	peer_server srv;
