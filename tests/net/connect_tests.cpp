@@ -626,7 +626,7 @@ TEST_CASE("Happy Eyeballs: stopped while the third attempt waits for the second 
 	CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(10));
 }
 
-TEST_CASE("Happy Eyeballs: the budget ends while the third attempt waits for the second to start",
+TEST_CASE("Happy Eyeballs: the budget ends with three addresses, the later attempts giving up in turn",
   "[net][connect][tcp][timeout][dns]")
 {
 	skip_unless_dns_seam();

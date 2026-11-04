@@ -19,7 +19,6 @@
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
-#include <climits>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -273,7 +272,9 @@ TEST_CASE("ad_password_value: a password over the length limit", "[net][password
 	// One byte over the limit, over a reserved, never touched mapping.
 	constexpr std::size_t size = (INT32_MAX / 2) - 1;
 	void *p = mmap(nullptr, size, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-	REQUIRE(p != MAP_FAILED);
+	if (p == MAP_FAILED) {
+		SKIP("cannot reserve 1 GiB of address space");
+	}
 	auto r = ldap::ad_password_value(std::string_view(static_cast<const char *>(p), size));
 	munmap(p, size);
 	REQUIRE_FALSE(r.has_value());
