@@ -821,14 +821,14 @@ itself needs only ICU.
   it holds the lease until destroyed). Write forwarders `add(params)`,
   `modify(params)`, `del(params)`, `modify_dn(params)`, `move(entry,
   new_parent, controls, timeout)`, `rename(entry, new_rdn,
-  delete_old_rdn, controls, timeout)`, and the typed `add(dn, T,
-  controls)` and `modify<T>(dn, changes, controls)`, each `->
+  delete_old_rdn, controls, timeout)`, each `->
   task<result<response>>`, run the operation on a shared lease and retry
   it once on another connection only after `client_errc::not_sent` (the
   server never saw the request); any other failure (a connection lost
   after sending, a timeout, busy, a result code) is returned, the update
   perhaps applied. A referral result of a write is the error
-  (`errc::referral`, `error::referrals`), never chased.
+  (`errc::referral`, `error::referrals`), never chased. Connection-bound
+  controls (`transaction_specification`) need a lease.
   Referrals (3pf.1): `client_options::referrals` (`referral_options{
   .follow_referrals, .follow_references, .authorize, .limits}`) chases
   nothing by default. `follow_referrals` chases referral results of
@@ -859,11 +859,11 @@ itself needs only ICU.
   ..., `begin_transaction`, `unbind`, `close`), run on the leased
   connection, plus `server()`, `release()` and `operator bool`. The
   forwarders `search`, `compare` and `who_am_i`, and the write
-  forwarders `add`, `modify`, `del`, `modify_dn`, `move`, `rename` (typed
-  `add` and `modify` too), block and retry as the async ones, and
-  `chase_search` / `chase_compare` mirror the async client's (referrals as `client_options::referrals` says; the
-  authorizer and `on_referral` run on the I/O thread); no `search_stream` (no blocking stream, as for
-  `sync::connection`). `close()` (from any thread, the I/O thread
+  forwarders `add`, `modify`, `del`, `modify_dn`, `move`, `rename`, block
+  and retry as the async ones, and `chase_search` / `chase_compare`
+  mirror the async client's (referrals as `client_options::referrals`
+  says; the authorizer and `on_referral` run on the I/O thread); no
+  `search_stream` (no blocking stream, as for `sync::connection`). `close()` (from any thread, the I/O thread
   included) fails waiting and later `acquire()` calls with
   `not_connected`; `connections()`, `executor()`. A call from the I/O
   thread fails with `would_deadlock` (context `"sync::client"`). The
