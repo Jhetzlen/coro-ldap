@@ -2333,8 +2333,9 @@ decision left open.
   happens, through `detail::set_close_hook` (a hook the connection runs
   once from `shut()`), so a waiter wakes when a leased connection dies.
   When the earliest backoff ends after the deadline it fails at once with
-  the last error (or the backing-off server's last error, its context
-  marked "backing off"). With no
+  the last error (or the last error of the server whose backoff ends
+  first, its context marked "backing off"; with none backing off,
+  `capy::error::timeout` "no connection ready"). With no
   `acquire_timeout` it retries until it succeeds, is stopped, or the
   client closes. Nothing starts after the deadline: no attempt, no probe,
   and so no server is penalised for an acquire that ran out of time. An

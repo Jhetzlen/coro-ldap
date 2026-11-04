@@ -370,20 +370,27 @@ namespace detail {
 			return false;
 		}
 
-		// acquire() gives up while every server backs off: the error of the
-		// one whose backoff ends first.
-		[[nodiscard]] auto backoff_error(const std::vector<bool> &excluded) const -> error
+		// The error of the server not excluded whose backoff ends first,
+		// among those backing off after a failure; nullopt if none is.
+		[[nodiscard]] auto backoff_error(const std::vector<bool> &excluded, clock::time_point now) const
+		  -> std::optional<error>
 		{
 			const server_state *first = nullptr;
+			const error *first_error = nullptr;
 			for (std::size_t i = 0; i < servers.size(); ++i) {
-				if (!excluded[i] && (first == nullptr || servers[i].retry_at < first->retry_at)) {
-					first = &servers[i];
+				const auto &s = servers[i];
+				if (excluded[i] || !s.last_error || s.retry_at <= now) {
+					continue;
+				}
+				if (first == nullptr || s.retry_at < first->retry_at) {
+					first = &s;
+					first_error = &*s.last_error;
 				}
 			}
-			if (first == nullptr || !first->last_error) {
-				return make_error(capy::error::timeout, "acquire: no server available within acquire_timeout");
+			if (first_error == nullptr) {
+				return std::nullopt;
 			}
-			error e = *first->last_error;
+			error e = *first_error;
 			e.context += " (backing off: acquire_timeout ends first)";
 			return e;
 		}
@@ -946,8 +953,8 @@ namespace detail {
 			co_return found{ std::move(c) };
 		}
 
-		// acquire() gives up at its deadline: the last failure, else the
-		// error of the server backing off (`backing_off`), else a timeout.
+		// acquire() gives up at its deadline: the last failure, else (if
+		// `backing_off`) the error of the server backing off, else a timeout.
 		[[nodiscard]] auto give_up(const std::vector<bool> &excluded, std::optional<error> last, bool backing_off) const
 		  -> error
 		{
@@ -955,7 +962,9 @@ namespace detail {
 				return std::move(*last);
 			}
 			if (backing_off) {
-				return backoff_error(excluded);
+				if (auto e = backoff_error(excluded, clock::now()); e) {
+					return std::move(*e);
+				}
 			}
 			return make_error(capy::error::timeout, "acquire: no connection ready within acquire_timeout");
 		}
