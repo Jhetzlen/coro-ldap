@@ -1782,8 +1782,12 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   leaf (X509_check_host with NEVER_CHECK_SUBJECT | NO_PARTIAL_WILDCARDS)
   after OpenSSL's lenient one; `tls_options::host_matching = legacy` keeps
   OpenSSL's defaults for old certificates.
-  CA bundles are split by us because Corosio loads only the first
-  certificate of a bundle (worth reporting upstream).
+  A CA bundle (`ca_file`, `ca_pem`) goes to Corosio whole: it trusts every
+  certificate of it, but parses them only when the handshake starts and
+  then reports a bad one as a setup failure. So the bundle is read first
+  as Corosio reads it (certificates up to the first text without a PEM
+  block), and a certificate that does not parse is named by its position
+  ("certificate 2 does not parse") before any network traffic.
 - Windows default verification (coro-ldap-1q5; unverified, no Windows
   build yet): with no `ca_file`, `ca_dir` or `ca_pem`, the verify
   callback hands the server's chain (the leaf, then what the server sent)

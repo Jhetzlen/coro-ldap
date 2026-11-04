@@ -1068,6 +1068,16 @@ TEST_CASE("ldaps:// with the CA configured", "[net][connect][tls]")
 		spawn(ioc, exchange(ioc, srv.url("ldaps", "localhost"), { .tls = { .ca_file = bundle.path() } }, true), client);
 		drive(ioc);
 	}
+	SECTION("CA PEM holding a bundle with text around the certificates")
+	{
+		test_pki other("unrelated CA");
+		const std::string bundle = "# roots\n" + other.ca_pem() + "# ours\n" + pki().ca_pem() + "# end\n";
+		spawn(ioc, accept_and_serve(srv.acc, server_context(localhost_cert())), server);
+		spawn(ioc,
+		  exchange(ioc, srv.url("ldaps", "localhost"), { .tls = { .ca_pem = std::pmr::string(bundle) } }, true),
+		  client);
+		drive(ioc);
+	}
 	SECTION("server_name for a certificate that does not name the address")
 	{
 		const auto leaf = pki().issue("ldap.example.org", "DNS:ldap.example.org");
@@ -1320,13 +1330,23 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_pem = std::pmr::string(pki().ca_pem() + broken) } });
 	REQUIRE_FALSE(bad_cert.has_value());
 	CHECK(bad_cert.error().code == std::errc::invalid_argument);
-	CHECK_THAT(std::string(bad_cert.error().context), EndsWith("tls: ca_pem: certificate 2 of 2 does not parse"));
+	CHECK_THAT(std::string(bad_cert.error().context), EndsWith("tls: ca_pem: certificate 2 does not parse"));
+
+	// A certificate cut short after a good one: Corosio would fail it at
+	// handshake time.
+	std::string truncated = pki().ca_pem();
+	truncated += "-----BEGIN CERTIFICATE-----\n";
+	truncated += pki().ca_pem().substr(28, 64);
+	auto cut = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_pem = std::pmr::string(truncated) } });
+	REQUIRE_FALSE(cut.has_value());
+	CHECK(cut.error().code == std::errc::invalid_argument);
+	CHECK_THAT(std::string(cut.error().context), EndsWith("tls: ca_pem: certificate 2 does not parse"));
 
 	temp_path bad_file(u8".pem");
 	bad_file.write(broken);
 	auto bad_ca_file = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_file = bad_file.path() } });
 	REQUIRE_FALSE(bad_ca_file.has_value());
-	CHECK_THAT(std::string(bad_ca_file.error().context), EndsWith(": certificate 1 of 1 does not parse"));
+	CHECK_THAT(std::string(bad_ca_file.error().context), EndsWith(": certificate 1 does not parse"));
 
 	auto no_dir = connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_dir = "/nonexistent/certs" } });
 	REQUIRE_FALSE(no_dir.has_value());
@@ -1430,7 +1450,7 @@ TEST_CASE("TLS configuration errors leave the OpenSSL error queue empty", "[net]
 	const std::string broken = "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n";
 	auto bad_ca = net::detail::make_tls_setup({ .ca_pem = std::pmr::string(pki().ca_pem() + broken) });
 	REQUIRE_FALSE(bad_ca.has_value());
-	CHECK_THAT(std::string(bad_ca.error().context), EndsWith("certificate 2 of 2 does not parse"));
+	CHECK_THAT(std::string(bad_ca.error().context), EndsWith("certificate 2 does not parse"));
 	CHECK(ERR_peek_error() == 0);
 
 	temp_path junk(u8".pem");

@@ -43,31 +43,6 @@ namespace corosio = boost::corosio;
 namespace jhetz::ldap::net::detail {
 namespace {
 
-	// Splits PEM text into single certificates. Corosio's tls_context reads
-	// only the first certificate of each CA entry, so bundles are added one
-	// certificate at a time.
-	auto split_pem_certificates(std::string_view pem) -> std::vector<std::string>
-	{
-		static constexpr std::string_view begin = "-----BEGIN CERTIFICATE-----";
-		static constexpr std::string_view end = "-----END CERTIFICATE-----";
-		std::vector<std::string> out;
-		std::size_t pos = 0;
-		while (true) {
-			const std::size_t b = pem.find(begin, pos);
-			if (b == std::string_view::npos) {
-				break;
-			}
-			const std::size_t e = pem.find(end, b);
-			if (e == std::string_view::npos) {
-				break;
-			}
-			out.emplace_back(pem.substr(b, e + end.size() - b));
-			out.back() += '\n';
-			pos = e + end.size();
-		}
-		return out;
-	}
-
 	// Deleters for the OpenSSL objects owned below. Each wraps the free call
 	// rather than taking its address: some are macros in older OpenSSL.
 	struct bio_deleter
@@ -94,26 +69,12 @@ namespace {
 	// Read-only memory BIO over `pem`, or null. Null too above INT_MAX
 	// bytes: BIO_new_mem_buf takes an int, so a larger size would wrap to a
 	// truncated length, or a negative one (-1 means "up to the first NUL").
-	auto pem_bio(const std::string &pem) -> bio_ptr
+	auto pem_bio(std::string_view pem) -> bio_ptr
 	{
 		if (pem.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
 			return nullptr;
 		}
 		return bio_ptr(BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())));
-	}
-
-	// True if `pem` holds one certificate OpenSSL can parse. Corosio only
-	// parses trust anchors when the handshake starts, which would make a
-	// broken CA fail after the TCP connect; this checks it up front. A
-	// failure leaves nothing on the thread's OpenSSL error queue.
-	auto parses_as_certificate(const std::string &pem) -> bool
-	{
-		const bio_ptr bio = pem_bio(pem);
-		if (bio && x509_ptr(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr)) != nullptr) {
-			return true;
-		}
-		ERR_clear_error();
-		return false;
 	}
 
 	// Checks a client certificate chain file and key file before any network
@@ -183,20 +144,37 @@ namespace {
 		return std::move(s).str();
 	}
 
+	// Checks a CA bundle as Corosio reads it when the handshake starts: one
+	// certificate or more, each parsing, then nothing but text without a PEM
+	// block. A failure leaves nothing on the thread's OpenSSL error queue.
+	auto check_ca_bundle(std::string_view pem, const std::string &what) -> result<void>
+	{
+		const bio_ptr bio = pem_bio(pem);
+		for (std::size_t n = 1;; ++n) {
+			if (bio && x509_ptr(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr)) != nullptr) {
+				continue;
+			}
+			const unsigned long err = ERR_peek_last_error();
+			ERR_clear_error();
+			const bool no_more = bio && ERR_GET_LIB(err) == ERR_LIB_PEM && ERR_GET_REASON(err) == PEM_R_NO_START_LINE;
+			if (!no_more) {
+				return fail(std::make_error_code(std::errc::invalid_argument),
+				  ldap::detail::format("{}: certificate {} does not parse", what, n));
+			}
+			if (n == 1) {
+				return fail(std::make_error_code(std::errc::invalid_argument), what + ": no PEM certificate found");
+			}
+			return {};
+		}
+	}
+
 	auto add_cas(corosio::tls_context &ctx, std::string_view pem, const std::string &what) -> result<void>
 	{
-		const auto certs = split_pem_certificates(pem);
-		if (certs.empty()) {
-			return fail(std::make_error_code(std::errc::invalid_argument), what + ": no PEM certificate found");
+		if (auto checked = check_ca_bundle(pem, what); !checked) {
+			return checked;
 		}
-		for (std::size_t i = 0; i < certs.size(); ++i) {
-			if (!parses_as_certificate(certs[i])) {
-				return fail(std::make_error_code(std::errc::invalid_argument),
-				  ldap::detail::format("{}: certificate {} of {} does not parse", what, i + 1, certs.size()));
-			}
-			if (const auto ec = ctx.add_certificate_authority(certs[i]); ec) {
-				return fail(ec, what);
-			}
+		if (const auto ec = ctx.add_certificate_authority(pem); ec) {
+			return fail(ec, what);
 		}
 		return {};
 	}
