@@ -13,6 +13,7 @@
 //   if (!lease) ...                         // every server failed, or acquire_timeout
 //   auto people = co_await (*lease)->search({.base = ldap::dn{"ou=people,dc=example,dc=org"}});
 //   auto again = co_await pool.search({.base = ...});   // a shared lease for one search, retried once
+//   auto added = co_await pool.add({.entry = ..., .attributes = ...});   // retried only if never sent
 //
 // Leases share connections by default. A lease gives the full
 // ldap::connection API on one pooled connection, and several shared leases
@@ -171,9 +172,11 @@
 // limit, failed, or follow_references off) still succeeds with what it
 // got, as connection::search() does; chase_search() tells (complete,
 // referrals, unlisted). client_observer::on_referral hears of each URI.
-// Writes are never chased: they run on leases, where a referral result is
-// returned as is (a referral means the update was not performed, section
-// 4.1.10; referral_target builds the request for another server).
+// Writes are never chased, whatever client_options::referrals says: the
+// write forwarders (add(), modify(), ...) and leases return a referral
+// result as an error (errc::referral, the URIs in error::referrals; the
+// update was not performed, section 4.1.10; referral_target builds the
+// request for another server).
 // search_stream() and who_am_i() never chase either: the stream hands out
 // its references (search_stream::references(), next_item()).
 //
@@ -467,6 +470,9 @@ namespace detail {
 	// For tests only: the jitter source (values in [0, 1]) instead of a
 	// random generator.
 	void set_jitter(const client &c, std::function<double()> unit);
+
+	// A write forwarder's operation on the leased connection.
+	using write_operation = std::move_only_function<boost::capy::task<result<response>>(connection &)>;
 }// namespace detail
 
 // The use of one pooled connection, until the lease is destroyed,
@@ -559,10 +565,8 @@ class client
 	// operations are bounded by their own timeouts
 	// (search_params::timeout, ..., else
 	// connection_options::operation_timeout). The task's stop token stops
-	// the acquire() and the operation. Read-only operations only: run
-	// updates and extended operations on a lease (they are never retried by
-	// the client; one failing with client_errc::not_sent was never seen by
-	// the server and may be retried by the caller). Each call may land on
+	// the acquire() and the operation. The write forwarders (below) retry
+	// less; extended operations need a lease. Each call may land on
 	// any pooled connection, so a request control bound to one connection
 	// (the paged-results cookie of an earlier page, anything tied to the
 	// session) needs a lease, not the forwarders. Like acquire(), the tasks
@@ -602,6 +606,55 @@ class client
 	  -> boost::capy::task<result<chased_search>>;
 	auto chase_compare(compare_params request) -> boost::capy::task<result<chased_compare>>;
 
+	// Write forwarders: each acquires a shared lease (acquire()), runs the
+	// connection's operation of the same name on it, and returns the lease,
+	// with the connection's results (connection.hpp). An operation failing
+	// with client_errc::not_sent (its request never reached the writer, so
+	// the server never saw it: connection.hpp "Sent or not") is retried
+	// once, on another connection, as the read forwarders retry after a
+	// lost connection: the one it failed on is no longer handed out, and
+	// the retry's acquire() goes by priority order. Any other failure is
+	// returned as is, and so is the retry's outcome: a connection lost once
+	// the request may have been written (not_connected, a transport error),
+	// a timeout, a server result code (busy and unavailable included, and
+	// errc::referral: referrals are never chased, see "Referrals" in the
+	// header comment), a cancellation. The update may then have been
+	// applied or not; the caller decides what to do. Each acquire() fails
+	// as acquire() does; the operations are bounded by their own timeouts,
+	// else connection_options::operation_timeout. The typed add() and
+	// modify() are connection's (mapping.hpp), with its schema check on
+	// the leased connection. Like acquire(), the tasks do not refer to
+	// *this.
+	auto add(add_params request) -> boost::capy::task<result<response>>;
+	auto modify(modify_params request) -> boost::capy::task<result<response>>;
+	auto del(del_params request) -> boost::capy::task<result<response>>;
+	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
+	auto move(dn entry,
+	  dn new_parent,
+	  modify_dn_controls controls = {},
+	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> boost::capy::task<result<response>>;
+	auto rename(dn entry,
+	  rdn new_rdn,
+	  bool delete_old_rdn = true,
+	  modify_dn_controls controls = {},
+	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> boost::capy::task<result<response>>;
+	template<described T> auto add(dn entry, T value, add_controls controls = {}) -> boost::capy::task<result<response>>
+	{
+		std::string context = detail::op_context("add", entry);
+		return write(std::move(context),
+		  [entry = std::move(entry), value = std::move(value), controls = std::move(controls)](
+			connection &c) { return c.add(entry, value, controls); });
+	}
+	template<described T>
+	auto modify(dn object, std::vector<change<T>> changes, modify_controls controls = {})
+	  -> boost::capy::task<result<response>>
+	{
+		std::string context = detail::op_context("modify", object);
+		return write(std::move(context),
+		  [object = std::move(object), changes = std::move(changes), controls = std::move(controls)](
+			connection &c) { return c.modify<T>(object, changes, controls); });
+	}
+
 	// Connections in the pool, open or retired and waiting for their last
 	// lease to return (not those still being opened). For tests and
 	// diagnostics.
@@ -614,6 +667,10 @@ class client
 
   private:
 	friend void detail::set_jitter(const client &, std::function<double()>);
+
+	// The write forwarders: `op` on a shared lease; `context` names the
+	// operation in a moved-from client's error.
+	auto write(std::string context, detail::write_operation op) -> boost::capy::task<result<response>>;
 
 	std::shared_ptr<detail::client_state> state_{};
 };

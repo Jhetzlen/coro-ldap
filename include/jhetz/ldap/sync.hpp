@@ -50,9 +50,11 @@
 #include <boost/capy/task.hpp>
 #include <boost/corosio/io_context.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <future>
 #include <memory>
 #include <memory_resource>
@@ -540,7 +542,7 @@ class lease : public detail::connection_api<lease>
 
 // The blocking ldap::client (client.hpp): a bounded pool of multiplexed
 // connections to a list of servers, with failover, backoff, a session
-// setup and the read forwarders' one retry, all as ldap::client's.
+// setup and the forwarders' retries, all as ldap::client's.
 //
 // It owns an io_context and one I/O thread, where the ldap::client lives:
 // the session setup, the observer's hooks and the connections all run
@@ -605,6 +607,37 @@ class client
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<chased_search>;
 	[[nodiscard]] auto chase_compare(compare_params request) -> result<chased_compare>;
 
+	// The write forwarders, as ldap::client's: each acquires a shared
+	// lease, runs the operation, returns the lease, and retries once on
+	// another connection only after client_errc::not_sent; referral
+	// results are errors (errc::referral), never chased.
+	[[nodiscard]] auto add(add_params request) -> result<response>;
+	[[nodiscard]] auto modify(modify_params request) -> result<response>;
+	[[nodiscard]] auto del(del_params request) -> result<response>;
+	[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<response>;
+	[[nodiscard]] auto move(dn entry,
+	  dn new_parent,
+	  modify_dn_controls controls = {},
+	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<response>;
+	[[nodiscard]] auto rename(dn entry,
+	  rdn new_rdn,
+	  bool delete_old_rdn = true,
+	  modify_dn_controls controls = {},
+	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<response>;
+	template<described T> [[nodiscard]] auto add(dn entry, T value, add_controls controls = {}) -> result<response>
+	{
+		return write(
+		  [&](ldap::client &pool) { return pool.add(std::move(entry), std::move(value), std::move(controls)); });
+	}
+	template<described T>
+	[[nodiscard]] auto modify(dn object, std::vector<change<T>> changes, modify_controls controls = {})
+	  -> result<response>
+	{
+		return write([&](ldap::client &pool) {
+			return pool.modify<T>(std::move(object), std::move(changes), std::move(controls));
+		});
+	}
+
 	// As ldap::client::connections(), from any thread (read at once on
 	// the I/O thread).
 	[[nodiscard]] auto connections() const -> std::size_t;
@@ -616,6 +649,11 @@ class client
 	void close() noexcept;
 
   private:
+	// Runs make_task(pool) on the I/O thread with the ldap::client and
+	// waits for its result.
+	[[nodiscard]] auto write(const std::function<boost::capy::task<result<response>>(ldap::client &pool)> &make_task)
+	  -> result<response>;
+
 	std::shared_ptr<detail::client_core> core_;
 };
 

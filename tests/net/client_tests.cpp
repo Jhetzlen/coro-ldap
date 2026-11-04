@@ -5,6 +5,7 @@
 // delays, with the jitter fixed by detail::set_jitter.
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/client.hpp"
+#include "jhetz/ldap/mapping.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -45,6 +46,21 @@ using std::chrono::milliseconds;
 
 namespace {
 
+// For the typed write forwarders.
+struct person
+{
+	std::string uid;
+	std::string cn;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<person> =
+  ldap::describe(ldap::object_class("person"), ldap::field<&person::uid>("uid"), ldap::field<&person::cn>("cn"));
+
+namespace {
+
 // The server hangs up as soon as it accepts the connection.
 auto hang_up_at_once() -> std::vector<step>
 {
@@ -57,10 +73,17 @@ auto bind_ok() -> std::vector<step> { return { answer({ bind_resp(1) }) }; }
 class ldap_server
 {
   public:
-	ldap_server(corosio::io_context &ioc, std::vector<std::vector<step>> scripts)
+	// socket_buffers::small: the accepted connections' receive buffer is
+	// small_socket_buffer (mock_ldap.hpp).
+	ldap_server(corosio::io_context &ioc,
+	  std::vector<std::vector<step>> scripts,
+	  socket_buffers buffers = socket_buffers::system)
 	  : ioc_(ioc), acc_(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8), scripts_(std::move(scripts)),
 		port_(acc_.local_endpoint().port())
 	{
+		if (buffers == socket_buffers::small) {
+			REQUIRE_FALSE(acc_.set_option(corosio::socket_option::receive_buffer_size(small_socket_buffer)));
+		}
 		spawn(ioc_, accept_loop(), accepting_);
 	}
 	ldap_server(const ldap_server &) = delete;
@@ -250,9 +273,10 @@ struct pool_fixture
 		drive(ioc);
 	}
 
-	auto server(std::vector<std::vector<step>> scripts) -> ldap_server &
+	auto server(std::vector<std::vector<step>> scripts, socket_buffers buffers = socket_buffers::system)
+	  -> ldap_server &
 	{
-		return servers.emplace_back(ioc, std::move(scripts));
+		return servers.emplace_back(ioc, std::move(scripts), buffers);
 	}
 	// A URL nothing listens on while the fixture lives: connects are
 	// refused at once (see refused_port).
@@ -2550,6 +2574,18 @@ TEST_CASE("client: move assignment, executor() and a moved-from client's reads",
 	refused(finish(f.ioc, f.pool->chase_search(people_search())).error(), search);
 	refused(finish(f.ioc, f.pool->chase_compare(jdoe_compare())).error(), compare);
 	refused(finish(f.ioc, f.pool->who_am_i()).error(), "who_am_i");
+	const ldap::dn jdoe{ "uid=jdoe,ou=people,dc=example,dc=org" };
+	const std::string add = "add uid=jdoe,ou=people,dc=example,dc=org";
+	const std::string modify = "modify uid=jdoe,ou=people,dc=example,dc=org";
+	const std::string modify_dn = "modify DN uid=jdoe,ou=people,dc=example,dc=org";
+	refused(finish(f.ioc, f.pool->add({ .entry = jdoe })).error(), add);
+	refused(finish(f.ioc, f.pool->modify({ .object = jdoe })).error(), modify);
+	refused(finish(f.ioc, f.pool->del({ .entry = jdoe })).error(), "delete uid=jdoe,ou=people,dc=example,dc=org");
+	refused(finish(f.ioc, f.pool->modify_dn({ .entry = jdoe, .new_rdn = ldap::rdn{ "uid=j" } })).error(), modify_dn);
+	refused(finish(f.ioc, f.pool->move(jdoe, ldap::dn{ "ou=staff,dc=example,dc=org" })).error(), modify_dn);
+	refused(finish(f.ioc, f.pool->rename(jdoe, ldap::rdn{ "uid=j" })).error(), modify_dn);
+	refused(finish(f.ioc, f.pool->add(jdoe, person{ .uid = "jdoe", .cn = "John" })).error(), add);
+	refused(finish(f.ioc, f.pool->modify<person>(jdoe, { ldap::replace<&person::cn>("J") })).error(), modify);
 	refused(finish(f.ioc, f.pool->acquire()).error(), "acquire");
 	f.pool->close();// nothing to close
 
@@ -2583,6 +2619,7 @@ TEST_CASE("client: a read fails as its acquire() does", "[net][client][retry]")
 	unusable(finish(f.ioc, f.pool->chase_search(people_search())).error());
 	unusable(finish(f.ioc, f.pool->chase_compare(jdoe_compare())).error());
 	unusable(finish(f.ioc, f.pool->who_am_i()).error());
+	unusable(finish(f.ioc, f.pool->del({ .entry = ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" } })).error());
 }
 
 TEST_CASE("client: a shared connection being unbound is not handed out", "[net][client]")
@@ -2707,4 +2744,219 @@ TEST_CASE("client: an observer overriding only on_connect", "[net][client][obser
 	REQUIRE(a.log(0).received.size() == 3);
 	CHECK(std::get<ldap::search_request>(a.log(0).received[1].op).base_object.empty());// the probe
 	CHECK(b.accepted() == 1);
+}
+
+// ---------------------------------------------------------------- write forwarders
+
+namespace {
+
+constexpr std::string_view jdoe_text = "uid=jdoe,ou=people,dc=example,dc=org";
+
+auto jdoe_dn() -> ldap::dn { return ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" }; }
+
+auto jdoe_add() -> ldap::add_params
+{
+	return { .entry = jdoe_dn(), .attributes = { { "objectClass", { "person" } }, { "cn", { "John" } } } };
+}
+
+template<class Response>
+auto written(std::int32_t id, std::int32_t code = 0, std::string_view diagnostic = {}) -> ldap::message
+{
+	return ldap::message{ id, Response{ ldap::ldap_result{ code, "", diagnostic } } };
+}
+
+// An AddRequest bigger than what the kernel holds of it while the server
+// does not read: the client's send buffer (autotuned up to tcp_wmem's
+// maximum, 4 MiB by default) and the server's small receive buffer
+// (socket_buffers::small).
+constexpr std::size_t unsendable_add_value = std::size_t{ 8 } << 20;
+
+auto unsendable_add() -> ldap::add_params
+{
+	return { .entry = ldap::dn{ "uid=big,ou=people,dc=example,dc=org" },
+		.attributes = { ldap::partial_attribute{ "description", { std::string(unsendable_add_value, 'x') } } } };
+}
+
+}// namespace
+
+TEST_CASE("client: write forwarders run on a shared lease", "[net][client][write]")
+{
+	pool_fixture f;
+	auto &s = f.server({ { answer({ bind_resp(1) }),
+	  answer({ written<ldap::add_response>(2) }),
+	  answer({ written<ldap::modify_response>(3) }),
+	  answer({ written<ldap::del_response>(4) }),
+	  answer({ written<ldap::modify_dn_response>(5) }),
+	  answer({ written<ldap::modify_dn_response>(6) }),
+	  answer({ written<ldap::modify_dn_response>(7) }),
+	  answer({ written<ldap::add_response>(8) }),
+	  answer({ written<ldap::modify_response>(9) }) } });
+	f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+	const ldap::dn staff{ "ou=staff,dc=example,dc=org" };
+	auto held = f.acquire();// shared with every write below
+	REQUIRE(held.has_value());
+	const auto added = finish(f.ioc, f.pool->add(jdoe_add()));
+	REQUIRE(added.has_value());
+	CHECK(added->message_id == 2);
+	CHECK(finish(f.ioc, f.pool->modify({ .object = jdoe_dn(), .changes = { ldap::mod::replace("cn", { "Johnny" }) } }))
+		.has_value());
+	CHECK(finish(f.ioc, f.pool->del({ .entry = jdoe_dn() })).has_value());
+	CHECK(finish(f.ioc, f.pool->modify_dn({ .entry = jdoe_dn(), .new_rdn = ldap::rdn{ "uid=j" } })).has_value());
+	CHECK(finish(f.ioc, f.pool->move(jdoe_dn(), staff)).has_value());
+	CHECK(finish(f.ioc, f.pool->rename(jdoe_dn(), ldap::rdn{ "uid=j" }, false)).has_value());
+	CHECK(finish(f.ioc, f.pool->add(jdoe_dn(), person{ .uid = "jdoe", .cn = "John" })).has_value());
+	CHECK(finish(f.ioc, f.pool->modify<person>(jdoe_dn(), { ldap::replace<&person::cn>("J") })).has_value());
+	CHECK(s.accepted() == 1);
+	CHECK(f.pool->connections() == 1);
+	held->release();
+
+	using op = ldap::modify_operation;
+	const auto &got = s.log(0).received;
+	REQUIRE(got.size() == 9);
+	CHECK(
+	  got[1]
+	  == ldap::message{ 2, ldap::add_request{ jdoe_text, { { "objectClass", { "person" } }, { "cn", { "John" } } } } });
+	CHECK(got[2] == ldap::message{ 3, ldap::modify_request{ jdoe_text, { { op::replace, { "cn", { "Johnny" } } } } } });
+	CHECK(got[3] == ldap::message{ 4, ldap::del_request{ jdoe_text } });
+	CHECK(got[4] == ldap::message{ 5, ldap::modify_dn_request{ jdoe_text, "uid=j", true, std::nullopt } });
+	CHECK(got[5]
+		  == ldap::message{ 6, ldap::modify_dn_request{ jdoe_text, "uid=jdoe", true, "ou=staff,dc=example,dc=org" } });
+	CHECK(got[6] == ldap::message{ 7, ldap::modify_dn_request{ jdoe_text, "uid=j", false, std::nullopt } });
+	CHECK(got[7]
+		  == ldap::message{ 8,
+			ldap::add_request{
+			  jdoe_text, { { "objectClass", { "person" } }, { "uid", { "jdoe" } }, { "cn", { "John" } } } } });
+	CHECK(got[8] == ldap::message{ 9, ldap::modify_request{ jdoe_text, { { op::replace, { "cn", { "J" } } } } } });
+	CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
+}
+
+TEST_CASE("client: when write forwarders do not retry", "[net][client][write][retry]")
+{
+	SECTION("a server result code: the error, with its diagnostic")
+	{
+		pool_fixture f;
+		auto &s = f.server(
+		  { { answer({ bind_resp(1) }), answer({ written<ldap::add_response>(2, 68, "already there") }) }, bind_ok() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		auto r = finish(f.ioc, f.pool->add(jdoe_add()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::entry_already_exists);
+		CHECK(r.error().diagnostic == "already there");
+		CHECK(std::string_view(r.error().context) == "add " + std::string(jdoe_text));
+		CHECK(s.accepted() == 1);
+		CHECK(f.pool->connections() == 1);// still pooled
+		CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
+	}
+	SECTION("busy")
+	{
+		pool_fixture f;
+		auto &s = f.server(
+		  { { answer({ bind_resp(1) }), answer({ written<ldap::del_response>(2, 51, "too busy") }) }, bind_ok() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		auto r = finish(f.ioc, f.pool->del({ .entry = jdoe_dn() }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::busy);
+		CHECK(s.accepted() == 1);
+		CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
+	}
+	SECTION("the connection is lost once the request was sent: the server saw it once")
+	{
+		pool_fixture f;
+		auto &s = f.server({ lost_after_bind(), bind_ok() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		auto r = finish(f.ioc, f.pool->add(jdoe_add()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::connection_lost);
+		CHECK(r.error().code != ldap::client_errc::not_sent);
+		CHECK(s.accepted() == 1);
+		REQUIRE(s.log(0).received.size() == 2);
+		CHECK(std::holds_alternative<ldap::add_request>(s.log(0).received[1].op));
+		CHECK(
+		  f.obs.events
+		  == std::vector<std::string>{ "connect " + text(s.url()) + " ok", "disconnect " + text(s.url()) + " closed" });
+		CHECK(f.pool->connections() == 0);
+	}
+	SECTION("the operation times out")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }), step{}, step{} }, bind_ok() });// never answers
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto r = finish(f.ioc, f.pool->del({ .entry = jdoe_dn(), .timeout = milliseconds(50) }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::timeout);
+		CHECK(s.accepted() == 1);
+	}
+	SECTION("a referral result: the error, not chased even when reads chase")
+	{
+		pool_fixture f;
+		auto &b = f.server({ bind_ok() });
+		const auto uri = ref_to(b, jdoe_text);
+		auto &a = f.server({ { answer({ bind_resp(1) }),
+		  answer(
+			{ ldap::message{ 2, ldap::modify_response{ ldap::ldap_result{ 10, "", "elsewhere", { uri } } } } }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .observer = &f.obs,
+		  .referrals = { .follow_referrals = true,
+			.follow_references = true,
+			.authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+		auto r = finish(f.ioc, f.pool->modify({ .object = jdoe_dn() }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::referral);
+		CHECK(r.error().referrals == ldap::string_list{ uri });
+		CHECK(b.accepted() == 0);
+		CHECK(a.accepted() == 1);
+		CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(a.url()) + " ok" });
+	}
+	SECTION("stopped by the stop token")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }), step{}, step{} }, bind_ok() });// never answers
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		std::stop_source stop;
+		outcome<ldap::result<ldap::response>> d;
+		spawn(f.ioc, stop.get_token(), f.pool->del({ .entry = jdoe_dn() }), d);
+		drive_until(f.ioc, [&s] { return s.accepted() == 1 && s.log(0).received.size() == 2; });
+		stop.request_stop();
+		drive_until(f.ioc, [&d] { return d.done(); });
+		REQUIRE_FALSE(d.get().has_value());
+		CHECK(d.get().error().code == ldap::cond::canceled);
+		CHECK(s.accepted() == 1);
+	}
+}
+
+// A write queued behind another lease's request on a shared connection,
+// that connection closed before the writer took it: client_errc::not_sent.
+TEST_CASE("client: a write never sent is retried once on another connection", "[net][client][write][retry]")
+{
+	pool_fixture f;
+	// The first connection reads nothing after the bind.
+	auto &s =
+	  f.server({ bind_ok(), { answer({ bind_resp(1) }), answer({ written<ldap::add_response>(2) }) }, bind_ok() },
+		socket_buffers::small);
+	f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
+	auto held = f.acquire();
+	REQUIRE(held.has_value());
+	outcome<ldap::result<ldap::response>> big;
+	outcome<ldap::result<ldap::response>> queued;
+	spawn(f.ioc, (*held)->add(unsendable_add()), big);
+	spawn(f.ioc, f.pool->add(jdoe_add()), queued);// shares the connection: queued behind it
+	drive_until(f.ioc, [&held] { return (*held)->outstanding() == 2; });
+	(*held)->close();
+	drive_until(f.ioc, [&] { return big.done() && queued.done(); });
+	REQUIRE_FALSE(big.get().has_value());
+	CHECK(big.get().error().code == ldap::client_errc::not_connected);// the writer had it: maybe seen
+	REQUIRE(queued.get().has_value());
+	CHECK(queued.get()->message_id == 2);
+	CHECK(s.accepted() == 2);
+	REQUIRE(s.log(1).received.size() == 2);
+	CHECK(
+	  s.log(1).received[1]
+	  == ldap::message{ 2, ldap::add_request{ jdoe_text, { { "objectClass", { "person" } }, { "cn", { "John" } } } } });
+	held->release();// the closed connection leaves the pool with its last lease
+	CHECK(f.obs.events
+		  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
+			"connect " + text(s.url()) + " ok",
+			"disconnect " + text(s.url()) + " closed" });
+	CHECK(f.pool->connections() == 1);
 }

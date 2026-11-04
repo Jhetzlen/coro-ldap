@@ -2501,15 +2501,46 @@ decision left open.
   abandon when the stream is destroyed), and errors from its `next()` are
   never retried, so nothing is retried once an entry may have been
   delivered. Cost: it waits for the first message, so a refreshAndPersist
-  search with nothing to send returns at its first change. Writes and
-  extended operations stay lease-only and are never retried by the
-  client: one failing with `client_errc::not_sent` was never seen by the
-  server (section 7, "Sent or not") and the caller may retry it. The
-  observer has no hook for an operation's retry (the retirement shows as
-  `on_disconnect`, a new connection as `on_connect`). Each call may land
+  search with nothing to send returns at its first change. Extended
+  operations stay lease-only. The observer has no hook for an
+  operation's retry (the retirement shows as `on_disconnect`, a new
+  connection as `on_connect`). Each call may land
   on any pooled connection, so connection-bound request controls (a
   paged-results cookie from an earlier page, anything tied to the
   session) need a lease (3pf.15).
+- Write forwarders: `client::add`, `modify`, `del`, `modify_dn`, `move`,
+  `rename`, and the typed `add(dn, T)` and `modify<T>` (connection's, so
+  the schema check runs on the leased connection), the `connection`
+  names and shapes. Each acquires a shared lease, runs the operation and
+  returns the lease, like the read forwarders, but retries only after
+  `client_errc::not_sent`: the request never reached the connection's
+  writer (refused by a closed connection, still queued behind another
+  PDU, or held behind a bind when the connection closed), so the server
+  never saw it and running it on another connection cannot apply it
+  twice. Every other failure may follow a request the server received,
+  and possibly applied: a connection lost after the writer took the
+  request (`not_connected`, a transport error), a timeout (the server
+  may still apply it), busy or unavailable (an unsolicited Notice of
+  Disconnection fails the outstanding operations with its code even when
+  the server already applied them), so it is returned and the caller
+  decides (reading the entry back, an idempotent change, a transaction).
+  The retry's `acquire()` goes by priority order (no `avoid`): `not_sent`
+  says nothing about the server. `client_state::write` is the loop;
+  `client::write` takes the operation type-erased
+  (`detail::write_operation`, a `std::move_only_function` called once per
+  attempt, copying the request into each), so the typed templates in the
+  header need nothing from client.cpp. A referral result is never chased
+  for a write, whatever `client_options::referrals` says: it fails with
+  `errc::referral` and the URIs in `error::referrals`, as on a
+  connection (a referral means the update was not performed, RFC 4511
+  section 4.1.10). Chasing an update would send it, with the client's
+  credentials, to a server the update's author did not name. Tests: a
+  write queued on a shared connection behind another lease's oversized
+  AddRequest (the server's receive buffer small, nothing read) while that
+  lease closes the connection: the queued write fails `not_sent` and
+  succeeds on a new connection; a connection lost after the server read
+  the request, a timeout, busy, a result code and a referral are each
+  returned with exactly one request seen.
 - Tests (`tests/net/client_tests.cpp`): loopback servers each running one
   script per accepted connection; backoff on real delays of 30 to 60 ms
   with the jitter fixed by `detail::set_jitter` (tests only). One slapd
@@ -2519,9 +2550,12 @@ decision left open.
   `ldap::client` made, used and destroyed on it, shared through a
   `shared_ptr` by the facade and its `sync::lease`s (each holding an
   aliasing pointer to the core's `io_thread`, its `ldap::lease`, touched
-  only on that thread, and a copy of its server URL). `acquire()` and the
-  read forwarders `search`, `compare`, `who_am_i` post to the I/O thread
-  and wait, as `sync::connection` does; the retry is `ldap::client`'s.
+  only on that thread, and a copy of its server URL). `acquire()`, the
+  read forwarders `search`, `compare`, `who_am_i` and the write
+  forwarders `add`, `modify`, `del`, `modify_dn`, `move`, `rename`
+  (typed `add` and `modify` too, through a private `write` taking the
+  task's maker) post to the I/O thread and wait, as `sync::connection`
+  does; the retry is `ldap::client`'s.
   `sync::lease` exposes `sync::connection`'s operations
   (`detail::connection_api`) on the leased connection. No blocking
   `search_stream`: `sync::connection` has no blocking stream either.

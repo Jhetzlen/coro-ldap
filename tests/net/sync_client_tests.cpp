@@ -2,6 +2,7 @@
 // loopback TCP running on their own thread and io_context: scripted ones
 // (one script per accepted connection, mock_ldap.hpp's serve_script) and
 // server_thread.hpp's, which answers whatever comes.
+#include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -40,6 +41,21 @@ namespace corosio = boost::corosio;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::IsEmpty;
 using std::chrono::milliseconds;
+
+namespace {
+
+// For the typed write forwarders.
+struct person
+{
+	std::string uid;
+	std::string cn;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<person> =
+  ldap::describe(ldap::object_class("person"), ldap::field<&person::uid>("uid"), ldap::field<&person::cn>("cn"));
 
 namespace {
 
@@ -276,6 +292,81 @@ TEST_CASE("sync client: the read forwarders retry once on another connection", "
 	}
 }
 
+TEST_CASE("sync client: the write forwarders", "[net][sync][client][write]")
+{
+	const auto ok = [](std::int32_t id, auto response) { return ldap::message{ id, std::move(response) }; };
+	SECTION("each runs on a shared lease")
+	{
+		threaded_script_server srv({ { answer({ bind_resp(1) }),
+		  answer({ ok(2, ldap::add_response{ ldap::ldap_result{ 0 } }) }),
+		  answer({ ok(3, ldap::modify_response{ ldap::ldap_result{ 0 } }) }),
+		  answer({ ok(4, ldap::del_response{ ldap::ldap_result{ 0 } }) }),
+		  answer({ ok(5, ldap::modify_dn_response{ ldap::ldap_result{ 0 } }) }),
+		  answer({ ok(6, ldap::modify_dn_response{ ldap::ldap_result{ 0 } }) }),
+		  answer({ ok(7, ldap::modify_dn_response{ ldap::ldap_result{ 0 } }) }),
+		  answer({ ok(8, ldap::add_response{ ldap::ldap_result{ 0 } }) }),
+		  answer({ ok(9, ldap::modify_response{ ldap::ldap_result{ 0 } }) }),
+		  unbind_read() } });
+		{
+			ldap::sync::client pool(options_for(srv.url()));
+			const auto added = pool.add({ .entry = jdoe_dn, .attributes = { { "cn", { "John" } } } });
+			REQUIRE(added.has_value());
+			CHECK(added->message_id == 2);
+			CHECK(pool.modify({ .object = jdoe_dn, .changes = { ldap::mod::replace("cn", { "J" }) } }).has_value());
+			CHECK(pool.del({ .entry = jdoe_dn }).has_value());
+			CHECK(pool.modify_dn({ .entry = jdoe_dn, .new_rdn = ldap::rdn{ "uid=j" } }).has_value());
+			CHECK(pool.move(jdoe_dn, ldap::dn{ "ou=staff,dc=example,dc=org" }).has_value());
+			CHECK(pool.rename(jdoe_dn, ldap::rdn{ "uid=j" }, false).has_value());
+			CHECK(pool.add(jdoe_dn, person{ .uid = "jdoe", .cn = "John" }).has_value());
+			CHECK(pool.modify<person>(jdoe_dn, { ldap::replace<&person::cn>("J") }).has_value());
+			CHECK(pool.connections() == 1);
+		}
+		srv.stop();
+		CHECK_THAT(srv.log(0).error, IsEmpty());
+		const auto &got = srv.log(0).received;
+		REQUIRE(got.size() == 10);
+		CHECK(std::holds_alternative<ldap::add_request>(got[1].op));
+		CHECK(std::holds_alternative<ldap::modify_request>(got[2].op));
+		CHECK(got[3] == ldap::message{ 4, ldap::del_request{ jdoe } });
+		CHECK(got[5]
+			  == ldap::message{ 6, ldap::modify_dn_request{ jdoe, "uid=jdoe", true, "ou=staff,dc=example,dc=org" } });
+		CHECK(got[6] == ldap::message{ 7, ldap::modify_dn_request{ jdoe, "uid=j", false, std::nullopt } });
+		CHECK(got[7]
+			  == ldap::message{ 8,
+				ldap::add_request{
+				  jdoe, { { "objectClass", { "person" } }, { "uid", { "jdoe" } }, { "cn", { "John" } } } } });
+		CHECK(got[8]
+			  == ldap::message{
+				9, ldap::modify_request{ jdoe, { { ldap::modify_operation::replace, { "cn", { "J" } } } } } });
+	}
+	SECTION("a server result code, with its diagnostic")
+	{
+		threaded_script_server srv({ { answer({ bind_resp(1) }),
+		  answer({ ok(2, ldap::del_response{ ldap::ldap_result{ 32, "", "gone" } }) }) } });
+		ldap::sync::client pool(options_for(srv.url()));
+		auto r = pool.del({ .entry = jdoe_dn });
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::no_such_object);
+		CHECK(r.error().diagnostic == "gone");
+		CHECK(srv.accepted() == 1);
+	}
+	SECTION("the connection is lost once the request was sent: not retried")
+	{
+		threaded_script_server srv({ lost_after_bind(), { answer({ bind_resp(1) }) } });
+		{
+			ldap::sync::client pool(options_for(srv.url()));
+			auto r = pool.add({ .entry = jdoe_dn, .attributes = { { "cn", { "John" } } } });
+			REQUIRE_FALSE(r.has_value());
+			CHECK(r.error().code == ldap::cond::connection_lost);
+			CHECK(r.error().code != ldap::client_errc::not_sent);
+			CHECK(srv.accepted() == 1);
+		}
+		srv.stop();
+		REQUIRE(srv.log(0).received.size() == 2);
+		CHECK(std::holds_alternative<ldap::add_request>(srv.log(0).received[1].op));
+	}
+}
+
 TEST_CASE("sync client: a blocking call from the I/O thread fails with would_deadlock", "[net][sync][client]")
 {
 	server_thread srv;
@@ -286,6 +377,7 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 	{
 		ldap::result<ldap::sync::lease> acquired{};
 		ldap::result<std::string> forwarded{};
+		ldap::result<ldap::response> written{};
 		ldap::result<std::string> on_lease{};
 		std::size_t connections = 0;
 	};
@@ -295,6 +387,7 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 		  from_io_thread r;
 		  r.acquired = p.acquire();// blocking, on the I/O thread
 		  r.forwarded = p.who_am_i();
+		  r.written = p.del({ .entry = ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" } });
 		  r.on_lease = l.who_am_i();
 		  r.connections = p.connections();
 		  out.set_value(std::move(r));
@@ -303,8 +396,10 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 	auto r = got.get_future().get();
 	REQUIRE_FALSE(r.acquired.has_value());
 	REQUIRE_FALSE(r.forwarded.has_value());
+	REQUIRE_FALSE(r.written.has_value());
 	REQUIRE_FALSE(r.on_lease.has_value());
-	for (const ldap::error *e : { &r.acquired.error(), &r.forwarded.error(), &r.on_lease.error() }) {
+	for (const ldap::error *e :
+	  { &r.acquired.error(), &r.forwarded.error(), &r.written.error(), &r.on_lease.error() }) {
 		CHECK(e->code == ldap::client_errc::would_deadlock);
 		CHECK(e->context == "sync::client");
 	}

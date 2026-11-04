@@ -2102,6 +2102,70 @@ class relay
 
 }// namespace
 
+TEST_CASE("integration: ldap::client's write forwarders", "[integration][client][write]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	const auto server = ldap::url::parse(env("JHETZ_LDAP_IT_LDAP"));
+	REQUIRE(server.has_value());
+	corosio::io_context ioc;
+	ldap::client pool(ioc,
+	  { .servers = { *server },
+		.connection = trusting({ .schema_check = ldap::schema_check::on_first_use }),
+		.setup = ldap::simple_bind_setup(admin, "secret") });
+	const std::string name = unique("pool");
+	const ldap::dn entry = people.child(*ldap::rdn::parse("uid=" + name));
+	const ldap::dn groups{ "ou=groups,dc=example,dc=org" };
+	const auto exists = [&](const ldap::dn &d) {
+		return finish(ioc, pool.search({ .base = d, .scope = ldap::search_scope::base_object })).has_value();
+	};
+
+	const ldap::add_params add{ .entry = entry,
+		.attributes = {
+		  { "objectClass", { "inetOrgPerson" } }, { "uid", { name } }, { "cn", { "Pool" } }, { "sn", { "Writer" } } } };
+	REQUIRE(finish(ioc, pool.add(add)).has_value());
+	auto again = finish(ioc, pool.add(add));
+	REQUIRE_FALSE(again.has_value());
+	CHECK(again.error().code == ldap::errc::entry_already_exists);
+	CHECK(std::string_view(again.error().context) == "add " + std::string(entry.to_string()));
+	const ldap::dn incomplete = people.child(*ldap::rdn::parse("uid=" + name + "-x"));
+	auto refused = finish(ioc,
+	  pool.add(
+		{ .entry = incomplete, .attributes = { { "objectClass", { "inetOrgPerson" } }, { "cn", { "No Sn" } } } }));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::errc::object_class_violation);
+	CHECK_THAT(std::string(refused.error().diagnostic), ContainsSubstring("sn"));
+
+	REQUIRE(finish(ioc, pool.modify({ .object = entry, .changes = { ldap::mod::add("mail", { "pool@example.org" }) } }))
+		.has_value());
+	CHECK(finish(ioc, pool.compare({ .entry = entry, .attribute = "mail", .value = "pool@example.org" })) == true);
+
+	REQUIRE(finish(ioc, pool.move(entry, groups)).has_value());
+	const ldap::dn moved = groups.child(entry.rdns().front());
+	CHECK(exists(moved));
+	const ldap::dn back = people.child(*ldap::rdn::parse("uid=" + name + "-b"));
+	REQUIRE(finish(ioc, pool.modify_dn({ .entry = moved, .new_rdn = back.rdns().front(), .new_superior = people }))
+		.has_value());
+	const ldap::dn renamed = people.child(*ldap::rdn::parse("uid=" + name + "-r"));
+	REQUIRE(finish(ioc, pool.rename(back, renamed.rdns().front())).has_value());
+	CHECK_FALSE(exists(back));
+	CHECK(exists(renamed));
+
+	// The typed forms, with the schema check on the pooled connection.
+	REQUIRE(
+	  finish(ioc, pool.modify<person>(renamed, { ldap::replace<&person::mail>("typed@example.org") })).has_value());
+	CHECK(finish(ioc, pool.compare({ .entry = renamed, .attribute = "mail", .value = "typed@example.org" })) == true);
+
+	REQUIRE(finish(ioc, pool.del({ .entry = renamed })).has_value());
+	auto gone = finish(ioc, pool.del({ .entry = renamed }));
+	REQUIRE_FALSE(gone.has_value());
+	CHECK(gone.error().code == ldap::errc::no_such_object);
+	CHECK(pool.connections() == 1);
+	pool.close();
+	drive(ioc);
+}
+
 TEST_CASE("integration: ldap::client replaces a connection the server dropped", "[integration][client]")
 {
 	if (!have_slapd()) {

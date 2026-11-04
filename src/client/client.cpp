@@ -1206,6 +1206,26 @@ namespace detail {
 			}
 		}
 
+		// ---------------------------------------------------------------- write forwarders
+
+		// add(), modify(), del(), modify_dn() and the like: `op` on a shared
+		// lease, retried once, on another connection, only if its request
+		// never reached the writer.
+		static auto write(std::shared_ptr<client_state> self, write_operation op) -> capy::task<result<response>>
+		{
+			for (bool retried = false;; retried = true) {
+				auto held = co_await acquire(self, {}, std::nullopt);
+				if (!held) {
+					co_return std::unexpected(std::move(held.error()));
+				}
+				auto r = co_await op(held->get());
+				if (r || retried || r.error().code != client_errc::not_sent) {
+					co_return std::move(r);
+				}
+				(void)self->set_aside(*held, r.error());
+			}
+		}
+
 		// ---------------------------------------------------------------- referrals
 
 		[[nodiscard]] auto chases() const noexcept -> bool
@@ -1487,6 +1507,61 @@ auto client::who_am_i(extended_controls controls) -> capy::task<result<std::stri
 	}
 	return detail::client_state::read<std::string>(
 	  state_, [controls = std::move(controls)](const lease &held) { return held->who_am_i(controls); });
+}
+
+auto client::write(std::string context, detail::write_operation op) -> capy::task<result<response>>
+{
+	if (state_ == nullptr) {
+		return read_refused<response>(std::move(context));
+	}
+	return detail::client_state::write(state_, std::move(op));
+}
+
+auto client::add(add_params request) -> capy::task<result<response>>
+{
+	std::string context = detail::op_context("add", request.entry);
+	return write(std::move(context), [request = std::move(request)](connection &c) { return c.add(request); });
+}
+
+auto client::modify(modify_params request) -> capy::task<result<response>>
+{
+	std::string context = detail::op_context("modify", request.object);
+	return write(std::move(context), [request = std::move(request)](connection &c) { return c.modify(request); });
+}
+
+auto client::del(del_params request) -> capy::task<result<response>>
+{
+	std::string context = detail::op_context("delete", request.entry);
+	return write(std::move(context), [request = std::move(request)](connection &c) { return c.del(request); });
+}
+
+auto client::modify_dn(modify_dn_params request) -> capy::task<result<response>>
+{
+	std::string context = detail::op_context("modify DN", request.entry);
+	return write(std::move(context), [request = std::move(request)](connection &c) { return c.modify_dn(request); });
+}
+
+auto client::move(dn entry,
+  dn new_parent,
+  modify_dn_controls controls,
+  std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<response>>
+{
+	std::string context = detail::op_context("modify DN", entry);
+	return write(std::move(context),
+	  [entry = std::move(entry), new_parent = std::move(new_parent), controls = std::move(controls), timeout](
+		connection &c) { return c.move(entry, new_parent, controls, timeout); });
+}
+
+auto client::rename(dn entry,
+  rdn new_rdn,
+  bool delete_old_rdn,
+  modify_dn_controls controls,
+  std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<response>>
+{
+	std::string context = detail::op_context("modify DN", entry);
+	return write(std::move(context),
+	  [entry = std::move(entry), new_rdn = std::move(new_rdn), delete_old_rdn, controls = std::move(controls), timeout](
+		connection &c) { return c.rename(entry, new_rdn, delete_old_rdn, controls, timeout); });
 }
 
 auto client::connections() const noexcept -> std::size_t { return state_ == nullptr ? 0 : state_->pool.size(); }
