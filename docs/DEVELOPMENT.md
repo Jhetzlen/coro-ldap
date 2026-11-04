@@ -389,6 +389,14 @@ What it covers:
   the relaxed one; on plain ldap:// `tls_required` before sending,
   `stronger_auth_required` from the strict DC with `require_tls = false`,
   accepted by the relaxed one.
+- The NTLM security layer (`security_layer` integrity and
+  confidentiality) on plain ldap:// to the strict DC, through a relay
+  that records the wire: a bind as Administrator, a 300 000-octet
+  `jpegPhoto` written and read back; the client's buffers are 128 KiB at
+  most and Samba puts the ModifyRequest cut across them back together,
+  Samba's answer comes in buffers of 128 KiB at most too; every buffer is
+  the signature (Version 1, sequence numbers from 0) then the message,
+  sealed with both levels (no plaintext on the wire).
 
 What Samba does not emulate, compared with Windows AD:
 
@@ -408,6 +416,9 @@ What Samba does not emulate, compared with Windows AD:
   check (an explicit Z(16) does not, hence `ntlm_channel_binding::none`
   leaves the pair out). The MsvAvTargetName (`ldap/127.0.0.1` here) is
   not checked.
+- With NTLM signing negotiated over LDAP, Samba seals (and expects
+  sealed buffers), which its code says Windows does too; unverified
+  against Windows here.
 - Group Policy, the registry settings themselves (`LDAPServerIntegrity`,
   `LdapEnforceChannelBinding`) and their per-DC reload: Samba reads
   `ldap server require strong auth` at start, so each policy is a

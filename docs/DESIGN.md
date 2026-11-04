@@ -1077,7 +1077,8 @@ negotiation, so no maximum buffer size is exchanged: the client accepts
 buffers up to `max_receive_size` (16 MiB by default; AD's MaxReceiveBuffer
 is 10 MB) and sends at most 128 KiB per buffer (Samba's
 `gensec_max_input_size` default), longer PDUs cut across buffers as for
-GSSAPI. AD refuses a SASL layer over TLS (MS-ADTS section 5.1.1.1.2), so
+GSSAPI (against Samba: buffers of at most 128 KiB both ways, a PDU cut
+across them accepted, `integration.samba_ad`). AD refuses a SASL layer over TLS (MS-ADTS section 5.1.1.1.2), so
 with TLS `start()` fails with `security_layer_unavailable` before anything
 is sent; and the layer stands in for TLS, so `require_tls` is not
 consulted with one (one option to set, not two; the PDUs are sealed with

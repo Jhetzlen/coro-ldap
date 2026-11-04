@@ -16,12 +16,21 @@
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl_ntlm.hpp"
 
+#include <boost/capy/buffers.hpp>
+#include <boost/capy/write.hpp>
+#include <boost/corosio/endpoint.hpp>
+#include <boost/corosio/ipv4_address.hpp>
+#include <boost/corosio/tcp_acceptor.hpp>
+#include <boost/corosio/tcp_socket.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -29,6 +38,7 @@
 #include <vector>
 
 namespace ldap = jhetz::ldap;
+namespace capy = boost::capy;
 namespace corosio = boost::corosio;
 using namespace jhetz::ldap::test;
 using Catch::Matchers::ContainsSubstring;
@@ -489,4 +499,221 @@ TEST_CASE("samba ad: sasl_ntlm without a security layer on plain ldap://", "[sam
 		CHECK(*who == "u:CORO\\alice");
 		CHECK(c.security_layer() == ldap::sasl_protection::none);
 	}
+}
+
+// ---------------------------------------------------------------- the NTLM security layer
+
+namespace {
+
+// A one-connection TCP relay to a DC that keeps every byte each side sent,
+// for the test to read the protected buffers on the wire.
+class recording_relay
+{
+  public:
+	recording_relay(corosio::io_context &ioc, std::uint16_t target)
+	  : ioc_(ioc), acc_(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1), client_(ioc), server_(ioc),
+		target_(target)
+	{
+		spawn(ioc_, run(), running_);
+	}
+	recording_relay(const recording_relay &) = delete;
+	auto operator=(const recording_relay &) -> recording_relay & = delete;
+	~recording_relay() { shut_down(); }
+
+	[[nodiscard]] auto url() const -> std::string
+	{
+		return "ldap://127.0.0.1:" + std::to_string(acc_.local_endpoint().port());
+	}
+	[[nodiscard]] auto from_client() const -> const std::string & { return from_client_; }
+	[[nodiscard]] auto from_server() const -> const std::string & { return from_server_; }
+	void shut_down()
+	{
+		acc_.close();
+		client_.close();
+		server_.close();
+	}
+
+  private:
+	auto run() -> capy::task<void>
+	{
+		if (auto [ec] = co_await acc_.accept(client_); ec) {
+			co_return;
+		}
+		if (auto [ec] = co_await server_.connect(corosio::endpoint(corosio::ipv4_address::loopback(), target_)); ec) {
+			client_.close();
+			co_return;
+		}
+		spawn(ioc_, pump(client_, server_, from_client_), up_);
+		spawn(ioc_, pump(server_, client_, from_server_), down_);
+	}
+
+	static auto pump(corosio::tcp_socket &from, corosio::tcp_socket &to, std::string &record) -> capy::task<void>
+	{
+		std::array<char, 1 << 16> buf{};
+		while (true) {
+			auto [ec, n] = co_await from.read_some(capy::mutable_buffer(buf.data(), buf.size()));
+			if (ec || n == 0) {
+				break;
+			}
+			record.append(buf.data(), n);
+			if (auto [wec, written] = co_await capy::write(to, capy::const_buffer(buf.data(), n)); wec) {
+				break;
+			}
+		}
+		from.close();
+		to.close();
+	}
+
+	corosio::io_context &ioc_;
+	corosio::tcp_acceptor acc_;
+	corosio::tcp_socket client_;
+	corosio::tcp_socket server_;
+	std::uint16_t target_;
+	std::string from_client_;
+	std::string from_server_;
+	outcome<void> running_;
+	outcome<void> up_;
+	outcome<void> down_;
+};
+
+auto port_of(const std::string &url) -> std::uint16_t
+{
+	auto u = ldap::url::parse(url);
+	REQUIRE(u.has_value());
+	REQUIRE(u->port().has_value());
+	return *u->port();
+}
+
+// The protected buffers in one direction of a recorded connection: after
+// `clear` LDAP messages in clear (the bind's), each four-octet big-endian
+// length and the buffer it announces. Fails the test on bytes that do not
+// frame that way.
+auto sasl_buffers(std::string_view bytes, std::size_t clear) -> std::vector<std::string_view>
+{
+	const auto octet = [&bytes](std::size_t i) -> std::size_t {
+		REQUIRE(i < bytes.size());
+		return static_cast<unsigned char>(bytes[i]);
+	};
+	std::size_t at = 0;
+	for (std::size_t m = 0; m < clear; ++m) {
+		REQUIRE(octet(at) == 0x30);// LDAPMessage: SEQUENCE
+		std::size_t length = octet(at + 1);
+		std::size_t header = 2;
+		if (length >= 0x80) {
+			const std::size_t n = length & 0x7F;
+			REQUIRE((n >= 1 && n <= 4));
+			length = 0;
+			for (std::size_t i = 0; i < n; ++i) {
+				length = (length << 8) | octet(at + 2 + i);
+			}
+			header += n;
+		}
+		at += header + length;
+	}
+	std::vector<std::string_view> out;
+	while (at < bytes.size()) {
+		REQUIRE(bytes.size() - at >= 4);
+		const std::size_t length = (octet(at) << 24) | (octet(at + 1) << 16) | (octet(at + 2) << 8) | octet(at + 3);
+		REQUIRE(bytes.size() - at - 4 >= length);
+		out.push_back(bytes.substr(at + 4, length));
+		at += 4 + length;
+	}
+	return out;
+}
+
+// Checks each buffer's NTLMSSP_MESSAGE_SIGNATURE: at least the 16 octets,
+// Version 1, then SeqNum counting from 0 (MS-NLMP section 2.2.2.9.2).
+void check_signatures(const std::vector<std::string_view> &buffers)
+{
+	for (std::size_t i = 0; i < buffers.size(); ++i) {
+		const auto b = buffers[i];
+		INFO("buffer " << i);
+		REQUIRE(b.size() >= ldap::detail::ntlm_signature_size);
+		CHECK(b.substr(0, 4) == std::string_view("\x01\x00\x00\x00", 4));
+		std::uint32_t seq = 0;
+		for (std::size_t k = 0; k < 4; ++k) {
+			seq |= static_cast<std::uint32_t>(static_cast<unsigned char>(b[12 + k])) << (8 * k);
+		}
+		CHECK(seq == i);
+	}
+}
+
+auto longest(const std::vector<std::string_view> &buffers) -> std::size_t
+{
+	std::size_t n = 0;
+	for (const auto b : buffers) {
+		n = std::max(n, b.size());
+	}
+	return n;
+}
+
+const ldap::dn large{ "CN=large,CN=Users,DC=coro,DC=test" };
+
+}// namespace
+
+TEST_CASE("samba ad: the NTLM security layer on plain ldap://, entries over 128 KiB both ways",
+  "[samba_ad][ntlm][layer]")
+{
+	require_samba();
+	// Integrity negotiates signing only, but Samba (as Windows) seals over
+	// LDAP once signing is negotiated, and so does the client: both are
+	// sealed on the wire.
+	const auto protection = GENERATE(ldap::sasl_protection::integrity, ldap::sasl_protection::confidentiality);
+	CAPTURE(protection);
+	corosio::io_context ioc;
+	// The strict DC: on plain ldap:// only a signed or sealed bind.
+	recording_relay relay(ioc, port_of(strict_ldap()));
+	auto c = open(ioc, relay.url());
+	ldap::sasl_ntlm mech("CORO\\Administrator", administrator_password, { .security_layer = protection });
+	auto who = ntlm_bind(ioc, c, mech);
+	if (!who) {
+		FAIL(who.error().message());
+	}
+	CHECK(*who == "u:CORO\\Administrator");
+	CHECK(c.security_layer() == ldap::sasl_protection::confidentiality);
+
+	// A jpegPhoto (no rangeUpper in AD's schema) of 300 000 octets, more
+	// than two of the client's 128 KiB buffers, with a marker that would
+	// show if the PDU crossed the wire in clear.
+	const std::string marker = "coro-ldap: a marker never seen on the wire";
+	std::string photo(300'000, '\0');
+	// Every octet value, in no simple order (a multiplicative hash of the
+	// offset).
+	for (std::size_t i = 0; i < photo.size(); ++i) {
+		photo[i] = static_cast<char>((i * 2'654'435'761U) >> 13);
+	}
+	std::ranges::copy(marker, photo.begin() + 1000);
+	auto m = finish(ioc, c.modify({ .object = large, .changes = { ldap::mod::replace("jpegPhoto", { photo }) } }));
+	if (!m) {
+		FAIL(m.error().message());
+	}
+	auto back =
+	  finish(ioc, c.search({ .base = large, .scope = ldap::search_scope::base_object, .attributes = { "jpegPhoto" } }));
+	if (!back) {
+		FAIL(back.error().message());
+	}
+	REQUIRE(back->size() == 1);
+	const auto *values = (*back)[0].find("jpegPhoto");
+	REQUIRE(values != nullptr);
+	REQUIRE(values->size() == 1);
+	CHECK((*values)[0].size() == photo.size());
+	CHECK(std::string_view((*values)[0]) == photo);
+	REQUIRE(finish(ioc, c.unbind()).has_value());
+	relay.shut_down();
+	drive(ioc);
+
+	// Two BindRequests and two BindResponses in clear, then only protected
+	// buffers, each a signature then the (sealed) message.
+	const auto up = sasl_buffers(relay.from_client(), 2);
+	const auto down = sasl_buffers(relay.from_server(), 2);
+	check_signatures(up);
+	check_signatures(down);
+	// The ModifyRequest went in buffers of 128 KiB: Samba put the PDU back
+	// together.
+	CHECK(longest(up) == std::size_t{ 1 } << 17);
+	// Samba cut its SearchResultEntry into buffers of 128 KiB too
+	// (gensec_max_input_size's default, the signature included).
+	CHECK(longest(down) == std::size_t{ 1 } << 17);
+	CHECK_FALSE(relay.from_client().contains(marker));
+	CHECK_FALSE(relay.from_server().contains(marker));
 }
