@@ -11,7 +11,8 @@
 # binding (sasl-cbinding tls-endpoint), SCRAM-SHA-256-PLUS; the data is
 # make_fixture.py's. Needs slapd and openssl. Under run_kdc.sh (a
 # throwaway Kerberos KDC), slapd also offers SASL GSSAPI as
-# ldap/localhost, with its keytab (KRB5_KTNAME) and realm.
+# ldap/localhost, with its keytab (KRB5_KTNAME) and realm. run_openldap.sh
+# runs this script in a Docker container instead, with Debian's slapd.
 #
 # Environment (defaults suit Debian / Ubuntu's slapd package):
 #   SLAPD              slapd binary              (/usr/sbin/slapd)
@@ -20,6 +21,7 @@
 #                                                 and syncprov overlays are loaded if
 #                                                 found there)
 #   JHETZ_LDAP_IT_PORT first port                (3389)
+#   TMPDIR             where its directory goes  (/tmp)
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,7 +31,7 @@ module_path="${SLAPD_MODULE_PATH:-/usr/lib/ldap}"
 port="${JHETZ_LDAP_IT_PORT:-3389}"
 tls_port=$((port + 1))
 
-dir="$(mktemp -d /tmp/jldap.XXXXXX)"
+dir="$(mktemp -d "${TMPDIR:-/tmp}/jldap.XXXXXX")"
 pid=""
 cleanup() {
 	if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then

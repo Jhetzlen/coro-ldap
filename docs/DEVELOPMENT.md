@@ -141,10 +141,10 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
 
 - SASL GSSAPI: configure stops on `JHETZ_LDAP_WITH_GSSAPI` (SSPI is not
   implemented).
-- The integration tests (`run_slapd.sh`, `run_kdc.sh`, `run_samba_ad.sh`), coverage
-  (`run_coverage.sh`, Clang only and rejected for clang-cl) and the
-  fuzzers (configure stops on `JHETZ_LDAP_BUILD_FUZZERS`). The
-  `*_fuzz_replay` tests do run on Windows.
+- The integration tests (`run_slapd.sh`, `run_openldap.sh`, `run_kdc.sh`,
+  `run_samba_ad.sh`), coverage (`run_coverage.sh`, Clang only and rejected
+  for clang-cl) and the fuzzers (configure stops on
+  `JHETZ_LDAP_BUILD_FUZZERS`). The `*_fuzz_replay` tests do run on Windows.
 - `JHETZ_LDAP_SANITIZE` is ASan only on MSVC and clang-cl (no UBSan) and is
   refused with MinGW (no ASan runtime).
 - A few `net.*` tests need Linux interfaces (the `getaddrinfo` interposer,
@@ -285,6 +285,26 @@ path; without it the server side sort test is skipped. Without slapd the
 `integration` test is skipped, so plain `ctest` stays hermetic. CI runs it
 in the `integration` job.
 
+Without a local slapd, `run_openldap.sh` runs `run_slapd.sh` itself in
+Docker, with Debian trixie's OpenLDAP (slapd 2.6.10, with the sssvlv and
+syncprov overlays and cyrus-sasl's SCRAM and GSSAPI plugins):
+
+```sh
+tests/integration/run_openldap.sh ctest --test-dir build/main -L integration --output-on-failure
+```
+
+It builds the image `coro-ldap-openldap` from
+`tests/integration/openldap/Dockerfile` (Debian packages only, on a pinned
+`debian:trixie-*-slim`; from Docker's cache after the first time, and kept)
+and starts one container, removed on exit (also on failure or Ctrl-C). The
+configuration, certificates and fixture are `run_slapd.sh`'s, with its
+Debian defaults: the container runs the script as the calling user, with
+the host network (slapd listens on 127.0.0.1 only, as without Docker) and
+a temporary directory mounted at the same path as its `TMPDIR`, so the
+certificate paths and the ldapi:// socket are the same on the host, where
+the command runs. Without a working `docker` the command runs without
+slapd, so the test is skipped.
+
 SASL GSSAPI (built with `JHETZ_LDAP_WITH_GSSAPI`) has its own test,
 `integration.gssapi` (labels `integration` and `kerberos`), run with a
 throwaway MIT Kerberos KDC around slapd: `run_kdc.sh` creates the realm
@@ -305,6 +325,17 @@ plugin slapd does not offer GSSAPI: either way the test is skipped. The
 KDC listens on 127.0.0.1, port `JHETZ_LDAP_IT_KDC_PORT` (3750). Not in
 CI.
 
+The Docker slapd has the plugin, so only the KDC tools are needed on the
+host: `run_openldap.sh` passes `run_kdc.sh`'s Kerberos environment
+(`KRB5_CONFIG`, `KRB5_KTNAME`, `KRB5RCACHEDIR` and the realm) to the
+container, with their directories mounted at the same paths, and slapd
+reaches the KDC on 127.0.0.1:
+
+```sh
+tests/integration/run_kdc.sh tests/integration/run_openldap.sh \
+  ctest --test-dir build/gssapi -L integration --output-on-failure
+```
+
 `kerberos.channel_binding` (same labels) checks the GSSAPI channel
 bindings against an in-process MIT acceptor (`gss_accept_sec_context`)
 rather than slapd, whose acceptor is given none: it needs the KDC only.
@@ -315,9 +346,9 @@ tests/integration/run_kdc.sh ctest --test-dir build/gssapi -L kerberos --output-
 
 (`integration.gssapi` is skipped there, without slapd.)
 
-A plugin outside cyrus-sasl's directory is found through `SASL_PATH`, a
-colon-separated list of directories replacing the default one, so list
-that one too. To use the plugin without installing it (Arch), extract the
+With a local slapd, a plugin outside cyrus-sasl's directory is found
+through `SASL_PATH`, a colon-separated list of directories replacing the
+default one, so list that one too. To use the plugin without installing it (Arch), extract the
 package into a scratch directory, as for a local slapd:
 
 ```sh

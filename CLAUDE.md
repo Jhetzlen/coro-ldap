@@ -68,10 +68,9 @@ cmake -B build/main -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_SANITIZE=ON
 cmake --build build/main -j
 ctest --test-dir build/main -j12        # serial ctest is ~4x slower (fuzz replays); let the build finish first
 
-# Integration tests against a throwaway OpenLDAP slapd (skipped without slapd).
-# SLAPD, SLAPD_SCHEMA_DIR and SLAPD_MODULE_PATH point at the slapd install:
-SLAPD=<ol>/usr/bin/slapd SLAPD_SCHEMA_DIR=<ol>/etc/openldap/schema SLAPD_MODULE_PATH=<ol>/usr/lib/openldap \
-  tests/integration/run_slapd.sh ctest --test-dir build/main -L integration --output-on-failure
+# Integration tests against a throwaway OpenLDAP slapd in Docker (Debian's 2.6.10; skipped without docker;
+# run_slapd.sh alone uses a local slapd). With GSSAPI: run_kdc.sh run_openldap.sh ... --test-dir build/gssapi
+tests/integration/run_openldap.sh ctest --test-dir build/main -L integration --output-on-failure
 
 # clang-tidy 23 (.clang-tidy; build/tidy is a Clang build dir, see docs/DEVELOPMENT.md "clang-tidy"):
 run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|tests|examples|fuzz|bench)/.*'
