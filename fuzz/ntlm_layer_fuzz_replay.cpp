@@ -2,9 +2,10 @@
 // properties run under ctest with any compiler, without libFuzzer.
 // Seeds: the server's first protected buffers, integrity and
 // confidentiality, of a short message and of an LDAP whoami response (valid
-// for the target's unwrap()), the golden security layer test's server
-// buffer (the same keys, confidentiality), and messages to wrap: empty, one
-// octet, and a 16-octet one shaped like a signature.
+// for the target's unwrap()), and messages to wrap: empty, one octet, and a
+// 16-octet one shaped like a signature. The confidentiality whoami seed must
+// equal the golden security layer test's server0 (the same keys), which the
+// replay checks rather than adding it as a duplicate seed.
 #include "jhetz/ldap/sasl_ntlm.hpp"
 
 #include "ntlm_layer.hpp"
@@ -52,10 +53,15 @@ auto main(int argc, char **argv) -> int
 			cfg.seeds.push_back(fuzz::to_input(buffer));
 		}
 	}
-	const auto others = std::to_array<std::string_view>({
-	  // The golden security layer test's server0.
+	// The golden security layer test's server0: the confidentiality whoami seed.
+	constexpr auto golden_server0 =
 	  "\x01\0\0\0\xff\x8e\x04\x8c\xbe\x7d\x22\x4f\0\0\0\0"
-	  "\x21\x17\x1b\xc7\xe7\xf6\x9e\xaa\x71\x0c\xa5\x02\xd5\xfc\x7a\x2c\x6f\xd6\x64\x33\x2b\x1d"sv,
+	  "\x21\x17\x1b\xc7\xe7\xf6\x9e\xaa\x71\x0c\xa5\x02\xd5\xfc\x7a\x2c\x6f\xd6\x64\x33\x2b\x1d"sv;
+	if (cfg.seeds.back() != fuzz::to_input(golden_server0)) {
+		std::println(stderr, "ntlm_layer_fuzz_replay: the confidentiality whoami seed is not the golden server0");
+		return 1;
+	}
+	const auto others = std::to_array<std::string_view>({
 	  ""sv,
 	  "\x01"sv,
 	  "\x01\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0"sv,
