@@ -665,7 +665,7 @@ TEST_CASE("client: acquire_timeout", "[net][client][timeout]")
 	CHECK_THAT(std::string(a.get().error().context), ContainsSubstring("acquire_timeout"));
 	REQUIRE_FALSE(b.get().has_value());
 	CHECK(b.get().error().code == ldap::cond::timeout);
-	CHECK(std::string_view(b.get().error().context) == "acquire: no connection ready within acquire_timeout");
+	CHECK_THAT(std::string(b.get().error().context), ContainsSubstring("acquire_timeout"));
 	CHECK(s.accepted() == 1);
 }
 

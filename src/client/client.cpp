@@ -376,7 +376,6 @@ namespace detail {
 		  -> std::optional<error>
 		{
 			const server_state *first = nullptr;
-			const error *first_error = nullptr;
 			for (std::size_t i = 0; i < servers.size(); ++i) {
 				const auto &s = servers[i];
 				if (excluded[i] || !s.last_error || s.retry_at <= now) {
@@ -384,13 +383,12 @@ namespace detail {
 				}
 				if (first == nullptr || s.retry_at < first->retry_at) {
 					first = &s;
-					first_error = &*s.last_error;
 				}
 			}
-			if (first_error == nullptr) {
+			if (first == nullptr || !first->last_error) {
 				return std::nullopt;
 			}
-			error e = *first_error;
+			error e = *first->last_error;
 			e.context += " (backing off: acquire_timeout ends first)";
 			return e;
 		}
@@ -1328,17 +1326,17 @@ namespace detail {
 					co_return std::unexpected(std::move(held.error()));
 				}
 				auto s = co_await (*held)->search_stream(request, mr);
-				std::optional<error> failed;
+				std::optional<error> outcome;
+				const error *failed = s ? nullptr : &s.error();
 				if (s) {
 					auto first = co_await first_outcome(*s);
 					if (!first) {// stopped
 						co_return std::unexpected(std::move(first.error()));
 					}
-					failed = std::move(*first);
-				} else {
-					failed = s.error();
+					outcome = std::move(*first);
+					failed = outcome ? &*outcome : nullptr;
 				}
-				if (failed && !retried && retryable(*failed)) {
+				if (failed != nullptr && !retried && retryable(*failed)) {
 					avoid = self->set_aside(*held, *failed);
 					continue;
 				}

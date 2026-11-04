@@ -1862,7 +1862,7 @@ TEST_CASE("integration: transactions through the sync connection", "[integration
 	CHECK(state(renamed).has_value());
 	auto w = c.begin_transaction();
 	REQUIRE(w.has_value());
-	CHECK(w->identifier().empty());// slapd's: one transaction per connection
+	CHECK(w->identifier().empty());
 	REQUIRE(w->del({ .entry = renamed }).has_value());
 	REQUIRE(w->commit().has_value());
 	CHECK(absent(renamed));
