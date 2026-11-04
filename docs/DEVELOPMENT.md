@@ -497,10 +497,12 @@ memory resources, protocol misuse through the mock servers and direct
 mechanism calls.
 
 - ICU failures in SASLprep (`src/sasl_scram.cpp`, `icu_failure`): ICU
-  fails only on its own allocation failure or an internal error.
+  fails only on its own allocation failure, an internal error, or ICU data
+  without the SASLprep profile (`usprep_openByType`).
 - OpenSSL failures of PBKDF2, HMAC, SHA-256 and `RAND_bytes`
-  (`src/sasl_scram.cpp`): only on OpenSSL's own allocation failure or an
-  internal error.
+  (`src/sasl_scram.cpp`): only on OpenSSL's own allocation failure, an
+  internal error, or a provider configuration without SHA-256 or a random
+  generator.
 - `TCP_NODELAY` failing (`src/net/connect.cpp`): `setsockopt` on a
   connected TCP socket fails only for a kernel reason.
 - Resolver failures caught in `resolve_detached` (`src/net/connect.cpp`,
