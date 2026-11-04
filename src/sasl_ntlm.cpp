@@ -697,8 +697,13 @@ auto sasl_ntlm::step(std::optional<std::string_view> challenge) -> result<std::o
 		if (auto r = detail::ntlm_derive_session_keys(exported.k, keys); !r) {
 			return std::unexpected(std::move(r.error()));
 		}
-		layer_ =
-		  std::make_unique<detail::ntlm_security_layer>(keys, options_.security_layer, options_.max_receive_size);
+		// Sealed even when only signing was negotiated: over LDAP a DC
+		// treats NTLMSSP_NEGOTIATE_SIGN as NTLMSSP_NEGOTIATE_SEAL (Samba's
+		// GENSEC_FEATURE_LDAP_STYLE, force_wrap_seal in
+		// auth/ntlmssp/ntlmssp_server.c, which follows Windows' LDAP), and
+		// refuses a buffer that is only signed.
+		layer_ = std::make_unique<detail::ntlm_security_layer>(
+		  keys, sasl_protection::confidentiality, options_.max_receive_size);
 	}
 	negotiate_.clear();
 	state_ = state::sent_authenticate;

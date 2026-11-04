@@ -1071,14 +1071,15 @@ TEST_CASE("ntlm: a security layer the server does not grant", "[net][sasl][ntlm]
 	  (dc_flags | detail::ntlmssp_negotiate_sign) & ~detail::ntlmssp_negotiate_128,
 	  "the server does not grant the integrity security layer (no NTLMSSP_NEGOTIATE_KEY_EXCH, "
 	  "NTLMSSP_NEGOTIATE_128 in the CHALLENGE_MESSAGE)");
-	// Integrity does not need sealing.
+	// Integrity does not need NTLMSSP_NEGOTIATE_SEAL; the layer seals all
+	// the same, as an LDAP DC expects.
 	mock_ldap m;
 	m.serve({ answer({ sasl_resp(
 				1, 14, dc_challenge(dc_flags | detail::ntlmssp_negotiate_sign | detail::ntlmssp_negotiate_key_exch)) }),
 	  answer({ sasl_resp(2, 0) }) });
 	ldap::sasl_ntlm mech("CORP\\jdoe", "secret", { .security_layer = ldap::sasl_protection::integrity });
 	REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
-	CHECK(m.conn.security_layer() == ldap::sasl_protection::integrity);
+	CHECK(m.conn.security_layer() == ldap::sasl_protection::confidentiality);
 	REQUIRE(m.log.received.size() == 2);
 	auto auth = detail::parse_ntlm_authenticate(sasl_creds(m.log.received[1]));
 	REQUIRE(auth.has_value());
@@ -1239,11 +1240,13 @@ TEST_CASE("ntlm: a bind with a security layer, then a search through it", "[net]
 		std::string error;
 		auto log = std::make_shared<dc_layer::log>();
 		outcome<void> server;
-		spawn(m.ioc, serve_ntlm_layer(m.server_end(), protection, log, error), server);
+		// The DC seals once SIGN is negotiated, SEAL or not (Samba's
+		// force_wrap_seal for LDAP, as Windows), and so does the client.
+		spawn(m.ioc, serve_ntlm_layer(m.server_end(), ldap::sasl_protection::confidentiality, log, error), server);
 		ldap::sasl_ntlm mech("CORP\\jdoe", "secret", { .security_layer = protection });
 		auto bound = m.run(m.conn.sasl_bind(mech));
 		REQUIRE(bound.has_value());
-		CHECK(m.conn.security_layer() == protection);
+		CHECK(m.conn.security_layer() == ldap::sasl_protection::confidentiality);
 		auto found = m.run(m.conn.search(people_search()));
 		drive_until(m.ioc, [&] { return server.done(); });
 		CHECK(error.empty());
@@ -1255,13 +1258,12 @@ TEST_CASE("ntlm: a bind with a security layer, then a search through it", "[net]
 		// sealed, neither side's text shows on the wire.
 		REQUIRE_FALSE(log->received.empty());
 		REQUIRE(log->sent.size() == 2);
-		const bool sealed = protection == ldap::sasl_protection::confidentiality;
 		std::string received;
 		for (const auto &b : log->received) {
 			received += b.substr(16);
 		}
-		CHECK(received.contains("ou=people") != sealed);
-		CHECK(log->sent[0].contains("Jdoe Sealed") != sealed);
+		CHECK_FALSE(received.contains("ou=people"));
+		CHECK_FALSE(log->sent[0].contains("Jdoe Sealed"));
 
 		// StartTLS would go below the layer.
 		auto tls = m.run(m.conn.start_tls());

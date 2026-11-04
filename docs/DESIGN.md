@@ -1047,8 +1047,17 @@ handles initialized with the sealing keys, and two sequence numbers from
 0, each kept across buffers. wrap() is MS-NLMP's SEAL (section 3.4.3):
 the checksum HMAC_MD5(SigningKey, ConcatenationOf(SeqNum, Message))[0..7]
 over the plaintext, the message RC4-sealed, then the checksum
-RC4-encrypted with the same handle (key exchange; with integrity only the
-message stays in clear and only the checksum goes through RC4). The
+RC4-encrypted with the same handle (key exchange). `ntlm_security_layer`
+also has MS-NLMP's integrity only, the message in clear and only the
+checksum through RC4, but `sasl_ntlm` always builds the sealing one: over
+LDAP a DC treats a negotiated SIGN as SEAL (Samba's
+GENSEC_FEATURE_LDAP_STYLE, `force_wrap_seal` in
+auth/ntlmssp/ntlmssp_server.c, which says it follows Windows) and refuses
+a buffer that is only signed ("NTLMSSP NTLM2 packet check failed due to
+invalid signature", the connection closed after the bind); found by
+`integration.samba_ad` (coro-ldap-ite.9). So `security_layer =
+integrity` negotiates SIGN without SEAL and still seals, and
+`connection::security_layer()` reports confidentiality. The
 protected buffer is the 16-octet NTLMSSP_MESSAGE_SIGNATURE (Version 1,
 Checksum, SeqNum, section 2.2.2.9.2) followed by the message, inside the
 four-octet SASL length of `sasl_layer_stream`: MS-ADTS section 5.1.2.1
@@ -1071,8 +1080,8 @@ is 10 MB) and sends at most 128 KiB per buffer (Samba's
 GSSAPI. AD refuses a SASL layer over TLS (MS-ADTS section 5.1.1.1.2), so
 with TLS `start()` fails with `security_layer_unavailable` before anything
 is sent; and the layer stands in for TLS, so `require_tls` is not
-consulted with one (one option to set, not two; integrity still leaves the
-PDUs readable). AD may refuse a later bind on a layered connection
+consulted with one (one option to set, not two; the PDUs are sealed with
+either level, see above). AD may refuse a later bind on a layered connection
 (unwillingToPerform without LDAP_CAP_ACTIVE_DIRECTORY_LDAP_INTEG_OID,
 MS-ADTS section 5.1.1.1.2); the library's rule (a bind without a layer
 leaves it in place, a second layer is `security_layer_in_effect`) is

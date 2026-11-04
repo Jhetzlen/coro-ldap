@@ -50,10 +50,15 @@
 //   being the 16-octet NTLMSSP_MESSAGE_SIGNATURE (section 2.2.2.9.2:
 //   Version 1, the first eight octets of HMAC_MD5(SigningKey,
 //   ConcatenationOf(SeqNum, Message)) RC4-encrypted, SeqNum), then the
-//   message, RC4-sealed with confidentiality (section 3.4.3: the message
-//   sealed first, then the checksum, with the same RC4 handle), as Samba
-//   and Windows lay it out. Each direction has its own RC4 handle, kept
-//   across buffers, and its own sequence number from 0; a buffer whose
+//   message, RC4-sealed (section 3.4.3: the message sealed first, then the
+//   checksum, with the same RC4 handle), as Samba and Windows lay it out.
+//   Sealed with integrity too: over LDAP a DC treats a negotiated
+//   NTLMSSP_NEGOTIATE_SIGN as NTLMSSP_NEGOTIATE_SEAL and refuses a buffer
+//   that is only signed (Samba's force_wrap_seal, which follows Windows'
+//   LDAP), so integrity differs from confidentiality only in the flags it
+//   negotiates, and connection::security_layer() reports confidentiality
+//   for both. Each direction has its own RC4 handle, kept across
+//   buffers, and its own sequence number from 0; a buffer whose
 //   checksum or sequence number is not the expected one (tampered with,
 //   replayed, reordered or dropped) closes the connection, as does one
 //   larger than sasl_ntlm_options::max_receive_size. Outgoing PDUs go in
@@ -67,11 +72,11 @@
 //   section 5.1.1.1.2), so with TLS start() fails with
 //   client_errc::security_layer_unavailable before anything is sent. A
 //   requested layer stands in for TLS: require_tls is not consulted then
-//   (integrity alone leaves the PDUs readable to an eavesdropper, but not
-//   changeable). The layer's secrets (the ExportedSessionKey, the four keys,
-//   the RC4 states) are wiped as the bind's are, the RC4 states and keys
-//   when the connection drops the layer. RC4 and HMAC-MD5 are what MS-NLMP
-//   defines: the layer is no match for TLS against a determined attacker,
+//   (the PDUs are sealed with either, see above). The layer's secrets
+//   (the ExportedSessionKey, the four keys, the RC4 states) are wiped as
+//   the bind's are, the RC4 states and keys when the connection drops the
+//   layer. RC4 and HMAC-MD5 are what MS-NLMP defines: the layer is no
+//   match for TLS against a determined attacker,
 //   but it is what Active Directory's "LDAP server signing requirements"
 //   policy accepts on plain ldap://.
 // - TLS is required by default (sasl_ntlm_options::require_tls): start()

@@ -618,7 +618,10 @@ itself needs only ICU.
   and MsvAvFlags with the MIC bit; the timestamp is the server's. By
   default no signing or sealing is negotiated: SASL does not protect the
   session, TLS does. `options.security_layer` (a `sasl_protection`:
-  `integrity` signs every later PDU, `confidentiality` signs and seals it;
+  `integrity` negotiates signing, `confidentiality` signing and sealing,
+  and both sign and seal every later PDU, as an LDAP DC expects (Samba
+  and Windows seal once signing is negotiated), so
+  `connection::security_layer()` reports `confidentiality` for both;
   MS-NLMP section 3.4, RC4 and HMAC-MD5 with key exchange and 128-bit
   keys) negotiates an NTLM security layer for plain ldap://, where AD's
   "LDAP server signing requirements" policy demands one:
