@@ -3,7 +3,7 @@ include(FetchContent)
 # SYSTEM: our warning flags must not fire on Catch2's headers.
 FetchContent_Declare(Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-    GIT_TAG v3.7.1
+    GIT_TAG v3.16.1
     GIT_SHALLOW TRUE
     SYSTEM
 )
