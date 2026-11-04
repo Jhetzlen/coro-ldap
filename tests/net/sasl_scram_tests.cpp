@@ -579,6 +579,18 @@ TEST_CASE("scram: server-final-message rejections (mutual authentication)", "[sa
 		CHECK(final_error("x=1").code == ldap::client_errc::decode_error);
 		CHECK(final_error("v=***").code == ldap::client_errc::decode_error);
 		CHECK(final_error(std::string(rfc_server_final) + ",").code == ldap::client_errc::decode_error);
+		const auto e = final_error("v");
+		CHECK(e.code == ldap::client_errc::decode_error);
+		CHECK_THAT(std::string(e.context), ContainsSubstring("server-final-message"));
+	}
+	SECTION("no challenge after the client-final-message")
+	{
+		auto m = rfc_mech();
+		to_client_final(m);
+		auto r = m.step(std::nullopt);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::decode_error);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("server-final-message: no challenge"));
 	}
 	SECTION("success right after the client-first-message")
 	{

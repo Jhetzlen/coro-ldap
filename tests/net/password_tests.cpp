@@ -611,6 +611,11 @@ TEST_CASE("change_password: refused before sending", "[net][password]")
 	CHECK(bad.error().code == client_errc::encode_error);
 	CHECK(std::string(bad.error().context)
 		  == "reset password " + jdoe_context + ": Active Directory password value: the password is not valid UTF-8");
+	auto bad_old = f.run(f.conn.change_password(jdoe, "0ld\xFF", std::string(new_pw)));
+	REQUIRE_FALSE(bad_old.has_value());
+	CHECK(bad_old.error().code == client_errc::encode_error);
+	CHECK(std::string(bad_old.error().context)
+		  == "change password " + jdoe_context + ": Active Directory password value: the password is not valid UTF-8");
 	CHECK(m.conn.is_open());
 	m.check_server();
 	CHECK(m.log.received.empty());
@@ -648,7 +653,10 @@ TEST_CASE("change_password: server errors, AD diagnostics explained", "[net][pas
 		  { answer({ modify_result(2, 19, policy) }),
 			answer({ modify_result(3, 19, wrong_old) }),
 			answer({ modify_result(4, 53, "00002077: SvcErr: DSID-03190EF9, problem 5003 (WILL_NOT_PERFORM)") }),
-			answer({ modify_result(5, 50, "insufficient access") }) });
+			answer({ modify_result(5, 50, "insufficient access") }),
+			answer({ modify_result(6, 50, "00000005: SecErr: DSID-031A11E5, problem 4003 (INSUFF_ACCESS_RIGHTS)") }),
+			answer({ modify_result(7, 19, "00000775: account locked out") }),
+			answer({ modify_result(8, 19, "0000002G: not hexadecimal") }) });
 		REQUIRE(f.connect(upgraded(password_method::active_directory)).has_value());
 		const std::string context = "change password " + jdoe_context + ": modify unicodePwd";
 
@@ -676,6 +684,17 @@ TEST_CASE("change_password: server errors, AD diagnostics explained", "[net][pas
 		auto plain = f.run(f.conn.change_password(jdoe, std::string(old_pw), std::string(new_pw)));
 		REQUIRE_FALSE(plain.has_value());
 		CHECK(std::string(plain.error().context) == context);
+		auto denied = f.run(f.conn.change_password(jdoe, std::string(old_pw), std::string(new_pw)));
+		REQUIRE_FALSE(denied.has_value());
+		CHECK(std::string(denied.error().context)
+			  == context + ": not allowed to set this user's password (Active Directory error 00000005)");
+		auto locked = f.run(f.conn.change_password(jdoe, std::string(old_pw), std::string(new_pw)));
+		REQUIRE_FALSE(locked.has_value());
+		CHECK(std::string(locked.error().context)
+			  == context + ": the account is locked out (Active Directory error 00000775)");
+		auto not_hex = f.run(f.conn.change_password(jdoe, std::string(old_pw), std::string(new_pw)));
+		REQUIRE_FALSE(not_hex.has_value());
+		CHECK(std::string(not_hex.error().context) == context);
 		CHECK(f.conn.is_open());
 		f.check_server();
 	}

@@ -829,6 +829,12 @@ TEST_CASE("distinguishedNameMatch: #hex values are decoded and transcoded", "[ma
 	CHECK(integer("#02020001", "1") == undefined);
 	CHECK(integer("#0202FFFF", "-1") == undefined);
 	CHECK(integer("#0200", "0") == undefined);
+	// BOOLEAN for booleanMatch; two content octets are not a BOOLEAN.
+	const auto boolean = [](const ldap::attribute &) -> std::string_view { return "booleanMatch"; };
+	CHECK(ldap::distinguished_name_match(parse("x=#0101FF"), parse("x=TRUE"), boolean) == yes);
+	CHECK(ldap::distinguished_name_match(parse("x=#010100"), parse("x=FALSE"), boolean) == yes);
+	CHECK(ldap::distinguished_name_match(parse("x=#010100"), parse("x=TRUE"), boolean) == no);
+	CHECK(ldap::distinguished_name_match(parse("x=#01020000"), parse("x=FALSE"), boolean) == undefined);
 }
 
 TEST_CASE("distinguishedNameMatch: a #hex INTEGER is decoded up to 4096 octets", "[matching][dn]")

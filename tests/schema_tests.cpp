@@ -275,6 +275,57 @@ TEST_CASE("schema: SUP cycles do not loop", "[schema]")
 	CHECK(s.syntax_of(*s.find_attribute("a")) == nullptr);
 }
 
+namespace {
+
+struct on_cycle
+{
+	std::vector<std::int64_t> a;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<on_cycle> = ldap::describe(ldap::object_class("top"), ldap::field<&on_cycle::a>("a"));
+
+TEST_CASE("schema: a SUP cycle is reported as a chain too long", "[schema][validate]")
+{
+	const std::pmr::vector<std::pmr::string> types{ "( 1.1 NAME 'a' SUP b )", "( 1.2 NAME 'b' SUP a )" };
+	const std::pmr::vector<std::pmr::string> classes{ "( 2.5.6.0 NAME 'top' ABSTRACT )" };
+	const auto rep = ldap::validate<on_cycle>(ldap::server_schema::parse(types, classes));
+	REQUIRE(rep.issues.size() == 1);
+	CHECK(rep.issues[0].what == ldap::schema_issue::kind::syntax_mismatch);
+	CHECK(rep.issues[0].detail == "syntax unknown: the SUP chain is longer than 32 (a cycle?)");
+}
+
+TEST_CASE("schema: lists and fields are bounded", "[schema]")
+{
+	const auto context = [](const auto &r) {
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::decode_error);
+		return std::string(r.error().context);
+	};
+	std::string names;
+	for (int i = 0; i < 4096; ++i) {
+		names += " 'n" + std::to_string(i) + "'";
+	}
+	CHECK(ldap::parse_attribute_type("( 1.2 NAME (" + names + " ) )").has_value());
+	CHECK(context(ldap::parse_attribute_type("( 1.2 NAME (" + names + " 'one-more' ) )")) == "schema: list too long");
+
+	std::string oids = "a0";
+	for (int i = 1; i < 4096; ++i) {
+		oids += "$a" + std::to_string(i);
+	}
+	CHECK(ldap::parse_object_class("( 1.2 MAY " + oids + " )").has_value());
+	CHECK(context(ldap::parse_object_class("( 1.2 MAY " + oids + "$extra )")) == "schema: list too long");
+
+	std::string fields;
+	for (int i = 0; i < 256; ++i) {
+		fields += " SINGLE-VALUE";
+	}
+	CHECK(ldap::parse_attribute_type("( 1.2" + fields + " )").has_value());
+	CHECK(context(ldap::parse_attribute_type("( 1.2" + fields + " SINGLE-VALUE )")) == "schema: too many fields");
+}
+
 TEST_CASE("schema: lookups fold ASCII case only", "[schema]")
 {
 	const std::pmr::vector<std::pmr::string> types{

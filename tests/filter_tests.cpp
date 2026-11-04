@@ -1,3 +1,4 @@
+#include "counting_resource.hpp"
 #include "jhetz/ldap/filter.hpp"
 #include "test_util.hpp"
 
@@ -324,6 +325,12 @@ TEST_CASE("filter equality compares trees", "[filter]")
 	CHECK_FALSE(raw("(cn:=v)") == raw("(cn:dn:=v)"));
 	CHECK_FALSE(raw("(cn:1.2:=v)") == raw("(cn:1.3:=v)"));
 	CHECK_FALSE(raw("(!(a=1))") == raw("(a=1)"));
+	CHECK_FALSE(raw("(cn=a*b*)") == raw("(cn=a*b*c*)"));// the same parts, then one more
+	CHECK_FALSE(raw("(&)") == raw("(&(a=1))"));// an absolute true has no children
+	CHECK_FALSE(raw("(&(a=1))") == raw("(&)"));
+	// No any part between initial and final.
+	const auto no_any = raw("(cn=a*b)");
+	CHECK(std::ranges::empty(no_any.root().any()));
 
 	// Copies are equal and independent.
 	const auto f = raw("(&(a=1)(|(b=*)(c=x*y)))");
@@ -697,6 +704,25 @@ TEST_CASE("combining a filter with itself copies instead of emptying it", "[filt
 		f = std::move(f) || std::move(f);
 		CHECK(f.to_string() == expected_or);
 	}
+	{
+		auto f = attr("cn") == "x";
+		f = f || std::move(f);
+		CHECK(f.to_string() == expected_or);
+	}
+}
+
+TEST_CASE("combining with an rvalue on another resource copies onto the left one's", "[filter][builder][pmr]")
+{
+	using namespace ldap::filters;
+	jhetz::ldap::test::counting_resource left_mr;
+	jhetz::ldap::test::counting_resource right_mr;
+	const auto f = ldap::filter::raw("(cn=a-long-value-that-allocates)", &left_mr);
+	REQUIRE(f.has_value());
+	auto g = ldap::filter::raw("(sn=another-long-value-that-allocates)", &right_mr);
+	REQUIRE(g.has_value());
+	const auto combined = *f || std::move(*g);
+	CHECK(combined.to_string() == "(|(cn=a-long-value-that-allocates)(sn=another-long-value-that-allocates))");
+	CHECK(combined.get_allocator().resource() == &left_mr);
 }
 
 TEST_CASE("building long chains is linear in either direction", "[filter][builder]")
@@ -781,6 +807,16 @@ TEST_CASE("filters are limited to max_filter_elements elements", "[filter][limit
 		REQUIRE_FALSE(t);
 		CHECK(t.error().code == client_errc::decode_error);
 		CHECK(t.error().context.contains("more than 10000 filter elements"));
+	}
+	{
+		// Substring parts count while decoding too.
+		const auto parts = to_ber(raw("(a=1*2*3)"));
+		REQUIRE(parts.has_value());
+		auto t = from_ber(*parts, { .max_elements = 3 });
+		REQUIRE_FALSE(t);
+		CHECK(t.error().code == client_errc::decode_error);
+		CHECK(t.error().context.starts_with("filter: more than 3 filter elements at offset "));
+		CHECK(from_ber(*parts, { .max_elements = 4 }).has_value());
 	}
 	{
 		const auto small = ber_and_of(3);

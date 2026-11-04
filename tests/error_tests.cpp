@@ -456,6 +456,7 @@ TEST_CASE("ldap::cond category", "[error][cond]")
 		CHECK_FALSE(ec.message().empty());
 		CHECK_FALSE(ec.message().contains("unknown"));
 	}
+	CHECK(ldap::cond_category().message(999) == "unknown LDAP error condition 999");
 	// Works through ldap::error, as callers write it.
 	const ldap::error e = ldap::make_error(ldap::errc::invalid_credentials, "bind cn=x");
 	CHECK(e.code == ldap::cond::auth_failed);

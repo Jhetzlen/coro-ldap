@@ -464,6 +464,20 @@ TEST_CASE("a conversion error shows the value and the DN sanitized", "[mapping][
 	auto p = ldap::decode<person>(e);
 	REQUIRE_FALSE(p.has_value());
 	CHECK(std::string(p.error().context) == "entry uid=x" + fffd + "2026-01-01 forged,dc=example: attribute uid");
+	// An empty DN is quoted.
+	e.dn = "";
+	auto root = ldap::decode<person>(e);
+	REQUIRE_FALSE(root.has_value());
+	CHECK(std::string(root.error().context) == "entry \"\": attribute uid");
+}
+
+TEST_CASE("a change's context names its RFC 4511 operation", "[mapping][encode]")
+{
+	using ldap::modify_operation;
+	CHECK(ldap::detail::change_context(modify_operation::add, "mail") == "add mail");
+	CHECK(ldap::detail::change_context(modify_operation::delete_, "mail") == "delete mail");
+	CHECK(ldap::detail::change_context(modify_operation::replace, "mail") == "replace mail");
+	CHECK(ldap::detail::change_context(modify_operation::increment, "uidNumber") == "increment uidNumber");
 }
 
 // ---------------------------------------------------------------- encode / descriptor

@@ -651,6 +651,16 @@ TEST_CASE("ntlm: input checks", "[sasl][ntlm]")
 	ldap::sasl_ntlm no_password("CORP\\jdoe", "", plain);
 	no_password.prepare({});
 	CHECK(no_password.start().has_value());
+
+	// NTOWFv2 itself checks the user and the domain too.
+	const auto ntowfv2_error = [](std::string_view user, std::string_view domain) -> std::string {
+		auto r = ntowfv2("secret", user, domain);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::encode_error);
+		return std::string(r.error().context);
+	};
+	CHECK(ntowfv2_error("j\xFF", "CORP") == "the user name is not valid UTF-8");
+	CHECK(ntowfv2_error("jdoe", "C\xC3") == "the domain is not valid UTF-8");
 }
 
 // ---------------------------------------------------------------- security layer

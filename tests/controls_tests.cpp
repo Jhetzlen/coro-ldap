@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -523,6 +524,50 @@ TEST_CASE("decode_matched_values", "[controls][matched_values]")
 	CHECK(context_of(with_value(ldap::matched_values_oid, "30 03 87 02 63")).starts_with("matched values: ber: "));
 	CHECK(
 	  context_of(with_value(ldap::matched_values_oid, "30 04 04 02 63 6E")).starts_with("matched values: filter: "));
+	// An extensible match whose content is not BER.
+	CHECK(context_of(with_value(ldap::matched_values_oid, "30 04 A9 02 82 05")).starts_with("matched values: "));
+}
+
+namespace {
+
+// (cn=x*x*...*x) with `parts` substrings: parts + 1 filter elements.
+auto many_substrings(std::size_t parts) -> ldap::filter
+{
+	std::string text = "(cn=x";
+	for (std::size_t i = 1; i < parts; ++i) {
+		text += "*x";
+	}
+	text += ')';
+	auto f = ldap::filter::raw(text, ldap::filter_limits{ .max_elements = 2 * ldap::max_filter_elements });
+	REQUIRE(f.has_value());
+	REQUIRE(f->elements() == parts + 1);
+	return std::move(*f);
+}
+
+}// namespace
+
+TEST_CASE("matched values: the filter element limit", "[controls][matched_values]")
+{
+	using ldap::filters::attr;
+	// Encoding: an item over the limit names its position.
+	const auto too_big = ldap::to_control(ldap::matched_values{
+	  .values_return_filter = { attr("cn") == "x", many_substrings(ldap::max_filter_elements) } });
+	REQUIRE_FALSE(too_big.has_value());
+	CHECK(too_big.error().code == ldap::client_errc::invalid_filter);
+	CHECK(std::string(too_big.error().context)
+		  == "matched values: item 2: filter: too many elements (10001, at most 10000)");
+
+	// Decoding: the items share one budget; an item after it is spent fails.
+	ldap::ber::writer w;
+	w.constructed(ldap::ber::tags::sequence, [](ldap::ber::writer &list) {
+		REQUIRE(ldap::encode_filter(list, many_substrings(ldap::max_filter_elements - 1)).has_value());
+		REQUIRE(ldap::encode_filter(list, attr("cn") == "x").has_value());
+	});
+	auto r =
+	  ldap::decode_matched_values(ldap::control{ ldap::matched_values_oid, false, ldap::detail::as_text(w.bytes()) });
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::client_errc::decode_error);
+	CHECK(std::string(r.error().context).starts_with("matched values: more than 10000 filter elements at offset "));
 }
 
 // ---------------------------------------------------------------- virtual list view (draft-ietf-ldapext-ldapv3-vlv-09)

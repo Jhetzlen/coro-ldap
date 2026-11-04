@@ -7,6 +7,7 @@
 #include "../../src/net/sasl_layer.hpp"
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/sasl.hpp"
 #include "mock_ldap.hpp"
@@ -14,6 +15,9 @@
 
 #include <boost/capy/read.hpp>
 #include <boost/capy/test/stream.hpp>
+#include <boost/corosio/endpoint.hpp>
+#include <boost/corosio/ipv4_address.hpp>
+#include <boost/corosio/tcp_acceptor.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -420,6 +424,83 @@ TEST_CASE("sasl layer: an oversized or broken buffer fails the read", "[net][sas
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == capy::cond::eof);
 	}
+}
+
+namespace {
+
+// A layer whose wrap always fails.
+class refusing_layer final : public ldap::sasl_security_layer
+{
+  public:
+	[[nodiscard]] auto protection() const noexcept -> ldap::sasl_protection override
+	{
+		return ldap::sasl_protection::integrity;
+	}
+	[[nodiscard]] auto max_wrap_input() const noexcept -> std::size_t override { return 1024; }
+	[[nodiscard]] auto max_received() const noexcept -> std::size_t override { return 1024; }
+	[[nodiscard]] auto wrap(std::span<const std::byte>, std::pmr::vector<std::byte> &) -> ldap::result<void> override
+	{
+		return ldap::fail(ldap::client_errc::encode_error, "wrap refused");
+	}
+	[[nodiscard]] auto unwrap(std::span<const std::byte>, std::pmr::vector<std::byte> &) -> ldap::result<void> override
+	{
+		return ldap::fail(ldap::client_errc::decode_error, "unwrap refused");
+	}
+};
+
+auto accept_and_close(corosio::tcp_acceptor &acc) -> capy::task<void>
+{
+	auto [ec, peer] = co_await acc.accept();
+	peer.close();
+}
+
+}// namespace
+
+TEST_CASE("sasl layer: a buffer the layer cannot wrap fails the write", "[net][sasl][sasl_layer]")
+{
+	corosio::io_context ioc;
+	socket_pair sockets(ioc);
+	auto client = net::transport::wrap(socket_ref{ &sockets.client }, "client");
+	net::read_buffer buf;
+	REQUIRE(net::detail::install_security_layer(client, buf, std::make_unique<refusing_layer>()).has_value());
+	auto w = finish(ioc, net::write_bytes(client, as_bytes(std::string("abc"))));
+	REQUIRE_FALSE(w.has_value());
+	CHECK(w.error().code == ldap::client_errc::encode_error);
+	CHECK(std::string(w.error().context) == "write client: SASL security layer: wrap refused");
+	CHECK(net::detail::security_layer_write_error(client) == "SASL security layer: wrap refused");
+	sockets.client.close();
+	sockets.server.close();
+	drive(ioc);
+}
+
+TEST_CASE("sasl layer: no layer errors on an empty transport", "[net][sasl][sasl_layer]")
+{
+	const net::transport none;
+	CHECK(net::detail::security_layer_read_error(none).empty());
+	CHECK(net::detail::security_layer_write_error(none).empty());
+}
+
+TEST_CASE("sasl layer: net::start_tls is refused over a layer", "[net][sasl][sasl_layer][starttls]")
+{
+	corosio::io_context ioc;
+	corosio::tcp_acceptor acc(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1);
+	outcome<void> server;
+	spawn(ioc, accept_and_close(acc), server);
+	auto u = ldap::url::parse("ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port()));
+	REQUIRE(u.has_value());
+	auto t = finish(ioc, net::connect(ioc, *u));
+	REQUIRE(t.has_value());
+	net::read_buffer buf;
+	REQUIRE(net::detail::install_security_layer(*t, buf, std::make_unique<xor_layer>()).has_value());
+	auto r = finish(ioc, net::start_tls(*t, buf, {}));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::client_errc::security_layer_in_effect);
+	CHECK_THAT(std::string(r.error().context),
+	  Catch::Matchers::StartsWith("start tls ldap://127.0.0.1:")
+		&& ContainsSubstring(": a SASL security layer is in effect"));
+	CHECK(t->is_open());
+	t->close();
+	drive(ioc);
 }
 
 namespace {

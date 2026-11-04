@@ -14,6 +14,7 @@
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/cond.hpp>
 #include <boost/capy/test/stream.hpp>
+#include <boost/corosio/delay.hpp>
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/ipv4_address.hpp>
 #include <boost/corosio/ipv6_address.hpp>
@@ -522,6 +523,60 @@ TEST_CASE("Happy Eyeballs: the budget covers every attempt", "[net][connect][tcp
 	CHECK_THAT(std::string(t.error().context), EndsWith("gave up after the 400 ms connect timeout"));
 	CHECK(elapsed >= std::chrono::milliseconds(350));
 	CHECK(elapsed < std::chrono::seconds(10));
+}
+
+TEST_CASE("Happy Eyeballs: the budget ends while the next attempt waits", "[net][connect][tcp][timeout][dns]")
+{
+	skip_unless_dns_seam();
+	skip_unless_linux_loopback();
+	corosio::io_context ioc;
+	tcp_server good(ioc);
+	blackhole hole(ioc, "127.0.0.2", good.port);
+	const auto start = std::chrono::steady_clock::now();
+	auto t = connect_to(ioc,
+	  good.url("ldap", "two-addr-f.test"),
+	  { .timeout = std::chrono::milliseconds(300), .attempt_delay = std::chrono::seconds(20) });
+	REQUIRE_FALSE(t.has_value());
+	CHECK(t.error().code == capy::cond::timeout);
+	CHECK_THAT(std::string(t.error().context), ContainsSubstring(": tcp connect 127.0.0.2:"));
+	CHECK_THAT(std::string(t.error().context), ContainsSubstring("(1 of 2 addresses tried)"));
+	CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(10));
+}
+
+namespace {
+
+auto stop_after(std::stop_source &stop, std::chrono::milliseconds after) -> capy::task<void>
+{
+	co_await corosio::delay(after);
+	stop.request_stop();
+}
+
+}// namespace
+
+TEST_CASE("Happy Eyeballs: stopped while the next attempt waits", "[net][connect][tcp][cancel][dns]")
+{
+	skip_unless_dns_seam();
+	skip_unless_linux_loopback();
+	corosio::io_context ioc;
+	tcp_server good(ioc);
+	blackhole hole(ioc, "127.0.0.2", good.port);
+	auto u = ldap::url::parse(good.url("ldap", "two-addr-g.test"));
+	REQUIRE(u.has_value());
+	std::stop_source stop;
+	outcome<void> stopper;
+	spawn(ioc, stop_after(stop, std::chrono::milliseconds(100)), stopper);
+	outcome<ldap::result<net::transport>> out;
+	const auto start = std::chrono::steady_clock::now();
+	spawn(ioc,
+	  stop.get_token(),
+	  net::connect(ioc, *u, { .timeout = std::chrono::seconds(30), .attempt_delay = std::chrono::seconds(20) }),
+	  out);
+	drive_until(ioc, [&out] { return out.done(); });
+	auto &t = out.get();
+	REQUIRE_FALSE(t.has_value());
+	CHECK(t.error().code == capy::cond::canceled);
+	CHECK_THAT(std::string(t.error().context), ContainsSubstring("(1 of 2 addresses tried)"));
+	CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(10));
 }
 
 TEST_CASE("Happy Eyeballs: address families alternate", "[net][connect]")

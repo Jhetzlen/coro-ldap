@@ -590,6 +590,51 @@ TEST_CASE("chase_search: referral results", "[net][referral]")
 		CHECK(r.error().referrals == std::pmr::vector<std::pmr::string>{ "ldap://a.example" });
 		CHECK(w.asked.size() == 1);
 	}
+	SECTION("over max_targets: the referral's other URIs are not looked at")
+	{
+		w.serve("a.example",
+		  { answer({ done_msg(1,
+			10,
+			"",
+			"",
+			{ "ldap://b.example/ou=people,dc=example,dc=org", "ldap://c.example/ou=people,dc=example,dc=org" }) }) });
+		w.serve("b.example", { answer({ done_msg(1, 51, "", "busy") }) });
+		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_targets = 1 }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == errc::busy);
+		CHECK(r.error().context.starts_with("referral chase (URIs: 1 limit_reached, 1 failed)"));
+		CHECK(w.asked == std::vector<std::pair<std::string, std::size_t>>{ { "b.example", 1 } });
+	}
+	SECTION("an unparseable URI")
+	{
+		w.serve("a.example", { answer({ done_msg(1, 10, "", "", { "foo://x", "ldap://c.example" }) }) });
+		w.refused = { "c.example" };
+		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == errc::referral);
+		CHECK(r.error().context.starts_with("referral chase (URIs: 1 skipped_policy, 1 unparseable)"));
+	}
+	SECTION("a referral without URIs: returned as it is")
+	{
+		w.serve("a.example", { answer({ done_msg(1, 10) }) });
+		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == errc::referral);
+		CHECK_FALSE(r.error().context.contains("referral chase"));
+		CHECK(w.asked.empty());
+	}
+	SECTION("followed within the request's timeout")
+	{
+		w.serve(
+		  "a.example", { answer({ done_msg(1, 10, "", "", { "ldap://b.example/ou=people,dc=example,dc=org" }) }) });
+		w.serve("b.example", { answer({ entry_msg(1, "uid=jdoe,ou=people,dc=example,dc=org", "B"), done_msg(1) }) });
+		auto request = search();
+		request.timeout = std::chrono::seconds(30);
+		auto r = w.run(ldap::chase_search(w.origin.conn, request, w.connector()));
+		REQUIRE(r.has_value());
+		CHECK(r->complete);
+		CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=people,dc=example,dc=org" });
+	}
 	SECTION("other errors are returned as they are")
 	{
 		w.serve("a.example", { answer({ done_msg(1, 50, "", "denied") }) });
@@ -641,6 +686,14 @@ TEST_CASE("chase_compare: referral results", "[net][referral]")
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == errc::referral);
 	}
+	SECTION("other errors are returned as they are")
+	{
+		w.serve("a.example", { answer({ result_msg<ldap::compare_response>(1, 50, "denied") }) });
+		auto r = w.run(ldap::chase_compare(w.origin.conn, request, w.connector()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == errc::insufficient_access_rights);
+		CHECK(w.asked.empty());
+	}
 	w.check_servers();
 }
 
@@ -665,6 +718,50 @@ TEST_CASE("chase_search: a cancellation stops the chase", "[net][referral]")
 	// Stopped before the request to b was sent, and c never asked for.
 	CHECK(w.asked == std::vector<std::pair<std::string, std::size_t>>{ { "b.example", 1 } });
 	CHECK(w.servers["b.example"]->log.received.empty());
+	w.check_servers();
+}
+
+TEST_CASE("chase_search and chase_compare: a cancellation between a referral's URIs", "[net][referral]")
+{
+	world w;
+	w.add("b.example");
+	w.add("c.example");
+	w.add("d.example");
+	w.refused = { "c.example" };
+	std::stop_source stop;
+	w.on_ask = [&w, &stop] {
+		if (w.asked.back().first == "c.example") {
+			stop.request_stop();
+		}
+	};
+
+	SECTION("search: in the referral of a referral's target")
+	{
+		w.serve("a.example", { answer({ done_msg(1, 10, "", "", { "ldap://b.example/dc=example,dc=org" }) }) });
+		w.serve("b.example", { answer({ done_msg(1, 10, "", "", { "ldap://c.example", "ldap://d.example" }) }) });
+		outcome<ldap::result<ldap::chased_search>> out;
+		spawn(w.ioc, stop.get_token(), ldap::chase_search(w.origin.conn, search(), w.connector()), out);
+		drive_until(w.ioc, [&out] { return out.done(); });
+		auto &r = out.get();
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::canceled);
+		CHECK(std::string(r.error().context) == "referral chase");
+	}
+	SECTION("compare")
+	{
+		w.serve("a.example", { answer({ referral_compare(1, { "ldap://c.example", "ldap://d.example" }) }) });
+		const ldap::compare_params request{
+			.entry = ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" }, .attribute = "mail", .value = "x"
+		};
+		outcome<ldap::result<ldap::chased_compare>> out;
+		spawn(w.ioc, stop.get_token(), ldap::chase_compare(w.origin.conn, request, w.connector()), out);
+		drive_until(w.ioc, [&out] { return out.done(); });
+		auto &r = out.get();
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::canceled);
+	}
+	// d is never asked for.
+	CHECK(w.asked.back().first == "c.example");
 	w.check_servers();
 }
 
