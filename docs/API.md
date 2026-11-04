@@ -850,29 +850,29 @@ itself needs only ICU.
   references were not followed); `client_observer::on_referral(server,
   attempt)` hears of each URI. Writes (forwarders and leases),
   `search_stream()` and `who_am_i()` never chase.
-- `jhetz/ldap/sync.hpp` (3pf.5): `ldap::sync::client`, the blocking
-  facade over `ldap::client`. `sync::client(client_options, mr)` owns an
+- `jhetz/ldap/sync.hpp` (3pf.5): `ldap::sync::client`, the blocking facade
+  over `ldap::client`. `sync::client(client_options, mr)` owns an
   io_context and an I/O thread, where the `ldap::client` lives (session
   setup and observer hooks run there). `acquire(acquire_options{}) ->
   result<sync::lease>`; a `sync::lease` has `sync::connection`'s
-  operations (bind, search, `search_paged`, `search_as`, add, modify,
-  ..., `begin_transaction`, `unbind`, `close`), run on the leased
-  connection, plus `server()`, `release()` and `operator bool`. The
-  forwarders `search`, `compare` and `who_am_i`, and the write
-  forwarders `add`, `modify`, `del`, `modify_dn`, `move`, `rename`, block
-  and retry as the async ones, and `chase_search` / `chase_compare`
-  mirror the async client's (referrals as `client_options::referrals`
-  says; the authorizer and `on_referral` run on the I/O thread); no
-  `search_stream` (no blocking stream, as for `sync::connection`). `close()` (from any thread, the I/O thread
-  included) fails waiting and later `acquire()` calls with
+  operations (bind, search, `search_paged`, `search_as`, add, modify, ...,
+  `begin_transaction`, `unbind`, `close`), run on the leased connection,
+  plus `server()`, `release()` and `operator bool`. The forwarders
+  `search`, `compare` and `who_am_i`, and the write forwarders `add`,
+  `modify`, `del`, `modify_dn`, `move`, `rename`, block and retry as the
+  async ones, and `chase_search` / `chase_compare` mirror the async
+  client's (referrals as `client_options::referrals` says; the authorizer
+  and `on_referral` run on the I/O thread); no `search_stream` (no
+  blocking stream, as for `sync::connection`). `close()` (from any thread,
+  the I/O thread included) fails waiting and later `acquire()` calls with
   `not_connected`; `connections()`, `executor()`. A call from the I/O
   thread fails with `would_deadlock` (context `"sync::client"`). The
-  destructor closes the pool (idle connections unbound) and joins the
-  I/O thread; a lease may outlive the client (its connection is closed,
-  its operations fail with `cond::connection_lost`) and keeps the I/O
-  thread until it is destroyed or released.
-  `detail::io_thread` and `detail::connection_api` are the machinery
-  `sync::connection` and `sync::lease` share.
+  destructor closes the pool (idle connections unbound) and joins the I/O
+  thread; a lease may outlive the client (its connection is closed, its
+  operations fail with `cond::connection_lost`) and keeps the I/O thread
+  until it is destroyed or released. `detail::io_thread` and
+  `detail::connection_api` are the machinery `sync::connection` and
+  `sync::lease` share.
 - `client_errc::not_sent` (connection.hpp, "Sent or not"): the operation
   failed before its request reached the writer (connection closed before
   it was submitted, still queued, or held behind a bind), so the server

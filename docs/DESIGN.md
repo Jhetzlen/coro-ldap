@@ -2511,43 +2511,43 @@ decision left open.
 - Write forwarders: `client::add`, `modify`, `del`, `modify_dn`, `move`
   and `rename`, the `connection` names and shapes. No typed `add(dn, T)`
   or `modify<T>`: typed CRUD belongs to a layer over the client and the
-  connection (`ldap::store<T>`, coro-ldap-2cx). Each acquires a shared lease, runs the operation and
-  returns the lease, like the read forwarders, but retries only after
-  `client_errc::not_sent`: the request never reached the connection's
-  writer (refused by a closed connection, still queued behind another
-  PDU, or held behind a bind when the connection closed), so the server
-  never saw it and running it on another connection cannot apply it
-  twice. Every other failure may follow a request the server received,
-  and possibly applied: a connection lost after the writer took the
-  request (`not_connected`, a transport error), a timeout (the server
-  may still apply it), busy or unavailable (an unsolicited Notice of
-  Disconnection fails the outstanding operations with its code even when
-  the server already applied them), so it is returned and the caller
-  decides (reading the entry back, an idempotent change, a transaction).
-  The retry's `acquire()` goes by priority order (no `avoid`): `not_sent`
-  says nothing about the server. `client_state::write<Op>` is the loop,
-  a template like `read<T, Op>`, the operation called once per attempt on
-  the lease, copying the request into each; a forwarder builds its error
-  context only for a moved-from client. A referral result is never
-  chased for a write, whatever `client_options::referrals` says: it
-  fails with `errc::referral` and the URIs in `error::referrals`, as on a
-  connection (a referral means the update was not performed, RFC 4511
-  section 4.1.10). Chasing an update would send it, with the client's
-  credentials, to a server the update's author did not name. UnboundID
-  (`followReferrals`), libldap (`LDAP_OPT_REFERRALS`) and JNDI
-  (`java.naming.referral=follow`) chase writes when asked to; this
-  client keeps never, with no switch, until a use case asks for one.
-  Connection-bound request controls (`transaction_specification`) need a
-  lease, as for the read forwarders. Tests: a write queued on a shared
-  connection behind another lease's 1 MiB AddRequest while that lease
-  closes the connection: the queued write fails `not_sent` and succeeds
-  on a new connection; a connection lost after the server read the
-  request, a timeout, busy, a result code and a referral are each
-  returned with exactly one request seen. The queued write must still be
-  queued when the connection closes, so the AddRequest must not fit in
-  the kernel's buffers while the server reads nothing: the server's end
-  has a small SO_RCVBUF, and the pooled connections are opened by a test
-  connector (`detail::set_connector`, tests only, like
+  connection (`ldap::store<T>`, coro-ldap-2cx). Each acquires a shared
+  lease, runs the operation and returns the lease, like the read
+  forwarders, but retries only after `client_errc::not_sent`: the request
+  never reached the connection's writer (refused by a closed connection,
+  still queued behind another PDU, or held behind a bind when the
+  connection closed), so the server never saw it and running it on another
+  connection cannot apply it twice. Every other failure may follow a
+  request the server received, and possibly applied: a connection lost
+  after the writer took the request (`not_connected`, a transport error),
+  a timeout (the server may still apply it), busy or unavailable (an
+  unsolicited Notice of Disconnection fails the outstanding operations
+  with its code even when the server already applied them), so it is
+  returned and the caller decides (reading the entry back, an idempotent
+  change, a transaction). The retry's `acquire()` goes by priority order
+  (no `avoid`): `not_sent` says nothing about the server.
+  `client_state::write<Op>` is the loop, a template like `read<T, Op>`,
+  the operation called once per attempt on the lease, copying the request
+  into each; a forwarder builds its error context only for a moved-from
+  client. A referral result is never chased for a write, whatever
+  `client_options::referrals` says: it fails with `errc::referral` and the
+  URIs in `error::referrals`, as on a connection (a referral means the
+  update was not performed, RFC 4511 section 4.1.10). Chasing an update
+  would send it, with the client's credentials, to a server the update's
+  author did not name. UnboundID (`followReferrals`), libldap
+  (`LDAP_OPT_REFERRALS`) and JNDI (`java.naming.referral=follow`) chase
+  writes when asked to; this client keeps never, with no switch, until a
+  use case asks for one. Connection-bound request controls
+  (`transaction_specification`) need a lease, as for the read forwarders.
+  Tests: a write queued on a shared connection behind another lease's 1
+  MiB AddRequest while that lease closes the connection: the queued write
+  fails `not_sent` and succeeds on a new connection; a connection lost
+  after the server read the request, a timeout, busy, a result code and a
+  referral are each returned with exactly one request seen. The queued
+  write must still be queued when the connection closes, so the AddRequest
+  must not fit in the kernel's buffers while the server reads nothing: the
+  server's end has a small SO_RCVBUF, and the pooled connections are
+  opened by a test connector (`detail::set_connector`, tests only, like
   `detail::set_jitter`) on a socket with a small SO_SNDBUF set before it
   connects. Setting SO_SNDBUF turns autotuning off, so `tcp_wmem` (whose
   default or maximum may reach several MiB) no longer applies, and the
