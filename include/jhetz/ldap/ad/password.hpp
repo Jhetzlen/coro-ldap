@@ -40,9 +40,11 @@ auto change_password(connection &c, dn user, std::string_view old_password, std:
 auto reset_password(connection &c, dn user, std::string_view new_password) -> boost::capy::task<result<void>>;
 
 // As above on a shared lease of `pool` (client::acquire()), retried once
-// on another connection after client_errc::not_sent, as client's write
-// forwarders are. An acquire() failure is returned as is. The client must
-// outlive the task.
+// after client_errc::not_sent, as client's write forwarders are: the
+// connection it failed on is closed (or being unbound), which acquire()
+// never hands out, so the retry takes another pooled connection or opens a
+// new one. An acquire() failure is returned as is, and so is the retry's
+// outcome. Like acquire(), the tasks do not refer to `pool`.
 auto change_password(client &pool, dn user, std::string_view old_password, std::string_view new_password)
   -> boost::capy::task<result<void>>;
 auto reset_password(client &pool, dn user, std::string_view new_password) -> boost::capy::task<result<void>>;

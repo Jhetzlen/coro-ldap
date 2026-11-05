@@ -109,21 +109,34 @@ namespace {
 		co_return co_await send(c, *p);
 	}
 
-	auto run(client &pool, result<prepared> p) -> capy::task<result<void>>
+	// `first` and `retry` are acquire() tasks of the same client: `retry`
+	// runs only after client_errc::not_sent on the first lease.
+	auto run(capy::task<result<lease>> first, capy::task<result<lease>> retry, result<prepared> p)
+	  -> capy::task<result<void>>
 	{
 		if (!p) {
 			co_return std::unexpected(std::move(p.error()));
 		}
-		for (int attempt = 0;; ++attempt) {
-			auto l = co_await pool.acquire();
+		{
+			auto l = co_await std::move(first);
 			if (!l) {
 				co_return std::unexpected(std::move(l.error()));
 			}
 			auto r = co_await send(l->get(), *p);
-			if (r || attempt != 0 || r.error().code != client_errc::not_sent) {
+			if (r || r.error().code != client_errc::not_sent) {
 				co_return r;
 			}
 		}
+		auto l = co_await std::move(retry);
+		if (!l) {
+			co_return std::unexpected(std::move(l.error()));
+		}
+		co_return co_await send(l->get(), *p);
+	}
+
+	auto run(client &pool, result<prepared> p) -> capy::task<result<void>>
+	{
+		return run(pool.acquire(), pool.acquire(), std::move(p));
 	}
 
 	template<class C> auto send_sync(C &c, const prepared &p) -> result<void>

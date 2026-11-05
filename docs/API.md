@@ -892,8 +892,10 @@ package component `ad`:
   `00000775`) are explained in the error's context (`ad::explain`);
   `error::diagnostic` keeps the server's text. The `client &` overloads
   run on a shared lease and retry once after `client_errc::not_sent`, as
-  the client's write forwarders do. The connection or client must outlive
-  the task.
+  the client's write forwarders do (the connection that failed is closed,
+  so the retry gets another). The connection must outlive the task; the
+  `client &` tasks, like `client::acquire()`'s, do not refer to the
+  client.
 - `jhetz/ldap/ad/sync.hpp` (`jhetz::ldap_ad`): the same calls, blocking,
   over `sync::connection &`, `sync::lease &` and `sync::client &`.
 - `jhetz/ldap/ad/diagnostic.hpp` (`jhetz::ldap`): `ad::explain(error)`,

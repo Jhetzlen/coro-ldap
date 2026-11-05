@@ -2727,12 +2727,16 @@ the context (0000052D, 00000056, 00000005, 00000775) by
 sent, and the core never interprets it. Overloads: `connection &` and
 `client &` (a shared lease, retried once after `not_sent` as the write
 forwarders are: the protection check needs the connection the modify goes
-to, so it cannot go through `client::modify`), and blocking ones in
-`ad/sync.hpp` built on the facade's public calls (`is_open()`,
-`is_tls()`, `security_layer()`, `modify()`), the sync facade having no
-generic "run this task" entry. There is no "detect and dispatch" helper:
-the caller calls the core's RFC 3062 functions or these. Tested against
-the scripted mock (`tests/net/ad_password_tests.cpp`, `sync_tests.cpp`,
+to, so it cannot go through `client::modify`; the connection that failed
+with `not_sent` is closed or being unbound, so the retry's `acquire()`
+never gets it again; both `acquire()` tasks are created before the call
+returns, so, as with the client's own forwarders, the task does not refer
+to the client), and blocking ones in `ad/sync.hpp` built on the facade's
+public calls (`is_open()`, `is_tls()`, `security_layer()`, `modify()`),
+the sync facade having no generic "run this task" entry. There is no
+"detect and dispatch" helper: the caller calls the core's RFC 3062
+functions or these. Tested against the scripted mock
+(`tests/net/ad_password_tests.cpp`, `sync_tests.cpp`,
 `sasl_layer_tests.cpp` with a made-up layer at each level) and a Samba AD
 DC (`integration.samba_ad`: reset, change, a non-BMP password, 0000052D
 and 00000056, plain ldap:// refused, a change and a reset over the NTLM
