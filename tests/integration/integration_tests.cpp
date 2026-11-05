@@ -329,8 +329,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 	corosio::io_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	// slapd offers SCRAM-SHA-256 only with cyrus-sasl's scram plugin installed.
-	auto dse =
-	  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "supportedSASLMechanisms" } }));
+	auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedSASLMechanisms" })));
 	REQUIRE(dse.has_value());
 	REQUIRE(dse->size() == 1);
 	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");
@@ -384,8 +383,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().context == "sasl bind SCRAM-SHA-256: giving up");
 		REQUIRE(c.is_open());
-		auto again =
-		  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "namingContexts" } }));
+		auto again = finish(ioc, c.search(ldap::root_dse({ "namingContexts" })));
 		REQUIRE(again.has_value());
 		CHECK(again->size() == 1);
 		CHECK(finish(ioc, c.who_am_i()) == "");
@@ -404,8 +402,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().context == "sasl bind SCRAM-SHA-256: giving up");
 		REQUIRE(c.is_open());
-		auto again =
-		  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "namingContexts" } }));
+		auto again = finish(ioc, c.search(ldap::root_dse({ "namingContexts" })));
 		REQUIRE(again.has_value());
 		CHECK(again->size() == 1);
 		CHECK(finish(ioc, c.who_am_i()) == "");
@@ -438,8 +435,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256-PLUS (channel binding)", "[integratio
 	auto c = open(ioc, env(over_start_tls ? "JHETZ_LDAP_IT_LDAP" : "JHETZ_LDAP_IT_LDAPS"), o);
 	REQUIRE(c.is_tls());
 	CHECK_FALSE(c.peer_certificate().empty());
-	auto dse =
-	  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "supportedSASLMechanisms" } }));
+	auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedSASLMechanisms" })));
 	REQUIRE(dse.has_value());
 	REQUIRE(dse->size() == 1);
 	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");
@@ -519,8 +515,7 @@ TEST_CASE("integration: SCRAM-SHA-256-PLUS with an Ed25519 server certificate",
 	REQUIRE(std::vector<std::byte>(der.begin(), der.end())
 			== certificate_der(read_text(env("JHETZ_LDAP_IT_SERVER_ED25519_CERT"))));
 	CHECK(c.channel_bindings().tls_server_end_point.empty());
-	auto dse =
-	  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "supportedSASLMechanisms" } }));
+	auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedSASLMechanisms" })));
 	REQUIRE(dse.has_value());
 	REQUIRE(dse->size() == 1);
 	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");
@@ -937,8 +932,7 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 		return !r.has_value() && r.error().code == ldap::errc::no_such_object;
 	};
 
-	auto dse =
-	  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "supportedExtension" } }));
+	auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedExtension" })));
 	REQUIRE(dse.has_value());
 	REQUIRE(dse->size() == 1);
 	const auto *extensions = (*dse)[0].find("supportedExtension");

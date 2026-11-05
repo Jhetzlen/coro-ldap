@@ -157,8 +157,7 @@ TEST_CASE("samba ad: ad::change_password and ad::reset_password", "[samba_ad][pa
 	SECTION("no RFC 3062: the core's password calls are refused")
 	{
 		auto c = open_tls(ioc, start_tls);
-		auto dse =
-		  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "supportedExtension" } }));
+		auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedExtension" })));
 		REQUIRE(dse.has_value());
 		REQUIRE(dse->size() == 1);
 		const auto *extensions = (*dse)[0].find("supportedExtension");

@@ -416,7 +416,7 @@ TEST_CASE("ntlm: TLS is required by default", "[net][sasl][ntlm]")
 	CHECK(r.error().context
 		  == "sasl bind GSS-SPNEGO: NTLM needs a TLS-protected connection (sasl_ntlm_options::require_tls)");
 	// Nothing was sent: the next request is the first.
-	CHECK(m.run(m.conn.search({})).has_value());
+	CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 1);
 	CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));

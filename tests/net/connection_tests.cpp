@@ -172,7 +172,7 @@ TEST_CASE("connection: search defaults", "[net][connection]")
 {
 	mock_ldap m;
 	m.serve({ answer({ done_msg(1) }) });
-	auto r = m.run(m.conn.search({}));
+	auto r = m.run(m.conn.search({ .base = ldap::dn{} }));
 	REQUIRE(r.has_value());
 	CHECK(r->empty());
 	m.check_server();
@@ -207,7 +207,7 @@ TEST_CASE("connection: search result errors", "[net][connection]")
 	CHECK_FALSE(referral.error().matched_dn.has_value());
 
 	// Still usable.
-	CHECK(m.run(m.conn.search({})).has_value());
+	CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
 	m.check_server();
 }
 
@@ -216,28 +216,28 @@ TEST_CASE("connection: requests that cannot be encoded are not sent", "[net][con
 	mock_ldap m;
 	m.serve({ answer({ done_msg(1) }) });
 
-	auto negative = m.run(m.conn.search({ .size_limit = -1 }));
+	auto negative = m.run(m.conn.search({ .base = ldap::dn{}, .size_limit = -1 }));
 	REQUIRE_FALSE(negative.has_value());
 	CHECK(negative.error().code == client_errc::encode_error);
 
-	auto too_long = m.run(m.conn.search(
-	  { .time_limit = std::chrono::seconds(std::int64_t{ std::numeric_limits<std::int32_t>::max() } + 1) }));
+	auto too_long = m.run(m.conn.search({ .base = ldap::dn{},
+	  .time_limit = std::chrono::seconds(std::int64_t{ std::numeric_limits<std::int32_t>::max() } + 1) }));
 	REQUIRE_FALSE(too_long.has_value());
 	CHECK(too_long.error().code == client_errc::encode_error);
 	CHECK_THAT(std::string(too_long.error().context), StartsWith("search \"\": time_limit"));
 
-	auto negative_time = m.run(m.conn.search({ .time_limit = std::chrono::seconds(-1) }));
+	auto negative_time = m.run(m.conn.search({ .base = ldap::dn{}, .time_limit = std::chrono::seconds(-1) }));
 	REQUIRE_FALSE(negative_time.has_value());
 	CHECK(negative_time.error().code == client_errc::encode_error);
 
-	auto empty_filter = m.run(m.conn.search({ .filter = ldap::filter{} }));
+	auto empty_filter = m.run(m.conn.search({ .base = ldap::dn{}, .filter = ldap::filter{} }));
 	REQUIRE_FALSE(empty_filter.has_value());
 	CHECK(empty_filter.error().code == client_errc::invalid_filter);
 
 	CHECK(m.conn.is_open());
 	CHECK(m.log.received.empty());
 	// Failed encodes do not use up message ids: the next request gets 1.
-	CHECK(m.run(m.conn.search({})).has_value());
+	CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 1);
 	CHECK(m.log.received[0].id == 1);
@@ -756,7 +756,7 @@ TEST_CASE("connection: moving connections and streams", "[net][connection]")
 		REQUIRE_FALSE(e.has_value());
 		CHECK(e.error().code == client_errc::not_connected);
 		CHECK(e.error().context == "search");
-		auto nc = m.run(m.conn.search({}));
+		auto nc = m.run(m.conn.search({ .base = ldap::dn{} }));
 		REQUIRE_FALSE(nc.has_value());
 		CHECK(nc.error().code == client_errc::not_connected);
 		CHECK(nc.error().context == "search \"\"");
@@ -816,8 +816,8 @@ TEST_CASE("connection: operations on a moved-from connection", "[net][connection
 	refused(m.run(c.compare({ .entry = who, .attribute = "uid", .value = "jdoe" })),
 	  "compare uid=jdoe,ou=people,dc=example,dc=org");
 	refused(m.run(c.extended({ .name = "1.2.3" })), "extended operation 1.2.3");
-	refused(m.run(c.search_stream({})), "search \"\"");
-	refused(m.run(c.search_paged({}, 10)), "search \"\"");
+	refused(m.run(c.search_stream({ .base = ldap::dn{} })), "search \"\"");
+	refused(m.run(c.search_paged({ .base = ldap::dn{} }, 10)), "search \"\"");
 	refused(m.run(c.start_transaction()), "start transaction");
 	refused(m.run(c.end_transaction(std::pmr::string("txn"))), "end transaction");
 	refused(m.run(c.begin_transaction()), "start transaction");
@@ -962,7 +962,7 @@ TEST_CASE("connection: unbind", "[net][connection]")
 	REQUIRE(m.log.received.size() == 2);
 	CHECK(m.log.received[1] == ldap::message{ 2, ldap::unbind_request{} });
 
-	auto after = m.run(m.conn.search({}));
+	auto after = m.run(m.conn.search({ .base = ldap::dn{} }));
 	REQUIRE_FALSE(after.has_value());
 	CHECK(after.error().code == client_errc::not_sent);
 	CHECK(after.error().context == "search \"\": connection closed");
@@ -1107,7 +1107,7 @@ TEST_CASE("connection: message ids increase per request", "[net][connection]")
 	  answer({ bind_resp(4) }),
 	  step{} });
 	CHECK(m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
-	CHECK(m.run(m.conn.search({})).has_value());
+	CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
 	CHECK(m.run(m.conn.search(people_search())).has_value());
 	CHECK(m.run(m.conn.simple_bind(ldap::dn{}, "")).has_value());
 	CHECK(m.run(m.conn.unbind()).has_value());
@@ -1176,7 +1176,7 @@ TEST_CASE("connection: protocol violations close the connection", "[net][connect
 			CHECK_FALSE(m.conn.is_open());
 			m.check_server();
 
-			auto later = m.run(m.conn.search({}));
+			auto later = m.run(m.conn.search({ .base = ldap::dn{} }));
 			REQUIRE_FALSE(later.has_value());
 			CHECK(later.error().code == client_errc::not_sent);
 			CHECK_THAT(
@@ -1324,7 +1324,7 @@ TEST_CASE("connection: a cancelled search is abandoned", "[net][connection]")
 	  answer({ bind_resp(3) }) });
 	std::stop_source stop;
 	outcome<ldap::result<std::pmr::vector<ldap::entry>>> out;
-	spawn(m.ioc, stop.get_token(), m.conn.search({}), out);
+	spawn(m.ioc, stop.get_token(), m.conn.search({ .base = ldap::dn{} }), out);
 	drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 	REQUIRE(m.log.received.size() == 1);
 	CHECK_FALSE(out.done());
@@ -1356,13 +1356,13 @@ using event_race = std::variant<std::error_code, entries, std::tuple<>>;
 // A search raced against `event`.
 auto search_or(ldap::connection &c, capy::async_event &event) -> capy::task<event_race>
 {
-	co_return co_await capy::when_any(ldap::raceable(c.search({})), event.wait());
+	co_return co_await capy::when_any(ldap::raceable(c.search({ .base = ldap::dn{} })), event.wait());
 }
 
 // A search raced against a timer.
 auto search_or_delay(ldap::connection &c, std::chrono::milliseconds d) -> capy::task<event_race>
 {
-	co_return co_await capy::when_any(ldap::raceable(c.search({})), corosio::delay(d));
+	co_return co_await capy::when_any(ldap::raceable(c.search({ .base = ldap::dn{} })), corosio::delay(d));
 }
 
 using bind_race = std::variant<std::error_code, ldap::result<void>, std::tuple<>>;
@@ -1522,7 +1522,7 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 	SECTION("completes normally; a stop requested afterwards has no effect")
 	{
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1) }) });
-		spawn(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.search({})), out);
+		spawn(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.search({ .base = ldap::dn{} })), out);
 		drive_until(m.ioc, [&out] { return out.done(); });
 		REQUIRE(out.get().has_value());
 		CHECK(out.get()->size() == 1);
@@ -1535,7 +1535,7 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 	SECTION("stopped mid-operation: the operation is abandoned")
 	{
 		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
-		spawn(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.search({})), out);
+		spawn(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.search({ .base = ldap::dn{} })), out);
 		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 		CHECK_FALSE(out.done());
 		cancel.request_stop();
@@ -1550,7 +1550,7 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 	{
 		m.serve({ answer({ bind_resp(1) }) });
 		cancel.request_stop();
-		auto r = m.run(ldap::with_stop(cancel.get_token(), m.conn.search({})));
+		auto r = m.run(ldap::with_stop(cancel.get_token(), m.conn.search({ .base = ldap::dn{} })));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::canceled);
 		CHECK(r.error().context == "search \"\"");
@@ -1565,7 +1565,7 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 	{
 		m.serve({ answer({ bind_resp(1) }) });
 		cancel.request_stop();
-		auto r = m.run(ldap::with_stop(cancel.get_token(), m.conn.search_paged({}, 10)));
+		auto r = m.run(ldap::with_stop(cancel.get_token(), m.conn.search_paged({ .base = ldap::dn{} }, 10)));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::canceled);
 		CHECK(r.error().context == "search \"\"");
@@ -1605,7 +1605,7 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 		CHECK(r.error().code == ldap::cond::canceled);
 		CHECK(r.error().context == "bind cn=admin,dc=example,dc=org");
 		CHECK(m.conn.is_open());
-		CHECK(m.run(m.conn.search({})).has_value());
+		CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 1);
 		CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));
@@ -1614,7 +1614,8 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 	{
 		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
 		std::stop_source outer;
-		spawn(m.ioc, outer.get_token(), ldap::with_stop(cancel.get_token(), m.conn.search({})), out);
+		spawn(
+		  m.ioc, outer.get_token(), ldap::with_stop(cancel.get_token(), m.conn.search({ .base = ldap::dn{} })), out);
 		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 		outer.request_stop();
 		drive_until(m.ioc, [&out] { return out.done(); });
@@ -1663,7 +1664,8 @@ TEST_CASE("with_stop: stopped from another thread while the io_context runs", "[
 		outcome<entries> out;
 		mock_ldap m(options);
 		m.serve({ step{}, step{}, answer({ bind_resp(3) }) });
-		spawn(m.ioc, then_stop_ioc(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.search({}))), out);
+		spawn(
+		  m.ioc, then_stop_ioc(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.search({ .base = ldap::dn{} }))), out);
 		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 		REQUIRE_FALSE(out.done());
 
@@ -1730,7 +1732,7 @@ TEST_CASE("connection: timeouts abandon the operation", "[net][connection][mux][
 		mock_ldap m;
 		m.serve({ step{}, step{} });// reads the search and the abandon, answers nothing
 		const auto start = std::chrono::steady_clock::now();
-		auto r = m.run(m.conn.search({ .timeout = std::chrono::milliseconds(100) }));
+		auto r = m.run(m.conn.search({ .base = ldap::dn{}, .timeout = std::chrono::milliseconds(100) }));
 		const auto elapsed = std::chrono::steady_clock::now() - start;
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == capy::cond::timeout);
@@ -1752,7 +1754,7 @@ TEST_CASE("connection: timeouts abandon the operation", "[net][connection][mux][
 		CHECK(r.error().code == ldap::cond::timeout);
 		CHECK(r.error().context == "delete cn=x,dc=example,dc=org (abandoned)");
 		// A search that is answered in time is unaffected.
-		CHECK(m.run(m.conn.search({})).has_value());
+		CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 3);
 		CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
@@ -1902,7 +1904,7 @@ TEST_CASE("connection: a notice of disconnection fails every outstanding operati
 	CHECK(search.get().error().diagnostic == "too busy");
 	CHECK(search.get().error().context == "search ou=people,dc=example,dc=org: notice of disconnection");
 	CHECK_FALSE(m.conn.is_open());
-	auto later = m.run(m.conn.search({}));
+	auto later = m.run(m.conn.search({ .base = ldap::dn{} }));
 	REQUIRE_FALSE(later.has_value());
 	CHECK(later.error().code == client_errc::not_sent);
 	CHECK_THAT(std::string(later.error().context), ContainsSubstring("notice of disconnection"));
@@ -2261,7 +2263,7 @@ TEST_CASE("RFC 4511 4.11: a bind that is given up on is not abandoned", "[net][c
 		CHECK_THAT(m.log.error, StartsWith("server read: "));
 		REQUIRE(m.log.received.size() == 1);
 		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
-		auto later = m.run(m.conn.search({}));
+		auto later = m.run(m.conn.search({ .base = ldap::dn{} }));
 		REQUIRE_FALSE(later.has_value());
 		CHECK_THAT(std::string(later.error().context), ContainsSubstring("cannot be abandoned"));
 	};
@@ -2322,7 +2324,7 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 		outcome<ldap::result<std::pmr::vector<ldap::entry>>> second;
 		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
 		spawn(m.ioc, m.conn.search(people_search()), first);
-		spawn(m.ioc, m.conn.search({}), second);
+		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), second);
 		drive_until(m.ioc, [&] { return bind.done() && first.done() && second.done(); });
 		CHECK(bind.get().has_value());
 		CHECK(first.get().has_value());
@@ -2348,7 +2350,7 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 		CHECK(bind.get().has_value());
 		REQUIRE_FALSE(cancelled.get().has_value());
 		CHECK(cancelled.get().error().code == ldap::cond::canceled);
-		CHECK(m.run(m.conn.search({})).has_value());
+		CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 2);
 		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
@@ -2413,7 +2415,7 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 		CHECK(second.get().error().code == ldap::cond::canceled);
 		CHECK(second.get().error().context == "bind \"\"");
 		CHECK(m.conn.is_open());
-		CHECK(m.run(m.conn.search({})).has_value());
+		CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 2);// the stopped bind was never sent
 		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
@@ -2451,7 +2453,7 @@ TEST_CASE("RFC 4511 4.1.1: ids still in use are skipped after wrapping", "[net][
 		// Reads the search (id 1) and leaves it open; answers two deletes,
 		// then ends the search.
 		m.serve({ step{}, answer({ del_resp(ldap::max_int) }), answer({ del_resp(2), done_msg(1) }) });
-		auto s = m.run(m.conn.search_stream({}));
+		auto s = m.run(m.conn.search_stream({ .base = ldap::dn{} }));
 		REQUIRE(s.has_value());
 		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 		ldap::detail::set_next_message_id(m.conn, ldap::max_int);
@@ -2473,7 +2475,7 @@ TEST_CASE("RFC 4511 4.1.1: ids still in use are skipped after wrapping", "[net][
 		m.serve({ step{}, step{}, answer({ del_resp(ldap::max_int) }), answer({ del_resp(2) }) });
 		std::stop_source stop;
 		outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
-		spawn(m.ioc, stop.get_token(), m.conn.search({}), search);
+		spawn(m.ioc, stop.get_token(), m.conn.search({ .base = ldap::dn{} }), search);
 		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 		stop.request_stop();
 		drive_until(m.ioc, [&] { return search.done() && m.log.received.size() == 2; });

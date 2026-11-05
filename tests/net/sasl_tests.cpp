@@ -280,7 +280,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		outcome<ldap::result<void>> bind;
 		outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
 		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
-		spawn(m.ioc, m.conn.search({}), search);// id 2, held
+		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
 		drive_until(m.ioc, [&] { return bind.done() && search.done(); });
 		REQUIRE_FALSE(bind.get().has_value());
 		CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
@@ -302,7 +302,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		outcome<ldap::result<void>> bind;
 		outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
 		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
-		spawn(m.ioc, m.conn.search({}), search);// id 2, held
+		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
 		drive_until(m.ioc, [&] { return bind.done() && search.done(); });
 		REQUIRE_FALSE(bind.get().has_value());
 		CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
@@ -379,7 +379,7 @@ TEST_CASE("sasl: requests started during the exchange wait for its end", "[net][
 	outcome<ldap::result<void>> bind;
 	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
 	spawn(m.ioc, m.conn.sasl_bind(mech), bind);
-	spawn(m.ioc, m.conn.search({}), search);// id 2, held
+	spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
 	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
 	CHECK(bind.get().has_value());
 	CHECK(search.get().has_value());
@@ -402,7 +402,7 @@ TEST_CASE("sasl: a failed exchange is aborted before held requests are sent", "[
 	outcome<ldap::result<void>> bind;
 	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
 	spawn(m.ioc, m.conn.sasl_bind(mech), bind);
-	spawn(m.ioc, m.conn.search({}), search);// id 2, held
+	spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
 	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
 	REQUIRE_FALSE(bind.get().has_value());
 	CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
@@ -444,7 +444,7 @@ TEST_CASE("sasl: an abort without an answer closes the connection", "[net][sasl]
 		m.serve({ answer({ sasl_resp(1, 14, "bad") }), step{}, client_hangs_up() });
 		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 		// id 2, held; its own timeout is longer, so the abort's ends it.
-		spawn(m.ioc, m.conn.search({ .timeout = std::chrono::seconds(10) }), search);
+		spawn(m.ioc, m.conn.search({ .base = ldap::dn{}, .timeout = std::chrono::seconds(10) }), search);
 		drive_until(m.ioc, [&] { return bind.done() && search.done(); });
 		check(m, bind, search);
 	}
@@ -454,7 +454,7 @@ TEST_CASE("sasl: an abort without an answer closes the connection", "[net][sasl]
 		m.serve({ answer({ sasl_resp(1, 14, "bad") }), step{}, client_hangs_up() });
 		std::stop_source stop;
 		spawn(m.ioc, stop.get_token(), m.conn.sasl_bind(mech), bind);
-		spawn(m.ioc, m.conn.search({}), search);// id 2, held
+		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 		CHECK_FALSE(bind.done());
 		stop.request_stop();
@@ -475,7 +475,7 @@ TEST_CASE("sasl: a mechanism that fails to start sends nothing", "[net][sasl]")
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().context == "sasl bind X-ECHO: no credentials");
 	CHECK(m.conn.is_open());
-	CHECK(m.run(m.conn.search({})).has_value());
+	CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 1);
 	CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));
@@ -618,7 +618,7 @@ TEST_CASE("sasl: a timeout or cancellation gives up on an offloaded step", "[net
 		// The step still runs, with what it owns: the mechanism can go.
 		mech.reset();
 		CHECK(gate->finished == 0);
-		CHECK(m.run(m.conn.search({})).has_value());
+		CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 1);
 		CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));
@@ -751,7 +751,7 @@ TEST_CASE("sasl: an offloaded step needs locking_mode::safe", "[net][sasl][offlo
 	CHECK_THAT(std::string(r.error().context), ContainsSubstring("locking_mode::safe"));
 	CHECK(mech.gate->started == 0);
 	CHECK(m.conn.is_open());
-	CHECK(m.run(m.conn.search({})).has_value());
+	CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 1);
 	CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));

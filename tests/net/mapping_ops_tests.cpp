@@ -280,13 +280,13 @@ TEST_CASE("typed: schema_check::on_first_use", "[net][mapping][schema]")
 	  answer({ account_entry(3, "a", "1000"), done_msg(3) }),
 	  answer({ done_msg(4) }) });
 	// The first typed search loads and checks the schema, then runs.
-	auto first = m.run(m.conn.search_as<account>({}));
+	auto first = m.run(m.conn.search_as<account>({ .base = ldap::dn{} }));
 	REQUIRE(first.has_value());
 	CHECK(first->size() == 1);
 	// The second one does neither again.
-	CHECK(m.run(m.conn.search_as<account>({})).has_value());
+	CHECK(m.run(m.conn.search_as<account>({ .base = ldap::dn{} })).has_value());
 	// A type that does not match fails before anything is sent.
-	auto bad = m.run(m.conn.search_as<mismatched>({}));
+	auto bad = m.run(m.conn.search_as<mismatched>({ .base = ldap::dn{} }));
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == ldap::client_errc::schema_mismatch);
 	CHECK_THAT(std::string(bad.error().context), Catch::Matchers::ContainsSubstring("error: attribute uid: syntax"));

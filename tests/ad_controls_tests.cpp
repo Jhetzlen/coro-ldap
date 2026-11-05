@@ -36,7 +36,7 @@ TEST_CASE("ad::show_deleted: the control (MS-ADTS 3.1.1.3.4.1.14)", "[ad][contro
 
 TEST_CASE("ad::show_deleted: in any operation's controls", "[ad][controls]")
 {
-	const ldap::search_params search{ .controls = { ad::show_deleted{}, ldap::manage_dsa_it{} } };
+	const ldap::search_params search{ .base = ldap::dn{}, .controls = { ad::show_deleted{}, ldap::manage_dsa_it{} } };
 	REQUIRE(search.controls.size() == 2);
 	CHECK(std::get<ldap::control>(search.controls[0]).type == ad::show_deleted_oid);
 

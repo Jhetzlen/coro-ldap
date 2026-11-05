@@ -24,8 +24,7 @@ namespace {
 	auto load_schema_impl(impl_ref self) -> capy::task<result<server_schema>>
 	{
 		const std::string context = "load schema";
-		auto root =
-		  co_await read_one(self, { .scope = search_scope::base_object, .attributes = { "subschemaSubentry" } });
+		auto root = co_await read_one(self, root_dse({ "subschemaSubentry" }));
 		if (!root) {
 			co_return std::unexpected(detail::with_context(std::move(root.error()), context));
 		}

@@ -64,7 +64,7 @@ TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 	CHECK(c.who_am_i() == "dn:cn=me");
 	REQUIRE(c.unbind().has_value());
 	CHECK_FALSE(c.is_open());
-	auto after = c.search({});
+	auto after = c.search({ .base = ldap::dn{} });
 	REQUIRE_FALSE(after.has_value());
 	CHECK(after.error().code == ldap::client_errc::not_sent);
 }

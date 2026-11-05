@@ -230,6 +230,21 @@ with `ldap::mod::add / remove / replace / increment`), `del_params`,
 client-side `.timeout`. Values are checked when the request is encoded,
 before anything is sent.
 
+`search_params::base` has no default: its type, `search_base`, is an
+`ldap::dn` without a default constructor (implicitly made from one), so a
+designated initializer that leaves `.base` out does not compile
+(`compile/search_without_base.cpp`), and a search of the whole server names
+the empty DN (`.base = ldap::dn{}`). An empty default with whole_subtree
+scope searched the whole server whenever `.base` was forgotten; libldap,
+UnboundID, go-ldap and .NET take the base as a required argument too. A
+run-time refusal of an empty base was rejected: the empty DN is a valid
+base (the root DSE, or a server whose naming context is ""), and the
+compiler catches the omission earlier. `ldap::root_dse(attributes)` builds
+the root DSE read (RFC 4512 section 5.1: the empty DN, base_object,
+`(objectClass=*)`, `"*"` and `"+"` by default), so it stays one call:
+`co_await c.search(ldap::root_dse({"namingContexts"}))`. The other
+defaults stay (whole_subtree, `(objectClass=*)`).
+
 Typed controls (step 6, `controls.hpp`): `paged`, `manage_dsa_it`,
 `relax_rules`, `proxied_authorization`, `server_side_sort`, `assertion`,
 `pre_read`, `post_read`, `sync_request`, `matched_values`,

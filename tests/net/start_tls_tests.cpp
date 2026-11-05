@@ -246,7 +246,7 @@ TEST_CASE("start_tls: is_tls() is false once the server drops the connection", "
 	REQUIRE(finish(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
 	drive_until(f.ioc, [&f] { return f.server.done(); });
 	CHECK_THAT(f.server.get(), IsEmpty());
-	auto r = finish(f.ioc, c.search({}));
+	auto r = finish(f.ioc, c.search({ .base = ldap::dn{} }));
 	REQUIRE_FALSE(r.has_value());
 	CHECK_FALSE(c.is_open());
 	CHECK_FALSE(c.is_tls());
@@ -335,7 +335,7 @@ TEST_CASE("start_tls: a failed allocation in the handshake's setup closes the co
 		CHECK_THROWS_AS(tls.get(), std::bad_alloc);
 		CHECK_FALSE(m.conn.is_open());
 		CHECK_FALSE(m.conn.is_tls());
-		auto later = m.run(m.conn.search({}));
+		auto later = m.run(m.conn.search({ .base = ldap::dn{} }));
 		REQUIRE_FALSE(later.has_value());
 		CHECK(later.error().code == ldap::client_errc::not_sent);
 		CHECK_THAT(std::string(later.error().context), ContainsSubstring(": connection closed by an earlier error: "));
@@ -389,7 +389,7 @@ TEST_CASE("start_tls: another exception in the handshake's setup closes the conn
 		CHECK_THROWS_AS(tls.get(), std::runtime_error);
 		CHECK_FALSE(m.conn.is_open());
 		CHECK_FALSE(m.conn.is_tls());
-		auto later = m.run(m.conn.search({}));
+		auto later = m.run(m.conn.search({ .base = ldap::dn{} }));
 		REQUIRE_FALSE(later.has_value());
 		CHECK(later.error().code == ldap::client_errc::not_sent);
 		CHECK_THAT(std::string(later.error().context), ContainsSubstring("StartTLS aborted by an exception"));
@@ -488,7 +488,7 @@ TEST_CASE("start_tls: the server refuses", "[net][starttls]")
 	// Still usable, in clear.
 	CHECK(c.is_open());
 	CHECK_FALSE(c.is_tls());
-	CHECK(finish(f.ioc, c.search({})).has_value());
+	CHECK(finish(f.ioc, c.search({ .base = ldap::dn{} })).has_value());
 	c.close();
 	drive(f.ioc);
 	CHECK_THAT(f.server.get(), IsEmpty());
@@ -505,7 +505,7 @@ TEST_CASE("start_tls: bytes before the handshake are refused", "[net][starttls]"
 	CHECK_THAT(std::string(r.error().context), ContainsSubstring("arrived before the TLS handshake"));
 	CHECK_FALSE(c.is_open());
 	CHECK_FALSE(c.is_tls());
-	auto later = finish(f.ioc, c.search({}));
+	auto later = finish(f.ioc, c.search({ .base = ldap::dn{} }));
 	REQUIRE_FALSE(later.has_value());
 	CHECK(later.error().code == ldap::client_errc::not_sent);
 	drive(f.ioc);
@@ -552,7 +552,7 @@ TEST_CASE("start_tls: refused while an operation is outstanding", "[net][starttl
 	mock_ldap m;
 	m.serve({ step{} });// reads the search, never answers
 	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
-	spawn(m.ioc, m.conn.search({}), search);
+	spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);
 	drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 	auto r = m.run(m.conn.start_tls());
 	REQUIRE_FALSE(r.has_value());
@@ -569,8 +569,8 @@ TEST_CASE("start_tls: the refusal counts the outstanding requests", "[net][start
 	m.serve({ step{}, step{} });// reads both searches, never answers
 	outcome<ldap::result<std::pmr::vector<ldap::entry>>> first;
 	outcome<ldap::result<std::pmr::vector<ldap::entry>>> second;
-	spawn(m.ioc, m.conn.search({}), first);
-	spawn(m.ioc, m.conn.search({}), second);
+	spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), first);
+	spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), second);
 	drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 	auto r = m.run(m.conn.start_tls());
 	REQUIRE_FALSE(r.has_value());
@@ -853,9 +853,9 @@ TEST_CASE("RFC 4513 3.1.5: the schema read in clear is read again after StartTLS
 	outcome<std::string> server;
 	spawn(f.ioc, serve_directory(f.acc, server_context(localhost_cert()), log), server);
 	auto c = f.connect(trusting({ .schema_check = ldap::schema_check::on_first_use }));
-	REQUIRE(finish(f.ioc, c.search_as<tls_account>({})).has_value());
+	REQUIRE(finish(f.ioc, c.search_as<tls_account>({ .base = ldap::dn{} })).has_value());
 	REQUIRE(finish(f.ioc, c.start_tls(trusting().tls)).has_value());
-	REQUIRE(finish(f.ioc, c.search_as<tls_account>({})).has_value());
+	REQUIRE(finish(f.ioc, c.search_as<tls_account>({ .base = ldap::dn{} })).has_value());
 	c.close();
 	drive_until(f.ioc, [&server] { return server.done(); });
 	CHECK_THAT(server.get(), IsEmpty());

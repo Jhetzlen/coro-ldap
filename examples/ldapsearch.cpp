@@ -295,7 +295,7 @@ auto run(corosio::io_context &ioc, options o) -> capy::task<int>
 		co_return 2;
 	}
 
-	ldap::search_params params;
+	ldap::search_params params{ .base = ldap::dn{} };
 	if (o.base) {
 		auto d = ldap::dn::parse(*o.base);
 		if (!d) {

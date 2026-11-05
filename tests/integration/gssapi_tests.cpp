@@ -75,8 +75,7 @@ void require_kerberos()
 	}
 	corosio::io_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
-	auto dse =
-	  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "supportedSASLMechanisms" } }));
+	auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedSASLMechanisms" })));
 	REQUIRE(dse.has_value());
 	REQUIRE(dse->size() == 1);
 	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");

@@ -141,7 +141,7 @@ namespace {
 	// there, its answer, and its depth.
 	template<class Params, class Value> struct reached
 	{
-		Params request{};
+		Params request;
 		Value value{};
 		std::size_t depth = 0;
 	};
@@ -249,7 +249,7 @@ namespace {
 	template<class Params> struct prepared
 	{
 		url server{};
-		Params request{};
+		Params request;
 		visit_key key{};
 	};
 

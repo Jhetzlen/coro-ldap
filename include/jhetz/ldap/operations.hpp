@@ -37,13 +37,23 @@ namespace jhetz::ldap {
 // also means no limit.
 inline constexpr std::chrono::milliseconds no_timeout = std::chrono::milliseconds::max();
 
+// search_params::base: a dn with no default constructor, so a search names
+// its base (ldap::dn{} for the root DSE, or for a search of the whole
+// server).
+struct search_base : dn
+{
+	// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor): `.base = ldap::dn{...}`
+	search_base(dn base) : dn(std::move(base)) {}
+};
+
 // A search, as a plain aggregate for designated initializers (DESIGN.md
-// section 3). Values are validated when the request is encoded: a negative
+// section 3). `base` is required: `search_params{.filter = f}` does not
+// compile. Values are validated when the request is encoded: a negative
 // size_limit or time_limit, or a time_limit above max_int seconds, fails with
 // encode_error, an empty filter with invalid_filter, before anything is sent.
 struct search_params
 {
-	dn base{};// the empty DN is the root DSE
+	search_base base;// ldap::dn{} is the root DSE
 	search_scope scope = search_scope::whole_subtree;
 	ldap::filter filter = filters::attr("objectClass").present();
 	// Attribute selectors as sent: descriptions, "*" (all user attributes),
@@ -69,6 +79,14 @@ struct search_params
 	// dropped).
 	bool intermediate_responses = false;
 };
+
+// The search reading the root DSE (RFC 4512 section 5.1): the empty DN,
+// base_object scope, (objectClass=*), and `attributes` ("*" and "+" by
+// default: the user and the operational attributes).
+[[nodiscard]] inline auto root_dse(string_list attributes = { "*", "+" }) -> search_params
+{
+	return { .base = dn{}, .scope = search_scope::base_object, .attributes = std::move(attributes) };
+}
 
 // The other operations (step 6), as plain aggregates like search_params.
 // `controls` and `timeout` mean the same everywhere: request controls, and

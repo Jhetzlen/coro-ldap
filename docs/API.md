@@ -229,7 +229,8 @@ itself needs only ICU.
   - `jhetz/ldap/operations.hpp` (part of the codec, `jhetz::ldap`): the
     request aggregates (`search_params`, `add_params`, `modify_params`,
     `del_params`, `modify_dn_params`, `compare_params`, `extended_params`,
-    `password_modify_params`), the `ldap::mod` builders, `response`
+    `password_modify_params`; `search_base`, the type of the required
+    `search_params::base`), `root_dse()`, the `ldap::mod` builders, `response`
     (`{message_id, controls}`; breaking: `message_id` is new and comes
     first, as in the LDAPMessage), `intermediate`, `extended_result`,
     `end_transaction_result`, and the OIDs `who_am_i_oid` and
@@ -260,7 +261,11 @@ itself needs only ICU.
   and `unbind()`. `search_params` is a plain aggregate for designated
   initializers (`.base`, `.scope`, `.filter`, `.attributes`, `.deref`,
   `.size_limit`, `.time_limit`, `.types_only`, `.controls`, `.timeout`,
-  `.intermediate_responses`). `.timeout = ldap::no_timeout` (in any
+  `.intermediate_responses`); `.base` is required (a `search_base`, an
+  `ldap::dn` with no default constructor: leaving it out does not compile,
+  and `.base = ldap::dn{}` searches from the empty DN), and
+  `ldap::root_dse(attributes = {"*", "+"})` is the root DSE read (base_object
+  on the empty DN). `.timeout = ldap::no_timeout` (in any
   request) lifts the client-side limit for that operation, whatever
   `operation_timeout` says.
   Multiplexed: any number of operations may be outstanding (concurrent

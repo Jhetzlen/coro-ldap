@@ -17,7 +17,9 @@ auto main() -> int
 	const ldap::add_params add{ .controls = { ldap::post_read{}, ldap::relax_rules{} } };
 	const ldap::del_params del{ .controls = { ldap::pre_read{}, ldap::control{ "1.2.3", false } } };
 	const ldap::modify_params modify{ .controls = { ldap::pre_read{}, ldap::post_read{}, ldap::assertion{} } };
-	const ldap::search_params search{ .controls = { ldap::paged{ .page_size = 10 }, ldap::server_side_sort{} } };
+	const ldap::search_params search{ .base = ldap::dn{},
+		.controls = { ldap::paged{ .page_size = 10 }, ldap::server_side_sort{} } };
+	const ldap::search_params dse = ldap::root_dse({ "namingContexts" });
 	const ldap::extended_params extended{ .controls = { ldap::proxied_authorization{ "dn:cn=x" } } };
 	(void)f;
 	(void)g;
@@ -25,6 +27,7 @@ auto main() -> int
 	(void)del;
 	(void)modify;
 	(void)search;
+	(void)dse;
 	(void)extended;
 	return static_cast<int>(changes.size());
 }

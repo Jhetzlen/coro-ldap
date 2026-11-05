@@ -495,6 +495,24 @@ TEST_CASE("operations: a response of the wrong type is a protocol error", "[net]
 	CHECK_FALSE(m.conn.is_open());
 }
 
+TEST_CASE("operations: root_dse() reads the root DSE", "[net][operations]")
+{
+	mock_ldap m;
+	m.serve({ answer({ entry_msg(1, "", "root"), done_msg(1) }) });
+	auto r = m.run(m.conn.search(ldap::root_dse({ "namingContexts" })));
+	REQUIRE(r.has_value());
+	REQUIRE(r->size() == 1);
+	CHECK((*r)[0].dn.empty());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 1);
+	const auto &sent = std::get<ldap::search_request>(m.log.received[0].op);
+	CHECK(sent.base_object.empty());
+	CHECK(sent.scope == ldap::search_scope::base_object);
+	CHECK(sent.filter == ldap::filters::attr("objectClass").present());
+	CHECK(sent.attributes == ldap::string_list{ "namingContexts" });
+	CHECK(ldap::root_dse().attributes == ldap::string_list{ "*", "+" });
+}
+
 // ---------------------------------------------------------------- controls
 
 TEST_CASE("operations: typed controls on the wire", "[net][operations][controls]")
@@ -503,6 +521,7 @@ TEST_CASE("operations: typed controls on the wire", "[net][operations][controls]
 	m.serve({ answer({ done_msg(1) }) });
 	REQUIRE(
 	  m.run(m.conn.search({
+			  .base = ldap::dn{},
 			  .controls = { ldap::proxied_authorization{ "dn:uid=jdoe,ou=people,dc=example,dc=org" },
 				ldap::manage_dsa_it{ .critical = true },
 				ldap::paged{ .page_size = 10, .cookie = "c" },
@@ -518,7 +537,7 @@ TEST_CASE("operations: typed controls on the wire", "[net][operations][controls]
 	CHECK(cs[2] == *ldap::encode_paged_results({ 10, "c" }));
 	CHECK(cs[3] == ldap::control{ "1.2.3.4", false, "raw" });
 
-	auto bad = m.run(m.conn.search({ .controls = { ldap::paged{ .page_size = -1 } } }));
+	auto bad = m.run(m.conn.search({ .base = ldap::dn{}, .controls = { ldap::paged{ .page_size = -1 } } }));
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == client_errc::encode_error);
 }
@@ -627,7 +646,7 @@ TEST_CASE("operations: server side sort result of a search", "[net][operations][
 	CHECK(m.log.received[0].controls[0] == ldap::to_control(by_cn).value());
 
 	// Invalid typed controls fail before anything is sent.
-	auto no_keys = m.run(m.conn.search({ .controls = { ldap::server_side_sort{} } }));
+	auto no_keys = m.run(m.conn.search({ .base = ldap::dn{}, .controls = { ldap::server_side_sort{} } }));
 	REQUIRE_FALSE(no_keys.has_value());
 	CHECK(no_keys.error().code == client_errc::encode_error);
 	auto no_filter = m.run(m.conn.del({ .entry = jdoe, .controls = { ldap::assertion{} } }));
@@ -663,9 +682,9 @@ TEST_CASE("operations: matched values on a search", "[net][operations][controls]
 	CHECK(ldap::decode_matched_values(sent).value() == only_jdoe);
 
 	// An item RFC 3876 excludes fails before anything is sent.
-	auto bad = m.run(m.conn.search(
-	  { .controls = { ldap::matched_values{ .values_return_filter = { ldap::filters::attr("member") == jdoe.to_string()
-																	  || ldap::filters::attr("cn") == "x" } } } }));
+	auto bad = m.run(m.conn.search({ .base = ldap::dn{},
+	  .controls = { ldap::matched_values{ .values_return_filter = { ldap::filters::attr("member") == jdoe.to_string()
+																	|| ldap::filters::attr("cn") == "x" } } } }));
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == client_errc::invalid_filter);
 	CHECK_THAT(std::string(bad.error().context),
@@ -733,7 +752,7 @@ TEST_CASE("operations: a virtual list view window", "[net][operations][controls]
 	CHECK(ldap::decode_virtual_list_view(m.log.received[1].controls.at(1)).value() == beyond);
 
 	// Without a sort control nothing is sent.
-	auto alone = m.run(m.conn.search({ .controls = { around_second } }));
+	auto alone = m.run(m.conn.search({ .base = ldap::dn{}, .controls = { around_second } }));
 	REQUIRE_FALSE(alone.has_value());
 	CHECK(alone.error().code == client_errc::encode_error);
 	CHECK_THAT(
