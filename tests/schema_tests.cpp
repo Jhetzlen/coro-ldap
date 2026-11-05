@@ -1,3 +1,4 @@
+#include "jhetz/ldap/ad/syntax.hpp"
 #include "jhetz/ldap/schema.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -447,7 +448,7 @@ TEST_CASE("schema: a syntax mismatch quotes the server's SYNTAX cut", "[schema][
 	CHECK(rep.issues[0].what == ldap::schema_issue::kind::syntax_mismatch);
 	CHECK(rep.issues[0].detail
 		  == "syntax " + oid.substr(0, 64) + "... is not one the member's type reads (" + ldap::syntax::integer + ", "
-			   + ldap::syntax::numeric_string + ", " + ldap::syntax::ad_large_integer + ")");
+			   + ldap::syntax::numeric_string + ", " + ldap::ad::large_integer_syntax + ")");
 }
 
 namespace {

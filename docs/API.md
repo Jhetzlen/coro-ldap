@@ -923,6 +923,10 @@ package component `ad`:
   write pwdLastSet 0 / -1; and `ad::filetime_clock::duration` members map
   the negative intervals (maxPwdAge, lockoutDuration; `ad::forever` for
   -9223372036854775808). `std::int64_t` members read any 906 attribute raw.
+- `jhetz/ldap/ad/syntax.hpp` (`jhetz::ldap`): `ad::large_integer_syntax`,
+  the Large Integer syntax OID (1.2.840.113556.1.4.906), which
+  `validate<T>` accepts for signed integers of 64 bits or more and the
+  FILETIME types.
 
 ## Memory
 

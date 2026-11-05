@@ -1697,7 +1697,7 @@ defined on the server". The cardinality and MUST checks are
 warnings (`schema_issue::is_error() == false`), the others are errors.
 Syntaxes per type come from `value_syntaxes<T>` (built in: integers →
 INTEGER / NumericString, and also AD Large Integer
-(`syntax::ad_large_integer`, 1.2.840.113556.1.4.906) for signed integers of
+(`ad::large_integer_syntax`, 1.2.840.113556.1.4.906) for signed integers of
 64 bits or more: a 32-bit or unsigned member could not hold its values, so
 it gets a `syntax_mismatch` rather than a conversion failure on the first
 large or negative value; `ad::filetime_clock` time points and durations →
@@ -2685,10 +2685,10 @@ Layout:
 
 - Codec-level AD code (no network) is in `jhetz::ldap`: headers under
   `include/jhetz/ldap/ad/`, sources under `src/ad/`. `ad/filetime.hpp`
-  (the FILETIME clock and its `value_traits`, section 4) and
-  `ad/password_value.hpp` (the `unicodePwd` value) and
-  `ad/diagnostic.hpp` (`explain`). These headers are
-  installed with the codec-only package too.
+  (the FILETIME clock and its `value_traits`, section 4),
+  `ad/syntax.hpp` (AD's syntax OIDs), `ad/password_value.hpp` (the
+  `unicodePwd` value) and `ad/diagnostic.hpp` (`explain`). These headers
+  are installed with the codec-only package too.
 - AD operations that need the network go in the target `jhetz::ldap_ad`
   (export name `ldap_ad`, package component `ad`), sources under `src/ad/`
   next to the codec's, their headers under `include/jhetz/ldap/ad/` too,
@@ -2745,6 +2745,18 @@ refused, a change and a reset over the NTLM layer (integrity and
 confidentiality) on plain ldap://, an NTLM bind without a layer refused,
 `ldap::client`, `sync::connection`, and the core's RFC 3062 calls refused
 by Samba).
+
+What stays in the core (the audit of AD mentions outside `ad/`):
+interop notes on how AD and Samba behave as servers (quoted schema OIDs,
+MUSTs AD fills in, `member;range=` names, account lockout and the
+client's bind backoff, channel binding and SASL layer policy), the NTLM
+mechanism's own rules (no layer over TLS, sealing when only signing is
+negotiated, its FILETIME timestamp), the RFC 2696 and RFC 2891 control
+OIDs that sit in Microsoft's arc, and `validate<T>`'s acceptance of Large
+Integer for signed integers of 64 bits or more: that is the core's
+mapping of its own types, and a type has one `value_syntaxes`, so the AD
+layer could not add it. The OID itself is public only as
+`ad::large_integer_syntax`.
 
 No detection: the library does not tell AD from other servers (no
 reading of supportedCapabilities, no AD DS / AD LDS edition). The caller

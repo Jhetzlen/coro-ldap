@@ -138,7 +138,7 @@ class server_schema
 // ---------------------------------------------------------------- syntaxes
 
 // Syntax OIDs used by the built-in value_traits and value_syntaxes: RFC
-// 4517, RFC 4523, RFC 2252 and Active Directory's Large Integer.
+// 4517, RFC 4523 and RFC 2252.
 namespace syntax {
 	inline constexpr const char *boolean = "1.3.6.1.4.1.1466.115.121.1.7";
 	inline constexpr const char *dn = "1.3.6.1.4.1.1466.115.121.1.12";
@@ -147,11 +147,6 @@ namespace syntax {
 	inline constexpr const char *name_and_optional_uid = "1.3.6.1.4.1.1466.115.121.1.34";
 	inline constexpr const char *numeric_string = "1.3.6.1.4.1.1466.115.121.1.36";
 	inline constexpr const char *directory_string = "1.3.6.1.4.1.1466.115.121.1.15";
-	// Active Directory's Large Integer / Interval (a signed 64-bit integer in
-	// decimal): FILETIME dates such as accountExpires, intervals such as
-	// maxPwdAge, and counters such as uSNChanged. See ad/filetime.hpp.
-	inline constexpr const char *ad_large_integer = "1.2.840.113556.1.4.906";
-
 	// Binary syntaxes: their values are octets, not UTF-8 text, so a string
 	// member rejects them (value_rejected_syntaxes). Octet String, Fax and
 	// JPEG are RFC 4517 (3.3.25, 3.3.12, 3.3.17); Certificate, Certificate
@@ -187,17 +182,20 @@ template<class T> struct value_syntaxes
 
 namespace detail {
 	inline constexpr auto integer_syntaxes = std::to_array<const char *>({ syntax::integer, syntax::numeric_string });
+	// Active Directory's Large Integer (ad::large_integer_syntax, ad/syntax.hpp).
+	inline constexpr const char *large_integer_syntax = "1.2.840.113556.1.4.906";
 	inline constexpr auto int64_syntaxes =
-	  std::to_array<const char *>({ syntax::integer, syntax::numeric_string, syntax::ad_large_integer });
+	  std::to_array<const char *>({ syntax::integer, syntax::numeric_string, large_integer_syntax });
 	inline constexpr auto dn_syntaxes = std::to_array<const char *>({ syntax::dn, syntax::name_and_optional_uid });
 	inline constexpr auto bool_syntaxes = std::to_array<const char *>({ syntax::boolean });
 	inline constexpr auto time_syntaxes = std::to_array<const char *>({ syntax::generalized_time });
 }// namespace detail
 
 // Integers read INTEGER and NumericString; signed integers of 64 bits or
-// more also read AD Large Integer, whose values (FILETIME dates, negative
-// intervals) a narrower or unsigned type could not hold: a 32-bit or
-// unsigned member on such an attribute is a syntax_mismatch.
+// more also read Active Directory's Large Integer (ad/syntax.hpp), whose
+// values (FILETIME dates, negative intervals) a narrower or unsigned type
+// could not hold: a 32-bit or unsigned member on such an attribute is a
+// syntax_mismatch.
 template<std::integral T>
 	requires(!std::same_as<T, bool> && !detail::char_like<T>)
 struct value_syntaxes<T>

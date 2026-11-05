@@ -299,7 +299,7 @@ TEST_CASE("schema: AD Large Integer validates for int64, filetime and interval m
 	const auto s = ldap::server_schema::parse(ad_types, ad_classes);
 	REQUIRE(s.skipped() == 0);
 	REQUIRE(s.find_attribute("accountExpires") != nullptr);
-	CHECK(*s.find_attribute("accountExpires")->syntax == ldap::syntax::ad_large_integer);
+	CHECK(*s.find_attribute("accountExpires")->syntax == ldap::ad::large_integer_syntax);
 
 	const auto raw = ldap::validate<ad_user_raw>(s);
 	CHECK(raw.ok());
@@ -328,7 +328,7 @@ TEST_CASE("schema: AD Large Integer validates for int64, filetime and interval m
 	CHECK(narrow[1].name == "uSNChanged");
 	CHECK(narrow[2].detail
 		  == std::string("syntax 1.3.6.1.4.1.1466.115.121.1.27 is not one the member's type reads (")
-			   + ldap::syntax::ad_large_integer + ")");
+			   + ldap::ad::large_integer_syntax + ")");
 	CHECK(narrow[3].name == "userAccountControl");
 }
 

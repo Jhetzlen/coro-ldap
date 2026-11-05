@@ -75,6 +75,7 @@
 // (|(accountExpires=9223372036854775807)(accountExpires=0)).
 #pragma once
 
+#include "jhetz/ldap/ad/syntax.hpp"
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/schema.hpp"
 
@@ -169,7 +170,7 @@ namespace jhetz::ldap {
 // and the rejected range is where to_sys would overflow.
 template<> struct value_traits<ad::filetime_clock::time_point>
 {
-	static constexpr std::array syntaxes{ syntax::ad_large_integer };
+	static constexpr std::array syntaxes{ ad::large_integer_syntax };
 
 	[[nodiscard]] static auto decode(std::string_view raw) -> result<ad::filetime_clock::time_point>
 	{
@@ -192,7 +193,7 @@ template<> struct value_traits<ad::filetime_clock::time_point>
 // as negative values: maxPwdAge -36288000000000 is 42 days).
 template<> struct value_traits<ad::filetime_clock::duration>
 {
-	static constexpr std::array syntaxes{ syntax::ad_large_integer };
+	static constexpr std::array syntaxes{ ad::large_integer_syntax };
 
 	[[nodiscard]] static auto decode(std::string_view raw) -> result<ad::filetime_clock::duration>
 	{
