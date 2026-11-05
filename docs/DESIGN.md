@@ -2736,13 +2736,15 @@ public calls (`is_open()`, `is_tls()`, `security_layer()`, `modify()`),
 the sync facade having no generic "run this task" entry. There is no
 "detect and dispatch" helper: the caller calls the core's RFC 3062
 functions or these. Tested against the scripted mock
-(`tests/net/ad_password_tests.cpp`, `sync_tests.cpp`,
-`sasl_layer_tests.cpp` with a made-up layer at each level) and a Samba AD
-DC (`integration.samba_ad`: reset, change, a non-BMP password, 0000052D
-and 00000056, plain ldap:// refused, a change and a reset over the NTLM
-layer (integrity and confidentiality) on plain ldap://, an NTLM bind
-without a layer refused, `ldap::client`, `sync::connection`, and the
-core's RFC 3062 calls refused by Samba).
+(`tests/net/ad_password_tests.cpp`, with the `client &` overloads'
+`not_sent` retry, `sync_tests.cpp`, `sync_client_tests.cpp` for
+`sync::lease &` and `sync::client &`, `sasl_layer_tests.cpp` with a
+made-up layer at each level) and a Samba AD DC (`integration.samba_ad`:
+reset, change, a non-BMP password, 0000052D and 00000056, plain ldap://
+refused, a change and a reset over the NTLM layer (integrity and
+confidentiality) on plain ldap://, an NTLM bind without a layer refused,
+`ldap::client`, `sync::connection`, and the core's RFC 3062 calls refused
+by Samba).
 
 No detection: the library does not tell AD from other servers (no
 reading of supportedCapabilities, no AD DS / AD LDS edition). The caller

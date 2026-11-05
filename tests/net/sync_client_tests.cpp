@@ -2,6 +2,7 @@
 // loopback TCP running on their own thread and io_context: scripted ones
 // (one script per accepted connection, mock_ldap.hpp's serve_script) and
 // server_thread.hpp's, which answers whatever comes.
+#include "jhetz/ldap/ad/sync.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -12,8 +13,10 @@
 #include <boost/corosio/delay.hpp>
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/ipv4_address.hpp>
+#include <boost/corosio/openssl_stream.hpp>
 #include <boost/corosio/tcp_acceptor.hpp>
 #include <boost/corosio/tcp_socket.hpp>
+#include <boost/corosio/tls_context.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
@@ -25,6 +28,7 @@
 #include <cstdint>
 #include <deque>
 #include <future>
+#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -43,6 +47,25 @@ using std::chrono::milliseconds;
 
 namespace {
 
+auto pki() -> test_pki &
+{
+	static test_pki instance("jhetz-ldap sync client test CA");
+	return instance;
+}
+
+auto server_context() -> corosio::tls_context
+{
+	static const auto leaf = pki().issue("localhost", "DNS:localhost,IP:127.0.0.1");
+	corosio::tls_context ctx;
+	REQUIRE_FALSE(ctx.use_certificate(leaf.cert_pem, corosio::tls_file_format::pem));
+	REQUIRE_FALSE(ctx.use_private_key(leaf.key_pem, corosio::tls_file_format::pem));
+	return ctx;
+}
+
+// Whether threaded_script_server's sessions run over TLS from the start
+// (ldaps://).
+enum class served { clear, tls };
+
 // Accepts connections one after another and runs the n-th script on the
 // n-th, then stops accepting (a later connect is refused). stop() lets the
 // sessions finish (the client, gone by then, may have written its last
@@ -52,8 +75,12 @@ namespace {
 class threaded_script_server
 {
   public:
-	explicit threaded_script_server(std::vector<std::vector<step>> scripts) : scripts_(std::move(scripts))
+	explicit threaded_script_server(std::vector<std::vector<step>> scripts, served how = served::clear)
+	  : scripts_(std::move(scripts))
 	{
+		if (how == served::tls) {
+			tls_.emplace(server_context());
+		}
 		capy::run_async(ioc_.get_executor())(accept_loop());
 		thread_ = std::thread([this] { ioc_.run(); });
 	}
@@ -63,7 +90,7 @@ class threaded_script_server
 
 	[[nodiscard]] auto url() const -> ldap::url
 	{
-		return *ldap::url::parse("ldap://127.0.0.1:" + std::to_string(port_));
+		return *ldap::url::parse((tls_ ? "ldaps://127.0.0.1:" : "ldap://127.0.0.1:") + std::to_string(port_));
 	}
 	[[nodiscard]] auto accepted() const -> std::size_t { return accepted_; }
 	// After stop().
@@ -107,11 +134,24 @@ class threaded_script_server
 			// Counted first: the session may run its whole script before
 			// spawn() returns, and the client thread check accepted() then.
 			++accepted_;
-			spawn(ioc_,
-			  serve_script(net::transport::wrap(socket_ref{ &peer }, "server"), script, log),
-			  sessions_.emplace_back());
+			spawn(ioc_, session(peer, script, log), sessions_.emplace_back());
 		}
 		acc_.close();
+	}
+
+	auto session(corosio::tcp_socket &peer, std::vector<step> script, server_log &log) -> capy::task<void>
+	{
+		if (!tls_) {
+			co_await serve_script(net::transport::wrap(socket_ref{ &peer }, "server"), std::move(script), log);
+			co_return;
+		}
+		corosio::openssl_stream tls(&peer, *tls_);
+		auto [ec] = co_await tls.handshake(corosio::tls_role::server);
+		if (ec) {
+			log.error = "server handshake: " + ec.message();
+			co_return;
+		}
+		co_await serve_script(net::transport::wrap(socket_ref{ &tls }, "server tls"), std::move(script), log);
 	}
 
 	corosio::io_context ioc_{};
@@ -120,6 +160,7 @@ class threaded_script_server
 	corosio::tcp_acceptor acc_{ ioc_, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8 };
 	std::uint16_t port_ = acc_.local_endpoint().port();
 	std::vector<std::vector<step>> scripts_;
+	std::optional<corosio::tls_context> tls_{};
 	std::deque<corosio::tcp_socket> peers_{};
 	std::deque<server_log> logs_{};
 	std::deque<outcome<void>> sessions_{};
@@ -337,6 +378,72 @@ TEST_CASE("sync client: the write forwarders", "[net][sync][client][write]")
 		srv.stop();
 		REQUIRE(srv.log(0).received.size() == 2);
 		CHECK(std::holds_alternative<ldap::add_request>(srv.log(0).received[1].op));
+	}
+}
+
+TEST_CASE("sync client: Active Directory passwords on a lease and on the client", "[net][sync][client][ad]")
+{
+	const auto modified = [](std::int32_t id) {
+		return ldap::message{ id, ldap::modify_response{ ldap::ldap_result{ 0 } } };
+	};
+	// The unicodePwd modify ad::reset_password (one replace) or
+	// ad::change_password (a delete and an add) sends for jdoe.
+	const auto unicode_pwd = [](const ldap::message &m) -> std::vector<ldap::modify_operation> {
+		const auto *r = std::get_if<ldap::modify_request>(&m.op);
+		REQUIRE(r != nullptr);
+		CHECK(std::string_view(r->object) == jdoe);
+		std::vector<ldap::modify_operation> ops;
+		for (const auto &c : r->changes) {
+			CHECK(c.modification.type == "unicodePwd");
+			ops.push_back(c.operation);
+		}
+		return ops;
+	};
+	using op = ldap::modify_operation;
+	SECTION("over TLS")
+	{
+		threaded_script_server srv(
+		  { { answer({ bind_resp(1) }), answer({ modified(2) }), answer({ modified(3) }), unbind_read() } },
+		  served::tls);
+		{
+			auto o = options_for(srv.url());
+			o.connection.tls.ca_pem = std::pmr::string(pki().ca_pem());
+			ldap::sync::client pool(std::move(o));
+			auto l = pool.acquire();
+			REQUIRE(l.has_value());
+			CHECK(l->is_tls());
+			CHECK(ldap::ad::reset_password(*l, jdoe_dn, "N3w-S3cret").has_value());
+			l->release();
+			CHECK(ldap::ad::change_password(pool, jdoe_dn, "0ld-S3cret", "N3w-S3cret").has_value());
+			CHECK(pool.connections() == 1);
+		}
+		srv.stop();
+		CHECK_THAT(srv.log(0).error, IsEmpty());
+		const auto &got = srv.log(0).received;
+		REQUIRE(got.size() == 4);
+		CHECK(unicode_pwd(got[1]) == std::vector{ op::replace });
+		CHECK(unicode_pwd(got[2]) == std::vector{ op::delete_, op::add });
+	}
+	SECTION("without TLS: refused before sending")
+	{
+		threaded_script_server srv({ { answer({ bind_resp(1) }), unbind_read() } });
+		{
+			ldap::sync::client pool(options_for(srv.url()));
+			auto l = pool.acquire();
+			REQUIRE(l.has_value());
+			auto on_lease = ldap::ad::reset_password(*l, jdoe_dn, "N3w-S3cret");
+			REQUIRE_FALSE(on_lease.has_value());
+			CHECK(on_lease.error().code == ldap::client_errc::tls_required);
+			l->release();
+			auto on_pool = ldap::ad::change_password(pool, jdoe_dn, "0ld-S3cret", "N3w-S3cret");
+			REQUIRE_FALSE(on_pool.has_value());
+			CHECK(on_pool.error().code == ldap::client_errc::tls_required);
+			CHECK(srv.accepted() == 1);
+		}
+		srv.stop();
+		const auto &got = srv.log(0).received;
+		REQUIRE(got.size() == 2);
+		CHECK(std::holds_alternative<ldap::unbind_request>(got[1].op));
 	}
 }
 

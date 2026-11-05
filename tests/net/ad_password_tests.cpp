@@ -1,8 +1,10 @@
 // ad::change_password / ad::reset_password (unicodePwd modifies) against
 // the scripted mock server: the ModifyRequests over TLS (StartTLS or
 // ldaps://), their refusal without it or during StartTLS, the refusals
-// before sending, and the server's AD diagnostics explained.
+// before sending, the server's AD diagnostics explained, and the
+// ldap::client overloads' shared lease and not_sent retry.
 #include "jhetz/ldap/ad/password.hpp"
+#include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -20,6 +22,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -31,6 +36,7 @@ namespace ldap = jhetz::ldap;
 namespace net = jhetz::ldap::net;
 using namespace jhetz::ldap::test;
 using namespace std::literals;
+using Catch::Matchers::ContainsSubstring;
 using Catch::Matchers::IsEmpty;
 using ldap::client_errc;
 
@@ -428,4 +434,269 @@ TEST_CASE("ad::change_password: server errors, AD diagnostics explained", "[net]
 	CHECK(std::string(not_hex.error().context) == context);
 	CHECK(f.conn.is_open());
 	f.check_server();
+}
+
+// ---------------------------------------------------------------- ldap::client
+
+namespace {
+
+// One accepted connection's script, over TLS from the start (ldaps://) or
+// in clear.
+struct session
+{
+	bool tls = true;
+	std::vector<step> script{};
+};
+
+auto serve_session(corosio::tcp_socket &peer, session s, server_log &log) -> capy::task<void>
+{
+	if (!s.tls) {
+		co_await serve_script(net::transport::wrap(socket_ref{ &peer }, "server"), std::move(s.script), log);
+		co_return;
+	}
+	corosio::openssl_stream tls(&peer, server_context());
+	auto [ec] = co_await tls.handshake(corosio::tls_role::server);
+	if (ec) {
+		log.error = "server handshake: " + ec.message();
+		co_return;
+	}
+	co_await serve_script(net::transport::wrap(socket_ref{ &tls }, "server tls"), std::move(s.script), log);
+}
+
+// Accepts connections one after another and runs the n-th session on the
+// n-th, then stops accepting.
+class session_server
+{
+  public:
+	session_server(corosio::io_context &ioc, std::vector<session> sessions)
+	  : ioc_(ioc), acc_(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8), sessions_(std::move(sessions))
+	{
+		spawn(ioc_, accept_loop(), accepting_);
+	}
+	session_server(const session_server &) = delete;
+	auto operator=(const session_server &) -> session_server & = delete;
+	~session_server() { shut_down(); }
+
+	[[nodiscard]] auto url(std::string_view scheme) const -> ldap::url
+	{
+		auto u = ldap::url::parse(std::string(scheme) + "://127.0.0.1:" + std::to_string(acc_.local_endpoint().port()));
+		REQUIRE(u.has_value());
+		return *u;
+	}
+	[[nodiscard]] auto accepted() const -> std::size_t { return logs_.size(); }
+	[[nodiscard]] auto log(std::size_t n) -> server_log & { return logs_.at(n); }
+	void shut_down()
+	{
+		acc_.close();
+		for (auto &p : peers_) {
+			p.close();
+		}
+	}
+
+  private:
+	auto accept_loop() -> capy::task<void>
+	{
+		for (auto &s : sessions_) {
+			auto &peer = peers_.emplace_back(ioc_);
+			auto [ec] = co_await acc_.accept(peer);
+			if (ec) {
+				co_return;
+			}
+			auto &log = logs_.emplace_back();
+			log.hang_up = [&peer] { peer.close(); };
+			spawn(ioc_, serve_session(peer, std::move(s), log), outcomes_.emplace_back());
+		}
+		acc_.close();
+	}
+
+	corosio::io_context &ioc_;
+	corosio::tcp_acceptor acc_;
+	std::vector<session> sessions_;
+	std::deque<corosio::tcp_socket> peers_{};
+	std::deque<server_log> logs_{};
+	std::deque<outcome<void>> outcomes_{};
+	outcome<void> accepting_{};
+};
+
+// How the pool's connector opens a connection: by ldap::connect, closed
+// before it is handed out (an operation on it fails with not_sent), or not
+// at all, failing with std::errc::invalid_argument (cond::invalid_input:
+// acquire() tries that server no more and fails at once).
+enum class opened { normally, closed, failed };
+
+auto open_as(corosio::io_context &ioc,
+  ldap::url u,
+  ldap::connection_options options,
+  std::pmr::memory_resource *mr,
+  opened how) -> capy::task<ldap::result<ldap::connection>>
+{
+	if (how == opened::failed) {
+		co_return ldap::fail(std::make_error_code(std::errc::invalid_argument), "failed by the test");
+	}
+	auto c = co_await ldap::connect(ioc, std::move(u), std::move(options), mr);
+	if (c && how == opened::closed) {
+		c->close();
+	}
+	co_return c;
+}
+
+// A client of a session_server, on one io_context.
+struct ad_pool
+{
+	corosio::io_context ioc{};
+	session_server server;
+	std::optional<ldap::client> pool{};
+
+	explicit ad_pool(std::vector<session> sessions) : server(ioc, std::move(sessions)) {}
+	ad_pool(const ad_pool &) = delete;
+	auto operator=(const ad_pool &) -> ad_pool & = delete;
+	~ad_pool()
+	{
+		pool.reset();
+		server.shut_down();
+		drive(ioc);
+	}
+
+	// Over ldaps:// (or `scheme`), trusting the test CA. The n-th connection
+	// is opened as `how[n]` says, normally past its end.
+	void make(std::vector<opened> how = {}, std::string_view scheme = "ldaps")
+	{
+		ldap::client_options o{ .servers = { server.url(scheme) }, .idle_check = std::nullopt };
+		o.connection.tls.ca_pem = std::pmr::string(pki().ca_pem());
+		pool.emplace(ioc, std::move(o));
+		ldap::detail::set_connector(*pool,
+		  [how = std::move(how), n = std::size_t{ 0 }](corosio::io_context &io,
+			ldap::url u,
+			ldap::connection_options options,
+			std::pmr::memory_resource *mr) mutable {
+			  const opened as = n < how.size() ? how[n] : opened::normally;
+			  ++n;
+			  return open_as(io, std::move(u), std::move(options), mr, as);
+		  });
+	}
+
+	template<class T> auto run(capy::task<T> t) -> T { return finish(ioc, std::move(t)); }
+};
+
+}// namespace
+
+TEST_CASE("ad::change_password on a client: a shared lease", "[net][password][ad][client]")
+{
+	ad_pool f({ { .script = { answer({ modify_result(1) }), answer({ modify_result(2) }) } } });
+	f.make();
+	CHECK(f.run(ldap::ad::change_password(*f.pool, jdoe, old_pw, new_pw)).has_value());
+	CHECK(f.run(ldap::ad::reset_password(*f.pool, jdoe, new_pw)).has_value());
+	CHECK(f.server.accepted() == 1);
+	CHECK(f.pool->connections() == 1);
+	CHECK_THAT(f.server.log(0).error, IsEmpty());
+	REQUIRE(f.server.log(0).received.size() == 2);
+	check_change_shape(f.server.log(0).received[0]);
+	check_reset_shape(f.server.log(0).received[1]);
+}
+
+TEST_CASE("ad::change_password on a client: the task does not refer to the client", "[net][password][ad][client]")
+{
+	ad_pool f({ { .script = { answer({ modify_result(1) }) } } });
+	f.make();
+	auto pending = ldap::ad::reset_password(*f.pool, jdoe, new_pw);
+	const ldap::client moved(std::move(*f.pool));
+	f.pool.reset();
+	const auto r = f.run(std::move(pending));
+	CHECK(r.has_value());
+	REQUIRE(f.server.log(0).received.size() == 1);
+	check_reset_shape(f.server.log(0).received[0]);
+}
+
+TEST_CASE("ad::change_password on a client: not_sent is retried once on another connection",
+  "[net][password][ad][client][retry]")
+{
+	SECTION("the retry succeeds")
+	{
+		ad_pool f({ {}, { .script = { answer({ modify_result(1) }) } } });
+		f.make({ opened::closed });
+		CHECK(f.run(ldap::ad::reset_password(*f.pool, jdoe, new_pw)).has_value());
+		CHECK(f.server.accepted() == 2);
+		CHECK(f.server.log(0).received.empty());
+		REQUIRE(f.server.log(1).received.size() == 1);
+		check_reset_shape(f.server.log(1).received[0]);
+		CHECK(f.pool->connections() == 1);
+	}
+	SECTION("a second not_sent is returned as is")
+	{
+		ad_pool f({ {}, {} });
+		f.make({ opened::closed, opened::closed });
+		auto r = f.run(ldap::ad::change_password(*f.pool, jdoe, old_pw, new_pw));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::not_sent);
+		CHECK(
+		  std::string_view(r.error().context).starts_with("change password " + jdoe_context + ": modify unicodePwd"));
+		check_no_password(r.error());
+		CHECK(f.server.accepted() == 2);
+		CHECK(f.server.log(0).received.empty());
+		CHECK(f.server.log(1).received.empty());
+	}
+	SECTION("the retry's acquire() failure is returned as is")
+	{
+		ad_pool f({ {} });
+		f.make({ opened::closed, opened::failed });
+		auto r = f.run(ldap::ad::reset_password(*f.pool, jdoe, new_pw));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == std::errc::invalid_argument);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("failed by the test"));
+		CHECK(f.server.accepted() == 1);
+	}
+}
+
+TEST_CASE("ad::change_password on a client: failures not retried", "[net][password][ad][client][retry]")
+{
+	SECTION("no TLS: refused before sending, the connection kept")
+	{
+		ad_pool f({ { .tls = false } });
+		f.make({}, "ldap");
+		auto r = f.run(ldap::ad::reset_password(*f.pool, jdoe, new_pw));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::tls_required);
+		drive_until(f.ioc, [&f] { return f.server.accepted() == 1; });
+		CHECK(f.server.accepted() == 1);
+		CHECK(f.server.log(0).received.empty());
+		CHECK(f.pool->connections() == 1);
+	}
+	SECTION("an empty DN: refused before acquiring")
+	{
+		ad_pool f({ {} });
+		f.make();
+		auto r = f.run(ldap::ad::change_password(*f.pool, {}, old_pw, new_pw));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::invalid_dn);
+		CHECK(f.server.accepted() == 0);
+		CHECK(f.pool->connections() == 0);
+	}
+	SECTION("a server refusal")
+	{
+		ad_pool f({ { .script = { answer({ modify_result(1, 19, "0000052D: Constraint violation") }) } } });
+		f.make();
+		auto r = f.run(ldap::ad::reset_password(*f.pool, jdoe, new_pw));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::constraint_violation);
+		CHECK(f.server.accepted() == 1);
+	}
+	SECTION("acquire() fails: its error")
+	{
+		ad_pool f({});
+		f.make({ opened::failed });
+		auto r = f.run(ldap::ad::reset_password(*f.pool, jdoe, new_pw));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == std::errc::invalid_argument);
+		CHECK(std::string_view(r.error().context).starts_with("acquire "));
+		CHECK(f.server.accepted() == 0);
+	}
+	SECTION("a moved-from client")
+	{
+		ad_pool f({});
+		f.make();
+		const ldap::client moved(std::move(*f.pool));
+		auto r = f.run(ldap::ad::reset_password(*f.pool, jdoe, new_pw));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::not_connected);
+	}
 }
