@@ -21,7 +21,6 @@ add_executable(jhetz_ldap_tests
     ad_diagnostic_tests.cpp
     ad_filetime_tests.cpp
     ad_password_value_tests.cpp
-    ad_root_dse_tests.cpp
     attribute_tests.cpp
     ber_reader_tests.cpp
     ber_writer_tests.cpp

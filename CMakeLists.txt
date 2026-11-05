@@ -200,7 +200,6 @@ endif()
 add_library(jhetz_ldap STATIC
     src/ad/diagnostic.cpp
     src/ad/password_value.cpp
-    src/ad/root_dse.cpp
     src/attribute.cpp
     src/ber.cpp
     src/content_sync.cpp

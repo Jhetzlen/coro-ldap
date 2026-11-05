@@ -2672,20 +2672,19 @@ AccountManagement on System.DirectoryServices.Protocols. The split rule:
   plug-in), generic controls and extended operations (any OID, typed or
   raw), and the raw result (result code, diagnosticMessage, matched DN) of
   every error.
-- `ldap::ad` holds AD semantics: what AD's attributes, values,
-  capabilities and diagnostics mean, and operations only AD defines
+- `ldap::ad` holds AD semantics: what AD's attributes, values and
+  diagnostics mean, and operations only AD defines
   (unicodePwd password changes, DirSync, change notification, ranged
   retrieval, domain controller discovery).
-- Free functions taking what they work on (`const entry &`, later
-  `connection &` / `client &`), no wrapper class until one carries state
-  of its own.
+- Free functions taking what they work on (`connection &`, `client &`,
+  `const error &`, the sync facade's types), no wrapper class until one
+  carries state of its own.
 
 Layout:
 
 - Codec-level AD code (no network) is in `jhetz::ldap`: headers under
   `include/jhetz/ldap/ad/`, sources under `src/ad/`. `ad/filetime.hpp`
   (the FILETIME clock and its `value_traits`, section 4) and
-  `ad/root_dse.hpp` (`edition_of`, `is_active_directory`),
   `ad/password_value.hpp` (the `unicodePwd` value) and
   `ad/diagnostic.hpp` (`explain`). These headers are
   installed with the codec-only package too.
@@ -2739,16 +2738,11 @@ the NTLM layer (integrity and confidentiality) on plain ldap://, an NTLM
 bind without a layer refused, `ldap::client`,
 `sync::connection`, and the core's RFC 3062 calls refused by Samba).
 
-Recognising AD: `ad::edition_of(root_dse)` reads the root DSE's
-supportedCapabilities: `ad::ds_capability_oid` (1.2.840.113556.1.4.800,
-LDAP_CAP_ACTIVE_DIRECTORY_OID: AD DS, and Samba AD, which cannot be told
-apart from it) gives `edition::ds`, else `ad::lds_capability_oid`
-(1.2.840.113556.1.4.1851, LDAP_CAP_ACTIVE_DIRECTORY_ADAM_OID: AD LDS)
-gives `edition::lds`, else `edition::none`; `is_active_directory` is
-`!= none`. It takes the entry, not a connection: reading the root DSE is
-the caller's search (base scope, empty DN, `supportedCapabilities`
-requested: it is an operational attribute), and a root DSE hidden by
-access controls reads as `none`.
+No detection: the library does not tell AD from other servers (no
+reading of supportedCapabilities, no AD DS / AD LDS edition). The caller
+knows its directory and picks the core's RFC calls or `ldap::ad`'s by the
+function it calls; nothing in the library needed the answer once the
+password method enum was gone.
 
 ## Resolved
 

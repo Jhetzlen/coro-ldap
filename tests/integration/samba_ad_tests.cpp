@@ -14,7 +14,6 @@
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/ad/filetime.hpp"
 #include "jhetz/ldap/ad/password.hpp"
-#include "jhetz/ldap/ad/root_dse.hpp"
 #include "jhetz/ldap/ad/sync.hpp"
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
@@ -154,13 +153,10 @@ TEST_CASE("samba ad: ad::change_password and ad::reset_password", "[samba_ad][pa
 	SECTION("no RFC 3062: the core's password calls are refused")
 	{
 		auto c = open_tls(ioc, start_tls);
-		auto dse = finish(ioc,
-		  c.search({ .scope = ldap::search_scope::base_object,
-			.attributes = { "supportedExtension", "supportedCapabilities" } }));
+		auto dse =
+		  finish(ioc, c.search({ .scope = ldap::search_scope::base_object, .attributes = { "supportedExtension" } }));
 		REQUIRE(dse.has_value());
 		REQUIRE(dse->size() == 1);
-		CHECK(ldap::ad::is_active_directory((*dse)[0]));
-		CHECK(ldap::ad::edition_of((*dse)[0]) == ldap::ad::edition::ds);
 		const auto *extensions = (*dse)[0].find("supportedExtension");
 		CHECK((extensions == nullptr || !std::ranges::contains(*extensions, ldap::password_modify_oid)));
 		reset(ioc, pwchange, "Core-Passw0rd");

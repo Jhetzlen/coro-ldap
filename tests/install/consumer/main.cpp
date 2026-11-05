@@ -1,11 +1,10 @@
 // Uses the installed headers and libraries: the codec always (with the
-// operations.hpp mod:: builders and the ad/ headers), the connection
+// operations.hpp mod:: builders and the codec's ad/ headers), the connection
 // (a connect that must be refused: no server), jhetz::ldap_ad (a password
 // reset on no connection) and SCRAM's SASLprep (links ICU through the
 // package) with WITH_NET.
 #include "jhetz/ldap/ad/filetime.hpp"
 #include "jhetz/ldap/ad/password_value.hpp"
-#include "jhetz/ldap/ad/root_dse.hpp"
 #include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
@@ -21,7 +20,6 @@
 #endif
 
 #include <cstdio>
-#include <initializer_list>
 #include <string_view>
 
 namespace ldap = jhetz::ldap;
@@ -42,11 +40,8 @@ auto main() -> int
 		std::puts("codec: unexpected mod::replace result");
 		return 1;
 	}
-	ldap::entry dse;
-	dse.attributes.emplace_back(ldap::attribute::unchecked("supportedCapabilities"),
-	  std::initializer_list<std::string_view>{ ldap::ad::ds_capability_oid });
 	const auto expires = ldap::value_traits<ldap::ad::filetime_clock::time_point>::decode("0");
-	if (!ldap::ad::is_active_directory(dse) || !expires || !ldap::ad::is_never(*expires)
+	if (!expires || !ldap::ad::is_never(*expires)
 		|| ldap::ad::password_value("ab") != std::string_view("\"\0a\0b\0\"\0", 8)) {
 		std::puts("codec: unexpected ad result");
 		return 1;

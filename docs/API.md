@@ -233,8 +233,7 @@ itself needs only ICU.
     (`{message_id, controls}`; breaking: `message_id` is new and comes
     first, as in the LDAPMessage), `intermediate`, `extended_result`,
     `end_transaction_result`, and the OIDs `who_am_i_oid` and
-    `password_modify_oid` (the AD capability OIDs are in
-    `jhetz/ldap/ad/root_dse.hpp`).
+    `password_modify_oid`.
   - `jhetz/ldap/search_stream.hpp` and `jhetz/ldap/paged_search.hpp`: the
     entry streams `search_stream()` and `search_paged()` return, and
     `search_entry` and `search_reference`, the items of
@@ -904,16 +903,6 @@ package component `ad`:
   full Unicode; `client_errc::encode_error` for ill-formed UTF-8), for a
   ModifyRequest built by hand.
 
-- `jhetz/ldap/ad/root_dse.hpp` (`jhetz::ldap`): `ad::edition_of(root_dse)`
-  reads a root DSE entry's supportedCapabilities: `ad::edition::ds` if it
-  lists `ad::ds_capability_oid` (1.2.840.113556.1.4.800, AD DS and Samba
-  AD), else `ad::edition::lds` if it lists `ad::lds_capability_oid`
-  (1.2.840.113556.1.4.1851, AD LDS), else `ad::edition::none` (also when
-  the attribute is missing). `ad::is_active_directory(root_dse)` is
-  `edition_of(root_dse) != edition::none`. The caller reads the root DSE:
-  `search({.scope = search_scope::base_object, .attributes =
-  {"supportedCapabilities"}})` (an operational attribute, so it must be
-  requested).
 - `jhetz/ldap/ad/filetime.hpp` (`jhetz::ldap`): Active Directory's Large
   Integer syntax (1.2.840.113556.1.4.906) as std::chrono types.
   `ad::filetime_clock` is a C++20 Clock for FILETIME (100 ns ticks since 1601-01-01 UTC;
