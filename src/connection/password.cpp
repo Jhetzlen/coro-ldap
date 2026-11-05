@@ -1,86 +1,22 @@
 #include "jhetz/ldap/connection.hpp"
 
-#include "jhetz/ldap/ad/root_dse.hpp"
-
 #include "../format_util.hpp"
-#include "../icu_util.hpp"
 #include "impl.hpp"
-#include "search.hpp"
 
-#include <unicode/ustring.h>
-#include <unicode/utypes.h>
-
-#include <algorithm>
-#include <charconv>
-#include <cstddef>
-#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
-#include <vector>
 
 namespace capy = boost::capy;
 
 namespace jhetz::ldap {
 
-using detail::icu_failed;
-
-
 using detail::impl_ref;
 using detail::no_connection;
 using detail::op_context;
-
-auto ad_password_value(std::string_view password) -> result<std::string>
-{
-	constexpr std::string_view context = "Active Directory password value";
-	if (password.size() > static_cast<std::size_t>(INT32_MAX / 2) - 2) {
-		return fail(client_errc::encode_error, std::string(context) + ": the password is too long");
-	}
-
-	// UTF-8 -> UTF-16 (ICU's native order). u_strFromUTF8 refuses ill-formed
-	// UTF-8: overlong forms, surrogates, code points above U+10FFFF,
-	// truncated sequences.
-	// Any other ICU status is ICU's failure, not the password's.
-	const auto failed = [&](UErrorCode status) {
-		if (status == U_INVALID_CHAR_FOUND || status == U_ILLEGAL_CHAR_FOUND) {
-			return fail(client_errc::encode_error, std::string(context) + ": the password is not valid UTF-8");
-		}
-		return fail(client_errc::internal_error,
-		  std::string(context) + ": UTF-16 conversion failed (ICU " + u_errorName(status) + ")");
-	};
-	UErrorCode status = U_ZERO_ERROR;
-	int32_t n = 0;
-	u_strFromUTF8(nullptr, 0, &n, password.data(), static_cast<int32_t>(password.size()), &status);
-	if (status != U_BUFFER_OVERFLOW_ERROR && icu_failed(status)) {
-		return failed(status);
-	}
-	std::vector<UChar> units(static_cast<std::size_t>(n));
-	status = U_ZERO_ERROR;
-	if (n != 0) {
-		u_strFromUTF8(units.data(), n, &n, password.data(), static_cast<int32_t>(password.size()), &status);
-	}
-	if (icu_failed(status)) {
-		return failed(status);
-	}
-
-	// '"' password '"', each UTF-16 code unit little-endian.
-	std::string out;
-	out.reserve((units.size() + 2) * 2);
-	const auto put = [&out](char16_t u) {
-		out.push_back(static_cast<char>(u & 0xFF));
-		out.push_back(static_cast<char>(u >> 8));
-	};
-	put(u'"');
-	for (const UChar u : units) {
-		put(static_cast<char16_t>(u));
-	}
-	put(u'"');
-	return out;
-}
-
 
 namespace {
 
@@ -180,134 +116,16 @@ auto connection::password_modify(password_modify_params request) -> capy::task<r
 	co_return co_await password_modify_impl(impl_ref(impl_), std::move(request), std::move(context));
 }
 
-using detail::read_one;
-
 // ---------------------------------------------------------------- password changes
 
 namespace {
-
-	// How to choose the method when the root DSE does not tell.
-	constexpr std::string_view choose_password_method =
-	  "choose the method with connection_options::password_method or the method argument "
-	  "(ldap::password_method::rfc3062 or active_directory)";
-
-	// password_method::automatic: what the root DSE advertises, RFC 3062
-	// first. Errors are prefixed with `context`.
-	auto advertised_password_method(impl_ref self, const std::string &context)
-	  -> capy::task<result<ldap::password_method>>
-	{
-		auto root = co_await read_one(self,
-		  { .scope = search_scope::base_object, .attributes = { "supportedExtension", "supportedCapabilities" } });
-		if (!root) {
-			co_return std::unexpected(detail::with_context(std::move(root.error()),
-			  detail::format("{}: reading the root DSE to pick the method failed ({} to skip it)",
-				context,
-				choose_password_method)));
-		}
-		const auto lists = [&root](std::string_view type, std::string_view oid) {
-			const auto *values = *root ? (*root)->find(type) : nullptr;
-			return values != nullptr && std::ranges::contains(*values, oid);
-		};
-		if (lists("supportedExtension", password_modify_oid)) {
-			co_return ldap::password_method::rfc3062;
-		}
-		if (lists("supportedCapabilities", ad::ds_capability_oid)) {
-			co_return ldap::password_method::active_directory;
-		}
-		co_return fail(client_errc::no_password_method,
-		  detail::format("{}: the root DSE advertises neither the RFC 3062 password modify extension nor Active "
-						 "Directory (it may be hidden by access controls): {}, or call password_modify()",
-			context,
-			choose_password_method));
-	}
-
-	// The Win32 error codes of a failed password change.
-	enum class win32_error : unsigned {
-		access_denied = 0x5,// ERROR_ACCESS_DENIED
-		invalid_password = 0x56,// ERROR_INVALID_PASSWORD
-		password_restriction = 0x52D,// ERROR_PASSWORD_RESTRICTION
-		account_locked_out = 0x775,// ERROR_ACCOUNT_LOCKED_OUT
-	};
-
-	// Active Directory starts its diagnosticMessage with the Win32 error in
-	// hex ("0000052D: Constraint violation - ..."): the common ones of a
-	// password change, explained ("" for the others).
-	auto ad_password_explanation(std::string_view diagnostic) -> std::string_view
-	{
-		constexpr std::size_t code_digits = 8;
-		if (diagnostic.size() <= code_digits || diagnostic[code_digits] != ':') {
-			return {};
-		}
-		unsigned code = 0;
-		// NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage): bounded to 8 chars, no terminator read
-		const auto [end, ec] = std::from_chars(diagnostic.data(), diagnostic.data() + code_digits, code, 16);
-		if (ec != std::errc{} || end != diagnostic.data() + code_digits) {
-			return {};
-		}
-		switch (static_cast<win32_error>(code)) {
-		case win32_error::access_denied:
-			return "not allowed to set this user's password";
-		case win32_error::invalid_password:
-			return "the old password is wrong";
-		case win32_error::password_restriction:
-			return "the new password does not meet the password policy (length, complexity, history or minimum "
-				   "age)";
-		case win32_error::account_locked_out:
-			return "the account is locked out";
-		default:
-			return {};
-		}
-	}
-
-	// password_method::active_directory: a ModifyRequest of unicodePwd.
-	auto ad_set_password(impl_ref self,
-	  const dn &user,
-	  const std::optional<std::string> &old_password,
-	  const std::string &new_password,
-	  const std::string &context) -> capy::task<result<void>>
-	{
-		if (user.empty()) {
-			co_return fail(client_errc::invalid_dn, context + ": Active Directory needs the user's DN");
-		}
-		// A closed connection fails with not_sent below.
-		if (self->is_open() && !self->is_tls()) {
-			co_return fail(client_errc::tls_required,
-			  context + ": Active Directory sets unicodePwd only over TLS (ldaps:// or start_tls())");
-		}
-		auto new_value = ad_password_value(new_password);
-		if (!new_value) {
-			co_return std::unexpected(detail::with_context(std::move(new_value.error()), context));
-		}
-		modify_params request{ .object = user };
-		if (old_password) {
-			auto old_value = ad_password_value(*old_password);
-			if (!old_value) {
-				co_return std::unexpected(detail::with_context(std::move(old_value.error()), context));
-			}
-			request.changes.push_back(mod::remove("unicodePwd", { *old_value }));
-			request.changes.push_back(mod::add("unicodePwd", { *new_value }));
-		} else {
-			request.changes.push_back(mod::replace("unicodePwd", { *new_value }));
-		}
-		auto r = co_await modify_impl(std::move(self), std::move(request), context + ": modify unicodePwd");
-		if (r) {
-			co_return result<void>{};
-		}
-		error e = std::move(r.error());
-		if (const auto text = ad_password_explanation(e.diagnostic); !text.empty()) {
-			e.context +=
-			  detail::format(": {} (Active Directory error {})", text, std::string_view(e.diagnostic).substr(0, 8));
-		}
-		co_return std::unexpected(std::move(e));
-	}
 
 	// change_password (with `old_password`) and reset_password.
 	auto set_password(impl_ref self,
 	  std::string context,
 	  dn user,
 	  std::optional<std::string> old_password,
-	  std::string new_password,
-	  std::optional<ldap::password_method> method) -> capy::task<result<void>>
+	  std::string new_password) -> capy::task<result<void>>
 	{
 		if (new_password.empty()) {
 			co_return fail(std::make_error_code(std::errc::invalid_argument), context + ": empty new password");
@@ -315,22 +133,6 @@ namespace {
 		if (old_password && old_password->empty()) {
 			co_return fail(std::make_error_code(std::errc::invalid_argument),
 			  context + ": empty old password (reset_password() sets one without it)");
-		}
-		ldap::password_method m = method.value_or(self->knowledge().password_mode);
-		if (m == ldap::password_method::automatic) {
-			if (const auto &known = self->knowledge().advertised_password_method) {
-				m = *known;
-			} else {
-				auto found = co_await advertised_password_method(self, context);
-				if (!found) {
-					co_return std::unexpected(std::move(found.error()));
-				}
-				self->knowledge().advertised_password_method = *found;
-				m = *found;
-			}
-		}
-		if (m == ldap::password_method::active_directory) {
-			co_return co_await ad_set_password(std::move(self), user, old_password, new_password, context);
 		}
 		password_modify_params request{ .old_password = std::move(old_password),
 			.new_password = std::move(new_password) };
@@ -347,28 +149,25 @@ namespace {
 
 }// namespace
 
-auto connection::change_password(dn user,
-  std::string old_password,
-  std::string new_password,
-  std::optional<ldap::password_method> method) -> capy::task<result<void>>
+auto connection::change_password(dn user, std::string old_password, std::string new_password)
+  -> capy::task<result<void>>
 {
 	std::string context = op_context("change password", user);
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
 	co_return co_await set_password(
-	  impl_ref(impl_), std::move(context), std::move(user), std::move(old_password), std::move(new_password), method);
+	  impl_ref(impl_), std::move(context), std::move(user), std::move(old_password), std::move(new_password));
 }
 
-auto connection::reset_password(dn user, std::string new_password, std::optional<ldap::password_method> method)
-  -> capy::task<result<void>>
+auto connection::reset_password(dn user, std::string new_password) -> capy::task<result<void>>
 {
 	std::string context = op_context("reset password", user);
 	if (impl_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
 	co_return co_await set_password(
-	  impl_ref(impl_), std::move(context), std::move(user), std::nullopt, std::move(new_password), method);
+	  impl_ref(impl_), std::move(context), std::move(user), std::nullopt, std::move(new_password));
 }
 
 }// namespace jhetz::ldap

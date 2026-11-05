@@ -1,5 +1,5 @@
 // Internal: search_stream's state and the search helpers shared by
-// paged search, schema loading and the AD password code.
+// paged search and schema loading.
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"

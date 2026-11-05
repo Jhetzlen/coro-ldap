@@ -148,17 +148,6 @@
 
 namespace jhetz::ldap {
 
-// The unicodePwd value Active Directory expects (MS-ADTS 3.1.1.3.1.5): the
-// password in double quotes, encoded UTF-16LE, characters outside the BMP
-// as surrogate pairs. `password` is UTF-8; ill-formed UTF-8 fails with
-// client_errc::encode_error, any other ICU failure (e.g. out of memory)
-// with client_errc::internal_error (the context never quotes the
-// password). For a ModifyRequest built by hand: replace unicodePwd with it
-// to reset a password, or delete the old value and add the new one in one
-// modify to change it. AD accepts it only over TLS. Neither the result nor
-// the scratch buffers are wiped (see change_password()).
-[[nodiscard]] auto ad_password_value(std::string_view password) -> result<std::string>;
-
 class connection;
 
 namespace detail {
@@ -410,39 +399,24 @@ class connection
 	  -> boost::capy::task<result<end_transaction_result>>;
 	auto begin_transaction(extended_controls controls = {}) -> boost::capy::task<result<transaction>>;
 
-	// Password changes that work on OpenLDAP and Active Directory alike:
-	// `method` (nullopt: connection_options::password_method) picks how (see
-	// password_method). change_password is a user's own change, which needs
-	// the old password; reset_password is an administrator's, without it.
-	// Both need a new password (only password_modify() has the server
-	// generate one) and the old one too for a change, else they fail with
-	// std::errc::invalid_argument before anything is sent.
+	// Password changes with RFC 3062 (password_modify()), `user` as
+	// userIdentity (left out if `user` is empty: the bound user).
+	// change_password is a user's own change, which needs the old password;
+	// reset_password is an administrator's, without it. Both need a new
+	// password (only password_modify() has the server generate one) and the
+	// old one too for a change, else they fail with
+	// std::errc::invalid_argument before anything is sent. Passwords never
+	// appear in errors. Active Directory has no RFC 3062: see
+	// ad::change_password and ad::reset_password (ad/password.hpp).
 	//
-	// rfc3062: password_modify() with `user` as userIdentity (left out if
-	// `user` is empty: the bound user). active_directory: one ModifyRequest
-	// of `user`'s unicodePwd (ad_password_value()), deleting the old value
-	// and adding the new one for a change, replacing it for a reset; `user`
-	// may not be empty (client_errc::invalid_dn), and the connection must be
-	// TLS-protected (is_tls(): ldaps:// or after start_tls()), else
-	// client_errc::tls_required before anything is sent. AD's own
-	// diagnostics for common refusals (0000052D: the password policy,
-	// 00000056: a wrong old password, ...) are explained in the error's
-	// context; error::diagnostic keeps the server's text. automatic: the
-	// root DSE decides; if it cannot be read, or advertises no method this
-	// library knows (client_errc::no_password_method), the error says to
-	// choose one. Passwords never appear in errors.
-	//
-	// Password memory is not wiped, here or in password_modify(), simple
-	// binds and ad_password_value(): the password passes through
-	// std::string copies (the arguments, the request's values, the encoded
-	// PDU in the connection's buffers) that the library cannot wipe all of.
-	// Only sasl_scram_sha256 and sasl_ntlm wipe what they hold.
-	auto change_password(dn user,
-	  std::string old_password,
-	  std::string new_password,
-	  std::optional<ldap::password_method> method = std::nullopt) -> boost::capy::task<result<void>>;
-	auto reset_password(dn user, std::string new_password, std::optional<ldap::password_method> method = std::nullopt)
+	// Password memory is not wiped, here or in password_modify() and simple
+	// binds: the password passes through std::string copies (the arguments,
+	// the request's values, the encoded PDU in the connection's buffers)
+	// that the library cannot wipe all of. Only sasl_scram_sha256 and
+	// sasl_ntlm wipe what they hold.
+	auto change_password(dn user, std::string old_password, std::string new_password)
 	  -> boost::capy::task<result<void>>;
+	auto reset_password(dn user, std::string new_password) -> boost::capy::task<result<void>>;
 
 	// Reads the server's subschema (RFC 4512): the root DSE's
 	// subschemaSubentry (cn=Subschema if it names none), then that entry's

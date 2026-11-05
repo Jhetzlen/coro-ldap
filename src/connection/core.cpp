@@ -94,7 +94,6 @@ connection::impl::impl(corosio::io_context &ioc,
 	abandoned(memory), outbox(memory), held(memory), scratch(memory)
 {
 	knowledge_.schema_mode = options.schema_check;
-	knowledge_.password_mode = options.password_method;
 	write_idle.set();
 	reader_idle.set();
 	bind_idle.set();

@@ -1,6 +1,7 @@
 // ldap::sync::connection against an in-process LDAP server on loopback TCP that
 // runs on its own thread and io_context and answers requests as they come.
 #include "../../src/net/tls.hpp"
+#include "jhetz/ldap/ad/sync.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/sync.hpp"
@@ -823,23 +824,23 @@ TEST_CASE("sync: a transaction's destructor waits for the abort's answer only so
 TEST_CASE("sync: change_password and reset_password", "[net][sync][password]")
 {
 	peer_server srv;
-	srv.serve({ answer({ ldap::message{ 1,
-						   ldap::search_result_entry{
-							 "", { ldap::partial_attribute{ "supportedExtension", { ldap::password_modify_oid } } } } },
-				  done_msg(1) }),
-	  answer({ ldap::message{ 2, ldap::extended_response{ ldap::ldap_result{ 0 } } } }),
-	  answer({ ldap::message{ 3, ldap::extended_response{ ldap::ldap_result{ 0 } } } }) });
+	srv.serve({ answer({ ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 0 } } } }),
+	  answer({ ldap::message{ 2, ldap::extended_response{ ldap::ldap_result{ 0 } } } }) });
 	connected k(srv);
 	CHECK(k.c.change_password(jdoe, "old", "new").has_value());
-	CHECK(k.c.reset_password(jdoe, "next", ldap::password_method::rfc3062).has_value());
-	auto refused = k.c.reset_password(jdoe, "next", ldap::password_method::active_directory);
+	CHECK(k.c.reset_password(jdoe, "next").has_value());
+	// Active Directory's, on plain ldap://: refused before sending.
+	CHECK(k.c.security_layer() == ldap::sasl_protection::none);
+	auto refused = ldap::ad::reset_password(k.c, jdoe, "next");
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == ldap::client_errc::tls_required);
+	auto no_dn = ldap::ad::change_password(k.c, {}, "old", "new");
+	REQUIRE_FALSE(no_dn.has_value());
+	CHECK(no_dn.error().code == ldap::client_errc::invalid_dn);
 	const auto &got = hang_up(k.c, srv);
-	REQUIRE(got.size() == 3);
-	CHECK(std::holds_alternative<ldap::search_request>(got[0].op));
+	REQUIRE(got.size() == 2);
+	CHECK(std::holds_alternative<ldap::extended_request>(got[0].op));
 	CHECK(std::holds_alternative<ldap::extended_request>(got[1].op));
-	CHECK(std::holds_alternative<ldap::extended_request>(got[2].op));
 }
 
 TEST_CASE("sync: close without an UnbindRequest", "[net][sync]")

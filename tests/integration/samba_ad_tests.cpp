@@ -13,9 +13,13 @@
 // Without the variables every test is skipped.
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/ad/filetime.hpp"
+#include "jhetz/ldap/ad/password.hpp"
 #include "jhetz/ldap/ad/root_dse.hpp"
+#include "jhetz/ldap/ad/sync.hpp"
+#include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl_ntlm.hpp"
+#include "jhetz/ldap/sync.hpp"
 
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/write.hpp>
@@ -130,7 +134,7 @@ auto try_bind(corosio::io_context &ioc, const ldap::dn &who, const std::string &
 void reset(corosio::io_context &ioc, const ldap::dn &who, const std::string &password)
 {
 	auto admin = open_bound(ioc, false, administrator, administrator_password);
-	auto r = finish(ioc, admin.reset_password(who, password));
+	auto r = finish(ioc, ldap::ad::reset_password(admin, who, password));
 	if (!r) {
 		FAIL("reset the password of " << who.to_string() << ": " << r.error().message());
 	}
@@ -140,14 +144,14 @@ void reset(corosio::io_context &ioc, const ldap::dn &who, const std::string &pas
 
 // ---------------------------------------------------------------- password changes (unicodePwd)
 
-TEST_CASE("samba ad: change_password and reset_password", "[samba_ad][password]")
+TEST_CASE("samba ad: ad::change_password and ad::reset_password", "[samba_ad][password]")
 {
 	require_samba();
 	corosio::io_context ioc;
 	const bool start_tls = GENERATE(false, true);
 	CAPTURE(start_tls);
 
-	SECTION("the root DSE advertises Active Directory and no RFC 3062: automatic picks active_directory")
+	SECTION("no RFC 3062: the core's password calls are refused")
 	{
 		auto c = open_tls(ioc, start_tls);
 		auto dse = finish(ioc,
@@ -159,22 +163,20 @@ TEST_CASE("samba ad: change_password and reset_password", "[samba_ad][password]"
 		CHECK(ldap::ad::edition_of((*dse)[0]) == ldap::ad::edition::ds);
 		const auto *extensions = (*dse)[0].find("supportedExtension");
 		CHECK((extensions == nullptr || !std::ranges::contains(*extensions, ldap::password_modify_oid)));
-		// automatic (the default) as Administrator: with RFC 3062 picked,
-		// Samba would answer protocolError to an unknown extended operation.
+		reset(ioc, pwchange, "Core-Passw0rd");
 		auto admin = open_bound(ioc, start_tls, administrator, administrator_password);
-		auto r = finish(ioc, admin.reset_password(pwchange, "Auto-Passw0rd"));
-		if (!r) {
-			FAIL(r.error().message());
-		}
-		CHECK(try_bind(ioc, pwchange, "Auto-Passw0rd").has_value());
+		auto r = finish(ioc, admin.reset_password(pwchange, "Never-Passw0rd"));
+		REQUIRE_FALSE(r.has_value());
+		INFO(r.error().message());
+		CHECK(r.error().code == ldap::errc::protocol_error);
+		CHECK(try_bind(ioc, pwchange, "Core-Passw0rd").has_value());
 	}
 
 	SECTION("reset_password as Administrator")
 	{
 		reset(ioc, pwchange, "Before-Reset-Passw0rd");
 		auto admin = open_bound(ioc, start_tls, administrator, administrator_password);
-		auto r =
-		  finish(ioc, admin.reset_password(pwchange, "After-Reset-Passw0rd", ldap::password_method::active_directory));
+		auto r = finish(ioc, ldap::ad::reset_password(admin, pwchange, "After-Reset-Passw0rd"));
 		if (!r) {
 			FAIL(r.error().message());
 		}
@@ -188,7 +190,7 @@ TEST_CASE("samba ad: change_password and reset_password", "[samba_ad][password]"
 	{
 		reset(ioc, pwchange, "Old-Passw0rd");
 		auto user = open_bound(ioc, start_tls, pwchange, "Old-Passw0rd");
-		auto r = finish(ioc, user.change_password(pwchange, "Old-Passw0rd", "New-Passw0rd"));
+		auto r = finish(ioc, ldap::ad::change_password(user, pwchange, "Old-Passw0rd", "New-Passw0rd"));
 		if (!r) {
 			FAIL(r.error().message());
 		}
@@ -206,7 +208,7 @@ TEST_CASE("samba ad: change_password and reset_password", "[samba_ad][password]"
 		reset(ioc, pwchange, reset_to);
 		CHECK(try_bind(ioc, pwchange, reset_to).has_value());
 		auto user = open_bound(ioc, start_tls, pwchange, reset_to);
-		auto r = finish(ioc, user.change_password(pwchange, reset_to, changed_to));
+		auto r = finish(ioc, ldap::ad::change_password(user, pwchange, reset_to, changed_to));
 		if (!r) {
 			FAIL(r.error().message());
 		}
@@ -221,7 +223,7 @@ TEST_CASE("samba ad: change_password and reset_password", "[samba_ad][password]"
 	{
 		reset(ioc, pwchange, "Policy-Passw0rd");
 		auto user = open_bound(ioc, start_tls, pwchange, "Policy-Passw0rd");
-		auto r = finish(ioc, user.change_password(pwchange, "Policy-Passw0rd", "short"));
+		auto r = finish(ioc, ldap::ad::change_password(user, pwchange, "Policy-Passw0rd", "short"));
 		REQUIRE_FALSE(r.has_value());
 		INFO(r.error().message());
 		CHECK(r.error().code == ldap::errc::constraint_violation);
@@ -229,7 +231,7 @@ TEST_CASE("samba ad: change_password and reset_password", "[samba_ad][password]"
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("does not meet the password policy"));
 		// An administrator's reset is held to the policy too.
 		auto admin = open_bound(ioc, start_tls, administrator, administrator_password);
-		auto a = finish(ioc, admin.reset_password(pwchange, "short"));
+		auto a = finish(ioc, ldap::ad::reset_password(admin, pwchange, "short"));
 		REQUIRE_FALSE(a.has_value());
 		INFO(a.error().message());
 		CHECK(a.error().code == ldap::errc::constraint_violation);
@@ -241,7 +243,7 @@ TEST_CASE("samba ad: change_password and reset_password", "[samba_ad][password]"
 	{
 		reset(ioc, pwchange, "Right-Passw0rd");
 		auto user = open_bound(ioc, start_tls, pwchange, "Right-Passw0rd");
-		auto r = finish(ioc, user.change_password(pwchange, "Wrong-Passw0rd", "Next-Passw0rd"));
+		auto r = finish(ioc, ldap::ad::change_password(user, pwchange, "Wrong-Passw0rd", "Next-Passw0rd"));
 		REQUIRE_FALSE(r.has_value());
 		INFO(r.error().message());
 		CHECK(r.error().code == ldap::errc::constraint_violation);
@@ -257,26 +259,49 @@ TEST_CASE("samba ad: a password change on plain ldap:// is refused before sendin
 	corosio::io_context ioc;
 	reset(ioc, pwchange, "Plain-Passw0rd");
 	auto c = open(ioc, strict_ldap());
-	SECTION("active_directory: nothing sent")
-	{
-		auto r = finish(ioc, c.reset_password(pwchange, "Never-Passw0rd", ldap::password_method::active_directory));
-		REQUIRE_FALSE(r.has_value());
-		CHECK(r.error().code == ldap::client_errc::tls_required);
-		CHECK(r.error().diagnostic.empty());
-		auto ch = finish(ioc,
-		  c.change_password(pwchange, "Plain-Passw0rd", "Never-Passw0rd", ldap::password_method::active_directory));
-		REQUIRE_FALSE(ch.has_value());
-		CHECK(ch.error().code == ldap::client_errc::tls_required);
-	}
-	SECTION("automatic: the root DSE is read, then the modify is not sent")
-	{
-		auto r = finish(ioc, c.change_password(pwchange, "Plain-Passw0rd", "Never-Passw0rd"));
-		REQUIRE_FALSE(r.has_value());
-		CHECK(r.error().code == ldap::client_errc::tls_required);
-		CHECK(r.error().diagnostic.empty());
-	}
+	auto r = finish(ioc, ldap::ad::reset_password(c, pwchange, "Never-Passw0rd"));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::client_errc::tls_required);
+	CHECK(r.error().diagnostic.empty());
+	auto ch = finish(ioc, ldap::ad::change_password(c, pwchange, "Plain-Passw0rd", "Never-Passw0rd"));
+	REQUIRE_FALSE(ch.has_value());
+	CHECK(ch.error().code == ldap::client_errc::tls_required);
 	CHECK(c.is_open());
 	CHECK(try_bind(ioc, pwchange, "Plain-Passw0rd").has_value());
+}
+
+TEST_CASE("samba ad: ad passwords through ldap::client and the sync facade", "[samba_ad][password]")
+{
+	require_samba();
+	corosio::io_context ioc;
+	SECTION("ldap::client")
+	{
+		auto u = ldap::url::parse(strict_ldaps());
+		REQUIRE(u.has_value());
+		ldap::client pool(ioc,
+		  { .servers = { *u },
+			.connection = samba_tls(),
+			.setup = ldap::simple_bind_setup(administrator, administrator_password) });
+		auto r = finish(ioc, ldap::ad::reset_password(pool, pwchange, "Pool-Passw0rd"));
+		if (!r) {
+			FAIL(r.error().message());
+		}
+		CHECK(try_bind(ioc, pwchange, "Pool-Passw0rd").has_value());
+		pool.close();
+		drive(ioc);
+	}
+	SECTION("sync::connection")
+	{
+		reset(ioc, pwchange, "Sync-Old-Passw0rd");
+		ldap::sync::connection c(samba_tls());
+		REQUIRE(c.connect(strict_ldaps()).has_value());
+		REQUIRE(c.simple_bind(pwchange, "Sync-Old-Passw0rd").has_value());
+		auto r = ldap::ad::change_password(c, pwchange, "Sync-Old-Passw0rd", "Sync-New-Passw0rd");
+		if (!r) {
+			FAIL(r.error().message());
+		}
+		CHECK(try_bind(ioc, pwchange, "Sync-New-Passw0rd").has_value());
+	}
 }
 
 // ---------------------------------------------------------------- SASL NTLM binds

@@ -383,7 +383,6 @@ TEST_CASE("every client_errc maps to its documented condition", "[error][cond]")
 		{ client_errc::operation_in_progress, std::nullopt },
 		{ client_errc::unauthenticated_bind, cond::auth_failed },
 		{ client_errc::tls_required, cond::access_denied },
-		{ client_errc::no_password_method, std::nullopt },
 		{ client_errc::gssapi_failure, cond::auth_failed },
 		{ client_errc::security_layer_required, cond::access_denied },
 		{ client_errc::internal_error, std::nullopt },
@@ -407,16 +406,16 @@ TEST_CASE("every client_errc maps to its documented condition", "[error][cond]")
 TEST_CASE("internal_error is a library failure, not invalid input", "[error][cond]")
 {
 	// SCRAM's OpenSSL and ICU failures, and ICU failures in
-	// ad_password_value, use it: a caller testing cond::invalid_input must
+	// ad::password_value, use it: a caller testing cond::invalid_input must
 	// not take the environment's failure for a bad username or password.
 	const std::error_code ec = ldap::client_errc::internal_error;
-	CHECK(ec.value() == 26);
+	CHECK(ec.value() == 25);
 	CHECK(ec.message() == "a library the client uses failed");
 	CHECK(ec != ldap::cond::invalid_input);
 	CHECK(ec != ldap::cond::auth_failed);
 	CHECK(cond_of(ec) == std::nullopt);
 	const ldap::error e = ldap::make_error(ldap::client_errc::internal_error, "OpenSSL PBKDF2 failed");
-	CHECK(e.message() == "OpenSSL PBKDF2 failed: a library the client uses failed [ldap.client:26]");
+	CHECK(e.message() == "OpenSSL PBKDF2 failed: a library the client uses failed [ldap.client:25]");
 }
 
 TEST_CASE("system, Capy and TLS codes map to conditions", "[error][cond]")

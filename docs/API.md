@@ -221,11 +221,11 @@ itself needs only ICU.
   `write_bytes` sends raw bytes.
 
 - `jhetz/ldap/connection.hpp` (steps 5a, 5b): `ldap::connection`, the
-  client API, with `ldap::connect()` and `ad_password_value()`. It includes
+  client API, with `ldap::connect()`. It includes
   the headers below, so it is the one to include; each also compiles on
   its own:
   - `jhetz/ldap/connection_options.hpp`: `connection_options`,
-    `schema_check`, `password_method`.
+    `schema_check`.
   - `jhetz/ldap/operations.hpp` (part of the codec, `jhetz::ldap`): the
     request aggregates (`search_params`, `add_params`, `modify_params`,
     `del_params`, `modify_dn_params`, `compare_params`, `extended_params`,
@@ -421,28 +421,18 @@ itself needs only ICU.
   `sasl_bind_setup` with an EXTERNAL mechanism, or `no_bind_setup()`, which
   presents it without binding). Its connections are reused per server and
   closed with the connector.
-- Password changes that work on OpenLDAP and Active Directory alike:
-  `change_password(user, old, new)` (a user's own) and
-  `reset_password(user, new)` (an administrator's), on `connection` and
-  `sync::connection`. The method comes from the server's root DSE, read
-  once per connection (again after StartTLS): RFC 3062 Password Modify if
-  `supportedExtension` lists it, else Active Directory (and Samba AD) if
-  `supportedCapabilities` lists `ad::ds_capability_oid`, else
-  `client_errc::no_password_method`; a server offering both gets RFC 3062.
-  On AD the password goes into one ModifyRequest of `unicodePwd`
-  (`ldap::ad_password_value`: quoted, UTF-16LE, full Unicode), deleting the
-  old value and adding the new one for a change, replacing it for a reset,
-  and only over TLS (`client_errc::tls_required` before anything is sent);
-  AD's diagnostics for common refusals (`0000052D` password policy,
-  `00000056` wrong old password) are explained in the error's context.
-  When the root DSE is hidden by access controls, choose the method with
-  `connection_options::password_method` or per call
-  (`ldap::password_method::rfc3062` / `active_directory`): an explicit
-  method never reads the root DSE. Passwords never appear in errors.
-  Password memory is not wiped (simple binds, `password_modify`, these
-  two, `ad_password_value`): the password goes through `std::string`
-  copies the library cannot all reach. Only `sasl_scram_sha256` and
-  `sasl_ntlm` wipe what they hold.
+- Password changes with RFC 3062 Password Modify: `password_modify(params)`
+  (the request as the RFC has it, a generated password returned), and two
+  conveniences over it, `change_password(user, old, new)` (a user's own)
+  and `reset_password(user, new)` (an administrator's; an empty `user` is
+  the bound user), on `connection` and `sync::connection`. Active Directory
+  has no RFC 3062: its password changes are `ad::change_password` and
+  `ad::reset_password` (section `ldap::ad`). Which one runs is the call's
+  choice: nothing reads the root DSE to pick. Passwords never appear in
+  errors. Password memory is not wiped (simple binds, `password_modify`,
+  these calls, `ad::password_value`): the password goes through
+  `std::string` copies the library cannot all reach. Only
+  `sasl_scram_sha256` and `sasl_ntlm` wipe what they hold.
 - StartTLS (step 7): `connection::start_tls(tls_options)` upgrades a plain
   ldap:// connection in place (refused while operations are outstanding;
   it first waits for the answers due to paged search releases; bytes
@@ -880,10 +870,31 @@ itself needs only ICU.
 Active Directory behaviour no RFC describes, as free functions and types in
 `jhetz::ldap::ad` over the public API (DESIGN.md section 12). The
 codec-level headers are part of `jhetz::ldap`; the operations that need
-the network will be in the target `jhetz::ldap_ad` (links
-`jhetz::ldap_net`; package component `ad`:
-`find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net ad)`), which has no
-operation of its own yet.
+the network are in the target `jhetz::ldap_ad` (links `jhetz::ldap_net`;
+package component `ad`:
+`find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net ad)`).
+
+- `jhetz/ldap/ad/password.hpp` (`jhetz::ldap_ad`): `ad::change_password(c,
+  user, old, new)` (a user's own) and `ad::reset_password(c, user, new)`
+  (an administrator's), with `c` a `connection &` or a `client &`. One
+  ModifyRequest of `user`'s `unicodePwd`, deleting the old value and
+  adding the new one for a change, replacing it for a reset: what AD DS,
+  AD LDS and Samba AD take instead of RFC 3062. Refused before anything is
+  sent on an open connection without TLS (`client_errc::tls_required`),
+  for an empty `user` (`client_errc::invalid_dn`), an empty password
+  (`std::errc::invalid_argument`) or ill-formed UTF-8
+  (`client_errc::encode_error`). AD's diagnostics for common refusals
+  (`0000052D` password policy, `00000056` wrong old password, `00000005`,
+  `00000775`) are explained in the error's context; `error::diagnostic`
+  keeps the server's text. The `client &` overloads run on a shared lease
+  and retry once after `client_errc::not_sent`, as the client's write
+  forwarders do. The connection or client must outlive the task.
+- `jhetz/ldap/ad/sync.hpp` (`jhetz::ldap_ad`): the same calls, blocking,
+  over `sync::connection &`, `sync::lease &` and `sync::client &`.
+- `jhetz/ldap/ad/password_value.hpp` (`jhetz::ldap`):
+  `ad::password_value(password)`, the `unicodePwd` value (quoted, UTF-16LE,
+  full Unicode; `client_errc::encode_error` for ill-formed UTF-8), for a
+  ModifyRequest built by hand.
 
 - `jhetz/ldap/ad/root_dse.hpp` (`jhetz::ldap`): `ad::edition_of(root_dse)`
   reads a root DSE entry's supportedCapabilities: `ad::edition::ds` if it

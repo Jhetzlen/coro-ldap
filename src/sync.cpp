@@ -92,6 +92,11 @@ namespace detail {
 
 	auto is_tls_of(const ldap::connection &c) -> capy::task<result<bool>> { co_return c.is_tls(); }
 
+	auto security_layer_of(const ldap::connection &c) -> capy::task<result<sasl_protection>>
+	{
+		co_return c.security_layer();
+	}
+
 	auto peer_certificate_of(const ldap::connection &c) -> capy::task<result<std::vector<std::byte>>>
 	{
 		const auto der = c.peer_certificate();

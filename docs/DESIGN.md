@@ -471,18 +471,14 @@ an error: it is not a valid answer). referral (10) is an error with the
 URIs in `error::referrals`; saslBindInProgress (14) is an error for a
 simple bind and the "continue" signal of `sasl_bind` (#11).
 
-`change_password()` / `reset_password()` pick RFC 3062 or Active
-Directory's `unicodePwd` Modify from the root DSE (`password_method`,
-connection_options.hpp), cached per connection and dropped by `start_tls()` like
-the schema; the AD path refuses a connection without TLS before sending
-(`client_errc::tls_required`). A root DSE the server refuses to read
-fails with the server's own error (e.g. insufficientAccessRights); one
-that returns no entry, or advertises neither method, fails with
-`client_errc::no_password_method`. Both errors name the option that skips
-the lookup. Tested against the scripted mock (`tests/net/password_tests.cpp`)
-and a Samba AD DC (`integration.samba_ad`, run_samba_ad.sh): detection,
-reset, change, a non-BMP password, and the 0000052D and 00000056
-explanations from Samba's diagnostics. Password memory is not wiped on these paths, nor in simple
+`change_password()` / `reset_password()` are RFC 3062 only: conveniences
+over `password_modify()` (the user as userIdentity, nothing generated),
+next to it and not instead of it. Active Directory's `unicodePwd` Modify is
+`ad::change_password()` / `ad::reset_password()` in the AD layer (section
+12). The call picks the protocol; nothing reads the root DSE to choose, so
+there is no method option, no per-connection cache and no "no method"
+error. Tested against the scripted mock (`tests/net/password_tests.cpp`)
+and slapd (`integration`). Password memory is not wiped on these paths, nor in simple
 binds and `password_modify()`: the password passes through `std::string`
 copies (the caller's, the request's values, the encoded PDU in the
 connection's pmr buffers) that cannot all be reached, and wiping one of
@@ -1489,7 +1485,7 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `no_password_method`, `gssapi_failure`, `security_layer_required`, `security_layer_unavailable`, `security_layer_in_effect`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock`; environment: `internal_error` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `gssapi_failure`, `security_layer_required`, `security_layer_unavailable`, `security_layer_in_effect`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock`; environment: `internal_error` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 `error`'s strings are `std::pmr::string` but always on the default
@@ -1540,9 +1536,8 @@ failure, which the context names), `not_sent` (the connection closed
 before the request reached the writer: the server never saw it, see
 "Sent or not" in section 7), `operation_in_progress` (the connection
 is busy; nothing is queued), `unauthenticated_bind` (a name with an empty
-password), `tls_required` (an Active Directory password change on a
-connection without TLS), `no_password_method` (the root DSE advertises
-no password-change method this library knows), `gssapi_failure` (a GSS-API
+password), `tls_required` (channel binding, or an Active Directory password change,
+on a connection without TLS), `gssapi_failure` (a GSS-API
 call failed in a SASL GSSAPI bind: the context quotes GSS-API's major and
 minor status messages), `security_layer_required` (the server accepts a
 SASL GSSAPI bind only with a security layer, which the options do not
@@ -1571,7 +1566,7 @@ a caller match none, deliberately (test them by exact code).
 | `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required`, `security_layer_required`, `security_layer_unavailable` | `permission_denied` |
 | `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
 | `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url`, `string_prep_failed` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
-| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `virtual_list_view_error`, `assertion_failed`, `e_sync_refresh_required`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `no_password_method`, `internal_error` | everything else |
+| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `virtual_list_view_error`, `assertion_failed`, `e_sync_refresh_required`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `internal_error` | everything else |
 
 Choices worth knowing: `unauthenticated_bind` is `auth_failed` (an empty
 password on a login form is a failed login); `stronger_auth_required` and
@@ -1581,7 +1576,7 @@ the session is not good enough); `unwilling_to_perform` matches nothing
 nothing (it comes with partial results); `operation_in_progress` matches
 nothing (it is a usage error, not a busy server); `internal_error` (a
 library the client uses failed: OpenSSL in SCRAM, ICU in SASLprep or
-`ad_password_value`, e.g. out of memory or ICU data without the SASLprep
+`ad::password_value`, e.g. out of memory or ICU data without the SASLprep
 profile) matches nothing: it is neither the caller's input (`invalid_input`
 would make an application prompt for the password again) nor the server's
 doing, and no retry or fix is implied; file errors from TLS
@@ -2690,8 +2685,9 @@ Layout:
 - Codec-level AD code (no network) is in `jhetz::ldap`: headers under
   `include/jhetz/ldap/ad/`, sources under `src/ad/`. `ad/filetime.hpp`
   (the FILETIME clock and its `value_traits`, section 4) and
-  `ad/root_dse.hpp` (`edition_of`, `is_active_directory`) so far. These
-  headers are installed with the codec-only package too.
+  `ad/root_dse.hpp` (`edition_of`, `is_active_directory`) and
+  `ad/password_value.hpp` (the `unicodePwd` value). These headers are
+  installed with the codec-only package too.
 - AD operations that need the network go in the target `jhetz::ldap_ad`
   (export name `ldap_ad`, package component `ad`), sources under `src/ad/`
   next to the codec's, their headers under `include/jhetz/ldap/ad/` too,
@@ -2699,16 +2695,38 @@ Layout:
   and `tests/CMakeLists.txt`'s header check.
   It links `jhetz::ldap_net` and includes only public headers, never
   `src/connection/` or `src/net/`; it is built and installed whenever
-  `jhetz::ldap_net` is. It is an INTERFACE library until its first source.
+  `jhetz::ldap_net` is. `ad/password.hpp` (async, `connection &` and
+  `client &`) and `ad/sync.hpp` (the blocking overloads, over
+  `sync::connection &`, `sync::lease &` and `sync::client &`) so far.
   A target of its own rather than `src/ad/` inside `jhetz::ldap_net`: the
   dependency is one-way and visible in CMake (`jhetz::ldap_net` cannot
   reach `ldap::ad`, `jhetz::ldap_ad` sees no private header), a consumer
   who never talks to AD does not link it, and the package says by
   component whether it is there.
-- The core does not depend on `jhetz::ldap_ad`. Codec-level `ldap::ad`
-  headers may be used by the core where it still carries AD behaviour
-  being moved out (`password_method::automatic` reads
-  `ad::ds_capability_oid`).
+- The core does not depend on `jhetz::ldap_ad`.
+
+Passwords: `ad::change_password(c, user, old, new)` sends one ModifyRequest
+of `unicodePwd` deleting the old value and adding the new one (a user's
+own change, which AD checks against the old password),
+`ad::reset_password(c, user, new)` one replacing it (an administrator's),
+with `ad::password_value()`'s quoted UTF-16LE (MS-ADTS 3.1.1.3.1.5). AD
+DS, AD LDS and Samba AD alike: no detection, the caller knows its
+directory. Validation (empty passwords, an empty DN, ill-formed UTF-8)
+fails before anything is sent, and so does an open connection without
+TLS (`client_errc::tls_required`). AD's Win32 code at the start of a
+refusal's diagnostic is explained in the context (0000052D, 00000056,
+00000005, 00000775); the diagnostic is kept as sent. Overloads:
+`connection &` and `client &` (a shared lease, retried once after
+`not_sent` as the write forwarders are: the protection check needs the
+connection the modify goes to, so it cannot go through `client::modify`),
+and blocking ones in `ad/sync.hpp` built on the facade's public calls
+(`is_open()`, `is_tls()`, `modify()`), the sync facade having no generic
+"run this task" entry. There is no "detect and dispatch" helper: the
+caller calls the core's RFC 3062 functions or these. Tested against the
+scripted mock (`tests/net/ad_password_tests.cpp`, `sync_tests.cpp`) and a
+Samba AD DC (`integration.samba_ad`: reset, change, a non-BMP password,
+0000052D and 00000056, plain ldap:// refused, `ldap::client`,
+`sync::connection`, and the core's RFC 3062 calls refused by Samba).
 
 Recognising AD: `ad::edition_of(root_dse)` reads the root DSE's
 supportedCapabilities: `ad::ds_capability_oid` (1.2.840.113556.1.4.800,

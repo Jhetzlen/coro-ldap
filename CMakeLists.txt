@@ -198,6 +198,7 @@ if(NOT ICU_FOUND)
 endif()
 
 add_library(jhetz_ldap STATIC
+    src/ad/password_value.cpp
     src/ad/root_dse.cpp
     src/attribute.cpp
     src/ber.cpp
@@ -346,12 +347,15 @@ endif()
 # jhetz::ldap_ad: the Active Directory operations that need the network
 # (DESIGN.md, "Active Directory layer"), built on jhetz::ldap_net's public
 # API only. Its codec-level headers (include/jhetz/ldap/ad/, sources in
-# src/ad/) are in jhetz::ldap. An INTERFACE library until its first source.
+# src/ad/) are in jhetz::ldap.
 if(JHETZ_LDAP_BUILD_NET)
-    add_library(jhetz_ldap_ad INTERFACE)
+    add_library(jhetz_ldap_ad STATIC
+        src/ad/password.cpp
+    )
     add_library(jhetz::ldap_ad ALIAS jhetz_ldap_ad)
     set_target_properties(jhetz_ldap_ad PROPERTIES EXPORT_NAME ldap_ad)
-    target_link_libraries(jhetz_ldap_ad INTERFACE jhetz_ldap_net)
+    target_link_libraries(jhetz_ldap_ad PUBLIC jhetz_ldap_net)
+    jhetz_ldap_warnings(jhetz_ldap_ad)
 endif()
 
 if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
@@ -423,7 +427,8 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "sasl_ntlm.hpp" EXCLUDE
             PATTERN "sasl_scram.hpp" EXCLUDE
             PATTERN "sasl_gssapi.hpp" EXCLUDE
-            PATTERN "sync.hpp" EXCLUDE)
+            PATTERN "sync.hpp" EXCLUDE
+            PATTERN "password.hpp" EXCLUDE)
     endif()
     install(EXPORT jhetz_ldap-targets NAMESPACE jhetz:: DESTINATION ${jhetz_ldap_cmakedir})
     configure_package_config_file(cmake/jhetz_ldap-config.cmake.in

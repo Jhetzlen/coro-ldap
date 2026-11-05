@@ -176,6 +176,7 @@ namespace detail {
 	  -> boost::capy::task<result<std::unique_ptr<ldap::transaction>>>;
 	[[nodiscard]] auto is_open_of(const ldap::connection &c) -> boost::capy::task<result<bool>>;
 	[[nodiscard]] auto is_tls_of(const ldap::connection &c) -> boost::capy::task<result<bool>>;
+	[[nodiscard]] auto security_layer_of(const ldap::connection &c) -> boost::capy::task<result<sasl_protection>>;
 	[[nodiscard]] auto peer_certificate_of(const ldap::connection &c)
 	  -> boost::capy::task<result<std::vector<std::byte>>>;
 	[[nodiscard]] auto close_of(ldap::connection &c) -> boost::capy::task<result<void>>;
@@ -259,6 +260,13 @@ namespace detail {
 		[[nodiscard]] auto is_tls() const -> bool
 		{
 			return self().call([](const ldap::connection &c) { return is_tls_of(c); }).value_or(false);
+		}
+		// As ldap::connection::security_layer(): none once closed.
+		[[nodiscard]] auto security_layer() const -> sasl_protection
+		{
+			return self()
+			  .call([](const ldap::connection &c) { return security_layer_of(c); })
+			  .value_or(sasl_protection::none);
 		}
 		// As ldap::connection::peer_certificate(), copied: the server's
 		// certificate (DER), empty unless is_tls().
@@ -368,21 +376,16 @@ namespace detail {
 		{
 			return self().call([&](ldap::connection &c) { return c.password_modify(std::move(request)); });
 		}
-		[[nodiscard]] auto change_password(dn user,
-		  std::string old_password,
-		  std::string new_password,
-		  std::optional<ldap::password_method> method = std::nullopt) -> result<void>
+		[[nodiscard]] auto change_password(dn user, std::string old_password, std::string new_password) -> result<void>
 		{
 			return self().call([&](ldap::connection &c) {
-				return c.change_password(std::move(user), std::move(old_password), std::move(new_password), method);
+				return c.change_password(std::move(user), std::move(old_password), std::move(new_password));
 			});
 		}
-		[[nodiscard]] auto reset_password(dn user,
-		  std::string new_password,
-		  std::optional<ldap::password_method> method = std::nullopt) -> result<void>
+		[[nodiscard]] auto reset_password(dn user, std::string new_password) -> result<void>
 		{
 			return self().call(
-			  [&](ldap::connection &c) { return c.reset_password(std::move(user), std::move(new_password), method); });
+			  [&](ldap::connection &c) { return c.reset_password(std::move(user), std::move(new_password)); });
 		}
 
 		// LDAP transactions (RFC 5805), as ldap::connection's.

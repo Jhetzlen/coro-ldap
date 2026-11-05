@@ -19,6 +19,7 @@ endif()
 
 add_executable(jhetz_ldap_tests
     ad_filetime_tests.cpp
+    ad_password_value_tests.cpp
     ad_root_dse_tests.cpp
     attribute_tests.cpp
     ber_reader_tests.cpp
@@ -109,7 +110,8 @@ file(GLOB_RECURSE jhetz_ldap_public_headers CONFIGURE_DEPENDS
 set(jhetz_ldap_net_headers
     jhetz/ldap/cancel.hpp jhetz/ldap/client.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
     jhetz/ldap/paged_search.hpp jhetz/ldap/referral_chase.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp jhetz/ldap/transaction.hpp
-    jhetz/ldap/sasl_ntlm.hpp jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp)
+    jhetz/ldap/sasl_ntlm.hpp jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp
+    jhetz/ldap/ad/password.hpp jhetz/ldap/ad/sync.hpp)
 set(jhetz_ldap_codec_header_tus)
 set(jhetz_ldap_net_header_tus)
 foreach(header ${jhetz_ldap_public_headers})
@@ -159,6 +161,7 @@ endif()
 # "net.", so `ctest -R "^net\."` runs just these.
 if(JHETZ_LDAP_BUILD_NET)
     add_executable(jhetz_ldap_net_tests
+        net/ad_password_tests.cpp
         net/connect_tests.cpp
         net/channel_binding_tests.cpp
         net/client_tests.cpp
@@ -181,7 +184,7 @@ if(JHETZ_LDAP_BUILD_NET)
     if(JHETZ_LDAP_WITH_GSSAPI)
         target_sources(jhetz_ldap_net_tests PRIVATE net/sasl_gssapi_tests.cpp)
     endif()
-    target_link_libraries(jhetz_ldap_net_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
+    target_link_libraries(jhetz_ldap_net_tests PRIVATE jhetz::ldap_ad Catch2::Catch2WithMain)
     # Integration tests against a real slapd (tests/integration/run_slapd.sh
     # starts one and sets JHETZ_LDAP_IT_*): one ctest entry, label
     # "integration", skipped (Catch2 exit code 4) when no server is set up.

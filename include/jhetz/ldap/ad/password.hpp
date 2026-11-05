@@ -1,0 +1,46 @@
+// Active Directory password changes: a ModifyRequest of unicodePwd
+// (MS-ADTS 3.1.1.3.1.5), which AD DS, AD LDS and Samba AD use instead of
+// RFC 3062 password modify. Part of jhetz::ldap_ad.
+//
+//   auto r = co_await ldap::ad::reset_password(conn, ldap::dn{"CN=jdoe,CN=Users,DC=example,DC=org"}, password);
+#pragma once
+
+#include "jhetz/ldap/client.hpp"
+#include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/dn.hpp"
+#include "jhetz/ldap/error.hpp"
+
+#include <boost/capy/task.hpp>
+
+#include <string>
+
+namespace jhetz::ldap::ad {
+
+// change_password is a user's own change: one ModifyRequest of `user`'s
+// unicodePwd deleting the old value and adding the new one
+// (ad::password_value()). reset_password is an administrator's: one
+// replacing it. Before anything is sent they fail with
+// std::errc::invalid_argument for an empty new password (or old one, for a
+// change), client_errc::invalid_dn for an empty `user`,
+// client_errc::encode_error for a password that is not valid UTF-8, and
+// client_errc::tls_required on an open connection without TLS (is_tls():
+// ldaps:// or after start_tls()). A server refusal keeps the server's
+// result code and diagnostic, with the context "change password <user>:
+// modify unicodePwd" (or "reset password"); the diagnostics of common
+// refusals (0000052D: the password policy, 00000056: a wrong old password,
+// ...) are explained in the context. Passwords never appear in errors, and
+// their memory is not wiped (see connection::change_password). The
+// connection must outlive the task.
+auto change_password(connection &c, dn user, std::string old_password, std::string new_password)
+  -> boost::capy::task<result<void>>;
+auto reset_password(connection &c, dn user, std::string new_password) -> boost::capy::task<result<void>>;
+
+// As above on a shared lease of `pool` (client::acquire()), retried once
+// on another connection after client_errc::not_sent, as client's write
+// forwarders are. An acquire() failure is returned as is. The client must
+// outlive the task.
+auto change_password(client &pool, dn user, std::string old_password, std::string new_password)
+  -> boost::capy::task<result<void>>;
+auto reset_password(client &pool, dn user, std::string new_password) -> boost::capy::task<result<void>>;
+
+}// namespace jhetz::ldap::ad

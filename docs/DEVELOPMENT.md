@@ -443,13 +443,15 @@ The containers are removed on exit. Not in CI.
 
 What it covers:
 
-- `change_password` and `reset_password` (unicodePwd) over ldaps:// and
-  StartTLS: `password_method::automatic` picks `active_directory` (Samba
-  advertises no RFC 3062), a reset as Administrator, a change as the user
+- `ad::change_password` and `ad::reset_password` (unicodePwd) over
+  ldaps:// and StartTLS: a reset as Administrator, a change as the user
   (delete and add), a non-BMP password (surrogate pairs), a password the
   policy refuses (`constraint_violation`, `0000052D`, also for a reset)
-  and a wrong old password (`constraint_violation`, `00000056`); on plain
-  ldap:// `client_errc::tls_required` before the modify is sent.
+  and a wrong old password (`constraint_violation`, `00000056`); through
+  `ldap::client` and `sync::connection`; on plain ldap://
+  `client_errc::tls_required` before the modify is sent. The core's RFC
+  3062 `reset_password` is refused by Samba (`protocol_error`: no
+  Password Modify extended operation).
 - `sasl_ntlm` binds over ldaps:// and StartTLS: a UPN, `DOMAIN\user`, a
   bare user name, a non-ASCII user (`jörg`, also in upper case) with a
   non-BMP password, a wrong password (`invalid_credentials`, `8009030C`

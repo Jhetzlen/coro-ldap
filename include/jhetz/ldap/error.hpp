@@ -107,8 +107,7 @@ enum class client_errc : int {
 	not_connected,// connection closed (unbind, close, or an earlier failure)
 	operation_in_progress,// the connection is busy with another operation or an open search_stream
 	unauthenticated_bind,// simple bind with a name and an empty password (RFC 4513 section 5.1.2)
-	tls_required,// refused on a connection without TLS (an Active Directory password change)
-	no_password_method,// the server advertises no password-change method this library knows
+	tls_required,// refused on a connection without TLS (channel binding, an Active Directory password change)
 	gssapi_failure,// a GSS-API (Kerberos) call failed during a SASL GSSAPI bind
 	security_layer_required,// the server requires a SASL security layer (integrity, confidentiality)
 	internal_error,// a library the client uses failed (OpenSSL, ICU), not the caller's input

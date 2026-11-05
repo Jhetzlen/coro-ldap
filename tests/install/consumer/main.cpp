@@ -1,8 +1,10 @@
 // Uses the installed headers and libraries: the codec always (with the
-// operations.hpp mod:: builders and the ad/ headers), the connection and
-// jhetz::ldap_ad with WITH_NET (a connect that must be refused: no server)
-// and SCRAM's SASLprep (links ICU through the package).
+// operations.hpp mod:: builders and the ad/ headers), the connection
+// (a connect that must be refused: no server), jhetz::ldap_ad (a password
+// reset on no connection) and SCRAM's SASLprep (links ICU through the
+// package) with WITH_NET.
 #include "jhetz/ldap/ad/filetime.hpp"
+#include "jhetz/ldap/ad/password_value.hpp"
 #include "jhetz/ldap/ad/root_dse.hpp"
 #include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/filter.hpp"
@@ -10,6 +12,7 @@
 #include "jhetz/ldap/operations.hpp"
 
 #ifdef WITH_NET
+#include "jhetz/ldap/ad/password.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl_scram.hpp"
 
@@ -43,7 +46,8 @@ auto main() -> int
 	dse.attributes.emplace_back(ldap::attribute::unchecked("supportedCapabilities"),
 	  std::initializer_list<std::string_view>{ ldap::ad::ds_capability_oid });
 	const auto expires = ldap::value_traits<ldap::ad::filetime_clock::time_point>::decode("0");
-	if (!ldap::ad::is_active_directory(dse) || !expires || !ldap::ad::is_never(*expires)) {
+	if (!ldap::ad::is_active_directory(dse) || !expires || !ldap::ad::is_never(*expires)
+		|| ldap::ad::password_value("ab") != std::string_view("\"\0a\0b\0\"\0", 8)) {
 		std::puts("codec: unexpected ad result");
 		return 1;
 	}
@@ -57,6 +61,17 @@ auto main() -> int
 	ioc.run();
 	if (!failed) {
 		std::puts("net: expected the connect to fail");
+		return 1;
+	}
+	// jhetz::ldap_ad: a reset on a connection that is not open.
+	ldap::connection none;
+	bool refused = false;
+	boost::capy::run_async(ioc.get_executor(), [&](ldap::result<void> r) { refused = !r; })(
+	  ldap::ad::reset_password(none, ldap::dn{ "cn=x" }, "pw"));
+	ioc.restart();
+	ioc.run();
+	if (!refused) {
+		std::puts("ad: expected the reset to fail");
 		return 1;
 	}
 	// "I" U+00AD "X": SASLprep maps the soft hyphen to nothing.

@@ -156,25 +156,20 @@ class connection::impl
 
 	// What the connection knows about the server: the modes set by the
 	// options, and the caches filled from the server's answers. The core
-	// never reads it: it is the operations' (schema checks, password
-	// changes), which fill its caches, hence the mutable accessor.
+	// never reads it: it is the operations' (schema checks), which fill its
+	// caches, hence the mutable accessor.
 	struct server_knowledge
 	{
 		// schema_check::on_first_use: the loaded schema and the types checked.
 		ldap::schema_check schema_mode = ldap::schema_check::off;
 		std::shared_ptr<const server_schema> schema{};
 		std::vector<std::type_index> schema_checked{};
-		// change_password / reset_password: the connection's default method, and
-		// the one the root DSE advertised (password_method::automatic), once read.
-		ldap::password_method password_mode = ldap::password_method::automatic;
-		std::optional<ldap::password_method> advertised_password_method{};
 
 		// Discards what was learnt from the server (the modes are kept).
 		void forget() noexcept
 		{
 			schema.reset();
 			schema_checked.clear();
-			advertised_password_method.reset();
 		}
 	};
 	auto knowledge() noexcept -> server_knowledge & { return knowledge_; }

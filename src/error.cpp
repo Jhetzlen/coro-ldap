@@ -156,8 +156,6 @@ namespace {
 			return "simple bind with a name but no password (unauthenticated bind)";
 		case client_errc::tls_required:
 			return "the connection must be protected by TLS";
-		case client_errc::no_password_method:
-			return "no known password-change method on this server";
 		case client_errc::gssapi_failure:
 			return "GSS-API failure";
 		case client_errc::security_layer_required:

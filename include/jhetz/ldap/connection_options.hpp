@@ -1,7 +1,7 @@
 // The options of ldap::connect() and of an ldap::connection
 // (connection.hpp): connect timeout and TLS, message and decoding limits,
-// the default operation timeout, StartTLS on connect, schema checks of the
-// typed operations and the password change method. Part of jhetz::ldap_net.
+// the default operation timeout, StartTLS on connect and schema checks of
+// the typed operations. Part of jhetz::ldap_net.
 //
 //   auto c = co_await ldap::connect(ioc, "ldap://ldap.example.org", {
 //       .timeout           = 5s,
@@ -31,24 +31,6 @@ enum class schema_check {
 	// and dropped by start_tls() (RFC 4513 section 3.1.5: what was read in
 	// clear is read again over TLS).
 	on_first_use,
-};
-
-// How connection::change_password and reset_password change a password.
-enum class password_method {
-	// Pick from the root DSE, read when first needed (one base search) and
-	// kept for the connection until start_tls() (RFC 4513 section 3.1.5:
-	// what was read in clear is read again over TLS): rfc3062 if its
-	// supportedExtension lists password_modify_oid, else active_directory
-	// if its supportedCapabilities lists ad::ds_capability_oid
-	// (Samba AD too), else client_errc::no_password_method. A server
-	// offering both gets rfc3062. A root DSE hidden by access controls
-	// advertises neither: choose the method explicitly then.
-	automatic,
-	// RFC 3062 Password Modify (password_modify()). Never reads the root DSE.
-	rfc3062,
-	// Active Directory: a ModifyRequest of unicodePwd (ad_password_value()),
-	// which needs TLS. Never reads the root DSE.
-	active_directory,
 };
 
 struct connection_options
@@ -86,9 +68,6 @@ struct connection_options
 	// does not work. Not allowed with ldaps:// or ldapi:// (invalid_url).
 	bool start_tls = false;
 	ldap::schema_check schema_check = ldap::schema_check::off;
-	// The method change_password() and reset_password() use unless a call
-	// names one.
-	ldap::password_method password_method = ldap::password_method::automatic;
 };
 
 }// namespace jhetz::ldap
