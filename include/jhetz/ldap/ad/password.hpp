@@ -25,15 +25,16 @@ namespace jhetz::ldap::ad {
 // client_errc::encode_error for a password that is not valid UTF-8, and
 // client_errc::tls_required on an open connection that is neither
 // TLS-protected (is_tls(): ldaps:// or after start_tls()) nor under a SASL
-// confidentiality layer (security_layer(), e.g. sasl_ntlm or sasl_gssapi
-// with security_layer set): AD takes unicodePwd over either. A server refusal keeps the server's
+// confidentiality layer (security_layer() reports confidentiality: sasl_ntlm
+// with either layer, sasl_gssapi with gssapi_security_layer::confidentiality;
+// GSSAPI's integrity layer is refused). A server refusal keeps the server's
 // result code and diagnostic, with the context "change password <user>:
 // modify unicodePwd" (or "reset password"); the diagnostics of common
 // refusals (0000052D: the password policy, 00000056: a wrong old password,
-// ...) are explained in the context (ad::explain, ad/diagnostic.hpp). Passwords never appear in errors, and
-// their memory is not wiped (see connection::change_password). The
-// connection must outlive the task; the passwords are read before the
-// call returns.
+// ...) are explained in the context (ad::explain, ad/diagnostic.hpp).
+// Passwords never appear in errors, and their memory is not wiped (see
+// connection::change_password). The connection must outlive the task; the
+// passwords are read before the call returns.
 auto change_password(connection &c, dn user, std::string_view old_password, std::string_view new_password)
   -> boost::capy::task<result<void>>;
 auto reset_password(connection &c, dn user, std::string_view new_password) -> boost::capy::task<result<void>>;

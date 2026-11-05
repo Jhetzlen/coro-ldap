@@ -881,16 +881,19 @@ package component `ad`:
   adding the new one for a change, replacing it for a reset: what AD DS,
   AD LDS and Samba AD take instead of RFC 3062. Refused before anything is
   sent on an open connection with neither TLS nor a SASL confidentiality
-  layer (`security_layer()`: `sasl_ntlm` or `sasl_gssapi` with
-  `security_layer` set; `client_errc::tls_required`),
-  for an empty `user` (`client_errc::invalid_dn`), an empty password
+  layer (`security_layer()` reports confidentiality: `sasl_ntlm` with
+  either layer, `sasl_gssapi` with
+  `gssapi_security_layer::confidentiality`, not integrity;
+  `client_errc::tls_required`), for an empty `user`
+  (`client_errc::invalid_dn`), an empty password
   (`std::errc::invalid_argument`) or ill-formed UTF-8
   (`client_errc::encode_error`). AD's diagnostics for common refusals
   (`0000052D` password policy, `00000056` wrong old password, `00000005`,
   `00000775`) are explained in the error's context (`ad::explain`);
-  `error::diagnostic` keeps the server's text. The `client &` overloads run on a shared lease
-  and retry once after `client_errc::not_sent`, as the client's write
-  forwarders do. The connection or client must outlive the task.
+  `error::diagnostic` keeps the server's text. The `client &` overloads
+  run on a shared lease and retry once after `client_errc::not_sent`, as
+  the client's write forwarders do. The connection or client must outlive
+  the task.
 - `jhetz/ldap/ad/sync.hpp` (`jhetz::ldap_ad`): the same calls, blocking,
   over `sync::connection &`, `sync::lease &` and `sync::client &`.
 - `jhetz/ldap/ad/diagnostic.hpp` (`jhetz::ldap`): `ad::explain(error)`,

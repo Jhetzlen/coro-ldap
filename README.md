@@ -37,9 +37,9 @@ coro-ldap aims to be the LDAP client you would want to use from modern C++:
   Active Directory's LDAP channel binding policy); the server's TLS
   certificate is available
 - Search (all at once, streamed or paged), add, modify, delete, modify DN
-  (rename / move), compare, extended operations, Who am I?, Password
-  Modify, and password change / reset that works on both OpenLDAP and
-  Active Directory
+  (rename / move), compare, extended operations, Who am I?, and RFC 3062
+  Password Modify with password change / reset conveniences; Active
+  Directory's unicodePwd change / reset in the separate ldap::ad layer
 - Opt-in referral chasing for search and compare: continuation references
   and referral results followed through a connector you control (host
   allow-list, no TLS downgrade, your own bind), with loop detection, hop

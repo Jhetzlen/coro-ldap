@@ -1536,8 +1536,9 @@ failure, which the context names), `not_sent` (the connection closed
 before the request reached the writer: the server never saw it, see
 "Sent or not" in section 7), `operation_in_progress` (the connection
 is busy; nothing is queued), `unauthenticated_bind` (a name with an empty
-password), `tls_required` (channel binding, or an Active Directory password change,
-on a connection without TLS), `gssapi_failure` (a GSS-API
+password), `tls_required` (channel binding on a connection without TLS,
+or an Active Directory password change on one with neither TLS nor a
+SASL confidentiality layer), `gssapi_failure` (a GSS-API
 call failed in a SASL GSSAPI bind: the context quotes GSS-API's major and
 minor status messages), `security_layer_required` (the server accepts a
 SASL GSSAPI bind only with a security layer, which the options do not
@@ -2705,9 +2706,9 @@ Layout:
   component whether it is there.
 - The core does not depend on `jhetz::ldap_ad`.
 
-Passwords: `ad::change_password(c, user, old, new)` sends one ModifyRequest
-of `unicodePwd` deleting the old value and adding the new one (a user's
-own change, which AD checks against the old password),
+Passwords: `ad::change_password(c, user, old, new)` sends one
+ModifyRequest of `unicodePwd` deleting the old value and adding the new
+one (a user's own change, which AD checks against the old password),
 `ad::reset_password(c, user, new)` one replacing it (an administrator's),
 with `ad::password_value()`'s quoted UTF-16LE (MS-ADTS 3.1.1.3.1.5). AD
 DS, AD LDS and Samba AD alike: no detection, the caller knows its
@@ -2718,25 +2719,26 @@ by neither TLS nor a SASL confidentiality layer
 encrypted with keys of 128 bits or more (MS-ADTS 3.1.1.3.1.5.1), TLS or a
 sealing SASL layer (Kerberos, NTLM; Windows' own tools seal on port 389).
 NTLM's integrity seals too over LDAP, so `security_layer()` reports
-confidentiality for both NTLM levels; GSSAPI integrity alone is refused. AD's Win32 code at the start of a
-refusal's diagnostic is explained in the context (0000052D, 00000056,
-00000005, 00000775) by `ad::explain(const error &)`, a codec function
-returning a static text (empty when the code is not one it knows); the
-diagnostic is kept as sent, and the core never interprets it. Overloads:
-`connection &` and `client &` (a shared lease, retried once after
-`not_sent` as the write forwarders are: the protection check needs the
-connection the modify goes to, so it cannot go through `client::modify`),
-and blocking ones in `ad/sync.hpp` built on the facade's public calls
-(`is_open()`, `is_tls()`, `modify()`), the sync facade having no generic
-"run this task" entry. There is no "detect and dispatch" helper: the
-caller calls the core's RFC 3062 functions or these. Tested against the
-scripted mock (`tests/net/ad_password_tests.cpp`, `sync_tests.cpp`,
-`sasl_layer_tests.cpp` with a made-up layer at each level) and a
-Samba AD DC (`integration.samba_ad`: reset, change, a non-BMP password,
-0000052D and 00000056, plain ldap:// refused, a change and a reset over
-the NTLM layer (integrity and confidentiality) on plain ldap://, an NTLM
-bind without a layer refused, `ldap::client`,
-`sync::connection`, and the core's RFC 3062 calls refused by Samba).
+confidentiality for both NTLM levels; GSSAPI integrity alone is refused.
+AD's Win32 code at the start of a refusal's diagnostic is explained in
+the context (0000052D, 00000056, 00000005, 00000775) by
+`ad::explain(const error &)`, a codec function returning a static text
+(empty when the code is not one it knows); the diagnostic is kept as
+sent, and the core never interprets it. Overloads: `connection &` and
+`client &` (a shared lease, retried once after `not_sent` as the write
+forwarders are: the protection check needs the connection the modify goes
+to, so it cannot go through `client::modify`), and blocking ones in
+`ad/sync.hpp` built on the facade's public calls (`is_open()`,
+`is_tls()`, `security_layer()`, `modify()`), the sync facade having no
+generic "run this task" entry. There is no "detect and dispatch" helper:
+the caller calls the core's RFC 3062 functions or these. Tested against
+the scripted mock (`tests/net/ad_password_tests.cpp`, `sync_tests.cpp`,
+`sasl_layer_tests.cpp` with a made-up layer at each level) and a Samba AD
+DC (`integration.samba_ad`: reset, change, a non-BMP password, 0000052D
+and 00000056, plain ldap:// refused, a change and a reset over the NTLM
+layer (integrity and confidentiality) on plain ldap://, an NTLM bind
+without a layer refused, `ldap::client`, `sync::connection`, and the
+core's RFC 3062 calls refused by Samba).
 
 No detection: the library does not tell AD from other servers (no
 reading of supportedCapabilities, no AD DS / AD LDS edition). The caller

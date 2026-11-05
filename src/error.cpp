@@ -155,7 +155,7 @@ namespace {
 		case client_errc::unauthenticated_bind:
 			return "simple bind with a name but no password (unauthenticated bind)";
 		case client_errc::tls_required:
-			return "the connection must be protected by TLS";
+			return "the connection must be encrypted (TLS, or a SASL confidentiality layer where that is accepted)";
 		case client_errc::gssapi_failure:
 			return "GSS-API failure";
 		case client_errc::security_layer_required:
