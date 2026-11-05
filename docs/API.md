@@ -875,7 +875,8 @@ package component `ad`:
 
 - `jhetz/ldap/ad/password.hpp` (`jhetz::ldap_ad`): `ad::change_password(c,
   user, old, new)` (a user's own) and `ad::reset_password(c, user, new)`
-  (an administrator's), with `c` a `connection &` or a `client &`. One
+  (an administrator's), with `c` a `connection &` or a `client &` and the
+  passwords `std::string_view`s, read before the call returns. One
   ModifyRequest of `user`'s `unicodePwd`, deleting the old value and
   adding the new one for a change, replacing it for a reset: what AD DS,
   AD LDS and Samba AD take instead of RFC 3062. Refused before anything is

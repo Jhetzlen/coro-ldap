@@ -7,6 +7,7 @@
 
 #include <boost/capy/task.hpp>
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -25,14 +26,15 @@ namespace {
 		modify_params request;
 	};
 
-	auto prepare(std::string_view op, dn user, const std::string *old_password, const std::string &new_password)
-	  -> result<prepared>
+	auto
+	  prepare(std::string_view op, dn user, std::optional<std::string_view> old_password, std::string_view new_password)
+		-> result<prepared>
 	{
 		std::string context = detail::op_context(op, user);
 		if (new_password.empty()) {
 			return fail(std::make_error_code(std::errc::invalid_argument), context + ": empty new password");
 		}
-		if (old_password != nullptr && old_password->empty()) {
+		if (old_password && old_password->empty()) {
 			return fail(std::make_error_code(std::errc::invalid_argument),
 			  context + ": empty old password (reset_password() sets one without it)");
 		}
@@ -44,7 +46,7 @@ namespace {
 			return std::unexpected(detail::with_context(std::move(new_value.error()), context));
 		}
 		modify_params request{ .object = std::move(user) };
-		if (old_password != nullptr) {
+		if (old_password) {
 			auto old_value = password_value(*old_password);
 			if (!old_value) {
 				return std::unexpected(detail::with_context(std::move(old_value.error()), context));
@@ -162,56 +164,59 @@ namespace {
 
 }// namespace
 
-auto change_password(connection &c, dn user, std::string old_password, std::string new_password)
+auto change_password(connection &c, dn user, std::string_view old_password, std::string_view new_password)
   -> capy::task<result<void>>
 {
-	return run(c, prepare(change_op, std::move(user), &old_password, new_password));
+	return run(c, prepare(change_op, std::move(user), old_password, new_password));
 }
 
-auto reset_password(connection &c, dn user, std::string new_password) -> capy::task<result<void>>
+auto reset_password(connection &c, dn user, std::string_view new_password) -> capy::task<result<void>>
 {
-	return run(c, prepare(reset_op, std::move(user), nullptr, new_password));
+	return run(c, prepare(reset_op, std::move(user), std::nullopt, new_password));
 }
 
-auto change_password(client &pool, dn user, std::string old_password, std::string new_password)
+auto change_password(client &pool, dn user, std::string_view old_password, std::string_view new_password)
   -> capy::task<result<void>>
 {
-	return run(pool, prepare(change_op, std::move(user), &old_password, new_password));
+	return run(pool, prepare(change_op, std::move(user), old_password, new_password));
 }
 
-auto reset_password(client &pool, dn user, std::string new_password) -> capy::task<result<void>>
+auto reset_password(client &pool, dn user, std::string_view new_password) -> capy::task<result<void>>
 {
-	return run(pool, prepare(reset_op, std::move(user), nullptr, new_password));
+	return run(pool, prepare(reset_op, std::move(user), std::nullopt, new_password));
 }
 
-auto change_password(sync::connection &c, dn user, std::string old_password, std::string new_password) -> result<void>
+auto change_password(sync::connection &c, dn user, std::string_view old_password, std::string_view new_password)
+  -> result<void>
 {
-	return run_sync(c, prepare(change_op, std::move(user), &old_password, new_password));
+	return run_sync(c, prepare(change_op, std::move(user), old_password, new_password));
 }
 
-auto reset_password(sync::connection &c, dn user, std::string new_password) -> result<void>
+auto reset_password(sync::connection &c, dn user, std::string_view new_password) -> result<void>
 {
-	return run_sync(c, prepare(reset_op, std::move(user), nullptr, new_password));
+	return run_sync(c, prepare(reset_op, std::move(user), std::nullopt, new_password));
 }
 
-auto change_password(sync::lease &c, dn user, std::string old_password, std::string new_password) -> result<void>
+auto change_password(sync::lease &c, dn user, std::string_view old_password, std::string_view new_password)
+  -> result<void>
 {
-	return run_sync(c, prepare(change_op, std::move(user), &old_password, new_password));
+	return run_sync(c, prepare(change_op, std::move(user), old_password, new_password));
 }
 
-auto reset_password(sync::lease &c, dn user, std::string new_password) -> result<void>
+auto reset_password(sync::lease &c, dn user, std::string_view new_password) -> result<void>
 {
-	return run_sync(c, prepare(reset_op, std::move(user), nullptr, new_password));
+	return run_sync(c, prepare(reset_op, std::move(user), std::nullopt, new_password));
 }
 
-auto change_password(sync::client &pool, dn user, std::string old_password, std::string new_password) -> result<void>
+auto change_password(sync::client &pool, dn user, std::string_view old_password, std::string_view new_password)
+  -> result<void>
 {
-	return run_sync(pool, prepare(change_op, std::move(user), &old_password, new_password));
+	return run_sync(pool, prepare(change_op, std::move(user), old_password, new_password));
 }
 
-auto reset_password(sync::client &pool, dn user, std::string new_password) -> result<void>
+auto reset_password(sync::client &pool, dn user, std::string_view new_password) -> result<void>
 {
-	return run_sync(pool, prepare(reset_op, std::move(user), nullptr, new_password));
+	return run_sync(pool, prepare(reset_op, std::move(user), std::nullopt, new_password));
 }
 
 }// namespace jhetz::ldap::ad

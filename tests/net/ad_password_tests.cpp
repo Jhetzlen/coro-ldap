@@ -196,8 +196,8 @@ TEST_CASE("ad::change_password: over StartTLS, unicodePwd modifies", "[net][pass
 	tls_mock f({ answer({ start_tls_ok(1) }) }, { answer({ modify_result(2) }), answer({ modify_result(3) }) });
 	REQUIRE(f.connect(upgraded()).has_value());
 	REQUIRE(f.conn.is_tls());
-	CHECK(f.run(ldap::ad::change_password(f.conn, jdoe, std::string(old_pw), std::string(new_pw))).has_value());
-	CHECK(f.run(ldap::ad::reset_password(f.conn, jdoe, std::string(new_pw))).has_value());
+	CHECK(f.run(ldap::ad::change_password(f.conn, jdoe, old_pw, new_pw)).has_value());
+	CHECK(f.run(ldap::ad::reset_password(f.conn, jdoe, new_pw)).has_value());
 	f.check_server();
 
 	REQUIRE(f.log.received.size() == 3);
@@ -212,8 +212,8 @@ TEST_CASE("ad::change_password: over ldaps://, unicodePwd modifies", "[net][pass
 	tls_mock f({}, { answer({ modify_result(1) }), answer({ modify_result(2) }) });
 	REQUIRE(f.connect({}, "ldaps").has_value());
 	REQUIRE(f.conn.is_tls());
-	CHECK(f.run(ldap::ad::change_password(f.conn, jdoe, std::string(old_pw), std::string(new_pw))).has_value());
-	CHECK(f.run(ldap::ad::reset_password(f.conn, jdoe, std::string(new_pw))).has_value());
+	CHECK(f.run(ldap::ad::change_password(f.conn, jdoe, old_pw, new_pw)).has_value());
+	CHECK(f.run(ldap::ad::reset_password(f.conn, jdoe, new_pw)).has_value());
 	f.check_server();
 
 	REQUIRE(f.log.received.size() == 2);
@@ -225,7 +225,7 @@ TEST_CASE("ad::change_password: without TLS, refused before sending", "[net][pas
 {
 	mock_ldap m;
 	m.serve({});
-	auto r = m.run(ldap::ad::reset_password(m.conn, jdoe, std::string(new_pw)));
+	auto r = m.run(ldap::ad::reset_password(m.conn, jdoe, new_pw));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == client_errc::tls_required);
 	CHECK(r.error().code == ldap::cond::access_denied);
@@ -233,7 +233,7 @@ TEST_CASE("ad::change_password: without TLS, refused before sending", "[net][pas
 		  == "reset password " + jdoe_context
 			   + ": Active Directory sets unicodePwd only over an encrypted connection (ldaps://, start_tls() or a SASL "
 				 "confidentiality layer)");
-	auto c = m.run(ldap::ad::change_password(m.conn, jdoe, std::string(old_pw), std::string(new_pw)));
+	auto c = m.run(ldap::ad::change_password(m.conn, jdoe, old_pw, new_pw));
 	REQUIRE_FALSE(c.has_value());
 	CHECK(c.error().code == client_errc::tls_required);
 	check_no_password(c.error());
@@ -303,14 +303,14 @@ TEST_CASE("ad::change_password: during StartTLS, refused before sending", "[net]
 	REQUIRE_FALSE(tls.done());
 	CHECK_FALSE(m.conn.is_tls());
 
-	auto reset = m.run(ldap::ad::reset_password(m.conn, jdoe, std::string(new_pw)));
+	auto reset = m.run(ldap::ad::reset_password(m.conn, jdoe, new_pw));
 	REQUIRE_FALSE(reset.has_value());
 	CHECK(reset.error().code == client_errc::tls_required);
 	CHECK(std::string(reset.error().context)
 		  == "reset password " + jdoe_context
 			   + ": Active Directory sets unicodePwd only over an encrypted connection (ldaps://, start_tls() or a SASL "
 				 "confidentiality layer)");
-	auto change = m.run(ldap::ad::change_password(m.conn, jdoe, std::string(old_pw), std::string(new_pw)));
+	auto change = m.run(ldap::ad::change_password(m.conn, jdoe, old_pw, new_pw));
 	REQUIRE_FALSE(change.has_value());
 	CHECK(change.error().code == client_errc::tls_required);
 	check_no_password(change.error());
@@ -334,11 +334,11 @@ TEST_CASE("ad::change_password: refused before sending", "[net][password][ad]")
 	mock_ldap m;
 	m.serve({});
 	const auto invalid = std::make_error_code(std::errc::invalid_argument);
-	auto no_new = m.run(ldap::ad::change_password(m.conn, jdoe, std::string(old_pw), ""));
+	auto no_new = m.run(ldap::ad::change_password(m.conn, jdoe, old_pw, ""));
 	REQUIRE_FALSE(no_new.has_value());
 	CHECK(no_new.error().code == invalid);
 	CHECK(std::string(no_new.error().context) == "change password " + jdoe_context + ": empty new password");
-	auto no_old = m.run(ldap::ad::change_password(m.conn, jdoe, "", std::string(new_pw)));
+	auto no_old = m.run(ldap::ad::change_password(m.conn, jdoe, "", new_pw));
 	REQUIRE_FALSE(no_old.has_value());
 	CHECK(no_old.error().code == invalid);
 	CHECK(std::string(no_old.error().context)
@@ -346,7 +346,7 @@ TEST_CASE("ad::change_password: refused before sending", "[net][password][ad]")
 	auto reset = m.run(ldap::ad::reset_password(m.conn, jdoe, ""));
 	REQUIRE_FALSE(reset.has_value());
 	CHECK(reset.error().code == invalid);
-	auto no_dn = m.run(ldap::ad::reset_password(m.conn, {}, std::string(new_pw)));
+	auto no_dn = m.run(ldap::ad::reset_password(m.conn, {}, new_pw));
 	REQUIRE_FALSE(no_dn.has_value());
 	CHECK(no_dn.error().code == client_errc::invalid_dn);
 	CHECK(std::string(no_dn.error().context) == "reset password \"\": Active Directory needs the user's DN");
@@ -356,7 +356,7 @@ TEST_CASE("ad::change_password: refused before sending", "[net][password][ad]")
 	CHECK(bad.error().code == client_errc::encode_error);
 	CHECK(std::string(bad.error().context)
 		  == "reset password " + jdoe_context + ": Active Directory password value: the password is not valid UTF-8");
-	auto bad_old = m.run(ldap::ad::change_password(m.conn, jdoe, "0ld\xFF", std::string(new_pw)));
+	auto bad_old = m.run(ldap::ad::change_password(m.conn, jdoe, "0ld\xFF", new_pw));
 	REQUIRE_FALSE(bad_old.has_value());
 	CHECK(bad_old.error().code == client_errc::encode_error);
 	CHECK(std::string(bad_old.error().context)
@@ -366,7 +366,7 @@ TEST_CASE("ad::change_password: refused before sending", "[net][password][ad]")
 	CHECK(m.log.received.empty());
 
 	ldap::connection none;
-	auto closed = m.run(ldap::ad::change_password(none, jdoe, std::string(old_pw), std::string(new_pw)));
+	auto closed = m.run(ldap::ad::change_password(none, jdoe, old_pw, new_pw));
 	REQUIRE_FALSE(closed.has_value());
 	CHECK(closed.error().code == client_errc::not_connected);
 	CHECK(std::string(closed.error().context) == "change password " + jdoe_context + ": modify unicodePwd");
@@ -391,7 +391,7 @@ TEST_CASE("ad::change_password: server errors, AD diagnostics explained", "[net]
 	REQUIRE(f.connect(upgraded()).has_value());
 	const std::string context = "change password " + jdoe_context + ": modify unicodePwd";
 
-	auto weak = f.run(ldap::ad::change_password(f.conn, jdoe, std::string(old_pw), std::string(new_pw)));
+	auto weak = f.run(ldap::ad::change_password(f.conn, jdoe, old_pw, new_pw));
 	REQUIRE_FALSE(weak.has_value());
 	CHECK(weak.error().code == ldap::errc::constraint_violation);
 	CHECK(std::string(weak.error().context)
@@ -401,29 +401,29 @@ TEST_CASE("ad::change_password: server errors, AD diagnostics explained", "[net]
 	CHECK(std::string(weak.error().diagnostic) == policy);// kept as sent
 	check_no_password(weak.error());
 
-	auto old = f.run(ldap::ad::change_password(f.conn, jdoe, std::string(old_pw), std::string(new_pw)));
+	auto old = f.run(ldap::ad::change_password(f.conn, jdoe, old_pw, new_pw));
 	REQUIRE_FALSE(old.has_value());
 	CHECK(
 	  std::string(old.error().context) == context + ": the old password is wrong (Active Directory error 00000056)");
 	CHECK(std::string(old.error().diagnostic) == wrong_old);
 
 	// Codes it does not explain, and diagnostics that are not AD's.
-	auto other = f.run(ldap::ad::change_password(f.conn, jdoe, std::string(old_pw), std::string(new_pw)));
+	auto other = f.run(ldap::ad::change_password(f.conn, jdoe, old_pw, new_pw));
 	REQUIRE_FALSE(other.has_value());
 	CHECK(other.error().code == ldap::errc::unwilling_to_perform);
 	CHECK(std::string(other.error().context) == context);
-	auto plain = f.run(ldap::ad::change_password(f.conn, jdoe, std::string(old_pw), std::string(new_pw)));
+	auto plain = f.run(ldap::ad::change_password(f.conn, jdoe, old_pw, new_pw));
 	REQUIRE_FALSE(plain.has_value());
 	CHECK(std::string(plain.error().context) == context);
-	auto denied = f.run(ldap::ad::change_password(f.conn, jdoe, std::string(old_pw), std::string(new_pw)));
+	auto denied = f.run(ldap::ad::change_password(f.conn, jdoe, old_pw, new_pw));
 	REQUIRE_FALSE(denied.has_value());
 	CHECK(std::string(denied.error().context)
 		  == context + ": not allowed to set this user's password (Active Directory error 00000005)");
-	auto locked = f.run(ldap::ad::change_password(f.conn, jdoe, std::string(old_pw), std::string(new_pw)));
+	auto locked = f.run(ldap::ad::change_password(f.conn, jdoe, old_pw, new_pw));
 	REQUIRE_FALSE(locked.has_value());
 	CHECK(
 	  std::string(locked.error().context) == context + ": the account is locked out (Active Directory error 00000775)");
-	auto not_hex = f.run(ldap::ad::change_password(f.conn, jdoe, std::string(old_pw), std::string(new_pw)));
+	auto not_hex = f.run(ldap::ad::change_password(f.conn, jdoe, old_pw, new_pw));
 	REQUIRE_FALSE(not_hex.has_value());
 	CHECK(std::string(not_hex.error().context) == context);
 	CHECK(f.conn.is_open());

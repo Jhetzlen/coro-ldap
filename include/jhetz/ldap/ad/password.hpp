@@ -12,7 +12,7 @@
 
 #include <boost/capy/task.hpp>
 
-#include <string>
+#include <string_view>
 
 namespace jhetz::ldap::ad {
 
@@ -32,17 +32,18 @@ namespace jhetz::ldap::ad {
 // refusals (0000052D: the password policy, 00000056: a wrong old password,
 // ...) are explained in the context (ad::explain, ad/diagnostic.hpp). Passwords never appear in errors, and
 // their memory is not wiped (see connection::change_password). The
-// connection must outlive the task.
-auto change_password(connection &c, dn user, std::string old_password, std::string new_password)
+// connection must outlive the task; the passwords are read before the
+// call returns.
+auto change_password(connection &c, dn user, std::string_view old_password, std::string_view new_password)
   -> boost::capy::task<result<void>>;
-auto reset_password(connection &c, dn user, std::string new_password) -> boost::capy::task<result<void>>;
+auto reset_password(connection &c, dn user, std::string_view new_password) -> boost::capy::task<result<void>>;
 
 // As above on a shared lease of `pool` (client::acquire()), retried once
 // on another connection after client_errc::not_sent, as client's write
 // forwarders are. An acquire() failure is returned as is. The client must
 // outlive the task.
-auto change_password(client &pool, dn user, std::string old_password, std::string new_password)
+auto change_password(client &pool, dn user, std::string_view old_password, std::string_view new_password)
   -> boost::capy::task<result<void>>;
-auto reset_password(client &pool, dn user, std::string new_password) -> boost::capy::task<result<void>>;
+auto reset_password(client &pool, dn user, std::string_view new_password) -> boost::capy::task<result<void>>;
 
 }// namespace jhetz::ldap::ad
