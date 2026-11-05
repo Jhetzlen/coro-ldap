@@ -13,8 +13,11 @@
 // Without the variables every test is skipped.
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/ad/filetime.hpp"
+#include "jhetz/ldap/ad/guid.hpp"
 #include "jhetz/ldap/ad/password.hpp"
+#include "jhetz/ldap/ad/sid.hpp"
 #include "jhetz/ldap/ad/sync.hpp"
+#include "jhetz/ldap/ad/user_account_control.hpp"
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl_ntlm.hpp"
@@ -817,4 +820,151 @@ TEST_CASE("samba ad: the NTLM security layer on plain ldap://, entries over 128 
 	CHECK(longest(down) == std::size_t{ 1 } << 17);
 	CHECK_FALSE(relay.from_client().contains(marker));
 	CHECK_FALSE(relay.from_server().contains(marker));
+}
+
+// ---------------------------------------------------------------- objectSid, objectGUID, userAccountControl
+
+namespace {
+
+struct ad_account
+{
+	std::string sam_account_name;
+	ldap::ad::sid object_sid;
+	ldap::ad::guid object_guid;
+	ldap::ad::user_account_control user_account_control{};
+};
+
+const ldap::dn domain{ "DC=coro,DC=test" };
+const ldap::dn alice{ "CN=alice,CN=Users,DC=coro,DC=test" };
+const ldap::dn typed_user{ "CN=coro-typed,CN=Users,DC=coro,DC=test" };
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<ad_account> = ldap::describe(ldap::object_class("user"),
+  ldap::field<&ad_account::sam_account_name>("sAMAccountName"),
+  ldap::field<&ad_account::object_sid>("objectSid", ldap::read_only),
+  ldap::field<&ad_account::object_guid>("objectGUID", ldap::read_only),
+  ldap::field<&ad_account::user_account_control>("userAccountControl"));
+
+namespace {
+
+auto read_account(corosio::io_context &ioc, ldap::connection &c, const ldap::dn &who) -> ad_account
+{
+	auto r = finish(ioc, c.search_as<ad_account>({ .base = who, .scope = ldap::search_scope::base_object }));
+	if (!r) {
+		FAIL("read " << who.to_string() << ": " << r.error().message());
+	}
+	REQUIRE(r->size() == 1);
+	return std::move((*r)[0]);
+}
+
+auto domain_sid(corosio::io_context &ioc, ldap::connection &c) -> ldap::ad::sid
+{
+	auto r = finish(
+	  ioc, c.search({ .base = domain, .scope = ldap::search_scope::base_object, .attributes = { "objectSid" } }));
+	REQUIRE(r.has_value());
+	REQUIRE(r->size() == 1);
+	const auto *values = (*r)[0].find("objectSid");
+	REQUIRE(values != nullptr);
+	REQUIRE(values->size() == 1);
+	auto s = ldap::ad::sid::from_binary((*values)[0]);
+	REQUIRE(s.has_value());
+	return *s;
+}
+
+// `s` is the domain's SID plus one RID.
+auto rid_in(const ldap::ad::sid &s, const ldap::ad::sid &dom) -> std::optional<std::uint32_t>
+{
+	const auto sub = s.sub_authorities();
+	const auto prefix = dom.sub_authorities();
+	if (s.identifier_authority() != dom.identifier_authority() || sub.size() != prefix.size() + 1
+		|| !std::ranges::equal(sub.first(prefix.size()), prefix)) {
+		return std::nullopt;
+	}
+	return sub.back();
+}
+
+}// namespace
+
+TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", "[samba_ad][types]")
+{
+	require_samba();
+	using enum ldap::ad::user_account_control;
+	corosio::io_context ioc;
+	auto c = open_bound(ioc, false, administrator, administrator_password);
+
+	const ldap::ad::sid dom = domain_sid(ioc, c);
+	INFO("domain " << dom.to_string());
+	CHECK_THAT(dom.to_string(), StartsWith("S-1-5-21-"));
+	REQUIRE(dom.sub_authorities().size() == 4);
+
+	SECTION("the schema: Octet String and INTEGER")
+	{
+		auto s = finish(ioc, c.load_schema());
+		REQUIRE(s.has_value());
+		const auto report = ldap::validate<ad_account>(*s);
+		INFO(report.to_string());
+		CHECK(report.ok());
+	}
+
+	SECTION("Administrator and alice")
+	{
+		const ad_account admin = read_account(ioc, c, administrator);
+		CHECK(admin.sam_account_name == "Administrator");
+		CHECK(rid_in(admin.object_sid, dom) == 500U);
+		CHECK(has(admin.user_account_control, normal_account));
+		CHECK_FALSE(has(admin.user_account_control, account_disable));
+
+		const ad_account a = read_account(ioc, c, alice);
+		CHECK(a.sam_account_name == "alice");
+		const auto rid = rid_in(a.object_sid, dom);
+		REQUIRE(rid.has_value());
+		CHECK(*rid >= 1000U);
+		CHECK(a.user_account_control == normal_account);
+		CHECK(a.object_guid != ldap::ad::guid{});
+		CHECK(a.object_guid != admin.object_guid);
+
+		// The SID's and the GUID's binary forms, in typed filters.
+		auto by_sid = finish(ioc,
+		  c.search_as<ad_account>(
+			{ .base = domain, .filter = ldap::filters::field<&ad_account::object_sid>() == a.object_sid }));
+		REQUIRE(by_sid.has_value());
+		REQUIRE(by_sid->size() == 1);
+		CHECK((*by_sid)[0].sam_account_name == "alice");
+		auto by_guid = finish(ioc,
+		  c.search_as<ad_account>(
+			{ .base = domain, .filter = ldap::filters::field<&ad_account::object_guid>() == a.object_guid }));
+		REQUIRE(by_guid.has_value());
+		REQUIRE(by_guid->size() == 1);
+		CHECK((*by_guid)[0].object_sid == a.object_sid);
+	}
+
+	SECTION("a new user: SID from the domain, userAccountControl written back")
+	{
+		(void)finish(ioc, c.del({ .entry = typed_user }));
+		auto added = finish(ioc,
+		  c.add({ .entry = typed_user,
+			.attributes = { { "objectClass", { "user" } }, { "sAMAccountName", { "coro-typed" } } } }));
+		if (!added) {
+			FAIL(added.error().message());
+		}
+		const ad_account fresh = read_account(ioc, c, typed_user);
+		CHECK(rid_in(fresh.object_sid, dom).has_value());
+		// AD creates a user without a password disabled.
+		CHECK(has(fresh.user_account_control, normal_account | account_disable));
+
+		auto m = finish(ioc,
+		  c.modify(typed_user,
+			std::vector<ldap::change<ad_account>>{
+			  ldap::replace<&ad_account::user_account_control>(fresh.user_account_control | dont_expire_passwd) }));
+		if (!m) {
+			FAIL(m.error().message());
+		}
+		const ad_account changed = read_account(ioc, c, typed_user);
+		CHECK(changed.user_account_control == (fresh.user_account_control | dont_expire_passwd));
+		CHECK(changed.object_sid == fresh.object_sid);
+		CHECK(changed.object_guid == fresh.object_guid);
+		CHECK(finish(ioc, c.del({ .entry = typed_user })).has_value());
+	}
 }

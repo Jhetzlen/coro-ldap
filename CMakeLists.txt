@@ -199,7 +199,9 @@ endif()
 
 add_library(jhetz_ldap STATIC
     src/ad/diagnostic.cpp
+    src/ad/guid.cpp
     src/ad/password_value.cpp
+    src/ad/sid.cpp
     src/attribute.cpp
     src/ber.cpp
     src/content_sync.cpp

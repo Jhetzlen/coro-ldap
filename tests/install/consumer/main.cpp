@@ -5,6 +5,7 @@
 // package) with WITH_NET.
 #include "jhetz/ldap/ad/filetime.hpp"
 #include "jhetz/ldap/ad/password_value.hpp"
+#include "jhetz/ldap/ad/sid.hpp"
 #include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
@@ -42,7 +43,8 @@ auto main() -> int
 	}
 	const auto expires = ldap::value_traits<ldap::ad::filetime_clock::time_point>::decode("0");
 	if (!expires || !ldap::ad::is_never(*expires)
-		|| ldap::ad::password_value("ab") != std::string_view("\"\0a\0b\0\"\0", 8)) {
+		|| ldap::ad::password_value("ab") != std::string_view("\"\0a\0b\0\"\0", 8)
+		|| ldap::ad::sid::parse("S-1-5-32-544").value_or(ldap::ad::sid{}).to_binary().size() != 16) {
 		std::puts("codec: unexpected ad result");
 		return 1;
 	}

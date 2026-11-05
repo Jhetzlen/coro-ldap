@@ -923,6 +923,28 @@ package component `ad`:
   write pwdLastSet 0 / -1; and `ad::filetime_clock::duration` members map
   the negative intervals (maxPwdAge, lockoutDuration; `ad::forever` for
   -9223372036854775808). `std::int64_t` members read any 906 attribute raw.
+- `jhetz/ldap/ad/sid.hpp` (`jhetz::ldap`): `ad::sid`, a security
+  identifier (MS-DTYP 2.4.2): `sid::parse(text)` ("S-1-5-21-...", the
+  authority in decimal or "0x" and 12 hex digits), `sid::from_binary(raw)`
+  (objectSid's value: revision 1, count, 48-bit authority big-endian,
+  sub-authorities little-endian), `sid::make(authority, sub_authorities)`,
+  `identifier_authority()`, `sub_authorities()`, `to_string()`,
+  `to_binary()`, `==` and `<=>`; up to 15 sub-authorities. Malformed input
+  is `client_errc::conversion_failed` (`std::errc::invalid_argument` for
+  `make`). Its `value_traits` map objectSid, sIDHistory, tokenGroups
+  (Octet String) as the binary form, so typed filters match on it.
+- `jhetz/ldap/ad/guid.hpp` (`jhetz::ldap`): `ad::guid`, a GUID by its
+  MS-DTYP 2.3.4 fields (`data1`, `data2`, `data3`, `data4`):
+  `guid::from_binary(raw)` (16 octets, the first three fields
+  little-endian, as objectGUID holds it), `guid::parse(text)` (with or
+  without braces, either case), `to_string()` (lower case, no braces),
+  `to_binary()`, `==` and `<=>`. `value_traits` on Octet String.
+- `jhetz/ldap/ad/user_account_control.hpp` (`jhetz::ldap`):
+  `enum class ad::user_account_control : std::uint32_t`, the
+  userAccountControl bits (MS-ADTS 2.2.16, `normal_account`,
+  `account_disable`, `dont_expire_passwd`, ...), with `|`, `&`, `^`, `~`,
+  their assignments and `has(flags, bits)`. `value_traits` on INTEGER: the
+  signed 32-bit decimal AD writes (bits not named are kept).
 - `jhetz/ldap/ad/syntax.hpp` (`jhetz::ldap`): `ad::large_integer_syntax`,
   the Large Integer syntax OID (1.2.840.113556.1.4.906), which
   `validate<T>` accepts for signed integers of 64 bits or more and the

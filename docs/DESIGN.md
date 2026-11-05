@@ -2686,9 +2686,11 @@ Layout:
 - Codec-level AD code (no network) is in `jhetz::ldap`: headers under
   `include/jhetz/ldap/ad/`, sources under `src/ad/`. `ad/filetime.hpp`
   (the FILETIME clock and its `value_traits`, section 4),
-  `ad/syntax.hpp` (AD's syntax OIDs), `ad/password_value.hpp` (the
-  `unicodePwd` value) and `ad/diagnostic.hpp` (`explain`). These headers
-  are installed with the codec-only package too.
+  `ad/syntax.hpp` (AD's syntax OIDs), `ad/sid.hpp`, `ad/guid.hpp` and
+  `ad/user_account_control.hpp` (the value types below),
+  `ad/password_value.hpp` (the `unicodePwd` value) and
+  `ad/diagnostic.hpp` (`explain`). These headers are installed with the
+  codec-only package too.
 - AD operations that need the network go in the target `jhetz::ldap_ad`
   (export name `ldap_ad`, package component `ad`), sources under `src/ad/`
   next to the codec's, their headers under `include/jhetz/ldap/ad/` too,
@@ -2705,6 +2707,28 @@ Layout:
   who never talks to AD does not link it, and the package says by
   component whether it is there.
 - The core does not depend on `jhetz::ldap_ad`.
+
+Value types, each with `value_traits` for the typed mapping (section 4):
+`ad::sid` (MS-DTYP 2.4.2: the binary form objectSid holds, revision 1,
+the 48-bit authority big-endian and up to 15 sub-authorities
+little-endian, and the "S-1-..." string form, the authority in decimal
+below 2^32 and in "0x" and 12 hex digits above; a class, since the count
+and the authority's width are invariants), `ad::guid` (MS-DTYP 2.3.4:
+an aggregate of Data1, Data2, Data3 and Data4; the binary form has the
+first three little-endian, so objectGUID's octets are not the text's
+order; the text is written in lower case without braces, as RFC 4122 and
+.NET's default, and read with or without braces) and
+`ad::user_account_control` (MS-ADTS 2.2.16's UF_ bits as an
+`enum class` over `std::uint32_t` with bitmask operators and `has`; the
+value is AD's signed 32-bit INTEGER, so bit 31 is written negative and
+both spellings are read). `sid` and `guid` accept Octet String in
+`validate<T>`, `user_account_control` INTEGER. `sid::parse` also takes a
+SID without sub-authorities ("S-1-0"), which MS-DTYP's ABNF does not
+list but the binary form can hold, so every value round-trips. Tested
+with MS-DTYP and .NET vectors (`tests/ad_types_tests.cpp`) and on Samba
+(`integration.samba_ad`: Administrator's RID 500 under the domain SID,
+lookups by typed objectSid and objectGUID filters, a new user's
+userAccountControl written back).
 
 Passwords: `ad::change_password(c, user, old, new)` sends one
 ModifyRequest of `unicodePwd` deleting the old value and adding the new
