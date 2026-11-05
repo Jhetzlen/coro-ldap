@@ -18,6 +18,7 @@ if(WIN32)
 endif()
 
 add_executable(jhetz_ldap_tests
+    ad_diagnostic_tests.cpp
     ad_filetime_tests.cpp
     ad_password_value_tests.cpp
     ad_root_dse_tests.cpp

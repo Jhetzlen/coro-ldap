@@ -2685,8 +2685,9 @@ Layout:
 - Codec-level AD code (no network) is in `jhetz::ldap`: headers under
   `include/jhetz/ldap/ad/`, sources under `src/ad/`. `ad/filetime.hpp`
   (the FILETIME clock and its `value_traits`, section 4) and
-  `ad/root_dse.hpp` (`edition_of`, `is_active_directory`) and
-  `ad/password_value.hpp` (the `unicodePwd` value). These headers are
+  `ad/root_dse.hpp` (`edition_of`, `is_active_directory`),
+  `ad/password_value.hpp` (the `unicodePwd` value) and
+  `ad/diagnostic.hpp` (`explain`). These headers are
   installed with the codec-only package too.
 - AD operations that need the network go in the target `jhetz::ldap_ad`
   (export name `ldap_ad`, package component `ad`), sources under `src/ad/`
@@ -2720,7 +2721,9 @@ sealing SASL layer (Kerberos, NTLM; Windows' own tools seal on port 389).
 NTLM's integrity seals too over LDAP, so `security_layer()` reports
 confidentiality for both NTLM levels; GSSAPI integrity alone is refused. AD's Win32 code at the start of a
 refusal's diagnostic is explained in the context (0000052D, 00000056,
-00000005, 00000775); the diagnostic is kept as sent. Overloads:
+00000005, 00000775) by `ad::explain(const error &)`, a codec function
+returning a static text (empty when the code is not one it knows); the
+diagnostic is kept as sent, and the core never interprets it. Overloads:
 `connection &` and `client &` (a shared lease, retried once after
 `not_sent` as the write forwarders are: the protection check needs the
 connection the modify goes to, so it cannot go through `client::modify`),

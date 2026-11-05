@@ -30,7 +30,7 @@ namespace jhetz::ldap::ad {
 // result code and diagnostic, with the context "change password <user>:
 // modify unicodePwd" (or "reset password"); the diagnostics of common
 // refusals (0000052D: the password policy, 00000056: a wrong old password,
-// ...) are explained in the context. Passwords never appear in errors, and
+// ...) are explained in the context (ad::explain, ad/diagnostic.hpp). Passwords never appear in errors, and
 // their memory is not wiped (see connection::change_password). The
 // connection must outlive the task.
 auto change_password(connection &c, dn user, std::string old_password, std::string new_password)

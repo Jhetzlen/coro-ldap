@@ -887,12 +887,18 @@ package component `ad`:
   (`std::errc::invalid_argument`) or ill-formed UTF-8
   (`client_errc::encode_error`). AD's diagnostics for common refusals
   (`0000052D` password policy, `00000056` wrong old password, `00000005`,
-  `00000775`) are explained in the error's context; `error::diagnostic`
-  keeps the server's text. The `client &` overloads run on a shared lease
+  `00000775`) are explained in the error's context (`ad::explain`);
+  `error::diagnostic` keeps the server's text. The `client &` overloads run on a shared lease
   and retry once after `client_errc::not_sent`, as the client's write
   forwarders do. The connection or client must outlive the task.
 - `jhetz/ldap/ad/sync.hpp` (`jhetz::ldap_ad`): the same calls, blocking,
   over `sync::connection &`, `sync::lease &` and `sync::client &`.
+- `jhetz/ldap/ad/diagnostic.hpp` (`jhetz::ldap`): `ad::explain(error)`,
+  the explanation of the Win32 code (eight hex digits and a colon) that
+  starts an AD diagnosticMessage, for the codes a password change commonly
+  fails with: `00000005` (not allowed), `00000056` (wrong old password),
+  `0000052D` (password policy), `00000775` (locked out); empty for any
+  other code or text. The core leaves the diagnostic raw.
 - `jhetz/ldap/ad/password_value.hpp` (`jhetz::ldap`):
   `ad::password_value(password)`, the `unicodePwd` value (quoted, UTF-16LE,
   full Unicode; `client_errc::encode_error` for ill-formed UTF-8), for a
