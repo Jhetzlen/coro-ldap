@@ -1,7 +1,9 @@
 // Uses the installed headers and libraries: the codec always (with the
-// operations.hpp mod:: builders), the connection with WITH_NET (a connect
-// that must be refused: no server) and SCRAM's SASLprep (links ICU through
-// the package).
+// operations.hpp mod:: builders and the ad/ headers), the connection and
+// jhetz::ldap_ad with WITH_NET (a connect that must be refused: no server)
+// and SCRAM's SASLprep (links ICU through the package).
+#include "jhetz/ldap/ad/filetime.hpp"
+#include "jhetz/ldap/ad/root_dse.hpp"
 #include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
@@ -16,6 +18,8 @@
 #endif
 
 #include <cstdio>
+#include <initializer_list>
+#include <string_view>
 
 namespace ldap = jhetz::ldap;
 
@@ -33,6 +37,14 @@ auto main() -> int
 	if (change.operation != ldap::modify_operation::replace || change.modification.type != "mail"
 		|| change.modification.values.size() != 1) {
 		std::puts("codec: unexpected mod::replace result");
+		return 1;
+	}
+	ldap::entry dse;
+	dse.attributes.emplace_back(ldap::attribute::unchecked("supportedCapabilities"),
+	  std::initializer_list<std::string_view>{ ldap::ad::ds_capability_oid });
+	const auto expires = ldap::value_traits<ldap::ad::filetime_clock::time_point>::decode("0");
+	if (!ldap::ad::is_active_directory(dse) || !expires || !ldap::ad::is_never(*expires)) {
+		std::puts("codec: unexpected ad result");
 		return 1;
 	}
 #ifdef WITH_NET

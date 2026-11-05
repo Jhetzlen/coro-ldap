@@ -12,7 +12,8 @@
 // 127.0.0.1 and match that name against the CN (host_name_matching::legacy).
 // Without the variables every test is skipped.
 #include "../net/net_test_support.hpp"
-#include "jhetz/ldap/ad.hpp"
+#include "jhetz/ldap/ad/filetime.hpp"
+#include "jhetz/ldap/ad/root_dse.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl_ntlm.hpp"
 
@@ -154,9 +155,8 @@ TEST_CASE("samba ad: change_password and reset_password", "[samba_ad][password]"
 			.attributes = { "supportedExtension", "supportedCapabilities" } }));
 		REQUIRE(dse.has_value());
 		REQUIRE(dse->size() == 1);
-		const auto *caps = (*dse)[0].find("supportedCapabilities");
-		REQUIRE(caps != nullptr);
-		CHECK(std::ranges::contains(*caps, ldap::active_directory_capability_oid));
+		CHECK(ldap::ad::is_active_directory((*dse)[0]));
+		CHECK(ldap::ad::edition_of((*dse)[0]) == ldap::ad::edition::ds);
 		const auto *extensions = (*dse)[0].find("supportedExtension");
 		CHECK((extensions == nullptr || !std::ranges::contains(*extensions, ldap::password_modify_oid)));
 		// automatic (the default) as Administrator: with RFC 3062 picked,

@@ -4,6 +4,7 @@
 // unicodePwd ModifyRequests over TLS (StartTLS or ldaps://) and their
 // refusal without it or during StartTLS, and ad_password_value's UTF-16LE
 // encoding.
+#include "jhetz/ldap/ad/root_dse.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -306,9 +307,8 @@ TEST_CASE("change_password: RFC 3062 advertised, the root DSE read once", "[net]
 TEST_CASE("change_password: a server advertising both gets RFC 3062", "[net][password]")
 {
 	mock_ldap m;
-	m.serve(
-	  { answer({ root_dse(1, { ldap::password_modify_oid }, { ldap::active_directory_capability_oid }), done_msg(1) }),
-		answer({ extended_ok(2) }) });
+	m.serve({ answer({ root_dse(1, { ldap::password_modify_oid }, { ldap::ad::ds_capability_oid }), done_msg(1) }),
+	  answer({ extended_ok(2) }) });
 	// Not over TLS: RFC 3062 does not need it (the AD path would refuse).
 	CHECK(m.run(m.conn.change_password(jdoe, std::string(old_pw), std::string(new_pw))).has_value());
 	m.check_server();
@@ -319,9 +319,8 @@ TEST_CASE("change_password: a server advertising both gets RFC 3062", "[net][pas
 TEST_CASE("change_password: the AD capability over TLS sends unicodePwd modifies", "[net][password]")
 {
 	tls_mock f({ answer({ start_tls_ok(1) }) },
-	  { answer(
-		  { root_dse(2, { ldap::who_am_i_oid }, { "1.2.840.113556.1.4.1791", ldap::active_directory_capability_oid }),
-			done_msg(2) }),
+	  { answer({ root_dse(2, { ldap::who_am_i_oid }, { "1.2.840.113556.1.4.1791", ldap::ad::ds_capability_oid }),
+		  done_msg(2) }),
 		answer({ modify_result(3) }),
 		answer({ modify_result(4) }) });
 	REQUIRE(f.connect(upgraded()).has_value());
@@ -341,7 +340,7 @@ TEST_CASE("change_password: the AD capability over TLS sends unicodePwd modifies
 TEST_CASE("change_password: the AD capability without TLS is refused before sending", "[net][password]")
 {
 	mock_ldap m;
-	m.serve({ answer({ root_dse(1, {}, { ldap::active_directory_capability_oid }), done_msg(1) }) });
+	m.serve({ answer({ root_dse(1, {}, { ldap::ad::ds_capability_oid }), done_msg(1) }) });
 	for (int i = 0; i < 2; ++i) {// the second time from the cache: no search
 		auto r = m.run(m.conn.change_password(jdoe, std::string(old_pw), std::string(new_pw)));
 		REQUIRE_FALSE(r.has_value());
@@ -361,7 +360,7 @@ TEST_CASE("change_password: the AD capability without TLS is refused before send
 TEST_CASE("change_password: the AD capability over ldaps:// sends unicodePwd modifies", "[net][password]")
 {
 	tls_mock f({},
-	  { answer({ root_dse(1, {}, { ldap::active_directory_capability_oid }), done_msg(1) }),
+	  { answer({ root_dse(1, {}, { ldap::ad::ds_capability_oid }), done_msg(1) }),
 		answer({ modify_result(2) }),
 		answer({ modify_result(3) }) });
 	REQUIRE(f.connect({}, "ldaps").has_value());
@@ -509,8 +508,7 @@ TEST_CASE("change_password: the root DSE is read again after StartTLS", "[net][p
 	tls_mock f({ answer({ root_dse(1, { ldap::password_modify_oid }), done_msg(1) }),
 				 answer({ extended_ok(2) }),
 				 answer({ start_tls_ok(3) }) },
-	  { answer({ root_dse(4, {}, { ldap::active_directory_capability_oid }), done_msg(4) }),
-		answer({ modify_result(5) }) });
+	  { answer({ root_dse(4, {}, { ldap::ad::ds_capability_oid }), done_msg(4) }), answer({ modify_result(5) }) });
 	REQUIRE(f.connect().has_value());
 	CHECK(f.run(f.conn.change_password(jdoe, std::string(old_pw), std::string(new_pw))).has_value());
 	REQUIRE(f.run(f.conn.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) })).has_value());

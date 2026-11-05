@@ -1345,8 +1345,8 @@ other Octet String attributes, jpegPhoto, userCertificate, objectGUID,
 objectSid) to `ldap::binary`: a string member fails on their values, and
 `validate<T>` reports it on a binary syntax (section 6).
 
-Active Directory's Large Integer syntax (`1.2.840.113556.1.4.906`, `ad.hpp`)
-holds FILETIME dates (accountExpires, pwdLastSet, lastLogonTimestamp,
+Active Directory's Large Integer syntax (`1.2.840.113556.1.4.906`,
+`ad/filetime.hpp`) holds FILETIME dates (accountExpires, pwdLastSet, lastLogonTimestamp,
 lastLogon, badPasswordTime, lockoutTime: a signed 64-bit count of 100 ns
 ticks since 1601-01-01 00:00:00 UTC, in decimal), intervals (maxPwdAge,
 minPwdAge, lockoutDuration, lockOutObservationWindow: negative tick counts)
@@ -2664,6 +2664,62 @@ decision left open.
   `search()` and `compare()` chase through `ldap::client`'s.
 - Later (beads): a background prober, DNS SRV, weighted or round-robin
   selection, per-identity sub-pools, pooled referred connections.
+
+## 12. Active Directory layer (`ldap::ad`)
+
+Active Directory behaviour that no RFC describes lives in
+`namespace jhetz::ldap::ad`, a layer built only on the public API, as
+ldap3's `conn.extend.microsoft` sits on its connection and .NET's
+AccountManagement on System.DirectoryServices.Protocols. The split rule:
+
+- The core keeps the standard extension points, whoever uses them: SASL
+  mechanisms (NTLM through GSS-SPNEGO included: a mechanism is a SASL
+  plug-in), generic controls and extended operations (any OID, typed or
+  raw), and the raw result (result code, diagnosticMessage, matched DN) of
+  every error.
+- `ldap::ad` holds AD semantics: what AD's attributes, values,
+  capabilities and diagnostics mean, and operations only AD defines
+  (unicodePwd password changes, DirSync, change notification, ranged
+  retrieval, domain controller discovery).
+- Free functions taking what they work on (`const entry &`, later
+  `connection &` / `client &`), no wrapper class until one carries state
+  of its own.
+
+Layout:
+
+- Codec-level AD code (no network) is in `jhetz::ldap`: headers under
+  `include/jhetz/ldap/ad/`, sources under `src/ad/`. `ad/filetime.hpp`
+  (the FILETIME clock and its `value_traits`, section 4) and
+  `ad/root_dse.hpp` (`edition_of`, `is_active_directory`) so far. These
+  headers are installed with the codec-only package too.
+- AD operations that need the network go in the target `jhetz::ldap_ad`
+  (export name `ldap_ad`, package component `ad`), sources under `src/ad/`
+  next to the codec's, their headers under `include/jhetz/ldap/ad/` too,
+  listed with the net headers in the codec-only install's EXCLUDE patterns
+  and `tests/CMakeLists.txt`'s header check.
+  It links `jhetz::ldap_net` and includes only public headers, never
+  `src/connection/` or `src/net/`; it is built and installed whenever
+  `jhetz::ldap_net` is. It is an INTERFACE library until its first source.
+  A target of its own rather than `src/ad/` inside `jhetz::ldap_net`: the
+  dependency is one-way and visible in CMake (`jhetz::ldap_net` cannot
+  reach `ldap::ad`, `jhetz::ldap_ad` sees no private header), a consumer
+  who never talks to AD does not link it, and the package says by
+  component whether it is there.
+- The core does not depend on `jhetz::ldap_ad`. Codec-level `ldap::ad`
+  headers may be used by the core where it still carries AD behaviour
+  being moved out (`password_method::automatic` reads
+  `ad::ds_capability_oid`).
+
+Recognising AD: `ad::edition_of(root_dse)` reads the root DSE's
+supportedCapabilities: `ad::ds_capability_oid` (1.2.840.113556.1.4.800,
+LDAP_CAP_ACTIVE_DIRECTORY_OID: AD DS, and Samba AD, which cannot be told
+apart from it) gives `edition::ds`, else `ad::lds_capability_oid`
+(1.2.840.113556.1.4.1851, LDAP_CAP_ACTIVE_DIRECTORY_ADAM_OID: AD LDS)
+gives `edition::lds`, else `edition::none`; `is_active_directory` is
+`!= none`. It takes the entry, not a connection: reading the root DSE is
+the caller's search (base scope, empty DN, `supportedCapabilities`
+requested: it is an operational attribute), and a root DSE hidden by
+access controls reads as `none`.
 
 ## Resolved
 

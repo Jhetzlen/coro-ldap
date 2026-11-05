@@ -149,7 +149,7 @@ namespace syntax {
 	inline constexpr const char *directory_string = "1.3.6.1.4.1.1466.115.121.1.15";
 	// Active Directory's Large Integer / Interval (a signed 64-bit integer in
 	// decimal): FILETIME dates such as accountExpires, intervals such as
-	// maxPwdAge, and counters such as uSNChanged. See ad.hpp.
+	// maxPwdAge, and counters such as uSNChanged. See ad/filetime.hpp.
 	inline constexpr const char *ad_large_integer = "1.2.840.113556.1.4.906";
 
 	// Binary syntaxes: their values are octets, not UTF-8 text, so a string

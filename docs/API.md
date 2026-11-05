@@ -232,8 +232,9 @@ itself needs only ICU.
     `password_modify_params`), the `ldap::mod` builders, `response`
     (`{message_id, controls}`; breaking: `message_id` is new and comes
     first, as in the LDAPMessage), `intermediate`, `extended_result`,
-    `end_transaction_result`, and the OIDs `who_am_i_oid`,
-    `password_modify_oid` and `active_directory_capability_oid`.
+    `end_transaction_result`, and the OIDs `who_am_i_oid` and
+    `password_modify_oid` (the AD capability OIDs are in
+    `jhetz/ldap/ad/root_dse.hpp`).
   - `jhetz/ldap/search_stream.hpp` and `jhetz/ldap/paged_search.hpp`: the
     entry streams `search_stream()` and `search_paged()` return, and
     `search_entry` and `search_reference`, the items of
@@ -426,7 +427,7 @@ itself needs only ICU.
   `sync::connection`. The method comes from the server's root DSE, read
   once per connection (again after StartTLS): RFC 3062 Password Modify if
   `supportedExtension` lists it, else Active Directory (and Samba AD) if
-  `supportedCapabilities` lists `1.2.840.113556.1.4.800`, else
+  `supportedCapabilities` lists `ad::ds_capability_oid`, else
   `client_errc::no_password_method`; a server offering both gets RFC 3062.
   On AD the password goes into one ModifyRequest of `unicodePwd`
   (`ldap::ad_password_value`: quoted, UTF-16LE, full Unicode), deleting the
@@ -744,20 +745,6 @@ itself needs only ICU.
   error before sending anything, and a typed filter on such a value is the
   empty filter (fails with `invalid_filter` when sent).
 
-- `jhetz/ldap/ad.hpp`: Active Directory's Large Integer syntax
-  (1.2.840.113556.1.4.906) as std::chrono types. `ad::filetime_clock` is a
-  C++20 Clock for FILETIME (100 ns ticks since 1601-01-01 UTC;
-  `clock_cast` to `system_clock` and `utc_clock`, and a `zoned_time` from
-  the resulting `sys_time`);
-  `ad::filetime_clock::time_point` members map dates (accountExpires,
-  pwdLastSet, lastLogonTimestamp) as the plain tick count:
-  9223372036854775807 is `ad::never`, 0 is tick 0 (1601-01-01, before every
-  date: "never happened" for lastLogon, `ad::pwd_must_change` for
-  pwdLastSet), and `ad::is_never(t)` is true for both of accountExpires'
-  "never expires" spellings; `ad::pwd_must_change` / `ad::pwd_set_now`
-  write pwdLastSet 0 / -1; and `ad::filetime_clock::duration` members map
-  the negative intervals (maxPwdAge, lockoutDuration; `ad::forever` for
-  -9223372036854775808). `std::int64_t` members read any 906 attribute raw.
 - `jhetz/ldap/schema.hpp` (#13): runtime schema validation. A lenient
   RFC 4512 parser for the subschema's attributeTypes / objectClasses
   (a definition that does not parse, or is not UTF-8, is skipped and
@@ -887,6 +874,41 @@ itself needs only ICU.
   (`-Y EXTERNAL [-X authzid]`, client certificate `--cert` / `--key`),
   search (paged with `--page N`), LDIF output, unbind;
   `jhetz-ldapsearch [options] URL [filter [attrs]]`.
+
+## `ldap::ad`: Active Directory
+
+Active Directory behaviour no RFC describes, as free functions and types in
+`jhetz::ldap::ad` over the public API (DESIGN.md section 12). The
+codec-level headers are part of `jhetz::ldap`; the operations that need
+the network will be in the target `jhetz::ldap_ad` (links
+`jhetz::ldap_net`; package component `ad`:
+`find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net ad)`), which has no
+operation of its own yet.
+
+- `jhetz/ldap/ad/root_dse.hpp` (`jhetz::ldap`): `ad::edition_of(root_dse)`
+  reads a root DSE entry's supportedCapabilities: `ad::edition::ds` if it
+  lists `ad::ds_capability_oid` (1.2.840.113556.1.4.800, AD DS and Samba
+  AD), else `ad::edition::lds` if it lists `ad::lds_capability_oid`
+  (1.2.840.113556.1.4.1851, AD LDS), else `ad::edition::none` (also when
+  the attribute is missing). `ad::is_active_directory(root_dse)` is
+  `edition_of(root_dse) != edition::none`. The caller reads the root DSE:
+  `search({.scope = search_scope::base_object, .attributes =
+  {"supportedCapabilities"}})` (an operational attribute, so it must be
+  requested).
+- `jhetz/ldap/ad/filetime.hpp` (`jhetz::ldap`): Active Directory's Large
+  Integer syntax (1.2.840.113556.1.4.906) as std::chrono types.
+  `ad::filetime_clock` is a C++20 Clock for FILETIME (100 ns ticks since 1601-01-01 UTC;
+  `clock_cast` to `system_clock` and `utc_clock`, and a `zoned_time` from
+  the resulting `sys_time`);
+  `ad::filetime_clock::time_point` members map dates (accountExpires,
+  pwdLastSet, lastLogonTimestamp) as the plain tick count:
+  9223372036854775807 is `ad::never`, 0 is tick 0 (1601-01-01, before every
+  date: "never happened" for lastLogon, `ad::pwd_must_change` for
+  pwdLastSet), and `ad::is_never(t)` is true for both of accountExpires'
+  "never expires" spellings; `ad::pwd_must_change` / `ad::pwd_set_now`
+  write pwdLastSet 0 / -1; and `ad::filetime_clock::duration` members map
+  the negative intervals (maxPwdAge, lockoutDuration; `ad::forever` for
+  -9223372036854775808). `std::int64_t` members read any 906 attribute raw.
 
 ## Memory
 

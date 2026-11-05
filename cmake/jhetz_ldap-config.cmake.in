@@ -3,11 +3,14 @@
 # OpenSSL); the dependencies are found here as packages. Component `net`
 # requires jhetz::ldap_net:
 #   find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net)
+# Component `ad` requires jhetz::ldap_ad (Active Directory operations over
+# jhetz::ldap_net), installed with jhetz::ldap_net.
 # Component `gssapi`: jhetz::ldap_net was built with SASL GSSAPI
 # (JHETZ_LDAP_WITH_GSSAPI); the GSS-API library is then found with pkg-config.
 @PACKAGE_INIT@
 
 set(jhetz_ldap_net_FOUND @JHETZ_LDAP_PACKAGE_NET@)
+set(jhetz_ldap_ad_FOUND @JHETZ_LDAP_PACKAGE_NET@)
 set(jhetz_ldap_gssapi_FOUND @JHETZ_LDAP_PACKAGE_GSSAPI@)
 include(CMakeFindDependencyMacro)
 # Linked privately, but the static jhetz::ldap and jhetz::ldap_net need it at

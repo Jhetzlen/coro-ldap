@@ -1,8 +1,9 @@
 #!/bin/sh
 # Installs Capy and Corosio as packages, then jhetz_ldap against them, into
-# a fresh prefix, and builds tests/install/consumer with find_package; then
-# the same for a codec-only install (no Corosio needed by consumers; ICU is,
-# found by the package config).
+# a fresh prefix, and builds tests/install/consumer with find_package
+# (COMPONENTS net ad); then the same for a codec-only install (no Corosio
+# needed by consumers; ICU is, found by the package config), where the net
+# and ad components must be missing.
 #
 #   tests/install/check_install.sh WORK_DIR
 #
@@ -74,6 +75,18 @@ step "a net consumer of the codec-only package fails to configure"
 if cmake -S "$here/consumer" -B "$work/build/consumer-missing" $gen -DCMAKE_PREFIX_PATH="$work/prefix-codec" \
 	>/dev/null 2>&1; then
 	echo "unexpected: COMPONENTS net found in a codec-only install"
+	exit 1
+fi
+step "COMPONENTS ad alone fails to configure on the codec-only package"
+mkdir -p "$work/build/ad-only-src"
+cat >"$work/build/ad-only-src/CMakeLists.txt" <<'EOF2'
+cmake_minimum_required(VERSION 3.25)
+project(jhetz_ldap_ad_only LANGUAGES CXX)
+find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS ad)
+EOF2
+if cmake -S "$work/build/ad-only-src" -B "$work/build/consumer-ad-missing" $gen \
+	-DCMAKE_PREFIX_PATH="$work/prefix-codec" >/dev/null 2>&1; then
+	echo "unexpected: COMPONENTS ad found in a codec-only install"
 	exit 1
 fi
 echo "install check passed"

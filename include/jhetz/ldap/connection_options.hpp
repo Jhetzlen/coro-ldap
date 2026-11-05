@@ -39,7 +39,7 @@ enum class password_method {
 	// kept for the connection until start_tls() (RFC 4513 section 3.1.5:
 	// what was read in clear is read again over TLS): rfc3062 if its
 	// supportedExtension lists password_modify_oid, else active_directory
-	// if its supportedCapabilities lists active_directory_capability_oid
+	// if its supportedCapabilities lists ad::ds_capability_oid
 	// (Samba AD too), else client_errc::no_password_method. A server
 	// offering both gets rfc3062. A root DSE hidden by access controls
 	// advertises neither: choose the method explicitly then.

@@ -11,7 +11,7 @@
 // maximum is ad::never), accept what int64 accepts from -1 up and encode
 // the same text; every decoded date other than ad::never clock_casts to
 // system_clock and back unchanged (UBSan catches an overflow).
-#include "jhetz/ldap/ad.hpp"
+#include "jhetz/ldap/ad/filetime.hpp"
 #include "jhetz/ldap/mapping.hpp"
 
 #include "check.hpp"

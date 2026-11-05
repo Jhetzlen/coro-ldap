@@ -1,5 +1,7 @@
 #include "jhetz/ldap/connection.hpp"
 
+#include "jhetz/ldap/ad/root_dse.hpp"
+
 #include "../format_util.hpp"
 #include "../icu_util.hpp"
 #include "impl.hpp"
@@ -209,7 +211,7 @@ namespace {
 		if (lists("supportedExtension", password_modify_oid)) {
 			co_return ldap::password_method::rfc3062;
 		}
-		if (lists("supportedCapabilities", active_directory_capability_oid)) {
+		if (lists("supportedCapabilities", ad::ds_capability_oid)) {
 			co_return ldap::password_method::active_directory;
 		}
 		co_return fail(client_errc::no_password_method,

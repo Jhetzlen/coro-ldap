@@ -249,8 +249,4 @@ struct end_transaction_result
 	  -> const std::pmr::vector<control> *;
 };
 
-// LDAP_CAP_ACTIVE_DIRECTORY_OID: in the root DSE's supportedCapabilities of
-// Active Directory and Samba AD domain controllers.
-inline constexpr std::string_view active_directory_capability_oid = "1.2.840.113556.1.4.800";
-
 }// namespace jhetz::ldap

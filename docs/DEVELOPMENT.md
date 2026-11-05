@@ -39,7 +39,7 @@ others; the list of `jhetz::ldap_net` headers is in `tests/CMakeLists.txt`).
 | Option | Default | |
 |---|---|---|
 | `JHETZ_LDAP_BUILD_TESTS` | `ON` | unit tests and the `*_fuzz_replay` tests |
-| `JHETZ_LDAP_BUILD_NET` | `ON` (`OFF` with fuzzers) | `jhetz::ldap_net` and its tests; fetches Corosio + Capy, needs OpenSSL |
+| `JHETZ_LDAP_BUILD_NET` | `ON` (`OFF` with fuzzers) | `jhetz::ldap_net`, `jhetz::ldap_ad` (Active Directory, DESIGN.md section 12) and their tests; fetches Corosio + Capy, needs OpenSSL |
 | `JHETZ_LDAP_WITH_GSSAPI` | `OFF` | SASL GSSAPI (Kerberos) in `jhetz::ldap_net`, its tests and example; needs the GSS-API library (pkg-config `krb5-gssapi`). The installed package then has the component `gssapi` |
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
@@ -166,7 +166,7 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
   `std::filesystem::path` and take any name.
 - `ad::filetime_clock` works for any `system_clock` period (MSVC's is
   100 ns); `from_sys` is defined up to `time_point::max()` minus the
-  1601-to-1970 offset, as documented in `ad.hpp`.
+  1601-to-1970 offset, as documented in `ad/filetime.hpp`.
 
 ### Linux only
 
@@ -199,8 +199,8 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
 - Abstract addresses: Windows' AF_UNIX has been said to accept them;
   connect() refuses them off Linux until that is checked.
 - Time zones: `std::chrono::locate_zone` on MSVC uses ICU's tzdb, whose
-  abbreviations may differ from IANA's (`ad_tests` checks the offset, not
-  "CET").
+  abbreviations may differ from IANA's (`ad_filetime_tests.cpp` checks the
+  offset, not "CET").
 - Static ICU (`U_STATIC_IMPLEMENTATION`, above) and a static OpenSSL's
   extra system libraries.
 - CryptoAPI chain verification (coro-ldap-1q5), syntax-checked only:
@@ -233,27 +233,32 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
 ## Installing
 
 Either add it to the build (`add_subdirectory` or FetchContent) and
-link `jhetz::ldap` / `jhetz::ldap_net`, or install it and use the CMake
-package:
+link `jhetz::ldap` / `jhetz::ldap_net` / `jhetz::ldap_ad`, or install it
+and use the CMake package:
 
 ```cmake
 find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net)   # or without `net`
 target_link_libraries(app PRIVATE jhetz::ldap_net)     # jhetz::ldap: codec only
+# Active Directory operations (ldap::ad over the connection):
+find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net ad)
+target_link_libraries(app PRIVATE jhetz::ldap_ad)
 ```
 
 `cmake --install` installs the headers, the libraries and the `jhetz_ldap`
 package (`JHETZ_LDAP_INSTALL`, on when this is the top-level project).
-`jhetz::ldap_net` is part of the package only when Capy and Corosio were
-found as installed packages (on `CMAKE_PREFIX_PATH`; configure prefers them
-to fetching): a fetched Corosio does not export its targets. Without it the
+`jhetz::ldap_net` and `jhetz::ldap_ad` are part of the package only when
+Capy and Corosio were found as installed packages (on `CMAKE_PREFIX_PATH`;
+configure prefers them to fetching): a fetched Corosio does not export its
+targets. Without them the
 package is the codec only, without the networking headers; fetched
 dependencies are never installed with it. The package finds ICU
 (`find_dependency(ICU 60 COMPONENTS uc data)`), which the static libraries
 need at link time, codec-only too. Corosio at the
 pinned commit needs help to install against an installed Capy;
 `tests/install/check_install.sh WORK_DIR` does the whole sequence (Capy,
-Corosio, jhetz_ldap, then a consumer in `tests/install/consumer/`, also
-codec-only) and is the reference for doing it by hand.
+Corosio, jhetz_ldap, then a consumer in `tests/install/consumer/` with the
+`net` and `ad` components, also codec-only) and is the reference for doing
+it by hand.
 
 ## Examples
 

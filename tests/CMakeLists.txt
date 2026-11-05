@@ -18,7 +18,8 @@ if(WIN32)
 endif()
 
 add_executable(jhetz_ldap_tests
-    ad_tests.cpp
+    ad_filetime_tests.cpp
+    ad_root_dse_tests.cpp
     attribute_tests.cpp
     ber_reader_tests.cpp
     ber_writer_tests.cpp
@@ -193,7 +194,7 @@ if(JHETZ_LDAP_BUILD_NET)
     # starts them and sets JHETZ_LDAP_IT_SAMBA_*): label "samba_ad", skipped
     # without them.
     add_executable(jhetz_ldap_samba_ad_tests integration/samba_ad_tests.cpp)
-    target_link_libraries(jhetz_ldap_samba_ad_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
+    target_link_libraries(jhetz_ldap_samba_ad_tests PRIVATE jhetz::ldap_ad Catch2::Catch2WithMain)
     jhetz_ldap_warnings(jhetz_ldap_samba_ad_tests)
     add_test(NAME integration.samba_ad COMMAND jhetz_ldap_samba_ad_tests)
     set_tests_properties(integration.samba_ad PROPERTIES LABELS "integration;samba_ad" SKIP_RETURN_CODE 4)

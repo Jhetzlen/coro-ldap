@@ -198,6 +198,7 @@ if(NOT ICU_FOUND)
 endif()
 
 add_library(jhetz_ldap STATIC
+    src/ad/root_dse.cpp
     src/attribute.cpp
     src/ber.cpp
     src/content_sync.cpp
@@ -342,6 +343,17 @@ elseif(JHETZ_LDAP_WITH_GSSAPI)
     message(FATAL_ERROR "JHETZ_LDAP_WITH_GSSAPI needs JHETZ_LDAP_BUILD_NET")
 endif()
 
+# jhetz::ldap_ad: the Active Directory operations that need the network
+# (DESIGN.md, "Active Directory layer"), built on jhetz::ldap_net's public
+# API only. Its codec-level headers (include/jhetz/ldap/ad/, sources in
+# src/ad/) are in jhetz::ldap. An INTERFACE library until its first source.
+if(JHETZ_LDAP_BUILD_NET)
+    add_library(jhetz_ldap_ad INTERFACE)
+    add_library(jhetz::ldap_ad ALIAS jhetz_ldap_ad)
+    set_target_properties(jhetz_ldap_ad PROPERTIES EXPORT_NAME ldap_ad)
+    target_link_libraries(jhetz_ldap_ad INTERFACE jhetz_ldap_net)
+endif()
+
 if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     add_executable(jhetz_ldapsearch examples/ldapsearch.cpp)
     set_target_properties(jhetz_ldapsearch PROPERTIES OUTPUT_NAME jhetz-ldapsearch)
@@ -361,8 +373,9 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
 endif()
 
 # cmake --install: headers, libraries and the jhetz_ldap package, so
-# consumers can find_package(jhetz_ldap) and link jhetz::ldap (codec) and
-# jhetz::ldap_net (connection, TLS). jhetz::ldap_net needs Corosio and Capy
+# consumers can find_package(jhetz_ldap) and link jhetz::ldap (codec),
+# jhetz::ldap_net (connection, TLS) and jhetz::ldap_ad (Active Directory).
+# jhetz::ldap_net and jhetz::ldap_ad need Corosio and Capy
 # as installed packages (CMAKE_PREFIX_PATH): a fetched Corosio does not
 # export its targets, so it cannot be referenced from our export set.
 if(JHETZ_LDAP_INSTALL)
@@ -372,7 +385,7 @@ if(JHETZ_LDAP_INSTALL)
     if(JHETZ_LDAP_BUILD_NET)
         get_target_property(jhetz_ldap_corosio_imported Boost::corosio IMPORTED)
         if(jhetz_ldap_corosio_imported)
-            list(APPEND jhetz_ldap_install_targets jhetz_ldap_net)
+            list(APPEND jhetz_ldap_install_targets jhetz_ldap_net jhetz_ldap_ad)
             set(JHETZ_LDAP_PACKAGE_NET ON)
         else()
             message(STATUS "jhetz_ldap: jhetz::ldap_net is not installed: Corosio was fetched, not found "
