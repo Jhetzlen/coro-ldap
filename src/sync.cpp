@@ -1,6 +1,8 @@
 #include "jhetz/ldap/sync.hpp"
 #include "jhetz/ldap/cancel.hpp"
 
+#include "connection/search.hpp"
+
 #include <boost/capy/when_any.hpp>
 #include <boost/corosio/delay.hpp>
 
@@ -58,23 +60,29 @@ namespace detail {
 
 	auto
 	  collect_paged(ldap::connection &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-		-> capy::task<result<std::pmr::vector<entry>>>
+		-> capy::task<result<search_result>>
 	{
 		auto s = co_await c.search_paged(std::move(request), page_size, mr);
 		if (!s) {
 			co_return std::unexpected(std::move(s.error()));
 		}
-		std::pmr::vector<entry> out(mr);
+		search_result out{ .entries = std::pmr::vector<entry>(mr), .references = string_list(mr) };
 		while (true) {
 			auto e = co_await s->next();
 			if (!e) {
-				co_return std::unexpected(std::move(e.error()));
+				const ldap_result *done = ldap::detail::paged_done(*s);
+				if (done == nullptr || !ldap::detail::limit_exceeded(done->result_code)) {
+					co_return std::unexpected(std::move(e.error()));
+				}
+				break;
 			}
 			if (!*e) {
-				co_return out;
+				break;
 			}
-			out.push_back(std::move(**e));
+			out.entries.push_back(std::move(**e));
 		}
+		ldap::detail::set_outcome(out, *ldap::detail::paged_done(*s), s->references(), s->controls());
+		co_return out;
 	}
 
 	// The ldap::transaction is made, and later destroyed, on the I/O thread.
@@ -436,7 +444,7 @@ auto client::acquire(acquire_options options) -> result<lease>
 	  std::shared_ptr<const detail::io_thread>(core_, &core_->io), std::move(r->first), std::move(r->second));
 }
 
-auto client::search(search_params request, std::pmr::memory_resource *mr) -> result<std::pmr::vector<entry>>
+auto client::search(search_params request, std::pmr::memory_resource *mr) -> result<search_result>
 {
 	return core_->io.run([&] { return core_->pool->search(std::move(request), mr); });
 }

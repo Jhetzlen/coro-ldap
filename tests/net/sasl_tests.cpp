@@ -278,7 +278,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		  answer({ done_msg(2) }) });
 		echo_mechanism mech;
 		outcome<ldap::result<void>> bind;
-		outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+		outcome<ldap::result<ldap::search_result>> search;
 		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
 		drive_until(m.ioc, [&] { return bind.done() && search.done(); });
@@ -300,7 +300,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(3, 14) }), client_hangs_up() });
 		echo_mechanism mech;
 		outcome<ldap::result<void>> bind;
-		outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+		outcome<ldap::result<ldap::search_result>> search;
 		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
 		drive_until(m.ioc, [&] { return bind.done() && search.done(); });
@@ -377,7 +377,7 @@ TEST_CASE("sasl: requests started during the exchange wait for its end", "[net][
 	  answer({ done_msg(2) }) });
 	echo_mechanism mech;
 	outcome<ldap::result<void>> bind;
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	outcome<ldap::result<ldap::search_result>> search;
 	spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 	spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
 	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
@@ -400,7 +400,7 @@ TEST_CASE("sasl: a failed exchange is aborted before held requests are sent", "[
 	m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(3) }), answer({ done_msg(2) }) });
 	echo_mechanism mech;
 	outcome<ldap::result<void>> bind;
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	outcome<ldap::result<ldap::search_result>> search;
 	spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 	spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);// id 2, held
 	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
@@ -420,24 +420,23 @@ TEST_CASE("sasl: an abort without an answer closes the connection", "[net][sasl]
 {
 	// The server reads the abort, answers nothing, and then sees the
 	// client hang up: nothing else is sent.
-	auto check = [](mock_ldap &m,
-				   outcome<ldap::result<void>> &bind,
-				   outcome<ldap::result<std::pmr::vector<ldap::entry>>> &search) {
-		REQUIRE_FALSE(bind.get().has_value());
-		CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
-		CHECK_FALSE(m.conn.is_open());
-		REQUIRE_FALSE(search.get().has_value());
-		CHECK(search.get().error().code == ldap::client_errc::not_sent);
-		CHECK_THAT(std::string(search.get().error().context), ContainsSubstring("cannot be abandoned"));
-		m.sockets.client.close();// closing a wrapped transport leaves the socket open
-		m.check_server();
-		REQUIRE(m.log.received.size() == 2);
-		CHECK(m.log.received[0] == sasl_req(1, "X-ECHO", "hello"));
-		CHECK(m.log.received[1] == abort_req(3));
-	};
+	auto check =
+	  [](mock_ldap &m, outcome<ldap::result<void>> &bind, outcome<ldap::result<ldap::search_result>> &search) {
+		  REQUIRE_FALSE(bind.get().has_value());
+		  CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
+		  CHECK_FALSE(m.conn.is_open());
+		  REQUIRE_FALSE(search.get().has_value());
+		  CHECK(search.get().error().code == ldap::client_errc::not_sent);
+		  CHECK_THAT(std::string(search.get().error().context), ContainsSubstring("cannot be abandoned"));
+		  m.sockets.client.close();// closing a wrapped transport leaves the socket open
+		  m.check_server();
+		  REQUIRE(m.log.received.size() == 2);
+		  CHECK(m.log.received[0] == sasl_req(1, "X-ECHO", "hello"));
+		  CHECK(m.log.received[1] == abort_req(3));
+	  };
 	echo_mechanism mech;
 	outcome<ldap::result<void>> bind;
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	outcome<ldap::result<ldap::search_result>> search;
 	SECTION("timeout")
 	{
 		mock_ldap m({ .operation_timeout = std::chrono::milliseconds(100) });

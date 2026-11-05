@@ -8,6 +8,8 @@
 
 #include <boost/capy/task.hpp>
 
+#include <cstdint>
+
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -36,6 +38,8 @@ struct search_stream::state
 	std::optional<error> error_{};
 	string_list references{};
 	std::pmr::vector<control> controls{};
+	// The SearchResultDone's LDAPResult, once read.
+	std::optional<ldap_result> done{};
 	// Released once the stream is destroyed, after the search is abandoned:
 	// ldap::client's lease on the connection (detail::keep_alive).
 	std::shared_ptr<void> owner{};
@@ -64,6 +68,37 @@ namespace detail {
 	  const search_params &p,
 	  std::pmr::memory_resource *mr,
 	  const std::stop_token &stop) -> result<ldap::search_stream>;
+
+	// The result codes other than success of a SearchResultDone that
+	// search() returns as a search_result with the entries received:
+	// sizeLimitExceeded, timeLimitExceeded, adminLimitExceeded.
+	[[nodiscard]] constexpr auto limit_exceeded(std::int32_t result_code) noexcept -> bool
+	{
+		return result_code == static_cast<std::int32_t>(errc::size_limit_exceeded)
+			   || result_code == static_cast<std::int32_t>(errc::time_limit_exceeded)
+			   || result_code == static_cast<std::int32_t>(errc::admin_limit_exceeded);
+	}
+
+	// The SearchResultDone's LDAPResult `s` ended with, null before it (or
+	// when it ended otherwise: a connection failure, a timeout).
+	[[nodiscard]] auto search_done(ldap::search_stream &s) noexcept -> const ldap_result *;
+	// As search_done(), for the current page of `p`.
+	[[nodiscard]] auto paged_done(ldap::paged_search &p) noexcept -> const ldap_result *;
+
+	// `out` with the outcome of `s`, which ended with `done`: its
+	// references, the LDAPResult's fields and the done's controls.
+	template<class Entries>
+	void set_outcome(basic_search_result<Entries> &out,
+	  const ldap_result &done,
+	  const string_list &references,
+	  const std::pmr::vector<control> &controls)
+	{
+		out.references.assign(references.begin(), references.end());
+		out.result_code = done.result_code;
+		out.matched_dn.assign(done.matched_dn);
+		out.diagnostic_message.assign(done.diagnostic_message);
+		out.controls.assign(controls.begin(), controls.end());
+	}
 
 	// The one entry of a base-scope search (nullopt if none came back).
 	auto read_one(impl_ref self, search_params p) -> boost::capy::task<result<std::optional<entry>>>;

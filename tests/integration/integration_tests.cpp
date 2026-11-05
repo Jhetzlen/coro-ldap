@@ -331,8 +331,8 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 	// slapd offers SCRAM-SHA-256 only with cyrus-sasl's scram plugin installed.
 	auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedSASLMechanisms" })));
 	REQUIRE(dse.has_value());
-	REQUIRE(dse->size() == 1);
-	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");
+	REQUIRE(dse->entries.size() == 1);
+	const auto *mechs = dse->entries[0].find("supportedSASLMechanisms");
 	if (mechs == nullptr || std::ranges::find(*mechs, "SCRAM-SHA-256") == mechs->end()) {
 		SKIP("slapd does not offer SCRAM-SHA-256 (cyrus-sasl scram plugin not installed)");
 	}
@@ -385,7 +385,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		REQUIRE(c.is_open());
 		auto again = finish(ioc, c.search(ldap::root_dse({ "namingContexts" })));
 		REQUIRE(again.has_value());
-		CHECK(again->size() == 1);
+		CHECK(again->entries.size() == 1);
 		CHECK(finish(ioc, c.who_am_i()) == "");
 	}
 	SECTION("a step the client fails, and a server that refuses the abort")
@@ -404,7 +404,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		REQUIRE(c.is_open());
 		auto again = finish(ioc, c.search(ldap::root_dse({ "namingContexts" })));
 		REQUIRE(again.has_value());
-		CHECK(again->size() == 1);
+		CHECK(again->entries.size() == 1);
 		CHECK(finish(ioc, c.who_am_i()) == "");
 		// The abort was refused: so is the same bind, made directly.
 		auto anonymous = finish(ioc, c.simple_bind({}, ""));
@@ -437,8 +437,8 @@ TEST_CASE("integration: SASL SCRAM-SHA-256-PLUS (channel binding)", "[integratio
 	CHECK_FALSE(c.peer_certificate().empty());
 	auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedSASLMechanisms" })));
 	REQUIRE(dse.has_value());
-	REQUIRE(dse->size() == 1);
-	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");
+	REQUIRE(dse->entries.size() == 1);
+	const auto *mechs = dse->entries[0].find("supportedSASLMechanisms");
 	if (mechs == nullptr || std::ranges::find(*mechs, "SCRAM-SHA-256-PLUS") == mechs->end()) {
 		SKIP("slapd does not offer SCRAM-SHA-256-PLUS (no scram plugin, or no sasl-cbinding)");
 	}
@@ -517,8 +517,8 @@ TEST_CASE("integration: SCRAM-SHA-256-PLUS with an Ed25519 server certificate",
 	CHECK(c.channel_bindings().tls_server_end_point.empty());
 	auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedSASLMechanisms" })));
 	REQUIRE(dse.has_value());
-	REQUIRE(dse->size() == 1);
-	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");
+	REQUIRE(dse->entries.size() == 1);
+	const auto *mechs = dse->entries[0].find("supportedSASLMechanisms");
 	if (mechs == nullptr || std::ranges::find(*mechs, "SCRAM-SHA-256-PLUS") == mechs->end()) {
 		SKIP("slapd does not offer SCRAM-SHA-256-PLUS (no scram plugin, or no sasl-cbinding)");
 	}
@@ -546,7 +546,7 @@ TEST_CASE("integration: plain, streaming and paged searches", "[integration]")
 
 	auto plain = finish(ioc, c.search(all_users));
 	REQUIRE(plain.has_value());
-	CHECK(plain->size() == 250);
+	CHECK(plain->entries.size() == 250);
 
 	auto s = finish(ioc, c.search_stream(all_users));
 	REQUIRE(s.has_value());
@@ -665,7 +665,7 @@ TEST_CASE("integration: a paged search stopped between pages sends a release", "
 	CHECK(c.is_tls());
 	auto all = finish(ioc, c.search(all_users));
 	REQUIRE(all.has_value());
-	CHECK(all->size() == 250);
+	CHECK(all->entries.size() == 250);
 }
 
 TEST_CASE("integration: large and binary values", "[integration]")
@@ -678,15 +678,15 @@ TEST_CASE("integration: large and binary values", "[integration]")
 	auto big = finish(ioc,
 	  c.search({ .base = ldap::dn{ "cn=big,ou=groups,dc=example,dc=org" }, .scope = ldap::search_scope::base_object }));
 	REQUIRE(big.has_value());
-	REQUIRE(big->size() == 1);
-	CHECK((*big)[0].find("member")->size() == 2000);
+	REQUIRE(big->entries.size() == 1);
+	CHECK(big->entries[0].find("member")->size() == 2000);
 
 	auto photo = run(ioc,
 	  c.search({ .base = ldap::dn{ "uid=photo,ou=people,dc=example,dc=org" },
 		.scope = ldap::search_scope::base_object,
 		.attributes = { "jpegPhoto" } }));
 	REQUIRE(photo.has_value());
-	const auto &bytes = (*photo)[0].find("jpegPhoto")->front();
+	const auto &bytes = photo->entries[0].find("jpegPhoto")->front();
 	REQUIRE(bytes.size() == 10000);
 	bool same = true;
 	for (std::size_t i = 0; i < bytes.size(); ++i) {
@@ -734,9 +734,9 @@ TEST_CASE("integration: typed search with the server's schema", "[integration][m
 	auto r = finish(
 	  ioc, c.search_as<person>({ .base = people, .filter = ldap::filters::field<&person::uid_number>() >= 10245 }));
 	REQUIRE(r.has_value());
-	REQUIRE(r->size() == 5);
-	CHECK((*r)[0].mail.has_value());
-	CHECK((*r)[0].created.time_since_epoch().count() > 0);
+	REQUIRE(r->entries.size() == 5);
+	CHECK(r->entries[0].mail.has_value());
+	CHECK(r->entries[0].created.time_since_epoch().count() > 0);
 }
 
 // ---------------------------------------------------------------- writes
@@ -934,8 +934,8 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 
 	auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedExtension" })));
 	REQUIRE(dse.has_value());
-	REQUIRE(dse->size() == 1);
-	const auto *extensions = (*dse)[0].find("supportedExtension");
+	REQUIRE(dse->entries.size() == 1);
+	const auto *extensions = dse->entries[0].find("supportedExtension");
 	if (extensions == nullptr || !std::ranges::contains(*extensions, ldap::start_transaction_oid)) {
 		SKIP("slapd does not advertise Start Transaction (" << ldap::start_transaction_oid << ")");
 	}
@@ -1031,11 +1031,11 @@ TEST_CASE("integration: matched values", "[integration][controls]")
 		.controls = {
 		  ldap::matched_values{ .values_return_filter = { attr("member") == member }, .critical = true } } }));
 	REQUIRE(big.has_value());
-	REQUIRE(big->size() == 1);
-	REQUIRE(big->front().find("member") != nullptr);
-	CHECK(*big->front().find("member") == ldap::string_list{ member });
+	REQUIRE(big->entries.size() == 1);
+	REQUIRE(big->entries.front().find("member") != nullptr);
+	CHECK(*big->entries.front().find("member") == ldap::string_list{ member });
 	// RFC 3876 returns cn with no values; slapd leaves it out.
-	CHECK(big->front().find("cn") == nullptr);
+	CHECK(big->entries.front().find("cn") == nullptr);
 
 	// Several items in the RFC 3876 string form, UTF-8 values.
 	const char sn[] = "\xC3\x85ngstr\xC3\xB6m";// Ångström
@@ -1047,11 +1047,11 @@ TEST_CASE("integration: matched values", "[integration][controls]")
 		.attributes = { "sn", "cn", "objectClass" },
 		.controls = { ldap::matched_values{ .values_return_filter = std::move(*items) } } }));
 	REQUIRE(jorg.has_value());
-	REQUIRE(jorg->size() == 1);
-	REQUIRE(jorg->front().find("sn") != nullptr);
-	CHECK(*jorg->front().find("sn") == ldap::string_list{ sn });
-	CHECK(jorg->front().find("cn") == nullptr);
-	CHECK(*jorg->front().find("objectClass") == ldap::string_list{ "inetOrgPerson" });
+	REQUIRE(jorg->entries.size() == 1);
+	REQUIRE(jorg->entries.front().find("sn") != nullptr);
+	CHECK(*jorg->entries.front().find("sn") == ldap::string_list{ sn });
+	CHECK(jorg->entries.front().find("cn") == nullptr);
+	CHECK(*jorg->entries.front().find("objectClass") == ldap::string_list{ "inetOrgPerson" });
 
 	// An extensible match picks the matching rule: caseExactMatch keeps
 	// "User 001" but not "user 001"; the entries themselves are unaffected.
@@ -1064,9 +1064,9 @@ TEST_CASE("integration: matched values", "[integration][controls]")
 			  .values_return_filter = { ldap::filter::raw(std::string("(cn:caseExactMatch:=") + value + ")").value(),
 				attr("uid").present() } } } }));
 		REQUIRE(r.has_value());
-		REQUIRE(r->size() == 1);
-		CHECK(r->front().find("uid") != nullptr);
-		return r->front().find("cn") != nullptr;
+		REQUIRE(r->entries.size() == 1);
+		CHECK(r->entries.front().find("uid") != nullptr);
+		return r->entries.front().find("cn") != nullptr;
 	};
 	CHECK(cn_exact("User 001"));
 	CHECK_FALSE(cn_exact("user 001"));
@@ -1158,9 +1158,9 @@ TEST_CASE("integration: server side sort", "[integration][controls]")
 		  .keys = { { .attribute = "sn", .ordering_rule = "caseIgnoreOrderingMatch", .reverse = true } },
 		  .critical = true } } }));
 	REQUIRE(by_sn.has_value());
-	REQUIRE(by_sn->size() == 250);
-	CHECK(by_sn->front().find("sn")->front() == "249");
-	CHECK(by_sn->back().find("sn")->front() == "000");
+	REQUIRE(by_sn->entries.size() == 250);
+	CHECK(by_sn->entries.front().find("sn")->front() == "249");
+	CHECK(by_sn->entries.back().find("sn")->front() == "000");
 
 	// cn has no ORDERING rule: a critical sort by it fails the search.
 	auto refused = finish(ioc,
@@ -1305,8 +1305,8 @@ TEST_CASE("integration: virtual list view", "[integration][controls]")
 		.controls = { ldap::server_side_sort{ .keys = { { .attribute = "uidNumber", .reverse = true } } },
 		  ldap::virtual_list_view{ .after_count = 2 } } }));
 	REQUIRE(plain.has_value());
-	REQUIRE(plain->size() == 3);
-	CHECK(plain->front().find("uid")->front() == "user249");
+	REQUIRE(plain->entries.size() == 3);
+	CHECK(plain->entries.front().find("uid")->front() == "user249");
 
 	// Without the sort control the client refuses, before sending.
 	auto unsorted = finish(ioc, c.search({ .base = people, .controls = { ldap::virtual_list_view{} } }));
@@ -1875,7 +1875,7 @@ TEST_CASE("integration: cancellation mid-search", "[integration]")
 		REQUIRE(first->has_value());
 	}// abandoned with entries still coming
 	std::stop_source stop;
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> cancelled;
+	outcome<ldap::result<ldap::search_result>> cancelled;
 	spawn(ioc, stop.get_token(), c.search({ .base = people }), cancelled);
 	stop.request_stop();
 	drive(ioc);
@@ -1886,7 +1886,7 @@ TEST_CASE("integration: cancellation mid-search", "[integration]")
 	  c.search(
 		{ .base = ldap::dn{ "uid=user001,ou=people,dc=example,dc=org" }, .scope = ldap::search_scope::base_object }));
 	REQUIRE(after.has_value());
-	CHECK(after->size() == 1);
+	CHECK(after->entries.size() == 1);
 	CHECK(c.outstanding() == 0);
 }
 
@@ -2185,7 +2185,7 @@ TEST_CASE("integration: ldap::client replaces a connection the server dropped", 
 			CHECK(finish(ioc, (*l)->who_am_i()) == "dn:cn=admin,dc=example,dc=org");
 			auto entries = finish(ioc, (*l)->search({ .base = people, .scope = ldap::search_scope::base_object }));
 			REQUIRE(entries.has_value());
-			CHECK(entries->size() == 1);
+			CHECK(entries->entries.size() == 1);
 		}
 		CHECK(pool.connections() == 1);
 	}

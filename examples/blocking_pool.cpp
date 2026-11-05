@@ -22,7 +22,7 @@ auto main(int argc, char *const *argv) -> int
 		std::cerr << people.error().message() << '\n';
 		return 1;
 	}
-	for (const ldap::entry &person : *people) {
+	for (const ldap::entry &person : people->entries) {
 		std::cout << person.dn << ": " << person.find("cn")->front() << '\n';
 	}
 }

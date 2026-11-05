@@ -152,9 +152,9 @@ TEST_CASE("connection: search sends the request and collects the entries", "[net
 	  .controls = { ldap::control{ "1.2.3.4", true, "v" } },
 	}));
 	REQUIRE(r.has_value());
-	REQUIRE(r->size() == 2);
-	CHECK((*r)[0] == expected_entry("uid=a,ou=people,dc=example,dc=org", "A"));
-	CHECK((*r)[1] == expected_entry("uid=b,ou=people,dc=example,dc=org", "B"));
+	REQUIRE(r->entries.size() == 2);
+	CHECK(r->entries[0] == expected_entry("uid=a,ou=people,dc=example,dc=org", "A"));
+	CHECK(r->entries[1] == expected_entry("uid=b,ou=people,dc=example,dc=org", "B"));
 	m.check_server();
 
 	ldap::search_request wire{ people,
@@ -174,10 +174,10 @@ TEST_CASE("connection: search defaults", "[net][connection]")
 	m.serve({ answer({ done_msg(1) }) });
 	auto r = m.run(m.conn.search({ .base = ldap::dn{} }));
 	REQUIRE(r.has_value());
-	CHECK(r->empty());
+	CHECK(r->entries.empty());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 1);
-	// Root DSE base, subtree, (objectClass=*), all user attributes, no limits.
+	// The empty DN, subtree, (objectClass=*), all user attributes, no limits.
 	CHECK(
 	  m.log.received[0]
 	  == ldap::message{ 1,
@@ -208,6 +208,58 @@ TEST_CASE("connection: search result errors", "[net][connection]")
 
 	// Still usable.
 	CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
+	m.check_server();
+}
+
+TEST_CASE("connection: search returns a search_result on the limit codes", "[net][connection]")
+{
+	mock_ldap m;
+	ldap::message size_limit = done_msg(1, 4, "ou=people,dc=example,dc=org", "size limit");
+	size_limit.controls.emplace_back("1.2.3.4", false, "v");
+	ldap::message ok = done_msg(5, 0, "", "all there");
+	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"),
+				ref_msg(1, { "ldap://b.example.org/ou=b,dc=example,dc=org" }),
+				entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B"),
+				size_limit }),
+	  answer({ entry_msg(2, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(2, 3) }),
+	  answer({ done_msg(3, 11, "", "admin limit") }),
+	  answer({ entry_msg(4, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(4, 53, "", "unwilling") }),
+	  answer({ entry_msg(5, "uid=a,ou=people,dc=example,dc=org", "A"), ok }) });
+
+	auto size = m.run(m.conn.search(people_search()));
+	REQUIRE(size.has_value());
+	CHECK_FALSE(size->is_success());
+	CHECK(size->result_code == 4);
+	REQUIRE(size->entries.size() == 2);
+	CHECK(size->entries[0] == expected_entry("uid=a,ou=people,dc=example,dc=org", "A"));
+	CHECK(size->entries[1] == expected_entry("uid=b,ou=people,dc=example,dc=org", "B"));
+	CHECK(size->references == ldap::string_list{ "ldap://b.example.org/ou=b,dc=example,dc=org" });
+	CHECK(size->matched_dn == "ou=people,dc=example,dc=org");
+	CHECK(size->diagnostic_message == "size limit");
+	CHECK(size->controls == std::pmr::vector<ldap::control>{ ldap::control{ "1.2.3.4", false, "v" } });
+
+	auto time = m.run(m.conn.search(people_search()));
+	REQUIRE(time.has_value());
+	CHECK(time->result_code == 3);
+	CHECK(time->entries.size() == 1);
+
+	auto admin = m.run(m.conn.search(people_search()));
+	REQUIRE(admin.has_value());
+	CHECK(admin->result_code == 11);
+	CHECK(admin->entries.empty());
+	CHECK(admin->diagnostic_message == "admin limit");
+
+	auto unwilling = m.run(m.conn.search(people_search()));
+	REQUIRE_FALSE(unwilling.has_value());
+	CHECK(unwilling.error().code == errc::unwilling_to_perform);
+	CHECK(unwilling.error().diagnostic == "unwilling");
+
+	auto all = m.run(m.conn.search(people_search()));
+	REQUIRE(all.has_value());
+	CHECK(all->is_success());
+	CHECK(all->entries.size() == 1);
+	CHECK(all->references.empty());
+	CHECK(all->diagnostic_message == "all there");
 	m.check_server();
 }
 
@@ -492,7 +544,7 @@ TEST_CASE("connection: search_stream yields intermediate responses when asked", 
 		params.intermediate_responses = true;
 		auto r = m.run(m.conn.search(std::move(params)));
 		REQUIRE(r.has_value());
-		CHECK(r->size() == 2);
+		CHECK(r->entries.size() == 2);
 		m.check_server();
 	}
 }
@@ -1297,7 +1349,7 @@ TEST_CASE("connection: unsolicited notifications and intermediate responses", "[
 		  done_msg(1) }) });
 		auto r = m.run(m.conn.search(people_search()));
 		REQUIRE(r.has_value());
-		CHECK(r->size() == 1);
+		CHECK(r->entries.size() == 1);
 		CHECK(m.conn.is_open());
 		m.check_server();
 	}
@@ -1323,7 +1375,7 @@ TEST_CASE("connection: a cancelled search is abandoned", "[net][connection]")
 	  answer({ entry_msg(1, "uid=late,ou=people,dc=example,dc=org", "L"), done_msg(1) }),
 	  answer({ bind_resp(3) }) });
 	std::stop_source stop;
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> out;
+	outcome<ldap::result<ldap::search_result>> out;
 	spawn(m.ioc, stop.get_token(), m.conn.search({ .base = ldap::dn{} }), out);
 	drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 	REQUIRE(m.log.received.size() == 1);
@@ -1350,7 +1402,7 @@ TEST_CASE("connection: a cancelled search is abandoned", "[net][connection]")
 
 namespace {
 
-using entries = ldap::result<std::pmr::vector<ldap::entry>>;
+using entries = ldap::result<ldap::search_result>;
 using event_race = std::variant<std::error_code, entries, std::tuple<>>;
 
 // A search raced against `event`.
@@ -1413,7 +1465,7 @@ TEST_CASE("raceable: an operation raced with capy::when_any", "[net][connection]
 		REQUIRE(out.get().index() == 1);
 		auto &r = std::get<1>(out.get());
 		REQUIRE(r.has_value());
-		CHECK(r->size() == 1);
+		CHECK(r->entries.size() == 1);
 		// The other event after completion: nothing more happens.
 		event.set();
 		m.check_server();
@@ -1525,7 +1577,7 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 		spawn(m.ioc, ldap::with_stop(cancel.get_token(), m.conn.search({ .base = ldap::dn{} })), out);
 		drive_until(m.ioc, [&out] { return out.done(); });
 		REQUIRE(out.get().has_value());
-		CHECK(out.get()->size() == 1);
+		CHECK(out.get()->entries.size() == 1);
 		cancel.request_stop();
 		m.check_server();
 		CHECK(out.get().has_value());
@@ -1706,18 +1758,18 @@ TEST_CASE("connection: concurrent searches with interleaved responses", "[net][c
 		done_msg(2),
 		entry_msg(1, "uid=a3,ou=people,dc=example,dc=org", "A3"),
 		done_msg(1) }) });
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> a;
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> b;
+	outcome<ldap::result<ldap::search_result>> a;
+	outcome<ldap::result<ldap::search_result>> b;
 	spawn(m.ioc, m.conn.search(people_search()), a);
 	spawn(m.ioc, m.conn.search({ .base = ldap::dn{ "ou=groups,dc=example,dc=org" } }), b);
 	drive_until(m.ioc, [&] { return a.done() && b.done(); });
 	REQUIRE(a.get().has_value());
 	REQUIRE(b.get().has_value());
-	REQUIRE(a.get()->size() == 3);
-	CHECK((*a.get())[0] == expected_entry("uid=a1,ou=people,dc=example,dc=org", "A1"));
-	CHECK((*a.get())[2] == expected_entry("uid=a3,ou=people,dc=example,dc=org", "A3"));
-	REQUIRE(b.get()->size() == 1);
-	CHECK((*b.get())[0] == expected_entry("uid=b1,ou=groups,dc=example,dc=org", "B1"));
+	REQUIRE(a.get()->entries.size() == 3);
+	CHECK(a.get()->entries[0] == expected_entry("uid=a1,ou=people,dc=example,dc=org", "A1"));
+	CHECK(a.get()->entries[2] == expected_entry("uid=a3,ou=people,dc=example,dc=org", "A3"));
+	REQUIRE(b.get()->entries.size() == 1);
+	CHECK(b.get()->entries[0] == expected_entry("uid=b1,ou=groups,dc=example,dc=org", "B1"));
 	m.check_server();
 	REQUIRE(m.log.received.size() == 2);
 	CHECK(m.log.received[0].id == 1);
@@ -1768,7 +1820,7 @@ TEST_CASE("connection: a disconnect fails every outstanding operation once", "[n
 	// outstanding, is never sent.
 	m.serve({ step{ .read_request = true, .replies = {}, .close_after = true } });
 	outcome<ldap::result<void>> bind;
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	outcome<ldap::result<ldap::search_result>> search;
 	spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
 	spawn(m.ioc, m.conn.search(people_search()), search);
 	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
@@ -1870,7 +1922,7 @@ TEST_CASE("connection: requests the writer never took fail with not_sent", "[net
 		tcp_mock_ldap m({}, socket_buffers::small);
 		REQUIRE(m.buffered_at_most() < oversized_add_value);
 		outcome<ldap::result<ldap::response>> add;
-		outcome<ldap::result<std::pmr::vector<ldap::entry>>> queued;
+		outcome<ldap::result<ldap::search_result>> queued;
 		spawn(m.ioc, m.conn.add(oversized_add()), add);
 		spawn(m.ioc, m.conn.search(people_search()), queued);
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 2; });
@@ -1891,7 +1943,7 @@ TEST_CASE("connection: a notice of disconnection fails every outstanding operati
 	  ldap::extended_response{
 		ldap::ldap_result{ 51, "", "too busy" }, std::string(ldap::notice_of_disconnection_oid) } } }) });
 	outcome<ldap::result<void>> bind;
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	outcome<ldap::result<ldap::search_result>> search;
 	spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
 	spawn(m.ioc, m.conn.search(people_search()), search);
 	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
@@ -2004,10 +2056,10 @@ auto checked_search(ldap::connection &c, std::string base) -> capy::task<std::st
 	if (!r) {
 		co_return std::string(r.error().message());
 	}
-	if (r->size() != 2) {
-		co_return "expected 2 entries, got " + std::to_string(r->size());
+	if (r->entries.size() != 2) {
+		co_return "expected 2 entries, got " + std::to_string(r->entries.size());
 	}
-	for (const auto &e : *r) {
+	for (const auto &e : r->entries) {
 		if (!std::string_view(e.dn).ends_with("," + base)) {
 			co_return "entry " + std::string(e.dn) + " not under " + base;
 		}
@@ -2151,14 +2203,14 @@ TEST_CASE("connection: entries live on the resource given to search", "[net][con
 
 		auto r = m.run(m.conn.search(people_search(), &results));
 		REQUIRE(r.has_value());
-		REQUIRE(r->size() == 2);
+		REQUIRE(r->entries.size() == 2);
 		CHECK(r->get_allocator().resource() == &results);
-		for (const auto &e : *r) {
+		for (const auto &e : r->entries) {
 			CHECK(e.get_allocator().resource() == &results);
 			CHECK(e.attributes.get_allocator().resource() == &results);
 			CHECK(e.attributes[0].values[0].get_allocator().resource() == &results);
 		}
-		CHECK((*r)[1] == expected_entry("uid=b,ou=people,dc=example,dc=org", "B"));
+		CHECK(r->entries[1] == expected_entry("uid=b,ou=people,dc=example,dc=org", "B"));
 
 		std::pmr::monotonic_buffer_resource arena;
 		auto s = m.run(m.conn.search_stream(people_search(), &arena));
@@ -2187,8 +2239,8 @@ TEST_CASE("connection: ldap::connect, bind, search and unbind over TCP", "[net][
 	CHECK(m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
 	auto r = m.run(m.conn.search(people_search()));
 	REQUIRE(r.has_value());
-	REQUIRE(r->size() == 1);
-	CHECK((*r)[0] == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "J"));
+	REQUIRE(r->entries.size() == 1);
+	CHECK(r->entries[0] == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "J"));
 	CHECK(m.run(m.conn.unbind()).has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 3);
@@ -2298,7 +2350,7 @@ TEST_CASE("RFC 4511 4.2.1: nothing is sent while a bind is outstanding", "[net][
 	mock_ldap m({ .operation_timeout = std::chrono::milliseconds(200) });
 	m.serve({ step{}, step{} });
 	outcome<ldap::result<void>> bind;
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	outcome<ldap::result<ldap::search_result>> search;
 	spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
 	spawn(m.ioc, m.conn.search(people_search()), search);
 	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
@@ -2320,8 +2372,8 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 		mock_ldap m;
 		m.serve({ answer({ bind_resp(1) }), answer({ done_msg(2) }), answer({ done_msg(3) }) });
 		outcome<ldap::result<void>> bind;
-		outcome<ldap::result<std::pmr::vector<ldap::entry>>> first;
-		outcome<ldap::result<std::pmr::vector<ldap::entry>>> second;
+		outcome<ldap::result<ldap::search_result>> first;
+		outcome<ldap::result<ldap::search_result>> second;
 		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
 		spawn(m.ioc, m.conn.search(people_search()), first);
 		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), second);
@@ -2340,7 +2392,7 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 		mock_ldap m;
 		m.serve({ answer({ bind_resp(1) }), answer({ done_msg(3) }) });
 		outcome<ldap::result<void>> bind;
-		outcome<ldap::result<std::pmr::vector<ldap::entry>>> cancelled;
+		outcome<ldap::result<ldap::search_result>> cancelled;
 		std::stop_source stop;
 		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), bind);
 		spawn(m.ioc, stop.get_token(), m.conn.search(people_search()), cancelled);
@@ -2474,7 +2526,7 @@ TEST_CASE("RFC 4511 4.1.1: ids still in use are skipped after wrapping", "[net][
 		// a delete: it must not reuse 1, which the server may still serve.
 		m.serve({ step{}, step{}, answer({ del_resp(ldap::max_int) }), answer({ del_resp(2) }) });
 		std::stop_source stop;
-		outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+		outcome<ldap::result<ldap::search_result>> search;
 		spawn(m.ioc, stop.get_token(), m.conn.search({ .base = ldap::dn{} }), search);
 		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 		stop.request_stop();

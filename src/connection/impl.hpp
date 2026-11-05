@@ -288,6 +288,8 @@ class connection::impl
 	// A stream's state (null for a default-constructed or moved-from one).
 	static auto stream_state(ldap::search_stream &s) noexcept -> search_stream::state * { return s.state_; }
 	static auto make_paged(paged_search::state *s) noexcept -> ldap::paged_search;
+	// A paged search's state (null for a default-constructed or moved-from one).
+	static auto paged_state(ldap::paged_search &p) noexcept -> paged_search::state * { return p.state_; }
 
 	// ---------------------------------------------------------------- binds
 

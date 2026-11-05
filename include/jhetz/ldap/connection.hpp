@@ -10,7 +10,7 @@
 //       .base       = ldap::dn{"ou=people,dc=example,dc=org"},
 //       .filter     = ldap::filters::attr("uid") == user,
 //       .attributes = {"cn", "mail"},
-//   });                                   // result<std::pmr::vector<entry>>
+//   });                                   // result<search_result>: people->entries
 //   co_await c->unbind();
 //
 // Multiplexing (step 5b): operations started concurrently (several tasks on
@@ -298,15 +298,17 @@ class connection
 	// nothing sent); unsafe_io cannot be detected and is unsupported.
 	auto sasl_bind(sasl_mechanism &mechanism, dn name = {}) -> boost::capy::task<result<void>>;
 
-	// Runs a search to its end and returns the entries in the order received,
-	// allocated from `mr` (see "Memory" above). Search result references
-	// (continuation references) are not returned here: use search_stream()
-	// to see them, or chase_search (referral_chase.hpp) to follow them. A
-	// result code other than success fails the whole call,
-	// size_limit_exceeded included; the entries received before it are lost
-	// (search_stream() keeps them).
+	// Runs a search to its end and returns a search_result (operations.hpp):
+	// the entries in the order received, allocated from `mr` (see "Memory"
+	// above), the URIs of the search result references (continuation
+	// references, not followed: chase_search in referral_chase.hpp follows
+	// them), and the SearchResultDone's result code, matched DN, diagnostic
+	// message and controls. A SearchResultDone with sizeLimitExceeded,
+	// timeLimitExceeded or adminLimitExceeded returns a search_result too,
+	// with the entries received before it (is_success() false); any other
+	// result code than success fails the call.
 	auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
-	  -> boost::capy::task<result<std::pmr::vector<entry>>>;
+	  -> boost::capy::task<result<search_result>>;
 
 	// Sends the search and returns a stream that yields its entries one at a
 	// time, each decoded into `mr`. Other operations may run while the
@@ -427,14 +429,15 @@ class connection
 	//
 	// search_as<T>: a search whose attribute list is T's descriptor's (any
 	// `request.attributes` are replaced) and whose filter is narrowed to T's
-	// object classes, if it declares some. Each entry is decoded to T; the
-	// first entry that does not decode fails the whole call (its error names
-	// the search, the entry and the attribute).
+	// object classes, if it declares some. Returns search()'s result with
+	// each entry decoded to T (a typed_search_result<T>, on the limit codes
+	// too); the first entry that does not decode fails the whole call (its
+	// error names the search, the entry and the attribute).
 	//
 	// An empty filter (the poison a typed filter operator gives when a value
 	// does not encode) fails with invalid_filter before the schema check, so
 	// nothing is sent.
-	template<described T> auto search_as(search_params request) -> boost::capy::task<result<std::vector<T>>>
+	template<described T> auto search_as(search_params request) -> boost::capy::task<result<typed_search_result<T>>>
 	{
 		const std::string context = detail::op_context("search", request.base);
 		if (request.filter.empty()) {
@@ -446,18 +449,22 @@ class connection
 		}
 		request.attributes = attribute_names<T>();
 		request.filter = narrow_filter<T>(std::move(request.filter));
-		auto entries = co_await search(std::move(request));
-		if (!entries) {
-			co_return std::unexpected(std::move(entries.error()));
+		auto found = co_await search(std::move(request));
+		if (!found) {
+			co_return std::unexpected(std::move(found.error()));
 		}
-		std::vector<T> out;
-		out.reserve(entries->size());
-		for (const auto &e : *entries) {
+		typed_search_result<T> out{ .references = std::move(found->references),
+			.result_code = found->result_code,
+			.matched_dn = std::move(found->matched_dn),
+			.diagnostic_message = std::move(found->diagnostic_message),
+			.controls = std::move(found->controls) };
+		out.entries.reserve(found->entries.size());
+		for (const auto &e : found->entries) {
 			auto v = ldap::decode<T>(e);
 			if (!v) {
 				co_return std::unexpected(detail::with_context(std::move(v.error()), context));
 			}
-			out.push_back(std::move(*v));
+			out.entries.push_back(std::move(*v));
 		}
 		co_return out;
 	}

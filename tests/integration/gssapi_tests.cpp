@@ -77,8 +77,8 @@ void require_kerberos()
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedSASLMechanisms" })));
 	REQUIRE(dse.has_value());
-	REQUIRE(dse->size() == 1);
-	const auto *mechs = (*dse)[0].find("supportedSASLMechanisms");
+	REQUIRE(dse->entries.size() == 1);
+	const auto *mechs = dse->entries[0].find("supportedSASLMechanisms");
 	if (mechs == nullptr || std::ranges::find(*mechs, "GSSAPI") == mechs->end()) {
 		SKIP("slapd does not offer GSSAPI (cyrus-sasl's gssapi plugin not installed, or not on SASL_PATH)");
 	}
@@ -111,8 +111,8 @@ class sasl_secprops
 		  config_.search(
 			{ .base = config_dn, .scope = ldap::search_scope::base_object, .attributes = { "olcSaslSecProps" } }));
 		REQUIRE(old.has_value());
-		REQUIRE(old->size() == 1);
-		if (const auto *v = (*old)[0].find("olcSaslSecProps"); v != nullptr && !v->empty()) {
+		REQUIRE(old->entries.size() == 1);
+		if (const auto *v = old->entries[0].find("olcSaslSecProps"); v != nullptr && !v->empty()) {
 			old_ = std::string((*v)[0]);
 		}
 		set(value);
@@ -274,7 +274,7 @@ TEST_CASE("integration: SASL GSSAPI with a server that requires a security layer
 																	  : ldap::sasl_protection::confidentiality));
 			auto all = finish(ioc, c.search({ .base = ldap::dn{ "dc=example,dc=org" } }));
 			REQUIRE(all.has_value());
-			CHECK(all->size() > 1);
+			CHECK(all->entries.size() > 1);
 			auto tls = finish(ioc, c.start_tls());
 			REQUIRE_FALSE(tls.has_value());
 			CHECK(tls.error().code == ldap::client_errc::security_layer_in_effect);

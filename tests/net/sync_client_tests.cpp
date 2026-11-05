@@ -224,8 +224,8 @@ TEST_CASE("sync client: acquire, then operations on the lease", "[net][sync][cli
 		CHECK_FALSE(l->is_tls());
 		auto found = l->search(people_search());
 		REQUIRE(found.has_value());
-		REQUIRE(found->size() == 1);
-		CHECK(found->front() == expected_entry(jdoe, "John"));
+		REQUIRE(found->entries.size() == 1);
+		CHECK(found->entries.front() == expected_entry(jdoe, "John"));
 		CHECK(l->who_am_i() == "dn:" + std::string(admin));
 		CHECK(pool.connections() == 1);
 		ldap::sync::lease moved = std::move(*l);
@@ -284,8 +284,8 @@ TEST_CASE("sync client: the read forwarders retry once on another connection", "
 		ldap::sync::client pool(options_for(srv.url()));
 		auto r = pool.search(people_search());
 		REQUIRE(r.has_value());
-		REQUIRE(r->size() == 1);
-		CHECK(r->front() == expected_entry(jdoe, "John"));
+		REQUIRE(r->entries.size() == 1);
+		CHECK(r->entries.front() == expected_entry(jdoe, "John"));
 		CHECK(srv.accepted() == 2);
 		CHECK(pool.connections() == 1);
 	}
@@ -646,8 +646,8 @@ TEST_CASE("sync client: many threads share the pool", "[net][sync][client]")
 		workers.emplace_back([&pool, &failures, t] {
 			for (int i = 0; i < per_thread; ++i) {
 				const std::string base = "ou=t" + std::to_string(t) + "i" + std::to_string(i) + ",dc=example,dc=org";
-				const auto ok = [&base](const ldap::result<std::pmr::vector<ldap::entry>> &r) {
-					return r && r->size() == 2 && std::string_view((*r)[1].dn).ends_with(base);
+				const auto ok = [&base](const ldap::result<ldap::search_result> &r) {
+					return r && r->entries.size() == 2 && std::string_view(r->entries[1].dn).ends_with(base);
 				};
 				bool good = false;
 				switch (i % 3) {

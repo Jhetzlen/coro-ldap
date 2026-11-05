@@ -36,7 +36,7 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task
 		std::cerr << everything.error().message() << '\n';
 		co_return 1;
 	}
-	std::cout << everything->size() << " entries under dc=example,dc=org\n";
+	std::cout << everything->entries.size() << " entries under dc=example,dc=org\n";
 	co_return 0;
 }
 

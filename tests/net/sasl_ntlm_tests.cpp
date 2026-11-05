@@ -1261,8 +1261,8 @@ TEST_CASE("ntlm: a bind with a security layer, then a search through it", "[net]
 		drive_until(m.ioc, [&] { return server.done(); });
 		CHECK(error.empty());
 		REQUIRE(found.has_value());
-		REQUIRE(found->size() == 1);
-		CHECK((*found)[0].dn == "uid=jdoe,ou=people,dc=example,dc=org");
+		REQUIRE(found->entries.size() == 1);
+		CHECK(found->entries[0].dn == "uid=jdoe,ou=people,dc=example,dc=org");
 
 		// The server checked the search's buffer(s) and sent two of its own;
 		// sealed, neither side's text shows on the wire.

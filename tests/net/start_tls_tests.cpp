@@ -551,7 +551,7 @@ TEST_CASE("start_tls: refused while an operation is outstanding", "[net][starttl
 {
 	mock_ldap m;
 	m.serve({ step{} });// reads the search, never answers
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+	outcome<ldap::result<ldap::search_result>> search;
 	spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), search);
 	drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 	auto r = m.run(m.conn.start_tls());
@@ -567,8 +567,8 @@ TEST_CASE("start_tls: the refusal counts the outstanding requests", "[net][start
 {
 	mock_ldap m;
 	m.serve({ step{}, step{} });// reads both searches, never answers
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> first;
-	outcome<ldap::result<std::pmr::vector<ldap::entry>>> second;
+	outcome<ldap::result<ldap::search_result>> first;
+	outcome<ldap::result<ldap::search_result>> second;
 	spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), first);
 	spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), second);
 	drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });

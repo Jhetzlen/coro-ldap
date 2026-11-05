@@ -123,6 +123,7 @@ namespace {
 			const auto &d = std::get<search_result_done>(m->op);// checked by the reader
 			s.finished = true;
 			s.controls.assign(m->controls.begin(), m->controls.end());
+			s.done = d.result;
 			if (!d.result.is_success()) {
 				s.error_ = d.result.to_error(s.context);
 				co_return std::unexpected(*s.error_);
@@ -195,24 +196,28 @@ auto connection::search_stream(search_params request, std::pmr::memory_resource 
 	co_return start_search(*impl_, request, mr, co_await capy::this_coro::stop_token);
 }
 
-auto connection::search(search_params request, std::pmr::memory_resource *mr)
-  -> capy::task<result<std::pmr::vector<entry>>>
+auto connection::search(search_params request, std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
 {
 	auto s = co_await search_stream(std::move(request), mr);
 	if (!s) {
 		co_return std::unexpected(std::move(s.error()));
 	}
-	std::pmr::vector<entry> out(mr);
+	search_result out{ .entries = std::pmr::vector<entry>(mr), .references = string_list(mr) };
 	while (true) {
 		auto e = co_await s->next();
 		if (!e) {
-			co_return std::unexpected(std::move(e.error()));
+			const ldap_result *done = detail::search_done(*s);
+			if (done == nullptr || !detail::limit_exceeded(done->result_code)) {
+				co_return std::unexpected(std::move(e.error()));
+			}
+			break;
 		}
 		if (!*e) {
 			break;
 		}
-		out.push_back(std::move(**e));
+		out.entries.push_back(std::move(**e));
 	}
+	detail::set_outcome(out, *detail::search_done(*s), s->references(), s->controls());
 	co_return out;
 }
 
@@ -240,6 +245,12 @@ namespace detail {
 				found = std::move(**e);
 			}
 		}
+	}
+
+	auto search_done(ldap::search_stream &s) noexcept -> const ldap_result *
+	{
+		const auto *state = connection::impl::stream_state(s);
+		return state == nullptr || !state->done ? nullptr : &*state->done;
 	}
 
 	void keep_alive(ldap::search_stream &s, std::shared_ptr<void> owner) noexcept

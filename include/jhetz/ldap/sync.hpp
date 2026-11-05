@@ -5,7 +5,7 @@
 //   ldap::sync::connection c;
 //   if (auto r = c.connect("ldaps://ldap.example.org"); !r) ...
 //   c.simple_bind(ldap::dn{"cn=admin,dc=example,dc=org"}, password);
-//   ldap::result<std::vector<person>> people = c.search_as<person>({.base = base});
+//   ldap::result<ldap::typed_search_result<person>> people = c.search_as<person>({.base = base});
 //
 //   ldap::sync::client pool({.servers = {...}, .setup = ldap::simple_bind_setup(...)});
 //   auto found = pool.search({.base = base});      // a shared lease for one search, retried once
@@ -174,7 +174,7 @@ namespace detail {
 	// (sync.cpp).
 	[[nodiscard]] auto
 	  collect_paged(ldap::connection &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-		-> boost::capy::task<result<std::pmr::vector<entry>>>;
+		-> boost::capy::task<result<search_result>>;
 	[[nodiscard]] auto make_transaction(ldap::connection &c, extended_controls controls)
 	  -> boost::capy::task<result<std::unique_ptr<ldap::transaction>>>;
 	[[nodiscard]] auto is_open_of(const ldap::connection &c) -> boost::capy::task<result<bool>>;
@@ -297,20 +297,24 @@ namespace detail {
 		}
 
 		[[nodiscard]] auto search(search_params request,
-		  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::pmr::vector<entry>>
+		  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<search_result>
 		{
 			return self().call([&](ldap::connection &c) { return c.search(std::move(request), mr); });
 		}
-		// Every page of a paged search (ldap::connection::search_paged), collected.
+		// Every page of a paged search (ldap::connection::search_paged),
+		// collected as one search_result: the entries and references of
+		// every page, the last page's SearchResultDone and controls; a page
+		// ending with a limit code ends it with the entries received, as
+		// search() does.
 		[[nodiscard]] auto search_paged(search_params request,
 		  std::int32_t page_size,
-		  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::pmr::vector<entry>>
+		  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<search_result>
 		{
 			return self().call(
 			  [&](ldap::connection &c) { return detail::collect_paged(c, std::move(request), page_size, mr); });
 		}
 
-		template<described T> [[nodiscard]] auto search_as(search_params request) -> result<std::vector<T>>
+		template<described T> [[nodiscard]] auto search_as(search_params request) -> result<typed_search_result<T>>
 		{
 			return self().call([&](ldap::connection &c) { return c.search_as<T>(std::move(request)); });
 		}
@@ -601,7 +605,7 @@ class client
 	// runs the operation, returns the lease, and retries once on another
 	// connection after cond::connection_lost or cond::busy_or_unavailable.
 	[[nodiscard]] auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
-	  -> result<std::pmr::vector<entry>>;
+	  -> result<search_result>;
 	[[nodiscard]] auto compare(compare_params request) -> result<bool>;
 	[[nodiscard]] auto who_am_i(extended_controls controls = {}) -> result<std::string>;
 	// As ldap::client's, chasing referrals as client_options::referrals

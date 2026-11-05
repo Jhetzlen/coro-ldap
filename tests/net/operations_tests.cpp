@@ -3,6 +3,7 @@
 // paged search and referrals.
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/controls.hpp"
+#include "jhetz/ldap/sync.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -501,8 +502,8 @@ TEST_CASE("operations: root_dse() reads the root DSE", "[net][operations]")
 	m.serve({ answer({ entry_msg(1, "", "root"), done_msg(1) }) });
 	auto r = m.run(m.conn.search(ldap::root_dse({ "namingContexts" })));
 	REQUIRE(r.has_value());
-	REQUIRE(r->size() == 1);
-	CHECK((*r)[0].dn.empty());
+	REQUIRE(r->entries.size() == 1);
+	CHECK(r->entries[0].dn.empty());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 1);
 	const auto &sent = std::get<ldap::search_request>(m.log.received[0].op);
@@ -670,8 +671,8 @@ TEST_CASE("operations: matched values on a search", "[net][operations][controls]
 	  .attributes = { "member" },
 	  .controls = { only_jdoe } }));
 	REQUIRE(r.has_value());
-	REQUIRE(r->size() == 1);
-	CHECK(*r->front().find("member") == ldap::string_list{ jdoe.to_string() });
+	REQUIRE(r->entries.size() == 1);
+	CHECK(*r->entries.front().find("member") == ldap::string_list{ jdoe.to_string() });
 	m.check_server();
 
 	// The server reads back what was sent.
@@ -889,6 +890,36 @@ TEST_CASE("operations: paged search errors", "[net][operations][paged]")
 		REQUIRE_FALSE(s.has_value());
 		CHECK(s.error().code == client_errc::encode_error);
 		CHECK(m.log.received.empty());
+	}
+}
+
+TEST_CASE("operations: collected pages end with a limit code as search() does", "[net][operations][paged]")
+{
+	SECTION("a size limit on a later page keeps every page's entries")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"),
+					ref_msg(1, { "ldap://other.example.org/ou=people,dc=example,dc=org" }),
+					paged_done(1, "next") }),
+		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), done_msg(2, 4, "", "size limit") }) });
+		auto r = m.run(ldap::sync::detail::collect_paged(m.conn, people_search(), 1, std::pmr::get_default_resource()));
+		REQUIRE(r.has_value());
+		CHECK(r->result_code == 4);
+		CHECK(r->diagnostic_message == "size limit");
+		REQUIRE(r->entries.size() == 2);
+		CHECK(r->entries[1] == expected_entry("uid=b,ou=people,dc=example,dc=org", "B"));
+		CHECK(r->references == ldap::string_list{ "ldap://other.example.org/ou=people,dc=example,dc=org" });
+		m.check_server();
+	}
+	SECTION("a malformed paged results control stays an error")
+	{
+		mock_ldap m;
+		ldap::message done = done_msg(1);
+		done.controls.emplace_back(ldap::paged_results_oid, false, "garbage");
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done }) });
+		auto r = m.run(ldap::sync::detail::collect_paged(m.conn, people_search(), 1, std::pmr::get_default_resource()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::protocol_error);
 	}
 }
 

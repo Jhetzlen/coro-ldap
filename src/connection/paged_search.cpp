@@ -146,6 +146,16 @@ auto connection::search_paged(search_params request, std::int32_t page_size, std
 	co_return std::move(out);
 }
 
+namespace detail {
+
+	auto paged_done(ldap::paged_search &p) noexcept -> const ldap_result *
+	{
+		auto *state = connection::impl::paged_state(p);
+		return state == nullptr ? nullptr : search_done(state->current);
+	}
+
+}// namespace detail
+
 namespace {
 
 	void delete_paged(paged_search::state *s) noexcept
@@ -228,6 +238,9 @@ auto paged_search::next() -> capy::task<result<std::optional<entry>>>
 		const auto &refs = s.current.references();
 		s.references.insert(s.references.end(), refs.begin() + static_cast<std::ptrdiff_t>(seen), refs.end());
 		if (!e) {
+			if (detail::search_done(s.current) != nullptr) {
+				s.controls = s.current.controls();
+			}
 			co_return finish(std::move(e.error()));
 		}
 		if (*e) {

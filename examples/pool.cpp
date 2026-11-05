@@ -20,7 +20,7 @@ auto run(boost::corosio::io_context &ioc, ldap::url server) -> boost::capy::task
 		std::cerr << people.error().message() << '\n';
 		co_return 1;
 	}
-	for (const ldap::entry &person : *people) {
+	for (const ldap::entry &person : people->entries) {
 		std::cout << person.dn << ": " << person.find("cn")->front() << '\n';
 	}
 	co_return 0;

@@ -130,6 +130,14 @@ struct chased_search
 	// The origin's entries (or, after a referral result, the target's), then
 	// those of each continuation reference followed, in the order followed.
 	std::pmr::vector<entry> entries{};
+	// The SearchResultDone of the origin's search (or, after a referral
+	// result, the target's), as search_result's: success, or a limit code
+	// (sizeLimitExceeded, timeLimitExceeded, adminLimitExceeded) with the
+	// entries received before it.
+	std::int32_t result_code = 0;
+	std::pmr::string matched_dn{};
+	std::pmr::string diagnostic_message{};
+	std::pmr::vector<control> controls{};
 	std::vector<referral_attempt> referrals{};
 	// URIs not in `referrals`: those beyond referral_policy::max_attempts,
 	// and those of the references left unexamined when the chase stopped
@@ -138,11 +146,10 @@ struct chased_search
 	std::size_t unlisted = 0;
 	// False if some continuation reference was not followed by any of its
 	// URIs (skipped, unparseable, over a limit, failed, left unexamined
-	// when the chase stopped, or not followed at all): the entries are then
-	// partial. A reference skipped only as a loop leaves it true (its
-	// server already got that search; loops are recognized before
-	// max_targets and the budget are checked), but one over max_hops or
-	// left unexamined clears it (whether it was a loop is not known).
+	// when the chase stopped, or not followed at all), or was followed to a
+	// search that ended with a limit code: the entries are then partial. A reference skipped only as a loop leaves it
+	// true (its server already got that search; loops are recognized before max_targets and the budget are checked),
+	// but one over max_hops or left unexamined clears it (whether it was a loop is not known).
 	bool complete = true;
 };
 

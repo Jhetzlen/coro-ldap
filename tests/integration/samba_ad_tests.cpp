@@ -159,8 +159,8 @@ TEST_CASE("samba ad: ad::change_password and ad::reset_password", "[samba_ad][pa
 		auto c = open_tls(ioc, start_tls);
 		auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedExtension" })));
 		REQUIRE(dse.has_value());
-		REQUIRE(dse->size() == 1);
-		const auto *extensions = (*dse)[0].find("supportedExtension");
+		REQUIRE(dse->entries.size() == 1);
+		const auto *extensions = dse->entries[0].find("supportedExtension");
 		CHECK((extensions == nullptr || !std::ranges::contains(*extensions, ldap::password_modify_oid)));
 		reset(ioc, pwchange, "Core-Passw0rd");
 		auto admin = open_bound(ioc, start_tls, administrator, administrator_password);
@@ -785,8 +785,8 @@ TEST_CASE("samba ad: the NTLM security layer on plain ldap://, entries over 128 
 	if (!back) {
 		FAIL(back.error().message());
 	}
-	REQUIRE(back->size() == 1);
-	const auto *values = (*back)[0].find("jpegPhoto");
+	REQUIRE(back->entries.size() == 1);
+	const auto *values = back->entries[0].find("jpegPhoto");
 	REQUIRE(values != nullptr);
 	REQUIRE(values->size() == 1);
 	CHECK((*values)[0].size() == photo.size());
@@ -855,8 +855,8 @@ auto read_account(corosio::io_context &ioc, ldap::connection &c, const ldap::dn 
 	if (!r) {
 		FAIL("read " << who.to_string() << ": " << r.error().message());
 	}
-	REQUIRE(r->size() == 1);
-	return std::move((*r)[0]);
+	REQUIRE(r->entries.size() == 1);
+	return std::move(r->entries[0]);
 }
 
 auto domain_sid(corosio::io_context &ioc, ldap::connection &c) -> ldap::ad::sid
@@ -864,8 +864,8 @@ auto domain_sid(corosio::io_context &ioc, ldap::connection &c) -> ldap::ad::sid
 	auto r = finish(
 	  ioc, c.search({ .base = domain, .scope = ldap::search_scope::base_object, .attributes = { "objectSid" } }));
 	REQUIRE(r.has_value());
-	REQUIRE(r->size() == 1);
-	const auto *values = (*r)[0].find("objectSid");
+	REQUIRE(r->entries.size() == 1);
+	const auto *values = r->entries[0].find("objectSid");
 	REQUIRE(values != nullptr);
 	REQUIRE(values->size() == 1);
 	auto s = ldap::ad::sid::from_binary((*values)[0]);
@@ -930,14 +930,14 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 		  c.search_as<ad_account>(
 			{ .base = domain, .filter = ldap::filters::field<&ad_account::object_sid>() == a.object_sid }));
 		REQUIRE(by_sid.has_value());
-		REQUIRE(by_sid->size() == 1);
-		CHECK((*by_sid)[0].sam_account_name == "alice");
+		REQUIRE(by_sid->entries.size() == 1);
+		CHECK(by_sid->entries[0].sam_account_name == "alice");
 		auto by_guid = finish(ioc,
 		  c.search_as<ad_account>(
 			{ .base = domain, .filter = ldap::filters::field<&ad_account::object_guid>() == a.object_guid }));
 		REQUIRE(by_guid.has_value());
-		REQUIRE(by_guid->size() == 1);
-		CHECK((*by_guid)[0].object_sid == a.object_sid);
+		REQUIRE(by_guid->entries.size() == 1);
+		CHECK(by_guid->entries[0].object_sid == a.object_sid);
 	}
 
 	SECTION("a new user: SID from the domain, userAccountControl written back")
@@ -990,7 +990,7 @@ TEST_CASE("samba ad: ad::show_deleted finds a deleted user's tombstone", "[samba
 	const auto by_guid = ldap::filters::field<&ad_account::object_guid>() == id;
 	auto hidden = finish(ioc, c.search({ .base = domain, .filter = by_guid, .attributes = { "isDeleted" } }));
 	REQUIRE(hidden.has_value());
-	CHECK(hidden->empty());
+	CHECK(hidden->entries.empty());
 
 	auto shown = finish(ioc,
 	  c.search({ .base = domain,
@@ -1000,8 +1000,8 @@ TEST_CASE("samba ad: ad::show_deleted finds a deleted user's tombstone", "[samba
 	if (!shown) {
 		FAIL(shown.error().message());
 	}
-	REQUIRE(shown->size() == 1);
-	const ldap::entry &tombstone = (*shown)[0];
+	REQUIRE(shown->entries.size() == 1);
+	const ldap::entry &tombstone = shown->entries[0];
 	INFO(tombstone.dn);
 	CHECK_THAT(std::string(tombstone.dn), ContainsSubstring(",CN=Deleted Objects,DC=coro,DC=test"));
 	const auto *deleted = tombstone.find("isDeleted");

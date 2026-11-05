@@ -56,11 +56,11 @@ TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 	CHECK(bad.error().code == ldap::cond::auth_failed);
 	auto r = c.search({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } });
 	REQUIRE(r.has_value());
-	REQUIRE(r->size() == 2);
-	CHECK((*r)[0].dn == "uid=x,ou=people,dc=example,dc=org");
+	REQUIRE(r->entries.size() == 2);
+	CHECK(r->entries[0].dn == "uid=x,ou=people,dc=example,dc=org");
 	auto paged = c.search_paged({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } }, 10);
 	REQUIRE(paged.has_value());
-	CHECK(paged->size() == 2);
+	CHECK(paged->entries.size() == 2);
 	CHECK(c.who_am_i() == "dn:cn=me");
 	REQUIRE(c.unbind().has_value());
 	CHECK_FALSE(c.is_open());
@@ -90,7 +90,7 @@ TEST_CASE("sync: many threads share one connection", "[net][sync]")
 				}
 				const std::string base = "ou=t" + std::to_string(t) + "i" + std::to_string(i) + ",dc=example,dc=org";
 				auto r = c.search({ .base = *ldap::dn::parse(base) });
-				if (!r || r->size() != 2 || !std::string_view((*r)[1].dn).ends_with(base)) {
+				if (!r || r->entries.size() != 2 || !std::string_view(r->entries[1].dn).ends_with(base)) {
 					++failures;
 				}
 			}

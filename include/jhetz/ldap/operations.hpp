@@ -13,6 +13,7 @@
 
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/dn.hpp"
+#include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
 
@@ -87,6 +88,33 @@ struct search_params
 {
 	return { .base = dn{}, .scope = search_scope::base_object, .attributes = std::move(attributes) };
 }
+
+// A search run to its end (connection::search, search_as, client::search,
+// the sync facades): the entries and the URIs of the search result
+// references received, in order, then the SearchResultDone's LDAPResult
+// (RFC 4511 sections 4.5.2 and 4.1.9; resultCode, matchedDN,
+// diagnosticMessage) and the controls of its message. Returned for success
+// and for the codes that end a search with part of its entries
+// (sizeLimitExceeded, timeLimitExceeded, adminLimitExceeded: is_success()
+// is then false); any other result code is an error.
+template<class Entries> struct basic_search_result
+{
+	Entries entries{};
+	string_list references{};// one string per URI, as sent
+	std::int32_t result_code = 0;
+	std::pmr::string matched_dn{};
+	std::pmr::string diagnostic_message{};
+	std::pmr::vector<control> controls{};
+
+	// resultCode success: the search returned every entry it found.
+	[[nodiscard]] auto is_success() const noexcept -> bool { return result_code == 0; }
+
+	friend auto operator==(const basic_search_result &, const basic_search_result &) -> bool = default;
+};
+
+using search_result = basic_search_result<std::pmr::vector<entry>>;
+// search_as<T>: the entries decoded to T.
+template<class T> using typed_search_result = basic_search_result<std::vector<T>>;
 
 // The other operations (step 6), as plain aggregates like search_params.
 // `controls` and `timeout` mean the same everywhere: request controls, and

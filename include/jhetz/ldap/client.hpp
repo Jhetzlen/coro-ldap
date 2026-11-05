@@ -11,7 +11,7 @@
 //   });
 //   auto lease = co_await pool.acquire();   // result<ldap::lease>
 //   if (!lease) ...                         // every server failed, or acquire_timeout
-//   auto people = co_await (*lease)->search({.base = ldap::dn{"ou=people,dc=example,dc=org"}});
+//   auto people = co_await (*lease)->search({.base = ldap::dn{"ou=people,dc=example,dc=org"}});   // people->entries
 //   auto again = co_await pool.search({.base = ...});   // a shared lease for one search, retried once
 //   auto added = co_await pool.add({.entry = ..., .attributes = ...});   // retried only if never sent
 //
@@ -132,7 +132,8 @@
 // Referrals (client_options::referrals): off by default, as for a
 // connection, nothing is chased: search() and compare() return a referral
 // result as an error (errc::referral, the URIs in error::referrals) and
-// search() drops continuation references. Opting in, follow_referrals
+// search() returns continuation references unfollowed
+// (search_result::references). Opting in, follow_referrals
 // chases referral results (RFC 4511 section 4.1.10) of search() and
 // compare(), follow_references the continuation references (section 4.5.3)
 // of search(), as ldap::chase_search and ldap::chase_compare
@@ -167,8 +168,8 @@
 // next chase that reaches it. A failure of the pooled connection's own
 // operation is retried once as usual (the whole chase starts again on
 // another connection); a referred server's failure or the chase's is
-// returned as is, never retried. search() returns the entries only: one
-// whose continuation references were not all followed (refused, over a
+// returned as is, never retried. search() returns the search_result only:
+// one whose continuation references were not all followed (refused, over a
 // limit, failed, or follow_references off) still succeeds with what it
 // got, as connection::search() does; chase_search() tells (complete,
 // referrals, unlisted). client_observer::on_referral hears of each URI.
@@ -578,10 +579,13 @@ class client
 	// anything tied to the session) needs a lease, not the forwarders. Like
 	// acquire(), the tasks do not refer to *this.
 	//
-	// search(): the entries reach the caller only once the search ends, so
-	// it is retried whatever it had received.
+	// search(): connection::search()'s search_result (a limit code is a
+	// value, never retried); the entries reach the caller only once the
+	// search ends, so it is retried whatever it had received. When it
+	// chases (client_options::referrals) its references are empty: the
+	// chase follows them, or counts them (chase_search() tells).
 	auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
-	  -> boost::capy::task<result<std::pmr::vector<entry>>>;
+	  -> boost::capy::task<result<search_result>>;
 	// search_stream(): returns once the search has a first message (an
 	// entry, a reference, an intermediate response) or has ended, and is
 	// retried only if it fails (as above) before any message. The stream

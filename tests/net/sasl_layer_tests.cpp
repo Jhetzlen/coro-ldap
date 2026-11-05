@@ -571,12 +571,12 @@ TEST_CASE("sasl layer: sasl_bind installs the negotiated layer", "[net][sasl][sa
 		CHECK(m.conn.security_layer() == ldap::sasl_protection::none);
 		outcome<ldap::result<void>> bind;
 		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
-		outcome<ldap::result<std::pmr::vector<ldap::entry>>> search;
+		outcome<ldap::result<ldap::search_result>> search;
 		spawn(m.ioc, m.conn.search(people_search()), search);
 		drive_until(m.ioc, [&] { return server.done() && search.done(); });
 		REQUIRE(bind.get().has_value());
 		REQUIRE(search.get().has_value());
-		CHECK(search.get()->size() == 1);
+		CHECK(search.get()->entries.size() == 1);
 		CHECK(error.empty());
 		CHECK(m.conn.security_layer() == ldap::sasl_protection::integrity);
 		CHECK(mech.counts->wraps >= 1);// the search

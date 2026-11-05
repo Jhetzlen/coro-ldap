@@ -300,8 +300,8 @@ TEST_CASE("kerberos: GSSAPI security layers against an MIT acceptor", "[integrat
 		if (!s) {
 			FAIL("search: " << s.error().message() << " (server: " << v.error << ")");
 		}
-		REQUIRE(s->size() == 1);
-		const auto *d = (*s)[0].find("description");
+		REQUIRE(s->entries.size() == 1);
+		const auto *d = s->entries[0].find("description");
 		REQUIRE(d != nullptr);
 		CHECK(std::string_view((*d)[0]) == value);
 		CHECK(v.search_filter_attr == "(uid=user007)");

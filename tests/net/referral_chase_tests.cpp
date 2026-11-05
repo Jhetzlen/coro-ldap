@@ -242,6 +242,29 @@ TEST_CASE("chase_search: continuation references are followed", "[net][referral]
 	CHECK(c[0].filter == (ldap::filters::attr("uid") == "other"));
 }
 
+TEST_CASE("chase_search: limit codes keep the entries", "[net][referral]")
+{
+	world w;
+	w.add("b.example");
+	ldap::message origin_done = done_msg(1, 4, "", "size limit");
+	origin_done.controls.emplace_back("1.2.3.4", false, "v");
+	w.serve("a.example",
+	  { answer({ entry_msg(1, "uid=jdoe,ou=a,dc=example,dc=org", "A"),
+		ref_msg(1, { "ldap://b.example/ou=b,dc=example,dc=org" }),
+		origin_done }) });
+	w.serve("b.example", { answer({ entry_msg(1, "uid=jdoe,ou=b,dc=example,dc=org", "B"), done_msg(1, 3) }) });
+
+	auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector()));
+	REQUIRE(r.has_value());
+	CHECK(r->result_code == 4);
+	CHECK(r->diagnostic_message == "size limit");
+	CHECK(r->controls == std::pmr::vector<ldap::control>{ ldap::control{ "1.2.3.4", false, "v" } });
+	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=a,dc=example,dc=org", "uid=jdoe,ou=b,dc=example,dc=org" });
+	CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed });
+	CHECK_FALSE(r->complete);// b's search ended with timeLimitExceeded
+	w.check_servers();
+}
+
 TEST_CASE("chase_search: nested references, one hop deeper each", "[net][referral]")
 {
 	world w;

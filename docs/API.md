@@ -233,7 +233,8 @@ itself needs only ICU.
     `search_params::base`), `root_dse()`, the `ldap::mod` builders, `response`
     (`{message_id, controls}`; breaking: `message_id` is new and comes
     first, as in the LDAPMessage), `intermediate`, `extended_result`,
-    `end_transaction_result`, and the OIDs `who_am_i_oid` and
+    `end_transaction_result`, `search_result` and `typed_search_result<T>`
+    (`basic_search_result`), and the OIDs `who_am_i_oid` and
     `password_modify_oid`.
   - `jhetz/ldap/search_stream.hpp` and `jhetz/ldap/paged_search.hpp`: the
     entry streams `search_stream()` and `search_paged()` return, and
@@ -255,7 +256,12 @@ itself needs only ICU.
   Operations: `simple_bind(dn, password)` (an empty name and password is
   anonymous; a name with an empty password is refused with
   `client_errc::unauthenticated_bind`, RFC 4513 section 5.1.2),
-  `search(search_params, mr)` returning `result<std::pmr::vector<entry>>`,
+  `search(search_params, mr)` returning `result<search_result>` (`entries`,
+  `references`, and the SearchResultDone's `result_code`, `matched_dn`,
+  `diagnostic_message` and `controls`; a value for success and for
+  sizeLimitExceeded, timeLimitExceeded and adminLimitExceeded, with the
+  entries received before it and `is_success()` false; any other code is
+  an error; `search_as<T>` returns the same as `typed_search_result<T>`),
   `search_stream(search_params, mr)` whose `co_await s.next()` yields one
   entry at a time (and keeps the search references and the done controls),
   and `unbind()`. `search_params` is a plain aggregate for designated
@@ -392,7 +398,10 @@ itself needs only ICU.
   `referral_connector` (`std::function` returning
   `task<result<connection *>>` for a URL and its depth; null skips it), which
   decides which servers may be contacted and how their connections are
-  bound. It returns `chased_search{entries, referrals, unlisted, complete}`: the
+  bound. It returns `chased_search{entries, result_code, matched_dn,
+  diagnostic_message, controls, referrals, unlisted, complete}` (the done
+  fields are the origin's search's, or the referral target's: success or a
+  limit code, as `search()`): the
   entries of every server reached, one `referral_attempt` per URI tried
   (`followed`, `skipped_policy`, `skipped_loop`, `limit_reached`,
   `unparseable`, `failed` with its error), and `complete == false` when a
@@ -695,8 +704,8 @@ itself needs only ICU.
   control codecs (`encode_` / `decode_sort_result`, `encode_` /
   `decode_vlv_response`, `encode_` / `decode_read_entry`) are in
   `message.hpp`, for mock servers. The sort result and the VLV response
-  come with the SearchResultDone, so they need `search_stream`
-  (`search()` returns only the entries); its `controls()` keep them when
+  come with the SearchResultDone: `search_result::controls`, or
+  `search_stream::controls()`, which keeps them when
   the search fails, e.g. with `errc::virtual_list_view_error` (76), whose
   reason is the VLV response's `result_code` (OpenLDAP 2.7: 77 for an
   offset beyond the list). OpenLDAP's sssvlv keeps each VLV list's state
@@ -763,7 +772,9 @@ itself needs only ICU.
 - `jhetz/ldap/sync.hpp` (#12): `ldap::sync::connection`, the blocking facade.
   It owns an io_context and an I/O thread; every method runs the
   corresponding connection operation there and waits, with the same
-  types (`connect` takes a `url` or its text, as `ldap::connect` does).
+  types (`connect` takes a `url` or its text, as `ldap::connect` does);
+  `search_paged(params, page_size)` collects every page into one
+  `search_result` (the last page's done; a limit code keeps the entries).
   Callable from any number of threads; a call from its own I/O
   thread fails with `client_errc::would_deadlock`.
 - `jhetz/ldap/client.hpp` (3pf, DESIGN.md section 11): `ldap::client`, a

@@ -8,6 +8,7 @@
 #include "../net/deadline.hpp"
 #include "../net/host_name.hpp"
 #include "referral_chase_impl.hpp"
+#include "search.hpp"
 
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/this_coro.hpp>
@@ -90,11 +91,14 @@ namespace {
 		return k;
 	}
 
-	// One server's search: its entries and each continuation reference's URIs.
+	// One server's search: its entries, each continuation reference's URIs,
+	// and its SearchResultDone (success or a limit code) with its controls.
 	struct search_run
 	{
 		std::pmr::vector<entry> entries{};
 		std::vector<string_list> references{};
+		ldap_result done{};
+		std::pmr::vector<control> controls{};
 	};
 
 	auto run_search(connection &c, search_params p, std::pmr::memory_resource *mr) -> capy::task<result<search_run>>
@@ -106,10 +110,13 @@ namespace {
 		search_run out{ .entries = std::pmr::vector<entry>(mr) };
 		while (true) {
 			auto item = co_await s->next_item();
-			if (!item) {
-				co_return std::unexpected(std::move(item.error()));
-			}
-			if (!*item) {
+			if (!item || !*item) {
+				const ldap_result *done = detail::search_done(*s);
+				if (!item && (done == nullptr || !detail::limit_exceeded(done->result_code))) {
+					co_return std::unexpected(std::move(item.error()));
+				}
+				out.done = *done;// set once the search ended with a SearchResultDone
+				out.controls = s->controls();
 				co_return out;
 			}
 			if (auto *e = std::get_if<search_entry>(&**item)) {
@@ -499,11 +506,15 @@ namespace {
 		std::deque<pending_reference> queue{};
 
 		// Takes the entries of `r`, and queues its references (or, when they
-		// are not followed, counts them).
-		void take(search_reached &r)
+		// are not followed, counts them). A continuation reference's search
+		// that ended with a limit code clears `complete`.
+		void take(search_reached &r, bool continuation)
 		{
 			for (auto &e : r.value.entries) {
 				out->entries.push_back(std::move(e));
+			}
+			if (continuation && !r.value.done.is_success()) {
+				out->complete = false;
 			}
 			if (r.value.references.empty()) {
 				return;
@@ -551,9 +562,14 @@ namespace detail {
 			co_return { .value = std::unexpected(std::move(first.value.error())),
 				.origin_failed = first.origin_failed };
 		}
-		chased_search out{ .entries = std::pmr::vector<entry>(mr) };
+		const search_run &origin_run = first.value->value;
+		chased_search out{ .entries = std::pmr::vector<entry>(mr),
+			.result_code = origin_run.done.result_code,
+			.matched_dn = origin_run.done.matched_dn,
+			.diagnostic_message = origin_run.done.diagnostic_message,
+			.controls = origin_run.controls };
 		reference_queue refs{ .st = &st, .out = &out };
-		refs.take(*first.value);
+		refs.take(*first.value, false);
 		while (!refs.queue.empty()) {
 			if (st.exhausted()) {
 				refs.drop_rest();
@@ -571,7 +587,7 @@ namespace detail {
 				co_return { .value = std::unexpected(std::move(f.error())) };
 			}
 			if (f->target) {
-				refs.take(*f->target);
+				refs.take(*f->target, true);
 			} else if (!f->loop) {
 				out.complete = false;
 			}

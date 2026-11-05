@@ -1717,8 +1717,8 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
 		auto r = finish(f.ioc, f.pool->search(people_search()));
 		REQUIRE(r.has_value());
-		REQUIRE(r->size() == 1);
-		CHECK(r->front() == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "John"));
+		REQUIRE(r->entries.size() == 1);
+		CHECK(r->entries.front() == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "John"));
 		REQUIRE(s.accepted() == 2);
 		CHECK(s.log(0).received.size() == 2);// the bind, the search
 		REQUIRE(s.log(1).received.size() == 2);
@@ -1766,7 +1766,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		CHECK(text(held->server()) == text(b.url()));
 		auto next = finish(f.ioc, f.pool->search(people_search()));
 		REQUIRE(next.has_value());
-		CHECK(next->size() == 1);
+		CHECK(next->entries.size() == 1);
 		CHECK(a.accepted() == 2);
 	}
 	SECTION("compare(): busy on the first server, the second down: back to the first")
@@ -1958,7 +1958,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
 		auto r = finish(f.ioc, f.pool->search(people_search()));
 		REQUIRE(r.has_value());
-		REQUIRE(r->size() == 1);
+		REQUIRE(r->entries.size() == 1);
 		CHECK(s.accepted() == 2);
 		CHECK(f.obs.events
 			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
@@ -2021,6 +2021,20 @@ TEST_CASE("client: when read forwarders do not retry", "[net][client][retry]")
 		CHECK(e.error().code == ldap::errc::no_such_object);
 		CHECK(s.accepted() == 1);
 		CHECK(s.log(0).received.size() == 3);
+	}
+	SECTION("a limit code: the search_result")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }),
+							   answer({ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "John"),
+								 done_msg(2, 4, "", "size limit") }) },
+		  found_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto r = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE(r.has_value());
+		CHECK(r->result_code == 4);
+		CHECK(r->entries.size() == 1);
+		CHECK(s.accepted() == 1);
 	}
 	SECTION("only once")
 	{
@@ -2175,7 +2189,8 @@ TEST_CASE("client: referrals are not chased by default", "[net][client][referral
 
 	auto refs = finish(f.ioc, f.pool->search(people_search()));
 	REQUIRE(refs.has_value());
-	CHECK(refs->size() == 1);// the reference is dropped, as connection::search() does
+	CHECK(refs->entries.size() == 1);
+	CHECK(refs->references == ldap::string_list{ ref_to(b, "ou=b,dc=example,dc=org") });
 
 	// chase_search() says so.
 	auto chased = finish(f.ioc, f.pool->chase_search(people_search()));
@@ -2203,8 +2218,8 @@ TEST_CASE("client: following referral results", "[net][client][referral]")
 		  .referrals = { .follow_referrals = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
 		auto r = finish(f.ioc, f.pool->search(people_search()));
 		REQUIRE(r.has_value());
-		REQUIRE(r->size() == 1);
-		CHECK(r->front() == expected_entry(b_dn, "B"));
+		REQUIRE(r->entries.size() == 1);
+		CHECK(r->entries.front() == expected_entry(b_dn, "B"));
 		REQUIRE(b.accepted() == 1);
 		REQUIRE(b.log(0).received.size() == 2);
 		const auto &bind = std::get<ldap::bind_request>(b.log(0).received[0].op);
@@ -2355,7 +2370,7 @@ TEST_CASE("client: following continuation references", "[net][client][referral]"
 		  .referrals = { .follow_references = true, .authorize = ldap::same_setup_for_domains({ "example.org" }) } });
 		auto r = finish(f.ioc, f.pool->search(people_search()));
 		REQUIRE(r.has_value());
-		CHECK(r->size() == 1);
+		CHECK(r->entries.size() == 1);
 		CHECK(f.obs.events.back()
 			  == "referral " + text(a.url()) + " ldap://elsewhere.example/ou=b,dc=example,dc=org skipped_policy");
 	}
@@ -2392,8 +2407,8 @@ TEST_CASE("client: referrals and the read forwarders' retry", "[net][client][ref
 		  .referrals = { .follow_referrals = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
 		auto r = finish(f.ioc, f.pool->search(people_search()));
 		REQUIRE(r.has_value());
-		REQUIRE(r->size() == 1);
-		CHECK(r->front() == expected_entry(b_dn, "B"));
+		REQUIRE(r->entries.size() == 1);
+		CHECK(r->entries.front() == expected_entry(b_dn, "B"));
 		CHECK(a.accepted() == 2);
 	}
 	SECTION("a referred server's failure is not")
@@ -2634,8 +2649,8 @@ TEST_CASE("client: a shared connection being unbound is not handed out", "[net][
 	REQUIRE(other.get().has_value());
 	auto r = finish(f.ioc, (*other.get())->search(people_search()));
 	REQUIRE(r.has_value());
-	REQUIRE(r->size() == 1);
-	CHECK(r->front() == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "John"));
+	REQUIRE(r->entries.size() == 1);
+	CHECK(r->entries.front() == expected_entry("uid=jdoe,ou=people,dc=example,dc=org", "John"));
 	CHECK(s.accepted() == 2);
 	REQUIRE(s.log(0).received.size() == 2);
 	CHECK(std::holds_alternative<ldap::unbind_request>(s.log(0).received[1].op));
@@ -2727,8 +2742,8 @@ TEST_CASE("client: an observer overriding only on_connect", "[net][client][obser
 	// (on_referral).
 	auto r = finish(f.ioc, f.pool->search(people_search()));
 	REQUIRE(r.has_value());
-	REQUIRE(r->size() == 1);
-	CHECK(r->front() == expected_entry(b_dn, "B"));
+	REQUIRE(r->entries.size() == 1);
+	CHECK(r->entries.front() == expected_entry(b_dn, "B"));
 	waiting.get()->release();
 	f.pool->close();// on_disconnect
 	CHECK(f.pool->connections() == 0);

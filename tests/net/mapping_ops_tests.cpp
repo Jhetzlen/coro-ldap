@@ -61,17 +61,31 @@ TEST_CASE("typed: search_as requests the descriptor's attributes and object clas
 	  .attributes = { "ignored" },
 	}));
 	REQUIRE(r.has_value());
-	REQUIRE(r->size() == 2);
-	CHECK((*r)[0].uid == "a");
-	CHECK((*r)[1].uid_number == 1001);
-	CHECK((*r)[1].groups.front() == ldap::dn{ "cn=staff,ou=groups,dc=example,dc=org" });
-	CHECK_FALSE((*r)[0].mail.has_value());
+	REQUIRE(r->entries.size() == 2);
+	CHECK(r->entries[0].uid == "a");
+	CHECK(r->entries[1].uid_number == 1001);
+	CHECK(r->entries[1].groups.front() == ldap::dn{ "cn=staff,ou=groups,dc=example,dc=org" });
+	CHECK_FALSE(r->entries[0].mail.has_value());
 	m.check_server();
 
 	REQUIRE(m.log.received.size() == 1);
 	const auto &sr = std::get<ldap::search_request>(m.log.received[0].op);
 	CHECK(sr.attributes == ldap::string_list{ "uid", "mail", "memberOf", "uidNumber", "modifyTimestamp" });
 	CHECK(sr.filter.to_string() == "(&(objectClass=inetOrgPerson)(uidNumber>=1000))");
+}
+
+TEST_CASE("typed: search_as keeps the decoded entries on a limit code", "[net][mapping]")
+{
+	mock_ldap m;
+	m.serve({ answer({ account_entry(1, "a", "1000"), done_msg(1, 4, "", "size limit") }) });
+	auto r = m.run(m.conn.search_as<account>({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } }));
+	REQUIRE(r.has_value());
+	CHECK_FALSE(r->is_success());
+	CHECK(r->result_code == 4);
+	CHECK(r->diagnostic_message == "size limit");
+	REQUIRE(r->entries.size() == 1);
+	CHECK(r->entries[0].uid == "a");
+	m.check_server();
 }
 
 TEST_CASE("typed: an entry that does not decode fails search_as", "[net][mapping]")
@@ -282,7 +296,7 @@ TEST_CASE("typed: schema_check::on_first_use", "[net][mapping][schema]")
 	// The first typed search loads and checks the schema, then runs.
 	auto first = m.run(m.conn.search_as<account>({ .base = ldap::dn{} }));
 	REQUIRE(first.has_value());
-	CHECK(first->size() == 1);
+	CHECK(first->entries.size() == 1);
 	// The second one does neither again.
 	CHECK(m.run(m.conn.search_as<account>({ .base = ldap::dn{} })).has_value());
 	// A type that does not match fails before anything is sent.

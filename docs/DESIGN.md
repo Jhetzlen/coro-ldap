@@ -245,6 +245,32 @@ the root DSE read (RFC 4512 section 5.1: the empty DN, base_object,
 `co_await c.search(ldap::root_dse({"namingContexts"}))`. The other
 defaults stay (whole_subtree, `(objectClass=*)`).
 
+`search()` returns a `search_result`: `entries`, `references` (the URIs of
+the SearchResultReferences, unfollowed), then the SearchResultDone's
+LDAPResult in RFC 4511's names (`result_code`, `matched_dn`,
+`diagnostic_message`; its `referral` is empty on the codes returned) and
+the done message's `controls` (paged results, sort result, ...). It is a
+value for success and for sizeLimitExceeded, timeLimitExceeded and
+adminLimitExceeded, the codes that end a search with part of its entries
+(`is_success()` false), and an error for every other code. A size limit
+is routine (Active Directory's MaxPageSize is 1000), and every library
+compared keeps those entries (libldap returns LDAP_SIZELIMIT_EXCEEDED with
+the entries in the result chain, go-ldap the partial SearchResult with
+the error, UnboundID `LDAPSearchException.getSearchEntries()`, .NET
+`DirectoryOperationException.Response`); returning the limit codes as an
+error lost them. Alternatives rejected: the partial entries inside the
+error (an `ldap::error` would carry entries for one operation only), and
+a success with a flag (the result code, matched DN and diagnostic would be
+lost). The same holds for `search_as<T>` (`typed_search_result<T>`, the
+same fields with `std::vector<T>` entries), `client::search`, the sync
+facades' `search`, `search_as` and `search_paged` (the pages collected:
+the last page's done), and `chase_search` (`chased_search` gains the same
+done fields, the origin's or the referral target's; a continuation
+reference's search ending with a limit code keeps its entries and clears
+`complete`). The streams (`search_stream`, `paged_search`) are unchanged:
+`next()` reports the code as an error after the entries it already handed
+out.
+
 Typed controls (step 6, `controls.hpp`): `paged`, `manage_dsa_it`,
 `relax_rules`, `proxied_authorization`, `server_side_sort`, `assertion`,
 `pre_read`, `post_read`, `sync_request`, `matched_values`,
@@ -1430,7 +1456,8 @@ Usage (implemented, #9, `mapping.hpp` and `connection.hpp`):
 
 ```cpp
 // Attribute list from the descriptor; filter narrowed to its object classes.
-ldap::result<std::vector<person>> people = co_await conn.search_as<person>({.base = base, .filter = f});
+ldap::result<ldap::typed_search_result<person>> people = co_await conn.search_as<person>({.base = base, .filter = f});
+// people->entries: std::vector<person>
 
 co_await conn.modify<person>(dn, {
     ldap::replace<&person::mail>("new@example.org"),
@@ -1589,7 +1616,8 @@ password on a login form is a failed login); `stronger_auth_required` and
 `confidentiality_required` are `access_denied` (the credentials may be fine,
 the session is not good enough); `unwilling_to_perform` matches nothing
 (servers use it for unrelated refusals); `size_limit_exceeded` matches
-nothing (it comes with partial results); `operation_in_progress` matches
+nothing (it comes with partial results, which `search()` returns as a
+`search_result`, not as an error: section 3); `operation_in_progress` matches
 nothing (it is a usage error, not a busy server); `internal_error` (a
 library the client uses failed: OpenSSL in SCRAM, ICU in SASLprep or
 `ad::password_value`, e.g. out of memory or ICU data without the SASLprep

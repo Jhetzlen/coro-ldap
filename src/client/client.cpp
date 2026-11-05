@@ -1318,13 +1318,17 @@ namespace detail {
 		}
 
 		// search() and compare() when they chase: the chase's value only.
-		static auto entries_of(capy::task<result<chased_search>> chase) -> capy::task<result<std::pmr::vector<entry>>>
+		static auto entries_of(capy::task<result<chased_search>> chase) -> capy::task<result<search_result>>
 		{
 			auto r = co_await std::move(chase);
 			if (!r) {
 				co_return std::unexpected(std::move(r.error()));
 			}
-			co_return std::move(r->entries);
+			co_return search_result{ .entries = std::move(r->entries),
+				.result_code = r->result_code,
+				.matched_dn = std::move(r->matched_dn),
+				.diagnostic_message = std::move(r->diagnostic_message),
+				.controls = std::move(r->controls) };
 		}
 
 		static auto answer_of(capy::task<result<chased_compare>> chase) -> capy::task<result<bool>>
@@ -1457,15 +1461,15 @@ namespace {
 }// namespace
 
 // Not coroutines either: the tasks hold their own copy of the state.
-auto client::search(search_params request, std::pmr::memory_resource *mr) -> capy::task<result<std::pmr::vector<entry>>>
+auto client::search(search_params request, std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
 {
 	if (state_ == nullptr) {
-		return read_refused<std::pmr::vector<entry>>(detail::op_context("search", request.base));
+		return read_refused<search_result>(detail::op_context("search", request.base));
 	}
 	if (state_->chases()) {
 		return detail::client_state::entries_of(detail::client_state::chase_search(state_, std::move(request), mr));
 	}
-	return detail::client_state::read<std::pmr::vector<entry>>(
+	return detail::client_state::read<search_result>(
 	  state_, [request = std::move(request), mr](const lease &held) { return held->search(request, mr); });
 }
 
