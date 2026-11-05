@@ -58,12 +58,15 @@ namespace {
 		return prepared{ .context = std::move(context), .request = std::move(request) };
 	}
 
-	// The refusal of an open connection AD would not take a password over.
-	auto check_protection(bool open, bool tls, const prepared &p) -> result<void>
+	// The refusal of an open connection neither TLS nor a SASL
+	// confidentiality layer protects.
+	auto check_protection(bool open, bool tls, sasl_protection layer, const prepared &p) -> result<void>
 	{
-		if (open && !tls) {
+		if (open && !tls && layer != sasl_protection::confidentiality) {
 			return fail(client_errc::tls_required,
-			  p.context + ": Active Directory sets unicodePwd only over TLS (ldaps:// or start_tls())");
+			  p.context
+				+ ": Active Directory sets unicodePwd only over an encrypted connection (ldaps://, start_tls() or a "
+				  "SASL confidentiality layer)");
 		}
 		return {};
 	}
@@ -129,7 +132,7 @@ namespace {
 
 	auto send(connection &c, const prepared &p) -> capy::task<result<void>>
 	{
-		if (auto ok = check_protection(c.is_open(), c.is_tls(), p); !ok) {
+		if (auto ok = check_protection(c.is_open(), c.is_tls(), c.security_layer(), p); !ok) {
 			co_return ok;
 		}
 		co_return settle(co_await c.modify(p.request), p);
@@ -162,7 +165,7 @@ namespace {
 
 	template<class C> auto send_sync(C &c, const prepared &p) -> result<void>
 	{
-		if (auto ok = check_protection(c.is_open(), c.is_tls(), p); !ok) {
+		if (auto ok = check_protection(c.is_open(), c.is_tls(), c.security_layer(), p); !ok) {
 			return ok;
 		}
 		return settle(c.modify(p.request), p);

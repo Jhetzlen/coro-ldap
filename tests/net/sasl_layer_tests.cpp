@@ -6,6 +6,7 @@
 // (tests/integration/gssapi_layer_tests.cpp).
 #include "../../src/net/sasl_layer.hpp"
 #include "../counting_resource.hpp"
+#include "jhetz/ldap/ad/password.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
@@ -33,6 +34,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace ldap = jhetz::ldap;
@@ -59,14 +61,12 @@ class xor_layer final : public ldap::sasl_security_layer
 
 	explicit xor_layer(std::size_t max_wrap_input = std::size_t{ 1 } << 20,
 	  std::size_t max_received = std::size_t{ 1 } << 20,
-	  std::shared_ptr<counts> c = std::make_shared<counts>())
-	  : max_wrap_input_(max_wrap_input), max_received_(max_received), counts_(std::move(c))
+	  std::shared_ptr<counts> c = std::make_shared<counts>(),
+	  ldap::sasl_protection level = ldap::sasl_protection::integrity)
+	  : max_wrap_input_(max_wrap_input), max_received_(max_received), counts_(std::move(c)), level_(level)
 	{}
 
-	[[nodiscard]] auto protection() const noexcept -> ldap::sasl_protection override
-	{
-		return ldap::sasl_protection::integrity;
-	}
+	[[nodiscard]] auto protection() const noexcept -> ldap::sasl_protection override { return level_; }
 	[[nodiscard]] auto max_wrap_input() const noexcept -> std::size_t override { return max_wrap_input_; }
 	[[nodiscard]] auto max_received() const noexcept -> std::size_t override { return max_received_; }
 	[[nodiscard]] auto wrap(std::span<const std::byte> plaintext, std::pmr::vector<std::byte> &out)
@@ -98,6 +98,7 @@ class xor_layer final : public ldap::sasl_security_layer
 	std::size_t max_wrap_input_;
 	std::size_t max_received_;
 	std::shared_ptr<counts> counts_;
+	ldap::sasl_protection level_;
 };
 
 // A protected buffer of `plaintext` as xor_layer writes it, after its length.
@@ -124,6 +125,7 @@ class layer_mechanism final : public ldap::sasl_mechanism
 	std::shared_ptr<xor_layer::counts> counts = std::make_shared<xor_layer::counts>();
 	bool negotiates = true;
 	bool endless = false;// every step answers and negotiates a layer
+	ldap::sasl_protection level = ldap::sasl_protection::integrity;
 
 	[[nodiscard]] auto name() const noexcept -> std::string_view override { return "X-LAYER"; }
 	auto start() -> ldap::result<std::optional<std::string>> override
@@ -144,7 +146,7 @@ class layer_mechanism final : public ldap::sasl_mechanism
 		if (!std::exchange(pending, false)) {
 			return nullptr;
 		}
-		return std::make_unique<xor_layer>(max_wrap_input, std::size_t{ 1 } << 20, counts);
+		return std::make_unique<xor_layer>(max_wrap_input, std::size_t{ 1 } << 20, counts, level);
 	}
 	[[nodiscard]] auto channel_binding_used() const noexcept -> std::optional<ldap::channel_binding_type> override
 	{
@@ -639,5 +641,91 @@ TEST_CASE("sasl layer: sasl_bind installs the negotiated layer", "[net][sasl][sa
 			CHECK(n <= 16);
 		}
 		drive_until(m.ioc, [&] { return server.done(); });
+	}
+}
+
+namespace {
+
+// A SASL bind answered with success, then the security layer `level`,
+// then, with `modify`, a ModifyRequest read through it and answered with
+// success.
+auto serve_layered_modify(net::transport t,
+  ldap::sasl_protection level,
+  bool modify,
+  std::vector<ldap::message> &received,
+  std::string &error) -> capy::task<void>
+{
+	net::read_buffer buf;
+	auto bind = co_await net::read_message(t, buf, as_server);
+	if (!bind) {
+		error = "bind read: " + std::string(bind.error().message());
+		co_return;
+	}
+	if (auto w = co_await net::write_message(t, sasl_ok(bind->id)); !w) {
+		error = "bind write";
+		co_return;
+	}
+	if (auto l = net::detail::install_security_layer(t,
+		  buf,
+		  std::make_unique<xor_layer>(
+			std::size_t{ 1 } << 20, std::size_t{ 1 } << 20, std::make_shared<xor_layer::counts>(), level));
+	  !l) {
+		error = "install";
+		co_return;
+	}
+	if (!modify) {
+		co_return;
+	}
+	auto request = co_await net::read_message(t, buf, as_server);
+	if (!request) {
+		error = "modify read: " + std::string(request.error().message());
+		co_return;
+	}
+	received.push_back(*request);
+	if (auto w =
+		  co_await net::write_message(t, ldap::message{ request->id, ldap::modify_response{ ldap::ldap_result{ 0 } } });
+	  !w) {
+		error = "modify write";
+	}
+}
+
+}// namespace
+
+TEST_CASE("sasl layer: an Active Directory password change needs confidentiality", "[net][sasl][sasl_layer][ad]")
+{
+	const ldap::dn jdoe{ "uid=jdoe,ou=people,dc=example,dc=org" };
+	mock_ldap m;
+	std::string error;
+	std::vector<ldap::message> received;
+	layer_mechanism mech;
+	SECTION("confidentiality: sent through the layer")
+	{
+		mech.level = ldap::sasl_protection::confidentiality;
+		outcome<void> server;
+		spawn(m.ioc, serve_layered_modify(m.server_end(), mech.level, true, received, error), server);
+		REQUIRE(finish(m.ioc, m.conn.sasl_bind(mech)).has_value());
+		CHECK(m.conn.security_layer() == ldap::sasl_protection::confidentiality);
+		CHECK_FALSE(m.conn.is_tls());
+		auto r = finish(m.ioc, ldap::ad::reset_password(m.conn, jdoe, "New-S3cret"));
+		CHECK(r.has_value());
+		drive_until(m.ioc, [&] { return server.done(); });
+		CHECK(error.empty());
+		REQUIRE(received.size() == 1);
+		CHECK(std::holds_alternative<ldap::modify_request>(received[0].op));
+		CHECK(mech.counts->wraps >= 1);
+	}
+	SECTION("integrity only: refused before sending")
+	{
+		outcome<void> server;
+		spawn(m.ioc, serve_layered_modify(m.server_end(), mech.level, false, received, error), server);
+		REQUIRE(finish(m.ioc, m.conn.sasl_bind(mech)).has_value());
+		CHECK(m.conn.security_layer() == ldap::sasl_protection::integrity);
+		drive_until(m.ioc, [&] { return server.done(); });
+		auto r = finish(m.ioc, ldap::ad::change_password(m.conn, jdoe, "Old-S3cret", "New-S3cret"));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::tls_required);
+		CHECK(mech.counts->wraps == 0);
+		CHECK(error.empty());
+		CHECK(m.conn.is_open());
 	}
 }

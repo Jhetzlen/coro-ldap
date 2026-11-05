@@ -304,6 +304,54 @@ TEST_CASE("samba ad: ad passwords through ldap::client and the sync facade", "[s
 	}
 }
 
+TEST_CASE("samba ad: a password change over the NTLM security layer on plain ldap://", "[samba_ad][password][ntlm]")
+{
+	require_samba();
+	corosio::io_context ioc;
+	SECTION("integrity and confidentiality: both seal, both accepted")
+	{
+		// Integrity negotiates signing only, but NTLM over LDAP seals once
+		// signing is negotiated: security_layer() reports confidentiality.
+		const auto protection = GENERATE(ldap::sasl_protection::integrity, ldap::sasl_protection::confidentiality);
+		CAPTURE(protection);
+		reset(ioc, pwchange, "Sealed-Old-Passw0rd");
+		auto c = open(ioc, strict_ldap());
+		ldap::sasl_ntlm mech("CORO\\pwchange", "Sealed-Old-Passw0rd", { .security_layer = protection });
+		auto b = finish(ioc, c.sasl_bind(mech));
+		if (!b) {
+			FAIL(b.error().message());
+		}
+		REQUIRE(c.security_layer() == ldap::sasl_protection::confidentiality);
+		REQUIRE_FALSE(c.is_tls());
+		auto r = finish(ioc, ldap::ad::change_password(c, pwchange, "Sealed-Old-Passw0rd", "Sealed-New-Passw0rd"));
+		if (!r) {
+			FAIL(r.error().message());
+		}
+		CHECK(try_bind(ioc, pwchange, "Sealed-New-Passw0rd").has_value());
+		auto admin = open(ioc, strict_ldap());
+		ldap::sasl_ntlm admin_mech("CORO\\Administrator", administrator_password, { .security_layer = protection });
+		REQUIRE(finish(ioc, admin.sasl_bind(admin_mech)).has_value());
+		auto reset_r = finish(ioc, ldap::ad::reset_password(admin, pwchange, "Sealed-Reset-Passw0rd"));
+		if (!reset_r) {
+			FAIL(reset_r.error().message());
+		}
+		CHECK(try_bind(ioc, pwchange, "Sealed-Reset-Passw0rd").has_value());
+	}
+	SECTION("an NTLM bind without a layer (relaxed DC): refused before sending")
+	{
+		reset(ioc, pwchange, "Unsealed-Passw0rd");
+		auto c = open(ioc, relaxed_ldap());
+		ldap::sasl_ntlm mech("CORO\\Administrator", administrator_password, { .require_tls = false });
+		REQUIRE(finish(ioc, c.sasl_bind(mech)).has_value());
+		REQUIRE(c.security_layer() == ldap::sasl_protection::none);
+		auto r = finish(ioc, ldap::ad::reset_password(c, pwchange, "Never-Passw0rd"));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::tls_required);
+		CHECK(r.error().diagnostic.empty());
+		CHECK(try_bind(ioc, pwchange, "Unsealed-Passw0rd").has_value());
+	}
+}
+
 // ---------------------------------------------------------------- SASL NTLM binds
 
 namespace {

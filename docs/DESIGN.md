@@ -2712,8 +2712,13 @@ own change, which AD checks against the old password),
 with `ad::password_value()`'s quoted UTF-16LE (MS-ADTS 3.1.1.3.1.5). AD
 DS, AD LDS and Samba AD alike: no detection, the caller knows its
 directory. Validation (empty passwords, an empty DN, ill-formed UTF-8)
-fails before anything is sent, and so does an open connection without
-TLS (`client_errc::tls_required`). AD's Win32 code at the start of a
+fails before anything is sent, and so does an open connection protected
+by neither TLS nor a SASL confidentiality layer
+(`client_errc::tls_required`): AD takes unicodePwd over any connection
+encrypted with keys of 128 bits or more (MS-ADTS 3.1.1.3.1.5.1), TLS or a
+sealing SASL layer (Kerberos, NTLM; Windows' own tools seal on port 389).
+NTLM's integrity seals too over LDAP, so `security_layer()` reports
+confidentiality for both NTLM levels; GSSAPI integrity alone is refused. AD's Win32 code at the start of a
 refusal's diagnostic is explained in the context (0000052D, 00000056,
 00000005, 00000775); the diagnostic is kept as sent. Overloads:
 `connection &` and `client &` (a shared lease, retried once after
@@ -2723,9 +2728,12 @@ and blocking ones in `ad/sync.hpp` built on the facade's public calls
 (`is_open()`, `is_tls()`, `modify()`), the sync facade having no generic
 "run this task" entry. There is no "detect and dispatch" helper: the
 caller calls the core's RFC 3062 functions or these. Tested against the
-scripted mock (`tests/net/ad_password_tests.cpp`, `sync_tests.cpp`) and a
+scripted mock (`tests/net/ad_password_tests.cpp`, `sync_tests.cpp`,
+`sasl_layer_tests.cpp` with a made-up layer at each level) and a
 Samba AD DC (`integration.samba_ad`: reset, change, a non-BMP password,
-0000052D and 00000056, plain ldap:// refused, `ldap::client`,
+0000052D and 00000056, plain ldap:// refused, a change and a reset over
+the NTLM layer (integrity and confidentiality) on plain ldap://, an NTLM
+bind without a layer refused, `ldap::client`,
 `sync::connection`, and the core's RFC 3062 calls refused by Samba).
 
 Recognising AD: `ad::edition_of(root_dse)` reads the root DSE's

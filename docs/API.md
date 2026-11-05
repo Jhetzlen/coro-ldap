@@ -880,7 +880,9 @@ package component `ad`:
   ModifyRequest of `user`'s `unicodePwd`, deleting the old value and
   adding the new one for a change, replacing it for a reset: what AD DS,
   AD LDS and Samba AD take instead of RFC 3062. Refused before anything is
-  sent on an open connection without TLS (`client_errc::tls_required`),
+  sent on an open connection with neither TLS nor a SASL confidentiality
+  layer (`security_layer()`: `sasl_ntlm` or `sasl_gssapi` with
+  `security_layer` set; `client_errc::tls_required`),
   for an empty `user` (`client_errc::invalid_dn`), an empty password
   (`std::errc::invalid_argument`) or ill-formed UTF-8
   (`client_errc::encode_error`). AD's diagnostics for common refusals

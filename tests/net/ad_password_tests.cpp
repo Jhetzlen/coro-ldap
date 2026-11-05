@@ -231,7 +231,8 @@ TEST_CASE("ad::change_password: without TLS, refused before sending", "[net][pas
 	CHECK(r.error().code == ldap::cond::access_denied);
 	CHECK(std::string(r.error().context)
 		  == "reset password " + jdoe_context
-			   + ": Active Directory sets unicodePwd only over TLS (ldaps:// or start_tls())");
+			   + ": Active Directory sets unicodePwd only over an encrypted connection (ldaps://, start_tls() or a SASL "
+				 "confidentiality layer)");
 	auto c = m.run(ldap::ad::change_password(m.conn, jdoe, std::string(old_pw), std::string(new_pw)));
 	REQUIRE_FALSE(c.has_value());
 	CHECK(c.error().code == client_errc::tls_required);
@@ -307,7 +308,8 @@ TEST_CASE("ad::change_password: during StartTLS, refused before sending", "[net]
 	CHECK(reset.error().code == client_errc::tls_required);
 	CHECK(std::string(reset.error().context)
 		  == "reset password " + jdoe_context
-			   + ": Active Directory sets unicodePwd only over TLS (ldaps:// or start_tls())");
+			   + ": Active Directory sets unicodePwd only over an encrypted connection (ldaps://, start_tls() or a SASL "
+				 "confidentiality layer)");
 	auto change = m.run(ldap::ad::change_password(m.conn, jdoe, std::string(old_pw), std::string(new_pw)));
 	REQUIRE_FALSE(change.has_value());
 	CHECK(change.error().code == client_errc::tls_required);

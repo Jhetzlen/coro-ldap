@@ -448,8 +448,11 @@ What it covers:
   (delete and add), a non-BMP password (surrogate pairs), a password the
   policy refuses (`constraint_violation`, `0000052D`, also for a reset)
   and a wrong old password (`constraint_violation`, `00000056`); through
-  `ldap::client` and `sync::connection`; on plain ldap://
-  `client_errc::tls_required` before the modify is sent. The core's RFC
+  `ldap::client` and `sync::connection`; on plain ldap:// over the NTLM
+  security layer (integrity and confidentiality, both sealed) a change and
+  a reset succeed, while without TLS or a layer (simple bind, NTLM bind
+  without a layer on the relaxed DC) `client_errc::tls_required` comes
+  before the modify is sent. The core's RFC
   3062 `reset_password` is refused by Samba (`protocol_error`: no
   Password Modify extended operation).
 - `sasl_ntlm` binds over ldaps:// and StartTLS: a UPN, `DOMAIN\user`, a
