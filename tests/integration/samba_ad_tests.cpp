@@ -12,6 +12,7 @@
 // 127.0.0.1 and match that name against the CN (host_name_matching::legacy).
 // Without the variables every test is skipped.
 #include "../net/net_test_support.hpp"
+#include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/ad/filetime.hpp"
 #include "jhetz/ldap/ad/guid.hpp"
 #include "jhetz/ldap/ad/password.hpp"
@@ -967,4 +968,48 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 		CHECK(changed.object_guid == fresh.object_guid);
 		CHECK(finish(ioc, c.del({ .entry = typed_user })).has_value());
 	}
+}
+
+// ---------------------------------------------------------------- Show Deleted
+
+TEST_CASE("samba ad: ad::show_deleted finds a deleted user's tombstone", "[samba_ad][show_deleted]")
+{
+	require_samba();
+	corosio::io_context ioc;
+	auto c = open_bound(ioc, false, administrator, administrator_password);
+	const ldap::dn doomed{ "CN=coro-deleted,CN=Users,DC=coro,DC=test" };
+	(void)finish(ioc, c.del({ .entry = doomed }));
+	auto added = finish(ioc,
+	  c.add({ .entry = doomed,
+		.attributes = { { "objectClass", { "user" } }, { "sAMAccountName", { "coro-deleted" } } } }));
+	if (!added) {
+		FAIL(added.error().message());
+	}
+	const ldap::ad::guid id = read_account(ioc, c, doomed).object_guid;
+	REQUIRE(finish(ioc, c.del({ .entry = doomed })).has_value());
+
+	const auto by_guid = ldap::filters::field<&ad_account::object_guid>() == id;
+	auto hidden = finish(ioc, c.search({ .base = domain, .filter = by_guid, .attributes = { "isDeleted" } }));
+	REQUIRE(hidden.has_value());
+	CHECK(hidden->empty());
+
+	auto shown = finish(ioc,
+	  c.search({ .base = domain,
+		.filter = by_guid,
+		.attributes = { "isDeleted", "objectGUID" },
+		.controls = { ldap::ad::show_deleted{} } }));
+	if (!shown) {
+		FAIL(shown.error().message());
+	}
+	REQUIRE(shown->size() == 1);
+	const ldap::entry &tombstone = (*shown)[0];
+	INFO(tombstone.dn);
+	CHECK_THAT(std::string(tombstone.dn), ContainsSubstring(",CN=Deleted Objects,DC=coro,DC=test"));
+	const auto *deleted = tombstone.find("isDeleted");
+	REQUIRE(deleted != nullptr);
+	CHECK(*deleted == std::pmr::vector<std::pmr::string>{ "TRUE" });
+	const auto *guid_values = tombstone.find("objectGUID");
+	REQUIRE(guid_values != nullptr);
+	REQUIRE(guid_values->size() == 1);
+	CHECK(ldap::ad::guid::from_binary((*guid_values)[0]) == id);
 }

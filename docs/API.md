@@ -945,6 +945,13 @@ package component `ad`:
   `account_disable`, `dont_expire_passwd`, ...), with `|`, `&`, `^`, `~`,
   their assignments and `has(flags, bits)`. `value_traits` on INTEGER: the
   signed 32-bit decimal AD writes (bits not named are kept).
+- `jhetz/ldap/ad/controls.hpp` (`jhetz::ldap`): AD's request controls,
+  converting to a raw `ldap::control`, so they go in any operation's
+  `.controls` (and `request_controls`). `ad::show_deleted{}`
+  (`ad::show_deleted_oid`, 1.2.840.113556.1.4.417, MS-ADTS
+  3.1.1.3.4.1.14): searches include deleted objects (isDeleted TRUE, under
+  CN=Deleted Objects); no value, critical by default
+  (`.critical = false` to send it non-critical).
 - `jhetz/ldap/ad/syntax.hpp` (`jhetz::ldap`): `ad::large_integer_syntax`,
   the Large Integer syntax OID (1.2.840.113556.1.4.906), which
   `validate<T>` accepts for signed integers of 64 bits or more and the

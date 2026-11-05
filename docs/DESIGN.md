@@ -2688,6 +2688,7 @@ Layout:
   (the FILETIME clock and its `value_traits`, section 4),
   `ad/syntax.hpp` (AD's syntax OIDs), `ad/sid.hpp`, `ad/guid.hpp` and
   `ad/user_account_control.hpp` (the value types below),
+  `ad/controls.hpp` (AD's request controls),
   `ad/password_value.hpp` (the `unicodePwd` value) and
   `ad/diagnostic.hpp` (`explain`). These headers are installed with the
   codec-only package too.
@@ -2729,6 +2730,19 @@ with MS-DTYP and .NET vectors (`tests/ad_types_tests.cpp`) and on Samba
 (`integration.samba_ad`: Administrator's RID 500 under the domain SID,
 lookups by typed objectSid and objectGUID filters, a new user's
 userAccountControl written back).
+
+Controls: AD's request controls are types in `ldap::ad` that convert
+implicitly to a raw `ldap::control`, the core's escape hatch allowed on
+every operation, so `.controls = { ldap::ad::show_deleted{} }` reads like
+a core typed control without the core's closed variant lists knowing about
+AD. `ad::show_deleted` (1.2.840.113556.1.4.417, MS-ADTS 3.1.1.3.4.1.14)
+has no value and is critical by default, as System.DirectoryServices.
+Protocols' ShowDeletedControl: on a server that does not know it the
+search fails (unavailable_critical_extension) rather than silently
+leaving deleted objects out. Tested by its encoding
+(`tests/ad_controls_tests.cpp`) and on Samba (a user added, deleted, then
+found by its objectGUID with the control, under CN=Deleted Objects with
+isDeleted TRUE, and not without it).
 
 Passwords: `ad::change_password(c, user, old, new)` sends one
 ModifyRequest of `unicodePwd` deleting the old value and adding the new
