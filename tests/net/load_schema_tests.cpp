@@ -168,3 +168,38 @@ TEST_CASE("load_schema: without a subschemaSubentry, or failing", "[net][schema]
 		CHECK(std::get<ldap::search_request>(m.log.received[1].op).base_object == "cn=Subschema");
 	}
 }
+
+TEST_CASE("load_schema: a limit code with no entry is an error", "[net][schema]")
+{
+	SECTION("on the root DSE")
+	{
+		mock_ldap m;
+		m.serve({ answer({ done_msg(1, 3, "", "time limit") }) });
+		auto s = m.run(ldap::load_schema(m.conn));
+		REQUIRE_FALSE(s.has_value());
+		CHECK(s.error().code == ldap::errc::time_limit_exceeded);
+		CHECK(s.error().diagnostic == "time limit");
+		CHECK(std::string(s.error().context) == "load schema: search \"\"");
+		m.check_server();
+		CHECK(m.log.received.size() == 1);
+	}
+	SECTION("on the subschema entry")
+	{
+		mock_ldap m;
+		m.serve({ answer({ root_dse(1), done_msg(1) }), answer({ done_msg(2, 11, "", "admin limit") }) });
+		auto s = m.run(ldap::load_schema(m.conn));
+		REQUIRE_FALSE(s.has_value());
+		CHECK(s.error().code == ldap::errc::admin_limit_exceeded);
+		CHECK(std::string(s.error().context) == "load schema: search cn=Subschema");
+		m.check_server();
+	}
+	SECTION("an entry that came back is used")
+	{
+		mock_ldap m;
+		m.serve({ answer({ root_dse(1), done_msg(1, 3) }), answer({ subschema(2), done_msg(2, 11) }) });
+		auto s = m.run(ldap::load_schema(m.conn));
+		REQUIRE(s.has_value());
+		CHECK(s->attribute_count() == 5);
+		m.check_server();
+	}
+}

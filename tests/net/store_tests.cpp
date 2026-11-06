@@ -176,6 +176,29 @@ TEST_CASE("store: get returns the other errors and decode failures", "[net][stor
 	m.check_server();
 }
 
+TEST_CASE("store: get fails on a limit code with no entry", "[net][store]")
+{
+	mock_ldap m;
+	m.serve({ answer({ done_msg(1, 3, "", "time limit") }),
+	  answer({ done_msg(2, 11, "", "admin limit") }),
+	  answer({ person_entry(3, "jdoe", "1000"), done_msg(3, 3) }) });
+	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	auto timed_out = m.run(s.get("jdoe"));
+	REQUIRE_FALSE(timed_out.has_value());
+	CHECK(timed_out.error().code == ldap::errc::time_limit_exceeded);
+	CHECK(timed_out.error().diagnostic == "time limit");
+	CHECK(std::string(timed_out.error().context) == "search uid=jdoe,ou=people,dc=example,dc=org");
+	auto limited = m.run(s.get("jdoe"));
+	REQUIRE_FALSE(limited.has_value());
+	CHECK(limited.error().code == ldap::errc::admin_limit_exceeded);
+	// The entry came back: it is the result.
+	auto found = m.run(s.get("jdoe"));
+	REQUIRE(found.has_value());
+	REQUIRE(found->has_value());
+	CHECK((*found)->uid == "jdoe");
+	m.check_server();
+}
+
 TEST_CASE("store: add, modify and remove name the entry from the key", "[net][store]")
 {
 	mock_ldap m;

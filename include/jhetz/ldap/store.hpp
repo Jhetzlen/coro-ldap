@@ -106,7 +106,8 @@ namespace detail {
 				.attributes = attribute_names<value_type>() };
 		}
 
-		// No entry, or no entry of T's object classes: nullopt.
+		// No entry, or no entry of T's object classes: nullopt. A limit code
+		// with no entry is an error.
 		[[nodiscard]] static auto get_result(result<search_result> found, const dn &entry)
 		  -> result<std::optional<value_type>>
 		{
@@ -117,6 +118,9 @@ namespace detail {
 				return std::unexpected(std::move(found.error()));
 			}
 			if (found->entries.empty()) {
+				if (!found->is_success()) {
+					return std::unexpected(search_error(*found, op_context("search", entry)));
+				}
 				return std::optional<value_type>{};
 			}
 			auto v = decode<value_type>(found->entries.front());
@@ -254,7 +258,8 @@ template<auto Naming, directory D> class store
 
 	// The entry named `key` (or at `entry`), read with a base-object search
 	// for T's attributes and object classes. nullopt when there is none
-	// (noSuchObject, or an entry that is not of T's object classes).
+	// (noSuchObject, or an entry that is not of T's object classes); a
+	// limit code with no entry is an error.
 	auto get(key_type key) -> boost::capy::task<result<std::optional<value_type>>>
 	{
 		auto entry = dn_of(key);

@@ -45,6 +45,10 @@ namespace detail {
 	// The schema in the subschema entry that `sub` found at `where`.
 	[[nodiscard]] auto subschema_of(result<search_result> sub, std::string_view where) -> result<server_schema>;
 
+	// The error of a search that ended with `r`'s result code, a limit code
+	// (is_success() false), as connection::search gives for the other codes.
+	[[nodiscard]] auto search_error(const search_result &r, std::string_view context) -> error;
+
 	// client_errc::schema_mismatch with the report, for the type named `type`.
 	[[nodiscard]] auto schema_mismatch(std::string_view type, const schema_report &report) -> error;
 
@@ -57,7 +61,8 @@ namespace detail {
 
 // Reads the server's subschema (RFC 4512 section 4.2): the root DSE's
 // subschemaSubentry (cn=Subschema if it names none), then that entry's
-// attributeTypes and objectClasses. Errors have the context "load schema".
+// attributeTypes and objectClasses. Errors have the context "load schema";
+// a search ending with a limit code and no entry is an error.
 // `d` must outlive the task.
 template<directory D> auto load_schema(D &d) -> boost::capy::task<result<server_schema>>
 {

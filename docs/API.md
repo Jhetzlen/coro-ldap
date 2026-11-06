@@ -788,7 +788,8 @@ itself needs only ICU.
   `modify`, `del`, `modify_dn` with `connection`'s signatures and
   results), satisfied by `connection`, `client` and a shared lease's
   `shared_connection`; `ldap::load_schema(directory &)`, the subschema
-  read over the public `search` (so it works on a `client`).
+  read over the public `search` (so it works on a `client`); a limit code
+  with no entry on either read is an error.
 - `jhetz/ldap/store.hpp` (coro-ldap-2cx.1, DESIGN.md section 4):
   `ldap::store`, typed CRUD of one mapped struct under a base DN, each
   entry named by one member: `ldap::store people(source, base,
@@ -798,7 +799,8 @@ itself needs only ICU.
   single-valued and writable (static_assert). `dn_of(key)`
   (`uid=<escaped key>,<base>`); `get(key)` / `get_at(dn)` -> `task<result<
   std::optional<T>>>` (a base-object search for T's attributes and object
-  classes; noSuchObject or no entry of T's classes is nullopt);
+  classes; noSuchObject or no entry of T's classes is nullopt, a limit
+  code with no entry is an error);
   `add(T)`, `modify(key, changes)` / `modify_at(dn, changes)`,
   `remove(key)` / `remove_at(dn)` -> `task<result<response>>`, each with
   its operation's controls; `search(filter = (objectClass=*), scope =
