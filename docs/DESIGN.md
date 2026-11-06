@@ -265,9 +265,9 @@ lost). The same holds for a store's `search` (`typed_search_result<record<T>>`,
 the same fields with `std::vector` entries), `client::search`, the sync
 facades' `search` and `search_paged` (the pages collected:
 the last page's done), and `chase_search` (`chased_search` gains the same
-done fields, the origin's or the referral target's; a continuation
-reference's search ending with a limit code keeps its entries and clears
-`complete`). The streams (`search_stream`, `paged_search`) are unchanged:
+done fields, the origin's or the referral target's; any search of the
+chase ending with a limit code, the origin's included, keeps its entries
+and clears `complete`). The streams (`search_stream`, `paged_search`) are unchanged:
 `next()` reports the code as an error after the entries it already handed
 out.
 

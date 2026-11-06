@@ -402,7 +402,8 @@ itself needs only ICU.
   entries of every server reached, one `referral_attempt` per URI tried
   (`followed`, `skipped_policy`, `skipped_loop`, `limit_reached`,
   `unparseable`, `failed` with its error), and `complete == false` when a
-  continuation reference could not be followed (partial results are never
+  continuation reference could not be followed or a search ended with a
+  limit code (partial results are never
   a plain success; such a reference never fails the search). A referral
   result that cannot be followed fails the call (the last error, else the
   referral; its context counts the attempts' outcomes). `chase_compare(conn, params, connector, policy)` does the

@@ -507,14 +507,14 @@ namespace {
 		std::deque<pending_reference> queue{};
 
 		// Takes the entries of `r`, and queues its references (or, when they
-		// are not followed, counts them). A continuation reference's search
-		// that ended with a limit code clears `complete`.
-		void take(search_reached &r, bool continuation)
+		// are not followed, counts them). A search that ended with a limit
+		// code clears `complete`.
+		void take(search_reached &r)
 		{
 			for (auto &e : r.value.entries) {
 				out->entries.push_back(std::move(e));
 			}
-			if (continuation && !r.value.done.is_success()) {
+			if (!r.value.done.is_success()) {
 				out->complete = false;
 			}
 			if (r.value.references.empty()) {
@@ -570,7 +570,7 @@ namespace detail {
 			.diagnostic_message = origin_run.done.diagnostic_message,
 			.controls = origin_run.controls };
 		reference_queue refs{ .st = &st, .out = &out };
-		refs.take(*first.value, false);
+		refs.take(*first.value);
 		while (!refs.queue.empty()) {
 			if (st.exhausted()) {
 				refs.drop_rest();
@@ -588,7 +588,7 @@ namespace detail {
 				co_return { .value = std::unexpected(std::move(f.error())) };
 			}
 			if (f->target) {
-				refs.take(*f->target, true);
+				refs.take(*f->target);
 			} else if (!f->loop) {
 				out.complete = false;
 			}

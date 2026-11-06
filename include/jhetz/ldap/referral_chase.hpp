@@ -132,8 +132,8 @@ using referral_connector = std::function<boost::capy::task<result<connection *>>
 // (sizeLimitExceeded, timeLimitExceeded, adminLimitExceeded: the entries
 // received are kept, as search() keeps them) fails the call, on the origin
 // or on the target of a referral result (as search() does); on the target
-// of a continuation reference it only makes that URI failed, and a limit
-// code there keeps that target's entries and clears `complete`.
+// of a continuation reference it only makes that URI failed. A limit code
+// anywhere keeps the entries received and clears `complete`.
 auto chase_search(shared_connection origin,
   search_params request,
   referral_connector connector,

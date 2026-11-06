@@ -265,6 +265,21 @@ TEST_CASE("chase_search: limit codes keep the entries", "[net][referral]")
 	w.check_servers();
 }
 
+TEST_CASE("chase_search: the origin's limit code alone leaves the search partial", "[net][referral]")
+{
+	world w;
+	w.serve(
+	  "a.example", { answer({ entry_msg(1, "uid=jdoe,ou=a,dc=example,dc=org", "A"), done_msg(1, 11, "", "admin") }) });
+	auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector()));
+	REQUIRE(r.has_value());
+	CHECK(r->result_code == 11);
+	CHECK(r->diagnostic_message == "admin");
+	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=a,dc=example,dc=org" });
+	CHECK(r->referrals.empty());
+	CHECK_FALSE(r->complete);
+	w.check_servers();
+}
+
 TEST_CASE("chase_search: nested references, one hop deeper each", "[net][referral]")
 {
 	world w;

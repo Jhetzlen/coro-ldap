@@ -144,12 +144,15 @@ struct chased_search
 	// (max_targets reached or the timeout spent), or not followed at all
 	// (ldap::client with referral_options::follow_references off).
 	std::size_t unlisted = 0;
-	// False if some continuation reference was not followed by any of its
-	// URIs (skipped, unparseable, over a limit, failed, left unexamined
-	// when the chase stopped, or not followed at all), or was followed to a
-	// search that ended with a limit code: the entries are then partial. A reference skipped only as a loop leaves it
-	// true (its server already got that search; loops are recognized before max_targets and the budget are checked),
-	// but one over max_hops or left unexamined clears it (whether it was a loop is not known).
+	// False when the entries are partial: a search ended with a limit
+	// code (the origin's, a referral target's or a followed continuation
+	// reference's), or some continuation reference was not followed by any
+	// of its URIs (skipped, unparseable, over a limit, failed, left
+	// unexamined when the chase stopped, or not followed at all). A
+	// reference skipped only as a loop leaves it true (its server already
+	// got that search; loops are recognized before max_targets and the
+	// budget are checked), but one over max_hops or left unexamined clears
+	// it (whether it was a loop is not known).
 	bool complete = true;
 };
 
