@@ -20,16 +20,6 @@ namespace corosio = boost::corosio;
 
 namespace jhetz::ldap {
 
-auto detail::op_context(std::string_view op, const dn &d) -> std::string
-{
-	if (d.empty()) {
-		return detail::format("{} \"\"", op);
-	}
-	std::string text = detail::format("{} ", op);
-	detail::append_sanitized(text, d.to_string(), 256);// as mapping's entry_context
-	return text;
-}
-
 using detail::core_ref;
 using detail::no_connection;
 

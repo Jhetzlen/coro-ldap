@@ -51,12 +51,6 @@ namespace detail {
 
 	// client_errc::schema_mismatch with the report, for the type named `type`.
 	[[nodiscard]] auto schema_mismatch(std::string_view type, const schema_report &report) -> error;
-
-	// An operation's error context: "search ou=people,dc=example,dc=org",
-	// `search ""` for the root DSE. The DN is often the server's text (an
-	// entry's DN, a referral's): sanitized and cut at 256 bytes, as an
-	// entry's in decode errors.
-	auto op_context(std::string_view op, const dn &d) -> std::string;
 }// namespace detail
 
 // Reads the server's subschema (RFC 4512 section 4.2): the root DSE's

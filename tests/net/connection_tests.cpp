@@ -10,6 +10,7 @@
 #include "../counting_resource.hpp"
 #include "../value_semantics.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "mock_ldap.hpp"

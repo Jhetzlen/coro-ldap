@@ -1,10 +1,13 @@
-// The ldap::mod builders and end_transaction_result's lookup
-// (operations.hpp): part of the codec.
+// The ldap::mod builders, end_transaction_result's lookup and
+// detail::op_context (operations.hpp): part of the codec.
 #include "jhetz/ldap/operations.hpp"
+
+#include "format_util.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <initializer_list>
+#include <string>
 #include <string_view>
 
 namespace jhetz::ldap::mod {
@@ -43,6 +46,20 @@ auto end_transaction_result::find_update_controls(std::int32_t message_id) const
 {
 	const auto it = std::ranges::find(updates_controls, message_id, &update_controls::message_id);
 	return it == updates_controls.end() ? nullptr : &it->controls;
+}
+
+}// namespace jhetz::ldap
+
+namespace jhetz::ldap {
+
+auto detail::op_context(std::string_view op, const dn &d) -> std::string
+{
+	if (d.empty()) {
+		return detail::format("{} \"\"", op);
+	}
+	std::string text = detail::format("{} ", op);
+	detail::append_sanitized(text, d.to_string(), 256);// as mapping's entry_context
+	return text;
 }
 
 }// namespace jhetz::ldap

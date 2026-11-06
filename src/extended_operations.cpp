@@ -2,7 +2,6 @@
 
 #include "jhetz/ldap/attribute.hpp"
 #include "jhetz/ldap/ber.hpp"
-#include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/mapping.hpp"
 
 #include "format_util.hpp"

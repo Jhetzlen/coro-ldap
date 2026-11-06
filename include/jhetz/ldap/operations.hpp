@@ -295,4 +295,12 @@ struct end_transaction_result
 	  -> const std::pmr::vector<control> *;
 };
 
+namespace detail {
+	// An operation's error context: "search ou=people,dc=example,dc=org",
+	// `search ""` for the root DSE. The DN is often the server's text (an
+	// entry's DN, a referral's): sanitized and cut at 256 bytes, as an
+	// entry's in decode errors.
+	[[nodiscard]] auto op_context(std::string_view op, const dn &d) -> std::string;
+}// namespace detail
+
 }// namespace jhetz::ldap
