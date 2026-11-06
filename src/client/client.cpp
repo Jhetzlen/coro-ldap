@@ -1194,7 +1194,7 @@ namespace detail {
 		template<class T> static auto origin_failed(const result<T> & /*r*/) -> bool { return true; }
 		template<class T> static auto origin_failed(const chase_result<T> &r) -> bool { return r.origin_failed; }
 
-		// search(), compare(), who_am_i() and the chases: `op` on a shared
+		// search(), compare() and the chases: `op` on a shared
 		// lease, retried once after a retryable failure of the pooled
 		// connection's own operation.
 		template<class T, class Op> static auto read(std::shared_ptr<client_state> self, Op op) -> capy::task<result<T>>

@@ -302,7 +302,7 @@ URL (`ldap://localhost`).
 | `add.cpp` | add the user `uid=jane` |
 | `move.cpp` | move `uid=jane` from `ou=people` to `ou=alumni` (`modify_dn` with `.new_superior`; `.new_rdn` alone renames) |
 | `delete.cpp` | delete the user `uid=jane` from `ou=alumni` (run `add`, `move`, then `delete`) |
-| `password.cpp` | reset a user's password (RFC 3062 or Active Directory, from the root DSE) |
+| `password.cpp` | reset a user's password (RFC 3062 Password Modify) |
 | `starttls.cpp` | connect with StartTLS, then bind |
 | `cancel.cpp` | search the whole tree; Ctrl-C gives up on it (`capy::when_any` with `ldap::raceable`) |
 | `paged.cpp` | page through `ou=people` 100 entries at a time, sorted by `mail` (RFC 2696 paging, RFC 2891 server-side sort) |
