@@ -2197,8 +2197,8 @@ and its destructor joins the thread.
   source; CMake picks it instead of `trust_store_default.cpp`; below),
   file names through `std::filesystem::path`.
   Linux only: abstract ldapi:// sockets, SASL GSSAPI (no SSPI), the
-  integration tests, coverage and the fuzzers. `/WX` is off by default on
-  MSVC and clang-cl until the first clean build (coro-ldap-2we). macOS is
+  integration tests, coverage and the fuzzers. `/WX` is on by default with
+  MSVC (built clean with 19.44), off on clang-cl (not built yet). macOS is
   not supported.
 - Corosio and Capy pinned by commit (FetchContent), used only by
   `jhetz_ldap_net` (option `JHETZ_LDAP_BUILD_NET`, off by default in fuzz builds);

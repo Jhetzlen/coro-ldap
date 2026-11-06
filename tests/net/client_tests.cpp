@@ -2085,8 +2085,10 @@ TEST_CASE("client: when read forwarders do not retry", "[net][client][retry]")
 	{
 		pool_fixture f;
 		const auto down = f.refused_url();
+		// An acquire_timeout above Winsock's retries of a refused SYN (about
+		// a second before WSAECONNREFUSED; Linux refuses at once).
 		f.make({ .servers = { down },
-		  .acquire_timeout = milliseconds(100),
+		  .acquire_timeout = milliseconds(10'000),
 		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) },
 		  .observer = &f.obs });
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));

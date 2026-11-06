@@ -650,12 +650,12 @@ namespace detail {
 			}
 			// Stop the connection attempts in progress: waiting acquires fail
 			// at once.
-			for (const auto &attempt : std::exchange(attempts, {})) {
+			for (auto &attempt : std::exchange(attempts, {})) {
 				attempt.request_stop();
 			}
 			// And the referral chases: no referred server is asked about,
 			// connected to or set up once the client is closed.
-			for (const auto &chase : std::exchange(chases_running, {})) {
+			for (auto &chase : std::exchange(chases_running, {})) {
 				chase.request_stop();
 			}
 			// The observer need only outlive close(): no hook runs after it.
@@ -1274,7 +1274,7 @@ namespace detail {
 		static auto stopped_by_close(std::shared_ptr<client_state> self, capy::task<chase_result<T>> chase)
 		  -> capy::task<chase_result<T>>
 		{
-			const std::stop_source stop;
+			std::stop_source stop;
 			if (self->closed) {
 				stop.request_stop();
 			} else {

@@ -369,7 +369,14 @@ TEST_CASE("sasl layer: a write failure keeps its own context", "[net][sasl][sasl
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::client_errc::message_too_large);
 
+#ifdef _WIN32
+	// Windows' AF_UNIX pair takes a whole 1 MiB protected buffer at once and
+	// completes or fails each write whole: 64 buffers fill it, and the
+	// failure falls between two of them (whole buffers' plaintext counted).
+	const std::string big(std::size_t{ 1 } << 26, 'x');
+#else
 	const std::string big(std::size_t{ 1 } << 20, 'x');
+#endif
 	outcome<ldap::result<void>> write;
 	spawn(p.ioc, net::write_bytes(p.client, as_bytes(big)), write);
 	while (p.ioc.poll() != 0) {}// the writer parks on a full socket
@@ -381,9 +388,14 @@ TEST_CASE("sasl layer: a write failure keeps its own context", "[net][sasl][sasl
 	REQUIRE_FALSE(write.get().has_value());
 	const std::string context(write.get().error().context);
 	CHECK_THAT(context, !ContainsSubstring("accepted"));
+#ifdef _WIN32
+	CHECK_THAT(context, Catch::Matchers::StartsWith("write client ("));
+	CHECK_THAT(context, Catch::Matchers::EndsWith(" of 67108864 bytes written)"));
+#else
 	CHECK_THAT(
 	  context, Catch::Matchers::StartsWith("write client: SASL security layer: a protected buffer cut after "));
 	CHECK_THAT(context, ContainsSubstring(" of its 1048581 octets"));
+#endif
 }
 
 TEST_CASE("sasl layer: an oversized or broken buffer fails the read", "[net][sasl][sasl_layer]")

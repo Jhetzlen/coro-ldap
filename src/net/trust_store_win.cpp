@@ -299,8 +299,7 @@ namespace {
 	auto policy_reason(DWORD status) -> std::string
 	{
 		const auto code = static_cast<HRESULT>(status);
-		const auto *const it =
-		  std::ranges::find_if(policy_errors, [code](const policy_error &e) { return e.code == code; });
+		const auto it = std::ranges::find_if(policy_errors, [code](const policy_error &e) { return e.code == code; });
 		if (it != policy_errors.end()) {
 			return ldap::detail::format("Windows certificate chain: {} (0x{:08X})", it->text, status);
 		}

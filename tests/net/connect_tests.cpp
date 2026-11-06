@@ -1844,7 +1844,12 @@ auto handshake_with_platform_chain(corosio::io_context &ioc,
 // runs the same callback logic here.
 TEST_CASE("TLS with the platform verifying the chain", "[net][connect][tls]")
 {
+	// The default (system) trust store: CryptoAPI verifies on Windows only.
+#ifdef _WIN32
+	CHECK(net::detail::make_tls_setup({}).value().state->system_chain != nullptr);
+#else
 	CHECK(net::detail::make_tls_setup({}).value().state->system_chain == nullptr);
+#endif
 	CHECK(net::detail::make_tls_setup({ .ca_pem = std::pmr::string(pki().ca_pem()) }).value().state->system_chain
 		  == nullptr);
 	CHECK(net::detail::make_tls_setup({ .verification = net::certificate_verification::insecure_accept_any })

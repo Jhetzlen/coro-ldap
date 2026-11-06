@@ -43,7 +43,7 @@ others; the list of `jhetz::ldap_net` headers is in `tests/CMakeLists.txt`).
 | `JHETZ_LDAP_WITH_GSSAPI` | `OFF` | SASL GSSAPI (Kerberos) in `jhetz::ldap_net`, its tests and example; needs the GSS-API library (pkg-config `krb5-gssapi`). The installed package then has the component `gssapi` |
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
-| `JHETZ_LDAP_WERROR` | `ON` (`OFF` as a subproject, and on MSVC / clang-cl) | warnings are errors in our own targets (never in Corosio, Capy or Catch2); off when added with `add_subdirectory` or FetchContent, so a newer compiler's new warnings do not break consumers. Off on MSVC and clang-cl until the first clean Windows build (`/W4` still shows the warnings; `-DJHETZ_LDAP_WERROR=ON` adds `/WX`; coro-ldap-2we) |
+| `JHETZ_LDAP_WERROR` | `ON` (`OFF` as a subproject, and on clang-cl) | warnings are errors in our own targets (never in Corosio, Capy or Catch2); off when added with `add_subdirectory` or FetchContent, so a newer compiler's new warnings do not break consumers. `/WX` on MSVC; off on clang-cl, not built yet (`/W4` still shows the warnings; `-DJHETZ_LDAP_WERROR=ON` adds `/WX`) |
 | `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench` (see below; not run by ctest or CI) |
 | `JHETZ_LDAP_COVERAGE` | `OFF` | Clang source-based coverage on our own targets (see [Coverage](#coverage)) |
 | `JHETZ_LDAP_CLANG_TIDY` | `OFF` | run clang-tidy (`.clang-tidy`) on our own targets while building them (see [clang-tidy](#clang-tidy)) |
@@ -51,11 +51,12 @@ others; the list of `jhetz::ldap_net` headers is in `tests/CMakeLists.txt`).
 ## Windows
 
 Status: the code has been ported to Windows (Winsock through Corosio, the
-CryptoAPI trust store and chain verification, wide file paths, MSVC-safe code and CMake), but no
-Windows build has run here: there is no Windows toolchain in the
-development setup, so the port is checked only by syntax checks against the
-mingw-w64 headers. Expect a first build to turn up warnings and small
-errors; reports are welcome.
+CryptoAPI trust store and chain verification, wide file paths, MSVC-safe code and CMake). The
+Linux development setup has no Windows toolchain and checks the port only
+by syntax checks against the mingw-w64 headers. A first MSVC build ran on
+2026-11-06 (Visual Studio 2022 17.14, MSVC 19.44, vcpkg's ICU 79.1 and
+OpenSSL 3.6.5): `/W4` clean, 751 of 752 tests passing in RelWithDebInfo
+(coro-ldap-0wp is the one left). clang-cl and MinGW have not been built.
 
 Compilers: MSVC 19.40 (Visual Studio 2022 17.10) or newer, clang-cl on such
 a toolset (configure checks `MSVC_VERSION` for both), or MinGW-w64 with GCC
@@ -109,6 +110,23 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+The vcpkg bundled with Visual Studio (`VC\vcpkg`) has no classic mode
+(`vcpkg install icu openssl` fails): put a `vcpkg.json` listing `icu` and
+`openssl` (with a `builtin-baseline`, which `vcpkg x-update-baseline
+--add-initial-baseline` adds) in a directory of its own, run `vcpkg install
+--triplet x64-windows --x-install-root=<dir>` there, and configure with
+`-DVCPKG_MANIFEST_MODE=OFF -DVCPKG_INSTALLED_DIR=<dir>` besides the
+toolchain file and triplet.
+
+CMake 4.5.0-rc3 stops in Capy's `CMakeLists.txt` (`source_group(TREE)`
+given `capy.hpp`, outside its tree); the CMake bundled with Visual Studio
+(3.31, `Common7\IDE\CommonExtensions\Microsoft\CMake`) configures.
+
+Run the tests from a Release or RelWithDebInfo build: in Debug, MSVC's
+checked iterators (`_ITERATOR_DEBUG_LEVEL=2`) make every container allocate
+a proxy from its allocator, so the allocation-counting tests (`[pmr]`,
+`[alloc]`, the read and write buffers' counts) fail there.
+
 Catch2, Corosio and Capy are fetched as on Linux. The tests are listed when
 ctest runs them (`DISCOVERY_MODE PRE_TEST`), so the ICU and OpenSSL DLLs
 must be found at test time only: vcpkg's toolchain copies them next to the
@@ -121,12 +139,12 @@ for Release) on `PATH`. Use the dynamic triplet: with a static ICU
 What the build does on Windows, for our own targets only: `/W4 /utf-8
 /bigobj` on MSVC and clang-cl (`-Wa,-mbig-obj` on MinGW),
 `_CRT_SECURE_NO_WARNINGS`, `NOMINMAX` and `WIN32_LEAN_AND_MEAN`, and
-`jhetz_ldap_net` links `crypt32`. Warnings are not errors on MSVC and
-clang-cl by default (`/WX` is off until the first clean build;
-`-DJHETZ_LDAP_WERROR=ON` turns it on; coro-ldap-2we tracks the switch).
+`jhetz_ldap_net` links `crypt32`. Warnings are errors on MSVC (`/WX`) as
+with GCC and Clang, but not by default on clang-cl, which has not been
+built yet (`-DJHETZ_LDAP_WERROR=ON` turns it on).
 Corosio's and Capy's targets get none of these flags, so no `/bigobj`
-either: if MSVC stops on C1128 (too many sections) in one of their files,
-add `/bigobj` to `CMAKE_CXX_FLAGS`. The `compile.*` tests (the mapping's
+either; MSVC 19.44 built them without C1128 (too many sections), but if it
+comes up, add `/bigobj` to `CMAKE_CXX_FLAGS`. The `compile.*` tests (the mapping's
 compile-time diagnostics) are not registered with MSVC or clang-cl.
 
 ### Behaviour that differs on Windows
@@ -181,21 +199,31 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
 - A few `net.*` tests need Linux interfaces (the `getaddrinfo` interposer,
   `getifaddrs` for a link-local address) and skip elsewhere.
 
-### Open questions for the first Windows build
+### Seen in the first Windows build
 
-- `/W4` warnings: none has been seen yet. Fix them, then default
-  `JHETZ_LDAP_WERROR` back on (coro-ldap-2we).
-- C1128 in Corosio's or Capy's sources without `/bigobj` (above).
+- MSVC 19.44 refuses what GCC and Clang accept: a `constexpr` function
+  calling ICU's `U_FAILURE` (a plain inline function in C++), `const auto
+  *` for a `std::array` iterator (a class there), `request_stop()` on a
+  const `std::stop_source` (non-const in the standard, const in
+  libstdc++), a `friend class client;` with no prior `sync::client` (bound
+  to `ldap::client`), and Catch2 comparing an ordering with `0` (passed as
+  an `int`, where MSVC's operators take a literal zero).
+- Refused connects: Winsock retries the SYN after an RST and fails with
+  `WSAECONNREFUSED` about a second later, where Linux fails at once; a test
+  that connects to `refused_port` needs a timeout above that.
+- Large writes: Windows completes an overlapped write of 1 MiB whole, on
+  AF_UNIX and on TCP with small socket buffers, where Linux fills the
+  socket and parks the writer. A test that needs a parked writer writes
+  more (`sasl_layer_tests.cpp`), or fails (coro-ldap-0wp).
+- The ldapi, `[tls]` (CryptoAPI chain verification included) and
+  `ad_filetime` tests pass.
+
+### Open questions for Windows
+
 - AF_UNIX: which error a connect to a missing socket path gives (the ldapi
   test accepts any "no such file" or "connection refused" condition), and
   whether Corosio's `local_endpoint` and Windows agree on paths near
   `max_path_length`.
-- Refused connects: Winsock retries the SYN after an RST (about a second,
-  `TcpMaxConnectRetransmissions`) before failing with `WSAECONNREFUSED`,
-  where Linux fails at once. The tests that connect to `refused_port`
-  (`tests/net/net_test_support.hpp`) with a short timeout (e.g. the
-  client's `acquire_timeout` of 100 ms) may then see a timeout instead of
-  the refusal; unverified.
 - Abstract addresses: Windows' AF_UNIX has been said to accept them;
   connect() refuses them off Linux until that is checked.
 - Time zones: `std::chrono::locate_zone` on MSVC uses ICU's tzdb, whose
@@ -203,12 +231,9 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
   offset, not "CET").
 - Static ICU (`U_STATIC_IMPLEMENTATION`, above) and a static OpenSSL's
   extra system libraries.
-- CryptoAPI chain verification (coro-ldap-1q5), syntax-checked only:
-  that `ldaps://` to a public server chaining to a root not yet in `ROOT`
-  connects (AuthRoot fetched); that the `[tls]` tests pass, in particular
-  "untrusted CA with the default (system) trust store" now failing with
-  `Windows certificate chain: untrusted root (CERT_E_UNTRUSTEDROOT, ...)`;
-  that a revoked server certificate fails with `CRYPT_E_REVOKED` while an
+- CryptoAPI chain verification (coro-ldap-1q5), beyond the `[tls]` tests
+  (which pass): that `ldaps://` to a public server chaining to a root not
+  yet in `ROOT` connects (AuthRoot fetched); that a revoked server certificate fails with `CRYPT_E_REVOKED` while an
   unreachable CRL distribution point passes (the SSL policy honouring
   `CERT_CHAIN_POLICY_IGNORE_ALL_REV_UNKNOWN_FLAGS`); that
   `SECURITY_FLAG_IGNORE_CERT_CN_INVALID` with a null `pwszServerName`

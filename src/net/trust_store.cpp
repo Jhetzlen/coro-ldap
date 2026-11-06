@@ -99,7 +99,7 @@ auto strong_sign_for_level(int security_level) -> std::optional<strong_sign_list
 	if (security_level <= 0) {
 		return std::nullopt;
 	}
-	const auto level = static_cast<std::size_t>(std::min<int>(security_level, min_security_bits.size()));
+	const auto level = static_cast<std::size_t>(std::min(security_level, static_cast<int>(min_security_bits.size())));
 	const int bits = min_security_bits.at(level - 1);
 	strong_sign_lists out;
 	for (const int digest : sha2_digest_bits) {

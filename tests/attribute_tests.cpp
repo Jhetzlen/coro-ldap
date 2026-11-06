@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -388,7 +389,9 @@ TEST_CASE("attribute comparison and hashing ignore case", "[attribute]")
 	CHECK(ldap::attribute{ "a" } < ldap::attribute{ "B" });
 	CHECK(ldap::attribute{ "B" } > ldap::attribute{ "a" });
 	CHECK(ldap::attribute{ "cn" } < ldap::attribute{ "cn;x" });
-	CHECK((ldap::attribute{ "CN" } <=> ldap::attribute{ "cn" }) == 0);
+	// Not `== 0`: Catch2's decomposer would pass the 0 as an int, which
+	// MSVC's comparison operators (taking a literal zero) refuse.
+	CHECK((ldap::attribute{ "CN" } <=> ldap::attribute{ "cn" }) == std::weak_ordering::equivalent);
 
 	std::unordered_set<ldap::attribute> set{
 		ldap::attribute{ "mail" }, ldap::attribute{ "MAIL" }, ldap::attribute{ "cn" }

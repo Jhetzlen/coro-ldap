@@ -159,7 +159,7 @@ namespace {
 
 	auto is_combining_mark(UChar32 c) noexcept -> bool
 	{
-		const auto *const it = std::ranges::upper_bound(combining_marks, c, {}, &code_point_range::first);
+		const auto it = std::ranges::upper_bound(combining_marks, c, {}, &code_point_range::first);
 		return it != combining_marks.begin() && c <= std::prev(it)->last;
 	}
 
@@ -1013,7 +1013,7 @@ namespace {
 
 	auto find_rule(std::string_view rule) noexcept -> const rule_entry *
 	{
-		const auto *const it = std::ranges::find_if(
+		const auto it = std::ranges::find_if(
 		  rules, [rule](const rule_entry &e) { return e.oid == rule || detail::iequals(e.name, rule); });
 		return it == rules.end() ? nullptr : &*it;
 	}
@@ -1368,7 +1368,7 @@ namespace {
 	template<std::size_t N>
 	auto builtin_oid(const std::array<type_name, N> &table, std::string_view name) noexcept -> std::string_view
 	{
-		const auto *const it = std::ranges::lower_bound(table, name, ci_less, &type_name::name);
+		const auto it = std::ranges::lower_bound(table, name, ci_less, &type_name::name);
 		return it != table.end() && detail::iequals(it->name, name) ? it->oid : std::string_view{};
 	}
 

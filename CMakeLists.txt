@@ -23,10 +23,9 @@ option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap_net (transports and connect; fetc
 option(JHETZ_LDAP_SANITIZE "Build all targets with AddressSanitizer and UBSan" OFF)
 # On by default for our own builds; off as a subproject (add_subdirectory,
 # FetchContent) so a consumer's newer compiler is not broken by new warnings.
-# Off by default on MSVC and clang-cl too (/W4 still shows the warnings): the
-# Windows port has not had its first clean build yet. Turn the default on
-# once it has (-DJHETZ_LDAP_WERROR=ON meanwhile).
-if(PROJECT_IS_TOP_LEVEL AND NOT MSVC)
+# Off by default on clang-cl (/W4 still shows the warnings): only MSVC itself
+# has had a clean Windows build (19.44); -DJHETZ_LDAP_WERROR=ON to try it.
+if(PROJECT_IS_TOP_LEVEL AND NOT (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
     set(jhetz_ldap_werror_default ON)
 else()
     set(jhetz_ldap_werror_default OFF)

@@ -431,9 +431,18 @@ TEST_CASE("system, Capy and TLS codes map to conditions", "[error][cond]")
 	CHECK(cond_of(std::make_error_code(std::errc::no_such_file_or_directory)) == cond::invalid_input);
 	CHECK(cond_of(std::make_error_code(std::errc::invalid_argument)) == cond::invalid_input);
 	CHECK(cond_of(std::make_error_code(std::errc::not_enough_memory)) == std::nullopt);
-	// The system category, as the network layer reports errno values.
-	CHECK(cond_of(std::error_code(ETIMEDOUT, std::system_category())) == cond::timeout);
-	CHECK(cond_of(std::error_code(ECONNRESET, std::system_category())) == cond::connection_lost);
+	// The system category, as the network layer reports its errors: errno
+	// values, or on Windows Winsock's (the CRT's ETIMEDOUT and ECONNRESET
+	// are other Win32 codes there).
+#ifdef _WIN32
+	constexpr int timed_out = 10060;// WSAETIMEDOUT
+	constexpr int reset = 10054;// WSAECONNRESET
+#else
+	constexpr int timed_out = ETIMEDOUT;
+	constexpr int reset = ECONNRESET;
+#endif
+	CHECK(cond_of(std::error_code(timed_out, std::system_category())) == cond::timeout);
+	CHECK(cond_of(std::error_code(reset, std::system_category())) == cond::connection_lost);
 
 	const named_category capy("boost.capy");
 	CHECK(cond_of(std::error_code(1, capy)) == cond::connection_lost);// eof

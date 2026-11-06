@@ -68,6 +68,9 @@
 namespace jhetz::ldap::sync {
 
 class transaction;
+// Declared before lease, whose friend declaration MSVC would otherwise bind
+// to ldap::client from the enclosing namespace.
+class client;
 
 namespace detail {
 	template<class> struct task_value;

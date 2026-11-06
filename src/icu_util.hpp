@@ -12,8 +12,10 @@
 
 namespace jhetz::ldap::detail {
 
-// ICU's U_FAILURE as a bool (it yields UBool, an integer type).
-constexpr auto icu_failed(UErrorCode status) noexcept -> bool { return U_FAILURE(status) != 0; }
+// ICU's U_FAILURE as a bool (it yields UBool, an integer type). Not
+// constexpr: in C++ U_FAILURE is a non-constexpr inline function, which MSVC
+// refuses in a constexpr function (GCC and Clang accept it, P2448).
+inline auto icu_failed(UErrorCode status) noexcept -> bool { return U_FAILURE(status) != 0; }
 
 // One step of UTF-8 decoding at s[i] with ICU's U8_NEXT: the code point, or a
 // negative value if the octets there are ill-formed (overlong, surrogate,

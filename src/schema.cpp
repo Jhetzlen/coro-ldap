@@ -682,7 +682,7 @@ namespace detail {
 	void check_field(const server_schema &s,
 	  std::string_view name,
 	  cardinality kind,
-	  bool read_only,
+	  bool member_read_only,
 	  std::span<const char *const> syntaxes,
 	  std::span<const char *const> rejected,
 	  schema_report &out)
@@ -703,7 +703,7 @@ namespace detail {
 				"single-valued member, but the attribute is multi-valued (decoding fails if an entry has several "
 				"values)" });
 		}
-		if (!read_only && a->no_user_modification) {
+		if (!member_read_only && a->no_user_modification) {
 			out.issues.push_back({ .what = schema_issue::kind::writable_but_no_user_modification,
 			  .name = std::string(name),
 			  .detail = "the attribute is NO-USER-MODIFICATION: mark the member ldap::read_only" });
