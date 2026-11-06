@@ -45,10 +45,10 @@ inline constexpr std::size_t tls_exporter_size = 32;
 // tls_handshake() never passes a null `ssl` (it fails closed when the
 // verify callback did not run); a null one is handled defensively by
 // only clearing im.
-void record_tls_session(transport::impl &im, ssl_st *ssl);
+void record_tls_session(transport::layers &im, ssl_st *ssl);
 
 // Clears what record_tls_session() set, and tls_exporter_used.
-void clear_tls_session(transport::impl &im) noexcept;
+void clear_tls_session(transport::layers &im) noexcept;
 
 // The channel bindings that sasl_bind hands a mechanism
 // (sasl_bind_context::bindings): im's, without tls-exporter once an
@@ -57,6 +57,6 @@ void clear_tls_session(transport::impl &im) noexcept;
 // instance on a TLS connection). The default type is then
 // tls-server-end-point when the connection has it, else none. Views into
 // im, as transport::channel_bindings()'s.
-[[nodiscard]] auto authentication_channel_bindings(const transport::impl &im) noexcept -> ldap::channel_bindings;
+[[nodiscard]] auto authentication_channel_bindings(const transport::layers &im) noexcept -> ldap::channel_bindings;
 
 }// namespace jhetz::ldap::net::detail

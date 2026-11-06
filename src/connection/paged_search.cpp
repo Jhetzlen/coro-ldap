@@ -1,7 +1,7 @@
 #include "jhetz/ldap/connection.hpp"
 
 #include "../format_util.hpp"
-#include "impl.hpp"
+#include "core.hpp"
 #include "search.hpp"
 
 #include <boost/capy/cond.hpp>
@@ -22,7 +22,7 @@ namespace capy = boost::capy;
 namespace jhetz::ldap {
 
 using detail::deadline_after;
-using detail::impl_ref;
+using detail::core_ref;
 using detail::no_connection;
 using detail::op_context;
 using detail::search_message;
@@ -32,7 +32,7 @@ using detail::start_search;
 
 struct paged_search::state
 {
-	impl_ref conn;
+	core_ref conn;
 	search_params params;
 	std::int32_t page_size;
 	std::pmr::memory_resource *mr;
@@ -129,17 +129,17 @@ struct paged_search::state
 auto connection::search_paged(search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
   -> capy::task<result<ldap::paged_search>>
 {
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection(op_context("search", request.base)));
 	}
 	if (page_size <= 0) {
 		co_return fail(client_errc::encode_error,
 		  detail::format("{}: page size {} is not positive", op_context("search", request.base), page_size));
 	}
-	std::pmr::polymorphic_allocator<> alloc(impl_->mr());
+	std::pmr::polymorphic_allocator<> alloc(core_->mr());
 	auto *st = alloc.new_object<paged_search::state>(
-	  paged_search::state{ .conn = impl_ref(impl_), .params = std::move(request), .page_size = page_size, .mr = mr });
-	ldap::paged_search out = connection::impl::make_paged(st);
+	  paged_search::state{ .conn = core_ref(core_), .params = std::move(request), .page_size = page_size, .mr = mr });
+	ldap::paged_search out = connection::core::make_paged(st);
 	if (auto r = st->request_page({}, co_await capy::this_coro::stop_token); !r) {
 		co_return std::unexpected(std::move(r.error()));
 	}
@@ -150,7 +150,7 @@ namespace detail {
 
 	auto paged_done(ldap::paged_search &p) noexcept -> const ldap_result *
 	{
-		auto *state = connection::impl::paged_state(p);
+		auto *state = connection::core::paged_state(p);
 		return state == nullptr ? nullptr : search_done(state->current);
 	}
 
@@ -164,7 +164,7 @@ namespace {
 			return;
 		}
 		s->stop();
-		impl_ref keep = s->conn;
+		core_ref keep = s->conn;
 		std::pmr::polymorphic_allocator<> alloc(keep->mr());
 		alloc.delete_object(s);
 	}

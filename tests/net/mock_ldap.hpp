@@ -8,7 +8,7 @@
 // provide()-before-read use in message_io_tests.cpp never parks a reader.
 #pragma once
 
-#include "../../src/net/transport_impl.hpp"
+#include "../../src/net/transport_layers.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "net_test_support.hpp"

@@ -1,9 +1,8 @@
-// Internal: the core of a connection (connection::impl, its state private
-// behind the core operations the features use), and the helpers they
-// share. Coroutine helpers are only declared here: each is defined once,
-// the core (impl's members, binds' serialization, request_response) in
-// core.cpp, the rest in the module of the operations that use them
-// (operations.cpp, password.cpp).
+// Internal: connection::core, a connection's state behind the operations
+// the features use, and the helpers they share. Coroutine helpers are only
+// declared here and defined once: core's members, binds' serialization and
+// request_response in core.cpp, the rest in the module of the operations
+// that use them (operations.cpp, ...).
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"
@@ -115,7 +114,7 @@ namespace detail {
 
 namespace detail {
 
-	class impl_ref;
+	class core_ref;
 
 }// namespace detail
 
@@ -123,19 +122,19 @@ namespace detail {
 // through the members below, which keep its invariants (message ids, the
 // writer, the reader, the due answers, the bind and StartTLS exclusions).
 // Its members are grouped by concern (each flag beside its event), not
-// packed: one impl per connection, so the padding costs nothing that counts.
+// packed: one core per connection, so the padding costs nothing that counts.
 // NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding): grouped by concern, see above
-class connection::impl
+class connection::core
 {
   public:
-	impl(boost::corosio::io_context &ioc,
+	core(boost::corosio::io_context &ioc,
 	  net::transport t,
 	  const connection_options &options,
 	  std::pmr::memory_resource *memory);
 
 	// ---------------------------------------------------------------- refs
 
-	// Inline: impl_ref copies call them from every module.
+	// Inline: core_ref copies call them from every module.
 	void add_ref() noexcept { ++refs; }
 	void release() noexcept
 	{
@@ -279,10 +278,10 @@ class connection::impl
 	// the wait, right before the bind is sent: a stop that comes once
 	// bind_idle.set() has claimed the waiter, but before it resumes, does
 	// not cancel the wait.
-	static auto begin_bind(detail::impl_ref c, std::string_view context) -> boost::capy::task<result<void>>;
+	static auto begin_bind(detail::core_ref c, std::string_view context) -> boost::capy::task<result<void>>;
 
 	// Ends the bind exchange begun by begin_bind() and sends the requests
-	// it held. Defined after detail::impl_ref.
+	// it held. Defined after detail::core_ref.
 	class bind_scope;
 
 	// ---------------------------------------------------------------- StartTLS
@@ -424,8 +423,8 @@ class connection::impl
 	// if a frame is destroyed without finishing (io_context destroyed).
 	struct frame_ref
 	{
-		impl *p;
-		explicit frame_ref(impl *p_) noexcept : p(p_) {}
+		core *p;
+		explicit frame_ref(core *p_) noexcept : p(p_) {}
 		frame_ref(const frame_ref &) = delete;
 		auto operator=(const frame_ref &) -> frame_ref & = delete;
 		~frame_ref() { p->release(); }
@@ -467,13 +466,13 @@ class connection::impl
 	//   made when the co_await is evaluated (before await_suspend), throws
 	//   bad_alloc normally: caught by the due watcher, propagated by the
 	//   others.
-	auto new_task(boost::capy::task<void> (*body)(impl *)) -> boost::capy::task<void>;
+	auto new_task(boost::capy::task<void> (*body)(core *)) -> boost::capy::task<void>;
 
 	// ---------------------------------------------------------------- writer
 
 	// A bad_alloc in a detached task would end the program (run_async's
 	// default handler): each catches its own and closes the connection.
-	static auto writer(impl *self) -> boost::capy::task<void>;
+	static auto writer(core *self) -> boost::capy::task<void>;
 
 	// Queues `bytes` (the request of message id `id`) and starts the writer
 	// if it is not running. A throw (bad_alloc) queues nothing and changes
@@ -525,7 +524,7 @@ class connection::impl
 	// timer heap's growth and the timeout coroutine's frame are made in an
 	// await_suspend that capy calls from a noexcept wrapper, so one of
 	// those failing ends the program (a known limitation, see new_task).
-	static auto due_watcher(impl *self) -> boost::capy::task<void>;
+	static auto due_watcher(core *self) -> boost::capy::task<void>;
 
 	// Requests waited for (registered operations), without the due answers.
 	auto requests_waiting() const noexcept -> std::size_t { return pending.size(); }
@@ -550,7 +549,7 @@ class connection::impl
 
 	void stop_reader_if_idle();
 
-	static auto reader(impl *self) -> boost::capy::task<void>;
+	static auto reader(core *self) -> boost::capy::task<void>;
 
 	auto unexpected(std::string_view text) -> error;
 
@@ -569,50 +568,50 @@ class connection::impl
 namespace detail {
 
 	// A counted reference to the connection state.
-	class impl_ref
+	class core_ref
 	{
 	  public:
-		impl_ref() noexcept = default;
-		explicit impl_ref(connection::impl *p) noexcept : p_(p)
+		core_ref() noexcept = default;
+		explicit core_ref(connection::core *p) noexcept : p_(p)
 		{
 			if (p_ != nullptr) {
 				p_->add_ref();
 			}
 		}
-		impl_ref(const impl_ref &o) noexcept : impl_ref(o.p_) {}
-		impl_ref(impl_ref &&o) noexcept : p_(std::exchange(o.p_, nullptr)) {}
-		auto operator=(const impl_ref &) -> impl_ref & = delete;// unused
-		auto operator=(impl_ref &&o) noexcept -> impl_ref &
+		core_ref(const core_ref &o) noexcept : core_ref(o.p_) {}
+		core_ref(core_ref &&o) noexcept : p_(std::exchange(o.p_, nullptr)) {}
+		auto operator=(const core_ref &) -> core_ref & = delete;// unused
+		auto operator=(core_ref &&o) noexcept -> core_ref &
 		{
-			impl_ref moved(std::move(o));
+			core_ref moved(std::move(o));
 			std::swap(p_, moved.p_);
 			return *this;
 		}
-		~impl_ref()
+		~core_ref()
 		{
 			if (p_ != nullptr) {
 				p_->release();
 			}
 		}
-		auto operator->() const noexcept -> connection::impl * { return p_; }
-		auto operator*() const noexcept -> connection::impl & { return *p_; }
+		auto operator->() const noexcept -> connection::core * { return p_; }
+		auto operator*() const noexcept -> connection::core & { return *p_; }
 
 	  private:
-		connection::impl *p_ = nullptr;
+		connection::core *p_ = nullptr;
 	};
 
 }// namespace detail
 
-class connection::impl::bind_scope
+class connection::core::bind_scope
 {
   public:
-	explicit bind_scope(detail::impl_ref c) noexcept : c_(std::move(c)) {}
+	explicit bind_scope(detail::core_ref c) noexcept : c_(std::move(c)) {}
 	bind_scope(const bind_scope &) = delete;
 	auto operator=(const bind_scope &) -> bind_scope & = delete;
 	~bind_scope();
 
   private:
-	detail::impl_ref c_;
+	detail::core_ref c_;
 };
 
 namespace detail {
@@ -620,7 +619,7 @@ namespace detail {
 	// Abandons `p` when the returned guard goes out of scope: the
 	// operation's task is destroyed (or returns early) while the request is
 	// still outstanding.
-	[[nodiscard]] inline auto registration(connection::impl &c, pending_op &p) noexcept
+	[[nodiscard]] inline auto registration(connection::core &c, pending_op &p) noexcept
 	{
 		return scope_exit{ [&c, &p] noexcept { c.abandon(p); } };
 	}
@@ -635,7 +634,7 @@ namespace detail {
 	// connection). With `intermediates`, the IntermediateResponses that come
 	// before the response are appended to it (on its resource); without,
 	// they are skipped unread.
-	auto request_response(impl_ref self,
+	auto request_response(core_ref self,
 	  message request,
 	  std::size_t expect,
 	  std::string context,
@@ -659,15 +658,15 @@ namespace detail {
 		return with_controls(std::move(op), std::move(wire), mr);
 	}
 
-	// The update operations once the connection is known (impl_ != nullptr);
+	// The update operations once the connection is known (core_ != nullptr);
 	// `context` names the operation in errors.
-	auto add_impl(impl_ref self, add_params request, std::string context) -> boost::capy::task<result<response>>;
-	auto modify_impl(impl_ref self, modify_params request, std::string context) -> boost::capy::task<result<response>>;
-	auto del_impl(impl_ref self, del_params request, std::string context) -> boost::capy::task<result<response>>;
-	auto modify_dn_impl(impl_ref self, modify_dn_params request, std::string context)
+	auto add_impl(core_ref self, add_params request, std::string context) -> boost::capy::task<result<response>>;
+	auto modify_impl(core_ref self, modify_params request, std::string context) -> boost::capy::task<result<response>>;
+	auto del_impl(core_ref self, del_params request, std::string context) -> boost::capy::task<result<response>>;
+	auto modify_dn_impl(core_ref self, modify_dn_params request, std::string context)
 	  -> boost::capy::task<result<response>>;
 
-	auto extended_impl(impl_ref self, extended_params request) -> boost::capy::task<result<extended_result>>;
+	auto extended_impl(core_ref self, extended_params request) -> boost::capy::task<result<extended_result>>;
 
 }// namespace detail
 

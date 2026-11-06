@@ -577,7 +577,7 @@ auto tls_peer_name(std::string_view host, const tls_options &options) -> std::st
 	return std::string(host);
 }
 
-auto tls_handshake(transport::impl &im,
+auto tls_handshake(transport::layers &im,
   std::string_view host,
   const tls_options &options,
   tls_setup setup,

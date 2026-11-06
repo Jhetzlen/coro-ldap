@@ -1,7 +1,7 @@
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/mapping.hpp"
 
-#include "impl.hpp"
+#include "core.hpp"
 
 #include <memory_resource>
 #include <optional>
@@ -15,7 +15,7 @@ namespace capy = boost::capy;
 
 namespace jhetz::ldap {
 
-using detail::impl_ref;
+using detail::core_ref;
 using detail::no_connection;
 using detail::op_context;
 using detail::op_index;
@@ -81,7 +81,7 @@ using detail::build_request;
 
 namespace detail {
 
-	auto add_impl(impl_ref self, add_params request, std::string context) -> capy::task<result<response>>
+	auto add_impl(core_ref self, add_params request, std::string context) -> capy::task<result<response>>
 	{
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		add_request op(alloc);
@@ -101,15 +101,15 @@ namespace detail {
 auto connection::add(add_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("add", request.entry);
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		return refuse(client_errc::not_connected, std::move(context));
 	}
-	return detail::add_impl(impl_ref(impl_), std::move(request), std::move(context));
+	return detail::add_impl(core_ref(core_), std::move(request), std::move(context));
 }
 
 namespace detail {
 
-	auto modify_impl(impl_ref self, modify_params request, std::string context) -> capy::task<result<response>>
+	auto modify_impl(core_ref self, modify_params request, std::string context) -> capy::task<result<response>>
 	{
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		modify_request op(alloc);
@@ -130,15 +130,15 @@ namespace detail {
 auto connection::modify(modify_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("modify", request.object);
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		return refuse(client_errc::not_connected, std::move(context));
 	}
-	return detail::modify_impl(impl_ref(impl_), std::move(request), std::move(context));
+	return detail::modify_impl(core_ref(core_), std::move(request), std::move(context));
 }
 
 namespace detail {
 
-	auto del_impl(impl_ref self, del_params request, std::string context) -> capy::task<result<response>>
+	auto del_impl(core_ref self, del_params request, std::string context) -> capy::task<result<response>>
 	{
 		auto msg =
 		  build_request(del_request(request.entry.to_string(self->mr()), std::pmr::polymorphic_allocator<>(self->mr())),
@@ -152,7 +152,7 @@ namespace detail {
 		  co_await request_response(self, std::move(*msg), op_index<del_response>, context, request.timeout), context);
 	}
 
-	auto modify_dn_impl(impl_ref self, modify_dn_params request, std::string context) -> capy::task<result<response>>
+	auto modify_dn_impl(core_ref self, modify_dn_params request, std::string context) -> capy::task<result<response>>
 	{
 		if (request.new_rdn.avas.empty()) {
 			co_return fail(client_errc::invalid_dn, context + ": empty new RDN");
@@ -180,29 +180,29 @@ namespace detail {
 auto connection::del(del_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("delete", request.entry);
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		return refuse(client_errc::not_connected, std::move(context));
 	}
-	return detail::del_impl(impl_ref(impl_), std::move(request), std::move(context));
+	return detail::del_impl(core_ref(core_), std::move(request), std::move(context));
 }
 
 // Not a coroutine: the task of detail::modify_dn_impl() is returned as is.
 auto connection::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("modify DN", request.entry);
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		return refuse(client_errc::not_connected, std::move(context));
 	}
-	return detail::modify_dn_impl(impl_ref(impl_), std::move(request), std::move(context));
+	return detail::modify_dn_impl(core_ref(core_), std::move(request), std::move(context));
 }
 
 auto connection::compare(compare_params request) -> capy::task<result<bool>>
 {
 	const std::string context = op_context("compare", request.entry);
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
-	impl_ref self(impl_);
+	core_ref self(core_);
 	const std::pmr::polymorphic_allocator<> alloc(self->mr());
 	auto msg = build_request(
 	  compare_request(
@@ -229,7 +229,7 @@ auto connection::compare(compare_params request) -> capy::task<result<bool>>
 
 namespace detail {
 
-	auto extended_impl(impl_ref self, extended_params request) -> capy::task<result<extended_result>>
+	auto extended_impl(core_ref self, extended_params request) -> capy::task<result<extended_result>>
 	{
 		const std::string context = "extended operation " + request.name;
 		if (request.name == start_tls_oid) {
@@ -277,10 +277,10 @@ using detail::extended_impl;
 
 auto connection::extended(extended_params request) -> capy::task<result<extended_result>>
 {
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection("extended operation " + request.name));
 	}
-	co_return co_await extended_impl(impl_ref(impl_), std::move(request));
+	co_return co_await extended_impl(core_ref(core_), std::move(request));
 }
 
 }// namespace jhetz::ldap

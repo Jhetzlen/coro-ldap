@@ -3,7 +3,7 @@
 #include "jhetz/ldap/net/connect.hpp"
 
 #include "../format_util.hpp"
-#include "impl.hpp"
+#include "core.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -30,25 +30,25 @@ auto detail::op_context(std::string_view op, const dn &d) -> std::string
 	return text;
 }
 
-using detail::impl_ref;
+using detail::core_ref;
 using detail::no_connection;
 
 // ---------------------------------------------------------------- connection
 
-// NOLINTNEXTLINE(misc-const-correctness): it changes the connection's state, through impl_
-void detail::set_next_message_id(connection &c, std::int32_t id) noexcept { c.impl_->set_next_message_id(id); }
+// NOLINTNEXTLINE(misc-const-correctness): it changes the connection's state, through core_
+void detail::set_next_message_id(connection &c, std::int32_t id) noexcept { c.core_->set_next_message_id(id); }
 
-// NOLINTNEXTLINE(misc-const-correctness): it changes the connection's state, through impl_
+// NOLINTNEXTLINE(misc-const-correctness): it changes the connection's state, through core_
 void detail::set_close_hook(connection &c, std::move_only_function<void() noexcept> hook) noexcept
 {
-	if (c.impl_ != nullptr) {
-		c.impl_->set_close_hook(std::move(hook));
+	if (c.core_ != nullptr) {
+		c.core_->set_close_hook(std::move(hook));
 	}
 }
 
 auto detail::accepts_requests(const connection &c) noexcept -> bool
 {
-	return c.impl_ != nullptr && c.impl_->accepts_requests();
+	return c.core_ != nullptr && c.core_->accepts_requests();
 }
 
 connection::connection(corosio::io_context &ioc,
@@ -57,50 +57,50 @@ connection::connection(corosio::io_context &ioc,
   std::pmr::memory_resource *mr)
 {
 	std::pmr::polymorphic_allocator<> alloc(mr);
-	impl_ = alloc.new_object<impl>(ioc, std::move(t), options, mr);
+	core_ = alloc.new_object<core>(ioc, std::move(t), options, mr);
 }
 
-connection::connection(connection &&other) noexcept : impl_(std::exchange(other.impl_, nullptr)) {}
+connection::connection(connection &&other) noexcept : core_(std::exchange(other.core_, nullptr)) {}
 
 auto connection::operator=(connection &&other) noexcept -> connection &
 {
 	if (this != &other) {
 		const connection old(std::move(*this));
-		impl_ = std::exchange(other.impl_, nullptr);
+		core_ = std::exchange(other.core_, nullptr);
 	}
 	return *this;
 }
 
 connection::~connection()
 {
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		return;
 	}
 	close();
-	impl_->release();
+	core_->release();
 }
 
-auto connection::is_open() const noexcept -> bool { return impl_ != nullptr && impl_->is_open(); }
+auto connection::is_open() const noexcept -> bool { return core_ != nullptr && core_->is_open(); }
 
 auto connection::name() const noexcept -> std::string_view
 {
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		return {};
 	}
-	return impl_->transport().name();
+	return core_->transport().name();
 }
 
-auto connection::executor() const noexcept -> connection::executor_type { return impl_->executor(); }
+auto connection::executor() const noexcept -> connection::executor_type { return core_->executor(); }
 
-auto connection::outstanding() const noexcept -> std::size_t { return impl_ == nullptr ? 0 : impl_->outstanding(); }
+auto connection::outstanding() const noexcept -> std::size_t { return core_ == nullptr ? 0 : core_->outstanding(); }
 
-auto connection::bind_count() const noexcept -> std::uint64_t { return impl_ == nullptr ? 0 : impl_->bind_count(); }
+auto connection::bind_count() const noexcept -> std::uint64_t { return core_ == nullptr ? 0 : core_->bind_count(); }
 
-auto connection::is_tls() const noexcept -> bool { return impl_ != nullptr && impl_->is_tls(); }
+auto connection::is_tls() const noexcept -> bool { return core_ != nullptr && core_->is_tls(); }
 
 auto connection::security_layer() const noexcept -> sasl_protection
 {
-	return impl_ == nullptr ? sasl_protection::none : impl_->security_layer();
+	return core_ == nullptr ? sasl_protection::none : core_->security_layer();
 }
 
 auto connection::peer_certificate() const noexcept -> std::span<const std::byte>
@@ -108,7 +108,7 @@ auto connection::peer_certificate() const noexcept -> std::span<const std::byte>
 	if (!is_tls()) {
 		return {};
 	}
-	return impl_->transport().peer_certificate();
+	return core_->transport().peer_certificate();
 }
 
 auto connection::channel_bindings() const noexcept -> ldap::channel_bindings
@@ -116,23 +116,23 @@ auto connection::channel_bindings() const noexcept -> ldap::channel_bindings
 	if (!is_tls()) {
 		return {};
 	}
-	return impl_->transport().channel_bindings();
+	return core_->transport().channel_bindings();
 }
 
 void connection::close() noexcept
 {
-	if (impl_ != nullptr) {
-		impl_->close();
+	if (core_ != nullptr) {
+		core_->close();
 	}
 }
 
 auto connection::unbind() -> capy::task<result<void>>
 {
 	const std::string context = "unbind";
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
-	const impl_ref self(impl_);
+	const core_ref self(core_);
 	if (!self->accepts_requests()) {
 		co_return std::unexpected(self->not_connected(context));
 	}

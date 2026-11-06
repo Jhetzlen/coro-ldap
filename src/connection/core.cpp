@@ -5,7 +5,7 @@
 
 #include "../format_util.hpp"
 #include "../net/sasl_layer.hpp"
-#include "impl.hpp"
+#include "core.hpp"
 
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
@@ -38,7 +38,7 @@ namespace corosio = boost::corosio;
 namespace jhetz::ldap {
 
 using detail::clock;
-using detail::impl_ref;
+using detail::core_ref;
 using detail::op_index;
 using detail::pending_op;
 
@@ -84,7 +84,7 @@ namespace {
 
 // ---------------------------------------------------------------- state
 
-connection::impl::impl(corosio::io_context &ioc,
+connection::core::core(corosio::io_context &ioc,
   net::transport t,
   const connection_options &options,
   std::pmr::memory_resource *memory)
@@ -101,7 +101,7 @@ connection::impl::impl(corosio::io_context &ioc,
 
 // ---------------------------------------------------------------- failure
 
-auto connection::impl::copy_error(const error &e) noexcept -> error
+auto connection::core::copy_error(const error &e) noexcept -> error
 {
 	try {
 		return e;
@@ -110,7 +110,7 @@ auto connection::impl::copy_error(const error &e) noexcept -> error
 	}
 }
 
-auto connection::impl::unsent_error(const error &e) noexcept -> error
+auto connection::core::unsent_error(const error &e) noexcept -> error
 {
 	error u = copy_error(e);
 	// An allocation failure stays one (DESIGN.md section 7: the operations
@@ -121,14 +121,14 @@ auto connection::impl::unsent_error(const error &e) noexcept -> error
 	return u;
 }
 
-auto connection::impl::out_of_memory() noexcept -> error
+auto connection::core::out_of_memory() noexcept -> error
 {
 	error e;
 	e.code = std::make_error_code(std::errc::not_enough_memory);
 	return e;
 }
 
-void connection::impl::shut(const error &e, bool remember, bool close_transport) noexcept
+void connection::core::shut(const error &e, bool remember, bool close_transport) noexcept
 {
 	if (!open) {
 		return;
@@ -163,9 +163,9 @@ void connection::impl::shut(const error &e, bool remember, bool close_transport)
 	}
 }
 
-void connection::impl::shut_out_of_memory() noexcept { shut(out_of_memory(), true); }
+void connection::core::shut_out_of_memory() noexcept { shut(out_of_memory(), true); }
 
-auto connection::impl::not_connected(std::string_view context) const -> error
+auto connection::core::not_connected(std::string_view context) const -> error
 {
 	std::string text(context);
 	if (failure) {
@@ -179,14 +179,14 @@ auto connection::impl::not_connected(std::string_view context) const -> error
 	return make_error(client_errc::not_connected, text);
 }
 
-auto connection::impl::not_sent(std::string_view context) const -> error
+auto connection::core::not_sent(std::string_view context) const -> error
 {
 	error e = not_connected(context);
 	e.code = client_errc::not_sent;
 	return e;
 }
 
-void connection::impl::close() noexcept
+void connection::core::close() noexcept
 {
 	// Without memory for the error's text, operations fail with
 	// not_enough_memory instead.
@@ -202,7 +202,7 @@ void connection::impl::close() noexcept
 
 // ---------------------------------------------------------------- tasks
 
-auto connection::impl::new_task(capy::task<void> (*body)(impl *)) -> capy::task<void>
+auto connection::core::new_task(capy::task<void> (*body)(core *)) -> capy::task<void>
 {
 	struct frame_allocator_scope
 	{
@@ -221,7 +221,7 @@ auto connection::impl::new_task(capy::task<void> (*body)(impl *)) -> capy::task<
 
 // ---------------------------------------------------------------- writer
 
-auto connection::impl::writer(impl *self) -> capy::task<void>
+auto connection::core::writer(core *self) -> capy::task<void>
 {
 	const frame_ref ref(self);
 	try {
@@ -243,7 +243,7 @@ auto connection::impl::writer(impl *self) -> capy::task<void>
 	self->write_idle.set();
 }
 
-void connection::impl::enqueue(std::int32_t id, std::pmr::vector<std::byte> bytes)
+void connection::core::enqueue(std::int32_t id, std::pmr::vector<std::byte> bytes)
 {
 	if (writing) {
 		outbox.push_back({ .id = id, .bytes = std::move(bytes) });
@@ -259,7 +259,7 @@ void connection::impl::enqueue(std::int32_t id, std::pmr::vector<std::byte> byte
 	capy::run_async(ex)(std::move(task));
 }
 
-auto connection::impl::free_id() const -> std::int32_t
+auto connection::core::free_id() const -> std::int32_t
 {
 	std::int32_t id = next_id;
 	if (!wrapped) {
@@ -274,7 +274,7 @@ auto connection::impl::free_id() const -> std::int32_t
 	return id;
 }
 
-auto connection::impl::submit(message &m, pending_op *p, std::string_view context) -> result<void>
+auto connection::core::submit(message &m, pending_op *p, std::string_view context) -> result<void>
 {
 	if (!open || unbinding) {
 		return std::unexpected(not_sent(context));
@@ -321,7 +321,7 @@ auto connection::impl::submit(message &m, pending_op *p, std::string_view contex
 	return {};
 }
 
-void connection::impl::release_held() noexcept
+void connection::core::release_held() noexcept
 {
 	try {
 		while (open && !held.empty()) {
@@ -334,7 +334,7 @@ void connection::impl::release_held() noexcept
 	held.clear();
 }
 
-void connection::impl::abandon(pending_op &p) noexcept
+void connection::core::abandon(pending_op &p) noexcept
 {
 	if (!p.registered) {
 		return;
@@ -368,7 +368,7 @@ void connection::impl::abandon(pending_op &p) noexcept
 	}
 }
 
-void connection::impl::send_unanswered(message &m,
+void connection::core::send_unanswered(message &m,
   bool search,
   std::optional<clock::time_point> deadline,
   std::string_view context)
@@ -410,7 +410,7 @@ void connection::impl::send_unanswered(message &m,
 	}
 }
 
-void connection::impl::forget_abandoned(const std::pmr::deque<abandoned_req>::iterator &a)
+void connection::core::forget_abandoned(const std::pmr::deque<abandoned_req>::iterator &a)
 {
 	const bool due = a->due;
 	if (due) {
@@ -423,7 +423,7 @@ void connection::impl::forget_abandoned(const std::pmr::deque<abandoned_req>::it
 	stop_reader_if_idle();
 }
 
-void connection::impl::trim_abandoned()
+void connection::core::trim_abandoned()
 {
 	if (abandoned.size() <= max_abandoned) {
 		return;
@@ -432,7 +432,7 @@ void connection::impl::trim_abandoned()
 	forget_abandoned(a != std::prev(abandoned.end()) ? a : abandoned.begin());
 }
 
-void connection::impl::due_updated()
+void connection::core::due_updated()
 {
 	if (due_answers == 0) {
 		due_idle.set();
@@ -444,7 +444,7 @@ void connection::impl::due_updated()
 
 // ---------------------------------------------------------------- due answers
 
-void connection::impl::start_due_watcher()
+void connection::core::start_due_watcher()
 {
 	if (watching) {
 		due_changed.set();// recomputes its next deadline
@@ -456,7 +456,7 @@ void connection::impl::start_due_watcher()
 	capy::run_async(ex)(std::move(task));
 }
 
-auto connection::impl::next_due_deadline() const -> std::optional<clock::time_point>
+auto connection::core::next_due_deadline() const -> std::optional<clock::time_point>
 {
 	std::optional<clock::time_point> next;
 	for (const auto &a : abandoned) {
@@ -467,7 +467,7 @@ auto connection::impl::next_due_deadline() const -> std::optional<clock::time_po
 	return next;
 }
 
-void connection::impl::expire_due(clock::time_point now)
+void connection::core::expire_due(clock::time_point now)
 {
 	bool changed = false;
 	for (auto &a : abandoned) {
@@ -485,7 +485,7 @@ void connection::impl::expire_due(clock::time_point now)
 	stop_reader_if_idle();
 }
 
-auto connection::impl::due_watcher(impl *self) -> capy::task<void>
+auto connection::core::due_watcher(core *self) -> capy::task<void>
 {
 	const frame_ref ref(self);
 	try {
@@ -507,10 +507,10 @@ auto connection::impl::due_watcher(impl *self) -> capy::task<void>
 	self->watching = false;
 }
 
-auto connection::impl::outstanding() const noexcept -> std::size_t { return pending.size() + due_answers; }
+auto connection::core::outstanding() const noexcept -> std::size_t { return pending.size() + due_answers; }
 
-auto connection::impl::wait_due_answers(std::optional<clock::time_point> deadline)
-  -> capy::task<connection::impl::due_wait>
+auto connection::core::wait_due_answers(std::optional<clock::time_point> deadline)
+  -> capy::task<connection::core::due_wait>
 {
 	const std::size_t due = due_answers;
 	// Something must read the answers and expire their deadlines: if
@@ -547,7 +547,7 @@ auto connection::impl::wait_due_answers(std::optional<clock::time_point> deadlin
 
 // ---------------------------------------------------------------- StartTLS
 
-auto connection::impl::check_start_tls(std::string_view context) const -> result<void>
+auto connection::core::check_start_tls(std::string_view context) const -> result<void>
 {
 	if (!accepts_requests()) {
 		return std::unexpected(not_sent(context));
@@ -570,7 +570,7 @@ auto connection::impl::check_start_tls(std::string_view context) const -> result
 	return {};
 }
 
-auto connection::impl::tls_handshake(net::tls_options options, std::optional<std::chrono::milliseconds> timeout)
+auto connection::core::tls_handshake(net::tls_options options, std::optional<std::chrono::milliseconds> timeout)
   -> capy::task<result<void>>
 {
 	return net::start_tls(transport_, buf, std::move(options), timeout);
@@ -578,7 +578,7 @@ auto connection::impl::tls_handshake(net::tls_options options, std::optional<std
 
 // ---------------------------------------------------------------- unbind
 
-void connection::impl::abandon_all_for_unbind()
+void connection::core::abandon_all_for_unbind()
 {
 	auto waiting = std::move(pending);
 	pending.clear();
@@ -599,7 +599,7 @@ void connection::impl::abandon_all_for_unbind()
 	stop_reader_if_idle();
 }
 
-auto connection::impl::send_unbind(std::string_view context) -> result<void>
+auto connection::core::send_unbind(std::string_view context) -> result<void>
 {
 	abandon_all_for_unbind();
 	message request{ 0, unbind_request{} };
@@ -610,7 +610,7 @@ auto connection::impl::send_unbind(std::string_view context) -> result<void>
 	return {};
 }
 
-auto connection::impl::finish_unbind() -> capy::task<std::optional<error>>
+auto connection::core::finish_unbind() -> capy::task<std::optional<error>>
 {
 	co_await wait_write_idle();
 	std::optional<error> failed = failure;
@@ -628,29 +628,29 @@ auto connection::impl::finish_unbind() -> capy::task<std::optional<error>>
 
 // ---------------------------------------------------------------- idle
 
-auto connection::impl::wait_io_idle() -> capy::task<void>
+auto connection::core::wait_io_idle() -> capy::task<void>
 {
-	co_await capy::run(std::stop_token{})([](impl &c) -> capy::task<void> {
+	co_await capy::run(std::stop_token{})([](core &c) -> capy::task<void> {
 		(void)co_await c.write_idle.wait();
 		(void)co_await c.reader_idle.wait();
 	}(*this));
 }
 
-auto connection::impl::wait_write_idle() -> capy::task<void>
+auto connection::core::wait_write_idle() -> capy::task<void>
 {
 	(void)co_await capy::run(std::stop_token{})(
-	  [](impl &c) -> capy::task<capy::results<>> { co_return co_await c.write_idle.wait(); }(*this));
+	  [](core &c) -> capy::task<capy::results<>> { co_return co_await c.write_idle.wait(); }(*this));
 }
 
-auto connection::impl::wait_reader_idle() -> capy::task<void>
+auto connection::core::wait_reader_idle() -> capy::task<void>
 {
 	(void)co_await capy::run(std::stop_token{})(
-	  [](impl &c) -> capy::task<capy::results<>> { co_return co_await c.reader_idle.wait(); }(*this));
+	  [](core &c) -> capy::task<capy::results<>> { co_return co_await c.reader_idle.wait(); }(*this));
 }
 
 // ---------------------------------------------------------------- reader
 
-void connection::impl::start_reader()
+void connection::core::start_reader()
 {
 	if (reading) {
 		return;// a reader that is stopping restarts itself if needed
@@ -664,14 +664,14 @@ void connection::impl::start_reader()
 	capy::run_async(ex, reader_stop.get_token())(std::move(task));
 }
 
-void connection::impl::stop_reader_if_idle()
+void connection::core::stop_reader_if_idle()
 {
 	if (outstanding() == 0 && reading) {
 		reader_stop.request_stop();
 	}
 }
 
-auto connection::impl::reader(impl *self) -> capy::task<void>
+auto connection::core::reader(core *self) -> capy::task<void>
 {
 	const frame_ref ref(self);
 	try {
@@ -705,12 +705,12 @@ auto connection::impl::reader(impl *self) -> capy::task<void>
 	}
 }
 
-auto connection::impl::unexpected(std::string_view text) -> error
+auto connection::core::unexpected(std::string_view text) -> error
 {
 	return make_error(client_errc::unexpected_response, detail::format("read {}: {}", transport_.name(), text));
 }
 
-void connection::impl::route(std::size_t size)
+void connection::core::route(std::size_t size)
 {
 	const auto bytes = buf.data().first(size);
 	auto h = peek_message_header(bytes);
@@ -780,7 +780,7 @@ void connection::impl::route(std::size_t size)
 	shut(unexpected(detail::format("message with id {}, which matches no outstanding request", h->id)), true);
 }
 
-auto connection::impl::take_armed_layer(const message &m) -> bool
+auto connection::core::take_armed_layer(const message &m) -> bool
 {
 	auto layer = std::move(armed_layer);
 	if (!std::get<bind_response>(m.op).result.is_success()) {
@@ -793,7 +793,7 @@ auto connection::impl::take_armed_layer(const message &m) -> bool
 	return true;
 }
 
-void connection::impl::notification(std::span<const std::byte> bytes)
+void connection::core::notification(std::span<const std::byte> bytes)
 {
 	std::optional<error> fatal;
 	{
@@ -817,19 +817,19 @@ void connection::impl::notification(std::span<const std::byte> bytes)
 	}
 }
 
-auto connection::impl::make_stream(search_stream::state *s) noexcept -> ldap::search_stream
+auto connection::core::make_stream(search_stream::state *s) noexcept -> ldap::search_stream
 {
 	return ldap::search_stream(s);
 }
 
-auto connection::impl::make_paged(paged_search::state *s) noexcept -> ldap::paged_search
+auto connection::core::make_paged(paged_search::state *s) noexcept -> ldap::paged_search
 {
 	return ldap::paged_search(s);
 }
 
 // ---------------------------------------------------------------- waiting
 
-auto connection::impl::next_response(pending_op &p, std::optional<clock::time_point> deadline, std::string_view context)
+auto connection::core::next_response(pending_op &p, std::optional<clock::time_point> deadline, std::string_view context)
   -> capy::task<result<message>>
 {
 	while (p.queue.empty() && !p.finished) {
@@ -872,7 +872,7 @@ auto connection::impl::next_response(pending_op &p, std::optional<clock::time_po
 
 // ---------------------------------------------------------------- binds
 
-auto connection::impl::begin_bind(impl_ref c, std::string_view context) -> capy::task<result<void>>
+auto connection::core::begin_bind(core_ref c, std::string_view context) -> capy::task<result<void>>
 {
 	while (c->binding) {
 		auto [ec] = co_await c->bind_idle.wait();
@@ -892,7 +892,7 @@ auto connection::impl::begin_bind(impl_ref c, std::string_view context) -> capy:
 	co_return result<void>{};
 }
 
-connection::impl::bind_scope::~bind_scope()
+connection::core::bind_scope::~bind_scope()
 {
 	c_->armed_layer.reset();
 	c_->binding = false;
@@ -904,7 +904,7 @@ connection::impl::bind_scope::~bind_scope()
 
 namespace detail {
 
-	auto request_response(impl_ref self,
+	auto request_response(core_ref self,
 	  message request,
 	  std::size_t expect,
 	  std::string context,

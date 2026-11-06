@@ -9,7 +9,7 @@
 #include "jhetz/ldap/net/connect.hpp"
 
 #include "deadline.hpp"
-#include "transport_impl.hpp"
+#include "transport_layers.hpp"
 
 #include <boost/capy/task.hpp>
 #include <boost/corosio/tls_context.hpp>
@@ -123,7 +123,7 @@ auto tls_peer_name(std::string_view host, const tls_options &options) -> std::st
 // test: the race is not reproducible on demand and every certificate-based
 // handshake runs the callback. Errors have the context "tls handshake"
 // (plus ": server certificate: <reason>" when verification failed).
-auto tls_handshake(transport::impl &im,
+auto tls_handshake(transport::layers &im,
   std::string_view host,
   const tls_options &options,
   tls_setup setup,

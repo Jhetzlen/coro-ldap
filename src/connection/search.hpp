@@ -4,7 +4,7 @@
 
 #include "jhetz/ldap/connection.hpp"
 
-#include "impl.hpp"
+#include "core.hpp"
 
 #include <boost/capy/task.hpp>
 
@@ -25,11 +25,11 @@ namespace jhetz::ldap {
 
 struct search_stream::state
 {
-	state(connection::impl *c, std::pmr::memory_resource *entries, std::string context_)
+	state(connection::core *c, std::pmr::memory_resource *entries, std::string context_)
 	  : conn(c), op(entries, true, detail::op_index<search_result_done>), context(std::move(context_))
 	{}
 
-	detail::impl_ref conn;
+	detail::core_ref conn;
 	detail::pending_op op;
 	std::string context;// "search <base>"
 	std::optional<detail::clock::time_point> deadline{};
@@ -58,13 +58,13 @@ struct search_stream::state
 namespace detail {
 
 	// The SearchRequest for `p`, validated (errors carry `context`).
-	auto search_message(const connection::impl &c, const search_params &p, const std::string &context)
+	auto search_message(const connection::core &c, const search_params &p, const std::string &context)
 	  -> result<message>;
 
 	// Validates and sends a search; returns its stream. Never suspends.
 	// `stop` is the awaiting task's stop token: if it is set already, the
 	// search is not sent and fails with capy::error::canceled.
-	auto start_search(connection::impl &c,
+	auto start_search(connection::core &c,
 	  const search_params &p,
 	  std::pmr::memory_resource *mr,
 	  const std::stop_token &stop) -> result<ldap::search_stream>;
@@ -101,7 +101,7 @@ namespace detail {
 	}
 
 	// The one entry of a base-scope search (nullopt if none came back).
-	auto read_one(impl_ref self, search_params p) -> boost::capy::task<result<std::optional<entry>>>;
+	auto read_one(core_ref self, search_params p) -> boost::capy::task<result<std::optional<entry>>>;
 
 	// For ldap::client: `owner` lives until `s` is destroyed (after its
 	// search is abandoned). Ignored on a default-constructed or moved-from

@@ -2,7 +2,7 @@
 
 #include "../format_util.hpp"
 #include "../scope_util.hpp"
-#include "impl.hpp"
+#include "core.hpp"
 #include "search.hpp"
 
 #include <boost/capy/cond.hpp>
@@ -26,7 +26,7 @@ namespace corosio = boost::corosio;
 
 namespace jhetz::ldap {
 
-using detail::impl_ref;
+using detail::core_ref;
 using detail::no_connection;
 using detail::op_context;
 using detail::pending_op;
@@ -34,7 +34,7 @@ using detail::start_search;
 
 namespace {
 
-	auto new_state(connection::impl &c, std::pmr::memory_resource *entries, const std::string &context)
+	auto new_state(connection::core &c, std::pmr::memory_resource *entries, const std::string &context)
 	  -> search_stream::state *
 	{
 		std::pmr::polymorphic_allocator<> alloc(c.mr());
@@ -48,7 +48,7 @@ namespace {
 		}
 		s->conn->abandon(s->op);
 		std::shared_ptr<void> owner = std::move(s->owner);// released last
-		impl_ref keep = s->conn;// the state lives on the connection's resource
+		core_ref keep = s->conn;// the state lives on the connection's resource
 		std::pmr::polymorphic_allocator<> alloc(keep->mr());
 		alloc.delete_object(s);
 		keep = {};
@@ -78,7 +78,7 @@ namespace {
 		s.in_next = true;
 		const detail::scope_exit reset{ [&s] { s.in_next = false; } };
 
-		const impl_ref conn = s.conn;
+		const core_ref conn = s.conn;
 		while (true) {
 			auto m = co_await conn->next_response(s.op, s.deadline, s.context);
 			if (!m) {
@@ -136,7 +136,7 @@ namespace {
 
 namespace detail {
 
-	auto search_message(const connection::impl &c, const search_params &p, const std::string &context)
+	auto search_message(const connection::core &c, const search_params &p, const std::string &context)
 	  -> result<message>
 	{
 		const auto seconds = p.time_limit.count();
@@ -158,7 +158,7 @@ namespace detail {
 		return build_request(std::move(wire), p.controls, c.mr(), context);
 	}
 
-	auto start_search(connection::impl &c,
+	auto start_search(connection::core &c,
 	  const search_params &p,
 	  std::pmr::memory_resource *mr,
 	  const std::stop_token &stop) -> result<ldap::search_stream>
@@ -173,7 +173,7 @@ namespace detail {
 		}
 
 		auto *state = new_state(c, mr, context);
-		ldap::search_stream s = connection::impl::make_stream(state);
+		ldap::search_stream s = connection::core::make_stream(state);
 		state->deadline = deadline_after(p.timeout ? p.timeout : c.default_timeout());
 		state->op.intermediates = p.intermediate_responses;
 		if (auto r = c.submit(*request, &state->op, context); !r) {
@@ -187,13 +187,13 @@ namespace detail {
 auto connection::search_stream(search_params request, std::pmr::memory_resource *mr)
   -> capy::task<result<ldap::search_stream>>
 {
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection(op_context("search", request.base)));
 	}
 	// The analyzer does not model the promise's construction: Capy's env_ is
 	// nullptr-initialised and set by the awaiting caller before the first resume.
 	// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
-	co_return start_search(*impl_, request, mr, co_await capy::this_coro::stop_token);
+	co_return start_search(*core_, request, mr, co_await capy::this_coro::stop_token);
 }
 
 auto connection::search(search_params request, std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
@@ -223,7 +223,7 @@ auto connection::search(search_params request, std::pmr::memory_resource *mr) ->
 
 namespace detail {
 
-	auto read_one(impl_ref self, search_params p) -> capy::task<result<std::optional<entry>>>
+	auto read_one(core_ref self, search_params p) -> capy::task<result<std::optional<entry>>>
 	{
 		// The analyzer does not model the promise's construction: Capy's env_ is
 		// nullptr-initialised and set by the awaiting caller before the first resume.
@@ -249,13 +249,13 @@ namespace detail {
 
 	auto search_done(ldap::search_stream &s) noexcept -> const ldap_result *
 	{
-		const auto *state = connection::impl::stream_state(s);
+		const auto *state = connection::core::stream_state(s);
 		return state == nullptr || !state->done ? nullptr : &*state->done;
 	}
 
 	void keep_alive(ldap::search_stream &s, std::shared_ptr<void> owner) noexcept
 	{
-		if (auto *state = connection::impl::stream_state(s)) {
+		if (auto *state = connection::core::stream_state(s)) {
 			state->owner = std::move(owner);
 		}
 	}
@@ -263,14 +263,14 @@ namespace detail {
 	auto first_outcome(ldap::search_stream &stream) -> capy::task<result<std::optional<error>>>
 	{
 		using outcome = std::optional<error>;
-		auto *sp = connection::impl::stream_state(stream);
+		auto *sp = connection::core::stream_state(stream);
 		if (sp == nullptr) {
 			co_return outcome{ no_connection("search") };
 		}
 		search_stream::state &s = *sp;// stable: the caller holds the stream
 		pending_op &p = s.op;
-		const impl_ref conn = s.conn;
-		// As connection::impl::next_response, without taking the message.
+		const core_ref conn = s.conn;
+		// As connection::core::next_response, without taking the message.
 		while (p.queue.empty() && !p.finished) {
 			p.ready.clear();
 			std::error_code ec;

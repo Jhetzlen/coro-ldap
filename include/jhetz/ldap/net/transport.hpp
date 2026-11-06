@@ -167,7 +167,7 @@ class transport
 	// transport is closed in every case. No write may be in flight; a read may (Corosio's rule).
 	auto shutdown(std::optional<std::chrono::milliseconds> timeout) -> boost::capy::task<result<void>>;
 
-	struct impl;// defined in src/net/transport_impl.hpp (used by connect)
+	struct layers;// defined in src/net/transport_layers.hpp (used by connect)
 
   private:
 	friend struct transport_access;
@@ -182,7 +182,7 @@ class transport
 	};
 	void set_custom(void *stream, custom_ops ops) noexcept;
 
-	impl *impl_ = nullptr;// allocated from the resource it records
+	layers *layers_ = nullptr;// allocated from the resource it records
 };
 
 }// namespace jhetz::ldap::net

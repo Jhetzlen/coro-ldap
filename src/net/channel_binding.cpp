@@ -1,6 +1,6 @@
 #include "channel_binding.hpp"
 
-#include "transport_impl.hpp"
+#include "transport_layers.hpp"
 
 #include "../scope_util.hpp"
 
@@ -119,7 +119,7 @@ namespace {
 	// RFC 9266 section 3 makes tls-exporter SCRAM's default on TLS 1.3;
 	// otherwise tls-server-end-point, which servers support widely, and
 	// tls-exporter when it is all there is.
-	auto default_type(const transport::impl &im, bool tls13) -> std::optional<channel_binding_type>
+	auto default_type(const transport::layers &im, bool tls13) -> std::optional<channel_binding_type>
 	{
 		const bool exporter = !im.tls_exporter.empty();
 		const bool end_point = !im.tls_server_end_point.empty();
@@ -148,7 +148,7 @@ auto openldap_tls_server_end_point(std::span<const std::byte> certificate) -> st
 	return cert ? digest_of(cert.get(), openldap_end_point_digest(cert.get())) : std::vector<std::byte>{};
 }
 
-void record_tls_session(transport::impl &im, ssl_st *ssl)
+void record_tls_session(transport::layers &im, ssl_st *ssl)
 {
 	clear_tls_session(im);
 	if (ssl == nullptr) {
@@ -189,7 +189,7 @@ void record_tls_session(transport::impl &im, ssl_st *ssl)
 	im.default_channel_binding = default_type(im, tls13);
 }
 
-void clear_tls_session(transport::impl &im) noexcept
+void clear_tls_session(transport::layers &im) noexcept
 {
 	im.peer_certificate.clear();
 	im.tls_server_end_point.clear();
@@ -198,7 +198,7 @@ void clear_tls_session(transport::impl &im) noexcept
 	im.tls_exporter_used = false;
 }
 
-auto authentication_channel_bindings(const transport::impl &im) noexcept -> ldap::channel_bindings
+auto authentication_channel_bindings(const transport::layers &im) noexcept -> ldap::channel_bindings
 {
 	ldap::channel_bindings b{
 		.tls_server_end_point = im.tls_server_end_point,

@@ -2,8 +2,8 @@
 
 #include "../format_util.hpp"
 #include "../net/channel_binding.hpp"
-#include "../net/transport_impl.hpp"
-#include "impl.hpp"
+#include "../net/transport_layers.hpp"
+#include "core.hpp"
 #include "sasl_offload.hpp"
 
 #include <boost/corosio/detail/scheduler.hpp>
@@ -20,7 +20,7 @@ namespace corosio = boost::corosio;
 
 namespace jhetz::ldap {
 
-using detail::impl_ref;
+using detail::core_ref;
 using detail::no_connection;
 using detail::op_context;
 using detail::op_index;
@@ -28,12 +28,12 @@ using detail::request_response;
 
 // ---------------------------------------------------------------- binds
 
-auto connection::impl::authentication_channel_bindings() const noexcept -> ldap::channel_bindings
+auto connection::core::authentication_channel_bindings() const noexcept -> ldap::channel_bindings
 {
 	return net::detail::authentication_channel_bindings(net::transport_access::get(transport_));
 }
 
-void connection::impl::mark_tls_exporter_used() noexcept
+void connection::core::mark_tls_exporter_used() noexcept
 {
 	net::transport_access::get(transport_).tls_exporter_used = true;
 }
@@ -48,7 +48,7 @@ namespace {
 	// 4511 section 4.2.2), and the server may still be in the exchange, so
 	// the connection is closed. Without a response (timeout, stop, transport
 	// error) the connection is already closed: a bind cannot be abandoned.
-	auto abort_sasl(impl_ref self, const std::string &context) -> capy::task<void>
+	auto abort_sasl(core_ref self, const std::string &context) -> capy::task<void>
 	{
 		// The anonymous bind's success installs no layer the exchange negotiated.
 		self->disarm_security_layer();
@@ -70,7 +70,7 @@ namespace {
 	// After a step: the layer the exchange negotiated, if this step's
 	// BindRequest is its last, takes effect with that request's success.
 	// One layer at a time.
-	auto arm_security_layer(connection::impl &c, sasl_mechanism &mechanism) -> result<void>
+	auto arm_security_layer(connection::core &c, sasl_mechanism &mechanism) -> result<void>
 	{
 		auto layer = mechanism.take_security_layer();
 		if (layer == nullptr) {
@@ -89,17 +89,17 @@ namespace {
 auto connection::simple_bind(dn name, std::string password) -> capy::task<result<void>>
 {
 	const std::string context = op_context("bind", name);
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
 	if (!name.empty() && password.empty()) {
 		co_return fail(client_errc::unauthenticated_bind, context + ": empty password (RFC 4513 section 5.1.2)");
 	}
-	impl_ref self(impl_);// `this` may be moved from while suspended
-	if (auto b = co_await impl::begin_bind(self, context); !b) {
+	core_ref self(core_);// `this` may be moved from while suspended
+	if (auto b = co_await core::begin_bind(self, context); !b) {
 		co_return std::unexpected(std::move(b.error()));
 	}
-	const impl::bind_scope exchange{ self };
+	const core::bind_scope exchange{ self };
 	message request(std::pmr::polymorphic_allocator<>(self->mr()));
 	request.op = bind_request(3, name.to_string(self->mr()), simple_auth(password, self->mr()), self->mr());
 	auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
@@ -117,14 +117,14 @@ auto connection::sasl_bind(sasl_mechanism &mechanism, dn name) -> capy::task<res
 {
 	std::string context = "sasl bind ";
 	context += mechanism.name();
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
-	impl_ref self(impl_);
-	if (auto b = co_await impl::begin_bind(self, context); !b) {
+	core_ref self(core_);
+	if (auto b = co_await core::begin_bind(self, context); !b) {
 		co_return std::unexpected(std::move(b.error()));
 	}
-	const impl::bind_scope exchange{ self };
+	const core::bind_scope exchange{ self };
 	constexpr int max_steps = 32;
 	sasl_bind_context bind_context;
 	if (self->transport().type() == net::transport::kind::tcp) {

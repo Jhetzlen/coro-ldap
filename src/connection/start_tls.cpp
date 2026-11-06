@@ -3,7 +3,7 @@
 #include "jhetz/ldap/net/connect.hpp"
 
 #include "../format_util.hpp"
-#include "impl.hpp"
+#include "core.hpp"
 
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/this_coro.hpp>
@@ -21,7 +21,7 @@ namespace capy = boost::capy;
 namespace jhetz::ldap {
 
 using detail::deadline_after;
-using detail::impl_ref;
+using detail::core_ref;
 using detail::no_connection;
 using detail::op_index;
 using detail::pending_op;
@@ -32,10 +32,10 @@ auto connection::start_tls(net::tls_options options, std::optional<std::chrono::
   -> capy::task<result<void>>
 {
 	const std::string context = "start tls";
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
-	impl_ref self(impl_);
+	core_ref self(core_);
 	// StartTLS may only be sent once every response is received (RFC 4513
 	// section 3.1.1). Operations are refused; the answers still due to
 	// released paged searches are waited for (they are certain, or given

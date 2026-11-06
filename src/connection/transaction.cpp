@@ -5,7 +5,7 @@
 #include "jhetz/ldap/connection.hpp"
 
 #include "../format_util.hpp"
-#include "impl.hpp"
+#include "core.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -23,7 +23,7 @@ namespace capy = boost::capy;
 namespace jhetz::ldap {
 
 using detail::build_request;
-using detail::impl_ref;
+using detail::core_ref;
 using detail::no_connection;
 using detail::op_context;
 using detail::op_index;
@@ -48,7 +48,7 @@ namespace {
 	// whether or not the answer is one section 2.3 allows: the transaction
 	// is then over on the server. It stays false when the request was not
 	// sent, or was given up on (timeout, cancellation, connection failure).
-	auto end_exchange(impl_ref self, std::string identifier, bool commit, std::string context, bool *answered)
+	auto end_exchange(core_ref self, std::string identifier, bool commit, std::string context, bool *answered)
 	  -> capy::task<result<end_reply>>
 	{
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
@@ -101,7 +101,7 @@ namespace {
 		return out;
 	}
 
-	auto start_exchange(impl_ref self, extended_controls controls) -> capy::task<result<std::pmr::string>>
+	auto start_exchange(core_ref self, extended_controls controls) -> capy::task<result<std::pmr::string>>
 	{
 		const std::string context(start_context);
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
@@ -133,19 +133,19 @@ namespace {
 
 auto connection::start_transaction(extended_controls controls) -> capy::task<result<std::pmr::string>>
 {
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection(start_context));
 	}
-	co_return co_await start_exchange(impl_ref(impl_), std::move(controls));
+	co_return co_await start_exchange(core_ref(core_), std::move(controls));
 }
 
 auto connection::end_transaction(std::pmr::string identifier, bool commit) -> capy::task<result<end_transaction_result>>
 {
 	std::string context(end_context);
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
-	auto reply = co_await end_exchange(impl_ref(impl_), std::string(identifier), commit, context, nullptr);
+	auto reply = co_await end_exchange(core_ref(core_), std::string(identifier), commit, context, nullptr);
 	if (!reply) {
 		co_return std::unexpected(std::move(reply.error()));
 	}
@@ -170,7 +170,7 @@ struct transaction::state
 		std::pmr::string context;
 	};
 
-	impl_ref conn;
+	core_ref conn;
 	std::pmr::string identifier;
 	std::pmr::vector<update> updates;
 	// Updates sent and not yet answered: commit() refuses while there are.
@@ -206,7 +206,7 @@ namespace {
 			}
 		} catch (...) {// NOLINT(bugprone-empty-catch): out of memory, the abort is best effort
 		}
-		impl_ref keep = s->conn;
+		core_ref keep = s->conn;
 		std::pmr::polymorphic_allocator<> alloc(keep->mr());
 		alloc.delete_object(s);
 	}
@@ -274,10 +274,10 @@ namespace {
 
 auto connection::begin_transaction(extended_controls controls) -> capy::task<result<transaction>>
 {
-	if (impl_ == nullptr) {
+	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection(start_context));
 	}
-	impl_ref self(impl_);
+	core_ref self(core_);
 	auto id = co_await start_exchange(self, std::move(controls));
 	if (!id) {
 		co_return std::unexpected(std::move(id.error()));

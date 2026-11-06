@@ -21,13 +21,13 @@ namespace jhetz::ldap::net {
 
 // Members are destroyed in reverse order: the SASL layer's view and the
 // layer, then the type-erased view, then the TLS layer (which refers to the socket), then the sockets.
-struct transport::impl
+struct transport::layers
 {
-	explicit impl(std::pmr::memory_resource *r)
+	explicit layers(std::pmr::memory_resource *r)
 	  : mr(r), name(r), host(r), peer_certificate(r), tls_server_end_point(r), tls_exporter(r)
 	{}
 
-	std::pmr::memory_resource *mr;// impl itself was allocated from it
+	std::pmr::memory_resource *mr;// this struct was allocated from it
 	kind type = kind::none;
 	std::pmr::string name;
 	std::pmr::string host;// the URL's host (for StartTLS verification); empty for custom streams
@@ -67,8 +67,8 @@ struct transport_access
 	{
 		return transport::make(k, name, mr);
 	}
-	static auto get(transport &t) noexcept -> transport::impl & { return *t.impl_; }
-	static auto get(const transport &t) noexcept -> const transport::impl & { return *t.impl_; }
+	static auto get(transport &t) noexcept -> transport::layers & { return *t.layers_; }
+	static auto get(const transport &t) noexcept -> const transport::layers & { return *t.layers_; }
 };
 
 }// namespace jhetz::ldap::net

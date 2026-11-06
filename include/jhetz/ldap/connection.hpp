@@ -426,7 +426,7 @@ class connection
 	// request was not written yet, see "Sent or not" above). Idempotent.
 	void close() noexcept;
 
-	class impl;// defined in src/connection/impl.hpp
+	class core;// defined in src/connection/core.hpp
 
   private:
 	friend class ldap::search_stream;
@@ -435,7 +435,7 @@ class connection
 	friend void detail::set_close_hook(connection &, std::move_only_function<void() noexcept>) noexcept;
 	friend auto detail::accepts_requests(const connection &) noexcept -> bool;
 
-	impl *impl_ = nullptr;// reference counted; allocated from the resource it records
+	core *core_ = nullptr;// reference counted; allocated from the resource it records
 };
 
 // A connection that others use too, such as the one of a shared
