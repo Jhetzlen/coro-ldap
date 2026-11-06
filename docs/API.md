@@ -401,13 +401,12 @@ itself needs only ICU.
   target's: success or a limit code, as `search()`; on success, the first
   limit code a followed continuation reference's search ended with;
   `references` holds the URIs of the continuation references not
-  followed): the
-  entries of every server reached, one `referral_attempt` per URI tried
-  (`followed`, `skipped_policy`, `skipped_loop`, `limit_reached`,
-  `unparseable`, `failed` with its error), and `complete == false` when a
-  continuation reference could not be followed or a search ended with a
-  limit code (partial results are never
-  a plain success; such a reference never fails the search). A referral
+  followed): the entries of every server reached, one `referral_attempt`
+  per URI tried (`followed`, `skipped_policy`, `skipped_loop`,
+  `limit_reached`, `unparseable`, `failed` with its error), and
+  `complete == false` when a continuation reference could not be
+  followed or a search ended with a limit code (partial results are
+  never a plain success; such a reference never fails the search). A referral
   result that cannot be followed fails the call (the last error, else the
   referral; its context counts the attempts' outcomes). `chase_compare(conn, params, connector, policy)` does the
   same for a compare (`chased_compare{value, referrals, unlisted}`). The URIs of one

@@ -263,13 +263,16 @@ error (an `ldap::error` would carry entries for one operation only), and
 a success with a flag (the result code, matched DN and diagnostic would be
 lost). The same holds for a store's `search` (`typed_search_result<record<T>>`,
 the same fields with `std::vector` entries), `client::search`, the sync
-facades' `search` and `search_paged` (the pages collected:
-the last page's done), and `chase_search` (`chased_search` gains the same
-done fields, the origin's or the referral target's; any search of the
-chase ending with a limit code, the origin's included, keeps its entries
-and clears `complete`). The streams (`search_stream`, `paged_search`) are unchanged:
-`next()` reports the code as an error after the entries it already handed
-out.
+facades' `search` and `search_paged` (the pages collected: the last
+page's done), and `chase_search` (`chased_search` gains the same done
+fields, the origin's or the referral target's, and when that is success
+the result code, matched DN and diagnostic of the first followed
+continuation reference whose search ended with a limit code, the
+controls staying the origin's; any search of the chase ending with a
+limit code, the origin's included, keeps its entries and clears
+`complete`). The streams (`search_stream`, `paged_search`) are
+unchanged: `next()` reports the code as an error after the entries it
+already handed out.
 
 Typed controls (step 6, `controls.hpp`): `paged`, `manage_dsa_it`,
 `relax_rules`, `proxied_authorization`, `server_side_sort`, `assertion`,

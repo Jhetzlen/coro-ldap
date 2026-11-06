@@ -181,7 +181,8 @@
 // URIs not followed in search_result::references, as connection::search()
 // does; one whose followed reference's search ended with a limit code
 // has that code (is_success() false) when the origin's search succeeded.
-// chase_search() tells more (complete, referrals, unlisted). client_observer::on_referral hears of each URI.
+// chase_search() tells more (complete, referrals, unlisted).
+// client_observer::on_referral hears of each URI.
 // Writes are never chased, whatever client_options::referrals says: the
 // write forwarders (add(), modify(), ...) and leases return a referral
 // result as an error (errc::referral, the URIs in error::referrals; the
