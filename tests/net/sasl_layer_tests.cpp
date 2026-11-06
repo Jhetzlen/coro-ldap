@@ -11,9 +11,13 @@
 #include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/sasl.hpp"
+#include "jhetz/ldap/store.hpp"
+#include "jhetz/ldap/sync.hpp"
+#include "jhetz/ldap/sync_store.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
+#include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/read.hpp>
 #include <boost/capy/test/stream.hpp>
 #include <boost/corosio/endpoint.hpp>
@@ -33,6 +37,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -739,5 +744,167 @@ TEST_CASE("sasl layer: an Active Directory password change needs confidentiality
 		CHECK(mech.counts->wraps == 0);
 		CHECK(error.empty());
 		CHECK(m.conn.is_open());
+	}
+}
+
+namespace {
+
+struct card
+{
+	std::string cn;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
+
+namespace {
+
+// Answers a SASL bind, which installs the xor_layer, and searches: the
+// root DSE, cn=Subschema, and any other base with one entry. Logs each
+// request ("layer " before those read through the layer) until the client
+// hangs up.
+auto serve_schema_and_layer(net::transport t, std::vector<std::string> &log, std::string &error) -> capy::task<void>
+{
+	net::read_buffer buf;
+	std::string prefix;
+	while (true) {
+		auto req = co_await net::read_message(t, buf, as_server);
+		if (!req || std::holds_alternative<ldap::unbind_request>(req->op)) {
+			co_return;
+		}
+		if (std::holds_alternative<ldap::bind_request>(req->op)) {
+			log.push_back(prefix + "bind");
+			if (auto w = co_await net::write_message(t, sasl_ok(req->id)); !w) {
+				error = "bind write";
+				co_return;
+			}
+			if (auto l = net::detail::install_security_layer(t, buf, std::make_unique<xor_layer>()); !l) {
+				error = "install";
+				co_return;
+			}
+			prefix = "layer ";
+			continue;
+		}
+		const auto *search = std::get_if<ldap::search_request>(&req->op);
+		if (search == nullptr) {
+			error = "unexpected request";
+			co_return;
+		}
+		ldap::message found{ req->id, ldap::search_result_entry{} };
+		if (search->base_object.empty()) {
+			log.push_back(prefix + "root DSE");
+			found.op = ldap::search_result_entry{ "", { { "subschemaSubentry", { "cn=Subschema" } } } };
+		} else if (search->base_object == "cn=Subschema") {
+			log.push_back(prefix + "subschema");
+			found.op = ldap::search_result_entry{ "cn=Subschema",
+				{ { "attributeTypes", { "( 2.5.4.3 NAME 'cn' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )" } },
+				  { "objectClasses", { "( 2.5.6.6 NAME 'person' STRUCTURAL MUST cn )" } } } };
+		} else {
+			log.push_back(prefix + "search");
+			found = entry_msg(req->id, "cn=a,dc=example,dc=org", "a");
+		}
+		for (const auto &m : { found, done_msg(req->id) }) {
+			if (auto w = co_await net::write_message(t, m); !w) {
+				error = "search write";
+				co_return;
+			}
+		}
+	}
+}
+
+const std::vector<std::string>
+  checked_twice{ "root DSE", "subschema", "search", "bind", "layer root DSE", "layer subschema", "layer search" };
+
+// serve_schema_and_layer for one TCP client, on its own thread.
+struct layer_server_thread
+{
+	corosio::io_context ioc{};
+	corosio::tcp_acceptor acc{ ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 1 };
+	std::vector<std::string> log{};
+	std::string error{};
+	std::thread thread{};
+
+	layer_server_thread()
+	{
+		capy::run_async(ioc.get_executor())([](layer_server_thread &s) -> capy::task<void> {
+			auto [ec, peer] = co_await s.acc.accept();
+			s.acc.close();
+			if (!ec) {
+				co_await serve_schema_and_layer(net::transport::wrap(std::move(peer), "server"), s.log, s.error);
+			}
+		}(*this));
+		thread = std::thread([this] { ioc.run(); });
+	}
+	layer_server_thread(const layer_server_thread &) = delete;
+	auto operator=(const layer_server_thread &) -> layer_server_thread & = delete;
+	~layer_server_thread() { join(); }
+
+	auto url() const -> ldap::url
+	{
+		return *ldap::url::parse("ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port()));
+	}
+	// Once the client hung up: the server's thread ends.
+	void join()
+	{
+		if (thread.joinable()) {
+			thread.join();
+		}
+	}
+};
+
+}// namespace
+
+// RFC 4513 section 5.2.1.6: once a SASL security layer is in effect, the
+// client "SHOULD discard or refresh all information about the server" it
+// obtained before.
+TEST_CASE("RFC 4513 5.2.1.6: a store's schema check is made again after a SASL security layer",
+  "[net][sasl][sasl_layer][rfc][schema][store]")
+{
+	SECTION("ldap::store on an ldap::connection")
+	{
+		mock_ldap m;
+		std::vector<std::string> log;
+		std::string error;
+		outcome<void> server;
+		spawn(m.ioc, serve_schema_and_layer(m.server_end(), log, error), server);
+		ldap::store cards(m.conn,
+		  ldap::dn{ "dc=example,dc=org" },
+		  ldap::named_by<&card::cn>,
+		  { .schema_check = ldap::schema_check::on_first_use });
+		REQUIRE(m.run(cards.search()).has_value());
+		layer_mechanism mech;
+		REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
+		REQUIRE(m.conn.security_layer() == ldap::sasl_protection::integrity);
+		auto r = m.run(cards.search());
+		REQUIRE(r.has_value());
+		CHECK(r->entries.size() == 1);
+		CHECK(m.run(m.conn.unbind()).has_value());
+		drive_until(m.ioc, [&server] { return server.done(); });
+		CHECK(error.empty());
+		CHECK(log == checked_twice);
+	}
+	SECTION("sync::store on a sync::connection")
+	{
+		layer_server_thread srv;
+		{
+			ldap::sync::connection c({ .timeout = std::chrono::seconds(10) });
+			REQUIRE(c.connect(srv.url()).has_value());
+			ldap::sync::store cards(c,
+			  ldap::dn{ "dc=example,dc=org" },
+			  ldap::named_by<&card::cn>,
+			  { .schema_check = ldap::schema_check::on_first_use });
+			REQUIRE(cards.search().has_value());
+			layer_mechanism mech;
+			REQUIRE(c.sasl_bind(mech).has_value());
+			REQUIRE(c.security_layer() == ldap::sasl_protection::integrity);
+			auto r = cards.get("a");
+			REQUIRE(r.has_value());
+			CHECK(r->has_value());
+		}
+		srv.join();
+		CHECK(srv.error.empty());
+		CHECK(srv.log == checked_twice);
 	}
 }

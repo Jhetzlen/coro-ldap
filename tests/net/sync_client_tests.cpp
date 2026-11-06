@@ -5,6 +5,7 @@
 #include "jhetz/ldap/ad/sync.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "jhetz/ldap/sync_extended_operations.hpp"
+#include "jhetz/ldap/sync_store.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 #include "server_thread.hpp"
@@ -21,6 +22,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_container_properties.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -783,4 +785,155 @@ TEST_CASE("sync client: chasing referrals", "[net][sync][client][referral]")
 	CHECK_THAT(b.log(0).error, IsEmpty());
 	CHECK_THAT(b.log(1).error, IsEmpty());
 	CHECK(b.accepted() == 2);// a connection per chase
+}
+
+namespace {
+
+struct card
+{
+	std::string cn;
+};
+
+struct badly_typed_card
+{
+	std::int64_t cn = 0;// cn is a DirectoryString: syntax error
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
+template<>
+constexpr auto ldap::schema<badly_typed_card> =
+  ldap::describe(ldap::object_class("person"), ldap::field<&badly_typed_card::cn>("cn"));
+
+namespace {
+
+auto root_dse_msg(std::int32_t id) -> ldap::message
+{
+	return ldap::message{ id, ldap::search_result_entry{ "", { { "subschemaSubentry", { "cn=Subschema" } } } } };
+}
+
+auto subschema_msg(std::int32_t id) -> ldap::message
+{
+	return ldap::message{ id,
+		ldap::search_result_entry{ "cn=Subschema",
+		  { { "attributeTypes", { "( 2.5.4.3 NAME 'cn' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )" } },
+			{ "objectClasses", { "( 2.5.6.6 NAME 'person' STRUCTURAL MUST cn )" } } } } };
+}
+
+const ldap::dn cards_base{ "ou=people,dc=example,dc=org" };
+constexpr std::string_view card_a = "cn=a,ou=people,dc=example,dc=org";
+
+}// namespace
+
+TEST_CASE("sync load_schema: on a sync::connection and a sync::client", "[net][sync][schema]")
+{
+	SECTION("sync::connection")
+	{
+		threaded_script_server srv(
+		  { { answer({ root_dse_msg(1), done_msg(1) }), answer({ subschema_msg(2), done_msg(2) }), unbind_read() } });
+		{
+			ldap::sync::connection c({ .timeout = std::chrono::seconds(10) });
+			REQUIRE(c.connect(srv.url()).has_value());
+			auto s = ldap::sync::load_schema(c);
+			REQUIRE(s.has_value());
+			CHECK(s->attribute_count() == 1);
+			CHECK(s->object_class_count() == 1);
+			CHECK(ldap::validate<card>(*s).ok());
+			CHECK(c.unbind().has_value());
+		}
+		srv.stop();
+		CHECK_THAT(srv.log(0).error, IsEmpty());
+		REQUIRE(srv.log(0).received.size() == 3);
+		CHECK(std::get<ldap::search_request>(srv.log(0).received[1].op).base_object == "cn=Subschema");
+	}
+	SECTION("sync::client: a failing root DSE read")
+	{
+		threaded_script_server srv(
+		  { { answer({ bind_resp(1) }), answer({ done_msg(2, 50, "", "no access") }), unbind_read() } });
+		{
+			ldap::sync::client pool(options_for(srv.url()));
+			auto s = ldap::sync::load_schema(pool);
+			REQUIRE_FALSE(s.has_value());
+			CHECK(s.error().code == ldap::errc::insufficient_access_rights);
+			CHECK_THAT(std::string(s.error().context), Catch::Matchers::StartsWith("load schema: "));
+		}
+		srv.stop();
+		CHECK_THAT(srv.log(0).error, IsEmpty());
+	}
+}
+
+TEST_CASE("sync store: schema_check::on_first_use", "[net][sync][store][schema]")
+{
+	SECTION("checked once, then every operation runs")
+	{
+		threaded_script_server srv({ { answer({ bind_resp(1) }),
+		  answer({ root_dse_msg(2), done_msg(2) }),
+		  answer({ subschema_msg(3), done_msg(3) }),
+		  answer({ entry_msg(4, card_a, "a"), done_msg(4) }),
+		  answer({ entry_msg(5, card_a, "a"), done_msg(5) }),
+		  unbind_read() } });
+		{
+			ldap::sync::client pool(options_for(srv.url()));
+			ldap::sync::store cards(
+			  pool, cards_base, ldap::named_by<&card::cn>, { .schema_check = ldap::schema_check::on_first_use });
+			for (int i = 0; i < 2; ++i) {
+				auto r = cards.get("a");
+				REQUIRE(r.has_value());
+				REQUIRE(r->has_value());
+				CHECK((*r)->cn == "a");
+			}
+		}
+		srv.stop();
+		CHECK_THAT(srv.log(0).error, IsEmpty());
+		CHECK(srv.log(0).received.size() == 6);
+	}
+	SECTION("a mismatch fails every operation, loaded once")
+	{
+		threaded_script_server srv({ { answer({ bind_resp(1) }),
+		  answer({ root_dse_msg(2), done_msg(2) }),
+		  answer({ subschema_msg(3), done_msg(3) }),
+		  unbind_read() } });
+		{
+			ldap::sync::client pool(options_for(srv.url()));
+			ldap::sync::store cards(pool,
+			  cards_base,
+			  ldap::named_by<&badly_typed_card::cn>,
+			  { .schema_check = ldap::schema_check::on_first_use });
+			for (int i = 0; i < 2; ++i) {
+				auto r = cards.add(badly_typed_card{ .cn = 7 });
+				REQUIRE_FALSE(r.has_value());
+				CHECK(r.error().code == ldap::client_errc::schema_mismatch);
+				CHECK_THAT(
+				  std::string(r.error().context), Catch::Matchers::ContainsSubstring("error: attribute cn: syntax"));
+			}
+		}
+		srv.stop();
+		CHECK_THAT(srv.log(0).error, IsEmpty());
+		CHECK(srv.log(0).received.size() == 4);
+	}
+	SECTION("a schema that does not load is tried again")
+	{
+		threaded_script_server srv({ { answer({ bind_resp(1) }),
+		  answer({ done_msg(2, 50, "", "no access") }),
+		  answer({ root_dse_msg(3), done_msg(3) }),
+		  answer({ subschema_msg(4), done_msg(4) }),
+		  answer({ ldap::message{ 5, ldap::del_response{ ldap::ldap_result{ 0 } } } }),
+		  unbind_read() } });
+		{
+			ldap::sync::client pool(options_for(srv.url()));
+			ldap::sync::store cards(
+			  pool, cards_base, ldap::named_by<&card::cn>, { .schema_check = ldap::schema_check::on_first_use });
+			auto first = cards.remove("a");
+			REQUIRE_FALSE(first.has_value());
+			CHECK(first.error().code == ldap::errc::insufficient_access_rights);
+			CHECK_THAT(std::string(first.error().context), Catch::Matchers::StartsWith("load schema: "));
+			CHECK(cards.remove("a").has_value());
+		}
+		srv.stop();
+		CHECK_THAT(srv.log(0).error, IsEmpty());
+		REQUIRE(srv.log(0).received.size() == 6);
+		CHECK(std::holds_alternative<ldap::del_request>(srv.log(0).received[4].op));
+	}
 }
