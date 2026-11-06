@@ -1499,6 +1499,56 @@ uid=jdoe,...: attribute uid: ...`.
 The untyped `ldap::entry` (dn + attribute → values) stays available for
 exploring unknown data; `ldap::decode<T>(entry)` converts one explicitly.
 
+### Typed CRUD: `ldap::store` (store.hpp)
+
+Layering rule: the codec (descriptor, `value_traits`, `decode<T>`,
+`to_attributes`, typed changes and filters) is in the core; I/O
+conveniences are layers that call only the public protocol operations,
+over the `ldap::directory` concept (directory.hpp: `search`, `add`,
+`modify`, `del`, `modify_dn` with `connection`'s signatures), which
+`connection`, `client` and a shared lease's `shared_connection`
+satisfy. The same rule as the `ldap::ad` layer (section 12).
+
+```cpp
+ldap::store people(pool, ldap::dn{"ou=people,dc=example,dc=org"}, ldap::named_by<&person::uid>);
+co_await people.add(person{.uid = "jdoe", ...});        // uid=jdoe,ou=people,dc=example,dc=org
+auto p = co_await people.get("jdoe");                   // result<std::optional<person>>
+co_await people.modify("jdoe", {ldap::replace<&person::mail>("j@example.org")});
+auto all = co_await people.search(ldap::filters::field<&person::mail>().present());
+co_await people.remove("jdoe");
+```
+
+- Naming: `named_by<&T::m>` is a tag carrying the member pointer as a
+  template argument, so class template argument deduction gets both the
+  struct and the source type (`store<&person::uid, ldap::client>`) and
+  the naming field is checked at compile time: listed in `schema<T>`,
+  required and single-valued (an RDN value), not `read_only` (`add`
+  writes it). An entry is `<attribute>=<escaped value>,<base>`;
+  `dn_of(key)` builds it, and the `_at(dn)` forms take entries that do
+  not follow the pattern.
+- `get` is a base-object search for T's attributes, narrowed to T's
+  object classes, and returns `std::optional<T>`: noSuchObject, or an
+  entry of other classes, is "not there", not an error. Other result
+  codes stay errors.
+- Writes return `response`, as the core operations, so response
+  controls (post-read, ...) stay reachable; each takes its operation's
+  controls.
+- `search(filter, scope = single_level)` returns
+  `typed_search_result<record<T>>`, `record<T>{dn, value}`: the DN as the
+  server sent it, parsed, so entries named otherwise are returned too,
+  and the limit codes are values, as `search()`.
+- No ORM traps: no whole-object save, no hidden reads, no relationships,
+  no entry cache. One request per call, plus the schema load once.
+- `store_options::schema_check = on_first_use` loads the schema with the
+  free `ldap::load_schema(directory &)` on the first operation and keeps
+  the outcome: a mismatch fails every later operation with
+  `schema_mismatch`, a load failure is retried by the next operation.
+- The requests and results without the I/O are
+  `detail::store_codec<Naming>`, shared with `sync::store`
+  (sync_store.hpp), which runs the same steps blocking over
+  `sync::directory` (`sync::connection`, `sync::client` and the sync
+  leases).
+
 **C++26 path:** reflection generates `ldap::schema<T>` from the struct, with
 an annotation to rename (`[[=ldap::name("memberOf")]]`). The descriptor stays
 supported, so user code does not change.

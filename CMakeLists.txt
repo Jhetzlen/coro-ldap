@@ -292,6 +292,7 @@ if(JHETZ_LDAP_BUILD_NET)
         src/connection/transaction.cpp
         src/connection/referral_chase.cpp
         src/connection/same_policy_connector.cpp
+        src/directory.cpp
         src/client/client.cpp
         src/sasl_ntlm.cpp
         src/sasl_scram.cpp
@@ -421,14 +422,17 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "client.hpp" EXCLUDE
             PATTERN "connection.hpp" EXCLUDE
             PATTERN "connection_options.hpp" EXCLUDE
+            PATTERN "directory.hpp" EXCLUDE
             PATTERN "paged_search.hpp" EXCLUDE
             PATTERN "referral_chase.hpp" EXCLUDE
             PATTERN "search_stream.hpp" EXCLUDE
+            PATTERN "store.hpp" EXCLUDE
             PATTERN "transaction.hpp" EXCLUDE
             PATTERN "sasl_ntlm.hpp" EXCLUDE
             PATTERN "sasl_scram.hpp" EXCLUDE
             PATTERN "sasl_gssapi.hpp" EXCLUDE
             PATTERN "sync.hpp" EXCLUDE
+            PATTERN "sync_store.hpp" EXCLUDE
             PATTERN "password.hpp" EXCLUDE)
     endif()
     install(EXPORT jhetz_ldap-targets NAMESPACE jhetz:: DESTINATION ${jhetz_ldap_cmakedir})

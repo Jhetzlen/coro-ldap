@@ -766,6 +766,38 @@ itself needs only ICU.
   syntax (Octet String, JPEG, Fax, Certificate, Certificate List,
   Certificate Pair, Audio, Binary; see `value_rejected_syntaxes`) is a
   `syntax_mismatch`: map userPassword and the like to `ldap::binary`.
+- `jhetz/ldap/directory.hpp` (coro-ldap-2cx.1): the `ldap::directory`
+  concept, the protocol operations a layer runs on (`search`, `add`,
+  `modify`, `del`, `modify_dn` with `connection`'s signatures and
+  results), satisfied by `connection`, `client` and a shared lease's
+  `shared_connection`; `ldap::load_schema(directory &)`, the subschema
+  read of `connection::load_schema()` written once over the public
+  `search` (so it works on a `client`).
+- `jhetz/ldap/store.hpp` (coro-ldap-2cx.1, DESIGN.md section 4):
+  `ldap::store`, typed CRUD of one mapped struct under a base DN, each
+  entry named by one member: `ldap::store people(source, base,
+  ldap::named_by<&person::uid>, store_options{.schema_check})`, the
+  struct and the source type deduced (`store<&person::uid,
+  ldap::client>`). The naming member must be in `schema<T>`, required,
+  single-valued and writable (static_assert). `dn_of(key)`
+  (`uid=<escaped key>,<base>`); `get(key)` / `get_at(dn)` -> `task<result<
+  std::optional<T>>>` (a base-object search for T's attributes and object
+  classes; noSuchObject or no entry of T's classes is nullopt);
+  `add(T)`, `modify(key, changes)` / `modify_at(dn, changes)`,
+  `remove(key)` / `remove_at(dn)` -> `task<result<response>>`, each with
+  its operation's controls; `search(filter = (objectClass=*), scope =
+  single_level)` -> `task<result<typed_search_result<record<T>>>>`,
+  `record<T>{dn, value}` with the DN the server sent (entries named
+  otherwise included), the limit codes a value as for `search()`. Values
+  that do not encode fail before anything is sent, with the contexts of
+  `modify<T>` / `add(dn, T)`. `schema_check::on_first_use` loads the
+  schema with `load_schema` on the first operation and keeps the outcome
+  (a mismatch fails every operation; a schema that does not load is tried
+  again). The store keeps a pointer to the source, which must outlive it
+  and its tasks. `jhetz/ldap/sync_store.hpp`: `ldap::sync::directory`,
+  `sync::load_schema` and `sync::store`, the same over
+  `sync::connection`, `sync::client`, `sync::lease` and
+  `sync::exclusive_lease`, blocking.
 - `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.

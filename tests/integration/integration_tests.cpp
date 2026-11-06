@@ -11,6 +11,7 @@
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/sasl_scram.hpp"
+#include "jhetz/ldap/store.hpp"
 #include "jhetz/ldap/sync.hpp"
 
 #include <boost/capy/buffers.hpp>
@@ -2154,6 +2155,59 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 	CHECK(pool.connections() == 1);
 	pool.close();
 	drive(ioc);
+}
+
+namespace {
+
+struct staff
+{
+	std::string uid;
+	std::string cn;
+	std::string sn;
+	std::optional<std::string> mail;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<staff> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::field<&staff::uid>("uid"),
+  ldap::field<&staff::cn>("cn"),
+  ldap::field<&staff::sn>("sn"),
+  ldap::field<&staff::mail>("mail"));
+
+TEST_CASE("integration: ldap::store over ldap::client", "[integration][client][store]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	const auto server = ldap::url::parse(env("JHETZ_LDAP_IT_LDAP"));
+	REQUIRE(server.has_value());
+	corosio::io_context ioc;
+	ldap::client pool(
+	  ioc, { .servers = { *server }, .connection = trusting(), .setup = ldap::simple_bind_setup(admin, "secret") });
+	ldap::store s(pool, people, ldap::named_by<&staff::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	const std::string name = unique("store");
+
+	REQUIRE(finish(ioc, s.add(staff{ .uid = name, .cn = "Störe", .sn = "Typed", .mail = std::nullopt })).has_value());
+	auto got = finish(ioc, s.get(name));
+	REQUIRE(got.has_value());
+	REQUIRE(got->has_value());
+	CHECK((*got)->cn == "Störe");
+	CHECK_FALSE((*got)->mail.has_value());
+
+	REQUIRE(finish(ioc, s.modify(name, { ldap::replace<&staff::mail>(name + "@example.org") })).has_value());
+	auto found = finish(ioc, s.search(ldap::filters::field<&staff::uid>() == name));
+	REQUIRE(found.has_value());
+	CHECK(found->is_success());
+	REQUIRE(found->entries.size() == 1);
+	CHECK(found->entries[0].dn == *s.dn_of(name));
+	CHECK(found->entries[0].value.mail == name + "@example.org");
+
+	REQUIRE(finish(ioc, s.remove(name)).has_value());
+	auto gone = finish(ioc, s.get(name));
+	REQUIRE(gone.has_value());
+	CHECK_FALSE(gone->has_value());
 }
 
 TEST_CASE("integration: ldap::client replaces a connection the server dropped", "[integration][client]")

@@ -1,4 +1,5 @@
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/store.hpp"
 
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/corosio/io_context.hpp>
@@ -26,7 +27,7 @@ constexpr auto ldap::schema<person> = ldap::describe(ldap::object_class("inetOrg
 
 auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task<int>
 {
-	auto c = co_await ldap::connect(ioc, text, { .schema_check = ldap::schema_check::on_first_use });
+	auto c = co_await ldap::connect(ioc, text);
 	if (!c) {
 		std::cerr << c.error().message() << '\n';
 		co_return 1;
@@ -36,26 +37,34 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task
 		std::cerr << bound.error().message() << '\n';
 		co_return 1;
 	}
-	auto added = co_await c->add(ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" },
-	  person{ .uid = "jdoe", .cn = "John Doe", .sn = "Doe", .mail = "jdoe@example.org" });
+	ldap::store people(*c,
+	  ldap::dn{ "ou=people,dc=example,dc=org" },
+	  ldap::named_by<&person::uid>,
+	  { .schema_check = ldap::schema_check::on_first_use });
+	auto added =
+	  co_await people.add(person{ .uid = "jdoe", .cn = "John Doe", .sn = "Doe", .mail = "jdoe@example.org" });
 	if (!added) {
 		std::cerr << added.error().message() << '\n';
 		co_return 1;
 	}
-	std::cout << "added uid=jdoe,ou=people,dc=example,dc=org\n";
-	auto modified = co_await c->modify<person>(
-	  ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" }, { ldap::replace<&person::mail>("john.doe@example.org") });
+	std::cout << "added uid=jdoe\n";
+	auto modified = co_await people.modify("jdoe", { ldap::replace<&person::mail>("john.doe@example.org") });
 	if (!modified) {
 		std::cerr << modified.error().message() << '\n';
 		co_return 1;
 	}
-	std::cout << "changed the mail of uid=jdoe,ou=people,dc=example,dc=org\n";
-	auto deleted = co_await c->del({ .entry = ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" } });
-	if (!deleted) {
-		std::cerr << deleted.error().message() << '\n';
+	auto found = co_await people.get("jdoe");
+	if (!found || !*found) {
+		std::cerr << "uid=jdoe not found\n";
 		co_return 1;
 	}
-	std::cout << "deleted uid=jdoe,ou=people,dc=example,dc=org\n";
+	std::cout << "uid=jdoe's mail is " << (*found)->mail.value_or("") << '\n';
+	auto removed = co_await people.remove("jdoe");
+	if (!removed) {
+		std::cerr << removed.error().message() << '\n';
+		co_return 1;
+	}
+	std::cout << "deleted uid=jdoe\n";
 	co_return 0;
 }
 

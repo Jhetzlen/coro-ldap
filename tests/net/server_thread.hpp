@@ -21,7 +21,8 @@
 namespace jhetz::ldap::test {
 
 // Answers each request when it arrives: bind (49 for password "wrong"),
-// search (two entries under its base, then done), extended (who am I),
+// search (two entries under its base, then done), add, modify and delete
+// (success), extended (who am I),
 // until the client unbinds or hangs up. Abandons are ignored.
 inline auto serve_session(net::transport t, std::atomic<int> &requests) -> capy::task<void>
 {
@@ -40,6 +41,12 @@ inline auto serve_session(net::transport t, std::atomic<int> &requests) -> capy:
 			const std::string base(s->base_object);
 			out = bytes_of(entry_msg(r->id, "uid=x," + base, "X")) + bytes_of(entry_msg(r->id, "uid=y," + base, "Y"))
 				  + bytes_of(done_msg(r->id));
+		} else if (std::holds_alternative<ldap::add_request>(r->op)) {
+			out = bytes_of(ldap::message{ r->id, ldap::add_response{ ldap::ldap_result{ 0 } } });
+		} else if (std::holds_alternative<ldap::modify_request>(r->op)) {
+			out = bytes_of(ldap::message{ r->id, ldap::modify_response{ ldap::ldap_result{ 0 } } });
+		} else if (std::holds_alternative<ldap::del_request>(r->op)) {
+			out = bytes_of(ldap::message{ r->id, ldap::del_response{ ldap::ldap_result{ 0 } } });
 		} else if (std::holds_alternative<ldap::extended_request>(r->op)) {
 			out = bytes_of(
 			  ldap::message{ r->id, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, "dn:cn=me" } });

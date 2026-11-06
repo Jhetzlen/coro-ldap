@@ -114,6 +114,7 @@
 #include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/connection_options.hpp"
 #include "jhetz/ldap/controls.hpp"
+#include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/error.hpp"
@@ -166,11 +167,6 @@ namespace detail {
 	// For ldap::client: the connection takes requests (open, no unbind()
 	// under way). False on a default-constructed or moved-from connection.
 	[[nodiscard]] auto accepts_requests(const connection &c) noexcept -> bool;
-	// An operation's error context: "search ou=people,dc=example,dc=org",
-	// `search ""` for the root DSE. The DN is often the server's text (an
-	// entry's DN, a referral's): sanitized and cut at 256 bytes, as an
-	// entry's in decode errors.
-	auto op_context(std::string_view op, const dn &d) -> std::string;
 }// namespace detail
 
 class connection
