@@ -89,7 +89,7 @@ struct search_params
 	return { .base = dn{}, .scope = search_scope::base_object, .attributes = std::move(attributes) };
 }
 
-// A search run to its end (connection::search, search_as, client::search,
+// A search run to its end (connection::search, store::search, client::search,
 // the sync facades): the entries and the URIs of the search result
 // references received, in order, then the SearchResultDone's LDAPResult
 // (RFC 4511 sections 4.5.2 and 4.1.9; resultCode, matchedDN,
@@ -113,7 +113,7 @@ template<class Entries> struct basic_search_result
 };
 
 using search_result = basic_search_result<std::pmr::vector<entry>>;
-// search_as<T>: the entries decoded to T.
+// The entries decoded to T (store::search, with record<T>).
 template<class T> using typed_search_result = basic_search_result<std::vector<T>>;
 
 // The other operations (step 6), as plain aggregates like search_params.

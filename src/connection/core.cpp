@@ -93,7 +93,6 @@ connection::impl::impl(corosio::io_context &ioc,
 	default_timeout_(options.operation_timeout), tls_shutdown_timeout(options.tls_shutdown_timeout), pending(memory),
 	abandoned(memory), outbox(memory), held(memory), scratch(memory)
 {
-	knowledge_.schema_mode = options.schema_check;
 	write_idle.set();
 	reader_idle.set();
 	bind_idle.set();
@@ -791,9 +790,6 @@ auto connection::impl::take_armed_layer(const message &m) -> bool
 		shut(detail::with_context(std::move(r.error()), detail::format("read {}", transport_.name())), true);
 		return false;
 	}
-	// RFC 4513 section 5.2.1.6: what was learnt before the layer is
-	// forgotten (it came unprotected).
-	knowledge_.forget();
 	return true;
 }
 

@@ -725,8 +725,8 @@ TEST_CASE("integration: typed search with the server's schema", "[integration][m
 		SKIP("no slapd: run under run_slapd.sh");
 	}
 	corosio::io_context ioc;
-	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"), trusting({ .schema_check = ldap::schema_check::on_first_use }));
-	auto s = finish(ioc, c.load_schema());
+	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"), trusting());
+	auto s = finish(ioc, ldap::load_schema(c));
 	REQUIRE(s.has_value());
 	CHECK(s->attribute_count() > 100);
 	CHECK(s->skipped() == 0);// every SYNTAX a numeric OID (RFC 4512 noidlen)
@@ -734,12 +734,12 @@ TEST_CASE("integration: typed search with the server's schema", "[integration][m
 	INFO(report.to_string());
 	CHECK(report.ok());
 
-	auto r = finish(
-	  ioc, c.search_as<person>({ .base = people, .filter = ldap::filters::field<&person::uid_number>() >= 10245 }));
+	ldap::store accounts(c, people, ldap::named_by<&person::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	auto r = finish(ioc, accounts.search(ldap::filters::field<&person::uid_number>() >= 10245));
 	REQUIRE(r.has_value());
 	REQUIRE(r->entries.size() == 5);
-	CHECK(r->entries[0].mail.has_value());
-	CHECK(r->entries[0].created.time_since_epoch().count() > 0);
+	CHECK(r->entries[0].value.mail.has_value());
+	CHECK(r->entries[0].value.created.time_since_epoch().count() > 0);
 }
 
 // ---------------------------------------------------------------- writes
@@ -790,7 +790,7 @@ TEST_CASE("integration: add, modify, compare, rename and delete", "[integration]
 	CHECK(deleted.error().code == ldap::errc::no_such_object);
 }
 
-TEST_CASE("integration: move to another OU and back, then rename", "[integration]")
+TEST_CASE("integration: modify DN to another OU and back, then rename", "[integration]")
 {
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
@@ -812,21 +812,23 @@ TEST_CASE("integration: move to another OU and back, then rename", "[integration
 		return finish(ioc, c.search({ .base = d, .scope = ldap::search_scope::base_object })).has_value();
 	};
 
-	REQUIRE(finish(ioc, c.move(entry, groups)).has_value());
+	REQUIRE(finish(ioc, c.modify_dn({ .entry = entry, .new_rdn = entry.rdns().front(), .new_superior = groups }))
+		.has_value());
 	CHECK_FALSE(exists(entry));
 	CHECK(exists(moved));
-	REQUIRE(finish(ioc, c.move(moved, people)).has_value());
+	REQUIRE(finish(ioc, c.modify_dn({ .entry = moved, .new_rdn = moved.rdns().front(), .new_superior = people }))
+		.has_value());
 	CHECK(exists(entry));
 	CHECK_FALSE(exists(moved));
 
 	// Keep the old RDN value: the entry then has both uids.
 	const ldap::rdn new_rdn = *ldap::rdn::parse("uid=" + name + "-r");
 	const ldap::dn renamed = people.child(new_rdn);
-	REQUIRE(finish(ioc, c.rename(entry, new_rdn, false)).has_value());
+	REQUIRE(finish(ioc, c.modify_dn({ .entry = entry, .new_rdn = new_rdn, .delete_old_rdn = false })).has_value());
 	CHECK_FALSE(exists(entry));
 	CHECK(finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name })) == true);
 	CHECK(finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name + "-r" })) == true);
-	auto taken = finish(ioc, c.rename(renamed, ldap::rdn{ "uid=user001" }));// a fixture user
+	auto taken = finish(ioc, c.modify_dn({ .entry = renamed, .new_rdn = ldap::rdn{ "uid=user001" } }));// a fixture user
 	REQUIRE_FALSE(taken.has_value());
 	CHECK(taken.error().code == ldap::errc::entry_already_exists);
 	CHECK(std::string_view(taken.error().context) == "modify DN " + std::string(renamed.to_string()));
@@ -1762,10 +1764,15 @@ TEST_CASE("integration: the sync connection", "[integration][sync]")
 		const ldap::dn renamed = *ldap::dn::parse("uid=" + name + "-r,ou=people,dc=example,dc=org");
 		REQUIRE(c.modify_dn({ .entry = entry, .new_rdn = renamed.rdns().front() }).has_value());
 		const ldap::dn groups{ "ou=groups,dc=example,dc=org" };
-		REQUIRE(c.move(renamed, groups).has_value());
-		REQUIRE(c.move(groups.child(renamed.rdns().front()), renamed.parent()).has_value());
-		REQUIRE(c.rename(renamed, entry.rdns().front()).has_value());
-		REQUIRE(c.rename(entry, renamed.rdns().front()).has_value());
+		REQUIRE(
+		  c.modify_dn({ .entry = renamed, .new_rdn = renamed.rdns().front(), .new_superior = groups }).has_value());
+		REQUIRE(
+		  c.modify_dn({ .entry = groups.child(renamed.rdns().front()),
+						.new_rdn = renamed.rdns().front(),
+						.new_superior = renamed.parent() })
+			.has_value());
+		REQUIRE(c.modify_dn({ .entry = renamed, .new_rdn = entry.rdns().front() }).has_value());
+		REQUIRE(c.modify_dn({ .entry = entry, .new_rdn = renamed.rdns().front() }).has_value());
 		REQUIRE(c.del({ .entry = renamed }).has_value());
 		auto gone = c.del({ .entry = renamed });
 		REQUIRE_FALSE(gone.has_value());
@@ -2132,14 +2139,15 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 		.has_value());
 	CHECK(finish(ioc, pool.compare({ .entry = entry, .attribute = "mail", .value = "pool@example.org" })) == true);
 
-	REQUIRE(finish(ioc, pool.move(entry, groups)).has_value());
+	REQUIRE(finish(ioc, pool.modify_dn({ .entry = entry, .new_rdn = entry.rdns().front(), .new_superior = groups }))
+		.has_value());
 	const ldap::dn moved = groups.child(entry.rdns().front());
 	CHECK(exists(moved));
 	const ldap::dn back = people.child(*ldap::rdn::parse("uid=" + name + "-b"));
 	REQUIRE(finish(ioc, pool.modify_dn({ .entry = moved, .new_rdn = back.rdns().front(), .new_superior = people }))
 		.has_value());
 	const ldap::dn renamed = people.child(*ldap::rdn::parse("uid=" + name + "-r"));
-	REQUIRE(finish(ioc, pool.rename(back, renamed.rdns().front())).has_value());
+	REQUIRE(finish(ioc, pool.modify_dn({ .entry = back, .new_rdn = renamed.rdns().front() })).has_value());
 	CHECK_FALSE(exists(back));
 	CHECK(exists(renamed));
 

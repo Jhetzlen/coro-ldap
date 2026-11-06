@@ -20,19 +20,6 @@
 
 namespace jhetz::ldap {
 
-// When typed operations check their struct against the server's schema
-// (DESIGN.md section 6).
-enum class schema_check {
-	off,
-	// The first search_as / modify<T> / add(dn, T) for each T loads the
-	// subschema (once per connection) and runs validate<T>; errors in the
-	// report fail the operation with client_errc::schema_mismatch (the
-	// report in the context). The result is cached per connection and T,
-	// and dropped by start_tls() (RFC 4513 section 3.1.5: what was read in
-	// clear is read again over TLS).
-	on_first_use,
-};
-
 struct connection_options
 {
 	// Budget for the whole connect (resolve, TCP, TLS handshake); see
@@ -67,7 +54,6 @@ struct connection_options
 	// right after connecting (using `tls` and `timeout`), and fail if that
 	// does not work. Not allowed with ldaps:// or ldapi:// (invalid_url).
 	bool start_tls = false;
-	ldap::schema_check schema_check = ldap::schema_check::off;
 };
 
 }// namespace jhetz::ldap

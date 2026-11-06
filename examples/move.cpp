@@ -20,8 +20,9 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task
 		std::cerr << bound.error().message() << '\n';
 		co_return 1;
 	}
-	auto moved =
-	  co_await c->move(ldap::dn{ "uid=jane,ou=people,dc=example,dc=org" }, ldap::dn{ "ou=alumni,dc=example,dc=org" });
+	auto moved = co_await c->modify_dn({ .entry = ldap::dn{ "uid=jane,ou=people,dc=example,dc=org" },
+	  .new_rdn = ldap::rdn{ "uid=jane" },
+	  .new_superior = ldap::dn{ "ou=alumni,dc=example,dc=org" } });
 	if (!moved) {
 		std::cerr << moved.error().message() << '\n';
 		co_return 1;

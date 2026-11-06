@@ -510,26 +510,6 @@ auto client::modify_dn(modify_dn_params request) -> result<response>
 	return core_->io.run([&] { return core_->pool->modify_dn(std::move(request)); });
 }
 
-auto client::move(dn entry,
-  dn new_parent,
-  modify_dn_controls controls,
-  std::optional<std::chrono::milliseconds> timeout) -> result<response>
-{
-	return core_->io.run(
-	  [&] { return core_->pool->move(std::move(entry), std::move(new_parent), std::move(controls), timeout); });
-}
-
-auto client::rename(dn entry,
-  rdn new_rdn,
-  bool delete_old_rdn,
-  modify_dn_controls controls,
-  std::optional<std::chrono::milliseconds> timeout) -> result<response>
-{
-	return core_->io.run([&] {
-		return core_->pool->rename(std::move(entry), std::move(new_rdn), delete_old_rdn, std::move(controls), timeout);
-	});
-}
-
 auto client::connections() const -> std::size_t
 {
 	if (core_->io.on_this_thread()) {

@@ -224,8 +224,7 @@ itself needs only ICU.
   client API, with `ldap::connect()`. It includes
   the headers below, so it is the one to include; each also compiles on
   its own:
-  - `jhetz/ldap/connection_options.hpp`: `connection_options`,
-    `schema_check`.
+  - `jhetz/ldap/connection_options.hpp`: `connection_options`.
   - `jhetz/ldap/operations.hpp` (part of the codec, `jhetz::ldap`): the
     request aggregates (`search_params`, `add_params`, `modify_params`,
     `del_params`, `modify_dn_params`, `compare_params`, `extended_params`,
@@ -261,7 +260,8 @@ itself needs only ICU.
   `diagnostic_message` and `controls`; a value for success and for
   sizeLimitExceeded, timeLimitExceeded and adminLimitExceeded, with the
   entries received before it and `is_success()` false; any other code is
-  an error; `search_as<T>` returns the same as `typed_search_result<T>`),
+  an error; a store's `search` returns the same as
+  `typed_search_result<record<T>>`),
   `search_stream(search_params, mr)` whose `co_await s.next()` yields one
   entry at a time (and keeps the search references and the done controls),
   and `unbind()`. `search_params` is a plain aggregate for designated
@@ -334,10 +334,9 @@ itself needs only ICU.
   lifetime rules.
   Step 6 adds the other operations: `add`, `modify` (changes from
   `ldap::mod::add / remove / replace / increment`), `del`, `modify_dn`
-  (rename and / or move; `move(entry, new_parent)` keeps the RDN and sets
-  newSuperior, `rename(entry, new_rdn, delete_old_rdn = true)` keeps the
-  parent; both build the ModifyDNRequest for `modify_dn`, on
-  `sync::connection` too), `compare` (`result<bool>`), `extended`,
+  (rename and / or move: `{.entry, .new_rdn, .delete_old_rdn,
+  .new_superior}`; breaking (coro-ldap-aw4.3): `move()` and `rename()`
+  are gone from `connection`, `client` and the sync facades), `compare` (`result<bool>`), `extended`,
   `who_am_i` (RFC 4532; an authzId that is not UTF-8 is
   conversion_failed) and `password_modify` (RFC 3062: returns the
   server-generated password, if any), each taking a params aggregate
@@ -730,13 +729,15 @@ itself needs only ICU.
   `std::optional<T>`, `std::vector<T>`); `value_traits<T>` converts values
   (strings, which must be well-formed UTF-8 or the decode is
   `conversion_failed`, and one bad value fails the whole `decode<T>` and
-  so the whole `search_as<T>`; integers, bool, `dn`, `binary` for binary
+  so the whole store search; integers, bool, `dn`, `binary` for binary
   attributes such as userPassword (Octet String), jpegPhoto and
   userCertificate, `sys_seconds` as GeneralizedTime, enums with an
   `enum_names` table). `decode<T>(entry)`,
   `to_attributes(value)`, typed changes `replace / add / remove<&T::m>(v)`,
-  typed filters `filters::field<&T::m>() == v`, and on the connection
-  `search_as<T>`, `modify<T>(dn, changes)` and `add(dn, value)`. Mistakes
+  typed filters `filters::field<&T::m>() == v`; the I/O is `ldap::store`
+  (store.hpp, below). Breaking (coro-ldap-2cx.2): `connection::search_as<T>`,
+  `modify<T>(dn, changes)` and `add(dn, value)`, their sync copies and
+  `connection_options::schema_check` are gone. Mistakes
   (unmapped or read_only member, wrong value type, invalid names) fail to
   compile; `tests/compile/` checks each. Encoding can fail (breaking
   change, coro-ldap-vcp): `value_traits<T>::encode` returns `std::string`
@@ -744,7 +745,7 @@ itself needs only ICU.
   string traits reject ill-formed UTF-8, enums a value without a name and
   `sys_seconds` a year outside 0000-9999, all as `encode_error`.
   `to_attributes` returns `result<...>` and `change<T>::wire` is a
-  `result<modify_change>`; `modify<T>` and `add(dn, value)` return the
+  `result<modify_change>`; a store's `modify` and `add` return the
   error before sending anything, and a typed filter on such a value is the
   empty filter (fails with `invalid_filter` when sent).
 
@@ -760,8 +761,10 @@ itself needs only ICU.
   maps as warnings: `must_attribute_not_mapped`,
   `must_attribute_not_required`, `unknown_superclass`),
   `object_class_type` with `sup`, `kind` (`object_class_kind`), `must`
-  and `may`, `connection::load_schema()` and
-  `connection_options::schema_check = schema_check::on_first_use`.
+  and `may`; the free `ldap::load_schema` (directory.hpp) and
+  `store_options::schema_check = schema_check::on_first_use`. Breaking
+  (coro-ldap-aw4.1): `connection::load_schema()` is gone, and with it the
+  connection's schema cache.
   Breaking: a `std::string` or `std::pmr::string` member on a binary
   syntax (Octet String, JPEG, Fax, Certificate, Certificate List,
   Certificate Pair, Audio, Binary; see `value_rejected_syntaxes`) is a
@@ -771,8 +774,7 @@ itself needs only ICU.
   `modify`, `del`, `modify_dn` with `connection`'s signatures and
   results), satisfied by `connection`, `client` and a shared lease's
   `shared_connection`; `ldap::load_schema(directory &)`, the subschema
-  read of `connection::load_schema()` written once over the public
-  `search` (so it works on a `client`).
+  read over the public `search` (so it works on a `client`).
 - `jhetz/ldap/store.hpp` (coro-ldap-2cx.1, DESIGN.md section 4):
   `ldap::store`, typed CRUD of one mapped struct under a base DN, each
   entry named by one member: `ldap::store people(source, base,
@@ -789,11 +791,14 @@ itself needs only ICU.
   single_level)` -> `task<result<typed_search_result<record<T>>>>`,
   `record<T>{dn, value}` with the DN the server sent (entries named
   otherwise included), the limit codes a value as for `search()`. Values
-  that do not encode fail before anything is sent, with the contexts of
-  `modify<T>` / `add(dn, T)`. `schema_check::on_first_use` loads the
+  that do not encode fail before anything is sent (`add uid=...:
+  attribute mail: ...`, `modify uid=...: replace mail: ...`).
+  `schema_check::on_first_use` (the enum is in store.hpp) loads the
   schema with `load_schema` on the first operation and keeps the outcome
   (a mismatch fails every operation; a schema that does not load is tried
-  again). The store keeps a pointer to the source, which must outlive it
+  again), and checks again once the source's `is_tls()` or
+  `security_layer()` changed (RFC 4513 sections 3.1.5 and 5.2.1.6), on a
+  source that has them. The store keeps a pointer to the source, which must outlive it
   and its tasks. `jhetz/ldap/sync_store.hpp`: `ldap::sync::directory`,
   `sync::load_schema` and `sync::store`, the same over
   `sync::connection`, `sync::client`, `sync::lease` and
@@ -849,9 +854,7 @@ itself needs only ICU.
   once on another connection after `cond::connection_lost` or
   `cond::busy_or_unavailable` (a stream only before its first message;
   it holds the lease until destroyed). Write forwarders `add(params)`,
-  `modify(params)`, `del(params)`, `modify_dn(params)`, `move(entry,
-  new_parent, controls, timeout)`, `rename(entry, new_rdn,
-  delete_old_rdn, controls, timeout)`, each `->
+  `modify(params)`, `del(params)`, `modify_dn(params)`, each `->
   task<result<response>>`, run the operation on a shared lease and retry
   it once on another connection only after `client_errc::not_sent` (the
   server never saw the request); any other failure (a connection lost
@@ -886,13 +889,13 @@ itself needs only ICU.
   setup and observer hooks run there). `acquire() -> result<sync::lease>`
   and `acquire_exclusive() -> result<sync::exclusive_lease>`; a
   `sync::exclusive_lease` has `sync::connection`'s operations (bind,
-  search, `search_paged`, `search_as`, add, modify, ...,
+  search, `search_paged`, add, modify, ...,
   `begin_transaction`, `unbind`, `close`), run on the leased connection, a
   `sync::lease` the same but `simple_bind`, `sasl_bind`, `start_tls`,
   `unbind` and `close` (as `ldap::shared_connection`), both with
   `server()`, `release()` and `operator bool` (`sync::basic_lease`). The forwarders
   `search`, `compare` and `who_am_i`, and the write forwarders `add`,
-  `modify`, `del`, `modify_dn`, `move`, `rename`, block and retry as the
+  `modify`, `del`, `modify_dn`, block and retry as the
   async ones, and `chase_search` / `chase_compare` mirror the async
   client's (referrals as `client_options::referrals` says; the authorizer
   and `on_referral` run on the I/O thread); no `search_stream` (no

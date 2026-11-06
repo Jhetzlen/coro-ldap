@@ -142,12 +142,14 @@ template<auto Naming, directory D> class store
 		if (options_.schema_check == ldap::schema_check::off) {
 			return {};
 		}
-		if (!checked_) {
+		const ldap::detail::source_protection now = ldap::detail::protection_of(*source_);
+		if (!checked_ || checked_under_ != now) {
 			auto s = sync::load_schema(*source_);
 			if (!s) {
 				return std::unexpected(std::move(s.error()));
 			}
 			checked_ = codec::check(*s);
+			checked_under_ = now;
 		}
 		return *checked_;
 	}
@@ -156,6 +158,7 @@ template<auto Naming, directory D> class store
 	dn base_;
 	store_options options_;
 	std::optional<result<void>> checked_{};
+	ldap::detail::source_protection checked_under_{};
 };
 
 }// namespace jhetz::ldap::sync

@@ -287,7 +287,6 @@ if(JHETZ_LDAP_BUILD_NET)
         src/connection/search.cpp
         src/connection/paged_search.cpp
         src/connection/operations.cpp
-        src/connection/schema_load.cpp
         src/connection/password.cpp
         src/connection/transaction.cpp
         src/connection/referral_chase.cpp

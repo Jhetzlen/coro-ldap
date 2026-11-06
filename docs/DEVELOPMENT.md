@@ -300,7 +300,7 @@ URL (`ldap://localhost`).
 | `pool.cpp` | the same search through an `ldap::client` pool (`client::search`: a shared lease, retried once on another connection) |
 | `modify.cpp` | replace a user's `mail` |
 | `add.cpp` | add the user `uid=jane` |
-| `move.cpp` | move `uid=jane` from `ou=people` to `ou=alumni` (`connection::move`; `rename` changes the RDN instead) |
+| `move.cpp` | move `uid=jane` from `ou=people` to `ou=alumni` (`modify_dn` with `.new_superior`; `.new_rdn` alone renames) |
 | `delete.cpp` | delete the user `uid=jane` from `ou=alumni` (run `add`, `move`, then `delete`) |
 | `password.cpp` | reset a user's password (RFC 3062 or Active Directory, from the root DSE) |
 | `starttls.cpp` | connect with StartTLS, then bind |

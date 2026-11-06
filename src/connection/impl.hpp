@@ -32,7 +32,6 @@
 #include <string_view>
 #include <system_error>
 #include <type_traits>
-#include <typeindex>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -153,26 +152,6 @@ class connection::impl
 	auto mr() const noexcept -> std::pmr::memory_resource * { return mr_; }
 	auto transport() const noexcept -> const net::transport & { return transport_; }
 	auto default_timeout() const noexcept -> std::optional<std::chrono::milliseconds> { return default_timeout_; }
-
-	// What the connection knows about the server: the modes set by the
-	// options, and the caches filled from the server's answers. The core
-	// never reads it: it is the operations' (schema checks), which fill its
-	// caches, hence the mutable accessor.
-	struct server_knowledge
-	{
-		// schema_check::on_first_use: the loaded schema and the types checked.
-		ldap::schema_check schema_mode = ldap::schema_check::off;
-		std::shared_ptr<const server_schema> schema{};
-		std::vector<std::type_index> schema_checked{};
-
-		// Discards what was learnt from the server (the modes are kept).
-		void forget() noexcept
-		{
-			schema.reset();
-			schema_checked.clear();
-		}
-	};
-	auto knowledge() noexcept -> server_knowledge & { return knowledge_; }
 
 	// Tests only (detail::set_next_message_id): the id the next request gets,
 	// to reach maxInt without sending 2^31 requests.
@@ -435,7 +414,6 @@ class connection::impl
 	// (RFC 4511 4.14.1), and is_tls() is false (the TLS layer is set before
 	// the handshake).
 	bool upgrading = false;
-	server_knowledge knowledge_{};
 	// arm_security_layer(): installed by route() on the next successful
 	// BindResponse.
 	std::unique_ptr<sasl_security_layer> armed_layer{};

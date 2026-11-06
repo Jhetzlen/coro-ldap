@@ -17,9 +17,10 @@
 //       jhetz::ldap::field<&person::created>("createTimestamp", jhetz::ldap::read_only));
 //
 //   ldap::result<person> p = ldap::decode<person>(entry);
-//   co_await conn.search_as<person>({.base = base, .filter = f});
-//   co_await conn.modify<person>(dn, {ldap::replace<&person::mail>("new@example.org")});
-//   co_await conn.add(dn, person{...});
+//   ldap::store people(conn, base, ldap::named_by<&person::uid>);   // store.hpp
+//   co_await people.search(f);
+//   co_await people.modify("jdoe", {ldap::replace<&person::mail>("new@example.org")});
+//   co_await people.add(person{...});
 //   auto f = ldap::filters::field<&person::uid>() == "jdoe";
 //
 // Compile-time checks: attribute and object class names are validated; a
@@ -35,7 +36,7 @@
 // (std::vector<std::byte>, ldap::binary, is a single binary value; use
 // std::vector<ldap::binary> for several.) A value that does not convert is
 // conversion_failed, and one bad value fails the whole decode<T> (and so the
-// whole search_as<T>). A string member (std::string, std::pmr::string) takes
+// whole store search). A string member (std::string, std::pmr::string) takes
 // only well-formed UTF-8, so binary attributes (userPassword, jpegPhoto,
 // userCertificate, ...) map to ldap::binary; validate<T> reports a string
 // member on a binary syntax (schema.hpp). Errors name the entry and the
@@ -53,7 +54,7 @@
 // value can be written, or ldap::result<std::string> when some cannot
 // (encode_error). detail::encode_value(v) takes both forms and returns
 // result<std::string>. A failed encode stops the typed write before
-// anything is sent: add<T> (to_attributes) and modify<T> (the change)
+// anything is sent: store::add (to_attributes) and store::modify (the change)
 // return the error, and a typed filter becomes the empty filter, which
 // fails with invalid_filter (see filters::typed_attr).
 //
@@ -446,7 +447,7 @@ namespace detail {
 	}
 }// namespace detail
 
-// The attribute names of T's descriptor, in order (what search_as requests).
+// The attribute names of T's descriptor, in order (what a store requests).
 template<described T>
 [[nodiscard]] auto attribute_names(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> string_list
 {
@@ -625,9 +626,9 @@ template<described T>
 // ---------------------------------------------------------------- typed changes
 
 // A ModifyRequest change for a member of T, built by ldap::add / remove /
-// replace below; connection::modify<T> takes them. A value that does not
+// replace below; store::modify takes them. A value that does not
 // encode leaves the error in `wire` (context "replace mail"), which
-// modify<T> returns before sending anything.
+// store::modify returns before sending anything.
 template<class T> struct change
 {
 	result<modify_change> wire;
@@ -788,7 +789,7 @@ namespace filters {
 }// namespace filters
 
 // `(&(objectClass=c1)...(objectClass=cN) f)`, or `f` when T declares no
-// object class: what search_as<T> sends.
+// object class: what a store's search sends.
 template<described T> [[nodiscard]] auto narrow_filter(filter f) -> filter
 {
 	constexpr auto &names = schema<T>.classes.names;

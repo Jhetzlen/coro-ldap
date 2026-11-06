@@ -133,9 +133,6 @@ auto connection::start_tls(net::tls_options options, std::optional<std::chrono::
 		self->shut(e, true);
 		co_return std::unexpected(std::move(e));
 	}
-	// RFC 4513 section 3.1.5: what was learnt about the server in clear
-	// (possibly from an attacker) is discarded; the schema is read again.
-	self->knowledge().forget();
 	co_return result<void>{};
 }
 

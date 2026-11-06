@@ -143,7 +143,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <typeindex>
 #include <utility>
 #include <vector>
 
@@ -349,24 +348,6 @@ class connection
 	auto modify(modify_params request) -> boost::capy::task<result<response>>;
 	auto del(del_params request) -> boost::capy::task<result<response>>;
 	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
-	// Task-named ModifyDN requests, built for modify_dn() (same context
-	// "modify DN <entry>", same results). move() puts `entry` under
-	// `new_parent` with its RDN unchanged (newSuperior = new_parent;
-	// deleteoldrdn is true, which has no effect when the RDN is kept, RFC
-	// 4511 section 4.9). rename() gives `entry` the RDN `new_rdn` under the
-	// same parent (no newSuperior), dropping the old RDN's values from the
-	// entry unless `delete_old_rdn` is false. An empty `entry` (move) or
-	// `new_rdn` (rename) fails with client_errc::invalid_dn before anything
-	// is sent.
-	auto move(dn entry,
-	  dn new_parent,
-	  modify_dn_controls controls = {},
-	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> boost::capy::task<result<response>>;
-	auto rename(dn entry,
-	  rdn new_rdn,
-	  bool delete_old_rdn = true,
-	  modify_dn_controls controls = {},
-	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> boost::capy::task<result<response>>;
 	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
 	// Any extended operation but StartTLS: its name (start_tls_oid) fails
 	// with encode_error before anything is sent; use start_tls().
@@ -420,96 +401,6 @@ class connection
 	auto change_password(dn user, std::string old_password, std::string new_password)
 	  -> boost::capy::task<result<void>>;
 	auto reset_password(dn user, std::string new_password) -> boost::capy::task<result<void>>;
-
-	// Reads the server's subschema (RFC 4512): the root DSE's
-	// subschemaSubentry (cn=Subschema if it names none), then that entry's
-	// attributeTypes and objectClasses. See schema.hpp.
-	auto load_schema() -> boost::capy::task<result<server_schema>>;
-
-	// Typed operations (mapping.hpp, DESIGN.md section 4).
-	//
-	// search_as<T>: a search whose attribute list is T's descriptor's (any
-	// `request.attributes` are replaced) and whose filter is narrowed to T's
-	// object classes, if it declares some. Returns search()'s result with
-	// each entry decoded to T (a typed_search_result<T>, on the limit codes
-	// too); the first entry that does not decode fails the whole call (its
-	// error names the search, the entry and the attribute).
-	//
-	// An empty filter (the poison a typed filter operator gives when a value
-	// does not encode) fails with invalid_filter before the schema check, so
-	// nothing is sent.
-	template<described T> auto search_as(search_params request) -> boost::capy::task<result<typed_search_result<T>>>
-	{
-		const std::string context = detail::op_context("search", request.base);
-		if (request.filter.empty()) {
-			co_return std::unexpected(
-			  detail::with_context(make_error(client_errc::invalid_filter, "filter: empty"), context));
-		}
-		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
-			co_return std::unexpected(std::move(c.error()));
-		}
-		request.attributes = attribute_names<T>();
-		request.filter = narrow_filter<T>(std::move(request.filter));
-		auto found = co_await search(std::move(request));
-		if (!found) {
-			co_return std::unexpected(std::move(found.error()));
-		}
-		typed_search_result<T> out{ .references = std::move(found->references),
-			.result_code = found->result_code,
-			.matched_dn = std::move(found->matched_dn),
-			.diagnostic_message = std::move(found->diagnostic_message),
-			.controls = std::move(found->controls) };
-		out.entries.reserve(found->entries.size());
-		for (const auto &e : found->entries) {
-			auto v = ldap::decode<T>(e);
-			if (!v) {
-				co_return std::unexpected(detail::with_context(std::move(v.error()), context));
-			}
-			out.entries.push_back(std::move(*v));
-		}
-		co_return out;
-	}
-
-	// modify<T>: changes built with ldap::replace / add / remove<&T::member>.
-	// A change whose value did not encode fails the call with its error
-	// ("modify uid=jdoe,...: replace mail: not valid UTF-8 (...)") before
-	// anything is sent.
-	template<described T>
-	auto modify(dn object, std::vector<change<T>> changes, modify_controls controls = {})
-	  -> boost::capy::task<result<response>>
-	{
-		modify_params p{ .object = std::move(object), .controls = std::move(controls) };
-		p.changes.reserve(changes.size());
-		for (auto &c : changes) {
-			if (!c.wire) {
-				co_return std::unexpected(
-				  detail::with_context(std::move(c.wire.error()), detail::op_context("modify", p.object)));
-			}
-			p.changes.push_back(std::move(*c.wire));
-		}
-		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
-			co_return std::unexpected(std::move(c.error()));
-		}
-		co_return co_await modify(std::move(p));
-	}
-
-	// add(dn, value): the attributes of ldap::to_attributes(value) (no
-	// read_only members, objectClass from the descriptor). A member that
-	// does not encode fails the call ("add uid=jdoe,...: attribute mail:
-	// ...") before anything is sent.
-	template<described T> auto add(dn entry, T value, add_controls controls = {}) -> boost::capy::task<result<response>>
-	{
-		auto attributes = to_attributes(value);
-		if (!attributes) {
-			co_return std::unexpected(
-			  detail::with_context(std::move(attributes.error()), detail::op_context("add", entry)));
-		}
-		if (auto c = co_await check_schema(typeid(T), &validate<T>); !c) {
-			co_return std::unexpected(std::move(c.error()));
-		}
-		co_return co_await add(add_params{
-		  .entry = std::move(entry), .attributes = std::move(*attributes), .controls = std::move(controls) });
-	}
 
 	// StartTLS (RFC 4511 section 4.14): upgrades a plain ldap:// connection to
 	// TLS in place, with the same verification rules as ldaps:// (`options`;
@@ -571,10 +462,6 @@ class connection
 	friend void detail::set_close_hook(connection &, std::move_only_function<void() noexcept>) noexcept;
 	friend auto detail::accepts_requests(const connection &) noexcept -> bool;
 
-	// schema_check::on_first_use for one type (connection_options.hpp).
-	auto check_schema(std::type_index type, schema_report (*validate_type)(const server_schema &))
-	  -> boost::capy::task<result<void>>;
-
 	impl *impl_ = nullptr;// reference counted; allocated from the resource it records
 };
 
@@ -634,21 +521,6 @@ class shared_connection
 	{
 		return conn_->modify_dn(std::move(request));
 	}
-	auto move(dn entry,
-	  dn new_parent,
-	  modify_dn_controls controls = {},
-	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) const -> boost::capy::task<result<response>>
-	{
-		return conn_->move(std::move(entry), std::move(new_parent), std::move(controls), timeout);
-	}
-	auto rename(dn entry,
-	  rdn new_rdn,
-	  bool delete_old_rdn = true,
-	  modify_dn_controls controls = {},
-	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) const -> boost::capy::task<result<response>>
-	{
-		return conn_->rename(std::move(entry), std::move(new_rdn), delete_old_rdn, std::move(controls), timeout);
-	}
 	auto compare(compare_params request) const -> boost::capy::task<result<bool>>
 	{
 		return conn_->compare(std::move(request));
@@ -686,24 +558,6 @@ class shared_connection
 	auto reset_password(dn user, std::string new_password) const -> boost::capy::task<result<void>>
 	{
 		return conn_->reset_password(std::move(user), std::move(new_password));
-	}
-	auto load_schema() const -> boost::capy::task<result<server_schema>> { return conn_->load_schema(); }
-
-	template<described T>
-	auto search_as(search_params request) const -> boost::capy::task<result<typed_search_result<T>>>
-	{
-		return conn_->search_as<T>(std::move(request));
-	}
-	template<described T>
-	auto modify(dn object, std::vector<change<T>> changes, modify_controls controls = {}) const
-	  -> boost::capy::task<result<response>>
-	{
-		return conn_->modify<T>(std::move(object), std::move(changes), std::move(controls));
-	}
-	template<described T>
-	auto add(dn entry, T value, add_controls controls = {}) const -> boost::capy::task<result<response>>
-	{
-		return conn_->add(std::move(entry), std::move(value), std::move(controls));
 	}
 
   private:

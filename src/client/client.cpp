@@ -1580,33 +1580,6 @@ auto client::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 	  state_, [request = std::move(request)](const lease &held) { return held->modify_dn(request); });
 }
 
-auto client::move(dn entry,
-  dn new_parent,
-  modify_dn_controls controls,
-  std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<response>>
-{
-	if (state_ == nullptr) {
-		return read_refused<response>(detail::op_context("modify DN", entry));
-	}
-	return detail::client_state::write(state_,
-	  [entry = std::move(entry), new_parent = std::move(new_parent), controls = std::move(controls), timeout](
-		const lease &held) { return held->move(entry, new_parent, controls, timeout); });
-}
-
-auto client::rename(dn entry,
-  rdn new_rdn,
-  bool delete_old_rdn,
-  modify_dn_controls controls,
-  std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<response>>
-{
-	if (state_ == nullptr) {
-		return read_refused<response>(detail::op_context("modify DN", entry));
-	}
-	return detail::client_state::write(state_,
-	  [entry = std::move(entry), new_rdn = std::move(new_rdn), delete_old_rdn, controls = std::move(controls), timeout](
-		const lease &held) { return held->rename(entry, new_rdn, delete_old_rdn, controls, timeout); });
-}
-
 auto client::connections() const noexcept -> std::size_t { return state_ == nullptr ? 0 : state_->pool.size(); }
 
 void client::close() noexcept

@@ -6,6 +6,7 @@
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
+#include "jhetz/ldap/store.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -852,10 +853,12 @@ TEST_CASE("RFC 4513 3.1.5: the schema read in clear is read again after StartTLS
 	std::vector<std::string> log;
 	outcome<std::string> server;
 	spawn(f.ioc, serve_directory(f.acc, server_context(localhost_cert()), log), server);
-	auto c = f.connect(trusting({ .schema_check = ldap::schema_check::on_first_use }));
-	REQUIRE(finish(f.ioc, c.search_as<tls_account>({ .base = ldap::dn{} })).has_value());
+	auto c = f.connect(trusting());
+	ldap::store accounts(
+	  c, ldap::dn{}, ldap::named_by<&tls_account::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	REQUIRE(finish(f.ioc, accounts.search()).has_value());
 	REQUIRE(finish(f.ioc, c.start_tls(trusting().tls)).has_value());
-	REQUIRE(finish(f.ioc, c.search_as<tls_account>({ .base = ldap::dn{} })).has_value());
+	REQUIRE(finish(f.ioc, accounts.search()).has_value());
 	c.close();
 	drive_until(f.ioc, [&server] { return server.done(); });
 	CHECK_THAT(server.get(), IsEmpty());

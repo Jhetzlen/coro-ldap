@@ -14,7 +14,6 @@
 // the schema check), and keeps no entries.
 #pragma once
 
-#include "jhetz/ldap/connection_options.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/dn.hpp"
@@ -22,10 +21,12 @@
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/operations.hpp"
+#include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/schema.hpp"
 
 #include <boost/capy/task.hpp>
 
+#include <concepts>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -42,13 +43,23 @@ template<auto Naming> struct named_by_t
 };
 template<auto Naming> inline constexpr named_by_t<Naming> named_by{};
 
+// When a store checks its struct against the server's schema (DESIGN.md
+// section 6).
+enum class schema_check {
+	off,
+	// The first operation loads the schema (load_schema) and checks the
+	// struct against it (validate<T>); a mismatch fails that operation and
+	// every later one with schema_mismatch (the report in the context),
+	// before anything is sent. A schema that does not load fails the
+	// operation and is tried again by the next one. On a source that
+	// reports is_tls() and security_layer() (a connection), a check made
+	// before StartTLS or a SASL security layer is made again (RFC 4513
+	// sections 3.1.5 and 5.2.1.6: what was read unprotected is read again).
+	on_first_use,
+};
+
 struct store_options
 {
-	// on_first_use: the first operation loads the schema (load_schema) and
-	// checks the struct against it (validate<T>); a mismatch fails that
-	// operation and every later one with schema_mismatch, before anything
-	// is sent. A schema that does not load fails the operation and is
-	// tried again by the next one.
 	ldap::schema_check schema_check = ldap::schema_check::off;
 };
 
@@ -196,6 +207,26 @@ namespace detail {
 		}
 	};
 
+	// The protection of a store's source, when it reports one.
+	struct source_protection
+	{
+		bool tls = false;
+		sasl_protection layer = sasl_protection::none;
+
+		friend auto operator==(const source_protection &, const source_protection &) -> bool = default;
+	};
+	template<class D> [[nodiscard]] auto protection_of(const D &d) -> source_protection
+	{
+		if constexpr (requires {
+						  { d.is_tls() } -> std::convertible_to<bool>;
+						  { d.security_layer() } -> std::convertible_to<sasl_protection>;
+					  }) {
+			return { .tls = d.is_tls(), .layer = d.security_layer() };
+		} else {
+			return {};
+		}
+	}
+
 }// namespace detail
 
 // The entries of `T` (the struct owning `Naming`) under `base`, each named
@@ -320,12 +351,14 @@ template<auto Naming, directory D> class store
 		if (options_.schema_check == ldap::schema_check::off) {
 			co_return result<void>{};
 		}
-		if (!checked_) {
+		const detail::source_protection now = detail::protection_of(*source_);
+		if (!checked_ || checked_under_ != now) {
 			auto s = co_await load_schema(*source_);
 			if (!s) {
 				co_return std::unexpected(std::move(s.error()));
 			}
 			checked_ = codec::check(*s);
+			checked_under_ = now;
 		}
 		co_return *checked_;
 	}
@@ -334,6 +367,7 @@ template<auto Naming, directory D> class store
 	dn base_;
 	store_options options_;
 	std::optional<result<void>> checked_{};
+	detail::source_protection checked_under_{};
 };
 
 }// namespace jhetz::ldap

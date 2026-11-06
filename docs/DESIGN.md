@@ -261,9 +261,9 @@ the error, UnboundID `LDAPSearchException.getSearchEntries()`, .NET
 error lost them. Alternatives rejected: the partial entries inside the
 error (an `ldap::error` would carry entries for one operation only), and
 a success with a flag (the result code, matched DN and diagnostic would be
-lost). The same holds for `search_as<T>` (`typed_search_result<T>`, the
-same fields with `std::vector<T>` entries), `client::search`, the sync
-facades' `search`, `search_as` and `search_paged` (the pages collected:
+lost). The same holds for a store's `search` (`typed_search_result<record<T>>`,
+the same fields with `std::vector` entries), `client::search`, the sync
+facades' `search` and `search_paged` (the pages collected:
 the last page's done), and `chase_search` (`chased_search` gains the same
 done fields, the origin's or the referral target's; a continuation
 reference's search ending with a limit code keeps its entries and clears
@@ -1300,13 +1300,13 @@ template<> constexpr auto ldap::schema<person> = ldap::describe(
 ```
 
 `object_class(...)` is optional. When present:
-- `search_as<T>` ANDs `(objectClass=…)` into the filter, so a `person` search
-  only returns person entries;
-- `add(dn, T{...})` writes those values to `objectClass` (a new entry cannot be
-  created without them);
+- a store's `search` and `get` AND `(objectClass=…)` into the filter, so a
+  `person` search only returns person entries;
+- `to_attributes` (a store's `add`) writes those values to `objectClass` (a
+  new entry cannot be created without them);
 - runtime validation checks the classes exist on the server.
 
-Without it, `search_as<T>` uses your filter unchanged and `add` requires an
+Without it, a store uses your filter unchanged and `add` requires an
 `objectClass` field in the descriptor.
 
 Field shape decides cardinality:
@@ -1319,7 +1319,7 @@ Field shape decides cardinality:
 
 (A value that fails to convert is `conversion_failed` for every shape:
 for `std::vector<T>` the first bad value fails the whole member. One bad
-value fails the whole `decode<T>`, and so the whole `search_as<T>`: the
+value fails the whole `decode<T>`, and so the whole store search: the
 first entry that does not decode fails the call.)
 
 Value conversion is an extension point, like `std::formatter`:
@@ -1342,10 +1342,10 @@ is sent:
 - `replace / add / remove<&T::m>(v)` still return `change<T>`, so brace
   lists compose; its `wire` is a `result<modify_change>` holding the error,
   with the change as context (`replace mail: not valid UTF-8 (...)`).
-  `modify<T>` returns the first such error, prefixed with `modify <dn>`,
+  A store's `modify` returns the first such error, prefixed with `modify <dn>`,
   before the schema check and before sending.
 - `to_attributes(value)` returns `result<std::pmr::vector<partial_attribute>>`
-  (context `attribute mail`), and `add(dn, T)` returns its error prefixed
+  (context `attribute mail`), and a store's `add` returns its error prefixed
   with `add <dn>`, again before anything is sent.
 - The typed filter operators (`==`, `>=`, `<=`, `approx`) keep returning
   `filter`: on an encode failure they return the empty filter, which is
@@ -1452,19 +1452,19 @@ the numbers, so "never" as 0 sorts below every date: expired accounts are
 0: "never expires" is `expires == ad::never || expires == time_point{}`,
 `(|(accountExpires=9223372036854775807)(accountExpires=0))`.
 
-Usage (implemented, #9, `mapping.hpp` and `connection.hpp`):
+Usage (implemented, #9, `mapping.hpp`; the I/O in `store.hpp`, below):
 
 ```cpp
+ldap::store people(conn, base, ldap::named_by<&person::uid>);
 // Attribute list from the descriptor; filter narrowed to its object classes.
-ldap::result<ldap::typed_search_result<person>> people = co_await conn.search_as<person>({.base = base, .filter = f});
-// people->entries: std::vector<person>
+auto found = co_await people.search(f);   // found->entries: std::vector<record<person>>
 
-co_await conn.modify<person>(dn, {
+co_await people.modify("jdoe", {
     ldap::replace<&person::mail>("new@example.org"),
     ldap::add<&person::member_of>(group_dn),
     ldap::remove<&person::mail>(),
 });
-co_await conn.add(dn, person{...});   // read_only fields skipped, objectClass written
+co_await people.add(person{...});   // read_only fields skipped, objectClass written
 auto f = ldap::filters::field<&person::uid_number>() >= 1000;   // typed value
 ldap::result<person> p = ldap::decode<person>(entry);
 ```
@@ -1485,12 +1485,13 @@ Compile-time guarantees (all implemented, each with a compile test in
 - the value type must match the member (`replace<&person::created>("x")`
   and `field<&person::uid_number>() == "x"` do not compile), and a
   single-valued member takes no range of values;
-- changes of another struct cannot be passed to `modify<person>`;
+- changes of another struct cannot be passed to a `person` store's `modify`;
 - `add` needs `object_class(...)` or an `objectClass` member.
 
 Errors name the entry and attribute: `search ou=people,dc=example,dc=org:
 entry uid=b,ou=people,dc=example,dc=org: attribute uidNumber: not an
-integer: "x"`. A mapping error fails `search_as` but not the connection.
+integer: "x"`. A mapping error fails the store's search but not the
+connection.
 Encode errors read the same way: `modify uid=jdoe,ou=people,dc=example,dc=org:
 replace mail: not valid UTF-8 (ill-formed sequence at offset 4)`, `add
 uid=jdoe,...: attribute uid: ...`.
@@ -1709,12 +1710,12 @@ Parsing is minimal, only what the checks below need:
   is skipped. Unparseable definitions are skipped, not fatal.
 
 ```cpp
-ldap::result<ldap::server_schema> s = co_await conn.load_schema();
+ldap::result<ldap::server_schema> s = co_await ldap::load_schema(conn);   // directory.hpp
 ldap::schema_report rep = ldap::validate<person>(*s);
 if (!rep.ok()) std::println("{}", rep);   // lists every issue, not just the first
 
-// or automatically:
-ldap::connection_options{.schema_check = ldap::schema_check::on_first_use};
+// or automatically, in a store:
+ldap::store people(conn, base, ldap::named_by<&person::uid>, {.schema_check = ldap::schema_check::on_first_use});
 ```
 
 Checks:
@@ -1732,7 +1733,7 @@ Checks:
   STRUCTURAL and AUXILIARY alike) must be mapped by a required (`T`),
   writable member. One that no member maps is
   `must_attribute_not_mapped`; one mapped only by `std::optional`,
-  `std::vector` or `read_only` members (add(dn, T) sends nothing for an
+  `std::vector` or `read_only` members (a store's add sends nothing for an
   empty one, never a read_only one) is `must_attribute_not_required`; a
   superclass the server does not define is `unknown_superclass` (its
   MUSTs cannot be checked). Each attribute is reported once, for the first
@@ -1745,7 +1746,7 @@ Checks:
   attributes (RFC 4511 4.7: a client must not send them, the server
   provides them). These are warnings, not errors, so
   `schema_check::on_first_use` never fails on them: a descriptor may be a
-  read projection with classes only to narrow search_as; at add time the
+  read projection with classes only to narrow a search; at add time the
   entry's RDN supplies its attribute values (RFC 4511 4.7: the attributes
   "along with those from the RDN" make up the entry), which a check per
   type cannot see; and Active Directory fills in MUSTs of its own (`top`
@@ -1754,9 +1755,13 @@ Checks:
   every class's MUST and MAY can still be legal (operational attributes,
   DIT content rules, extensibleObject).
 
-With `schema_check::on_first_use`, the first typed operation for `T` runs
+With `schema_check::on_first_use`, a store's first operation runs
 `validate<T>` and fails with `client_errc::schema_mismatch` if the report has
-errors. Results are cached per connection.
+errors. The outcome is kept by the store, and checked again once its
+source's `is_tls()` or `security_layer()` changed (RFC 4513 sections
+3.1.5 and 5.2.1.6: what was read unprotected is read again). The
+connection itself caches nothing about the server (coro-ldap-aw4.1: its
+schema cache and `connection_options::schema_check` are gone).
 
 Implemented (#13, `schema.hpp`): `parse_attribute_type` /
 `parse_object_class` (a small RFC 4512 lexer: parentheses, quoted strings
@@ -1810,7 +1815,7 @@ values are binary, map the member to ldap::binary"); a string member
 whose syntax cannot be determined is not reported. This is a breaking
 change: string members used to pass validation on any syntax, so a
 descriptor that maps userPassword to `std::string` now fails
-`validate<T>` and `schema_check::on_first_use`; map it to `ldap::binary`. `connection::load_schema()` reads
+`validate<T>` and `schema_check::on_first_use`; map it to `ldap::binary`. `ldap::load_schema()` reads
 the root DSE's `subschemaSubentry` (default `cn=Subschema`). The parser
 has a fuzz target (`schema_fuzz`) with OpenLDAP and AD seeds.
 
@@ -1828,7 +1833,7 @@ while (auto p = co_await stream.next()) { ... }   // result<std::optional<person
 
 // blocking (jhetz/ldap/sync.hpp)
 ldap::sync::connection c{url};                     // owns an io_context + 1 I/O thread
-auto people = c.search_as<person>({...});          // same request/result types
+auto people = c.search({...});                     // same request/result types
 ```
 
 Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
@@ -2617,10 +2622,9 @@ decision left open.
   on any pooled connection, so connection-bound request controls (a
   paged-results cookie from an earlier page, anything tied to the
   session) need a lease (3pf.15).
-- Write forwarders: `client::add`, `modify`, `del`, `modify_dn`, `move`
-  and `rename`, the `connection` names and shapes. No typed `add(dn, T)`
-  or `modify<T>`: typed CRUD belongs to a layer over the client and the
-  connection (`ldap::store<T>`, coro-ldap-2cx). Each acquires a shared
+- Write forwarders: `client::add`, `modify`, `del` and `modify_dn`, the
+  `connection` names and shapes. Typed CRUD is a layer over the client and
+  the connection (`ldap::store`, section 4). Each acquires a shared
   lease, runs the operation and returns the lease, like the read
   forwarders, but retries only after `client_errc::not_sent`: the request
   never reached the connection's writer (refused by a closed connection,
@@ -2673,7 +2677,7 @@ decision left open.
   aliasing pointer to the core's `io_thread`, its `ldap::lease`, touched
   only on that thread, and a copy of its server URL). `acquire()`, the
   read forwarders `search`, `compare`, `who_am_i` and the write
-  forwarders `add`, `modify`, `del`, `modify_dn`, `move`, `rename` post
+  forwarders `add`, `modify`, `del`, `modify_dn` post
   to the I/O thread and wait, as `sync::connection` does; the retry is
   `ldap::client`'s.
   `sync::lease` exposes `sync::connection`'s operations

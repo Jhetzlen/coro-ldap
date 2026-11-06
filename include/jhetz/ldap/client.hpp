@@ -687,15 +687,6 @@ class client
 	auto modify(modify_params request) -> boost::capy::task<result<response>>;
 	auto del(del_params request) -> boost::capy::task<result<response>>;
 	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
-	auto move(dn entry,
-	  dn new_parent,
-	  modify_dn_controls controls = {},
-	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> boost::capy::task<result<response>>;
-	auto rename(dn entry,
-	  rdn new_rdn,
-	  bool delete_old_rdn = true,
-	  modify_dn_controls controls = {},
-	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> boost::capy::task<result<response>>;
 
 	// Connections in the pool, open or retired and waiting for their last
 	// lease to return (not those still being opened). For tests and

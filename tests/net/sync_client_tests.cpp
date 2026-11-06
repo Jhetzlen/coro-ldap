@@ -346,8 +346,6 @@ TEST_CASE("sync client: the write forwarders", "[net][sync][client][write]")
 		  answer({ ok(3, ldap::modify_response{ ldap::ldap_result{ 0 } }) }),
 		  answer({ ok(4, ldap::del_response{ ldap::ldap_result{ 0 } }) }),
 		  answer({ ok(5, ldap::modify_dn_response{ ldap::ldap_result{ 0 } }) }),
-		  answer({ ok(6, ldap::modify_dn_response{ ldap::ldap_result{ 0 } }) }),
-		  answer({ ok(7, ldap::modify_dn_response{ ldap::ldap_result{ 0 } }) }),
 		  unbind_read() } });
 		{
 			ldap::sync::client pool(options_for(srv.url()));
@@ -357,20 +355,15 @@ TEST_CASE("sync client: the write forwarders", "[net][sync][client][write]")
 			CHECK(pool.modify({ .object = jdoe_dn, .changes = { ldap::mod::replace("cn", { "J" }) } }).has_value());
 			CHECK(pool.del({ .entry = jdoe_dn }).has_value());
 			CHECK(pool.modify_dn({ .entry = jdoe_dn, .new_rdn = ldap::rdn{ "uid=j" } }).has_value());
-			CHECK(pool.move(jdoe_dn, ldap::dn{ "ou=staff,dc=example,dc=org" }).has_value());
-			CHECK(pool.rename(jdoe_dn, ldap::rdn{ "uid=j" }, false).has_value());
 			CHECK(pool.connections() == 1);
 		}
 		srv.stop();
 		CHECK_THAT(srv.log(0).error, IsEmpty());
 		const auto &got = srv.log(0).received;
-		REQUIRE(got.size() == 8);
+		REQUIRE(got.size() == 6);
 		CHECK(std::holds_alternative<ldap::add_request>(got[1].op));
 		CHECK(std::holds_alternative<ldap::modify_request>(got[2].op));
 		CHECK(got[3] == ldap::message{ 4, ldap::del_request{ jdoe } });
-		CHECK(got[5]
-			  == ldap::message{ 6, ldap::modify_dn_request{ jdoe, "uid=jdoe", true, "ou=staff,dc=example,dc=org" } });
-		CHECK(got[6] == ldap::message{ 7, ldap::modify_dn_request{ jdoe, "uid=j", false, std::nullopt } });
 	}
 	SECTION("a server result code, with its diagnostic")
 	{

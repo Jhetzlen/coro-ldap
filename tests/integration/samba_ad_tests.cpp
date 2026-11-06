@@ -22,6 +22,7 @@
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl_ntlm.hpp"
+#include "jhetz/ldap/store.hpp"
 #include "jhetz/ldap/sync.hpp"
 
 #include <boost/capy/buffers.hpp>
@@ -851,12 +852,13 @@ namespace {
 
 auto read_account(corosio::io_context &ioc, ldap::connection &c, const ldap::dn &who) -> ad_account
 {
-	auto r = finish(ioc, c.search_as<ad_account>({ .base = who, .scope = ldap::search_scope::base_object }));
+	ldap::store accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
+	auto r = finish(ioc, accounts.get_at(who));
 	if (!r) {
 		FAIL("read " << who.to_string() << ": " << r.error().message());
 	}
-	REQUIRE(r->entries.size() == 1);
-	return std::move(r->entries[0]);
+	REQUIRE(r->has_value());
+	return std::move(**r);
 }
 
 auto domain_sid(corosio::io_context &ioc, ldap::connection &c) -> ldap::ad::sid
@@ -901,7 +903,7 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 
 	SECTION("the schema: Octet String and INTEGER")
 	{
-		auto s = finish(ioc, c.load_schema());
+		auto s = finish(ioc, ldap::load_schema(c));
 		REQUIRE(s.has_value());
 		const auto report = ldap::validate<ad_account>(*s);
 		INFO(report.to_string());
@@ -926,18 +928,19 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 		CHECK(a.object_guid != admin.object_guid);
 
 		// The SID's and the GUID's binary forms, in typed filters.
+		ldap::store accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
 		auto by_sid = finish(ioc,
-		  c.search_as<ad_account>(
-			{ .base = domain, .filter = ldap::filters::field<&ad_account::object_sid>() == a.object_sid }));
+		  accounts.search(
+			ldap::filters::field<&ad_account::object_sid>() == a.object_sid, ldap::search_scope::whole_subtree));
 		REQUIRE(by_sid.has_value());
 		REQUIRE(by_sid->entries.size() == 1);
-		CHECK(by_sid->entries[0].sam_account_name == "alice");
+		CHECK(by_sid->entries[0].value.sam_account_name == "alice");
 		auto by_guid = finish(ioc,
-		  c.search_as<ad_account>(
-			{ .base = domain, .filter = ldap::filters::field<&ad_account::object_guid>() == a.object_guid }));
+		  accounts.search(
+			ldap::filters::field<&ad_account::object_guid>() == a.object_guid, ldap::search_scope::whole_subtree));
 		REQUIRE(by_guid.has_value());
 		REQUIRE(by_guid->entries.size() == 1);
-		CHECK(by_guid->entries[0].object_sid == a.object_sid);
+		CHECK(by_guid->entries[0].value.object_sid == a.object_sid);
 	}
 
 	SECTION("a new user: SID from the domain, userAccountControl written back")
@@ -954,10 +957,10 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 		// AD creates a user without a password disabled.
 		CHECK(has(fresh.user_account_control, normal_account | account_disable));
 
+		ldap::store accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
 		auto m = finish(ioc,
-		  c.modify(typed_user,
-			std::vector<ldap::change<ad_account>>{
-			  ldap::replace<&ad_account::user_account_control>(fresh.user_account_control | dont_expire_passwd) }));
+		  accounts.modify_at(typed_user,
+			{ ldap::replace<&ad_account::user_account_control>(fresh.user_account_control | dont_expire_passwd) }));
 		if (!m) {
 			FAIL(m.error().message());
 		}

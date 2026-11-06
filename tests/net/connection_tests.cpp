@@ -859,7 +859,10 @@ TEST_CASE("connection: operations on a moved-from connection", "[net][connection
 	ldap::sasl_external external;
 	refused(m.run(c.sasl_bind(external)), "sasl bind EXTERNAL");
 	refused(m.run(c.unbind()), "unbind");
-	refused(m.run(c.load_schema()), "load schema");
+	auto schema = m.run(ldap::load_schema(c));
+	REQUIRE_FALSE(schema.has_value());
+	CHECK(schema.error().code == client_errc::not_connected);
+	CHECK(std::string_view(schema.error().context) == "load schema: search \"\"");
 	refused(m.run(c.add({ .entry = who })), "add uid=jdoe,ou=people,dc=example,dc=org");
 	refused(m.run(c.modify({ .object = who })), "modify uid=jdoe,ou=people,dc=example,dc=org");
 	refused(m.run(c.del({ .entry = who })), "delete uid=jdoe,ou=people,dc=example,dc=org");
@@ -891,7 +894,7 @@ TEST_CASE("connection: load_schema and sasl_bind on a closed connection", "[net]
 	mock_ldap m;
 	m.serve({});
 	m.conn.close();
-	auto s = m.run(m.conn.load_schema());
+	auto s = m.run(ldap::load_schema(m.conn));
 	REQUIRE_FALSE(s.has_value());
 	CHECK(s.error().code == client_errc::not_sent);
 	CHECK_THAT(std::string(s.error().context), StartsWith("load schema"));

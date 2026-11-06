@@ -171,7 +171,7 @@ if(JHETZ_LDAP_BUILD_NET)
         net/client_tests.cpp
         net/connection_tests.cpp
         net/content_sync_tests.cpp
-        net/mapping_ops_tests.cpp
+        net/load_schema_tests.cpp
         net/operations_tests.cpp
         net/password_tests.cpp
         net/referral_chase_tests.cpp

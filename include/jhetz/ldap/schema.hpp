@@ -2,7 +2,7 @@
 // (RFC 4512), parsed only as far as the checks need, and validate<T>,
 // which checks a struct descriptor (mapping.hpp) against it.
 //
-//   ldap::result<ldap::server_schema> s = co_await conn.load_schema();
+//   ldap::result<ldap::server_schema> s = co_await ldap::load_schema(conn);
 //   ldap::schema_report rep = ldap::validate<person>(*s);
 //   if (!rep.ok()) std::puts(rep.to_string().c_str());   // every issue, not just the first
 //
@@ -268,10 +268,10 @@ struct schema_issue
 		writable_but_no_user_modification,// error
 		single_member_multi_valued,// warning: only fails if an entry really has several values
 		// warning: a MUST attribute of a declared object class or of one of
-		// its superclasses that no member maps (add(dn, T) does not send it)
+		// its superclasses that no member maps (store::add does not send it)
 		must_attribute_not_mapped,
 		// warning: a MUST attribute mapped only by std::optional, std::vector
-		// or read_only members (add(dn, T) may not send it)
+		// or read_only members (store::add may not send it)
 		must_attribute_not_required,
 		// warning: a superclass (SUP) of a declared object class that is not
 		// defined on the server: the MUSTs it would add are not checked
@@ -306,7 +306,7 @@ namespace detail {
 	  schema_report &out);
 	void check_object_class(const server_schema &s, std::string_view name, schema_report &out);
 
-	// What add(dn, T) does with one member, for check_must.
+	// What store::add does with one member, for check_must.
 	struct field_use
 	{
 		std::string_view name;
@@ -324,9 +324,9 @@ namespace detail {
 // With declared object classes, also checks their MUST attributes, and
 // those of their superclasses (SUP followed, RFC 4512 section 2.4), against
 // the members: each must be mapped by a required (T), writable member, or
-// add(dn, T) may leave it out and the server refuse the entry
+// store::add may leave it out and the server refuse the entry
 // (objectClassViolation). Those are warnings, never errors: the descriptor
-// may be a read projection (search_as), the entry's RDN supplies its
+// may be a read projection (a store's search), the entry's RDN supplies its
 // attribute values at add time (RFC 4511 section 4.7), and some servers fill
 // MUSTs in themselves (Active Directory: objectCategory, instanceType,
 // nTSecurityDescriptor). Not reported: objectClass, by any of its names or

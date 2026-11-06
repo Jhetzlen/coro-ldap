@@ -196,36 +196,6 @@ auto connection::modify_dn(modify_dn_params request) -> capy::task<result<respon
 	return detail::modify_dn_impl(impl_ref(impl_), std::move(request), std::move(context));
 }
 
-// Not coroutines: the task of modify_dn() is returned as is.
-auto connection::move(dn entry,
-  dn new_parent,
-  modify_dn_controls controls,
-  std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<response>>
-{
-	if (entry.empty()) {// the root DSE: no RDN to keep
-		return refuse(client_errc::invalid_dn, op_context("modify DN", entry) + ": empty entry, no RDN to keep");
-	}
-	rdn kept = entry.rdns().front();
-	return modify_dn({ .entry = std::move(entry),
-	  .new_rdn = std::move(kept),
-	  .new_superior = std::move(new_parent),
-	  .controls = std::move(controls),
-	  .timeout = timeout });
-}
-
-auto connection::rename(dn entry,
-  rdn new_rdn,
-  bool delete_old_rdn,
-  modify_dn_controls controls,
-  std::optional<std::chrono::milliseconds> timeout) -> capy::task<result<response>>
-{
-	return modify_dn({ .entry = std::move(entry),
-	  .new_rdn = std::move(new_rdn),
-	  .delete_old_rdn = delete_old_rdn,
-	  .controls = std::move(controls),
-	  .timeout = timeout });
-}
-
 auto connection::compare(compare_params request) -> capy::task<result<bool>>
 {
 	const std::string context = op_context("compare", request.entry);

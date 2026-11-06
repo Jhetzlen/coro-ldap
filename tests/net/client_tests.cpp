@@ -2634,8 +2634,6 @@ TEST_CASE("client: move assignment, executor() and a moved-from client's reads",
 	refused(finish(f.ioc, f.pool->modify({ .object = jdoe })).error(), modify);
 	refused(finish(f.ioc, f.pool->del({ .entry = jdoe })).error(), "delete uid=jdoe,ou=people,dc=example,dc=org");
 	refused(finish(f.ioc, f.pool->modify_dn({ .entry = jdoe, .new_rdn = ldap::rdn{ "uid=j" } })).error(), modify_dn);
-	refused(finish(f.ioc, f.pool->move(jdoe, ldap::dn{ "ou=staff,dc=example,dc=org" })).error(), modify_dn);
-	refused(finish(f.ioc, f.pool->rename(jdoe, ldap::rdn{ "uid=j" })).error(), modify_dn);
 	refused(finish(f.ioc, f.pool->acquire()).error(), "acquire");
 	f.pool->close();// nothing to close
 
@@ -2847,11 +2845,8 @@ TEST_CASE("client: write forwarders run on a shared lease", "[net][client][write
 	  answer({ written<ldap::add_response>(2) }),
 	  answer({ written<ldap::modify_response>(3) }),
 	  answer({ written<ldap::del_response>(4) }),
-	  answer({ written<ldap::modify_dn_response>(5) }),
-	  answer({ written<ldap::modify_dn_response>(6) }),
-	  answer({ written<ldap::modify_dn_response>(7) }) } });
+	  answer({ written<ldap::modify_dn_response>(5) }) } });
 	f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
-	const ldap::dn staff{ "ou=staff,dc=example,dc=org" };
 	auto held = f.acquire();// shared with every write below
 	REQUIRE(held.has_value());
 	const auto added = finish(f.ioc, f.pool->add(jdoe_add()));
@@ -2861,24 +2856,19 @@ TEST_CASE("client: write forwarders run on a shared lease", "[net][client][write
 		.has_value());
 	CHECK(finish(f.ioc, f.pool->del({ .entry = jdoe_dn() })).has_value());
 	CHECK(finish(f.ioc, f.pool->modify_dn({ .entry = jdoe_dn(), .new_rdn = ldap::rdn{ "uid=j" } })).has_value());
-	CHECK(finish(f.ioc, f.pool->move(jdoe_dn(), staff)).has_value());
-	CHECK(finish(f.ioc, f.pool->rename(jdoe_dn(), ldap::rdn{ "uid=j" }, false)).has_value());
 	CHECK(s.accepted() == 1);
 	CHECK(f.pool->connections() == 1);
 	held->release();
 
 	using op = ldap::modify_operation;
 	const auto &got = s.log(0).received;
-	REQUIRE(got.size() == 7);
+	REQUIRE(got.size() == 5);
 	CHECK(
 	  got[1]
 	  == ldap::message{ 2, ldap::add_request{ jdoe_text, { { "objectClass", { "person" } }, { "cn", { "John" } } } } });
 	CHECK(got[2] == ldap::message{ 3, ldap::modify_request{ jdoe_text, { { op::replace, { "cn", { "Johnny" } } } } } });
 	CHECK(got[3] == ldap::message{ 4, ldap::del_request{ jdoe_text } });
 	CHECK(got[4] == ldap::message{ 5, ldap::modify_dn_request{ jdoe_text, "uid=j", true, std::nullopt } });
-	CHECK(got[5]
-		  == ldap::message{ 6, ldap::modify_dn_request{ jdoe_text, "uid=jdoe", true, "ou=staff,dc=example,dc=org" } });
-	CHECK(got[6] == ldap::message{ 7, ldap::modify_dn_request{ jdoe_text, "uid=j", false, std::nullopt } });
 	CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
 }
 

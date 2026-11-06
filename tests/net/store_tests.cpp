@@ -207,7 +207,7 @@ TEST_CASE("store: add, modify and remove name the entry from the key", "[net][st
 
 TEST_CASE("store: a value that does not encode fails before anything is sent", "[net][store]")
 {
-	mock_ldap m({ .schema_check = ldap::schema_check::off });
+	mock_ldap m;
 	m.serve({});
 	ldap::store s(
 	  m.conn, people_base, ldap::named_by<&person::uid>, { .schema_check = ldap::schema_check::on_first_use });
@@ -276,6 +276,26 @@ TEST_CASE("store: search returns records under the base, on the limit codes too"
 		  == "(&(objectClass=inetOrgPerson)(objectClass=*))");
 }
 
+// The base is often a DN the server returned: sanitized in the context
+// (valid UTF-8 kept, U+2028 shown as U+FFFD) and cut at 256 bytes, as the
+// entry's DN.
+TEST_CASE("store: search quotes its base sanitized", "[net][store]")
+{
+	mock_ldap m;
+	m.serve({ answer({ person_entry(1, "b", "x"), done_msg(1) }) });
+	// 13 bytes: U+2028 and accents; then o up to the cut.
+	auto base = ldap::dn::parse("ou=\xE2\x80\xA8p\xC3\xA9pl\xC3\xA9" + std::string(400, 'o') + ",dc=example,dc=org");
+	REQUIRE(base.has_value());
+	ldap::store s(m.conn, std::move(*base), ldap::named_by<&person::uid>);
+	auto r = m.run(s.search());
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::client_errc::conversion_failed);
+	CHECK(std::string(r.error().context)
+		  == "search ou=\xEF\xBF\xBDp\xC3\xA9pl\xC3\xA9" + std::string(256 - 13, 'o')
+			   + "...: entry uid=b,ou=people,dc=example,dc=org: attribute uidNumber: not an integer: \"x\"");
+	CHECK(m.conn.is_open());// a mapping error is not a connection error
+}
+
 TEST_CASE("store: schema_check::on_first_use", "[net][store][schema]")
 {
 	SECTION("checked once, then every operation runs")
@@ -327,49 +347,6 @@ TEST_CASE("store: schema_check::on_first_use", "[net][store][schema]")
 		CHECK(m.run(s.remove("a")).has_value());
 		m.check_server();
 		CHECK(m.log.received.size() == 4);
-	}
-}
-
-TEST_CASE("store: load_schema over a directory", "[net][store][schema]")
-{
-	SECTION("the subschema the root DSE names")
-	{
-		mock_ldap m;
-		m.serve({ answer({ root_dse(1), done_msg(1) }), answer({ subschema(2), done_msg(2) }) });
-		auto s = m.run(ldap::load_schema(m.conn));
-		REQUIRE(s.has_value());
-		CHECK(s->attribute_count() == 4);
-		CHECK(ldap::validate<person>(*s).ok());
-		m.check_server();
-		REQUIRE(m.log.received.size() == 2);
-		const auto &sub = std::get<ldap::search_request>(m.log.received[1].op);
-		CHECK(sub.scope == ldap::search_scope::base_object);
-		CHECK(sub.filter.to_string() == "(objectClass=subschema)");
-		CHECK(sub.attributes == ldap::string_list{ "attributeTypes", "objectClasses" });
-	}
-	SECTION("no root DSE entry: cn=Subschema, which is not there")
-	{
-		mock_ldap m;
-		m.serve({ answer({ done_msg(1) }), answer({ done_msg(2) }) });
-		auto s = m.run(ldap::load_schema(m.conn));
-		REQUIRE_FALSE(s.has_value());
-		CHECK(s.error().code == ldap::errc::no_such_object);
-		CHECK(std::string(s.error().context) == "load schema: no subschema entry at cn=Subschema");
-		m.check_server();
-		CHECK(std::get<ldap::search_request>(m.log.received[1].op).base_object == "cn=Subschema");
-	}
-	SECTION("a subschemaSubentry that is not a DN")
-	{
-		mock_ldap m;
-		m.serve(
-		  { answer({ ldap::message{ 1, ldap::search_result_entry{ "", { { "subschemaSubentry", { "Subschema" } } } } },
-			done_msg(1) }) });
-		auto s = m.run(ldap::load_schema(m.conn));
-		REQUIRE_FALSE(s.has_value());
-		CHECK(s.error().code == ldap::client_errc::invalid_dn);
-		CHECK(
-		  std::string(s.error().context) == "load schema: the root DSE names an invalid subschemaSubentry: Subschema");
-		m.check_server();
 	}
 }
 

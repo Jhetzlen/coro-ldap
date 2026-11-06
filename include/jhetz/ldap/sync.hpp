@@ -5,7 +5,7 @@
 //   ldap::sync::connection c;
 //   if (auto r = c.connect("ldaps://ldap.example.org"); !r) ...
 //   c.simple_bind(ldap::dn{"cn=admin,dc=example,dc=org"}, password);
-//   ldap::result<ldap::typed_search_result<person>> people = c.search_as<person>({.base = base});
+//   ldap::result<ldap::search_result> found = c.search({.base = base});
 //
 //   ldap::sync::client pool({.servers = {...}, .setup = ldap::simple_bind_setup(...)});
 //   auto found = pool.search({.base = base});      // a shared lease for one search, retried once
@@ -319,31 +319,13 @@ namespace detail {
 			  [&](ldap::connection &c) { return detail::collect_paged(c, std::move(request), page_size, mr); });
 		}
 
-		template<described T> [[nodiscard]] auto search_as(search_params request) -> result<typed_search_result<T>>
-		{
-			return self().call([&](ldap::connection &c) { return c.search_as<T>(std::move(request)); });
-		}
-
 		[[nodiscard]] auto add(add_params request) -> result<response>
 		{
 			return self().call([&](ldap::connection &c) { return c.add(std::move(request)); });
 		}
-		template<described T> [[nodiscard]] auto add(dn entry, T value, add_controls controls = {}) -> result<response>
-		{
-			return self().call(
-			  [&](ldap::connection &c) { return c.add(std::move(entry), std::move(value), std::move(controls)); });
-		}
 		[[nodiscard]] auto modify(modify_params request) -> result<response>
 		{
 			return self().call([&](ldap::connection &c) { return c.modify(std::move(request)); });
-		}
-		template<described T>
-		[[nodiscard]] auto modify(dn object, std::vector<change<T>> changes, modify_controls controls = {})
-		  -> result<response>
-		{
-			return self().call([&](ldap::connection &c) {
-				return c.modify<T>(std::move(object), std::move(changes), std::move(controls));
-			});
 		}
 		[[nodiscard]] auto del(del_params request) -> result<response>
 		{
@@ -352,25 +334,6 @@ namespace detail {
 		[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<response>
 		{
 			return self().call([&](ldap::connection &c) { return c.modify_dn(std::move(request)); });
-		}
-		[[nodiscard]] auto move(dn entry,
-		  dn new_parent,
-		  modify_dn_controls controls = {},
-		  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<response>
-		{
-			return self().call([&](ldap::connection &c) {
-				return c.move(std::move(entry), std::move(new_parent), std::move(controls), timeout);
-			});
-		}
-		[[nodiscard]] auto rename(dn entry,
-		  rdn new_rdn,
-		  bool delete_old_rdn = true,
-		  modify_dn_controls controls = {},
-		  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<response>
-		{
-			return self().call([&](ldap::connection &c) {
-				return c.rename(std::move(entry), std::move(new_rdn), delete_old_rdn, std::move(controls), timeout);
-			});
 		}
 		[[nodiscard]] auto compare(compare_params request) -> result<bool>
 		{
@@ -651,15 +614,6 @@ class client
 	[[nodiscard]] auto modify(modify_params request) -> result<response>;
 	[[nodiscard]] auto del(del_params request) -> result<response>;
 	[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<response>;
-	[[nodiscard]] auto move(dn entry,
-	  dn new_parent,
-	  modify_dn_controls controls = {},
-	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<response>;
-	[[nodiscard]] auto rename(dn entry,
-	  rdn new_rdn,
-	  bool delete_old_rdn = true,
-	  modify_dn_controls controls = {},
-	  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<response>;
 
 	// As ldap::client::connections(), from any thread (read at once on
 	// the I/O thread).
