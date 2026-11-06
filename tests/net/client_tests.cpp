@@ -2872,7 +2872,9 @@ TEST_CASE("client: write forwarders run on a shared lease", "[net][client][write
 	  answer({ written<ldap::add_response>(2) }),
 	  answer({ written<ldap::modify_response>(3) }),
 	  answer({ written<ldap::del_response>(4) }),
-	  answer({ written<ldap::modify_dn_response>(5) }) } });
+	  answer({ written<ldap::modify_dn_response>(5) }),
+	  answer({ ldap::message{ 6, ldap::extended_response{ ldap::ldap_result{ 0 }, "1.2.3.5", "answer" } } }),
+	  answer({ ldap::message{ 7, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, "dn:cn=me" } } }) } });
 	f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
 	auto held = f.acquire();// shared with every write below
 	REQUIRE(held.has_value());
@@ -2883,19 +2885,28 @@ TEST_CASE("client: write forwarders run on a shared lease", "[net][client][write
 		.has_value());
 	CHECK(finish(f.ioc, f.pool->del({ .entry = jdoe_dn() })).has_value());
 	CHECK(finish(f.ioc, f.pool->modify_dn({ .entry = jdoe_dn(), .new_rdn = ldap::rdn{ "uid=j" } })).has_value());
+	const auto x = finish(f.ioc, f.pool->extended({ .name = "1.2.3.4", .value = "question" }));
+	REQUIRE(x.has_value());
+	CHECK(x->name == "1.2.3.5");
+	CHECK(x->value == "answer");
+	CHECK(finish(f.ioc, ldap::who_am_i(*f.pool)) == "dn:cn=me");
 	CHECK(s.accepted() == 1);
 	CHECK(f.pool->connections() == 1);
 	held->release();
 
 	using op = ldap::modify_operation;
 	const auto &got = s.log(0).received;
-	REQUIRE(got.size() == 5);
+	REQUIRE(got.size() == 7);
 	CHECK(
 	  got[1]
 	  == ldap::message{ 2, ldap::add_request{ jdoe_text, { { "objectClass", { "person" } }, { "cn", { "John" } } } } });
 	CHECK(got[2] == ldap::message{ 3, ldap::modify_request{ jdoe_text, { { op::replace, { "cn", { "Johnny" } } } } } });
 	CHECK(got[3] == ldap::message{ 4, ldap::del_request{ jdoe_text } });
 	CHECK(got[4] == ldap::message{ 5, ldap::modify_dn_request{ jdoe_text, "uid=j", true, std::nullopt } });
+	const auto &question = std::get<ldap::extended_request>(got[5].op);
+	CHECK(question.request_name == "1.2.3.4");
+	CHECK(question.request_value == "question");
+	CHECK(std::get<ldap::extended_request>(got[6].op).request_name == "1.3.6.1.4.1.4203.1.11.3");
 	CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
 }
 
@@ -3036,6 +3047,51 @@ TEST_CASE("client: a write never sent is retried once on another connection", "[
 	CHECK(
 	  s.log(1).received[1]
 	  == ldap::message{ 2, ldap::add_request{ jdoe_text, { { "objectClass", { "person" } }, { "cn", { "John" } } } } });
+	held->release();// the closed connection leaves the pool with its last lease
+	CHECK(f.obs.events
+		  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
+			"connect " + text(s.url()) + " ok",
+			"disconnect " + text(s.url()) + " closed" });
+	CHECK(f.pool->connections() == 1);
+}
+
+TEST_CASE("client: an extended operation never sent is retried once on another connection",
+  "[net][client][write][retry]")
+{
+	pool_fixture f;
+	// The first connection reads nothing after the bind.
+	auto &s = f.server(
+	  { bind_ok(),
+		{ answer({ bind_resp(1) }),
+		  answer({ ldap::message{ 2, ldap::extended_response{ ldap::ldap_result{ 0 }, "1.2.3.5", "answer" } } }) },
+		bind_ok() },
+	  socket_buffers::small);
+	f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
+	std::size_t send_buffer = 0;
+	connect_small(*f.pool, s, &send_buffer);
+	auto held = f.acquire();
+	REQUIRE(held.has_value());
+	REQUIRE(send_buffer + s.receive_buffer(0) < oversized_add_value);
+	outcome<ldap::result<ldap::response>> big;
+	outcome<ldap::result<ldap::extended_result>> queued;
+	spawn(f.ioc, (*held)->add(oversized_add()), big);
+	spawn(f.ioc,
+	  f.pool->extended({ .name = "1.2.3.4", .value = "question" }),
+	  queued);// queued behind `big` on the same connection
+	drive_until(f.ioc, [&held] { return (*held)->outstanding() == 2; });
+	CHECK_FALSE(big.done());
+	full(*held).close();
+	drive_until(f.ioc, [&] { return big.done() && queued.done(); });
+	REQUIRE_FALSE(big.get().has_value());
+	CHECK(big.get().error().code == ldap::client_errc::not_connected);
+	REQUIRE(queued.get().has_value());
+	CHECK(queued.get()->value == "answer");
+	CHECK(s.accepted() == 2);
+	REQUIRE(s.log(1).received.size() == 2);
+	CHECK(s.log(1).received[1].id == 2);
+	const auto &resent = std::get<ldap::extended_request>(s.log(1).received[1].op);
+	CHECK(resent.request_name == "1.2.3.4");
+	CHECK(resent.request_value == "question");
 	held->release();// the closed connection leaves the pool with its last lease
 	CHECK(f.obs.events
 		  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
