@@ -11,6 +11,10 @@
 // the encoded PDU in the connection's buffers) that the library cannot
 // wipe all of. Only sasl_scram_sha256 and sasl_ntlm wipe what they hold.
 // Passwords never appear in error contexts.
+//
+// The tasks refer to `d`, which must outlive them: d.extended() runs when
+// a task is first awaited. On an ldap::client too, whose own forwarders'
+// tasks do not refer to it.
 #pragma once
 
 #include "jhetz/ldap/controls.hpp"

@@ -692,8 +692,8 @@ class client
 	// Any extended operation but StartTLS, as a write forwarder: retried
 	// only after not_sent, since an extended operation may change the
 	// directory (who_am_i() and the password calls of
-	// extended_operations.hpp run on it). A referral result is an error,
-	// never chased.
+	// extended_operations.hpp run on it, and their tasks refer to the
+	// client). A referral result is an error, never chased.
 	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
 
 	// Connections in the pool, open or retired and waiting for their last

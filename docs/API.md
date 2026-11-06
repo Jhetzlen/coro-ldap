@@ -444,7 +444,9 @@ itself needs only ICU.
   params)` (the request as the RFC has it, a generated password
   returned), and two conveniences over it, `change_password(d, user, old,
   new)` (a user's own) and `reset_password(d, user, new)` (an
-  administrator's; an empty `user` is the bound user).
+  administrator's; an empty `user` is the bound user). The tasks refer
+  to `d`, which must outlive them (an `ldap::client` too: unlike
+  `client::extended()`'s own task, these hold the client).
   `sync_extended_operations.hpp`: `sync::extended_directory` and the same
   four, blocking, over `sync::connection`, `sync::client` and the sync
   leases. Breaking: the members `who_am_i`, `password_modify`,
