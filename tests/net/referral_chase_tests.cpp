@@ -217,6 +217,7 @@ TEST_CASE("chase_search: continuation references are followed", "[net][referral]
 	auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector()));
 	REQUIRE(r.has_value());
 	CHECK(r->complete);
+	CHECK(r->references.empty());
 	CHECK(dns(*r)
 		  == std::vector<std::string>{
 			"uid=jdoe,ou=a,dc=example,dc=org", "uid=jdoe,ou=b,dc=example,dc=org", "uid=other,ou=c,dc=example,dc=org" });
@@ -262,6 +263,36 @@ TEST_CASE("chase_search: limit codes keep the entries", "[net][referral]")
 	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=a,dc=example,dc=org", "uid=jdoe,ou=b,dc=example,dc=org" });
 	CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed });
 	CHECK_FALSE(r->complete);// b's search ended with timeLimitExceeded
+	w.check_servers();
+}
+
+TEST_CASE("chase_search: a continuation reference's limit code after the origin's success", "[net][referral]")
+{
+	world w;
+	w.add("b.example");
+	w.add("c.example");
+	ldap::message origin_done = done_msg(1);
+	origin_done.controls.emplace_back("1.2.3.4", false, "v");
+	w.serve("a.example",
+	  { answer({ ref_msg(1, { "ldap://b.example/ou=b,dc=example,dc=org" }),
+		ref_msg(1, { "ldap://c.example/ou=c,dc=example,dc=org" }),
+		origin_done }) });
+	w.serve("b.example",
+	  { answer(
+		{ entry_msg(1, "uid=jdoe,ou=b,dc=example,dc=org", "B"), done_msg(1, 3, "ou=b,dc=example,dc=org", "time") }) });
+	w.serve(
+	  "c.example", { answer({ entry_msg(1, "uid=jdoe,ou=c,dc=example,dc=org", "C"), done_msg(1, 4, "", "size") }) });
+
+	auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector()));
+	REQUIRE(r.has_value());
+	// The first limit code, with its matched DN and diagnostic; the origin's controls.
+	CHECK(r->result_code == 3);
+	CHECK(r->matched_dn == "ou=b,dc=example,dc=org");
+	CHECK(r->diagnostic_message == "time");
+	CHECK(r->controls == std::pmr::vector<ldap::control>{ ldap::control{ "1.2.3.4", false, "v" } });
+	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=b,dc=example,dc=org", "uid=jdoe,ou=c,dc=example,dc=org" });
+	CHECK(r->references.empty());
+	CHECK_FALSE(r->complete);
 	w.check_servers();
 }
 
@@ -452,6 +483,9 @@ TEST_CASE("chase_search: references that cannot be followed leave the search par
 	CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=a,dc=example,dc=org" });
 	CHECK(outcomes(r->referrals)
 		  == std::vector{ referral_outcome::failed, referral_outcome::skipped_policy, referral_outcome::unparseable });
+	CHECK(r->references
+		  == ldap::string_list{
+			"ldap://b.example/ou=b,dc=example,dc=org", "ldap://c.example/ou=c,dc=example,dc=org", "ldap://c.example" });
 	REQUIRE(r->referrals[0].failure);
 	CHECK(r->referrals[0].failure->code == errc::no_such_object);
 	w.check_servers();
@@ -487,6 +521,7 @@ TEST_CASE("chase_search: loops are not followed", "[net][referral]")
 		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector()));
 		REQUIRE(r.has_value());
 		CHECK(r->complete);
+		CHECK(r->references.empty());
 		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::skipped_loop });
 		CHECK(w.asked.empty());
 	}

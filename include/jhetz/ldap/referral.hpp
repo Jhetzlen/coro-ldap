@@ -130,14 +130,22 @@ struct chased_search
 	// The origin's entries (or, after a referral result, the target's), then
 	// those of each continuation reference followed, in the order followed.
 	std::pmr::vector<entry> entries{};
+	// The URIs of the continuation references not followed by any of their
+	// URIs (skipped, unparseable, over a limit, failed, left unexamined
+	// when the chase stopped, or not followed at all), one string per URI
+	// as sent, in the order the chase got to them. A reference skipped
+	// only as a loop is not here.
+	string_list references{};
 	// The SearchResultDone of the origin's search (or, after a referral
 	// result, the target's), as search_result's: success, or a limit code
 	// (sizeLimitExceeded, timeLimitExceeded, adminLimitExceeded) with the
-	// entries received before it.
+	// entries received before it. When that is success, the result code,
+	// matched DN and diagnostic of the first followed continuation
+	// reference whose search ended with a limit code.
 	std::int32_t result_code = 0;
 	std::pmr::string matched_dn{};
 	std::pmr::string diagnostic_message{};
-	std::pmr::vector<control> controls{};
+	std::pmr::vector<control> controls{};// the origin's (or the referral target's)
 	std::vector<referral_attempt> referrals{};
 	// URIs not in `referrals`: those beyond referral_policy::max_attempts,
 	// and those of the references left unexamined when the chase stopped

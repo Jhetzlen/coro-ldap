@@ -506,16 +506,29 @@ namespace {
 		chased_search *out;
 		std::deque<pending_reference> queue{};
 
+		// The URIs of a reference not followed: kept in `references`.
+		void unfollowed(const string_list &uris) const
+		{
+			out->references.insert(out->references.end(), uris.begin(), uris.end());
+			out->complete = false;
+		}
+
 		// Takes the entries of `r`, and queues its references (or, when they
-		// are not followed, counts them). A search that ended with a limit
-		// code clears `complete`.
-		void take(search_reached &r)
+		// are not followed, counts and keeps them). A search that ended with
+		// a limit code clears `complete`; a continuation reference's gives
+		// its LDAPResult to `out` when the origin's was success.
+		void take(search_reached &r, bool continuation)
 		{
 			for (auto &e : r.value.entries) {
 				out->entries.push_back(std::move(e));
 			}
 			if (!r.value.done.is_success()) {
 				out->complete = false;
+				if (continuation && out->result_code == 0) {
+					out->result_code = r.value.done.result_code;
+					out->matched_dn.assign(r.value.done.matched_dn);
+					out->diagnostic_message.assign(r.value.done.diagnostic_message);
+				}
 			}
 			if (r.value.references.empty()) {
 				return;
@@ -523,8 +536,8 @@ namespace {
 			if (!st->settings.references) {
 				for (const auto &uris : r.value.references) {
 					st->unlisted += uris.size();
+					unfollowed(uris);
 				}
-				out->complete = false;
 				return;
 			}
 			const auto shared = std::make_shared<const search_params>(std::move(r.request));
@@ -538,6 +551,7 @@ namespace {
 		{
 			for (const auto &ref : queue) {
 				st->unlisted += ref.uris.size();
+				unfollowed(ref.uris);
 			}
 			queue.clear();
 			out->complete = false;
@@ -565,12 +579,13 @@ namespace detail {
 		}
 		const search_run &origin_run = first.value->value;
 		chased_search out{ .entries = std::pmr::vector<entry>(mr),
+			.references = string_list(mr),
 			.result_code = origin_run.done.result_code,
 			.matched_dn = origin_run.done.matched_dn,
 			.diagnostic_message = origin_run.done.diagnostic_message,
 			.controls = origin_run.controls };
 		reference_queue refs{ .st = &st, .out = &out };
-		refs.take(*first.value);
+		refs.take(*first.value, false);
 		while (!refs.queue.empty()) {
 			if (st.exhausted()) {
 				refs.drop_rest();
@@ -588,9 +603,9 @@ namespace detail {
 				co_return { .value = std::unexpected(std::move(f.error())) };
 			}
 			if (f->target) {
-				refs.take(*f->target);
+				refs.take(*f->target, true);
 			} else if (!f->loop) {
-				out.complete = false;
+				refs.unfollowed(ref.uris);
 			}
 		}
 		out.referrals = std::move(st.attempts);

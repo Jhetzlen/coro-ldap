@@ -2383,7 +2383,47 @@ TEST_CASE("client: following continuation references", "[net][client][referral]"
 		CHECK(r->entries.size() == 1);
 		CHECK_FALSE(r->complete);
 		CHECK(r->unlisted == 2);
+		CHECK(r->references
+			  == ldap::string_list{ ref_to(b, "ou=b,dc=example,dc=org"), ref_to(b, "ou=c,dc=example,dc=org") });
 		CHECK(b.accepted() == 0);
+	}
+	SECTION("referral results only: search() returns the references, as without chasing")
+	{
+		pool_fixture f;
+		auto &b = f.server({});
+		const auto uri = ref_to(b, "ou=b,dc=example,dc=org");
+		auto &a = f.server({ { answer({ bind_resp(1) }),
+		  answer(
+			{ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "John"), ref_msg(2, { uri }), done_msg(2) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .follow_referrals = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+		auto r = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE(r.has_value());
+		CHECK(r->entries.size() == 1);
+		CHECK(r->references == ldap::string_list{ uri });
+		CHECK(r->is_success());
+		CHECK(b.accepted() == 0);
+	}
+	SECTION("a followed reference's limit code is search()'s result code")
+	{
+		pool_fixture f;
+		auto &b = f.server(
+		  { { answer({ bind_resp(1) }), answer({ entry_msg(2, b_dn, "B"), done_msg(2, 4, "", "size limit") }) } });
+		const auto uri = ref_to(b, "ou=b,dc=example,dc=org");
+		auto &a = f.server({ { answer({ bind_resp(1) }),
+		  answer(
+			{ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "John"), ref_msg(2, { uri }), done_msg(2) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .follow_references = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+		auto r = finish(f.ioc, f.pool->search(people_search()));
+		REQUIRE(r.has_value());
+		CHECK(r->entries.size() == 2);
+		CHECK(r->references.empty());
+		CHECK_FALSE(r->is_success());
+		CHECK(r->result_code == 4);
+		CHECK(r->diagnostic_message == "size limit");
 	}
 	SECTION("not followed: search() still returns the entries it got")
 	{
@@ -2399,6 +2439,7 @@ TEST_CASE("client: following continuation references", "[net][client][referral]"
 		auto r = finish(f.ioc, f.pool->search(people_search()));
 		REQUIRE(r.has_value());
 		CHECK(r->entries.size() == 1);
+		CHECK(r->references == ldap::string_list{ "ldap://elsewhere.example/ou=b,dc=example,dc=org" });
 		CHECK(f.obs.events.back()
 			  == "referral " + text(a.url()) + " ldap://elsewhere.example/ou=b,dc=example,dc=org skipped_policy");
 	}

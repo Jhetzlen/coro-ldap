@@ -2732,11 +2732,15 @@ decision left open.
   `chase_settings`: the two switches and an `on_attempt` hook) on the
   shared lease; `client::chase_search()` / `chase_compare()` always do,
   and return the chase (`complete`, `referrals`, `unlisted`): `search()`
-  returns only the entries, as `connection::search()` drops references,
-  so the forwarder that hides partial results is the one that already
-  did. A reference not followed because `follow_references` is off is
-  counted in `unlisted` and clears `complete`, without an attempt entry
-  or a parse.
+  returns the `search_result` part of it, as `connection::search()`
+  would: the entries, the URIs of the continuation references not
+  followed (`chased_search::references`, as `connection::search()`
+  returns the ones it does not follow) and the done fields, where a
+  followed reference's limit code stands in for the origin's success so
+  that partial entries are never `is_success()`. A reference not followed
+  because `follow_references` is off is counted in `unlisted`, kept in
+  `references` and clears `complete`, without an attempt entry or a
+  parse.
   `authorize(referral_hop{target, depth, origin}) -> referral_binding
   {refuse, anonymous, same_setup}` decides per URI; empty refuses all.
   It is asked only for URLs that pass the connector's fixed rules (no

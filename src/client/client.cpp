@@ -1322,7 +1322,8 @@ namespace detail {
 			});
 		}
 
-		// search() and compare() when they chase: the chase's value only.
+		// search() and compare() when they chase: the chase's value, with the
+		// references not followed.
 		static auto entries_of(capy::task<result<chased_search>> chase) -> capy::task<result<search_result>>
 		{
 			auto r = co_await std::move(chase);
@@ -1330,6 +1331,7 @@ namespace detail {
 				co_return std::unexpected(std::move(r.error()));
 			}
 			co_return search_result{ .entries = std::move(r->entries),
+				.references = std::move(r->references),
 				.result_code = r->result_code,
 				.matched_dn = std::move(r->matched_dn),
 				.diagnostic_message = std::move(r->diagnostic_message),

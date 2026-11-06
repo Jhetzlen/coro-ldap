@@ -395,10 +395,13 @@ itself needs only ICU.
   `referral_connector` (`std::function` returning
   `task<result<connection *>>` for a URL and its depth; null skips it), which
   decides which servers may be contacted and how their connections are
-  bound. It returns `chased_search{entries, result_code, matched_dn,
-  diagnostic_message, controls, referrals, unlisted, complete}` (the done
-  fields are the origin's search's, or the referral target's: success or a
-  limit code, as `search()`): the
+  bound. It returns `chased_search{entries, references, result_code,
+  matched_dn, diagnostic_message, controls, referrals, unlisted,
+  complete}` (the done fields are the origin's search's, or the referral
+  target's: success or a limit code, as `search()`; on success, the first
+  limit code a followed continuation reference's search ended with;
+  `references` holds the URIs of the continuation references not
+  followed): the
   entries of every server reached, one `referral_attempt` per URI tried
   (`followed`, `skipped_policy`, `skipped_loop`, `limit_reached`,
   `unparseable`, `failed` with its error), and `complete == false` when a
@@ -898,8 +901,10 @@ itself needs only ICU.
   the pooled connection's own failure is retried, never a referred
   server's. `chase_search(params, mr) -> task<result<chased_search>>`
   and `chase_compare(params) -> task<result<chased_compare>>` return what
-  the chase did (`search()` returns only the entries, even when some
-  references were not followed); `client_observer::on_referral(server,
+  the chase did (`search()` returns its `search_result`: the URIs of the
+  continuation references not followed in `references`, and when the
+  origin's search succeeded the first limit code of a followed
+  reference's search as `result_code`); `client_observer::on_referral(server,
   attempt)` hears of each URI. Writes (forwarders and leases),
   `search_stream()` and `extended()` never chase.
 - `jhetz/ldap/sync.hpp` (3pf.5): `ldap::sync::client`, the blocking facade
