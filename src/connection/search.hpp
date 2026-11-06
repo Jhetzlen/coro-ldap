@@ -100,9 +100,6 @@ namespace detail {
 		out.controls.assign(controls.begin(), controls.end());
 	}
 
-	// The one entry of a base-scope search (nullopt if none came back).
-	auto read_one(core_ref self, search_params p) -> boost::capy::task<result<std::optional<entry>>>;
-
 	// For ldap::client: `owner` lives until `s` is destroyed (after its
 	// search is abandoned). Ignored on a default-constructed or moved-from
 	// stream.

@@ -223,30 +223,6 @@ auto connection::search(search_params request, std::pmr::memory_resource *mr) ->
 
 namespace detail {
 
-	auto read_one(core_ref self, search_params p) -> capy::task<result<std::optional<entry>>>
-	{
-		// The analyzer does not model the promise's construction: Capy's env_ is
-		// nullptr-initialised and set by the awaiting caller before the first resume.
-		// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
-		auto s = start_search(*self, p, std::pmr::get_default_resource(), co_await capy::this_coro::stop_token);
-		if (!s) {
-			co_return std::unexpected(std::move(s.error()));
-		}
-		std::optional<entry> found;
-		while (true) {
-			auto e = co_await s->next();
-			if (!e) {
-				co_return std::unexpected(std::move(e.error()));
-			}
-			if (!*e) {
-				co_return found;
-			}
-			if (!found) {
-				found = std::move(**e);
-			}
-		}
-	}
-
 	auto search_done(ldap::search_stream &s) noexcept -> const ldap_result *
 	{
 		const auto *state = connection::core::stream_state(s);
