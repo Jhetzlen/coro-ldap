@@ -669,11 +669,6 @@ namespace detail {
 
 	auto extended_impl(impl_ref self, extended_params request) -> boost::capy::task<result<extended_result>>;
 
-	// `context` names the operation in errors, instead of "extended
-	// operation <oid>".
-	auto password_modify_impl(impl_ref self, password_modify_params request, std::string context)
-	  -> boost::capy::task<result<std::optional<std::string>>>;
-
 }// namespace detail
 
 }// namespace jhetz::ldap

@@ -4,6 +4,7 @@
 // server_thread.hpp's, which answers whatever comes.
 #include "jhetz/ldap/ad/sync.hpp"
 #include "jhetz/ldap/sync.hpp"
+#include "jhetz/ldap/sync_extended_operations.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 #include "server_thread.hpp"
@@ -245,13 +246,13 @@ TEST_CASE("sync client: acquire, then operations on the lease", "[net][sync][cli
 		REQUIRE(found.has_value());
 		REQUIRE(found->entries.size() == 1);
 		CHECK(found->entries.front() == expected_entry(jdoe, "John"));
-		CHECK(l->who_am_i() == "dn:" + std::string(admin));
+		CHECK(ldap::sync::who_am_i(*l) == "dn:" + std::string(admin));
 		CHECK(pool.connections() == 1);
 		ldap::sync::lease moved = std::move(*l);
 		CHECK_FALSE(static_cast<bool>(*l));
 		CHECK(l->server() == ldap::url{});
 		CHECK_FALSE(l->is_open());
-		auto none = l->who_am_i();
+		auto none = ldap::sync::who_am_i(*l);
 		REQUIRE_FALSE(none.has_value());
 		CHECK(none.error().code == ldap::client_errc::not_connected);
 		moved.release();
@@ -318,12 +319,14 @@ TEST_CASE("sync client: the read forwarders retry once on another connection", "
 		CHECK(*r);
 		CHECK(srv.accepted() == 2);
 	}
-	SECTION("who_am_i(): the connection is lost")
+	SECTION("who_am_i() through extended(): a write forwarder, not retried once sent")
 	{
 		threaded_script_server srv({ lost_after_bind(), { answer({ bind_resp(1) }), answer({ whoami_msg(2) }) } });
 		ldap::sync::client pool(options_for(srv.url()));
-		CHECK(pool.who_am_i() == "dn:" + std::string(admin));
-		CHECK(srv.accepted() == 2);
+		auto r = ldap::sync::who_am_i(pool);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::connection_lost);
+		CHECK(srv.accepted() == 1);
 	}
 	SECTION("search(): a result code that is not retried")
 	{
@@ -478,9 +481,9 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 	  [](ldap::sync::client &p, ldap::sync::lease &l, std::promise<from_io_thread> &out) -> capy::task<void> {
 		  from_io_thread r;
 		  r.acquired = p.acquire();// blocking, on the I/O thread
-		  r.forwarded = p.who_am_i();
+		  r.forwarded = ldap::sync::who_am_i(p);
 		  r.written = p.del({ .entry = ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" } });
-		  r.on_lease = l.who_am_i();
+		  r.on_lease = ldap::sync::who_am_i(l);
 		  r.connections = p.connections();
 		  out.set_value(std::move(r));
 		  co_return;
@@ -497,8 +500,8 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 	}
 	CHECK(r.connections == 1);// read at once on the I/O thread
 	// Everything still works from other threads.
-	CHECK(pool.who_am_i() == "dn:cn=me");
-	CHECK(held->who_am_i() == "dn:cn=me");
+	CHECK(ldap::sync::who_am_i(pool) == "dn:cn=me");
+	CHECK(ldap::sync::who_am_i(*held) == "dn:cn=me");
 	CHECK(pool.connections() == 1);
 }
 
@@ -549,7 +552,7 @@ TEST_CASE("sync client: close() from the I/O thread", "[net][sync][client][close
 {
 	server_thread srv;
 	ldap::sync::client pool({ .servers = { srv.url() } });
-	REQUIRE(pool.who_am_i().has_value());
+	REQUIRE(ldap::sync::who_am_i(pool).has_value());
 	std::promise<void> closed;
 	capy::run_async(pool.executor())([](ldap::sync::client &p, std::promise<void> &done) -> capy::task<void> {
 		p.close();// at once, not would_deadlock
@@ -557,7 +560,7 @@ TEST_CASE("sync client: close() from the I/O thread", "[net][sync][client][close
 		co_return;
 	}(pool, closed));
 	closed.get_future().wait();
-	auto after = pool.who_am_i();
+	auto after = ldap::sync::who_am_i(pool);
 	REQUIRE_FALSE(after.has_value());
 	CHECK(after.error().code == ldap::client_errc::not_connected);
 	CHECK(pool.connections() == 0);
@@ -575,7 +578,7 @@ TEST_CASE("sync client: destroyed while a lease is outstanding", "[net][sync][cl
 	}// closes the leased connection (no UnbindRequest); the lease keeps the I/O thread
 	CHECK(static_cast<bool>(l));
 	CHECK_FALSE(l.is_open());
-	auto after = l.who_am_i();
+	auto after = ldap::sync::who_am_i(l);
 	REQUIRE_FALSE(after.has_value());
 	CHECK(after.error().code == ldap::cond::connection_lost);
 	SECTION("released on this thread") { l.release(); }
@@ -595,7 +598,7 @@ TEST_CASE("sync client: a lease released or destroyed on the I/O thread", "[net]
 	ldap::sync::client pool({ .servers = { srv.url() }, .max_connections = 1 });
 	auto held = pool.acquire_exclusive();
 	REQUIRE(held.has_value());
-	REQUIRE(held->who_am_i().has_value());
+	REQUIRE(ldap::sync::who_am_i(*held).has_value());
 	std::promise<void> released;
 	SECTION("released")
 	{
@@ -624,7 +627,7 @@ TEST_CASE("sync client: a lease released or destroyed on the I/O thread", "[net]
 	// The only connection is back in the pool: an exclusive lease gets it.
 	auto again = pool.acquire_exclusive();
 	REQUIRE(again.has_value());
-	CHECK(again->who_am_i() == "dn:cn=me");
+	CHECK(ldap::sync::who_am_i(*again) == "dn:cn=me");
 	CHECK(pool.connections() == 1);
 }
 
@@ -669,7 +672,7 @@ TEST_CASE("sync client: many threads share the pool", "[net][sync][client]")
 					good = ok(pool.search({ .base = *ldap::dn::parse(base) }));
 					break;
 				case 1:
-					good = pool.who_am_i() == "dn:cn=me";
+					good = ldap::sync::who_am_i(pool) == "dn:cn=me";
 					break;
 				default: {
 					auto l = pool.acquire();

@@ -182,7 +182,7 @@
 // request for another server). UnboundID's followReferrals, libldap's
 // LDAP_OPT_REFERRALS and JNDI's java.naming.referral=follow chase writes
 // too; this client does not.
-// search_stream() and who_am_i() never chase either: the stream hands out
+// search_stream() and extended() never chase either: the stream hands out
 // its references (search_stream::references(), next_item()).
 //
 // For code without coroutines, sync::client (sync.hpp) owns an io_context
@@ -232,7 +232,7 @@ using session_setup = std::function<boost::capy::task<result<void>>(connection &
 
 // A session_setup doing simple_bind(name, password) (an empty name and
 // password: an anonymous bind). The password is kept in the setup, unwiped
-// (see connection::change_password on password memory).
+// (see extended_operations.hpp on password memory).
 [[nodiscard]] auto simple_bind_setup(dn name, std::string password) -> session_setup;
 
 // Makes a fresh SASL mechanism for each connection (a mechanism holds the
@@ -623,7 +623,7 @@ class client
 	// (search_params::timeout, ..., else
 	// connection_options::operation_timeout). The task's stop token stops
 	// the acquire() and the operation. The write forwarders (below) retry
-	// only after client_errc::not_sent; extended operations need a lease.
+	// only after client_errc::not_sent.
 	// Each call may land on any pooled connection, so a request control
 	// bound to one connection (the paged-results cookie of an earlier page,
 	// anything tied to the session) needs a lease, not the forwarders. Like
@@ -649,11 +649,10 @@ class client
 	auto search_stream(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> boost::capy::task<result<ldap::search_stream>>;
 	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
-	auto who_am_i(extended_controls controls = {}) -> boost::capy::task<result<std::string>>;
 	//
 	// search() and compare() chase referrals as client_options::referrals
-	// says (see "Referrals" in the header comment); search_stream() and
-	// who_am_i() never do.
+	// says (see "Referrals" in the header comment); search_stream() never
+	// does.
 
 	// search() and compare() with what the chase did: as ldap::chase_search
 	// and ldap::chase_compare (referral_chase.hpp) on a shared lease, with
@@ -687,6 +686,12 @@ class client
 	auto modify(modify_params request) -> boost::capy::task<result<response>>;
 	auto del(del_params request) -> boost::capy::task<result<response>>;
 	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
+	// Any extended operation but StartTLS, as a write forwarder: retried
+	// only after not_sent, since an extended operation may change the
+	// directory (who_am_i() and the password calls of
+	// extended_operations.hpp run on it). A referral result is an error,
+	// never chased.
+	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
 
 	// Connections in the pool, open or retired and waiting for their last
 	// lease to return (not those still being opened). For tests and

@@ -5,6 +5,7 @@
 #include "jhetz/ldap/cancel.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/controls.hpp"
+#include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/transaction.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -323,7 +324,7 @@ TEST_CASE("transaction: destroyed while open, it is aborted without waiting", "[
 		REQUIRE(m.run(moved.add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } })).has_value());
 	}
 	CHECK(m.conn.outstanding() == 1);// the abort's answer is due
-	auto me = m.run(m.conn.who_am_i());
+	auto me = m.run(ldap::who_am_i(m.conn));
 	REQUIRE(me.has_value());
 	CHECK(m.conn.outstanding() == 0);
 	CHECK(m.conn.is_open());
@@ -457,7 +458,7 @@ TEST_CASE("transaction: an End Transaction never sent leaves it to the destructo
 	}
 	// ...so the destructor still aborts it on the server.
 	CHECK(m.conn.outstanding() == 1);
-	REQUIRE(m.run(m.conn.who_am_i()).has_value());
+	REQUIRE(m.run(ldap::who_am_i(m.conn)).has_value());
 
 	// Once the server answered, the destructor sends nothing more.
 	{
@@ -567,7 +568,7 @@ TEST_CASE("transaction: destroyed while the abort's write fails inline", "[net][
 	CHECK_FALSE(conn.is_open());
 	CHECK(conn.outstanding() == 0);
 	CHECK(log.received.size() == 1);
-	const auto me = finish(ioc, conn.who_am_i());
+	const auto me = finish(ioc, ldap::who_am_i(conn));
 	REQUIRE_FALSE(me.has_value());
 	CHECK(me.error().code == client_errc::not_sent);
 	CHECK_THAT(std::string(me.error().context), Catch::Matchers::ContainsSubstring("write breakable"));

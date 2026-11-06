@@ -1,5 +1,6 @@
 // SASL binds (connection::sasl_bind) against the scripted mock server.
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/sasl_scram.hpp"
 #include "mock_ldap.hpp"
@@ -327,7 +328,7 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		// The server considers the connection bound: it is closed, and later
 		// operations name the reason.
 		CHECK_FALSE(m.conn.is_open());
-		auto later = m.run(m.conn.who_am_i());
+		auto later = m.run(ldap::who_am_i(m.conn));
 		REQUIRE_FALSE(later.has_value());
 		CHECK(later.error().code == ldap::client_errc::not_sent);
 		CHECK_THAT(std::string(later.error().context), ContainsSubstring("server signature mismatch"));

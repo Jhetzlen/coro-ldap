@@ -1,4 +1,5 @@
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/extended_operations.hpp"
 
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/corosio/io_context.hpp>
@@ -20,7 +21,8 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task
 		std::cerr << bound.error().message() << '\n';
 		co_return 1;
 	}
-	auto reset = co_await c->reset_password(ldap::dn{ "uid=user001,ou=people,dc=example,dc=org" }, "a new pässword");
+	auto reset =
+	  co_await ldap::reset_password(*c, ldap::dn{ "uid=user001,ou=people,dc=example,dc=org" }, "a new pässword");
 	if (!reset) {
 		std::cerr << reset.error().message() << '\n';
 		co_return 1;

@@ -343,25 +343,6 @@ namespace detail {
 		{
 			return self().call([&](ldap::connection &c) { return c.extended(std::move(request)); });
 		}
-		[[nodiscard]] auto who_am_i(extended_controls controls = {}) -> result<std::string>
-		{
-			return self().call([&](ldap::connection &c) { return c.who_am_i(std::move(controls)); });
-		}
-		[[nodiscard]] auto password_modify(password_modify_params request) -> result<std::optional<std::string>>
-		{
-			return self().call([&](ldap::connection &c) { return c.password_modify(std::move(request)); });
-		}
-		[[nodiscard]] auto change_password(dn user, std::string old_password, std::string new_password) -> result<void>
-		{
-			return self().call([&](ldap::connection &c) {
-				return c.change_password(std::move(user), std::move(old_password), std::move(new_password));
-			});
-		}
-		[[nodiscard]] auto reset_password(dn user, std::string new_password) -> result<void>
-		{
-			return self().call(
-			  [&](ldap::connection &c) { return c.reset_password(std::move(user), std::move(new_password)); });
-		}
 
 		// LDAP transactions (RFC 5805), as ldap::connection's.
 		[[nodiscard]] auto start_transaction(extended_controls controls = {}) -> result<std::pmr::string>
@@ -597,7 +578,6 @@ class client
 	[[nodiscard]] auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> result<search_result>;
 	[[nodiscard]] auto compare(compare_params request) -> result<bool>;
-	[[nodiscard]] auto who_am_i(extended_controls controls = {}) -> result<std::string>;
 	// As ldap::client's, chasing referrals as client_options::referrals
 	// says, with what the chase did (search() and compare() chase too, see
 	// "Referrals" in client.hpp). The authorizer and the observer's
@@ -614,6 +594,8 @@ class client
 	[[nodiscard]] auto modify(modify_params request) -> result<response>;
 	[[nodiscard]] auto del(del_params request) -> result<response>;
 	[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<response>;
+	// As ldap::client::extended: retried only after not_sent.
+	[[nodiscard]] auto extended(extended_params request) -> result<extended_result>;
 
 	// As ldap::client::connections(), from any thread (read at once on
 	// the I/O thread).

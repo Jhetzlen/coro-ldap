@@ -283,23 +283,4 @@ auto connection::extended(extended_params request) -> capy::task<result<extended
 	co_return co_await extended_impl(impl_ref(impl_), std::move(request));
 }
 
-auto connection::who_am_i(extended_controls controls) -> capy::task<result<std::string>>
-{
-	auto r = co_await extended({ .name = std::string(who_am_i_oid), .controls = std::move(controls) });
-	if (!r) {
-		co_return std::unexpected(std::move(r.error()));
-	}
-	if (!r->value) {
-		co_return std::string();
-	}
-	// The authzId is an LDAPString (RFC 4532 section 2.2, RFC 4511 section
-	// 4.1.2): UTF-8, checked as the mapping checks a decoded string.
-	if (const std::size_t bad = detail::invalid_utf8_offset(*r->value); bad != std::string_view::npos) {
-		error e = detail::utf8_conversion_error(bad);
-		e.context.insert(0, "who_am_i authzId: ");
-		co_return std::unexpected(std::move(e));
-	}
-	co_return std::string(*r->value);
-}
-
 }// namespace jhetz::ldap

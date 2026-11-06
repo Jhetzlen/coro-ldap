@@ -1219,7 +1219,8 @@ namespace detail {
 		// add(), modify(), del(), modify_dn() and the like: `op` on a shared
 		// lease, retried once, on another connection, only if its request
 		// never reached the writer.
-		template<class Op> static auto write(std::shared_ptr<client_state> self, Op op) -> capy::task<result<response>>
+		template<class T = response, class Op>
+		static auto write(std::shared_ptr<client_state> self, Op op) -> capy::task<result<T>>
 		{
 			for (bool retried = false;; retried = true) {
 				auto held = co_await acquire<lease>(self);
@@ -1535,15 +1536,6 @@ auto client::chase_compare(compare_params request) -> capy::task<result<chased_c
 	return detail::client_state::chase_compare(state_, std::move(request));
 }
 
-auto client::who_am_i(extended_controls controls) -> capy::task<result<std::string>>
-{
-	if (state_ == nullptr) {
-		return read_refused<std::string>("who_am_i");
-	}
-	return detail::client_state::read<std::string>(
-	  state_, [controls = std::move(controls)](const lease &held) { return held->who_am_i(controls); });
-}
-
 auto client::add(add_params request) -> capy::task<result<response>>
 {
 	if (state_ == nullptr) {
@@ -1578,6 +1570,15 @@ auto client::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 	}
 	return detail::client_state::write(
 	  state_, [request = std::move(request)](const lease &held) { return held->modify_dn(request); });
+}
+
+auto client::extended(extended_params request) -> capy::task<result<extended_result>>
+{
+	if (state_ == nullptr) {
+		return read_refused<extended_result>("extended operation " + request.name);
+	}
+	return detail::client_state::write<extended_result>(
+	  state_, [request = std::move(request)](const lease &held) { return held->extended(request); });
 }
 
 auto client::connections() const noexcept -> std::size_t { return state_ == nullptr ? 0 : state_->pool.size(); }

@@ -10,6 +10,7 @@
 #include "../counting_resource.hpp"
 #include "../value_semantics.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -876,12 +877,13 @@ TEST_CASE("connection: operations on a moved-from connection", "[net][connection
 	refused(m.run(c.start_transaction()), "start transaction");
 	refused(m.run(c.end_transaction(std::pmr::string("txn"))), "end transaction");
 	refused(m.run(c.begin_transaction()), "start transaction");
-	refused(m.run(c.reset_password(who, "new")), "reset password uid=jdoe,ou=people,dc=example,dc=org");
-	refused(m.run(c.password_modify({})), "password modify");
-	auto change = m.run(c.change_password(who, "old", "new"));
+	refused(m.run(ldap::reset_password(c, who, "new")),
+	  "reset password uid=jdoe,ou=people,dc=example,dc=org: password modify (RFC 3062)");
+	refused(m.run(ldap::password_modify(c, {})), "password modify");
+	auto change = m.run(ldap::change_password(c, who, "old", "new"));
 	REQUIRE_FALSE(change.has_value());
 	CHECK(change.error().code == client_errc::not_connected);
-	auto who_am_i = m.run(c.who_am_i());
+	auto who_am_i = m.run(ldap::who_am_i(c));
 	REQUIRE_FALSE(who_am_i.has_value());
 	CHECK(who_am_i.error().code == client_errc::not_connected);
 	CHECK(m.log.received.empty());

@@ -5,6 +5,7 @@
 // delays, with the jitter fixed by detail::set_jitter.
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/client.hpp"
+#include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -1956,21 +1957,6 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 				"retry " + text(c) + " 50ms",
 				"connect " + text(b.url()) + " ok" });
 	}
-	SECTION("who_am_i(): the server dropped the idle connection")
-	{
-		pool_fixture f;
-		auto &s = f.server({ bind_ok(),
-		  { answer({ bind_resp(1) }),
-			answer({ ldap::message{
-			  2, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, "dn:" + std::string(admin) } } }) } });
-		f.make({ .servers = { s.url() }, .setup = admin_setup(), .idle_check = std::nullopt });
-		REQUIRE(f.acquire().has_value());// pooled, then returned
-		s.drop(0);// the client cannot tell yet
-		auto r = finish(f.ioc, f.pool->who_am_i());
-		REQUIRE(r.has_value());
-		CHECK(*r == "dn:" + std::string(admin));
-		CHECK(s.accepted() == 2);
-	}
 	SECTION("search_stream(): lost before its first message")
 	{
 		pool_fixture f;
@@ -2625,7 +2611,7 @@ TEST_CASE("client: move assignment, executor() and a moved-from client's reads",
 	refused(finish(f.ioc, f.pool->compare(jdoe_compare())).error(), compare);
 	refused(finish(f.ioc, f.pool->chase_search(people_search())).error(), search);
 	refused(finish(f.ioc, f.pool->chase_compare(jdoe_compare())).error(), compare);
-	refused(finish(f.ioc, f.pool->who_am_i()).error(), "who_am_i");
+	refused(finish(f.ioc, ldap::who_am_i(*f.pool)).error(), "extended operation 1.3.6.1.4.1.4203.1.11.3");
 	const ldap::dn jdoe{ "uid=jdoe,ou=people,dc=example,dc=org" };
 	const std::string add = "add uid=jdoe,ou=people,dc=example,dc=org";
 	const std::string modify = "modify uid=jdoe,ou=people,dc=example,dc=org";
@@ -2666,7 +2652,7 @@ TEST_CASE("client: a read fails as its acquire() does", "[net][client][retry]")
 	unusable(finish(f.ioc, f.pool->compare(jdoe_compare())).error());
 	unusable(finish(f.ioc, f.pool->chase_search(people_search())).error());
 	unusable(finish(f.ioc, f.pool->chase_compare(jdoe_compare())).error());
-	unusable(finish(f.ioc, f.pool->who_am_i()).error());
+	unusable(finish(f.ioc, ldap::who_am_i(*f.pool)).error());
 	unusable(finish(f.ioc, f.pool->del({ .entry = ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" } })).error());
 }
 
@@ -2900,6 +2886,18 @@ TEST_CASE("client: when write forwarders do not retry", "[net][client][write][re
 		CHECK(r.error().code == ldap::errc::busy);
 		CHECK(s.accepted() == 1);
 		CHECK(f.obs.events == std::vector<std::string>{ "connect " + text(s.url()) + " ok" });
+	}
+	SECTION("an extended operation (who_am_i) lost once sent is not retried either")
+	{
+		pool_fixture f;
+		auto &s = f.server({ lost_after_bind(), bind_ok() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto r = finish(f.ioc, ldap::who_am_i(*f.pool));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::connection_lost);
+		CHECK(s.accepted() == 1);
+		REQUIRE(s.log(0).received.size() == 2);
+		CHECK(std::holds_alternative<ldap::extended_request>(s.log(0).received[1].op));
 	}
 	SECTION("the connection is lost once the request was sent: the server saw it once")
 	{

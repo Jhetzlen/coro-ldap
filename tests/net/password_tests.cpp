@@ -2,6 +2,7 @@
 // scripted mock server: the requests sent, the bound user's own change, and
 // the refusals before sending.
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/extended_operations.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -53,8 +54,8 @@ TEST_CASE("change_password: RFC 3062 password modify, no root DSE read", "[net][
 {
 	mock_ldap m;
 	m.serve({ answer({ extended_ok(1) }), answer({ extended_ok(2) }) });
-	CHECK(m.run(m.conn.change_password(jdoe, std::string(old_pw), std::string(new_pw))).has_value());
-	CHECK(m.run(m.conn.reset_password(jdoe, std::string(new_pw))).has_value());
+	CHECK(m.run(ldap::change_password(m.conn, jdoe, std::string(old_pw), std::string(new_pw))).has_value());
+	CHECK(m.run(ldap::reset_password(m.conn, jdoe, std::string(new_pw))).has_value());
 	m.check_server();
 
 	REQUIRE(m.log.received.size() == 2);
@@ -66,7 +67,7 @@ TEST_CASE("change_password: the bound user's own, no userIdentity", "[net][passw
 {
 	mock_ldap m;
 	m.serve({ answer({ extended_ok(1) }) });
-	CHECK(m.run(m.conn.change_password({}, "o", "n")).has_value());
+	CHECK(m.run(ldap::change_password(m.conn, {}, "o", "n")).has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 1);
 	CHECK(m.log.received[0] == password_modify_request(1, "\x30\x06\x81\x01o\x82\x01n"s));
@@ -77,16 +78,16 @@ TEST_CASE("change_password: refused before sending", "[net][password]")
 	mock_ldap m;
 	m.serve({});
 	const auto invalid = std::make_error_code(std::errc::invalid_argument);
-	auto no_new = m.run(m.conn.change_password(jdoe, std::string(old_pw), ""));
+	auto no_new = m.run(ldap::change_password(m.conn, jdoe, std::string(old_pw), ""));
 	REQUIRE_FALSE(no_new.has_value());
 	CHECK(no_new.error().code == invalid);
 	CHECK(std::string(no_new.error().context) == "change password " + jdoe_context + ": empty new password");
-	auto no_old = m.run(m.conn.change_password(jdoe, "", std::string(new_pw)));
+	auto no_old = m.run(ldap::change_password(m.conn, jdoe, "", std::string(new_pw)));
 	REQUIRE_FALSE(no_old.has_value());
 	CHECK(no_old.error().code == invalid);
 	CHECK(std::string(no_old.error().context)
 		  == "change password " + jdoe_context + ": empty old password (reset_password() sets one without it)");
-	auto reset = m.run(m.conn.reset_password(jdoe, ""));
+	auto reset = m.run(ldap::reset_password(m.conn, jdoe, ""));
 	REQUIRE_FALSE(reset.has_value());
 	CHECK(reset.error().code == invalid);
 	CHECK(m.conn.is_open());
@@ -94,7 +95,7 @@ TEST_CASE("change_password: refused before sending", "[net][password]")
 	CHECK(m.log.received.empty());
 
 	ldap::connection none;
-	auto closed = m.run(none.change_password(jdoe, std::string(old_pw), std::string(new_pw)));
+	auto closed = m.run(ldap::change_password(none, jdoe, std::string(old_pw), std::string(new_pw)));
 	REQUIRE_FALSE(closed.has_value());
 	CHECK(closed.error().code == client_errc::not_connected);
 }
@@ -103,7 +104,7 @@ TEST_CASE("change_password: a server error", "[net][password]")
 {
 	mock_ldap m;
 	m.serve({ answer({ ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 49, "", "wrong" } } } }) });
-	auto r = m.run(m.conn.change_password(jdoe, std::string(old_pw), std::string(new_pw)));
+	auto r = m.run(ldap::change_password(m.conn, jdoe, std::string(old_pw), std::string(new_pw)));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::errc::invalid_credentials);
 	CHECK(std::string(r.error().context) == "change password " + jdoe_context + ": password modify (RFC 3062)");

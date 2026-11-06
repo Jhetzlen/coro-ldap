@@ -336,10 +336,8 @@ itself needs only ICU.
   `ldap::mod::add / remove / replace / increment`), `del`, `modify_dn`
   (rename and / or move: `{.entry, .new_rdn, .delete_old_rdn,
   .new_superior}`; breaking (coro-ldap-aw4.3): `move()` and `rename()`
-  are gone from `connection`, `client` and the sync facades), `compare` (`result<bool>`), `extended`,
-  `who_am_i` (RFC 4532; an authzId that is not UTF-8 is
-  conversion_failed) and `password_modify` (RFC 3062: returns the
-  server-generated password, if any), each taking a params aggregate
+  are gone from `connection`, `client` and the sync facades), `compare`
+  (`result<bool>`) and `extended`, each taking a params aggregate
   with `.controls` (that operation's control list, see controls.hpp
   below) and `.timeout` (`extended` refuses the StartTLS name with
   encode_error before sending: use `start_tls`);
@@ -433,11 +431,27 @@ itself needs only ICU.
   `sasl_bind_setup` with an EXTERNAL mechanism, or `no_bind_setup()`, which
   presents it without binding). Its connections are reused per server and
   closed with the connector.
-- Password changes with RFC 3062 Password Modify: `password_modify(params)`
-  (the request as the RFC has it, a generated password returned), and two
-  conveniences over it, `change_password(user, old, new)` (a user's own)
-  and `reset_password(user, new)` (an administrator's; an empty `user` is
-  the bound user), on `connection` and `sync::connection`. Active Directory
+- `jhetz/ldap/extended_operations.hpp` (coro-ldap-aw4.4): the standard
+  extended operations as free functions over `ldap::extended_directory`
+  (anything with `connection`'s `extended()`: `connection`, `client`, a
+  shared lease's `shared_connection`), written once: `who_am_i(d,
+  controls)` (RFC 4532; an authzId that is not UTF-8 is
+  conversion_failed) and RFC 3062 Password Modify, `password_modify(d,
+  params)` (the request as the RFC has it, a generated password
+  returned), and two conveniences over it, `change_password(d, user, old,
+  new)` (a user's own) and `reset_password(d, user, new)` (an
+  administrator's; an empty `user` is the bound user).
+  `sync_extended_operations.hpp`: `sync::extended_directory` and the same
+  four, blocking, over `sync::connection`, `sync::client` and the sync
+  leases. Breaking: the members `who_am_i`, `password_modify`,
+  `change_password` and `reset_password` are gone from `connection`,
+  `shared_connection` and the sync facades, and `client::who_am_i` /
+  `sync::client::who_am_i` with them (`client::extended` replaces them,
+  retried only after `not_sent`, so a Who am I? on a client is no longer
+  retried after a lost connection). The transactions
+  (`start_transaction`, `end_transaction`, `begin_transaction`) stay
+  connection members: a refused End Transaction's txnEndRes does not
+  reach the public `extended()`. Active Directory
   has no RFC 3062: its password changes are `ad::change_password` and
   `ad::reset_password` (section `ldap::ad`). Which one runs is the call's
   choice: nothing reads the root DSE to pick. Passwords never appear in
@@ -849,13 +863,15 @@ itself needs only ICU.
   `disconnect_reason`, `on_retry`, `on_probe`, `on_acquire_wait`) do
   nothing by default, and none runs after `close()`. `close()`,
   `connections()`. Read forwarders `search(params, mr)`,
-  `search_stream(params, mr)`, `compare(params)` and
-  `who_am_i(controls)` run the operation on a shared lease and retry it
+  `search_stream(params, mr)` and `compare(params)` run the operation on a
+  shared lease and retry it
   once on another connection after `cond::connection_lost` or
   `cond::busy_or_unavailable` (a stream only before its first message;
   it holds the lease until destroyed). Write forwarders `add(params)`,
   `modify(params)`, `del(params)`, `modify_dn(params)`, each `->
-  task<result<response>>`, run the operation on a shared lease and retry
+  task<result<response>>`, and `extended(params)` (`->
+  task<result<extended_result>>`, where `ldap::who_am_i(pool)` and the
+  password calls run), run the operation on a shared lease and retry
   it once on another connection only after `client_errc::not_sent` (the
   server never saw the request); any other failure (a connection lost
   after sending, a timeout, busy, a result code) is returned, the update
@@ -882,7 +898,7 @@ itself needs only ICU.
   the chase did (`search()` returns only the entries, even when some
   references were not followed); `client_observer::on_referral(server,
   attempt)` hears of each URI. Writes (forwarders and leases),
-  `search_stream()` and `who_am_i()` never chase.
+  `search_stream()` and `extended()` never chase.
 - `jhetz/ldap/sync.hpp` (3pf.5): `ldap::sync::client`, the blocking facade
   over `ldap::client`. `sync::client(client_options, mr)` owns an
   io_context and an I/O thread, where the `ldap::client` lives (session
@@ -894,8 +910,8 @@ itself needs only ICU.
   `sync::lease` the same but `simple_bind`, `sasl_bind`, `start_tls`,
   `unbind` and `close` (as `ldap::shared_connection`), both with
   `server()`, `release()` and `operator bool` (`sync::basic_lease`). The forwarders
-  `search`, `compare` and `who_am_i`, and the write forwarders `add`,
-  `modify`, `del`, `modify_dn`, block and retry as the
+  `search` and `compare`, and the write forwarders `add`,
+  `modify`, `del`, `modify_dn` and `extended`, block and retry as the
   async ones, and `chase_search` / `chase_compare` mirror the async
   client's (referrals as `client_options::referrals` says; the authorizer
   and `on_referral` run on the I/O thread); no `search_stream` (no

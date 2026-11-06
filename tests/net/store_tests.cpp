@@ -2,7 +2,9 @@
 // (mock_ldap.hpp) and the threaded one (server_thread.hpp).
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/store.hpp"
+#include "jhetz/ldap/sync_extended_operations.hpp"
 #include "jhetz/ldap/sync_store.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -65,6 +67,13 @@ static_assert(ldap::sync::directory<ldap::sync::connection>);
 static_assert(ldap::sync::directory<ldap::sync::client>);
 static_assert(ldap::sync::directory<ldap::sync::lease>);
 static_assert(ldap::sync::directory<ldap::sync::exclusive_lease>);
+static_assert(ldap::extended_directory<ldap::connection>);
+static_assert(ldap::extended_directory<ldap::client>);
+static_assert(ldap::extended_directory<const ldap::shared_connection>);
+static_assert(ldap::sync::extended_directory<ldap::sync::connection>);
+static_assert(ldap::sync::extended_directory<ldap::sync::client>);
+static_assert(ldap::sync::extended_directory<ldap::sync::lease>);
+static_assert(ldap::sync::extended_directory<ldap::sync::exclusive_lease>);
 
 namespace {
 

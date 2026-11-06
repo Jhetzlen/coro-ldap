@@ -3,6 +3,7 @@
 // paged search and referrals.
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/controls.hpp"
+#include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -157,7 +158,8 @@ TEST_CASE("operations: the context quotes the DN sanitized", "[net][operations]"
 	CHECK(std::string(r.error().context)
 		  == "modify cn=" + fffd + fffd + "\xC3\xA9\xE6\x97\xA5\xE6\x9C\xAC" + std::string(256 - 16, 'z') + "...");
 	// A password modify's user, usually a DN, likewise.
-	auto pw = m.run(m.conn.password_modify({ .user = "uid=\r\n\xE2\x80\xA8j\xC3\xB6rg", .new_password = "new" }));
+	auto pw =
+	  m.run(ldap::password_modify(m.conn, { .user = "uid=\r\n\xE2\x80\xA8j\xC3\xB6rg", .new_password = "new" }));
 	REQUIRE_FALSE(pw.has_value());
 	CHECK(pw.error().code == ldap::cond::access_denied);
 	CHECK(std::string(pw.error().context) == "password modify uid=" + fffd + fffd + fffd + "j\xC3\xB6rg");
@@ -271,10 +273,10 @@ TEST_CASE("operations: extended operations and who am I", "[net][operations]")
 	CHECK(x->name == "1.2.3.4.5");
 	CHECK(x->value == std::pmr::string("\x04\x01x", 3));
 
-	auto me = m.run(m.conn.who_am_i());
+	auto me = m.run(ldap::who_am_i(m.conn));
 	REQUIRE(me.has_value());
 	CHECK(*me == "dn:cn=admin,dc=example,dc=org");
-	auto anon = m.run(m.conn.who_am_i());
+	auto anon = m.run(ldap::who_am_i(m.conn));
 	REQUIRE(anon.has_value());
 	CHECK(anon->empty());
 
@@ -300,13 +302,13 @@ TEST_CASE("operations: who am I with an authzId that is not UTF-8", "[net][opera
 		answer({ ldap::message{
 		  2, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, "u:caf\xC3\xA9 \xE6\x97\xA5" } } }) });
 
-	auto bad = m.run(m.conn.who_am_i());
+	auto bad = m.run(ldap::who_am_i(m.conn));
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == client_errc::conversion_failed);
 	CHECK(bad.error().context == "who_am_i authzId: not valid UTF-8 (ill-formed sequence at offset 5)");
 	CHECK(m.conn.is_open());
 
-	auto good = m.run(m.conn.who_am_i());
+	auto good = m.run(ldap::who_am_i(m.conn));
 	REQUIRE(good.has_value());
 	CHECK(*good == "u:caf\xC3\xA9 \xE6\x97\xA5");
 	m.check_server();
@@ -372,7 +374,7 @@ TEST_CASE("operations: extended operations with intermediate responses", "[net][
 		CHECK(x->name == "1.2.3.5");
 		CHECK(x->value == "done");
 		CHECK(x->intermediates.empty());
-		auto me = m.run(m.conn.who_am_i());
+		auto me = m.run(ldap::who_am_i(m.conn));
 		REQUIRE(me.has_value());
 		CHECK(*me == "done");
 		CHECK(m.conn.is_open());
@@ -401,7 +403,7 @@ TEST_CASE("operations: extended operations with intermediate responses", "[net][
 		  { .name = "1.2.3.4", .timeout = std::chrono::milliseconds(50), .intermediate_responses = true }));
 		REQUIRE_FALSE(x.has_value());
 		CHECK(x.error().code == ldap::cond::timeout);
-		auto me = m.run(m.conn.who_am_i());
+		auto me = m.run(ldap::who_am_i(m.conn));
 		REQUIRE(me.has_value());
 		CHECK(*me == "dn:x");
 		CHECK(m.conn.is_open());
@@ -2311,25 +2313,26 @@ TEST_CASE("operations: password modify (RFC 3062)", "[net][operations]")
 	  answer({ ok(5, "\x04\x00"s) }) });
 
 	// All fields: no generated password.
-	auto set = m.run(m.conn.password_modify(
-	  { .user = "uid=jdoe,ou=people,dc=example,dc=org", .old_password = "old", .new_password = "new" }));
+	auto set = m.run(ldap::password_modify(
+	  m.conn, { .user = "uid=jdoe,ou=people,dc=example,dc=org", .old_password = "old", .new_password = "new" }));
 	REQUIRE(set.has_value());
 	CHECK_FALSE(set->has_value());
 	// No new password: the server generates one.
-	auto generated = m.run(m.conn.password_modify({}));
+	auto generated = m.run(ldap::password_modify(m.conn, {}));
 	REQUIRE(generated.has_value());
 	CHECK(*generated == "s3cr3");
-	auto empty = m.run(m.conn.password_modify({ .new_password = "x" }));
+	auto empty = m.run(ldap::password_modify(m.conn, { .new_password = "x" }));
 	REQUIRE(empty.has_value());
 	CHECK_FALSE(empty->has_value());
 	// Server errors name the operation and the user, never a password.
-	auto refused = m.run(m.conn.password_modify({ .user = "uid=jdoe", .old_password = "bad", .new_password = "new" }));
+	auto refused =
+	  m.run(ldap::password_modify(m.conn, { .user = "uid=jdoe", .old_password = "bad", .new_password = "new" }));
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == errc::invalid_credentials);
 	CHECK(refused.error().context == "password modify uid=jdoe");
 	CHECK(refused.error().diagnostic == "old password wrong");
 	// A malformed response value.
-	auto bad = m.run(m.conn.password_modify({}));
+	auto bad = m.run(ldap::password_modify(m.conn, {}));
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == ldap::cond::protocol_error);
 	CHECK_THAT(std::string(bad.error().context), StartsWith("password modify: response value"));

@@ -21,6 +21,7 @@
 #include "jhetz/ldap/ad/user_account_control.hpp"
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/sasl_ntlm.hpp"
 #include "jhetz/ldap/store.hpp"
 #include "jhetz/ldap/sync.hpp"
@@ -165,7 +166,7 @@ TEST_CASE("samba ad: ad::change_password and ad::reset_password", "[samba_ad][pa
 		CHECK((extensions == nullptr || !std::ranges::contains(*extensions, ldap::password_modify_oid)));
 		reset(ioc, pwchange, "Core-Passw0rd");
 		auto admin = open_bound(ioc, start_tls, administrator, administrator_password);
-		auto r = finish(ioc, admin.reset_password(pwchange, "Never-Passw0rd"));
+		auto r = finish(ioc, ldap::reset_password(admin, pwchange, "Never-Passw0rd"));
 		REQUIRE_FALSE(r.has_value());
 		INFO(r.error().message());
 		CHECK(r.error().code == ldap::errc::protocol_error);
@@ -375,7 +376,7 @@ auto ntlm_bind(corosio::io_context &ioc, ldap::connection &c, ldap::sasl_mechani
 	if (!r) {
 		return std::unexpected(std::move(r.error()));
 	}
-	return finish(ioc, c.who_am_i());
+	return finish(ioc, ldap::who_am_i(c));
 }
 
 // sasl_ntlm given the tls-server-end-point hash of another certificate (the

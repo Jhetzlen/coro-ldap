@@ -350,17 +350,9 @@ class connection
 	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
 	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
 	// Any extended operation but StartTLS: its name (start_tls_oid) fails
-	// with encode_error before anything is sent; use start_tls().
+	// with encode_error before anything is sent; use start_tls(). Who am I?
+	// and Password Modify are free functions (extended_operations.hpp).
 	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
-	// The authorization identity of this connection (RFC 4532): "dn:<dn>",
-	// "u:<user>", or "" when anonymous. An authzId that is not well-formed
-	// UTF-8 (an LDAPString, RFC 4511 section 4.1.2) fails with
-	// conversion_failed, as a mapped string value does.
-	auto who_am_i(extended_controls controls = {}) -> boost::capy::task<result<std::string>>;
-	// Changes a password (RFC 3062). Returns the password the server
-	// generated (genPasswd) when new_password was not given, else nullopt.
-	// Passwords never appear in error contexts.
-	auto password_modify(password_modify_params request) -> boost::capy::task<result<std::optional<std::string>>>;
 
 	// LDAP transactions (RFC 5805; transaction.hpp has the helper and the
 	// rules). start_transaction() sends a Start Transaction request (section
@@ -382,25 +374,6 @@ class connection
 	auto end_transaction(std::pmr::string identifier, bool commit = true)
 	  -> boost::capy::task<result<end_transaction_result>>;
 	auto begin_transaction(extended_controls controls = {}) -> boost::capy::task<result<transaction>>;
-
-	// Password changes with RFC 3062 (password_modify()), `user` as
-	// userIdentity (left out if `user` is empty: the bound user).
-	// change_password is a user's own change, which needs the old password;
-	// reset_password is an administrator's, without it. Both need a new
-	// password (only password_modify() has the server generate one) and the
-	// old one too for a change, else they fail with
-	// std::errc::invalid_argument before anything is sent. Passwords never
-	// appear in errors. Active Directory has no RFC 3062: see
-	// ad::change_password and ad::reset_password (ad/password.hpp).
-	//
-	// Password memory is not wiped, here or in password_modify() and simple
-	// binds: the password passes through std::string copies (the arguments,
-	// the request's values, the encoded PDU in the connection's buffers)
-	// that the library cannot wipe all of. Only sasl_scram_sha256 and
-	// sasl_ntlm wipe what they hold.
-	auto change_password(dn user, std::string old_password, std::string new_password)
-	  -> boost::capy::task<result<void>>;
-	auto reset_password(dn user, std::string new_password) -> boost::capy::task<result<void>>;
 
 	// StartTLS (RFC 4511 section 4.14): upgrades a plain ldap:// connection to
 	// TLS in place, with the same verification rules as ldaps:// (`options`;
@@ -529,14 +502,6 @@ class shared_connection
 	{
 		return conn_->extended(std::move(request));
 	}
-	auto who_am_i(extended_controls controls = {}) const -> boost::capy::task<result<std::string>>
-	{
-		return conn_->who_am_i(std::move(controls));
-	}
-	auto password_modify(password_modify_params request) const -> boost::capy::task<result<std::optional<std::string>>>
-	{
-		return conn_->password_modify(std::move(request));
-	}
 	auto start_transaction(extended_controls controls = {}) const -> boost::capy::task<result<std::pmr::string>>
 	{
 		return conn_->start_transaction(std::move(controls));
@@ -549,15 +514,6 @@ class shared_connection
 	auto begin_transaction(extended_controls controls = {}) const -> boost::capy::task<result<transaction>>
 	{
 		return conn_->begin_transaction(std::move(controls));
-	}
-	auto change_password(dn user, std::string old_password, std::string new_password) const
-	  -> boost::capy::task<result<void>>
-	{
-		return conn_->change_password(std::move(user), std::move(old_password), std::move(new_password));
-	}
-	auto reset_password(dn user, std::string new_password) const -> boost::capy::task<result<void>>
-	{
-		return conn_->reset_password(std::move(user), std::move(new_password));
 	}
 
   private:

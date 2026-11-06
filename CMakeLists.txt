@@ -287,7 +287,7 @@ if(JHETZ_LDAP_BUILD_NET)
         src/connection/search.cpp
         src/connection/paged_search.cpp
         src/connection/operations.cpp
-        src/connection/password.cpp
+        src/extended_operations.cpp
         src/connection/transaction.cpp
         src/connection/referral_chase.cpp
         src/connection/same_policy_connector.cpp
@@ -422,6 +422,7 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "connection.hpp" EXCLUDE
             PATTERN "connection_options.hpp" EXCLUDE
             PATTERN "directory.hpp" EXCLUDE
+            PATTERN "extended_operations.hpp" EXCLUDE
             PATTERN "paged_search.hpp" EXCLUDE
             PATTERN "referral_chase.hpp" EXCLUDE
             PATTERN "search_stream.hpp" EXCLUDE
@@ -431,6 +432,7 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "sasl_scram.hpp" EXCLUDE
             PATTERN "sasl_gssapi.hpp" EXCLUDE
             PATTERN "sync.hpp" EXCLUDE
+            PATTERN "sync_extended_operations.hpp" EXCLUDE
             PATTERN "sync_store.hpp" EXCLUDE
             PATTERN "password.hpp" EXCLUDE)
     endif()

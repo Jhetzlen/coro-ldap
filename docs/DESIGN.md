@@ -503,15 +503,27 @@ values, and the integration tests run them against slapd.
 Results (step 6): success returns the operation's value — `response`
 (the request's message id and the response controls) for add / modify /
 delete / modify DN, `bool` for
-compare, `extended_result` for extended operations, the authzId string for
-`who_am_i()` (RFC 4532), the generated password (if any) for
-`password_modify()` (RFC 3062; passwords never appear in error contexts).
+compare, `extended_result` for extended operations; the free
+`ldap::who_am_i()` (RFC 4532) returns the authzId string, and
+`ldap::password_modify()` (RFC 3062) the generated password, if any
+(passwords never appear in error contexts).
 Any other result code is an error. compareTrue /
 compareFalse map to `true` / `false` (a compare answered with success is
 an error: it is not a valid answer). referral (10) is an error with the
 URIs in `error::referrals`; saslBindInProgress (14) is an error for a
 simple bind and the "continue" signal of `sasl_bind` (#11).
 
+Layering (coro-ldap-aw4): `connection`, `client` and the sync facades
+keep only the protocol operations. Who am I? and Password Modify, with
+`change_password()` / `reset_password()` over it, are free functions over
+`ldap::extended_directory` (extended_operations.hpp), written once for
+every source; their requests and results are I/O-free steps in `detail`
+that the blocking twins (sync_extended_operations.hpp) share, as
+`detail::store_codec` is shared by `store` and `sync::store`. The
+transactions stay members: a refused End Transaction's txnEndRes (the
+update at fault) never reaches the public `extended()`, which turns any
+other result code into an error, and the transaction's abort on
+destruction needs the internal fire-and-forget send.
 `change_password()` / `reset_password()` are RFC 3062 only: conveniences
 over `password_modify()` (the user as userIdentity, nothing generated),
 next to it and not instead of it. Active Directory's `unicodePwd` Modify is
@@ -2580,8 +2592,8 @@ decision left open.
   `sasl_bind_setup(factory, dn)`, the factory making a fresh mechanism per
   connection (a null one fails with `invalid_argument`, so the server is
   not retried in that acquire).
-- Read forwarders (3pf.4): `client::search`, `search_stream`, `compare`
-  and `who_am_i`, the `connection` names and shapes. Each acquires a
+- Read forwarders (3pf.4): `client::search`, `search_stream` and
+  `compare`, the `connection` names and shapes. Each acquires a
   shared lease, runs the operation, and retries once after
   `cond::connection_lost` (`not_sent` included) or
   `cond::busy_or_unavailable` (result codes busy and unavailable, a
@@ -2616,14 +2628,17 @@ decision left open.
   never retried, so nothing is retried once an entry may have been
   delivered. Cost: it waits for the first message, so a refreshAndPersist
   search with nothing to send returns at its first change. Extended
-  operations stay lease-only. The observer has no hook for an
+  operations are a write forwarder (below). The observer has no hook for an
   operation's retry (the retirement shows as `on_disconnect`, a new
   connection as `on_connect`). Each call may land
   on any pooled connection, so connection-bound request controls (a
   paged-results cookie from an earlier page, anything tied to the
   session) need a lease (3pf.15).
-- Write forwarders: `client::add`, `modify`, `del` and `modify_dn`, the
-  `connection` names and shapes. Typed CRUD is a layer over the client and
+- Write forwarders: `client::add`, `modify`, `del`, `modify_dn` and
+  `extended`, the `connection` names and shapes (`extended` is one: an
+  extended operation may change the directory, so it is retried only
+  after `not_sent`; the free `ldap::who_am_i` and password calls run on
+  it, and Who am I? lost its read retry, coro-ldap-aw4.4). Typed CRUD is a layer over the client and
   the connection (`ldap::store`, section 4). Each acquires a shared
   lease, runs the operation and returns the lease, like the read
   forwarders, but retries only after `client_errc::not_sent`: the request
@@ -2676,8 +2691,8 @@ decision left open.
   `shared_ptr` by the facade and its `sync::lease`s (each holding an
   aliasing pointer to the core's `io_thread`, its `ldap::lease`, touched
   only on that thread, and a copy of its server URL). `acquire()`, the
-  read forwarders `search`, `compare`, `who_am_i` and the write
-  forwarders `add`, `modify`, `del`, `modify_dn` post
+  read forwarders `search`, `compare` and the write
+  forwarders `add`, `modify`, `del`, `modify_dn`, `extended` post
   to the I/O thread and wait, as `sync::connection` does; the retry is
   `ldap::client`'s.
   `sync::lease` exposes `sync::connection`'s operations
@@ -2768,7 +2783,7 @@ decision left open.
   a switch would have nothing to apply to; a referral result means the
   update was not performed (RFC 4511 4.1.10), and `referral_target(url,
   add_params ...)` builds the request for a caller who decides to resend
-  it. `search_stream()` and `who_am_i()` never chase: a stream hands its
+  it. `search_stream()` and `extended()` never chase: a stream hands its
   references out as they come, and merging chased entries into it would
   change what `next()` means. `client_observer::on_referral(server,
   attempt)` is called for each attempt as it is decided (also beyond

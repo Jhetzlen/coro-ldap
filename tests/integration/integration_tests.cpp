@@ -8,11 +8,13 @@
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/sasl_scram.hpp"
 #include "jhetz/ldap/store.hpp"
 #include "jhetz/ldap/sync.hpp"
+#include "jhetz/ldap/sync_extended_operations.hpp"
 
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/ex/run_async.hpp>
@@ -257,7 +259,7 @@ TEST_CASE("integration: every transport", "[integration]")
 		auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 		CHECK_FALSE(c.is_tls());
 		CHECK(finish(ioc, c.simple_bind(admin, "secret")).has_value());
-		CHECK(finish(ioc, c.who_am_i()) == "dn:cn=admin,dc=example,dc=org");
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "dn:cn=admin,dc=example,dc=org");
 	}
 	SECTION("ldaps://")
 	{
@@ -276,7 +278,7 @@ TEST_CASE("integration: every transport", "[integration]")
 	SECTION("ldapi://")
 	{
 		auto c = open(ioc, env("JHETZ_LDAP_IT_LDAPI"));
-		CHECK(finish(ioc, c.who_am_i()) == "");// anonymous
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "");// anonymous
 	}
 }
 
@@ -291,7 +293,7 @@ TEST_CASE("integration: bind success and failure", "[integration]")
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == ldap::errc::invalid_credentials);
 	CHECK(finish(ioc, c.simple_bind(ldap::dn{ "uid=user007,ou=people,dc=example,dc=org" }, "pw-user007")).has_value());
-	CHECK(finish(ioc, c.who_am_i()) == "dn:uid=user007,ou=people,dc=example,dc=org");
+	CHECK(finish(ioc, ldap::who_am_i(c)) == "dn:uid=user007,ou=people,dc=example,dc=org");
 	CHECK(finish(ioc, c.unbind()).has_value());
 }
 
@@ -307,7 +309,7 @@ TEST_CASE("integration: SASL EXTERNAL", "[integration][sasl]")
 		ldap::sasl_external mech;
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE(r.has_value());
-		CHECK_THAT(finish(ioc, c.who_am_i()).value(), ContainsSubstring("cn=peercred,cn=external,cn=auth"));
+		CHECK_THAT(finish(ioc, ldap::who_am_i(c)).value(), ContainsSubstring("cn=peercred,cn=external,cn=auth"));
 	}
 	SECTION("with a TLS client certificate")
 	{
@@ -318,7 +320,7 @@ TEST_CASE("integration: SASL EXTERNAL", "[integration][sasl]")
 		ldap::sasl_external mech;
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE(r.has_value());
-		CHECK(finish(ioc, c.who_am_i()) == "dn:cn=client,dc=example,dc=org");
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "dn:cn=client,dc=example,dc=org");
 	}
 }
 
@@ -343,7 +345,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		ldap::sasl_scram_sha256 mech("user007", "pw-user007");
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE(r.has_value());
-		CHECK(finish(ioc, c.who_am_i()) == "dn:uid=user007,ou=people,dc=example,dc=org");
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "dn:uid=user007,ou=people,dc=example,dc=org");
 		// The same object binds again (fresh nonce).
 		REQUIRE(finish(ioc, c.sasl_bind(mech)).has_value());
 	}
@@ -357,7 +359,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		  "jo\xCC\x88rg", "p\xC3\xA4ssw\xC3\xB6rd\xC2\xA0\xE6\x97\xA5\xE6\x9C\xAC\xE3\x80\x80\xE2\x82\xAC");
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE(r.has_value());
-		CHECK(finish(ioc, c.who_am_i()) == "dn:uid=j\xC3\xB6rg,ou=people,dc=example,dc=org");
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "dn:uid=j\xC3\xB6rg,ou=people,dc=example,dc=org");
 	}
 	SECTION("a non-ASCII password that is wrong")
 	{
@@ -373,7 +375,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::auth_failed);
 		CHECK(c.is_open());
-		CHECK(finish(ioc, c.who_am_i()) == "");
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "");
 	}
 	SECTION("a step the client fails mid-exchange")
 	{
@@ -387,7 +389,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		auto again = finish(ioc, c.search(ldap::root_dse({ "namingContexts" })));
 		REQUIRE(again.has_value());
 		CHECK(again->entries.size() == 1);
-		CHECK(finish(ioc, c.who_am_i()) == "");
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "");
 	}
 	SECTION("a step the client fails, and a server that refuses the abort")
 	{
@@ -406,7 +408,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		auto again = finish(ioc, c.search(ldap::root_dse({ "namingContexts" })));
 		REQUIRE(again.has_value());
 		CHECK(again->entries.size() == 1);
-		CHECK(finish(ioc, c.who_am_i()) == "");
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "");
 		// The abort was refused: so is the same bind, made directly.
 		auto anonymous = finish(ioc, c.simple_bind({}, ""));
 		REQUIRE_FALSE(anonymous.has_value());
@@ -414,7 +416,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 		REQUIRE(c.is_open());
 		REQUIRE(
 		  finish(ioc, c.simple_bind(ldap::dn{ "uid=user007,ou=people,dc=example,dc=org" }, "pw-user007")).has_value());
-		CHECK(finish(ioc, c.who_am_i()) == "dn:uid=user007,ou=people,dc=example,dc=org");
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "dn:uid=user007,ou=people,dc=example,dc=org");
 	}
 }
 
@@ -458,7 +460,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256-PLUS (channel binding)", "[integratio
 		if (!r) {
 			FAIL(r.error().message());
 		}
-		CHECK(finish(ioc, c.who_am_i()) == "dn:uid=user007,ou=people,dc=example,dc=org");
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "dn:uid=user007,ou=people,dc=example,dc=org");
 	}
 	SECTION("the RFC 5802 form is refused by slapd")
 	{
@@ -531,7 +533,7 @@ TEST_CASE("integration: SCRAM-SHA-256-PLUS with an Ed25519 server certificate",
 	if (!r) {
 		FAIL(r.error().message());
 	}
-	CHECK(finish(ioc, c.who_am_i()) == "dn:uid=user007,ou=people,dc=example,dc=org");
+	CHECK(finish(ioc, ldap::who_am_i(c)) == "dn:uid=user007,ou=people,dc=example,dc=org");
 }
 
 TEST_CASE("integration: plain, streaming and paged searches", "[integration]")
@@ -998,7 +1000,7 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 	// counted as outstanding until then) before the next Start Transaction.
 	// slapd may answer the who_am_i first, hence the loop.
 	for (int i = 0; i < 100 && c.outstanding() != 0; ++i) {
-		REQUIRE(finish(ioc, c.who_am_i()).has_value());
+		REQUIRE(finish(ioc, ldap::who_am_i(c)).has_value());
 	}
 	REQUIRE(c.outstanding() == 0);
 	CHECK(exists(person(a).entry));
@@ -1658,19 +1660,19 @@ TEST_CASE("integration: password modify (RFC 3062)", "[integration]")
 		.has_value());
 
 	// The admin sets a password, then has the server generate one.
-	auto set = finish(ioc, c.password_modify({ .user = who, .new_password = "first" }));
+	auto set = finish(ioc, ldap::password_modify(c, { .user = who, .new_password = "first" }));
 	REQUIRE(set.has_value());
 	CHECK_FALSE(set->has_value());
 	{
 		auto u = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 		CHECK(finish(ioc, u.simple_bind(entry, "first")).has_value());
 		// This server's ACL (read only) refuses users their own change.
-		auto own = finish(ioc, u.password_modify({ .old_password = "first", .new_password = "second" }));
+		auto own = finish(ioc, ldap::password_modify(u, { .old_password = "first", .new_password = "second" }));
 		REQUIRE_FALSE(own.has_value());
 		CHECK(own.error().code == ldap::errc::insufficient_access_rights);
 		CHECK(own.error().context == "password modify");
 	}
-	auto generated = finish(ioc, c.password_modify({ .user = who }));
+	auto generated = finish(ioc, ldap::password_modify(c, { .user = who }));
 	REQUIRE(generated.has_value());
 	REQUIRE(generated->has_value());
 	CHECK_FALSE((*generated)->empty());
@@ -1707,13 +1709,13 @@ TEST_CASE("integration: change_password and reset_password (RFC 3062)", "[integr
 	};
 
 	const std::string first = "pässwörd 日本 \xF0\x9F\x94\x91";
-	REQUIRE(finish(ioc, c.reset_password(entry, first)).has_value());
+	REQUIRE(finish(ioc, ldap::reset_password(c, entry, first)).has_value());
 	CHECK(binds(first));
-	REQUIRE(finish(ioc, c.change_password(entry, first, "second")).has_value());
+	REQUIRE(finish(ioc, ldap::change_password(c, entry, first, "second")).has_value());
 	CHECK(binds("second"));
 	CHECK_FALSE(binds(first));
 	// slapd checks the old password.
-	auto wrong = finish(ioc, c.change_password(entry, "not-the-password", "third"));
+	auto wrong = finish(ioc, ldap::change_password(c, entry, "not-the-password", "third"));
 	REQUIRE_FALSE(wrong.has_value());
 	INFO(wrong.error().message());
 	CHECK_FALSE(std::string(wrong.error().message()).contains("not-the-password"));
@@ -1758,7 +1760,7 @@ TEST_CASE("integration: the sync connection", "[integration][sync]")
 		  c.modify({ .object = entry, .changes = { ldap::mod::add("mail", { "sync@example.org" }) } }).has_value());
 		CHECK(c.compare({ .entry = entry, .attribute = "mail", .value = "sync@example.org" }) == true);
 		CHECK(c.compare({ .entry = entry, .attribute = "sn", .value = "Zoe" }) == false);
-		auto pw = c.password_modify({ .user = std::string(entry.to_string()) });
+		auto pw = ldap::sync::password_modify(c, { .user = std::string(entry.to_string()) });
 		REQUIRE(pw.has_value());
 		CHECK(pw->has_value());
 		const ldap::dn renamed = *ldap::dn::parse("uid=" + name + "-r,ou=people,dc=example,dc=org");
@@ -1789,7 +1791,7 @@ TEST_CASE("integration: the sync connection", "[integration][sync]")
 		REQUIRE(c.connect(*ldap::url::parse(env("JHETZ_LDAP_IT_LDAPI"))).has_value());
 		ldap::sasl_external mech;
 		REQUIRE(c.sasl_bind(mech).has_value());
-		CHECK_THAT(c.who_am_i().value(), ContainsSubstring("cn=peercred,cn=external,cn=auth"));
+		CHECK_THAT(ldap::sync::who_am_i(c).value(), ContainsSubstring("cn=peercred,cn=external,cn=auth"));
 		c.close();
 		CHECK_FALSE(c.is_open());
 	}
@@ -2238,7 +2240,7 @@ TEST_CASE("integration: ldap::client replaces a connection the server dropped", 
 		{
 			auto l = finish(ioc, pool.acquire());
 			REQUIRE(l.has_value());
-			CHECK(finish(ioc, (*l)->who_am_i()) == "dn:cn=admin,dc=example,dc=org");
+			CHECK(finish(ioc, ldap::who_am_i(*(*l))) == "dn:cn=admin,dc=example,dc=org");
 		}
 		r.cut(0);
 		{
@@ -2246,7 +2248,7 @@ TEST_CASE("integration: ldap::client replaces a connection the server dropped", 
 			auto l = finish(ioc, pool.acquire());
 			REQUIRE(l.has_value());
 			CHECK(r.relayed() == 2);
-			CHECK(finish(ioc, (*l)->who_am_i()) == "dn:cn=admin,dc=example,dc=org");
+			CHECK(finish(ioc, ldap::who_am_i(*(*l))) == "dn:cn=admin,dc=example,dc=org");
 			auto entries = finish(ioc, (*l)->search({ .base = people, .scope = ldap::search_scope::base_object }));
 			REQUIRE(entries.has_value());
 			CHECK(entries->entries.size() == 1);

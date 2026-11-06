@@ -1,4 +1,5 @@
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/sasl_gssapi.hpp"
 
 #include <boost/capy/ex/run_async.hpp>
@@ -22,7 +23,7 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task
 		std::cerr << bound.error().message() << '\n';
 		co_return 1;
 	}
-	auto me = co_await c->who_am_i();
+	auto me = co_await ldap::who_am_i(*c);
 	if (!me) {
 		std::cerr << me.error().message() << '\n';
 		co_return 1;

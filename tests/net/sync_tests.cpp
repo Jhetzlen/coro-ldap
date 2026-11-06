@@ -5,6 +5,7 @@
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/sync.hpp"
+#include "jhetz/ldap/sync_extended_operations.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 #include "server_thread.hpp"
@@ -61,7 +62,7 @@ TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 	auto paged = c.search_paged({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } }, 10);
 	REQUIRE(paged.has_value());
 	CHECK(paged->entries.size() == 2);
-	CHECK(c.who_am_i() == "dn:cn=me");
+	CHECK(ldap::sync::who_am_i(c) == "dn:cn=me");
 	REQUIRE(c.unbind().has_value());
 	CHECK_FALSE(c.is_open());
 	auto after = c.search({ .base = ldap::dn{} });
@@ -112,7 +113,7 @@ TEST_CASE("sync: a blocking call from the I/O thread fails with would_deadlock",
 	std::promise<ldap::result<std::string>> got;
 	capy::run_async(c.executor())(
 	  [](ldap::sync::connection &cl, std::promise<ldap::result<std::string>> &p) -> capy::task<void> {
-		  p.set_value(cl.who_am_i());// blocking, on the I/O thread
+		  p.set_value(ldap::sync::who_am_i(cl));// blocking, on the I/O thread
 		  co_return;
 	  }(c, got));
 	auto r = got.get_future().get();
@@ -120,7 +121,7 @@ TEST_CASE("sync: a blocking call from the I/O thread fails with would_deadlock",
 	CHECK(r.error().code == ldap::client_errc::would_deadlock);
 	CHECK(r.error().context == "sync::connection");
 	// The connection still works from other threads.
-	CHECK(c.who_am_i() == "dn:cn=me");
+	CHECK(ldap::sync::who_am_i(c) == "dn:cn=me");
 }
 
 TEST_CASE("sync: connect failures and destruction without unbind", "[net][sync]")
@@ -154,7 +155,7 @@ TEST_CASE("sync: connect with the URL as text", "[net][sync]")
 	CHECK(srv.requests == 0);
 	REQUIRE(c.connect(where).has_value());
 	CHECK(c.is_open());
-	CHECK(c.who_am_i() == "dn:cn=me");
+	CHECK(ldap::sync::who_am_i(c) == "dn:cn=me");
 	CHECK(srv.requests == 1);
 }
 
@@ -576,10 +577,11 @@ TEST_CASE("sync: password_modify", "[net][sync]")
 				  1, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, "\x30\x07\x80\x05s3cr3"s } } }),
 	  answer({ ldap::message{ 2, ldap::extended_response{ ldap::ldap_result{ 49, "", "old password wrong" } } } }) });
 	connected k(srv);
-	auto generated = k.c.password_modify({ .user = std::string(jdoe_str) });
+	auto generated = ldap::sync::password_modify(k.c, { .user = std::string(jdoe_str) });
 	REQUIRE(generated.has_value());
 	CHECK(*generated == "s3cr3");
-	auto refused = k.c.password_modify({ .user = "uid=jdoe", .old_password = "bad", .new_password = "new" });
+	auto refused =
+	  ldap::sync::password_modify(k.c, { .user = "uid=jdoe", .old_password = "bad", .new_password = "new" });
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == ldap::errc::invalid_credentials);
 	CHECK(refused.error().context == "password modify uid=jdoe");
@@ -776,8 +778,8 @@ TEST_CASE("sync: change_password and reset_password", "[net][sync][password]")
 	srv.serve({ answer({ ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 0 } } } }),
 	  answer({ ldap::message{ 2, ldap::extended_response{ ldap::ldap_result{ 0 } } } }) });
 	connected k(srv);
-	CHECK(k.c.change_password(jdoe, "old", "new").has_value());
-	CHECK(k.c.reset_password(jdoe, "next").has_value());
+	CHECK(ldap::sync::change_password(k.c, jdoe, "old", "new").has_value());
+	CHECK(ldap::sync::reset_password(k.c, jdoe, "next").has_value());
 	// Active Directory's, on plain ldap://: refused before sending.
 	CHECK(k.c.security_layer() == ldap::sasl_protection::none);
 	auto refused = ldap::ad::reset_password(k.c, jdoe, "next");
@@ -806,7 +808,7 @@ TEST_CASE("sync: close without an UnbindRequest", "[net][sync]")
 	REQUIRE(k.c.simple_bind(*ldap::dn::parse(admin), "secret").has_value());
 	k.c.close();
 	CHECK_FALSE(k.c.is_open());
-	auto after = k.c.who_am_i();
+	auto after = ldap::sync::who_am_i(k.c);
 	REQUIRE_FALSE(after.has_value());
 	CHECK(after.error().code == ldap::client_errc::not_sent);
 	k.c.close();// again: nothing happens

@@ -10,6 +10,7 @@
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/sasl_gssapi.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -90,7 +91,7 @@ auto bind_and_who(corosio::io_context &ioc, ldap::connection &c, ldap::sasl_gssa
 	if (!r) {
 		FAIL("sasl bind: " << r.error().message());
 	}
-	auto who = finish(ioc, c.who_am_i());
+	auto who = finish(ioc, ldap::who_am_i(c));
 	REQUIRE(who.has_value());
 	return *who;
 }
@@ -220,7 +221,7 @@ TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 		CHECK_THAT(std::string(r.error().context), StartsWith("sasl bind GSSAPI: gss_init_sec_context: "));
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("ldap/nowhere.example.org@"));
 		CHECK(c.is_open());
-		CHECK(finish(ioc, c.who_am_i()) == "");
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "");
 	}
 	SECTION("a principal without credentials")
 	{
@@ -252,7 +253,7 @@ TEST_CASE("integration: SASL GSSAPI with a server that requires a security layer
 		CHECK(r.error().code == ldap::cond::access_denied);
 		CHECK_THAT(std::string(r.error().context), StartsWith("sasl bind GSSAPI: the server requires integrity"));
 		REQUIRE(c.is_open());
-		CHECK(finish(ioc, c.who_am_i()) == "");
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "");
 	}
 	SECTION("StartTLS: no layer is fine")
 	{
@@ -278,7 +279,7 @@ TEST_CASE("integration: SASL GSSAPI with a server that requires a security layer
 			auto tls = finish(ioc, c.start_tls());
 			REQUIRE_FALSE(tls.has_value());
 			CHECK(tls.error().code == ldap::client_errc::security_layer_in_effect);
-			CHECK(finish(ioc, c.who_am_i()) == user007);
+			CHECK(finish(ioc, ldap::who_am_i(c)) == user007);
 			CHECK(finish(ioc, c.unbind()).has_value());
 		}
 	}
