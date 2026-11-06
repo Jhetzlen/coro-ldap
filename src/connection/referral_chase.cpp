@@ -101,7 +101,8 @@ namespace {
 		std::pmr::vector<control> controls{};
 	};
 
-	auto run_search(connection &c, search_params p, std::pmr::memory_resource *mr) -> capy::task<result<search_run>>
+	auto run_search(shared_connection c, search_params p, std::pmr::memory_resource *mr)
+	  -> capy::task<result<search_run>>
 	{
 		auto s = co_await c.search_stream(std::move(p), mr);
 		if (!s) {
@@ -130,7 +131,7 @@ namespace {
 	struct search_op
 	{
 		std::pmr::memory_resource *mr;
-		auto operator()(connection &c, search_params p) const -> capy::task<result<search_run>>
+		auto operator()(shared_connection c, search_params p) const -> capy::task<result<search_run>>
 		{
 			return run_search(c, std::move(p), mr);
 		}
@@ -138,7 +139,7 @@ namespace {
 
 	struct compare_op
 	{
-		auto operator()(connection &c, compare_params p) const -> capy::task<result<bool>>
+		auto operator()(shared_connection c, compare_params p) const -> capy::task<result<bool>>
 		{
 			return c.compare(std::move(p));
 		}
@@ -393,7 +394,7 @@ namespace {
 	// The chase's state for `request` on `origin`: its budget, and the
 	// origin's own request as visited when its name is a URL.
 	template<class Params>
-	auto start(connection &origin,
+	auto start(shared_connection origin,
 	  const Params &request,
 	  referral_connector &&connector,
 	  referral_policy policy,
@@ -476,7 +477,7 @@ namespace {
 
 	// The search on the origin, and the chase of its referral result: what
 	// was reached, or the failure (origin_failed: the origin's own).
-	auto first_search(connection &origin, chase_state &st, search_params request, const search_op &op)
+	auto first_search(shared_connection origin, chase_state &st, search_params request, const search_op &op)
 	  -> capy::task<detail::chase_result<search_reached>>
 	{
 		auto r = co_await op(origin, request);
@@ -547,7 +548,7 @@ namespace {
 
 namespace detail {
 
-	auto chase_search(connection &origin,
+	auto chase_search(shared_connection origin,
 	  search_params request,
 	  referral_connector connector,
 	  referral_policy policy,
@@ -597,7 +598,7 @@ namespace detail {
 		co_return { .value = std::move(out) };
 	}
 
-	auto chase_compare(connection &origin,
+	auto chase_compare(shared_connection origin,
 	  compare_params request,
 	  referral_connector connector,
 	  referral_policy policy,
@@ -630,7 +631,7 @@ namespace detail {
 
 }// namespace detail
 
-auto chase_search(connection &origin,
+auto chase_search(shared_connection origin,
   search_params request,
   referral_connector connector,
   referral_policy policy,
@@ -640,8 +641,10 @@ auto chase_search(connection &origin,
 	co_return std::move(r.value);
 }
 
-auto chase_compare(connection &origin, compare_params request, referral_connector connector, referral_policy policy)
-  -> capy::task<result<chased_compare>>
+auto chase_compare(shared_connection origin,
+  compare_params request,
+  referral_connector connector,
+  referral_policy policy) -> capy::task<result<chased_compare>>
 {
 	auto r = co_await detail::chase_compare(origin, std::move(request), std::move(connector), policy, {});
 	co_return std::move(r.value);

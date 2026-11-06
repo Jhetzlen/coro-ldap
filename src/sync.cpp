@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -359,9 +360,15 @@ namespace detail {
 
 	namespace {
 
-		auto take_lease(ldap::client &pool, acquire_options options) -> capy::task<result<std::pair<ldap::lease, url>>>
+		template<class Lease> auto take_lease(ldap::client &pool) -> capy::task<result<std::pair<Lease, url>>>
 		{
-			auto l = co_await pool.acquire(options);
+			auto l = co_await [&pool] {
+				if constexpr (std::is_same_v<Lease, ldap::exclusive_lease>) {
+					return pool.acquire_exclusive();
+				} else {
+					return pool.acquire();
+				}
+			}();
 			if (!l) {
 				co_return std::unexpected(std::move(l.error()));
 			}
@@ -378,17 +385,19 @@ namespace detail {
 
 }// namespace detail
 
-lease::lease(std::shared_ptr<const detail::io_thread> io, ldap::lease held, url server) noexcept
+template<bool Exclusive>
+basic_lease<Exclusive>::basic_lease(std::shared_ptr<const detail::io_thread> io, held_lease held, url server) noexcept
   : io_(std::move(io)), held_(std::move(held)), server_(std::move(server))
 {}
 
-lease::lease(lease &&other) noexcept
+template<bool Exclusive>
+basic_lease<Exclusive>::basic_lease(basic_lease &&other) noexcept
   : io_(std::move(other.io_)), held_(std::move(other.held_)), server_(std::move(other.server_))
 {
 	other.server_ = url{};
 }
 
-auto lease::operator=(lease &&other) noexcept -> lease &
+template<bool Exclusive> auto basic_lease<Exclusive>::operator=(basic_lease &&other) noexcept -> basic_lease &
 {
 	if (this != &other) {
 		release();
@@ -399,9 +408,9 @@ auto lease::operator=(lease &&other) noexcept -> lease &
 	return *this;
 }
 
-lease::~lease() { release(); }
+template<bool Exclusive> basic_lease<Exclusive>::~basic_lease() { release(); }
 
-void lease::release() noexcept
+template<bool Exclusive> void basic_lease<Exclusive>::release() noexcept
 {
 	if (io_ == nullptr) {
 		return;
@@ -423,6 +432,9 @@ void lease::release() noexcept
 	io_.reset();
 }
 
+template class basic_lease<false>;
+template class basic_lease<true>;
+
 client::client(client_options options, std::pmr::memory_resource *mr)
   : core_(std::make_shared<detail::client_core>(std::move(options), mr))
 {}
@@ -433,9 +445,9 @@ client::~client() { close(); }
 
 auto client::executor() const noexcept -> ldap::client::executor_type { return core_->io.executor(); }
 
-auto client::acquire(acquire_options options) -> result<lease>
+auto client::acquire() -> result<lease>
 {
-	auto r = core_->io.run([&] { return detail::take_lease(*core_->pool, options); });
+	auto r = core_->io.run([&] { return detail::take_lease<ldap::lease>(*core_->pool); });
 	if (!r) {
 		return std::unexpected(std::move(r.error()));
 	}
@@ -444,6 +456,15 @@ auto client::acquire(acquire_options options) -> result<lease>
 	  std::shared_ptr<const detail::io_thread>(core_, &core_->io), std::move(r->first), std::move(r->second));
 }
 
+auto client::acquire_exclusive() -> result<exclusive_lease>
+{
+	auto r = core_->io.run([&] { return detail::take_lease<ldap::exclusive_lease>(*core_->pool); });
+	if (!r) {
+		return std::unexpected(std::move(r.error()));
+	}
+	return exclusive_lease(
+	  std::shared_ptr<const detail::io_thread>(core_, &core_->io), std::move(r->first), std::move(r->second));
+}
 auto client::search(search_params request, std::pmr::memory_resource *mr) -> result<search_result>
 {
 	return core_->io.run([&] { return core_->pool->search(std::move(request), mr); });

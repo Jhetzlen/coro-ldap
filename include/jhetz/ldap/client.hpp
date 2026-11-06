@@ -9,40 +9,42 @@
 //       .connection = {.timeout = 5s, .operation_timeout = 30s, .start_tls = true},
 //       .setup      = ldap::simple_bind_setup(ldap::dn{"cn=app,dc=example,dc=org"}, password),
 //   });
-//   auto lease = co_await pool.acquire();   // result<ldap::lease>
+//   auto lease = co_await pool.acquire();   // result<ldap::lease>: a shared_connection
 //   if (!lease) ...                         // every server failed, or acquire_timeout
 //   auto people = co_await (*lease)->search({.base = ldap::dn{"ou=people,dc=example,dc=org"}});   // people->entries
 //   auto again = co_await pool.search({.base = ...});   // a shared lease for one search, retried once
 //   auto added = co_await pool.add({.entry = ..., .attributes = ...});   // retried only if never sent
 //
-// Leases share connections by default. A lease gives the full
-// ldap::connection API on one pooled connection, and several shared leases
-// may use the same connection at once: their operations are multiplexed on
-// it (connection.hpp), which is why max_connections defaults to 1.
+// Leases share connections by default. A lease (acquire()) gives a
+// shared_connection on one pooled connection: every operation of
+// ldap::connection but simple_bind, sasl_bind, start_tls, unbind and close,
+// which do not compile on it. Several leases may use the same connection at
+// once: their operations are multiplexed on it (connection.hpp), which is
+// why max_connections defaults to 1. An exclusive_lease
+// (acquire_exclusive()) gives the full ldap::connection.
 // acquire() hands out an idle connection (no lease) first, then opens a new
 // one while fewer than max_connections exist, and only then shares the
 // connection with the fewest leases: N connections give N-way isolation (a
 // slow paged search, a long SASL exchange) before any sharing. It also
 // shares one, rather than wait or fail, when no new connection may be opened
 // now (every server backing off, or excluded for this acquire(), e.g. after
-// an authentication failure). While an exclusive acquire() waits, shared
+// an authentication failure). While an acquire_exclusive() waits, shared
 // ones never take an idle connection: they share one already shared, else
 // open a new one (a slot free, a server to try) or wait (even with every
 // server excluded: then they do not fail while that idle connection
 // exists), so shared load cannot starve it. Because shared leases share,
-// what one changes on its connection the others see: a bind changes the
-// identity of all of them, start_tls() fails with operation_in_progress
-// while another lease has an operation outstanding, and unbind() or close()
-// ends the connection for everyone (from the moment unbind() begins, the
-// connection is not handed out again). So call bind, start_tls() and unbind()
-// only on an exclusive lease (acquire({.exclusive = true})): an idle or new
-// connection that no other lease shares while it is held. A connection
-// whose bind_count() changed (a bind done, failed, or still in progress) is
-// never handed out again, to anyone: it leaves the pool once its last lease
-// returns (see "Bind identity"). Mind that a failed bind leaves the
-// connection anonymous: on a shared lease the others sharing it silently
-// drop to the anonymous identity until they return it. Use a client per
-// identity, and keep binds to session_setup.
+// what one changes on its connection the others would see: a bind would
+// change the identity of all of them, start_tls() would fail with
+// operation_in_progress while another lease has an operation outstanding,
+// and unbind() or close() would end the connection for everyone. So a
+// shared lease has none of them; they are on an exclusive lease
+// (acquire_exclusive()): an idle or new connection that no other lease
+// shares while it is held (from the moment its unbind() begins, the
+// connection is not handed out again). A connection whose bind_count()
+// changed (a bind done, failed, or still in progress) is never handed out
+// again, to anyone: it leaves the pool once its last lease returns (see
+// "Bind identity"). Use a client per identity, and keep binds to
+// session_setup.
 //
 // Servers and failover: `servers` is in priority order. A new connection
 // tries each server whose backoff has ended, in that order. A server that
@@ -449,16 +451,6 @@ struct client_options
 	referral_options referrals{};
 };
 
-// How acquire() picks the connection.
-struct acquire_options
-{
-	// An idle connection or a new one, which no other lease shares while
-	// this one holds it: for bind, start_tls() and unbind() (see the header
-	// comment). It waits (within acquire_timeout) when every connection is
-	// leased and max_connections are open.
-	bool exclusive = false;
-};
-
 class client;
 
 namespace detail {
@@ -482,38 +474,91 @@ namespace detail {
 	void set_connector(const client &c, pool_connector open);
 }// namespace detail
 
-// The use of one pooled connection, until the lease is destroyed,
-// reassigned or released. Shared unless acquired with
-// acquire_options::exclusive: other leases may then use the connection too
-// (see the header comment). Destroy it on the client's executor.
-class lease
+namespace detail {
+	// What lease and exclusive_lease share: the hold on one pooled
+	// connection, until destroyed, reassigned or released.
+	class lease_base
+	{
+	  public:
+		lease_base(const lease_base &) = delete;
+		auto operator=(const lease_base &) -> lease_base & = delete;
+
+		// False for a default-constructed, moved-from or released lease.
+		explicit operator bool() const noexcept { return conn_ != nullptr; }
+		// The server the connection goes to. Precondition: *this is true.
+		[[nodiscard]] auto server() const noexcept -> const url &;
+		// Returns the connection to the pool now (the destructor's job).
+		void release() noexcept;
+
+	  protected:
+		lease_base() noexcept = default;
+		lease_base(std::shared_ptr<client_state> state, std::shared_ptr<pooled_connection> conn) noexcept;
+		lease_base(lease_base &&other) noexcept = default;
+		auto operator=(lease_base &&other) noexcept -> lease_base &;
+		~lease_base();
+
+		[[nodiscard]] auto pooled() const noexcept -> connection &;
+
+	  private:
+		friend struct client_state;
+
+		std::shared_ptr<client_state> state_{};
+		std::shared_ptr<pooled_connection> conn_{};
+	};
+}// namespace detail
+
+// A shared use of one pooled connection (client::acquire()): other leases
+// may use the connection at once (see the header comment), so it gives a
+// shared_connection (connection.hpp), without the operations that change
+// the session for every lease (simple_bind, sasl_bind, start_tls, unbind,
+// close): those need an exclusive_lease. Destroy it on the client's
+// executor.
+class lease : public detail::lease_base
 {
   public:
 	lease() noexcept = default;
 	lease(lease &&other) noexcept = default;
-	auto operator=(lease &&other) noexcept -> lease &;
+	auto operator=(lease &&other) noexcept -> lease & = default;
 	lease(const lease &) = delete;
 	auto operator=(const lease &) -> lease & = delete;
-	~lease();
+	~lease() = default;
 
-	// False for a default-constructed, moved-from or released lease.
-	explicit operator bool() const noexcept { return conn_ != nullptr; }
 	// The connection. Precondition: *this is true.
-	[[nodiscard]] auto get() const noexcept -> connection &;
-	auto operator*() const noexcept -> connection & { return get(); }
-	auto operator->() const noexcept -> connection * { return &get(); }
-	// The server the connection goes to. Precondition: *this is true.
-	[[nodiscard]] auto server() const noexcept -> const url &;
-	// Returns the connection to the pool now (the destructor's job).
-	void release() noexcept;
+	[[nodiscard]] auto get() const noexcept -> const shared_connection & { return view_; }
+	auto operator*() const noexcept -> const shared_connection & { return view_; }
+	auto operator->() const noexcept -> const shared_connection * { return &view_; }
 
   private:
-	friend class client;
 	friend struct detail::client_state;
 	lease(std::shared_ptr<detail::client_state> state, std::shared_ptr<detail::pooled_connection> conn) noexcept;
 
-	std::shared_ptr<detail::client_state> state_{};
-	std::shared_ptr<detail::pooled_connection> conn_{};
+	shared_connection view_{};
+};
+
+// The exclusive use of one pooled connection (client::acquire_exclusive()):
+// an idle or new connection that no other lease shares while it is held,
+// with the full connection API, binds, start_tls() and unbind() included
+// (see the header comment for what a bind does to the connection's place in
+// the pool). Destroy it on the client's executor.
+class exclusive_lease : public detail::lease_base
+{
+  public:
+	exclusive_lease() noexcept = default;
+	exclusive_lease(exclusive_lease &&other) noexcept = default;
+	auto operator=(exclusive_lease &&other) noexcept -> exclusive_lease & = default;
+	exclusive_lease(const exclusive_lease &) = delete;
+	auto operator=(const exclusive_lease &) -> exclusive_lease & = delete;
+	~exclusive_lease() = default;
+
+	// The connection. Precondition: *this is true.
+	[[nodiscard]] auto get() const noexcept -> connection & { return pooled(); }
+	auto operator*() const noexcept -> connection & { return pooled(); }
+	auto operator->() const noexcept -> connection * { return &pooled(); }
+
+  private:
+	friend struct detail::client_state;
+	exclusive_lease(std::shared_ptr<detail::client_state> state,
+	  std::shared_ptr<detail::pooled_connection> conn) noexcept;
 };
 
 class client
@@ -536,19 +581,24 @@ class client
 	// The executor everything must run on. Precondition: not moved from.
 	[[nodiscard]] auto executor() const noexcept -> executor_type;
 
-	// A lease on a pooled connection: an idle one (probed first if unused for
-	// longer than idle_check), else a new one while fewer than max_connections
-	// exist and a server may be tried now, else (unless `options.exclusive`)
-	// the open one with the fewest leases (see the header comment). Waits at
-	// most acquire_timeout. Fails with the last server's error (its context
-	// names the server: "acquire ldap://ldap1.example.org: ..."), the stored
-	// error of a server backing off after an authentication failure,
+	// A shared lease on a pooled connection: an idle one (probed first if
+	// unused for longer than idle_check), else a new one while fewer than
+	// max_connections exist and a server may be tried now, else the open one
+	// with the fewest leases (see the header comment). Waits at most
+	// acquire_timeout. Fails with the last server's error (its context names
+	// the server: "acquire ldap://ldap1.example.org: ..."), the stored error
+	// of a server backing off after an authentication failure,
 	// capy::error::timeout when it waited for other acquires that long,
 	// capy::error::canceled if the task's stop token is set, and
 	// client_errc::not_connected once close() was called (or on a moved-from
 	// client). The task does not refer to *this: the client may be moved or
 	// destroyed while it runs (destroying it fails it with not_connected).
-	auto acquire(acquire_options options = {}) -> boost::capy::task<result<lease>>;
+	auto acquire() -> boost::capy::task<result<lease>>;
+	// As acquire(), an exclusive lease: an idle connection or a new one,
+	// which no other lease shares while this one holds it, for binds,
+	// start_tls() and unbind(). It waits (within acquire_timeout) when every
+	// connection is leased and max_connections are open.
+	auto acquire_exclusive() -> boost::capy::task<result<exclusive_lease>>;
 
 	// Read forwarders: each acquires a shared lease (acquire()), runs the
 	// connection's operation of the same name on it, and returns the lease.

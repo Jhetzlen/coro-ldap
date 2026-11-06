@@ -2318,9 +2318,8 @@ decision left open.
   the background (no timer keeps `io_context::run()` alive).
 - **Leases share connections by default** (the open choice of the
   decision: "exclusive or shared"; the 3pf.6 review kept shared as the
-  default and added exclusive). `acquire(acquire_options{.exclusive})
-  -> task<result<lease>>`; a lease
-  gives the whole `connection` API, and several leases may hold the same
+  default and added exclusive). `acquire() -> task<result<lease>>`; a
+  lease gives a `shared_connection`, and several leases may hold the same
   connection, their operations multiplexed on it. Why: the decision's
   default of one connection rests on multiplexing covering throughput,
   which exclusive leases would defeat (every concurrent task would queue
@@ -2336,8 +2335,8 @@ decision left open.
   requests although `is_open()` stays true until the UnbindRequest is
   written: the pool tests `detail::accepts_requests()`, so it is retired
   (`closed`) and never handed out again. A failed bind silently drops
-  them all to anonymous. Hence
-  `acquire({.exclusive = true})`: an idle connection, else a new one
+  them all to anonymous. Hence `acquire_exclusive() ->
+  task<result<exclusive_lease>>`: an idle connection, else a new one
   while a slot is free, else it waits; no other acquire (shared or
   exclusive) gets that connection while the exclusive lease holds it.
   While an exclusive acquire waits (`client_state::exclusive_waiting`),
@@ -2350,9 +2349,30 @@ decision left open.
   acquire that waited and ends without a lease (stopped, timed out,
   destroyed) calls `notify()`, so the shared ones it held back look
   again at once (3pf.11).
-  Bind, `start_tls()` and `unbind()` belong on exclusive leases. The
-  header says to use one client per identity and keep binds to the
-  setup; per-identity sub-pools are a later bead. (`acquire()` is not a
+  Bind, `start_tls()` and `unbind()` belong on exclusive leases, and the
+  types say so: a shared `lease` gives `shared_connection` (connection.hpp),
+  a non-owning handle with every operation of `connection` but
+  `simple_bind`, `sasl_bind`, `start_tls`, `unbind` and `close`, so
+  calling them on a shared lease does not compile; an `exclusive_lease`
+  gives the `connection` itself (both derive from `detail::lease_base`:
+  `server()`, `release()`, `operator bool`). `close()` is left out too: it
+  ends the connection for every lease, as `unbind()` does. The run-time
+  `acquire_options{.exclusive}` became the two calls, so the type follows
+  the choice. Rejected: exclusive by default (it defeats multiplexing, see
+  above) and a louder comment (misuse would still compile; 3pf's review
+  found a pool handing out a connection being unbound, kmx.2.1).
+  `shared_connection` converts implicitly from `connection &`, so what
+  needs no session change takes one and accepts both: `chase_search`,
+  `chase_compare`, `make_same_policy_connector`, `ad::change_password` /
+  `reset_password`. The pool's own code reaches the connection under a
+  shared lease through `detail::connection_of()`, as the sync facade does
+  (the tests use it to play a lease that binds anyway). The blocking
+  facade splits the same way: `sync::lease` (`acquire()`) lacks the five
+  operations (`detail::connection_api<Derived, Session>` constrains them
+  on `Session`), `sync::exclusive_lease` (`acquire_exclusive()`) has them,
+  both `sync::basic_lease<Exclusive>`. The header says to use one client
+  per identity and keep binds to the setup; per-identity sub-pools are a
+  later bead. (`acquire()` is not a
   coroutine: it copies the shared state into the task, so the client may
   be moved or destroyed before the task runs.)
 - Servers, in priority order. A connection attempt tries every server
@@ -2805,7 +2825,8 @@ AD's Win32 code at the start of a refusal's diagnostic is explained in
 the context (0000052D, 00000056, 00000005, 00000775) by
 `ad::explain(const error &)`, a codec function returning a static text
 (empty when the code is not one it knows); the diagnostic is kept as
-sent, and the core never interprets it. Overloads: `connection &` and
+sent, and the core never interprets it. Overloads: `shared_connection`
+(a connection or a shared lease's) and
 `client &` (a shared lease, retried once after `not_sent` as the write
 forwarders are: the protection check needs the connection the modify goes
 to, so it cannot go through `client::modify`; the connection that failed

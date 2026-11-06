@@ -47,6 +47,25 @@ using std::chrono::milliseconds;
 
 namespace {
 
+// The operations that change the session for everyone sharing a connection.
+template<class C>
+concept has_session_operation =
+  requires(C &c) { c.simple_bind(ldap::dn{}, std::string{}); } || requires(C &c, ldap::sasl_mechanism &m) {
+	  c.sasl_bind(m);
+  } || requires(C &c) { c.start_tls(); } || requires(C &c) { c.unbind(); } || requires(C &c) { c.close(); };
+template<class C>
+concept all_session_operations = requires(C &c, ldap::sasl_mechanism &m) {
+	c.simple_bind(ldap::dn{}, std::string{});
+	c.sasl_bind(m);
+	c.start_tls();
+	c.unbind();
+	c.close();
+};
+
+static_assert(all_session_operations<ldap::sync::connection>);
+static_assert(!has_session_operation<ldap::sync::lease>);
+static_assert(all_session_operations<ldap::sync::exclusive_lease>);
+
 auto pki() -> test_pki &
 {
 	static test_pki instance("jhetz-ldap sync client test CA");
@@ -261,7 +280,7 @@ TEST_CASE("sync client: a transaction on an exclusive lease", "[net][sync][clien
 	  unbind_read() } });
 	{
 		ldap::sync::client pool(options_for(srv.url()));
-		auto l = pool.acquire({ .exclusive = true });
+		auto l = pool.acquire_exclusive();
 		REQUIRE(l.has_value());
 		auto t = l->begin_transaction();
 		REQUIRE(t.has_value());
@@ -581,34 +600,36 @@ TEST_CASE("sync client: a lease released or destroyed on the I/O thread", "[net]
 {
 	server_thread srv;
 	ldap::sync::client pool({ .servers = { srv.url() }, .max_connections = 1 });
-	auto held = pool.acquire({ .exclusive = true });
+	auto held = pool.acquire_exclusive();
 	REQUIRE(held.has_value());
 	REQUIRE(held->who_am_i().has_value());
 	std::promise<void> released;
 	SECTION("released")
 	{
-		capy::run_async(pool.executor())([](ldap::sync::lease &l, std::promise<void> &done) -> capy::task<void> {
-			l.release();// not the last owner: returns the connection without waiting
-			done.set_value();
-			co_return;
-		}(*held, released));
+		capy::run_async(pool.executor())(
+		  [](ldap::sync::exclusive_lease &l, std::promise<void> &done) -> capy::task<void> {
+			  l.release();// not the last owner: returns the connection without waiting
+			  done.set_value();
+			  co_return;
+		  }(*held, released));
 		released.get_future().wait();
 	}
 	SECTION("moved into a coroutine and destroyed there")
 	{
-		capy::run_async(pool.executor())([](ldap::sync::lease l, std::promise<void> &done) -> capy::task<void> {
-			{
-				auto gone = std::move(l);// its destructor runs here, on the I/O thread
-			}
-			done.set_value();
-			co_return;
-		}(std::move(*held), released));
+		capy::run_async(pool.executor())(
+		  [](ldap::sync::exclusive_lease l, std::promise<void> &done) -> capy::task<void> {
+			  {
+				  auto gone = std::move(l);// its destructor runs here, on the I/O thread
+			  }
+			  done.set_value();
+			  co_return;
+		  }(std::move(*held), released));
 		released.get_future().wait();
 	}
 	CHECK_FALSE(static_cast<bool>(*held));
 	CHECK(pool.connections() == 1);
 	// The only connection is back in the pool: an exclusive lease gets it.
-	auto again = pool.acquire({ .exclusive = true });
+	auto again = pool.acquire_exclusive();
 	REQUIRE(again.has_value());
 	CHECK(again->who_am_i() == "dn:cn=me");
 	CHECK(pool.connections() == 1);

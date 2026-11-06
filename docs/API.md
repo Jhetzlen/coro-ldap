@@ -781,13 +781,19 @@ itself needs only ICU.
   pool of multiplexed connections opened lazily. `client(ioc,
   client_options{.servers, .connection, .setup, .max_connections = 1,
   .idle_check, .probe_timeout, .max_lifetime, .acquire_timeout,
-  .backoff, .failback_after, .observer, .referrals})`; `acquire(acquire_options{})
-  -> task<result<lease>>`, the lease giving the full `connection` API
-  (`(*lease)->search(...)`), shared with other leases on the same
-  connection unless acquired with `{.exclusive = true}` (an idle or new
-  connection nobody else uses while it is held: for bind, `start_tls()`,
-  `unbind()`); the lease returns the connection when destroyed or
-  `release()`d. `servers` fail over in priority order with a per-server
+  .backoff, .failback_after, .observer, .referrals})`; `acquire() ->
+  task<result<lease>>`, the lease giving a `shared_connection`
+  (connection.hpp: every `connection` operation but `simple_bind`,
+  `sasl_bind`, `start_tls`, `unbind` and `close`, which do not compile on
+  it; `(*lease)->search(...)`), shared with other leases on the same
+  connection; `acquire_exclusive() -> task<result<exclusive_lease>>`, the
+  full `connection` on an idle or new connection nobody else uses while it
+  is held (for binds, `start_tls()`, `unbind()`). Breaking:
+  `acquire_options` is gone. A lease returns the connection when destroyed
+  or `release()`d. `shared_connection` is a non-owning handle made
+  implicitly from a `connection &`; `chase_search`, `chase_compare`,
+  `make_same_policy_connector` and `ad::change_password` /
+  `reset_password` take one. `servers` fail over in priority order with a per-server
   jittered exponential backoff (`backoff_options{initial, max,
   multiplier, auth_failure_min}`), and an idle connection to a
   lower-priority server goes back to the primary after `failback_after`.
@@ -845,11 +851,14 @@ itself needs only ICU.
 - `jhetz/ldap/sync.hpp` (3pf.5): `ldap::sync::client`, the blocking facade
   over `ldap::client`. `sync::client(client_options, mr)` owns an
   io_context and an I/O thread, where the `ldap::client` lives (session
-  setup and observer hooks run there). `acquire(acquire_options{}) ->
-  result<sync::lease>`; a `sync::lease` has `sync::connection`'s
-  operations (bind, search, `search_paged`, `search_as`, add, modify, ...,
-  `begin_transaction`, `unbind`, `close`), run on the leased connection,
-  plus `server()`, `release()` and `operator bool`. The forwarders
+  setup and observer hooks run there). `acquire() -> result<sync::lease>`
+  and `acquire_exclusive() -> result<sync::exclusive_lease>`; a
+  `sync::exclusive_lease` has `sync::connection`'s operations (bind,
+  search, `search_paged`, `search_as`, add, modify, ...,
+  `begin_transaction`, `unbind`, `close`), run on the leased connection, a
+  `sync::lease` the same but `simple_bind`, `sasl_bind`, `start_tls`,
+  `unbind` and `close` (as `ldap::shared_connection`), both with
+  `server()`, `release()` and `operator bool` (`sync::basic_lease`). The forwarders
   `search`, `compare` and `who_am_i`, and the write forwarders `add`,
   `modify`, `del`, `modify_dn`, `move`, `rename`, block and retry as the
   async ones, and `chase_search` / `chase_compare` mirror the async
@@ -863,8 +872,8 @@ itself needs only ICU.
   thread; a lease may outlive the client (its connection is closed, its
   operations fail with `cond::connection_lost`) and keeps the I/O thread
   until it is destroyed or released. `detail::io_thread` and
-  `detail::connection_api` are the machinery `sync::connection` and
-  `sync::lease` share.
+  `detail::connection_api` are the machinery `sync::connection` and the
+  sync leases share.
 - `client_errc::not_sent` (connection.hpp, "Sent or not"): the operation
   failed before its request reached the writer (connection closed before
   it was submitted, still queued, or held behind a bind), so the server

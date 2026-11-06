@@ -28,6 +28,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -1079,10 +1080,11 @@ namespace detail {
 
 		// `avoid`: a server to use only when no other serves (see
 		// pick_avoiding); its backoff is left as is.
-		static auto acquire(std::shared_ptr<client_state> self,
-		  acquire_options how,
-		  std::optional<std::size_t> avoid = std::nullopt) -> capy::task<result<lease>>
+		template<class Lease>
+		static auto acquire(std::shared_ptr<client_state> self, std::optional<std::size_t> avoid = std::nullopt)
+		  -> capy::task<result<Lease>>
 		{
+			constexpr bool exclusive = std::is_same_v<Lease, exclusive_lease>;
 			constexpr std::string_view context = "acquire";
 			if (auto bad = self->unusable_options(); bad) {
 				co_return std::unexpected(std::move(*bad));
@@ -1102,14 +1104,14 @@ namespace detail {
 			// An exclusive acquire counted in exclusive_waiting that ends
 			// without a lease (stopped, timed out, destroyed): shared ones
 			// left it an idle connection, they look again.
-			const scope_exit leave{ [&self, &waited, &leased, &how] noexcept {
-				if (how.exclusive && waited && !leased) {
+			const scope_exit leave{ [&self, &waited, &leased] noexcept {
+				if (exclusive && waited && !leased) {
 					self->notify();
 				}
 			} };
 			const auto hand_out = [&self, &leased](std::shared_ptr<pooled_connection> c) {
 				leased = true;
-				return lease(self, std::move(c));
+				return Lease(self, std::move(c));
 			};
 			while (true) {
 				if (self->closed) {
@@ -1120,7 +1122,7 @@ namespace detail {
 				}
 				self->exclude_auth_failures(excluded, auth_seen, last, clock::now());
 				const std::uint64_t seen = self->version;
-				auto pooled = co_await from_pool(self, deadline, how.exclusive, excluded, avoid);
+				auto pooled = co_await from_pool(self, deadline, exclusive, excluded, avoid);
 				if (!pooled) {
 					co_return std::unexpected(std::move(pooled.error()));
 				}
@@ -1133,7 +1135,7 @@ namespace detail {
 				if (deadline && clock::now() >= *deadline) {// nothing is tried after the deadline
 					co_return std::unexpected(self->give_up(excluded, std::move(last), false));
 				}
-				auto r = co_await open_new(self, deadline, how.exclusive, excluded, last, avoid);
+				auto r = co_await open_new(self, deadline, exclusive, excluded, last, avoid);
 				if (!r) {
 					co_return std::unexpected(std::move(r.error()));
 				}
@@ -1152,7 +1154,7 @@ namespace detail {
 				// a held connection passes max_lifetime (freeing its slot; one
 				// closing notifies, see watch_close), or at the deadline.
 				const auto until = earliest({ wake, self->next_expiry(), deadline });
-				if (const auto ec = co_await wait(self, until, how.exclusive); ec) {
+				if (const auto ec = co_await wait(self, until, exclusive); ec) {
 					co_return fail(ec, context);
 				}
 			}
@@ -1197,7 +1199,7 @@ namespace detail {
 		{
 			std::optional<std::size_t> avoid;
 			for (bool retried = false;; retried = true) {
-				auto held = co_await acquire(self, {}, avoid);
+				auto held = co_await acquire<lease>(self, avoid);
 				if (!held) {
 					co_return std::unexpected(std::move(held.error()));
 				}
@@ -1218,7 +1220,7 @@ namespace detail {
 		template<class Op> static auto write(std::shared_ptr<client_state> self, Op op) -> capy::task<result<response>>
 		{
 			for (bool retried = false;; retried = true) {
-				auto held = co_await acquire(self, {}, std::nullopt);
+				auto held = co_await acquire<lease>(self);
 				if (!held) {
 					co_return std::unexpected(std::move(held.error()));
 				}
@@ -1348,7 +1350,7 @@ namespace detail {
 		{
 			std::optional<std::size_t> avoid;
 			for (bool retried = false;; retried = true) {
-				auto held = co_await acquire(self, {}, avoid);
+				auto held = co_await acquire<lease>(self, avoid);
 				if (!held) {
 					co_return std::unexpected(std::move(held.error()));
 				}
@@ -1382,37 +1384,50 @@ namespace detail {
 
 }// namespace detail
 
-// ---------------------------------------------------------------- lease
+// ---------------------------------------------------------------- leases
+
+namespace detail {
+
+	lease_base::lease_base(std::shared_ptr<client_state> state, std::shared_ptr<pooled_connection> conn) noexcept
+	  : state_(std::move(state)), conn_(std::move(conn))
+	{}
+
+	auto lease_base::operator=(lease_base &&other) noexcept -> lease_base &
+	{
+		if (this != &other) {
+			release();
+			state_ = std::move(other.state_);
+			conn_ = std::move(other.conn_);
+		}
+		return *this;
+	}
+
+	lease_base::~lease_base() { release(); }
+
+	auto lease_base::pooled() const noexcept -> connection & { return conn_->conn; }
+
+	auto lease_base::server() const noexcept -> const url & { return state_->servers[conn_->server].address; }
+
+	void lease_base::release() noexcept
+	{
+		if (conn_ == nullptr) {
+			return;
+		}
+		state_->release(conn_);
+		conn_.reset();
+		state_.reset();
+	}
+
+}// namespace detail
 
 lease::lease(std::shared_ptr<detail::client_state> state, std::shared_ptr<detail::pooled_connection> conn) noexcept
-  : state_(std::move(state)), conn_(std::move(conn))
+  : lease_base(std::move(state), std::move(conn)), view_(pooled())
 {}
 
-auto lease::operator=(lease &&other) noexcept -> lease &
-{
-	if (this != &other) {
-		release();
-		state_ = std::move(other.state_);
-		conn_ = std::move(other.conn_);
-	}
-	return *this;
-}
-
-lease::~lease() { release(); }
-
-auto lease::get() const noexcept -> connection & { return conn_->conn; }
-
-auto lease::server() const noexcept -> const url & { return state_->servers[conn_->server].address; }
-
-void lease::release() noexcept
-{
-	if (conn_ == nullptr) {
-		return;
-	}
-	state_->release(conn_);
-	conn_.reset();
-	state_.reset();
-}
+exclusive_lease::exclusive_lease(std::shared_ptr<detail::client_state> state,
+  std::shared_ptr<detail::pooled_connection> conn) noexcept
+  : lease_base(std::move(state), std::move(conn))
+{}
 
 // ---------------------------------------------------------------- client
 
@@ -1435,20 +1450,28 @@ auto client::executor() const noexcept -> executor_type { return state_->ioc->ge
 
 namespace {
 
-	auto acquire_refused() -> capy::task<result<lease>>
+	template<class Lease> auto acquire_refused() -> capy::task<result<Lease>>
 	{
 		co_return fail(client_errc::not_connected, "acquire: client moved from");
 	}
 
 }// namespace
 
-// Not a coroutine: the task holds its own copy of the state, never `this`.
-auto client::acquire(acquire_options options) -> capy::task<result<lease>>
+// Not coroutines: the tasks hold their own copy of the state, never `this`.
+auto client::acquire() -> capy::task<result<lease>>
 {
 	if (state_ == nullptr) {
-		return acquire_refused();
+		return acquire_refused<lease>();
 	}
-	return detail::client_state::acquire(state_, options);
+	return detail::client_state::acquire<lease>(state_);
+}
+
+auto client::acquire_exclusive() -> capy::task<result<exclusive_lease>>
+{
+	if (state_ == nullptr) {
+		return acquire_refused<exclusive_lease>();
+	}
+	return detail::client_state::acquire<exclusive_lease>(state_);
 }
 
 namespace {

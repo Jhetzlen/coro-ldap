@@ -20,6 +20,10 @@ namespace jhetz::ldap::ad {
   change_password(sync::lease &c, dn user, std::string_view old_password, std::string_view new_password)
 	-> result<void>;
 [[nodiscard]] auto reset_password(sync::lease &c, dn user, std::string_view new_password) -> result<void>;
+[[nodiscard]] auto
+  change_password(sync::exclusive_lease &c, dn user, std::string_view old_password, std::string_view new_password)
+	-> result<void>;
+[[nodiscard]] auto reset_password(sync::exclusive_lease &c, dn user, std::string_view new_password) -> result<void>;
 // On a shared lease of `pool`, retried once after client_errc::not_sent.
 [[nodiscard]] auto
   change_password(sync::client &pool, dn user, std::string_view old_password, std::string_view new_password)

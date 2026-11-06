@@ -345,7 +345,7 @@ namespace detail {
 }// namespace detail
 
 auto make_same_policy_connector(corosio::io_context &ioc,
-  const connection &origin,
+  shared_connection origin,
   connection_options options,
   std::vector<std::string> allowed_host_suffixes,
   session_setup setup) -> referral_connector

@@ -39,14 +39,14 @@ template<class T> struct chase_result
 	bool origin_failed = false;
 };
 
-auto chase_search(connection &origin,
+auto chase_search(shared_connection origin,
   search_params request,
   referral_connector connector,
   referral_policy policy,
   std::pmr::memory_resource *mr,
   chase_settings settings) -> boost::capy::task<chase_result<chased_search>>;
 
-auto chase_compare(connection &origin,
+auto chase_compare(shared_connection origin,
   compare_params request,
   referral_connector connector,
   referral_policy policy,
