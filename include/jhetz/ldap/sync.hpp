@@ -65,6 +65,10 @@
 #include <utility>
 #include <vector>
 
+namespace jhetz::ldap {
+class server_schema;
+}
+
 namespace jhetz::ldap::sync {
 
 class transaction;
@@ -608,6 +612,8 @@ class client
 	void close() noexcept;
 
   private:
+	friend auto load_schema(client &c) -> result<server_schema>;
+
 	std::shared_ptr<detail::client_core> core_;
 };
 

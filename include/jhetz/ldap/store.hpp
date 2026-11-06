@@ -55,6 +55,12 @@ enum class schema_check {
 	// reports is_tls() and security_layer() (a connection), a check made
 	// before StartTLS or a SASL security layer is made again (RFC 4513
 	// sections 3.1.5 and 5.2.1.6: what was read unprotected is read again).
+	// On a client, the schema is read on one pooled connection (both
+	// searches on one shared lease, see load_schema(client &)) and the
+	// outcome holds for every operation of the store, whichever server it
+	// runs on: every server of the pool must serve the same schema. For a
+	// check per connection, use a lease's connection (*lease) as the
+	// source.
 	on_first_use,
 };
 

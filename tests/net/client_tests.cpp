@@ -5,7 +5,11 @@
 // delays, with the jitter fixed by detail::set_jitter.
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/client.hpp"
+#include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
+#include "jhetz/ldap/mapping.hpp"
+#include "jhetz/ldap/schema.hpp"
+#include "jhetz/ldap/store.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -3098,4 +3102,141 @@ TEST_CASE("client: an extended operation never sent is retried once on another c
 			"connect " + text(s.url()) + " ok",
 			"disconnect " + text(s.url()) + " closed" });
 	CHECK(f.pool->connections() == 1);
+}
+
+namespace {
+
+struct card
+{
+	std::string cn;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
+
+namespace {
+
+auto root_dse_msg(std::int32_t id) -> ldap::message
+{
+	return ldap::message{ id, ldap::search_result_entry{ "", { { "subschemaSubentry", { "cn=Subschema" } } } } };
+}
+
+auto subschema_msg(std::int32_t id) -> ldap::message
+{
+	return ldap::message{ id,
+		ldap::search_result_entry{ "cn=Subschema",
+		  { { "attributeTypes", { "( 2.5.4.3 NAME 'cn' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )" } },
+			{ "objectClasses", { "( 2.5.6.6 NAME 'person' STRUCTURAL MUST cn )" } } } } };
+}
+
+// Answers the setup's bind, the root DSE and the subschema searches, then
+// reads the unbind.
+auto schema_after_bind() -> std::vector<step>
+{
+	return { answer({ bind_resp(1) }),
+		answer({ root_dse_msg(2), done_msg(2) }),
+		answer({ subschema_msg(3), done_msg(3) }),
+		step{},
+		client_hangs_up() };
+}
+
+auto search_base(const ldap::message &received) -> std::string
+{
+	return std::string(std::string_view(std::get<ldap::search_request>(received.op).base_object));
+}
+
+}// namespace
+
+TEST_CASE("client: load_schema runs both searches on one lease", "[net][client][schema]")
+{
+	SECTION("a two-server pool where each acquire() opens a new connection")
+	{
+		pool_fixture f;
+		// max_lifetime 0: a released connection is not handed out again.
+		auto &a = f.server({ schema_after_bind() });
+		auto &b = f.server({ { answer({ bind_resp(1) }), answer({ subschema_msg(2), done_msg(2) }) } });
+		f.make({ .servers = { a.url(), b.url() }, .setup = admin_setup(), .max_lifetime = milliseconds(0) });
+		auto s = finish(f.ioc, ldap::load_schema(*f.pool));
+		REQUIRE(s.has_value());
+		CHECK(ldap::validate<card>(*s).ok());
+		CHECK(a.accepted() == 1);
+		CHECK(b.accepted() == 0);
+		REQUIRE(a.log(0).received.size() >= 3);
+		CHECK(search_base(a.log(0).received[1]).empty());
+		CHECK(search_base(a.log(0).received[2]) == "cn=Subschema");
+	}
+	SECTION("a store over the client checks the schema the same way")
+	{
+		pool_fixture f;
+		auto &a = f.server({ schema_after_bind(),
+		  { answer({ bind_resp(1) }),
+			answer({ entry_msg(2, "cn=a,ou=people,dc=example,dc=org", "a"), done_msg(2) }),
+			step{},
+			client_hangs_up() } });
+		f.make({ .servers = { a.url() }, .setup = admin_setup(), .max_lifetime = milliseconds(0) });
+		ldap::store cards(*f.pool,
+		  ldap::dn{ "ou=people,dc=example,dc=org" },
+		  ldap::named_by<&card::cn>,
+		  { .schema_check = ldap::schema_check::on_first_use });
+		auto r = finish(f.ioc, cards.get("a"));
+		REQUIRE(r.has_value());
+		REQUIRE(r->has_value());
+		CHECK((*r)->cn == "a");
+		CHECK(a.accepted() == 2);
+		REQUIRE(a.log(0).received.size() >= 3);
+		CHECK(search_base(a.log(0).received[2]) == "cn=Subschema");
+	}
+	SECTION("a lost connection: both searches again on a new lease")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }),
+							   answer({ root_dse_msg(2), done_msg(2) }),
+							   step{ .read_request = true, .replies = {}, .close_after = true } },
+		  schema_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		auto r = finish(f.ioc, ldap::load_schema(*f.pool));
+		REQUIRE(r.has_value());
+		CHECK(ldap::validate<card>(*r).ok());
+		REQUIRE(s.accepted() == 2);
+		CHECK(s.log(0).received.size() == 3);
+		REQUIRE(s.log(1).received.size() >= 3);
+		CHECK(search_base(s.log(1).received[1]).empty());
+		CHECK(search_base(s.log(1).received[2]) == "cn=Subschema");
+	}
+	SECTION("lost twice: the retry's error")
+	{
+		pool_fixture f;
+		auto &s = f.server({ lost_after_bind(), lost_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto r = finish(f.ioc, ldap::load_schema(*f.pool));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::connection_lost);
+		CHECK_THAT(std::string(r.error().context), Catch::Matchers::StartsWith("load schema: "));
+		CHECK(s.accepted() == 2);
+	}
+	SECTION("busy is not retried")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }), answer({ done_msg(2, 51, "", "too many operations") }) },
+		  schema_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto r = finish(f.ioc, ldap::load_schema(*f.pool));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::busy);
+		CHECK_THAT(std::string(r.error().context), Catch::Matchers::StartsWith("load schema: "));
+		CHECK(s.accepted() == 1);
+	}
+	SECTION("an acquire() failure")
+	{
+		pool_fixture f;
+		f.make({ .servers = { f.refused_url() },
+		  .setup = admin_setup(),
+		  .acquire_timeout = milliseconds(50),
+		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
+		auto r = finish(f.ioc, ldap::load_schema(*f.pool));
+		REQUIRE_FALSE(r.has_value());
+		CHECK_THAT(std::string(r.error().context), Catch::Matchers::StartsWith("load schema: acquire "));
+	}
 }

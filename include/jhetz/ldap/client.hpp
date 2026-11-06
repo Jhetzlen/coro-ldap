@@ -83,7 +83,11 @@
 // failback_after old, while a higher-priority server this acquire() may try
 // has ended its backoff, is closed when acquire() finds it, so the next
 // connection goes back to the primary (failing over again if the primary
-// still fails).
+// still fails). So the servers must serve the same directory, schema
+// included: a store's schema check (store.hpp, schema_check) and the
+// schema load_schema(client &) reads on one lease (directory.hpp) hold
+// for whichever server the next operation runs on; for a check per
+// connection, use a lease's connection as the store's source.
 //
 // Health: there is no background timer (it would keep io_context::run()
 // from returning). acquire() drops pooled connections found closed, and

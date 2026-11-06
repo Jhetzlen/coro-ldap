@@ -37,6 +37,10 @@ template<directory D> [[nodiscard]] auto load_schema(D &d) -> result<server_sche
 	return ldap::detail::subschema_of(d.search(std::move(sub->request)), sub->where);
 }
 
+// As ldap::load_schema on an ldap::client: both searches on one shared
+// lease, run once more on a new lease after cond::connection_lost.
+[[nodiscard]] auto load_schema(client &c) -> result<server_schema>;
+
 // As ldap::store, blocking. The source must outlive the store. Not
 // thread-safe: one thread at a time per store.
 template<auto Naming, directory D> class store

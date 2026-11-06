@@ -19,6 +19,8 @@
 
 namespace jhetz::ldap {
 
+class client;
+
 // The protocol operations a directory runs, with connection's names and
 // results.
 template<class D>
@@ -66,5 +68,15 @@ template<directory D> auto load_schema(D &d) -> boost::capy::task<result<server_
 	}
 	co_return detail::subschema_of(co_await d.search(std::move(sub->request)), sub->where);
 }
+
+// load_schema on a client's pool: both searches run on one shared lease
+// (client::acquire()), so the subschema read is the one that server's
+// root DSE names. After cond::connection_lost the two searches run once
+// more, on a new lease; any other error (busy and unavailable included)
+// is returned as is. An acquire() failure has the context "load schema"
+// too. Every server of the pool must serve the same schema: the next
+// operation may run on another one. `c` must outlive the task. Part of
+// jhetz::ldap_net.
+auto load_schema(client &c) -> boost::capy::task<result<server_schema>>;
 
 }// namespace jhetz::ldap

@@ -794,8 +794,12 @@ itself needs only ICU.
   `modify`, `del`, `modify_dn` with `connection`'s signatures and
   results), satisfied by `connection`, `client` and a shared lease's
   `shared_connection`; `ldap::load_schema(directory &)`, the subschema
-  read over the public `search` (so it works on a `client`); a limit code
-  with no entry on either read is an error.
+  read over the public `search`; a limit code with no entry on either
+  read is an error. `ldap::load_schema(client &)` (coro-ldap-2cx.2.2,
+  defined in jhetz::ldap_net) runs both searches on one shared lease, so
+  the root DSE and the subschema come from the same server, and runs
+  them once more on a new lease after `cond::connection_lost` (not after
+  busy or unavailable); `sync::load_schema(sync::client &)` likewise.
 - `jhetz/ldap/store.hpp` (coro-ldap-2cx.1, DESIGN.md section 4):
   `ldap::store`, typed CRUD of one mapped struct under a base DN, each
   entry named by one member: `ldap::store people(source, base,
@@ -820,8 +824,12 @@ itself needs only ICU.
   (a mismatch fails every operation; a schema that does not load is tried
   again), and checks again once the source's `is_tls()` or
   `security_layer()` changed (RFC 4513 sections 3.1.5 and 5.2.1.6), on a
-  source that has them. The store keeps a pointer to the source, which must outlive it
-  and its tasks. `jhetz/ldap/sync_store.hpp`: `ldap::sync::directory`,
+  source that has them. Over a `client` that is one check for the whole
+  pool (a client has no `is_tls()`), whichever server later operations
+  run on: every server of a pool must serve the same schema; use a
+  lease's connection (`*lease`) as the source for a check per
+  connection. The store keeps a pointer to the source, which must
+  outlive it and its tasks. `jhetz/ldap/sync_store.hpp`: `ldap::sync::directory`,
   `sync::load_schema` and `sync::store`, the same over
   `sync::connection`, `sync::client`, `sync::lease` and
   `sync::exclusive_lease`, blocking.

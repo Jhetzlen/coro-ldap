@@ -1,5 +1,8 @@
 #include "jhetz/ldap/sync.hpp"
 #include "jhetz/ldap/cancel.hpp"
+#include "jhetz/ldap/directory.hpp"
+#include "jhetz/ldap/schema.hpp"
+#include "jhetz/ldap/sync_store.hpp"
 
 #include "connection/search.hpp"
 
@@ -473,6 +476,11 @@ auto client::search(search_params request, std::pmr::memory_resource *mr) -> res
 auto client::compare(compare_params request) -> result<bool>
 {
 	return core_->io.run([&] { return core_->pool->compare(std::move(request)); });
+}
+
+auto load_schema(client &c) -> result<server_schema>
+{
+	return c.core_->io.run([&c] { return ldap::load_schema(*c.core_->pool); });
 }
 
 

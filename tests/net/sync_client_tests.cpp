@@ -848,6 +848,30 @@ TEST_CASE("sync load_schema: on a sync::connection and a sync::client", "[net][s
 		REQUIRE(srv.log(0).received.size() == 3);
 		CHECK(std::get<ldap::search_request>(srv.log(0).received[1].op).base_object == "cn=Subschema");
 	}
+	SECTION("sync::client: both searches on one lease of a two-server pool")
+	{
+		threaded_script_server a({ { answer({ bind_resp(1) }),
+		  answer({ root_dse_msg(2), done_msg(2) }),
+		  answer({ subschema_msg(3), done_msg(3) }),
+		  unbind_read() } });
+		threaded_script_server b({ { answer({ bind_resp(1) }), answer({ subschema_msg(2), done_msg(2) }) } });
+		{
+			auto options = options_for(a.url());
+			options.servers.push_back(b.url());
+			// A released connection is not handed out again.
+			options.max_lifetime = std::chrono::milliseconds(0);
+			ldap::sync::client pool(std::move(options));
+			auto s = ldap::sync::load_schema(pool);
+			REQUIRE(s.has_value());
+			CHECK(ldap::validate<card>(*s).ok());
+		}
+		a.stop();
+		b.stop();
+		CHECK_THAT(a.log(0).error, IsEmpty());
+		REQUIRE(a.log(0).received.size() == 4);
+		CHECK(std::get<ldap::search_request>(a.log(0).received[2].op).base_object == "cn=Subschema");
+		CHECK(b.accepted() == 0);
+	}
 	SECTION("sync::client: a failing root DSE read")
 	{
 		threaded_script_server srv(

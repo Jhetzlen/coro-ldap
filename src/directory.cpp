@@ -1,4 +1,5 @@
 #include "jhetz/ldap/directory.hpp"
+#include "jhetz/ldap/client.hpp"
 
 #include "format_util.hpp"
 
@@ -73,6 +74,20 @@ auto detail::schema_mismatch(std::string_view type, const schema_report &report)
 {
 	return make_error(
 	  client_errc::schema_mismatch, detail::format("schema check of {}:\n{}", type, report.to_string()));
+}
+
+auto load_schema(client &c) -> boost::capy::task<result<server_schema>>
+{
+	for (bool retried = false;; retried = true) {
+		auto held = co_await c.acquire();
+		if (!held) {
+			co_return std::unexpected(detail::with_context(std::move(held.error()), detail::load_schema_context));
+		}
+		auto s = co_await load_schema(**held);
+		if (s || retried || s.error().code != cond::connection_lost) {
+			co_return s;
+		}
+	}
 }
 
 }// namespace jhetz::ldap

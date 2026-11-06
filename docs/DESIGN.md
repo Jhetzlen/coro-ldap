@@ -1556,6 +1556,7 @@ co_await people.remove("jdoe");
   free `ldap::load_schema(directory &)` on the first operation and keeps
   the outcome: a mismatch fails every later operation with
   `schema_mismatch`, a load failure is retried by the next operation.
+  Over a client that is one check for the whole pool (section 6).
 - The requests and results without the I/O are
   `detail::store_codec<Naming>`, shared with `sync::store`
   (sync_store.hpp), which runs the same steps blocking over
@@ -1774,6 +1775,21 @@ source's `is_tls()` or `security_layer()` changed (RFC 4513 sections
 3.1.5 and 5.2.1.6: what was read unprotected is read again). The
 connection itself caches nothing about the server (coro-ldap-aw4.1: its
 schema cache and `connection_options::schema_check` are gone).
+
+Over an `ldap::client` the store checks once, not per pooled connection
+or server (coro-ldap-2cx.2.2): a client reports no `is_tls()` or
+`security_layer()`, so the outcome is never checked again, and the
+operations that follow may run on any server of the pool, failover
+included. So every server of a pool must serve the same schema; for a
+check per connection, the source is a lease's connection (`*lease`).
+The schema itself is read consistently: `ldap::load_schema(client &)`
+(and `sync::load_schema(sync::client &)`), non-template overloads that
+overload resolution prefers to the `directory` template, run the root
+DSE and the subschema searches on one shared lease, so the subschema
+read is the one that server's root DSE names, never another server's.
+Both searches are idempotent reads: after `cond::connection_lost` the
+pair runs once more on a new lease; busy and unavailable are not
+retried (unlike the read forwarders), and nor is anything else.
 
 Implemented (#13, `schema.hpp`): `parse_attribute_type` /
 `parse_object_class` (a small RFC 4512 lexer: parentheses, quoted strings
