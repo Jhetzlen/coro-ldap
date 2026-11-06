@@ -577,8 +577,10 @@ TEST_CASE("integration: plain, streaming and paged searches", "[integration]")
 
 	// The server's size limit (1000) is not hit, a client one is.
 	auto limited = finish(ioc, c.search({ .base = people, .size_limit = 5 }));
-	REQUIRE_FALSE(limited.has_value());
-	CHECK(limited.error().code == ldap::errc::size_limit_exceeded);
+	REQUIRE(limited.has_value());
+	CHECK(limited->result_code == std::to_underlying(ldap::errc::size_limit_exceeded));
+	CHECK_FALSE(limited->is_success());
+	CHECK(limited->entries.size() == 5);
 }
 
 namespace {
@@ -1828,8 +1830,8 @@ TEST_CASE("integration: transactions through the sync connection", "[integration
 	CHECK(absent(entry));
 	auto after = state(renamed);
 	REQUIRE(after.has_value());
-	REQUIRE(after->size() == 1);
-	CHECK(*(*after)[0].find("mail") == ldap::string_list{ "stx@example.org" });
+	REQUIRE(after->entries.size() == 1);
+	CHECK(*after->entries[0].find("mail") == ldap::string_list{ "stx@example.org" });
 
 	// abort(): nothing applied.
 	auto u = c.begin_transaction();

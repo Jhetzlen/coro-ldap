@@ -2204,7 +2204,7 @@ TEST_CASE("connection: entries live on the resource given to search", "[net][con
 		auto r = m.run(m.conn.search(people_search(), &results));
 		REQUIRE(r.has_value());
 		REQUIRE(r->entries.size() == 2);
-		CHECK(r->get_allocator().resource() == &results);
+		CHECK(r->entries.get_allocator().resource() == &results);
 		for (const auto &e : r->entries) {
 			CHECK(e.get_allocator().resource() == &results);
 			CHECK(e.attributes.get_allocator().resource() == &results);
