@@ -159,6 +159,7 @@ namespace {
 
 	auto is_combining_mark(UChar32 c) noexcept -> bool
 	{
+		// NOLINTNEXTLINE(readability-qualified-auto): a class iterator, not a pointer, with MSVC
 		const auto it = std::ranges::upper_bound(combining_marks, c, {}, &code_point_range::first);
 		return it != combining_marks.begin() && c <= std::prev(it)->last;
 	}
@@ -1013,6 +1014,7 @@ namespace {
 
 	auto find_rule(std::string_view rule) noexcept -> const rule_entry *
 	{
+		// NOLINTNEXTLINE(readability-qualified-auto): a class iterator, not a pointer, with MSVC
 		const auto it = std::ranges::find_if(
 		  rules, [rule](const rule_entry &e) { return e.oid == rule || detail::iequals(e.name, rule); });
 		return it == rules.end() ? nullptr : &*it;

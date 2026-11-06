@@ -243,11 +243,11 @@ TEST_CASE("connection: search returns a search_result on the limit codes", "[net
 	CHECK(time->result_code == 3);
 	CHECK(time->entries.size() == 1);
 
-	auto admin = m.run(m.conn.search(people_search()));
-	REQUIRE(admin.has_value());
-	CHECK(admin->result_code == 11);
-	CHECK(admin->entries.empty());
-	CHECK(admin->diagnostic_message == "admin limit");
+	auto admin_limit = m.run(m.conn.search(people_search()));
+	REQUIRE(admin_limit.has_value());
+	CHECK(admin_limit->result_code == 11);
+	CHECK(admin_limit->entries.empty());
+	CHECK(admin_limit->diagnostic_message == "admin limit");
 
 	auto unwilling = m.run(m.conn.search(people_search()));
 	REQUIRE_FALSE(unwilling.has_value());

@@ -651,11 +651,13 @@ namespace detail {
 			}
 			// Stop the connection attempts in progress: waiting acquires fail
 			// at once.
+			// NOLINTNEXTLINE(misc-const-correctness): request_stop() is non-const in the standard (MSVC)
 			for (auto &attempt : std::exchange(attempts, {})) {
 				attempt.request_stop();
 			}
 			// And the referral chases: no referred server is asked about,
 			// connected to or set up once the client is closed.
+			// NOLINTNEXTLINE(misc-const-correctness): request_stop() is non-const in the standard (MSVC)
 			for (auto &chase : std::exchange(chases_running, {})) {
 				chase.request_stop();
 			}
