@@ -599,6 +599,23 @@ TEST_CASE("chase_search: referral results", "[net][referral]")
 		CHECK(r->referrals[1].depth == 2);
 		CHECK(w.servers["b.example"]->searches().at(0).base_object == "ou=people,dc=example,dc=org");
 	}
+	SECTION("the target's limit code: its done fields, its entries")
+	{
+		w.serve("a.example",
+		  { answer({ done_msg(1, 10, "a.example", "go", { "ldap://b.example/ou=people,dc=example,dc=org" }) }) });
+		ldap::message target_done = done_msg(1, 3, "ou=people,dc=example,dc=org", "time limit");
+		target_done.controls.emplace_back("1.2.3.4", false, "b");
+		w.serve("b.example", { answer({ entry_msg(1, "uid=jdoe,ou=people,dc=example,dc=org", "B"), target_done }) });
+		auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector()));
+		REQUIRE(r.has_value());
+		CHECK(r->result_code == 3);
+		CHECK(r->matched_dn == "ou=people,dc=example,dc=org");
+		CHECK(r->diagnostic_message == "time limit");
+		CHECK(r->controls == std::pmr::vector<ldap::control>{ ldap::control{ "1.2.3.4", false, "b" } });
+		CHECK(dns(*r) == std::vector<std::string>{ "uid=jdoe,ou=people,dc=example,dc=org" });
+		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed });
+		CHECK_FALSE(r->complete);
+	}
 	SECTION("a referral from the target is chased one hop deeper")
 	{
 		w.serve(

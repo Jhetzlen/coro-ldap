@@ -840,6 +840,36 @@ TEST_CASE("operations: collected pages end with a limit code as search() does", 
 		CHECK(r->references == ldap::string_list{ "ldap://other.example.org/ou=people,dc=example,dc=org" });
 		m.check_server();
 	}
+	SECTION("a time or admin limit on a later page: no release request")
+	{
+		const std::int32_t code = GENERATE(3, 11);
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "next") }),
+		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), done_msg(2, code, "", "limit") }),
+		  answer({ done_msg(3) }) });
+		auto r = m.run(ldap::sync::detail::collect_paged(m.conn, people_search(), 1, std::pmr::get_default_resource()));
+		REQUIRE(r.has_value());
+		CHECK(r->result_code == code);
+		CHECK(r->diagnostic_message == "limit");
+		CHECK(r->entries.size() == 2);
+		// The next request is the caller's search, not a release of the paging state.
+		CHECK(m.run(m.conn.search(people_search())).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(m.log.received[2].controls.empty());
+		CHECK(m.conn.is_open());
+	}
+	SECTION("a time limit on the first page")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1, 3) }) });
+		auto r = m.run(ldap::sync::detail::collect_paged(m.conn, people_search(), 1, std::pmr::get_default_resource()));
+		REQUIRE(r.has_value());
+		CHECK(r->result_code == 3);
+		CHECK(r->entries.size() == 1);
+		m.check_server();
+		CHECK(m.log.received.size() == 1);
+	}
 	SECTION("a malformed paged results control stays an error")
 	{
 		mock_ldap m;

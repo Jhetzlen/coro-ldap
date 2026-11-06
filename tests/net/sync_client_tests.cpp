@@ -269,6 +269,61 @@ TEST_CASE("sync client: acquire, then operations on the lease", "[net][sync][cli
 	CHECK(std::holds_alternative<ldap::unbind_request>(got.received[3].op));
 }
 
+TEST_CASE("sync: a search ending with a limit code returns its entries", "[net][sync][client]")
+{
+	SECTION("sync::connection: search and search_paged")
+	{
+		threaded_script_server srv({ { answer({ entry_msg(1, jdoe, "John"), done_msg(1, 4, "", "size limit") }),
+		  answer({ entry_msg(2, jdoe, "John"), done_msg(2, 11, "", "admin limit") }),
+		  unbind_read() } });
+		{
+			ldap::sync::connection c({ .timeout = std::chrono::seconds(10) });
+			REQUIRE(c.connect(srv.url()).has_value());
+			auto r = c.search(people_search());
+			REQUIRE(r.has_value());
+			CHECK(r->result_code == 4);
+			CHECK_FALSE(r->is_success());
+			CHECK(r->diagnostic_message == "size limit");
+			REQUIRE(r->entries.size() == 1);
+			CHECK(r->entries.front() == expected_entry(jdoe, "John"));
+			auto paged = c.search_paged(people_search(), 10);
+			REQUIRE(paged.has_value());
+			CHECK(paged->result_code == 11);
+			CHECK(paged->entries.size() == 1);
+			CHECK(c.unbind().has_value());
+		}
+		srv.stop();
+		CHECK_THAT(srv.log(0).error, IsEmpty());
+		CHECK(srv.log(0).received.size() == 3);
+	}
+	SECTION("sync::client and sync::lease")
+	{
+		threaded_script_server srv({ { answer({ bind_resp(1) }),
+		  answer({ entry_msg(2, jdoe, "John"), done_msg(2, 3, "", "time limit") }),
+		  answer({ entry_msg(3, jdoe, "John"), done_msg(3, 4) }),
+		  unbind_read() } });
+		{
+			ldap::sync::client pool(options_for(srv.url()));
+			auto r = pool.search(people_search());
+			REQUIRE(r.has_value());
+			CHECK(r->result_code == 3);
+			CHECK(r->diagnostic_message == "time limit");
+			CHECK(r->entries.size() == 1);
+			auto l = pool.acquire();
+			REQUIRE(l.has_value());
+			auto on_lease = l->search(people_search());
+			REQUIRE(on_lease.has_value());
+			CHECK(on_lease->result_code == 4);
+			CHECK(on_lease->entries.size() == 1);
+			CHECK(pool.connections() == 1);// not retried
+		}
+		srv.stop();
+		CHECK_THAT(srv.log(0).error, IsEmpty());
+		CHECK(srv.accepted() == 1);
+		CHECK(srv.log(0).received.size() == 4);
+	}
+}
+
 TEST_CASE("sync client: a transaction on an exclusive lease", "[net][sync][client][transaction]")
 {
 	const auto ext = [](std::int32_t id, std::optional<std::string_view> value = std::nullopt) {
