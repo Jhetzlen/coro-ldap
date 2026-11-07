@@ -49,6 +49,9 @@
 // outstanding. Requests started during a bind exchange (all the steps of a
 // SASL bind) are held and sent, in order, once it ends; one cancelled while
 // held is never sent. Binds are serialized: a second waits for the first.
+// A connection reached through a shared ldap::lease (client.hpp) is used by
+// the other leases too, so a bind, start_tls(), unbind() or close() on it
+// changes the session for all of them: do those on acquire_exclusive().
 //
 // What the server sends is decoded with origin::server, always. Each
 // response must carry the id of an outstanding (or recently abandoned)
