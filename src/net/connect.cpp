@@ -252,8 +252,10 @@ namespace {
 	// "<what> <text>", with `text` (a decoded host or socket path, or the
 	// encoded URL) sanitized and cut as op_context quotes a DN: the URL is
 	// often a server's (a referral), and its decoded host may hold C1 or
-	// bidi controls, U+2028 or ill-formed UTF-8 (check_server_address only
-	// rejects C0 and DEL). Valid non-ASCII (an IDN's U-labels) is kept.
+	// bidi controls or U+2028, an ldapi path or the encoded URL ill-formed
+	// UTF-8 too (check_server_address rejects C0, DEL and ill-formed UTF-8
+	// in an ldap/ldaps host only). Valid non-ASCII (an IDN's U-labels) is
+	// kept.
 	auto quoted(std::string_view what, std::string_view text) -> std::string
 	{
 		std::string out(what);
