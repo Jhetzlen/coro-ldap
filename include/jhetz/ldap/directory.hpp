@@ -1,6 +1,6 @@
 // The `directory` concept: what the layers over the core (ldap::store,
-// load_schema, ...) run their requests on. ldap::connection,
-// and ldap::client satisfy it.
+// load_schema, ...) run their requests on. ldap::connection and ldap::client
+// satisfy it.
 //
 //   ldap::result<ldap::server_schema> s = co_await ldap::load_schema(pool);
 #pragma once

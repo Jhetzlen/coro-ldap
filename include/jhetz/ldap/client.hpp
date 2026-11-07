@@ -35,10 +35,10 @@
 // change the identity of all of them, start_tls() would fail with
 // operation_in_progress while another lease has an operation outstanding,
 // and unbind() or close() would end the connection for everyone. So use
-// them on an exclusive lease (acquire_exclusive()), not on a shared one,
-// whose connection has them too: an idle or new connection that no other lease
-// shares while it is held (from the moment its unbind() begins, the
-// connection is not handed out again). A connection whose bind_count()
+// them on an exclusive lease (acquire_exclusive()): an idle or new
+// connection that no other lease shares while it is held (from the moment
+// its unbind() begins, the connection is not handed out again). A shared
+// lease's connection has them too, but they act on every lease sharing it. A connection whose bind_count()
 // changed (a bind done, failed, or still in progress) is never handed out
 // again, to anyone: it leaves the pool once its last lease returns (see
 // "Bind identity"). Use a client per identity, and keep binds to

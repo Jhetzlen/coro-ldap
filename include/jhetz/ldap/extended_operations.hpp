@@ -1,6 +1,7 @@
 // Standard extended operations as free functions over any source with
-// extended() (an ldap::connection, a lease's, an ldap::client): Who am I? (RFC 4532) and Password Modify
-// (RFC 3062), with change_password / reset_password over it.
+// extended() (an ldap::connection, a lease's, an ldap::client): Who am I?
+// (RFC 4532) and Password Modify (RFC 3062), with change_password /
+// reset_password over it.
 //
 //   ldap::result<std::string> me = co_await ldap::who_am_i(conn);
 //   co_await ldap::reset_password(pool, ldap::dn{"uid=jdoe,ou=people,dc=example,dc=org"}, new_password);
