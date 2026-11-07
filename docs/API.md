@@ -756,7 +756,12 @@ itself needs only ICU.
   typed filters `filters::field<&T::m>() == v`; the I/O is `ldap::store`
   (store.hpp, below). Breaking (coro-ldap-2cx.2): `connection::search_as<T>`,
   `modify<T>(dn, changes)` and `add(dn, value)`, their sync copies and
-  `connection_options::schema_check` are gone. Mistakes
+  `connection_options::schema_check` are gone. Breaking
+  (coro-ldap-2cx.2.1): connection.hpp (and so sync.hpp and client.hpp)
+  no longer includes directory.hpp, mapping.hpp and schema.hpp: include
+  jhetz/ldap/directory.hpp for `load_schema`, mapping.hpp and schema.hpp
+  for the typed mapping (`decode<T>`, `ldap::schema<T>`, `describe`,
+  `validate<T>`), store.hpp for `ldap::store`. Mistakes
   (unmapped or read_only member, wrong value type, invalid names) fail to
   compile; `tests/compile/` checks each. Encoding can fail (breaking
   change, coro-ldap-vcp): `value_traits<T>::encode` returns `std::string`
