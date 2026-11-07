@@ -200,14 +200,18 @@ struct extended_params
 };
 
 // What a successful operation returns besides success: the message id of
-// its request and the controls of the server's response (e.g. a post-read
-// entry, RFC 4527: find_post_read()). In a transaction (RFC 5805) the
-// update is only accepted, and its response controls come with the End
-// Transaction response, matched by message_id
+// its request, the matchedDN and diagnosticMessage of the server's
+// LDAPResult (RFC 4511 section 4.1.9; a server may put a warning in the
+// diagnostic of a success), and the controls of its response (e.g. a
+// post-read entry, RFC 4527: find_post_read()). In a transaction (RFC
+// 5805) the update is only accepted, and its response controls come with
+// the End Transaction response, matched by message_id
 // (end_transaction_result::find_update_controls).
 struct response
 {
 	std::int32_t message_id = 0;// messageID of the request (and of this response)
+	std::pmr::string matched_dn{};// matchedDN as sent, usually empty on success
+	std::pmr::string diagnostic_message{};// diagnosticMessage as sent; empty: none
 	std::pmr::vector<control> controls{};
 };
 

@@ -518,7 +518,9 @@ pin the encodings and decodings against bytes captured between OpenLDAP
 values, and the integration tests run them against slapd.
 
 Results (step 6): success returns the operation's value — `response`
-(the request's message id and the response controls) for add / modify /
+(the request's message id, the LDAPResult's matchedDN and
+diagnosticMessage, which a server may use for a warning on success, and
+the response controls) for add / modify /
 delete / modify DN, `bool` for
 compare, `extended_result` for extended operations; the free
 `ldap::who_am_i()` (RFC 4532) returns the authzId string, and
@@ -2426,6 +2428,11 @@ decision left open.
   whose executor everything runs on, as for `connection`. Connections are
   opened lazily by `acquire()`, up to `max_connections`; nothing runs in
   the background (no timer keeps `io_context::run()` alive).
+- `max_connections` stays 1 by default (c67, user decision): one
+  multiplexed connection, which every shared lease uses at once. More
+  connections mostly matter for exclusive leases, which wait for an idle
+  connection, and for isolating slow operations; the header and API.md say
+  so where the option is.
 - **Leases share connections by default** (the open choice of the
   decision: "exclusive or shared"; the 3pf.6 review kept shared as the
   default and added exclusive). `acquire() -> task<result<lease>>`; a

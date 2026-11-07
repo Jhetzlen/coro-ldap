@@ -237,8 +237,9 @@ itself needs only ICU.
     `del_params`, `modify_dn_params`, `compare_params`, `extended_params`,
     `password_modify_params`; `search_base`, the type of the required
     `search_params::base`), `root_dse()`, the `ldap::mod` builders, `response`
-    (`{message_id, controls}`; breaking: `message_id` is new and comes
-    first, as in the LDAPMessage), `intermediate`, `extended_result`,
+    (`{message_id, matched_dn, diagnostic_message, controls}`: the
+    LDAPResult's matchedDN and diagnosticMessage kept on success, where a
+    server may warn, RFC 4511 section 4.1.9), `intermediate`, `extended_result`,
     `end_transaction_result`, `search_result` and `typed_search_result<T>`
     (`basic_search_result`), and the OIDs `who_am_i_oid` and
     `password_modify_oid`.
@@ -859,7 +860,11 @@ itself needs only ICU.
   pool of multiplexed connections opened lazily. `client(ioc,
   client_options{.servers, .connection, .setup, .max_connections = 1,
   .idle_check, .probe_timeout, .max_lifetime, .acquire_timeout,
-  .backoff, .failback_after, .observer, .referrals})`; `acquire() ->
+  .backoff, .failback_after, .observer, .referrals})`. The default
+  `max_connections = 1` is one multiplexed connection that every shared
+  lease uses at once, not a pool of one connection per caller; raise it
+  for exclusive leases (binds, StartTLS) or to isolate slow operations.
+  `acquire() ->
   task<result<lease>>`, the lease giving a `shared_connection`
   (connection.hpp: every `connection` operation but `simple_bind`,
   `sasl_bind`, `start_tls`, `unbind` and `close`, which do not compile on

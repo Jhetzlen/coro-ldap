@@ -87,6 +87,24 @@ TEST_CASE("operations: add", "[net][operations]")
 			{ ldap::control{ ldap::manage_dsa_it_oid } } });
 }
 
+TEST_CASE("operations: a success keeps its matchedDN and diagnosticMessage", "[net][operations]")
+{
+	mock_ldap m;
+	m.serve({ answer({ ldap::message{ 1,
+				ldap::modify_response{ ldap::ldap_result{ 0, "dc=example,dc=org", "password expires in 3 days" } } } }),
+	  answer({ result_msg<ldap::del_response>(2) }) });
+	auto warned = m.run(m.conn.modify({ .object = jdoe }));
+	REQUIRE(warned.has_value());
+	CHECK(warned->message_id == 1);
+	CHECK(warned->matched_dn == "dc=example,dc=org");
+	CHECK(warned->diagnostic_message == "password expires in 3 days");
+	auto plain = m.run(m.conn.del({ .entry = jdoe }));
+	REQUIRE(plain.has_value());
+	CHECK(plain->matched_dn.empty());
+	CHECK(plain->diagnostic_message.empty());
+	m.check_server();
+}
+
 TEST_CASE("operations: an attribute without values is not sent", "[net][operations]")
 {
 	mock_ldap m;

@@ -38,7 +38,7 @@ namespace {
 	}
 
 	// A response that only carries an LDAPResult: success gives its
-	// controls, anything else the error.
+	// matchedDN, diagnosticMessage and controls, anything else the error.
 	auto to_response(result<message> m, std::string_view context) -> result<response>
 	{
 		if (!m) {
@@ -50,6 +50,8 @@ namespace {
 		}
 		response out;
 		out.message_id = m->id;
+		out.matched_dn.assign(r.matched_dn);
+		out.diagnostic_message.assign(r.diagnostic_message);
 		out.controls.assign(m->controls.begin(), m->controls.end());
 		return out;
 	}

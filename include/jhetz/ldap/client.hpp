@@ -433,7 +433,12 @@ struct client_options
 	// Run on every new connection; empty: none (anonymous connections).
 	session_setup setup{};
 	// Connections open at once, at least 1 (0 makes acquire() fail with
-	// std::errc::invalid_argument).
+	// std::errc::invalid_argument). The default, 1, is a single multiplexed
+	// connection that every shared lease uses at once; more connections
+	// matter mostly for exclusive leases (acquire_exclusive(): binds,
+	// StartTLS) and for isolating slow operations, and an exclusive lease
+	// with max_connections = 1 waits until no shared lease holds the one
+	// connection.
 	std::size_t max_connections = 1;
 	// Probe an idle connection unused for longer than this before handing it
 	// out; nullopt: never (a dead connection is then found by the lease's
