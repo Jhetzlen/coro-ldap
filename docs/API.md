@@ -145,7 +145,7 @@ rationale is in [`DESIGN.md`](DESIGN.md).
   `!` marker), all percent-decoded; `parse()` / `to_string()` round-trip.
   Absent and empty DN / scope / filter stay distinct, as referrals need.
   Server URLs: `check_server()` (non-empty host without control
-  characters, no critical extension, no DN, attributes, scope or filter;
+  characters, UTF-8 except for an ldapi path, no critical extension, no DN, attributes, scope or filter;
   an empty DN is allowed), `parse_server(text, mr)`, `parse_servers(texts,
   mr) -> result<std::vector<url>>` (any range of strings or a braced list;
   the context names the failing index, `servers[1]`), and the explicit

@@ -127,7 +127,8 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
   Allocator-aware (`std::pmr`), including its extensions. Server URLs
   (what `client_options::servers` holds) follow a server rule,
   `check_server()`: a non-empty host (or ldapi socket path) without
-  control characters, no critical extension, and no DN (an empty one
+  control characters, a well-formed UTF-8 host (an ldapi path stays
+  bytes), no critical extension, and no DN (an empty one
   aside), attributes, scope or filter. `parse_server(text, mr)` and
   `parse_servers(texts, mr)` (a range or braced list of strings; the
   error names the index) apply it after `parse`; the explicit literal

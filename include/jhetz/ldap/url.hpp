@@ -196,14 +196,19 @@ namespace detail {
 	}
 
 	// `s` holds only characters `allowed` accepts and %XX triplets, decodes
-	// to at least one byte, and no decoded byte is a C0 control or DEL.
+	// to at least one byte, no decoded byte is a C0 control or DEL and, with
+	// `utf8`, the decoded bytes are well-formed UTF-8.
 	template<class Allowed>
-	constexpr auto is_encoded_host_text(std::string_view s, const Allowed &allowed) noexcept -> bool
+	constexpr auto is_encoded_host_text(std::string_view s, const Allowed &allowed, bool utf8) noexcept -> bool
 	{
 		constexpr unsigned ascii_delete = 0x7F;
+		constexpr unsigned ascii_end = 0x80;
 		if (s.empty()) {
 			return false;
 		}
+		std::size_t pending = 0;
+		unsigned next_first = utf8_continuation_first;
+		unsigned next_last = utf8_continuation_last;
 		for (std::size_t i = 0; i < s.size(); ++i) {
 			unsigned byte = static_cast<unsigned char>(s[i]);
 			if (s[i] == '%') {
@@ -218,8 +223,32 @@ namespace detail {
 			if (byte < ' ' || byte == ascii_delete) {
 				return false;
 			}
+			if (!utf8 || (pending == 0 && byte < ascii_end)) {
+				continue;
+			}
+			if (pending > 0) {
+				if (byte < next_first || byte > next_last) {
+					return false;
+				}
+				--pending;
+				next_first = utf8_continuation_first;
+				next_last = utf8_continuation_last;
+				continue;
+			}
+			utf8_lead_range lead{};
+			for (const auto &r : utf8_lead_ranges) {
+				if (byte >= r.lead_first && byte <= r.lead_last) {
+					lead = r;
+				}
+			}
+			if (lead.length == 0) {
+				return false;
+			}
+			pending = lead.length - 1;
+			next_first = lead.second_first;
+			next_last = lead.second_last;
 		}
-		return true;
+		return pending == 0;
 	}
 
 	// RFC 3986 port: digits, 1..65535; empty means the scheme's default.
@@ -273,7 +302,8 @@ namespace detail {
 			if (!is_ipv6(literal.substr(0, zone))) {
 				return false;
 			}
-			if (zone != std::string_view::npos && !is_encoded_host_text(literal.substr(zone + 3), is_url_unreserved)) {
+			if (zone != std::string_view::npos
+				&& !is_encoded_host_text(literal.substr(zone + 3), is_url_unreserved, true)) {
 				return false;
 			}
 			const std::string_view rest = authority.substr(close + 1);
@@ -286,7 +316,7 @@ namespace detail {
 			}
 		} else {
 			const std::size_t colon = authority.find(':');
-			if (!is_encoded_host_text(authority.substr(0, colon), is_url_reg_name_char)) {
+			if (!is_encoded_host_text(authority.substr(0, colon), is_url_reg_name_char, !ldapi)) {
 				return false;
 			}
 			if (colon != std::string_view::npos) {
@@ -446,7 +476,8 @@ class url
 	// The server rule, for a URL to connect to (client_options::servers):
 	// a non-empty host (for ldapi, a socket path) without control characters
 	// once decoded (a leading NUL in an ldapi path, a Linux abstract socket,
-	// is allowed on Linux), no critical extension, and no DN, attributes,
+	// is allowed on Linux) and, except for ldapi, well-formed UTF-8 once
+	// decoded (RFC 3986 section 3.2.2), no critical extension, and no DN, attributes,
 	// scope or filter (an empty DN, `ldap://host/`, is allowed). Fails with
 	// invalid_url naming the broken rule. net::connect() checks the same
 	// host and extensions but ignores the DN and later parts.

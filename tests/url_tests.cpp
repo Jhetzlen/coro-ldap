@@ -608,6 +608,11 @@ TEST_CASE("server URLs: check_server and parse_server", "[url]")
 	refused("ldap://h/???\?!x-unknown", "url: unsupported critical extension x-unknown");
 	refused("ldap://evil%00.example.org", "url: control character in the host");
 	refused("ldap://h%7F", "url: control character in the host");
+	refused("ldap://%FF", "url: ill-formed UTF-8 in the host");
+	refused("ldap://%C3", "url: ill-formed UTF-8 in the host");
+	refused("ldaps://%C0%AF.example", "url: ill-formed UTF-8 in the host");
+	refused("ldap://[fe80::1%25e%FF]", "url: ill-formed UTF-8 in the host");
+	CHECK(ldap::url::parse_server("ldapi://%2Ftmp%2F%FF").has_value());
 	refused("ldap://h:0", "url: port 0 at offset 9");
 	refused("http://h", "url: scheme is not ldap, ldaps or ldapi at offset 0");
 }
@@ -677,6 +682,14 @@ TEST_CASE("server URLs: the compile-time checked literal", "[url]")
 	static_assert(!is_server_url_literal("ldap://[::1%25]"));
 	static_assert(!is_server_url_literal("http://h"));
 	static_assert(!is_server_url_literal("ldap:/h"));
+	static_assert(!is_server_url_literal("ldap://%FF"));
+	static_assert(!is_server_url_literal("ldap://%C3"));
+	static_assert(!is_server_url_literal("ldap://%C3:389"));
+	static_assert(!is_server_url_literal("ldap://%C0%AF"));
+	static_assert(!is_server_url_literal("ldap://%ED%A0%80"));
+	static_assert(!is_server_url_literal("ldap://[fe80::1%25e%FF]"));
+	static_assert(is_server_url_literal("ldap://%F0%9F%98%80.example"));
+	static_assert(is_server_url_literal("ldapi://%2Ftmp%2F%FF"));
 
 	// What the literal accepts, parse_server accepts too.
 	for (const auto *text : { "ldap://h",
@@ -686,6 +699,8 @@ TEST_CASE("server URLs: the compile-time checked literal", "[url]")
 		   "ldap://192.0.2.1:65535",
 		   "ldap://a!$&'()*+,;=b",
 		   "ldap://%C3%A9",
+		   "ldap://%F0%9F%98%80.example",
+		   "ldapi://%2Ftmp%2F%FF",
 		   "ldap://[::ffff:192.0.2.1]" }) {
 		INFO(text);
 		CHECK(ldap::detail::is_server_url_literal(text));

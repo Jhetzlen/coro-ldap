@@ -388,6 +388,9 @@ auto detail::check_server_address(const url &u) -> result<void>
 	if (has_control_character(u.host(), u.scheme())) {
 		return fail(client_errc::invalid_url, "control character in the host");
 	}
+	if (u.scheme() != url_scheme::ldapi && !detail::is_valid_utf8(u.host())) {
+		return fail(client_errc::invalid_url, "ill-formed UTF-8 in the host");
+	}
 	return {};
 }
 
