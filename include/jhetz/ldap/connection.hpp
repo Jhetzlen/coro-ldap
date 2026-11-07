@@ -367,8 +367,8 @@ class connection
 	// follow section 2 (a responseName, no identifier, a malformed
 	// txnEndRes) fails with decode_error. begin_transaction() is
 	// start_transaction() wrapped in an ldap::transaction.
-	auto start_transaction(extended_controls controls = {}) -> boost::capy::task<result<std::pmr::string>>;
-	auto end_transaction(std::pmr::string identifier, bool commit = true)
+	auto start_transaction(extended_controls controls = {}) -> boost::capy::task<result<std::string>>;
+	auto end_transaction(std::string identifier, bool commit = true)
 	  -> boost::capy::task<result<end_transaction_result>>;
 	auto begin_transaction(extended_controls controls = {}) -> boost::capy::task<result<transaction>>;
 
@@ -499,11 +499,11 @@ class shared_connection
 	{
 		return conn_->extended(std::move(request));
 	}
-	auto start_transaction(extended_controls controls = {}) const -> boost::capy::task<result<std::pmr::string>>
+	auto start_transaction(extended_controls controls = {}) const -> boost::capy::task<result<std::string>>
 	{
 		return conn_->start_transaction(std::move(controls));
 	}
-	auto end_transaction(std::pmr::string identifier, bool commit = true) const
+	auto end_transaction(std::string identifier, bool commit = true) const
 	  -> boost::capy::task<result<end_transaction_result>>
 	{
 		return conn_->end_transaction(std::move(identifier), commit);

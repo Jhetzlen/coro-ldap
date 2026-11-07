@@ -73,8 +73,9 @@ auto who_am_i(D &d, extended_controls controls = {}) -> boost::capy::task<result
 }
 
 // Changes a password (RFC 3062). Returns the password the server
-// generated (genPasswd) when new_password was not given, else nullopt.
-// Errors have the context "password modify <user>".
+// generated (genPasswd) when new_password was not given, else nullopt;
+// that password is a plain std::string and is not wiped. Errors have the
+// context "password modify <user>".
 template<extended_directory D>
 auto password_modify(D &d, password_modify_params request) -> boost::capy::task<result<std::optional<std::string>>>
 {

@@ -101,7 +101,7 @@ namespace {
 		return out;
 	}
 
-	auto start_exchange(core_ref self, extended_controls controls) -> capy::task<result<std::pmr::string>>
+	auto start_exchange(core_ref self, extended_controls controls) -> capy::task<result<std::string>>
 	{
 		const std::string context(start_context);
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
@@ -126,12 +126,12 @@ namespace {
 			co_return fail(client_errc::decode_error,
 			  context + ": the response has no transaction identifier (RFC 5805 section 2.1)");
 		}
-		co_return std::pmr::string(*x.response_value);
+		co_return std::string(*x.response_value);
 	}
 
 }// namespace
 
-auto connection::start_transaction(extended_controls controls) -> capy::task<result<std::pmr::string>>
+auto connection::start_transaction(extended_controls controls) -> capy::task<result<std::string>>
 {
 	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection(start_context));
@@ -139,13 +139,13 @@ auto connection::start_transaction(extended_controls controls) -> capy::task<res
 	co_return co_await start_exchange(core_ref(core_), std::move(controls));
 }
 
-auto connection::end_transaction(std::pmr::string identifier, bool commit) -> capy::task<result<end_transaction_result>>
+auto connection::end_transaction(std::string identifier, bool commit) -> capy::task<result<end_transaction_result>>
 {
 	std::string context(end_context);
 	if (core_ == nullptr) {
 		co_return std::unexpected(no_connection(context));
 	}
-	auto reply = co_await end_exchange(core_ref(core_), std::string(identifier), commit, context, nullptr);
+	auto reply = co_await end_exchange(core_ref(core_), std::move(identifier), commit, context, nullptr);
 	if (!reply) {
 		co_return std::unexpected(std::move(reply.error()));
 	}

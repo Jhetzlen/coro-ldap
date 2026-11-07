@@ -349,7 +349,7 @@ itself needs only ICU.
   below) and `.timeout` (`extended` refuses the StartTLS name with
   encode_error before sending: use `start_tls`);
   transactions (RFC 5805): `start_transaction(extended_controls)` ->
-  `result<std::pmr::string>` (the identifier; proxied authorization goes
+  `result<std::string>` (the identifier; proxied authorization goes
   here, section 4.4), updates carrying
   `ldap::transaction_specification{.identifier}`, and
   `end_transaction(identifier, commit = true)` ->
@@ -1094,6 +1094,13 @@ unless a resource is given.
   `monotonic_buffer_resource` over a fixed buffer with a null upstream while
   the default resource is `null_memory_resource()` (`tests/pmr_tests.cpp`).
 - `tls_options` is a plain aggregate (configuration, not a hot path).
+- String types: a call taking a `memory_resource *` returns `std::pmr`
+  strings on it; members of allocator-aware types (entry values,
+  `extended_result`, the message model) are `std::pmr`; every other
+  returned string is `std::string` (`who_am_i()`, `password_modify()`,
+  `start_transaction()`, `sync::transaction::identifier()`). `ldap::error`
+  is the exception (above). Coroutine string parameters are by value
+  (`end_transaction(std::string identifier, commit)`).
 
 LDAP resultCode 0 (success) has no `errc` value: success is the absence of
 an error; `ldap_result::is_success()` checks for it.

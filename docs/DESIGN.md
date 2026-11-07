@@ -549,7 +549,8 @@ next to it and not instead of it. Active Directory's `unicodePwd` Modify is
 there is no method option, no per-connection cache and no "no method"
 error. Tested against the scripted mock (`tests/net/password_tests.cpp`)
 and slapd (`integration`). Password memory is not wiped on these paths, nor in simple
-binds and `password_modify()`: the password passes through `std::string`
+binds and `password_modify()`, whose generated password (a plain
+`std::string`) is not wiped either: the password passes through `std::string`
 copies (the caller's, the request's values, the encoded PDU in the
 connection's pmr buffers) that cannot all be reached, and wiping one of
 them would suggest a protection the library does not give. Only SCRAM
@@ -2300,6 +2301,15 @@ and its destructor joins the thread.
   `encode(m, mr)` and `write_message(t, m, mr | ber::writer&)` let callers
   pool write buffers. `tls_options` stays a plain aggregate with
   `std::filesystem::path` for files.
+- String types (mcb): a call that takes a `memory_resource *` returns
+  `std::pmr` strings on it (`dn::to_string(mr)`, `url::to_string(mr)`);
+  the members of allocator-aware types are `std::pmr` (entry values,
+  `extended_result`, the message model); every other returned string is
+  `std::string` (`who_am_i()`, `password_modify()`'s generated password,
+  `start_transaction()`'s identifier, `sync::transaction::identifier()`).
+  `ldap::error` (pmr members, default resource) is the documented
+  exception. String parameters of a coroutine (task) are taken by value,
+  so the frame owns them (`end_transaction(std::string identifier)`).
 
 **`std::pmr` (implemented, step 4b).**
 - Rule: an object decoded into a caller-supplied arena must not outlive it.

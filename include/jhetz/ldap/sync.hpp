@@ -349,12 +349,11 @@ namespace detail {
 		}
 
 		// LDAP transactions (RFC 5805), as ldap::connection's.
-		[[nodiscard]] auto start_transaction(extended_controls controls = {}) -> result<std::pmr::string>
+		[[nodiscard]] auto start_transaction(extended_controls controls = {}) -> result<std::string>
 		{
 			return self().call([&](ldap::connection &c) { return c.start_transaction(std::move(controls)); });
 		}
-		[[nodiscard]] auto end_transaction(std::pmr::string identifier, bool commit = true)
-		  -> result<end_transaction_result>
+		[[nodiscard]] auto end_transaction(std::string identifier, bool commit = true) -> result<end_transaction_result>
 		{
 			return self().call([&](ldap::connection &c) { return c.end_transaction(std::move(identifier), commit); });
 		}
