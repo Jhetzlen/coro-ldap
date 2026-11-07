@@ -18,36 +18,13 @@ namespace {
 
 	using detail::hex_value;
 	using detail::iequals;
-	using detail::is_alpha;
 	using detail::is_digit;
 	using detail::is_hex;
 
 	// ------------------------------------------------------------ character classes (RFC 3986 section 2)
 
-	constexpr auto is_unreserved(char c) noexcept -> bool
-	{
-		return is_alpha(c) || is_digit(c) || c == '-' || c == '.' || c == '_' || c == '~';
-	}
-
-	constexpr auto is_sub_delim(char c) noexcept -> bool
-	{
-		switch (c) {
-		case '!':
-		case '$':
-		case '&':
-		case '\'':
-		case '(':
-		case ')':
-		case '*':
-		case '+':
-		case ',':
-		case ';':
-		case '=':
-			return true;
-		default:
-			return false;
-		}
-	}
+	constexpr auto is_unreserved(char c) noexcept -> bool { return detail::is_url_unreserved(c); }
+	constexpr auto is_sub_delim(char c) noexcept -> bool { return detail::is_url_sub_delim(c); }
 
 	// pchar / "/" (without '%', handled as pct-encoded): what may appear
 	// unencoded in the path and query of a URI. '?' is the RFC 4516 part
@@ -64,7 +41,7 @@ namespace {
 		return is_part_char(c) || c == ' ' || static_cast<unsigned char>(c) >= 0x80;
 	}
 
-	constexpr auto is_reg_name_char(char c) noexcept -> bool { return is_unreserved(c) || is_sub_delim(c); }
+	constexpr auto is_reg_name_char(char c) noexcept -> bool { return detail::is_url_reg_name_char(c); }
 
 	// ------------------------------------------------------------ errors
 
@@ -161,90 +138,7 @@ namespace {
 
 	// ------------------------------------------------------------ addresses
 
-	// dec-octet "." dec-octet "." dec-octet "." dec-octet (no leading zeros).
-	auto is_ipv4(std::string_view s) noexcept -> bool
-	{
-		int parts = 0;
-		std::size_t i = 0;
-		while (true) {
-			const std::size_t start = i;
-			unsigned value = 0;
-			while (i < s.size() && is_digit(s[i]) && i - start < 3) {
-				value = (value * 10) + static_cast<unsigned>(s[i++] - '0');
-			}
-			const std::size_t len = i - start;
-			if (len == 0 || value > 255 || (len > 1 && s[start] == '0')) {
-				return false;
-			}
-			++parts;
-			if (parts == 4) {
-				return i == s.size();
-			}
-			if (i == s.size() || s[i] != '.') {
-				return false;
-			}
-			++i;
-		}
-	}
-
-	// RFC 3986 IPv6address: eight 16-bit groups, at most one "::" standing for
-	// one or more zero groups, optionally ending in an IPv4 address (two groups).
-	auto is_ipv6(std::string_view s) noexcept -> bool
-	{
-		constexpr int ipv6_groups = 8;
-		constexpr std::size_t max_group_digits = 4;
-		const std::size_t n = s.size();
-		std::size_t i = 0;
-		int groups = 0;
-		bool compressed = false;
-		if (n >= 2 && s[0] == ':' && s[1] == ':') {
-			compressed = true;
-			i = 2;
-			if (i == n) {
-				return true;
-			}
-		} else if (n == 0 || s[0] == ':') {
-			return false;
-		}
-		while (true) {
-			const std::size_t start = i;
-			while (i < n && is_hex(s[i]) && i - start <= max_group_digits) {
-				++i;
-			}
-			if (i < n && s[i] == '.') {
-				if (!is_ipv4(s.substr(start))) {
-					return false;
-				}
-				groups += 2;
-				break;
-			}
-			const std::size_t len = i - start;
-			if (len == 0 || len > max_group_digits) {
-				return false;
-			}
-			++groups;
-			if (i == n) {
-				break;
-			}
-			if (s[i] != ':') {
-				return false;
-			}
-			++i;
-			if (i < n && s[i] == ':') {
-				if (compressed) {
-					return false;
-				}
-				compressed = true;
-				++i;
-				if (i == n) {
-					break;
-				}
-			} else if (i == n) {
-				return false;// trailing single ':'
-			}
-		}
-		return compressed ? groups < ipv6_groups : groups == ipv6_groups;
-	}
+	using detail::is_ipv6;
 
 	// ------------------------------------------------------------ parts
 
@@ -368,6 +262,11 @@ auto url_extension::operator=(url_extension &&other) -> url_extension &
 
 url::url(const allocator_type &alloc) : host_(alloc), attributes_(alloc), extensions_(alloc) {}
 
+url::url(literal l, const allocator_type &alloc) : url(alloc)
+{
+	*this = parse_server(l.text, alloc.resource()).value();// same resource: no copy
+}
+
 url::url(const url &other, const allocator_type &alloc)
   : scheme_(other.scheme_), host_(other.host_, alloc), host_is_ipv6_(other.host_is_ipv6_), port_(other.port_),
 	dn_(detail::optional_with(other.dn_, alloc)), attributes_(other.attributes_, alloc), scope_(other.scope_),
@@ -446,6 +345,78 @@ auto url::port_or_default() const noexcept -> std::uint16_t
 auto url::has_critical_extension() const noexcept -> bool
 {
 	return std::ranges::any_of(extensions_, &url_extension::critical);
+}
+
+namespace {
+
+	// A leading NUL in an ldapi path names a Linux abstract socket; elsewhere
+	// (Windows' AF_UNIX) there is none, so it is a control character like
+	// any other.
+#ifdef __linux__
+	constexpr bool has_abstract_sockets = true;
+#else
+	constexpr bool has_abstract_sockets = false;
+#endif
+
+	auto has_control_character(std::string_view host, url_scheme scheme) -> bool
+	{
+		for (std::size_t i = 0; i < host.size(); ++i) {
+			const auto c = static_cast<unsigned char>(host[i]);
+			const bool abstract_socket = has_abstract_sockets && scheme == url_scheme::ldapi && i == 0 && c == 0;
+			if (detail::is_ascii_control(c) && !abstract_socket) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+}// namespace
+
+auto detail::check_server_address(const url &u) -> result<void>
+{
+	if (u.host().empty()) {
+		return fail(client_errc::invalid_url, "the URL names no host (or, for ldapi, no socket path)");
+	}
+	for (const auto &e : u.extensions()) {
+		if (e.critical) {
+			return fail(client_errc::invalid_url, detail::format("unsupported critical extension {}", e.type));
+		}
+	}
+	// Decoded hosts may hold any byte. getaddrinfo, OpenSSL's host name check
+	// and sockaddr_un stop at a NUL, so "evil%00.example.org" would silently
+	// become "evil".
+	if (has_control_character(u.host(), u.scheme())) {
+		return fail(client_errc::invalid_url, "control character in the host");
+	}
+	return {};
+}
+
+auto detail::server_list_error(error e, std::size_t index) -> error
+{
+	return with_context(std::move(e), detail::format("servers[{}]", index));
+}
+
+auto url::check_server() const -> result<void>
+{
+	if (auto r = detail::check_server_address(*this); !r) {
+		return r;
+	}
+	if ((dn_ && !dn_->empty()) || !attributes_.empty() || scope_ || filter_) {
+		return fail(client_errc::invalid_url, "a server URL names no DN, attributes, scope or filter");
+	}
+	return {};
+}
+
+auto url::parse_server(std::string_view text, std::pmr::memory_resource *mr) -> result<url>
+{
+	auto u = parse(text, mr);
+	if (!u) {
+		return u;
+	}
+	if (auto r = u->check_server(); !r) {
+		return std::unexpected(detail::with_context(std::move(r.error()), "url"));
+	}
+	return u;
 }
 
 namespace {

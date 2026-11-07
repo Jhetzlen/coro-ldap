@@ -252,7 +252,7 @@ namespace {
 	// "<what> <text>", with `text` (a decoded host or socket path, or the
 	// encoded URL) sanitized and cut as op_context quotes a DN: the URL is
 	// often a server's (a referral), and its decoded host may hold C1 or
-	// bidi controls, U+2028 or ill-formed UTF-8 (has_control_character only
+	// bidi controls, U+2028 or ill-formed UTF-8 (check_server_address only
 	// rejects C0 and DEL). Valid non-ASCII (an IDN's U-labels) is kept.
 	auto quoted(std::string_view what, std::string_view text) -> std::string
 	{
@@ -260,27 +260,6 @@ namespace {
 		out += ' ';
 		ldap::detail::append_sanitized(out, text, 256);
 		return out;
-	}
-
-	// A leading NUL in an ldapi path names a Linux abstract socket; elsewhere
-	// (Windows' AF_UNIX) there is none, so it is a control character like
-	// any other.
-#ifdef __linux__
-	constexpr bool has_abstract_sockets = true;
-#else
-	constexpr bool has_abstract_sockets = false;
-#endif
-
-	auto has_control_character(std::string_view host, url_scheme scheme) -> bool
-	{
-		for (std::size_t i = 0; i < host.size(); ++i) {
-			const auto c = static_cast<unsigned char>(host[i]);
-			const bool abstract_socket = has_abstract_sockets && scheme == url_scheme::ldapi && i == 0 && c == 0;
-			if (ldap::detail::is_ascii_control(c) && !abstract_socket) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 }// namespace
@@ -292,19 +271,8 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 	const std::string server = str(to_string(u.scheme())) + "://" + str(u.authority());
 	const std::string target = quoted("connect", server);
 
-	if (u.host().empty()) {
-		co_return fail(client_errc::invalid_url, target + ": the URL names no host (or, for ldapi, no socket path)");
-	}
-	for (const auto &e : u.extensions()) {
-		if (e.critical) {
-			co_return fail(client_errc::invalid_url, target + ": unsupported critical extension " + str(e.type));
-		}
-	}
-	// Decoded hosts may hold any byte. getaddrinfo, OpenSSL's host name check
-	// and sockaddr_un stop at a NUL, so "evil%00.example.org" would silently
-	// become "evil". Only a leading NUL is meaningful: a Linux abstract socket.
-	if (has_control_character(u.host(), u.scheme())) {
-		co_return fail(client_errc::invalid_url, target + ": control character in the host");
+	if (auto r = ldap::detail::check_server_address(u); !r) {
+		co_return fail(client_errc::invalid_url, target + ": " + str(r.error().context));
 	}
 
 	if (options.timeout && options.timeout->count() <= 0) {

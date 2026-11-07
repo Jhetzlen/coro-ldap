@@ -4,6 +4,7 @@
 
 #include "../connection/referral_chase_impl.hpp"
 #include "../connection/search.hpp"
+#include "../format_util.hpp"
 #include "../net/deadline.hpp"
 #include "../scope_util.hpp"
 
@@ -166,6 +167,11 @@ namespace detail {
 			servers.reserve(options.servers.size());
 			for (const auto &u : options.servers) {
 				servers.push_back({ .address = u, .name = std::string(std::string_view(u.to_string())) });
+				if (auto r = u.check_server(); !r && !bad_server) {
+					bad_server = detail::with_context(std::move(r.error()),
+					  detail::format(
+						"acquire: client_options::servers[{}] {}", servers.size() - 1, servers.back().name));
+				}
 			}
 		}
 
@@ -173,6 +179,8 @@ namespace detail {
 		client_options options;
 		std::pmr::memory_resource *mr;
 		std::vector<server_state> servers{};
+		// The first entry of options.servers check_server() refuses.
+		std::optional<error> bad_server{};
 		std::vector<std::shared_ptr<pooled_connection>> pool{};
 		std::size_t opening = 0;// connection attempts in progress (they count against max_connections)
 		// Their stop sources (copies share the stop state): close() stops them.
@@ -1017,6 +1025,9 @@ namespace detail {
 		{
 			if (servers.empty()) {
 				return make_error(client_errc::invalid_url, "acquire: client_options::servers is empty");
+			}
+			if (bad_server) {
+				return bad_server;
 			}
 			if (options.max_connections == 0) {
 				return make_error(

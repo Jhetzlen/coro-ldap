@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ldap = jhetz::ldap;
 using ldap::client_errc;
@@ -572,4 +573,122 @@ TEST_CASE("URL parsing into a monotonic buffer", "[url][pmr]")
 	REQUIRE(full.has_value());
 	CHECK(full->base_dn()->rdns()[0].avas[0].value.get_allocator().resource() == &arena);
 	CHECK(full->search_filter()->get_allocator().resource() == &arena);
+}
+
+TEST_CASE("server URLs: check_server and parse_server", "[url]")
+{
+	for (const auto *ok : { "ldap://ldap.example.org",
+		   "LDAPS://ldap.example.org:636",
+		   "ldap://ldap.example.org/",
+		   "ldap://[::1]:389",
+		   "ldap://[fe80::1%25eth0]",
+		   "ldapi://%2Fvar%2Frun%2Fslapd%2Fldapi",
+		   "ldap://h/????bindname=cn%3Dx",
+		   "ldap://h/???",
+		   "ldap://caf%C3%A9.example" }) {
+		INFO(ok);
+		auto u = ldap::url::parse_server(ok);
+		CHECK(u.has_value());
+		CHECK(ldap::url::parse(ok)->check_server().has_value());
+	}
+	const auto refused = [](std::string_view text, std::string_view context) {
+		INFO(text);
+		auto u = ldap::url::parse_server(text);
+		REQUIRE_FALSE(u.has_value());
+		CHECK(u.error().code == client_errc::invalid_url);
+		CHECK(std::string_view(u.error().context) == context);
+	};
+	constexpr auto no_search = "url: a server URL names no DN, attributes, scope or filter"sv;
+	refused("ldap://h/dc=example,dc=org", no_search);
+	refused("ldap://h/?cn", no_search);
+	refused("ldap://h/??sub", no_search);
+	refused("ldap://h/??\?(cn=x)", no_search);
+	refused("ldap://", "url: the URL names no host (or, for ldapi, no socket path)");
+	refused("ldapi://", "url: the URL names no host (or, for ldapi, no socket path)");
+	refused("ldap://h/???\?!x-unknown", "url: unsupported critical extension x-unknown");
+	refused("ldap://evil%00.example.org", "url: control character in the host");
+	refused("ldap://h%7F", "url: control character in the host");
+	refused("ldap://h:0", "url: port 0 at offset 9");
+	refused("http://h", "url: scheme is not ldap, ldaps or ldapi at offset 0");
+}
+
+TEST_CASE("server URLs: parse_servers", "[url]")
+{
+	auto list = ldap::url::parse_servers({ "ldap://a.example.org", "ldaps://b.example.org" });
+	REQUIRE(list.has_value());
+	REQUIRE(list->size() == 2);
+	CHECK((*list)[0].host() == "a.example.org");
+	CHECK((*list)[1].scheme() == url_scheme::ldaps);
+
+	const std::vector<std::string> config{ "ldap://a.example.org", "ldap://b.example.org/dc=x" };
+	auto bad = ldap::url::parse_servers(config);
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(bad.error().code == client_errc::invalid_url);
+	CHECK(std::string_view(bad.error().context)
+		  == "servers[1]: url: a server URL names no DN, attributes, scope or filter");
+
+	auto none = ldap::url::parse_servers(std::vector<std::string_view>{});
+	REQUIRE(none.has_value());
+	CHECK(none->empty());
+
+	std::pmr::monotonic_buffer_resource arena;
+	auto on_arena = ldap::url::parse_servers({ "ldap://a.example.org" }, &arena);
+	REQUIRE(on_arena.has_value());
+	CHECK((*on_arena)[0].get_allocator().resource() == &arena);
+}
+
+TEST_CASE("server URLs: the compile-time checked literal", "[url]")
+{
+	const ldap::url u{ "ldaps://ldap.example.org:1636" };
+	CHECK(u.scheme() == url_scheme::ldaps);
+	CHECK(u.host() == "ldap.example.org");
+	CHECK(u.port() == 1636);
+	CHECK(u == *ldap::url::parse("ldaps://ldap.example.org:1636"));
+
+	std::pmr::monotonic_buffer_resource arena;
+	const ldap::url on_arena{ "ldap://[::1]/", &arena };
+	CHECK(on_arena.get_allocator().resource() == &arena);
+	CHECK(on_arena.host() == "::1");
+	CHECK(on_arena.host_is_ipv6());
+	CHECK(on_arena.base_dn() == ldap::dn{});
+
+	using ldap::detail::is_server_url_literal;
+	static_assert(is_server_url_literal("ldap://h"));
+	static_assert(is_server_url_literal("LdApI://%2Ftmp%2Fs"));
+	static_assert(is_server_url_literal("ldap://h:"));
+	static_assert(is_server_url_literal("ldap://[2001:db8::1%25en0]:389/"));
+	static_assert(is_server_url_literal("ldap://192.0.2.1:65535"));
+	static_assert(!is_server_url_literal("ldap://"));
+	static_assert(!is_server_url_literal("ldap://h/dc=x"));
+	static_assert(!is_server_url_literal("ldap://h/????e"));
+	static_assert(!is_server_url_literal("ldap://h?x"));
+	static_assert(!is_server_url_literal("ldap://h#f"));
+	static_assert(!is_server_url_literal("ldap://u@h"));
+	static_assert(!is_server_url_literal("ldap://h:0"));
+	static_assert(!is_server_url_literal("ldap://h:65536"));
+	static_assert(!is_server_url_literal("ldap://h:1:2"));
+	static_assert(!is_server_url_literal("ldap://h%0"));
+	static_assert(!is_server_url_literal("ldap://h%00"));
+	static_assert(!is_server_url_literal("ldapi://s:1"));
+	static_assert(!is_server_url_literal("ldapi://[::1]"));
+	static_assert(!is_server_url_literal("ldap://[::1"));
+	static_assert(!is_server_url_literal("ldap://[v1.x]"));
+	static_assert(!is_server_url_literal("ldap://[::1]x"));
+	static_assert(!is_server_url_literal("ldap://[::1%25]"));
+	static_assert(!is_server_url_literal("http://h"));
+	static_assert(!is_server_url_literal("ldap:/h"));
+
+	// What the literal accepts, parse_server accepts too.
+	for (const auto *text : { "ldap://h",
+		   "LdApI://%2Ftmp%2Fs",
+		   "ldap://h:",
+		   "ldap://[2001:db8::1%25en0]:389/",
+		   "ldap://192.0.2.1:65535",
+		   "ldap://a!$&'()*+,;=b",
+		   "ldap://%C3%A9",
+		   "ldap://[::ffff:192.0.2.1]" }) {
+		INFO(text);
+		CHECK(ldap::detail::is_server_url_literal(text));
+		CHECK(ldap::url::parse_server(text).has_value());
+	}
 }

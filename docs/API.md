@@ -144,6 +144,13 @@ rationale is in [`DESIGN.md`](DESIGN.md).
   default), DN, attributes, scope, filter and extensions (with the critical
   `!` marker), all percent-decoded; `parse()` / `to_string()` round-trip.
   Absent and empty DN / scope / filter stay distinct, as referrals need.
+  Server URLs: `check_server()` (non-empty host without control
+  characters, no critical extension, no DN, attributes, scope or filter;
+  an empty DN is allowed), `parse_server(text, mr)`, `parse_servers(texts,
+  mr) -> result<std::vector<url>>` (any range of strings or a braced list;
+  the context names the failing index, `servers[1]`), and the explicit
+  compile-time checked literal `ldap::url{"ldaps://ldap.example.org"}`
+  (`scheme://host[:port]`, optional trailing `/`).
   Allocator-aware (`std::pmr`, see below).
 - `jhetz/ldap/referral.hpp`: `referral_target(url, request)`, the request
   that progresses an operation at a referral's target (RFC 4511 section
@@ -864,7 +871,9 @@ itself needs only ICU.
   or `release()`d. `shared_connection` is a non-owning handle made
   implicitly from a `connection &`; `chase_search`, `chase_compare`,
   `make_same_policy_connector` and `ad::change_password` /
-  `reset_password` take one. `servers` fail over in priority order with a per-server
+  `reset_password` take one. `servers` (checked with `url::check_server()` when the
+  client is built: an empty list or a refused entry fails every
+  `acquire()` with `invalid_url`) fail over in priority order with a per-server
   jittered exponential backoff (`backoff_options{initial, max,
   multiplier, auth_failure_min}`), and an idle connection to a
   lower-priority server goes back to the primary after `failback_after`.

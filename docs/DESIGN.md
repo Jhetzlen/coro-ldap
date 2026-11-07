@@ -63,7 +63,8 @@ No raw strings for LDAP concepts. Each type validates when it is built.
 ```cpp
 ldap::dn        base{"ou=people,dc=example,dc=org"};  // literal: checked at compile time
 ldap::attribute mail{"mail"};                         // case-insensitive equality and hashing
-auto            url = ldap::url::parse("ldaps://ldap.example.org");  // result<url>
+ldap::url       server{"ldaps://ldap.example.org"};    // server URL literal: checked at compile time
+auto            url = ldap::url::parse(user_text);     // result<url>
 
 ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never throws
 ```
@@ -123,13 +124,26 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
   `parse(text, mr)` never throws; `to_string()` is canonical and
   `parse(to_string()) == *this`. Absent and empty dn/scope/filter are kept
   apart (referral chasing needs "absent = same as the original request").
-  Allocator-aware (`std::pmr`), including its extensions. No literal
-  constructor: use `parse`.
+  Allocator-aware (`std::pmr`), including its extensions. Server URLs
+  (what `client_options::servers` holds) follow a server rule,
+  `check_server()`: a non-empty host (or ldapi socket path) without
+  control characters, no critical extension, and no DN (an empty one
+  aside), attributes, scope or filter. `parse_server(text, mr)` and
+  `parse_servers(texts, mr)` (a range or braced list of strings; the
+  error names the index) apply it after `parse`; the explicit literal
+  `ldap::url{"ldaps://ldap.example.org"}` checks `scheme://host[:port]`
+  (optional trailing `/`) at compile time, a subset of what
+  `parse_server` takes. `net::connect` shares the host and extension half
+  (`detail::check_server_address`) and ignores the DN and later parts, so
+  `connect(ioc, "ldap://host/dc=x")` still works; the client checks every
+  entry of `servers` when it is built, and a refused one makes every
+  `acquire()` fail at once (a typo is not hidden until failover).
 - `bytes`: not implemented; wire values are `std::pmr::string` holding raw
   octets (see section 10).
 - Literals go through `consteval` helper types (`dn::literal`,
-  `rdn::literal`, `attribute::literal`) that run the same scanner as
-  `parse()`, so an invalid literal is a compile error. A runtime
+  `rdn::literal`, `attribute::literal`, `url::literal`) that run the same
+  scanner as `parse()` (for `url`, a constexpr scanner accepting a subset
+  of `parse_server()`), so an invalid literal is a compile error. A runtime
   `const char*` does not compile there: runtime text must go through
   `parse()` returning `result<T>`.
 

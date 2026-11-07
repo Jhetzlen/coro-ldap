@@ -6,7 +6,7 @@ namespace ldap = jhetz::ldap;
 
 auto main(int argc, char *const *argv) -> int
 {
-	auto server = ldap::url::parse(argc > 1 ? argv[1] : "ldap://localhost");
+	auto server = ldap::url::parse_server(argc > 1 ? argv[1] : "ldap://localhost");
 	if (!server) {
 		std::cerr << server.error().message() << '\n';
 		return 1;

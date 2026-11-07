@@ -340,6 +340,23 @@ TEST_CASE("client: options it cannot use", "[net][client]")
 	CHECK(from.error().code == ldap::client_errc::not_connected);
 }
 
+TEST_CASE("client: a server URL check_server() refuses fails every acquire() up front", "[net][client]")
+{
+	pool_fixture f;
+	const auto with_dn = ldap::url::parse("ldap://127.0.0.1:1/dc=example,dc=org");
+	REQUIRE(with_dn.has_value());
+	f.make({ .servers = { f.refused_url(), *with_dn }, .observer = &f.obs });
+	for (int i = 0; i < 2; ++i) {
+		auto bad = f.acquire();
+		REQUIRE_FALSE(bad.has_value());
+		CHECK(bad.error().code == ldap::client_errc::invalid_url);
+		CHECK(std::string_view(bad.error().context)
+			  == "acquire: client_options::servers[1] ldap://127.0.0.1:1/dc=example,dc=org: a server URL names no DN, "
+				 "attributes, scope or filter");
+	}
+	CHECK(f.obs.events.empty());// the first server is not tried either
+}
+
 TEST_CASE("client: fails over to the next server", "[net][client][failover]")
 {
 	pool_fixture f;

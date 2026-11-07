@@ -5,7 +5,7 @@
 //
 //   corosio::io_context ioc;
 //   ldap::client pool(ioc, {
-//       .servers    = {*ldap::url::parse("ldap://ldap1.example.org"), *ldap::url::parse("ldap://ldap2.example.org")},
+//       .servers    = {ldap::url{"ldap://ldap1.example.org"}, ldap::url{"ldap://ldap2.example.org"}},
 //       .connection = {.timeout = 5s, .operation_timeout = 30s, .start_tls = true},
 //       .setup      = ldap::simple_bind_setup(ldap::dn{"cn=app,dc=example,dc=org"}, password),
 //   });
@@ -422,7 +422,10 @@ struct client_options
 	static constexpr std::chrono::milliseconds default_failback_after{ 300'000 };
 	static constexpr std::chrono::milliseconds default_probe_timeout{ 5'000 };
 
-	// In priority order. Empty: acquire() fails with invalid_url.
+	// In priority order; url::parse_servers, url::parse_server or the url
+	// literal build them. Empty, or an entry url::check_server() refuses
+	// (checked when the client is built): every acquire() fails with
+	// invalid_url.
 	std::vector<url> servers{};
 	// For every connection (connect timeout, TLS, operation_timeout,
 	// start_tls, ...).
