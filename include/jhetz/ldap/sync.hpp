@@ -9,7 +9,7 @@
 //
 //   ldap::sync::client pool({.servers = {...}, .setup = ldap::simple_bind_setup(...)});
 //   auto found = pool.search({.base = base});      // a shared lease for one search, retried once
-//   if (auto lease = pool.acquire()) lease->modify(...);   // shared: no bind, start_tls, unbind, close
+//   if (auto lease = pool.acquire()) lease->modify(...);   // shared: binds belong on acquire_exclusive()
 //
 // A sync::connection (a sync::client) owns an io_context and one I/O
 // thread running it. Each method starts the matching coroutine of
@@ -188,7 +188,7 @@ namespace detail {
 	  -> boost::capy::task<result<std::vector<std::byte>>>;
 	[[nodiscard]] auto close_of(ldap::connection &c) -> boost::capy::task<result<void>>;
 
-	template<class Derived, bool Session> class connection_api;
+	template<class Derived> class connection_api;
 }// namespace detail
 
 // ldap::transaction (transaction.hpp) for a sync::connection or a
@@ -232,7 +232,7 @@ class transaction
 	[[nodiscard]] auto abort() -> result<void>;
 
   private:
-	template<class, bool> friend class detail::connection_api;
+	template<class> friend class detail::connection_api;
 	transaction(std::shared_ptr<const detail::io_thread> io, std::unique_ptr<ldap::transaction> t) noexcept;
 
 	// Ends the ldap::transaction on the I/O thread, aborting it first if
@@ -249,14 +249,12 @@ class transaction
 namespace detail {
 
 	// The blocking ldap::connection operations, shared by sync::connection
-	// and the sync leases. With `Session` false (sync::lease, a shared
-	// connection) simple_bind, sasl_bind, start_tls, unbind and close are
-	// left out, as from ldap::shared_connection. `Derived` provides
+	// and the sync leases. `Derived` provides
 	//   call(make_task): runs make_task(c) on the I/O thread with its
 	//     ldap::connection c (const from a const member) and waits for it;
 	//   runner(): its io_thread, as the shared_ptr a sync::transaction
 	//     keeps.
-	template<class Derived, bool Session> class connection_api
+	template<class Derived> class connection_api
 	{
 	  public:
 		// As ldap::connection::is_open() / is_tls(): is_tls() is true only
@@ -287,20 +285,17 @@ namespace detail {
 		}
 
 		[[nodiscard]] auto simple_bind(dn name, std::string password) -> result<void>
-			requires Session
 		{
 			return self().call(
 			  [&](ldap::connection &c) { return c.simple_bind(std::move(name), std::move(password)); });
 		}
 		// `mechanism` is used on the I/O thread while the call runs.
 		[[nodiscard]] auto sasl_bind(sasl_mechanism &mechanism, dn name = {}) -> result<void>
-			requires Session
 		{
 			return self().call([&](ldap::connection &c) { return c.sasl_bind(mechanism, std::move(name)); });
 		}
 		[[nodiscard]] auto start_tls(net::tls_options options = {},
 		  std::optional<std::chrono::milliseconds> timeout = std::nullopt) -> result<void>
-			requires Session
 		{
 			return self().call([&](ldap::connection &c) { return c.start_tls(std::move(options), timeout); });
 		}
@@ -368,13 +363,11 @@ namespace detail {
 		}
 
 		[[nodiscard]] auto unbind() -> result<void>
-			requires Session
 		{
 			return self().call([](ldap::connection &c) { return c.unbind(); });
 		}
 		// Closes the connection at once (no UnbindRequest).
 		void close()
-			requires Session
 		{
 			(void)self().call([](ldap::connection &c) { return close_of(c); });
 		}
@@ -391,7 +384,7 @@ namespace detail {
 
 // The blocking ldap::connection: connect(), then the operations of
 // detail::connection_api (bind, search, add, ..., unbind, close).
-class connection : public detail::connection_api<connection, true>
+class connection : public detail::connection_api<connection>
 {
   public:
 	// Starts the I/O thread; not connected yet. `options` apply to
@@ -416,7 +409,7 @@ class connection : public detail::connection_api<connection, true>
 	[[nodiscard]] auto executor() const noexcept -> ldap::connection::executor_type { return io_.executor(); }
 
   private:
-	friend class detail::connection_api<connection, true>;
+	friend class detail::connection_api<connection>;
 
 	// Runs make_task(conn_) on the I/O thread and waits for its result;
 	// conn_ is const when called from a const member.
@@ -443,9 +436,10 @@ namespace detail {
 // A pooled connection of a sync::client (ldap::lease or
 // ldap::exclusive_lease, blocking): the operations of detail::connection_api
 // run on the leased connection, on the client's I/O thread. sync::lease
-// (acquire()) is shared, as ldap::lease: it has no simple_bind, sasl_bind,
-// start_tls, unbind or close (client.hpp, "Leases share connections by
-// default"); sync::exclusive_lease (acquire_exclusive()) has them all.
+// (acquire()) is shared, as ldap::lease: its simple_bind, sasl_bind,
+// start_tls, unbind and close change the session for every lease sharing
+// the connection (client.hpp, "Leases share connections by default"), so
+// use a sync::exclusive_lease (acquire_exclusive()) for them.
 // Its methods may be called from any number of threads at once, except
 // that moving, reassigning, release() and the destructor must not run
 // while another thread is inside one of its methods. A lease may outlive
@@ -459,7 +453,7 @@ namespace detail {
 // std::terminate() is called with a message on stderr. Move-only. Not
 // [[nodiscard]] as a class: it comes inside a result, which is
 // [[nodiscard]] on its own.
-template<bool Exclusive> class basic_lease : public detail::connection_api<basic_lease<Exclusive>, Exclusive>
+template<bool Exclusive> class basic_lease : public detail::connection_api<basic_lease<Exclusive>>
 {
   public:
 	basic_lease() noexcept = default;
@@ -483,7 +477,7 @@ template<bool Exclusive> class basic_lease : public detail::connection_api<basic
 	using held_lease = std::conditional_t<Exclusive, ldap::exclusive_lease, ldap::lease>;
 
 	friend class client;
-	friend class detail::connection_api<basic_lease, Exclusive>;
+	friend class detail::connection_api<basic_lease>;
 	basic_lease(std::shared_ptr<const detail::io_thread> io, held_lease held, url server) noexcept;
 
 	// Runs make_task(c) on the I/O thread with the leased connection c and
@@ -499,14 +493,7 @@ template<bool Exclusive> class basic_lease : public detail::connection_api<basic
 	}
 	[[nodiscard]] auto runner() const noexcept -> std::shared_ptr<const detail::io_thread> { return io_; }
 	// The leased ldap::connection; touched only on the I/O thread.
-	[[nodiscard]] auto leased() const noexcept -> ldap::connection &
-	{
-		if constexpr (Exclusive) {
-			return held_.get();
-		} else {
-			return ldap::detail::connection_of(held_.get());
-		}
-	}
+	[[nodiscard]] auto leased() const noexcept -> ldap::connection & { return held_.get(); }
 
 	// Shares the ownership of the client's I/O thread (an aliasing pointer
 	// to its client_core); null iff the lease holds nothing.

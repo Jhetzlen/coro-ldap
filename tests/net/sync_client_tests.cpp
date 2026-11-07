@@ -52,11 +52,6 @@ namespace {
 
 // The operations that change the session for everyone sharing a connection.
 template<class C>
-concept has_session_operation =
-  requires(C &c) { c.simple_bind(ldap::dn{}, std::string{}); } || requires(C &c, ldap::sasl_mechanism &m) {
-	  c.sasl_bind(m);
-  } || requires(C &c) { c.start_tls(); } || requires(C &c) { c.unbind(); } || requires(C &c) { c.close(); };
-template<class C>
 concept all_session_operations = requires(C &c, ldap::sasl_mechanism &m) {
 	c.simple_bind(ldap::dn{}, std::string{});
 	c.sasl_bind(m);
@@ -66,7 +61,7 @@ concept all_session_operations = requires(C &c, ldap::sasl_mechanism &m) {
 };
 
 static_assert(all_session_operations<ldap::sync::connection>);
-static_assert(!has_session_operation<ldap::sync::lease>);
+static_assert(all_session_operations<ldap::sync::lease>);
 static_assert(all_session_operations<ldap::sync::exclusive_lease>);
 
 auto pki() -> test_pki &

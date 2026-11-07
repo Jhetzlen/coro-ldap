@@ -146,13 +146,8 @@
 namespace jhetz::ldap {
 
 class connection;
-class shared_connection;
-class lease;
 
 namespace detail {
-	// The connection a shared_connection uses, for the library's own
-	// layers (the blocking facade, the pool) that run its operations on it.
-	[[nodiscard]] inline auto connection_of(shared_connection c) noexcept -> connection &;
 	// For tests only: the message id the next request tries first.
 	void set_next_message_id(connection &c, std::int32_t id) noexcept;
 	// For ldap::client: `hook` runs once, on the connection's executor, when
@@ -434,97 +429,6 @@ class connection
 
 	core *core_ = nullptr;// reference counted; allocated from the resource it records
 };
-
-// A connection that others use too, such as the one of a shared
-// ldap::lease (client.hpp): every operation of `connection` but those that
-// change the session for everyone sharing it (simple_bind, sasl_bind,
-// start_tls, unbind, close), which do not compile here. A non-owning handle,
-// cheap to copy (pass it by value), made implicitly from a connection, so
-// what takes one (chase_search, ad::change_password, ...) takes a
-// connection too. The connection must outlive it; the operations' rules
-// are the connection's.
-class shared_connection
-{
-  public:
-	using executor_type = connection::executor_type;
-
-	// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor): a connection is usable as one
-	shared_connection(connection &c) noexcept : conn_(&c) {}
-
-	[[nodiscard]] auto is_open() const noexcept -> bool { return conn_->is_open(); }
-	[[nodiscard]] auto name() const noexcept -> std::string_view { return conn_->name(); }
-	[[nodiscard]] auto executor() const noexcept -> executor_type { return conn_->executor(); }
-	[[nodiscard]] auto outstanding() const noexcept -> std::size_t { return conn_->outstanding(); }
-	[[nodiscard]] auto is_tls() const noexcept -> bool { return conn_->is_tls(); }
-	[[nodiscard]] auto security_layer() const noexcept -> sasl_protection { return conn_->security_layer(); }
-	[[nodiscard]] auto peer_certificate() const noexcept -> std::span<const std::byte>
-	{
-		return conn_->peer_certificate();
-	}
-	[[nodiscard]] auto channel_bindings() const noexcept -> ldap::channel_bindings { return conn_->channel_bindings(); }
-	[[nodiscard]] auto bind_count() const noexcept -> std::uint64_t { return conn_->bind_count(); }
-
-	auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
-	  -> boost::capy::task<result<search_result>>
-	{
-		return conn_->search(std::move(request), mr);
-	}
-	auto search_stream(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
-	  -> boost::capy::task<result<ldap::search_stream>>
-	{
-		return conn_->search_stream(std::move(request), mr);
-	}
-	auto search_paged(search_params request,
-	  std::int32_t page_size,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
-	  -> boost::capy::task<result<ldap::paged_search>>
-	{
-		return conn_->search_paged(std::move(request), page_size, mr);
-	}
-	auto add(add_params request) const -> boost::capy::task<result<response>> { return conn_->add(std::move(request)); }
-	auto modify(modify_params request) const -> boost::capy::task<result<response>>
-	{
-		return conn_->modify(std::move(request));
-	}
-	auto del(del_params request) const -> boost::capy::task<result<response>> { return conn_->del(std::move(request)); }
-	auto modify_dn(modify_dn_params request) const -> boost::capy::task<result<response>>
-	{
-		return conn_->modify_dn(std::move(request));
-	}
-	auto compare(compare_params request) const -> boost::capy::task<result<bool>>
-	{
-		return conn_->compare(std::move(request));
-	}
-	auto extended(extended_params request) const -> boost::capy::task<result<extended_result>>
-	{
-		return conn_->extended(std::move(request));
-	}
-	auto start_transaction(extended_controls controls = {}) const -> boost::capy::task<result<std::string>>
-	{
-		return conn_->start_transaction(std::move(controls));
-	}
-	auto end_transaction(std::string identifier, bool commit = true) const
-	  -> boost::capy::task<result<end_transaction_result>>
-	{
-		return conn_->end_transaction(std::move(identifier), commit);
-	}
-	auto begin_transaction(extended_controls controls = {}) const -> boost::capy::task<result<transaction>>
-	{
-		return conn_->begin_transaction(std::move(controls));
-	}
-
-  private:
-	friend class lease;
-	friend auto detail::connection_of(shared_connection c) noexcept -> connection &;
-
-	shared_connection() noexcept = default;
-
-	connection *conn_ = nullptr;
-};
-
-namespace detail {
-	inline auto connection_of(shared_connection c) noexcept -> connection & { return *c.conn_; }
-}// namespace detail
 
 // Opens a connection to `u` (net::connect: resolve, TCP, TLS for ldaps://,
 // Unix socket for ldapi://) with the timeout and TLS settings of `options`.

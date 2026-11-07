@@ -444,8 +444,8 @@ itself needs only ICU.
   closed with the connector.
 - `jhetz/ldap/extended_operations.hpp` (coro-ldap-aw4.4): the standard
   extended operations as free functions over `ldap::extended_directory`
-  (anything with `connection`'s `extended()`: `connection`, `client`, a
-  shared lease's `shared_connection`), written once: `who_am_i(d,
+  (anything with `connection`'s `extended()`: `connection`, `client`),
+  written once: `who_am_i(d,
   controls)` (RFC 4532; an authzId that is not UTF-8 is
   conversion_failed) and RFC 3062 Password Modify, `password_modify(d,
   params)` (the request as the RFC has it, a generated password
@@ -457,8 +457,8 @@ itself needs only ICU.
   `sync_extended_operations.hpp`: `sync::extended_directory` and the same
   four, blocking, over `sync::connection`, `sync::client` and the sync
   leases. Breaking: the members `who_am_i`, `password_modify`,
-  `change_password` and `reset_password` are gone from `connection`,
-  `shared_connection` and the sync facades, and `client::who_am_i` /
+  `change_password` and `reset_password` are gone from `connection`
+  and the sync facades, and `client::who_am_i` /
   `sync::client::who_am_i` with them (`client::extended` replaces them,
   retried only after `not_sent`, so a Who am I? on a client is no longer
   retried after a lost connection). The transactions
@@ -804,8 +804,7 @@ itself needs only ICU.
 - `jhetz/ldap/directory.hpp` (coro-ldap-2cx.1): the `ldap::directory`
   concept, the protocol operations a layer runs on (`search`, `add`,
   `modify`, `del`, `modify_dn` with `connection`'s signatures and
-  results), satisfied by `connection`, `client` and a shared lease's
-  `shared_connection`; `ldap::load_schema(directory &)`, the subschema
+  results), satisfied by `connection` and `client`; `ldap::load_schema(directory &)`, the subschema
   read over the public `search`; a limit code with no entry on either
   read is an error. `ldap::load_schema(client &)` (coro-ldap-2cx.2.2,
   defined in jhetz::ldap_net) runs both searches on one shared lease, so
@@ -865,18 +864,17 @@ itself needs only ICU.
   lease uses at once, not a pool of one connection per caller; raise it
   for exclusive leases (binds, StartTLS) or to isolate slow operations.
   `acquire() ->
-  task<result<lease>>`, the lease giving a `shared_connection`
-  (connection.hpp: every `connection` operation but `simple_bind`,
-  `sasl_bind`, `start_tls`, `unbind` and `close`, which do not compile on
-  it; `(*lease)->search(...)`), shared with other leases on the same
-  connection; `acquire_exclusive() -> task<result<exclusive_lease>>`, the
+  task<result<lease>>`, the lease giving the pooled `connection`
+  (`(*lease)->search(...)`), shared with other leases on the same
+  connection (coro-ldap-tfn: `shared_connection` is gone; `simple_bind`,
+  `sasl_bind`, `start_tls`, `unbind` and `close` through a shared lease
+  change the session for every lease sharing it); `acquire_exclusive() -> task<result<exclusive_lease>>`, the
   full `connection` on an idle or new connection nobody else uses while it
   is held (for binds, `start_tls()`, `unbind()`). Breaking:
   `acquire_options` is gone. A lease returns the connection when destroyed
-  or `release()`d. `shared_connection` is a non-owning handle made
-  implicitly from a `connection &`; `chase_search`, `chase_compare`,
+  or `release()`d. `chase_search`, `chase_compare`,
   `make_same_policy_connector` and `ad::change_password` /
-  `reset_password` take one. `servers` (checked with `url::check_server()` when the
+  `reset_password` take a `connection &` (a lease's too). `servers` (checked with `url::check_server()` when the
   client is built: an empty list or a refused entry fails every
   `acquire()` with `invalid_url`) fail over in priority order with a per-server
   jittered exponential backoff (`backoff_options{initial, max,
@@ -942,9 +940,9 @@ itself needs only ICU.
   and `acquire_exclusive() -> result<sync::exclusive_lease>`; a
   `sync::exclusive_lease` has `sync::connection`'s operations (bind,
   search, `search_paged`, add, modify, ...,
-  `begin_transaction`, `unbind`, `close`), run on the leased connection, a
-  `sync::lease` the same but `simple_bind`, `sasl_bind`, `start_tls`,
-  `unbind` and `close` (as `ldap::shared_connection`), both with
+  `begin_transaction`, `unbind`, `close`), run on the leased connection, and so
+  does a `sync::lease` (the five session operations then change the
+  session for every lease sharing it), both with
   `server()`, `release()` and `operator bool` (`sync::basic_lease`). The forwarders
   `search` and `compare`, and the write forwarders `add`,
   `modify`, `del`, `modify_dn` and `extended`, block and retry as the

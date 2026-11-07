@@ -1540,8 +1540,7 @@ Layering rule: the codec (descriptor, `value_traits`, `decode<T>`,
 conveniences are layers that call only the public protocol operations,
 over the `ldap::directory` concept (directory.hpp: `search`, `add`,
 `modify`, `del`, `modify_dn` with `connection`'s signatures), which
-`connection`, `client` and a shared lease's `shared_connection`
-satisfy. The same rule as the `ldap::ad` layer (section 12).
+`connection` and `client` satisfy. The same rule as the `ldap::ad` layer (section 12).
 
 ```cpp
 ldap::store people(pool, ldap::dn{"ou=people,dc=example,dc=org"}, ldap::named_by<&person::uid>);
@@ -2438,7 +2437,7 @@ decision left open.
 - **Leases share connections by default** (the open choice of the
   decision: "exclusive or shared"; the 3pf.6 review kept shared as the
   default and added exclusive). `acquire() -> task<result<lease>>`; a
-  lease gives a `shared_connection`, and several leases may hold the same
+  lease gives the pooled `connection`, and several leases may hold the same
   connection, their operations multiplexed on it. Why: the decision's
   default of one connection rests on multiplexing covering throughput,
   which exclusive leases would defeat (every concurrent task would queue
@@ -2468,27 +2467,20 @@ decision left open.
   acquire that waited and ends without a lease (stopped, timed out,
   destroyed) calls `notify()`, so the shared ones it held back look
   again at once (3pf.11).
-  Bind, `start_tls()` and `unbind()` belong on exclusive leases, and the
-  types say so: a shared `lease` gives `shared_connection` (connection.hpp),
-  a non-owning handle with every operation of `connection` but
-  `simple_bind`, `sasl_bind`, `start_tls`, `unbind` and `close`, so
-  calling them on a shared lease does not compile; an `exclusive_lease`
-  gives the `connection` itself (both derive from `detail::lease_base`:
-  `server()`, `release()`, `operator bool`). `close()` is left out too: it
-  ends the connection for every lease, as `unbind()` does. The run-time
-  `acquire_options{.exclusive}` became the two calls, so the type follows
-  the choice. Rejected: exclusive by default (it defeats multiplexing, see
-  above) and a louder comment (misuse would still compile; 3pf's review
-  found a pool handing out a connection being unbound, kmx.2.1).
-  `shared_connection` converts implicitly from `connection &`, so what
-  needs no session change takes one and accepts both: `chase_search`,
-  `chase_compare`, `make_same_policy_connector`, `ad::change_password` /
-  `reset_password`. The pool's own code reaches the connection under a
-  shared lease through `detail::connection_of()`, as the sync facade does
-  (the tests use it to play a lease that binds anyway). The blocking
-  facade splits the same way: `sync::lease` (`acquire()`) lacks the five
-  operations (`detail::connection_api<Derived, Session>` constrains them
-  on `Session`), `sync::exclusive_lease` (`acquire_exclusive()`) has them,
+  Bind, `start_tls()` and `unbind()` belong on exclusive leases. A
+  shared `lease` gives the `connection` itself, as an `exclusive_lease`
+  does (both derive from `detail::lease_base`: `server()`, `release()`,
+  `operator bool`); its `simple_bind`, `sasl_bind`, `start_tls`, `unbind`
+  and `close` change the session for every lease sharing the connection
+  (a bind retires it, see below). coro-ldap-9uu had a
+  `shared_connection` type without those five, so that misuse would not
+  compile; coro-ldap-tfn removed it by user decision (it was not
+  useful), and what took one (`chase_search`, `chase_compare`,
+  `make_same_policy_connector`, `ad::change_password` /
+  `reset_password`) takes `connection &` again. The `acquire_options{.exclusive}`
+  run-time flag stays two calls. The blocking facade matches:
+  `sync::lease` (`acquire()`) and `sync::exclusive_lease`
+  (`acquire_exclusive()`) both have every `sync::connection` operation,
   both `sync::basic_lease<Exclusive>`. The header says to use one client
   per identity and keep binds to the setup; per-identity sub-pools are a
   later bead. (`acquire()` is not a
@@ -2950,7 +2942,7 @@ AD's Win32 code at the start of a refusal's diagnostic is explained in
 the context (0000052D, 00000056, 00000005, 00000775) by
 `ad::explain(const error &)`, a codec function returning a static text
 (empty when the code is not one it knows); the diagnostic is kept as
-sent, and the core never interprets it. Overloads: `shared_connection`
+sent, and the core never interprets it. Overloads: `connection &`
 (a connection or a shared lease's) and
 `client &` (a shared lease, retried once after `not_sent` as the write
 forwarders are: the protection check needs the connection the modify goes

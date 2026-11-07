@@ -78,8 +78,8 @@
 //
 // Threading: the connections the connector returns must belong to the
 // origin's executor, and every task here runs on it. `origin` (a
-// connection, or a shared lease's shared_connection: a chase does not bind
-// it), and the connections the connector returns, must outlive the task.
+// connection, or a shared lease's: a chase does not bind it), and the
+// connections the connector returns, must outlive the task.
 //
 // make_same_policy_connector (below) builds a connector that keeps the
 // origin's security: no TLS downgrade, an allow-list of hosts, the
@@ -134,14 +134,14 @@ using referral_connector = std::function<boost::capy::task<result<connection *>>
 // or on the target of a referral result (as search() does); on the target
 // of a continuation reference it only makes that URI failed. A limit code
 // anywhere keeps the entries received and clears `complete`.
-auto chase_search(shared_connection origin,
+auto chase_search(connection &origin,
   search_params request,
   referral_connector connector,
   referral_policy policy = {},
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<chased_search>>;
 
 // connection::compare, chasing referral results.
-auto chase_compare(shared_connection origin,
+auto chase_compare(connection &origin,
   compare_params request,
   referral_connector connector,
   referral_policy policy = {}) -> boost::capy::task<result<chased_compare>>;
@@ -195,7 +195,7 @@ auto chase_compare(shared_connection origin,
 // (without an UnbindRequest), so keep it as long as the results need no
 // more of them; `ioc` must outlive it.
 [[nodiscard]] auto make_same_policy_connector(boost::corosio::io_context &ioc,
-  shared_connection origin,
+  const connection &origin,
   connection_options options,
   std::vector<std::string> allowed_host_suffixes,
   session_setup setup = {}) -> referral_connector;

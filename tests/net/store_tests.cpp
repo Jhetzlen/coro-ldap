@@ -62,14 +62,12 @@ constexpr auto ldap::schema<card> = ldap::describe(ldap::object_class("person"),
 
 static_assert(ldap::directory<ldap::connection>);
 static_assert(ldap::directory<ldap::client>);
-static_assert(ldap::directory<const ldap::shared_connection>);
 static_assert(ldap::sync::directory<ldap::sync::connection>);
 static_assert(ldap::sync::directory<ldap::sync::client>);
 static_assert(ldap::sync::directory<ldap::sync::lease>);
 static_assert(ldap::sync::directory<ldap::sync::exclusive_lease>);
 static_assert(ldap::extended_directory<ldap::connection>);
 static_assert(ldap::extended_directory<ldap::client>);
-static_assert(ldap::extended_directory<const ldap::shared_connection>);
 static_assert(ldap::sync::extended_directory<ldap::sync::connection>);
 static_assert(ldap::sync::extended_directory<ldap::sync::client>);
 static_assert(ldap::sync::extended_directory<ldap::sync::lease>);
@@ -380,19 +378,6 @@ TEST_CASE("store: schema_check::on_first_use", "[net][store][schema]")
 		m.check_server();
 		CHECK(m.log.received.size() == 4);
 	}
-}
-
-TEST_CASE("store: over a shared lease's connection", "[net][store]")
-{
-	mock_ldap m;
-	m.serve({ answer({ person_entry(1, "a", "1000"), done_msg(1) }) });
-	const ldap::shared_connection shared(m.conn);
-	ldap::store s(shared, people_base, ldap::named_by<&person::uid>);
-	static_assert(std::same_as<decltype(s)::source_type, const ldap::shared_connection>);
-	auto r = m.run(s.search());
-	REQUIRE(r.has_value());
-	CHECK(r->entries.size() == 1);
-	m.check_server();
 }
 
 TEST_CASE("sync store: the same operations, blocking", "[net][store][sync]")

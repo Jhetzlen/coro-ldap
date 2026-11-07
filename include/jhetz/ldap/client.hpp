@@ -9,19 +9,17 @@
 //       .connection = {.timeout = 5s, .operation_timeout = 30s, .start_tls = true},
 //       .setup      = ldap::simple_bind_setup(ldap::dn{"cn=app,dc=example,dc=org"}, password),
 //   });
-//   auto lease = co_await pool.acquire();   // result<ldap::lease>: a shared_connection
+//   auto lease = co_await pool.acquire();   // result<ldap::lease>: a shared ldap::connection
 //   if (!lease) ...                         // every server failed, or acquire_timeout
 //   auto people = co_await (*lease)->search({.base = ldap::dn{"ou=people,dc=example,dc=org"}});   // people->entries
 //   auto again = co_await pool.search({.base = ...});   // a shared lease for one search, retried once
 //   auto added = co_await pool.add({.entry = ..., .attributes = ...});   // retried only if never sent
 //
-// Leases share connections by default. A lease (acquire()) gives a
-// shared_connection on one pooled connection: every operation of
-// ldap::connection but simple_bind, sasl_bind, start_tls, unbind and close,
-// which do not compile on it. Several leases may use the same connection at
-// once: their operations are multiplexed on it (connection.hpp), which is
-// why max_connections defaults to 1. An exclusive_lease
-// (acquire_exclusive()) gives the full ldap::connection.
+// Leases share connections by default. A lease (acquire()) gives the
+// ldap::connection of one pooled connection, which several leases may use
+// at once: their operations are multiplexed on it (connection.hpp), which
+// is why max_connections defaults to 1. An exclusive_lease
+// (acquire_exclusive()) gives a connection no other lease shares.
 // acquire() hands out an idle connection (no lease) first, then opens a new
 // one while fewer than max_connections exist, and only then shares the
 // connection with the fewest leases: N connections give N-way isolation (a
@@ -36,9 +34,9 @@
 // what one changes on its connection the others would see: a bind would
 // change the identity of all of them, start_tls() would fail with
 // operation_in_progress while another lease has an operation outstanding,
-// and unbind() or close() would end the connection for everyone. So a
-// shared lease has none of them; they are on an exclusive lease
-// (acquire_exclusive()): an idle or new connection that no other lease
+// and unbind() or close() would end the connection for everyone. So use
+// them on an exclusive lease (acquire_exclusive()), not on a shared one,
+// whose connection has them too: an idle or new connection that no other lease
 // shares while it is held (from the moment its unbind() begins, the
 // connection is not handed out again). A connection whose bind_count()
 // changed (a bind done, failed, or still in progress) is never handed out
@@ -524,11 +522,11 @@ namespace detail {
 }// namespace detail
 
 // A shared use of one pooled connection (client::acquire()): other leases
-// may use the connection at once (see the header comment), so it gives a
-// shared_connection (connection.hpp), without the operations that change
-// the session for every lease (simple_bind, sasl_bind, start_tls, unbind,
-// close): those need an exclusive_lease. Destroy it on the client's
-// executor.
+// may use the connection at once (see the header comment). It gives the
+// full ldap::connection, but simple_bind, sasl_bind, start_tls, unbind and
+// close change the session for every lease sharing the connection (a bind
+// also retires it from the pool, see "Bind identity"): use an
+// exclusive_lease for those. Destroy it on the client's executor.
 class lease : public detail::lease_base
 {
   public:
@@ -540,15 +538,13 @@ class lease : public detail::lease_base
 	~lease() = default;
 
 	// The connection. Precondition: *this is true.
-	[[nodiscard]] auto get() const noexcept -> const shared_connection & { return view_; }
-	auto operator*() const noexcept -> const shared_connection & { return view_; }
-	auto operator->() const noexcept -> const shared_connection * { return &view_; }
+	[[nodiscard]] auto get() const noexcept -> connection & { return pooled(); }
+	auto operator*() const noexcept -> connection & { return pooled(); }
+	auto operator->() const noexcept -> connection * { return &pooled(); }
 
   private:
 	friend struct detail::client_state;
 	lease(std::shared_ptr<detail::client_state> state, std::shared_ptr<detail::pooled_connection> conn) noexcept;
-
-	shared_connection view_{};
 };
 
 // The exclusive use of one pooled connection (client::acquire_exclusive()):

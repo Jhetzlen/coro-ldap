@@ -1437,7 +1437,7 @@ namespace detail {
 }// namespace detail
 
 lease::lease(std::shared_ptr<detail::client_state> state, std::shared_ptr<detail::pooled_connection> conn) noexcept
-  : lease_base(std::move(state), std::move(conn)), view_(pooled())
+  : lease_base(std::move(state), std::move(conn))
 {}
 
 exclusive_lease::exclusive_lease(std::shared_ptr<detail::client_state> state,

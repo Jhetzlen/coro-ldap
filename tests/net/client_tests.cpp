@@ -297,12 +297,12 @@ struct pool_fixture
 };
 
 // The connection a lease is on, to tell connections apart.
-auto conn_of(const ldap::lease &l) -> const ldap::connection * { return &ldap::detail::connection_of(*l); }
+auto conn_of(const ldap::lease &l) -> const ldap::connection * { return &*l; }
 auto conn_of(const ldap::exclusive_lease &l) -> const ldap::connection * { return &*l; }
 
-// The whole connection under a shared lease: what the lease itself refuses
-// (a bind, unbind(), close()), to see how the pool copes.
-auto full(const ldap::lease &l) -> ldap::connection & { return ldap::detail::connection_of(*l); }
+// The connection under a shared lease, for what changes the session for
+// every lease (a bind, unbind(), close()), to see how the pool copes.
+auto full(const ldap::lease &l) -> ldap::connection & { return *l; }
 
 }// namespace
 
@@ -1145,20 +1145,14 @@ concept has_close = requires(C &c) { c.close(); };
 template<class C>
 concept session_operations =
   has_simple_bind<C> && has_sasl_bind<C> && has_start_tls<C> && has_unbind<C> && has_close<C>;
-template<class C>
-concept no_session_operations =
-  !has_simple_bind<C> && !has_sasl_bind<C> && !has_start_tls<C> && !has_unbind<C> && !has_close<C>;
 
 template<class Lease> using leased_t = decltype(*std::declval<Lease &>());
 
 static_assert(session_operations<ldap::connection>);
-static_assert(no_session_operations<const ldap::shared_connection>);
-static_assert(no_session_operations<leased_t<ldap::lease>>);
-static_assert(session_operations<leased_t<ldap::exclusive_lease>>);
-static_assert(std::is_convertible_v<ldap::connection &, ldap::shared_connection>);
-static_assert(!std::is_convertible_v<ldap::shared_connection, ldap::connection &>);
+static_assert(std::same_as<leased_t<ldap::lease>, ldap::connection &>);
+static_assert(std::same_as<leased_t<ldap::exclusive_lease>, ldap::connection &>);
 static_assert(session_operations<ldap::sync::connection>);
-static_assert(no_session_operations<ldap::sync::lease>);
+static_assert(session_operations<ldap::sync::lease>);
 static_assert(session_operations<ldap::sync::exclusive_lease>);
 
 }// namespace

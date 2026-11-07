@@ -93,7 +93,7 @@ namespace {
 		return std::unexpected(std::move(e));
 	}
 
-	auto send(shared_connection c, const prepared &p) -> capy::task<result<void>>
+	auto send(connection &c, const prepared &p) -> capy::task<result<void>>
 	{
 		if (auto ok = check_protection(c.is_open(), c.is_tls(), c.security_layer(), p); !ok) {
 			co_return ok;
@@ -101,7 +101,7 @@ namespace {
 		co_return settle(co_await c.modify(p.request), p);
 	}
 
-	auto run(shared_connection c, result<prepared> p) -> capy::task<result<void>>
+	auto run(connection &c, result<prepared> p) -> capy::task<result<void>>
 	{
 		if (!p) {
 			co_return std::unexpected(std::move(p.error()));
@@ -177,13 +177,13 @@ namespace {
 
 }// namespace
 
-auto change_password(shared_connection c, dn user, std::string_view old_password, std::string_view new_password)
+auto change_password(connection &c, dn user, std::string_view old_password, std::string_view new_password)
   -> capy::task<result<void>>
 {
 	return run(c, prepare(change_op, std::move(user), old_password, new_password));
 }
 
-auto reset_password(shared_connection c, dn user, std::string_view new_password) -> capy::task<result<void>>
+auto reset_password(connection &c, dn user, std::string_view new_password) -> capy::task<result<void>>
 {
 	return run(c, prepare(reset_op, std::move(user), std::nullopt, new_password));
 }
