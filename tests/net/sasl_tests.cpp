@@ -760,6 +760,64 @@ TEST_CASE("sasl: an offloaded step fails under locking_mode::unsafe", "[net][sas
 	CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));
 }
 
+// Forwards to a mechanism and records the thread each offloaded work ran on.
+class offload_recorder final : public ldap::sasl_mechanism
+{
+  public:
+	explicit offload_recorder(ldap::sasl_mechanism &inner) : inner_(&inner) {}
+
+	void prepare(const ldap::sasl_bind_context &context) override { inner_->prepare(context); }
+	[[nodiscard]] auto name() const noexcept -> std::string_view override { return inner_->name(); }
+	[[nodiscard]] auto start() -> ldap::result<std::optional<std::string>> override { return inner_->start(); }
+	[[nodiscard]] auto step(std::optional<std::string_view> challenge)
+	  -> ldap::result<std::optional<std::string>> override
+	{
+		return inner_->step(challenge);
+	}
+	[[nodiscard]] auto complete(std::optional<std::string_view> server_creds) -> ldap::result<void> override
+	{
+		return inner_->complete(server_creds);
+	}
+	[[nodiscard]] auto offload_start() -> ldap::sasl_work override { return record(inner_->offload_start()); }
+	[[nodiscard]] auto offload_step(std::optional<std::string_view> challenge) -> ldap::sasl_work override
+	{
+		return record(inner_->offload_step(challenge));
+	}
+	[[nodiscard]] auto channel_binding_used() const noexcept -> std::optional<ldap::channel_binding_type> override
+	{
+		return inner_->channel_binding_used();
+	}
+	[[nodiscard]] auto take_security_layer() -> std::unique_ptr<ldap::sasl_security_layer> override
+	{
+		return inner_->take_security_layer();
+	}
+
+	[[nodiscard]] auto worker_threads() const -> std::vector<std::thread::id>
+	{
+		const std::scoped_lock lock(mutex_);
+		return threads_;
+	}
+
+  private:
+	auto record(ldap::sasl_work work) -> ldap::sasl_work
+	{
+		if (!work) {
+			return work;
+		}
+		return [this, work = std::move(work)] mutable {
+			{
+				const std::scoped_lock lock(mutex_);
+				threads_.push_back(std::this_thread::get_id());
+			}
+			return work();
+		};
+	}
+
+	ldap::sasl_mechanism *inner_;
+	mutable std::mutex mutex_;
+	std::vector<std::thread::id> threads_;
+};
+
 // Under locking_mode::unsafe_io the scheduler keeps its lock, so the
 // offloaded step's thread may post its wakeup: the bind completes while
 // the I/O thread waits in the backend (epoll, and io_uring where the
@@ -812,11 +870,15 @@ TEST_CASE("sasl: offloaded steps under locking_mode::unsafe_io", "[net][sasl][of
 		constexpr std::string_view server_final = "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=";
 		mock_ldap m(unsafe_io, timeout);
 		m.serve({ answer({ sasl_resp(1, 14, server_first) }), answer({ sasl_resp(2, 0, server_final) }) });
-		auto mech = ldap::detail::scram_test_access::with_nonce(
+		auto scram = ldap::detail::scram_test_access::with_nonce(
 		  "user", "pencil", ldap::sasl_scram_options{ .offload_above_iterations = 0 }, "rOprNGfwEbeRWgbNEkqO");
+		offload_recorder mech(scram);
 		REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
 		m.check_server();
 		REQUIRE(m.log.received.size() == 2);
+		const auto threads = mech.worker_threads();
+		REQUIRE(threads.size() == 1);
+		CHECK(threads[0] != std::this_thread::get_id());
 	}
 }
 
