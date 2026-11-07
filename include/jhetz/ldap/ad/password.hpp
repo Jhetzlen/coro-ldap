@@ -33,9 +33,9 @@ namespace jhetz::ldap::ad {
 // refusals (0000052D: the password policy, 00000056: a wrong old password,
 // ...) are explained in the context (ad::explain, ad/diagnostic.hpp).
 // Passwords never appear in errors, and their memory is not wiped (see
-// extended_operations.hpp on password memory). `c` is a connection or a shared lease's
-// shared_connection; the connection must outlive the task; the passwords
-// are read before the call returns.
+// extended_operations.hpp on password memory). `c` is a connection or a
+// shared lease's shared_connection; the connection must outlive the task;
+// the passwords are read before the call returns.
 auto change_password(shared_connection c, dn user, std::string_view old_password, std::string_view new_password)
   -> boost::capy::task<result<void>>;
 auto reset_password(shared_connection c, dn user, std::string_view new_password) -> boost::capy::task<result<void>>;
