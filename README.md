@@ -2,6 +2,17 @@
 
 A modern C++23 LDAP client library built on coroutines.
 
+> **Requirement: Corosio's `io_context`.** The asynchronous API
+> (`ldap::connect`, `ldap::connection`, `ldap::client`, `net::connect`)
+> runs on a `boost::corosio::io_context` and its executor. It does not run
+> on Boost.Asio's or standalone Asio's `io_context`, nor on another
+> executor; a custom byte stream can be plugged in (any Capy stream, through
+> `net::transport::wrap`), but the connection still runs on a Corosio
+> `io_context`. Code without Corosio can use the blocking facades
+> (`ldap::sync::connection`, `ldap::sync::client`), which own their
+> `io_context` and I/O thread, or the codec library alone (`jhetz::ldap`:
+> BER, messages, DN, filter, URL), which has no networking dependency.
+
 ## Goal
 
 coro-ldap aims to be the LDAP client you would want to use from modern C++:
