@@ -7,6 +7,7 @@
 #include "net_test_support.hpp"
 #include "scram_test_access.hpp"
 
+#include <boost/corosio/backend.hpp>
 #include <boost/corosio/delay.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -20,6 +21,7 @@
 #include <semaphore>
 #include <stop_token>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -737,9 +739,10 @@ TEST_CASE("sasl: destroying the io_context waits for an offloaded step", "[net][
 }
 
 // The thread of an offloaded step posts to the io_context from outside, so
-// it needs Corosio's locking_mode::safe: under unsafe the step fails before
-// anything is sent, as Corosio's resolver does (coro-ldap-2px.1.3).
-TEST_CASE("sasl: an offloaded step needs locking_mode::safe", "[net][sasl][offload]")
+// it needs the scheduler lock (locking_mode::safe or unsafe_io): under
+// unsafe the step fails before anything is sent, as Corosio's resolver
+// does (coro-ldap-2px.1.3).
+TEST_CASE("sasl: an offloaded step fails under locking_mode::unsafe", "[net][sasl][offload]")
 {
 	mock_ldap m(corosio::io_context_options{ .locking = corosio::locking_mode::unsafe });
 	m.serve({ answer({ done_msg(1) }) });
@@ -748,13 +751,73 @@ TEST_CASE("sasl: an offloaded step needs locking_mode::safe", "[net][sasl][offlo
 	auto r = m.run(m.conn.sasl_bind(mech));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == std::errc::operation_not_supported);
-	CHECK_THAT(std::string(r.error().context), ContainsSubstring("locking_mode::safe"));
+	CHECK_THAT(std::string(r.error().context), ContainsSubstring("locking_mode::safe or unsafe_io"));
 	CHECK(mech.gate->started == 0);
 	CHECK(m.conn.is_open());
 	CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
 	m.check_server();
 	REQUIRE(m.log.received.size() == 1);
 	CHECK(std::holds_alternative<ldap::search_request>(m.log.received[0].op));
+}
+
+// Under locking_mode::unsafe_io the scheduler keeps its lock, so the
+// offloaded step's thread may post its wakeup: the bind completes while
+// the I/O thread waits in the backend (epoll, and io_uring where the
+// kernel allows it). A lost wakeup would end the bind with its timeout.
+TEST_CASE("sasl: offloaded steps under locking_mode::unsafe_io", "[net][sasl][offload]")
+{
+	const corosio::io_context_options unsafe_io{ .locking = corosio::locking_mode::unsafe_io };
+	const ldap::connection_options timeout{ .operation_timeout = std::chrono::seconds(10) };
+	const auto bind_while_blocked = [](mock_ldap &m) {
+		m.serve({ answer({ sasl_resp(1, 14, "c1") }), answer({ sasl_resp(2, 0) }) });
+		offload_mechanism mech;
+		const open_at_exit opener{ mech.gate };
+		const std::jthread later([gate = mech.gate] {
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			gate->allow(1);
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			gate->allow(2);
+		});
+		const auto start = std::chrono::steady_clock::now();
+		auto r = m.run(m.conn.sasl_bind(mech));
+		INFO((r ? std::string("bound") : std::string(r.error().message())));
+		REQUIRE(r.has_value());
+		CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(5));
+		CHECK(mech.gate->finished == 2);
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[1] == sasl_req(2, "X-SLOW", "re:c1"));
+	};
+	SECTION("default backend")
+	{
+		mock_ldap m(unsafe_io, timeout);
+		bind_while_blocked(m);
+	}
+#if BOOST_COROSIO_HAS_URING
+	SECTION("io_uring")
+	{
+		std::optional<mock_ldap> m;
+		try {
+			m.emplace(corosio::uring, unsafe_io, timeout);
+		} catch (const std::system_error &e) {
+			SKIP("io_uring unavailable: " << e.what());
+		}
+		bind_while_blocked(*m);
+	}
+#endif
+	SECTION("SCRAM-SHA-256 offloads PBKDF2")
+	{
+		constexpr std::string_view server_first =
+		  "r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096";
+		constexpr std::string_view server_final = "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=";
+		mock_ldap m(unsafe_io, timeout);
+		m.serve({ answer({ sasl_resp(1, 14, server_first) }), answer({ sasl_resp(2, 0, server_final) }) });
+		auto mech = ldap::detail::scram_test_access::with_nonce(
+		  "user", "pencil", ldap::sasl_scram_options{ .offload_above_iterations = 0 }, "rOprNGfwEbeRWgbNEkqO");
+		REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+	}
 }
 
 // A high iteration count runs PBKDF2 on a thread of its own, so the

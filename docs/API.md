@@ -626,9 +626,9 @@ itself needs only ICU.
   on its thread; `io_context::run()` returns only after it, and
   destroying the io_context (or a `sync::connection`) waits for its
   thread to end, as long as krb5's own timeouts. That needs an io_context
-  that accepts posts from other threads (the default `locking_mode::safe`;
-  under `unsafe` the bind fails with `std::errc::operation_not_supported`
-  before anything is sent; `unsafe_io` is unsupported).
+  that accepts posts from other threads (the default `locking_mode::safe`,
+  or `unsafe_io`; under `unsafe` the bind fails with
+  `std::errc::operation_not_supported` before anything is sent).
   `examples/gssapi.cpp` binds with StartTLS and the default ticket.
 - SASL NTLM (`sasl_ntlm`, `jhetz/ldap/sasl_ntlm.hpp`, MS-NLMP NTLMv2):
   `sasl_ntlm(username, password, sasl_ntlm_options)` binds to Active

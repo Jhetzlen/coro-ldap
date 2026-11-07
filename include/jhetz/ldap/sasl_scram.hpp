@@ -84,17 +84,14 @@
 //   (sasl_scram_options::max_iterations) when the servers are known.
 // - PBKDF2 (the SaltedPassword) runs on a thread of its own when the
 //   server asks for more than options.offload_above_iterations (16'384 by
-//   default) and the io_context can be woken from another thread (Corosio's
-//   default locking_mode::safe): sasl_bind hands it the step through
-//   offload_step() (sasl.hpp), so other operations on the io_context go on
-//   meanwhile. Up to that count, or under locking_mode::unsafe, it runs on
+//   default) and the io_context can be woken from another thread
+//   (locking_mode::safe, Corosio's default, or unsafe_io): sasl_bind hands
+//   it the step through offload_step() (sasl.hpp), so other operations on
+//   the io_context go on meanwhile. Up to that count, or under locking_mode::unsafe, it runs on
 //   the I/O thread, inside step() (a few ms at most by default: less than a
 //   thread start is worth). The bind's timeout and cancellation apply to
 //   the wait; a step given up on runs to its end with copies of what it
-//   needs, and its result is dropped. locking_mode::unsafe_io cannot be
-//   told from safe and is unsupported for an offloaded step (its wakeup may
-//   be lost under io_uring): set offload_above_iterations to
-//   max_iterations to keep PBKDF2 inline there.
+//   needs, and its result is dropped.
 // - The SaltedPassword is cached per (salt, iteration count): a later bind
 //   with the same object to a server that sends the same salt and count
 //   (the same stored keys) skips PBKDF2. A different salt or count replaces

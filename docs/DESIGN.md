@@ -618,14 +618,15 @@ outlives the io_context. The cost:
 destroying the io_context (and so `sync::connection`'s destructor)
 waits for a step still running, as long as krb5's own timeouts. A
 thread that has ended is joined when the next one starts, so they do
-not pile up. The posts from the worker need
-Corosio's default `locking_mode::safe`: under `unsafe` (no scheduler
+not pile up. The posts from the worker need the scheduler lock
+(Corosio's default `locking_mode::safe`, or `unsafe_io`): under `unsafe` (no scheduler
 locking) `run_offloaded` fails with `std::errc::operation_not_supported`
 before starting the thread, as Corosio's resolver does
 (`detail::scheduler::scheduler_locking_disabled()`); `unsafe_io` keeps
-scheduler locking but io_uring then skips the cross-thread wakeup, and
-Corosio exposes nothing to tell it from `safe`, so it is documented as
-unsupported. A thread per call rather than a
+scheduler locking, which is all the worker's post and work-guard release
+need, and Corosio wakes a `run()` blocked in epoll or io_uring for it
+(tested on both backends: `sasl: offloaded steps under
+locking_mode::unsafe_io`), so offloading works there as under `safe`. A thread per call rather than a
 pool: Capy's system pool (`get_system_context()`) is shared and sized for
 CPU work, and a KDC call can block one of its threads for many seconds;
 Corosio's blocking-call pool (used for getaddrinfo) is
@@ -650,9 +651,8 @@ choice (about 0.45 µs per iteration on a current x86-64 core: 2 ms at
 about 7 ms) `offload_step()` hands it to `sasl_bind` to run on a thread
 of its own (coro-ldap-zzz). Up to it, a thread start (tens of µs) and the
 two extra hops through the scheduler are not worth it, the common server
-defaults (4096, cyrus-sasl's 10'000) stay inline, and with them binds
-under `locking_mode::unsafe_io` (undetectable, where the offloaded
-wakeup may be lost under io_uring); under `unsafe` (`can_offload` false)
+defaults (4096, cyrus-sasl's 10'000) stay inline; under `unsafe_io` an
+offloaded PBKDF2 works as under `safe`; under `unsafe` (`can_offload` false)
 PBKDF2 always runs inline, so SCRAM keeps working there. The offloaded
 work owns a `shared_ptr` block (`derivation`: the prepared password
 moved in, the salt, the count, the AuthMessage; out: the SaltedPassword
@@ -2125,10 +2125,11 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   reader, writer and StartTLS handshake run under their own stop tokens.
   So a stop from any thread is safe only with Corosio's default
   `locking_mode::safe`. Under `unsafe_io` and `unsafe` the stop must come
-  from the thread running the io_context: both tiers forbid a post from
-  another thread (`unsafe` has no scheduler lock; `unsafe_io` drops the I/O
-  locks, and on io_uring it also skips the eventfd wake, so a `run()`
-  blocked in the ring never sees the posted resumption). Neither helper
+  from the thread running the io_context: `unsafe_io` keeps the scheduler
+  lock (another thread may post, and Corosio wakes a `run()` blocked in
+  epoll or the ring) but drops the I/O locks the socket cancellations
+  above take; `unsafe` has no scheduler lock, so no post from another
+  thread at all. Neither helper
   owns anything beyond its coroutine frame, which outlives the operation it
   awaits.
 - Bind sequencing (RFC 4511 section 4.2.1: no PDU while a BindRequest is

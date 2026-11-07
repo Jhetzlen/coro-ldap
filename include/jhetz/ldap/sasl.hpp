@@ -46,8 +46,8 @@ struct sasl_bind_context
 	// Whether a step can be offloaded (offload_start, offload_step): false
 	// when the io_context is in locking_mode::unsafe, where offloaded work
 	// fails (sasl_work), so that a mechanism whose offloading is optional
-	// (SCRAM's PBKDF2) runs the step inline instead. True otherwise,
-	// unsafe_io included (it cannot be detected). False when prepare() is
+	// (SCRAM's PBKDF2) runs the step inline instead. True otherwise (safe
+	// and unsafe_io, which keep the scheduler lock). False when prepare() is
 	// called with a default sasl_bind_context.
 	bool can_offload = false;
 	// Whether TLS protects the connection (connection::is_tls()).
@@ -70,10 +70,10 @@ struct sasl_bind_context
 // while the mechanism may be destroyed or start another bind, so it must
 // own (or share) everything it uses, and the mechanism must not touch that
 // state again until the work is over. Its result is then discarded. The
-// thread wakes the bind through the io_context, so the io_context must use
-// Corosio's default locking_mode::safe: under unsafe the step fails with
-// std::errc::operation_not_supported before the work runs; unsafe_io (which
-// cannot be detected) is unsupported, its wakeup may be lost.
+// thread wakes the bind through the io_context, so the io_context must keep
+// its scheduler lock (locking_mode::safe, Corosio's default, or unsafe_io):
+// under unsafe the step fails with std::errc::operation_not_supported
+// before the work runs.
 using sasl_work = std::move_only_function<result<std::optional<std::string>>()>;
 
 // The protection a SASL security layer gives the rest of the session (RFC
@@ -161,7 +161,8 @@ class sasl_mechanism
 	// another thread (sasl_work). sasl_bind calls these in place of start()
 	// and step(), and uses the work's result as theirs; empty work (the
 	// default) means start() or step() is called on the I/O thread instead.
-	// Non-empty work needs an io_context in locking_mode::safe (sasl_work).
+	// Non-empty work needs an io_context in locking_mode::safe or unsafe_io
+	// (sasl_work).
 	[[nodiscard]] virtual auto offload_start() -> sasl_work { return {}; }
 	[[nodiscard]] virtual auto offload_step(std::optional<std::string_view> challenge) -> sasl_work
 	{

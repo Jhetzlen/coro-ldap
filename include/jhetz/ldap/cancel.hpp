@@ -22,9 +22,9 @@
 // request_stop() may be called from any thread only while the io_context
 // uses Corosio's default locking_mode::safe; the operation still completes on
 // the connection's executor. Under locking_mode::unsafe_io and unsafe, call
-// it only on the thread running the io_context: posting from another thread
-// is unsupported there (io_uring, for one, then skips the wake, so a run()
-// blocked in the ring would not see the stop).
+// it only on the thread running the io_context: the stop cancels socket
+// operations, which takes the per-descriptor I/O locks unsafe_io turns
+// off, and unsafe allows no post from another thread at all.
 //
 // Either way the operation is cancelled as by its own timeout (see
 // "Cancellation and timeouts" in connection.hpp): it fails with

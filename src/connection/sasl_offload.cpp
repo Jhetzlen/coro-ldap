@@ -135,11 +135,12 @@ auto run_offloaded(corosio::io_context::executor_type ex,
 {
 	// The thread posts its wakeup and drops its work from outside the
 	// I/O thread, undefined behaviour under locking_mode::unsafe, so the
-	// step fails at once there, as Corosio's resolver does (unsafe_io
-	// cannot be told from safe: documented instead).
+	// step fails at once there, as Corosio's resolver does. unsafe_io
+	// keeps the scheduler lock, so the post is fine there.
 	if (corosio::detail::get_scheduler(ex.context()).scheduler_locking_disabled()) {
 		co_return fail(std::make_error_code(std::errc::operation_not_supported),
-		  "the mechanism's step runs on a thread of its own, which needs an io_context in locking_mode::safe");
+		  "the mechanism's step runs on a thread of its own, which needs an io_context in locking_mode::safe or "
+		  "unsafe_io");
 	}
 	auto shared = std::make_shared<offloaded>(std::move(work));
 	try {

@@ -236,6 +236,16 @@ struct mock_ldap : scripted_server<mock_ldap>
 		log.hang_up = [this] { sockets.server.close(); };
 	}
 
+	// Over an io_context with the backend `backend` (corosio::uring, say)
+	// made with `io`.
+	template<class Backend>
+		requires requires { Backend::construct; }
+	mock_ldap(Backend backend, const corosio::io_context_options &io, const ldap::connection_options &options = {})
+	  : ioc(backend, io), conn(ioc, net::transport::wrap(socket_ref{ &sockets.client }, "mock"), options)
+	{
+		log.hang_up = [this] { sockets.server.close(); };
+	}
+
 	mock_ldap(const mock_ldap &) = delete;
 	auto operator=(const mock_ldap &) -> mock_ldap & = delete;
 
