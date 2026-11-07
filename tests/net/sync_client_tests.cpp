@@ -531,6 +531,7 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 		ldap::result<std::string> forwarded{};
 		ldap::result<ldap::response> written{};
 		ldap::result<std::string> on_lease{};
+		ldap::result<ldap::server_schema> schema{};
 		std::size_t connections = 0;
 	};
 	std::promise<from_io_thread> got;
@@ -541,6 +542,7 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 		  r.forwarded = ldap::sync::who_am_i(p);
 		  r.written = p.del({ .entry = ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" } });
 		  r.on_lease = ldap::sync::who_am_i(l);
+		  r.schema = ldap::sync::load_schema(p);
 		  r.connections = p.connections();
 		  out.set_value(std::move(r));
 		  co_return;
@@ -555,6 +557,9 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 		CHECK(e->code == ldap::client_errc::would_deadlock);
 		CHECK(e->context == "sync::client");
 	}
+	REQUIRE_FALSE(r.schema.has_value());
+	CHECK(r.schema.error().code == ldap::client_errc::would_deadlock);
+	CHECK(r.schema.error().context == "load schema: sync::client");
 	CHECK(r.connections == 1);// read at once on the I/O thread
 	// Everything still works from other threads.
 	CHECK(ldap::sync::who_am_i(pool) == "dn:cn=me");

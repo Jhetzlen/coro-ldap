@@ -480,7 +480,11 @@ auto client::compare(compare_params request) -> result<bool>
 
 auto load_schema(client &c) -> result<server_schema>
 {
-	return c.core_->io.run([&c] { return ldap::load_schema(*c.core_->pool); });
+	auto r = c.core_->io.run([&c] { return ldap::load_schema(*c.core_->pool); });
+	if (!r && r.error().code == client_errc::would_deadlock) {
+		return std::unexpected(ldap::detail::with_context(std::move(r.error()), ldap::detail::load_schema_context));
+	}
+	return r;
 }
 
 
