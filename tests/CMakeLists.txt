@@ -49,11 +49,14 @@ jhetz_ldap_warnings(jhetz_ldap_tests)
 catch_discover_tests(jhetz_ldap_tests)
 
 # Replaces the global operator new / delete to count allocations, so it
-# gets its own executable.
-add_executable(jhetz_ldap_alloc_tests schema_alloc_tests.cpp)
-target_link_libraries(jhetz_ldap_alloc_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)
-jhetz_ldap_warnings(jhetz_ldap_alloc_tests)
-catch_discover_tests(jhetz_ldap_alloc_tests)
+# gets its own executable. Not built with ThreadSanitizer, whose runtime
+# defines operator new / delete too.
+if(NOT CMAKE_CXX_FLAGS MATCHES "-fsanitize=([^ ]*,)?thread")
+    add_executable(jhetz_ldap_alloc_tests schema_alloc_tests.cpp)
+    target_link_libraries(jhetz_ldap_alloc_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)
+    jhetz_ldap_warnings(jhetz_ldap_alloc_tests)
+    catch_discover_tests(jhetz_ldap_alloc_tests)
+endif()
 
 # Compile tests for the mapping's compile-time checks (DESIGN.md section 4)
 # and the per-operation request controls (section 3):

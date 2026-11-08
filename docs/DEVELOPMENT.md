@@ -777,7 +777,9 @@ pair of invocations):
 client and one store from many tasks on an io_context run by 4 threads;
 the integration test `[threads]` does the same against slapd. Run them,
 and the other net tests, under TSan in a Clang build of their own
-(`JHETZ_LDAP_SANITIZE` is ASan + UBSan, which TSan excludes):
+(`JHETZ_LDAP_SANITIZE` is ASan + UBSan, which TSan excludes;
+`jhetz_ldap_alloc_tests`, which replaces operator new / delete as the TSan
+runtime does, is left out of a `-fsanitize=thread` build):
 
 ```sh
 CXX=clang++ cmake -B build/tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_WERROR=OFF \
