@@ -41,8 +41,8 @@ template<directory D> [[nodiscard]] auto load_schema(D &d) -> result<server_sche
 // lease, run once more on a new lease after cond::connection_lost.
 [[nodiscard]] auto load_schema(client &c) -> result<server_schema>;
 
-// As ldap::store, blocking. The source must outlive the store. Not
-// thread-safe: one thread at a time per store.
+// As ldap::store, blocking. The source must outlive the store. One store
+// may be used from several threads at once.
 template<auto Naming, directory D> class store
 {
 	using codec = ldap::detail::store_codec<Naming>;
@@ -147,22 +147,22 @@ template<auto Naming, directory D> class store
 			return {};
 		}
 		const ldap::detail::source_protection now = ldap::detail::protection_of(*source_);
-		if (!checked_ || checked_under_ != now) {
-			auto s = sync::load_schema(*source_);
-			if (!s) {
-				return std::unexpected(std::move(s.error()));
-			}
-			checked_ = codec::check(*s);
-			checked_under_ = now;
+		if (auto known = checked_.find(now)) {
+			return std::move(*known);
 		}
-		return *checked_;
+		auto s = sync::load_schema(*source_);
+		if (!s) {
+			return std::unexpected(std::move(s.error()));
+		}
+		auto outcome = codec::check(*s);
+		checked_.record(outcome, now);
+		return outcome;
 	}
 
 	D *source_;
 	dn base_;
 	store_options options_;
-	std::optional<result<void>> checked_{};
-	ldap::detail::source_protection checked_under_{};
+	ldap::detail::schema_check_cache checked_{};
 };
 
 }// namespace jhetz::ldap::sync

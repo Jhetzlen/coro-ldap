@@ -27,6 +27,7 @@
 #include <boost/capy/task.hpp>
 
 #include <concepts>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -237,12 +238,67 @@ namespace detail {
 		}
 	}
 
+	// A store's schema-check outcome and the protection it was made under,
+	// behind a lock: one store may be used from several threads.
+	class schema_check_cache
+	{
+	  public:
+		schema_check_cache() = default;
+		schema_check_cache(const schema_check_cache &other) : schema_check_cache(other, std::scoped_lock(other.mutex_))
+		{}
+		schema_check_cache(schema_check_cache &&other) : schema_check_cache(other, std::scoped_lock(other.mutex_)) {}
+		auto operator=(const schema_check_cache &other) -> schema_check_cache &
+		{
+			if (this != &other) {
+				const std::scoped_lock lock(mutex_, other.mutex_);
+				outcome_ = other.outcome_;
+				under_ = other.under_;
+			}
+			return *this;
+		}
+		auto operator=(schema_check_cache &&other) -> schema_check_cache &
+		{
+			if (this != &other) {
+				const std::scoped_lock lock(mutex_, other.mutex_);
+				outcome_ = std::move(other.outcome_);
+				under_ = other.under_;
+			}
+			return *this;
+		}
+		~schema_check_cache() = default;
+
+		// The outcome recorded under `now`, if any.
+		[[nodiscard]] auto find(source_protection now) const -> std::optional<result<void>>
+		{
+			const std::scoped_lock lock(mutex_);
+			if (!outcome_ || under_ != now) {
+				return std::nullopt;
+			}
+			return outcome_;
+		}
+		void record(const result<void> &outcome, source_protection now)
+		{
+			const std::scoped_lock lock(mutex_);
+			outcome_ = outcome;
+			under_ = now;
+		}
+
+	  private:
+		schema_check_cache(const schema_check_cache &other, const std::scoped_lock<std::mutex> & /*held*/)
+		  : outcome_(other.outcome_), under_(other.under_)
+		{}
+
+		mutable std::mutex mutex_;
+		std::optional<result<void>> outcome_{};
+		source_protection under_{};
+	};
+
 }// namespace detail
 
 // The entries of `T` (the struct owning `Naming`) under `base`, each named
 // <naming attribute>=<value>,<base>. Every operation is a task that refers
-// to *this and to the source: both must outlive it. Not thread-safe: use it
-// on the source's executor.
+// to *this and to the source: both must outlive it. One store may be used
+// from several threads at once, as its source (a connection, a client).
 template<auto Naming, directory D> class store
 {
 	using codec = detail::store_codec<Naming>;
@@ -363,22 +419,22 @@ template<auto Naming, directory D> class store
 			co_return result<void>{};
 		}
 		const detail::source_protection now = detail::protection_of(*source_);
-		if (!checked_ || checked_under_ != now) {
-			auto s = co_await load_schema(*source_);
-			if (!s) {
-				co_return std::unexpected(std::move(s.error()));
-			}
-			checked_ = codec::check(*s);
-			checked_under_ = now;
+		if (auto known = checked_.find(now)) {
+			co_return std::move(*known);
 		}
-		co_return *checked_;
+		auto s = co_await load_schema(*source_);
+		if (!s) {
+			co_return std::unexpected(std::move(s.error()));
+		}
+		auto outcome = codec::check(*s);
+		checked_.record(outcome, now);
+		co_return outcome;
 	}
 
 	D *source_;
 	dn base_;
 	store_options options_;
-	std::optional<result<void>> checked_{};
-	detail::source_protection checked_under_{};
+	detail::schema_check_cache checked_{};
 };
 
 }// namespace jhetz::ldap
