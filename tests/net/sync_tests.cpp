@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <future>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -188,6 +189,25 @@ TEST_CASE("sync: run() runs an async free function on the I/O thread", "[net][sy
 	REQUIRE_FALSE(s.has_value());
 	CHECK(s.error().code == ldap::client_errc::not_connected);
 	CHECK(s.error().context == "load schema: sync::connection: not connected");
+}
+
+TEST_CASE("sync: run() rejects results that must be destroyed on the I/O thread", "[net][sync]")
+{
+	using ldap::sync::detail::io_thread_bound;
+	STATIC_CHECK(io_thread_bound<ldap::search_stream>);
+	STATIC_CHECK(io_thread_bound<ldap::paged_search>);
+	STATIC_CHECK(io_thread_bound<ldap::record_stream<int, ldap::search_stream>>);
+	STATIC_CHECK(io_thread_bound<ldap::lease>);
+	STATIC_CHECK(io_thread_bound<ldap::exclusive_lease>);
+	STATIC_CHECK(io_thread_bound<ldap::transaction>);
+	STATIC_CHECK(io_thread_bound<ldap::result<ldap::search_stream>>);
+	STATIC_CHECK(io_thread_bound<ldap::result<std::optional<ldap::lease>>>);
+	STATIC_CHECK(io_thread_bound<ldap::result<std::unique_ptr<ldap::transaction>>>);
+	STATIC_CHECK(io_thread_bound<std::shared_ptr<ldap::exclusive_lease>>);
+	STATIC_CHECK_FALSE(io_thread_bound<ldap::result<void>>);
+	STATIC_CHECK_FALSE(io_thread_bound<ldap::result<std::string>>);
+	STATIC_CHECK_FALSE(io_thread_bound<ldap::result<ldap::search_result>>);
+	STATIC_CHECK_FALSE(io_thread_bound<ldap::result<std::optional<ldap::entry>>>);
 }
 
 TEST_CASE("sync: search_paged leaves nothing on the caller's resource once it returns", "[net][sync]")

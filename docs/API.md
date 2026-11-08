@@ -907,7 +907,11 @@ itself needs only ICU.
   or a lease's) or `ldap::client` and the task it returns is waited for,
   `ldap::sync::run(c, [](auto &a) { return ldap::who_am_i(a); })`; its
   `result<T>` is returned, after the facade's own `not_connected` and
-  `would_deadlock`. `sync::directory` is the concept of the four facades
+  `would_deadlock`. A task whose result has to be destroyed on the I/O
+  thread (a `search_stream`, `paged_search`, `record_stream`, `lease`,
+  `exclusive_lease` or `transaction`, also inside `result`,
+  `std::optional`, `std::unique_ptr` or `std::shared_ptr`) is rejected by
+  a `static_assert`. `sync::directory` is the concept of the four facades
   (`sync::connection`, `sync::lease`, `sync::exclusive_lease`,
   `sync::client`); the blocking conveniences (`sync::who_am_i`,
   `sync::search_paged`, `sync::load_schema`, `sync::store`,

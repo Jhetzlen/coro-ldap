@@ -2426,7 +2426,10 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   through `detail::facade_access`. The task must end what it creates on
   the I/O thread before it returns (`sync::search_paged` reads every page
   of its `paged_search` on the connection's strand, or destroys it
-  there): the facades hand out no streams.
+  there): the facades hand out no streams. A `static_assert` on the
+  `detail::io_thread_bound` trait rejects a task whose result is (or
+  wraps, in `result`, `std::optional` or a smart pointer) a stream, a
+  `paged_search`, a lease or a transaction.
 - The noexcept paths that end objects of the I/O thread (the
   destructors of `sync::connection`'s core and of the client's core,
   `sync::transaction`'s abort, `sync::lease::release()`) go through

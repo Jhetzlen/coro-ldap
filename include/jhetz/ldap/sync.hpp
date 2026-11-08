@@ -68,6 +68,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <expected>
 #include <functional>
 #include <future>
 #include <memory>
@@ -82,7 +83,8 @@
 
 namespace jhetz::ldap {
 class server_schema;
-}
+template<class T, class Stream> class record_stream;
+}// namespace jhetz::ldap
 
 namespace jhetz::ldap::sync {
 
@@ -685,6 +687,21 @@ namespace detail {
 	{
 		template<class D, class F> static auto call(D &d, const F &make_task) { return d.call(make_task); }
 	};
+
+	// True for the types that must be destroyed on their connection's I/O
+	// thread (streams, leases, transactions), alone or inside result<T>,
+	// std::optional, std::unique_ptr or std::shared_ptr.
+	template<class T> inline constexpr bool io_thread_bound = false;
+	template<> inline constexpr bool io_thread_bound<ldap::search_stream> = true;
+	template<> inline constexpr bool io_thread_bound<ldap::paged_search> = true;
+	template<> inline constexpr bool io_thread_bound<ldap::lease> = true;
+	template<> inline constexpr bool io_thread_bound<ldap::exclusive_lease> = true;
+	template<> inline constexpr bool io_thread_bound<ldap::transaction> = true;
+	template<class T, class Stream> inline constexpr bool io_thread_bound<ldap::record_stream<T, Stream>> = true;
+	template<class T, class E> inline constexpr bool io_thread_bound<std::expected<T, E>> = io_thread_bound<T>;
+	template<class T> inline constexpr bool io_thread_bound<std::optional<T>> = io_thread_bound<T>;
+	template<class T, class Del> inline constexpr bool io_thread_bound<std::unique_ptr<T, Del>> = io_thread_bound<T>;
+	template<class T> inline constexpr bool io_thread_bound<std::shared_ptr<T>> = io_thread_bound<T>;
 }// namespace detail
 
 // Runs make_task(a, args...) on the I/O thread of `d` and waits for the
@@ -697,16 +714,22 @@ namespace detail {
 //
 // make_task, its task and `args` are used on the I/O thread while the call
 // runs; whatever the task creates there (a stream) must also end there,
-// before the task does. The facade's own errors come first:
+// before the task does. A task whose result holds a search_stream,
+// paged_search, record_stream, lease, exclusive_lease or transaction does
+// not compile. The facade's own errors come first:
 // not_connected without a connection (a default or moved-from
 // sync::connection, a released lease), would_deadlock from the I/O thread
 // itself (context "sync::connection", or "sync::client" for a client and
 // its leases).
 // An exception thrown by make_task or its task is rethrown here.
-template<directory D, class F, class... Args> auto run(D &d, F &&make_task, Args &&...args)
+template<directory D, class F, class... Args> [[nodiscard]] auto run(D &d, F &&make_task, Args &&...args)
 {
-	return detail::facade_access::call(
-	  d, [&](auto &a) { return std::invoke(std::forward<F>(make_task), a, std::forward<Args>(args)...); });
+	const auto task_of = [&](
+						   auto &a) { return std::invoke(std::forward<F>(make_task), a, std::forward<Args>(args)...); };
+	static_assert(!detail::io_thread_bound<decltype(detail::facade_access::call(d, task_of))>,
+	  "sync::run: the task's result holds a stream, lease or transaction, which must be destroyed on the I/O "
+	  "thread; consume it inside the task and return plain values");
+	return detail::facade_access::call(d, task_of);
 }
 
 // ldap::search_paged (paged_search.hpp), blocking: every page collected as
