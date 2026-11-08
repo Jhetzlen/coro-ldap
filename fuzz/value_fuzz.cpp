@@ -3,7 +3,8 @@
 // value_fuzz_replay).
 //
 // For any input it must not crash, and for each decoder (GeneralizedTime,
-// integers, bool, dn, AD FILETIME dates and intervals):
+// integers, bool, dn, AD FILETIME dates and intervals, AD SIDs, GUIDs and
+// userAccountControl):
 // - rejected input fails with conversion_failed;
 // - accepted input encodes to text that decodes to the same value, and
 //   GeneralizedTime re-encodes to the same text (encoding is canonical).
@@ -11,7 +12,14 @@
 // maximum is ad::never), accept what int64 accepts from -1 up and encode
 // the same text; every decoded date other than ad::never clock_casts to
 // system_clock and back unchanged (UBSan catches an overflow).
+// AD SIDs and GUIDs: accepted binary re-encodes to the same octets, the
+// string forms (sid::parse, guid::parse) refuse with conversion_failed and
+// parse what to_string() writes back to the same value. userAccountControl
+// accepts what int64 accepts within -2^31 to 2^32 - 1.
 #include "jhetz/ldap/ad/filetime.hpp"
+#include "jhetz/ldap/ad/guid.hpp"
+#include "jhetz/ldap/ad/sid.hpp"
+#include "jhetz/ldap/ad/user_account_control.hpp"
 #include "jhetz/ldap/mapping.hpp"
 
 #include "check.hpp"
@@ -22,6 +30,7 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <utility>
 
 constexpr jhetz::ldap::fuzz::checker check{ "value_fuzz" };
 
@@ -71,6 +80,40 @@ void filetime_checks(std::string_view text)
 	  std::chrono::clock_cast<ad::filetime_clock>(sys) == *t, "std::chrono::clock_cast<ad::filetime_clock>(sys) == *t");
 }
 
+template<class T> void binary_and_text_checks(std::string_view text)
+{
+	if (auto v = T::from_binary(text)) {
+		check(v->to_binary() == text, "v->to_binary() == text");
+		auto back = T::parse(v->to_string());
+		check(back.has_value() && *back == *v, "back.has_value() && *back == *v");
+	} else {
+		check(v.error().code == ldap::client_errc::conversion_failed,
+		  "v.error().code == ldap::client_errc::conversion_failed");
+	}
+	if (auto v = T::parse(text)) {
+		auto back = T::parse(v->to_string());
+		check(back.has_value() && *back == *v, "back.has_value() && *back == *v");
+		auto raw = T::from_binary(v->to_binary());
+		check(raw.has_value() && *raw == *v, "raw.has_value() && *raw == *v");
+	} else {
+		check(v.error().code == ldap::client_errc::conversion_failed,
+		  "v.error().code == ldap::client_errc::conversion_failed");
+	}
+}
+
+void user_account_control_checks(std::string_view text)
+{
+	const auto u = ldap::value_traits<ldap::ad::user_account_control>::decode(text);
+	const auto n = ldap::value_traits<std::int64_t>::decode(text);
+	const bool in_range = n.has_value() && std::cmp_greater_equal(*n, std::numeric_limits<std::int32_t>::min())
+						  && std::cmp_less_equal(*n, std::numeric_limits<std::uint32_t>::max());
+	check(u.has_value() == in_range, "u.has_value() == in_range");
+	if (u) {
+		check(std::to_underlying(*u) == static_cast<std::uint32_t>(*n),
+		  "std::to_underlying(*u) == static_cast<std::uint32_t>(*n)");
+	}
+}
+
 }// namespace
 
 extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size) -> int
@@ -99,5 +142,11 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 	round_trip<ldap::ad::filetime_clock::time_point>(text);
 	round_trip<ldap::ad::filetime_clock::duration>(text);
 	filetime_checks(text);
+	round_trip<ldap::ad::sid>(text);
+	round_trip<ldap::ad::guid>(text);
+	round_trip<ldap::ad::user_account_control>(text);
+	binary_and_text_checks<ldap::ad::sid>(text);
+	binary_and_text_checks<ldap::ad::guid>(text);
+	user_account_control_checks(text);
 	return 0;
 }
