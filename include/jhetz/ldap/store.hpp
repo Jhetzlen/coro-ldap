@@ -5,6 +5,8 @@
 //   co_await people.add(person{.uid = "jdoe", ...});         // uid=jdoe,ou=people,dc=example,dc=org
 //   auto p = co_await people.get("jdoe");                    // result<std::optional<person>>
 //   co_await people.modify("jdoe", {ldap::replace<&person::mail>("j@example.org")});
+//   person q = **p; q.mail = "john@example.org";
+//   co_await people.update(**p, q);                          // the changed members only
 //   co_await people.rename("jdoe", "john");                  // uid=john,ou=people,dc=example,dc=org
 //   auto all = co_await people.search(ldap::filters::field<&person::mail>().present());
 //   auto pages = co_await people.search_paged(100);         // result<record_stream<person, paged_search>>
@@ -194,6 +196,38 @@ namespace detail {
 				p.changes.push_back(std::move(*c.wire));
 			}
 			return p;
+		}
+
+		// The modify turning `original` into `changed` at `entry` (diff),
+		// nullopt when nothing differs. A naming member that differs fails
+		// with naming_value_changed.
+		[[nodiscard]] static auto
+		  update_request(dn entry, const value_type &original, const value_type &changed, modify_controls controls)
+			-> result<std::optional<modify_params>>
+		{
+			auto from = encode_value(original.*Naming);
+			auto to = encode_value(changed.*Naming);
+			if (!from || !to) {
+				return std::unexpected(with_context(
+				  std::move(!from ? from.error() : to.error()), op_context("modify", entry) + ": attribute " + name()));
+			}
+			if (*from != *to) {
+				return std::unexpected(
+				  with_context(make_error(client_errc::naming_value_changed, std::string(name()) + ": use rename()"),
+					op_context("modify", entry)));
+			}
+			auto changes = diff(original, changed);
+			if (!changes) {
+				return std::unexpected(with_context(std::move(changes.error()), op_context("modify", entry)));
+			}
+			if (changes->empty()) {
+				return std::optional<modify_params>{};
+			}
+			auto request = modify_request(std::move(entry), std::move(*changes), std::move(controls));
+			if (!request) {
+				return std::unexpected(std::move(request.error()));
+			}
+			return std::optional<modify_params>(std::move(*request));
 		}
 
 		// The modify DN renaming the entry named `from` to `to` under `base`:
@@ -483,6 +517,38 @@ namespace detail {
 		}
 
 		template<directory S>
+		auto update(S &s, value_type original, value_type changed, modify_controls controls)
+		  -> boost::capy::task<result<std::optional<response>>>
+		{
+			auto entry = dn_of(original.*Naming);
+			if (!entry) {
+				co_return std::unexpected(with_context(std::move(entry.error()), "modify"));
+			}
+			co_return co_await update_at(
+			  s, std::move(*entry), std::move(original), std::move(changed), std::move(controls));
+		}
+		template<directory S>
+		auto update_at(S &s, dn entry, value_type original, value_type changed, modify_controls controls)
+		  -> boost::capy::task<result<std::optional<response>>>
+		{
+			auto request = codec::update_request(std::move(entry), original, changed, std::move(controls));
+			if (!request) {
+				co_return std::unexpected(std::move(request.error()));
+			}
+			if (!*request) {
+				co_return std::optional<response>{};
+			}
+			if (auto c = co_await check_schema(s); !c) {
+				co_return std::unexpected(std::move(c.error()));
+			}
+			auto done = co_await s.modify(std::move(**request));
+			if (!done) {
+				co_return std::unexpected(std::move(done.error()));
+			}
+			co_return std::optional<response>(std::move(*done));
+		}
+
+		template<directory S>
 		auto remove(S &s, key_type key, del_controls controls) -> boost::capy::task<result<response>>
 		{
 			auto entry = dn_of(key);
@@ -660,6 +726,22 @@ template<auto Naming, directory D> class store
 	  -> boost::capy::task<result<response>>
 	{
 		return core_.modify_at(*source_, std::move(entry), std::move(changes), std::move(controls));
+	}
+
+	// One modify turning `original` into `changed` (ldap::diff: only the
+	// members T maps, read_only ones skipped), sent to original.dn, or for a
+	// value, to dn_of(its naming member). nullopt, and nothing sent (no
+	// schema check either), when no member differs. A changed naming member
+	// fails with naming_value_changed before anything is sent: use rename().
+	auto update(const record<value_type> &original, value_type changed, modify_controls controls = {})
+	  -> boost::capy::task<result<std::optional<response>>>
+	{
+		return core_.update_at(*source_, original.dn, original.value, std::move(changed), std::move(controls));
+	}
+	auto update(const value_type &original, value_type changed, modify_controls controls = {})
+	  -> boost::capy::task<result<std::optional<response>>>
+	{
+		return core_.update(*source_, original, std::move(changed), std::move(controls));
 	}
 
 	// Deletes the entry named `key` (or at `entry`).

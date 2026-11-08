@@ -1567,6 +1567,8 @@ ldap::store people(pool, ldap::dn{"ou=people,dc=example,dc=org"}, ldap::named_by
 co_await people.add(person{.uid = "jdoe", ...});        // uid=jdoe,ou=people,dc=example,dc=org
 auto p = co_await people.get("jdoe");                   // result<std::optional<person>>
 co_await people.modify("jdoe", {ldap::replace<&person::mail>("j@example.org")});
+person q = **p; q.mail.reset();
+co_await people.update(**p, q);                          // only mail: delete
 auto all = co_await people.search(ldap::filters::field<&person::mail>().present());
 co_await people.remove("jdoe");
 ```
@@ -1590,6 +1592,21 @@ co_await people.remove("jdoe");
   `typed_search_result<record<T>>`, `record<T>{dn, value}`: the DN as the
   server sent it, parsed, so entries named otherwise are returned too,
   and the limit codes are values, as `search()`.
+- `update(original, changed)` sends one modify built by `ldap::diff`
+  (mapping.hpp), to `original.dn` for a `record<T>` or to `dn_of` the
+  naming member for a `T`: a single-valued member that differs is
+  replaced, or deleted once empty; a multi-valued one deletes the values
+  it lost, then adds the new ones (RFC 4511 section 4.6, applied in
+  order, so a value that changed only in case under a caseIgnore rule is
+  deleted, then added again), or is deleted once empty; values compare
+  as encoded, exactly. Only members T maps are touched, read_only ones
+  never. Nothing differs: nothing is sent, no schema check either, and
+  the result is `std::optional<response>{}`. A naming member that
+  differs is `naming_value_changed` (cond `invalid_input`) before
+  anything is sent: the entry would need a new DN, which is `rename`'s
+  job, not a hidden modify DN. `original` is the caller's: no read
+  before the write, so a concurrent change between the read and the
+  update is not detected (the Assertion control is coro-ldap-2cx.6).
 - `rename(from, to)` is a modify DN to the RDN `<naming attribute>=<to>`
   with deleteoldrdn TRUE, so the naming member follows; `move(key,
   new_base)` (or `move(key, other_store)`, its base) keeps the RDN and
@@ -1651,7 +1668,7 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `gssapi_failure`, `security_layer_required`, `security_layer_unavailable`, `security_layer_in_effect`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`; facade: `would_deadlock`; environment: `internal_error` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `gssapi_failure`, `security_layer_required`, `security_layer_unavailable`, `security_layer_in_effect`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `naming_value_changed`; facade: `would_deadlock`; environment: `internal_error` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 `error`'s strings are `std::pmr::string` but always on the default
@@ -1732,7 +1749,7 @@ a caller match none, deliberately (test them by exact code).
 | `busy_or_unavailable` | `busy`, `unavailable` | | `connection_refused`, `host_unreachable`, `network_unreachable`, `network_down` |
 | `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required`, `security_layer_required`, `security_layer_unavailable` | `permission_denied` |
 | `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
-| `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url`, `string_prep_failed` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
+| `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url`, `string_prep_failed`, `naming_value_changed` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
 | none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `virtual_list_view_error`, `assertion_failed`, `e_sync_refresh_required`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `internal_error` | everything else |
 
 Choices worth knowing: `unauthenticated_bind` is `auth_failed` (an empty

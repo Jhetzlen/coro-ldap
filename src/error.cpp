@@ -170,6 +170,8 @@ namespace {
 			return "the server does not offer the SASL security layer asked for";
 		case client_errc::security_layer_in_effect:
 			return "not possible while a SASL security layer is in effect";
+		case client_errc::naming_value_changed:
+			return "the naming value changed: the entry must be renamed";
 		}
 		return {};
 	}
@@ -230,6 +232,7 @@ namespace {
 		case client_errc::encode_error:
 		case client_errc::invalid_url:
 		case client_errc::string_prep_failed:
+		case client_errc::naming_value_changed:
 			return cond::invalid_input;
 		case client_errc::not_connected:
 		case client_errc::not_sent:

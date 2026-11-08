@@ -22,6 +22,7 @@
 //   co_await people.modify("jdoe", {ldap::replace<&person::mail>("new@example.org")});
 //   co_await people.add(person{...});
 //   auto f = ldap::filters::field<&person::uid>() == "jdoe";
+//   auto changes = ldap::diff(before, after);   // result<std::vector<ldap::change<person>>>
 //
 // Compile-time checks: attribute and object class names are validated; a
 // member type without value_traits, a member of another struct, a change to
@@ -735,6 +736,81 @@ template<auto Ptr> [[nodiscard]] auto remove() -> change<detail::owner_of<Ptr>>
 template<auto Ptr, class V> [[nodiscard]] auto remove(const V &v) -> change<detail::owner_of<Ptr>>
 {
 	return detail::make_change<Ptr>(modify_operation::delete_, detail::encode_values<Ptr>(v));
+}
+
+namespace detail {
+	// The values of `values` not in `other`, each once, in order.
+	auto values_not_in(const string_list &values, const string_list &other) -> string_list;
+
+	// Appends the changes turning member `Ptr` of `before` into that of
+	// `after` to `out`; false, with `failed` set, when a value does not
+	// encode.
+	template<auto Ptr>
+	auto append_diff(const owner_of<Ptr> &before,
+	  const owner_of<Ptr> &after,
+	  std::vector<change<owner_of<Ptr>>> &out,
+	  std::optional<error> &failed) -> bool
+	{
+		using F = std::remove_cvref_t<decltype(field_of<Ptr>())>;
+		auto from = encode_values<Ptr>(before.*Ptr);
+		auto to = encode_values<Ptr>(after.*Ptr);
+		if (!from || !to) {
+			failed = with_context(
+			  std::move(!from ? from.error() : to.error()), std::string("attribute ").append(field_of<Ptr>().name));
+			return false;
+		}
+		if (*from == *to) {
+			return true;
+		}
+		if (to->empty()) {
+			out.push_back(make_change<Ptr>(modify_operation::delete_, string_list{}));
+			return true;
+		}
+		if constexpr (F::kind == cardinality::multiple) {
+			auto removed = values_not_in(*from, *to);
+			auto added = values_not_in(*to, *from);
+			if (!removed.empty()) {
+				out.push_back(make_change<Ptr>(modify_operation::delete_, std::move(removed)));
+			}
+			if (!added.empty()) {
+				out.push_back(make_change<Ptr>(modify_operation::add, std::move(added)));
+			}
+		} else {
+			out.push_back(make_change<Ptr>(modify_operation::replace, std::move(*to)));
+		}
+		return true;
+	}
+}// namespace detail
+
+// The changes turning `original` into `changed`, member by member in
+// descriptor order, read_only members skipped: a single-valued member that
+// differs is replaced, or deleted once empty; a multi-valued one deletes
+// the values it lost, then adds the ones it gained (values compared as
+// encoded, exactly), or is deleted once empty. Empty when nothing
+// differs. Fails with the first value that does not encode (context
+// "attribute mail").
+template<described T> [[nodiscard]] auto diff(const T &original, const T &changed) -> result<std::vector<change<T>>>
+{
+	std::vector<change<T>> out;
+	std::optional<error> failed;
+	std::apply(
+	  [&](const auto &...f) {
+		  (
+			[&] {
+				constexpr auto ptr = std::remove_cvref_t<decltype(f)>::ptr;
+				if constexpr (!detail::field_of<ptr>().read_only) {
+					return failed.has_value() || detail::append_diff<ptr>(original, changed, out, failed);
+				} else {
+					return true;
+				}
+			}(),
+			...);
+	  },
+	  schema<T>.fields);
+	if (failed) {
+		return std::unexpected(std::move(*failed));
+	}
+	return out;
 }
 
 // ---------------------------------------------------------------- typed filters

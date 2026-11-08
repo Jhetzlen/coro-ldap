@@ -851,6 +851,14 @@ itself needs only ICU.
   classes; noSuchObject or no entry of T's classes is nullopt, a limit
   code with no entry is an error);
   `add(T)`, `modify(key, changes)` / `modify_at(dn, changes)`,
+  `update(original, changed)` (`original` a `record<T>`, sent to its
+  DN, or a `T`, sent to `dn_of` its naming member) -> `task<result<
+  std::optional<response>>>`: one modify of the members that differ
+  (`ldap::diff(original, changed)` in mapping.hpp: replace or delete for
+  single-valued members, delete then add of the values for multi-valued
+  ones, read_only members skipped), nullopt with nothing sent when none
+  differs, `client_errc::naming_value_changed` when the naming member
+  differs (use `rename`);
   `remove(key)` / `remove_at(dn)`, `rename(from, to)` (modify DN to
   `<naming attribute>=<to>`, deleteoldrdn TRUE) and `move(key, new_base)` /
   `move(key, other_store)` (newSuperior, RDN kept) -> `task<result<response>>`, each with

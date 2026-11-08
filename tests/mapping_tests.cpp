@@ -624,6 +624,79 @@ TEST_CASE("a typed change carries the encode error of its value", "[mapping][mod
 			ldap::modify_operation::replace, { "cn", { "Jos\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC \xF0\x9F\x98\x80" } } });
 }
 
+TEST_CASE("diff: the changes turning one value into another", "[mapping][diff]")
+{
+	using op = ldap::modify_operation;
+	const auto wires = [](const ldap::result<std::vector<ldap::change<person>>> &r) {
+		REQUIRE(r.has_value());
+		std::vector<ldap::modify_change> out;
+		for (const auto &c : *r) {
+			REQUIRE(c.wire.has_value());
+			out.push_back(*c.wire);
+		}
+		return out;
+	};
+	const person before{ .uid = "jdoe",
+		.cn = "John Doe",
+		.mail = "jdoe@example.org",
+		.member_of = { ldap::dn{ "cn=admins,dc=example,dc=org" }, ldap::dn{ "cn=staff,dc=example,dc=org" } },
+		.uid_number = 1000,
+		.disabled = std::nullopt,
+		.photo = {},
+		.telephone = { "1", "2" },
+		.created = sys_seconds{ seconds{ 1 } },
+		.state = std::nullopt };
+
+	CHECK(wires(ldap::diff(before, before)).empty());
+
+	SECTION("single-valued members: replace, or delete once empty")
+	{
+		person after = before;
+		after.cn = "J\xC3\xBCrgen Doe";
+		after.mail.reset();
+		after.disabled = true;
+		after.uid_number = 1001;
+		after.created = sys_seconds{ seconds{ 2 } };// read_only: never written
+		CHECK(wires(ldap::diff(before, after))
+			  == std::vector<ldap::modify_change>{ { op::replace, { "cn", { "J\xC3\xBCrgen Doe" } } },
+				{ op::delete_, { "mail", {} } },
+				{ op::replace, { "uidNumber", { "1001" } } },
+				{ op::replace, { "x-disabled", { "TRUE" } } } });
+	}
+
+	SECTION("multi-valued members: delete the lost values, then add the new ones")
+	{
+		person after = before;
+		after.member_of = { ldap::dn{ "cn=staff,dc=example,dc=org" },
+			ldap::dn{ "cn=ops,dc=example,dc=org" },
+			ldap::dn{ "cn=ops,dc=example,dc=org" } };
+		after.telephone = { "2", "1" };// the same values: no change
+		after.photo = { std::byte{ 0xff } };
+		CHECK(wires(ldap::diff(before, after))
+			  == std::vector<ldap::modify_change>{ { op::delete_, { "memberOf", { "cn=admins,dc=example,dc=org" } } },
+				{ op::add, { "memberOf", { "cn=ops,dc=example,dc=org" } } },
+				{ op::replace, { "jpegPhoto", { "\xff" } } } });
+
+		after = before;
+		after.telephone.clear();
+		after.member_of.push_back(ldap::dn{ "cn=ops,dc=example,dc=org" });
+		CHECK(wires(ldap::diff(before, after))
+			  == std::vector<ldap::modify_change>{ { op::add, { "memberOf", { "cn=ops,dc=example,dc=org" } } },
+				{ op::delete_, { "telephoneNumber", {} } } });
+	}
+
+	SECTION("a value that does not encode fails the diff")
+	{
+		person after = before;
+		after.telephone.emplace_back("\xFF");
+		auto r = ldap::diff(before, after);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::encode_error);
+		CHECK(std::string_view(r.error().context)
+			  == "attribute telephoneNumber: not valid UTF-8 (ill-formed sequence at offset 0)");
+	}
+}
+
 TEST_CASE("typed filters and object class narrowing", "[mapping][filter]")
 {
 	CHECK((ldap::filters::field<&person::uid>() == "jdoe").to_string() == "(uid=jdoe)");

@@ -4,6 +4,8 @@
 #include "generalized_time.hpp"
 
 #include <string>
+#include <string_view>
+#include <unordered_set>
 
 namespace jhetz::ldap {
 
@@ -68,6 +70,19 @@ namespace detail {
 		}
 		detail::format_to(text, ": attribute {}", attribute);
 		return text;
+	}
+
+	auto values_not_in(const string_list &values, const string_list &other) -> string_list
+	{
+		const std::unordered_set<std::string_view> excluded(other.begin(), other.end());
+		std::unordered_set<std::string_view> taken;
+		string_list out;
+		for (const auto &v : values) {
+			if (!excluded.contains(v) && taken.insert(v).second) {
+				out.push_back(v);
+			}
+		}
+		return out;
 	}
 
 }// namespace detail

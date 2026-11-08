@@ -82,6 +82,19 @@ template<auto Naming, directory D> class store
 		  [&](auto &a) { return core_.modify_at(a, std::move(entry), std::move(changes), std::move(controls)); });
 	}
 
+	[[nodiscard]] auto update(const record<value_type> &original,
+	  const value_type &changed,
+	  modify_controls controls = {}) -> result<std::optional<response>>
+	{
+		return sync::run(*source_,
+		  [&](auto &a) { return core_.update_at(a, original.dn, original.value, changed, std::move(controls)); });
+	}
+	[[nodiscard]] auto update(const value_type &original, const value_type &changed, modify_controls controls = {})
+	  -> result<std::optional<response>>
+	{
+		return sync::run(*source_, [&](auto &a) { return core_.update(a, original, changed, std::move(controls)); });
+	}
+
 	[[nodiscard]] auto remove(const key_type &key, const del_controls &controls = {}) -> result<response>
 	{
 		return sync::run(*source_, [&](auto &a) { return core_.remove(a, key, controls); });

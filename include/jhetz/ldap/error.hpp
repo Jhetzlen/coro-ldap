@@ -127,6 +127,10 @@ enum class client_errc : int {
 	// have to go below the layer, RFC 4513 section 5.2.1.6), or a second
 	// layer. Matches no condition.
 	security_layer_in_effect,
+	// store::update with a naming member that differs from the original's:
+	// the entry would need a new DN (store::rename). Matches
+	// cond::invalid_input.
+	naming_value_changed,
 };
 
 // Error conditions: what an error means, across categories (DESIGN.md

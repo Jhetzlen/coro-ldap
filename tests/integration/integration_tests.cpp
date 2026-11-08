@@ -2302,6 +2302,95 @@ TEST_CASE("integration: ldap::store over ldap::client", "[integration][client][s
 	CHECK_FALSE(gone->has_value());
 }
 
+namespace {
+
+struct contact
+{
+	std::string uid;
+	std::string cn;
+	std::string sn;
+	std::optional<std::string> mail;
+	std::vector<std::string> telephone;
+	std::vector<std::string> description;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<contact> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::field<&contact::uid>("uid"),
+  ldap::field<&contact::cn>("cn"),
+  ldap::field<&contact::sn>("sn"),
+  ldap::field<&contact::mail>("mail"),
+  ldap::field<&contact::telephone>("telephoneNumber"),
+  ldap::field<&contact::description>("description"));
+
+TEST_CASE("integration: store::update sends only what differs", "[integration][store][update]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	draining_context ioc;
+	auto c = open_admin(ioc);
+	ldap::store s(c, people, ldap::named_by<&contact::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	const std::string name = unique("update");
+	REQUIRE(finish(ioc,
+	  s.add(contact{ .uid = name,
+		.cn = "Update",
+		.sn = "Typed",
+		.mail = name + "@example.org",
+		.telephone = { "+1 555 0100", "+1 555 0101" },
+		.description = { "Foo", "bar" } }))
+		.has_value());
+	auto found = finish(ioc, s.search(ldap::filters::field<&contact::uid>() == name));
+	REQUIRE(found.has_value());
+	REQUIRE(found->entries.size() == 1);
+	const ldap::record<contact> original = found->entries[0];
+
+	contact changed = original.value;
+	changed.cn = "Upd\xC3\xA4ted";
+	changed.mail.reset();
+	changed.telephone = { "+1 555 0101", "+1 555 0102" };
+	// The same value under caseIgnoreMatch: deleted, then added again.
+	changed.description = { "foo", "bar" };
+	auto r = finish(ioc, s.update(original, changed));
+	if (!r) {
+		FAIL(r.error().message());
+	}
+	CHECK(r->has_value());
+	auto got = finish(ioc, s.get(name));
+	REQUIRE(got.has_value());
+	REQUIRE(got->has_value());
+	CHECK((*got)->cn == "Upd\xC3\xA4ted");
+	CHECK_FALSE((*got)->mail.has_value());
+	auto phones = (*got)->telephone;
+	std::ranges::sort(phones);
+	CHECK(phones == std::vector<std::string>{ "+1 555 0101", "+1 555 0102" });
+	auto descriptions = (*got)->description;
+	std::ranges::sort(descriptions);
+	CHECK(descriptions == std::vector<std::string>{ "bar", "foo" });
+
+	auto unchanged = finish(ioc, s.update(**got, **got));
+	REQUIRE(unchanged.has_value());
+	CHECK_FALSE(unchanged->has_value());
+	contact cleared = **got;
+	cleared.telephone.clear();
+	cleared.description.clear();
+	REQUIRE(finish(ioc, s.update(**got, cleared)).has_value());
+	auto after = finish(ioc, s.get(name));
+	REQUIRE(after.has_value());
+	REQUIRE(after->has_value());
+	CHECK((*after)->telephone.empty());
+	CHECK((*after)->description.empty());
+
+	contact renamed = cleared;
+	renamed.uid = name + "-r";
+	auto refused = finish(ioc, s.update(cleared, renamed));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::client_errc::naming_value_changed);
+	REQUIRE(finish(ioc, s.remove(name)).has_value());
+}
+
 TEST_CASE("integration: ldap::client replaces a connection the server dropped", "[integration][client]")
 {
 	if (!have_slapd()) {

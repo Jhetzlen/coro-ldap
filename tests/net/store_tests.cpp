@@ -44,6 +44,12 @@ struct card
 	std::string cn;
 };
 
+struct labelled_card
+{
+	std::string cn;
+	std::optional<std::string> description;
+};
+
 }// namespace
 
 template<>
@@ -59,6 +65,11 @@ constexpr auto ldap::schema<badly_typed> =
 
 template<>
 constexpr auto ldap::schema<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
+
+template<>
+constexpr auto ldap::schema<labelled_card> = ldap::describe(ldap::object_class("person"),
+  ldap::field<&labelled_card::cn>("cn"),
+  ldap::field<&labelled_card::description>("description"));
 
 static_assert(ldap::directory<ldap::connection>);
 static_assert(ldap::directory<ldap::client>);
@@ -231,6 +242,60 @@ TEST_CASE("store: add, modify and remove name the entry from the key", "[net][st
 			3, ldap::modify_request{ "cn=jdoe,ou=other,dc=example,dc=org", { { op::delete_, { "mail", {} } } } } });
 	CHECK(m.log.received[3] == ldap::message{ 4, ldap::del_request{ jdoe.to_string() } });
 	CHECK(m.log.received[4] == ldap::message{ 5, ldap::del_request{ "cn=jdoe,ou=other,dc=example,dc=org" } });
+}
+
+TEST_CASE("store: update sends the members that differ in one modify", "[net][store][update]")
+{
+	mock_ldap m;
+	m.serve({ answer({ ok(1, ldap::modify_response{}) }), answer({ ok(2, ldap::modify_response{}) }) });
+	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	const person before{ .uid = "jdoe", .mail = "j@example.org", .uid_number = 1000 };
+	const ldap::record<person> found{ .dn = ldap::dn{ "cn=John,ou=other,dc=example,dc=org" }, .value = before };
+
+	person after = before;
+	after.mail.reset();
+	after.uid_number = 1001;
+	after.modified = std::chrono::sys_seconds{ std::chrono::seconds{ 5 } };// read_only
+	auto r = m.run(s.update(found, after));
+	REQUIRE(r.has_value());
+	CHECK(r->has_value());
+	after.mail = "john@example.org";
+	REQUIRE(m.run(s.update(before, after)).has_value());
+
+	// Nothing differs: nothing sent.
+	auto same = m.run(s.update(before, before));
+	REQUIRE(same.has_value());
+	CHECK_FALSE(same->has_value());
+
+	// The naming member: refused, use rename().
+	person renamed = before;
+	renamed.uid = "john";
+	auto refused = m.run(s.update(found, renamed));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::client_errc::naming_value_changed);
+	CHECK(refused.error().code == ldap::cond::invalid_input);
+	CHECK(std::string(refused.error().context) == "modify cn=John,ou=other,dc=example,dc=org: uid: use rename()");
+
+	person bad = before;
+	bad.mail = "j\xFF";
+	auto not_encoded = m.run(s.update(before, bad));
+	REQUIRE_FALSE(not_encoded.has_value());
+	CHECK(not_encoded.error().code == ldap::client_errc::encode_error);
+	CHECK_THAT(std::string(not_encoded.error().context),
+	  Catch::Matchers::StartsWith("modify uid=jdoe,ou=people,dc=example,dc=org: attribute mail: "));
+	m.check_server();
+
+	using op = ldap::modify_operation;
+	REQUIRE(m.log.received.size() == 2);
+	CHECK(m.log.received[0]
+		  == ldap::message{ 1,
+			ldap::modify_request{ "cn=John,ou=other,dc=example,dc=org",
+			  { { op::delete_, { "mail", {} } }, { op::replace, { "uidNumber", { "1001" } } } } } });
+	CHECK(
+	  m.log.received[1]
+	  == ldap::message{ 2,
+		ldap::modify_request{ "uid=jdoe,ou=people,dc=example,dc=org",
+		  { { op::replace, { "mail", { "john@example.org" } } }, { op::replace, { "uidNumber", { "1001" } } } } } });
 }
 
 TEST_CASE("store: rename and move send a modify DN", "[net][store]")
@@ -572,4 +637,19 @@ TEST_CASE("sync store: the same operations, blocking", "[net][store][sync]")
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == ldap::client_errc::encode_error);
 	CHECK(srv.requests == 9);
+
+	ldap::sync::store labelled(c, people_base, ldap::named_by<&labelled_card::cn>);
+	const ldap::record<labelled_card> x{ .dn = ldap::dn{ "uid=x,ou=people,dc=example,dc=org" },
+		.value = { .cn = "X", .description = std::nullopt } };
+	auto same = labelled.update(x, x.value);
+	REQUIRE(same.has_value());
+	CHECK_FALSE(same->has_value());
+	auto described = labelled.update(x, labelled_card{ .cn = "X", .description = "first" });
+	REQUIRE(described.has_value());
+	CHECK(described->has_value());
+	CHECK(labelled.update(x.value, labelled_card{ .cn = "X", .description = "second" }).has_value());
+	auto refused = labelled.update(x, labelled_card{ .cn = "Z", .description = std::nullopt });
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::client_errc::naming_value_changed);
+	CHECK(srv.requests == 11);
 }
