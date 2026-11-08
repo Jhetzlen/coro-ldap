@@ -850,7 +850,13 @@ itself needs only ICU.
   its operation's controls; `search(filter = (objectClass=*), scope =
   single_level)` -> `task<result<typed_search_result<record<T>>>>`,
   `record<T>{dn, value}` with the DN the server sent (entries named
-  otherwise included), the limit codes a value as for `search()`. Values
+  otherwise included), the limit codes a value as for `search()`;
+  `search_stream(filter, scope)` and `search_paged(page_size, filter,
+  scope)` -> `task<result<record_stream<T, search_stream | paged_search>>>`,
+  whose `next()` yields `record<T>` one at a time (the first entry that does
+  not decode ends the stream with its error, as it fails `search()`;
+  `stream()` is the underlying stream; on a client, one shared lease held
+  by the stream). Values
   that do not encode fail before anything is sent (`add uid=...:
   attribute mail: ...`, `modify uid=...: replace mail: ...`).
   `schema_check::on_first_use` (the enum is in store.hpp) loads the
@@ -866,7 +872,8 @@ itself needs only ICU.
   outlive it and its tasks. `jhetz/ldap/sync_store.hpp`: `ldap::sync::directory`,
   `sync::load_schema` and `sync::store`, the same over
   `sync::connection`, `sync::client`, `sync::lease` and
-  `sync::exclusive_lease`, blocking.
+  `sync::exclusive_lease`, blocking (no streams: `search_paged` collects
+  every page into a `typed_search_result<record<T>>`).
 - `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.

@@ -326,6 +326,116 @@ TEST_CASE("store: search quotes its base sanitized", "[net][store]")
 	CHECK(m.conn.is_open());// a mapping error is not a connection error
 }
 
+namespace {
+
+auto paged_done(std::int32_t id, std::string_view cookie, std::int32_t code = 0) -> ldap::message
+{
+	ldap::message m = done_msg(id, code);
+	m.controls.push_back(*ldap::encode_paged_results({ 0, cookie }));
+	return m;
+}
+
+template<class Stream>
+auto drain_records(Stream &s) -> boost::capy::task<ldap::result<std::vector<ldap::record<person>>>>
+{
+	std::vector<ldap::record<person>> out;
+	while (true) {
+		auto r = co_await s.next();
+		if (!r) {
+			co_return std::unexpected(std::move(r.error()));
+		}
+		if (!*r) {
+			co_return out;
+		}
+		out.push_back(std::move(**r));
+	}
+}
+
+}// namespace
+
+TEST_CASE("store: search_stream decodes each entry as a record", "[net][store][stream]")
+{
+	mock_ldap m;
+	m.serve({ answer({ person_entry(1, "a", "1000"),
+				ref_msg(1, { "ldap://other.example.org/ou=people,dc=example,dc=org" }),
+				person_entry(1, "b", "1001"),
+				done_msg(1) }),
+	  answer({ person_entry(2, "c", "1002"), person_entry(2, "d", "x"), person_entry(2, "e", "1003"), done_msg(2) }) });
+	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+
+	auto stream = m.run(s.search_stream(ldap::filters::field<&person::uid_number>() >= 1000));
+	REQUIRE(stream.has_value());
+	auto all = m.run(drain_records(*stream));
+	REQUIRE(all.has_value());
+	REQUIRE(all->size() == 2);
+	CHECK((*all)[0].dn == ldap::dn{ "uid=a,ou=people,dc=example,dc=org" });
+	CHECK((*all)[1].value.uid_number == 1001);
+	CHECK(stream->done());
+	CHECK(stream->stream().references().size() == 1);
+
+	// An entry that does not decode ends the stream with its error.
+	auto bad = m.run(s.search_stream());
+	REQUIRE(bad.has_value());
+	auto first = m.run(bad->next());
+	REQUIRE(first.has_value());
+	REQUIRE(first->has_value());
+	CHECK((*first)->value.uid == "c");
+	auto second = m.run(bad->next());
+	REQUIRE_FALSE(second.has_value());
+	CHECK(second.error().code == ldap::client_errc::conversion_failed);
+	CHECK_THAT(std::string(second.error().context),
+	  Catch::Matchers::StartsWith("search ou=people,dc=example,dc=org: entry uid=d,ou=people,dc=example,dc=org: "));
+	CHECK(bad->done());
+	auto again = m.run(bad->next());
+	REQUIRE_FALSE(again.has_value());
+	CHECK(again.error().code == ldap::client_errc::conversion_failed);
+	*bad = {};// abandons the search
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 2);
+	const auto &request = std::get<ldap::search_request>(m.log.received[0].op);
+	CHECK(request.scope == ldap::search_scope::single_level);
+	CHECK(request.filter.to_string() == "(&(objectClass=inetOrgPerson)(uidNumber>=1000))");
+	CHECK(request.attributes == ldap::string_list{ "uid", "mail", "uidNumber", "modifyTimestamp" });
+}
+
+TEST_CASE("store: search_paged decodes the entries of every page", "[net][store][paged]")
+{
+	mock_ldap m;
+	m.serve({ answer({ person_entry(1, "a", "1000"), paged_done(1, "next") }),
+	  answer({ person_entry(2, "b", "1001"), paged_done(2, "", 4) }) });
+	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+
+	auto pages =
+	  m.run(s.search_paged(1, ldap::filters::field<&person::uid>().present(), ldap::search_scope::whole_subtree));
+	REQUIRE(pages.has_value());
+	auto a = m.run(pages->next());
+	REQUIRE(a.has_value());
+	REQUIRE(a->has_value());
+	CHECK((*a)->value.uid == "a");
+	auto b = m.run(pages->next());
+	REQUIRE(b.has_value());
+	REQUIRE(b->has_value());
+	CHECK((*b)->dn == ldap::dn{ "uid=b,ou=people,dc=example,dc=org" });
+	auto end = m.run(pages->next());// the last page ended with sizeLimitExceeded
+	REQUIRE_FALSE(end.has_value());
+	CHECK(end.error().code == ldap::errc::size_limit_exceeded);
+	CHECK(pages->stream().pages() == 2);
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 2);
+	CHECK(std::get<ldap::search_request>(m.log.received[0].op).scope == ldap::search_scope::whole_subtree);
+	auto cookie = ldap::find_paged(m.log.received[1].controls);
+	REQUIRE(cookie.has_value());
+	REQUIRE(cookie->has_value());
+	CHECK((*cookie)->cookie == "next");
+	CHECK((*cookie)->size == 1);
+
+	auto none = m.run(s.search_paged(10, ldap::filters::field<&person::uid>() == std::string("j\xC3")));
+	REQUIRE_FALSE(none.has_value());
+	CHECK(none.error().code == ldap::client_errc::invalid_filter);
+}
+
 TEST_CASE("store: schema_check::on_first_use", "[net][store][schema]")
 {
 	SECTION("checked once, then every operation runs")
@@ -401,9 +511,14 @@ TEST_CASE("sync store: the same operations, blocking", "[net][store][sync]")
 	CHECK(s.modify("Z", { ldap::replace<&card::cn>("Z") }).has_value());
 	CHECK(s.remove("Z").has_value());
 	CHECK(srv.requests == 5);
+	auto paged = s.search_paged(10);
+	REQUIRE(paged.has_value());// the server ignores the control: one page
+	REQUIRE(paged->entries.size() == 2);
+	CHECK(paged->entries[1].dn == ldap::dn{ "uid=y,ou=people,dc=example,dc=org" });
+	CHECK(srv.requests == 6);
 
 	auto bad = s.add(card{ .cn = "\xC3" });
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == ldap::client_errc::encode_error);
-	CHECK(srv.requests == 5);
+	CHECK(srv.requests == 6);
 }

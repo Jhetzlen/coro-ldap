@@ -2251,6 +2251,25 @@ TEST_CASE("integration: ldap::store over ldap::client", "[integration][client][s
 	CHECK(found->entries[0].dn == *s.dn_of(name));
 	CHECK(found->entries[0].value.mail == name + "@example.org");
 
+	auto pages = finish(ioc, s.search_paged(1, ldap::filters::field<&staff::uid>() == name));
+	REQUIRE(pages.has_value());
+	auto paged = finish(ioc, pages->next());
+	REQUIRE(paged.has_value());
+	REQUIRE(paged->has_value());
+	CHECK((*paged)->value.cn == "Störe");
+	auto paged_end = finish(ioc, pages->next());
+	REQUIRE(paged_end.has_value());
+	CHECK_FALSE(paged_end->has_value());
+	auto streamed = finish(ioc, s.search_stream(ldap::filters::field<&staff::uid>() == name));
+	REQUIRE(streamed.has_value());
+	auto one = finish(ioc, streamed->next());
+	REQUIRE(one.has_value());
+	REQUIRE(one->has_value());
+	CHECK((*one)->dn == *s.dn_of(name));
+	auto stream_end = finish(ioc, streamed->next());
+	REQUIRE(stream_end.has_value());
+	CHECK_FALSE(stream_end->has_value());
+
 	REQUIRE(finish(ioc, s.remove(name)).has_value());
 	auto gone = finish(ioc, s.get(name));
 	REQUIRE(gone.has_value());

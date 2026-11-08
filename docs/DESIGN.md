@@ -1584,6 +1584,17 @@ co_await people.remove("jdoe");
   `typed_search_result<record<T>>`, `record<T>{dn, value}`: the DN as the
   server sent it, parsed, so entries named otherwise are returned too,
   and the limit codes are values, as `search()`.
+- `search_stream(filter, scope)` and `search_paged(page_size, filter,
+  scope)` return a `record_stream<T, Stream>` over the source's
+  `search_stream()` or `ldap::search_paged` (on a client: one shared lease,
+  held by the stream). Its `next()` decodes one entry at a time. A decode
+  error is handled as in `search()`, where the first entry that does not
+  decode fails the call: it ends the stream, and `next()` returns it again
+  from then on (the alternative, skipping the entry and going on, would
+  make a stream accept what `search()` refuses). `stream()` gives the
+  underlying stream (references, controls, pages). `sync::store` has
+  `search_paged` with every page collected into a
+  `typed_search_result<record<T>>` (the blocking facade has no streams).
 - No ORM traps: no whole-object save, no hidden reads, no relationships,
   no entry cache. One request per call, plus the schema load once.
 - `store_options::schema_check = on_first_use` loads the schema with the

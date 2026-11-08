@@ -10,6 +10,7 @@
 #include "jhetz/ldap/sync.hpp"
 
 #include <concepts>
+#include <cstdint>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -138,6 +139,22 @@ template<auto Naming, directory D> class store
 			return std::unexpected(std::move(c.error()));
 		}
 		return codec::search_result_of(source_->search(std::move(*request)), base_);
+	}
+	// As search(), in pages of `page_size` entries, every page collected
+	// (sync::search_paged): the records of every page, the last page's
+	// result. No stream: the blocking facade has none (sync.hpp).
+	[[nodiscard]] auto search_paged(std::int32_t page_size,
+	  filter f = filters::attr("objectClass").present(),
+	  search_scope scope = search_scope::single_level) -> result<typed_search_result<record<value_type>>>
+	{
+		auto request = codec::search_request(base_, std::move(f), scope);
+		if (!request) {
+			return std::unexpected(std::move(request.error()));
+		}
+		if (auto c = check_schema(); !c) {
+			return std::unexpected(std::move(c.error()));
+		}
+		return codec::search_result_of(sync::search_paged(*source_, std::move(*request), page_size), base_);
 	}
 
   private:

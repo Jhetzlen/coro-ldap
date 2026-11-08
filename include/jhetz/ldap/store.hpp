@@ -6,12 +6,14 @@
 //   auto p = co_await people.get("jdoe");                    // result<std::optional<person>>
 //   co_await people.modify("jdoe", {ldap::replace<&person::mail>("j@example.org")});
 //   auto all = co_await people.search(ldap::filters::field<&person::mail>().present());
+//   auto pages = co_await people.search_paged(100);         // result<record_stream<person, paged_search>>
 //   co_await people.remove("jdoe");
 //
 // The source is any ldap::directory (directory.hpp): an ldap::connection,
 // an ldap::client, or a shared lease's connection (*lease). The store only
-// calls its public operations, one request per call (two more, once, for
-// the schema check), and keeps no entries.
+// calls its public operations, one request per call (one per page for
+// search_paged; two more, once, for the schema check), and keeps no
+// entries.
 #pragma once
 
 #include "jhetz/ldap/controls.hpp"
@@ -21,12 +23,15 @@
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/operations.hpp"
+#include "jhetz/ldap/paged_search.hpp"
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/schema.hpp"
+#include "jhetz/ldap/search_stream.hpp"
 
 #include <boost/capy/task.hpp>
 
 #include <concepts>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -82,6 +87,21 @@ template<class T> struct record
 
 namespace detail {
 
+	// `e` decoded as T, with its DN parsed; errors have the context of a
+	// search of `base`.
+	template<class T> [[nodiscard]] auto record_of(const entry &e, const dn &base) -> result<record<T>>
+	{
+		auto name = dn::parse(e.dn);
+		if (!name) {
+			return std::unexpected(with_context(std::move(name.error()), op_context("search", base)));
+		}
+		auto v = decode<T>(e);
+		if (!v) {
+			return std::unexpected(with_context(std::move(v.error()), op_context("search", base)));
+		}
+		return record<T>{ .dn = std::move(*name), .value = std::move(*v) };
+	}
+
 	// The requests and results of a store, without the I/O: shared by
 	// ldap::store and sync::store.
 	template<auto Naming> struct store_codec
@@ -96,13 +116,23 @@ namespace detail {
 
 		[[nodiscard]] static auto name() -> const char * { return field_of<Naming>().name; }
 
-		[[nodiscard]] static auto dn_of(const dn &base, const key_type &key) -> result<dn>
+		// <naming attribute>=<key>. Fails with the key's encode error.
+		[[nodiscard]] static auto rdn_of(const key_type &key) -> result<rdn>
 		{
 			auto value = encode_value(key);
 			if (!value) {
 				return std::unexpected(with_context(std::move(value.error()), std::string("attribute ") + name()));
 			}
-			return base.child(rdn{ ava{ attribute::unchecked(name()), *value } });
+			return rdn{ ava{ attribute::unchecked(name()), *value } };
+		}
+
+		[[nodiscard]] static auto dn_of(const dn &base, const key_type &key) -> result<dn>
+		{
+			auto name = rdn_of(key);
+			if (!name) {
+				return std::unexpected(std::move(name.error()));
+			}
+			return base.child(std::move(*name));
 		}
 
 		[[nodiscard]] static auto get_request(const dn &entry) -> search_params
@@ -195,18 +225,15 @@ namespace detail {
 				.controls = std::move(found->controls) };
 			out.entries.reserve(found->entries.size());
 			for (const auto &e : found->entries) {
-				auto name = dn::parse(e.dn);
-				if (!name) {
-					return std::unexpected(with_context(std::move(name.error()), op_context("search", base)));
+				auto r = record_of<value_type>(e, base);
+				if (!r) {
+					return std::unexpected(std::move(r.error()));
 				}
-				auto v = decode<value_type>(e);
-				if (!v) {
-					return std::unexpected(with_context(std::move(v.error()), op_context("search", base)));
-				}
-				out.entries.push_back({ .dn = std::move(*name), .value = std::move(*v) });
+				out.entries.push_back(std::move(*r));
 			}
 			return out;
 		}
+
 
 		[[nodiscard]] static auto check(const server_schema &s) -> result<void>
 		{
@@ -294,6 +321,55 @@ namespace detail {
 	};
 
 }// namespace detail
+
+// The entries of a store's streamed or paged search (store::search_stream,
+// store::search_paged), each decoded as a record<T>: `Stream` is
+// ldap::search_stream or ldap::paged_search, whose rules apply (move-only,
+// one next() at a time, not destroyed or moved while next() is suspended,
+// destroyed before its end it abandons the search). As store::search(), an
+// entry that does not decode, or whose DN does not parse, is an error: it
+// ends the stream, and next() returns that error again from then on
+// (destroying the stream abandons the search).
+template<class T, class Stream> class record_stream
+{
+  public:
+	record_stream() = default;
+	record_stream(Stream entries, dn base) : entries_(std::move(entries)), base_(std::move(base)) {}
+
+	// The next record, nullopt at the end, or an error: the search's (as
+	// Stream::next()) or the entry's decode error, with the context
+	// "search <base>".
+	auto next() -> boost::capy::task<result<std::optional<record<T>>>>
+	{
+		if (failed_) {
+			co_return std::unexpected(*failed_);
+		}
+		auto e = co_await entries_.next();
+		if (!e) {
+			co_return std::unexpected(std::move(e.error()));
+		}
+		if (!*e) {
+			co_return std::optional<record<T>>{};
+		}
+		auto r = detail::record_of<T>(**e, base_);
+		if (!r) {
+			failed_ = r.error();
+			co_return std::unexpected(std::move(r.error()));
+		}
+		co_return std::optional<record<T>>(std::move(*r));
+	}
+
+	// True once the search ended, or an entry did not decode.
+	[[nodiscard]] auto done() const noexcept -> bool { return failed_.has_value() || entries_.done(); }
+	// The underlying stream: its references(), controls(), pages().
+	[[nodiscard]] auto stream() noexcept -> Stream & { return entries_; }
+	[[nodiscard]] auto stream() const noexcept -> const Stream & { return entries_; }
+
+  private:
+	Stream entries_{};
+	dn base_{};
+	std::optional<error> failed_{};
+};
 
 // The entries of `T` (the struct owning `Naming`) under `base`, each named
 // <naming attribute>=<value>,<base>. Every operation is a task that refers
@@ -410,6 +486,49 @@ template<auto Naming, directory D> class store
 		}
 		auto found = co_await source_->search(std::move(*request));
 		co_return codec::search_result_of(std::move(found), base_);
+	}
+
+	// search() read one entry at a time: the source's search_stream(), each
+	// entry decoded by next() (see record_stream). On a client, the stream
+	// holds a shared lease until destroyed (client::search_stream()).
+	auto search_stream(filter f = filters::attr("objectClass").present(),
+	  search_scope scope = search_scope::single_level)
+	  -> boost::capy::task<result<record_stream<value_type, ldap::search_stream>>>
+	{
+		auto request = codec::search_request(base_, std::move(f), scope);
+		if (!request) {
+			co_return std::unexpected(std::move(request.error()));
+		}
+		if (auto c = co_await check_schema(); !c) {
+			co_return std::unexpected(std::move(c.error()));
+		}
+		auto s = co_await source_->search_stream(std::move(*request));
+		if (!s) {
+			co_return std::unexpected(std::move(s.error()));
+		}
+		co_return record_stream<value_type, ldap::search_stream>(std::move(*s), base_);
+	}
+
+	// search() in pages of `page_size` entries: ldap::search_paged on the
+	// source (paged_search.hpp; on a client, one shared lease for every
+	// page), each entry decoded by next() (see record_stream).
+	auto search_paged(std::int32_t page_size,
+	  filter f = filters::attr("objectClass").present(),
+	  search_scope scope = search_scope::single_level)
+	  -> boost::capy::task<result<record_stream<value_type, ldap::paged_search>>>
+	{
+		auto request = codec::search_request(base_, std::move(f), scope);
+		if (!request) {
+			co_return std::unexpected(std::move(request.error()));
+		}
+		if (auto c = co_await check_schema(); !c) {
+			co_return std::unexpected(std::move(c.error()));
+		}
+		auto s = co_await ldap::search_paged(*source_, std::move(*request), page_size);
+		if (!s) {
+			co_return std::unexpected(std::move(s.error()));
+		}
+		co_return record_stream<value_type, ldap::paged_search>(std::move(*s), base_);
 	}
 
   private:
