@@ -1,156 +1,105 @@
 // ldap::store (store.hpp) and ldap::load_schema (directory.hpp) for the
 // blocking facade: the same operations, on a sync::connection, a
-// sync::client or a sync lease, blocking the calling thread.
+// sync::client or a sync lease, blocking the calling thread. Each runs the
+// async operation with sync::run (sync.hpp).
 //
 //   ldap::sync::store people(pool, ldap::dn{"ou=people,dc=example,dc=org"}, ldap::named_by<&person::uid>);
 //   ldap::result<std::optional<person>> p = people.get("jdoe");
 #pragma once
 
+#include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/store.hpp"
 #include "jhetz/ldap/sync.hpp"
 
-#include <concepts>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace jhetz::ldap::sync {
 
-// ldap::directory, blocking: sync::connection, sync::client, sync::lease
-// and sync::exclusive_lease satisfy it.
-template<class D>
-concept directory = requires(D &d, search_params s, add_params a, modify_params m, del_params r, modify_dn_params n) {
-	{ d.search(std::move(s)) } -> std::same_as<result<search_result>>;
-	{ d.add(std::move(a)) } -> std::same_as<result<response>>;
-	{ d.modify(std::move(m)) } -> std::same_as<result<response>>;
-	{ d.del(std::move(r)) } -> std::same_as<result<response>>;
-	{ d.modify_dn(std::move(n)) } -> std::same_as<result<response>>;
-};
-
-// As ldap::load_schema.
+// As ldap::load_schema: on a sync::client, ldap::load_schema(client &)
+// (both searches on one shared lease). The facade's own errors
+// (not_connected, would_deadlock) have the context "load schema" too.
 template<directory D> [[nodiscard]] auto load_schema(D &d) -> result<server_schema>
 {
-	auto sub = ldap::detail::subschema_request(d.search(root_dse({ "subschemaSubentry" })));
-	if (!sub) {
-		return std::unexpected(std::move(sub.error()));
+	auto r = sync::run(d, [](auto &a) { return ldap::load_schema(a); });
+	if (!r && (r.error().code == client_errc::would_deadlock || r.error().code == client_errc::not_connected)
+		&& !std::string_view(r.error().context).starts_with(ldap::detail::load_schema_context)) {
+		return std::unexpected(ldap::detail::with_context(std::move(r.error()), ldap::detail::load_schema_context));
 	}
-	return ldap::detail::subschema_of(d.search(std::move(sub->request)), sub->where);
+	return r;
 }
 
-// As ldap::load_schema on an ldap::client: both searches on one shared
-// lease, run once more on a new lease after cond::connection_lost.
-[[nodiscard]] auto load_schema(client &c) -> result<server_schema>;
-
-// As ldap::store, blocking. The source must outlive the store. One store
-// may be used from several threads at once.
+// As ldap::store, blocking: each operation runs the async store's on the
+// I/O thread. The source must outlive the store. One store may be used
+// from several threads at once.
 template<auto Naming, directory D> class store
 {
+	using core = ldap::detail::store_core<Naming>;
 	using codec = ldap::detail::store_codec<Naming>;
 
   public:
-	using value_type = codec::value_type;
-	using key_type = codec::key_type;
+	using value_type = core::value_type;
+	using key_type = core::key_type;
 	using source_type = D;
 
 	store(D &source, dn base, named_by_t<Naming> /*naming*/, store_options options = {})
-	  : source_(&source), base_(std::move(base)), options_(options)
+	  : source_(&source), core_(std::move(base), options)
 	{}
 
 	[[nodiscard]] auto source() const noexcept -> D & { return *source_; }
-	[[nodiscard]] auto base() const noexcept -> const dn & { return base_; }
-	[[nodiscard]] auto dn_of(const key_type &key) const -> result<dn> { return codec::dn_of(base_, key); }
+	[[nodiscard]] auto base() const noexcept -> const dn & { return core_.base(); }
+	[[nodiscard]] auto dn_of(const key_type &key) const -> result<dn> { return core_.dn_of(key); }
 
 	[[nodiscard]] auto get(const key_type &key) -> result<std::optional<value_type>>
 	{
-		auto entry = dn_of(key);
-		if (!entry) {
-			return std::unexpected(ldap::detail::with_context(std::move(entry.error()), "search"));
-		}
-		return get_at(std::move(*entry));
+		return sync::run(*source_, [&](auto &a) { return core_.get(a, key); });
 	}
 	[[nodiscard]] auto get_at(const dn &entry) -> result<std::optional<value_type>>
 	{
-		if (auto c = check_schema(); !c) {
-			return std::unexpected(std::move(c.error()));
-		}
-		return codec::get_result(source_->search(codec::get_request(entry)), entry);
+		return sync::run(*source_, [&](auto &a) { return core_.get_at(a, entry); });
 	}
 
 	[[nodiscard]] auto add(const value_type &value, const add_controls &controls = {}) -> result<response>
 	{
-		auto request = codec::add_request(base_, value, controls);
-		if (!request) {
-			return std::unexpected(std::move(request.error()));
-		}
-		if (auto c = check_schema(); !c) {
-			return std::unexpected(std::move(c.error()));
-		}
-		return source_->add(std::move(*request));
+		return sync::run(*source_, [&](auto &a) { return core_.add(a, value, controls); });
 	}
 
 	[[nodiscard]] auto modify(const key_type &key,
 	  std::vector<change<value_type>> changes,
 	  modify_controls controls = {}) -> result<response>
 	{
-		auto entry = dn_of(key);
-		if (!entry) {
-			return std::unexpected(ldap::detail::with_context(std::move(entry.error()), "modify"));
-		}
-		return modify_at(std::move(*entry), std::move(changes), std::move(controls));
+		return sync::run(
+		  *source_, [&](auto &a) { return core_.modify(a, key, std::move(changes), std::move(controls)); });
 	}
 	[[nodiscard]] auto modify_at(dn entry, std::vector<change<value_type>> changes, modify_controls controls = {})
 	  -> result<response>
 	{
-		auto request = codec::modify_request(std::move(entry), std::move(changes), std::move(controls));
-		if (!request) {
-			return std::unexpected(std::move(request.error()));
-		}
-		if (auto c = check_schema(); !c) {
-			return std::unexpected(std::move(c.error()));
-		}
-		return source_->modify(std::move(*request));
+		return sync::run(*source_,
+		  [&](auto &a) { return core_.modify_at(a, std::move(entry), std::move(changes), std::move(controls)); });
 	}
 
 	[[nodiscard]] auto remove(const key_type &key, const del_controls &controls = {}) -> result<response>
 	{
-		auto entry = dn_of(key);
-		if (!entry) {
-			return std::unexpected(ldap::detail::with_context(std::move(entry.error()), "delete"));
-		}
-		return remove_at(*entry, controls);
+		return sync::run(*source_, [&](auto &a) { return core_.remove(a, key, controls); });
 	}
 	[[nodiscard]] auto remove_at(const dn &entry, const del_controls &controls = {}) -> result<response>
 	{
-		if (auto c = check_schema(); !c) {
-			return std::unexpected(std::move(c.error()));
-		}
-		return source_->del({ .entry = entry, .controls = controls });
+		return sync::run(*source_, [&](auto &a) { return core_.remove_at(a, entry, controls); });
 	}
 
 	[[nodiscard]] auto rename(const key_type &from, const key_type &to, const modify_dn_controls &controls = {})
 	  -> result<response>
 	{
-		auto request = codec::rename_request(base_, from, to, controls);
-		if (!request) {
-			return std::unexpected(std::move(request.error()));
-		}
-		if (auto c = check_schema(); !c) {
-			return std::unexpected(std::move(c.error()));
-		}
-		return source_->modify_dn(std::move(*request));
+		return sync::run(*source_, [&](auto &a) { return core_.rename(a, from, to, controls); });
 	}
 	[[nodiscard]] auto move(const key_type &key, const dn &new_base, const modify_dn_controls &controls = {})
 	  -> result<response>
 	{
-		auto request = codec::move_request(base_, key, new_base, controls);
-		if (!request) {
-			return std::unexpected(std::move(request.error()));
-		}
-		if (auto c = check_schema(); !c) {
-			return std::unexpected(std::move(c.error()));
-		}
-		return source_->modify_dn(std::move(*request));
+		return sync::run(*source_, [&](auto &a) { return core_.move(a, key, new_base, controls); });
 	}
 	template<directory Other>
 	[[nodiscard]] auto move(const key_type &key,
@@ -163,14 +112,7 @@ template<auto Naming, directory D> class store
 	[[nodiscard]] auto search(filter f = filters::attr("objectClass").present(),
 	  search_scope scope = search_scope::single_level) -> result<typed_search_result<record<value_type>>>
 	{
-		auto request = codec::search_request(base_, std::move(f), scope);
-		if (!request) {
-			return std::unexpected(std::move(request.error()));
-		}
-		if (auto c = check_schema(); !c) {
-			return std::unexpected(std::move(c.error()));
-		}
-		return codec::search_result_of(source_->search(std::move(*request)), base_);
+		return sync::run(*source_, [&](auto &a) { return core_.search(a, std::move(f), scope); });
 	}
 	// As search(), in pages of `page_size` entries, every page collected
 	// (sync::search_paged): the records of every page, the last page's
@@ -179,39 +121,25 @@ template<auto Naming, directory D> class store
 	  filter f = filters::attr("objectClass").present(),
 	  search_scope scope = search_scope::single_level) -> result<typed_search_result<record<value_type>>>
 	{
-		auto request = codec::search_request(base_, std::move(f), scope);
-		if (!request) {
-			return std::unexpected(std::move(request.error()));
-		}
-		if (auto c = check_schema(); !c) {
-			return std::unexpected(std::move(c.error()));
-		}
-		return codec::search_result_of(sync::search_paged(*source_, std::move(*request), page_size), base_);
+		return sync::run(*source_, [&](auto &a) { return collect_records(core_, a, page_size, std::move(f), scope); });
 	}
 
   private:
-	auto check_schema() -> result<void>
+	template<class A>
+	static auto collect_records(core &c, A &a, std::int32_t page_size, filter f, search_scope scope)
+	  -> boost::capy::task<result<typed_search_result<record<value_type>>>>
 	{
-		if (options_.schema_check == ldap::schema_check::off) {
-			return {};
+		auto request = co_await c.search_request(a, std::move(f), scope);
+		if (!request) {
+			co_return std::unexpected(std::move(request.error()));
 		}
-		const ldap::detail::source_protection now = ldap::detail::protection_of(*source_);
-		if (auto known = checked_.find(now)) {
-			return std::move(*known);
-		}
-		auto s = sync::load_schema(*source_);
-		if (!s) {
-			return std::unexpected(std::move(s.error()));
-		}
-		auto outcome = codec::check(*s);
-		checked_.record(outcome, now);
-		return outcome;
+		auto found =
+		  co_await detail::collect_paged(a, std::move(*request), page_size, std::pmr::get_default_resource());
+		co_return codec::search_result_of(std::move(found), c.base());
 	}
 
 	D *source_;
-	dn base_;
-	store_options options_;
-	ldap::detail::schema_check_cache checked_{};
+	core core_;
 };
 
 }// namespace jhetz::ldap::sync

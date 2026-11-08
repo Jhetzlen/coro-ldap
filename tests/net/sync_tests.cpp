@@ -7,6 +7,7 @@
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "jhetz/ldap/sync_extended_operations.hpp"
+#include "jhetz/ldap/sync_store.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 #include "server_thread.hpp"
@@ -159,6 +160,34 @@ TEST_CASE("sync: a blocking call from the I/O thread fails with would_deadlock",
 	CHECK(r.error().context == "sync::connection");
 	// The connection still works from other threads.
 	CHECK(ldap::sync::who_am_i(c) == "dn:cn=me");
+}
+
+TEST_CASE("sync: run() runs an async free function on the I/O thread", "[net][sync]")
+{
+	server_thread srv;
+	auto opened = ldap::sync::connect(srv.url());
+	REQUIRE(opened.has_value());
+	auto &c = *opened;
+	CHECK(ldap::sync::run(c, [](auto &a) { return ldap::who_am_i(a); }) == "dn:cn=me");
+	const auto io_thread = ldap::sync::run(
+	  c, [](ldap::connection &) -> capy::task<ldap::result<std::thread::id>> { co_return std::this_thread::get_id(); });
+	REQUIRE(io_thread.has_value());
+	CHECK(*io_thread != std::this_thread::get_id());
+	// Arguments are passed after the connection.
+	auto with_args = ldap::sync::run(
+	  c,
+	  [](ldap::connection &a, ldap::extended_controls controls) { return ldap::who_am_i(a, std::move(controls)); },
+	  ldap::extended_controls{});
+	CHECK(with_args == "dn:cn=me");
+
+	ldap::sync::connection none;
+	auto r = ldap::sync::run(none, [](auto &a) { return ldap::who_am_i(a); });
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == ldap::client_errc::not_connected);
+	auto s = ldap::sync::load_schema(none);
+	REQUIRE_FALSE(s.has_value());
+	CHECK(s.error().code == ldap::client_errc::not_connected);
+	CHECK(s.error().context == "load schema: sync::connection: not connected");
 }
 
 TEST_CASE("sync: search_paged leaves nothing on the caller's resource once it returns", "[net][sync]")

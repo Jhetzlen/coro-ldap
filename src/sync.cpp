@@ -1,8 +1,5 @@
 #include "jhetz/ldap/sync.hpp"
 #include "jhetz/ldap/cancel.hpp"
-#include "jhetz/ldap/directory.hpp"
-#include "jhetz/ldap/schema.hpp"
-#include "jhetz/ldap/sync_store.hpp"
 
 #include "connection/search.hpp"
 #include "strand_util.hpp"
@@ -496,6 +493,13 @@ client::~client() { close(); }
 
 auto client::executor() const noexcept -> boost::corosio::io_context::executor_type { return core_->io.executor(); }
 
+auto client::io() const noexcept -> const detail::io_thread & { return core_->io; }
+
+auto client::pool() const noexcept -> ldap::client &
+{
+	return *core_->pool;// NOLINT(bugprone-unchecked-optional-access): engaged until the core is destroyed
+}
+
 auto client::acquire() -> result<lease>
 {
 	auto r = core_->io.run([&] { return detail::take_lease<ldap::lease>(*core_->pool); });
@@ -525,22 +529,6 @@ auto client::compare(compare_params request) -> result<bool>
 {
 	return core_->io.run([&] { return core_->pool->compare(std::move(request)); });
 }
-
-auto search_paged(client &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-  -> result<search_result>
-{
-	return c.core_->io.run([&] { return detail::collect_paged(*c.core_->pool, std::move(request), page_size, mr); });
-}
-
-auto load_schema(client &c) -> result<server_schema>
-{
-	auto r = c.core_->io.run([&c] { return ldap::load_schema(*c.core_->pool); });
-	if (!r && r.error().code == client_errc::would_deadlock) {
-		return std::unexpected(ldap::detail::with_context(std::move(r.error()), ldap::detail::load_schema_context));
-	}
-	return r;
-}
-
 
 auto client::chase_search(search_params request, std::pmr::memory_resource *mr) -> result<chased_search>
 {

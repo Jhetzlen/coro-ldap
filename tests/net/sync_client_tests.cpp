@@ -597,6 +597,8 @@ TEST_CASE("sync client: a blocking call from the I/O thread fails with would_dea
 	// Everything still works from other threads.
 	CHECK(ldap::sync::who_am_i(pool) == "dn:cn=me");
 	CHECK(ldap::sync::who_am_i(*held) == "dn:cn=me");
+	CHECK(ldap::sync::run(pool, [](ldap::client &a) { return ldap::who_am_i(a); }) == "dn:cn=me");
+	CHECK(ldap::sync::run(*held, [](ldap::connection &a) { return ldap::who_am_i(a); }) == "dn:cn=me");
 	CHECK(pool.connections() == 1);
 }
 

@@ -39,8 +39,7 @@ concept extended_directory = requires(D &d, extended_params x) {
 };
 
 namespace detail {
-	// The requests and results, without the I/O: shared by the async forms
-	// below and the blocking ones (sync_extended_operations.hpp).
+	// The requests and results, without the I/O (extended_operations.cpp).
 	[[nodiscard]] auto who_am_i_request(extended_controls controls) -> extended_params;
 	[[nodiscard]] auto who_am_i_result(result<extended_result> r) -> result<std::string>;
 

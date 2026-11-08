@@ -19,6 +19,18 @@
 // once: their operations are multiplexed on the one connection (on the
 // pool's connections).
 //
+// The free functions over ldap::connection and ldap::client (who_am_i,
+// load_schema, ad::reset_password, ...) run on the facade through
+// sync::run (below), which starts the async function's task on the I/O
+// thread with the facade's ldap::connection or ldap::client and waits for
+// it:
+//
+//   ldap::result<std::string> me = ldap::sync::run(*c, [](auto &a) { return ldap::who_am_i(a); });
+//
+// The blocking forms of the library's own conveniences (sync::search_paged,
+// sync::load_schema, sync::store, sync_extended_operations.hpp,
+// ad/sync.hpp) are written that way.
+//
 // Calling a method from the facade's own I/O thread (from code running on
 // its executor) would wait for itself; it fails at once with
 // client_errc::would_deadlock instead.
@@ -56,6 +68,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <future>
 #include <memory>
 #include <memory_resource>
@@ -74,9 +87,17 @@ class server_schema;
 namespace jhetz::ldap::sync {
 
 class transaction;
+class connection;
+template<bool Exclusive> class basic_lease;
 // Declared before lease, whose friend declaration MSVC would otherwise bind
 // to ldap::client from the enclosing namespace.
 class client;
+
+// The blocking facades sync::run runs tasks on: sync::connection,
+// sync::lease, sync::exclusive_lease and sync::client.
+template<class D>
+concept directory = std::same_as<D, connection> || std::same_as<D, basic_lease<false>>
+					|| std::same_as<D, basic_lease<true>> || std::same_as<D, client>;
 
 namespace detail {
 	template<class> struct task_value;
@@ -398,8 +419,6 @@ namespace detail {
 
 }// namespace detail
 
-class connection;
-
 // The blocking ldap::connect: starts a sync::connection's I/O thread and
 // opens the connection there (and with options.start_tls, upgrades), as
 // ldap::connect(ioc, u, options, mr) does; on failure the thread is joined
@@ -644,43 +663,65 @@ class client
 	void close() noexcept;
 
   private:
-	friend auto load_schema(client &c) -> result<server_schema>;
-	friend auto search_paged(client &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-	  -> result<search_result>;
+	friend struct detail::facade_access;
+
+	// Runs make_task(pool) on the I/O thread with the ldap::client and
+	// waits for its result.
+	template<class F>
+	auto call(const F &make_task) -> detail::task_value<std::invoke_result_t<const F &, ldap::client &>>::type
+	{
+		return io().run([&] { return make_task(pool()); });
+	}
+	[[nodiscard]] auto io() const noexcept -> const detail::io_thread &;
+	// The ldap::client; touched only on the I/O thread.
+	[[nodiscard]] auto pool() const noexcept -> ldap::client &;
 
 	std::shared_ptr<detail::client_core> core_;
 };
 
 namespace detail {
-	// Runs make_task(c) on the I/O thread of a sync::connection or a sync
-	// lease, with its ldap::connection c, and waits for its result: the
-	// blocking form of the free functions over a connection.
+	// sync::run's access to the facades' call(make_task).
 	struct facade_access
 	{
 		template<class D, class F> static auto call(D &d, const F &make_task) { return d.call(make_task); }
 	};
 }// namespace detail
 
+// Runs make_task(a, args...) on the I/O thread of `d` and waits for the
+// task it returns, a capy::task<result<T>>; returns its result<T>. `a` is
+// what `d` stands for: the ldap::connection of a sync::connection or a sync
+// lease, the ldap::client of a sync::client. make_task is typically a
+// generic lambda calling an async free function:
+//
+//   ldap::sync::run(pool, [](auto &a) { return ldap::who_am_i(a); });
+//
+// make_task, its task and `args` are used on the I/O thread while the call
+// runs; whatever the task creates there (a stream) must also end there,
+// before the task does. The facade's own errors come first:
+// not_connected without a connection (a default or moved-from
+// sync::connection, a released lease), would_deadlock from the I/O thread
+// itself (context "sync::connection", or "sync::client" for a client and
+// its leases).
+// An exception thrown by make_task or its task is rethrown here.
+template<directory D, class F, class... Args> auto run(D &d, F &&make_task, Args &&...args)
+{
+	return detail::facade_access::call(
+	  d, [&](auto &a) { return std::invoke(std::forward<F>(make_task), a, std::forward<Args>(args)...); });
+}
+
 // ldap::search_paged (paged_search.hpp), blocking: every page collected as
 // one search_result, with the entries and references of every page and the
 // last page's SearchResultDone and controls; a page ending with a limit
 // code ends it with the entries received, as search() does. On a
-// sync::connection or a sync lease.
-template<class D>
-	requires std::derived_from<D, detail::connection_api<D>>
+// sync::client, one shared lease for every page (ldap::search_paged(client
+// &)).
+template<directory D>
 [[nodiscard]] auto search_paged(D &d,
   search_params request,
   std::int32_t page_size,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<search_result>
 {
-	return detail::facade_access::call(
-	  d, [&](ldap::connection &c) { return detail::collect_paged(c, std::move(request), page_size, mr); });
+	return sync::run(d, [&](auto &a) { return detail::collect_paged(a, std::move(request), page_size, mr); });
 }
-
-// As above, on one shared lease of the pool (ldap::search_paged(client &)).
-[[nodiscard]] auto search_paged(client &c,
-  search_params request,
-  std::int32_t page_size,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<search_result>;
 
 }// namespace jhetz::ldap::sync

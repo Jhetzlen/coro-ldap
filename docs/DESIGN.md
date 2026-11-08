@@ -537,9 +537,9 @@ Layering (coro-ldap-aw4): `connection`, `client` and the sync facades
 keep only the protocol operations. Who am I? and Password Modify, with
 `change_password()` / `reset_password()` over it, are free functions over
 `ldap::extended_directory` (extended_operations.hpp), written once for
-every source; their requests and results are I/O-free steps in `detail`
-that the blocking twins (sync_extended_operations.hpp) share, as
-`detail::store_codec` is shared by `store` and `sync::store`. The
+every source; their requests and results are I/O-free steps in `detail`.
+The blocking forms (sync_extended_operations.hpp) run these same
+functions on the facade's I/O thread with `sync::run` (section 7). The
 transactions stay members: a refused End Transaction's txnEndRes (the
 update at fault) never reaches the public `extended()`, which turns any
 other result code into an error, and the transaction's abort on
@@ -1613,11 +1613,13 @@ co_await people.remove("jdoe");
   the outcome: a mismatch fails every later operation with
   `schema_mismatch`, a load failure is retried by the next operation.
   Over a client that is one check for the whole pool (section 6).
-- The requests and results without the I/O are
-  `detail::store_codec<Naming>`, shared with `sync::store`
-  (sync_store.hpp), which runs the same steps blocking over
-  `sync::directory` (`sync::connection`, `sync::client` and the sync
-  leases).
+- `detail::store_core<Naming>` holds the base, the options, the
+  schema-check outcome and every operation, over a source passed to each
+  call; the requests and results without the I/O are
+  `detail::store_codec<Naming>`. `ldap::store` runs the core on its
+  source; `sync::store` (sync_store.hpp) runs it on its facade's
+  `ldap::connection` or `ldap::client` with `sync::run` (section 7), one
+  task on the I/O thread per call, the schema check included.
 
 **C++26 path:** reflection generates `ldap::schema<T>` from the struct, with
 an annotation to rename (`[[=ldap::name("memberOf")]]`). The descriptor stays
@@ -1839,7 +1841,7 @@ operations that follow may run on any server of the pool, failover
 included. So every server of a pool must serve the same schema; for a
 check per connection, the source is a lease's connection (`*lease`).
 The schema itself is read consistently: `ldap::load_schema(client &)`
-(and `sync::load_schema(sync::client &)`), non-template overloads that
+(which `sync::load_schema` runs on a `sync::client`), non-template overloads that
 overload resolution prefers to the `directory` template, run the root
 DSE and the subschema searches on one shared lease, so the subschema
 read is the one that server's root DSE names, never another server's.
@@ -2401,6 +2403,30 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   lease outliving its client cannot; not owning when made by a
   `sync::connection`, whose core it must not outlive: a move keeps the
   core, a reconnect `c = sync::connect(...)` destroys it).
+- Free functions run through one generic entry (coro-ldap-aw4.5): the
+  facades re-declare only the protocol operations (`connection_api`, the
+  client's forwarders); every convenience over `ldap::connection` or
+  `ldap::client` runs on them with `sync::run(d, make_task, args...)`,
+  which calls `make_task(a, args...)` on the I/O thread, `a` being the
+  facade's `ldap::connection` (a `sync::connection`'s, a lease's) or
+  `ldap::client`, and waits for the task it returns. `sync::directory` is
+  the concept of the four facades it takes. The library's own blocking
+  conveniences are written that way, each a line over the async function
+  (`sync::who_am_i` and the password calls, `sync::load_schema`,
+  `sync::search_paged`, `ad::change_password` / `reset_password` in
+  ad/sync.hpp), and so is `sync::store`, over the async store's core. A
+  whole convenience is one task on the I/O thread, not one round trip
+  per protocol call, and it behaves exactly as the async one (the
+  client's retries, AD's protection check on the connection the modify
+  goes to). The alternative, a `sync::directory` adapter giving the
+  blocking facades async-looking members so that the async templates
+  instantiate over them, would have made every operation a blocking call
+  dressed as a task and would not cover the non-template `client &`
+  overloads. `sync::run` reaches the facades' private `call(make_task)`
+  through `detail::facade_access`. The task must end what it creates on
+  the I/O thread before it returns (`sync::search_paged` reads every page
+  of its `paged_search` on the connection's strand, or destroys it
+  there): the facades hand out no streams.
 - The noexcept paths that end objects of the I/O thread (the
   destructors of `sync::connection`'s core and of the client's core,
   `sync::transaction`'s abort, `sync::lease::release()`) go through
@@ -3007,8 +3033,8 @@ Layout:
   It links `jhetz::ldap_net` and includes only public headers, never
   `src/connection/` or `src/net/`; it is built and installed whenever
   `jhetz::ldap_net` is. `ad/password.hpp` (async, `connection &` and
-  `client &`) and `ad/sync.hpp` (the blocking overloads, over
-  `sync::connection &`, `sync::lease &` and `sync::client &`) so far.
+  `client &`) and `ad/sync.hpp` (the blocking forms, over the sync
+  facades through `sync::run`) so far.
   A target of its own rather than `src/ad/` inside `jhetz::ldap_net`: the
   dependency is one-way and visible in CMake (`jhetz::ldap_net` cannot
   reach `ldap::ad`, `jhetz::ldap_ad` sees no private header), a consumer
@@ -3077,9 +3103,8 @@ to, so it cannot go through `client::modify`; the connection that failed
 with `not_sent` is closed or being unbound, so the retry's `acquire()`
 never gets it again; both `acquire()` tasks are created before the call
 returns, so, as with the client's own forwarders, the task does not refer
-to the client), and blocking ones in `ad/sync.hpp` built on the facade's
-public calls (`is_open()`, `is_tls()`, `security_layer()`, `modify()`),
-the sync facade having no generic "run this task" entry. There is no
+to the client), and blocking ones in `ad/sync.hpp`, which run the async
+ones with `sync::run`. There is no
 "detect and dispatch" helper: the caller calls the core's RFC 3062
 functions or these. Tested against the scripted mock
 (`tests/net/ad_password_tests.cpp`, with the `client &` overloads'

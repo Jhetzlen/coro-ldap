@@ -2,7 +2,6 @@
 
 #include "jhetz/ldap/ad/diagnostic.hpp"
 #include "jhetz/ldap/ad/password_value.hpp"
-#include "jhetz/ldap/ad/sync.hpp"
 #include "jhetz/ldap/operations.hpp"
 
 #include <boost/capy/task.hpp>
@@ -139,39 +138,6 @@ namespace {
 		return run(pool.acquire(), pool.acquire(), std::move(p));
 	}
 
-	template<class C> auto send_sync(C &c, const prepared &p) -> result<void>
-	{
-		if (auto ok = check_protection(c.is_open(), c.is_tls(), c.security_layer(), p); !ok) {
-			return ok;
-		}
-		return settle(c.modify(p.request), p);
-	}
-
-	template<class C> auto run_sync(C &c, result<prepared> p) -> result<void>
-	{
-		if (!p) {
-			return std::unexpected(std::move(p.error()));
-		}
-		return send_sync(c, *p);
-	}
-
-	auto run_sync(sync::client &pool, result<prepared> p) -> result<void>
-	{
-		if (!p) {
-			return std::unexpected(std::move(p.error()));
-		}
-		for (int attempt = 0;; ++attempt) {
-			auto l = pool.acquire();
-			if (!l) {
-				return std::unexpected(std::move(l.error()));
-			}
-			auto r = send_sync(*l, *p);
-			if (r || attempt != 0 || r.error().code != client_errc::not_sent) {
-				return r;
-			}
-		}
-	}
-
 	constexpr std::string_view change_op = "change password";
 	constexpr std::string_view reset_op = "reset password";
 
@@ -197,50 +163,6 @@ auto change_password(client &pool, dn user, std::string_view old_password, std::
 auto reset_password(client &pool, dn user, std::string_view new_password) -> capy::task<result<void>>
 {
 	return run(pool, prepare(reset_op, std::move(user), std::nullopt, new_password));
-}
-
-auto change_password(sync::connection &c, dn user, std::string_view old_password, std::string_view new_password)
-  -> result<void>
-{
-	return run_sync(c, prepare(change_op, std::move(user), old_password, new_password));
-}
-
-auto reset_password(sync::connection &c, dn user, std::string_view new_password) -> result<void>
-{
-	return run_sync(c, prepare(reset_op, std::move(user), std::nullopt, new_password));
-}
-
-auto change_password(sync::lease &c, dn user, std::string_view old_password, std::string_view new_password)
-  -> result<void>
-{
-	return run_sync(c, prepare(change_op, std::move(user), old_password, new_password));
-}
-
-auto reset_password(sync::lease &c, dn user, std::string_view new_password) -> result<void>
-{
-	return run_sync(c, prepare(reset_op, std::move(user), std::nullopt, new_password));
-}
-
-auto change_password(sync::exclusive_lease &c, dn user, std::string_view old_password, std::string_view new_password)
-  -> result<void>
-{
-	return run_sync(c, prepare(change_op, std::move(user), old_password, new_password));
-}
-
-auto reset_password(sync::exclusive_lease &c, dn user, std::string_view new_password) -> result<void>
-{
-	return run_sync(c, prepare(reset_op, std::move(user), std::nullopt, new_password));
-}
-
-auto change_password(sync::client &pool, dn user, std::string_view old_password, std::string_view new_password)
-  -> result<void>
-{
-	return run_sync(pool, prepare(change_op, std::move(user), old_password, new_password));
-}
-
-auto reset_password(sync::client &pool, dn user, std::string_view new_password) -> result<void>
-{
-	return run_sync(pool, prepare(reset_op, std::move(user), std::nullopt, new_password));
 }
 
 }// namespace jhetz::ldap::ad

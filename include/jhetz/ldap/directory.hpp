@@ -33,7 +33,7 @@ concept directory = requires(D &d, search_params s, add_params a, modify_params 
 };
 
 namespace detail {
-	// The steps of load_schema, for the async and the blocking forms.
+	// The steps of load_schema.
 	inline constexpr std::string_view load_schema_context = "load schema";
 	struct subschema_search
 	{

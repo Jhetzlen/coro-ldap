@@ -476,9 +476,11 @@ itself needs only ICU.
   administrator's; an empty `user` is the bound user). The tasks refer
   to `d`, which must outlive them (an `ldap::client` too: unlike
   `client::extended()`'s own task, these hold the client).
-  `sync_extended_operations.hpp`: `sync::extended_directory` and the same
+  `sync_extended_operations.hpp`: the same
   four, blocking, over `sync::connection`, `sync::client` and the sync
-  leases. Breaking: the members `who_am_i`, `password_modify`,
+  leases (`sync::directory`), each running the async one with
+  `sync::run` (coro-ldap-aw4.5; breaking: `sync::extended_directory` is
+  gone). Breaking: the members `who_am_i`, `password_modify`,
   `change_password` and `reset_password` are gone from `connection`
   and the sync facades, and `client::who_am_i` /
   `sync::client::who_am_i` with them (`client::extended` replaces them,
@@ -832,7 +834,9 @@ itself needs only ICU.
   defined in jhetz::ldap_net) runs both searches on one shared lease, so
   the root DSE and the subschema come from the same server, and runs
   them once more on a new lease after `cond::connection_lost` (not after
-  busy or unavailable); `sync::load_schema(sync::client &)` likewise.
+  busy or unavailable); `sync::load_schema(d)` runs it on a sync facade
+  (the facade's own `not_connected` and `would_deadlock` with the context
+  "load schema" too).
 - `jhetz/ldap/store.hpp` (coro-ldap-2cx.1, DESIGN.md section 4):
   `ldap::store`, typed CRUD of one mapped struct under a base DN, each
   entry named by one member: `ldap::store people(source, base,
@@ -872,11 +876,14 @@ itself needs only ICU.
   run on: every server of a pool must serve the same schema; use a
   lease's connection (`*lease`) as the source for a check per
   connection. The store keeps a pointer to the source, which must
-  outlive it and its tasks. `jhetz/ldap/sync_store.hpp`: `ldap::sync::directory`,
+  outlive it and its tasks. `jhetz/ldap/sync_store.hpp`:
   `sync::load_schema` and `sync::store`, the same over
   `sync::connection`, `sync::client`, `sync::lease` and
-  `sync::exclusive_lease`, blocking (no streams: `search_paged` collects
-  every page into a `typed_search_result<record<T>>`).
+  `sync::exclusive_lease` (`sync::directory`), blocking (no streams:
+  `search_paged` collects every page into a
+  `typed_search_result<record<T>>`); each `sync::store` call runs the
+  async store's operation (`detail::store_core`, shared with
+  `ldap::store`) as one task on the I/O thread.
 - `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.
@@ -894,6 +901,20 @@ itself needs only ICU.
   `sync::search_paged(c, params, page_size)` (also on a sync lease and a
   `sync::client`) collects every page into one `search_result` (the last
   page's done; a limit code keeps the entries).
+  `sync::run(d, make_task, args...)` (coro-ldap-aw4.5) runs any async
+  free function on a facade: `make_task(a, args...)` is called on the
+  I/O thread with the facade's `ldap::connection` (a `sync::connection`'s
+  or a lease's) or `ldap::client` and the task it returns is waited for,
+  `ldap::sync::run(c, [](auto &a) { return ldap::who_am_i(a); })`; its
+  `result<T>` is returned, after the facade's own `not_connected` and
+  `would_deadlock`. `sync::directory` is the concept of the four facades
+  (`sync::connection`, `sync::lease`, `sync::exclusive_lease`,
+  `sync::client`); the blocking conveniences (`sync::who_am_i`,
+  `sync::search_paged`, `sync::load_schema`, `sync::store`,
+  `ad::change_password`, ...) are written over it. Breaking:
+  `sync::directory` was a structural concept (blocking `search`, `add`,
+  ...), and `sync::search_paged(client &)` and `sync::load_schema(client
+  &)` are no longer separate overloads.
   Callable from any number of threads; a call from its own I/O
   thread fails with `client_errc::would_deadlock`.
 - `jhetz/ldap/client.hpp` (3pf, DESIGN.md section 11): `ldap::client`, a
@@ -1052,7 +1073,9 @@ package component `ad`:
   `client &` tasks, like `client::acquire()`'s, do not refer to the
   client.
 - `jhetz/ldap/ad/sync.hpp` (`jhetz::ldap_ad`): the same calls, blocking,
-  over `sync::connection &`, `sync::lease &` and `sync::client &`.
+  over a sync facade (`sync::directory`: a `sync::connection`, a sync
+  lease or a `sync::client`), each running the async one with
+  `sync::run`.
 - `jhetz/ldap/ad/diagnostic.hpp` (`jhetz::ldap`): `ad::explain(error)`,
   the explanation of the Win32 code (eight hex digits and a colon) that
   starts an AD diagnosticMessage, for the codes a password change commonly

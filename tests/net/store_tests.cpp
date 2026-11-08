@@ -68,10 +68,8 @@ static_assert(ldap::sync::directory<ldap::sync::lease>);
 static_assert(ldap::sync::directory<ldap::sync::exclusive_lease>);
 static_assert(ldap::extended_directory<ldap::connection>);
 static_assert(ldap::extended_directory<ldap::client>);
-static_assert(ldap::sync::extended_directory<ldap::sync::connection>);
-static_assert(ldap::sync::extended_directory<ldap::sync::client>);
-static_assert(ldap::sync::extended_directory<ldap::sync::lease>);
-static_assert(ldap::sync::extended_directory<ldap::sync::exclusive_lease>);
+static_assert(!ldap::sync::directory<ldap::connection>);
+static_assert(!ldap::sync::directory<const ldap::sync::connection>);
 
 namespace {
 
