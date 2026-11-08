@@ -2,17 +2,17 @@
 // sections 7 and 11): for code that does not use coroutines. Part of
 // jhetz::ldap_net.
 //
-//   ldap::sync::connection c;
-//   if (auto r = c.connect("ldaps://ldap.example.org"); !r) ...
-//   c.simple_bind(ldap::dn{"cn=admin,dc=example,dc=org"}, password);
-//   ldap::result<ldap::search_result> found = c.search({.base = base});
+//   ldap::result<ldap::sync::connection> c = ldap::sync::connect("ldaps://ldap.example.org");
+//   if (!c) ...
+//   c->simple_bind(ldap::dn{"cn=admin,dc=example,dc=org"}, password);
+//   ldap::result<ldap::search_result> found = c->search({.base = base});
 //
 //   ldap::sync::client pool({.servers = {...}, .setup = ldap::simple_bind_setup(...)});
 //   auto found = pool.search({.base = base});      // a shared lease for one search, retried once
 //   if (auto lease = pool.acquire()) lease->modify(...);   // shared: binds belong on acquire_exclusive()
 //
-// A sync::connection (a sync::client) owns an io_context and one I/O
-// thread running it. Each method starts the matching coroutine of
+// A connected sync::connection (a sync::client) owns an io_context and one
+// I/O thread running it. Each method starts the matching coroutine of
 // ldap::connection (ldap::client) on that thread and waits for it, with
 // exactly the same request, result, error and mapping types, so the APIs
 // cannot drift apart. Methods may be called from any number of threads at
@@ -27,7 +27,8 @@
 // errors) are rethrown in the calling thread; everything else is an
 // ldap::error, as in the async API.
 //
-// sync::connection's shutdown: the destructor closes the connection (no
+// sync::connection's shutdown: the destructor (and a move assignment, for
+// the connection it replaces) closes the connection (no
 // UnbindRequest; call unbind() first for a clean end), lets the operations
 // still running finish with not_connected, and joins the I/O thread. A
 // host name lookup in progress (net::connect runs getaddrinfo detached,
@@ -382,51 +383,98 @@ namespace detail {
 
 }// namespace detail
 
-// The blocking ldap::connection: connect(), then the operations of
-// detail::connection_api (bind, search, add, ..., unbind, close).
+namespace detail {
+
+	// What a connected sync::connection owns: the I/O thread and the
+	// ldap::connection on it, at a fixed address across moves.
+	struct connection_core
+	{
+		io_thread io{ "sync::connection" };
+		ldap::connection conn{};// touched only on the I/O thread
+
+		connection_core() = default;
+		connection_core(const connection_core &) = delete;
+		auto operator=(const connection_core &) -> connection_core & = delete;
+		connection_core(connection_core &&) = delete;
+		auto operator=(connection_core &&) -> connection_core & = delete;
+		// Closes the connection on the I/O thread and joins it.
+		~connection_core();
+	};
+
+}// namespace detail
+
+class connection;
+
+// The blocking ldap::connect: starts a sync::connection's I/O thread and
+// opens the connection there (and with options.start_tls, upgrades), as
+// ldap::connect(ioc, u, options, mr) does; on failure the thread is joined
+// and the error returned. The connection's state is allocated from `mr`,
+// which must outlive the sync::connection. To reconnect, assign a new
+// one: c = sync::connect(...).
+[[nodiscard]] auto connect(url u,
+  connection_options options = {},
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<connection>;
+// As connect(url), to the URL `text` (url::parse); a bad URL fails with
+// url::parse's error (client_errc::invalid_url) before any thread starts.
+[[nodiscard]] auto connect(std::string_view text,
+  connection_options options = {},
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<connection>;
+
+// The blocking ldap::connection, made by sync::connect(): the operations of
+// detail::connection_api (bind, search, add, ..., unbind, close). A
+// default-constructed or moved-from one has no I/O thread and every
+// operation fails with client_errc::not_connected (is_open() is false,
+// close() does nothing). Move-only; moving keeps the I/O thread and the
+// connection where they are, so a sync::transaction made by it stays
+// valid. Not [[nodiscard]] as a class: it comes inside a result, which is
+// [[nodiscard]] on its own.
 class connection : public detail::connection_api<connection>
 {
   public:
-	// Starts the I/O thread; not connected yet. `options` apply to
-	// connect().
-	explicit connection(connection_options options = {});
+	connection() noexcept = default;
+	connection(connection &&) noexcept = default;
+	// Ends the connection this one held first, as the destructor does.
+	auto operator=(connection &&) noexcept -> connection & = default;
 	connection(const connection &) = delete;
 	auto operator=(const connection &) -> connection & = delete;
 	// Closes the connection on the I/O thread and joins it. Not on the I/O
 	// thread itself: it would join itself, and std::terminate() is called
 	// with a message on stderr.
-	~connection();
-
-	// Connects (and with options.start_tls, upgrades). Replaces (closes) a
-	// previous connection.
-	[[nodiscard]] auto connect(url u) -> result<void>;
-	// As connect(url), to the URL `text` (url::parse); a bad URL fails with
-	// url::parse's error (client_errc::invalid_url) before connecting.
-	[[nodiscard]] auto connect(std::string_view text) -> result<void>;
+	~connection() = default;
 
 	// The executor of the I/O thread, e.g. to run coroutines next to the
 	// facade. Blocking methods called from there fail with would_deadlock.
-	[[nodiscard]] auto executor() const noexcept -> boost::corosio::io_context::executor_type { return io_.executor(); }
+	// One with no context for a connection without an I/O thread.
+	[[nodiscard]] auto executor() const noexcept -> boost::corosio::io_context::executor_type
+	{
+		return core_ ? core_->io.executor() : boost::corosio::io_context::executor_type{};
+	}
 
   private:
 	friend class detail::connection_api<connection>;
+	friend auto connect(url u, connection_options options, std::pmr::memory_resource *mr) -> result<connection>;
+	explicit connection(std::unique_ptr<detail::connection_core> core) noexcept : core_(std::move(core)) {}
 
-	// Runs make_task(conn_) on the I/O thread and waits for its result;
-	// conn_ is const when called from a const member.
+	// Runs make_task(c) on the I/O thread with its ldap::connection c
+	// (const from a const member) and waits for its result; not_connected
+	// without an I/O thread.
 	template<class Self, class F>
-	auto call(this Self &self, const F &make_task) -> detail::task_value<decltype(make_task(self.conn_))>::type
+	auto call(this Self &self, const F &make_task)
+	  -> detail::task_value<decltype(make_task(std::forward_like<Self &>(std::declval<ldap::connection &>())))>::type
 	{
-		return self.io_.run([&] { return make_task(self.conn_); });
+		if (!self.core_) {
+			return std::unexpected(make_error(client_errc::not_connected, "sync::connection: not connected"));
+		}
+		auto &c = std::forward_like<Self &>(self.core_->conn);
+		return self.core_->io.run([&] { return make_task(c); });
 	}
 	// Not owning: a transaction must not outlive its sync::connection.
 	[[nodiscard]] auto runner() const noexcept -> std::shared_ptr<const detail::io_thread>
 	{
-		return { std::shared_ptr<const detail::io_thread>{}, &io_ };
+		return { std::shared_ptr<const detail::io_thread>{}, &core_->io };
 	}
 
-	connection_options options_;
-	detail::io_thread io_{ "sync::connection" };
-	ldap::connection conn_{};// touched only on the I/O thread
+	std::unique_ptr<detail::connection_core> core_;
 };
 
 namespace detail {

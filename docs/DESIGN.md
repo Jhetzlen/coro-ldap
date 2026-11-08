@@ -1880,9 +1880,20 @@ auto stream = co_await conn.search_stream_as<person>({...});
 while (auto p = co_await stream.next()) { ... }   // result<std::optional<person>>
 
 // blocking (jhetz/ldap/sync.hpp)
-ldap::sync::connection c{url};                     // owns an io_context + 1 I/O thread
-auto people = c.search({...});                     // same request/result types
+auto c = ldap::sync::connect(url, {.timeout = 5s}); // owns an io_context + 1 I/O thread
+auto people = c->search({...});                    // same request/result types
 ```
+
+Entry points follow one rule: what opens eagerly is a free `connect()`
+returning `result<...>` (`ldap::connect`, `ldap::sync::connect`), what
+opens lazily is a constructor (`ldap::client`, `ldap::sync::client`,
+pools that connect on first use). So `sync::connection` has no options
+constructor and no member `connect()`: it is made by `sync::connect()`,
+reconnecting is assigning a new one, and its noexcept default
+constructor makes one with no I/O thread whose operations fail with
+`not_connected`. The I/O thread and the `ldap::connection` live in one
+heap core (`sync::detail::connection_core`), so the type is move-only and
+a move leaves a `sync::transaction` made by it valid.
 
 Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
 - `net::connect(ctx, url, connect_options, mr)` returns a `net::transport`
@@ -2327,8 +2338,8 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
     it (the state is leaked): the tests' `draining_context` polls before
     it is destroyed.
 
-- Implemented (#12, `jhetz/ldap/sync.hpp`): `sync::connection` owns an
-  io_context and one I/O thread (kept alive by a work guard). Each method
+- Implemented (#12, `jhetz/ldap/sync.hpp`): a connected `sync::connection`
+  owns an io_context and one I/O thread (kept alive by a work guard). Each method
   posts a wrapper coroutine to that thread, which builds and awaits the
   matching `ldap::connection` operation, and the caller waits on a
   `std::promise` holding the same `ldap::result<T>` (an exception thrown
@@ -2354,7 +2365,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   lease outliving its client cannot; not owning when made by a
   `sync::connection`, which it must not outlive).
 - The noexcept paths that end objects of the I/O thread (the
-  destructors of `sync::connection` and of the client's core,
+  destructors of `sync::connection`'s core and of the client's core,
   `sync::transaction`'s abort, `sync::lease::release()`) go through
   `io_thread::hand_over(make_task, what)` (3pf.18): if the post fails
   (out of memory) before `make_task` ran on the I/O thread, it writes

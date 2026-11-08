@@ -889,8 +889,9 @@ TEST_CASE("RFC 4513 5.2.1.6: a store's schema check is made again after a SASL s
 	{
 		layer_server_thread srv;
 		{
-			ldap::sync::connection c({ .timeout = std::chrono::seconds(10) });
-			REQUIRE(c.connect(srv.url()).has_value());
+			auto opened = ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10) });
+			REQUIRE(opened.has_value());
+			auto &c = *opened;
 			ldap::sync::store cards(c,
 			  ldap::dn{ "dc=example,dc=org" },
 			  ldap::named_by<&card::cn>,

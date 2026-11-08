@@ -35,6 +35,8 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -49,9 +51,9 @@ using Catch::Matchers::IsEmpty;
 TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 {
 	server_thread srv;
-	ldap::sync::connection c({ .timeout = std::chrono::seconds(10) });
-	CHECK_FALSE(c.is_open());
-	REQUIRE(c.connect(srv.url()).has_value());
+	auto opened = ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10) });
+	REQUIRE(opened.has_value());
+	auto &c = *opened;
 	CHECK(c.is_open());
 	CHECK(c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret").has_value());
 	auto bad = c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "wrong");
@@ -72,11 +74,43 @@ TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 	CHECK(after.error().code == ldap::client_errc::not_sent);
 }
 
+TEST_CASE("sync: a connection without an I/O thread, moves and reconnecting", "[net][sync]")
+{
+	static_assert(std::is_nothrow_default_constructible_v<ldap::sync::connection>);
+	static_assert(std::is_nothrow_move_constructible_v<ldap::sync::connection>);
+	static_assert(std::is_nothrow_move_assignable_v<ldap::sync::connection>);
+	static_assert(!std::is_copy_constructible_v<ldap::sync::connection>);
+	static_assert(!std::is_copy_assignable_v<ldap::sync::connection>);
+	ldap::sync::connection none;
+	CHECK_FALSE(none.is_open());
+	CHECK(none.security_layer() == ldap::sasl_protection::none);
+	CHECK(none.executor() == boost::corosio::io_context::executor_type{});
+	CHECK(none.simple_bind(ldap::dn{}, "").error().code == ldap::client_errc::not_connected);
+	CHECK(none.search({ .base = ldap::dn{} }).error().code == ldap::client_errc::not_connected);
+	CHECK(none.begin_transaction().error().code == ldap::client_errc::not_connected);
+	none.close();
+
+	server_thread srv;
+	auto opened = ldap::sync::connect(srv.url());
+	REQUIRE(opened.has_value());
+	ldap::sync::connection c = std::move(*opened);
+	CHECK(c.is_open());
+	CHECK(c.simple_bind(ldap::dn{}, "").has_value());
+	auto again = ldap::sync::connect(srv.url());
+	REQUIRE(again.has_value());
+	c = std::move(*again);// closes the first connection
+	CHECK(c.is_open());
+	CHECK(ldap::sync::who_am_i(c) == "dn:cn=me");
+	c = ldap::sync::connection{};
+	CHECK_FALSE(c.is_open());
+}
+
 TEST_CASE("sync: many threads share one connection", "[net][sync]")
 {
 	server_thread srv;
-	ldap::sync::connection c;
-	REQUIRE(c.connect(srv.url()).has_value());
+	auto opened = ldap::sync::connect(srv.url());
+	REQUIRE(opened.has_value());
+	auto &c = *opened;
 	constexpr int threads = 8;
 	constexpr int per_thread = 25;
 	std::atomic<int> failures{ 0 };
@@ -110,8 +144,9 @@ TEST_CASE("sync: many threads share one connection", "[net][sync]")
 TEST_CASE("sync: a blocking call from the I/O thread fails with would_deadlock", "[net][sync]")
 {
 	server_thread srv;
-	ldap::sync::connection c;
-	REQUIRE(c.connect(srv.url()).has_value());
+	auto opened = ldap::sync::connect(srv.url());
+	REQUIRE(opened.has_value());
+	auto &c = *opened;
 	std::promise<ldap::result<std::string>> got;
 	capy::run_async(c.executor())(
 	  [](ldap::sync::connection &cl, std::promise<ldap::result<std::string>> &p) -> capy::task<void> {
@@ -129,8 +164,9 @@ TEST_CASE("sync: a blocking call from the I/O thread fails with would_deadlock",
 TEST_CASE("sync: search_paged leaves nothing on the caller's resource once it returns", "[net][sync]")
 {
 	server_thread srv;
-	ldap::sync::connection c({ .timeout = std::chrono::seconds(10) });
-	REQUIRE(c.connect(srv.url()).has_value());
+	auto opened = ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10) });
+	REQUIRE(opened.has_value());
+	auto &c = *opened;
 	auto arena = std::make_unique<counting_resource>();
 	{
 		auto paged = c.search_paged({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } }, 10, arena.get());
@@ -147,15 +183,15 @@ TEST_CASE("sync: connect failures and destruction without unbind", "[net][sync]"
 {
 	{
 		const refused_port closed;// nothing listens there
-		ldap::sync::connection c;
-		auto r = c.connect(*ldap::url::parse(closed.url()));
+		auto r = ldap::sync::connect(*ldap::url::parse(closed.url()));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == std::errc::connection_refused);
 	}
 	server_thread srv;
 	{
-		ldap::sync::connection c;
-		REQUIRE(c.connect(srv.url()).has_value());
+		auto opened = ldap::sync::connect(srv.url());
+		REQUIRE(opened.has_value());
+		auto &c = *opened;
 		REQUIRE(c.simple_bind(ldap::dn{}, "").has_value());
 	}// destroyed while connected: closes and joins
 	SUCCEED();
@@ -164,17 +200,16 @@ TEST_CASE("sync: connect failures and destruction without unbind", "[net][sync]"
 TEST_CASE("sync: connect with the URL as text", "[net][sync]")
 {
 	server_thread srv;
-	ldap::sync::connection c;
 	const std::string where = "ldap://127.0.0.1:" + std::to_string(srv.acc.local_endpoint().port());
-	auto bad = c.connect(where + "/??sub?(cn=x");
+	auto bad = ldap::sync::connect(where + "/??sub?(cn=x");
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == ldap::client_errc::invalid_url);
 	CHECK(bad.error() == ldap::url::parse(where + "/??sub?(cn=x").error());
-	CHECK_FALSE(c.is_open());
 	CHECK(srv.requests == 0);
-	REQUIRE(c.connect(where).has_value());
-	CHECK(c.is_open());
-	CHECK(ldap::sync::who_am_i(c) == "dn:cn=me");
+	auto c = ldap::sync::connect(where);
+	REQUIRE(c.has_value());
+	CHECK(c->is_open());
+	CHECK(ldap::sync::who_am_i(*c) == "dn:cn=me");
 	CHECK(srv.requests == 1);
 }
 
@@ -330,8 +365,13 @@ struct peer_server
 // server never answers (a script too short) instead of hanging the test.
 struct connected
 {
-	ldap::sync::connection c{ { .operation_timeout = std::chrono::seconds(10) } };
-	explicit connected(peer_server &srv) { REQUIRE(c.connect(srv.url()).has_value()); }
+	ldap::sync::connection c;
+	explicit connected(peer_server &srv)
+	{
+		auto opened = ldap::sync::connect(srv.url(), { .operation_timeout = std::chrono::seconds(10) });
+		REQUIRE(opened.has_value());
+		c = std::move(*opened);
+	}
 };
 
 // Hangs up and waits for the server's session to end; what it received.
@@ -636,6 +676,9 @@ TEST_CASE("sync: transactions", "[net][sync][transaction]")
 	connected k(srv);
 	auto t = k.c.begin_transaction();
 	REQUIRE(t.has_value());
+	// Moving the connection leaves its I/O thread where the transaction has it.
+	ldap::sync::connection elsewhere = std::move(k.c);
+	k.c = std::move(elsewhere);
 	CHECK(t->identifier() == "t1");
 	CHECK(t->is_open());
 	auto d = t->del({ .entry = jdoe });
@@ -776,8 +819,9 @@ TEST_CASE("sync: a transaction's destructor waits for the abort's answer only so
 	  step{},// the abort, never answered
 	  step{},// its abandon
 	  step{} });// the abort queued again by the ldap::transaction's destructor
-	ldap::sync::connection c;// no default timeout
-	REQUIRE(c.connect(srv.url()).has_value());
+	auto opened = ldap::sync::connect(srv.url());// no default timeout
+	REQUIRE(opened.has_value());
+	auto &c = *opened;
 	const auto started = std::chrono::steady_clock::now();
 	{
 		auto t = c.begin_transaction();

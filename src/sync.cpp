@@ -140,49 +140,59 @@ namespace detail {
 
 // ---------------------------------------------------------------- connection
 
-connection::connection(connection_options options) : options_(std::move(options)) {}
+namespace detail {
 
-connection::~connection()
-{
-	// Close on the I/O thread, then let the io_context run out of work:
-	// operations still running finish with not_connected, a detached name
-	// lookup or offloaded SASL step finishes, and run() returns. The
-	// io_context's destructor then joins that step's thread. Out of memory
-	// for the post: terminates (joining with the connection still open
-	// would hang, its reader keeping the io_context busy).
-	io_.hand_over(
-	  [this] {
-		  conn_ = ldap::connection{};
-		  return detail::done();
-	  },
-	  "out of memory closing the connection on the I/O thread");
-	io_.join();
-}
+	connection_core::~connection_core()
+	{
+		// Close on the I/O thread, then let the io_context run out of work:
+		// operations still running finish with not_connected, a detached
+		// name lookup or offloaded SASL step finishes, and run() returns.
+		// The io_context's destructor then joins that step's thread. Out of
+		// memory for the post: terminates (joining with the connection still
+		// open would hang, its reader keeping the io_context busy).
+		io.hand_over(
+		  [this] {
+			  conn = ldap::connection{};
+			  return done();
+		  },
+		  "out of memory closing the connection on the I/O thread");
+		io.join();
+	}
 
-auto connection::connect(url u) -> result<void>
-{
-	return call([&](ldap::connection &c) -> capy::task<result<void>> {
-		return [](ldap::connection &target,
-				 boost::corosio::io_context &ioc,
-				 url where,
-				 connection_options o) -> capy::task<result<void>> {
-			auto r = co_await ldap::connect(ioc, std::move(where), std::move(o));
+	namespace {
+
+		auto open_on(connection_core &core, url where, connection_options o, std::pmr::memory_resource *mr)
+		  -> capy::task<result<void>>
+		{
+			auto r = co_await ldap::connect(core.io.context(), std::move(where), std::move(o), mr);
 			if (!r) {
 				co_return std::unexpected(std::move(r.error()));
 			}
-			target = std::move(*r);
+			core.conn = std::move(*r);
 			co_return result<void>{};
-		}(c, io_.context(), std::move(u), options_);
-	});
+		}
+
+	}// namespace
+
+}// namespace detail
+
+auto connect(url u, connection_options options, std::pmr::memory_resource *mr) -> result<connection>
+{
+	auto core = std::make_unique<detail::connection_core>();
+	auto r = core->io.run([&] { return detail::open_on(*core, std::move(u), std::move(options), mr); });
+	if (!r) {
+		return std::unexpected(std::move(r.error()));
+	}
+	return connection(std::move(core));
 }
 
-auto connection::connect(std::string_view text) -> result<void>
+auto connect(std::string_view text, connection_options options, std::pmr::memory_resource *mr) -> result<connection>
 {
 	auto u = url::parse(text);
 	if (!u) {
 		return std::unexpected(std::move(u.error()));
 	}
-	return connect(std::move(*u));
+	return connect(std::move(*u), std::move(options), mr);
 }
 
 // ---------------------------------------------------------------- transaction

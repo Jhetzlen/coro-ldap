@@ -867,9 +867,15 @@ itself needs only ICU.
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.
 - `jhetz/ldap/sync.hpp` (#12): `ldap::sync::connection`, the blocking facade.
-  It owns an io_context and an I/O thread; every method runs the
-  corresponding connection operation there and waits, with the same
-  types (`connect` takes a `url` or its text, as `ldap::connect` does);
+  `ldap::sync::connect(url | string_view, connection_options = {}, mr)`
+  -> `result<sync::connection>` is the only way to open one (as
+  `ldap::connect`, without an io_context); reconnecting is
+  `c = sync::connect(...)`. A connected one owns an io_context and an I/O
+  thread in one heap core, so it is move-only and a move keeps its
+  transactions valid; a default-constructed (noexcept) or moved-from one
+  has no thread and its operations fail with `not_connected`. Every
+  method runs the corresponding connection operation on the I/O thread
+  and waits, with the same types;
   `search_paged(params, page_size)` collects every page into one
   `search_result` (the last page's done; a limit code keeps the entries).
   Callable from any number of threads; a call from its own I/O

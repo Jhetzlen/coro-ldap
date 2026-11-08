@@ -383,8 +383,9 @@ TEST_CASE("store: schema_check::on_first_use", "[net][store][schema]")
 TEST_CASE("sync store: the same operations, blocking", "[net][store][sync]")
 {
 	server_thread srv;
-	ldap::sync::connection c;
-	REQUIRE(c.connect(srv.url()).has_value());
+	auto opened = ldap::sync::connect(srv.url());
+	REQUIRE(opened.has_value());
+	auto &c = *opened;
 	ldap::sync::store s(c, people_base, ldap::named_by<&card::cn>);
 
 	auto all = s.search();

@@ -6,16 +6,16 @@ namespace ldap = jhetz::ldap;
 
 auto main(int argc, char *const *argv) -> int
 {
-	ldap::sync::connection conn;
-	if (auto connected = conn.connect(argc > 1 ? argv[1] : "ldap://localhost"); !connected) {
-		std::cerr << connected.error().message() << '\n';
+	auto conn = ldap::sync::connect(argc > 1 ? argv[1] : "ldap://localhost");
+	if (!conn) {
+		std::cerr << conn.error().message() << '\n';
 		return 1;
 	}
-	if (auto bound = conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"); !bound) {
+	if (auto bound = conn->simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"); !bound) {
 		std::cerr << bound.error().message() << '\n';
 		return 1;
 	}
-	auto people = conn.search({
+	auto people = conn->search({
 	  .base = ldap::dn{ "ou=people,dc=example,dc=org" },
 	  .filter = ldap::filters::attr("uid").starts_with("user00"),
 	  .attributes = { "cn" },

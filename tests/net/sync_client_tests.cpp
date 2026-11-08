@@ -274,8 +274,9 @@ TEST_CASE("sync: a search ending with a limit code returns its entries", "[net][
 		  answer({ entry_msg(2, jdoe, "John"), done_msg(2, 11, "", "admin limit") }),
 		  unbind_read() } });
 		{
-			ldap::sync::connection c({ .timeout = std::chrono::seconds(10) });
-			REQUIRE(c.connect(srv.url()).has_value());
+			auto opened = ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10) });
+			REQUIRE(opened.has_value());
+			auto &c = *opened;
 			auto r = c.search(people_search());
 			REQUIRE(r.has_value());
 			CHECK(r->result_code == 4);
@@ -834,8 +835,9 @@ TEST_CASE("sync load_schema: on a sync::connection and a sync::client", "[net][s
 		threaded_script_server srv(
 		  { { answer({ root_dse_msg(1), done_msg(1) }), answer({ subschema_msg(2), done_msg(2) }), unbind_read() } });
 		{
-			ldap::sync::connection c({ .timeout = std::chrono::seconds(10) });
-			REQUIRE(c.connect(srv.url()).has_value());
+			auto opened = ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10) });
+			REQUIRE(opened.has_value());
+			auto &c = *opened;
 			auto s = ldap::sync::load_schema(c);
 			REQUIRE(s.has_value());
 			CHECK(s->attribute_count() == 1);

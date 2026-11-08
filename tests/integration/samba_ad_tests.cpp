@@ -294,8 +294,9 @@ TEST_CASE("samba ad: ad passwords through ldap::client and the sync facade", "[s
 	SECTION("sync::connection")
 	{
 		reset(ioc, pwchange, "Sync-Old-Passw0rd");
-		ldap::sync::connection c(samba_tls());
-		REQUIRE(c.connect(strict_ldaps()).has_value());
+		auto opened = ldap::sync::connect(strict_ldaps(), samba_tls());
+		REQUIRE(opened.has_value());
+		auto &c = *opened;
 		REQUIRE(c.simple_bind(pwchange, "Sync-Old-Passw0rd").has_value());
 		auto r = ldap::ad::change_password(c, pwchange, "Sync-Old-Passw0rd", "Sync-New-Passw0rd");
 		if (!r) {

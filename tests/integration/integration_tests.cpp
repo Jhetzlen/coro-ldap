@@ -1737,10 +1737,11 @@ TEST_CASE("integration: the sync connection", "[integration][sync]")
 	}
 	SECTION("StartTLS, then writes")
 	{
-		ldap::sync::connection c(trusting());
 		auto u = env("JHETZ_LDAP_IT_LDAP");
 		u.replace(u.find("127.0.0.1"), 9, "localhost");
-		REQUIRE(c.connect(*ldap::url::parse(u)).has_value());
+		auto opened = ldap::sync::connect(*ldap::url::parse(u), trusting());
+		REQUIRE(opened.has_value());
+		auto &c = *opened;
 		CHECK_FALSE(c.is_tls());
 		net::tls_options tls;
 		tls.ca_file = env("JHETZ_LDAP_IT_CA");
@@ -1792,8 +1793,9 @@ TEST_CASE("integration: the sync connection", "[integration][sync]")
 	}
 	SECTION("SASL EXTERNAL over ldapi://, then close")
 	{
-		ldap::sync::connection c(trusting());
-		REQUIRE(c.connect(*ldap::url::parse(env("JHETZ_LDAP_IT_LDAPI"))).has_value());
+		auto opened = ldap::sync::connect(*ldap::url::parse(env("JHETZ_LDAP_IT_LDAPI")), trusting());
+		REQUIRE(opened.has_value());
+		auto &c = *opened;
 		ldap::sasl_external mech;
 		REQUIRE(c.sasl_bind(mech).has_value());
 		CHECK_THAT(ldap::sync::who_am_i(c).value(), ContainsSubstring("cn=peercred,cn=external,cn=auth"));
@@ -1807,8 +1809,9 @@ TEST_CASE("integration: transactions through the sync connection", "[integration
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	ldap::sync::connection c(trusting());
-	REQUIRE(c.connect(*ldap::url::parse(env("JHETZ_LDAP_IT_LDAP"))).has_value());
+	auto opened = ldap::sync::connect(*ldap::url::parse(env("JHETZ_LDAP_IT_LDAP")), trusting());
+	REQUIRE(opened.has_value());
+	auto &c = *opened;
 	REQUIRE(c.simple_bind(admin, "secret").has_value());
 	const auto state = [&c](const ldap::dn &d) {
 		return c.search({ .base = d, .scope = ldap::search_scope::base_object, .attributes = { "mail" } });
