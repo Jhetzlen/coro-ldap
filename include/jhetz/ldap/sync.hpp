@@ -199,7 +199,10 @@ namespace detail {
 // most even without a default timeout (the abort is then abandoned and
 // queued again without waiting); from the I/O thread itself it queues the
 // abort without waiting, as ldap::transaction does. Made by a
-// sync::connection, it must not outlive it. Made by a sync::lease, it
+// sync::connection, it must not outlive that connection's I/O thread: a
+// move of the connection keeps it valid; destroying the connection or
+// assigning a new one over it (reconnecting) ends it. Made by a
+// sync::lease, it
 // shares the ownership of the client's I/O thread as the lease does, so
 // it may outlive the lease and the client without dangling; but keep the
 // lease while using it: `pool.acquire()->begin_transaction()` releases

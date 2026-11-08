@@ -872,7 +872,8 @@ itself needs only ICU.
   `ldap::connect`, without an io_context); reconnecting is
   `c = sync::connect(...)`. A connected one owns an io_context and an I/O
   thread in one heap core, so it is move-only and a move keeps its
-  transactions valid; a default-constructed (noexcept) or moved-from one
+  transactions valid (destroying it, or assigning a new connection over it
+  to reconnect, ends them: they must not be used after that); a default-constructed (noexcept) or moved-from one
   has no thread and its operations fail with `not_connected`. Every
   method runs the corresponding connection operation on the I/O thread
   and waits, with the same types;

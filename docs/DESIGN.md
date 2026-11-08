@@ -2363,7 +2363,8 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   `shared_ptr`, owning the client's core when made by a `sync::lease`,
   so that it cannot dangle once the lease and the client are gone, as a
   lease outliving its client cannot; not owning when made by a
-  `sync::connection`, which it must not outlive).
+  `sync::connection`, whose core it must not outlive: a move keeps the
+  core, a reconnect `c = sync::connect(...)` destroys it).
 - The noexcept paths that end objects of the I/O thread (the
   destructors of `sync::connection`'s core and of the client's core,
   `sync::transaction`'s abort, `sync::lease::release()`) go through
