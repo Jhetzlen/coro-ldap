@@ -757,17 +757,19 @@ entry (best and median of 9 runs):
 cmake --build build/bench && build/bench/jhetz_ldap_paged_bench
 ```
 
-`ldap::search_paged` as a free function over the public
-`connection::search_stream()`, measured against the member it replaced
+`ldap::search_paged` as a free function, which requests each page through
+the same task as `connection::search_stream()` (`detail::search_stream_of`
+on the connection's shared state), measured against the member it replaced
 (the internal search start, no stream task, no copy of the search_params)
-in a worktree built the same way (GCC, Release, same session, five
-alternating invocations each, medians):
+in a worktree of 358238e built the same way (GCC, Release, same session,
+five alternating invocations each, medians; the difference is that of each
+pair of invocations):
 
 | Page size | member | free function | |
 |---:|---:|---:|---:|
-| 1 | 21.5-21.8 us/page | 22.3-24.8 us/page | +4-15% |
-| 10 | 43.3-44.2 us/page | 44.9-47.2 us/page | +2-8% |
-| 100 | 264-270 us/page | 266-281 us/page | noise |
+| 1 | 21.1-22.9 us/page | 22.4-25.4 us/page | +0.9-2.9 us (+4-13%) |
+| 10 | 43.3-45.0 us/page | 45.7-48.0 us/page | +1.2-2.9 us (+3-7%) |
+| 100 | 265-270 us/page | 272-274 us/page | +2.6-9.0 us (+1-3%) |
 
 ## ThreadSanitizer
 

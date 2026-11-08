@@ -1277,9 +1277,9 @@ shared state, so that the `paged_search`, like a stream, does not depend
 on the connection object staying where it is) with the paged control. Measured
 with bench/paged_bench.cpp against the internal search start it replaced
 (Release, one thread, in-process server; docs/DEVELOPMENT.md has the
-numbers): 1 to 3 µs more per page (a stream task and a copy of the
-search_params), +4 to 15% at one entry per page, within the noise at 100,
-nothing against a network round trip. `search_paged(client &, ...)` runs it on one shared lease, which
+numbers): 1 to 3 µs more per page of 1 or 10 entries (a stream task and
+a copy of the search_params), +4 to 13% at one entry per page, +1 to 3%
+at 100, nothing against a network round trip. `search_paged(client &, ...)` runs it on one shared lease, which
 the `paged_search` holds until destroyed (the cookies are bound to that
 connection), and requests the first page again on a new lease when it
 fails with `cond::connection_lost` or `cond::busy_or_unavailable` before
