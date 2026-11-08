@@ -2236,18 +2236,87 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   timeout awaitable's own `std::stop_source`, made before `await_suspend`,
   throws `std::bad_alloc` as usual: the due watcher catches it (and closes
   the connection), the operations let it propagate.
+  A destructor or `close()` called off the strand posts its work with
+  `capy::run_async`, whose frame failing to allocate ends the program
+  too (they are `noexcept`; running the work on the calling thread
+  instead would race the strand).
 - Lifetime: the state is one reference-counted block on the connection's
   resource, held by the connection, each outstanding operation, each
   stream, and the reader and writer frames. Moving a connection or stream
   is a pointer move; destroying the connection closes it and the others
   finish with `not_connected` and release the block.
-- Threading: everything runs on the executor of the connection's
-  io_context (`connection::executor()`); from another thread, start the
-  operation there (`capy::run_async(conn.executor())(task)`). The one
-  exception is a SASL step a mechanism offloads (GSSAPI's calls to the
-  KDC, section 3): it runs on a thread of its own and wakes the bind
-  through the executor; the io_context counts it as outstanding work,
-and its destructor joins the thread.
+- Threading (coro-ldap-nj9): the usual deployment is one io_context run
+  by a thread pool, so thread safety is built in, not a convention. The
+  connection's state runs on a `capy::strand` over the io_context's
+  executor (`connection::executor_type`, `executor()`): the writer, the
+  reader and the due watcher are started on it, and every public
+  operation (of `connection`, `search_stream`, `paged_search`,
+  `transaction`) enters it through `detail::on_strand`
+  (`src/strand_util.hpp`): inline when the awaiting task already runs
+  there (its executor compares equal to the strand), else through
+  `capy::run(strand)`, which posts the operation's task there and resumes
+  the caller on its own executor. Waits inside it (async_event, timers,
+  socket I/O) resume through the strand, their task's executor. Corosio's
+  `tls_stream` requires exactly this (all operations on one stream within
+  one strand on a multi-threaded context). On one thread the price is two
+  posts per operation started from a task of the plain io_context
+  executor (onto the strand, and back); none when the caller runs on the
+  strand. Since run_async dispatches, a writer or reader started on the
+  strand runs at once, up to its first suspension.
+  - Accessors (`is_open()`, `outstanding()`, `is_tls()`,
+    `security_layer()`, `bind_count()`, `detail::accepts_requests()`) read
+    atomic snapshots that the strand publishes after each change
+    (`core::publish()`); `close()` clears the open and accepting snapshots
+    (and zeroes `outstanding()`) at once, before its posted work runs.
+    `transaction::is_open()` is an atomic. A second concurrent `next()` on
+    a `search_stream` or `paged_search` fails with `operation_in_progress`
+    (checked on the strand). A stream's other accessors (`done()`,
+    `references()`, `controls()`) read what its `next()` calls wrote:
+    not while one runs.
+  - capy::strand cannot be entered synchronously (its lock is private), so
+    the noexcept paths called off it, `connection::close()`, the
+    destructors (connection, `search_stream`, `paged_search`,
+    `transaction`) and `detail::set_close_hook`, post their work
+    (`detail::run_on_strand`), unless the calling thread runs the strand or
+    the io_context is stopped (no thread runs it): then the work runs
+    inline, as before. Breaking rule (user decision, option A of nj9):
+    after destroying a stream, paged search or transaction off the strand,
+    the memory resource of its entries must outlive the next run of the
+    io_context, which runs the posted cleanup, and `close()` takes effect
+    then. An own strand-like executor whose lock could be taken
+    synchronously (option B) would have kept the synchronous semantics; it
+    was not chosen.
+  - `ldap::client` has a strand of its own for the pool state
+    (`client::executor()`); acquire(), the forwarders, `close()` and a
+    lease's release enter it the same way. Its connections keep their own
+    strands, so operations on different pooled connections run in
+    parallel; the close hook a connection runs on its strand posts the
+    pool's `notify()` to the client's strand, and the pool reads a
+    connection's state through the snapshots. A forwarded operation thus
+    hops client strand, connection strand, client strand.
+  - `store<T>` keeps its schema-check outcome in a mutex-guarded
+    `detail::schema_check_cache`, so one store may be used from several
+    threads (`sync::store` too).
+  - Out of scope, documented: value types (`entry`, `dn`,
+    `search_result`) follow the standard library's rules; a memory
+    resource the caller passes for a search's entries must allow the
+    strand allocating while the caller frees entries on another thread;
+    `locking_mode::unsafe_io` and `unsafe` opt out of cross-thread use.
+  - A SASL step a mechanism offloads (GSSAPI's calls to the KDC, section
+    3) runs on a thread of its own and wakes the bind through the strand;
+    the io_context counts it as outstanding work, and its destructor joins
+    the thread.
+  - Tests: `tests/net/thread_tests.cpp` runs a connection, a client and a
+    store from 16 tasks on a 4-thread io_context against an answering
+    in-process server (every operation, concurrent `next()`s, the
+    connection and the client destroyed with operations of other threads
+    outstanding), clean under TSan (Clang, `build/tsan`); the integration
+    test `[threads]` runs a connection, a client, a store and streams
+    against slapd the same way. `bench/connection_bench.cpp` measures the
+    strand's price on one thread (docs/DEVELOPMENT.md "Benchmark").
+  - An io_context destroyed before it runs a posted cleanup again drops
+    it (the state is leaked): the tests' `draining_context` polls before
+    it is destroyed.
 
 - Implemented (#12, `jhetz/ldap/sync.hpp`): `sync::connection` owns an
   io_context and one I/O thread (kept alive by a work guard). Each method
@@ -2425,8 +2494,9 @@ decision left open.
 - One type, `ldap::client` (the name `naming-connection` reserved), built
   from `client_options{servers, connection, setup, max_connections = 1,
   idle_check = 60 s, probe_timeout = 5 s, max_lifetime, acquire_timeout =
-  30 s, backoff, failback_after = 5 min, observer, referrals}` on one io_context,
-  whose executor everything runs on, as for `connection`. Connections are
+  30 s, backoff, failback_after = 5 min, observer, referrals}` on one io_context;
+  the pool state runs on a strand of its own and each connection on its
+  own (section 7, "Threading"). Connections are
   opened lazily by `acquire()`, up to `max_connections`; nothing runs in
   the background (no timer keeps `io_context::run()` alive).
 - `max_connections` stays 1 by default (c67, user decision): one
@@ -2627,7 +2697,7 @@ decision left open.
   on the io_context. Unbinding cleanly at `close()` still works while
   the executor runs (from a task, as `examples/pool.cpp` does).
 - `client_observer`: virtual hooks, no-ops by default, called
-  synchronously on the executor: `on_connect(server, outcome)` after each
+  synchronously on the client's strand: `on_connect(server, outcome)` after each
   attempt, `on_retry(server, error, delay)` when a server enters backoff,
   `on_disconnect(server, reason)` when a connection leaves the pool,
   `on_probe(server, outcome)`, `on_acquire_wait(waited)` once per acquire

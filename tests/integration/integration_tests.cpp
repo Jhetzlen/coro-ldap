@@ -18,6 +18,7 @@
 
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/ex/run_async.hpp>
+#include <boost/capy/ex/work_guard.hpp>
 #include <boost/corosio/endpoint.hpp>
 #include <boost/corosio/ipv4_address.hpp>
 #include <boost/corosio/tcp_acceptor.hpp>
@@ -28,15 +29,18 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
 #include <format>
 #include <fstream>
 #include <iterator>
+#include <latch>
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -2260,3 +2264,121 @@ TEST_CASE("integration: ldap::client replaces a connection the server dropped", 
 	drive(ioc);
 }
 
+// ---------------------------------------------------------------- threads
+
+namespace {
+
+// Searches, compares and an add / modify / delete of an entry of its own,
+// `rounds` times, on `d` (a connection or a client).
+template<class D> auto threaded_worker(D &d, std::string name, int rounds, std::atomic<int> &failed) -> capy::task<void>
+{
+	const ldap::dn entry = *ldap::dn::parse("uid=" + name + ",ou=people,dc=example,dc=org");
+	const auto check = [&failed](bool ok) {
+		if (!ok) {
+			++failed;
+		}
+	};
+	for (int i = 0; i < rounds; ++i) {
+		auto found = co_await d.search({ .base = people,
+		  .scope = ldap::search_scope::single_level,
+		  .filter = ldap::filters::attr("uid") == "user01" + std::to_string(i % 10) });
+		check(found && found->entries.size() == 1);
+		check((co_await d.add({ .entry = entry,
+				 .attributes = { { "objectClass", { "inetOrgPerson" } },
+				   { "uid", { name } },
+				   { "cn", { "T" } },
+				   { "sn", { "T" } } } }))
+			.has_value());
+		auto same = co_await d.compare({ .entry = entry, .attribute = "cn", .value = "T" });
+		check(same && *same);
+		check((co_await d.modify({ .object = entry, .changes = { ldap::mod::replace("cn", { "U" }) } })).has_value());
+		check((co_await d.del({ .entry = entry })).has_value());
+	}
+}
+
+// Reads through a store shared by every worker, and a search_stream.
+auto store_worker(ldap::store<&staff::uid, ldap::client> &s, ldap::client &pool, int rounds, std::atomic<int> &failed)
+  -> capy::task<void>
+{
+	for (int i = 0; i < rounds; ++i) {
+		auto got = co_await s.get("user01" + std::to_string(i % 10));
+		if (!got || !got->has_value()) {
+			++failed;
+		}
+		auto stream = co_await pool.search_stream({ .base = people,
+		  .scope = ldap::search_scope::single_level,
+		  .filter = ldap::filters::attr("uid") == "user010" });
+		std::size_t n = 0;
+		if (stream) {
+			while (true) {
+				auto e = co_await stream->next();
+				if (!e || !*e) {
+					if (!e) {
+						++failed;
+					}
+					break;
+				}
+				++n;
+			}
+		}
+		if (n != 1) {
+			++failed;
+		}
+	}
+}
+
+void run_threaded(corosio::io_context &ioc, std::vector<capy::task<void>> tasks)
+{
+	std::latch done(static_cast<std::ptrdiff_t>(tasks.size()));
+	std::optional<capy::work_guard<corosio::io_context::executor_type>> guard(std::in_place, ioc.get_executor());
+	for (auto &t : tasks) {
+		capy::run_async(
+		  ioc.get_executor(),
+		  [&done] { done.count_down(); },
+		  [&done](const std::exception_ptr &) { done.count_down(); })(std::move(t));
+	}
+	constexpr int pool_threads = 4;
+	std::vector<std::thread> threads;
+	threads.reserve(pool_threads);
+	for (int i = 0; i < pool_threads; ++i) {
+		threads.emplace_back([&ioc] { ioc.run(); });
+	}
+	done.wait();
+	guard.reset();// run() returns once no work is left
+	for (auto &t : threads) {
+		t.join();
+	}
+	ioc.restart();
+}
+
+}// namespace
+
+TEST_CASE("integration: one connection, one client and one store from several threads", "[integration][threads]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	constexpr int workers = 8;
+	constexpr int rounds = 10;
+	std::atomic<int> failed = 0;
+	draining_context ioc;
+	auto c = open_admin(ioc);
+	const auto server = ldap::url::parse(env("JHETZ_LDAP_IT_LDAP"));
+	REQUIRE(server.has_value());
+	ldap::client pool(ioc,
+	  { .servers = { *server },
+		.connection = trusting(),
+		.setup = ldap::simple_bind_setup(admin, "secret"),
+		.max_connections = 3 });
+	ldap::store staffs(pool, people, ldap::named_by<&staff::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	std::vector<capy::task<void>> tasks;
+	for (int i = 0; i < workers; ++i) {
+		tasks.push_back(threaded_worker(c, unique("thc"), rounds, failed));
+		tasks.push_back(threaded_worker(pool, unique("thp"), rounds, failed));
+		tasks.push_back(store_worker(staffs, pool, rounds, failed));
+	}
+	run_threaded(ioc, std::move(tasks));
+	CHECK(failed == 0);
+	CHECK(c.is_open());
+	CHECK(pool.connections() <= 3);
+}

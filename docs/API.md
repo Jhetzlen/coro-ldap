@@ -340,6 +340,22 @@ itself needs only ICU.
   connection, and later operations fail with `client_errc::not_sent`
   naming the first error. The header documents the memory, threading and
   lifetime rules.
+  Threading (coro-ldap-nj9): a connection may be used from any number of
+  threads, on an io_context run by one thread or a pool.
+  `connection::executor_type` is a `capy::strand` of the io_context's
+  executor; every operation of the connection, its streams, paged searches
+  and transactions runs on it and resumes the awaiting task on that
+  task's own executor. `is_open()`, `outstanding()`, `is_tls()`,
+  `security_layer()` and `bind_count()` are snapshots, safe on any thread;
+  a second concurrent `next()` on a stream fails with
+  `operation_in_progress`. Breaking: `close()` and the destructors of
+  `connection`, `search_stream`, `paged_search` and `transaction`, called
+  off the strand (from another thread, or a task of the plain io_context
+  executor), post their work: `close()` takes effect when the io_context
+  next runs (`is_open()` reports it at once), and the memory resource of
+  a destroyed stream's entries must outlive that run. On the strand, or
+  with the io_context stopped, they run at once. `locking_mode::unsafe_io`
+  and `unsafe` opt out of cross-thread use.
   Step 6 adds the other operations: `add`, `modify` (changes from
   `ldap::mod::add / remove / replace / increment`), `del`, `modify_dn`
   (rename and / or move: `{.entry, .new_rdn, .delete_old_rdn,
@@ -816,7 +832,8 @@ itself needs only ICU.
   entry named by one member: `ldap::store people(source, base,
   ldap::named_by<&person::uid>, store_options{.schema_check})`, the
   struct and the source type deduced (`store<&person::uid,
-  ldap::client>`). The naming member must be in `schema<T>`, required,
+  ldap::client>`); one store may be used from several threads (its
+  schema-check outcome is behind a lock). The naming member must be in `schema<T>`, required,
   single-valued and writable (static_assert). `dn_of(key)`
   (`uid=<escaped key>,<base>`); `get(key)` / `get_at(dn)` -> `task<result<
   std::optional<T>>>` (a base-object search for T's attributes and object
@@ -856,7 +873,10 @@ itself needs only ICU.
   Callable from any number of threads; a call from its own I/O
   thread fails with `client_errc::would_deadlock`.
 - `jhetz/ldap/client.hpp` (3pf, DESIGN.md section 11): `ldap::client`, a
-  pool of multiplexed connections opened lazily. `client(ioc,
+  pool of multiplexed connections opened lazily, usable from any number of
+  threads (its pool state on a strand of its own, `executor()`, each
+  connection on its own; `close()`, the destructor and a lease's release
+  off that strand post their work, as `connection::close()` does). `client(ioc,
   client_options{.servers, .connection, .setup, .max_connections = 1,
   .idle_check, .probe_timeout, .max_lifetime, .acquire_timeout,
   .backoff, .failback_after, .observer, .referrals})`. The default

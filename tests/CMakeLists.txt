@@ -187,6 +187,7 @@ if(JHETZ_LDAP_BUILD_NET)
         net/sync_client_tests.cpp
         net/store_tests.cpp
         net/message_io_tests.cpp
+        net/thread_tests.cpp
     )
     if(JHETZ_LDAP_WITH_GSSAPI)
         target_sources(jhetz_ldap_net_tests PRIVATE net/sasl_gssapi_tests.cpp)

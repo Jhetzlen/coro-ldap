@@ -44,7 +44,7 @@ others; the list of `jhetz::ldap_net` headers is in `tests/CMakeLists.txt`).
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
 | `JHETZ_LDAP_WERROR` | `ON` (`OFF` as a subproject, and on clang-cl) | warnings are errors in our own targets (never in Corosio, Capy or Catch2); off when added with `add_subdirectory` or FetchContent, so a newer compiler's new warnings do not break consumers. `/WX` on MSVC; off on clang-cl, not built yet (`/W4` still shows the warnings; `-DJHETZ_LDAP_WERROR=ON` adds `/WX`) |
-| `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench` (see below; not run by ctest or CI) |
+| `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench`, and with `JHETZ_LDAP_BUILD_NET` `jhetz_ldap_connection_bench` (see below; not run by ctest or CI) |
 | `JHETZ_LDAP_COVERAGE` | `OFF` | Clang source-based coverage on our own targets (see [Coverage](#coverage)) |
 | `JHETZ_LDAP_CLANG_TIDY` | `OFF` | run clang-tidy (`.clang-tidy`) on our own targets while building them (see [clang-tidy](#clang-tidy)) |
 
@@ -720,6 +720,51 @@ session, before and after that change, heap 11.5 to 10.0 ms (-13%), arena
 with buffer 9.3 to 7.6 ms (-18%), arena without buffer 9.6 to 8.0 ms
 (-17%). Counting decoded strings against `decode_options::max_elements`
 costs about 0.3 ms of that.
+
+`bench/connection_bench.cpp` (built when `JHETZ_LDAP_BUILD_NET` is on too)
+sends CompareRequests over a Unix socket pair to an in-process server that
+answers each at once, on an io_context run by one thread: one after
+another from a task of the io_context's executor, the same from a task of
+`connection::executor()`, and from 64 tasks at once. It prints the time
+per operation (best and median of 9 runs of 20,000).
+
+```sh
+cmake -B build/bench -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DJHETZ_LDAP_BUILD_BENCH=ON -DJHETZ_LDAP_BUILD_TESTS=OFF
+cmake --build build/bench && build/bench/jhetz_ldap_connection_bench
+```
+
+The connection's strand (DESIGN.md section 7, "Threading"), measured
+against a worktree of main built the same way (GCC 16.2, Release, same
+session, two alternating invocations each, medians):
+
+| Mode | before the strand | on the strand | |
+|---|---:|---:|---:|
+| sequential, from the io_context's executor | 11.2-11.4 us | 13.4-13.9 us | +19-22% |
+| sequential, from `connection::executor()` | 11.2-11.3 us | 12.1-12.7 us | +8-13% |
+| 64 tasks at once | 6.1 us | 7.6 us | +24-25% |
+
+A caller off the strand pays for the two posts (onto the strand and back),
+a caller on it for the strand's locking of the writer's and reader's
+wake-ups only.
+
+## ThreadSanitizer
+
+`tests/net/thread_tests.cpp` (tag `[threads]`) uses one connection, one
+client and one store from many tasks on an io_context run by 4 threads;
+the integration test `[threads]` does the same against slapd. Run them,
+and the other net tests, under TSan in a Clang build of their own
+(`JHETZ_LDAP_SANITIZE` is ASan + UBSan, which TSan excludes):
+
+```sh
+CXX=clang++ cmake -B build/tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_WERROR=OFF \
+      -DJHETZ_LDAP_BUILD_EXAMPLES=OFF \
+      -DCMAKE_CXX_FLAGS='-fsanitize=thread -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread
+cmake --build build/tsan --target jhetz_ldap_net_tests jhetz_ldap_integration_tests
+build/tsan/tests/jhetz_ldap_net_tests '[threads]'
+build/tsan/tests/jhetz_ldap_net_tests '[net]'
+tests/integration/run_openldap.sh build/tsan/tests/jhetz_ldap_integration_tests '[threads]'
+```
 
 ## Golden vectors
 
