@@ -16,91 +16,102 @@
 //   auto added = co_await pool.add({.entry = ..., .attributes = ...});   // retried only if never sent
 //
 // Leases: a lease (acquire()) shares its connection with other leases, their
-// operations multiplexed on it. acquire() takes an idle connection, else opens
-// a new one while fewer than max_connections exist, else shares the one with
-// the fewest leases; it also shares rather than wait or fail when no server
-// may be tried now. An exclusive_lease (acquire_exclusive()) gets an idle or
-// new connection no other lease shares while it is held; while one waits,
-// shared acquires do not take idle connections. On a shared lease, a bind,
-// start_tls() (operation_in_progress while another lease has an operation
-// outstanding), unbind() and close() act on every lease sharing the
-// connection: do them on an exclusive lease. A connection whose bind_count()
-// changed since session_setup (a bind done, failed or in progress) is never
-// handed out again and leaves the pool once its last lease returns, as does
-// one whose unbind() has begun. Use one client per identity and keep binds in
-// session_setup.
+// operations multiplexed on it. acquire() takes an idle connection, else
+// opens a new one while fewer than max_connections exist, else shares the one
+// with the fewest leases; it also shares rather than wait or fail when no
+// server may be tried now. An exclusive_lease (acquire_exclusive()) gets an
+// idle or new connection no other lease shares while it is held; while one
+// waits, shared acquires do not take idle connections (they share, open a new
+// one, or wait, without failing while that idle connection exists). On a
+// shared lease, a bind, start_tls() (operation_in_progress while another
+// lease has an operation outstanding), unbind() and close() act on every
+// lease sharing the connection: do them on an exclusive lease. A connection
+// whose bind_count() changed since session_setup (a bind done, failed or in
+// progress) is never handed out again and leaves the pool once its last lease
+// returns, as does one whose unbind() has begun. Use one client per identity
+// and keep binds in session_setup.
 //
 // Servers and failover: `servers` is in priority order; a new connection
 // tries each server whose backoff has ended, in order. A failed connect,
 // StartTLS or session_setup puts the server in backoff: uniform in [0, d],
 // d = min(backoff.max, backoff.initial * backoff.multiplier^(failures - 1)),
-// reset by a success; concurrent failures count once. An attempt cut short
-// by acquire_timeout counts as a failure unless it began with less than half
-// of acquire_timeout left. acquire() waits for the earliest backoff, up to
+// reset by a success; concurrent failures count once. An attempt cut short by
+// acquire_timeout counts as a failure unless it began with less than half of
+// acquire_timeout left. acquire() waits for the earliest backoff, up to
 // acquire_timeout, then fails with the last server's error.
 // cond::invalid_input excludes the server for that acquire().
 // cond::auth_failed backs off for at least backoff.auth_failure_min and half
-// of d; during it every acquire() fails at once with the stored error (unless
-// another server or a pooled connection serves it), and afterwards one
-// acquire() binds again while the others fail. So a wrong password costs at
-// most one bind per server per backoff period, plus attempts in flight (a
-// rate limit, not a lockout guard), and a password fixed on the server is
-// noticed only once the backoff ends. An idle connection to a lower-priority
-// server at least failback_after old is closed by acquire() when a
-// higher-priority server may be tried. All servers must serve the same
-// directory and schema (a store's schema check holds for any of them).
+// of d; acquire() calls already running stop trying that server, and during
+// the backoff every acquire() fails at once with the stored error (unless
+// another server or a pooled connection serves it). Afterwards one acquire()
+// binds again while the others fail; if that bind ends without the server's
+// verdict (cut short, stopped, its task destroyed, another error), the
+// authentication backoff starts again. So a wrong password costs at most one
+// bind per server per backoff period, plus attempts in flight (a rate limit,
+// not a lockout guard), and a password fixed on the server is noticed only
+// once the backoff ends. An idle connection to a lower-priority server at
+// least failback_after old is closed by acquire() when a higher-priority
+// server may be tried. All servers must serve the same directory and schema
+// (a store's schema check holds for any of them).
 //
 // Health: there is no background timer. acquire() drops connections found
-// closed and probes an idle connection unused for longer than idle_check
-// (a root DSE base search for "1.1", within probe_timeout): no answer (a
-// server error is an answer) closes and replaces it, unless acquire_timeout
-// cut a probe short that began with less than half of it left. A connection
-// older than max_lifetime is not handed out again. Retired connections do
-// not count against max_connections while their leases drain.
+// closed and probes an idle connection unused for longer than idle_check (a
+// root DSE base search for "1.1", within probe_timeout): no answer (a server
+// error is an answer) closes and replaces it, unless acquire_timeout cut a
+// probe short that began with less than half of it left. A connection older
+// than max_lifetime is not handed out again. Retired connections do not count
+// against max_connections while their leases drain. An acquire() waiting for
+// a slot looks again when a leased connection closes or passes max_lifetime.
 //
 // Closing: a connection leaving the pool is unbound (a detached unbind() on
 // the executor) if no lease holds it, else closed; once the io_context is
-// stopped (io_context::stopped()) it is closed. A posted unbind runs only if
-// the io_context runs again, so after restart() run it, or the connection is
-// destroyed without an UnbindRequest. close() (and the destructor) closes
+// stopped (io_context::stopped()) it is closed. stopped() is false after
+// restart() and after run_one(), run_for() or poll() returned with work left:
+// the posted unbind then runs only if the io_context runs again, else it is
+// destroyed with the io_context without an UnbindRequest; so restart() just
+// before running it again. To unbind cleanly, call close() (or destroy the
+// client) from a task on the executor. close() (and the destructor) closes
 // every pooled connection, leased ones included (outstanding operations fail
 // with not_connected, or not_sent if not written yet), stops connection
 // attempts and referral chases in progress (they fail with not_connected),
-// and fails waiting and later acquire() calls with not_connected. No
-// observer hook runs once close() has returned.
+// and fails waiting and later acquire() calls with not_connected. No observer
+// hook runs once close() has returned.
 //
 // Referrals (client_options::referrals): off by default; search() and
 // compare() then return a referral result as errc::referral (URIs in
-// error::referrals) and search() returns continuation references
-// unfollowed. follow_referrals and follow_references chase them as
-// ldap::chase_search / chase_compare (referral_chase.hpp) do, within
-// `limits`, from the pooled connection. `authorize` decides per URI (empty:
-// every URI skipped_policy); ldapi:// and implausible hosts are never
-// contacted. Only same_setup sends the client's session_setup and TLS client
-// certificate to a referred server (same_setup_for_domains() builds such an
-// authorizer). No TLS downgrade: from a TLS connection, ldaps:// stays TLS
-// and ldap:// uses StartTLS. The referred host's certificate is checked as
-// the client's TLS settings say, so with insecure_accept_any same_setup
-// sends credentials to whatever answers. Referred connections are per chase,
-// not pooled, with no backoff or auth guard. Only a failure of the pooled
-// connection's own operation is retried. search() returns the
-// search_result: references not followed stay in search_result::references,
-// and a followed search's limit code replaces the origin's success. Writes,
-// search_stream() and extended() never chase: a write's referral is
-// errc::referral (referral_target() builds the request for another server).
+// error::referrals) and search() returns continuation references unfollowed.
+// follow_referrals and follow_references chase them as ldap::chase_search /
+// chase_compare (referral_chase.hpp) do, within `limits`, from the pooled
+// connection. `authorize` decides per URI (empty: every URI skipped_policy);
+// ldapi:// and implausible hosts are never contacted. Only same_setup sends
+// the client's session_setup and TLS client certificate to a referred server
+// (same_setup_for_domains() builds such an authorizer). No TLS downgrade:
+// from a TLS connection, ldaps:// stays TLS and ldap:// uses StartTLS. The
+// certificate is checked against the referred host (tls_options::server_name
+// cleared) as the client's TLS settings say: only
+// certificate_verification::full (and strict host_matching) authenticates a
+// referred server before same_setup sends it credentials. Referred
+// connections are per chase, not pooled, with no backoff or auth guard. Only
+// a failure of the pooled connection's own operation is retried. search()
+// returns the search_result: references not followed stay in
+// search_result::references, and a followed search's limit code replaces the
+// origin's success. Writes, search_stream() and extended() never chase: a
+// write's referral is errc::referral (referral_target() builds the request
+// for another server).
 //
 // sync::client (sync.hpp) wraps a client in blocking calls.
 //
 // Threading and lifetime: a client may be used from any number of threads.
 // Its pool state is on its own strand (executor()); each pooled connection
-// has its own strand. The observer, the referral authorizer and
-// session_setup are called on the client's strand. close(), the destructor
-// and a lease's release or destruction called off that strand post their
-// work there (it takes effect when the io_context next runs). The io_context
-// must outlive the client and its leases; the memory resource must outlive
-// the work left on the io_context (keep it until io_context::run() returns).
-// A lease may outlive its client: its connection is then closed, its
-// operations fail, and destroying it is safe.
+// has its own strand. The observer, the referral authorizer and session_setup
+// are called on the client's strand. close(), the destructor and a lease's
+// release or destruction called off that strand post their work there (it
+// takes effect when the io_context next runs, so the no-hook guarantee of
+// close() holds for a close() called on the strand). connections() reads a
+// snapshot. The io_context must outlive the client and its leases; the memory
+// resource must outlive the work left on the io_context (keep it until
+// io_context::run() returns). A lease may outlive its client: its connection
+// is then closed, its operations fail, and destroying it is safe.
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"

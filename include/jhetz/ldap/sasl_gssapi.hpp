@@ -20,7 +20,8 @@
 // - The target is the host-based service "ldap@<host>" with the URL's host,
 //   unless sasl_gssapi_options::target names another; Kerberos maps it to
 //   ldap/<host>@<realm>. Connect by DNS name, or set the target (required
-//   for ldapi:// and wrapped transports).
+//   for ldapi:// and wrapped transports). DNS canonicalization of the name is
+//   krb5.conf's (dns_canonicalize_hostname, rdns).
 // - Mutual authentication is required.
 // - Security layer (RFC 4752 section 3.1, sasl_gssapi_options::
 //   security_layer): none by default (maximum buffer size 0), so use TLS

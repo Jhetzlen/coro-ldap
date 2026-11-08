@@ -16,8 +16,9 @@
 // Multiplexing: concurrent operations (from any threads) are sent at once,
 // each with its own message id, and responses are matched by id. One writer
 // sends PDUs in order; one reader routes responses and runs only while an
-// operation waits (an idle connection lets io_context::run() return). Search
-// entries are queued per search, unbounded, until its stream takes them.
+// operation waits or a paged search release's answer is due (an idle
+// connection lets io_context::run() return). Search entries are queued per
+// search, unbounded, until its stream takes them.
 //
 // Cancellation and timeouts: every operation honours its task's stop token
 // and a timeout (search_params::timeout, else
@@ -28,8 +29,9 @@
 // Abandon is best effort: a cancelled update may still have been applied.
 // Giving up on a bind or StartTLS closes the connection instead. An operation
 // whose stop token is set before it starts is not sent and fails with
-// canceled. unbind() is sent regardless. cancel.hpp has raceable() and
-// with_stop() for racing an operation or cancelling it from a stop_source.
+// canceled; the connection stays open. unbind() is sent regardless.
+// cancel.hpp has raceable() and with_stop() for racing an operation or
+// cancelling it from a stop_source.
 //
 // Binds (RFC 4511 section 4.2.1): requests started during a bind exchange
 // (every step of a SASL bind) are held and sent in order once it ends; one
@@ -40,12 +42,12 @@
 // Server messages are decoded with origin::server. A response must carry the
 // id of an outstanding (or recently abandoned) request and an operation that
 // answers it, else client_errc::unexpected_response. IntermediateResponses
-// (section 4.13) are skipped unless requested
-// (search_params / extended_params::intermediate_responses), then returned
-// by search_stream::next_item() or in extended_result::intermediates. A
-// Notice of Disconnection (section 4.4) fails every outstanding operation
-// with its result code (errc::unavailable for success) and closes the
-// connection; other unsolicited responses are ignored.
+// (section 4.13) are skipped unless requested (search_params /
+// extended_params::intermediate_responses), then returned by
+// search_stream::next_item() or in extended_result::intermediates. A Notice
+// of Disconnection (section 4.4) fails every outstanding operation with its
+// result code (errc::unavailable for success) and closes the connection;
+// other unsolicited responses are ignored.
 //
 // Errors: a non-success result is `ldap_result::to_error` with the operation
 // as context (e.g. "search ou=people,dc=example,dc=org") and fails that
@@ -57,43 +59,43 @@
 //
 // Sent or not: an operation whose request the writer had not taken when the
 // connection closed (refused, queued, or held behind a bind) fails with
-// client_errc::not_sent, its context naming the failure: the server never
-// saw it, so even an update may be retried elsewhere. Once taken, the
-// failure's own code is reported (the server may have seen it). not_sent
-// matches cond::connection_lost. Exceptions: allocation failure stays
+// client_errc::not_sent, its context naming the failure: the server never saw
+// it, so even an update may be retried elsewhere. Once taken, the failure's
+// own code is reported (the server may have seen it). not_sent matches
+// cond::connection_lost. Exceptions: allocation failure stays
 // std::errc::not_enough_memory, operations abandoned by unbind() fail with
 // not_connected, and a default-constructed or moved-from connection fails
 // with not_connected.
 //
 // Memory: search() and search_stream entries are decoded straight into the
-// memory resource given to that call (default: the default resource) and
-// must not outlive it. The connection's own state lives on the resource
-// given to connect() or the constructor.
+// memory resource given to that call (default: the default resource) and must
+// not outlive it. The connection's own state lives on the resource given to
+// connect() or the constructor.
 //
 // Threading: a connection may be used from any number of threads, with an
 // io_context run by one thread or several. Everything runs on a capy::strand
 // of the io_context (executor()); operations hop onto it and resume the
-// awaiting task on its own executor. The accessors (is_open(),
-// outstanding(), is_tls(), security_layer(), bind_count(), ...) are safe on
-// any thread. A search_stream or paged_search allows one next() at a time
-// (another fails with client_errc::operation_in_progress). The objects
-// themselves (connection, stream, transaction) allow one thread at a time in
-// their non-const members. Entries are allocated on the strand and may be
-// freed on another thread, so their resource must allow that (the default
-// resource, std::pmr::synchronized_pool_resource, or an arena that frees
-// nothing until the search ends). Corosio's locking_mode::unsafe_io and
-// unsafe require a single thread.
-// Destructors and close() called off the strand post their work, which runs
-// when the io_context next runs (is_open(), outstanding(), is_tls() and
-// security_layer() reflect close() at once); the entries' memory resource
-// must outlive that run. An io_context destroyed before running it leaks
-// that work: after run_one() or a stop, restart() and poll() first. They run
-// at once on the strand, or once the io_context is stopped from outside its
-// run() (join its threads first before destroying a connection or stream on
-// another thread). Streams, outstanding operations and the reader may
-// outlive the connection object (destroying it closes the connection; they
-// fail with not_connected). Destroying a task suspended in an operation is
-// safe: the operation is abandoned.
+// awaiting task on its own executor. The accessors (is_open(), outstanding(),
+// is_tls(), security_layer(), bind_count(), ...) are safe on any thread. A
+// search_stream or paged_search allows one next() at a time (another fails
+// with client_errc::operation_in_progress). The objects themselves
+// (connection, stream, transaction) allow one thread at a time in their
+// non-const members. Entries are allocated on the strand and may be freed on
+// another thread, so their resource must allow that (the default resource,
+// std::pmr::synchronized_pool_resource, or an arena that frees nothing until
+// the search ends). Corosio's locking_mode::unsafe_io and unsafe require a
+// single thread. Destructors and close() called off the strand post their
+// work, which runs when the io_context next runs (is_open(), outstanding(),
+// is_tls() and security_layer() reflect close() at once); the entries' memory
+// resource must outlive that run. An io_context destroyed before running it
+// leaks that work: after run_one() or a stop, restart() and poll() first.
+// They run at once on the strand, or once the io_context is stopped from
+// outside its run() (join its threads first before destroying a connection or
+// stream on another thread); called inside run() after stop(), they post as
+// above. Streams, outstanding operations and the reader may outlive the
+// connection object (destroying it closes the connection; they fail with
+// not_connected). Destroying a task suspended in an operation is safe: the
+// operation is abandoned.
 #pragma once
 
 #include "jhetz/ldap/ber.hpp"

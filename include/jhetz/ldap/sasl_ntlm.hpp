@@ -15,10 +15,10 @@
 // - NTLM does not authenticate the server: over TLS the certificate check
 //   does, and channel binding prevents relaying the bind.
 // - TLS is required by default (sasl_ntlm_options::require_tls): start()
-//   fails with client_errc::tls_required before anything is sent. Without
-//   TLS or a security layer every PDU after the bind is unprotected, and AD
-//   with LDAP signing required refuses the bind
-//   (errc::stronger_auth_required).
+//   fails with client_errc::tls_required before anything is sent. Without TLS
+//   or a security layer every PDU after the bind is unprotected, a recorded
+//   exchange can be attacked offline (the NTProofStr), and AD with LDAP signing
+//   required refuses the bind (errc::stronger_auth_required).
 // - Security layer (MS-NLMP section 3.4, sasl_ntlm_options::security_layer):
 //   none by default (no signing or sealing negotiated). integrity or
 //   confidentiality negotiates SIGN, KEY_EXCH, 128 and ALWAYS_SIGN (SEAL
