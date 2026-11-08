@@ -1362,6 +1362,27 @@ template<> constexpr auto ldap::schema<person> = ldap::describe(
 Without it, a store uses your filter unchanged and `add` requires an
 `objectClass` field in the descriptor.
 
+`auxiliary_class(...)`, after `object_class(...)` (a static_assert
+otherwise), declares auxiliary classes (RFC 4512 section 2.4.3), such as
+`posixAccount` on an `inetOrgPerson`:
+
+```cpp
+template<> constexpr auto ldap::schema<posix_user> = ldap::describe(
+    ldap::object_class("inetOrgPerson"),
+    ldap::auxiliary_class("posixAccount", "shadowAccount"),
+    ldap::field<&posix_user::uid>("uid"), ...);
+```
+
+They are written on add after the object classes, and validated like
+them (they must exist, their MUSTs and their superclasses' are checked,
+and one the server defines as STRUCTURAL or ABSTRACT is the warning
+`not_auxiliary`), but a store's `search` and `get` AND only the
+`object_class(...)` ones into the filter: an entry is found whether or
+not it carries the auxiliary classes, and decoding it then fails if a
+required member's attribute is missing. Classes listed in `object_class`
+are all ANDed, auxiliary or not, as before. `auxiliary_classes_of<T>()`
+lists them; `object_classes_of<T>()` does not.
+
 Field shape decides cardinality:
 
 | Member type | Meaning | Error when |
@@ -1809,7 +1830,9 @@ ldap::store people(conn, base, ldap::named_by<&person::uid>, {.schema_check = ld
 ```
 
 Checks:
-- object classes from `object_class(...)` exist;
+- object classes from `object_class(...)` and `auxiliary_class(...)`
+  exist; an auxiliary one the server defines with another kind is the
+  warning `not_auxiliary`;
 - attribute exists on the server (name or alias);
 - cardinality: `T` / `optional<T>` mapped to a multi-valued attribute is
   reported (it only fails at runtime if an entry really has several values);
@@ -1818,7 +1841,8 @@ Checks:
 - writability: a non-`read_only` field on a `NO-USER-MODIFICATION`
   attribute (`createTimestamp`) is reported.
 - required attributes (warnings): with declared object classes, each
-  `MUST` attribute of those classes and of their superclasses (every `SUP`
+  `MUST` attribute of those classes, of the auxiliary classes, and of
+  their superclasses (every `SUP`
   followed, breadth first, each class once, so a cycle ends; ABSTRACT,
   STRUCTURAL and AUXILIARY alike) must be mapped by a required (`T`),
   writable member. One that no member maps is

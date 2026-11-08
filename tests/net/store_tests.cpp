@@ -44,6 +44,12 @@ struct card
 	std::string cn;
 };
 
+struct posix_card
+{
+	std::string cn;
+	std::int64_t uid_number = 0;
+};
+
 struct labelled_card
 {
 	std::string cn;
@@ -65,6 +71,12 @@ constexpr auto ldap::schema<badly_typed> =
 
 template<>
 constexpr auto ldap::schema<card> = ldap::describe(ldap::object_class("person"), ldap::field<&card::cn>("cn"));
+
+template<>
+constexpr auto ldap::schema<posix_card> = ldap::describe(ldap::object_class("person"),
+  ldap::auxiliary_class("posixAccount"),
+  ldap::field<&posix_card::cn>("cn"),
+  ldap::field<&posix_card::uid_number>("uidNumber"));
 
 template<>
 constexpr auto ldap::schema<labelled_card> = ldap::describe(ldap::object_class("person"),
@@ -242,6 +254,27 @@ TEST_CASE("store: add, modify and remove name the entry from the key", "[net][st
 			3, ldap::modify_request{ "cn=jdoe,ou=other,dc=example,dc=org", { { op::delete_, { "mail", {} } } } } });
 	CHECK(m.log.received[3] == ldap::message{ 4, ldap::del_request{ jdoe.to_string() } });
 	CHECK(m.log.received[4] == ldap::message{ 5, ldap::del_request{ "cn=jdoe,ou=other,dc=example,dc=org" } });
+}
+
+TEST_CASE("store: auxiliary classes are added, not searched for", "[net][store][auxiliary]")
+{
+	mock_ldap m;
+	m.serve({ answer({ ok(1, ldap::add_response{}) }), answer({ done_msg(2) }), answer({ done_msg(3) }) });
+	ldap::store s(m.conn, people_base, ldap::named_by<&posix_card::cn>);
+	REQUIRE(m.run(s.add(posix_card{ .cn = "X", .uid_number = 7 })).has_value());
+	REQUIRE(m.run(s.get("X")).has_value());
+	REQUIRE(m.run(s.search(ldap::filters::field<&posix_card::uid_number>() == 7)).has_value());
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 3);
+	CHECK(m.log.received[0]
+		  == ldap::message{ 1,
+			ldap::add_request{ "cn=X,ou=people,dc=example,dc=org",
+			  { { "objectClass", { "person", "posixAccount" } }, { "cn", { "X" } }, { "uidNumber", { "7" } } } } });
+	CHECK(std::get<ldap::search_request>(m.log.received[1].op).filter.to_string()
+		  == "(&(objectClass=person)(objectClass=*))");
+	CHECK(std::get<ldap::search_request>(m.log.received[2].op).filter.to_string()
+		  == "(&(objectClass=person)(uidNumber=7))");
 }
 
 TEST_CASE("store: update sends the members that differ in one modify", "[net][store][update]")

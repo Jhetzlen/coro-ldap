@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -37,6 +38,12 @@ struct person
 	std::optional<status> state;
 };
 
+struct account
+{
+	std::string uid;
+	std::int64_t uid_number = 0;
+};
+
 // A struct without declared object classes maps objectClass itself.
 struct device
 {
@@ -62,6 +69,12 @@ constexpr auto ldap::schema<person> = ldap::describe(ldap::object_class("inetOrg
   ldap::field<&person::telephone>("telephoneNumber"),
   ldap::field<&person::created>("createTimestamp", ldap::read_only),
   ldap::field<&person::state>("x-status"));
+
+template<>
+constexpr auto ldap::schema<account> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::auxiliary_class("posixAccount", "shadowAccount"),
+  ldap::field<&account::uid>("uid"),
+  ldap::field<&account::uid_number>("uidNumber"));
 
 template<>
 constexpr auto ldap::schema<device> =
@@ -562,6 +575,22 @@ TEST_CASE("to_attributes fails on a member that does not encode", "[mapping][enc
 		p.created = sys_days(10000y / January / 1);
 		CHECK(ldap::to_attributes(p).has_value());
 	}
+}
+
+TEST_CASE("auxiliary classes are written on add, not ANDed into the filter", "[mapping][auxiliary]")
+{
+	CHECK(std::ranges::equal(ldap::object_classes_of<account>(), std::array{ "inetOrgPerson"sv }));
+	CHECK(std::ranges::equal(ldap::auxiliary_classes_of<account>(), std::array{ "posixAccount"sv, "shadowAccount"sv }));
+	CHECK(ldap::auxiliary_classes_of<person>().empty());
+
+	auto a = ldap::to_attributes(account{ .uid = "jdoe", .uid_number = 1000 });
+	REQUIRE(a.has_value());
+	REQUIRE(a->size() == 3);
+	CHECK((*a)[0] == ldap::partial_attribute{ "objectClass", { "inetOrgPerson", "posixAccount", "shadowAccount" } });
+	CHECK((*a)[1] == ldap::partial_attribute{ "uid", { "jdoe" } });
+
+	CHECK(ldap::narrow_filter<account>(ldap::filters::attr("uid") == "jdoe").to_string()
+		  == "(&(objectClass=inetOrgPerson)(uid=jdoe))");
 }
 
 TEST_CASE("descriptor helpers", "[mapping]")

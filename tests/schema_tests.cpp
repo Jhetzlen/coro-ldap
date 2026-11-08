@@ -1075,3 +1075,98 @@ TEST_CASE("schema: MUST checks scale with long SUP chains and MUST lists", "[sch
 	CHECK(issues.back() == std::pair<k, std::string>{ k::must_attribute_not_mapped, "m" + std::to_string(names - 1) });
 	CHECK(took < std::chrono::seconds(10));
 }
+
+namespace {
+
+struct posix_person
+{
+	std::string uid;
+	std::string cn;
+	std::string sn;
+	std::int64_t uid_number = 0;
+	std::int64_t gid_number = 0;
+};
+
+struct wrongly_auxiliary
+{
+	std::string cn;
+	std::string sn;
+};
+
+const std::pmr::vector<std::pmr::string> posix_types{
+	"( 1.3.6.1.1.1.1.1 NAME 'gidNumber' EQUALITY integerMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.27 SINGLE-VALUE )",
+	"( 1.3.6.1.1.1.1.3 NAME 'homeDirectory' EQUALITY caseExactIA5Match SYNTAX 1.3.6.1.4.1.1466.115.121.1.26 "
+	"SINGLE-VALUE )",
+};
+const std::pmr::vector<std::pmr::string> posix_classes{
+	"( 1.3.6.1.1.1.2.0 NAME 'posixAccount' DESC 'Abstraction of an account with POSIX attributes' SUP top AUXILIARY "
+	"MUST ( cn $ uid $ uidNumber $ gidNumber $ homeDirectory ) )",
+	"( 1.3.6.1.1.1.2.1 NAME 'shadowAccount' SUP top AUXILIARY MUST uid )",
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<posix_person> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::auxiliary_class("posixAccount", "shadowAccount"),
+  ldap::field<&posix_person::uid>("uid"),
+  ldap::field<&posix_person::cn>("cn"),
+  ldap::field<&posix_person::sn>("sn"),
+  ldap::field<&posix_person::uid_number>("uidNumber"),
+  ldap::field<&posix_person::gid_number>("gidNumber"));
+
+template<>
+constexpr auto ldap::schema<wrongly_auxiliary> = ldap::describe(ldap::object_class("organizationalPerson"),
+  ldap::auxiliary_class("person", "top", "x-noSuchClass"),
+  ldap::field<&wrongly_auxiliary::cn>("cn"),
+  ldap::field<&wrongly_auxiliary::sn>("sn"));
+
+TEST_CASE("schema: auxiliary classes are checked with the object classes", "[schema][validate][auxiliary]")
+{
+	using k = ldap::schema_issue::kind;
+	auto types = openldap_types;
+	types.insert(types.end(), posix_types.begin(), posix_types.end());
+	auto classes = openldap_classes;
+	classes.insert(classes.end(), posix_classes.begin(), posix_classes.end());
+	const auto s = ldap::server_schema::parse(types, classes);
+
+	// posixAccount's MUSTs count: homeDirectory is not mapped. uid and cn
+	// are multi-valued on the server.
+	const auto rep = ldap::validate<posix_person>(s);
+	INFO(rep.to_string());
+	CHECK(rep.ok());
+	REQUIRE(rep.issues.size() == 4);
+	CHECK(rep.issues[0].what == k::single_member_multi_valued);
+	CHECK(rep.issues[1].what == k::single_member_multi_valued);
+	CHECK(rep.issues[2].what == k::single_member_multi_valued);
+	CHECK(rep.issues[3].what == k::must_attribute_not_mapped);
+	CHECK(rep.issues[3].name == "homeDirectory");
+	CHECK(rep.issues[3].detail
+		  == "required (MUST) by object class posixAccount, but no member maps it: add(dn, T) fails unless the entry's "
+			 "RDN or the server supplies it");
+
+	// Without posixAccount on the server: an error, as for an object class.
+	auto no_posix = ldap::validate<posix_person>(ldap::server_schema::parse(types, openldap_classes));
+	CHECK_FALSE(no_posix.ok());
+	CHECK(std::ranges::count_if(no_posix.issues, [](const auto &i) { return i.what == k::unknown_object_class; }) == 2);
+
+	// A class of another kind declared auxiliary: a warning.
+	const auto wrong = ldap::validate<wrongly_auxiliary>(s);
+	CHECK_FALSE(wrong.ok());
+	const auto issues_of = [&](k what) {
+		std::vector<std::string> out;
+		for (const auto &i : wrong.issues) {
+			if (i.what == what) {
+				out.push_back(i.name);
+			}
+		}
+		return out;
+	};
+	CHECK(issues_of(k::unknown_object_class) == std::vector<std::string>{ "x-noSuchClass" });
+	CHECK(issues_of(k::not_auxiliary) == std::vector<std::string>{ "person", "top" });
+	const std::string text = wrong.to_string();
+	CHECK_THAT(text,
+	  ContainsSubstring("warning: object class person: declared auxiliary, but the server defines it STRUCTURAL"));
+	CHECK_THAT(
+	  text, ContainsSubstring("warning: object class top: declared auxiliary, but the server defines it ABSTRACT"));
+}

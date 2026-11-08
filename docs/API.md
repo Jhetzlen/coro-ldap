@@ -775,8 +775,11 @@ itself needs only ICU.
   connection get each other's entries: see `search_paged` above.
 - `jhetz/ldap/mapping.hpp` (#9): typed struct mapping. A descriptor
   (`ldap::schema<T> = ldap::describe(ldap::object_class(...),
-  ldap::field<&T::m>("attr", ldap::read_only)...)`) maps members to
-  attributes; the member type decides cardinality (`T`,
+  ldap::auxiliary_class(...), ldap::field<&T::m>("attr",
+  ldap::read_only)...)`, both class lists optional, auxiliary only after
+  object_class) maps members to attributes; auxiliary classes are added
+  and validated with the object classes, but not ANDed into a store's
+  search filter (`auxiliary_classes_of<T>()`); the member type decides cardinality (`T`,
   `std::optional<T>`, `std::vector<T>`); `value_traits<T>` converts values
   (strings, which must be well-formed UTF-8 or the decode is
   `conversion_failed`, and one bad value fails the whole `decode<T>` and
@@ -815,7 +818,8 @@ itself needs only ICU.
   multi-valued attribute as a warning; MUST attributes of the declared
   object classes and their superclasses that no required, writable member
   maps as warnings: `must_attribute_not_mapped`,
-  `must_attribute_not_required`, `unknown_superclass`),
+  `must_attribute_not_required`, `unknown_superclass`; an auxiliary class
+  of another kind on the server: `not_auxiliary`),
   `object_class_type` with `sup`, `kind` (`object_class_kind`), `must`
   and `may`; the free `ldap::load_schema` (directory.hpp) and
   `store_options::schema_check = schema_check::on_first_use`. Breaking

@@ -11,6 +11,7 @@
 //
 //   template<> constexpr auto jhetz::ldap::schema<person> = jhetz::ldap::describe(
 //       jhetz::ldap::object_class("inetOrgPerson"),   // optional
+//       jhetz::ldap::auxiliary_class("posixAccount"), // optional, after object_class
 //       jhetz::ldap::field<&person::uid>("uid"),
 //       jhetz::ldap::field<&person::mail>("mail"),
 //       jhetz::ldap::field<&person::member_of>("memberOf"),
@@ -387,22 +388,50 @@ template<class... S> consteval auto object_class(S... names)
 	return out;
 }
 
-template<std::size_t N, class... F> struct descriptor
+// Auxiliary object classes (RFC 4512 section 2.4.3), after object_class:
+// written on add and checked by validate<T>, but not ANDed into a store's
+// search filter, so entries without them are found too.
+template<std::size_t N> struct auxiliary_classes
+{
+	std::array<const char *, N> names{};
+};
+
+template<class... S> consteval auto auxiliary_class(S... names)
+{
+	static_assert(sizeof...(S) > 0, "ldap::auxiliary_class: name at least one object class");
+	auxiliary_classes<sizeof...(S)> out{ { names... } };
+	for (const char *n : out.names) {
+		if (!detail::is_oid(n)) {
+			// NOLINTNEXTLINE(bugprone-std-exception-baseclass): consteval, fails compilation with this text
+			throw "ldap::auxiliary_class: invalid object class name";
+		}
+	}
+	return out;
+}
+
+template<std::size_t N, std::size_t M, class... F> struct descriptor
 {
 	using owner = std::tuple_element_t<0, std::tuple<F...>>::owner;
 	object_classes<N> classes;
+	auxiliary_classes<M> auxiliary;
 	std::tuple<F...> fields;
 };
 
-template<std::size_t N, class F0, class... F> consteval auto describe(object_classes<N> classes, F0 f0, F... f)
+template<std::size_t N, std::size_t M, class F0, class... F>
+consteval auto describe(object_classes<N> classes, auxiliary_classes<M> auxiliary, F0 f0, F... f)
 {
+	static_assert(N > 0 || M == 0, "ldap::describe: auxiliary_class(...) needs object_class(...) before it");
 	static_assert((std::same_as<typename F0::owner, typename F::owner> && ...),
 	  "ldap::describe: every field must be a member of the same struct");
-	return descriptor<N, F0, F...>{ classes, { f0, f... } };
+	return descriptor<N, M, F0, F...>{ classes, auxiliary, { f0, f... } };
+}
+template<std::size_t N, class F0, class... F> consteval auto describe(object_classes<N> classes, F0 f0, F... f)
+{
+	return describe(classes, auxiliary_classes<0>{}, f0, f...);
 }
 template<class F0, class... F> consteval auto describe(F0 f0, F... f)
 {
-	return describe(object_classes<0>{}, f0, f...);
+	return describe(object_classes<0>{}, auxiliary_classes<0>{}, f0, f...);
 }
 
 // Specialize for each mapped struct (see the top of this header).
@@ -457,11 +486,35 @@ template<described T>
 	return out;
 }
 
-// The object classes of T's descriptor (empty if none were declared).
+// The object classes of T's descriptor (empty if none were declared),
+// without the auxiliary ones.
 template<described T> [[nodiscard]] constexpr auto object_classes_of() -> std::span<const char *const>
 {
 	return schema<T>.classes.names;
 }
+
+// The auxiliary object classes of T's descriptor (empty if none).
+template<described T> [[nodiscard]] constexpr auto auxiliary_classes_of() -> std::span<const char *const>
+{
+	return schema<T>.auxiliary.names;
+}
+
+namespace detail {
+	// The object classes, then the auxiliary ones: what add writes.
+	template<described T>
+	inline constexpr auto all_object_classes = [] {
+		constexpr auto &d = schema<T>;
+		std::array<const char *, d.classes.names.size() + d.auxiliary.names.size()> out{};
+		std::size_t i = 0;
+		for (const char *n : d.classes.names) {
+			out[i++] = n;
+		}
+		for (const char *n : d.auxiliary.names) {
+			out[i++] = n;
+		}
+		return out;
+	}();
+}// namespace detail
 
 // ---------------------------------------------------------------- decode / encode
 
@@ -591,7 +644,8 @@ namespace detail {
 
 // The attributes to add for `value`: every described member except
 // read_only ones and empty optionals / vectors, plus objectClass with the
-// descriptor's object classes when it declares some. Without declared
+// descriptor's object classes, then its auxiliary ones, when it declares
+// some. Without declared
 // object classes the descriptor must map objectClass itself. Fails with the
 // first member that does not encode (encode_error, context "attribute
 // mail").
@@ -607,7 +661,7 @@ template<described T>
 	std::pmr::vector<partial_attribute> out(mr);
 	if constexpr (d.classes.names.size() > 0) {
 		partial_attribute oc("objectClass", {}, out.get_allocator());
-		for (const char *n : d.classes.names) {
+		for (const char *n : detail::all_object_classes<T>) {
 			oc.values.emplace_back(n);
 		}
 		out.push_back(std::move(oc));
@@ -865,7 +919,8 @@ namespace filters {
 }// namespace filters
 
 // `(&(objectClass=c1)...(objectClass=cN) f)`, or `f` when T declares no
-// object class: what a store's search sends.
+// object class: what a store's search sends. Auxiliary classes are not
+// included.
 template<described T> [[nodiscard]] auto narrow_filter(filter f) -> filter
 {
 	constexpr auto &names = schema<T>.classes.names;

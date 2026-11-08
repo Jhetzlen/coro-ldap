@@ -265,6 +265,9 @@ struct schema_issue
 		// warning: a superclass (SUP) of a declared object class that is not
 		// defined on the server: the MUSTs it would add are not checked
 		unknown_superclass,
+		// warning: a class declared with ldap::auxiliary_class that the
+		// server defines as STRUCTURAL or ABSTRACT
+		not_auxiliary,
 	};
 	kind what;
 	std::string name;// the attribute or object class
@@ -272,7 +275,8 @@ struct schema_issue
 	[[nodiscard]] auto is_error() const noexcept -> bool
 	{
 		return what != kind::single_member_multi_valued && what != kind::must_attribute_not_mapped
-			   && what != kind::must_attribute_not_required && what != kind::unknown_superclass;
+			   && what != kind::must_attribute_not_required && what != kind::unknown_superclass
+			   && what != kind::not_auxiliary;
 	}
 };
 
@@ -294,6 +298,8 @@ namespace detail {
 	  std::span<const char *const> rejected,
 	  schema_report &out);
 	void check_object_class(const server_schema &s, std::string_view name, schema_report &out);
+	// not_auxiliary when the server defines `name` with another kind.
+	void check_auxiliary_class(const server_schema &s, std::string_view name, schema_report &out);
 
 	// What store::add does with one member, for check_must.
 	struct field_use
@@ -310,7 +316,10 @@ namespace detail {
 
 // Checks T's descriptor against the server's schema; lists every issue.
 //
-// With declared object classes, also checks their MUST attributes, and
+// The declared object classes and auxiliary classes must be defined on the
+// server; an auxiliary one of another kind is a warning (not_auxiliary).
+// With declared object classes, also checks their MUST attributes and the
+// auxiliary classes', and
 // those of their superclasses (SUP followed, RFC 4512 section 2.4), against
 // the members: each must be mapped by a required (T), writable member, or
 // store::add may leave it out and the server refuse the entry
@@ -325,8 +334,11 @@ namespace detail {
 template<described T> [[nodiscard]] auto validate(const server_schema &s) -> schema_report
 {
 	schema_report out;
-	for (const char *oc : schema<T>.classes.names) {
+	for (const char *oc : detail::all_object_classes<T>) {
 		detail::check_object_class(s, oc, out);
+	}
+	for (const char *oc : schema<T>.auxiliary.names) {
+		detail::check_auxiliary_class(s, oc, out);
 	}
 	std::apply(
 	  [&](const auto &...f) {
@@ -347,7 +359,7 @@ template<described T> [[nodiscard]] auto validate(const server_schema &s) -> sch
 				.name = f.name, .kind = std::remove_cvref_t<decltype(f)>::kind, .read_only = f.read_only }... };
 		  },
 		  schema<T>.fields);
-		detail::check_must(s, schema<T>.classes.names, fields, out);
+		detail::check_must(s, detail::all_object_classes<T>, fields, out);
 	}
 	return out;
 }

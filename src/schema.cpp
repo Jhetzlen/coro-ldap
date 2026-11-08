@@ -516,6 +516,7 @@ auto schema_report::to_string() const -> std::string
 		  "{}{}{}: {}",
 		  i.is_error() ? "error: " : "warning: ",
 		  i.what == schema_issue::kind::unknown_object_class || i.what == schema_issue::kind::unknown_superclass
+			  || i.what == schema_issue::kind::not_auxiliary
 			? "object class "
 			: "attribute ",
 		  i.name,
@@ -677,6 +678,19 @@ namespace detail {
 			  .name = std::string(name),
 			  .detail = "not defined on the server" });
 		}
+	}
+
+	void check_auxiliary_class(const server_schema &s, std::string_view name, schema_report &out)
+	{
+		const object_class_type *c = s.find_object_class(name);
+		if (c == nullptr || c->kind == object_class_kind::auxiliary) {
+			return;
+		}
+		out.issues.push_back({ .what = schema_issue::kind::not_auxiliary,
+		  .name = std::string(name),
+		  .detail = c->kind == object_class_kind::structural
+					  ? "declared auxiliary, but the server defines it STRUCTURAL"
+					  : "declared auxiliary, but the server defines it ABSTRACT" });
 	}
 
 	void check_field(const server_schema &s,

@@ -2391,6 +2391,82 @@ TEST_CASE("integration: store::update sends only what differs", "[integration][s
 	REQUIRE(finish(ioc, s.remove(name)).has_value());
 }
 
+namespace {
+
+struct posix_user
+{
+	std::string uid;
+	std::string cn;
+	std::string sn;
+	std::int64_t uid_number = 0;
+	std::int64_t gid_number = 0;
+	std::string home_directory;
+	std::optional<std::string> login_shell;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<posix_user> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::auxiliary_class("posixAccount", "shadowAccount"),
+  ldap::field<&posix_user::uid>("uid"),
+  ldap::field<&posix_user::cn>("cn"),
+  ldap::field<&posix_user::sn>("sn"),
+  ldap::field<&posix_user::uid_number>("uidNumber"),
+  ldap::field<&posix_user::gid_number>("gidNumber"),
+  ldap::field<&posix_user::home_directory>("homeDirectory"),
+  ldap::field<&posix_user::login_shell>("loginShell"));
+
+TEST_CASE("integration: a store adds auxiliary object classes", "[integration][store][auxiliary]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	draining_context ioc;
+	auto c = open_admin(ioc);
+	auto schema = finish(ioc, ldap::load_schema(c));
+	REQUIRE(schema.has_value());
+	const auto report = ldap::validate<posix_user>(*schema);
+	INFO(report.to_string());
+	CHECK(report.ok());
+	CHECK(std::ranges::none_of(report.issues, [](const auto &i) {
+		return i.what == ldap::schema_issue::kind::must_attribute_not_mapped
+			   || i.what == ldap::schema_issue::kind::not_auxiliary;
+	}));
+
+	ldap::store s(c, people, ldap::named_by<&posix_user::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	const std::string name = unique("aux");
+	auto added = finish(ioc,
+	  s.add(posix_user{ .uid = name,
+		.cn = "Auxiliary",
+		.sn = "Posix",
+		.uid_number = 7001,
+		.gid_number = 100,
+		.home_directory = "/home/" + name,
+		.login_shell = std::nullopt }));
+	if (!added) {
+		FAIL(added.error().message());
+	}
+	auto read = finish(ioc,
+	  c.search({ .base = *s.dn_of(name), .scope = ldap::search_scope::base_object, .attributes = { "objectClass" } }));
+	REQUIRE(read.has_value());
+	REQUIRE(read->entries.size() == 1);
+	REQUIRE(read->entries[0].find("objectClass") != nullptr);
+	auto classes = *read->entries[0].find("objectClass");
+	std::ranges::sort(classes);
+	CHECK(classes == ldap::string_list{ "inetOrgPerson", "posixAccount", "shadowAccount" });
+
+	auto got = finish(ioc, s.get(name));
+	REQUIRE(got.has_value());
+	REQUIRE(got->has_value());
+	CHECK((*got)->home_directory == "/home/" + name);
+	auto found = finish(ioc, s.search(ldap::filters::field<&posix_user::uid_number>() == 7001));
+	REQUIRE(found.has_value());
+	REQUIRE(found->entries.size() == 1);
+	CHECK(found->entries[0].value.uid == name);
+	REQUIRE(finish(ioc, s.remove(name)).has_value());
+}
+
 TEST_CASE("integration: ldap::client replaces a connection the server dropped", "[integration][client]")
 {
 	if (!have_slapd()) {

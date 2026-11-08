@@ -1,0 +1,9 @@
+#include "common.hpp"
+struct gadget
+{
+	std::string cn;
+};
+template<>
+constexpr auto ldap::schema<gadget> =
+  ldap::describe(ldap::object_classes<0>{}, ldap::auxiliary_class("posixAccount"), ldap::field<&gadget::cn>("cn"));
+auto main() -> int { return static_cast<int>(ldap::attribute_names<gadget>().size()); }
