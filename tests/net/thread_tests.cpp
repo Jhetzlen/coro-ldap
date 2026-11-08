@@ -326,6 +326,13 @@ template<class Source> auto hanging_search(Source &c, tally &t) -> capy::task<vo
 	}
 }
 
+// Searches until the connection is closed: the strand keeps publishing
+// its state meanwhile.
+auto busy_search(ldap::connection &c) -> capy::task<void>
+{
+	while ((co_await c.search(people_search())).has_value()) {}
+}
+
 // Runs `t` on the pool and waits for its result on the test's thread.
 template<class T> auto run_on_pool(corosio::io_context &ioc, capy::task<T> t) -> T
 {
@@ -540,5 +547,42 @@ TEST_CASE("threads: a connection destroyed by a pool task after stop()", "[net][
 	CHECK(t.lost == hung);
 	server.stop();
 	drive(ioc);
+	CHECK(t.failed == 0);
+}
+
+TEST_CASE("threads: close() from another thread reads as closed at once", "[net][threads]")
+{
+	corosio::io_context ioc;
+	answering_server server(ioc);
+	auto c = finish(ioc, ldap::connect(ioc, server.url(), { .operation_timeout = std::chrono::seconds(30) }));
+	REQUIRE(c.has_value());
+	tally t;
+	constexpr std::size_t hung = 4;
+	constexpr std::size_t busy = 8;
+	std::latch ended(hung + busy);
+	{
+		thread_pool pool(ioc);
+		for (std::size_t i = 0; i < hung; ++i) {
+			start(ioc, hanging_search(*c, t), ended);
+		}
+		for (std::size_t i = 0; i < busy; ++i) {
+			start(ioc, busy_search(*c), ended);
+		}
+		wait_for([&server] { return server.hanging() == hung; });
+		REQUIRE(server.hanging() == hung);
+		c->close();
+		constexpr int reads = 2000;
+		int stale = 0;
+		for (int i = 0; i < reads; ++i) {
+			if (c->is_open() || c->outstanding() != 0 || c->is_tls() || ldap::detail::accepts_requests(*c)
+				|| c->security_layer() != ldap::sasl_protection::none) {
+				++stale;
+			}
+		}
+		CHECK(stale == 0);
+		ended.wait();
+		CHECK(t.lost == hung);
+		server.stop();
+	}
 	CHECK(t.failed == 0);
 }

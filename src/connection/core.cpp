@@ -105,22 +105,16 @@ void connection::core::publish() noexcept
 	if (!open) {
 		open_snapshot.store(false, std::memory_order_release);
 	}
-	// Once request_close() cleared it, the connection is closing: it stays
-	// closed in the snapshots.
-	const bool live = open_snapshot.load(std::memory_order_acquire);
-	outstanding_snapshot.store(live ? outstanding() : 0, std::memory_order_relaxed);
+	outstanding_snapshot.store(outstanding(), std::memory_order_relaxed);
 	binds_snapshot.store(binds_begun, std::memory_order_relaxed);
 	layer_snapshot.store(security_layer(), std::memory_order_release);
-	tls_snapshot.store(live && is_tls(), std::memory_order_release);
-	accepting_snapshot.store(live && accepts_requests(), std::memory_order_release);
+	tls_snapshot.store(is_tls(), std::memory_order_release);
+	accepting_snapshot.store(accepts_requests(), std::memory_order_release);
 }
 
 void connection::core::request_close() noexcept
 {
 	open_snapshot.store(false, std::memory_order_release);
-	accepting_snapshot.store(false, std::memory_order_release);
-	tls_snapshot.store(false, std::memory_order_release);
-	outstanding_snapshot.store(0, std::memory_order_relaxed);
 	detail::run_on_strand(*this, [self = core_ref(this)] noexcept { self->close(); });
 }
 

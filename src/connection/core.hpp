@@ -161,20 +161,24 @@ class connection::core
 	// ---------------------------------------------------------------- snapshots
 
 	// The state as of the strand's last change, for the connection's
-	// accessors on any thread.
+	// accessors on any thread. Once the open snapshot is cleared, the
+	// others (but the bind count) read as closed.
 	auto published_open() const noexcept -> bool { return open_snapshot.load(std::memory_order_acquire); }
 	auto published_accepts_requests() const noexcept -> bool
 	{
-		return accepting_snapshot.load(std::memory_order_acquire);
+		return published_open() && accepting_snapshot.load(std::memory_order_acquire);
 	}
-	auto published_tls() const noexcept -> bool { return tls_snapshot.load(std::memory_order_acquire); }
+	auto published_tls() const noexcept -> bool
+	{
+		return published_open() && tls_snapshot.load(std::memory_order_acquire);
+	}
 	auto published_security_layer() const noexcept -> sasl_protection
 	{
-		return layer_snapshot.load(std::memory_order_acquire);
+		return published_open() ? layer_snapshot.load(std::memory_order_acquire) : sasl_protection::none;
 	}
 	auto published_outstanding() const noexcept -> std::size_t
 	{
-		return outstanding_snapshot.load(std::memory_order_relaxed);
+		return published_open() ? outstanding_snapshot.load(std::memory_order_relaxed) : 0;
 	}
 	auto published_bind_count() const noexcept -> std::uint64_t
 	{

@@ -122,10 +122,10 @@
 // it, or from a task of another executor, as a task started with
 // capy::run_async(ioc.get_executor()) is) do not wait for it: they post
 // their work there, and it runs when the io_context next runs. So close()
-// takes effect then (is_open() and outstanding() report it at once), and
-// after destroying a stream, paged_search or transaction off the strand,
-// the memory resource given for its entries must outlive that run of the
-// io_context. An io_context destroyed before it runs that work again drops
+// takes effect then (is_open(), outstanding(), is_tls() and
+// security_layer() report it at once), and after destroying a stream,
+// paged_search or transaction off the strand, the memory resource given
+// for its entries must outlive that run of the io_context. An io_context destroyed before it runs that work again drops
 // it, and what it would have freed is leaked: after run_one() or a stop,
 // let it run (poll()) first. They run at once when called on the strand,
 // or once the io_context is stopped from a thread outside its run():

@@ -2266,8 +2266,10 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   - Accessors (`is_open()`, `outstanding()`, `is_tls()`,
     `security_layer()`, `bind_count()`, `detail::accepts_requests()`) read
     atomic snapshots that the strand publishes after each change
-    (`core::publish()`); `close()` clears the open and accepting snapshots
-    (and zeroes `outstanding()`) at once, before its posted work runs.
+    (`core::publish()`); `close()` clears the open snapshot at once,
+    before its posted work runs, and the others but `bind_count()` read
+    as closed while it is cleared (a publish racing close() cannot bring
+    them back).
     `transaction::is_open()` is an atomic. A second concurrent `next()` on
     a `search_stream` or `paged_search` fails with `operation_in_progress`
     (checked on the strand). A stream's other accessors (`done()`,
