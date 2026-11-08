@@ -1838,10 +1838,10 @@ auto handshake_with_platform_chain(corosio::io_context &ioc,
 
 }// namespace
 
-// Windows' default verification (coro-ldap-1q5): CryptoAPI's verdict on the
-// chain replaces OpenSSL's, and OpenSSL's host name verdict is kept. Off
-// Windows make_tls_setup() never sets a platform verifier, so a stand-in
-// runs the same callback logic here.
+// Windows' default verification: CryptoAPI's verdict on the chain replaces
+// OpenSSL's, and OpenSSL's host name verdict is kept. Off Windows
+// make_tls_setup() never sets a platform verifier, so a stand-in runs the
+// same callback logic here.
 TEST_CASE("TLS with the platform verifying the chain", "[net][connect][tls]")
 {
 	// The default (system) trust store: CryptoAPI verifies on Windows only.

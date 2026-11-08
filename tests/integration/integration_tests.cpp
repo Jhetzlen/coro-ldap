@@ -384,7 +384,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 	SECTION("a step the client fails mid-exchange")
 	{
 		// RFC 4511 section 4.2.1: the exchange is aborted, so slapd accepts
-		// other operations again (coro-ldap-f1e).
+		// other operations again.
 		scram_giving_up mech;
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
@@ -399,7 +399,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 	{
 		// slapd ends the exchange before it refuses the anonymous bind that
 		// aborts it (inappropriateAuthentication): the connection stays
-		// open and anonymous, and a bind then succeeds (coro-ldap-f1e.1).
+		// open and anonymous, and a bind then succeeds.
 		// bind_anon refuses only anonymous binds, not anonymous operations:
 		// the search succeeds only if the exchange ended (a server still in
 		// it would answer operationsError).
@@ -1545,15 +1545,15 @@ TEST_CASE("integration: content synchronization (RFC 4533)", "[integration][cont
 
 // slapd keeps one paged search per connection (RFC 2696 section 3 lets a
 // server age out older ones). Without sorting, resuming any but the
-// last-answered one fails cleanly: back-mdb compares the request's cookie
-// (an entry ID) with the connection's last returned one, older gives 53
-// unwillingToPerform and newer 2 protocolError. With the sssvlv overlay (sorted paged searches), any
-// non-empty cookie resumes the connection's latest sorted paged search:
-// sssvlv looks the session up by ps_cookie, which slapd's control parser
-// copies from the connection's last returned cookie, and never reads the
-// request's own cookie (ps_cookieval; OpenLDAP 2.7.1 and master as of
-// 2026-10). The client cannot tell: concurrent sorted paged searches need
-// one connection each, which this checks.
+// last-answered one fails cleanly: back-mdb compares the request's cookie (an
+// entry ID) with the connection's last returned one, older gives 53
+// unwillingToPerform and newer 2 protocolError. With the sssvlv overlay
+// (sorted paged searches), any non-empty cookie resumes the connection's
+// latest sorted paged search: sssvlv looks the session up by ps_cookie, which
+// slapd's control parser copies from the connection's last returned cookie,
+// and never reads the request's own cookie (ps_cookieval; OpenLDAP 2.7.1).
+// The client cannot tell: concurrent sorted paged searches need one
+// connection each, which this checks.
 TEST_CASE("integration: concurrent paged searches with and without sorting", "[integration][controls]")
 {
 	if (!have_slapd()) {
@@ -1596,7 +1596,7 @@ TEST_CASE("integration: concurrent paged searches with and without sorting", "[i
 		REQUIRE_FALSE(a1->cookie.empty());
 		CHECK(a1->cookie != b1->cookie);
 		// The request carries A's own cookie, filter and sort; the answer is
-		// B's second page. Pins the slapd sssvlv bug (coro-ldap-seo): failing
+		// B's second page. Pins the slapd sssvlv bug: failing
 		// here means slapd fixed it, so update the notes of search_paged
 		// (connection.hpp), docs/API.md and this section.
 		INFO(

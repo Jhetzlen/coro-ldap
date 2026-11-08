@@ -1206,16 +1206,10 @@ TEST_CASE("channel binding: the client refuses TLS 1.2 renegotiation", "[net][tl
 	CHECK(srv.result() == "refused: no renegotiation");
 }
 
-// coro-ldap-cx0: Corosio allocates its SSL_CTX ex_data slot when the
-// process builds its first SSL_CTX, without synchronisation; threads doing
-// that at once could leave a context without its data, and Corosio then
-// skipped our verify callback (no peer certificate). The library primes the
-// slot once (prime_corosio_openssl()) before its first tls_context, and
-// fails a handshake whose verify callback did not run. The servers are
-// plain OpenSSL, so the clients' contexts are the process's only Corosio
-// ones. Meaningful in a fresh process (ctest runs each test case alone):
-// without the workaround a TSan build reports the race in most runs (the
-// threads must overlap), other builds lose a certificate only rarely.
+// Concurrent first TLS handshakes all run the verify callback
+// (prime_corosio_openssl(), DESIGN.md section 3). The servers are plain
+// OpenSSL, so the clients' contexts are the process's only Corosio ones.
+// Meaningful in a fresh process (ctest runs each test case alone).
 TEST_CASE("channel binding: concurrent first TLS handshakes all record the peer", "[net][tls][channel_binding]")
 {
 	struct client_result

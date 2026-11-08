@@ -3,10 +3,8 @@
 // from a script, over a Unix socket pair (and once over loopback TCP,
 // through ldap::connect: tcp_mock_ldap).
 //
-// Not capy::test::stream: at the pinned Capy commit its wake() posts the
-// parked continuation by reference and then clears the handle while it is
-// still queued, so a reader woken by the peer resumes a null handle. Its
-// provide()-before-read use in message_io_tests.cpp never parks a reader.
+// Not capy::test::stream: its wake() resumes a null handle for a reader
+// parked before the peer writes.
 #include "../counting_resource.hpp"
 #include "../value_semantics.hpp"
 #include "jhetz/ldap/connection.hpp"
@@ -1158,8 +1156,8 @@ TEST_CASE("RFC 4511 4.3: requests started while unbind waits for the writer are 
 // allocates after it is spawned (finish_unbind's, its wait's) comes before
 // the wait: each is failed in turn. unbind() rethrows, the connection is
 // closed, and later operations name not_enough_memory, or the abort for an
-// exception that is not bad_alloc (none is known to escape today). Past
-// them, unbind() waits for the writer and completes.
+// exception that is not bad_alloc. Past them, unbind() waits for the writer
+// and completes.
 TEST_CASE("connection: a failed allocation in unbind closes the connection", "[net][connection][oom]")
 {
 	// True if the failing-th allocation threw, false if unbind() waited.

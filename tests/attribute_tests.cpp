@@ -329,13 +329,12 @@ static_assert(unmix(mix(0, 0x0123'4567'89AB'CDEFull)) == 0x0123'4567'89AB'CDEFul
 
 }// namespace
 
-// coro-ldap-pyf: hash_value started from a fixed state and its
-// rounds are invertible, so anyone could compute attribute names colliding
-// in all 64 bits, and a server sending them made entry::from quadratic.
+// Names crafted to collide in all 64 bits under a fixed start state must
+// spread under the seeded hash (entry::from stays linear).
 TEST_CASE("ci_hash is seeded: names crafted to collide under a fixed start spread", "[attribute]")
 {
-	// 16-byte names "<8 digits><w2>": with the old start h0, the state after
-	// both words is the same for every name, so the old hash was too.
+	// 16-byte names "<8 digits><w2>": from a fixed start h0, the state after
+	// both words is the same for every name, so an unseeded hash would be too.
 	constexpr std::uint64_t h0 = 0xCBF2'9CE4'8422'2325ull;
 	const std::uint64_t target = mix(mix(h0, 1), 2);
 	const auto word = [](std::string_view s) {

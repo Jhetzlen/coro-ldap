@@ -396,7 +396,7 @@ TEST_CASE("sasl: requests started during the exchange wait for its end", "[net][
 
 // RFC 4511 section 4.2.1: a client that gives up on a SASL exchange the
 // server still considers in progress aborts it with another bind before
-// anything else is sent (coro-ldap-f1e).
+// anything else is sent.
 TEST_CASE("sasl: a failed exchange is aborted before held requests are sent", "[net][sasl][rfc]")
 {
 	mock_ldap m;
@@ -582,8 +582,7 @@ TEST_CASE("sasl: SCRAM-SHA-256 with the RFC 7677 test vector", "[net][sasl][scra
 }
 
 // A mechanism's blocking steps run on a thread of their own (offload_start,
-// offload_step), and the bind's timeout and cancellation apply to the wait
-// (coro-ldap-2px.1).
+// offload_step), and the bind's timeout and cancellation apply to the wait.
 TEST_CASE("sasl: offloaded steps run off the I/O thread", "[net][sasl][offload]")
 {
 	mock_ldap m;
@@ -700,9 +699,7 @@ TEST_CASE("sasl: a timeout or cancellation gives up on an offloaded step", "[net
 }
 
 // The io_context's destructor joins the thread of a step still running, so
-// nothing of it outlives the scheduler it wakes and releases its work on
-// (coro-ldap-2px.1.1: a detached thread could still be in the scheduler's
-// stop() when the io_context was destroyed).
+// nothing of it outlives the scheduler it wakes and releases its work on.
 TEST_CASE("sasl: destroying the io_context waits for an offloaded step", "[net][sasl][offload]")
 {
 	// The step is let through only once the scope has checked it is still
@@ -741,7 +738,7 @@ TEST_CASE("sasl: destroying the io_context waits for an offloaded step", "[net][
 // The thread of an offloaded step posts to the io_context from outside, so
 // it needs the scheduler lock (locking_mode::safe or unsafe_io): under
 // unsafe the step fails before anything is sent, as Corosio's resolver
-// does (coro-ldap-2px.1.3).
+// does.
 TEST_CASE("sasl: an offloaded step fails under locking_mode::unsafe", "[net][sasl][offload]")
 {
 	mock_ldap m(corosio::io_context_options{ .locking = corosio::locking_mode::unsafe });
@@ -885,7 +882,7 @@ TEST_CASE("sasl: offloaded steps under locking_mode::unsafe_io", "[net][sasl][of
 // A high iteration count runs PBKDF2 on a thread of its own, so the
 // io_context goes on meanwhile: a 1 ms timer ticks between the server's
 // first message and the client's final one (inline, PBKDF2 would block the
-// event loop for that whole time, ~0.1 s here). coro-ldap-zzz.
+// event loop for that whole time, ~0.1 s here).
 TEST_CASE("sasl: SCRAM-SHA-256 runs a costly PBKDF2 off the I/O thread", "[net][sasl][scram][offload]")
 {
 	constexpr std::string_view server_first = "r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=300000";
