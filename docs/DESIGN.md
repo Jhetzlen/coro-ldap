@@ -278,7 +278,7 @@ error (an `ldap::error` would carry entries for one operation only), and
 a success with a flag (the result code, matched DN and diagnostic would be
 lost). The same holds for a store's `search` (`typed_search_result<record<T>>`,
 the same fields with `std::vector` entries), `client::search`, the sync
-facades' `search` and `search_paged` (the pages collected: the last
+facades' `search` and `sync::search_paged` (the pages collected: the last
 page's done), and `chase_search` (`chased_search` gains the same done
 fields, the origin's or the referral target's, and when that is success
 the result code, matched DN and diagnostic of the first followed
@@ -1267,10 +1267,23 @@ same pieces: see section 11, "Referrals". The plain types of a chase
 `client.hpp` can name them; `referral_chase.hpp` includes `client.hpp`
 for `session_setup`, so the other way round would be circular.
 
-Paged search (step 6): `connection::search_paged(params, page_size)`
-returns a `paged_search` that yields entries across pages, requesting the
-next page with the server's cookie when one ends, until the cookie is
-empty. A server that ignores the (non-critical) control returns
+Paged search (step 6): `ldap::search_paged(connection &, params,
+page_size)` returns a `paged_search` that yields entries across pages,
+requesting the next page with the server's cookie when one ends, until the
+cookie is empty. It is a free function, not a connection member (the aw4
+rule: core types keep only the protocol operations): each page is a
+`connection::search_stream()` (the same task, run on the connection's
+shared state, so that the `paged_search`, like a stream, does not depend
+on the connection object staying where it is) with the paged control. Measured
+with bench/paged_bench.cpp against the internal search start it replaced
+(Release, one thread, in-process server; docs/DEVELOPMENT.md has the
+numbers): 1 to 3 µs more per page (a stream task and a copy of the
+search_params), +4 to 15% at one entry per page, within the noise at 100,
+nothing against a network round trip. `search_paged(client &, ...)` runs it on one shared lease, which
+the `paged_search` holds until destroyed (the cookies are bound to that
+connection), and requests the first page again on a new lease when it
+fails with `cond::connection_lost` before its first message, as
+`client::search_stream()` does. A server that ignores the (non-critical) control returns
 everything as one page, which works the same. Each page is a separate
 search on the wire (its own message id and timeout). Destroying the
 `paged_search` early abandons the current page if it is still running,
@@ -1308,9 +1321,10 @@ timeLimitExceeded, which ended the search). There is no awaitable
 `release()`: the destructor does everything that needs no waiting, and
 waiting for the server's answer would tell the caller nothing it could
 act on.
-`sync::connection::search_paged` keeps the `paged_search` on the I/O thread
-and either reads every page or destroys it after an error, so it needs
-nothing more.
+`sync::search_paged` (a `sync::connection`, a sync lease or a
+`sync::client`) keeps the `paged_search` on the I/O thread and reads every
+page on its connection's strand, or destroys it there after an error, so
+it needs nothing more.
 
 ## 4. Mapping entries to structs
 

@@ -344,27 +344,6 @@ class connection
 	auto search_stream(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> boost::capy::task<result<ldap::search_stream>>;
 
-	// A search in pages of `page_size` entries (Simple Paged Results, RFC
-	// 2696): when a page ends, the next page is requested with the server's
-	// cookie, until the cookie is empty. A paged control already in
-	// `request.controls` (typed, or raw with paged_results_oid) is
-	// replaced. A server that ignores the (non-critical) control returns
-	// everything as one page, which works the same. Each page is one search on the wire, with its own message id
-	// and its own `request.timeout`. Destroyed early, the paged_search
-	// abandons the current page and releases the server's paging state
-	// (see paged_search). Several may run at once on one connection (RFC
-	// 2696 section 3), but servers may limit that: OpenLDAP keeps one paged
-	// search per connection and refuses the next page of any but the one
-	// whose page it answered last (unwilling_to_perform or protocol_error,
-	// depending on the cookies' entry order), and with server_side_sort (its
-	// sssvlv overlay) it answers any next page with the latest sorted paged
-	// search's entries instead, which the client cannot detect. Give each
-	// concurrent paged search its own connection there.
-	auto search_paged(search_params request,
-	  std::int32_t page_size,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource())
-	  -> boost::capy::task<result<ldap::paged_search>>;
-
 	// The other operations. Result codes: success returns the value; any
 	// other code is an error (`ldap_result::to_error`, with the operation as
 	// context), referral included (errc::referral, the URIs in
@@ -457,7 +436,6 @@ class connection
 
   private:
 	friend class ldap::search_stream;
-	friend class ldap::paged_search;
 	friend void detail::set_next_message_id(connection &, std::int32_t) noexcept;
 	friend void detail::set_close_hook(connection &, std::move_only_function<void() noexcept>) noexcept;
 	friend auto detail::accepts_requests(const connection &) noexcept -> bool;

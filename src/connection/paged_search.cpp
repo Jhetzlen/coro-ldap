@@ -1,3 +1,6 @@
+#include "jhetz/ldap/paged_search.hpp"
+
+#include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
 
 #include "../format_util.hpp"
@@ -5,13 +8,12 @@
 #include "search.hpp"
 
 #include <boost/capy/cond.hpp>
-#include <boost/capy/ex/this_coro.hpp>
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <memory_resource>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <utility>
 #include <variant>
@@ -26,12 +28,12 @@ using detail::core_ref;
 using detail::no_connection;
 using detail::op_context;
 using detail::search_message;
-using detail::start_search;
 
 // ---------------------------------------------------------------- paged_search
 
 struct paged_search::state
 {
+	// The connection's shared state, where the pages are requested.
 	core_ref conn;
 	search_params params;
 	std::int32_t page_size;
@@ -47,6 +49,9 @@ struct paged_search::state
 	// the search stops early. Empty before the first page ends, after the
 	// last one, and after an error that ended the search on the server.
 	std::string cookie{};
+	// ldap::client's lease on the connection, released after the paged
+	// results release is sent.
+	std::shared_ptr<void> owner{};
 
 	void set_page_control(std::int32_t size, std::string page_cookie)
 	{
@@ -58,12 +63,16 @@ struct paged_search::state
 		cs.emplace_back(paged{ .page_size = size, .cookie = std::move(page_cookie) });
 	}
 
-	// Sends the search for the next page (cookie empty for the first);
-	// not sent if `stop` (the awaiting task's) is set already.
-	auto request_page(std::string page_cookie, const std::stop_token &stop) -> result<void>
+	// The search for the next page (cookie empty for the first).
+	auto request_page(std::string page_cookie) -> capy::task<result<ldap::search_stream>>
 	{
 		set_page_control(page_size, std::move(page_cookie));
-		auto s = start_search(*conn, params, mr, stop);
+		return detail::search_stream_of(conn, params, mr);
+	}
+
+	// `s`, the stream of the page requested, becomes the current page.
+	auto take_page(result<ldap::search_stream> s) -> result<void>
+	{
 		if (!s) {
 			return std::unexpected(std::move(s.error()));
 		}
@@ -77,10 +86,7 @@ struct paged_search::state
 	// ended, next() has not read it yet).
 	[[nodiscard]] auto server_cookie() const -> std::string
 	{
-		if (current.state_ == nullptr) {
-			return cookie;
-		}
-		const message *done = current.state_->queued_done();
+		const message *done = detail::queued_done(current);
 		if (done == nullptr) {
 			return cookie;
 		}
@@ -127,6 +133,16 @@ struct paged_search::state
 	}
 };
 
+namespace detail {
+
+	struct paged_access
+	{
+		static auto make(paged_search::state *s) noexcept -> paged_search { return paged_search(s); }
+		static auto state_of(const paged_search &p) noexcept -> paged_search::state * { return p.state_; }
+	};
+
+}// namespace detail
+
 namespace {
 
 	auto search_paged_impl(core_ref self, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
@@ -142,8 +158,8 @@ namespace {
 		std::pmr::polymorphic_allocator<> alloc(self->mr());
 		auto *st = alloc.new_object<paged_search::state>(
 		  paged_search::state{ .conn = self, .params = std::move(request), .page_size = page_size, .mr = mr });
-		ldap::paged_search out = connection::core::make_paged(st);
-		if (auto r = st->request_page({}, co_await capy::this_coro::stop_token); !r) {
+		ldap::paged_search out = detail::paged_access::make(st);
+		if (auto r = st->take_page(co_await st->request_page({})); !r) {
 			co_return std::unexpected(std::move(r.error()));
 		}
 		co_return std::move(out);
@@ -151,19 +167,81 @@ namespace {
 
 }// namespace
 
-auto connection::search_paged(search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
+// NOLINTNEXTLINE(misc-const-correctness): the search runs on `c`
+auto search_paged(connection &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
   -> capy::task<result<ldap::paged_search>>
 {
-	const core_ref self(core_);
-	return detail::on_strand(self, search_paged_impl(self, std::move(request), page_size, mr));
+	core_ref self(connection::core::of(c));
+	auto body = search_paged_impl(self, std::move(request), page_size, mr);
+	return detail::on_strand(self, std::move(body));
+}
+
+namespace {
+
+	// Destroys `p` on its connection's strand.
+	auto end_paged(ldap::paged_search &p) -> capy::task<void>
+	{
+		const auto *state = detail::paged_access::state_of(p);
+		if (state == nullptr) {
+			co_return;
+		}
+		co_await detail::on_strand(state->conn, [](ldap::paged_search &pages) -> capy::task<void> {
+			pages = ldap::paged_search{};
+			co_return;
+		}(p));
+	}
+
+}// namespace
+
+auto search_paged(client &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
+  -> capy::task<result<ldap::paged_search>>
+{
+	for (bool retried = false;; retried = true) {
+		auto held = co_await c.acquire();
+		if (!held) {
+			co_return std::unexpected(std::move(held.error()));
+		}
+		auto p = co_await search_paged(**held, request, page_size, mr);
+		std::optional<error> failed;
+		if (!p) {
+			failed = p.error();
+		} else {
+			auto first = co_await detail::first_outcome(detail::paged_access::state_of(*p)->current);
+			if (!first) {// stopped
+				co_await end_paged(*p);
+				co_return std::unexpected(std::move(first.error()));
+			}
+			failed = std::move(*first);
+		}
+		if (failed && !retried && failed->code == cond::connection_lost) {
+			if (p) {
+				co_await end_paged(*p);
+			}
+			continue;
+		}
+		if (!p) {
+			co_return std::unexpected(std::move(p.error()));
+		}
+		detail::paged_access::state_of(*p)->owner = std::make_shared<lease>(std::move(*held));
+		co_return std::move(*p);
+	}
 }
 
 namespace detail {
 
-	auto paged_done(ldap::paged_search &p) noexcept -> const ldap_result *
+	auto paged_done(const ldap::paged_search &p) noexcept -> const ldap_result *
 	{
-		auto *state = connection::core::paged_state(p);
+		const auto *state = paged_access::state_of(p);
 		return state == nullptr ? nullptr : search_done(state->current);
+	}
+
+	auto paged_executor(const ldap::paged_search &p) noexcept -> std::optional<connection::executor_type>
+	{
+		const auto *state = paged_access::state_of(p);
+		if (state == nullptr) {
+			return std::nullopt;
+		}
+		return state->conn->executor();
 	}
 
 }// namespace detail
@@ -286,7 +364,7 @@ namespace {
 				s.finished = true;
 				co_return std::optional<entry>{};
 			}
-			if (auto r = s.request_page(s.cookie, co_await capy::this_coro::stop_token); !r) {
+			if (auto r = s.take_page(co_await s.request_page(s.cookie)); !r) {
 				co_return finish(std::move(r.error()), false);
 			}
 		}

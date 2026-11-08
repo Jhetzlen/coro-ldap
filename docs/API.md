@@ -244,7 +244,9 @@ itself needs only ICU.
     (`basic_search_result`), and the OIDs `who_am_i_oid` and
     `password_modify_oid`.
   - `jhetz/ldap/search_stream.hpp` and `jhetz/ldap/paged_search.hpp`: the
-    entry streams `search_stream()` and `search_paged()` return, and
+    entry streams `search_stream()` and the free `ldap::search_paged()`
+    (on a connection, or on a client's pool through one shared lease the
+    `paged_search` holds) return, and
     `search_entry` and `search_reference`, the items of
     `search_stream::next_item()`.
   - `jhetz/ldap/cancel.hpp`: `raceable()` and `with_stop()`.
@@ -397,7 +399,9 @@ itself needs only ICU.
   abort. The codecs (`end_transaction_request`, `update_controls`,
   `end_transaction_response`, `encode_` / `decode_end_transaction_request`
   / `_response`, the OIDs) are in `message.hpp`;
-  `search_paged(params, page_size)` follows the Simple Paged Results cookie across pages (destroyed early, it abandons the
+  `ldap::search_paged(conn, params, page_size)` (a free function over
+  `search_stream()`; `ldap::search_paged(client, ...)` runs it on one shared
+  lease) follows the Simple Paged Results cookie across pages (destroyed early, it abandons the
   current page and releases the server's paging state with a page size 0
   request, RFC 2696 section 3, unless the search already ended; the
   release's answer is read and dropped, and counted by `outstanding()`
@@ -877,8 +881,9 @@ itself needs only ICU.
   has no thread and its operations fail with `not_connected`. Every
   method runs the corresponding connection operation on the I/O thread
   and waits, with the same types;
-  `search_paged(params, page_size)` collects every page into one
-  `search_result` (the last page's done; a limit code keeps the entries).
+  `sync::search_paged(c, params, page_size)` (also on a sync lease and a
+  `sync::client`) collects every page into one `search_result` (the last
+  page's done; a limit code keeps the entries).
   Callable from any number of threads; a call from its own I/O
   thread fails with `client_errc::would_deadlock`.
 - `jhetz/ldap/client.hpp` (3pf, DESIGN.md section 11): `ldap::client`, a
@@ -968,7 +973,7 @@ itself needs only ICU.
   setup and observer hooks run there). `acquire() -> result<sync::lease>`
   and `acquire_exclusive() -> result<sync::exclusive_lease>`; a
   `sync::exclusive_lease` has `sync::connection`'s operations (bind,
-  search, `search_paged`, add, modify, ...,
+  search, add, modify, ...,
   `begin_transaction`, `unbind`, `close`), run on the leased connection, and so
   does a `sync::lease` (the five session operations then change the
   session for every lease sharing it), both with

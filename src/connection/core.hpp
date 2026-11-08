@@ -294,14 +294,15 @@ class connection::core
 	  std::optional<detail::clock::time_point> deadline,
 	  std::string_view context) -> boost::capy::task<result<message>>;
 
-	// search_stream / paged_search constructors are private.
+	// The state of `c` (null for a default-constructed or moved-from one).
+	static auto of(const connection &c) noexcept -> core * { return c.core_; }
+
+	// search_stream / transaction constructors are private.
 	static auto make_stream(search_stream::state *s) noexcept -> ldap::search_stream;
 	// A stream's state (null for a default-constructed or moved-from one).
 	static auto stream_state(ldap::search_stream &s) noexcept -> search_stream::state * { return s.state_; }
-	static auto make_paged(paged_search::state *s) noexcept -> ldap::paged_search;
+	static auto stream_state(const ldap::search_stream &s) noexcept -> const search_stream::state * { return s.state_; }
 	static auto make_transaction(transaction::state *s) noexcept -> ldap::transaction { return ldap::transaction(s); }
-	// A paged search's state (null for a default-constructed or moved-from one).
-	static auto paged_state(ldap::paged_search &p) noexcept -> paged_search::state * { return p.state_; }
 
 	// ---------------------------------------------------------------- binds
 

@@ -52,6 +52,7 @@
 #include <boost/corosio/io_context.hpp>
 
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -180,6 +181,9 @@ namespace detail {
 	[[nodiscard]] auto
 	  collect_paged(ldap::connection &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
 		-> boost::capy::task<result<search_result>>;
+	[[nodiscard]] auto
+	  collect_paged(ldap::client &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
+		-> boost::capy::task<result<search_result>>;
 	[[nodiscard]] auto make_transaction(ldap::connection &c, extended_controls controls)
 	  -> boost::capy::task<result<std::unique_ptr<ldap::transaction>>>;
 	[[nodiscard]] auto is_open_of(const ldap::connection &c) -> boost::capy::task<result<bool>>;
@@ -190,6 +194,7 @@ namespace detail {
 	[[nodiscard]] auto close_of(ldap::connection &c) -> boost::capy::task<result<void>>;
 
 	template<class Derived> class connection_api;
+	struct facade_access;
 }// namespace detail
 
 // ldap::transaction (transaction.hpp) for a sync::connection or a
@@ -309,19 +314,6 @@ namespace detail {
 		{
 			return self().call([&](ldap::connection &c) { return c.search(std::move(request), mr); });
 		}
-		// Every page of a paged search (ldap::connection::search_paged),
-		// collected as one search_result: the entries and references of
-		// every page, the last page's SearchResultDone and controls; a page
-		// ending with a limit code ends it with the entries received, as
-		// search() does.
-		[[nodiscard]] auto search_paged(search_params request,
-		  std::int32_t page_size,
-		  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<search_result>
-		{
-			return self().call(
-			  [&](ldap::connection &c) { return detail::collect_paged(c, std::move(request), page_size, mr); });
-		}
-
 		[[nodiscard]] auto add(add_params request) -> result<response>
 		{
 			return self().call([&](ldap::connection &c) { return c.add(std::move(request)); });
@@ -455,6 +447,7 @@ class connection : public detail::connection_api<connection>
 
   private:
 	friend class detail::connection_api<connection>;
+	friend struct detail::facade_access;
 	friend auto connect(url u, connection_options options, std::pmr::memory_resource *mr) -> result<connection>;
 	explicit connection(std::unique_ptr<detail::connection_core> core) noexcept : core_(std::move(core)) {}
 
@@ -529,6 +522,7 @@ template<bool Exclusive> class basic_lease : public detail::connection_api<basic
 
 	friend class client;
 	friend class detail::connection_api<basic_lease>;
+	friend struct detail::facade_access;
 	basic_lease(std::shared_ptr<const detail::io_thread> io, held_lease held, url server) noexcept;
 
 	// Runs make_task(c) on the I/O thread with the leased connection c and
@@ -589,7 +583,7 @@ extern template class basic_lease<true>;
 // called with a message on stderr.
 //
 // No search_stream(): as sync::connection, the facade has no blocking
-// stream; use search(), or a lease's search_paged().
+// stream; use search(), or sync::search_paged().
 class client
 {
   public:
@@ -651,8 +645,42 @@ class client
 
   private:
 	friend auto load_schema(client &c) -> result<server_schema>;
+	friend auto search_paged(client &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
+	  -> result<search_result>;
 
 	std::shared_ptr<detail::client_core> core_;
 };
+
+namespace detail {
+	// Runs make_task(c) on the I/O thread of a sync::connection or a sync
+	// lease, with its ldap::connection c, and waits for its result: the
+	// blocking form of the free functions over a connection.
+	struct facade_access
+	{
+		template<class D, class F> static auto call(D &d, const F &make_task) { return d.call(make_task); }
+	};
+}// namespace detail
+
+// ldap::search_paged (paged_search.hpp), blocking: every page collected as
+// one search_result, with the entries and references of every page and the
+// last page's SearchResultDone and controls; a page ending with a limit
+// code ends it with the entries received, as search() does. On a
+// sync::connection or a sync lease.
+template<class D>
+	requires std::derived_from<D, detail::connection_api<D>>
+[[nodiscard]] auto search_paged(D &d,
+  search_params request,
+  std::int32_t page_size,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<search_result>
+{
+	return detail::facade_access::call(
+	  d, [&](ldap::connection &c) { return detail::collect_paged(c, std::move(request), page_size, mr); });
+}
+
+// As above, on one shared lease of the pool (ldap::search_paged(client &)).
+[[nodiscard]] auto search_paged(client &c,
+  search_params request,
+  std::int32_t page_size,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<search_result>;
 
 }// namespace jhetz::ldap::sync

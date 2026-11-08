@@ -66,7 +66,6 @@
 namespace jhetz::ldap {
 
 class connection;
-class paged_search;
 
 // A SearchResultEntry (RFC 4511 section 4.5.2) as an ldap::entry, with the
 // controls of its message. Allocator-aware like entry. Converting it to
@@ -178,7 +177,6 @@ class search_stream
 
   private:
 	friend class connection;
-	friend class paged_search;
 
 	explicit search_stream(state *s) noexcept : state_(s) {}
 

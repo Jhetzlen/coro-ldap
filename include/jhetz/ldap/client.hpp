@@ -651,7 +651,8 @@ class client
 	// only after client_errc::not_sent.
 	// Each call may land on any pooled connection, so a request control
 	// bound to one connection (the paged-results cookie of an earlier page,
-	// anything tied to the session) needs a lease, not the forwarders. Like
+	// anything tied to the session) needs a lease, not the forwarders
+	// (ldap::search_paged(client &) holds one for its pages). Like
 	// acquire(), the tasks do not refer to *this.
 	//
 	// search(): connection::search()'s search_result (a limit code is a

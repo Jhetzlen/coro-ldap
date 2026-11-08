@@ -3262,3 +3262,120 @@ TEST_CASE("client: load_schema runs both searches on one lease", "[net][client][
 		CHECK_THAT(std::string(r.error().context), Catch::Matchers::StartsWith("load schema: acquire "));
 	}
 }
+
+namespace {
+
+auto paged_page(std::int32_t id, std::string_view cookie) -> ldap::message
+{
+	ldap::message m = done_msg(id);
+	m.controls.push_back(*ldap::encode_paged_results({ 0, cookie }));
+	return m;
+}
+
+// Answers the setup's bind, then two pages of one entry each.
+auto two_pages_after_bind() -> std::vector<step>
+{
+	return { answer({ bind_resp(1) }),
+		answer({ entry_msg(2, "uid=a,ou=people,dc=example,dc=org", "A"), paged_page(2, "page2") }),
+		answer({ entry_msg(3, "uid=b,ou=people,dc=example,dc=org", "B"), paged_page(3, "") }) };
+}
+
+auto drain_pages(ldap::paged_search &s) -> capy::task<ldap::result<std::vector<std::string>>>
+{
+	std::vector<std::string> dns;
+	while (true) {
+		auto e = co_await s.next();
+		if (!e) {
+			co_return std::unexpected(std::move(e.error()));
+		}
+		if (!*e) {
+			co_return dns;
+		}
+		dns.emplace_back((*e)->dn);
+	}
+}
+
+}// namespace
+
+TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
+{
+	const std::vector<std::string> both{ "uid=a,ou=people,dc=example,dc=org", "uid=b,ou=people,dc=example,dc=org" };
+	SECTION("the pages follow the cookie on the lease it holds")
+	{
+		pool_fixture f;
+		auto &s = f.server({ two_pages_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .acquire_timeout = milliseconds(200) });
+		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		REQUIRE(pages.has_value());
+		// The paged_search holds its lease: an exclusive acquire() finds no
+		// connection free.
+		auto busy = f.acquire_exclusive();
+		REQUIRE_FALSE(busy.has_value());
+		CHECK(busy.error().code == ldap::cond::timeout);
+		auto dns = finish(f.ioc, drain_pages(*pages));
+		REQUIRE(dns.has_value());
+		CHECK(*dns == both);
+		CHECK(pages->pages() == 2);
+		REQUIRE(s.log(0).received.size() == 3);
+		const auto &second = s.log(0).received[2];
+		auto cookie = ldap::find_paged(second.controls);
+		REQUIRE(cookie.has_value());
+		REQUIRE(cookie->has_value());
+		CHECK((*cookie)->cookie == "page2");
+		run_on(f.ioc, (**f.acquire()).executor(), [&pages] { *pages = ldap::paged_search{}; });// returns the lease
+		auto mine = f.acquire_exclusive();
+		REQUIRE(mine.has_value());
+		CHECK(s.accepted() == 1);
+	}
+	SECTION("lost before the first page's first message: requested again on a new lease")
+	{
+		pool_fixture f;
+		auto &s = f.server({ lost_after_bind(),
+		  { answer({ bind_resp(1) }),
+			answer({ entry_msg(2, "uid=a,ou=people,dc=example,dc=org", "A"), paged_page(2, "") }) } });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		REQUIRE(pages.has_value());
+		CHECK(s.accepted() == 2);
+		auto dns = finish(f.ioc, drain_pages(*pages));
+		REQUIRE(dns.has_value());
+		CHECK(*dns == std::vector<std::string>{ "uid=a,ou=people,dc=example,dc=org" });
+	}
+	SECTION("busy is not retried: next() reports it")
+	{
+		pool_fixture f;
+		auto &s = f.server({ busy_search(), two_pages_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		REQUIRE(pages.has_value());
+		auto dns = finish(f.ioc, drain_pages(*pages));
+		REQUIRE_FALSE(dns.has_value());
+		CHECK(dns.error().code == ldap::errc::busy);
+		CHECK(s.accepted() == 1);
+	}
+	SECTION("an acquire() failure")
+	{
+		pool_fixture f;
+		f.make({ .servers = { f.refused_url() },
+		  .setup = admin_setup(),
+		  .acquire_timeout = milliseconds(50),
+		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
+		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		REQUIRE_FALSE(pages.has_value());
+		CHECK_THAT(std::string(pages.error().context), ContainsSubstring("acquire "));
+	}
+	SECTION("it outlives its client")
+	{
+		pool_fixture f;
+		auto &s = f.server({ two_pages_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		REQUIRE(pages.has_value());
+		f.pool.reset();// closes the leased connection
+		auto dns = finish(f.ioc, drain_pages(*pages));
+		REQUIRE_FALSE(dns.has_value());
+		CHECK(dns.error().code == ldap::cond::connection_lost);
+		*pages = ldap::paged_search{};
+		drive(f.ioc);
+	}
+}

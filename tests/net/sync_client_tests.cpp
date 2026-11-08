@@ -284,7 +284,7 @@ TEST_CASE("sync: a search ending with a limit code returns its entries", "[net][
 			CHECK(r->diagnostic_message == "size limit");
 			REQUIRE(r->entries.size() == 1);
 			CHECK(r->entries.front() == expected_entry(jdoe, "John"));
-			auto paged = c.search_paged(people_search(), 10);
+			auto paged = ldap::sync::search_paged(c, people_search(), 10);
 			REQUIRE(paged.has_value());
 			CHECK(paged->result_code == 11);
 			CHECK(paged->entries.size() == 1);
@@ -320,6 +320,43 @@ TEST_CASE("sync: a search ending with a limit code returns its entries", "[net][
 		CHECK(srv.accepted() == 1);
 		CHECK(srv.log(0).received.size() == 4);
 	}
+}
+
+TEST_CASE("sync: search_paged on a sync::client and a sync::lease", "[net][sync][client][paged]")
+{
+	const auto page = [](std::int32_t id, std::string_view cookie) {
+		ldap::message m = done_msg(id);
+		m.controls.push_back(*ldap::encode_paged_results({ 0, cookie }));
+		return m;
+	};
+	threaded_script_server srv({ { answer({ bind_resp(1) }),
+	  answer({ entry_msg(2, jdoe, "John"), page(2, "next") }),
+	  answer({ entry_msg(3, "uid=jane,ou=people,dc=example,dc=org", "Jane"), page(3, "") }),
+	  answer({ entry_msg(4, jdoe, "John"), page(4, "") }),
+	  unbind_read() } });
+	{
+		ldap::sync::client pool(options_for(srv.url()));
+		auto all = ldap::sync::search_paged(pool, people_search(), 1);
+		REQUIRE(all.has_value());
+		REQUIRE(all->entries.size() == 2);
+		CHECK(all->entries[0] == expected_entry(jdoe, "John"));
+		CHECK(all->entries[1] == expected_entry("uid=jane,ou=people,dc=example,dc=org", "Jane"));
+		CHECK(all->is_success());
+		auto l = pool.acquire();
+		REQUIRE(l.has_value());
+		auto on_lease = ldap::sync::search_paged(*l, people_search(), 1);
+		REQUIRE(on_lease.has_value());
+		CHECK(on_lease->entries.size() == 1);
+		CHECK(pool.connections() == 1);
+	}
+	srv.stop();
+	CHECK_THAT(srv.log(0).error, IsEmpty());
+	CHECK(srv.accepted() == 1);
+	REQUIRE(srv.log(0).received.size() == 5);
+	auto cookie = ldap::find_paged(srv.log(0).received[2].controls);
+	REQUIRE(cookie.has_value());
+	REQUIRE(cookie->has_value());
+	CHECK((*cookie)->cookie == "next");
 }
 
 TEST_CASE("sync client: a transaction on an exclusive lease", "[net][sync][client][transaction]")

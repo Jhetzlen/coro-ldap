@@ -63,7 +63,7 @@ TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 	REQUIRE(r.has_value());
 	REQUIRE(r->entries.size() == 2);
 	CHECK(r->entries[0].dn == "uid=x,ou=people,dc=example,dc=org");
-	auto paged = c.search_paged({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } }, 10);
+	auto paged = ldap::sync::search_paged(c, { .base = ldap::dn{ "ou=people,dc=example,dc=org" } }, 10);
 	REQUIRE(paged.has_value());
 	CHECK(paged->entries.size() == 2);
 	CHECK(ldap::sync::who_am_i(c) == "dn:cn=me");
@@ -169,7 +169,8 @@ TEST_CASE("sync: search_paged leaves nothing on the caller's resource once it re
 	auto &c = *opened;
 	auto arena = std::make_unique<counting_resource>();
 	{
-		auto paged = c.search_paged({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } }, 10, arena.get());
+		auto paged =
+		  ldap::sync::search_paged(c, { .base = ldap::dn{ "ou=people,dc=example,dc=org" } }, 10, arena.get());
 		REQUIRE(paged.has_value());
 		CHECK(paged->entries.size() == 2);
 	}

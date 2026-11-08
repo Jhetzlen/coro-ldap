@@ -44,7 +44,7 @@ others; the list of `jhetz::ldap_net` headers is in `tests/CMakeLists.txt`).
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
 | `JHETZ_LDAP_WERROR` | `ON` (`OFF` as a subproject, and on clang-cl) | warnings are errors in our own targets (never in Corosio, Capy or Catch2); off when added with `add_subdirectory` or FetchContent, so a newer compiler's new warnings do not break consumers. `/WX` on MSVC; off on clang-cl, not built yet (`/W4` still shows the warnings; `-DJHETZ_LDAP_WERROR=ON` adds `/WX`) |
-| `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench`, and with `JHETZ_LDAP_BUILD_NET` `jhetz_ldap_connection_bench` (see below; not run by ctest or CI) |
+| `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench`, and with `JHETZ_LDAP_BUILD_NET` `jhetz_ldap_connection_bench` and `jhetz_ldap_paged_bench` (see below; not run by ctest or CI) |
 | `JHETZ_LDAP_COVERAGE` | `OFF` | Clang source-based coverage on our own targets (see [Coverage](#coverage)) |
 | `JHETZ_LDAP_CLANG_TIDY` | `OFF` | run clang-tidy (`.clang-tidy`) on our own targets while building them (see [clang-tidy](#clang-tidy)) |
 
@@ -747,6 +747,27 @@ session, two alternating invocations each, medians):
 A caller off the strand pays for the two posts (onto the strand and back),
 a caller on it for the strand's locking of the writer's and reader's
 wake-ups only.
+
+`bench/paged_bench.cpp` drains `ldap::search_paged` over a Unix socket
+pair from an in-process server that answers each page at once (20,000
+entries, pages of 1, 10 and 100), and prints the time per page and per
+entry (best and median of 9 runs):
+
+```sh
+cmake --build build/bench && build/bench/jhetz_ldap_paged_bench
+```
+
+`ldap::search_paged` as a free function over the public
+`connection::search_stream()`, measured against the member it replaced
+(the internal search start, no stream task, no copy of the search_params)
+in a worktree built the same way (GCC, Release, same session, five
+alternating invocations each, medians):
+
+| Page size | member | free function | |
+|---:|---:|---:|---:|
+| 1 | 21.5-21.8 us/page | 22.3-24.8 us/page | +4-15% |
+| 10 | 43.3-44.2 us/page | 44.9-47.2 us/page | +2-8% |
+| 100 | 264-270 us/page | 266-281 us/page | noise |
 
 ## ThreadSanitizer
 

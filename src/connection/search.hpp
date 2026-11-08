@@ -1,5 +1,5 @@
 // Internal: search_stream's state and the search helpers shared by
-// paged search and schema loading.
+// paged search, the client and the sync facade.
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"
@@ -61,6 +61,10 @@ namespace detail {
 	auto search_message(const connection::core &c, const search_params &p, const std::string &context)
 	  -> result<message>;
 
+	// connection::search_stream() on the connection whose state is `self`.
+	auto search_stream_of(const core_ref &self, search_params request, std::pmr::memory_resource *mr)
+	  -> boost::capy::task<result<ldap::search_stream>>;
+
 	// Validates and sends a search; returns its stream. Never suspends.
 	// `stop` is the awaiting task's stop token: if it is set already, the
 	// search is not sent and fails with capy::error::canceled.
@@ -81,9 +85,15 @@ namespace detail {
 
 	// The SearchResultDone's LDAPResult `s` ended with, null before it (or
 	// when it ended otherwise: a connection failure, a timeout).
-	[[nodiscard]] auto search_done(ldap::search_stream &s) noexcept -> const ldap_result *;
+	[[nodiscard]] auto search_done(const ldap::search_stream &s) noexcept -> const ldap_result *;
 	// As search_done(), for the current page of `p`.
-	[[nodiscard]] auto paged_done(ldap::paged_search &p) noexcept -> const ldap_result *;
+	[[nodiscard]] auto paged_done(const ldap::paged_search &p) noexcept -> const ldap_result *;
+	// The SearchResultDone `s` received and next() has not read yet, or
+	// null. On the connection's strand.
+	[[nodiscard]] auto queued_done(const ldap::search_stream &s) noexcept -> const message *;
+	// The strand of `p`'s connection; nullopt for a default-constructed or
+	// moved-from paged_search.
+	[[nodiscard]] auto paged_executor(const ldap::paged_search &p) noexcept -> std::optional<connection::executor_type>;
 
 	// `out` with the outcome of `s`, which ended with `done`: its
 	// references, the LDAPResult's fields and the done's controls.

@@ -237,11 +237,17 @@ namespace {
 
 }// namespace
 
+auto detail::search_stream_of(const core_ref &self, search_params request, std::pmr::memory_resource *mr)
+  -> capy::task<result<ldap::search_stream>>
+{
+	auto body = search_stream_impl(self, std::move(request), mr);
+	return detail::on_strand(self, std::move(body));
+}
+
 auto connection::search_stream(search_params request, std::pmr::memory_resource *mr)
   -> capy::task<result<ldap::search_stream>>
 {
-	const core_ref self(core_);
-	return detail::on_strand(self, search_stream_impl(self, std::move(request), mr));
+	return detail::search_stream_of(core_ref(core_), std::move(request), mr);
 }
 
 auto connection::search(search_params request, std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
@@ -252,10 +258,16 @@ auto connection::search(search_params request, std::pmr::memory_resource *mr) ->
 
 namespace detail {
 
-	auto search_done(ldap::search_stream &s) noexcept -> const ldap_result *
+	auto search_done(const ldap::search_stream &s) noexcept -> const ldap_result *
 	{
 		const auto *state = connection::core::stream_state(s);
 		return state == nullptr || !state->done ? nullptr : &*state->done;
+	}
+
+	auto queued_done(const ldap::search_stream &s) noexcept -> const message *
+	{
+		const auto *state = connection::core::stream_state(s);
+		return state == nullptr ? nullptr : state->queued_done();
 	}
 
 	void keep_alive(ldap::search_stream &s, std::shared_ptr<void> owner) noexcept

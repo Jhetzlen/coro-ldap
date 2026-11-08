@@ -568,7 +568,7 @@ TEST_CASE("integration: plain, streaming and paged searches", "[integration]")
 	}
 	CHECK(streamed == 250);
 
-	auto p = finish(ioc, c.search_paged(all_users, 40));
+	auto p = finish(ioc, ldap::search_paged(c, all_users, 40));
 	REQUIRE(p.has_value());
 	std::size_t paged = 0;
 	while (true) {
@@ -658,7 +658,7 @@ TEST_CASE("integration: a paged search stopped between pages sends a release", "
 	// answer is read and dropped without harm. StartTLS waits for it (RFC
 	// 4513 section 3.1.1; slapd would refuse a StartTLS sent before).
 	{
-		auto p = finish(ioc, c.search_paged(all_users, 40));
+		auto p = finish(ioc, ldap::search_paged(c, all_users, 40));
 		REQUIRE(p.has_value());
 		for (int i = 0; i < 40; ++i) {
 			auto e = finish(ioc, p->next());
@@ -1614,7 +1614,7 @@ TEST_CASE("integration: concurrent paged searches with and without sorting", "[i
 		std::vector<ldap::paged_search> searches;
 		for (int n = 0; n < 3; ++n) {
 			conns.push_back(open_admin(ioc));
-			auto p = finish(ioc, conns.back().search_paged(hundred_users(n, true), 20));
+			auto p = finish(ioc, ldap::search_paged(conns.back(), hundred_users(n, true), 20));
 			REQUIRE(p.has_value());
 			searches.push_back(std::move(*p));
 		}
@@ -2193,6 +2193,35 @@ constexpr auto ldap::schema<staff> = ldap::describe(ldap::object_class("inetOrgP
   ldap::field<&staff::cn>("cn"),
   ldap::field<&staff::sn>("sn"),
   ldap::field<&staff::mail>("mail"));
+
+TEST_CASE("integration: search_paged over ldap::client", "[integration][client]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	const auto server = ldap::url::parse(env("JHETZ_LDAP_IT_LDAP"));
+	REQUIRE(server.has_value());
+	draining_context ioc;
+	ldap::client pool(ioc, { .servers = { *server }, .connection = trusting(), .max_connections = 2 });
+	const ldap::search_params all_users{
+		.base = people, .filter = ldap::filters::attr("objectClass") == "posixAccount", .attributes = { "uid" }
+	};
+	auto p = finish(ioc, ldap::search_paged(pool, all_users, 40));
+	REQUIRE(p.has_value());
+	std::size_t paged = 0;
+	while (true) {
+		// Other operations on the pool run on the other connection meanwhile.
+		REQUIRE(finish(ioc, pool.search(ldap::root_dse({ "namingContexts" }))).has_value());
+		auto e = finish(ioc, p->next());
+		REQUIRE(e.has_value());
+		if (!*e) {
+			break;
+		}
+		++paged;
+	}
+	CHECK(paged == 250);
+	CHECK(p->pages() == 7);
+}
 
 TEST_CASE("integration: ldap::store over ldap::client", "[integration][client][store]")
 {

@@ -52,7 +52,7 @@ namespace jhetz::ldap {
 
 // Simple Paged Results (RFC 2696, OID paged_results_oid): ask for at most
 // `page_size` entries; `cookie` is empty for the first page and the
-// server's cookie for the next ones. connection::search_paged() manages it.
+// server's cookie for the next ones. ldap::search_paged() manages it.
 struct paged
 {
 	std::int32_t page_size = 0;
@@ -104,7 +104,7 @@ struct proxied_authorization
 // no sort result, even when not critical (libldap's own requests too). So
 // check the search's result, and treat find_sort_result() returning
 // nullopt as "not known to be sorted". sssvlv also mixes up concurrent
-// sorted paged searches on one connection (see connection::search_paged).
+// sorted paged searches on one connection (see ldap::search_paged).
 // Fails with encode_error, before anything is sent, if there are no keys or
 // a key has no attribute.
 struct sort_key

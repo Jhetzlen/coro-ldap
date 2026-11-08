@@ -850,11 +850,6 @@ auto connection::core::make_stream(search_stream::state *s) noexcept -> ldap::se
 	return ldap::search_stream(s);
 }
 
-auto connection::core::make_paged(paged_search::state *s) noexcept -> ldap::paged_search
-{
-	return ldap::paged_search(s);
-}
-
 // ---------------------------------------------------------------- waiting
 
 auto connection::core::next_response(pending_op &p, std::optional<clock::time_point> deadline, std::string_view context)

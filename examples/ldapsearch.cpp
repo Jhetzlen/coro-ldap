@@ -360,7 +360,7 @@ auto run(corosio::io_context &ioc, options o) -> capy::task<int>
 
 	int status = 0;
 	if (o.page_size > 0) {
-		auto s = co_await c->search_paged(std::move(params), o.page_size);
+		auto s = co_await ldap::search_paged(*c, std::move(params), o.page_size);
 		status = co_await print_all(s);
 	} else {
 		auto s = co_await c->search_stream(std::move(params));
