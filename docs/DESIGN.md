@@ -2277,9 +2277,16 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
     the noexcept paths called off it, `connection::close()`, the
     destructors (connection, `search_stream`, `paged_search`,
     `transaction`) and `detail::set_close_hook`, post their work
-    (`detail::run_on_strand`), unless the calling thread runs the strand or
-    the io_context is stopped (no thread runs it): then the work runs
-    inline, as before. Breaking rule (user decision, option A of nj9):
+    (`detail::run_on_strand`), unless the calling thread runs the strand,
+    or the io_context is stopped and the calling thread is not inside its
+    `run()`: then the work runs inline. `stopped()` is true from `stop()`
+    on, while other threads may still finish a handler on the strand, and
+    nothing public tells whether one does, so the inline path is
+    documented as needing those threads joined first. Called from inside
+    `run()` after `stop()`, the work is posted: a strand busy on another
+    thread runs it before that thread leaves `run()` (capy's strand
+    invoker empties its queue whatever `stop()` says), an idle one when
+    the io_context is restarted and run. Breaking rule (user decision, option A of nj9):
     after destroying a stream, paged search or transaction off the strand,
     the memory resource of its entries must outlive the next run of the
     io_context, which runs the posted cleanup, and `close()` takes effect

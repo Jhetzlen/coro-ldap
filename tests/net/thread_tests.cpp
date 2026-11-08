@@ -498,3 +498,47 @@ TEST_CASE("threads: one client and one store used from several threads", "[net][
 	}
 	CHECK(t.failed == 0);
 }
+
+TEST_CASE("threads: a connection destroyed by a pool task after stop()", "[net][threads]")
+{
+	corosio::io_context ioc;
+	answering_server server(ioc);
+	auto c = finish(ioc, ldap::connect(ioc, server.url(), { .operation_timeout = std::chrono::seconds(30) }));
+	REQUIRE(c.has_value());
+	std::atomic<bool> closed = false;
+	ldap::detail::set_close_hook(*c, [&closed] noexcept { closed = true; });
+	tally t;
+	constexpr std::size_t hung = 4;
+	std::latch ended(hung);
+	std::latch stopped(1);
+	{
+		thread_pool pool(ioc);
+		for (std::size_t i = 0; i < hung; ++i) {
+			start(ioc, hanging_search(*c, t), ended);
+		}
+		wait_for([&server] { return server.hanging() == hung; });
+		REQUIRE(server.hanging() == hung);
+		// Inside run() after stop(): the close is posted, not run while the
+		// other threads may still be on the strand.
+		start(
+		  ioc,
+		  [](corosio::io_context &io, ldap::connection &conn) -> capy::task<void> {
+			  io.stop();
+			  conn = ldap::connection{};
+			  co_return;
+		  }(ioc, *c),
+		  stopped);
+		pool.join();
+	}
+	CHECK(stopped.try_wait());
+	CHECK_FALSE(c->is_open());
+	CHECK_FALSE(closed);
+	ioc.restart();
+	drive_until(ioc, [&] { return closed && ended.try_wait(); });
+	CHECK(closed);
+	CHECK(ended.try_wait());
+	CHECK(t.lost == hung);
+	server.stop();
+	drive(ioc);
+	CHECK(t.failed == 0);
+}

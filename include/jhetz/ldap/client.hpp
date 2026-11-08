@@ -201,15 +201,15 @@
 // strand, so operations on different connections run in parallel on an
 // io_context run by several threads. connections() reads a snapshot. The
 // observer's hooks, the referral authorizer and session_setup are called on
-// the client's strand. close(), the destructor and a
-// lease's release() or destruction called off the client's strand post
-// their work there: it takes effect when the io_context next runs (at once
-// on the strand, or once the io_context is stopped), so "no observer hook
-// runs once close() has returned" holds for a close() called on the
-// strand. The io_context must outlive the client and its leases. The memory
-// resource must outlive the work the client leaves on the io_context (a
-// detached unbind() may still run after the client and its leases are
-// gone): keep it until io_context::run() returns. A lease may outlive its
+// the client's strand. close(), the destructor and a lease's release() or
+// destruction called off the client's strand post their work there: it
+// takes effect when the io_context next runs (at once on the strand, or
+// once the io_context is stopped and its threads have left run()), so "no
+// observer hook runs once close() has returned" holds for a close() called
+// on the strand. The io_context must outlive the client and its leases.
+// The memory resource must outlive the work the client leaves on the
+// io_context (a detached unbind() may still run after the client and its
+// leases are gone): keep it until io_context::run() returns. A lease may outlive its
 // client, but the client's destruction closes its connection (close()):
 // its operations then fail, and destroying the lease later is safe.
 #pragma once

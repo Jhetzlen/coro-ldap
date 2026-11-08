@@ -35,13 +35,15 @@ template<class F> auto invoke_detached(F f) -> boost::capy::task<void>
 	co_return;
 }
 
-// Runs `f` on `strand`: at once when the calling thread runs on it or the
-// io_context is stopped (no thread runs it), else posted there (the call
-// returns first). For the noexcept paths (destructors, close()): an
-// allocation failure ends the program, as capy::run_async's own does.
+// Runs `f` on `strand`: at once when the calling thread runs on it, or when
+// the io_context is stopped and the calling thread is not inside its run();
+// else posted there (the call returns first). For the noexcept paths
+// (destructors, close()): an allocation failure ends the program, as
+// capy::run_async's own does.
 template<class F> void run_on_strand(const io_strand &strand, F f) noexcept
 {
-	if (strand.running_in_this_thread() || strand.context().stopped()) {
+	if (strand.running_in_this_thread()
+		|| (strand.context().stopped() && !strand.get_inner_executor().running_in_this_thread())) {
 		f();
 		return;
 	}

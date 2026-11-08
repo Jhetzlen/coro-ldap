@@ -470,8 +470,8 @@ namespace detail {
 
 		// Ends a connection that left the pool: unbound if open and no lease
 		// holds it (a detached task on the executor), else closed. Closed
-		// too once the io_context is stopped (its run() returned): as a
-		// connection's destructor, nothing is sent.
+		// too once the io_context is stopped (a detached unbind would not
+		// run): as a connection's destructor, nothing is sent.
 		void shut_down(pooled_connection &c) const noexcept
 		{
 			if (!c.conn.is_open()) {

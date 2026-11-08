@@ -354,7 +354,8 @@ itself needs only ICU.
   executor), post their work: `close()` takes effect when the io_context
   next runs (`is_open()` reports it at once), and the memory resource of
   a destroyed stream's entries must outlive that run. On the strand, or
-  with the io_context stopped, they run at once. `locking_mode::unsafe_io`
+  with the io_context stopped and called outside its `run()` (join the
+  threads running it first), they run at once. `locking_mode::unsafe_io`
   and `unsafe` opt out of cross-thread use.
   Step 6 adds the other operations: `add`, `modify` (changes from
   `ldap::mod::add / remove / replace / increment`), `del`, `modify_dn`

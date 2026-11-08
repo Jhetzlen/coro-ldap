@@ -127,8 +127,12 @@
 // the memory resource given for its entries must outlive that run of the
 // io_context. An io_context destroyed before it runs that work again drops
 // it, and what it would have freed is leaked: after run_one() or a stop,
-// let it run (poll()) first. Called on the strand, or once the io_context is stopped (its
-// run() returned, no thread runs it), they run at once. The shared state is
+// let it run (poll()) first. They run at once when called on the strand,
+// or once the io_context is stopped from a thread outside its run():
+// stopped() is true from stop() on, while the threads running it may still
+// finish a handler on the strand, so join them before destroying a
+// connection or stream on another thread. Called from inside run() after
+// stop(), they post their work as above. The shared state is
 // reference counted, so a stream, an outstanding operation or the internal
 // reader may outlive the connection object (destroying the connection
 // closes it; they then fail with not_connected). Operations never wait on
