@@ -63,31 +63,45 @@ namespace detail {
 		thread_.join();
 	}
 
+	namespace {
+
+		auto collect_pages(ldap::connection &c,
+		  search_params request,
+		  std::int32_t page_size,
+		  std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
+		{
+			auto s = co_await c.search_paged(std::move(request), page_size, mr);
+			if (!s) {
+				co_return std::unexpected(std::move(s.error()));
+			}
+			search_result out{ .entries = std::pmr::vector<entry>(mr), .references = string_list(mr) };
+			while (true) {
+				auto e = co_await s->next();
+				if (!e) {
+					const ldap_result *done = ldap::detail::paged_done(*s);
+					if (done == nullptr || !ldap::detail::limit_exceeded(done->result_code)) {
+						co_return std::unexpected(std::move(e.error()));
+					}
+					break;
+				}
+				if (!*e) {
+					break;
+				}
+				out.entries.push_back(std::move(**e));
+			}
+			ldap::detail::set_outcome(out, *ldap::detail::paged_done(*s), s->references(), s->controls());
+			co_return out;
+		}
+
+	}// namespace
+
+	// On the connection's strand: the paged_search ends there, before the
+	// result is delivered.
 	auto
 	  collect_paged(ldap::connection &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
 		-> capy::task<result<search_result>>
 	{
-		auto s = co_await c.search_paged(std::move(request), page_size, mr);
-		if (!s) {
-			co_return std::unexpected(std::move(s.error()));
-		}
-		search_result out{ .entries = std::pmr::vector<entry>(mr), .references = string_list(mr) };
-		while (true) {
-			auto e = co_await s->next();
-			if (!e) {
-				const ldap_result *done = ldap::detail::paged_done(*s);
-				if (done == nullptr || !ldap::detail::limit_exceeded(done->result_code)) {
-					co_return std::unexpected(std::move(e.error()));
-				}
-				break;
-			}
-			if (!*e) {
-				break;
-			}
-			out.entries.push_back(std::move(**e));
-		}
-		ldap::detail::set_outcome(out, *ldap::detail::paged_done(*s), s->references(), s->controls());
-		co_return out;
+		return ldap::detail::on_strand(c.executor(), collect_pages(c, std::move(request), page_size, mr));
 	}
 
 	// The ldap::transaction is made, and later destroyed, on the I/O thread.

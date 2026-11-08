@@ -1366,6 +1366,15 @@ namespace detail {
 			co_return r->value;
 		}
 
+		// Destroys `s` on `c`'s strand.
+		static auto end_stream(connection &c, ldap::search_stream &s) -> capy::task<void>
+		{
+			return detail::on_strand(c.executor(), [](ldap::search_stream &stream) -> capy::task<void> {
+				stream = ldap::search_stream{};
+				co_return;
+			}(s));
+		}
+
 		// search_stream(): retried once if it fails before its first message,
 		// at once or as its first outcome.
 		static auto read_stream(std::shared_ptr<client_state> self,
@@ -1384,12 +1393,16 @@ namespace detail {
 				if (s) {
 					auto first = co_await first_outcome(*s);
 					if (!first) {// stopped
+						co_await end_stream(**held, *s);
 						co_return std::unexpected(std::move(first.error()));
 					}
 					outcome = std::move(*first);
 					failed = outcome ? &*outcome : nullptr;
 				}
 				if (failed != nullptr && !retried && retryable(*failed)) {
+					if (s) {
+						co_await end_stream(**held, *s);
+					}
 					avoid = self->set_aside(*held, *failed);
 					continue;
 				}

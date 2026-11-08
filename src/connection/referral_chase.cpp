@@ -7,6 +7,7 @@
 #include "../format_util.hpp"
 #include "../net/deadline.hpp"
 #include "../net/host_name.hpp"
+#include "../strand_util.hpp"
 #include "referral_chase_impl.hpp"
 #include "search.hpp"
 
@@ -101,7 +102,8 @@ namespace {
 		std::pmr::vector<control> controls{};
 	};
 
-	auto run_search(connection &c, search_params p, std::pmr::memory_resource *mr) -> capy::task<result<search_run>>
+	auto run_search_here(connection &c, search_params p, std::pmr::memory_resource *mr)
+	  -> capy::task<result<search_run>>
 	{
 		auto s = co_await c.search_stream(std::move(p), mr);
 		if (!s) {
@@ -125,6 +127,13 @@ namespace {
 				out.references.push_back(std::move(r->uris));
 			}
 		}
+	}
+
+	// On the connection's strand: the search_stream ends there, before the
+	// result is delivered.
+	auto run_search(connection &c, search_params p, std::pmr::memory_resource *mr) -> capy::task<result<search_run>>
+	{
+		return detail::on_strand(c.executor(), run_search_here(c, std::move(p), mr));
 	}
 
 	struct search_op

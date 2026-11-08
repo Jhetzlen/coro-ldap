@@ -3,6 +3,7 @@
 // serve_script over socket pairs), with a test connector that maps a URL's
 // host to one of them.
 #include "../../src/connection/referral_chase_impl.hpp"
+#include "../counting_resource.hpp"
 #include "jhetz/ldap/referral_chase.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -241,6 +242,33 @@ TEST_CASE("chase_search: continuation references are followed", "[net][referral]
 	REQUIRE(c.size() == 1);
 	CHECK(c[0].scope == ldap::search_scope::single_level);
 	CHECK(c[0].filter == (ldap::filters::attr("uid") == "other"));
+}
+
+TEST_CASE("chase_search: nothing is left on the caller's resource once it returns", "[net][referral]")
+{
+	world w;
+	w.add("b.example");
+	w.serve("a.example",
+	  { answer({ entry_msg(1, "uid=jdoe,ou=a,dc=example,dc=org", "A"),
+		ref_msg(1, { "ldap://b.example/ou=b,dc=example,dc=org" }),
+		done_msg(1) }) });
+	w.serve("b.example", { answer({ entry_msg(1, "uid=jdoe,ou=b,dc=example,dc=org", "B"), done_msg(1) }) });
+	counting_resource arena;
+	// The resource's state as the chase returns, before the io_context runs
+	// anything else.
+	const auto [entries, left] =
+	  w.run([](world &on, counting_resource &mr) -> boost::capy::task<std::pair<std::size_t, std::size_t>> {
+		  std::size_t n = 0;
+		  {
+			  auto r = co_await ldap::chase_search(on.origin.conn, search(), on.connector(), {}, &mr);
+			  n = r ? r->entries.size() : 0;
+		  }
+		  co_return std::pair{ n, mr.outstanding() };
+	  }(w, arena));
+	CHECK(entries == 2);
+	CHECK(arena.allocations() > 0);
+	CHECK(left == 0);
+	w.check_servers();
 }
 
 TEST_CASE("chase_search: limit codes keep the entries", "[net][referral]")

@@ -1,6 +1,7 @@
 // ldap::sync::connection against an in-process LDAP server on loopback TCP that
 // runs on its own thread and io_context and answers requests as they come.
 #include "../../src/net/tls.hpp"
+#include "../counting_resource.hpp"
 #include "jhetz/ldap/ad/sync.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/sasl.hpp"
@@ -28,6 +29,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <future>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -122,6 +124,23 @@ TEST_CASE("sync: a blocking call from the I/O thread fails with would_deadlock",
 	CHECK(r.error().context == "sync::connection");
 	// The connection still works from other threads.
 	CHECK(ldap::sync::who_am_i(c) == "dn:cn=me");
+}
+
+TEST_CASE("sync: search_paged leaves nothing on the caller's resource once it returns", "[net][sync]")
+{
+	server_thread srv;
+	ldap::sync::connection c({ .timeout = std::chrono::seconds(10) });
+	REQUIRE(c.connect(srv.url()).has_value());
+	auto arena = std::make_unique<counting_resource>();
+	{
+		auto paged = c.search_paged({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } }, 10, arena.get());
+		REQUIRE(paged.has_value());
+		CHECK(paged->entries.size() == 2);
+	}
+	CHECK(arena->allocations() > 0);
+	CHECK(arena->outstanding() == 0);
+	arena.reset();
+	CHECK(c.search({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } }).has_value());
 }
 
 TEST_CASE("sync: connect failures and destruction without unbind", "[net][sync]")
