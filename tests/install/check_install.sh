@@ -8,7 +8,8 @@
 #   tests/install/check_install.sh WORK_DIR
 #
 # Sources: FETCHCONTENT_SOURCE_DIR_CAPY / _COROSIO if set (local
-# checkouts), else the pinned commits are cloned into WORK_DIR.
+# checkouts), else the pinned commits are cloned into WORK_DIR (a clone
+# there at another commit is cloned again).
 set -eu
 work=$(realpath -m "${1:?usage: check_install.sh WORK_DIR}")
 here=$(cd "$(dirname "$0")" && pwd)
@@ -17,14 +18,18 @@ rm -rf "$work/prefix" "$work/prefix-codec" "$work/build"
 mkdir -p "$work/build"
 gen="-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
 
-# source_of NAME URL COMMIT OVERRIDE: a source directory.
+# source_of NAME URL COMMIT OVERRIDE: a source directory at COMMIT.
 source_of() {
 	if [ -n "$4" ]; then echo "$4"; return; fi
-	if [ ! -d "$work/src-$1" ]; then
-		git clone -q "$2" "$work/src-$1"
-		git -C "$work/src-$1" checkout -q "$3"
+	src="$work/src-$1"
+	if [ -d "$src" ] && [ "$(git -C "$src" rev-parse HEAD 2>/dev/null)" != "$3" ]; then
+		rm -rf "$src"
 	fi
-	echo "$work/src-$1"
+	if [ ! -d "$src" ]; then
+		git clone -q "$2" "$src"
+		git -C "$src" checkout -q "$3"
+	fi
+	echo "$src"
 }
 pin() { sed -n "/FetchContent_Declare($1/,/)/s/.*GIT_TAG \([0-9a-f]*\).*/\1/p" "$root/CMakeLists.txt"; }
 capy=$(source_of capy https://github.com/cppalliance/capy.git "$(pin capy)" "${FETCHCONTENT_SOURCE_DIR_CAPY:-}")
