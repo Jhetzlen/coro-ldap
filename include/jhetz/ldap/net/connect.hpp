@@ -96,33 +96,24 @@ enum class host_name_matching : unsigned char {
 	legacy,
 };
 
-// TLS settings for ldaps:// (and StartTLS, step 7). The defaults are secure:
-// certificate verification with the system trust store, host name check, SNI,
-// TLS 1.2 or later. A plain aggregate on purpose: this is configuration, read
-// once per connect, not a hot path, so it is not allocator-aware (the pmr
-// strings use the default resource). Files and directories are read and
-// checked when connect() starts, before any network traffic: an unreadable
-// file, a CA that does not parse, or a missing ca_dir fail at once.
+// TLS settings for ldaps:// and StartTLS. The defaults are secure: the
+// system trust store, host name check, SNI, TLS 1.2 or later. Not
+// allocator-aware (the pmr strings use the default resource). Files and
+// directories are read and checked when connect() starts, before any
+// network traffic: an unreadable file, a CA that does not parse, or a
+// missing ca_dir fail at once.
 struct tls_options
 {
 	certificate_verification verification = certificate_verification::full;
 
-	// Trust anchors. If none of the three is set, the system default store is
-	// used: OpenSSL's (it honours SSL_CERT_FILE and SSL_CERT_DIR), or on
-	// Windows CryptoAPI: the server's chain is verified as Windows' own
-	// clients verify it (CertGetCertificateChain with the SSL policy: the
-	// roots Windows fetches on demand, its distrust and NotBefore rules, and
-	// revocation, soft-fail: an unreachable CRL or OCSP responder is not an
-	// error, a revoked certificate is), held to OpenSSL's security level;
-	// the host name is matched as elsewhere (host_matching). CryptoAPI is
-	// synchronous: during the handshake it blocks the thread running the
-	// io_context, and so every other operation on it, while it fetches
-	// what it needs. The connect or StartTLS timeout bounds only its
-	// revocation fetches (CRL, OCSP: all together, at most 20 s even
-	// without a timeout); intermediates (AIA) and on-demand roots have
-	// Windows' own per-URL timeout and can make the handshake overrun it.
-	// Setting any of them replaces the system store, CryptoAPI included;
-	// they may be combined.
+	// Trust anchors. If none of the three is set, the system default store
+	// is used: OpenSSL's (SSL_CERT_FILE, SSL_CERT_DIR), or on Windows
+	// CryptoAPI (CertGetCertificateChain with the SSL policy, soft-fail
+	// revocation, held to OpenSSL's security level; host_matching as
+	// elsewhere). CryptoAPI blocks the io_context's thread during the
+	// handshake; the connect or StartTLS timeout bounds only its
+	// revocation fetches (at most 20 s), not AIA or root fetches. Setting
+	// any of them replaces the system store; they may be combined.
 	std::filesystem::path ca_file{};// PEM file with one or more CA certificates
 	// Directory hashed with `openssl rehash`. OpenSSL reads it lazily through
 	// char paths: on Windows keep its path ASCII (files are opened by UTF-8
@@ -166,16 +157,12 @@ struct connect_options
 };
 
 // Connects to the server named by `u`. `ioc` must outlive the transport and
-// the returned task must run on `ioc`'s executor (connect() uses Corosio
-// timers, which need an io_context). As for every Corosio/Capy operation,
-// its continuations must not run concurrently: a single-threaded io_context,
-// or a strand over a multi-threaded one (DESIGN.md section 8: one connection,
-// one executor). The detached name lookup may finish on any thread; it hands
-// its result over through a mutex and a capy::async_waker, which is safe
-// across threads. To stop it from another thread, see with_stop in
-// connection.hpp (locking_mode::safe only). Arguments are taken by value, so
-// the task does not depend on the caller's objects. The transport's own block
-// and name are allocated from `mr`.
+// the task must run on `ioc`'s executor. Its continuations must not run
+// concurrently: a single-threaded io_context, or a strand (DESIGN.md section
+// 8). The detached name lookup may finish on any thread. To stop it from
+// another thread, see with_stop in connection.hpp (locking_mode::safe only).
+// Arguments are taken by value. The transport's block and name are
+// allocated from `mr`.
 auto connect(boost::corosio::io_context &ioc,
   url u,
   connect_options options = {},

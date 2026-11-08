@@ -116,7 +116,7 @@ using search_result = basic_search_result<std::pmr::vector<entry>>;
 // The entries decoded to T (store::search, with record<T>).
 template<class T> using typed_search_result = basic_search_result<std::vector<T>>;
 
-// The other operations (step 6), as plain aggregates like search_params.
+// The other operations, as plain aggregates like search_params.
 // `controls` and `timeout` mean the same everywhere: request controls, and
 // a client-side limit overriding connection_options::operation_timeout
 // (ldap::no_timeout: none). Each `controls` is its operation's list

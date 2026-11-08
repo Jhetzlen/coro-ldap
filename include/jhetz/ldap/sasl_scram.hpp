@@ -1,147 +1,83 @@
 // SASL SCRAM-SHA-256 (RFC 5802, RFC 7677), client side, for
-// connection::sasl_bind:
+// connection::sasl_bind (DESIGN.md section 3, "SCRAM-SHA-256"):
 //
 //   ldap::sasl_scram_sha256 mech("jdoe", password);
 //   if (auto r = co_await conn.sasl_bind(mech); !r) ...
 //
 // A password mechanism with mutual authentication: the password never
-// crosses the wire, and the bind fails unless the server proves that it
-// knows the stored keys (the "v=" server signature of the last message).
-// Use it over TLS anyway: SCRAM does not protect the rest of the session.
+// crosses the wire, and the bind fails unless the server's "v=" signature
+// proves it knows the stored keys. SCRAM does not protect the rest of the
+// session: use TLS. Part of jhetz::ldap_net (OpenSSL, ICU).
 //
-// Part of jhetz::ldap_net (the implementation needs OpenSSL and ICU), not
-// of the codec library jhetz::ldap.
+// Channel binding (RFC 5802 sections 6 and 7, RFC 5056, RFC 9266),
+// sasl_scram_options::channel_binding:
+// - none (default): mechanism SCRAM-SHA-256, GS2 header "n,," ("n,a=<authzid>,"
+//   with an authorization identity).
+// - plus: mechanism SCRAM-SHA-256-PLUS, GS2 header "p=<type>,,", c= binds the
+//   authentication to the TLS connection. sasl_scram_options::binding_type
+//   picks the type; default channel_bindings::default_type (tls-exporter on
+//   TLS 1.3; on TLS 1.2 tls-server-end-point, or tls-exporter with the
+//   extended master secret when the certificate has no
+//   tls-server-end-point). For OpenLDAP's slapd set binding_form to
+//   scram_channel_binding_form::openldap ("p=ldap,,", tls-server-end-point
+//   hashed as OpenLDAP does). Without TLS or binding data of the type,
+//   start() fails with client_errc::tls_required. tls-exporter serves one
+//   authentication per TLS connection (RFC 9266 section 4.1): once a bind
+//   used it (from a successful start() on), later binds there get no
+//   tls-exporter data, so the default falls back to tls-server-end-point,
+//   else start() fails with tls_required.
+// - not_offered: the server did not advertise SCRAM-SHA-256-PLUS. Mechanism
+//   SCRAM-SHA-256 with "y,," on a TLS connection with binding data ("n,,"
+//   otherwise), so a -PLUS server refuses the bind if a man in the middle
+//   stripped -PLUS (RFC 5802 section 6).
+// scram_channel_binding_for() maps the root DSE's supportedSASLMechanisms to
+// plus or not_offered; reading it without TLS is fine.
 //
-// Channel binding (RFC 5802 sections 6 and 7, RFC 5056, RFC 9266), chosen
-// with sasl_scram_options::channel_binding:
-// - scram_channel_binding::none (the default): GS2 header "n,," ("n,a=
-//   <authzid>," with an authorization identity), mechanism SCRAM-SHA-256.
-//   The client does not claim channel binding support.
-// - scram_channel_binding::plus: mechanism SCRAM-SHA-256-PLUS, GS2 header
-//   "p=<type>,,", and the client-final-message's c= is the base64 of the
-//   GS2 header followed by the connection's channel binding data, which
-//   ties the authentication to this TLS connection: a man in the middle
-//   holding a certificate the client accepted cannot relay it.
-//   sasl_scram_options::binding_type picks the type; by default the
-//   connection's (channel_bindings::default_type): tls-exporter on TLS 1.3
-//   (RFC 9266 section 3); on TLS 1.2 tls-server-end-point (this library
-//   has no tls-unique, RFC 5802's default there: see channel_binding.hpp),
-//   or tls-exporter when the certificate has no tls-server-end-point
-//   (Ed25519, Ed448) and the extended master secret was negotiated.
-//   OpenLDAP's slapd ("sasl-cbinding tls-endpoint" or "tls-unique") does
-//   not speak the RFC 5802 form: it expects "p=ldap,," and the data
-//   prefixed with its type name, and knows no tls-exporter. For it, set
-//   sasl_scram_options::binding_form to scram_channel_binding_form::openldap
-//   (tls-server-end-point, hashed as OpenLDAP does). start() fails with
-//   client_errc::tls_required (cond::access_denied) when TLS does not
-//   protect the connection or it has no binding data of that type (e.g.
-//   tls-exporter on TLS 1.2 without the extended master secret).
-//   RFC 9266 section 4.1: tls-exporter MUST NOT be used for more than one
-//   authentication on a TLS connection. connection::sasl_bind enforces it:
-//   once a bind used tls-exporter (failed attempts included, once start()
-//   succeeded), later binds on the connection are given no
-//   tls-exporter data, so the default type becomes tls-server-end-point
-//   when the connection has it, and a bind with no other type (or an
-//   explicit binding_type tls_exporter) fails start() with
-//   client_errc::tls_required, before anything is sent. Another
-//   connection has its own tls-exporter. (tls-server-end-point has no
-//   such limit: it names the server's certificate, not the connection.)
-// - scram_channel_binding::not_offered: the client supports channel
-//   binding but the server did not advertise SCRAM-SHA-256-PLUS. Mechanism
-//   SCRAM-SHA-256 with the GS2 header "y,," on a TLS connection that has
-//   channel binding data ("n,," otherwise): a server that does support
-//   SCRAM-SHA-256-PLUS on that connection then refuses the bind, which
-//   detects a man in the middle that removed -PLUS from the mechanism list
-//   (RFC 5802 section 6).
-// The caller knows which mechanisms the server offers (supportedSASLMechanisms
-// of the root DSE); scram_channel_binding_for() turns that list into plus
-// or not_offered. Reading it without TLS is fine: removing -PLUS from it
-// leads to "y", which such a server refuses.
-//
-// Scope and limits:
-// - Usernames and passwords are UTF-8 and are prepared with SASLprep (RFC
-//   4013, with ICU), as RFC 5802 requires: soft hyphens and the like are
-//   mapped to nothing, non-ASCII spaces to U+0020, the text is normalized
-//   to NFKC, and prohibited characters (controls, private use,
-//   non-characters, ...) or text breaking the bidi rules are refused. The
-//   password is a "stored string" (code points unassigned in Unicode 3.2
-//   are refused), the username a "query" (they are allowed), as RFC 5802
-//   sections 2.2 and 5.1 say. Invalid UTF-8 is refused.
-//   Interoperability: cyrus-sasl's SCRAM (OpenLDAP's slapd) does not
-//   SASLprep the password it reads from userPassword, so a stored password
-//   that SASLprep changes (e.g. one with a non-ASCII space or not in NFKC)
-//   does not match there. Passwords already in SASLprep form work.
+// - Usernames and passwords are UTF-8, prepared with SASLprep (RFC 4013, ICU):
+//   the password as a stored string, the username as a query (RFC 5802
+//   sections 2.2 and 5.1); invalid UTF-8 and prohibited text are refused.
+//   cyrus-sasl (slapd) does not SASLprep stored passwords, so a password
+//   SASLprep changes does not match there.
 // - The authorization identity must be valid UTF-8 without control
-//   characters (C0, DEL, C1: U+0000-U+001F, U+007F-U+009F); any other code
-//   point is accepted. It is not SASLprep'ed (RFC 5802 does not ask for it).
+//   characters (C0, DEL, C1); it is not SASLprep'ed.
 // - '=' and ',' in the username and authorization identity are escaped as
-//   "=3D" and "=2C" (RFC 5802 section 5.1).
+//   "=3D" and "=2C".
 // - The server's iteration count must be in [min_iterations,
-//   options.max_iterations] (4096 .. 1'000'000 by default): RFC 7677
-//   section 4 asks for at least 4096, and the upper bound keeps a hostile
-//   server from making the client spend seconds in PBKDF2 on every bind
-//   (about 0.45 s for 1'000'000 on a 2020s x86-64 core). Lower it
-//   (sasl_scram_options::max_iterations) when the servers are known.
-// - PBKDF2 (the SaltedPassword) runs on a thread of its own when the
-//   server asks for more than options.offload_above_iterations (16'384 by
-//   default) and the io_context can be woken from another thread
-//   (locking_mode::safe, Corosio's default, or unsafe_io): sasl_bind hands
-//   it the step through offload_step() (sasl.hpp), so other operations on
-//   the io_context go on meanwhile. Up to that count, or under locking_mode::unsafe, it runs on
-//   the I/O thread, inside step() (a few ms at most by default: less than a
-//   thread start is worth). The bind's timeout and cancellation apply to
-//   the wait; a step given up on runs to its end with copies of what it
-//   needs, and its result is dropped.
-// - The SaltedPassword is cached per (salt, iteration count): a later bind
-//   with the same object to a server that sends the same salt and count
-//   (the same stored keys) skips PBKDF2. A different salt or count replaces
-//   the cached value. It is a key that authenticates as the user to such a
-//   server, so it is kept like the password: wiped with OPENSSL_cleanse
-//   when replaced or when the object is destroyed.
-// - The server nonce must extend the client nonce (start with it and be
-//   longer).
-// - The password is kept (to allow later binds with the same object) and
-//   wiped with OPENSSL_cleanse when the object is destroyed; the buffers
-//   of the SASLprep preparation when start() returns; the prepared
-//   password and the derived keys (but the cached SaltedPassword, above)
-//   as soon as the proof is built (a start() that fails leaves no
-//   prepared password).
-//   ICU's own internal working buffers cannot be wiped. Copies the caller
-//   made of the password are the caller's to wipe.
+//   options.max_iterations] (4096 .. 1'000'000 by default, about 0.45 s of
+//   PBKDF2 at the top).
+// - PBKDF2 runs on a thread of its own (offload_step(), sasl.hpp) above
+//   options.offload_above_iterations (16'384 by default) when the io_context
+//   accepts posts from other threads (locking_mode::safe or unsafe_io), else
+//   inside step(). The bind's timeout and cancellation apply to the wait; a
+//   step given up on runs to its end and its result is dropped.
+// - The SaltedPassword is cached per (salt, iteration count) and wiped with
+//   OPENSSL_cleanse when replaced or on destruction.
+// - The server nonce must extend the client nonce.
+// - The password is kept for later binds and wiped on destruction; SASLprep
+//   buffers when start() returns; the prepared password and derived keys
+//   once the proof is built. ICU's internal buffers and the caller's copies
+//   are not wiped.
 //
-// Errors (contexts never contain the password, nor name the mechanism):
-// - client_errc::tls_required (cond::access_denied): channel binding
-//   (scram_channel_binding::plus) on a connection without TLS, or without
-//   binding data of the chosen type (tls-exporter after an earlier bind
-//   used it included).
+// Errors (contexts never contain the password; sasl_bind prefixes
+// "sasl bind SCRAM-SHA-256"):
+// - client_errc::tls_required (cond::access_denied): plus without TLS or
+//   without binding data of the chosen type.
 // - client_errc::encode_error (cond::invalid_input): binding_form openldap
-//   with binding_type tls_exporter and channel_binding plus, which
-//   OpenLDAP's form does not have.
-// - client_errc::encode_error (cond::invalid_input): an empty username or
-//   password (also after SASLprep), invalid UTF-8, a character SASLprep
-//   prohibits (e.g. a control character) or that is unassigned, a bidi
-//   rule violation; options.max_iterations outside [min_iterations,
-//   2^31-1] (start() refuses it).
+//   with binding_type tls_exporter; an empty username or password (also after
+//   SASLprep), invalid UTF-8, a prohibited or unassigned character, a bidi
+//   violation; max_iterations outside [min_iterations, 2^31-1].
 // - client_errc::decode_error (cond::protocol_error): a malformed server
 //   message.
-// - client_errc::unexpected_response (cond::protocol_error): a server
-//   message out of order, a nonce that does not extend ours, an iteration
-//   count out of bounds (the context gives the count and the bound), an unknown mandatory extension ("m="), a server
-//   error ("e=", its text quoted in the context: at most 64 bytes, UTF-8,
-//   with control characters, bidi controls, U+2028/U+2029 and ill-formed
-//   sequences replaced by U+FFFD), a wrong server signature, or a server
-//   that reports success without a valid signature. The last three mean
-//   the server could not be authenticated: do not trust that connection.
-//   When the server had already reported success (the error comes from
-//   complete()), connection::sasl_bind closes the connection, since the
-//   server considers it bound.
-// - client_errc::internal_error (no condition): OpenSSL (RAND_bytes,
-//   PBKDF2, HMAC, SHA-256) or ICU (e.g. out of memory, ICU data without
-//   the SASLprep profile) failed: the environment, not the credentials.
-// Error contexts do not name the mechanism: sasl_bind prefixes
-// "sasl bind SCRAM-SHA-256".
-// A server that refuses the proof normally answers invalidCredentials,
-// which sasl_bind returns as errc::invalid_credentials (cond::auth_failed).
+// - client_errc::unexpected_response (cond::protocol_error): a message out of
+//   order, a nonce not extending ours, an iteration count out of bounds, an
+//   unknown mandatory extension ("m="), a server error ("e=", quoted
+//   sanitized, at most 64 bytes), a wrong server signature, or success
+//   without a valid signature. The last three mean the server is not
+//   authenticated; if it already reported success, sasl_bind closes the
+//   connection.
+// - client_errc::internal_error (no condition): OpenSSL or ICU failed.
+// - errc::invalid_credentials (cond::auth_failed): the server refused the
+//   proof.
 #pragma once
 
 #include "jhetz/ldap/channel_binding.hpp"

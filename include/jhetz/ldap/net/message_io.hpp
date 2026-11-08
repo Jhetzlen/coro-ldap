@@ -1,6 +1,6 @@
 // Reading and writing whole LDAPMessages on a transport: the bridge between
 // the byte stream (net::transport) and the message codec (message.hpp) that
-// the connection layer (step 5) builds on.
+// the connection layer builds on.
 //
 // Framing: ber::declared_message_size tells from the header alone how long
 // the next PDU is. A PDU that does not start with a SEQUENCE tag, or declares

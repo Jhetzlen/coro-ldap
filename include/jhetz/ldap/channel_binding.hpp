@@ -1,49 +1,31 @@
-// TLS channel bindings (RFC 5056): data that identifies one TLS connection,
-// which an authentication exchange (SCRAM-SHA-256-PLUS, GSSAPI) includes so
-// that it cannot be relayed through a man in the middle that terminates TLS
-// with a certificate of its own.
-//
-// Two channel binding types are provided:
+// TLS channel bindings (RFC 5056): data identifying one TLS connection, which
+// an authentication exchange (SCRAM-SHA-256-PLUS, GSSAPI) includes so it
+// cannot be relayed by a man in the middle terminating TLS.
 //
 //   tls-server-end-point  RFC 5929 section 4.1: the hash of the server's
-//                         certificate, with the hash function of the
-//                         certificate's signature algorithm (MD5 and SHA-1
-//                         are replaced by SHA-256). Undefined, so absent,
-//                         for a signature algorithm without exactly one hash
-//                         function (Ed25519, Ed448). Any TLS version.
-//   tls-exporter          RFC 9266: 32 bytes of TLS keying material
-//                         (RFC 5705 / RFC 8446 section 7.5 exporter), label
-//                         "EXPORTER-Channel-Binding", zero-length context.
-//                         TLS 1.3, and TLS 1.2 with the extended master
-//                         secret extension (RFC 7627; RFC 9266 section 2
-//                         ties the binding's uniqueness to it); absent
-//                         otherwise.
+//                         certificate with its signature algorithm's hash
+//                         (MD5 and SHA-1 become SHA-256). Absent for an
+//                         algorithm without exactly one hash (Ed25519,
+//                         Ed448). Any TLS version.
+//   tls-exporter          RFC 9266: 32 bytes of TLS keying material, label
+//                         "EXPORTER-Channel-Binding", empty context. TLS 1.3,
+//                         and TLS 1.2 with the extended master secret (RFC
+//                         7627); absent otherwise.
 //
-// tls-unique (RFC 5929 section 3) is not provided: it is undefined for TLS
-// 1.3 (RFC 9266 section 3), and without the extended master secret it is
-// open to the triple handshake attack (RFC 9266 section 1, RFC 7627). For
-// TLS 1.2, where RFC 5802 makes tls-unique SCRAM's default, this library
-// defaults to tls-server-end-point instead (when the certificate defines
-// it; see channel_bindings::default_type), which servers support widely
-// (Active Directory, PostgreSQL; OpenLDAP's "sasl-cbinding tls-endpoint" in
-// a form of its own, see sasl_scram.hpp).
+// tls-unique is not provided; on TLS 1.2 the default is tls-server-end-point
+// where the certificate defines it (channel_bindings::default_type).
 //
-// They are computed once, after the handshake, when the server sent a
-// certificate (the client's verify callback, which reaches OpenSSL's
-// session, ran). The client then refuses TLS 1.2 renegotiation (RFC 9266
-// section 4.2: tls-exporter is undefined where renegotiation is enabled),
-// so they and the peer certificate describe the connection for its
-// lifetime. Without a server certificate nothing is recorded (no peer
-// certificate, no channel bindings) and renegotiation is left at
-// OpenSSL's default.
+// They are computed once after the handshake, when the server sent a
+// certificate; the client then refuses TLS 1.2 renegotiation (RFC 9266
+// section 4.2), so they describe the connection for its lifetime. Without a
+// server certificate nothing is recorded.
 //
-// RFC 9266 section 4.1: tls-exporter MUST NOT be used for more than one
-// authentication mechanism instance on a TLS connection.
-// ldap::connection::channel_bindings() gives the connection's bindings,
-// tls-exporter included, whatever was done with them; connection::sasl_bind
-// passes them to mechanisms (sasl_bind_context) without tls-exporter once
-// a bind used it (sasl_mechanism::channel_binding_used), default_type then
-// tls-server-end-point, or none. This header is part of the codec (no
+// tls-exporter serves one authentication per TLS connection (RFC 9266
+// section 4.1): connection::channel_bindings() always reports it, but
+// connection::sasl_bind passes no tls-exporter to mechanisms once a bind used
+// it (sasl_mechanism::channel_binding_used); default_type then falls back to
+// tls-server-end-point, or none. This header is part of the codec; the bytes
+// come from jhetz::ldap_net's TLS layer.
 // dependencies); the bytes come from jhetz::ldap_net's TLS layer.
 #pragma once
 
@@ -101,14 +83,10 @@ struct channel_bindings
 	}
 };
 
-// The channel bindings of type `t` with their unique prefix: the type's
-// registered name, a colon, then `data` (RFC 5056 section 2.1: "channel
-// bindings MUST start with the channel binding unique prefix followed by a
-// colon"). The form GSS-API's application_data carries (sasl_gssapi):
-// Windows SSPI gives tls-server-end-point this way (SEC_CHANNEL_BINDINGS
-// from QueryContextAttributes SECPKG_ATTR_ENDPOINT_BINDINGS begins with
-// "tls-server-end-point:"), and OpenLDAP's libldap builds it for cyrus-sasl
-// (ldap_pvt_sasl_cbinding). SCRAM's RFC 5802 form has no prefix.
+// The channel bindings of type `t` with their unique prefix (RFC 5056
+// section 2.1): the type's name, a colon, then `data`. The form GSS-API's
+// application_data carries (sasl_gssapi, Windows SSPI, OpenLDAP's libldap);
+// SCRAM's RFC 5802 form has no prefix.
 [[nodiscard]] inline auto prefixed_channel_binding(channel_binding_type t, std::span<const std::byte> data)
   -> std::string
 {

@@ -1,168 +1,78 @@
 // SASL GSSAPI (RFC 4752): Kerberos V5 binds, as Active Directory and
 // OpenLDAP (cyrus-sasl's gssapi plugin) accept them, for
-// connection::sasl_bind:
+// connection::sasl_bind (DESIGN.md section 3, "GSSAPI"):
 //
 //   ldap::sasl_gssapi mech;                  // ldap@<host>, default credentials
 //   if (auto r = co_await conn.sasl_bind(mech); !r) ...
 //
-// The credentials come from the GSS-API library (MIT krb5's
-// libgssapi_krb5): a ticket-granting ticket in the default credential cache
-// (kinit, KRB5CCNAME), or a client keytab (KRB5_CLIENT_KTNAME). The library
-// never sees a password.
+// The credentials come from the GSS-API library (MIT krb5): a TGT in the
+// default credential cache (kinit, KRB5CCNAME) or a client keytab
+// (KRB5_CLIENT_KTNAME). The library never sees a password. Part of
+// jhetz::ldap_net only when built with JHETZ_LDAP_WITH_GSSAPI (off by
+// default).
 //
-// Part of jhetz::ldap_net only when it is built with JHETZ_LDAP_WITH_GSSAPI
-// (an optional dependency, off by default).
-//
-// Behaviour:
-// - Threading: gss_acquire_cred and gss_init_sec_context may block for a
-//   long time (MIT krb5 resolves the KDC and the realm through DNS and
-//   sends the TGS-REQ for the service ticket, retrying with backoff over
-//   the KDCs, several seconds per unreachable one; the total is bounded
-//   only by krb5.conf's [libdefaults] request_timeout, MIT 1.22 and later,
-//   default none; DNS by resolv.conf's timeout and attempts; Heimdal has
-//   kdc_timeout and max_retries instead). connection::sasl_bind runs them
-//   on a thread of its own (one per call, offload_start and offload_step),
-//   so the io_context (or the sync::connection's I/O thread) goes on with
-//   other work. The bind's timeout (connection_options::operation_timeout)
-//   and cancellation stop the wait, not the call: the bind then fails with
-//   capy::error::timeout or canceled, and the call runs to its end on its
-//   thread, with handles of its own, released there. The io_context keeps
-//   the call as outstanding work: run() returns only once it is over, and
-//   destroying the io_context (a sync::connection's destructor too) waits
-//   for its thread to end. The io_context must accept posts from other
-//   threads (locking_mode::safe, Corosio's default, or unsafe_io; under
-//   unsafe the bind fails with std::errc::operation_not_supported, nothing
-//   sent). Before the first BindRequest (the first call, which
-//   contacts the KDC) nothing was sent: the connection stays usable.
-//   start() and step() called directly still block their caller.
-// - The target is a host-based service name (GSS_C_NT_HOSTBASED_SERVICE),
-//   "ldap@<host>" with the host of the URL connected to (ldap://,
-//   ldaps://), unless sasl_gssapi_options::target names another. Kerberos
-//   turns it into the service principal ldap/<host>@<realm>: connect with
-//   the server's DNS name, not an address, or set the target (an ldapi://
-//   connection, or a wrap()ped transport, must). Whether the name is
-//   canonicalized through DNS first is krb5.conf's business
-//   (dns_canonicalize_hostname, rdns).
-// - Mutual authentication is required: the bind fails unless the server
-//   proved its identity (it holds the service principal's key).
+// - Threading: gss_acquire_cred and gss_init_sec_context may block for long
+//   (DNS, KDC retries; bounded only by krb5.conf and resolv.conf).
+//   connection::sasl_bind runs them on a thread of their own
+//   (offload_start, offload_step); see connection::sasl_bind for timeouts,
+//   cancellation and the io_context's locking_mode. start() and step()
+//   called directly block their caller.
+// - The target is the host-based service "ldap@<host>" with the URL's host,
+//   unless sasl_gssapi_options::target names another; Kerberos maps it to
+//   ldap/<host>@<realm>. Connect by DNS name, or set the target (required
+//   for ldapi:// and wrapped transports).
+// - Mutual authentication is required.
 // - Security layer (RFC 4752 section 3.1, sasl_gssapi_options::
-//   security_layer): by default the client chooses "no security layer",
-//   with a maximum buffer size of 0, so the rest of the session is neither
-//   signed nor sealed by SASL. Use it over TLS (ldaps:// or StartTLS)
-//   unless the network is trusted. A server that does not offer "no
-//   security layer" (only integrity or confidentiality) then fails the bind
-//   with client_errc::security_layer_required. Active Directory offers it,
-//   but with the "LDAP server signing requirements" policy set to require
-//   signing it refuses binds over plain ldap:// that do not sign
-//   (errc::stronger_auth_required, diagnostic 00002028): use TLS, which
-//   satisfies the policy, or ask for a layer. With integrity,
-//   confidentiality or best_offered the client selects that layer from the
-//   server's offer, announces max_receive_size as its maximum buffer size
-//   (the security context must provide that protection and sequence
-//   detection, GSS_C_SEQUENCE_FLAG, as RFC 4752 section 3.1 requires:
-//   client_errc::gssapi_failure otherwise), and connection::sasl_bind
-//   installs it right after the successful BindResponse: every later PDU,
-//   both ways, goes in gss_wrap'd buffers (with confidentiality: encrypted)
-//   after a four-octet length (RFC 4422 section 3.7), outgoing PDUs cut to
-//   fit the server's maximum buffer size (gss_wrap_size_limit), incoming
-//   buffers larger than max_receive_size closing the connection, as do a
-//   buffer that fails gss_unwrap, one replayed or out of sequence, or one
-//   without confidentiality on a confidentiality layer.
-//   connection::security_layer() reports it. The security context then
-//   lives as long as the connection. With a layer in effect, start_tls()
-//   fails (TLS would have to go below the layer) and so does a bind that
-//   negotiates another (client_errc::security_layer_in_effect); a bind
-//   without a layer leaves it in place (RFC 4513 section 5.2.1.4).
-// - Channel binding (RFC 5056, RFC 5929 section 4), chosen with
-//   sasl_gssapi_options::channel_binding: over TLS (ldaps:// or StartTLS),
-//   gss_init_sec_context is given a gss_channel_bindings_struct with no
-//   addresses (GSS_C_AF_UNSPEC, empty) and the application data
-//   "tls-server-end-point:" followed by the hash of the server's
-//   certificate (prefixed_channel_binding, channel_binding.hpp). Kerberos
-//   puts its MD5 into the authenticator's checksum (RFC 4121 section
-//   4.1.1.2), and the server compares it with the hash of the certificate
-//   it sent: a man in the middle that terminates TLS with a certificate of
-//   its own cannot relay the bind. This is the form Active Directory checks
-//   for its "LDAP channel binding" policy (LdapEnforceChannelBinding: with
-//   "Always" it refuses a bind over TLS without it; with "When supported"
-//   it refuses a wrong one): Windows' own clients pass Schannel's
-//   SECPKG_ATTR_ENDPOINT_BINDINGS, which begins with "tls-server-end-point:"
-//   (Microsoft's SEC_CHANNEL_BINDINGS documentation; OpenJDK's
-//   JDK-8245527 does the same for AD). OpenLDAP's libldap builds the same
-//   bytes ("sasl-cbinding tls-endpoint": ldap_pvt_sasl_cbinding), but
-//   cyrus-sasl's gssapi plugin ignores them in its latest release, 2.1.28
-//   (GSS_C_NO_CHANNEL_BINDINGS on both sides): slapd does not check GSSAPI
-//   bindings. Its unreleased master passes them as application_data
-//   (addresses zeroed) only with the security property
-//   SASL_SEC_NONSTD_CBIND (OpenLDAP's "sasl-secprops ...,nonstdcbind" in
-//   slapd, SASL_SECPROPS for libldap, beside "sasl-cbinding tls-endpoint";
-//   only in an OpenLDAP built against such a cyrus-sasl), a flag the same
-//   master's mechanism selection (lib/server.c mech_permitted) also asks
-//   of every mechanism and no plugin declares, so, from the sources, a
-//   slapd with it offers no SASL mechanism at all. Active Directory is the
-//   server that checks them. With bindings the client also passes
-//   GSS_C_CHANNEL_BOUND_FLAG, on which MIT krb5 1.19 and later (Heimdal
-//   since a 2024 change on its master; older ones ignore it) put
-//   Microsoft's KERB_AP_OPTIONS_CBT in the authenticator, as MIT's
-//   krb5.conf client_aware_channel_bindings does for every request. It is
-//   a signal, on which AD and MIT report the context as channel bound, not
-//   a protection: an acceptor given bindings refuses a wrong one with or
-//   without it (MIT, Heimdal), and it only makes a missing one refused,
-//   while the client sets it only together with bindings. The hash is RFC
-//   5929's (channel_bindings::tls_server_end_point), or OpenLDAP's
-//   (sasl_gssapi_options::binding_form openldap, the bytes libldap builds,
-//   for a slapd that checks them, see above: they differ only for an
-//   RSASSA-PSS, Ed25519 or Ed448 certificate, see sasl_scram.hpp).
-//   Without TLS no bindings are sent (GSS_C_NO_CHANNEL_BINDINGS). Over TLS
-//   without a hash (RFC 5929's: none for a certificate whose signature
-//   algorithm has no single hash function, e.g. Ed25519, Ed448, ML-DSA or
-//   SLH-DSA, or one OpenSSL does not know; the openldap form's: none for a
-//   certificate it cannot parse or whose signature algorithm OpenSSL does
-//   not know; neither when the server sent no certificate), start() fails
-//   with client_errc::tls_required (cond::access_denied) before anything
-//   is sent, as SCRAM-SHA-256-PLUS does: the certificate is chosen by
-//   whoever terminates TLS, so going on without bindings would let a man
-//   in the middle that the certificate check let through present an
-//   Ed25519 certificate and relay the unbound bind, which an acceptor
-//   given bindings accepts (no bindings, no KERB_AP_OPTIONS_CBT: AD with
-//   "When supported" too). gssapi_channel_binding::none is the explicit
-//   opt-out. A server whose acceptor is given no bindings (slapd, AD with
-//   the policy "Never") ignores them; one given others (TLS terminated by
-//   a proxy in front of the server, whose certificate the client sees)
-//   refuses the bind (GSS_S_BAD_BINDINGS): gssapi_channel_binding::none
-//   turns them off. tls-exporter (RFC 9266) is not used: neither Active
-//   Directory nor OpenLDAP knows it.
-// - Names are UTF-8 and passed to the GSS-API library as given (Kerberos
-//   principals are byte strings; UTF-8 is what MIT krb5 and Active
-//   Directory use). The target, principal and authorization identity must
-//   be well-formed UTF-8 without control characters (C0, DEL, C1).
-// - Every GSS-API handle (names, credentials, the security context, output
-//   buffers) is released when no longer needed: the security context when
-//   the bind succeeds without a security layer (nothing uses it
-//   afterwards; with one, the layer owns it until the connection goes), when
-//   the mechanism fails, at the next start(), or with the object; those of
-//   a call sasl_bind gave up on, by its thread once it ends.
+//   security_layer): none by default (maximum buffer size 0), so use TLS
+//   unless the network is trusted; a server not offering "no security layer"
+//   fails the bind with client_errc::security_layer_required. AD requiring
+//   LDAP signing refuses unsigned binds over plain ldap://
+//   (errc::stronger_auth_required). integrity, confidentiality or
+//   best_offered selects that layer from the server's offer and announces
+//   max_receive_size; the context must provide that protection and
+//   GSS_C_SEQUENCE_FLAG, else client_errc::gssapi_failure.
+//   connection::sasl_bind installs it after the successful BindResponse;
+//   outgoing PDUs are cut to the server's maximum buffer size, and an
+//   incoming buffer that is too large, fails gss_unwrap, is replayed or out
+//   of sequence, or lacks confidentiality on a confidentiality layer closes
+//   the connection. With a layer in effect, start_tls() and a bind
+//   negotiating another layer fail (client_errc::security_layer_in_effect);
+//   a bind without a layer leaves it in place.
+// - Channel binding (RFC 5056, RFC 5929 section 4,
+//   sasl_gssapi_options::channel_binding): over TLS, the bindings carry
+//   "tls-server-end-point:" and the certificate hash (RFC 5929's, or
+//   OpenLDAP's with binding_form openldap), with GSS_C_CHANNEL_BOUND_FLAG;
+//   AD checks them (LdapEnforceChannelBinding), slapd does not. Without TLS
+//   none are sent. Over TLS without a hash (e.g. an Ed25519 certificate, or
+//   none), start() fails with client_errc::tls_required before anything is
+//   sent. gssapi_channel_binding::none turns them off (needed behind a
+//   TLS-terminating proxy, where the acceptor refuses them). tls-exporter is
+//   not used.
+// - Names are UTF-8, passed as given; the target, principal and
+//   authorization identity must be well-formed UTF-8 without control
+//   characters.
+// - GSS-API handles are released as soon as they are not needed; with a
+//   security layer, the layer owns the security context until the
+//   connection closes.
 //
-// Errors (contexts never contain tokens or credentials, nor name the
-// mechanism: connection::sasl_bind prefixes "sasl bind GSSAPI"):
-// - client_errc::gssapi_failure (cond::auth_failed): a GSS-API call failed,
-//   e.g. no ticket in the cache, an expired ticket, an unknown service
-//   principal, an unreachable KDC, or a server that did not authenticate.
-//   The context names the call and quotes gss_display_status's major and
-//   minor status messages: "gss_init_sec_context: Unspecified GSS failure.
-//   Minor code may provide more information (Server ldap/x@EXAMPLE.ORG not
-//   found in Kerberos database)".
+// Errors (contexts never contain tokens or credentials; connection::sasl_bind
+// prefixes "sasl bind GSSAPI"):
+// - client_errc::gssapi_failure (cond::auth_failed): a GSS-API call failed
+//   (no or expired ticket, unknown service principal, unreachable KDC,
+//   server not authenticated); the context names the call and quotes
+//   gss_display_status's major and minor messages.
 // - client_errc::security_layer_required, security_layer_unavailable
 //   (cond::access_denied): see above.
-// - client_errc::encode_error (cond::invalid_input): no target (no host to
-//   default to), or a target, principal or authorization identity that is
-//   not well-formed UTF-8 or holds a control character.
+// - client_errc::tls_required (cond::access_denied): no hash for channel
+//   binding over TLS.
+// - client_errc::encode_error (cond::invalid_input): no target, or a target,
+//   principal or authorization identity not well-formed UTF-8 or holding a
+//   control character.
 // - client_errc::decode_error, unexpected_response (cond::protocol_error):
-//   a malformed security layer message, a challenge out of order, or a
-//   server that reports success before the exchange is complete (then
-//   connection::sasl_bind closes the connection).
-// A server that refuses the client normally answers invalidCredentials or
-// inappropriateAuthentication (errc, cond::auth_failed).
+//   a malformed security layer message, a challenge out of order, or success
+//   reported early (connection::sasl_bind then closes the connection).
+// - errc::invalid_credentials or inappropriate_authentication
+//   (cond::auth_failed): the server refused the client.
 #pragma once
 
 #include "jhetz/ldap/channel_binding.hpp"

@@ -11,42 +11,29 @@
 //   if (!done) ...                                        // nothing applied; the context names the update
 //   if (const auto *c = done->find_update_controls(a->message_id)) ldap::find_post_read(*c);
 //
-// ldap::transaction is a thin helper over the connection's primitives
-// (connection::start_transaction(), end_transaction() and the
-// transaction_specification control, controls.hpp), which may be used
-// directly instead. Each update it sends carries the transaction
-// specification control; the server answers it at once, with success if it
-// takes the update into the transaction (the update itself is deferred) or
-// with the reason it refuses it, which is returned and leaves the
-// transaction open: commit without it, or abort. RFC 5805 section 3.3: if
-// the server gives up on the transaction it sends an Aborted Transaction
-// Notice, which this library does not route (it is ignored like other
-// unsolicited notifications): the next update or the commit then fails
-// with the server's error.
+// ldap::transaction is a thin helper over connection::start_transaction(),
+// end_transaction() and the transaction_specification control
+// (controls.hpp). The server answers each update at once: success if it took
+// it into the transaction (deferred), else the refusal, which leaves the
+// transaction open (commit without it, or abort). An Aborted Transaction
+// Notice (RFC 5805 section 3.3) is ignored; the next update or the commit
+// then fails with the server's error.
 //
-// Settling: commit() and abort() end the transaction, whatever their
-// outcome; afterwards its operations fail with std::errc::invalid_argument.
-// Await every update before commit(): while one is still in flight,
-// commit() fails with client_errc::operation_in_progress and the
-// transaction stays open (the server could otherwise read the End
-// Transaction before that update). A transaction destroyed while the server
-// may still hold it is aborted: an End Transaction (abort) is queued
-// without waiting for its answer, which is dropped (best effort, as when a
-// paged search is released: nothing is sent if the connection is closed or
-// in StartTLS). That holds while it is open, and also after a commit() or
-// abort() whose End Transaction the server did not answer (not sent
-// because the task was stopped, or given up on). An update that timed out
-// or was cancelled may or may not be part of the transaction (its abandon
-// is best effort): abort then, rather than commit an unknown set of
-// updates. A
-// commit whose answer is lost (connection failure, timeout, cancellation)
-// has an unknown outcome: re-read the entries if it matters. RFC 5805
-// section 3.5: a bind or unbind aborts every transaction of the connection
-// on the server; transactions do not nest. The server may support one
-// transaction per connection at a time (OpenLDAP does).
+// Settling: commit() and abort() end the transaction whatever their outcome;
+// afterwards its operations fail with std::errc::invalid_argument. Await
+// every update first: with one in flight, commit() fails with
+// client_errc::operation_in_progress and the transaction stays open. A
+// transaction destroyed while the server may hold it (open, or a commit() or
+// abort() left unanswered) queues an abort without waiting, best effort
+// (nothing is sent on a closed connection or during StartTLS). An update
+// that timed out or was cancelled may or may not be in the transaction:
+// abort then. A commit whose answer is lost has an unknown outcome. A bind
+// or unbind aborts every transaction of the connection (RFC 5805 section
+// 3.5); transactions do not nest; the server may allow one per connection
+// (OpenLDAP does).
 //
 // Threading and lifetime: as the connection's (connection.hpp); a
-// transaction keeps the connection's state alive, and must outlive the tasks
+// transaction keeps the connection's state alive and must outlive the tasks
 // of its own operations. Move-only.
 #pragma once
 

@@ -1,62 +1,45 @@
-// RFC 4511 LDAPMessage: a faithful wire model of every protocol operation
-// (requests and responses, so a mock server can reuse it) and its BER codec.
+// RFC 4511 LDAPMessage: a wire model of every protocol operation (requests
+// and responses, so a mock server can reuse it) and its BER codec.
 //
 // Field types: every LDAPDN, RelativeLDAPDN, LDAPString, LDAPOID,
-// AttributeDescription and OCTET STRING of the wire format is a
-// std::pmr::string here, holding the bytes exactly as sent (values may be
-// binary); the search filter is an ldap::filter tree. The
-// validating vocabulary types (ldap::dn, ldap::attribute) belong to the API
-// layer built on top: keeping them out of the wire model means a server that
-// sends an odd DN or attribute name never breaks decoding.
+// AttributeDescription and OCTET STRING is a std::pmr::string holding the
+// bytes as sent (values may be binary); the search filter is an
+// ldap::filter tree. The validating types (ldap::dn, ldap::attribute) are
+// the API layer's, so an odd DN or attribute name never breaks decoding.
 //
 // Decoding follows RFC 4511 section 4:
-// - unknown elements at the end of a SEQUENCE are skipped (they must still be
-//   well-formed BER); optional components are only recognized in their
-//   defined order, so an out-of-order one counts as such an unknown element;
+// - unknown elements at the end of a SEQUENCE are skipped (they must be
+//   well-formed BER); optional components are recognized only in their
+//   defined order;
 // - an unknown protocolOp fails with client_errc::unsupported_operation;
-// - enumerations the model relies on (scope, derefAliases, modify operation)
-//   and INTEGER ranges (message id, version, limits) are checked and fail
-//   with decode_error, but unknown resultCode values are kept;
+// - enumerations (scope, derefAliases, modify operation) and INTEGER ranges
+//   (message id, version, limits) are checked (decode_error); unknown
+//   resultCode values are kept;
 // - SEQUENCE OF with SIZE (1..MAX) (referral, search references) is accepted
-//   when empty; an empty list is the same as an absent one in this model.
-//   Values of an AddRequest attribute or of a modify `add` change must not be
-//   empty (SIZE (1..MAX), servers reject it): encode fails with encode_error,
-//   decode with decode_error;
+//   empty, the same as absent. Values of an AddRequest attribute or of a
+//   modify `add` change must not be empty (encode_error, decode_error);
 // - nesting is bounded by ber::reader's depth limit, filters by
-//   filter_limits (depth and number of elements), and nothing is allocated
-//   from a length that was not checked against the input first;
+//   filter_limits, and nothing is allocated from an unchecked length;
 // - decode_options::from rejects operations the peer may not send.
 //
-// Memory (DESIGN.md section 8): every type here that owns strings is
-// allocator-aware (std::pmr): it has allocator_type, get_allocator(), a
-// constructor taking only an allocator, allocator-extended copy and move
-// constructors, and assignment that keeps the target's resource (also for
-// its std::optional and std::variant members). Containers of these types
-// (std::pmr::vector<control>, ...) hand their resource to their elements.
-// decode() allocates everything it returns from
-// decode_options::memory (default: the default resource, i.e. the heap).
-// - Lifetime rule: an object decoded into (or built on) a caller-supplied
-//   resource, e.g. a per-response std::pmr::monotonic_buffer_resource, must
-//   not outlive that resource. To keep it longer, copy it: a plain copy
-//   allocates from the default resource. Objects decoded with default
-//   options are always safe.
-// - Assigning directly to an std::optional or std::variant member (not to
-//   the whole object) follows the standard types' rules: engaging an empty
-//   optional or switching the variant's alternative copies or moves the new
-//   value with its own resource.
-// - The value constructors (e.g. `control{"1.2.3", true}`) take string_views
-//   and initializer lists and copy them into the given resource; nested
-//   elements given as initializer lists are built on the default resource
-//   first. Code that must not touch the default resource at all builds with
-//   the allocator constructor and assigns the members.
-// - The types have constructors, so they are not aggregates and designated
-//   initializers do not work on them; the value constructors take the fields
-//   in their declaration order (`message{1, del_request{"cn=x"}}`).
-// - A value constructor called with one argument is explicit (no implicit
-//   `"1.2.3"` -> control or `14` -> ldap_result), the multi-argument form is
-//   not, so braced lists keep working: `{ "cn", { "x" } }` as a
-//   partial_attribute, `return { 32, "dc=example,dc=org" };` as an
-//   ldap_result. One argument needs the type: `ldap_result{ 14 }`.
+// Memory (DESIGN.md section 8): every type owning strings is allocator-aware
+// (allocator_type, get_allocator(), allocator and allocator-extended
+// constructors, assignment keeping the target's resource, also for its
+// optional and variant members); containers hand their resource to their
+// elements. decode() allocates from decode_options::memory (default: the
+// default resource).
+// - An object decoded into (or built on) a caller-supplied resource must not
+//   outlive it; a plain copy allocates from the default resource.
+// - Assigning directly to an optional or variant member follows the standard
+//   types' rules: a newly engaged value or alternative uses its own resource.
+// - The value constructors (`control{"1.2.3", true}`) copy into the given
+//   resource; nested initializer lists are built on the default resource
+//   first. To avoid the default resource entirely, use the allocator
+//   constructor and assign the members.
+// - The types are not aggregates: the value constructors take the fields in
+//   declaration order (`message{1, del_request{"cn=x"}}`). The one-argument
+//   form is explicit (`ldap_result{ 14 }`), multi-argument braced lists are
+//   not (`return { 32, "dc=example,dc=org" };`).
 #pragma once
 
 #include "jhetz/ldap/ber.hpp"
@@ -194,7 +177,7 @@ struct attribute_value_assertion
 
 	attribute_value_assertion() = default;
 	explicit attribute_value_assertion(const allocator_type &alloc) : attribute_desc(alloc), assertion_value(alloc) {}
-	// Public API, RFC 4511 field order; kept by decision (coro-ldap-bsm.30).
+	// Public API, RFC 4511 field order.
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	attribute_value_assertion(std::string_view attribute_desc_,
 	  std::string_view assertion_value_,
@@ -899,12 +882,10 @@ struct decode_options
 	// Limits for the filter of a search request.
 	filter_limits filter{};
 	// Most strings (attribute types, values, DNs, URIs, OIDs...) one message
-	// may decode to; more fail with message_too_large. Every list element
-	// holds at least one, so this bounds every list: without it a 16 MiB
-	// entry of empty values (2 bytes each on the wire) takes 320 MiB to
-	// decode. 1,000,000 is far above real entries (335,000 member DNs of
-	// 48 bytes already fill 16 MiB) and stops that case at 38 MiB.
-	// Filters have their own limits (filter_limits).
+	// may decode to; more fail with message_too_large. This bounds every list
+	// (a 16 MiB entry of empty values would otherwise take 320 MiB to
+	// decode); 1,000,000 is far above real entries. Filters have their own
+	// limits (filter_limits).
 	std::size_t max_elements = default_max_elements;
 	// Everything the decoded message owns is allocated from here. With an
 	// arena (e.g. a std::pmr::monotonic_buffer_resource per response), the
@@ -1043,9 +1024,7 @@ struct vlv_response
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	// The RFC fields are the API, public as in the other message types; the
-	// private allocator only remembers the resource, which an absent
-	// contextID cannot carry.
+	// The RFC fields are public; the private allocator keeps the resource.
 	// NOLINTBEGIN(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
 	// targetPosition: the list offset of the target entry, 1 for the first.
 	// contentCount + 1 when no entry is greater than or equal to a
@@ -1055,14 +1034,11 @@ struct vlv_response
 	// list; send it back in the next vlv_by_offset (section 6.2).
 	std::int32_t content_count = 0;
 	// virtualListViewResult: 0 (success) or the result code saying why the
-	// view failed. The draft lists operationsError (1), protocolError (3:
-	// a typo in the draft, RFC 4511's protocolError is 2), timeLimitExceeded
-	// (3), adminLimitExceeded (11), inappropriateMatching
-	// (18), insufficientAccessRights (50), unwillingToPerform (53),
-	// sortControlMissing (60), offsetRangeError (61) and other (80), the
-	// values as it gives them. Unknown values are kept, as for resultCode
-	// (OpenLDAP 2.7 reports an offset beyond the list as 77). Meaningful only
-	// when the search's resultCode is 76 (section 6.2.1).
+	// view failed (operationsError, protocolError, timeLimitExceeded,
+	// adminLimitExceeded, inappropriateMatching, insufficientAccessRights,
+	// unwillingToPerform, sortControlMissing (60), offsetRangeError (61),
+	// other). Unknown values are kept (OpenLDAP 2.7 reports an offset beyond
+	// the list as 77). Meaningful only when the search's resultCode is 76.
 	std::int32_t result_code = 0;
 	// contextID: return it unchanged in the next request for the same list
 	// (virtual_list_view::context_id); nullopt when absent (an empty one is

@@ -26,28 +26,25 @@
 //       else if (auto *r = std::get_if<ldap::search_reference>(&**i)) on_reference(r->uris, r->controls);
 //       else on_intermediate(std::get<ldap::intermediate>(**i));
 //
-// RFC 4533 content synchronization reads a search sent with a
-// sync_request control this way: content_sync.hpp decodes the controls and
-// intermediates. A refreshAndPersist search never ends by itself: send it
-// with search_params::timeout = ldap::no_timeout, and stop it with a stop
-// token or by destroying the stream.
+// RFC 4533 content synchronization reads a search sent with a sync_request
+// control this way (content_sync.hpp decodes the controls and intermediates).
+// A refreshAndPersist search never ends by itself: send it with
+// search_params::timeout = ldap::no_timeout and stop it with a stop token or
+// by destroying the stream.
 //
-// Memory: entries are decoded into the search's resource and queued there
-// until next() or next_item() takes them; the queue is not bounded and
-// does not slow the server down (see connection.hpp), so a reader that
-// falls behind lets it grow. On a std::pmr::monotonic_buffer_resource
-// nothing is freed until the arena goes, so a long-lived (persist) search
-// grows without bound there: use the default resource or a pool for it.
-// references() also keeps every reference for the stream's life.
+// Memory: entries are decoded into the search's resource and queued,
+// unbounded, until read; on a monotonic_buffer_resource a long-lived search
+// grows without bound, so use the default resource or a pool for it.
+// references() keeps every reference for the stream's life.
 //
-// next() and next_item() may be mixed on one stream: each reads the next
-// message. next() drops what it cannot return (the controls of an entry, an
-// intermediate); references go to references() either way.
+// next() and next_item() may be mixed: each reads the next message. next()
+// drops entry controls and intermediates; references go to references()
+// either way.
 //
 // Move-only. A default-constructed stream fails with
-// client_errc::not_connected. The stream must not be destroyed or moved
-// while its next() or next_item() is suspended; a second call of either
-// while one is suspended fails with client_errc::operation_in_progress.
+// client_errc::not_connected. Do not destroy or move the stream while
+// next() or next_item() is suspended; a second call meanwhile fails with
+// client_errc::operation_in_progress.
 #pragma once
 
 #include "jhetz/ldap/entry.hpp"

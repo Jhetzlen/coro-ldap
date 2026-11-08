@@ -1,7 +1,7 @@
 // ldap::client: a bounded pool of multiplexed connections to a list of
 // servers, opened lazily, with failover, jittered backoff, a session setup
-// replayed on every new connection, and a health check on acquire
-// (DESIGN.md section 11). Part of jhetz::ldap_net.
+// run on every new connection, and a health check on acquire (DESIGN.md
+// section 11). Part of jhetz::ldap_net.
 //
 //   corosio::io_context ioc;
 //   ldap::client pool(ioc, {
@@ -15,204 +15,92 @@
 //   auto again = co_await pool.search({.base = ...});   // a shared lease for one search, retried once
 //   auto added = co_await pool.add({.entry = ..., .attributes = ...});   // retried only if never sent
 //
-// Leases share connections by default. A lease (acquire()) gives the
-// ldap::connection of one pooled connection, which several leases may use
-// at once: their operations are multiplexed on it (connection.hpp), which
-// is why max_connections defaults to 1. An exclusive_lease
-// (acquire_exclusive()) gives a connection no other lease shares.
-// acquire() hands out an idle connection (no lease) first, then opens a new
-// one while fewer than max_connections exist, and only then shares the
-// connection with the fewest leases: N connections give N-way isolation (a
-// slow paged search, a long SASL exchange) before any sharing. It also
-// shares one, rather than wait or fail, when no new connection may be opened
-// now (every server backing off, or excluded for this acquire(), e.g. after
-// an authentication failure). While an acquire_exclusive() waits, shared
-// ones never take an idle connection: they share one already shared, else
-// open a new one (a slot free, a server to try) or wait (even with every
-// server excluded: then they do not fail while that idle connection
-// exists), so shared load cannot starve it. Because shared leases share,
-// what one changes on its connection the others would see: a bind would
-// change the identity of all of them, start_tls() would fail with
-// operation_in_progress while another lease has an operation outstanding,
-// and unbind() or close() would end the connection for everyone. So use
-// them on an exclusive lease (acquire_exclusive()): an idle or new
-// connection that no other lease shares while it is held (from the moment
-// its unbind() begins, the connection is not handed out again). A shared
-// lease's connection has them too, but they act on every lease sharing it. A connection whose bind_count()
-// changed (a bind done, failed, or still in progress) is never handed out
-// again, to anyone: it leaves the pool once its last lease returns (see
-// "Bind identity"). Use a client per identity, and keep binds to
+// Leases: a lease (acquire()) shares its connection with other leases, their
+// operations multiplexed on it. acquire() takes an idle connection, else opens
+// a new one while fewer than max_connections exist, else shares the one with
+// the fewest leases; it also shares rather than wait or fail when no server
+// may be tried now. An exclusive_lease (acquire_exclusive()) gets an idle or
+// new connection no other lease shares while it is held; while one waits,
+// shared acquires do not take idle connections. On a shared lease, a bind,
+// start_tls() (operation_in_progress while another lease has an operation
+// outstanding), unbind() and close() act on every lease sharing the
+// connection: do them on an exclusive lease. A connection whose bind_count()
+// changed since session_setup (a bind done, failed or in progress) is never
+// handed out again and leaves the pool once its last lease returns, as does
+// one whose unbind() has begun. Use one client per identity and keep binds in
 // session_setup.
 //
-// Servers and failover: `servers` is in priority order. A new connection
-// tries each server whose backoff has ended, in that order. A server that
-// fails (connect, StartTLS, or session_setup) is not tried again until a
-// backoff delay has passed: full jitter, uniform in [0, d] with d =
-// min(backoff.max, backoff.initial * backoff.multiplier^(failures - 1)),
-// reset by a success. Concurrent attempts failing together count as one
-// failure. An attempt cut short by acquire_timeout is a failure too (a
-// hung server must not block failover) unless it began with less than half
-// of acquire_timeout left (the acquire waited, or tried other servers,
-// first): only then is it excused (no backoff, no on_connect). The one
-// bind let through after an authentication backoff (below) that ends
-// without the server's verdict on the password (cut short, late or not,
-// stopped, its acquire() task destroyed, or any other error) starts that
-// authentication backoff again, with the stored error. acquire() waits
-// for the earliest backoff to end, up to acquire_timeout, and then fails
-// with the last server's error (or shares an open connection, see above).
-// A failure that retrying cannot fix (cond::invalid_input: a bad URL, a
-// setup that cannot work) stops this acquire() from trying that server
-// again. An authentication failure
-// (cond::auth_failed, e.g. a wrong password) does more: its backoff is at
-// least backoff.auth_failure_min and at least half of d (no jitter down to
-// 0), every acquire() already running stops trying that server, and every
-// acquire() started during that backoff fails at once with the stored error
-// (unless another server or a pooled connection serves it) instead of
-// binding again. Once the backoff ends, one acquire() binds again; the
-// others fail with the stored error while it runs. So a wrong password costs
-// at most one bind per server per backoff period (plus, the first time, the
-// attempts already in flight, up to max_connections), not a retry storm;
-// this limits the rate of failed binds, it cannot keep a password that stays
-// wrong from locking an account (Active Directory) in the end. Mind that it
-// works both ways: once the service password is fixed on the server, this
-// client's acquire() still fails at once until the backoff ends, at least
-// auth_failure_min after the last failed bind, unless a pooled connection
-// serves it. A connection to a lower-priority server that is idle, at least
-// failback_after old, while a higher-priority server this acquire() may try
-// has ended its backoff, is closed when acquire() finds it, so the next
-// connection goes back to the primary (failing over again if the primary
-// still fails). So the servers must serve the same directory, schema
-// included: a store's schema check (store.hpp, schema_check) and the
-// schema load_schema(client &) reads on one lease (directory.hpp) hold
-// for whichever server the next operation runs on; for a check per
-// connection, use a lease's connection as the store's source.
+// Servers and failover: `servers` is in priority order; a new connection
+// tries each server whose backoff has ended, in order. A failed connect,
+// StartTLS or session_setup puts the server in backoff: uniform in [0, d],
+// d = min(backoff.max, backoff.initial * backoff.multiplier^(failures - 1)),
+// reset by a success; concurrent failures count once. An attempt cut short
+// by acquire_timeout counts as a failure unless it began with less than half
+// of acquire_timeout left. acquire() waits for the earliest backoff, up to
+// acquire_timeout, then fails with the last server's error.
+// cond::invalid_input excludes the server for that acquire().
+// cond::auth_failed backs off for at least backoff.auth_failure_min and half
+// of d; during it every acquire() fails at once with the stored error (unless
+// another server or a pooled connection serves it), and afterwards one
+// acquire() binds again while the others fail. So a wrong password costs at
+// most one bind per server per backoff period, plus attempts in flight (a
+// rate limit, not a lockout guard), and a password fixed on the server is
+// noticed only once the backoff ends. An idle connection to a lower-priority
+// server at least failback_after old is closed by acquire() when a
+// higher-priority server may be tried. All servers must serve the same
+// directory and schema (a store's schema check holds for any of them).
 //
-// Health: there is no background timer (it would keep io_context::run()
-// from returning). acquire() drops pooled connections found closed, and
-// probes an idle connection unused for longer than idle_check with a root
-// DSE base search for the attribute "1.1" (no attributes) before handing it
-// out, within probe_timeout: one that does not answer (a server error is an
-// answer) is closed and replaced, also when acquire_timeout cuts the probe
-// short, unless the probe began with less than half of acquire_timeout left:
-// that proves nothing, the connection stays, and acquire() fails with the
-// timeout. A connection
-// older than max_lifetime is no longer handed out (acquire() opens a
-// replacement instead), and leaves the pool once its last lease returns.
-// An acquire() waiting for a slot looks again when a leased connection
-// closes or passes max_lifetime.
+// Health: there is no background timer. acquire() drops connections found
+// closed and probes an idle connection unused for longer than idle_check
+// (a root DSE base search for "1.1", within probe_timeout): no answer (a
+// server error is an answer) closes and replaces it, unless acquire_timeout
+// cut a probe short that began with less than half of it left. A connection
+// older than max_lifetime is not handed out again. Retired connections do
+// not count against max_connections while their leases drain.
 //
-// Bind identity: session_setup runs on every new connection, after connect
-// and StartTLS (connection_options::start_tls). The client records the
-// connection's bind_count() after it; once the count differs (a lease bound
-// again, or is binding), no acquire() hands the connection out, and it is
-// closed once no lease uses it.
+// Closing: a connection leaving the pool is unbound (a detached unbind() on
+// the executor) if no lease holds it, else closed; once the io_context is
+// stopped (io_context::stopped()) it is closed. A posted unbind runs only if
+// the io_context runs again, so after restart() run it, or the connection is
+// destroyed without an UnbindRequest. close() (and the destructor) closes
+// every pooled connection, leased ones included (outstanding operations fail
+// with not_connected, or not_sent if not written yet), stops connection
+// attempts and referral chases in progress (they fail with not_connected),
+// and fails waiting and later acquire() calls with not_connected. No
+// observer hook runs once close() has returned.
 //
-// Retired connections (closed, re-bound, too old, failed back) do not count
-// against max_connections while their last leases drain: acquire() opens a
-// replacement at once, so the pool may briefly hold more connections.
+// Referrals (client_options::referrals): off by default; search() and
+// compare() then return a referral result as errc::referral (URIs in
+// error::referrals) and search() returns continuation references
+// unfollowed. follow_referrals and follow_references chase them as
+// ldap::chase_search / chase_compare (referral_chase.hpp) do, within
+// `limits`, from the pooled connection. `authorize` decides per URI (empty:
+// every URI skipped_policy); ldapi:// and implausible hosts are never
+// contacted. Only same_setup sends the client's session_setup and TLS client
+// certificate to a referred server (same_setup_for_domains() builds such an
+// authorizer). No TLS downgrade: from a TLS connection, ldaps:// stays TLS
+// and ldap:// uses StartTLS. The referred host's certificate is checked as
+// the client's TLS settings say, so with insecure_accept_any same_setup
+// sends credentials to whatever answers. Referred connections are per chase,
+// not pooled, with no backoff or auth guard. Only a failure of the pooled
+// connection's own operation is retried. search() returns the
+// search_result: references not followed stay in search_result::references,
+// and a followed search's limit code replaces the origin's success. Writes,
+// search_stream() and extended() never chase: a write's referral is
+// errc::referral (referral_target() builds the request for another server).
 //
-// Closing: a connection leaving the pool while open is unbound (a detached
-// unbind() on the executor) if no lease holds it, else closed. Once the
-// io_context is stopped (io_context::stopped(): its run() returned, as for
-// a client destroyed at the end of main()), it is closed, as a connection's
-// destructor does: a task posted then would never run. So call close() (or
-// destroy the client) from a task on the executor to unbind cleanly. But
-// stopped() is false, and the unbind is still posted, while the io_context
-// was restart()ed and not run since, or once run_one(), run_for() or poll()
-// returned with work outstanding: that task runs only if the io_context is
-// run again, else it and its connection are destroyed with the io_context,
-// the socket closed without an UnbindRequest. So restart() it just before
-// running it again, not right after run() returns.
+// sync::client (sync.hpp) wraps a client in blocking calls.
 //
-// close() closes every pooled connection, leased ones included (their
-// outstanding operations fail with not_connected, or not_sent for requests
-// not written yet, see connection.hpp "Sent or not"), stops the connection
-// attempts in progress (connect, StartTLS, session_setup) and the referral
-// chases running (no referred server is authorized, connected to or set up
-// after it: the chase fails with not_connected), and fails waiting and
-// later acquire() calls with not_connected at once; the destructor calls
-// it. No observer hook runs once close() has returned.
-//
-// Referrals (client_options::referrals): off by default, as for a
-// connection, nothing is chased: search() and compare() return a referral
-// result as an error (errc::referral, the URIs in error::referrals) and
-// search() returns continuation references unfollowed
-// (search_result::references). Opting in, follow_referrals
-// chases referral results (RFC 4511 section 4.1.10) of search() and
-// compare(), follow_references the continuation references (section 4.5.3)
-// of search(), as ldap::chase_search and ldap::chase_compare
-// (referral_chase.hpp) do, from the pooled connection the operation ran
-// on, within `limits`. The URIs of a reference are alternatives, loops are
-// skipped, the request's timeout bounds the whole chase: see
-// referral_chase.hpp. Which servers may be contacted, and how their
-// connections are bound, is `authorize`'s call (empty: none, every URI
-// skipped_policy), asked once per URI that passes the fixed rules: never
-// ldapi:// (a server's URL must not reach a local socket), nor a host
-// with bytes no host name has. Only an authorizer returning same_setup
-// sends the client's session_setup (its credentials) to a referred
-// server, and presents its TLS client certificate (tls_options::cert_file)
-// there; the library never does by itself; same_setup_for_domains()
-// builds one that does so for the hosts of the domains named.
-// No TLS downgrade: when the pooled connection is TLS-protected, an ldaps://
-// target is opened as such and an ldap:// one with StartTLS (a failed
-// StartTLS fails that URI); otherwise client_options::connection applies
-// as given. The certificate is checked against the referred host
-// (connection_options::tls::server_name cleared), as the client's TLS
-// settings say: only with certificate_verification::full (and strict
-// host_matching for the strict name rules) is a referred server
-// authenticated before same_setup sends it the client's credentials; a
-// client configured with insecure_accept_any sends them to whatever
-// answers. These are make_same_policy_connector's rules, with `authorize`
-// for its allow-list.
-// Referred connections are not pooled: each chase opens its own (one per
-// server and binding, reused within the chase), runs the setup chosen on
-// them, and closes them (without an UnbindRequest) when it ends. So they
-// get neither the pool's backoff nor its authentication-failure guard: a
-// referred server refusing the client's credentials is bound again by the
-// next chase that reaches it. A failure of the pooled connection's own
-// operation is retried once as usual (the whole chase starts again on
-// another connection); a referred server's failure or the chase's is
-// returned as is, never retried. search() returns the search_result only
-// (chased_search's entries, references and done fields): one whose
-// continuation references were not all followed (refused, over a limit,
-// failed, or follow_references off) still succeeds with what it got, the
-// URIs not followed in search_result::references, as connection::search()
-// does; one whose followed reference's search ended with a limit code
-// has that code (is_success() false) when the origin's search succeeded.
-// chase_search() tells more (complete, referrals, unlisted).
-// client_observer::on_referral hears of each URI.
-// Writes are never chased, whatever client_options::referrals says: the
-// write forwarders (add(), modify(), ...) and leases return a referral
-// result as an error (errc::referral, the URIs in error::referrals; the
-// update was not performed, section 4.1.10; referral_target builds the
-// request for another server). UnboundID's followReferrals, libldap's
-// LDAP_OPT_REFERRALS and JNDI's java.naming.referral=follow chase writes
-// too; this client does not.
-// search_stream() and extended() never chase either: the stream hands out
-// its references (search_stream::references(), next_item()).
-//
-// For code without coroutines, sync::client (sync.hpp) owns an io_context
-// and its thread, and wraps a client in blocking calls.
-//
-// Threading and lifetime: as a connection (connection.hpp "Threading"), a
-// client may be used from any number of threads at once. Its pool state is
-// on a strand of its own (executor()): acquire(), the forwarders, a lease's
-// release and close() run there; each pooled connection has its own
-// strand, so operations on different connections run in parallel on an
-// io_context run by several threads. connections() reads a snapshot. The
-// observer's hooks, the referral authorizer and session_setup are called on
-// the client's strand. close(), the destructor and a lease's release() or
-// destruction called off the client's strand post their work there: it
-// takes effect when the io_context next runs (at once on the strand, or
-// once the io_context is stopped and its threads have left run()), so "no
-// observer hook runs once close() has returned" holds for a close() called
-// on the strand. The io_context must outlive the client and its leases.
-// The memory resource must outlive the work the client leaves on the
-// io_context (a detached unbind() may still run after the client and its
-// leases are gone): keep it until io_context::run() returns. A lease may
-// outlive its client, but the client's destruction closes its connection
-// (close()): its operations then fail, and destroying the lease later is
-// safe.
+// Threading and lifetime: a client may be used from any number of threads.
+// Its pool state is on its own strand (executor()); each pooled connection
+// has its own strand. The observer, the referral authorizer and
+// session_setup are called on the client's strand. close(), the destructor
+// and a lease's release or destruction called off that strand post their
+// work there (it takes effect when the io_context next runs). The io_context
+// must outlive the client and its leases; the memory resource must outlive
+// the work left on the io_context (keep it until io_context::run() returns).
+// A lease may outlive its client: its connection is then closed, its
+// operations fail, and destroying it is safe.
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"
@@ -630,61 +518,38 @@ class client
 	// connection is leased and max_connections are open.
 	auto acquire_exclusive() -> boost::capy::task<result<exclusive_lease>>;
 
-	// Read forwarders: each acquires a shared lease (acquire()), runs the
-	// connection's operation of the same name on it, and returns the lease.
-	// An operation failing with cond::connection_lost (client_errc::not_sent
-	// included) or cond::busy_or_unavailable (the result codes busy and
-	// unavailable, a Notice of Disconnection) is retried once, on another
-	// connection: the one it failed on is no longer handed out (if still
-	// open, it is retired with disconnect_reason::busy_or_unavailable and
-	// leaves the pool once its last lease returns), so the retry's acquire()
-	// takes another pooled connection or opens a new one. After busy or
-	// unavailable it prefers the other servers: a pooled connection to one
-	// of them, else a new connection to the first of them, in priority
-	// order, that may be tried now, and only then that server again (a
-	// pooled connection to it first, before a new one; so a single server
-	// is retried as before); its backoff is not touched (it answered).
-	// After a lost connection it goes by priority order, as acquire() does.
-	// Any other error, a server result code included (no_such_object, ...),
-	// a timeout or a cancellation, is returned as is, and so is the retry's
-	// outcome. Each acquire() is bounded by acquire_timeout and fails as
-	// acquire() does (that error is returned, also for the retry's); the
-	// operations are bounded by their own timeouts
-	// (search_params::timeout, ..., else
-	// connection_options::operation_timeout). The task's stop token stops
-	// the acquire() and the operation. The write forwarders (below) retry
-	// only after client_errc::not_sent.
-	// Each call may land on any pooled connection, so a request control
-	// bound to one connection (the paged-results cookie of an earlier page,
-	// anything tied to the session) needs a lease, not the forwarders
-	// (ldap::search_paged(client &) holds one for its pages). Like
-	// acquire(), the tasks do not refer to *this.
+	// Read forwarders: each acquires a shared lease, runs the connection's
+	// operation of the same name and returns the lease. A failure with
+	// cond::connection_lost (not_sent included) or cond::busy_or_unavailable
+	// is retried once on another connection: the failed one is retired
+	// (disconnect_reason::busy_or_unavailable if still open), and after busy
+	// or unavailable the retry prefers the other servers (the server's
+	// backoff is untouched). Any other error (a result code, a timeout, a
+	// cancellation) and the retry's outcome are returned as is. Each acquire()
+	// is bounded by acquire_timeout and fails as acquire() does; the
+	// operations by their own timeouts, else
+	// connection_options::operation_timeout. The stop token stops both. A
+	// request control bound to one connection (a paged-results cookie,
+	// anything tied to the session) needs a lease, since each call may land
+	// on any pooled connection. The tasks do not refer to *this.
 	//
 	// search(): connection::search()'s search_result (a limit code is a
-	// value, never retried); the entries reach the caller only once the
-	// search ends, so it is retried whatever it had received. When it
-	// chases (client_options::referrals) its references are those the
-	// chase did not follow (chase_search() tells more).
+	// value, never retried); entries are collected before any is handed
+	// over, so it is retried whatever it had received. When chasing, its
+	// references are those the chase did not follow.
 	auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> boost::capy::task<result<search_result>>;
-	// search_stream(): returns once the search has a first message (an
-	// entry, a reference, an intermediate response) or has ended, and is
-	// retried only if it fails (as above) before any message. The stream
-	// holds the lease until it is destroyed; its next() and next_item()
-	// errors are never retried, so a stream is never retried once its first
-	// entry may have been delivered. A search ended with a code that is not
-	// retried (no_such_object, ...) or a passed deadline is reported by
-	// next(), as for connection::search_stream(). Mind that it waits for
-	// that first message: a refreshAndPersist search with nothing to send
-	// returns at its first change. ldap::search_paged(client &)
-	// (paged_search.hpp) retries its first page the same way.
+	// search_stream(): returns once the search has a first message or has
+	// ended, retried only if it fails before any message. The stream holds
+	// the lease until destroyed; next() and next_item() errors are never
+	// retried. A non-retried end code or a passed deadline is reported by
+	// next(). A refreshAndPersist search with nothing to send returns only at
+	// its first change.
 	auto search_stream(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> boost::capy::task<result<ldap::search_stream>>;
 	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
-	//
 	// search() and compare() chase referrals as client_options::referrals
-	// says (see "Referrals" in the header comment); search_stream() never
-	// does.
+	// says; search_stream() never does.
 
 	// search() and compare() with what the chase did: as ldap::chase_search
 	// and ldap::chase_compare (referral_chase.hpp) on a shared lease, with
@@ -697,23 +562,13 @@ class client
 	  -> boost::capy::task<result<chased_search>>;
 	auto chase_compare(compare_params request) -> boost::capy::task<result<chased_compare>>;
 
-	// Write forwarders: each acquires a shared lease (acquire()), runs the
-	// connection's operation of the same name on it, and returns the lease,
-	// with the connection's results (connection.hpp). An operation failing
-	// with client_errc::not_sent (connection.hpp "Sent or not") is retried
-	// once, on another connection: the one it failed on is no longer handed
-	// out, and the retry's acquire() goes by priority order. Any other
-	// failure is returned as is, and so is the retry's outcome: a lost
-	// connection (not_connected, a transport error), a timeout, a server
-	// result code (busy and unavailable included, and errc::referral:
-	// referrals are never chased, see "Referrals" in the header comment), a
-	// cancellation; the update may then have been applied or not. Each
-	// acquire() fails as acquire() does; the operations are bounded by their
-	// own timeouts, else connection_options::operation_timeout. Each call
-	// may land on any pooled connection, so a request control bound to one
-	// connection (transaction_specification, anything tied to the session)
-	// needs a lease, not the forwarders. Like acquire(), the tasks do not
-	// refer to *this.
+	// Write forwarders: as the read forwarders, but retried once only after
+	// client_errc::not_sent (the server never saw the request). Any other
+	// failure (a lost connection, a timeout, busy or unavailable, any result
+	// code, errc::referral: never chased) is returned as is, and the update
+	// may or may not have been applied. A connection-bound request control
+	// (transaction_specification) needs a lease. The tasks do not refer to
+	// *this.
 	auto add(add_params request) -> boost::capy::task<result<response>>;
 	auto modify(modify_params request) -> boost::capy::task<result<response>>;
 	auto del(del_params request) -> boost::capy::task<result<response>>;

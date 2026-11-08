@@ -1,170 +1,75 @@
 // SASL NTLM bind (NTLMv2, MS-NLMP), client side, for connection::sasl_bind:
-// a user's password bind to Active Directory where Kerberos (sasl_gssapi)
-// is not available, as Samba's libads, python-ldap3 and Rust's ldap3 do:
+// a password bind to Active Directory where Kerberos (sasl_gssapi) is not
+// available (DESIGN.md section 3, "NTLM"):
 //
 //   ldap::sasl_ntlm mech("EXAMPLE\\jdoe", password);  // or "jdoe@example.org"
 //   if (auto r = co_await conn.sasl_bind(mech); !r) ...
 //
-// The SASL mechanism is "GSS-SPNEGO" carrying raw NTLMSSP messages, not
-// wrapped in SPNEGO tokens, which Active Directory accepts (MS-ADTS
-// section 3.1.1.3.4.5.2): two BindRequests, NEGOTIATE_MESSAGE then
-// AUTHENTICATE_MESSAGE, the server's CHALLENGE_MESSAGE in between (MS-NLMP
-// section 3.1). The password never crosses the wire.
+// The SASL mechanism is "GSS-SPNEGO" carrying raw NTLMSSP messages (MS-ADTS
+// section 3.1.1.3.4.5.2): NEGOTIATE, the server's CHALLENGE, AUTHENTICATE.
+// The password never crosses the wire. Part of jhetz::ldap_net (OpenSSL);
+// the messages and MD4 are in the codec (ntlm_message.hpp).
 //
-// Part of jhetz::ldap_net (HMAC-MD5, MD5 and the random client challenge
-// come from OpenSSL); the messages and MD4 are in the codec
-// (ntlm_message.hpp).
-//
-// What it does, and what it does not:
-// - NTLMv2 only (MS-NLMP section 3.3.2): a CHALLENGE_MESSAGE without
-//   NTLMSSP_NEGOTIATE_UNICODE, without
-//   NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY or without TargetInfo (a
-//   server that would take LM or NTLMv1 responses) is refused before any
-//   response is computed.
-// - NTLM does not authenticate the server: nothing in the exchange proves
-//   that the server knows the user's password hash, so a bind's success
-//   says nothing about whom the client is talking to. Over TLS the
-//   certificate check does that; the channel binding below keeps a man in
-//   the middle from relaying the bind.
-// - Security layer (MS-NLMP section 3.4, sasl_ntlm_options::
-//   security_layer): none by default, and then the client negotiates
-//   neither signing nor sealing (no NTLMSSP_NEGOTIATE_SIGN, SEAL,
-//   ALWAYS_SIGN nor KEY_EXCH), so the session after the bind is protected
-//   only by TLS, if any. With sasl_protection::integrity the NEGOTIATE_MESSAGE
-//   adds NTLMSSP_NEGOTIATE_SIGN and NTLMSSP_NEGOTIATE_KEY_EXCH (with 128-bit
-//   keys, NTLMSSP_NEGOTIATE_128, always asked for) and
-//   NTLMSSP_NEGOTIATE_ALWAYS_SIGN (MS-NLMP section 2.2.2.5: it MUST be set
-//   in the NEGOTIATE_MESSAGE; SIGN overrides it), with confidentiality
-//   NTLMSSP_NEGOTIATE_SEAL too; a CHALLENGE_MESSAGE that does not grant
-//   them all fails the bind with client_errc::security_layer_unavailable
-//   (cond::access_denied) before the AUTHENTICATE_MESSAGE is sent. The
-//   client then picks a random ExportedSessionKey, sends it RC4-encrypted
-//   with the SessionBaseKey (EncryptedRandomSessionKey, section 3.1.5.1.2;
-//   for NTLMv2 the KeyExchangeKey is the SessionBaseKey, section 3.4.5.1),
-//   keys the MIC with it, and derives the four keys of section 3.4.5.2 and
-//   3.4.5.3 (client-to-server and server-to-client signing and sealing).
-//   connection::sasl_bind installs the layer right after the successful
-//   BindResponse (RFC 4513 section 5.2.1.4): every later PDU, both ways,
-//   goes in a protected buffer after a four-octet length (RFC 4422 section
-//   3.7, as MS-ADTS section 5.1.2.1 says Active Directory does), the buffer
-//   being the 16-octet NTLMSSP_MESSAGE_SIGNATURE (section 2.2.2.9.2:
-//   Version 1, the first eight octets of HMAC_MD5(SigningKey,
-//   ConcatenationOf(SeqNum, Message)) RC4-encrypted, SeqNum), then the
-//   message, RC4-sealed (section 3.4.3: the message sealed first, then the
-//   checksum, with the same RC4 handle), as Samba and Windows lay it out.
-//   Sealed with integrity too: over LDAP a DC treats a negotiated
-//   NTLMSSP_NEGOTIATE_SIGN as NTLMSSP_NEGOTIATE_SEAL and refuses a buffer
-//   that is only signed (Samba's force_wrap_seal, which follows Windows'
-//   LDAP), so integrity differs from confidentiality only in the flags it
-//   negotiates, and connection::security_layer() reports confidentiality
-//   for both. Samba before the fix of its bug 13427 (4.7/4.8, 2018) also
-//   expects NTLMSSP_NEGOTIATE_SEAL in the flags, so integrity fails there
-//   after the bind. Each direction has its own RC4 handle, kept across
-//   buffers, and its own sequence number from 0; a buffer whose
-//   checksum or sequence number is not the expected one (tampered with,
-//   replayed, reordered or dropped) closes the connection, as does one
-//   larger than sasl_ntlm_options::max_receive_size. Outgoing PDUs go in
-//   buffers of at most 128 KiB (Samba's default). connection::
-//   security_layer() reports the layer; with one in effect start_tls() and
-//   a bind negotiating another fail (client_errc::security_layer_in_effect).
-//   Active Directory may refuse any further bind on that connection
-//   (MS-ADTS section 5.1.1.1.2: unwillingToPerform without the
-//   LDAP_CAP_ACTIVE_DIRECTORY_LDAP_INTEG_OID capability). Only over plain
-//   ldap://: Active Directory refuses a SASL layer over TLS (MS-ADTS
-//   section 5.1.1.1.2), so with TLS start() fails with
-//   client_errc::security_layer_unavailable before anything is sent. A
-//   requested layer stands in for TLS: require_tls is not consulted then
-//   (the PDUs are sealed with either, see above). The layer's secrets
-//   (the ExportedSessionKey, the four keys, the RC4 states) are wiped as
-//   the bind's are, the RC4 states and keys when the connection drops the
-//   layer. RC4 and HMAC-MD5 are what MS-NLMP defines: the layer is no
-//   match for TLS against a determined attacker,
-//   but it is what Active Directory's "LDAP server signing requirements"
-//   policy accepts on plain ldap://.
+// - NTLMv2 only: a CHALLENGE_MESSAGE without NTLMSSP_NEGOTIATE_UNICODE,
+//   NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY or TargetInfo is refused.
+// - NTLM does not authenticate the server: over TLS the certificate check
+//   does, and channel binding prevents relaying the bind.
 // - TLS is required by default (sasl_ntlm_options::require_tls): start()
-//   fails with client_errc::tls_required (cond::access_denied) on a
-//   connection without TLS, before anything is sent. Over plain ldap://
-//   (require_tls false, no security layer) the exchange stays safe from
-//   eavesdroppers as far as NTLMv2 goes (an attacker who records it can
-//   still try passwords offline against the NTProofStr), but every PDU
-//   after the bind is in clear and unsigned, and an active attacker can
-//   take over the bound connection. Active Directory with the "Domain
-//   controller: LDAP server signing requirements" policy set to require
-//   signing refuses such an unsigned bind on plain ldap://
-//   (errc::stronger_auth_required, diagnostic 00002028): use ldaps://,
-//   StartTLS, or a security layer there.
-// - Channel binding (MS-NLMP section 3.1.5.1.2, MsvAvChannelBindings):
-//   over TLS the AUTHENTICATE_MESSAGE carries the MD5 hash of a
-//   gss_channel_bindings_struct (RFC 2744 section 3.11, no addresses) whose
-//   application data is "tls-server-end-point:" and the hash of the
-//   server's certificate (RFC 5929 section 4.1; prefixed_channel_binding,
-//   channel_binding.hpp), as Windows does; Active Directory with "Domain
-//   controller: LDAP server channel binding token requirements" set to
-//   "Always" requires it. Over TLS without that hash (a certificate
-//   without one, e.g. Ed25519 or Ed448, or no server certificate) start()
-//   fails with client_errc::tls_required rather than bind without it.
-//   ntlm_channel_binding::none opts out (a server behind a TLS-terminating
-//   proxy): over TLS the AUTHENTICATE_MESSAGE then carries no
-//   MsvAvChannelBindings at all, which a DC whose check is optional lets
-//   through, where Samba refuses an explicit Z(16) as bindings that do not
-//   match (a DC requiring channel binding refuses both). Without TLS the
-//   value is 16 zero octets (Z(16)), as Windows sends it.
-// - The NTProofStr covers the client's TargetInfo: the server's AV_PAIRs,
-//   MsvAvFlags with the MIC bit, MsvAvChannelBindings and MsvAvTargetName
-//   (the service principal name, "ldap/<host>" by default). The MIC
-//   (HMAC-MD5 of the three messages, keyed with the ExportedSessionKey:
-//   with no key exchange, i.e. no security layer, the SessionBaseKey) keeps
-//   the messages from being changed in transit. The timestamp is the
-//   server's MsvAvTimestamp (then the LmChallengeResponse is Z(24), as
-//   MS-NLMP section 3.1.5.1.2 says), the current time when it sent none.
-// - Unicode: the username, domain, password, workstation and target are
-//   UTF-8, sent as UTF-16LE (ill-formed UTF-8 is refused). NTOWFv2 hashes
-//   the password's UTF-16 as it is (no normalization: Windows hashes what
-//   was typed) and uppercases the user name with the simple case mapping
-//   (ntlm_uppercase_unicode), as Windows does; the domain is not
-//   uppercased (MS-NLMP section 3.3.2).
-// - The user: "DOMAIN\user" is split at its first backslash into the
-//   domain and the user name; "user@dns.domain" (a UPN) is sent as the
-//   user name with an empty domain, which Active Directory accepts; a bare
-//   "user" goes with sasl_ntlm_options::domain (empty: the server's
-//   domain). An explicit sasl_ntlm_options::domain keeps the username as
-//   given.
-// - The password is kept (to allow later binds with the same object) and
-//   wiped with OPENSSL_cleanse when the object is destroyed, as are its
-//   UTF-16 form, the NT hash, NTOWFv2 and the SessionBaseKey once used:
-//   each is built in place in its wiped buffer, or copied into one and
-//   its source cleansed at once (step()'s copy of NTOWFv2 and the
-//   exported session key), never returned or moved by value (which would
-//   leave an unwiped copy behind). OpenSSL's HMAC
-//   working state, registers and spill slots are beyond the library's
-//   reach.
+//   fails with client_errc::tls_required before anything is sent. Without
+//   TLS or a security layer every PDU after the bind is unprotected, and AD
+//   with LDAP signing required refuses the bind
+//   (errc::stronger_auth_required).
+// - Security layer (MS-NLMP section 3.4, sasl_ntlm_options::security_layer):
+//   none by default (no signing or sealing negotiated). integrity or
+//   confidentiality negotiates SIGN, KEY_EXCH, 128 and ALWAYS_SIGN (SEAL
+//   too for confidentiality); a CHALLENGE_MESSAGE not granting them all
+//   fails with client_errc::security_layer_unavailable before
+//   AUTHENTICATE is sent. connection::sasl_bind installs it after the
+//   successful BindResponse; PDUs are always sealed (AD requires it), so
+//   connection::security_layer() reports confidentiality for both levels.
+//   A buffer with a wrong checksum or sequence number, or larger than
+//   sasl_ntlm_options::max_receive_size, closes the connection; outgoing
+//   buffers are at most 128 KiB. With a layer in effect, start_tls() and a
+//   bind negotiating another layer fail (security_layer_in_effect), and AD
+//   may refuse further binds. Plain ldap:// only: over TLS start() fails with
+//   security_layer_unavailable. A requested layer replaces require_tls. The
+//   layer is RC4 and HMAC-MD5, weaker than TLS.
+// - Channel binding (MsvAvChannelBindings): over TLS, the MD5 of a
+//   gss_channel_bindings_struct with "tls-server-end-point:" and the
+//   certificate hash (RFC 5929); without such a hash (e.g. Ed25519) start()
+//   fails with client_errc::tls_required. ntlm_channel_binding::none sends
+//   none over TLS (for a TLS-terminating proxy). Without TLS: 16 zero
+//   octets.
+// - The NTProofStr covers the client's TargetInfo, with MsvAvTargetName (the
+//   SPN, "ldap/<host>" by default); a MIC protects the three messages.
+// - Unicode: user name, domain, password, workstation and target are UTF-8,
+//   sent as UTF-16LE (ill-formed UTF-8 refused); the password is not
+//   normalized, the user name is uppercased with the simple case mapping.
+// - The user: "DOMAIN\user" splits at the first backslash; "user@dns.domain"
+//   (a UPN) goes with an empty domain; a bare "user" with
+//   sasl_ntlm_options::domain (empty: the server's). An explicit domain keeps
+//   the username as given.
+// - The password is kept for later binds and wiped with OPENSSL_cleanse on
+//   destruction, as are its derived secrets and the layer's keys.
 //
-// Errors (contexts never contain the password, nor name the mechanism:
-// sasl_bind prefixes "sasl bind GSS-SPNEGO"):
+// Errors (contexts never contain the password; sasl_bind prefixes
+// "sasl bind GSS-SPNEGO"):
 // - client_errc::tls_required (cond::access_denied): no TLS with
-//   require_tls (and no security layer), or no tls-server-end-point hash
-//   with channel binding.
-// - client_errc::security_layer_unavailable (cond::access_denied): a
-//   security layer asked for over TLS, or one the CHALLENGE_MESSAGE does
-//   not grant.
+//   require_tls and no security layer, or no tls-server-end-point hash.
+// - client_errc::security_layer_unavailable (cond::access_denied): a layer
+//   asked for over TLS, or not granted by the CHALLENGE_MESSAGE.
 // - client_errc::encode_error (cond::invalid_input): an empty user name,
-//   ill-formed UTF-8, a target or an AUTHENTICATE_MESSAGE field too long,
-//   max_receive_size below 16 with a security layer.
-// - client_errc::decode_error (cond::protocol_error): a malformed
-//   CHALLENGE_MESSAGE (bounds-checked: every offset and length, the
-//   AV_PAIR list), or none.
+//   ill-formed UTF-8, a field too long, max_receive_size below 16 with a
+//   layer.
+// - client_errc::decode_error (cond::protocol_error): a malformed or missing
+//   CHALLENGE_MESSAGE; with a layer, a malformed signature.
 // - client_errc::unexpected_response (cond::protocol_error): a challenge
-//   that does not offer NTLMv2, a challenge after the AUTHENTICATE_MESSAGE,
-//   or a server that reports success before it (then connection::sasl_bind
-//   closes the connection).
-// - client_errc::internal_error: OpenSSL (RAND_bytes, MD5, HMAC-MD5)
-//   failed, e.g. MD5 unavailable in a FIPS-only configuration.
-// Once a layer is in effect, a protected buffer that does not verify
-// closes the connection; the read fails with client_errc::decode_error
-// (a malformed signature) or client_errc::unexpected_response (a checksum
-// or sequence number that is not the expected one).
-// A server that refuses the credentials answers invalidCredentials
-// (errc::invalid_credentials, cond::auth_failed).
+//   without NTLMv2, a challenge after AUTHENTICATE, success before it (the
+//   connection is closed); with a layer, a wrong checksum or sequence number.
+// - client_errc::internal_error: OpenSSL failed (e.g. MD5 unavailable under
+//   FIPS).
+// - errc::invalid_credentials (cond::auth_failed): the server refused the
+//   credentials.
 #pragma once
 
 #include "jhetz/ldap/channel_binding.hpp"

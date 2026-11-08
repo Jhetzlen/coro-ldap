@@ -1,9 +1,9 @@
 // Active Directory's Large Integer syntax (1.2.840.113556.1.4.906) as
-// std::chrono types. AD stores dates as FILETIME, a signed 64-bit count of
-// 100 ns ticks since 1601-01-01 00:00:00 UTC, written in decimal
-// (accountExpires, pwdLastSet, lastLogonTimestamp, lastLogon,
-// badPasswordTime, lockoutTime), and intervals as negative tick counts
-// (maxPwdAge, minPwdAge, lockoutDuration, lockOutObservationWindow).
+// std::chrono types: dates as FILETIME, a signed 64-bit count of 100 ns
+// ticks since 1601-01-01 00:00:00 UTC in decimal (accountExpires,
+// pwdLastSet, lastLogonTimestamp, lastLogon, badPasswordTime, lockoutTime),
+// intervals as negative tick counts (maxPwdAge, minPwdAge, lockoutDuration,
+// lockOutObservationWindow).
 //
 //   struct ad_user {
 //       std::string                                  sam_account_name;
@@ -17,60 +17,36 @@
 //   if (u.account_expires && !ldap::ad::is_never(*u.account_expires)) {
 //       auto utc = std::chrono::clock_cast<std::chrono::system_clock>(*u.account_expires);
 //   }
-//   // Expired accounts. AD compares the numbers, and 0 ("never expires")
-//   // is below every date: ">= 1" leaves it out.
+//   // Expired accounts: 0 ("never expires") is below every date, ">= 1" leaves it out.
 //   using ft = ldap::ad::filetime_clock;
 //   auto expires = ldap::filters::field<&ad_user::account_expires>();
 //   auto f = expires >= ft::time_point{ ft::duration{ 1 } } && expires <= ft::now();
 //
-// The schema cannot tell a date from a counter (uSNChanged is 906 too): the
-// member's type decides. std::int64_t members read every 906 attribute as
-// the raw number; the time_point and duration below read 906 only.
+// The member's type decides how a 906 attribute reads (uSNChanged is 906
+// too): std::int64_t reads any 906 attribute as the raw number; the
+// time_point and duration below read 906 only.
 //
 // Sentinels:
-//   ad::never          9223372036854775807, time_point::max(): accountExpires
-//                      "never expires". Decodes from and encodes as
-//                      9223372036854775807. As a date it is in year 30828:
-//                      test for it before converting or doing arithmetic.
-//                      Arithmetic on any decoded date near the top of the
-//                      range can overflow too, like any std::chrono value:
-//                      an untrusted lockoutTime 9223372036854775806 minus a
-//                      30-minute lockoutDuration is undefined. Check
-//                      ad::is_never / ad::forever first, and keep the
-//                      result in range.
-//   0                  decodes to tick 0 (time_point{}, 1601-01-01, never a
-//                      real AD date), which sorts before every date and
-//                      encodes as 0 again. What it means depends on the
-//                      attribute:
-//                      - accountExpires: "never expires", like ad::never.
-//                        ad::is_never(t) is true for both.
-//                      - lastLogon, lastLogonTimestamp, badPasswordTime:
-//                        "never happened". Being before every date,
-//                        `last_logon < cutoff` includes accounts that never
-//                        logged on (test != time_point{} to skip them).
-//                      - lockoutTime: "not currently locked out". AD writes
-//                        0 when an account is unlocked, so it does not mean
-//                        the account was never locked out.
-//                      - pwdLastSet: equals ad::pwd_must_change (the user
-//                        must change the password at the next logon).
-//   ad::pwd_must_change  pwdLastSet 0 (time_point{}): written, the user must
-//                      change the password at the next logon; read back,
-//                      pwdLastSet 0 compares equal to it.
+//   ad::never          9223372036854775807 (time_point::max()): accountExpires
+//                      "never expires", year 30828 as a date. Test for it
+//                      (ad::is_never) before converting or doing arithmetic;
+//                      arithmetic near the top of the range can overflow.
+//   0                  tick 0 (time_point{}), before every date. accountExpires:
+//                      "never expires" (ad::is_never is true). lastLogon,
+//                      lastLogonTimestamp, badPasswordTime: "never happened"
+//                      (`last_logon < cutoff` includes it). lockoutTime: not
+//                      currently locked out. pwdLastSet: ad::pwd_must_change.
+//   ad::pwd_must_change  pwdLastSet 0: the user must change the password at
+//                      the next logon.
 //   ad::pwd_set_now    pwdLastSet -1: written, AD sets pwdLastSet to now.
-//   ad::forever        an interval of -9223372036854775808 ticks
-//                      (duration::min()): maxPwdAge "passwords never
-//                      expire", lockoutDuration "until an administrator
-//                      unlocks". Negating it overflows: test for it first.
+//   ad::forever        -9223372036854775808 ticks (duration::min()): maxPwdAge
+//                      "never expire", lockoutDuration "until an
+//                      administrator unlocks". Negating it overflows.
 //
-// Filters: a typed filter on a mapped member encodes the value
-// (filters::field<&T::m>() <= t). On an untyped attribute, encode it; the
-// two FILETIME traits return a plain std::string, as every value encodes
-// (the string, enum and sys_seconds traits return result<std::string>):
+// Filters: a typed filter on a mapped member encodes the value; on an
+// untyped attribute use the trait, which returns a plain std::string:
 // filters::attr("accountExpires") <= ldap::value_traits<ad::filetime_clock::time_point>::encode(t).
-// AD compares the numbers, so 0 ("never") is below every date:
-// "accounts that expired" is (&(accountExpires>=1)(accountExpires<=now)).
-// An equality filter on ad::never encodes 9223372036854775807 only and
-// misses accounts stored as 0; "never expires" takes both spellings:
+// Equality on ad::never misses accounts stored as 0: "never expires" is
 // expires == ad::never || expires == ft::time_point{}, that is
 // (|(accountExpires=9223372036854775807)(accountExpires=0)).
 #pragma once
@@ -91,13 +67,10 @@
 
 namespace jhetz::ldap::ad {
 
-// A C++20 Clock for FILETIME: 100 ns ticks since 1601-01-01 00:00:00 UTC.
-// std::chrono::file_clock is not this clock: its epoch and period are
-// implementation-defined (libstdc++: 2174-01-01, nanoseconds).
-// std::chrono::clock_cast converts to and from system_clock (and so
-// utc_clock, ...) through to_sys / from_sys; a zoned_time is then built
-// from the sys_time it returns. Leap seconds are not counted, as in
-// FILETIME and system_clock.
+// A C++20 Clock for FILETIME: 100 ns ticks since 1601-01-01 00:00:00 UTC
+// (not std::chrono::file_clock, whose epoch and period are
+// implementation-defined). clock_cast converts to and from system_clock
+// through to_sys / from_sys. Leap seconds are not counted.
 struct filetime_clock
 {
 	using rep = std::int64_t;
@@ -112,16 +85,11 @@ struct filetime_clock
 	[[nodiscard]] static auto now() noexcept -> time_point { return from_sys(std::chrono::system_clock::now()); }
 
 	// Defined for t >= time_point::min() + unix_epoch_offset (about year
-	// -27258, sys_time::min()); below, the subtraction overflows. Every
-	// decoded value is in range (decode rejects dates below -1). ad::never
-	// converts without overflow, to a sys_time in year 30828 that is no real
-	// date: test ad::is_never (or == ad::never) before converting.
-	// Converting is defined for every decoded date, but arithmetic on a date
-	// near the top of the range (t + days(n), t - lockout_duration) can
-	// overflow, like on any std::chrono value. The result keeps the 100 ns
-	// ticks; assigning it to a system_clock::time_point may not fit (with
-	// libstdc++'s nanoseconds it overflows after 2262, ad::never included),
-	// so keep the ticks or floor to seconds.
+	// -27258), so for every decoded value. ad::never converts to year 30828:
+	// test ad::is_never first. Arithmetic near the top of the range can
+	// overflow. The result keeps 100 ns ticks and may not fit a
+	// system_clock::time_point (libstdc++'s nanoseconds overflow after 2262):
+	// keep the ticks or floor to seconds.
 	template<class D>
 	[[nodiscard]] static constexpr auto to_sys(const std::chrono::time_point<filetime_clock, D> &t)
 	  -> std::chrono::sys_time<std::common_type_t<D, std::chrono::seconds>>
@@ -130,16 +98,11 @@ struct filetime_clock
 		  t.time_since_epoch() - unix_epoch_offset);
 	}
 
-	// Rounds down to a tick (system_clock's period is implementation-
-	// defined: nanoseconds in libstdc++, microseconds in libc++, 100 ns in
-	// MSVC's STL). Defined for t <= time_point::max() - unix_epoch_offset
-	// (as a sys_time in ticks, year 30828: the result is then at most
-	// ad::never) and t >= the lowest sys_time in ticks (about year -27258),
-	// whatever D is; beyond, the result or the conversion of t to ticks
-	// overflows. The mirror of to_sys' domain. Whether every
-	// system_clock::time_point is in range depends on the period: yes with
-	// nanoseconds (years 1677-2262), no with MSVC's 100 ns ticks or libc++'s
-	// microseconds, whose time_point::max() is beyond year 30828.
+	// Rounds down to a tick. Defined for t from about year -27258 to
+	// time_point::max() - unix_epoch_offset (year 30828, at most ad::never);
+	// beyond, it overflows. Not every system_clock::time_point is in range
+	// with libc++'s microseconds or MSVC's 100 ns ticks; all are with
+	// nanoseconds.
 	template<class D> [[nodiscard]] static constexpr auto from_sys(const std::chrono::sys_time<D> &t) -> time_point
 	{
 		return time_point(std::chrono::floor<duration>(t.time_since_epoch()) + unix_epoch_offset);

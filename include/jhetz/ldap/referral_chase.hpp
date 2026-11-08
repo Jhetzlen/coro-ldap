@@ -1,11 +1,9 @@
 // Opt-in referral chasing for searches and compares (RFC 4511 sections
 // 4.1.10 and 4.5.3). Part of jhetz::ldap_net. A connection never chases by
-// itself: its operations return referrals (errc::referral, the URIs in
-// error::referrals) and continuation references (search_stream) as they
-// are. chase_search and chase_compare run the operation on a connection and
-// then follow what it returned, through a caller-supplied connector that
-// decides which servers may be contacted and how the connections to them are
-// bound (the library never forwards credentials by itself).
+// itself. chase_search and chase_compare run the operation, then follow what
+// it returned through a caller-supplied connector that decides which servers
+// are contacted and how they are bound (the library never forwards
+// credentials by itself).
 //
 //   auto chased = co_await ldap::chase_search(conn, {
 //       .base   = ldap::dn{"dc=example,dc=org"},
@@ -15,76 +13,45 @@
 //   if (!chased->complete) ...             // some references could not be followed
 //   for (const ldap::entry &e : chased->entries) ...
 //
-// Following one reference: each URI is parsed (url::parse) and the request
-// for its server built with referral_target (referral.hpp). The connector
-// is then asked for a connection to the URL's server; null skips that URI.
-// The request is sent there with the connection's own operation (search
-// streams the entries, compare), so its replies follow the usual rules. A
-// referral or continuation reference holds alternatives (RFC 4511: "any
-// supported URI may be used"): its URIs are tried in order until one is
-// followed, and the rest are not used.
+// Following a reference: each URI is parsed, its request built with
+// referral_target (referral.hpp), and the connector asked for a connection
+// (null skips the URI). The URIs of one referral or reference are
+// alternatives, tried in order until one is followed.
 //
-// Referral results: when the operation (on the origin or on a target)
-// fails with errc::referral, its URIs are tried in order, recursively: the
-// first that answers ends the chase of that referral (a further referral is
-// chased one hop deeper). When none does, the operation fails: with the
-// last error a target or the connector returned, else with the original
-// referral error (every URI skipped, unparseable, a loop or over a limit).
-// The attempt list is not returned then: the error's context counts the
-// outcomes instead ("referral chase (URIs: 1 failed, 2 skipped_policy)"),
-// and when the error is the original referral, its URIs are in `referrals`.
-// Writes are never chased (a referral result means the update was not
-// performed); referral_target builds them for a caller that wants to.
+// Referral results (origin or target fails with errc::referral): chased
+// recursively. If no URI answers, the call fails with the last target or
+// connector error, else with the original referral error; its context counts
+// the outcomes ("referral chase (URIs: 1 failed, 2 skipped_policy)"). Writes
+// are never chased; referral_target builds them for a caller that wants to.
 //
-// Continuation references (search only): followed after the search that
-// returned them ended, one after another, breadth first; the entries of
-// every target are appended in that order, and a target's own references
-// are followed one hop deeper. A reference that cannot be followed never
-// fails the search: it clears chased_search::complete instead, so partial
-// results are never reported as a plain success. Only a cancellation stops
-// the chase (the call then fails with it).
+// Continuation references (search only): followed breadth first after the
+// search ended, entries appended in that order. A reference that cannot be
+// followed clears chased_search::complete instead of failing the search;
+// only a cancellation stops the chase with an error.
 //
-// Limits (referral_policy): max_hops bounds the nesting (a URL the origin
-// returned is at depth 1); RFC 4511 asks clients that count hops to handle
-// at least ten, the default. max_targets bounds the connector calls of one
-// chase. The original request's timeout (search_params / compare_params
-// ::timeout) is the budget of the whole chase, measured from the call. The
-// connector's task is cancelled (through its stop token) when the budget
-// runs out while it works, and that URI is then failed with a timeout
-// error; each request sent to a target gets what is left of the budget once
-// the connector returned. A connector that ignores cancellation is bounded
-// only by itself (its connection is then not used). Without a timeout each
-// request has its connection's operation_timeout and the chase has no
-// overall limit.
-// Once max_targets is reached or the budget spent the chase stops: the URI
-// at hand is limit_reached (the rest of its reference is not looked at;
-// its URIs before it were parsed only to tell loops), and the continuation
-// references still waiting are not parsed (their URIs are counted in
-// `unlisted`, and they clear `complete`). Over max_hops nothing is parsed:
-// a reference gets one limit_reached entry, for its first URI, even if it
-// is a loop (telling would cost a parse and a copy of the request). The
-// attempt list keeps at most max_attempts entries; the URIs considered
-// beyond them are counted in `unlisted` too, so a server streaming
-// references cannot make the list grow without bound.
+// Limits (referral_policy): max_hops bounds the nesting (depth 1: a URL the
+// origin returned; default 10). max_targets bounds connector calls per
+// chase. The request's timeout is the budget of the whole chase: it cancels
+// the connector's task through its stop token (that URI fails with a
+// timeout; a connector ignoring it is bounded only by itself, and its
+// connection is then not used), and each target request gets what is left.
+// Without a timeout, each request has its connection's operation_timeout.
+// Once max_targets or the budget is spent, the URI at hand is limit_reached
+// and waiting references are counted in `unlisted` (clearing `complete`);
+// over max_hops a reference gets one limit_reached entry. The attempt list
+// keeps at most max_attempts entries; the rest are counted in `unlisted`.
 //
-// Loops (RFC 4511: clients "MUST NOT repeatedly contact the same server for
-// the same request with the same parameters"): a URI whose server (scheme,
-// host, port) and request (DN, and for a search scope and filter) match one
-// already sent in this chase, the origin's own request included when the
-// origin's name() is a URL, is skipped_loop without asking the connector.
-// Hosts compare in their ASCII form (IDNA ToASCII for internationalized
-// names, then ASCII case-insensitively), DNs by distinguishedNameMatch,
+// Loops: a URI whose server (scheme, host, port) and request (DN; for a
+// search, scope and filter) match one already sent in this chase, the
+// origin's included, is skipped_loop without asking the connector. Hosts
+// compare in ASCII form, case-insensitively; DNs by distinguishedNameMatch;
 // filters as trees.
 //
-// Threading: the connections the connector returns must belong to the
-// origin's executor, and every task here runs on it. `origin` (a
-// connection, or a shared lease's: a chase does not bind it), and the
-// connections the connector returns, must outlive the task.
+// Threading: the connector's connections must belong to the origin's
+// executor; every task runs on it. `origin` and the connector's connections
+// must outlive the task.
 //
-// make_same_policy_connector (below) builds a connector that keeps the
-// origin's security: no TLS downgrade, an allow-list of hosts, the
-// certificate checked against the referred host, and a bind only through
-// the caller's session_setup:
+// make_same_policy_connector (below) keeps the origin's security:
 //
 //   auto connector = ldap::make_same_policy_connector(ioc, conn, options, {"example.org"},
 //       ldap::simple_bind_setup(ldap::dn{"cn=reader,dc=example,dc=org"}, password));
@@ -147,53 +114,32 @@ auto chase_compare(connection &origin,
   referral_policy policy = {}) -> boost::capy::task<result<chased_compare>>;
 
 // A connector that opens connections to referred servers with the origin's
-// security policy, and keeps them for its later calls (one per scheme, host
-// and port; reopened once closed). It returns null (skips the URI) for:
-// - an ldapi:// URL (a server's URL must not reach a local socket), or one
-//   without a host;
-// - a host outside `allowed_host_suffixes`: a name matches an entry equal
-//   to it or of which it is a subdomain (`example.org` allows
-//   `example.org` and `ldap.eu.example.org`, not `badexample.org`), both
-//   compared in their ASCII form (RFC 4513 section 3.1.3.1: IDNA ToASCII
-//   with UseSTD3ASCIIRules for an internationalized name, then ASCII
-//   case-insensitively; one trailing dot ignored). An IP address matches
-//   only an entry that is the same address text. Empty (the default):
-//   every URI is skipped. A host with bytes no host name has (a decoded
-//   NUL or other control, space, '%', '/', ...; non-ASCII is left to IDNA)
-//   or an IPv6 zone identifier is skipped too;
-// - a port other than the scheme's default (389, 636) and the origin's
-//   (when its name() is a URL), unless an entry for that host names it:
-//   `host:port`, `10.0.0.1:port`, `[::1]:port` (a bare IPv6 address takes
-//   no port). An entry with a port allows that port on top of the usual
-//   ones, for the hosts the entry matches: `example.org:1389` allows port
-//   1389 on `example.org` and on its subdomains too. The setup's
-//   credentials go to whatever listens on the port a server's URL names,
-//   so other ports are opt-in.
-// No TLS downgrade: when `origin` is TLS-protected (is_tls(), read here,
-// once), an ldaps:// target is opened as such and an ldap:// one with
-// StartTLS (connection_options::start_tls); a failed StartTLS fails the URI
-// (the error, never a plain connection). Otherwise `options` apply as given
-// (an ldaps:// target is still TLS). The server certificate is checked as
-// `options.tls` says, against the referred host (RFC 4513 section 3.1.3: the
-// reference identity is the host the URL names): tls_options::server_name is
-// cleared, and an internationalized name is connected to in its ASCII form.
-// Binding: `setup` runs on each new connection (simple_bind_setup,
-// sasl_bind_setup, or any session_setup; it may bind with other
-// credentials, or look at connection::name() to choose), and the TLS client
-// certificate of `options.tls` (cert_file, key_file) is presented only
-// with a setup. Empty: the connection stays anonymous, at the TLS layer
-// too: no certificate is presented, so no server authenticates it by one
-// (mutual TLS, a certificate mapped to an identity, SASL EXTERNAL), even
-// with the origin's options passed as they are. To present the
-// certificate, pass a setup: sasl_bind_setup with an EXTERNAL mechanism
-// (binds as the identity the certificate maps to), or no_bind_setup()
-// (presents it without a bind, for a server that maps it by itself). The
-// library never sends the origin's credentials by itself. A connect, StartTLS or setup failure
-// fails the URI.
-// Its connect, StartTLS and setup stop when the chase's budget is spent.
-// The connections close when the last copy of the connector is destroyed
-// (without an UnbindRequest), so keep it as long as the results need no
-// more of them; `ioc` must outlive it.
+// security policy, reusing them for later calls (one per scheme, host and
+// port; reopened once closed). It skips (returns null for):
+// - ldapi:// URLs and URLs without a host;
+// - hosts outside `allowed_host_suffixes`: a name matches an entry equal to
+//   it or of which it is a subdomain (`example.org` allows
+//   `ldap.eu.example.org`, not `badexample.org`), compared in ASCII form
+//   (RFC 4513 section 3.1.3.1: IDNA ToASCII with UseSTD3ASCIIRules, then
+//   case-insensitively, one trailing dot ignored); an IP address matches only
+//   the same address text. Empty (default): everything is skipped. Hosts with
+//   bytes no host name has (controls, space, '%', '/', ...) or an IPv6 zone
+//   identifier are skipped too;
+// - ports other than the scheme's default (389, 636) and the origin's,
+//   unless the matching entry names it (`host:port`, `10.0.0.1:port`,
+//   `[::1]:port`; `example.org:1389` also allows 1389 on its subdomains).
+// No TLS downgrade: if `origin` is TLS-protected (is_tls(), read once), an
+// ldaps:// target stays TLS and an ldap:// one uses StartTLS (a failure fails
+// the URI); otherwise `options` apply as given. The certificate is checked as
+// `options.tls` says against the referred host (tls_options::server_name
+// cleared; an internationalized name connected to in ASCII form).
+// `setup` runs on each new connection; the TLS client certificate of
+// `options.tls` is presented only with a setup. Empty: anonymous, without a
+// client certificate. To present the certificate pass a setup, e.g.
+// sasl_bind_setup with EXTERNAL, or no_bind_setup(). A connect, StartTLS or
+// setup failure fails the URI; they stop when the chase's budget is spent.
+// The connections close (without an UnbindRequest) when the last copy of the
+// connector is destroyed; `ioc` must outlive it.
 [[nodiscard]] auto make_same_policy_connector(boost::corosio::io_context &ioc,
   const connection &origin,
   connection_options options,

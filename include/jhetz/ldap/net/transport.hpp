@@ -14,38 +14,25 @@
 // and custom streams, transport::wrap().
 //
 // Ownership: the transport owns the socket, the TLS layer (if any) and the
-// type-erased view, in one block allocated from the memory resource given to
-// connect() or wrap() (default: the default resource), so their addresses stay
-// stable when the transport itself is moved (the TLS layer and the view point
-// into it). name() lives on the same resource. Corosio's and Capy's own
-// internals (socket state, the any_stream's cached awaitables, the OpenSSL
-// session) still allocate with operator new.
+// type-erased view in one block allocated from the memory resource given to
+// connect() or wrap() (default: the default resource), so their addresses
+// stay stable when the transport moves. name() lives on the same resource.
+// Corosio's and Capy's internals still allocate with operator new.
 //
-// StartTLS (step 7, net::start_tls in connect.hpp): the plain tcp_socket is
-// a separate member for this. start_tls() requires type() ==
-// kind::tcp, !is_tls(), no operation in flight, and an empty read_buffer
-// (bytes that arrived after the StartTLS response were sent before the TLS
-// handshake and must not be trusted; the plaintext injection bug class of
-// CVE-2011-0411). It then constructs an openssl_stream in *reference* mode
-// over the owned socket (`openssl_stream(&socket, ctx)`), runs the client
-// handshake with the same verification rules as ldaps:// (net::tls_options),
-// and re-points stream() at the TLS layer. The socket is never moved, so
-// nothing referring to it is invalidated. ldaps:// already uses exactly this
-// layering (reference-mode TLS over the owned socket), so StartTLS reuses
-// the ldaps:// handshake code: detail::make_tls_setup() and
-// detail::tls_handshake() in src/net/tls.hpp.
+// StartTLS (net::start_tls in connect.hpp) requires type() == kind::tcp,
+// !is_tls(), no operation in flight and an empty read_buffer (bytes received
+// before the handshake are untrusted, CVE-2011-0411). It builds a
+// reference-mode openssl_stream over the owned socket, as ldaps:// does, runs
+// the handshake with net::tls_options, and re-points stream() at it.
 //
-// Ending a connection: close() is immediate (the socket goes away; for TLS no
-// close_notify alert is sent, so the peer sees a truncated stream).
-// shutdown() is the graceful variant: for TLS it sends close_notify and
-// waits, within a bound, for the peer's before closing (RFC 5246 section
-// 7.2.1; RFC 4511 section 4.13 for StartTLS). connection::unbind() uses it.
+// Ending a connection: close() is immediate (for TLS, no close_notify).
+// shutdown() sends close_notify and waits, within a bound, for the peer's
+// before closing (RFC 5246 section 7.2.1); connection::unbind() uses it.
 //
-// Threading (Capy/Corosio rules): at most one read and one write may be in
-// flight at a time, and all operations must run on the executor of the
-// io_context the transport was created on. Destroying a transport with an
-// operation in flight is undefined: close() or cancel() and let it finish.
-// Moving one is fine, the parts stay where they are.
+// Threading: at most one read and one write in flight, all on the executor
+// of the io_context the transport was created on. Destroying a transport
+// with an operation in flight is undefined: close() or cancel() and let it
+// finish. Moving one is fine.
 #pragma once
 
 #include "jhetz/ldap/channel_binding.hpp"

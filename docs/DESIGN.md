@@ -1127,7 +1127,9 @@ a buffer that is only signed ("NTLMSSP NTLM2 packet check failed due to
 invalid signature", the connection closed after the bind); found by
 `integration.samba_ad` (coro-ldap-ite.9). So `security_layer =
 integrity` negotiates SIGN without SEAL and still seals, and
-`connection::security_layer()` reports confidentiality. The
+`connection::security_layer()` reports confidentiality. Samba before the
+fix of its bug 13427 (4.7/4.8, 2018) also expects SEAL in the negotiated
+flags, so integrity fails there after the bind. The
 protected buffer is the 16-octet NTLMSSP_MESSAGE_SIGNATURE (Version 1,
 Checksum, SeqNum, section 2.2.2.9.2) followed by the message, inside the
 four-octet SASL length of `sasl_layer_stream`: MS-ADTS section 5.1.2.1

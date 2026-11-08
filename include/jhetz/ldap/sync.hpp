@@ -11,48 +11,31 @@
 //   auto found = pool.search({.base = base});      // a shared lease for one search, retried once
 //   if (auto lease = pool.acquire()) lease->modify(...);   // shared: binds belong on acquire_exclusive()
 //
-// A connected sync::connection (a sync::client) owns an io_context and one
-// I/O thread running it. Each method starts the matching coroutine of
-// ldap::connection (ldap::client) on that thread and waits for it, with
-// exactly the same request, result, error and mapping types, so the APIs
-// cannot drift apart. Methods may be called from any number of threads at
-// once: their operations are multiplexed on the one connection (on the
-// pool's connections).
+// A connected sync::connection (sync::client) owns an io_context and one I/O
+// thread. Each method runs the matching ldap::connection (ldap::client)
+// coroutine there and waits, with the same request, result and error types.
+// Methods may be called from any number of threads; their operations are
+// multiplexed.
 //
-// The free functions over ldap::connection and ldap::client (who_am_i,
-// load_schema, ad::reset_password, ...) run on the facade through
-// sync::run (below), which starts the async function's task on the I/O
-// thread with the facade's ldap::connection or ldap::client and waits for
-// it:
+// Free functions over ldap::connection and ldap::client (who_am_i,
+// load_schema, ad::reset_password, ...) run on a facade through sync::run:
 //
 //   ldap::result<std::string> me = ldap::sync::run(*c, [](auto &a) { return ldap::who_am_i(a); });
 //
-// The blocking forms of the library's own conveniences (sync::search_paged,
-// sync::load_schema, sync::store, sync_extended_operations.hpp,
-// ad/sync.hpp) are written that way.
+// sync::search_paged, sync::load_schema, sync::store,
+// sync_extended_operations.hpp and ad/sync.hpp are built that way.
 //
-// Calling a method from the facade's own I/O thread (from code running on
-// its executor) would wait for itself; it fails at once with
-// client_errc::would_deadlock instead.
+// A method called from the facade's own I/O thread fails with
+// client_errc::would_deadlock. Exceptions thrown by an operation are
+// rethrown in the calling thread; everything else is an ldap::error.
 //
-// Exceptions thrown by an operation (allocation failure, programming
-// errors) are rethrown in the calling thread; everything else is an
-// ldap::error, as in the async API.
-//
-// sync::connection's shutdown: the destructor (and a move assignment, for
-// the connection it replaces) closes the connection (no
-// UnbindRequest; call unbind() first for a clean end), lets the operations
-// still running finish with not_connected, and joins the I/O thread. A
-// host name lookup in progress (net::connect runs getaddrinfo detached,
-// which cannot be interrupted) is waited for, so destruction can take as
-// long as the system resolver's own timeout; so is a SASL step sasl_bind
-// gave up on but which still runs on its thread (GSSAPI waiting for a KDC:
-// with MIT krb5, bounded by krb5.conf's request_timeout, from 1.22, else
-// by its retry schedule, and DNS by resolv.conf). Do not destroy a
-// sync::connection while another thread is inside one of its methods, nor
-// from its I/O thread.
-//
-// sync::client (below) has its own rules: see its comment.
+// sync::connection's destructor (and a move assignment, for the connection
+// it replaces) closes the connection without an UnbindRequest (call unbind()
+// first), lets running operations fail with not_connected, and joins the I/O
+// thread. It waits for a host name lookup in progress and for a SASL step
+// still running on its thread (e.g. GSSAPI waiting for a KDC), so it may take
+// as long as their timeouts. Do not destroy a sync::connection while another
+// thread is inside one of its methods, nor from its I/O thread.
 #pragma once
 
 #include "jhetz/ldap/client.hpp"
@@ -221,28 +204,17 @@ namespace detail {
 }// namespace detail
 
 // ldap::transaction (transaction.hpp) for a sync::connection or a
-// sync::lease: each method runs the async one on its I/O thread and waits
-// for it, with the same results. Destroyed while still open, it aborts the
-// transaction and waits for the server's answer (ignored), five seconds at
-// most even without a default timeout (the abort is then abandoned and
-// queued again without waiting); from the I/O thread itself it queues the
-// abort without waiting, as ldap::transaction does. Made by a
-// sync::connection, it must not outlive that connection's I/O thread: a
-// move of the connection keeps it valid; destroying the connection or
-// assigning a new one over it (reconnecting) ends it. Made by a
-// sync::lease, it
-// shares the ownership of the client's I/O thread as the lease does, so
-// it may outlive the lease and the client without dangling; but keep the
-// lease while using it: `pool.acquire()->begin_transaction()` releases
-// the lease at the end of the statement, and the transaction then runs on
-// a connection back in the pool, which other leases may share, and which
-// the pool may unbind or close under it (max_lifetime, a failed idle
-// check, failback, the client's destruction). As the last owner of the
-// I/O thread (the client, the leases and the other transactions gone), it
-// must not be destroyed or move-assigned on that thread: it would join
-// itself, and std::terminate() is called with a message on stderr.
-// Move-only. Not [[nodiscard]] as a class: it comes inside a result,
-// which is [[nodiscard]] on its own.
+// sync::lease, each method run on the I/O thread with the same results.
+// Destroyed while open, it aborts the transaction and waits for the answer
+// (ignored), at most five seconds; from the I/O thread it only queues the
+// abort. Made by a sync::connection, it must not outlive that connection's
+// I/O thread (moving the connection keeps it valid; destroying or
+// reassigning it ends it). Made by a sync::lease, it shares the I/O thread's
+// ownership and may outlive the lease and client, but keep the lease while
+// using it, else the connection returns to the pool and may be shared or
+// closed under it. As the last owner of the I/O thread it must not be
+// destroyed or move-assigned there (std::terminate()). Move-only; not
+// [[nodiscard]] as a class since it comes inside a result.
 class transaction
 {
   public:
@@ -498,26 +470,19 @@ namespace detail {
 	struct client_core;
 }
 
-// A pooled connection of a sync::client (ldap::lease or
-// ldap::exclusive_lease, blocking): the operations of detail::connection_api
-// run on the leased connection, on the client's I/O thread. sync::lease
-// (acquire()) is shared, as ldap::lease: its simple_bind, sasl_bind,
-// start_tls, unbind and close change the session for every lease sharing
-// the connection (client.hpp, "Leases share connections by default"), so
-// use a sync::exclusive_lease (acquire_exclusive()) for them.
-// Its methods may be called from any number of threads at once, except
-// that moving, reassigning, release() and the destructor must not run
-// while another thread is inside one of its methods. A lease may outlive
-// its sync::client: the client's destruction closes the leased connection
-// (operations then fail with cond::connection_lost), and the I/O thread
-// keeps running until the last lease is released or destroyed and the
-// last transaction made by one is destroyed. On the I/O thread, release()
-// and the destructor return the connection without waiting; but there
-// they must not end the last owner of the I/O thread (the client, every
-// other lease and their transactions gone): it would join itself, and
-// std::terminate() is called with a message on stderr. Move-only. Not
-// [[nodiscard]] as a class: it comes inside a result, which is
-// [[nodiscard]] on its own.
+// A pooled connection of a sync::client (blocking ldap::lease or
+// ldap::exclusive_lease): detail::connection_api's operations run on the
+// leased connection, on the client's I/O thread. sync::lease (acquire()) is
+// shared: its simple_bind, sasl_bind, start_tls, unbind and close affect
+// every lease on the connection, so use a sync::exclusive_lease
+// (acquire_exclusive()) for them. Methods may be called from any number of
+// threads, but moving, reassigning, release() and the destructor must not
+// run while another thread is inside a method. A lease may outlive its
+// sync::client (its connection is then closed: cond::connection_lost) and
+// keeps the I/O thread alive. On the I/O thread, release() and the
+// destructor return the connection without waiting, but must not end the
+// last owner of the I/O thread (std::terminate()). Move-only; not
+// [[nodiscard]] as a class since it comes inside a result.
 template<bool Exclusive> class basic_lease : public detail::connection_api<basic_lease<Exclusive>>
 {
   public:
@@ -574,37 +539,22 @@ using exclusive_lease = basic_lease<true>;
 extern template class basic_lease<false>;
 extern template class basic_lease<true>;
 
-// The blocking ldap::client (client.hpp): a bounded pool of multiplexed
-// connections to a list of servers, with failover, backoff, a session
-// setup and the forwarders' retries, all as ldap::client's.
+// The blocking ldap::client (client.hpp), with ldap::client's pool,
+// failover, backoff, session setup and retries. It owns an io_context and
+// one I/O thread where the ldap::client, the setup and the observer's hooks
+// run. acquire() and the forwarders block the caller and may be called from
+// any number of threads. close() may be called from any thread, the I/O
+// thread included; waiting acquire() calls then fail with not_connected.
 //
-// It owns an io_context and one I/O thread, where the ldap::client lives:
-// the session setup, the observer's hooks and the connections all run
-// there. acquire() and the forwarders block the calling thread; any
-// number of threads may call them at once (the pool then shares or opens
-// connections as ldap::client::acquire() does). close() may be called from
-// any thread, the I/O thread included, e.g. while other threads wait in
-// acquire(): they then fail with not_connected.
+// Lifetime: the destructor closes the ldap::client on the I/O thread, lets
+// the unbinds run, and joins it, unless leases or their transactions are
+// still alive: the last of them joins it (their operations fail from then
+// on). The memory resource must outlive the I/O thread; the observer need
+// only outlive close(). Do not destroy a sync::client while another thread
+// is inside one of its methods, nor as the last owner of the I/O thread on
+// that thread (std::terminate() with a message on stderr).
 //
-// Lifetime: the destructor closes the ldap::client on the I/O thread
-// (client::close(): idle connections are unbound, leased ones closed, the
-// attempts in progress stopped), then lets the I/O thread run out of
-// work, which the unbinds are, and joins it, unless leases or
-// transactions made by leases are still alive: those keep the I/O thread
-// (and the closed ldap::client) until the last of them is released or
-// destroyed, which joins it (see sync::lease). So destroying a
-// sync::client with leases outstanding is safe, and their operations fail
-// from then on. The memory resource must outlive the I/O thread (the
-// client, its last lease and their transactions); the observer
-// (client_options::observer) need only outlive close(), the destructor's
-// at the latest. Do not destroy a sync::client while another thread is
-// inside one of its methods, nor on its I/O thread unless a lease (or a
-// transaction made by one) outlives it there: the last owner of the I/O
-// thread destroyed on it would join itself, and std::terminate() is
-// called with a message on stderr.
-//
-// No search_stream(): as sync::connection, the facade has no blocking
-// stream; use search(), or sync::search_paged().
+// No search_stream(): use search() or sync::search_paged().
 class client
 {
   public:

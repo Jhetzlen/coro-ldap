@@ -1,36 +1,26 @@
-// Cancelling an operation from a coroutine: raceable() for
-// capy::when_any, with_stop() for a std::stop_source of your own. Works with
-// any task returning ldap::result<T>, ldap::connection's operations
-// (connection.hpp) in particular. Part of jhetz::ldap_net (header-only, on
-// Capy).
+// Cancelling an operation from a coroutine: raceable() for capy::when_any,
+// with_stop() for a std::stop_source of your own. Works with any task
+// returning ldap::result<T>. Part of jhetz::ldap_net (header-only, on Capy).
 //
-// The per-operation timeout covers the common case. To give up on an
-// operation when something else happens first (a timer, Ctrl-C, a
-// capy::async_event), race it with capy::when_any through raceable(): when_any only takes awaitables returning
-// capy::results. The first to complete wins and the others are stopped, so a losing operation is abandoned (a losing
-// bind or StartTLS closes the connection):
+// Race an operation against another event (a timer, Ctrl-C, a
+// capy::async_event) with capy::when_any through raceable(); the losers are
+// stopped, so a losing operation is abandoned (a losing bind or StartTLS
+// closes the connection):
 //
 //   auto r = co_await capy::when_any(ldap::raceable(c->search(params)),
 //                                    corosio::delay(std::chrono::seconds(5)));
 //   if (r.index() == 1) use(std::get<1>(r));  // the search's result<T>, success or not
 //   else ...                                  // the delay won (2), or our task was stopped (0)
 //
-// To cancel it from a std::stop_source of your own (a "Cancel" button, a
-// parent giving up), await it with with_stop(source.get_token(), op): it then
-// stops on either that token or the awaiting task's. (capy::run(token)(op)
-// replaces the task's token instead, so stopping the task would be ignored.)
-// request_stop() may be called from any thread only while the io_context
-// uses Corosio's default locking_mode::safe: the cancellation it runs posts
-// to the connection's strand, and the operation still resumes the awaiting
-// task on that task's executor. Under locking_mode::unsafe_io and unsafe, call
-// it only on the thread running the io_context: the stop cancels socket
-// operations, which takes the per-descriptor I/O locks unsafe_io turns
-// off, and unsafe allows no post from another thread at all.
+// with_stop(source.get_token(), op) stops on either that token or the
+// awaiting task's (capy::run(token)(op) would replace the task's token).
+// request_stop() may be called from any thread only under Corosio's default
+// locking_mode::safe; under unsafe_io and unsafe, only on the thread running
+// the io_context.
 //
-// Either way the operation is cancelled as by its own timeout (see
-// "Cancellation and timeouts" in connection.hpp): it fails with
-// cond::canceled and is abandoned, or, for a bind or StartTLS, closes the
-// connection.
+// Either way the operation fails with cond::canceled and is abandoned, or,
+// for a bind or StartTLS, closes the connection (connection.hpp
+// "Cancellation and timeouts").
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -46,18 +36,13 @@
 
 namespace jhetz::ldap {
 
-// Adapts an operation for capy::when_any, which races only awaitables
-// returning capy::results: the operation's result<T> becomes the payload
-// of a capy::results with no error, so it wins the race once it completes,
-// successfully or not. If it is cancelled (it lost the race, or the awaiting
-// task was stopped) the results carry its error code instead and cannot
-// win; the operation was then abandoned, or, for a bind or StartTLS, the
-// connection closed (one stopped before it starts is not sent: nothing is
-// abandoned and the connection stays open). At the operation's index,
-// when_any's result holds the result<T>. Abandon is best effort (RFC 4511
-// section 4.11): an update (add, modify, delete, modify DN) that lost the
-// race may still have been applied by the server; re-read the entry if the
-// outcome matters.
+// Adapts an operation for capy::when_any: its result<T> becomes the payload
+// of an error-free capy::results, so it wins once it completes, successfully
+// or not. Cancelled (lost, or the awaiting task stopped), the results carry
+// its error and cannot win: the operation was abandoned, or for a bind or
+// StartTLS the connection closed; one stopped before it starts is not sent.
+// Abandon is best effort (RFC 4511 section 4.11): an update that lost may
+// still have been applied.
 template<class T> auto raceable(boost::capy::task<result<T>> op) -> boost::capy::task<boost::capy::results<result<T>>>
 {
 	result<T> r = co_await std::move(op);
@@ -68,18 +53,10 @@ template<class T> auto raceable(boost::capy::task<result<T>> op) -> boost::capy:
 	co_return boost::capy::results<result<T>>{ ec, std::move(r) };
 }
 
-// Awaits `op` with a stop token that is set when either `token` or the
-// awaiting task's own stop token is: either cancels the operation (an LDAP
-// operation then fails with cond::canceled and is abandoned, or, for a bind
-// or StartTLS, closes the connection; one stopped before it starts is not
-// sent: nothing is abandoned and the connection stays open). Abandon is best
-// effort (RFC 4511 section 4.11): a stopped update (add, modify, delete,
-// modify DN) may still have been applied by the server; re-read the entry if
-// the outcome matters.
-// A stop requested after `op` has completed has no effect. `token` may be
-// stopped from any thread only under the io_context's default
-// locking_mode::safe; under unsafe_io and unsafe, only from the thread
-// running the io_context (see the top of this header).
+// Awaits `op` with a stop token set when either `token` or the awaiting
+// task's own is: the operation is cancelled as by raceable() losing. A stop
+// after `op` completed has no effect. `token` may be stopped from any thread
+// only under locking_mode::safe (see the top of this header).
 template<class T> auto with_stop(std::stop_token token, boost::capy::task<T> op) -> boost::capy::task<T>
 {
 	std::stop_source either;

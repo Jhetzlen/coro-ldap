@@ -91,22 +91,15 @@ struct proxied_authorization
 };
 
 // Server Side Sorting (RFC 2891, OID sort_request_oid): sort the search's
-// entries by `keys`, the first one most significant. RFC 2891 section 2
-// says a server that supports the control but cannot sort SHOULD fail the
-// search if it is critical and should return the entries unsorted if not,
-// with a sort result control on the SearchResultDone, though scenario 6
-// lets the server omit that control when the search fails or returns no
-// entries; a server without sort support ignores a non-critical control
-// and sends none. A server may accept only one key. Servers deviate:
-// OpenLDAP 2.7's sssvlv fails an unsortable search with 18
-// inappropriateMatching and no sort result even when not critical, and
-// answers every multi-key sort with 2 protocolError ("decoding error") and
-// no sort result, even when not critical (libldap's own requests too). So
-// check the search's result, and treat find_sort_result() returning
-// nullopt as "not known to be sorted". sssvlv also mixes up concurrent
-// sorted paged searches on one connection (see ldap::search_paged).
-// Fails with encode_error, before anything is sent, if there are no keys or
-// a key has no attribute.
+// entries by `keys`, the first most significant. A server that cannot sort
+// may fail the search or return the entries unsorted, with or without a sort
+// result control, and may accept only one key (OpenLDAP 2.7's sssvlv fails
+// unsortable searches with inappropriateMatching and multi-key sorts with
+// protocolError, even when not critical, and mixes up concurrent sorted
+// paged searches on one connection). Check the search's result, and read
+// find_sort_result() returning nullopt as "not known to be sorted". Fails
+// with encode_error, before anything is sent, if there are no keys or a key
+// has no attribute.
 struct sort_key
 {
 	std::string attribute{};// attributeType: an attribute description
@@ -198,29 +191,22 @@ struct matched_values
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<matched_values>;
 
 // Virtual List View (draft-ietf-ldapext-ldapv3-vlv-09, OID vlv_request_oid):
-// return a window of a sorted search's entries, `before_count` entries
-// before the target entry and `after_count` after it, for a UI scrolling
-// through a large list. The search must also carry a server_side_sort
-// (section 6.1), whose first key orders the list: without one the request
-// fails with encode_error before anything is sent (a raw control with
-// sort_request_oid counts). The target is
-// - vlv_by_offset{.offset, .content_count}: the entry at offset / content
-//   count of the list, offset 1 being the first entry and offset ==
-//   content_count the last; content_count 0 means "the server's count"
-//   (section 5);
+// a window of a sorted search's entries, `before_count` before and
+// `after_count` after the target entry. The search must also carry a
+// server_side_sort (a raw sort_request_oid control counts), else
+// encode_error before anything is sent. The target is
+// - vlv_by_offset{.offset, .content_count}: offset 1 is the first entry,
+//   offset == content_count the last; content_count 0 means the server's
+//   count;
 // - vlv_greater_than_or_equal{.value}: the first entry whose primary sort
-//   key is >= value in the sort order ("typedown").
+//   key is >= value.
 // `context_id` is the contextID of the server's last response for this
-// list, returned unchanged (nullopt if it sent none). The server answers
-// with a VLV response control on the SearchResultDone (find_vlv_response):
-// the target's position, its content count and, when the search fails with
-// errc::virtual_list_view_error (76), why. search() drops those controls,
-// so read the window with search_stream(), whose controls() keep them even
-// after an error. OpenLDAP serves it with the sssvlv overlay, which keeps
-// each list's state until the connection closes and, past
-// sssvlv-maxperconn lists per connection (default 5), refuses a request
-// without a contextID it knows with busy (51): send the contextID back.
-// Fails with encode_error for a negative count or an offset below 1.
+// list (nullopt if none). The VLV response control (find_vlv_response) is on
+// the SearchResultDone, with errc::virtual_list_view_error (76) explaining
+// failures; search() drops it, so use search_stream(), whose controls() keep
+// it. OpenLDAP's sssvlv answers busy (51) past sssvlv-maxperconn lists per
+// connection unless the request carries a known contextID. Fails with
+// encode_error for a negative count or an offset below 1.
 struct vlv_by_offset
 {
 	std::int32_t offset = 1;// INTEGER (1 .. maxInt)
