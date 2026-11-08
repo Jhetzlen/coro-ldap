@@ -20,8 +20,9 @@
 // stops on either that token or the awaiting task's. (capy::run(token)(op)
 // replaces the task's token instead, so stopping the task would be ignored.)
 // request_stop() may be called from any thread only while the io_context
-// uses Corosio's default locking_mode::safe; the operation still completes on
-// the connection's executor. Under locking_mode::unsafe_io and unsafe, call
+// uses Corosio's default locking_mode::safe: the cancellation it runs posts
+// to the connection's strand, and the operation still resumes the awaiting
+// task on that task's executor. Under locking_mode::unsafe_io and unsafe, call
 // it only on the thread running the io_context: the stop cancels socket
 // operations, which takes the per-descriptor I/O locks unsafe_io turns
 // off, and unsafe allows no post from another thread at all.

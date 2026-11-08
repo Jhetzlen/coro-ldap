@@ -152,7 +152,7 @@ void reset(corosio::io_context &ioc, const ldap::dn &who, const std::string &pas
 TEST_CASE("samba ad: ad::change_password and ad::reset_password", "[samba_ad][password]")
 {
 	require_samba();
-	corosio::io_context ioc;
+	draining_context ioc;
 	const bool start_tls = GENERATE(false, true);
 	CAPTURE(start_tls);
 
@@ -257,7 +257,7 @@ TEST_CASE("samba ad: ad::change_password and ad::reset_password", "[samba_ad][pa
 TEST_CASE("samba ad: a password change on plain ldap:// is refused before sending", "[samba_ad][password]")
 {
 	require_samba();
-	corosio::io_context ioc;
+	draining_context ioc;
 	reset(ioc, pwchange, "Plain-Passw0rd");
 	auto c = open(ioc, strict_ldap());
 	auto r = finish(ioc, ldap::ad::reset_password(c, pwchange, "Never-Passw0rd"));
@@ -274,7 +274,7 @@ TEST_CASE("samba ad: a password change on plain ldap:// is refused before sendin
 TEST_CASE("samba ad: ad passwords through ldap::client and the sync facade", "[samba_ad][password]")
 {
 	require_samba();
-	corosio::io_context ioc;
+	draining_context ioc;
 	SECTION("ldap::client")
 	{
 		auto u = ldap::url::parse(strict_ldaps());
@@ -308,7 +308,7 @@ TEST_CASE("samba ad: ad passwords through ldap::client and the sync facade", "[s
 TEST_CASE("samba ad: a password change over the NTLM security layer on plain ldap://", "[samba_ad][password][ntlm]")
 {
 	require_samba();
-	corosio::io_context ioc;
+	draining_context ioc;
 	SECTION("integrity and confidentiality: both seal, both accepted")
 	{
 		// Integrity negotiates signing only, but NTLM over LDAP seals once
@@ -421,7 +421,7 @@ class ntlm_wrong_binding final : public ldap::sasl_mechanism
 TEST_CASE("samba ad: sasl_ntlm binds over TLS with channel binding", "[samba_ad][ntlm]")
 {
 	require_samba();
-	corosio::io_context ioc;
+	draining_context ioc;
 	const bool start_tls = GENERATE(false, true);
 	CAPTURE(start_tls);
 	// The strict DC: channel bindings required over TLS.
@@ -481,7 +481,7 @@ TEST_CASE("samba ad: sasl_ntlm binds over TLS with channel binding", "[samba_ad]
 TEST_CASE("samba ad: sasl_ntlm channel binding policy", "[samba_ad][ntlm]")
 {
 	require_samba();
-	corosio::io_context ioc;
+	draining_context ioc;
 	const bool start_tls = GENERATE(false, true);
 	CAPTURE(start_tls);
 	// A refused binding is invalidCredentials with SEC_E_BAD_BINDINGS
@@ -539,7 +539,7 @@ TEST_CASE("samba ad: sasl_ntlm channel binding policy", "[samba_ad][ntlm]")
 TEST_CASE("samba ad: sasl_ntlm without a security layer on plain ldap://", "[samba_ad][ntlm]")
 {
 	require_samba();
-	corosio::io_context ioc;
+	draining_context ioc;
 	SECTION("require_tls (the default): refused before anything is sent")
 	{
 		auto c = open(ioc, strict_ldap());
@@ -755,7 +755,7 @@ TEST_CASE("samba ad: the NTLM security layer on plain ldap://, entries over 128 
 	// sealed on the wire.
 	const auto protection = GENERATE(ldap::sasl_protection::integrity, ldap::sasl_protection::confidentiality);
 	CAPTURE(protection);
-	corosio::io_context ioc;
+	draining_context ioc;
 	// The strict DC: on plain ldap:// only a signed or sealed bind.
 	recording_relay relay(ioc, port_of(strict_ldap()));
 	auto c = open(ioc, relay.url());
@@ -894,7 +894,7 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 {
 	require_samba();
 	using enum ldap::ad::user_account_control;
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_bound(ioc, false, administrator, administrator_password);
 
 	const ldap::ad::sid dom = domain_sid(ioc, c);
@@ -978,7 +978,7 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 TEST_CASE("samba ad: ad::show_deleted finds a deleted user's tombstone", "[samba_ad][show_deleted]")
 {
 	require_samba();
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_bound(ioc, false, administrator, administrator_password);
 	const ldap::dn doomed{ "CN=coro-deleted,CN=Users,DC=coro,DC=test" };
 	(void)finish(ioc, c.del({ .entry = doomed }));

@@ -120,6 +120,23 @@ template<class T> void spawn(corosio::io_context &ioc, capy::task<T> t, outcome<
 	}
 }
 
+// spawn() on `ex` (a connection's strand, say) instead of the io_context's
+// executor.
+template<class Ex, class T> void spawn_on(const Ex &ex, capy::task<T> t, outcome<T> &out)
+{
+	if constexpr (std::is_void_v<T>) {
+		capy::run_async(
+		  ex,
+		  [s = out.state] { s->finished = true; },
+		  [s = out.state](std::exception_ptr e) { s->error = std::move(e); })(std::move(t));
+	} else {
+		capy::run_async(
+		  ex,
+		  [s = out.state](T v) { s->value.emplace(std::move(v)); },
+		  [s = out.state](std::exception_ptr e) { s->error = std::move(e); })(std::move(t));
+	}
+}
+
 // spawn() with a stop token, to cancel the task from the test.
 template<class T> void spawn(corosio::io_context &ioc, std::stop_token st, capy::task<T> t, outcome<T> &out)
 {
@@ -153,6 +170,41 @@ template<class Pred> void drive_until(corosio::io_context &ioc, Pred done)
 	const auto deadline = std::chrono::steady_clock::now() + io_limit;
 	while (!done() && ioc.run_one_until(deadline) != 0) {}
 	ioc.restart();
+}
+
+// An io_context whose destructor first runs the work that is ready, as the
+// cleanups that destructors and close() post when called off a connection's
+// strand: tests that drive it with drive_until() or finish() and then let
+// their connections and streams go out of scope leave such work behind.
+class draining_context : public corosio::io_context
+{
+  public:
+	draining_context() = default;
+	draining_context(const draining_context &) = delete;
+	auto operator=(const draining_context &) -> draining_context & = delete;
+	draining_context(draining_context &&) = delete;
+	auto operator=(draining_context &&) -> draining_context & = delete;
+	~draining_context()
+	{
+		constexpr int rounds = 1000;
+		restart();
+		for (int i = 0; i < rounds && poll() != 0; ++i) {}
+	}
+};
+
+// Calls `f` on `strand` (a connection's or a client's executor), as code
+// running there does, and returns once it has: destructors and close()
+// called there take effect at once, where called off it they post their
+// work.
+template<class Strand, class F> void run_on(corosio::io_context &ioc, const Strand &strand, F f)
+{
+	bool done = false;
+	capy::run_async(strand)([](F &g, bool &finished) -> capy::task<void> {
+		g();
+		finished = true;
+		co_return;
+	}(f, done));
+	drive_until(ioc, [&done] { return done; });
 }
 
 // Runs one task to completion and returns its result, after running `ioc`

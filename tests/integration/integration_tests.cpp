@@ -253,7 +253,7 @@ TEST_CASE("integration: every transport", "[integration]")
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	SECTION("ldap://")
 	{
 		auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
@@ -287,7 +287,7 @@ TEST_CASE("integration: bind success and failure", "[integration]")
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	auto bad = finish(ioc, c.simple_bind(admin, "wrong"));
 	REQUIRE_FALSE(bad.has_value());
@@ -302,7 +302,7 @@ TEST_CASE("integration: SASL EXTERNAL", "[integration][sasl]")
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	SECTION("over ldapi:// (peer credentials)")
 	{
 		auto c = open(ioc, env("JHETZ_LDAP_IT_LDAPI"));
@@ -329,7 +329,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	// slapd offers SCRAM-SHA-256 only with cyrus-sasl's scram plugin installed.
 	auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedSASLMechanisms" })));
@@ -427,7 +427,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256-PLUS (channel binding)", "[integratio
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	// run_slapd.sh sets "sasl-cbinding tls-endpoint": slapd then offers
 	// SCRAM-SHA-256-PLUS over TLS, with tls-server-end-point in OpenLDAP's
 	// own form ("p=ldap", data "tls-server-end-point:<hash>"), not RFC
@@ -504,7 +504,7 @@ TEST_CASE("integration: SCRAM-SHA-256-PLUS with an Ed25519 server certificate",
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	// RFC 5929 has no tls-server-end-point for Ed25519; OpenLDAP (and so
 	// scram_channel_binding_form::openldap) hashes it with SHA-256.
 	const server_certificate_swapped swapped(
@@ -541,7 +541,7 @@ TEST_CASE("integration: plain, streaming and paged searches", "[integration]")
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	const ldap::search_params all_users{ .base = people,
 		.filter = ldap::filters::attr("objectClass") == "posixAccount",
@@ -630,7 +630,7 @@ TEST_CASE("integration: a paged search stopped between pages sends a release", "
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto u = env("JHETZ_LDAP_IT_LDAP");
 	u.replace(u.find("127.0.0.1"), 9, "localhost");// the certificate's name, for StartTLS
 	auto c = open(ioc, u);
@@ -663,6 +663,7 @@ TEST_CASE("integration: a paged search stopped between pages sends a release", "
 		}
 		drive_until(ioc, [&c] { return c.outstanding() == 0; });
 		CHECK(p->pages() == 1);
+		run_on(ioc, c.executor(), [&p] { *p = ldap::paged_search{}; });
 	}
 	CHECK(c.outstanding() == 1);// the release
 	REQUIRE(finish(ioc, c.start_tls(trusting().tls)).has_value());
@@ -678,7 +679,7 @@ TEST_CASE("integration: large and binary values", "[integration]")
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAPS"));
 	auto big = finish(ioc,
 	  c.search({ .base = ldap::dn{ "cn=big,ou=groups,dc=example,dc=org" }, .scope = ldap::search_scope::base_object }));
@@ -726,7 +727,7 @@ TEST_CASE("integration: typed search with the server's schema", "[integration][m
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"), trusting());
 	auto s = finish(ioc, ldap::load_schema(c));
 	REQUIRE(s.has_value());
@@ -751,7 +752,7 @@ TEST_CASE("integration: add, modify, compare, rename and delete", "[integration]
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_admin(ioc);
 	const std::string name = unique("it");
 	const ldap::dn entry = *ldap::dn::parse("uid=" + name + ",ou=people,dc=example,dc=org");
@@ -797,7 +798,7 @@ TEST_CASE("integration: modify DN to another OU and back, then rename", "[integr
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_admin(ioc);
 	const std::string name = unique("mv");
 	const ldap::dn groups{ "ou=groups,dc=example,dc=org" };
@@ -843,7 +844,7 @@ TEST_CASE("integration: assertion and pre/post-read controls", "[integration][co
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_admin(ioc);
 	const std::string name = unique("ctl");
 	const ldap::dn entry = *ldap::dn::parse("uid=" + name + ",ou=people,dc=example,dc=org");
@@ -920,7 +921,7 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_admin(ioc);
 	const auto person = [](const std::string &uid) -> ldap::add_params {
 		return { .entry = *ldap::dn::parse("uid=" + uid + ",ou=people,dc=example,dc=org"),
@@ -1025,7 +1026,7 @@ TEST_CASE("integration: matched values", "[integration][controls]")
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_admin(ioc);
 	using ldap::filters::attr;
 
@@ -1091,7 +1092,7 @@ TEST_CASE("integration: the relax rules control", "[integration][controls]")
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_admin(ioc);
 	const std::string name = unique("relax");
 	const ldap::dn entry = *ldap::dn::parse("uid=" + name + ",ou=people,dc=example,dc=org");
@@ -1128,7 +1129,7 @@ TEST_CASE("integration: server side sort", "[integration][controls]")
 	if (env("JHETZ_LDAP_IT_SORT").empty()) {
 		SKIP("slapd without the sssvlv overlay");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_admin(ioc);
 	auto s = finish(ioc,
 	  c.search_stream({ .base = people,
@@ -1240,7 +1241,7 @@ TEST_CASE("integration: virtual list view", "[integration][controls]")
 	if (env("JHETZ_LDAP_IT_SORT").empty()) {
 		SKIP("slapd without the sssvlv overlay");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_admin(ioc);
 	using uids = std::vector<std::string>;
 	std::optional<std::string> context;
@@ -1434,7 +1435,7 @@ TEST_CASE("integration: content synchronization (RFC 4533)", "[integration][cont
 	if (env("JHETZ_LDAP_IT_SYNCREPL").empty()) {
 		SKIP("slapd without the syncprov overlay");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_admin(ioc);
 	const std::string name = unique("sync");
 	const ldap::dn base = *ldap::dn::parse("ou=" + name + ",dc=example,dc=org");
@@ -1557,7 +1558,7 @@ TEST_CASE("integration: concurrent paged searches with and without sorting", "[i
 	if (env("JHETZ_LDAP_IT_SORT").empty()) {
 		SKIP("slapd without the sssvlv overlay");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 
 	SECTION("unsorted on one connection: the older search's cookie is refused")
 	{
@@ -1645,7 +1646,7 @@ TEST_CASE("integration: password modify (RFC 3062)", "[integration]")
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_admin(ioc);
 	const std::string name = unique("pw");
 	const std::string who = "uid=" + name + ",ou=people,dc=example,dc=org";
@@ -1691,7 +1692,7 @@ TEST_CASE("integration: change_password and reset_password (RFC 3062)", "[integr
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open_admin(ioc);
 	const std::string name = unique("pwc");
 	const ldap::dn entry = *ldap::dn::parse("uid=" + name + ",ou=people,dc=example,dc=org");
@@ -1877,7 +1878,7 @@ TEST_CASE("integration: cancellation mid-search", "[integration]")
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	{
 		auto s = finish(ioc, c.search_stream({ .base = people }));
@@ -1983,7 +1984,7 @@ TEST_CASE("integration: a broken server answer closes the connection", "[integra
 	for (const auto &c : cases) {
 		DYNAMIC_SECTION(c.name)
 		{
-			corosio::io_context ioc;
+			draining_context ioc;
 			corosio::tcp_acceptor acc(ioc, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 4);
 			outcome<void> p;
 			spawn(ioc, proxy(ioc, acc, *server->port(), c.f), p);
@@ -2111,7 +2112,7 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 	}
 	const auto server = ldap::url::parse(env("JHETZ_LDAP_IT_LDAP"));
 	REQUIRE(server.has_value());
-	corosio::io_context ioc;
+	draining_context ioc;
 	ldap::client pool(
 	  ioc, { .servers = { *server }, .connection = trusting(), .setup = ldap::simple_bind_setup(admin, "secret") });
 	const std::string name = unique("pool");
@@ -2193,7 +2194,7 @@ TEST_CASE("integration: ldap::store over ldap::client", "[integration][client][s
 	}
 	const auto server = ldap::url::parse(env("JHETZ_LDAP_IT_LDAP"));
 	REQUIRE(server.has_value());
-	corosio::io_context ioc;
+	draining_context ioc;
 	ldap::client pool(
 	  ioc, { .servers = { *server }, .connection = trusting(), .setup = ldap::simple_bind_setup(admin, "secret") });
 	ldap::store s(pool, people, ldap::named_by<&staff::uid>, { .schema_check = ldap::schema_check::on_first_use });
@@ -2227,7 +2228,7 @@ TEST_CASE("integration: ldap::client replaces a connection the server dropped", 
 	}
 	const auto server = ldap::url::parse(env("JHETZ_LDAP_IT_LDAP"));
 	REQUIRE(server.has_value());
-	corosio::io_context ioc;
+	draining_context ioc;
 	relay r(ioc, *server->port());
 	{
 		auto u = ldap::url::parse(r.url());
@@ -2258,3 +2259,4 @@ TEST_CASE("integration: ldap::client replaces a connection the server dropped", 
 	r.shut_down();
 	drive(ioc);
 }
+

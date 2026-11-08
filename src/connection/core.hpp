@@ -11,12 +11,14 @@
 
 #include "../net/deadline.hpp"
 #include "../scope_util.hpp"
+#include "../strand_util.hpp"
 
 #include <boost/capy/ex/async_event.hpp>
 #include <boost/capy/task.hpp>
 #include <boost/corosio/io_context.hpp>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -127,18 +129,15 @@ namespace detail {
 class connection::core
 {
   public:
-	core(boost::corosio::io_context &ioc,
-	  net::transport t,
-	  const connection_options &options,
-	  std::pmr::memory_resource *memory);
+	core(executor_type strand, net::transport t, const connection_options &options, std::pmr::memory_resource *memory);
 
 	// ---------------------------------------------------------------- refs
 
-	// Inline: core_ref copies call them from every module.
-	void add_ref() noexcept { ++refs; }
+	// Inline: core_ref copies call them from every module, on any thread.
+	void add_ref() noexcept { refs.fetch_add(1, std::memory_order_relaxed); }
 	void release() noexcept
 	{
-		if (--refs != 0) {
+		if (refs.fetch_sub(1, std::memory_order_acq_rel) != 1) {
 			return;
 		}
 		std::pmr::polymorphic_allocator<> alloc(mr_);
@@ -147,7 +146,7 @@ class connection::core
 
 	// ---------------------------------------------------------------- configuration
 
-	auto executor() const noexcept -> boost::corosio::io_context::executor_type { return ex; }
+	auto executor() const noexcept -> const executor_type & { return ex; }
 	auto mr() const noexcept -> std::pmr::memory_resource * { return mr_; }
 	auto transport() const noexcept -> const net::transport & { return transport_; }
 	auto default_timeout() const noexcept -> std::optional<std::chrono::milliseconds> { return default_timeout_; }
@@ -158,6 +157,36 @@ class connection::core
 
 	// detail::set_close_hook: `hook` runs once, when shut() closes the connection.
 	void set_close_hook(std::move_only_function<void() noexcept> hook) noexcept { close_hook = std::move(hook); }
+
+	// ---------------------------------------------------------------- snapshots
+
+	// The state as of the strand's last change, for the connection's
+	// accessors on any thread.
+	auto published_open() const noexcept -> bool { return open_snapshot.load(std::memory_order_acquire); }
+	auto published_accepts_requests() const noexcept -> bool
+	{
+		return accepting_snapshot.load(std::memory_order_acquire);
+	}
+	auto published_tls() const noexcept -> bool { return tls_snapshot.load(std::memory_order_acquire); }
+	auto published_security_layer() const noexcept -> sasl_protection
+	{
+		return layer_snapshot.load(std::memory_order_acquire);
+	}
+	auto published_outstanding() const noexcept -> std::size_t
+	{
+		return outstanding_snapshot.load(std::memory_order_relaxed);
+	}
+	auto published_bind_count() const noexcept -> std::uint64_t
+	{
+		return binds_snapshot.load(std::memory_order_relaxed);
+	}
+
+	// Updates the snapshots: called on the strand after each change.
+	void publish() noexcept;
+
+	// connection::close() from any thread: at once on the strand, else
+	// posted to it (is_open() is false from now on).
+	void request_close() noexcept;
 
 	// ---------------------------------------------------------------- state
 
@@ -266,6 +295,7 @@ class connection::core
 	// A stream's state (null for a default-constructed or moved-from one).
 	static auto stream_state(ldap::search_stream &s) noexcept -> search_stream::state * { return s.state_; }
 	static auto make_paged(paged_search::state *s) noexcept -> ldap::paged_search;
+	static auto make_transaction(transaction::state *s) noexcept -> ldap::transaction { return ldap::transaction(s); }
 	// A paged search's state (null for a default-constructed or moved-from one).
 	static auto paged_state(ldap::paged_search &p) noexcept -> paged_search::state * { return p.state_; }
 
@@ -313,7 +343,11 @@ class connection::core
 	[[nodiscard]] auto upgrade_scope() noexcept
 	{
 		upgrading = true;
-		return detail::scope_exit{ [this] noexcept { upgrading = false; } };
+		publish();
+		return detail::scope_exit{ [this] noexcept {
+			upgrading = false;
+			publish();
+		} };
 	}
 
 	// Waits until the writer, then the reader, is idle. Not cancellable (it
@@ -343,9 +377,15 @@ class connection::core
 	auto finish_unbind() -> boost::capy::task<std::optional<error>>;
 
   private:
-	boost::corosio::io_context::executor_type ex;
+	executor_type ex;
 	std::pmr::memory_resource *mr_;
-	std::size_t refs = 1;
+	std::atomic<std::size_t> refs = 1;
+	std::atomic<bool> open_snapshot = true;
+	std::atomic<bool> accepting_snapshot = true;
+	std::atomic<bool> tls_snapshot = false;
+	std::atomic<sasl_protection> layer_snapshot = sasl_protection::none;
+	std::atomic<std::size_t> outstanding_snapshot = 0;
+	std::atomic<std::uint64_t> binds_snapshot = 0;
 	net::transport transport_;
 	net::read_buffer buf;
 	std::size_t max_message_size;
@@ -595,10 +635,31 @@ namespace detail {
 		}
 		auto operator->() const noexcept -> connection::core * { return p_; }
 		auto operator*() const noexcept -> connection::core & { return *p_; }
+		explicit operator bool() const noexcept { return p_ != nullptr; }
 
 	  private:
 		connection::core *p_ = nullptr;
 	};
+
+}// namespace detail
+
+namespace detail {
+
+	// Runs `body` on the connection's strand (on_strand in strand_util.hpp);
+	// a null `self` (no connection) runs it inline.
+	template<class T> auto on_strand(const core_ref &self, boost::capy::task<T> body) -> boost::capy::task<T>
+	{
+		if (!self) {
+			return body;
+		}
+		return detail::on_strand(self->executor(), std::move(body));
+	}
+
+	// Runs `f` on `c`'s strand (run_on_strand in strand_util.hpp).
+	template<class F> void run_on_strand(connection::core &c, F f) noexcept
+	{
+		detail::run_on_strand(c.executor(), std::move(f));
+	}
 
 }// namespace detail
 

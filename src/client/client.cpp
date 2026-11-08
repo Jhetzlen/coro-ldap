@@ -7,6 +7,7 @@
 #include "../format_util.hpp"
 #include "../net/deadline.hpp"
 #include "../scope_util.hpp"
+#include "../strand_util.hpp"
 
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
@@ -16,6 +17,7 @@
 #include <boost/corosio/timeout.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -162,7 +164,7 @@ namespace detail {
 	struct client_state
 	{
 		client_state(corosio::io_context &io, client_options o, std::pmr::memory_resource *memory)
-		  : ioc(&io), options(std::move(o)), mr(memory), rng(std::random_device{}())
+		  : ioc(&io), strand(io.get_executor()), options(std::move(o)), mr(memory), rng(std::random_device{}())
 		{
 			servers.reserve(options.servers.size());
 			for (const auto &u : options.servers) {
@@ -176,12 +178,15 @@ namespace detail {
 		}
 
 		corosio::io_context *ioc;
+		// Everything below is used on it.
+		client::executor_type strand;
 		client_options options;
 		std::pmr::memory_resource *mr;
 		std::vector<server_state> servers{};
 		// The first entry of options.servers check_server() refuses.
 		std::optional<error> bad_server{};
 		std::vector<std::shared_ptr<pooled_connection>> pool{};
+		std::atomic<std::size_t> pool_size = 0;// pool.size(), for client::connections() on any thread
 		std::size_t opening = 0;// connection attempts in progress (they count against max_connections)
 		// Their stop sources (copies share the stop state): close() stops them.
 		std::vector<std::stop_source> attempts{};
@@ -203,6 +208,7 @@ namespace detail {
 
 		void notify() noexcept
 		{
+			pool_size.store(pool.size(), std::memory_order_relaxed);
 			++version;
 			changed.set();
 		}
@@ -722,8 +728,9 @@ namespace detail {
 		static void watch_close(const std::shared_ptr<client_state> &self, connection &c) noexcept
 		{
 			detail::set_close_hook(c, [state = std::weak_ptr<client_state>(self)] noexcept {
-				if (const auto s = state.lock()) {
-					s->notify();
+				if (auto s = state.lock()) {
+					const client::executor_type strand = s->strand;
+					detail::run_on_strand(strand, [s = std::move(s)] noexcept { s->notify(); });
 				}
 			});
 		}
@@ -759,6 +766,7 @@ namespace detail {
 			p->exclusive = exclusive;
 			watch_close(self, p->conn);
 			self->pool.push_back(p);
+			self->pool_size.store(self->pool.size(), std::memory_order_relaxed);
 			if (auto *o = self->observer()) {
 				o->on_connect(self->servers[i].address, result<void>{});
 			}
@@ -1429,7 +1437,9 @@ namespace detail {
 		if (conn_ == nullptr) {
 			return;
 		}
-		state_->release(conn_);
+		const client::executor_type strand = state_->strand;
+		detail::run_on_strand(
+		  strand, [state = std::move(state_), conn = std::move(conn_)] noexcept { state->release(conn); });
 		conn_.reset();
 		state_.reset();
 	}
@@ -1462,7 +1472,7 @@ auto client::operator=(client &&other) noexcept -> client &
 
 client::~client() { close(); }
 
-auto client::executor() const noexcept -> executor_type { return state_->ioc->get_executor(); }
+auto client::executor() const noexcept -> executor_type { return state_->strand; }
 
 namespace {
 
@@ -1479,7 +1489,7 @@ auto client::acquire() -> capy::task<result<lease>>
 	if (state_ == nullptr) {
 		return acquire_refused<lease>();
 	}
-	return detail::client_state::acquire<lease>(state_);
+	return detail::on_strand(state_->strand, detail::client_state::acquire<lease>(state_));
 }
 
 auto client::acquire_exclusive() -> capy::task<result<exclusive_lease>>
@@ -1487,7 +1497,7 @@ auto client::acquire_exclusive() -> capy::task<result<exclusive_lease>>
 	if (state_ == nullptr) {
 		return acquire_refused<exclusive_lease>();
 	}
-	return detail::client_state::acquire<exclusive_lease>(state_);
+	return detail::on_strand(state_->strand, detail::client_state::acquire<exclusive_lease>(state_));
 }
 
 namespace {
@@ -1506,10 +1516,12 @@ auto client::search(search_params request, std::pmr::memory_resource *mr) -> cap
 		return read_refused<search_result>(detail::op_context("search", request.base));
 	}
 	if (state_->chases()) {
-		return detail::client_state::entries_of(detail::client_state::chase_search(state_, std::move(request), mr));
+		return detail::on_strand(state_->strand,
+		  detail::client_state::entries_of(detail::client_state::chase_search(state_, std::move(request), mr)));
 	}
-	return detail::client_state::read<search_result>(
-	  state_, [request = std::move(request), mr](const lease &held) { return held->search(request, mr); });
+	return detail::on_strand(state_->strand,
+	  detail::client_state::read<search_result>(
+		state_, [request = std::move(request), mr](const lease &held) { return held->search(request, mr); }));
 }
 
 auto client::search_stream(search_params request, std::pmr::memory_resource *mr)
@@ -1518,7 +1530,7 @@ auto client::search_stream(search_params request, std::pmr::memory_resource *mr)
 	if (state_ == nullptr) {
 		return read_refused<ldap::search_stream>(detail::op_context("search", request.base));
 	}
-	return detail::client_state::read_stream(state_, std::move(request), mr);
+	return detail::on_strand(state_->strand, detail::client_state::read_stream(state_, std::move(request), mr));
 }
 
 auto client::compare(compare_params request) -> capy::task<result<bool>>
@@ -1527,10 +1539,12 @@ auto client::compare(compare_params request) -> capy::task<result<bool>>
 		return read_refused<bool>(detail::op_context("compare", request.entry));
 	}
 	if (state_->chases()) {
-		return detail::client_state::answer_of(detail::client_state::chase_compare(state_, std::move(request)));
+		return detail::on_strand(state_->strand,
+		  detail::client_state::answer_of(detail::client_state::chase_compare(state_, std::move(request))));
 	}
-	return detail::client_state::read<bool>(
-	  state_, [request = std::move(request)](const lease &held) { return held->compare(request); });
+	return detail::on_strand(state_->strand,
+	  detail::client_state::read<bool>(
+		state_, [request = std::move(request)](const lease &held) { return held->compare(request); }));
 }
 
 auto client::chase_search(search_params request, std::pmr::memory_resource *mr) -> capy::task<result<chased_search>>
@@ -1538,7 +1552,7 @@ auto client::chase_search(search_params request, std::pmr::memory_resource *mr) 
 	if (state_ == nullptr) {
 		return read_refused<chased_search>(detail::op_context("search", request.base));
 	}
-	return detail::client_state::chase_search(state_, std::move(request), mr);
+	return detail::on_strand(state_->strand, detail::client_state::chase_search(state_, std::move(request), mr));
 }
 
 auto client::chase_compare(compare_params request) -> capy::task<result<chased_compare>>
@@ -1546,7 +1560,7 @@ auto client::chase_compare(compare_params request) -> capy::task<result<chased_c
 	if (state_ == nullptr) {
 		return read_refused<chased_compare>(detail::op_context("compare", request.entry));
 	}
-	return detail::client_state::chase_compare(state_, std::move(request));
+	return detail::on_strand(state_->strand, detail::client_state::chase_compare(state_, std::move(request)));
 }
 
 auto client::add(add_params request) -> capy::task<result<response>>
@@ -1554,8 +1568,9 @@ auto client::add(add_params request) -> capy::task<result<response>>
 	if (state_ == nullptr) {
 		return read_refused<response>(detail::op_context("add", request.entry));
 	}
-	return detail::client_state::write(
-	  state_, [request = std::move(request)](const lease &held) { return held->add(request); });
+	return detail::on_strand(state_->strand,
+	  detail::client_state::write(
+		state_, [request = std::move(request)](const lease &held) { return held->add(request); }));
 }
 
 auto client::modify(modify_params request) -> capy::task<result<response>>
@@ -1563,8 +1578,9 @@ auto client::modify(modify_params request) -> capy::task<result<response>>
 	if (state_ == nullptr) {
 		return read_refused<response>(detail::op_context("modify", request.object));
 	}
-	return detail::client_state::write(
-	  state_, [request = std::move(request)](const lease &held) { return held->modify(request); });
+	return detail::on_strand(state_->strand,
+	  detail::client_state::write(
+		state_, [request = std::move(request)](const lease &held) { return held->modify(request); }));
 }
 
 auto client::del(del_params request) -> capy::task<result<response>>
@@ -1572,8 +1588,9 @@ auto client::del(del_params request) -> capy::task<result<response>>
 	if (state_ == nullptr) {
 		return read_refused<response>(detail::op_context("delete", request.entry));
 	}
-	return detail::client_state::write(
-	  state_, [request = std::move(request)](const lease &held) { return held->del(request); });
+	return detail::on_strand(state_->strand,
+	  detail::client_state::write(
+		state_, [request = std::move(request)](const lease &held) { return held->del(request); }));
 }
 
 auto client::modify_dn(modify_dn_params request) -> capy::task<result<response>>
@@ -1581,8 +1598,9 @@ auto client::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 	if (state_ == nullptr) {
 		return read_refused<response>(detail::op_context("modify DN", request.entry));
 	}
-	return detail::client_state::write(
-	  state_, [request = std::move(request)](const lease &held) { return held->modify_dn(request); });
+	return detail::on_strand(state_->strand,
+	  detail::client_state::write(
+		state_, [request = std::move(request)](const lease &held) { return held->modify_dn(request); }));
 }
 
 auto client::extended(extended_params request) -> capy::task<result<extended_result>>
@@ -1590,16 +1608,21 @@ auto client::extended(extended_params request) -> capy::task<result<extended_res
 	if (state_ == nullptr) {
 		return read_refused<extended_result>("extended operation " + request.name);
 	}
-	return detail::client_state::write<extended_result>(
-	  state_, [request = std::move(request)](const lease &held) { return held->extended(request); });
+	return detail::on_strand(state_->strand,
+	  detail::client_state::write<extended_result>(
+		state_, [request = std::move(request)](const lease &held) { return held->extended(request); }));
 }
 
-auto client::connections() const noexcept -> std::size_t { return state_ == nullptr ? 0 : state_->pool.size(); }
+auto client::connections() const noexcept -> std::size_t
+{
+	return state_ == nullptr ? 0 : state_->pool_size.load(std::memory_order_relaxed);
+}
 
 void client::close() noexcept
 {
 	if (state_ != nullptr) {
-		state_->close();
+		const executor_type strand = state_->strand;
+		detail::run_on_strand(strand, [state = state_] noexcept { state->close(); });
 	}
 }
 

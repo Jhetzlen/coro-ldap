@@ -74,7 +74,7 @@ void require_kerberos()
 	if (env("JHETZ_LDAP_IT_LDAP").empty() || env("JHETZ_LDAP_IT_KRB5_REALM").empty()) {
 		SKIP("no slapd and KDC: run under run_kdc.sh run_slapd.sh");
 	}
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 	auto dse = finish(ioc, c.search(ldap::root_dse({ "supportedSASLMechanisms" })));
 	REQUIRE(dse.has_value());
@@ -154,7 +154,7 @@ class sasl_secprops
 TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 {
 	require_kerberos();
-	corosio::io_context ioc;
+	draining_context ioc;
 
 	SECTION("default credentials, target ldap@<the URL's host>")
 	{
@@ -238,7 +238,7 @@ TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 TEST_CASE("integration: SASL GSSAPI with a server that requires a security layer", "[integration][sasl][gssapi]")
 {
 	require_kerberos();
-	corosio::io_context ioc;
+	draining_context ioc;
 	// minssf=1: over plain LDAP slapd offers integrity and confidentiality
 	// only; over TLS, TLS provides the strength, and "no layer" is offered.
 	const sasl_secprops secprops(ioc, "noanonymous,noplain,minssf=1");
@@ -297,7 +297,7 @@ TEST_CASE("integration: SASL GSSAPI with a server that requires a security layer
 TEST_CASE("integration: SASL GSSAPI security layers with slapd's default policy", "[integration][sasl][gssapi]")
 {
 	require_kerberos();
-	corosio::io_context ioc;
+	draining_context ioc;
 	auto c = open(ioc, localhost_url());
 	ldap::sasl_gssapi mech({ .security_layer = ldap::gssapi_security_layer::best_offered });
 	CHECK(bind_and_who(ioc, c, mech) == user007);

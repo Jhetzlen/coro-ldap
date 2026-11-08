@@ -124,14 +124,6 @@ struct breakable_stream
 
 // Destroys `t` inside a coroutine on the connection's io_context, where
 // the writer an abort starts runs inline.
-auto destroy_on_context(ldap::transaction t) -> capy::task<void>
-{
-	{
-		const ldap::transaction gone = std::move(t);
-	}
-	co_return;
-}
-
 }// namespace
 
 TEST_CASE("transaction: deferred updates and their response controls at commit", "[net][transaction]")
@@ -322,6 +314,7 @@ TEST_CASE("transaction: destroyed while open, it is aborted without waiting", "[
 		ldap::transaction moved = std::move(*t);
 		CHECK_FALSE(t->is_open());// moved from
 		REQUIRE(m.run(moved.add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } })).has_value());
+		run_on(m.ioc, m.conn.executor(), [&moved] { moved = ldap::transaction{}; });
 	}
 	CHECK(m.conn.outstanding() == 1);// the abort's answer is due
 	auto me = m.run(ldap::who_am_i(m.conn));
@@ -455,6 +448,7 @@ TEST_CASE("transaction: an End Transaction never sent leaves it to the destructo
 		CHECK(a.error().code == ldap::cond::canceled);
 		CHECK_FALSE(t->is_open());// settled for the API...
 		CHECK(m.log.received.size() == 1);// ...but nothing was sent
+		run_on(m.ioc, m.conn.executor(), [&t] { *t = ldap::transaction{}; });
 	}
 	// ...so the destructor still aborts it on the server.
 	CHECK(m.conn.outstanding() == 1);
@@ -564,7 +558,7 @@ TEST_CASE("transaction: destroyed while the abort's write fails inline", "[net][
 	CHECK(log.error.empty());
 
 	broken = true;
-	finish(ioc, destroy_on_context(std::move(*t)));
+	run_on(ioc, conn.executor(), [&t] { *t = ldap::transaction{}; });
 	CHECK_FALSE(conn.is_open());
 	CHECK(conn.outstanding() == 0);
 	CHECK(log.received.size() == 1);

@@ -398,9 +398,9 @@ TEST_CASE("connection: search_stream yields intermediate responses when asked", 
 
 	SECTION("next_item() returns every message in order, with its controls")
 	{
+		std::pmr::monotonic_buffer_resource arena;// outlives the stream's posted cleanup
 		mock_ldap m;
 		m.serve({ script() });
-		std::pmr::monotonic_buffer_resource arena;
 		auto params = people_search();
 		params.intermediate_responses = true;
 		auto s = m.run(m.conn.search_stream(std::move(params), &arena));
@@ -714,6 +714,7 @@ TEST_CASE("connection: a stream destroyed early abandons its search", "[net][con
 		REQUIRE(a.has_value());
 		REQUIRE(a->has_value());
 		CHECK(m.conn.outstanding() == 1);
+		run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::search_stream{}; });
 	}
 	CHECK(m.conn.outstanding() == 0);
 	auto b = m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
@@ -723,6 +724,69 @@ TEST_CASE("connection: a stream destroyed early abandons its search", "[net][con
 	REQUIRE(m.log.received.size() == 3);
 	CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
 	CHECK(m.log.received[2] == bind_request_msg(3));
+}
+
+// Off the connection's strand (here: the test's thread, the io_context not
+// running), a stream's destructor and close() post their work: it runs when
+// the io_context next runs, so the stream's memory resource must outlive
+// that run. Once the io_context is stopped, they run at once.
+TEST_CASE("connection: off the strand, a stream's destructor and close() take effect when the io_context runs",
+  "[net][connection][pmr]")
+{
+	SECTION("a stream destroyed off the strand")
+	{
+		counting_resource arena;// outlives the posted abandon, which frees the stream's queue on it
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"),
+					entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B") }),
+		  step{} });// reads the AbandonRequest
+		{
+			auto s = m.run(m.conn.search_stream(people_search(), &arena));
+			REQUIRE(s.has_value());
+			auto a = m.run(s->next());
+			REQUIRE(a.has_value());
+			REQUIRE(a->has_value());
+			drive_until(m.ioc, [&arena] { return arena.outstanding() > 0; });// B queued on the arena
+		}
+		CHECK(m.conn.outstanding() == 1);// not abandoned yet
+		CHECK(arena.outstanding() > 0);
+		CHECK(m.log.received.size() == 1);
+		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+		CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(arena.outstanding() == 0);
+		CHECK(m.conn.is_open());
+	}
+	SECTION("close() off the strand")
+	{
+		mock_ldap m;
+		m.serve({ step{}, client_hangs_up() });// reads the search, never answers
+		auto s = m.run(m.conn.search_stream(people_search()));
+		REQUIRE(s.has_value());
+		drive_until(m.ioc, [&m] { return m.log.received.size() == 1; });
+		m.conn.close();
+		CHECK_FALSE(m.conn.is_open());// at once
+		CHECK(m.conn.outstanding() == 0);
+		CHECK_FALSE(m.server.done());// the socket is closed by the posted work
+		m.sockets.client.close();// a wrapped transport leaves the socket open
+		auto e = m.run(s->next());
+		REQUIRE_FALSE(e.has_value());
+		CHECK(e.error().code == ldap::client_errc::not_connected);
+		m.check_server();
+	}
+	SECTION("once the io_context is stopped, at once")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A") }), step{} });
+		auto s = m.run(m.conn.search_stream(people_search()));
+		REQUIRE(s.has_value());
+		m.ioc.stop();
+		*s = ldap::search_stream{};
+		CHECK(m.conn.outstanding() == 0);
+		m.ioc.restart();
+		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+		CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });
+	}
 }
 
 TEST_CASE("connection: a second next() on the same stream is refused", "[net][connection]")
@@ -840,7 +904,7 @@ TEST_CASE("connection: operations on a moved-from connection", "[net][connection
 	mock_ldap m;
 	m.serve({});
 	const ldap::connection moved = std::move(m.conn);
-	CHECK(moved.executor() == m.ioc.get_executor());
+	CHECK(moved.executor().get_inner_executor() == m.ioc.get_executor());
 	ldap::connection &c = m.conn;
 	CHECK_FALSE(c.is_open());
 	CHECK(c.name().empty());
@@ -2199,6 +2263,9 @@ TEST_CASE("connection: entries live on the resource given to search", "[net][con
 {
 	counting_resource conn_mr;
 	counting_resource results;
+	// Outlives the mock: the stream's search is abandoned on the strand, by
+	// work its destructor posts, after the stream is gone.
+	std::pmr::monotonic_buffer_resource arena;
 	{
 		mock_ldap m({}, &conn_mr);
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"),
@@ -2218,7 +2285,6 @@ TEST_CASE("connection: entries live on the resource given to search", "[net][con
 		}
 		CHECK(r->entries[1] == expected_entry("uid=b,ou=people,dc=example,dc=org", "B"));
 
-		std::pmr::monotonic_buffer_resource arena;
 		auto s = m.run(m.conn.search_stream(people_search(), &arena));
 		REQUIRE(s.has_value());
 		auto c = m.run(s->next());
@@ -2456,19 +2522,25 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 	{
 		// The first bind's end posts the waiting bind's resumption
 		// (bind_idle.set() claims the waiter); the stop comes before that
-		// resumption runs, so the wait itself is not cancelled.
+		// resumption runs, so the wait itself is not cancelled. The first
+		// bind runs on the strand and requests the stop as it ends, ahead of
+		// the posted resumption.
 		mock_ldap m;
 		m.serve({ answer({ bind_resp(1) }), answer({ done_msg(2) }) });
 		outcome<ldap::result<void>> first;
 		outcome<ldap::result<void>> second;
 		std::stop_source stop;
-		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"), first);
+		capy::run_async(
+		  m.conn.executor(),
+		  [s = first.state, &stop](ldap::result<void> v) {
+			  s->value.emplace(std::move(v));
+			  stop.request_stop();
+		  },
+		  [s = first.state](std::exception_ptr e) { s->error = std::move(e); })(
+		  m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
 		spawn(m.ioc, stop.get_token(), m.conn.simple_bind(ldap::dn{}, ""), second);
-		drive_until(m.ioc, [&first] { return first.done(); });
+		drive_until(m.ioc, [&] { return first.done() && second.done(); });
 		CHECK(first.get().has_value());
-		REQUIRE_FALSE(second.done());
-		stop.request_stop();
-		drive_until(m.ioc, [&second] { return second.done(); });
 		REQUIRE_FALSE(second.get().has_value());
 		CHECK(second.get().error().code == ldap::cond::canceled);
 		CHECK(second.get().error().context == "bind \"\"");

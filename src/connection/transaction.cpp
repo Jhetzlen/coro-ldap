@@ -8,6 +8,7 @@
 #include "core.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -131,31 +132,48 @@ namespace {
 
 }// namespace
 
+namespace {
+
+	auto start_transaction_impl(core_ref self, extended_controls controls) -> capy::task<result<std::string>>
+	{
+		if (!self) {
+			co_return std::unexpected(no_connection(start_context));
+		}
+		co_return co_await start_exchange(std::move(self), std::move(controls));
+	}
+
+	auto end_transaction_impl(core_ref self, std::string identifier, bool commit)
+	  -> capy::task<result<end_transaction_result>>
+	{
+		std::string context(end_context);
+		if (!self) {
+			co_return std::unexpected(no_connection(context));
+		}
+		auto reply = co_await end_exchange(std::move(self), std::move(identifier), commit, context, nullptr);
+		if (!reply) {
+			co_return std::unexpected(std::move(reply.error()));
+		}
+		if (!reply->result.is_success()) {
+			if (reply->value.message_id) {
+				context += detail::format(": update message {}", *reply->value.message_id);
+			}
+			co_return std::unexpected(reply->result.to_error(context));
+		}
+		co_return to_result(std::move(*reply));
+	}
+
+}// namespace
+
 auto connection::start_transaction(extended_controls controls) -> capy::task<result<std::string>>
 {
-	if (core_ == nullptr) {
-		co_return std::unexpected(no_connection(start_context));
-	}
-	co_return co_await start_exchange(core_ref(core_), std::move(controls));
+	const core_ref self(core_);
+	return detail::on_strand(self, start_transaction_impl(self, std::move(controls)));
 }
 
 auto connection::end_transaction(std::string identifier, bool commit) -> capy::task<result<end_transaction_result>>
 {
-	std::string context(end_context);
-	if (core_ == nullptr) {
-		co_return std::unexpected(no_connection(context));
-	}
-	auto reply = co_await end_exchange(core_ref(core_), std::move(identifier), commit, context, nullptr);
-	if (!reply) {
-		co_return std::unexpected(std::move(reply.error()));
-	}
-	if (!reply->result.is_success()) {
-		if (reply->value.message_id) {
-			context += detail::format(": update message {}", *reply->value.message_id);
-		}
-		co_return std::unexpected(reply->result.to_error(context));
-	}
-	co_return to_result(std::move(*reply));
+	const core_ref self(core_);
+	return detail::on_strand(self, end_transaction_impl(self, std::move(identifier), commit));
 }
 
 // ---------------------------------------------------------------- transaction
@@ -175,8 +193,9 @@ struct transaction::state
 	std::pmr::vector<update> updates;
 	// Updates sent and not yet answered: commit() refuses while there are.
 	std::size_t in_flight = 0;
-	// The API state: neither commit() nor abort() was called.
-	bool open = true;
+	// The API state: neither commit() nor abort() was called (read by
+	// is_open() on any thread).
+	std::atomic<bool> open = true;
 	// The server may still hold the transaction: no End Transaction it
 	// answered yet. The destructor aborts it while this holds, even after
 	// a commit() or abort() whose request was not sent (stopped before it
@@ -186,11 +205,8 @@ struct transaction::state
 
 namespace {
 
-	void delete_transaction(transaction::state *s) noexcept
+	void delete_transaction_now(transaction::state *s) noexcept
 	{
-		if (s == nullptr) {
-			return;
-		}
 		// Still open: abort it without waiting, its answer dropped like a
 		// late response to an abandoned request (RFC 5805 section 3.4: an
 		// End Transaction is always answered).
@@ -210,6 +226,16 @@ namespace {
 		std::pmr::polymorphic_allocator<> alloc(keep->mr());
 		alloc.delete_object(s);
 	}
+
+	void delete_transaction(transaction::state *s) noexcept
+	{
+		if (s == nullptr) {
+			return;
+		}
+		detail::run_on_strand(*s->conn, [s] noexcept { delete_transaction_now(s); });
+	}
+
+	auto conn_of(const transaction::state *s) -> core_ref { return s == nullptr ? core_ref() : s->conn; }
 
 	// The error of an operation that cannot go on `s`: not started (or moved
 	// from), or settled already.
@@ -272,21 +298,31 @@ namespace {
 
 }// namespace
 
+namespace {
+
+	auto begin_transaction_impl(core_ref self, extended_controls controls) -> capy::task<result<transaction>>
+	{
+		if (!self) {
+			co_return std::unexpected(no_connection(start_context));
+		}
+		auto id = co_await start_exchange(self, std::move(controls));
+		if (!id) {
+			co_return std::unexpected(std::move(id.error()));
+		}
+		std::pmr::polymorphic_allocator<> alloc(self->mr());
+		auto *s = alloc.new_object<transaction::state>();
+		s->conn = std::move(self);
+		s->identifier = std::pmr::string(*id, alloc);
+		s->updates = std::pmr::vector<transaction::state::update>(alloc);
+		co_return connection::core::make_transaction(s);
+	}
+
+}// namespace
+
 auto connection::begin_transaction(extended_controls controls) -> capy::task<result<transaction>>
 {
-	if (core_ == nullptr) {
-		co_return std::unexpected(no_connection(start_context));
-	}
-	core_ref self(core_);
-	auto id = co_await start_exchange(self, std::move(controls));
-	if (!id) {
-		co_return std::unexpected(std::move(id.error()));
-	}
-	std::pmr::polymorphic_allocator<> alloc(self->mr());
-	auto *s = alloc.new_object<transaction::state>(transaction::state{ .conn = self,
-	  .identifier = std::pmr::string(*id, alloc),
-	  .updates = std::pmr::vector<transaction::state::update>(alloc) });
-	co_return transaction(s);
+	const core_ref self(core_);
+	return detail::on_strand(self, begin_transaction_impl(self, std::move(controls)));
 }
 
 transaction::transaction(transaction &&other) noexcept : state_(std::exchange(other.state_, nullptr)) {}
@@ -311,82 +347,95 @@ auto transaction::is_open() const noexcept -> bool { return state_ != nullptr &&
 auto transaction::add(add_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("add", request.entry);
-	return run_update(state_, std::move(request), std::move(context), &detail::add_impl);
+	return detail::on_strand(
+	  conn_of(state_), run_update(state_, std::move(request), std::move(context), &detail::add_impl));
 }
 
 auto transaction::modify(modify_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("modify", request.object);
-	return run_update(state_, std::move(request), std::move(context), &detail::modify_impl);
+	return detail::on_strand(
+	  conn_of(state_), run_update(state_, std::move(request), std::move(context), &detail::modify_impl));
 }
 
 auto transaction::del(del_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("delete", request.entry);
-	return run_update(state_, std::move(request), std::move(context), &detail::del_impl);
+	return detail::on_strand(
+	  conn_of(state_), run_update(state_, std::move(request), std::move(context), &detail::del_impl));
 }
 
 auto transaction::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("modify DN", request.entry);
-	return run_update(state_, std::move(request), std::move(context), &detail::modify_dn_impl);
+	return detail::on_strand(
+	  conn_of(state_), run_update(state_, std::move(request), std::move(context), &detail::modify_dn_impl));
 }
+
+namespace {
+
+	auto commit_impl(transaction::state *s) -> capy::task<result<commit_result>>
+	{
+		std::string context = "commit transaction";
+		if (auto e = unusable(s, context)) {
+			co_return std::unexpected(std::move(*e));
+		}
+		if (s->in_flight != 0) {
+			// The server would commit without them, or refuse the commit,
+			// depending on which it reads first.
+			co_return fail(client_errc::operation_in_progress,
+			  detail::format("{}: {} update(s) still in flight: await every update first", context, s->in_flight));
+		}
+		s->open = false;// settled, whatever the outcome
+		bool answered = false;
+		auto reply = co_await end_exchange(s->conn, std::string(s->identifier), true, context, &answered);
+		if (answered) {
+			s->needs_abort = false;
+		}
+		if (!reply) {
+			co_return std::unexpected(std::move(reply.error()));
+		}
+		if (!reply->result.is_success()) {
+			if (const auto id = reply->value.message_id) {
+				detail::format_to(context, ": update message {}", *id);
+				const auto it = std::ranges::find(s->updates, *id, &transaction::state::update::message_id);
+				if (it != s->updates.end()) {
+					detail::format_to(context, " ({})", std::string_view(it->context));
+				}
+			}
+			co_return std::unexpected(reply->result.to_error(context));
+		}
+		co_return to_result(std::move(*reply));
+	}
+
+	auto abort_impl(transaction::state *s) -> capy::task<result<void>>
+	{
+		const std::string context = "abort transaction";
+		if (auto e = unusable(s, context)) {
+			co_return std::unexpected(std::move(*e));
+		}
+		s->open = false;
+		bool answered = false;
+		auto reply = co_await end_exchange(s->conn, std::string(s->identifier), false, context, &answered);
+		if (answered) {
+			s->needs_abort = false;
+		}
+		if (!reply) {
+			co_return std::unexpected(std::move(reply.error()));
+		}
+		if (!reply->result.is_success()) {
+			co_return std::unexpected(reply->result.to_error(context));
+		}
+		co_return result<void>{};
+	}
+
+}// namespace
 
 auto transaction::commit() -> capy::task<result<commit_result>>
 {
-	std::string context = "commit transaction";
-	if (auto e = unusable(state_, context)) {
-		co_return std::unexpected(std::move(*e));
-	}
-	state *s = state_;
-	if (s->in_flight != 0) {
-		// The server would commit without them, or refuse the commit,
-		// depending on which it reads first.
-		co_return fail(client_errc::operation_in_progress,
-		  detail::format("{}: {} update(s) still in flight: await every update first", context, s->in_flight));
-	}
-	s->open = false;// settled, whatever the outcome
-	bool answered = false;
-	auto reply = co_await end_exchange(s->conn, std::string(s->identifier), true, context, &answered);
-	if (answered) {
-		s->needs_abort = false;
-	}
-	if (!reply) {
-		co_return std::unexpected(std::move(reply.error()));
-	}
-	if (!reply->result.is_success()) {
-		if (const auto id = reply->value.message_id) {
-			detail::format_to(context, ": update message {}", *id);
-			const auto it = std::ranges::find(s->updates, *id, &state::update::message_id);
-			if (it != s->updates.end()) {
-				detail::format_to(context, " ({})", std::string_view(it->context));
-			}
-		}
-		co_return std::unexpected(reply->result.to_error(context));
-	}
-	co_return to_result(std::move(*reply));
+	return detail::on_strand(conn_of(state_), commit_impl(state_));
 }
 
-auto transaction::abort() -> capy::task<result<void>>
-{
-	const std::string context = "abort transaction";
-	if (auto e = unusable(state_, context)) {
-		co_return std::unexpected(std::move(*e));
-	}
-	state *s = state_;
-	s->open = false;
-	bool answered = false;
-	auto reply = co_await end_exchange(s->conn, std::string(s->identifier), false, context, &answered);
-	if (answered) {
-		s->needs_abort = false;
-	}
-	if (!reply) {
-		co_return std::unexpected(std::move(reply.error()));
-	}
-	if (!reply->result.is_success()) {
-		co_return std::unexpected(reply->result.to_error(context));
-	}
-	co_return result<void>{};
-}
+auto transaction::abort() -> capy::task<result<void>> { return detail::on_strand(conn_of(state_), abort_impl(state_)); }
 
 }// namespace jhetz::ldap

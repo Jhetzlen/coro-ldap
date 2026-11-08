@@ -38,6 +38,7 @@ struct paged_search::state
 	std::pmr::memory_resource *mr;
 	ldap::search_stream current{};
 	std::size_t pages = 0;
+	bool in_next = false;
 	bool finished = false;
 	std::optional<error> error_{};
 	string_list references{};
@@ -126,24 +127,35 @@ struct paged_search::state
 	}
 };
 
+namespace {
+
+	auto search_paged_impl(core_ref self, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
+	  -> capy::task<result<ldap::paged_search>>
+	{
+		if (!self) {
+			co_return std::unexpected(no_connection(op_context("search", request.base)));
+		}
+		if (page_size <= 0) {
+			co_return fail(client_errc::encode_error,
+			  detail::format("{}: page size {} is not positive", op_context("search", request.base), page_size));
+		}
+		std::pmr::polymorphic_allocator<> alloc(self->mr());
+		auto *st = alloc.new_object<paged_search::state>(
+		  paged_search::state{ .conn = self, .params = std::move(request), .page_size = page_size, .mr = mr });
+		ldap::paged_search out = connection::core::make_paged(st);
+		if (auto r = st->request_page({}, co_await capy::this_coro::stop_token); !r) {
+			co_return std::unexpected(std::move(r.error()));
+		}
+		co_return std::move(out);
+	}
+
+}// namespace
+
 auto connection::search_paged(search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
   -> capy::task<result<ldap::paged_search>>
 {
-	if (core_ == nullptr) {
-		co_return std::unexpected(no_connection(op_context("search", request.base)));
-	}
-	if (page_size <= 0) {
-		co_return fail(client_errc::encode_error,
-		  detail::format("{}: page size {} is not positive", op_context("search", request.base), page_size));
-	}
-	std::pmr::polymorphic_allocator<> alloc(core_->mr());
-	auto *st = alloc.new_object<paged_search::state>(
-	  paged_search::state{ .conn = core_ref(core_), .params = std::move(request), .page_size = page_size, .mr = mr });
-	ldap::paged_search out = connection::core::make_paged(st);
-	if (auto r = st->request_page({}, co_await capy::this_coro::stop_token); !r) {
-		co_return std::unexpected(std::move(r.error()));
-	}
-	co_return std::move(out);
+	const core_ref self(core_);
+	return detail::on_strand(self, search_paged_impl(self, std::move(request), page_size, mr));
 }
 
 namespace detail {
@@ -163,11 +175,15 @@ namespace {
 		if (s == nullptr) {
 			return;
 		}
-		s->stop();
-		core_ref keep = s->conn;
-		std::pmr::polymorphic_allocator<> alloc(keep->mr());
-		alloc.delete_object(s);
+		detail::run_on_strand(*s->conn, [s] noexcept {
+			s->stop();
+			core_ref keep = s->conn;
+			std::pmr::polymorphic_allocator<> alloc(keep->mr());
+			alloc.delete_object(s);
+		});
 	}
+
+	auto next_page_entry(paged_search::state *sp) -> capy::task<result<std::optional<entry>>>;
 
 }// namespace
 
@@ -207,60 +223,75 @@ auto paged_search::controls() const noexcept -> const std::pmr::vector<control> 
 
 auto paged_search::next() -> capy::task<result<std::optional<entry>>>
 {
-	if (state_ == nullptr) {
-		co_return std::unexpected(no_connection("search"));
-	}
-	state &s = *state_;
-	if (s.finished) {
-		if (s.error_) {
-			co_return std::unexpected(*s.error_);
+	return detail::on_strand(state_ == nullptr ? core_ref() : state_->conn, next_page_entry(state_));
+}
+
+namespace {
+
+	auto next_page_entry(paged_search::state *sp) -> capy::task<result<std::optional<entry>>>
+	{
+		if (sp == nullptr) {
+			co_return std::unexpected(no_connection("search"));
 		}
-		co_return std::optional<entry>{};
-	}
-	// `ended`: the error ended the search on the server (an error result,
-	// a malformed answer, a closed connection), so there is nothing to
-	// release. A cancelled or timed-out page was only abandoned, and a page
-	// request that could not be sent was never seen: the server may still
-	// hold the paging state of `cookie`, which the destructor releases.
-	// Decided by capy::cond, not ldap::cond::timeout: that also matches the
-	// server's timeLimitExceeded, which ended the search on the server.
-	const auto finish = [&s](error e, bool ended = true) -> result<std::optional<entry>> {
-		if (ended && e.code != capy::cond::canceled && e.code != capy::cond::timeout) {
-			s.cookie.clear();
-		}
-		s.finished = true;
-		s.error_ = e;
-		return std::unexpected(std::move(e));
-	};
-	while (true) {
-		const std::size_t seen = s.current.references().size();
-		auto e = co_await s.current.next();
-		const auto &refs = s.current.references();
-		s.references.insert(s.references.end(), refs.begin() + static_cast<std::ptrdiff_t>(seen), refs.end());
-		if (!e) {
-			if (detail::search_done(s.current) != nullptr) {
-				s.controls = s.current.controls();
+		paged_search::state &s = *sp;
+		if (s.finished) {
+			if (s.error_) {
+				co_return std::unexpected(*s.error_);
 			}
-			co_return finish(std::move(e.error()));
-		}
-		if (*e) {
-			co_return std::move(*e);
-		}
-		// The page ended: the next one, if the server gave a cookie.
-		s.controls = s.current.controls();
-		auto pr = find_paged(s.controls);
-		if (!pr) {
-			co_return finish(detail::with_context(std::move(pr.error()), op_context("search", s.params.base)));
-		}
-		s.cookie = *pr ? std::string((*pr)->cookie) : std::string();
-		if (s.cookie.empty()) {
-			s.finished = true;
 			co_return std::optional<entry>{};
 		}
-		if (auto r = s.request_page(s.cookie, co_await capy::this_coro::stop_token); !r) {
-			co_return finish(std::move(r.error()), false);
+		if (s.in_next) {
+			co_return fail(client_errc::operation_in_progress,
+			  op_context("search", s.params.base) + " during an earlier next() on this paged_search");
+		}
+		s.in_next = true;
+		const detail::scope_exit reset{ [&s] { s.in_next = false; } };
+		// `ended`: the error ended the search on the server (an error result,
+		// a malformed answer, a closed connection), so there is nothing to
+		// release. A cancelled or timed-out page was only abandoned, and a page
+		// request that could not be sent was never seen: the server may still
+		// hold the paging state of `cookie`, which the destructor releases.
+		// Decided by capy::cond, not ldap::cond::timeout: that also matches the
+		// server's timeLimitExceeded, which ended the search on the server.
+		const auto finish = [&s](error e, bool ended = true) -> result<std::optional<entry>> {
+			if (ended && e.code != capy::cond::canceled && e.code != capy::cond::timeout) {
+				s.cookie.clear();
+			}
+			s.finished = true;
+			s.error_ = e;
+			return std::unexpected(std::move(e));
+		};
+		while (true) {
+			const std::size_t seen = s.current.references().size();
+			auto e = co_await s.current.next();
+			const auto &refs = s.current.references();
+			s.references.insert(s.references.end(), refs.begin() + static_cast<std::ptrdiff_t>(seen), refs.end());
+			if (!e) {
+				if (detail::search_done(s.current) != nullptr) {
+					s.controls = s.current.controls();
+				}
+				co_return finish(std::move(e.error()));
+			}
+			if (*e) {
+				co_return std::move(*e);
+			}
+			// The page ended: the next one, if the server gave a cookie.
+			s.controls = s.current.controls();
+			auto pr = find_paged(s.controls);
+			if (!pr) {
+				co_return finish(detail::with_context(std::move(pr.error()), op_context("search", s.params.base)));
+			}
+			s.cookie = *pr ? std::string((*pr)->cookie) : std::string();
+			if (s.cookie.empty()) {
+				s.finished = true;
+				co_return std::optional<entry>{};
+			}
+			if (auto r = s.request_page(s.cookie, co_await capy::this_coro::stop_token); !r) {
+				co_return finish(std::move(r.error()), false);
+			}
 		}
 	}
-}
+
+}// namespace
 
 }// namespace jhetz::ldap

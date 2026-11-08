@@ -32,13 +32,14 @@ void detail::set_next_message_id(connection &c, std::int32_t id) noexcept { c.co
 void detail::set_close_hook(connection &c, std::move_only_function<void() noexcept> hook) noexcept
 {
 	if (c.core_ != nullptr) {
-		c.core_->set_close_hook(std::move(hook));
+		detail::run_on_strand(*c.core_,
+		  [self = core_ref(c.core_), h = std::move(hook)] mutable noexcept { self->set_close_hook(std::move(h)); });
 	}
 }
 
 auto detail::accepts_requests(const connection &c) noexcept -> bool
 {
-	return c.core_ != nullptr && c.core_->accepts_requests();
+	return c.core_ != nullptr && c.core_->published_accepts_requests();
 }
 
 connection::connection(corosio::io_context &ioc,
@@ -47,7 +48,7 @@ connection::connection(corosio::io_context &ioc,
   std::pmr::memory_resource *mr)
 {
 	std::pmr::polymorphic_allocator<> alloc(mr);
-	core_ = alloc.new_object<core>(ioc, std::move(t), options, mr);
+	core_ = alloc.new_object<core>(executor_type(ioc.get_executor()), std::move(t), options, mr);
 }
 
 connection::connection(connection &&other) noexcept : core_(std::exchange(other.core_, nullptr)) {}
@@ -70,7 +71,7 @@ connection::~connection()
 	core_->release();
 }
 
-auto connection::is_open() const noexcept -> bool { return core_ != nullptr && core_->is_open(); }
+auto connection::is_open() const noexcept -> bool { return core_ != nullptr && core_->published_open(); }
 
 auto connection::name() const noexcept -> std::string_view
 {
@@ -82,17 +83,25 @@ auto connection::name() const noexcept -> std::string_view
 
 auto connection::executor() const noexcept -> connection::executor_type { return core_->executor(); }
 
-auto connection::outstanding() const noexcept -> std::size_t { return core_ == nullptr ? 0 : core_->outstanding(); }
+auto connection::outstanding() const noexcept -> std::size_t
+{
+	return core_ == nullptr ? 0 : core_->published_outstanding();
+}
 
-auto connection::bind_count() const noexcept -> std::uint64_t { return core_ == nullptr ? 0 : core_->bind_count(); }
+auto connection::bind_count() const noexcept -> std::uint64_t
+{
+	return core_ == nullptr ? 0 : core_->published_bind_count();
+}
 
-auto connection::is_tls() const noexcept -> bool { return core_ != nullptr && core_->is_tls(); }
+auto connection::is_tls() const noexcept -> bool { return core_ != nullptr && core_->published_tls(); }
 
 auto connection::security_layer() const noexcept -> sasl_protection
 {
-	return core_ == nullptr ? sasl_protection::none : core_->security_layer();
+	return core_ == nullptr ? sasl_protection::none : core_->published_security_layer();
 }
 
+// The TLS data are set before is_tls() first reports true (release /
+// acquire) and never change while it does.
 auto connection::peer_certificate() const noexcept -> std::span<const std::byte>
 {
 	if (!is_tls()) {
@@ -112,62 +121,70 @@ auto connection::channel_bindings() const noexcept -> ldap::channel_bindings
 void connection::close() noexcept
 {
 	if (core_ != nullptr) {
-		core_->close();
+		core_->request_close();
 	}
 }
 
-auto connection::unbind() -> capy::task<result<void>>
-{
-	const std::string context = "unbind";
-	if (core_ == nullptr) {
-		co_return std::unexpected(no_connection(context));
-	}
-	const core_ref self(core_);
-	if (!self->accepts_requests()) {
-		co_return std::unexpected(self->not_connected(context));
-	}
-	// Nothing may be sent while a BindRequest is outstanding (RFC 4511
-	// section 4.2.1), or during StartTLS until its response is received and
-	// the handshake done (section 4.14.1), an UnbindRequest included: just
-	// close, before anything is changed (StartTLS then fails with
-	// not_connected). Refusing instead would leave the session the caller
-	// wants ended open.
-	if (self->exchange_in_progress()) {
-		self->shut(make_error(client_errc::not_connected, "connection closed"), false);
+namespace {
+
+	auto unbind_impl(core_ref self) -> capy::task<result<void>>
+	{
+		const std::string context = "unbind";
+		if (!self) {
+			co_return std::unexpected(no_connection(context));
+		}
+		if (!self->accepts_requests()) {
+			co_return std::unexpected(self->not_connected(context));
+		}
+		// Nothing may be sent while a BindRequest is outstanding (RFC 4511
+		// section 4.2.1), or during StartTLS until its response is received and
+		// the handshake done (section 4.14.1), an UnbindRequest included: just
+		// close, before anything is changed (StartTLS then fails with
+		// not_connected). Refusing instead would leave the session the caller
+		// wants ended open.
+		if (self->exchange_in_progress()) {
+			self->shut(make_error(client_errc::not_connected, "connection closed"), false);
+			co_return result<void>{};
+		}
+
+		// Outstanding operations are abandoned by the unbind (RFC 4511 section
+		// 4.3), and nothing may follow the UnbindRequest. An exception (the
+		// writer's frame, finish_unbind's, its wait's) closes the connection
+		// before it propagates, as for StartTLS: left open, it would stay
+		// "closing (unbind)" until close(). Later operations fail naming
+		// not_enough_memory for a bad_alloc, the abort otherwise (no other
+		// exception is known to escape today: defensive).
+		std::optional<error> failed;
+		try {
+			if (auto r = self->send_unbind(context); !r) {
+				co_return r;
+			}
+			failed = co_await self->finish_unbind();
+		} catch (const std::bad_alloc &) {
+			self->shut_out_of_memory();
+			self->close();// the transport, if finish_unbind had shut the connection already
+			throw;
+		} catch (...) {
+			try {// the message's allocation may fail too
+				self->shut(
+				  make_error(client_errc::not_connected, "connection closed: unbind aborted by an exception"), true);
+			} catch (const std::bad_alloc &) {
+				self->shut_out_of_memory();
+			}
+			self->close();
+			throw;
+		}
+		if (failed) {
+			co_return std::unexpected(detail::with_context(std::move(*failed), context));
+		}
 		co_return result<void>{};
 	}
 
-	// Outstanding operations are abandoned by the unbind (RFC 4511 section
-	// 4.3), and nothing may follow the UnbindRequest. An exception (the
-	// writer's frame, finish_unbind's, its wait's) closes the connection
-	// before it propagates, as for StartTLS: left open, it would stay
-	// "closing (unbind)" until close(). Later operations fail naming
-	// not_enough_memory for a bad_alloc, the abort otherwise (no other
-	// exception is known to escape today: defensive).
-	std::optional<error> failed;
-	try {
-		if (auto r = self->send_unbind(context); !r) {
-			co_return r;
-		}
-		failed = co_await self->finish_unbind();
-	} catch (const std::bad_alloc &) {
-		self->shut_out_of_memory();
-		self->close();// the transport, if finish_unbind had shut the connection already
-		throw;
-	} catch (...) {
-		try {// the message's allocation may fail too
-			self->shut(
-			  make_error(client_errc::not_connected, "connection closed: unbind aborted by an exception"), true);
-		} catch (const std::bad_alloc &) {
-			self->shut_out_of_memory();
-		}
-		self->close();
-		throw;
-	}
-	if (failed) {
-		co_return std::unexpected(detail::with_context(std::move(*failed), context));
-	}
-	co_return result<void>{};
+}// namespace
+
+auto connection::unbind() -> capy::task<result<void>>
+{
+	return detail::on_strand(core_ref(core_), unbind_impl(core_ref(core_)));
 }
 
 // ---------------------------------------------------------------- connect

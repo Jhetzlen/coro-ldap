@@ -1131,7 +1131,7 @@ TEST_CASE("channel binding: TLS 1.2 without the extended master secret", "[net][
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::tls_required);
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("no tls-exporter channel binding data"));
-		c.close();
+		run_on(ioc, c.executor(), [&c] { c.close(); });// the socket closed now: the server sees it
 		CHECK(srv.result().empty());
 	}
 	SECTION("Ed25519 certificate: no channel binding at all")
@@ -1150,7 +1150,7 @@ TEST_CASE("channel binding: TLS 1.2 without the extended master secret", "[net][
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::tls_required);
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("the TLS connection has no channel binding data"));
-		c.close();
+		run_on(ioc, c.executor(), [&c] { c.close(); });// the socket closed now: the server sees it
 		CHECK(srv.result().empty());
 	}
 }

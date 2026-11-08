@@ -294,6 +294,17 @@ struct pool_fixture
 	}
 	auto acquire() -> ldap::result<ldap::lease> { return finish(ioc, pool->acquire()); }
 	auto acquire_exclusive() -> ldap::result<ldap::exclusive_lease> { return finish(ioc, pool->acquire_exclusive()); }
+	// Calls `f` on the client's strand, where a lease's release() and the
+	// client's close() take effect at once.
+	template<class F> void on_strand(F f) { run_on(ioc, pool->executor(), std::move(f)); }
+	template<class Lease> void release(Lease &l)
+	{
+		on_strand([&l] { l.release(); });
+	}
+	void close()
+	{
+		on_strand([this] { pool->close(); });
+	}
 };
 
 // The connection a lease is on, to tell connections apart.
@@ -421,7 +432,7 @@ TEST_CASE("client: a failed server waits out its backoff", "[net][client][backof
 		REQUIRE(first.has_value());
 		CHECK(text(first->server()) == text(b.url()));
 		full(*first).close();// its connection ends: the next acquire opens another
-		first->release();
+		f.release(*first);
 		CHECK(f.pool->connections() == 0);
 		auto second = f.acquire();
 		REQUIRE(second.has_value());
@@ -464,7 +475,7 @@ TEST_CASE("client: the session setup runs again on a new connection", "[net][cli
 	auto r = finish(f.ioc, (*stale)->search(people_search()));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::cond::connection_lost);
-	stale->release();// closed: leaves the pool
+	f.release(*stale);// closed: leaves the pool
 	CHECK(f.pool->connections() == 0);
 
 	auto fresh = f.acquire();
@@ -729,7 +740,7 @@ TEST_CASE("client: connections are not pooled again after", "[net][client][pool]
 		CHECK(l->get().bind_count() == 1);
 		REQUIRE(finish(f.ioc, (*l)->simple_bind(ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" }, "pw")).has_value());
 		CHECK(l->get().bind_count() == 2);
-		l->release();
+		f.release(*l);
 		CHECK(f.pool->connections() == 0);
 		CHECK(f.obs.events.back() == "disconnect " + text(s.url()) + " rebound");
 		// It is unbound, not just closed.
@@ -748,7 +759,7 @@ TEST_CASE("client: connections are not pooled again after", "[net][client][pool]
 		f.make({ .servers = { s.url() }, .setup = admin_setup(), .max_lifetime = milliseconds(0), .observer = &f.obs });
 		auto l = f.acquire();
 		REQUIRE(l.has_value());
-		l->release();
+		f.release(*l);
 		CHECK(f.pool->connections() == 0);
 		CHECK(f.obs.events.back() == "disconnect " + text(s.url()) + " max_lifetime");
 		drive_until(f.ioc, [&s] { return s.session(0).done(); });
@@ -795,7 +806,7 @@ TEST_CASE("client: close()", "[net][client]")
 	f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
 	auto l = f.acquire();
 	REQUIRE(l.has_value());
-	f.pool->close();
+	f.close();
 	CHECK_FALSE((*l)->is_open());// leased connections are closed too
 	CHECK(f.pool->connections() == 0);
 	CHECK(f.obs.events.back() == "disconnect " + text(s.url()) + " client_closed");
@@ -815,7 +826,7 @@ TEST_CASE("client: a lease outlives its client", "[net][client]")
 	REQUIRE(l.has_value());
 	ldap::lease kept = std::move(*l);
 	CHECK_FALSE(static_cast<bool>(*l));
-	f.pool.reset();
+	f.on_strand([&f] { f.pool.reset(); });
 	CHECK(static_cast<bool>(kept));
 	CHECK_FALSE(kept->is_open());
 	CHECK(text(kept.server()) == text(s.url()));
@@ -1301,7 +1312,7 @@ TEST_CASE("client: max_lifetime under load", "[net][client][pool]")
 	CHECK(conn_of(*b) != conn_of(*a));
 	CHECK(s.accepted() == 2);
 	CHECK(f.pool->connections() == 2);// the old one drains
-	a->release();
+	f.release(*a);
 	CHECK(f.pool->connections() == 1);
 	CHECK(f.obs.events.back() == "disconnect " + text(s.url()) + " max_lifetime");
 }
@@ -2647,11 +2658,11 @@ TEST_CASE("client: move assignment, executor() and a moved-from client's reads",
 	pool_fixture f;
 	auto &s = f.server({ bind_ok() });
 	f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
-	CHECK(f.pool->executor() == f.ioc.get_executor());
+	CHECK(f.pool->executor().get_inner_executor() == f.ioc.get_executor());
 	REQUIRE(f.acquire().has_value());// pooled, then returned
 	ldap::client other(f.ioc, {});
 	other = std::move(*f.pool);// takes the pool and its connection
-	CHECK(other.executor() == f.ioc.get_executor());
+	CHECK(other.executor().get_inner_executor() == f.ioc.get_executor());
 	CHECK(other.connections() == 1);
 	CHECK(f.pool->connections() == 0);
 
@@ -2684,7 +2695,7 @@ TEST_CASE("client: move assignment, executor() and a moved-from client's reads",
 	REQUIRE(l.has_value());
 	CHECK(s.accepted() == 1);
 	// Assigned over, a client is closed first, as by its destructor.
-	other = ldap::client(f.ioc, {});
+	run_on(f.ioc, other.executor(), [&] { other = ldap::client(f.ioc, {}); });
 	CHECK_FALSE((*l)->is_open());
 	CHECK(other.connections() == 0);
 	CHECK(f.obs.events
@@ -2736,7 +2747,7 @@ TEST_CASE("client: a shared connection being unbound is not handed out", "[net][
 	CHECK(s.accepted() == 2);
 	REQUIRE(s.log(0).received.size() == 2);
 	CHECK(std::holds_alternative<ldap::unbind_request>(s.log(0).received[1].op));
-	mine->release();
+	f.release(*mine);
 	CHECK(f.pool->connections() == 1);// the new one only
 	CHECK(f.obs.events
 		  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
@@ -2826,8 +2837,8 @@ TEST_CASE("client: an observer overriding only on_connect", "[net][client][obser
 	REQUIRE(r.has_value());
 	REQUIRE(r->entries.size() == 1);
 	CHECK(r->entries.front() == expected_entry(b_dn, "B"));
-	waiting.get()->release();
-	f.pool->close();// on_disconnect
+	f.release(*waiting.get());
+	f.close();// on_disconnect
 	CHECK(f.pool->connections() == 0);
 	CHECK(obs.events
 		  == std::vector<std::string>{ "connect " + text(down) + " failed", "connect " + text(a.url()) + " ok" });
@@ -3062,7 +3073,7 @@ TEST_CASE("client: a write never sent is retried once on another connection", "[
 	CHECK(
 	  s.log(1).received[1]
 	  == ldap::message{ 2, ldap::add_request{ jdoe_text, { { "objectClass", { "person" } }, { "cn", { "John" } } } } });
-	held->release();// the closed connection leaves the pool with its last lease
+	f.release(*held);// the closed connection leaves the pool with its last lease
 	CHECK(f.obs.events
 		  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
 			"connect " + text(s.url()) + " ok",
@@ -3107,7 +3118,7 @@ TEST_CASE("client: an extended operation never sent is retried once on another c
 	const auto &resent = std::get<ldap::extended_request>(s.log(1).received[1].op);
 	CHECK(resent.request_name == "1.2.3.4");
 	CHECK(resent.request_value == "question");
-	held->release();// the closed connection leaves the pool with its last lease
+	f.release(*held);// the closed connection leaves the pool with its last lease
 	CHECK(f.obs.events
 		  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
 			"connect " + text(s.url()) + " ok",

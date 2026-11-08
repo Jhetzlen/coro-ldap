@@ -99,14 +99,15 @@ namespace detail {
 
 }// namespace detail
 
-// Not a coroutine: the task of detail::add_impl() is returned as is.
+// Not a coroutine: the task of detail::add_impl() runs on the strand.
 auto connection::add(add_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("add", request.entry);
 	if (core_ == nullptr) {
 		return refuse(client_errc::not_connected, std::move(context));
 	}
-	return detail::add_impl(core_ref(core_), std::move(request), std::move(context));
+	const core_ref self(core_);
+	return detail::on_strand(self, detail::add_impl(self, std::move(request), std::move(context)));
 }
 
 namespace detail {
@@ -128,14 +129,15 @@ namespace detail {
 
 }// namespace detail
 
-// Not a coroutine: the task of detail::modify_impl() is returned as is.
+// Not a coroutine: the task of detail::modify_impl() runs on the strand.
 auto connection::modify(modify_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("modify", request.object);
 	if (core_ == nullptr) {
 		return refuse(client_errc::not_connected, std::move(context));
 	}
-	return detail::modify_impl(core_ref(core_), std::move(request), std::move(context));
+	const core_ref self(core_);
+	return detail::on_strand(self, detail::modify_impl(self, std::move(request), std::move(context)));
 }
 
 namespace detail {
@@ -178,55 +180,66 @@ namespace detail {
 
 }// namespace detail
 
-// Not a coroutine: the task of detail::del_impl() is returned as is.
+// Not a coroutine: the task of detail::del_impl() runs on the strand.
 auto connection::del(del_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("delete", request.entry);
 	if (core_ == nullptr) {
 		return refuse(client_errc::not_connected, std::move(context));
 	}
-	return detail::del_impl(core_ref(core_), std::move(request), std::move(context));
+	const core_ref self(core_);
+	return detail::on_strand(self, detail::del_impl(self, std::move(request), std::move(context)));
 }
 
-// Not a coroutine: the task of detail::modify_dn_impl() is returned as is.
+// Not a coroutine: the task of detail::modify_dn_impl() runs on the strand.
 auto connection::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("modify DN", request.entry);
 	if (core_ == nullptr) {
 		return refuse(client_errc::not_connected, std::move(context));
 	}
-	return detail::modify_dn_impl(core_ref(core_), std::move(request), std::move(context));
+	const core_ref self(core_);
+	return detail::on_strand(self, detail::modify_dn_impl(self, std::move(request), std::move(context)));
 }
+
+namespace {
+
+	auto compare_impl(core_ref self, compare_params request) -> capy::task<result<bool>>
+	{
+		const std::string context = op_context("compare", request.entry);
+		if (!self) {
+			co_return std::unexpected(no_connection(context));
+		}
+		const std::pmr::polymorphic_allocator<> alloc(self->mr());
+		auto msg = build_request(compare_request(request.entry.to_string(self->mr()),
+								   attribute_value_assertion(request.attribute, request.value, alloc),
+								   alloc),
+		  request.controls,
+		  self->mr(),
+		  context);
+		if (!msg) {
+			co_return std::unexpected(std::move(msg.error()));
+		}
+		auto m = co_await request_response(self, std::move(*msg), op_index<compare_response>, context, request.timeout);
+		if (!m) {
+			co_return std::unexpected(std::move(m.error()));
+		}
+		const ldap_result &r = result_of(*m);
+		if (r.result_code == std::to_underlying(errc::compare_true)) {
+			co_return true;
+		}
+		if (r.result_code == std::to_underlying(errc::compare_false)) {
+			co_return false;
+		}
+		co_return std::unexpected(r.to_error(context));// success (0) is not a valid answer either
+	}
+
+}// namespace
 
 auto connection::compare(compare_params request) -> capy::task<result<bool>>
 {
-	const std::string context = op_context("compare", request.entry);
-	if (core_ == nullptr) {
-		co_return std::unexpected(no_connection(context));
-	}
-	core_ref self(core_);
-	const std::pmr::polymorphic_allocator<> alloc(self->mr());
-	auto msg = build_request(
-	  compare_request(
-		request.entry.to_string(self->mr()), attribute_value_assertion(request.attribute, request.value, alloc), alloc),
-	  request.controls,
-	  self->mr(),
-	  context);
-	if (!msg) {
-		co_return std::unexpected(std::move(msg.error()));
-	}
-	auto m = co_await request_response(self, std::move(*msg), op_index<compare_response>, context, request.timeout);
-	if (!m) {
-		co_return std::unexpected(std::move(m.error()));
-	}
-	const ldap_result &r = result_of(*m);
-	if (r.result_code == std::to_underlying(errc::compare_true)) {
-		co_return true;
-	}
-	if (r.result_code == std::to_underlying(errc::compare_false)) {
-		co_return false;
-	}
-	co_return std::unexpected(r.to_error(context));// success (0) is not a valid answer either
+	const core_ref self(core_);
+	return detail::on_strand(self, compare_impl(self, std::move(request)));
 }
 
 namespace detail {
@@ -277,12 +290,19 @@ namespace detail {
 
 using detail::extended_impl;
 
+namespace {
+
+	auto refuse_extended(error e) -> capy::task<result<extended_result>> { co_return std::unexpected(std::move(e)); }
+
+}// namespace
+
 auto connection::extended(extended_params request) -> capy::task<result<extended_result>>
 {
 	if (core_ == nullptr) {
-		co_return std::unexpected(no_connection("extended operation " + request.name));
+		return refuse_extended(no_connection("extended operation " + request.name));
 	}
-	co_return co_await extended_impl(core_ref(core_), std::move(request));
+	const core_ref self(core_);
+	return detail::on_strand(self, extended_impl(self, std::move(request)));
 }
 
 }// namespace jhetz::ldap

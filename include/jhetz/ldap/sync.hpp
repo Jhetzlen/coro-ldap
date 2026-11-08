@@ -406,7 +406,7 @@ class connection : public detail::connection_api<connection>
 
 	// The executor of the I/O thread, e.g. to run coroutines next to the
 	// facade. Blocking methods called from there fail with would_deadlock.
-	[[nodiscard]] auto executor() const noexcept -> ldap::connection::executor_type { return io_.executor(); }
+	[[nodiscard]] auto executor() const noexcept -> boost::corosio::io_context::executor_type { return io_.executor(); }
 
   private:
 	friend class detail::connection_api<connection>;
@@ -554,7 +554,7 @@ class client
 	// The executor of the I/O thread (the ldap::client's), e.g. to run
 	// coroutines next to the facade. Blocking methods called from there
 	// fail with would_deadlock.
-	[[nodiscard]] auto executor() const noexcept -> ldap::client::executor_type;
+	[[nodiscard]] auto executor() const noexcept -> boost::corosio::io_context::executor_type;
 
 	// As ldap::client::acquire() and acquire_exclusive(), blocking: a lease
 	// on a pooled connection, or the same errors (not_connected once close()
@@ -593,8 +593,9 @@ class client
 
 	// As ldap::client::close(), and waits for it: closes every pooled
 	// connection, stops the attempts in progress, and fails waiting and
-	// later acquire() calls with not_connected. From the I/O thread it
-	// closes at once. Idempotent.
+	// later acquire() calls with not_connected. From the I/O thread, as
+	// ldap::client::close() there: at once on the client's strand, else
+	// posted to it. Idempotent.
 	void close() noexcept;
 
   private:

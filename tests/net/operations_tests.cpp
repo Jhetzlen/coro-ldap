@@ -988,6 +988,7 @@ TEST_CASE("operations: a paged search stopped between pages releases the server'
 		// Page 2 ended (its SearchResultDone is queued), next() not called.
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
 		CHECK(s->pages() == 2);
+		run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
 	}
 	CHECK(m.conn.outstanding() == 1);// the release's answer is due
 	auto b = m.run(bind_admin(m.conn));
@@ -1234,7 +1235,8 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 			spawn(m.ioc, bind_admin(m.conn), bound);
 			drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 			CHECK_FALSE(bound.done());
-		}// destroyed while the bind is outstanding
+			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });// while the bind is outstanding
+		}
 		CHECK(m.conn.outstanding() == 2);// the bind, and the held release's answer
 		drive_until(m.ioc, [&bound] { return bound.done(); });
 		CHECK(bound.get().has_value());
@@ -1338,10 +1340,10 @@ TEST_CASE("operations: two paged search releases due at once", "[net][operations
 		REQUIRE(eb.has_value());
 		REQUIRE(eb->has_value());
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
-		*a = ldap::paged_search{};
+		run_on(m.ioc, m.conn.executor(), [&a] { *a = ldap::paged_search{}; });
 		CHECK(m.conn.outstanding() == 1);
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 3; });
-		*b = ldap::paged_search{};
+		run_on(m.ioc, m.conn.executor(), [&b] { *b = ldap::paged_search{}; });
 		CHECK(m.conn.outstanding() == 2);
 	}
 	drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
@@ -1644,6 +1646,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 			REQUIRE(e.has_value());
 			REQUIRE(e->has_value());
 			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
 		}
 		CHECK(m.conn.outstanding() == 1);
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
@@ -1669,6 +1672,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
 			REQUIRE(e->has_value());
+			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::search_stream{}; });
 		}
 		CHECK(m.conn.outstanding() == 0);
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
@@ -1692,6 +1696,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 			REQUIRE(e.has_value());
 			REQUIRE(e->has_value());
 			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
 		}
 		CHECK(m.conn.outstanding() == 1);
 		CHECK(m.run(m.conn.unbind()).has_value());
@@ -1903,6 +1908,7 @@ TEST_CASE("operations: release answers' deadlines", "[net][operations][paged][ti
 			auto s = m.run(m.conn.search_paged(p, 1));
 			REQUIRE(s.has_value());
 			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
 		}
 		CHECK(m.conn.outstanding() == 1);
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });// its deadline passes
@@ -1926,6 +1932,7 @@ TEST_CASE("operations: release answers' deadlines", "[net][operations][paged][ti
 			auto s = m.run(m.conn.search_paged(std::move(p), 1));
 			REQUIRE(s.has_value());
 			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 1; });// page 3 ended
+			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
 		}
 		CHECK(m.conn.outstanding() == 2);
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() < 2; });// the second's deadline passes
@@ -1967,10 +1974,13 @@ auto release_failing(M &m,
 	REQUIRE(e->has_value());
 	drive_until(m.ioc, [&] { return frames.live() == 0; });
 	REQUIRE(frames.live() == 0);
-	frames.fail_at(failing);
-	*s = ldap::paged_search{};
-	const std::size_t attempted = frames.count();
-	frames.fail_at(0);
+	std::size_t attempted = 0;
+	run_on(m.ioc, m.conn.executor(), [&] {
+		frames.fail_at(failing);
+		*s = ldap::paged_search{};
+		attempted = frames.count();
+		frames.fail_at(0);
+	});
 	return attempted;
 }
 
@@ -1996,11 +2006,14 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
 		return answer({ entry_msg(id, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(id, "page2") });
 	};
 
+	// On the strand, the writer starts at once: its write's two frames
+	// (write_bytes, capy::write) come before the reader's, whose read adds
+	// one.
 	SECTION("nothing fails: the writer's frame, then the reader's, then the due watcher's, each with run_async's")
 	{
 		m.serve({ page(1), step{} });// reads the release
 		m.ioc.set_frame_allocator(&frames);
-		CHECK(release_failing(0) == 6);
+		CHECK(release_failing(0) == 9);
 		CHECK(m.conn.outstanding() == 1);
 		m.check_server();
 		check_release(m.log.received[1], m.log.received[0], "page2");
@@ -2020,7 +2033,7 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
 	{
 		m.serve({ page(1), answer({ paged_done(2, "") }), answer({ bind_resp(3) }) });
 		m.ioc.set_frame_allocator(&frames);
-		CHECK(release_failing(3) == 3);
+		CHECK(release_failing(5) == 5);
 		CHECK(m.conn.outstanding() == 1);// due, not read yet
 		CHECK(m.run(bind_admin(m.conn)).has_value());
 		CHECK(m.conn.outstanding() == 0);
@@ -2033,7 +2046,7 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
 	{
 		m.serve({ page(1), step{}, page(3), step{} });// reads each release, never answers
 		m.ioc.set_frame_allocator(&frames);
-		CHECK(release_failing(5) == 5);
+		CHECK(release_failing(8) == 8);
 		CHECK(m.conn.outstanding() == 1);
 		{
 			auto p = people_search();
@@ -2041,6 +2054,7 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
 			auto s = m.run(m.conn.search_paged(std::move(p), 1));
 			REQUIRE(s.has_value());
 			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 1; });// page 3 ended
+			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
 		}
 		CHECK(m.conn.outstanding() == 2);
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });// both deadlines pass
@@ -2076,7 +2090,8 @@ TEST_CASE("operations: StartTLS waits for a release's answer whose reader could 
 	{
 		m.serve({ page, step{}, answer({ start_tls_refused(3) }) });// reads the release, answered below
 		m.ioc.set_frame_allocator(&frames);
-		CHECK(release_failing(m, frames, 3, std::nullopt) == 3);// the writer's, run_async's, the reader's
+		CHECK(
+		  release_failing(m, frames, 5, std::nullopt) == 5);// the writer's, run_async's, its write's two, the reader's
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 		CHECK(m.conn.outstanding() == 1);
 		server_sends(m, paged_done(2, ""));
@@ -2094,7 +2109,8 @@ TEST_CASE("operations: StartTLS waits for a release's answer whose reader could 
 	{
 		m.serve({ page, step{}, answer({ start_tls_refused(3) }) });// reads the release, never answers
 		m.ioc.set_frame_allocator(&frames);
-		CHECK(release_failing(m, frames, 3, std::chrono::milliseconds(100)) == 3);
+		CHECK(
+		  release_failing(m, frames, 5, std::chrono::milliseconds(100)) == 5);// the reader's, after the writer's write
 		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 		CHECK(m.conn.outstanding() == 1);
 		auto r = start_tls();
@@ -2193,7 +2209,7 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 			co_return co_await std::move(add);
 		};
 		outcome<ldap::result<ldap::response>> add;
-		spawn(t.ioc, body(), add);
+		spawn_on(t.conn.executor(), body(), add);// on the strand: the destructor runs inline
 		drive_until(t.ioc, [&add] { return add.done(); });
 		CHECK(frames.count() == 3);
 		frames.fail_at(0);
@@ -2210,10 +2226,14 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 		REQUIRE(first.has_value());
 		REQUIRE(second.has_value());
 		settle_now();
-		frames.fail_at(1);
-		*first = ldap::search_stream{};// abandoned: the writer's frame fails
-		CHECK(frames.count() == 1);
-		frames.fail_at(0);
+		std::size_t attempted = 0;
+		run_on(m.ioc, m.conn.executor(), [&] {
+			frames.fail_at(1);
+			*first = ldap::search_stream{};// abandoned: the writer's frame fails
+			attempted = frames.count();
+			frames.fail_at(0);
+		});
+		CHECK(attempted == 1);
 		CHECK_FALSE(m.conn.is_open());
 		auto e = m.run(second->next());
 		REQUIRE_FALSE(e.has_value());
@@ -2226,8 +2246,10 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 		REQUIRE(first.has_value());
 		REQUIRE(second.has_value());
 		settle_now();
-		frames.fail_at(3);// the writer's frame, run_async's, then the writer's write
-		*first = ldap::search_stream{};
+		run_on(m.ioc, m.conn.executor(), [&] {
+			frames.fail_at(3);// the writer's frame, run_async's, then the writer's write
+			*first = ldap::search_stream{};
+		});
 		drive_until(m.ioc, [&frames] { return frames.count() == 3; });
 		frames.fail_at(0);
 		CHECK_FALSE(m.conn.is_open());
@@ -2301,12 +2323,14 @@ TEST_CASE("operations: a due release answer forgotten past the limit is no longe
 		auto s = m.run(m.conn.search_paged(people_search(), 1));
 		REQUIRE(s.has_value());
 		drive_until(m.ioc, [&m, i] { return m.conn.outstanding() == static_cast<std::size_t>(i); });// page ended
-	}// each released
+		run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });// released
+	}
 	CHECK(m.conn.outstanding() == releases);
 	{
 		auto s = m.run(m.conn.search_stream(people_search()));
 		REQUIRE(s.has_value());
-	}// abandoned: the first release (id 2) is forgotten
+		run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::search_stream{}; });// abandoned
+	}// the first release (id 2) is forgotten
 	CHECK(m.conn.outstanding() == releases - 1);
 	drive_until(m.ioc, [&m] { return m.server.done(); });
 	REQUIRE(m.log.received.size() == (2 * releases) + 2);

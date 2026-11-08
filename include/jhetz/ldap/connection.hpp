@@ -13,8 +13,8 @@
 //   });                                   // result<search_result>: people->entries
 //   co_await c->unbind();
 //
-// Multiplexing (step 5b): operations started concurrently (several tasks on
-// the connection's executor, e.g. with capy::when_all) are all sent at once,
+// Multiplexing (step 5b): operations started concurrently (several tasks,
+// on any threads, e.g. with capy::when_all) are all sent at once,
 // each with its own message id, and their responses are matched by id. One
 // writer coroutine sends the PDUs in order, never interleaved; one reader
 // coroutine routes each response to the operation waiting for it, and runs
@@ -98,18 +98,43 @@
 // (DESIGN.md section 8). The connection's own state, buffers and queues live
 // on the resource given to connect() or the constructor.
 //
-// Threading (Capy / Corosio rules): a connection belongs to the executor of
-// the io_context it was created with. All its operations, and those of its
-// search_streams, must run on that executor (one thread); from another
-// thread, start them there, e.g. capy::run_async(conn.executor())(task).
-// Operations may be outstanding concurrently, but each search_stream has at
-// most one next() at a time. Connections and streams are cheap to move;
-// the shared state is reference counted, so a stream, an outstanding
-// operation or the internal reader may outlive the connection object
-// (destroying the connection closes it; they then fail with not_connected).
-// Operations never wait on I/O themselves (the writer and reader do), only
-// for their responses, so destroying a task suspended in one of them is
-// safe: the operation is abandoned. Stop tokens are the normal way to cancel.
+// Threading: a connection may be used from any number of threads at once,
+// with an io_context run by one thread or by a pool. It runs on a
+// capy::strand of its io_context's executor (executor()): the writer, the
+// reader, the timers and every operation of the connection, of its
+// search_streams, paged_searches and transactions hop onto it when they
+// start (at once when the awaiting task already runs there) and resume the
+// awaiting task on its own executor when they end. The accessors (is_open(),
+// outstanding(), is_tls(), security_layer(), bind_count(), ...) read
+// snapshots, safe on any thread. A search_stream or paged_search has one
+// next() at a time: another, from any thread, fails with
+// client_errc::operation_in_progress. The objects themselves (connection,
+// stream, transaction) follow the standard library's rule: one thread at a
+// time calls their non-const members (move, assign, destroy). Values
+// returned (entry, dn, search_result) are plain values. A search's entries
+// are allocated on the strand while the caller may free those it got on
+// another thread: the resource given for them must allow that (the default
+// resource, std::pmr::synchronized_pool_resource, or an arena that frees
+// nothing until the search has ended). Corosio's locking_mode::unsafe_io and unsafe opt
+// out of cross-thread use: the io_context must then run on one thread and
+// the connection be used from it only.
+// Destructors and close() called off the strand (from a thread not running
+// it, or from a task of another executor, as a task started with
+// capy::run_async(ioc.get_executor()) is) do not wait for it: they post
+// their work there, and it runs when the io_context next runs. So close()
+// takes effect then (is_open() and outstanding() report it at once), and
+// after destroying a stream, paged_search or transaction off the strand,
+// the memory resource given for its entries must outlive that run of the
+// io_context. An io_context destroyed before it runs that work again drops
+// it, and what it would have freed is leaked: after run_one() or a stop,
+// let it run (poll()) first. Called on the strand, or once the io_context is stopped (its
+// run() returned, no thread runs it), they run at once. The shared state is
+// reference counted, so a stream, an outstanding operation or the internal
+// reader may outlive the connection object (destroying the connection
+// closes it; they then fail with not_connected). Operations never wait on
+// I/O themselves (the writer and reader do), only for their responses, so
+// destroying a task suspended in one of them is safe: the operation is
+// abandoned. Stop tokens are the normal way to cancel.
 #pragma once
 
 #include "jhetz/ldap/ber.hpp"
@@ -131,6 +156,7 @@
 #include "jhetz/ldap/transaction.hpp"
 #include "jhetz/ldap/url.hpp"
 
+#include <boost/capy/ex/strand.hpp>
 #include <boost/capy/task.hpp>
 #include <boost/corosio/io_context.hpp>
 
@@ -166,7 +192,9 @@ namespace detail {
 class connection
 {
   public:
-	using executor_type = boost::corosio::io_context::executor_type;
+	// The connection's strand over its io_context's executor: everything
+	// the connection does runs on it (see "Threading" above).
+	using executor_type = boost::capy::strand<boost::corosio::io_context::executor_type>;
 
 	// Not connected: every operation fails with client_errc::not_connected.
 	connection() noexcept = default;
@@ -193,7 +221,7 @@ class connection
 	// Where it is connected ("ldap://127.0.0.1:389"), for logs; empty if never
 	// connected.
 	[[nodiscard]] auto name() const noexcept -> std::string_view;
-	// The executor every operation of this connection must run on.
+	// The connection's strand (see "Threading" above).
 	// Precondition: constructed with a transport (not default, not moved from).
 	[[nodiscard]] auto executor() const noexcept -> executor_type;
 	// Requests waiting for a response: operations (searches until their

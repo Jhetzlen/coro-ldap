@@ -41,11 +41,8 @@ namespace {
 		return alloc.new_object<search_stream::state>(&c, entries, context);
 	}
 
-	void delete_state(search_stream::state *s) noexcept
+	void delete_state_now(search_stream::state *s) noexcept
 	{
-		if (s == nullptr) {
-			return;
-		}
 		s->conn->abandon(s->op);
 		std::shared_ptr<void> owner = std::move(s->owner);// released last
 		core_ref keep = s->conn;// the state lives on the connection's resource
@@ -53,6 +50,20 @@ namespace {
 		alloc.delete_object(s);
 		keep = {};
 		owner.reset();
+	}
+
+	// On the connection's strand: the search's registration is the reader's.
+	void delete_state(search_stream::state *s) noexcept
+	{
+		if (s == nullptr) {
+			return;
+		}
+		detail::run_on_strand(*s->conn, [s] noexcept { delete_state_now(s); });
+	}
+
+	auto core_stream_state(ldap::search_stream &s) noexcept -> search_stream::state *
+	{
+		return connection::core::stream_state(s);
 	}
 
 	// next() (Item = entry: entry controls and IntermediateResponses are
@@ -184,41 +195,59 @@ namespace detail {
 
 }// namespace detail
 
+namespace {
+
+	auto search_stream_impl(core_ref self, search_params request, std::pmr::memory_resource *mr)
+	  -> capy::task<result<ldap::search_stream>>
+	{
+		if (!self) {
+			co_return std::unexpected(no_connection(op_context("search", request.base)));
+		}
+		// The analyzer does not model the promise's construction: Capy's env_ is
+		// nullptr-initialised and set by the awaiting caller before the first resume.
+		// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
+		co_return start_search(*self, request, mr, co_await capy::this_coro::stop_token);
+	}
+
+	auto search_impl(core_ref self, search_params request, std::pmr::memory_resource *mr)
+	  -> capy::task<result<search_result>>
+	{
+		auto s = co_await search_stream_impl(std::move(self), std::move(request), mr);
+		if (!s) {
+			co_return std::unexpected(std::move(s.error()));
+		}
+		search_result out{ .entries = std::pmr::vector<entry>(mr), .references = string_list(mr) };
+		while (true) {
+			auto e = co_await next_of<entry>(core_stream_state(*s));
+			if (!e) {
+				const ldap_result *done = detail::search_done(*s);
+				if (done == nullptr || !detail::limit_exceeded(done->result_code)) {
+					co_return std::unexpected(std::move(e.error()));
+				}
+				break;
+			}
+			if (!*e) {
+				break;
+			}
+			out.entries.push_back(std::move(**e));
+		}
+		detail::set_outcome(out, *detail::search_done(*s), s->references(), s->controls());
+		co_return out;
+	}
+
+}// namespace
+
 auto connection::search_stream(search_params request, std::pmr::memory_resource *mr)
   -> capy::task<result<ldap::search_stream>>
 {
-	if (core_ == nullptr) {
-		co_return std::unexpected(no_connection(op_context("search", request.base)));
-	}
-	// The analyzer does not model the promise's construction: Capy's env_ is
-	// nullptr-initialised and set by the awaiting caller before the first resume.
-	// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
-	co_return start_search(*core_, request, mr, co_await capy::this_coro::stop_token);
+	const core_ref self(core_);
+	return detail::on_strand(self, search_stream_impl(self, std::move(request), mr));
 }
 
 auto connection::search(search_params request, std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
 {
-	auto s = co_await search_stream(std::move(request), mr);
-	if (!s) {
-		co_return std::unexpected(std::move(s.error()));
-	}
-	search_result out{ .entries = std::pmr::vector<entry>(mr), .references = string_list(mr) };
-	while (true) {
-		auto e = co_await s->next();
-		if (!e) {
-			const ldap_result *done = detail::search_done(*s);
-			if (done == nullptr || !detail::limit_exceeded(done->result_code)) {
-				co_return std::unexpected(std::move(e.error()));
-			}
-			break;
-		}
-		if (!*e) {
-			break;
-		}
-		out.entries.push_back(std::move(**e));
-	}
-	detail::set_outcome(out, *detail::search_done(*s), s->references(), s->controls());
-	co_return out;
+	const core_ref self(core_);
+	return detail::on_strand(self, search_impl(self, std::move(request), mr));
 }
 
 namespace detail {
@@ -236,46 +265,57 @@ namespace detail {
 		}
 	}
 
+	namespace {
+
+		auto first_outcome_on_strand(search_stream::state &s) -> capy::task<result<std::optional<error>>>
+		{
+			using outcome = std::optional<error>;
+			pending_op &p = s.op;
+			const core_ref conn = s.conn;
+			// As connection::core::next_response, without taking the message.
+			while (p.queue.empty() && !p.finished) {
+				p.ready.clear();
+				std::error_code ec;
+				if (s.deadline) {
+					auto [e] = co_await corosio::timeout(p.ready.wait(), *s.deadline);
+					ec = e;
+				} else {
+					auto [e] = co_await p.ready.wait();
+					ec = e;
+				}
+				if (!ec || !p.queue.empty() || p.finished) {
+					continue;
+				}
+				if (ec == capy::cond::timeout) {
+					co_return outcome{};// next() reports it (and abandons the search)
+				}
+				co_return fail(ec, s.context);// stopped: destroying the stream abandons the search
+			}
+			if (!p.queue.empty()) {
+				const auto *done = std::get_if<search_result_done>(&p.queue.front().op);
+				if (done != nullptr && !done->result.is_success()) {
+					co_return outcome{ done->result.to_error(s.context) };
+				}
+				co_return outcome{};
+			}
+			if (p.failure) {
+				co_return outcome{ detail::with_context(*p.failure, s.context) };
+			}
+			co_return outcome{ conn->not_connected(s.context) };
+		}
+
+	}// namespace
+
 	auto first_outcome(ldap::search_stream &stream) -> capy::task<result<std::optional<error>>>
 	{
-		using outcome = std::optional<error>;
-		auto *sp = connection::core::stream_state(stream);
-		if (sp == nullptr) {
-			co_return outcome{ no_connection("search") };
+		auto *s = connection::core::stream_state(stream);
+		if (s == nullptr) {
+			return [] -> capy::task<result<std::optional<error>>> {
+				co_return std::optional<error>{ no_connection("search") };
+			}();
 		}
-		search_stream::state &s = *sp;// stable: the caller holds the stream
-		pending_op &p = s.op;
-		const core_ref conn = s.conn;
-		// As connection::core::next_response, without taking the message.
-		while (p.queue.empty() && !p.finished) {
-			p.ready.clear();
-			std::error_code ec;
-			if (s.deadline) {
-				auto [e] = co_await corosio::timeout(p.ready.wait(), *s.deadline);
-				ec = e;
-			} else {
-				auto [e] = co_await p.ready.wait();
-				ec = e;
-			}
-			if (!ec || !p.queue.empty() || p.finished) {
-				continue;
-			}
-			if (ec == capy::cond::timeout) {
-				co_return outcome{};// next() reports it (and abandons the search)
-			}
-			co_return fail(ec, s.context);// stopped: destroying the stream abandons the search
-		}
-		if (!p.queue.empty()) {
-			const auto *done = std::get_if<search_result_done>(&p.queue.front().op);
-			if (done != nullptr && !done->result.is_success()) {
-				co_return outcome{ done->result.to_error(s.context) };
-			}
-			co_return outcome{};
-		}
-		if (p.failure) {
-			co_return outcome{ detail::with_context(*p.failure, s.context) };
-		}
-		co_return outcome{ conn->not_connected(s.context) };
+		// Not a coroutine: the state is stable, the caller holds the stream.
+		return on_strand(s->conn, first_outcome_on_strand(*s));
 	}
 
 }// namespace detail
@@ -309,9 +349,15 @@ auto search_stream::controls() const noexcept -> const std::pmr::vector<control>
 	return state_ == nullptr ? none : state_->controls;
 }
 
-auto search_stream::next() -> capy::task<result<std::optional<entry>>> { return next_of<entry>(state_); }
+auto search_stream::next() -> capy::task<result<std::optional<entry>>>
+{
+	return detail::on_strand(state_ == nullptr ? core_ref() : state_->conn, next_of<entry>(state_));
+}
 
-auto search_stream::next_item() -> capy::task<result<std::optional<item>>> { return next_of<item>(state_); }
+auto search_stream::next_item() -> capy::task<result<std::optional<item>>>
+{
+	return detail::on_strand(state_ == nullptr ? core_ref() : state_->conn, next_of<item>(state_));
+}
 
 auto search_stream::reference_urls(std::pmr::memory_resource *mr) const -> std::pmr::vector<url>
 {

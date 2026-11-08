@@ -5,6 +5,7 @@
 #include "jhetz/ldap/sync_store.hpp"
 
 #include "connection/search.hpp"
+#include "strand_util.hpp"
 
 #include <boost/capy/when_any.hpp>
 #include <boost/corosio/delay.hpp>
@@ -352,12 +353,20 @@ namespace detail {
 			io.join();
 		}
 
+		static auto close_now(ldap::client &pool) -> capy::task<result<void>>
+		{
+			pool.close();
+			co_return result<void>{};
+		}
+
+		// Closes the ldap::client on its strand, so that its close() has
+		// run when the task ends.
 		static auto close(client_core &core) -> capy::task<result<void>>
 		{
-			if (core.pool) {
-				core.pool->close();
+			if (!core.pool) {
+				co_return result<void>{};
 			}
-			co_return result<void>{};
+			co_return co_await ldap::detail::on_strand(core.pool->executor(), close_now(*core.pool));
 		}
 	};
 
@@ -446,7 +455,7 @@ client::client(client_options options, std::pmr::memory_resource *mr)
 // client_core destructor joins it.
 client::~client() { close(); }
 
-auto client::executor() const noexcept -> ldap::client::executor_type { return core_->io.executor(); }
+auto client::executor() const noexcept -> boost::corosio::io_context::executor_type { return core_->io.executor(); }
 
 auto client::acquire() -> result<lease>
 {

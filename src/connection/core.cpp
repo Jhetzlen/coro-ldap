@@ -84,11 +84,11 @@ namespace {
 
 // ---------------------------------------------------------------- state
 
-connection::core::core(corosio::io_context &ioc,
+connection::core::core(executor_type strand,
   net::transport t,
   const connection_options &options,
   std::pmr::memory_resource *memory)
-  : ex(ioc.get_executor()), mr_(memory), transport_(std::move(t)), buf(memory),
+  : ex(std::move(strand)), mr_(memory), transport_(std::move(t)), buf(memory),
 	max_message_size(options.max_message_size), max_elements(options.max_elements),
 	default_timeout_(options.operation_timeout), tls_shutdown_timeout(options.tls_shutdown_timeout), pending(memory),
 	abandoned(memory), outbox(memory), held(memory), scratch(memory)
@@ -97,6 +97,31 @@ connection::core::core(corosio::io_context &ioc,
 	reader_idle.set();
 	bind_idle.set();
 	due_idle.set();
+	publish();
+}
+
+void connection::core::publish() noexcept
+{
+	if (!open) {
+		open_snapshot.store(false, std::memory_order_release);
+	}
+	// Once request_close() cleared it, the connection is closing: it stays
+	// closed in the snapshots.
+	const bool live = open_snapshot.load(std::memory_order_acquire);
+	outstanding_snapshot.store(live ? outstanding() : 0, std::memory_order_relaxed);
+	binds_snapshot.store(binds_begun, std::memory_order_relaxed);
+	layer_snapshot.store(security_layer(), std::memory_order_release);
+	tls_snapshot.store(live && is_tls(), std::memory_order_release);
+	accepting_snapshot.store(live && accepts_requests(), std::memory_order_release);
+}
+
+void connection::core::request_close() noexcept
+{
+	open_snapshot.store(false, std::memory_order_release);
+	accepting_snapshot.store(false, std::memory_order_release);
+	tls_snapshot.store(false, std::memory_order_release);
+	outstanding_snapshot.store(0, std::memory_order_relaxed);
+	detail::run_on_strand(*this, [self = core_ref(this)] noexcept { self->close(); });
 }
 
 // ---------------------------------------------------------------- failure
@@ -157,6 +182,7 @@ void connection::core::shut(const error &e, bool remember, bool close_transport)
 	if (reading) {
 		reader_stop.request_stop();
 	}
+	publish();
 	if (close_hook) {
 		auto hook = std::exchange(close_hook, nullptr);
 		hook();
@@ -298,6 +324,7 @@ auto connection::core::submit(message &m, pending_op *p, std::string_view contex
 		p->id = m.id;
 		pending.emplace(m.id, p);
 		p->registered = true;
+		publish();
 	}
 	try {
 		if (p != nullptr) {
@@ -315,6 +342,7 @@ auto connection::core::submit(message &m, pending_op *p, std::string_view contex
 			pending.erase(m.id);
 			p->registered = false;
 			stop_reader_if_idle();
+			publish();
 		}
 		throw;
 	}
@@ -343,6 +371,7 @@ void connection::core::abandon(pending_op &p) noexcept
 	p.finished = true;
 	pending.erase(p.id);
 	stop_reader_if_idle();
+	publish();
 	if (!open) {
 		return;
 	}
@@ -434,6 +463,7 @@ void connection::core::trim_abandoned()
 
 void connection::core::due_updated()
 {
+	publish();
 	if (due_answers == 0) {
 		due_idle.set();
 	} else {
@@ -597,6 +627,7 @@ void connection::core::abandon_all_for_unbind()
 	due_answers = 0;
 	due_changed.set();// the due watcher ends
 	stop_reader_if_idle();
+	publish();
 }
 
 auto connection::core::send_unbind(std::string_view context) -> result<void>
@@ -607,6 +638,7 @@ auto connection::core::send_unbind(std::string_view context) -> result<void>
 		return r;
 	}
 	unbinding = true;
+	publish();
 	return {};
 }
 
@@ -758,6 +790,7 @@ void connection::core::route(std::size_t size)
 			p.registered = false;
 			pending.erase(it);
 			stop_reader_if_idle();
+			publish();
 		}
 		p.ready.set();
 		return;
@@ -790,6 +823,7 @@ auto connection::core::take_armed_layer(const message &m) -> bool
 		shut(detail::with_context(std::move(r.error()), detail::format("read {}", transport_.name())), true);
 		return false;
 	}
+	publish();
 	return true;
 }
 
@@ -888,6 +922,7 @@ auto connection::core::begin_bind(core_ref c, std::string_view context) -> capy:
 	}
 	c->binding = true;
 	++c->binds_begun;
+	c->publish();
 	c->bind_idle.clear();
 	co_return result<void>{};
 }

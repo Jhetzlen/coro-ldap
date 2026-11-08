@@ -194,15 +194,24 @@
 // For code without coroutines, sync::client (sync.hpp) owns an io_context
 // and its thread, and wraps a client in blocking calls.
 //
-// Threading and lifetime: like connection, a client belongs to the executor
-// of its io_context; acquire() and the leases (their connections, their
-// destruction) must be used on it. The io_context must outlive the client
-// and its leases. The memory resource must outlive the work the client
-// leaves on the io_context (a detached unbind() may still run after the
-// client and its leases are gone): keep it until io_context::run() returns.
-// A lease may outlive its client, but the client's destruction closes its
-// connection (close()): its operations then fail, and destroying the lease
-// later is safe.
+// Threading and lifetime: as a connection (connection.hpp "Threading"), a
+// client may be used from any number of threads at once. Its pool state is
+// on a strand of its own (executor()): acquire(), the forwarders, a lease's
+// release and close() run there; each pooled connection has its own
+// strand, so operations on different connections run in parallel on an
+// io_context run by several threads. connections() reads a snapshot. The
+// observer's hooks, the referral authorizer and session_setup are called on
+// the client's strand. close(), the destructor and a
+// lease's release() or destruction called off the client's strand post
+// their work there: it takes effect when the io_context next runs (at once
+// on the strand, or once the io_context is stopped), so "no observer hook
+// runs once close() has returned" holds for a close() called on the
+// strand. The io_context must outlive the client and its leases. The memory
+// resource must outlive the work the client leaves on the io_context (a
+// detached unbind() may still run after the client and its leases are
+// gone): keep it until io_context::run() returns. A lease may outlive its
+// client, but the client's destruction closes its connection (close()):
+// its operations then fail, and destroying the lease later is safe.
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"
@@ -526,7 +535,7 @@ namespace detail {
 // full ldap::connection, but simple_bind, sasl_bind, start_tls, unbind and
 // close change the session for every lease sharing the connection (a bind
 // also retires it from the pool, see "Bind identity"): use an
-// exclusive_lease for those. Destroy it on the client's executor.
+// exclusive_lease for those.
 class lease : public detail::lease_base
 {
   public:
@@ -551,7 +560,7 @@ class lease : public detail::lease_base
 // an idle or new connection that no other lease shares while it is held,
 // with the full connection API, binds, start_tls() and unbind() included
 // (see the header comment for what a bind does to the connection's place in
-// the pool). Destroy it on the client's executor.
+// the pool).
 class exclusive_lease : public detail::lease_base
 {
   public:
@@ -576,7 +585,9 @@ class exclusive_lease : public detail::lease_base
 class client
 {
   public:
-	using executor_type = boost::corosio::io_context::executor_type;
+	// The client's strand over its io_context's executor (as
+	// connection::executor_type).
+	using executor_type = connection::executor_type;
 
 	// Opens nothing yet: connections are opened by acquire(). Connections'
 	// state is allocated from `mr`.
@@ -590,7 +601,8 @@ class client
 	// close().
 	~client();
 
-	// The executor everything must run on. Precondition: not moved from.
+	// The client's strand (see "Threading and lifetime" in the header
+	// comment). Precondition: not moved from.
 	[[nodiscard]] auto executor() const noexcept -> executor_type;
 
 	// A shared lease on a pooled connection: an idle one (probed first if
