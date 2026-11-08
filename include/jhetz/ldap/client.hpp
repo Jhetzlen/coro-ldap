@@ -209,9 +209,10 @@
 // on the strand. The io_context must outlive the client and its leases.
 // The memory resource must outlive the work the client leaves on the
 // io_context (a detached unbind() may still run after the client and its
-// leases are gone): keep it until io_context::run() returns. A lease may outlive its
-// client, but the client's destruction closes its connection (close()):
-// its operations then fail, and destroying the lease later is safe.
+// leases are gone): keep it until io_context::run() returns. A lease may
+// outlive its client, but the client's destruction closes its connection
+// (close()): its operations then fail, and destroying the lease later is
+// safe.
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"

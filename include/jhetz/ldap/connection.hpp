@@ -115,30 +115,30 @@
 // are allocated on the strand while the caller may free those it got on
 // another thread: the resource given for them must allow that (the default
 // resource, std::pmr::synchronized_pool_resource, or an arena that frees
-// nothing until the search has ended). Corosio's locking_mode::unsafe_io and unsafe opt
-// out of cross-thread use: the io_context must then run on one thread and
-// the connection be used from it only.
+// nothing until the search has ended). Corosio's locking_mode::unsafe_io and
+// unsafe opt out of cross-thread use: the io_context must then run on one
+// thread and the connection be used from it only.
 // Destructors and close() called off the strand (from a thread not running
 // it, or from a task of another executor, as a task started with
 // capy::run_async(ioc.get_executor()) is) do not wait for it: they post
 // their work there, and it runs when the io_context next runs. So close()
-// takes effect then (is_open(), outstanding(), is_tls() and
-// security_layer() report it at once), and after destroying a stream,
-// paged_search or transaction off the strand, the memory resource given
-// for its entries must outlive that run of the io_context. An io_context destroyed before it runs that work again drops
-// it, and what it would have freed is leaked: after run_one() or a stop,
-// let it run (poll()) first. They run at once when called on the strand,
-// or once the io_context is stopped from a thread outside its run():
-// stopped() is true from stop() on, while the threads running it may still
-// finish a handler on the strand, so join them before destroying a
-// connection or stream on another thread. Called from inside run() after
-// stop(), they post their work as above. The shared state is
-// reference counted, so a stream, an outstanding operation or the internal
-// reader may outlive the connection object (destroying the connection
-// closes it; they then fail with not_connected). Operations never wait on
-// I/O themselves (the writer and reader do), only for their responses, so
-// destroying a task suspended in one of them is safe: the operation is
-// abandoned. Stop tokens are the normal way to cancel.
+// takes effect then (is_open(), outstanding(), is_tls() and security_layer()
+// report it at once), and after destroying a stream, paged_search or
+// transaction off the strand, the memory resource given for its entries must
+// outlive that run of the io_context. An io_context destroyed before it runs
+// that work again drops it, and what it would have freed is leaked: after
+// run_one() or a stop, let it run (restart(), then poll()) first. They run
+// at once when called on the strand, or once the io_context is stopped from
+// a thread outside its run(): stopped() is true from stop() on, while the
+// threads running it may still finish a handler on the strand, so join them
+// before destroying a connection or stream on another thread. Called from
+// inside run() after stop(), they post their work as above. The shared state
+// is reference counted, so a stream, an outstanding operation or the
+// internal reader may outlive the connection object (destroying the
+// connection closes it; they then fail with not_connected). Operations never
+// wait on I/O themselves (the writer and reader do), only for their
+// responses, so destroying a task suspended in one of them is safe: the
+// operation is abandoned. Stop tokens are the normal way to cancel.
 #pragma once
 
 #include "jhetz/ldap/ber.hpp"

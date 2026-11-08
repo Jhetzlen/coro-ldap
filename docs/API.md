@@ -834,8 +834,9 @@ itself needs only ICU.
   ldap::named_by<&person::uid>, store_options{.schema_check})`, the
   struct and the source type deduced (`store<&person::uid,
   ldap::client>`); one store may be used from several threads (its
-  schema-check outcome is behind a lock). The naming member must be in `schema<T>`, required,
-  single-valued and writable (static_assert). `dn_of(key)`
+  schema-check outcome is behind a lock). The naming member must be in
+  `schema<T>`, required, single-valued and writable (static_assert).
+  `dn_of(key)`
   (`uid=<escaped key>,<base>`); `get(key)` / `get_at(dn)` -> `task<result<
   std::optional<T>>>` (a base-object search for T's attributes and object
   classes; noSuchObject or no entry of T's classes is nullopt, a limit
@@ -877,10 +878,10 @@ itself needs only ICU.
   pool of multiplexed connections opened lazily, usable from any number of
   threads (its pool state on a strand of its own, `executor()`, each
   connection on its own; `close()`, the destructor and a lease's release
-  off that strand post their work, as `connection::close()` does). `client(ioc,
-  client_options{.servers, .connection, .setup, .max_connections = 1,
-  .idle_check, .probe_timeout, .max_lifetime, .acquire_timeout,
-  .backoff, .failback_after, .observer, .referrals})`. The default
+  off that strand post their work, as `connection::close()` does).
+  `client(ioc, client_options{.servers, .connection, .setup,
+  .max_connections = 1, .idle_check, .probe_timeout, .max_lifetime,
+  .acquire_timeout, .backoff, .failback_after, .observer, .referrals})`. The default
   `max_connections = 1` is one multiplexed connection that every shared
   lease uses at once, not a pool of one connection per caller; raise it
   for exclusive leases (binds, StartTLS) or to isolate slow operations.
