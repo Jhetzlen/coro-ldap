@@ -43,7 +43,7 @@ namespace {
 
 }// namespace
 
-// Public API, RFC 4511 field order; kept by decision (coro-ldap-bsm.30).
+// Public API, RFC 4511 field order.
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
 ldap_result::ldap_result(std::int32_t result_code_,
   std::string_view matched_dn_,
@@ -243,7 +243,7 @@ search_request::search_request(search_request &&other, const allocator_type &all
 	filter(std::move(other.filter), alloc), attributes(std::move(other.attributes), alloc)
 {}
 
-// Public API, RFC 4511 field order; kept by decision (coro-ldap-bsm.30).
+// Public API, RFC 4511 field order.
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 modify_dn_request::modify_dn_request(std::string_view entry_,
   std::string_view new_rdn_,
@@ -317,7 +317,7 @@ auto extended_request::operator=(extended_request &&other) -> extended_request &
 	return *this;
 }
 
-// Public API, RFC 4511 field order; kept by decision (coro-ldap-bsm.30).
+// Public API, RFC 4511 field order.
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
 extended_response::extended_response(const ldap_result &result_,
   std::optional<std::string_view> response_name_,
@@ -357,7 +357,7 @@ auto extended_response::operator=(extended_response &&other) -> extended_respons
 	return *this;
 }
 
-// Public API, RFC 4511 field order; kept by decision (coro-ldap-bsm.30).
+// Public API, RFC 4511 field order.
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 intermediate_response::intermediate_response(std::optional<std::string_view> response_name_,
   std::optional<std::string_view> response_value_,

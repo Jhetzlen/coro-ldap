@@ -202,21 +202,13 @@ namespace {
 		return library_error(std::string(what) + ": SASLprep failed (ICU " + u_errorName(status) + ")");
 	}
 
-	// SASLprep (RFC 4013, the RFC 3454 stringprep profile) with ICU's
-	// usprep: map table B.1 to nothing and the non-ASCII spaces of C.1.2 to
-	// U+0020, NFKC, refuse the prohibited tables (C.1.2, C.2.1 .. C.9), check
-	// the bidi rules (RFC 3454 section 6) and, for a stored string, refuse
-	// the unassigned code points of table A.1 (Unicode 3.2). The input must
-	// be UTF-8; the result is UTF-8. `what` names the input in error
-	// contexts, which never quote it (it may be the password). The result
-	// is written into `out`, whose old content is wiped first (resizing a
-	// non-empty string could free a buffer still holding it, or leave its
-	// bytes past size()); it is then sized once and wiped on failure, so no
-	// other copy of the prepared text is made (returning a std::string
-	// would move it, and a move out of a short (SSO) string copies the
-	// characters and leaves them in the moved-from one). Every buffer of
-	// ours that held the text is wiped; ICU's internal working buffers
-	// cannot be.
+	// SASLprep (RFC 4013) with ICU's usprep: table B.1 mapped to nothing, the
+	// non-ASCII spaces of C.1.2 to U+0020, NFKC, the prohibited tables (C.1.2,
+	// C.2.1 .. C.9) refused, bidi checked (RFC 3454 section 6), and for a
+	// stored string the unassigned code points of table A.1 refused. UTF-8 in
+	// and out. `what` names the input in error contexts, which never quote it.
+	// The result is written into `out`, wiped first, sized once and wiped on
+	// failure, so no other copy of the prepared text is made.
 	auto saslprep(std::string_view s, std::string_view what, prep_kind kind, std::string &out) -> result<void>
 	{
 		wipe_string(out);

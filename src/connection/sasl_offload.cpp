@@ -24,14 +24,10 @@ namespace jhetz::ldap::detail {
 
 namespace {
 
-	// The threads of the offloaded SASL steps (run_offloaded), owned by
-	// the io_context as one of its services, which joins them when the
-	// io_context is destroyed. A service is shut down and destroyed before
-	// the ones created earlier, the scheduler (created by the io_context's
-	// constructor) among them, so the join happens while the scheduler is
-	// still alive: a thread may post its wakeup and drop its work_guard
-	// until it ends. A thread that has ended is joined (reaped) when the
-	// next one starts.
+	// The threads of the offloaded SASL steps (run_offloaded), owned by the
+	// io_context as a service, which joins them on destruction while the
+	// scheduler (an earlier service) is still alive. An ended thread is
+	// joined when the next one starts.
 	class offload_threads final : public capy::execution_context::service
 	{
 	  public:
@@ -109,15 +105,10 @@ namespace {
 
 	// Runs a mechanism's offloaded step (sasl_work) on a thread of its own
 	// (offload_threads) and waits for its result, within the operation
-	// timeout and the stop token. Errors are without the bind's context
-	// (sasl_bind adds it). The thread shares `offloaded` with this wait, so
-	// giving up (timeout, cancellation, the task destroyed) leaves the work
-	// running with what it owns; its wake() then latches a token nobody
-	// reads, and the last owner frees the work and its result. The thread
-	// holds work on the io_context until it is done, so run() returns only
-	// after the work, and destroying the io_context waits for the thread to
-	// end. A thread per call: the work blocks for as long as the network
-	// takes (a Kerberos KDC), which a shared pool would spend its threads on.
+	// timeout and the stop token. Errors are without the bind's context. The
+	// thread shares `offloaded` with this wait, so giving up leaves the work
+	// running with what it owns, and the last owner frees it. The thread holds
+	// work on the io_context until done. One thread per call.
 	struct offloaded
 	{
 		explicit offloaded(sasl_work w) noexcept : work(std::move(w)) {}

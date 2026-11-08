@@ -495,22 +495,10 @@ class connection::core
 
 	// The frame of a detached task (writer, reader, due watcher), from the
 	// executor's frame allocator as capy::run_async would use. Made before
-	// the caller sets its flags: a bad_alloc then leaves no flag set without
-	// its task. (capy::run_async allocates its own frame before the task's;
-	// a task frame failing there would leak it, and its work guard.)
-	// Known limitations, outside this library, where an allocation failing
-	// ends the program, whatever the caller catches:
-	// - capy::run_async allocates its own frame (the trampoline) in a
-	//   noexcept constructor;
-	// - corosio::timeout builds its timer (and grows the timer heap) and
-	//   starts its timeout coroutine (a frame) in await_suspend, which
-	//   capy's task calls from a noexcept wrapper (transform_awaiter): the
-	//   due watcher, next_response and start_tls's wait for due answers
-	//   with a deadline, and net::detail::bounded (connect, TLS handshake
-	//   and shutdown with a deadline). Its awaitable's std::stop_source,
-	//   made when the co_await is evaluated (before await_suspend), throws
-	//   bad_alloc normally: caught by the due watcher, propagated by the
-	//   others.
+	// the caller sets its flags, so a bad_alloc leaves no flag set without
+	// its task. Allocations that end the program on failure (run_async's
+	// frame, corosio::timeout's timer and coroutine) are listed in DESIGN.md
+	// section 7.
 	auto new_task(boost::capy::task<void> (*body)(core *)) -> boost::capy::task<void>;
 
 	// ---------------------------------------------------------------- writer
@@ -563,12 +551,8 @@ class connection::core
 	// idle connection holds no timer and `io_context::run()` can return.
 	// No stop token: it ends on its own when the due answers do (or when
 	// the connection closes).
-	// Its only allocations are corosio::timeout's. The catch sees the one
-	// made when the co_await is evaluated: the awaitable's std::stop_source
-	// (its shared state, from the global operator new). The timer, the
-	// timer heap's growth and the timeout coroutine's frame are made in an
-	// await_suspend that capy calls from a noexcept wrapper, so one of
-	// those failing ends the program (a known limitation, see new_task).
+	// Its only allocations are corosio::timeout's; the catch sees only the
+	// awaitable's std::stop_source (DESIGN.md section 7 has the limitation).
 	static auto due_watcher(core *self) -> boost::capy::task<void>;
 
 	// Requests waited for (registered operations), without the due answers.
@@ -692,14 +676,11 @@ namespace detail {
 
 	// One request with one response (everything but search): sends it,
 	// waits for the response of index `expect` and returns it. `self` keeps
-	// the state alive across the suspension. One whose stop token is set
-	// already is not sent (sending it would only abandon it at once, and an
-	// update might be applied): it fails with capy::error::canceled. Binds
-	// are checked by begin_bind() instead: a later step of a SASL exchange
-	// is sent, since the server waits for it (abandoning it then closes the
-	// connection). With `intermediates`, the IntermediateResponses that come
-	// before the response are appended to it (on its resource); without,
-	// they are skipped unread.
+	// the state alive across the suspension. One whose stop token is already
+	// set is not sent and fails with capy::error::canceled (binds are checked
+	// by begin_bind() instead). With `intermediates`, the
+	// IntermediateResponses before the response are appended to it (on its
+	// resource); without, they are skipped unread.
 	auto request_response(core_ref self,
 	  message request,
 	  std::size_t expect,

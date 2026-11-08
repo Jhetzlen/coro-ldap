@@ -77,21 +77,13 @@ namespace filters {
 // (exact spelling), values and flags. How a filter was made does not matter:
 // `filter::raw("(&(a=1)(b=2))") == (attr("a") == "1" && attr("b") == "2")`.
 //
-// Representation: all nodes of a filter live in one std::pmr::vector
-// (44 bytes each, linked by 32-bit indices: parent, first / last child, next
-// sibling) and all their strings in one std::pmr::string, so a filter makes
-// two allocations however large it is, copies with two memcpy-like copies,
-// and its destructor never recurses. Combining reuses the storage of an
-// rvalue operand (the larger one when both are) and copies an lvalue one, so
-// a chain in one expression (`a && b && c ...`, nested either way) and a loop
-// `f = std::move(f) || x` are linear, while `f = f || x` copies f every time
-// (quadratic over a loop). Traversals (==, to_string) follow the
-// parent links instead of recursing, so any depth is safe; encoding recurses,
-// but only after checking the depth limit.
-//
-// Nodes are linked by 32-bit offsets, so the strings of one filter are
-// limited to 4 GiB in all; exceeding that throws std::length_error, like
-// exceeding a container's max_size() (a filter that large cannot be sent).
+// Representation: the nodes live in one std::pmr::vector linked by 32-bit
+// indices and the strings in one std::pmr::string, so a filter makes two
+// allocations and traversals (==, to_string) do not recurse; encoding
+// recurses only after checking the depth limit. Combining reuses an rvalue
+// operand's storage and copies an lvalue one: `f = std::move(f) || x` is
+// linear over a loop, `f = f || x` quadratic. A filter's strings are
+// limited to 4 GiB in all; beyond, std::length_error is thrown.
 //
 // Memory (DESIGN.md section 8): allocator-aware. The nodes and strings use
 // the resource given to raw(), decode_filter(), filters::attr or the

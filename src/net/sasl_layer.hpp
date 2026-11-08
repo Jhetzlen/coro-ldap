@@ -34,25 +34,19 @@ namespace jhetz::ldap::net::detail {
 // byte order (RFC 4422 section 3.7).
 inline constexpr std::size_t sasl_length_size = 4;
 
-// A capy::Stream over `inner` (the transport's own stream, TLS-decrypted
-// for ldaps:// or StartTLS: the SASL layer goes on top of TLS, RFC 4513
-// section 5.2.1.6). write_some() protects at most max_wrap_input() octets
-// into one buffer, writes it whole after its length, and reports the
-// plaintext octets taken (none when the buffer could not be written whole:
-// a part of one delivers nothing); a layer whose max_wrap_input() is 0
-// fails the write (client_errc::encode_error) rather than loop. read_some()
-// delivers plaintext, reading and unwrapping whole buffers as needed; a
-// length above max_received() fails (client_errc::message_too_large) before
-// the buffer is read. Bytes received but not unwrapped stay across a
-// cancelled read. One read and one write may be in flight at once, as on
-// any transport stream.
+// A capy::Stream over `inner` (the transport's stream, above TLS if any, RFC
+// 4513 section 5.2.1.6). write_some() protects at most max_wrap_input()
+// octets into one buffer, writes it whole after its length, and reports the
+// plaintext octets taken (none if the buffer was not written whole); a
+// max_wrap_input() of 0 fails with client_errc::encode_error. read_some()
+// delivers plaintext, unwrapping whole buffers; a length above
+// max_received() fails with client_errc::message_too_large before the buffer
+// is read. Unwrapped bytes survive a cancelled read. One read and one write
+// may be in flight at once.
 //
-// Errors are error codes (capy's stream contract); the context of the
-// last read's and the last write's failure, when it came from the layer
-// (an oversized buffer, a wrap or unwrap error, a protected buffer cut
-// short), is kept in last_read_error() and last_write_error() for
-// read_frame and write_bytes to add: each side's own, empty when the
-// inner stream's error says it all.
+// Errors are error codes; the context of the last read and write failure
+// that came from the layer is kept in last_read_error() and
+// last_write_error() (empty when the inner stream's error says it all).
 class sasl_layer_stream
 {
   public:

@@ -1,21 +1,13 @@
 // Internal: the trust anchors of default verification (tls_options with no
 // ca_file, ca_dir or ca_pem). Off Windows OpenSSL reads them itself
-// (SSL_CERT_FILE, SSL_CERT_DIR, its compiled-in paths). On Windows, where
-// OpenSSL reads no system store, they come from the CryptoAPI "ROOT" store
-// (trust_store_win.cpp, the only Windows-specific part): enumerated per
-// connection, filtered (system_certificate below), each passed to Corosio as
-// PEM.
+// (SSL_CERT_FILE, SSL_CERT_DIR, its compiled-in paths). On Windows they come
+// from the CryptoAPI "ROOT" store (trust_store_win.cpp), enumerated per
+// connection, filtered (system_certificate) and passed to Corosio as PEM.
 //
 // On Windows, default verification also hands the server's chain to
-// CryptoAPI (verify_system_chain), whose verdict replaces OpenSSL's on
-// the chain: CryptoAPI fetches the AuthRoot roots Windows downloads on
-// demand (a root never fetched is not in ROOT yet), and applies Windows'
-// root program and revocation checks. The ROOT anchors still go to
-// OpenSSL, which then builds and checks the chain as elsewhere; only its
-// verdicts on the leaf alone are kept (tls.cpp fatal_with_platform_chain:
-// the host name, the leaf's key size and its purpose), and CryptoAPI is
-// given OpenSSL's security level for the rest of the chain
-// (strong_sign_for_level).
+// CryptoAPI (verify_system_chain), whose verdict replaces OpenSSL's on the
+// chain; OpenSSL's verdicts on the leaf alone (host name, key size,
+// purpose) are kept (tls.cpp fatal_with_platform_chain).
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -70,29 +62,13 @@ auto load_system_trust(boost::corosio::tls_context &ctx) -> result<void>;
 // load_system_trust's anchors).
 auto platform_verifies_chain() noexcept -> bool;
 
-// CryptoAPI's strong signature lists (CERT_STRONG_SIGN_SERIALIZED_INFO,
-// given to CertGetCertificateChain) for OpenSSL's security level
-// `security_level` (the X509_VERIFY_PARAM auth level OpenSSL checks the
-// server's chain against: SSL_get_security_level, 2 by default since
-// OpenSSL 3.2), so that CryptoAPI's verdict on the chain is not weaker than
-// OpenSSL's CA_KEY_TOO_SMALL and CA_MD_TOO_WEAK checks it replaces. Level
-// n requires the security bits of OpenSSL's table (crypto/x509/x509_vfy.c
-// minbits_table: 80, 112, 128, 192, 256; above 5 as 5), which OpenSSL rates
-// as: RSA keys of 1024, 2048, 3072, 7680, 15360 bits
-// (ossl_ifc_ffc_compute_security_bits), EC curves of twice the bits
-// (OpenSSL rates a curve at half its size), and signature hashes of twice
-// the bits (half the digest size; SHA-1 counts 63, below every level, in
-// crypto/x509/x509_set.c). So level 2 is
-// "RSA/2048;ECDSA/224" and the RSA and ECDSA signatures with SHA-256,
-// SHA-384 or SHA-512. Stricter than OpenSSL only where a list leaves
-// something out: SHA-224 and SHA-3 hashes and DSA and EdDSA signatures are
-// not listed (CNG names DSA, the lists simply omit it), so CryptoAPI counts
-// them as weak although OpenSSL accepts e.g. SHA3-256 (128 bits) at level
-// 2; and RSA sizes between OpenSSL's standard ones, which OpenSSL rates by
-// formula (RSA-2040 is 112 bits, enough for level 2) but the list's
-// minimum (RSA/2048) refuses, the leaf's key included, although OpenSSL's
-// EE_KEY_TOO_SMALL would pass it.
-// nullopt at level 0 or below (OpenSSL checks nothing then).
+// CryptoAPI's strong signature lists (CERT_STRONG_SIGN_SERIALIZED_INFO, for
+// CertGetCertificateChain) matching OpenSSL's security level
+// `security_level` (SSL_get_security_level): the key sizes and signature
+// hashes of OpenSSL's minbits_table for that level, e.g. level 2 is
+// "RSA/2048;ECDSA/224" with SHA-256, SHA-384 or SHA-512. Stricter than
+// OpenSSL for SHA-224, SHA-3, DSA, EdDSA and non-standard RSA sizes (DESIGN.md
+// section 7). nullopt at level 0 or below.
 struct strong_sign_lists
 {
 	// pwszCNGSignHashAlgids: "RSA/SHA256;ECDSA/SHA256;...".
@@ -102,29 +78,18 @@ struct strong_sign_lists
 };
 auto strong_sign_for_level(int security_level) -> std::optional<strong_sign_lists>;
 
-// Verifies the server certificate chain `chain` (DER: the leaf, then the
-// other certificates the server sent) for TLS server authentication with
-// the platform's chain engine and SSL policy (Windows:
-// CertGetCertificateChain for serverAuth, revocation checked for every
-// certificate but the root, then CertVerifyCertificateChainPolicy with
-// CERT_CHAIN_POLICY_SSL; a revocation status that cannot be determined,
-// e.g. an unreachable CRL, is not an error, a revoked certificate is).
-// Signatures and keys below OpenSSL's `security_level` are rejected
-// (strong_sign_for_level). The host name is not checked: it stays
-// OpenSSL's (host_name_matching).
-// `timeout` (what is left of the deadline; nullopt: none) bounds only the
-// revocation retrieval, every CRL and OCSP URL together
-// (revocation_retrieval_budget). The intermediates CryptoAPI fetches from
-// AIA URLs and the roots and lists of AuthRoot auto-update are fetched
-// with the chain engine's own per-URL timeout (Windows' default; Microsoft
-// documents CERT_CHAIN_PARA::dwUrlRetrievalTimeout for revocation only),
-// so the call can take longer than `timeout`: the revocation budget plus
-// that timeout per such URL. Blocks the calling thread throughout. Errors
-// have the context "Windows certificate chain: <why>". Not available off
-// Windows (std::errc::function_not_supported).
-// The cap on verify_system_chain's revocation retrieval: revocation is
-// soft-fail, so waiting longer only delays the same verdict, with the
-// thread blocked.
+// Verifies the server certificate chain `chain` (DER, leaf first) for TLS
+// server authentication with the platform's chain engine and SSL policy
+// (Windows: CertGetCertificateChain for serverAuth with soft-fail revocation
+// for every certificate but the root, then CertVerifyCertificateChainPolicy
+// with CERT_CHAIN_POLICY_SSL), rejecting signatures and keys below
+// `security_level` (strong_sign_for_level). The host name is not checked.
+// `timeout` (nullopt: none) bounds only the revocation retrieval
+// (revocation_retrieval_budget); AIA and AuthRoot fetches use the chain
+// engine's own per-URL timeout. Blocks the calling thread. Errors have the
+// context "Windows certificate chain: <why>". Off Windows:
+// std::errc::function_not_supported.
+// The cap on verify_system_chain's revocation retrieval.
 inline constexpr std::chrono::milliseconds max_revocation_retrieval = std::chrono::seconds(20);
 
 // verify_system_chain's budget for the revocation retrieval, every URL

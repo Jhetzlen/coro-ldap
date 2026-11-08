@@ -1,30 +1,20 @@
 // Default verification on Windows (trust_store.hpp): the CryptoAPI "ROOT"
 // system store as OpenSSL's anchors, and verify_system_chain, whose verdict
-// replaces OpenSSL's on the chain (so the filtering below no longer
-// decides; a ROOT store that cannot be read still fails the connect).
-// Compiled on Windows only (CMake picks this file instead of
-// trust_store_default.cpp).
+// replaces OpenSSL's on the chain (a ROOT store that cannot be read still
+// fails the connect). Compiled on Windows only, instead of
+// trust_store_default.cpp.
 //
-// Enumerated again for every context, like OpenSSL re-reading its files
-// off Windows. Each root is kept only if its extended key usage property
-// allows serverAuth (or restricts nothing), its disallowed extended key
-// usage property does not list serverAuth, it has no NotBefore restriction
-// on serverAuth (below), it has no CERT_DISALLOWED_FILETIME_PROP_ID
-// property, and it is not in the "Disallowed" store (by SHA-1 thumbprint).
-// The "CA" store (intermediates) never provides anchors. A store that
-// cannot be enumerated to the end fails: no silent partial set.
+// Enumerated for every context. A root is kept only if its extended key
+// usage property allows serverAuth (or restricts nothing), its disallowed
+// extended key usage property does not list serverAuth, it has no NotBefore
+// restriction on serverAuth (CERT_NOT_BEFORE_FILETIME_PROP_ID for the uses
+// CERT_NOT_BEFORE_ENHKEY_USAGE_PROP_ID lists; pass such a root in ca_file to
+// trust it anyway), no CERT_DISALLOWED_FILETIME_PROP_ID, and it is not in
+// the "Disallowed" store (by SHA-1 thumbprint). The "CA" store never provides
+// anchors. A store that cannot be enumerated to the end fails.
 //
-// NotBefore: the root program stops trusting certificates a root issues
-// after a date with the CERT_NOT_BEFORE_FILETIME_PROP_ID property, for the
-// uses CERT_NOT_BEFORE_ENHKEY_USAGE_PROP_ID lists (all uses when it is
-// absent). OpenSSL cannot trust a root only for certificates issued before
-// a date, so such a root is not an anchor for TLS servers at all (fail
-// closed); pass it in ca_file to trust it anyway.
-//
-// verify_system_chain: the server's chain through CryptoAPI, as wldap32
-// and Schannel clients verify it (see trust_store.hpp). Needs
-// CERT_CHAIN_PARA_HAS_EXTRA_FIELDS (set for this file by CMake) for
-// CERT_CHAIN_PARA::dwUrlRetrievalTimeout and pStrongSignPara.
+// verify_system_chain needs CERT_CHAIN_PARA_HAS_EXTRA_FIELDS (set by CMake)
+// for CERT_CHAIN_PARA::dwUrlRetrievalTimeout and pStrongSignPara.
 #include "trust_store.hpp"
 
 #include "../format_util.hpp"

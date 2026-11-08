@@ -1992,7 +1992,10 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   demand, which OpenSSL (with the filtered ROOT store copied into it) does
   not have, so requiring both would keep that gap; and Windows applies
   its own root program rules (distrust, NotBefore dates, name
-  constraints) itself. So OpenSSL's errors are let through, except a host
+  constraints) itself. The ROOT anchors copied into OpenSSL leave out a
+  root with a NotBefore restriction on serverAuth: OpenSSL cannot trust a
+  root only for certificates issued before a date, so it fails closed
+  (`ca_file` trusts it anyway). So OpenSSL's errors are let through, except a host
   name or IP address mismatch and the two checks on the leaf alone, which
   no chain CryptoAPI builds can change and the SSL policy does not redo
   (or not all of): the leaf's key below the security level

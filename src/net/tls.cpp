@@ -248,15 +248,11 @@ namespace {
 	}
 
 	// The platform's verdict on the chain (verify_state::system_chain), at
-	// the leaf's final callback, once. OpenSSL (X509_verify_cert's
-	// verify_chain) calls it after the chain build, the purpose, security
-	// level and host name checks, and the signature and validity checks of
-	// every certificate; only the name constraint, RFC 3779 and policy
-	// checks come after it, and their errors are let through (CryptoAPI
-	// checks name constraints and policies itself). On acceptance the
-	// store's error, still the last one let through (e.g.
-	// UNABLE_TO_GET_ISSUER_CERT_LOCALLY), is reset to X509_V_OK, so that
-	// SSL_get_verify_result() reports the verified connection as such.
+	// the leaf's final callback, once: after OpenSSL's chain build, purpose,
+	// security level, host name, signature and validity checks; the later
+	// name constraint, RFC 3779 and policy errors are let through. On
+	// acceptance the store's error is reset to X509_V_OK so that
+	// SSL_get_verify_result() reports the connection as verified.
 	auto verify_chain_with_platform(verify_state &state, X509_STORE_CTX *store) -> bool
 	{
 		state.system_chain_verified = false;
@@ -593,14 +589,10 @@ auto tls_handshake(transport::layers &im,
 		setup.state->strict_host = name;
 	}
 	setup.state->deadline = deadline;
-	// im.tls is set before the handshake and kept only if it succeeds:
-	// transport::is_tls() is true during the handshake, so a caller that
-	// needs "TLS protects the stream" must also check that no handshake is
-	// in progress (connection's `upgrading`). Undone on a failed handshake,
-	// and on a throw (bad_alloc) from openssl_stream's construction,
-	// set_hostname(), the handshake's frame, bounded()'s or the timeout's
-	// stop_source. Back to the plain socket; the connection is unusable
-	// anyway and must be closed (the server expects a handshake now).
+	// im.tls is set before the handshake and kept only if it succeeds
+	// (transport::is_tls() is true during the handshake: callers also check
+	// that none is in progress). Undone on a failed handshake and on a throw,
+	// back to the plain socket, which must then be closed.
 	ldap::detail::scope_exit undo_tls{ [&im] {
 		clear_tls_session(im);
 		im.tls.reset();

@@ -39,17 +39,10 @@ namespace {
 	gss_OID_set_desc krb5_oid_set{ .count = 1, .elements = &krb5_oid };
 	// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
-	// GSS_C_CHANNEL_BOUND_FLAG, spelled out too: MIT krb5 1.19 and later
-	// define it in gssapi_ext.h (which Heimdal lacks), Heimdal in gssapi.h,
-	// both as 2048. As a req_flag of gss_init_sec_context it makes the
-	// initiator put Microsoft's KERB_AP_OPTIONS_CBT in the authenticator
-	// (MIT init_sec_context.c: AP_OPTS_CBT_FLAG; Heimdal's master since
-	// 2024, ba8c3dbc62: channel_bound). A signal only: an acceptor refuses a
-	// wrong binding with or without it (MIT accept_sec_context.c
-	// process_checksum), and it changes the outcome only for an initiator
-	// that sends no bindings, while this one sets it only with bindings. AD
-	// and MIT then report the context as channel bound. Older libraries
-	// ignore the bit (MIT masks req_flags, Heimdal tests the flags it knows).
+	// GSS_C_CHANNEL_BOUND_FLAG (2048 in both MIT krb5's gssapi_ext.h and
+	// Heimdal's gssapi.h), spelled out for libraries that lack it. As a
+	// req_flag it makes the initiator send KERB_AP_OPTIONS_CBT; older
+	// libraries ignore it (DESIGN.md section 3, "GSSAPI").
 	constexpr OM_uint32 channel_bound_flag = 2048;
 
 	// The req_flags a security layer needs: integrity and confidentiality
@@ -419,9 +412,8 @@ namespace detail {
 			openldap_hash = net::detail::openldap_tls_server_end_point(context.peer_certificate);
 			hash = openldap_hash;
 		}
-		// Never a silent fallback to no bindings: the certificate is the
-		// TLS peer's choice, so a man in the middle could pick one without
-		// a hash (coro-ldap-2y3). gssapi_channel_binding::none opts out.
+		// No fallback to no bindings without a hash;
+		// gssapi_channel_binding::none opts out.
 		if (hash.empty()) {
 			return fail(client_errc::tls_required,
 			  form == gssapi_channel_binding_form::rfc5929
