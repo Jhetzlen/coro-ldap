@@ -5,6 +5,7 @@
 //   co_await people.add(person{.uid = "jdoe", ...});         // uid=jdoe,ou=people,dc=example,dc=org
 //   auto p = co_await people.get("jdoe");                    // result<std::optional<person>>
 //   co_await people.modify("jdoe", {ldap::replace<&person::mail>("j@example.org")});
+//   co_await people.rename("jdoe", "john");                  // uid=john,ou=people,dc=example,dc=org
 //   auto all = co_await people.search(ldap::filters::field<&person::mail>().present());
 //   auto pages = co_await people.search_paged(100);         // result<record_stream<person, paged_search>>
 //   co_await people.remove("jdoe");
@@ -194,6 +195,44 @@ namespace detail {
 				p.changes.push_back(std::move(*c.wire));
 			}
 			return p;
+		}
+
+		// The modify DN renaming the entry named `from` to `to` under `base`:
+		// the new RDN <naming attribute>=<to>, the old one's value removed.
+		// NOLINTBEGIN(bugprone-easily-swappable-parameters): from, then to, as modify DN
+		[[nodiscard]] static auto
+		  rename_request(const dn &base, const key_type &from, const key_type &to, const modify_dn_controls &controls)
+			-> result<modify_dn_params>
+		{
+			auto entry = dn_of(base, from);
+			if (!entry) {
+				return std::unexpected(with_context(std::move(entry.error()), "modify DN"));
+			}
+			auto name = rdn_of(to);
+			if (!name) {
+				return std::unexpected(with_context(std::move(name.error()), op_context("modify DN", *entry)));
+			}
+			return modify_dn_params{
+				.entry = std::move(*entry), .new_rdn = std::move(*name), .delete_old_rdn = true, .controls = controls
+			};
+		}
+		// NOLINTEND(bugprone-easily-swappable-parameters)
+
+		// The modify DN moving the entry named `key` under `base` to
+		// `new_base`, its RDN kept.
+		[[nodiscard]] static auto
+		  move_request(const dn &base, const key_type &key, const dn &new_base, const modify_dn_controls &controls)
+			-> result<modify_dn_params>
+		{
+			auto name = rdn_of(key);
+			if (!name) {
+				return std::unexpected(with_context(std::move(name.error()), "modify DN"));
+			}
+			return modify_dn_params{ .entry = base.child(*name),
+				.new_rdn = std::move(*name),
+				.delete_old_rdn = true,
+				.new_superior = new_base,
+				.controls = controls };
 		}
 
 		// An empty filter (a typed filter whose value did not encode) fails
@@ -467,6 +506,45 @@ template<auto Naming, directory D> class store
 			co_return std::unexpected(std::move(c.error()));
 		}
 		co_return co_await source_->del({ .entry = std::move(entry), .controls = std::move(controls) });
+	}
+
+	// Renames the entry named `from` to `to` (modify DN, RFC 4511 section
+	// 4.9): the new RDN is <naming attribute>=<to> and the old RDN's value
+	// is removed (deleteoldrdn TRUE), so the naming member reads `to`
+	// afterwards. A key that does not encode fails before anything is sent.
+	auto rename(key_type from, key_type to, modify_dn_controls controls = {}) -> boost::capy::task<result<response>>
+	{
+		auto request = codec::rename_request(base_, from, to, controls);
+		if (!request) {
+			co_return std::unexpected(std::move(request.error()));
+		}
+		if (auto c = co_await check_schema(); !c) {
+			co_return std::unexpected(std::move(c.error()));
+		}
+		co_return co_await source_->modify_dn(std::move(*request));
+	}
+
+	// Moves the entry named `key` under `new_base` (modify DN with
+	// newSuperior), keeping its RDN: it is then named `key` in a store of
+	// `new_base`.
+	auto move(key_type key, dn new_base, modify_dn_controls controls = {}) -> boost::capy::task<result<response>>
+	{
+		auto request = codec::move_request(base_, key, new_base, controls);
+		if (!request) {
+			co_return std::unexpected(std::move(request.error()));
+		}
+		if (auto c = co_await check_schema(); !c) {
+			co_return std::unexpected(std::move(c.error()));
+		}
+		co_return co_await source_->modify_dn(std::move(*request));
+	}
+	// As above, under `other`'s base (a store of the same struct and naming
+	// member, on any source); the request runs on this store's source.
+	template<directory Other>
+	auto move(key_type key, const store<Naming, Other> &other, modify_dn_controls controls = {})
+	  -> boost::capy::task<result<response>>
+	{
+		return move(std::move(key), other.base(), std::move(controls));
 	}
 
 	// The entries of T's object classes matching `f` under the base

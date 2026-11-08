@@ -846,7 +846,9 @@ itself needs only ICU.
   classes; noSuchObject or no entry of T's classes is nullopt, a limit
   code with no entry is an error);
   `add(T)`, `modify(key, changes)` / `modify_at(dn, changes)`,
-  `remove(key)` / `remove_at(dn)` -> `task<result<response>>`, each with
+  `remove(key)` / `remove_at(dn)`, `rename(from, to)` (modify DN to
+  `<naming attribute>=<to>`, deleteoldrdn TRUE) and `move(key, new_base)` /
+  `move(key, other_store)` (newSuperior, RDN kept) -> `task<result<response>>`, each with
   its operation's controls; `search(filter = (objectClass=*), scope =
   single_level)` -> `task<result<typed_search_result<record<T>>>>`,
   `record<T>{dn, value}` with the DN the server sent (entries named

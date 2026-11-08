@@ -128,6 +128,38 @@ template<auto Naming, directory D> class store
 		return source_->del({ .entry = entry, .controls = controls });
 	}
 
+	[[nodiscard]] auto rename(const key_type &from, const key_type &to, const modify_dn_controls &controls = {})
+	  -> result<response>
+	{
+		auto request = codec::rename_request(base_, from, to, controls);
+		if (!request) {
+			return std::unexpected(std::move(request.error()));
+		}
+		if (auto c = check_schema(); !c) {
+			return std::unexpected(std::move(c.error()));
+		}
+		return source_->modify_dn(std::move(*request));
+	}
+	[[nodiscard]] auto move(const key_type &key, const dn &new_base, const modify_dn_controls &controls = {})
+	  -> result<response>
+	{
+		auto request = codec::move_request(base_, key, new_base, controls);
+		if (!request) {
+			return std::unexpected(std::move(request.error()));
+		}
+		if (auto c = check_schema(); !c) {
+			return std::unexpected(std::move(c.error()));
+		}
+		return source_->modify_dn(std::move(*request));
+	}
+	template<directory Other>
+	[[nodiscard]] auto move(const key_type &key,
+	  const store<Naming, Other> &other,
+	  const modify_dn_controls &controls = {}) -> result<response>
+	{
+		return move(key, other.base(), controls);
+	}
+
 	[[nodiscard]] auto search(filter f = filters::attr("objectClass").present(),
 	  search_scope scope = search_scope::single_level) -> result<typed_search_result<record<value_type>>>
 	{

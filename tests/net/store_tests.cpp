@@ -235,6 +235,54 @@ TEST_CASE("store: add, modify and remove name the entry from the key", "[net][st
 	CHECK(m.log.received[4] == ldap::message{ 5, ldap::del_request{ "cn=jdoe,ou=other,dc=example,dc=org" } });
 }
 
+TEST_CASE("store: rename and move send a modify DN", "[net][store]")
+{
+	mock_ldap m;
+	m.serve({ answer({ ok(1, ldap::modify_dn_response{}) }),
+	  answer({ ok(2, ldap::modify_dn_response{}) }),
+	  answer({ ok(3, ldap::modify_dn_response{}) }) });
+	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	const ldap::dn staff_base{
+		"ou=st\xC3\xA4"
+		"ff,dc=example,dc=org"
+	};
+	const ldap::store staff(m.conn, staff_base, ldap::named_by<&person::uid>);
+
+	REQUIRE(m.run(s.rename("Doe, John+x", "J\xC3\xBCrgen #1")).has_value());
+	REQUIRE(m.run(s.move("J\xC3\xBCrgen #1", staff_base)).has_value());
+	REQUIRE(m.run(s.move("#a;b", staff)).has_value());
+	m.check_server();
+
+	REQUIRE(m.log.received.size() == 3);
+	const auto &renamed = std::get<ldap::modify_dn_request>(m.log.received[0].op);
+	CHECK(renamed.entry == "uid=Doe\\, John\\+x,ou=people,dc=example,dc=org");
+	CHECK(renamed.new_rdn == "uid=J\xC3\xBCrgen #1");
+	CHECK(renamed.delete_old_rdn);
+	CHECK_FALSE(renamed.new_superior.has_value());
+	const auto &moved = std::get<ldap::modify_dn_request>(m.log.received[1].op);
+	CHECK(moved.entry == "uid=J\xC3\xBCrgen #1,ou=people,dc=example,dc=org");
+	CHECK(moved.new_rdn == "uid=J\xC3\xBCrgen #1");
+	REQUIRE(moved.new_superior.has_value());
+	CHECK(*moved.new_superior == "ou=st\xC3\xA4" "ff,dc=example,dc=org");
+	const auto &to_store = std::get<ldap::modify_dn_request>(m.log.received[2].op);
+	CHECK(to_store.entry == "uid=\\#a\\;b,ou=people,dc=example,dc=org");
+	REQUIRE(to_store.new_superior.has_value());
+	CHECK(*to_store.new_superior == staff_base.to_string());
+
+	auto bad_from = m.run(s.rename("j\xC3", "x"));
+	REQUIRE_FALSE(bad_from.has_value());
+	CHECK(bad_from.error().code == ldap::client_errc::encode_error);
+	CHECK_THAT(std::string(bad_from.error().context), Catch::Matchers::StartsWith("modify DN: attribute uid: "));
+	auto bad_to = m.run(s.rename("x", "j\xC3"));
+	REQUIRE_FALSE(bad_to.has_value());
+	CHECK_THAT(std::string(bad_to.error().context),
+	  Catch::Matchers::StartsWith("modify DN uid=x,ou=people,dc=example,dc=org: attribute uid: "));
+	auto bad_move = m.run(s.move("j\xC3", staff_base));
+	REQUIRE_FALSE(bad_move.has_value());
+	CHECK_THAT(std::string(bad_move.error().context), Catch::Matchers::StartsWith("modify DN: attribute uid: "));
+	CHECK(m.log.received.size() == 3);
+}
+
 TEST_CASE("store: a value that does not encode fails before anything is sent", "[net][store]")
 {
 	mock_ldap m;
@@ -516,9 +564,14 @@ TEST_CASE("sync store: the same operations, blocking", "[net][store][sync]")
 	REQUIRE(paged->entries.size() == 2);
 	CHECK(paged->entries[1].dn == ldap::dn{ "uid=y,ou=people,dc=example,dc=org" });
 	CHECK(srv.requests == 6);
+	CHECK(s.rename("Z", "W").has_value());
+	const ldap::sync::store others(c, ldap::dn{ "ou=others,dc=example,dc=org" }, ldap::named_by<&card::cn>);
+	CHECK(s.move("W", others).has_value());
+	CHECK(s.move("W", ldap::dn{ "ou=people,dc=example,dc=org" }).has_value());
+	CHECK(srv.requests == 9);
 
 	auto bad = s.add(card{ .cn = "\xC3" });
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == ldap::client_errc::encode_error);
-	CHECK(srv.requests == 6);
+	CHECK(srv.requests == 9);
 }

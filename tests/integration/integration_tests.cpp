@@ -2270,6 +2270,32 @@ TEST_CASE("integration: ldap::store over ldap::client", "[integration][client][s
 	REQUIRE(stream_end.has_value());
 	CHECK_FALSE(stream_end->has_value());
 
+	// A naming value that needs escaping in a DN, and non-ASCII.
+	const std::string renamed = name + ", J\xC3\xBCrgen+1";
+	REQUIRE(finish(ioc, s.rename(name, renamed)).has_value());
+	auto old_name = finish(ioc, s.get(name));
+	REQUIRE(old_name.has_value());
+	CHECK_FALSE(old_name->has_value());
+	auto new_name = finish(ioc, s.get(renamed));
+	REQUIRE(new_name.has_value());
+	REQUIRE(new_name->has_value());
+	CHECK((*new_name)->uid == renamed);// the old RDN's value was removed
+	CHECK((*new_name)->cn == "Störe");
+
+	ldap::store groups(pool, ldap::dn{ "ou=groups,dc=example,dc=org" }, ldap::named_by<&staff::uid>);
+	REQUIRE(finish(ioc, s.move(renamed, groups)).has_value());
+	auto moved = finish(ioc, groups.get(renamed));
+	REQUIRE(moved.has_value());
+	REQUIRE(moved->has_value());
+	auto left = finish(ioc, s.get(renamed));
+	REQUIRE(left.has_value());
+	CHECK_FALSE(left->has_value());
+	auto not_there = finish(ioc, s.move(renamed, groups.base()));// not under s's base any more
+	REQUIRE_FALSE(not_there.has_value());
+	CHECK(not_there.error().code == ldap::errc::no_such_object);
+	REQUIRE(finish(ioc, groups.move(renamed, people)).has_value());
+	REQUIRE(finish(ioc, s.rename(renamed, name)).has_value());
+
 	REQUIRE(finish(ioc, s.remove(name)).has_value());
 	auto gone = finish(ioc, s.get(name));
 	REQUIRE(gone.has_value());

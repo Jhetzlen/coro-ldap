@@ -1584,6 +1584,13 @@ co_await people.remove("jdoe");
   `typed_search_result<record<T>>`, `record<T>{dn, value}`: the DN as the
   server sent it, parsed, so entries named otherwise are returned too,
   and the limit codes are values, as `search()`.
+- `rename(from, to)` is a modify DN to the RDN `<naming attribute>=<to>`
+  with deleteoldrdn TRUE, so the naming member follows; `move(key,
+  new_base)` (or `move(key, other_store)`, its base) keeps the RDN and
+  sets newSuperior. Unlike the `move`/`rename` the connection and client
+  used to have (dropped: `modify_dn` with designated initializers is the
+  one call there), these build both DNs from the naming member, escaping
+  included, which is the store's job.
 - `search_stream(filter, scope)` and `search_paged(page_size, filter,
   scope)` return a `record_stream<T, Stream>` over the source's
   `search_stream()` or `ldap::search_paged` (on a client: one shared lease,

@@ -47,6 +47,8 @@ inline auto serve_session(net::transport t, std::atomic<int> &requests) -> capy:
 			out = bytes_of(ldap::message{ r->id, ldap::modify_response{ ldap::ldap_result{ 0 } } });
 		} else if (std::holds_alternative<ldap::del_request>(r->op)) {
 			out = bytes_of(ldap::message{ r->id, ldap::del_response{ ldap::ldap_result{ 0 } } });
+		} else if (std::holds_alternative<ldap::modify_dn_request>(r->op)) {
+			out = bytes_of(ldap::message{ r->id, ldap::modify_dn_response{ ldap::ldap_result{ 0 } } });
 		} else if (std::holds_alternative<ldap::extended_request>(r->op)) {
 			out = bytes_of(
 			  ldap::message{ r->id, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, "dn:cn=me" } });
