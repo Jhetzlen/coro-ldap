@@ -123,14 +123,19 @@ auto search_paged(connection &c,
 
 // As above, on one connection of `c`'s pool: a shared lease (acquire())
 // that the paged_search holds until it is destroyed, since the cookies are
-// bound to that connection. Returns once the first page has a first message
-// or has ended; when it fails before that with cond::connection_lost
-// (client_errc::not_sent included), it is requested once more, on a new
-// lease. Any other error, an acquire() failure included, is returned as is,
-// a page ended with another result code than success is reported by
-// next(), and next()'s errors are never retried. The paged_search may
-// outlive `c`: the client's destruction closes the connection, and next()
-// then fails with not_connected.
+// bound to that connection. A page size that is not positive fails with
+// encode_error before any lease is acquired. Returns once the first page
+// has a first message or has ended; when it fails before that with
+// cond::connection_lost (client_errc::not_sent included) or
+// cond::busy_or_unavailable, it is requested once more, on a new lease, as
+// client::search_stream() is: the connection it failed on is no longer
+// handed out, and after busy or unavailable the retry prefers the other
+// servers. Any other error, an acquire() failure included, is returned as
+// is, a page ended with another result code than success (the retry's
+// busy included) is reported by next(), and next()'s errors are never
+// retried. The task does not refer to `c`. The paged_search may outlive
+// `c`: the client's destruction closes the connection, and next() then
+// fails with not_connected.
 auto search_paged(client &c,
   search_params request,
   std::int32_t page_size,

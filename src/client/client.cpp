@@ -1375,11 +1375,13 @@ namespace detail {
 			}(s));
 		}
 
-		// search_stream(): retried once if it fails before its first message,
-		// at once or as its first outcome.
-		static auto read_stream(std::shared_ptr<client_state> self,
-		  search_params request,
-		  std::pmr::memory_resource *mr) -> capy::task<result<ldap::search_stream>>
+		static auto end_stream(connection & /*c*/, ldap::paged_search &s) -> capy::task<void> { return end_paged(s); }
+
+		// search_stream() and search_paged(client &): `start` on a shared
+		// lease (a search_stream or a paged_search), retried once if it fails
+		// before its first message, at once or as its first outcome.
+		template<class Stream, class Start>
+		static auto read_stream(std::shared_ptr<client_state> self, Start start) -> capy::task<result<Stream>>
 		{
 			std::optional<std::size_t> avoid;
 			for (bool retried = false;; retried = true) {
@@ -1387,7 +1389,7 @@ namespace detail {
 				if (!held) {
 					co_return std::unexpected(std::move(held.error()));
 				}
-				auto s = co_await (*held)->search_stream(request, mr);
+				result<Stream> s = co_await start(**held);
 				std::optional<error> outcome;
 				const error *failed = s ? nullptr : &s.error();
 				if (s) {
@@ -1543,8 +1545,27 @@ auto client::search_stream(search_params request, std::pmr::memory_resource *mr)
 	if (state_ == nullptr) {
 		return read_refused<ldap::search_stream>(detail::op_context("search", request.base));
 	}
-	return detail::on_strand(state_->strand, detail::client_state::read_stream(state_, std::move(request), mr));
+	return detail::on_strand(state_->strand,
+	  detail::client_state::read_stream<ldap::search_stream>(
+		state_, [request = std::move(request), mr](connection &c) { return c.search_stream(request, mr); }));
 }
+
+namespace detail {
+
+	auto search_paged_of(const client &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
+	  -> capy::task<result<ldap::paged_search>>
+	{
+		if (c.state_ == nullptr) {
+			return read_refused<ldap::paged_search>(op_context("search", request.base));
+		}
+		return on_strand(c.state_->strand,
+		  client_state::read_stream<ldap::paged_search>(
+			c.state_, [request = std::move(request), page_size, mr](connection &conn) {
+				return ldap::search_paged(conn, request, page_size, mr);
+			}));
+	}
+
+}// namespace detail
 
 auto client::compare(compare_params request) -> capy::task<result<bool>>
 {

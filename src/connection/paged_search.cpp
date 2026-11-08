@@ -145,15 +145,24 @@ namespace detail {
 
 namespace {
 
+	// The encode_error of a page size that is not positive, else nullopt.
+	auto invalid_page_size(const search_params &request, std::int32_t page_size) -> std::optional<error>
+	{
+		if (page_size > 0) {
+			return std::nullopt;
+		}
+		return make_error(client_errc::encode_error,
+		  detail::format("{}: page size {} is not positive", op_context("search", request.base), page_size));
+	}
+
 	auto search_paged_impl(core_ref self, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
 	  -> capy::task<result<ldap::paged_search>>
 	{
 		if (!self) {
 			co_return std::unexpected(no_connection(op_context("search", request.base)));
 		}
-		if (page_size <= 0) {
-			co_return fail(client_errc::encode_error,
-			  detail::format("{}: page size {} is not positive", op_context("search", request.base), page_size));
+		if (auto bad = invalid_page_size(request, page_size)) {
+			co_return std::unexpected(std::move(*bad));
 		}
 		std::pmr::polymorphic_allocator<> alloc(self->mr());
 		auto *st = alloc.new_object<paged_search::state>(
@@ -178,53 +187,18 @@ auto search_paged(connection &c, search_params request, std::int32_t page_size, 
 
 namespace {
 
-	// Destroys `p` on its connection's strand.
-	auto end_paged(ldap::paged_search &p) -> capy::task<void>
-	{
-		const auto *state = detail::paged_access::state_of(p);
-		if (state == nullptr) {
-			co_return;
-		}
-		co_await detail::on_strand(state->conn, [](ldap::paged_search &pages) -> capy::task<void> {
-			pages = ldap::paged_search{};
-			co_return;
-		}(p));
-	}
+	auto paged_refused(error e) -> capy::task<result<ldap::paged_search>> { co_return std::unexpected(std::move(e)); }
 
 }// namespace
 
+// NOLINTNEXTLINE(misc-const-correctness): the search runs on `c`'s pool
 auto search_paged(client &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
   -> capy::task<result<ldap::paged_search>>
 {
-	for (bool retried = false;; retried = true) {
-		auto held = co_await c.acquire();
-		if (!held) {
-			co_return std::unexpected(std::move(held.error()));
-		}
-		auto p = co_await search_paged(**held, request, page_size, mr);
-		std::optional<error> failed;
-		if (!p) {
-			failed = p.error();
-		} else {
-			auto first = co_await detail::first_outcome(detail::paged_access::state_of(*p)->current);
-			if (!first) {// stopped
-				co_await end_paged(*p);
-				co_return std::unexpected(std::move(first.error()));
-			}
-			failed = std::move(*first);
-		}
-		if (failed && !retried && failed->code == cond::connection_lost) {
-			if (p) {
-				co_await end_paged(*p);
-			}
-			continue;
-		}
-		if (!p) {
-			co_return std::unexpected(std::move(p.error()));
-		}
-		detail::paged_access::state_of(*p)->owner = std::make_shared<lease>(std::move(*held));
-		co_return std::move(*p);
+	if (auto bad = invalid_page_size(request, page_size)) {
+		return paged_refused(std::move(*bad));
 	}
+	return detail::search_paged_of(c, std::move(request), page_size, mr);
 }
 
 namespace detail {
@@ -242,6 +216,38 @@ namespace detail {
 			return std::nullopt;
 		}
 		return state->conn->executor();
+	}
+
+	// NOLINTNEXTLINE(misc-const-correctness): `p`'s state changes
+	void keep_alive(ldap::paged_search &p, std::shared_ptr<void> owner) noexcept
+	{
+		if (auto *state = paged_access::state_of(p)) {
+			state->owner = std::move(owner);
+		}
+	}
+
+	// NOLINTNEXTLINE(misc-const-correctness): `p`'s current page is read
+	auto first_outcome(ldap::paged_search &p) -> capy::task<result<std::optional<error>>>
+	{
+		auto *state = paged_access::state_of(p);
+		if (state == nullptr) {
+			return [] -> capy::task<result<std::optional<error>>> {
+				co_return std::optional<error>{ no_connection("search") };
+			}();
+		}
+		return first_outcome(state->current);
+	}
+
+	auto end_paged(ldap::paged_search &p) -> capy::task<void>
+	{
+		const auto *state = paged_access::state_of(p);
+		if (state == nullptr) {
+			return [] -> capy::task<void> { co_return; }();
+		}
+		return on_strand(state->conn, [](ldap::paged_search &pages) -> capy::task<void> {
+			pages = ldap::paged_search{};
+			co_return;
+		}(p));
 	}
 
 }// namespace detail

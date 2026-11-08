@@ -1282,8 +1282,12 @@ search_params), +4 to 15% at one entry per page, within the noise at 100,
 nothing against a network round trip. `search_paged(client &, ...)` runs it on one shared lease, which
 the `paged_search` holds until destroyed (the cookies are bound to that
 connection), and requests the first page again on a new lease when it
-fails with `cond::connection_lost` before its first message, as
-`client::search_stream()` does. A server that ignores the (non-critical) control returns
+fails with `cond::connection_lost` or `cond::busy_or_unavailable` before
+its first message, as `client::search_stream()` does (the same loop in
+client.cpp, through the internal `detail::search_paged_of`): the
+connection it failed on is set aside, and after busy or unavailable the
+retry prefers the other servers. A page size that is not positive fails
+before a lease is acquired. A server that ignores the (non-critical) control returns
 everything as one page, which works the same. Each page is a separate
 search on the wire (its own message id and timeout). Destroying the
 `paged_search` early abandons the current page if it is still running,

@@ -401,8 +401,9 @@ itself needs only ICU.
   / `_response`, the OIDs) are in `message.hpp`;
   `ldap::search_paged(conn, params, page_size)` (a free function over
   `search_stream()`; `ldap::search_paged(client, ...)` runs it on one shared
-  lease) follows the Simple Paged Results cookie across pages (destroyed early, it abandons the
-  current page and releases the server's paging state with a page size 0
+  lease, the first page retried as `client::search_stream()` is) follows
+  the Simple Paged Results cookie across pages (destroyed early, it
+  abandons the current page and releases the server's paging state with a page size 0
   request, RFC 2696 section 3, unless the search already ended; the
   release's answer is read and dropped, and counted by `outstanding()`
   until it arrives or the page timeout passes). Several paged searches
@@ -942,7 +943,8 @@ itself needs only ICU.
   shared lease and retry it
   once on another connection after `cond::connection_lost` or
   `cond::busy_or_unavailable` (a stream only before its first message;
-  it holds the lease until destroyed). Write forwarders `add(params)`,
+  it holds the lease until destroyed; `ldap::search_paged(client, ...)`
+  retries its first page the same way). Write forwarders `add(params)`,
   `modify(params)`, `del(params)`, `modify_dn(params)`, each `->
   task<result<response>>`, and `extended(params)` (`->
   task<result<extended_result>>`, where `ldap::who_am_i(pool)` and the

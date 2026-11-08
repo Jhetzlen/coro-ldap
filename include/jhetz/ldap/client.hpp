@@ -496,6 +496,11 @@ namespace detail {
 	using pool_connector = std::function<boost::capy::task<result<
 	  connection>>(boost::corosio::io_context &ioc, url u, connection_options options, std::pmr::memory_resource *mr)>;
 	void set_connector(const client &c, pool_connector open);
+
+	// ldap::search_paged(client &): the first page on a shared lease,
+	// retried as client::search_stream() is.
+	auto search_paged_of(const client &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
+	  -> boost::capy::task<result<paged_search>>;
 }// namespace detail
 
 namespace detail {
@@ -671,7 +676,8 @@ class client
 	// retried (no_such_object, ...) or a passed deadline is reported by
 	// next(), as for connection::search_stream(). Mind that it waits for
 	// that first message: a refreshAndPersist search with nothing to send
-	// returns at its first change.
+	// returns at its first change. ldap::search_paged(client &)
+	// (paged_search.hpp) retries its first page the same way.
 	auto search_stream(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> boost::capy::task<result<ldap::search_stream>>;
 	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
@@ -732,6 +738,8 @@ class client
   private:
 	friend void detail::set_jitter(const client &, std::function<double()>);
 	friend void detail::set_connector(const client &, detail::pool_connector);
+	friend auto detail::search_paged_of(const client &, search_params, std::int32_t, std::pmr::memory_resource *)
+	  -> boost::capy::task<result<paged_search>>;
 
 	std::shared_ptr<detail::client_state> state_{};
 };

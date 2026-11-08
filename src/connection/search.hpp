@@ -123,6 +123,12 @@ namespace detail {
 	// reports the timeout). Fails only when the awaiting task is stopped.
 	auto first_outcome(ldap::search_stream &s) -> boost::capy::task<result<std::optional<error>>>;
 
+	// As keep_alive and first_outcome, for the current page of `p`.
+	void keep_alive(ldap::paged_search &p, std::shared_ptr<void> owner) noexcept;
+	auto first_outcome(ldap::paged_search &p) -> boost::capy::task<result<std::optional<error>>>;
+	// Destroys `p` on its connection's strand.
+	auto end_paged(ldap::paged_search &p) -> boost::capy::task<void>;
+
 }// namespace detail
 
 }// namespace jhetz::ldap

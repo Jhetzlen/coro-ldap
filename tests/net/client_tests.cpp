@@ -3341,17 +3341,67 @@ TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
 		REQUIRE(dns.has_value());
 		CHECK(*dns == std::vector<std::string>{ "uid=a,ou=people,dc=example,dc=org" });
 	}
-	SECTION("busy is not retried: next() reports it")
+	SECTION("busy before the first page's first message: set aside, requested again on a new lease")
 	{
 		pool_fixture f;
 		auto &s = f.server({ busy_search(), two_pages_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		REQUIRE(pages.has_value());
+		auto dns = finish(f.ioc, drain_pages(*pages));
+		REQUIRE(dns.has_value());
+		CHECK(*dns == both);
+		CHECK(s.accepted() == 2);
+		REQUIRE(s.log(1).received.size() == 3);// the bind and both pages, on the new connection
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
+				"disconnect " + text(s.url()) + " busy_or_unavailable",
+				"connect " + text(s.url()) + " ok" });
+	}
+	SECTION("busy on the first server: the first page is requested again on the second")
+	{
+		pool_fixture f;
+		auto &a = f.server({ busy_search(), two_pages_after_bind() });
+		auto &b = f.server({ two_pages_after_bind() });
+		f.make({ .servers = { a.url(), b.url() }, .setup = admin_setup(), .max_connections = 2, .observer = &f.obs });
+		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		REQUIRE(pages.has_value());
+		auto dns = finish(f.ioc, drain_pages(*pages));
+		REQUIRE(dns.has_value());
+		CHECK(*dns == both);
+		CHECK(a.accepted() == 1);
+		CHECK(b.accepted() == 1);
+		REQUIRE(b.log(0).received.size() == 3);
+		CHECK(f.obs.events
+			  == std::vector<std::string>{ "connect " + text(a.url()) + " ok",
+				"disconnect " + text(a.url()) + " busy_or_unavailable",
+				"connect " + text(b.url()) + " ok" });
+	}
+	SECTION("requested again only once: the retry's error is reported by next()")
+	{
+		pool_fixture f;
+		auto &s = f.server({ busy_search(),
+		  { answer({ bind_resp(1) }), answer({ done_msg(2, 52, "", "shutting down") }) },
+		  two_pages_after_bind() });
 		f.make({ .servers = { s.url() }, .setup = admin_setup() });
 		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
 		REQUIRE(pages.has_value());
 		auto dns = finish(f.ioc, drain_pages(*pages));
 		REQUIRE_FALSE(dns.has_value());
-		CHECK(dns.error().code == ldap::errc::busy);
-		CHECK(s.accepted() == 1);
+		CHECK(dns.error().code == ldap::errc::unavailable);
+		CHECK(s.accepted() == 2);
+	}
+	SECTION("a page size that is not positive: nothing is opened")
+	{
+		pool_fixture f;
+		auto &s = f.server({ two_pages_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 0));
+		REQUIRE_FALSE(pages.has_value());
+		CHECK(pages.error().code == ldap::client_errc::encode_error);
+		drive(f.ioc);
+		CHECK(s.accepted() == 0);
+		CHECK(f.pool->connections() == 0);
 	}
 	SECTION("an acquire() failure")
 	{
