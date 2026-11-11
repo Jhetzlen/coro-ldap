@@ -860,7 +860,8 @@ itself needs only ICU.
   std::optional<response>>>`: one modify of the members that differ
   (`ldap::diff(original, changed)` in mapping.hpp: replace or delete for
   single-valued members, delete then add of the values for multi-valued
-  ones, read_only members skipped), nullopt with nothing sent when none
+  ones, a cleared one included, so values `original` does not hold stay;
+  read_only members skipped), nullopt with nothing sent when none
   differs, `client_errc::naming_value_changed` when the naming member
   differs (use `rename`);
   `update_if(original, changed)` and `update_if(original, changed,

@@ -1620,8 +1620,12 @@ co_await people.remove("jdoe");
   replaced, or deleted once empty; a multi-valued one deletes the values
   it lost, then adds the new ones (RFC 4511 section 4.6, applied in
   order, so a value that changed only in case under a caseIgnore rule is
-  deleted, then added again), or is deleted once empty; values compare
-  as encoded, exactly. Only members T maps are touched, read_only ones
+  deleted, then added again); values compare as encoded, exactly. A
+  cleared multi-valued member deletes the values `original` held, not the
+  attribute, so a value another client added since stays; the server
+  removes the attribute with its last value. A value another client
+  removed since fails the modify with noSuchAttribute (16), a partial
+  edit or a clear alike. Only members T maps are touched, read_only ones
   never. Nothing differs: nothing is sent, no schema check either, and
   the result is `std::optional<response>{}`. A naming member that
   differs is `naming_value_changed` (cond `invalid_input`) before

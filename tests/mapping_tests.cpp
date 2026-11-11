@@ -754,7 +754,7 @@ TEST_CASE("diff: the changes turning one value into another", "[mapping][diff]")
 		after.member_of.push_back(ops);
 		CHECK(wires(ldap::diff(before, after))
 			  == std::vector<ldap::modify_change>{ { op::add, { "memberOf", { "cn=ops,dc=example,dc=org" } } },
-				{ op::delete_, { "telephoneNumber", {} } } });
+				{ op::delete_, { "telephoneNumber", { "1", "2" } } } });
 	}
 
 	SECTION("a value that does not encode fails the diff")

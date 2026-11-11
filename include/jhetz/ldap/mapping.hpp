@@ -818,10 +818,6 @@ namespace detail {
 		if (*from == *to) {
 			return true;
 		}
-		if (to->empty()) {
-			out.push_back(make_change<Ptr>(modify_operation::delete_, string_list{}));
-			return true;
-		}
 		if constexpr (F::kind == cardinality::multiple) {
 			auto removed = values_not_in(*from, *to);
 			auto added = values_not_in(*to, *from);
@@ -831,6 +827,8 @@ namespace detail {
 			if (!added.empty()) {
 				out.push_back(make_change<Ptr>(modify_operation::add, std::move(added)));
 			}
+		} else if (to->empty()) {
+			out.push_back(make_change<Ptr>(modify_operation::delete_, string_list{}));
 		} else {
 			out.push_back(make_change<Ptr>(modify_operation::replace, std::move(*to)));
 		}
@@ -842,9 +840,9 @@ namespace detail {
 // descriptor order, read_only members skipped: a single-valued member that
 // differs is replaced, or deleted once empty; a multi-valued one deletes
 // the values it lost, then adds the ones it gained (values compared as
-// encoded, exactly), or is deleted once empty. Empty when nothing
-// differs. Fails with the first value that does not encode (context
-// "attribute mail").
+// encoded, exactly), even when it lost them all, so values `original` does
+// not hold stay. Empty when nothing differs. Fails with the first value that
+// does not encode (context "attribute mail").
 template<described T> [[nodiscard]] auto diff(const T &original, const T &changed) -> result<std::vector<change<T>>>
 {
 	std::vector<change<T>> out;

@@ -2376,12 +2376,28 @@ TEST_CASE("integration: store::update sends only what differs", "[integration][s
 	contact cleared = **got;
 	cleared.telephone.clear();
 	cleared.description.clear();
-	REQUIRE(finish(ioc, s.update(**got, cleared)).has_value());
+	// A value the original never held stays.
+	REQUIRE(finish(
+	  ioc, c.modify({ .object = original.dn, .changes = { ldap::mod::add("telephoneNumber", { "+1 555 0103" }) } }))
+		.has_value());
+	auto cleared_result = finish(ioc, s.update(**got, cleared));
+	if (!cleared_result) {
+		FAIL(cleared_result.error().message());
+	}
 	auto after = finish(ioc, s.get(name));
 	REQUIRE(after.has_value());
 	REQUIRE(after->has_value());
-	CHECK((*after)->telephone.empty());
+	CHECK((*after)->telephone == std::vector<std::string>{ "+1 555 0103" });
 	CHECK((*after)->description.empty());
+	// Its last values: the attribute goes.
+	cleared.telephone = (*after)->telephone;
+	contact emptied = cleared;
+	emptied.telephone.clear();
+	REQUIRE(finish(ioc, s.update(cleared, emptied)).has_value());
+	auto gone = finish(ioc, s.get(name));
+	REQUIRE(gone.has_value());
+	REQUIRE(gone->has_value());
+	CHECK((*gone)->telephone.empty());
 
 	contact renamed = cleared;
 	renamed.uid = name + "-r";
