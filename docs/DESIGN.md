@@ -3333,8 +3333,20 @@ search asks for one attribute of one entry, the returned attributes are
 grouped by description without the range option (case-insensitive, other
 options kept), and the group named as asked is the answer, else the only
 group present whatever its name; the following windows ask for the
-server's name (Samba ignores `2.5.4.31;range=0-2`, so a step
-needs the server's name from the start). Several groups none named as
+server's name. A server may ignore the range option (Samba answers
+`2.5.4.31;range=0-2` with a bare entry, slapd ignores it on every
+attribute), which looks exactly like an attribute without values, so
+with a step a first window (`low == 0`) that completes with no value is
+asked for once more with the plain description, at most once, and that
+answer is taken as without a step: no attribute is no values, the plain
+attribute all of them, and a ranged answer continues under the server's
+name in windows of the step. An attribute without values then costs two
+searches; the values do not depend on the step, except that such a
+server sends them in one answer, and naming the lDAPDisplayName keeps
+the bound on a server that honours ranges. A bare later window keeps
+meaning "past the end", which Samba relies on. Refusing a numeric OID
+with a step, or probing with typesOnly, was rejected: the retry costs
+one search only in the empty case and needs no new error. Several groups none named as
 asked are refused. Within the group, AD may send a value-less plain
 attribute next to the window (MS-ADTS 3.1.1.3.1.3.3: `member` and
 `member;range=0-1499`), so one ranged attribute with at most one

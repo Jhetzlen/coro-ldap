@@ -52,10 +52,11 @@ namespace {
 			.context = std::move(context) };
 	}
 
-	// The attribute description to ask for, `type` from value `low` on.
-	auto selector(const request &r, std::string_view type, std::uint32_t low) -> std::string
+	// The attribute description to ask for, `type` from value `low` on;
+	// `plain` asks for the first window without a range.
+	auto selector(const request &r, std::string_view type, std::uint32_t low, bool plain) -> std::string
 	{
-		if (r.options.step == 0) {
+		if (r.options.step == 0 || (plain && low == 0)) {
 			return low == 0 ? std::string(type) : with_range(type, { .low = low });
 		}
 		constexpr auto top = std::uint64_t{ std::numeric_limits<std::uint32_t>::max() };
@@ -182,9 +183,10 @@ namespace {
 		string_list out(r.mr);
 		std::string type = r.attribute;
 		std::optional<std::uint32_t> low = 0;
+		bool plain = false;
 		while (low) {
 			search_params query{ .base = r.object, .scope = search_scope::base_object };
-			query.attributes.emplace_back(selector(r, type, *low));
+			query.attributes.emplace_back(selector(r, type, *low, plain));
 			auto found = co_await c.search(std::move(query), r.mr);
 			if (!found) {
 				co_return std::unexpected(detail::with_context(std::move(found.error()), r.context));
@@ -198,6 +200,10 @@ namespace {
 			auto next = take(found->entries.front(), r, type, *low, out);
 			if (!next) {
 				co_return std::unexpected(std::move(next.error()));
+			}
+			if (r.options.step != 0 && *low == 0 && !*next && out.empty() && !plain) {
+				plain = true;
+				continue;
 			}
 			low = *next;
 		}

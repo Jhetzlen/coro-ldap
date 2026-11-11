@@ -1108,6 +1108,16 @@ TEST_CASE("samba ad: ad::read_all_values reads a group of more than MaxValRange 
 		}
 		check_large_group(*r);
 	}
+	SECTION("the attribute named by OID with a step, asked for again without a range")
+	{
+		const std::uint32_t step = GENERATE(500U, 1600U);
+		CAPTURE(step);
+		auto r = finish(ioc, ldap::ad::read_all_values(c, large_group, "2.5.4.31", { .step = step }));
+		if (!r) {
+			FAIL(r.error().message());
+		}
+		check_large_group(*r);
+	}
 	SECTION("windows of a step, the last one cut short by the server or past the end")
 	{
 		const std::uint32_t step = GENERATE(400U, 500U, 1500U, 1600U, 7U);

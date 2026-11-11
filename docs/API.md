@@ -1182,8 +1182,15 @@ package component `ad`:
   most one value-less plain one (AD's `member` next to
   `member;range=0-1499`, MS-ADTS 3.1.1.3.1.3.3) is a window, a lone plain
   one is every value; two ranged ones, or a plain one with values next to
-  a ranged one, are `unexpected_response`. With a step, name the attribute as the
-  server does: Samba ignores a range option on a numeric OID.
+  a ranged one, are `unexpected_response`. With a step, when the first window
+  comes back without values, it is asked for once more without a range
+  and that answer is taken as without a step (a ranged answer continues
+  in windows of the step under the server's name): a server may ignore
+  the range option (Samba on a numeric OID, slapd on every attribute). An
+  attribute without values then costs two searches; the values do not
+  depend on the step, except that such a server sends them in one
+  answer; naming the lDAPDisplayName keeps the bound on a server that
+  honours ranges. A bare later window still means past the end.
 - `jhetz/ldap/ad/dirsync.hpp` (`jhetz::ldap_ad`): `ad::dirsync(c, request,
   options = {}, max_rounds = ad::dirsync_default_max_rounds, mr)`, DirSync
   polling (MS-ADTS 3.1.1.3.4.1.3): runs the search `request` (its base the

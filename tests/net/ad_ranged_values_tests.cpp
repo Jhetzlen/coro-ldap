@@ -249,6 +249,50 @@ TEST_CASE("ad::read_all_values: a step asks for windows of that size", "[net][ad
 	CHECK(asked_for(m.log.received[3]) == "member;range=10-13");
 }
 
+TEST_CASE("ad::read_all_values: a step whose first window comes back empty is asked for plain", "[net][ad][range]")
+{
+	mock_ldap m;
+	SECTION("an OID the server answers without a range")
+	{
+		m.serve({ bare(1), window(2, "member", values(0, 4)) });
+		auto r = m.run(ldap::ad::read_all_values(m.conn, group, "2.5.4.31", { .step = 2 }));
+		REQUIRE(r.has_value());
+		CHECK(as_strings(*r) == values(0, 4));
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(asked_for(m.log.received[0]) == "2.5.4.31;range=0-1");
+		CHECK(asked_for(m.log.received[1]) == "2.5.4.31");
+	}
+	SECTION("a server without ranges")
+	{
+		m.serve({ bare(1), window(2, "member", values(0, 4)) });
+		auto r = m.run(ldap::ad::read_all_values(m.conn, group, "member", { .step = 2 }));
+		REQUIRE(r.has_value());
+		CHECK(as_strings(*r) == values(0, 4));
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(asked_for(m.log.received[0]) == "member;range=0-1");
+		CHECK(asked_for(m.log.received[1]) == "member");
+	}
+	SECTION("no values either way")
+	{
+		m.serve({ bare(1), bare(2) });
+		auto r = m.run(ldap::ad::read_all_values(m.conn, group, "member", { .step = 2 }));
+		REQUIRE(r.has_value());
+		CHECK(r->empty());
+		CHECK(m.log.received.size() == 2);
+	}
+	SECTION("the plain request answered in windows")
+	{
+		m.serve({ bare(1), window(2, "member;range=0-2", values(0, 2)), window(3, "member;range=3-*", values(3, 4)) });
+		auto r = m.run(ldap::ad::read_all_values(m.conn, group, "2.5.4.31", { .step = 2 }));
+		REQUIRE(r.has_value());
+		CHECK(as_strings(*r) == values(0, 4));
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(asked_for(m.log.received[1]) == "2.5.4.31");
+		CHECK(asked_for(m.log.received[2]) == "member;range=3-4");
+	}
+	m.check_server();
+}
+
 TEST_CASE("ad::read_all_values: a step near 2^32 does not wrap", "[net][ad][range]")
 {
 	mock_ldap m;

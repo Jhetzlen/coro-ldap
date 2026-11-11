@@ -42,9 +42,15 @@ struct range_options
 // `attribute`, else the only group: the server's name for an OID or an
 // alias, which the following windows then ask for. In the group, one
 // ranged attribute with at most one value-less plain one is a window
-// (MS-ADTS 3.1.1.3.1.3.3), a lone plain one every value. With a step, name the attribute as the server does
-// (its lDAPDisplayName): Samba ignores a range option on a numeric OID.
-// Fails before anything is sent with
+// (MS-ADTS 3.1.1.3.1.3.3), a lone plain one every value. With a step,
+// when the first window comes back without values, it is asked for once
+// more without a range, and that answer is taken as with no step (a
+// ranged one continues in windows of the step): a server may ignore the
+// range option (Samba on a numeric OID, slapd on every attribute). An
+// attribute without values then costs two searches, and such a server
+// sends every value in one answer; naming the attribute as the server
+// does (its lDAPDisplayName) keeps the bound on a server that honours
+// ranges. Fails before anything is sent with
 // std::errc::invalid_argument for an empty `attribute` or one with a
 // range option; with the search's error (context "read all values of
 // <attribute> <object>"); with client_errc::unexpected_response when no
