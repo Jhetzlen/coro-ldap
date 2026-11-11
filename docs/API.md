@@ -1187,6 +1187,27 @@ package component `ad`:
   `dirsync_flags::object_security` is set. A SearchResultDone without the
   control, or MoreResults without a new cookie, is
   `client_errc::unexpected_response`.
+- `jhetz/ldap/ad/discover.hpp` (`jhetz::ldap_ad`): domain controller
+  discovery from DNS SRV records, for `client_options::servers`.
+  `ad::discover_domain_controllers(domain, options = {})` returns the
+  `ldap://host:port` URLs of `_ldap._tcp.dc._msdcs.<domain>`;
+  `ad::discover_global_catalogs(forest, options = {})` those of
+  `_ldap._tcp.gc._msdcs.<forest>` (port 3268). `ad::discover_options`:
+  `.site` (that site's `_ldap._tcp.<site>._sites....` records first, then
+  the domain's others), `.tls` (`ldaps://` on 636, or 3269 for a Global
+  Catalog), `.resolver` (an `ad::srv_resolver`, a function from an ASCII
+  DNS name to `result<std::vector<ad::srv_record>>`; empty: the system's
+  `ad::resolve_srv`, res_nquery on Linux (links libresolv), DnsQuery_UTF8
+  on Windows (dnsapi)). Each list is in RFC 2782 order
+  (`ad::order_srv(records, g)`: by priority, then weighted random), without
+  duplicates or the `.` target. Internationalized names are converted to
+  A-labels (UTS #46, ICU). Errors: `std::errc::invalid_argument` (empty
+  domain), `client_errc::string_prep_failed` (a name UTS #46 refuses),
+  `std::errc::host_unreachable` (no SRV record names a server;
+  `cond::busy_or_unavailable`), the resolver's error
+  (`std::errc::resource_unavailable_try_again` for a temporary DNS
+  failure, `client_errc::decode_error` for an unparsable answer).
+  Blocking: call it before building the client or off the I/O thread.
 - `jhetz/ldap/ad/range.hpp` (`jhetz::ldap`): the range option itself:
   `ad::parse_range(description)` splits `member;range=0-1499` into
   `ad::ranged_description{.type = "member", .range = {0, 1499}}` (nullopt

@@ -3212,8 +3212,9 @@ Layout:
   It links `jhetz::ldap_net` and includes only public headers, never
   `src/connection/` or `src/net/`; it is built and installed whenever
   `jhetz::ldap_net` is. `ad/password.hpp`, `ad/ranged_values.hpp` and
-  `ad/dirsync.hpp` (async, `connection &` and `client &`) and `ad/sync.hpp` (the blocking
-  forms, over the sync facades through `sync::run`).
+  `ad/dirsync.hpp` (async, `connection &` and `client &`),
+  `ad/discover.hpp` (DNS discovery, blocking) and `ad/sync.hpp` (the
+  blocking forms, over the sync facades through `sync::run`).
   A target of its own rather than `src/ad/` inside `jhetz::ldap_net`: the
   dependency is one-way and visible in CMake (`jhetz::ldap_net` cannot
   reach `ldap::ad`, `jhetz::ldap_ad` sees no private header), a consumer
@@ -3392,6 +3393,39 @@ control and builder (`tests/ad_controls_tests.cpp`), against the mock
 timeout, the AbandonRequest when the stream is destroyed) and on Samba,
 which supports it (`integration.samba_ad`: two description changes on
 one stream, base and one-level).
+
+Domain controller discovery (`ad/discover.hpp`): the DC locator's DNS
+records (MS-ADTS 6.3.2.3), `_ldap._tcp.dc._msdcs.<domain>` for a domain's
+DCs, `_ldap._tcp.<site>._sites.dc._msdcs.<domain>` for a site's, and the
+`gc` forms for Global Catalogs, turned into `url`s for
+`client_options::servers`, whose order is the client's priority order.
+Each record set is ordered as RFC 2782 says (priority, then a weighted
+random pick, weight 0 first in the list so only a draw of 0 takes it);
+with a site, its DCs come first and the domain's others follow, so the
+client falls back past the site without a second discovery. Duplicates
+and the "." target (service not offered) are dropped, and nothing left
+is `host_unreachable` (`busy_or_unavailable`), the same condition as a
+server that cannot be reached. SRV records give the LDAP ports only
+(389, 3268); with `tls` the URLs use the fixed LDAPS ports (636, 3269).
+`getaddrinfo` cannot ask for SRV records, so the system resolver is
+called directly: `res_nquery` with its own `res_state` (thread-safe) and
+libresolv's `ns_parserr` / `dn_expand` to read the answer, so the library
+has no DNS message parser of its own to fuzz; on Windows
+`DnsQuery_UTF8`. The resolver is a seam (`discover_options::resolver`,
+`std::function`), which the tests script; `order_srv` is a template over
+any `uniform_random_bit_generator`, tested with a scripted one, and
+discovery itself uses a per-thread `mt19937_64`. Names are converted to
+A-labels with ICU's UTS #46 (nontransitional, as IDNA2008 resolvers do),
+so an internationalized domain or site is looked up as DNS holds it; the
+targets DNS returns are A-labels already. The calls block on DNS, as
+`getaddrinfo` would: discovery runs once before a client is built, so
+there is no async form. The link dependencies are private to
+`jhetz::ldap_ad` (ICU, `resolv` or `dnsapi` by name, carried in the
+exported link interface as plain names, so the package config only
+documents them); the install check's consumer calls discovery with a
+scripted resolver. No live DNS test: the Samba DC is provisioned without
+DNS, and the unit tests cover the resolver only on a `.invalid` name
+(RFC 6761), which must give no records.
 
 What stays in the core (the audit of AD mentions outside `ad/`):
 interop notes on how AD and Samba behave as servers (quoted schema OIDs,

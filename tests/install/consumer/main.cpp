@@ -1,6 +1,7 @@
 // Uses the installed headers and libraries: the codec always (with the
 // operations.hpp mod:: builders and the codec's ad/ headers), the connection
-// (a connect that must be refused: no server), jhetz::ldap_ad (a password
+// (a connect that must be refused: no server), jhetz::ldap_ad (DC discovery
+// with a scripted resolver, a password
 // reset on no connection) and SCRAM's SASLprep (links ICU through the
 // package) with WITH_NET.
 #include "jhetz/ldap/ad/filetime.hpp"
@@ -12,6 +13,7 @@
 #include "jhetz/ldap/operations.hpp"
 
 #ifdef WITH_NET
+#include "jhetz/ldap/ad/discover.hpp"
 #include "jhetz/ldap/ad/password.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl_scram.hpp"
@@ -22,6 +24,7 @@
 
 #include <cstdio>
 #include <string_view>
+#include <vector>
 
 namespace ldap = jhetz::ldap;
 
@@ -69,6 +72,16 @@ auto main() -> int
 	ioc.run();
 	if (!refused) {
 		std::puts("ad: expected the reset to fail");
+		return 1;
+	}
+	// jhetz::ldap_ad's discovery (ICU, the resolver library) with a scripted
+	// resolver.
+	auto dcs = ldap::ad::discover_domain_controllers(
+	  "example.org", { .resolver = [](std::string_view) -> ldap::result<std::vector<ldap::ad::srv_record>> {
+		  return std::vector<ldap::ad::srv_record>{ { .port = 389, .target = "dc1.example.org" } };
+	  } });
+	if (!dcs || dcs->size() != 1) {
+		std::puts("ad: unexpected discovery result");
 		return 1;
 	}
 	// "I" U+00AD "X": SASLprep maps the soft hyphen to nothing.

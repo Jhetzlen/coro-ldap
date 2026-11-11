@@ -353,13 +353,23 @@ endif()
 # src/ad/) are in jhetz::ldap.
 if(JHETZ_LDAP_BUILD_NET)
     add_library(jhetz_ldap_ad STATIC
+        src/ad/discover.cpp
         src/ad/dirsync.cpp
         src/ad/password.cpp
         src/ad/ranged_values.cpp
     )
     add_library(jhetz::ldap_ad ALIAS jhetz_ldap_ad)
     set_target_properties(jhetz_ldap_ad PROPERTIES EXPORT_NAME ldap_ad)
-    target_link_libraries(jhetz_ldap_ad PUBLIC jhetz_ldap_net)
+    # ICU: UTS #46 for internationalized domain names (ad/discover.hpp).
+    # The SRV resolver: libresolv's res_nquery, or DnsQuery (dnsapi) on
+    # Windows; a plain library name in the exported link interface, so the
+    # package config needs nothing more for it.
+    target_link_libraries(jhetz_ldap_ad PUBLIC jhetz_ldap_net PRIVATE ICU::uc ICU::data)
+    if(WIN32)
+        target_link_libraries(jhetz_ldap_ad PRIVATE dnsapi)
+    else()
+        target_link_libraries(jhetz_ldap_ad PRIVATE resolv)
+    endif()
     jhetz_ldap_warnings(jhetz_ldap_ad)
 endif()
 
@@ -441,7 +451,8 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "sync_store.hpp" EXCLUDE
             PATTERN "password.hpp" EXCLUDE
             PATTERN "ranged_values.hpp" EXCLUDE
-            PATTERN "dirsync.hpp" EXCLUDE)
+            PATTERN "dirsync.hpp" EXCLUDE
+            PATTERN "discover.hpp" EXCLUDE)
     endif()
     install(EXPORT jhetz_ldap-targets NAMESPACE jhetz:: DESTINATION ${jhetz_ldap_cmakedir})
     configure_package_config_file(cmake/jhetz_ldap-config.cmake.in

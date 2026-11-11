@@ -4,7 +4,8 @@
 # requires jhetz::ldap_net:
 #   find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net)
 # Component `ad` requires jhetz::ldap_ad (Active Directory operations over
-# jhetz::ldap_net), installed with jhetz::ldap_net.
+# jhetz::ldap_net), installed with jhetz::ldap_net; it also links ICU and
+# the system's resolver library (resolv, or dnsapi on Windows) by name.
 # Component `gssapi`: jhetz::ldap_net was built with SASL GSSAPI
 # (JHETZ_LDAP_WITH_GSSAPI); the GSS-API library is then found with pkg-config.
 @PACKAGE_INIT@
