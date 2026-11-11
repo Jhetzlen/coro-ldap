@@ -17,7 +17,8 @@
 //   request or response, RFC 5805 transaction specification, or RFC 4533
 //   sync request, state or done control that decodes re-encodes to an equal
 //   value (the entry of a read control allocated from the message's
-//   resource), and so do an RFC 4533 Sync Info Message, an RFC 5805
+//   resource), as does an Active Directory DirSync request or response
+//   control, and so do an RFC 4533 Sync Info Message, an RFC 5805
 //   txnEndReq (End Transaction request value) and txnEndRes (any extended
 //   response value);
 // - an attribute description of a search entry with an Active Directory
@@ -30,6 +31,7 @@
 // Also, with the input as (possibly non-canonical) filter text: if it
 // parses, the search request m carrying it encodes, decode(encode(m)) == m
 // and encode(decode(encode(m))) == encode(m).
+#include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/ad/range.hpp"
 #include "jhetz/ldap/content_sync.hpp"
 #include "jhetz/ldap/controls.hpp"
@@ -62,6 +64,24 @@ auto is_decode_failure(const ldap::error &e) -> bool
 	return e.code == ldap::client_errc::decode_error || e.code == ldap::client_errc::unexpected_tag
 		   || e.code == ldap::client_errc::nesting_too_deep || e.code == ldap::client_errc::integer_overflow
 		   || e.code == ldap::client_errc::unsupported_tag;
+}
+
+// The DirSync OID names the request and the response control alike.
+void exercise_dirsync(const ldap::control &c)
+{
+	if (auto r = ldap::ad::decode_dirsync_request(c)) {
+		check(r->critical == c.criticality, "r->critical == c.criticality");
+		check(ldap::ad::decode_dirsync_request(ldap::ad::encode_dirsync_request(*r)) == *r,
+		  "ldap::ad::decode_dirsync_request(encode(*r)) == *r");
+	} else {
+		check(is_decode_failure(r.error()), "is_decode_failure(r.error())");
+	}
+	if (auto r = ldap::ad::decode_dirsync_response(c)) {
+		const auto again = ldap::ad::encode_dirsync_response(*r, c.criticality);
+		check(ldap::ad::decode_dirsync_response(again) == *r, "ldap::ad::decode_dirsync_response(again) == *r");
+	} else {
+		check(is_decode_failure(r.error()), "is_decode_failure(r.error())");
+	}
 }
 
 void exercise_control(const ldap::control &c)
@@ -139,6 +159,8 @@ void exercise_control(const ldap::control &c)
 		} else {
 			check(is_decode_failure(s.error()), "is_decode_failure(s.error())");
 		}
+	} else if (c.type == ldap::ad::dirsync_oid) {
+		exercise_dirsync(c);
 	} else if (c.type == ldap::sync_done_oid) {
 		if (auto d = ldap::decode_sync_done(c)) {
 			const auto again = ldap::encode_sync_done(*d, c.criticality);

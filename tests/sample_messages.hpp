@@ -2,6 +2,7 @@
 // and unset. Shared by the unit tests and message_fuzz_replay (seed inputs).
 #pragma once
 
+#include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/content_sync.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/message.hpp"
@@ -156,7 +157,10 @@ inline auto sample_controls() -> std::pmr::vector<control>
 		  .value(),
 		to_control(virtual_list_view{ .target = vlv_greater_than_or_equal{ "B" } }).value(),
 		encode_vlv_response(vlv_response{ 5, 250, 0, "c" }).value(),
-		to_control(transaction_specification{ .identifier = "txn" }).value() };
+		to_control(transaction_specification{ .identifier = "txn" }).value(),
+		ad::encode_dirsync_request(
+		  ad::dirsync_request{ .flags = ad::dirsync_flags::incremental_values, .max_bytes = 100, .cookie = "c" }),
+		ad::encode_dirsync_response(ad::dirsync_response{ .more_results = true, .cookie_server = "c" }) };
 }
 
 }// namespace jhetz::ldap::test

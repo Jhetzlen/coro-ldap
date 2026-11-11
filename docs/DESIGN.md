@@ -3197,7 +3197,8 @@ Layout:
   `ad/syntax.hpp` (AD's syntax OIDs), `ad/sid.hpp`, `ad/guid.hpp` and
   `ad/user_account_control.hpp` (the value types below),
   `ad/filters.hpp` (filters on AD's bitwise matching rules, below),
-  `ad/controls.hpp` (AD's request controls), `ad/range.hpp` (the range
+  `ad/controls.hpp` (AD's request controls and DirSync's codec),
+  `ad/range.hpp` (the range
   option of ranged retrieval),
   `ad/password_value.hpp` (the `unicodePwd` value) and
   `ad/diagnostic.hpp` (`explain`). These headers are installed with the
@@ -3209,8 +3210,8 @@ Layout:
   and `tests/CMakeLists.txt`'s header check.
   It links `jhetz::ldap_net` and includes only public headers, never
   `src/connection/` or `src/net/`; it is built and installed whenever
-  `jhetz::ldap_net` is. `ad/password.hpp` and `ad/ranged_values.hpp`
-  (async, `connection &` and `client &`) and `ad/sync.hpp` (the blocking
+  `jhetz::ldap_net` is. `ad/password.hpp`, `ad/ranged_values.hpp` and
+  `ad/dirsync.hpp` (async, `connection &` and `client &`) and `ad/sync.hpp` (the blocking
   forms, over the sync facades through `sync::run`).
   A target of its own rather than `src/ad/` inside `jhetz::ldap_net`: the
   dependency is one-way and visible in CMake (`jhetz::ldap_net` cannot
@@ -3335,6 +3336,39 @@ time) reads the group without a step and with steps that end inside,
 at, and past the last window; the mock tests
 (`tests/net/ad_ranged_values_tests.cpp`) play AD's windows and the
 refused shapes.
+
+DirSync (MS-ADTS 3.1.1.3.4.1.3) is AD's poll-based change tracking, the
+counterpart of RFC 4533's refreshOnly: a search carrying the DirSync
+control returns the objects changed in a naming context since the
+cookie, each with the requested attributes that changed, and the
+response control carries the next cookie and MoreResults. Codec in
+`ad/controls.hpp` (`jhetz::ldap`, so `message_fuzz` covers it):
+`dirsync_request` converts implicitly to a raw `control` like
+`show_deleted`, since every value is encodable; names and field order are
+the spec's (Flags, MaxBytes, Cookie; MoreResults, unused, CookieServer).
+Flags is written as the signed 32-bit INTEGER Windows and .NET send
+(`incremental_values` is bit 31, so negative) and read signed or
+unsigned; MaxBytes defaults to .NET's 1048576; MoreResults is an INTEGER
+read as non-zero and written 1 or 0. One OID names both the request and
+the response control, so the fuzzer decodes every such control both ways.
+`ad::dirsync(c, request, options)` (`ad/dirsync.hpp`, `jhetz::ldap_ad`)
+runs the search again with each new cookie while MoreResults is set and
+returns every entry and the last cookie; the caller stores the cookie
+for the next poll. Collecting the batches is the common case (each is
+bounded by MaxBytes), and a caller who wants batch by batch sends the
+control itself with `ad::find_dirsync_response`. A response without the
+control, or MoreResults without a new cookie, fails
+(`unexpected_response`) instead of looping. The `client &` overload keeps
+one shared lease (the cookie is a DC's) and starts again from the
+caller's cookie after `connection_lost`, discarding what it collected;
+the blocking form is in `ad/sync.hpp`. Tested by its encoding
+(`tests/ad_controls_tests.cpp`, including unsigned Flags and malformed
+values), against the mock (`tests/net/ad_dirsync_tests.cpp`: cookies
+chained through MoreResults, refused answers) and on Samba
+(`integration.samba_ad`: a changed description found with the cookie and
+gone from the next poll, `incremental_values` returning an added member
+as `member;range=1-1`, a user without the right refused and served with
+`object_security`, `ldap::client` and `sync::connection`).
 
 What stays in the core (the audit of AD mentions outside `ad/`):
 interop notes on how AD and Samba behave as servers (quoted schema OIDs,

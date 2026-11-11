@@ -197,6 +197,7 @@ if(NOT ICU_FOUND)
 endif()
 
 add_library(jhetz_ldap STATIC
+    src/ad/controls.cpp
     src/ad/diagnostic.cpp
     src/ad/guid.cpp
     src/ad/password_value.cpp
@@ -352,6 +353,7 @@ endif()
 # src/ad/) are in jhetz::ldap.
 if(JHETZ_LDAP_BUILD_NET)
     add_library(jhetz_ldap_ad STATIC
+        src/ad/dirsync.cpp
         src/ad/password.cpp
         src/ad/ranged_values.cpp
     )
@@ -438,7 +440,8 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "sync_extended_operations.hpp" EXCLUDE
             PATTERN "sync_store.hpp" EXCLUDE
             PATTERN "password.hpp" EXCLUDE
-            PATTERN "ranged_values.hpp" EXCLUDE)
+            PATTERN "ranged_values.hpp" EXCLUDE
+            PATTERN "dirsync.hpp" EXCLUDE)
     endif()
     install(EXPORT jhetz_ldap-targets NAMESPACE jhetz:: DESTINATION ${jhetz_ldap_cmakedir})
     configure_package_config_file(cmake/jhetz_ldap-config.cmake.in

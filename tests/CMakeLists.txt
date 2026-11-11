@@ -124,7 +124,7 @@ set(jhetz_ldap_net_headers
     jhetz/ldap/sasl_ntlm.hpp jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp
     jhetz/ldap/directory.hpp jhetz/ldap/extended_operations.hpp jhetz/ldap/store.hpp jhetz/ldap/sync_extended_operations.hpp
     jhetz/ldap/sync_store.hpp
-    jhetz/ldap/ad/password.hpp jhetz/ldap/ad/ranged_values.hpp jhetz/ldap/ad/sync.hpp)
+    jhetz/ldap/ad/dirsync.hpp jhetz/ldap/ad/password.hpp jhetz/ldap/ad/ranged_values.hpp jhetz/ldap/ad/sync.hpp)
 set(jhetz_ldap_codec_header_tus)
 set(jhetz_ldap_net_header_tus)
 foreach(header ${jhetz_ldap_public_headers})
@@ -174,6 +174,7 @@ endif()
 # "net.", so `ctest -R "^net\."` runs just these.
 if(JHETZ_LDAP_BUILD_NET)
     add_executable(jhetz_ldap_net_tests
+        net/ad_dirsync_tests.cpp
         net/ad_password_tests.cpp
         net/ad_ranged_values_tests.cpp
         net/connect_tests.cpp

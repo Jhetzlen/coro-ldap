@@ -13,6 +13,7 @@
 // Without the variables every test is skipped.
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/ad/controls.hpp"
+#include "jhetz/ldap/ad/dirsync.hpp"
 #include "jhetz/ldap/ad/filetime.hpp"
 #include "jhetz/ldap/ad/filters.hpp"
 #include "jhetz/ldap/ad/guid.hpp"
@@ -41,6 +42,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -1139,5 +1141,131 @@ TEST_CASE("samba ad: ad::read_all_values reads a group of more than MaxValRange 
 			FAIL(r.error().message());
 		}
 		check_large_group(*r);
+	}
+}
+
+// ---------------------------------------------------------------- DirSync
+
+namespace {
+
+auto find_entry(const std::pmr::vector<ldap::entry> &entries, const ldap::dn &d) -> const ldap::entry *
+{
+	const auto text = d.to_string();
+	const auto it = std::ranges::find_if(entries, [&](const ldap::entry &e) { return e.dn == text; });
+	return it == entries.end() ? nullptr : &*it;
+}
+
+auto users_dirsync() -> ldap::search_params
+{
+	return { .base = domain, .filter = ldap::filters::attr("objectClass") == "user", .attributes = { "description" } };
+}
+
+}// namespace
+
+TEST_CASE("samba ad: ad::dirsync returns what changed since the cookie", "[samba_ad][dirsync]")
+{
+	require_samba();
+	draining_context ioc;
+	auto c = open_bound(ioc, false, administrator, administrator_password);
+
+	SECTION("a changed attribute")
+	{
+		auto first = finish(ioc, ldap::ad::dirsync(c, users_dirsync()));
+		if (!first) {
+			FAIL(first.error().message());
+		}
+		CHECK(find_entry(first->entries, administrator) != nullptr);
+		REQUIRE_FALSE(first->cookie.empty());
+
+		const std::string marker =
+		  "dirsync-" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+		REQUIRE(finish(ioc, c.modify({ .object = alice, .changes = { ldap::mod::replace("description", { marker }) } }))
+			.has_value());
+
+		auto next = finish(ioc, ldap::ad::dirsync(c, users_dirsync(), { .cookie = first->cookie }));
+		if (!next) {
+			FAIL(next.error().message());
+		}
+		const ldap::entry *changed = find_entry(next->entries, alice);
+		REQUIRE(changed != nullptr);
+		const auto *description = changed->find("description");
+		REQUIRE(description != nullptr);
+		REQUIRE(description->size() == 1);
+		CHECK(std::string_view(description->front()) == marker);
+		CHECK(find_entry(next->entries, pwchange) == nullptr);
+		CHECK(next->cookie != first->cookie);
+
+		auto quiet = finish(ioc, ldap::ad::dirsync(c, users_dirsync(), { .cookie = next->cookie }));
+		REQUIRE(quiet.has_value());
+		CHECK(find_entry(quiet->entries, alice) == nullptr);
+	}
+	SECTION("incremental values of a linked attribute")
+	{
+		const ldap::dn group{ "CN=coro-dirsync-group,CN=Users,DC=coro,DC=test" };
+		(void)finish(ioc, c.del({ .entry = group }));
+		REQUIRE(finish(ioc, c.add({ .entry = group, .attributes = { { "objectClass", { "group" } } } })).has_value());
+		const ldap::search_params groups{
+			.base = domain, .filter = ldap::filters::attr("objectClass") == "group", .attributes = { "member" }
+		};
+		const ldap::ad::dirsync_request incremental{ .flags = ldap::ad::dirsync_flags::incremental_values };
+		auto first = finish(ioc, ldap::ad::dirsync(c, groups, incremental));
+		if (!first) {
+			FAIL(first.error().message());
+		}
+		REQUIRE(
+		  finish(ioc, c.modify({ .object = group, .changes = { ldap::mod::add("member", { alice.to_string() }) } }))
+			.has_value());
+		auto request = incremental;
+		request.cookie = first->cookie;
+		auto next = finish(ioc, ldap::ad::dirsync(c, groups, request));
+		if (!next) {
+			FAIL(next.error().message());
+		}
+		const ldap::entry *changed = find_entry(next->entries, group);
+		REQUIRE(changed != nullptr);
+		const auto *added = changed->find("member;range=1-1");
+		REQUIRE(added != nullptr);
+		REQUIRE(added->size() == 1);
+		CHECK(added->front() == alice.to_string());
+		(void)finish(ioc, c.del({ .entry = group }));
+	}
+	SECTION("without the replication right: refused, unless object_security")
+	{
+		auto user = open_bound(ioc, false, alice, alice_password);
+		auto refused = finish(ioc, ldap::ad::dirsync(user, users_dirsync()));
+		REQUIRE_FALSE(refused.has_value());
+		CHECK(refused.error().code == ldap::errc::insufficient_access_rights);
+		CHECK_THAT(std::string(refused.error().context), StartsWith("DirSync DC=coro,DC=test"));
+		auto allowed =
+		  finish(ioc, ldap::ad::dirsync(user, users_dirsync(), { .flags = ldap::ad::dirsync_flags::object_security }));
+		if (!allowed) {
+			FAIL(allowed.error().message());
+		}
+		CHECK_FALSE(allowed->entries.empty());
+	}
+	SECTION("ldap::client and sync::connection")
+	{
+		auto u = ldap::url::parse(strict_ldaps());
+		REQUIRE(u.has_value());
+		ldap::client pool(ioc,
+		  { .servers = { *u },
+			.connection = samba_tls(),
+			.setup = ldap::simple_bind_setup(administrator, administrator_password) });
+		auto pooled = finish(ioc, ldap::ad::dirsync(pool, users_dirsync()));
+		if (!pooled) {
+			FAIL(pooled.error().message());
+		}
+		CHECK(find_entry(pooled->entries, administrator) != nullptr);
+		pool.close();
+		drive(ioc);
+
+		auto opened = ldap::sync::connect(strict_ldaps(), samba_tls());
+		REQUIRE(opened.has_value());
+		REQUIRE(opened->simple_bind(administrator, administrator_password).has_value());
+		auto blocking = ldap::ad::dirsync(*opened, users_dirsync(), { .cookie = pooled->cookie });
+		if (!blocking) {
+			FAIL(blocking.error().message());
+		}
+		CHECK_FALSE(blocking->cookie.empty());
 	}
 }

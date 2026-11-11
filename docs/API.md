@@ -1173,6 +1173,20 @@ package component `ad`:
   plain attribute after a window or no entry is
   `client_errc::unexpected_response`; a malformed range is
   `client_errc::decode_error`.
+- `jhetz/ldap/ad/dirsync.hpp` (`jhetz::ldap_ad`): `ad::dirsync(c, request,
+  options = {}, mr)`, DirSync polling (MS-ADTS 3.1.1.3.4.1.3): runs the
+  search `request` (its base the root of a naming context) with a DirSync
+  control from `options` (an `ad::dirsync_request`: its cookie, then each
+  response's) while the response says MoreResults, and returns an
+  `ad::dirsync_result`: the entries changed since the cookie (with the
+  asked-for attributes that changed; all with an empty cookie) and the
+  last cookie, for the next poll. `c` is a `connection &` or a
+  `client &` (one shared lease, run once more from the first cookie after
+  `cond::connection_lost`). Without the Replicating Directory Changes right
+  the server refuses it (`insufficient_access_rights`) unless
+  `dirsync_flags::object_security` is set. A SearchResultDone without the
+  control, or MoreResults without a new cookie, is
+  `client_errc::unexpected_response`.
 - `jhetz/ldap/ad/range.hpp` (`jhetz::ldap`): the range option itself:
   `ad::parse_range(description)` splits `member;range=0-1499` into
   `ad::ranged_description{.type = "member", .range = {0, 1499}}` (nullopt
@@ -1248,6 +1262,18 @@ package component `ad`:
   3.1.1.3.4.1.14): searches include deleted objects (isDeleted TRUE, under
   CN=Deleted Objects); no value, critical by default
   (`.critical = false` to send it non-critical).
+  DirSync's codec (`ad::dirsync_oid`, 1.2.840.113556.1.4.841, MS-ADTS
+  3.1.1.3.4.1.3): `ad::dirsync_request{.flags, .max_bytes, .cookie,
+  .critical = true}` converts to the request control (Flags as AD's signed
+  32-bit INTEGER, MaxBytes 1048576 by default as .NET sends it);
+  `ad::dirsync_flags` (`object_security`, `ancestors_first_order`,
+  `public_data_only`, `incremental_values`, with `|`, `&`, `has`); the
+  response `ad::dirsync_response{.more_results, .unused, .cookie_server}`
+  from `ad::decode_dirsync_response(c)` or
+  `ad::find_dirsync_response(controls)`; and
+  `ad::encode_dirsync_request` / `decode_dirsync_request` /
+  `encode_dirsync_response` for servers and tests. Malformed values are
+  `decode_error`.
 - `jhetz/ldap/ad/syntax.hpp` (`jhetz::ldap`): `ad::large_integer_syntax`,
   the Large Integer syntax OID (1.2.840.113556.1.4.906), which
   `validate<T>` accepts for signed integers of 64 bits or more and the

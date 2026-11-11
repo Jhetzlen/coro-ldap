@@ -1,14 +1,16 @@
 // Blocking counterparts of the ldap::ad operations (ad/password.hpp,
-// ad/ranged_values.hpp), over
+// ad/ranged_values.hpp, ad/dirsync.hpp), over
 // the sync facade's connection, leases and client (sync.hpp): each runs
 // the async function with sync::run. Part of jhetz::ldap_ad.
 #pragma once
 
+#include "jhetz/ldap/ad/dirsync.hpp"
 #include "jhetz/ldap/ad/password.hpp"
 #include "jhetz/ldap/ad/ranged_values.hpp"
 #include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/message.hpp"
+#include "jhetz/ldap/operations.hpp"
 #include "jhetz/ldap/sync.hpp"
 
 #include <string>
@@ -41,6 +43,15 @@ template<sync::directory D>
 {
 	return sync::run(
 	  d, [&](auto &a) { return ad::read_all_values(a, std::move(object), std::move(attribute), options); });
+}
+
+// As ad::dirsync (ad/dirsync.hpp), blocking, the entries on the default
+// resource. On a sync::client, one shared lease for every search, run once
+// more after cond::connection_lost.
+template<sync::directory D>
+[[nodiscard]] auto dirsync(D &d, search_params request, dirsync_request options = {}) -> result<dirsync_result>
+{
+	return sync::run(d, [&](auto &a) { return ad::dirsync(a, std::move(request), std::move(options)); });
 }
 
 }// namespace jhetz::ldap::ad
