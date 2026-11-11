@@ -3329,12 +3329,18 @@ value, which happens when the count is a multiple of the step. A
 server answers under its own name for the type, not the requested form
 (Samba and AD answer `2.5.4.31` as `member`, slapd an alias with the
 primary name), and matching that needs the server schema; since the
-search asks for one attribute of one entry, an entry with exactly one
-attribute is the answer whatever its name, and the following windows ask
-for the server's name (Samba ignores `2.5.4.31;range=0-2`, so a step
-needs the server's name from the start). An entry with several
-attributes uses the one named as asked (case-insensitive, range option
-removed) and is refused when none is. Every
+search asks for one attribute of one entry, the returned attributes are
+grouped by description without the range option (case-insensitive, other
+options kept), and the group named as asked is the answer, else the only
+group present whatever its name; the following windows ask for the
+server's name (Samba ignores `2.5.4.31;range=0-2`, so a step
+needs the server's name from the start). Several groups none named as
+asked are refused. Within the group, AD may send a value-less plain
+attribute next to the window (MS-ADTS 3.1.1.3.1.3.3: `member` and
+`member;range=0-1499`), so one ranged attribute with at most one
+value-less plain one is the window and a lone plain one is every value;
+any other combination (two ranged, a plain one with values next to a
+ranged one) is `unexpected_response` rather than a first match. Every
 other shape is refused rather than guessed at (a window not starting
 where the previous one ended, the plain attribute after a window:
 `unexpected_response`; a malformed range: `decode_error`), so the values

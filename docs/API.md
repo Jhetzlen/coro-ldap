@@ -1171,13 +1171,18 @@ package component `ad`:
   attribute or one with a range option is `std::errc::invalid_argument`
   before sending; a window that does not continue the previous one, the
   plain attribute after a window or no entry is
-  `client_errc::unexpected_response`, as is an entry with several
-  attributes none of which is `attribute`; a malformed range is
-  `client_errc::decode_error`. The returned attribute matches when its
-  description without the range option is `attribute` (ignoring case);
-  otherwise the entry's only attribute is taken as the server's name for
-  an OID or alias (`2.5.4.31` answered as `member`), and the following
-  windows ask for that name. With a step, name the attribute as the
+  `client_errc::unexpected_response`, as is an entry whose attributes
+  name several types none of which is `attribute`, or several answers for
+  one; a malformed range is `client_errc::decode_error`. The returned
+  attributes are grouped by description without the range option
+  (ignoring case, other options kept): the group named `attribute` is the
+  answer, otherwise the only group present is taken as the server's name
+  for an OID or alias (`2.5.4.31` answered as `member`), and the following
+  windows ask for that name. In the group, one ranged attribute with at
+  most one value-less plain one (AD's `member` next to
+  `member;range=0-1499`, MS-ADTS 3.1.1.3.1.3.3) is a window, a lone plain
+  one is every value; two ranged ones, or a plain one with values next to
+  a ranged one, are `unexpected_response`. With a step, name the attribute as the
   server does: Samba ignores a range option on a numeric OID.
 - `jhetz/ldap/ad/dirsync.hpp` (`jhetz::ldap_ad`): `ad::dirsync(c, request,
   options = {}, max_rounds = ad::dirsync_default_max_rounds, mr)`, DirSync

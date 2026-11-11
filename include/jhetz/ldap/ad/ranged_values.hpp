@@ -37,17 +37,20 @@ struct range_options
 // `attribute` (or `attribute;range=...`, options.step) until the answer
 // holds the attribute without a range option, a window ending with '*',
 // or no such attribute (no values, or none left: an empty list when the
-// entry has none). The answer is the attribute whose description, without
-// its range option, is `attribute` (ignoring case), else the entry's only
-// attribute: the server's name for an OID or an alias, which the following
-// windows then ask for. With a step, name the attribute as the server does
+// entry has none). The returned attributes are grouped by description
+// without the range option (ignoring case); the answer is the group named
+// `attribute`, else the only group: the server's name for an OID or an
+// alias, which the following windows then ask for. In the group, one
+// ranged attribute with at most one value-less plain one is a window
+// (MS-ADTS 3.1.1.3.1.3.3), a lone plain one every value. With a step, name the attribute as the server does
 // (its lDAPDisplayName): Samba ignores a range option on a numeric OID.
 // Fails before anything is sent with
 // std::errc::invalid_argument for an empty `attribute` or one with a
 // range option; with the search's error (context "read all values of
 // <attribute> <object>"); with client_errc::unexpected_response when no
-// entry comes back, it holds several attributes none of which is
-// `attribute`, a window does not start where the previous one ended,
+// entry comes back, it holds several groups none of which is `attribute`,
+// the group holds two ranged attributes or a plain one with values next to
+// a ranged one, a window does not start where the previous one ended,
 // or the plain attribute follows a window; and with
 // client_errc::decode_error for a malformed range option. The connection
 // must outlive the task.

@@ -8,6 +8,7 @@
 #include <boost/capy/task.hpp>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <limits>
@@ -16,6 +17,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace capy = boost::capy;
 
@@ -67,29 +69,73 @@ namespace {
 		std::optional<ranged_description> ranged{};
 	};
 
-	// The attribute of `e` answering a request for `type`: the one whose
-	// description without its range option is `type` (case-insensitive),
-	// else the entry's only attribute (the server's name for an OID or an
-	// alias). values nullptr when the entry has no attribute.
+	struct returned
+	{
+		attribute_values *values = nullptr;
+		std::optional<ranged_description> ranged{};
+
+		[[nodiscard]] auto base() const -> std::string_view
+		{
+			return ranged ? std::string_view(ranged->type) : std::string_view(values->type.name());
+		}
+	};
+
+	// The attribute of `e` answering a request for `type`. The attributes
+	// are grouped by description without the range option (ignoring case);
+	// the candidates are the group named `type`, else the only group (the
+	// server's name for an OID or an alias). Among them, one ranged
+	// attribute with at most one value-less plain one is the ranged answer
+	// (MS-ADTS 3.1.1.3.1.3.3), a lone plain one the plain answer. values
+	// nullptr when the entry has no attribute.
 	auto find_answer(entry &e, std::string_view type, const request &r) -> result<answer>
 	{
-		answer only;
+		std::vector<returned> all;
+		all.reserve(e.attributes.size());
 		for (auto &a : e.attributes) {
 			auto ranged = parse_range(a.type.name());
 			if (!ranged) {
 				return std::unexpected(detail::with_context(std::move(ranged.error()), r.context));
 			}
-			const std::string_view base = *ranged ? std::string_view((*ranged)->type) : std::string_view(a.type.name());
-			if (detail::iequals(base, type)) {
-				return answer{ .values = &a, .ranged = std::move(*ranged) };
+			all.push_back({ .values = &a, .ranged = std::move(*ranged) });
+		}
+		if (all.empty()) {
+			return answer{};
+		}
+		const auto named = [&](std::string_view base) {
+			return [base](const returned &x) { return detail::iequals(x.base(), base); };
+		};
+		std::string_view group = type;
+		if (std::ranges::none_of(all, named(type))) {
+			group = all.front().base();
+			if (!std::ranges::all_of(all, named(group))) {
+				return fail(client_errc::unexpected_response,
+				  r.context + ": none of the attributes returned is " + std::string(type));
 			}
-			only = answer{ .values = &a, .ranged = std::move(*ranged) };
 		}
-		if (e.attributes.size() > 1) {
-			return fail(client_errc::unexpected_response,
-			  r.context + ": none of the attributes returned is " + std::string(type));
+		returned *ranged = nullptr;
+		const returned *plain = nullptr;
+		std::size_t ranged_count = 0;
+		std::size_t plain_count = 0;
+		for (auto &x : all) {
+			if (!named(group)(x)) {
+				continue;
+			}
+			if (x.ranged) {
+				ranged = &x;
+				++ranged_count;
+			} else {
+				plain = &x;
+				++plain_count;
+			}
 		}
-		return only;
+		if (ranged_count == 1 && (plain_count == 0 || (plain_count == 1 && plain->values->values.empty()))) {
+			return answer{ .values = ranged->values, .ranged = std::move(ranged->ranged) };
+		}
+		if (ranged_count == 0 && plain_count == 1) {
+			return answer{ .values = plain->values };
+		}
+		return fail(
+		  client_errc::unexpected_response, r.context + ": several attributes returned answer " + std::string(type));
 	}
 
 	// Moves the values of `type` in `e` (plain or ranged from `low`) to

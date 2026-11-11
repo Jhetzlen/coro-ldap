@@ -6,12 +6,15 @@
 #include "net_test_support.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <cstdint>
 #include <initializer_list>
+#include <iterator>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -55,6 +58,27 @@ auto bare(std::int32_t id) -> step
 	s.replies.push_back(bytes_of(ldap::message{ id, ldap::search_result_entry{ "cn=staff,dc=example,dc=org", {} } }));
 	s.replies.push_back(bytes_of(done_msg(id)));
 	return s;
+}
+
+// One entry for `group` with the attributes `attrs`, then the
+// SearchResultDone.
+auto entry_with(std::int32_t id, std::vector<ldap::partial_attribute> attrs) -> step
+{
+	ldap::search_result_entry e{ "cn=staff,dc=example,dc=org" };
+	e.attributes.assign(std::make_move_iterator(attrs.begin()), std::make_move_iterator(attrs.end()));
+	step s;
+	s.replies.push_back(bytes_of(ldap::message{ id, std::move(e) }));
+	s.replies.push_back(bytes_of(done_msg(id)));
+	return s;
+}
+
+auto attr(std::string_view name, const std::vector<std::string> &vals) -> ldap::partial_attribute
+{
+	ldap::partial_attribute a{ name, {} };
+	for (const auto &v : vals) {
+		a.values.emplace_back(v);
+	}
+	return a;
 }
 
 auto asked_for(const ldap::message &m) -> std::string
@@ -161,6 +185,47 @@ TEST_CASE("ad::read_all_values: the server names the attribute its own way", "[n
 		CHECK(r.error().code == client_errc::unexpected_response);
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("none of the attributes returned is name"));
 	}
+	m.check_server();
+}
+
+TEST_CASE("ad::read_all_values: an empty plain attribute next to the first window", "[net][ad][range]")
+{
+	const bool plain_first = GENERATE(true, false);
+	const std::string requested = GENERATE(std::string("member"), std::string("2.5.4.31"));
+	CAPTURE(plain_first, requested);
+	std::vector<ldap::partial_attribute> first;
+	first.push_back(attr("member", {}));
+	first.push_back(attr("member;range=0-2", values(0, 2)));
+	if (!plain_first) {
+		std::swap(first[0], first[1]);
+	}
+	mock_ldap m;
+	m.serve({ entry_with(1, std::move(first)), window(2, "member;range=3-*", values(3, 4)) });
+	auto r = m.run(ldap::ad::read_all_values(m.conn, group, requested));
+	if (!r) {
+		FAIL(r.error().message());
+	}
+	CHECK(as_strings(*r) == values(0, 4));
+	m.check_server();
+	REQUIRE(m.log.received.size() == 2);
+	CHECK(asked_for(m.log.received[1]) == "member;range=3-*");
+}
+
+TEST_CASE("ad::read_all_values: several answers for the attribute", "[net][ad][range]")
+{
+	mock_ldap m;
+	SECTION("two ranged forms")
+	{
+		m.serve({ entry_with(1, { attr("member;range=0-2", values(0, 2)), attr("member;range=3-5", values(3, 5)) }) });
+	}
+	SECTION("a plain attribute with values next to a ranged one")
+	{
+		m.serve({ entry_with(1, { attr("member", values(0, 5)), attr("member;range=0-2", values(0, 2)) }) });
+	}
+	auto r = m.run(ldap::ad::read_all_values(m.conn, group, "member"));
+	REQUIRE_FALSE(r.has_value());
+	CHECK(r.error().code == client_errc::unexpected_response);
+	CHECK_THAT(std::string(r.error().context), ContainsSubstring("several attributes returned answer member"));
 	m.check_server();
 }
 
