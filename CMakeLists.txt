@@ -366,7 +366,7 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     jhetz_ldap_warnings(jhetz_ldapsearch)
 
     # Small programs showing the main use cases (docs/DEVELOPMENT.md, "Examples").
-    set(jhetz_ldap_examples connect search pool modify add delete move password starttls cancel blocking blocking_pool bulk paged syncrepl typed_crud referrals ntlm)
+    set(jhetz_ldap_examples connect search pool modify add delete move password starttls cancel blocking blocking_pool bulk paged syncrepl typed_crud referrals ntlm transaction)
     if(JHETZ_LDAP_WITH_GSSAPI)
         list(APPEND jhetz_ldap_examples gssapi)
     endif()

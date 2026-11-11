@@ -138,7 +138,7 @@ auto main() -> int
 ```
 
 More in [`examples/`](examples/): one small program per task (connect,
-search, add, modify, delete, password reset, StartTLS, cancellation, paged
+search, add, modify, delete, transactions, password reset, StartTLS, cancellation, paged
 search, following referrals, following changes with syncrepl, the blocking API, Kerberos), and `ldapsearch.cpp`, a small
 command-line tool.
 
