@@ -51,43 +51,50 @@ namespace detail {
 		bool finished = false;
 		std::exception_ptr error{};
 	};
+
+	struct run_fn
+	{
+		template<class T> auto operator()(boost::corosio::io_context &ioc, boost::capy::task<T> t) const -> T
+		{
+			// Shared with the handlers: a task ending after run threw (a stopped
+			// ioc run again later) writes here, not into a destroyed frame.
+			const auto state = std::make_shared<run_state<T>>();
+			if (ioc.stopped()) {
+				ioc.restart();
+			}
+			const auto fail = [state](std::exception_ptr e) { state->error = std::move(e); };
+			if constexpr (std::is_void_v<T>) {
+				boost::capy::run_async(ioc.get_executor(), [state] { state->finished = true; }, fail)(std::move(t));
+			} else {
+				boost::capy::run_async(
+				  ioc.get_executor(), [state](T v) { state->value.emplace(std::move(v)); }, fail)(std::move(t));
+			}
+			ioc.run();
+			if (state->error) {
+				std::rethrow_exception(state->error);
+			}
+			if constexpr (std::is_void_v<T>) {
+				if (state->finished) {
+					return;
+				}
+			} else {
+				if (state->value) {
+					return std::move(*state->value);
+				}
+			}
+			throw std::system_error(
+			  make_error_code(boost::capy::error::canceled), "ldap::run: the task did not finish");
+		}
+
+		template<class T> auto operator()(boost::capy::task<T> t) const -> T
+		{
+			boost::corosio::io_context ioc;
+			return (*this)(ioc, std::move(t));
+		}
+	};
 }// namespace detail
 
-template<class T> auto run(boost::corosio::io_context &ioc, boost::capy::task<T> t) -> T
-{
-	// Shared with the handlers: a task ending after run threw (a stopped
-	// ioc run again later) writes here, not into a destroyed frame.
-	const auto state = std::make_shared<detail::run_state<T>>();
-	if (ioc.stopped()) {
-		ioc.restart();
-	}
-	const auto fail = [state](std::exception_ptr e) { state->error = std::move(e); };
-	if constexpr (std::is_void_v<T>) {
-		boost::capy::run_async(ioc.get_executor(), [state] { state->finished = true; }, fail)(std::move(t));
-	} else {
-		boost::capy::run_async(
-		  ioc.get_executor(), [state](T v) { state->value.emplace(std::move(v)); }, fail)(std::move(t));
-	}
-	ioc.run();
-	if (state->error) {
-		std::rethrow_exception(state->error);
-	}
-	if constexpr (std::is_void_v<T>) {
-		if (state->finished) {
-			return;
-		}
-	} else {
-		if (state->value) {
-			return std::move(*state->value);
-		}
-	}
-	throw std::system_error(make_error_code(boost::capy::error::canceled), "ldap::run: the task did not finish");
-}
-
-template<class T> auto run(boost::capy::task<T> t) -> T
-{
-	boost::corosio::io_context ioc;
-	return ldap::run(ioc, std::move(t));
-}
+// A function object, so argument-dependent lookup never finds it.
+inline constexpr detail::run_fn run{};
 
 }// namespace jhetz::ldap

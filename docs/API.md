@@ -276,7 +276,9 @@ itself needs only ICU.
     task's value or rethrows its exception; `std::system_error` with
     `capy::error::canceled` if `ioc` was stopped (or the task abandoned)
     before the task ended. `ldap::run(task)` uses an io_context of its own. Not to
-    be called from a thread already running `ioc`.
+    be called from a thread already running `ioc`. `ldap::run` is a function
+    object, so argument-dependent lookup does not find it: a caller's own
+    unqualified `run(ioc, task)` helper stays unambiguous.
 
     ```cpp
     boost::corosio::io_context ioc;

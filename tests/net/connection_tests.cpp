@@ -2362,6 +2362,26 @@ TEST_CASE("ldap::run returns the task's value or rethrows its exception", "[net]
 	CHECK(ldap::run(ioc, []() -> capy::task<int> { co_return 8; }()) == 8);
 }
 
+namespace user_code {
+template<class T> auto run(corosio::io_context &ioc, capy::task<T> t) -> T { return ldap::run(ioc, std::move(t)); }
+
+auto connect_with_own_run(corosio::io_context &ioc, const ldap::url &u) -> ldap::result<ldap::connection>
+{
+	return run(ioc, ldap::connect(ioc, u));
+}
+}// namespace user_code
+
+TEST_CASE("ldap::run leaves a user's own unqualified run(ioc, task) unambiguous", "[net][run]")
+{
+	corosio::io_context ioc;
+	const refused_port closed;
+	auto u = ldap::url::parse(closed.url());
+	REQUIRE(u.has_value());
+	auto c = user_code::connect_with_own_run(ioc, *u);
+	REQUIRE_FALSE(c.has_value());
+	CHECK(c.error().code == std::errc::connection_refused);
+}
+
 TEST_CASE("ldap::run throws canceled when the io_context stops before the task ends", "[net][run]")
 {
 	corosio::io_context ioc;
