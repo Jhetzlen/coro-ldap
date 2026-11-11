@@ -2137,7 +2137,8 @@ auto c = ldap::sync::connect(url, {.timeout = 5s}); // owns an io_context + 1 I/
 auto people = c->search({...});                    // same request/result types
 ```
 
-Starting the async side from `main()` is `ldap::run(ioc, task)` (`run.hpp`,
+Starting the async side from `main()` is `ldap::run(f, args...)` or
+`ldap::run(ioc, task)` (`run.hpp`,
 header-only, included by `connection.hpp`): it starts the task on the
 io_context's executor with `capy::run_async`, runs the io_context on the
 calling thread until it has no work left, and returns the task's value or
@@ -2150,9 +2151,21 @@ without the task having ended (stopped, or the task abandoned; the
 trampoline's work guard keeps `run()` going while the task waits), `run` throws `std::system_error` with `capy::error::canceled`,
 as Capy's `run_blocking` does; the completion handlers share their state
 through a `shared_ptr`, so a task that ends later (the io_context run
-again) writes into that state, not into `run`'s frame. `ldap::run(task)`
-does the same on an io_context of its own, for a task that needs none (a
-connection needs `connect(ioc, ...)`). The connection's strand changes
+again) writes into that state, not into `run`'s frame. `ldap::run(f,
+args...)` makes the io_context itself and passes it to `f(ioc, args...)`,
+mirroring `sync::run(d, make_task, args...)`: the library hands the task
+the io_context it drives, so a task that needs one (every `connect`) has
+it, and the owning `run(task)`, which could only run tasks needing none,
+was removed. The call `f(ioc, args...)` and the run are one
+full-expression, so conversion temporaries bound to the task's reference
+parameters (a `const char *` for a `const std::string &`) live until the
+run ends; the io_context is destroyed before `f` and the arguments. A
+result bound to that io_context (connection, client, stream, lease,
+transaction: `detail::io_context_bound`, `io_thread_bound` plus the
+connection and client) would dangle, so it fails a static_assert; no
+ambient `connect(url)` finding the io_context at run time was added (a
+run-time error instead of a compile-time one, and unlike `client` and the
+connectors). The connection's strand changes
 nothing here: operations hop to the strand and resume the task on the
 io_context's executor. `ldap::run` is not `sync::run` (which runs a free
 async function on a blocking facade's I/O thread).

@@ -39,6 +39,5 @@ auto main(int argc, char *const *argv) -> int
 		std::cerr << "usage: LDAP_PASSWORD=... ntlm ldaps://dc1.example.org 'EXAMPLE\\jdoe'\n";
 		return 2;
 	}
-	boost::corosio::io_context ioc;
-	return ldap::run(ioc, example(ioc, argv, password));
+	return ldap::run(example, argv, password);
 }

@@ -128,8 +128,7 @@ auto search(boost::corosio::io_context &ioc) -> boost::capy::task<int>
 
 auto main() -> int
 {
-	boost::corosio::io_context ioc;
-	return ldap::run(ioc, search(ioc));
+	return ldap::run(search);
 }
 ```
 

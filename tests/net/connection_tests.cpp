@@ -2337,25 +2337,45 @@ TEST_CASE("connection: ldap::connect failures", "[net][connection]")
 	CHECK(refused.error().code == client_errc::invalid_url);
 }
 
-TEST_CASE("ldap::run returns the task's value or rethrows its exception", "[net][run]")
+namespace {
+
+auto echo_length(corosio::io_context &, const std::string &text) -> capy::task<std::size_t> { co_return text.size(); }
+
+}// namespace
+
+TEST_CASE("ldap::run(f, args...) returns the task's value or rethrows its exception", "[net][run]")
 {
-	CHECK(ldap::run([]() -> capy::task<int> { co_return 7; }()) == 7);
+	CHECK(ldap::run([](corosio::io_context &) -> capy::task<int> { co_return 7; }) == 7);
 	bool ran = false;
-	ldap::run([](bool &r) -> capy::task<void> {
-		r = true;
-		co_return;
-	}(ran));
+	ldap::run(
+	  [](corosio::io_context &, bool &r) -> capy::task<void> {
+		  r = true;
+		  co_return;
+	  },
+	  ran);
 	CHECK(ran);
-	CHECK_THROWS_AS(ldap::run([]() -> capy::task<int> {
+	CHECK_THROWS_AS(ldap::run([](corosio::io_context &) -> capy::task<int> {
 		throw std::runtime_error("thrown");
 		co_return 0;
-	}()),
+	}),
 	  std::runtime_error);
+	CHECK_THROWS_AS(
+	  ldap::run([](corosio::io_context &) -> capy::task<int> { throw std::logic_error("from f"); }), std::logic_error);
+	// The std::string made from the const char * lives until the run ends.
+	CHECK(ldap::run(echo_length, "a temporary string longer than the small-string buffer") == 54);
 
-	corosio::io_context ioc;
 	const refused_port closed;
 	auto u = ldap::url::parse(closed.url());
 	REQUIRE(u.has_value());
+	const auto code = ldap::run(
+	  [](corosio::io_context &ioc, const ldap::url &to) -> capy::task<std::error_code> {
+		  auto c = co_await ldap::connect(ioc, to);
+		  co_return c ? std::error_code{} : c.error().code;
+	  },
+	  *u);
+	CHECK(code == std::errc::connection_refused);
+
+	corosio::io_context ioc;
 	auto c = ldap::run(ioc, ldap::connect(ioc, *u));
 	REQUIRE_FALSE(c.has_value());
 	CHECK(c.error().code == std::errc::connection_refused);

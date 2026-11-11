@@ -40,6 +40,7 @@
 
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/run.hpp"
 
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/work_guard.hpp>
@@ -635,20 +636,9 @@ namespace detail {
 		template<class D> static auto runner(const D &d) { return d.runner(); }
 	};
 
-	// True for the types that must be destroyed on their connection's I/O
-	// thread (streams, leases, transactions), alone or inside result<T>,
-	// std::optional, std::unique_ptr or std::shared_ptr.
-	template<class T> inline constexpr bool io_thread_bound = false;
-	template<> inline constexpr bool io_thread_bound<ldap::search_stream> = true;
-	template<> inline constexpr bool io_thread_bound<ldap::paged_search> = true;
-	template<> inline constexpr bool io_thread_bound<ldap::lease> = true;
-	template<> inline constexpr bool io_thread_bound<ldap::exclusive_lease> = true;
-	template<> inline constexpr bool io_thread_bound<ldap::transaction> = true;
-	template<class T, class Stream> inline constexpr bool io_thread_bound<ldap::record_stream<T, Stream>> = true;
-	template<class T, class E> inline constexpr bool io_thread_bound<std::expected<T, E>> = io_thread_bound<T>;
-	template<class T> inline constexpr bool io_thread_bound<std::optional<T>> = io_thread_bound<T>;
-	template<class T, class Del> inline constexpr bool io_thread_bound<std::unique_ptr<T, Del>> = io_thread_bound<T>;
-	template<class T> inline constexpr bool io_thread_bound<std::shared_ptr<T>> = io_thread_bound<T>;
+	// The types that must be destroyed on their connection's I/O thread
+	// (run.hpp).
+	using ldap::detail::io_thread_bound;
 }// namespace detail
 
 template<class D> auto transaction::begin_on(D &d, extended_controls controls) -> result<transaction>

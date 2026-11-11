@@ -34,8 +34,4 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 	co_return 0;
 }
 
-auto main(int argc, char *const *argv) -> int
-{
-	boost::corosio::io_context ioc;
-	return ldap::run(ioc, example(ioc, argc > 1 ? argv[1] : "ldap://localhost"));
-}
+auto main(int argc, char *const *argv) -> int { return ldap::run(example, argc > 1 ? argv[1] : "ldap://localhost"); }

@@ -270,19 +270,27 @@ itself needs only ICU.
     `search_entry` and `search_reference`, the items of
     `search_stream::next_item()`.
   - `jhetz/ldap/cancel.hpp`: `raceable()` and `with_stop()`.
-  - `jhetz/ldap/run.hpp`: `ldap::run(ioc, task) -> T` runs a task from
-    `main()`: it starts the task on `ioc`, runs `ioc` on the calling thread
-    until no work is left (restarting it first if stopped), and returns the
-    task's value or rethrows its exception; `std::system_error` with
+  - `jhetz/ldap/run.hpp`: `ldap::run(f, args...) -> T` runs a task from
+    `main()`: it makes an io_context, calls `f(ioc, args...)` (a function
+    or lambda taking the `io_context &` first and returning a
+    `capy::task<T>`; an overloaded name does not deduce), runs the task as
+    below, and destroys the io_context before returning. A `T` bound to
+    that io_context (a connection, client, stream, lease or transaction,
+    also inside `result`, `std::optional`, `std::unique_ptr` or
+    `std::shared_ptr`) fails a static_assert: use `run(ioc, task)` or
+    return plain values. `ldap::run(ioc, task) -> T` starts the task on
+    `ioc`, runs `ioc` on the calling thread until no work is left
+    (restarting it first if stopped), and returns the task's value or
+    rethrows its exception (also one `f` throws); `std::system_error` with
     `capy::error::canceled` if `ioc` was stopped (or the task abandoned)
-    before the task ended. `ldap::run(task)` uses an io_context of its own. Not to
-    be called from a thread already running `ioc`. `ldap::run` is a function
+    before the task ended; use it when the io_context outlives the task.
+    Breaking: the owning `ldap::run(task)` is gone (`run(f, args...)`
+    replaces it). Not to be called from a thread already running `ioc`. `ldap::run` is a function
     object, so argument-dependent lookup does not find it: a caller's own
     unqualified `run(ioc, task)` helper stays unambiguous.
 
     ```cpp
-    boost::corosio::io_context ioc;
-    return ldap::run(ioc, search(ioc));   // search: a capy::task<int> using ldap::connect(ioc, ...)
+    return ldap::run(search, "ldap://localhost");   // search(io_context &, std::string) -> capy::task<int>
     ```
   - `jhetz/ldap/transaction.hpp`: `ldap::transaction` and
     `commit_result` (RFC 5805, below).
