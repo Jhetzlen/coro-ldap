@@ -24,6 +24,7 @@
 //   co_await people.add(person{...});
 //   auto f = ldap::filters::field<&person::uid>() == "jdoe";
 //   auto changes = ldap::diff(before, after);   // result<std::vector<ldap::change<person>>>
+//   auto same = ldap::unchanged_filter(before); // result<ldap::filter>
 //
 // Compile-time checks: attribute and object class names are validated; a
 // member type without value_traits, a member of another struct, a change to
@@ -800,6 +801,7 @@ namespace detail {
 	// `after` to `out`; false, with `failed` set, when a value does not
 	// encode.
 	template<auto Ptr>
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): before, then after, as diff
 	auto append_diff(const owner_of<Ptr> &before,
 	  const owner_of<Ptr> &after,
 	  std::vector<change<owner_of<Ptr>>> &out,
@@ -933,6 +935,83 @@ template<described T> [[nodiscard]] auto narrow_filter(filter f) -> filter
 		}
 		return std::move(out) && std::move(f);
 	}
+}
+
+namespace detail {
+	// `out` ANDed with `f`, or `f` when `out` is still empty.
+	inline void and_into(filter &out, filter f) { out = out.empty() ? std::move(f) : std::move(out) && std::move(f); }
+
+	// ANDs (a=v) for each value of member `Ptr` of `original` into `out`, or
+	// (!(a=*)) when it has none; false, with `failed` set, when a value does
+	// not encode.
+	template<auto Ptr>
+	auto append_unchanged(const owner_of<Ptr> &original, filter &out, std::optional<error> &failed) -> bool
+	{
+		const filters::attr a(field_of<Ptr>().name);
+		auto values = encode_values<Ptr>(original.*Ptr);
+		if (!values) {
+			failed = with_context(std::move(values.error()), std::string("attribute ").append(field_of<Ptr>().name));
+			return false;
+		}
+		if (values->empty()) {
+			and_into(out, !a.present());
+		}
+		for (const auto &v : *values) {
+			and_into(out, a == v);
+		}
+		return true;
+	}
+}// namespace detail
+
+// A filter true of an entry that still has `original`'s values, for an
+// Assertion control (RFC 4528): (a=v) for each value of each member in
+// descriptor order, (!(a=*)) for an empty one, read_only members skipped,
+// all ANDed. Fails with the first value that does not encode (context
+// "attribute mail").
+template<described T> [[nodiscard]] auto unchanged_filter(const T &original) -> result<filter>
+{
+	static_assert(std::apply([](const auto &...f) { return (!f.read_only || ...); }, schema<T>.fields),
+	  "ldap::unchanged_filter: every member is read_only");
+	filter out;
+	std::optional<error> failed;
+	std::apply(
+	  [&](const auto &...f) {
+		  (
+			[&] {
+				constexpr auto ptr = std::remove_cvref_t<decltype(f)>::ptr;
+				if constexpr (!detail::field_of<ptr>().read_only) {
+					return failed.has_value() || detail::append_unchanged<ptr>(original, out, failed);
+				} else {
+					return true;
+				}
+			}(),
+			...);
+	  },
+	  schema<T>.fields);
+	if (failed) {
+		return std::unexpected(std::move(*failed));
+	}
+	return out;
+}
+
+// (a=v) on one single-valued member of `original`, read_only or not: a
+// version attribute such as entryCSN or modifyTimestamp. An empty optional
+// fails with missing_attribute, and a value that does not encode with its
+// error (context "attribute entryCSN").
+template<auto Ptr> [[nodiscard]] auto unchanged_filter(const detail::owner_of<Ptr> &original) -> result<filter>
+{
+	static_assert(std::remove_cvref_t<decltype(detail::field_of<Ptr>())>::kind != cardinality::multiple,
+	  "ldap::unchanged_filter: a version member must be single-valued");
+	const auto *name = detail::field_of<Ptr>().name;
+	auto values = detail::encode_values<Ptr>(original.*Ptr);
+	if (!values) {
+		return std::unexpected(detail::with_context(std::move(values.error()), std::string("attribute ").append(name)));
+	}
+	if (values->empty()) {
+		return std::unexpected(
+		  detail::with_context(make_error(client_errc::missing_attribute), std::string("attribute ").append(name)));
+	}
+	return filters::attr(detail::field_of<Ptr>().name) == values->front();
 }
 
 }// namespace jhetz::ldap

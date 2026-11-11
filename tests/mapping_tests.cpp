@@ -653,6 +653,48 @@ TEST_CASE("a typed change carries the encode error of its value", "[mapping][mod
 			ldap::modify_operation::replace, { "cn", { "Jos\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC \xF0\x9F\x98\x80" } } });
 }
 
+TEST_CASE("unchanged_filter: the original's values as a filter", "[mapping][unchanged_filter]")
+{
+	const person original{ .uid = "jdoe",
+		.cn = "John",
+		.mail = std::nullopt,
+		.member_of = {},
+		.uid_number = 1000,
+		.disabled = false,
+		.photo = { std::byte{ 0x28 } },
+		.telephone = { "1", "2" },
+		.created = sys_seconds{ seconds{ 5 } },
+		.state = std::nullopt };
+
+	auto all = ldap::unchanged_filter(original);
+	REQUIRE(all.has_value());
+	CHECK(all->to_string()
+		  == "(&(uid=jdoe)(cn=John)(!(mail=*))(!(memberOf=*))(uidNumber=1000)(x-disabled=FALSE)(jpegPhoto=\\28)"
+			 "(telephoneNumber=1)(telephoneNumber=2)(!(x-status=*)))");
+
+	auto version = ldap::unchanged_filter<&person::created>(original);
+	REQUIRE(version.has_value());
+	CHECK(version->to_string() == "(createTimestamp=19700101000005Z)");
+	auto optional_version = ldap::unchanged_filter<&person::disabled>(original);
+	REQUIRE(optional_version.has_value());
+	CHECK(optional_version->to_string() == "(x-disabled=FALSE)");
+
+	auto missing = ldap::unchanged_filter<&person::mail>(original);
+	REQUIRE_FALSE(missing.has_value());
+	CHECK(missing.error().code == ldap::client_errc::missing_attribute);
+	CHECK(std::string(missing.error().context) == "attribute mail");
+
+	person bad = original;
+	bad.cn = "j\xFF";
+	auto not_encoded = ldap::unchanged_filter(bad);
+	REQUIRE_FALSE(not_encoded.has_value());
+	CHECK(not_encoded.error().code == ldap::client_errc::encode_error);
+	CHECK_THAT(std::string(not_encoded.error().context), ContainsSubstring("attribute cn"));
+	auto bad_version = ldap::unchanged_filter<&person::cn>(bad);
+	REQUIRE_FALSE(bad_version.has_value());
+	CHECK(bad_version.error().code == ldap::client_errc::encode_error);
+}
+
 TEST_CASE("diff: the changes turning one value into another", "[mapping][diff]")
 {
 	using op = ldap::modify_operation;
@@ -708,7 +750,8 @@ TEST_CASE("diff: the changes turning one value into another", "[mapping][diff]")
 
 		after = before;
 		after.telephone.clear();
-		after.member_of.push_back(ldap::dn{ "cn=ops,dc=example,dc=org" });
+		const ldap::dn ops{ "cn=ops,dc=example,dc=org" };
+		after.member_of.push_back(ops);
 		CHECK(wires(ldap::diff(before, after))
 			  == std::vector<ldap::modify_change>{ { op::add, { "memberOf", { "cn=ops,dc=example,dc=org" } } },
 				{ op::delete_, { "telephoneNumber", {} } } });

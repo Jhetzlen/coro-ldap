@@ -1590,6 +1590,7 @@ auto p = co_await people.get("jdoe");                   // result<std::optional<
 co_await people.modify("jdoe", {ldap::replace<&person::mail>("j@example.org")});
 person q = **p; q.mail.reset();
 co_await people.update(**p, q);                          // only mail: delete
+co_await people.update_if(**p, q);                       // the same, if the entry still has p's values
 auto all = co_await people.search(ldap::filters::field<&person::mail>().present());
 co_await people.remove("jdoe");
 ```
@@ -1627,7 +1628,39 @@ co_await people.remove("jdoe");
   anything is sent: the entry would need a new DN, which is `rename`'s
   job, not a hidden modify DN. `original` is the caller's: no read
   before the write, so a concurrent change between the read and the
-  update is not detected (the Assertion control is coro-ldap-2cx.6).
+  update is not detected (`update_if` detects it).
+- `update_if(original, changed)` is `update` with a critical Assertion
+  control (RFC 4528), so the server applies the modify only if the
+  entry still matches `original`, atomically, and otherwise answers
+  assertionFailed (122), returned as the error. Critical because a
+  server ignoring the control would apply an update the caller made
+  conditional. Two conditions:
+  - By default `ldap::unchanged_filter(original)`: `(a=v)` for each value
+    of each member, `(!(a=*))` for an empty one, so a value added to an
+    empty member is seen too. read_only members are skipped, as in `diff`:
+    the server changes those on its own (a `lastLogon` would refuse
+    updates nobody raced with), and a type that truncates (`sys_seconds`
+    drops fractions) could never match. A filter cannot count values, so
+    a value added to a non-empty multi-valued member, and any attribute T
+    does not map, go unnoticed. A member whose attribute has no equality
+    rule (jpegPhoto) evaluates to Undefined, which fails the assertion
+    every time.
+  - `ldap::versioned_by<&T::m>`: `(m=<original's value>)` on one
+    single-valued member, usually a read_only one, which covers the whole
+    entry and has none of those limits. A tag argument, as `named_by`, so
+    the member is checked at compile time. entryCSN is exact;
+    modifyTimestamp has a resolution of one second, so two changes in the
+    same second look like one; map it as a string on a server whose
+    timestamps have fractions. An empty optional is
+    `missing_attribute` before anything is sent, since `(!(m=*))` would be
+    true on a server without the attribute, a check that never fails.
+
+  Nothing differs: nothing is sent and the condition is not tested. An
+  Assertion control already in the `controls` argument is `encode_error`
+  before anything is sent: slapd refuses a repeated control with
+  protocolError, and combining the two is not `update_if`'s to decide
+  (`update(original, changed, {ldap::assertion{...}})` sends any
+  condition).
 - `rename(from, to)` is a modify DN to the RDN `<naming attribute>=<to>`
   with deleteoldrdn TRUE, so the naming member follows; `move(key,
   new_base)` (or `move(key, other_store)`, its base) keeps the RDN and

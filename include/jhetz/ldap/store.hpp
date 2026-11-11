@@ -7,6 +7,7 @@
 //   co_await people.modify("jdoe", {ldap::replace<&person::mail>("j@example.org")});
 //   person q = **p; q.mail = "john@example.org";
 //   co_await people.update(**p, q);                          // the changed members only
+//   co_await people.update_if(**p, q);                       // ... if the entry still has p's values
 //   co_await people.rename("jdoe", "john");                  // uid=john,ou=people,dc=example,dc=org
 //   auto all = co_await people.search(ldap::filters::field<&person::mail>().present());
 //   auto pages = co_await people.search_paged(100);         // result<record_stream<person, paged_search>>
@@ -33,6 +34,7 @@
 
 #include <boost/capy/task.hpp>
 
+#include <algorithm>
 #include <concepts>
 #include <cstdint>
 #include <mutex>
@@ -41,6 +43,7 @@
 #include <type_traits>
 #include <typeinfo>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace jhetz::ldap {
@@ -51,6 +54,14 @@ template<auto Naming> struct named_by_t
 	explicit constexpr named_by_t() = default;
 };
 template<auto Naming> inline constexpr named_by_t<Naming> named_by{};
+
+// The single-valued member store::update_if asserts instead of every mapped
+// value: ldap::versioned_by<&person::entry_csn>.
+template<auto Version> struct versioned_by_t
+{
+	explicit constexpr versioned_by_t() = default;
+};
+template<auto Version> inline constexpr versioned_by_t<Version> versioned_by{};
 
 // When a store checks its struct against the server's schema (DESIGN.md
 // section 6).
@@ -103,6 +114,20 @@ namespace detail {
 			return std::unexpected(with_context(std::move(v.error()), op_context("search", base)));
 		}
 		return record<T>{ .dn = std::move(*name), .value = std::move(*v) };
+	}
+
+	// store::update_if asserting every mapped value.
+	struct every_mapped_value
+	{
+	};
+
+	// Whether `controls` already has an Assertion control, typed or raw.
+	[[nodiscard]] inline auto has_assertion(const modify_controls &controls) -> bool
+	{
+		return std::ranges::any_of(controls, [](const auto &c) {
+			const auto *raw = std::get_if<control>(&c);
+			return std::holds_alternative<assertion>(c) || (raw != nullptr && raw->type == assertion_oid);
+		});
 	}
 
 	// The requests and results of a store, without the I/O (store_core).
@@ -228,6 +253,47 @@ namespace detail {
 				return std::unexpected(std::move(request.error()));
 			}
 			return std::optional<modify_params>(std::move(*request));
+		}
+
+		[[nodiscard]] static auto guard_filter(const value_type &original, every_mapped_value /*guard*/)
+		  -> result<filter>
+		{
+			return unchanged_filter(original);
+		}
+		template<auto Version>
+		[[nodiscard]] static auto guard_filter(const value_type &original, versioned_by_t<Version> /*guard*/)
+		  -> result<filter>
+		{
+			static_assert(std::same_as<owner_of<Version>, value_type>,
+			  "ldap::versioned_by: the version member must be a member of the store's struct");
+			return unchanged_filter<Version>(original);
+		}
+
+		// update_request with an Assertion control on `original` (guard_filter).
+		// An Assertion control already in `controls` fails with encode_error.
+		template<class Guard>
+		[[nodiscard]] static auto update_if_request(dn entry,
+		  const value_type &original,
+		  const value_type &changed,
+		  Guard guard,
+		  modify_controls controls) -> result<std::optional<modify_params>>
+		{
+			auto request = update_request(std::move(entry), original, changed, std::move(controls));
+			if (!request || !*request) {
+				return request;
+			}
+			modify_params &p = **request;
+			if (has_assertion(p.controls)) {
+				return std::unexpected(
+				  with_context(make_error(client_errc::encode_error, "assertion: update_if sends its own"),
+					op_context("modify", p.object)));
+			}
+			auto f = guard_filter(original, guard);
+			if (!f) {
+				return std::unexpected(with_context(std::move(f.error()), op_context("modify", p.object)));
+			}
+			p.controls.emplace_back(assertion{ .filter = std::move(*f) });
+			return request;
 		}
 
 		// The modify DN renaming the entry named `from` to `to` under `base`:
@@ -531,21 +597,28 @@ namespace detail {
 		auto update_at(S &s, dn entry, value_type original, value_type changed, modify_controls controls)
 		  -> boost::capy::task<result<std::optional<response>>>
 		{
-			auto request = codec::update_request(std::move(entry), original, changed, std::move(controls));
-			if (!request) {
-				co_return std::unexpected(std::move(request.error()));
+			co_return co_await send_update(
+			  s, codec::update_request(std::move(entry), original, changed, std::move(controls)));
+		}
+
+		template<directory S, class Guard>
+		auto update_if(S &s, value_type original, value_type changed, Guard guard, modify_controls controls)
+		  -> boost::capy::task<result<std::optional<response>>>
+		{
+			auto entry = dn_of(original.*Naming);
+			if (!entry) {
+				co_return std::unexpected(with_context(std::move(entry.error()), "modify"));
 			}
-			if (!*request) {
-				co_return std::optional<response>{};
-			}
-			if (auto c = co_await check_schema(s); !c) {
-				co_return std::unexpected(std::move(c.error()));
-			}
-			auto done = co_await s.modify(std::move(**request));
-			if (!done) {
-				co_return std::unexpected(std::move(done.error()));
-			}
-			co_return std::optional<response>(std::move(*done));
+			co_return co_await update_if_at(
+			  s, std::move(*entry), std::move(original), std::move(changed), guard, std::move(controls));
+		}
+		template<directory S, class Guard>
+		auto
+		  update_if_at(S &s, dn entry, value_type original, value_type changed, Guard guard, modify_controls controls)
+			-> boost::capy::task<result<std::optional<response>>>
+		{
+			co_return co_await send_update(
+			  s, codec::update_if_request(std::move(entry), original, changed, guard, std::move(controls)));
 		}
 
 		template<directory S>
@@ -648,6 +721,27 @@ namespace detail {
 		}
 
 	  private:
+		// Sends `request` once the schema check passed; nullopt sends nothing.
+		template<directory S>
+		auto send_update(S &s, result<std::optional<modify_params>> request)
+		  -> boost::capy::task<result<std::optional<response>>>
+		{
+			if (!request) {
+				co_return std::unexpected(std::move(request.error()));
+			}
+			if (!*request) {
+				co_return std::optional<response>{};
+			}
+			if (auto c = co_await check_schema(s); !c) {
+				co_return std::unexpected(std::move(c.error()));
+			}
+			auto done = co_await s.modify(std::move(**request));
+			if (!done) {
+				co_return std::unexpected(std::move(done.error()));
+			}
+			co_return std::optional<response>(std::move(*done));
+		}
+
 		template<directory S> auto check_schema(S &s) -> boost::capy::task<result<void>>
 		{
 			if (options_.schema_check == ldap::schema_check::off) {
@@ -742,6 +836,44 @@ template<auto Naming, directory D> class store
 	  -> boost::capy::task<result<std::optional<response>>>
 	{
 		return core_.update(*source_, original, std::move(changed), std::move(controls));
+	}
+
+	// update(), the modify carrying an Assertion control (RFC 4528) on
+	// `original`: the server applies it only if the entry still matches,
+	// else it fails with errc::assertion_failed (122). The filter is
+	// ldap::unchanged_filter(original), or with ldap::versioned_by<&T::m>,
+	// (m=<original's value>), which fails with missing_attribute before
+	// anything is sent if `original` has none. Critical. nullopt, and nothing
+	// sent, when no member differs. An Assertion control in `controls` fails
+	// with encode_error before anything is sent.
+	auto update_if(const record<value_type> &original, value_type changed, modify_controls controls = {})
+	  -> boost::capy::task<result<std::optional<response>>>
+	{
+		return core_.update_if_at(
+		  *source_, original.dn, original.value, std::move(changed), detail::every_mapped_value{}, std::move(controls));
+	}
+	auto update_if(const value_type &original, value_type changed, modify_controls controls = {})
+	  -> boost::capy::task<result<std::optional<response>>>
+	{
+		return core_.update_if(
+		  *source_, original, std::move(changed), detail::every_mapped_value{}, std::move(controls));
+	}
+	template<auto Version>
+	auto update_if(const record<value_type> &original,
+	  value_type changed,
+	  versioned_by_t<Version> version,
+	  modify_controls controls = {}) -> boost::capy::task<result<std::optional<response>>>
+	{
+		return core_.update_if_at(
+		  *source_, original.dn, original.value, std::move(changed), version, std::move(controls));
+	}
+	template<auto Version>
+	auto update_if(const value_type &original,
+	  value_type changed,
+	  versioned_by_t<Version> version,
+	  modify_controls controls = {}) -> boost::capy::task<result<std::optional<response>>>
+	{
+		return core_.update_if(*source_, original, std::move(changed), version, std::move(controls));
 	}
 
 	// Deletes the entry named `key` (or at `entry`).

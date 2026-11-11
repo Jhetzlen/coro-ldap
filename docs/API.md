@@ -863,6 +863,16 @@ itself needs only ICU.
   ones, read_only members skipped), nullopt with nothing sent when none
   differs, `client_errc::naming_value_changed` when the naming member
   differs (use `rename`);
+  `update_if(original, changed)` and `update_if(original, changed,
+  ldap::versioned_by<&T::m>)`, the same modify with a critical Assertion
+  control (RFC 4528) on `original`: `ldap::unchanged_filter(original)`
+  (mapping.hpp: `(a=v)` for each value of each member, `(!(a=*))` for an
+  empty one, read_only members skipped) or `(m=<original's value>)` on a
+  single-valued member, read_only or not (entryCSN, modifyTimestamp); a
+  concurrent change fails with `errc::assertion_failed` (122). An empty
+  version member fails with `client_errc::missing_attribute`, and an
+  Assertion control in the `controls` argument with `encode_error`, before
+  anything is sent;
   `remove(key)` / `remove_at(dn)`, `rename(from, to)` (modify DN to
   `<naming attribute>=<to>`, deleteoldrdn TRUE) and `move(key, new_base)` /
   `move(key, other_store)` (newSuperior, RDN kept) -> `task<result<response>>`, each with

@@ -72,6 +72,7 @@ namespace detail {
 		return text;
 	}
 
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): the values, then the ones to leave out
 	auto values_not_in(const string_list &values, const string_list &other) -> string_list
 	{
 		const std::unordered_set<std::string_view> excluded(other.begin(), other.end());

@@ -331,6 +331,112 @@ TEST_CASE("store: update sends the members that differ in one modify", "[net][st
 		  { { op::replace, { "mail", { "john@example.org" } } }, { op::replace, { "uidNumber", { "1001" } } } } } });
 }
 
+TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]")
+{
+	using op = ldap::modify_operation;
+	using ldap::filters::attr;
+	const auto assertion_of = [](const ldap::filter &f) {
+		auto c = ldap::to_control(ldap::assertion{ .filter = f });
+		REQUIRE(c.has_value());
+		return *c;
+	};
+	const person before{ .uid = "jdoe",
+		.mail = std::nullopt,
+		.uid_number = 1000,
+		.modified = std::chrono::sys_seconds{ std::chrono::seconds{ 5 } } };
+	const ldap::record<person> found{ .dn = ldap::dn{ "cn=John,ou=other,dc=example,dc=org" }, .value = before };
+	person after = before;
+	after.uid_number = 1001;
+	const ldap::modify_change number{ op::replace, { "uidNumber", { "1001" } } };
+	const auto values = attr("uid") == "jdoe" && !attr("mail").present() && attr("uidNumber") == "1000";
+	const auto version = attr("modifyTimestamp") == "19700101000005Z";
+	constexpr auto modified = ldap::versioned_by<&person::modified>;
+
+	SECTION("every mapped value, or the version member")
+	{
+		mock_ldap m;
+		m.serve({ answer({ ok(1, ldap::modify_response{}) }),
+		  answer({ ok(2, ldap::modify_response{}) }),
+		  answer({ ok(3, ldap::modify_response{}) }),
+		  answer({ ok(4, ldap::modify_response{}) }) });
+		ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+		auto r = m.run(s.update_if(found, after));
+		REQUIRE(r.has_value());
+		CHECK(r->has_value());
+		REQUIRE(m.run(s.update_if(before, after)).has_value());
+		REQUIRE(m.run(s.update_if(found, after, modified)).has_value());
+		REQUIRE(m.run(s.update_if(before, after, modified, { ldap::post_read{ .attributes = { "cn" } } })).has_value());
+		m.check_server();
+
+		const std::string other = "cn=John,ou=other,dc=example,dc=org";
+		const std::string named = "uid=jdoe,ou=people,dc=example,dc=org";
+		const auto post_read = ldap::to_control(ldap::post_read{ .attributes = { "cn" } });
+		REQUIRE(post_read.has_value());
+		REQUIRE(m.log.received.size() == 4);
+		CHECK(
+		  m.log.received[0] == ldap::message{ 1, ldap::modify_request{ other, { number } }, { assertion_of(values) } });
+		CHECK(
+		  m.log.received[1] == ldap::message{ 2, ldap::modify_request{ named, { number } }, { assertion_of(values) } });
+		CHECK(m.log.received[2]
+			  == ldap::message{ 3, ldap::modify_request{ other, { number } }, { assertion_of(version) } });
+		CHECK(m.log.received[3]
+			  == ldap::message{ 4, ldap::modify_request{ named, { number } }, { *post_read, assertion_of(version) } });
+		CHECK(m.log.received[0].controls[0].criticality);
+	}
+
+	SECTION("a concurrent change fails with assertionFailed")
+	{
+		mock_ldap m;
+		m.serve({ answer({ ldap::message{ 1, ldap::modify_response{ ldap::ldap_result{ 122 } } } }) });
+		ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+		auto r = m.run(s.update_if(found, after));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::assertion_failed);
+		m.check_server();
+	}
+
+	SECTION("refused before anything is sent")
+	{
+		mock_ldap m;
+		m.serve({});
+		ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+
+		auto same = m.run(s.update_if(before, before));
+		REQUIRE(same.has_value());
+		CHECK_FALSE(same->has_value());
+
+		person renamed = before;
+		renamed.uid = "john";
+		auto refused = m.run(s.update_if(found, renamed));
+		REQUIRE_FALSE(refused.has_value());
+		CHECK(refused.error().code == ldap::client_errc::naming_value_changed);
+
+		auto no_version = m.run(s.update_if(found, after, ldap::versioned_by<&person::mail>));
+		REQUIRE_FALSE(no_version.has_value());
+		CHECK(no_version.error().code == ldap::client_errc::missing_attribute);
+		CHECK(std::string(no_version.error().context) == "modify cn=John,ou=other,dc=example,dc=org: attribute mail");
+
+		auto own = m.run(s.update_if(found, after, { ldap::assertion{ .filter = attr("cn") == "x" } }));
+		REQUIRE_FALSE(own.has_value());
+		CHECK(own.error().code == ldap::client_errc::encode_error);
+		CHECK(std::string(own.error().context)
+			  == "modify cn=John,ou=other,dc=example,dc=org: assertion: update_if sends its own");
+		auto raw = m.run(s.update_if(found, after, { ldap::control(ldap::assertion_oid, true) }));
+		REQUIRE_FALSE(raw.has_value());
+		CHECK(raw.error().code == ldap::client_errc::encode_error);
+
+		person bad = before;
+		bad.uid_number = 1001;
+		person bad_original = before;
+		bad_original.mail = "j\xFF";
+		auto not_encoded = m.run(s.update_if(bad_original, bad));
+		REQUIRE_FALSE(not_encoded.has_value());
+		CHECK(not_encoded.error().code == ldap::client_errc::encode_error);
+		m.check_server();
+		CHECK(m.log.received.empty());
+	}
+}
+
 TEST_CASE("store: rename and move send a modify DN", "[net][store]")
 {
 	mock_ldap m;
@@ -685,4 +791,22 @@ TEST_CASE("sync store: the same operations, blocking", "[net][store][sync]")
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == ldap::client_errc::naming_value_changed);
 	CHECK(srv.requests == 11);
+
+	constexpr auto version = ldap::versioned_by<&labelled_card::description>;
+	const labelled_card first{ .cn = "X", .description = "first" };
+	const labelled_card second{ .cn = "X", .description = "second" };
+	auto no_change = labelled.update_if(x, x.value);
+	REQUIRE(no_change.has_value());
+	CHECK_FALSE(no_change->has_value());
+	auto guarded = labelled.update_if(x, first);
+	REQUIRE(guarded.has_value());
+	CHECK(guarded->has_value());
+	CHECK(labelled.update_if(x.value, first).has_value());
+	CHECK(labelled.update_if(ldap::record<labelled_card>{ .dn = x.dn, .value = first }, second, version).has_value());
+	CHECK(labelled.update_if(first, second, version).has_value());
+	CHECK(srv.requests == 15);
+	auto no_version = labelled.update_if(x, first, version);
+	REQUIRE_FALSE(no_version.has_value());
+	CHECK(no_version.error().code == ldap::client_errc::missing_attribute);
+	CHECK(srv.requests == 15);
 }

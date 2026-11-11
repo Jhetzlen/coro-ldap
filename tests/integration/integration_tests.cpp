@@ -2467,6 +2467,112 @@ TEST_CASE("integration: a store adds auxiliary object classes", "[integration][s
 	REQUIRE(finish(ioc, s.remove(name)).has_value());
 }
 
+namespace {
+
+struct versioned_contact
+{
+	std::string uid;
+	std::string cn;
+	std::string sn;
+	std::optional<std::string> mail;
+	std::vector<std::string> telephone;
+	std::string entry_csn{};
+	std::chrono::sys_seconds modified{};
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<versioned_contact> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::field<&versioned_contact::uid>("uid"),
+  ldap::field<&versioned_contact::cn>("cn"),
+  ldap::field<&versioned_contact::sn>("sn"),
+  ldap::field<&versioned_contact::mail>("mail"),
+  ldap::field<&versioned_contact::telephone>("telephoneNumber"),
+  ldap::field<&versioned_contact::entry_csn>("entryCSN", ldap::read_only),
+  ldap::field<&versioned_contact::modified>("modifyTimestamp", ldap::read_only));
+
+TEST_CASE("integration: store::update_if detects a concurrent change", "[integration][store][update]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	draining_context ioc;
+	auto c = open_admin(ioc);
+	ldap::store s(
+	  c, people, ldap::named_by<&versioned_contact::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	const std::string name = unique("update-if");
+	REQUIRE(finish(ioc,
+	  s.add(versioned_contact{
+		.uid = name, .cn = "Update", .sn = "Guarded", .mail = std::nullopt, .telephone = { "+1 555 0100" } }))
+		.has_value());
+	const auto read = [&] {
+		auto got = finish(ioc, s.get(name));
+		REQUIRE(got.has_value());
+		REQUIRE(got->has_value());
+		return **got;
+	};
+	constexpr auto csn = ldap::versioned_by<&versioned_contact::entry_csn>;
+
+	// Nobody changed the entry: applied.
+	versioned_contact original = read();
+	versioned_contact changed = original;
+	changed.cn = "Upd\xC3\xA4ted";
+	auto applied = finish(ioc, s.update_if(original, changed));
+	if (!applied) {
+		FAIL(applied.error().message());
+	}
+	CHECK(applied->has_value());
+	CHECK(read().cn == "Upd\xC3\xA4ted");
+
+	// A mapped value changed meanwhile: refused, nothing applied.
+	original = read();
+	REQUIRE(finish(ioc, s.modify(name, { ldap::replace<&versioned_contact::sn>("Other") })).has_value());
+	changed = original;
+	changed.cn = "Stale";
+	auto stale = finish(ioc, s.update_if(original, changed));
+	REQUIRE_FALSE(stale.has_value());
+	CHECK(stale.error().code == ldap::errc::assertion_failed);
+	CHECK(read().cn == "Upd\xC3\xA4ted");
+
+	// A value added to a member that was empty: refused.
+	original = read();
+	REQUIRE(
+	  finish(ioc, s.modify(name, { ldap::replace<&versioned_contact::mail>(name + "@example.org") })).has_value());
+	changed = original;
+	changed.cn = "Stale";
+	auto added = finish(ioc, s.update_if(original, changed));
+	REQUIRE_FALSE(added.has_value());
+	CHECK(added.error().code == ldap::errc::assertion_failed);
+
+	// entryCSN: applied, then the same original is stale.
+	original = read();
+	REQUIRE_FALSE(original.entry_csn.empty());
+	changed = original;
+	changed.cn = "By version";
+	auto by_version = finish(ioc, s.update_if(original, changed, csn));
+	if (!by_version) {
+		FAIL(by_version.error().message());
+	}
+	CHECK(by_version->has_value());
+	changed.cn = "Stale";
+	auto refused = finish(ioc, s.update_if(original, changed, csn));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::errc::assertion_failed);
+	CHECK(read().cn == "By version");
+
+	// modifyTimestamp as the version.
+	original = read();
+	changed = original;
+	changed.cn = "By timestamp";
+	auto by_time = finish(ioc, s.update_if(original, changed, ldap::versioned_by<&versioned_contact::modified>));
+	if (!by_time) {
+		FAIL(by_time.error().message());
+	}
+	CHECK(read().cn == "By timestamp");
+	REQUIRE(finish(ioc, s.remove(name)).has_value());
+}
+
 TEST_CASE("integration: ldap::client replaces a connection the server dropped", "[integration][client]")
 {
 	if (!have_slapd()) {
