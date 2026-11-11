@@ -875,7 +875,9 @@ itself needs only ICU.
   (mapping.hpp: `(a=v)` for each value of each member, `(!(a=*))` for an
   empty one, read_only members skipped) or `(m=<original's value>)` on a
   single-valued member, read_only or not (entryCSN, modifyTimestamp); a
-  concurrent change fails with `errc::assertion_failed` (122). An empty
+  concurrent change fails with `errc::assertion_failed` (122). The default
+  filter past `max_filter_elements` (10,000) elements, one per value, fails
+  with `invalid_filter` before anything is sent: use `versioned_by`. An empty
   version member fails with `client_errc::missing_attribute`, and an
   Assertion control in the `controls` argument with `encode_error`, before
   anything is sent;

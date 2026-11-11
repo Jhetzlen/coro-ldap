@@ -56,6 +56,13 @@ struct labelled_card
 	std::optional<std::string> description;
 };
 
+struct large_group
+{
+	std::string cn;
+	std::vector<std::string> members;
+	std::string csn;
+};
+
 }// namespace
 
 template<>
@@ -82,6 +89,12 @@ template<>
 constexpr auto ldap::schema<labelled_card> = ldap::describe(ldap::object_class("person"),
   ldap::field<&labelled_card::cn>("cn"),
   ldap::field<&labelled_card::description>("description"));
+
+template<>
+constexpr auto ldap::schema<large_group> = ldap::describe(ldap::object_class("groupOfNames"),
+  ldap::field<&large_group::cn>("cn"),
+  ldap::field<&large_group::members>("member"),
+  ldap::field<&large_group::csn>("entryCSN", ldap::read_only));
 
 static_assert(ldap::directory<ldap::connection>);
 static_assert(ldap::directory<ldap::client>);
@@ -435,6 +448,29 @@ TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]
 		m.check_server();
 		CHECK(m.log.received.empty());
 	}
+}
+
+TEST_CASE("store: update_if's default filter has a size limit", "[net][store][update]")
+{
+	large_group before{ .cn = "big", .members = {}, .csn = "1" };
+	for (std::size_t i = 0; i < ldap::max_filter_elements; ++i) {
+		before.members.push_back("m" + std::to_string(i));
+	}
+	large_group after = before;
+	after.members.emplace_back("new");
+
+	mock_ldap m;
+	m.serve({ answer({ ok(1, ldap::modify_response{}) }) });
+	ldap::store s(m.conn, people_base, ldap::named_by<&large_group::cn>);
+	auto refused = m.run(s.update_if(before, after));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::client_errc::invalid_filter);
+	CHECK(m.log.received.empty());
+
+	REQUIRE(m.run(s.update_if(before, after, ldap::versioned_by<&large_group::csn>)).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 1);
+	CHECK(m.log.received[0].controls.size() == 1);
 }
 
 TEST_CASE("store: rename and move send a modify DN", "[net][store]")

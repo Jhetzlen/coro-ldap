@@ -1656,7 +1656,11 @@ co_await people.remove("jdoe");
     a value added to a non-empty multi-valued member, and any attribute T
     does not map, go unnoticed. A member whose attribute has no equality
     rule (jpegPhoto) evaluates to Undefined, which fails the assertion
-    every time.
+    every time. A filter holds at most `max_filter_elements` (10,000)
+    elements, the enclosing AND and one per value or empty member, so a
+    struct with more (a large group's `member`) fails every call with
+    `invalid_filter` before anything is sent; `versioned_by` is the way
+    out.
   - `ldap::versioned_by<&T::m>`: `(m=<original's value>)` on one
     single-valued member, usually a read_only one, which covers the whole
     entry and has none of those limits. A tag argument, as `named_by`, so
