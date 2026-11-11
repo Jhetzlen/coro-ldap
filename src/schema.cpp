@@ -149,16 +149,18 @@ namespace {
 	}
 
 	// The keywords whose argument is an oidlist (RFC 4512 4.1.1 SUP, MUST
-	// and MAY of an object class), for which an unparenthesised "a$b" is
-	// read as the list "( a $ b )".
+	// and MAY of an object class; 4.1.6 AUX, MUST, MAY and NOT of a DIT
+	// content rule), for which an unparenthesised "a$b" is read as the list
+	// "( a $ b )".
 	auto is_oidlist_keyword(std::string_view k) -> bool
 	{
-		return detail::iequals(k, "SUP") || detail::iequals(k, "MUST") || detail::iequals(k, "MAY");
+		return detail::iequals(k, "SUP") || detail::iequals(k, "MUST") || detail::iequals(k, "MAY")
+			   || detail::iequals(k, "AUX") || detail::iequals(k, "NOT");
 	}
 
 	// Which definition parse_definition reads: an object class's SUP is
 	// an oidlist (oids), an attribute type's one oid.
-	enum class definition_kind { attribute_type, object_class };
+	enum class definition_kind { attribute_type, object_class, dit_content_rule };
 
 	// A keyword's argument: one word or quoted string, or a parenthesised
 	// list of them ('$' separators dropped), appended to `values`. With
@@ -264,7 +266,7 @@ namespace {
 			}
 			std::vector<std::string> values;
 			if (!is_flag(k->text)) {
-				const bool oidlist = kind == definition_kind::object_class && is_oidlist_keyword(k->text);
+				const bool oidlist = kind != definition_kind::attribute_type && is_oidlist_keyword(k->text);
 				if (auto r = read_values(lx, values, oidlist); !r) {
 					return std::unexpected(std::move(r.error()));
 				}
@@ -418,10 +420,23 @@ auto parse_object_class(std::string_view text) -> result<object_class_type>
 	});
 }
 
+auto parse_dit_content_rule(std::string_view text) -> result<dit_content_rule>
+{
+	return parse_definition(text, definition_kind::dit_content_rule).transform([](definition &&d) {
+		return dit_content_rule{ .oid = std::move(d.oid),
+			.names = valid_names(d.get("NAME")),
+			.aux = valid_oids(d.get("AUX")),
+			.must = valid_oids(d.get("MUST")),
+			.may = valid_oids(d.get("MAY")),
+			.precluded = valid_oids(d.get("NOT")) };
+	});
+}
+
 // Public API, subschema attribute order (RFC 4512 4.2).
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 auto server_schema::parse(std::span<const std::pmr::string> attribute_types,
-  std::span<const std::pmr::string> object_classes) -> server_schema
+  std::span<const std::pmr::string> object_classes,
+  std::span<const std::pmr::string> dit_content_rules) -> server_schema
 {
 	server_schema s;
 	for (const auto &text : attribute_types) {
@@ -462,6 +477,15 @@ auto server_schema::parse(std::span<const std::pmr::string> attribute_types,
 		}
 		s.classes_.push_back(std::move(*c));
 	}
+	for (const auto &text : dit_content_rules) {
+		auto r = parse_dit_content_rule(text);
+		if (!r) {
+			++s.skipped_;
+			continue;
+		}
+		s.rule_index_.emplace(r->oid, s.rules_.size());
+		s.rules_.push_back(std::move(*r));
+	}
 	return s;
 }
 
@@ -475,6 +499,12 @@ auto server_schema::find_object_class(std::string_view name) const noexcept -> c
 {
 	const auto it = class_index_.find(name);
 	return it == class_index_.end() ? nullptr : &classes_[it->second];
+}
+
+auto server_schema::find_dit_content_rule(std::string_view class_oid) const noexcept -> const dit_content_rule *
+{
+	const auto it = rule_index_.find(class_oid);
+	return it == rule_index_.end() ? nullptr : &rules_[it->second];
 }
 
 auto server_schema::skipped_for_syntax(std::string_view name) const noexcept -> bool
@@ -703,8 +733,32 @@ namespace {
 		});
 	}
 
+	// The DIT content rules of the entry's structural class: that of each
+	// declared STRUCTURAL class no other reached class has as a superclass.
+	auto content_rules(const server_schema &s, const std::vector<reached_class> &all)
+	  -> std::vector<const dit_content_rule *>
+	{
+		std::unordered_set<const object_class_type *> supers;
+		for (const reached_class &r : all) {
+			for (const auto &sup : r.c->sup) {
+				supers.insert(s.find_object_class(sup));
+			}
+		}
+		std::vector<const dit_content_rule *> out;
+		for (const reached_class &r : all) {
+			if (!r.from.empty() || r.c->kind != object_class_kind::structural || supers.contains(r.c)) {
+				continue;
+			}
+			if (const dit_content_rule *rule = s.find_dit_content_rule(r.c->oid); rule != nullptr) {
+				out.push_back(rule);
+			}
+		}
+		return out;
+	}
+
 	// attribute_not_allowed for each writable member outside the MUSTs and
-	// MAYs of `all`, unless a class allows anything or may be missing.
+	// MAYs of `all` and of the structural class's content rule, or that the
+	// rule precludes, unless a class allows anything or may be missing.
 	void report_not_allowed(const server_schema &s,
 	  const std::vector<reached_class> &all,
 	  std::span<const detail::field_use> fields,
@@ -719,23 +773,37 @@ namespace {
 			return;
 		}
 		std::unordered_set<const attribute_type *> allowed;
-		for (const reached_class &r : all) {
-			for (const auto *list : { &r.c->must, &r.c->may }) {
-				for (const auto &name : *list) {
-					allowed.insert(s.find_attribute(name));
-				}
+		std::unordered_set<const attribute_type *> precluded;
+		const auto add = [&s](std::unordered_set<const attribute_type *> &to, const std::vector<std::string> &names) {
+			for (const auto &name : names) {
+				to.insert(s.find_attribute(name));
 			}
+		};
+		for (const reached_class &r : all) {
+			add(allowed, r.c->must);
+			add(allowed, r.c->may);
+		}
+		for (const dit_content_rule *rule : content_rules(s, all)) {
+			add(allowed, rule->must);
+			add(allowed, rule->may);
+			add(precluded, rule->precluded);
 		}
 		for (const detail::field_use &f : fields) {
 			const attribute_type *a = s.find_attribute(f.name);
 			if (f.read_only || a == nullptr || is_object_class(s, f.name, a)
-				|| a->usage != attribute_usage::user_applications || allowed.contains(a)) {
+				|| a->usage != attribute_usage::user_applications) {
 				continue;
 			}
-			out.issues.push_back({ .what = schema_issue::kind::attribute_not_allowed,
-			  .name = std::string(f.name),
-			  .detail = "in no MUST or MAY of the declared object classes, the auxiliary ones or their superclasses: "
-						"the server refuses it unless a DIT content rule allows it" });
+			if (precluded.contains(a)) {
+				out.issues.push_back({ .what = schema_issue::kind::attribute_not_allowed,
+				  .name = std::string(f.name),
+				  .detail = "precluded (NOT) by the DIT content rule of the structural object class" });
+			} else if (!allowed.contains(a)) {
+				out.issues.push_back({ .what = schema_issue::kind::attribute_not_allowed,
+				  .name = std::string(f.name),
+				  .detail = "in no MUST or MAY of the declared object classes, the auxiliary ones, their superclasses "
+							"or the structural class's DIT content rule" });
+			}
 		}
 	}
 

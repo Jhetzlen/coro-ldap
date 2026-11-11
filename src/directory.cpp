@@ -42,7 +42,7 @@ auto detail::subschema_request(const result<search_result> &root) -> result<subs
 	return subschema_search{ .request = { .base = std::move(*base),
 							   .scope = search_scope::base_object,
 							   .filter = filters::attr("objectClass") == "subschema",
-							   .attributes = { "attributeTypes", "objectClasses" } },
+							   .attributes = { "attributeTypes", "objectClasses", "dITContentRules" } },
 		.where = std::move(where) };
 }
 
@@ -62,7 +62,9 @@ auto detail::subschema_of(result<search_result> sub, std::string_view where) -> 
 	const entry &e = sub->entries.front();
 	const auto *types = e.find("attributeTypes");
 	const auto *classes = e.find("objectClasses");
-	return server_schema::parse(types != nullptr ? *types : none, classes != nullptr ? *classes : none);
+	const auto *rules = e.find("dITContentRules");
+	return server_schema::parse(
+	  types != nullptr ? *types : none, classes != nullptr ? *classes : none, rules != nullptr ? *rules : none);
 }
 
 auto detail::search_error(const search_result &r, std::string_view context) -> error

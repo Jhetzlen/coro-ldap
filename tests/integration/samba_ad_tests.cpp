@@ -911,6 +911,11 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 		const auto report = ldap::validate<ad_account>(*s);
 		INFO(report.to_string());
 		CHECK(report.ok());
+		// sAMAccountName is securityPrincipal's, a system auxiliary class of
+		// user that only user's DIT content rule names.
+		CHECK(s->find_dit_content_rule(s->find_object_class("user")->oid) != nullptr);
+		CHECK(std::ranges::none_of(
+		  report.issues, [](const auto &i) { return i.what == ldap::schema_issue::kind::attribute_not_allowed; }));
 	}
 
 	SECTION("Administrator and alice")

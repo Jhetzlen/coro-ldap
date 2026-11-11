@@ -83,7 +83,7 @@ TEST_CASE("load_schema: reads the subschema named by the root DSE", "[net][schem
 	const auto &sub = std::get<ldap::search_request>(m.log.received[1].op);
 	CHECK(sub.base_object == "cn=Subschema");
 	CHECK(sub.filter.to_string() == "(objectClass=subschema)");
-	CHECK(sub.attributes == ldap::string_list{ "attributeTypes", "objectClasses" });
+	CHECK(sub.attributes == ldap::string_list{ "attributeTypes", "objectClasses", "dITContentRules" });
 }
 
 // The root DSE's subschemaSubentry is the server's text: quoted in the

@@ -1881,8 +1881,12 @@ Parsing is minimal, only what the checks below need:
   `MAY` (`object_class_type`, in the RFC's field order). `SUP` is followed
   to inherit `MUST` (RFC 4512 2.4); entries that are not oids are dropped,
   like NAMEs that are not descriptors.
+- `dITContentRules` (RFC 4512 4.1.6): the OID (the structural class's),
+  `NAME`, `AUX`, `MUST`, `MAY` and `NOT` (`dit_content_rule`, `NOT` as
+  `precluded`), indexed by OID. `load_schema` asks for them with the
+  other two.
 - Everything else (`ORDERING`, `SUBSTR`, matching rule definitions,
-  DIT content rules, extensions)
+  extensions)
   is skipped. Unparseable definitions are skipped, not fatal.
 
 ```cpp
@@ -1942,10 +1946,25 @@ Checks:
   do not govern), attributes the server does not define (already
   `unknown_attribute`), and no member at all when a class is
   extensibleObject (RFC 4512 section 4.3) or a class or superclass is
-  undefined, since that class might allow it. A warning, because what a
-  server serves in `objectClasses` is not all it allows: DIT content
-  rules (RFC 4512 section 2.6) are not parsed, and Samba AD's `user` does
-  not list `sAMAccountName`, so a member on it is reported there.
+  undefined, since that class might allow it. The DIT content rule
+  (RFC 4512 sections 2.6 and 4.1.6) of the entry's structural class
+  widens the set by its own `MUST` and `MAY`, and its `NOT` precludes
+  attributes (reported as `attribute_not_allowed` even when a class
+  allows them). The structural class is each declared STRUCTURAL class
+  that no reached class has as a superclass: a rule governs the entries
+  of its own class, not of its subclasses. The attributes of the rule's
+  `AUX` classes do not count: an entry has them only once its
+  objectClass lists the class, which `auxiliary_class(...)` declares.
+  Active Directory needs the rule: `user` does not list `sAMAccountName`
+  (it comes from `securityPrincipal`, a system auxiliary class AD adds
+  implicitly, without naming it in objectClass); Samba publishes the
+  rule with that class's attributes already in its `MUST` and `MAY`
+  (`( 1.2.840.113556.1.5.9 NAME 'user' AUX ( ... securityPrincipal ... )
+  MUST ( sAMAccountName $ objectSid $ cn ) MAY ( ... ) )`), as AD does;
+  the classSchema entries' `systemAuxiliaryClass` / `auxiliaryClass`
+  are not read. A rule's `MUST` are not checked as unmapped (AD's
+  include `objectSid`, which the server assigns). Still a warning: a
+  server may allow more than its subschema says.
 
 With `schema_check::on_first_use`, a store's first operation runs
 `validate<T>` and fails with `client_errc::schema_mismatch` if the report has

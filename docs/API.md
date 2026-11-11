@@ -844,8 +844,8 @@ itself needs only ICU.
   empty filter (fails with `invalid_filter` when sent).
 
 - `jhetz/ldap/schema.hpp` (#13): runtime schema validation. A lenient
-  RFC 4512 parser for the subschema's attributeTypes / objectClasses
-  (a definition that does not parse, or is not UTF-8, is skipped and
+  RFC 4512 parser for the subschema's attributeTypes / objectClasses /
+  dITContentRules (a definition that does not parse, or is not UTF-8, is skipped and
   counted), `server_schema` (`syntax_of()` and `equality_of()` follow SUP to the
   inherited SYNTAX and EQUALITY), `validate<T>(schema)` listing every issue (unknown
   attribute or object class, syntax the member's type cannot read, a
@@ -855,11 +855,15 @@ itself needs only ICU.
   maps as warnings: `must_attribute_not_mapped`,
   `must_attribute_not_required`, `unknown_superclass`; an auxiliary class
   of another kind on the server: `not_auxiliary`; a writable member whose
-  attribute no MUST or MAY of those classes and the auxiliary ones lists:
+  attribute no MUST or MAY of those classes, the auxiliary ones or the
+  structural class's DIT content rule lists, or that the rule precludes:
   `attribute_not_allowed`),
   `attribute_type` with `usage` (`attribute_usage`),
   `object_class_type` with `sup`, `kind` (`object_class_kind`), `must`
-  and `may`; the free `ldap::load_schema` (directory.hpp) and
+  and `may`, `dit_content_rule` (`aux`, `must`, `may`, `precluded`: RFC
+  4512 4.1.6; `parse_dit_content_rule`,
+  `server_schema::find_dit_content_rule(class_oid)`); the free
+  `ldap::load_schema` (which reads dITContentRules too) (directory.hpp) and
   `store_options::schema_check = schema_check::on_first_use`. Breaking
   (coro-ldap-aw4.1): `connection::load_schema()` is gone, and with it the
   connection's schema cache.

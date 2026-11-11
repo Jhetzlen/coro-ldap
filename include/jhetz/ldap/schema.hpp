@@ -9,11 +9,13 @@
 // Parsing keeps, for attributeTypes: the OID, every NAME, SUP, EQUALITY,
 // SYNTAX (the OID, without a {length}), SINGLE-VALUE and
 // NO-USER-MODIFICATION; for objectClasses: the OID, every NAME, SUP, the
-// kind, MUST and MAY. Everything else is skipped. Definitions that do not
+// kind, MUST and MAY; for dITContentRules: the OID, every NAME, AUX, MUST,
+// MAY and NOT. Everything else is skipped. Definitions that do not
 // parse are skipped and counted (skipped()), never fatal. Lenient where real
 // servers are: quoted OIDs (Active Directory), keywords in any case, missing
 // spaces before ')' and around "$", and an object class's SUP, MUST or MAY
-// list without parentheses ("MUST cn $ sn"); elsewhere a "$" outside
+// list (a content rule's AUX, MUST, MAY or NOT) without parentheses
+// ("MUST cn $ sn"); elsewhere a "$" outside
 // parentheses and quotes fails the definition. Also skipped: an invalid OID,
 // a SYNTAX that is not a numeric OID with an optional adjacent "{digits}"
 // (names remembered, see skipped_for_syntax), an unknown keyword, ill-formed
@@ -74,25 +76,45 @@ struct object_class_type
 	std::vector<std::string> may{};// allowed attribute types
 };
 
-// One definition each (an attributeTypes / objectClasses value); errors are
-// decode_error with the reason.
+// RFC 4512 section 4.1.6, in its field order: the DIT content rule of the
+// structural object class whose OID it carries. The oids are as the
+// server wrote them.
+struct dit_content_rule
+{
+	std::string oid{};// the structural object class's
+	std::vector<std::string> names{};
+	std::vector<std::string> aux{};// auxiliary classes its entries may belong to
+	std::vector<std::string> must{};// attribute types its entries must contain
+	std::vector<std::string> may{};// attribute types its entries may contain
+	std::vector<std::string> precluded{};// NOT: attribute types its entries must not contain
+};
+
+// One definition each (an attributeTypes / objectClasses / dITContentRules
+// value); errors are decode_error with the reason.
 [[nodiscard]] auto parse_attribute_type(std::string_view text) -> result<attribute_type>;
 [[nodiscard]] auto parse_object_class(std::string_view text) -> result<object_class_type>;
+[[nodiscard]] auto parse_dit_content_rule(std::string_view text) -> result<dit_content_rule>;
 
 class server_schema
 {
   public:
 	server_schema() = default;
-	// From the attributeTypes and objectClasses values of a subschema
-	// entry. Unparseable definitions are skipped (see skipped()).
+	// From the attributeTypes, objectClasses and dITContentRules values of
+	// a subschema entry. Unparseable definitions are skipped (see
+	// skipped()).
 	[[nodiscard]] static auto parse(std::span<const std::pmr::string> attribute_types,
-	  std::span<const std::pmr::string> object_classes) -> server_schema;
+	  std::span<const std::pmr::string> object_classes,
+	  std::span<const std::pmr::string> dit_content_rules = {}) -> server_schema;
 
 	// By any NAME (case-insensitive) or the OID; options ("cn;lang-en") are
 	// ignored. nullptr if unknown. Case folds A-Z only (names and OIDs are
 	// ASCII, RFC 4512 section 1.4). No allocation.
 	[[nodiscard]] auto find_attribute(std::string_view name) const noexcept -> const attribute_type *;
 	[[nodiscard]] auto find_object_class(std::string_view name) const noexcept -> const object_class_type *;
+	// The content rule of the structural object class with this OID
+	// (object_class_type::oid; case-insensitive, no allocation); nullptr
+	// if the server publishes none.
+	[[nodiscard]] auto find_dit_content_rule(std::string_view class_oid) const noexcept -> const dit_content_rule *;
 	// The attribute's SYNTAX, or its supertypes' (SUP followed, with a depth
 	// limit against cycles); nullptr if none declares one, or if a SUP on the
 	// chain is not found (see skipped_for_syntax). Points into a (if it
@@ -114,16 +136,19 @@ class server_schema
 
 	auto attribute_count() const noexcept -> std::size_t { return attributes_.size(); }
 	auto object_class_count() const noexcept -> std::size_t { return classes_.size(); }
+	auto dit_content_rule_count() const noexcept -> std::size_t { return rules_.size(); }
 	// Definitions that did not parse.
 	auto skipped() const noexcept -> std::size_t { return skipped_; }
 
   private:
 	std::vector<attribute_type> attributes_{};
 	std::vector<object_class_type> classes_{};
+	std::vector<dit_content_rule> rules_{};
 	// Name / OID (as the server spells it; the first definition wins) -> index.
 	using name_index = std::unordered_map<std::string, std::size_t, detail::ci_hash, detail::ci_equal>;
 	name_index attribute_index_{};
 	name_index class_index_{};
+	name_index rule_index_{};// by OID only
 	// The names and OIDs of attribute types skipped for their SYNTAX.
 	std::unordered_set<std::string, detail::ci_hash, detail::ci_equal> bad_syntax_{};
 	std::size_t skipped_ = 0;
@@ -274,7 +299,9 @@ struct schema_issue
 		// server defines as STRUCTURAL or ABSTRACT
 		not_auxiliary,
 		// warning: a writable member whose attribute is in no MUST or MAY of
-		// the declared object classes, the auxiliary ones or their superclasses
+		// the declared object classes, the auxiliary ones, their superclasses
+		// or the structural class's DIT content rule, or that the rule
+		// precludes (NOT)
 		attribute_not_allowed,
 	};
 	kind what;
@@ -341,12 +368,19 @@ namespace detail {
 // map a MUST name); attribute options do (cn;lang-en maps cn).
 //
 // With declared object classes, also reports each writable member whose
-// attribute no MUST or MAY of those classes, the auxiliary ones or their
-// superclasses lists (attribute_not_allowed, a warning; the same matching).
+// attribute no MUST or MAY of those classes, the auxiliary ones, their
+// superclasses or the DIT content rule (RFC 4512 section 4.1.6) of the
+// entry's structural class lists, or that the rule precludes (NOT)
+// (attribute_not_allowed, a warning; the same matching). The structural
+// class is each declared STRUCTURAL class that is not a superclass of
+// another one. Only the rule's own MUST and MAY count, not the attributes
+// of its AUX classes: an entry has those only once it lists the class
+// (declare it with ldap::auxiliary_class). Active Directory publishes its
+// system auxiliary classes' attributes in the rule's MUST and MAY
+// (sAMAccountName on user). A rule's MUST are not checked as unmapped.
 // Not reported: objectClass, operational attributes (USAGE other than
 // userApplications), attributes the server does not define, and every member
 // when a class is extensibleObject or a class or superclass is not defined.
-// DIT content rules are not read, so an attribute only they allow is reported.
 template<described T> [[nodiscard]] auto validate(const server_schema &s) -> schema_report
 {
 	schema_report out;

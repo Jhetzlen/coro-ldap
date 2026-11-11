@@ -12,6 +12,9 @@
 //   as an attribute type parses as an object class, and what parses only
 //   as an object class failed SYNTAX or has a "$"; an accepted object
 //   class's SUP, MUST and MAY entries are oids;
+// - a DIT content rule reads the object class grammar, AUX and NOT taking
+//   lists too: what parses as an object class parses as a rule, and an
+//   accepted rule's AUX, MUST, MAY and NOT entries are oids;
 // - server_schema::parse of the input (as both an attribute type and an
 //   object class) finds what parsed by OID and every NAME, and counts
 //   what did not as skipped; syntax_of terminates, and so does the MUST
@@ -20,8 +23,9 @@
 //   are warnings named by the MUST or SUP entries;
 // - split at its newlines, as several definitions (a schema with SUP
 //   chains, cycles and shared MUSTs), the MUST check with every class
-//   declared terminates, and its issues are warnings named by a MUST or
-//   SUP entry of a class that parsed.
+//   declared terminates (the lines also read as DIT content rules), and
+//   its issues are warnings named by a MUST or SUP entry of a class that
+//   parsed, or by a member.
 #include "jhetz/ldap/schema.hpp"
 
 #include "check.hpp"
@@ -54,7 +58,7 @@ void check_multi(std::string_view text)
 			parsed.push_back(std::move(*lc));
 		}
 	}
-	const auto multi = ldap::server_schema::parse(lines, lines);
+	const auto multi = ldap::server_schema::parse(lines, lines, lines);
 	std::vector<const char *> declared;
 	std::vector<ldap::detail::field_use> fields;
 	for (const auto &pc : parsed) {
@@ -108,6 +112,16 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 			check(std::ranges::all_of(*list, [](const std::string &o) { return ldap::detail::is_oid(o); }),
 			  "every SUP, MUST and MAY entry is an oid");
 		}
+	}
+
+	if (auto r = ldap::parse_dit_content_rule(text)) {
+		for (const auto *list : { &r->aux, &r->must, &r->may, &r->precluded }) {
+			check(std::ranges::all_of(*list, [](const std::string &o) { return ldap::detail::is_oid(o); }),
+			  "every AUX, MUST, MAY and NOT entry is an oid");
+		}
+	} else {
+		check(r.error().code == ldap::client_errc::decode_error, "r.error().code == ldap::client_errc::decode_error");
+		check(!c, "what parses as an object class parses as a DIT content rule");
 	}
 
 	const std::pmr::vector<std::pmr::string> values{ std::pmr::string(text) };

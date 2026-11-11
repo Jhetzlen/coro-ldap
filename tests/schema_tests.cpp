@@ -1342,3 +1342,59 @@ TEST_CASE("schema: a member no class allows is a warning", "[schema][validate][a
 		CHECK(std::ranges::count_if(rep.issues, [](const auto &i) { return i.what == k::unknown_superclass; }) == 1);
 	}
 }
+
+TEST_CASE("schema: DIT content rules", "[schema][validate][content_rule]")
+{
+	SECTION("parsed")
+	{
+		auto r = ldap::parse_dit_content_rule(
+		  "( 1.2.840.113556.1.5.9 NAME 'user' DESC 'd' AUX ( securityPrincipal $ "
+		  "mailRecipient ) MUST (sAMAccountName $ objectSid ) MAY cn$uid NOT "
+		  "description X-ORIGIN 'x' )");
+		REQUIRE(r.has_value());
+		CHECK(r->oid == "1.2.840.113556.1.5.9");
+		CHECK(r->names == std::vector<std::string>{ "user" });
+		CHECK(r->aux == std::vector<std::string>{ "securityPrincipal", "mailRecipient" });
+		CHECK(r->must == std::vector<std::string>{ "sAMAccountName", "objectSid" });
+		CHECK(r->may == std::vector<std::string>{ "cn", "uid" });
+		CHECK(r->precluded == std::vector<std::string>{ "description" });
+		CHECK_FALSE(ldap::parse_dit_content_rule("( 1.2.3 AUX a").has_value());
+
+		const std::pmr::vector<std::pmr::string> rules{ "( 2.5.6.6 NAME 'personRule' MAY uid )", "( broken" };
+		const auto s = ldap::server_schema::parse(core_types, core_classes, rules);
+		CHECK(s.dit_content_rule_count() == 1);
+		CHECK(s.skipped() == 1);
+		REQUIRE(s.find_dit_content_rule("2.5.6.6") != nullptr);
+		CHECK(s.find_dit_content_rule("2.5.6.6")->may == std::vector<std::string>{ "uid" });
+		CHECK(s.find_dit_content_rule("personRule") == nullptr);// by OID only
+	}
+	SECTION("the structural class's rule allows its MUST and MAY")
+	{
+		const std::pmr::vector<std::pmr::string> rules{
+			"( 2.16.840.1.113730.3.2.2 NAME 'inetOrgPersonRule' MUST ( cn ) MAY ( uidNumber ) )"
+		};
+		const auto rep = ldap::validate<forgot_auxiliary>(ldap::server_schema::parse(core_types, core_classes, rules));
+		INFO(rep.to_string());
+		CHECK(not_allowed(rep).empty());
+	}
+	SECTION("a rule's AUX classes do not, nor a superclass's rule")
+	{
+		const std::pmr::vector<std::pmr::string> rules{
+			"( 2.16.840.1.113730.3.2.2 NAME 'inetOrgPersonRule' AUX posixAccount )",
+			"( 2.5.6.7 NAME 'organizationalPersonRule' MAY uidNumber )",
+		};
+		const auto rep = ldap::validate<forgot_auxiliary>(ldap::server_schema::parse(core_types, core_classes, rules));
+		CHECK(not_allowed(rep) == std::vector<std::string>{ "uidNumber" });
+	}
+	SECTION("NOT precludes an attribute a class allows")
+	{
+		const std::pmr::vector<std::pmr::string> rules{
+			"( 2.16.840.1.113730.3.2.2 NAME 'inetOrgPersonRule' MAY uidNumber NOT uid )"
+		};
+		const auto rep = ldap::validate<forgot_auxiliary>(ldap::server_schema::parse(core_types, core_classes, rules));
+		CHECK(rep.ok());
+		CHECK(not_allowed(rep) == std::vector<std::string>{ "uid" });
+		CHECK_THAT(
+		  rep.to_string(), ContainsSubstring("warning: attribute uid: precluded (NOT) by the DIT content rule"));
+	}
+}
