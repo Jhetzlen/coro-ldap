@@ -4,6 +4,8 @@
 // accepting, so a later connect is refused. Backoff runs on short real
 // delays, with the jitter fixed by detail::set_jitter.
 #include "../counting_resource.hpp"
+#include "jhetz/ldap/ad/controls.hpp"
+#include "jhetz/ldap/ad/dirsync.hpp"
 #include "jhetz/ldap/ad/ranged_values.hpp"
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/directory.hpp"
@@ -3383,6 +3385,91 @@ TEST_CASE("client: ad::read_all_values starts over on a new lease after a lost c
 		  .acquire_timeout = milliseconds(50),
 		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
 		auto r = finish(f.ioc, ldap::ad::read_all_values(*f.pool, staff, "member"));
+		REQUIRE_FALSE(r.has_value());
+		CHECK_FALSE(r.error().code == ldap::cond::connection_lost);
+		CHECK_THAT(std::string(r.error().context), Catch::Matchers::StartsWith("acquire "));
+		CHECK(s.accepted() == 1);
+	}
+}
+
+namespace {
+
+const ldap::dn domain_root{ "dc=example,dc=org" };
+
+// One entry `dn` (when not empty), then a SearchResultDone with a DirSync
+// response control.
+auto dirsync_page(std::int32_t id, std::string_view dn, bool more, std::string_view cookie) -> step
+{
+	step out;
+	if (!dn.empty()) {
+		out.replies.push_back(bytes_of(entry_msg(id, dn, "x")));
+	}
+	ldap::message done = done_msg(id);
+	done.controls.push_back(
+	  ldap::ad::encode_dirsync_response({ .more_results = more, .cookie_server = std::string(cookie) }));
+	out.replies.push_back(bytes_of(done));
+	return out;
+}
+
+auto dirsync_cookie_sent(const ldap::message &received) -> std::string
+{
+	REQUIRE(received.controls.size() == 1);
+	auto r = ldap::ad::decode_dirsync_request(received.controls[0]);
+	REQUIRE(r.has_value());
+	return r->cookie;
+}
+
+}// namespace
+
+TEST_CASE("client: ad::dirsync starts over from the caller's cookie after a lost connection",
+  "[net][client][ad][dirsync][retry]")
+{
+	const ldap::search_params users{ .base = domain_root, .filter = ldap::filters::attr("objectClass") == "user" };
+	SECTION("the entries of the lost lease are dropped")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }),
+							   dirsync_page(2, "cn=a,dc=example,dc=org", true, "c1"),
+							   step{ .read_request = true, .replies = {}, .close_after = true } },
+		  { answer({ bind_resp(1) }),
+			dirsync_page(2, "cn=b,dc=example,dc=org", false, "c9"),
+			step{},
+			client_hangs_up() } });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto r = finish(f.ioc, ldap::ad::dirsync(*f.pool, users, { .cookie = "c0" }));
+		if (!r) {
+			FAIL(r.error().message());
+		}
+		REQUIRE(r->entries.size() == 1);
+		CHECK(r->entries[0].dn == "cn=b,dc=example,dc=org");
+		CHECK(r->cookie == "c9");
+		REQUIRE(s.accepted() == 2);
+		REQUIRE(s.log(0).received.size() == 3);
+		CHECK(dirsync_cookie_sent(s.log(0).received[1]) == "c0");
+		CHECK(dirsync_cookie_sent(s.log(0).received[2]) == "c1");
+		REQUIRE(s.log(1).received.size() >= 2);
+		CHECK(dirsync_cookie_sent(s.log(1).received[1]) == "c0");
+	}
+	SECTION("lost twice: the retry's error")
+	{
+		pool_fixture f;
+		auto &s = f.server({ lost_after_bind(), lost_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto r = finish(f.ioc, ldap::ad::dirsync(*f.pool, users));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::connection_lost);
+		CHECK_THAT(std::string(r.error().context), Catch::Matchers::StartsWith("DirSync dc=example,dc=org"));
+		CHECK(s.accepted() == 2);
+	}
+	SECTION("the retry's acquire() failure is returned as is")
+	{
+		pool_fixture f;
+		auto &s = f.server({ lost_after_bind() });
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .acquire_timeout = milliseconds(50),
+		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
+		auto r = finish(f.ioc, ldap::ad::dirsync(*f.pool, users));
 		REQUIRE_FALSE(r.has_value());
 		CHECK_FALSE(r.error().code == ldap::cond::connection_lost);
 		CHECK_THAT(std::string(r.error().context), Catch::Matchers::StartsWith("acquire "));
