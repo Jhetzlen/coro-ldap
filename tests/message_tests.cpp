@@ -874,6 +874,17 @@ TEST_CASE("RFC 4511 4.1.1: requests never carry message id 0", "[message][rfc]")
 	CHECK(round_trip(notice) == notice);
 }
 
+TEST_CASE("RFC 4511 4.5.3: a SearchResultReference carries at least one URI", "[message][rfc]")
+{
+	auto empty = raw_message(2, [](ber::writer &m) { m.constructed(ber::application(19), [](ber::writer &) {}); });
+	auto r = ldap::decode(empty);
+	CHECK(code_of(r) == client_errc::decode_error);
+	CHECK(r.error().context.starts_with("message: search result reference without a URI at offset "));
+	CHECK(code_of(ldap::encode(ldap::message{ 2, ldap::search_result_reference{} })) == client_errc::encode_error);
+	const ldap::message one{ 2, ldap::search_result_reference{ { "ldap://a.example.org/" } } };
+	CHECK(round_trip(one) == one);
+}
+
 // A throwing emplace leaves the op valueless. The id 0 request check reads
 // its index, so encode reports bad_variant_access instead of terminating.
 TEST_CASE("encode of a valueless op with message id 0 throws", "[message]")

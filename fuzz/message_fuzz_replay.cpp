@@ -1,6 +1,7 @@
 // Deterministic driver for message_fuzz (see message_fuzz.cpp), so its
 // properties run under ctest with any compiler, without libFuzzer.
-// Seeds: every sample message of the unit tests, a few with controls.
+// Seeds: every sample message of the unit tests, a few with controls, and
+// an empty SearchResultReference.
 #include "../tests/sample_messages.hpp"
 #include "replay.hpp"
 
@@ -62,5 +63,7 @@ auto main(int argc, char **argv) -> int
 		}
 		cfg.seeds.push_back(fuzz::to_input(*bytes));
 	}
+	// A SearchResultReference without a URI, which decode rejects.
+	cfg.seeds.push_back({ 0x30, 0x05, 0x02, 0x01, 0x01, 0x73, 0x00 });
 	return fuzz::replay_main(argc, argv, cfg);
 }

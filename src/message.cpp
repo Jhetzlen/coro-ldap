@@ -531,6 +531,10 @@ namespace {
 					return fail(client_errc::encode_error, "message: add request attribute without values");
 				}
 			}
+		} else if (const auto *ref = std::get_if<search_result_reference>(&m.op)) {
+			if (ref->uris.empty()) {
+				return fail(client_errc::encode_error, "message: search result reference without a URI");
+			}
 		}
 		return {};
 	}
@@ -1239,6 +1243,10 @@ namespace {
 			}
 			protocol_op op(std::in_place_type<search_result_reference>, a_);
 			auto &ref = std::get<search_result_reference>(op);
+			// RFC 4511 section 4.5.3: SEQUENCE SIZE (1..MAX) OF uri.
+			if (o->empty()) {
+				return bad("search result reference without a URI", o->offset());
+			}
 			while (!o->empty()) {
 				auto uri = str(*o);
 				if (!uri) {

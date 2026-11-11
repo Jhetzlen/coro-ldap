@@ -79,7 +79,7 @@ inline auto sample_messages() -> std::vector<message>
 		search_result_done{},
 		search_result_done{ sample_result() },
 		search_result_reference{ { "ldap://a.example.org/dc=x", "ldap://b.example.org/dc=x??sub" } },
-		search_result_reference{},
+		search_result_reference{ { "ldap://c.example.org/" } },
 		modify_request{ dn,
 		  { { modify_operation::add, { "mail", { "a@x", "b@x" } } },
 			{ modify_operation::delete_, { "phone", {} } },

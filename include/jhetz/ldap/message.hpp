@@ -456,7 +456,8 @@ struct search_result_entry
 // [APPLICATION 5]
 using search_result_done = result_response<detail::op_tag::search_result_done>;
 
-// [APPLICATION 19] SEQUENCE OF URI
+// [APPLICATION 19] SEQUENCE SIZE (1..MAX) OF URI: encode and decode reject
+// a reference without a URI.
 struct search_result_reference
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
