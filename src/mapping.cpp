@@ -1,5 +1,7 @@
 #include "jhetz/ldap/mapping.hpp"
 
+#include "jhetz/ldap/ad/range.hpp"
+
 #include "format_util.hpp"
 #include "generalized_time.hpp"
 
@@ -34,6 +36,24 @@ namespace detail {
 	auto enum_encode_error(std::intmax_t value) -> error
 	{
 		return make_error(client_errc::encode_error, detail::format("value {} is not in ldap::enum_names", value));
+	}
+
+	auto ranged_values_error(const entry &e, std::string_view name) -> std::optional<error>
+	{
+		for (const auto &a : e.attributes) {
+			const std::string_view description = a.type.name();
+			if (!description.contains(';')) {
+				continue;
+			}
+			auto ranged = ad::parse_range(description);
+			if (ranged && *ranged && iequals((*ranged)->type, name)) {
+				std::string text;
+				detail::append_sanitized(text, description, 128);
+				text += ": values under a range option; read them with ldap::ad::read_all_values";
+				return make_error(client_errc::incomplete_values, text);
+			}
+		}
+		return std::nullopt;
 	}
 
 	auto change_context(modify_operation op, std::string_view attribute) -> std::string

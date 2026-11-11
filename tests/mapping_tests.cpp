@@ -1,6 +1,7 @@
 #include "jhetz/ldap/mapping.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
@@ -443,6 +444,42 @@ TEST_CASE("decode errors name the entry and the attribute", "[mapping][decode]")
 			CHECK(message.find(code_text, first + 1) == std::string::npos);
 		}
 	}
+}
+
+TEST_CASE("decode: a mapped attribute under a range option is incomplete", "[mapping][decode]")
+{
+	const std::string range = GENERATE(std::string("memberOf;range=0-1"), std::string("MemberOf;Range=2-*"));
+	CAPTURE(range);
+	const bool plain_kept = GENERATE(true, false);
+	ldap::entry e = full_entry();
+	const ldap::attribute member_of{ "memberOf" };
+	if (!plain_kept) {
+		std::erase_if(e.attributes, [&](const ldap::attribute_values &a) { return a.type == member_of; });
+	}
+	ldap::attribute_values ranged;
+	ranged.type = ldap::attribute::unchecked(range);
+	ranged.values.emplace_back("cn=more,ou=groups,dc=example,dc=org");
+	e.attributes.push_back(std::move(ranged));
+	auto p = ldap::decode<person>(e);
+	REQUIRE_FALSE(p.has_value());
+	CHECK(p.error().code == ldap::client_errc::incomplete_values);
+	CHECK(std::string(p.error().context)
+		  == "entry uid=jdoe,ou=people,dc=example,dc=org: attribute memberOf: " + range
+			   + ": values under a range option; read them with ldap::ad::read_all_values");
+}
+
+TEST_CASE("decode: a range option on another attribute, or another option, is ignored", "[mapping][decode]")
+{
+	ldap::entry e = full_entry();
+	for (const char *other : { "member;range=0-1", "memberOf;lang-fr" }) {
+		ldap::attribute_values a;
+		a.type = ldap::attribute::unchecked(other);
+		a.values.emplace_back("x");
+		e.attributes.push_back(std::move(a));
+	}
+	auto p = ldap::decode<person>(e);
+	REQUIRE(p.has_value());
+	CHECK(p->member_of.size() == 2);
 }
 
 TEST_CASE("a mapping error message names the code once", "[mapping][decode]")

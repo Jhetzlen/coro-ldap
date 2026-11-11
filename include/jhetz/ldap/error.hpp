@@ -131,6 +131,11 @@ enum class client_errc : int {
 	// the entry would need a new DN (store::rename). Matches
 	// cond::invalid_input.
 	naming_value_changed,
+	// decode<T> on an entry holding a mapped attribute with a range option
+	// (Active Directory's member;range=0-1499): the entry has only part of
+	// its values (ldap::ad::read_all_values reads them all). Matches no
+	// condition.
+	incomplete_values,
 };
 
 // Error conditions: what an error means, across categories (DESIGN.md

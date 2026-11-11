@@ -823,7 +823,10 @@ itself needs only ICU.
   so the whole store search; integers, bool, `dn`, `binary` for binary
   attributes such as userPassword (Octet String), jpegPhoto and
   userCertificate, `sys_seconds` as GeneralizedTime, enums with an
-  `enum_names` table). `decode<T>(entry)`,
+  `enum_names` table). `decode<T>(entry)` (an entry holding a mapped
+  attribute with a range option, AD's `member;range=0-1499`, fails with
+  `client_errc::incomplete_values`: read it with
+  `ldap::ad::read_all_values`),
   `to_attributes(value)`, typed changes `replace / add / remove<&T::m>(v)`,
   typed filters `filters::field<&T::m>() == v`; the I/O is `ldap::store`
   (store.hpp, below). Breaking (coro-ldap-2cx.2): `connection::search_as<T>`,

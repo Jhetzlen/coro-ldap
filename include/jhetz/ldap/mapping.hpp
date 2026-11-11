@@ -570,11 +570,18 @@ namespace detail {
 	}
 
 	auto entry_context(std::string_view dn, std::string_view attribute) -> std::string;
+
+	// The error for an attribute of `e` that is `name` with a range option
+	// (MS-ADTS 3.1.1.3.1.3.3), or nullopt when there is none.
+	auto ranged_values_error(const entry &e, std::string_view name) -> std::optional<error>;
 }// namespace detail
 
 // Converts an entry to T (default-constructed, then every described member
 // assigned). Attribute names match case-insensitively, options included
-// (see entry::find).
+// (see entry::find). Fails with client_errc::incomplete_values when the
+// entry holds a mapped attribute with a range option (Active Directory's
+// member;range=0-1499, MS-ADTS 3.1.1.3.1.3.3): read such a member with
+// ldap::ad::read_all_values.
 template<described T> [[nodiscard]] auto decode(const entry &e) -> result<T>
 {
 	T out{};
@@ -584,6 +591,10 @@ template<described T> [[nodiscard]] auto decode(const entry &e) -> result<T>
 		  (
 			[&] {
 				if (failed) {
+					return;
+				}
+				if (auto ranged = detail::ranged_values_error(e, f.name)) {
+					failed = detail::with_context(std::move(*ranged), detail::entry_context(e.dn, f.name));
 					return;
 				}
 				auto v =

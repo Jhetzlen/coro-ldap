@@ -1417,6 +1417,19 @@ for `std::vector<T>` the first bad value fails the whole member. One bad
 value fails the whole `decode<T>`, and so the whole store search: the
 first entry that does not decode fails the call.)
 
+An entry holding a mapped attribute with a range option (Active
+Directory answers a large multi-valued attribute as
+`member;range=0-1499`, MS-ADTS 3.1.1.3.1.3.3, possibly next to a
+value-less `member`) fails `decode<T>` with
+`client_errc::incomplete_values` for every shape, the context naming
+`ldap::ad::read_all_values`: `entry::find` compares the description
+with its options, so the member would otherwise decode empty, and a
+store's reads and `update_if`/`diff` would work on wrong data. Any
+range option counts, `range=0-*` included: the check needs no
+knowledge of whether the window is the whole set, and a store has no
+business reading ranged values. A range option on another attribute,
+and other options of the mapped one (`;lang-fr`), are ignored.
+
 Value conversion is an extension point, like `std::formatter`:
 
 ```cpp
@@ -1786,7 +1799,7 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `gssapi_failure`, `security_layer_required`, `security_layer_unavailable`, `security_layer_in_effect`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `naming_value_changed`; facade: `would_deadlock`; environment: `internal_error` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `gssapi_failure`, `security_layer_required`, `security_layer_unavailable`, `security_layer_in_effect`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `naming_value_changed`, `incomplete_values`; facade: `would_deadlock`; environment: `internal_error` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 `error`'s strings are `std::pmr::string` but always on the default
@@ -1868,7 +1881,7 @@ a caller match none, deliberately (test them by exact code).
 | `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required`, `security_layer_required`, `security_layer_unavailable` | `permission_denied` |
 | `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
 | `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url`, `string_prep_failed`, `naming_value_changed` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
-| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `virtual_list_view_error`, `assertion_failed`, `e_sync_refresh_required`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `internal_error` | everything else |
+| none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `virtual_list_view_error`, `assertion_failed`, `e_sync_refresh_required`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `internal_error`, `incomplete_values` | everything else |
 
 Choices worth knowing: `unauthenticated_bind` is `auth_failed` (an empty
 password on a login form is a failed login); `stronger_auth_required` and

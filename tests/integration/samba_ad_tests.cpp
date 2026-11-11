@@ -1163,6 +1163,46 @@ TEST_CASE("samba ad: ad::read_all_values reads a group of more than MaxValRange 
 	}
 }
 
+namespace {
+
+struct ranged_group
+{
+	std::string cn;
+	std::vector<std::string> member;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<ranged_group> = ldap::describe(ldap::object_class("group"),
+  ldap::field<&ranged_group::cn>("cn"),
+  ldap::field<&ranged_group::member>("member"));
+
+TEST_CASE("samba ad: decode<T> refuses a member read under a range option", "[samba_ad][range]")
+{
+	require_samba();
+	draining_context ioc;
+	auto c = open_bound(ioc, false, administrator, administrator_password);
+	const auto read = [&](const char *member) {
+		auto r = finish(ioc,
+		  c.search({ .base = large_group, .scope = ldap::search_scope::base_object, .attributes = { "cn", member } }));
+		REQUIRE(r.has_value());
+		REQUIRE(r->entries.size() == 1);
+		return ldap::decode<ranged_group>(r->entries[0]);
+	};
+
+	auto ranged = read("member;range=0-99");
+	REQUIRE_FALSE(ranged.has_value());
+	CHECK(ranged.error().code == ldap::client_errc::incomplete_values);
+	CHECK_THAT(std::string(ranged.error().context), Catch::Matchers::ContainsSubstring("ldap::ad::read_all_values"));
+
+	auto plain = read("member");
+	if (!plain) {
+		FAIL(plain.error().message());
+	}
+	CHECK(plain->member.size() == large_group_size);
+}
+
 // ---------------------------------------------------------------- DirSync
 
 namespace {

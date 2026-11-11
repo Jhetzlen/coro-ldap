@@ -172,6 +172,8 @@ namespace {
 			return "not possible while a SASL security layer is in effect";
 		case client_errc::naming_value_changed:
 			return "the naming value changed: the entry must be renamed";
+		case client_errc::incomplete_values:
+			return "the entry holds only part of the attribute's values (a range option)";
 		}
 		return {};
 	}
