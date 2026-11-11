@@ -531,10 +531,8 @@ namespace {
 					return fail(client_errc::encode_error, "message: add request attribute without values");
 				}
 			}
-		} else if (const auto *ref = std::get_if<search_result_reference>(&m.op)) {
-			if (ref->uris.empty()) {
-				return fail(client_errc::encode_error, "message: search result reference without a URI");
-			}
+		} else if (const auto *ref = std::get_if<search_result_reference>(&m.op); ref != nullptr && ref->uris.empty()) {
+			return fail(client_errc::encode_error, "message: search result reference without a URI");
 		}
 		return {};
 	}
