@@ -7,6 +7,8 @@
 #   server (--dns-backend=NONE: the tests connect by address);
 # - Administrator's password Adm1n-Passw0rd;
 # - the users of tests/integration/samba_ad_tests.cpp, below;
+# - OU=Ranged: 1600 contacts and CN=large-group holding them all, more
+#   members than MaxValRange (1500) for ranged retrieval;
 # - the password policy: complexity and a minimum length of 7 as Samba
 #   provisions them, but no minimum age (a user may change a password just
 #   reset, as the tests do) and no history (the tests set the same
@@ -38,6 +40,12 @@ RUN rm -f /etc/samba/smb.conf \
 	&& samba-tool user add 'jörg' 'Jörg-𝄞-Pässw0rd' --use-username-as-cn \
 	&& samba-tool user add pwchange 'Initial-Passw0rd' --use-username-as-cn \
 	&& samba-tool user add large 'Large-Passw0rd' --use-username-as-cn \
+	&& { printf 'dn: OU=Ranged,DC=coro,DC=test\nobjectClass: organizationalUnit\n\n'; \
+		for i in $(seq -w 0 1599); do printf 'dn: CN=m%s,OU=Ranged,DC=coro,DC=test\nobjectClass: contact\n\n' "$i"; done; \
+		printf 'dn: CN=large-group,OU=Ranged,DC=coro,DC=test\nobjectClass: group\n'; \
+		for i in $(seq -w 0 1599); do printf 'member: CN=m%s,OU=Ranged,DC=coro,DC=test\n' "$i"; done; } > /tmp/ranged.ldif \
+	&& ldbadd -H /var/lib/samba/private/sam.ldb /tmp/ranged.ldif > /dev/null \
+	&& rm -f /tmp/ranged.ldif \
 	&& (samba --foreground --no-process-group & pid=$!; \
 		for _ in $(seq 300); do [ -s /var/lib/samba/private/tls/cert.pem ] && break; sleep 0.1; done; \
 		kill "$pid"; wait "$pid" || true) \

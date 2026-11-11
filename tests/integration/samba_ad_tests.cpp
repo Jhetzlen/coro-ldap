@@ -17,6 +17,7 @@
 #include "jhetz/ldap/ad/filters.hpp"
 #include "jhetz/ldap/ad/guid.hpp"
 #include "jhetz/ldap/ad/password.hpp"
+#include "jhetz/ldap/ad/ranged_values.hpp"
 #include "jhetz/ldap/ad/sid.hpp"
 #include "jhetz/ldap/ad/sync.hpp"
 #include "jhetz/ldap/ad/user_account_control.hpp"
@@ -1058,4 +1059,85 @@ TEST_CASE("samba ad: ad::show_deleted finds a deleted user's tombstone", "[samba
 	REQUIRE(guid_values != nullptr);
 	REQUIRE(guid_values->size() == 1);
 	CHECK(ldap::ad::guid::from_binary((*guid_values)[0]) == id);
+}
+
+// ---------------------------------------------------------------- ranged retrieval
+
+namespace {
+
+const ldap::dn large_group{ "CN=large-group,OU=Ranged,DC=coro,DC=test" };
+constexpr std::size_t large_group_size = 1600;
+
+// The members samba-ad/Dockerfile gives large-group, in order.
+void check_large_group(const ldap::string_list &members)
+{
+	std::vector<std::string> got(members.begin(), members.end());
+	std::ranges::sort(got);
+	std::vector<std::string> want;
+	for (std::size_t i = 0; i < large_group_size; ++i) {
+		std::string n = std::to_string(i);
+		want.push_back("CN=m" + std::string(4 - n.size(), '0') + n + ",OU=Ranged,DC=coro,DC=test");
+	}
+	CHECK(got == want);
+}
+
+}// namespace
+
+TEST_CASE("samba ad: ad::read_all_values reads a group of more than MaxValRange members", "[samba_ad][range]")
+{
+	require_samba();
+	draining_context ioc;
+	auto c = open_bound(ioc, false, administrator, administrator_password);
+
+	SECTION("windows the server chooses (Samba sends them all at once)")
+	{
+		auto r = finish(ioc, ldap::ad::read_all_values(c, large_group, "member"));
+		if (!r) {
+			FAIL(r.error().message());
+		}
+		check_large_group(*r);
+	}
+	SECTION("windows of a step, the last one cut short by the server or past the end")
+	{
+		const std::uint32_t step = GENERATE(400U, 500U, 1500U, 1600U, 7U);
+		CAPTURE(step);
+		auto r = finish(ioc, ldap::ad::read_all_values(c, large_group, "member", { .step = step }));
+		if (!r) {
+			FAIL(r.error().message());
+		}
+		check_large_group(*r);
+	}
+	SECTION("an attribute without values")
+	{
+		auto r = finish(ioc, ldap::ad::read_all_values(c, large_group, "memberOf", { .step = 100 }));
+		REQUIRE(r.has_value());
+		CHECK(r->empty());
+	}
+	SECTION("ldap::client")
+	{
+		auto u = ldap::url::parse(strict_ldaps());
+		REQUIRE(u.has_value());
+		ldap::client pool(ioc,
+		  { .servers = { *u },
+			.connection = samba_tls(),
+			.setup = ldap::simple_bind_setup(administrator, administrator_password) });
+		auto r = finish(ioc, ldap::ad::read_all_values(pool, large_group, "member", { .step = 1000 }));
+		if (!r) {
+			FAIL(r.error().message());
+		}
+		check_large_group(*r);
+		pool.close();
+		drive(ioc);
+	}
+	SECTION("sync::connection")
+	{
+		auto opened = ldap::sync::connect(strict_ldaps(), samba_tls());
+		REQUIRE(opened.has_value());
+		REQUIRE(opened->simple_bind(administrator, administrator_password).has_value());
+		auto r = ldap::ad::read_all_values(*opened, large_group, "member", { .step = 1500 });
+		if (!r) {
+			FAIL(r.error().message());
+		}
+		check_large_group(*r);
+	}
 }

@@ -200,6 +200,7 @@ add_library(jhetz_ldap STATIC
     src/ad/diagnostic.cpp
     src/ad/guid.cpp
     src/ad/password_value.cpp
+    src/ad/range.cpp
     src/ad/sid.cpp
     src/attribute.cpp
     src/ber.cpp
@@ -352,6 +353,7 @@ endif()
 if(JHETZ_LDAP_BUILD_NET)
     add_library(jhetz_ldap_ad STATIC
         src/ad/password.cpp
+        src/ad/ranged_values.cpp
     )
     add_library(jhetz::ldap_ad ALIAS jhetz_ldap_ad)
     set_target_properties(jhetz_ldap_ad PROPERTIES EXPORT_NAME ldap_ad)
@@ -435,7 +437,8 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "sync.hpp" EXCLUDE
             PATTERN "sync_extended_operations.hpp" EXCLUDE
             PATTERN "sync_store.hpp" EXCLUDE
-            PATTERN "password.hpp" EXCLUDE)
+            PATTERN "password.hpp" EXCLUDE
+            PATTERN "ranged_values.hpp" EXCLUDE)
     endif()
     install(EXPORT jhetz_ldap-targets NAMESPACE jhetz:: DESTINATION ${jhetz_ldap_cmakedir})
     configure_package_config_file(cmake/jhetz_ldap-config.cmake.in

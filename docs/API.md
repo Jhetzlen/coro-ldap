@@ -1157,6 +1157,28 @@ package component `ad`:
   so the retry gets another). The connection must outlive the task; the
   `client &` tasks, like `client::acquire()`'s, do not refer to the
   client.
+- `jhetz/ldap/ad/ranged_values.hpp` (`jhetz::ldap_ad`):
+  `ad::read_all_values(c, object, attribute, options = {}, mr)`, every
+  value of a multi-valued attribute that AD returns in windows of at most
+  MaxValRange values (ranged retrieval, MS-ADTS 3.1.1.3.1.3.3), as a
+  `string_list` on `mr`. Base-object searches for `attribute`, then
+  `attribute;range=<next>-*`, until the answer holds the attribute without
+  a range, a window ending with `*`, or no such attribute;
+  `ad::range_options{.step = N}` asks for windows of N values instead
+  (`member;range=0-999`, ...; a smaller window from the server is
+  followed). `c` is a `connection &` or a `client &` (one shared lease for
+  every window, run once more after `cond::connection_lost`). An empty
+  attribute or one with a range option is `std::errc::invalid_argument`
+  before sending; a window that does not continue the previous one, the
+  plain attribute after a window or no entry is
+  `client_errc::unexpected_response`; a malformed range is
+  `client_errc::decode_error`.
+- `jhetz/ldap/ad/range.hpp` (`jhetz::ldap`): the range option itself:
+  `ad::parse_range(description)` splits `member;range=0-1499` into
+  `ad::ranged_description{.type = "member", .range = {0, 1499}}` (nullopt
+  without a range option, `decode_error` for a malformed one), and
+  `ad::with_range(type, range)` writes `member;range=1500-*`
+  (`ad::value_range{.low, .high}`, `high` nullopt for `*`).
 - `jhetz/ldap/ad/sync.hpp` (`jhetz::ldap_ad`): the same calls, blocking,
   over a sync facade (`sync::directory`: a `sync::connection`, a sync
   lease or a `sync::client`), each running the async one with

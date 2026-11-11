@@ -74,8 +74,11 @@ inline auto sample_messages() -> std::vector<message>
 		search_request{},
 		typed_only,
 		search_result_entry{},
-		search_result_entry{
-		  dn, { { "cn", { "John", "Johnny" } }, { "jpegPhoto", { "\xff\xd8\0"s } }, { "empty", {} } } },
+		search_result_entry{ dn,
+		  { { "cn", { "John", "Johnny" } },
+			{ "jpegPhoto", { "\xff\xd8\0"s } },
+			{ "empty", {} },
+			{ "member;range=0-*", { "cn=a" } } } },
 		search_result_done{},
 		search_result_done{ sample_result() },
 		search_result_reference{ { "ldap://a.example.org/dc=x", "ldap://b.example.org/dc=x??sub" } },

@@ -3197,7 +3197,8 @@ Layout:
   `ad/syntax.hpp` (AD's syntax OIDs), `ad/sid.hpp`, `ad/guid.hpp` and
   `ad/user_account_control.hpp` (the value types below),
   `ad/filters.hpp` (filters on AD's bitwise matching rules, below),
-  `ad/controls.hpp` (AD's request controls),
+  `ad/controls.hpp` (AD's request controls), `ad/range.hpp` (the range
+  option of ranged retrieval),
   `ad/password_value.hpp` (the `unicodePwd` value) and
   `ad/diagnostic.hpp` (`explain`). These headers are installed with the
   codec-only package too.
@@ -3208,9 +3209,9 @@ Layout:
   and `tests/CMakeLists.txt`'s header check.
   It links `jhetz::ldap_net` and includes only public headers, never
   `src/connection/` or `src/net/`; it is built and installed whenever
-  `jhetz::ldap_net` is. `ad/password.hpp` (async, `connection &` and
-  `client &`) and `ad/sync.hpp` (the blocking forms, over the sync
-  facades through `sync::run`) so far.
+  `jhetz::ldap_net` is. `ad/password.hpp` and `ad/ranged_values.hpp`
+  (async, `connection &` and `client &`) and `ad/sync.hpp` (the blocking
+  forms, over the sync facades through `sync::run`).
   A target of its own rather than `src/ad/` inside `jhetz::ldap_net`: the
   dependency is one-way and visible in CMake (`jhetz::ldap_net` cannot
   reach `ldap::ad`, `jhetz::ldap_ad` sees no private header), a consumer
@@ -3301,6 +3302,39 @@ refused, a change and a reset over the NTLM layer (integrity and
 confidentiality) on plain ldap://, an NTLM bind without a layer refused,
 `ldap::client`, `sync::connection`, and the core's RFC 3062 calls refused
 by Samba).
+
+Ranged retrieval: AD returns a multi-valued attribute with more values
+than MaxValRange (lDAPAdminLimits, 1500 by default) in windows, named by
+a range option (MS-ADTS 3.1.1.3.1.3.3): `member;range=0-1499`, and the
+client asks for `member;range=1500-*` until a window ends with `*`.
+`ad::read_all_values(c, object, attribute)` does that with base-object
+searches and returns the values as one `string_list`. By default it asks
+for the plain attribute first, as AD's own clients do: a server that
+needs no window answers with all the values at once. With
+`range_options::step` it asks for windows of that size from the start
+(`member;range=0-999`), which bounds each answer on a server that does
+not enforce MaxValRange; a window the server cuts shorter is followed
+from where it ended. The answer ends the read when it holds the plain
+attribute (the first answer only), a window ending with `*`, or no such
+attribute: Samba drops the attribute when a window starts past the last
+value, which happens when the count is a multiple of the step. Every
+other shape is refused rather than guessed at (a window not starting
+where the previous one ended, the plain attribute after a window:
+`unexpected_response`; a malformed range: `decode_error`), so the values
+are never silently incomplete or duplicated. The range option's syntax is
+a codec function (`ad/range.hpp`: `parse_range`, `with_range`, bounds of
+32 bits, the option name case-insensitive, other options kept), fuzzed
+through `message_fuzz` on every search entry's attribute names. The
+`client &` overload runs every window on one shared lease, the windows of
+one entry on one server, and starts over once on a new lease after
+`connection_lost`, as `load_schema(client &)` does; the blocking form is
+in `ad/sync.hpp`. Samba (4.22) honours range options but does not enforce
+MaxValRange (a plain request gets every value), so its test
+(`integration.samba_ad`, a group of 1600 contacts made at image build
+time) reads the group without a step and with steps that end inside,
+at, and past the last window; the mock tests
+(`tests/net/ad_ranged_values_tests.cpp`) play AD's windows and the
+refused shapes.
 
 What stays in the core (the audit of AD mentions outside `ad/`):
 interop notes on how AD and Samba behave as servers (quoted schema OIDs,

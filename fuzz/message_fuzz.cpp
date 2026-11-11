@@ -20,6 +20,9 @@
 //   resource), and so do an RFC 4533 Sync Info Message, an RFC 5805
 //   txnEndReq (End Transaction request value) and txnEndRes (any extended
 //   response value);
+// - an attribute description of a search entry with an Active Directory
+//   range option splits (ad::parse_range) into a type and a range that
+//   ad::with_range() writes back to the same split;
 // - search entries convert to ldap::entry, results to ldap::error, whose
 //   message() is well-formed UTF-8 without C0 controls or DEL;
 // - decode_options::from accepts exactly the responses (origin::server) or the
@@ -27,6 +30,7 @@
 // Also, with the input as (possibly non-canonical) filter text: if it
 // parses, the search request m carrying it encodes, decode(encode(m)) == m
 // and encode(decode(encode(m))) == encode(m).
+#include "jhetz/ldap/ad/range.hpp"
 #include "jhetz/ldap/content_sync.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/entry.hpp"
@@ -40,6 +44,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <variant>
 
@@ -210,6 +215,24 @@ void exercise_transaction(const std::optional<std::pmr::string> &value, bool req
 	}
 }
 
+// An attribute description with an Active Directory range option splits
+// into a type and a range that with_range() puts back together.
+void exercise_range(std::string_view description)
+{
+	auto r = ldap::ad::parse_range(description);
+	if (!r) {
+		check(r.error().code == ldap::client_errc::decode_error, "parse_range fails with decode_error");
+		return;
+	}
+	if (!*r) {
+		return;
+	}
+	check(!(*r)->type.empty(), "!(*r)->type.empty()");
+	check(!(*r)->range.high || *(*r)->range.high >= (*r)->range.low, "high >= low");
+	auto again = ldap::ad::parse_range(ldap::ad::with_range((*r)->type, (*r)->range));
+	check(again.has_value() && again->has_value() && **again == **r, "parse_range(with_range(r)) == r");
+}
+
 void exercise(const ldap::message &m)
 {
 	for (const auto &c : m.controls) {
@@ -232,6 +255,7 @@ void exercise(const ldap::message &m)
 			  check(e.dn == op.object_name, "e.dn == op.object_name");
 			  for (const auto &a : op.attributes) {
 				  check(e.find(a.type) != nullptr, "e.find(a.type) != nullptr");
+				  exercise_range(a.type);
 			  }
 		  } else if constexpr (has_result<T>) {
 			  if constexpr (std::is_same_v<T, ldap::extended_response>) {
