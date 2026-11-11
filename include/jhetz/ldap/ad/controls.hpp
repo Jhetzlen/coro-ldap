@@ -9,8 +9,11 @@
 //   });
 #pragma once
 
+#include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/error.hpp"
+#include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
+#include "jhetz/ldap/operations.hpp"
 
 #include <cstdint>
 #include <memory_resource>
@@ -36,6 +39,46 @@ struct show_deleted
 	// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor): goes in `.controls` lists as is
 	operator control() const { return { show_deleted_oid, critical }; }
 };
+
+// LDAP_SERVER_NOTIFICATION_OID (MS-ADTS 3.1.1.3.4.1.9): the search never
+// ends; the server sends an entry each time an object in scope changes (no
+// initial content, no cookie). AD takes it with the filter
+// (objectClass=*) and a base or one-level scope, and allows a few at once
+// per connection (MaxNotificationPerConn, 5 by default).
+// notification_search() builds such a search. No value. Critical by
+// default: a server without it refuses the search instead of running it
+// as a plain one.
+inline constexpr std::string_view notification_oid = "1.2.840.113556.1.4.528";
+struct notification
+{
+	bool critical = true;
+
+	// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor): goes in `.controls` lists as is
+	operator control() const { return { notification_oid, critical }; }
+};
+
+// The search a change notification needs, for search_stream(): `base` and
+// `scope` (base_object or single_level), the filter (objectClass=*), the
+// `attributes` each changed entry is sent with, the notification control,
+// and no client timeout (ldap::no_timeout): it runs until the stream is
+// destroyed or its stop token is set. On an ldap::client, open it on a
+// lease (acquire()): client::search_stream() returns at the search's first
+// message, which here is the first change.
+//
+//   auto s = co_await conn.search_stream(ldap::ad::notification_search(ldap::dn{"CN=Users,DC=example,DC=org"},
+//       ldap::search_scope::single_level, {"description"}));
+//   while (auto e = co_await s->next()) { if (!*e) break; changed(**e); }
+[[nodiscard]] inline auto notification_search(dn base,
+  search_scope scope = search_scope::base_object,
+  string_list attributes = {}) -> search_params
+{
+	return { .base = std::move(base),
+		.scope = scope,
+		.filter = filters::attr("objectClass").present(),
+		.attributes = std::move(attributes),
+		.controls = { notification{} },
+		.timeout = no_timeout };
+}
 
 // ---------------------------------------------------------------- DirSync (MS-ADTS 3.1.1.3.4.1.3)
 

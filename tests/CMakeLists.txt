@@ -175,6 +175,7 @@ endif()
 if(JHETZ_LDAP_BUILD_NET)
     add_executable(jhetz_ldap_net_tests
         net/ad_dirsync_tests.cpp
+        net/ad_notification_tests.cpp
         net/ad_password_tests.cpp
         net/ad_ranged_values_tests.cpp
         net/connect_tests.cpp

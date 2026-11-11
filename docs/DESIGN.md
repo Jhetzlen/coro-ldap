@@ -3197,7 +3197,8 @@ Layout:
   `ad/syntax.hpp` (AD's syntax OIDs), `ad/sid.hpp`, `ad/guid.hpp` and
   `ad/user_account_control.hpp` (the value types below),
   `ad/filters.hpp` (filters on AD's bitwise matching rules, below),
-  `ad/controls.hpp` (AD's request controls and DirSync's codec),
+  `ad/controls.hpp` (AD's request controls, change notification's search
+  and DirSync's codec),
   `ad/range.hpp` (the range
   option of ranged retrieval),
   `ad/password_value.hpp` (the `unicodePwd` value) and
@@ -3369,6 +3370,28 @@ chained through MoreResults, refused answers) and on Samba
 gone from the next poll, `incremental_values` returning an added member
 as `member;range=1-1`, a user without the right refused and served with
 `object_security`, `ldap::client` and `sync::connection`).
+
+Change notification (MS-ADTS 3.1.1.3.4.1.9) is AD's push counterpart, close
+to refreshAndPersist without the refresh: a search carrying
+LDAP_SERVER_NOTIFICATION_OID never ends, and the server sends an entry
+each time an object in scope changes, with no initial content and no
+cookie (a reconnecting client re-reads what it needs). It needs no
+plumbing of its own: `ad::notification` is a value-less control like
+`show_deleted`, and `ad::notification_search(base, scope, attributes)`
+a params builder (AD's filter `(objectClass=*)`, the control,
+`no_timeout` so the operation timeout does not end it) for the core's
+`search_stream`, which already serves RFC 4533's persist phase: entries
+are queued until read, a stop token or the stream's destruction abandons
+the search. There is no blocking form, since the sync facade has no
+streams, and no `client &` overload: `client::search_stream` returns at
+the first message, here the first change, so a caller holds a lease and
+streams on it. AD's limits (base or one-level scope,
+MaxNotificationPerConn, 5) are the server's to enforce. Tested by the
+control and builder (`tests/ad_controls_tests.cpp`), against the mock
+(`tests/net/ad_notification_tests.cpp`: changes after the operation
+timeout, the AbandonRequest when the stream is destroyed) and on Samba,
+which supports it (`integration.samba_ad`: two description changes on
+one stream, base and one-level).
 
 What stays in the core (the audit of AD mentions outside `ad/`):
 interop notes on how AD and Samba behave as servers (quoted schema OIDs,

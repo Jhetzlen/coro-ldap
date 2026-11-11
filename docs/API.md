@@ -1262,6 +1262,15 @@ package component `ad`:
   3.1.1.3.4.1.14): searches include deleted objects (isDeleted TRUE, under
   CN=Deleted Objects); no value, critical by default
   (`.critical = false` to send it non-critical).
+  `ad::notification{}` (`ad::notification_oid`, 1.2.840.113556.1.4.528,
+  MS-ADTS 3.1.1.3.4.1.9): change notification, critical by default; and
+  `ad::notification_search(base, scope = base_object, attributes = {})`,
+  the `search_params` it needs ((objectClass=*), the control,
+  `ldap::no_timeout`), for `search_stream()`: the stream yields an entry
+  each time an object in scope changes (no initial content) until it is
+  destroyed or stopped. On an `ldap::client`, open it on a lease
+  (`client::search_stream()` returns only at the first message, here the
+  first change); the sync facade has no streams.
   DirSync's codec (`ad::dirsync_oid`, 1.2.840.113556.1.4.841, MS-ADTS
   3.1.1.3.4.1.3): `ad::dirsync_request{.flags, .max_bytes, .cookie,
   .critical = true}` converts to the request control (Flags as AD's signed

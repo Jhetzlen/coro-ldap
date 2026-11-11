@@ -49,6 +49,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace ldap = jhetz::ldap;
@@ -1268,4 +1269,49 @@ TEST_CASE("samba ad: ad::dirsync returns what changed since the cookie", "[samba
 		}
 		CHECK_FALSE(blocking->cookie.empty());
 	}
+}
+
+// ---------------------------------------------------------------- change notification
+
+TEST_CASE("samba ad: ad::notification_search streams changes", "[samba_ad][notification]")
+{
+	require_samba();
+	draining_context ioc;
+	auto watcher = open_bound(ioc, false, administrator, administrator_password);
+	auto writer = open_bound(ioc, false, administrator, administrator_password);
+	const bool one_level = GENERATE(false, true);
+	CAPTURE(one_level);
+
+	auto request = one_level
+					 ? ldap::ad::notification_search(
+						 ldap::dn{ "CN=Users,DC=coro,DC=test" }, ldap::search_scope::single_level, { "description" })
+					 : ldap::ad::notification_search(alice, ldap::search_scope::base_object, { "description" });
+	request.timeout = std::chrono::seconds(30);// a missed change fails instead of hanging
+	auto s = finish(ioc, watcher.search_stream(std::move(request)));
+	if (!s) {
+		FAIL(s.error().message());
+	}
+	// The server registers the search before the change is made.
+	std::this_thread::sleep_for(std::chrono::seconds(1));
+
+	for (int round = 0; round < 2; ++round) {
+		const std::string marker =
+		  "notify-" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+		REQUIRE(
+		  finish(ioc, writer.modify({ .object = alice, .changes = { ldap::mod::replace("description", { marker }) } }))
+			.has_value());
+		auto e = finish(ioc, s->next());
+		if (!e) {
+			FAIL(e.error().message());
+		}
+		REQUIRE(e->has_value());
+		CHECK((*e)->dn == alice.to_string());
+		const auto *description = (*e)->find("description");
+		REQUIRE(description != nullptr);
+		REQUIRE(description->size() == 1);
+		CHECK(std::string_view(description->front()) == marker);
+	}
+	CHECK_FALSE(s->done());
+	*s = ldap::search_stream{};
+	CHECK(watcher.is_open());
 }

@@ -146,3 +146,31 @@ TEST_CASE("ad::dirsync: malformed values", "[ad][controls][dirsync]")
 	CHECK_FALSE(ad::decode_dirsync_request(ldap::control{ "1.2.3", true, "\x30\x00"s }).has_value());
 	CHECK_FALSE(ad::decode_dirsync_response(ldap::control{ ad::dirsync_oid }).has_value());
 }
+
+// ---------------------------------------------------------------- change notification
+
+TEST_CASE("ad::notification: the control (MS-ADTS 3.1.1.3.4.1.9)", "[ad][controls][notification]")
+{
+	CHECK(ad::notification_oid == "1.2.840.113556.1.4.528");
+	const ldap::control c = ad::notification{};
+	CHECK(c == ldap::control{ ad::notification_oid, true });
+	CHECK_FALSE(c.value.has_value());
+	CHECK(ldap::control(ad::notification{ .critical = false }) == ldap::control{ ad::notification_oid, false });
+}
+
+TEST_CASE("ad::notification_search: the search AD expects", "[ad][controls][notification]")
+{
+	const auto s = ad::notification_search(
+	  ldap::dn{ "CN=Users,DC=example,DC=org" }, ldap::search_scope::single_level, { "description", "member" });
+	CHECK(s.base.to_string() == "CN=Users,DC=example,DC=org");
+	CHECK(s.scope == ldap::search_scope::single_level);
+	CHECK(s.filter.to_string() == "(objectClass=*)");
+	CHECK(s.attributes == ldap::string_list{ "description", "member" });
+	REQUIRE(s.controls.size() == 1);
+	CHECK(std::get<ldap::control>(s.controls[0]) == ldap::control{ ad::notification_oid, true });
+	CHECK(s.timeout == ldap::no_timeout);
+
+	const auto base = ad::notification_search(ldap::dn{ "CN=x,DC=example,DC=org" });
+	CHECK(base.scope == ldap::search_scope::base_object);
+	CHECK(base.attributes.empty());
+}
