@@ -859,10 +859,12 @@ itself needs only ICU.
   of another kind on the server: `not_auxiliary`; a writable member whose
   attribute no MUST or MAY of those classes, the auxiliary ones or the
   structural class's DIT content rule lists, or that the rule precludes:
-  `attribute_not_allowed`),
+  `attribute_not_allowed`; a declared auxiliary class that rule's `AUX`
+  does not list: `auxiliary_class_not_allowed`; an OBSOLETE rule counts
+  for nothing),
   `attribute_type` with `usage` (`attribute_usage`),
   `object_class_type` with `sup`, `kind` (`object_class_kind`), `must`
-  and `may`, `dit_content_rule` (`aux`, `must`, `may`, `precluded`: RFC
+  and `may`, `dit_content_rule` (`obsolete`, `aux`, `must`, `may`, `precluded`: RFC
   4512 4.1.6; `parse_dit_content_rule`,
   `server_schema::find_dit_content_rule(class_oid)`); the free
   `ldap::load_schema` (which reads dITContentRules too) (directory.hpp) and

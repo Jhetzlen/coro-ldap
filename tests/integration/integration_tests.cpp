@@ -2507,7 +2507,8 @@ TEST_CASE("integration: a store adds auxiliary object classes", "[integration][s
 	CHECK(std::ranges::none_of(report.issues, [](const auto &i) {
 		return i.what == ldap::schema_issue::kind::must_attribute_not_mapped
 			   || i.what == ldap::schema_issue::kind::not_auxiliary
-			   || i.what == ldap::schema_issue::kind::attribute_not_allowed;
+			   || i.what == ldap::schema_issue::kind::attribute_not_allowed
+			   || i.what == ldap::schema_issue::kind::auxiliary_class_not_allowed;
 	}));
 
 	ldap::store s(c, people, ldap::named_by<&posix_user::uid>, { .schema_check = ldap::schema_check::on_first_use });

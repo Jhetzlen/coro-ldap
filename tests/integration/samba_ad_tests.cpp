@@ -838,6 +838,11 @@ struct ad_account
 	ldap::ad::user_account_control user_account_control{};
 };
 
+struct ad_aux_account
+{
+	std::string sam_account_name;
+};
+
 const ldap::dn domain{ "DC=coro,DC=test" };
 const ldap::dn alice{ "CN=alice,CN=Users,DC=coro,DC=test" };
 const ldap::dn typed_user{ "CN=coro-typed,CN=Users,DC=coro,DC=test" };
@@ -850,6 +855,10 @@ constexpr auto ldap::schema<ad_account> = ldap::describe(ldap::object_class("use
   ldap::field<&ad_account::object_sid>("objectSid", ldap::read_only),
   ldap::field<&ad_account::object_guid>("objectGUID", ldap::read_only),
   ldap::field<&ad_account::user_account_control>("userAccountControl"));
+template<>
+constexpr auto ldap::schema<ad_aux_account> = ldap::describe(ldap::object_class("user"),
+  ldap::auxiliary_class("posixAccount", "ipHost"),
+  ldap::field<&ad_aux_account::sam_account_name>("sAMAccountName"));
 
 namespace {
 
@@ -916,6 +925,17 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 		CHECK(s->find_dit_content_rule(s->find_object_class("user")->oid) != nullptr);
 		CHECK(std::ranges::none_of(
 		  report.issues, [](const auto &i) { return i.what == ldap::schema_issue::kind::attribute_not_allowed; }));
+
+		// user's rule lists posixAccount in AUX, not ipHost.
+		const auto aux = ldap::validate<ad_aux_account>(*s);
+		INFO(aux.to_string());
+		std::vector<std::string> not_listed;
+		for (const auto &i : aux.issues) {
+			if (i.what == ldap::schema_issue::kind::auxiliary_class_not_allowed) {
+				not_listed.push_back(i.name);
+			}
+		}
+		CHECK(not_listed == std::vector<std::string>{ "ipHost" });
 	}
 
 	SECTION("Administrator and alice")

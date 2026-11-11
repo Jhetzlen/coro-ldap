@@ -1965,6 +1965,16 @@ Checks:
   are not read. A rule's `MUST` are not checked as unmapped (AD's
   include `objectSid`, which the server assigns). Still a warning: a
   server may allow more than its subschema says.
+- allowed auxiliary classes (warning): with a DIT content rule for the
+  structural class, each declared AUXILIARY class (by `object_class` or
+  `auxiliary_class`) that the rule's `AUX` does not list, by name or
+  OID, is `auxiliary_class_not_allowed` (RFC 4512 section 2.6: an entry
+  may only belong to the auxiliary classes its governing rule lists); a
+  server enforcing rules (slapd does) refuses the add with
+  objectClassViolation. Without a rule nothing is reported (any
+  auxiliary class is allowed). An OBSOLETE rule is not active (RFC 4512
+  section 2.6: a rule governs only "if present and active") and counts
+  for neither check.
 
 With `schema_check::on_first_use`, a store's first operation runs
 `validate<T>` and fails with `client_errc::schema_mismatch` if the report has

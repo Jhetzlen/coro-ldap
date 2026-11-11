@@ -83,6 +83,7 @@ struct dit_content_rule
 {
 	std::string oid{};// the structural object class's
 	std::vector<std::string> names{};
+	bool obsolete = false;// OBSOLETE: inactive, validate ignores it
 	std::vector<std::string> aux{};// auxiliary classes its entries may belong to
 	std::vector<std::string> must{};// attribute types its entries must contain
 	std::vector<std::string> may{};// attribute types its entries may contain
@@ -303,6 +304,9 @@ struct schema_issue
 		// or the structural class's DIT content rule, or that the rule
 		// precludes (NOT)
 		attribute_not_allowed,
+		// warning: a declared AUXILIARY class that the structural class's
+		// DIT content rule does not list in its AUX
+		auxiliary_class_not_allowed,
 	};
 	kind what;
 	std::string name;// the attribute or object class
@@ -311,7 +315,8 @@ struct schema_issue
 	{
 		return what != kind::single_member_multi_valued && what != kind::must_attribute_not_mapped
 			   && what != kind::must_attribute_not_required && what != kind::unknown_superclass
-			   && what != kind::not_auxiliary && what != kind::attribute_not_allowed;
+			   && what != kind::not_auxiliary && what != kind::attribute_not_allowed
+			   && what != kind::auxiliary_class_not_allowed;
 	}
 };
 
@@ -377,7 +382,10 @@ namespace detail {
 // of its AUX classes: an entry has those only once it lists the class
 // (declare it with ldap::auxiliary_class). Active Directory publishes its
 // system auxiliary classes' attributes in the rule's MUST and MAY
-// (sAMAccountName on user). A rule's MUST are not checked as unmapped.
+// (sAMAccountName on user). A rule's MUST are not checked as unmapped. With
+// a rule, a declared AUXILIARY class it does not list in AUX (by name or
+// OID) is auxiliary_class_not_allowed, a warning (RFC 4512 section 2.6). An
+// OBSOLETE rule is not active and counts for nothing.
 // Not reported: objectClass, operational attributes (USAGE other than
 // userApplications), attributes the server does not define, and every member
 // when a class is extensibleObject or a class or superclass is not defined.

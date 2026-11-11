@@ -1397,4 +1397,60 @@ TEST_CASE("schema: DIT content rules", "[schema][validate][content_rule]")
 		CHECK_THAT(
 		  rep.to_string(), ContainsSubstring("warning: attribute uid: precluded (NOT) by the DIT content rule"));
 	}
+	SECTION("a declared auxiliary class must be in the rule's AUX")
+	{
+		using k = ldap::schema_issue::kind;
+		auto types = openldap_types;
+		types.insert(types.end(), posix_types.begin(), posix_types.end());
+		auto classes = openldap_classes;
+		classes.insert(classes.end(), posix_classes.begin(), posix_classes.end());
+		const auto aux_issues = [&](std::string_view rule) {
+			const std::pmr::vector<std::pmr::string> rules{ std::pmr::string(rule) };
+			const auto rep = ldap::validate<posix_person>(ldap::server_schema::parse(types, classes, rules));
+			INFO(rep.to_string());
+			CHECK(rep.ok());
+			std::vector<std::string> out;
+			for (const auto &i : rep.issues) {
+				if (i.what == k::auxiliary_class_not_allowed) {
+					out.push_back(i.name);
+				}
+			}
+			return out;
+		};
+		CHECK(aux_issues("( 2.16.840.1.113730.3.2.2 NAME 'inetOrgPersonRule' AUX posixAccount )")
+			  == std::vector<std::string>{ "shadowAccount" });
+		CHECK(aux_issues("( 2.16.840.1.113730.3.2.2 MAY uid )")
+			  == std::vector<std::string>{ "posixAccount", "shadowAccount" });
+		// By OID or by any case of the name.
+		CHECK(aux_issues("( 2.16.840.1.113730.3.2.2 AUX ( 1.3.6.1.1.1.2.0 $ SHADOWACCOUNT ) )").empty());
+		// A superclass's rule does not govern the entry.
+		CHECK(aux_issues("( 2.5.6.7 NAME 'organizationalPersonRule' MAY uid )").empty());
+
+		const std::pmr::vector<std::pmr::string> rules{ "( 2.16.840.1.113730.3.2.2 MAY uid )" };
+		CHECK_THAT(ldap::validate<posix_person>(ldap::server_schema::parse(types, classes, rules)).to_string(),
+		  ContainsSubstring("warning: object class shadowAccount: auxiliary, but not in the AUX of the DIT content "
+							"rule of the structural object class"));
+	}
+	SECTION("an OBSOLETE rule is not active")
+	{
+		auto r = ldap::parse_dit_content_rule("( 2.16.840.1.113730.3.2.2 NAME 'old' OBSOLETE MAY uidNumber NOT uid )");
+		REQUIRE(r.has_value());
+		CHECK(r->obsolete);
+		CHECK_FALSE(ldap::parse_dit_content_rule("( 2.16.840.1.113730.3.2.2 MAY uidNumber )")->obsolete);
+
+		const std::pmr::vector<std::pmr::string> rules{
+			"( 2.16.840.1.113730.3.2.2 NAME 'old' OBSOLETE MAY uidNumber NOT uid )"
+		};
+		const auto rep = ldap::validate<forgot_auxiliary>(ldap::server_schema::parse(core_types, core_classes, rules));
+		CHECK(not_allowed(rep) == std::vector<std::string>{ "uidNumber" });
+
+		auto types = openldap_types;
+		types.insert(types.end(), posix_types.begin(), posix_types.end());
+		auto classes = openldap_classes;
+		classes.insert(classes.end(), posix_classes.begin(), posix_classes.end());
+		const std::pmr::vector<std::pmr::string> aux_rules{ "( 2.16.840.1.113730.3.2.2 OBSOLETE AUX posixAccount )" };
+		const auto posix = ldap::validate<posix_person>(ldap::server_schema::parse(types, classes, aux_rules));
+		CHECK(std::ranges::none_of(
+		  posix.issues, [](const auto &i) { return i.what == ldap::schema_issue::kind::auxiliary_class_not_allowed; }));
+	}
 }

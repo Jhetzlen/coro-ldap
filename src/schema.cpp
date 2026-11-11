@@ -425,6 +425,7 @@ auto parse_dit_content_rule(std::string_view text) -> result<dit_content_rule>
 	return parse_definition(text, definition_kind::dit_content_rule).transform([](definition &&d) {
 		return dit_content_rule{ .oid = std::move(d.oid),
 			.names = valid_names(d.get("NAME")),
+			.obsolete = d.has("OBSOLETE"),
 			.aux = valid_oids(d.get("AUX")),
 			.must = valid_oids(d.get("MUST")),
 			.may = valid_oids(d.get("MAY")),
@@ -565,6 +566,7 @@ auto schema_report::to_string() const -> std::string
 		  i.is_error() ? "error: " : "warning: ",
 		  i.what == schema_issue::kind::unknown_object_class || i.what == schema_issue::kind::unknown_superclass
 			  || i.what == schema_issue::kind::not_auxiliary
+			  || i.what == schema_issue::kind::auxiliary_class_not_allowed
 			? "object class "
 			: "attribute ",
 		  i.name,
@@ -733,8 +735,9 @@ namespace {
 		});
 	}
 
-	// The DIT content rules of the entry's structural class: that of each
-	// declared STRUCTURAL class no other reached class has as a superclass.
+	// The active (not OBSOLETE) DIT content rules of the entry's structural
+	// class: that of each declared STRUCTURAL class no other reached class
+	// has as a superclass.
 	auto content_rules(const server_schema &s, const std::vector<reached_class> &all)
 	  -> std::vector<const dit_content_rule *>
 	{
@@ -749,7 +752,7 @@ namespace {
 			if (!r.from.empty() || r.c->kind != object_class_kind::structural || supers.contains(r.c)) {
 				continue;
 			}
-			if (const dit_content_rule *rule = s.find_dit_content_rule(r.c->oid); rule != nullptr) {
+			if (const dit_content_rule *rule = s.find_dit_content_rule(r.c->oid); rule != nullptr && !rule->obsolete) {
 				out.push_back(rule);
 			}
 		}
@@ -761,6 +764,7 @@ namespace {
 	// rule precludes, unless a class allows anything or may be missing.
 	void report_not_allowed(const server_schema &s,
 	  const std::vector<reached_class> &all,
+	  std::span<const dit_content_rule *const> rules,
 	  std::span<const detail::field_use> fields,
 	  schema_report &out)
 	{
@@ -783,7 +787,7 @@ namespace {
 			add(allowed, r.c->must);
 			add(allowed, r.c->may);
 		}
-		for (const dit_content_rule *rule : content_rules(s, all)) {
+		for (const dit_content_rule *rule : rules) {
 			add(allowed, rule->must);
 			add(allowed, rule->may);
 			add(precluded, rule->precluded);
@@ -804,6 +808,33 @@ namespace {
 				  .detail = "in no MUST or MAY of the declared object classes, the auxiliary ones, their superclasses "
 							"or the structural class's DIT content rule" });
 			}
+		}
+	}
+
+	// auxiliary_class_not_allowed for each declared AUXILIARY class (by
+	// ldap::object_class or ldap::auxiliary_class) that no rule of `rules`
+	// lists in its AUX, when there is a rule.
+	void report_auxiliary_not_allowed(const server_schema &s,
+	  const std::vector<reached_class> &all,
+	  std::span<const dit_content_rule *const> rules,
+	  schema_report &out)
+	{
+		if (rules.empty()) {
+			return;
+		}
+		const auto listed = [&s, rules](const object_class_type *c) {
+			return std::ranges::any_of(rules, [&s, c](const dit_content_rule *rule) {
+				return std::ranges::any_of(
+				  rule->aux, [&s, c](const std::string &name) { return s.find_object_class(name) == c; });
+			});
+		};
+		for (const reached_class &r : all) {
+			if (!r.from.empty() || r.c->kind != object_class_kind::auxiliary || listed(r.c)) {
+				continue;
+			}
+			out.issues.push_back({ .what = schema_issue::kind::auxiliary_class_not_allowed,
+			  .name = std::string(class_name(*r.c)),
+			  .detail = "auxiliary, but not in the AUX of the DIT content rule of the structural object class" });
 		}
 	}
 
@@ -926,7 +957,9 @@ namespace detail {
 				report_must(r, m, mapping_of(s, a, m, fields), out);
 			}
 		}
-		report_not_allowed(s, all, fields, out);
+		const std::vector<const dit_content_rule *> rules = content_rules(s, all);
+		report_not_allowed(s, all, rules, fields, out);
+		report_auxiliary_not_allowed(s, all, rules, out);
 	}
 
 }// namespace detail
