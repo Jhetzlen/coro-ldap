@@ -109,6 +109,22 @@ static_assert(!ldap::sync::directory<const ldap::sync::connection>);
 
 namespace {
 
+using compared = ldap::result<ldap::compare_result>;
+template<class D> using compare_of = decltype(std::declval<D &>().compare(ldap::compare_params{}));
+
+}// namespace
+
+static_assert(std::is_same_v<compare_of<ldap::connection>, boost::capy::task<compared>>);
+static_assert(std::is_same_v<decltype(std::declval<ldap::lease &>()->compare(ldap::compare_params{})),
+  boost::capy::task<compared>>);
+static_assert(std::is_same_v<compare_of<ldap::client>, boost::capy::task<compared>>);
+static_assert(std::is_same_v<compare_of<ldap::sync::connection>, compared>);
+static_assert(std::is_same_v<compare_of<ldap::sync::lease>, compared>);
+static_assert(std::is_same_v<compare_of<ldap::sync::exclusive_lease>, compared>);
+static_assert(std::is_same_v<compare_of<ldap::sync::client>, compared>);
+
+namespace {
+
 const ldap::dn people_base{ "ou=people,dc=example,dc=org" };
 
 auto person_entry(std::int32_t id, std::string_view uid, std::string_view number) -> ldap::message

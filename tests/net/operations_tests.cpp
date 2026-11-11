@@ -247,16 +247,25 @@ TEST_CASE("operations: modify DN", "[net][operations]")
 TEST_CASE("operations: compare", "[net][operations]")
 {
 	mock_ldap m;
-	m.serve({ answer({ result_msg<ldap::compare_response>(1, 6) }),
+	ldap::message answered{ 1,
+		ldap::compare_response{ ldap::ldap_result{ 6, "ou=people,dc=example,dc=org", "from the cache" } } };
+	answered.controls.push_back(post_read_control());
+	m.serve({ answer({ answered }),
 	  answer({ result_msg<ldap::compare_response>(2, 5) }),
 	  answer({ result_msg<ldap::compare_response>(3, 16, "no such attribute") }),
 	  answer({ result_msg<ldap::compare_response>(4, 0) }) });
 	auto yes = m.run(m.conn.compare({ .entry = jdoe, .attribute = "mail", .value = "jdoe@example.org" }));
 	REQUIRE(yes.has_value());
-	CHECK(*yes);
+	CHECK(yes->value);
+	CHECK(yes->matched_dn == "ou=people,dc=example,dc=org");
+	CHECK(yes->diagnostic_message == "from the cache");
+	REQUIRE(yes->controls.size() == 1);
+	CHECK(yes->controls[0] == post_read_control());
+	CHECK(yes->referrals.empty());
+	CHECK(yes->unlisted == 0);
 	auto no = m.run(m.conn.compare({ .entry = jdoe, .attribute = "mail", .value = "other@example.org" }));
 	REQUIRE(no.has_value());
-	CHECK_FALSE(*no);
+	CHECK_FALSE(no->value);
 	auto missing = m.run(m.conn.compare({ .entry = jdoe, .attribute = "pager", .value = "1" }));
 	REQUIRE_FALSE(missing.has_value());
 	CHECK(missing.error().code == ldap::cond::not_found);

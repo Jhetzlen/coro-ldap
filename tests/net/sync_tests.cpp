@@ -624,10 +624,10 @@ TEST_CASE("sync: compare", "[net][sync]")
 	connected k(srv);
 	auto yes = k.c.compare({ .entry = jdoe, .attribute = "mail", .value = "jdoe@example.org" });
 	REQUIRE(yes.has_value());
-	CHECK(*yes);
+	CHECK(yes->value);
 	auto no = k.c.compare({ .entry = jdoe, .attribute = "cn", .value = "Jöhn" });
 	REQUIRE(no.has_value());
-	CHECK_FALSE(*no);
+	CHECK_FALSE(no->value);
 	auto missing = k.c.compare({ .entry = jdoe, .attribute = "pager", .value = "1" });
 	REQUIRE_FALSE(missing.has_value());
 	CHECK(missing.error().code == ldap::errc::no_such_attribute);

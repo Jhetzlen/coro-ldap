@@ -334,7 +334,7 @@ namespace detail {
 		{
 			return self().call([&](ldap::connection &c) { return c.modify_dn(std::move(request)); });
 		}
-		[[nodiscard]] auto compare(compare_params request) -> result<bool>
+		[[nodiscard]] auto compare(compare_params request) -> result<compare_result>
 		{
 			return self().call([&](ldap::connection &c) { return c.compare(std::move(request)); });
 		}

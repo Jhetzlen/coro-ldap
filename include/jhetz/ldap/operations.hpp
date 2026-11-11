@@ -84,10 +84,18 @@ struct search_params
 	// Whether a referral result is chased: overrides
 	// referral_options::follow_referrals for this request in client::search
 	// and sync::client::search, and turns it off for chase_search when
-	// false. Ignored by the calls that never chase: client::search_stream,
-	// ldap::search_paged (on a client too), and every connection and
+	// false. Governs referral results only, not continuation references.
+	// Ignored by the calls that never chase: client::search_stream,
+	// ldap::search_paged (on a client too), and every connection, lease and
 	// sync::connection call.
 	std::optional<bool> follow_referrals{};
+	// Whether continuation references (SearchResultReference) are chased:
+	// overrides referral_options::follow_references for this request in
+	// client::search and sync::client::search, and turns it off for
+	// chase_search when false (the references stay in `references`, counted
+	// in `unlisted`). Governs continuation references only, not referral
+	// results. Ignored by the same calls as follow_referrals.
+	std::optional<bool> follow_references{};
 };
 
 // The search reading the root DSE (RFC 4512 section 5.1): the empty DN,
@@ -259,12 +267,18 @@ struct compare_params
 	std::optional<bool> follow_referrals{};
 };
 
-// What ldap::client::compare and chase_compare return: compareTrue: true,
-// compareFalse: false, and what a referral chase did (as
-// basic_search_result's `referrals` and `unlisted`; empty without one).
+// What compare returns (connection, client, chase_compare and the sync
+// facades): compareTrue: true, compareFalse: false; the matchedDN,
+// diagnosticMessage and controls of the CompareResponse that answered (the
+// referral target's after a chase); and what a referral chase did (as
+// basic_search_result's `referrals` and `unlisted`; empty where nothing
+// chases).
 struct compare_result
 {
 	bool value = false;
+	std::pmr::string matched_dn{};
+	std::pmr::string diagnostic_message{};
+	std::pmr::vector<control> controls{};
 	std::vector<referral_attempt> referrals{};
 	std::size_t unlisted = 0;
 

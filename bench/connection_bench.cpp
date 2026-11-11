@@ -82,7 +82,7 @@ auto compares(ldap::connection &c, std::size_t n) -> capy::task<bool>
 	const auto params = compare_params();
 	for (std::size_t i = 0; i < n; ++i) {
 		auto r = co_await c.compare(params);
-		if (!r || !*r) {
+		if (!r || !r->value) {
 			co_return false;
 		}
 	}

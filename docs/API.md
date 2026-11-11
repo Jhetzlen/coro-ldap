@@ -13,7 +13,7 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
 | Search, entry by entry | `connection::search_stream(params)` | `next()` / `next_item()`; memory bounded by the caller's pace; abandons the search when destroyed early |
 | Search a large result in pages | `ldap::search_paged(conn_or_client, params, page_size)` | RFC 2696 paged results, one page requested at a time; `sync::search_paged` collects every page |
 | Search into structs | `store<T>::search` / `search_stream` / `search_paged` (store.hpp) | the same three shapes, entries decoded to `record<T>` |
-| Search and follow referrals | `client::search(params)` with `client_options::referrals` | the pool chases referral results and continuation references; the report is in `search_result::referrals` / `unlisted`, `is_complete()`; a request's `follow_referrals` overrides the pool's switch for one call; `client::search_stream`, `search_paged` and the `connection` / `sync::connection` calls ignore it (they never chase) |
+| Search and follow referrals | `client::search(params)` with `client_options::referrals` | the pool chases referral results and continuation references; the report is in `search_result::referrals` / `unlisted`, `is_complete()`; a request's `follow_referrals` / `follow_references` override the pool's switches for one call; `client::search_stream`, `search_paged` and the `connection` / `sync::connection` calls ignore it (they never chase) |
 | Follow referrals from a bare connection | `ldap::chase_search(conn, params, connector)`, `chase_compare` (referral_chase.hpp) | the caller's `referral_connector` decides which servers and how to bind (`make_same_policy_connector`) |
 | Watch changes | `search_stream` with `ldap::sync_request` (content_sync.hpp) | RFC 4533 refreshOnly / refreshAndPersist |
 | Change a password, RFC 3062 | `ldap::password_modify(d, params)` | the Password Modify request as the RFC has it; returns the generated password, if any |
@@ -398,7 +398,11 @@ itself needs only ICU.
   (rename and / or move: `{.entry, .new_rdn, .delete_old_rdn,
   .new_superior}`; breaking (coro-ldap-aw4.3): `move()` and `rename()`
   are gone from `connection`, `client` and the sync facades), `compare`
-  (`result<bool>`) and `extended`, each taking a params aggregate
+  (`result<compare_result>`: `value` true / false for compareTrue /
+  compareFalse, the response's `matched_dn`, `diagnostic_message` and
+  `controls`, and an empty chase report (`referrals`, `unlisted`) where
+  nothing chases; breaking: it returned `result<bool>` on `connection`,
+  the leases and `sync::connection`) and `extended`, each taking a params aggregate
   with `.controls` (that operation's control list, see controls.hpp
   below) and `.timeout` (`extended` refuses the StartTLS name with
   encode_error before sending: use `start_tls`);
@@ -485,7 +489,9 @@ itself needs only ICU.
   referral; its context counts the attempts' outcomes); with the
   request's `follow_referrals` false, a referral result is not chased (the
   call fails with `errc::referral`). `chase_compare(conn, params, connector, policy)` does the
-  same for a compare (`compare_result{value, referrals, unlisted}`). The URIs of one
+  same for a compare (`compare_result{value, matched_dn, diagnostic_message,
+  controls, referrals, unlisted}`, the LDAPResult tail and controls of the
+  response that answered). The URIs of one
   reference are alternatives, tried in order; `referral_policy` bounds the
   depth (`max_hops`, 10 by default as RFC 4511 asks), the connector calls
   (`max_targets`, 64; once reached the chase stops, and the references still
@@ -888,8 +894,8 @@ itself needs only ICU.
   `syntax_mismatch`: map userPassword and the like to `ldap::binary`.
 - `jhetz/ldap/directory.hpp` (coro-ldap-2cx.1): the `ldap::directory`
   concept, the protocol operations a layer runs on (`search`, `add`,
-  `modify`, `del`, `modify_dn` with `connection`'s signatures and
-  results), satisfied by `connection` and `client`; `ldap::load_schema(directory &)`, the subschema
+  `modify`, `del`, `modify_dn`, `compare` with `connection`'s signatures
+  and results), satisfied by `connection` and `client`; `ldap::load_schema(directory &)`, the subschema
   read over the public `search`; a limit code with no entry on either
   read is an error. `ldap::load_schema(client &)` (coro-ldap-2cx.2.2,
   defined in jhetz::ldap_net) runs both searches on one shared lease, so
@@ -1085,10 +1091,15 @@ itself needs only ICU.
   the pooled connection, within `limits` (a `referral_policy`). A
   request's `follow_referrals` (`search_params`, `compare_params`:
   `std::optional<bool>`) overrides `follow_referrals` for that call
-  (`search()`, `compare()`, and the same on `sync::client`); the calls
-  that never chase ignore it: `client::search_stream`,
-  `ldap::search_paged` on a client, and every `connection` and
-  `sync::connection` call.
+  (`search()`, `compare()`, and the same on `sync::client`), and
+  `search_params::follow_references` overrides `follow_references` for
+  that search (false: the references stay in `references`, counted in
+  `unlisted`); each governs only its own mechanism (referral results,
+  continuation references), and `chase_search` / `chase_compare` take
+  them too (false turns chasing off). The calls that never chase ignore
+  both: `client::search_stream`, `ldap::search_paged` on a client, every
+  `connection` and `sync::connection` call, and a call on a lease
+  (`(*lease)->search(...)`).
   `authorize`, a `std::function<referral_binding(const referral_hop &)>`
   (`referral_hop{target, depth, origin}`), returns `refuse`, `anonymous`
   or `same_setup` (bind with the client's `session_setup`) per URI;

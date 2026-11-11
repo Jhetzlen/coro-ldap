@@ -97,8 +97,9 @@
 // followed stay in search_result::references, a followed search's limit code
 // replaces the origin's success, and `referrals` and `unlisted` report each
 // URI; compare() returns a compare_result with the same report. A request's
-// follow_referrals overrides referral_options::follow_referrals for it. Writes, search_stream(), extended() and
-// ldap::search_paged(client&) never chase, and ignore a request's follow_referrals: a write's referral is
+// follow_referrals overrides referral_options::follow_referrals for it, and a search's follow_references
+// referral_options::follow_references. Writes, search_stream(), extended() and
+// ldap::search_paged(client&) never chase, and ignore both: a write's referral is
 // errc::referral (referral_target() builds the request for another server).
 //
 // sync::client (sync.hpp) wraps a client in blocking calls.
@@ -316,7 +317,8 @@ struct referral_options
 	// Chase referral results (RFC 4511 section 4.1.10) of search() and
 	// compare(); a request's follow_referrals overrides it.
 	bool follow_referrals = false;
-	// Follow the continuation references (section 4.5.3) of search().
+	// Follow the continuation references (section 4.5.3) of search(); a
+	// request's follow_references overrides it.
 	bool follow_references = false;
 	// Which servers to contact, and how to bind; empty: none.
 	referral_authorizer authorize{};
@@ -561,11 +563,12 @@ class client
 	// its first change.
 	auto search_stream(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> boost::capy::task<result<ldap::search_stream>>;
-	// compare(): compareTrue / compareFalse as compare_result::value; when
-	// chasing, with what the chase did.
+	// compare(): compareTrue / compareFalse as compare_result::value, with
+	// the answering response's LDAPResult tail and controls; when chasing,
+	// with what the chase did.
 	auto compare(compare_params request) -> boost::capy::task<result<compare_result>>;
 	// search() and compare() chase referrals as client_options::referrals
-	// (and the request's follow_referrals) say, as ldap::chase_search and
+	// (and the request's follow_referrals and follow_references) say, as ldap::chase_search and
 	// ldap::chase_compare (referral_chase.hpp) do, on a shared lease with
 	// the read forwarders' retry. With follow_references off, the
 	// references received are counted in `unlisted`; with follow_referrals

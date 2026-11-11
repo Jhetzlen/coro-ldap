@@ -538,13 +538,16 @@ Results (step 6): success returns the operation's value — `response`
 (the request's message id, the LDAPResult's matchedDN and
 diagnosticMessage, which a server may use for a warning on success, and
 the response controls) for add / modify /
-delete / modify DN, `bool` for
-compare, `extended_result` for extended operations; the free
+delete / modify DN, `compare_result` for
+compare (the same LDAPResult tail and controls, and the referral chase's
+report, empty where nothing chases: one result type for compare on
+connection, client, chase_compare and the sync facades, so compare is part
+of the `directory` concept), `extended_result` for extended operations; the free
 `ldap::who_am_i()` (RFC 4532) returns the authzId string, and
 `ldap::password_modify()` (RFC 3062) the generated password, if any
 (passwords never appear in error contexts).
 Any other result code is an error. compareTrue /
-compareFalse map to `true` / `false` (a compare answered with success is
+compareFalse map to `compare_result::value` `true` / `false` (a compare answered with success is
 an error: it is not a valid answer). referral (10) is an error with the
 URIs in `error::referrals`; saslBindInProgress (14) is an error for a
 simple bind and the "continue" signal of `sasl_bind` (#11).

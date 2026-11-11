@@ -289,12 +289,14 @@ class connection
 	// context), referral included (errc::referral, the URIs in
 	// error::referrals; referrals are not chased, see url::parse_list and
 	// chase_compare in referral_chase.hpp).
-	// compare() maps compareTrue / compareFalse to true / false.
+	// compare() maps compareTrue / compareFalse to compare_result::value
+	// true / false, with the response's matchedDN, diagnosticMessage and
+	// controls (its referrals and unlisted stay empty: nothing chases).
 	auto add(add_params request) -> boost::capy::task<result<response>>;
 	auto modify(modify_params request) -> boost::capy::task<result<response>>;
 	auto del(del_params request) -> boost::capy::task<result<response>>;
 	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
-	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
+	auto compare(compare_params request) -> boost::capy::task<result<compare_result>>;
 	// Any extended operation but StartTLS: its name (start_tls_oid) fails
 	// with encode_error before anything is sent; use start_tls(). Who am I?
 	// and Password Modify are free functions (extended_operations.hpp).

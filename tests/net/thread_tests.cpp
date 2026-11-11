@@ -271,7 +271,7 @@ auto connection_worker(ldap::connection &c, tally &t, int rounds) -> capy::task<
 			.has_value());
 		auto same = co_await c.compare(
 		  { .entry = ldap::dn{ "uid=x,ou=people,dc=example,dc=org" }, .attribute = "uid", .value = "x" });
-		t.check(same && *same);
+		t.check(same && same->value);
 		t.check((co_await c.del({ .entry = ldap::dn{ "uid=x,ou=people,dc=example,dc=org" } })).has_value());
 		auto me = co_await ldap::who_am_i(c);
 		t.check(me && *me == "dn:cn=admin,dc=example,dc=org");

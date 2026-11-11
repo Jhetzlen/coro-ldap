@@ -147,7 +147,7 @@ namespace {
 
 	struct compare_op
 	{
-		auto operator()(connection &c, compare_params p) const -> capy::task<result<bool>>
+		auto operator()(connection &c, compare_params p) const -> capy::task<result<compare_result>>
 		{
 			return c.compare(std::move(p));
 		}
@@ -415,6 +415,11 @@ namespace {
 		if (request.follow_referrals) {
 			st.settings.referrals = *request.follow_referrals;
 		}
+		if constexpr (requires { request.follow_references; }) {
+			if (request.follow_references) {
+				st.settings.references = *request.follow_references;
+			}
+		}
 		if (auto u = url::parse(origin.name())) {
 			st.visited.push_back(request_key(*u, request));
 		}
@@ -628,12 +633,12 @@ namespace detail {
 		chase_state st = start(origin, request, std::move(connector), policy, std::move(settings));
 		auto r = co_await origin.compare(request);
 		if (r) {
-			co_return { .value = compare_result{ .value = *r } };
+			co_return { .value = std::move(*r) };
 		}
 		if (r.error().code != errc::referral || !st.settings.referrals) {
 			co_return { .value = std::unexpected(std::move(r.error())), .origin_failed = true };
 		}
-		auto f = co_await follow<compare_params, bool>(st,
+		auto f = co_await follow<compare_params, compare_result>(st,
 		  std::span<const std::pmr::string>(r.error().referrals),
 		  reference_kind::referral,
 		  1,
@@ -646,8 +651,10 @@ namespace detail {
 			co_return { .value = std::unexpected(
 						  with_attempts(f->last_failure ? std::move(*f->last_failure) : std::move(r.error()), st)) };
 		}
-		co_return { .value = compare_result{
-					  .value = f->target->value, .referrals = std::move(st.attempts), .unlisted = st.unlisted } };
+		compare_result out = std::move(f->target->value);
+		out.referrals = std::move(st.attempts);
+		out.unlisted = st.unlisted;
+		co_return { .value = std::move(out) };
 	}
 
 }// namespace detail

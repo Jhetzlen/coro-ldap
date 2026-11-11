@@ -1817,6 +1817,21 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 				"disconnect " + text(s.url()) + " busy_or_unavailable",
 				"connect " + text(s.url()) + " ok" });
 	}
+	SECTION("compare(): the response's diagnosticMessage and controls")
+	{
+		pool_fixture f;
+		ldap::message answered{ 2, ldap::compare_response{ ldap::ldap_result{ 6, "", "cached" } } };
+		answered.controls.emplace_back("1.2.3.4", false, "v");
+		auto &s = f.server({ { answer({ bind_resp(1) }), answer({ answered }) } });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
+		REQUIRE(r.has_value());
+		CHECK(r->value);
+		CHECK(r->diagnostic_message == "cached");
+		REQUIRE(r->controls.size() == 1);
+		CHECK(r->controls[0].type == "1.2.3.4");
+		CHECK(r->referrals.empty());
+	}
 	SECTION("compare(): busy on the first server, the retry goes to the second")
 	{
 		pool_fixture f;
@@ -2474,6 +2489,46 @@ TEST_CASE("client: following continuation references", "[net][client][referral]"
 		CHECK(r->references
 			  == ldap::string_list{ ref_to(b, "ou=b,dc=example,dc=org"), ref_to(b, "ou=c,dc=example,dc=org") });
 		CHECK(b.accepted() == 0);
+	}
+	SECTION("the request's follow_references false: the reference is not followed")
+	{
+		pool_fixture f;
+		auto &b = f.server({});
+		const auto uri = ref_to(b, "ou=b,dc=example,dc=org");
+		auto &a = f.server({ { answer({ bind_resp(1) }),
+		  answer(
+			{ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "John"), ref_msg(2, { uri }), done_msg(2) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .follow_references = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+		auto request = people_search();
+		request.follow_references = false;
+		auto r = finish(f.ioc, f.pool->search(request));
+		REQUIRE(r.has_value());
+		CHECK(r->entries.size() == 1);
+		CHECK_FALSE(r->is_complete());
+		CHECK(r->references == ldap::string_list{ uri });
+		CHECK(b.accepted() == 0);
+	}
+	SECTION("the request's follow_references true: followed though the client's is off")
+	{
+		pool_fixture f;
+		auto &b = f.server({ { answer({ bind_resp(1) }), answer({ entry_msg(2, b_dn, "B"), done_msg(2) }) } });
+		const auto uri = ref_to(b, "ou=b,dc=example,dc=org");
+		auto &a = f.server({ { answer({ bind_resp(1) }),
+		  answer(
+			{ entry_msg(2, "uid=jdoe,ou=people,dc=example,dc=org", "John"), ref_msg(2, { uri }), done_msg(2) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+		auto request = people_search();
+		request.follow_references = true;
+		auto r = finish(f.ioc, f.pool->search(request));
+		REQUIRE(r.has_value());
+		CHECK(r->is_complete());
+		REQUIRE(r->entries.size() == 2);
+		CHECK(r->entries[1] == expected_entry(b_dn, "B"));
+		CHECK(b.accepted() == 1);
 	}
 	SECTION("referral results only: search() returns the references, as without chasing")
 	{

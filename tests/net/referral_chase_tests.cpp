@@ -272,6 +272,26 @@ TEST_CASE("chase_search: nothing is left on the caller's resource once it return
 	w.check_servers();
 }
 
+TEST_CASE("chase_search: the request's follow_references false keeps the references", "[net][referral]")
+{
+	world w;
+	w.add("b.example");
+	w.serve("a.example",
+	  { answer({ entry_msg(1, "uid=jdoe,ou=a,dc=example,dc=org", "A"),
+		ref_msg(1, { "ldap://b.example/ou=b,dc=example,dc=org" }),
+		done_msg(1) }) });
+	auto request = search();
+	request.follow_references = false;
+	auto r = w.run(ldap::chase_search(w.origin.conn, request, w.connector()));
+	REQUIRE(r.has_value());
+	CHECK(r->entries.size() == 1);
+	CHECK(r->references == ldap::string_list{ "ldap://b.example/ou=b,dc=example,dc=org" });
+	CHECK(r->unlisted == 1);
+	CHECK_FALSE(r->is_complete());
+	CHECK(w.asked.empty());
+	w.check_servers();
+}
+
 TEST_CASE("chase_search: limit codes keep the entries", "[net][referral]")
 {
 	world w;
@@ -827,10 +847,15 @@ TEST_CASE("chase_compare: referral results", "[net][referral]")
 	{
 		w.serve(
 		  "a.example", { answer({ referral_compare(1, { "ldap://b.example/uid=jdoe,ou=moved,dc=example,dc=org" }) }) });
-		w.serve("b.example", { answer({ result_msg<ldap::compare_response>(1, 5) }) });
+		auto answered = result_msg<ldap::compare_response>(1, 5, "checked on b");
+		answered.controls.emplace_back("1.2.3.4", false, "b");
+		w.serve("b.example", { answer({ answered }) });
 		auto r = w.run(ldap::chase_compare(w.origin.conn, request, w.connector()));
 		REQUIRE(r.has_value());
 		CHECK_FALSE(r->value);
+		CHECK(r->diagnostic_message == "checked on b");
+		REQUIRE(r->controls.size() == 1);
+		CHECK(r->controls[0].type == "1.2.3.4");
 		CHECK(outcomes(r->referrals) == std::vector{ referral_outcome::followed });
 		REQUIRE(w.servers["b.example"]->log.received.size() == 1);
 		const auto &sent = std::get<ldap::compare_request>(w.servers["b.example"]->log.received[0].op);

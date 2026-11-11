@@ -204,7 +204,7 @@ auto connection::modify_dn(modify_dn_params request) -> capy::task<result<respon
 
 namespace {
 
-	auto compare_impl(core_ref self, compare_params request) -> capy::task<result<bool>>
+	auto compare_impl(core_ref self, compare_params request) -> capy::task<result<compare_result>>
 	{
 		const std::string context = op_context("compare", request.entry);
 		if (!self) {
@@ -225,18 +225,21 @@ namespace {
 			co_return std::unexpected(std::move(m.error()));
 		}
 		const ldap_result &r = result_of(*m);
-		if (r.result_code == std::to_underlying(errc::compare_true)) {
-			co_return true;
+		const bool is_true = r.result_code == std::to_underlying(errc::compare_true);
+		if (!is_true && r.result_code != std::to_underlying(errc::compare_false)) {
+			co_return std::unexpected(r.to_error(context));// success (0) is not a valid answer either
 		}
-		if (r.result_code == std::to_underlying(errc::compare_false)) {
-			co_return false;
-		}
-		co_return std::unexpected(r.to_error(context));// success (0) is not a valid answer either
+		compare_result out;
+		out.value = is_true;
+		out.matched_dn.assign(r.matched_dn);
+		out.diagnostic_message.assign(r.diagnostic_message);
+		out.controls.assign(m->controls.begin(), m->controls.end());
+		co_return out;
 	}
 
 }// namespace
 
-auto connection::compare(compare_params request) -> capy::task<result<bool>>
+auto connection::compare(compare_params request) -> capy::task<result<compare_result>>
 {
 	const core_ref self(core_);
 	return detail::on_strand(self, compare_impl(self, std::move(request)));

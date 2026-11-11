@@ -781,9 +781,11 @@ TEST_CASE("integration: add, modify, compare, rename and delete", "[integration]
 		  ldap::mod::replace("cn", { "Renamed Integration" }),
 		  ldap::mod::increment("uidNumber", "5") } }))
 		.has_value());
-	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "mail", .value = "b@example.org" })) == true);
-	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "mail", .value = "a@example.org" })) == false);
-	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "uidNumber", .value = "505" })) == true);
+	CHECK(
+	  finish(ioc, c.compare({ .entry = entry, .attribute = "mail", .value = "b@example.org" })).value().value == true);
+	CHECK(
+	  finish(ioc, c.compare({ .entry = entry, .attribute = "mail", .value = "a@example.org" })).value().value == false);
+	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "uidNumber", .value = "505" })).value().value == true);
 
 	const ldap::dn renamed = *ldap::dn::parse("uid=" + name + "-r,ou=people,dc=example,dc=org");
 	REQUIRE(finish(ioc, c.modify_dn({ .entry = entry, .new_rdn = renamed.rdns().front() })).has_value());
@@ -833,8 +835,8 @@ TEST_CASE("integration: modify DN to another OU and back, then rename", "[integr
 	const ldap::dn renamed = people.child(new_rdn);
 	REQUIRE(finish(ioc, c.modify_dn({ .entry = entry, .new_rdn = new_rdn, .delete_old_rdn = false })).has_value());
 	CHECK_FALSE(exists(entry));
-	CHECK(finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name })) == true);
-	CHECK(finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name + "-r" })) == true);
+	CHECK(finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name })).value().value == true);
+	CHECK(finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name + "-r" })).value().value == true);
 	auto taken = finish(ioc, c.modify_dn({ .entry = renamed, .new_rdn = ldap::rdn{ "uid=user001" } }));// a fixture user
 	REQUIRE_FALSE(taken.has_value());
 	CHECK(taken.error().code == ldap::errc::entry_already_exists);
@@ -899,7 +901,7 @@ TEST_CASE("integration: assertion and pre/post-read controls", "[integration][co
 		.controls = { ldap::assertion{ .filter = attr("sn") == before_sn } } }));
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == ldap::errc::assertion_failed);
-	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "sn", .value = after_sn })) == true);
+	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "sn", .value = after_sn })).value().value == true);
 	// On a search the assertion applies to the base entry.
 	auto search_refused = finish(ioc,
 	  c.search({ .base = entry,
@@ -1119,7 +1121,8 @@ TEST_CASE("integration: the relax rules control", "[integration][controls]")
 		.changes = { ldap::mod::replace("createTimestamp", { migrated }) },
 		.controls = { ldap::relax_rules{} } }));
 	REQUIRE(relaxed.has_value());
-	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "createTimestamp", .value = migrated })) == true);
+	CHECK(finish(ioc, c.compare({ .entry = entry, .attribute = "createTimestamp", .value = migrated })).value().value
+		  == true);
 
 	REQUIRE(finish(ioc, c.del({ .entry = entry })).has_value());
 }
@@ -1763,8 +1766,8 @@ TEST_CASE("integration: the sync connection", "[integration][sync]")
 		CHECK(again.error().code == ldap::cond::already_exists);
 		REQUIRE(
 		  c.modify({ .object = entry, .changes = { ldap::mod::add("mail", { "sync@example.org" }) } }).has_value());
-		CHECK(c.compare({ .entry = entry, .attribute = "mail", .value = "sync@example.org" }) == true);
-		CHECK(c.compare({ .entry = entry, .attribute = "sn", .value = "Zoe" }) == false);
+		CHECK(c.compare({ .entry = entry, .attribute = "mail", .value = "sync@example.org" }).value().value == true);
+		CHECK(c.compare({ .entry = entry, .attribute = "sn", .value = "Zoe" }).value().value == false);
 		auto pw = ldap::sync::password_modify(c, { .user = std::string(entry.to_string()) });
 		REQUIRE(pw.has_value());
 		CHECK(pw->has_value());
@@ -2793,11 +2796,7 @@ template<class D> auto threaded_worker(D &d, std::string name, int rounds, std::
 				   { "sn", { "T" } } } }))
 			.has_value());
 		auto same = co_await d.compare({ .entry = entry, .attribute = "cn", .value = "T" });
-		if constexpr (std::is_same_v<decltype(same), ldap::result<bool>>) {
-			check(same && *same);
-		} else {
-			check(same && same->value);
-		}
+		check(same && same->value);
 		check((co_await d.modify({ .object = entry, .changes = { ldap::mod::replace("cn", { "U" }) } })).has_value());
 		check((co_await d.del({ .entry = entry })).has_value());
 	}

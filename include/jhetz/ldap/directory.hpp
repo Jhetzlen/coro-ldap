@@ -24,13 +24,15 @@ class client;
 // The protocol operations a directory runs, with connection's names and
 // results.
 template<class D>
-concept directory = requires(D &d, search_params s, add_params a, modify_params m, del_params r, modify_dn_params n) {
-	{ d.search(std::move(s)) } -> std::same_as<boost::capy::task<result<search_result>>>;
-	{ d.add(std::move(a)) } -> std::same_as<boost::capy::task<result<response>>>;
-	{ d.modify(std::move(m)) } -> std::same_as<boost::capy::task<result<response>>>;
-	{ d.del(std::move(r)) } -> std::same_as<boost::capy::task<result<response>>>;
-	{ d.modify_dn(std::move(n)) } -> std::same_as<boost::capy::task<result<response>>>;
-};
+concept directory =
+  requires(D &d, search_params s, add_params a, modify_params m, del_params r, modify_dn_params n, compare_params c) {
+	  { d.search(std::move(s)) } -> std::same_as<boost::capy::task<result<search_result>>>;
+	  { d.add(std::move(a)) } -> std::same_as<boost::capy::task<result<response>>>;
+	  { d.modify(std::move(m)) } -> std::same_as<boost::capy::task<result<response>>>;
+	  { d.del(std::move(r)) } -> std::same_as<boost::capy::task<result<response>>>;
+	  { d.modify_dn(std::move(n)) } -> std::same_as<boost::capy::task<result<response>>>;
+	  { d.compare(std::move(c)) } -> std::same_as<boost::capy::task<result<compare_result>>>;
+  };
 
 namespace detail {
 	// The steps of load_schema.

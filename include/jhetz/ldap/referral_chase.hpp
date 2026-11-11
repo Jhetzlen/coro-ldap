@@ -21,7 +21,9 @@
 //
 // Referral results (origin or target fails with errc::referral): chased
 // recursively, unless the request's follow_referrals is false (the
-// referral result is then the call's errc::referral). If no URI answers, the call fails with the last target or
+// referral result is then the call's errc::referral; a search_params
+// follow_references false likewise leaves continuation references in
+// search_result::references, counted in `unlisted`). If no URI answers, the call fails with the last target or
 // connector error, else with the original referral error; its context counts
 // the outcomes ("referral chase (URIs: 1 failed, 2 skipped_policy)") instead
 // of an attempt list, and the original referral error keeps its URIs in
