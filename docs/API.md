@@ -1171,8 +1171,14 @@ package component `ad`:
   attribute or one with a range option is `std::errc::invalid_argument`
   before sending; a window that does not continue the previous one, the
   plain attribute after a window or no entry is
-  `client_errc::unexpected_response`; a malformed range is
-  `client_errc::decode_error`.
+  `client_errc::unexpected_response`, as is an entry with several
+  attributes none of which is `attribute`; a malformed range is
+  `client_errc::decode_error`. The returned attribute matches when its
+  description without the range option is `attribute` (ignoring case);
+  otherwise the entry's only attribute is taken as the server's name for
+  an OID or alias (`2.5.4.31` answered as `member`), and the following
+  windows ask for that name. With a step, name the attribute as the
+  server does: Samba ignores a range option on a numeric OID.
 - `jhetz/ldap/ad/dirsync.hpp` (`jhetz::ldap_ad`): `ad::dirsync(c, request,
   options = {}, mr)`, DirSync polling (MS-ADTS 3.1.1.3.4.1.3): runs the
   search `request` (its base the root of a naming context) with a DirSync

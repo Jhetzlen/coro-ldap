@@ -48,6 +48,15 @@ auto window(std::int32_t id, std::string_view name, const std::vector<std::strin
 	return s;
 }
 
+// One entry for `group` without attributes, then the SearchResultDone.
+auto bare(std::int32_t id) -> step
+{
+	step s;
+	s.replies.push_back(bytes_of(ldap::message{ id, ldap::search_result_entry{ "cn=staff,dc=example,dc=org", {} } }));
+	s.replies.push_back(bytes_of(done_msg(id)));
+	return s;
+}
+
 auto asked_for(const ldap::message &m) -> std::string
 {
 	const auto *s = std::get_if<ldap::search_request>(&m.op);
@@ -101,10 +110,57 @@ TEST_CASE("ad::read_all_values: the plain attribute is every value", "[net][ad][
 TEST_CASE("ad::read_all_values: no such attribute is no values", "[net][ad][range]")
 {
 	mock_ldap m;
-	m.serve({ window(1, "cn", { "staff" }) });
+	m.serve({ bare(1) });
 	auto r = m.run(ldap::ad::read_all_values(m.conn, group, "member"));
 	REQUIRE(r.has_value());
 	CHECK(r->empty());
+	m.check_server();
+}
+
+TEST_CASE("ad::read_all_values: the server names the attribute its own way", "[net][ad][range]")
+{
+	mock_ldap m;
+	SECTION("an OID answered as the plain attribute")
+	{
+		m.serve({ window(1, "member", values(0, 3)) });
+		auto r = m.run(ldap::ad::read_all_values(m.conn, group, "2.5.4.31"));
+		REQUIRE(r.has_value());
+		CHECK(as_strings(*r) == values(0, 3));
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(asked_for(m.log.received[0]) == "2.5.4.31");
+	}
+	SECTION("an OID answered in windows: the next ones under the server's name")
+	{
+		m.serve({ window(1, "member;range=0-2", values(0, 2)), window(2, "member;range=3-*", values(3, 4)) });
+		auto r = m.run(ldap::ad::read_all_values(m.conn, group, "2.5.4.31"));
+		REQUIRE(r.has_value());
+		CHECK(as_strings(*r) == values(0, 4));
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(asked_for(m.log.received[1]) == "member;range=3-*");
+	}
+	SECTION("an alias with a step")
+	{
+		m.serve({ window(1, "cn;range=0-1", { "a", "b" }), window(2, "cn;range=2-*", { "c" }) });
+		auto r = m.run(ldap::ad::read_all_values(m.conn, group, "commonName", { .step = 2 }));
+		REQUIRE(r.has_value());
+		CHECK(as_strings(*r) == std::vector<std::string>{ "a", "b", "c" });
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(asked_for(m.log.received[0]) == "commonName;range=0-1");
+		CHECK(asked_for(m.log.received[1]) == "cn;range=2-3");
+	}
+	SECTION("several attributes, none of them the one asked for")
+	{
+		step s;
+		s.replies.push_back(bytes_of(ldap::message{ 1,
+		  ldap::search_result_entry{ "cn=staff,dc=example,dc=org",
+			{ ldap::partial_attribute{ "cn", { "x" } }, ldap::partial_attribute{ "sn", { "y" } } } } }));
+		s.replies.push_back(bytes_of(done_msg(1)));
+		m.serve({ std::move(s) });
+		auto r = m.run(ldap::ad::read_all_values(m.conn, group, "name"));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::unexpected_response);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("none of the attributes returned is name"));
+	}
 	m.check_server();
 }
 
@@ -116,7 +172,7 @@ TEST_CASE("ad::read_all_values: a step asks for windows of that size", "[net][ad
 	m.serve({ window(1, "member;range=0-3", values(0, 3)),
 	  window(2, "member;range=4-5", values(4, 5)),
 	  window(3, "member;range=6-9", values(6, 9)),
-	  window(4, "cn", { "staff" }) });
+	  bare(4) });
 	auto r = m.run(ldap::ad::read_all_values(m.conn, group, "member", { .step = 4 }));
 	REQUIRE(r.has_value());
 	CHECK(as_strings(*r) == concat({ values(0, 3), values(4, 5), values(6, 9) }));

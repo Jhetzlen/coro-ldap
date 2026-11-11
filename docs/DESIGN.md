@@ -3325,7 +3325,16 @@ not enforce MaxValRange; a window the server cuts shorter is followed
 from where it ended. The answer ends the read when it holds the plain
 attribute (the first answer only), a window ending with `*`, or no such
 attribute: Samba drops the attribute when a window starts past the last
-value, which happens when the count is a multiple of the step. Every
+value, which happens when the count is a multiple of the step. A
+server answers under its own name for the type, not the requested form
+(Samba and AD answer `2.5.4.31` as `member`, slapd an alias with the
+primary name), and matching that needs the server schema; since the
+search asks for one attribute of one entry, an entry with exactly one
+attribute is the answer whatever its name, and the following windows ask
+for the server's name (Samba ignores `2.5.4.31;range=0-2`, so a step
+needs the server's name from the start). An entry with several
+attributes uses the one named as asked (case-insensitive, range option
+removed) and is refused when none is. Every
 other shape is refused rather than guessed at (a window not starting
 where the previous one ended, the plain attribute after a window:
 `unexpected_response`; a malformed range: `decode_error`), so the values
