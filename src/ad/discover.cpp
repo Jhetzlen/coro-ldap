@@ -1,4 +1,5 @@
 #include "jhetz/ldap/ad/discover.hpp"
+#include "jhetz/ldap/attribute.hpp"
 
 #include <unicode/uidna.h>
 #include <unicode/utypes.h>
@@ -115,8 +116,8 @@ namespace {
 				return std::unexpected(detail::with_context(std::move(records.error()), where));
 			}
 			for (auto &r : order_srv(std::move(*records), random_engine())) {
-				const bool listed = std::ranges::any_of(
-				  ordered, [&](const srv_record &o) { return o.target == r.target && o.port == r.port; });
+				const bool listed = std::ranges::any_of(ordered,
+				  [&](const srv_record &o) { return detail::iequals(o.target, r.target) && o.port == r.port; });
 				if (r.target != "." && !r.target.empty() && !listed) {
 					ordered.push_back(std::move(r));
 				}
@@ -174,18 +175,16 @@ auto resolve_srv(std::string_view name) -> result<std::vector<srv_record>>
 {
 	const std::string query(name);
 	const std::string context = "res_nquery SRV " + query;
+	// Closes a state res_ninit initialized.
 	struct state_closer
 	{
-		void operator()(res_state s) const noexcept
-		{
-			res_nclose(s);
-			delete s;// NOLINT(cppcoreguidelines-owning-memory): allocated below for res_ninit
-		}
+		void operator()(res_state s) const noexcept { res_nclose(s); }
 	};
-	const std::unique_ptr<struct __res_state, state_closer> st(new (struct __res_state){});
-	if (res_ninit(st.get()) != 0) {
+	const auto storage = std::make_unique<struct __res_state>();
+	if (res_ninit(storage.get()) != 0) {
 		return fail(std::make_error_code(std::errc::io_error), context + ": res_ninit failed");
 	}
+	const std::unique_ptr<struct __res_state, state_closer> st(storage.get());
 	std::vector<unsigned char> answer(NS_MAXMSG);
 	const int n =
 	  res_nquery(st.get(), query.c_str(), ns_c_in, ns_t_srv, answer.data(), static_cast<int>(answer.size()));

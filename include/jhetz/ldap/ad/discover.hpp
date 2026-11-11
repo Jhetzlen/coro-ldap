@@ -102,7 +102,8 @@ struct discover_options
 // The LDAP URLs of `domain`'s domain controllers, from the SRV records of
 // _ldap._tcp.dc._msdcs.<domain> (with a site, first those of
 // _ldap._tcp.<site>._sites.dc._msdcs.<domain>), each list in RFC 2782 order,
-// without duplicates or the "." target. `domain` and `site` may be
+// without duplicates (the same port and a target equal ignoring ASCII case,
+// RFC 4343) or the "." target. `domain` and `site` may be
 // internationalized (UTF-8): they are converted to A-labels (UTS #46).
 // Fails with std::errc::invalid_argument for an empty domain,
 // client_errc::string_prep_failed for a name UTS #46 refuses,

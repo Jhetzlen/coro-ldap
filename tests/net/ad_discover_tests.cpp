@@ -6,12 +6,20 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <map>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#ifndef _WIN32
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace ldap = jhetz::ldap;
 namespace ad = jhetz::ldap::ad;
@@ -112,6 +120,21 @@ TEST_CASE("ad::discover_domain_controllers: URLs from the SRV records", "[ad][di
 	CHECK(texts(*tls) == std::vector<std::string>{ "ldaps://dc1.example.org:636", "ldaps://dc2.example.org:636" });
 }
 
+TEST_CASE("ad::discover_domain_controllers: duplicate targets ignore case", "[ad][discover]")
+{
+	fake_dns dns{ .zone = { { "_ldap._tcp.berlin._sites.dc._msdcs.example.org",
+							  { { .port = 389, .target = "DC1.Example.ORG" } } },
+					{ "_ldap._tcp.dc._msdcs.example.org",
+					  { { .port = 389, .target = "dc1.example.org" },
+						{ .port = 3268, .target = "dc1.example.org" },
+						{ .port = 389, .target = "dc2.example.org" },
+						{ .port = 389, .target = "DC2.EXAMPLE.ORG" } } } } };
+	auto r = ad::discover_domain_controllers("example.org", { .site = "berlin", .resolver = dns.resolver() });
+	REQUIRE(r.has_value());
+	REQUIRE(r->size() == 3);
+	CHECK(texts(*r).front() == "ldap://DC1.Example.ORG:389");
+}
+
 TEST_CASE("ad::discover_domain_controllers: the site's DCs first", "[ad][discover]")
 {
 	// UTS #46 maps the names to lower case.
@@ -203,3 +226,44 @@ TEST_CASE("ad::resolve_srv: a name that does not exist", "[ad][discover][dns]")
 		CHECK(r->empty());
 	}
 }
+
+#ifndef _WIN32
+TEST_CASE("ad::resolve_srv: a failing res_ninit leaves descriptor 0 open", "[ad][discover][dns]")
+{
+	// In a child: descriptor 0 open, no free descriptor below RLIMIT_NOFILE,
+	// so res_ninit cannot open resolv.conf. Exit status 0: fd 0 still open,
+	// 1: closed, 2: res_ninit did not fail.
+	const pid_t pid = fork();
+	REQUIRE(pid >= 0);
+	if (pid == 0) {
+		struct stat st{};
+		std::array<int, 2> pipe_fds{};
+		if (fstat(0, &st) != 0 && (pipe(pipe_fds.data()) != 0 || pipe_fds[0] != 0)) {
+			_exit(3);
+		}
+		const int lowest_free = dup(0);
+		if (lowest_free < 0) {
+			_exit(3);
+		}
+		close(lowest_free);
+		rlimit limit{};
+		getrlimit(RLIMIT_NOFILE, &limit);
+		limit.rlim_cur = static_cast<rlim_t>(lowest_free);
+		if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
+			_exit(3);
+		}
+		auto r = ad::resolve_srv("_ldap._tcp.dc._msdcs.coro-ldap.invalid");
+		if (r || !std::string(r.error().context).contains("res_ninit")) {
+			_exit(2);
+		}
+		_exit(fstat(0, &st) != 0 ? 1 : 0);
+	}
+	int status = 0;
+	REQUIRE(waitpid(pid, &status, 0) == pid);
+	REQUIRE(WIFEXITED(status));
+	if (WEXITSTATUS(status) == 2) {
+		SKIP("res_ninit did not need a new descriptor here");
+	}
+	CHECK(WEXITSTATUS(status) == 0);
+}
+#endif
