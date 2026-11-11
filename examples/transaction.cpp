@@ -19,7 +19,7 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 		std::cerr << bound.error().message() << '\n';
 		co_return 1;
 	}
-	auto t = co_await c->begin_transaction();
+	auto t = co_await ldap::transaction::begin(*c);
 	if (!t) {
 		std::cerr << t.error().message() << '\n';
 		co_return 1;

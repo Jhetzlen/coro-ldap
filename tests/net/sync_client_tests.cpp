@@ -373,7 +373,7 @@ TEST_CASE("sync client: a transaction on an exclusive lease", "[net][sync][clien
 		ldap::sync::client pool(options_for(srv.url()));
 		auto l = pool.acquire_exclusive();
 		REQUIRE(l.has_value());
-		auto t = l->begin_transaction();
+		auto t = ldap::sync::transaction::begin(*l);
 		REQUIRE(t.has_value());
 		CHECK(t->identifier() == "t1");
 		REQUIRE(t->del({ .entry = jdoe_dn }).has_value());
@@ -734,11 +734,15 @@ TEST_CASE("sync client: a transaction outlives its temporary lease and the clien
 	std::optional<ldap::sync::transaction> t;
 	{
 		ldap::sync::client pool({ .servers = { srv.url() } });
-		// The lease is released at the end of the statement; the transaction
-		// shares the client's core, so it keeps the I/O thread.
-		auto made = pool.acquire()->begin_transaction();
-		REQUIRE(made.has_value());
-		t.emplace(std::move(*made));
+		// The lease is released first; the transaction shares the client's
+		// core, so it keeps the I/O thread.
+		{
+			auto l = pool.acquire();
+			REQUIRE(l.has_value());
+			auto made = ldap::sync::transaction::begin(*l);
+			REQUIRE(made.has_value());
+			t.emplace(std::move(*made));
+		}
 		CHECK(t->is_open());
 	}// closes the connection; the transaction keeps the I/O thread
 	auto after = t->commit();

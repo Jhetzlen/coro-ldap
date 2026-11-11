@@ -314,12 +314,15 @@ class connection
 	// of each update). On success end_transaction() returns the updates'
 	// response controls (end_transaction_result). An answer that does not
 	// follow section 2 (a responseName, no identifier, a malformed
-	// txnEndRes) fails with decode_error. begin_transaction() is
+	// txnEndRes) fails with decode_error. Before sending Start Transaction,
+	// start_transaction() waits for the answers still due (a destroyed
+	// transaction's abort, a destroyed paged_search's release), within the
+	// default timeout, then sends it anyway; a stop while waiting fails with
+	// cond::canceled, nothing sent. transaction::begin() is
 	// start_transaction() wrapped in an ldap::transaction.
 	auto start_transaction(extended_controls controls = {}) -> boost::capy::task<result<std::string>>;
 	auto end_transaction(std::string identifier, bool commit = true)
 	  -> boost::capy::task<result<end_transaction_result>>;
-	auto begin_transaction(extended_controls controls = {}) -> boost::capy::task<result<transaction>>;
 
 	// StartTLS (RFC 4511 section 4.14): upgrades a plain ldap:// connection to
 	// TLS in place, verified as ldaps:// would be (`options`; the name checked

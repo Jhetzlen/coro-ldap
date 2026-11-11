@@ -940,7 +940,7 @@ TEST_CASE("connection: operations on a moved-from connection", "[net][connection
 	refused(m.run(ldap::search_paged(c, { .base = ldap::dn{} }, 10)), "search \"\"");
 	refused(m.run(c.start_transaction()), "start transaction");
 	refused(m.run(c.end_transaction(std::string("txn"))), "end transaction");
-	refused(m.run(c.begin_transaction()), "start transaction");
+	refused(m.run(ldap::transaction::begin(c)), "start transaction");
 	refused(m.run(ldap::reset_password(c, who, "new")),
 	  "reset password uid=jdoe,ou=people,dc=example,dc=org: password modify (RFC 3062)");
 	refused(m.run(ldap::password_modify(c, {})), "password modify");

@@ -224,6 +224,13 @@ class transaction
 	auto operator=(const transaction &) -> transaction & = delete;
 	~transaction();
 
+	// ldap::transaction::begin() on the connection of `c` or of the lease
+	// `l`, on the I/O thread: Start Transaction, once the answers still due
+	// have arrived.
+	[[nodiscard]] static auto begin(connection &c, extended_controls controls = {}) -> result<transaction>;
+	template<bool Exclusive>
+	[[nodiscard]] static auto begin(basic_lease<Exclusive> &l, extended_controls controls = {}) -> result<transaction>;
+
 	// A copy of ldap::transaction::identifier(); empty once moved from.
 	[[nodiscard]] auto identifier() const -> std::string;
 	[[nodiscard]] auto is_open() const -> bool;
@@ -236,8 +243,10 @@ class transaction
 	[[nodiscard]] auto abort() -> result<void>;
 
   private:
-	template<class> friend class detail::connection_api;
 	transaction(std::shared_ptr<const detail::io_thread> io, std::unique_ptr<ldap::transaction> t) noexcept;
+
+	// begin() on the facade `d` (a sync::connection or lease).
+	template<class D> static auto begin_on(D &d, extended_controls controls) -> result<transaction>;
 
 	// Ends the ldap::transaction on the I/O thread, aborting it first if
 	// still open.
@@ -342,15 +351,6 @@ namespace detail {
 		[[nodiscard]] auto end_transaction(std::string identifier, bool commit = true) -> result<end_transaction_result>
 		{
 			return self().call([&](ldap::connection &c) { return c.end_transaction(std::move(identifier), commit); });
-		}
-		// start_transaction() wrapped in a sync::transaction (below).
-		[[nodiscard]] auto begin_transaction(extended_controls controls = {}) -> result<transaction>
-		{
-			auto t = self().call([&](ldap::connection &c) { return detail::make_transaction(c, std::move(controls)); });
-			if (!t) {
-				return std::unexpected(std::move(t.error()));
-			}
-			return transaction(self().runner(), std::move(*t));
 		}
 
 		[[nodiscard]] auto unbind() -> result<void>
@@ -632,6 +632,7 @@ namespace detail {
 	struct facade_access
 	{
 		template<class D, class F> static auto call(D &d, const F &make_task) { return d.call(make_task); }
+		template<class D> static auto runner(const D &d) { return d.runner(); }
 	};
 
 	// True for the types that must be destroyed on their connection's I/O
@@ -649,6 +650,27 @@ namespace detail {
 	template<class T, class Del> inline constexpr bool io_thread_bound<std::unique_ptr<T, Del>> = io_thread_bound<T>;
 	template<class T> inline constexpr bool io_thread_bound<std::shared_ptr<T>> = io_thread_bound<T>;
 }// namespace detail
+
+template<class D> auto transaction::begin_on(D &d, extended_controls controls) -> result<transaction>
+{
+	auto t = detail::facade_access::call(
+	  d, [&](ldap::connection &c) { return detail::make_transaction(c, std::move(controls)); });
+	if (!t) {
+		return std::unexpected(std::move(t.error()));
+	}
+	return transaction(detail::facade_access::runner(d), std::move(*t));
+}
+
+inline auto transaction::begin(connection &c, extended_controls controls) -> result<transaction>
+{
+	return begin_on(c, std::move(controls));
+}
+
+template<bool Exclusive>
+auto transaction::begin(basic_lease<Exclusive> &l, extended_controls controls) -> result<transaction>
+{
+	return begin_on(l, std::move(controls));
+}
 
 // Runs make_task(a, args...) on the I/O thread of `d` and waits for the
 // task it returns, a capy::task<result<T>>; returns its result<T>. `a` is

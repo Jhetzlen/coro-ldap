@@ -13,10 +13,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <chrono>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
+#include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -134,7 +137,7 @@ TEST_CASE("transaction: deferred updates and their response controls at commit",
 	  answer({ result_msg<ldap::modify_response>(3) }),
 	  answer({ ended(4, 0, { std::nullopt, { ldap::update_controls{ 2, { post_read_entry() } } } }) }) });
 
-	auto t = m.run(m.conn.begin_transaction());
+	auto t = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(t.has_value());
 	CHECK(t->is_open());
 	CHECK(t->identifier() == txn_id);
@@ -221,7 +224,7 @@ TEST_CASE("transaction: a failed commit names the update at fault", "[net][trans
 	  answer({ started(7) }),
 	  answer({ ended(8, 80, {}) }) });
 
-	auto t = m.run(m.conn.begin_transaction());
+	auto t = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(t.has_value());
 	REQUIRE(m.run(t->add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } })).has_value());
 	REQUIRE(m.run(t->modify_dn({ .entry = jdoe, .new_rdn = ldap::rdn{ "uid=john" } })).has_value());
@@ -232,12 +235,12 @@ TEST_CASE("transaction: a failed commit names the update at fault", "[net][trans
 	CHECK_FALSE(t->is_open());
 
 	// An id this transaction did not send, and no id at all.
-	auto u = m.run(m.conn.begin_transaction());
+	auto u = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(u.has_value());
 	auto unknown = m.run(u->commit());
 	REQUIRE_FALSE(unknown.has_value());
 	CHECK(unknown.error().context == "commit transaction: update message 9");
-	auto v = m.run(m.conn.begin_transaction());
+	auto v = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(v.has_value());
 	auto plain = m.run(v->commit());
 	REQUIRE_FALSE(plain.has_value());
@@ -254,7 +257,7 @@ TEST_CASE("transaction: an empty identifier", "[net][transaction]")
 	  answer({ result_msg<ldap::del_response>(2) }),
 	  answer({ ended(3, 0, {}) }) });
 
-	auto t = m.run(m.conn.begin_transaction());
+	auto t = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(t.has_value());
 	CHECK(t->is_open());
 	CHECK(t->identifier().empty());
@@ -275,7 +278,7 @@ TEST_CASE("transaction: abort, and a settled transaction refuses more", "[net][t
 	mock_ldap m;
 	m.serve({ answer({ started(1) }), answer({ result_msg<ldap::del_response>(2) }), answer({ ended(3, 0, {}) }) });
 
-	auto t = m.run(m.conn.begin_transaction());
+	auto t = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(t.has_value());
 	REQUIRE(m.run(t->del({ .entry = jdoe })).has_value());
 	auto a = m.run(t->abort());
@@ -309,7 +312,7 @@ TEST_CASE("transaction: destroyed while open, it is aborted without waiting", "[
 	  answer({ ended(3, 0, {}) }),// the abort's answer: dropped
 	  answer({ ext_resp(4, 0, std::nullopt, "dn:cn=admin,dc=example,dc=org") }) });
 	{
-		auto t = m.run(m.conn.begin_transaction());
+		auto t = m.run(ldap::transaction::begin(m.conn));
 		REQUIRE(t.has_value());
 		ldap::transaction moved = std::move(*t);
 		CHECK_FALSE(t->is_open());// moved from
@@ -345,7 +348,7 @@ TEST_CASE("transaction: rejected updates leave it open", "[net][transaction]")
 	  answer({ result_msg<ldap::add_response>(3) }),
 	  answer({ ended(4, 0, {}) }) });
 
-	auto t = m.run(m.conn.begin_transaction());
+	auto t = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(t.has_value());
 	auto refused = m.run(t->add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } }));
 	REQUIRE_FALSE(refused.has_value());
@@ -395,7 +398,7 @@ TEST_CASE("transaction: answers RFC 5805 section 2 does not allow", "[net][trans
 	  answer({ started(8) }),
 	  answer({ ext_resp(9, 32, std::nullopt, "not BER") }) });
 
-	auto unsupported = m.run(m.conn.begin_transaction());
+	auto unsupported = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE_FALSE(unsupported.has_value());
 	CHECK(unsupported.error().code == errc::protocol_error);
 	CHECK(unsupported.error().context == "start transaction");
@@ -408,19 +411,19 @@ TEST_CASE("transaction: answers RFC 5805 section 2 does not allow", "[net][trans
 	CHECK(
 	  no_id.error().context == "start transaction: the response has no transaction identifier (RFC 5805 section 2.1)");
 
-	auto t = m.run(m.conn.begin_transaction());
+	auto t = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(t.has_value());
 	auto end_named = m.run(t->commit());
 	REQUIRE_FALSE(end_named.has_value());
 	CHECK(end_named.error().context == "commit transaction: the response has a responseName (RFC 5805 section 2.3)");
-	auto u = m.run(m.conn.begin_transaction());
+	auto u = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(u.has_value());
 	auto malformed = m.run(u->commit());
 	REQUIRE_FALSE(malformed.has_value());
 	CHECK(malformed.error().code == client_errc::decode_error);
 	CHECK(malformed.error().context.starts_with("commit transaction: txnEndRes: "));
 	// A refusal with a malformed txnEndRes keeps the server's code.
-	auto v = m.run(m.conn.begin_transaction());
+	auto v = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(v.has_value());
 	auto refused = m.run(v->commit());
 	REQUIRE_FALSE(refused.has_value());
@@ -439,7 +442,7 @@ TEST_CASE("transaction: an End Transaction never sent leaves it to the destructo
 	  answer({ started(4) }),
 	  answer({ ended(5, 0, {}) }) });
 	{
-		auto t = m.run(m.conn.begin_transaction());
+		auto t = m.run(ldap::transaction::begin(m.conn));
 		REQUIRE(t.has_value());
 		std::stop_source stop;
 		stop.request_stop();
@@ -456,7 +459,7 @@ TEST_CASE("transaction: an End Transaction never sent leaves it to the destructo
 
 	// Once the server answered, the destructor sends nothing more.
 	{
-		auto t = m.run(m.conn.begin_transaction());
+		auto t = m.run(ldap::transaction::begin(m.conn));
 		REQUIRE(t.has_value());
 		REQUIRE(m.run(t->abort()).has_value());
 	}
@@ -468,6 +471,89 @@ TEST_CASE("transaction: an End Transaction never sent leaves it to the destructo
 	CHECK(end_request_of(m.log.received[4]) == ldap::end_transaction_request{ false, txn_id });
 }
 
+namespace {
+
+auto send_reply(net::transport t, ldap::message m) -> capy::task<void>
+{
+	const auto bytes = bytes_of(m);
+	if (auto w = co_await net::write_bytes(t, std::as_bytes(std::span(bytes))); !w) {
+		throw std::runtime_error("write: " + std::string(w.error().message()));
+	}
+}
+
+// Destroys a started transaction with `drop(m, t)` and begins another at
+// once: the Start Transaction goes out only after the destroyed one's abort
+// is answered.
+template<class Drop> void drop_then_begin(Drop drop)
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }),
+	  step{},// the destructor's abort, answered from outside the script
+	  answer({ started(3) }),
+	  answer({ ended(4, 0, {}) }) });
+	auto t = m.run(ldap::transaction::begin(m.conn));
+	REQUIRE(t.has_value());
+	drop(m, *t);
+	outcome<ldap::result<ldap::transaction>> next;
+	spawn(m.ioc, ldap::transaction::begin(m.conn), next);
+	drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+	m.ioc.run_for(std::chrono::milliseconds(50));
+	m.ioc.restart();
+	CHECK(m.log.received.size() == 2);
+	CHECK_FALSE(next.done());
+
+	outcome<void> sent;
+	spawn(m.ioc, send_reply(m.server_end(), ended(2, 0, {})), sent);
+	drive_until(m.ioc, [&next] { return next.done(); });
+	auto &u = next.get();
+	REQUIRE(u.has_value());
+	CHECK(u->is_open());
+	REQUIRE(m.run(u->abort()).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 4);
+	CHECK(end_request_of(m.log.received[1]) == ldap::end_transaction_request{ false, txn_id });
+	const auto *start = std::get_if<ldap::extended_request>(&m.log.received[2].op);
+	REQUIRE(start != nullptr);
+	CHECK(start->request_name == ldap::start_transaction_oid);
+}
+
+}// namespace
+
+TEST_CASE("transaction: begin waits for a destroyed transaction's abort", "[net][transaction]")
+{
+	SECTION("destroyed on the connection's strand")
+	{
+		drop_then_begin([](mock_ldap &m, ldap::transaction &t) {
+			run_on(m.ioc, m.conn.executor(), [&t] { t = ldap::transaction{}; });
+			CHECK(m.conn.outstanding() == 1);
+		});
+	}
+	SECTION("destroyed off the strand")
+	{
+		drop_then_begin([](mock_ldap &, ldap::transaction &t) { t = ldap::transaction{}; });
+	}
+}
+
+TEST_CASE("transaction: a stop while begin waits for the answers due sends nothing", "[net][transaction][cancel]")
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }), step{} });
+	auto t = m.run(ldap::transaction::begin(m.conn));
+	REQUIRE(t.has_value());
+	run_on(m.ioc, m.conn.executor(), [&t] { *t = ldap::transaction{}; });
+	std::stop_source stop;
+	outcome<ldap::result<ldap::transaction>> next;
+	spawn(m.ioc, stop.get_token(), ldap::transaction::begin(m.conn), next);
+	drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+	stop.request_stop();
+	drive_until(m.ioc, [&next] { return next.done(); });
+	REQUIRE_FALSE(next.get().has_value());
+	CHECK(next.get().error().code == ldap::cond::canceled);
+	CHECK(next.get().error().context == "start transaction (waiting for 1 answer due)");
+	CHECK(m.conn.is_open());
+	CHECK(m.log.received.size() == 2);
+}
+
 TEST_CASE("transaction: commit refuses while an update is in flight", "[net][transaction]")
 {
 	mock_ldap m;
@@ -475,7 +561,7 @@ TEST_CASE("transaction: commit refuses while an update is in flight", "[net][tra
 	  step{},// the add: answered with the abort below
 	  answer({ result_msg<ldap::add_response>(2), ended(3, 0, {}) }) });
 
-	auto t = m.run(m.conn.begin_transaction());
+	auto t = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(t.has_value());
 	outcome<ldap::result<ldap::response>> add;
 	spawn(m.ioc, t->add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } }), add);
@@ -501,7 +587,7 @@ TEST_CASE("transaction: a raw transaction specification is refused too", "[net][
 	mock_ldap m;
 	m.serve({ answer({ started(1) }), answer({ ended(2, 0, {}) }) });
 
-	auto t = m.run(m.conn.begin_transaction());
+	auto t = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(t.has_value());
 	auto raw = m.run(t->del({ .entry = jdoe, .controls = { spec_control() } }));
 	REQUIRE_FALSE(raw.has_value());
@@ -523,7 +609,7 @@ TEST_CASE("transaction: an Aborted Transaction Notice is ignored", "[net][transa
 		result_msg<ldap::add_response>(2) }),
 	  answer({ ended(3, 80, {}) }) });
 
-	auto t = m.run(m.conn.begin_transaction());
+	auto t = m.run(ldap::transaction::begin(m.conn));
 	REQUIRE(t.has_value());
 	REQUIRE(m.run(t->add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } })).has_value());
 	CHECK(t->is_open());
@@ -551,7 +637,7 @@ TEST_CASE("transaction: destroyed while the abort's write fails inline", "[net][
 	spawn(ioc,
 	  serve_script(net::transport::wrap(socket_ref{ &sockets.server }, "server"), { answer({ started(1) }) }, log),
 	  server);
-	auto t = finish(ioc, conn.begin_transaction());
+	auto t = finish(ioc, ldap::transaction::begin(conn));
 	REQUIRE(t.has_value());
 	REQUIRE(t->is_open());
 	drive_until(ioc, [&server] { return server.done(); });

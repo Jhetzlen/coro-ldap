@@ -1,6 +1,6 @@
-// LDAP transactions (RFC 5805): connection::start_transaction(),
-// end_transaction() and begin_transaction(), and the ldap::transaction
-// helper built on them (transaction.hpp).
+// LDAP transactions (RFC 5805): connection::start_transaction() and
+// end_transaction(), and the ldap::transaction helper built on them
+// (transaction.hpp).
 #include "jhetz/ldap/transaction.hpp"
 #include "jhetz/ldap/connection.hpp"
 
@@ -102,9 +102,18 @@ namespace {
 		return out;
 	}
 
+	// Waits for the answers still due (a destroyed transaction's abort), at
+	// most the default timeout, then sends Start Transaction.
 	auto start_exchange(core_ref self, extended_controls controls) -> capy::task<result<std::string>>
 	{
 		const std::string context(start_context);
+		if (self->answers_due() != 0) {
+			const auto [ec, left] = co_await self->wait_due_answers(detail::deadline_after(self->default_timeout()));
+			if (ec && ec != capy::cond::timeout) {
+				co_return fail(
+				  ec, detail::format("{} (waiting for {} answer{} due)", context, left, left == 1 ? "" : "s"));
+			}
+		}
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		auto msg =
 		  build_request(extended_request(start_transaction_oid, std::nullopt, alloc), controls, self->mr(), context);
@@ -300,7 +309,7 @@ namespace {
 
 namespace {
 
-	auto begin_transaction_impl(core_ref self, extended_controls controls) -> capy::task<result<transaction>>
+	auto begin_impl(core_ref self, extended_controls controls) -> capy::task<result<transaction>>
 	{
 		if (!self) {
 			co_return std::unexpected(no_connection(start_context));
@@ -319,10 +328,10 @@ namespace {
 
 }// namespace
 
-auto connection::begin_transaction(extended_controls controls) -> capy::task<result<transaction>>
+auto transaction::begin(connection &conn, extended_controls controls) -> capy::task<result<transaction>>
 {
-	const core_ref self(core_);
-	return detail::on_strand(self, begin_transaction_impl(self, std::move(controls)));
+	const core_ref self(connection::core::of(conn));
+	return detail::on_strand(self, begin_impl(self, std::move(controls)));
 }
 
 transaction::transaction(transaction &&other) noexcept : state_(std::exchange(other.state_, nullptr)) {}

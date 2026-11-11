@@ -1,7 +1,7 @@
 // LDAP transactions (RFC 5805): a group of updates applied all together or
 // not at all. Part of jhetz::ldap_net.
 //
-//   auto t = co_await conn.begin_transaction();         // Start Transaction
+//   auto t = co_await ldap::transaction::begin(conn);   // Start Transaction
 //   if (!t) ...                                          // e.g. not supported
 //   auto a = co_await t->add({.entry = jdoe, .attributes = ...,
 //                             .controls = {ldap::post_read{.attributes = {"entryUUID"}}}});
@@ -25,7 +25,10 @@
 // client_errc::operation_in_progress and the transaction stays open. A
 // transaction destroyed while the server may hold it (open, or a commit() or
 // abort() left unanswered) queues an abort without waiting, best effort
-// (nothing is sent on a closed connection or during StartTLS). An update
+// (nothing is sent on a closed connection or during StartTLS); the next
+// begin() or start_transaction() on the connection waits for its answer,
+// so a server allowing one transaction per connection does not refuse
+// the new one as busy. An update
 // that timed out or was cancelled may or may not be in the transaction:
 // abort then. A commit whose answer is lost has an unknown outcome. A bind
 // or unbind aborts every transaction of the connection (RFC 5805 section
@@ -37,6 +40,7 @@
 // of its own operations. Move-only.
 #pragma once
 
+#include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/message.hpp"
 #include "jhetz/ldap/operations.hpp"
@@ -53,11 +57,18 @@ class connection;
 // by their response::message_id.
 using commit_result = end_transaction_result;
 
-// Not [[nodiscard]] as a class: begin_transaction() returns it inside a
-// result, which is [[nodiscard]] on its own.
+// Not [[nodiscard]] as a class: begin() returns it inside a result, which
+// is [[nodiscard]] on its own.
 class transaction
 {
   public:
+	// Sends Start Transaction (connection::start_transaction(), which first
+	// waits for the answers still due, such as a destroyed transaction's
+	// abort) and returns the started transaction. `controls` may carry
+	// proxied_authorization, to run the whole transaction as another
+	// identity (RFC 5805 section 4.4). Errors as start_transaction().
+	static auto begin(connection &conn, extended_controls controls = {}) -> boost::capy::task<result<transaction>>;
+
 	// Not started: every operation fails with client_errc::not_connected.
 	transaction() noexcept = default;
 	transaction(transaction &&other) noexcept;
@@ -76,7 +87,7 @@ class transaction
 	// control appended to `request.controls` (which must not carry one:
 	// encode_error), as part of this transaction. A request that also
 	// carries proxied_authorization fails with encode_error before anything
-	// is sent (RFC 5805 section 4.4: put it on begin_transaction()). Success
+	// is sent (RFC 5805 section 4.4: put it on begin()). Success
 	// means the server took the update into the transaction; its response
 	// controls come with commit(). Errors as connection::add() and the others.
 	auto add(add_params request) -> boost::capy::task<result<response>>;

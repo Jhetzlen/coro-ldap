@@ -120,7 +120,7 @@ namespace detail {
 	auto make_transaction(ldap::connection &c, extended_controls controls)
 	  -> capy::task<result<std::unique_ptr<ldap::transaction>>>
 	{
-		auto r = co_await c.begin_transaction(std::move(controls));
+		auto r = co_await ldap::transaction::begin(c, std::move(controls));
 		if (!r) {
 			co_return std::unexpected(std::move(r.error()));
 		}

@@ -89,7 +89,7 @@ TEST_CASE("sync: a connection without an I/O thread, moves and reconnecting", "[
 	CHECK(none.executor() == boost::corosio::io_context::executor_type{});
 	CHECK(none.simple_bind(ldap::dn{}, "").error().code == ldap::client_errc::not_connected);
 	CHECK(none.search({ .base = ldap::dn{} }).error().code == ldap::client_errc::not_connected);
-	CHECK(none.begin_transaction().error().code == ldap::client_errc::not_connected);
+	CHECK(ldap::sync::transaction::begin(none).error().code == ldap::client_errc::not_connected);
 	none.close();
 
 	server_thread srv;
@@ -724,7 +724,7 @@ TEST_CASE("sync: transactions", "[net][sync][transaction]")
 	  answer({ ext(6, "t3") }),
 	  answer({ ext(7) }) });
 	connected k(srv);
-	auto t = k.c.begin_transaction();
+	auto t = ldap::sync::transaction::begin(k.c);
 	REQUIRE(t.has_value());
 	// Moving the connection leaves its I/O thread where the transaction has it.
 	ldap::sync::connection elsewhere = std::move(k.c);
@@ -738,7 +738,7 @@ TEST_CASE("sync: transactions", "[net][sync][transaction]")
 	REQUIRE(done.has_value());
 	CHECK_FALSE(t->is_open());
 	{
-		auto open = k.c.begin_transaction();
+		auto open = ldap::sync::transaction::begin(k.c);
 		REQUIRE(open.has_value());
 		ldap::sync::transaction moved = std::move(*open);
 		CHECK_FALSE(open->is_open());
@@ -774,7 +774,7 @@ TEST_CASE("sync: a transaction's add, modify and modify DN, then abort", "[net][
 	  answer({ result_msg<ldap::modify_dn_response>(4) }),
 	  answer({ ext(5) }) });
 	connected k(srv);
-	auto t = k.c.begin_transaction();
+	auto t = ldap::sync::transaction::begin(k.c);
 	REQUIRE(t.has_value());
 	auto a = t->add({ .entry = jdoe, .attributes = { { "uid", { "jdoe" } } } });
 	REQUIRE(a.has_value());
@@ -824,9 +824,9 @@ TEST_CASE("sync: a move-assigned transaction aborts the one it replaces", "[net]
 	  answer({ result_msg<ldap::del_response>(4) }),
 	  answer({ ext(5) }) });// t2's commit
 	connected k(srv);
-	auto u = k.c.begin_transaction();
+	auto u = ldap::sync::transaction::begin(k.c);
 	REQUIRE(u.has_value());
-	auto v = k.c.begin_transaction();
+	auto v = ldap::sync::transaction::begin(k.c);
 	REQUIRE(v.has_value());
 	*u = std::move(*v);
 	CHECK(u->identifier() == "t2");
@@ -874,7 +874,7 @@ TEST_CASE("sync: a transaction's destructor waits for the abort's answer only so
 	auto &c = *opened;
 	const auto started = std::chrono::steady_clock::now();
 	{
-		auto t = c.begin_transaction();
+		auto t = ldap::sync::transaction::begin(c);
 		REQUIRE(t.has_value());
 	}
 	CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(30));

@@ -438,7 +438,7 @@ server's bad control fails only the caller who asks for it.
   transaction: update message 5"); no structured field was added to
   `ldap::error` for it, as the helper reads the id itself. The helper,
   `ldap::transaction` (`transaction.hpp`, move-only, made
-  by `connection::begin_transaction()`), is built only from those
+  by the static `transaction::begin(connection &, extended_controls)`), is built only from those
   primitives: its `add` / `modify` / `del` / `modify_dn` append the control
   and record each accepted update's context by message id, so `commit()`
   (-> `commit_result`, i.e. `end_transaction_result`) names the failing
@@ -454,6 +454,23 @@ server's bad control fails only the caller who asks for it.
   release; `sync::transaction` aborts synchronously in its destructor
   instead (queued, from the I/O thread), racing the answer against a
   five-second delay so that it returns without a default timeout too.
+  Start Transaction (`start_exchange`, used by `transaction::begin` and
+  `start_transaction`) first waits for the answers due
+  (`core::wait_due_answers`, StartTLS's mechanism, no counter of its own)
+  within the default timeout, then sends anyway: slapd 2.6.10 answered
+  busy (51) "Too many transactions" to about one Start in 50 sent right
+  after a destroyed transaction, whose abort it had not processed yet. The
+  wait also covers a destroyed paged search's release, one round trip.
+  On a timeout a busy is then a real error. The entry point is a static
+  factory on the class rather than a constructor: an async constructor
+  cannot co_await, so `transaction t(conn)` would need a lazy start (the
+  Start sent inside the first update: hidden I/O, an identifier the caller
+  never sees leaked when that update times out, identity drift across a
+  bind) or a two-step `t.begin()` with a not-started state to check; an
+  `in_transaction(conn, fn)` helper was rejected too (a coroutine lambda
+  capturing by reference dangles, it needs a sync twin, and it saves one
+  `co_await t.commit()`). `connection::begin_transaction()` was removed
+  so there is one spelling.
   The helper counts its updates in flight and `commit()` refuses with
   `operation_in_progress` while any is: the End Transaction could
   otherwise reach the server before an update it should cover.

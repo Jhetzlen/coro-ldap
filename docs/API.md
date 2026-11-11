@@ -20,7 +20,7 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
 | Change one's own password | `ldap::change_password(d, user, old, new)` | RFC 3062 with the old password |
 | Set a password as an administrator | `ldap::reset_password(d, user, new)` | RFC 3062 without the old password |
 | Active Directory passwords | `ldap::ad::change_password` / `ad::reset_password` (ad/password.hpp) | `unicodePwd` modify (AD does not implement RFC 3062); needs TLS or a SASL confidentiality layer |
-| A transaction, the easy way | `connection::begin_transaction()` | an `ldap::transaction`: its updates (`t->add`, `t->modify`, ...) carry the specification control; `commit()` / `abort()`; aborted when destroyed unsettled |
+| A transaction, the easy way | `transaction::begin(conn)` | an `ldap::transaction`: its updates (`t->add`, `t->modify`, ...) carry the specification control; `commit()` / `abort()`; aborted when destroyed unsettled |
 | A transaction, by hand | `connection::start_transaction()`, `end_transaction(id, commit)` | RFC 5805's two extended operations; put `transaction_specification{id}` on each update yourself |
 
 ## `jhetz::ldap`: the codec
@@ -411,8 +411,15 @@ itself needs only ICU.
   updatesControls `{message_id, controls}`, with
   `find_update_controls(response::message_id)`, and `controls`); a refused
   End Transaction has the context "end transaction: update message N" when
-  the server names the update. `begin_transaction(extended_controls)`
-  returns the helper `ldap::transaction` (move-only):
+  the server names the update. Before sending, `start_transaction` waits
+  for the answers still due (a destroyed transaction's abort, a destroyed
+  paged search's release) within the default timeout, then sends anyway
+  (a stop meanwhile fails with `cond::canceled`, nothing sent), so slapd's
+  one transaction per connection does not refuse the next one as busy.
+  The static `ldap::transaction::begin(connection &, extended_controls = {})`
+  -> `task<result<transaction>>` sends Start Transaction and returns the
+  started helper `ldap::transaction` (move-only; it replaced
+  `connection::begin_transaction()`, removed):
   `add` / `modify` / `del` / `modify_dn` attach the control (a request that
   already carries one, typed or raw, or carries proxied authorization,
   fails with encode_error before sending), `commit()` ->
@@ -425,8 +432,10 @@ itself needs only ICU.
   may still hold it (open, or a commit / abort whose End Transaction got no
   answer: stopped before sending, or given up on) queues an End
   Transaction (abort) without waiting. `sync::connection` forwards
-  `start_transaction` and `end_transaction`, and its `begin_transaction()`
-  returns a `sync::transaction`, which aborts synchronously when destroyed
+  `start_transaction` and `end_transaction`, and the static
+  `sync::transaction::begin(sync::connection &, extended_controls = {})`
+  (and `begin(sync::basic_lease<E> &, ...)` for a lease) returns a
+  `result<sync::transaction>`, which aborts synchronously when destroyed
   open, waiting five seconds at most for the answer. The Aborted
   Transaction Notice is not routed: the next use fails.
   An update cancelled or timed out inside a transaction may be part of it:
@@ -523,8 +532,7 @@ itself needs only ICU.
   `sync::client::who_am_i` with them (`client::extended` replaces them,
   retried only after `not_sent`, so a Who am I? on a client is no longer
   retried after a lost connection). The transactions
-  (`start_transaction`, `end_transaction`, `begin_transaction`) stay
-  connection members: a refused End Transaction's txnEndRes does not
+  (`start_transaction`, `end_transaction`) stay connection members: a refused End Transaction's txnEndRes does not
   reach the public `extended()`. Active Directory
   has no RFC 3062: its password changes are `ad::change_password` and
   `ad::reset_password` (section `ldap::ad`). Which one runs is the call's
@@ -1106,7 +1114,7 @@ itself needs only ICU.
   and `acquire_exclusive() -> result<sync::exclusive_lease>`; a
   `sync::exclusive_lease` has `sync::connection`'s operations (bind,
   search, add, modify, ...,
-  `begin_transaction`, `unbind`, `close`), run on the leased connection, and so
+  `unbind`, `close`; `sync::transaction::begin(lease)`), run on the leased connection, and so
   does a `sync::lease` (the five session operations then change the
   session for every lease sharing it), both with
   `server()`, `release()` and `operator bool` (`sync::basic_lease`). The forwarders

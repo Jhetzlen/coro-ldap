@@ -951,7 +951,7 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 	if (extensions == nullptr || !std::ranges::contains(*extensions, ldap::start_transaction_oid)) {
 		SKIP("slapd does not advertise Start Transaction (" << ldap::start_transaction_oid << ")");
 	}
-	auto t = finish(ioc, c.begin_transaction());
+	auto t = finish(ioc, ldap::transaction::begin(c));
 	if (!t
 		&& (t.error().code == ldap::errc::protocol_error
 			|| t.error().code == ldap::errc::unavailable_critical_extension)) {
@@ -974,7 +974,7 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 
 	// A conflicting update fails the whole commit, which names it; the
 	// other update is not applied either.
-	auto u = finish(ioc, c.begin_transaction());
+	auto u = finish(ioc, ldap::transaction::begin(c));
 	REQUIRE(u.has_value());
 	const std::string fresh = unique("txc");
 	REQUIRE(finish(ioc, u->add(person(fresh))).has_value());
@@ -991,23 +991,22 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 
 	// Abort, explicit and by destruction: nothing applied, the connection
 	// stays usable.
-	auto v = finish(ioc, c.begin_transaction());
+	auto v = finish(ioc, ldap::transaction::begin(c));
 	REQUIRE(v.has_value());
 	REQUIRE(finish(ioc, v->del({ .entry = person(a).entry })).has_value());
 	REQUIRE(finish(ioc, v->abort()).has_value());
 	{
-		auto w = finish(ioc, c.begin_transaction());
+		auto w = finish(ioc, ldap::transaction::begin(c));
 		REQUIRE(w.has_value());
 		REQUIRE(finish(ioc, w->del({ .entry = person(b).entry })).has_value());
 	}
 	// The destructor's abort is queued, not awaited, and slapd allows one
-	// transaction per connection: wait until its answer has arrived (it is
-	// counted as outstanding until then) before the next Start Transaction.
-	// slapd may answer the who_am_i first, hence the loop.
-	for (int i = 0; i < 100 && c.outstanding() != 0; ++i) {
-		REQUIRE(finish(ioc, ldap::who_am_i(c)).has_value());
+	// transaction per connection: the next Start Transaction waits for its
+	// answer.
+	for (int i = 0; i < 20; ++i) {
+		auto again = finish(ioc, ldap::transaction::begin(c));
+		REQUIRE(again.has_value());
 	}
-	REQUIRE(c.outstanding() == 0);
 	CHECK(exists(person(a).entry));
 	CHECK(exists(person(b).entry));
 
@@ -1820,7 +1819,7 @@ TEST_CASE("integration: transactions through the sync connection", "[integration
 		auto r = state(d);
 		return !r.has_value() && r.error().code == ldap::errc::no_such_object;
 	};
-	auto t = c.begin_transaction();
+	auto t = ldap::sync::transaction::begin(c);
 	if (!t
 		&& (t.error().code == ldap::errc::protocol_error
 			|| t.error().code == ldap::errc::unavailable_critical_extension)) {
@@ -1852,7 +1851,7 @@ TEST_CASE("integration: transactions through the sync connection", "[integration
 	CHECK(*after->entries[0].find("mail") == ldap::string_list{ "stx@example.org" });
 
 	// abort(): nothing applied.
-	auto u = c.begin_transaction();
+	auto u = ldap::sync::transaction::begin(c);
 	REQUIRE(u.has_value());
 	REQUIRE(u->del({ .entry = renamed }).has_value());
 	REQUIRE(u->abort().has_value());
@@ -1861,7 +1860,7 @@ TEST_CASE("integration: transactions through the sync connection", "[integration
 	// Move-assigned over, an open transaction is aborted and its answer
 	// waited for: slapd allows one transaction per connection, and the
 	// next Start Transaction succeeds.
-	auto v = c.begin_transaction();
+	auto v = ldap::sync::transaction::begin(c);
 	REQUIRE(v.has_value());
 	REQUIRE(v->del({ .entry = renamed }).has_value());
 	*v = std::move(*u);// u's is settled already: nothing more is sent for it
@@ -1870,7 +1869,7 @@ TEST_CASE("integration: transactions through the sync connection", "[integration
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == ldap::client_errc::not_connected);
 	CHECK(state(renamed).has_value());
-	auto w = c.begin_transaction();
+	auto w = ldap::sync::transaction::begin(c);
 	REQUIRE(w.has_value());
 	CHECK(w->identifier().empty());
 	REQUIRE(w->del({ .entry = renamed }).has_value());
