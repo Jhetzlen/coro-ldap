@@ -184,6 +184,7 @@ auto search() -> ldap::search_params
 auto dns(const ldap::search_result &r) -> std::vector<std::string>
 {
 	std::vector<std::string> out;
+	out.reserve(r.entries.size());
 	for (const auto &e : r.entries) {
 		out.emplace_back(e.dn);
 	}
