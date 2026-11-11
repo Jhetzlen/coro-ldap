@@ -1,0 +1,5 @@
+# Examples: the root .clang-tidy, except that an exception escaping main
+# (rethrown by ldap::run) ends the program, as it should in a bare example.
+InheritParentConfig: true
+CheckOptions:
+  bugprone-exception-escape.CheckMain: false

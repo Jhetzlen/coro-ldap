@@ -45,13 +45,11 @@ namespace detail {
 	{
 		std::optional<T> value{};
 		std::exception_ptr error{};
-		[[nodiscard]] auto done() const noexcept -> bool { return value.has_value() || error != nullptr; }
 	};
 	template<> struct run_state<void>
 	{
 		bool finished = false;
 		std::exception_ptr error{};
-		[[nodiscard]] auto done() const noexcept -> bool { return finished || error != nullptr; }
 	};
 }// namespace detail
 
@@ -59,7 +57,7 @@ template<class T> auto run(boost::corosio::io_context &ioc, boost::capy::task<T>
 {
 	// Shared with the handlers: a task ending after run threw (a stopped
 	// ioc run again later) writes here, not into a destroyed frame.
-	auto state = std::make_shared<detail::run_state<T>>();
+	const auto state = std::make_shared<detail::run_state<T>>();
 	if (ioc.stopped()) {
 		ioc.restart();
 	}
@@ -74,12 +72,16 @@ template<class T> auto run(boost::corosio::io_context &ioc, boost::capy::task<T>
 	if (state->error) {
 		std::rethrow_exception(state->error);
 	}
-	if (!state->done()) {
-		throw std::system_error(make_error_code(boost::capy::error::canceled), "ldap::run: the task did not finish");
+	if constexpr (std::is_void_v<T>) {
+		if (state->finished) {
+			return;
+		}
+	} else {
+		if (state->value) {
+			return std::move(*state->value);
+		}
 	}
-	if constexpr (!std::is_void_v<T>) {
-		return std::move(*state->value);
-	}
+	throw std::system_error(make_error_code(boost::capy::error::canceled), "ldap::run: the task did not finish");
 }
 
 template<class T> auto run(boost::capy::task<T> t) -> T
