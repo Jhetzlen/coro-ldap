@@ -13,6 +13,7 @@
 #include "jhetz/ldap/operations.hpp"
 #include "jhetz/ldap/sync.hpp"
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -49,9 +50,12 @@ template<sync::directory D>
 // resource. On a sync::client, one shared lease for every search, run once
 // more after cond::connection_lost.
 template<sync::directory D>
-[[nodiscard]] auto dirsync(D &d, search_params request, dirsync_request options = {}) -> result<dirsync_result>
+[[nodiscard]] auto dirsync(D &d,
+  search_params request,
+  dirsync_request options = {},
+  std::size_t max_rounds = dirsync_default_max_rounds) -> result<dirsync_result>
 {
-	return sync::run(d, [&](auto &a) { return ad::dirsync(a, std::move(request), std::move(options)); });
+	return sync::run(d, [&](auto &a) { return ad::dirsync(a, std::move(request), std::move(options), max_rounds); });
 }
 
 }// namespace jhetz::ldap::ad

@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <variant>
 
 namespace ldap = jhetz::ldap;
@@ -75,6 +76,7 @@ TEST_CASE("ad::dirsync: follows MoreResults with each new cookie", "[net][ad][di
 	CHECK(r->entries[0].dn == "cn=a,dc=example,dc=org");
 	CHECK(r->entries[1].dn == "cn=b,dc=example,dc=org");
 	CHECK(r->cookie == "c3");
+	CHECK_FALSE(r->more_results);
 	m.check_server();
 	REQUIRE(m.log.received.size() == 3);
 	CHECK(
@@ -109,10 +111,28 @@ TEST_CASE("ad::dirsync: answers refused", "[net][ad][dirsync]")
 		CHECK(
 		  std::string(r.error().context) == "DirSync dc=example,dc=org: no DirSync control in the SearchResultDone");
 	}
-	SECTION("more results without a new cookie")
+	SECTION("more results with the previous cookie")
 	{
 		m.serve({ page(1, "", response(true, "c1")), page(2, "", response(true, "c1")) });
 		auto r = m.run(ad::dirsync(m.conn, users()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::unexpected_response);
+		CHECK(std::string(r.error().context) == "DirSync dc=example,dc=org: more results with a cookie already seen");
+	}
+	SECTION("more results with an earlier cookie")
+	{
+		m.serve(
+		  { page(1, "", response(true, "c1")), page(2, "", response(true, "c2")), page(3, "", response(true, "c1")) });
+		auto r = m.run(ad::dirsync(m.conn, users()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::unexpected_response);
+		CHECK(std::string(r.error().context) == "DirSync dc=example,dc=org: more results with a cookie already seen");
+		CHECK(m.log.received.size() == 3);
+	}
+	SECTION("more results with the caller's cookie")
+	{
+		m.serve({ page(1, "", response(true, "c0")) });
+		auto r = m.run(ad::dirsync(m.conn, users(), { .cookie = "c0" }));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == client_errc::unexpected_response);
 	}
@@ -132,4 +152,64 @@ TEST_CASE("ad::dirsync: answers refused", "[net][ad][dirsync]")
 	}
 	m.check_server();
 	CHECK(m.conn.is_open());
+}
+
+TEST_CASE("ad::dirsync: a repeated cookie without MoreResults ends the call", "[net][ad][dirsync]")
+{
+	mock_ldap m;
+	m.serve({ page(1, "cn=a,dc=example,dc=org", response(false, "c0")) });
+	auto r = m.run(ad::dirsync(m.conn, users(), { .cookie = "c0" }));
+	REQUIRE(r.has_value());
+	CHECK(r->entries.size() == 1);
+	CHECK(r->cookie == "c0");
+	CHECK_FALSE(r->more_results);
+	m.check_server();
+}
+
+TEST_CASE("ad::dirsync: max_rounds", "[net][ad][dirsync]")
+{
+	mock_ldap m;
+	SECTION("a server with no end stops after max_rounds searches")
+	{
+		m.serve({ page(1, "cn=a,dc=example,dc=org", response(true, "c1")),
+		  page(2, "cn=b,dc=example,dc=org", response(true, "c2")),
+		  page(3, "cn=c,dc=example,dc=org", response(true, "c3")) });
+		auto r = m.run(ad::dirsync(m.conn, users(), {}, 3));
+		if (!r) {
+			FAIL(r.error().message());
+		}
+		REQUIRE(r->entries.size() == 3);
+		CHECK(r->entries[2].dn == "cn=c,dc=example,dc=org");
+		CHECK(r->cookie == "c3");
+		CHECK(r->more_results);
+		CHECK(m.log.received.size() == 3);
+	}
+	SECTION("one batch per call, resumed with the cookie")
+	{
+		m.serve({ page(1, "cn=a,dc=example,dc=org", response(true, "c1")),
+		  page(2, "cn=b,dc=example,dc=org", response(false, "c2")) });
+		auto first = m.run(ad::dirsync(m.conn, users(), {}, 1));
+		REQUIRE(first.has_value());
+		REQUIRE(first->entries.size() == 1);
+		CHECK(first->cookie == "c1");
+		CHECK(first->more_results);
+		auto second = m.run(ad::dirsync(m.conn, users(), { .cookie = first->cookie }, 1));
+		REQUIRE(second.has_value());
+		REQUIRE(second->entries.size() == 1);
+		CHECK(second->entries[0].dn == "cn=b,dc=example,dc=org");
+		CHECK(second->cookie == "c2");
+		CHECK_FALSE(second->more_results);
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(sent(m.log.received[1]).cookie == "c1");
+	}
+	SECTION("0 is refused before anything is sent")
+	{
+		m.serve({});
+		auto r = m.run(ad::dirsync(m.conn, users(), {}, 0));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == std::errc::invalid_argument);
+		CHECK(std::string(r.error().context) == "DirSync dc=example,dc=org: max_rounds is 0");
+		CHECK(m.log.received.empty());
+	}
+	m.check_server();
 }

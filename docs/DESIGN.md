@@ -3367,20 +3367,45 @@ Flags is written as the signed 32-bit INTEGER Windows and .NET send
 unsigned; MaxBytes defaults to .NET's 1048576; MoreResults is an INTEGER
 read as non-zero and written 1 or 0. One OID names both the request and
 the response control, so the fuzzer decodes every such control both ways.
-`ad::dirsync(c, request, options)` (`ad/dirsync.hpp`, `jhetz::ldap_ad`)
-runs the search again with each new cookie while MoreResults is set and
-returns every entry and the last cookie; the caller stores the cookie
-for the next poll. Collecting the batches is the common case (each is
-bounded by MaxBytes), and a caller who wants batch by batch sends the
-control itself with `ad::find_dirsync_response`. A response without the
-control, or MoreResults without a new cookie, fails
-(`unexpected_response`) instead of looping. The `client &` overload keeps
-one shared lease (the cookie is a DC's) and starts again from the
-caller's cookie after `connection_lost`, discarding what it collected;
-the blocking form is in `ad/sync.hpp`. Tested by its encoding
-(`tests/ad_controls_tests.cpp`, including unsigned Flags and malformed
-values), against the mock (`tests/net/ad_dirsync_tests.cpp`: cookies
-chained through MoreResults, refused answers) and on Samba
+`ad::dirsync(c, request, options, max_rounds)` (`ad/dirsync.hpp`,
+`jhetz::ldap_ad`) runs the search again with each new cookie while
+MoreResults is set, at most `max_rounds` searches, and returns every
+entry and the last cookie; the caller stores the cookie for the next
+poll. `ad::dirsync_request` stays the pure wire value; the bound is a
+parameter of the call. Collecting the batches is the common case, and a
+caller who wants batch by batch passes `max_rounds = 1` or sends the
+control itself with `ad::find_dirsync_response`. MS-ADTS 3.1.1.3.4.1.3
+makes each response a valid batch and its CookieServer the resume point,
+and MaxBytes and MaxPageSize mean a large naming context needs many
+rounds, so reaching the bound is not an error: the result carries the
+entries so far, the last cookie and `more_results = true`, and a
+complete snapshot loops `while (r->more_results)`. A periodic poller that
+only saves the cookie stays correct and gets the rest on its next poll.
+The default, `ad::dirsync_default_max_rounds` = 1000, is about a million
+objects at AD's default MaxPageSize; it counts searches (1 = one search,
+the per-round call of ldap3, go-ldap and .NET). `max_rounds == 0` fails
+with `std::errc::invalid_argument` before anything is sent, as
+search_paged refuses a non-positive page size: 0 is LDAP's "no limit" for
+size and time limits, so neither clamping it nor reading it as one search
+would be clear. There is no entry cap; memory per round is bounded only
+as far as the server honours MaxBytes and MaxPageSize. A server that
+cycles cookies would otherwise keep the loop going: the call keeps the
+cookies it has seen (the caller's and every CookieServer), and a response
+with MoreResults whose CookieServer is one of them fails
+(`unexpected_response`, "more results with a cookie already seen"); a
+repeat without MoreResults is a success. A response without the control
+fails the same way. `request.timeout` bounds each search, not the call;
+an async caller can stop the whole call with its stop token. The
+`client &` overload keeps one shared lease (the cookie is a DC's) and
+starts again from the caller's cookie after `connection_lost`,
+discarding what it collected and resetting the count of rounds; the
+blocking form is in `ad/sync.hpp`. Samba never sets MoreResults
+(source4 dirsync.c), so the multi-round paths are tested on the mock
+only. Tested by its encoding (`tests/ad_controls_tests.cpp`, including
+unsigned Flags and malformed values), against the mock
+(`tests/net/ad_dirsync_tests.cpp`: cookies chained through MoreResults,
+cycles of cookies, `max_rounds` reached and resumed, 0 refused, refused
+answers) and on Samba
 (`integration.samba_ad`: a changed description found with the cookie and
 gone from the next poll, `incremental_values` returning an added member
 as `member;range=1-1`, a user without the right refused and served with

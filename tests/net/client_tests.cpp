@@ -3477,6 +3477,27 @@ TEST_CASE("client: ad::dirsync starts over from the caller's cookie after a lost
 	}
 }
 
+TEST_CASE("client: ad::dirsync honours max_rounds", "[net][client][ad][dirsync]")
+{
+	const ldap::search_params users{ .base = domain_root, .filter = ldap::filters::attr("objectClass") == "user" };
+	pool_fixture f;
+	auto &s = f.server({ { answer({ bind_resp(1) }),
+	  dirsync_page(2, "cn=a,dc=example,dc=org", true, "c1"),
+	  dirsync_page(3, "cn=b,dc=example,dc=org", true, "c2"),
+	  step{},
+	  client_hangs_up() } });
+	f.make({ .servers = { s.url() }, .setup = admin_setup() });
+	auto r = finish(f.ioc, ldap::ad::dirsync(*f.pool, users, { .cookie = "c0" }, 2));
+	if (!r) {
+		FAIL(r.error().message());
+	}
+	CHECK(r->entries.size() == 2);
+	CHECK(r->cookie == "c2");
+	CHECK(r->more_results);
+	REQUIRE(s.accepted() == 1);
+	CHECK(s.log(0).received.size() >= 3);
+}
+
 namespace {
 
 auto paged_page(std::int32_t id, std::string_view cookie) -> ldap::message

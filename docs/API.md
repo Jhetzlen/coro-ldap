@@ -1180,19 +1180,36 @@ package component `ad`:
   windows ask for that name. With a step, name the attribute as the
   server does: Samba ignores a range option on a numeric OID.
 - `jhetz/ldap/ad/dirsync.hpp` (`jhetz::ldap_ad`): `ad::dirsync(c, request,
-  options = {}, mr)`, DirSync polling (MS-ADTS 3.1.1.3.4.1.3): runs the
-  search `request` (its base the root of a naming context) with a DirSync
-  control from `options` (an `ad::dirsync_request`: its cookie, then each
-  response's) while the response says MoreResults, and returns an
-  `ad::dirsync_result`: the entries changed since the cookie (with the
-  asked-for attributes that changed; all with an empty cookie) and the
-  last cookie, for the next poll. `c` is a `connection &` or a
-  `client &` (one shared lease, run once more from the first cookie after
-  `cond::connection_lost`). Without the Replicating Directory Changes right
+  options = {}, max_rounds = ad::dirsync_default_max_rounds, mr)`, DirSync
+  polling (MS-ADTS 3.1.1.3.4.1.3): runs the search `request` (its base the
+  root of a naming context) with a DirSync control from `options` (an
+  `ad::dirsync_request`: its cookie, then each response's) while the
+  response says MoreResults, at most `max_rounds` searches (default 1000),
+  and returns an `ad::dirsync_result`: the entries changed since the
+  cookie (with the asked-for attributes that changed; all with an empty
+  cookie), the last cookie, for the next poll, and `more_results`. Each
+  response is a complete batch and its CookieServer the point to resume
+  from; MaxBytes and the server's MaxPageSize bound each round, so a large
+  naming context needs many (1000 rounds is about a million objects at
+  AD's default MaxPageSize). When MoreResults is still set after
+  `max_rounds` searches, the call succeeds with the entries so far, the
+  last cookie and `more_results == true`: call again now with that cookie
+  for the rest. A complete snapshot needs `more_results == false`
+  (`while (r && r->more_results) r = co_await ad::dirsync(c, request, {.cookie = r->cookie});`),
+  `max_rounds = 1` returns one batch per call, and a periodic poller that
+  only saves `cookie` stays correct and gets the rest on its next poll.
+  `max_rounds == 0` fails with `std::errc::invalid_argument` before
+  anything is sent. `request.timeout` bounds each search, not the call; an
+  async caller can stop the whole call with its stop token. Memory per
+  round is bounded only as far as the server honours MaxBytes and
+  MaxPageSize. `c` is a `connection &` or a `client &` (one shared lease,
+  run once more from the first cookie after `cond::connection_lost`, the
+  count of rounds reset). Without the Replicating Directory Changes right
   the server refuses it (`insufficient_access_rights`) unless
   `dirsync_flags::object_security` is set. A SearchResultDone without the
-  control, or MoreResults without a new cookie, is
-  `client_errc::unexpected_response`.
+  control, or MoreResults with a cookie already seen in this call (the
+  caller's included), is `client_errc::unexpected_response`; a repeated
+  cookie without MoreResults is a success.
 - `jhetz/ldap/ad/discover.hpp` (`jhetz::ldap_ad`): domain controller
   discovery from DNS SRV records, for `client_options::servers`.
   `ad::discover_domain_controllers(domain, options = {})` returns the
