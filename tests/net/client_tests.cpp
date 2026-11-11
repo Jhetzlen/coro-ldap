@@ -4,6 +4,7 @@
 // accepting, so a later connect is refused. Backoff runs on short real
 // delays, with the jitter fixed by detail::set_jitter.
 #include "../counting_resource.hpp"
+#include "jhetz/ldap/ad/ranged_values.hpp"
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
@@ -30,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -3314,6 +3316,77 @@ TEST_CASE("client: load_schema runs both searches on one lease", "[net][client][
 		auto r = finish(f.ioc, ldap::load_schema(*f.pool));
 		REQUIRE_FALSE(r.has_value());
 		CHECK_THAT(std::string(r.error().context), Catch::Matchers::StartsWith("load schema: acquire "));
+	}
+}
+
+namespace {
+
+const ldap::dn staff{ "cn=staff,dc=example,dc=org" };
+
+// The entry `staff` with the attribute `name` holding `values`.
+auto staff_msg(std::int32_t id, std::string_view name, std::initializer_list<std::string_view> values) -> ldap::message
+{
+	return ldap::message{ id, ldap::search_result_entry{ "cn=staff,dc=example,dc=org", { { name, values } } } };
+}
+
+auto attributes_asked(const ldap::message &received) -> std::string
+{
+	const auto &attributes = std::get<ldap::search_request>(received.op).attributes;
+	REQUIRE(attributes.size() == 1);
+	return std::string(attributes[0]);
+}
+
+}// namespace
+
+TEST_CASE("client: ad::read_all_values starts over on a new lease after a lost connection",
+  "[net][client][ad][range][retry]")
+{
+	SECTION("the values of the lost lease are dropped")
+	{
+		pool_fixture f;
+		auto &s = f.server({ { answer({ bind_resp(1) }),
+							   answer({ staff_msg(2, "member;range=0-1", { "m0", "m1" }), done_msg(2) }),
+							   step{ .read_request = true, .replies = {}, .close_after = true } },
+		  { answer({ bind_resp(1) }),
+			answer({ staff_msg(2, "member;range=0-*", { "m0", "m1", "m2" }), done_msg(2) }),
+			step{},
+			client_hangs_up() } });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto r = finish(f.ioc, ldap::ad::read_all_values(*f.pool, staff, "member"));
+		if (!r) {
+			FAIL(r.error().message());
+		}
+		CHECK(std::vector<std::string>(r->begin(), r->end()) == std::vector<std::string>{ "m0", "m1", "m2" });
+		REQUIRE(s.accepted() == 2);
+		REQUIRE(s.log(0).received.size() == 3);
+		CHECK(attributes_asked(s.log(0).received[2]) == "member;range=2-*");
+		REQUIRE(s.log(1).received.size() >= 2);
+		CHECK(attributes_asked(s.log(1).received[1]) == "member");
+	}
+	SECTION("lost twice: the retry's error")
+	{
+		pool_fixture f;
+		auto &s = f.server({ lost_after_bind(), lost_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto r = finish(f.ioc, ldap::ad::read_all_values(*f.pool, staff, "member"));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::cond::connection_lost);
+		CHECK_THAT(std::string(r.error().context), Catch::Matchers::StartsWith("read all values of member "));
+		CHECK(s.accepted() == 2);
+	}
+	SECTION("the retry's acquire() failure is returned as is")
+	{
+		pool_fixture f;
+		auto &s = f.server({ lost_after_bind() });
+		f.make({ .servers = { s.url() },
+		  .setup = admin_setup(),
+		  .acquire_timeout = milliseconds(50),
+		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
+		auto r = finish(f.ioc, ldap::ad::read_all_values(*f.pool, staff, "member"));
+		REQUIRE_FALSE(r.has_value());
+		CHECK_FALSE(r.error().code == ldap::cond::connection_lost);
+		CHECK_THAT(std::string(r.error().context), Catch::Matchers::StartsWith("acquire "));
+		CHECK(s.accepted() == 1);
 	}
 }
 
