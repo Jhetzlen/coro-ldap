@@ -458,7 +458,8 @@ in Samba:
 Samba's third value, `allow_sasl_without_tls_channel_bindings`
 (LdapEnforceChannelBinding = 1), is not run. Each container publishes
 LDAP and LDAPS on 127.0.0.1 only, from `JHETZ_LDAP_IT_SAMBA_PORT` (4389:
-strict 4389 and 4390, relaxed 4391 and 4392). The TLS certificate is the
+strict 4389 and 4390, relaxed 4391 and 4392; the strict DC's KDC on
+4393). The TLS certificate is the
 one Samba generates for itself, `CN=DC1.coro.test` without a
 subjectAltName; its CA is copied to a temporary directory under `build/`
 (`JHETZ_LDAP_IT_SAMBA_CA`), and the tests connect to 127.0.0.1 with
@@ -498,6 +499,27 @@ What it covers:
   Samba's answer comes in buffers of 128 KiB at most too; every buffer is
   the signature (Version 1, sequence numbers from 0) then the message,
   sealed with both levels (no plaintext on the wire).
+- Ranged retrieval, DirSync and change notification (the AD layer,
+  DESIGN.md section 12), against a group of 1600 contacts made at image
+  build time and changes made by the tests.
+- `sasl_gssapi` against the strict DC's KDC (`integration.samba_ad.gssapi`,
+  built in a `-DJHETZ_LDAP_WITH_GSSAPI=ON` directory such as
+  `build/gssapi`; labels `samba_ad` and `kerberos`): the script publishes
+  the KDC (TCP) on `JHETZ_LDAP_IT_SAMBA_PORT`+4, writes a `krb5.conf` for
+  `CORO.TEST` next to the CA (`KRB5_CONFIG`) and gets alice's ticket with
+  MIT's `kinit` into a cache there (`KRB5CCNAME`); without `kinit` the
+  test is skipped. Both DCs come from the same provisioned image, so they
+  share their keys and one ticket serves both. The image registers
+  `ldap/dc1.coro.test` on the DC account (Samba's `samba_spnupdate`
+  would, but it runs with the `dnsupdate` service the image leaves out).
+  Covered: binds to `ldap@dc1.coro.test` on plain ldap:// without a layer
+  (relaxed: accepted; strict: refused), with integrity and
+  confidentiality on the strict DC (then a search through the layer), and
+  over ldaps:// with tls-server-end-point channel bindings on both DCs.
+
+```sh
+tests/integration/run_samba_ad.sh ctest --test-dir build/gssapi -L samba_ad --output-on-failure
+```
 
 What Samba does not emulate, compared with Windows AD:
 

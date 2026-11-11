@@ -223,6 +223,14 @@ if(JHETZ_LDAP_BUILD_NET)
     # SASL GSSAPI against slapd and a throwaway KDC (run_kdc.sh around
     # run_slapd.sh): skipped without them.
     if(JHETZ_LDAP_WITH_GSSAPI)
+        # Against the Samba AD DCs' Kerberos (run_samba_ad.sh): skipped
+        # without Samba or kinit.
+        add_executable(jhetz_ldap_samba_ad_gssapi_tests integration/samba_ad_gssapi_tests.cpp)
+        target_link_libraries(jhetz_ldap_samba_ad_gssapi_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
+        jhetz_ldap_warnings(jhetz_ldap_samba_ad_gssapi_tests)
+        add_test(NAME integration.samba_ad.gssapi COMMAND jhetz_ldap_samba_ad_gssapi_tests)
+        set_tests_properties(integration.samba_ad.gssapi PROPERTIES
+            LABELS "integration;samba_ad;kerberos" SKIP_RETURN_CODE 4)
         add_executable(jhetz_ldap_gssapi_integration_tests integration/gssapi_tests.cpp)
         target_link_libraries(jhetz_ldap_gssapi_integration_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
         jhetz_ldap_warnings(jhetz_ldap_gssapi_integration_tests)

@@ -1000,8 +1000,13 @@ under run_kdc.sh only, coro-ldap-oil): `start()`'s AP-REQ goes straight
 to `gss_accept_sec_context`, which accepts it when given no bindings or
 the same ones (then with GSS_C_CHANNEL_BOUND_FLAG in its `ret_flags`),
 refuses it with GSS_S_BAD_BINDINGS when given others, and accepts
-`none`'s while given bindings (no CBT asserted). Against AD itself it is
-not tested (coro-ldap-c2u).
+`none`'s while given bindings (no CBT asserted). Against Samba AD
+(`integration.samba_ad.gssapi`, run_samba_ad.sh with the strict DC's
+KDC): a bind without a layer on plain ldap:// is refused by the strict DC
+and accepted by the relaxed one, integrity and confidentiality are
+accepted by the strict DC (a search then runs through the layer), and
+over ldaps:// both DCs accept the tls-server-end-point bindings, the
+strict one checking them. Against Windows AD it is not tested.
 
 NTLM (`sasl_ntlm.hpp`, coro-ldap-ite; MS-NLMP is the authority for the
 names, the field order and the flags): an NTLMv2 password bind for
