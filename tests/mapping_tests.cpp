@@ -51,6 +51,11 @@ struct device
 	std::string cn;
 };
 
+struct album
+{
+	std::vector<ldap::binary> photos;
+};
+
 }// namespace
 
 template<>
@@ -79,6 +84,8 @@ constexpr auto ldap::schema<account> = ldap::describe(ldap::object_class("inetOr
 template<>
 constexpr auto ldap::schema<device> =
   ldap::describe(ldap::field<&device::object_class>("objectClass"), ldap::field<&device::cn>("cn"));
+
+template<> constexpr auto ldap::schema<album> = ldap::describe(ldap::field<&album::photos>("jpegPhoto"));
 
 namespace {
 
@@ -767,6 +774,30 @@ TEST_CASE("diff: the changes turning one value into another", "[mapping][diff]")
 		CHECK(std::string_view(r.error().context)
 			  == "attribute telephoneNumber: not valid UTF-8 (ill-formed sequence at offset 0)");
 	}
+}
+
+TEST_CASE("diff: a multi-valued binary member is replaced", "[mapping][diff]")
+{
+	using op = ldap::modify_operation;
+	const auto wires = [](const ldap::result<std::vector<ldap::change<album>>> &r) {
+		REQUIRE(r.has_value());
+		std::vector<ldap::modify_change> out;
+		for (const auto &c : *r) {
+			REQUIRE(c.wire.has_value());
+			out.push_back(*c.wire);
+		}
+		return out;
+	};
+	const ldap::binary a{ std::byte{ 'a' } };
+	const ldap::binary b{ std::byte{ 'b' } };
+	const ldap::binary c{ std::byte{ 'c' } };
+	const album before{ .photos = { a, b } };
+
+	CHECK(wires(ldap::diff(before, album{ .photos = { b, a } })).empty());
+	CHECK(wires(ldap::diff(before, album{ .photos = { b, c, c } }))
+		  == std::vector<ldap::modify_change>{ { op::replace, { "jpegPhoto", { "b", "c" } } } });
+	CHECK(wires(ldap::diff(before, album{ .photos = {} }))
+		  == std::vector<ldap::modify_change>{ { op::replace, { "jpegPhoto", {} } } });
 }
 
 TEST_CASE("typed filters and object class narrowing", "[mapping][filter]")

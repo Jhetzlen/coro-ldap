@@ -861,6 +861,8 @@ itself needs only ICU.
   (`ldap::diff(original, changed)` in mapping.hpp: replace or delete for
   single-valued members, delete then add of the values for multi-valued
   ones, a cleared one included, so values `original` does not hold stay;
+  one replace with the new set for `std::vector<ldap::binary>`, whose
+  attributes often have no equality rule;
   read_only members skipped), nullopt with nothing sent when none
   differs, `client_errc::naming_value_changed` when the naming member
   differs (use `rename`);

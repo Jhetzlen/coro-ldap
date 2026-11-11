@@ -1625,7 +1625,15 @@ co_await people.remove("jdoe");
   attribute, so a value another client added since stays; the server
   removes the attribute with its last value. A value another client
   removed since fails the modify with noSuchAttribute (16), a partial
-  edit or a clear alike. Only members T maps are touched, read_only ones
+  edit or a clear alike. A `std::vector<ldap::binary>` member is the
+  exception: it is replaced with its new set (no values when cleared), so
+  a value another client added since is lost. The usual such attributes
+  (jpegPhoto, RFC 2798) have no EQUALITY rule, a server answers a value
+  add or delete on those with inappropriateMatching (18, RFC 4511 section
+  4.6 needs equality to find the values), and `diff` has no schema to ask.
+  A member of another type on an attribute without EQUALITY gets that 18:
+  map it as `ldap::binary`, or send `ldap::replace<&T::m>(values)` through
+  `modify`. Only members T maps are touched, read_only ones
   never. Nothing differs: nothing is sent, no schema check either, and
   the result is `std::optional<response>{}`. A naming member that
   differs is `naming_value_changed` (cond `invalid_input`) before

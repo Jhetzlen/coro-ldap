@@ -2409,6 +2409,65 @@ TEST_CASE("integration: store::update sends only what differs", "[integration][s
 
 namespace {
 
+struct photo_album
+{
+	std::string uid;
+	std::string cn;
+	std::string sn;
+	std::vector<ldap::binary> photos;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<photo_album> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::field<&photo_album::uid>("uid"),
+  ldap::field<&photo_album::cn>("cn"),
+  ldap::field<&photo_album::sn>("sn"),
+  ldap::field<&photo_album::photos>("jpegPhoto"));
+
+TEST_CASE("integration: store::update changes a multi-valued attribute without EQUALITY",
+  "[integration][store][update]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	draining_context ioc;
+	auto c = open_admin(ioc);
+	ldap::store s(c, people, ldap::named_by<&photo_album::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	const std::string name = unique("album");
+	const ldap::binary a{ std::byte{ 'a' } };
+	const ldap::binary b{ std::byte{ 'b' } };
+	const ldap::binary d{ std::byte{ 'd' } };
+	const photo_album original{ .uid = name, .cn = "Album", .sn = "Binary", .photos = { a, b } };
+	REQUIRE(finish(ioc, s.add(original)).has_value());
+
+	photo_album edited = original;
+	edited.photos = { b, d };
+	auto r = finish(ioc, s.update(original, edited));
+	if (!r) {
+		FAIL(r.error().message());
+	}
+	CHECK(r->has_value());
+	auto got = finish(ioc, s.get(name));
+	REQUIRE(got.has_value());
+	REQUIRE(got->has_value());
+	auto photos = (*got)->photos;
+	std::ranges::sort(photos);
+	CHECK(photos == std::vector<ldap::binary>{ b, d });
+
+	photo_album cleared = edited;
+	cleared.photos.clear();
+	REQUIRE(finish(ioc, s.update(edited, cleared)).has_value());
+	auto after = finish(ioc, s.get(name));
+	REQUIRE(after.has_value());
+	REQUIRE(after->has_value());
+	CHECK((*after)->photos.empty());
+	REQUIRE(finish(ioc, s.remove(name)).has_value());
+}
+
+namespace {
+
 struct posix_user
 {
 	std::string uid;
