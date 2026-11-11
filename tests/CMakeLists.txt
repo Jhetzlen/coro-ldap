@@ -88,6 +88,7 @@ if(NOT MSVC)
     jhetz_ldap_compile_test(fields_of_two_structs "every field must be a member of the same struct")
     jhetz_ldap_compile_test(add_without_object_class "declare ldap::object_class")
     jhetz_ldap_compile_test(auxiliary_without_object_class "needs object_class")
+    jhetz_ldap_compile_test(auxiliary_before_object_class "needs object_class")
     jhetz_ldap_compile_test(multi_valued_version "a version member must be single-valued")
     jhetz_ldap_compile_test(syntax_of_temporary "syntax_of_temporary\\.cpp:9:[0-9]+: error: (use of deleted function|call to deleted)")
     # Anchored on the discarding line, so a nodiscard warning from a header does

@@ -410,6 +410,11 @@ template<class... S> consteval auto auxiliary_class(S... names)
 	return out;
 }
 
+namespace detail {
+	template<class> inline constexpr bool is_auxiliary_classes = false;
+	template<std::size_t M> inline constexpr bool is_auxiliary_classes<auxiliary_classes<M>> = true;
+}// namespace detail
+
 template<std::size_t N, std::size_t M, class... F> struct descriptor
 {
 	using owner = std::tuple_element_t<0, std::tuple<F...>>::owner;
@@ -421,7 +426,9 @@ template<std::size_t N, std::size_t M, class... F> struct descriptor
 template<std::size_t N, std::size_t M, class F0, class... F>
 consteval auto describe(object_classes<N> classes, auxiliary_classes<M> auxiliary, F0 f0, F... f)
 {
-	static_assert(N > 0 || M == 0, "ldap::describe: auxiliary_class(...) needs object_class(...) before it");
+	static_assert(N > 0 || M == 0, "ldap::describe: auxiliary_class(...) needs object_class(...) right before it");
+	static_assert(!detail::is_auxiliary_classes<F0> && (!detail::is_auxiliary_classes<F> && ...),
+	  "ldap::describe: auxiliary_class(...) needs object_class(...) right before it");
 	static_assert((std::same_as<typename F0::owner, typename F::owner> && ...),
 	  "ldap::describe: every field must be a member of the same struct");
 	return descriptor<N, M, F0, F...>{ classes, auxiliary, { f0, f... } };
