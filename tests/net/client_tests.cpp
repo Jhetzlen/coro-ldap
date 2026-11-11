@@ -2309,6 +2309,41 @@ TEST_CASE("client: following referral results", "[net][client][referral]")
 		CHECK(r.error().code == ldap::errc::referral);
 		CHECK(b.accepted() == 0);
 	}
+	SECTION("compare(): the request's follow_referrals turns it on")
+	{
+		pool_fixture f;
+		auto &b = f.server({ { answer({ compare_msg(1, 6) }) } });
+		auto &a = f.server({ { answer({ bind_resp(1) }),
+		  answer({ compare_referral(2, ref_to(b, "uid=jdoe,ou=b,dc=example,dc=org")) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .authorize = [](const ldap::referral_hop &) { return ldap::referral_binding::anonymous; } } });
+		auto request = jdoe_compare();
+		request.follow_referrals = true;
+		auto r = finish(f.ioc, f.pool->compare(request));
+		REQUIRE(r.has_value());
+		CHECK(r->value);
+		REQUIRE(r->referrals.size() == 1);
+		CHECK(r->referrals[0].outcome == ldap::referral_outcome::followed);
+		CHECK(b.accepted() == 1);
+	}
+	SECTION("compare(): the request's follow_referrals turns it off")
+	{
+		pool_fixture f;
+		auto &b = f.server({});
+		auto &a = f.server({ { answer({ bind_resp(1) }),
+		  answer({ compare_referral(2, ref_to(b, "uid=jdoe,ou=b,dc=example,dc=org")) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .follow_referrals = true,
+			.authorize = [](const ldap::referral_hop &) { return ldap::referral_binding::anonymous; } } });
+		auto request = jdoe_compare();
+		request.follow_referrals = false;
+		auto r = finish(f.ioc, f.pool->compare(request));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::referral);
+		CHECK(b.accepted() == 0);
+	}
 	SECTION("compare(): anonymous")
 	{
 		pool_fixture f;

@@ -827,6 +827,41 @@ TEST_CASE("sync client: chasing referrals", "[net][sync][client][referral]")
 	CHECK(b.accepted() == 2);// a connection per chase
 }
 
+TEST_CASE("sync client: a compare's follow_referrals overrides the client's", "[net][sync][client][referral]")
+{
+	threaded_script_server b({ { answer({ bind_resp(1) }), answer({ compare_msg(2, 6) }) } });
+	const std::pmr::string compare_uri(text(b.url()) + "/" + std::string(jdoe));
+	const auto referral =
+	  ldap::message{ 2, ldap::compare_response{ ldap::ldap_result{ 10, "", "", { compare_uri } } } };
+	threaded_script_server a({ { answer({ bind_resp(1) }), answer({ referral }), unbind_read() },
+	  { answer({ bind_resp(1) }), answer({ referral }), unbind_read() } });
+	const auto authorize = ldap::same_setup_for_domains({ "127.0.0.1:" + std::to_string(b.url().port_or_default()) });
+	{
+		auto options = options_for(a.url());
+		options.referrals = { .authorize = authorize };
+		ldap::sync::client pool(std::move(options));
+		auto chased = pool.compare({ .entry = jdoe_dn, .attribute = "cn", .value = "B", .follow_referrals = true });
+		REQUIRE(chased.has_value());
+		CHECK(chased->value);
+		REQUIRE(chased->referrals.size() == 1);
+		CHECK(chased->referrals[0].outcome == ldap::referral_outcome::followed);
+	}
+	{
+		auto options = options_for(a.url());
+		options.referrals = { .follow_referrals = true, .authorize = authorize };
+		ldap::sync::client pool(std::move(options));
+		auto refused = pool.compare({ .entry = jdoe_dn, .attribute = "cn", .value = "B", .follow_referrals = false });
+		REQUIRE_FALSE(refused.has_value());
+		CHECK(refused.error().code == ldap::errc::referral);
+	}
+	a.stop();
+	b.stop();
+	CHECK_THAT(a.log(0).error, IsEmpty());
+	CHECK_THAT(a.log(1).error, IsEmpty());
+	CHECK_THAT(b.log(0).error, IsEmpty());
+	CHECK(b.accepted() == 1);
+}
+
 namespace {
 
 struct card

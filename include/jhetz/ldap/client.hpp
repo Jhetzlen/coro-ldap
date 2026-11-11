@@ -97,8 +97,9 @@
 // followed stay in search_result::references, a followed search's limit code
 // replaces the origin's success, and `referrals` and `unlisted` report each
 // URI; compare() returns a compare_result with the same report. A request's
-// follow_referrals overrides referral_options::follow_referrals for it. Writes, search_stream() and extended() never
-// chase: a write's referral is errc::referral (referral_target() builds the request for another server).
+// follow_referrals overrides referral_options::follow_referrals for it. Writes, search_stream(), extended() and
+// ldap::search_paged(client&) never chase, and ignore a request's follow_referrals: a write's referral is
+// errc::referral (referral_target() builds the request for another server).
 //
 // sync::client (sync.hpp) wraps a client in blocking calls.
 //

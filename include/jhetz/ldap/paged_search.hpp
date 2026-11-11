@@ -114,7 +114,8 @@ auto search_paged(connection &c,
 // acquire() failure included) are returned as is, a page's non-success
 // result is reported by next(), and next()'s errors are never retried. The
 // task does not refer to `c`; the paged_search may outlive it (its
-// connection is then closed and next() fails with not_connected).
+// connection is then closed and next() fails with not_connected). Referrals
+// are never chased: request.follow_referrals is ignored.
 auto search_paged(client &c,
   search_params request,
   std::int32_t page_size,

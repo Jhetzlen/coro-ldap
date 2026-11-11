@@ -13,7 +13,7 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
 | Search, entry by entry | `connection::search_stream(params)` | `next()` / `next_item()`; memory bounded by the caller's pace; abandons the search when destroyed early |
 | Search a large result in pages | `ldap::search_paged(conn_or_client, params, page_size)` | RFC 2696 paged results, one page requested at a time; `sync::search_paged` collects every page |
 | Search into structs | `store<T>::search` / `search_stream` / `search_paged` (store.hpp) | the same three shapes, entries decoded to `record<T>` |
-| Search and follow referrals | `client::search(params)` with `client_options::referrals` | the pool chases referral results and continuation references; the report is in `search_result::referrals` / `unlisted`, `is_complete()`; a request's `follow_referrals` overrides the pool's switch for one call |
+| Search and follow referrals | `client::search(params)` with `client_options::referrals` | the pool chases referral results and continuation references; the report is in `search_result::referrals` / `unlisted`, `is_complete()`; a request's `follow_referrals` overrides the pool's switch for one call; `client::search_stream`, `search_paged` and the `connection` / `sync::connection` calls ignore it (they never chase) |
 | Follow referrals from a bare connection | `ldap::chase_search(conn, params, connector)`, `chase_compare` (referral_chase.hpp) | the caller's `referral_connector` decides which servers and how to bind (`make_same_policy_connector`) |
 | Watch changes | `search_stream` with `ldap::sync_request` (content_sync.hpp) | RFC 4533 refreshOnly / refreshAndPersist |
 | Change a password, RFC 3062 | `ldap::password_modify(d, params)` | the Password Modify request as the RFC has it; returns the generated password, if any |
@@ -1059,7 +1059,11 @@ itself needs only ICU.
   references of `search()`, as `chase_search` / `chase_compare` do, from
   the pooled connection, within `limits` (a `referral_policy`). A
   request's `follow_referrals` (`search_params`, `compare_params`:
-  `std::optional<bool>`) overrides `follow_referrals` for that call.
+  `std::optional<bool>`) overrides `follow_referrals` for that call
+  (`search()`, `compare()`, and the same on `sync::client`); the calls
+  that never chase ignore it: `client::search_stream`,
+  `ldap::search_paged` on a client, and every `connection` and
+  `sync::connection` call.
   `authorize`, a `std::function<referral_binding(const referral_hop &)>`
   (`referral_hop{target, depth, origin}`), returns `refuse`, `anonymous`
   or `same_setup` (bind with the client's `session_setup`) per URI;

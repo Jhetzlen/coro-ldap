@@ -82,9 +82,11 @@ struct search_params
 	// dropped).
 	bool intermediate_responses = false;
 	// Whether a referral result is chased: overrides
-	// referral_options::follow_referrals for this request on ldap::client
-	// (client::search), and turns it off for chase_search when false. A
-	// connection never chases: connection::search ignores it.
+	// referral_options::follow_referrals for this request in client::search
+	// and sync::client::search, and turns it off for chase_search when
+	// false. Ignored by the calls that never chase: client::search_stream,
+	// ldap::search_paged (on a client too), and every connection and
+	// sync::connection call.
 	std::optional<bool> follow_referrals{};
 };
 
@@ -251,8 +253,9 @@ struct compare_params
 	std::string value{};
 	compare_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
-	// As search_params::follow_referrals, for client::compare and
-	// chase_compare.
+	// As search_params::follow_referrals, for client::compare,
+	// sync::client::compare and chase_compare; connection::compare and
+	// sync::connection::compare ignore it.
 	std::optional<bool> follow_referrals{};
 };
 
