@@ -41,6 +41,7 @@
 #include <numeric>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -2235,7 +2236,7 @@ TEST_CASE("connection: mutated server responses", "[net][connection]")
 		s.close_after = true;
 		outcome<void> server;
 		spawn(ioc, serve_script(net::transport::wrap(socket_ref{ &sp.server }, "server"), { s }, log), server);
-		auto r = run(ioc, conn.search(people_search()));
+		auto r = run_task(ioc, conn.search(people_search()));
 		if (r) {
 			++ok;
 		} else if (&r.error().code.category() == &ldap::result_category()) {
@@ -2323,7 +2324,7 @@ TEST_CASE("connection: ldap::connect failures", "[net][connection]")
 	const refused_port closed;// nothing listens there
 	auto u = ldap::url::parse(closed.url());
 	REQUIRE(u.has_value());
-	auto c = run(ioc, ldap::connect(ioc, *u));
+	auto c = run_task(ioc, ldap::connect(ioc, *u));
 	REQUIRE_FALSE(c.has_value());
 	CHECK(c.error().code == std::errc::connection_refused);
 	CHECK(c.error().code == ldap::cond::busy_or_unavailable);
@@ -2331,9 +2332,57 @@ TEST_CASE("connection: ldap::connect failures", "[net][connection]")
 
 	auto bad = ldap::url::parse("ldap://127.0.0.1:1/??sub?(cn=x)?!unknown-ext");
 	REQUIRE(bad.has_value());
-	auto refused = run(ioc, ldap::connect(ioc, *bad));
+	auto refused = run_task(ioc, ldap::connect(ioc, *bad));
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == client_errc::invalid_url);
+}
+
+TEST_CASE("ldap::run returns the task's value or rethrows its exception", "[net][run]")
+{
+	CHECK(ldap::run([]() -> capy::task<int> { co_return 7; }()) == 7);
+	bool ran = false;
+	ldap::run([](bool &r) -> capy::task<void> {
+		r = true;
+		co_return;
+	}(ran));
+	CHECK(ran);
+	CHECK_THROWS_AS(ldap::run([]() -> capy::task<int> {
+		throw std::runtime_error("thrown");
+		co_return 0;
+	}()),
+	  std::runtime_error);
+
+	corosio::io_context ioc;
+	const refused_port closed;
+	auto u = ldap::url::parse(closed.url());
+	REQUIRE(u.has_value());
+	auto c = ldap::run(ioc, ldap::connect(ioc, *u));
+	REQUIRE_FALSE(c.has_value());
+	CHECK(c.error().code == std::errc::connection_refused);
+	CHECK(ldap::run(ioc, []() -> capy::task<int> { co_return 8; }()) == 8);
+}
+
+TEST_CASE("ldap::run throws canceled when the io_context stops before the task ends", "[net][run]")
+{
+	corosio::io_context ioc;
+	capy::async_event resume;
+	try {
+		(void)ldap::run(ioc, [](corosio::io_context &io, capy::async_event &e) -> capy::task<int> {
+			io.stop();
+			(void)co_await e.wait();
+			co_return 1;
+		}(ioc, resume));
+		FAIL("ldap::run returned");
+	} catch (const std::system_error &e) {
+		CHECK(e.code() == capy::cond::canceled);
+	}
+	// Run again: the stopped context is restarted, and the first task ends too.
+	CHECK(ldap::run(ioc,
+			[](capy::async_event &e) -> capy::task<int> {
+				e.set();
+				co_return 2;
+			}(resume))
+		  == 2);
 }
 
 TEST_CASE("connection: ldap::connect with the URL as text", "[net][connection][connect]")

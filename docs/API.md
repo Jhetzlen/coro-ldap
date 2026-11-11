@@ -250,6 +250,18 @@ itself needs only ICU.
     `search_entry` and `search_reference`, the items of
     `search_stream::next_item()`.
   - `jhetz/ldap/cancel.hpp`: `raceable()` and `with_stop()`.
+  - `jhetz/ldap/run.hpp`: `ldap::run(ioc, task) -> T` runs a task from
+    `main()`: it starts the task on `ioc`, runs `ioc` on the calling thread
+    until no work is left (restarting it first if stopped), and returns the
+    task's value or rethrows its exception; `std::system_error` with
+    `capy::error::canceled` if `ioc` was stopped (or the task abandoned)
+    before the task ended. `ldap::run(task)` uses an io_context of its own. Not to
+    be called from a thread already running `ioc`.
+
+    ```cpp
+    boost::corosio::io_context ioc;
+    return ldap::run(ioc, search(ioc));   // search: a capy::task<int> using ldap::connect(ioc, ...)
+    ```
   - `jhetz/ldap/transaction.hpp`: `ldap::transaction` and
     `commit_result` (RFC 5805, below).
 

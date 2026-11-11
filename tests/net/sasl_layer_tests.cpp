@@ -323,7 +323,7 @@ TEST_CASE("sasl layer: a big buffer read in small pieces grows the read buffer o
 
 	const auto allocations = counting.allocations();
 	const auto bytes = counting.bytes();
-	auto got = run(ioc, [](net::transport &t, std::size_t want) -> capy::task<std::string> {
+	auto got = run_task(ioc, [](net::transport &t, std::size_t want) -> capy::task<std::string> {
 		std::string out(want, '\0');
 		auto [ec, n] = co_await capy::read(t.stream(), capy::mutable_buffer(out.data(), out.size()));
 		if (ec) {

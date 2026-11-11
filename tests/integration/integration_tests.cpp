@@ -691,7 +691,7 @@ TEST_CASE("integration: large and binary values", "[integration]")
 	REQUIRE(big->entries.size() == 1);
 	CHECK(big->entries[0].find("member")->size() == 2000);
 
-	auto photo = run(ioc,
+	auto photo = run_task(ioc,
 	  c.search({ .base = ldap::dn{ "uid=photo,ou=people,dc=example,dc=org" },
 		.scope = ldap::search_scope::base_object,
 		.attributes = { "jpegPhoto" } }));
@@ -774,7 +774,7 @@ TEST_CASE("integration: add, modify, compare, rename and delete", "[integration]
 	REQUIRE_FALSE(again.has_value());
 	CHECK(again.error().code == ldap::cond::already_exists);
 
-	REQUIRE(run(ioc,
+	REQUIRE(run_task(ioc,
 	  c.modify({ .object = entry,
 		.changes = { ldap::mod::add("mail", { "a@example.org", "b@example.org" }),
 		  ldap::mod::remove("mail", { "a@example.org" }),

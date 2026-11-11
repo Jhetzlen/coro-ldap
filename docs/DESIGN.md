@@ -2027,6 +2027,26 @@ auto c = ldap::sync::connect(url, {.timeout = 5s}); // owns an io_context + 1 I/
 auto people = c->search({...});                    // same request/result types
 ```
 
+Starting the async side from `main()` is `ldap::run(ioc, task)` (`run.hpp`,
+header-only, included by `connection.hpp`): it starts the task on the
+io_context's executor with `capy::run_async`, runs the io_context on the
+calling thread until it has no work left, and returns the task's value or
+rethrows its exception. Running until no work is left, rather than until the
+task ends, lets what the task leaves behind finish (a connection destroyed
+off its strand posts its close, a detached name lookup), so the io_context
+can be destroyed right after. A stopped io_context is restarted first, so
+`run` may be called again on the same one. If `io_context::run()` returns
+without the task having ended (stopped, or the task abandoned; the
+trampoline's work guard keeps `run()` going while the task waits), `run` throws `std::system_error` with `capy::error::canceled`,
+as Capy's `run_blocking` does; the completion handlers share their state
+through a `shared_ptr`, so a task that ends later (the io_context run
+again) writes into that state, not into `run`'s frame. `ldap::run(task)`
+does the same on an io_context of its own, for a task that needs none (a
+connection needs `connect(ioc, ...)`). The connection's strand changes
+nothing here: operations hop to the strand and resume the task on the
+io_context's executor. `ldap::run` is not `sync::run` (which runs a free
+async function on a blocking facade's I/O thread).
+
 Entry points follow one rule: what opens eagerly is a free `connect()`
 returning `result<...>` (`ldap::connect`, `ldap::sync::connect`), what
 opens lazily is a constructor (`ldap::client`, `ldap::sync::client`,

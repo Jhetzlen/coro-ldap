@@ -27,7 +27,6 @@
 // Exit status: 0 on success, 1 on an LDAP or connection error, 2 on bad usage.
 #include "jhetz/ldap/connection.hpp"
 
-#include <boost/capy/ex/run_async.hpp>
 #include <boost/corosio/io_context.hpp>
 
 #include <algorithm>
@@ -287,7 +286,7 @@ template<class Stream> auto print_all(ldap::result<Stream> &s) -> capy::task<int
 	co_return status;
 }
 
-auto run(corosio::io_context &ioc, options o) -> capy::task<int>
+auto ldapsearch(corosio::io_context &ioc, options o) -> capy::task<int>
 {
 	auto u = ldap::url::parse(o.url);
 	if (!u) {
@@ -380,19 +379,7 @@ auto main(int argc, char **argv) -> int
 try {
 	options o = parse_args(argc, argv);
 	corosio::io_context ioc;
-	int status = 1;
-	capy::run_async(
-	  ioc.get_executor(),
-	  [&status](int s) { status = s; },
-	  [](std::exception_ptr e) {
-		  try {
-			  std::rethrow_exception(std::move(e));
-		  } catch (const std::exception &x) {
-			  std::println(stderr, "jhetz-ldapsearch: {}", x.what());
-		  }
-	  })(run(ioc, std::move(o)));
-	ioc.run();
-	return status;
+	return ldap::run(ioc, ldapsearch(ioc, std::move(o)));
 } catch (const std::exception &x) {
 	// fputs rather than println, which could throw again.
 	(void)std::fputs("jhetz-ldapsearch: ", stderr);

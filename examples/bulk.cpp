@@ -43,7 +43,7 @@ auto add_modify_delete(ldap::connection &c, in_flight &running, int i) -> capy::
 	running.changed.set();
 }
 
-auto run(boost::corosio::io_context &ioc, std::string text) -> capy::task<int>
+auto example(boost::corosio::io_context &ioc, std::string text) -> capy::task<int>
 {
 	auto c = co_await ldap::connect(ioc, text);
 	if (!c) {
@@ -75,9 +75,5 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> capy::task<int>
 auto main(int argc, char *const *argv) -> int
 {
 	boost::corosio::io_context ioc;
-	int rc = 1;
-	boost::capy::run_async(ioc.get_executor(), [&](int r) { rc = r; })(
-	  run(ioc, argc > 1 ? argv[1] : "ldap://localhost"));
-	ioc.run();
-	return rc;
+	return ldap::run(ioc, example(ioc, argc > 1 ? argv[1] : "ldap://localhost"));
 }

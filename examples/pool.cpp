@@ -1,13 +1,12 @@
 #include "jhetz/ldap/client.hpp"
 
-#include <boost/capy/ex/run_async.hpp>
 #include <boost/corosio/io_context.hpp>
 
 #include <iostream>
 
 namespace ldap = jhetz::ldap;
 
-auto run(boost::corosio::io_context &ioc, ldap::url server) -> boost::capy::task<int>
+auto example(boost::corosio::io_context &ioc, ldap::url server) -> boost::capy::task<int>
 {
 	ldap::client pool(ioc,
 	  { .servers = { server }, .setup = ldap::simple_bind_setup(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret") });
@@ -34,8 +33,5 @@ auto main(int argc, char *const *argv) -> int
 		return 1;
 	}
 	boost::corosio::io_context ioc;
-	int rc = 1;
-	boost::capy::run_async(ioc.get_executor(), [&](int r) { rc = r; })(run(ioc, *server));
-	ioc.run();
-	return rc;
+	return ldap::run(ioc, example(ioc, *server));
 }

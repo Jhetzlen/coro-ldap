@@ -1,6 +1,5 @@
 #include "jhetz/ldap/connection.hpp"
 
-#include <boost/capy/ex/run_async.hpp>
 #include <boost/corosio/io_context.hpp>
 
 #include <iostream>
@@ -10,7 +9,7 @@ namespace ldap = jhetz::ldap;
 
 constexpr int page_size = 100;
 
-auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task<int>
+auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task<int>
 {
 	auto c = co_await ldap::connect(ioc, text);
 	if (!c) {
@@ -46,9 +45,5 @@ auto run(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task
 auto main(int argc, char *const *argv) -> int
 {
 	boost::corosio::io_context ioc;
-	int rc = 1;
-	boost::capy::run_async(ioc.get_executor(), [&](int r) { rc = r; })(
-	  run(ioc, argc > 1 ? argv[1] : "ldap://localhost"));
-	ioc.run();
-	return rc;
+	return ldap::run(ioc, example(ioc, argc > 1 ? argv[1] : "ldap://localhost"));
 }

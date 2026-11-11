@@ -13,6 +13,9 @@
 //   });                                   // result<search_result>: people->entries
 //   co_await c->unbind();
 //
+// From main(), ldap::run(ioc, task) (run.hpp, included here) runs such a task
+// on ioc and returns its result.
+//
 // Multiplexing: concurrent operations (from any threads) are sent at once,
 // each with its own message id, and responses are matched by id. One writer
 // sends PDUs in order; one reader routes responses and runs only while an
@@ -112,6 +115,7 @@
 #include "jhetz/ldap/net/transport.hpp"
 #include "jhetz/ldap/operations.hpp"
 #include "jhetz/ldap/paged_search.hpp"
+#include "jhetz/ldap/run.hpp"
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/search_stream.hpp"
 #include "jhetz/ldap/transaction.hpp"

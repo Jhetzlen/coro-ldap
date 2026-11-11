@@ -425,6 +425,7 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "extended_operations.hpp" EXCLUDE
             PATTERN "paged_search.hpp" EXCLUDE
             PATTERN "referral_chase.hpp" EXCLUDE
+            PATTERN "run.hpp" EXCLUDE
             PATTERN "search_stream.hpp" EXCLUDE
             PATTERN "store.hpp" EXCLUDE
             PATTERN "transaction.hpp" EXCLUDE

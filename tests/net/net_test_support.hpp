@@ -209,7 +209,7 @@ template<class Strand, class F> void run_on(corosio::io_context &ioc, const Stra
 
 // Runs one task to completion and returns its result, after running `ioc`
 // until it has no work left (so peers spawned on it finish too).
-template<class T> auto run(corosio::io_context &ioc, capy::task<T> t) -> T
+template<class T> auto run_task(corosio::io_context &ioc, capy::task<T> t) -> T
 {
 	outcome<T> out;
 	spawn(ioc, std::move(t), out);

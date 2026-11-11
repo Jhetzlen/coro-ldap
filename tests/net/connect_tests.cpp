@@ -285,7 +285,7 @@ auto connect_to(corosio::io_context &ioc, const std::string &text, net::connect_
 {
 	auto u = ldap::url::parse(text);
 	REQUIRE(u.has_value());
-	return run(ioc, net::connect(ioc, *u, std::move(options)));
+	return run_task(ioc, net::connect(ioc, *u, std::move(options)));
 }
 
 auto server_context(const test_pki::issued &leaf) -> corosio::tls_context
@@ -407,7 +407,7 @@ struct blackhole
 	corosio::tcp_socket filler;
 	blackhole(corosio::io_context &ioc, const char *addr, std::uint16_t port) : acc(make(ioc, addr, port)), filler(ioc)
 	{
-		auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::results<>> {
+		auto [fec] = run_task(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::results<>> {
 			co_return co_await s.connect(ep);
 		}(filler, acc.local_endpoint()));
 		REQUIRE_FALSE(fec);
@@ -522,7 +522,7 @@ TEST_CASE("Happy Eyeballs: the budget covers every attempt", "[net][connect][tcp
 	tcp_server srv(ioc, 0);
 	blackhole first(ioc, "127.0.0.2", srv.port);
 	corosio::tcp_socket filler(ioc);
-	auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::results<>> {
+	auto [fec] = run_task(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::results<>> {
 		co_return co_await s.connect(ep);
 	}(filler, corosio::endpoint(corosio::ipv4_address::loopback(), srv.port)));
 	REQUIRE_FALSE(fec);
@@ -722,7 +722,7 @@ TEST_CASE("connect timeout while the TCP handshake cannot complete", "[net][conn
 	corosio::io_context ioc;
 	tcp_server srv(ioc, 0);
 	corosio::tcp_socket filler(ioc);
-	auto [fec] = run(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::results<>> {
+	auto [fec] = run_task(ioc, [](corosio::tcp_socket &s, corosio::endpoint ep) -> capy::task<capy::results<>> {
 		co_return co_await s.connect(ep);
 	}(filler, corosio::endpoint(corosio::ipv4_address::loopback(), srv.port)));
 	REQUIRE_FALSE(fec);
@@ -1700,11 +1700,11 @@ TEST_CASE("transport shutdown: plain and wrapped transports just close", "[net][
 	auto [a, b] = capy::test::make_stream_pair();
 	auto t = net::transport::wrap(std::move(a), "pair");
 	CHECK(t.is_open());
-	REQUIRE(run(ioc, t.shutdown(std::chrono::milliseconds(100))).has_value());
+	REQUIRE(run_task(ioc, t.shutdown(std::chrono::milliseconds(100))).has_value());
 	CHECK_FALSE(t.is_open());
 	// capy::test::stream::close() ran: the peer reads end of file.
 	char byte = 0;
-	auto [ec, n] = run(ioc, [](capy::test::stream &s, char &c) -> capy::task<capy::results<std::size_t>> {
+	auto [ec, n] = run_task(ioc, [](capy::test::stream &s, char &c) -> capy::task<capy::results<std::size_t>> {
 		co_return co_await s.read_some(capy::mutable_buffer(&c, 1));
 	}(b, byte));
 	CHECK(ec == capy::cond::eof);
@@ -1720,7 +1720,7 @@ TEST_CASE("connect allocates the transport from the given resource", "[net][conn
 		spawn(ioc, accept_and_close(srv.acc), server);
 		auto u = ldap::url::parse(srv.url("ldap"));
 		REQUIRE(u.has_value());
-		auto t = run(ioc, net::connect(ioc, *u, {}, &counting));
+		auto t = run_task(ioc, net::connect(ioc, *u, {}, &counting));
 		REQUIRE(t.has_value());
 		server.get();
 		CHECK(t->name().get_allocator().resource() == &counting);
@@ -2022,7 +2022,7 @@ TEST_CASE("net::start_tls needs an open plain TCP transport", "[net][starttls]")
 	auto [a, b] = capy::test::make_stream_pair();
 	auto wrapped = net::transport::wrap(std::move(a), "custom");
 	const net::read_buffer none;
-	auto r = run(ioc, net::start_tls(wrapped, none, { .ca_pem = std::pmr::string(pki().ca_pem()) }));
+	auto r = run_task(ioc, net::start_tls(wrapped, none, { .ca_pem = std::pmr::string(pki().ca_pem()) }));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == std::errc::invalid_argument);
 	CHECK(std::string(r.error().context) == "start tls custom: needs an open plain TCP transport");

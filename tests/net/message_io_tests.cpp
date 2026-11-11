@@ -151,7 +151,7 @@ struct mock
 
 	auto read(net::read_options options = {}) -> ldap::result<ldap::message>
 	{
-		return run(ioc, net::read_message(client, buf, options));
+		return run_task(ioc, net::read_message(client, buf, options));
 	}
 };
 
@@ -399,22 +399,22 @@ TEST_CASE("write_message and write_bytes", "[net][write_message]")
 	auto client = net::transport::wrap(std::move(a), "client");
 	auto server = net::transport::wrap(std::move(b), "server");
 
-	REQUIRE(run(ioc, net::write_message(client, bind_request_msg(1))).has_value());
+	REQUIRE(run_task(ioc, net::write_message(client, bind_request_msg(1))).has_value());
 	const auto two = bytes_of(bind_request_msg(2)) + bytes_of(bind_request_msg(3));
 	const std::vector<std::byte> raw(
 	  reinterpret_cast<const std::byte *>(two.data()), reinterpret_cast<const std::byte *>(two.data()) + two.size());
-	REQUIRE(run(ioc, net::write_bytes(client, raw)).has_value());
+	REQUIRE(run_task(ioc, net::write_bytes(client, raw)).has_value());
 
 	net::read_buffer buf;
 	const net::read_options as_server{ .decode = { .from = ldap::origin::client } };
 	for (int id = 1; id <= 3; ++id) {
-		auto r = run(ioc, net::read_message(server, buf, as_server));
+		auto r = run_task(ioc, net::read_message(server, buf, as_server));
 		REQUIRE(r.has_value());
 		CHECK(*r == bind_request_msg(id));
 	}
 
 	// Encoding errors come back before anything is written.
-	auto bad = run(ioc, net::write_message(client, ldap::message{ -1, ldap::unbind_request{} }));
+	auto bad = run_task(ioc, net::write_message(client, ldap::message{ -1, ldap::unbind_request{} }));
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == client_errc::encode_error);
 	CHECK(std::string(bad.error().context).starts_with("write client: "));
@@ -428,14 +428,14 @@ TEST_CASE("write_message: a write failure reports how much was written", "[net][
 
 	// Ten bytes go out in two writes, then the stream breaks.
 	auto partial = net::transport::wrap(short_write_stream{ .budget = 10, .chunk = 5 }, "partial");
-	auto r = run(ioc, net::write_message(partial, bind_request_msg(1)));
+	auto r = run_task(ioc, net::write_message(partial, bind_request_msg(1)));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == std::errc::broken_pipe);
 	CHECK(std::string(r.error().context) == "write partial (10 of " + std::to_string(size) + " bytes written)");
 
 	// Nothing written: no count.
 	auto none = net::transport::wrap(short_write_stream{}, "none");
-	auto z = run(ioc, net::write_message(none, bind_request_msg(1)));
+	auto z = run_task(ioc, net::write_message(none, bind_request_msg(1)));
 	REQUIRE_FALSE(z.has_value());
 	CHECK(z.error().code == std::errc::broken_pipe);
 	CHECK(std::string(z.error().context) == "write none");
@@ -495,28 +495,28 @@ TEST_CASE("write_message into a caller's resource or a reused writer", "[net][wr
 		// The PDU buffer comes from the given resource (only the coroutine
 		// frame from the default one, as before).
 		ldap::test::scoped_default_resource guard(&heap);
-		REQUIRE(run(ioc, net::write_message(client, bind_request_msg(1), &counting)).has_value());
+		REQUIRE(run_task(ioc, net::write_message(client, bind_request_msg(1), &counting)).has_value());
 	}
 	CHECK(counting.allocations() == 1);// the encoded PDU, reserved once
 	CHECK(counting.outstanding() == 0);
 
 	ldap::ber::writer w{ ldap::ber::writer::allocator_type(&counting) };
-	REQUIRE(run(ioc, net::write_message(client, bind_request_msg(2), w)).has_value());
+	REQUIRE(run_task(ioc, net::write_message(client, bind_request_msg(2), w)).has_value());
 	const auto grown = counting.allocations();
 	for (int id = 3; id <= 4; ++id) {
-		REQUIRE(run(ioc, net::write_message(client, bind_request_msg(id), w)).has_value());
+		REQUIRE(run_task(ioc, net::write_message(client, bind_request_msg(id), w)).has_value());
 	}
 	CHECK(counting.allocations() == grown);// reused, no new allocation
 	CHECK(w.get_allocator().resource() == &counting);
 	CHECK(w.bytes() == *ldap::encode(bind_request_msg(4)));// holds the last PDU
 	// An encoding error leaves the writer empty and writes nothing.
-	auto bad = run(ioc, net::write_message(client, ldap::message{ -1, ldap::unbind_request{} }, w));
+	auto bad = run_task(ioc, net::write_message(client, ldap::message{ -1, ldap::unbind_request{} }, w));
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == client_errc::encode_error);
 	CHECK(w.bytes().empty());
 
 	for (int id = 1; id <= 4; ++id) {
-		auto r = run(ioc, net::read_message(server, buf, as_server));
+		auto r = run_task(ioc, net::read_message(server, buf, as_server));
 		REQUIRE(r.has_value());
 		CHECK(*r == bind_request_msg(id));
 	}
@@ -690,7 +690,7 @@ TEST_CASE("read_message: TLS truncation (no close_notify)", "[net][read_message]
 		std::vector<ldap::result<ldap::message>> out;
 		out.reserve(2);
 		for (int i = 0; i < 2; ++i) {
-			out.push_back(run(ioc, net::read_message(t, buf)));
+			out.push_back(run_task(ioc, net::read_message(t, buf)));
 		}
 		return out;
 	};

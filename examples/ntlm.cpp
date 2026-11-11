@@ -2,7 +2,6 @@
 #include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/sasl_ntlm.hpp"
 
-#include <boost/capy/ex/run_async.hpp>
 #include <boost/corosio/io_context.hpp>
 
 #include <cstdlib>
@@ -10,7 +9,7 @@
 
 namespace ldap = jhetz::ldap;
 
-auto run(boost::corosio::io_context &ioc, char *const *argv, const char *password) -> boost::capy::task<int>
+auto example(boost::corosio::io_context &ioc, char *const *argv, const char *password) -> boost::capy::task<int>
 {
 	auto c = co_await ldap::connect(ioc, argv[1]);
 	if (!c) {
@@ -41,8 +40,5 @@ auto main(int argc, char *const *argv) -> int
 		return 2;
 	}
 	boost::corosio::io_context ioc;
-	int rc = 1;
-	boost::capy::run_async(ioc.get_executor(), [&](int r) { rc = r; })(run(ioc, argv, password));
-	ioc.run();
-	return rc;
+	return ldap::run(ioc, example(ioc, argv, password));
 }

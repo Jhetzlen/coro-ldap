@@ -93,14 +93,13 @@ recipe and what stays Linux only. macOS is not supported.
 ```cpp
 #include "jhetz/ldap/connection.hpp"
 
-#include <boost/capy/ex/run_async.hpp>
 #include <boost/corosio/io_context.hpp>
 
 #include <iostream>
 
 namespace ldap = jhetz::ldap;
 
-auto run(boost::corosio::io_context &ioc) -> boost::capy::task<int>
+auto search(boost::corosio::io_context &ioc) -> boost::capy::task<int>
 {
 	auto c = co_await ldap::connect(ioc, "ldap://localhost");
 	if (!c) {
@@ -130,10 +129,7 @@ auto run(boost::corosio::io_context &ioc) -> boost::capy::task<int>
 auto main() -> int
 {
 	boost::corosio::io_context ioc;
-	int rc = 1;
-	boost::capy::run_async(ioc.get_executor(), [&](int r) { rc = r; })(run(ioc));
-	ioc.run();
-	return rc;
+	return ldap::run(ioc, search(ioc));
 }
 ```
 

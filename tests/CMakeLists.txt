@@ -119,7 +119,7 @@ file(GLOB_RECURSE jhetz_ldap_public_headers CONFIGURE_DEPENDS
 # tests/install/check_install.sh).
 set(jhetz_ldap_net_headers
     jhetz/ldap/cancel.hpp jhetz/ldap/client.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
-    jhetz/ldap/paged_search.hpp jhetz/ldap/referral_chase.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp jhetz/ldap/transaction.hpp
+    jhetz/ldap/paged_search.hpp jhetz/ldap/referral_chase.hpp jhetz/ldap/run.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp jhetz/ldap/transaction.hpp
     jhetz/ldap/sasl_ntlm.hpp jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp
     jhetz/ldap/directory.hpp jhetz/ldap/extended_operations.hpp jhetz/ldap/store.hpp jhetz/ldap/sync_extended_operations.hpp
     jhetz/ldap/sync_store.hpp
