@@ -830,7 +830,8 @@ namespace detail {
 			auto added = values_not_in(*to, *from);
 			if constexpr (std::same_as<typename F::element, binary>) {
 				if (!removed.empty() || !added.empty()) {
-					out.push_back(make_change<Ptr>(modify_operation::replace, values_not_in(*to, string_list{})));
+					out.push_back(make_change<Ptr>(from->empty() ? modify_operation::add : modify_operation::replace,
+					  values_not_in(*to, string_list{})));
 				}
 			} else {
 				if (!removed.empty()) {
@@ -842,6 +843,8 @@ namespace detail {
 			}
 		} else if (to->empty()) {
 			out.push_back(make_change<Ptr>(modify_operation::delete_, string_list{}));
+		} else if (from->empty()) {
+			out.push_back(make_change<Ptr>(modify_operation::add, std::move(*to)));
 		} else {
 			out.push_back(make_change<Ptr>(modify_operation::replace, std::move(*to)));
 		}
@@ -851,13 +854,17 @@ namespace detail {
 
 // The changes turning `original` into `changed`, member by member in
 // descriptor order, read_only members skipped: a single-valued member that
-// differs is replaced, or deleted once empty; a multi-valued one deletes
-// the values it lost, then adds the ones it gained (values compared as
-// encoded, exactly), even when it lost them all, so values `original` does
-// not hold stay. A std::vector<ldap::binary> member is replaced with its new
-// set instead: such attributes (jpegPhoto) often have no equality rule, and
-// the server refuses a value add or delete on those. Empty when nothing
-// differs. Fails with the first value that does not encode (context
+// differs is added when `original` has no value, replaced otherwise, or
+// deleted once empty; a multi-valued one deletes the values it lost, then
+// adds the ones it gained (values compared as encoded, exactly), even when
+// it lost them all, so values `original` does not hold stay. A
+// std::vector<ldap::binary> member is replaced with its new set instead
+// (added when `original`'s set is empty): such attributes (jpegPhoto)
+// often have no equality rule, and the server refuses a value add or
+// delete on those. Writing an empty member with add makes the server
+// refuse a conflicting concurrent value (constraintViolation on a
+// SINGLE-VALUE type already set, attributeOrValueExists for the same
+// value). Empty when nothing differs. Fails with the first value that does not encode (context
 // "attribute mail").
 template<described T> [[nodiscard]] auto diff(const T &original, const T &changed) -> result<std::vector<change<T>>>
 {
@@ -955,9 +962,8 @@ namespace detail {
 	// `out` ANDed with `f`, or `f` when `out` is still empty.
 	inline void and_into(filter &out, filter f) { out = out.empty() ? std::move(f) : std::move(out) && std::move(f); }
 
-	// ANDs (a=v) for each value of member `Ptr` of `original` into `out`, or
-	// (!(a=*)) when it has none; false, with `failed` set, when a value does
-	// not encode.
+	// ANDs (a=v) for each value of member `Ptr` of `original` into `out`;
+	// false, with `failed` set, when a value does not encode.
 	template<auto Ptr>
 	auto append_unchanged(const owner_of<Ptr> &original, filter &out, std::optional<error> &failed) -> bool
 	{
@@ -966,9 +972,6 @@ namespace detail {
 		if (!values) {
 			failed = with_context(std::move(values.error()), std::string("attribute ").append(field_of<Ptr>().name));
 			return false;
-		}
-		if (values->empty()) {
-			and_into(out, !a.present());
 		}
 		for (const auto &v : *values) {
 			and_into(out, a == v);
@@ -979,8 +982,12 @@ namespace detail {
 
 // A filter true of an entry that still has `original`'s values, for an
 // Assertion control (RFC 4528): (a=v) for each value of each member in
-// descriptor order, (!(a=*)) for an empty one, read_only members skipped,
-// all ANDed. Fails with the first value that does not encode (context
+// descriptor order, read_only members skipped, all ANDed; the empty filter
+// when `original` has no value. Each term also matches the attribute's
+// subtypes and tagged values (RFC 4511 4.5.1.7, RFC 4512 2.5), so the
+// filter does not see an added value, nor a plain value replaced while a
+// tagged or subtype sibling holds the same text: ldap::versioned_by is the
+// exact check. Fails with the first value that does not encode (context
 // "attribute mail").
 template<described T> [[nodiscard]] auto unchanged_filter(const T &original) -> result<filter>
 {

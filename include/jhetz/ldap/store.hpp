@@ -823,8 +823,9 @@ template<auto Naming, directory D> class store
 	}
 
 	// One modify turning `original` into `changed` (ldap::diff: only the
-	// members T maps, read_only ones skipped), sent to original.dn, or for a
-	// value, to dn_of(its naming member). nullopt, and nothing sent (no
+	// members T maps, read_only ones skipped; an empty member written with
+	// add, so the server refuses a conflicting concurrent value), sent to
+	// original.dn, or for a value, to dn_of(its naming member). nullopt, and nothing sent (no
 	// schema check either), when no member differs. A changed naming member
 	// fails with naming_value_changed before anything is sent: use rename().
 	auto update(const record<value_type> &original, value_type changed, modify_controls controls = {})
@@ -841,9 +842,13 @@ template<auto Naming, directory D> class store
 	// update(), the modify carrying an Assertion control (RFC 4528) on
 	// `original`: the server applies it only if the entry still matches,
 	// else it fails with errc::assertion_failed (122). The filter is
-	// ldap::unchanged_filter(original), or with ldap::versioned_by<&T::m>,
+	// ldap::unchanged_filter(original), true while every value of `original`
+	// is still there (subtypes and tagged values included; added values are
+	// not seen), or with ldap::versioned_by<&T::m>, the exact check,
 	// (m=<original's value>), which fails with missing_attribute before
-	// anything is sent if `original` has none. Critical. nullopt, and nothing
+	// anything is sent if `original` has none. Critical. A conflicting write
+	// to an empty member fails with the server's own code (16, 18, 19, 20),
+	// so a retry loop re-reads on those too. nullopt, and nothing
 	// sent, when no member differs. An Assertion control in `controls` fails
 	// with encode_error before anything is sent, and so does, with
 	// invalid_filter, a default filter past max_filter_elements (one element

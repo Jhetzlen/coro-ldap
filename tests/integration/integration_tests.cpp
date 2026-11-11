@@ -2612,15 +2612,17 @@ TEST_CASE("integration: store::update_if detects a concurrent change", "[integra
 	CHECK(stale.error().code == ldap::errc::assertion_failed);
 	CHECK(read().cn == "Upd\xC3\xA4ted");
 
-	// A value added to a member that was empty: refused.
+	// A value added to a member that was empty is not seen by the filter.
 	original = read();
 	REQUIRE(
 	  finish(ioc, s.modify(name, { ldap::replace<&versioned_contact::mail>(name + "@example.org") })).has_value());
 	changed = original;
-	changed.cn = "Stale";
+	changed.cn = "Not seen";
 	auto added = finish(ioc, s.update_if(original, changed));
-	REQUIRE_FALSE(added.has_value());
-	CHECK(added.error().code == ldap::errc::assertion_failed);
+	if (!added) {
+		FAIL(added.error().message());
+	}
+	CHECK(read().cn == "Not seen");
 
 	// entryCSN: applied, then the same original is stale.
 	original = read();
@@ -2647,6 +2649,83 @@ TEST_CASE("integration: store::update_if detects a concurrent change", "[integra
 		FAIL(by_time.error().message());
 	}
 	CHECK(read().cn == "By timestamp");
+	REQUIRE(finish(ioc, s.remove(name)).has_value());
+}
+
+namespace {
+
+struct tagged_contact
+{
+	std::string uid;
+	std::string cn;
+	std::string sn;
+	std::optional<std::string> description;
+	std::optional<std::string> display_name;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<tagged_contact> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::field<&tagged_contact::uid>("uid"),
+  ldap::field<&tagged_contact::cn>("cn"),
+  ldap::field<&tagged_contact::sn>("sn"),
+  ldap::field<&tagged_contact::description>("description"),
+  ldap::field<&tagged_contact::display_name>("displayName"));
+
+TEST_CASE("integration: store::update_if next to a tagged value, and an empty member written with add",
+  "[integration][store][update]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	draining_context ioc;
+	auto c = open_admin(ioc);
+	ldap::store s(c, people, ldap::named_by<&tagged_contact::uid>);
+	const std::string name = unique("tagged");
+	REQUIRE(finish(ioc,
+	  s.add(tagged_contact{
+		.uid = name, .cn = "Tagged", .sn = "Contact", .description = std::nullopt, .display_name = std::nullopt }))
+		.has_value());
+	const auto entry = s.dn_of(name);
+	REQUIRE(entry.has_value());
+	REQUIRE(
+	  finish(ioc, c.modify({ .object = *entry, .changes = { ldap::mod::add("description;lang-fr", { "Bonjour" }) } }))
+		.has_value());
+	const auto read = [&] {
+		auto got = finish(ioc, s.get(name));
+		REQUIRE(got.has_value());
+		REQUIRE(got->has_value());
+		return **got;
+	};
+
+	// Only description;lang-fr: another member, then description itself.
+	tagged_contact original = read();
+	CHECK_FALSE(original.description.has_value());
+	tagged_contact changed = original;
+	changed.cn = "Re-tagged";
+	auto other = finish(ioc, s.update_if(original, changed));
+	if (!other) {
+		FAIL(other.error().message());
+	}
+	original = read();
+	changed = original;
+	changed.description = "Hello";
+	auto described = finish(ioc, s.update_if(original, changed));
+	if (!described) {
+		FAIL(described.error().message());
+	}
+	CHECK(read().description == "Hello");
+
+	// An empty SINGLE-VALUE member set meanwhile: the add is refused.
+	original = read();
+	REQUIRE(finish(ioc, s.modify(name, { ldap::replace<&tagged_contact::display_name>("Theirs") })).has_value());
+	changed = original;
+	changed.display_name = "Mine";
+	auto conflict = finish(ioc, s.update_if(original, changed));
+	REQUIRE_FALSE(conflict.has_value());
+	CHECK(conflict.error().code == ldap::errc::constraint_violation);
+	CHECK(read().display_name == "Theirs");
 	REQUIRE(finish(ioc, s.remove(name)).has_value());
 }
 

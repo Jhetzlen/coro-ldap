@@ -676,8 +676,8 @@ TEST_CASE("unchanged_filter: the original's values as a filter", "[mapping][unch
 	auto all = ldap::unchanged_filter(original);
 	REQUIRE(all.has_value());
 	CHECK(all->to_string()
-		  == "(&(uid=jdoe)(cn=John)(!(mail=*))(!(memberOf=*))(uidNumber=1000)(x-disabled=FALSE)(jpegPhoto=\\28)"
-			 "(telephoneNumber=1)(telephoneNumber=2)(!(x-status=*)))");
+		  == "(&(uid=jdoe)(cn=John)(uidNumber=1000)(x-disabled=FALSE)(jpegPhoto=\\28)"
+			 "(telephoneNumber=1)(telephoneNumber=2))");
 
 	auto version = ldap::unchanged_filter<&person::created>(original);
 	REQUIRE(version.has_value());
@@ -727,7 +727,7 @@ TEST_CASE("diff: the changes turning one value into another", "[mapping][diff]")
 
 	CHECK(wires(ldap::diff(before, before)).empty());
 
-	SECTION("single-valued members: replace, or delete once empty")
+	SECTION("single-valued members: add when empty, replace, or delete once empty")
 	{
 		person after = before;
 		after.cn = "J\xC3\xBCrgen Doe";
@@ -739,7 +739,12 @@ TEST_CASE("diff: the changes turning one value into another", "[mapping][diff]")
 			  == std::vector<ldap::modify_change>{ { op::replace, { "cn", { "J\xC3\xBCrgen Doe" } } },
 				{ op::delete_, { "mail", {} } },
 				{ op::replace, { "uidNumber", { "1001" } } },
-				{ op::replace, { "x-disabled", { "TRUE" } } } });
+				{ op::add, { "x-disabled", { "TRUE" } } } });
+
+		person refilled = after;
+		refilled.disabled = false;
+		CHECK(wires(ldap::diff(after, refilled))
+			  == std::vector<ldap::modify_change>{ { op::replace, { "x-disabled", { "FALSE" } } } });
 	}
 
 	SECTION("multi-valued members: delete the lost values, then add the new ones")
@@ -776,7 +781,7 @@ TEST_CASE("diff: the changes turning one value into another", "[mapping][diff]")
 	}
 }
 
-TEST_CASE("diff: a multi-valued binary member is replaced", "[mapping][diff]")
+TEST_CASE("diff: a multi-valued binary member is replaced, or added when empty", "[mapping][diff]")
 {
 	using op = ldap::modify_operation;
 	const auto wires = [](const ldap::result<std::vector<ldap::change<album>>> &r) {
@@ -798,6 +803,8 @@ TEST_CASE("diff: a multi-valued binary member is replaced", "[mapping][diff]")
 		  == std::vector<ldap::modify_change>{ { op::replace, { "jpegPhoto", { "b", "c" } } } });
 	CHECK(wires(ldap::diff(before, album{ .photos = {} }))
 		  == std::vector<ldap::modify_change>{ { op::replace, { "jpegPhoto", {} } } });
+	CHECK(wires(ldap::diff(album{}, album{ .photos = { a, b, a } }))
+		  == std::vector<ldap::modify_change>{ { op::add, { "jpegPhoto", { "a", "b" } } } });
 }
 
 TEST_CASE("typed filters and object class narrowing", "[mapping][filter]")

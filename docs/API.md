@@ -904,21 +904,33 @@ itself needs only ICU.
   `update(original, changed)` (`original` a `record<T>`, sent to its
   DN, or a `T`, sent to `dn_of` its naming member) -> `task<result<
   std::optional<response>>>`: one modify of the members that differ
-  (`ldap::diff(original, changed)` in mapping.hpp: replace or delete for
-  single-valued members, delete then add of the values for multi-valued
-  ones, a cleared one included, so values `original` does not hold stay;
-  one replace with the new set for `std::vector<ldap::binary>`, whose
-  attributes often have no equality rule;
+  (`ldap::diff(original, changed)` in mapping.hpp: add when `original`
+  has no value, else replace or delete, for single-valued members, delete
+  then add of the values for multi-valued ones, a cleared one included,
+  so values `original` does not hold stay; one replace with the new set
+  for `std::vector<ldap::binary>` (add when `original`'s set is empty),
+  whose attributes often have no equality rule;
   read_only members skipped), nullopt with nothing sent when none
   differs, `client_errc::naming_value_changed` when the naming member
   differs (use `rename`);
   `update_if(original, changed)` and `update_if(original, changed,
   ldap::versioned_by<&T::m>)`, the same modify with a critical Assertion
   control (RFC 4528) on `original`: `ldap::unchanged_filter(original)`
-  (mapping.hpp: `(a=v)` for each value of each member, `(!(a=*))` for an
-  empty one, read_only members skipped) or `(m=<original's value>)` on a
-  single-valued member, read_only or not (entryCSN, modifyTimestamp); a
-  concurrent change fails with `errc::assertion_failed` (122). The default
+  (mapping.hpp: `(a=v)` for each value of each member, read_only members
+  skipped; true while every value of `original` is still held by its
+  attribute, subtypes and tagged values included, RFC 4511 4.5.1.7, RFC
+  4512 2.5; it does not see added values nor a plain value replaced while
+  a tagged or subtype sibling holds the same text) or `(m=<original's
+  value>)` on a single-valued member, read_only or not (entryCSN,
+  uSNChanged, modifyTimestamp), the exact check; a value of `original`
+  gone fails with `errc::assertion_failed` (122), and a conflicting write
+  to an empty member, which `update` and `update_if` write with add, with
+  the server's own code (16, 18, 19, 20; not refused under Permissive
+  Modify), so a retry loop re-reads on those too. A member mapped
+  `std::optional` over a schema-multi-valued attribute can end with two
+  values after concurrent writes; its next decode fails with
+  `too_many_values`. An `original` with no values gives the empty filter
+  (`invalid_filter` before sending). The default
   filter past `max_filter_elements` (10,000) elements, one per value, fails
   with `invalid_filter` before anything is sent: use `versioned_by`. An empty
   version member fails with `client_errc::missing_attribute`, and an

@@ -1637,8 +1637,9 @@ co_await people.remove("jdoe");
   and the limit codes are values, as `search()`.
 - `update(original, changed)` sends one modify built by `ldap::diff`
   (mapping.hpp), to `original.dn` for a `record<T>` or to `dn_of` the
-  naming member for a `T`: a single-valued member that differs is
-  replaced, or deleted once empty; a multi-valued one deletes the values
+  naming member for a `T`: a single-valued member that differs is added
+  when `original` has no value, replaced otherwise, or deleted once
+  empty; a multi-valued one deletes the values
   it lost, then adds the new ones (RFC 4511 section 4.6, applied in
   order, so a value that changed only in case under a caseIgnore rule is
   deleted, then added again); values compare as encoded, exactly. A
@@ -1647,8 +1648,9 @@ co_await people.remove("jdoe");
   removes the attribute with its last value. A value another client
   removed since fails the modify with noSuchAttribute (16), a partial
   edit or a clear alike. A `std::vector<ldap::binary>` member is the
-  exception: it is replaced with its new set (no values when cleared), so
-  a value another client added since is lost. The usual such attributes
+  exception: it is replaced with its new set (no values when cleared,
+  added when `original`'s set is empty), so a value another client added
+  since to a non-empty set is lost. The usual such attributes
   (jpegPhoto, RFC 2798) have no EQUALITY rule, a server answers a value
   add or delete on those with inappropriateMatching (18, RFC 4511 section
   4.6 needs equality to find the values), and `diff` has no schema to ask.
@@ -1661,16 +1663,41 @@ co_await people.remove("jdoe");
   anything is sent: the entry would need a new DN, which is `rename`'s
   job, not a hidden modify DN. `original` is the caller's: no read
   before the write, so a concurrent change between the read and the
-  update is not detected (`update_if` detects it).
+  update is not detected (`update_if` detects it), except that an empty
+  member is written with add: the server refuses a conflicting value
+  written since (verified on slapd 2.6.10: constraintViolation (19) on a
+  SINGLE-VALUE type already set, attributeOrValueExists (20) for the same
+  value, inappropriateMatching (18) when a no-EQUALITY attribute such as
+  jpegPhoto is present), while a tagged sibling such as
+  `description;lang-fr` does not interfere, so `update` no longer
+  silently overwrites a concurrent value there. `store::modify` with
+  `ldap::replace<&T::m>` stays the last-writer-wins path. With Permissive
+  Modify the conflicting add is not refused. A member mapped
+  `std::optional` over a schema-multi-valued attribute can end with two
+  values after concurrent writes, and its next decode fails with
+  `too_many_values`.
 - `update_if(original, changed)` is `update` with a critical Assertion
   control (RFC 4528), so the server applies the modify only if the
   entry still matches `original`, atomically, and otherwise answers
   assertionFailed (122), returned as the error. Critical because a
   server ignoring the control would apply an update the caller made
   conditional. Two conditions:
-  - By default `ldap::unchanged_filter(original)`: `(a=v)` for each value
-    of each member, `(!(a=*))` for an empty one, so a value added to an
-    empty member is seen too. read_only members are skipped, as in `diff`:
+  - By default exactly `ldap::unchanged_filter(original)`: `(a=v)` for
+    each value of each member, true while every value of `original` is
+    still held by its attribute, subtypes and tagged values included (RFC
+    4511 section 4.5.1.7, RFC 4512 section 2.5). There is no absence term
+    for an empty member: no filter can test the exact description alone,
+    so `(!(description=*))` is false on an entry holding only
+    `description;lang-fr` (or AD's `member;range=0-1499`) and failed
+    every update with 122 with nobody racing. A value written to an empty
+    member is caught by the add instead (above), with the server's own
+    code (16, 18, 19, 20) rather than 122, so a retry loop re-reads on
+    those too. The filter does not see added values nor a plain value
+    replaced while a tagged or subtype sibling holds the same text;
+    `versioned_by` is the exact check. An `original` with no values gives
+    the empty filter, and `update_if` fails with `invalid_filter` before
+    sending (unreachable for a store, whose naming member is not
+    read_only). read_only members are skipped, as in `diff`:
     the server changes those on its own (a `lastLogon` would refuse
     updates nobody raced with), and a type that truncates (`sys_seconds`
     drops fractions) could never match. A filter cannot count values, so
@@ -1678,7 +1705,7 @@ co_await people.remove("jdoe");
     does not map, go unnoticed. A member whose attribute has no equality
     rule (jpegPhoto) evaluates to Undefined, which fails the assertion
     every time. A filter holds at most `max_filter_elements` (10,000)
-    elements, the enclosing AND and one per value or empty member, so a
+    elements, the enclosing AND and one per value, so a
     struct with more (a large group's `member`) fails every call with
     `invalid_filter` before anything is sent; `versioned_by` is the way
     out.

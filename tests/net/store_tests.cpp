@@ -361,7 +361,7 @@ TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]
 	person after = before;
 	after.uid_number = 1001;
 	const ldap::modify_change number{ op::replace, { "uidNumber", { "1001" } } };
-	const auto values = attr("uid") == "jdoe" && !attr("mail").present() && attr("uidNumber") == "1000";
+	const auto values = attr("uid") == "jdoe" && attr("uidNumber") == "1000";
 	const auto version = attr("modifyTimestamp") == "19700101000005Z";
 	constexpr auto modified = ldap::versioned_by<&person::modified>;
 
@@ -395,6 +395,23 @@ TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]
 		CHECK(m.log.received[3]
 			  == ldap::message{ 4, ldap::modify_request{ named, { number } }, { *post_read, assertion_of(version) } });
 		CHECK(m.log.received[0].controls[0].criticality);
+	}
+
+	SECTION("an empty member: no absence clause, and the value is added")
+	{
+		mock_ldap m;
+		m.serve({ answer({ ok(1, ldap::modify_response{}) }) });
+		ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+		person filled = before;
+		filled.mail = "jdoe@example.org";
+		REQUIRE(m.run(s.update_if(found, filled)).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(m.log.received[0]
+			  == ldap::message{ 1,
+				ldap::modify_request{
+				  "cn=John,ou=other,dc=example,dc=org", { { op::add, { "mail", { "jdoe@example.org" } } } } },
+				{ assertion_of(values) } });
 	}
 
 	SECTION("a concurrent change fails with assertionFailed")
