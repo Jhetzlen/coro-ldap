@@ -1139,6 +1139,17 @@ package component `ad`:
   `account_disable`, `dont_expire_passwd`, ...), with `|`, `&`, `^`, `~`,
   their assignments and `has(flags, bits)`. `value_traits` on INTEGER: the
   signed 32-bit decimal AD writes (bits not named are kept).
+- `jhetz/ldap/ad/filters.hpp` (`jhetz::ldap`): AD's bitwise matching
+  rules as extensible-match filters: `ad::matching_rule_bit_and`
+  (LDAP_MATCHING_RULE_BIT_AND, 1.2.840.113556.1.4.803) and
+  `ad::matching_rule_bit_or` (1.2.840.113556.1.4.804);
+  `ad::all_bits(attr, bits)` / `ad::any_bits(attr, bits)` and the typed
+  `ad::all_bits<&T::m>(bits)` / `ad::any_bits<&T::m>(bits)` on a
+  described member, for a `user_account_control` (written as its
+  `value_traits` write it, AD's signed 32-bit decimal) or an integer
+  (groupType, systemFlags, searchFlags; its own decimal value):
+  `ad::all_bits<&user::uac>(account_disable)` is
+  `(userAccountControl:1.2.840.113556.1.4.803:=2)`.
 - `jhetz/ldap/ad/controls.hpp` (`jhetz::ldap`): AD's request controls,
   converting to a raw `ldap::control`, so they go in any operation's
   `.controls` (and `request_controls`). `ad::show_deleted{}`

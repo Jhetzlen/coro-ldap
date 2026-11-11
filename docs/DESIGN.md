@@ -3070,6 +3070,7 @@ Layout:
   (the FILETIME clock and its `value_traits`, section 4),
   `ad/syntax.hpp` (AD's syntax OIDs), `ad/sid.hpp`, `ad/guid.hpp` and
   `ad/user_account_control.hpp` (the value types below),
+  `ad/filters.hpp` (filters on AD's bitwise matching rules, below),
   `ad/controls.hpp` (AD's request controls),
   `ad/password_value.hpp` (the `unicodePwd` value) and
   `ad/diagnostic.hpp` (`explain`). These headers are installed with the
@@ -3112,6 +3113,15 @@ with MS-DTYP and .NET vectors (`tests/ad_types_tests.cpp`) and on Samba
 (`integration.samba_ad`: Administrator's RID 500 under the domain SID,
 lookups by typed objectSid and objectGUID filters, a new user's
 userAccountControl written back).
+
+Filters: `ad::all_bits` and `ad::any_bits` (`ad/filters.hpp`) build the
+extensible matches on LDAP_MATCHING_RULE_BIT_AND and BIT_OR (MS-ADTS
+3.1.1.3.4.4.1), from an attribute or a described member, for a
+`user_account_control` or an integer. The value is written by the type's
+`value_traits`, so bit 31 of a `user_account_control` is AD's signed
+decimal, and the rule OIDs are named constants. Tested byte for byte
+(`tests/ad_types_tests.cpp`) and on Samba (`integration.samba_ad`: a
+disabled user found by BIT_AND and BIT_OR, not found negated).
 
 Controls: AD's request controls are types in `ldap::ad` that convert
 implicitly to a raw `ldap::control`, the core's escape hatch allowed on

@@ -1,7 +1,9 @@
+#include "jhetz/ldap/ad/filters.hpp"
 #include "jhetz/ldap/ad/guid.hpp"
 #include "jhetz/ldap/ad/sid.hpp"
 #include "jhetz/ldap/ad/user_account_control.hpp"
 #include "jhetz/ldap/schema.hpp"
+#include "test_util.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -378,4 +380,61 @@ TEST_CASE("ad types in validate<T>: Octet String and INTEGER", "[ad][schema]")
 	CHECK(bad.issues[0].what == ldap::schema_issue::kind::syntax_mismatch);
 	CHECK(bad.issues[1].name == "userAccountControl");
 	CHECK(bad.issues[1].what == ldap::schema_issue::kind::syntax_mismatch);
+}
+
+// ---------------------------------------------------------------- bitwise filters
+
+namespace {
+
+struct ad_group
+{
+	std::string cn;
+	std::int64_t group_type = 0;
+};
+
+auto ber_of(const ldap::filter &f) -> std::string
+{
+	ldap::ber::writer w;
+	REQUIRE(ldap::encode_filter(w, f).has_value());
+	return ldap::test::hex(w.bytes());
+}
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<ad_group> = ldap::describe(ldap::object_class("group"),
+  ldap::field<&ad_group::cn>("cn"),
+  ldap::field<&ad_group::group_type>("groupType"));
+
+TEST_CASE("ad bitwise matching-rule filters", "[ad][filter]")
+{
+	using enum ad::user_account_control;
+	CHECK(std::string_view(ad::matching_rule_bit_and) == "1.2.840.113556.1.4.803");
+	CHECK(std::string_view(ad::matching_rule_bit_or) == "1.2.840.113556.1.4.804");
+
+	const auto disabled = ad::all_bits<&ad_account::user_account_control>(account_disable);
+	CHECK(disabled.to_string() == "(userAccountControl:1.2.840.113556.1.4.803:=2)");
+	// ExtensibleMatch [9]: matchingRule [1], type [2], matchValue [3], no dnAttributes.
+	CHECK(ber_of(disabled)
+		  == "A9 2F 81 16 31 2E 32 2E 38 34 30 2E 31 31 33 35 35 36 2E 31 2E 34 2E 38 30 33 82 12 75 73 65 72 41 63 63 "
+			 "6F 75 6E 74 43 6F 6E 74 72 6F 6C 83 01 32");
+	CHECK(ad::any_bits<&ad_account::user_account_control>(account_disable | lockout).to_string()
+		  == "(userAccountControl:1.2.840.113556.1.4.804:=18)");
+	// Bit 31 as AD's signed 32-bit INTEGER.
+	CHECK(ad::all_bits(ldap::filters::attr("userAccountControl"), ad::user_account_control(0x8000'0000U)).to_string()
+		  == "(userAccountControl:1.2.840.113556.1.4.803:=-2147483648)");
+
+	// Other bitmask attributes, by integer.
+	CHECK(ad::any_bits(ldap::filters::attr("groupType"), std::uint32_t{ 0x8000'0000 }).to_string()
+		  == "(groupType:1.2.840.113556.1.4.804:=2147483648)");
+	CHECK(ber_of(ad::any_bits(ldap::filters::attr("groupType"), std::uint32_t{ 0x8000'0000 }))
+		  == "A9 2F 81 16 31 2E 32 2E 38 34 30 2E 31 31 33 35 35 36 2E 31 2E 34 2E 38 30 34 82 09 67 72 6F 75 70 54 79 "
+			 "70 65 83 0A 32 31 34 37 34 38 33 36 34 38");
+	CHECK(ad::all_bits<&ad_group::group_type>(4).to_string() == "(groupType:1.2.840.113556.1.4.803:=4)");
+	CHECK(
+	  ad::all_bits(ldap::filters::attr("systemFlags"), 0x10).to_string() == "(systemFlags:1.2.840.113556.1.4.803:=16)");
+
+	// They compose like any filter: enabled users.
+	CHECK((ldap::filters::attr("objectCategory") == "person" && !disabled).to_string()
+		  == "(&(objectCategory=person)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))");
 }

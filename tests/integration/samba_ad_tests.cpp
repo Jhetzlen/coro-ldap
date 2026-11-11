@@ -14,6 +14,7 @@
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/ad/filetime.hpp"
+#include "jhetz/ldap/ad/filters.hpp"
 #include "jhetz/ldap/ad/guid.hpp"
 #include "jhetz/ldap/ad/password.hpp"
 #include "jhetz/ldap/ad/sid.hpp"
@@ -960,6 +961,22 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 		CHECK(has(fresh.user_account_control, normal_account | account_disable));
 
 		ldap::store accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
+		const auto named = ldap::filters::field<&ad_account::sam_account_name>() == "coro-typed";
+		auto disabled = finish(ioc,
+		  accounts.search(named && ldap::ad::all_bits<&ad_account::user_account_control>(account_disable),
+			ldap::search_scope::whole_subtree));
+		REQUIRE(disabled.has_value());
+		CHECK(disabled->entries.size() == 1);
+		auto either = finish(ioc,
+		  accounts.search(named && ldap::ad::any_bits<&ad_account::user_account_control>(account_disable | lockout),
+			ldap::search_scope::whole_subtree));
+		REQUIRE(either.has_value());
+		CHECK(either->entries.size() == 1);
+		auto enabled = finish(ioc,
+		  accounts.search(named && !ldap::ad::all_bits<&ad_account::user_account_control>(account_disable),
+			ldap::search_scope::whole_subtree));
+		REQUIRE(enabled.has_value());
+		CHECK(enabled->entries.empty());
 		auto m = finish(ioc,
 		  accounts.modify_at(typed_user,
 			{ ldap::replace<&ad_account::user_account_control>(fresh.user_account_control | dont_expire_passwd) }));
