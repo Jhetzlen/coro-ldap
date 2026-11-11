@@ -583,14 +583,10 @@ class client
 	// connection after cond::connection_lost or cond::busy_or_unavailable.
 	[[nodiscard]] auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> result<search_result>;
-	[[nodiscard]] auto compare(compare_params request) -> result<bool>;
-	// As ldap::client's, chasing referrals as client_options::referrals
-	// says, with what the chase did (search() and compare() chase too, see
-	// "Referrals" in client.hpp). The authorizer and the observer's
-	// on_referral run on the I/O thread.
-	[[nodiscard]] auto chase_search(search_params request,
-	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<chased_search>;
-	[[nodiscard]] auto chase_compare(compare_params request) -> result<chased_compare>;
+	[[nodiscard]] auto compare(compare_params request) -> result<compare_result>;
+	// Both chase referrals as client_options::referrals says, with what the
+	// chase did in the result (see "Referrals" in client.hpp). The
+	// authorizer and the observer's on_referral run on the I/O thread.
 
 	// The write forwarders, as ldap::client's: each acquires a shared
 	// lease, runs the operation, returns the lease, and retries once on

@@ -14,10 +14,12 @@
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/entry.hpp"
+#include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <memory_resource>
@@ -79,6 +81,11 @@ struct search_params
 	// next(), search() and search_paged() ignore it (they are decoded and
 	// dropped).
 	bool intermediate_responses = false;
+	// Whether a referral result is chased: overrides
+	// referral_options::follow_referrals for this request on ldap::client
+	// (client::search), and turns it off for chase_search when false. A
+	// connection never chases: connection::search ignores it.
+	std::optional<bool> follow_referrals{};
 };
 
 // The search reading the root DSE (RFC 4512 section 5.1): the empty DN,
@@ -89,14 +96,60 @@ struct search_params
 	return { .base = dn{}, .scope = search_scope::base_object, .attributes = std::move(attributes) };
 }
 
+// Where a referral URL came from: what to do with an absent DN depends on it.
+enum class reference_kind : std::uint8_t {
+	referral,// the referral field of an LDAPResult (RFC 4511 section 4.1.10)
+	continuation_reference,// a SearchResultReference (section 4.5.3)
+};
+
+// What became of one URI of a referral or continuation reference that a
+// referral chase considered (referral_chase.hpp, ldap::client).
+enum class referral_outcome : std::uint8_t {
+	// The request was sent to the target and answered: a result, or a
+	// referral that was chased in turn (the next attempts, one hop deeper).
+	followed,
+	skipped_policy,// the connector returned null
+	skipped_loop,// that server already got the same request in this chase
+	limit_reached,// over max_hops or max_targets, or the timeout was spent
+	unparseable,// not an LDAP URL, or one that cannot be followed (referral_target): see failure
+	failed,// the connector or the request failed: see failure
+};
+
+// One URI that was considered, in the order the chase got to it. URIs not
+// tried because an earlier alternative of the same reference was followed,
+// or was over a limit, are not listed.
+struct referral_attempt
+{
+	std::string uri{};// as the server sent it
+	reference_kind kind = reference_kind::referral;
+	std::size_t depth = 1;// 1: returned by the origin's server
+	referral_outcome outcome = referral_outcome::followed;
+	std::optional<error> failure{};// unparseable and failed: why
+
+	friend auto operator==(const referral_attempt &, const referral_attempt &) -> bool = default;
+};
+
 // A search run to its end (connection::search, store::search, client::search,
-// the sync facades): the entries and the URIs of the search result
-// references received, in order, then the SearchResultDone's LDAPResult
-// (RFC 4511 sections 4.5.2 and 4.1.9; resultCode, matchedDN,
+// chase_search, the sync facades): the entries and the URIs of the search
+// result references received, in order, then the SearchResultDone's
+// LDAPResult (RFC 4511 sections 4.5.2 and 4.1.9; resultCode, matchedDN,
 // diagnosticMessage) and the controls of its message. Returned for success
 // and for the codes that end a search with part of its entries
 // (sizeLimitExceeded, timeLimitExceeded, adminLimitExceeded: is_success()
 // is then false); any other result code is an error.
+//
+// After a referral chase (chase_search, or ldap::client with
+// client_options::referrals): the entries are the origin's (or, after a
+// referral result, the target's), then those of each continuation
+// reference followed, in the order followed; `references` holds the URIs
+// of the continuation references not followed by any of their URIs
+// (skipped, unparseable, over a limit, failed, left unexamined when the
+// chase stopped, or not followed at all; one skipped only as a loop is not
+// there); the LDAPResult is the origin's (or the referral target's), or,
+// when that is success, that of the first followed continuation
+// reference whose search ended with a limit code; the controls are the
+// origin's (or the referral target's). `referrals` and `unlisted` report
+// what the chase did with each URI.
 template<class Entries> struct basic_search_result
 {
 	Entries entries{};
@@ -105,9 +158,23 @@ template<class Entries> struct basic_search_result
 	std::pmr::string matched_dn{};
 	std::pmr::string diagnostic_message{};
 	std::pmr::vector<control> controls{};
+	// The URIs a referral chase considered (empty without one), at most
+	// referral_policy::max_attempts.
+	std::vector<referral_attempt> referrals{};
+	// URIs a chase considered that are not in `referrals`: those beyond
+	// referral_policy::max_attempts, and those of the references left
+	// unexamined when the chase stopped (max_targets reached or the timeout
+	// spent), or not followed at all (ldap::client with
+	// referral_options::follow_references off).
+	std::size_t unlisted = 0;
 
 	// resultCode success: the search returned every entry it found.
 	[[nodiscard]] auto is_success() const noexcept -> bool { return result_code == 0; }
+	// The entries are all there are: resultCode success and no continuation
+	// reference left unfollowed. A chase's reference skipped only as a loop
+	// leaves it true (its server already got that search); one over
+	// max_hops or left unexamined clears it.
+	[[nodiscard]] auto is_complete() const noexcept -> bool { return is_success() && references.empty(); }
 
 	friend auto operator==(const basic_search_result &, const basic_search_result &) -> bool = default;
 };
@@ -184,6 +251,21 @@ struct compare_params
 	std::string value{};
 	compare_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
+	// As search_params::follow_referrals, for client::compare and
+	// chase_compare.
+	std::optional<bool> follow_referrals{};
+};
+
+// What ldap::client::compare and chase_compare return: compareTrue: true,
+// compareFalse: false, and what a referral chase did (as
+// basic_search_result's `referrals` and `unlisted`; empty without one).
+struct compare_result
+{
+	bool value = false;
+	std::vector<referral_attempt> referrals{};
+	std::size_t unlisted = 0;
+
+	friend auto operator==(const compare_result &, const compare_result &) -> bool = default;
 };
 
 // ExtendedRequest (RFC 4511 section 4.12).

@@ -372,7 +372,7 @@ auto client_worker(ldap::client &pool, ldap::store<&person::uid, ldap::client> &
 		t.check((co_await pool.add({ .entry = ldap::dn{ "uid=y,ou=people,dc=example,dc=org" } })).has_value());
 		auto same = co_await pool.compare(
 		  { .entry = ldap::dn{ "uid=y,ou=people,dc=example,dc=org" }, .attribute = "uid", .value = "y" });
-		t.check(same && *same);
+		t.check(same && same->value);
 		t.check((co_await pool.del({ .entry = ldap::dn{ "uid=y,ou=people,dc=example,dc=org" } })).has_value());
 		t.check((co_await ldap::who_am_i(pool)).has_value());
 		t.check((co_await people.get("a")).has_value());

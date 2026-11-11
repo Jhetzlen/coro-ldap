@@ -2147,7 +2147,7 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 
 	REQUIRE(finish(ioc, pool.modify({ .object = entry, .changes = { ldap::mod::add("mail", { "pool@example.org" }) } }))
 		.has_value());
-	CHECK(finish(ioc, pool.compare({ .entry = entry, .attribute = "mail", .value = "pool@example.org" })) == true);
+	CHECK(finish(ioc, pool.compare({ .entry = entry, .attribute = "mail", .value = "pool@example.org" }))->value);
 
 	REQUIRE(finish(ioc, pool.modify_dn({ .entry = entry, .new_rdn = entry.rdns().front(), .new_superior = groups }))
 		.has_value());
@@ -2164,7 +2164,7 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 	REQUIRE(finish(
 	  ioc, pool.modify({ .object = renamed, .changes = { ldap::mod::replace("mail", { "plain@example.org" }) } }))
 		.has_value());
-	CHECK(finish(ioc, pool.compare({ .entry = renamed, .attribute = "mail", .value = "plain@example.org" })) == true);
+	CHECK(finish(ioc, pool.compare({ .entry = renamed, .attribute = "mail", .value = "plain@example.org" }))->value);
 
 	REQUIRE(finish(ioc, pool.del({ .entry = renamed })).has_value());
 	auto gone = finish(ioc, pool.del({ .entry = renamed }));
@@ -2714,7 +2714,11 @@ template<class D> auto threaded_worker(D &d, std::string name, int rounds, std::
 				   { "sn", { "T" } } } }))
 			.has_value());
 		auto same = co_await d.compare({ .entry = entry, .attribute = "cn", .value = "T" });
-		check(same && *same);
+		if constexpr (std::is_same_v<decltype(same), ldap::result<bool>>) {
+			check(same && *same);
+		} else {
+			check(same && same->value);
+		}
 		check((co_await d.modify({ .object = entry, .changes = { ldap::mod::replace("cn", { "U" }) } })).has_value());
 		check((co_await d.del({ .entry = entry })).has_value());
 	}

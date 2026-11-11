@@ -1,16 +1,17 @@
 // Opt-in referral chasing for searches and compares (RFC 4511 sections
-// 4.1.10 and 4.5.3). Part of jhetz::ldap_net. A connection never chases by
-// itself. chase_search and chase_compare run the operation, then follow what
-// it returned through a caller-supplied connector that decides which servers
-// are contacted and how they are bound (the library never forwards
-// credentials by itself).
+// 4.1.10 and 4.5.3) from a bare connection. Part of jhetz::ldap_net. A
+// connection never chases by itself (ldap::client does, as
+// client_options::referrals says). chase_search and chase_compare run the
+// operation, then follow what it returned through a caller-supplied
+// connector that decides which servers are contacted and how they are bound
+// (the library never forwards credentials by itself).
 //
 //   auto chased = co_await ldap::chase_search(conn, {
 //       .base   = ldap::dn{"dc=example,dc=org"},
 //       .filter = ldap::filters::attr("uid") == "jdoe",
 //   }, connector);
 //   if (!chased) ...                       // the search itself failed
-//   if (!chased->complete) ...             // some references could not be followed
+//   if (!chased->is_complete()) ...        // a limit code, or references not followed
 //   for (const ldap::entry &e : chased->entries) ...
 //
 // Following a reference: each URI is parsed, its request built with
@@ -19,7 +20,8 @@
 // alternatives, tried in order until one is followed.
 //
 // Referral results (origin or target fails with errc::referral): chased
-// recursively. If no URI answers, the call fails with the last target or
+// recursively, unless the request's follow_referrals is false (the
+// referral result is then the call's errc::referral). If no URI answers, the call fails with the last target or
 // connector error, else with the original referral error; its context counts
 // the outcomes ("referral chase (URIs: 1 failed, 2 skipped_policy)") instead
 // of an attempt list, and the original referral error keeps its URIs in
@@ -28,8 +30,8 @@
 //
 // Continuation references (search only): followed breadth first after the
 // search ended, entries appended in that order. A reference that cannot be
-// followed clears chased_search::complete instead of failing the search;
-// only a cancellation stops the chase with an error.
+// followed stays in search_result::references (is_complete() false) instead
+// of failing the search; only a cancellation stops the chase with an error.
 //
 // Limits (referral_policy): max_hops bounds the nesting (depth 1: a URL the
 // origin returned; default 10). max_targets bounds connector calls per
@@ -39,7 +41,8 @@
 // connection is then not used), and each target request gets what is left.
 // Without a timeout, each request has its connection's operation_timeout.
 // Once max_targets or the budget is spent, the URI at hand is limit_reached
-// and waiting references are counted in `unlisted` (clearing `complete`);
+// and waiting references are counted in `unlisted` (and kept in
+// `references`);
 // over max_hops a reference gets one limit_reached entry. The attempt list
 // keeps at most max_attempts entries; the rest are counted in `unlisted`.
 //
@@ -92,8 +95,8 @@ namespace jhetz::ldap {
 // builds one.
 using referral_connector = std::function<boost::capy::task<result<connection *>>(const url &target, std::size_t depth)>;
 
-// referral_policy, referral_attempt, chased_search and chased_compare are in
-// referral.hpp (plain data, so client.hpp can name them).
+// referral_policy is in referral.hpp; search_result, compare_result and
+// referral_attempt in operations.hpp.
 
 // connection::search, chasing referral results and continuation references
 // as described above. The entries are allocated from `mr`, as search()'s.
@@ -102,18 +105,18 @@ using referral_connector = std::function<boost::capy::task<result<connection *>>
 // received are kept, as search() keeps them) fails the call, on the origin
 // or on the target of a referral result (as search() does); on the target
 // of a continuation reference it only makes that URI failed. A limit code
-// anywhere keeps the entries received and clears `complete`.
+// anywhere keeps the entries received (is_complete() false).
 auto chase_search(connection &origin,
   search_params request,
   referral_connector connector,
   referral_policy policy = {},
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<chased_search>>;
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<search_result>>;
 
 // connection::compare, chasing referral results.
 auto chase_compare(connection &origin,
   compare_params request,
   referral_connector connector,
-  referral_policy policy = {}) -> boost::capy::task<result<chased_compare>>;
+  referral_policy policy = {}) -> boost::capy::task<result<compare_result>>;
 
 // A connector that opens connections to referred servers with the origin's
 // security policy, reusing them for later calls (one per scheme, host and

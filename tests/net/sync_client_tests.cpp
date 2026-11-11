@@ -406,7 +406,7 @@ TEST_CASE("sync client: the read forwarders retry once on another connection", "
 		ldap::sync::client pool(options_for(srv.url()));
 		auto r = pool.compare({ .entry = jdoe_dn, .attribute = "cn", .value = "John" });
 		REQUIRE(r.has_value());
-		CHECK(*r);
+		CHECK(r->value);
 		CHECK(srv.accepted() == 2);
 	}
 	SECTION("who_am_i() through extended(): a write forwarder, not retried once sent")
@@ -808,12 +808,12 @@ TEST_CASE("sync client: chasing referrals", "[net][sync][client][referral]")
 			.follow_references = true,
 			.authorize = ldap::same_setup_for_domains({ "127.0.0.1:" + std::to_string(b.url().port_or_default()) }) };
 		ldap::sync::client pool(std::move(options));
-		auto found = pool.chase_search(people_search());
+		auto found = pool.search(people_search());
 		REQUIRE(found.has_value());
-		CHECK(found->complete);
+		CHECK(found->is_complete());
 		REQUIRE(found->entries.size() == 1);
 		CHECK(found->entries.front() == expected_entry(jdoe, "B"));
-		auto same = pool.chase_compare({ .entry = jdoe_dn, .attribute = "cn", .value = "B" });
+		auto same = pool.compare({ .entry = jdoe_dn, .attribute = "cn", .value = "B" });
 		REQUIRE(same.has_value());
 		CHECK(same->value);
 		REQUIRE(same->referrals.size() == 1);

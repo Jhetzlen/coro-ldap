@@ -279,13 +279,12 @@ a success with a flag (the result code, matched DN and diagnostic would be
 lost). The same holds for a store's `search` (`typed_search_result<record<T>>`,
 the same fields with `std::vector` entries), `client::search`, the sync
 facades' `search` and `sync::search_paged` (the pages collected: the last
-page's done), and `chase_search` (`chased_search` gains the same done
-fields, the origin's or the referral target's, and when that is success
-the result code, matched DN and diagnostic of the first followed
-continuation reference whose search ended with a limit code, the
-controls staying the origin's; any search of the chase ending with a
-limit code, the origin's included, keeps its entries and clears
-`complete`). The streams (`search_stream`, `paged_search`) are
+page's done), and `chase_search` (the done fields are the origin's or
+the referral target's, and when that is success the result code,
+matched DN and diagnostic of the first followed continuation reference
+whose search ended with a limit code, the controls staying the
+origin's; any search of the chase ending with a limit code, the
+origin's included, keeps its entries, and `is_complete()` is false). The streams (`search_stream`, `paged_search`) are
 unchanged: `next()` reports the code as an error after the entries it
 already handed out.
 
@@ -1231,12 +1230,13 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   and the attempt list is capped (`max_attempts`). Results: every URI considered gets a
   `referral_attempt` (followed, skipped_policy, skipped_loop,
   limit_reached, unparseable, failed with the error). A continuation
-  reference that cannot be followed never fails the search but clears
-  `chased_search::complete` (partial results are never a plain success;
-  one skipped only as a loop does not, its server already answered that
-  search; loops are checked before `max_targets` and the budget, but
-  references over `max_hops`, which are not parsed at all, and those left
-  unexamined once the chase stopped clear it). A referral result that
+  reference that cannot be followed never fails the search but stays in
+  `search_result::references`, so `is_complete()` is false (partial
+  results are never a plain success; one skipped only as a loop is not
+  kept, its server already answered that search; loops are checked
+  before `max_targets` and the budget, but references over `max_hops`,
+  which are not parsed at all, and those left unexamined once the chase
+  stopped are kept). A referral result that
   cannot be followed fails the call (the last failure, else the referral
   itself): there is nothing partial to return; the error's context counts
   the attempts' outcomes, the list itself is not returned. A cancellation stops the chase. Writes are never chased: a
@@ -1263,11 +1263,27 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   URIs and closed with the connector.
 
 The pool's policy, `client_options::referrals` (3pf.1), is built on the
-same pieces: see section 11, "Referrals". The plain types of a chase
-(`referral_policy`, `referral_outcome`, `referral_attempt`,
-`chased_search`, `chased_compare`) live in `referral.hpp` (codec) so that
-`client.hpp` can name them; `referral_chase.hpp` includes `client.hpp`
-for `session_setup`, so the other way round would be circular.
+same pieces: see section 11, "Referrals". A chase returns the types every
+search and compare does: `search_result` carries the report
+(`referrals`, one `referral_attempt` per URI, and `unlisted`; empty
+without a chase), and `is_complete()` (`is_success() &&
+references.empty()`) says whether the entries are all there are, for a
+chase and a plain search alike, so no flag has to be kept in step with
+`references`; `compare_result{value, referrals, unlisted}` is what
+`client::compare` and `chase_compare` return. One result type means
+`client::search()` reports its chase without a second call (the
+separate `client::chase_search` / `chase_compare` were removed, API
+review #8). `referral_attempt` and `referral_outcome` are in
+`operations.hpp` with `search_result`, `referral_policy` in
+`referral.hpp` (codec), so that `client.hpp` can name them;
+`referral_chase.hpp` includes `client.hpp` for `session_setup`, so the
+other way round would be circular. A request's `follow_referrals`
+(`search_params`, `compare_params`) turns referral-result chasing on or
+off for one call (UnboundID's per-request `followReferrals`): on
+`ldap::client` it overrides `referral_options::follow_referrals`, in the
+free functions `false` stops it; `connection::search` ignores it, since a
+connection never chases. `connection::compare` still returns `bool`: only
+a chase has more to report.
 
 Paged search (step 6): `ldap::search_paged(connection &, params,
 page_size)` returns a `paged_search` that yields entries across pages,
@@ -2759,7 +2775,7 @@ decision left open.
   (a bind retires it, see below). coro-ldap-9uu had a
   `shared_connection` type without those five, so that misuse would not
   compile; coro-ldap-tfn removed it by user decision (it was not
-  useful), and what took one (`chase_search`, `chase_compare`,
+  useful), and what took one (the free `chase_search`, `chase_compare`,
   `make_same_policy_connector`, `ad::change_password` /
   `reset_password`) takes `connection &` again. The `acquire_options{.exclusive}`
   run-time flag stays two calls. The blocking facade matches:
@@ -3058,17 +3074,16 @@ decision left open.
   otherwise fail. With a switch on, `search()` and `compare()` run
   `detail::chase_search` / `chase_compare` (the free functions' code with
   `chase_settings`: the two switches and an `on_attempt` hook) on the
-  shared lease; `client::chase_search()` / `chase_compare()` always do,
-  and return the chase (`complete`, `referrals`, `unlisted`): `search()`
-  returns the `search_result` part of it, as `connection::search()`
-  would: the entries, the URIs of the continuation references not
-  followed (`chased_search::references`, as `connection::search()`
-  returns the ones it does not follow) and the done fields, where a
-  followed reference's limit code stands in for the origin's success so
-  that partial entries are never `is_success()`. A reference not followed
-  because `follow_references` is off is counted in `unlisted`, kept in
-  `references` and clears `complete`, without an attempt entry or a
-  parse.
+  shared lease (a request's `follow_referrals` overrides the first
+  switch), and return the chase's `search_result` / `compare_result`:
+  the entries, the URIs of the continuation references not followed (as
+  `connection::search()` returns the ones it does not follow), the done
+  fields, where a followed reference's limit code stands in for the
+  origin's success so that partial entries are never `is_success()`, and
+  the report (`referrals`, `unlisted`). A reference not followed because
+  `follow_references` is off is counted in `unlisted` and kept in
+  `references` (so `is_complete()` is false), without an attempt entry
+  or a parse.
   `authorize(referral_hop{target, depth, origin}) -> referral_binding
   {refuse, anonymous, same_setup}` decides per URI; empty refuses all.
   It is asked only for URLs that pass the connector's fixed rules (no
@@ -3120,8 +3135,8 @@ decision left open.
   change what `next()` means. `client_observer::on_referral(server,
   attempt)` is called for each attempt as it is decided (also beyond
   `max_attempts`), never for references left unexamined or switched off.
-  `sync::client` mirrors `chase_search()` / `chase_compare()`; its
-  `search()` and `compare()` chase through `ldap::client`'s.
+  `sync::client`'s `search()` and `compare()` chase through
+  `ldap::client`'s.
 - Later (beads): a background prober, DNS SRV, weighted or round-robin
   selection, per-identity sub-pools, pooled referred connections.
 

@@ -23,7 +23,7 @@ struct chase_settings
 {
 	bool referrals = true;// referral results (RFC 4511 section 4.1.10)
 	// Continuation references (section 4.5.3). Off: their URIs are counted
-	// in chased_search::unlisted, and they clear `complete`.
+	// in search_result::unlisted, and kept in its references.
 	bool references = true;
 	// Called with each attempt as it is decided (also those beyond
 	// max_attempts, which are not listed).
@@ -44,13 +44,13 @@ auto chase_search(connection &origin,
   referral_connector connector,
   referral_policy policy,
   std::pmr::memory_resource *mr,
-  chase_settings settings) -> boost::capy::task<chase_result<chased_search>>;
+  chase_settings settings) -> boost::capy::task<chase_result<search_result>>;
 
 auto chase_compare(connection &origin,
   compare_params request,
   referral_connector connector,
   referral_policy policy,
-  chase_settings settings) -> boost::capy::task<chase_result<chased_compare>>;
+  chase_settings settings) -> boost::capy::task<chase_result<compare_result>>;
 
 // make_same_policy_connector's allow-list check: `target`'s host (and
 // port, the scheme's default or `origin_port` unless an entry names it)

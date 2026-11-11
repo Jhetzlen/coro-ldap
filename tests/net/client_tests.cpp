@@ -1806,7 +1806,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
-		CHECK(*r);
+		CHECK(r->value);
 		CHECK(s.accepted() == 2);// another connection, although the first stayed open
 		CHECK(f.obs.events
 			  == std::vector<std::string>{ "connect " + text(s.url()) + " ok",
@@ -1821,7 +1821,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.make({ .servers = { a.url(), b.url() }, .setup = admin_setup(), .max_connections = 2, .observer = &f.obs });
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
-		CHECK(*r);
+		CHECK(r->value);
 		CHECK(a.accepted() == 1);
 		CHECK(b.accepted() == 1);
 		CHECK(f.obs.events
@@ -1847,7 +1847,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.make({ .servers = { a.url(), down }, .setup = admin_setup(), .observer = &f.obs });
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
-		CHECK(*r);
+		CHECK(r->value);
 		CHECK(a.accepted() == 2);
 		CHECK(f.obs.events
 			  == std::vector<std::string>{ "connect " + text(a.url()) + " ok",
@@ -1876,7 +1876,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		second->release();// the most recently used: compare() takes it
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
-		CHECK(*r);
+		CHECK(r->value);
 		CHECK(a.accepted() == 2);// the retry took the idle first connection, opened none
 		CHECK(a.log(0).received.size() == 2);// the bind, the compare
 		CHECK(f.obs.events
@@ -1911,7 +1911,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.obs.events.clear();
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));// the first server's, preferred
 		REQUIRE(r.has_value());
-		CHECK(*r);
+		CHECK(r->value);
 		CHECK(a.accepted() == 2);
 		CHECK(b.accepted() == 1);// no new connection
 		CHECK(b.log(0).received.size() == 3);// the bind, both compares
@@ -1935,7 +1935,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		  { .servers = { a.url(), other }, .setup = admin_setup(), .idle_check = std::nullopt, .observer = &f.obs });
 		auto mine = f.acquire();
 		REQUIRE(mine.has_value());
-		outcome<ldap::result<bool>> compared;
+		outcome<ldap::result<ldap::compare_result>> compared;
 		spawn(f.ioc, f.pool->compare(jdoe_compare()), compared);// shares `mine`'s connection
 		drive_until(f.ioc, [&a] { return a.log(0).received.size() == 2; });
 		outcome<ldap::result<void>> bound;
@@ -1948,7 +1948,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		REQUIRE(opener.get().has_value());
 		CHECK(text(opener.get()->server()) == text(a.url()));
 		REQUIRE(compared.get().has_value());
-		CHECK(*compared.get());
+		CHECK(compared.get()->value);
 		CHECK(a.accepted() == 2);
 		CHECK(a.log(1).received.size() == 2);// the bind, the retried compare
 		CHECK(f.obs.events
@@ -1972,7 +1972,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		f.obs.events.clear();
 		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
-		CHECK(*r);
+		CHECK(r->value);
 		CHECK(a.accepted() == 2);
 		CHECK(b.accepted() == 2);
 		CHECK(f.obs.events
@@ -2246,11 +2246,18 @@ TEST_CASE("client: referrals are not chased by default", "[net][client][referral
 	CHECK(refs->entries.size() == 1);
 	CHECK(refs->references == ldap::string_list{ ref_to(b, "ou=b,dc=example,dc=org") });
 
-	// chase_search() says so.
-	auto chased = finish(f.ioc, f.pool->chase_search(people_search()));
+	CHECK_FALSE(refs->is_complete());
+	CHECK(refs->unlisted == 0);
+	CHECK(refs->referrals.empty());
+
+	// A request's follow_referrals turns chasing on for it: the reference
+	// is counted (follow_references is off), not followed.
+	auto request = people_search();
+	request.follow_referrals = true;
+	auto chased = finish(f.ioc, f.pool->search(request));
 	REQUIRE(chased.has_value());
 	CHECK(chased->entries.size() == 1);
-	CHECK_FALSE(chased->complete);
+	CHECK_FALSE(chased->is_complete());
 	CHECK(chased->unlisted == 1);
 	CHECK(chased->referrals.empty());
 
@@ -2286,6 +2293,22 @@ TEST_CASE("client: following referral results", "[net][client][referral]")
 				"referral " + text(a.url()) + " " + std::string(uri) + " followed" });
 		CHECK(f.pool->connections() == 1);// the referred connection is not pooled
 	}
+	SECTION("search(): the request's follow_referrals turns it off")
+	{
+		pool_fixture f;
+		auto &b = f.server({});
+		auto &a = f.server(
+		  { { answer({ bind_resp(1) }), answer({ search_referral(2, ref_to(b, "ou=b,dc=example,dc=org")) }) } });
+		f.make({ .servers = { a.url() },
+		  .setup = admin_setup(),
+		  .referrals = { .follow_referrals = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
+		auto request = people_search();
+		request.follow_referrals = false;
+		auto r = finish(f.ioc, f.pool->search(request));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::referral);
+		CHECK(b.accepted() == 0);
+	}
 	SECTION("compare(): anonymous")
 	{
 		pool_fixture f;
@@ -2299,7 +2322,7 @@ TEST_CASE("client: following referral results", "[net][client][referral]")
 							asked.push_back(hop);
 							return ldap::referral_binding::anonymous;
 						} } });
-		auto r = finish(f.ioc, f.pool->chase_compare(jdoe_compare()));
+		auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 		REQUIRE(r.has_value());
 		CHECK(r->value);
 		REQUIRE(r->referrals.size() == 1);
@@ -2371,9 +2394,9 @@ TEST_CASE("client: following continuation references", "[net][client][referral]"
 		f.make({ .servers = { a.url() },
 		  .setup = admin_setup(),
 		  .referrals = { .follow_references = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
-		auto r = finish(f.ioc, f.pool->chase_search(people_search()));
+		auto r = finish(f.ioc, f.pool->search(people_search()));
 		REQUIRE(r.has_value());
-		CHECK(r->complete);
+		CHECK(r->is_complete());
 		REQUIRE(r->entries.size() == 2);
 		CHECK(r->entries[1] == expected_entry(b_dn, "B"));
 		REQUIRE(r->referrals.size() == 1);
@@ -2404,10 +2427,10 @@ TEST_CASE("client: following continuation references", "[net][client][referral]"
 		f.make({ .servers = { a.url() },
 		  .setup = admin_setup(),
 		  .referrals = { .follow_referrals = true, .authorize = ldap::same_setup_for_domains({ domain_of(b) }) } });
-		auto r = finish(f.ioc, f.pool->chase_search(people_search()));
+		auto r = finish(f.ioc, f.pool->search(people_search()));
 		REQUIRE(r.has_value());
 		CHECK(r->entries.size() == 1);
-		CHECK_FALSE(r->complete);
+		CHECK_FALSE(r->is_complete());
 		CHECK(r->unlisted == 2);
 		CHECK(r->references
 			  == ldap::string_list{ ref_to(b, "ou=b,dc=example,dc=org"), ref_to(b, "ou=c,dc=example,dc=org") });
@@ -2480,9 +2503,9 @@ TEST_CASE("client: following continuation references", "[net][client][referral]"
 		  .referrals = { .follow_references = true,
 			.authorize = ldap::same_setup_for_domains({ domain_of(b) }),
 			.limits = { .max_hops = 0 } } });
-		auto r = finish(f.ioc, f.pool->chase_search(people_search()));
+		auto r = finish(f.ioc, f.pool->search(people_search()));
 		REQUIRE(r.has_value());
-		CHECK_FALSE(r->complete);
+		CHECK_FALSE(r->is_complete());
 		REQUIRE(r->referrals.size() == 1);
 		CHECK(r->referrals[0].outcome == ldap::referral_outcome::limit_reached);
 		CHECK(b.accepted() == 0);
@@ -2545,7 +2568,7 @@ TEST_CASE("client: an authorizer's exception propagates", "[net][client][referra
 	// The lease came back, its connection still pooled and usable.
 	auto r = finish(f.ioc, f.pool->compare(jdoe_compare()));
 	REQUIRE(r.has_value());
-	CHECK(*r);
+	CHECK(r->value);
 	CHECK(a.accepted() == 1);
 	CHECK(f.pool->connections() == 1);
 }
@@ -2570,9 +2593,9 @@ TEST_CASE("client: one referred connection per server and binding", "[net][clien
 								 ? ldap::referral_binding::same_setup
 								 : ldap::referral_binding::anonymous;
 					} } });
-	auto r = finish(f.ioc, f.pool->chase_search(people_search()));
+	auto r = finish(f.ioc, f.pool->search(people_search()));
 	REQUIRE(r.has_value());
-	CHECK(r->complete);
+	CHECK(r->is_complete());
 	CHECK(r->entries.size() == 3);
 	REQUIRE(b.accepted() == 2);
 	REQUIRE(b.log(0).received.size() == 2);// anonymous: no bind, both searches
@@ -2605,10 +2628,10 @@ TEST_CASE("client: close() stops a chase", "[net][client][referral][close]")
 			}
 			return ldap::referral_binding::same_setup;
 		} } });
-	outcome<ldap::result<ldap::chased_search>> r;
+	outcome<ldap::result<ldap::search_result>> r;
 	SECTION("while a referred server is being set up")
 	{
-		spawn(f.ioc, f.pool->chase_search(people_search()), r);
+		spawn(f.ioc, f.pool->search(people_search()), r);
 		drive_until(f.ioc, [&b] { return b.accepted() == 1 && !b.log(0).received.empty(); });// the bind at b
 		f.pool->close();
 		drive_until(f.ioc, [&r] { return r.done(); });
@@ -2616,7 +2639,7 @@ TEST_CASE("client: close() stops a chase", "[net][client][referral][close]")
 	SECTION("from the authorizer: the server it allowed is not contacted")
 	{
 		close_when_asked = true;
-		spawn(f.ioc, f.pool->chase_search(people_search()), r);
+		spawn(f.ioc, f.pool->search(people_search()), r);
 		drive_until(f.ioc, [&r] { return r.done(); });
 		finish(f.ioc, sleep_for(milliseconds(20)));
 		CHECK(b.accepted() == 0);
@@ -2676,8 +2699,6 @@ TEST_CASE("client: move assignment, executor() and a moved-from client's reads",
 	refused(finish(f.ioc, f.pool->search(people_search())).error(), search);
 	refused(finish(f.ioc, f.pool->search_stream(people_search())).error(), search);
 	refused(finish(f.ioc, f.pool->compare(jdoe_compare())).error(), compare);
-	refused(finish(f.ioc, f.pool->chase_search(people_search())).error(), search);
-	refused(finish(f.ioc, f.pool->chase_compare(jdoe_compare())).error(), compare);
 	refused(finish(f.ioc, ldap::who_am_i(*f.pool)).error(), "extended operation 1.3.6.1.4.1.4203.1.11.3");
 	const ldap::dn jdoe{ "uid=jdoe,ou=people,dc=example,dc=org" };
 	const std::string add = "add uid=jdoe,ou=people,dc=example,dc=org";
@@ -2717,8 +2738,6 @@ TEST_CASE("client: a read fails as its acquire() does", "[net][client][retry]")
 	unusable(finish(f.ioc, f.pool->search(people_search())).error());
 	unusable(finish(f.ioc, f.pool->search_stream(people_search())).error());
 	unusable(finish(f.ioc, f.pool->compare(jdoe_compare())).error());
-	unusable(finish(f.ioc, f.pool->chase_search(people_search())).error());
-	unusable(finish(f.ioc, f.pool->chase_compare(jdoe_compare())).error());
 	unusable(finish(f.ioc, ldap::who_am_i(*f.pool)).error());
 	unusable(finish(f.ioc, f.pool->del({ .entry = ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" } })).error());
 }

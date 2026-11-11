@@ -38,10 +38,11 @@
 // The URL's scheme, host and port name the server to send the request to;
 // they are not checked here (see make_same_policy_connector for a policy).
 //
-// Also here, as plain data (so that client.hpp can name them without the
-// chasing code): the limits of a chase (referral_policy) and what it
-// returns (referral_attempt, chased_search, chased_compare). chase_search,
-// chase_compare and their rules are in referral_chase.hpp.
+// Also here, as plain data (so that client.hpp can name it without the
+// chasing code): the limits of a chase (referral_policy). What a chase
+// returns is in operations.hpp (search_result, compare_result,
+// referral_attempt); chase_search, chase_compare and their rules are in
+// referral_chase.hpp.
 #pragma once
 
 #include "jhetz/ldap/entry.hpp"
@@ -57,12 +58,6 @@
 #include <vector>
 
 namespace jhetz::ldap {
-
-// Where a URL came from: what to do with an absent DN depends on it.
-enum class reference_kind : std::uint8_t {
-	referral,// the referral field of an LDAPResult (RFC 4511 section 4.1.10)
-	continuation_reference,// a SearchResultReference (section 4.5.3)
-};
 
 // The search to send to `target`'s server. Fails with client_errc::invalid_url
 // for a URL with a critical extension, or a continuation reference without a
@@ -81,7 +76,7 @@ enum class reference_kind : std::uint8_t {
 [[nodiscard]] auto referral_target(const url &target, del_params original) -> result<del_params>;
 [[nodiscard]] auto referral_target(const url &target, modify_dn_params original) -> result<modify_dn_params>;
 
-// ---------------------------------------------------------------- chase results (referral_chase.hpp)
+// ---------------------------------------------------------------- chase limits (referral_chase.hpp)
 
 struct referral_policy
 {
@@ -96,79 +91,10 @@ struct referral_policy
 	std::size_t max_hops = default_max_hops;
 	// Most URIs handed to the connector in one chase.
 	std::size_t max_targets = default_max_targets;
-	// Most referral_attempt entries in a result (chased_*::referrals); the
-	// URIs considered beyond them are only counted (chased_*::unlisted).
+	// Most referral_attempt entries in a result (search_result::referrals,
+	// compare_result::referrals); the URIs considered beyond them are only
+	// counted (`unlisted`).
 	std::size_t max_attempts = default_max_attempts;
-};
-
-// What became of one URI of a referral or continuation reference.
-enum class referral_outcome : std::uint8_t {
-	// The request was sent to the target and answered: a result, or a
-	// referral that was chased in turn (the next attempts, one hop deeper).
-	followed,
-	skipped_policy,// the connector returned null
-	skipped_loop,// that server already got the same request in this chase
-	limit_reached,// over max_hops or max_targets, or the timeout was spent
-	unparseable,// not an LDAP URL, or one that cannot be followed (referral_target): see failure
-	failed,// the connector or the request failed: see failure
-};
-
-// One URI that was considered, in the order the chase got to it. URIs not
-// tried because an earlier alternative of the same reference was followed,
-// or was over a limit, are not listed.
-struct referral_attempt
-{
-	std::string uri{};// as the server sent it
-	reference_kind kind = reference_kind::referral;
-	std::size_t depth = 1;// 1: returned by the origin's server
-	referral_outcome outcome = referral_outcome::followed;
-	std::optional<error> failure{};// unparseable and failed: why
-};
-
-struct chased_search
-{
-	// The origin's entries (or, after a referral result, the target's), then
-	// those of each continuation reference followed, in the order followed.
-	std::pmr::vector<entry> entries{};
-	// The URIs of the continuation references not followed by any of their
-	// URIs (skipped, unparseable, over a limit, failed, left unexamined
-	// when the chase stopped, or not followed at all), one string per URI
-	// as sent, in the order the chase got to them. A reference skipped
-	// only as a loop is not here.
-	string_list references{};
-	// The SearchResultDone of the origin's search (or, after a referral
-	// result, the target's), as search_result's: success, or a limit code
-	// (sizeLimitExceeded, timeLimitExceeded, adminLimitExceeded) with the
-	// entries received before it. When that is success, the result code,
-	// matched DN and diagnostic of the first followed continuation
-	// reference whose search ended with a limit code.
-	std::int32_t result_code = 0;
-	std::pmr::string matched_dn{};
-	std::pmr::string diagnostic_message{};
-	std::pmr::vector<control> controls{};// the origin's (or the referral target's)
-	std::vector<referral_attempt> referrals{};
-	// URIs not in `referrals`: those beyond referral_policy::max_attempts,
-	// and those of the references left unexamined when the chase stopped
-	// (max_targets reached or the timeout spent), or not followed at all
-	// (ldap::client with referral_options::follow_references off).
-	std::size_t unlisted = 0;
-	// False when the entries are partial: a search ended with a limit
-	// code (the origin's, a referral target's or a followed continuation
-	// reference's), or some continuation reference was not followed by any
-	// of its URIs (skipped, unparseable, over a limit, failed, left
-	// unexamined when the chase stopped, or not followed at all). A
-	// reference skipped only as a loop leaves it true (its server already
-	// got that search; loops are recognized before max_targets and the
-	// budget are checked), but one over max_hops or left unexamined clears
-	// it (whether it was a loop is not known).
-	bool complete = true;
-};
-
-struct chased_compare
-{
-	bool value = false;// compareTrue: true, compareFalse: false
-	std::vector<referral_attempt> referrals{};
-	std::size_t unlisted = 0;// URIs beyond referral_policy::max_attempts
 };
 
 }// namespace jhetz::ldap

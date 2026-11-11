@@ -93,11 +93,12 @@
 // referred server before same_setup sends it credentials. Referred
 // connections are per chase, not pooled, with no backoff or auth guard. Only
 // a failure of the pooled connection's own operation is retried. search()
-// returns the search_result: references not followed stay in
-// search_result::references, and a followed search's limit code replaces the
-// origin's success. Writes, search_stream() and extended() never chase: a
-// write's referral is errc::referral (referral_target() builds the request
-// for another server).
+// returns the chase's search_result (operations.hpp): references not
+// followed stay in search_result::references, a followed search's limit code
+// replaces the origin's success, and `referrals` and `unlisted` report each
+// URI; compare() returns a compare_result with the same report. A request's
+// follow_referrals overrides referral_options::follow_referrals for it. Writes, search_stream() and extended() never
+// chase: a write's referral is errc::referral (referral_target() builds the request for another server).
 //
 // sync::client (sync.hpp) wraps a client in blocking calls.
 //
@@ -252,10 +253,10 @@ class client_observer
 	virtual void on_acquire_wait(std::chrono::milliseconds waited) { (void)waited; }
 	// A chase from a connection to `server` decided what became of one URI
 	// of a referral or continuation reference (client_options::referrals),
-	// as it went: each URI chased_search::referrals lists, and those beyond
-	// referral_policy::max_attempts. Not called for the references left
-	// unexamined, or not followed (follow_references off): those are only
-	// counted (chased_search::unlisted).
+	// as it went: each URI search_result::referrals (compare_result::
+	// referrals) lists, and those beyond referral_policy::max_attempts. Not
+	// called for the references left unexamined, or not followed
+	// (follow_references off): those are only counted (`unlisted`).
 	virtual void on_referral(const url &server, const referral_attempt &attempt)
 	{
 		(void)server;
@@ -292,7 +293,7 @@ enum class referral_binding : std::uint8_t {
 
 // Decides for each referred server. Called on the client's executor. An
 // exception it throws propagates out of the operation (search(),
-// compare(), chase_search(), chase_compare(); sync::client rethrows it)
+// compare(); sync::client rethrows it)
 // as an exception, not as an error result; the chase's referred
 // connections are closed and the lease is returned.
 using referral_authorizer = std::function<referral_binding(const referral_hop &hop)>;
@@ -312,7 +313,7 @@ using referral_authorizer = std::function<referral_binding(const referral_hop &h
 struct referral_options
 {
 	// Chase referral results (RFC 4511 section 4.1.10) of search() and
-	// compare().
+	// compare(); a request's follow_referrals overrides it.
 	bool follow_referrals = false;
 	// Follow the continuation references (section 4.5.3) of search().
 	bool follow_references = false;
@@ -546,8 +547,9 @@ class client
 	//
 	// search(): connection::search()'s search_result (a limit code is a
 	// value, never retried); entries are collected before any is handed
-	// over, so it is retried whatever it had received. When chasing, its
-	// references are those the chase did not follow.
+	// over, so it is retried whatever it had received. When chasing, the
+	// chase's: its references are those the chase did not follow, with
+	// what it did in `referrals` and `unlisted`.
 	auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> boost::capy::task<result<search_result>>;
 	// search_stream(): returns once the search has a first message or has
@@ -558,20 +560,16 @@ class client
 	// its first change.
 	auto search_stream(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> boost::capy::task<result<ldap::search_stream>>;
-	auto compare(compare_params request) -> boost::capy::task<result<bool>>;
+	// compare(): compareTrue / compareFalse as compare_result::value; when
+	// chasing, with what the chase did.
+	auto compare(compare_params request) -> boost::capy::task<result<compare_result>>;
 	// search() and compare() chase referrals as client_options::referrals
-	// says; search_stream() never does.
-
-	// search() and compare() with what the chase did: as ldap::chase_search
-	// and ldap::chase_compare (referral_chase.hpp) on a shared lease, with
-	// client_options::referrals' switches, authorize and limits, and the
-	// read forwarders' retry. With follow_references off, the references
-	// received are counted in `unlisted` and clear `complete`; with
-	// follow_referrals off, a referral result fails the call
-	// (errc::referral) as it does search().
-	auto chase_search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
-	  -> boost::capy::task<result<chased_search>>;
-	auto chase_compare(compare_params request) -> boost::capy::task<result<chased_compare>>;
+	// (and the request's follow_referrals) say, as ldap::chase_search and
+	// ldap::chase_compare (referral_chase.hpp) do, on a shared lease with
+	// the read forwarders' retry. With follow_references off, the
+	// references received are counted in `unlisted`; with follow_referrals
+	// off, a referral result fails the call (errc::referral).
+	// search_stream() never chases.
 
 	// Write forwarders: as the read forwarders, but retried once only after
 	// client_errc::not_sent (the server never saw the request). Any other

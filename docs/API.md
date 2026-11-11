@@ -3,6 +3,26 @@
 What each public header provides, in more detail than the README. The design
 rationale is in [`DESIGN.md`](DESIGN.md).
 
+## Which call do I use
+
+Several calls overlap: the RFC-named operation, and conveniences on top.
+
+| To | Call | Notes |
+|---|---|---|
+| Search, all entries at once | `connection::search(params)` | `result<search_result>`: entries, references (not followed), the done's result code; a limit code (sizeLimitExceeded, ...) keeps the entries |
+| Search, entry by entry | `connection::search_stream(params)` | `next()` / `next_item()`; memory bounded by the caller's pace; abandons the search when destroyed early |
+| Search a large result in pages | `ldap::search_paged(conn_or_client, params, page_size)` | RFC 2696 paged results, one page requested at a time; `sync::search_paged` collects every page |
+| Search into structs | `store<T>::search` / `search_stream` / `search_paged` (store.hpp) | the same three shapes, entries decoded to `record<T>` |
+| Search and follow referrals | `client::search(params)` with `client_options::referrals` | the pool chases referral results and continuation references; the report is in `search_result::referrals` / `unlisted`, `is_complete()`; a request's `follow_referrals` overrides the pool's switch for one call |
+| Follow referrals from a bare connection | `ldap::chase_search(conn, params, connector)`, `chase_compare` (referral_chase.hpp) | the caller's `referral_connector` decides which servers and how to bind (`make_same_policy_connector`) |
+| Watch changes | `search_stream` with `ldap::sync_request` (content_sync.hpp) | RFC 4533 refreshOnly / refreshAndPersist |
+| Change a password, RFC 3062 | `ldap::password_modify(d, params)` | the Password Modify request as the RFC has it; returns the generated password, if any |
+| Change one's own password | `ldap::change_password(d, user, old, new)` | RFC 3062 with the old password |
+| Set a password as an administrator | `ldap::reset_password(d, user, new)` | RFC 3062 without the old password |
+| Active Directory passwords | `ldap::ad::change_password` / `ad::reset_password` (ad/password.hpp) | `unicodePwd` modify (AD does not implement RFC 3062); needs TLS or a SASL confidentiality layer |
+| A transaction, the easy way | `connection::begin_transaction()` | an `ldap::transaction`: its updates (`t->add`, `t->modify`, ...) carry the specification control; `commit()` / `abort()`; aborted when destroyed unsettled |
+| A transaction, by hand | `connection::start_transaction()`, `end_transaction(id, commit)` | RFC 5805's two extended operations; put `transaction_specification{id}` on each update yourself |
+
 ## `jhetz::ldap`: the codec
 
 - `jhetz/ldap/error.hpp`: `ldap::error`, `ldap::result<T>` (`std::expected`),
@@ -437,21 +457,24 @@ itself needs only ICU.
   `referral_connector` (`std::function` returning
   `task<result<connection *>>` for a URL and its depth; null skips it), which
   decides which servers may be contacted and how their connections are
-  bound. It returns `chased_search{entries, references, result_code,
-  matched_dn, diagnostic_message, controls, referrals, unlisted,
-  complete}` (the done fields are the origin's search's, or the referral
+  bound. It returns a `search_result` (`entries, references, result_code,
+  matched_dn, diagnostic_message, controls, referrals, unlisted`, and
+  `is_complete()`; the done fields are the origin's search's, or the referral
   target's: success or a limit code, as `search()`; on success, the first
   limit code a followed continuation reference's search ended with;
   `references` holds the URIs of the continuation references not
   followed): the entries of every server reached, one `referral_attempt`
   per URI tried (`followed`, `skipped_policy`, `skipped_loop`,
   `limit_reached`, `unparseable`, `failed` with its error), and
-  `complete == false` when a continuation reference could not be
-  followed or a search ended with a limit code (partial results are
+  `is_complete() == false` (`is_success() && references.empty()`) when a
+  continuation reference could not be followed or a search ended with a
+  limit code (partial results are
   never a plain success; such a reference never fails the search). A referral
   result that cannot be followed fails the call (the last error, else the
-  referral; its context counts the attempts' outcomes). `chase_compare(conn, params, connector, policy)` does the
-  same for a compare (`chased_compare{value, referrals, unlisted}`). The URIs of one
+  referral; its context counts the attempts' outcomes); with the
+  request's `follow_referrals` false, a referral result is not chased (the
+  call fails with `errc::referral`). `chase_compare(conn, params, connector, policy)` does the
+  same for a compare (`compare_result{value, referrals, unlisted}`). The URIs of one
   reference are alternatives, tried in order; `referral_policy` bounds the
   depth (`max_hops`, 10 by default as RFC 4511 asks), the connector calls
   (`max_targets`, 64; once reached the chase stops, and the references still
@@ -983,7 +1006,7 @@ itself needs only ICU.
   full `connection` on an idle or new connection nobody else uses while it
   is held (for binds, `start_tls()`, `unbind()`). Breaking:
   `acquire_options` is gone. A lease returns the connection when destroyed
-  or `release()`d. `chase_search`, `chase_compare`,
+  or `release()`d. The free `chase_search`, `chase_compare`,
   `make_same_policy_connector` and `ad::change_password` /
   `reset_password` take a `connection &` (a lease's too). `servers` (checked with `url::check_server()` when the
   client is built: an empty list or a refused entry fails every
@@ -1006,7 +1029,8 @@ itself needs only ICU.
   `disconnect_reason`, `on_retry`, `on_probe`, `on_acquire_wait`) do
   nothing by default, and none runs after `close()`. `close()`,
   `connections()`. Read forwarders `search(params, mr)`,
-  `search_stream(params, mr)` and `compare(params)` run the operation on a
+  `search_stream(params, mr)` and `compare(params)` (`->
+  task<result<compare_result>>`: `value`, and the chase's report) run the operation on a
   shared lease and retry it
   once on another connection after `cond::connection_lost` or
   `cond::busy_or_unavailable` (a stream only before its first message;
@@ -1027,7 +1051,9 @@ itself needs only ICU.
   nothing by default. `follow_referrals` chases referral results of
   `search()` and `compare()`, `follow_references` the continuation
   references of `search()`, as `chase_search` / `chase_compare` do, from
-  the pooled connection, within `limits` (a `referral_policy`).
+  the pooled connection, within `limits` (a `referral_policy`). A
+  request's `follow_referrals` (`search_params`, `compare_params`:
+  `std::optional<bool>`) overrides `follow_referrals` for that call.
   `authorize`, a `std::function<referral_binding(const referral_hop &)>`
   (`referral_hop{target, depth, origin}`), returns `refuse`, `anonymous`
   or `same_setup` (bind with the client's `session_setup`) per URI;
@@ -1037,12 +1063,13 @@ itself needs only ICU.
   connection makes ldap:// targets use StartTLS (no downgrade). Referred
   connections belong to one call (closed when it ends, not pooled). Only
   the pooled connection's own failure is retried, never a referred
-  server's. `chase_search(params, mr) -> task<result<chased_search>>`
-  and `chase_compare(params) -> task<result<chased_compare>>` return what
-  the chase did (`search()` returns its `search_result`: the URIs of the
-  continuation references not followed in `references`, and when the
+  server's. `search()` returns the chase's `search_result` (the URIs of
+  the continuation references not followed in `references`, when the
   origin's search succeeded the first limit code of a followed
-  reference's search as `result_code`); `client_observer::on_referral(server,
+  reference's search as `result_code`, and what the chase did in
+  `referrals` and `unlisted`; with `follow_references` off, the
+  references received are counted in `unlisted`), `compare()` its
+  `compare_result`; `client_observer::on_referral(server,
   attempt)` hears of each URI. Writes (forwarders and leases),
   `search_stream()` and `extended()` never chase.
 - `jhetz/ldap/sync.hpp` (3pf.5): `ldap::sync::client`, the blocking facade
@@ -1058,9 +1085,9 @@ itself needs only ICU.
   `server()`, `release()` and `operator bool` (`sync::basic_lease`). The forwarders
   `search` and `compare`, and the write forwarders `add`,
   `modify`, `del`, `modify_dn` and `extended`, block and retry as the
-  async ones, and `chase_search` / `chase_compare` mirror the async
-  client's (referrals as `client_options::referrals` says; the authorizer
-  and `on_referral` run on the I/O thread); no `search_stream` (no
+  async ones (`compare` returns a `compare_result`; both chase
+  referrals as `client_options::referrals` says, the authorizer and
+  `on_referral` running on the I/O thread); no `search_stream` (no
   blocking stream, as for `sync::connection`). `close()` (from any thread,
   the I/O thread included) fails waiting and later `acquire()` calls with
   `not_connected`; `connections()`, `executor()`. A call from the I/O

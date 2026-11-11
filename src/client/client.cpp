@@ -1256,9 +1256,12 @@ namespace detail {
 
 		// ---------------------------------------------------------------- referrals
 
-		[[nodiscard]] auto chases() const noexcept -> bool
+		// Whether a search (compare: `references` false) with the request's
+		// follow_referrals override chases.
+		[[nodiscard]] auto chases(std::optional<bool> follow_referrals, bool references) const noexcept -> bool
 		{
-			return options.referrals.follow_referrals || options.referrals.follow_references;
+			return follow_referrals.value_or(options.referrals.follow_referrals)
+				   || (references && options.referrals.follow_references);
 		}
 
 		// The connector of a chase from `held`'s connection: the fixed rules
@@ -1315,9 +1318,9 @@ namespace detail {
 
 		static auto chase_search(const std::shared_ptr<client_state> &self,
 		  search_params request,
-		  std::pmr::memory_resource *mr) -> capy::task<result<chased_search>>
+		  std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
 		{
-			return read<chased_search>(self, [self, request = std::move(request), mr](const lease &held) {
+			return read<search_result>(self, [self, request = std::move(request), mr](const lease &held) {
 				return stopped_by_close(self,
 				  detail::chase_search(*held,
 					request,
@@ -1329,9 +1332,9 @@ namespace detail {
 		}
 
 		static auto chase_compare(const std::shared_ptr<client_state> &self, compare_params request)
-		  -> capy::task<result<chased_compare>>
+		  -> capy::task<result<compare_result>>
 		{
-			return read<chased_compare>(self, [self, request = std::move(request)](const lease &held) {
+			return read<compare_result>(self, [self, request = std::move(request)](const lease &held) {
 				return stopped_by_close(self,
 				  detail::chase_compare(*held,
 					request,
@@ -1339,31 +1342,6 @@ namespace detail {
 					self->options.referrals.limits,
 					settings_for(self, held)));
 			});
-		}
-
-		// search() and compare() when they chase: the chase's value, with the
-		// references not followed.
-		static auto entries_of(capy::task<result<chased_search>> chase) -> capy::task<result<search_result>>
-		{
-			auto r = co_await std::move(chase);
-			if (!r) {
-				co_return std::unexpected(std::move(r.error()));
-			}
-			co_return search_result{ .entries = std::move(r->entries),
-				.references = std::move(r->references),
-				.result_code = r->result_code,
-				.matched_dn = std::move(r->matched_dn),
-				.diagnostic_message = std::move(r->diagnostic_message),
-				.controls = std::move(r->controls) };
-		}
-
-		static auto answer_of(capy::task<result<chased_compare>> chase) -> capy::task<result<bool>>
-		{
-			auto r = co_await std::move(chase);
-			if (!r) {
-				co_return std::unexpected(std::move(r.error()));
-			}
-			co_return r->value;
 		}
 
 		// Destroys `s` on `c`'s strand.
@@ -1522,6 +1500,16 @@ namespace {
 		co_return fail(client_errc::not_connected, context + ": client moved from");
 	}
 
+	// A compare that does not chase, as a compare_result.
+	auto compared(capy::task<result<bool>> compare) -> capy::task<result<compare_result>>
+	{
+		auto r = co_await std::move(compare);
+		if (!r) {
+			co_return std::unexpected(std::move(r.error()));
+		}
+		co_return compare_result{ .value = *r };
+	}
+
 }// namespace
 
 // Not coroutines either: the tasks hold their own copy of the state.
@@ -1530,9 +1518,8 @@ auto client::search(search_params request, std::pmr::memory_resource *mr) -> cap
 	if (state_ == nullptr) {
 		return read_refused<search_result>(detail::op_context("search", request.base));
 	}
-	if (state_->chases()) {
-		return detail::on_strand(state_->strand,
-		  detail::client_state::entries_of(detail::client_state::chase_search(state_, std::move(request), mr)));
+	if (state_->chases(request.follow_referrals, true)) {
+		return detail::on_strand(state_->strand, detail::client_state::chase_search(state_, std::move(request), mr));
 	}
 	return detail::on_strand(state_->strand,
 	  detail::client_state::read<search_result>(
@@ -1567,34 +1554,17 @@ namespace detail {
 
 }// namespace detail
 
-auto client::compare(compare_params request) -> capy::task<result<bool>>
+auto client::compare(compare_params request) -> capy::task<result<compare_result>>
 {
 	if (state_ == nullptr) {
-		return read_refused<bool>(detail::op_context("compare", request.entry));
+		return read_refused<compare_result>(detail::op_context("compare", request.entry));
 	}
-	if (state_->chases()) {
-		return detail::on_strand(state_->strand,
-		  detail::client_state::answer_of(detail::client_state::chase_compare(state_, std::move(request))));
+	if (state_->chases(request.follow_referrals, false)) {
+		return detail::on_strand(state_->strand, detail::client_state::chase_compare(state_, std::move(request)));
 	}
 	return detail::on_strand(state_->strand,
-	  detail::client_state::read<bool>(
-		state_, [request = std::move(request)](const lease &held) { return held->compare(request); }));
-}
-
-auto client::chase_search(search_params request, std::pmr::memory_resource *mr) -> capy::task<result<chased_search>>
-{
-	if (state_ == nullptr) {
-		return read_refused<chased_search>(detail::op_context("search", request.base));
-	}
-	return detail::on_strand(state_->strand, detail::client_state::chase_search(state_, std::move(request), mr));
-}
-
-auto client::chase_compare(compare_params request) -> capy::task<result<chased_compare>>
-{
-	if (state_ == nullptr) {
-		return read_refused<chased_compare>(detail::op_context("compare", request.entry));
-	}
-	return detail::on_strand(state_->strand, detail::client_state::chase_compare(state_, std::move(request)));
+	  detail::client_state::read<compare_result>(
+		state_, [request = std::move(request)](const lease &held) { return compared(held->compare(request)); }));
 }
 
 auto client::add(add_params request) -> capy::task<result<response>>

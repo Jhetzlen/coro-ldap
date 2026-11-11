@@ -28,8 +28,8 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 	for (const ldap::entry &person : people->entries) {
 		std::cout << person.dn << '\n';
 	}
-	if (!people->complete) {
-		std::cerr << "some referrals could not be followed\n";
+	if (!people->is_complete()) {
+		std::cerr << "the result is partial\n";
 	}
 	co_return 0;
 }

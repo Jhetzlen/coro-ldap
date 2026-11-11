@@ -525,19 +525,9 @@ auto client::search(search_params request, std::pmr::memory_resource *mr) -> res
 	return core_->io.run([&] { return core_->pool->search(std::move(request), mr); });
 }
 
-auto client::compare(compare_params request) -> result<bool>
+auto client::compare(compare_params request) -> result<compare_result>
 {
 	return core_->io.run([&] { return core_->pool->compare(std::move(request)); });
-}
-
-auto client::chase_search(search_params request, std::pmr::memory_resource *mr) -> result<chased_search>
-{
-	return core_->io.run([&] { return core_->pool->chase_search(std::move(request), mr); });
-}
-
-auto client::chase_compare(compare_params request) -> result<chased_compare>
-{
-	return core_->io.run([&] { return core_->pool->chase_compare(std::move(request)); });
 }
 
 auto client::add(add_params request) -> result<response>

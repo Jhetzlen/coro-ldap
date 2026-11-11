@@ -412,6 +412,9 @@ namespace {
 			.policy = policy,
 			.deadline = net::detail::deadline_after(request.timeout),
 			.settings = std::move(settings) };
+		if (request.follow_referrals) {
+			st.settings.referrals = *request.follow_referrals;
+		}
 		if (auto u = url::parse(origin.name())) {
 			st.visited.push_back(request_key(*u, request));
 		}
@@ -511,32 +514,28 @@ namespace {
 	struct reference_queue
 	{
 		chase_state *st;
-		chased_search *out;
+		search_result *out;
 		std::deque<pending_reference> queue{};
 
 		// The URIs of a reference not followed: kept in `references`.
 		void unfollowed(const string_list &uris) const
 		{
 			out->references.insert(out->references.end(), uris.begin(), uris.end());
-			out->complete = false;
 		}
 
 		// Takes the entries of `r`, and queues its references (or, when they
-		// are not followed, counts and keeps them). A search that ended with
-		// a limit code clears `complete`; a continuation reference's gives
-		// its LDAPResult to `out` when the origin's was success.
+		// are not followed, counts and keeps them). A continuation
+		// reference's search that ended with a limit code gives its
+		// LDAPResult to `out` when the origin's was success.
 		void take(search_reached &r, bool continuation)
 		{
 			for (auto &e : r.value.entries) {
 				out->entries.push_back(std::move(e));
 			}
-			if (!r.value.done.is_success()) {
-				out->complete = false;
-				if (continuation && out->result_code == 0) {
-					out->result_code = r.value.done.result_code;
-					out->matched_dn.assign(r.value.done.matched_dn);
-					out->diagnostic_message.assign(r.value.done.diagnostic_message);
-				}
+			if (!r.value.done.is_success() && continuation && out->result_code == 0) {
+				out->result_code = r.value.done.result_code;
+				out->matched_dn.assign(r.value.done.matched_dn);
+				out->diagnostic_message.assign(r.value.done.diagnostic_message);
 			}
 			if (r.value.references.empty()) {
 				return;
@@ -562,7 +561,6 @@ namespace {
 				unfollowed(ref.uris);
 			}
 			queue.clear();
-			out->complete = false;
 		}
 	};
 
@@ -575,7 +573,7 @@ namespace detail {
 	  referral_connector connector,
 	  referral_policy policy,
 	  std::pmr::memory_resource *mr,
-	  chase_settings settings) -> capy::task<chase_result<chased_search>>
+	  chase_settings settings) -> capy::task<chase_result<search_result>>
 	{
 		chase_state st = start(origin, request, std::move(connector), policy, std::move(settings));
 		const search_op op{ mr };
@@ -586,7 +584,7 @@ namespace detail {
 				.origin_failed = first.origin_failed };
 		}
 		const search_run &origin_run = first.value->value;
-		chased_search out{ .entries = std::pmr::vector<entry>(mr),
+		search_result out{ .entries = std::pmr::vector<entry>(mr),
 			.references = string_list(mr),
 			.result_code = origin_run.done.result_code,
 			.matched_dn = origin_run.done.matched_dn,
@@ -625,12 +623,12 @@ namespace detail {
 	  compare_params request,
 	  referral_connector connector,
 	  referral_policy policy,
-	  chase_settings settings) -> capy::task<chase_result<chased_compare>>
+	  chase_settings settings) -> capy::task<chase_result<compare_result>>
 	{
 		chase_state st = start(origin, request, std::move(connector), policy, std::move(settings));
 		auto r = co_await origin.compare(request);
 		if (r) {
-			co_return { .value = chased_compare{ .value = *r } };
+			co_return { .value = compare_result{ .value = *r } };
 		}
 		if (r.error().code != errc::referral || !st.settings.referrals) {
 			co_return { .value = std::unexpected(std::move(r.error())), .origin_failed = true };
@@ -648,7 +646,7 @@ namespace detail {
 			co_return { .value = std::unexpected(
 						  with_attempts(f->last_failure ? std::move(*f->last_failure) : std::move(r.error()), st)) };
 		}
-		co_return { .value = chased_compare{
+		co_return { .value = compare_result{
 					  .value = f->target->value, .referrals = std::move(st.attempts), .unlisted = st.unlisted } };
 	}
 
@@ -658,14 +656,14 @@ auto chase_search(connection &origin,
   search_params request,
   referral_connector connector,
   referral_policy policy,
-  std::pmr::memory_resource *mr) -> capy::task<result<chased_search>>
+  std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
 {
 	auto r = co_await detail::chase_search(origin, std::move(request), std::move(connector), policy, mr, {});
 	co_return std::move(r.value);
 }
 
 auto chase_compare(connection &origin, compare_params request, referral_connector connector, referral_policy policy)
-  -> capy::task<result<chased_compare>>
+  -> capy::task<result<compare_result>>
 {
 	auto r = co_await detail::chase_compare(origin, std::move(request), std::move(connector), policy, {});
 	co_return std::move(r.value);
