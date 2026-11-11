@@ -357,7 +357,8 @@ TEST_CASE("ad types in validate<T>: Octet String and INTEGER", "[ad][schema]")
 	};
 	const std::pmr::vector<std::pmr::string> classes{
 		"( 2.5.6.0 NAME 'top' ABSTRACT )",
-		"( 1.2.840.113556.1.5.9 NAME 'user' SUP top STRUCTURAL MAY ( sAMAccountName $ userAccountControl ) )",
+		"( 1.2.840.113556.1.5.9 NAME 'user' SUP top STRUCTURAL MAY ( sAMAccountName $ userAccountControl $ "
+		"sIDHistory ) )",
 	};
 	const auto s = ldap::server_schema::parse(types, classes);
 	REQUIRE(s.skipped() == 0);

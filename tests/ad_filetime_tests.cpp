@@ -257,8 +257,11 @@ const std::pmr::vector<std::pmr::string> ad_classes{
 	"( 2.5.6.0 NAME 'top' ABSTRACT MUST (objectClass $ instanceType $ nTSecurityDescriptor $ objectCategory ) )",
 	"( 2.5.6.6 NAME 'person' SUP top STRUCTURAL MUST (cn ) MAY (sn $ userPassword ) )",
 	"( 2.5.6.7 NAME 'organizationalPerson' SUP person STRUCTURAL MAY (c $ l ) )",
-	"( 1.2.840.113556.1.5.9 NAME 'user' SUP organizationalPerson STRUCTURAL MAY (accountExpires $ pwdLastSet ) )",
-	"( 1.2.840.113556.1.5.67 NAME 'domainDNS' SUP top STRUCTURAL MAY (maxPwdAge ) )",
+	// NOLINTNEXTLINE(bugprone-suspicious-missing-comma): one definition, wrapped at the column limit
+	"( 1.2.840.113556.1.5.9 NAME 'user' SUP organizationalPerson STRUCTURAL MAY (accountExpires $ pwdLastSet $ "
+	"sAMAccountName $ userAccountControl ) )",
+	"( 1.2.840.113556.1.5.67 NAME 'domainDNS' SUP top STRUCTURAL MAY (maxPwdAge $ lockoutDuration $ "
+	"lockOutObservationWindow ) )",
 };
 
 // The issues but the MUST warnings (validate<T> reports the MUSTs of the

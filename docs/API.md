@@ -819,7 +819,10 @@ itself needs only ICU.
   object classes and their superclasses that no required, writable member
   maps as warnings: `must_attribute_not_mapped`,
   `must_attribute_not_required`, `unknown_superclass`; an auxiliary class
-  of another kind on the server: `not_auxiliary`),
+  of another kind on the server: `not_auxiliary`; a writable member whose
+  attribute no MUST or MAY of those classes and the auxiliary ones lists:
+  `attribute_not_allowed`),
+  `attribute_type` with `usage` (`attribute_usage`),
   `object_class_type` with `sup`, `kind` (`object_class_kind`), `must`
   and `may`; the free `ldap::load_schema` (directory.hpp) and
   `store_options::schema_check = schema_check::on_first_use`. Breaking

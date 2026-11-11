@@ -95,6 +95,8 @@ TEST_CASE("schema: parse OpenLDAP definitions", "[schema]")
 	REQUIRE(ts != nullptr);
 	CHECK(ts->single_value);
 	CHECK(ts->no_user_modification);
+	CHECK(ts->usage == ldap::attribute_usage::directory_operation);
+	CHECK(cn->usage == ldap::attribute_usage::user_applications);
 	const auto *member_of = s.find_attribute("memberOf");
 	REQUIRE(member_of != nullptr);
 	CHECK(member_of->syntax == ldap::syntax::dn);// quoted
@@ -291,7 +293,7 @@ constexpr auto ldap::schema<on_cycle> = ldap::describe(ldap::object_class("top")
 TEST_CASE("schema: a SUP cycle is reported as a chain too long", "[schema][validate]")
 {
 	const std::pmr::vector<std::pmr::string> types{ "( 1.1 NAME 'a' SUP b )", "( 1.2 NAME 'b' SUP a )" };
-	const std::pmr::vector<std::pmr::string> classes{ "( 2.5.6.0 NAME 'top' ABSTRACT )" };
+	const std::pmr::vector<std::pmr::string> classes{ "( 2.5.6.0 NAME 'top' ABSTRACT MAY a )" };
 	const auto rep = ldap::validate<on_cycle>(ldap::server_schema::parse(types, classes));
 	REQUIRE(rep.issues.size() == 1);
 	CHECK(rep.issues[0].what == ldap::schema_issue::kind::syntax_mismatch);
@@ -442,7 +444,7 @@ TEST_CASE("schema: a syntax mismatch quotes the server's SYNTAX cut", "[schema][
 	const std::pmr::vector<std::pmr::string> types{ std::pmr::string(
 	  "( 1.2.1 NAME 'longSyntax' " + desc + " SYNTAX " + oid + " SINGLE-VALUE )") };
 	const std::pmr::vector<std::pmr::string> classes{ std::pmr::string(
-	  "( 2.5.6.0 NAME 'top' " + desc + " ABSTRACT )") };
+	  "( 2.5.6.0 NAME 'top' " + desc + " ABSTRACT MAY longSyntax )") };
 	const auto rep = ldap::validate<long_syntax>(ldap::server_schema::parse(types, classes));
 	REQUIRE(rep.issues.size() == 1);
 	CHECK(rep.issues[0].what == ldap::schema_issue::kind::syntax_mismatch);
@@ -482,7 +484,9 @@ TEST_CASE("schema: a SUP that is missing or skipped for its SYNTAX is reported",
 		"( 1.2.5 NAME 'childAttr' DESC 'na\xC3\xAFve \xE5\xAD\x90' SUP parentAttr )",
 		"( 1.2.6 NAME 'orphanAttr' DESC '\xC3\xA9t\xC3\xA9 \xE5\xAD\xA4' SUP 'no\xE2\x80\xAEsuch' )",
 	};
-	const std::pmr::vector<std::pmr::string> classes{ "( 2.5.6.0 NAME 'top' ABSTRACT )" };
+	const std::pmr::vector<std::pmr::string> classes{
+		"( 2.5.6.0 NAME 'top' ABSTRACT MAY ( childAttr $ orphanAttr ) )"
+	};
 	const auto s = ldap::server_schema::parse(types, classes);
 	CHECK(s.skipped() == 1);
 	CHECK(s.find_attribute("parentAttr") == nullptr);
@@ -535,7 +539,7 @@ TEST_CASE("schema: an attribute type with neither SYNTAX nor SUP is reported", "
 		"( 1.2.7 NAME 'bareAttr' DESC 'caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC \xF0\x9F\x93\x9C' )",
 		"( 1.2.8 NAME 'bareChild' DESC 'na\xC3\xAFve \xE5\xAD\x90' SUP bareAttr )",
 	};
-	const std::pmr::vector<std::pmr::string> classes{ "( 2.5.6.0 NAME 'top' ABSTRACT )" };
+	const std::pmr::vector<std::pmr::string> classes{ "( 2.5.6.0 NAME 'top' ABSTRACT MAY ( bareAttr $ bareChild ) )" };
 	const auto s = ldap::server_schema::parse(types, classes);
 	CHECK(s.skipped() == 0);
 	REQUIRE(s.find_attribute("bareAttr") != nullptr);
@@ -558,14 +562,17 @@ TEST_CASE("schema: validate a matching descriptor", "[schema][validate]")
 	const auto rep = ldap::validate<good_person>(s);
 	CHECK(rep.ok());
 	// uid is multi-valued on the server but a single member here, person's
-	// sn is not mapped and its cn is a vector: warnings only.
-	REQUIRE(rep.issues.size() == 3);
+	// sn is not mapped, its cn is a vector and no class allows uidNumber:
+	// warnings only.
+	REQUIRE(rep.issues.size() == 4);
 	CHECK(rep.issues[0].what == ldap::schema_issue::kind::single_member_multi_valued);
 	CHECK(rep.issues[0].name == "uid");
 	CHECK(rep.issues[1].what == ldap::schema_issue::kind::must_attribute_not_mapped);
 	CHECK(rep.issues[1].name == "sn");
 	CHECK(rep.issues[2].what == ldap::schema_issue::kind::must_attribute_not_required);
 	CHECK(rep.issues[2].name == "cn");
+	CHECK(rep.issues[3].what == ldap::schema_issue::kind::attribute_not_allowed);
+	CHECK(rep.issues[3].name == "uidNumber");
 	CHECK(std::ranges::none_of(rep.issues, &ldap::schema_issue::is_error));
 }
 
@@ -1030,7 +1037,7 @@ TEST_CASE("schema: MUST checks follow the RFC 4512 rules", "[schema][validate]")
 		const std::string text = rep.to_string();
 		CHECK_THAT(text,
 		  ContainsSubstring("warning: object class missing: a superclass of namedThing not defined on the server: "
-							"the MUST attributes it would add are not checked"));
+							"the attributes it would add are not checked"));
 		CHECK_THAT(text, ContainsSubstring("by object class loopB (a superclass of namedThing)"));
 	}
 	SECTION("an undefined declared class is an error, with no MUST to check")
@@ -1169,4 +1176,169 @@ TEST_CASE("schema: auxiliary classes are checked with the object classes", "[sch
 	  ContainsSubstring("warning: object class person: declared auxiliary, but the server defines it STRUCTURAL"));
 	CHECK_THAT(
 	  text, ContainsSubstring("warning: object class top: declared auxiliary, but the server defines it ABSTRACT"));
+}
+
+namespace {
+
+struct forgot_auxiliary
+{
+	std::string uid;
+	std::string cn;
+	std::string sn;
+	std::int64_t uid_number = 0;
+};
+
+struct spelled_members
+{
+	std::string cn;
+	std::string surname;
+	std::string user_id;
+	std::vector<std::string> mail;
+	std::vector<std::string> object_class;
+};
+
+struct odd_members
+{
+	std::string cn;
+	std::string sn;
+	std::string title;
+	std::string created;
+	std::string marker;
+};
+
+struct no_class_members
+{
+	std::int64_t uid_number = 0;
+};
+
+struct extensible_person
+{
+	std::string cn;
+	std::string sn;
+	std::int64_t uid_number = 0;
+};
+
+struct under_name
+{
+	std::string cn;
+};
+
+auto not_allowed(const ldap::schema_report &rep) -> std::vector<std::string>
+{
+	std::vector<std::string> out;
+	for (const auto &i : rep.issues) {
+		if (i.what == ldap::schema_issue::kind::attribute_not_allowed) {
+			out.push_back(i.name);
+		}
+	}
+	return out;
+}
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<forgot_auxiliary> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::field<&forgot_auxiliary::uid>("uid"),
+  ldap::field<&forgot_auxiliary::cn>("cn"),
+  ldap::field<&forgot_auxiliary::sn>("sn"),
+  ldap::field<&forgot_auxiliary::uid_number>("uidNumber"));
+
+template<>
+constexpr auto ldap::schema<spelled_members> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::field<&spelled_members::cn>("cn;lang-en"),
+  ldap::field<&spelled_members::surname>("SURNAME"),
+  ldap::field<&spelled_members::user_id>("0.9.2342.19200300.100.1.1"),
+  ldap::field<&spelled_members::mail>("rfc822Mailbox"),
+  ldap::field<&spelled_members::object_class>("objectClass"));
+
+template<>
+constexpr auto ldap::schema<odd_members> = ldap::describe(ldap::object_class("person"),
+  ldap::field<&odd_members::cn>("cn"),
+  ldap::field<&odd_members::sn>("sn"),
+  ldap::field<&odd_members::title>("title", ldap::read_only),
+  ldap::field<&odd_members::created>("x-operational"),
+  ldap::field<&odd_members::marker>("x-undefined"));
+
+template<>
+constexpr auto ldap::schema<no_class_members> = ldap::describe(ldap::field<&no_class_members::uid_number>("uidNumber"));
+
+template<>
+constexpr auto ldap::schema<extensible_person> = ldap::describe(ldap::object_class("person"),
+  ldap::auxiliary_class("extensibleObject"),
+  ldap::field<&extensible_person::cn>("cn"),
+  ldap::field<&extensible_person::sn>("sn"),
+  ldap::field<&extensible_person::uid_number>("uidNumber"));
+
+template<>
+constexpr auto ldap::schema<under_name> =
+  ldap::describe(ldap::object_class("namedOnly"), ldap::field<&under_name::cn>("cn"));
+
+TEST_CASE("schema: a member no class allows is a warning", "[schema][validate][auxiliary]")
+{
+	using k = ldap::schema_issue::kind;
+	auto types = core_types;
+	types.emplace_back("( 1.9.1 NAME 'title' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )");
+	types.emplace_back(
+	  "( 1.9.2 NAME 'x-operational' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 USAGE distributedOperation )");
+	auto classes = core_classes;
+	classes.emplace_back("( 1.3.6.1.1.1.2.1 NAME 'shadowAccount' SUP top AUXILIARY MUST uid )");
+	classes.emplace_back("( 1.3.6.1.4.1.1466.101.120.111 NAME 'extensibleObject' SUP top AUXILIARY )");
+	classes.emplace_back("( 1.9.3 NAME 'namedOnly' SUP top STRUCTURAL MAY name )");
+	const auto s = ldap::server_schema::parse(types, classes);
+
+	SECTION("a forgotten auxiliary class")
+	{
+		const auto rep = ldap::validate<forgot_auxiliary>(s);
+		INFO(rep.to_string());
+		CHECK(rep.ok());
+		CHECK(not_allowed(rep) == std::vector<std::string>{ "uidNumber" });
+		CHECK_THAT(rep.to_string(),
+		  ContainsSubstring("warning: attribute uidNumber: in no MUST or MAY of the declared object classes"));
+	}
+	SECTION("the auxiliary classes and superclasses allow their attributes")
+	{
+		const auto rep = ldap::validate<posix_person>(s);
+		INFO(rep.to_string());
+		CHECK(rep.ok());
+		CHECK(not_allowed(rep).empty());
+	}
+	SECTION("an option, an alias, an OID and objectClass")
+	{
+		const auto rep = ldap::validate<spelled_members>(s);
+		INFO(rep.to_string());
+		CHECK(rep.ok());
+		CHECK(not_allowed(rep).empty());
+	}
+	SECTION("read_only, operational and undefined attributes")
+	{
+		const auto rep = ldap::validate<odd_members>(s);
+		INFO(rep.to_string());
+		CHECK(not_allowed(rep).empty());
+		CHECK(std::ranges::count_if(rep.issues, [](const auto &i) { return i.what == k::unknown_attribute; }) == 1);
+	}
+	SECTION("no declared class: nothing to check against")
+	{
+		CHECK(not_allowed(ldap::validate<no_class_members>(s)).empty());
+	}
+	SECTION("extensibleObject allows anything")
+	{
+		const auto rep = ldap::validate<extensible_person>(s);
+		INFO(rep.to_string());
+		CHECK(rep.ok());
+		CHECK(not_allowed(rep).empty());
+	}
+	SECTION("a subtype is not its supertype")
+	{
+		CHECK(not_allowed(ldap::validate<under_name>(s)) == std::vector<std::string>{ "cn" });
+	}
+	SECTION("a class that is not defined may allow it")
+	{
+		CHECK(not_allowed(ldap::validate<forgot_auxiliary>(ldap::server_schema::parse(types, {}))).empty());
+		const std::pmr::vector<std::pmr::string> missing_sup{
+			"( 2.16.840.1.113730.3.2.2 NAME 'inetOrgPerson' SUP x-missing STRUCTURAL MUST ( uid $ cn $ sn ) )",
+		};
+		const auto rep = ldap::validate<forgot_auxiliary>(ldap::server_schema::parse(types, missing_sup));
+		CHECK(not_allowed(rep).empty());
+		CHECK(std::ranges::count_if(rep.issues, [](const auto &i) { return i.what == k::unknown_superclass; }) == 1);
+	}
 }

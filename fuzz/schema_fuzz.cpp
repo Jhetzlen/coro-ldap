@@ -64,9 +64,14 @@ void check_multi(std::string_view text)
 		}
 	}
 	ldap::schema_report rep;
-	ldap::detail::check_must(multi, declared, fields, rep);
+	ldap::detail::check_class_attributes(multi, declared, fields, rep);
 	for (const auto &i : rep.issues) {
 		check(!i.is_error(), "!i.is_error()");
+		if (i.what == ldap::schema_issue::kind::attribute_not_allowed) {
+			check(std::ranges::contains(fields, std::string_view(i.name), &ldap::detail::field_use::name),
+			  "a not-allowed issue names a member");
+			continue;
+		}
 		const bool superclass = i.what == ldap::schema_issue::kind::unknown_superclass;
 		check(std::ranges::any_of(parsed,
 				[&](const ldap::object_class_type &pc) {
@@ -134,9 +139,14 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 		}
 		fields.push_back({ .name = c->oid, .kind = ldap::cardinality::optional, .read_only = false });
 		ldap::schema_report rep;
-		ldap::detail::check_must(s, classes, fields, rep);
+		ldap::detail::check_class_attributes(s, classes, fields, rep);
 		for (const auto &i : rep.issues) {
 			check(!i.is_error(), "!i.is_error()");
+			if (i.what == ldap::schema_issue::kind::attribute_not_allowed) {
+				check(std::ranges::contains(fields, std::string_view(i.name), &ldap::detail::field_use::name),
+				  "a not-allowed issue names a member");
+				continue;
+			}
 			const auto named = [&](
 								 const std::vector<std::string> &list) { return std::ranges::contains(list, i.name); };
 			check(i.what == ldap::schema_issue::kind::unknown_superclass ? named(c->sup) : named(c->must),

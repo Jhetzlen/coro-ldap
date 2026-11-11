@@ -1852,7 +1852,7 @@ connection and check descriptors against it.
 
 Parsing is minimal, only what the checks below need:
 - `attributeTypes`: `NAME` (all aliases), `SUP`, `EQUALITY`, `SYNTAX`,
-  `SINGLE-VALUE`, `NO-USER-MODIFICATION`. `SUP` is followed to inherit
+  `SINGLE-VALUE`, `NO-USER-MODIFICATION`, `USAGE`. `SUP` is followed to inherit
   `SYNTAX` and `EQUALITY`, because many common attributes (`cn`, `sn`, …)
   only declare `SUP name`. `EQUALITY` drives
   `distinguished_name_match(a, b, schema)` (section 1).
@@ -1910,9 +1910,22 @@ Checks:
   "along with those from the RDN" make up the entry), which a check per
   type cannot see; and Active Directory fills in MUSTs of its own (`top`
   requires instanceType, nTSecurityDescriptor and objectCategory, which a
-  client does not send). `MAY` is parsed but not checked: a member outside
-  every class's MUST and MAY can still be legal (operational attributes,
-  DIT content rules, extensibleObject).
+  client does not send).
+- allowed attributes (warning): with declared object classes, a writable
+  member whose attribute is in no `MUST` or `MAY` of those classes, the
+  auxiliary classes and their superclasses is `attribute_not_allowed`, the
+  mistake of forgetting `auxiliary_class("posixAccount")` on a `uidNumber`
+  member, which would otherwise surface as objectClassViolation on add.
+  Matching is the one above: aliases, OIDs and options count, a subtype
+  does not. Not reported: `objectClass`, read_only members, operational
+  attributes (`USAGE` other than userApplications, which object classes
+  do not govern), attributes the server does not define (already
+  `unknown_attribute`), and no member at all when a class is
+  extensibleObject (RFC 4512 section 4.3) or a class or superclass is
+  undefined, since that class might allow it. A warning, because what a
+  server serves in `objectClasses` is not all it allows: DIT content
+  rules (RFC 4512 section 2.6) are not parsed, and Samba AD's `user` does
+  not list `sAMAccountName`, so a member on it is reported there.
 
 With `schema_check::on_first_use`, a store's first operation runs
 `validate<T>` and fails with `client_errc::schema_mismatch` if the report has

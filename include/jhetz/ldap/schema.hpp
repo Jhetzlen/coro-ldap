@@ -40,6 +40,10 @@
 
 namespace jhetz::ldap {
 
+// RFC 4512 section 4.1.2 AttributeUsage: userApplications when the definition
+// gives none; the others are operational.
+enum class attribute_usage { user_applications, directory_operation, distributed_operation, dsa_operation };
+
 struct attribute_type
 {
 	std::string oid{};
@@ -51,6 +55,7 @@ struct attribute_type
 	std::optional<std::string> syntax{};// syntax OID, {length} removed
 	bool single_value = false;
 	bool no_user_modification = false;
+	attribute_usage usage = attribute_usage::user_applications;
 };
 
 // RFC 4512 section 4.1.1 ObjectClassDescription kind: STRUCTURAL when the
@@ -263,11 +268,14 @@ struct schema_issue
 		// or read_only members (store::add may not send it)
 		must_attribute_not_required,
 		// warning: a superclass (SUP) of a declared object class that is not
-		// defined on the server: the MUSTs it would add are not checked
+		// defined on the server: the attributes it would add are not checked
 		unknown_superclass,
 		// warning: a class declared with ldap::auxiliary_class that the
 		// server defines as STRUCTURAL or ABSTRACT
 		not_auxiliary,
+		// warning: a writable member whose attribute is in no MUST or MAY of
+		// the declared object classes, the auxiliary ones or their superclasses
+		attribute_not_allowed,
 	};
 	kind what;
 	std::string name;// the attribute or object class
@@ -276,7 +284,7 @@ struct schema_issue
 	{
 		return what != kind::single_member_multi_valued && what != kind::must_attribute_not_mapped
 			   && what != kind::must_attribute_not_required && what != kind::unknown_superclass
-			   && what != kind::not_auxiliary;
+			   && what != kind::not_auxiliary && what != kind::attribute_not_allowed;
 	}
 };
 
@@ -301,14 +309,14 @@ namespace detail {
 	// not_auxiliary when the server defines `name` with another kind.
 	void check_auxiliary_class(const server_schema &s, std::string_view name, schema_report &out);
 
-	// What store::add does with one member, for check_must.
+	// What store::add does with one member, for check_class_attributes.
 	struct field_use
 	{
 		std::string_view name;
 		cardinality kind;
 		bool read_only;
 	};
-	void check_must(const server_schema &s,
+	void check_class_attributes(const server_schema &s,
 	  std::span<const char *const> classes,
 	  std::span<const field_use> fields,
 	  schema_report &out);
@@ -331,6 +339,14 @@ namespace detail {
 // its OID 2.5.4.0 (add sends the declared classes), and NO-USER-MODIFICATION attributes (a client must not send
 // them, RFC 4511 section 4.7). Subtypes do not count (a cn member does not
 // map a MUST name); attribute options do (cn;lang-en maps cn).
+//
+// With declared object classes, also reports each writable member whose
+// attribute no MUST or MAY of those classes, the auxiliary ones or their
+// superclasses lists (attribute_not_allowed, a warning; the same matching).
+// Not reported: objectClass, operational attributes (USAGE other than
+// userApplications), attributes the server does not define, and every member
+// when a class is extensibleObject or a class or superclass is not defined.
+// DIT content rules are not read, so an attribute only they allow is reported.
 template<described T> [[nodiscard]] auto validate(const server_schema &s) -> schema_report
 {
 	schema_report out;
@@ -359,7 +375,7 @@ template<described T> [[nodiscard]] auto validate(const server_schema &s) -> sch
 				.name = f.name, .kind = std::remove_cvref_t<decltype(f)>::kind, .read_only = f.read_only }... };
 		  },
 		  schema<T>.fields);
-		detail::check_must(s, detail::all_object_classes<T>, fields, out);
+		detail::check_class_attributes(s, detail::all_object_classes<T>, fields, out);
 	}
 	return out;
 }

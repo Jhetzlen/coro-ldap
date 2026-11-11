@@ -335,6 +335,21 @@ namespace {
 
 namespace {
 
+	// RFC 4512 section 4.1.2; userApplications for any other text.
+	auto usage_of(std::string_view text) -> attribute_usage
+	{
+		if (detail::iequals(text, "directoryOperation")) {
+			return attribute_usage::directory_operation;
+		}
+		if (detail::iequals(text, "distributedOperation")) {
+			return attribute_usage::distributed_operation;
+		}
+		if (detail::iequals(text, "dSAOperation")) {
+			return attribute_usage::dsa_operation;
+		}
+		return attribute_usage::user_applications;
+	}
+
 	// The attribute type of a definition that parsed; fails only for its
 	// SYNTAX (server_schema::parse remembers those definitions' names).
 	auto to_attribute_type(definition &&d) -> result<attribute_type>
@@ -361,6 +376,9 @@ namespace {
 		}
 		a.single_value = d.has("SINGLE-VALUE");
 		a.no_user_modification = d.has("NO-USER-MODIFICATION");
+		if (const auto *s = d.get("USAGE"); s && !s->empty()) {
+			a.usage = usage_of(s->front());
+		}
 		return a;
 	}
 
@@ -605,7 +623,7 @@ namespace {
 				out.issues.push_back({ .what = schema_issue::kind::unknown_superclass,
 				  .name = sup,
 				  .detail = detail::format(
-					"a superclass of {} not defined on the server: the MUST attributes it would add are not checked",
+					"a superclass of {} not defined on the server: the attributes it would add are not checked",
 					declared) });
 			}
 		}
@@ -665,6 +683,60 @@ namespace {
 												: schema_issue::kind::must_attribute_not_mapped,
 		  .name = std::string(must),
 		  .detail = std::move(text) });
+	}
+
+	// objectClass (RFC 4512 section 3.3, OID 2.5.4.0) by any of its names; a:
+	// the definition of `name`, or nullptr.
+	auto is_object_class(const server_schema &s, std::string_view name, const attribute_type *a) -> bool
+	{
+		if (a != nullptr) {
+			return a == s.find_attribute("objectClass") || a->oid == "2.5.4.0";
+		}
+		return detail::iequals(name, "objectClass") || name == "2.5.4.0";
+	}
+
+	// RFC 4512 section 4.3.
+	auto is_extensible_object(const object_class_type &c) -> bool
+	{
+		return c.oid == "1.3.6.1.4.1.1466.101.120.111" || std::ranges::any_of(c.names, [](const std::string &n) {
+			return detail::iequals(n, "extensibleObject");
+		});
+	}
+
+	// attribute_not_allowed for each writable member outside the MUSTs and
+	// MAYs of `all`, unless a class allows anything or may be missing.
+	void report_not_allowed(const server_schema &s,
+	  const std::vector<reached_class> &all,
+	  std::span<const detail::field_use> fields,
+	  schema_report &out)
+	{
+		const auto is_unknown_class = [](const schema_issue &i) {
+			return i.what == schema_issue::kind::unknown_object_class
+				   || i.what == schema_issue::kind::unknown_superclass;
+		};
+		if (std::ranges::any_of(out.issues, is_unknown_class)
+			|| std::ranges::any_of(all, [](const reached_class &r) { return is_extensible_object(*r.c); })) {
+			return;
+		}
+		std::unordered_set<const attribute_type *> allowed;
+		for (const reached_class &r : all) {
+			for (const auto *list : { &r.c->must, &r.c->may }) {
+				for (const auto &name : *list) {
+					allowed.insert(s.find_attribute(name));
+				}
+			}
+		}
+		for (const detail::field_use &f : fields) {
+			const attribute_type *a = s.find_attribute(f.name);
+			if (f.read_only || a == nullptr || is_object_class(s, f.name, a)
+				|| a->usage != attribute_usage::user_applications || allowed.contains(a)) {
+				continue;
+			}
+			out.issues.push_back({ .what = schema_issue::kind::attribute_not_allowed,
+			  .name = std::string(f.name),
+			  .detail = "in no MUST or MAY of the declared object classes, the auxiliary ones or their superclasses: "
+						"the server refuses it unless a DIT content rule allows it" });
+		}
 	}
 
 }// namespace
@@ -760,21 +832,12 @@ namespace detail {
 		}
 	}
 
-	void check_must(const server_schema &s,
+	void check_class_attributes(const server_schema &s,
 	  std::span<const char *const> classes,
 	  std::span<const field_use> fields,
 	  schema_report &out)
 	{
 		const std::vector<reached_class> all = with_superclasses(s, classes, out);
-		// objectClass (RFC 4512 3.3, OID 2.5.4.0) by any of its names: add
-		// sends the declared classes.
-		const attribute_type *object_class = s.find_attribute("objectClass");
-		const auto is_object_class = [&](std::string_view m, const attribute_type *a) {
-			if (a != nullptr) {
-				return a == object_class || a->oid == "2.5.4.0";
-			}
-			return detail::iequals(m, "objectClass") || m == "2.5.4.0";
-		};
 		// Each attribute once: by its definition, or by its name if the
 		// server does not define it.
 		std::unordered_set<const attribute_type *> done_types;
@@ -782,8 +845,8 @@ namespace detail {
 		for (const reached_class &r : all) {
 			for (const auto &m : r.c->must) {
 				const attribute_type *a = s.find_attribute(m);
-				if (is_object_class(m, a)) {
-					continue;
+				if (is_object_class(s, m, a)) {
+					continue;// add sends the declared classes
 				}
 				if (a != nullptr) {
 					if (a->no_user_modification || !done_types.insert(a).second) {
@@ -795,6 +858,7 @@ namespace detail {
 				report_must(r, m, mapping_of(s, a, m, fields), out);
 			}
 		}
+		report_not_allowed(s, all, fields, out);
 	}
 
 }// namespace detail
