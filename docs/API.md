@@ -1283,8 +1283,25 @@ package component `ad`:
   AD's default MaxPageSize). When MoreResults is still set after
   `max_rounds` searches, the call succeeds with the entries so far, the
   last cookie and `more_results == true`: call again now with that cookie
-  for the rest. A complete snapshot needs `more_results == false`
-  (`while (r && r->more_results) r = co_await ad::dirsync(c, request, {.cookie = r->cookie});`),
+  for the rest. A complete snapshot needs `more_results == false`, and
+  the entries of every call: each result holds only its own call's
+  entries, so the loop accumulates them and keeps the caller's flags,
+  `max_bytes` and other options, replacing only the cookie:
+
+  ```cpp
+  std::vector<ldap::entry> snapshot;
+  auto r = co_await ldap::ad::dirsync(c, request, options);
+  while (r) {
+      std::ranges::move(r->entries, std::back_inserter(snapshot));
+      if (!r->more_results) {
+          break;
+      }
+      options.cookie = r->cookie;
+      r = co_await ldap::ad::dirsync(c, request, options);
+  }
+  // r: the error, or the last call's result (r->cookie for the next poll)
+  ```
+
   `max_rounds = 1` returns one batch per call, and a periodic poller that
   only saves `cookie` stays correct and gets the rest on its next poll.
   `max_rounds == 0` fails with `std::errc::invalid_argument` before
