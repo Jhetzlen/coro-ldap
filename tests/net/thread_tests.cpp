@@ -1,4 +1,4 @@
-// A connection, a client and a store used from several threads at once:
+// A connection, a client and a repository used from several threads at once:
 // one io_context run by a thread pool, many operations in flight, against
 // an in-process server that answers every request. Meant for TSan too
 // (docs/DEVELOPMENT.md "ThreadSanitizer").
@@ -6,7 +6,7 @@
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/mapping.hpp"
-#include "jhetz/ldap/store.hpp"
+#include "jhetz/ldap/repository.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -62,7 +62,7 @@ constexpr const char *hang_base = "ou=hang,dc=example,dc=org";
 const ldap::dn people_base{ "ou=people,dc=example,dc=org" };
 
 // Answers every request at once by its type: a search with two entries
-// (under hang_base: nothing, until abandoned), the schema searches a store
+// (under hang_base: nothing, until abandoned), the schema searches a repository
 // makes, success for the updates, binds and extended operations, compareTrue.
 // Its coroutines run on a strand of their own.
 class answering_server
@@ -362,8 +362,8 @@ template<class Pred> void wait_for(Pred done)
 }
 
 // Every operation of a client (forwarders, leases, an exclusive lease
-// bound again) and a store shared by every worker.
-auto client_worker(ldap::client &pool, ldap::store<&person::uid, ldap::client> &people, tally &t, int rounds)
+// bound again) and a repository shared by every worker.
+auto client_worker(ldap::client &pool, ldap::repository<&person::uid, ldap::client> &people, tally &t, int rounds)
   -> capy::task<void>
 {
 	for (int i = 0; i < rounds; ++i) {
@@ -463,7 +463,7 @@ TEST_CASE("threads: one connection used from several threads", "[net][threads]")
 	CHECK(t.failed == 0);
 }
 
-TEST_CASE("threads: one client and one store used from several threads", "[net][threads][client]")
+TEST_CASE("threads: one client and one repository used from several threads", "[net][threads][client]")
 {
 	corosio::io_context ioc;
 	answering_server server(ioc);
@@ -472,7 +472,7 @@ TEST_CASE("threads: one client and one store used from several threads", "[net][
 	  ldap::client_options{ .servers = { server.url() },
 		.setup = ldap::simple_bind_setup(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"),
 		.max_connections = 4 });
-	ldap::store persons(
+	ldap::repository persons(
 	  *pool, people_base, ldap::named_by<&person::uid>, { .schema_check = ldap::schema_check::on_first_use });
 	tally t;
 	{

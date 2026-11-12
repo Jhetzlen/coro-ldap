@@ -297,10 +297,10 @@ struct schema_issue
 		writable_but_no_user_modification,// error
 		single_member_multi_valued,// warning: only fails if an entry really has several values
 		// warning: a MUST attribute of a declared object class or of one of
-		// its superclasses that no member maps (store::add does not send it)
+		// its superclasses that no member maps (repository::add does not send it)
 		must_attribute_not_mapped,
 		// warning: a MUST attribute mapped only by std::optional, std::vector
-		// or read_only members (store::add may not send it)
+		// or read_only members (repository::add may not send it)
 		must_attribute_not_required,
 		// warning: a superclass (SUP) of a declared object class that is not
 		// defined on the server: the attributes it would add are not checked
@@ -322,7 +322,7 @@ struct schema_issue
 		// warning: a writable member whose attribute has no EQUALITY rule
 		// on its SUP chain, on a schema that declares EQUALITY for some
 		// attribute type: an assertion on it is always Undefined, so
-		// store::update_if's default guard cannot succeed
+		// repository::update_if's default guard cannot succeed
 		no_equality_rule,
 		// error: a member mapping the attribute type of an earlier member,
 		// with the same options, under another name (sn and surname, a name
@@ -364,7 +364,7 @@ namespace detail {
 	// not_auxiliary when the server defines `name` with another kind.
 	void check_auxiliary_class(const server_schema &s, std::string_view name, schema_report &out);
 
-	// What store::add does with one member, for check_class_attributes.
+	// What repository::add does with one member, for check_class_attributes.
 	struct field_use
 	{
 		std::string_view name;
@@ -389,9 +389,9 @@ namespace detail {
 // auxiliary classes', and
 // those of their superclasses (SUP followed, RFC 4512 section 2.4), against
 // the members: each must be mapped by a required (T), writable member, or
-// store::add may leave it out and the server refuse the entry
+// repository::add may leave it out and the server refuse the entry
 // (objectClassViolation). Those are warnings, never errors: the descriptor
-// may be a read projection (a store's search), the entry's RDN supplies its
+// may be a read projection (a repository's search), the entry's RDN supplies its
 // attribute values at add time (RFC 4511 section 4.7), and some servers fill
 // MUSTs in themselves (Active Directory: objectCategory, instanceType,
 // nTSecurityDescriptor). Not reported: objectClass, by any of its names or

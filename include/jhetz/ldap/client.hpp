@@ -52,7 +52,7 @@
 // once the backoff ends. An idle connection to a lower-priority server at
 // least failback_after old is closed by acquire() when a higher-priority
 // server may be tried. All servers must serve the same directory and schema
-// (a store's schema check holds for any of them).
+// (a repository's schema check holds for any of them).
 //
 // Health: there is no background timer. acquire() drops connections found
 // closed and probes an idle connection unused for longer than idle_check (a

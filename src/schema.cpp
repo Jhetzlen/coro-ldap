@@ -941,7 +941,7 @@ namespace detail {
 		if (!member_read_only && declares_equality(s) && s.equality_of(*a) == nullptr) {
 			out.issues.push_back({ .what = schema_issue::kind::no_equality_rule,
 			  .name = std::string(name),
-			  .detail = "no EQUALITY matching rule: an assertion on it is always Undefined, so store::update_if's "
+			  .detail = "no EQUALITY matching rule: an assertion on it is always Undefined, so repository::update_if's "
 						"default guard fails (use ldap::versioned_by)" });
 		}
 	}

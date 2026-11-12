@@ -18,7 +18,7 @@
 //       jhetz::ldap::field<&person::created>("createTimestamp", jhetz::ldap::read_only));
 //
 //   ldap::result<person> p = ldap::decode<person>(entry);
-//   ldap::store people(conn, base, ldap::named_by<&person::uid>);   // store.hpp
+//   ldap::repository people(conn, base, ldap::named_by<&person::uid>);   // repository.hpp
 //   co_await people.search(f);
 //   co_await people.modify("jdoe", {ldap::replace<&person::mail>("new@example.org")});
 //   co_await people.add(person{...});
@@ -39,7 +39,7 @@
 // (std::vector<std::byte>, ldap::binary, is a single binary value; use
 // std::vector<ldap::binary> for several.) A value that does not convert is
 // conversion_failed, and one bad value fails the whole decode<T> (and so the
-// whole store search). A string member (std::string, std::pmr::string) takes
+// whole repository search). A string member (std::string, std::pmr::string) takes
 // only well-formed UTF-8, so binary attributes (userPassword, jpegPhoto,
 // userCertificate, ...) map to ldap::binary; validate<T> reports a string
 // member on a binary syntax (schema.hpp). Errors name the entry and the
@@ -50,7 +50,7 @@
 // holds none (an attribute the reader may not see, RFC 4511 4.5.1.8). Map
 // each member by the attribute's primary name, the one the server answers
 // with: a member named by an alias or OID decodes empty (validate<T> warns
-// with not_primary_name, and a store read fails with schema_mismatch).
+// with not_primary_name, and a repository read fails with schema_mismatch).
 //
 // value_traits<T> is the extension point, like std::formatter:
 //
@@ -63,7 +63,7 @@
 // value can be written, or ldap::result<std::string> when some cannot
 // (encode_error). detail::encode_value(v) takes both forms and returns
 // result<std::string>. A failed encode stops the typed write before
-// anything is sent: store::add (to_attributes) and store::modify (the change)
+// anything is sent: repository::add (to_attributes) and repository::modify (the change)
 // return the error, and a typed filter becomes the empty filter, which
 // fails with invalid_filter (see filters::typed_attr).
 //
@@ -396,7 +396,7 @@ template<class... S> consteval auto object_class(S... names)
 }
 
 // Auxiliary object classes (RFC 4512 section 2.4.3), after object_class:
-// written on add and checked by validate<T>, but not ANDed into a store's
+// written on add and checked by validate<T>, but not ANDed into a repository's
 // search filter, so entries without them are found too.
 template<std::size_t N> struct auxiliary_classes
 {
@@ -491,7 +491,7 @@ namespace detail {
 	}
 }// namespace detail
 
-// The attribute names of T's descriptor, in order (what a store requests).
+// The attribute names of T's descriptor, in order (what a repository requests).
 template<described T>
 [[nodiscard]] auto attribute_names(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> string_list
 {
@@ -726,9 +726,9 @@ template<described T>
 // ---------------------------------------------------------------- typed changes
 
 // A ModifyRequest change for a member of T, built by ldap::add / remove /
-// replace below; store::modify takes them. A value that does not
+// replace below; repository::modify takes them. A value that does not
 // encode leaves the error in `wire` (context "replace mail"), which
-// store::modify returns before sending anything.
+// repository::modify returns before sending anything.
 template<class T> struct change
 {
 	result<modify_change> wire;
@@ -975,7 +975,7 @@ namespace filters {
 }// namespace filters
 
 // `(&(objectClass=c1)...(objectClass=cN) f)`, or `f` when T declares no
-// object class: what a store's search sends. Auxiliary classes are not
+// object class: what a repository's search sends. Auxiliary classes are not
 // included.
 template<described T> [[nodiscard]] auto narrow_filter(filter f) -> filter
 {

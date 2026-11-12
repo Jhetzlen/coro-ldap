@@ -276,7 +276,7 @@ the error, UnboundID `LDAPSearchException.getSearchEntries()`, .NET
 error lost them. Alternatives rejected: the partial entries inside the
 error (an `ldap::error` would carry entries for one operation only), and
 a success with a flag (the result code, matched DN and diagnostic would be
-lost). The same holds for a store's `search` (`typed_search_result<record<T>>`,
+lost). The same holds for a repository's `search` (`typed_search_result<record<T>>`,
 the same fields with `std::vector` entries), `client::search`, the sync
 facades' `search` and `sync::search_paged` (the pages collected: the last
 page's done), and `chase_search` (the done fields are the origin's or
@@ -1334,7 +1334,7 @@ retry prefers the other servers. A page size that is not positive, or a
 
 A paged search is bounded by `max_pages` (default
 `search_paged_default_max_pages` = 10000, about a million entries at a
-page size of 100; `sync::search_paged` and the stores' paged searches use
+page size of 100; `sync::search_paged` and the repositories' paged searches use
 it too), as `ad::dirsync` is by `max_rounds`: a server that keeps answering
 with a cookie, an empty page or not, would otherwise keep the search, and
 the sync facade's collected result, growing without end. Once page
@@ -1414,13 +1414,13 @@ template<> constexpr auto ldap::schema<person> = ldap::describe(
 ```
 
 `object_class(...)` is optional. When present:
-- a store's `search` and `get` AND `(objectClass=…)` into the filter, so a
+- a repository's `search` and `get` AND `(objectClass=…)` into the filter, so a
   `person` search only returns person entries;
-- `to_attributes` (a store's `add`) writes those values to `objectClass` (a
+- `to_attributes` (a repository's `add`) writes those values to `objectClass` (a
   new entry cannot be created without them);
 - runtime validation checks the classes exist on the server.
 
-Without it, a store uses your filter unchanged and `add` requires an
+Without it, a repository uses your filter unchanged and `add` requires an
 `objectClass` field in the descriptor.
 
 `auxiliary_class(...)`, after `object_class(...)` (a static_assert
@@ -1437,7 +1437,7 @@ template<> constexpr auto ldap::schema<posix_user> = ldap::describe(
 They are written on add after the object classes, and validated like
 them (they must exist, their MUSTs and their superclasses' are checked,
 and one the server defines as STRUCTURAL or ABSTRACT is the warning
-`not_auxiliary`), but a store's `search` and `get` AND only the
+`not_auxiliary`), but a repository's `search` and `get` AND only the
 `object_class(...)` ones into the filter: an entry is found whether or
 not it carries the auxiliary classes, and decoding it then fails if a
 required member's attribute is missing. Classes listed in `object_class`
@@ -1454,7 +1454,7 @@ Field shape decides cardinality:
 
 (A value that fails to convert is `conversion_failed` for every shape:
 for `std::vector<T>` the first bad value fails the whole member. One bad
-value fails the whole `decode<T>`, and so the whole store search: the
+value fails the whole `decode<T>`, and so the whole repository search: the
 first entry that does not decode fails the call.)
 
 An entry holding a mapped attribute with a range option (Active
@@ -1464,9 +1464,9 @@ value-less `member`) fails `decode<T>` with
 `client_errc::incomplete_values` for every shape, the context naming
 `ldap::ad::read_all_values`: `entry::find` compares the description
 with its options, so the member would otherwise decode empty, and a
-store's reads and `update_if`/`diff` would work on wrong data. Any
+repository's reads and `update_if`/`diff` would work on wrong data. Any
 range option counts, `range=0-*` included: the check needs no
-knowledge of whether the window is the whole set, and a store has no
+knowledge of whether the window is the whole set, and a repository has no
 business reading ranged values. A range option on another attribute,
 and other options of the mapped one (`;lang-fr`), are ignored.
 
@@ -1490,10 +1490,10 @@ is sent:
 - `replace / add / remove<&T::m>(v)` still return `change<T>`, so brace
   lists compose; its `wire` is a `result<modify_change>` holding the error,
   with the change as context (`replace mail: not valid UTF-8 (...)`).
-  A store's `modify` returns the first such error, prefixed with `modify <dn>`,
+  A repository's `modify` returns the first such error, prefixed with `modify <dn>`,
   before the schema check and before sending.
 - `to_attributes(value)` returns `result<std::pmr::vector<partial_attribute>>`
-  (context `attribute mail`), and a store's `add` returns its error prefixed
+  (context `attribute mail`), and a repository's `add` returns its error prefixed
   with `add <dn>`, again before anything is sent.
 - The typed filter operators (`==`, `>=`, `<=`, `approx`) keep returning
   `filter`: on an encode failure they return the empty filter, which is
@@ -1600,10 +1600,10 @@ the numbers, so "never" as 0 sorts below every date: expired accounts are
 0: "never expires" is `expires == ad::never || expires == time_point{}`,
 `(|(accountExpires=9223372036854775807)(accountExpires=0))`.
 
-Usage (implemented, #9, `mapping.hpp`; the I/O in `store.hpp`, below):
+Usage (implemented, #9, `mapping.hpp`; the I/O in `repository.hpp`, below):
 
 ```cpp
-ldap::store people(conn, base, ldap::named_by<&person::uid>);
+ldap::repository people(conn, base, ldap::named_by<&person::uid>);
 // Attribute list from the descriptor; filter narrowed to its object classes.
 auto found = co_await people.search(f);   // found->entries: std::vector<record<person>>
 
@@ -1633,12 +1633,12 @@ Compile-time guarantees (all implemented, each with a compile test in
 - the value type must match the member (`replace<&person::created>("x")`
   and `field<&person::uid_number>() == "x"` do not compile), and a
   single-valued member takes no range of values;
-- changes of another struct cannot be passed to a `person` store's `modify`;
+- changes of another struct cannot be passed to a `person` repository's `modify`;
 - `add` needs `object_class(...)` or an `objectClass` member.
 
 Errors name the entry and attribute: `search ou=people,dc=example,dc=org:
 entry uid=b,ou=people,dc=example,dc=org: attribute uidNumber: not an
-integer: "x"`. A mapping error fails the store's search but not the
+integer: "x"`. A mapping error fails the repository's search but not the
 connection.
 Encode errors read the same way: `modify uid=jdoe,ou=people,dc=example,dc=org:
 replace mail: not valid UTF-8 (ill-formed sequence at offset 4)`, `add
@@ -1648,7 +1648,7 @@ uid=jdoe,...: attribute uid: ...`.
 The untyped `ldap::entry` (dn + attribute → values) stays available for
 exploring unknown data; `ldap::decode<T>(entry)` converts one explicitly.
 
-### Typed CRUD: `ldap::store` (store.hpp)
+### Typed CRUD: `ldap::repository` (repository.hpp)
 
 Layering rule: the codec (descriptor, `value_traits`, `decode<T>`,
 `to_attributes`, typed changes and filters) is in the core; I/O
@@ -1658,7 +1658,7 @@ over the `ldap::directory` concept (directory.hpp: `search`, `add`,
 `connection` and `client` satisfy. The same rule as the `ldap::ad` layer (section 12).
 
 ```cpp
-ldap::store people(pool, ldap::dn{"ou=people,dc=example,dc=org"}, ldap::named_by<&person::uid>);
+ldap::repository people(pool, ldap::dn{"ou=people,dc=example,dc=org"}, ldap::named_by<&person::uid>);
 co_await people.add(person{.uid = "jdoe", ...});        // uid=jdoe,ou=people,dc=example,dc=org
 auto p = co_await people.get("jdoe");                   // result<std::optional<person>>
 co_await people.modify("jdoe", {ldap::replace<&person::mail>("j@example.org")});
@@ -1671,7 +1671,7 @@ co_await people.remove("jdoe");
 
 - Naming: `named_by<&T::m>` is a tag carrying the member pointer as a
   template argument, so class template argument deduction gets both the
-  struct and the source type (`store<&person::uid, ldap::client>`) and
+  struct and the source type (`repository<&person::uid, ldap::client>`) and
   the naming field is checked at compile time: listed in `schema<T>`,
   required and single-valued (an RDN value), not `read_only` (`add`
   writes it). An entry is `<attribute>=<escaped value>,<base>`;
@@ -1724,7 +1724,7 @@ co_await people.remove("jdoe");
   with no internal mode. Map members by the name the server returns: a
   member named by an alias (`surname`) or OID decodes empty, since the
   server answers with the primary name (`sn`) and decode matches names
-  exactly; a store read (`get`, `search`, the streams) fails with
+  exactly; a repository read (`get`, `search`, the streams) fails with
   `schema_mismatch` ("attribute sn returned for no member") when the
   answer holds an attribute that decode does not read: one whose
   description is none of the names it requested (RFC 4512 2.5: options
@@ -1758,7 +1758,7 @@ co_await people.remove("jdoe");
     replaced while a tagged or subtype sibling holds the same text;
     `versioned_by` is the exact check. An `original` with no values gives
     the empty filter, and `update_if` fails with `invalid_filter` before
-    sending (unreachable for a store, whose naming member is not
+    sending (unreachable for a repository, whose naming member is not
     read_only). read_only members are skipped, as in `diff`:
     the server changes those on its own (a `lastLogon` would refuse
     updates nobody raced with), and a type that truncates (`sys_seconds`
@@ -1785,8 +1785,8 @@ co_await people.remove("jdoe");
     unavailableCriticalExtension (12), applies nothing and keeps the
     connection; with criticality FALSE it ignores the control and applies
     the modify. The check
-    reuses the store's schema check (`validate<T>` reports the warning
-    `no_equality_rule`; the store keeps a second outcome beside the
+    reuses the repository's schema check (`validate<T>` reports the warning
+    `no_equality_rule`; the repository keeps a second outcome beside the
     first, no extra request, no stored schema), and a real
     `schema_mismatch` takes precedence. A filter holds at most `max_filter_elements` (10,000)
     elements, the enclosing AND and one per value, so a
@@ -1811,11 +1811,11 @@ co_await people.remove("jdoe");
   condition).
 - `rename(from, to)` is a modify DN to the RDN `<naming attribute>=<to>`
   with deleteoldrdn TRUE, so the naming member follows; `move(key,
-  new_base)` (or `move(key, other_store)`, its base) keeps the RDN and
+  new_base)` (or `move(key, other_repository)`, its base) keeps the RDN and
   sets newSuperior. Unlike the `move`/`rename` the connection and client
   used to have (dropped: `modify_dn` with designated initializers is the
   one call there), these build both DNs from the naming member, escaping
-  included, which is the store's job.
+  included, which is the repository's job.
 - `search_stream(filter, scope)` and `search_paged(page_size, filter,
   scope)` return a `record_stream<T, Stream>` over the source's
   `search_stream()` or `ldap::search_paged` (on a client: one shared lease,
@@ -1824,21 +1824,21 @@ co_await people.remove("jdoe");
   decode fails the call: it ends the stream, and `next()` returns it again
   from then on (the alternative, skipping the entry and going on, would
   make a stream accept what `search()` refuses). `stream()` gives the
-  underlying stream (references, controls, pages). `sync::store` has
+  underlying stream (references, controls, pages). `sync::repository` has
   `search_paged` with every page collected into a
   `typed_search_result<record<T>>` (the blocking facade has no streams).
 - No ORM traps: no whole-object save, no hidden reads, no relationships,
   no entry cache. One request per call, plus the schema load once.
-- `store_options::schema_check = on_first_use` loads the schema with the
+- `repository_options::schema_check = on_first_use` loads the schema with the
   free `ldap::load_schema(directory &)` on the first operation and keeps
   the outcome: a mismatch fails every later operation with
   `schema_mismatch`, a load failure is retried by the next operation.
   Over a client that is one check for the whole pool (section 6).
-- `detail::store_core<Naming>` holds the base, the options, the
+- `detail::repository_core<Naming>` holds the base, the options, the
   schema-check outcome and every operation, over a source passed to each
   call; the requests and results without the I/O are
-  `detail::store_codec<Naming>`. `ldap::store` runs the core on its
-  source; `sync::store` (sync_store.hpp) runs it on its facade's
+  `detail::repository_codec<Naming>`. `ldap::repository` runs the core on its
+  source; `sync::repository` (sync_repository.hpp) runs it on its facade's
   `ldap::connection` or `ldap::client` with `sync::run` (section 7), one
   task on the I/O thread per call, the schema check included.
 
@@ -2010,8 +2010,8 @@ ldap::result<ldap::server_schema> s = co_await ldap::load_schema(conn);   // dir
 ldap::schema_report rep = ldap::validate<person>(*s);
 if (!rep.ok()) std::println("{}", rep);   // lists every issue, not just the first
 
-// or automatically, in a store:
-ldap::store people(conn, base, ldap::named_by<&person::uid>, {.schema_check = ldap::schema_check::on_first_use});
+// or automatically, in a repository:
+ldap::repository people(conn, base, ldap::named_by<&person::uid>, {.schema_check = ldap::schema_check::on_first_use});
 ```
 
 Checks:
@@ -2026,7 +2026,7 @@ Checks:
 - attribute exists on the server (name or alias); a member named by an
   alias or numeric OID rather than the attribute's first NAME is the
   warning `not_primary_name` (servers answer with the primary name, so
-  the member would decode empty and a store read fails with
+  the member would decode empty and a repository read fails with
   `schema_mismatch`; an attribute with no NAME mapped by its OID gets
   none);
 - one attribute per name: a member mapping the attribute type of an
@@ -2050,7 +2050,7 @@ Checks:
   STRUCTURAL and AUXILIARY alike) must be mapped by a required (`T`),
   writable member. One that no member maps is
   `must_attribute_not_mapped`; one mapped only by `std::optional`,
-  `std::vector` or `read_only` members (a store's add sends nothing for an
+  `std::vector` or `read_only` members (a repository's add sends nothing for an
   empty one, never a read_only one) is `must_attribute_not_required`; a
   superclass the server does not define is `unknown_superclass` (its
   MUSTs cannot be checked). Each attribute is reported once, for the first
@@ -2110,12 +2110,12 @@ Checks:
   section 2.6: a rule governs only "if present and active") and counts
   for neither check.
 
-With `schema_check::on_first_use`, a store's first operation runs
+With `schema_check::on_first_use`, a repository's first operation runs
 `validate<T>` and fails with `client_errc::schema_mismatch` if the report has
-errors. The outcome is kept by the store, and checked again once its
+errors. The outcome is kept by the repository, and checked again once its
 source's `is_tls()` or `security_layer()` changed (RFC 4513 sections
 3.1.5 and 5.2.1.6: what was read unprotected is read again). From the
-same report the store keeps a second outcome: with a `no_equality_rule`
+same report the repository keeps a second outcome: with a `no_equality_rule`
 warning, `update_if` with its default guard fails with
 `client_errc::no_equality_rule` (cond `invalid_input`; context
 "attribute jpegPhoto: no equality rule, an assertion on it is always
@@ -2124,7 +2124,7 @@ Undefined (use ldap::versioned_by)") before sending; `versioned_by`,
 connection itself caches nothing about the server (coro-ldap-aw4.1: its
 schema cache and `connection_options::schema_check` are gone).
 
-Over an `ldap::client` the store checks once, not per pooled connection
+Over an `ldap::client` the repository checks once, not per pooled connection
 or server (coro-ldap-2cx.2.2): a client reports no `is_tls()` or
 `security_layer()`, so the outcome is never checked again, and the
 operations that follow may run on any server of the pool, failover
@@ -2705,9 +2705,9 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
     pool's `notify()` to the client's strand, and the pool reads a
     connection's state through the snapshots. A forwarded operation thus
     hops client strand, connection strand, client strand.
-  - `store<T>` keeps its schema-check outcome in a mutex-guarded
-    `detail::schema_check_cache`, so one store may be used from several
-    threads (`sync::store` too).
+  - `repository<T>` keeps its schema-check outcome in a mutex-guarded
+    `detail::schema_check_cache`, so one repository may be used from several
+    threads (`sync::repository` too).
   - Out of scope, documented: value types (`entry`, `dn`,
     `search_result`) follow the standard library's rules; a memory
     resource the caller passes for a search's entries must allow the
@@ -2718,11 +2718,11 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
     the io_context counts it as outstanding work, and its destructor joins
     the thread.
   - Tests: `tests/net/thread_tests.cpp` runs a connection, a client and a
-    store from 16 tasks on a 4-thread io_context against an answering
+    repository from 16 tasks on a 4-thread io_context against an answering
     in-process server (every operation, concurrent `next()`s, the
     connection and the client destroyed with operations of other threads
     outstanding), clean under TSan (Clang, `build/tsan`); the integration
-    test `[threads]` runs a connection, a client, a store and streams
+    test `[threads]` runs a connection, a client, a repository and streams
     against slapd the same way. `bench/connection_bench.cpp` measures the
     strand's price on one thread (docs/DEVELOPMENT.md "Benchmark").
   - An io_context destroyed before it runs a posted cleanup again drops
@@ -2767,7 +2767,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   conveniences are written that way, each a line over the async function
   (`sync::who_am_i` and the password calls, `sync::load_schema`,
   `sync::search_paged`, `ad::change_password` / `reset_password` in
-  ad/sync.hpp), and so is `sync::store`, over the async store's core. A
+  ad/sync.hpp), and so is `sync::repository`, over the async repository's core. A
   whole convenience is one task on the I/O thread, not one round trip
   per protocol call, and it behaves exactly as the async one (the
   client's retries, AD's protection check on the connection the modify
@@ -3192,7 +3192,7 @@ decision left open.
   extended operation may change the directory, so it is retried only
   after `not_sent`; the free `ldap::who_am_i` and password calls run on
   it, and Who am I? lost its read retry, coro-ldap-aw4.4). Typed CRUD is a layer over the client and
-  the connection (`ldap::store`, section 4). Each acquires a shared
+  the connection (`ldap::repository`, section 4). Each acquires a shared
   lease, runs the operation and returns the lease, like the read
   forwarders, but retries only after `client_errc::not_sent`: the request
   never reached the connection's writer (refused by a closed connection,

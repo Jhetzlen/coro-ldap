@@ -11,8 +11,8 @@
 #include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
+#include "jhetz/ldap/repository.hpp"
 #include "jhetz/ldap/sasl_scram.hpp"
-#include "jhetz/ldap/store.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "jhetz/ldap/sync_extended_operations.hpp"
 
@@ -742,7 +742,8 @@ TEST_CASE("integration: typed search with the server's schema", "[integration][m
 	INFO(report.to_string());
 	CHECK(report.ok());
 
-	ldap::store accounts(c, people, ldap::named_by<&person::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	ldap::repository accounts(
+	  c, people, ldap::named_by<&person::uid>, { .schema_check = ldap::schema_check::on_first_use });
 	auto r = finish(ioc, accounts.search(ldap::filters::field<&person::uid_number>() >= 10245));
 	REQUIRE(r.has_value());
 	REQUIRE(r->entries.size() == 5);
@@ -2226,7 +2227,7 @@ TEST_CASE("integration: search_paged over ldap::client", "[integration][client]"
 	CHECK(p->pages() == 7);
 }
 
-TEST_CASE("integration: ldap::store over ldap::client", "[integration][client][store]")
+TEST_CASE("integration: ldap::repository over ldap::client", "[integration][client][repository]")
 {
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
@@ -2236,8 +2237,8 @@ TEST_CASE("integration: ldap::store over ldap::client", "[integration][client][s
 	draining_context ioc;
 	ldap::client pool(
 	  ioc, { .servers = { *server }, .connection = trusting(), .setup = ldap::simple_bind_setup(admin, "secret") });
-	ldap::store s(pool, people, ldap::named_by<&staff::uid>, { .schema_check = ldap::schema_check::on_first_use });
-	const std::string name = unique("store");
+	ldap::repository s(pool, people, ldap::named_by<&staff::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	const std::string name = unique("repository");
 
 	REQUIRE(finish(ioc, s.add(staff{ .uid = name, .cn = "Störe", .sn = "Typed", .mail = std::nullopt })).has_value());
 	auto got = finish(ioc, s.get(name));
@@ -2285,7 +2286,7 @@ TEST_CASE("integration: ldap::store over ldap::client", "[integration][client][s
 	CHECK((*new_name)->uid == renamed);// the old RDN's value was removed
 	CHECK((*new_name)->cn == "Störe");
 
-	ldap::store groups(pool, ldap::dn{ "ou=groups,dc=example,dc=org" }, ldap::named_by<&staff::uid>);
+	ldap::repository groups(pool, ldap::dn{ "ou=groups,dc=example,dc=org" }, ldap::named_by<&staff::uid>);
 	REQUIRE(finish(ioc, s.move(renamed, groups)).has_value());
 	auto moved = finish(ioc, groups.get(renamed));
 	REQUIRE(moved.has_value());
@@ -2328,14 +2329,14 @@ constexpr auto ldap::schema<contact> = ldap::describe(ldap::object_class("inetOr
   ldap::field<&contact::telephone>("telephoneNumber"),
   ldap::field<&contact::description>("description"));
 
-TEST_CASE("integration: store::update sends only what differs", "[integration][store][update]")
+TEST_CASE("integration: repository::update sends only what differs", "[integration][repository][update]")
 {
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
 	draining_context ioc;
 	auto c = open_admin(ioc);
-	ldap::store s(c, people, ldap::named_by<&contact::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	ldap::repository s(c, people, ldap::named_by<&contact::uid>, { .schema_check = ldap::schema_check::on_first_use });
 	const std::string name = unique("update");
 	REQUIRE(finish(ioc,
 	  s.add(contact{ .uid = name,
@@ -2429,15 +2430,16 @@ constexpr auto ldap::schema<photo_album> = ldap::describe(ldap::object_class("in
   ldap::field<&photo_album::sn>("sn"),
   ldap::field<&photo_album::photos>("jpegPhoto"));
 
-TEST_CASE("integration: store::update changes a multi-valued attribute without EQUALITY",
-  "[integration][store][update]")
+TEST_CASE("integration: repository::update changes a multi-valued attribute without EQUALITY",
+  "[integration][repository][update]")
 {
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
 	draining_context ioc;
 	auto c = open_admin(ioc);
-	ldap::store s(c, people, ldap::named_by<&photo_album::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	ldap::repository s(
+	  c, people, ldap::named_by<&photo_album::uid>, { .schema_check = ldap::schema_check::on_first_use });
 	const std::string name = unique("album");
 	const ldap::binary a{ std::byte{ 'a' } };
 	const ldap::binary b{ std::byte{ 'b' } };
@@ -2495,7 +2497,7 @@ constexpr auto ldap::schema<posix_user> = ldap::describe(ldap::object_class("ine
   ldap::field<&posix_user::home_directory>("homeDirectory"),
   ldap::field<&posix_user::login_shell>("loginShell"));
 
-TEST_CASE("integration: a store adds auxiliary object classes", "[integration][store][auxiliary]")
+TEST_CASE("integration: a repository adds auxiliary object classes", "[integration][repository][auxiliary]")
 {
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
@@ -2514,7 +2516,8 @@ TEST_CASE("integration: a store adds auxiliary object classes", "[integration][s
 			   || i.what == ldap::schema_issue::kind::auxiliary_class_not_allowed;
 	}));
 
-	ldap::store s(c, people, ldap::named_by<&posix_user::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	ldap::repository s(
+	  c, people, ldap::named_by<&posix_user::uid>, { .schema_check = ldap::schema_check::on_first_use });
 	const std::string name = unique("aux");
 	auto added = finish(ioc,
 	  s.add(posix_user{ .uid = name,
@@ -2572,14 +2575,14 @@ constexpr auto ldap::schema<versioned_contact> = ldap::describe(ldap::object_cla
   ldap::field<&versioned_contact::entry_csn>("entryCSN", ldap::read_only),
   ldap::field<&versioned_contact::modified>("modifyTimestamp", ldap::read_only));
 
-TEST_CASE("integration: store::update_if detects a concurrent change", "[integration][store][update]")
+TEST_CASE("integration: repository::update_if detects a concurrent change", "[integration][repository][update]")
 {
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
 	draining_context ioc;
 	auto c = open_admin(ioc);
-	ldap::store s(
+	ldap::repository s(
 	  c, people, ldap::named_by<&versioned_contact::uid>, { .schema_check = ldap::schema_check::on_first_use });
 	const std::string name = unique("update-if");
 	REQUIRE(finish(ioc,
@@ -2676,15 +2679,15 @@ constexpr auto ldap::schema<photo_contact> = ldap::describe(ldap::object_class("
   ldap::field<&photo_contact::photo>("jpegPhoto"),
   ldap::field<&photo_contact::entry_csn>("entryCSN", ldap::read_only));
 
-TEST_CASE("integration: store::update_if's default guard on jpegPhoto, which has no equality rule",
-  "[integration][store][update]")
+TEST_CASE("integration: repository::update_if's default guard on jpegPhoto, which has no equality rule",
+  "[integration][repository][update]")
 {
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
 	draining_context ioc;
 	auto c = open_admin(ioc);
-	ldap::store s(c, people, ldap::named_by<&photo_contact::uid>);
+	ldap::repository s(c, people, ldap::named_by<&photo_contact::uid>);
 	const std::string name = unique("photo");
 	const ldap::binary picture{ std::byte{ 0xFF }, std::byte{ 0xD8 } };
 	REQUIRE(finish(
@@ -2716,7 +2719,7 @@ TEST_CASE("integration: store::update_if's default guard on jpegPhoto, which has
 	CHECK(read().cn == "Versioned");
 
 	// With the schema check: refused before sending, the entry untouched.
-	ldap::store checked(
+	ldap::repository checked(
 	  c, people, ldap::named_by<&photo_contact::uid>, { .schema_check = ldap::schema_check::on_first_use });
 	original = read();
 	changed = original;
@@ -2761,15 +2764,15 @@ constexpr auto ldap::schema<tagged_contact> = ldap::describe(ldap::object_class(
   ldap::field<&tagged_contact::description>("description"),
   ldap::field<&tagged_contact::display_name>("displayName"));
 
-TEST_CASE("integration: store::update_if next to a tagged value, and an empty member written with replace",
-  "[integration][store][update]")
+TEST_CASE("integration: repository::update_if next to a tagged value, and an empty member written with replace",
+  "[integration][repository][update]")
 {
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
 	draining_context ioc;
 	auto c = open_admin(ioc);
-	ldap::store s(c, people, ldap::named_by<&tagged_contact::uid>);
+	ldap::repository s(c, people, ldap::named_by<&tagged_contact::uid>);
 	const std::string name = unique("tagged");
 	REQUIRE(finish(ioc,
 	  s.add(tagged_contact{
@@ -2913,19 +2916,20 @@ constexpr auto ldap::schema<surname_holder> = ldap::describe(ldap::object_class(
   ldap::field<&surname_holder::uid>("uid"),
   ldap::field<&surname_holder::surname>("surname"));
 
-TEST_CASE("integration: store::update replaces a password its owner cannot read", "[integration][store][update]")
+TEST_CASE("integration: repository::update replaces a password its owner cannot read",
+  "[integration][repository][update]")
 {
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
 	draining_context ioc;
 	auto c = open_admin(ioc);
-	ldap::store admin_store(c, people, ldap::named_by<&password_holder::uid>);
+	ldap::repository admin_repository(c, people, ldap::named_by<&password_holder::uid>);
 	const std::string name = unique("secret");
-	REQUIRE(finish(
-	  ioc, admin_store.add(password_holder{ .uid = name, .cn = "Secret", .sn = "Holder", .password = bytes("first") }))
+	REQUIRE(finish(ioc,
+	  admin_repository.add(password_holder{ .uid = name, .cn = "Secret", .sn = "Holder", .password = bytes("first") }))
 		.has_value());
-	const auto entry = admin_store.dn_of(name);
+	const auto entry = admin_repository.dn_of(name);
 	REQUIRE(entry.has_value());
 	const auto bind_code = [&](const std::string &password) {
 		auto u = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
@@ -2936,7 +2940,7 @@ TEST_CASE("integration: store::update replaces a password its owner cannot read"
 		const password_write_only acl(ioc);
 		auto u = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
 		REQUIRE(finish(ioc, u.simple_bind(*entry, "first")).has_value());
-		ldap::store own(u, people, ldap::named_by<&password_holder::uid>);
+		ldap::repository own(u, people, ldap::named_by<&password_holder::uid>);
 		const auto read = [&] {
 			auto got = finish(ioc, own.get(name));
 			REQUIRE(got.has_value());
@@ -2966,17 +2970,17 @@ TEST_CASE("integration: store::update replaces a password its owner cannot read"
 		CHECK(bind_code("second") == ldap::errc::invalid_credentials);
 		CHECK(bind_code("third") == std::error_code{});
 	}
-	REQUIRE(finish(ioc, admin_store.remove(name)).has_value());
+	REQUIRE(finish(ioc, admin_repository.remove(name)).has_value());
 }
 
-TEST_CASE("integration: a store read fails on a member mapped by an alias", "[integration][store]")
+TEST_CASE("integration: a repository read fails on a member mapped by an alias", "[integration][repository]")
 {
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
 	draining_context ioc;
 	auto c = open_admin(ioc);
-	ldap::store s(c, people, ldap::named_by<&surname_holder::uid>);
+	ldap::repository s(c, people, ldap::named_by<&surname_holder::uid>);
 	auto got = finish(ioc, s.get("user007"));
 	REQUIRE_FALSE(got.has_value());
 	CHECK(got.error().code == ldap::client_errc::schema_mismatch);
@@ -2998,14 +3002,14 @@ constexpr auto ldap::schema<english_named> = ldap::describe(ldap::object_class("
   ldap::field<&english_named::uid>("uid"),
   ldap::field<&english_named::english_cn>("cn;lang-en"));
 
-TEST_CASE("integration: a store reads a member mapped with an option", "[integration][store]")
+TEST_CASE("integration: a repository reads a member mapped with an option", "[integration][repository]")
 {
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
 	}
 	draining_context ioc;
 	auto c = open_admin(ioc);
-	ldap::store contacts(c, people, ldap::named_by<&tagged_contact::uid>);
+	ldap::repository contacts(c, people, ldap::named_by<&tagged_contact::uid>);
 	const std::string name = unique("english");
 	REQUIRE(finish(ioc,
 	  contacts.add(tagged_contact{
@@ -3015,7 +3019,7 @@ TEST_CASE("integration: a store reads a member mapped with an option", "[integra
 	REQUIRE(entry.has_value());
 	REQUIRE(finish(ioc, c.modify({ .object = *entry, .changes = { ldap::mod::add("cn;lang-en", { "Named" }) } }))
 		.has_value());
-	ldap::store s(c, people, ldap::named_by<&english_named::uid>);
+	ldap::repository s(c, people, ldap::named_by<&english_named::uid>);
 	auto got = finish(ioc, s.get(name));
 	if (!got) {
 		FAIL(got.error().message());
@@ -3096,9 +3100,11 @@ template<class D> auto threaded_worker(D &d, std::string name, int rounds, std::
 	}
 }
 
-// Reads through a store shared by every worker, and a search_stream.
-auto store_worker(ldap::store<&staff::uid, ldap::client> &s, ldap::client &pool, int rounds, std::atomic<int> &failed)
-  -> capy::task<void>
+// Reads through a repository shared by every worker, and a search_stream.
+auto repository_worker(ldap::repository<&staff::uid, ldap::client> &s,
+  ldap::client &pool,
+  int rounds,
+  std::atomic<int> &failed) -> capy::task<void>
 {
 	for (int i = 0; i < rounds; ++i) {
 		auto got = co_await s.get("user01" + std::to_string(i % 10));
@@ -3153,7 +3159,7 @@ void run_threaded(corosio::io_context &ioc, std::vector<capy::task<void>> tasks)
 
 }// namespace
 
-TEST_CASE("integration: one connection, one client and one store from several threads", "[integration][threads]")
+TEST_CASE("integration: one connection, one client and one repository from several threads", "[integration][threads]")
 {
 	if (!have_slapd()) {
 		SKIP("no slapd: run under run_slapd.sh");
@@ -3170,12 +3176,13 @@ TEST_CASE("integration: one connection, one client and one store from several th
 		.connection = trusting(),
 		.setup = ldap::simple_bind_setup(admin, "secret"),
 		.max_connections = 3 });
-	ldap::store staffs(pool, people, ldap::named_by<&staff::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	ldap::repository staffs(
+	  pool, people, ldap::named_by<&staff::uid>, { .schema_check = ldap::schema_check::on_first_use });
 	std::vector<capy::task<void>> tasks;
 	for (int i = 0; i < workers; ++i) {
 		tasks.push_back(threaded_worker(c, unique("thc"), rounds, failed));
 		tasks.push_back(threaded_worker(pool, unique("thp"), rounds, failed));
-		tasks.push_back(store_worker(staffs, pool, rounds, failed));
+		tasks.push_back(repository_worker(staffs, pool, rounds, failed));
 	}
 	run_threaded(ioc, std::move(tasks));
 	CHECK(failed == 0);

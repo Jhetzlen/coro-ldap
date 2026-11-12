@@ -10,10 +10,10 @@
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
+#include "jhetz/ldap/repository.hpp"
 #include "jhetz/ldap/sasl.hpp"
-#include "jhetz/ldap/store.hpp"
 #include "jhetz/ldap/sync.hpp"
-#include "jhetz/ldap/sync_store.hpp"
+#include "jhetz/ldap/sync_repository.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -859,17 +859,17 @@ struct layer_server_thread
 // RFC 4513 section 5.2.1.6: once a SASL security layer is in effect, the
 // client "SHOULD discard or refresh all information about the server" it
 // obtained before.
-TEST_CASE("RFC 4513 5.2.1.6: a store's schema check is made again after a SASL security layer",
-  "[net][sasl][sasl_layer][rfc][schema][store]")
+TEST_CASE("RFC 4513 5.2.1.6: a repository's schema check is made again after a SASL security layer",
+  "[net][sasl][sasl_layer][rfc][schema][repository]")
 {
-	SECTION("ldap::store on an ldap::connection")
+	SECTION("ldap::repository on an ldap::connection")
 	{
 		mock_ldap m;
 		std::vector<std::string> log;
 		std::string error;
 		outcome<void> server;
 		spawn(m.ioc, serve_schema_and_layer(m.server_end(), log, error), server);
-		ldap::store cards(m.conn,
+		ldap::repository cards(m.conn,
 		  ldap::dn{ "dc=example,dc=org" },
 		  ldap::named_by<&card::cn>,
 		  { .schema_check = ldap::schema_check::on_first_use });
@@ -885,14 +885,14 @@ TEST_CASE("RFC 4513 5.2.1.6: a store's schema check is made again after a SASL s
 		CHECK(error.empty());
 		CHECK(log == checked_twice);
 	}
-	SECTION("sync::store on a sync::connection")
+	SECTION("sync::repository on a sync::connection")
 	{
 		layer_server_thread srv;
 		{
 			auto opened = ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10) });
 			REQUIRE(opened.has_value());
 			auto &c = *opened;
-			ldap::sync::store cards(c,
+			ldap::sync::repository cards(c,
 			  ldap::dn{ "dc=example,dc=org" },
 			  ldap::named_by<&card::cn>,
 			  { .schema_check = ldap::schema_check::on_first_use });

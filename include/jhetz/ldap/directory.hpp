@@ -1,4 +1,4 @@
-// The `directory` concept: what the layers over the core (ldap::store,
+// The `directory` concept: what the layers over the core (ldap::repository,
 // load_schema, ...) run their requests on. ldap::connection and ldap::client
 // satisfy it.
 //

@@ -304,7 +304,7 @@ URL (`ldap://localhost`).
 | `delete.cpp` | delete the user `uid=jane` from `ou=alumni` (run `add`, `move`, then `delete`) |
 | `password.cpp` | reset a user's password (RFC 3062 Password Modify) |
 | `transaction.cpp` | add the user `uid=jane` and set the `manager` of `uid=user001` in one RFC 5805 transaction: both applied, or neither (run `delete` or remove `uid=jane` to run it again) |
-| `update_if.cpp` | read `uid=user001` through a `store`, then set its `mail` with `update_if`: applied only if the entry still holds the values read (RFC 4528 Assertion control), else `assertion_failed` |
+| `update_if.cpp` | read `uid=user001` through a `repository`, then set its `mail` with `update_if`: applied only if the entry still holds the values read (RFC 4528 Assertion control), else `assertion_failed` |
 | `starttls.cpp` | connect with StartTLS, then bind |
 | `cancel.cpp` | search the whole tree; Ctrl-C gives up on it (`capy::when_any` with `ldap::raceable`) |
 | `paged.cpp` | page through `ou=people` 100 entries at a time, sorted by `mail` (RFC 2696 paging, RFC 2891 server-side sort) |
@@ -798,7 +798,7 @@ pair of invocations):
 ## ThreadSanitizer
 
 `tests/net/thread_tests.cpp` (tag `[threads]`) uses one connection, one
-client and one store from many tasks on an io_context run by 4 threads;
+client and one repository from many tasks on an io_context run by 4 threads;
 the integration test `[threads]` does the same against slapd. Run them,
 and the other net tests, under TSan in a Clang build of their own
 (`JHETZ_LDAP_SANITIZE` is ASan + UBSan, which TSan excludes;

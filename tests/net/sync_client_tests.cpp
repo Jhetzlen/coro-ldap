@@ -5,7 +5,7 @@
 #include "jhetz/ldap/ad/sync.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "jhetz/ldap/sync_extended_operations.hpp"
-#include "jhetz/ldap/sync_store.hpp"
+#include "jhetz/ldap/sync_repository.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 #include "server_thread.hpp"
@@ -968,7 +968,7 @@ TEST_CASE("sync load_schema: on a sync::connection and a sync::client", "[net][s
 	}
 }
 
-TEST_CASE("sync store: schema_check::on_first_use", "[net][sync][store][schema]")
+TEST_CASE("sync repository: schema_check::on_first_use", "[net][sync][repository][schema]")
 {
 	SECTION("checked once, then every operation runs")
 	{
@@ -980,7 +980,7 @@ TEST_CASE("sync store: schema_check::on_first_use", "[net][sync][store][schema]"
 		  unbind_read() } });
 		{
 			ldap::sync::client pool(options_for(srv.url()));
-			ldap::sync::store cards(
+			ldap::sync::repository cards(
 			  pool, cards_base, ldap::named_by<&card::cn>, { .schema_check = ldap::schema_check::on_first_use });
 			for (int i = 0; i < 2; ++i) {
 				auto r = cards.get("a");
@@ -1001,7 +1001,7 @@ TEST_CASE("sync store: schema_check::on_first_use", "[net][sync][store][schema]"
 		  unbind_read() } });
 		{
 			ldap::sync::client pool(options_for(srv.url()));
-			ldap::sync::store cards(pool,
+			ldap::sync::repository cards(pool,
 			  cards_base,
 			  ldap::named_by<&badly_typed_card::cn>,
 			  { .schema_check = ldap::schema_check::on_first_use });
@@ -1027,7 +1027,7 @@ TEST_CASE("sync store: schema_check::on_first_use", "[net][sync][store][schema]"
 		  unbind_read() } });
 		{
 			ldap::sync::client pool(options_for(srv.url()));
-			ldap::sync::store cards(
+			ldap::sync::repository cards(
 			  pool, cards_base, ldap::named_by<&card::cn>, { .schema_check = ldap::schema_check::on_first_use });
 			auto first = cards.remove("a");
 			REQUIRE_FALSE(first.has_value());

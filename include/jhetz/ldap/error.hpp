@@ -127,8 +127,8 @@ enum class client_errc : int {
 	// have to go below the layer, RFC 4513 section 5.2.1.6), or a second
 	// layer. Matches no condition.
 	security_layer_in_effect,
-	// store::update with a naming member that differs from the original's:
-	// the entry would need a new DN (store::rename). Matches
+	// repository::update with a naming member that differs from the original's:
+	// the entry would need a new DN (repository::rename). Matches
 	// cond::invalid_input.
 	naming_value_changed,
 	// decode<T> on an entry holding a mapped attribute with a range option
@@ -136,7 +136,7 @@ enum class client_errc : int {
 	// its values (ldap::ad::read_all_values reads them all). Matches no
 	// condition.
 	incomplete_values,
-	// store::update_if with its default guard, schema_check on, on a struct
+	// repository::update_if with its default guard, schema_check on, on a struct
 	// with a writable member whose attribute has no EQUALITY rule: an
 	// assertion on it is always Undefined (RFC 4511 section 4.5.1.7), so
 	// the server would answer assertionFailed every time. Matches

@@ -12,7 +12,7 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
 | Search, all entries at once | `connection::search(params)` | `result<search_result>`: entries, references (not followed), the done's result code; a limit code (sizeLimitExceeded, ...) keeps the entries |
 | Search, entry by entry | `connection::search_stream(params)` | `next()` / `next_item()`; memory bounded by the caller's pace; abandons the search when destroyed early |
 | Search a large result in pages | `ldap::search_paged(conn_or_client, params, page_size)` | RFC 2696 paged results, one page requested at a time; `sync::search_paged` collects every page |
-| Search into structs | `store<T>::search` / `search_stream` / `search_paged` (store.hpp) | the same three shapes, entries decoded to `record<T>` |
+| Search into structs | `repository<T>::search` / `search_stream` / `search_paged` (repository.hpp) | the same three shapes, entries decoded to `record<T>` |
 | Search and follow referrals | `client::search(params)` with `client_options::referrals` | the pool chases referral results and continuation references; the report is in `search_result::referrals` / `unlisted`, `is_complete()`; a request's `follow_referrals` / `follow_references` override the pool's switches for one call; `client::search_stream`, `search_paged` and the `connection` / `sync::connection` calls ignore it (they never chase) |
 | Follow referrals from a bare connection | `ldap::chase_search(conn, params, connector)`, `chase_compare` (referral_chase.hpp) | the caller's `referral_connector` decides which servers and how to bind (`make_same_policy_connector`) |
 | Watch changes | `search_stream` with `ldap::sync_request` (content_sync.hpp) | RFC 4533 refreshOnly / refreshAndPersist |
@@ -312,7 +312,7 @@ itself needs only ICU.
   `diagnostic_message` and `controls`; a value for success and for
   sizeLimitExceeded, timeLimitExceeded and adminLimitExceeded, with the
   entries received before it and `is_success()` false; any other code is
-  an error; a store's `search` returns the same as
+  an error; a repository's `search` returns the same as
   `typed_search_result<record<T>>`),
   `search_stream(search_params, mr)` whose `co_await s.next()` yields one
   entry at a time (and keeps the search references and the done controls),
@@ -870,12 +870,12 @@ itself needs only ICU.
   ldap::auxiliary_class(...), ldap::field<&T::m>("attr",
   ldap::read_only)...)`, both class lists optional, auxiliary only after
   object_class) maps members to attributes; auxiliary classes are added
-  and validated with the object classes, but not ANDed into a store's
+  and validated with the object classes, but not ANDed into a repository's
   search filter (`auxiliary_classes_of<T>()`); the member type decides cardinality (`T`,
   `std::optional<T>`, `std::vector<T>`); `value_traits<T>` converts values
   (strings, which must be well-formed UTF-8 or the decode is
   `conversion_failed`, and one bad value fails the whole `decode<T>` and
-  so the whole store search; integers, bool, `dn`, `binary` for binary
+  so the whole repository search; integers, bool, `dn`, `binary` for binary
   attributes such as userPassword (Octet String), jpegPhoto and
   userCertificate, `sys_seconds` as GeneralizedTime, enums with an
   `enum_names` table). `decode<T>(entry)` (an entry holding a mapped
@@ -883,15 +883,15 @@ itself needs only ICU.
   `client_errc::incomplete_values`: read it with
   `ldap::ad::read_all_values`),
   `to_attributes(value)`, typed changes `replace / add / remove<&T::m>(v)`,
-  typed filters `filters::field<&T::m>() == v`; the I/O is `ldap::store`
-  (store.hpp, below). Breaking (coro-ldap-2cx.2): `connection::search_as<T>`,
+  typed filters `filters::field<&T::m>() == v`; the I/O is `ldap::repository`
+  (repository.hpp, below). Breaking (coro-ldap-2cx.2): `connection::search_as<T>`,
   `modify<T>(dn, changes)` and `add(dn, value)`, their sync copies and
   `connection_options::schema_check` are gone. Breaking
   (coro-ldap-2cx.2.1): connection.hpp (and so sync.hpp and client.hpp)
   no longer includes directory.hpp, mapping.hpp and schema.hpp: include
   jhetz/ldap/directory.hpp for `load_schema`, mapping.hpp and schema.hpp
   for the typed mapping (`decode<T>`, `ldap::schema<T>`, `describe`,
-  `validate<T>`), store.hpp for `ldap::store`. Mistakes
+  `validate<T>`), repository.hpp for `ldap::repository`. Mistakes
   (unmapped or read_only member, wrong value type, invalid names) fail to
   compile; `tests/compile/` checks each. Encoding can fail (breaking
   change, coro-ldap-vcp): `value_traits<T>::encode` returns `std::string`
@@ -899,7 +899,7 @@ itself needs only ICU.
   string traits reject ill-formed UTF-8, enums a value without a name and
   `sys_seconds` a year outside 0000-9999, all as `encode_error`.
   `to_attributes` returns `result<...>` and `change<T>::wire` is a
-  `result<modify_change>`; a store's `modify` and `add` return the
+  `result<modify_change>`; a repository's `modify` and `add` return the
   error before sending anything, and a typed filter on such a value is the
   empty filter (fails with `invalid_filter` when sent).
 
@@ -933,7 +933,7 @@ itself needs only ICU.
   4512 4.1.6; `parse_dit_content_rule`,
   `server_schema::find_dit_content_rule(class_oid)`); the free
   `ldap::load_schema` (which reads dITContentRules too) (directory.hpp) and
-  `store_options::schema_check = schema_check::on_first_use`. Breaking
+  `repository_options::schema_check = schema_check::on_first_use`. Breaking
   (coro-ldap-aw4.1): `connection::load_schema()` is gone, and with it the
   connection's schema cache.
   Breaking: a `std::string` or `std::pmr::string` member on a binary
@@ -952,13 +952,17 @@ itself needs only ICU.
   busy or unavailable); `sync::load_schema(d)` runs it on a sync facade
   (the facade's own `not_connected` and `would_deadlock` with the context
   "load schema" too).
-- `jhetz/ldap/store.hpp` (coro-ldap-2cx.1, DESIGN.md section 4):
-  `ldap::store`, typed CRUD of one mapped struct under a base DN, each
-  entry named by one member: `ldap::store people(source, base,
-  ldap::named_by<&person::uid>, store_options{.schema_check})`, the
-  struct and the source type deduced (`store<&person::uid,
-  ldap::client>`); one store may be used from several threads (its
-  schema-check outcome is behind a lock). The naming member must be in
+- `jhetz/ldap/repository.hpp` (coro-ldap-2cx.1, DESIGN.md section 4):
+  `ldap::repository`, typed CRUD of one mapped struct under a base DN, each
+  entry named by one member: `ldap::repository people(source, base,
+  ldap::named_by<&person::uid>, repository_options{.schema_check})`, the
+  struct and the source type deduced (`repository<&person::uid,
+  ldap::client>`); one repository may be used from several threads (its
+  schema-check outcome is behind a lock). Breaking: `ldap::store`,
+  `sync::store`, `store_options`, store.hpp and sync_store.hpp are now
+  `ldap::repository`, `sync::repository`, `repository_options`,
+  repository.hpp and sync_repository.hpp, with no alias (a repository
+  keeps no entries: each call is one request). The naming member must be in
   `schema<T>`, required, single-valued and writable (static_assert).
   `dn_of(key)`
   (`uid=<escaped key>,<base>`); `get(key)` / `get_at(dn)` -> `task<result<
@@ -1020,7 +1024,7 @@ itself needs only ICU.
   `update`;
   `remove(key)` / `remove_at(dn)`, `rename(from, to)` (modify DN to
   `<naming attribute>=<to>`, deleteoldrdn TRUE) and `move(key, new_base)` /
-  `move(key, other_store)` (newSuperior, RDN kept) -> `task<result<response>>`, each with
+  `move(key, other_repository)` (newSuperior, RDN kept) -> `task<result<response>>`, each with
   its operation's controls; `search(filter = (objectClass=*), scope =
   single_level)` -> `task<result<typed_search_result<record<T>>>>`,
   `record<T>{dn, value}` with the DN the server sent (entries named
@@ -1033,7 +1037,7 @@ itself needs only ICU.
   by the stream). Values
   that do not encode fail before anything is sent (`add uid=...:
   attribute mail: ...`, `modify uid=...: replace mail: ...`).
-  `schema_check::on_first_use` (the enum is in store.hpp) loads the
+  `schema_check::on_first_use` (the enum is in repository.hpp) loads the
   schema with `load_schema` on the first operation and keeps the outcome
   (a mismatch fails every operation; a schema that does not load is tried
   again), and checks again once the source's `is_tls()` or
@@ -1042,15 +1046,15 @@ itself needs only ICU.
   pool (a client has no `is_tls()`), whichever server later operations
   run on: every server of a pool must serve the same schema; use a
   lease's connection (`*lease`) as the source for a check per
-  connection. The store keeps a pointer to the source, which must
-  outlive it and its tasks. `jhetz/ldap/sync_store.hpp`:
-  `sync::load_schema` and `sync::store`, the same over
+  connection. The repository keeps a pointer to the source, which must
+  outlive it and its tasks. `jhetz/ldap/sync_repository.hpp`:
+  `sync::load_schema` and `sync::repository`, the same over
   `sync::connection`, `sync::client`, `sync::lease` and
   `sync::exclusive_lease` (`sync::directory`), blocking (no streams:
   `search_paged` collects every page into a
-  `typed_search_result<record<T>>`); each `sync::store` call runs the
-  async store's operation (`detail::store_core`, shared with
-  `ldap::store`) as one task on the I/O thread.
+  `typed_search_result<record<T>>`); each `sync::repository` call runs the
+  async repository's operation (`detail::repository_core`, shared with
+  `ldap::repository`) as one task on the I/O thread.
 - `net::read_frame` and `peek_message_header` (message.hpp) are the pieces
   the reader uses: wait for one complete PDU without decoding it, then read
   only its message id and operation tag.
@@ -1082,7 +1086,7 @@ itself needs only ICU.
   a `static_assert`. `sync::directory` is the concept of the four facades
   (`sync::connection`, `sync::lease`, `sync::exclusive_lease`,
   `sync::client`); the blocking conveniences (`sync::who_am_i`,
-  `sync::search_paged`, `sync::load_schema`, `sync::store`,
+  `sync::search_paged`, `sync::load_schema`, `sync::repository`,
   `ad::change_password`, ...) are written over it. Breaking:
   `sync::directory` was a structural concept (blocking `search`, `add`,
   ...), and `sync::search_paged(client &)` and `sync::load_schema(client

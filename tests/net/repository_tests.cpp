@@ -1,11 +1,11 @@
-// ldap::store and sync::store against the scripted mock server
+// ldap::repository and sync::repository against the scripted mock server
 // (mock_ldap.hpp) and the threaded one (server_thread.hpp).
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
-#include "jhetz/ldap/store.hpp"
+#include "jhetz/ldap/repository.hpp"
 #include "jhetz/ldap/sync_extended_operations.hpp"
-#include "jhetz/ldap/sync_store.hpp"
+#include "jhetz/ldap/sync_repository.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 #include "server_thread.hpp"
@@ -230,10 +230,10 @@ auto ok(std::int32_t id, const auto &response) -> ldap::message
 
 }// namespace
 
-TEST_CASE("store: dn_of escapes the naming value under the base", "[net][store]")
+TEST_CASE("repository: dn_of escapes the naming value under the base", "[net][repository]")
 {
 	mock_ldap m;
-	const ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	const ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 	auto d = s.dn_of("a,b+c \xC3\xA9");
 	REQUIRE(d.has_value());
 	CHECK(d->to_string() == "uid=a\\,b\\+c \xC3\xA9,ou=people,dc=example,dc=org");
@@ -245,13 +245,13 @@ TEST_CASE("store: dn_of escapes the naming value under the base", "[net][store]"
 	CHECK_THAT(std::string(bad.error().context), Catch::Matchers::StartsWith("attribute uid: "));
 }
 
-TEST_CASE("store: get reads one entry with a base-object search", "[net][store]")
+TEST_CASE("repository: get reads one entry with a base-object search", "[net][repository]")
 {
 	mock_ldap m;
 	m.serve({ answer({ person_entry(1, "jdoe", "1000"), done_msg(1) }),
 	  answer({ done_msg(2, 32, "ou=people,dc=example,dc=org", "no such entry") }),
 	  answer({ done_msg(3) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 
 	auto found = m.run(s.get("jdoe"));
 	REQUIRE(found.has_value());
@@ -277,11 +277,11 @@ TEST_CASE("store: get reads one entry with a base-object search", "[net][store]"
 	CHECK(std::get<ldap::search_request>(m.log.received[2].op).base_object == "cn=config");
 }
 
-TEST_CASE("store: get returns the other errors and decode failures", "[net][store]")
+TEST_CASE("repository: get returns the other errors and decode failures", "[net][repository]")
 {
 	mock_ldap m;
 	m.serve({ answer({ done_msg(1, 50, "", "no access") }), answer({ person_entry(2, "jdoe", "x"), done_msg(2) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 	auto denied = m.run(s.get("jdoe"));
 	REQUIRE_FALSE(denied.has_value());
 	CHECK(denied.error().code == ldap::errc::insufficient_access_rights);
@@ -294,7 +294,7 @@ TEST_CASE("store: get returns the other errors and decode failures", "[net][stor
 	m.check_server();
 }
 
-TEST_CASE("store: a read fails on an attribute answered for no member", "[net][store]")
+TEST_CASE("repository: a read fails on an attribute answered for no member", "[net][repository]")
 {
 	mock_ldap m;
 	m.serve({ answer({ ldap::message{ 1,
@@ -309,7 +309,7 @@ TEST_CASE("store: a read fails on an attribute answered for no member", "[net][s
 				 ldap::search_result_entry{ "cn=X,ou=people,dc=example,dc=org",
 				   { { "CN", { "X" } }, { "description;lang-fr", { "Bonjour" } } } } },
 		done_msg(3) }) });
-	ldap::store aliased(m.conn, people_base, ldap::named_by<&surnamed::cn>);
+	ldap::repository aliased(m.conn, people_base, ldap::named_by<&surnamed::cn>);
 	auto got = m.run(aliased.get("X"));
 	REQUIRE_FALSE(got.has_value());
 	CHECK(got.error().code == ldap::client_errc::schema_mismatch);
@@ -320,7 +320,7 @@ TEST_CASE("store: a read fails on an attribute answered for no member", "[net][s
 	REQUIRE_FALSE(found.has_value());
 	CHECK(found.error().code == ldap::client_errc::schema_mismatch);
 
-	ldap::store labelled(m.conn, people_base, ldap::named_by<&labelled_card::cn>);
+	ldap::repository labelled(m.conn, people_base, ldap::named_by<&labelled_card::cn>);
 	auto tagged = m.run(labelled.get("X"));
 	REQUIRE(tagged.has_value());
 	REQUIRE(tagged->has_value());
@@ -328,7 +328,7 @@ TEST_CASE("store: a read fails on an attribute answered for no member", "[net][s
 	m.check_server();
 }
 
-TEST_CASE("store: a read accepts a member mapped with options, answered in any case", "[net][store]")
+TEST_CASE("repository: a read accepts a member mapped with options, answered in any case", "[net][repository]")
 {
 	const auto card = [](std::int32_t id, std::string_view cn, std::string_view english, std::string_view certificate) {
 		return ldap::message{ id,
@@ -343,7 +343,7 @@ TEST_CASE("store: a read accepts a member mapped with options, answered in any c
 				   { { "cn", { "X" } }, { "cn;lang-en", { "Ecks" } }, { "sn", { "Y" } } } } },
 		done_msg(3) }),
 	  answer({ card(4, "cn", "cn;lang-en", "userCertificate"), done_msg(4) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&certified_card::cn>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&certified_card::cn>);
 	const ldap::binary der{ std::byte{ 'd' }, std::byte{ 'e' }, std::byte{ 'r' } };
 	for (int i = 0; i < 2; ++i) {
 		auto got = m.run(s.get("X"));
@@ -364,7 +364,7 @@ TEST_CASE("store: a read accepts a member mapped with options, answered in any c
 	m.check_server();
 }
 
-TEST_CASE("store: a read compares option sets, and refuses an option superset", "[net][store]")
+TEST_CASE("repository: a read compares option sets, and refuses an option superset", "[net][repository]")
 {
 	const auto entry = [](std::int32_t id, std::string_view english, std::string_view certificate) {
 		return ldap::message{ id,
@@ -376,7 +376,7 @@ TEST_CASE("store: a read compares option sets, and refuses an option superset", 
 	  answer({ entry(2, "cn;lang-en", "userCertificate;binary;lang-en"), done_msg(2) }),
 	  answer({ entry(3, "cn;lang-en;x-foo", "userCertificate;binary"), done_msg(3) }),
 	  answer({ entry(4, "cn;lang-fr", "userCertificate;binary;range=0-*"), done_msg(4) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&certified_card::cn>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&certified_card::cn>);
 	auto plain = m.run(s.get("X"));
 	REQUIRE(plain.has_value());
 	REQUIRE(plain->has_value());
@@ -397,7 +397,7 @@ TEST_CASE("store: a read compares option sets, and refuses an option superset", 
 	m.check_server();
 }
 
-TEST_CASE("store: a read decodes a member mapped with options answered in another order", "[net][store]")
+TEST_CASE("repository: a read decodes a member mapped with options answered in another order", "[net][repository]")
 {
 	mock_ldap m;
 	m.serve({ answer({ ldap::message{ 1,
@@ -408,7 +408,7 @@ TEST_CASE("store: a read decodes a member mapped with options answered in anothe
 				 ldap::search_result_entry{ "cn=X,ou=people,dc=example,dc=org",
 				   { { "cn", { "X" } }, { "userCertificate;lang-en;binary;x-foo", { "der" } } } } },
 		done_msg(2) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&english_certified::cn>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&english_certified::cn>);
 	auto got = m.run(s.get("X"));
 	REQUIRE(got.has_value());
 	REQUIRE(got->has_value());
@@ -422,13 +422,13 @@ TEST_CASE("store: a read decodes a member mapped with options answered in anothe
 	m.check_server();
 }
 
-TEST_CASE("store: get fails on a limit code with no entry", "[net][store]")
+TEST_CASE("repository: get fails on a limit code with no entry", "[net][repository]")
 {
 	mock_ldap m;
 	m.serve({ answer({ done_msg(1, 3, "", "time limit") }),
 	  answer({ done_msg(2, 11, "", "admin limit") }),
 	  answer({ person_entry(3, "jdoe", "1000"), done_msg(3, 3) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 	auto timed_out = m.run(s.get("jdoe"));
 	REQUIRE_FALSE(timed_out.has_value());
 	CHECK(timed_out.error().code == ldap::errc::time_limit_exceeded);
@@ -445,7 +445,7 @@ TEST_CASE("store: get fails on a limit code with no entry", "[net][store]")
 	m.check_server();
 }
 
-TEST_CASE("store: add, modify and remove name the entry from the key", "[net][store]")
+TEST_CASE("repository: add, modify and remove name the entry from the key", "[net][repository]")
 {
 	mock_ldap m;
 	m.serve({ answer({ ok(1, ldap::add_response{}) }),
@@ -453,7 +453,7 @@ TEST_CASE("store: add, modify and remove name the entry from the key", "[net][st
 	  answer({ ok(3, ldap::modify_response{}) }),
 	  answer({ ok(4, ldap::del_response{}) }),
 	  answer({ ok(5, ldap::del_response{}) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 	const ldap::dn jdoe{ "uid=jdoe,ou=people,dc=example,dc=org" };
 
 	REQUIRE(m.run(s.add(person{ .uid = "jdoe", .mail = "j@example.org", .uid_number = 1000 })).has_value());
@@ -483,11 +483,11 @@ TEST_CASE("store: add, modify and remove name the entry from the key", "[net][st
 	CHECK(m.log.received[4] == ldap::message{ 5, ldap::del_request{ "cn=jdoe,ou=other,dc=example,dc=org" } });
 }
 
-TEST_CASE("store: auxiliary classes are added, not searched for", "[net][store][auxiliary]")
+TEST_CASE("repository: auxiliary classes are added, not searched for", "[net][repository][auxiliary]")
 {
 	mock_ldap m;
 	m.serve({ answer({ ok(1, ldap::add_response{}) }), answer({ done_msg(2) }), answer({ done_msg(3) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&posix_card::cn>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&posix_card::cn>);
 	REQUIRE(m.run(s.add(posix_card{ .cn = "X", .uid_number = 7 })).has_value());
 	REQUIRE(m.run(s.get("X")).has_value());
 	REQUIRE(m.run(s.search(ldap::filters::field<&posix_card::uid_number>() == 7)).has_value());
@@ -504,11 +504,11 @@ TEST_CASE("store: auxiliary classes are added, not searched for", "[net][store][
 		  == "(&(objectClass=person)(uidNumber=7))");
 }
 
-TEST_CASE("store: update sends the members that differ in one modify", "[net][store][update]")
+TEST_CASE("repository: update sends the members that differ in one modify", "[net][repository][update]")
 {
 	mock_ldap m;
 	m.serve({ answer({ ok(1, ldap::modify_response{}) }), answer({ ok(2, ldap::modify_response{}) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 	const person before{ .uid = "jdoe", .mail = "j@example.org", .uid_number = 1000 };
 	const ldap::record<person> found{ .dn = ldap::dn{ "cn=John,ou=other,dc=example,dc=org" }, .value = before };
 
@@ -558,7 +558,7 @@ TEST_CASE("store: update sends the members that differ in one modify", "[net][st
 		  { { op::replace, { "mail", { "john@example.org" } } }, { op::replace, { "uidNumber", { "1001" } } } } } });
 }
 
-TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]")
+TEST_CASE("repository: update_if carries an Assertion control", "[net][repository][update]")
 {
 	using op = ldap::modify_operation;
 	using ldap::filters::attr;
@@ -586,7 +586,7 @@ TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]
 		  answer({ ok(2, ldap::modify_response{}) }),
 		  answer({ ok(3, ldap::modify_response{}) }),
 		  answer({ ok(4, ldap::modify_response{}) }) });
-		ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+		ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 		auto r = m.run(s.update_if(found, after));
 		REQUIRE(r.has_value());
 		CHECK(r->has_value());
@@ -615,7 +615,7 @@ TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]
 	{
 		mock_ldap m;
 		m.serve({ answer({ ok(1, ldap::modify_response{}) }), answer({ ok(2, ldap::modify_response{}) }) });
-		ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+		ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 		person filled = before;
 		filled.mail = "jdoe@example.org";
 		REQUIRE(m.run(s.update(found, filled)).has_value());
@@ -632,7 +632,7 @@ TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]
 	{
 		mock_ldap m;
 		m.serve({ answer({ ldap::message{ 1, ldap::modify_response{ ldap::ldap_result{ 122 } } } }) });
-		ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+		ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 		auto r = m.run(s.update_if(found, after));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::errc::assertion_failed);
@@ -644,7 +644,7 @@ TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]
 		mock_ldap m;
 		m.serve({ answer({ ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 12 } } } }),
 		  answer({ ok(2, ldap::modify_response{}) }) });
-		ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+		ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 		auto r = m.run(s.update_if(found, after));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::errc::unavailable_critical_extension);
@@ -657,7 +657,7 @@ TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]
 	{
 		mock_ldap m;
 		m.serve({});
-		ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+		ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 
 		auto same = m.run(s.update_if(before, before));
 		REQUIRE(same.has_value());
@@ -695,7 +695,7 @@ TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]
 	}
 }
 
-TEST_CASE("store: update_if's default filter has a size limit", "[net][store][update]")
+TEST_CASE("repository: update_if's default filter has a size limit", "[net][repository][update]")
 {
 	large_group before{ .cn = "big", .members = {}, .csn = "1" };
 	for (std::size_t i = 0; i < ldap::max_filter_elements; ++i) {
@@ -706,7 +706,7 @@ TEST_CASE("store: update_if's default filter has a size limit", "[net][store][up
 
 	mock_ldap m;
 	m.serve({ answer({ ok(1, ldap::modify_response{}) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&large_group::cn>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&large_group::cn>);
 	auto refused = m.run(s.update_if(before, after));
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == ldap::client_errc::invalid_filter);
@@ -718,18 +718,18 @@ TEST_CASE("store: update_if's default filter has a size limit", "[net][store][up
 	CHECK(m.log.received[0].controls.size() == 1);
 }
 
-TEST_CASE("store: rename and move send a modify DN", "[net][store]")
+TEST_CASE("repository: rename and move send a modify DN", "[net][repository]")
 {
 	mock_ldap m;
 	m.serve({ answer({ ok(1, ldap::modify_dn_response{}) }),
 	  answer({ ok(2, ldap::modify_dn_response{}) }),
 	  answer({ ok(3, ldap::modify_dn_response{}) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 	const ldap::dn staff_base{
 		"ou=st\xC3\xA4"
 		"ff,dc=example,dc=org"
 	};
-	const ldap::store staff(m.conn, staff_base, ldap::named_by<&person::uid>);
+	const ldap::repository staff(m.conn, staff_base, ldap::named_by<&person::uid>);
 
 	REQUIRE(m.run(s.rename("Doe, John+x", "J\xC3\xBCrgen #1")).has_value());
 	REQUIRE(m.run(s.move("J\xC3\xBCrgen #1", staff_base)).has_value());
@@ -747,10 +747,10 @@ TEST_CASE("store: rename and move send a modify DN", "[net][store]")
 	CHECK(moved.new_rdn == "uid=J\xC3\xBCrgen #1");
 	REQUIRE(moved.new_superior.has_value());
 	CHECK(*moved.new_superior == "ou=st\xC3\xA4" "ff,dc=example,dc=org");
-	const auto &to_store = std::get<ldap::modify_dn_request>(m.log.received[2].op);
-	CHECK(to_store.entry == "uid=\\#a\\;b,ou=people,dc=example,dc=org");
-	REQUIRE(to_store.new_superior.has_value());
-	CHECK(*to_store.new_superior == staff_base.to_string());
+	const auto &to_repository = std::get<ldap::modify_dn_request>(m.log.received[2].op);
+	CHECK(to_repository.entry == "uid=\\#a\\;b,ou=people,dc=example,dc=org");
+	REQUIRE(to_repository.new_superior.has_value());
+	CHECK(*to_repository.new_superior == staff_base.to_string());
 
 	auto bad_from = m.run(s.rename("j\xC3", "x"));
 	REQUIRE_FALSE(bad_from.has_value());
@@ -766,11 +766,11 @@ TEST_CASE("store: rename and move send a modify DN", "[net][store]")
 	CHECK(m.log.received.size() == 3);
 }
 
-TEST_CASE("store: a value that does not encode fails before anything is sent", "[net][store]")
+TEST_CASE("repository: a value that does not encode fails before anything is sent", "[net][repository]")
 {
 	mock_ldap m;
 	m.serve({});
-	ldap::store s(
+	ldap::repository s(
 	  m.conn, people_base, ldap::named_by<&person::uid>, { .schema_check = ldap::schema_check::on_first_use });
 
 	auto add_key = m.run(s.add(person{ .uid = "j\xC3", .mail = std::nullopt }));
@@ -800,7 +800,7 @@ TEST_CASE("store: a value that does not encode fails before anything is sent", "
 	CHECK(m.log.received.empty());
 }
 
-TEST_CASE("store: search returns records under the base, on the limit codes too", "[net][store]")
+TEST_CASE("repository: search returns records under the base, on the limit codes too", "[net][repository]")
 {
 	mock_ldap m;
 	m.serve(
@@ -810,7 +810,7 @@ TEST_CASE("store: search returns records under the base, on the limit codes too"
 			  { { "uid", { "b" } }, { "uidNumber", { "1001" } }, { "modifyTimestamp", { "20250101000000Z" } } } } },
 		  done_msg(1, 4, "", "size limit") }),
 		answer({ person_entry(2, "c", "x"), done_msg(2) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 
 	auto r = m.run(s.search(ldap::filters::field<&person::uid_number>() >= 1000));
 	REQUIRE(r.has_value());
@@ -840,14 +840,14 @@ TEST_CASE("store: search returns records under the base, on the limit codes too"
 // The base is often a DN the server returned: sanitized in the context
 // (valid UTF-8 kept, U+2028 shown as U+FFFD) and cut at 256 bytes, as the
 // entry's DN.
-TEST_CASE("store: search quotes its base sanitized", "[net][store]")
+TEST_CASE("repository: search quotes its base sanitized", "[net][repository]")
 {
 	mock_ldap m;
 	m.serve({ answer({ person_entry(1, "b", "x"), done_msg(1) }) });
 	// 13 bytes: U+2028 and accents; then o up to the cut.
 	auto base = ldap::dn::parse("ou=\xE2\x80\xA8p\xC3\xA9pl\xC3\xA9" + std::string(400, 'o') + ",dc=example,dc=org");
 	REQUIRE(base.has_value());
-	ldap::store s(m.conn, std::move(*base), ldap::named_by<&person::uid>);
+	ldap::repository s(m.conn, std::move(*base), ldap::named_by<&person::uid>);
 	auto r = m.run(s.search());
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::client_errc::conversion_failed);
@@ -884,7 +884,7 @@ auto drain_records(Stream &s) -> boost::capy::task<ldap::result<std::vector<ldap
 
 }// namespace
 
-TEST_CASE("store: search_stream decodes each entry as a record", "[net][store][stream]")
+TEST_CASE("repository: search_stream decodes each entry as a record", "[net][repository][stream]")
 {
 	mock_ldap m;
 	m.serve({ answer({ person_entry(1, "a", "1000"),
@@ -892,7 +892,7 @@ TEST_CASE("store: search_stream decodes each entry as a record", "[net][store][s
 				person_entry(1, "b", "1001"),
 				done_msg(1) }),
 	  answer({ person_entry(2, "c", "1002"), person_entry(2, "d", "x"), person_entry(2, "e", "1003"), done_msg(2) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 
 	auto stream = m.run(s.search_stream(ldap::filters::field<&person::uid_number>() >= 1000));
 	REQUIRE(stream.has_value());
@@ -930,12 +930,12 @@ TEST_CASE("store: search_stream decodes each entry as a record", "[net][store][s
 	CHECK(request.attributes == ldap::string_list{ "uid", "mail", "uidNumber", "modifyTimestamp" });
 }
 
-TEST_CASE("store: search_paged decodes the entries of every page", "[net][store][paged]")
+TEST_CASE("repository: search_paged decodes the entries of every page", "[net][repository][paged]")
 {
 	mock_ldap m;
 	m.serve({ answer({ person_entry(1, "a", "1000"), paged_done(1, "next") }),
 	  answer({ person_entry(2, "b", "1001"), paged_done(2, "", 4) }) });
-	ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 
 	auto pages =
 	  m.run(s.search_paged(1, ldap::filters::field<&person::uid>().present(), ldap::search_scope::whole_subtree));
@@ -967,7 +967,7 @@ TEST_CASE("store: search_paged decodes the entries of every page", "[net][store]
 	CHECK(none.error().code == ldap::client_errc::invalid_filter);
 }
 
-TEST_CASE("store: schema_check::on_first_use", "[net][store][schema]")
+TEST_CASE("repository: schema_check::on_first_use", "[net][repository][schema]")
 {
 	SECTION("checked once, then every operation runs")
 	{
@@ -976,7 +976,7 @@ TEST_CASE("store: schema_check::on_first_use", "[net][store][schema]")
 		  answer({ subschema(2), done_msg(2) }),
 		  answer({ person_entry(3, "a", "1000"), done_msg(3) }),
 		  answer({ ok(4, ldap::del_response{}) }) });
-		ldap::store s(
+		ldap::repository s(
 		  m.conn, people_base, ldap::named_by<&person::uid>, { .schema_check = ldap::schema_check::on_first_use });
 		CHECK(m.run(s.get("a")).has_value());
 		CHECK(m.run(s.remove("a")).has_value());
@@ -990,7 +990,7 @@ TEST_CASE("store: schema_check::on_first_use", "[net][store][schema]")
 	{
 		mock_ldap m;
 		m.serve({ answer({ root_dse(1), done_msg(1) }), answer({ subschema(2), done_msg(2) }) });
-		ldap::store s(
+		ldap::repository s(
 		  m.conn, people_base, ldap::named_by<&badly_typed::uid>, { .schema_check = ldap::schema_check::on_first_use });
 		for (int i = 0; i < 2; ++i) {
 			auto r = m.run(s.add(badly_typed{ .uid = 7 }));
@@ -1009,7 +1009,7 @@ TEST_CASE("store: schema_check::on_first_use", "[net][store][schema]")
 		  answer({ root_dse(2), done_msg(2) }),
 		  answer({ subschema(3), done_msg(3) }),
 		  answer({ ok(4, ldap::del_response{}) }) });
-		ldap::store s(
+		ldap::repository s(
 		  m.conn, people_base, ldap::named_by<&person::uid>, { .schema_check = ldap::schema_check::on_first_use });
 		auto first = m.run(s.remove("a"));
 		REQUIRE_FALSE(first.has_value());
@@ -1021,7 +1021,8 @@ TEST_CASE("store: schema_check::on_first_use", "[net][store][schema]")
 	}
 }
 
-TEST_CASE("store: update_if's default guard on a member without an equality rule", "[net][store][schema][update]")
+TEST_CASE("repository: update_if's default guard on a member without an equality rule",
+  "[net][repository][schema][update]")
 {
 	using op = ldap::modify_operation;
 	const ldap::binary photo{ std::byte{ 'p' } };
@@ -1037,7 +1038,7 @@ TEST_CASE("store: update_if's default guard on a member without an equality rule
 		  answer({ photo_subschema(2), done_msg(2) }),
 		  answer({ ok(3, ldap::modify_response{}) }),
 		  answer({ ok(4, ldap::modify_response{}) }) });
-		ldap::store s(
+		ldap::repository s(
 		  m.conn, people_base, ldap::named_by<&photo_card::cn>, { .schema_check = ldap::schema_check::on_first_use });
 		auto refused = m.run(s.update_if(before, after));
 		REQUIRE_FALSE(refused.has_value());
@@ -1068,7 +1069,7 @@ TEST_CASE("store: update_if's default guard on a member without an equality rule
 	{
 		mock_ldap m;
 		m.serve({ answer({ root_dse(1), done_msg(1) }), answer({ photo_subschema(2), done_msg(2) }) });
-		ldap::store s(m.conn,
+		ldap::repository s(m.conn,
 		  people_base,
 		  ldap::named_by<&badly_typed_photo::cn>,
 		  { .schema_check = ldap::schema_check::on_first_use });
@@ -1083,20 +1084,20 @@ TEST_CASE("store: update_if's default guard on a member without an equality rule
 	{
 		mock_ldap m;
 		m.serve({ answer({ ok(1, ldap::modify_response{}) }) });
-		ldap::store s(m.conn, people_base, ldap::named_by<&photo_card::cn>);
+		ldap::repository s(m.conn, people_base, ldap::named_by<&photo_card::cn>);
 		REQUIRE(m.run(s.update_if(before, after)).has_value());
 		m.check_server();
 		CHECK(m.log.received.size() == 1);
 	}
 }
 
-TEST_CASE("sync store: the same operations, blocking", "[net][store][sync]")
+TEST_CASE("sync repository: the same operations, blocking", "[net][repository][sync]")
 {
 	server_thread srv;
 	auto opened = ldap::sync::connect(srv.url());
 	REQUIRE(opened.has_value());
 	auto &c = *opened;
-	ldap::sync::store s(c, people_base, ldap::named_by<&card::cn>);
+	ldap::sync::repository s(c, people_base, ldap::named_by<&card::cn>);
 
 	auto all = s.search();
 	REQUIRE(all.has_value());
@@ -1117,7 +1118,7 @@ TEST_CASE("sync store: the same operations, blocking", "[net][store][sync]")
 	CHECK(paged->entries[1].dn == ldap::dn{ "uid=y,ou=people,dc=example,dc=org" });
 	CHECK(srv.requests == 6);
 	CHECK(s.rename("Z", "W").has_value());
-	const ldap::sync::store others(c, ldap::dn{ "ou=others,dc=example,dc=org" }, ldap::named_by<&card::cn>);
+	const ldap::sync::repository others(c, ldap::dn{ "ou=others,dc=example,dc=org" }, ldap::named_by<&card::cn>);
 	CHECK(s.move("W", others).has_value());
 	CHECK(s.move("W", ldap::dn{ "ou=people,dc=example,dc=org" }).has_value());
 	CHECK(srv.requests == 9);
@@ -1127,7 +1128,7 @@ TEST_CASE("sync store: the same operations, blocking", "[net][store][sync]")
 	CHECK(bad.error().code == ldap::client_errc::encode_error);
 	CHECK(srv.requests == 9);
 
-	ldap::sync::store labelled(c, people_base, ldap::named_by<&labelled_card::cn>);
+	ldap::sync::repository labelled(c, people_base, ldap::named_by<&labelled_card::cn>);
 	const ldap::record<labelled_card> x{ .dn = ldap::dn{ "uid=x,ou=people,dc=example,dc=org" },
 		.value = { .cn = "X", .description = std::nullopt } };
 	auto same = labelled.update(x, x.value);

@@ -65,7 +65,7 @@ inline auto entry_msg(std::int32_t id, std::string_view dn, std::string_view cn)
 }
 
 // An entry with only cn, as a server answers a search for cn alone (a
-// store of a struct mapping only cn).
+// repository of a struct mapping only cn).
 inline auto card_msg(std::int32_t id, std::string_view dn, std::string_view cn) -> ldap::message
 {
 	return ldap::message{ id, ldap::search_result_entry{ dn, { ldap::partial_attribute{ "cn", { cn } } } } };

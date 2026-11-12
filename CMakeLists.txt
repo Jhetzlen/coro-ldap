@@ -441,14 +441,14 @@ if(JHETZ_LDAP_INSTALL)
             PATTERN "referral_chase.hpp" EXCLUDE
             PATTERN "run.hpp" EXCLUDE
             PATTERN "search_stream.hpp" EXCLUDE
-            PATTERN "store.hpp" EXCLUDE
+            PATTERN "repository.hpp" EXCLUDE
             PATTERN "transaction.hpp" EXCLUDE
             PATTERN "sasl_ntlm.hpp" EXCLUDE
             PATTERN "sasl_scram.hpp" EXCLUDE
             PATTERN "sasl_gssapi.hpp" EXCLUDE
             PATTERN "sync.hpp" EXCLUDE
             PATTERN "sync_extended_operations.hpp" EXCLUDE
-            PATTERN "sync_store.hpp" EXCLUDE
+            PATTERN "sync_repository.hpp" EXCLUDE
             PATTERN "password.hpp" EXCLUDE
             PATTERN "ranged_values.hpp" EXCLUDE
             PATTERN "dirsync.hpp" EXCLUDE

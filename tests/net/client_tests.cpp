@@ -11,8 +11,8 @@
 #include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/mapping.hpp"
+#include "jhetz/ldap/repository.hpp"
 #include "jhetz/ldap/schema.hpp"
-#include "jhetz/ldap/store.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -3302,7 +3302,7 @@ TEST_CASE("client: load_schema runs both searches on one lease", "[net][client][
 		CHECK(search_base(a.log(0).received[1]).empty());
 		CHECK(search_base(a.log(0).received[2]) == "cn=Subschema");
 	}
-	SECTION("a store over the client checks the schema the same way")
+	SECTION("a repository over the client checks the schema the same way")
 	{
 		pool_fixture f;
 		auto &a = f.server({ schema_after_bind(),
@@ -3311,7 +3311,7 @@ TEST_CASE("client: load_schema runs both searches on one lease", "[net][client][
 			step{},
 			client_hangs_up() } });
 		f.make({ .servers = { a.url() }, .setup = admin_setup(), .max_lifetime = milliseconds(0) });
-		ldap::store cards(*f.pool,
+		ldap::repository cards(*f.pool,
 		  ldap::dn{ "ou=people,dc=example,dc=org" },
 		  ldap::named_by<&card::cn>,
 		  { .schema_check = ldap::schema_check::on_first_use });

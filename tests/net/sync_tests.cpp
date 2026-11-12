@@ -7,7 +7,7 @@
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "jhetz/ldap/sync_extended_operations.hpp"
-#include "jhetz/ldap/sync_store.hpp"
+#include "jhetz/ldap/sync_repository.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 #include "server_thread.hpp"

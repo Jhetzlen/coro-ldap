@@ -122,8 +122,8 @@ set(jhetz_ldap_net_headers
     jhetz/ldap/cancel.hpp jhetz/ldap/client.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
     jhetz/ldap/paged_search.hpp jhetz/ldap/referral_chase.hpp jhetz/ldap/run.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp jhetz/ldap/transaction.hpp
     jhetz/ldap/sasl_ntlm.hpp jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp
-    jhetz/ldap/directory.hpp jhetz/ldap/extended_operations.hpp jhetz/ldap/store.hpp jhetz/ldap/sync_extended_operations.hpp
-    jhetz/ldap/sync_store.hpp
+    jhetz/ldap/directory.hpp jhetz/ldap/extended_operations.hpp jhetz/ldap/repository.hpp jhetz/ldap/sync_extended_operations.hpp
+    jhetz/ldap/sync_repository.hpp
     jhetz/ldap/ad/dirsync.hpp jhetz/ldap/ad/discover.hpp jhetz/ldap/ad/password.hpp jhetz/ldap/ad/ranged_values.hpp jhetz/ldap/ad/sync.hpp)
 set(jhetz_ldap_codec_header_tus)
 set(jhetz_ldap_net_header_tus)
@@ -196,7 +196,7 @@ if(JHETZ_LDAP_BUILD_NET)
         net/start_tls_tests.cpp
         net/sync_tests.cpp
         net/sync_client_tests.cpp
-        net/store_tests.cpp
+        net/repository_tests.cpp
         net/message_io_tests.cpp
         net/thread_tests.cpp
     )

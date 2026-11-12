@@ -1,7 +1,7 @@
 // Typed CRUD over a directory (DESIGN.md section 4): the entries of one
 // mapped struct (mapping.hpp) under a base DN, each named by one member.
 //
-//   ldap::store people(conn, ldap::dn{"ou=people,dc=example,dc=org"}, ldap::named_by<&person::uid>);
+//   ldap::repository people(conn, ldap::dn{"ou=people,dc=example,dc=org"}, ldap::named_by<&person::uid>);
 //   co_await people.add(person{.uid = "jdoe", ...});         // uid=jdoe,ou=people,dc=example,dc=org
 //   auto p = co_await people.get("jdoe");                    // result<std::optional<person>>
 //   co_await people.modify("jdoe", {ldap::replace<&person::mail>("j@example.org")});
@@ -14,7 +14,7 @@
 //   co_await people.remove("jdoe");
 //
 // The source is any ldap::directory (directory.hpp): an ldap::connection,
-// an ldap::client, or a shared lease's connection (*lease). The store only
+// an ldap::client, or a shared lease's connection (*lease). The repository only
 // calls its public operations, one request per call (one per page for
 // search_paged; two more, once, for the schema check), and keeps no
 // entries.
@@ -48,14 +48,14 @@
 
 namespace jhetz::ldap {
 
-// The member whose value names a store's entries: ldap::named_by<&person::uid>.
+// The member whose value names a repository's entries: ldap::named_by<&person::uid>.
 template<auto Naming> struct named_by_t
 {
 	explicit constexpr named_by_t() = default;
 };
 template<auto Naming> inline constexpr named_by_t<Naming> named_by{};
 
-// The single-valued member store::update_if asserts instead of every mapped
+// The single-valued member repository::update_if asserts instead of every mapped
 // value: ldap::versioned_by<&person::entry_csn>.
 template<auto Version> struct versioned_by_t
 {
@@ -63,7 +63,7 @@ template<auto Version> struct versioned_by_t
 };
 template<auto Version> inline constexpr versioned_by_t<Version> versioned_by{};
 
-// When a store checks its struct against the server's schema (DESIGN.md
+// When a repository checks its struct against the server's schema (DESIGN.md
 // section 6).
 enum class schema_check {
 	off,
@@ -77,19 +77,19 @@ enum class schema_check {
 	// sections 3.1.5 and 5.2.1.6: what was read unprotected is read again).
 	// On a client, the schema is read on one pooled connection (both
 	// searches on one shared lease, see load_schema(client &)) and the
-	// outcome holds for every operation of the store, whichever server it
+	// outcome holds for every operation of the repository, whichever server it
 	// runs on: every server of the pool must serve the same schema. For a
 	// check per connection, use a lease's connection (*lease) as the
 	// source.
 	on_first_use,
 };
 
-struct store_options
+struct repository_options
 {
 	ldap::schema_check schema_check = ldap::schema_check::off;
 };
 
-// An entry a store's search found: its DN, as the server sent it, and its
+// An entry a repository's search found: its DN, as the server sent it, and its
 // value.
 template<class T> struct record
 {
@@ -128,7 +128,7 @@ namespace detail {
 		return record<T>{ .dn = std::move(*name), .value = std::move(*v) };
 	}
 
-	// store::update_if asserting every mapped value.
+	// repository::update_if asserting every mapped value.
 	struct every_mapped_value
 	{
 	};
@@ -142,7 +142,7 @@ namespace detail {
 		});
 	}
 
-	// A store's schema check: whether T fits the schema, and whether
+	// A repository's schema check: whether T fits the schema, and whether
 	// update_if's default guard can succeed on it.
 	struct schema_outcome
 	{
@@ -150,8 +150,8 @@ namespace detail {
 		result<void> guardable{};
 	};
 
-	// The requests and results of a store, without the I/O (store_core).
-	template<auto Naming> struct store_codec
+	// The requests and results of a repository, without the I/O (repository_core).
+	template<auto Naming> struct repository_codec
 	{
 		using value_type = member_pointer<decltype(Naming)>::owner;
 		using field_type = std::remove_cvref_t<decltype(field_of<Naming>())>;
@@ -285,7 +285,7 @@ namespace detail {
 		  -> result<filter>
 		{
 			static_assert(std::same_as<owner_of<Version>, value_type>,
-			  "ldap::versioned_by: the version member must be a member of the store's struct");
+			  "ldap::versioned_by: the version member must be a member of the repository's struct");
 			return unchanged_filter<Version>(original);
 		}
 
@@ -414,7 +414,7 @@ namespace detail {
 		}
 	};
 
-	// The protection of a store's source, when it reports one.
+	// The protection of a repository's source, when it reports one.
 	struct source_protection
 	{
 		bool tls = false;
@@ -434,8 +434,8 @@ namespace detail {
 		}
 	}
 
-	// A store's schema-check outcome and the protection it was made under,
-	// behind a lock: one store may be used from several threads.
+	// A repository's schema-check outcome and the protection it was made under,
+	// behind a lock: one repository may be used from several threads.
 	class schema_check_cache
 	{
 	  public:
@@ -491,11 +491,11 @@ namespace detail {
 
 }// namespace detail
 
-// The entries of a store's streamed or paged search (store::search_stream,
-// store::search_paged), each decoded as a record<T>: `Stream` is
+// The entries of a repository's streamed or paged search (repository::search_stream,
+// repository::search_paged), each decoded as a record<T>: `Stream` is
 // ldap::search_stream or ldap::paged_search, whose rules apply (move-only,
 // one next() at a time, not destroyed or moved while next() is suspended,
-// destroyed before its end it abandons the search). As store::search(), an
+// destroyed before its end it abandons the search). As repository::search(), an
 // entry that does not decode, or whose DN does not parse, is an error: it
 // ends the stream, and next() returns that error again from then on
 // (destroying the stream abandons the search).
@@ -542,19 +542,19 @@ template<class T, class Stream> class record_stream
 
 namespace detail {
 
-	// A store's base, options and schema-check outcome, and its operations
-	// over a source given to each call: ldap::store runs them on its
-	// source, sync::store on its facade's ldap::connection or ldap::client,
+	// A repository's base, options and schema-check outcome, and its operations
+	// over a source given to each call: ldap::repository runs them on its
+	// source, sync::repository on its facade's ldap::connection or ldap::client,
 	// on the I/O thread. The tasks refer to *this and to the source.
-	template<auto Naming> class store_core
+	template<auto Naming> class repository_core
 	{
-		using codec = store_codec<Naming>;
+		using codec = repository_codec<Naming>;
 
 	  public:
 		using value_type = codec::value_type;
 		using key_type = codec::key_type;
 
-		store_core(dn base, store_options options) : base_(std::move(base)), options_(options) {}
+		repository_core(dn base, repository_options options) : base_(std::move(base)), options_(options) {}
 
 		[[nodiscard]] auto base() const noexcept -> const dn & { return base_; }
 		[[nodiscard]] auto dn_of(const key_type &key) const -> result<dn> { return codec::dn_of(base_, key); }
@@ -805,7 +805,7 @@ namespace detail {
 		}
 
 		dn base_;
-		store_options options_;
+		repository_options options_;
 		schema_check_cache checked_{};
 	};
 
@@ -813,18 +813,18 @@ namespace detail {
 
 // The entries of `T` (the struct owning `Naming`) under `base`, each named
 // <naming attribute>=<value>,<base>. Every operation is a task that refers
-// to *this and to the source: both must outlive it. One store may be used
+// to *this and to the source: both must outlive it. One repository may be used
 // from several threads at once, as its source (a connection, a client).
-template<auto Naming, directory D> class store
+template<auto Naming, directory D> class repository
 {
-	using core = detail::store_core<Naming>;
+	using core = detail::repository_core<Naming>;
 
   public:
 	using value_type = core::value_type;
 	using key_type = core::key_type;
 	using source_type = D;
 
-	store(D &source, dn base, named_by_t<Naming> /*naming*/, store_options options = {})
+	repository(D &source, dn base, named_by_t<Naming> /*naming*/, repository_options options = {})
 	  : source_(&source), core_(std::move(base), options)
 	{}
 
@@ -958,16 +958,16 @@ template<auto Naming, directory D> class store
 	}
 
 	// Moves the entry named `key` under `new_base` (modify DN with
-	// newSuperior), keeping its RDN: it is then named `key` in a store of
+	// newSuperior), keeping its RDN: it is then named `key` in a repository of
 	// `new_base`.
 	auto move(key_type key, dn new_base, modify_dn_controls controls = {}) -> boost::capy::task<result<response>>
 	{
 		return core_.move(*source_, std::move(key), std::move(new_base), std::move(controls));
 	}
-	// As above, under `other`'s base (a store of the same struct and naming
-	// member, on any source); the request runs on this store's source.
+	// As above, under `other`'s base (a repository of the same struct and naming
+	// member, on any source); the request runs on this repository's source.
 	template<directory Other>
-	auto move(key_type key, const store<Naming, Other> &other, modify_dn_controls controls = {})
+	auto move(key_type key, const repository<Naming, Other> &other, modify_dn_controls controls = {})
 	  -> boost::capy::task<result<response>>
 	{
 		return move(std::move(key), other.base(), std::move(controls));

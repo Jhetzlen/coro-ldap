@@ -25,8 +25,8 @@
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
+#include "jhetz/ldap/repository.hpp"
 #include "jhetz/ldap/sasl_ntlm.hpp"
-#include "jhetz/ldap/store.hpp"
 #include "jhetz/ldap/sync.hpp"
 
 #include <boost/capy/buffers.hpp>
@@ -868,7 +868,7 @@ namespace {
 
 auto read_account(corosio::io_context &ioc, ldap::connection &c, const ldap::dn &who) -> ad_account
 {
-	ldap::store accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
+	ldap::repository accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
 	auto r = finish(ioc, accounts.get_at(who));
 	if (!r) {
 		FAIL("read " << who.to_string() << ": " << r.error().message());
@@ -960,7 +960,7 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 		CHECK(a.object_guid != admin.object_guid);
 
 		// The SID's and the GUID's binary forms, in typed filters.
-		ldap::store accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
+		ldap::repository accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
 		auto by_sid = finish(ioc,
 		  accounts.search(
 			ldap::filters::field<&ad_account::object_sid>() == a.object_sid, ldap::search_scope::whole_subtree));
@@ -989,7 +989,7 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 		// AD creates a user without a password disabled.
 		CHECK(has(fresh.user_account_control, normal_account | account_disable));
 
-		ldap::store accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
+		ldap::repository accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
 		const auto named = ldap::filters::field<&ad_account::sam_account_name>() == "coro-typed";
 		auto disabled = finish(ioc,
 		  accounts.search(named && ldap::ad::all_bits<&ad_account::user_account_control>(account_disable),
@@ -1020,7 +1020,7 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 	}
 }
 
-TEST_CASE("samba ad: the Assertion control is not supported", "[samba_ad][store]")
+TEST_CASE("samba ad: the Assertion control is not supported", "[samba_ad][repository]")
 {
 	require_samba();
 	draining_context ioc;
@@ -1055,7 +1055,7 @@ TEST_CASE("samba ad: the Assertion control is not supported", "[samba_ad][store]
 	const ad_account a = read_account(ioc, c, alice);
 	ad_account changed = a;
 	changed.user_account_control = a.user_account_control | ldap::ad::user_account_control::dont_expire_passwd;
-	ldap::store accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
+	ldap::repository accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
 	auto guarded = finish(ioc, accounts.update_if(ldap::record<ad_account>{ .dn = alice, .value = a }, changed));
 	REQUIRE_FALSE(guarded.has_value());
 	CHECK(guarded.error().code == ldap::errc::unavailable_critical_extension);

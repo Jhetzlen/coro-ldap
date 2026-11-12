@@ -1,14 +1,14 @@
-// ldap::store (store.hpp) and ldap::load_schema (directory.hpp) for the
+// ldap::repository (repository.hpp) and ldap::load_schema (directory.hpp) for the
 // blocking facade: the same operations, on a sync::connection, a
 // sync::client or a sync lease, blocking the calling thread. Each runs the
 // async operation with sync::run (sync.hpp).
 //
-//   ldap::sync::store people(pool, ldap::dn{"ou=people,dc=example,dc=org"}, ldap::named_by<&person::uid>);
+//   ldap::sync::repository people(pool, ldap::dn{"ou=people,dc=example,dc=org"}, ldap::named_by<&person::uid>);
 //   ldap::result<std::optional<person>> p = people.get("jdoe");
 #pragma once
 
 #include "jhetz/ldap/directory.hpp"
-#include "jhetz/ldap/store.hpp"
+#include "jhetz/ldap/repository.hpp"
 #include "jhetz/ldap/sync.hpp"
 
 #include <cstdint>
@@ -33,20 +33,20 @@ template<directory D> [[nodiscard]] auto load_schema(D &d) -> result<server_sche
 	return r;
 }
 
-// As ldap::store, blocking: each operation runs the async store's on the
-// I/O thread. The source must outlive the store. One store may be used
+// As ldap::repository, blocking: each operation runs the async repository's on the
+// I/O thread. The source must outlive the repository. One repository may be used
 // from several threads at once.
-template<auto Naming, directory D> class store
+template<auto Naming, directory D> class repository
 {
-	using core = ldap::detail::store_core<Naming>;
-	using codec = ldap::detail::store_codec<Naming>;
+	using core = ldap::detail::repository_core<Naming>;
+	using codec = ldap::detail::repository_codec<Naming>;
 
   public:
 	using value_type = core::value_type;
 	using key_type = core::key_type;
 	using source_type = D;
 
-	store(D &source, dn base, named_by_t<Naming> /*naming*/, store_options options = {})
+	repository(D &source, dn base, named_by_t<Naming> /*naming*/, repository_options options = {})
 	  : source_(&source), core_(std::move(base), options)
 	{}
 
@@ -144,7 +144,7 @@ template<auto Naming, directory D> class store
 	}
 	template<directory Other>
 	[[nodiscard]] auto move(const key_type &key,
-	  const store<Naming, Other> &other,
+	  const repository<Naming, Other> &other,
 	  const modify_dn_controls &controls = {}) -> result<response>
 	{
 		return move(key, other.base(), controls);

@@ -22,7 +22,7 @@
 //
 //   ldap::result<std::string> me = ldap::sync::run(*c, [](auto &a) { return ldap::who_am_i(a); });
 //
-// sync::search_paged, sync::load_schema, sync::store,
+// sync::search_paged, sync::load_schema, sync::repository,
 // sync_extended_operations.hpp and ad/sync.hpp are built that way.
 //
 // A method called from the facade's own I/O thread fails with

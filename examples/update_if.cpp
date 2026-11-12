@@ -1,5 +1,5 @@
 #include "jhetz/ldap/connection.hpp"
-#include "jhetz/ldap/store.hpp"
+#include "jhetz/ldap/repository.hpp"
 
 #include <boost/corosio/io_context.hpp>
 
@@ -36,7 +36,7 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 		std::cerr << bound.error().message() << '\n';
 		co_return 1;
 	}
-	ldap::store people(*c, ldap::dn{ "ou=people,dc=example,dc=org" }, ldap::named_by<&person::uid>);
+	ldap::repository people(*c, ldap::dn{ "ou=people,dc=example,dc=org" }, ldap::named_by<&person::uid>);
 	auto found = co_await people.get("user001");
 	if (!found || !*found) {
 		std::cerr << "uid=user001 not found\n";
