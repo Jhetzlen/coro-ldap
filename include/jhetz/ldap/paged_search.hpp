@@ -102,9 +102,7 @@ inline constexpr std::size_t search_paged_default_max_pages = 10000;
 // encode_error, and a max_pages of 0 with std::errc::invalid_argument,
 // before anything is sent. When page `max_pages` ends with a cookie,
 // next() fails with std::errc::value_too_large (the paging state is
-// released on destruction): the cookie is the server's opaque state (RFC
-// 2696 section 3) and a server may return the same one for every page, so
-// the bound, not a repeated cookie, ends a search that does not. OpenLDAP allows one paged search per
+// released on destruction). OpenLDAP allows one paged search per
 // connection (it refuses another's next page with unwilling_to_perform or
 // protocol_error) and, with server_side_sort (sssvlv), silently answers with
 // the latest sorted paged search's entries: give each concurrent paged

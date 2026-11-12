@@ -472,7 +472,7 @@ TEST_CASE("threads: one client and one store used from several threads", "[net][
 	  ldap::client_options{ .servers = { server.url() },
 		.setup = ldap::simple_bind_setup(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"),
 		.max_connections = 4 });
-	ldap::store people(
+	ldap::store persons(
 	  *pool, people_base, ldap::named_by<&person::uid>, { .schema_check = ldap::schema_check::on_first_use });
 	tally t;
 	{
@@ -482,7 +482,7 @@ TEST_CASE("threads: one client and one store used from several threads", "[net][
 		constexpr int rounds = 12;
 		std::latch done(workers);
 		for (std::size_t i = 0; i < workers; ++i) {
-			start(ioc, client_worker(*pool, people, t, rounds), done);
+			start(ioc, client_worker(*pool, persons, t, rounds), done);
 		}
 		done.wait();
 		CHECK(t.failed == 0);
