@@ -1020,6 +1020,55 @@ TEST_CASE("samba ad: objectSid, objectGUID and userAccountControl as ad types", 
 	}
 }
 
+TEST_CASE("samba ad: the Assertion control is not supported", "[samba_ad][store]")
+{
+	require_samba();
+	draining_context ioc;
+	auto c = open_bound(ioc, false, administrator, administrator_password);
+
+	auto root = finish(ioc, c.search(ldap::root_dse({ "supportedControl" })));
+	REQUIRE(root.has_value());
+	REQUIRE(root->entries.size() == 1);
+	const auto *supported = root->entries[0].find("supportedControl");
+	REQUIRE(supported != nullptr);
+	CHECK(std::ranges::find(*supported, ldap::assertion_oid) == supported->end());
+
+	const std::string marker =
+	  "assertion-" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+	const auto description = [&] {
+		auto r = finish(
+		  ioc, c.search({ .base = alice, .scope = ldap::search_scope::base_object, .attributes = { "description" } }));
+		REQUIRE(r.has_value());
+		REQUIRE(r->entries.size() == 1);
+		const auto *v = r->entries[0].find("description");
+		return v == nullptr || v->empty() ? std::string() : std::string(v->front());
+	};
+	const ldap::assertion any{ .filter = ldap::filters::attr("objectClass").present() };
+
+	auto critical = finish(ioc,
+	  c.modify({ .object = alice, .changes = { ldap::mod::replace("description", { marker }) }, .controls = { any } }));
+	REQUIRE_FALSE(critical.has_value());
+	CHECK(critical.error().code == ldap::errc::unavailable_critical_extension);
+	CHECK(c.is_open());
+	CHECK(description() != marker);
+
+	const ad_account a = read_account(ioc, c, alice);
+	ad_account changed = a;
+	changed.user_account_control = a.user_account_control | ldap::ad::user_account_control::dont_expire_passwd;
+	ldap::store accounts(c, domain, ldap::named_by<&ad_account::sam_account_name>);
+	auto guarded = finish(ioc, accounts.update_if(ldap::record<ad_account>{ .dn = alice, .value = a }, changed));
+	REQUIRE_FALSE(guarded.has_value());
+	CHECK(guarded.error().code == ldap::errc::unavailable_critical_extension);
+	CHECK(read_account(ioc, c, alice).user_account_control == a.user_account_control);
+
+	auto ignored = finish(ioc,
+	  c.modify({ .object = alice,
+		.changes = { ldap::mod::replace("description", { marker }) },
+		.controls = { ldap::assertion{ .filter = any.filter, .critical = false } } }));
+	REQUIRE(ignored.has_value());
+	CHECK(description() == marker);
+}
+
 // ---------------------------------------------------------------- Show Deleted
 
 TEST_CASE("samba ad: ad::show_deleted finds a deleted user's tombstone", "[samba_ad][show_deleted]")

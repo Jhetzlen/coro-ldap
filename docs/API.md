@@ -379,7 +379,10 @@ itself needs only ICU.
   default resource (not a monotonic arena, which never frees) and a
   reader that keeps up. A
   Notice of Disconnection fails every
-  outstanding operation. A server result error fails one operation; a
+  outstanding operation. A server result error fails one operation, also
+  when it comes in an ExtendedResponse without a responseName to a request
+  other than a Bind (Samba's answer to an unsupported critical control,
+  e.g. `errc::unavailable_critical_extension`); a
   transport or protocol error fails all of them once and closes the
   connection, and later operations fail with `client_errc::not_sent`
   naming the first error. The header documents the memory, threading and
@@ -1010,7 +1013,11 @@ itself needs only ICU.
   with `invalid_filter` before anything is sent: use `versioned_by`. An empty
   version member fails with `client_errc::missing_attribute`, and an
   Assertion control in the `controls` argument with `encode_error`, before
-  anything is sent;
+  anything is sent. AD and Samba do not support the Assertion control (no
+  1.3.6.1.1.12 in supportedControl): Samba answers the critical control
+  with `errc::unavailable_critical_extension` (12) and applies nothing, the
+  connection staying open, so `update_if` never succeeds there; use
+  `update`;
   `remove(key)` / `remove_at(dn)`, `rename(from, to)` (modify DN to
   `<naming attribute>=<to>`, deleteoldrdn TRUE) and `move(key, new_base)` /
   `move(key, other_store)` (newSuperior, RDN kept) -> `task<result<response>>`, each with

@@ -1779,7 +1779,12 @@ co_await people.remove("jdoe");
     not `ldap::binary`: userPassword, with octetStringMatch, asserts fine.
     An empty member adds no term, so tests without values hide the
     problem. `versioned_by` is the fix, on a member that has an equality
-    rule. Samba and AD do not support the Assertion control. The check
+    rule. Samba and AD do not support the Assertion control (not in
+    supportedControl): Samba answers the critical control with an
+    ExtendedResponse carrying the modify's message id, no responseName and
+    unavailableCriticalExtension (12), applies nothing and keeps the
+    connection; with criticality FALSE it ignores the control and applies
+    the modify. The check
     reuses the store's schema check (`validate<T>` reports the warning
     `no_equality_rule`; the store keeps a second outcome beside the
     first, no extra request, no stored schema), and a real
@@ -2554,7 +2559,10 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
     reference the search returns, for its whole life.
 - Failure model: a server result error, an encode error, a cancellation or
   a timeout fails one operation and the connection stays usable (except a
-  cancelled or timed-out Bind or StartTLS, which closes it). A
+  cancelled or timed-out Bind or StartTLS, which closes it). So does a
+  non-success ExtendedResponse without a responseName answering a request
+  other than a Bind (Samba's reply to an unsupported critical control):
+  the request fails with its result. A
   transport error, a malformed or oversized PDU, an unexpected response or
   a Notice of Disconnection fails every outstanding operation exactly once
   (each with its own context) and closes the transport; the error is

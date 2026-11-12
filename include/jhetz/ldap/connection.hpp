@@ -44,7 +44,11 @@
 //
 // Server messages are decoded with origin::server. A response must carry the
 // id of an outstanding (or recently abandoned) request and an operation that
-// answers it, else client_errc::unexpected_response. IntermediateResponses
+// answers it, else client_errc::unexpected_response, except an
+// ExtendedResponse without a responseName carrying a non-success result to
+// a request other than a Bind (Samba's answer to an unsupported critical
+// control): that request fails with the result, as from its own response,
+// and the connection stays open. IntermediateResponses
 // (section 4.13) are skipped unless requested (search_params /
 // extended_params::intermediate_responses), then returned by
 // search_stream::next_item() or in extended_result::intermediates. A Notice

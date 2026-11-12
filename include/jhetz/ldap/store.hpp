@@ -905,7 +905,9 @@ template<auto Naming, directory D> class store
 	// member differs. An Assertion control in `controls` fails
 	// with encode_error before anything is sent, and so does, with
 	// invalid_filter, a default filter past max_filter_elements (one element
-	// per value): use ldap::versioned_by for such a struct.
+	// per value): use ldap::versioned_by for such a struct. AD and Samba do
+	// not support the Assertion control (not in supportedControl): Samba
+	// fails it with errc::unavailable_critical_extension and applies nothing.
 	auto update_if(const record<value_type> &original, value_type changed, modify_controls controls = {})
 	  -> boost::capy::task<result<std::optional<response>>>
 	{

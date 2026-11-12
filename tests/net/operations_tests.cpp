@@ -452,6 +452,63 @@ TEST_CASE("operations: a response of the wrong type is a protocol error", "[net]
 	CHECK_FALSE(m.conn.is_open());
 }
 
+TEST_CASE("operations: a failed ExtendedResponse without a name ends the request with its result", "[net][operations]")
+{
+	const auto critical_assertion = ldap::control(ldap::assertion_oid, true, std::string_view("\x87\x0bobjectClass"));
+	SECTION("Samba's answer to an unsupported critical control")
+	{
+		// Captured from Samba 4 (Debian) for a modify with id 2 carrying a
+		// critical Assertion control: ExtendedResponse, unavailableCriticalExtension.
+		using namespace std::string_literals;
+		step refused;
+		refused.replies.push_back("\x30\x0c\x02\x01\x02\x78\x07\x0a\x01\x0c\x04\x00\x04\x00"s);
+		mock_ldap m;
+		m.serve({ answer({ result_msg<ldap::modify_response>(1) }),
+		  refused,
+		  answer({ result_msg<ldap::modify_response>(3) }) });
+		REQUIRE(m.run(m.conn.modify({ .object = jdoe })).has_value());
+		auto r = m.run(m.conn.modify({ .object = jdoe, .controls = { critical_assertion } }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == errc::unavailable_critical_extension);
+		CHECK_THAT(
+		  std::string(r.error().context), ContainsSubstring("ExtendedResponse in response to a ModifyRequest"));
+		CHECK(m.conn.is_open());
+		REQUIRE(m.run(m.conn.modify({ .object = jdoe })).has_value());
+		m.check_server();
+	}
+	SECTION("after a search's entries")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,dc=example,dc=org", "a"),
+		  ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 12 } } } }) });
+		auto r = m.run(m.conn.search({ .base = ldap::dn{ "dc=example,dc=org" }, .controls = { critical_assertion } }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == errc::unavailable_critical_extension);
+		CHECK(m.conn.is_open());
+		m.check_server();
+	}
+	SECTION("a successful or a named one is a protocol error")
+	{
+		const auto reply = GENERATE(ldap::extended_response{ ldap::ldap_result{ 0 } },
+		  ldap::extended_response{ ldap::ldap_result{ 12 }, std::string("1.2.3") });
+		mock_ldap m;
+		m.serve({ answer({ ldap::message{ 1, reply } }) });
+		auto r = m.run(m.conn.modify({ .object = jdoe }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::unexpected_response);
+		CHECK_FALSE(m.conn.is_open());
+	}
+	SECTION("one answering a bind is a protocol error")
+	{
+		mock_ldap m;
+		m.serve({ answer({ ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 12 } } } }) });
+		auto r = m.run(m.conn.simple_bind(jdoe, "secret"));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::unexpected_response);
+		CHECK_FALSE(m.conn.is_open());
+	}
+}
+
 TEST_CASE("operations: root_dse() reads the root DSE", "[net][operations]")
 {
 	mock_ldap m;

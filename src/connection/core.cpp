@@ -768,10 +768,23 @@ void connection::core::route(std::size_t size)
 		  (p.search && (index == op_index<search_result_entry> || index == op_index<search_result_reference>))
 		  || (p.intermediates && index == op_index<intermediate_response>);
 		if (!final && !streamed) {
-			shut(unexpected(detail::format("{} with message id {} in response to a {}",
-				   op_name(m->op),
-				   h->id,
-				   p.search ? std::string_view("SearchRequest") : op_names[p.expect - 1])),
+			const std::string_view request = p.search ? std::string_view("SearchRequest") : op_names[p.expect - 1];
+			// A failed ExtendedResponse without a responseName (Samba's answer
+			// to an unsupported critical control) ends the request with its
+			// result; the connection stays open.
+			if (const auto *x = std::get_if<extended_response>(&m->op);
+			  x != nullptr && p.expect != op_index<bind_response> && !x->response_name && !x->result.is_success()) {
+				p.failure = x->result.to_error(detail::format("ExtendedResponse in response to a {}", request));
+				p.finished = true;
+				p.registered = false;
+				pending.erase(it);
+				stop_reader_if_idle();
+				publish();
+				p.ready.set();
+				return;
+			}
+			shut(
+			  unexpected(detail::format("{} with message id {} in response to a {}", op_name(m->op), h->id, request)),
 			  true);
 			return;
 		}

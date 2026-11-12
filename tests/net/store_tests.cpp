@@ -639,6 +639,20 @@ TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]
 		m.check_server();
 	}
 
+	SECTION("Samba's ExtendedResponse refusing the control fails with unavailableCriticalExtension")
+	{
+		mock_ldap m;
+		m.serve({ answer({ ldap::message{ 1, ldap::extended_response{ ldap::ldap_result{ 12 } } } }),
+		  answer({ ok(2, ldap::modify_response{}) }) });
+		ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
+		auto r = m.run(s.update_if(found, after));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::errc::unavailable_critical_extension);
+		CHECK(m.conn.is_open());
+		REQUIRE(m.run(s.update(found, after)).has_value());
+		m.check_server();
+	}
+
 	SECTION("refused before anything is sent")
 	{
 		mock_ldap m;
