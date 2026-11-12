@@ -946,6 +946,42 @@ namespace detail {
 		}
 	}
 
+	void check_duplicate_attributes(const server_schema &s, std::span<const std::string_view> names, schema_report &out)
+	{
+		for (std::size_t i = 1; i < names.size(); ++i) {
+			const std::string_view name = names[i];
+			const attribute_type *a = s.find_attribute(name);
+			if (a == nullptr) {
+				continue;
+			}
+			const std::string_view type = name.substr(0, name.find(';'));
+			for (std::size_t j = 0; j < i; ++j) {
+				const std::string_view other = names[j];
+				if (s.find_attribute(other) != a) {
+					continue;
+				}
+				// `other`'s options on `name`'s type.
+				std::string same_type(type);
+				same_type += other.substr(std::min(other.find(';'), other.size()));
+				if (!same_description(name, same_type) || same_description(name, other)) {
+					continue;
+				}
+				std::string text = "maps the attribute type of member ";
+				detail::append_sanitized(text, other, 128);
+				if (!a->names.empty()) {
+					text += " (";
+					detail::append_sanitized(text, a->names.front(), 128);
+					text += ')';
+				}
+				text += ": an update writes it twice and a read decodes only one member";
+				out.issues.push_back({ .what = schema_issue::kind::duplicate_attribute,
+				  .name = std::string(name),
+				  .detail = std::move(text) });
+				break;
+			}
+		}
+	}
+
 	void check_class_attributes(const server_schema &s,
 	  std::span<const char *const> classes,
 	  std::span<const field_use> fields,

@@ -911,7 +911,11 @@ itself needs only ICU.
   for nothing; a member named by an alias or numeric OID rather than the
   attribute's first NAME: `not_primary_name`; a writable member whose
   attribute has no EQUALITY on its SUP chain, on a schema that declares
-  EQUALITY somewhere: `no_equality_rule`),
+  EQUALITY somewhere: `no_equality_rule`; two members mapping one
+  attribute type with the same options under different names or its OID
+  (`sn` and `surname`): `duplicate_attribute`, an error, as an update
+  would write it twice and a read decode only one; `cn` and `cn;lang-en`
+  are not),
   `attribute_type` with `usage` (`attribute_usage`),
   `object_class_type` with `sup`, `kind` (`object_class_kind`), `must`
   and `may`, `dit_content_rule` (`obsolete`, `aux`, `must`, `may`, `precluded`: RFC

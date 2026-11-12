@@ -999,6 +999,76 @@ TEST_CASE("schema: a member named by an alias or OID is not_primary_name", "[sch
 	CHECK(alias.to_string().contains("warning: attribute surname: not the attribute's primary name"));
 }
 
+namespace {
+
+struct twice_named
+{
+	std::string sn;
+	std::optional<std::string> surname;
+	std::optional<std::string> by_oid;
+};
+struct twice_with_options
+{
+	std::string cn;
+	std::optional<std::string> english;
+	std::optional<std::string> english_again;
+	std::optional<std::string> french;
+};
+struct twice_unknown
+{
+	std::string x;
+	std::optional<std::string> y;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<twice_named> = ldap::describe(ldap::field<&twice_named::sn>("sn"),
+  ldap::field<&twice_named::surname>("surname"),
+  ldap::field<&twice_named::by_oid>("2.5.4.4"));
+template<>
+constexpr auto ldap::schema<twice_with_options> = ldap::describe(ldap::field<&twice_with_options::cn>("cn"),
+  ldap::field<&twice_with_options::english>("cn;lang-en;x-a"),
+  ldap::field<&twice_with_options::english_again>("commonName;X-A;Lang-En"),
+  ldap::field<&twice_with_options::french>("cn;lang-fr"));
+template<>
+constexpr auto ldap::schema<twice_unknown> =
+  ldap::describe(ldap::field<&twice_unknown::x>("x-unknown"), ldap::field<&twice_unknown::y>("x-unknown;lang-en"));
+
+TEST_CASE("schema: two members mapping one attribute type are duplicate_attribute", "[schema][validate]")
+{
+	const auto s = core_schema();
+	using k = ldap::schema_issue::kind;
+	const auto duplicates = [](const ldap::schema_report &rep) {
+		std::vector<std::pair<std::string, std::string>> out;
+		for (const auto &i : rep.issues) {
+			if (i.what == k::duplicate_attribute) {
+				CHECK(i.is_error());
+				out.emplace_back(i.name, i.detail);
+			}
+		}
+		return out;
+	};
+	const auto named = ldap::validate<twice_named>(s);
+	CHECK_FALSE(named.ok());
+	CHECK(duplicates(named)
+		  == std::vector<std::pair<std::string, std::string>>{
+			{ "surname",
+			  "maps the attribute type of member sn (sn): an update writes it twice and a read decodes only one "
+			  "member" },
+			{ "2.5.4.4",
+			  "maps the attribute type of member sn (sn): an update writes it twice and a read decodes only one "
+			  "member" } });
+	CHECK(named.to_string().contains("error: attribute surname: maps the attribute type of member sn"));
+	const auto options = ldap::validate<twice_with_options>(s);
+	CHECK(duplicates(options)
+		  == std::vector<std::pair<std::string, std::string>>{ { "commonName;X-A;Lang-En",
+			"maps the attribute type of member cn;lang-en;x-a (cn): an update writes it twice and a read decodes "
+			"only one member" } });
+	CHECK(duplicates(ldap::validate<twice_unknown>(s)).empty());
+	CHECK(duplicates(ldap::validate<last_named>(s)).empty());
+}
+
 TEST_CASE("schema: MUST attributes not mapped, or mapped by members add may leave out", "[schema][validate]")
 {
 	const auto s = core_schema();

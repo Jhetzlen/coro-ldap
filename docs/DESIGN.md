@@ -2004,6 +2004,14 @@ Checks:
   the member would decode empty and a store read fails with
   `schema_mismatch`; an attribute with no NAME mapped by its OID gets
   none);
+- one attribute per name: a member mapping the attribute type of an
+  earlier member with the same option set under another name (`sn` and
+  `surname`, `cn` and `2.5.4.3`, the type resolved through the schema's
+  names and OIDs) is the error `duplicate_attribute`: `ldap::diff` and
+  `update` would write the attribute twice and a read decodes only the
+  member named as the server answers. Different option sets (`cn` and
+  `cn;lang-en`) are distinct attributes, and one name mapped twice (two
+  representations of one attribute) decodes into both;
 - cardinality: `T` / `optional<T>` mapped to a multi-valued attribute is
   reported (it only fails at runtime if an entry really has several values);
 - syntax: the attribute's SYNTAX OID is in `value_traits<T>::syntaxes`

@@ -324,6 +324,11 @@ struct schema_issue
 		// attribute type: an assertion on it is always Undefined, so
 		// store::update_if's default guard cannot succeed
 		no_equality_rule,
+		// error: a member mapping the attribute type of an earlier member,
+		// with the same options, under another name (sn and surname, a name
+		// and its OID): an update writes it twice and a read decodes only
+		// one of them
+		duplicate_attribute,
 	};
 	kind what;
 	std::string name;// the attribute or object class
@@ -370,6 +375,10 @@ namespace detail {
 	  std::span<const char *const> classes,
 	  std::span<const field_use> fields,
 	  schema_report &out);
+	// duplicate_attribute for each of `names` that maps the attribute type
+	// of an earlier one, with the same options, under another name.
+	void
+	  check_duplicate_attributes(const server_schema &s, std::span<const std::string_view> names, schema_report &out);
 }// namespace detail
 
 // Checks T's descriptor against the server's schema; lists every issue.
@@ -407,6 +416,11 @@ namespace detail {
 // Not reported: objectClass, operational attributes (USAGE other than
 // userApplications), attributes the server does not define, and every member
 // when a class is extensibleObject or a class or superclass is not defined.
+//
+// Two members mapping one attribute type with the same options under
+// different names (sn and surname, a name and its OID) are an error
+// (duplicate_attribute); different options (cn and cn;lang-en) are not,
+// nor one name mapped twice (two representations of one attribute).
 template<described T> [[nodiscard]] auto validate(const server_schema &s) -> schema_report
 {
 	schema_report out;
@@ -428,6 +442,8 @@ template<described T> [[nodiscard]] auto validate(const server_schema &s) -> sch
 			...);
 	  },
 	  schema<T>.fields);
+	static constexpr auto names = detail::attribute_name_array<T>();
+	detail::check_duplicate_attributes(s, names, out);
 	if constexpr (schema<T>.classes.names.size() > 0) {
 		const auto fields = std::apply(
 		  [](const auto &...f) {
