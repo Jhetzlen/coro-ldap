@@ -1706,8 +1706,10 @@ co_await people.remove("jdoe");
   server answers with the primary name (`sn`) and decode matches names
   exactly; a store read (`get`, `search`, the streams) fails with
   `schema_mismatch` ("attribute sn returned for no member") when the
-  answer holds an attribute whose description without options is none of
-  the names it requested, and `validate<T>` warns with
+  answer holds an attribute whose description is none of the names it
+  requested nor a subtype of one (RFC 4512 2.5: the same type with at
+  least the name's options, so `cn;lang-en` answers `cn` and
+  `userCertificate;binary` answers itself), and `validate<T>` warns with
   `not_primary_name`. Plain `decode<T>` does not check.
 - `update_if(original, changed)` is `update` with a critical Assertion
   control (RFC 4528), so the server applies the modify only if the

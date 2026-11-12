@@ -593,8 +593,9 @@ namespace detail {
 	auto ranged_values_error(const entry &e, std::string_view name) -> std::optional<error>;
 
 	// client_errc::schema_mismatch for the first attribute of `e` whose
-	// description without options matches none of `names`
-	// (case-insensitively), or nullopt when there is none.
+	// description is none of `names` nor a subtype of one (RFC 4512 2.5: the
+	// same type, case-insensitively, with at least its options, in any order),
+	// or nullopt when there is none.
 	auto unrequested_attribute_error(const entry &e, std::span<const std::string_view> names) -> std::optional<error>;
 }// namespace detail
 

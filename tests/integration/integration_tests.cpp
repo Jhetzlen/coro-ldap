@@ -2983,6 +2983,48 @@ TEST_CASE("integration: a store read fails on a member mapped by an alias", "[in
 	CHECK_THAT(std::string(got.error().context), Catch::Matchers::EndsWith("attribute sn returned for no member"));
 }
 
+namespace {
+
+struct english_named
+{
+	std::string uid;
+	std::optional<std::string> english_cn;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<english_named> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::field<&english_named::uid>("uid"),
+  ldap::field<&english_named::english_cn>("cn;lang-en"));
+
+TEST_CASE("integration: a store reads a member mapped with an option", "[integration][store]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	draining_context ioc;
+	auto c = open_admin(ioc);
+	ldap::store contacts(c, people, ldap::named_by<&tagged_contact::uid>);
+	const std::string name = unique("english");
+	REQUIRE(finish(ioc,
+	  contacts.add(tagged_contact{
+		.uid = name, .cn = "Nommé", .sn = "Contact", .description = std::nullopt, .display_name = std::nullopt }))
+		.has_value());
+	const auto entry = contacts.dn_of(name);
+	REQUIRE(entry.has_value());
+	REQUIRE(finish(ioc, c.modify({ .object = *entry, .changes = { ldap::mod::add("cn;lang-en", { "Named" }) } }))
+		.has_value());
+	ldap::store s(c, people, ldap::named_by<&english_named::uid>);
+	auto got = finish(ioc, s.get(name));
+	if (!got) {
+		FAIL(got.error().message());
+	}
+	REQUIRE(got->has_value());
+	CHECK((*got)->english_cn == "Named");
+	REQUIRE(finish(ioc, contacts.remove(name)).has_value());
+}
+
 TEST_CASE("integration: ldap::client replaces a connection the server dropped", "[integration][client]")
 {
 	if (!have_slapd()) {

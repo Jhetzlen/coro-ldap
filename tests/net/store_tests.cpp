@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -60,6 +61,13 @@ struct surnamed
 {
 	std::string cn;
 	std::optional<std::string> surname;
+};
+
+struct certified_card
+{
+	std::string cn;
+	std::optional<std::string> english_cn;
+	std::vector<ldap::binary> certificates;
 };
 
 struct photo_card
@@ -113,6 +121,11 @@ template<>
 constexpr auto ldap::schema<surnamed> = ldap::describe(ldap::object_class("person"),
   ldap::field<&surnamed::cn>("cn"),
   ldap::field<&surnamed::surname>("surname"));
+
+template<>
+constexpr auto ldap::schema<certified_card> = ldap::describe(ldap::field<&certified_card::cn>("cn"),
+  ldap::field<&certified_card::english_cn>("cn;lang-en"),
+  ldap::field<&certified_card::certificates>("userCertificate;binary"));
 
 template<>
 constexpr auto ldap::schema<photo_card> = ldap::describe(ldap::field<&photo_card::cn>("cn"),
@@ -302,6 +315,42 @@ TEST_CASE("store: a read fails on an attribute answered for no member", "[net][s
 	REQUIRE(tagged.has_value());
 	REQUIRE(tagged->has_value());
 	CHECK_FALSE((*tagged)->description.has_value());
+	m.check_server();
+}
+
+TEST_CASE("store: a read accepts a member mapped with options, answered in any case", "[net][store]")
+{
+	const auto card = [](std::int32_t id, std::string_view cn, std::string_view english, std::string_view certificate) {
+		return ldap::message{ id,
+			ldap::search_result_entry{ "cn=X,ou=people,dc=example,dc=org",
+			  { { cn, { "X" } }, { english, { "Ecks" } }, { certificate, { "der" } } } } };
+	};
+	mock_ldap m;
+	m.serve({ answer({ card(1, "cn", "cn;lang-en", "userCertificate;binary"), done_msg(1) }),
+	  answer({ card(2, "CN", "CN;LANG-EN", "USERCERTIFICATE;BINARY"), done_msg(2) }),
+	  answer({ ldap::message{ 3,
+				 ldap::search_result_entry{ "cn=X,ou=people,dc=example,dc=org",
+				   { { "cn", { "X" } }, { "cn;lang-en", { "Ecks" } }, { "sn", { "Y" } } } } },
+		done_msg(3) }),
+	  answer({ card(4, "cn", "cn;lang-en", "userCertificate"), done_msg(4) }) });
+	ldap::store s(m.conn, people_base, ldap::named_by<&certified_card::cn>);
+	const ldap::binary der{ std::byte{ 'd' }, std::byte{ 'e' }, std::byte{ 'r' } };
+	for (int i = 0; i < 2; ++i) {
+		auto got = m.run(s.get("X"));
+		REQUIRE(got.has_value());
+		REQUIRE(got->has_value());
+		CHECK((*got)->english_cn == "Ecks");
+		CHECK((*got)->certificates == std::vector<ldap::binary>{ der });
+	}
+	auto refused = m.run(s.get("X"));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::client_errc::schema_mismatch);
+	CHECK_THAT(std::string(refused.error().context), Catch::Matchers::EndsWith("attribute sn returned for no member"));
+	auto plain = m.run(s.get("X"));
+	REQUIRE_FALSE(plain.has_value());
+	CHECK(plain.error().code == ldap::client_errc::schema_mismatch);
+	CHECK_THAT(std::string(plain.error().context),
+	  Catch::Matchers::EndsWith("attribute userCertificate returned for no member"));
 	m.check_server();
 }
 

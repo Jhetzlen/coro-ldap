@@ -58,12 +58,56 @@ namespace detail {
 		return std::nullopt;
 	}
 
+	namespace {
+
+		// Whether `option` is one of the ';'-separated `options`, case-insensitively.
+		auto has_option(std::string_view options, std::string_view option) -> bool
+		{
+			while (!options.empty()) {
+				const std::size_t semi = options.find(';');
+				if (iequals(options.substr(0, semi), option)) {
+					return true;
+				}
+				options = semi == std::string_view::npos ? std::string_view{} : options.substr(semi + 1);
+			}
+			return false;
+		}
+
+		// Whether `description` is `requested` or one of its subtypes (RFC 4512
+		// 2.5): the same type, case-insensitively, with at least its options,
+		// in any order. A range option (MS-ADTS 3.1.1.3.1.3.3) is one more option.
+		auto answers(std::string_view description, std::string_view requested) -> bool
+		{
+			const std::size_t semi = description.find(';');
+			const std::size_t requested_semi = requested.find(';');
+			if (!iequals(description.substr(0, semi), requested.substr(0, requested_semi))) {
+				return false;
+			}
+			if (requested_semi == std::string_view::npos) {
+				return true;
+			}
+			if (semi == std::string_view::npos) {
+				return false;
+			}
+			const std::string_view options = description.substr(semi + 1);
+			std::string_view wanted = requested.substr(requested_semi + 1);
+			while (!wanted.empty()) {
+				const std::size_t next = wanted.find(';');
+				if (!has_option(options, wanted.substr(0, next))) {
+					return false;
+				}
+				wanted = next == std::string_view::npos ? std::string_view{} : wanted.substr(next + 1);
+			}
+			return true;
+		}
+
+	}// namespace
+
 	auto unrequested_attribute_error(const entry &e, std::span<const std::string_view> names) -> std::optional<error>
 	{
 		for (const auto &a : e.attributes) {
 			const std::string_view description = a.type.name();
-			const std::string_view type = description.substr(0, description.find(';'));
-			if (std::ranges::none_of(names, [&](std::string_view n) { return iequals(n, type); })) {
+			if (std::ranges::none_of(names, [&](std::string_view n) { return answers(description, n); })) {
 				std::string text = "attribute ";
 				detail::append_sanitized(text, description, 128);
 				text += " returned for no member";

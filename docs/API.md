@@ -951,7 +951,8 @@ itself needs only ICU.
   classes; noSuchObject or no entry of T's classes is nullopt, a limit
   code with no entry is an error; a read, `get` or `search`, fails with
   `client_errc::schema_mismatch` when the answer holds an attribute whose
-  description without options is none of the names T maps, an alias, OID
+  description is none of the names T maps nor a subtype of one (RFC 4512
+  2.5: the same type with at least the name's options), an alias, OID
   or supertype mapping answered under another name, RFC 4511 4.5.2: map
   members by the name the server returns);
   `add(T)`, `modify(key, changes)` / `modify_at(dn, changes)`,
