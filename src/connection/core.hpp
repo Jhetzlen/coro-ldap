@@ -108,7 +108,10 @@ namespace detail {
 		// writer or held by a bind: a failure closing the connection then
 		// fails the operation with client_errc::not_sent instead.
 		bool sent = false;
-		std::optional<error> failure{};// connection failure (without op context)
+		// Why the request failed without a response to queue: the connection
+		// failed, or a failed ExtendedResponse without a responseName
+		// answered it (without op context).
+		std::optional<error> failure{};
 		boost::capy::async_event ready{};// set while queue is non-empty or finished
 	};
 
