@@ -163,21 +163,12 @@ namespace detail {
 		// case-insensitively.
 		auto options_within(std::string_view options, std::string_view among) noexcept -> bool
 		{
-			for (const auto option : std::views::split(options, ';')) {
+			return std::ranges::all_of(std::views::split(options, ';'), [&](const auto option) {
 				const std::string_view o(option.begin(), option.end());
-				const auto in_among = [&] {
-					for (const auto candidate : std::views::split(among, ';')) {
-						if (iequals(std::string_view(candidate.begin(), candidate.end()), o)) {
-							return true;
-						}
-					}
-					return false;
-				};
-				if (!in_among()) {
-					return false;
-				}
-			}
-			return true;
+				return std::ranges::any_of(std::views::split(among, ';'), [&](const auto candidate) {
+					return iequals(std::string_view(candidate.begin(), candidate.end()), o);
+				});
+			});
 		}
 
 	}// namespace
