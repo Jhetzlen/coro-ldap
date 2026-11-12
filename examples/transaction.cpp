@@ -37,7 +37,6 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 	});
 	if (!added || !modified) {
 		std::cerr << (added ? modified.error() : added.error()).message() << '\n';
-		co_await t->abort();
 		co_return 1;
 	}
 	auto committed = co_await t->commit();
