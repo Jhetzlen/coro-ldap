@@ -339,6 +339,15 @@ namespace detail {
 	// iequals, 8 bytes at a time (not constexpr).
 	auto iequals_fast(std::string_view a, std::string_view b) noexcept -> bool;
 
+	// Whether the attribute descriptions `a` and `b` are the same (RFC 4512
+	// 2.5): the same type and the same set of options, both compared
+	// case-insensitively, the options in any order.
+	auto same_description(std::string_view a, std::string_view b) noexcept -> bool;
+
+	// Whether the attribute description `description` holds `base`'s type and
+	// at least its options (RFC 4512 2.5), compared as same_description does.
+	auto has_description_options(std::string_view description, std::string_view base) noexcept -> bool;
+
 	// Hash and equality for unordered containers keyed by names that compare
 	// case-insensitively (A-Z only, as iequals and hash_value: other bytes as
 	// they are). Transparent, so a std::string-keyed container is searched

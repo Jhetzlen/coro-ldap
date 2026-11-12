@@ -70,6 +70,12 @@ struct certified_card
 	std::vector<ldap::binary> certificates;
 };
 
+struct english_certified
+{
+	std::string cn;
+	std::vector<ldap::binary> certificates;
+};
+
 struct photo_card
 {
 	std::string cn;
@@ -126,6 +132,10 @@ template<>
 constexpr auto ldap::schema<certified_card> = ldap::describe(ldap::field<&certified_card::cn>("cn"),
   ldap::field<&certified_card::english_cn>("cn;lang-en"),
   ldap::field<&certified_card::certificates>("userCertificate;binary"));
+
+template<>
+constexpr auto ldap::schema<english_certified> = ldap::describe(ldap::field<&english_certified::cn>("cn"),
+  ldap::field<&english_certified::certificates>("userCertificate;lang-en;binary"));
 
 template<>
 constexpr auto ldap::schema<photo_card> = ldap::describe(ldap::field<&photo_card::cn>("cn"),
@@ -351,6 +361,64 @@ TEST_CASE("store: a read accepts a member mapped with options, answered in any c
 	CHECK(plain.error().code == ldap::client_errc::schema_mismatch);
 	CHECK_THAT(std::string(plain.error().context),
 	  Catch::Matchers::EndsWith("attribute userCertificate returned for no member"));
+	m.check_server();
+}
+
+TEST_CASE("store: a read compares option sets, and refuses an option superset", "[net][store]")
+{
+	const auto entry = [](std::int32_t id, std::string_view english, std::string_view certificate) {
+		return ldap::message{ id,
+			ldap::search_result_entry{ "cn=X,ou=people,dc=example,dc=org",
+			  { { "cn", { "X" } }, { english, { "Ecks" } }, { certificate, { "der" } } } } };
+	};
+	mock_ldap m;
+	m.serve({ answer({ entry(1, "cn;LANG-EN", "userCertificate;binary"), done_msg(1) }),
+	  answer({ entry(2, "cn;lang-en", "userCertificate;binary;lang-en"), done_msg(2) }),
+	  answer({ entry(3, "cn;lang-en;x-foo", "userCertificate;binary"), done_msg(3) }),
+	  answer({ entry(4, "cn;lang-fr", "userCertificate;binary;range=0-*"), done_msg(4) }) });
+	ldap::store s(m.conn, people_base, ldap::named_by<&certified_card::cn>);
+	auto plain = m.run(s.get("X"));
+	REQUIRE(plain.has_value());
+	REQUIRE(plain->has_value());
+	CHECK((*plain)->english_cn == "Ecks");
+	auto superset_certificate = m.run(s.get("X"));
+	REQUIRE_FALSE(superset_certificate.has_value());
+	CHECK(superset_certificate.error().code == ldap::client_errc::schema_mismatch);
+	CHECK_THAT(std::string(superset_certificate.error().context),
+	  Catch::Matchers::EndsWith("attribute userCertificate;binary;lang-en returned for no member"));
+	auto superset_cn = m.run(s.get("X"));
+	REQUIRE_FALSE(superset_cn.has_value());
+	CHECK(superset_cn.error().code == ldap::client_errc::schema_mismatch);
+	CHECK_THAT(std::string(superset_cn.error().context),
+	  Catch::Matchers::EndsWith("attribute cn;lang-en;x-foo returned for no member"));
+	auto ranged = m.run(s.get("X"));
+	REQUIRE_FALSE(ranged.has_value());
+	CHECK(ranged.error().code == ldap::client_errc::incomplete_values);
+	m.check_server();
+}
+
+TEST_CASE("store: a read decodes a member mapped with options answered in another order", "[net][store]")
+{
+	mock_ldap m;
+	m.serve({ answer({ ldap::message{ 1,
+						 ldap::search_result_entry{ "cn=X,ou=people,dc=example,dc=org",
+						   { { "cn", { "X" } }, { "userCertificate;binary;lang-en", { "der" } } } } },
+				done_msg(1) }),
+	  answer({ ldap::message{ 2,
+				 ldap::search_result_entry{ "cn=X,ou=people,dc=example,dc=org",
+				   { { "cn", { "X" } }, { "userCertificate;lang-en;binary;x-foo", { "der" } } } } },
+		done_msg(2) }) });
+	ldap::store s(m.conn, people_base, ldap::named_by<&english_certified::cn>);
+	auto got = m.run(s.get("X"));
+	REQUIRE(got.has_value());
+	REQUIRE(got->has_value());
+	const ldap::binary der{ std::byte{ 'd' }, std::byte{ 'e' }, std::byte{ 'r' } };
+	CHECK((*got)->certificates == std::vector<ldap::binary>{ der });
+	auto superset = m.run(s.get("X"));
+	REQUIRE_FALSE(superset.has_value());
+	CHECK(superset.error().code == ldap::client_errc::schema_mismatch);
+	CHECK_THAT(std::string(superset.error().context),
+	  Catch::Matchers::EndsWith("attribute userCertificate;lang-en;binary;x-foo returned for no member"));
 	m.check_server();
 }
 

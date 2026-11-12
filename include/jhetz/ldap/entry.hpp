@@ -69,7 +69,8 @@ struct entry
 	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return dn.get_allocator(); }
 
 	// Values of `type` (case-insensitive, options included: `cn;lang-en` is
-	// not `cn`), or nullptr if the entry has no such attribute. An attribute
+	// not `cn`, and options compare as a set, RFC 4512 2.5: `a;x;y` is
+	// `a;y;x`), or nullptr if the entry has no such attribute. An attribute
 	// present without values (typesOnly searches) gives an empty vector.
 	[[nodiscard]] auto find(std::string_view type) const noexcept -> const std::pmr::vector<std::pmr::string> *;
 	[[nodiscard]] auto find(const attribute &type) const noexcept -> const std::pmr::vector<std::pmr::string> *

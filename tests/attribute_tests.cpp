@@ -432,3 +432,31 @@ TEST_CASE("entry from a search result entry", "[entry]")
 	CHECK(x.find("novalues")->empty());
 	CHECK(ldap::entry::from(e) == x);
 }
+
+TEST_CASE("entry::find compares options as a set", "[entry]")
+{
+	const auto x = ldap::entry::from(ldap::search_result_entry{ "cn=X,dc=example,dc=org",
+	  { { "userCertificate;binary;lang-en", { "der" } }, { "cn;lang-en;x-foo", { "Ecks" } }, { "sn", { "Y" } } } });
+	CHECK(x.find("userCertificate;lang-en;binary") == &x.attributes[0].values);
+	CHECK(x.find("USERCERTIFICATE;LANG-EN;BINARY") == &x.attributes[0].values);
+	CHECK(x.find("userCertificate;binary") == nullptr);
+	CHECK(x.find("userCertificate;binary;lang-en;lang-fr") == nullptr);
+	CHECK(x.find("userCertificate") == nullptr);
+	CHECK(x.find("cn;x-foo;lang-en") == &x.attributes[1].values);
+	CHECK(x.find("cn;lang-en") == nullptr);
+	CHECK(x.find("sn;lang-en") == nullptr);
+	CHECK(x.find("sn") == &x.attributes[2].values);
+}
+
+TEST_CASE("same_description", "[entry]")
+{
+	using ldap::detail::same_description;
+	CHECK(same_description("cn", "CN"));
+	CHECK(same_description("cn;lang-en;binary", "CN;Binary;LANG-EN"));
+	CHECK(same_description("cn;lang-en;lang-en", "cn;lang-en"));
+	CHECK_FALSE(same_description("cn", "cn;lang-en"));
+	CHECK_FALSE(same_description("cn;lang-en", "cn"));
+	CHECK_FALSE(same_description("cn;lang-en", "sn;lang-en"));
+	CHECK_FALSE(same_description("cn;lang-en", "cn;lang-en;x-foo"));
+	CHECK_FALSE(same_description("cn;lang-en;x-foo", "cn;lang-en"));
+}

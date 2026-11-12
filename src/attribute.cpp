@@ -9,6 +9,7 @@
 #include <cstring>
 #include <exception>
 #include <random>
+#include <ranges>
 
 namespace jhetz::ldap {
 
@@ -154,6 +155,61 @@ namespace detail {
 			}
 		}
 		return i == n || same(tail8(a), tail8(b));
+	}
+
+	namespace {
+
+		// Whether every ';'-separated option of `options` is one of `among`,
+		// case-insensitively.
+		auto options_within(std::string_view options, std::string_view among) noexcept -> bool
+		{
+			for (const auto option : std::views::split(options, ';')) {
+				const std::string_view o(option.begin(), option.end());
+				const auto in_among = [&] {
+					for (const auto candidate : std::views::split(among, ';')) {
+						if (iequals(std::string_view(candidate.begin(), candidate.end()), o)) {
+							return true;
+						}
+					}
+					return false;
+				};
+				if (!in_among()) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+	}// namespace
+
+	auto same_description(std::string_view a, std::string_view b) noexcept -> bool
+	{
+		if (iequals_fast(a, b)) {
+			return true;
+		}
+		const std::size_t a_semi = a.find(';');
+		const std::size_t b_semi = b.find(';');
+		if (a_semi == std::string_view::npos || b_semi == std::string_view::npos
+			|| !iequals(a.substr(0, a_semi), b.substr(0, b_semi))) {
+			return false;
+		}
+		const std::string_view a_options = a.substr(a_semi + 1);
+		const std::string_view b_options = b.substr(b_semi + 1);
+		return options_within(a_options, b_options) && options_within(b_options, a_options);
+	}
+
+	auto has_description_options(std::string_view description, std::string_view base) noexcept -> bool
+	{
+		const std::size_t semi = description.find(';');
+		const std::size_t base_semi = base.find(';');
+		if (!iequals(description.substr(0, semi), base.substr(0, base_semi))) {
+			return false;
+		}
+		if (base_semi == std::string_view::npos) {
+			return true;
+		}
+		return semi != std::string_view::npos
+			   && options_within(base.substr(base_semi + 1), description.substr(semi + 1));
 	}
 
 	auto icu_utf8_sequence_length(std::string_view s, std::size_t i) noexcept -> std::size_t

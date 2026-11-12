@@ -592,16 +592,19 @@ namespace detail {
 	// (MS-ADTS 3.1.1.3.1.3.3), or nullopt when there is none.
 	auto ranged_values_error(const entry &e, std::string_view name) -> std::optional<error>;
 
-	// client_errc::schema_mismatch for the first attribute of `e` whose
-	// description is none of `names` nor a subtype of one (RFC 4512 2.5: the
-	// same type, case-insensitively, with at least its options, in any order),
-	// or nullopt when there is none.
+	// client_errc::schema_mismatch for the first attribute of `e` that decode
+	// does not read as one of `names` (the same description, RFC 4512 2.5:
+	// type and option set compared case-insensitively, options in any order)
+	// and that is no subtype of a name without options (`cn;lang-en` for
+	// `cn`), or is a subtype of a name with options (`cn;lang-en;x-foo` for
+	// `cn;lang-en`); nullopt when there is none. A range option (MS-ADTS
+	// 3.1.1.3.1.3.3) is left out of the comparison.
 	auto unrequested_attribute_error(const entry &e, std::span<const std::string_view> names) -> std::optional<error>;
 }// namespace detail
 
 // Converts an entry to T (default-constructed, then every described member
 // assigned). Attribute names match case-insensitively, options included
-// (see entry::find). Fails with client_errc::incomplete_values when the
+// and compared as a set (see entry::find). Fails with client_errc::incomplete_values when the
 // entry holds a mapped attribute with a range option (Active Directory's
 // member;range=0-1499, MS-ADTS 3.1.1.3.1.3.3): read such a member with
 // ldap::ad::read_all_values.

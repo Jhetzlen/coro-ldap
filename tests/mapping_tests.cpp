@@ -57,6 +57,12 @@ struct album
 	std::vector<ldap::binary> photos;
 };
 
+struct certified
+{
+	std::string cn;
+	std::vector<std::string> certificates;
+};
+
 }// namespace
 
 template<>
@@ -87,6 +93,10 @@ constexpr auto ldap::schema<device> =
   ldap::describe(ldap::field<&device::object_class>("objectClass"), ldap::field<&device::cn>("cn"));
 
 template<> constexpr auto ldap::schema<album> = ldap::describe(ldap::field<&album::photos>("jpegPhoto"));
+
+template<>
+constexpr auto ldap::schema<certified> = ldap::describe(ldap::field<&certified::cn>("cn"),
+  ldap::field<&certified::certificates>("userCertificate;lang-en;binary"));
 
 namespace {
 
@@ -480,6 +490,18 @@ TEST_CASE("decode: a range option on another attribute, or another option, is ig
 	auto p = ldap::decode<person>(e);
 	REQUIRE(p.has_value());
 	CHECK(p->member_of.size() == 2);
+}
+
+TEST_CASE("decode: a member mapped with options reads them in any order", "[mapping][decode]")
+{
+	auto p = ldap::decode<certified>(ldap::entry::from(ldap::search_result_entry{
+	  "cn=X,dc=example,dc=org", { { "cn", { "X" } }, { "USERCERTIFICATE;BINARY;LANG-EN", { "der" } } } }));
+	REQUIRE(p.has_value());
+	CHECK(p->certificates == std::vector<std::string>{ "der" });
+	auto ranged = ldap::decode<certified>(ldap::entry::from(ldap::search_result_entry{
+	  "cn=X,dc=example,dc=org", { { "cn", { "X" } }, { "userCertificate;binary;range=0-1;lang-en", { "der" } } } }));
+	REQUIRE_FALSE(ranged.has_value());
+	CHECK(ranged.error().code == ldap::client_errc::incomplete_values);
 }
 
 TEST_CASE("a mapping error message names the code once", "[mapping][decode]")

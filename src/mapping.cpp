@@ -48,7 +48,7 @@ namespace detail {
 				continue;
 			}
 			auto ranged = ad::parse_range(description);
-			if (ranged && *ranged && iequals((*ranged)->type, name)) {
+			if (ranged && *ranged && same_description((*ranged)->type, name)) {
 				std::string text;
 				detail::append_sanitized(text, description, 128);
 				text += ": values under a range option; read them with ldap::ad::read_all_values";
@@ -60,45 +60,24 @@ namespace detail {
 
 	namespace {
 
-		// Whether `option` is one of the ';'-separated `options`, case-insensitively.
-		auto has_option(std::string_view options, std::string_view option) -> bool
+		// Whether decode reads `description` as one of `names` (the same
+		// description), or ignores it as a subtype of a name without options
+		// (`cn;lang-en` for `cn`) that holds no name with options.
+		auto read_or_ignored(std::string_view description, std::span<const std::string_view> names) -> bool
 		{
-			while (!options.empty()) {
-				const std::size_t semi = options.find(';');
-				if (iequals(options.substr(0, semi), option)) {
-					return true;
-				}
-				options = semi == std::string_view::npos ? std::string_view{} : options.substr(semi + 1);
-			}
-			return false;
-		}
-
-		// Whether `description` is `requested` or one of its subtypes (RFC 4512
-		// 2.5): the same type, case-insensitively, with at least its options,
-		// in any order. A range option (MS-ADTS 3.1.1.3.1.3.3) is one more option.
-		auto answers(std::string_view description, std::string_view requested) -> bool
-		{
-			const std::size_t semi = description.find(';');
-			const std::size_t requested_semi = requested.find(';');
-			if (!iequals(description.substr(0, semi), requested.substr(0, requested_semi))) {
-				return false;
-			}
-			if (requested_semi == std::string_view::npos) {
+			if (std::ranges::any_of(names, [&](std::string_view n) { return same_description(description, n); })) {
 				return true;
 			}
-			if (semi == std::string_view::npos) {
-				return false;
-			}
-			const std::string_view options = description.substr(semi + 1);
-			std::string_view wanted = requested.substr(requested_semi + 1);
-			while (!wanted.empty()) {
-				const std::size_t next = wanted.find(';');
-				if (!has_option(options, wanted.substr(0, next))) {
-					return false;
+			bool subtype_of_plain = false;
+			for (const std::string_view n : names) {
+				if (has_description_options(description, n)) {
+					if (n.contains(';')) {
+						return false;
+					}
+					subtype_of_plain = true;
 				}
-				wanted = next == std::string_view::npos ? std::string_view{} : wanted.substr(next + 1);
 			}
-			return true;
+			return subtype_of_plain;
 		}
 
 	}// namespace
@@ -107,7 +86,12 @@ namespace detail {
 	{
 		for (const auto &a : e.attributes) {
 			const std::string_view description = a.type.name();
-			if (std::ranges::none_of(names, [&](std::string_view n) { return answers(description, n); })) {
+			// A range option (MS-ADTS 3.1.1.3.1.3.3) is left out: decode then
+			// reports the member's values as incomplete.
+			const auto ranged = description.contains(';') ? ad::parse_range(description)
+														  : result<std::optional<ad::ranged_description>>{};
+			const std::string_view compared = ranged && *ranged ? std::string_view((*ranged)->type) : description;
+			if (!read_or_ignored(compared, names)) {
 				std::string text = "attribute ";
 				detail::append_sanitized(text, description, 128);
 				text += " returned for no member";

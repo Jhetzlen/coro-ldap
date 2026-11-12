@@ -15,8 +15,10 @@ attribute_values::attribute_values(const attribute &type_,
 
 auto entry::find(std::string_view type) const noexcept -> const std::pmr::vector<std::pmr::string> *
 {
-	const auto it =
-	  std::ranges::find_if(attributes, [&](const attribute_values &a) { return detail::iequals(a.type.name(), type); });
+	const bool has_options = type.contains(';');
+	const auto it = std::ranges::find_if(attributes, [&](const attribute_values &a) {
+		return has_options ? detail::same_description(a.type.name(), type) : detail::iequals(a.type.name(), type);
+	});
 	return it == attributes.end() ? nullptr : &it->values;
 }
 
