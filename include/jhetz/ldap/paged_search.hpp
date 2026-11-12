@@ -89,12 +89,22 @@ class paged_search
 	state *state_ = nullptr;
 };
 
+// The default bound on the pages of one paged search.
+inline constexpr std::size_t search_paged_default_max_pages = 10000;
+
 // A search of `c` in pages of `page_size` entries: each page is requested
-// with the previous page's cookie until the cookie is empty. A paged control
-// already in `request.controls` is replaced. A server ignoring the control
-// returns everything as one page. Each page has its own message id and
-// `request.timeout`. A page size that is not positive fails with
-// encode_error before anything is sent. OpenLDAP allows one paged search per
+// with the previous page's cookie until the cookie is empty, at most
+// `max_pages` pages (the default is about a million entries at a page size
+// of 100). A paged control already in `request.controls` is replaced. A
+// server ignoring the control returns everything as one page. Each page has
+// its own message id and `request.timeout`; `request.timeout` bounds each
+// page, not the search. A page size that is not positive fails with
+// encode_error, and a max_pages of 0 with std::errc::invalid_argument,
+// before anything is sent. When page `max_pages` ends with a cookie,
+// next() fails with std::errc::value_too_large (the paging state is
+// released on destruction): the cookie is the server's opaque state (RFC
+// 2696 section 3) and a server may return the same one for every page, so
+// the bound, not a repeated cookie, ends a search that does not. OpenLDAP allows one paged search per
 // connection (it refuses another's next page with unwilling_to_perform or
 // protocol_error) and, with server_side_sort (sssvlv), silently answers with
 // the latest sorted paged search's entries: give each concurrent paged
@@ -104,11 +114,12 @@ class paged_search
 auto search_paged(connection &c,
   search_params request,
   std::int32_t page_size,
+  std::size_t max_pages = search_paged_default_max_pages,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<paged_search>>;
 
 // As above, on one shared lease of `c`'s pool, held by the paged_search
 // until destroyed (the cookies are bound to that connection). A page size
-// that is not positive fails with encode_error before any acquire. Returns
+// that is not positive, or a max_pages of 0, fails before any acquire. Returns
 // once the first page has a first message or has ended; a failure before
 // that is retried once as client::search_stream() retries. Other errors (an
 // acquire() failure included) are returned as is, a page's non-success
@@ -119,6 +130,7 @@ auto search_paged(connection &c,
 auto search_paged(client &c,
   search_params request,
   std::int32_t page_size,
+  std::size_t max_pages = search_paged_default_max_pages,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<paged_search>>;
 
 }// namespace jhetz::ldap

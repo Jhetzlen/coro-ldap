@@ -87,10 +87,13 @@ namespace detail {
 		}
 
 		template<class D>
-		auto collect(D &d, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-		  -> capy::task<result<search_result>>
+		auto collect(D &d,
+		  search_params request,
+		  std::int32_t page_size,
+		  std::size_t max_pages,
+		  std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
 		{
-			auto s = co_await ldap::search_paged(d, std::move(request), page_size, mr);
+			auto s = co_await ldap::search_paged(d, std::move(request), page_size, max_pages, mr);
 			if (!s) {
 				co_return std::unexpected(std::move(s.error()));
 			}
@@ -103,17 +106,22 @@ namespace detail {
 
 	}// namespace
 
-	auto
-	  collect_paged(ldap::connection &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-		-> capy::task<result<search_result>>
+	auto collect_paged(ldap::connection &c,
+	  search_params request,
+	  std::int32_t page_size,
+	  std::size_t max_pages,
+	  std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
 	{
-		return collect(c, std::move(request), page_size, mr);
+		return collect(c, std::move(request), page_size, max_pages, mr);
 	}
 
-	auto collect_paged(ldap::client &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-	  -> capy::task<result<search_result>>
+	auto collect_paged(ldap::client &c,
+	  search_params request,
+	  std::int32_t page_size,
+	  std::size_t max_pages,
+	  std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
 	{
-		return collect(c, std::move(request), page_size, mr);
+		return collect(c, std::move(request), page_size, max_pages, mr);
 	}
 
 	// The ldap::transaction is made, and later destroyed, on the I/O thread.

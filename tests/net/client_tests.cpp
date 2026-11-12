@@ -3693,6 +3693,19 @@ TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
 		CHECK(s.accepted() == 0);
 		CHECK(f.pool->connections() == 0);
 	}
+	SECTION("a max_pages of 0: nothing is opened")
+	{
+		pool_fixture f;
+		auto &s = f.server({ two_pages_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup() });
+		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1, 0));
+		REQUIRE_FALSE(pages.has_value());
+		CHECK(pages.error().code == std::errc::invalid_argument);
+		CHECK(pages.error().context == "search ou=people,dc=example,dc=org: max_pages is 0");
+		drive(f.ioc);
+		CHECK(s.accepted() == 0);
+		CHECK(f.pool->connections() == 0);
+	}
 	SECTION("an acquire() failure")
 	{
 		pool_fixture f;

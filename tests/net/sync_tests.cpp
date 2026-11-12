@@ -218,8 +218,11 @@ TEST_CASE("sync: search_paged leaves nothing on the caller's resource once it re
 	auto &c = *opened;
 	auto arena = std::make_unique<counting_resource>();
 	{
-		auto paged =
-		  ldap::sync::search_paged(c, { .base = ldap::dn{ "ou=people,dc=example,dc=org" } }, 10, arena.get());
+		auto paged = ldap::sync::search_paged(c,
+		  { .base = ldap::dn{ "ou=people,dc=example,dc=org" } },
+		  10,
+		  ldap::search_paged_default_max_pages,
+		  arena.get());
 		REQUIRE(paged.has_value());
 		CHECK(paged->entries.size() == 2);
 	}

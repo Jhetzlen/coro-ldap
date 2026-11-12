@@ -191,8 +191,8 @@ template<auto Naming, directory D> class store
 		if (!request) {
 			co_return std::unexpected(std::move(request.error()));
 		}
-		auto found =
-		  co_await detail::collect_paged(a, std::move(*request), page_size, std::pmr::get_default_resource());
+		auto found = co_await detail::collect_paged(
+		  a, std::move(*request), page_size, search_paged_default_max_pages, std::pmr::get_default_resource());
 		co_return codec::search_result_of(std::move(found), c.base());
 	}
 

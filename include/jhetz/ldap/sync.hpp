@@ -185,12 +185,16 @@ namespace detail {
 
 	// The tasks behind sync::connection_api's non-inline operations
 	// (sync.cpp).
-	[[nodiscard]] auto
-	  collect_paged(ldap::connection &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-		-> boost::capy::task<result<search_result>>;
-	[[nodiscard]] auto
-	  collect_paged(ldap::client &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-		-> boost::capy::task<result<search_result>>;
+	[[nodiscard]] auto collect_paged(ldap::connection &c,
+	  search_params request,
+	  std::int32_t page_size,
+	  std::size_t max_pages,
+	  std::pmr::memory_resource *mr) -> boost::capy::task<result<search_result>>;
+	[[nodiscard]] auto collect_paged(ldap::client &c,
+	  search_params request,
+	  std::int32_t page_size,
+	  std::size_t max_pages,
+	  std::pmr::memory_resource *mr) -> boost::capy::task<result<search_result>>;
 	[[nodiscard]] auto make_transaction(ldap::connection &c, extended_controls controls)
 	  -> boost::capy::task<result<std::unique_ptr<ldap::transaction>>>;
 	[[nodiscard]] auto is_open_of(const ldap::connection &c) -> boost::capy::task<result<bool>>;
@@ -693,16 +697,20 @@ template<directory D, class F, class... Args> [[nodiscard]] auto run(D &d, F &&m
 // ldap::search_paged (paged_search.hpp), blocking: every page collected as
 // one search_result, with the entries and references of every page and the
 // last page's SearchResultDone and controls; a page ending with a limit
-// code ends it with the entries received, as search() does. On a
-// sync::client, one shared lease for every page (ldap::search_paged(client
-// &)).
+// code ends it with the entries received, as search() does. At most
+// `max_pages` pages: past them it fails with std::errc::value_too_large,
+// and a max_pages of 0 fails with std::errc::invalid_argument before
+// anything is sent. On a sync::client, one shared lease for every page
+// (ldap::search_paged(client &)).
 template<directory D>
 [[nodiscard]] auto search_paged(D &d,
   search_params request,
   std::int32_t page_size,
+  std::size_t max_pages = search_paged_default_max_pages,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<search_result>
 {
-	return sync::run(d, [&](auto &a) { return detail::collect_paged(a, std::move(request), page_size, mr); });
+	return sync::run(
+	  d, [&](auto &a) { return detail::collect_paged(a, std::move(request), page_size, max_pages, mr); });
 }
 
 }// namespace jhetz::ldap::sync

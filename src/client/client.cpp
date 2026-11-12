@@ -1532,16 +1532,19 @@ auto client::search_stream(search_params request, std::pmr::memory_resource *mr)
 
 namespace detail {
 
-	auto search_paged_of(const client &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-	  -> capy::task<result<ldap::paged_search>>
+	auto search_paged_of(const client &c,
+	  search_params request,
+	  std::int32_t page_size,
+	  std::size_t max_pages,
+	  std::pmr::memory_resource *mr) -> capy::task<result<ldap::paged_search>>
 	{
 		if (c.state_ == nullptr) {
 			return read_refused<ldap::paged_search>(op_context("search", request.base));
 		}
 		return on_strand(c.state_->strand,
 		  client_state::read_stream<ldap::paged_search>(
-			c.state_, [request = std::move(request), page_size, mr](connection &conn) {
-				return ldap::search_paged(conn, request, page_size, mr);
+			c.state_, [request = std::move(request), page_size, max_pages, mr](connection &conn) {
+				return ldap::search_paged(conn, request, page_size, max_pages, mr);
 			}));
 	}
 

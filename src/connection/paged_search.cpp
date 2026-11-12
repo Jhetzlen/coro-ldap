@@ -15,6 +15,7 @@
 #include <memory_resource>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -37,6 +38,7 @@ struct paged_search::state
 	core_ref conn;
 	search_params params;
 	std::int32_t page_size;
+	std::size_t max_pages;
 	std::pmr::memory_resource *mr;
 	ldap::search_stream current{};
 	std::size_t pages = 0;
@@ -155,18 +157,35 @@ namespace {
 		  detail::format("{}: page size {} is not positive", op_context("search", request.base), page_size));
 	}
 
-	auto search_paged_impl(core_ref self, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-	  -> capy::task<result<ldap::paged_search>>
+	// The error of arguments refused before anything is sent, else nullopt.
+	auto invalid_arguments(const search_params &request, std::int32_t page_size, std::size_t max_pages)
+	  -> std::optional<error>
+	{
+		if (auto bad = invalid_page_size(request, page_size)) {
+			return bad;
+		}
+		if (max_pages == 0) {
+			return make_error(std::make_error_code(std::errc::invalid_argument),
+			  op_context("search", request.base) + ": max_pages is 0");
+		}
+		return std::nullopt;
+	}
+
+	auto search_paged_impl(core_ref self,
+	  search_params request,
+	  std::int32_t page_size,
+	  std::size_t max_pages,
+	  std::pmr::memory_resource *mr) -> capy::task<result<ldap::paged_search>>
 	{
 		if (!self) {
 			co_return std::unexpected(no_connection(op_context("search", request.base)));
 		}
-		if (auto bad = invalid_page_size(request, page_size)) {
+		if (auto bad = invalid_arguments(request, page_size, max_pages)) {
 			co_return std::unexpected(std::move(*bad));
 		}
 		std::pmr::polymorphic_allocator<> alloc(self->mr());
-		auto *st = alloc.new_object<paged_search::state>(
-		  paged_search::state{ .conn = self, .params = std::move(request), .page_size = page_size, .mr = mr });
+		auto *st = alloc.new_object<paged_search::state>(paged_search::state{
+		  .conn = self, .params = std::move(request), .page_size = page_size, .max_pages = max_pages, .mr = mr });
 		ldap::paged_search out = detail::paged_access::make(st);
 		if (auto r = st->take_page(co_await st->request_page({})); !r) {
 			co_return std::unexpected(std::move(r.error()));
@@ -177,11 +196,14 @@ namespace {
 }// namespace
 
 // NOLINTNEXTLINE(misc-const-correctness): the search runs on `c`
-auto search_paged(connection &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-  -> capy::task<result<ldap::paged_search>>
+auto search_paged(connection &c,
+  search_params request,
+  std::int32_t page_size,
+  std::size_t max_pages,
+  std::pmr::memory_resource *mr) -> capy::task<result<ldap::paged_search>>
 {
 	core_ref self(connection::core::of(c));
-	auto body = search_paged_impl(self, std::move(request), page_size, mr);
+	auto body = search_paged_impl(self, std::move(request), page_size, max_pages, mr);
 	return detail::on_strand(self, std::move(body));
 }
 
@@ -192,13 +214,16 @@ namespace {
 }// namespace
 
 // NOLINTNEXTLINE(misc-const-correctness): the search runs on `c`'s pool
-auto search_paged(client &c, search_params request, std::int32_t page_size, std::pmr::memory_resource *mr)
-  -> capy::task<result<ldap::paged_search>>
+auto search_paged(client &c,
+  search_params request,
+  std::int32_t page_size,
+  std::size_t max_pages,
+  std::pmr::memory_resource *mr) -> capy::task<result<ldap::paged_search>>
 {
-	if (auto bad = invalid_page_size(request, page_size)) {
+	if (auto bad = invalid_arguments(request, page_size, max_pages)) {
 		return paged_refused(std::move(*bad));
 	}
-	return detail::search_paged_of(c, std::move(request), page_size, mr);
+	return detail::search_paged_of(c, std::move(request), page_size, max_pages, mr);
 }
 
 namespace detail {
@@ -369,6 +394,13 @@ namespace {
 			if (s.cookie.empty()) {
 				s.finished = true;
 				co_return std::optional<entry>{};
+			}
+			if (s.pages == s.max_pages) {
+				co_return finish(
+				  make_error(std::make_error_code(std::errc::value_too_large),
+					detail::format(
+					  "{}: more than max_pages ({}) pages", op_context("search", s.params.base), s.max_pages)),
+				  false);
 			}
 			if (auto r = s.take_page(co_await s.request_page(s.cookie)); !r) {
 				co_return finish(std::move(r.error()), false);

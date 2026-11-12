@@ -858,7 +858,8 @@ TEST_CASE("operations: collected pages end with a limit code as search() does", 
 					ref_msg(1, { "ldap://other.example.org/ou=people,dc=example,dc=org" }),
 					paged_done(1, "next") }),
 		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), done_msg(2, 4, "", "size limit") }) });
-		auto r = m.run(ldap::sync::detail::collect_paged(m.conn, people_search(), 1, std::pmr::get_default_resource()));
+		auto r = m.run(ldap::sync::detail::collect_paged(
+		  m.conn, people_search(), 1, ldap::search_paged_default_max_pages, std::pmr::get_default_resource()));
 		REQUIRE(r.has_value());
 		CHECK(r->result_code == 4);
 		CHECK(r->diagnostic_message == "size limit");
@@ -874,7 +875,8 @@ TEST_CASE("operations: collected pages end with a limit code as search() does", 
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "next") }),
 		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), done_msg(2, code, "", "limit") }),
 		  answer({ done_msg(3) }) });
-		auto r = m.run(ldap::sync::detail::collect_paged(m.conn, people_search(), 1, std::pmr::get_default_resource()));
+		auto r = m.run(ldap::sync::detail::collect_paged(
+		  m.conn, people_search(), 1, ldap::search_paged_default_max_pages, std::pmr::get_default_resource()));
 		REQUIRE(r.has_value());
 		CHECK(r->result_code == code);
 		CHECK(r->diagnostic_message == "limit");
@@ -890,7 +892,8 @@ TEST_CASE("operations: collected pages end with a limit code as search() does", 
 	{
 		mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1, 3) }) });
-		auto r = m.run(ldap::sync::detail::collect_paged(m.conn, people_search(), 1, std::pmr::get_default_resource()));
+		auto r = m.run(ldap::sync::detail::collect_paged(
+		  m.conn, people_search(), 1, ldap::search_paged_default_max_pages, std::pmr::get_default_resource()));
 		REQUIRE(r.has_value());
 		CHECK(r->result_code == 3);
 		CHECK(r->entries.size() == 1);
@@ -903,7 +906,8 @@ TEST_CASE("operations: collected pages end with a limit code as search() does", 
 		ldap::message done = done_msg(1);
 		done.controls.emplace_back(ldap::paged_results_oid, false, "garbage");
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done }) });
-		auto r = m.run(ldap::sync::detail::collect_paged(m.conn, people_search(), 1, std::pmr::get_default_resource()));
+		auto r = m.run(ldap::sync::detail::collect_paged(
+		  m.conn, people_search(), 1, ldap::search_paged_default_max_pages, std::pmr::get_default_resource()));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::protocol_error);
 	}
@@ -1009,6 +1013,99 @@ TEST_CASE("operations: a paged search stopped between pages releases the server'
 	CHECK(m.log.received[2].id == 3);
 	check_release(m.log.received[2], m.log.received[0], "page3");
 	CHECK(m.log.received[3] == bind_request_msg(4));
+}
+
+TEST_CASE("operations: a paged search stops after max_pages pages", "[net][operations][paged]")
+{
+	SECTION("a cookie repeated on every page: the bound ends it, then the destructor releases")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "same") }),
+		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), paged_done(2, "same") }),
+		  answer({ entry_msg(3, "uid=c,ou=people,dc=example,dc=org", "C"), paged_done(3, "same") }),
+		  answer({ paged_done(4, "") }),// the release's answer: dropped
+		  answer({ bind_resp(5) }) });
+		{
+			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1, 3));
+			REQUIRE(s.has_value());
+			for (int i = 0; i < 3; ++i) {
+				auto e = m.run(s->next());
+				REQUIRE(e.has_value());
+				REQUIRE(e->has_value());
+			}
+			auto over = m.run(s->next());
+			REQUIRE_FALSE(over.has_value());
+			CHECK(over.error().code == std::errc::value_too_large);
+			CHECK(over.error().context == "search ou=people,dc=example,dc=org: more than max_pages (3) pages");
+			CHECK(s->done());
+			CHECK(s->pages() == 3);
+			auto again = m.run(s->next());
+			REQUIRE_FALSE(again.has_value());
+			CHECK(again.error().code == std::errc::value_too_large);
+			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
+		}
+		CHECK(m.run(bind_admin(m.conn)).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 5);
+		check_release(m.log.received[3], m.log.received[0], "same");
+	}
+	SECTION("the last page within the bound ends the search")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "next") }),
+		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), paged_done(2, "") }) });
+		auto s = m.run(ldap::search_paged(m.conn, people_search(), 1, 2));
+		REQUIRE(s.has_value());
+		auto dns = m.run(drain_paged(*s));
+		REQUIRE(dns.has_value());
+		CHECK(dns->size() == 2);
+		m.check_server();
+	}
+	SECTION("max_pages = 1 against a server without paging")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1) }) });
+		auto s = m.run(ldap::search_paged(m.conn, people_search(), 1, 1));
+		REQUIRE(s.has_value());
+		auto dns = m.run(drain_paged(*s));
+		REQUIRE(dns.has_value());
+		CHECK(dns->size() == 1);
+		m.check_server();
+	}
+	SECTION("a max_pages of 0: nothing is sent")
+	{
+		mock_ldap m;
+		auto s = m.run(ldap::search_paged(m.conn, people_search(), 1, 0));
+		REQUIRE_FALSE(s.has_value());
+		CHECK(s.error().code == std::errc::invalid_argument);
+		CHECK(s.error().context == "search ou=people,dc=example,dc=org: max_pages is 0");
+		CHECK(m.log.received.empty());
+	}
+	SECTION("collected pages: past the bound an error, and the paging state released")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "p2") }),
+		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), paged_done(2, "p3") }),
+		  answer({ paged_done(3, "") }),// the release's answer: dropped
+		  answer({ bind_resp(4) }) });
+		auto r =
+		  m.run(ldap::sync::detail::collect_paged(m.conn, people_search(), 1, 2, std::pmr::get_default_resource()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == std::errc::value_too_large);
+		CHECK(m.run(bind_admin(m.conn)).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 4);
+		check_release(m.log.received[2], m.log.received[0], "p3");
+	}
+	SECTION("collected pages: a max_pages of 0")
+	{
+		mock_ldap m;
+		auto r =
+		  m.run(ldap::sync::detail::collect_paged(m.conn, people_search(), 1, 0, std::pmr::get_default_resource()));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == std::errc::invalid_argument);
+		CHECK(m.log.received.empty());
+	}
 }
 
 TEST_CASE("operations: a paged search stopped mid-page abandons it, then releases", "[net][operations][paged]")

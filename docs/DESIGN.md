@@ -1329,8 +1329,28 @@ fails with `cond::connection_lost` or `cond::busy_or_unavailable` before
 its first message, as `client::search_stream()` does (the same loop in
 client.cpp, through the internal `detail::search_paged_of`): the
 connection it failed on is set aside, and after busy or unavailable the
-retry prefers the other servers. A page size that is not positive fails
-before a lease is acquired. A server that ignores the (non-critical) control returns
+retry prefers the other servers. A page size that is not positive, or a
+`max_pages` of 0, fails before a lease is acquired.
+
+A paged search is bounded by `max_pages` (default
+`search_paged_default_max_pages` = 10000, about a million entries at a
+page size of 100; `sync::search_paged` and the stores' paged searches use
+it too), as `ad::dirsync` is by `max_rounds`: a server that keeps answering
+with a cookie, an empty page or not, would otherwise keep the search, and
+the sync facade's collected result, growing without end. Once page
+`max_pages` ends with a cookie, `next()` fails with
+`std::errc::value_too_large` (context "search <base>: more than max_pages
+(N) pages") and the paged_search keeps the cookie, so its destruction
+releases the server's paging state. An error, not DirSync's success with
+`more_results`: a paged search cannot be resumed by a later call (the
+cookie is bound to the connection and the paged_search). `max_pages == 0`
+fails with `std::errc::invalid_argument` before anything is sent, as
+DirSync's `max_rounds == 0` does. Unlike DirSync there is no repeated-
+cookie check: an RFC 2696 cookie is the server's opaque handle on its
+paging state (section 3), not a resume point, and the RFC does not
+require a new one per page: a server may return the same one for every
+page, so a repeat proves no cycle. The bound alone ends a search that
+does not end. A server that ignores the (non-critical) control returns
 everything as one page, which works the same. Each page is a separate
 search on the wire (its own message id and timeout). Destroying the
 `paged_search` early abandons the current page if it is still running,

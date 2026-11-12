@@ -476,10 +476,18 @@ itself needs only ICU.
   abort. The codecs (`end_transaction_request`, `update_controls`,
   `end_transaction_response`, `encode_` / `decode_end_transaction_request`
   / `_response`, the OIDs) are in `message.hpp`;
-  `ldap::search_paged(conn, params, page_size)` (a free function over
+  `ldap::search_paged(conn, params, page_size, max_pages =
+  ldap::search_paged_default_max_pages, mr)` (a free function over
   `search_stream()`; `ldap::search_paged(client, ...)` runs it on one shared
   lease, the first page retried as `client::search_stream()` is) follows
-  the Simple Paged Results cookie across pages (destroyed early, it
+  the Simple Paged Results cookie across pages, at most `max_pages` pages
+  (default 10000, about a million entries at a page size of 100; a page
+  ending with a cookie after that fails `next()` with
+  `std::errc::value_too_large`, the paging state then released on
+  destruction; 0 fails with `std::errc::invalid_argument` before anything
+  is sent, on a client before any acquire; `request.timeout` bounds each
+  page, not the search; a repeated cookie is not an error, the cookie
+  being the server's opaque state) (destroyed early, it
   abandons the current page and releases the server's paging state with a page size 0
   request, RFC 2696 section 3, unless the search already ended; the
   release's answer is read and dropped, and counted by `outstanding()`
@@ -1050,9 +1058,10 @@ itself needs only ICU.
   has no thread and its operations fail with `not_connected`. Every
   method runs the corresponding connection operation on the I/O thread
   and waits, with the same types;
-  `sync::search_paged(c, params, page_size)` (also on a sync lease and a
-  `sync::client`) collects every page into one `search_result` (the last
-  page's done; a limit code keeps the entries).
+  `sync::search_paged(c, params, page_size, max_pages, mr)` (also on a
+  sync lease and a `sync::client`) collects every page into one
+  `search_result` (the last page's done; a limit code keeps the entries;
+  more than `max_pages` pages fails with `std::errc::value_too_large`).
   `sync::run(d, make_task, args...)` (coro-ldap-aw4.5) runs any async
   free function on a facade: `make_task(a, args...)` is called on the
   I/O thread with the facade's `ldap::connection` (a `sync::connection`'s
