@@ -72,9 +72,19 @@ namespace {
 	// RFC 4511 protocolOp tags of the responses the reader recognizes before
 	// decoding.
 	constexpr ber::tag search_result_done_tag = ber::application(5, true);
+	constexpr ber::tag extended_response_tag = ber::application(24, true);
 	constexpr ber::tag intermediate_response_tag = ber::application(25, true);
 
 	auto same_tag(ber::tag a, ber::tag b) noexcept -> bool { return a.cls == b.cls && a.number == b.number; }
+
+	// A failed ExtendedResponse without a responseName (Samba's answer to an
+	// unsupported critical control): the last answer to the request it
+	// carries the message id of, or null.
+	auto refusal(const protocol_op &op) noexcept -> const extended_response *
+	{
+		const auto *x = std::get_if<extended_response>(&op);
+		return x != nullptr && !x->response_name && !x->result.is_success() ? x : nullptr;
+	}
 
 	// Abandoned requests whose late responses are still dropped. Older ones
 	// are forgotten: a response for them would then be unexpected.
@@ -769,11 +779,9 @@ void connection::core::route(std::size_t size)
 		  || (p.intermediates && index == op_index<intermediate_response>);
 		if (!final && !streamed) {
 			const std::string_view request = p.search ? std::string_view("SearchRequest") : op_names[p.expect - 1];
-			// A failed ExtendedResponse without a responseName (Samba's answer
-			// to an unsupported critical control) ends the request with its
-			// result; the connection stays open.
-			if (const auto *x = std::get_if<extended_response>(&m->op);
-			  x != nullptr && p.expect != op_index<bind_response> && !x->response_name && !x->result.is_success()) {
+			// A refusal ends the request with its result; the connection
+			// stays open.
+			if (const auto *x = refusal(m->op); x != nullptr && p.expect != op_index<bind_response>) {
 				p.failure = x->result.to_error(detail::format("ExtendedResponse in response to a {}", request));
 				p.finished = true;
 				p.registered = false;
@@ -802,22 +810,34 @@ void connection::core::route(std::size_t size)
 		p.ready.set();
 		return;
 	}
-	buf.consume(size);
 	const auto a = std::ranges::find(abandoned, h->id, &abandoned_req::id);
 	if (a != abandoned.end()) {
 		// A late response to an abandoned request: dropped. Only a final
-		// response is its last: the search's SearchResultDone, or the
-		// response to another request. IntermediateResponses (any request)
-		// and a search's entries and references may come before it.
-		if (same_tag(h->op, intermediate_response_tag)) {
-			return;
-		}
-		if (!a->search || same_tag(h->op, search_result_done_tag)) {
+		// response is its last: the search's SearchResultDone or a refusal,
+		// or the response to another request. IntermediateResponses (any
+		// request) and a search's entries and references may come before it.
+		const bool last = !same_tag(h->op, intermediate_response_tag)
+						  && (!a->search || same_tag(h->op, search_result_done_tag)
+							  || (same_tag(h->op, extended_response_tag) && is_refusal(bytes)));
+		buf.consume(size);
+		if (last) {
 			forget_abandoned(a);
 		}
 		return;
 	}
+	buf.consume(size);
 	shut(unexpected(detail::format("message with id {}, which matches no outstanding request", h->id)), true);
+}
+
+auto connection::core::is_refusal(std::span<const std::byte> bytes) -> bool
+{
+	bool refused = false;
+	{
+		auto m = decode(bytes, { .from = origin::server, .max_elements = max_elements, .memory = &scratch });
+		refused = m && refusal(m->op) != nullptr;
+	}
+	scratch.release();
+	return refused;
 }
 
 auto connection::core::take_armed_layer(const message &m) -> bool

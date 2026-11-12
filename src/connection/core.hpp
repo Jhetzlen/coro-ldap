@@ -455,7 +455,8 @@ class connection::core
 	// arm_security_layer(): installed by route() on the next successful
 	// BindResponse.
 	std::unique_ptr<sasl_security_layer> armed_layer{};
-	// Unsolicited notifications are decoded here, then released.
+	// Unsolicited notifications and late answers to abandoned searches are
+	// decoded here, then released.
 	std::pmr::monotonic_buffer_resource scratch;
 
 	// Held by the writer and reader frames, so the state is released even
@@ -583,6 +584,10 @@ class connection::core
 	// installs the armed security layer if `m` is a success, else drops
 	// it. False if the connection was shut.
 	auto take_armed_layer(const message &m) -> bool;
+
+	// Whether the PDU `bytes` is a failed ExtendedResponse without a
+	// responseName (decoded in scratch).
+	auto is_refusal(std::span<const std::byte> bytes) -> bool;
 
 	// An unsolicited notification (message id 0, RFC 4511 section 4.4).
 	void notification(std::span<const std::byte> bytes);

@@ -1549,6 +1549,35 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		check_release(m.log.received[1], m.log.received[0], "page2");
 		CHECK(is_start_tls(m.log.received[2]));
 	}
+	SECTION("a failed ExtendedResponse without a name is the release's last answer too")
+	{
+		tcp_mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  step{},// reads the release, does not answer
+		  answer({ start_tls_refused(3) }) });
+		release_after_one_page(m);
+		outcome<ldap::result<void>> tls;
+		spawn(m.ioc, m.conn.start_tls(), tls);
+		settle(m);
+		CHECK_FALSE(tls.done());
+		CHECK(m.conn.outstanding() == 1);
+
+		// Samba's refusal of the release (id 2): ExtendedResponse,
+		// unavailableCriticalExtension, no responseName.
+		using namespace std::string_literals;
+		const std::string refusal = "\x30\x0c\x02\x01\x02\x78\x07\x0a\x01\x0c\x04\x00\x04\x00"s;
+		auto t = m.server_end();
+		REQUIRE(m.run(net::write_bytes(t, std::as_bytes(std::span(refusal)))).has_value());
+		drive_until(m.ioc, [&tls] { return tls.done(); });
+		REQUIRE(tls.done());
+		REQUIRE_FALSE(tls.get().has_value());
+		CHECK(tls.get().error().code == errc::unavailable);// sent, and refused
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.conn.is_open());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(is_start_tls(m.log.received[2]));
+	}
 	SECTION("two StartTLS wait: one proceeds, the other is refused")
 	{
 		tcp_mock_ldap m;
