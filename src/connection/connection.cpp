@@ -31,15 +31,15 @@ void detail::set_next_message_id(connection &c, std::int32_t id) noexcept { c.co
 // NOLINTNEXTLINE(misc-const-correctness): it changes the connection's state, through core_
 void detail::set_close_hook(connection &c, std::move_only_function<void() noexcept> hook) noexcept
 {
-	if (c.core_ != nullptr) {
-		detail::run_on_strand(*c.core_,
-		  [self = core_ref(c.core_), h = std::move(hook)] mutable noexcept { self->set_close_hook(std::move(h)); });
+	if (c.core_) {
+		detail::run_on_strand(
+		  *c.core_, [self = c.core_, h = std::move(hook)] mutable noexcept { self->set_close_hook(std::move(h)); });
 	}
 }
 
 auto detail::accepts_requests(const connection &c) noexcept -> bool
 {
-	return c.core_ != nullptr && c.core_->published_accepts_requests();
+	return c.core_ && c.core_->published_accepts_requests();
 }
 
 connection::connection(corosio::io_context &ioc,
@@ -48,34 +48,33 @@ connection::connection(corosio::io_context &ioc,
   std::pmr::memory_resource *mr)
 {
 	std::pmr::polymorphic_allocator<> alloc(mr);
-	core_ = alloc.new_object<core>(executor_type(ioc.get_executor()), std::move(t), options, mr);
+	core_ = core_ref(alloc.new_object<core>(executor_type(ioc.get_executor()), std::move(t), options, mr));
 }
 
-connection::connection(connection &&other) noexcept : core_(std::exchange(other.core_, nullptr)) {}
+connection::connection(connection &&other) noexcept = default;
 
+// Not defaulted: the connection replaced is closed, not just released.
 auto connection::operator=(connection &&other) noexcept -> connection &
 {
 	if (this != &other) {
 		const connection old(std::move(*this));
-		core_ = std::exchange(other.core_, nullptr);
+		core_ = std::move(other.core_);
 	}
 	return *this;
 }
 
 connection::~connection()
 {
-	if (core_ == nullptr) {
-		return;
+	if (core_) {
+		close();
 	}
-	close();
-	core_->release();
 }
 
-auto connection::is_open() const noexcept -> bool { return core_ != nullptr && core_->published_open(); }
+auto connection::is_open() const noexcept -> bool { return core_ && core_->published_open(); }
 
 auto connection::name() const noexcept -> std::string_view
 {
-	if (core_ == nullptr) {
+	if (!core_) {
 		return {};
 	}
 	return core_->transport().name();
@@ -83,21 +82,15 @@ auto connection::name() const noexcept -> std::string_view
 
 auto connection::executor() const noexcept -> connection::executor_type { return core_->executor(); }
 
-auto connection::outstanding() const noexcept -> std::size_t
-{
-	return core_ == nullptr ? 0 : core_->published_outstanding();
-}
+auto connection::outstanding() const noexcept -> std::size_t { return !core_ ? 0 : core_->published_outstanding(); }
 
-auto connection::bind_count() const noexcept -> std::uint64_t
-{
-	return core_ == nullptr ? 0 : core_->published_bind_count();
-}
+auto connection::bind_count() const noexcept -> std::uint64_t { return !core_ ? 0 : core_->published_bind_count(); }
 
-auto connection::is_tls() const noexcept -> bool { return core_ != nullptr && core_->published_tls(); }
+auto connection::is_tls() const noexcept -> bool { return core_ && core_->published_tls(); }
 
 auto connection::security_layer() const noexcept -> sasl_protection
 {
-	return core_ == nullptr ? sasl_protection::none : core_->published_security_layer();
+	return !core_ ? sasl_protection::none : core_->published_security_layer();
 }
 
 // The TLS data are set before is_tls() first reports true (release /
@@ -120,7 +113,7 @@ auto connection::channel_bindings() const noexcept -> ldap::channel_bindings
 
 void connection::close() noexcept
 {
-	if (core_ != nullptr) {
+	if (core_) {
 		core_->request_close();
 	}
 }
@@ -182,10 +175,7 @@ namespace {
 
 }// namespace
 
-auto connection::unbind() -> capy::task<result<void>>
-{
-	return detail::on_strand(core_ref(core_), unbind_impl(core_ref(core_)));
-}
+auto connection::unbind() -> capy::task<result<void>> { return detail::on_strand(core_, unbind_impl(core_)); }
 
 // ---------------------------------------------------------------- connect
 

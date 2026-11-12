@@ -2578,7 +2578,12 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   resource, held by the connection, each outstanding operation, each
   stream, and the reader and writer frames. Moving a connection or stream
   is a pointer move; destroying the connection closes it and the others
-  finish with `not_connected` and release the block.
+  finish with `not_connected` and release the block. The public handles
+  (`connection`, `net::transport`, the streams, `transaction`) hold their
+  state by pointer for shared lifetime and address stability, not as a
+  compilation firewall: the connection's `detail::core_ref` is shared
+  with its tasks, and the transport's block is self-referential (a
+  reference-mode TLS stream over its socket, views of both).
 - Threading (coro-ldap-nj9): the usual deployment is one io_context run
   by a thread pool, so thread safety is built in, not a convention. The
   connection's state runs on a `capy::strand` over the io_context's

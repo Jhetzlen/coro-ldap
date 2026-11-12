@@ -103,7 +103,7 @@ namespace detail {
 auto connection::add(add_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("add", request.entry);
-	if (core_ == nullptr) {
+	if (!core_) {
 		return refuse(client_errc::not_connected, std::move(context));
 	}
 	const core_ref self(core_);
@@ -133,7 +133,7 @@ namespace detail {
 auto connection::modify(modify_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("modify", request.object);
-	if (core_ == nullptr) {
+	if (!core_) {
 		return refuse(client_errc::not_connected, std::move(context));
 	}
 	const core_ref self(core_);
@@ -184,7 +184,7 @@ namespace detail {
 auto connection::del(del_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("delete", request.entry);
-	if (core_ == nullptr) {
+	if (!core_) {
 		return refuse(client_errc::not_connected, std::move(context));
 	}
 	const core_ref self(core_);
@@ -195,7 +195,7 @@ auto connection::del(del_params request) -> capy::task<result<response>>
 auto connection::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 {
 	std::string context = op_context("modify DN", request.entry);
-	if (core_ == nullptr) {
+	if (!core_) {
 		return refuse(client_errc::not_connected, std::move(context));
 	}
 	const core_ref self(core_);
@@ -301,7 +301,7 @@ namespace {
 
 auto connection::extended(extended_params request) -> capy::task<result<extended_result>>
 {
-	if (core_ == nullptr) {
+	if (!core_) {
 		return refuse_extended(no_connection("extended operation " + request.name));
 	}
 	const core_ref self(core_);

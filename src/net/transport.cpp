@@ -29,12 +29,6 @@ void transport::destroy() noexcept
 		return;
 	}
 	layers *im = std::exchange(layers_, nullptr);
-	im->layered = {};// refers to the SASL layer, which refers to `stream`
-	im->sasl_layer.reset();
-	if (im->custom != nullptr) {
-		im->stream = {};// refers to the custom stream
-		im->custom_ops.destroy(im->custom, im->mr);
-	}
 	std::pmr::polymorphic_allocator<layers> alloc(im->mr);
 	alloc.delete_object(im);
 }

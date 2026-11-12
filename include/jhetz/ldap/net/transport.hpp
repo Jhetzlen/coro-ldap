@@ -32,7 +32,8 @@
 // Threading: at most one read and one write in flight, all on the executor
 // of the io_context the transport was created on. Destroying a transport
 // with an operation in flight is undefined: close() or cancel() and let it
-// finish. Moving one is fine.
+// finish. Moving one with an operation in flight is undefined too, like
+// destroying it; moving an idle one is fine.
 #pragma once
 
 #include "jhetz/ldap/channel_binding.hpp"
@@ -169,7 +170,10 @@ class transport
 	};
 	void set_custom(void *stream, custom_ops ops) noexcept;
 
-	layers *layers_ = nullptr;// allocated from the resource it records
+	// One block whose socket, reference-mode TLS stream and stream views
+	// point at each other, so its address must not change when the
+	// transport moves; allocated from the resource it records.
+	layers *layers_ = nullptr;
 };
 
 }// namespace jhetz::ldap::net

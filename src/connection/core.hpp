@@ -114,12 +114,6 @@ namespace detail {
 
 }// namespace detail
 
-namespace detail {
-
-	class core_ref;
-
-}// namespace detail
-
 // The multiplexing core. Its state is private: the operations reach it
 // through the members below, which keep its invariants (message ids, the
 // writer, the reader, the due answers, the bind and StartTLS exclusions).
@@ -295,7 +289,7 @@ class connection::core
 	  std::string_view context) -> boost::capy::task<result<message>>;
 
 	// The state of `c` (null for a default-constructed or moved-from one).
-	static auto of(const connection &c) noexcept -> core * { return c.core_; }
+	static auto of(const connection &c) noexcept -> core * { return c.core_.get(); }
 
 	// search_stream / transaction constructors are private.
 	static auto make_stream(search_stream::state *s) noexcept -> ldap::search_stream;
@@ -384,7 +378,7 @@ class connection::core
   private:
 	executor_type ex;
 	std::pmr::memory_resource *mr_;
-	std::atomic<std::size_t> refs = 1;
+	std::atomic<std::size_t> refs = 0;
 	std::atomic<bool> open_snapshot = true;
 	std::atomic<bool> accepting_snapshot = true;
 	std::atomic<bool> tls_snapshot = false;
@@ -596,39 +590,26 @@ class connection::core
 
 namespace detail {
 
-	// A counted reference to the connection state.
-	class core_ref
+	template<class Core> counted_ref<Core>::counted_ref(Core *p) noexcept : p_(p)
 	{
-	  public:
-		core_ref() noexcept = default;
-		explicit core_ref(connection::core *p) noexcept : p_(p)
-		{
-			if (p_ != nullptr) {
-				p_->add_ref();
-			}
+		if (p_ != nullptr) {
+			p_->add_ref();
 		}
-		core_ref(const core_ref &o) noexcept : core_ref(o.p_) {}
-		core_ref(core_ref &&o) noexcept : p_(std::exchange(o.p_, nullptr)) {}
-		auto operator=(const core_ref &) -> core_ref & = delete;// unused
-		auto operator=(core_ref &&o) noexcept -> core_ref &
-		{
-			core_ref moved(std::move(o));
-			std::swap(p_, moved.p_);
-			return *this;
+	}
+	template<class Core> counted_ref<Core>::counted_ref(const counted_ref &o) noexcept : counted_ref(o.p_) {}
+	template<class Core> counted_ref<Core>::counted_ref(counted_ref &&o) noexcept : p_(std::exchange(o.p_, nullptr)) {}
+	template<class Core> auto counted_ref<Core>::operator=(counted_ref &&o) noexcept -> counted_ref &
+	{
+		counted_ref moved(std::move(o));
+		std::swap(p_, moved.p_);
+		return *this;
+	}
+	template<class Core> counted_ref<Core>::~counted_ref()
+	{
+		if (p_ != nullptr) {
+			p_->release();
 		}
-		~core_ref()
-		{
-			if (p_ != nullptr) {
-				p_->release();
-			}
-		}
-		auto operator->() const noexcept -> connection::core * { return p_; }
-		auto operator*() const noexcept -> connection::core & { return *p_; }
-		explicit operator bool() const noexcept { return p_ != nullptr; }
-
-	  private:
-		connection::core *p_ = nullptr;
-	};
+	}
 
 }// namespace detail
 

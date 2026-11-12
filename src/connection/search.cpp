@@ -247,7 +247,7 @@ auto detail::search_stream_of(const core_ref &self, search_params request, std::
 auto connection::search_stream(search_params request, std::pmr::memory_resource *mr)
   -> capy::task<result<ldap::search_stream>>
 {
-	return detail::search_stream_of(core_ref(core_), std::move(request), mr);
+	return detail::search_stream_of(core_, std::move(request), mr);
 }
 
 auto connection::search(search_params request, std::pmr::memory_resource *mr) -> capy::task<result<search_result>>

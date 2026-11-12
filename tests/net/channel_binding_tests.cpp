@@ -557,6 +557,11 @@ TEST_CASE("channel binding: ldaps:// with TLS 1.3", "[net][tls][channel_binding]
 
 	const bytes server_der = certificate_der(server_leaf().cert_pem);
 	CHECK(to_bytes(c.peer_certificate()) == server_der);
+	{
+		ldap::connection moved = std::move(c);
+		CHECK(to_bytes(moved.peer_certificate()) == server_der);
+		c = std::move(moved);
+	}
 	const auto b = c.channel_bindings();
 	CHECK(f.view->version == TLS1_3_VERSION);
 	REQUIRE(b.default_type == ldap::channel_binding_type::tls_exporter);

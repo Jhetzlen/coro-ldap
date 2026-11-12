@@ -19,13 +19,29 @@
 
 namespace jhetz::ldap::net {
 
-// Members are destroyed in reverse order: the SASL layer's view and the
-// layer, then the type-erased view, then the TLS layer (which refers to the socket), then the sockets.
+// Destroyed in this order, each part before the one it refers to: the SASL
+// layer's view (`layered`), the SASL layer, then for kind::custom the
+// type-erased view and the custom stream; then the members in reverse
+// order: the type-erased view, the TLS stream (which refers to the TCP
+// socket), the TLS context and the sockets.
 struct transport::layers
 {
 	explicit layers(std::pmr::memory_resource *r)
 	  : mr(r), name(r), host(r), peer_certificate(r), tls_server_end_point(r), tls_exporter(r)
 	{}
+	layers(const layers &) = delete;
+	auto operator=(const layers &) -> layers & = delete;
+	layers(layers &&) = delete;
+	auto operator=(layers &&) -> layers & = delete;
+	~layers()
+	{
+		layered = {};
+		sasl_layer.reset();
+		if (custom != nullptr) {
+			stream = {};
+			custom_ops.destroy(custom, mr);
+		}
+	}
 
 	std::pmr::memory_resource *mr;// this struct was allocated from it
 	kind type = kind::none;
@@ -49,7 +65,7 @@ struct transport::layers
 	// rest by detail::clear_tls_session.
 	bool tls_exporter_used = false;
 	// kind::custom: the wrapped stream, owned (allocated from mr) and
-	// destroyed by transport::destroy() after `stream`, which refers to it.
+	// destroyed by ~layers() after `stream`, which refers to it.
 	void *custom = nullptr;
 	transport::custom_ops custom_ops{};
 	bool custom_closed = false;

@@ -894,6 +894,34 @@ TEST_CASE("connection: moving connections and streams", "[net][connection]")
 		CHECK(e.error().code == client_errc::not_connected);
 		CHECK(s->done());
 	}
+	SECTION("a live connection move-assigned over one with an open stream closes it")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1) }) });
+		auto s = m.run(m.conn.search_stream(people_search()));
+		REQUIRE(s.has_value());
+		socket_pair other(m.ioc);
+		m.conn = ldap::connection(m.ioc, net::transport::wrap(socket_ref{ &other.client }, "other"));
+		CHECK(m.conn.is_open());
+		auto e = m.run(s->next());
+		REQUIRE_FALSE(e.has_value());
+		CHECK(e.error().code == client_errc::not_connected);
+		m.conn.close();
+		other.client.close();
+		other.server.close();
+		drive(m.ioc);
+	}
+	SECTION("a task created before a move completes")
+	{
+		mock_ldap m;
+		m.serve({ answer({ ldap::message{ 1, ldap::add_response{ ldap::ldap_result{ 0 } } } }) });
+		auto added = m.conn.add({ .entry = ldap::dn{ "uid=a,ou=people,dc=example,dc=org" } });
+		ldap::connection moved = std::move(m.conn);
+		CHECK(moved.is_open());
+		auto r = m.run(std::move(added));
+		REQUIRE(r.has_value());
+		m.check_server();
+	}
 }
 
 // Every operation of a moved-from connection fails at once with

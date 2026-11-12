@@ -152,6 +152,29 @@ namespace detail {
 	// For ldap::client: the connection takes requests (open, no unbind()
 	// under way). False on a default-constructed or moved-from connection.
 	[[nodiscard]] auto accepts_requests(const connection &c) noexcept -> bool;
+
+	// A counted reference to a connection's state (detail::core_ref). The
+	// copies, moves and destructor are defined where Core is complete
+	// (src/connection/core.hpp).
+	template<class Core> class counted_ref
+	{
+	  public:
+		counted_ref() noexcept = default;
+		explicit counted_ref(Core *p) noexcept;
+		counted_ref(const counted_ref &o) noexcept;
+		counted_ref(counted_ref &&o) noexcept;
+		auto operator=(const counted_ref &) -> counted_ref & = delete;
+		auto operator=(counted_ref &&o) noexcept -> counted_ref &;
+		~counted_ref();
+
+		[[nodiscard]] auto get() const noexcept -> Core * { return p_; }
+		auto operator->() const noexcept -> Core * { return p_; }
+		auto operator*() const noexcept -> Core & { return *p_; }
+		explicit operator bool() const noexcept { return p_ != nullptr; }
+
+	  private:
+		Core *p_ = nullptr;
+	};
 }// namespace detail
 
 class connection
@@ -373,8 +396,16 @@ class connection
 	friend void detail::set_close_hook(connection &, std::move_only_function<void() noexcept>) noexcept;
 	friend auto detail::accepts_requests(const connection &) noexcept -> bool;
 
-	core *core_ = nullptr;// reference counted; allocated from the resource it records
+	// A counted handle to the shared state, which operations, streams, paged
+	// searches, transactions and the reader and writer keep alive across a
+	// move or the destruction of the connection. The state's type stays
+	// incomplete here: its members are internal.
+	detail::counted_ref<core> core_;
 };
+
+namespace detail {
+	using core_ref = counted_ref<connection::core>;
+}// namespace detail
 
 // Opens a connection to `u` (net::connect: resolve, TCP, TLS for ldaps://,
 // Unix socket for ldapi://) with the timeout and TLS settings of `options`.
