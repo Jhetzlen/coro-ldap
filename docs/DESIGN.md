@@ -2623,7 +2623,26 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
     `run()`: then the work runs inline. `stopped()` is true from `stop()`
     on, while other threads may still finish a handler on the strand, and
     nothing public tells whether one does, so the inline path is
-    documented as needing those threads joined first. Called from inside
+    documented as needing those threads joined first: an interim
+    precondition, stated once in connection.hpp's threading paragraph
+    (client.hpp and API.md refer to it), that cannot be detected today
+    (the strand's lock is private, and `stopped()` says nothing about
+    threads still in a handler; TSan reports a violation). The way out
+    is upstream: a synchronous try-enter on `capy::strand` (coro-ldap-nj9.11
+    tracks it; nj9.10 has the proposal), after which `run_on_strand`
+    runs the work inline when the strand is idle and posts it otherwise.
+    Rejected meanwhile: always posting (after `run()` returns from a stop,
+    destroying a connection would no longer close it; the cleanup waits
+    for a restart and is dropped with the io_context, leaking the stream
+    and transaction states); an `ldap::run(ioc)` wrapper counting the
+    threads inside `run()` (still a convention, nothing stops a direct
+    `ioc.run()`, and `run_one`, `run_for`, `poll` to mirror) or a counting
+    executor bracketing every resume (a frame per hop, a new
+    `executor_type`: option B by another name); and a patched Capy (the
+    build prefers an installed Capy through `FIND_PACKAGE_ARGS`, where a
+    fork-only API would not compile). The
+    `std::jthread` declaration-order pitfall is in API.md's threading
+    section. Called from inside
     `run()` after `stop()`, the work is posted: a strand busy on another
     thread runs it before that thread leaves `run()` (capy's strand
     invoker empties its queue whatever `stop()` says), an idle one when

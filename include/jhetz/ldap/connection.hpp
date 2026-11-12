@@ -93,9 +93,15 @@
 // resource must outlive that run. An io_context destroyed before running it
 // leaks that work: after run_one() or a stop, restart() and poll() first.
 // They run at once on the strand, or once the io_context is stopped from
-// outside its run() (join its threads first before destroying a connection or
-// stream on another thread); called inside run() after stop(), they post as
-// above. Streams, outstanding operations and the reader may outlive the
+// outside its run(); called inside run() after stop(), they post as above.
+// Precondition (temporary, until Capy's strand can be entered
+// synchronously): close() and the destructors of a connection, stream, paged
+// search, transaction, client or lease, called from a thread outside run()
+// of a stopped io_context, require that no thread is still inside run() (or
+// run_one(), run_for(), poll()) of that io_context: join those threads
+// first. A violation is a data race, which TSan reports. With std::jthread,
+// declare the threads after the objects they serve, so they are joined before
+// those are destroyed (docs/API.md, "Threading"). Streams, outstanding operations and the reader may outlive the
 // connection object (destroying it closes the connection; they fail with
 // not_connected). Destroying a task suspended in an operation is safe: the
 // operation is abandoned.

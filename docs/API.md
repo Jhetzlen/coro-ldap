@@ -398,9 +398,31 @@ itself needs only ICU.
   executor), post their work: `close()` takes effect when the io_context
   next runs (`is_open()` reports it at once), and the memory resource of
   a destroyed stream's entries must outlive that run. On the strand, or
-  with the io_context stopped and called outside its `run()` (join the
-  threads running it first), they run at once. `locking_mode::unsafe_io`
-  and `unsafe` opt out of cross-thread use.
+  with the io_context stopped and called outside its `run()`, they run at
+  once; the latter has the temporary precondition stated in
+  connection.hpp's threading paragraph (no thread may still be inside
+  `run()` of the stopped io_context: join them first). With
+  `std::jthread`s, declaration order decides: members and locals are
+  destroyed in reverse order, so declare the threads after the
+  connections, clients, streams and transactions they serve, and they are
+  joined before those are destroyed:
+
+  ```cpp
+  corosio::io_context ioc;
+  auto c = /* ldap::connection, ldap::client, ... */;
+  std::vector<std::jthread> pool;   // declared last: joined first
+  for (int i = 0; i < 4; ++i) {
+      pool.emplace_back([&] { ioc.run(); });
+  }
+  // ...
+  ioc.stop();
+  // leaving the scope: pool joins, then c is destroyed, then ioc
+  ```
+
+  Declared the other way round (`pool` before `c`), `c` is destroyed
+  while the pool threads may still finish a handler on its strand, a race
+  TSan reports. `locking_mode::unsafe_io` and `unsafe` opt out of
+  cross-thread use.
   Step 6 adds the other operations: `add`, `modify` (changes from
   `ldap::mod::add / remove / replace / increment`), `del`, `modify_dn`
   (rename and / or move: `{.entry, .new_rdn, .delete_old_rdn,

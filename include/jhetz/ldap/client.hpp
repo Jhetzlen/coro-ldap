@@ -114,7 +114,10 @@
 // snapshot. The io_context must outlive the client and its leases; the memory
 // resource must outlive the work left on the io_context (keep it until
 // io_context::run() returns). A lease may outlive its client: its connection
-// is then closed, its operations fail, and destroying it is safe.
+// is then closed, its operations fail, and destroying it is safe. Called
+// from a thread outside run() of a stopped io_context, close(), the
+// destructor and a lease's release have connection.hpp's temporary
+// precondition (no thread still inside run(): join them first).
 #pragma once
 
 #include "jhetz/ldap/connection.hpp"
