@@ -142,6 +142,14 @@ namespace detail {
 		});
 	}
 
+	// A store's schema check: whether T fits the schema, and whether
+	// update_if's default guard can succeed on it.
+	struct schema_outcome
+	{
+		result<void> fits{};
+		result<void> guardable{};
+	};
+
 	// The requests and results of a store, without the I/O (store_core).
 	template<auto Naming> struct store_codec
 	{
@@ -385,11 +393,22 @@ namespace detail {
 		}
 
 
-		[[nodiscard]] static auto check(const server_schema &s) -> result<void>
+		// validate<T>'s outcome: schema_mismatch when the report has errors,
+		// and for update_if's default guard, no_equality_rule on the first
+		// member reported without an equality rule.
+		[[nodiscard]] static auto check(const server_schema &s) -> schema_outcome
 		{
 			const schema_report report = validate<value_type>(s);
 			if (!report.ok()) {
-				return std::unexpected(schema_mismatch(typeid(value_type).name(), report));
+				return { .fits = std::unexpected(schema_mismatch(typeid(value_type).name(), report)), .guardable = {} };
+			}
+			for (const auto &i : report.issues) {
+				if (i.what == schema_issue::kind::no_equality_rule) {
+					return { .fits = {},
+						.guardable = std::unexpected(make_error(client_errc::no_equality_rule,
+						  "attribute " + i.name
+							+ ": no equality rule, an assertion on it is always Undefined (use ldap::versioned_by)")) };
+				}
 			}
 			return {};
 		}
@@ -445,7 +464,7 @@ namespace detail {
 		~schema_check_cache() = default;
 
 		// The outcome recorded under `now`, if any.
-		[[nodiscard]] auto find(source_protection now) const -> std::optional<result<void>>
+		[[nodiscard]] auto find(source_protection now) const -> std::optional<schema_outcome>
 		{
 			const std::scoped_lock lock(mutex_);
 			if (!outcome_ || under_ != now) {
@@ -453,7 +472,7 @@ namespace detail {
 			}
 			return outcome_;
 		}
-		void record(const result<void> &outcome, source_protection now)
+		void record(const schema_outcome &outcome, source_protection now)
 		{
 			const std::scoped_lock lock(mutex_);
 			outcome_ = outcome;
@@ -466,7 +485,7 @@ namespace detail {
 		{}
 
 		mutable std::mutex mutex_;
-		std::optional<result<void>> outcome_{};
+		std::optional<schema_outcome> outcome_{};
 		source_protection under_{};
 	};
 
@@ -629,8 +648,9 @@ namespace detail {
 		  update_if_at(S &s, dn entry, value_type original, value_type changed, Guard guard, modify_controls controls)
 			-> boost::capy::task<result<std::optional<response>>>
 		{
-			co_return co_await send_update(
-			  s, codec::update_if_request(std::move(entry), original, changed, guard, std::move(controls)));
+			co_return co_await send_update(s,
+			  codec::update_if_request(std::move(entry), original, changed, guard, std::move(controls)),
+			  std::same_as<Guard, every_mapped_value>);
 		}
 
 		template<directory S>
@@ -733,9 +753,11 @@ namespace detail {
 		}
 
 	  private:
-		// Sends `request` once the schema check passed; nullopt sends nothing.
+		// Sends `request` once the schema check passed (with
+		// `default_guard`, update_if's default guard also needs a struct
+		// whose members all have an equality rule); nullopt sends nothing.
 		template<directory S>
-		auto send_update(S &s, result<std::optional<modify_params>> request)
+		auto send_update(S &s, result<std::optional<modify_params>> request, bool default_guard = false)
 		  -> boost::capy::task<result<std::optional<response>>>
 		{
 			if (!request) {
@@ -744,8 +766,13 @@ namespace detail {
 			if (!*request) {
 				co_return std::optional<response>{};
 			}
-			if (auto c = co_await check_schema(s); !c) {
+			auto c = co_await check_schema(s);
+			if (!c) {
 				co_return std::unexpected(std::move(c.error()));
+			}
+			if (default_guard && !c->guardable) {
+				co_return std::unexpected(
+				  with_context(std::move(c->guardable.error()), op_context("modify", (*request)->object)));
 			}
 			auto done = co_await s.modify(std::move(**request));
 			if (!done) {
@@ -754,22 +781,27 @@ namespace detail {
 			co_return std::optional<response>(std::move(*done));
 		}
 
-		template<directory S> auto check_schema(S &s) -> boost::capy::task<result<void>>
+		// The schema check's outcome; fails with its schema_mismatch, or the
+		// load's error.
+		template<directory S> auto check_schema(S &s) -> boost::capy::task<result<schema_outcome>>
 		{
 			if (options_.schema_check == ldap::schema_check::off) {
-				co_return result<void>{};
+				co_return schema_outcome{};
 			}
 			const source_protection now = protection_of(s);
-			if (auto known = checked_.find(now)) {
-				co_return std::move(*known);
+			auto known = checked_.find(now);
+			if (!known) {
+				auto schema = co_await load_schema(s);
+				if (!schema) {
+					co_return std::unexpected(std::move(schema.error()));
+				}
+				known = codec::check(*schema);
+				checked_.record(*known, now);
 			}
-			auto schema = co_await load_schema(s);
-			if (!schema) {
-				co_return std::unexpected(std::move(schema.error()));
+			if (!known->fits) {
+				co_return std::unexpected(std::move(known->fits.error()));
 			}
-			auto outcome = codec::check(*schema);
-			checked_.record(outcome, now);
-			co_return outcome;
+			co_return std::move(*known);
 		}
 
 		dn base_;
@@ -860,8 +892,17 @@ template<auto Naming, directory D> class store
 	// not seen, so a value written meanwhile to a member empty in `original`
 	// is overwritten), or with ldap::versioned_by<&T::m>, the exact check,
 	// (m=<original's value>), which fails with missing_attribute before
-	// anything is sent if `original` has none. Critical. nullopt, and nothing
-	// sent, when no member differs. An Assertion control in `controls` fails
+	// anything is sent if `original` has none. Critical. A 122 from the
+	// default filter can mean Undefined (RFC 4528 section 3), then permanent:
+	// a member whose attribute has no equality rule (jpegPhoto), an equality
+	// rule whose assertion syntax is not the attribute's (userCertificate),
+	// or an attribute the bound identity may not read; retry loops on 122
+	// must be bounded. With schema_check::on_first_use, the default guard on
+	// a struct with a writable member without an equality rule fails with
+	// client_errc::no_equality_rule before anything is sent (after a
+	// schema_mismatch, which comes first); versioned_by, whose member must
+	// have an equality rule, is the fix. nullopt, and nothing sent, when no
+	// member differs. An Assertion control in `controls` fails
 	// with encode_error before anything is sent, and so does, with
 	// invalid_filter, a default filter past max_filter_elements (one element
 	// per value): use ldap::versioned_by for such a struct.

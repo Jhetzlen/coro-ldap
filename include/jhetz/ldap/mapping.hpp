@@ -1017,8 +1017,11 @@ namespace detail {
 // filter does not see an added value (a value written meanwhile to a member
 // empty in `original` is overwritten), nor a plain value replaced while a
 // tagged or subtype sibling holds the same text: ldap::versioned_by is the
-// exact check. Fails with the first value that does not encode (context
-// "attribute mail").
+// exact check. A term on an attribute without an equality rule (jpegPhoto),
+// or whose rule's assertion syntax is not the attribute's
+// (userCertificate), is Undefined, and the Assertion control then fails
+// every time (RFC 4528 section 3). Fails with the first value that does not
+// encode (context "attribute mail").
 template<described T> [[nodiscard]] auto unchanged_filter(const T &original) -> result<filter>
 {
 	static_assert(std::apply([](const auto &...f) { return (!f.read_only || ...); }, schema<T>.fields),

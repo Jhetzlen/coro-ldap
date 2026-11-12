@@ -941,9 +941,11 @@ TEST_CASE("schema: MUST attributes mapped by required members", "[schema][valida
 	// cn and sn are mapped through an option and an alias.
 	CHECK(must_issues(rep).empty());
 	// Only the multi-valued warnings are left (uid, cn, sn, mail, home),
-	// and sn mapped by its alias.
+	// sn mapped by its alias, and the members whose attribute has no
+	// EQUALITY in this cut schema.
 	CHECK(std::ranges::all_of(rep.issues, [](const auto &i) {
 		return i.what == ldap::schema_issue::kind::single_member_multi_valued
+			   || i.what == ldap::schema_issue::kind::no_equality_rule
 			   || (i.what == ldap::schema_issue::kind::not_primary_name && i.name == "surname");
 	}));
 	CHECK(std::ranges::count_if(rep.issues, [](const auto &i) {
@@ -1507,4 +1509,57 @@ TEST_CASE("schema: DIT content rules", "[schema][validate][content_rule]")
 		CHECK(std::ranges::none_of(
 		  posix.issues, [](const auto &i) { return i.what == ldap::schema_issue::kind::auxiliary_class_not_allowed; }));
 	}
+}
+
+namespace {
+
+struct equality_members
+{
+	std::string cn;// EQUALITY inherited from name
+	std::optional<ldap::binary> photo;// no EQUALITY
+	std::optional<ldap::binary> thumbnail;// SUP photo: none either
+	std::optional<ldap::binary> seen;// no EQUALITY, but read_only
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<equality_members> = ldap::describe(ldap::field<&equality_members::cn>("cn"),
+  ldap::field<&equality_members::photo>("x-photo"),
+  ldap::field<&equality_members::thumbnail>("x-thumbnail"),
+  ldap::field<&equality_members::seen>("x-seen", ldap::read_only));
+
+TEST_CASE("schema: a writable member without an equality rule is no_equality_rule", "[schema][validate]")
+{
+	using k = ldap::schema_issue::kind;
+	const auto no_equality = [](const ldap::schema_report &rep) {
+		std::vector<std::string> out;
+		for (const auto &i : rep.issues) {
+			if (i.what == k::no_equality_rule) {
+				out.push_back(i.name);
+			}
+		}
+		return out;
+	};
+	const std::pmr::vector<std::pmr::string> with_equality{
+		"( 2.5.4.41 NAME 'name' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+		"( 2.5.4.3 NAME 'cn' SUP name )",
+		"( 1.1.1 NAME 'x-photo' SYNTAX 1.3.6.1.4.1.1466.115.121.1.40 )",
+		"( 1.1.2 NAME 'x-thumbnail' SUP x-photo )",
+		"( 1.1.3 NAME 'x-seen' SYNTAX 1.3.6.1.4.1.1466.115.121.1.40 )",
+	};
+	const auto rep = ldap::validate<equality_members>(ldap::server_schema::parse(with_equality, {}));
+	INFO(rep.to_string());
+	CHECK(rep.ok());
+	CHECK(no_equality(rep) == std::vector<std::string>{ "x-photo", "x-thumbnail" });
+
+	// A schema declaring no EQUALITY at all (Active Directory, Samba): none.
+	const std::pmr::vector<std::pmr::string> without_equality{
+		"( 2.5.4.41 NAME 'name' SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+		"( 2.5.4.3 NAME 'cn' SUP name )",
+		"( 1.1.1 NAME 'x-photo' SYNTAX 1.3.6.1.4.1.1466.115.121.1.40 )",
+		"( 1.1.2 NAME 'x-thumbnail' SUP x-photo )",
+		"( 1.1.3 NAME 'x-seen' SYNTAX 1.3.6.1.4.1.1466.115.121.1.40 )",
+	};
+	CHECK(no_equality(ldap::validate<equality_members>(ldap::server_schema::parse(without_equality, {}))).empty());
 }

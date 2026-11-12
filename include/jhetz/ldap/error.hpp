@@ -136,6 +136,12 @@ enum class client_errc : int {
 	// its values (ldap::ad::read_all_values reads them all). Matches no
 	// condition.
 	incomplete_values,
+	// store::update_if with its default guard, schema_check on, on a struct
+	// with a writable member whose attribute has no EQUALITY rule: an
+	// assertion on it is always Undefined (RFC 4511 section 4.5.1.7), so
+	// the server would answer assertionFailed every time. Matches
+	// cond::invalid_input.
+	no_equality_rule,
 };
 
 // Error conditions: what an error means, across categories (DESIGN.md

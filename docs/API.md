@@ -887,7 +887,9 @@ itself needs only ICU.
   `attribute_not_allowed`; a declared auxiliary class that rule's `AUX`
   does not list: `auxiliary_class_not_allowed`; an OBSOLETE rule counts
   for nothing; a member named by an alias or numeric OID rather than the
-  attribute's first NAME: `not_primary_name`),
+  attribute's first NAME: `not_primary_name`; a writable member whose
+  attribute has no EQUALITY on its SUP chain, on a schema that declares
+  EQUALITY somewhere: `no_equality_rule`),
   `attribute_type` with `usage` (`attribute_usage`),
   `object_class_type` with `sup`, `kind` (`object_class_kind`), `must`
   and `may`, `dit_content_rule` (`obsolete`, `aux`, `must`, `may`, `precluded`: RFC
@@ -956,7 +958,15 @@ itself needs only ICU.
   meanwhile to a member empty in `original` is overwritten) or
   `(m=<original's value>)` on a single-valued member, read_only or not
   (entryCSN, uSNChanged, modifyTimestamp), the exact check; a value of
-  `original` gone fails with `errc::assertion_failed` (122). An
+  `original` gone fails with `errc::assertion_failed` (122). A 122 from
+  the default filter can also mean Undefined (RFC 4528 section 3), then
+  permanent: an attribute without an equality rule (jpegPhoto, audio), an
+  equality rule whose assertion syntax is not the attribute's
+  (userCertificate), or one the bound identity may not read, so retry
+  loops on 122 must be bounded; with `schema_check::on_first_use`, the
+  default guard on a struct with a writable member without an equality
+  rule fails with `client_errc::no_equality_rule` (cond `invalid_input`)
+  before sending, `schema_mismatch` first; `versioned_by` is the fix. An
   `original` with no values gives the empty filter
   (`invalid_filter` before sending). The default
   filter past `max_filter_elements` (10,000) elements, one per value, fails

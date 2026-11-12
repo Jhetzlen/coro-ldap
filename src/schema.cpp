@@ -459,6 +459,7 @@ auto server_schema::parse(std::span<const std::pmr::string> attribute_types,
 			continue;
 		}
 		const std::size_t i = s.attributes_.size();
+		s.declares_equality_ = s.declares_equality_ || a->equality.has_value();
 		s.attribute_index_.emplace(a->oid, i);
 		for (const auto &n : a->names) {
 			s.attribute_index_.emplace(n, i);
@@ -544,6 +545,8 @@ auto server_schema::syntax_of(const attribute_type &a) const noexcept -> const s
 {
 	return inherited(*this, a, &attribute_type::syntax);
 }
+
+auto detail::declares_equality(const server_schema &s) noexcept -> bool { return s.declares_equality_; }
 
 auto server_schema::equality_of(const attribute_type &a) const noexcept -> const std::string *
 {
@@ -934,6 +937,12 @@ namespace detail {
 				  .name = std::string(name),
 				  .detail = std::move(text) });
 			}
+		}
+		if (!member_read_only && declares_equality(s) && s.equality_of(*a) == nullptr) {
+			out.issues.push_back({ .what = schema_issue::kind::no_equality_rule,
+			  .name = std::string(name),
+			  .detail = "no EQUALITY matching rule: an assertion on it is always Undefined, so store::update_if's "
+						"default guard fails (use ldap::versioned_by)" });
 		}
 	}
 

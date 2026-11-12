@@ -62,6 +62,19 @@ struct surnamed
 	std::optional<std::string> surname;
 };
 
+struct photo_card
+{
+	std::string cn;
+	std::optional<ldap::binary> photo;
+	std::string csn;
+};
+
+struct badly_typed_photo
+{
+	std::int64_t cn = 0;// cn is a DirectoryString: syntax error
+	std::optional<ldap::binary> photo;
+};
+
 struct large_group
 {
 	std::string cn;
@@ -100,6 +113,15 @@ template<>
 constexpr auto ldap::schema<surnamed> = ldap::describe(ldap::object_class("person"),
   ldap::field<&surnamed::cn>("cn"),
   ldap::field<&surnamed::surname>("surname"));
+
+template<>
+constexpr auto ldap::schema<photo_card> = ldap::describe(ldap::field<&photo_card::cn>("cn"),
+  ldap::field<&photo_card::photo>("jpegPhoto"),
+  ldap::field<&photo_card::csn>("entryCSN", ldap::read_only));
+
+template<>
+constexpr auto ldap::schema<badly_typed_photo> =
+  ldap::describe(ldap::field<&badly_typed_photo::cn>("cn"), ldap::field<&badly_typed_photo::photo>("jpegPhoto"));
 
 template<>
 constexpr auto ldap::schema<large_group> = ldap::describe(ldap::object_class("groupOfNames"),
@@ -162,6 +184,20 @@ auto subschema(std::int32_t id) -> ldap::message
 				"( 2.5.18.2 NAME 'modifyTimestamp' SYNTAX 1.3.6.1.4.1.1466.115.121.1.24 SINGLE-VALUE "
 				"NO-USER-MODIFICATION )" } },
 			{ "objectClasses", { "( 2.16.840.1.113730.3.2.2 NAME 'inetOrgPerson' STRUCTURAL )" } } } } };
+}
+
+// cn with an equality rule, jpegPhoto without one, entryCSN read-only.
+auto photo_subschema(std::int32_t id) -> ldap::message
+{
+	return ldap::message{ id,
+		ldap::search_result_entry{ "cn=Subschema",
+		  { { "attributeTypes",
+			  { "( 2.5.4.3 NAME 'cn' EQUALITY caseIgnoreMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.15 )",
+				"( 0.9.2342.19200300.100.1.60 NAME 'jpegPhoto' SYNTAX 1.3.6.1.4.1.1466.115.121.1.28 )",
+				// NOLINTNEXTLINE(bugprone-suspicious-missing-comma): one definition, wrapped at the column limit
+				"( 1.3.6.1.4.1.4203.666.1.7 NAME 'entryCSN' EQUALITY CSNMatch SYNTAX 1.3.6.1.4.1.4203.666.11.2.1 "
+				"SINGLE-VALUE NO-USER-MODIFICATION USAGE directoryOperation )" } },
+			{ "objectClasses", { "( 2.5.6.6 NAME 'person' STRUCTURAL MUST cn )" } } } } };
 }
 
 auto ok(std::int32_t id, const auto &response) -> ldap::message
@@ -851,6 +887,75 @@ TEST_CASE("store: schema_check::on_first_use", "[net][store][schema]")
 		CHECK(m.run(s.remove("a")).has_value());
 		m.check_server();
 		CHECK(m.log.received.size() == 4);
+	}
+}
+
+TEST_CASE("store: update_if's default guard on a member without an equality rule", "[net][store][schema][update]")
+{
+	using op = ldap::modify_operation;
+	const ldap::binary photo{ std::byte{ 'p' } };
+	const photo_card before{ .cn = "A", .photo = photo, .csn = "20250101000000.000000Z#000000#000#000000" };
+	photo_card after = before;
+	after.photo = ldap::binary{ std::byte{ 'q' } };
+	const ldap::modify_change replaced{ op::replace, { "jpegPhoto", { "q" } } };
+
+	SECTION("refused before sending with the default guard, also on an empty member")
+	{
+		mock_ldap m;
+		m.serve({ answer({ root_dse(1), done_msg(1) }),
+		  answer({ photo_subschema(2), done_msg(2) }),
+		  answer({ ok(3, ldap::modify_response{}) }),
+		  answer({ ok(4, ldap::modify_response{}) }) });
+		ldap::store s(
+		  m.conn, people_base, ldap::named_by<&photo_card::cn>, { .schema_check = ldap::schema_check::on_first_use });
+		auto refused = m.run(s.update_if(before, after));
+		REQUIRE_FALSE(refused.has_value());
+		CHECK(refused.error().code == ldap::client_errc::no_equality_rule);
+		CHECK(refused.error().code == ldap::cond::invalid_input);
+		CHECK(std::string(refused.error().context)
+			  == "modify cn=A,ou=people,dc=example,dc=org: attribute jpegPhoto: no equality rule, an assertion on it "
+				 "is always Undefined (use ldap::versioned_by)");
+		photo_card empty = before;
+		empty.photo.reset();
+		auto also = m.run(s.update_if(empty, after));
+		REQUIRE_FALSE(also.has_value());
+		CHECK(also.error().code == ldap::client_errc::no_equality_rule);
+
+		// versioned_by and update are sent.
+		REQUIRE(m.run(s.update_if(before, after, ldap::versioned_by<&photo_card::csn>)).has_value());
+		REQUIRE(m.run(s.update(before, after)).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 4);
+		const auto &versioned = std::get<ldap::modify_request>(m.log.received[2].op).changes;
+		REQUIRE(versioned.size() == 1);
+		CHECK(versioned[0] == replaced);
+		CHECK(m.log.received[2].controls.size() == 1);
+		CHECK(m.log.received[3]
+			  == ldap::message{ 4, ldap::modify_request{ "cn=A,ou=people,dc=example,dc=org", { replaced } } });
+	}
+	SECTION("a struct that does not fit fails with schema_mismatch first")
+	{
+		mock_ldap m;
+		m.serve({ answer({ root_dse(1), done_msg(1) }), answer({ photo_subschema(2), done_msg(2) }) });
+		ldap::store s(m.conn,
+		  people_base,
+		  ldap::named_by<&badly_typed_photo::cn>,
+		  { .schema_check = ldap::schema_check::on_first_use });
+		auto r =
+		  m.run(s.update_if(badly_typed_photo{ .cn = 1, .photo = photo }, badly_typed_photo{ .cn = 1, .photo = {} }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::schema_mismatch);
+		m.check_server();
+		CHECK(m.log.received.size() == 2);
+	}
+	SECTION("schema_check off: sent")
+	{
+		mock_ldap m;
+		m.serve({ answer({ ok(1, ldap::modify_response{}) }) });
+		ldap::store s(m.conn, people_base, ldap::named_by<&photo_card::cn>);
+		REQUIRE(m.run(s.update_if(before, after)).has_value());
+		m.check_server();
+		CHECK(m.log.received.size() == 1);
 	}
 }
 

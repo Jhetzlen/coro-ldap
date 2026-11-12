@@ -2657,6 +2657,91 @@ TEST_CASE("integration: store::update_if detects a concurrent change", "[integra
 
 namespace {
 
+struct photo_contact
+{
+	std::string uid;
+	std::string cn;
+	std::string sn;
+	std::optional<ldap::binary> photo;
+	std::string entry_csn{};
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<photo_contact> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::field<&photo_contact::uid>("uid"),
+  ldap::field<&photo_contact::cn>("cn"),
+  ldap::field<&photo_contact::sn>("sn"),
+  ldap::field<&photo_contact::photo>("jpegPhoto"),
+  ldap::field<&photo_contact::entry_csn>("entryCSN", ldap::read_only));
+
+TEST_CASE("integration: store::update_if's default guard on jpegPhoto, which has no equality rule",
+  "[integration][store][update]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	draining_context ioc;
+	auto c = open_admin(ioc);
+	ldap::store s(c, people, ldap::named_by<&photo_contact::uid>);
+	const std::string name = unique("photo");
+	const ldap::binary picture{ std::byte{ 0xFF }, std::byte{ 0xD8 } };
+	REQUIRE(finish(
+	  ioc, s.add(photo_contact{ .uid = name, .cn = "Photo", .sn = "Contact", .photo = picture, .entry_csn = {} }))
+		.has_value());
+	const auto read = [&] {
+		auto got = finish(ioc, s.get(name));
+		REQUIRE(got.has_value());
+		REQUIRE(got->has_value());
+		return **got;
+	};
+
+	// The assertion on jpegPhoto is Undefined: assertionFailed every time.
+	for (int i = 0; i < 2; ++i) {
+		const photo_contact original = read();
+		photo_contact changed = original;
+		changed.cn = "Changed";
+		auto undefined = finish(ioc, s.update_if(original, changed));
+		REQUIRE_FALSE(undefined.has_value());
+		CHECK(undefined.error().code == ldap::errc::assertion_failed);
+	}
+	photo_contact original = read();
+	photo_contact changed = original;
+	changed.cn = "Versioned";
+	auto versioned = finish(ioc, s.update_if(original, changed, ldap::versioned_by<&photo_contact::entry_csn>));
+	if (!versioned) {
+		FAIL(versioned.error().message());
+	}
+	CHECK(read().cn == "Versioned");
+
+	// With the schema check: refused before sending, the entry untouched.
+	ldap::store checked(
+	  c, people, ldap::named_by<&photo_contact::uid>, { .schema_check = ldap::schema_check::on_first_use });
+	original = read();
+	changed = original;
+	changed.cn = "Refused";
+	auto refused = finish(ioc, checked.update_if(original, changed));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::client_errc::no_equality_rule);
+	CHECK(read().cn == "Versioned");
+
+	// Without a photo there is no term on jpegPhoto.
+	REQUIRE(finish(ioc, s.modify(name, { ldap::remove<&photo_contact::photo>() })).has_value());
+	original = read();
+	CHECK_FALSE(original.photo.has_value());
+	changed = original;
+	changed.cn = "No photo";
+	auto plain = finish(ioc, s.update_if(original, changed));
+	if (!plain) {
+		FAIL(plain.error().message());
+	}
+	CHECK(read().cn == "No photo");
+	REQUIRE(finish(ioc, s.remove(name)).has_value());
+}
+
+namespace {
+
 struct tagged_contact
 {
 	std::string uid;

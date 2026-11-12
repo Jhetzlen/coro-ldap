@@ -174,6 +174,8 @@ namespace {
 			return "the naming value changed: the entry must be renamed";
 		case client_errc::incomplete_values:
 			return "the entry holds only part of the attribute's values (a range option)";
+		case client_errc::no_equality_rule:
+			return "attribute has no equality matching rule";
 		}
 		return {};
 	}
@@ -235,6 +237,7 @@ namespace {
 		case client_errc::invalid_url:
 		case client_errc::string_prep_failed:
 		case client_errc::naming_value_changed:
+		case client_errc::no_equality_rule:
 			return cond::invalid_input;
 		case client_errc::not_connected:
 		case client_errc::not_sent:

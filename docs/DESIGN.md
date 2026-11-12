@@ -1736,9 +1736,26 @@ co_await people.remove("jdoe");
     updates nobody raced with), and a type that truncates (`sys_seconds`
     drops fractions) could never match. A filter cannot count values, so
     a value added to a non-empty multi-valued member, and any attribute T
-    does not map, go unnoticed. A member whose attribute has no equality
-    rule (jpegPhoto) evaluates to Undefined, which fails the assertion
-    every time. A filter holds at most `max_filter_elements` (10,000)
+    does not map, go unnoticed. A 122 from this filter can also mean
+    Undefined, which RFC 4528 section 3 answers as assertionFailed (RFC
+    4511 section 4.5.1.7), and is then permanent, so retry loops on 122
+    must be bounded. Three cases, probed on slapd 2.6.10: the attribute
+    has no equality rule (jpegPhoto, audio), refused up front with
+    `schema_check::on_first_use` (`client_errc::no_equality_rule` before
+    anything is sent, the default guard only, an empty member included:
+    the struct's next value would be asserted); the equality rule's
+    assertion syntax is not the attribute's (userCertificate's
+    certificateExactMatch); the bound identity may not read the
+    attribute. An extensible `:2.5.13.17:` match or a negation is
+    Undefined too, so neither is a way out. The criterion is the rule,
+    not `ldap::binary`: userPassword, with octetStringMatch, asserts fine.
+    An empty member adds no term, so tests without values hide the
+    problem. `versioned_by` is the fix, on a member that has an equality
+    rule. Samba and AD do not support the Assertion control. The check
+    reuses the store's schema check (`validate<T>` reports the warning
+    `no_equality_rule`; the store keeps a second outcome beside the
+    first, no extra request, no stored schema), and a real
+    `schema_mismatch` takes precedence. A filter holds at most `max_filter_elements` (10,000)
     elements, the enclosing AND and one per value, so a
     struct with more (a large group's `member`) fails every call with
     `invalid_filter` before anything is sent; `versioned_by` is the way
@@ -1820,7 +1837,7 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `gssapi_failure`, `security_layer_required`, `security_layer_unavailable`, `security_layer_in_effect`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `naming_value_changed`, `incomplete_values`; facade: `would_deadlock`; environment: `internal_error` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `gssapi_failure`, `security_layer_required`, `security_layer_unavailable`, `security_layer_in_effect`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `naming_value_changed`, `incomplete_values`, `no_equality_rule`; facade: `would_deadlock`; environment: `internal_error` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 `error`'s strings are `std::pmr::string` but always on the default
@@ -1901,7 +1918,7 @@ a caller match none, deliberately (test them by exact code).
 | `busy_or_unavailable` | `busy`, `unavailable` | | `connection_refused`, `host_unreachable`, `network_unreachable`, `network_down` |
 | `access_denied` | `insufficient_access_rights`, `stronger_auth_required`, `confidentiality_required` | `tls_required`, `security_layer_required`, `security_layer_unavailable` | `permission_denied` |
 | `already_exists` | `entry_already_exists`, `attribute_or_value_exists` | | |
-| `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url`, `string_prep_failed`, `naming_value_changed` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
+| `invalid_input` | `undefined_attribute_type`, `inappropriate_matching`, `constraint_violation`, `invalid_attribute_syntax`, `invalid_dn_syntax`, `naming_violation`, `object_class_violation` | `invalid_filter`, `invalid_dn`, `invalid_attribute`, `encode_error`, `invalid_url`, `string_prep_failed`, `naming_value_changed`, `no_equality_rule` | `invalid_argument`, `no_such_file_or_directory`, `not_a_directory`, `filename_too_long` (TLS configuration) |
 | none | `operations_error`, `size_limit_exceeded`, `compare_false`, `compare_true`, `referral`, `admin_limit_exceeded`, `unavailable_critical_extension`, `sasl_bind_in_progress`, `alias_problem`, `alias_dereferencing_problem`, `unwilling_to_perform`, `loop_detect`, `not_allowed_on_non_leaf`, `not_allowed_on_rdn`, `object_class_mods_prohibited`, `affects_multiple_dsas`, `other`, `virtual_list_view_error`, `assertion_failed`, `e_sync_refresh_required`, unknown codes | `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `would_deadlock`, `operation_in_progress`, `internal_error`, `incomplete_values` | everything else |
 
 Choices worth knowing: `unauthenticated_bind` is `auth_failed` (an empty
@@ -1968,6 +1985,11 @@ Checks:
 - object classes from `object_class(...)` and `auxiliary_class(...)`
   exist; an auxiliary one the server defines with another kind is the
   warning `not_auxiliary`;
+- equality (warning): a writable member whose attribute has no EQUALITY
+  on its SUP chain is `no_equality_rule` (an assertion on it is always
+  Undefined, so `update_if`'s default guard cannot succeed), reported
+  only when the schema declares EQUALITY for some attribute type, so an
+  AD or Samba schema, which declares none, reports nothing;
 - attribute exists on the server (name or alias); a member named by an
   alias or numeric OID rather than the attribute's first NAME is the
   warning `not_primary_name` (servers answer with the primary name, so
@@ -2051,7 +2073,13 @@ With `schema_check::on_first_use`, a store's first operation runs
 `validate<T>` and fails with `client_errc::schema_mismatch` if the report has
 errors. The outcome is kept by the store, and checked again once its
 source's `is_tls()` or `security_layer()` changed (RFC 4513 sections
-3.1.5 and 5.2.1.6: what was read unprotected is read again). The
+3.1.5 and 5.2.1.6: what was read unprotected is read again). From the
+same report the store keeps a second outcome: with a `no_equality_rule`
+warning, `update_if` with its default guard fails with
+`client_errc::no_equality_rule` (cond `invalid_input`; context
+"attribute jpegPhoto: no equality rule, an assertion on it is always
+Undefined (use ldap::versioned_by)") before sending; `versioned_by`,
+`update` and the other operations are not affected. The
 connection itself caches nothing about the server (coro-ldap-aw4.1: its
 schema cache and `connection_options::schema_check` are gone).
 

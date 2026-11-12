@@ -96,6 +96,12 @@ struct dit_content_rule
 [[nodiscard]] auto parse_object_class(std::string_view text) -> result<object_class_type>;
 [[nodiscard]] auto parse_dit_content_rule(std::string_view text) -> result<dit_content_rule>;
 
+class server_schema;
+namespace detail {
+	// Whether any attribute type of `s` declares EQUALITY itself.
+	[[nodiscard]] auto declares_equality(const server_schema &s) noexcept -> bool;
+}// namespace detail
+
 class server_schema
 {
   public:
@@ -153,6 +159,9 @@ class server_schema
 	// The names and OIDs of attribute types skipped for their SYNTAX.
 	std::unordered_set<std::string, detail::ci_hash, detail::ci_equal> bad_syntax_{};
 	std::size_t skipped_ = 0;
+	bool declares_equality_ = false;
+
+	friend auto detail::declares_equality(const server_schema &s) noexcept -> bool;
 };
 
 // ---------------------------------------------------------------- syntaxes
@@ -310,6 +319,11 @@ struct schema_issue
 		// warning: a member mapped by an alias or numeric OID rather than
 		// the attribute's first NAME, the one the server answers with
 		not_primary_name,
+		// warning: a writable member whose attribute has no EQUALITY rule
+		// on its SUP chain, on a schema that declares EQUALITY for some
+		// attribute type: an assertion on it is always Undefined, so
+		// store::update_if's default guard cannot succeed
+		no_equality_rule,
 	};
 	kind what;
 	std::string name;// the attribute or object class
@@ -319,7 +333,8 @@ struct schema_issue
 		return what != kind::single_member_multi_valued && what != kind::must_attribute_not_mapped
 			   && what != kind::must_attribute_not_required && what != kind::unknown_superclass
 			   && what != kind::not_auxiliary && what != kind::attribute_not_allowed
-			   && what != kind::auxiliary_class_not_allowed && what != kind::not_primary_name;
+			   && what != kind::auxiliary_class_not_allowed && what != kind::not_primary_name
+			   && what != kind::no_equality_rule;
 	}
 };
 
