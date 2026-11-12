@@ -803,7 +803,7 @@ auto serve_schema_and_layer(net::transport t, std::vector<std::string> &log, std
 				  { "objectClasses", { "( 2.5.6.6 NAME 'person' STRUCTURAL MUST cn )" } } } };
 		} else {
 			log.push_back(prefix + "search");
-			found = entry_msg(req->id, "cn=a,dc=example,dc=org", "a");
+			found = entry_msg_for(*search, req->id, "cn=a,dc=example,dc=org", "a");
 		}
 		for (const auto &m : { found, done_msg(req->id) }) {
 			if (auto w = co_await net::write_message(t, m); !w) {

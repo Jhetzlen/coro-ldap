@@ -3307,7 +3307,7 @@ TEST_CASE("client: load_schema runs both searches on one lease", "[net][client][
 		pool_fixture f;
 		auto &a = f.server({ schema_after_bind(),
 		  { answer({ bind_resp(1) }),
-			answer({ entry_msg(2, "cn=a,ou=people,dc=example,dc=org", "a"), done_msg(2) }),
+			answer({ card_msg(2, "cn=a,ou=people,dc=example,dc=org", "a"), done_msg(2) }),
 			step{},
 			client_hangs_up() } });
 		f.make({ .servers = { a.url() }, .setup = admin_setup(), .max_lifetime = milliseconds(0) });

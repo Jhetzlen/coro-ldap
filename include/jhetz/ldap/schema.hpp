@@ -307,6 +307,9 @@ struct schema_issue
 		// warning: a declared AUXILIARY class that the structural class's
 		// DIT content rule does not list in its AUX
 		auxiliary_class_not_allowed,
+		// warning: a member mapped by an alias or numeric OID rather than
+		// the attribute's first NAME, the one the server answers with
+		not_primary_name,
 	};
 	kind what;
 	std::string name;// the attribute or object class
@@ -316,7 +319,7 @@ struct schema_issue
 		return what != kind::single_member_multi_valued && what != kind::must_attribute_not_mapped
 			   && what != kind::must_attribute_not_required && what != kind::unknown_superclass
 			   && what != kind::not_auxiliary && what != kind::attribute_not_allowed
-			   && what != kind::auxiliary_class_not_allowed;
+			   && what != kind::auxiliary_class_not_allowed && what != kind::not_primary_name;
 	}
 };
 

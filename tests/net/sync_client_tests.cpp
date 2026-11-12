@@ -975,8 +975,8 @@ TEST_CASE("sync store: schema_check::on_first_use", "[net][sync][store][schema]"
 		threaded_script_server srv({ { answer({ bind_resp(1) }),
 		  answer({ root_dse_msg(2), done_msg(2) }),
 		  answer({ subschema_msg(3), done_msg(3) }),
-		  answer({ entry_msg(4, card_a, "a"), done_msg(4) }),
-		  answer({ entry_msg(5, card_a, "a"), done_msg(5) }),
+		  answer({ card_msg(4, card_a, "a"), done_msg(4) }),
+		  answer({ card_msg(5, card_a, "a"), done_msg(5) }),
 		  unbind_read() } });
 		{
 			ldap::sync::client pool(options_for(srv.url()));

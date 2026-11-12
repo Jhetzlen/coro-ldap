@@ -1670,9 +1670,8 @@ co_await people.remove("jdoe");
   and the limit codes are values, as `search()`.
 - `update(original, changed)` sends one modify built by `ldap::diff`
   (mapping.hpp), to `original.dn` for a `record<T>` or to `dn_of` the
-  naming member for a `T`: a single-valued member that differs is added
-  when `original` has no value, replaced otherwise, or deleted once
-  empty; a multi-valued one deletes the values
+  naming member for a `T`: a single-valued member that differs is
+  replaced, or deleted once empty; a multi-valued one deletes the values
   it lost, then adds the new ones (RFC 4511 section 4.6, applied in
   order, so a value that changed only in case under a caseIgnore rule is
   deleted, then added again); values compare as encoded, exactly. A
@@ -1681,9 +1680,8 @@ co_await people.remove("jdoe");
   removes the attribute with its last value. A value another client
   removed since fails the modify with noSuchAttribute (16), a partial
   edit or a clear alike. A `std::vector<ldap::binary>` member is the
-  exception: it is replaced with its new set (no values when cleared,
-  added when `original`'s set is empty), so a value another client added
-  since to a non-empty set is lost. The usual such attributes
+  exception: it is replaced with its new set (no values when cleared), so
+  a value another client added since is lost. The usual such attributes
   (jpegPhoto, RFC 2798) have no EQUALITY rule, a server answers a value
   add or delete on those with inappropriateMatching (18, RFC 4511 section
   4.6 needs equality to find the values), and `diff` has no schema to ask.
@@ -1696,19 +1694,21 @@ co_await people.remove("jdoe");
   anything is sent: the entry would need a new DN, which is `rename`'s
   job, not a hidden modify DN. `original` is the caller's: no read
   before the write, so a concurrent change between the read and the
-  update is not detected (`update_if` detects it), except that an empty
-  member is written with add: the server refuses a conflicting value
-  written since (verified on slapd 2.6.10: constraintViolation (19) on a
-  SINGLE-VALUE type already set, attributeOrValueExists (20) for the same
-  value, inappropriateMatching (18) when a no-EQUALITY attribute such as
-  jpegPhoto is present), while a tagged sibling such as
-  `description;lang-fr` does not interfere, so `update` no longer
-  silently overwrites a concurrent value there. `store::modify` with
-  `ldap::replace<&T::m>` stays the last-writer-wins path. With Permissive
-  Modify the conflicting add is not refused. A member mapped
-  `std::optional` over a schema-multi-valued attribute can end with two
-  values after concurrent writes, and its next decode fails with
-  `too_many_values`.
+  update is not detected (`update_if` detects it). A member empty in
+  `original` is written with replace, not add: empty in the struct is
+  not absent on the server. A read returns no value for an attribute the
+  reader may not see (RFC 4511 section 4.5.1.8: a userPassword under
+  slapd's `by self =xw`, AD's unicodePwd, AD confidential attributes), so
+  an add would leave the old password next to the new one (or be refused
+  on unicodePwd). One diff serves `ldap::diff`, `update` and `update_if`,
+  with no internal mode. Map members by the name the server returns: a
+  member named by an alias (`surname`) or OID decodes empty, since the
+  server answers with the primary name (`sn`) and decode matches names
+  exactly; a store read (`get`, `search`, the streams) fails with
+  `schema_mismatch` ("attribute sn returned for no member") when the
+  answer holds an attribute whose description without options is none of
+  the names it requested, and `validate<T>` warns with
+  `not_primary_name`. Plain `decode<T>` does not check.
 - `update_if(original, changed)` is `update` with a critical Assertion
   control (RFC 4528), so the server applies the modify only if the
   entry still matches `original`, atomically, and otherwise answers
@@ -1722,10 +1722,11 @@ co_await people.remove("jdoe");
     for an empty member: no filter can test the exact description alone,
     so `(!(description=*))` is false on an entry holding only
     `description;lang-fr` (or AD's `member;range=0-1499`) and failed
-    every update with 122 with nobody racing. A value written to an empty
-    member is caught by the add instead (above), with the server's own
-    code (16, 18, 19, 20) rather than 122, so a retry loop re-reads on
-    those too. The filter does not see added values nor a plain value
+    every update with 122 with nobody racing (verified on slapd 2.6.10:
+    a replace on description or displayName leaves the `;lang-fr`
+    siblings intact). So the default guard does not see a value added to
+    a member empty in `original`: a concurrent fill is overwritten by the
+    replace. The filter does not see added values nor a plain value
     replaced while a tagged or subtype sibling holds the same text;
     `versioned_by` is the exact check. An `original` with no values gives
     the empty filter, and `update_if` fails with `invalid_filter` before
@@ -1967,7 +1968,12 @@ Checks:
 - object classes from `object_class(...)` and `auxiliary_class(...)`
   exist; an auxiliary one the server defines with another kind is the
   warning `not_auxiliary`;
-- attribute exists on the server (name or alias);
+- attribute exists on the server (name or alias); a member named by an
+  alias or numeric OID rather than the attribute's first NAME is the
+  warning `not_primary_name` (servers answer with the primary name, so
+  the member would decode empty and a store read fails with
+  `schema_mismatch`; an attribute with no NAME mapped by its OID gets
+  none);
 - cardinality: `T` / `optional<T>` mapped to a multi-valued attribute is
   reported (it only fails at runtime if an entry really has several values);
 - syntax: the attribute's SYNTAX OID is in `value_traits<T>::syntaxes`

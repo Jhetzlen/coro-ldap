@@ -56,6 +56,12 @@ struct labelled_card
 	std::optional<std::string> description;
 };
 
+struct surnamed
+{
+	std::string cn;
+	std::optional<std::string> surname;
+};
+
 struct large_group
 {
 	std::string cn;
@@ -89,6 +95,11 @@ template<>
 constexpr auto ldap::schema<labelled_card> = ldap::describe(ldap::object_class("person"),
   ldap::field<&labelled_card::cn>("cn"),
   ldap::field<&labelled_card::description>("description"));
+
+template<>
+constexpr auto ldap::schema<surnamed> = ldap::describe(ldap::object_class("person"),
+  ldap::field<&surnamed::cn>("cn"),
+  ldap::field<&surnamed::surname>("surname"));
 
 template<>
 constexpr auto ldap::schema<large_group> = ldap::describe(ldap::object_class("groupOfNames"),
@@ -221,6 +232,40 @@ TEST_CASE("store: get returns the other errors and decode failures", "[net][stor
 	CHECK(std::string(bad.error().context)
 		  == "search uid=jdoe,ou=people,dc=example,dc=org: entry uid=jdoe,ou=people,dc=example,dc=org: attribute "
 			 "uidNumber: not an integer: \"x\"");
+	m.check_server();
+}
+
+TEST_CASE("store: a read fails on an attribute answered for no member", "[net][store]")
+{
+	mock_ldap m;
+	m.serve({ answer({ ldap::message{ 1,
+						 ldap::search_result_entry{
+						   "cn=X,ou=people,dc=example,dc=org", { { "cn", { "X" } }, { "sn", { "Y" } } } } },
+				done_msg(1) }),
+	  answer(
+		{ ldap::message{ 2,
+			ldap::search_result_entry{ "cn=X,ou=people,dc=example,dc=org", { { "cn", { "X" } }, { "sn", { "Y" } } } } },
+		  done_msg(2) }),
+	  answer({ ldap::message{ 3,
+				 ldap::search_result_entry{ "cn=X,ou=people,dc=example,dc=org",
+				   { { "CN", { "X" } }, { "description;lang-fr", { "Bonjour" } } } } },
+		done_msg(3) }) });
+	ldap::store aliased(m.conn, people_base, ldap::named_by<&surnamed::cn>);
+	auto got = m.run(aliased.get("X"));
+	REQUIRE_FALSE(got.has_value());
+	CHECK(got.error().code == ldap::client_errc::schema_mismatch);
+	CHECK(std::string(got.error().context)
+		  == "search cn=X,ou=people,dc=example,dc=org: entry cn=X,ou=people,dc=example,dc=org: attribute sn returned "
+			 "for no member");
+	auto found = m.run(aliased.search());
+	REQUIRE_FALSE(found.has_value());
+	CHECK(found.error().code == ldap::client_errc::schema_mismatch);
+
+	ldap::store labelled(m.conn, people_base, ldap::named_by<&labelled_card::cn>);
+	auto tagged = m.run(labelled.get("X"));
+	REQUIRE(tagged.has_value());
+	REQUIRE(tagged->has_value());
+	CHECK_FALSE((*tagged)->description.has_value());
 	m.check_server();
 }
 
@@ -413,21 +458,21 @@ TEST_CASE("store: update_if carries an Assertion control", "[net][store][update]
 		CHECK(m.log.received[0].controls[0].criticality);
 	}
 
-	SECTION("an empty member: no absence clause, and the value is added")
+	SECTION("an empty member: no absence clause, and the value is replaced")
 	{
 		mock_ldap m;
-		m.serve({ answer({ ok(1, ldap::modify_response{}) }) });
+		m.serve({ answer({ ok(1, ldap::modify_response{}) }), answer({ ok(2, ldap::modify_response{}) }) });
 		ldap::store s(m.conn, people_base, ldap::named_by<&person::uid>);
 		person filled = before;
 		filled.mail = "jdoe@example.org";
+		REQUIRE(m.run(s.update(found, filled)).has_value());
 		REQUIRE(m.run(s.update_if(found, filled)).has_value());
 		m.check_server();
-		REQUIRE(m.log.received.size() == 1);
-		CHECK(m.log.received[0]
-			  == ldap::message{ 1,
-				ldap::modify_request{
-				  "cn=John,ou=other,dc=example,dc=org", { { op::add, { "mail", { "jdoe@example.org" } } } } },
-				{ assertion_of(values) } });
+		const ldap::modify_request replaced{ "cn=John,ou=other,dc=example,dc=org",
+			{ { op::replace, { "mail", { "jdoe@example.org" } } } } };
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(m.log.received[0] == ldap::message{ 1, replaced });
+		CHECK(m.log.received[1] == ldap::message{ 2, replaced, { assertion_of(values) } });
 	}
 
 	SECTION("a concurrent change fails with assertionFailed")

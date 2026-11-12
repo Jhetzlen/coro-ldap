@@ -764,7 +764,7 @@ TEST_CASE("diff: the changes turning one value into another", "[mapping][diff]")
 
 	CHECK(wires(ldap::diff(before, before)).empty());
 
-	SECTION("single-valued members: add when empty, replace, or delete once empty")
+	SECTION("single-valued members: replace, empty in the original too, or delete once empty")
 	{
 		person after = before;
 		after.cn = "J\xC3\xBCrgen Doe";
@@ -776,7 +776,7 @@ TEST_CASE("diff: the changes turning one value into another", "[mapping][diff]")
 			  == std::vector<ldap::modify_change>{ { op::replace, { "cn", { "J\xC3\xBCrgen Doe" } } },
 				{ op::delete_, { "mail", {} } },
 				{ op::replace, { "uidNumber", { "1001" } } },
-				{ op::add, { "x-disabled", { "TRUE" } } } });
+				{ op::replace, { "x-disabled", { "TRUE" } } } });
 
 		person refilled = after;
 		refilled.disabled = false;
@@ -818,7 +818,7 @@ TEST_CASE("diff: the changes turning one value into another", "[mapping][diff]")
 	}
 }
 
-TEST_CASE("diff: a multi-valued binary member is replaced, or added when empty", "[mapping][diff]")
+TEST_CASE("diff: a multi-valued binary member is replaced, empty in the original too", "[mapping][diff]")
 {
 	using op = ldap::modify_operation;
 	const auto wires = [](const ldap::result<std::vector<ldap::change<album>>> &r) {
@@ -841,7 +841,7 @@ TEST_CASE("diff: a multi-valued binary member is replaced, or added when empty",
 	CHECK(wires(ldap::diff(before, album{ .photos = {} }))
 		  == std::vector<ldap::modify_change>{ { op::replace, { "jpegPhoto", {} } } });
 	CHECK(wires(ldap::diff(album{}, album{ .photos = { a, b, a } }))
-		  == std::vector<ldap::modify_change>{ { op::add, { "jpegPhoto", { "a", "b" } } } });
+		  == std::vector<ldap::modify_change>{ { op::replace, { "jpegPhoto", { "a", "b" } } } });
 }
 
 TEST_CASE("typed filters and object class narrowing", "[mapping][filter]")

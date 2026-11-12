@@ -881,6 +881,12 @@ namespace detail {
 						  : "not defined on the server" });
 			return;
 		}
+		if (!a->names.empty() && !detail::iequals(a->names.front(), name.substr(0, name.find(';')))) {
+			std::string text = "not the attribute's primary name: the server answers with ";
+			detail::append_sanitized(text, a->names.front(), 128);
+			out.issues.push_back(
+			  { .what = schema_issue::kind::not_primary_name, .name = std::string(name), .detail = std::move(text) });
+		}
 		if (kind != cardinality::multiple && !a->single_value) {
 			out.issues.push_back({ .what = schema_issue::kind::single_member_multi_valued,
 			  .name = std::string(name),

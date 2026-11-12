@@ -5,6 +5,8 @@
 #include "format_util.hpp"
 #include "generalized_time.hpp"
 
+#include <algorithm>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -56,6 +58,21 @@ namespace detail {
 		return std::nullopt;
 	}
 
+	auto unrequested_attribute_error(const entry &e, std::span<const std::string_view> names) -> std::optional<error>
+	{
+		for (const auto &a : e.attributes) {
+			const std::string_view description = a.type.name();
+			const std::string_view type = description.substr(0, description.find(';'));
+			if (std::ranges::none_of(names, [&](std::string_view n) { return iequals(n, type); })) {
+				std::string text = "attribute ";
+				detail::append_sanitized(text, description, 128);
+				text += " returned for no member";
+				return with_context(make_error(client_errc::schema_mismatch, text), entry_context(e.dn));
+			}
+		}
+		return std::nullopt;
+	}
+
 	auto change_context(modify_operation op, std::string_view attribute) -> std::string
 	{
 		// The RFC 4511 section 4.6 operation names.
@@ -77,9 +94,7 @@ namespace detail {
 		return detail::format("{} {}", name, attribute);
 	}
 
-	// A swap only garbles the context of a diagnostic; one caller (mapping.hpp).
-	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-	auto entry_context(std::string_view dn, std::string_view attribute) -> std::string
+	auto entry_context(std::string_view dn) -> std::string
 	{
 		// The DN is the server's text.
 		std::string text = "entry ";
@@ -88,6 +103,14 @@ namespace detail {
 		} else {
 			detail::append_sanitized(text, dn, 256);
 		}
+		return text;
+	}
+
+	// A swap only garbles the context of a diagnostic; one caller (mapping.hpp).
+	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+	auto entry_context(std::string_view dn, std::string_view attribute) -> std::string
+	{
+		std::string text = entry_context(dn);
 		detail::format_to(text, ": attribute {}", attribute);
 		return text;
 	}

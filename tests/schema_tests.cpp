@@ -561,18 +561,20 @@ TEST_CASE("schema: validate a matching descriptor", "[schema][validate]")
 	const auto s = ldap::server_schema::parse(openldap_types, openldap_classes);
 	const auto rep = ldap::validate<good_person>(s);
 	CHECK(rep.ok());
-	// uid is multi-valued on the server but a single member here, person's
-	// sn is not mapped, its cn is a vector and no class allows uidNumber:
-	// warnings only.
-	REQUIRE(rep.issues.size() == 4);
+	// uid is multi-valued on the server but a single member here, cn is
+	// mapped by its alias, person's sn is not mapped, its cn is a vector and
+	// no class allows uidNumber: warnings only.
+	REQUIRE(rep.issues.size() == 5);
 	CHECK(rep.issues[0].what == ldap::schema_issue::kind::single_member_multi_valued);
 	CHECK(rep.issues[0].name == "uid");
-	CHECK(rep.issues[1].what == ldap::schema_issue::kind::must_attribute_not_mapped);
-	CHECK(rep.issues[1].name == "sn");
-	CHECK(rep.issues[2].what == ldap::schema_issue::kind::must_attribute_not_required);
-	CHECK(rep.issues[2].name == "cn");
-	CHECK(rep.issues[3].what == ldap::schema_issue::kind::attribute_not_allowed);
-	CHECK(rep.issues[3].name == "uidNumber");
+	CHECK(rep.issues[1].what == ldap::schema_issue::kind::not_primary_name);
+	CHECK(rep.issues[1].name == "commonName");
+	CHECK(rep.issues[2].what == ldap::schema_issue::kind::must_attribute_not_mapped);
+	CHECK(rep.issues[2].name == "sn");
+	CHECK(rep.issues[3].what == ldap::schema_issue::kind::must_attribute_not_required);
+	CHECK(rep.issues[3].name == "cn");
+	CHECK(rep.issues[4].what == ldap::schema_issue::kind::attribute_not_allowed);
+	CHECK(rep.issues[4].name == "uidNumber");
 	CHECK(std::ranges::none_of(rep.issues, &ldap::schema_issue::is_error));
 }
 
@@ -938,9 +940,61 @@ TEST_CASE("schema: MUST attributes mapped by required members", "[schema][valida
 	// objectClass (top's MUST) is what add sends from the declared classes;
 	// cn and sn are mapped through an option and an alias.
 	CHECK(must_issues(rep).empty());
-	// Only the multi-valued warnings are left (uid, cn, sn, mail, home).
-	CHECK(std::ranges::all_of(
-	  rep.issues, [](const auto &i) { return i.what == ldap::schema_issue::kind::single_member_multi_valued; }));
+	// Only the multi-valued warnings are left (uid, cn, sn, mail, home),
+	// and sn mapped by its alias.
+	CHECK(std::ranges::all_of(rep.issues, [](const auto &i) {
+		return i.what == ldap::schema_issue::kind::single_member_multi_valued
+			   || (i.what == ldap::schema_issue::kind::not_primary_name && i.name == "surname");
+	}));
+	CHECK(std::ranges::count_if(rep.issues, [](const auto &i) {
+		return i.what == ldap::schema_issue::kind::not_primary_name;
+	}) == 1);
+}
+
+namespace {
+
+struct last_named
+{
+	std::string sn;
+};
+struct alias_named
+{
+	std::string sn;
+};
+struct oid_named
+{
+	std::string sn;
+};
+
+}// namespace
+
+template<> constexpr auto ldap::schema<last_named> = ldap::describe(ldap::field<&last_named::sn>("SN;lang-en"));
+template<> constexpr auto ldap::schema<alias_named> = ldap::describe(ldap::field<&alias_named::sn>("surname"));
+template<> constexpr auto ldap::schema<oid_named> = ldap::describe(ldap::field<&oid_named::sn>("2.5.4.4"));
+
+TEST_CASE("schema: a member named by an alias or OID is not_primary_name", "[schema][validate]")
+{
+	const auto s = core_schema();
+	using k = ldap::schema_issue::kind;
+	const auto primary = [](const ldap::schema_report &rep) {
+		std::vector<std::pair<std::string, std::string>> out;
+		for (const auto &i : rep.issues) {
+			if (i.what == k::not_primary_name) {
+				out.emplace_back(i.name, i.detail);
+			}
+		}
+		return out;
+	};
+	CHECK(primary(ldap::validate<last_named>(s)).empty());
+	const auto alias = ldap::validate<alias_named>(s);
+	CHECK(alias.ok());
+	CHECK(primary(alias)
+		  == std::vector<std::pair<std::string, std::string>>{
+			{ "surname", "not the attribute's primary name: the server answers with sn" } });
+	CHECK(primary(ldap::validate<oid_named>(s))
+		  == std::vector<std::pair<std::string, std::string>>{
+			{ "2.5.4.4", "not the attribute's primary name: the server answers with sn" } });
+	CHECK(alias.to_string().contains("warning: attribute surname: not the attribute's primary name"));
 }
 
 TEST_CASE("schema: MUST attributes not mapped, or mapped by members add may leave out", "[schema][validate]")

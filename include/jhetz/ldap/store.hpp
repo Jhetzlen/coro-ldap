@@ -101,6 +101,18 @@ template<class T> struct record
 
 namespace detail {
 
+	// `e` decoded as T. Fails with schema_mismatch when `e` holds an
+	// attribute T maps under no name (an alias, OID or supertype mapping that
+	// the server answers under another name, RFC 4511 4.5.2).
+	template<class T> [[nodiscard]] auto decode_requested(const entry &e) -> result<T>
+	{
+		static constexpr auto names = attribute_name_array<T>();
+		if (auto unrequested = unrequested_attribute_error(e, names)) {
+			return std::unexpected(std::move(*unrequested));
+		}
+		return decode<T>(e);
+	}
+
 	// `e` decoded as T, with its DN parsed; errors have the context of a
 	// search of `base`.
 	template<class T> [[nodiscard]] auto record_of(const entry &e, const dn &base) -> result<record<T>>
@@ -109,7 +121,7 @@ namespace detail {
 		if (!name) {
 			return std::unexpected(with_context(std::move(name.error()), op_context("search", base)));
 		}
-		auto v = decode<T>(e);
+		auto v = decode_requested<T>(e);
 		if (!v) {
 			return std::unexpected(with_context(std::move(v.error()), op_context("search", base)));
 		}
@@ -187,7 +199,7 @@ namespace detail {
 				}
 				return std::optional<value_type>{};
 			}
-			auto v = decode<value_type>(found->entries.front());
+			auto v = decode_requested<value_type>(found->entries.front());
 			if (!v) {
 				return std::unexpected(with_context(std::move(v.error()), op_context("search", entry)));
 			}
@@ -823,10 +835,11 @@ template<auto Naming, directory D> class store
 	}
 
 	// One modify turning `original` into `changed` (ldap::diff: only the
-	// members T maps, read_only ones skipped; an empty member written with
-	// add, so the server refuses a conflicting concurrent value), sent to
-	// original.dn, or for a value, to dn_of(its naming member). nullopt, and nothing sent (no
-	// schema check either), when no member differs. A changed naming member
+	// members T maps, read_only ones skipped; a member empty in `original`
+	// written with replace, since empty in the struct is not absent on the
+	// server: an attribute the reader may not see, RFC 4511 4.5.1.8), sent to
+	// original.dn, or for a value, to dn_of(its naming member). nullopt, and
+	// nothing sent (no schema check either), when no member differs. A changed naming member
 	// fails with naming_value_changed before anything is sent: use rename().
 	auto update(const record<value_type> &original, value_type changed, modify_controls controls = {})
 	  -> boost::capy::task<result<std::optional<response>>>
@@ -844,11 +857,10 @@ template<auto Naming, directory D> class store
 	// else it fails with errc::assertion_failed (122). The filter is
 	// ldap::unchanged_filter(original), true while every value of `original`
 	// is still there (subtypes and tagged values included; added values are
-	// not seen), or with ldap::versioned_by<&T::m>, the exact check,
+	// not seen, so a value written meanwhile to a member empty in `original`
+	// is overwritten), or with ldap::versioned_by<&T::m>, the exact check,
 	// (m=<original's value>), which fails with missing_attribute before
-	// anything is sent if `original` has none. Critical. A conflicting write
-	// to an empty member fails with the server's own code (16, 18, 19, 20),
-	// so a retry loop re-reads on those too. nullopt, and nothing
+	// anything is sent if `original` has none. Critical. nullopt, and nothing
 	// sent, when no member differs. An Assertion control in `controls` fails
 	// with encode_error before anything is sent, and so does, with
 	// invalid_filter, a default filter past max_filter_elements (one element

@@ -25,6 +25,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -61,6 +62,30 @@ inline auto entry_msg(std::int32_t id, std::string_view dn, std::string_view cn)
 		ldap::search_result_entry{ dn,
 		  { ldap::partial_attribute{ "cn", { cn } }, ldap::partial_attribute{ "objectClass", { "person", "top" } } } }
 	};
+}
+
+// An entry with only cn, as a server answers a search for cn alone (a
+// store of a struct mapping only cn).
+inline auto card_msg(std::int32_t id, std::string_view dn, std::string_view cn) -> ldap::message
+{
+	return ldap::message{ id, ldap::search_result_entry{ dn, { ldap::partial_attribute{ "cn", { cn } } } } };
+}
+
+// entry_msg with only the attributes `search` asks for (all of them when it
+// lists none or "*"), as a server answers.
+inline auto entry_msg_for(const ldap::search_request &search, std::int32_t id, std::string_view dn, std::string_view cn)
+  -> ldap::message
+{
+	auto m = entry_msg(id, dn, cn);
+	const auto &wanted = search.attributes;
+	if (wanted.empty() || std::ranges::find(wanted, "*") != wanted.end()) {
+		return m;
+	}
+	auto &e = std::get<ldap::search_result_entry>(m.op);
+	std::erase_if(e.attributes, [&](const ldap::partial_attribute &a) {
+		return std::ranges::none_of(wanted, [&](std::string_view w) { return ldap::detail::iequals(w, a.type); });
+	});
+	return m;
 }
 
 inline auto expected_entry(std::string_view dn, std::string_view cn) -> ldap::entry

@@ -35,6 +35,7 @@
 #include <deque>
 #include <format>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <latch>
 #include <optional>
@@ -2675,7 +2676,7 @@ constexpr auto ldap::schema<tagged_contact> = ldap::describe(ldap::object_class(
   ldap::field<&tagged_contact::description>("description"),
   ldap::field<&tagged_contact::display_name>("displayName"));
 
-TEST_CASE("integration: store::update_if next to a tagged value, and an empty member written with add",
+TEST_CASE("integration: store::update_if next to a tagged value, and an empty member written with replace",
   "[integration][store][update]")
 {
 	if (!have_slapd()) {
@@ -2719,16 +2720,182 @@ TEST_CASE("integration: store::update_if next to a tagged value, and an empty me
 	}
 	CHECK(read().description == "Hello");
 
-	// An empty SINGLE-VALUE member set meanwhile: the add is refused.
+	// An empty SINGLE-VALUE member set meanwhile: the guard does not see it,
+	// and the replace overwrites it.
 	original = read();
 	REQUIRE(finish(ioc, s.modify(name, { ldap::replace<&tagged_contact::display_name>("Theirs") })).has_value());
 	changed = original;
 	changed.display_name = "Mine";
-	auto conflict = finish(ioc, s.update_if(original, changed));
-	REQUIRE_FALSE(conflict.has_value());
-	CHECK(conflict.error().code == ldap::errc::constraint_violation);
-	CHECK(read().display_name == "Theirs");
+	auto overwritten = finish(ioc, s.update_if(original, changed));
+	if (!overwritten) {
+		FAIL(overwritten.error().message());
+	}
+	CHECK(read().display_name == "Mine");
 	REQUIRE(finish(ioc, s.remove(name)).has_value());
+}
+
+namespace {
+
+struct password_holder
+{
+	std::string uid;
+	std::string cn;
+	std::string sn;
+	std::optional<ldap::binary> password;
+};
+
+struct surname_holder
+{
+	std::string uid;
+	std::optional<std::string> surname;
+};
+
+auto bytes(std::string_view s) -> ldap::binary
+{
+	ldap::binary out;
+	for (const char c : s) {
+		out.push_back(static_cast<std::byte>(c));
+	}
+	return out;
+}
+
+// The database's ACL makes userPassword write-only for its owner
+// (olcAccess through cn=config) while this lives, then `to * by * read`
+// again. A failed restore fails the test.
+class password_write_only
+{
+  public:
+	explicit password_write_only(corosio::io_context &ioc) : ioc_(&ioc), config_(open(ioc, env("JHETZ_LDAP_IT_LDAP")))
+	{
+		auto b = finish(*ioc_, config_.simple_bind(ldap::dn{ "cn=config" }, "secret"));
+		if (!b) {
+			FAIL("bind as cn=config: " << b.error().message());
+		}
+		auto m = set({ "{0}to attrs=userPassword by self =xw by anonymous auth by * none", "{1}to * by * read" });
+		if (!m) {
+			FAIL("make userPassword write-only: " << m.error().message());
+		}
+	}
+
+	password_write_only(const password_write_only &) = delete;
+	auto operator=(const password_write_only &) -> password_write_only & = delete;
+
+	// As ~anonymous_binds_disallowed.
+	~password_write_only()
+	{
+		bool restored = false;
+		std::string why;
+		try {
+			auto m = set({ "{0}to * by * read" });
+			restored = m.has_value();
+			if (!m) {
+				why = ": " + std::string(m.error().message());
+			}
+		} catch (...) {// NOLINT(bugprone-empty-catch): reported below as restored stays false
+		}
+		if (restored) {
+			return;
+		}
+		try {
+			FAIL_CHECK("could not restore the database ACL, later tests run with another one" << why);
+		} catch (...) {// NOLINT(bugprone-empty-catch): Catch2 aborting the run, see above
+		}
+	}
+
+  private:
+	auto set(std::initializer_list<std::string_view> rules) -> ldap::result<ldap::response>
+	{
+		return finish(
+		  *ioc_, config_.modify({ .object = database_dn, .changes = { ldap::mod::replace("olcAccess", rules) } }));
+	}
+
+	inline static const ldap::dn database_dn{ "olcDatabase={1}mdb,cn=config" };
+	corosio::io_context *ioc_;// non-null
+	ldap::connection config_;
+};
+
+}// namespace
+
+template<>
+constexpr auto ldap::schema<password_holder> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::field<&password_holder::uid>("uid"),
+  ldap::field<&password_holder::cn>("cn"),
+  ldap::field<&password_holder::sn>("sn"),
+  ldap::field<&password_holder::password>("userPassword"));
+
+template<>
+constexpr auto ldap::schema<surname_holder> = ldap::describe(ldap::object_class("inetOrgPerson"),
+  ldap::field<&surname_holder::uid>("uid"),
+  ldap::field<&surname_holder::surname>("surname"));
+
+TEST_CASE("integration: store::update replaces a password its owner cannot read", "[integration][store][update]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	draining_context ioc;
+	auto c = open_admin(ioc);
+	ldap::store admin_store(c, people, ldap::named_by<&password_holder::uid>);
+	const std::string name = unique("secret");
+	REQUIRE(finish(
+	  ioc, admin_store.add(password_holder{ .uid = name, .cn = "Secret", .sn = "Holder", .password = bytes("first") }))
+		.has_value());
+	const auto entry = admin_store.dn_of(name);
+	REQUIRE(entry.has_value());
+	const auto bind_code = [&](const std::string &password) {
+		auto u = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
+		auto b = finish(ioc, u.simple_bind(*entry, password));
+		return b ? std::error_code{} : b.error().code;
+	};
+	{
+		const password_write_only acl(ioc);
+		auto u = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
+		REQUIRE(finish(ioc, u.simple_bind(*entry, "first")).has_value());
+		ldap::store own(u, people, ldap::named_by<&password_holder::uid>);
+		const auto read = [&] {
+			auto got = finish(ioc, own.get(name));
+			REQUIRE(got.has_value());
+			REQUIRE(got->has_value());
+			return **got;
+		};
+
+		password_holder original = read();
+		CHECK_FALSE(original.password.has_value());
+		password_holder changed = original;
+		changed.password = bytes("second");
+		auto updated = finish(ioc, own.update(original, changed));
+		if (!updated) {
+			FAIL(updated.error().message());
+		}
+		CHECK(bind_code("first") == ldap::errc::invalid_credentials);
+		CHECK(bind_code("second") == std::error_code{});
+
+		original = read();
+		CHECK_FALSE(original.password.has_value());
+		changed = original;
+		changed.password = bytes("third");
+		auto guarded = finish(ioc, own.update_if(original, changed));
+		if (!guarded) {
+			FAIL(guarded.error().message());
+		}
+		CHECK(bind_code("second") == ldap::errc::invalid_credentials);
+		CHECK(bind_code("third") == std::error_code{});
+	}
+	REQUIRE(finish(ioc, admin_store.remove(name)).has_value());
+}
+
+TEST_CASE("integration: a store read fails on a member mapped by an alias", "[integration][store]")
+{
+	if (!have_slapd()) {
+		SKIP("no slapd: run under run_slapd.sh");
+	}
+	draining_context ioc;
+	auto c = open_admin(ioc);
+	ldap::store s(c, people, ldap::named_by<&surname_holder::uid>);
+	auto got = finish(ioc, s.get("user007"));
+	REQUIRE_FALSE(got.has_value());
+	CHECK(got.error().code == ldap::client_errc::schema_mismatch);
+	CHECK_THAT(std::string(got.error().context), Catch::Matchers::EndsWith("attribute sn returned for no member"));
 }
 
 TEST_CASE("integration: ldap::client replaces a connection the server dropped", "[integration][client]")

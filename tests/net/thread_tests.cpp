@@ -116,8 +116,8 @@ class answering_server
 	static auto entry(std::int32_t id, std::string_view uid) -> ldap::message
 	{
 		return ldap::message{ id,
-			ldap::search_result_entry{ "uid=" + std::string(uid) + ",ou=people,dc=example,dc=org",
-			  { { "uid", { uid } }, { "objectClass", { "inetOrgPerson" } } } } };
+			ldap::search_result_entry{
+			  "uid=" + std::string(uid) + ",ou=people,dc=example,dc=org", { { "uid", { uid } } } } };
 	}
 
 	static auto answers(const ldap::message &m) -> std::vector<ldap::message>

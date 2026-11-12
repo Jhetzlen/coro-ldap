@@ -39,8 +39,8 @@ inline auto serve_session(net::transport t, std::atomic<int> &requests) -> capy:
 			out = bytes_of(bind_resp(r->id, pw != nullptr && pw->password == "wrong" ? 49 : 0));
 		} else if (const auto *s = std::get_if<ldap::search_request>(&r->op)) {
 			const std::string base(s->base_object);
-			out = bytes_of(entry_msg(r->id, "uid=x," + base, "X")) + bytes_of(entry_msg(r->id, "uid=y," + base, "Y"))
-				  + bytes_of(done_msg(r->id));
+			out = bytes_of(entry_msg_for(*s, r->id, "uid=x," + base, "X"))
+				  + bytes_of(entry_msg_for(*s, r->id, "uid=y," + base, "Y")) + bytes_of(done_msg(r->id));
 		} else if (std::holds_alternative<ldap::add_request>(r->op)) {
 			out = bytes_of(ldap::message{ r->id, ldap::add_response{ ldap::ldap_result{ 0 } } });
 		} else if (std::holds_alternative<ldap::modify_request>(r->op)) {

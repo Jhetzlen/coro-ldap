@@ -886,7 +886,8 @@ itself needs only ICU.
   structural class's DIT content rule lists, or that the rule precludes:
   `attribute_not_allowed`; a declared auxiliary class that rule's `AUX`
   does not list: `auxiliary_class_not_allowed`; an OBSOLETE rule counts
-  for nothing),
+  for nothing; a member named by an alias or numeric OID rather than the
+  attribute's first NAME: `not_primary_name`),
   `attribute_type` with `usage` (`attribute_usage`),
   `object_class_type` with `sup`, `kind` (`object_class_kind`), `must`
   and `may`, `dit_content_rule` (`obsolete`, `aux`, `must`, `may`, `precluded`: RFC
@@ -924,17 +925,23 @@ itself needs only ICU.
   (`uid=<escaped key>,<base>`); `get(key)` / `get_at(dn)` -> `task<result<
   std::optional<T>>>` (a base-object search for T's attributes and object
   classes; noSuchObject or no entry of T's classes is nullopt, a limit
-  code with no entry is an error);
+  code with no entry is an error; a read, `get` or `search`, fails with
+  `client_errc::schema_mismatch` when the answer holds an attribute whose
+  description without options is none of the names T maps, an alias, OID
+  or supertype mapping answered under another name, RFC 4511 4.5.2: map
+  members by the name the server returns);
   `add(T)`, `modify(key, changes)` / `modify_at(dn, changes)`,
   `update(original, changed)` (`original` a `record<T>`, sent to its
   DN, or a `T`, sent to `dn_of` its naming member) -> `task<result<
   std::optional<response>>>`: one modify of the members that differ
-  (`ldap::diff(original, changed)` in mapping.hpp: add when `original`
-  has no value, else replace or delete, for single-valued members, delete
-  then add of the values for multi-valued ones, a cleared one included,
-  so values `original` does not hold stay; one replace with the new set
-  for `std::vector<ldap::binary>` (add when `original`'s set is empty),
-  whose attributes often have no equality rule;
+  (`ldap::diff(original, changed)` in mapping.hpp: replace or delete for
+  single-valued members, delete then add of the values for multi-valued
+  ones, a cleared one included, so values `original` does not hold stay;
+  one replace with the new set for `std::vector<ldap::binary>`, whose
+  attributes often have no equality rule; a member empty in `original` is
+  written with replace too, since empty in the struct is not absent on
+  the server: an attribute the reader may not see, RFC 4511 4.5.1.8, such
+  as a userPassword under `by self =xw` or AD's unicodePwd;
   read_only members skipped), nullopt with nothing sent when none
   differs, `client_errc::naming_value_changed` when the naming member
   differs (use `rename`);
@@ -945,16 +952,12 @@ itself needs only ICU.
   skipped; true while every value of `original` is still held by its
   attribute, subtypes and tagged values included, RFC 4511 4.5.1.7, RFC
   4512 2.5; it does not see added values nor a plain value replaced while
-  a tagged or subtype sibling holds the same text) or `(m=<original's
-  value>)` on a single-valued member, read_only or not (entryCSN,
-  uSNChanged, modifyTimestamp), the exact check; a value of `original`
-  gone fails with `errc::assertion_failed` (122), and a conflicting write
-  to an empty member, which `update` and `update_if` write with add, with
-  the server's own code (16, 18, 19, 20; not refused under Permissive
-  Modify), so a retry loop re-reads on those too. A member mapped
-  `std::optional` over a schema-multi-valued attribute can end with two
-  values after concurrent writes; its next decode fails with
-  `too_many_values`. An `original` with no values gives the empty filter
+  a tagged or subtype sibling holds the same text, so a value written
+  meanwhile to a member empty in `original` is overwritten) or
+  `(m=<original's value>)` on a single-valued member, read_only or not
+  (entryCSN, uSNChanged, modifyTimestamp), the exact check; a value of
+  `original` gone fails with `errc::assertion_failed` (122). An
+  `original` with no values gives the empty filter
   (`invalid_filter` before sending). The default
   filter past `max_filter_elements` (10,000) elements, one per value, fails
   with `invalid_filter` before anything is sent: use `versioned_by`. An empty

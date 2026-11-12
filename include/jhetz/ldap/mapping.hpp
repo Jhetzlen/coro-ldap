@@ -46,6 +46,12 @@
 // attribute in their context: "entry uid=x,ou=people,dc=example,dc=org:
 // attribute uidNumber: not an integer: \"12a\"".
 //
+// An empty member means the read returned no value, not that the server
+// holds none (an attribute the reader may not see, RFC 4511 4.5.1.8). Map
+// each member by the attribute's primary name, the one the server answers
+// with: a member named by an alias or OID decodes empty (validate<T> warns
+// with not_primary_name, and a store read fails with schema_mismatch).
+//
 // value_traits<T> is the extension point, like std::formatter:
 //
 //   template<> struct jhetz::ldap::value_traits<my_type> {
@@ -494,6 +500,16 @@ template<described T>
 	return out;
 }
 
+namespace detail {
+	// The attribute names of T's descriptor, in order.
+	template<described T> constexpr auto attribute_name_array()
+	{
+		return std::apply(
+		  [](const auto &...f) { return std::array<std::string_view, sizeof...(f)>{ std::string_view(f.name)... }; },
+		  schema<T>.fields);
+	}
+}// namespace detail
+
 // The object classes of T's descriptor (empty if none were declared),
 // without the auxiliary ones.
 template<described T> [[nodiscard]] constexpr auto object_classes_of() -> std::span<const char *const>
@@ -569,11 +585,17 @@ namespace detail {
 		}
 	}
 
+	auto entry_context(std::string_view dn) -> std::string;
 	auto entry_context(std::string_view dn, std::string_view attribute) -> std::string;
 
 	// The error for an attribute of `e` that is `name` with a range option
 	// (MS-ADTS 3.1.1.3.1.3.3), or nullopt when there is none.
 	auto ranged_values_error(const entry &e, std::string_view name) -> std::optional<error>;
+
+	// client_errc::schema_mismatch for the first attribute of `e` whose
+	// description without options matches none of `names`
+	// (case-insensitively), or nullopt when there is none.
+	auto unrequested_attribute_error(const entry &e, std::span<const std::string_view> names) -> std::optional<error>;
 }// namespace detail
 
 // Converts an entry to T (default-constructed, then every described member
@@ -841,8 +863,7 @@ namespace detail {
 			auto added = values_not_in(*to, *from);
 			if constexpr (std::same_as<typename F::element, binary>) {
 				if (!removed.empty() || !added.empty()) {
-					out.push_back(make_change<Ptr>(from->empty() ? modify_operation::add : modify_operation::replace,
-					  values_not_in(*to, string_list{})));
+					out.push_back(make_change<Ptr>(modify_operation::replace, values_not_in(*to, string_list{})));
 				}
 			} else {
 				if (!removed.empty()) {
@@ -854,8 +875,6 @@ namespace detail {
 			}
 		} else if (to->empty()) {
 			out.push_back(make_change<Ptr>(modify_operation::delete_, string_list{}));
-		} else if (from->empty()) {
-			out.push_back(make_change<Ptr>(modify_operation::add, std::move(*to)));
 		} else {
 			out.push_back(make_change<Ptr>(modify_operation::replace, std::move(*to)));
 		}
@@ -865,17 +884,16 @@ namespace detail {
 
 // The changes turning `original` into `changed`, member by member in
 // descriptor order, read_only members skipped: a single-valued member that
-// differs is added when `original` has no value, replaced otherwise, or
-// deleted once empty; a multi-valued one deletes the values it lost, then
-// adds the ones it gained (values compared as encoded, exactly), even when
-// it lost them all, so values `original` does not hold stay. A
-// std::vector<ldap::binary> member is replaced with its new set instead
-// (added when `original`'s set is empty): such attributes (jpegPhoto)
-// often have no equality rule, and the server refuses a value add or
-// delete on those. Writing an empty member with add makes the server
-// refuse a conflicting concurrent value (constraintViolation on a
-// SINGLE-VALUE type already set, attributeOrValueExists for the same
-// value). Empty when nothing differs. Fails with the first value that does not encode (context
+// differs is replaced, or deleted once empty; a multi-valued one deletes
+// the values it lost, then adds the ones it gained (values compared as
+// encoded, exactly), even when it lost them all, so values `original` does
+// not hold stay. A std::vector<ldap::binary> member is replaced with its new
+// set instead: such attributes (jpegPhoto) often have no equality rule, and
+// the server refuses a value add or delete on those. A member empty in
+// `original` is not known to be absent on the server (an attribute the
+// reader may not see, RFC 4511 4.5.1.8: a write-only userPassword, AD's
+// unicodePwd), so it is written with replace too. Empty when nothing
+// differs. Fails with the first value that does not encode (context
 // "attribute mail").
 template<described T> [[nodiscard]] auto diff(const T &original, const T &changed) -> result<std::vector<change<T>>>
 {
@@ -996,7 +1014,8 @@ namespace detail {
 // descriptor order, read_only members skipped, all ANDed; the empty filter
 // when `original` has no value. Each term also matches the attribute's
 // subtypes and tagged values (RFC 4511 4.5.1.7, RFC 4512 2.5), so the
-// filter does not see an added value, nor a plain value replaced while a
+// filter does not see an added value (a value written meanwhile to a member
+// empty in `original` is overwritten), nor a plain value replaced while a
 // tagged or subtype sibling holds the same text: ldap::versioned_by is the
 // exact check. Fails with the first value that does not encode (context
 // "attribute mail").
