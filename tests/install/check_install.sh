@@ -8,10 +8,10 @@
 #   tests/install/check_install.sh WORK_DIR
 #
 # Sources: FETCHCONTENT_SOURCE_DIR_CAPY / _COROSIO if set (local
-# checkouts, used as they are), else the pinned commits are cloned into
-# WORK_DIR (a clone there at another commit is cloned again) and patched
-# with cmake/source_group_tree_patch.cmake, as the root CMakeLists.txt
-# patches the fetched ones for CMake 4.5.
+# checkouts), else the pinned commits are cloned into WORK_DIR (a clone
+# there at another commit is cloned again). Both are configured with
+# cmake/source_group_tree_filter.cmake before their project(), as the root
+# CMakeLists.txt does for CMake 4.5 and later.
 set -eu
 work=$(realpath -m "${1:?usage: check_install.sh WORK_DIR}")
 here=$(cd "$(dirname "$0")" && pwd)
@@ -19,6 +19,7 @@ root=$(cd "$here/../.." && pwd)
 rm -rf "$work/prefix" "$work/prefix-codec" "$work/build"
 mkdir -p "$work/build"
 gen="-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
+filter="$root/cmake/source_group_tree_filter.cmake"
 
 # source_of NAME URL COMMIT OVERRIDE: a source directory at COMMIT.
 source_of() {
@@ -31,7 +32,6 @@ source_of() {
 		git clone -q "$2" "$src"
 		git -C "$src" checkout -q "$3"
 	fi
-	(cd "$src" && cmake -P "$root/cmake/source_group_tree_patch.cmake")
 	echo "$src"
 }
 pin() { sed -n "/FetchContent_Declare($1/,/)/s/.*GIT_TAG \([0-9a-f]*\).*/\1/p" "$root/CMakeLists.txt"; }
@@ -41,12 +41,14 @@ corosio=$(source_of corosio https://github.com/cppalliance/corosio.git "$(pin co
 step() { echo "== $*"; }
 step "Capy"
 cmake -S "$capy" -B "$work/build/capy" $gen -DCMAKE_INSTALL_PREFIX="$work/prefix" \
+	-DCMAKE_PROJECT_boost_capy_INCLUDE_BEFORE="$filter" \
 	-DBOOST_CAPY_BUILD_TESTS=OFF -DBOOST_CAPY_BUILD_EXAMPLES=OFF -DBOOST_CAPY_BUILD_BENCH=OFF >/dev/null
 cmake --build "$work/build/capy" >/dev/null
 cmake --install "$work/build/capy" >/dev/null
 step "Corosio"
 cmake -S "$corosio" -B "$work/build/corosio" $gen -DCMAKE_INSTALL_PREFIX="$work/prefix" \
 	-DCMAKE_PREFIX_PATH="$work/prefix" -DCMAKE_PROJECT_INCLUDE="$here/corosio_with_installed_capy.cmake" \
+	-DCMAKE_PROJECT_boost_corosio_INCLUDE_BEFORE="$filter" \
 	-DBOOST_COROSIO_BUILD_TESTS=OFF -DBOOST_COROSIO_BUILD_EXAMPLES=OFF \
 	-DBOOST_COROSIO_BUILD_BENCH=OFF >/dev/null
 cmake --build "$work/build/corosio" >/dev/null

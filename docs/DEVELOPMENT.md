@@ -120,14 +120,14 @@ toolchain file and triplet.
 
 CMake 4.5 stops in Capy's and Corosio's `CMakeLists.txt`
 (`source_group(TREE include/boost/<lib>)` given `<lib>.hpp`, outside its
-tree). From CMake 4.5 on, the root `CMakeLists.txt` patches the fetched
-sources with `cmake/source_group_tree_patch.cmake` (a FetchContent
-`PATCH_COMMAND`), which leaves the top-level header out of that call;
-`tests/install/check_install.sh` patches its clones the same way. Local
-checkouts given with `FETCHCONTENT_SOURCE_DIR_CAPY` / `_COROSIO` are not
-patched: run `cmake -P <repo>/cmake/source_group_tree_patch.cmake` in them,
-or configure with an older CMake (Visual Studio's bundled 3.31,
-`Common7\IDE\CommonExtensions\Microsoft\CMake`).
+tree). From CMake 4.5 on, the root `CMakeLists.txt` includes
+`cmake/source_group_tree_filter.cmake` before their `project()`
+(`CMAKE_PROJECT_boost_capy_INCLUDE_BEFORE`, `..._boost_corosio_...`): in
+their directories it overrides `source_group` to leave the files outside the
+tree out of a `TREE` call. Their sources are not modified, so local
+checkouts (`FETCHCONTENT_SOURCE_DIR_CAPY` / `_COROSIO`) work too, and a pin
+bump updates the fetched clones cleanly; `tests/install/check_install.sh`
+configures its clones with the same file.
 
 Run the tests from a Release or RelWithDebInfo build: in Debug, MSVC's
 checked iterators (`_ITERATOR_DEBUG_LEVEL=2`) make every container allocate

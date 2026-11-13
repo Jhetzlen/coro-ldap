@@ -241,25 +241,25 @@ if(JHETZ_LDAP_BUILD_NET)
     # -DFETCHCONTENT_SOURCE_DIR_CAPY=... -DFETCHCONTENT_SOURCE_DIR_COROSIO=...
     # SYSTEM: our warning flags must not fire on their headers.
     # CMake 4.5 rejects their source_group(TREE include/boost/<lib>) given
-    # the top-level <lib>.hpp, outside that tree: from 4.5 on, the fetched
-    # sources are patched to leave it out of that call (IDE grouping only).
-    # Local checkouts (FETCHCONTENT_SOURCE_DIR_*) are not patched.
-    set(jhetz_ldap_dep_patch)
+    # the top-level <lib>.hpp, outside that tree: from 4.5 on,
+    # cmake/source_group_tree_filter.cmake runs before their project() and
+    # leaves it out of that call (IDE grouping only), for fetched sources
+    # and local checkouts alike, without modifying them.
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.5)
-        set(jhetz_ldap_dep_patch PATCH_COMMAND
-            ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/source_group_tree_patch.cmake)
+        foreach(dep_project boost_capy boost_corosio)
+            set(CMAKE_PROJECT_${dep_project}_INCLUDE_BEFORE
+                ${CMAKE_CURRENT_SOURCE_DIR}/cmake/source_group_tree_filter.cmake)
+        endforeach()
     endif()
     FetchContent_Declare(capy
         GIT_REPOSITORY https://github.com/cppalliance/capy.git
         GIT_TAG bdadc6adef8c8eb79da6454373175bb1428be524
-        ${jhetz_ldap_dep_patch}
         SYSTEM
         FIND_PACKAGE_ARGS NAMES boost_capy CONFIG
     )
     FetchContent_Declare(corosio
         GIT_REPOSITORY https://github.com/cppalliance/corosio.git
         GIT_TAG fd8e95a7125047d5385068a4c640da8232b9588e
-        ${jhetz_ldap_dep_patch}
         SYSTEM
         FIND_PACKAGE_ARGS NAMES boost_corosio CONFIG
     )
