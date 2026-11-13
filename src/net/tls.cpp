@@ -627,13 +627,25 @@ auto make_tls_setup(const tls_options &o) -> result<tls_setup>
 
 auto tls_peer_name(std::string_view host, const tls_options &options) -> std::string
 {
+	std::string name;
 	if (!options.server_name.empty()) {
-		return std::string(options.server_name);
+		name.assign(options.server_name);
+	} else if (host.contains(':')) {
+		name.assign(host.substr(0, host.find('%')));// IPv6 literal
+	} else {
+		name.assign(host);
 	}
-	if (host.contains(':')) {
-		host = host.substr(0, host.find('%'));// IPv6 literal
+	// A fully qualified DNS name ("ldap.example.org."): RFC 6066 section 3
+	// sends the SNI HostName without the trailing dot, and the certificate
+	// names the host without it. A name that would then read as an IP
+	// literal ("127.0.0.1.") stays a DNS name.
+	if (name.size() > 1 && name.ends_with('.')) {
+		std::string bare = name.substr(0, name.size() - 1);
+		if (!is_ip_literal(bare)) {
+			return bare;
+		}
 	}
-	return std::string(host);
+	return name;
 }
 
 auto tls_handshake(transport::layers &im,

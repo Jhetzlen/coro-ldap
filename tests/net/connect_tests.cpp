@@ -1855,6 +1855,75 @@ TEST_CASE("TLS peer name: server_name, else the host without an IPv6 zone", "[ne
 	CHECK(tls_peer_name("fe80::1%eth0", { .server_name = "ldap.example.org" }) == "ldap.example.org");
 }
 
+// RFC 6066 section 3: the SNI HostName has no trailing dot.
+TEST_CASE("TLS peer name: a DNS name's trailing dot is dropped", "[net][connect][tls][rfc]")
+{
+	using net::detail::tls_peer_name;
+	CHECK(tls_peer_name("ldap.example.org.", {}) == "ldap.example.org");
+	CHECK(tls_peer_name("localhost.", {}) == "localhost");
+	CHECK(tls_peer_name("127.0.0.1", { .server_name = "ldap.example.org." }) == "ldap.example.org");
+	CHECK(tls_peer_name("ldap.example.org..", {}) == "ldap.example.org.");// one dot only
+	CHECK(tls_peer_name(".", {}) == ".");
+	CHECK(tls_peer_name("127.0.0.1.", {}) == "127.0.0.1.");// a DNS name, not an IP literal
+}
+
+TEST_CASE("ldaps:// to a fully qualified name with a trailing dot", "[net][connect][tls][rfc]")
+{
+	corosio::io_context ioc;
+	tcp_server srv(ioc);
+	outcome<std::string> server;
+	outcome<std::string> client;
+	const auto ca = std::pmr::string(pki().ca_pem());
+
+	SECTION("URL host, strict")
+	{
+		spawn(ioc, accept_and_serve(srv.acc, server_context(localhost_cert())), server);
+		spawn(ioc, exchange(ioc, srv.url("ldaps", "localhost."), { .tls = { .ca_pem = ca } }, true), client);
+	}
+	SECTION("server_name, strict")
+	{
+		const auto leaf = pki().issue("x", "DNS:ldap.example.org");
+		spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
+		spawn(ioc,
+		  exchange(ioc, srv.url("ldaps"), { .tls = { .ca_pem = ca, .server_name = "ldap.example.org." } }, true),
+		  client);
+	}
+	SECTION("server_name, legacy, subject CN only")
+	{
+		const auto leaf = pki().issue("ldap.example.org", "");
+		spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
+		spawn(ioc,
+		  exchange(ioc,
+			srv.url("ldaps"),
+			{ .tls = { .ca_pem = ca,
+				.server_name = "ldap.example.org.",
+				.host_matching = net::host_name_matching::legacy } },
+			true),
+		  client);
+	}
+	drive(ioc);
+	CHECK_THAT(client.get(), IsEmpty());
+	CHECK_THAT(server.get(), IsEmpty());
+}
+
+TEST_CASE("ldaps:// to a trailing-dot name still checks the host", "[net][connect][tls][rfc]")
+{
+	corosio::io_context ioc;
+	tcp_server srv(ioc);
+	outcome<std::string> server;
+	const auto leaf = pki().issue("other.example.org", "DNS:other.example.org");
+	spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
+	auto t = connect_to(ioc,
+	  srv.url("ldaps"),
+	  { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()), .server_name = "ldap.example.org." } });
+	REQUIRE_FALSE(t.has_value());
+	CHECK(t.error().code == ldap::cond::tls_failure);
+	CHECK_THAT(std::string(t.error().context),
+	  ContainsSubstring("server certificate: hostname mismatch", Catch::CaseSensitive::No));
+	drive(ioc);
+	CHECK_THAT(server.get(), StartsWith("server handshake: "));
+}
+
 namespace {
 
 // A stand-in for the platform's chain verification (verify_state::

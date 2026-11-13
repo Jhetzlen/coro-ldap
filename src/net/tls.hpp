@@ -97,7 +97,8 @@ auto make_tls_setup(const tls_options &options) -> result<tls_setup>;
 // The name for SNI and certificate verification: options.server_name if
 // set, else `host` without an IPv6 zone ("fe80::1%eth0" -> "fe80::1"): the
 // zone is local routing information, not part of the certificate's
-// iPAddress.
+// iPAddress. One trailing dot of a DNS name is dropped
+// ("ldap.example.org." -> "ldap.example.org").
 auto tls_peer_name(std::string_view host, const tls_options &options) -> std::string;
 
 // Requires im.tcp connected and !im.tls. `host` is the URL host (the peer

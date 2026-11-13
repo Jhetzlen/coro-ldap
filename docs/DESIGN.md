@@ -2287,7 +2287,9 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
 - TLS: verification is on by default (Corosio's own default is off), with
   the system trust store (OpenSSL's; on Windows CryptoAPI's verdict on the
   chain, below), SNI, host name checks (IP literals against iPAddress
-  entries, zone stripped) and TLS 1.2 minimum. Options: `ca_file`, `ca_dir`,
+  entries, zone stripped; a DNS name's trailing dot dropped, as RFC 6066
+  section 3 sends SNI and as OpenSSL 4.1's X509_VERIFY_PARAM_set1_host
+  requires) and TLS 1.2 minimum. Options: `ca_file`, `ca_dir`,
   `ca_pem`, client `cert_file` + `key_file`, `server_name`; the only opt-out
   is `certificate_verification::insecure_accept_any`. Configuration errors
   (bad or mismatched PEM certificates and keys, missing `ca_dir`) fail before

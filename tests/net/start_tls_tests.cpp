@@ -513,6 +513,23 @@ TEST_CASE("start_tls: bytes before the handshake are refused", "[net][starttls]"
 	CHECK_THAT(f.server.get(), IsEmpty());
 }
 
+// RFC 6066 section 3: SNI and the host check use the name without its
+// trailing dot.
+TEST_CASE("start_tls: to a fully qualified name with a trailing dot", "[net][starttls][rfc]")
+{
+	tls_fixture f;
+	f.serve(mode::upgrade);
+	auto c = f.connect(trusting(), "localhost.");
+	auto r = finish(f.ioc, c.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }));
+	REQUIRE(r.has_value());
+	CHECK(c.is_tls());
+	auto b = finish(f.ioc, c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
+	CHECK(b.has_value());
+	c.close();
+	drive(f.ioc);
+	CHECK_THAT(f.server.get(), IsEmpty());
+}
+
 TEST_CASE("start_tls: certificate verification failures", "[net][starttls]")
 {
 	SECTION("untrusted CA (system trust store)")

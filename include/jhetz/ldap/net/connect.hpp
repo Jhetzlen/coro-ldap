@@ -130,6 +130,9 @@ struct tls_options
 	// Name sent as SNI and matched against the certificate. Empty: the URL's
 	// host. Set it when connecting by address to a server whose certificate
 	// only names its DNS name. Control characters (NUL included) are rejected.
+	// A fully qualified name's trailing dot (in server_name or the URL's
+	// host) is dropped: "ldap.example.org." is sent and matched as
+	// "ldap.example.org".
 	std::pmr::string server_name{};
 	host_name_matching host_matching = host_name_matching::strict;
 
