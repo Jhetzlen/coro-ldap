@@ -1,31 +1,6 @@
 #!/usr/bin/env bash
-# Coverage report for jhetz::ldap with Clang source-based coverage: builds
-# BUILD_DIR with -DJHETZ_LDAP_COVERAGE=ON (our targets only, no sanitizers),
-# runs the whole ctest suite (and the slapd integration tests when SLAPD is
-# set), merges the profiles and reports on src and include:
-#
+# Clang coverage report on src and include (docs/DEVELOPMENT.md "Coverage"):
 #   tests/coverage/run_coverage.sh [--run-only] [BUILD_DIR]
-#
-#   BUILD_DIR/llvm-cov/summary.txt    llvm-cov report (also printed)
-#   BUILD_DIR/llvm-cov/html/index.html line, region and branch details
-#   BUILD_DIR/llvm-cov/summary.json   llvm-cov export -summary-only
-#
-# BUILD_DIR defaults to build/coverage at the repository root; an existing
-# build directory configured without JHETZ_LDAP_COVERAGE=ON is refused.
-# --run-only builds and runs the tests and leaves the .profraw files in
-# BUILD_DIR/llvm-cov/profraw, without llvm-profdata / llvm-cov.
-# When a test fails the report is still written, and the script exits with
-# the first failing test step's status; a failing report step (no profiles,
-# llvm-profdata, llvm-cov) exits with its own.
-#
-# Linux, bash >= 4.4, GNU coreutils (realpath -m), like check_install.sh.
-#
-# Environment:
-#   CXX                          Clang C++ compiler        (clang++)
-#   LLVM_PROFDATA, LLVM_COV      the tools, matching CXX   (from PATH)
-#   FETCHCONTENT_SOURCE_DIR_CAPY / _COROSIO / _CATCH2      local checkouts
-#   SLAPD, SLAPD_SCHEMA_DIR, SLAPD_MODULE_PATH             see run_slapd.sh;
-#                                setting SLAPD runs the integration tests
 set -euo pipefail
 
 run_only=""
@@ -39,8 +14,7 @@ build="$(realpath -m "${1:-$root/build/coverage}")"
 out="$build/llvm-cov"
 cxx="${CXX:-clang++}"
 
-# Any type: a first configure that failed in project() (before
-# option(JHETZ_LDAP_COVERAGE)) leaves JHETZ_LDAP_COVERAGE:UNINITIALIZED=ON.
+# Any cache type, UNINITIALIZED included.
 if [[ -f "$build/CMakeCache.txt" ]] &&
 	! grep -qixE 'JHETZ_LDAP_COVERAGE:[A-Z]+=(ON|TRUE|YES|Y|1)' "$build/CMakeCache.txt"; then
 	echo "error: $build is not a coverage build (its CMakeCache.txt lacks" \
@@ -86,16 +60,11 @@ cmake -S "$root" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPI
 	${fetch_args[@]+"${fetch_args[@]}"} >/dev/null
 cmake --build "$build"
 
-# %m: one profile per instrumented binary (the tests also run
-# jhetz-ldapsearch), merged online across that binary's processes; %p is
-# optional and only splits them per process, the merge below sums them.
 rm -rf "$out"
 mkdir -p "$out/profraw"
 export LLVM_PROFILE_FILE="$out/profraw/%p-%m.profraw"
 
-# A failing test still leaves its profile: report anyway, then exit with
-# the first failing test step's status (a report step that fails exits with
-# its own).
+# Exit status: the first failing test step's.
 status=0
 step "ctest"
 ctest --test-dir "$build" --output-on-failure -j "$(nproc 2>/dev/null || echo 2)" || status=$?
@@ -120,11 +89,7 @@ if [[ ${#profiles[@]} -eq 0 ]]; then
 fi
 
 step "report"
-# --failure-mode=all: skip (with a warning) a profile a killed process left
-# truncated, e.g. on a ctest timeout or a child the test kills on purpose
-# (which need not fail the test), rather than lose the whole report; it
-# still fails when no profile is readable. Its warnings (one per skipped
-# profile) are shown, then counted.
+# Truncated profiles are skipped, one warning each.
 merge_rc=0
 "$profdata" merge -sparse --failure-mode=all "${profiles[@]}" -o "$out/ldap.profdata" \
 	2>"$out/profdata.err" || merge_rc=$?
@@ -134,10 +99,7 @@ skipped="$(grep -c 'warning:' "$out/profdata.err" || true)"
 if [[ $skipped -gt 0 ]]; then
 	echo "warning: $skipped profiles skipped; the report omits them" >&2
 fi
-# Every ELF executable: our targets are the only ones built with
-# -fprofile-instr-generate, so the rest (Catch2, Corosio) has no mapping.
-# Only ELF files: llvm-cov rejects anything else (e.g. an executable script).
-# llvm-cov takes the first as a positional argument, the rest with -object.
+# Every ELF executable: the first positional, the rest after -object.
 objects=()
 while IFS= read -r exe; do
 	if ! cmp -s -n 4 "$exe" <(printf '\177ELF'); then continue; fi
@@ -149,12 +111,6 @@ if [[ ${#objects[@]} -eq 0 ]]; then
 	echo "error: no ELF executables in $build" >&2
 	exit 1
 fi
-# "N functions have mismatched data" is expected: hash-0 placeholder records
-# of inline / constexpr functions a binary never emitted (e.g. ldap::detail::
-# is_dn, used at compile time); the emitted copy carries the counts.
-# The source paths alone select our files (no -ignore-filename-regex: it
-# matches the absolute path, so a checkout under e.g. ~/src/examples/ would
-# drop everything).
 filters=(-instr-profile "$out/ldap.profdata" "${objects[@]}"
 	"$root/src" "$root/include")
 "$cov" report "${filters[@]}" | tee "$out/summary.txt"

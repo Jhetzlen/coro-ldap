@@ -1,27 +1,7 @@
 #!/usr/bin/env bash
-# Starts a throwaway OpenLDAP slapd for the integration tests, runs a
-# command with the JHETZ_LDAP_IT_* variables set, and stops slapd:
-#
-#   tests/integration/run_slapd.sh ctest --test-dir build -L integration --output-on-failure
-#
-# slapd listens on ldap://127.0.0.1:$PORT, ldaps://localhost:$((PORT+1))
-# and an ldapi:// socket in a temporary directory, with a test CA, a
-# server certificate (localhost, 127.0.0.1) and a client certificate for
-# SASL EXTERNAL, and authz-regexp for SASL SCRAM-SHA-256 and, with channel
-# binding (sasl-cbinding tls-endpoint), SCRAM-SHA-256-PLUS; the data is
-# make_fixture.py's. Needs slapd and openssl. Under run_kdc.sh (a
-# throwaway Kerberos KDC), slapd also offers SASL GSSAPI as
-# ldap/localhost, with its keytab (KRB5_KTNAME) and realm. run_openldap.sh
-# runs this script in a Docker container instead, with Debian's slapd.
-#
-# Environment (defaults suit Debian / Ubuntu's slapd package):
-#   SLAPD              slapd binary              (/usr/sbin/slapd)
-#   SLAPD_SCHEMA_DIR   directory of *.schema     (/etc/ldap/schema)
-#   SLAPD_MODULE_PATH  slapd modules, if any     (/usr/lib/ldap; back_mdb and the sssvlv
-#                                                 and syncprov overlays are loaded if
-#                                                 found there)
-#   JHETZ_LDAP_IT_PORT first port                (3389)
-#   TMPDIR             where its directory goes  (/tmp)
+# Runs a command with a throwaway OpenLDAP slapd (docs/DEVELOPMENT.md
+# "Integration tests"):
+#   tests/integration/run_slapd.sh ctest --test-dir build/main -L integration
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,8 +11,7 @@ module_path="${SLAPD_MODULE_PATH:-/usr/lib/ldap}"
 port="${JHETZ_LDAP_IT_PORT:-3389}"
 tls_port=$((port + 1))
 
-# The ldapi:// socket goes in it: keep TMPDIR short, a socket path has
-# at most 107 bytes (sun_path is 108 with its terminating NUL on Linux).
+# Holds the ldapi:// socket: at most 107 bytes of path.
 dir="$(mktemp -d "${TMPDIR:-/tmp}/jldap.XXXXXX")"
 pid=""
 cleanup() {
@@ -58,11 +37,7 @@ openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=localh
 	-keyout server.key -out server.csr 2>/dev/null
 openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 2 \
 	-extfile server.ext -out server.pem 2>/dev/null
-# A server certificate for the same names signed with Ed25519, by an
-# Ed25519 intermediate CA under ca.pem (the file holds both): a test
-# switches slapd to it through cn=config (channel binding: RFC 5929 has
-# no tls-server-end-point for an Ed25519 signature, OpenLDAP hashes it
-# with SHA-256).
+# The same names signed by an Ed25519 intermediate CA; the file holds both.
 cat > ca-ed25519.ext <<EXT
 basicConstraints = critical, CA:TRUE, pathlen:0
 keyUsage = critical, keyCertSign, cRLSign
@@ -94,8 +69,6 @@ has_module() { [[ -e "$module_path/$1.so" || -e "$module_path/$1.la" ]]; }
 if has_module back_mdb; then
 	modules="moduleload back_mdb"
 fi
-# Server side sorting (RFC 2891) needs the sssvlv overlay; the sort test is
-# skipped without it (JHETZ_LDAP_IT_SORT unset).
 sort_available=""
 if has_module sssvlv; then
 	modules="$modules
@@ -103,9 +76,6 @@ moduleload sssvlv"
 	overlays="overlay sssvlv"
 	sort_available=1
 fi
-# Content synchronization (RFC 4533) needs the syncprov overlay; the
-# syncrepl test is skipped without it (JHETZ_LDAP_IT_SYNCREPL unset). The
-# session log lets a refresh from a cookie send only the changes.
 syncrepl_available=""
 if has_module syncprov; then
 	modules="$modules
@@ -116,10 +86,7 @@ syncprov-checkpoint 100 10
 syncprov-sessionlog 100"
 	syncrepl_available=1
 fi
-# SASL GSSAPI (run_kdc.sh sets JHETZ_LDAP_IT_KRB5_REALM and KRB5_KTNAME;
-# cyrus-sasl's gssapi plugin must be installed, or on SASL_PATH): the
-# service principal is ldap/localhost, and a principal of the realm maps
-# to the entry of the same uid.
+# GSSAPI under run_kdc.sh: a principal maps to the entry of the same uid.
 gssapi=""
 if [[ -n "${JHETZ_LDAP_IT_KRB5_REALM:-}" ]]; then
 	gssapi="sasl-host localhost
@@ -142,20 +109,12 @@ TLSCertificateFile $dir/server.pem
 TLSCertificateKeyFile $dir/server.key
 TLSVerifyClient try
 sizelimit 1000
-# SASL SCRAM-SHA-256 (cyrus-sasl's scram plugin, if installed): the
-# username is a uid, checked against the entry's cleartext userPassword.
 authz-regexp "^uid=([^,]+)(,cn=[^,]+)?,cn=scram-sha-256,cn=auth\$" "uid=\$1,ou=people,dc=example,dc=org"
-# SCRAM-SHA-256-PLUS over TLS, channel binding tls-server-end-point.
-# GSSAPI ignores it: cyrus-sasl 2.1.28's gssapi plugin passes no channel
-# bindings; its unreleased master needs "sasl-secprops ...,nonstdcbind",
-# which this slapd may not parse and which, from cyrus's sources, would
-# also turn off every SASL mechanism (sasl_gssapi.hpp), so it is not set.
 sasl-cbinding tls-endpoint
 authz-regexp "^uid=([^,]+)(,cn=[^,]+)?,cn=scram-sha-256-plus,cn=auth\$" "uid=\$1,ou=people,dc=example,dc=org"
 $gssapi
 
-# cn=config, writable by cn=config / secret: tests toggle settings at run
-# time (olcDisallows, the server certificate) and restore them.
+# Writable by cn=config / secret.
 database config
 rootpw secret
 
@@ -174,7 +133,7 @@ CONF
 python3 "$here/make_fixture.py" > fixture.ldif
 "$slapd" -T add -f slapd.conf -l fixture.ldif -q
 
-# ---- start and wait until it accepts connections
+# ---- start
 socket="$dir/ldapi"
 socket_url="ldapi://$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$socket")"
 "$slapd" -f slapd.conf -h "ldap://127.0.0.1:$port/ ldaps://127.0.0.1:$tls_port/ $socket_url" -s 0

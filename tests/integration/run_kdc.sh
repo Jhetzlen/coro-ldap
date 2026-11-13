@@ -1,30 +1,7 @@
 #!/usr/bin/env bash
-# Starts a throwaway MIT Kerberos KDC for the SASL GSSAPI integration
-# tests, runs a command with the Kerberos environment set, and stops the
-# KDC. Wrap run_slapd.sh with it, so slapd offers GSSAPI:
-#
-#   tests/integration/run_kdc.sh tests/integration/run_slapd.sh \
-#       ctest --test-dir build -L integration --output-on-failure
-#
-# Realm EXAMPLE.ORG on 127.0.0.1:$JHETZ_LDAP_IT_KDC_PORT, with the
-# service principal ldap/localhost (its keytab in KRB5_KTNAME, for slapd)
-# and two users matching make_fixture.py's entries, user007 and jörg,
-# whose tickets are in a DIR: credential cache collection (KRB5CCNAME),
-# user007's the default. Nothing outside a temporary directory is used:
-# KRB5_CONFIG and KRB5_KDC_PROFILE point into it, and KRB5RCACHEDIR too,
-# for slapd's replay cache (MIT's default is /var/tmp).
-#
-# Needs MIT krb5's KDC tools (krb5kdc, kdb5_util, kadmin.local, kinit);
-# without them the command runs without Kerberos, so the GSSAPI test is
-# skipped. slapd needs cyrus-sasl's gssapi plugin (Debian:
-# libsasl2-modules-gssapi-mit, Arch: cyrus-sasl-gssapi). A plugin outside
-# cyrus-sasl's directory is found through SASL_PATH, a colon-separated
-# list of directories that replaces the default one, so name that too:
-# SASL_PATH=<plugin dir>:/usr/lib/sasl2 (Arch; Debian:
-# /usr/lib/x86_64-linux-gnu/sasl2).
-#
-# Environment:
-#   JHETZ_LDAP_IT_KDC_PORT  KDC port, UDP and TCP  (3750)
+# Runs a command with a throwaway MIT Kerberos KDC (docs/DEVELOPMENT.md
+# "Integration tests"):
+#   tests/integration/run_kdc.sh tests/integration/run_slapd.sh ctest ...
 set -euo pipefail
 
 port="${JHETZ_LDAP_IT_KDC_PORT:-3750}"
@@ -92,7 +69,7 @@ for _ in $(seq 100); do
 done
 pid="$(cat "$dir/kdc.pid")"
 
-# One cache per principal in the collection; the last kinit's is the default.
+# The last kinit's cache is the default.
 export KRB5CCNAME="DIR:$dir/ccache"
 mkdir "$dir/ccache"
 echo "pässwörd" | kinit "jörg@$realm" > /dev/null

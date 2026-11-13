@@ -296,7 +296,9 @@ pinned commit needs help to install against an installed Capy;
 `tests/install/check_install.sh WORK_DIR` does the whole sequence (Capy,
 Corosio, jhetz_ldap, then a consumer in `tests/install/consumer/` with the
 `net` and `ad` components, also codec-only) and is the reference for doing
-it by hand.
+it by hand. It takes Capy and Corosio from `FETCHCONTENT_SOURCE_DIR_CAPY` /
+`_COROSIO` when set, else clones the commits pinned in `CMakeLists.txt` into
+`WORK_DIR`, and configures both with `cmake/source_group_tree_filter.cmake`.
 
 ## Examples
 
@@ -361,6 +363,24 @@ path; without it the server side sort test is skipped. Without slapd the
 `integration` test is skipped, so plain `ctest` stays hermetic. CI runs it
 in the `integration` job.
 
+slapd listens on `ldap://127.0.0.1:PORT`, `ldaps://localhost:PORT+1` and an
+ldapi:// socket in a directory under `TMPDIR` (a socket path holds at most
+107 bytes, so keep `TMPDIR` short); `PORT` is `JHETZ_LDAP_IT_PORT` (3389).
+The test PKI has a CA, a server certificate for `localhost` and
+`127.0.0.1`, a second one signed by an Ed25519 intermediate CA (a test
+switches slapd to it through `cn=config`) and a client certificate for SASL
+EXTERNAL. `cn=config` is writable as `cn=config` / `secret`; tests that
+change it restore it. SCRAM binds map the user name to the `uid` of an entry
+under `ou=people`, checked against its cleartext `userPassword`. With the
+syncprov overlay (session log of 100) the syncrepl test runs, otherwise it
+is skipped.
+
+The fixture (`make_fixture.py`) is `dc=example,dc=org` with `ou=people`
+(250 inetOrgPerson / posixAccount users `user000` to `user249`, password
+`pw-<uid>`; `uid=jörg` with a non-ASCII password in SASLprep form; `uid=photo`
+with a 10000-byte `jpegPhoto` whose byte `i` is `i % 251`), `ou=groups`
+(`staff` with 10 members, `big` with 2000) and an empty `ou=alumni`.
+
 Without a local slapd, `run_openldap.sh` runs `run_slapd.sh` itself in
 Docker, with Debian trixie's OpenLDAP (slapd 2.6.10, with the sssvlv and
 syncprov overlays and cyrus-sasl's SCRAM and GSSAPI plugins):
@@ -400,7 +420,10 @@ It needs MIT krb5's KDC tools (`krb5kdc`, `kdb5_util`, `kadmin.local`,
 `libsasl2-modules-gssapi-mit`, Arch `cyrus-sasl-gssapi`). Without the KDC
 tools `run_kdc.sh` runs the command without Kerberos, and without the
 plugin slapd does not offer GSSAPI: either way the test is skipped. The
-KDC listens on 127.0.0.1, port `JHETZ_LDAP_IT_KDC_PORT` (3750). Not in
+KDC listens on 127.0.0.1, port `JHETZ_LDAP_IT_KDC_PORT` (3750). The
+tickets are in a `DIR:` credential cache collection (`KRB5CCNAME`), with
+`user007`'s the default; `KRB5_CONFIG`, `KRB5_KDC_PROFILE` and slapd's
+replay cache (`KRB5RCACHEDIR`) are in the temporary directory too. Not in
 CI.
 
 The Docker slapd has the plugin, so only the KDC tools are needed on the
@@ -583,7 +606,11 @@ script exits with the first failing test step's status (a failing report
 step exits with its own). An existing `BUILD_DIR`
 configured without the option is refused rather than reconfigured. It needs
 `llvm-profdata` and `llvm-cov` matching the compiler (the `llvm` package; or
-set `LLVM_PROFDATA`, `LLVM_COV` and `CXX`), on Linux.
+set `LLVM_PROFDATA`, `LLVM_COV` and `CXX`), on Linux with bash 4.4 or
+later; `FETCHCONTENT_SOURCE_DIR_CAPY` / `_COROSIO` / `_CATCH2` are passed on.
+A profile truncated by a killed process is skipped with a warning. llvm-cov's
+"N functions have mismatched data" is expected: placeholder records of inline
+and constexpr functions a binary never emitted.
 
 A template that nothing instantiates generates no code, so it is missing
 from the report rather than shown as 0% (uncalled inline functions do show

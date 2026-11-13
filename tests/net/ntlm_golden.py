@@ -1,25 +1,6 @@
 #!/usr/bin/env python3
-"""Prints the golden NTLMv2 messages of sasl_ntlm_tests.cpp's "a golden
-AUTHENTICATE_MESSAGE from an independent implementation", then those of "a
-golden security layer from an independent implementation": the exchange
-with signing, sealing and key exchange over plain ldap:// (no channel
-bindings), and protected buffers both ways (MS-NLMP 3.4).
-
-Written from MS-NLMP alone, stdlib only (hashlib, hmac, struct), none of the
-library's code: the NEGOTIATE_MESSAGE, a domain controller's
-CHALLENGE_MESSAGE and the AUTHENTICATE_MESSAGE with its MIC, for fixed
-inputs, as C++ string literals of hex. Run it with `python3 -I
-tests/net/ntlm_golden.py` and paste its output into the test.
-
-MS-NLMP leaves some choices to the client; for those the script copies the
-library's (the test comment lists them), so the vector does not anchor them:
-the NEGOTIATE flags and its zero Version, the AUTHENTICATE NegotiateFlags
-((client & server) | VERSION), the "DOMAIN\\user" split at the first
-backslash, the client's AV_PAIR order (the server's pairs, then MsvAvFlags,
-MsvAvChannelBindings, MsvAvTargetName, MsvAvEOL) and the payload order.
-With the security layer, also the ExportedSessionKey (random in the library,
-fixed here and in the test) and the protected buffer's layout (the 16-octet
-signature, then the sealed message, as Samba's ntlmssp_wrap).
+"""Prints the golden NTLMv2 messages and security-layer buffers of
+sasl_ntlm_tests.cpp, from MS-NLMP alone (docs/DEVELOPMENT.md "Golden vectors").
 """
 import hashlib
 import hmac
@@ -80,20 +61,11 @@ def u16(s: str) -> bytes:
 
 
 def upper_simple(s: str) -> str:
-    """Uppercase(User) as Windows' RtlUpcaseUnicodeString: one UTF-16 unit
-    to one, so each code point of the BMP by its simple (one-to-one)
-    uppercase mapping, the others unchanged.
-
-    Python has no simple case mapping: str.upper() is the full mapping
-    (SpecialCasing, "SS" for U+00DF). Where the full uppercase is one code
-    point it is the simple mapping; where it is several, the simple mapping
-    is the titlecase when that is one code point (the Greek letters with
-    ypogegrammeni: U+1F80 to U+1F88), otherwise none (U+00DF stays).
-    Checked against ICU's u_toupper over the whole BMP; only letters whose
-    mapping is newer than Python's Unicode version can differ.
-    """
+    """Uppercase(User) as RtlUpcaseUnicodeString: the simple uppercase
+    mapping of each BMP code point, the others unchanged."""
     out = []
     for ch in s:
+        # The full upper or title mapping, when one code point, is the simple one.
         mapped = ch
         if ord(ch) < 0x10000:
             for candidate in (ch.upper(), ch.title()):
@@ -260,8 +232,7 @@ class RC4:
 # RFC 6229 section 2, the 40-bit key's keystream at offset 0.
 assert RC4(bytes.fromhex("0102030405"))(b"\0" * 16).hex() == "b2396305f03dc027ccc3524a0a1118a8"
 
-# NTLMSSP_NEGOTIATE_ALWAYS_SIGN MUST be set in the NEGOTIATE_MESSAGE
-# (MS-NLMP 2.2.2.5 flag M); SIGN and SEAL override it.
+# ALWAYS_SIGN (MS-NLMP 2.2.2.5 flag M), overridden by SIGN and SEAL.
 layer_client_flags = client_flags | ALWAYS_SIGN | SIGN | SEAL | KEY_EXCH
 negotiate2 = (b"NTLMSSP\0" + struct.pack("<II", 1, layer_client_flags) + fields(0, 40) + fields(0, 40)
               + version(0, 0, 0))
@@ -302,9 +273,7 @@ auth2 = authenticate2(mic2)
 
 
 def subkey(magic: str) -> bytes:
-    """SIGNKEY / SEALKEY with extended session security and
-    NTLMSSP_NEGOTIATE_128 (3.4.5.2, 3.4.5.3): the magic constant with its
-    NUL."""
+    """SIGNKEY / SEALKEY (3.4.5.2, 3.4.5.3), NTLMSSP_NEGOTIATE_128."""
     return hashlib.md5(exported2 + magic.encode("ascii") + b"\0").digest()
 
 
@@ -315,9 +284,7 @@ server_seal = subkey("session key to server-to-client sealing key magic constant
 
 
 def wrap(handle, sign_key, seq_num, message):
-    """SEAL (3.4.3) with MAC (3.4.4.2, key exchange): the message sealed,
-    then the checksum, with the same handle; the signature, then the sealed
-    message."""
+    """SEAL (3.4.3) with MAC (3.4.4.2): the signature, then the sealed message."""
     checksum = hmac_md5(sign_key, struct.pack("<I", seq_num) + message)[:8]
     sealed = handle(message)
     return struct.pack("<I", 1) + handle(checksum) + struct.pack("<I", seq_num) + sealed

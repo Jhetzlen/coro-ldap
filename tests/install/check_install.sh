@@ -1,17 +1,7 @@
 #!/bin/sh
-# Installs Capy and Corosio as packages, then jhetz_ldap against them, into
-# a fresh prefix, and builds tests/install/consumer with find_package
-# (COMPONENTS net ad); then the same for a codec-only install (no Corosio
-# needed by consumers; ICU is, found by the package config), where the net
-# and ad components must be missing.
-#
+# Installs Capy, Corosio and jhetz_ldap, full and codec-only, and builds a
+# consumer against each (docs/DEVELOPMENT.md "Installing"):
 #   tests/install/check_install.sh WORK_DIR
-#
-# Sources: FETCHCONTENT_SOURCE_DIR_CAPY / _COROSIO if set (local
-# checkouts), else the pinned commits are cloned into WORK_DIR (a clone
-# there at another commit is cloned again). Both are configured with
-# cmake/source_group_tree_filter.cmake before their project(), as the root
-# CMakeLists.txt does for CMake 4.5 and later.
 set -eu
 work=$(realpath -m "${1:?usage: check_install.sh WORK_DIR}")
 here=$(cd "$(dirname "$0")" && pwd)
@@ -21,7 +11,7 @@ mkdir -p "$work/build"
 gen="-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
 filter="$root/cmake/source_group_tree_filter.cmake"
 
-# source_of NAME URL COMMIT OVERRIDE: a source directory at COMMIT.
+# source_of NAME URL COMMIT OVERRIDE
 source_of() {
 	if [ -n "$4" ]; then echo "$4"; return; fi
 	src="$work/src-$1"

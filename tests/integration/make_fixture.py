@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Writes the LDIF fixture of the integration tests to stdout.
-
-dc=example,dc=org with ou=people (250 inetOrgPerson / posixAccount users,
-user000 .. user249, enough for several pages; and uid=jörg, not a
-posixAccount, with a non-ASCII password for SCRAM), ou=groups (staff with 10
-members, big with 2000 member values), an empty ou=alumni (the target of
-examples/move.cpp) and a user with a 10000-byte binary
-jpegPhoto whose bytes are i % 251 (the tests check them).
-"""
+"""Writes the integration tests' LDIF fixture to stdout (docs/DEVELOPMENT.md)."""
 import base64
 
 out = []
@@ -29,8 +21,7 @@ for i in range(250):
           "uidNumber: %d" % (10000 + i), "gidNumber: 100",
           "homeDirectory: /home/" + uid,
           "userPassword: pw-" + uid)
-# Non-ASCII values are base64 in LDIF. The password is in SASLprep form
-# (cyrus-sasl's SCRAM derives its keys from userPassword as stored).
+# The password is in SASLprep form.
 def b64(text):
     return base64.b64encode(text.encode()).decode()
 entry_dn = "uid=j\u00f6rg,ou=people,dc=example,dc=org"

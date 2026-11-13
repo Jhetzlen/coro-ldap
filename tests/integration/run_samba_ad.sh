@@ -1,45 +1,7 @@
 #!/usr/bin/env bash
-# Starts two throwaway Samba Active Directory domain controllers in Docker
-# for the Samba AD integration tests, runs a command with the
-# JHETZ_LDAP_IT_SAMBA_* variables set, and removes the containers:
-#
-#   tests/integration/run_samba_ad.sh ctest --test-dir build -L samba_ad --output-on-failure
-#
-# The image (coro-ldap-samba-ad, from samba-ad/Dockerfile: Debian's Samba,
-# the domain CORO.TEST and its test users provisioned at build time) is
-# built first, from Docker's cache after the first time, and kept. The two
-# containers differ only in `ldap server require strong auth`, which is
-# global in Samba:
-#
-#   strict   yes: simple binds and SASL binds only over TLS, the latter
-#            with correct TLS channel bindings; on plain ldap:// only SASL
-#            binds with signing or sealing (Windows' "LDAP server signing
-#            requirements" = require signing and LdapEnforceChannelBinding
-#            = 2, "Always"). Samba's default.
-#   relaxed  no: any bind on any transport, channel bindings not checked
-#            (signing not required, LdapEnforceChannelBinding = 0, "Never").
-#
-# Each serves LDAP and LDAPS on 127.0.0.1 only: the strict one on
-# $PORT and $((PORT+1)), the relaxed one on $((PORT+2)) and $((PORT+3));
-# the strict one's KDC (TCP) on $((PORT+4)). Both DCs come from one
-# provisioned image, so they share their Kerberos keys: a ticket from
-# that KDC is good on either.
-#
-# Kerberos, when MIT's kinit is installed: a krb5.conf for CORO.TEST
-# (KRB5_CONFIG) in the temporary directory, and alice's ticket in a
-# credential cache there (KRB5CCNAME); JHETZ_LDAP_IT_SAMBA_KRB5_TARGET
-# names the DC's LDAP service (ldap@dc1.coro.test) for the GSSAPI tests,
-# which are skipped without it.
-# Their TLS certificate is the one Samba generated for itself (CN
-# DC1.coro.test, no subjectAltName: the tests connect to 127.0.0.1 and
-# match that name, JHETZ_LDAP_IT_SAMBA_TLS_NAME, against the subject CN);
-# its CA is copied to a temporary directory under the repository's build/.
-#
-# No privileges or capabilities are needed (see the Dockerfile). Without a
-# working docker the command runs without Samba, so the tests are skipped.
-#
-# Environment:
-#   JHETZ_LDAP_IT_SAMBA_PORT  first host port  (4389)
+# Runs a command with two throwaway Samba AD DCs in Docker
+# (docs/DEVELOPMENT.md "Samba Active Directory"):
+#   tests/integration/run_samba_ad.sh ctest --test-dir build/main -L samba_ad
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,8 +9,7 @@ repo="$(cd "$here/../.." && pwd)"
 port="${JHETZ_LDAP_IT_SAMBA_PORT:-4389}"
 image=coro-ldap-samba-ad
 
-# A signal ends the script once the docker command it interrupted returns
-# (the CLI catches SIGINT and may exit as if it had failed).
+# A signal exits once the interrupted docker command returns.
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
@@ -58,12 +19,7 @@ if ! command -v docker > /dev/null || ! docker info > /dev/null 2>&1; then
 	exec "$@"
 fi
 
-# The cleanup removes the containers with this run's label. docker run
-# and docker exec run in their own session (setsid), out of the
-# terminal's process group: Ctrl-C does not reach them (the CLI would
-# cancel a container still being created, leaving it behind, and both
-# catch SIGINT, so the script would go on), and the trap, which bash runs
-# once they return, ends the script. No signal cuts the cleanup short.
+# docker runs in its own session (setsid), out of Ctrl-C's reach.
 label="coro-ldap-it=samba-ad-$$-$RANDOM$RANDOM"
 dir=""
 cleanup() {
@@ -91,8 +47,7 @@ start() {
 start strict yes "$port" $((port + 1)) $((port + 4))
 start relaxed no $((port + 2)) $((port + 3))
 
-# Until each DC answers a root DSE search, inside and through the
-# published port.
+# Wait for a root DSE answer inside each DC, then for each published port.
 for name in "${containers[@]}"; do
 	ready=""
 	for _ in $(seq 300); do
