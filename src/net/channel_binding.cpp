@@ -43,8 +43,7 @@ namespace {
 
 	// The digest of the certificate's signature algorithm for
 	// tls-server-end-point, or null when the type is undefined for it.
-	// X509_get_signature_info takes a non-const X509 (it may cache the
-	// extensions), hence the caller's non-const certificate.
+	// NOLINTNEXTLINE(misc-const-correctness): OpenSSL 3's X509_get_signature_info takes a non-const X509
 	auto end_point_digest(X509 *cert) -> const EVP_MD *
 	{
 		int md_nid = NID_undef;

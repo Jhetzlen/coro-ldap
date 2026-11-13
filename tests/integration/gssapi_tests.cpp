@@ -130,7 +130,7 @@ class sasl_secprops
 	{
 		try {
 			std::string restore = old_.value_or("noanonymous,noplain");
-			if (restore.find("minssf=") == std::string::npos) {
+			if (!restore.contains("minssf=")) {
 				restore += ",minssf=0";
 			}
 			set(restore);
