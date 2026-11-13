@@ -1,44 +1,5 @@
-// Blocking facades over ldap::connection and ldap::client (DESIGN.md
-// sections 7 and 11): for code that does not use coroutines. Part of
-// jhetz::ldap_net.
-//
-//   ldap::result<ldap::sync::connection> c = ldap::sync::connect("ldaps://ldap.example.org");
-//   if (!c) ...
-//   c->simple_bind(ldap::dn{"cn=admin,dc=example,dc=org"}, password);
-//   ldap::result<ldap::search_result> found = c->search({.base = base});
-//
-//   ldap::sync::client pool({.servers = {...}, .setup = ldap::simple_bind_setup(...)});
-//   auto found = pool.search({.base = base});      // a shared lease for one search, retried once
-//   if (auto lease = pool.acquire()) lease->modify(...);   // shared: binds belong on acquire_exclusive()
-//
-// A connected sync::connection (sync::client) owns an io_context and one I/O
-// thread. Each method runs the matching ldap::connection (ldap::client)
-// coroutine there and waits, with the same request, result and error types.
-// Methods may be called from any number of threads; their operations are
-// multiplexed.
-//
-// Free functions over ldap::connection and ldap::client (who_am_i,
-// load_schema, ad::reset_password, ...) run on a facade through sync::run:
-//
-//   ldap::result<std::string> me = ldap::sync::run(*c, [](auto &a) { return ldap::who_am_i(a); });
-//
-// sync::search_paged, sync::load_schema, sync::repository,
-// sync_extended_operations.hpp and ad/sync.hpp are built that way.
-//
-// A method called from the facade's own I/O thread fails with
-// client_errc::would_deadlock. Exceptions thrown by an operation are
-// rethrown in the calling thread; everything else is an ldap::error.
-//
-// A sync::connection is a handle: copies share the I/O thread and the
-// connection, and close() or unbind() through any copy ends it for all. The
-// last handle's destructor (or an assignment over the last handle) closes the
-// connection without an UnbindRequest (call unbind() first), lets running
-// operations fail with not_connected, and joins the I/O thread. It waits for a
-// host name lookup in progress and for a SASL step still running on its thread
-// (e.g. GSSAPI waiting for a KDC), so it may take as long as their timeouts.
-// Do not destroy or assign to a sync::connection while another thread is
-// inside one of its methods (other copies may be in use), nor destroy the last
-// handle from its I/O thread.
+// Blocking facades over ldap::connection and ldap::client, each owning an
+// io_context and one I/O thread (docs/API.md, "jhetz/ldap/sync.hpp").
 #pragma once
 
 #include "jhetz/ldap/client.hpp"
@@ -78,12 +39,10 @@ namespace jhetz::ldap::sync {
 class transaction;
 class connection;
 template<bool Exclusive> class basic_lease;
-// Declared before lease, whose friend declaration MSVC would otherwise bind
-// to ldap::client from the enclosing namespace.
+// Declared before lease so MSVC binds its friend declaration here.
 class client;
 
-// The blocking facades sync::run runs tasks on: sync::connection,
-// sync::lease, sync::exclusive_lease and sync::client.
+// The facades sync::run runs tasks on.
 template<class D>
 concept directory = std::same_as<D, connection> || std::same_as<D, basic_lease<false>>
 					|| std::same_as<D, basic_lease<true>> || std::same_as<D, client>;
@@ -95,16 +54,12 @@ namespace detail {
 		using type = R;
 	};
 
-	// Writes "jhetz::ldap::<facade>: <what>" to stderr and calls
-	// std::terminate(): what a noexcept path of the facades does when it
-	// can neither finish its job on the I/O thread nor give it up safely.
+	// Writes "jhetz::ldap::<facade>: <what>" to stderr and calls std::terminate().
 	[[noreturn]] void fatal(const char *facade, const char *what) noexcept;
 
-	// A task doing nothing, for a make_task that did its work at once.
 	[[nodiscard]] auto done() -> boost::capy::task<result<void>>;
 
-	// An io_context and the one thread running it (kept alive by a work
-	// guard until join()): what the blocking facades share.
+	// An io_context and the one thread running it.
 	class io_thread
 	{
 	  public:
@@ -112,7 +67,6 @@ namespace detail {
 		explicit io_thread(const char *facade);
 		io_thread(const io_thread &) = delete;
 		auto operator=(const io_thread &) -> io_thread & = delete;
-		// join().
 		~io_thread();
 
 		[[nodiscard]] auto context() noexcept -> boost::corosio::io_context & { return ioc_; }
@@ -120,14 +74,10 @@ namespace detail {
 		{
 			return ioc_.get_executor();
 		}
-		// True on the I/O thread itself.
 		[[nodiscard]] auto on_this_thread() const noexcept -> bool { return std::this_thread::get_id() == id_; }
 
-		// Runs make_task(), a function returning a capy::task<result<T>>,
-		// on the I/O thread (the task is created there too: whatever
-		// make_task touches is only touched on that thread) and waits for
-		// its result; an exception it throws is rethrown here. From the I/O
-		// thread itself it fails at once with would_deadlock.
+		// Creates and runs make_task()'s task on the I/O thread and waits for its
+		// result; would_deadlock from the I/O thread itself.
 		template<class F> auto run(const F &make_task) const -> task_value<std::invoke_result_t<const F &>>::type
 		{
 			using R = task_value<std::invoke_result_t<const F &>>::type;
@@ -144,16 +94,8 @@ namespace detail {
 			return f.get();
 		}
 
-		// run(make_task) for a noexcept path (a destructor, release()) that
-		// hands objects of the I/O thread over to it: make_task, called on
-		// the I/O thread, takes them (closes, destroys or moves them). If
-		// that fails before make_task was called (out of memory for the
-		// post), nothing else may touch those objects from this thread (the
-		// I/O thread may be using them: a data race), and waiting for what
-		// make_task would have ended may never return: fatal() with `what`.
-		// A failure once make_task was called (an exception in it, or in
-		// its task) leaves the objects to the I/O thread, and is ignored.
-		// From the I/O thread it does nothing (would_deadlock).
+		// run() for a noexcept path handing I/O-thread objects over to make_task.
+		// A failure before make_task ran calls fatal(); a later one is ignored.
 		template<class F> void hand_over(const F &make_task, const char *what) const noexcept
 		{
 			bool taken = false;
@@ -163,19 +105,15 @@ namespace detail {
 					return make_task();
 				});
 			} catch (...) {
-				// `taken` was set on the I/O thread before the exception was
-				// stored in the promise, or never: no race reading it here.
+				// `taken` is set on the I/O thread before the exception is stored.
 				if (!taken) {
 					fatal(facade_, what);
 				}
 			}
 		}
 
-		// Drops the work guard and waits for the thread: run() returns once
-		// the work left on the io_context (operations ending, a detached
-		// unbind, a name lookup) is done. Idempotent. From the I/O thread
-		// itself (the facade's last owner destroyed there: it would join
-		// itself), fatal().
+		// Drops the work guard and joins the thread. Idempotent; fatal() on the
+		// I/O thread itself.
 		void join() noexcept;
 
 	  private:
@@ -186,8 +124,7 @@ namespace detail {
 		std::thread::id id_;
 	};
 
-	// The tasks behind sync::connection_api's non-inline operations
-	// (sync.cpp).
+	// The tasks behind connection_api's non-inline operations.
 	[[nodiscard]] auto collect_paged(ldap::connection &c,
 	  search_params request,
 	  std::int32_t page_size,
@@ -211,18 +148,8 @@ namespace detail {
 	struct facade_access;
 }// namespace detail
 
-// ldap::transaction (transaction.hpp) for a sync::connection or a
-// sync::lease, each method run on the I/O thread with the same results.
-// Destroyed while open, it aborts the transaction and waits for the answer
-// (ignored), at most five seconds; from the I/O thread it only queues the
-// abort. Made by a sync::connection, it must not outlive that connection's
-// I/O thread (moves and copies of the connection keep it valid; destroying or
-// reassigning the last handle ends it). Made by a sync::lease, it shares the I/O thread's
-// ownership and may outlive the lease and client, but keep the lease while
-// using it, else the connection returns to the pool and may be shared or
-// closed under it. As the last owner of the I/O thread it must not be
-// destroyed or move-assigned there (std::terminate()). Move-only; not
-// [[nodiscard]] as a class since it comes inside a result.
+// ldap::transaction for a sync::connection or a sync lease, run on the I/O
+// thread. Destroyed open, it aborts and waits at most five seconds.
 class transaction
 {
   public:
@@ -232,14 +159,11 @@ class transaction
 	auto operator=(const transaction &) -> transaction & = delete;
 	~transaction();
 
-	// ldap::transaction::begin() on the connection of `c` or of the lease
-	// `l`, on the I/O thread: Start Transaction, once the answers still due
-	// have arrived.
 	[[nodiscard]] static auto begin(connection &c, extended_controls controls = {}) -> result<transaction>;
 	template<bool Exclusive>
 	[[nodiscard]] static auto begin(basic_lease<Exclusive> &l, extended_controls controls = {}) -> result<transaction>;
 
-	// A copy of ldap::transaction::identifier(); empty once moved from.
+	// Empty once moved from.
 	[[nodiscard]] auto identifier() const -> std::string;
 	[[nodiscard]] auto is_open() const -> bool;
 
@@ -253,34 +177,24 @@ class transaction
   private:
 	transaction(std::shared_ptr<const detail::io_thread> io, std::unique_ptr<ldap::transaction> t) noexcept;
 
-	// begin() on the facade `d` (a sync::connection or lease).
 	template<class D> static auto begin_on(D &d, extended_controls controls) -> result<transaction>;
 
-	// Ends the ldap::transaction on the I/O thread, aborting it first if
-	// still open.
+	// Ends the ldap::transaction, aborting it first if still open.
 	void settle() noexcept;
 
-	// The I/O thread it runs on: owning (the client's core) when made by a
-	// sync::lease, not owning when made by a sync::connection.
+	// Owning when made by a sync lease, not owning when made by a connection.
 	std::shared_ptr<const detail::io_thread> io_{};
-	// Touched only on the I/O thread (null once moved from).
+	// Touched only on the I/O thread; null once moved from.
 	std::unique_ptr<ldap::transaction> txn_;
 };
 
 namespace detail {
 
-	// The blocking ldap::connection operations, shared by sync::connection
-	// and the sync leases. `Derived` provides
-	//   call(make_task): runs make_task(c) on the I/O thread with its
-	//     ldap::connection c (const from a const member) and waits for it;
-	//   runner(): its io_thread, as the shared_ptr a sync::transaction
-	//     keeps.
+	// The blocking ldap::connection operations shared by sync::connection and
+	// the sync leases. `Derived` provides call(make_task) and runner().
 	template<class Derived> class connection_api
 	{
 	  public:
-		// As ldap::connection::is_open() / is_tls(): is_tls() is true only
-		// while TLS protects the open connection (false after unbind() or
-		// close()).
 		[[nodiscard]] auto is_open() const -> bool
 		{
 			return self().call([](const ldap::connection &c) { return is_open_of(c); }).value_or(false);
@@ -289,15 +203,13 @@ namespace detail {
 		{
 			return self().call([](const ldap::connection &c) { return is_tls_of(c); }).value_or(false);
 		}
-		// As ldap::connection::security_layer(): none once closed.
 		[[nodiscard]] auto security_layer() const -> sasl_protection
 		{
 			return self()
 			  .call([](const ldap::connection &c) { return security_layer_of(c); })
 			  .value_or(sasl_protection::none);
 		}
-		// As ldap::connection::peer_certificate(), copied: the server's
-		// certificate (DER), empty unless is_tls().
+		// Copied; empty unless is_tls().
 		[[nodiscard]] auto peer_certificate() const -> std::vector<std::byte>
 		{
 			return self()
@@ -351,7 +263,6 @@ namespace detail {
 			return self().call([&](ldap::connection &c) { return c.extended(std::move(request)); });
 		}
 
-		// LDAP transactions (RFC 5805), as ldap::connection's.
 		[[nodiscard]] auto start_transaction(extended_controls controls = {}) -> result<std::string>
 		{
 			return self().call([&](ldap::connection &c) { return c.start_transaction(std::move(controls)); });
@@ -365,7 +276,7 @@ namespace detail {
 		{
 			return self().call([](ldap::connection &c) { return c.unbind(); });
 		}
-		// Closes the connection at once (no UnbindRequest).
+		// Closes at once, without an UnbindRequest.
 		void close()
 		{
 			(void)self().call([](ldap::connection &c) { return close_of(c); });
@@ -383,8 +294,7 @@ namespace detail {
 
 namespace detail {
 
-	// What the handles of a connected sync::connection share: the I/O
-	// thread and the ldap::connection on it, at a fixed address.
+	// What the handles of a sync::connection share.
 	struct connection_core
 	{
 		io_thread io{ "sync::connection" };
@@ -395,53 +305,38 @@ namespace detail {
 		auto operator=(const connection_core &) -> connection_core & = delete;
 		connection_core(connection_core &&) = delete;
 		auto operator=(connection_core &&) -> connection_core & = delete;
-		// Closes the connection on the I/O thread (for every copy of the
-		// ldap::connection) and joins it.
+		// Closes the connection on the I/O thread and joins it.
 		~connection_core();
 	};
 
 }// namespace detail
 
-// The blocking ldap::connect: starts a sync::connection's I/O thread and
-// opens the connection there (and with options.start_tls, upgrades), as
-// ldap::connect(ioc, u, options, mr) does; on failure the thread is joined
-// and the error returned. The connection's state is allocated from `mr`,
-// which must outlive the sync::connection. To reconnect, assign a new
-// one: c = sync::connect(...).
+// The blocking ldap::connect: starts the I/O thread and connects there.
+// `mr` must outlive the sync::connection.
 [[nodiscard]] auto connect(url u,
   connection_options options = {},
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<connection>;
-// As connect(url), to the URL `text` (url::parse); a bad URL fails with
-// url::parse's error (client_errc::invalid_url) before any thread starts.
+// From the URL text; a bad URL fails with invalid_url before any thread
+// starts.
 [[nodiscard]] auto connect(std::string_view text,
   connection_options options = {},
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<connection>;
 
-// The blocking ldap::connection, made by sync::connect(): the operations of
-// detail::connection_api (bind, search, add, ..., unbind, close). A
-// default-constructed or moved-from one has no I/O thread and every
-// operation fails with client_errc::not_connected (is_open() is false,
-// close() does nothing). Copyable: a copy is another handle on the same
-// I/O thread and connection (see the header comment); moves and copies keep
-// a sync::transaction made by it valid. Not [[nodiscard]] as a class: it
-// comes inside a result, which is [[nodiscard]] on its own.
+// The blocking ldap::connection. Copyable: a copy is another handle on the
+// same I/O thread and connection.
 class connection : public detail::connection_api<connection>
 {
   public:
 	connection() noexcept = default;
 	connection(const connection &) noexcept = default;
 	connection(connection &&) noexcept = default;
-	// Releases the handle replaced first, as the destructor does.
 	auto operator=(const connection &) noexcept -> connection & = default;
 	auto operator=(connection &&) noexcept -> connection & = default;
-	// Releases this handle. The last one closes the connection on the I/O
-	// thread and joins it. Not on the I/O thread itself: it would join
-	// itself, and std::terminate() is called with a message on stderr.
+	// The last handle closes the connection and joins the I/O thread; never on
+	// that thread.
 	~connection() = default;
 
-	// The executor of the I/O thread, e.g. to run coroutines next to the
-	// facade. Blocking methods called from there fail with would_deadlock.
-	// One with no context for a connection without an I/O thread.
+	// The I/O thread's executor; no context without an I/O thread.
 	[[nodiscard]] auto executor() const noexcept -> boost::corosio::io_context::executor_type
 	{
 		return core_ ? core_->io.executor() : boost::corosio::io_context::executor_type{};
@@ -453,9 +348,7 @@ class connection : public detail::connection_api<connection>
 	friend auto connect(url u, connection_options options, std::pmr::memory_resource *mr) -> result<connection>;
 	explicit connection(std::shared_ptr<detail::connection_core> core) noexcept : core_(std::move(core)) {}
 
-	// Runs make_task(c) on the I/O thread with its ldap::connection c
-	// (const from a const member) and waits for its result; not_connected
-	// without an I/O thread.
+	// Runs make_task(c) on the I/O thread and waits; not_connected without one.
 	template<class Self, class F>
 	auto call(this Self &self, const F &make_task)
 	  -> detail::task_value<decltype(make_task(std::forward_like<Self &>(std::declval<ldap::connection &>())))>::type
@@ -466,8 +359,7 @@ class connection : public detail::connection_api<connection>
 		auto &c = std::forward_like<Self &>(self.core_->conn);
 		return self.core_->io.run([&] { return make_task(c); });
 	}
-	// Not owning: a transaction must not outlive the last handle of its
-	// sync::connection.
+	// Not owning.
 	[[nodiscard]] auto runner() const noexcept -> std::shared_ptr<const detail::io_thread>
 	{
 		return { std::shared_ptr<const detail::io_thread>{}, &core_->io };
@@ -480,19 +372,8 @@ namespace detail {
 	struct client_core;
 }
 
-// A pooled connection of a sync::client (blocking ldap::lease or
-// ldap::exclusive_lease): detail::connection_api's operations run on the
-// leased connection, on the client's I/O thread. sync::lease (acquire()) is
-// shared: its simple_bind, sasl_bind, start_tls, unbind and close affect
-// every lease on the connection, so use a sync::exclusive_lease
-// (acquire_exclusive()) for them. Methods may be called from any number of
-// threads, but moving, reassigning, release() and the destructor must not
-// run while another thread is inside a method. A lease may outlive its
-// sync::client (its connection is then closed: cond::connection_lost) and
-// keeps the I/O thread alive. On the I/O thread, release() and the
-// destructor return the connection without waiting, but must not end the
-// last owner of the I/O thread (std::terminate()). Move-only; not
-// [[nodiscard]] as a class since it comes inside a result.
+// A blocking ldap::lease (Exclusive false) or ldap::exclusive_lease of a
+// sync::client, run on the client's I/O thread.
 template<bool Exclusive> class basic_lease : public detail::connection_api<basic_lease<Exclusive>>
 {
   public:
@@ -501,16 +382,13 @@ template<bool Exclusive> class basic_lease : public detail::connection_api<basic
 	auto operator=(basic_lease &&other) noexcept -> basic_lease &;
 	basic_lease(const basic_lease &) = delete;
 	auto operator=(const basic_lease &) -> basic_lease & = delete;
-	// release().
 	~basic_lease();
 
-	// False for a default-constructed, moved-from or released lease, whose
-	// operations fail with client_errc::not_connected.
+	// False for a default-constructed, moved-from or released lease.
 	explicit operator bool() const noexcept { return io_ != nullptr; }
-	// The server the connection goes to; empty for a false lease.
+	// Empty for a false lease.
 	[[nodiscard]] auto server() const noexcept -> const url & { return server_; }
-	// Returns the connection to the pool now (the destructor's job), on the
-	// I/O thread, and waits for that.
+	// Returns the connection to the pool now and waits for that.
 	void release() noexcept;
 
   private:
@@ -521,8 +399,7 @@ template<bool Exclusive> class basic_lease : public detail::connection_api<basic
 	friend struct detail::facade_access;
 	basic_lease(std::shared_ptr<const detail::io_thread> io, held_lease held, url server) noexcept;
 
-	// Runs make_task(c) on the I/O thread with the leased connection c and
-	// waits for its result; not_connected for a false lease.
+	// Runs make_task(c) on the I/O thread with the leased connection.
 	template<class Self, class F>
 	auto call(this Self &self, const F &make_task)
 	  -> detail::task_value<decltype(make_task(std::forward_like<Self &>(std::declval<ldap::connection &>())))>::type
@@ -533,11 +410,10 @@ template<bool Exclusive> class basic_lease : public detail::connection_api<basic
 		return self.io_->run([&] { return make_task(std::forward_like<Self &>(self.leased())); });
 	}
 	[[nodiscard]] auto runner() const noexcept -> std::shared_ptr<const detail::io_thread> { return io_; }
-	// The leased ldap::connection; touched only on the I/O thread.
+	// Touched only on the I/O thread.
 	[[nodiscard]] auto leased() const noexcept -> ldap::connection & { return held_.get(); }
 
-	// Shares the ownership of the client's I/O thread (an aliasing pointer
-	// to its client_core); null iff the lease holds nothing.
+	// An aliasing pointer to the client's core; null iff the lease holds nothing.
 	std::shared_ptr<const detail::io_thread> io_{};
 	held_lease held_{};// touched only on the I/O thread
 	url server_{};
@@ -549,105 +425,64 @@ using exclusive_lease = basic_lease<true>;
 extern template class basic_lease<false>;
 extern template class basic_lease<true>;
 
-// The blocking ldap::client (client.hpp), with ldap::client's pool,
-// failover, backoff, session setup and retries. It owns an io_context and
-// one I/O thread where the ldap::client, the setup and the observer's hooks
-// run. acquire() and the forwarders block the caller and may be called from
-// any number of threads. close() may be called from any thread, the I/O
-// thread included; waiting acquire() calls then fail with not_connected.
-//
-// Lifetime: the destructor closes the ldap::client on the I/O thread, lets
-// the unbinds run, and joins it, unless leases or their transactions are
-// still alive: the last of them joins it (their operations fail from then
-// on). The memory resource must outlive the I/O thread; the observer need
-// only outlive close(). Do not destroy a sync::client while another thread
-// is inside one of its methods, nor as the last owner of the I/O thread on
-// that thread (std::terminate() with a message on stderr).
-//
-// No search_stream(): use search() or sync::search_paged().
+// The blocking ldap::client: the ldap::client, its setup and observer run
+// on an I/O thread the facade owns. No search_stream().
 class client
 {
   public:
-	// Starts the I/O thread and makes the ldap::client there; opens
-	// nothing yet. Connections' state is allocated from `mr`.
+	// Starts the I/O thread and makes the ldap::client there.
 	explicit client(client_options options, std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 	client(const client &) = delete;
 	auto operator=(const client &) -> client & = delete;
-	// close(), then joins the I/O thread unless leases (or transactions
-	// made by leases) are still alive.
+	// close(), then joins the I/O thread unless leases are still alive.
 	~client();
 
-	// The executor of the I/O thread (the ldap::client's), e.g. to run
-	// coroutines next to the facade. Blocking methods called from there
-	// fail with would_deadlock.
+	// The I/O thread's executor.
 	[[nodiscard]] auto executor() const noexcept -> boost::corosio::io_context::executor_type;
 
-	// As ldap::client::acquire() and acquire_exclusive(), blocking: a lease
-	// on a pooled connection, or the same errors (not_connected once close()
-	// was called).
 	[[nodiscard]] auto acquire() -> result<lease>;
 	[[nodiscard]] auto acquire_exclusive() -> result<exclusive_lease>;
 
-	// The read forwarders, as ldap::client's: each acquires a shared lease,
-	// runs the operation, returns the lease, and retries once on another
-	// connection after cond::connection_lost or cond::busy_or_unavailable.
+	// Read forwarders, as ldap::client's.
 	[[nodiscard]] auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> result<search_result>;
 	[[nodiscard]] auto compare(compare_params request) -> result<compare_result>;
-	// Both chase referrals as client_options::referrals says, with what the
-	// chase did in the result (see "Referrals" in client.hpp). The
-	// authorizer and the observer's on_referral run on the I/O thread.
 
-	// The write forwarders, as ldap::client's: each acquires a shared
-	// lease, runs the operation, returns the lease, and retries once on
-	// another connection only after client_errc::not_sent; referral
-	// results are errors (errc::referral), never chased.
+	// Write forwarders, as ldap::client's.
 	[[nodiscard]] auto add(add_params request) -> result<response>;
 	[[nodiscard]] auto modify(modify_params request) -> result<response>;
 	[[nodiscard]] auto del(del_params request) -> result<response>;
 	[[nodiscard]] auto modify_dn(modify_dn_params request) -> result<response>;
-	// As ldap::client::extended: retried only after not_sent.
 	[[nodiscard]] auto extended(extended_params request) -> result<extended_result>;
 
-	// As ldap::client::connections(), from any thread (read at once on
-	// the I/O thread).
 	[[nodiscard]] auto connections() const -> std::size_t;
 
-	// As ldap::client::close(), and waits for it: closes every pooled
-	// connection, stops the attempts in progress, and fails waiting and
-	// later acquire() calls with not_connected. From the I/O thread, as
-	// ldap::client::close() there: at once on the client's strand, else
-	// posted to it. Idempotent.
+	// As ldap::client::close(), and waits for it. Idempotent.
 	void close() noexcept;
 
   private:
 	friend struct detail::facade_access;
 
-	// Runs make_task(pool) on the I/O thread with the ldap::client and
-	// waits for its result.
+	// Runs make_task(pool) on the I/O thread and waits for its result.
 	template<class F>
 	auto call(const F &make_task) -> detail::task_value<std::invoke_result_t<const F &, ldap::client &>>::type
 	{
 		return io().run([&] { return make_task(pool()); });
 	}
 	[[nodiscard]] auto io() const noexcept -> const detail::io_thread &;
-	// The ldap::client; touched only on the I/O thread.
+	// Touched only on the I/O thread.
 	[[nodiscard]] auto pool() const noexcept -> ldap::client &;
 
 	std::shared_ptr<detail::client_core> core_;
 };
 
 namespace detail {
-	// sync::run's access to the facades' call(make_task).
 	struct facade_access
 	{
 		template<class D, class F> static auto call(D &d, const F &make_task) { return d.call(make_task); }
 		template<class D> static auto runner(const D &d) { return d.runner(); }
 	};
 
-	// The types that must be destroyed on their connection's I/O thread,
-	// and those, with the connection and client, that must not outlive
-	// its io_context (run.hpp).
 	using ldap::detail::io_context_bound;
 	using ldap::detail::io_thread_bound;
 }// namespace detail
@@ -673,27 +508,9 @@ auto transaction::begin(basic_lease<Exclusive> &l, extended_controls controls) -
 	return begin_on(l, std::move(controls));
 }
 
-// Runs make_task(a, args...) on the I/O thread of `d` and waits for the
-// task it returns, a capy::task<result<T>>; returns its result<T>. `a` is
-// what `d` stands for: the ldap::connection of a sync::connection or a sync
-// lease, the ldap::client of a sync::client. make_task is typically a
-// generic lambda calling an async free function:
-//
+// Runs make_task(a, args...) on the I/O thread of `d`, `a` being its
+// ldap::connection or ldap::client, and returns the task's result:
 //   ldap::sync::run(pool, [](auto &a) { return ldap::who_am_i(a); });
-//
-// make_task, its task and `args` are used on the I/O thread while the call
-// runs; whatever the task creates there (a stream) must also end there,
-// before the task does. A task whose result holds a search_stream,
-// paged_search, record_stream, lease, exclusive_lease, transaction,
-// ldap::connection or ldap::client does not compile. Copies of `a` must
-// not leave the task (through a capture by reference either): they must
-// not outlive the I/O thread's io_context. The facade's own errors come
-// first:
-// not_connected without a connection (a default or moved-from
-// sync::connection, a released lease), would_deadlock from the I/O thread
-// itself (context "sync::connection", or "sync::client" for a client and
-// its leases).
-// An exception thrown by make_task or its task is rethrown here.
 template<directory D, class F, class... Args> [[nodiscard]] auto run(D &d, F &&make_task, Args &&...args)
 {
 	const auto task_of = [&](
@@ -704,14 +521,7 @@ template<directory D, class F, class... Args> [[nodiscard]] auto run(D &d, F &&m
 	return detail::facade_access::call(d, task_of);
 }
 
-// ldap::search_paged (paged_search.hpp), blocking: every page collected as
-// one search_result, with the entries and references of every page and the
-// last page's SearchResultDone and controls; a page ending with a limit
-// code ends it with the entries received, as search() does. At most
-// `max_pages` pages: past them it fails with std::errc::value_too_large,
-// and a max_pages of 0 fails with std::errc::invalid_argument before
-// anything is sent. On a sync::client, one shared lease for every page
-// (ldap::search_paged(client &)).
+// ldap::search_paged, blocking: every page collected into one search_result.
 template<directory D>
 [[nodiscard]] auto search_paged(D &d,
   search_params request,

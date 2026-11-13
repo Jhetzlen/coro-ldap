@@ -54,17 +54,12 @@ namespace detail {
 		return true;
 	}
 
-	// Length of the well-formed UTF-8 sequence starting at s[i] (RFC 3629;
-	// RFC 4512 UTF1 / UTFMB: no overlong forms, surrogates or code points
-	// above U+10FFFF), or 0 if there is none. Precondition: i < s.size().
-	// Defined in src/attribute.cpp with ICU (U8_NEXT).
+	// Length of the well-formed UTF-8 sequence at s[i], or 0. ICU, in
+	// src/attribute.cpp.
 	auto icu_utf8_sequence_length(std::string_view s, std::size_t i) noexcept -> std::size_t;
 
-	// Offset of the first octet of s that does not start a well-formed UTF-8
-	// sequence (the same rule as icu_utf8_sequence_length), or
-	// std::string_view::npos if all of s is well-formed. ASCII runs are
-	// skipped eight octets at a time (tried at the start and after an ASCII
-	// octet). Defined in src/attribute.cpp with ICU.
+	// Offset of the first octet not starting a well-formed UTF-8 sequence, or
+	// npos.
 	auto invalid_utf8_offset(std::string_view s) noexcept -> std::size_t;
 
 	inline auto is_valid_utf8(std::string_view s) noexcept -> bool
@@ -72,11 +67,7 @@ namespace detail {
 		return invalid_utf8_offset(s) == std::string_view::npos;
 	}
 
-	// Well-formed UTF-8 (Unicode section 3.9, table 3-7): an octet below
-	// 0x80 stands alone; a lead octet in [lead_first, lead_last] starts a
-	// sequence of `length` octets whose second is in [second_first,
-	// second_last] (excluding overlongs, surrogates and code points above
-	// U+10FFFF) and whose others are continuation octets.
+	// Well-formed UTF-8 (Unicode section 3.9, table 3-7).
 	inline constexpr unsigned char utf8_continuation_first = 0x80u;
 	inline constexpr unsigned char utf8_continuation_last = 0xBFu;
 	struct utf8_lead_range
@@ -130,13 +121,8 @@ namespace detail {
 		  .second_last = 0x8Fu },
 	};
 
-	// The same check, hand-rolled, for compile time only: utf8_sequence_length
-	// uses it in constant evaluation (the consteval ldap::dn / ldap::rdn /
-	// attribute literals go through detail::scan_dn), where ICU's functions
-	// cannot run. ICU's U8_NEXT macro would be constexpr-friendly but needs
-	// <unicode/utf8.h>, which the public headers do not include (ICU is a
-	// private dependency of jhetz::ldap). Its answers match ICU's for every
-	// input (tests/attribute_tests.cpp, "utf8_sequence_length").
+	// The same check for constant evaluation, where ICU cannot run; it matches
+	// ICU's answers.
 	constexpr auto constexpr_utf8_sequence_length(std::string_view s, std::size_t i) noexcept -> std::size_t
 	{
 		const auto at = [&](std::size_t k) { return static_cast<unsigned char>(s[i + k]); };
@@ -161,9 +147,7 @@ namespace detail {
 		return 0;
 	}
 
-	// Length of the well-formed UTF-8 sequence starting at s[i], or 0 if
-	// there is none: ICU at run time, the hand-rolled check above in constant
-	// evaluation. Precondition: i < s.size().
+	// ICU at run time, the hand-rolled check in constant evaluation.
 	constexpr auto utf8_sequence_length(std::string_view s, std::size_t i) noexcept -> std::size_t
 	{
 		if consteval {
@@ -181,8 +165,7 @@ namespace detail {
 		return std::ranges::all_of(s, is_keychar);
 	}
 
-	// numericoid = number 1*( DOT number ); number = DIGIT / ( LDIGIT 1*DIGIT )
-	// (no leading zeros).
+	// numericoid = number 1*( DOT number ), no leading zeros
 	constexpr auto is_numericoid(std::string_view s) noexcept -> bool
 	{
 		std::size_t parts = 0;
@@ -213,8 +196,7 @@ namespace detail {
 	// oid = descr / numericoid (RFC 4512 section 1.4)
 	constexpr auto is_oid(std::string_view s) noexcept -> bool { return is_descr(s) || is_numericoid(s); }
 
-	// attributedescription = attributetype options; options = *( SEMI option );
-	// option = 1*keychar
+	// attributedescription = attributetype options
 	constexpr auto is_attribute_description(std::string_view s) noexcept -> bool
 	{
 		const std::size_t semi = s.find(';');
@@ -243,32 +225,16 @@ namespace detail {
 
 }// namespace detail
 
-// An attribute description such as `cn`, `2.5.4.3` or `userCertificate;binary`.
-// Equality, ordering and hashing ignore ASCII case (RFC 4512: descriptors and
-// options are case-insensitive); the original spelling is kept for output.
-//
-// Built three ways:
-// - from a string literal, checked at compile time: `ldap::attribute a{"mail"};`
-//   (a runtime `const char*` does not compile; use parse());
-// - `attribute::parse(text)` for runtime text, returning invalid_attribute on
-//   failure;
-// - `attribute::unchecked(text)` for names received from a server, which are
-//   kept as sent (Active Directory, for one, sends `member;range=0-1499`,
-//   which is not RFC 4512 syntax). Only use it for data that is not going
-//   back into a request unvalidated.
-//
-// Memory: allocator-aware (std::pmr); the name is allocated from the resource
-// given to the constructor, parse() or unchecked(). A plain copy uses the
-// default resource, assignment keeps the target's resource.
+// An attribute description such as `cn` or `userCertificate;binary`;
+// compared case-insensitively, spelling kept.
 class attribute
 {
   public:
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	// Compile-time checked literal (consteval: invalid text fails to compile).
+	// Compile-time checked literal.
 	struct literal
 	{
-		// Implicit on purpose: `"..."` converts to the literal, checked at compile time.
 		// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
 		consteval literal(const char *s) : text(s)
 		{
@@ -329,36 +295,24 @@ class attribute
 	std::pmr::string name_{};
 };
 
-// Case-insensitive hash, consistent with operator==. Seeded at random per
-// process, so a server cannot craft names that collide: values differ from
-// one run to the next and must not be stored or sent anywhere.
+// Case-insensitive hash, seeded per process.
 [[nodiscard]] auto hash_value(std::string_view attribute_name) noexcept -> std::size_t;
 
 namespace detail {
 
-	// iequals, 8 bytes at a time (not constexpr).
 	auto iequals_fast(std::string_view a, std::string_view b) noexcept -> bool;
 
-	// Whether the attribute descriptions `a` and `b` are the same (RFC 4512
-	// 2.5): the same type and the same set of options, both compared
-	// case-insensitively, the options in any order.
+	// The same type and set of options (RFC 4512 section 2.5).
 	auto same_description(std::string_view a, std::string_view b) noexcept -> bool;
 
-	// Whether the attribute description `description` holds `base`'s type and
-	// at least its options (RFC 4512 2.5), compared as same_description does.
+	// `description` holds `base`'s type and at least its options.
 	auto has_description_options(std::string_view description, std::string_view base) noexcept -> bool;
 
-	// Hash and equality for unordered containers keyed by names that compare
-	// case-insensitively (A-Z only, as iequals and hash_value: other bytes as
-	// they are). Transparent, so a std::string-keyed container is searched
-	// with a std::string_view, without a copy.
+	// Transparent case-insensitive (A-Z) hash and equality.
 	struct ci_hash
 	{
 		using is_transparent = void;
-		// Never throws, but deliberately not noexcept: libstdc++ then caches
-		// the hash code in each node, as it does for std::hash<std::string>.
-		// Without it, a find hashes the key of every node it walks past (to
-		// see where the bucket ends): measured about 10% slower lookups.
+		// Not noexcept so libstdc++ caches the hash code in each node.
 		auto operator()(std::string_view s) const -> std::size_t { return hash_value(s); }
 	};
 	struct ci_equal

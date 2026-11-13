@@ -1,10 +1,5 @@
-// ldap::repository (repository.hpp) and ldap::load_schema (directory.hpp) for the
-// blocking facade: the same operations, on a sync::connection, a
-// sync::client or a sync lease, blocking the calling thread. Each runs the
-// async operation with sync::run (sync.hpp).
-//
-//   ldap::sync::repository people(pool, ldap::dn{"ou=people,dc=example,dc=org"}, ldap::named_by<&person::uid>);
-//   ldap::result<std::optional<person>> p = people.get("jdoe");
+// ldap::repository and ldap::load_schema for the blocking facades, run with
+// sync::run.
 #pragma once
 
 #include "jhetz/ldap/directory.hpp"
@@ -20,9 +15,6 @@
 
 namespace jhetz::ldap::sync {
 
-// As ldap::load_schema: on a sync::client, ldap::load_schema(client &)
-// (both searches on one shared lease). The facade's own errors
-// (not_connected, would_deadlock) have the context "load schema" too.
 template<directory D> [[nodiscard]] auto load_schema(D &d) -> result<server_schema>
 {
 	auto r = sync::run(d, [](auto &a) { return ldap::load_schema(a); });
@@ -33,9 +25,7 @@ template<directory D> [[nodiscard]] auto load_schema(D &d) -> result<server_sche
 	return r;
 }
 
-// As ldap::repository, blocking: each operation runs the async repository's on the
-// I/O thread. The source must outlive the repository. One repository may be used
-// from several threads at once.
+// ldap::repository, blocking. The source must outlive the repository.
 template<auto Naming, directory D> class repository
 {
 	using core = ldap::detail::repository_core<Naming>;
@@ -155,9 +145,7 @@ template<auto Naming, directory D> class repository
 	{
 		return sync::run(*source_, [&](auto &a) { return core_.search(a, std::move(f), scope); });
 	}
-	// As search(), in pages of `page_size` entries, every page collected
-	// (sync::search_paged): the records of every page, the last page's
-	// result. No stream: the blocking facade has none (sync.hpp).
+	// search() in pages, every page collected.
 	[[nodiscard]] auto search_paged(std::int32_t page_size,
 	  filter f = filters::attr("objectClass").present(),
 	  search_scope scope = search_scope::single_level) -> result<typed_search_result<record<value_type>>>

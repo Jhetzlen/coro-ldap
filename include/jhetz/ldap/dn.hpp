@@ -1,26 +1,5 @@
-// Distinguished names (RFC 4514 string form), DESIGN.md section 1.
-//
-// Scope: syntax only. Attribute types compare case-insensitively and values
-// compare byte for byte after unescaping; matching-rule normalization
-// (caseIgnoreMatch on values, whitespace folding, schema-aware aliases such as
-// `cn` vs `2.5.4.3`, Unicode normalization) is out of scope, so
-// `cn=John` != `cn=john` here even though most servers treat them as equal.
-//
-// Parsing is RFC 4514 with the leniency of RFC 2253 section 4 / OpenLDAP:
-// spaces around `,`, `+` and `=` are ignored, and unescaped trailing spaces of
-// a value are dropped. Everything else follows RFC 4514: the text is UTF-8,
-// `"`, `;`, `<`, `>` and NUL must be escaped, `\` is followed by a special
-// character or two hex digits (any octet, so values need not be UTF-8), `#`
-// starts a hex-encoded (BER) value, types are descriptors or numeric OIDs
-// without options. to_string() escapes octets that are not part of valid
-// UTF-8, so its output is UTF-8 too.
-//
-// Memory: ava, rdn and dn are allocator-aware (std::pmr). Everything a dn owns
-// is allocated from the resource given to parse(), the literal constructor or
-// the allocator-extended constructors; parent() and child() use the dn's own
-// resource. rdn::parse() and the rdn literal allocate from their resource
-// too. A plain copy uses the default resource, assignment keeps the target's
-// resource.
+// Distinguished names (RFC 4514 string form), syntax only: values compare
+// byte for byte after unescaping (docs/API.md, DESIGN.md section 1).
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"
@@ -61,13 +40,12 @@ namespace detail {
 	{
 		std::string_view type;
 		std::string_view raw_value;// escaped text, or hex digits after '#'
-		bool hex = false;// `#hexstring` form
+		bool hex = false;
 		bool new_rdn = true;// false: joined to the previous AVA with '+'
 	};
 
-	// The length of the value unit at s[i], which is not ',', '+' or ' ': an
-	// escape, a UTF-8 sequence (RFC 4514: UTF-8 only) or one character; 0 if
-	// none may start there.
+	// The length of the value unit at s[i] (an escape, a UTF-8 sequence or one
+	// character); 0 if none may start there.
 	constexpr auto dn_value_unit_length(std::string_view s, std::size_t i) noexcept -> std::size_t
 	{
 		const std::size_t n = s.size();
@@ -90,8 +68,7 @@ namespace detail {
 		return 1;
 	}
 
-	// The `#hexstring` value whose digits start at s[i]: advances `i` past
-	// them and sets tok's value. npos, or the offset of the error.
+	// Scans the `#hexstring` value at s[i]; npos, or the offset of the error.
 	constexpr auto scan_dn_hex_value(std::string_view s, std::size_t &i, dn_token &tok) noexcept -> std::size_t
 	{
 		const std::size_t start = i;
@@ -106,13 +83,12 @@ namespace detail {
 		return std::string_view::npos;
 	}
 
-	// The string value starting at s[i]: advances `i` to the ',' or '+'
-	// ending it (or the end) and sets tok's value, without its unescaped
-	// trailing spaces. npos, or the offset of the error.
+	// Scans the string value at s[i] up to ',' or '+', without unescaped
+	// trailing spaces; npos, or the offset of the error.
 	constexpr auto scan_dn_string_value(std::string_view s, std::size_t &i, dn_token &tok) noexcept -> std::size_t
 	{
 		const std::size_t start = i;
-		std::size_t end = i;// end of the value without unescaped trailing spaces
+		std::size_t end = i;// without unescaped trailing spaces
 		while (i < s.size() && s[i] != ',' && s[i] != '+') {
 			if (s[i] == ' ') {
 				++i;
@@ -129,9 +105,8 @@ namespace detail {
 		return std::string_view::npos;
 	}
 
-	// Scans RFC 4514 text and calls `on_ava(dn_token)` for every AVA in
-	// order. Returns npos on success, otherwise the offset of the error.
-	// constexpr, so the same code validates literals at compile time.
+	// Calls `on_ava(dn_token)` for every AVA of RFC 4514 text; npos on success,
+	// else the offset of the error. constexpr, for the literals.
 	template<class F> constexpr auto scan_dn(std::string_view s, const F &on_ava) -> std::size_t
 	{
 		constexpr std::size_t ok = std::string_view::npos;
@@ -193,7 +168,7 @@ namespace detail {
 		return scan_dn(s, [](const dn_token &) {}) == std::string_view::npos;
 	}
 
-	// Exactly one RDN (one or more AVAs joined with '+'), no ','.
+	// Exactly one RDN.
 	constexpr auto is_rdn(std::string_view s) noexcept -> bool
 	{
 		std::size_t rdns = 0;
@@ -207,9 +182,8 @@ namespace detail {
 
 }// namespace detail
 
-// One attribute type and value of an RDN. `value` holds the unescaped bytes;
-// for the `#hexstring` form (`hex_form == true`) it holds the decoded BER
-// bytes, and to_string() writes them back as `#...`.
+// One attribute type and value; `value` holds the unescaped bytes, or the
+// decoded BER bytes of the `#hexstring` form.
 struct ava
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -241,21 +215,14 @@ struct ava
 	friend auto operator==(const ava &, const ava &) -> bool = default;
 };
 
-// Relative distinguished name: one or more AVAs joined with '+'. Equality
-// ignores the order of the AVAs (RFC 4512: an RDN is a set).
-//
-// Built from a literal (`ldap::rdn{"uid=jdoe"}`, checked at compile time),
-// from runtime text with parse(), or AVA by AVA. parse() and the literal take
-// exactly one RDN: "cn=a+sn=b" is one RDN, "cn=a,dc=b" is a DN.
+// One or more AVAs joined with '+'; equality ignores their order.
 struct rdn
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	// Compile-time checked literal: `ldap::rdn{"uid=jdoe"}` (consteval: text
-	// that is not exactly one RDN fails to compile; runtime text uses parse()).
+	// Compile-time checked literal: `ldap::rdn{"uid=jdoe"}`.
 	struct literal
 	{
-		// Implicit on purpose: `"..."` converts to the literal, checked at compile time.
 		// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
 		consteval literal(const char *s) : text(s)
 		{
@@ -283,13 +250,11 @@ struct rdn
 
 	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return avas.get_allocator(); }
 
-	// RFC 4514 text of one RDN (`uid=jdoe`, `cn=a+sn=b`). invalid_dn if the
-	// text is empty, has a syntax error, or holds more than one RDN.
+	// RFC 4514 text of exactly one RDN; invalid_dn otherwise.
 	[[nodiscard]] static auto parse(std::string_view text,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<rdn>;
 
-	// Escaped like dn::to_string(); parse(to_string()) == *this for an RDN
-	// that parse() or the literal built.
+	// parse(to_string()) == *this.
 	[[nodiscard]] auto to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
 	  -> std::pmr::string;
 
@@ -301,11 +266,9 @@ class dn
   public:
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	// Compile-time checked literal: `ldap::dn base{"ou=people,dc=example,dc=org"};`
-	// (consteval: invalid text fails to compile; runtime text uses parse()).
+	// Compile-time checked literal: `ldap::dn{"ou=people,dc=example,dc=org"}`.
 	struct literal
 	{
-		// Implicit on purpose: `"..."` converts to the literal, checked at compile time.
 		// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
 		consteval literal(const char *s) : text(s)
 		{
@@ -333,29 +296,19 @@ class dn
 	[[nodiscard]] static auto parse(std::string_view text,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<dn>;
 
-	// RFC 4514 string form. Types keep their spelling; values are escaped as
-	// needed (`, + " \ < > ;`, leading space or '#', trailing space as `\c`;
-	// NUL and other control characters as `\xx`). parse(to_string()) == *this.
+	// RFC 4514 string form; parse(to_string()) == *this.
 	[[nodiscard]] auto to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
 	  -> std::pmr::string;
 
-	// Most specific RDN first, as in the string form.
+	// Most specific RDN first.
 	[[nodiscard]] auto rdns() const noexcept -> const std::pmr::vector<rdn> & { return rdns_; }
 	[[nodiscard]] auto empty() const noexcept -> bool { return rdns_.empty(); }
-	// Without the first RDN; the parent of the empty DN is the empty DN.
+	// The parent of the empty DN is the empty DN.
 	[[nodiscard]] auto parent() const -> dn;
-	// `r` prepended to this DN: `base.child(ldap::rdn{"uid=jdoe"})` is
-	// `uid=jdoe,<base>`. Throws std::invalid_argument (programming error) if
-	// `r` has no AVA, a type that is not a descriptor or numeric OID, or an
-	// empty `#` value.
+	// `r` prepended; throws std::invalid_argument for an invalid RDN.
 	[[nodiscard]] auto child(const rdn &r) const -> dn;
 	[[nodiscard]] auto child(rdn &&r) const -> dn;
-	// `relative` prepended to this DN, its RDNs in order (the leftmost stays
-	// the most specific): `base.child(ldap::dn{"uid=jdoe,ou=people"})` is
-	// `uid=jdoe,ou=people,<base>`. A child of the empty DN is `relative`.
-	//
-	// `base.child({"uid=jdoe"})` does not compile (ambiguous between rdn
-	// and dn): name the type, `ldap::rdn{...}` or `ldap::dn{...}`.
+	// `relative` prepended, its RDNs in order.
 	[[nodiscard]] auto child(const dn &relative) const -> dn;
 
 	friend auto operator==(const dn &, const dn &) -> bool = default;
@@ -364,11 +317,7 @@ class dn
 	std::pmr::vector<rdn> rdns_{};
 };
 
-// One attribute value escaped for RFC 4514 text, exactly as dn::to_string()
-// writes it, so `"cn=" + escape_dn_value(v)` parses back to the value `v`:
-// `, + " \ < > ;` and a leading space or `#` or a trailing space become
-// `\c`; NUL, other control characters and octets that are not part of valid
-// UTF-8 become `\xx`; valid UTF-8 is kept as is. An empty value stays empty.
+// One attribute value escaped exactly as dn::to_string() writes it.
 [[nodiscard]] auto escape_dn_value(std::string_view value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> std::pmr::string;
 

@@ -1,9 +1,5 @@
-// The free extended operations (extended_operations.hpp) for the blocking
-// facade: the same calls on a sync::connection, a sync::client or a sync
-// lease, blocking the calling thread. Each runs the async function with
-// sync::run (sync.hpp).
-//
-//   ldap::result<std::string> me = ldap::sync::who_am_i(c);
+// The free extended operations for the blocking facades, run with
+// sync::run.
 #pragma once
 
 #include "jhetz/ldap/extended_operations.hpp"

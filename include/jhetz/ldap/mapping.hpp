@@ -1,78 +1,6 @@
-// Typed mapping between directory entries and C++ structs (DESIGN.md
-// section 4): a descriptor names the attribute of each member, value_traits
-// converts values, and the member's type decides cardinality.
-//
-//   struct person {
-//       std::string                 uid;        // required, single-valued
-//       std::optional<std::string>  mail;       // optional
-//       std::vector<ldap::dn>       member_of;  // multi-valued
-//       std::chrono::sys_seconds    created{};  // GeneralizedTime
-//   };
-//
-//   template<> constexpr auto jhetz::ldap::schema<person> = jhetz::ldap::describe(
-//       jhetz::ldap::object_class("inetOrgPerson"),   // optional
-//       jhetz::ldap::auxiliary_class("posixAccount"), // optional, after object_class
-//       jhetz::ldap::field<&person::uid>("uid"),
-//       jhetz::ldap::field<&person::mail>("mail"),
-//       jhetz::ldap::field<&person::member_of>("memberOf"),
-//       jhetz::ldap::field<&person::created>("createTimestamp", jhetz::ldap::read_only));
-//
-//   ldap::result<person> p = ldap::decode<person>(entry);
-//   ldap::repository people(conn, base, ldap::named_by<&person::uid>);   // repository.hpp
-//   co_await people.search(f);
-//   co_await people.modify("jdoe", {ldap::replace<&person::mail>("new@example.org")});
-//   co_await people.add(person{...});
-//   auto f = ldap::filters::field<&person::uid>() == "jdoe";
-//   auto changes = ldap::diff(before, after);   // result<std::vector<ldap::change<person>>>
-//   auto same = ldap::unchanged_filter(before); // result<ldap::filter>
-//
-// Compile-time checks: attribute and object class names are validated; a
-// member type without value_traits, a member of another struct, a change to
-// a member that is not in the descriptor or is read_only, and a value whose
-// type does not match the member all fail to compile.
-//
-// Member shapes:
-//   T                 required, single value: missing_attribute if absent,
-//                     too_many_values if the entry has several
-//   std::optional<T>  optional, single value: too_many_values if several
-//   std::vector<T>    zero or more values
-// (std::vector<std::byte>, ldap::binary, is a single binary value; use
-// std::vector<ldap::binary> for several.) A value that does not convert is
-// conversion_failed, and one bad value fails the whole decode<T> (and so the
-// whole repository search). A string member (std::string, std::pmr::string) takes
-// only well-formed UTF-8, so binary attributes (userPassword, jpegPhoto,
-// userCertificate, ...) map to ldap::binary; validate<T> reports a string
-// member on a binary syntax (schema.hpp). Errors name the entry and the
-// attribute in their context: "entry uid=x,ou=people,dc=example,dc=org:
-// attribute uidNumber: not an integer: \"12a\"".
-//
-// An empty member means the read returned no value, not that the server
-// holds none (an attribute the reader may not see, RFC 4511 4.5.1.8). Map
-// each member by the attribute's primary name, the one the server answers
-// with: a member named by an alias or OID decodes empty (validate<T> warns
-// with not_primary_name, and a repository read fails with schema_mismatch).
-//
-// value_traits<T> is the extension point, like std::formatter:
-//
-//   template<> struct jhetz::ldap::value_traits<my_type> {
-//       static ldap::result<my_type> decode(std::string_view raw);  // conversion_failed on bad input
-//       static std::string encode(const my_type &v);                // or ldap::result<std::string>
-//   };
-//
-// encode returns std::string (or anything convertible to it) when every
-// value can be written, or ldap::result<std::string> when some cannot
-// (encode_error). detail::encode_value(v) takes both forms and returns
-// result<std::string>. A failed encode stops the typed write before
-// anything is sent: repository::add (to_attributes) and repository::modify (the change)
-// return the error, and a typed filter becomes the empty filter, which
-// fails with invalid_filter (see filters::typed_attr).
-//
-// Built in: std::string, std::pmr::string (well-formed UTF-8 only, both
-// ways), integers (decimal, range checked), bool (TRUE / FALSE, RFC 4517),
-// ldap::dn, ldap::binary, std::chrono::sys_seconds (GeneralizedTime, RFC
-// 4517 section 3.3.13) and enums that have an ldap::enum_names table.
-// The ad/ headers add Active Directory's FILETIME dates and intervals,
-// SIDs, GUIDs and userAccountControl flags.
+// Typed mapping between entries and C++ structs: a descriptor names each
+// member's attribute, value_traits converts values, the member type decides
+// cardinality (docs/API.md, DESIGN.md section 4).
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"
@@ -110,7 +38,6 @@ using binary = std::vector<std::byte>;
 template<class T> struct value_traits;
 
 namespace detail {
-	// What value_traits<T>::encode returns.
 	template<class T> using encode_result_t = decltype(value_traits<T>::encode(std::declval<const T &>()));
 
 	template<class R>
@@ -118,8 +45,7 @@ namespace detail {
 	  std::same_as<std::remove_cvref_t<R>, result<std::string>> || std::convertible_to<R, std::string>;
 }// namespace detail
 
-// encode returns std::string (or a type convertible to it) or
-// result<std::string>.
+// encode returns std::string (or convertible) or result<std::string>.
 template<class T>
 concept mapped_value = requires(std::string_view raw, const T &v) {
 	{ value_traits<T>::decode(raw) } -> std::same_as<result<T>>;
@@ -127,8 +53,7 @@ concept mapped_value = requires(std::string_view raw, const T &v) {
 };
 
 namespace detail {
-	// value_traits<T>::encode(v) as a result, whichever form the trait
-	// returns.
+	// value_traits<T>::encode(v) as a result, whichever form the trait returns.
 	template<mapped_value T> [[nodiscard]] auto encode_value(const T &v) -> result<std::string>
 	{
 		if constexpr (std::same_as<std::remove_cvref_t<encode_result_t<T>>, result<std::string>>) {
@@ -139,21 +64,19 @@ namespace detail {
 		}
 	}
 
-	// "not an integer: \"12a\"" (the value is quoted, sanitized and cut at 64
-	// bytes, see append_sanitized in src/format_util.hpp).
+	// "not an integer: \"12a\"", the value quoted, sanitized and cut at 64 bytes.
 	auto conversion_error(std::string_view what, std::string_view raw) -> error;
 
-	// conversion_failed "not valid UTF-8 (ill-formed sequence at offset N)",
-	// N counted from 0; the value itself is not quoted.
+	// conversion_failed "not valid UTF-8 (ill-formed sequence at offset N)".
 	auto utf8_conversion_error(std::size_t offset) -> error;
 
-	// The same text as encode_error: a string member to be written.
+	// The same text as encode_error.
 	auto utf8_encode_error(std::size_t offset) -> error;
 
 	// encode_error "value N is not in ldap::enum_names".
 	auto enum_encode_error(std::intmax_t value) -> error;
 
-	// `text` itself, or utf8_encode_error when it is not well-formed UTF-8.
+	// `text`, or utf8_encode_error when it is not well-formed UTF-8.
 	inline auto checked_utf8(std::string_view text) -> result<std::string>
 	{
 		if (const std::size_t bad = invalid_utf8_offset(text); bad != std::string_view::npos) {
@@ -163,13 +86,7 @@ namespace detail {
 	}
 }// namespace detail
 
-// Text: the value must be well-formed UTF-8 (RFC 3629, as RFC 4512 UTF8
-// requires of Directory String and the other string syntaxes), else
-// conversion_failed. Map binary attributes (userPassword and the other
-// Octet String ones, jpegPhoto, userCertificate, objectGUID, ...) to
-// ldap::binary instead; validate<T> reports a string member on a binary
-// syntax. Encoding checks the same: ill-formed UTF-8 is encode_error, with
-// the offset, and nothing is sent.
+// Well-formed UTF-8 only, both ways; binary attributes map to ldap::binary.
 template<> struct value_traits<std::string>
 {
 	[[nodiscard]] static auto decode(std::string_view raw) -> result<std::string>
@@ -203,7 +120,7 @@ namespace detail {
 						|| std::same_as<T, char16_t> || std::same_as<T, char32_t>;
 }// namespace detail
 
-// LDAP INTEGER syntax (RFC 4517 section 3.3.16): decimal, optional '-'.
+// INTEGER syntax (RFC 4517 section 3.3.16).
 template<std::integral T>
 	requires(!std::same_as<T, bool> && !detail::char_like<T>)
 struct value_traits<T>
@@ -222,7 +139,7 @@ struct value_traits<T>
 	[[nodiscard]] static auto encode(T v) -> std::string { return std::to_string(v); }
 };
 
-// Boolean syntax (RFC 4517 section 3.3.3): exactly "TRUE" or "FALSE".
+// Boolean syntax (RFC 4517 section 3.3.3): "TRUE" or "FALSE".
 template<> struct value_traits<bool>
 {
 	[[nodiscard]] static auto decode(std::string_view raw) -> result<bool>
@@ -255,9 +172,8 @@ template<> struct value_traits<binary>
 	[[nodiscard]] static auto encode(const binary &v) -> std::string { return std::string(detail::as_text(v)); }
 };
 
-// GeneralizedTime (RFC 4517 section 3.3.13): decodes every form (minutes,
-// seconds, fractions of the last unit, "Z" or an offset; fractions of a
-// second are truncated), encodes as "YYYYMMDDHHMMSSZ". Years 0000-9999.
+// GeneralizedTime (RFC 4517 section 3.3.13): decodes every form, encodes
+// "YYYYMMDDHHMMSSZ". Years 0000-9999.
 [[nodiscard]] auto parse_generalized_time(std::string_view text) -> result<std::chrono::sys_seconds>;
 [[nodiscard]] auto format_generalized_time(std::chrono::sys_seconds t) -> result<std::string>;
 
@@ -267,20 +183,13 @@ template<> struct value_traits<std::chrono::sys_seconds>
 	{
 		return parse_generalized_time(raw);
 	}
-	// A time outside years 0000-9999 cannot be written: encode_error.
 	[[nodiscard]] static auto encode(std::chrono::sys_seconds v) -> result<std::string>
 	{
 		return format_generalized_time(v);
 	}
 };
 
-// Enums map to names through a table:
-//
-//   template<> constexpr auto jhetz::ldap::enum_names<color> = std::to_array<std::pair<color, std::string_view>>(
-//       {{color::red, "red"}, {color::green, "green"}});
-//
-// Names are matched exactly; an unknown name is conversion_failed, and
-// encoding a value that is not in the table is encode_error.
+// Enums map to names through an ldap::enum_names<E> table, matched exactly.
 struct no_enum_names
 {
 };
@@ -347,8 +256,7 @@ struct read_only_t
 {
 	explicit constexpr read_only_t() = default;
 };
-// Read but never written: add() skips it, a change to it does not compile
-// (operational attributes such as createTimestamp).
+// Read but never written (operational attributes such as createTimestamp).
 inline constexpr read_only_t read_only{};
 
 template<auto Ptr> struct field
@@ -395,9 +303,8 @@ template<class... S> consteval auto object_class(S... names)
 	return out;
 }
 
-// Auxiliary object classes (RFC 4512 section 2.4.3), after object_class:
-// written on add and checked by validate<T>, but not ANDed into a repository's
-// search filter, so entries without them are found too.
+// Auxiliary object classes (RFC 4512 section 2.4.3): written and validated,
+// not ANDed into a repository's search filter.
 template<std::size_t N> struct auxiliary_classes
 {
 	std::array<const char *, N> names{};
@@ -448,7 +355,7 @@ template<class F0, class... F> consteval auto describe(F0 f0, F... f)
 	return describe(object_classes<0>{}, auxiliary_classes<0>{}, f0, f...);
 }
 
-// Specialize for each mapped struct (see the top of this header).
+// Specialize for each mapped struct.
 struct not_described
 {
 };
@@ -467,7 +374,6 @@ namespace detail {
 		}
 	}
 
-	// Index of the field for member `Ptr` in its struct's descriptor.
 	template<auto Ptr> consteval auto field_index() -> std::size_t
 	{
 		using C = member_pointer<decltype(Ptr)>::owner;
@@ -491,7 +397,7 @@ namespace detail {
 	}
 }// namespace detail
 
-// The attribute names of T's descriptor, in order (what a repository requests).
+// The attribute names of T's descriptor, in order.
 template<described T>
 [[nodiscard]] auto attribute_names(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> string_list
 {
@@ -501,7 +407,6 @@ template<described T>
 }
 
 namespace detail {
-	// The attribute names of T's descriptor, in order.
 	template<described T> constexpr auto attribute_name_array()
 	{
 		return std::apply(
@@ -510,14 +415,12 @@ namespace detail {
 	}
 }// namespace detail
 
-// The object classes of T's descriptor (empty if none were declared),
-// without the auxiliary ones.
+// Without the auxiliary ones.
 template<described T> [[nodiscard]] constexpr auto object_classes_of() -> std::span<const char *const>
 {
 	return schema<T>.classes.names;
 }
 
-// The auxiliary object classes of T's descriptor (empty if none).
 template<described T> [[nodiscard]] constexpr auto auxiliary_classes_of() -> std::span<const char *const>
 {
 	return schema<T>.auxiliary.names;
@@ -543,7 +446,6 @@ namespace detail {
 // ---------------------------------------------------------------- decode / encode
 
 namespace detail {
-	// The values entry::find returned, or none when the attribute is absent.
 	inline auto values_or_empty(const std::pmr::vector<std::pmr::string> *values) noexcept
 	  -> std::span<const std::pmr::string>
 	{
@@ -588,26 +490,17 @@ namespace detail {
 	auto entry_context(std::string_view dn) -> std::string;
 	auto entry_context(std::string_view dn, std::string_view attribute) -> std::string;
 
-	// The error for an attribute of `e` that is `name` with a range option
-	// (MS-ADTS 3.1.1.3.1.3.3), or nullopt when there is none.
+	// The error for an attribute of `e` that is `name` with a range option, if
+	// any.
 	auto ranged_values_error(const entry &e, std::string_view name) -> std::optional<error>;
 
 	// client_errc::schema_mismatch for the first attribute of `e` that decode
-	// does not read as one of `names` (the same description, RFC 4512 2.5:
-	// type and option set compared case-insensitively, options in any order)
-	// and that is no subtype of a name without options (`cn;lang-en` for
-	// `cn`), or is a subtype of a name with options (`cn;lang-en;x-foo` for
-	// `cn;lang-en`); nullopt when there is none. A range option (MS-ADTS
-	// 3.1.1.3.1.3.3) is left out of the comparison.
+	// would not read as one of `names`, if any.
 	auto unrequested_attribute_error(const entry &e, std::span<const std::string_view> names) -> std::optional<error>;
 }// namespace detail
 
-// Converts an entry to T (default-constructed, then every described member
-// assigned). Attribute names match case-insensitively, options included
-// and compared as a set (see entry::find). Fails with client_errc::incomplete_values when the
-// entry holds a mapped attribute with a range option (Active Directory's
-// member;range=0-1499, MS-ADTS 3.1.1.3.1.3.3): read such a member with
-// ldap::ad::read_all_values.
+// Converts an entry to T; incomplete_values for a mapped attribute with a
+// range option (read it with ldap::ad::read_all_values).
 template<described T> [[nodiscard]] auto decode(const entry &e) -> result<T>
 {
 	T out{};
@@ -641,8 +534,8 @@ template<described T> [[nodiscard]] auto decode(const entry &e) -> result<T>
 }
 
 namespace detail {
-	// Appends the encoded `v` to `values`; false, with `failed` set (the
-	// attribute as context), when it does not encode.
+	// Appends the encoded `v` to `values`; false, with `failed` set, if it does
+	// not encode.
 	template<class E>
 	auto append_encoded(const E &v,
 	  std::string_view name,
@@ -687,13 +580,8 @@ namespace detail {
 	}
 }// namespace detail
 
-// The attributes to add for `value`: every described member except
-// read_only ones and empty optionals / vectors, plus objectClass with the
-// descriptor's object classes, then its auxiliary ones, when it declares
-// some. Without declared
-// object classes the descriptor must map objectClass itself. Fails with the
-// first member that does not encode (encode_error, context "attribute
-// mail").
+// The attributes to add for `value`: every described member but read_only
+// ones and empty ones, plus objectClass when the descriptor declares classes.
 template<described T>
 [[nodiscard]] auto to_attributes(const T &value, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
   -> result<std::pmr::vector<partial_attribute>>
@@ -725,27 +613,20 @@ template<described T>
 
 // ---------------------------------------------------------------- typed changes
 
-// A ModifyRequest change for a member of T, built by ldap::add / remove /
-// replace below; repository::modify takes them. A value that does not
-// encode leaves the error in `wire` (context "replace mail"), which
-// repository::modify returns before sending anything.
+// A ModifyRequest change for a member of T; an encode error stays in `wire`.
 template<class T> struct change
 {
 	result<modify_change> wire;
 };
 
 namespace detail {
-	// For static_assert in a discarded if-constexpr branch: dependent, so
-	// only an instantiation that reaches it fails (a plain
-	// static_assert(false) there needs P2593, not in every supported
-	// compiler).
+	// For static_assert in a discarded if-constexpr branch.
 	template<class> inline constexpr bool dependent_false = false;
 
 	template<class E, class V>
 	concept range_of =
 	  std::ranges::input_range<V> && std::same_as<std::remove_cvref_t<std::ranges::range_value_t<V>>, E>;
 
-	// Appends the encoded `v` to `out`, or returns its error.
 	template<class E> auto append_value(const E &v, string_list &out) -> std::optional<error>
 	{
 		auto s = encode_value(v);
@@ -756,9 +637,7 @@ namespace detail {
 		return std::nullopt;
 	}
 
-	// The values `v` stands for, for member `Ptr`: one element, an optional
-	// element (0 or 1), or, for a multi-valued member, a range of elements.
-	// Fails with the first value that does not encode.
+	// The values `v` stands for, for member `Ptr`.
 	template<auto Ptr, class V> auto encode_values(const V &v) -> result<string_list>
 	{
 		using F = std::remove_cvref_t<decltype(field_of<Ptr>())>;
@@ -813,15 +692,12 @@ namespace detail {
 	}
 }// namespace detail
 
-// Replaces all values of the member's attribute with `v`: an element, an
-// optional element (nullopt removes the attribute) or, for a vector
-// member, a range of elements.
+// Replaces all values (nullopt removes the attribute).
 template<auto Ptr, class V> [[nodiscard]] auto replace(const V &v) -> change<detail::owner_of<Ptr>>
 {
 	return detail::make_change<Ptr>(modify_operation::replace, detail::encode_values<Ptr>(v));
 }
 
-// Adds values (an element, or a range of elements for a vector member).
 template<auto Ptr, class V> [[nodiscard]] auto add(const V &v) -> change<detail::owner_of<Ptr>>
 {
 	return detail::make_change<Ptr>(modify_operation::add, detail::encode_values<Ptr>(v));
@@ -841,9 +717,8 @@ namespace detail {
 	// The values of `values` not in `other`, each once, in order.
 	auto values_not_in(const string_list &values, const string_list &other) -> string_list;
 
-	// Appends the changes turning member `Ptr` of `before` into that of
-	// `after` to `out`; false, with `failed` set, when a value does not
-	// encode.
+	// Appends the changes turning member `Ptr` of `before` into that of `after`
+	// to `out`; false, with `failed` set, if a value does not encode.
 	template<auto Ptr>
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): before, then after, as diff
 	auto append_diff(const owner_of<Ptr> &before,
@@ -886,19 +761,8 @@ namespace detail {
 	}
 }// namespace detail
 
-// The changes turning `original` into `changed`, member by member in
-// descriptor order, read_only members skipped: a single-valued member that
-// differs is replaced, or deleted once empty; a multi-valued one deletes
-// the values it lost, then adds the ones it gained (values compared as
-// encoded, exactly), even when it lost them all, so values `original` does
-// not hold stay. A std::vector<ldap::binary> member is replaced with its new
-// set instead: such attributes (jpegPhoto) often have no equality rule, and
-// the server refuses a value add or delete on those. A member empty in
-// `original` is not known to be absent on the server (an attribute the
-// reader may not see, RFC 4511 4.5.1.8: a write-only userPassword, AD's
-// unicodePwd), so it is written with replace too. Empty when nothing
-// differs. Fails with the first value that does not encode (context
-// "attribute mail").
+// The changes turning `original` into `changed`, member by member; empty
+// when nothing differs (rules: docs/API.md, repository update).
 template<described T> [[nodiscard]] auto diff(const T &original, const T &changed) -> result<std::vector<change<T>>>
 {
 	std::vector<change<T>> out;
@@ -927,12 +791,8 @@ template<described T> [[nodiscard]] auto diff(const T &original, const T &change
 
 namespace filters {
 
-	// Filters on a described member, with values of its type:
-	// `filters::field<&person::uid_number>() >= 1000`. A value that does not
-	// encode (ill-formed UTF-8, an enum value without a name, ...) gives the
-	// empty filter, which stays empty through && || ! and fails with
-	// invalid_filter before anything is sent (filter.hpp); the encode error
-	// itself is not carried.
+	// Filters on a described member, with values of its type; a value that does
+	// not encode gives the empty filter.
 	template<auto Ptr> class typed_attr
 	{
 		using E = std::remove_cvref_t<decltype(detail::field_of<Ptr>())>::element;
@@ -975,8 +835,7 @@ namespace filters {
 }// namespace filters
 
 // `(&(objectClass=c1)...(objectClass=cN) f)`, or `f` when T declares no
-// object class: what a repository's search sends. Auxiliary classes are not
-// included.
+// object class.
 template<described T> [[nodiscard]] auto narrow_filter(filter f) -> filter
 {
 	constexpr auto &names = schema<T>.classes.names;
@@ -992,11 +851,10 @@ template<described T> [[nodiscard]] auto narrow_filter(filter f) -> filter
 }
 
 namespace detail {
-	// `out` ANDed with `f`, or `f` when `out` is still empty.
 	inline void and_into(filter &out, filter f) { out = out.empty() ? std::move(f) : std::move(out) && std::move(f); }
 
-	// ANDs (a=v) for each value of member `Ptr` of `original` into `out`;
-	// false, with `failed` set, when a value does not encode.
+	// ANDs (a=v) for each value of member `Ptr` of `original` into `out`; false,
+	// with `failed` set, if a value does not encode.
 	template<auto Ptr>
 	auto append_unchanged(const owner_of<Ptr> &original, filter &out, std::optional<error> &failed) -> bool
 	{
@@ -1014,18 +872,7 @@ namespace detail {
 }// namespace detail
 
 // A filter true of an entry that still has `original`'s values, for an
-// Assertion control (RFC 4528): (a=v) for each value of each member in
-// descriptor order, read_only members skipped, all ANDed; the empty filter
-// when `original` has no value. Each term also matches the attribute's
-// subtypes and tagged values (RFC 4511 4.5.1.7, RFC 4512 2.5), so the
-// filter does not see an added value (a value written meanwhile to a member
-// empty in `original` is overwritten), nor a plain value replaced while a
-// tagged or subtype sibling holds the same text: ldap::versioned_by is the
-// exact check. A term on an attribute without an equality rule (jpegPhoto),
-// or whose rule's assertion syntax is not the attribute's
-// (userCertificate), is Undefined, and the Assertion control then fails
-// every time (RFC 4528 section 3). Fails with the first value that does not
-// encode (context "attribute mail").
+// Assertion control (RFC 4528); empty when `original` has no value.
 template<described T> [[nodiscard]] auto unchanged_filter(const T &original) -> result<filter>
 {
 	static_assert(std::apply([](const auto &...f) { return (!f.read_only || ...); }, schema<T>.fields),
@@ -1052,10 +899,8 @@ template<described T> [[nodiscard]] auto unchanged_filter(const T &original) -> 
 	return out;
 }
 
-// (a=v) on one single-valued member of `original`, read_only or not: a
-// version attribute such as entryCSN or modifyTimestamp. An empty optional
-// fails with missing_attribute, and a value that does not encode with its
-// error (context "attribute entryCSN").
+// (a=v) on one single-valued member of `original`, e.g. entryCSN; an empty
+// optional fails with missing_attribute.
 template<auto Ptr> [[nodiscard]] auto unchanged_filter(const detail::owner_of<Ptr> &original) -> result<filter>
 {
 	static_assert(std::remove_cvref_t<decltype(detail::field_of<Ptr>())>::kind != cardinality::multiple,

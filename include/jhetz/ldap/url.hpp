@@ -1,52 +1,5 @@
-// LDAP URLs (RFC 4516), DESIGN.md section 1: the server to connect to, and
-// later the targets of referrals and search continuation references.
-//
-//   ldapurl = scheme "://" [host [":" port]]
-//             ["/" dn ["?" [attributes] ["?" [scope] ["?" [filter] ["?" extensions]]]]]
-//
-// Schemes: `ldap` (plain TCP, default port 389), `ldaps` (TLS from the first
-// byte, default port 636) and `ldapi` (Unix domain socket; the host part is
-// the percent-encoded socket path, e.g. `ldapi://%2Fvar%2Frun%2Fslapd%2Fldapi`,
-// and a port is not allowed). Scheme names are case-insensitive.
-//
-// Host: reg-name, IPv4 or bracketed IPv6 (`[::1]`, also with an RFC 6874 zone
-// `[fe80::1%25eth0]`); IPvFuture and userinfo (`user@host`) are rejected. The
-// host may be empty (`ldap:///dc=example`, `ldapi://`): RFC 4516 leaves the
-// server to client configuration then. parse() accepts it, so referrals can be
-// represented; net::connect() rejects it (see net/connect.hpp).
-//
-// Every part is percent-decoded when parsed and stored decoded; to_string()
-// encodes again. Absent and present-but-empty parts are kept apart where RFC
-// 4511 gives them different meanings for referrals (section 4.1.10: an absent
-// DN, scope or filter means "same as the original request"):
-// - base_dn(): nullopt without "/", the (possibly empty) DN after "/";
-// - scope(), search_filter(): nullopt when absent or empty;
-// - port(): nullopt when absent or empty (`host:`), port_or_default() applies
-//   the scheme's default.
-// Attributes and extensions are lists; absent and empty are the same.
-//
-// Validation: the DN must be RFC 4514 (dn::parse), the filter RFC 4515
-// (filter::raw), scope one of base/one/sub (case-insensitive), extension
-// types descriptors or numeric OIDs, attribute selectors non-empty. The port
-// must be 1..65535. Characters outside RFC 3986 are rejected, except that
-// unencoded spaces and bytes >= 0x80 are accepted in the DN, attribute, scope,
-// filter and extension parts (some servers send them); a '#' (fragment) is
-// always rejected. After percent-decoding, the attribute, filter and
-// extension parts must be well-formed UTF-8 (RFC 4516 section 2), like the
-// DN (dn::parse). Errors are client_errc::invalid_url with the reason and
-// offset in the context.
-//
-// Comparison is syntactic on the decoded parts: host names are compared
-// exactly (no case folding), the DN with dn's equality, the filter as a tree
-// (so `cn=x` and `(cn=x)` are the same filter). to_string() writes the
-// filter's canonical text (filter::to_string), so it is canonical too.
-//
-// Memory (DESIGN.md section 8): url is allocator-aware. Everything it owns
-// (strings, lists, the DN and the filter tree) uses the resource given to
-// parse() or the constructor (default: std::pmr::get_default_resource(),
-// i.e. the heap); a plain copy uses the default resource, the
-// allocator-extended copy the one given, as for any pmr container, and
-// assignment keeps this url's resource.
+// LDAP URLs (RFC 4516): parsed, percent-decoded and validated; absent and
+// empty parts kept apart for referrals (docs/API.md, DESIGN.md section 1).
 #pragma once
 
 #include "jhetz/ldap/dn.hpp"
@@ -69,12 +22,11 @@
 namespace jhetz::ldap {
 
 enum class url_scheme : std::uint8_t {
-	ldap,// TCP, default port 389
-	ldaps,// TLS over TCP, default port 636
-	ldapi,// Unix domain socket
+	ldap,// default port 389
+	ldaps,// TLS, default port 636
+	ldapi,
 };
 
-// "ldap", "ldaps" or "ldapi".
 [[nodiscard]] auto to_string(url_scheme s) noexcept -> std::string_view;
 
 namespace detail {
@@ -107,7 +59,7 @@ namespace detail {
 
 	constexpr auto is_url_reg_name_char(char c) noexcept -> bool { return is_url_unreserved(c) || is_url_sub_delim(c); }
 
-	// dec-octet "." dec-octet "." dec-octet "." dec-octet (no leading zeros).
+	// dec-octet "." dec-octet "." dec-octet "." dec-octet, no leading zeros.
 	constexpr auto is_ipv4(std::string_view s) noexcept -> bool
 	{
 		constexpr unsigned max_octet = 255;
@@ -136,8 +88,7 @@ namespace detail {
 		}
 	}
 
-	// RFC 3986 IPv6address: eight 16-bit groups, at most one "::" standing for
-	// one or more zero groups, optionally ending in an IPv4 address (two groups).
+	// RFC 3986 IPv6address.
 	constexpr auto is_ipv6(std::string_view s) noexcept -> bool
 	{
 		constexpr int ipv6_groups = 8;
@@ -195,9 +146,8 @@ namespace detail {
 		return compressed ? groups < ipv6_groups : groups == ipv6_groups;
 	}
 
-	// `s` holds only characters `allowed` accepts and %XX triplets, decodes
-	// to at least one byte, no decoded byte is a C0 control or DEL and, with
-	// `utf8`, the decoded bytes are well-formed UTF-8.
+	// Only `allowed` characters and %XX triplets, decoding to at least one byte
+	// without C0 or DEL, and with `utf8` to well-formed UTF-8.
 	template<class Allowed>
 	constexpr auto is_encoded_host_text(std::string_view s, const Allowed &allowed, bool utf8) noexcept -> bool
 	{
@@ -251,7 +201,7 @@ namespace detail {
 		return pending == 0;
 	}
 
-	// RFC 3986 port: digits, 1..65535; empty means the scheme's default.
+	// RFC 3986 port: digits, 1..65535; empty: the scheme's default.
 	constexpr auto is_url_port(std::string_view s) noexcept -> bool
 	{
 		constexpr unsigned max_port = 65535;
@@ -271,10 +221,8 @@ namespace detail {
 	// `e` with "servers[index]: " before its context.
 	[[nodiscard]] auto server_list_error(error e, std::size_t index) -> error;
 
-	// The text of the server url literal: `scheme://host[:port]`, optionally
-	// followed by one '/', where the host is a reg-name, a bracketed IPv6
-	// address (with an optional "%25" zone) or, for ldapi, the encoded
-	// socket path (no port). url::parse_server accepts everything this does.
+	// The text the server url literal accepts: `scheme://host[:port]`, an
+	// optional '/'.
 	constexpr auto is_server_url_literal(std::string_view s) noexcept -> bool
 	{
 		const std::size_t sep = s.find("://");
@@ -330,15 +278,13 @@ namespace detail {
 }// namespace detail
 
 // One RFC 4516 extension: `[!]type[=value]`.
-// Allocator-aware like url: in a url (a pmr::vector<url_extension>) the
-// strings live on the url's resource; assignment keeps the target's resource.
 struct url_extension
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	std::pmr::string type{};// descriptor or numeric OID, e.g. "bindname", "1.2.3.4"
-	std::optional<std::pmr::string> value{};// decoded; nullopt without '=', "" for "type="
-	bool critical = false;// '!' prefix: a client that does not know it must not use the URL
+	std::pmr::string type{};// descriptor or numeric OID
+	std::optional<std::pmr::string> value{};// decoded; nullopt without '='
+	bool critical = false;// '!' prefix
 
 	url_extension() = default;
 	explicit url_extension(const allocator_type &alloc) : type(alloc) {}
@@ -367,13 +313,9 @@ class url
 	static constexpr std::uint16_t default_ldap_port = 389;
 	static constexpr std::uint16_t default_ldaps_port = 636;
 
-	// Compile-time checked server URL literal:
-	// `ldap::url{"ldaps://ldap.example.org"}` (consteval: text that is not
-	// `scheme://host[:port]` with an optional trailing '/' fails to compile,
-	// see detail::is_server_url_literal; other text uses parse_server()).
+	// A server URL literal checked at compile time.
 	struct literal
 	{
-		// Implicit on purpose: `"..."` converts to the literal, checked at compile time.
 		// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
 		consteval literal(const char *s) : text(s)
 		{
@@ -385,31 +327,27 @@ class url
 		const char *text;
 	};
 
-	// `ldap://` (no host, nothing else).
+	// `ldap://`
 	url() = default;
 	explicit url(const allocator_type &alloc);
 	explicit url(literal l, const allocator_type &alloc = {});
-	url(const url &) = default;// default resource, like any pmr container copy
+	url(const url &) = default;// default resource, like any pmr copy
 	url(url &&) noexcept = default;
 	url(const url &other, const allocator_type &alloc);
 	url(url &&other, const allocator_type &alloc);
-	// Assignment keeps this url's resource for everything it owns.
 	auto operator=(const url &other) -> url &;
 	auto operator=(url &&other) -> url &;
 	~url() = default;
 
 	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return host_.get_allocator(); }
 
-	// Parses RFC 4516 text; fails with invalid_url (never throws on bad input).
-	// The url's strings and lists are allocated from `mr`.
+	// Parses RFC 4516 text into `mr`; invalid_url on bad input.
 	[[nodiscard]] static auto parse(std::string_view text,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<url>;
-	// parse(), then check_server(): a URL to connect to, as
-	// client_options::servers needs. Fails with invalid_url.
+	// parse(), then check_server().
 	[[nodiscard]] static auto parse_server(std::string_view text,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<url>;
-	// parse_server() on each text, in order; the first failure is returned,
-	// its context naming the text's index.
+	// parse_server() on each text; the context names the failing index.
 	template<std::ranges::input_range R>
 		requires std::convertible_to<std::ranges::range_reference_t<const R>, std::string_view>
 	[[nodiscard]] static auto parse_servers(const R &texts,
@@ -432,55 +370,37 @@ class url
 	{
 		return parse_servers<std::initializer_list<std::string_view>>(texts, mr);
 	}
-	// Parses each URI (e.g. the referral or continuation references of a
-	// result) and returns those that are valid LDAP URLs, in order; the
-	// others are left out (servers may send any URI scheme).
+	// The valid LDAP URLs among `uris`, in order.
 	[[nodiscard]] static auto parse_list(const std::pmr::vector<std::pmr::string> &uris,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> std::pmr::vector<url>;
 
-	// RFC 4516 text: lower-case scheme, IPv6 in brackets, the port only if
-	// one was given, then only as many parts as needed to carry the ones that
-	// are set. Characters that are not unreserved (RFC 3986) and would be
-	// ambiguous in their part are percent-encoded (always `%`, `?`, `#`, and
-	// `,` inside attributes and extension values; `/` in an ldapi path).
-	// parse(to_string()) == *this.
+	// Canonical RFC 4516 text; parse(to_string()) == *this.
 	[[nodiscard]] auto to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
 	  -> std::pmr::string;
 
 	[[nodiscard]] auto scheme() const noexcept -> url_scheme { return scheme_; }
-	// Decoded host: a name, an IPv4 address, an IPv6 address without the
-	// brackets (zone after '%'), or for ldapi the socket path. May be empty.
+	// Decoded: a name, IPv4, IPv6 without brackets, or the ldapi socket path.
 	[[nodiscard]] auto host() const noexcept -> const std::pmr::string & { return host_; }
-	// The host was written as a bracketed IPv6 literal.
 	[[nodiscard]] auto host_is_ipv6() const noexcept -> bool { return host_is_ipv6_; }
-	// The port as written; nullopt when absent (always for ldapi).
+	// nullopt when absent (always for ldapi).
 	[[nodiscard]] auto port() const noexcept -> std::optional<std::uint16_t> { return port_; }
-	// port(), or 389 for ldap and 636 for ldaps; 0 for ldapi.
+	// 389 for ldap, 636 for ldaps, 0 for ldapi when no port is given.
 	[[nodiscard]] auto port_or_default() const noexcept -> std::uint16_t;
-	// Encoded `host:port` with the port made explicit (`[::1]:389`), or the
-	// encoded socket path for ldapi. For error messages and logs.
+	// Encoded `host:port` (`[::1]:389`), or the ldapi path; for logs.
 	[[nodiscard]] auto authority(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
 	  -> std::pmr::string;
 
-	// nullopt when the URL has no "/" (then no later part either).
+	// nullopt without "/".
 	[[nodiscard]] auto base_dn() const noexcept -> const std::optional<dn> & { return dn_; }
-	// Attribute selectors as written (decoded): descriptions, "*", "+", "1.1".
 	[[nodiscard]] auto attributes() const noexcept -> const std::pmr::vector<std::pmr::string> & { return attributes_; }
 	[[nodiscard]] auto scope() const noexcept -> std::optional<search_scope> { return scope_; }
 	[[nodiscard]] auto search_filter() const noexcept -> const std::optional<ldap::filter> & { return filter_; }
 	[[nodiscard]] auto extensions() const noexcept -> const std::pmr::vector<url_extension> & { return extensions_; }
-	// True if some extension is marked critical ('!'). This library knows no
-	// extension yet, so such a URL must not be used (RFC 4516 section 2.1).
+	// Such a URL must not be used (RFC 4516 section 2.1): none is known.
 	[[nodiscard]] auto has_critical_extension() const noexcept -> bool;
 
-	// The server rule, for a URL to connect to (client_options::servers):
-	// a non-empty host (for ldapi, a socket path) without control characters
-	// once decoded (a leading NUL in an ldapi path, a Linux abstract socket,
-	// is allowed on Linux) and, except for ldapi, well-formed UTF-8 once
-	// decoded (RFC 3986 section 3.2.2), no critical extension, and no DN, attributes,
-	// scope or filter (an empty DN, `ldap://host/`, is allowed). Fails with
-	// invalid_url naming the broken rule. net::connect() checks the same
-	// host and extensions but ignores the DN and later parts.
+	// A URL to connect to: a non-empty host and nothing after it but an empty
+	// DN; invalid_url naming the broken rule.
 	[[nodiscard]] auto check_server() const -> result<void>;
 
 	friend auto operator==(const url &, const url &) -> bool = default;
@@ -499,8 +419,7 @@ class url
 
 namespace detail {
 
-	// The host and extension part of url::check_server(), shared with
-	// net::connect(); the context is the bare reason.
+	// The host and extension part of check_server(), shared with net::connect().
 	[[nodiscard]] auto check_server_address(const url &u) -> result<void>;
 
 }// namespace detail

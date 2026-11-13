@@ -1,9 +1,4 @@
 // Active Directory's GUID (MS-DTYP 2.3.4): objectGUID, schemaIDGUID.
-//
-//   struct ad_user {
-//       ldap::ad::guid object_guid;
-//   };
-//   std::string text = u.object_guid.to_string();   // "1b9f2a5e-8f3c-4d1e-..."
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -18,16 +13,8 @@
 
 namespace jhetz::ldap::ad {
 
-// A GUID by its MS-DTYP 2.3.4 fields.
-//
-// Binary form (MS-DTYP 2.3.4.2), the attribute value: 16 octets, Data1,
-// Data2 and Data3 little-endian, then Data4's 8 octets as they are. So
-// the text's first three groups are the first 8 octets reversed group by
-// group: octets 33 22 11 00 55 44 77 66 88 99 AA BB CC DD EE FF are
-// 00112233-4455-6677-8899-aabbccddeeff.
-// String form (MS-DTYP 2.3.4.3, without the braces): Data1 in 8 hex
-// digits, Data2 and Data3 in 4, Data4 in 4 and 12, joined by "-";
-// to_string() writes lower case.
+// A GUID by its MS-DTYP 2.3.4 fields. Binary form (2.3.4.2): Data1, Data2,
+// Data3 little-endian, then Data4; to_string() writes lower case.
 struct guid
 {
 	std::uint32_t data1{};
@@ -35,11 +22,9 @@ struct guid
 	std::uint16_t data3{};
 	std::array<std::uint8_t, 8> data4{};
 
-	// The string form, with or without braces ("{...}"), hex digits in
-	// either case. Anything else fails with client_errc::conversion_failed.
+	// With or without braces, either case; else conversion_failed.
 	[[nodiscard]] static auto parse(std::string_view text) -> result<guid>;
-	// Exactly 16 octets; anything else fails with
-	// client_errc::conversion_failed.
+	// Exactly 16 octets; else conversion_failed.
 	[[nodiscard]] static auto from_binary(std::string_view raw) -> result<guid>;
 
 	[[nodiscard]] auto to_string() const -> std::string;
@@ -53,7 +38,7 @@ struct guid
 
 namespace jhetz::ldap {
 
-// The binary form, on Octet String attributes (objectGUID's syntax).
+// The binary form, on Octet String attributes.
 template<> struct value_traits<ad::guid>
 {
 	static constexpr std::array syntaxes{ syntax::octet_string };

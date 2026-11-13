@@ -1,45 +1,5 @@
-// RFC 4511 LDAPMessage: a wire model of every protocol operation (requests
-// and responses, so a mock server can reuse it) and its BER codec.
-//
-// Field types: every LDAPDN, RelativeLDAPDN, LDAPString, LDAPOID,
-// AttributeDescription and OCTET STRING is a std::pmr::string holding the
-// bytes as sent (values may be binary); the search filter is an
-// ldap::filter tree. The validating types (ldap::dn, ldap::attribute) are
-// the API layer's, so an odd DN or attribute name never breaks decoding.
-//
-// Decoding follows RFC 4511 section 4:
-// - unknown elements at the end of a SEQUENCE are skipped (they must be
-//   well-formed BER); optional components are recognized only in their
-//   defined order;
-// - an unknown protocolOp fails with client_errc::unsupported_operation;
-// - enumerations (scope, derefAliases, modify operation) and INTEGER ranges
-//   (message id, version, limits) are checked (decode_error); unknown
-//   resultCode values are kept;
-// - SEQUENCE OF with SIZE (1..MAX) (referral, search references) is accepted
-//   empty, the same as absent. Values of an AddRequest attribute or of a
-//   modify `add` change must not be empty (encode_error, decode_error);
-// - nesting is bounded by ber::reader's depth limit, filters by
-//   filter_limits, and nothing is allocated from an unchecked length;
-// - decode_options::from rejects operations the peer may not send.
-//
-// Memory (DESIGN.md section 8): every type owning strings is allocator-aware
-// (allocator_type, get_allocator(), allocator and allocator-extended
-// constructors, assignment keeping the target's resource, also for its
-// optional and variant members); containers hand their resource to their
-// elements. decode() allocates from decode_options::memory (default: the
-// default resource).
-// - An object decoded into (or built on) a caller-supplied resource must not
-//   outlive it; a plain copy allocates from the default resource.
-// - Assigning directly to an optional or variant member follows the standard
-//   types' rules: a newly engaged value or alternative uses its own resource.
-// - The value constructors (`control{"1.2.3", true}`) copy into the given
-//   resource; nested initializer lists are built on the default resource
-//   first. To avoid the default resource entirely, use the allocator
-//   constructor and assign the members.
-// - The types are not aggregates: the value constructors take the fields in
-//   declaration order (`message{1, del_request{"cn=x"}}`). The one-argument
-//   form is explicit (`ldap_result{ 14 }`), multi-argument braced lists are
-//   not (`return { 32, "dc=example,dc=org" };`).
+// RFC 4511 LDAPMessage: a wire model of every request and response, and its
+// BER codec (decoding rules and memory: docs/API.md, "jhetz/ldap/message.hpp").
 #pragma once
 
 #include "jhetz/ldap/ber.hpp"
@@ -60,7 +20,7 @@
 
 namespace jhetz::ldap {
 
-// MessageID ::= INTEGER (0 .. maxInt), maxInt = 2^31 - 1
+// MessageID ::= INTEGER (0 .. maxInt)
 inline constexpr std::int32_t max_int = 2'147'483'647;
 
 using string_list = std::pmr::vector<std::pmr::string>;
@@ -72,7 +32,7 @@ struct ldap_result
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	std::int32_t result_code = 0;// RFC 4511 resultCode; unknown values are kept
+	std::int32_t result_code = 0;// unknown values are kept
 	std::pmr::string matched_dn{};
 	std::pmr::string diagnostic_message{};
 	string_list referral{};// [3] Referral OPTIONAL; empty = absent
@@ -97,11 +57,7 @@ struct ldap_result
 
 	[[nodiscard]] auto is_success() const noexcept -> bool { return result_code == 0; }
 
-	// The result as an ldap::error (on the default resource): code in
-	// result_category() (unknown codes keep their number and get a generic
-	// message), diagnostic, matched DN (when not empty), referral URIs and
-	// `context`. For a success result the code is 0, i.e. "no error"; callers
-	// check is_success() first.
+	// The result as an ldap::error, with `context`; check is_success() first.
 	[[nodiscard]] auto to_error(std::string_view context = {}) const -> error;
 
 	friend auto operator==(const ldap_result &, const ldap_result &) -> bool = default;
@@ -112,8 +68,8 @@ struct control
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	std::pmr::string type{};// LDAPOID
-	bool criticality = false;// DEFAULT FALSE: omitted from the encoding when false
+	std::pmr::string type{};
+	bool criticality = false;// DEFAULT FALSE
 	std::optional<std::pmr::string> value{};
 
 	control() = default;
@@ -177,7 +133,6 @@ struct attribute_value_assertion
 
 	attribute_value_assertion() = default;
 	explicit attribute_value_assertion(const allocator_type &alloc) : attribute_desc(alloc), assertion_value(alloc) {}
-	// Public API, RFC 4511 field order.
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	attribute_value_assertion(std::string_view attribute_desc_,
 	  std::string_view assertion_value_,
@@ -226,9 +181,7 @@ namespace detail::op_tag {
 	inline constexpr std::uint8_t intermediate_response = 25;
 }// namespace detail::op_tag
 
-// An operation that is just an LDAPResult: SearchResultDone, ModifyResponse,
-// AddResponse, DelResponse, ModifyDNResponse, CompareResponse (aliases
-// below). `Tag` is the [APPLICATION n] number, which makes each a distinct type.
+// An operation that is just an LDAPResult; `Tag` is its [APPLICATION n].
 template<std::uint8_t Tag> struct result_response
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -304,7 +257,7 @@ struct sasl_auth
 	friend auto operator==(const sasl_auth &, const sasl_auth &) -> bool = default;
 };
 
-// [APPLICATION 0]. version is INTEGER (1 .. 127).
+// [APPLICATION 0]
 struct bind_request
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -363,15 +316,13 @@ struct bind_response
 	friend auto operator==(const bind_response &, const bind_response &) -> bool = default;
 };
 
-// [APPLICATION 2] NULL. No strings, so not allocator-aware.
+// [APPLICATION 2]
 struct unbind_request
 {
 	friend auto operator==(const unbind_request &, const unbind_request &) -> bool = default;
 };
 
-// RFC 4511 lists 0-2 with an extension marker; 3 is subordinateSubtree
-// (draft-sermersheim-ldap-subordinate-scope), which OpenLDAP and Active
-// Directory implement. Other values are rejected.
+// RFC 4511's 0-2, plus subordinateSubtree (3).
 enum class search_scope : std::int32_t {
 	base_object = 0,
 	single_level = 1,
@@ -381,7 +332,7 @@ enum class search_scope : std::int32_t {
 
 enum class deref_aliases : std::int32_t { never = 0, in_searching = 1, finding_base_obj = 2, always = 3 };
 
-// [APPLICATION 3]. size_limit and time_limit are INTEGER (0 .. maxInt).
+// [APPLICATION 3]
 struct search_request
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -392,16 +343,13 @@ struct search_request
 	std::int32_t size_limit = 0;
 	std::int32_t time_limit = 0;
 	bool types_only = false;
-	// The filter tree, written to BER as is (no parsing when encoding).
-	// Default: (objectClass=*). An empty filter fails to encode.
+	// Written to BER as is; an empty filter fails to encode.
 	ldap::filter filter = filters::attr("objectClass").present();
 	string_list attributes{};
 
 	search_request() = default;
 	explicit search_request(const allocator_type &alloc);
-	// Base, scope, filter and attributes; the other fields keep their defaults
-	// and are set by name afterwards (no positional constructor for them:
-	// size_limit and time_limit are adjacent int32_t and easy to swap).
+	// Base, scope, filter and attributes; the other fields are set by name.
 	search_request(std::string_view base_object_,
 	  search_scope scope_,
 	  ldap::filter filter_,
@@ -456,8 +404,7 @@ struct search_result_entry
 // [APPLICATION 5]
 using search_result_done = result_response<detail::op_tag::search_result_done>;
 
-// [APPLICATION 19] SEQUENCE SIZE (1..MAX) OF URI: encode and decode reject
-// a reference without a URI.
+// [APPLICATION 19]; a reference without a URI is rejected.
 struct search_result_reference
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -466,9 +413,6 @@ struct search_result_reference
 
 	search_result_reference() = default;
 	explicit search_result_reference(const allocator_type &alloc) : uris(alloc) {}
-	// A string_list, not an initializer_list<string_view>: with the latter,
-	// `search_result_reference{ { "a", "b" } }` would be one string_view made
-	// from two unrelated pointers.
 	explicit search_result_reference(string_list uris_, const allocator_type &alloc = {})
 	  : uris(std::move(uris_), alloc)
 	{}
@@ -488,8 +432,7 @@ struct search_result_reference
 	friend auto operator==(const search_result_reference &, const search_result_reference &) -> bool = default;
 };
 
-// RFC 4511 add/delete/replace with an extension marker, plus increment (3,
-// RFC 4525). Other values are rejected.
+// RFC 4511's add, delete, replace, plus increment (3, RFC 4525).
 enum class modify_operation : std::int32_t { add = 0, delete_ = 1, replace = 2, increment = 3 };
 
 struct modify_change
@@ -593,7 +536,7 @@ struct add_request
 // [APPLICATION 9]
 using add_response = result_response<detail::op_tag::add_response>;
 
-// [APPLICATION 10] LDAPDN (primitive)
+// [APPLICATION 10]
 struct del_request
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -682,10 +625,10 @@ struct compare_request
 	friend auto operator==(const compare_request &, const compare_request &) -> bool = default;
 };
 
-// [APPLICATION 15]. compare_true (6) / compare_false (5) are the normal outcomes.
+// [APPLICATION 15]
 using compare_response = result_response<detail::op_tag::compare_response>;
 
-// [APPLICATION 16] MessageID (primitive). No strings, so not allocator-aware.
+// [APPLICATION 16]
 struct abandon_request
 {
 	std::int32_t message_id = 0;
@@ -697,7 +640,7 @@ struct extended_request
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	std::pmr::string request_name{};// [0] LDAPOID
+	std::pmr::string request_name{};// [0]
 	std::optional<std::pmr::string> request_value{};// [1]
 
 	extended_request() = default;
@@ -719,9 +662,7 @@ struct extended_request
 	friend auto operator==(const extended_request &, const extended_request &) -> bool = default;
 };
 
-// [APPLICATION 24]. An unsolicited notification is an extended_response in a
-// message with id 0 (RFC 4511 section 4.4), e.g. Notice of Disconnection
-// with response_name notice_of_disconnection_oid.
+// [APPLICATION 24]; with message id 0, an unsolicited notification.
 struct extended_response
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -755,9 +696,6 @@ struct intermediate_response
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	// The RFC fields are the API, public as in the other message types; the
-	// private allocator only remembers the resource, which absent optional
-	// members cannot carry.
 	// NOLINTBEGIN(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
 	std::optional<std::pmr::string> response_name{};// [0]
 	std::optional<std::pmr::string> response_value{};// [1]
@@ -779,7 +717,6 @@ struct intermediate_response
 	auto operator=(intermediate_response &&other) -> intermediate_response &;
 	~intermediate_response() = default;
 
-	// Both members may be absent, so the resource is kept separately.
 	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return alloc_; }
 
 	friend auto operator==(const intermediate_response &a, const intermediate_response &b) -> bool
@@ -816,8 +753,7 @@ using protocol_op = std::variant<bind_request,
   extended_response,
   intermediate_response>;
 
-// LDAPMessage (RFC 4511 section 4.2.1). `id` is 0 .. max_int; 0 is only
-// meaningful for unsolicited notifications, which the decoder accepts.
+// LDAPMessage (RFC 4511 section 4.2.1); id 0 for unsolicited notifications.
 struct message
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -847,81 +783,56 @@ struct message
 
 // ---------------------------------------------------------------- codec
 
-// Encodes one LDAPMessage. Fails before writing anything with
-// - invalid_filter if a search request's filter is empty or beyond the
-//   default filter_limits (only possible for filters made by the builders);
-// - encode_error for values the wire format cannot carry (negative message
-//   id or limits; version outside 1..127; enum values outside the ranges
-//   above; an AddRequest attribute or modify `add` change without values).
-// The filter tree is written as is: encoding never parses text.
-// If encode(m) succeeds, then
-// - decode(*encode(m)) == m, exactly (filters included: decoding builds the
-//   same tree);
-// - encode(*decode(*encode(m))) == encode(m), byte for byte.
-// The first overload returns the bytes in a vector allocated from `mr`; the
-// second appends them to `w` (e.g. a reused writer, or one on an arena).
+// Encodes one LDAPMessage into a vector on `mr`, or appends it to `w`.
+// decode(encode(m)) == m, and re-encoding is byte-identical.
 [[nodiscard]] auto encode(const message &m, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
   -> result<std::pmr::vector<std::byte>>;
 [[nodiscard]] auto encode(ber::writer &w, const message &m) -> result<void>;
 
 // Which side sent the message being decoded.
 enum class origin {
-	any,// both requests and responses (tests, tools)
-	server,// responses only: what a client receives
-	client,// requests only: what a server (or mock server) receives
+	any,// requests and responses
+	server,// responses only
+	client,// requests only
 };
 
 inline constexpr std::size_t default_max_elements = 1'000'000;
 
 struct decode_options
 {
-	// Operations the peer may not send fail with unsupported_operation before
-	// they are decoded.
+	// Operations the peer may not send fail with unsupported_operation.
 	origin from = origin::any;
-	// ber::reader depth limit for the whole message.
 	std::size_t max_depth = ber::reader::default_max_depth;
-	// Limits for the filter of a search request.
 	filter_limits filter{};
-	// Most strings (attribute types, values, DNs, URIs, OIDs...) one message
-	// may decode to; more fail with message_too_large. This bounds every list
-	// (a 16 MiB entry of empty values would otherwise take 320 MiB to
-	// decode); 1,000,000 is far above real entries. Filters have their own
-	// limits (filter_limits).
+	// Strings one message may decode to; more fail with message_too_large.
 	std::size_t max_elements = default_max_elements;
-	// Everything the decoded message owns is allocated from here. With an
-	// arena (e.g. a std::pmr::monotonic_buffer_resource per response), the
-	// message must not outlive it; see the lifetime rule at the top. Errors
-	// are always allocated from the default resource.
+	// Everything the decoded message owns; errors use the default resource.
 	std::pmr::memory_resource *memory = std::pmr::get_default_resource();
 };
 
-// Decodes exactly one LDAPMessage, as delimited by ber::complete_message_size;
-// trailing bytes are an error (decode_error).
+// Decodes exactly one LDAPMessage; trailing bytes are a decode_error.
 [[nodiscard]] auto decode(std::span<const std::byte> one_complete_message, const decode_options &options = {})
   -> result<message>;
 
-// The messageID and the protocolOp tag of one complete PDU, read without
-// decoding the rest or allocating: a multiplexed connection uses it to find
-// the operation a response belongs to (and the resource to decode it into)
-// before decoding. Only the outer SEQUENCE header, the id (0 .. maxInt) and
-// the next tag are checked; decode() still validates everything.
+// The messageID and protocolOp tag of one complete PDU, read without
+// decoding the rest.
 struct message_header
 {
 	std::int32_t id = 0;
-	ber::tag op{};// e.g. [APPLICATION 4] for a SearchResultEntry
+	ber::tag op{};
 };
 [[nodiscard]] auto peek_message_header(std::span<const std::byte> one_complete_message) -> result<message_header>;
 
 // ---------------------------------------------------------------- typed controls
 
-// Simple Paged Results (RFC 2696): realSearchControlValue.
+// Simple Paged Results (RFC 2696).
 inline constexpr std::string_view paged_results_oid = "1.2.840.113556.1.4.319";
 
 struct paged_results
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	std::int32_t size = 0;// INTEGER (0 .. maxInt): page size / result set estimate
+	std::int32_t size = 0;// page size / result set estimate
 	std::pmr::string cookie{};
 
 	paged_results() = default;
@@ -947,21 +858,13 @@ struct paged_results
 	friend auto operator==(const paged_results &, const paged_results &) -> bool = default;
 };
 
-// Fails with encode_error for a negative size. The control is allocated
-// from `mr`.
 [[nodiscard]] auto encode_paged_results(const paged_results &value,
   bool criticality = false,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
-// Fails with decode_error if `c` is not a paged results control or its value
-// is missing or malformed (trailing bytes after the SEQUENCE included; unknown
-// trailing SEQUENCE elements are skipped). The result is allocated from `mr`.
 [[nodiscard]] auto decode_paged_results(const control &c,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<paged_results>;
 
-// Server Side Sorting (RFC 2891). The request control (sort keys) is built
-// from ldap::server_side_sort (controls.hpp); this is the response control,
-// SortResult, which the server attaches to the SearchResultDone (not
-// always, even per RFC 2891 section 2: see server_side_sort).
+// Server Side Sorting (RFC 2891): the SortResult response control.
 inline constexpr std::string_view sort_request_oid = "1.2.840.113556.1.4.473";
 inline constexpr std::string_view sort_response_oid = "1.2.840.113556.1.4.474";
 
@@ -969,12 +872,9 @@ struct sort_result
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	// sortResult: 0 (success) or the LDAP result code saying why the entries
-	// are not sorted (RFC 2891 section 1.2: e.g. 18 inappropriateMatching,
-	// 53 unwillingToPerform). Unknown values are kept, as for resultCode.
+	// sortResult; unknown values are kept.
 	std::int32_t result_code = 0;
-	// attributeType [0]: the attribute that caused the failure. Empty when
-	// absent (an empty AttributeDescription is not valid, so nothing is lost).
+	// attributeType [0]; empty when absent.
 	std::pmr::string attribute_type{};
 
 	sort_result() = default;
@@ -1002,22 +902,15 @@ struct sort_result
 	friend auto operator==(const sort_result &, const sort_result &) -> bool = default;
 };
 
-// The response control (as a server sends it; for mock servers and tests).
-// Allocated from `mr`. Never fails today; result<> like the other encoders.
+// For mock servers and tests.
 [[nodiscard]] auto encode_sort_result(const sort_result &value,
   bool criticality = false,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
-// Fails with decode_error if `c` is not a sort response control or its value
-// is missing or malformed (trailing bytes after the SEQUENCE included; unknown
-// trailing SEQUENCE elements are skipped). Allocated from `mr`.
 [[nodiscard]] auto decode_sort_result(const control &c,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<sort_result>;
 
-// Virtual List View (draft-ietf-ldapext-ldapv3-vlv-09). The request
-// control is built from ldap::virtual_list_view (controls.hpp); this is the
-// response control, VirtualListViewResponse, which the server attaches to
-// the SearchResultDone when it serviced the request (section 6.2), also
-// when the search fails with errc::virtual_list_view_error (76).
+// Virtual List View (draft-ietf-ldapext-ldapv3-vlv-09): the
+// VirtualListViewResponse control.
 inline constexpr std::string_view vlv_request_oid = "2.16.840.1.113730.3.4.9";
 inline constexpr std::string_view vlv_response_oid = "2.16.840.1.113730.3.4.10";
 
@@ -1025,25 +918,14 @@ struct vlv_response
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	// The RFC fields are public; the private allocator keeps the resource.
 	// NOLINTBEGIN(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
-	// targetPosition: the list offset of the target entry, 1 for the first.
-	// contentCount + 1 when no entry is greater than or equal to a
-	// vlv_greater_than_or_equal value (section 5). Possibly approximate.
+	// targetPosition: 1 for the first entry.
 	std::int32_t target_position = 0;
-	// contentCount: the server's estimate of the number of entries in the
-	// list; send it back in the next vlv_by_offset (section 6.2).
+	// contentCount: the server's estimate.
 	std::int32_t content_count = 0;
-	// virtualListViewResult: 0 (success) or the result code saying why the
-	// view failed (operationsError, protocolError, timeLimitExceeded,
-	// adminLimitExceeded, inappropriateMatching, insufficientAccessRights,
-	// unwillingToPerform, sortControlMissing (60), offsetRangeError (61),
-	// other). Unknown values are kept (OpenLDAP 2.7 reports an offset beyond
-	// the list as 77). Meaningful only when the search's resultCode is 76.
+	// virtualListViewResult; unknown values are kept.
 	std::int32_t result_code = 0;
-	// contextID: return it unchanged in the next request for the same list
-	// (virtual_list_view::context_id); nullopt when absent (an empty one is
-	// still a contextID).
+	// contextID; nullopt when absent.
 	std::optional<std::pmr::string> context_id{};
 	// NOLINTEND(misc-non-private-member-variables-in-classes,cppcoreguidelines-non-private-member-variables-in-classes)
 
@@ -1076,59 +958,40 @@ struct vlv_response
 	allocator_type alloc_{};
 };
 
-// The response control (as a server sends it; for mock servers and tests).
-// Fails with encode_error for a negative targetPosition or contentCount.
-// Allocated from `mr`.
+// For mock servers and tests.
 [[nodiscard]] auto encode_vlv_response(const vlv_response &value,
   bool criticality = false,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
-// Fails with decode_error if `c` is not a VLV response control or its value
-// is missing or malformed (a negative targetPosition or contentCount,
-// trailing bytes after the SEQUENCE; unknown trailing SEQUENCE elements are
-// skipped). Allocated from `mr`.
 [[nodiscard]] auto decode_vlv_response(const control &c,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<vlv_response>;
 
-// Pre-Read and Post-Read (RFC 4527). The request controls (an attribute
-// selection) are built from ldap::pre_read / ldap::post_read (controls.hpp);
-// the response control of either carries the entry as it was before / is
-// after the update, encoded as a SearchResultEntry.
+// Pre-Read and Post-Read (RFC 4527): the response control carries the entry.
 inline constexpr std::string_view pre_read_oid = "1.3.6.1.1.13.1";
 inline constexpr std::string_view post_read_oid = "1.3.6.1.1.13.2";
 
-// The response control `oid` (pre_read_oid or post_read_oid, else
-// encode_error) carrying `entry` (for mock servers and tests). Allocated
-// from `mr`.
+// For mock servers and tests; `oid` is pre_read_oid or post_read_oid.
 [[nodiscard]] auto encode_read_entry(std::string_view oid,
   const search_result_entry &entry,
   bool criticality = false,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
-// The entry of a pre-read or post-read response control. Fails with
-// decode_error if `c` is neither or has no value, and like decode() if the
-// value is not exactly one SearchResultEntry: options.max_depth and
-// options.max_elements apply, and the entry is allocated from
-// options.memory (options.from and options.filter do not matter).
+// The entry of a pre-read or post-read response control.
 [[nodiscard]] auto decode_read_entry(const control &c, const decode_options &options = {})
   -> result<search_result_entry>;
 
 // ---------------------------------------------------------------- transactions (RFC 5805)
 
-// Start Transaction (section 2.1: no requestValue; the response's value is
-// the transaction identifier), the Transaction Specification control
-// (section 2.2, ldap::transaction_specification in controls.hpp), End
-// Transaction (section 2.3) and the Aborted Transaction Notice (section 2.4,
-// an unsolicited notification whose value is the identifier).
+// Start Transaction, End Transaction and the Aborted Transaction Notice.
 inline constexpr std::string_view start_transaction_oid = "1.3.6.1.1.21.1";
 inline constexpr std::string_view transaction_specification_oid = "1.3.6.1.1.21.2";
 inline constexpr std::string_view end_transaction_oid = "1.3.6.1.1.21.3";
 inline constexpr std::string_view aborted_transaction_notice_oid = "1.3.6.1.1.21.4";
 
-// txnEndReq ::= SEQUENCE { commit BOOLEAN DEFAULT TRUE, identifier OCTET STRING }
+// txnEndReq (RFC 5805 section 2.3)
 struct end_transaction_request
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	bool commit = true;// FALSE: abort the transaction
+	bool commit = true;// FALSE: abort
 	std::pmr::string identifier{};
 
 	end_transaction_request() = default;
@@ -1153,20 +1016,13 @@ struct end_transaction_request
 	friend auto operator==(const end_transaction_request &, const end_transaction_request &) -> bool = default;
 };
 
-// The requestValue of an End Transaction request; commit TRUE, the DEFAULT,
-// is left out. Allocated from `mr`.
 [[nodiscard]] auto encode_end_transaction_request(const end_transaction_request &value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> std::pmr::string;
-// The requestValue as a server reads it (for mock servers and tests): an
-// absent commit is TRUE. Fails with decode_error if it is malformed
-// (unknown trailing SEQUENCE elements are skipped). Allocated from `mr`.
+// For mock servers and tests.
 [[nodiscard]] auto decode_end_transaction_request(std::string_view value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<end_transaction_request>;
 
-// updateControls ::= SEQUENCE { messageID MessageID, controls Controls }:
-// the response controls an update of the transaction would have had
-// outside it (a pre-read or post-read entry), and the message id of that
-// update's request (its response::message_id).
+// updateControls: an update's response controls and request message id.
 struct update_controls
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -1199,17 +1055,14 @@ struct update_controls
 	friend auto operator==(const update_controls &, const update_controls &) -> bool = default;
 };
 
-// txnEndRes ::= SEQUENCE { messageID MessageID OPTIONAL,
-//   updatesControls SEQUENCE OF updateControls OPTIONAL }
+// txnEndRes (RFC 5805 section 2.3)
 struct end_transaction_response
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
-	// The message id of the update a non-success End Transaction response
-	// is about; absent on success, or when the failure is no single
-	// update's (section 2.3).
+	// The update a non-success response is about.
 	std::optional<std::int32_t> message_id{};
-	// updatesControls; empty = absent.
+	// empty = absent
 	std::pmr::vector<update_controls> updates_controls{};
 
 	end_transaction_response() = default;
@@ -1237,17 +1090,9 @@ struct end_transaction_response
 	friend auto operator==(const end_transaction_response &, const end_transaction_response &) -> bool = default;
 };
 
-// The responseValue of an End Transaction response (as a server sends it;
-// for mock servers and tests), nullopt when both fields are absent: the
-// responseValue is then left out (section 2.3). Fails with encode_error
-// for a message id outside 0..maxInt. Allocated from `mr`.
+// For mock servers and tests; nullopt when both fields are absent.
 [[nodiscard]] auto encode_end_transaction_response(const end_transaction_response &value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::optional<std::pmr::string>>;
-// Fails with decode_error if `value` is malformed: a message id outside
-// 0..maxInt, a control that is not an RFC 4511 Control, trailing bytes
-// after the SEQUENCE (unknown trailing SEQUENCE elements are skipped), or
-// message_too_large beyond options.max_elements strings. Allocated from
-// options.memory (options.from and options.filter do not matter).
 [[nodiscard]] auto decode_end_transaction_response(std::string_view value, const decode_options &options = {})
   -> result<end_transaction_response>;
 

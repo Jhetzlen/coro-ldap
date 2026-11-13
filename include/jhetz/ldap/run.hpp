@@ -1,38 +1,5 @@
-// ldap::run: runs a task to completion from a plain function such as main()
-// and returns its result. Part of jhetz::ldap_net (header-only, on Capy and
-// Corosio).
-//
-//   auto work(boost::corosio::io_context &ioc, std::string url) -> boost::capy::task<int>
-//   {
-//       auto c = co_await ldap::connect(ioc, url);
-//       ...
-//   }
-//
-//   auto main() -> int
-//   {
-//       return ldap::run(work, "ldap://localhost");
-//   }
-//
-// run(f, args...) makes an io_context, calls f(ioc, args...), which must
-// return a capy::task<T> (f is a function or a lambda taking the
-// io_context& first; an overloaded name does not deduce), and runs that
-// task as run(ioc, task) does; the io_context is destroyed before run
-// returns, before f and args. A task whose result is bound to that
-// io_context (a connection, a client, a stream, a lease, a transaction,
-// also inside result, std::optional, std::unique_ptr or std::shared_ptr)
-// does not compile: use run(ioc, task), or return plain values.
-//
-// run(ioc, task) starts the task on ioc's executor and calls ioc.run() on
-// the calling thread (restarting a stopped ioc first), so it returns once
-// ioc has no work left: the task, and what it leaves behind (a connection
-// closing, a detached name lookup). Other threads may run ioc too. It must
-// not be called from a thread already running ioc. Use it when the
-// io_context is needed after the task (several tasks on one io_context, a
-// result bound to it).
-//
-// The task's value is returned, an exception it throws (or f throws) is
-// rethrown. If ioc.run() returns before the task ended (ioc stopped, or the
-// task abandoned), run throws std::system_error with capy::error::canceled.
+// ldap::run: runs a coroutine task to completion from a plain function such as
+// main() (docs/API.md, run.hpp).
 #pragma once
 
 #include <boost/capy/error.hpp>
@@ -61,9 +28,8 @@ class transaction;
 template<class T, class Stream> class record_stream;
 
 namespace detail {
-	// True for the types that must be destroyed on their connection's I/O
-	// thread (streams, leases, transactions), alone or inside result<T>,
-	// std::optional, std::unique_ptr or std::shared_ptr.
+	// Types that must be destroyed on their connection's I/O thread, alone or
+	// inside result, std::optional, std::unique_ptr or std::shared_ptr.
 	template<class T> inline constexpr bool io_thread_bound = false;
 	template<> inline constexpr bool io_thread_bound<search_stream> = true;
 	template<> inline constexpr bool io_thread_bound<paged_search> = true;
@@ -76,8 +42,7 @@ namespace detail {
 	template<class T, class Del> inline constexpr bool io_thread_bound<std::unique_ptr<T, Del>> = io_thread_bound<T>;
 	template<class T> inline constexpr bool io_thread_bound<std::shared_ptr<T>> = io_thread_bound<T>;
 
-	// io_thread_bound, and the connection and client themselves: the types
-	// that must not outlive the io_context they run on.
+	// Types that must not outlive the io_context they run on.
 	template<class T> inline constexpr bool io_context_bound = io_thread_bound<T>;
 	template<> inline constexpr bool io_context_bound<connection> = true;
 	template<> inline constexpr bool io_context_bound<client> = true;
@@ -112,8 +77,7 @@ namespace detail {
 	{
 		template<class T> auto operator()(boost::corosio::io_context &ioc, boost::capy::task<T> t) const -> T
 		{
-			// Shared with the handlers: a task ending after run threw (a stopped
-			// ioc run again later) writes here, not into a destroyed frame.
+			// Shared with the handlers, which may run after run() returned.
 			const auto state = std::make_shared<run_state<T>>();
 			if (ioc.stopped()) {
 				ioc.restart();
@@ -151,14 +115,12 @@ namespace detail {
 			  "ldap::run(f, ...): the task's result is bound to the io_context run destroys; use run(ioc, task) or "
 			  "return plain values");
 			boost::corosio::io_context ioc;
-			// f is called here, not in std::invoke, so the arguments' conversion
-			// temporaries live until the run ends.
+			// Calls f here so its argument temporaries live until the run ends.
 			return (*this)(ioc, std::forward<F>(f)(ioc, std::forward<Args>(args)...));
 		}
 	};
 }// namespace detail
 
-// A function object, so argument-dependent lookup never finds it.
 inline constexpr detail::run_fn run{};
 
 }// namespace jhetz::ldap

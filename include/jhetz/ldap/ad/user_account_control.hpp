@@ -1,11 +1,4 @@
 // Active Directory's userAccountControl flags (MS-ADTS 2.2.16).
-//
-//   struct ad_user {
-//       ldap::ad::user_account_control uac{};
-//   };
-//   using enum ldap::ad::user_account_control;
-//   if (has(u.uac, account_disable)) ...
-//   u.uac |= account_disable;
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -21,10 +14,7 @@
 
 namespace jhetz::ldap::ad {
 
-// The bits of userAccountControl, named after MS-ADTS's UF_ constants. A
-// value may hold bits not listed here; they are kept both ways. AD computes
-// lockout and password_expired in msDS-User-Account-Control-Computed and
-// does not store them in userAccountControl.
+// MS-ADTS's UF_ bits; bits not listed are kept both ways.
 enum class user_account_control : std::uint32_t {
 	none = 0,
 	script = 0x0000'0001,
@@ -82,7 +72,7 @@ constexpr auto operator^=(user_account_control &a, user_account_control b) noexc
 	return a = a ^ b;
 }
 
-// True when every bit of `bits` is set in `flags`.
+// Every bit of `bits` is set in `flags`.
 [[nodiscard]] constexpr auto has(user_account_control flags, user_account_control bits) noexcept -> bool
 {
 	return (flags & bits) == bits;
@@ -92,8 +82,7 @@ constexpr auto operator^=(user_account_control &a, user_account_control b) noexc
 
 namespace jhetz::ldap {
 
-// The INTEGER value, a signed 32-bit number in AD: decodes -2^31 to
-// 2^32 - 1 (as the 32 bits), encodes the 32 bits as a signed number.
+// AD's signed 32-bit INTEGER: decodes -2^31 to 2^32 - 1, encodes signed.
 template<> struct value_traits<ad::user_account_control>
 {
 	static constexpr std::array syntaxes{ syntax::integer };

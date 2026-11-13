@@ -1,14 +1,5 @@
-// Domain controller discovery from DNS (MS-ADTS 6.3.2.3, the DC locator's
-// SRV records; RFC 2782 ordering): the URLs of a domain's DCs or a forest's
-// Global Catalog servers, for client_options::servers. Part of
-// jhetz::ldap_ad.
-//
-//   auto dcs = ldap::ad::discover_domain_controllers("example.org", {.site = "Berlin", .tls = true});
-//   if (!dcs) ...
-//   ldap::client pool(ioc, {.servers = std::move(*dcs), ...});
-//
-// Blocking: the system resolver (res_nquery on Linux, DnsQuery on Windows)
-// waits for DNS. Call it before building a client, or off the I/O thread.
+// Domain controller discovery from DNS SRV records (MS-ADTS 6.3.2.3, RFC
+// 2782 order), for client_options::servers. Blocking.
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -25,31 +16,24 @@
 
 namespace jhetz::ldap::ad {
 
-// One SRV resource record's data (RFC 2782).
+// One SRV record's data (RFC 2782).
 struct srv_record
 {
 	std::uint16_t priority = 0;
 	std::uint16_t weight = 0;
 	std::uint16_t port = 0;
-	std::string target{};// a host name without the final dot; "." for none
+	std::string target{};// without the final dot; "." for none
 
 	friend auto operator==(const srv_record &, const srv_record &) -> bool = default;
 };
 
-// Looks up the SRV records of `name` (an ASCII DNS name). An empty list
-// when the name or its SRV records do not exist (NXDOMAIN, NODATA); an
-// error for anything else.
+// SRV records of an ASCII DNS name; empty when it has none.
 using srv_resolver = std::function<result<std::vector<srv_record>>(std::string_view name)>;
 
-// The system resolver: res_nquery (Linux, libresolv) or DnsQuery_UTF8
-// (Windows). Fails with std::errc::resource_unavailable_try_again for a
-// temporary DNS failure, client_errc::decode_error for an answer it cannot
-// parse, std::errc::io_error (or the Windows DNS status) otherwise.
+// The system resolver: res_nquery (Linux) or DnsQuery_UTF8 (Windows).
 [[nodiscard]] auto resolve_srv(std::string_view name) -> result<std::vector<srv_record>>;
 
-// RFC 2782's order: by priority, lowest first; within a priority, a
-// weighted random order (each record picked with a chance proportional to
-// its weight, records of weight 0 rarely first). `g` gives the randomness.
+// RFC 2782 order: by priority, then weighted random within a priority.
 template<std::uniform_random_bit_generator G>
 [[nodiscard]] auto order_srv(std::vector<srv_record> records, G &g) -> std::vector<srv_record>
 {
@@ -89,34 +73,20 @@ template<std::uniform_random_bit_generator G>
 
 struct discover_options
 {
-	// The client's AD site: its DCs come first, then the domain's others.
-	// Empty: the domain's DCs only.
+	// That site's DCs first; empty: the domain's only.
 	std::string site{};
-	// ldaps:// URLs on the LDAPS ports (636 for a DC, 3269 for a Global
-	// Catalog) instead of ldap:// on the ports the SRV records name.
+	// ldaps:// on 636 (3269 for a Global Catalog).
 	bool tls = false;
 	// Empty: resolve_srv.
 	srv_resolver resolver{};
 };
 
-// The LDAP URLs of `domain`'s domain controllers, from the SRV records of
-// _ldap._tcp.dc._msdcs.<domain> (with a site, first those of
-// _ldap._tcp.<site>._sites.dc._msdcs.<domain>), each list in RFC 2782 order,
-// without duplicates (the same port and a target equal ignoring ASCII case,
-// RFC 4343) or the "." target. `domain` and `site` may be
-// internationalized (UTF-8): they are converted to A-labels (UTS #46).
-// Fails with std::errc::invalid_argument for an empty domain,
-// client_errc::string_prep_failed for a name UTS #46 refuses,
-// std::errc::host_unreachable when no record names a DC, the resolver's
-// error, or client_errc::invalid_url for a target that is no URL host.
-// Errors have the context "discover domain controllers of <domain>".
+// The LDAP URLs of `domain`'s domain controllers, without duplicates;
+// internationalized names are converted to A-labels.
 [[nodiscard]] auto discover_domain_controllers(std::string_view domain, const discover_options &options = {})
   -> result<std::vector<url>>;
 
-// As above for the Global Catalog servers of the forest whose root domain
-// is `forest`: _ldap._tcp.gc._msdcs.<forest> (with a site,
-// _ldap._tcp.<site>._sites.gc._msdcs.<forest> first), port 3268, or 3269
-// with tls.
+// The Global Catalog servers of `forest` (port 3268, or 3269 with tls).
 [[nodiscard]] auto discover_global_catalogs(std::string_view forest, const discover_options &options = {})
   -> result<std::vector<url>>;
 

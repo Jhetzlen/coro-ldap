@@ -1,21 +1,7 @@
-// The messages of the NT LAN Manager authentication protocol (MS-NLMP,
-// [MS-NLMP] section 2.2), which sasl_ntlm (sasl_ntlm.hpp) sends and reads:
-// NEGOTIATE_MESSAGE, CHALLENGE_MESSAGE, AUTHENTICATE_MESSAGE and the AV_PAIR
-// list of TargetInfo, with MD4 (RFC 1320) for NTOWFv2, and for session
-// security (MS-NLMP section 3.4, sasl_ntlm's SASL security layer) RC4 and
-// the NTLMSSP_MESSAGE_SIGNATURE of a protected buffer. Part of the codec
-// (jhetz::ldap, no dependency but ICU), so the CHALLENGE_MESSAGE parser can
-// be fuzzed with the other parsers; the keyed hashes (HMAC-MD5, MD5) need
-// OpenSSL and are in sasl_ntlm.hpp. Everything here is internal (detail),
-// exposed for the tests and the fuzz target.
-//
-// Names follow MS-NLMP: the structures' fields come in the order of the
-// wire format, the flags are named after NegotiateFlags (section 2.2.2.5)
-// and the AvIds after section 2.2.2.1. Integers are little-endian on the
-// wire, as MS-NLMP says. Strings (TargetName, DomainName, UserName,
-// Workstation, the AV_PAIR names) are kept as their wire bytes: UTF-16LE
-// once NTLMSSP_NEGOTIATE_UNICODE is negotiated, the only form this client
-// uses (ntlm_unicode() converts UTF-8 to it).
+// The NTLM messages of MS-NLMP section 2.2 (NEGOTIATE, CHALLENGE,
+// AUTHENTICATE, AV_PAIRs), MD4, RC4 and message signatures, for sasl_ntlm.
+// Internal, exposed for the tests and the fuzz target. Strings are their
+// wire bytes (UTF-16LE).
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -55,15 +41,13 @@ inline constexpr std::uint32_t ntlmssp_negotiate_128 = 0x2000'0000;// U
 inline constexpr std::uint32_t ntlmssp_negotiate_key_exch = 0x4000'0000;// V
 inline constexpr std::uint32_t ntlmssp_negotiate_56 = 0x8000'0000;// W
 
-// The Signature of every NTLM message, and the MessageType values (MS-NLMP
-// section 2.2.1).
+// Signature and MessageType values (MS-NLMP section 2.2.1).
 inline constexpr std::string_view ntlmssp_signature{ "NTLMSSP\0", 8 };
 inline constexpr std::uint32_t ntlm_negotiate_message_type = 1;
 inline constexpr std::uint32_t ntlm_challenge_message_type = 2;
 inline constexpr std::uint32_t ntlm_authenticate_message_type = 3;
 
-// AvId (MS-NLMP section 2.2.2.1). Other values may come from a server and
-// are kept as they are.
+// AvId (MS-NLMP section 2.2.2.1); unknown values are kept.
 enum class ntlm_av_id : std::uint16_t {
 	msv_av_eol = 0x0000,
 	msv_av_nb_computer_name = 0x0001,
@@ -83,7 +67,6 @@ inline constexpr std::uint32_t msv_av_flags_constrained = 0x0000'0001;
 inline constexpr std::uint32_t msv_av_flags_mic = 0x0000'0002;// the AUTHENTICATE_MESSAGE carries a MIC
 inline constexpr std::uint32_t msv_av_flags_untrusted_spn = 0x0000'0004;
 
-// One AV_PAIR: AvId, then Value (AvLen is its size).
 struct ntlm_av_pair
 {
 	ntlm_av_id av_id = ntlm_av_id::msv_av_eol;
@@ -91,8 +74,7 @@ struct ntlm_av_pair
 	friend auto operator==(const ntlm_av_pair &, const ntlm_av_pair &) -> bool = default;
 };
 
-// VERSION (MS-NLMP section 2.2.2.10): for debugging only. NTLMRevisionCurrent
-// is NTLMSSP_REVISION_W2K3 (0x0F).
+// VERSION (MS-NLMP section 2.2.2.10).
 struct ntlm_version
 {
 	static constexpr std::uint8_t ntlmssp_revision_w2k3 = 0x0F;
@@ -103,18 +85,13 @@ struct ntlm_version
 	friend auto operator==(const ntlm_version &, const ntlm_version &) -> bool = default;
 };
 
-// The size of the keys and hashes (MD4, MD5, HMAC-MD5 outputs).
 inline constexpr std::size_t ntlm_key_size = 16;
 using ntlm_key = std::array<unsigned char, ntlm_key_size>;
 
-// The 8-octet challenges (ServerChallenge, ClientChallenge).
 inline constexpr std::size_t ntlm_challenge_size = 8;
 using ntlm_challenge = std::array<unsigned char, ntlm_challenge_size>;
 
-// CHALLENGE_MESSAGE (MS-NLMP section 2.2.1.2), as parsed: TargetName (its
-// bytes), NegotiateFlags, ServerChallenge, TargetInfo (the AV_PAIRs before
-// MsvAvEOL) and Version (present exactly when NTLMSSP_NEGOTIATE_VERSION is
-// set). Reserved is not kept.
+// CHALLENGE_MESSAGE (MS-NLMP section 2.2.1.2), as parsed.
 struct ntlm_challenge_message
 {
 	std::string target_name{};
@@ -125,9 +102,7 @@ struct ntlm_challenge_message
 	friend auto operator==(const ntlm_challenge_message &, const ntlm_challenge_message &) -> bool = default;
 };
 
-// AUTHENTICATE_MESSAGE (MS-NLMP section 2.2.1.3): the payload fields'
-// bytes, NegotiateFlags, Version (always sent by this client: the MIC
-// follows it) and MIC.
+// AUTHENTICATE_MESSAGE (MS-NLMP section 2.2.1.3).
 struct ntlm_authenticate_message
 {
 	std::string lm_challenge_response{};
@@ -142,111 +117,60 @@ struct ntlm_authenticate_message
 	friend auto operator==(const ntlm_authenticate_message &, const ntlm_authenticate_message &) -> bool = default;
 };
 
-// Where the MIC is in an AUTHENTICATE_MESSAGE with a Version (MS-NLMP
-// section 2.2.1.3), and the size of its fixed part.
+// The MIC's offset in an AUTHENTICATE_MESSAGE with a Version.
 inline constexpr std::size_t ntlm_authenticate_mic_offset = 72;
 inline constexpr std::size_t ntlm_authenticate_header_size = 88;
 
-// NEGOTIATE_MESSAGE (MS-NLMP section 2.2.1.1) with `negotiate_flags`, no
-// DomainName nor Workstation, and `version` (sent whatever the flags say,
-// as the layout with a Version has it).
+// NEGOTIATE_MESSAGE (MS-NLMP section 2.2.1.1), always with a Version.
 [[nodiscard]] auto encode_ntlm_negotiate(std::uint32_t negotiate_flags, const ntlm_version &version) -> std::string;
 
-// Parses a CHALLENGE_MESSAGE: the "NTLMSSP\0" signature, MessageType 2,
-// the fixed part (48 octets, 56 with NTLMSSP_NEGOTIATE_VERSION), every
-// payload field's offset and length within the message, the AV_PAIR list
-// up to its MsvAvEOL (AvLen 0; MsvAvEOL ends the list, section 2.2.2.1, so
-// what follows it in the field is ignored), each pair within the field,
-// MsvAvFlags of 4 octets and MsvAvTimestamp of 8, at most once each.
-// client_errc::decode_error otherwise, the context saying what is wrong
-// ("CHALLENGE_MESSAGE: ...").
+// Parses and bounds-checks a CHALLENGE_MESSAGE; decode_error
+// ("CHALLENGE_MESSAGE: ...") otherwise.
 [[nodiscard]] auto parse_ntlm_challenge(std::string_view message) -> result<ntlm_challenge_message>;
 
-// Encodes a CHALLENGE_MESSAGE (a test server's side; parse_ntlm_challenge
-// reads it back equal when the flags say whether a Version is there):
-// TargetName then TargetInfo (MsvAvEOL appended) in the payload, written
-// when the list is not empty or NTLMSSP_NEGOTIATE_TARGET_INFO is set.
+// Encodes a CHALLENGE_MESSAGE (a test server's side).
 [[nodiscard]] auto encode_ntlm_challenge(const ntlm_challenge_message &message) -> std::string;
 
 // The AV_PAIR list as TargetInfo carries it, MsvAvEOL appended.
 [[nodiscard]] auto encode_ntlm_av_pairs(std::span<const ntlm_av_pair> pairs) -> std::string;
 
-// The MsvAvTimestamp of `pairs` (a FILETIME, 100 ns units since 1601-01-01
-// UTC), nullopt when there is none.
+// MsvAvTimestamp (a FILETIME), nullopt when absent.
 [[nodiscard]] auto ntlm_timestamp(std::span<const ntlm_av_pair> pairs) -> std::optional<std::uint64_t>;
 
-// The client's TargetInfo for its NTLMv2_CLIENT_CHALLENGE (MS-NLMP section
-// 3.1.5.1.2): the server's AV_PAIRs in their order, without any
-// MsvAvChannelBindings or MsvAvTargetName of its own; MsvAvFlags with
-// msv_av_flags_mic or'ed in when `mic` (added after the server's pairs when
-// it sent none); then MsvAvChannelBindings (`channel_bindings`: Z(16) for
-// an unbound exchange without TLS; nullopt leaves the pair out, as a
-// client that does not bind does over TLS); then MsvAvTargetName when
-// `target_name` (UTF-16LE) is not empty.
+// The client's TargetInfo (MS-NLMP section 3.1.5.1.2): the server's pairs,
+// MsvAvFlags, MsvAvChannelBindings (nullopt: left out), MsvAvTargetName.
 [[nodiscard]] auto ntlm_client_target_info(std::span<const ntlm_av_pair> server,
   bool mic,
   const std::optional<ntlm_key> &channel_bindings,
   std::string_view target_name) -> std::vector<ntlm_av_pair>;
 
-// Encodes an AUTHENTICATE_MESSAGE: the fixed part with Version and MIC
-// (88 octets), then DomainName, UserName, Workstation,
-// LmChallengeResponse, NtChallengeResponse and EncryptedRandomSessionKey.
-// client_errc::encode_error when a field is longer than 65535 octets.
+// Encodes an AUTHENTICATE_MESSAGE; encode_error for a field over 65535
+// octets.
 [[nodiscard]] auto encode_ntlm_authenticate(const ntlm_authenticate_message &message) -> result<std::string>;
 
-// Parses an AUTHENTICATE_MESSAGE with a Version and MIC (a test server's
-// side), bounds-checked as parse_ntlm_challenge is.
+// Parses an AUTHENTICATE_MESSAGE (a test server's side).
 [[nodiscard]] auto parse_ntlm_authenticate(std::string_view message) -> result<ntlm_authenticate_message>;
 
-// UNICODE(s) of MS-NLMP (section 3.1.5.1.2 and the NTOWFv2 of 3.3.2): the
-// UTF-8 text `utf8` as UTF-16LE. client_errc::encode_error for ill-formed
-// UTF-8. Every code point is kept as it is (no normalization: Windows
-// derives the NT hash from the password's UTF-16 as typed).
+// UNICODE(s) of MS-NLMP: UTF-8 to UTF-16LE, not normalized.
 [[nodiscard]] auto ntlm_unicode(std::string_view utf8) -> result<std::string>;
 
-// ntlm_unicode(utf8) into `out`, for a secret (the password): `out`'s
-// buffer is reserved once for the longest possible result, so it is never
-// reallocated, and nothing is moved or returned by value, so the only copy
-// is the one in `out` (also a partial one on failure), for the caller to
-// wipe. `out` should be empty with no capacity of its own: a buffer it
-// already holds is not wiped first. One too small is freed by the reserve
-// as it is; a large enough one is kept, its old bytes past the new size()
-// still there (harmless when the caller wipes the whole capacity, as
-// wipe_string does).
+// ntlm_unicode(utf8) into `out` without reallocation, for a secret the
+// caller wipes; `out` should start empty with no capacity.
 [[nodiscard]] auto ntlm_unicode(std::string_view utf8, std::string &out) -> result<void>;
 
-// UNICODE(Uppercase(s)), the user name of NTOWFv2: each code point of the
-// Basic Multilingual Plane by its simple (one-to-one) uppercase mapping
-// (ICU's u_toupper, UnicodeData's Simple_Uppercase_Mapping), then UTF-16LE.
-// That is what Windows does (RtlUpcaseUnicodeString maps one UTF-16 unit to
-// one: no "SS" for U+00DF, and the units of a surrogate pair stay as they
-// are, so code points above U+FFFF are not mapped). Windows' casing table
-// follows the Unicode simple mappings of its own Unicode version: a letter
-// whose mapping is newer may differ. client_errc::encode_error for
-// ill-formed UTF-8.
+// UNICODE(Uppercase(s)): the simple uppercase mapping of each BMP code
+// point, as Windows does, then UTF-16LE.
 [[nodiscard]] auto ntlm_uppercase_unicode(std::string_view utf8) -> result<std::string>;
 
-// MD4 (RFC 1320) of `data`, into `out`. NTOWFv2's MD4(UNICODE(Passwd))
-// needs it, and OpenSSL 3 has MD4 only in its legacy provider, often not
-// available: this one is self-contained, so NTLM works whatever OpenSSL
-// loads. Its working memory (the chaining state, each block's message
-// words, the padded tail) is zeroed before it returns, and the digest goes
-// straight into `out`, so no copy of the NT hash is left behind; values
-// the compiler keeps in registers or spill slots are out of its reach.
+// MD4 (RFC 1320) into `out`, self-contained; its working memory is zeroed.
 void md4(std::span<const std::byte> data, ntlm_key &out) noexcept;
 
-// RC4 (MS-NLMP section 6, RC4Init, RC4 and RC4K; the keystream of RFC
-// 6229's test vectors), for NTLM's key exchange and session security. OpenSSL
-// 3 has RC4 only in its legacy provider, as MD4: this one is
-// self-contained. The state (the permutation and its two indices) is the
-// handle MS-NLMP keeps across messages, one per direction; it is zeroed
-// when the object goes, through volatile stores as md4's. Neither copyable
-// nor movable: no stray copy of a keystream state.
+// RC4 (MS-NLMP section 6), self-contained, one state per direction; zeroed
+// on destruction.
 class ntlm_rc4
 {
   public:
-	// RC4Init(key): `key` is 1 to 256 octets (NTLM's are 16); an empty key
-	// leaves the state as for a single zero octet.
+	// RC4Init(key): 1 to 256 octets.
 	explicit ntlm_rc4(std::span<const unsigned char> key) noexcept;
 	~ntlm_rc4();
 	ntlm_rc4(const ntlm_rc4 &) = delete;
@@ -254,8 +178,7 @@ class ntlm_rc4
 	auto operator=(const ntlm_rc4 &) -> ntlm_rc4 & = delete;
 	auto operator=(ntlm_rc4 &&) -> ntlm_rc4 & = delete;
 
-	// RC4(handle, data): XORs the next data.size() keystream octets into
-	// `data`, in place (encryption and decryption alike).
+	// RC4(handle, data): XORs the keystream into `data`, in place.
 	void apply(std::span<unsigned char> data) noexcept;
 	void apply(std::span<std::byte> data) noexcept;
 
@@ -267,14 +190,11 @@ class ntlm_rc4
 };
 
 // NTLMSSP_MESSAGE_SIGNATURE with extended session security (MS-NLMP section
-// 2.2.2.9.2): Version (1), Checksum (8 octets: the first eight of an
-// HMAC-MD5, RC4-encrypted with key exchange) and SeqNum, 16 octets.
+// 2.2.2.9.2).
 inline constexpr std::size_t ntlm_signature_size = 16;
 inline constexpr std::uint32_t ntlm_signature_version = 1;
 inline constexpr std::size_t ntlm_checksum_size = 8;
-// Where SeqNum is in the signature: the MAC is over ConcatenationOf(SeqNum,
-// Message), so in a protected buffer (the signature, then the message) the
-// octets from here on are exactly what it covers.
+// SeqNum's offset: the MAC covers the buffer from here on.
 inline constexpr std::size_t ntlm_signature_seq_num_offset = 12;
 
 struct ntlm_message_signature
@@ -285,24 +205,19 @@ struct ntlm_message_signature
 	friend auto operator==(const ntlm_message_signature &, const ntlm_message_signature &) -> bool = default;
 };
 
-// The signature's 16 octets, little-endian integers.
+// Little-endian integers.
 void encode_ntlm_signature(const ntlm_message_signature &signature,
   std::span<std::byte, ntlm_signature_size> out) noexcept;
 
-// A protected buffer of an NTLM security layer as LDAP carries it (after
-// the SASL four-octet length, RFC 4422 section 3.7, which MS-ADTS section
-// 5.1.2.1 follows): the 16-octet signature, then the message, sealed with
-// confidentiality, as it is with integrity only (as Samba's ntlmssp_wrap
-// lays it out, and Windows' EncryptMessage with the token buffer first).
+// A protected buffer: the 16-octet signature, then the (sealed) message.
 struct ntlm_protected_buffer
 {
 	ntlm_message_signature signature{};
 	std::span<const std::byte> message{};
 };
 
-// Splits a protected buffer: at least 16 octets, and the signature's
-// Version 1. client_errc::decode_error otherwise ("NTLM protected buffer:
-// ..."). The checksum and the sequence number are the caller's to check.
+// Splits a protected buffer; decode_error unless at least 16 octets with a
+// Version 1 signature.
 [[nodiscard]] auto parse_ntlm_protected_buffer(std::span<const std::byte> buffer) -> result<ntlm_protected_buffer>;
 
 }// namespace jhetz::ldap::detail

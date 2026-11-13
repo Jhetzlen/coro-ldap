@@ -1,23 +1,5 @@
-// Typed CRUD over a directory (DESIGN.md section 4): the entries of one
-// mapped struct (mapping.hpp) under a base DN, each named by one member.
-//
-//   ldap::repository people(conn, ldap::dn{"ou=people,dc=example,dc=org"}, ldap::named_by<&person::uid>);
-//   co_await people.add(person{.uid = "jdoe", ...});         // uid=jdoe,ou=people,dc=example,dc=org
-//   auto p = co_await people.get("jdoe");                    // result<std::optional<person>>
-//   co_await people.modify("jdoe", {ldap::replace<&person::mail>("j@example.org")});
-//   person q = **p; q.mail = "john@example.org";
-//   co_await people.update(**p, q);                          // the changed members only
-//   co_await people.update_if(**p, q);                       // ... if the entry still has p's values
-//   co_await people.rename("jdoe", "john");                  // uid=john,ou=people,dc=example,dc=org
-//   auto all = co_await people.search(ldap::filters::field<&person::mail>().present());
-//   auto pages = co_await people.search_paged(100);         // result<record_stream<person, paged_search>>
-//   co_await people.remove("jdoe");
-//
-// The source is any ldap::directory (directory.hpp): an ldap::connection,
-// an ldap::client, or a shared lease's connection (*lease). The repository only
-// calls its public operations, one request per call (one per page for
-// search_paged; two more, once, for the schema check), and keeps no
-// entries.
+// Typed CRUD over a directory: the entries of one mapped struct under a
+// base DN, each named by one member (docs/API.md, DESIGN.md section 4).
 #pragma once
 
 #include "jhetz/ldap/controls.hpp"
@@ -48,39 +30,27 @@
 
 namespace jhetz::ldap {
 
-// The member whose value names a repository's entries: ldap::named_by<&person::uid>.
+// The member whose value names a repository's entries.
 template<auto Naming> struct named_by_t
 {
 	explicit constexpr named_by_t() = default;
 };
 template<auto Naming> inline constexpr named_by_t<Naming> named_by{};
 
-// The single-valued member repository::update_if asserts instead of every mapped
-// value: ldap::versioned_by<&person::entry_csn>.
+// The single-valued member repository::update_if asserts instead of every
+// mapped value.
 template<auto Version> struct versioned_by_t
 {
 	explicit constexpr versioned_by_t() = default;
 };
 template<auto Version> inline constexpr versioned_by_t<Version> versioned_by{};
 
-// When a repository checks its struct against the server's schema (DESIGN.md
-// section 6).
+// When a repository checks its struct against the server's schema.
 enum class schema_check {
 	off,
-	// The first operation loads the schema (load_schema) and checks the
-	// struct against it (validate<T>); a mismatch fails that operation and
-	// every later one with schema_mismatch (the report in the context),
-	// before anything is sent. A schema that does not load fails the
-	// operation and is tried again by the next one. On a source that
-	// reports is_tls() and security_layer() (a connection), a check made
-	// before StartTLS or a SASL security layer is made again (RFC 4513
-	// sections 3.1.5 and 5.2.1.6: what was read unprotected is read again).
-	// On a client, the schema is read on one pooled connection (both
-	// searches on one shared lease, see load_schema(client &)) and the
-	// outcome holds for every operation of the repository, whichever server it
-	// runs on: every server of the pool must serve the same schema. For a
-	// check per connection, use a lease's connection (*lease) as the
-	// source.
+	// The first operation loads the schema and validates the struct; a
+	// mismatch fails every operation with schema_mismatch. Rechecked after
+	// StartTLS or a SASL security layer.
 	on_first_use,
 };
 
@@ -89,8 +59,7 @@ struct repository_options
 	ldap::schema_check schema_check = ldap::schema_check::off;
 };
 
-// An entry a repository's search found: its DN, as the server sent it, and its
-// value.
+// An entry a repository's search found: its DN, as sent, and its value.
 template<class T> struct record
 {
 	ldap::dn dn{};
@@ -101,9 +70,8 @@ template<class T> struct record
 
 namespace detail {
 
-	// `e` decoded as T. Fails with schema_mismatch when `e` holds an
-	// attribute T maps under no name (an alias, OID or supertype mapping that
-	// the server answers under another name, RFC 4511 4.5.2).
+	// `e` decoded as T; schema_mismatch when `e` holds an attribute T maps
+	// under no name.
 	template<class T> [[nodiscard]] auto decode_requested(const entry &e) -> result<T>
 	{
 		static constexpr auto names = attribute_name_array<T>();
@@ -113,8 +81,7 @@ namespace detail {
 		return decode<T>(e);
 	}
 
-	// `e` decoded as T, with its DN parsed; errors have the context of a
-	// search of `base`.
+	// `e` decoded as T, with its DN parsed; errors name a search of `base`.
 	template<class T> [[nodiscard]] auto record_of(const entry &e, const dn &base) -> result<record<T>>
 	{
 		auto name = dn::parse(e.dn);
@@ -128,12 +95,10 @@ namespace detail {
 		return record<T>{ .dn = std::move(*name), .value = std::move(*v) };
 	}
 
-	// repository::update_if asserting every mapped value.
 	struct every_mapped_value
 	{
 	};
 
-	// Whether `controls` already has an Assertion control, typed or raw.
 	[[nodiscard]] inline auto has_assertion(const modify_controls &controls) -> bool
 	{
 		return std::ranges::any_of(controls, [](const auto &c) {
@@ -142,15 +107,15 @@ namespace detail {
 		});
 	}
 
-	// A repository's schema check: whether T fits the schema, and whether
-	// update_if's default guard can succeed on it.
+	// Whether T fits the schema, and whether update_if's default guard can
+	// succeed on it.
 	struct schema_outcome
 	{
 		result<void> fits{};
 		result<void> guardable{};
 	};
 
-	// The requests and results of a repository, without the I/O (repository_core).
+	// The requests and results of a repository, without the I/O.
 	template<auto Naming> struct repository_codec
 	{
 		using value_type = member_pointer<decltype(Naming)>::owner;
@@ -163,7 +128,7 @@ namespace detail {
 
 		[[nodiscard]] static auto name() -> const char * { return field_of<Naming>().name; }
 
-		// <naming attribute>=<key>. Fails with the key's encode error.
+		// <naming attribute>=<key>.
 		[[nodiscard]] static auto rdn_of(const key_type &key) -> result<rdn>
 		{
 			auto value = encode_value(key);
@@ -190,8 +155,8 @@ namespace detail {
 				.attributes = attribute_names<value_type>() };
 		}
 
-		// No entry, or no entry of T's object classes: nullopt. A limit code
-		// with no entry is an error.
+		// nullopt for no entry, or none of T's object classes; a limit code with
+		// no entry is an error.
 		[[nodiscard]] static auto get_result(result<search_result> found, const dn &entry)
 		  -> result<std::optional<value_type>>
 		{
@@ -243,9 +208,8 @@ namespace detail {
 			return p;
 		}
 
-		// The modify turning `original` into `changed` at `entry` (diff),
-		// nullopt when nothing differs. A naming member that differs fails
-		// with naming_value_changed.
+		// The modify turning `original` into `changed`, nullopt when nothing
+		// differs; naming_value_changed when the naming member differs.
 		[[nodiscard]] static auto
 		  update_request(dn entry, const value_type &original, const value_type &changed, modify_controls controls)
 			-> result<std::optional<modify_params>>
@@ -289,8 +253,7 @@ namespace detail {
 			return unchanged_filter<Version>(original);
 		}
 
-		// update_request with an Assertion control on `original` (guard_filter).
-		// An Assertion control already in `controls` fails with encode_error.
+		// update_request with an Assertion control on `original`.
 		template<class Guard>
 		[[nodiscard]] static auto update_if_request(dn entry,
 		  const value_type &original,
@@ -316,8 +279,7 @@ namespace detail {
 			return request;
 		}
 
-		// The modify DN renaming the entry named `from` to `to` under `base`:
-		// the new RDN <naming attribute>=<to>, the old one's value removed.
+		// Renames `from` to `to` under `base`, removing the old RDN's value.
 		// NOLINTBEGIN(bugprone-easily-swappable-parameters): from, then to, as modify DN
 		[[nodiscard]] static auto
 		  rename_request(const dn &base, const key_type &from, const key_type &to, const modify_dn_controls &controls)
@@ -337,8 +299,7 @@ namespace detail {
 		}
 		// NOLINTEND(bugprone-easily-swappable-parameters)
 
-		// The modify DN moving the entry named `key` under `base` to
-		// `new_base`, its RDN kept.
+		// Moves `key` from `base` to `new_base`, keeping its RDN.
 		[[nodiscard]] static auto
 		  move_request(const dn &base, const key_type &key, const dn &new_base, const modify_dn_controls &controls)
 			-> result<modify_dn_params>
@@ -354,8 +315,6 @@ namespace detail {
 				.controls = controls };
 		}
 
-		// An empty filter (a typed filter whose value did not encode) fails
-		// with invalid_filter.
 		[[nodiscard]] static auto search_request(const dn &base, filter f, search_scope scope) -> result<search_params>
 		{
 			if (f.empty()) {
@@ -368,8 +327,7 @@ namespace detail {
 				.attributes = attribute_names<value_type>() };
 		}
 
-		// The entries decoded, on the limit codes too; the first entry that
-		// does not decode, or whose DN does not parse, fails the call.
+		// The entries decoded; the first that does not decode fails the call.
 		[[nodiscard]] static auto search_result_of(result<search_result> found, const dn &base)
 		  -> result<typed_search_result<record<value_type>>>
 		{
@@ -393,9 +351,8 @@ namespace detail {
 		}
 
 
-		// validate<T>'s outcome: schema_mismatch when the report has errors,
-		// and for update_if's default guard, no_equality_rule on the first
-		// member reported without an equality rule.
+		// validate<T>'s outcome as schema_mismatch, and no_equality_rule for
+		// update_if's default guard.
 		[[nodiscard]] static auto check(const server_schema &s) -> schema_outcome
 		{
 			const schema_report report = validate<value_type>(s);
@@ -414,7 +371,6 @@ namespace detail {
 		}
 	};
 
-	// The protection of a repository's source, when it reports one.
 	struct source_protection
 	{
 		bool tls = false;
@@ -434,8 +390,8 @@ namespace detail {
 		}
 	}
 
-	// A repository's schema-check outcome and the protection it was made under,
-	// behind a lock: one repository may be used from several threads.
+	// A schema-check outcome and the protection it was made under, behind a
+	// lock.
 	class schema_check_cache
 	{
 	  public:
@@ -463,7 +419,6 @@ namespace detail {
 		}
 		~schema_check_cache() = default;
 
-		// The outcome recorded under `now`, if any.
 		[[nodiscard]] auto find(source_protection now) const -> std::optional<schema_outcome>
 		{
 			const std::scoped_lock lock(mutex_);
@@ -491,23 +446,15 @@ namespace detail {
 
 }// namespace detail
 
-// The entries of a repository's streamed or paged search (repository::search_stream,
-// repository::search_paged), each decoded as a record<T>: `Stream` is
-// ldap::search_stream or ldap::paged_search, whose rules apply (move-only,
-// one next() at a time, not destroyed or moved while next() is suspended,
-// destroyed before its end it abandons the search). As repository::search(), an
-// entry that does not decode, or whose DN does not parse, is an error: it
-// ends the stream, and next() returns that error again from then on
-// (destroying the stream abandons the search).
+// The entries of a streamed or paged search, each decoded as a record<T>.
+// An entry that does not decode ends the stream with that error.
 template<class T, class Stream> class record_stream
 {
   public:
 	record_stream() = default;
 	record_stream(Stream entries, dn base) : entries_(std::move(entries)), base_(std::move(base)) {}
 
-	// The next record, nullopt at the end, or an error: the search's (as
-	// Stream::next()) or the entry's decode error, with the context
-	// "search <base>".
+	// The next record, nullopt at the end, or an error.
 	auto next() -> boost::capy::task<result<std::optional<record<T>>>>
 	{
 		if (failed_) {
@@ -528,7 +475,6 @@ template<class T, class Stream> class record_stream
 		co_return std::optional<record<T>>(std::move(*r));
 	}
 
-	// True once the search ended, or an entry did not decode.
 	[[nodiscard]] auto done() const noexcept -> bool { return failed_.has_value() || entries_.done(); }
 	// The underlying stream: its references(), controls(), pages().
 	[[nodiscard]] auto stream() noexcept -> Stream & { return entries_; }
@@ -542,10 +488,7 @@ template<class T, class Stream> class record_stream
 
 namespace detail {
 
-	// A repository's base, options and schema-check outcome, and its operations
-	// over a source given to each call: ldap::repository runs them on its
-	// source, sync::repository on its facade's ldap::connection or ldap::client,
-	// on the I/O thread. The tasks refer to *this and to the source.
+	// A repository's state and its operations over a source given to each call.
 	template<auto Naming> class repository_core
 	{
 		using codec = repository_codec<Naming>;
@@ -737,8 +680,7 @@ namespace detail {
 			co_return record_stream<value_type, ldap::paged_search>(std::move(*pages), base_);
 		}
 
-		// The search of T's entries matching `f` under the base, once the
-		// schema check passed: what search() sends.
+		// What search() sends, once the schema check passed.
 		template<directory S>
 		auto search_request(S &s, filter f, search_scope scope) -> boost::capy::task<result<search_params>>
 		{
@@ -753,9 +695,7 @@ namespace detail {
 		}
 
 	  private:
-		// Sends `request` once the schema check passed (with
-		// `default_guard`, update_if's default guard also needs a struct
-		// whose members all have an equality rule); nullopt sends nothing.
+		// Sends `request` once the schema check passed; nullopt sends nothing.
 		template<directory S>
 		auto send_update(S &s, result<std::optional<modify_params>> request, bool default_guard = false)
 		  -> boost::capy::task<result<std::optional<response>>>
@@ -781,8 +721,7 @@ namespace detail {
 			co_return std::optional<response>(std::move(*done));
 		}
 
-		// The schema check's outcome; fails with its schema_mismatch, or the
-		// load's error.
+		// The schema check's outcome, or its schema_mismatch or load error.
 		template<directory S> auto check_schema(S &s) -> boost::capy::task<result<schema_outcome>>
 		{
 			if (options_.schema_check == ldap::schema_check::off) {
@@ -811,10 +750,8 @@ namespace detail {
 
 }// namespace detail
 
-// The entries of `T` (the struct owning `Naming`) under `base`, each named
-// <naming attribute>=<value>,<base>. Every operation is a task that refers
-// to *this and to the source: both must outlive it. One repository may be used
-// from several threads at once, as its source (a connection, a client).
+// The entries of the struct owning `Naming` under `base`. The tasks refer
+// to *this and to the source: both must outlive them.
 template<auto Naming, directory D> class repository
 {
 	using core = detail::repository_core<Naming>;
@@ -831,13 +768,10 @@ template<auto Naming, directory D> class repository
 	[[nodiscard]] auto source() const noexcept -> D & { return *source_; }
 	[[nodiscard]] auto base() const noexcept -> const dn & { return core_.base(); }
 
-	// <naming attribute>=<key>,<base>. Fails with the key's encode error.
+	// <naming attribute>=<key>,<base>.
 	[[nodiscard]] auto dn_of(const key_type &key) const -> result<dn> { return core_.dn_of(key); }
 
-	// The entry named `key` (or at `entry`), read with a base-object search
-	// for T's attributes and object classes. nullopt when there is none
-	// (noSuchObject, or an entry that is not of T's object classes); a
-	// limit code with no entry is an error.
+	// nullopt when there is no entry (or none of T's object classes).
 	auto get(key_type key) -> boost::capy::task<result<std::optional<value_type>>>
 	{
 		return core_.get(*source_, std::move(key));
@@ -847,14 +781,12 @@ template<auto Naming, directory D> class repository
 		return core_.get_at(*source_, std::move(entry));
 	}
 
-	// Adds `value` at dn_of(value's naming member), with to_attributes(value).
+	// Adds `value` at dn_of(its naming member).
 	auto add(value_type value, add_controls controls = {}) -> boost::capy::task<result<response>>
 	{
 		return core_.add(*source_, std::move(value), std::move(controls));
 	}
 
-	// Applies `changes` (ldap::replace / add / remove<&T::member>) to the
-	// entry named `key` (or at `entry`).
 	auto modify(key_type key, std::vector<change<value_type>> changes, modify_controls controls = {})
 	  -> boost::capy::task<result<response>>
 	{
@@ -866,13 +798,8 @@ template<auto Naming, directory D> class repository
 		return core_.modify_at(*source_, std::move(entry), std::move(changes), std::move(controls));
 	}
 
-	// One modify turning `original` into `changed` (ldap::diff: only the
-	// members T maps, read_only ones skipped; a member empty in `original`
-	// written with replace, since empty in the struct is not absent on the
-	// server: an attribute the reader may not see, RFC 4511 4.5.1.8), sent to
-	// original.dn, or for a value, to dn_of(its naming member). nullopt, and
-	// nothing sent (no schema check either), when no member differs. A changed naming member
-	// fails with naming_value_changed before anything is sent: use rename().
+	// One modify turning `original` into `changed`; nullopt, nothing sent,
+	// when no member differs.
 	auto update(const record<value_type> &original, value_type changed, modify_controls controls = {})
 	  -> boost::capy::task<result<std::optional<response>>>
 	{
@@ -884,30 +811,8 @@ template<auto Naming, directory D> class repository
 		return core_.update(*source_, original, std::move(changed), std::move(controls));
 	}
 
-	// update(), the modify carrying an Assertion control (RFC 4528) on
-	// `original`: the server applies it only if the entry still matches,
-	// else it fails with errc::assertion_failed (122). The filter is
-	// ldap::unchanged_filter(original), true while every value of `original`
-	// is still there (subtypes and tagged values included; added values are
-	// not seen, so a value written meanwhile to a member empty in `original`
-	// is overwritten), or with ldap::versioned_by<&T::m>, the exact check,
-	// (m=<original's value>), which fails with missing_attribute before
-	// anything is sent if `original` has none. Critical. A 122 from the
-	// default filter can mean Undefined (RFC 4528 section 3), then permanent:
-	// a member whose attribute has no equality rule (jpegPhoto), an equality
-	// rule whose assertion syntax is not the attribute's (userCertificate),
-	// or an attribute the bound identity may not read; retry loops on 122
-	// must be bounded. With schema_check::on_first_use, the default guard on
-	// a struct with a writable member without an equality rule fails with
-	// client_errc::no_equality_rule before anything is sent (after a
-	// schema_mismatch, which comes first); versioned_by, whose member must
-	// have an equality rule, is the fix. nullopt, and nothing sent, when no
-	// member differs. An Assertion control in `controls` fails
-	// with encode_error before anything is sent, and so does, with
-	// invalid_filter, a default filter past max_filter_elements (one element
-	// per value): use ldap::versioned_by for such a struct. AD and Samba do
-	// not support the Assertion control (not in supportedControl): Samba
-	// fails it with errc::unavailable_critical_extension and applies nothing.
+	// update() with an Assertion control (RFC 4528) on `original`; fails with
+	// errc::assertion_failed if the entry changed.
 	auto update_if(const record<value_type> &original, value_type changed, modify_controls controls = {})
 	  -> boost::capy::task<result<std::optional<response>>>
 	{
@@ -938,7 +843,6 @@ template<auto Naming, directory D> class repository
 		return core_.update_if(*source_, original, std::move(changed), version, std::move(controls));
 	}
 
-	// Deletes the entry named `key` (or at `entry`).
 	auto remove(key_type key, del_controls controls = {}) -> boost::capy::task<result<response>>
 	{
 		return core_.remove(*source_, std::move(key), std::move(controls));
@@ -948,24 +852,18 @@ template<auto Naming, directory D> class repository
 		return core_.remove_at(*source_, std::move(entry), std::move(controls));
 	}
 
-	// Renames the entry named `from` to `to` (modify DN, RFC 4511 section
-	// 4.9): the new RDN is <naming attribute>=<to> and the old RDN's value
-	// is removed (deleteoldrdn TRUE), so the naming member reads `to`
-	// afterwards. A key that does not encode fails before anything is sent.
+	// Renames `from` to `to` (deleteoldrdn TRUE).
 	auto rename(key_type from, key_type to, modify_dn_controls controls = {}) -> boost::capy::task<result<response>>
 	{
 		return core_.rename(*source_, std::move(from), std::move(to), std::move(controls));
 	}
 
-	// Moves the entry named `key` under `new_base` (modify DN with
-	// newSuperior), keeping its RDN: it is then named `key` in a repository of
-	// `new_base`.
+	// Moves the entry under `new_base`, keeping its RDN.
 	auto move(key_type key, dn new_base, modify_dn_controls controls = {}) -> boost::capy::task<result<response>>
 	{
 		return core_.move(*source_, std::move(key), std::move(new_base), std::move(controls));
 	}
-	// As above, under `other`'s base (a repository of the same struct and naming
-	// member, on any source); the request runs on this repository's source.
+	// Moves the entry under `other`'s base; runs on this repository's source.
 	template<directory Other>
 	auto move(key_type key, const repository<Naming, Other> &other, modify_dn_controls controls = {})
 	  -> boost::capy::task<result<response>>
@@ -973,20 +871,13 @@ template<auto Naming, directory D> class repository
 		return move(std::move(key), other.base(), std::move(controls));
 	}
 
-	// The entries of T's object classes matching `f` under the base
-	// (single_level: its children), with their DNs; entries named otherwise
-	// are returned too. A value on the limit codes, as search() (the
-	// entries received). An empty filter fails with invalid_filter before
-	// anything is sent.
+	// The entries of T's object classes matching `f` under the base.
 	auto search(filter f = filters::attr("objectClass").present(), search_scope scope = search_scope::single_level)
 	  -> boost::capy::task<result<typed_search_result<record<value_type>>>>
 	{
 		return core_.search(*source_, std::move(f), scope);
 	}
 
-	// search() read one entry at a time: the source's search_stream(), each
-	// entry decoded by next() (see record_stream). On a client, the stream
-	// holds a shared lease until destroyed (client::search_stream()).
 	auto search_stream(filter f = filters::attr("objectClass").present(),
 	  search_scope scope = search_scope::single_level)
 	  -> boost::capy::task<result<record_stream<value_type, ldap::search_stream>>>
@@ -994,9 +885,6 @@ template<auto Naming, directory D> class repository
 		return core_.search_stream(*source_, std::move(f), scope);
 	}
 
-	// search() in pages of `page_size` entries: ldap::search_paged on the
-	// source (paged_search.hpp; on a client, one shared lease for every
-	// page), each entry decoded by next() (see record_stream).
 	auto search_paged(std::int32_t page_size,
 	  filter f = filters::attr("objectClass").present(),
 	  search_scope scope = search_scope::single_level)

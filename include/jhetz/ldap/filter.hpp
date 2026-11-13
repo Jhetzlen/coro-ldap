@@ -1,7 +1,5 @@
-// Search filters (DESIGN.md section 2): a typed tree, made by the builders in
-// ldap::filters or parsed once from RFC 4515 text by filter::raw, written to
-// BER directly from the tree, decoded from BER back into a tree, and printed
-// as canonical RFC 4515 text for logs.
+// Search filters (DESIGN.md section 2): a typed tree, built by ldap::filters
+// or parsed from RFC 4515 text, encoded to and decoded from BER.
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"
@@ -20,26 +18,13 @@
 
 namespace jhetz::ldap {
 
-// Maximum nesting of filter elements, counting every `(...)` on the path from
-// the outermost filter to a leaf: `(cn=x)` has depth 1, `(&(cn=x))` depth 2.
-// filter::raw and decode_filter reject deeper filters as they read them
-// (invalid_filter, resp. nesting_too_deep); a deeper filter made by the
-// builders fails with invalid_filter when it is encoded. The value keeps a
-// search request with the deepest allowed filter within ber::reader's default
-// depth limit (32): LDAPMessage and SearchRequest take 2 levels, a substrings
-// leaf 1 extra.
+// Maximum nesting of filter elements: `(cn=x)` has depth 1, `(&(cn=x))` 2.
 inline constexpr std::size_t max_filter_depth = 24;
 
-// Maximum number of filter elements (every `(...)`, leaves included, plus
-// every part of a substring assertion: `(a=*x*y*)` is 3) in one filter, with
-// the same checks as max_filter_depth. A hostile peer could otherwise send a multi-megabyte
-// `(&(a=*)(a=*)...)` whose 3-byte BER children each become a tree node.
-// 10,000 leaves room for large real filters (group membership ORs).
+// Maximum number of filter elements, each substring part counted.
 inline constexpr std::size_t max_filter_elements = 10'000;
 
-// Limits applied by filter::raw, encode_filter and decode_filter. Raising
-// `max_depth` above 24 can produce search requests deeper than ber::reader's
-// default depth limit; parsing, encoding and decoding recurse once per level.
+// Limits applied by filter::raw, encode_filter and decode_filter.
 struct filter_limits
 {
 	std::size_t max_depth = max_filter_depth;
@@ -56,57 +41,25 @@ namespace filters {
 	class attr;
 }
 
-// A search filter (RFC 4511 section 4.5.1.7) as a tree whose leaves hold
-// unescaped values: and / or / not, equality, substrings (initial, any...,
-// final), >=, <=, present, approx and extensible match.
-//
-// Made three ways, each giving a tree the encoder can write without parsing:
-// - the builders in ldap::filters (`attr("uid") == v && !attr("x").present()`);
-// - filter::raw(text), the only parser of RFC 4515 text, run once when called;
-// - decode_filter (BER, e.g. a mock server reading a search request).
-// There is no other way to build nodes, so every non-empty filter is well
-// formed: its attribute descriptions are valid (RFC 4512), no substring part
-// is empty, and it has an RFC 4515 form. Only the depth and element limits can
-// be exceeded, by builders; encoding then fails with invalid_filter.
-//
-// A default-constructed filter is empty: it has no tree, encoding it fails
-// with invalid_filter, and combining it with && / || / ! gives an empty filter
-// again (so an empty filter never silently turns into a condition).
-//
-// Equality compares the trees: same shape, kinds, attribute descriptions
-// (exact spelling), values and flags. How a filter was made does not matter:
-// `filter::raw("(&(a=1)(b=2))") == (attr("a") == "1" && attr("b") == "2")`.
-//
-// Representation: the nodes live in one std::pmr::vector linked by 32-bit
-// indices and the strings in one std::pmr::string, so a filter makes two
-// allocations and traversals (==, to_string) do not recurse; encoding
-// recurses only after checking the depth limit. Combining reuses an rvalue
-// operand's storage and copies an lvalue one: `f = std::move(f) || x` is
-// linear over a loop, `f = f || x` quadratic. A filter's strings are
-// limited to 4 GiB in all; beyond, std::length_error is thrown.
-//
-// Memory (DESIGN.md section 8): allocator-aware. The nodes and strings use
-// the resource given to raw(), decode_filter(), filters::attr or the
-// constructor; a filter combined from others uses the left operand's
-// resource. As for any pmr container, a plain copy uses the default resource,
-// the allocator-extended copy the one given, and assignment keeps the target's
-// resource. A filter allocated from an arena must not outlive the arena.
+// A search filter (RFC 4511 section 4.5.1.7) as a tree of unescaped values,
+// its nodes in one vector and its strings in one string. Empty when
+// default-constructed.
 class filter
 {
   public:
 	using allocator_type = std::pmr::polymorphic_allocator<>;
 
 	enum class kind : std::uint8_t {
-		and_,// (&...): any number of children, (&) is absolute true (RFC 4526)
-		or_,// (|...): any number of children, (|) is absolute false
-		not_,// (!f): exactly one child
+		and_,// (&...); (&) is absolute true (RFC 4526)
+		or_,// (|...); (|) is absolute false
+		not_,// (!f)
 		equality,// (a=v)
-		substrings,// (a=initial*any*...*final): at least one non-empty part
+		substrings,// (a=initial*any*...*final)
 		greater_or_equal,// (a>=v)
 		less_or_equal,// (a<=v)
 		present,// (a=*)
 		approx,// (a~=v)
-		extensible_match,// (a:dn:rule:=v): attribute and/or rule, dnAttributes
+		extensible_match,// (a:dn:rule:=v)
 	};
 
 	class view;
@@ -121,26 +74,14 @@ class filter
 	filter(filter &&other) noexcept;
 	filter(const filter &other, const allocator_type &alloc);
 	filter(filter &&other, const allocator_type &alloc);
-	// Assignment keeps this filter's resource.
 	auto operator=(const filter &) -> filter & = default;
 	auto operator=(filter &&other) -> filter &;
 	~filter() = default;
 
 	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return nodes_.get_allocator(); }
 
-	// Parses RFC 4515 text into a tree allocated from `mr`. Fails with
-	// invalid_filter (position in the context); never throws on bad input.
-	//
-	// Supported: and/or/not, RFC 4526 absolute true/false `(&)` and `(|)`,
-	// equality, substrings (empty `any` parts such as `a**b` are skipped), >=,
-	// <=, ~=, presence, extensible match (`attr[:dn][:rule]:=v`,
-	// `[:dn]:rule:=v`), attribute options (`cn;lang-en`), numeric OIDs, `\xx`
-	// escapes. Leniency: text that does not start with '(' is read as if it
-	// were wrapped in parentheses, as ldapsearch does (`uid=jdoe` is
-	// `(uid=jdoe)`). No other leniency: no whitespace between elements, and
-	// `(`, `)`, `*` (outside substrings), `\` and NUL must be escaped in values,
-	// and unescaped octets must be valid UTF-8 (escapes may give any octet).
-	// Filters beyond `limits` (depth or number of elements) fail too.
+	// Parses RFC 4515 text into a tree on `mr`; invalid_filter with the
+	// position. Text without an outer '(' is read as if wrapped in one.
 	[[nodiscard]] static auto raw(std::string_view text,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<filter>;
 	[[nodiscard]] static auto raw(std::string_view text,
@@ -148,18 +89,13 @@ class filter
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<filter>;
 
 	[[nodiscard]] auto empty() const noexcept -> bool { return nodes_.empty(); }
-	// The top node. Precondition: !empty().
+	// Precondition: !empty().
 	[[nodiscard]] auto root() const noexcept -> view;
-	// Longest path from the root to a leaf, counting both (`(cn=x)` is 1), and
-	// number of elements; both 0 when empty. Constant time.
+	// Both 0 when empty. Constant time.
 	[[nodiscard]] auto depth() const noexcept -> std::size_t { return empty() ? 0 : depth_; }
 	[[nodiscard]] auto elements() const noexcept -> std::size_t { return empty() ? 0 : elements_; }
 
-	// Canonical RFC 4515 text, for logs: values escaped with
-	// escape_filter_value (lower-case hex), `:dn` in lower case, empty
-	// substring parts dropped, attribute descriptions and rules as stored.
-	// raw(to_string()) == *this for every filter within the limits. Empty
-	// filter: "".
+	// Canonical RFC 4515 text, for logs; raw(to_string()) == *this.
 	[[nodiscard]] auto to_string(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
 	  -> std::pmr::string;
 
@@ -170,8 +106,7 @@ class filter
 
 	static constexpr std::uint32_t npos = 0xFFFF'FFFFu;
 
-	// Substring parts are child nodes of their substrings node, with these
-	// node kinds (never visible as a filter::kind).
+	// Node kinds of substring parts (never a filter::kind).
 	static constexpr std::uint8_t part_initial = 32;
 	static constexpr std::uint8_t part_any = 33;
 	static constexpr std::uint8_t part_final = 34;
@@ -187,9 +122,9 @@ class filter
 		std::uint32_t rule_off = 0;// extensible: matching rule, may be empty
 		std::uint32_t rule_len = 0;
 		std::uint32_t parent = npos;
-		std::uint32_t first = npos;// first child
-		std::uint32_t last = npos;// last child
-		std::uint32_t next = npos;// next sibling
+		std::uint32_t first = npos;
+		std::uint32_t last = npos;
+		std::uint32_t next = npos;
 	};
 
 	[[nodiscard]] auto str(std::uint32_t off, std::uint32_t len) const noexcept -> std::string_view
@@ -205,27 +140,22 @@ class filter
 	std::size_t elements_ = 0;
 };
 
-// A node of a filter, for inspecting the tree (e.g. evaluating it in a mock
-// server). Refers into the filter: valid while it is alive and unchanged.
+// A node of a filter; valid while the filter is alive and unchanged.
 class filter::view
 {
   public:
 	[[nodiscard]] auto kind() const noexcept -> filter::kind { return static_cast<filter::kind>(n().k); }
-	// Attribute description of a leaf; the (possibly empty) type of an
-	// extensible match; empty for and / or / not.
+	// Empty for and / or / not.
 	[[nodiscard]] auto attribute() const noexcept -> std::string_view { return f_->str(n().attr_off, n().attr_len); }
-	// Assertion value of equality, >=, <=, ~= and extensible match (unescaped).
+	// Unescaped.
 	[[nodiscard]] auto value() const noexcept -> std::string_view { return f_->str(n().value_off, n().value_len); }
-	// Extensible match: matching rule (may be empty) and dnAttributes.
 	[[nodiscard]] auto matching_rule() const noexcept -> std::string_view
 	{
 		return f_->str(n().rule_off, n().rule_len);
 	}
 	[[nodiscard]] auto dn_attributes() const noexcept -> bool { return n().dn_attributes; }
-	// Children of and / or (any number) and not (one); empty for other kinds.
 	[[nodiscard]] auto children() const noexcept -> child_range;
-	// Parts of a substrings assertion (never empty strings); nullopt / empty
-	// for other kinds.
+	// Never empty strings; nullopt / empty for other kinds.
 	[[nodiscard]] auto initial() const noexcept -> std::optional<std::string_view>;
 	[[nodiscard]] auto any() const noexcept -> substring_range;
 	[[nodiscard]] auto final() const noexcept -> std::optional<std::string_view>;
@@ -269,9 +199,7 @@ class filter::child_iterator
 	std::uint32_t i_ = filter::npos;
 };
 
-// A borrowed view: its iterators point into the filter, not into the range,
-// so they stay valid after the range object is gone (as long as the filter
-// lives). view_interface adds front() and explicit operator bool.
+// A borrowed view: its iterators point into the filter.
 class filter::child_range : public std::ranges::view_interface<filter::child_range>
 {
   public:
@@ -287,7 +215,6 @@ class filter::child_range : public std::ranges::view_interface<filter::child_ran
 	child_iterator first_;
 };
 
-// Iterates over the `any` parts of a substrings node.
 class filter::substring_iterator
 {
   public:
@@ -345,27 +272,17 @@ class filter::substring_range : public std::ranges::view_interface<filter::subst
 
 inline auto filter::root() const noexcept -> filter::view { return { this, root_ }; }
 
-// RFC 4515 section 3 escaping: `*` `(` `)` `\` and NUL become \2a \28 \29 \5c
-// \00, and octets that are not part of valid UTF-8 become \xx (the string
-// form is UTF-8); valid UTF-8 is kept as is.
+// RFC 4515 section 3 escaping; valid UTF-8 is kept as is.
 [[nodiscard]] auto escape_filter_value(std::string_view value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> std::pmr::string;
 
-// The inverse of escape_filter_value: the octets of one RFC 4515 assertion
-// value, `\XX` (either case) decoded to any octet. Accepts what filter::raw
-// accepts in a value: `(`, `)`, `*`, NUL and a `\` not followed by two hex
-// digits fail with invalid_filter, and so do unescaped octets that are not
-// valid UTF-8. unescape_filter_value(escape_filter_value(v)) == v for any v.
+// The inverse of escape_filter_value; invalid_filter on what filter::raw
+// rejects in a value.
 [[nodiscard]] auto unescape_filter_value(std::string_view text,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::pmr::string>;
 
-// (&fg), (|fg), (!f). An operand that is itself an AND (resp. OR) is merged,
-// so `a && b && c` gives (&abc), not (&(&ab)c), in whichever order the chain
-// is built; (!f) is always a new node. Combining only adds nodes: an
-// operand's own tree, parsed or built, is never re-read, so it keeps its
-// meaning (merging (&...) into an AND does not change it). The result is
-// allocated from the left operand's resource; an rvalue operand's storage is
-// reused when possible. An empty operand gives an empty result.
+// (&fg), (|fg), (!f); a nested AND (OR) operand is merged. An empty operand
+// gives an empty result.
 [[nodiscard]] auto operator&&(const filter &f, const filter &g) -> filter;
 [[nodiscard]] auto operator&&(filter &&f, const filter &g) -> filter;
 [[nodiscard]] auto operator&&(const filter &f, filter &&g) -> filter;
@@ -379,38 +296,26 @@ inline auto filter::root() const noexcept -> filter::view { return { this, root_
 
 namespace filters {
 
-	// `attr(a) == v` and friends (DESIGN.md section 2 table). Each builds a
-	// one-node filter holding `v` unescaped, allocated from the resource
-	// given to attr (default: the default resource). A literal name is
-	// checked at compile time; an ldap::attribute is checked when attr() is
-	// built and throws std::invalid_argument if it is not a valid attribute
-	// description (only possible with attribute::unchecked), so an attribute
-	// name can never make a filter that has no RFC 4515 form.
+	// `attr(a) == v` and friends: one-node filters holding `v` unescaped.
 	class attr
 	{
 	  public:
 		using allocator_type = std::pmr::polymorphic_allocator<>;
 
-		// Implicit on purpose: `attr` is the literal-taking builder, like attribute(literal).
 		// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
 		attr(attribute::literal name, const allocator_type &alloc = {}) : name_(name.text, alloc) {}
 		explicit attr(const attribute &name, const allocator_type &alloc = {});
 
-		[[nodiscard]] auto operator==(std::string_view value) const -> filter;// (a=v)
-		[[nodiscard]] auto operator>=(std::string_view value) const -> filter;// (a>=v)
-		[[nodiscard]] auto operator<=(std::string_view value) const -> filter;// (a<=v)
-		[[nodiscard]] auto approx(std::string_view value) const -> filter;// (a~=v)
-		[[nodiscard]] auto present() const -> filter;// (a=*)
-		// (a=v*), (a=*v), (a=*v*). With an empty value these mean "has any
-		// value" and give present(), since (a=**) is not a valid filter.
+		[[nodiscard]] auto operator==(std::string_view value) const -> filter;
+		[[nodiscard]] auto operator>=(std::string_view value) const -> filter;
+		[[nodiscard]] auto operator<=(std::string_view value) const -> filter;
+		[[nodiscard]] auto approx(std::string_view value) const -> filter;
+		[[nodiscard]] auto present() const -> filter;
+		// (a=v*), (a=*v), (a=*v*); an empty value gives present().
 		[[nodiscard]] auto starts_with(std::string_view value) const -> filter;
 		[[nodiscard]] auto ends_with(std::string_view value) const -> filter;
 		[[nodiscard]] auto contains(std::string_view value) const -> filter;
-		// Extensible match (RFC 4515): `(a:rule:=v)`, `(a:dn:rule:=v)` with
-		// dn_attributes, `(a:=v)` / `(a:dn:=v)` with an empty rule. The rule
-		// is a matching rule name or OID ("caseExactMatch", "2.5.13.5");
-		// anything else throws std::invalid_argument, as does the rule "dn"
-		// without dn_attributes (RFC 4515 has no form for it).
+		// Extensible match (RFC 4515): `(a:rule:=v)`, `(a:dn:rule:=v)`.
 		[[nodiscard]] auto matches(std::string_view rule, std::string_view value, bool dn_attributes = false) const
 		  -> filter;
 
@@ -419,40 +324,29 @@ namespace filters {
 	};
 
 	// Extensible match without an attribute: `(:rule:=v)`, `(:dn:rule:=v)`.
-	// The rule is required; same checks as attr::matches.
 	[[nodiscard]] auto rule_matches(std::string_view rule,
 	  std::string_view value,
 	  bool dn_attributes = false,
 	  const filter::allocator_type &alloc = {}) -> filter;
 
-	// The combinators live in namespace ldap (found by argument-dependent
-	// lookup for any filter, parsed or built); also reachable from here.
+	// The combinators, also reachable from here.
 	using ldap::operator&&;
 	using ldap::operator||;
 	using ldap::operator!;
 
 }// namespace filters
 
-// Appends the BER Filter (RFC 4511 section 4.5.1.7) of `f` to `w`. Fails with
-// invalid_filter, before writing anything, if `f` is empty or deeper or larger
-// than `limits` (only possible for filters made by the builders).
+// Appends the BER Filter of `f` to `w`; invalid_filter, nothing written, if
+// `f` is empty or beyond `limits`.
 [[nodiscard]] auto encode_filter(ber::writer &w, const filter &f, const filter_limits &limits = {}) -> result<void>;
 
-// Reads one BER Filter from `r` into a tree allocated from `mr`. Filters that
-// cannot be written as RFC 4515 text are rejected with decode_error (invalid
-// attribute descriptions, empty substrings, initial or final out of place,
-// extensible match without type and rule, or with a rule named "dn" but no
-// dnAttributes), as are filters deeper than limits.max_depth
-// (nesting_too_deep) and filters with more than limits.max_elements elements
-// (decode_error). So every decoded filter encodes, and encodes to the same
-// tree. Unknown trailing elements are skipped and an explicit dnAttributes
-// FALSE is accepted (re-encoding omits both). On failure `r` is unchanged.
+// Reads one BER Filter from `r` into a tree on `mr`; `r` is unchanged on
+// failure.
 [[nodiscard]] auto decode_filter(ber::reader &r,
   const filter_limits &limits = {},
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<filter>;
 
 }// namespace jhetz::ldap
 
-// The ranges' iterators refer to the filter, never to the range object.
 template<> inline constexpr bool std::ranges::enable_borrowed_range<jhetz::ldap::filter::child_range> = true;
 template<> inline constexpr bool std::ranges::enable_borrowed_range<jhetz::ldap::filter::substring_range> = true;

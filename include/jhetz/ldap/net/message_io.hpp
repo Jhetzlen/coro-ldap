@@ -1,15 +1,4 @@
-// Reading and writing whole LDAPMessages on a transport: the bridge between
-// the byte stream (net::transport) and the message codec (message.hpp) that
-// the connection layer builds on.
-//
-// Framing: ber::declared_message_size tells from the header alone how long
-// the next PDU is. A PDU that does not start with a SEQUENCE tag, or declares
-// more than read_options::max_message_size bytes, is rejected as soon as its
-// first (resp. length) octets arrive, before any of its body is read. Each
-// read_some gets all the free space of the buffer, which is made to hold at
-// least the rest of the current PDU once its header is in (the buffer grows
-// once for it), and min_read bytes in all before that. Several PDUs arriving
-// in one read are all kept for the following calls.
+// Reading and writing whole LDAPMessages on a transport.
 #pragma once
 
 #include "jhetz/ldap/ber.hpp"
@@ -28,27 +17,15 @@ namespace jhetz::ldap::net {
 
 struct read_options
 {
-	// Largest accepted PDU (header + body). A larger declared length fails
-	// with client_errc::message_too_large before the body is read. The
-	// default is 16 MiB; decode.max_elements bounds the decoded size.
+	// Largest accepted PDU; a larger declared length fails before the body is
+	// read.
 	std::size_t max_message_size = ber::default_max_message_size;
-	// Passed to decode(). A client must keep origin::server: a server may
-	// not send request operations (for example search filters).
-	// decode.memory is the resource the message is decoded into (default:
-	// the default resource); with a per-response arena the message must not
-	// outlive the arena (see message.hpp).
+	// A client keeps origin::server.
 	decode_options decode{ .from = origin::server };
 };
 
-// Bytes received but not consumed yet. One per transport, kept across
-// read_message() calls: a read may deliver the start of the next PDU (or
-// several PDUs), which stays here for the next call.
-//
-// Memory is bounded: the buffer grows only to hold one PDU whose header has
-// arrived (at most max_message_size), or min_read bytes, whichever is larger,
-// and gives memory above shrink_threshold back once it is empty. The bytes
-// live in a std::pmr::vector on the resource given to the constructor (default:
-// the default resource), so buffers can be pooled.
+// Bytes received but not consumed yet, kept across read_message() calls;
+// grows to one PDU at most.
 class read_buffer
 {
   public:
@@ -62,8 +39,6 @@ class read_buffer
 
 	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return buf_.get_allocator(); }
 
-	// Unconsumed bytes (e.g. to check that nothing follows a StartTLS
-	// response before the TLS handshake).
 	[[nodiscard]] auto data() const noexcept -> std::span<const std::byte>
 	{
 		return std::span(buf_).subspan(begin_, end_ - begin_);
@@ -73,12 +48,9 @@ class read_buffer
 	[[nodiscard]] auto capacity() const noexcept -> std::size_t { return buf_.size(); }
 	void clear() noexcept { begin_ = end_ = 0; }
 
-	// All free space after the data, at least `n` bytes (compacting, or
-	// growing to max(size() + n, min_read)).
+	// All free space after the data, at least `n` bytes.
 	auto prepare(std::size_t n) -> std::span<std::byte>;
-	// Marks `n` bytes of the prepare()d space as data.
 	void commit(std::size_t n) noexcept { end_ += n; }
-	// Drops `n` bytes from the front of the data.
 	void consume(std::size_t n) noexcept;
 
   private:
@@ -87,48 +59,19 @@ class read_buffer
 	std::size_t end_ = 0;
 };
 
-// Returns the next complete LDAPMessage from `t`, reading as needed and
-// leaving any bytes after it in `buf`.
-//
-// Errors (context "read <transport name>: ..."). After any error the caller
-// must drop the connection:
-// - the transport's error_code for I/O failures. The peer closing the
-//   connection gives boost::capy::error::eof, or cond::stream_truncated for
-//   a TLS peer that skips close_notify; between PDUs both read "connection
-//   closed" (the latter "... (without TLS close_notify)"), inside a PDU
-//   "connection closed after N of M bytes of a PDU" or "... inside a PDU
-//   header";
-// - message_too_large, decode_error (not a SEQUENCE, bad length) from the
-//   header, before the body is read. Nothing is consumed, so every later
-//   call fails the same way: the stream cannot be re-framed;
-// - decode() errors for a complete PDU. Only here is the bad PDU consumed,
-//   so a later call would start at the next PDU; the peer is still broken
-//   or hostile, so drop the connection anyway;
-// - canceled / timeout if the awaiting coroutine is stopped.
-// `t` and `buf` must outlive the task (normal when it is co_awaited at once).
+// The next complete LDAPMessage from `t`; bytes after it stay in `buf`.
+// After any error the connection must be dropped.
 auto read_message(transport &t, read_buffer &buf, read_options options = {}) -> boost::capy::task<result<message>>;
 
-// The framing half of read_message(): reads until a complete PDU is at the
-// front of `buf` and returns its size; buf.data().first(size) are its bytes.
-// Nothing is consumed or decoded: the caller decodes (for example after
-// peek_message_header() told it where the message goes) and then calls
-// buf.consume(size). Same errors as read_message() except decode errors.
-// Bytes received before a cancellation stay in `buf`, so a reader that is
-// stopped between PDUs can resume later without losing data.
+// Reads until a complete PDU is at the front of `buf` and returns its size,
+// consuming and decoding nothing.
 auto read_frame(transport &t, read_buffer &buf, std::size_t max_message_size) -> boost::capy::task<result<std::size_t>>;
 
-// Encodes `m` and writes all of it. Encoding errors are returned before
-// anything is written. Only one write may be in flight on a transport. `m`
-// must outlive the task.
-// The first overload encodes into a buffer allocated from `mr` for this
-// call; the second clears `w` and encodes into it, so one writer (on any
-// resource) can be reused for every message of a connection, like
-// read_buffer. `w` must outlive the task and not be used until it is done.
+// Encodes `m` (into a buffer on `mr`, or into `w`) and writes all of it.
 auto write_message(transport &t, const message &m, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
   -> boost::capy::task<result<void>>;
 auto write_message(transport &t, const message &m, ber::writer &w) -> boost::capy::task<result<void>>;
 
-// Writes already encoded bytes (e.g. one or more PDUs from encode()).
 auto write_bytes(transport &t, std::span<const std::byte> bytes) -> boost::capy::task<result<void>>;
 
 }// namespace jhetz::ldap::net

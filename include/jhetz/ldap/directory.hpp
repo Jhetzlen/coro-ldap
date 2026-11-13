@@ -1,8 +1,5 @@
-// The `directory` concept: what the layers over the core (ldap::repository,
-// load_schema, ...) run their requests on. ldap::connection and ldap::client
-// satisfy it.
-//
-//   ldap::result<ldap::server_schema> s = co_await ldap::load_schema(pool);
+// The `directory` concept: what repository, load_schema and the other
+// layers run on (ldap::connection, ldap::client).
 #pragma once
 
 #include "jhetz/ldap/dn.hpp"
@@ -21,8 +18,6 @@ namespace jhetz::ldap {
 
 class client;
 
-// The protocol operations a directory runs, with connection's names and
-// results.
 template<class D>
 concept directory =
   requires(D &d, search_params s, add_params a, modify_params m, del_params r, modify_dn_params n, compare_params c) {
@@ -35,33 +30,25 @@ concept directory =
   };
 
 namespace detail {
-	// The steps of load_schema.
 	inline constexpr std::string_view load_schema_context = "load schema";
 	struct subschema_search
 	{
 		search_params request;
 		std::string where;// the DN as the root DSE wrote it
 	};
-	// The search of the subschema entry the root DSE names
-	// (subschemaSubentry), cn=Subschema if it names none. A name that is
-	// not a DN fails with invalid_dn.
+	// The search of the root DSE's subschemaSubentry (cn=Subschema if none).
 	[[nodiscard]] auto subschema_request(const result<search_result> &root) -> result<subschema_search>;
-	// The schema in the subschema entry that `sub` found at `where`.
 	[[nodiscard]] auto subschema_of(result<search_result> sub, std::string_view where) -> result<server_schema>;
 
-	// The error of a search that ended with `r`'s result code, a limit code
-	// (is_success() false), as connection::search gives for the other codes.
+	// The error of a search that ended with a limit code.
 	[[nodiscard]] auto search_error(const search_result &r, std::string_view context) -> error;
 
-	// client_errc::schema_mismatch with the report, for the type named `type`.
+	// client_errc::schema_mismatch with the report.
 	[[nodiscard]] auto schema_mismatch(std::string_view type, const schema_report &report) -> error;
 }// namespace detail
 
-// Reads the server's subschema (RFC 4512 section 4.2): the root DSE's
-// subschemaSubentry (cn=Subschema if it names none), then that entry's
-// attributeTypes and objectClasses. Errors have the context "load schema";
-// a search ending with a limit code and no entry is an error.
-// `d` must outlive the task.
+// Reads the server's subschema (RFC 4512 section 4.2). `d` must outlive the
+// task.
 template<directory D> auto load_schema(D &d) -> boost::capy::task<result<server_schema>>
 {
 	auto sub = detail::subschema_request(co_await d.search(root_dse({ "subschemaSubentry" })));
@@ -71,14 +58,8 @@ template<directory D> auto load_schema(D &d) -> boost::capy::task<result<server_
 	co_return detail::subschema_of(co_await d.search(std::move(sub->request)), sub->where);
 }
 
-// load_schema on a client's pool: both searches run on one shared lease
-// (client::acquire()), so the subschema read is the one that server's
-// root DSE names. After cond::connection_lost the two searches run once
-// more, on a new lease; any other error (busy and unavailable included)
-// is returned as is. An acquire() failure has the context "load schema"
-// too. Every server of the pool must serve the same schema: the next
-// operation may run on another one. `c` must outlive the task. Part of
-// jhetz::ldap_net.
+// load_schema on one shared lease of a client's pool, retried once after
+// cond::connection_lost. `c` must outlive the task.
 auto load_schema(client &c) -> boost::capy::task<result<server_schema>>;
 
 }// namespace jhetz::ldap

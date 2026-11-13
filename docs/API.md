@@ -40,13 +40,50 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
 - `jhetz/ldap/ber.hpp`: the restricted BER codec LDAP uses (RFC 4511 section 5.1):
   `ber::writer` (its buffer on a `memory_resource`, reusable), `ber::reader`
   (non-owning, depth-bounded, safe on untrusted input) and the framer
-  `ber::complete_message_size`.
+  `ber::complete_message_size`. Only definite lengths, tag numbers 0..30
+  and the universal types LDAP uses. The reader rejects indefinite lengths
+  and lengths of more than 4 octets but accepts non-minimal ones; a
+  BOOLEAN is one octet, any non-zero value true; an INTEGER or ENUMERATED
+  is not empty and at most 8 octets (else `integer_overflow`); NULL is
+  empty. Every read either succeeds and advances or fails and leaves the
+  reader unchanged, errors naming the absolute offset. A reader and what
+  it returns borrow the buffer and must not outlive it; nested BER (a
+  control value) is read with `enter_encapsulated`, keeping depth and
+  offsets. The writer sets the constructed bit by method, not from the
+  tag; `constructed(tag, body)` removes a partial element if `body` throws,
+  and `body` must only append (`clear()` or `take()` inside it throws
+  `std::logic_error`).
 - `jhetz/ldap/message.hpp`: RFC 4511 `LDAPMessage` as a wire model
   (`ldap::message`, `protocol_op` = every request and response, `control`,
   `ldap_result` with `to_error()`), `encode()` / `decode()`, and the paged
   results control (RFC 2696). Wire strings are `std::pmr::string` holding the
-  octets as sent; the search filter is an `ldap::filter` tree; see the header
-  for the decoding rules (RFC 4511 section 4 extensibility, range checks).
+  octets as sent (values may be binary), so an odd DN or attribute name
+  never breaks decoding; the search filter is an `ldap::filter` tree.
+  Decoding follows RFC 4511 section 4: unknown elements at the end of a
+  SEQUENCE are skipped (they must be well-formed BER) and optional
+  components are recognized only in their defined order; an unknown
+  protocolOp fails with `client_errc::unsupported_operation`; enumerations
+  (scope, derefAliases, modify operation) and INTEGER ranges (message id,
+  version, limits) are checked (decode_error) while unknown resultCode
+  values are kept; a SEQUENCE OF with SIZE (1..MAX) (referral, search
+  references) is accepted empty, as absent; AddRequest and modify `add`
+  values must not be empty (encode_error, decode_error); nesting is bounded
+  by the reader's depth and filters by `filter_limits`, and nothing is
+  allocated from an unchecked length. `search_scope` also has
+  subordinateSubtree (3, draft-sermersheim-ldap-subordinate-scope), and
+  `modify_operation` increment (3, RFC 4525). `encode()` fails before
+  writing anything with invalid_filter (an empty or over-limit filter) or
+  encode_error (a value the wire format cannot carry). `peek_message_header`
+  reads the message id and protocolOp tag of a PDU without decoding the
+  rest. The response control codecs (`encode_` / `decode_paged_results`,
+  `sort_result`, `vlv_response`, `read_entry`, `end_transaction_request` /
+  `_response`) are for mock servers and tests; `vlv_response::context_id`
+  is to be sent back unchanged, and `content_count` in the next
+  `vlv_by_offset`. Assigning directly to an optional or variant member
+  follows the standard types' rules (a newly engaged value uses its own
+  resource), and nested initializer lists are built on the default
+  resource first: to avoid it entirely, use the allocator constructor and
+  assign the members.
   `decode(encode(m)) == m` exactly, and re-encoding is byte-identical.
   `decode_options` limits what a peer may send: `from = origin::server`
   (a client connection) rejects request operations, `origin::client` (a
@@ -74,7 +111,14 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   4533 section 3.8): resend it with the cookie of that result's Sync Done
   control (`find_sync_done(s.controls())`, kept on an error result too), or,
   if it has none, with no cookie for a full reload, discarding the local
-  copy.
+  copy. `sync_request` is critical by default (a server without content
+  synchronization refuses the search); `reload_hint` asks for the full
+  content instead of that error when the cookie is too old. After a
+  present-mode refresh (a Sync Done, or a refreshPresent, with
+  `refresh_deletes` false) the entries not reported present are gone; a
+  `refresh_done` false means another refresh phase follows, true in
+  refreshAndPersist that the persist stage begins (RFC 4533 sections
+  3.3.2, 3.4.1). Cookies are opaque octets, absent and empty kept apart.
 - `jhetz/ldap/filter.hpp`: `ldap::filter`, a typed tree (and / or / not,
   equality, substrings, >=, <=, present, approx, extensible match) holding
   unescaped values. Built by the builders in `ldap::filters`
@@ -100,6 +144,17 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   non-UTF-8 octets as `\xx`; UTF-8 is kept), and
   `unescape_filter_value(text)` returns `result<std::pmr::string>`, failing
   with `invalid_filter` on what `filter::raw` would reject in a value.
+  `filter::raw` reads text not starting with `(` as if wrapped in
+  parentheses (`uid=jdoe`, as ldapsearch does); otherwise no whitespace
+  between elements, and `(`, `)`, `*` outside substrings, `\` and NUL must
+  be escaped. A default-constructed filter is empty: combining it gives an
+  empty filter, and encoding one fails with `invalid_filter`. A filter
+  combined from others uses the left operand's memory resource. An
+  attribute given to `filters::attr` that is not a valid description (only
+  possible with `attribute::unchecked`), or a bad extensible-match rule,
+  throws `std::invalid_argument`. `decode_filter` rejects what has no RFC
+  4515 form (decode_error), so every decoded filter re-encodes to the same
+  tree.
 - `jhetz/ldap/dn.hpp`: `ldap::dn` (RFC 4514 parse / `to_string`, multi-valued
   RDNs, `parent()`, `child()`, compile-time checked literals). Its `==` is
   syntactic (values exact after unescaping, `cn=A` != `cn=a`); compare as a
@@ -111,6 +166,16 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   (`uid=jdoe,ou=people,<base>`); the result uses `base`'s resource.
   `escape_dn_value(v)` gives the RFC 4514 text of one attribute value,
   exactly as `to_string()` writes it, for DN text built elsewhere.
+  Parsing follows RFC 4514 with RFC 2253 section 4's leniency (spaces
+  around `,`, `+` and `=` ignored, unescaped trailing spaces dropped);
+  `\` escapes any octet, so values need not be UTF-8, and `to_string()`
+  escapes octets that are not valid UTF-8. `child(rdn)` throws
+  `std::invalid_argument` for an RDN without an AVA, a bad type or an
+  empty `#` value; `base.child({"uid=jdoe"})` is ambiguous: name the type.
+- `jhetz/ldap/attribute.hpp`: also `attribute::parse(text)` (runtime text,
+  `invalid_attribute`) and `attribute::unchecked(text)` for names a
+  server sent as they are (AD's `member;range=0-1499`). The hash is
+  seeded per process: its values must not be stored or sent.
 - `jhetz/ldap/matching.hpp`: RFC 4517 matching rules on values prepared by
   LDAPprep (RFC 4518). Each rule is a function named after it, taking the
   attribute value and the assertion value and returning `match_result`
@@ -157,7 +222,11 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   case-insensitive equality, ordering and `std::hash`.
 - `jhetz/ldap/entry.hpp`: `ldap::entry`, the untyped search result entry
   (DN text + attributes, case-insensitive `find`); `entry::from` takes the
-  strings of a decoded `search_result_entry` and keeps its resource.
+  strings of a decoded `search_result_entry` and keeps its resource,
+  merging attributes of the same description (first spelling and order
+  kept). `find(type)` compares options as a set (`a;x;y` is `a;y;x`, but
+  `cn;lang-en` is not `cn`) and returns null when absent, an empty vector
+  for an attribute without values (typesOnly).
 - `jhetz/ldap/url.hpp`: `ldap::url`, RFC 4516 LDAP URLs (`ldap://`,
   `ldaps://`, `ldapi://` with a percent-encoded socket path): host (name,
   IPv4, bracketed IPv6 with optional zone), port (explicit or scheme
@@ -171,7 +240,16 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   the context names the failing index, `servers[1]`), and the explicit
   compile-time checked literal `ldap::url{"ldaps://ldap.example.org"}`
   (`scheme://host[:port]`, optional trailing `/`).
-  Allocator-aware (`std::pmr`, see below).
+  Allocator-aware (`std::pmr`, see below). `parse()` validates the DN (RFC
+  4514), filter (RFC 4515), scope (base / one / sub, any case), extension
+  types and port (1..65535), and rejects IPvFuture, userinfo and a `#`
+  fragment; unencoded spaces and bytes >= 0x80 are accepted in the DN,
+  attribute, scope, filter and extension parts, which must be UTF-8 once
+  decoded; errors are `invalid_url` with the reason and offset. Comparison
+  is syntactic on the decoded parts (hosts exactly, the DN with dn's
+  equality, the filter as a tree), and `to_string()` is canonical.
+  `parse_list(uris)` keeps only the valid LDAP URLs (servers may send any
+  scheme).
 - `jhetz/ldap/referral.hpp`: `referral_target(url, request)`, the request
   that progresses an operation at a referral's target (RFC 4511 section
   4.1.10), for a search, a compare and each update; build only, nothing is
@@ -230,6 +308,38 @@ itself needs only ICU.
     link-local address with a zone. CI builds with GCC 16 and Clang 23
     (libstdc++ 16).
   - `mr` holds the transport's own block and name.
+  - `ldapi://` connects to the Unix socket named by the host part, which
+    must fit in `sockaddr_un`; on Windows (AF_UNIX, code-only) a path
+    outside the ANSI code page may not reach the right file. `connect()`
+    refuses with `invalid_url` an empty host, a host with control
+    characters once decoded (a leading NUL, a Linux abstract socket, is
+    allowed on Linux), and a critical extension; the DN and later parts
+    are ignored.
+  - `tls_options`: `ca_file`, `ca_dir` (hashed with `openssl rehash`; keep
+    its path ASCII on Windows) and `ca_pem` replace the system store
+    (OpenSSL's `SSL_CERT_FILE` / `SSL_CERT_DIR`; on Windows CryptoAPI,
+    which blocks the io_context's thread during the handshake, its
+    revocation fetches bounded by the timeout, at most 20 s);
+    `cert_file` and `key_file` go together; `server_name` (default the
+    URL's host) rejects control characters, and a trailing dot is dropped
+    before SNI and matching. Not allocator-aware.
+  - The connect task must run on `ioc`'s executor, its continuations not
+    concurrently (a single-threaded io_context, or a strand).
+    `net::start_tls(t, pending, options, timeout)` upgrades a plain TCP
+    transport in place: `invalid_argument` unless plain TCP, `decode_error`
+    if `pending` holds unread bytes (CVE-2011-0411), both without touching
+    the transport; a failed handshake leaves it unusable (close it), and an
+    exception during the handshake closes it before propagating.
+  - A transport allows one read and one write in flight, on the executor of
+    its io_context; destroying or moving it with an operation in flight is
+    undefined (`close()` or `cancel()` and let it finish). `cancel()`
+    keeps it open. `shutdown(timeout)` returns the TLS shutdown's result
+    (`capy::cond::timeout` when the peer did not answer in time,
+    `stream_truncated` when it closed without close_notify,
+    `cond::canceled` on a stop) and closes in every case; a read may be in
+    flight, not a write. `peer_certificate()` and `channel_bindings()` are
+    views valid until the transport is destroyed or a StartTLS handshake
+    is redone.
 - `jhetz/ldap/net/message_io.hpp`: `read_message(transport, read_buffer,
   options)` returns the next complete `ldap::message`, decoded with
   `origin::server` by default; bytes of the following PDUs stay in the
@@ -241,7 +351,10 @@ itself needs only ICU.
   PDU made of tiny values (38 MiB instead of 320 MiB for 16 MiB of empty
   values). A TLS peer
   closing without close_notify between PDUs reads as a close. After any
-  error the connection must be dropped. `read_options::decode.memory` is the
+  error the connection must be dropped: a framing error consumes nothing,
+  so every later call fails the same way, and only a decode error
+  consumes the bad PDU. `read_frame` keeps the bytes received before a
+  cancellation, so a reader stopped between PDUs can resume. `read_options::decode.memory` is the
   resource the message is decoded into (e.g. a per-response arena).
   `write_message(t, m, mr)` encodes into a buffer on `mr`;
   `write_message(t, m, writer)` reuses the caller's `ber::writer`;
@@ -291,7 +404,9 @@ itself needs only ICU.
     `std::shared_ptr`) fails a static_assert: use `run(ioc, task)` or
     return plain values. `ldap::run(ioc, task) -> T` starts the task on
     `ioc`, runs `ioc` on the calling thread until no work is left
-    (restarting it first if stopped), and returns the task's value or
+    (restarting it first if stopped; other threads may run `ioc` too, and
+    what the task leaves behind, such as a closing connection or a detached
+    name lookup, is waited for), and returns the task's value or
     rethrows its exception (also one `f` throws); `std::system_error` with
     `capy::error::canceled` if `ioc` was stopped (or the task abandoned)
     before the task ended; use it when the io_context outlives the task.
@@ -336,7 +451,10 @@ itself needs only ICU.
   `ldap::root_dse(attributes = {"*", "+"})` is the root DSE read (base_object
   on the empty DN). `.timeout = ldap::no_timeout` (in any
   request) lifts the client-side limit for that operation, whatever
-  `operation_timeout` says.
+  `operation_timeout` says; so does any timeout whose deadline would
+  overflow the clock. A negative `size_limit` or `time_limit`, or a
+  `time_limit` above maxInt seconds, fails with encode_error before
+  anything is sent.
   Multiplexed: any number of operations may be outstanding (concurrent
   tasks on the connection's executor); one writer sends the PDUs in order
   and one reader, running only while something is outstanding, routes
@@ -380,6 +498,12 @@ itself needs only ICU.
   `references()`) and `intermediate` (only when asked for). `next()` and
   `next_item()` may be mixed on a stream; `next()`, `search()` and
   `search_paged()` drop the entries' controls and the intermediates.
+  A stream is move-only; do not destroy or move it while `next()` or
+  `next_item()` is suspended. After the end or an error, `next()` returns
+  the same again without I/O. `references()` keeps every reference for
+  the stream's life. `search_stream::item` is a `std::variant`, which is
+  not allocator-aware: a `std::pmr::vector<item>` does not propagate its
+  resource.
   Content synchronization (RFC 4533, `content_sync.hpp`) runs on
   `next_item()`: a search with a `sync_request` control,
   `.intermediate_responses = true` and, for refreshAndPersist,
@@ -396,8 +520,61 @@ itself needs only ICU.
   e.g. `errc::unavailable_critical_extension`); a
   transport or protocol error fails all of them once and closes the
   connection, and later operations fail with `client_errc::not_sent`
-  naming the first error. The header documents the memory, threading and
-  lifetime rules.
+  naming the first error. A Notice of Disconnection's success code reads
+  as `errc::unavailable`; other unsolicited responses are ignored.
+  `not_sent` has exceptions: an allocation failure stays
+  `std::errc::not_enough_memory`, operations abandoned by `unbind()` and
+  calls on a default-constructed or moved-from connection fail with
+  `not_connected`.
+  Memory: `search()` and `search_stream()` entries are decoded into the
+  call's memory resource and must not outlive it; they are allocated on
+  the strand and may be freed on another thread, so the resource must
+  allow that (the default resource, `std::pmr::synchronized_pool_resource`,
+  or an arena that frees nothing until the search ends). The connection's
+  own state lives on the resource given to `connect()` or the
+  constructor, of whose `connection_options` only `max_message_size` and
+  `operation_timeout` apply.
+  Lifetime: the last handle's destruction closes the transport without an
+  UnbindRequest (`co_await unbind()` first for a clean shutdown).
+  Streams, paged searches, transactions and outstanding operations may
+  outlive every handle (they then fail with `not_connected`); destroying a
+  task suspended in an operation abandons it. Work posted by a close or
+  destructor off the strand leaks if the io_context is destroyed without
+  running it: after `run_one()` or a stop, `restart()` and `poll()` first.
+  Accessors: `is_tls()` is false while `start_tls()` runs and whenever
+  `is_open()` is; `security_layer()` holds from the first octet after the
+  successful BindResponse until the connection closes, a later bind
+  leaving it in place (RFC 4513 section 5.2.1.4), and a bind negotiating
+  another fails with `security_layer_in_effect`; `peer_certificate()` is
+  a view valid until the connection is destroyed or assigned to, or
+  `start_tls()` runs again; `bind_count()` counts the bind exchanges
+  begun, whatever their outcome; `outstanding()` counts the operations and
+  the paged search releases still due, not abandoned requests; `name()`
+  is where it is connected, for logs.
+  `sasl_bind(mechanism, name)` (the mechanism must outlive the task) sends
+  at most 32 BindRequests, then fails with `unexpected_response`. A
+  mechanism error after a saslBindInProgress aborts the exchange with an
+  anonymous simple bind before any held request is sent (RFC 4511
+  section 4.2.1); any answer but saslBindInProgress leaves the
+  connection usable, anonymous and without a security layer, else it is
+  closed with `unexpected_response`. Offloaded steps run within
+  `operation_timeout` and the stop token; giving up leaves the step
+  running (the io_context counts it as work) and closes the connection
+  only once a BindRequest was sent; under `locking_mode::unsafe` an
+  offloaded step fails with `std::errc::operation_not_supported`.
+  `start_tls(options, timeout)` checks `options.server_name`, else the
+  URL's host; it fails with `invalid_argument` unless the connection is
+  plain TCP; once its request is sent other operations fail with
+  `operation_in_progress`, and an `unbind()` closes the connection (the
+  StartTLS fails with `not_connected`). `timeout` bounds the wait for
+  release answers, the exchange and the handshake each; `nullopt`:
+  `operation_timeout` for the first two, none for the handshake.
+  `unbind()` during a bind or a StartTLS only closes; on TLS it then sends
+  close_notify and waits for the server's within `tls_shutdown_timeout`
+  (best effort). An operation started while the UnbindRequest is being
+  written fails with `not_sent`, a second `unbind()` with `not_connected`;
+  the connection is closed even if the write fails or the task is
+  cancelled.
   Threading (coro-ldap-nj9): a connection may be used from any number of
   threads, on an io_context run by one thread or a pool.
   `connection::executor_type` is a `capy::strand` of the io_context's
@@ -487,7 +664,9 @@ itself needs only ICU.
   open, waiting five seconds at most for the answer. The Aborted
   Transaction Notice is not routed: the next use fails.
   An update cancelled or timed out inside a transaction may be part of it:
-  abort. The codecs (`end_transaction_request`, `update_controls`,
+  abort. A commit whose answer is lost has an unknown outcome. A bind or
+  unbind aborts every transaction of the connection (RFC 5805 section
+  3.5); transactions do not nest. The codecs (`end_transaction_request`, `update_controls`,
   `end_transaction_response`, `encode_` / `decode_end_transaction_request`
   / `_response`, the OIDs) are in `message.hpp`;
   `ldap::search_paged(conn, params, page_size, max_pages =
@@ -567,7 +746,16 @@ itself needs only ICU.
   `options` is presented only with a setup: to keep it, pass
   `sasl_bind_setup` with an EXTERNAL mechanism, or `no_bind_setup()`, which
   presents it without binding). Its connections are reused per server and
-  closed with the connector.
+  closed (without an UnbindRequest) with the last copy of the connector;
+  `ioc` must outlive it.
+  Continuation references are followed breadth first after the search
+  ended, their entries appended in that order. Loops compare hosts in
+  ASCII form, case-insensitively, DNs by distinguishedNameMatch and
+  filters as trees. Without a request `timeout`, each request has its
+  connection's `operation_timeout`; a connector ignoring the stop token is
+  bounded only by itself, and its connection is then not used. The
+  connector's connections must belong to the origin's executor, and the
+  origin and those connections must outlive the task.
 - `jhetz/ldap/extended_operations.hpp` (coro-ldap-aw4.4): the standard
   extended operations as free functions over `ldap::extended_directory`
   (anything with `connection`'s `extended()`: `connection`, `client`),
@@ -630,6 +818,35 @@ itself needs only ICU.
   reports success but the mechanism's `complete()` refuses it (e.g. a
   wrong SCRAM server signature), `sasl_bind` returns the error and closes
   the connection, since the server considers it bound.
+  Writing a mechanism: one object serves one bind at a time; `start()`,
+  `step()` and `complete()` run on the connection's I/O thread and must
+  not block; `start()` also resets the mechanism; error contexts should
+  not name the mechanism (`sasl_bind` prefixes "sasl bind <name>").
+  `sasl_bind_context`'s views (host, bindings, `peer_certificate`) are
+  valid only during `prepare()`. A `sasl_work` (from `offload_start()` /
+  `offload_step()`, empty: run inline) runs once on a thread of its own;
+  once `sasl_bind` gave up waiting it runs on while the mechanism may be
+  destroyed or start another bind, so it must own or share what it uses.
+  `channel_binding_used()` defaults to tls_exporter (fail-closed: a
+  mechanism given tls-exporter data counts as having used it); override
+  it to report what the exchange actually bound to.
+  `take_security_layer()`, called once per step, returns the layer the
+  exchange negotiated if that step's BindRequest is the last; it is
+  installed when the server answers it with success, before `complete()`.
+  A `sasl_security_layer` only wraps and unwraps buffers (on the I/O
+  thread, one connection per layer): the connection frames each buffer
+  with a four-octet network-order length, cuts outgoing PDUs to
+  `max_wrap_input()` (at least 1) octets, and closes the connection on an
+  incoming length above `max_received()` or an `unwrap()` error.
+  SCRAM details: the server's iteration count must be at least 4096 (RFC
+  7677 section 4) and at most `max_iterations`; the server nonce must
+  extend the client's; `=` and `,` in the username and `authz_id` are
+  escaped as `=3D` and `=2C`; `authz_id` must be UTF-8 without control
+  characters (not SASLprep'ed). cyrus-sasl (slapd) does not SASLprep
+  stored passwords, so a password SASLprep changes does not match there.
+  `scram_channel_binding_for(supportedSASLMechanisms)` gives `plus` or
+  `not_offered` (`"y,,"` over TLS, so a -PLUS server notices a stripped
+  -PLUS, RFC 5802 section 6).
 - TLS channel bindings (`jhetz/ldap/channel_binding.hpp`, RFC 5056):
   `connection::peer_certificate()` is the server's certificate (DER) and
   `connection::channel_bindings()` the connection's tls-server-end-point
@@ -739,7 +956,9 @@ itself needs only ICU.
   GSS-API failures (no ticket, unknown service principal, unreachable
   KDC) are `client_errc::gssapi_failure` (`cond::auth_failed`), the
   context quoting GSS-API's major and minor status messages; never
-  tokens or credentials. Every GSS-API handle is released (RAII).
+  tokens or credentials. Every GSS-API handle is released (RAII). The
+  target, principal and `authz_id` must be well-formed UTF-8 without
+  control characters (`encode_error`).
   The GSS-API calls that may block (`gss_acquire_cred`,
   `gss_init_sec_context`: MIT krb5 does DNS lookups and asks the KDC for
   the service ticket, retrying over the KDCs with backoff; the total is
@@ -789,8 +1008,8 @@ itself needs only ICU.
   fails with `client_errc::security_layer_unavailable`, as does a
   CHALLENGE_MESSAGE that does not grant SIGN, KEY_EXCH and 128 (and SEAL
   for confidentiality). With a layer, `require_tls` is not consulted (the
-  layer stands in for it). `options.max_receive_size` (16 MiB) bounds
-  the server's buffers.
+  layer stands in for it). `options.max_receive_size` (16 MiB, at least
+  16) bounds the server's buffers; outgoing buffers are at most 128 KiB.
   `options.require_tls` (default true, without a layer) fails the bind with
   `client_errc::tls_required` on a plain ldap:// connection before
   anything is sent. NTLM does not authenticate the server, so only TLS's
@@ -876,6 +1095,22 @@ itself needs only ICU.
   the search's result, and handle `find_sort_result` returning nullopt
   ("not known to be sorted"). Sorted paged searches sharing one OpenLDAP
   connection get each other's entries: see `search_paged` above.
+  Details: `relax_rules` lets an update bend the schema rules (e.g. set a
+  NO-USER-MODIFICATION attribute such as `createTimestamp` when
+  migrating); the server still decides who may (OpenLDAP: manage access).
+  `proxied_authorization{.authz_id}` takes `"dn:<dn>"`, `"u:<user>"` or
+  `""` (anonymous). `pre_read` goes on modify, delete and modify DN,
+  `post_read` on add, modify and modify DN; empty attributes mean all
+  user attributes. `matched_values` is non-critical by default; per RFC
+  3876 section 2 an attribute without a matching value comes back with no
+  values (OpenLDAP 2.7 leaves it out), and typesOnly or `"1.1"` make it a
+  no-op. `vlv_by_offset`: offset 1 is the first entry, `content_count` 0
+  means the server's count; `vlv_greater_than_or_equal`: the first entry
+  whose primary sort key is >= the value. A `transaction_specification`
+  update is answered at once and applied at `end_transaction()`, where its
+  response controls come back (`end_transaction_result::updates_controls`);
+  Password Modify takes it only as a raw control, and only a typed one is
+  checked against proxied authorization.
 - `jhetz/ldap/mapping.hpp` (#9): typed struct mapping. A descriptor
   (`ldap::schema<T> = ldap::describe(ldap::object_class(...),
   ldap::auxiliary_class(...), ldap::field<&T::m>("attr",
@@ -937,7 +1172,11 @@ itself needs only ICU.
   attribute type with the same options under different names or its OID
   (`sn` and `surname`): `duplicate_attribute`, an error, as an update
   would write it twice and a read decode only one; `cn` and `cn;lang-en`
-  are not),
+  are not; never reported: objectClass, operational attributes,
+  attributes the server does not define, and every member when a class
+  is extensibleObject or a class or superclass is not defined),
+  `server_schema::skipped_for_syntax(name)` (an attribute type defined
+  but skipped because its SYNTAX is not a numeric OID),
   `attribute_type` with `usage` (`attribute_usage`),
   `object_class_type` with `sup`, `kind` (`object_class_kind`), `must`
   and `may`, `dit_content_rule` (`obsolete`, `aux`, `must`, `may`, `precluded`: RFC
@@ -1106,7 +1345,23 @@ itself needs only ICU.
   ...), and `sync::search_paged(client &)` and `sync::load_schema(client
   &)` are no longer separate overloads.
   Callable from any number of threads; a call from its own I/O
-  thread fails with `client_errc::would_deadlock`.
+  thread fails with `client_errc::would_deadlock`. Exceptions thrown by
+  an operation are rethrown in the calling thread. The last handle's
+  destructor also waits for a host name lookup or a SASL step still
+  running (e.g. GSSAPI waiting for a KDC), so it may take as long as
+  their timeouts. Do not destroy or assign to a `sync::connection`, a
+  sync lease or a `sync::client` while another thread is inside one of
+  its methods, nor destroy the last owner of an I/O thread on that
+  thread (`std::terminate()` with a message on stderr). In `sync::run`,
+  `make_task`, its task and `args` are used on the I/O thread, whatever
+  the task creates there (a stream) must end there too, and copies of
+  `a` must not leave the task. A `sync::transaction` made by a
+  `sync::connection` must not outlive its last handle; one made by a
+  sync lease shares the client's I/O thread and may outlive the lease
+  and client, but keep the lease while using it. A sync lease keeps the
+  client's I/O thread alive; on that thread its release and destructor
+  return the connection without waiting. The memory resource of a
+  `sync::connection` or `sync::client` must outlive its I/O thread.
 - `jhetz/ldap/client.hpp` (3pf, DESIGN.md section 11): `ldap::client`, a
   pool of multiplexed connections opened lazily, usable from any number of
   threads (its pool state on a strand of its own, `executor()`, each
@@ -1202,6 +1457,26 @@ itself needs only ICU.
   `compare_result`; `client_observer::on_referral(server,
   attempt)` hears of each URI. Writes (forwarders and leases),
   `search_stream()` and `extended()` never chase.
+  `referral_hop::target` is the URL as the server sent it: the host
+  percent-decoded but not lowercased, not in its ASCII (IDNA) form, a
+  trailing dot kept, while the chase connects to the ASCII form; a
+  hand-written authorizer must not compare the host as a raw string and
+  must check the scheme and port itself (`same_setup_for_domains` does
+  both). An exception the authorizer throws propagates out of `search()`
+  / `compare()` (`sync::client` rethrows it), the chase's referred
+  connections closed and the lease returned.
+  Lifetime: the io_context must outlive the client and its leases, the
+  memory resource the work left on the io_context (until `run()`
+  returns), the observer the client or its `close()`. The observer, the
+  authorizer and `session_setup` run on the client's strand;
+  `session_setup` is copied into each attempt and may run concurrently
+  for several connections. A connection leaving the pool after
+  `io_context::stopped()` is closed, not unbound; a posted unbind runs
+  only if the io_context runs again, so call `restart()` just before
+  running it again, or call `close()` from a task on the executor to
+  unbind cleanly. Called from a thread outside `run()` of a stopped
+  io_context, `close()`, the destructor and a lease's release have
+  connection.hpp's precondition (no thread still inside `run()`).
 - `jhetz/ldap/sync.hpp` (3pf.5): `ldap::sync::client`, the blocking facade
   over `ldap::client`. `sync::client(client_options, mr)` owns an
   io_context and an I/O thread, where the `ldap::client` lives (session
@@ -1413,6 +1688,15 @@ package component `ad`:
   write pwdLastSet 0 / -1; and `ad::filetime_clock::duration` members map
   the negative intervals (maxPwdAge, lockoutDuration; `ad::forever` for
   -9223372036854775808). `std::int64_t` members read any 906 attribute raw.
+  Test `ad::is_never` before converting or doing arithmetic: arithmetic
+  near the top of the range overflows, `ad::never` converts to year 30828,
+  and a converted value keeps 100 ns ticks, which may not fit a
+  `system_clock::time_point` (libstdc++'s nanoseconds end in 2262): keep
+  the ticks or floor to seconds. Negating `ad::forever` overflows. Dates
+  below -1 are rejected (`conversion_failed`). An equality filter on
+  `ad::never` misses accounts stored as 0: "never expires" is
+  `(|(accountExpires=9223372036854775807)(accountExpires=0))`, and
+  `>= 1` leaves those out of an "expired" filter.
 - `jhetz/ldap/ad/sid.hpp` (`jhetz::ldap`): `ad::sid`, a security
   identifier (MS-DTYP 2.4.2): `sid::parse(text)` ("S-1-5-21-...", the
   authority in decimal or "0x" and 12 hex digits), `sid::from_binary(raw)`

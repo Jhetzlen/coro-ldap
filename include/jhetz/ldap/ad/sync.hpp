@@ -1,7 +1,4 @@
-// Blocking counterparts of the ldap::ad operations (ad/password.hpp,
-// ad/ranged_values.hpp, ad/dirsync.hpp), over
-// the sync facade's connection, leases and client (sync.hpp): each runs
-// the async function with sync::run. Part of jhetz::ldap_ad.
+// Blocking counterparts of the ldap::ad operations, run with sync::run.
 #pragma once
 
 #include "jhetz/ldap/ad/dirsync.hpp"
@@ -20,9 +17,6 @@
 
 namespace jhetz::ldap::ad {
 
-// As ad::change_password and ad::reset_password (ad/password.hpp),
-// blocking. On a sync::client, on a shared lease of the pool, retried once
-// after client_errc::not_sent.
 template<sync::directory D>
 [[nodiscard]] auto change_password(D &d, dn user, std::string_view old_password, std::string_view new_password)
   -> result<void>
@@ -35,9 +29,7 @@ template<sync::directory D>
 	return sync::run(d, [&](auto &a) { return ad::reset_password(a, std::move(user), new_password); });
 }
 
-// As ad::read_all_values (ad/ranged_values.hpp), blocking, the values on
-// the default resource. On a sync::client, one shared lease for every
-// window, run once more after cond::connection_lost.
+// Values on the default resource.
 template<sync::directory D>
 [[nodiscard]] auto read_all_values(D &d, dn object, std::string attribute, range_options options = {})
   -> result<string_list>
@@ -46,9 +38,7 @@ template<sync::directory D>
 	  d, [&](auto &a) { return ad::read_all_values(a, std::move(object), std::move(attribute), options); });
 }
 
-// As ad::dirsync (ad/dirsync.hpp), blocking, the entries on the default
-// resource. On a sync::client, one shared lease for every search, run once
-// more after cond::connection_lost.
+// Entries on the default resource.
 template<sync::directory D>
 [[nodiscard]] auto dirsync(D &d,
   search_params request,

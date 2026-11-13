@@ -1,14 +1,6 @@
-// The requests of ldap::connection's operations (connection.hpp) as plain
-// aggregates for designated initializers (DESIGN.md section 3), the
-// ldap::mod builders of a ModifyRequest's changes, what the operations
-// return besides success, and the OIDs of the extended operations and
-// capabilities the connection knows. Part of jhetz::ldap (the codec): no
-// Corosio or Capy, the requests are encoded when an operation sends them.
-//
-//   co_await c->modify({
-//       .object  = ldap::dn{"uid=jdoe,ou=people,dc=example,dc=org"},
-//       .changes = {ldap::mod::replace("mail", {"jdoe@example.org"}), ldap::mod::increment("loginCount")},
-//   });
+// The requests of ldap::connection's operations as plain aggregates, the
+// ldap::mod builders, what the operations return, and extended operation
+// OIDs. Part of jhetz::ldap (the codec).
 #pragma once
 
 #include "jhetz/ldap/controls.hpp"
@@ -31,103 +23,64 @@
 
 namespace jhetz::ldap {
 
-// For the `timeout` of a request below: no client-side limit for this
-// operation, whatever connection_options::operation_timeout says (nullopt
-// means "the connection's default" there). For a search that is meant to
-// run until stopped, such as a refreshAndPersist content synchronization
-// (content_sync.hpp): cancel it with a stop token or by destroying its
-// stream. Any timeout too large for the clock (now + timeout overflows)
-// also means no limit.
+// For a request's `timeout`: no client-side limit for this operation.
 inline constexpr std::chrono::milliseconds no_timeout = std::chrono::milliseconds::max();
 
-// search_params::base: a dn with no default constructor, so a search names
-// its base (ldap::dn{} for the root DSE, or for a search of the whole
-// server).
+// A dn with no default constructor, so a search names its base.
 struct search_base : dn
 {
 	// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor): `.base = ldap::dn{...}`
 	search_base(dn base) : dn(std::move(base)) {}
 };
 
-// A search, as a plain aggregate for designated initializers (DESIGN.md
-// section 3). `base` is required: `search_params{.filter = f}` does not
-// compile. Values are validated when the request is encoded: a negative
-// size_limit or time_limit, or a time_limit above max_int seconds, fails with
-// encode_error, an empty filter with invalid_filter, before anything is sent.
+// A search; `base` is required. Values are validated when encoded.
 struct search_params
 {
 	search_base base;// ldap::dn{} is the root DSE
 	search_scope scope = search_scope::whole_subtree;
 	ldap::filter filter = filters::attr("objectClass").present();
-	// Attribute selectors as sent: descriptions, "*" (all user attributes),
-	// "+" (operational, RFC 3673), "1.1" (none). Empty: all user attributes.
+	// Descriptions, "*", "+" (RFC 3673) or "1.1"; empty: all user attributes.
 	string_list attributes{};
 	deref_aliases deref = deref_aliases::never;
-	std::int32_t size_limit = 0;// entries; 0 = no client-requested limit
-	std::chrono::seconds time_limit{ 0 };// 0 = no client-requested limit (sent to the server)
+	std::int32_t size_limit = 0;// 0: no limit requested
+	std::chrono::seconds time_limit{ 0 };// sent to the server; 0: no limit requested
 	bool types_only = false;
-	// Request controls: the typed ones a search takes (ldap::paged,
-	// ldap::server_side_sort, ...) or a raw ldap::control (controls.hpp).
 	search_controls controls{};
-	// Client-side limit for the whole search, from sending it to the
-	// SearchResultDone across every next() (see
-	// connection_options::operation_timeout, which applies if this is
-	// nullopt; ldap::no_timeout: none). Unlike time_limit it is enforced
-	// by the client.
+	// Client-side limit for the whole search; nullopt:
+	// connection_options::operation_timeout.
 	std::optional<std::chrono::milliseconds> timeout{};
-	// Keep the IntermediateResponses (RFC 4511 section 4.13) the server
-	// sends during the search, for search_stream::next_item(). False: they
-	// are skipped unread, as everywhere else. Only next_item() returns them;
-	// next(), search() and search_paged() ignore it (they are decoded and
-	// dropped).
+	// Keep IntermediateResponses (RFC 4511 section 4.13) for next_item().
 	bool intermediate_responses = false;
-	// Whether a referral result is chased: overrides
-	// referral_options::follow_referrals for this request in client::search
-	// and sync::client::search, and turns it off for chase_search when
-	// false. Governs referral results only, not continuation references.
-	// Ignored by the calls that never chase: client::search_stream,
-	// ldap::search_paged (on a client too), and every connection, lease and
-	// sync::connection call.
+	// Overrides referral_options::follow_referrals for this request.
 	std::optional<bool> follow_referrals{};
-	// Whether continuation references (SearchResultReference) are chased:
-	// overrides referral_options::follow_references for this request in
-	// client::search and sync::client::search, and turns it off for
-	// chase_search when false (the references stay in `references`, counted
-	// in `unlisted`). Governs continuation references only, not referral
-	// results. Ignored by the same calls as follow_referrals.
+	// Overrides referral_options::follow_references for this request.
 	std::optional<bool> follow_references{};
 };
 
-// The search reading the root DSE (RFC 4512 section 5.1): the empty DN,
-// base_object scope, (objectClass=*), and `attributes` ("*" and "+" by
-// default: the user and the operational attributes).
+// The root DSE read (RFC 4512 section 5.1).
 [[nodiscard]] inline auto root_dse(string_list attributes = { "*", "+" }) -> search_params
 {
 	return { .base = dn{}, .scope = search_scope::base_object, .attributes = std::move(attributes) };
 }
 
-// Where a referral URL came from: what to do with an absent DN depends on it.
+// Where a referral URL came from.
 enum class reference_kind : std::uint8_t {
 	referral,// the referral field of an LDAPResult (RFC 4511 section 4.1.10)
 	continuation_reference,// a SearchResultReference (section 4.5.3)
 };
 
-// What became of one URI of a referral or continuation reference that a
-// referral chase considered (referral_chase.hpp, ldap::client).
+// What became of one URI a referral chase considered.
 enum class referral_outcome : std::uint8_t {
-	// The request was sent to the target and answered: a result, or a
-	// referral that was chased in turn (the next attempts, one hop deeper).
+	// Sent to the target and answered.
 	followed,
 	skipped_policy,// the connector returned null
 	skipped_loop,// that server already got the same request in this chase
 	limit_reached,// over max_hops or max_targets, or the timeout was spent
-	unparseable,// not an LDAP URL, or one that cannot be followed (referral_target): see failure
+	unparseable,// cannot be followed: see failure
 	failed,// the connector or the request failed: see failure
 };
 
-// One URI that was considered, in the order the chase got to it. URIs not
-// tried because an earlier alternative of the same reference was followed,
-// or was over a limit, are not listed.
+// One URI a chase considered, in the order it got to it.
 struct referral_attempt
 {
 	std::string uri{};// as the server sent it
@@ -139,27 +92,9 @@ struct referral_attempt
 	friend auto operator==(const referral_attempt &, const referral_attempt &) -> bool = default;
 };
 
-// A search run to its end (connection::search, repository::search, client::search,
-// chase_search, the sync facades): the entries and the URIs of the search
-// result references received, in order, then the SearchResultDone's
-// LDAPResult (RFC 4511 sections 4.5.2 and 4.1.9; resultCode, matchedDN,
-// diagnosticMessage) and the controls of its message. Returned for success
-// and for the codes that end a search with part of its entries
-// (sizeLimitExceeded, timeLimitExceeded, adminLimitExceeded: is_success()
-// is then false); any other result code is an error.
-//
-// After a referral chase (chase_search, or ldap::client with
-// client_options::referrals): the entries are the origin's (or, after a
-// referral result, the target's), then those of each continuation
-// reference followed, in the order followed; `references` holds the URIs
-// of the continuation references not followed by any of their URIs
-// (skipped, unparseable, over a limit, failed, left unexamined when the
-// chase stopped, or not followed at all; one skipped only as a loop is not
-// there); the LDAPResult is the origin's (or the referral target's), or,
-// when that is success, that of the first followed continuation
-// reference whose search ended with a limit code; the controls are the
-// origin's (or the referral target's). `referrals` and `unlisted` report
-// what the chase did with each URI.
+// A search run to its end: the entries, the URIs of the references not
+// followed, the SearchResultDone's LDAPResult and controls, and what a
+// referral chase did.
 template<class Entries> struct basic_search_result
 {
 	Entries entries{};
@@ -168,40 +103,22 @@ template<class Entries> struct basic_search_result
 	std::pmr::string matched_dn{};
 	std::pmr::string diagnostic_message{};
 	std::pmr::vector<control> controls{};
-	// The URIs a referral chase considered (empty without one), at most
-	// referral_policy::max_attempts.
+	// At most referral_policy::max_attempts.
 	std::vector<referral_attempt> referrals{};
-	// URIs a chase considered that are not in `referrals`: those beyond
-	// referral_policy::max_attempts, and those of the references left
-	// unexamined when the chase stopped (max_targets reached or the timeout
-	// spent), or not followed at all (ldap::client with
-	// referral_options::follow_references off).
+	// URIs a chase considered that are not in `referrals`.
 	std::size_t unlisted = 0;
 
-	// resultCode success: the search returned every entry it found.
 	[[nodiscard]] auto is_success() const noexcept -> bool { return result_code == 0; }
-	// The entries are all there are: resultCode success and no continuation
-	// reference left unfollowed. A chase's reference skipped only as a loop
-	// leaves it true (its server already got that search); one over
-	// max_hops or left unexamined clears it.
+	// resultCode success and no continuation reference left unfollowed.
 	[[nodiscard]] auto is_complete() const noexcept -> bool { return is_success() && references.empty(); }
 
 	friend auto operator==(const basic_search_result &, const basic_search_result &) -> bool = default;
 };
 
 using search_result = basic_search_result<std::pmr::vector<entry>>;
-// The entries decoded to T (repository::search, with record<T>).
 template<class T> using typed_search_result = basic_search_result<std::vector<T>>;
 
-// The other operations, as plain aggregates like search_params.
-// `controls` and `timeout` mean the same everywhere: request controls, and
-// a client-side limit overriding connection_options::operation_timeout
-// (ldap::no_timeout: none). Each `controls` is its operation's list
-// (add_controls, ...: controls.hpp), which takes only the typed controls
-// whose specification allows them there, plus raw ldap::control.
-
-// AddRequest (RFC 4511 section 4.7). Every attribute needs at least one
-// value (encode_error otherwise, before anything is sent).
+// AddRequest (RFC 4511 section 4.7); each attribute needs a value.
 struct add_params
 {
 	dn entry{};
@@ -211,7 +128,6 @@ struct add_params
 };
 
 // ModifyRequest (RFC 4511 section 4.6): changes applied in order, atomically.
-// Build them with ldap::mod::add / remove / replace / increment.
 struct modify_params
 {
 	dn object{};
@@ -221,18 +137,17 @@ struct modify_params
 };
 
 namespace mod {
-	// Adds values (at least one).
 	[[nodiscard]] auto add(std::string_view type, std::initializer_list<std::string_view> values) -> modify_change;
 	// Deletes the given values, or the whole attribute if none are given.
 	[[nodiscard]] auto remove(std::string_view type, std::initializer_list<std::string_view> values = {})
 	  -> modify_change;
 	// Replaces all values (none: deletes the attribute if present).
 	[[nodiscard]] auto replace(std::string_view type, std::initializer_list<std::string_view> values) -> modify_change;
-	// Adds `delta` to an integer attribute (RFC 4525 Modify-Increment).
+	// RFC 4525 Modify-Increment.
 	[[nodiscard]] auto increment(std::string_view type, std::string_view delta = "1") -> modify_change;
 }// namespace mod
 
-// DelRequest (RFC 4511 section 4.8): deletes a leaf entry.
+// DelRequest (RFC 4511 section 4.8).
 struct del_params
 {
 	dn entry{};
@@ -240,14 +155,12 @@ struct del_params
 	std::optional<std::chrono::milliseconds> timeout{};
 };
 
-// ModifyDNRequest (RFC 4511 section 4.9): renames an entry (new_rdn) and/or
-// moves it under new_superior. To move without renaming, pass its current
-// RDN (entry.rdns().front()).
+// ModifyDNRequest (RFC 4511 section 4.9): rename and/or move.
 struct modify_dn_params
 {
 	dn entry{};
 	rdn new_rdn{};
-	bool delete_old_rdn = true;// drop the old RDN's values from the entry
+	bool delete_old_rdn = true;
 	std::optional<dn> new_superior{};
 	modify_dn_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
@@ -261,18 +174,12 @@ struct compare_params
 	std::string value{};
 	compare_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
-	// As search_params::follow_referrals, for client::compare,
-	// sync::client::compare and chase_compare; connection::compare and
-	// sync::connection::compare ignore it.
+	// As search_params::follow_referrals.
 	std::optional<bool> follow_referrals{};
 };
 
-// What compare returns (connection, client, chase_compare and the sync
-// facades): compareTrue: true, compareFalse: false; the matchedDN,
-// diagnosticMessage and controls of the CompareResponse that answered (the
-// referral target's after a chase); and what a referral chase did (as
-// basic_search_result's `referrals` and `unlisted`; empty where nothing
-// chases).
+// compareTrue / compareFalse as `value`, with the answering response's
+// fields and what a referral chase did.
 struct compare_result
 {
 	bool value = false;
@@ -288,41 +195,25 @@ struct compare_result
 // ExtendedRequest (RFC 4511 section 4.12).
 struct extended_params
 {
-	std::string name{};// requestName, an OID
+	std::string name{};// requestName
 	std::optional<std::string> value{};// requestValue, as encoded for that operation
 	extended_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
-	// Collect the IntermediateResponses (RFC 4511 section 4.13) the server
-	// sends before the ExtendedResponse into extended_result::intermediates.
-	// False: they are skipped unread.
+	// Collect IntermediateResponses into extended_result::intermediates.
 	bool intermediate_responses = false;
 };
 
-// What a successful operation returns besides success: the message id of
-// its request, the matchedDN and diagnosticMessage of the server's
-// LDAPResult (RFC 4511 section 4.1.9; a server may put a warning in the
-// diagnostic of a success), and the controls of its response (e.g. a
-// post-read entry, RFC 4527: find_post_read()). In a transaction (RFC
-// 5805) the update is only accepted, and its response controls come with
-// the End Transaction response, matched by message_id
-// (end_transaction_result::find_update_controls).
+// What a successful operation returns besides success (RFC 4511 section
+// 4.1.9 fields and the response's controls).
 struct response
 {
-	std::int32_t message_id = 0;// messageID of the request (and of this response)
-	std::pmr::string matched_dn{};// matchedDN as sent, usually empty on success
-	std::pmr::string diagnostic_message{};// diagnosticMessage as sent; empty: none
+	std::int32_t message_id = 0;
+	std::pmr::string matched_dn{};// as sent
+	std::pmr::string diagnostic_message{};// as sent; empty: none
 	std::pmr::vector<control> controls{};
 };
 
-// An IntermediateResponse (RFC 4511 section 4.13: response_name and
-// response_value, both optional) and the controls of its message, for a
-// caller that asked for them (`intermediate_responses` in search_params and
-// extended_params). Its meaning, and so the encoding of responseValue, is
-// the extension's (e.g. RFC 4533's syncInfoValue); some extensions put their
-// data in the controls instead. Allocator-aware like the message model
-// (message.hpp): a plain copy uses the default resource, the
-// allocator-extended copy the given one, assignment keeps the target's.
-// Converting it to an intermediate_response (slicing) drops the controls.
+// An IntermediateResponse (RFC 4511 section 4.13) with its message's controls.
 struct intermediate : intermediate_response
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -331,8 +222,7 @@ struct intermediate : intermediate_response
 
 	intermediate() = default;
 	explicit intermediate(const allocator_type &alloc) : intermediate_response(alloc), controls(alloc) {}
-	// Takes the strings of `response` and `controls_` when they are on
-	// `alloc`'s resource, else copies them onto it.
+	// Takes the strings when on `alloc`'s resource, else copies them onto it.
 	intermediate(intermediate_response response, std::pmr::vector<control> controls_, const allocator_type &alloc = {})
 	  : intermediate_response(std::move(response), alloc), controls(std::move(controls_), alloc)
 	{}
@@ -356,53 +246,42 @@ struct extended_result
 	std::optional<std::pmr::string> name{};// responseName
 	std::optional<std::pmr::string> value{};// responseValue
 	std::pmr::vector<control> controls{};
-	// The IntermediateResponses received before the ExtendedResponse, in
-	// order; empty unless extended_params::intermediate_responses is set.
-	// Lost when the operation fails.
+	// Empty unless extended_params::intermediate_responses is set.
 	std::pmr::vector<intermediate> intermediates{};
 };
 
-// RFC 4532 "Who am I?" extended operation.
+// RFC 4532 "Who am I?".
 inline constexpr std::string_view who_am_i_oid = "1.3.6.1.4.1.4203.1.11.3";
 
-// RFC 3062 Password Modify extended operation.
+// RFC 3062 Password Modify.
 inline constexpr std::string_view password_modify_oid = "1.3.6.1.4.1.4203.1.11.1";
 
 struct password_modify_params
 {
-	// userIdentity: whose password, usually a DN (the server decides the
-	// form). nullopt: the user this connection is bound as.
+	// userIdentity; nullopt: the bound user.
 	std::optional<std::string> user{};
-	// oldPasswd: servers usually require it when users change their own.
+	// oldPasswd
 	std::optional<std::string> old_password{};
-	// newPasswd. nullopt: the server generates one and returns it.
+	// newPasswd; nullopt: the server generates one.
 	std::optional<std::string> new_password{};
 	extended_controls controls{};
 	std::optional<std::chrono::milliseconds> timeout{};
 };
 
-// What connection::end_transaction() returns when the server reports
-// success (RFC 5805 section 2.3): when committing, every update was
-// applied, and `updates_controls` holds the response controls the updates
-// would have had outside the transaction (pre-read and post-read entries),
-// each under its update's message id (response::message_id); `controls` are
-// those of the End Transaction response itself.
+// A successful End Transaction (RFC 5805 section 2.3): the updates' response
+// controls by message id, and the response's own controls.
 struct end_transaction_result
 {
 	std::pmr::vector<update_controls> updates_controls{};
 	std::pmr::vector<control> controls{};
 
-	// The response controls of the update whose request had `message_id`,
-	// null if the server returned none for it.
+	// Null if the server returned none for that update.
 	[[nodiscard]] auto find_update_controls(std::int32_t message_id) const noexcept
 	  -> const std::pmr::vector<control> *;
 };
 
 namespace detail {
-	// An operation's error context: "search ou=people,dc=example,dc=org",
-	// `search ""` for the root DSE. The DN is often the server's text (an
-	// entry's DN, a referral's): sanitized and cut at 256 bytes, as an
-	// entry's in decode errors.
+	// "search ou=people,dc=example,dc=org"; the DN sanitized and cut at 256 bytes.
 	[[nodiscard]] auto op_context(std::string_view op, const dn &d) -> std::string;
 }// namespace detail
 

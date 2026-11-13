@@ -1,12 +1,4 @@
-// Active Directory's security identifier (MS-DTYP 2.4.2): objectSid,
-// sIDHistory, tokenGroups.
-//
-//   struct ad_user {
-//       std::string sam_account_name;
-//       ldap::ad::sid object_sid;
-//   };
-//   std::string text = u.object_sid.to_string();   // "S-1-5-21-...-1104"
-//   auto admins = ldap::ad::sid::parse("S-1-5-32-544");
+// Active Directory's security identifier (MS-DTYP 2.4.2).
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -24,15 +16,8 @@
 
 namespace jhetz::ldap::ad {
 
-// A SID of revision 1: a 48-bit identifier authority and up to 15
-// sub-authorities. The default is S-1-0 (null authority, no
-// sub-authority).
-//
-// Binary form (MS-DTYP 2.4.2.2), the attribute value: Revision (1),
-// SubAuthorityCount, IdentifierAuthority in 6 octets big-endian, then each
-// SubAuthority in 4 octets little-endian.
-// String form (MS-DTYP 2.4.2.1): "S-1-", the authority (decimal below 2^32,
-// else "0x" and 12 hex digits), then "-" and each sub-authority in decimal.
+// A SID of revision 1: a 48-bit authority and up to 15 sub-authorities;
+// S-1-0 by default. Binary form MS-DTYP 2.4.2.2, string form 2.4.2.1.
 class sid
 {
   public:
@@ -41,14 +26,11 @@ class sid
 
 	sid() = default;
 
-	// The string form; "s-" and hex digits in either case. Anything else
-	// fails with client_errc::conversion_failed.
+	// conversion_failed unless a string form ("s-" and hex in either case).
 	[[nodiscard]] static auto parse(std::string_view text) -> result<sid>;
-	// The binary form, exactly 8 + 4 * SubAuthorityCount octets; anything
-	// else fails with client_errc::conversion_failed.
+	// conversion_failed unless exactly 8 + 4 * SubAuthorityCount octets.
 	[[nodiscard]] static auto from_binary(std::string_view raw) -> result<sid>;
-	// std::errc::invalid_argument for an authority above
-	// max_identifier_authority or more than max_sub_authorities.
+	// std::errc::invalid_argument for an authority or count out of range.
 	[[nodiscard]] static auto make(std::uint64_t identifier_authority, std::span<const std::uint32_t> sub_authorities)
 	  -> result<sid>;
 
@@ -74,7 +56,7 @@ class sid
 
 namespace jhetz::ldap {
 
-// The binary form, on Octet String attributes (objectSid's syntax).
+// The binary form, on Octet String attributes.
 template<> struct value_traits<ad::sid>
 {
 	static constexpr std::array syntaxes{ syntax::octet_string };

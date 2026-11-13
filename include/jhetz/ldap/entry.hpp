@@ -1,4 +1,4 @@
-// Untyped search result entry (DESIGN.md section 4, "exploring unknown data").
+// Untyped search result entry (DESIGN.md section 4).
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"
@@ -12,9 +12,6 @@
 
 namespace jhetz::ldap {
 
-// Memory: attribute_values and entry are allocator-aware (std::pmr), like the
-// message model: a plain copy uses the default resource, the
-// allocator-extended copy the given one, assignment keeps the target's.
 struct attribute_values
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -44,9 +41,8 @@ struct attribute_values
 	friend auto operator==(const attribute_values &, const attribute_values &) -> bool = default;
 };
 
-// DN text plus attributes in the order the server sent them. The DN is kept
-// as text (servers may send DNs ldap::dn::parse rejects); attribute names are
-// kept as sent (attribute::unchecked), compared case-insensitively.
+// DN text plus attributes in the order the server sent them, names kept as
+// sent.
 struct entry
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -68,20 +64,16 @@ struct entry
 
 	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return dn.get_allocator(); }
 
-	// Values of `type` (case-insensitive, options included: `cn;lang-en` is
-	// not `cn`, and options compare as a set, RFC 4512 2.5: `a;x;y` is
-	// `a;y;x`), or nullptr if the entry has no such attribute. An attribute
-	// present without values (typesOnly searches) gives an empty vector.
+	// Values of `type` (case-insensitive, options compared as a set), or
+	// nullptr.
 	[[nodiscard]] auto find(std::string_view type) const noexcept -> const std::pmr::vector<std::pmr::string> *;
 	[[nodiscard]] auto find(const attribute &type) const noexcept -> const std::pmr::vector<std::pmr::string> *
 	{
 		return find(type.name());
 	}
 
-	// Attributes with the same description (compared case-insensitively) are
-	// merged, keeping the first spelling and the order of first appearance.
-	// The entry takes the strings of `e` and is allocated from e's resource
-	// (so an entry made from a message decoded into an arena lives in it too).
+	// Takes the strings of `e`, on its resource; merges attributes with the
+	// same description.
 	[[nodiscard]] static auto from(search_result_entry e) -> entry;
 
 	friend auto operator==(const entry &, const entry &) -> bool = default;

@@ -1,15 +1,5 @@
-// Restricted BER codec used by LDAP (RFC 4511 section 5.1).
-//
-// Only what LDAP needs: definite lengths, low tag numbers (0..30), and the
-// universal types BOOLEAN, INTEGER, OCTET STRING, NULL, ENUMERATED, SEQUENCE
-// and SET. The decoder is written for untrusted input: it never reads out of
-// bounds, never recurses (callers recurse through `enter`, which is depth
-// bounded), and never allocates based on a length it has not checked against
-// the bytes actually present.
-//
-// `reader` and `element` are non-owning views into a caller-owned buffer and
-// are internal building blocks (DESIGN.md section 8): nothing built on them
-// may hand such a view to the user.
+// Restricted BER codec used by LDAP (RFC 4511 section 5.1), safe on
+// untrusted input (docs/API.md, "jhetz/ldap/ber.hpp").
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -27,9 +17,7 @@
 
 namespace jhetz::ldap::detail {
 
-// The bytes as text, without copying (char may alias any object). For BER
-// payloads that hold strings: LDAPString, OCTET STRING values, encoded
-// control values.
+// The bytes as text, without copying.
 [[nodiscard]] inline auto as_text(std::span<const std::byte> b) noexcept -> std::string_view
 {
 	return { reinterpret_cast<const char *>(b.data()), b.size() };
@@ -41,13 +29,10 @@ namespace jhetz::ldap::ber {
 
 enum class tag_class : std::uint8_t { universal = 0, application = 1, context = 2, private_ = 3 };
 
-// Highest tag number the low-tag-number form can carry. 31 means "high tag
-// number form follows", which LDAP never needs and this codec rejects.
+// Highest low-form tag number; 31 (high form) is rejected.
 inline constexpr std::uint8_t max_tag_number = 30;
 
-// The identifier octet's fields (X.690 section 8.1.2): the class in bits
-// 8-7, the constructed flag in bit 6, the tag number in bits 5-1 (all ones
-// for the high-tag-number form).
+// The identifier octet's fields (X.690 section 8.1.2).
 inline constexpr unsigned identifier_class_shift = 6;
 inline constexpr unsigned identifier_constructed_bit = 0x20u;
 inline constexpr unsigned identifier_number_mask = 0x1Fu;
@@ -61,8 +46,7 @@ struct tag
 	friend constexpr auto operator==(tag, tag) -> bool = default;
 };
 
-// Builds a tag, checking the number. Throws std::invalid_argument for numbers
-// above 30 (a programming error; in a constant expression it fails to compile).
+// Throws std::invalid_argument for numbers above 30.
 [[nodiscard]] constexpr auto make_tag(tag_class cls, std::uint8_t number, bool constructed = false) -> tag
 {
 	if (number > max_tag_number) {
@@ -98,9 +82,7 @@ namespace tags {
 	inline constexpr tag set = universal(17, true);
 }// namespace tags
 
-// The single identifier octet for `t`. Throws std::invalid_argument for tag
-// numbers above 30 (a compile error in constant expressions), which would
-// otherwise be silently turned into the high-tag-number marker 0x1F.
+// Throws std::invalid_argument for tag numbers above 30.
 [[nodiscard]] constexpr auto identifier_octet(tag t) -> std::byte
 {
 	if (t.number > max_tag_number) {
@@ -111,25 +93,13 @@ namespace tags {
 								  | (t.number & identifier_number_mask));
 }
 
-// Human readable form, e.g. "[UNIVERSAL 16 constructed]", for error context.
+// "[UNIVERSAL 16 constructed]", for error contexts.
 [[nodiscard]] auto to_string(tag t) -> std::string;
 
 // ---------------------------------------------------------------- encoder
 
-// Appends BER elements to an internal buffer.
-//
-// The primitive/constructed bit of the emitted identifier is decided by the
-// method, not by the `constructed` flag of the tag passed in: `constructed()`
-// always sets it, every other method always clears it. This lets callers write
-// `w.constructed(ber::context(0), ...)` without repeating the flag.
-//
-// Tags with a number above 30 cannot be encoded and throw
-// std::invalid_argument (only reachable by aggregate-initialising a `tag`).
-//
-// Memory: the buffer is a std::pmr::vector on the resource given to the
-// constructor (default: the default resource), so it can live in an arena or
-// be reused: clear() keeps its capacity. Like any pmr container, a copy uses
-// the default resource and assignment keeps the target's resource.
+// Appends BER elements to a pmr buffer; the method decides the constructed
+// bit.
 class writer
 {
   public:
@@ -141,10 +111,10 @@ class writer
 	writer(writer &&) noexcept = default;
 	writer(const writer &other, const allocator_type &alloc) : buf_(other.buf_, alloc) {}
 	writer(writer &&other, const allocator_type &alloc) : buf_(std::move(other.buf_), alloc) {}
-	// Assigning replaces the buffer, so it counts as a reset (see constructed()).
+	// Counts as a reset.
 	auto operator=(const writer &other) -> writer &
 	{
-		if (this == &other) {// the buffer is unchanged: not a reset
+		if (this == &other) {// not a reset
 			return *this;
 		}
 		buf_ = other.buf_;
@@ -171,10 +141,8 @@ class writer
 	void null(tag t = tags::null);
 	void primitive(tag t, std::span<const std::byte> content);
 
-	// Writes the identifier, runs `body(*this)` to append the contents, then
-	// fills in the minimal definite length. If `body` or the length fix-up
-	// throws, the partial element is removed. `body` must only append: calling
-	// clear() or take() on this writer inside it throws std::logic_error.
+	// Writes the identifier, appends `body(*this)`, then the minimal length.
+	// The partial element is removed if `body` throws.
 	template<class F> void constructed(tag t, F &&body)
 	{
 		const std::size_t resets = resets_;
@@ -188,17 +156,15 @@ class writer
 		}
 	}
 
-	// Capacity for at least `n` bytes in all (like std::vector::reserve).
 	void reserve(std::size_t n) { buf_.reserve(n); }
 
 	[[nodiscard]] auto bytes() const noexcept -> const std::pmr::vector<std::byte> & { return buf_; }
-	// Moves the encoded bytes out (on the writer's resource) and leaves the
-	// writer empty, still on the same resource.
+	// Moves the bytes out and leaves the writer empty, on the same resource.
 	[[nodiscard]] auto take() noexcept -> std::pmr::vector<std::byte>
 	{
 		++resets_;
 		std::pmr::vector<std::byte> out(std::move(buf_));
-		buf_.clear();// valid but unspecified after the move: make it empty
+		buf_.clear();// valid but unspecified after the move
 		return out;
 	}
 	void clear() noexcept
@@ -216,7 +182,7 @@ class writer
 	void check_mark(std::size_t mark, std::size_t resets) const;
 
 	std::pmr::vector<std::byte> buf_{};
-	std::size_t resets_ = 0;// bumped by clear()/take(), to detect misuse inside constructed()
+	std::size_t resets_ = 0;// bumped by clear()/take()
 };
 
 // Appends the minimal definite length encoding of `length` to `out`.
@@ -228,37 +194,14 @@ struct element
 {
 	tag t{};
 	std::span<const std::byte> content{};// view into the reader's buffer
-	std::size_t offset = 0;// absolute offset of the identifier octet
+	std::size_t offset = 0;// of the identifier octet
 	std::size_t header_size = 0;// identifier + length octets
 
 	[[nodiscard]] auto size() const noexcept -> std::size_t { return header_size + content.size(); }
 };
 
-// Sequential decoder over a caller-owned buffer.
-//
-// Decoding choices (leniency toward servers, strictness where it matters for
-// safety):
-// - Lengths: definite form only. Indefinite length (0x80) is rejected; long
-//   form with more than 4 length octets is rejected; non-minimal length
-//   encodings (e.g. 81 05) are accepted.
-// - BOOLEAN: content must be exactly 1 octet; any non-zero value is true
-//   (BER), not only 0xFF (DER).
-// - INTEGER / ENUMERATED: empty content is rejected; more than 8 content
-//   octets fail with integer_overflow, even if a redundant leading 00/FF
-//   would make the value fit; non-minimal encodings of up to 8 octets
-//   (e.g. 00 7F) are accepted.
-// - NULL: content must be empty.
-// - Typed reads compare class and number with the expected tag and require
-//   the primitive form (constructed form for `enter`), regardless of the
-//   expected tag's `constructed` flag.
-//
-// Every operation either succeeds and advances, or fails and leaves the reader
-// unchanged. Error contexts include the absolute byte offset of the problem.
-//
-// A reader (and every span or sub-reader it returns) only borrows the buffer:
-// it must not outlive it. `reader r(make_vector());` dangles immediately.
-// To decode BER nested in a value, use `enter_encapsulated` rather than a
-// fresh reader over element::content, so depth and offsets carry over.
+// Sequential decoder over a caller-owned buffer, which it must not outlive.
+// Each operation succeeds and advances, or fails and leaves it unchanged.
 class reader
 {
   public:
@@ -270,43 +213,32 @@ class reader
 
 	[[nodiscard]] auto empty() const noexcept -> bool { return pos_ == data_.size(); }
 	[[nodiscard]] auto remaining() const noexcept -> std::size_t { return data_.size() - pos_; }
-	// Absolute offset of the next byte, counted from the start of the
-	// outermost reader's buffer.
+	// Absolute offset of the next byte.
 	[[nodiscard]] auto offset() const noexcept -> std::size_t { return base_ + pos_; }
-	// Number of `enter` calls between the outermost reader and this one.
 	[[nodiscard]] auto depth() const noexcept -> std::size_t { return depth_; }
 	[[nodiscard]] auto max_depth() const noexcept -> std::size_t { return max_depth_; }
 
 	[[nodiscard]] auto peek_tag() const -> result<tag>;
-	// Reads the next element of any tag.
 	[[nodiscard]] auto read() -> result<element>;
-	// Reads the next element; fails with unexpected_tag unless its class and
-	// number match `expected`. Like the typed reads, the constructed bit of
-	// `expected` is ignored; the returned element carries the real one.
+	// unexpected_tag unless class and number match `expected`.
 	[[nodiscard]] auto read(tag expected) -> result<element>;
 
 	[[nodiscard]] auto read_boolean(tag t = tags::boolean) -> result<bool>;
 	[[nodiscard]] auto read_integer(tag t = tags::integer) -> result<std::int64_t>;
 	[[nodiscard]] auto read_enumerated(tag t = tags::enumerated) -> result<std::int64_t>;
 	[[nodiscard]] auto read_octet_string(tag t = tags::octet_string) -> result<std::span<const std::byte>>;
-	// Same as read_octet_string, copied into a string allocated from `mr`
-	// (the only allocation any reader operation makes, apart from errors).
+	// read_octet_string copied into a string on `mr`.
 	[[nodiscard]] auto read_string(tag t = tags::octet_string,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::pmr::string>;
 	[[nodiscard]] auto read_null(tag t = tags::null) -> result<void>;
 
-	// Reads a constructed element with class/number of `t` and returns a
-	// reader over its contents, one level deeper. Fails with
-	// nesting_too_deep when that would exceed max_depth().
+	// A reader over a constructed element's contents, one level deeper.
 	[[nodiscard]] auto enter(tag t = tags::sequence) -> result<reader>;
 
-	// Reads a primitive element with class/number of `t` (by default an
-	// OCTET STRING) whose content is itself BER, e.g. a control value or
-	// the paged-results cookie, and returns a reader over that content one
-	// level deeper, with the same depth limit as `enter` and absolute offsets.
+	// A reader over a primitive element whose content is itself BER.
 	[[nodiscard]] auto enter_encapsulated(tag t = tags::octet_string) -> result<reader>;
 
-	// Fails with decode_error if any bytes are left (trailing garbage).
+	// decode_error if any bytes are left.
 	[[nodiscard]] auto expect_end() const -> result<void>;
 
   private:
@@ -317,7 +249,6 @@ class reader
 		std::size_t content_size{};
 	};
 
-	// Private, called by reader only, in member order (base, depth, max_depth).
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	reader(std::span<const std::byte> data, std::size_t base, std::size_t depth, std::size_t max_depth) noexcept
 	  : data_(data), base_(base), depth_(depth), max_depth_(max_depth)
@@ -340,22 +271,13 @@ class reader
 
 inline constexpr std::size_t default_max_message_size = std::size_t{ 16 } * 1024 * 1024;
 
-// Size of the first complete element at the start of `buf`.
-// - nullopt: more bytes are needed (header or content incomplete);
-// - value:   total size (header + content) of the first element; bytes after
-//            it are ignored;
-// - error:   malformed header (unsupported_tag, decode_error), or a declared
-//            total size above `max_size` (message_too_large). Both are decided
-//            from the header alone, before any content has arrived.
-// Only the header is inspected; the content is not validated.
+// Size of the first complete element at the start of `buf`; nullopt while
+// incomplete; an error, from the header alone, for a malformed header or a
+// size above `max_size`.
 [[nodiscard]] auto complete_message_size(std::span<const std::byte> buf,
   std::size_t max_size = default_max_message_size) -> result<std::optional<std::size_t>>;
 
-// Total size (header + content) that the first element at the start of `buf`
-// declares, known as soon as its header is complete, whether or not the
-// content has arrived: nullopt while the header is incomplete; the same
-// errors as complete_message_size. Lets a reader size its buffer for the
-// whole element after reading only the header.
+// The total size the first element declares, once its header is complete.
 [[nodiscard]] auto declared_message_size(std::span<const std::byte> buf,
   std::size_t max_size = default_max_message_size) -> result<std::optional<std::size_t>>;
 

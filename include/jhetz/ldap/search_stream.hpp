@@ -1,50 +1,5 @@
-// ldap::search_stream: the entries of one search, read one at a time
-// (connection::search_stream). Part of jhetz::ldap_net.
-//
-//   auto s = co_await conn.search_stream({.base = base, .filter = f});
-//   if (!s) return s.error();
-//   while (true) {
-//       ldap::result<std::optional<ldap::entry>> e = co_await s->next();
-//       if (!e) return e.error();   // transport, protocol or server error
-//       if (!*e) break;             // SearchResultDone with success
-//       use(**e);
-//   }
-//
-// next_item() reads the same search message by message, in the order the
-// server sent them, each with its message's controls (RFC 4533's Sync State
-// control on every entry and reference, ...): a search_entry, a
-// search_reference, or an IntermediateResponse (RFC 4511 section 4.13: RFC
-// 4533's syncInfo, ...) when the search was sent with
-// search_params::intermediate_responses:
-//
-//   auto s = co_await conn.search_stream({.base = base, .intermediate_responses = true});
-//   ...
-//       ldap::result<std::optional<ldap::search_stream::item>> i = co_await s->next_item();
-//       if (!i) return i.error();
-//       if (!*i) break;
-//       if (auto *e = std::get_if<ldap::search_entry>(&**i)) use(*e, e->controls);
-//       else if (auto *r = std::get_if<ldap::search_reference>(&**i)) on_reference(r->uris, r->controls);
-//       else on_intermediate(std::get<ldap::intermediate>(**i));
-//
-// RFC 4533 content synchronization reads a search sent with a sync_request
-// control this way (content_sync.hpp decodes the controls and intermediates).
-// A refreshAndPersist search never ends by itself: send it with
-// search_params::timeout = ldap::no_timeout and stop it with a stop token or
-// by destroying the stream.
-//
-// Memory: entries are decoded into the search's resource and queued,
-// unbounded, until read; on a monotonic_buffer_resource a long-lived search
-// grows without bound, so use the default resource or a pool for it.
-// references() keeps every reference for the stream's life.
-//
-// next() and next_item() may be mixed: each reads the next message. next()
-// drops entry controls and intermediates; references go to references()
-// either way.
-//
-// Move-only. A default-constructed stream fails with
-// client_errc::not_connected. Do not destroy or move the stream while
-// next() or next_item() is suspended; a second call meanwhile fails with
-// client_errc::operation_in_progress.
+// ldap::search_stream: the entries (or, with next_item(), every message) of
+// one search, read one at a time (docs/API.md, connection.hpp section).
 #pragma once
 
 #include "jhetz/ldap/entry.hpp"
@@ -64,9 +19,7 @@ namespace jhetz::ldap {
 
 class connection;
 
-// A SearchResultEntry (RFC 4511 section 4.5.2) as an ldap::entry, with the
-// controls of its message. Allocator-aware like entry. Converting it to
-// an entry (slicing) drops the controls.
+// A SearchResultEntry (RFC 4511 section 4.5.2) with its message's controls.
 struct search_entry : entry
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -75,8 +28,7 @@ struct search_entry : entry
 
 	search_entry() = default;
 	explicit search_entry(const allocator_type &alloc) : entry(alloc), controls(alloc) {}
-	// Takes the strings of `e` and `controls_` when they are on `alloc`'s
-	// resource, else copies them onto it.
+	// Takes the strings when on `alloc`'s resource, else copies them onto it.
 	search_entry(entry e, std::pmr::vector<control> controls_, const allocator_type &alloc = {})
 	  : entry(std::move(e), alloc), controls(std::move(controls_), alloc)
 	{}
@@ -95,9 +47,8 @@ struct search_entry : entry
 	friend auto operator==(const search_entry &, const search_entry &) -> bool = default;
 };
 
-// A SearchResultReference (RFC 4511 section 4.5.3): its URIs as sent, with
-// the controls of its message. Allocator-aware like the message model.
-// Converting it to a search_result_reference (slicing) drops the controls.
+// A SearchResultReference (RFC 4511 section 4.5.3) with its message's
+// controls.
 struct search_reference : search_result_reference
 {
 	using allocator_type = std::pmr::polymorphic_allocator<>;
@@ -106,8 +57,7 @@ struct search_reference : search_result_reference
 
 	search_reference() = default;
 	explicit search_reference(const allocator_type &alloc) : search_result_reference(alloc), controls(alloc) {}
-	// Takes the strings of `r` and `controls_` when they are on `alloc`'s
-	// resource, else copies them onto it.
+	// Takes the strings when on `alloc`'s resource, else copies them onto it.
 	search_reference(search_result_reference r, std::pmr::vector<control> controls_, const allocator_type &alloc = {})
 	  : search_result_reference(std::move(r), alloc), controls(std::move(controls_), alloc)
 	{}
@@ -137,37 +87,21 @@ class search_stream
 	// Unfinished: the search is abandoned.
 	~search_stream();
 
-	// The next entry, nullopt at the end (SearchResultDone with success), or
-	// an error: the server's result code (the connection stays usable), a
-	// cancellation or timeout (the search is abandoned, the connection stays
-	// usable) or a connection failure. After the end or an error, next()
-	// returns the same again without I/O. Drops the controls of the entries;
-	// references go to references(), IntermediateResponses are skipped.
+	// The next entry, nullopt at the end, or an error; then the same again.
 	auto next() -> boost::capy::task<result<std::optional<entry>>>;
 
-	// What next_item() yields: one search message with its controls, decoded
-	// into the search's memory resource. An intermediate only when the
-	// search was sent with search_params::intermediate_responses.
-	// std::variant is not allocator-aware: a std::pmr::vector<item> does not
-	// propagate its resource, and copies land on the default resource.
+	// One search message with its controls.
 	using item = std::variant<search_entry, search_reference, intermediate>;
-	// As next(), but yields every message before the SearchResultDone, in
-	// the order received: entries and references with their controls, and
-	// the IntermediateResponses if asked for. A reference is also appended
-	// to references(), so that holds every reference whichever call read it.
+	// As next(), every message before the SearchResultDone, in order.
 	auto next_item() -> boost::capy::task<result<std::optional<item>>>;
 
-	// True once the SearchResultDone (or an error) was read.
 	[[nodiscard]] auto done() const noexcept -> bool;
-	// URIs of the SearchResultReference messages read so far (by next() or
-	// next_item()), in order, as sent (one string per URI). They are not
-	// chased; reference_urls() parses them.
+	// URIs of the references read so far, as sent; not chased.
 	[[nodiscard]] auto references() const noexcept -> const string_list &;
 	// references() parsed as LDAP URLs; URIs that do not parse are left out.
 	[[nodiscard]] auto reference_urls(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
 	  -> std::pmr::vector<url>;
-	// Controls of the SearchResultDone (e.g. paged results, or the sort
-	// result: find_sort_result()), once done().
+	// Controls of the SearchResultDone, once done().
 	[[nodiscard]] auto controls() const noexcept -> const std::pmr::vector<control> &;
 
 	struct state;// defined in src/connection/search.hpp

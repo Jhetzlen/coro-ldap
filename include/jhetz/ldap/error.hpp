@@ -13,18 +13,8 @@
 
 namespace jhetz::ldap {
 
-// RFC 4511 resultCode values (section 4.1.9 and Appendix A), numbers kept
-// exactly so that `std::to_underlying(errc::invalid_credentials) == 49`.
-//
-// `success` (0) is deliberately not an enumerator: a std::error_code with
-// value 0 means "no error", so a successful LDAP result is represented by the
-// absence of an ldap::error, never by an error_code: the message layer maps
-// resultCode 0 to a value, not an error. The category still describes value
-// 0 as "success" for completeness.
-//
-// Some codes are not failures in every context (compare_false, compare_true,
-// referral, sasl_bind_in_progress); they are listed so every resultCode a
-// server can send has a name. Higher layers decide which ones become errors.
+// RFC 4511 resultCode values (section 4.1.9 and Appendix A), numbers kept.
+// No success (0): a successful result is the absence of an error.
 enum class errc : int {
 	operations_error = 1,
 	protocol_error = 2,
@@ -69,22 +59,17 @@ enum class errc : int {
 	object_class_mods_prohibited = 69,
 	// 70 reserved for CLDAP
 	affects_multiple_dsas = 71,
-	// 72-75 and 77-79 unused (76, virtual_list_view_error, is an extension's, below)
+	// 72-75 and 77-79 unused
 	other = 80,
-	// Codes defined by extensions (RFC 4520 IANA registry)
-	// draft-ietf-ldapext-ldapv3-vlv-09 section 6.2.1: the search failed
-	// because of its virtual_list_view control; the VLV response control
-	// (find_vlv_response) says why.
+	// Codes defined by extensions (RFC 4520 IANA registry):
+	// draft-ietf-ldapext-ldapv3-vlv-09 section 6.2.1.
 	virtual_list_view_error = 76,
-	assertion_failed = 122,// RFC 4528: the assertion control's filter did not match
-	// RFC 4533 section 3.8: the server cannot continue the sync search; resend
-	// it with the cookie of the result's Sync Done control (find_sync_done),
-	// or with no cookie (a full reload) if there is none.
+	assertion_failed = 122,// RFC 4528
+	// RFC 4533 section 3.8
 	e_sync_refresh_required = 4096,
 };
 
-// Failures detected by the client itself. Values start at 1 (0 is "no
-// error"); new values are only ever appended so existing numbers stay stable.
+// Failures detected by the client itself; values are only ever appended.
 enum class client_errc : int {
 	decode_error = 1,// malformed BER / protocol data
 	message_too_large,// declared size exceeds the configured maximum
@@ -107,56 +92,32 @@ enum class client_errc : int {
 	not_connected,// connection closed (unbind, close, or an earlier failure)
 	operation_in_progress,// the connection is busy with another operation or an open search_stream
 	unauthenticated_bind,// simple bind with a name and an empty password (RFC 4513 section 5.1.2)
-	tls_required,// refused on a connection without TLS (channel binding; an AD password change without a SASL
-				 // confidentiality layer either)
+	tls_required,// refused on a connection without TLS (or a SASL confidentiality layer)
 	gssapi_failure,// a GSS-API (Kerberos) call failed during a SASL GSSAPI bind
 	security_layer_required,// the server requires a SASL security layer (integrity, confidentiality)
 	internal_error,// a library the client uses failed (OpenSSL, ICU), not the caller's input
 	string_prep_failed,// RFC 4518 string preparation refused the value (ill-formed UTF-8, prohibited code point)
-	// The connection closed (or was closed) before the request was handed to
-	// its writer: the server never saw it, so even an update may be retried
-	// on another connection. Matches cond::connection_lost, like
-	// not_connected.
+	// The connection closed before the request reached its writer: the server
+	// never saw it. Matches cond::connection_lost.
 	not_sent,
-	// The server does not offer the SASL security layer asked for
-	// (sasl_gssapi_options::security_layer, sasl_ntlm_options::
-	// security_layer), or it cannot be used here (NTLM's over TLS). Matches
-	// cond::access_denied.
+	// The SASL security layer asked for is not offered, or not usable here.
+	// Matches cond::access_denied.
 	security_layer_unavailable,
-	// Refused while a SASL security layer is in effect: StartTLS (TLS would
-	// have to go below the layer, RFC 4513 section 5.2.1.6), or a second
-	// layer. Matches no condition.
+	// Refused while a SASL security layer is in effect. Matches no condition.
 	security_layer_in_effect,
-	// repository::update with a naming member that differs from the original's:
-	// the entry would need a new DN (repository::rename). Matches
+	// repository::update with a changed naming member. Matches
 	// cond::invalid_input.
 	naming_value_changed,
-	// decode<T> on an entry holding a mapped attribute with a range option
-	// (Active Directory's member;range=0-1499): the entry has only part of
-	// its values (ldap::ad::read_all_values reads them all). Matches no
-	// condition.
+	// decode<T> on an entry with a ranged attribute (AD's member;range=0-1499).
+	// Matches no condition.
 	incomplete_values,
-	// repository::update_if with its default guard, schema_check on, on a struct
-	// with a writable member whose attribute has no EQUALITY rule: an
-	// assertion on it is always Undefined (RFC 4511 section 4.5.1.7), so
-	// the server would answer assertionFailed every time. Matches
+	// update_if's default guard on a member without an EQUALITY rule. Matches
 	// cond::invalid_input.
 	no_equality_rule,
 };
 
-// Error conditions: what an error means, across categories (DESIGN.md
-// section 5), so callers test meaning rather than exact codes:
-//
-//   if (r.error().code == ldap::cond::auth_failed) ...
-//
-// Each code maps to at most one condition; codes with no clear meaning for
-// a caller (size_limit_exceeded, referral, other, ...) match none. The full
-// table is in DESIGN.md section 5. Codes from outside this library are
-// matched too: system codes through their generic condition
-// (std::errc::timed_out, connection_reset, ...), Capy's by category name
-// ("boost.capy": eof, stream_truncated; canceled and timeout through their
-// generic conditions) and TLS errors by category ("corosio.openssl"), so
-// this header needs neither Capy nor Corosio.
+// Error conditions: what an error means across categories, Capy, system
+// and TLS codes included (table: DESIGN.md section 5).
 enum class cond : int {
 	not_found = 1,// the entry (or attribute) does not exist
 	auth_failed,// bad credentials, or an authentication method refused
@@ -191,35 +152,18 @@ auto cond_category() noexcept -> const std::error_category &;// "ldap.cond"
 }
 
 // An error: its code plus what the server and the client said about it.
-//
-// Memory (DESIGN.md section 8): the strings are std::pmr containers, but error
-// is deliberately not allocator-aware (no allocator_type). The library always
-// builds errors on the default resource, never on a caller's arena, even when
-// it fails while decoding into one: errors travel up the call stack and into
-// logs, often after the arena of the failed operation was released, so they
-// must not depend on it. Copies use the default resource too, as for any pmr
-// container. Errors are the cold path, so the extra allocations do not matter.
+// Not allocator-aware: always on the default resource.
 struct error
 {
 	std::error_code code{};
 	std::pmr::string diagnostic{};// server's diagnosticMessage, if any
-	// matched_dn and referrals stay text, exactly as the server sent them
-	// (DESIGN.md section 5): a server's matchedDN or referral URI may not
-	// parse as ldap::dn / ldap::url, and an error must not lose it or fail to
-	// be built. Parse on demand with dn::parse / url::parse. (dn.hpp and
-	// url.hpp also depend on this header for result<T>.)
+	// Kept as text, exactly as the server sent them.
 	std::optional<std::pmr::string> matched_dn{};// server's matchedDN, if any
 	std::pmr::vector<std::pmr::string> referrals{};// from a referral result
 	std::pmr::string context{};// client-side path, e.g. "ber: integer at offset 12"
 
-	// Everything above, human readable, on one line. The server's text
-	// (diagnostic, matched_dn, referrals) is shown sanitized, so a hostile
-	// server cannot break the line or change how a log or terminal displays
-	// it: valid UTF-8 is kept; control characters (C0, DEL, C1), bidi
-	// controls, U+2028/U+2029 and ill-formed UTF-8 become U+FFFD; each string
-	// is cut at 256 bytes on a character boundary ("..." marks the cut), and
-	// at most 8 referrals are listed. The fields above keep the text exactly
-	// as the server sent it.
+	// Everything above on one line, the server's text sanitized and cut at 256
+	// bytes, at most 8 referrals.
 	[[nodiscard]] auto message(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
 	  -> std::pmr::string;
 
@@ -228,7 +172,6 @@ struct error
 
 template<class T> using result = std::expected<T, error>;
 
-// Builds an error carrying only a code and a client-side context string.
 [[nodiscard]] inline auto make_error(std::error_code code, std::string_view context = {}) -> error
 {
 	error e;
@@ -244,8 +187,7 @@ template<class T> using result = std::expected<T, error>;
 }
 
 namespace detail {
-	// `e` with `prefix` in front of its context ("prefix: context", or just
-	// "prefix" for an empty one).
+	// `e` with "prefix: " in front of its context.
 	[[nodiscard]] auto with_context(error e, std::string_view prefix) -> error;
 }// namespace detail
 

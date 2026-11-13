@@ -1,23 +1,6 @@
 // Matching rules (RFC 4517 section 4.2) with LDAP string preparation
-// (LDAPprep, RFC 4518), DESIGN.md section 1.
-//
-//   ldap::case_ignore_match("Strau\u00DF  Johann", "STRAUSS johann")   // true_value
-//   ldap::match("caseExactMatch", "Jane", "jane")                      // false_value
-//   ldap::distinguished_name_match(ldap::dn{"CN=Jane Doe,DC=Example"},
-//     ldap::dn{"cn=jane  doe,dc=example"})                             // true_value
-//
-// dn's operator== stays byte-exact after unescaping; these functions are the
-// explicit, server-like comparison. Every matching rule evaluates to
-// TRUE, FALSE or Undefined (RFC 4511 section 4.5.1.7, RFC 4517 section 4.1):
-// a value that fails preparation (ill-formed UTF-8, a prohibited or
-// unassigned code point, RFC 4518 section 2) or that is not of the rule's
-// assertion syntax makes the match Undefined, never FALSE.
-//
-// Values are UTF-8 (the LDAP-specific encoding of Directory String, RFC 4517
-// section 3.3.6). The character repertoire is Unicode 3.2, as RFC 4518
-// section 2 requires: code points assigned later are unassigned there, so a
-// value holding one (an emoji, U+1E9E) makes the match Undefined, as it does
-// on servers that follow RFC 4518.
+// (LDAPprep, RFC 4518). A value that fails preparation or is not of the
+// rule's assertion syntax makes the match Undefined, never FALSE.
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"
@@ -38,68 +21,40 @@ namespace jhetz::ldap {
 
 class server_schema;
 
-// The result of a matching rule: TRUE, FALSE or Undefined (RFC 4511 section
-// 4.5.1.7). Not a bool on purpose: Undefined is neither, and a filter's NOT
-// of Undefined is Undefined.
+// TRUE, FALSE or Undefined (RFC 4511 section 4.5.1.7).
 enum class match_result : std::uint8_t { false_value, true_value, undefined };
 
 // ---------------------------------------------------------------- LDAPprep
 
-// RFC 4518 section 2.6: the Insignificant Character Handling step, which the
-// matching rule chooses.
+// RFC 4518 section 2.6: the Insignificant Character Handling step.
 enum class insignificant_handling : std::uint8_t {
 	space,// section 2.6.1: case ignore and case exact rules
 	numeric_string,// section 2.6.2: every space removed
 	telephone_number,// section 2.6.3: every space and hyphen removed
 };
 
-// What is being prepared (RFC 4518 section 2.6.1 treats them differently): an
-// attribute value or a non-substring assertion value, or one substring of a
-// substring assertion.
+// An attribute or assertion value, or one substring of a substring assertion
+// (RFC 4518 section 2.6.1).
 enum class prep_input : std::uint8_t { value, initial_substring, any_substring, final_substring };
 
 struct prep_options
 {
-	// Map step (section 2.2): case fold per RFC 3454 table B.2 (case ignore
-	// rules, telephoneNumber), or not (case exact rules, numericString).
+	// Map step (section 2.2): case fold per RFC 3454 table B.2.
 	bool case_fold = false;
 	insignificant_handling handling = insignificant_handling::space;
 	prep_input input = prep_input::value;
 };
 
-// RFC 4518 string preparation of a UTF-8 string, the result in UTF-8:
-//   2.1 Transcode: the UTF-8 is decoded; ill-formed UTF-8 fails.
-//   2.2 Map: soft hyphens, joiners, variation selectors, controls and other
-//       format characters to nothing; tabs, line breaks and every other
-//       separator to SPACE; with case_fold, table B.2 case folding (so U+00DF
-//       becomes "ss" and U+0130 becomes "i" + U+0307, whatever the locale).
-//   2.3 Normalize: NFKC (U+FB01 is "fi", "e" + U+0301 is U+00E9).
-//   2.4 Prohibit: code points unassigned in Unicode 3.2, private use,
-//       non-characters, surrogates, display-changing or deprecated
-//       characters (table C.8) and U+FFFD fail.
-//   2.5 Check bidi: nothing (bidirectional characters are ignored).
-//   2.6 Insignificant Character Handling, per `options`: for space handling
-//       (2.6.1), a value with no non-space character becomes exactly two
-//       SPACEs, otherwise it starts and ends with exactly one SPACE and each
-//       inner run of spaces is exactly two ("foo bar  " becomes
-//       " foo  bar "); substrings follow 2.6.1 as amended by errata 1757 and
-//       1758. A SPACE followed by a combining mark (RFC 4518 Appendix A) is
-//       not a space (so preparing a prepared value that starts with a
-//       combining mark adds a SPACE: " " + mark is no longer a space).
-// Fails with client_errc::string_prep_failed (the context names the step)
-// for input that cannot be prepared or is too long to (over about 13 MB:
-// ICU counts in int32_t and NFKC can expand a code point 18 times), and with
-// client_errc::internal_error if ICU itself fails. The context never quotes
-// the value.
+// RFC 4518 string preparation (transcode, map, NFKC, prohibit, bidi,
+// insignificant character handling) of a UTF-8 string, to UTF-8. Fails with
+// string_prep_failed, the context naming the step, never the value.
 [[nodiscard]] auto prepare_string(std::string_view value,
   const prep_options &options = {},
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::pmr::string>;
 
 // ---------------------------------------------------------------- rules
 
-// A substring assertion (RFC 4511 SubstringFilter, RFC 4517 section 3.3.30):
-// `initial*any[0]*...*final`. An empty initial or final is absent; empty
-// `any` parts are skipped (an LDAP substring is never empty).
+// A substring assertion (RFC 4517 section 3.3.30): `initial*any[0]*...*final`.
 struct substring_assertion
 {
 	std::string_view initial{};
@@ -108,9 +63,6 @@ struct substring_assertion
 };
 
 // Equality rules: TRUE if the prepared values are the same code points.
-// caseIgnoreMatch (2.5.13.2) and caseExactMatch (2.5.13.5) take Directory
-// String values. The IA5 rules take IA5 String values (RFC 4517 section
-// 3.3.15: octets 0x00-0x7F); any other octet makes them Undefined.
 [[nodiscard]] auto case_ignore_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
 [[nodiscard]] auto case_exact_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result;
@@ -118,21 +70,13 @@ struct substring_assertion
   -> match_result;
 [[nodiscard]] auto case_exact_ia5_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
-// caseIgnoreMatch and caseExactMatch (and their ordering and substrings
-// rules) take Directory String values, 1*UTF8: an empty value is Undefined,
-// while a value of spaces only is valid (it prepares to two SPACEs).
-// numericStringMatch (2.5.13.8): spaces ignored; Undefined unless each value
-// is a Numeric String as given (ASCII digits and spaces, not empty: RFC 4517
-// section 3.3.23, so a fullwidth digit is not one).
 [[nodiscard]] auto numeric_string_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
-// telephoneNumberMatch (2.5.13.20): case ignored, spaces and hyphens ignored;
-// an empty value is Undefined.
 [[nodiscard]] auto telephone_number_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
 
-// Ordering rules: TRUE if the prepared attribute value comes before the
-// prepared assertion value in code point order ("less than").
+// Ordering rules: TRUE if the prepared attribute value is less than the
+// prepared assertion value, in code point order.
 [[nodiscard]] auto case_ignore_ordering_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
 [[nodiscard]] auto case_exact_ordering_match(std::string_view attribute_value, std::string_view assertion_value)
@@ -140,11 +84,8 @@ struct substring_assertion
 [[nodiscard]] auto numeric_string_ordering_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
 
-// Substrings rules: TRUE if the prepared substrings match disjoint portions
-// of the prepared value in order, initial at its start, final at its end.
-// An assertion with no substring at all matches any value that prepares.
-// Each substring is checked against the rule's syntax as given (a
-// numericString substring is ASCII digits and spaces). Linear time.
+// Substrings rules: the substrings match disjoint portions of the value, in
+// order. Linear time.
 [[nodiscard]] auto case_ignore_substrings_match(std::string_view attribute_value, const substring_assertion &assertion)
   -> match_result;
 [[nodiscard]] auto case_exact_substrings_match(std::string_view attribute_value, const substring_assertion &assertion)
@@ -156,13 +97,7 @@ struct substring_assertion
 [[nodiscard]] auto telephone_number_substrings_match(std::string_view attribute_value,
   const substring_assertion &assertion) -> match_result;
 
-// Rules without string preparation. octetStringMatch (2.5.13.17) and
-// octetStringOrderingMatch (2.5.13.18) compare octets; integerMatch
-// (2.5.13.14) and integerOrderingMatch (2.5.13.15) take the Integer syntax
-// (RFC 4517 section 3.3.16: no leading zero, no "-0", any magnitude);
-// booleanMatch (2.5.13.13) takes "TRUE" or "FALSE", in any case (RFC 4517
-// section 3.3.3 is ABNF, whose quoted strings are case-insensitive). A
-// value not of the syntax makes them Undefined.
+// Rules without string preparation.
 [[nodiscard]] auto octet_string_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
 [[nodiscard]] auto octet_string_ordering_match(std::string_view attribute_value, std::string_view assertion_value)
@@ -172,93 +107,46 @@ struct substring_assertion
   -> match_result;
 [[nodiscard]] auto boolean_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result;
 
-// objectIdentifierMatch (2.5.13.0, RFC 4517 section 4.2.26): TRUE if both
-// values name the same OID. Values are of the OID syntax (RFC 4512 section
-// 1.4: a numericoid such as "2.5.4.3", no leading zeros, or a descriptor
-// such as "cn", ASCII case-insensitive). A descriptor is resolved to its
-// OID through the schema, then through the names RFC 4512 and RFC 4519
-// define (attribute types such as `cn`, `commonName`, `objectClass`;
-// object classes such as `top`, `person`, `groupOfNames`). In both steps an
-// attribute type comes first: a descriptor that names both an attribute
-// type and an object class resolves to the attribute type's OID.
-// Undefined if a value is not of the syntax, or if either value is a
-// descriptor nothing resolves, even compared with itself (RFC 4517: a
-// descriptor that is not recognized makes the rule Undefined).
+// objectIdentifierMatch (RFC 4517 section 4.2.26); a descriptor is resolved
+// through the schema, then RFC 4512 and RFC 4519 names.
 [[nodiscard]] auto object_identifier_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
 [[nodiscard]] auto object_identifier_match(std::string_view attribute_value,
   std::string_view assertion_value,
   const server_schema &schema) -> match_result;
 
-// bitStringMatch (2.5.13.16, RFC 4517 section 4.2.1) on the Bit String
-// syntax (section 3.3.2: `'0101'B`, the "B" in either case): the same bits,
-// the same number of them (the syntax has no named bit list).
+// bitStringMatch (RFC 4517 section 4.2.1).
 [[nodiscard]] auto bit_string_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result;
 
-// uniqueMemberMatch (2.5.13.23, RFC 4517 section 4.2.31) on the Name And
-// Optional UID syntax (section 3.3.21: an RFC 4514 DN, then optionally "#"
-// and a Bit String, `cn=Jane,o=Test#'0101'B`): the DNs match by
-// distinguishedNameMatch (as distinguished_name_match(a, b), or with the
-// schema's rules), and either neither value has a UID or both have the
-// same one (bitStringMatch). FALSE if either part is FALSE (a UID on one
-// side only is FALSE), else Undefined if the DNs compare Undefined. The DN
-// may hold "#" itself, unescaped: a value ending in "#" and a Bit String
-// whose text before the "#" parses as a DN has a UID (the last "#").
+// uniqueMemberMatch (RFC 4517 section 4.2.31): `cn=Jane,o=Test#'0101'B`.
 [[nodiscard]] auto unique_member_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
 [[nodiscard]] auto unique_member_match(std::string_view attribute_value,
   std::string_view assertion_value,
   const server_schema &schema) -> match_result;
 
-// generalizedTimeMatch (2.5.13.27) and generalizedTimeOrderingMatch
-// (2.5.13.28), RFC 4517 sections 4.2.16 and 4.2.17, on the Generalized Time
-// syntax (section 3.3.13: `199412160532-0500`, minutes and seconds
-// optional, a fraction of the last unit given after "." or ",", "Z" or a
-// differential; no such date as February 31). The values are compared as
-// instants in UTC, exactly: "199412161032Z" is "199412160532-0500",
-// "1994121610.5Z" is "199412161030Z", a fraction of any length counts, and
-// a leap second (second 60) is its own instant, after second 59 and before
-// the next minute. Undefined for a value not of the syntax.
+// generalizedTimeMatch and generalizedTimeOrderingMatch (RFC 4517 sections
+// 4.2.16, 4.2.17): instants in UTC, compared exactly.
 [[nodiscard]] auto generalized_time_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
 [[nodiscard]] auto generalized_time_ordering_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
 
-// uuidMatch (1.3.6.1.1.16.2) and uuidOrderingMatch (1.3.6.1.1.16.3), RFC
-// 4530 sections 2.2 and 2.3: values in RFC 4122's string form
-// (`597ae2f6-16a6-1027-98f4-d28b5365dc14`, hex digits in either case),
-// compared as their 16 octets like octetStringMatch and
-// octetStringOrderingMatch. Undefined for any other form.
+// uuidMatch and uuidOrderingMatch (RFC 4530 sections 2.2, 2.3).
 [[nodiscard]] auto uuid_match(std::string_view attribute_value, std::string_view assertion_value) -> match_result;
 [[nodiscard]] auto uuid_ordering_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
 
-// caseIgnoreListMatch (2.5.13.11, RFC 4517 section 4.2.9): values of the
-// Postal Address syntax (section 3.3.28: lines separated by "$", "\24" and
-// "\5C" for "$" and "\" in a line, no empty line), TRUE if they have the
-// same number of lines and the lines match by position by caseIgnoreMatch.
-// caseIgnoreListSubstringsMatch (2.5.13.12, section 4.2.10): the assertion
-// matched by caseIgnoreSubstringsMatch against the lines, with no substring
-// spanning two lines (initial in the first line, final in the last).
-// Undefined if a value or a line is not of the syntax or fails preparation.
+// caseIgnoreListMatch and caseIgnoreListSubstringsMatch (RFC 4517 sections
+// 4.2.9, 4.2.10) on Postal Address values.
 [[nodiscard]] auto case_ignore_list_match(std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
 [[nodiscard]] auto case_ignore_list_substrings_match(std::string_view attribute_value,
   const substring_assertion &assertion) -> match_result;
 
-// A rule by NAME (case-insensitive) or OID, as in an attribute type's
-// EQUALITY or an extensible match (RFC 4517 section 4.2): every rule above,
-// and distinguishedNameMatch (2.5.13.1, values in RFC 4514 form, compared as
-// distinguished_name_match(a, b) below). Rules that can use a schema
-// (objectIdentifierMatch, uniqueMemberMatch) are applied without one here;
-// call their schema overloads for that. For the substrings rules the
-// assertion value is in the Substring Assertion syntax (RFC 4517 section
-// 3.3.30: `initial*any*final`, "*" and "\" escaped as \2A and \5C). An
-// unknown rule, or one this library does not implement, gives Undefined
-// (RFC 4511 section 4.5.1.7: the server would not recognize it either).
+// A rule by NAME or OID; an unknown rule gives Undefined.
 [[nodiscard]] auto match(std::string_view rule, std::string_view attribute_value, std::string_view assertion_value)
   -> match_result;
-// Whether match() implements `rule` (NAME or OID).
 [[nodiscard]] auto is_known_matching_rule(std::string_view rule) noexcept -> bool;
 
 // ---------------------------------------------------------------- DNs
@@ -266,10 +154,8 @@ struct substring_assertion
 namespace detail {
 	using equality_rule_lookup = std::string_view (*)(const void *context, const attribute &type);
 
-	// What a per-type rule lookup may return: text it does not own (a
-	// std::string_view, a const char * or char *, or a reference to a string
-	// that outlives the call). A std::string returned by value would be
-	// destroyed before the rule's name is read.
+	// A per-type rule lookup returns text it does not own (string_view, char
+	// pointer, or a reference to a string that outlives the call).
 	template<class R>
 	inline constexpr bool is_borrowed_rule_name =
 	  std::same_as<std::remove_cv_t<R>, std::string_view> || std::same_as<std::remove_cv_t<R>, const char *>
@@ -288,64 +174,22 @@ namespace detail {
 	  const server_schema *schema) -> match_result;
 }// namespace detail
 
-// distinguishedNameMatch (RFC 4517 section 4.2.15): the same number of RDNs,
-// and RDNs by position with the same number of AVAs, each AVA equal to the
-// other RDN's AVA of the same type (in any order) by that type's equality
-// rule. FALSE if any comparison is FALSE; otherwise Undefined if any is
-// Undefined (also for an RDN that has a type twice, or a `#hex` value that
-// is not a BER string, OCTET STRING, INTEGER or BOOLEAN, or is a
-// TeletexString: RFC 4518 section 2.1 leaves its transcoding a local
-// matter); otherwise TRUE. `#hex` values are decoded and transcoded (BER
-// BMPString and UniversalString to UTF-8, RFC 4518 section 2.1; INTEGER to
-// decimal, up to 4096 content octets: a longer one is Undefined, as the
-// conversion is quadratic) before the rule sees them. A value whose rule is
-// distinguishedNameMatch is compared as a DN with the same rules, up to a
-// small nesting depth (Undefined deeper).
-//
-// Types: a name (ASCII case-insensitive) or a numeric OID is resolved to its
-// definition's OID through the schema (if any), then the attribute type
-// names RFC 4512 and RFC 4519 define (`cn`, `commonName` and `2.5.4.3` are one type, as
-// are `sn` and `surname`, `uid` and `userid`, ...). Two resolved types are
-// the same type exactly when their OIDs are. A name that cannot be resolved
-// might be another name of any type: if the RDNs differ only in such types
-// (`foo=x` against `2.5.4.3=x`), the comparison is Undefined, not FALSE.
-//
-// This overload uses caseIgnoreMatch for every type.
+// distinguishedNameMatch (RFC 4517 section 4.2.15), caseIgnoreMatch for
+// every type.
 [[nodiscard]] auto distinguished_name_match(const dn &attribute_value, const dn &assertion_value) -> match_result;
 
-// Schema-driven: each type's EQUALITY (inherited from its supertypes, see
-// server_schema::equality_of), caseIgnoreMatch for a type the schema does
-// not know or that declares none. An RFC 4512 or RFC 4519 name the schema
-// does not list (`userid` when it lists only `uid`) takes the rule of its
-// OID's definition. A rule match() does not implement gives
-// Undefined. An objectIdentifierMatch value resolves its descriptors through
-// the schema, and a uniqueMemberMatch value's DN uses the schema's rules. Types are the same when they name the same
-// definition in the schema.
+// Each type's EQUALITY from the schema, caseIgnoreMatch when it has none.
 [[nodiscard]] auto distinguished_name_match(const dn &attribute_value,
   const dn &assertion_value,
   const server_schema &schema) -> match_result;
 
-// With a per-type rule lookup: `equality_rule(type)` returns the rule's NAME
-// or OID for match(), or an empty string (or a null pointer) for
-// caseIgnoreMatch. It is called through a const reference (a `mutable`
-// lambda or an object with only a non-const operator() does not compile),
-// and returns a std::string_view, a const char *, a char * or an lvalue
-// reference to a string, never an owning std::string (that does not
-// compile); the text must stay valid until the next call of
-// `equality_rule`. Both AVAs' types are looked up when their names differ
-// (`uid` and `userid`, a name and its OID): two different rules give
-// Undefined.
-//
-//   ldap::distinguished_name_match(a, b, [](const ldap::attribute &t) -> std::string_view {
-//       return t == ldap::attribute{"uid"} ? "caseExactMatch" : "";
-//   });
+// `equality_rule(type)` returns the rule's NAME or OID, or empty for
+// caseIgnoreMatch; the text stays valid until its next call.
 template<detail::equality_rule_lookup_function F>
 [[nodiscard]] auto
   distinguished_name_match(const dn &attribute_value, const dn &assertion_value, const F &equality_rule) -> match_result
 {
 	if constexpr (std::is_function_v<F>) {
-		// A function: through a function pointer, an object `context` can
-		// point to.
 		F *const function = &equality_rule;
 		return distinguished_name_match(attribute_value, assertion_value, function);
 	} else {
