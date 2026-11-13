@@ -97,7 +97,13 @@ auto bind_and_who(corosio::io_context &ioc, ldap::connection &c, ldap::sasl_gssa
 }
 
 // Sets slapd's SASL security properties (olcSaslSecProps) for the test,
-// then restores them.
+// then restores them. slapd applies a value field by field
+// (ldap_pvt_sasl_secprops): a field the value leaves out keeps its
+// running setting, and deleting the attribute changes none. So the
+// restore writes the old value, or slapd's default "noanonymous,noplain",
+// with minssf=0 unless it gives one: removing the attribute alone would
+// leave minssf=1 in force, and the next test case (Catch2's order is
+// random) would find a server that requires a security layer.
 class sasl_secprops
 {
   public:
@@ -123,9 +129,13 @@ class sasl_secprops
 	~sasl_secprops()
 	{
 		try {
-			if (old_) {
-				set(*old_);
-			} else {
+			std::string restore = old_.value_or("noanonymous,noplain");
+			if (restore.find("minssf=") == std::string::npos) {
+				restore += ",minssf=0";
+			}
+			set(restore);
+			if (!old_) {
+				// The entry as it was; the settings stay restore's.
 				(void)finish(*ioc_,
 				  config_.modify({ .object = config_dn, .changes = { ldap::mod::remove("olcSaslSecProps", {}) } }));
 			}
