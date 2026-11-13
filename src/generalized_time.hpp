@@ -1,6 +1,4 @@
-// Internal: the GeneralizedTime parser (RFC 4517 section 3.3.13) shared by
-// the struct mapping (parse_generalized_time, mapping.cpp) and the
-// generalizedTime matching rules (matching.cpp).
+// The GeneralizedTime parser (RFC 4517 section 3.3.13).
 #pragma once
 
 #include <chrono>

@@ -43,8 +43,7 @@ namespace corosio = boost::corosio;
 namespace jhetz::ldap::net::detail {
 namespace {
 
-	// Deleters for the OpenSSL objects owned below. Each wraps the free call
-	// rather than taking its address: some are macros in older OpenSSL.
+	// Deleters for the OpenSSL objects owned below, each wrapping the free call.
 	struct bio_deleter
 	{
 		void operator()(BIO *p) const noexcept { BIO_free(p); }
@@ -76,9 +75,7 @@ namespace {
 	using x509_store_ptr = std::unique_ptr<X509_STORE, x509_store_deleter>;
 	using x509_store_ctx_ptr = std::unique_ptr<X509_STORE_CTX, x509_store_ctx_deleter>;
 
-	// Read-only memory BIO over `pem`, or null. Null too above INT_MAX
-	// bytes: BIO_new_mem_buf takes an int, so a larger size would wrap to a
-	// truncated length, or a negative one (-1 means "up to the first NUL").
+	// Read-only memory BIO over `pem`; null above INT_MAX bytes.
 	auto pem_bio(std::string_view pem) -> bio_ptr
 	{
 		if (pem.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
@@ -87,15 +84,10 @@ namespace {
 		return bio_ptr(BIO_new_mem_buf(pem.data(), static_cast<int>(pem.size())));
 	}
 
-	// Checks a client certificate chain file and key file before any network
-	// traffic: Corosio only parses them when the handshake starts. The first
-	// certificate of the chain must parse, the key must parse, and they must
-	// belong together.
-	// Password callback that refuses: with a null callback OpenSSL would prompt
-	// on the terminal for an encrypted key. Encrypted keys are not supported.
+	// Refuses passwords: encrypted keys are not supported.
 	auto no_password(char *, int, int, void *) -> int { return -1; }
 
-	// One caller; a swapped certificate and key fails the first PEM parse.
+	// Checks that the client certificate and key parse and belong together.
 	// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 	auto check_client_credentials(const std::string &cert_pem,
 	  const std::string &key_pem,
@@ -127,9 +119,7 @@ namespace {
 		return {};
 	}
 
-	// A path as UTF-8, for error contexts and OpenSSL's char paths:
-	// path::string() is in the ANSI code page on Windows (it throws or
-	// mangles there), u8string() is the path's own bytes on Linux.
+	// A path as UTF-8, for error contexts and OpenSSL's char paths.
 	auto path_text(const std::filesystem::path &path) -> std::string
 	{
 		const std::u8string u8 = path.u8string();
@@ -154,9 +144,8 @@ namespace {
 		return std::move(s).str();
 	}
 
-	// Checks a CA bundle as Corosio reads it when the handshake starts: one
-	// certificate or more, each parsing, then nothing but text without a PEM
-	// block. A failure leaves nothing on the thread's OpenSSL error queue.
+	// Checks a CA bundle as Corosio reads it; leaves the OpenSSL error queue
+	// empty.
 	auto check_ca_bundle(std::string_view pem, const std::string &what) -> result<void>
 	{
 		const bio_ptr bio = pem_bio(pem);
@@ -211,9 +200,7 @@ namespace {
 		state.ssl = static_cast<SSL *>(X509_STORE_CTX_get_ex_data(store, SSL_get_ex_data_X509_STORE_CTX_idx()));
 	}
 
-	// The server's chain as DER: the leaf, then every other certificate it
-	// sent (the store's untrusted stack, which on a client holds the peer's
-	// chain). Empty if the leaf cannot be encoded.
+	// The server's chain as DER: the leaf, then the rest it sent.
 	auto peer_chain_der(const X509_STORE_CTX *store) -> std::vector<std::vector<unsigned char>>
 	{
 		std::vector<std::vector<unsigned char>> out;
@@ -257,12 +244,8 @@ namespace {
 		return std::max(left, std::chrono::milliseconds(1));
 	}
 
-	// The platform's verdict on the chain (verify_state::system_chain), at
-	// the leaf's final callback, once: after OpenSSL's chain build, purpose,
-	// security level, host name, signature and validity checks; the later
-	// name constraint, RFC 3779 and policy errors are let through. On
-	// acceptance the store's error is reset to X509_V_OK so that
-	// SSL_get_verify_result() reports the connection as verified.
+	// The platform's verdict on the chain, once at the leaf's final callback;
+	// on acceptance the store's error is reset to X509_V_OK.
 	auto verify_chain_with_platform(verify_state &state, X509_STORE_CTX *store) -> bool
 	{
 		state.system_chain_verified = false;
@@ -280,10 +263,8 @@ namespace {
 		return true;
 	}
 
-	// Whether `cert` matches `host` under X509_VERIFY_PARAM host `flags`:
-	// OpenSSL's own host check, run by verifying `cert` alone against an
-	// empty store whose verify callback accepts every error but
-	// X509_V_ERR_HOSTNAME_MISMATCH. False on any other failure.
+	// Whether `cert` matches `host` under X509_VERIFY_PARAM `flags`, by
+	// OpenSSL's own host check.
 	// NOLINTNEXTLINE(misc-const-correctness): OpenSSL 3's X509_STORE_CTX_init takes X509 *
 	auto host_matches(X509 *cert, const std::string &host, unsigned flags) -> bool
 	{
@@ -323,17 +304,8 @@ namespace {
 	}
 
 	// The verify callback of certificate_verification::full: records why
-	// verification failed (the handshake error itself only says
-	// "certificate verify failed"). With strict_host set it also rejects a
-	// leaf that only OpenSSL's lenient host matching accepted (Corosio has
-	// no option for the X509_CHECK_FLAG_* flags, so the check is redone
-	// here); with legacy_host set it accepts a leaf without subjectAltName
-	// DNS names whose subject CN matches (OpenSSL 4's own check ignores the
-	// CN). It relaxes no other built-in verdict. When the
-	// platform verifies the chain (verify_state::system_chain), OpenSSL's
-	// errors other than fatal_with_platform_chain's are let through and the
-	// leaf's final callback asks the platform instead (tls_handshake() fails
-	// a handshake that never got there).
+	// verification failed, applies strict or legacy host matching, and defers
+	// to the platform's chain verdict when it verifies the chain.
 	auto verify_full(verify_state &state, bool preverified, X509_STORE_CTX *store) -> bool
 	{
 		if (store == nullptr) {
@@ -352,9 +324,7 @@ namespace {
 		}
 		if (state.system_chain != nullptr && !preverified
 			&& !fatal_with_platform_chain(X509_STORE_CTX_get_error(store), X509_STORE_CTX_get_error_depth(store))) {
-			// After the platform accepted (the checks that follow the
-			// leaf's final callback), its verdict stands for
-			// SSL_get_verify_result() too.
+			// The platform accepted: its verdict stands.
 			if (state.system_chain_verified) {
 				X509_STORE_CTX_set_error(store, X509_V_OK);
 			}
@@ -384,10 +354,7 @@ namespace {
 		return preverified;
 	}
 
-	// verify_full as OpenSSL calls it, through Corosio's trampoline: an
-	// exception (bad_alloc from the chain's DER, the platform's error text
-	// or the reason) must not unwind through their C frames, so it fails
-	// verification instead (fail closed).
+	// verify_full without exceptions: one fails verification.
 	auto verify_full_noexcept(verify_state &state, bool preverified, X509_STORE_CTX *store) noexcept -> bool
 	{
 		try {
@@ -408,10 +375,8 @@ namespace {
 		return false;
 	}
 
-	// The verify callback without verification: only reaches the session
-	// (verify_state). Accepts everything, so that OpenSSL goes on to the
-	// leaf whatever it finds wrong higher up the chain (the verdict is
-	// ignored in this mode anyway).
+	// The verify callback without verification: records the session, accepts
+	// everything.
 	auto verify_none(verify_state &state, const X509_STORE_CTX *store) noexcept -> bool
 	{
 		if (store != nullptr) {
@@ -434,11 +399,8 @@ namespace {
 		}
 	};
 
-	// One client handshake on a fresh tls_context over a dead_stream: its
-	// first step builds the SSL_CTX, which allocates Corosio's ex_data slot.
-	// The handshake's failure is expected. On a thread of its own, so that
-	// the caller's thread (running another io_context, inside a coroutine)
-	// keeps its Capy and Corosio thread-local state.
+	// One throwaway client handshake on a thread of its own, allocating
+	// Corosio's ex_data slot; its failure is expected.
 	auto run_throwaway_handshake() noexcept -> bool
 	{
 		bool ran = false;
@@ -502,10 +464,7 @@ namespace {
 			if (!std::filesystem::is_directory(status)) {
 				return fail(std::make_error_code(std::errc::not_a_directory), what);
 			}
-			// OpenSSL looks the hashed names up lazily, with char paths
-			// (SSL_CTX_load_verify_locations), so the directory goes as a
-			// path, in UTF-8: on Windows OpenSSL opens files by UTF-8 name
-			// but stat()s them in the ANSI code page (see connect.hpp).
+			// The directory goes as a UTF-8 path.
 			if (auto r = check(ctx.add_verify_path(path_text(o.ca_dir)), what); !r) {
 				return r;
 			}
@@ -635,10 +594,8 @@ auto tls_peer_name(std::string_view host, const tls_options &options) -> std::st
 	} else {
 		name.assign(host);
 	}
-	// A fully qualified DNS name ("ldap.example.org."): RFC 6066 section 3
-	// sends the SNI HostName without the trailing dot, and the certificate
-	// names the host without it. A name that would then read as an IP
-	// literal ("127.0.0.1.") stays a DNS name.
+	// A fully qualified name's trailing dot is dropped (RFC 6066 section 3);
+	// one that would then read as an IP literal stays a DNS name.
 	if (name.size() > 1 && name.ends_with('.')) {
 		std::string bare = name.substr(0, name.size() - 1);
 		if (!is_ip_literal(bare)) {
@@ -668,10 +625,7 @@ auto tls_handshake(transport::layers &im,
 		setup.state->legacy_host = name;
 	}
 	setup.state->deadline = deadline;
-	// im.tls is set before the handshake and kept only if it succeeds
-	// (transport::is_tls() is true during the handshake: callers also check
-	// that none is in progress). Undone on a failed handshake and on a throw,
-	// back to the plain socket, which must then be closed.
+	// im.tls is kept only if the handshake succeeds.
 	ldap::detail::scope_exit undo_tls{ [&im] {
 		clear_tls_session(im);
 		im.tls.reset();
@@ -688,11 +642,7 @@ auto tls_handshake(transport::layers &im,
 		}
 		co_return fail(ec, std::move(context));
 	}
-	// Fail closed if the verify callback never ran: without it there is no
-	// session to record (peer certificate, channel bindings, renegotiation
-	// off) and, under full verification, the strict host check was skipped.
-	// Every certificate-based handshake runs it, so this means Corosio
-	// skipped it (the ex_data race prime_corosio_openssl() works around).
+	// Fail closed if the verify callback never ran.
 	if (setup.state->ssl == nullptr) {
 		co_return fail(client_errc::internal_error, "tls handshake: the certificate verify callback did not run");
 	}
@@ -701,9 +651,6 @@ auto tls_handshake(transport::layers &im,
 	if (setup.state->system_chain != nullptr && !setup.state->system_chain_verified) {
 		co_return fail(client_errc::internal_error, "tls handshake: the system certificate chain check did not run");
 	}
-	// The session outlives the handshake (it is the stream's), but the
-	// pointer is not kept: everything needed is read now, and renegotiation,
-	// which would change it, is turned off.
 	record_tls_session(im, std::exchange(setup.state->ssl, nullptr));
 	im.stream = boost::capy::any_stream(&stream);
 	undo_tls.release();

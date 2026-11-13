@@ -153,8 +153,7 @@ namespace {
 		}
 	};
 
-	// The first URI of a reference that was followed: the request sent
-	// there, its answer, and its depth.
+	// The first URI of a reference that was followed: request, answer, depth.
 	template<class Params, class Value> struct reached
 	{
 		Params request;
@@ -162,8 +161,8 @@ namespace {
 		std::size_t depth = 0;
 	};
 
-	// How one reference ended: reached, or not (then the last failure, and
-	// whether one of its URIs was a loop).
+	// How one reference ended: reached, or the last failure and whether a URI
+	// was a loop.
 	template<class Params, class Value> struct followed
 	{
 		std::optional<reached<Params, Value>> target{};
@@ -234,9 +233,7 @@ namespace {
 
 	auto canceled() -> error { return make_error(capy::error::canceled, "referral chase"); }
 
-	// The connector's answer as a capy::results, for corosio::timeout: its
-	// cancellation shows in the code (the deadline is then reported as
-	// such), the answer itself in the payload.
+	// The connector's answer as a capy::results, for corosio::timeout.
 	auto as_results(capy::task<result<connection *>> asked)
 	  -> capy::task<capy::results<std::optional<result<connection *>>>>
 	{
@@ -295,13 +292,9 @@ namespace {
 		return prepared<Params>{ .server = std::move(*u), .request = std::move(*request), .key = std::move(key) };
 	}
 
-	// Tries the URIs of one reference in order until one is followed. Over
-	// max_hops nothing is parsed: the reference's first URI is limit_reached
-	// (a loop there too: telling would cost a parse and a copy of the
-	// request per reference). A URI over max_targets or the budget (and not
-	// a loop) is limit_reached. Either way the reference's other URIs are
-	// not looked at (they would be over it too). Fails only when the chase
-	// is cancelled.
+	// Tries the URIs of one reference in order until one is followed; over a
+	// limit, the first URI is limit_reached and the others are skipped. Fails
+	// only when the chase is cancelled.
 	template<class Params, class Value, class Op>
 	auto follow(chase_state &st,
 	  std::span<const std::pmr::string> uris,
@@ -445,9 +438,8 @@ namespace {
 		return "unknown";
 	}
 
-	// The error of a referral result that could not be followed, its
-	// context counting what became of the URIs (the attempt list itself is
-	// not returned with an error).
+	// The error of an unfollowed referral result, its context counting the
+	// URI outcomes.
 	auto with_attempts(error e, const chase_state &st) -> error
 	{
 		if (st.attempts.empty() && st.unlisted == 0) {
@@ -475,9 +467,8 @@ namespace {
 		return detail::with_context(std::move(e), summary);
 	}
 
-	// A continuation reference waiting to be followed: its URIs, and the
-	// request that got it, shared by the references of one run (not a copy
-	// each: a reference costs the server a few dozen bytes).
+	// A continuation reference waiting to be followed, with the request that
+	// got it (shared).
 	struct pending_reference
 	{
 		string_list uris{};
@@ -491,8 +482,7 @@ namespace {
 
 	using search_reached = reached<search_params, search_run>;
 
-	// The search on the origin, and the chase of its referral result: what
-	// was reached, or the failure (origin_failed: the origin's own).
+	// The search on the origin, and the chase of its referral result.
 	auto first_search(connection &origin, chase_state &st, search_params request, const search_op &op)
 	  -> capy::task<detail::chase_result<search_reached>>
 	{
@@ -528,10 +518,8 @@ namespace {
 			out->references.insert(out->references.end(), uris.begin(), uris.end());
 		}
 
-		// Takes the entries of `r`, and queues its references (or, when they
-		// are not followed, counts and keeps them). A continuation
-		// reference's search that ended with a limit code gives its
-		// LDAPResult to `out` when the origin's was success.
+		// Takes the entries of `r` and queues (or counts) its references; a
+		// continuation's limit code replaces the origin's success.
 		void take(search_reached &r, bool continuation)
 		{
 			for (auto &e : r.value.entries) {

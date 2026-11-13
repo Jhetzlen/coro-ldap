@@ -11,9 +11,7 @@
 namespace jhetz::ldap::ber {
 namespace {
 
-	// Longest long-form length accepted by the decoder: 4 octets (lengths up to
-	// 4 GiB - 1), far beyond any sane LDAP message and within size_t on every
-	// supported platform.
+	// Longest long-form length accepted: 4 octets.
 	constexpr std::size_t max_length_octets = 4;
 
 	auto octet(std::byte b) noexcept -> unsigned { return std::to_integer<unsigned>(b); }
@@ -41,9 +39,8 @@ namespace {
 		std::uint64_t content_size;
 	};
 
-	// Parses the identifier and length octets at the start of `buf`.
-	// nullopt: `buf` ends inside the header. `base` is the absolute offset of
-	// buf[0], used only for error messages. Never reads past buf.size().
+	// Parses the identifier and length octets at the start of `buf`; nullopt
+	// when `buf` ends inside the header. `base` is buf[0]'s absolute offset.
 	auto parse_header_at(std::span<const std::byte> buf, std::size_t base) -> result<std::optional<raw_header>>
 	{
 		if (buf.empty()) {
@@ -86,9 +83,7 @@ namespace {
 		return raw_header{ .t = t, .header_size = 2 + count, .content_size = length };
 	}
 
-	// Long-form definite lengths (length >= 0x80): the initial octet is
-	// 0x80 | count, followed by `count` minimal big-endian length octets.
-	// Precondition: length >= 0x80 (short-form lengths have no length octets).
+	// Length octets of a long-form length (length >= 0x80).
 	auto length_octet_count(std::size_t length) noexcept -> unsigned
 	{
 		return (static_cast<unsigned>(std::bit_width(length)) + octet_bits - 1) / octet_bits;
@@ -159,9 +154,7 @@ void writer::boolean(bool value, tag t)
 
 void writer::integer(std::int64_t value, tag t)
 {
-	// Big-endian two's complement, then drop redundant leading octets: a 00
-	// followed by a byte with the top bit clear, or FF followed by one with
-	// the top bit set.
+	// Big-endian two's complement without redundant leading 00 / FF octets.
 	const auto u = static_cast<std::uint64_t>(value);
 	std::array<std::byte, 8> octets{};
 	for (std::size_t i = 0; i < octets.size(); ++i) {
@@ -212,14 +205,9 @@ void writer::end_constructed(std::size_t mark, std::size_t resets)
 		buf_[mark + 1] = static_cast<std::byte>(length);
 		return;
 	}
-	// Long form: the extra length octets are inserted in front of the
-	// content, which moves it. Nested long-form elements therefore move their
-	// content once per level (quadratic in the nesting depth in the worst
-	// case); fine for LDAP message sizes and depths.
+	// Long form: the extra length octets go in front of the content.
 	const unsigned count = length_octet_count(length);
-	// Make room first (may throw; std::vector gives the strong guarantee for
-	// trivially copyable elements), then fill it and patch the placeholder,
-	// which cannot throw.
+	// Make room first (may throw), then fill it and patch the placeholder.
 	const auto room = buf_.insert(buf_.begin() + static_cast<std::ptrdiff_t>(content_start), count, std::byte{ 0 });
 	put_length_octets(room, length, count);
 	buf_[mark + 1] = static_cast<std::byte>(0x80u | count);
@@ -233,9 +221,8 @@ void writer::rollback(std::size_t mark, std::size_t resets)
 
 // ---------------------------------------------------------------- decoder
 
-// The common case (low tag number, definite length, content present), without
-// building a result; everything else, every error included, goes through
-// parse_header_at.
+// The common case (low tag, definite length, content present); everything
+// else goes through parse_header_at.
 auto reader::fast_header(header &out) const noexcept -> bool
 {
 	const auto rest = data_.subspan(pos_);
@@ -384,8 +371,7 @@ auto reader::read_int(tag expected, const char *what) -> result<std::int64_t>
 		return fail(client_errc::integer_overflow,
 		  detail::format("ber: {} with {} content octets at offset {}", what, c.size(), e->offset));
 	}
-	// Sign-extend from the first octet; unsigned arithmetic avoids UB, and the
-	// final conversion to int64 is modular (well defined since C++20).
+	// Sign-extends from the first octet, in unsigned arithmetic.
 	std::uint64_t v = (octet(c[0]) & 0x80u) != 0 ? ~std::uint64_t{ 0 } : 0;
 	for (const std::byte b : c) {
 		v = (v << 8) | octet(b);
@@ -414,8 +400,7 @@ auto reader::read_string(tag t, std::pmr::memory_resource *mr) -> result<std::pm
 	if (!s) {
 		return std::unexpected(std::move(s.error()));
 	}
-	// The length was checked against the bytes present, so this allocation is
-	// bounded by the input size.
+	// Bounded by the input size: the length was checked.
 	return std::pmr::string(detail::as_text(*s), mr);
 }
 

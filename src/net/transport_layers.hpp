@@ -20,10 +20,8 @@
 namespace jhetz::ldap::net {
 
 // Destroyed in this order, each part before the one it refers to: the SASL
-// layer's view (`layered`), the SASL layer, then for kind::custom the
-// type-erased view and the custom stream; then the members in reverse
-// order: the type-erased view, the TLS stream (which refers to the TCP
-// socket), the TLS context and the sockets.
+// layer's view and layer, the custom stream's views, then the members in
+// reverse order.
 struct transport::layers
 {
 	explicit layers(std::pmr::memory_resource *r)
@@ -52,17 +50,13 @@ struct transport::layers
 	std::optional<boost::corosio::tls_context> tls_context{};
 	// Reference mode over *tcp (see transport.hpp, StartTLS).
 	std::optional<boost::corosio::openssl_stream> tls{};
-	// Read from the TLS session once its handshake succeeded
-	// (detail::record_tls_session), cleared with `tls`: the server's
-	// certificate (DER) and the channel bindings (empty: unavailable).
+	// Read from the TLS session after its handshake, cleared with `tls`.
 	std::pmr::vector<std::byte> peer_certificate;
 	std::pmr::vector<std::byte> tls_server_end_point;
 	std::pmr::vector<std::byte> tls_exporter;
 	std::optional<channel_binding_type> default_channel_binding{};
-	// An authentication (a SASL bind) used tls_exporter: RFC 9266 section
-	// 4.1 forbids a second use on the connection, so later binds are not
-	// given it (detail::authentication_channel_bindings). Cleared with the
-	// rest by detail::clear_tls_session.
+	// A SASL bind used tls_exporter: later binds do not get it (RFC 9266
+	// section 4.1).
 	bool tls_exporter_used = false;
 	// kind::custom: the wrapped stream, owned (allocated from mr) and
 	// destroyed by ~layers() after `stream`, which refers to it.
@@ -70,9 +64,8 @@ struct transport::layers
 	transport::custom_ops custom_ops{};
 	bool custom_closed = false;
 	boost::capy::any_stream stream{};
-	// The SASL security layer over `stream` (detail::install_security_layer),
-	// and the view of it that stream() returns once it is set. Declared
-	// after `stream`, which the layer refers to, so destroyed before it.
+	// The SASL security layer over `stream` and the view stream() returns once
+	// it is set; declared after `stream`.
 	std::optional<detail::sasl_layer_stream> sasl_layer{};
 	boost::capy::any_stream layered{};
 };

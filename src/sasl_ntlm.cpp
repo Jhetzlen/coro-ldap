@@ -38,19 +38,14 @@ namespace {
 	constexpr std::uint32_t byte_mask = 0xFF;
 	constexpr std::size_t max_av_length = 0xFFFF;// AvLen is a USHORT
 
-	// The flags of the NEGOTIATE_MESSAGE (MS-NLMP section 2.2.2.5): Unicode,
-	// the target's name, NTLM with extended session security (NTLMv2's),
-	// TargetInfo, a Version, 128-bit keys; no signing, sealing nor key
-	// exchange without a security layer.
+	// NEGOTIATE_MESSAGE flags (MS-NLMP section 2.2.2.5) without a security
+	// layer.
 	constexpr std::uint32_t client_flags =
 	  detail::ntlmssp_negotiate_unicode | detail::ntlmssp_request_target | detail::ntlmssp_negotiate_ntlm
 	  | detail::ntlmssp_negotiate_extended_sessionsecurity | detail::ntlmssp_negotiate_target_info
 	  | detail::ntlmssp_negotiate_version | detail::ntlmssp_negotiate_128;
 
-	// What a security layer adds (MS-NLMP section 3.4): signing with key
-	// exchange, and sealing for confidentiality; NTLMSSP_NEGOTIATE_ALWAYS_SIGN
-	// too, which "MUST be set in the NEGOTIATE_MESSAGE" (section 2.2.2.5,
-	// flag M) and which SIGN and SEAL override.
+	// What a security layer adds (MS-NLMP section 3.4).
 	constexpr std::uint32_t signing_flags =
 	  detail::ntlmssp_negotiate_always_sign | detail::ntlmssp_negotiate_sign | detail::ntlmssp_negotiate_key_exch;
 
@@ -83,8 +78,8 @@ namespace {
 	constexpr std::string_view client_sealing_magic = "session key to client-to-server sealing key magic constant\0"sv;
 	constexpr std::string_view server_sealing_magic = "session key to server-to-client sealing key magic constant\0"sv;
 
-	// Whether the server's flags grant the layer: security_layer_unavailable
-	// naming the flags missing otherwise.
+	// security_layer_unavailable naming the missing flags, unless the server's
+	// flags grant the layer.
 	auto layer_granted(sasl_protection layer, std::uint32_t server_flags) -> result<void>
 	{
 		const std::uint32_t flags = requested_flags(layer);
@@ -138,10 +133,7 @@ namespace {
 		s.clear();
 	}
 
-	// A string holding the password's UTF-16, wiped when it goes out of
-	// scope. It is filled in place (ntlm_unicode's out-parameter form), never
-	// moved from another string, which would leave the short-string bytes
-	// behind in the source.
+	// The password's UTF-16, filled in place and wiped on scope exit.
 	struct wiped_string
 	{
 		std::string s;
@@ -363,9 +355,8 @@ namespace detail {
 		OPENSSL_cleanse(server_signing_key_.data(), server_signing_key_.size());
 	}
 
-	// SEAL (MS-NLMP section 3.4.3) or, for integrity, MAC (section 3.4.4.2):
-	// the checksum over ConcatenationOf(SeqNum, Message) before sealing,
-	// then the message sealed, then the checksum, with the same handle.
+	// SEAL (MS-NLMP section 3.4.3) or MAC (section 3.4.4.2) with the same
+	// handle.
 	auto ntlm_security_layer::wrap(std::span<const std::byte> plaintext, std::pmr::vector<std::byte> &out)
 	  -> result<void>
 	{
@@ -489,8 +480,7 @@ void sasl_ntlm::prepare(const sasl_bind_context &context)
 	if (!tls_ || options_.channel_binding == ntlm_channel_binding::none) {
 		return;
 	}
-	// Never a silent fallback to no bindings: the certificate is the TLS
-	// peer's choice, so a man in the middle could pick one without a hash.
+	// No fallback to no bindings without a hash.
 	if (context.bindings.tls_server_end_point.empty()) {
 		binding_error_ =
 		  "the TLS connection has no tls-server-end-point channel binding data (no hash for the "
@@ -603,12 +593,8 @@ auto sasl_ntlm::step(std::optional<std::string_view> challenge) -> result<std::o
 		return std::unexpected(std::move(granted.error()));
 	}
 
-	// Over TLS the hash, or with ntlm_channel_binding::none no
-	// MsvAvChannelBindings at all: a server whose channel binding check is
-	// optional (Samba's `ldap server require strong auth` other than yes,
-	// as Windows' "When supported") lets an exchange without the pair
-	// through but refuses an explicit Z(16), which does not match its
-	// bindings. Without TLS, Z(16), as Windows sends it.
+	// Over TLS the hash, or nothing with ntlm_channel_binding::none; without
+	// TLS, Z(16).
 	std::optional<ntlm_key> bindings;
 	if (!binding_data_.empty()) {
 		auto h = detail::ntlm_channel_bindings_hash(binding_data_);
@@ -643,9 +629,7 @@ auto sasl_ntlm::step(std::optional<std::string_view> challenge) -> result<std::o
 	if (!computed) {
 		return std::unexpected(std::move(computed.error()));
 	}
-	// Without key exchange the ExportedSessionKey is the KeyExchangeKey;
-	// with it (a security layer), a random key sent as
-	// EncryptedRandomSessionKey = RC4K(KeyExchangeKey, ExportedSessionKey)
+	// With key exchange, a random ExportedSessionKey sent RC4K-encrypted
 	// (section 3.1.5.1.2).
 	wiped_key exported(key_exchange_key.k);
 	std::string encrypted_random_session_key;
@@ -697,11 +681,7 @@ auto sasl_ntlm::step(std::optional<std::string_view> challenge) -> result<std::o
 		if (auto r = detail::ntlm_derive_session_keys(exported.k, keys); !r) {
 			return std::unexpected(std::move(r.error()));
 		}
-		// Sealed even when only signing was negotiated: over LDAP a DC
-		// treats NTLMSSP_NEGOTIATE_SIGN as NTLMSSP_NEGOTIATE_SEAL (Samba's
-		// GENSEC_FEATURE_LDAP_STYLE, force_wrap_seal in
-		// auth/ntlmssp/ntlmssp_server.c, which follows Windows' LDAP), and
-		// refuses a buffer that is only signed.
+		// Always sealed: an LDAP DC treats SIGN as SEAL.
 		layer_ = std::make_unique<detail::ntlm_security_layer>(
 		  keys, sasl_protection::confidentiality, options_.max_receive_size);
 	}

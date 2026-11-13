@@ -142,24 +142,14 @@ namespace {
 		if (!self->accepts_requests()) {
 			co_return std::unexpected(self->not_connected(context));
 		}
-		// Nothing may be sent while a BindRequest is outstanding (RFC 4511
-		// section 4.2.1), or during StartTLS until its response is received and
-		// the handshake done (section 4.14.1), an UnbindRequest included: just
-		// close, before anything is changed (StartTLS then fails with
-		// not_connected). Refusing instead would leave the session the caller
-		// wants ended open.
+		// During a bind or StartTLS nothing may be sent (RFC 4511 sections 4.2.1,
+		// 4.14.1): just close.
 		if (self->exchange_in_progress()) {
 			self->shut(make_error(client_errc::not_connected, "connection closed"), false);
 			co_return result<void>{};
 		}
 
-		// Outstanding operations are abandoned by the unbind (RFC 4511 section
-		// 4.3), and nothing may follow the UnbindRequest. An exception (the
-		// writer's frame, finish_unbind's, its wait's) closes the connection
-		// before it propagates, as for StartTLS: left open, it would stay
-		// "closing (unbind)" until close(). Later operations fail naming
-		// not_enough_memory for a bad_alloc, the abort otherwise (no other
-		// exception is known to escape today: defensive).
+		// An exception closes the connection before it propagates.
 		std::optional<error> failed;
 		try {
 			if (auto r = self->send_unbind(context); !r) {
@@ -228,7 +218,7 @@ namespace {
 auto connect(corosio::io_context &ioc, std::string_view text, connection_options options, std::pmr::memory_resource *mr)
   -> capy::task<result<connection>>
 {
-	// Not a coroutine: `text` is parsed now, so the task does not refer to it.
+	// Not a coroutine: `text` is parsed now.
 	auto u = url::parse(text, mr);
 	if (!u) {
 		return connect_failed(std::move(u.error()));

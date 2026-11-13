@@ -164,12 +164,8 @@ namespace detail {
 
 	connection_core::~connection_core()
 	{
-		// Close on the I/O thread, then let the io_context run out of work:
-		// operations still running finish with not_connected, a detached
-		// name lookup or offloaded SASL step finishes, and run() returns.
-		// The io_context's destructor then joins that step's thread. Out of
-		// memory for the post: terminates (joining with the connection still
-		// open would hang, its reader keeping the io_context busy).
+		// Close on the I/O thread, then let the io_context run out of work.
+		// Terminates if the post cannot be allocated.
 		io.hand_over(
 		  [this] {
 			  conn.close();
@@ -225,14 +221,10 @@ namespace {
 		return make_error(client_errc::not_connected, std::string(what) + ": no transaction (moved from)");
 	}
 
-	// How long finish() waits at most for the server's answer to its abort,
-	// so that a sync::transaction's destructor returns even without a
-	// default timeout and with a server that never answers.
+	// How long finish() waits at most for the answer to its abort.
 	constexpr std::chrono::seconds abort_wait_limit{ 5 };
 
-	// Aborts `t` if it is still open, then destroys it, on the I/O thread.
-	// If the abort is not answered within abort_wait_limit it is abandoned,
-	// and the ldap::transaction's destructor queues another without waiting.
+	// Aborts `t` if still open, then destroys it, on the I/O thread.
 	auto finish(std::unique_ptr<ldap::transaction> t) -> capy::task<result<void>>
 	{
 		if (t->is_open()) {
@@ -281,9 +273,8 @@ void transaction::settle() noexcept
 		txn_.reset();
 		return;
 	}
-	// finish() takes txn_ on the I/O thread; a failure after that (the
-	// abort is best effort) is ignored there. Out of memory for the post:
-	// terminates, as txn_ must not be destroyed on this thread.
+	// finish() takes txn_ on the I/O thread; terminates if the post cannot be
+	// allocated.
 	io_->hand_over([this] { return finish(std::move(txn_)); }, "out of memory ending a transaction on the I/O thread");
 }
 
@@ -357,9 +348,8 @@ auto transaction::abort() -> result<void>
 
 namespace detail {
 
-	// What a sync::client and its leases share: the I/O thread and the
-	// ldap::client living on it. The last owner destroys the ldap::client
-	// on the I/O thread and joins it.
+	// What a sync::client and its leases share; the last owner destroys the
+	// ldap::client on the I/O thread and joins.
 	struct client_core
 	{
 		io_thread io{ "sync::client" };
@@ -382,11 +372,8 @@ namespace detail {
 		client_core(client_core &&) = delete;
 		auto operator=(client_core &&) -> client_core & = delete;
 
-		// Closes the ldap::client (idle connections unbound by detached
-		// tasks) and destroys it, then lets those tasks finish and joins.
-		// Out of memory for the post: terminates (the ldap::client is not
-		// closed if sync::client::close() failed too, and its connections
-		// would keep the io_context busy: joining would hang).
+		// Closes and destroys the ldap::client, then lets its tasks finish and
+		// joins. Terminates if the post cannot be allocated.
 		~client_core()
 		{
 			io.hand_over(
@@ -404,8 +391,7 @@ namespace detail {
 			co_return result<void>{};
 		}
 
-		// Closes the ldap::client on its strand, so that its close() has
-		// run when the task ends.
+		// Closes the ldap::client on its strand.
 		static auto close(client_core &core) -> capy::task<result<void>>
 		{
 			if (!core.pool) {
@@ -475,8 +461,7 @@ template<bool Exclusive> void basic_lease<Exclusive>::release() noexcept
 	if (io_->on_this_thread()) {
 		held_.release();
 	} else {
-		// Out of memory for the post: terminates, as held_ must not be
-		// returned to the ldap::client from this thread.
+		// Terminates if the post cannot be allocated.
 		io_->hand_over(
 		  [this] {
 			  held_.release();

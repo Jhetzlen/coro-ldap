@@ -423,9 +423,7 @@ namespace detail {
 
 	namespace {
 
-		// What append_sanitized replaces besides ill-formed UTF-8: control
-		// characters (General_Category Cc: C0, DEL, C1), Bidi_Control, and
-		// LINE / PARAGRAPH SEPARATOR (the only characters of Zl and Zp).
+		// Control characters, Bidi_Control, and LINE / PARAGRAPH SEPARATOR.
 		auto replaced(UChar32 c) noexcept -> bool
 		{
 			const auto type = static_cast<UCharCategory>(u_charType(c));

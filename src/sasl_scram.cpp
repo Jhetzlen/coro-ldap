@@ -54,9 +54,7 @@ namespace {
 		auto operator[](std::size_t i) -> unsigned char & { return bytes[i]; }
 	};
 
-	// Error contexts say what is wrong, not the code's own text (message()
-	// appends it), and not the mechanism's name: connection::sasl_bind
-	// prefixes "sasl bind SCRAM-SHA-256".
+	// An encode_error with `what` as its context.
 	auto input_error(std::string_view what) -> std::unexpected<error> { return fail(client_errc::encode_error, what); }
 
 	// OpenSSL or ICU failed (memory, missing ICU data): the environment, not
@@ -202,13 +200,8 @@ namespace {
 		return library_error(std::string(what) + ": SASLprep failed (ICU " + u_errorName(status) + ")");
 	}
 
-	// SASLprep (RFC 4013) with ICU's usprep: table B.1 mapped to nothing, the
-	// non-ASCII spaces of C.1.2 to U+0020, NFKC, the prohibited tables (C.1.2,
-	// C.2.1 .. C.9) refused, bidi checked (RFC 3454 section 6), and for a
-	// stored string the unassigned code points of table A.1 refused. UTF-8 in
-	// and out. `what` names the input in error contexts, which never quote it.
-	// The result is written into `out`, wiped first, sized once and wiped on
-	// failure, so no other copy of the prepared text is made.
+	// SASLprep (RFC 4013) with ICU's usprep, into `out` (wiped first, sized
+	// once, wiped on failure). `what` names the input in errors.
 	auto saslprep(std::string_view s, std::string_view what, prep_kind kind, std::string &out) -> result<void>
 	{
 		wipe_string(out);
@@ -401,9 +394,8 @@ namespace {
 	}
 
 
-	// The keys of RFC 5802 section 3 from the SaltedPassword: the
-	// client-final-message's proof (base64) and the ServerSignature. False
-	// if OpenSSL fails.
+	// The client proof (base64) and ServerSignature from the SaltedPassword (RFC
+	// 5802 section 3); false if OpenSSL fails.
 	//   ClientKey       := HMAC(SaltedPassword, "Client Key")
 	//   StoredKey       := H(ClientKey)
 	//   ClientSignature := HMAC(StoredKey, AuthMessage)
@@ -471,12 +463,8 @@ struct sasl_scram_sha256::server_first
 	std::uint32_t iterations = 0;
 };
 
-// What PBKDF2 and the keys need and give, shared between the mechanism and
-// its offloaded step (offload_step). The step reads the inputs and writes
-// the outputs, then sets `done` (release); the mechanism touches neither
-// until it reads `done` (acquire) as true (collect()), and drops its
-// reference without reading them otherwise (a step sasl_bind gave up on:
-// it runs on with this block). Wiped by its last owner.
+// PBKDF2's inputs and outputs, shared with an offloaded step: read by the
+// mechanism only once `done` is true (acquire). Wiped by its last owner.
 struct sasl_scram_sha256::derivation
 {
 	std::string password;// prepared
@@ -568,8 +556,8 @@ void sasl_scram_sha256::prepare(const sasl_bind_context &context)
 		}
 		return;
 	}
-	// not_offered only asks whether the client could bind to this channel
-	// (any type); plus binds with the type chosen, or the default.
+	// not_offered: whether any type is available; plus: the chosen type, or the
+	// default.
 	binding_type_ = context.bindings.default_type;
 	if (plus && options_.binding_type) {
 		binding_type_ = options_.binding_type;
@@ -580,9 +568,7 @@ void sasl_scram_sha256::prepare(const sasl_bind_context &context)
 	}
 }
 
-// The outcome of an offloaded step, once it is over: its ServerSignature
-// for verify(), its SaltedPassword for the cache. A step still running
-// (sasl_bind gave up on it) is dropped: this exchange has no signature.
+// The outcome of a finished offloaded step; one still running is dropped.
 void sasl_scram_sha256::collect() noexcept
 {
 	if (pending_ == nullptr) {
@@ -623,11 +609,8 @@ auto sasl_scram_sha256::start() -> result<std::optional<std::string>>
 	if (auto r = saslprep(username_, "username", prep_kind::query, user); !r) {
 		return std::unexpected(std::move(r.error()));
 	}
-	// The authorization identity is a saslname too (UTF-8), but RFC 5802
-	// does not prepare it: it is sent as given (escaped) once checked. It
-	// must be well-formed UTF-8 (RFC 3629: U8_NEXT refuses overlong forms,
-	// surrogates and code points above U+10FFFF) without control characters
-	// (general category Cc: C0, DEL, C1); every other code point is accepted.
+	// The authorization identity: well-formed UTF-8 without control characters,
+	// not prepared.
 	for (std::size_t i = 0; i < authz_id.size();) {
 		const auto [c, n] = detail::utf8_next(authz_id, i);
 		if (c < 0) {
@@ -685,10 +668,7 @@ auto sasl_scram_sha256::start() -> result<std::optional<std::string>>
 		client_nonce_ = base64_encode(raw.span());
 	}
 
-	// The password last, after every other check: a failure above leaves
-	// no prepared password behind, and saslprep() wipes its own on failure.
-	// RFC 5802 section 2.2: the password is prepared as a stored string
-	// (unassigned code points refused).
+	// The password last; prepared as a stored string (RFC 5802 section 2.2).
 	if (auto r = saslprep(password_, "password", prep_kind::stored, prepared_password_); !r) {
 		return std::unexpected(std::move(r.error()));
 	}
@@ -796,7 +776,6 @@ auto sasl_scram_sha256::parse_server_first(std::string_view message) -> result<s
 namespace {
 	// AuthMessage := client-first-message-bare + "," + server-first-message
 	//                + "," + client-final-message-without-proof
-	// RFC 5802 section 3 AuthMessage order, which the two callers follow.
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto auth_message_of(std::string_view first_bare, std::string_view server_first, std::string_view without_proof)
 	  -> std::string

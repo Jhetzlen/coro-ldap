@@ -56,8 +56,7 @@ namespace {
 		return out;
 	}
 
-	// A task that fails at once, for the forwarders that refuse a request
-	// before modify_dn() would.
+	// A task that fails at once.
 	auto refuse(std::error_code code, std::string context) -> capy::task<result<response>>
 	{
 		co_return fail(code, context);
@@ -251,9 +250,7 @@ namespace detail {
 	{
 		const std::string context = "extended operation " + request.name;
 		if (request.name == start_tls_oid) {
-			// RFC 4511 section 4.14: StartTLS changes the transport, which
-			// start_tls() drives; RFC 4370 section 3 keeps proxied
-			// authorization off it, and start_tls() sends no control.
+			// StartTLS goes through start_tls(), which sends no control.
 			co_return std::unexpected(make_error(client_errc::encode_error, context + ": use start_tls()"));
 		}
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());

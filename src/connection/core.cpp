@@ -77,17 +77,16 @@ namespace {
 
 	auto same_tag(ber::tag a, ber::tag b) noexcept -> bool { return a.cls == b.cls && a.number == b.number; }
 
-	// A failed ExtendedResponse without a responseName (Samba's answer to an
-	// unsupported critical control): the last answer to the request it
-	// carries the message id of, or null.
+	// A failed ExtendedResponse without a responseName: the last answer to the
+	// request whose id it carries; null otherwise.
 	auto refusal(const protocol_op &op) noexcept -> const extended_response *
 	{
 		const auto *x = std::get_if<extended_response>(&op);
 		return x != nullptr && !x->response_name && !x->result.is_success() ? x : nullptr;
 	}
 
-	// Abandoned requests whose late responses are still dropped. Older ones
-	// are forgotten: a response for them would then be unexpected.
+	// Abandoned requests whose late responses are still dropped; older ones are
+	// forgotten.
 	constexpr std::size_t max_abandoned = 1024;
 
 }// namespace
@@ -142,8 +141,7 @@ auto connection::core::copy_error(const error &e) noexcept -> error
 auto connection::core::unsent_error(const error &e) noexcept -> error
 {
 	error u = copy_error(e);
-	// An allocation failure stays one (DESIGN.md section 7: the operations
-	// fail with not_enough_memory, what was to be sent is lost).
+	// An allocation failure stays not_enough_memory.
 	if (u.code != std::errc::not_enough_memory) {
 		u.code = client_errc::not_sent;
 	}
@@ -218,8 +216,7 @@ auto connection::core::not_sent(std::string_view context) const -> error
 
 void connection::core::close() noexcept
 {
-	// Without memory for the error's text, operations fail with
-	// not_enough_memory instead.
+	// Without memory for the error's text: not_enough_memory.
 	error closed;
 	try {
 		closed = make_error(client_errc::not_connected, "connection closed");
@@ -284,8 +281,7 @@ void connection::core::enqueue(std::int32_t id, std::pmr::vector<std::byte> byte
 	writing = true;
 	write_idle.clear();
 	add_ref();// released by the writer
-	// No stop token: a PDU is always written whole (a cancelled write
-	// would leave half a PDU on the wire).
+	// No stop token: a PDU is always written whole.
 	capy::run_async(ex)(std::move(task));
 }
 
@@ -340,8 +336,7 @@ auto connection::core::submit(message &m, pending_op *p, std::string_view contex
 			enqueue(m.id, std::move(*bytes));
 		}
 	} catch (...) {
-		// `p` (in the caller's frame) must not stay registered: its
-		// request is not sent.
+		// Unregister `p`: its request is not sent.
 		if (p != nullptr) {
 			pending.erase(m.id);
 			p->registered = false;
@@ -406,16 +401,8 @@ void connection::core::send_unanswered(message &m,
   std::optional<clock::time_point> deadline,
   std::string_view context)
 {
-	// Listed before `m` is queued, like abandon(): nothing may fail after
-	// that, or its answer would match no request. Id 0 is never a
-	// request's. submit returns an error, or throws, only with nothing
-	// queued, so the entry is still last then. It may start the writer
-	// inline, whose failed write runs shut() inside it, which clears the
-	// list: hence the guarded pop_back() on a throw, and the !open check
-	// after it. If starting the reader or the due watcher below throws,
-	// the request is sent and its answer still counted as due: the next
-	// reader started reads it, and its deadline is applied once a due
-	// watcher runs again (StartTLS's wait starts both).
+	// Listed before `m` is queued, so that its answer always matches; popped
+	// again if submit throws with nothing queued.
 	abandoned.push_back({ .id = 0, .search = search });
 	try {
 		if (!submit(m, nullptr, context)) {
@@ -547,9 +534,7 @@ auto connection::core::wait_due_answers(std::optional<clock::time_point> deadlin
   -> capy::task<connection::core::due_wait>
 {
 	const std::size_t due = due_answers;
-	// Something must read the answers and expire their deadlines: if
-	// send_unanswered() could not start the reader or the due watcher
-	// (bad_alloc), nothing else may (a throw here is the caller's).
+	// Start the reader and due watcher if send_unanswered() could not.
 	start_reader();
 	if (!watching && next_due_deadline()) {
 		start_due_watcher();
@@ -562,10 +547,8 @@ auto connection::core::wait_due_answers(std::optional<clock::time_point> deadlin
 		auto [e] = co_await due_idle.wait();
 		ec = e;
 	}
-	// The wait's timeout may run before the due watcher expires an
-	// answer whose deadline passed at the same time: expire those here
-	// (only those past their own deadline), and check again if none is
-	// left. A stop gives canceled, not timeout.
+	// Expire the answers past their own deadline, then check again; a stop
+	// gives canceled.
 	std::size_t left = due;
 	if (ec == capy::cond::timeout) {
 		expire_due(clock::now());
@@ -574,8 +557,7 @@ auto connection::core::wait_due_answers(std::optional<clock::time_point> deadlin
 			co_return due_wait{};
 		}
 	}
-	// A stop reports the count waited for, not due_answers: the last
-	// answer may have come meanwhile, and "0 releases" would say nothing.
+	// A stop reports the count waited for.
 	co_return due_wait{ .ec = ec, .left = left };
 }
 
@@ -621,10 +603,7 @@ void connection::core::abandon_all_for_unbind()
 		op->finished = true;
 		op->ready.set();// they fail with not_connected ("connection closed")
 	}
-	// The answers still due are not read either. due_idle stays clear until
-	// unbind() calls shut(): a StartTLS waiting for them then fails with
-	// not_connected instead of being sent after the UnbindRequest (as does
-	// one whose wait times out meanwhile: `unbinding`).
+	// due_idle stays clear until unbind() calls shut().
 	for (auto &a : abandoned) {
 		a.due = false;
 	}
@@ -651,9 +630,7 @@ auto connection::core::finish_unbind() -> capy::task<std::optional<error>>
 	co_await wait_write_idle();
 	std::optional<error> failed = failure;
 	shut(make_error(client_errc::not_connected, "connection closed"), false, false);
-	// TLS: close_notify, after the reader has stopped (it would otherwise
-	// read the peer's close_notify itself). Best effort and bounded: the
-	// unbind is complete whatever the peer does.
+	// TLS close_notify once the reader has stopped; best effort and bounded.
 	if (!failed && transport_.is_tls() && transport_.is_open()) {
 		co_await wait_reader_idle();
 		(void)co_await transport_.shutdown(tls_shutdown_timeout);
@@ -714,8 +691,8 @@ auto connection::core::reader(core *self) -> capy::task<void>
 		while (self->open && self->outstanding() != 0) {
 			auto size = co_await net::read_frame(self->transport_, self->buf, self->max_message_size);
 			if (!size) {
-				// Stopped because nothing is outstanding (bytes already
-				// received stay in buf), or a real failure.
+				// Stopped because nothing is outstanding (received bytes stay in buf), or
+				// a real failure.
 				if (size.error().code == capy::cond::canceled && self->open) {
 					break;
 				}
@@ -729,9 +706,7 @@ auto connection::core::reader(core *self) -> capy::task<void>
 	}
 	self->reading = false;
 	self->reader_idle.set();
-	// Stopped while an operation was being registered: start afresh,
-	// with a new stop token. If it cannot start, nothing would read the
-	// responses: closed.
+	// Stopped while an operation was being registered: start afresh.
 	try {
 		if (self->open && self->outstanding() != 0) {
 			self->start_reader();
@@ -812,10 +787,8 @@ void connection::core::route(std::size_t size)
 	}
 	const auto a = std::ranges::find(abandoned, h->id, &abandoned_req::id);
 	if (a != abandoned.end()) {
-		// A late response to an abandoned request: dropped. Only a final
-		// response is its last: the search's SearchResultDone or a refusal,
-		// or the response to another request. IntermediateResponses (any
-		// request) and a search's entries and references may come before it.
+		// A late response to an abandoned request, dropped; only a final response
+		// is its last.
 		const bool last = !same_tag(h->op, intermediate_response_tag)
 						  && (!a->search || same_tag(h->op, search_result_done_tag)
 							  || (same_tag(h->op, extended_response_tag) && is_refusal(bytes)));

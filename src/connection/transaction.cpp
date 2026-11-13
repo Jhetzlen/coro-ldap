@@ -1,6 +1,5 @@
-// LDAP transactions (RFC 5805): connection::start_transaction() and
-// end_transaction(), and the ldap::transaction helper built on them
-// (transaction.hpp).
+// RFC 5805 transactions: start_transaction(), end_transaction() and
+// ldap::transaction.
 #include "jhetz/ldap/transaction.hpp"
 #include "jhetz/ldap/connection.hpp"
 
@@ -35,9 +34,7 @@ namespace {
 	constexpr std::string_view start_context = "start transaction";
 	constexpr std::string_view end_context = "end transaction";
 
-	// What an End Transaction exchange ended with, once the server answered
-	// as section 2.3 allows: its result, its txnEndRes (empty when there is
-	// no responseValue) and the response's controls.
+	// An End Transaction exchange's result, txnEndRes and controls.
 	struct end_reply
 	{
 		ldap_result result{};
@@ -45,10 +42,7 @@ namespace {
 		std::pmr::vector<control> controls{};
 	};
 
-	// `answered`, if given, is set once the server has answered the request,
-	// whether or not the answer is one section 2.3 allows: the transaction
-	// is then over on the server. It stays false when the request was not
-	// sent, or was given up on (timeout, cancellation, connection failure).
+	// `answered` is set once the server answered: the transaction is over.
 	auto end_exchange(core_ref self, std::string identifier, bool commit, std::string context, bool *answered)
 	  -> capy::task<result<end_reply>>
 	{
@@ -86,9 +80,8 @@ namespace {
 			} else if (success) {
 				co_return std::unexpected(detail::with_context(std::move(v.error()), context));
 			}
-			// A failure whose txnEndRes is malformed: the server's result
-			// code says more than the decode error, so it is kept, without
-			// a message id.
+			// A malformed txnEndRes: keep the server's result code, without a message
+			// id.
 		}
 		co_return out;
 	}
@@ -202,13 +195,9 @@ struct transaction::state
 	std::pmr::vector<update> updates;
 	// Updates sent and not yet answered: commit() refuses while there are.
 	std::size_t in_flight = 0;
-	// The API state: neither commit() nor abort() was called (read by
-	// is_open() on any thread).
+	// Neither commit() nor abort() was called.
 	std::atomic<bool> open = true;
-	// The server may still hold the transaction: no End Transaction it
-	// answered yet. The destructor aborts it while this holds, even after
-	// a commit() or abort() whose request was not sent (stopped before it
-	// started, StartTLS in progress) or was given up on.
+	// No End Transaction answered yet: the destructor aborts it.
 	bool needs_abort = true;
 };
 
@@ -216,9 +205,7 @@ namespace {
 
 	void delete_transaction_now(transaction::state *s) noexcept
 	{
-		// Still open: abort it without waiting, its answer dropped like a
-		// late response to an abandoned request (RFC 5805 section 3.4: an
-		// End Transaction is always answered).
+		// Abort without waiting; the answer is dropped.
 		try {
 			if (s->needs_abort && s->conn->is_open()) {
 				const std::string context = std::string(end_context) + " (abort, transaction destroyed)";
@@ -270,9 +257,8 @@ namespace {
 		return raw != nullptr && raw->type == transaction_specification_oid;
 	}
 
-	// The update `request` with the transaction specification control, or
-	// encode_error if it carries one already (typed or raw: two would be
-	// sent).
+	// `request` with the transaction specification control; encode_error if it
+	// has one already.
 	template<class Params>
 	auto specified(Params &request, const transaction::state &s, std::string_view context) -> std::optional<error>
 	{
@@ -390,8 +376,6 @@ namespace {
 			co_return std::unexpected(std::move(*e));
 		}
 		if (s->in_flight != 0) {
-			// The server would commit without them, or refuse the commit,
-			// depending on which it reads first.
 			co_return fail(client_errc::operation_in_progress,
 			  detail::format("{}: {} update(s) still in flight: await every update first", context, s->in_flight));
 		}

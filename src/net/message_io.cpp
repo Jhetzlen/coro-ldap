@@ -48,12 +48,7 @@ auto read_buffer::prepare(std::size_t n) -> std::span<std::byte>
 			// Enough room once the consumed prefix is dropped.
 			std::memmove(buf_.data(), buf_.data() + begin_, used);
 		} else {
-			// What is needed, at least min_read: read_message asks for the
-			// rest of the current PDU, so the buffer never exceeds one PDU
-			// (or min_read) and grows at most once per PDU.
-			// The new vector is zero-filled; for at most one PDU per growth
-			// that costs little next to receiving it, and keeps this a plain
-			// pmr container.
+			// Grows to what is needed, at least min_read.
 			std::pmr::vector<std::byte> bigger(std::max(used + n, min_read), buf_.get_allocator());
 			if (used != 0) {
 				std::memcpy(bigger.data(), buf_.data() + begin_, used);
@@ -87,8 +82,7 @@ auto read_frame(transport &t, read_buffer &buf, std::size_t max_message_size) ->
 		std::size_t want = read_buffer::min_read;
 		std::optional<std::size_t> declared;
 		if (!data.empty()) {
-			// LDAPMessage is a SEQUENCE: reject anything else from its first
-			// octet instead of reading a body of up to max_message_size.
+			// LDAPMessage is a SEQUENCE: reject anything else from its first octet.
 			if (data[0] != ber::identifier_octet(ber::tags::sequence)) {
 				co_return fail(client_errc::decode_error,
 				  where + ": PDU starts with " + hex_byte(data[0]) + ", not a SEQUENCE (0x30)");
@@ -101,10 +95,8 @@ auto read_frame(transport &t, read_buffer &buf, std::size_t max_message_size) ->
 			if (declared && data.size() >= *declared) {
 				co_return *declared;
 			}
-			// Room for exactly the rest of this PDU (or, while its header is
-			// incomplete, for min_read bytes in all): asking for more would
-			// reallocate on every short read near the end of a PDU. Free
-			// space beyond it is still used, for the next PDUs.
+			// Room for exactly the rest of this PDU (or min_read while its header is
+			// incomplete).
 			want = declared ? *declared - data.size() : read_buffer::min_read - data.size();
 		}
 
@@ -119,10 +111,8 @@ auto read_frame(transport &t, read_buffer &buf, std::size_t max_message_size) ->
 		if (!ec) {
 			continue;
 		}
-		// A TLS peer that closes without close_notify gives stream_truncated.
-		// Between PDUs no data is lost (LDAP frames every message), so it is
-		// reported like a plain close; inside a PDU it is a truncation. The
-		// original error code is kept either way.
+		// eof, or stream_truncated (no TLS close_notify): a close between PDUs, a
+		// truncation inside one.
 		const bool closed = ec == capy::cond::eof || ec == capy::cond::stream_truncated;
 		if (n != 0 && closed) {
 			continue;// use the bytes; the close shows again on the next read

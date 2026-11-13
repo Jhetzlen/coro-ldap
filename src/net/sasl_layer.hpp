@@ -1,8 +1,5 @@
-// Internal: the SASL security layer stream (RFC 4422 section 3.7) that
-// connection::sasl_bind puts between the LDAP PDUs and the transport's
-// stream once a mechanism negotiated integrity or confidentiality
-// (sasl.hpp, sasl_security_layer). transport::stream() then returns it, so
-// read_frame, write_bytes and everything above them are unchanged.
+// The SASL security layer stream (RFC 4422 section 3.7) between the LDAP
+// PDUs and the transport's stream.
 #pragma once
 
 #include "jhetz/ldap/error.hpp"
@@ -34,19 +31,9 @@ namespace jhetz::ldap::net::detail {
 // byte order (RFC 4422 section 3.7).
 inline constexpr std::size_t sasl_length_size = 4;
 
-// A capy::Stream over `inner` (the transport's stream, above TLS if any, RFC
-// 4513 section 5.2.1.6). write_some() protects at most max_wrap_input()
-// octets into one buffer, writes it whole after its length, and reports the
-// plaintext octets taken (none if the buffer was not written whole); a
-// max_wrap_input() of 0 fails with client_errc::encode_error. read_some()
-// delivers plaintext, unwrapping whole buffers; a length above
-// max_received() fails with client_errc::message_too_large before the buffer
-// is read. Unwrapped bytes survive a cancelled read. One read and one write
-// may be in flight at once.
-//
-// Errors are error codes; the context of the last read and write failure
-// that came from the layer is kept in last_read_error() and
-// last_write_error() (empty when the inner stream's error says it all).
+// A capy::Stream over `inner`: write_some() protects at most
+// max_wrap_input() octets into one length-prefixed buffer; read_some()
+// unwraps whole buffers. One read and one write may be in flight.
 class sasl_layer_stream
 {
   public:
@@ -109,8 +96,8 @@ class sasl_layer_stream
 	auto flush() -> boost::capy::task<boost::capy::results<>>;
 	// A layer that takes no plaintext (max_wrap_input() 0): encode_error.
 	auto refuse_empty_wrap() -> std::error_code;
-	// Unwraps the buffer at the front of in_ if it is complete; whether it
-	// was. Fails on an oversized length or an unwrap error.
+	// Unwraps the buffer at the front of in_ if complete; `done` says whether
+	// it was.
 	auto unwrap_front(bool &done) -> std::error_code;
 
 	boost::capy::any_stream *inner_;
@@ -124,11 +111,8 @@ class sasl_layer_stream
 	std::string write_error_;
 };
 
-// Installs `layer` on `t` (RFC 4513 section 5.2.1.4: from the first octet
-// after the final BindResponse): the bytes already in `buf` past that
-// response move into the layer, `buf` is emptied, and t.stream() returns
-// the layer from now on. A write in flight keeps the stream it started on.
-// client_errc::security_layer_in_effect if `t` has a layer already.
+// Installs `layer` on `t`: the bytes in `buf` past the final BindResponse
+// move into it, and t.stream() returns the layer from now on.
 auto install_security_layer(transport &t, read_buffer &buf, std::unique_ptr<sasl_security_layer> layer) -> result<void>;
 
 // The context of the last read's or write's failure on `t`, when it came

@@ -89,11 +89,8 @@ auto sasl_layer_stream::fill() -> capy::task<capy::results<>>
 		if (done) {
 			continue;// an empty buffer delivers nothing: the next one
 		}
-		// Room for exactly the rest of this buffer (or, while its length is
-		// incomplete, for read_chunk bytes in all), as in read_frame: asking
-		// for more would reallocate and copy the partial buffer on every
-		// short read near its end. prepare() hands all its free space, so
-		// the next buffers still fill what is beyond.
+		// Room for exactly the rest of this buffer (or read_chunk while its length
+		// is incomplete).
 		const std::size_t have = in_.size();
 		const std::size_t want =
 		  have >= sasl_length_size ? sasl_length_size + read_length(in_.data()) - have : read_chunk - have;

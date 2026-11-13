@@ -120,9 +120,8 @@ namespace {
 		return fail(client_errc::decode_error, detail::format("{}: {}", message, what));
 	}
 
-	// The payload field described at `fields` (Len, MaxLen, BufferOffset):
-	// within the message, else an error naming it. A field of length 0 is
-	// empty whatever its offset.
+	// The payload field described at `fields`, within the message; empty when
+	// its length is 0.
 	auto payload_field(std::string_view message, std::string_view kind, std::size_t fields, std::string_view name)
 	  -> result<std::string_view>
 	{
@@ -216,10 +215,8 @@ namespace {
 		put16(out, trail_base + (v & surrogate_mask));
 	}
 
-	// Into `out`, whose buffer is reserved once for the longest possible
-	// result (two octets per UTF-8 octet: a 1 to 3 octet sequence gives one
-	// UTF-16 unit, a 4 octet one two), so it is never reallocated and no
-	// freed buffer keeps a copy.
+	// Into `out`, reserved once for the longest result so it never
+	// reallocates.
 	template<class Map> auto to_utf16le(std::string_view utf8, Map map, std::string &out) -> result<void>
 	{
 		out.clear();
@@ -246,9 +243,7 @@ namespace {
 
 	// ---------------------------------------------------------------- MD4 (RFC 1320)
 
-	// Zeroes `n` octets at `p` through a volatile pointer, so the stores are
-	// kept even when nothing reads the memory again (the codec has no
-	// OPENSSL_cleanse).
+	// Zeroes `n` octets at `p` through a volatile pointer.
 	void wipe_bytes(void *p, std::size_t n) noexcept
 	{
 		for (volatile unsigned char &b : std::span(static_cast<volatile unsigned char *>(p), n)) {

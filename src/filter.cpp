@@ -167,9 +167,8 @@ namespace detail {
 			link_last(f, parent, p);
 		}
 
-		// Visits the elements of the subtree at `top` in preorder without
-		// recursion: enter(i) before the children of i, leave(i) after them.
-		// Substring parts are not visited (they belong to their node).
+		// Visits the subtree at `top` in preorder without recursion; substring
+		// parts are not visited.
 		template<class Enter, class Leave>
 		static void walk(const filter &f, std::uint32_t top, Enter enter, Leave leave)
 		{
@@ -196,9 +195,8 @@ namespace detail {
 			}
 		}
 
-		// Copies the subtree of `src` at `top` into `dst` (not linked; returns
-		// its index). `base`: where src's string pool starts in dst's.
-		// Node index, then pool offset; all four callers pass their `base`.
+		// Copies the subtree of `src` at `top` into `dst` (not linked; returns its
+		// index). `base`: where src's string pool starts in dst's.
 		// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 		static auto copy_subtree(filter &dst, const filter &src, std::uint32_t top, std::uint32_t base) -> std::uint32_t
 		{
@@ -320,8 +318,7 @@ namespace detail {
 		}
 
 		// (a=initial*any*...*final); empty parts are omitted, all empty gives
-		// present (callers pass at least one non-empty part otherwise).
-		// RFC 4511 SubstringFilter order (type, initial, any, final).
+		// present.
 		// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 		static auto substrings(const filter::allocator_type &alloc,
 		  std::string_view attr,
@@ -544,9 +541,7 @@ auto operator==(const filter &a, const filter &b) noexcept -> bool
 
 namespace {
 
-	// RFC 4515 section 3: `*`, `(`, `)`, `\` and NUL are escaped as \XX, and
-	// so is every octet that is not part of valid UTF-8 (the string form is
-	// UTF-8).
+	// RFC 4515 section 3 escaping, and every octet not part of valid UTF-8.
 	void append_escaped(std::pmr::string &out, std::string_view value)
 	{
 		static constexpr std::string_view digits = "0123456789abcdef";
@@ -828,13 +823,8 @@ namespace {
 	constexpr std::uint8_t filter_part_any = access::part_any;
 	constexpr std::uint8_t filter_part_final = access::part_final;
 
-	// One unit of an RFC 4515 assertion value at s[i], once the caller has
-	// handled its own terminators (`)`, and `*` in substrings): `\XX` gives one
-	// octet, any other octet below 0x80 itself, and an octet from 0x80 must
-	// start a valid UTF-8 sequence, which is kept. `(`, `*` and NUL must be
-	// escaped. Appends the octets with `emit` and returns the number of
-	// characters read, or what is wrong. Shared by filter::raw and
-	// unescape_filter_value, so they accept the same values.
+	// One unit of an RFC 4515 assertion value at s[i], appended with `emit`;
+	// the characters read, or the error.
 	template<class Emit>
 	auto read_value_unit(std::string_view s, std::size_t i, const Emit &emit)
 	  -> std::expected<std::size_t, std::string_view>
@@ -874,8 +864,7 @@ namespace {
 	class filter_parser
 	{
 	  public:
-		// `shift`: 1 when the text was wrapped in parentheses, so positions
-		// in errors refer to the caller's text.
+		// `shift`: 1 when the text was wrapped in parentheses.
 		filter_parser(std::string_view s, std::size_t shift, const filter_limits &limits, filter &out)
 		  : s_(s), shift_(shift), limits_(limits), out_(&out)
 		{}
@@ -980,9 +969,8 @@ namespace {
 			return node;
 		}
 
-		// Unescapes value bytes up to the closing ')' (or, with `stars`, an
-		// unescaped '*'), which is not consumed, into a string of out_.
-		// Returns (offset, length).
+		// Unescapes value bytes up to ')' (or, with `stars`, an unescaped '*');
+		// returns (offset, length) in out_'s pool.
 		auto read_part(bool stars) -> result<std::pair<std::uint32_t, std::uint32_t>>
 		{
 			const std::uint32_t off = access::add_text(*out_, {});
@@ -1051,9 +1039,7 @@ namespace {
 			}
 			++i_;
 			const std::size_t value_start = i_;
-			// Unescaped '*' up to the closing ')' decide the kind. Escapes are
-			// `\` and two hex digits, so they never hide a '*' or ')'; text
-			// with a bad escape fails below, whatever the count.
+			// Unescaped '*' up to the closing ')' decide the kind.
 			const auto stars = std::ranges::count(s_.substr(i_, s_.find(')', i_) - i_), '*');
 			if (stars == 0) {
 				const std::uint32_t node = add(kind::equality, parent);
@@ -1521,8 +1507,7 @@ namespace {
 				return std::unexpected(std::move(sub.error()));
 			}
 			const auto next_is = [&](std::uint8_t number) {
-				// Checked first: peek_tag() on an empty reader would build an
-				// error (on the default resource) only to drop it.
+				// Checked first, before peek_tag().
 				if (sub->empty()) {
 					return false;
 				}

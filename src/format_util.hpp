@@ -1,9 +1,5 @@
-// Internal: std::format for diagnostics, and server text in them (below).
-// Calling std::format directly instantiates the whole formatting engine
-// (about 100 KB of code and seconds of -O3 compile time) in every
-// translation unit that builds a message; these wrappers type-erase the
-// arguments and run the engine once, in format_util.cpp. The format string is
-// still checked at compile time.
+// std::format wrappers instantiating the engine once (format_util.cpp), and
+// sanitizing of server text.
 #pragma once
 
 #include <cstddef>
@@ -38,12 +34,9 @@ template<class... Args> void format_to(std::string &out, std::format_string<cons
 	detail::vformat_to(out, fmt.get(), std::make_format_args(args...));
 }
 
-// Appends text a server or peer sent (a diagnosticMessage, a DN, a value,
-// ...) to a human-readable message: at most `max_bytes` bytes of `s`, cut on
-// a code point boundary, then "..." if cut. Valid UTF-8 is kept; ill-formed
-// sequences (one U+FFFD per maximal subpart), control characters (Cc), bidi
-// controls (Bidi_Control) and LINE / PARAGRAPH SEPARATOR (Zl, Zp) become
-// U+FFFD. Other format characters are kept.
+// Appends at most `max_bytes` of peer text, cut on a code point boundary
+// ("..." if cut); ill-formed UTF-8, Cc, Bidi_Control, Zl and Zp become
+// U+FFFD.
 void append_sanitized(std::string &out, std::string_view s, std::size_t max_bytes);
 void append_sanitized(std::pmr::string &out, std::string_view s, std::size_t max_bytes);
 

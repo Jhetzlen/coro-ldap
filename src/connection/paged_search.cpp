@@ -47,9 +47,8 @@ struct paged_search::state
 	std::optional<error> error_{};
 	string_list references{};
 	std::pmr::vector<control> controls{};
-	// The last cookie the server returned: its paging state, to release if
-	// the search stops early. Empty before the first page ends, after the
-	// last one, and after an error that ended the search on the server.
+	// The last cookie the server returned; empty before the first page ends,
+	// after the last one, and after an error that ended the search.
 	std::string cookie{};
 	// ldap::client's lease on the connection, released after the paged
 	// results release is sent.
@@ -83,9 +82,8 @@ struct paged_search::state
 		return {};
 	}
 
-	// The paging state the server holds now: `cookie`, or the current
-	// page's own if its SearchResultDone was already received (the page
-	// ended, next() has not read it yet).
+	// The paging state the server holds now: `cookie`, or the current page's
+	// if its SearchResultDone was received.
 	[[nodiscard]] auto server_cookie() const -> std::string
 	{
 		const message *done = detail::queued_done(current);
@@ -102,12 +100,9 @@ struct paged_search::state
 		return std::string((*pr)->cookie);
 	}
 
-	// Stopped before its end (destroyed): abandons the current page, then
-	// releases the server's paging state (RFC 2696 section 3: page size 0
-	// and the last cookie). Best effort and never suspends: the release is
-	// sent without waiting for its answer, which is dropped. Nothing is sent
-	// if the connection is closed or in StartTLS (a bind holds it until the
-	// bind ends, like any request).
+	// Abandons the current page and releases the server's paging state (RFC
+	// 2696 section 3), without waiting; nothing is sent on a closed connection
+	// or during StartTLS.
 	void stop() noexcept
 	{
 		std::string last;
@@ -355,13 +350,7 @@ namespace {
 		}
 		s.in_next = true;
 		const detail::scope_exit reset{ [&s] { s.in_next = false; } };
-		// `ended`: the error ended the search on the server (an error result,
-		// a malformed answer, a closed connection), so there is nothing to
-		// release. A cancelled or timed-out page was only abandoned, and a page
-		// request that could not be sent was never seen: the server may still
-		// hold the paging state of `cookie`, which the destructor releases.
-		// Decided by capy::cond, not ldap::cond::timeout: that also matches the
-		// server's timeLimitExceeded, which ended the search on the server.
+		// `ended`: the search ended on the server, nothing to release.
 		const auto finish = [&s](error e, bool ended = true) -> result<std::optional<entry>> {
 			if (ended && e.code != capy::cond::canceled && e.code != capy::cond::timeout) {
 				s.cookie.clear();

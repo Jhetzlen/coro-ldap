@@ -28,9 +28,7 @@ namespace {
 
 	constexpr unsigned char first_non_ascii = 0x80;
 
-	// RFC 4513 section 3.1.3.1: ToASCII with UseSTD3ASCIIRules (and the
-	// bidi and CONTEXTJ checks of IDNA). Transitional processing (no
-	// UIDNA_NONTRANSITIONAL_TO_ASCII) maps as IDNA2003 (RFC 3490) does.
+	// RFC 4513 section 3.1.3.1: ToASCII with UseSTD3ASCIIRules, transitional.
 	constexpr auto idna_options = static_cast<std::uint32_t>(UIDNA_USE_STD3_RULES)
 								  | static_cast<std::uint32_t>(UIDNA_CHECK_BIDI)
 								  | static_cast<std::uint32_t>(UIDNA_CHECK_CONTEXTJ);

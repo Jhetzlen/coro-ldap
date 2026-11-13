@@ -1,20 +1,6 @@
-// Default verification on Windows (trust_store.hpp): the CryptoAPI "ROOT"
-// system store as OpenSSL's anchors, and verify_system_chain, whose verdict
-// replaces OpenSSL's on the chain (a ROOT store that cannot be read still
-// fails the connect). Compiled on Windows only, instead of
-// trust_store_default.cpp.
-//
-// Enumerated for every context. A root is kept only if its extended key
-// usage property allows serverAuth (or restricts nothing), its disallowed
-// extended key usage property does not list serverAuth, it has no NotBefore
-// restriction on serverAuth (CERT_NOT_BEFORE_FILETIME_PROP_ID for the uses
-// CERT_NOT_BEFORE_ENHKEY_USAGE_PROP_ID lists; pass such a root in ca_file to
-// trust it anyway), no CERT_DISALLOWED_FILETIME_PROP_ID, and it is not in
-// the "Disallowed" store (by SHA-1 thumbprint). The "CA" store never provides
-// anchors. A store that cannot be enumerated to the end fails.
-//
-// verify_system_chain needs CERT_CHAIN_PARA_HAS_EXTRA_FIELDS (set by CMake)
-// for CERT_CHAIN_PARA::dwUrlRetrievalTimeout and pStrongSignPara.
+// Default verification on Windows: the CryptoAPI "ROOT" store's roots
+// allowed for serverAuth and not distrusted, as OpenSSL's anchors, and
+// verify_system_chain. Needs CERT_CHAIN_PARA_HAS_EXTRA_FIELDS (CMake).
 #include "trust_store.hpp"
 
 #include "../format_util.hpp"
@@ -70,12 +56,7 @@ namespace {
 		return false;
 	}
 
-	// The certificate's extended key usage *property* (the store's
-	// restriction, not the certificate's extension) allows serverAuth.
-	// CertGetEnhancedKeyUsage with CERT_FIND_PROP_ONLY_ENHKEY_USAGE_FLAG:
-	// failing with CRYPT_E_NOT_FOUND means no property (all uses); an empty
-	// list means all uses if the last error is CRYPT_E_NOT_FOUND, none
-	// otherwise. Any other failure skips the root.
+	// The certificate's extended key usage property allows serverAuth.
 	auto server_auth_allowed(PCCERT_CONTEXT cert) -> bool
 	{
 		DWORD size = 0;
@@ -102,7 +83,6 @@ namespace {
 	constexpr DWORD not_before_filetime_prop_id = 126;
 	constexpr DWORD not_before_enhkey_usage_prop_id = 127;
 
-	// What an ASN.1 encoded enhanced key usage property says about serverAuth.
 	enum class usage_property : std::uint8_t {
 		absent,
 		lists_server_auth,
@@ -137,19 +117,15 @@ namespace {
 		return lists_server_auth(*usage) ? usage_property::lists_server_auth : usage_property::omits_server_auth;
 	}
 
-	// The root program disables a use of a root by listing it in the
-	// CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID property. True when it lists
-	// serverAuth, or when it is there but cannot be read (fail closed); no
-	// property is false.
+	// The CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID property lists serverAuth, or
+	// cannot be read.
 	auto server_auth_disallowed(PCCERT_CONTEXT cert) -> bool
 	{
 		const usage_property p = read_usage_property(cert, CERT_DISALLOWED_ENHKEY_USAGE_PROP_ID);
 		return p == usage_property::lists_server_auth || p == usage_property::unreadable;
 	}
 
-	// A NotBefore date (header) applies to serverAuth: the date property is
-	// there (whatever its value, or when it cannot be read), and the usage
-	// property is absent (all uses), lists serverAuth or cannot be read.
+	// A NotBefore date applies to serverAuth.
 	auto server_auth_not_before(PCCERT_CONTEXT cert) -> bool
 	{
 		DWORD size = 0;
@@ -216,8 +192,7 @@ auto load_system_trust(boost::corosio::tls_context &ctx) -> result<void>
 	}
 
 	std::vector<system_certificate> certs;
-	// CertEnumCertificatesInStore frees the previous context; the last call
-	// returns null, so only an exception (bad_alloc) leaves one to free.
+	// CertEnumCertificatesInStore frees the previous context.
 	PCCERT_CONTEXT cert = nullptr;
 	try {
 		while ((cert = CertEnumCertificatesInStore(root.get(), cert)) != nullptr) {
@@ -232,8 +207,7 @@ auto load_system_trust(boost::corosio::tls_context &ctx) -> result<void>
 		}
 		throw;
 	}
-	// The loop ends on null: at the end of the store, or on a failure that
-	// would leave the set partial.
+	// Null ends the loop: the end of the store, or a failure.
 	if (const DWORD error = GetLastError(); !is_not_found(error) && error != static_cast<DWORD>(ERROR_NO_MORE_FILES)) {
 		return fail({ static_cast<int>(error), std::system_category() }, what + ": cannot enumerate the ROOT store");
 	}
@@ -338,8 +312,7 @@ auto verify_system_chain(std::span<const std::vector<unsigned char>> chain,
 	}
 	for (const auto &der : chain.subspan(1)) {
 		const auto size = der_size(der);
-		// One the engine cannot decode is left out: the chain then fails
-		// to build if it was needed, with the engine's reason.
+		// One the engine cannot decode is left out.
 		if (size) {
 			CertAddEncodedCertificateToStore(static_cast<HCERTSTORE>(extra.get()),
 			  X509_ASN_ENCODING,
@@ -358,11 +331,7 @@ auto verify_system_chain(std::span<const std::vector<unsigned char>> chain,
 	para.RequestedUsage.dwType = USAGE_MATCH_TYPE_AND;
 	para.RequestedUsage.Usage.cUsageIdentifier = static_cast<DWORD>(server_auth.size());
 	para.RequestedUsage.Usage.rgpszUsageIdentifier = server_auth.data();
-	// OpenSSL's security level for the signatures and keys of the chain
-	// (trust_store.hpp strong_sign_for_level): without pStrongSignPara the
-	// chain engine checks neither. dwFlags 0: CRL and OCSP signatures are
-	// not held to it (OpenSSL checks no revocation at all), and
-	// dwStrongSignFlags 0 checks the leaf's key length too.
+	// OpenSSL's security level for the chain's signatures and keys.
 	auto strong = strong_sign_for_level(security_level);
 	CERT_STRONG_SIGN_SERIALIZED_INFO strong_info{};
 	CERT_STRONG_SIGN_PARA strong_para{};
@@ -376,13 +345,7 @@ auto verify_system_chain(std::span<const std::vector<unsigned char>> chain,
 		strong_para.pSerializedInfo = &strong_info;// NOLINT(cppcoreguidelines-pro-type-union-access)
 		para.pStrongSignPara = &strong_para;
 	}
-	// The revocation retrieval, every CRL and OCSP URL together
-	// (CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT), within what is left of
-	// the connect's or StartTLS's deadline and at most
-	// max_revocation_retrieval, with a deadline or without. Microsoft
-	// documents dwUrlRetrievalTimeout for revocation only: AIA
-	// intermediates and AuthRoot roots are fetched with the chain engine's
-	// own per-URL timeout (trust_store.hpp).
+	// The revocation retrieval budget (CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT).
 	para.dwUrlRetrievalTimeout = static_cast<DWORD>(revocation_retrieval_budget(timeout).count());
 	const DWORD flags = CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT | CERT_CHAIN_REVOCATION_ACCUMULATIVE_TIMEOUT;
 	PCCERT_CHAIN_CONTEXT raw_chain = nullptr;
@@ -394,8 +357,7 @@ auto verify_system_chain(std::span<const std::vector<unsigned char>> chain,
 		return chain_error(GetLastError(), "CertGetCertificateChain failed");
 	}
 	const chain_ptr built(raw_chain);
-	// Checked here rather than left to the SSL policy, whose mapping of it
-	// to an error Microsoft does not document.
+	// A weak signature is refused here.
 	if ((built->TrustStatus.dwErrorStatus & CERT_TRUST_HAS_WEAK_SIGNATURE) != 0) {
 		return fail(std::make_error_code(std::errc::permission_denied),
 		  ldap::detail::format("Windows certificate chain: a signature or key below OpenSSL's security level {} "

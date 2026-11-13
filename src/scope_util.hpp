@@ -6,8 +6,8 @@
 
 namespace jhetz::ldap::detail {
 
-// Calls `f` on destruction unless release() was called first. Neither
-// copyable nor movable: the guard stays where it was declared.
+// Calls `f` on destruction unless release() was called. Neither copyable
+// nor movable.
 template<class F> class scope_exit
 {
   public:

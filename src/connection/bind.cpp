@@ -39,15 +39,8 @@ void connection::core::mark_tls_exporter_used() noexcept
 }
 
 namespace {
-	// Ends a SASL exchange the client gives up on while the server waits for
-	// its next step: until then the server refuses other operations (RFC
-	// 4511 section 4.2.1). An anonymous simple bind aborts it. A
-	// BindResponse ends the exchange, even a refusal (a server that disallows
-	// anonymous binds): the connection is then anonymous and stays open. The
-	// exception is saslBindInProgress, which cannot answer a simple bind (RFC
-	// 4511 section 4.2.2), and the server may still be in the exchange, so
-	// the connection is closed. Without a response (timeout, stop, transport
-	// error) the connection is already closed: a bind cannot be abandoned.
+	// Aborts a SASL exchange with an anonymous simple bind (RFC 4511 section
+	// 4.2.1); a saslBindInProgress answer closes the connection.
 	auto abort_sasl(core_ref self, const std::string &context) -> capy::task<void>
 	{
 		// The anonymous bind's success installs no layer the exchange negotiated.
@@ -67,9 +60,7 @@ namespace {
 		self->shut(make_error(client_errc::unexpected_response, text), true);
 	}
 
-	// After a step: the layer the exchange negotiated, if this step's
-	// BindRequest is its last, takes effect with that request's success.
-	// One layer at a time.
+	// Arms the layer this step negotiated, if its BindRequest is the last.
 	auto arm_security_layer(connection::core &c, sasl_mechanism &mechanism) -> result<void>
 	{
 		auto layer = mechanism.take_security_layer();
@@ -152,8 +143,7 @@ namespace {
 			self->mark_tls_exporter_used();
 		}
 		for (int step = 0;; ++step) {
-			// Not at the limit: these credentials are never sent, and abort_sasl's
-			// anonymous bind must not install their layer.
+			// Below the limit only: these credentials are sent.
 			if (creds && step < max_steps) {
 				if (auto armed = arm_security_layer(*self, mechanism); !armed) {
 					creds = std::unexpected(std::move(armed.error()));
@@ -189,9 +179,7 @@ namespace {
 			}
 			if (r.result.is_success()) {
 				if (auto done = mechanism.complete(server_creds); !done) {
-					// The server considers the connection bound, the client does
-					// not (e.g. SCRAM could not authenticate the server): close
-					// it rather than leave it bound to an identity nobody vouched for.
+					// The server considers the connection bound, the client does not: close it.
 					auto e = detail::with_context(std::move(done.error()), context);
 					self->shut(e, true);
 					co_return std::unexpected(std::move(e));

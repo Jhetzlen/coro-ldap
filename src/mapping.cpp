@@ -60,9 +60,8 @@ namespace detail {
 
 	namespace {
 
-		// Whether decode reads `description` as one of `names` (the same
-		// description), or ignores it as a subtype of a name without options
-		// (`cn;lang-en` for `cn`) that holds no name with options.
+		// Whether decode reads `description` as one of `names`, or ignores it as a
+		// subtype of a name without options.
 		auto read_or_ignored(std::string_view description, std::span<const std::string_view> names) -> bool
 		{
 			if (std::ranges::any_of(names, [&](std::string_view n) { return same_description(description, n); })) {
@@ -348,8 +347,7 @@ auto format_generalized_time(sys_seconds t) -> result<std::string>
 	if (y < 0 || y > max_year) {
 		return fail(client_errc::encode_error, detail::format("GeneralizedTime: year {} outside 0000-9999", y));
 	}
-	// Plain integers rather than the chrono formatter ("{:%Y%m%d%H%M%S}Z"),
-	// which costs this file seconds of compile time for the same output.
+	// Plain integers, not the chrono formatter.
 	const hh_mm_ss hms(t - day);
 	return detail::format("{:04}{:02}{:02}{:02}{:02}{:02}Z",
 	  y,

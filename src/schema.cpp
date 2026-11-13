@@ -17,11 +17,8 @@ namespace {
 
 	auto is_space(char c) -> bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
-	// RFC 4512 section 4.1 definitions: "(", ")", "$", 'quoted strings'
-	// (with \27 and \5C escapes) and bare words (keywords, OIDs,
-	// descriptors, "noidlen" like 1.2.3{64}). "$" ends a word: an oidlist
-	// is oid *( WSP DOLLAR WSP oid ) with WSP = 0*SPACE (section 1.4), so
-	// "(sn$cn)" is two oids.
+	// RFC 4512 section 4.1 tokens: "(", ")", "$", 'quoted strings' and bare
+	// words; "$" ends a word.
 	struct token
 	{
 		enum class kind { open, close, dollar, quoted, word, end } k;
@@ -102,11 +99,7 @@ namespace {
 		std::size_t pos_ = 0;
 	};
 
-	// A keyword: RFC 4512 keystring (ALPHA *( ALPHA / DIGIT / "-" )) or an
-	// extension's xstring ("X-" 1*( ALPHA / "-" / "_" ), as eDirectory's
-	// X-NDS_SYNTAX). Anything else (a "{256}" spaced from SYNTAX's OID, a
-	// stray "$" (a token of its own) or OID) fails the definition: taken as a keyword, it would
-	// swallow the next one (SINGLE-VALUE, say) as its value.
+	// RFC 4512 keystring or an X- xstring.
 	auto is_keyword(std::string_view k) -> bool
 	{
 		if (k.empty() || !detail::is_alpha(k[0])) {
@@ -148,10 +141,7 @@ namespace {
 		return fail(client_errc::decode_error, detail::format("schema: {}", why));
 	}
 
-	// The keywords whose argument is an oidlist (RFC 4512 4.1.1 SUP, MUST
-	// and MAY of an object class; 4.1.6 AUX, MUST, MAY and NOT of a DIT
-	// content rule), for which an unparenthesised "a$b" is read as the list
-	// "( a $ b )".
+	// The keywords whose argument is an oidlist.
 	auto is_oidlist_keyword(std::string_view k) -> bool
 	{
 		return detail::iequals(k, "SUP") || detail::iequals(k, "MUST") || detail::iequals(k, "MAY")
@@ -162,12 +152,8 @@ namespace {
 	// an oidlist (oids), an attribute type's one oid.
 	enum class definition_kind { attribute_type, object_class, dit_content_rule };
 
-	// A keyword's argument: one word or quoted string, or a parenthesised
-	// list of them ('$' separators dropped), appended to `values`. With
-	// `oidlist`, a word followed by "$" starts an unparenthesised list,
-	// "cn$sn" or "cn $ sn" (RFC 4512 4.1 parenthesises a list of several
-	// oids; this is a convenience for servers that do not), each "$"
-	// followed by a word or quoted string.
+	// A keyword's argument (a word, a quoted string, or a list) appended to
+	// `values`; with `oidlist`, "cn$sn" is read as a list.
 	auto read_values(lexer &lx, std::vector<std::string> &values, bool oidlist) -> result<void>
 	{
 		constexpr std::size_t max_values = 4096;
@@ -218,10 +204,7 @@ namespace {
 
 	auto parse_definition(std::string_view text, definition_kind kind) -> result<definition>
 	{
-		// RFC 4512 section 4.1: a definition is ASCII but for its qdstrings
-		// (NAME, DESC), which are UTF-8 (QUTF8, section 1.4); the \27 and
-		// \5C escapes are ASCII, so the whole text must be UTF-8. A
-		// definition that is not fails like any other syntax error.
+		// The whole definition must be UTF-8 (RFC 4512 section 4.1).
 		if (const std::size_t bad = detail::invalid_utf8_offset(text); bad != std::string_view::npos) {
 			return fail(client_errc::decode_error,
 			  detail::format("schema: not valid UTF-8 (ill-formed sequence at offset {})", bad));
@@ -283,9 +266,8 @@ namespace {
 		return d;
 	}
 
-	// noidlen without its length: "1.2.3{64}" -> "1.2.3". The length must
-	// be "{" 1*DIGIT "}" right after the OID and end the text; otherwise
-	// nullopt (the definition is then skipped).
+	// "1.2.3{64}" -> "1.2.3"; nullopt unless the length is right after the OID
+	// and ends the text.
 	auto strip_length(std::string_view s) -> std::optional<std::string>
 	{
 		const std::size_t open = s.find('{');
@@ -302,8 +284,7 @@ namespace {
 		return std::string(s.substr(0, open));
 	}
 
-	// Keeps the values that `valid` accepts; others could never be looked
-	// up, so they are dropped.
+	// Keeps the values that `valid` accepts.
 	template<class Pred> auto kept(const std::vector<std::string> *values, Pred valid) -> std::vector<std::string>
 	{
 		std::vector<std::string> out;
@@ -365,11 +346,7 @@ namespace {
 		if (const auto *s = d.get("EQUALITY"); s && !s->empty()) {
 			a.equality = s->front();
 		}
-		// RFC 4512 section 4.1.2: SYNTAX noidlen, a numericoid with an
-		// optional {len} right after it ("{" 1*DIGIT "}", no space; a spaced
-		// "{len}" already failed as a keyword). Anything else could never
-		// match a syntax the mapping knows, and would be the server's raw
-		// text in a report.
+		// SYNTAX noidlen (RFC 4512 section 4.1.2).
 		if (const auto *s = d.get("SYNTAX"); s && !s->empty()) {
 			a.syntax = strip_length(s->front());
 			if (!a.syntax || !detail::is_numericoid(*a.syntax)) {
@@ -519,9 +496,8 @@ namespace {
 	// Longest SUP chain followed; a longer one is taken for a cycle.
 	constexpr int max_sup_depth = 32;
 
-	// The first definition on a's SUP chain (a itself first) that has
-	// `field`; nullptr if none does, a SUP is not found, or the chain is
-	// longer than max_sup_depth (a cycle).
+	// The first definition on a's SUP chain with `field`; nullptr if none, a
+	// SUP is missing, or the chain exceeds max_sup_depth.
 	auto inherited(const server_schema &s,
 	  const attribute_type &a,
 	  std::optional<std::string> attribute_type::*field) noexcept -> const std::string *
@@ -580,11 +556,7 @@ auto schema_report::to_string() const -> std::string
 
 namespace {
 
-	// Why syntax_of(a) is nullptr: a SUP that names no definition (or one
-	// skipped for its SYNTAX), a chain too long (a cycle), or a chain that
-	// ends without any SYNTAX (RFC 4512 4.1.2 requires a SYNTAX or a SUP;
-	// slapd refuses such a definition, AD always gives SYNTAX). The syntax
-	// cannot be checked then, which is an error, not a silent pass.
+	// Why syntax_of(a) is nullptr.
 	auto broken_sup_chain(const server_schema &s, const attribute_type &a) -> std::string
 	{
 		const attribute_type *cur = &a;
@@ -619,17 +591,15 @@ namespace {
 	// Names folded as lookups fold them (ASCII case only).
 	using ci_set = std::unordered_set<std::string_view, detail::ci_hash, detail::ci_equal>;
 
-	// A class whose MUSTs apply, and the declared class it was reached
-	// from (empty for a declared class).
+	// A class whose MUSTs apply, and the declared class it was reached from.
 	struct reached_class
 	{
 		const object_class_type *c;
 		std::string_view from;
 	};
 
-	// The declared classes (those the server defines), then their
-	// superclasses breadth first, each once (a SUP cycle ends). A SUP the
-	// server does not define is reported once, as unknown_superclass.
+	// The declared classes, then their superclasses breadth first, each once;
+	// an undefined SUP is reported once as unknown_superclass.
 	auto with_superclasses(const server_schema &s, std::span<const char *const> classes, schema_report &out)
 	  -> std::vector<reached_class>
 	{
@@ -738,9 +708,7 @@ namespace {
 		});
 	}
 
-	// The active (not OBSOLETE) DIT content rules of the entry's structural
-	// class: that of each declared STRUCTURAL class no other reached class
-	// has as a superclass.
+	// The active DIT content rules of the entry's structural classes.
 	auto content_rules(const server_schema &s, const std::vector<reached_class> &all)
 	  -> std::vector<const dit_content_rule *>
 	{
@@ -762,9 +730,8 @@ namespace {
 		return out;
 	}
 
-	// attribute_not_allowed for each writable member outside the MUSTs and
-	// MAYs of `all` and of the structural class's content rule, or that the
-	// rule precludes, unless a class allows anything or may be missing.
+	// attribute_not_allowed for each writable member the classes and content
+	// rule do not allow.
 	void report_not_allowed(const server_schema &s,
 	  const std::vector<reached_class> &all,
 	  std::span<const dit_content_rule *const> rules,
@@ -814,9 +781,8 @@ namespace {
 		}
 	}
 
-	// auxiliary_class_not_allowed for each declared AUXILIARY class (by
-	// ldap::object_class or ldap::auxiliary_class) that no rule of `rules`
-	// lists in its AUX, when there is a rule.
+	// auxiliary_class_not_allowed for each declared AUXILIARY class no rule
+	// lists in its AUX.
 	void report_auxiliary_not_allowed(const server_schema &s,
 	  const std::vector<reached_class> &all,
 	  std::span<const dit_content_rule *const> rules,

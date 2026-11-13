@@ -81,13 +81,9 @@ namespace {
 		}
 	};
 
-	// The attribute of `e` answering a request for `type`. The attributes
-	// are grouped by description without the range option (ignoring case);
-	// the candidates are the group named `type`, else the only group (the
-	// server's name for an OID or an alias). Among them, one ranged
-	// attribute with at most one value-less plain one is the ranged answer
-	// (MS-ADTS 3.1.1.3.1.3.3), a lone plain one the plain answer. values
-	// nullptr when the entry has no attribute.
+	// The attribute of `e` answering a request for `type`: the group named
+	// `type` (descriptions without the range option), else the only group;
+	// values nullptr when the entry has none.
 	auto find_answer(entry &e, std::string_view type, const request &r) -> result<answer>
 	{
 		std::vector<returned> all;
@@ -139,9 +135,8 @@ namespace {
 		  client_errc::unexpected_response, r.context + ": several attributes returned answer " + std::string(type));
 	}
 
-	// Moves the values of `type` in `e` (plain or ranged from `low`) to
-	// `out`, and sets `type` to the server's name for it. The next window's
-	// low bound, or nullopt once complete.
+	// Moves the values of `type` (plain or ranged from `low`) to `out` and sets
+	// `type` to the server's name; the next window's low bound, or nullopt.
 	auto take(entry &e, const request &r, std::string &type, std::uint32_t low, string_list &out)
 	  -> result<std::optional<std::uint32_t>>
 	{

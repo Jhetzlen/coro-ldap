@@ -61,11 +61,8 @@ namespace {
 		return w;
 	}
 
-	// The bytes of s packed little-endian when it is shorter than 8, else its
-	// last 8 (overlapping the previous word). On big-endian the two paths
-	// pack differently, but each is self-consistent, so equal strings still
-	// hash equally; hash_value mixes in the length to separate strings that
-	// only differ by trailing zero bytes ("a" / "a\0").
+	// The bytes of s packed little-endian when shorter than 8, else its last 8
+	// (overlapping the previous word).
 	auto tail8(std::string_view s) noexcept -> std::uint64_t
 	{
 		if (s.size() >= 8) {
@@ -78,11 +75,7 @@ namespace {
 		return w;
 	}
 
-	// Two multiply / xor-shift rounds: one alone cannot carry a difference
-	// in a word's high bytes down past the next word, so OIDs differing
-	// only there ("1.3.6.1.4.1.0.14.1.8" / "...0.18.1.4") collided in all
-	// 64 bits. Portable (no 128-bit product).
-	// 2^64 / golden ratio, and a multiplier from Pelle Evensen's moremur.
+	// Two multiply / xor-shift rounds (moremur multipliers).
 	constexpr std::uint64_t mix_multiplier_1 = 0x9E37'79B9'7F4A'7C15ull;
 	constexpr std::uint64_t mix_multiplier_2 = 0xD6E8'FEB8'6659'FD93ull;
 	// MurmurHash3's fmix64: its first multiplier and its shift.
@@ -97,19 +90,14 @@ namespace {
 		return h ^ (h >> 32);
 	}
 
-	// The hash's starting state, random per process. The rounds above are
-	// invertible, so with a fixed start anyone can compute names that
-	// collide in all 64 bits, and a server sending them makes the
-	// unordered containers keyed by its names (entry::from, schema name
-	// indexes) quadratic. Not knowing the start, it cannot.
+	// The hash's starting state, random per process.
 	auto make_seed() noexcept -> std::uint64_t
 	{
 		try {
 			std::random_device random;
 			return (std::uint64_t{ random() } << 32) ^ random();
 		} catch (const std::exception &) {
-			// No random device: the clock and an address (ASLR), weaker
-			// but not fixed.
+			// No random device: the clock and an address.
 			const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
 			return mix(static_cast<std::uint64_t>(now), reinterpret_cast<std::uintptr_t>(&now));
 		}
@@ -131,9 +119,7 @@ auto hash_value(std::string_view attribute_name) noexcept -> std::size_t
 	if (i != n) {
 		h = mix(h, ascii_lower8(tail8(attribute_name)));
 	}
-	// The length goes in after the data: XORed into the seed it landed in
-	// the same bits as the first word, so "1.1.1.1.1" and "3.1.1.1.1.1"
-	// collided in all 64 bits.
+	// The length is mixed in after the data.
 	h ^= n;
 	h *= finish_multiplier;
 	return static_cast<std::size_t>(h ^ (h >> finish_shift));
@@ -215,8 +201,7 @@ namespace detail {
 		constexpr std::size_t word = 8;
 		const std::size_t n = s.size();
 		std::size_t i = 0;
-		// Try a block of eight ASCII octets at the start and after an ASCII
-		// octet only: in non-ASCII text (CJK, ...) it would fail every time.
+		// An eight-octet ASCII block is tried at the start and after an ASCII octet.
 		bool ascii = true;
 		while (i < n) {
 			if (ascii && i + word <= n && (load8(s.data() + i) & high_bits) == 0) {

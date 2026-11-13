@@ -66,10 +66,7 @@ namespace {
 		return connection::core::stream_state(s);
 	}
 
-	// next() (Item = entry: entry controls and IntermediateResponses are
-	// dropped) and next_item() (Item = search_stream::item), without a
-	// coroutine frame of their own. References go to s.references either
-	// way.
+	// next() (Item = entry) and next_item() (Item = search_stream::item).
 	template<class Item> auto next_of(search_stream::state *sp) -> capy::task<result<std::optional<Item>>>
 	{
 		if (sp == nullptr) {

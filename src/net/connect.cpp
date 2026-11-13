@@ -105,9 +105,8 @@ namespace {
 		capy::async_waker waker{};// wake() may be called from any thread
 	};
 
-	// Owns the resolver, so connect() can return on timeout while
-	// getaddrinfo is still running on Corosio's pool thread (it cannot be
-	// interrupted). The late result is stored and dropped with the state.
+	// Owns the resolver, so connect() can return on timeout while getaddrinfo
+	// runs; the late result is dropped with the state.
 	auto
 	  resolve_detached(corosio::io_context &ioc, std::string host, std::string port, std::shared_ptr<resolve_state> st)
 		-> capy::task<void>
@@ -156,10 +155,7 @@ namespace {
 		if (st->done) {
 			co_return { st->ec, std::move(st->endpoints) };
 		}
-		// Timed out or cancelled: stop waiting and return now. Cancelling the
-		// resolver only marks the lookup; Corosio completes it (and so the
-		// detached task) when getaddrinfo returns on its thread, and the late
-		// result is dropped with the shared state.
+		// Timed out or cancelled: return now; the lookup completes on its own.
 		if (st->resolver != nullptr) {
 			st->resolver->cancel();
 		}
@@ -168,11 +164,8 @@ namespace {
 
 	// ---------------------------------------------------------------- Happy Eyeballs
 
-	// Shared by the attempts of one connect(), which outlives them (when_any
-	// waits for every child). Attempt i starts once attempt i-1 has failed
-	// or has been running for attempt_delay, whichever comes first. The
-	// delay stays in milliseconds: converting a huge one (ldap::no_timeout)
-	// to clock::duration would overflow, and deadline_after saturates.
+	// Shared by the attempts of one connect(): attempt i starts once i-1 failed
+	// or ran for attempt_delay.
 	struct race_state
 	{
 		race_state(corosio::io_context &ioc,
@@ -249,13 +242,7 @@ namespace {
 		co_return {};
 	}
 
-	// "<what> <text>", with `text` (a decoded host or socket path, or the
-	// encoded URL) sanitized and cut as op_context quotes a DN: the URL is
-	// often a server's (a referral), and its decoded host may hold C1 or
-	// bidi controls or U+2028, an ldapi path or the encoded URL ill-formed
-	// UTF-8 too (check_server_address rejects C0, DEL and ill-formed UTF-8
-	// in an ldap/ldaps host only). Valid non-ASCII (an IDN's U-labels) is
-	// kept.
+	// "<what> <text>", `text` sanitized and cut.
 	auto quoted(std::string_view what, std::string_view text) -> std::string
 	{
 		std::string out(what);
@@ -303,9 +290,8 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 		co_return t;
 	}
 
-	// ---- ldaps://: TLS settings first, so configuration errors (missing CA
-	// file, unparsable certificate, cert without key) fail before any
-	// network traffic.
+	// ---- ldaps://: TLS settings first, so configuration errors fail before
+	// any network traffic.
 	std::optional<detail::tls_setup> tls;
 	if (u.scheme() == url_scheme::ldaps) {
 		auto setup = detail::make_tls_setup(options.tls);
@@ -416,9 +402,7 @@ auto start_tls(transport &t,
 			co_return prefixed(std::move(hs.error()));
 		}
 	} catch (...) {
-		// bad_alloc in the handshake's setup or the handshake: the peer
-		// expects a handshake now (or is in the middle of one), so the
-		// session cannot go on in clear; closed, as for a failed handshake.
+		// bad_alloc in the handshake: closed, as for a failed handshake.
 		t.close();
 		throw;
 	}

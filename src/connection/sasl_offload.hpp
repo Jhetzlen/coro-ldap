@@ -14,10 +14,8 @@
 
 namespace jhetz::ldap::detail {
 
-// Runs `work` on a thread of its own and waits for its result, within
-// `timeout` and the stop token. Fails with std::errc::operation_not_supported
-// under the io_context's locking_mode::unsafe. Errors are without
-// the bind's context (sasl_bind adds it).
+// Runs `work` on a thread of its own and waits within `timeout` and the
+// stop token; operation_not_supported under locking_mode::unsafe.
 auto run_offloaded(boost::corosio::io_context::executor_type ex,
   std::optional<std::chrono::milliseconds> timeout,
   sasl_work work) -> boost::capy::task<result<std::optional<std::string>>>;

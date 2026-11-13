@@ -96,9 +96,7 @@ namespace {
 		});
 	}
 
-	// The value bytes of a request control read back (for mock servers),
-	// once its type is `oid` and it has a value; decode_error naming the
-	// control otherwise.
+	// The value of a request control of type `oid`; decode_error otherwise.
 	auto control_value(const control &c, std::string_view oid, std::string_view what)
 	  -> result<std::span<const std::byte>>
 	{
@@ -132,10 +130,7 @@ namespace {
 	constexpr std::uint8_t extensible_match_tag = 9;
 	constexpr std::uint8_t dn_attributes_tag = 4;
 
-	// Whether `f` is a SimpleFilterItem (RFC 3876 section 2): one leaf, and
-	// an extensible match without dnAttributes. `code` is the error's
-	// (invalid_filter when encoding or parsing, decode_error when decoding),
-	// whose context ("item 2 is (&...), ...") callers prefix; `index` is
+	// Whether `f` is a SimpleFilterItem (RFC 3876 section 2); `index` is
 	// 0-based.
 	auto check_simple_item(const filter &f, std::size_t index, client_errc code) -> result<void>
 	{
@@ -200,10 +195,7 @@ namespace {
 		return value_control(matched_values_oid, v.critical, w, control::allocator_type(mr));
 	}
 
-	// Whether the next element is an extensibleMatch [9] carrying a
-	// dnAttributes [4] element, even FALSE: SimpleMatchingAssertion (RFC 3876
-	// section 2) has no such field, so a value that has one is not a
-	// SimpleFilterItem, whatever its value.
+	// The next element is an extensibleMatch with a dnAttributes field.
 	auto has_dn_attributes_field(ber::reader r) -> bool
 	{
 		constexpr ber::tag extensible = ber::context(extensible_match_tag, true);

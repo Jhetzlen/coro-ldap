@@ -22,9 +22,8 @@ auto password_value(std::string_view password) -> result<std::string>
 		return fail(client_errc::encode_error, std::string(context) + ": the password is too long");
 	}
 
-	// UTF-8 -> UTF-16 (ICU's native order). u_strFromUTF8 refuses ill-formed
-	// UTF-8: overlong forms, surrogates, code points above U+10FFFF,
-	// truncated sequences. Any other ICU status is ICU's failure.
+	// UTF-8 to UTF-16; u_strFromUTF8 refuses ill-formed UTF-8, any other status
+	// is ICU's failure.
 	const auto failed = [&](UErrorCode status) {
 		if (status == U_INVALID_CHAR_FOUND || status == U_ILLEGAL_CHAR_FOUND) {
 			return fail(client_errc::encode_error, std::string(context) + ": the password is not valid UTF-8");

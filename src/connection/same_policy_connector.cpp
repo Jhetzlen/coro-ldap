@@ -30,18 +30,14 @@ namespace {
 
 	constexpr unsigned char first_non_ascii = 0x80;
 
-	// Dotted decimal: an IPv4 literal, which matches only itself (a suffix
-	// match would let "0.0.1" allow "10.0.0.1").
+	// Dotted decimal: an IPv4 literal, matching only itself.
 	auto is_ipv4_literal(std::string_view host) -> bool
 	{
 		return !host.empty() && std::ranges::all_of(host, [](char c) { return (c >= '0' && c <= '9') || c == '.'; });
 	}
 
-	// RFC 3986 reg-name as a host name may use it, decoded: ASCII letters,
-	// digits, '-', '.' and '_' (internal names), and UTF-8 for an
-	// internationalized name (IDNA checks it). Nothing else is passed on to
-	// DNS or the certificate check: no NUL or other control, space, '%',
-	// '/' or ':' a percent-encoding could have smuggled in.
+	// A decoded reg-name with only host name bytes: ASCII letters, digits, '-',
+	// '.', '_', and UTF-8.
 	auto plausible_name(std::string_view host) -> bool
 	{
 		return std::ranges::all_of(host, [](char c) {
@@ -59,9 +55,7 @@ namespace {
 		});
 	}
 
-	// An allow-list entry: a host, and the one port it allows besides the
-	// usual ones, if it names one ("example.org", "example.org:1389",
-	// "10.0.0.1:1389", "[::1]:1389"; "::1" is an address without a port).
+	// An allow-list entry: a host and the one extra port it allows, if any.
 	struct allowed_entry
 	{
 		std::string_view host{};
@@ -135,9 +129,7 @@ namespace {
 				   && name[name.size() - suffix->size() - 1] == '.');
 	}
 
-	// `target`'s host in ASCII form, if it may be contacted at all: not
-	// ldapi://, a host with only the bytes a host name has (no IPv6 zone),
-	// and one that converts.
+	// `target`'s host in ASCII form, if it may be contacted at all.
 	auto usable_host(const url &target) -> std::optional<std::string>
 	{
 		const std::string_view host = target.host();
@@ -152,9 +144,7 @@ namespace {
 		return name;
 	}
 
-	// `target`'s server (a URL's host, decoded, and its port) is in the
-	// allow-list. Its port must be the scheme's default or the origin's,
-	// unless an entry matching the host names it.
+	// `target`'s host and port are allowed.
 	auto server_allowed(const url &target,
 	  std::span<const std::string> allowed,
 	  std::optional<std::uint16_t> origin_port) -> bool
@@ -172,9 +162,8 @@ namespace {
 		});
 	}
 
-	// The URL to connect to: `target` itself, or for an internationalized
-	// name the same server under its ASCII name (what DNS, SNI and the
-	// certificate check expect, RFC 4513 section 3.1.3.1).
+	// `target`, or the same server under its ASCII name (RFC 4513 section
+	// 3.1.3.1).
 	auto connect_url(const url &target) -> std::optional<url>
 	{
 		const auto ascii = net::detail::ascii_host_name(target.host());
@@ -243,11 +232,7 @@ namespace {
 		if (!chosen) {
 			co_return nullptr;
 		}
-		// The chooser may have stopped the chase (ldap::client's close()
-		// from its authorizer): nothing is contacted then, whatever connect
-		// would do with a stopped token.
-		// The analyzer does not model the promise's construction: Capy's env_ is
-		// nullptr-initialised and set by the awaiting caller before the first resume.
+		// The chooser may have stopped the chase: contact nothing then.
 		// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
 		if ((co_await capy::this_coro::stop_token).stop_requested()) {
 			co_return std::unexpected(make_error(capy::error::canceled, "referral connect"));

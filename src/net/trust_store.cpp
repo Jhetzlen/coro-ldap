@@ -35,7 +35,7 @@ namespace {
 		}
 		const unsigned char *p = der.data();
 		const x509_ptr cert(d2i_X509(nullptr, &p, static_cast<long>(der.size())));
-		// The whole buffer: trailing bytes mean it was not one certificate.
+		// Trailing bytes: not one certificate.
 		if (!cert || p != der.data() + der.size()) {
 			return {};
 		}

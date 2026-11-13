@@ -182,12 +182,8 @@ namespace {
 		return p;
 	}
 
-	// ICU's RFC 4518 profiles, opened once (usprep_prepare does not modify a
-	// profile, so threads share them). nullptr if ICU cannot load its data,
-	// and then for good: a failed open is not retried (ICU's data does not
-	// appear later in a process). The profiles are closed at static
-	// destruction; a program that calls u_cleanup() must do so after its last
-	// match, as ICU requires of every ICU object.
+	// ICU's RFC 4518 profiles, opened once and shared; nullptr for good if ICU
+	// cannot load its data.
 	auto ldap_profile(bool case_fold) noexcept -> const UStringPrepProfile *
 	{
 		static const profile_ptr exact = open_profile(USPREP_RFC4518_LDAP);
@@ -206,10 +202,8 @@ namespace {
 	};
 
 	constexpr UChar replacement_character = 0xFFFD;
-	// ICU counts in int32_t. One UTF-8 octet gives at most one UTF-16 unit;
-	// table B.2 maps a code point to at most 3, NFKC expands one to at most
-	// 18 (U+FDFA), and a UTF-16 unit gives at most 3 UTF-8 octets: about
-	// 13 MB of input keeps every count below INT32_MAX.
+	// ICU counts in int32_t: with these expansion bounds, about 13 MB of input
+	// keeps every count below INT32_MAX.
 	constexpr std::size_t max_case_fold_expansion = 3;
 	constexpr std::size_t max_nfkc_expansion = 18;
 	constexpr std::size_t max_utf8_per_utf16 = 3;
@@ -230,9 +224,7 @@ namespace {
 
 	auto ascii_fold(char c) noexcept -> char { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
 
-	// ICU's statuses for a count past int32_t, should the bound above ever
-	// be wrong: the value is too long, not an ICU failure. Any other status
-	// (U_ILLEGAL_ARGUMENT_ERROR included: a misuse of ICU) is an ICU error.
+	// A count past int32_t: the value is too long, not an ICU failure.
 	auto is_icu_overflow(UErrorCode status) noexcept -> bool
 	{
 		return status == U_INDEX_OUTOFBOUNDS_ERROR || status == U_INPUT_TOO_LONG_ERROR;
@@ -265,10 +257,8 @@ namespace {
 			return icu_status(status);
 		}
 
-		// 2.2 Map, 2.3 Normalize (NFKC), 2.4 Prohibit and 2.5 Check bidi
-		// (none) with ICU's RFC 4518 profiles. USPREP_DEFAULT refuses the
-		// code points unassigned in Unicode 3.2 (table A.1), which RFC 4518
-		// prohibits for every string (it has no "query" strings).
+		// RFC 4518 steps 2.2 to 2.5 with ICU's profiles; USPREP_DEFAULT refuses the
+		// code points unassigned in Unicode 3.2.
 		const UStringPrepProfile *profile = ldap_profile(case_fold);
 		if (profile == nullptr) {
 			return prep_status::icu;
@@ -327,8 +317,7 @@ namespace {
 		return next < s.size() && is_combining_mark(detail::utf8_next(s, next).code_point);
 	}
 
-	// HYPHEN-MINUS, ARMENIAN HYPHEN, HYPHEN, NON-BREAKING HYPHEN, MINUS SIGN,
-	// SMALL HYPHEN-MINUS, FULLWIDTH HYPHEN-MINUS (section 2.6.3).
+	// The hyphens of section 2.6.3.
 	constexpr auto hyphens = std::to_array<UChar32>({ 0x002D, 0x058A, 0x2010, 0x2011, 0x2212, 0xFE63, 0xFF0D });
 
 	// 2.6.1 Insignificant Space Handling. A space is a SPACE followed by no
@@ -348,9 +337,8 @@ namespace {
 			out.assign(substring ? 1 : 2, ' ');
 			return;
 		}
-		// With errata 1757 and 1758, every input starts and ends the same way
-		// except for the substring rules below, and inner runs become two
-		// SPACEs.
+		// With errata 1757 and 1758 every input starts and ends the same way
+		// (except substrings), and inner runs become two SPACEs.
 		const bool starts_with_space =
 		  input == prep_input::value || input == prep_input::initial_substring
 		  || (leading && (input == prep_input::any_substring || input == prep_input::final_substring));
@@ -476,8 +464,7 @@ namespace {
 		return std::ranges::all_of(s, [](char c) { return c >= '0' && c <= '9'; });
 	}
 
-	// NumericString characters, ASCII only (RFC 4517 section 3.3.23): a
-	// fullwidth digit is not one, although NFKC would make it a digit.
+	// NumericString characters, ASCII only (RFC 4517 section 3.3.23).
 	auto is_numeric_string_chars(std::string_view s) noexcept -> bool
 	{
 		return std::ranges::all_of(s, [](char c) { return (c >= '0' && c <= '9') || c == ' '; });
@@ -495,9 +482,7 @@ namespace {
 		case string_syntax::numeric_string:
 			return !v.empty() && is_numeric_string_chars(v);
 		case string_syntax::telephone_number:
-			// Not empty. The characters are not checked: RFC 4518 section
-			// 2.6.3 removes hyphens that no PrintableString holds, so
-			// servers take more than PrintableString here.
+			// Not empty; the characters are not checked.
 			return !v.empty();
 		}
 		return false;
@@ -537,9 +522,8 @@ namespace {
 		return to_result(pa < pb);
 	}
 
-	// The first occurrence of `needle` in `text` at or after `from`, in
-	// linear time: string_view::find is O(text * needle) at worst ("a...ab"
-	// in "a...a"), so a long needle is searched with Knuth-Morris-Pratt.
+	// The first occurrence of `needle` in `text` at or after `from`, in linear
+	// time (Knuth-Morris-Pratt for a long needle).
 	auto find_first(std::string_view text, std::string_view needle, std::size_t from) -> std::size_t
 	{
 		constexpr std::size_t short_needle = 16;
@@ -615,9 +599,8 @@ namespace {
 		if (!prepare_for(value, rule, prep_input::value, v) || !prepare_assertion(rule, assertion, p)) {
 			return match_result::undefined;
 		}
-		// Leftmost matches: initial at the start, final at the end, each any
-		// part at its first place after the previous one. Valid UTF-8 needles
-		// only match whole characters.
+		// Leftmost matches: initial at the start, final at the end, each any part
+		// at its first place after the previous one.
 		const std::string_view text = v;
 		if (p.has_initial && !text.starts_with(p.initial)) {
 			return match_result::false_value;
@@ -640,9 +623,8 @@ namespace {
 		return match_result::true_value;
 	}
 
-	// caseIgnoreListSubstringsMatch on the prepared lines (not empty): each
-	// part inside one line, initial in the first and final in the last, each
-	// at its leftmost place.
+	// caseIgnoreListSubstringsMatch on the prepared lines: each part inside one
+	// line, initial in the first, final in the last.
 	auto list_substrings(const std::vector<std::pmr::string> &lines, const prepared_assertion &p) -> match_result
 	{
 		const std::size_t last = lines.size() - 1;
@@ -711,9 +693,7 @@ namespace {
 
 	// ------------------------------------------------------------ Substring Assertion
 
-	// RFC 4517 section 3.3.30, decoded: `initial*any*...*final`, "\2A" and
-	// "\5C" (hex digits in either case, ABNF strings are case-insensitive)
-	// for "*" and "\". false if malformed.
+	// RFC 4517 section 3.3.30, decoded; false if malformed.
 	struct parsed_substrings
 	{
 		std::vector<std::string> parts;// initial, any..., final
@@ -778,9 +758,7 @@ namespace {
 
 	// ------------------------------------------------------------ Bit String, UUID
 
-	// RFC 4517 section 3.3.2: BitString = SQUOTE *binary-digit SQUOTE "B"
-	// (the "B" in either case: ABNF strings are case-insensitive); `bits` is
-	// the digits.
+	// RFC 4517 section 3.3.2 BitString; `bits` is the digits.
 	auto parse_bit_string(std::string_view s, std::string_view &bits) noexcept -> bool
 	{
 		constexpr std::size_t delimiters = 3;// ' ' B
@@ -825,9 +803,7 @@ namespace {
 
 	// ------------------------------------------------------------ Generalized Time
 
-	// An instant in UTC, exactly: the minute, the second in it (60 for a
-	// leap second) and the decimal digits of the fraction of a second, with
-	// no trailing zero. Ordered as instants.
+	// An instant in UTC, exactly, ordered as instants.
 	struct utc_instant
 	{
 		std::int64_t minute = 0;
@@ -856,10 +832,7 @@ namespace {
 		int second = f->second.value_or(0);
 		std::string fraction(f->fraction);
 		if (!fraction.empty() && !f->second) {
-			// A fraction of an hour or a minute: times 3600 or 60, exactly
-			// (decimal digits times an integer). The carry out of the
-			// leftmost digit is whole seconds, below the unit; the digits
-			// stay the fraction of a second.
+			// A fraction of an hour or a minute, times 3600 or 60, exactly.
 			const int unit = f->minute ? seconds_per_minute : seconds_per_hour;
 			int carry = 0;
 			for (auto &c : std::views::reverse(fraction)) {
@@ -879,10 +852,8 @@ namespace {
 
 	// ------------------------------------------------------------ Postal Address
 
-	// RFC 4517 section 3.3.28: lines separated by "$", "\24" and "\5C" (hex
-	// digits in either case) for "$" and "\", no empty line. The lines go
-	// unescaped into `text`, one after the other, and `ends` gets the end
-	// offset of each. false if not of the syntax.
+	// RFC 4517 section 3.3.28: the unescaped lines go into `text`, their end
+	// offsets into `ends`; false if not of the syntax.
 	auto parse_postal_address(std::string_view s, std::string &text, std::vector<std::size_t> &ends) -> bool
 	{
 		text.reserve(s.size());
@@ -1071,15 +1042,11 @@ namespace {
 		return true;
 	}
 
-	// The longest INTEGER content decoded to decimal: the conversion below is
-	// quadratic in the length, and a DN can be megabytes long (cf. CPython's
-	// int-to-str digit limit for CVE-2020-10735). 4096 octets are 9865
-	// decimal digits.
+	// The longest INTEGER content decoded to decimal (quadratic conversion).
 	constexpr std::size_t max_integer_octets = 4096;
 
-	// X.690 section 8.3: an INTEGER's content octets, two's complement and
-	// minimal (8.3.2), in decimal (the Integer syntax, RFC 4517 section
-	// 3.3.16). false if empty, not minimal or longer than max_integer_octets.
+	// X.690 section 8.3 INTEGER content in decimal; false if empty, not minimal
+	// or too long.
 	auto ber_integer_to_decimal(std::span<const std::byte> content, std::string &out) -> bool
 	{
 		constexpr unsigned sign_bit = 0x80;
@@ -1168,13 +1135,8 @@ namespace {
 		return u >= first && u <= last;
 	}
 
-	// The value of a `#hex` AVA (BER, RFC 4514 section 2.4) as the text the
-	// rules take: string types and OCTET STRING by their content (NumericString,
-	// PrintableString, IA5String and VisibleString checked against their
-	// character sets), BMPString and UniversalString transcoded to UTF-8 (RFC
-	// 4518 section 2.1), INTEGER in decimal (up to max_integer_octets content
-	// octets), BOOLEAN as TRUE or FALSE. false for anything else,
-	// TeletexString included (its transcoding is a local matter).
+	// The value of a `#hex` AVA (RFC 4514 section 2.4) as the text the rules
+	// take; false for TeletexString and other types.
 	auto decode_hex_value(std::string_view ber_value, std::string &out) -> bool
 	{
 		// Universal tag numbers (X.680).
@@ -1232,11 +1194,8 @@ namespace {
 
 	// ------------------------------------------------------------ AVA types
 
-	// The attribute types of RFC 4512 (sections 3.3, 3.4, 4.2 and 5.1) and
-	// RFC 4519 by every name they give them (RFC 4519 section 4's
-	// registrations, and section 2's X.500 names "stateOrProvinceName" and
-	// "streetAddress"), so that `cn`, `commonName` and `2.5.4.3` are one
-	// type without a schema. Sorted by name, case-insensitively.
+	// The attribute types of RFC 4512 and RFC 4519 by every name, sorted
+	// case-insensitively.
 	struct type_name
 	{
 		std::string_view name;
@@ -1323,9 +1282,7 @@ namespace {
 	  { .name = "x500UniqueIdentifier", .oid = "2.5.4.45" },
 	});
 
-	// The object classes of RFC 4512 (top, alias, subschema,
-	// extensibleObject) and RFC 4519 section 3, for objectIdentifierMatch
-	// without a schema. Sorted the same way.
+	// The object classes of RFC 4512 and RFC 4519 section 3, sorted the same way.
 	constexpr auto builtin_classes = std::to_array<type_name>({
 	  { .name = "alias", .oid = "2.5.6.1" },
 	  { .name = "applicationProcess", .oid = "2.5.6.11" },
@@ -1376,11 +1333,8 @@ namespace {
 
 	// ------------------------------------------------------------ OID
 
-	// A value of the OID syntax (RFC 4512 section 1.4) as far as it can be
-	// resolved: a numericoid, or a descriptor's OID from the schema (an
-	// attribute type, then an object class), else from the built-in names
-	// of RFC 4512 and RFC 4519 (again a type, then a class); else the
-	// descriptor itself, unresolved.
+	// An OID-syntax value resolved as far as possible: numericoid, schema, then
+	// built-in names; else the descriptor, unresolved.
 	struct oid_key
 	{
 		std::string_view text;
@@ -1426,20 +1380,14 @@ namespace {
 		if (!resolve_oid(a, schema, ka) || !resolve_oid(b, schema, kb)) {
 			return match_result::undefined;
 		}
-		// A descriptor that is "not recognized" makes the rule Undefined
-		// (RFC 4517 section 4.2.26), even against itself: TRUE needs "the
-		// same object identifier", which an unknown name does not give.
+		// An unrecognized descriptor is Undefined (RFC 4517 section 4.2.26).
 		if (!ka.resolved || !kb.resolved) {
 			return match_result::undefined;
 		}
 		return to_result(ka.text == kb.text);
 	}
 
-	// An AVA's attribute type as far as it can be identified: the OID of its
-	// definition (resolved), or the name itself when neither the schema nor
-	// the built-in RFC 4512 and RFC 4519 names know it. Two resolved keys
-	// name the same type exactly when equal; a name that is not resolved
-	// might be another name of any type.
+	// An AVA's type: its definition's OID (resolved), or the name itself.
 	struct type_key
 	{
 		std::string_view text;
@@ -1530,9 +1478,8 @@ namespace {
 		bool has_uid = false;
 	};
 
-	// false if `v` is not of the syntax. The DN may hold "#" unescaped: the
-	// last "#" starts the UID when a Bit String follows it and a DN precedes
-	// it; otherwise the whole value is the DN.
+	// false if `v` is not of the syntax; the last "#" followed by a Bit String
+	// starts the UID.
 	auto parse_name_and_uid(std::string_view v, name_and_uid &out) -> bool
 	{
 		if (const std::size_t sharp = v.rfind("#'"); sharp != std::string_view::npos) {
@@ -1577,10 +1524,7 @@ namespace {
 		return find_rule(rule.empty() ? std::string_view{ "caseIgnoreMatch" } : rule);
 	}
 
-	// x and y were paired by type key, but their type names may differ
-	// (`uid` and `userid`, a name and its OID): each name is looked up, and
-	// two rules that are not the same rule give Undefined, so the result does
-	// not depend on which side is the attribute value.
+	// Each side's type name is looked up; two different rules give Undefined.
 	auto ava_match(const ava &x, const ava &y, const dn_context &ctx) -> match_result
 	{
 		const rule_entry *e = rule_of(x.type, ctx);
@@ -1676,9 +1620,8 @@ namespace {
 		for (; k < kb.size(); ++k) {
 			left_b.add(kb[k].key);
 		}
-		// A resolved type left over can only be the same type as a name left
-		// over on the other side: with none there, the RDNs differ (FALSE).
-		// Otherwise the types cannot be told apart or proved different.
+		// A resolved type left over can only pair with an unresolved name on the
+		// other side.
 		match_result acc = match_result::true_value;
 		if (left_a.resolved || left_a.unresolved) {
 			if ((left_a.resolved && !left_b.unresolved) || (left_b.resolved && !left_a.unresolved)) {
@@ -2025,9 +1968,7 @@ auto distinguished_name_match(const dn &attribute_value, const dn &assertion_val
 		const auto &s = *static_cast<const server_schema *>(context);
 		const attribute_type *t = s.find_attribute(type.name());
 		if (t == nullptr) {
-			// A built-in name (RFC 4512, RFC 4519) the schema does not list
-			// (`userid`) is the type of its OID, as for type identity
-			// (dn_context::key_of).
+			// A built-in name the schema does not list takes its OID's type.
 			if (const std::string_view oid = builtin_oid(builtin_types, type.name()); !oid.empty()) {
 				t = s.find_attribute(oid);
 			}

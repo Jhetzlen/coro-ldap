@@ -130,8 +130,7 @@ namespace {
 		a.hex_form = tok.hex;
 	}
 
-	// Case-insensitive type, then form, then value: a total order consistent
-	// with ava::operator==, used to compare RDNs as sets.
+	// A total order consistent with ava::operator==.
 	auto ava_less(const ava &a, const ava &b) -> bool
 	{
 		const auto c = a.type <=> b.type;
@@ -159,9 +158,7 @@ auto operator==(const rdn &a, const rdn &b) -> bool
 	if (a.avas.size() == 1) {
 		return a.avas[0] == b.avas[0];
 	}
-	// Sorted pointer copies in a small stack buffer (multi-valued RDNs are
-	// short); unusually long ones fall back to the heap. The buffer is raw
-	// storage the resource hands out uninitialised: zeroing it is wasted work.
+	// Sorted pointer copies in a small stack buffer, heap for long ones.
 	// NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init): raw arena storage
 	std::array<std::byte, (2uz * 16 * sizeof(const ava *)) + 64> buffer;
 	std::pmr::monotonic_buffer_resource scratch(buffer.data(), buffer.size());
@@ -169,8 +166,6 @@ auto operator==(const rdn &a, const rdn &b) -> bool
 	std::pmr::vector<const ava *> y(&scratch);
 	x.reserve(a.avas.size());
 	y.reserve(b.avas.size());
-	// Loops: append_range(avas | views::transform(...)) measured about 13%
-	// slower on this hot path.
 	for (const auto &v : a.avas) {
 		x.push_back(&v);
 	}

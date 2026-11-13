@@ -16,8 +16,7 @@ namespace jhetz::ldap::net::detail {
 using clock = std::chrono::steady_clock;
 using deadline_t = std::optional<clock::time_point>;
 
-// `timeout` from `now`: no deadline for nullopt, or for a timeout so large
-// that now + timeout would overflow the clock (ldap::no_timeout).
+// No deadline for nullopt or a timeout that would overflow the clock.
 inline auto deadline_after(std::optional<std::chrono::milliseconds> timeout, clock::time_point now = clock::now())
   -> deadline_t
 {
@@ -31,10 +30,8 @@ inline auto deadline_after(std::optional<std::chrono::milliseconds> timeout, clo
 	return now + *timeout;
 }
 
-// Awaits `a`, cancelled at `deadline` if there is one (the result then
-// compares equal to capy::cond::timeout). Only for operations that stop
-// promptly when cancelled; see resolve_bounded in connect.cpp for one that
-// does not.
+// Awaits `a`, cancelled at `deadline` (then capy::cond::timeout). Only for
+// operations that stop promptly when cancelled.
 template<class A>
 auto bounded(A a, deadline_t deadline) -> boost::capy::task<std::remove_cvref_t<boost::capy::awaitable_result_t<A>>>
 {

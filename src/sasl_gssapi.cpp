@@ -28,9 +28,7 @@
 namespace jhetz::ldap {
 namespace {
 
-	// The Kerberos V5 mechanism, 1.2.840.113554.1.2.2 (RFC 1964), DER-encoded
-	// and spelled out rather than taken from gssapi_krb5.h (MIT's
-	// gss_mech_krb5, Heimdal's GSS_KRB5_MECHANISM).
+	// The Kerberos V5 mechanism OID 1.2.840.113554.1.2.2 (RFC 1964), DER.
 	constexpr auto krb5_oid_der =
 	  std::to_array<unsigned char>({ 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02 });
 	// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables): GSS-API takes them non-const, never writes
@@ -39,10 +37,7 @@ namespace {
 	gss_OID_set_desc krb5_oid_set{ .count = 1, .elements = &krb5_oid };
 	// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
 
-	// GSS_C_CHANNEL_BOUND_FLAG (2048 in both MIT krb5's gssapi_ext.h and
-	// Heimdal's gssapi.h), spelled out for libraries that lack it. As a
-	// req_flag it makes the initiator send KERB_AP_OPTIONS_CBT; older
-	// libraries ignore it (DESIGN.md section 3, "GSSAPI").
+	// GSS_C_CHANNEL_BOUND_FLAG, for libraries that lack it.
 	constexpr OM_uint32 channel_bound_flag = 2048;
 
 	// The req_flags a security layer needs: integrity and confidentiality
@@ -173,9 +168,7 @@ namespace {
 		return fail(client_errc::unexpected_response, what);
 	}
 
-	// Well-formed UTF-8 (RFC 3629: U8_NEXT refuses overlong forms,
-	// surrogates and code points above U+10FFFF) without control characters
-	// (general category Cc: C0, DEL, C1). Every other code point is accepted.
+	// Well-formed UTF-8 without control characters (Cc).
 	auto check_text(std::string_view s, std::string_view what) -> result<void>
 	{
 		for (std::size_t i = 0; i < s.size();) {
@@ -202,21 +195,17 @@ namespace {
 		return {};
 	}
 
-	// The supplementary statuses of a buffer replayed, too old or out of
-	// order (RFC 2744 section 3.9.1): with GSS_C_SEQUENCE_FLAG gss_unwrap
-	// reports them without failing; the layer refuses such a buffer.
+	// The supplementary statuses of a replayed, old or out-of-order buffer (RFC
+	// 2744 section 3.9.1).
 	constexpr OM_uint32 sequence_problems =
 	  GSS_S_DUPLICATE_TOKEN | GSS_S_OLD_TOKEN | GSS_S_UNSEQ_TOKEN | GSS_S_GAP_TOKEN;
 
-	// The integrity or confidentiality layer of RFC 4752 section 3.1 over
-	// the bind's security context, which it owns: gss_wrap and gss_unwrap
-	// of every buffer.
+	// The integrity or confidentiality layer of RFC 4752 section 3.1, owning
+	// the security context.
 	class gssapi_layer final : public sasl_security_layer
 	{
 	  public:
-		// Takes over `context` once allocated (make_unique allocates before
-		// it constructs: a bad_alloc leaves the context with its owner).
-		// One caller (sasl_gssapi::state::reply), which names each argument.
+		// Takes over `context` once allocated.
 		// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 		gssapi_layer(context_handle &context,
 		  bool confidentiality,
@@ -269,8 +258,7 @@ namespace {
 				return fail(client_errc::gssapi_failure,
 				  "gss_unwrap: a buffer replayed or out of sequence: " + status_text(major, GSS_C_GSS_CODE));
 			}
-			// The layer selected applies both ways: a server buffer without
-			// confidentiality would be a downgrade.
+			// A confidentiality layer refuses a buffer without confidentiality.
 			if (confidentiality_ && conf_state == 0) {
 				return refused("a buffer without confidentiality on a confidentiality layer");
 			}
@@ -482,9 +470,7 @@ struct sasl_gssapi::state
 		gss_buffer_desc in = input(token.value_or(std::string_view()));
 		output_buffer out;
 		OM_uint32 flags = 0;
-		// RFC 2744 section 3.11 (gss_channel_bindings_struct): no
-		// addresses (GSS_C_AF_UNSPEC, as cyrus-sasl's gssapi plugin and
-		// Windows leave them), the TLS binding as application data.
+		// RFC 2744 section 3.11: no addresses, the TLS binding as application data.
 		gss_channel_bindings_struct channel{ .initiator_addrtype = GSS_C_AF_UNSPEC,
 			.initiator_address = { .length = 0, .value = nullptr },
 			.acceptor_addrtype = GSS_C_AF_UNSPEC,
@@ -527,7 +513,6 @@ struct sasl_gssapi::state
 
 	// The server's wrapped offer gives the wrapped reply; with a layer
 	// selected, `layer` takes over the context.
-	// One caller; as gssapi_layer_reply: the server's offer, then our authzid.
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto reply(std::string_view wrapped_offer, std::string_view authz_id) -> result<std::optional<std::string>>
 	{
@@ -574,11 +559,8 @@ struct sasl_gssapi::state
 		return std::optional<std::string>(std::move(out));
 	}
 
-	// The most plaintext one gss_wrap turns into at most `max_size` octets
-	// (the server's maximum buffer size), with the context's flags checked
-	// for the layer: the protection selected, and sequence detection, without
-	// which gss_unwrap reports no replayed or reordered buffer for the layer
-	// to refuse (sequence_problems).
+	// The most plaintext gss_wrap turns into at most `max_size` octets, after
+	// checking the context's flags for the layer.
 	auto wrap_limit(bool confidentiality, std::uint32_t max_size) const -> result<std::size_t>
 	{
 		const detail::gssapi_context_flags provided{ .integrity = (context_flags & GSS_C_INTEG_FLAG) != 0,

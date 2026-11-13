@@ -66,16 +66,12 @@ namespace detail {
 	  -> boost::capy::task<result<ldap::search_stream>>;
 
 	// Validates and sends a search; returns its stream. Never suspends.
-	// `stop` is the awaiting task's stop token: if it is set already, the
-	// search is not sent and fails with capy::error::canceled.
 	auto start_search(connection::core &c,
 	  const search_params &p,
 	  std::pmr::memory_resource *mr,
 	  const std::stop_token &stop) -> result<ldap::search_stream>;
 
-	// The result codes other than success of a SearchResultDone that
-	// search() returns as a search_result with the entries received:
-	// sizeLimitExceeded, timeLimitExceeded, adminLimitExceeded.
+	// The limit codes search() returns as a search_result.
 	[[nodiscard]] constexpr auto limit_exceeded(std::int32_t result_code) noexcept -> bool
 	{
 		return result_code == static_cast<std::int32_t>(errc::size_limit_exceeded)
@@ -110,17 +106,11 @@ namespace detail {
 		out.controls.assign(controls.begin(), controls.end());
 	}
 
-	// For ldap::client: `owner` lives until `s` is destroyed (after its
-	// search is abandoned). Ignored on a default-constructed or moved-from
-	// stream.
+	// `owner` lives until `s` is destroyed.
 	void keep_alive(ldap::search_stream &s, std::shared_ptr<void> owner) noexcept;
 
-	// For ldap::client: waits until the search has a message for next() or
-	// has ended, without taking anything. Returns the error next() would
-	// return before any message (a connection failure, a SearchResultDone
-	// with another code than success), else nullopt: a message is ready,
-	// the search ended with success, or its deadline passed (next() then
-	// reports the timeout). Fails only when the awaiting task is stopped.
+	// Waits until the search has a message or ended; the error next() would
+	// return first, else nullopt. Fails only when stopped.
 	auto first_outcome(ldap::search_stream &s) -> boost::capy::task<result<std::optional<error>>>;
 
 	// As keep_alive and first_outcome, for the current page of `p`.

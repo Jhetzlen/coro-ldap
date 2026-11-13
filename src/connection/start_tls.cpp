@@ -37,13 +37,8 @@ namespace {
 		if (!self) {
 			co_return std::unexpected(no_connection(context));
 		}
-		// StartTLS may only be sent once every response is received (RFC 4513
-		// section 3.1.1). Operations are refused; the answers still due to
-		// released paged searches are waited for (they are certain, or given
-		// up on at their own deadline), within `timeout`. The checks are made
-		// again after the wait: an operation started meanwhile is refused as
-		// if start_tls had been called then, and so is an unbind() (which
-		// zeroes the answers due without waking this wait until it closes).
+		// Waits for the answers still due (RFC 4513 section 3.1.1), then checks
+		// again.
 		const auto wait_deadline = deadline_after(timeout ? timeout : self->default_timeout());
 		while (true) {
 			if (auto r = self->check_start_tls(context); !r) {
@@ -58,7 +53,7 @@ namespace {
 				break;
 			}
 			const auto [ec, left] = co_await self->wait_due_answers(wait_deadline);
-			// Cancelled or timed out: nothing was sent, the connection is usable.
+			// Nothing was sent; the connection is usable.
 			if (ec) {
 				co_return fail(ec,
 				  detail::format("{} (waiting for the answer{} to {} paged search release{})",
@@ -69,10 +64,7 @@ namespace {
 			}
 		}
 
-		// The ExtendedRequest; nothing else may be sent until it is answered
-		// and the handshake is done (RFC 4511 section 4.14.1).
-		// Given up on already: not sent, since it could only be given up on by
-		// closing the connection.
+		// Already stopped: not sent.
 		if ((co_await capy::this_coro::stop_token).stop_requested()) {
 			co_return fail(capy::error::canceled, context);
 		}
@@ -97,12 +89,7 @@ namespace {
 			}
 		}
 
-		// From here on the server expects a handshake, so the session cannot go
-		// on in clear (RFC 4511 section 4.14.1): an exception (this wait's frames,
-		// the handshake's setup or the handshake; net::start_tls then closed the
-		// transport) closes the connection before it propagates. Later
-		// operations fail naming not_enough_memory for a bad_alloc, the abort
-		// otherwise (no other exception is known to escape today: defensive).
+		// From here on an exception closes the connection before it propagates.
 		result<void> r;
 		try {
 			// The reader and writer must be idle: the handshake reads and writes
@@ -124,8 +111,7 @@ namespace {
 			}
 			throw;
 		}
-		// Closed meanwhile (unbind(), close()): the handshake failed because of
-		// that, or ended over a closed transport; say so, as for the steps above.
+		// Closed meanwhile (unbind(), close()).
 		if (!self->is_open()) {
 			co_return std::unexpected(self->not_connected(context));
 		}

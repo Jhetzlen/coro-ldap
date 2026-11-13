@@ -26,9 +26,7 @@ namespace {
 	constexpr auto is_unreserved(char c) noexcept -> bool { return detail::is_url_unreserved(c); }
 	constexpr auto is_sub_delim(char c) noexcept -> bool { return detail::is_url_sub_delim(c); }
 
-	// pchar / "/" (without '%', handled as pct-encoded): what may appear
-	// unencoded in the path and query of a URI. '?' is the RFC 4516 part
-	// separator and is excluded.
+	// RFC 3986 pchar / "/" without '%' and '?'.
 	constexpr auto is_part_char(char c) noexcept -> bool
 	{
 		return is_unreserved(c) || is_sub_delim(c) || c == ':' || c == '@' || c == '/';
@@ -81,8 +79,7 @@ namespace {
 		return out;
 	}
 
-	// Where the n-th byte decode() made of `s` starts in `s`: at its '%'
-	// when it was percent-encoded. `s` is one decode() accepted.
+	// Where the n-th byte decode() made of `s` starts in `s`.
 	auto encoded_offset(std::string_view s, std::size_t n) noexcept -> std::size_t
 	{
 		constexpr std::size_t triplet = 3;// "%XX"
@@ -93,14 +90,8 @@ namespace {
 		return i;
 	}
 
-	// decode(), then RFC 4516 section 2: the percent-decoded text is UTF-8,
-	// an ill-formed sequence reported at its URL offset. For the parts that
-	// are UTF-8 text and checked nowhere else: the attributes (RFC 4511
-	// AttributeSelectors, which the URL keeps as given), the filter (its
-	// values, RFC 4515; checked before filter::raw, whose error gives a
-	// position in the decoded filter rather than in the URL) and the
-	// extension values. A DN is checked by dn::parse, a scope is
-	// base/one/sub, an extension type (an OID) by detail::is_oid.
+	// decode(), then the decoded text must be UTF-8 (RFC 4516 section 2), an
+	// ill-formed sequence reported at its URL offset.
 	template<class Allowed>
 	auto decode_utf8(std::string_view s,
 	  std::size_t offset,
@@ -224,8 +215,7 @@ url_extension::url_extension(url_extension &&other, const allocator_type &alloc)
 	}
 }
 
-// std::optional's own assignment would copy-construct a missing value on the
-// default resource; keep it on this extension's resource instead.
+// Keeps a newly engaged value on this extension's resource.
 auto url_extension::operator=(const url_extension &other) -> url_extension &
 {
 	if (this == &other) {
@@ -273,8 +263,7 @@ url::url(const url &other, const allocator_type &alloc)
 	filter_(detail::optional_with(other.filter_, alloc)), extensions_(other.extensions_, alloc)
 {}
 
-// std::optional's own assignment would construct a missing DN or filter on
-// the source's (or the default) resource; keep them on this url's resource.
+// Keeps a newly engaged DN or filter on this url's resource.
 auto url::operator=(const url &other) -> url &
 {
 	if (this == &other) {
@@ -349,9 +338,7 @@ auto url::has_critical_extension() const noexcept -> bool
 
 namespace {
 
-	// A leading NUL in an ldapi path names a Linux abstract socket; elsewhere
-	// (Windows' AF_UNIX) there is none, so it is a control character like
-	// any other.
+	// A leading NUL in an ldapi path names a Linux abstract socket.
 #ifdef __linux__
 	constexpr bool has_abstract_sockets = true;
 #else
@@ -382,9 +369,7 @@ auto detail::check_server_address(const url &u) -> result<void>
 			return fail(client_errc::invalid_url, detail::format("unsupported critical extension {}", e.type));
 		}
 	}
-	// Decoded hosts may hold any byte. getaddrinfo, OpenSSL's host name check
-	// and sockaddr_un stop at a NUL, so "evil%00.example.org" would silently
-	// become "evil".
+	// Decoded hosts may hold any byte; refuse control characters.
 	if (has_control_character(u.host(), u.scheme())) {
 		return fail(client_errc::invalid_url, "control character in the host");
 	}

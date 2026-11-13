@@ -23,15 +23,11 @@ namespace {
 
 	auto strings(std::initializer_list<std::string_view> list, const string_list::allocator_type &alloc) -> string_list
 	{
-		// Not ranges::to: string_view -> pmr::string is explicit, so it would
-		// build each element as a nested range on the default resource first.
+		// Each element built straight on `alloc`.
 		return { list.begin(), list.end(), alloc };
 	}
 
-	// `before`, the peer's `text` sanitized and cut to 64 bytes
-	// (detail::append_sanitized), then `after`: an error context naming a
-	// control type or attribute the peer sent.
-	// The arguments are in the order of the text they make.
+	// `before`, the peer's `text` sanitized and cut to 64 bytes, then `after`.
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto sanitized_context(std::string_view before, std::string_view text, std::string_view after) -> std::string
 	{
@@ -67,8 +63,7 @@ ldap_result::ldap_result(ldap_result &&other, const allocator_type &alloc)
 
 auto ldap_result::to_error(std::string_view context) const -> error
 {
-	// On the default resource, whatever this result's resource is: errors
-	// must not depend on an arena (see error.hpp).
+	// On the default resource (see error.hpp).
 	error e;
 	e.code = std::error_code(result_code, result_category());
 	e.diagnostic.assign(diagnostic_message);
@@ -469,8 +464,7 @@ namespace {
 	  || std::is_same_v<T, modify_dn_request> || std::is_same_v<T, compare_request>
 	  || std::is_same_v<T, abandon_request> || std::is_same_v<T, extended_request>;
 
-	// Compares protocol_op::index() rather than std::visit, which throws
-	// bad_variant_access on a valueless op (left by a throwing emplace).
+	// By protocol_op::index(): safe on a valueless op.
 	auto is_request_op(const protocol_op &op) noexcept -> bool
 	{
 		const std::size_t index = op.index();// variant_npos when valueless
@@ -479,8 +473,7 @@ namespace {
 		}(std::make_index_sequence<std::variant_size_v<protocol_op>>{});
 	}
 
-	// Checks everything encoding could reject (the filter of a search request
-	// included), so the writer is only touched once nothing can fail.
+	// Checks everything encoding could reject, before the writer is touched.
 	auto precheck(const message &m) -> result<void>
 	{
 		if (m.id < 0) {
@@ -729,9 +722,8 @@ namespace {
 
 	// ---------------------------------------------------------------- decoder
 
-	// RFC 4511 section 4: unrecognized elements at the end of a SEQUENCE are
-	// ignored. They must still be well-formed (read() checks the header and
-	// that the length fits).
+	// RFC 4511 section 4: unrecognized trailing elements are skipped; they must
+	// be well-formed.
 	auto skip_rest(ber::reader &r) -> result<void>
 	{
 		while (!r.empty()) {
@@ -775,15 +767,8 @@ namespace {
 
 	using alloc_t = std::pmr::polymorphic_allocator<>;
 
-	// Number of leading elements in `r` (a copy: only headers are read) that
-	// carry tag `t` and are at least `min_size` bytes, to reserve vectors
-	// exactly. That saves the growth reallocations, which matter most in a
-	// monotonic arena (it never reuses the old buffers). Counting stops at
-	// the first element that could not decode as one, so a hostile list of
-	// invalid elements (e.g. 8M empty SEQUENCEs) cannot make decode reserve
-	// more than a valid message of the same size would really use. It also
-	// stops at `limit` (what is left of decode_options::max_elements).
-	// Internal, two callers; a swap only changes a reserve() size hint.
+	// Leading elements of tag `t` and at least `min_size` bytes, up to `limit`,
+	// to reserve vectors exactly.
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 	auto count_elements(ber::reader r, ber::tag t, std::size_t min_size, std::size_t limit) -> std::size_t
 	{
@@ -798,15 +783,12 @@ namespace {
 		return n;
 	}
 
-	// Smallest valid encodings: a value is an OCTET STRING (`04 00`); a
-	// PartialAttribute is SEQUENCE { type OCTET STRING, vals SET }
-	// (`30 04 04 00 31 00`).
+	// Smallest valid encodings: an OCTET STRING `04 00`, a PartialAttribute
+	// `30 04 04 00 31 00`.
 	constexpr std::size_t min_value_size = 2;
 	constexpr std::size_t min_attribute_size = 6;
 
-	// Everything decoded is allocated from `a` (decode_options::memory). The
-	// objects are built with `a` and their parts moved in, so nothing is
-	// copied twice and nothing touches the default resource (except errors).
+	// Decodes into `a` (decode_options::memory), moving the parts in.
 	class decoder
 	{
 	  public:

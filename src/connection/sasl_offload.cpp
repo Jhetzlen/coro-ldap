@@ -24,10 +24,8 @@ namespace jhetz::ldap::detail {
 
 namespace {
 
-	// The threads of the offloaded SASL steps (run_offloaded), owned by the
-	// io_context as a service, which joins them on destruction while the
-	// scheduler (an earlier service) is still alive. An ended thread is
-	// joined when the next one starts.
+	// The threads of the offloaded SASL steps, an io_context service joining
+	// them on destruction; an ended thread is joined when the next one starts.
 	class offload_threads final : public capy::execution_context::service
 	{
 	  public:
@@ -103,12 +101,7 @@ namespace {
 		std::list<worker> workers_;
 	};
 
-	// Runs a mechanism's offloaded step (sasl_work) on a thread of its own
-	// (offload_threads) and waits for its result, within the operation
-	// timeout and the stop token. Errors are without the bind's context. The
-	// thread shares `offloaded` with this wait, so giving up leaves the work
-	// running with what it owns, and the last owner frees it. The thread holds
-	// work on the io_context until done. One thread per call.
+	// An offloaded step's state, shared by its thread and the wait.
 	struct offloaded
 	{
 		explicit offloaded(sasl_work w) noexcept : work(std::move(w)) {}
@@ -124,10 +117,8 @@ auto run_offloaded(corosio::io_context::executor_type ex,
   std::optional<std::chrono::milliseconds> timeout,
   sasl_work work) -> capy::task<result<std::optional<std::string>>>
 {
-	// The thread posts its wakeup and drops its work from outside the
-	// I/O thread, undefined behaviour under locking_mode::unsafe, so the
-	// step fails at once there, as Corosio's resolver does. unsafe_io
-	// keeps the scheduler lock, so the post is fine there.
+	// The thread posts from outside the I/O thread: not under
+	// locking_mode::unsafe.
 	if (corosio::detail::get_scheduler(ex.context()).scheduler_locking_disabled()) {
 		co_return fail(std::make_error_code(std::errc::operation_not_supported),
 		  "the mechanism's step runs on a thread of its own, which needs an io_context in locking_mode::safe or "

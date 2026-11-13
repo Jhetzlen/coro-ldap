@@ -1,7 +1,5 @@
-// Internal: allocator-aware copies and assignments of std::optional and
-// std::variant members, which the standard types do not do themselves (an
-// empty optional has no allocator to keep; a variant switching alternatives
-// constructs the new one without the owner's allocator).
+// Allocator-aware copies and assignments of std::optional and std::variant
+// members.
 #pragma once
 
 #include <memory>

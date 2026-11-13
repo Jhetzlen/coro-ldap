@@ -61,10 +61,9 @@ namespace {
 		}
 	}
 
-	// OpenLDAP's choice (libldap tls_o.c, tlso_session_endpoint): the
-	// digest of the signature algorithm's OID alone, SHA-256 when it names
-	// none (RSASSA-PSS, whose hash is in its parameters, Ed25519, Ed448)
-	// or a weak one (MD2, MD4, MD5, SHA-1); null for an unknown algorithm.
+	// OpenLDAP's digest (libldap tlso_session_endpoint): the signature
+	// algorithm OID's hash, SHA-256 when it names none or a weak one; null for
+	// an unknown algorithm.
 	auto openldap_end_point_digest(const X509 *cert) -> const EVP_MD *
 	{
 		int md_nid = NID_undef;
@@ -115,9 +114,8 @@ namespace {
 		return x509_ptr(d2i_X509(nullptr, &p, static_cast<long>(certificate.size())));
 	}
 
-	// RFC 9266 section 3 makes tls-exporter SCRAM's default on TLS 1.3;
-	// otherwise tls-server-end-point, which servers support widely, and
-	// tls-exporter when it is all there is.
+	// tls-exporter on TLS 1.3 (RFC 9266 section 3), else tls-server-end-point,
+	// else tls-exporter.
 	auto default_type(const transport::layers &im, bool tls13) -> std::optional<channel_binding_type>
 	{
 		const bool exporter = !im.tls_exporter.empty();
@@ -155,11 +153,7 @@ void record_tls_session(transport::layers &im, ssl_st *ssl)
 	}
 	// Errors left by what follows are dropped, the caller's are kept.
 	const auto mark = openssl_error_mark();
-	// RFC 9266 section 4.2: tls-exporter is undefined where renegotiation
-	// is enabled, and a renegotiation (TLS 1.2; TLS 1.3 has none) could
-	// change the certificate recorded here. The client refuses the
-	// server's HelloRequest from now on (a no_renegotiation alert); an
-	// OpenSSL server then fails the connection.
+	// No renegotiation from now on (RFC 9266 section 4.2).
 	SSL_set_options(ssl, SSL_OP_NO_RENEGOTIATION);
 	if (X509 *cert = SSL_get0_peer_certificate(ssl); cert != nullptr) {
 		unsigned char *raw = nullptr;
