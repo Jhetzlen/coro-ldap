@@ -118,9 +118,16 @@ The vcpkg bundled with Visual Studio (`VC\vcpkg`) has no classic mode
 `-DVCPKG_MANIFEST_MODE=OFF -DVCPKG_INSTALLED_DIR=<dir>` besides the
 toolchain file and triplet.
 
-CMake 4.5.0-rc3 stops in Capy's `CMakeLists.txt` (`source_group(TREE)`
-given `capy.hpp`, outside its tree); the CMake bundled with Visual Studio
-(3.31, `Common7\IDE\CommonExtensions\Microsoft\CMake`) configures.
+CMake 4.5 stops in Capy's and Corosio's `CMakeLists.txt`
+(`source_group(TREE include/boost/<lib>)` given `<lib>.hpp`, outside its
+tree). From CMake 4.5 on, the root `CMakeLists.txt` patches the fetched
+sources with `cmake/source_group_tree_patch.cmake` (a FetchContent
+`PATCH_COMMAND`), which leaves the top-level header out of that call;
+`tests/install/check_install.sh` patches its clones the same way. Local
+checkouts given with `FETCHCONTENT_SOURCE_DIR_CAPY` / `_COROSIO` are not
+patched: run `cmake -P <repo>/cmake/source_group_tree_patch.cmake` in them,
+or configure with an older CMake (Visual Studio's bundled 3.31,
+`Common7\IDE\CommonExtensions\Microsoft\CMake`).
 
 Run the tests from a Release or RelWithDebInfo build: in Debug, MSVC's
 checked iterators (`_ITERATOR_DEBUG_LEVEL=2`) make every container allocate

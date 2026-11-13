@@ -8,8 +8,10 @@
 #   tests/install/check_install.sh WORK_DIR
 #
 # Sources: FETCHCONTENT_SOURCE_DIR_CAPY / _COROSIO if set (local
-# checkouts), else the pinned commits are cloned into WORK_DIR (a clone
-# there at another commit is cloned again).
+# checkouts, used as they are), else the pinned commits are cloned into
+# WORK_DIR (a clone there at another commit is cloned again) and patched
+# with cmake/source_group_tree_patch.cmake, as the root CMakeLists.txt
+# patches the fetched ones for CMake 4.5.
 set -eu
 work=$(realpath -m "${1:?usage: check_install.sh WORK_DIR}")
 here=$(cd "$(dirname "$0")" && pwd)
@@ -29,6 +31,7 @@ source_of() {
 		git clone -q "$2" "$src"
 		git -C "$src" checkout -q "$3"
 	fi
+	(cd "$src" && cmake -P "$root/cmake/source_group_tree_patch.cmake")
 	echo "$src"
 }
 pin() { sed -n "/FetchContent_Declare($1/,/)/s/.*GIT_TAG \([0-9a-f]*\).*/\1/p" "$root/CMakeLists.txt"; }
