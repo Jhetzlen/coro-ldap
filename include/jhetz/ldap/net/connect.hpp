@@ -90,8 +90,8 @@ enum class host_name_matching : unsigned char {
 	// names count, never the subject CN, and a wildcard must be the whole
 	// leftmost label (`*.example.org`, not `ldap*.example.org`).
 	strict,
-	// OpenSSL's defaults: the subject CN is used when the certificate has no
-	// subjectAltName DNS name, and partial wildcards match. For old
+	// OpenSSL 3's defaults: the subject CN is used when the certificate has
+	// no subjectAltName DNS name, and partial wildcards match. For old
 	// certificates only.
 	legacy,
 };

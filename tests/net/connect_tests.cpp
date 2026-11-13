@@ -1135,7 +1135,7 @@ TEST_CASE("ldaps:// verification failures", "[net][connect][tls]")
 
 // RFC 6125 / RFC 4513 section 3.1.3: by default only subjectAltName DNS
 // names count (no subject CN fallback) and a wildcard is a whole leftmost
-// label; host_name_matching::legacy restores OpenSSL's defaults.
+// label; host_name_matching::legacy restores OpenSSL 3's defaults.
 TEST_CASE("ldaps:// host name matching", "[net][connect][tls][rfc]")
 {
 	struct case_t
@@ -1200,6 +1200,112 @@ TEST_CASE("ldaps:// host name matching", "[net][connect][tls][rfc]")
 			}
 		}
 	}
+}
+
+// host_name_matching::legacy's subject CN fallback, for a leaf without
+// subjectAltName DNS names: whole or partial CN wildcards and any of
+// several CNs match; it never matches another host, an IP literal, or a
+// leaf whose chain or validity fails.
+TEST_CASE("ldaps:// legacy host name matching by subject CN", "[net][connect][tls][rfc]")
+{
+	struct case_t
+	{
+		const char *name;
+		test_pki::leaf_spec leaf;
+		bool legacy_ok;
+	};
+	const std::vector<case_t> cases{
+		{ .name = "CN wildcard", .leaf = { .cns = { "*.example.org" } }, .legacy_ok = true },
+		{ .name = "partial CN wildcard", .leaf = { .cns = { "ld*.example.org" } }, .legacy_ok = true },
+		{ .name = "CN in different case", .leaf = { .cns = { "LDAP.Example.ORG" } }, .legacy_ok = true },
+		{ .name = "second of several CNs",
+		  .leaf = { .cns = { "other.example.org", "ldap.example.org" } },
+		  .legacy_ok = true },
+		{ .name = "CN with an IP-only subjectAltName",
+		  .leaf = { .cns = { "ldap.example.org" }, .subject_alt_names = "IP:192.0.2.1" },
+		  .legacy_ok = true },
+		{ .name = "CN naming another host", .leaf = { .cns = { "other.example.org" } }, .legacy_ok = false },
+		{ .name = "several CNs naming other hosts",
+		  .leaf = { .cns = { "other.example.org", "ldap.example.net" } },
+		  .legacy_ok = false },
+		{ .name = "CN wildcard for another domain", .leaf = { .cns = { "*.example.net" } }, .legacy_ok = false },
+	};
+	for (const auto &c : cases) {
+		for (const auto matching : { net::host_name_matching::strict, net::host_name_matching::legacy }) {
+			const bool strict = matching == net::host_name_matching::strict;
+			DYNAMIC_SECTION(c.name << (strict ? ", strict" : ", legacy"))
+			{
+				corosio::io_context ioc;
+				tcp_server srv(ioc);
+				outcome<std::string> server;
+				const auto leaf = pki().issue(c.leaf);
+				spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
+				const net::connect_options o{ .tls = { .ca_pem = std::pmr::string(pki().ca_pem()),
+												.server_name = "ldap.example.org",
+												.host_matching = matching } };
+				if (!strict && c.legacy_ok) {
+					outcome<std::string> client;
+					spawn(ioc, exchange(ioc, srv.url("ldaps"), o, true), client);
+					drive(ioc);
+					CHECK_THAT(client.get(), IsEmpty());
+					CHECK_THAT(server.get(), IsEmpty());
+				} else {
+					auto t = connect_to(ioc, srv.url("ldaps"), o);
+					REQUIRE_FALSE(t.has_value());
+					CHECK(t.error().code == ldap::cond::tls_failure);
+					CHECK_THAT(std::string(t.error().context),
+					  ContainsSubstring("server certificate: hostname mismatch", Catch::CaseSensitive::No));
+					drive(ioc);
+					CHECK_THAT(server.get(), StartsWith("server handshake: "));
+				}
+			}
+		}
+	}
+}
+
+TEST_CASE("ldaps:// legacy host name matching keeps the other checks", "[net][connect][tls][rfc]")
+{
+	corosio::io_context ioc;
+	tcp_server srv(ioc);
+	outcome<std::string> server;
+	std::optional<ldap::result<net::transport>> t;
+	const net::connect_options by_name{ .tls = { .ca_pem = std::pmr::string(pki().ca_pem()),
+										  .server_name = "ldap.example.org",
+										  .host_matching = net::host_name_matching::legacy } };
+
+	SECTION("expired leaf whose CN matches")
+	{
+		const auto leaf = pki().issue({ .cns = { "ldap.example.org" }, .not_before = -2L * 3600, .not_after = -3600 });
+		spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
+		t = connect_to(ioc, srv.url("ldaps"), by_name);
+		REQUIRE_FALSE(t->has_value());
+		CHECK_THAT(std::string(t->error().context),
+		  ContainsSubstring("server certificate: certificate has expired", Catch::CaseSensitive::No));
+	}
+	SECTION("leaf from an untrusted CA whose CN matches")
+	{
+		test_pki other("unrelated CA");
+		const auto leaf = other.issue({ .cns = { "ldap.example.org" } });
+		spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
+		t = connect_to(ioc, srv.url("ldaps"), by_name);
+		REQUIRE_FALSE(t->has_value());
+		CHECK_THAT(std::string(t->error().context),
+		  ContainsSubstring("server certificate: unable to get local issuer certificate", Catch::CaseSensitive::No));
+	}
+	SECTION("IP literal found only in the CN")
+	{
+		const auto leaf = pki().issue({ .cns = { "127.0.0.1" } });
+		spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
+		t = connect_to(ioc,
+		  srv.url("ldaps"),
+		  { .tls = { .ca_pem = std::pmr::string(pki().ca_pem()), .host_matching = net::host_name_matching::legacy } });
+		REQUIRE_FALSE(t->has_value());
+		CHECK_THAT(std::string(t->error().context),
+		  ContainsSubstring("server certificate: IP address mismatch", Catch::CaseSensitive::No));
+	}
+	drive(ioc);
+	CHECK(t->error().code == ldap::cond::tls_failure);
+	CHECK_THAT(server.get(), StartsWith("server handshake: "));
 }
 
 TEST_CASE("ldaps:// insecure opt-out accepts an untrusted certificate", "[net][connect][tls]")

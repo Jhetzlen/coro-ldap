@@ -2305,8 +2305,10 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   when the certificate has no subjectAltName DNS name. OpenSSL 4 dropped
   that CN fallback from its default check, so under legacy the callback
   accepts a HOSTNAME_MISMATCH on such a leaf whose CN matches (the same
-  matcher with ALWAYS_CHECK_SUBJECT); with OpenSSL 3 that error never
-  comes.
+  matcher with ALWAYS_CHECK_SUBJECT). With OpenSSL 3 that error comes only
+  when OpenSSL's own CN fallback did not match, so this one does not match
+  either. The fallback is for DNS names at depth 0 only: an IP literal
+  never matches a CN, and a leaf whose chain or validity fails still fails.
   A CA bundle (`ca_file`, `ca_pem`) goes to Corosio whole: it trusts every
   certificate of it, but parses them only when the handshake starts and
   then reports a bad one as a setup failure. So the bundle is read first

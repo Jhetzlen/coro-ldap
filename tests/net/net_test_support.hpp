@@ -33,6 +33,7 @@
 #include <memory_resource>
 #include <new>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
@@ -375,7 +376,7 @@ class test_pki
 	explicit test_pki(const char *ca_name = "jhetz-ldap test CA")
 	{
 		ca_key_.reset(generate_key());
-		ca_cert_.reset(make_cert(ca_key_.get(), ca_name, nullptr, nullptr, true, {}, {}, next_serial()));
+		ca_cert_.reset(make_cert(ca_key_.get(), { &ca_name, 1 }, nullptr, nullptr, true, {}, {}, next_serial(), {}));
 		ca_pem_ = to_pem(ca_cert_.get());
 	}
 
@@ -418,9 +419,48 @@ class test_pki
 		std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(
 		  rsa_bits == 0 ? generate_key() : EVP_RSA_gen(rsa_bits), &EVP_PKEY_free);
 		check(key != nullptr, "EVP_RSA_gen");
+		std::unique_ptr<X509, decltype(&X509_free)> cert(make_cert(key.get(),
+														   { &cn, 1 },
+														   ca_cert_.get(),
+														   ca_key_.get(),
+														   false,
+														   subject_alt_names,
+														   extended_key_usage,
+														   next_serial(),
+														   {}),
+		  &X509_free);
+		return { .cert_pem = to_pem(cert.get()), .key_pem = key_to_pem(key.get()) };
+	}
+
+	// A leaf's subject CNs (in order) and validity, in seconds from now.
+	struct leaf_spec
+	{
+		std::vector<std::string> cns{};
+		std::string subject_alt_names{};
+		long not_before = -3600;
+		long not_after = 24L * 3600;
+	};
+
+	// A leaf certificate as issue() makes it (EC P-256, serverAuth and
+	// clientAuth), with several subject CNs or another validity.
+	auto issue(const leaf_spec &spec) -> issued
+	{
+		std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(generate_key(), &EVP_PKEY_free);
+		std::vector<const char *> cns;
+		cns.reserve(spec.cns.size());
+		for (const auto &cn : spec.cns) {
+			cns.push_back(cn.c_str());
+		}
 		std::unique_ptr<X509, decltype(&X509_free)> cert(
-		  make_cert(
-			key.get(), cn, ca_cert_.get(), ca_key_.get(), false, subject_alt_names, extended_key_usage, next_serial()),
+		  make_cert(key.get(),
+			cns,
+			ca_cert_.get(),
+			ca_key_.get(),
+			false,
+			spec.subject_alt_names,
+			"serverAuth,clientAuth",
+			next_serial(),
+			{ .not_before = spec.not_before, .not_after = spec.not_after }),
 		  &X509_free);
 		return { .cert_pem = to_pem(cert.get()), .key_pem = key_to_pem(key.get()) };
 	}
@@ -444,6 +484,13 @@ class test_pki
 
 	auto next_serial() noexcept -> long { return ++serial_; }
 
+	// notBefore and notAfter, in seconds from now.
+	struct validity
+	{
+		long not_before = -3600;
+		long not_after = 24L * 3600;
+	};
+
 	static auto generate_key() -> EVP_PKEY *
 	{
 		std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> ctx(
@@ -466,27 +513,30 @@ class test_pki
 	}
 
 	static auto make_cert(EVP_PKEY *key,
-	  const char *cn,
+	  std::span<const char *const> cns,
 	  X509 *issuer,
 	  EVP_PKEY *issuer_key,
 	  bool ca,
 	  const std::string &sans,
 	  const std::string &extended_key_usage,
-	  long serial) -> X509 *
+	  long serial,
+	  validity valid) -> X509 *
 	{
 		X509 *cert = X509_new();
 		check(cert != nullptr, "X509_new");
 		check(X509_set_version(cert, 2) == 1, "X509_set_version");
 		check(ASN1_INTEGER_set(X509_get_serialNumber(cert), serial) == 1, "serial");
-		check(X509_gmtime_adj(X509_getm_notBefore(cert), -3600) != nullptr, "notBefore");
-		check(X509_gmtime_adj(X509_getm_notAfter(cert), 24L * 3600) != nullptr, "notAfter");
+		check(X509_gmtime_adj(X509_getm_notBefore(cert), valid.not_before) != nullptr, "notBefore");
+		check(X509_gmtime_adj(X509_getm_notAfter(cert), valid.not_after) != nullptr, "notAfter");
 		check(X509_set_pubkey(cert, key) == 1, "X509_set_pubkey");
 		const std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)> name(X509_NAME_new(), &X509_NAME_free);
 		check(name != nullptr, "X509_NAME_new");
-		check(X509_NAME_add_entry_by_txt(
-				name.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char *>(cn), -1, -1, 0)
-				== 1,
-		  "CN");
+		for (const char *cn : cns) {
+			check(X509_NAME_add_entry_by_txt(
+					name.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char *>(cn), -1, -1, 0)
+					== 1,
+			  "CN");
+		}
 		check(X509_set_subject_name(cert, name.get()) == 1, "subject");
 		check(X509_set_issuer_name(cert, issuer ? X509_get_subject_name(issuer) : name.get()) == 1, "issuer");
 
