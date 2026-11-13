@@ -49,9 +49,8 @@ target_link_libraries(jhetz_ldap_tests PRIVATE jhetz::ldap ICU::uc Catch2::Catch
 jhetz_ldap_warnings(jhetz_ldap_tests)
 catch_discover_tests(jhetz_ldap_tests)
 
-# Replaces the global operator new / delete to count allocations, so it
-# gets its own executable. Not built with ThreadSanitizer, whose runtime
-# defines operator new / delete too.
+# Replaces the global operator new / delete: its own executable, not with
+# TSan.
 if(NOT CMAKE_CXX_FLAGS MATCHES "-fsanitize=([^ ]*,)?thread")
     add_executable(jhetz_ldap_alloc_tests schema_alloc_tests.cpp)
     target_link_libraries(jhetz_ldap_alloc_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)
@@ -59,12 +58,9 @@ if(NOT CMAKE_CXX_FLAGS MATCHES "-fsanitize=([^ ]*,)?thread")
     catch_discover_tests(jhetz_ldap_alloc_tests)
 endif()
 
-# Compile tests for the mapping's compile-time checks (DESIGN.md section 4)
-# and the per-operation request controls (section 3):
-# each file in compile/ is compiled with -fsyntax-only and must fail with the
-# expected diagnostic (matched in the C locale); ok.cpp must compile, so the
-# failures are not due to the command line. discarded_child.cpp compiles but
-# must warn ([[nodiscard]], on by default in GCC and Clang).
+# Compile tests: each file in compile/ must fail with the expected
+# diagnostic (C locale), ok.cpp must compile, discarded_child.cpp must
+# warn.
 if(NOT MSVC)
     # CMAKE_CXX_FLAGS too, so flags such as --gcc-install-dir reach the compiler.
     separate_arguments(jhetz_ldap_user_flags UNIX_COMMAND "${CMAKE_CXX_FLAGS}")
@@ -108,16 +104,12 @@ if(NOT MSVC)
     jhetz_ldap_compile_test(transaction_specification_on_search "transaction_specification_on_search\\.cpp:[0-9]+:[0-9]+: error: .*search_controls")
 endif()
 
-# Header self-containment: one generated TU per public header, including
-# only that header (twice: #pragma once), built with our warnings. The
-# codec's headers are built against jhetz::ldap alone, so one that needs
-# Corosio or Capy fails here; jhetz::ldap_net's against jhetz::ldap_net.
-# A new header is picked up when CMake reconfigures (CONFIGURE_DEPENDS).
+# Header self-containment: one generated TU per public header; the codec's
+# against jhetz::ldap alone.
 file(GLOB_RECURSE jhetz_ldap_public_headers CONFIGURE_DEPENDS
     RELATIVE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/include/jhetz/ldap/*.hpp)
-# The headers that need jhetz::ldap_net; the root CMakeLists.txt's codec-only
-# install() EXCLUDE patterns spell the same list (checked by
-# tests/install/check_install.sh).
+# The headers that need jhetz::ldap_net (the same list as the root
+# CMakeLists.txt's install EXCLUDE patterns).
 set(jhetz_ldap_net_headers
     jhetz/ldap/cancel.hpp jhetz/ldap/client.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
     jhetz/ldap/paged_search.hpp jhetz/ldap/referral_chase.hpp jhetz/ldap/run.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp jhetz/ldap/transaction.hpp
@@ -146,9 +138,8 @@ if(JHETZ_LDAP_BUILD_NET)
     jhetz_ldap_warnings(jhetz_ldap_net_header_check)
 endif()
 
-# Each <target>_fuzz_replay runs the libFuzzer entry point of fuzz/<target>.cpp
-# on deterministic inputs, so the fuzz properties are checked by every
-# compiler, without libFuzzer.
+# <target>_fuzz_replay runs fuzz/<target>.cpp's entry point on
+# deterministic inputs.
 foreach(target ber_fuzz message_fuzz filter_fuzz dn_fuzz url_fuzz value_fuzz schema_fuzz matching_fuzz ntlm_fuzz)
     add_executable(${target}_replay
         ${PROJECT_SOURCE_DIR}/fuzz/${target}.cpp
@@ -169,9 +160,7 @@ if(JHETZ_LDAP_BUILD_NET)
     add_test(NAME ntlm_layer_fuzz_replay COMMAND ntlm_layer_fuzz_replay)
 endif()
 
-# Transport and connect tests (jhetz::ldap_net): in-process servers on
-# loopback and Unix domain sockets, Capy mock streams. ctest names start with
-# "net.", so `ctest -R "^net\."` runs just these.
+# jhetz::ldap_net tests; ctest names start with "net.".
 if(JHETZ_LDAP_BUILD_NET)
     add_executable(jhetz_ldap_net_tests
         net/ad_discover_tests.cpp
@@ -204,17 +193,14 @@ if(JHETZ_LDAP_BUILD_NET)
         target_sources(jhetz_ldap_net_tests PRIVATE net/sasl_gssapi_tests.cpp)
     endif()
     target_link_libraries(jhetz_ldap_net_tests PRIVATE jhetz::ldap_ad Catch2::Catch2WithMain)
-    # Integration tests against a real slapd (tests/integration/run_slapd.sh
-    # starts one and sets JHETZ_LDAP_IT_*): one ctest entry, label
-    # "integration", skipped (Catch2 exit code 4) when no server is set up.
+    # Against slapd (run_slapd.sh): label "integration", skipped without it.
     add_executable(jhetz_ldap_integration_tests integration/integration_tests.cpp)
     target_link_libraries(jhetz_ldap_integration_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
     jhetz_ldap_warnings(jhetz_ldap_integration_tests)
     add_test(NAME integration COMMAND jhetz_ldap_integration_tests)
     set_tests_properties(integration PROPERTIES LABELS integration SKIP_RETURN_CODE 4)
-    # Against Samba AD DCs in Docker (tests/integration/run_samba_ad.sh
-    # starts them and sets JHETZ_LDAP_IT_SAMBA_*): label "samba_ad", skipped
-    # without them.
+    # Against Samba AD DCs (run_samba_ad.sh): label "samba_ad", skipped without
+    # them.
     add_executable(jhetz_ldap_samba_ad_tests integration/samba_ad_tests.cpp)
     target_link_libraries(jhetz_ldap_samba_ad_tests PRIVATE jhetz::ldap_ad Catch2::Catch2WithMain)
     jhetz_ldap_warnings(jhetz_ldap_samba_ad_tests)

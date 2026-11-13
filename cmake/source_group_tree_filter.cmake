@@ -1,15 +1,7 @@
-# Included before Capy's and Corosio's project() (as
-# CMAKE_PROJECT_boost_capy_INCLUDE_BEFORE and
-# CMAKE_PROJECT_boost_corosio_INCLUDE_BEFORE). CMake 4.5 rejects a FILES
-# path of source_group(TREE <root>) outside <root>, and their
-# source_group(TREE .../include/boost/<lib>) is given the top-level
-# include/boost/<lib>.hpp. In those projects' directories,
-# source_group(TREE) leaves the files outside <root> out (IDE grouping
-# only); everywhere else source_group forwards its arguments unchanged.
-# Their sources are not modified. The override is defined once per CMake
-# run, whatever path this file is included from, and not at all when
-# source_group is already overridden (an earlier override is called
-# through _source_group, so wrapping it again would recurse).
+# Included before Capy's and Corosio's project(): in their directories,
+# source_group(TREE <root>) leaves out the files outside <root>, which
+# CMake 4.5 rejects; elsewhere it forwards unchanged. Defined once, and not
+# over another override.
 set(jhetz_ldap_source_group_tree_filter ON)
 include_guard(GLOBAL)
 get_property(jhetz_ldap_defined GLOBAL PROPERTY JHETZ_LDAP_SOURCE_GROUP_TREE_FILTER)
@@ -27,9 +19,8 @@ function(jhetz_ldap_append_quoted jhetz_ldap_var jhetz_ldap_value)
     set(${jhetz_ldap_var} "${${jhetz_ldap_var}} \"${jhetz_ldap_value}\"" PARENT_SCOPE)
 endfunction()
 
-# CMake's own source_group (_source_group) is called through
-# cmake_language(EVAL) with every argument quoted, so that empty ones (the
-# root group's "") and ones holding a semicolon are passed as they came.
+# Calls CMake's _source_group with every argument quoted, empty ones and
+# semicolons kept.
 function(source_group)
     set(call "")
     if(jhetz_ldap_source_group_tree_filter AND ARGC GREATER 1 AND "${ARGV0}" STREQUAL "TREE")

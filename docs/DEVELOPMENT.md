@@ -25,6 +25,12 @@ ctest --test-dir build/main -R '^net\.'     # just the transport / connect / con
 
 To build against local checkouts instead of downloading, pass
 `-DFETCHCONTENT_SOURCE_DIR_CAPY=/path/to/capy -DFETCHCONTENT_SOURCE_DIR_COROSIO=/path/to/corosio`.
+Installed `boost_capy` / `boost_corosio` packages on `CMAKE_PREFIX_PATH`
+are used when found. Fetched ones build only the targets the library links,
+and their install rules are left out, so `cmake --install` installs
+jhetz_ldap alone. C++20 module scanning is off for the whole build
+(`CMAKE_CXX_SCAN_FOR_MODULES`): nothing uses modules, and GCC 16 crashes
+compiling Corosio in module mode.
 
 The `net.*` tests need no LDAP server and no fixed ports: they run TCP, TLS
 and Unix socket servers in-process on loopback, with a throwaway CA and

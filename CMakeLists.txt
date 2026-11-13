@@ -1,18 +1,12 @@
-# jhetz::ldap - C++23 LDAP client library (work in progress).
-#
-#   cmake -B build/main -G Ninja -DCMAKE_BUILD_TYPE=Debug
-#   cmake --build build/main
-#   ctest --test-dir build/main --output-on-failure
-#
-# See docs/DEVELOPMENT.md for sanitizer and fuzzer builds.
+# jhetz::ldap - C++23 LDAP client library. Building: docs/DEVELOPMENT.md.
 cmake_minimum_required(VERSION 3.25)
 
 project(jhetz_ldap VERSION 0.1.0 LANGUAGES CXX)
 
 option(JHETZ_LDAP_BUILD_TESTS "Build the jhetz::ldap unit tests" ON)
 option(JHETZ_LDAP_BUILD_FUZZERS "Build the libFuzzer targets (Clang only)" OFF)
-# jhetz::ldap_net needs Corosio + Capy (fetched) and OpenSSL. The fuzzers
-# only exercise the codec, so a fuzz build leaves it off by default.
+# jhetz::ldap_net is off by default in a fuzz build (the fuzzers exercise
+# the codec).
 if(JHETZ_LDAP_BUILD_FUZZERS)
     set(jhetz_ldap_net_default OFF)
 else()
@@ -21,10 +15,8 @@ endif()
 option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap_net (transports and connect; fetches Corosio and Capy, needs OpenSSL)"
     ${jhetz_ldap_net_default})
 option(JHETZ_LDAP_SANITIZE "Build all targets with AddressSanitizer and UBSan" OFF)
-# On by default for our own builds; off as a subproject (add_subdirectory,
-# FetchContent) so a consumer's newer compiler is not broken by new warnings.
-# Off by default on clang-cl (/W4 still shows the warnings): only MSVC itself
-# has had a clean Windows build (19.44); -DJHETZ_LDAP_WERROR=ON to try it.
+# Warnings as errors for our own builds, not as a subproject nor on
+# clang-cl.
 if(PROJECT_IS_TOP_LEVEL AND NOT (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
     set(jhetz_ldap_werror_default ON)
 else()
@@ -38,13 +30,8 @@ option(JHETZ_LDAP_BUILD_EXAMPLES "Build the examples (examples/; need JHETZ_LDAP
 option(JHETZ_LDAP_INSTALL "Generate install rules and the jhetz_ldap CMake package" ${PROJECT_IS_TOP_LEVEL})
 option(JHETZ_LDAP_CLANG_TIDY "Run clang-tidy (.clang-tidy) on our own targets while building them" OFF)
 
-# Minimum compilers: GCC 16, Clang 23, and libstdc++ 16 when it is the
-# standard library (Clang uses the newest GCC's libstdc++ it finds; install
-# g++-16 next to clang++-23, or pass --gcc-install-dir), for the C++23 library
-# additions older versions lack (std::print, std::ranges::to, ...), or MSVC
-# 19.40 (Visual Studio 2022 17.10). Linux is the supported platform; the
-# Windows port (MSVC, clang-cl, MinGW) is code-only so far and not tested
-# here. Apple Clang (macOS) is rejected.
+# Minimum compilers: GCC 16, Clang 23 with libstdc++ 16, or MSVC 19.40;
+# Apple Clang is rejected.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
     message(FATAL_ERROR "jhetz::ldap does not support Apple Clang (macOS is not a supported platform)")
 endif()
@@ -54,15 +41,13 @@ endif()
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 23)
     message(FATAL_ERROR "jhetz::ldap needs Clang 23 or newer (found ${CMAKE_CXX_COMPILER_VERSION})")
 endif()
-# MSVC_VERSION covers clang-cl too: it uses the MSVC STL of the toolset it
-# emulates, and reports that toolset's version.
+# MSVC_VERSION covers clang-cl too.
 if(MSVC AND MSVC_VERSION LESS 1940)
     message(FATAL_ERROR "jhetz::ldap needs MSVC 19.40 (Visual Studio 2022 17.10) or newer, or clang-cl on "
         "that toolset (found MSVC_VERSION ${MSVC_VERSION})")
 endif()
 include(CheckCXXSourceCompiles)
-# Re-run the probe on every configure: a cached failure would otherwise keep
-# failing after the user installs a newer libstdc++ or changes the flags.
+# Re-run the probe on every configure.
 unset(JHETZ_LDAP_STDLIB_RECENT_ENOUGH CACHE)
 check_cxx_source_compiles([=[
 #include <version>
@@ -79,29 +64,23 @@ endif()
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-# No C++20 modules here or in Capy/Corosio. CMake 3.28+ with Ninja scans every
-# C++20 source for them by default, and GCC 16 (still 16.2) crashes compiling
-# Corosio's uring_scheduler.hpp in module mode (-fmodules). Set before
-# FetchContent so the dependencies inherit it.
+# No C++20 modules here or in Capy / Corosio; set before FetchContent.
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
-# Global flags: set before any dependency is fetched so Catch2 is built the
-# same way (mixing sanitized and unsanitized code causes false positives).
+# Global flags, set before any dependency is fetched so Catch2 matches.
 if(JHETZ_LDAP_SANITIZE)
     if(MINGW)
         message(FATAL_ERROR "JHETZ_LDAP_SANITIZE is not supported with MinGW (no AddressSanitizer runtime); "
             "use MSVC or clang-cl")
     endif()
     if(MSVC)
-        # /fsanitize=address is incompatible with the /RTC1 runtime checks
-        # CMake puts in the default Debug flags (error D8016), so drop them.
+        # Drop /RTC1, which /fsanitize=address refuses (D8016).
         foreach(var CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELWITHDEBINFO)
             string(REGEX REPLACE "/RTC[1csu]+" "" ${var} "${${var}}")
         endforeach()
         add_compile_options(/fsanitize=address)
     else()
-        # -fno-sanitize-recover=all: UBSan findings abort the process instead
-        # of printing and continuing, so they fail tests.
+        # UBSan findings abort.
         add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
         add_link_options(-fsanitize=address,undefined -fno-sanitize-recover=all)
     endif()
@@ -115,17 +94,13 @@ if(JHETZ_LDAP_BUILD_FUZZERS)
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         message(FATAL_ERROR "JHETZ_LDAP_BUILD_FUZZERS requires Clang (libFuzzer)")
     endif()
-    # Coverage instrumentation for all code; only fuzz executables link the
-    # libFuzzer main (-fsanitize=fuzzer below).
-    # -fno-sanitize-recover=all: UBSan findings are reported as crashes.
+    # Coverage instrumentation for all code; only the fuzz executables link
+    # libFuzzer's main. UBSan findings abort.
     add_compile_options(-fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address,undefined -fno-sanitize-recover=all)
 endif()
 
-# Coverage (tests/coverage/run_coverage.sh): Clang source-based coverage
-# on our own targets only, through jhetz_ldap_warnings below, so Corosio,
-# Capy and Catch2 are not instrumented. -O0 so regions and branches map to
-# the source as written.
+# Clang source-based coverage of our own targets only, at -O0.
 if(JHETZ_LDAP_COVERAGE)
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR MSVC)
         message(FATAL_ERROR "JHETZ_LDAP_COVERAGE needs Clang (-fprofile-instr-generate, llvm-cov)")
@@ -136,12 +111,8 @@ if(JHETZ_LDAP_COVERAGE)
     endif()
 endif()
 
-# clang-tidy (JHETZ_LDAP_CLANG_TIDY): CXX_CLANG_TIDY on our own targets only,
-# through jhetz_ldap_warnings below, so Corosio, Capy and Catch2 are never
-# checked; the checks and the header filter (include/jhetz/ and src/) are in
-# .clang-tidy. compile_commands.json is exported by default for a standalone
-# run-clang-tidy and clangd (CMake creates the cache entry empty, so an
-# explicit -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF still wins).
+# clang-tidy on our own targets only (.clang-tidy); compile_commands.json
+# exported unless set explicitly.
 if(PROJECT_IS_TOP_LEVEL AND "${CMAKE_EXPORT_COMPILE_COMMANDS}" STREQUAL "")
     set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 endif()
@@ -149,16 +120,8 @@ if(JHETZ_LDAP_CLANG_TIDY)
     find_program(JHETZ_LDAP_CLANG_TIDY_EXE NAMES clang-tidy-23 clang-tidy REQUIRED)
 endif()
 
-# Warnings (and coverage instrumentation) apply to our own targets only, and
-# so do the Windows settings: UTF-8 sources and execution charset (/utf-8:
-# the sources and tests hold UTF-8 literals), big object files (Corosio's
-# templates exceed the default section count), no CRT "deprecated" warnings
-# for the standard C functions (getenv, ...), and a lean <windows.h> without
-# the min/max macros for anything that pulls in Winsock.
-# Clang counts __COUNTER__ (used by Catch2's macros, expanded in our test
-# sources) as a C2y extension under -Wpedantic. Clang only: GCC has no such
-# warning (it accepts the unknown -Wno- flag, then notes it next to any other
-# warning).
+# Our own targets' warnings, coverage and Windows settings (/utf-8,
+# /bigobj, no CRT deprecation, lean <windows.h> without min/max).
 
 function(jhetz_ldap_warnings target)
     if(JHETZ_LDAP_CLANG_TIDY)
@@ -184,12 +147,8 @@ function(jhetz_ldap_warnings target)
     endif()
 endfunction()
 
-# ICU is the Unicode dependency (DESIGN.md decision 6), of the codec too:
-# UTF-8 decoding, character properties and LDAPprep for the matching
-# rules (RFC 4518, usprep) in jhetz::ldap, SASLprep for SCRAM (usprep) in
-# jhetz::ldap_net. `data` too, for a static ICU (libicuuc.so
-# already pulls in libicudata). ICU 60+: U8_NEXT's maximal-subpart
-# behaviour (Unicode section 3.9) dates from ICU 60.
+# ICU 60+ (U8_NEXT's maximal subparts): UTF-8, character properties,
+# LDAPprep and SASLprep. `data` for a static ICU.
 find_package(ICU 60 COMPONENTS uc data)
 if(NOT ICU_FOUND)
     message(FATAL_ERROR "jhetz::ldap needs ICU 60+ (e.g. apt install libicu-dev; on Windows "
@@ -235,16 +194,9 @@ jhetz_ldap_warnings(jhetz_ldap)
 
 if(JHETZ_LDAP_BUILD_NET)
     include(FetchContent)
-    # Installed packages (boost_capy, boost_corosio on CMAKE_PREFIX_PATH)
-    # are used when found; otherwise these pinned commits are fetched.
-    # Local checkouts can be used with
-    # -DFETCHCONTENT_SOURCE_DIR_CAPY=... -DFETCHCONTENT_SOURCE_DIR_COROSIO=...
-    # SYSTEM: our warning flags must not fire on their headers.
-    # CMake 4.5 rejects their source_group(TREE include/boost/<lib>) given
-    # the top-level <lib>.hpp, outside that tree: from 4.5 on,
-    # cmake/source_group_tree_filter.cmake runs before their project() and
-    # leaves it out of that call (IDE grouping only), for fetched sources
-    # and local checkouts alike, without modifying them.
+    # Installed boost_capy / boost_corosio packages if found, else these
+    # pinned commits (SYSTEM headers). From CMake 4.5,
+    # cmake/source_group_tree_filter.cmake runs before their project().
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.5)
         foreach(dep_project boost_capy boost_corosio)
             set(CMAKE_PROJECT_${dep_project}_INCLUDE_BEFORE
@@ -270,14 +222,8 @@ if(JHETZ_LDAP_BUILD_NET)
         set(${var} OFF)
     endforeach()
     FetchContent_MakeAvailable(capy corosio)
-    # Fetched (not found as packages): build only the targets we link (Capy
-    # always adds its test-suite libraries, unused here), and leave their
-    # install rules out of ours, so cmake --install installs jhetz_ldap
-    # alone (CMake skips EXCLUDE_FROM_ALL directories' install scripts).
-    # FetchContent_Declare(EXCLUDE_FROM_ALL) would need CMake 3.28. Only
-    # directories added here: a parent project that made Capy or Corosio
-    # available itself (our MakeAvailable then does nothing, but
-    # <dep>_SOURCE_DIR is set) keeps its own settings for them.
+    # Fetched dependencies: only the targets we link are built, and their
+    # install rules are left out.
     get_property(jhetz_ldap_subdirs DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY SUBDIRECTORIES)
     foreach(dep capy corosio)
         if(DEFINED ${dep}_SOURCE_DIR)
@@ -318,9 +264,7 @@ if(JHETZ_LDAP_BUILD_NET)
         src/net/transport.cpp
         src/net/trust_store.cpp
     )
-    # Default verification's trust anchors (src/net/trust_store.hpp): the
-    # CryptoAPI ROOT store and chain verification on Windows, OpenSSL's
-    # default paths elsewhere.
+    # Default verification's trust anchors (src/net/trust_store.hpp).
     if(WIN32)
         target_sources(jhetz_ldap_net PRIVATE src/net/trust_store_win.cpp)
         # CERT_CHAIN_PARA's dwUrlRetrievalTimeout (verify_system_chain).
@@ -335,10 +279,7 @@ if(JHETZ_LDAP_BUILD_NET)
     target_link_libraries(jhetz_ldap_net PUBLIC jhetz_ldap Boost::corosio Boost::corosio_openssl
         PRIVATE ICU::uc ICU::data)
     jhetz_ldap_warnings(jhetz_ldap_net)
-    # SASL GSSAPI (sasl_gssapi.hpp), optional: the GSS-API library is found
-    # with pkg-config (MIT krb5's krb5-gssapi; Heimdal's heimdal-gssapi
-    # should work too, untested). The installed package config finds it
-    # the same way.
+    # SASL GSSAPI, optional: the GSS-API library through pkg-config.
     if(JHETZ_LDAP_WITH_GSSAPI)
         if(WIN32)
             message(FATAL_ERROR "JHETZ_LDAP_WITH_GSSAPI is not supported on Windows (SSPI is not implemented)")
@@ -358,10 +299,8 @@ elseif(JHETZ_LDAP_WITH_GSSAPI)
     message(FATAL_ERROR "JHETZ_LDAP_WITH_GSSAPI needs JHETZ_LDAP_BUILD_NET")
 endif()
 
-# jhetz::ldap_ad: the Active Directory operations that need the network
-# (DESIGN.md, "Active Directory layer"), built on jhetz::ldap_net's public
-# API only. Its codec-level headers (include/jhetz/ldap/ad/, sources in
-# src/ad/) are in jhetz::ldap.
+# jhetz::ldap_ad: the Active Directory operations over jhetz::ldap_net's
+# public API; its codec-level headers are in jhetz::ldap.
 if(JHETZ_LDAP_BUILD_NET)
     add_library(jhetz_ldap_ad STATIC
         src/ad/discover.cpp
@@ -371,10 +310,7 @@ if(JHETZ_LDAP_BUILD_NET)
     )
     add_library(jhetz::ldap_ad ALIAS jhetz_ldap_ad)
     set_target_properties(jhetz_ldap_ad PROPERTIES EXPORT_NAME ldap_ad)
-    # ICU: UTS #46 for internationalized domain names (ad/discover.hpp).
-    # The SRV resolver: libresolv's res_nquery, or DnsQuery (dnsapi) on
-    # Windows; a plain library name in the exported link interface, so the
-    # package config needs nothing more for it.
+    # ICU for UTS #46; libresolv (dnsapi on Windows) for SRV lookups.
     target_link_libraries(jhetz_ldap_ad PUBLIC jhetz_ldap_net PRIVATE ICU::uc ICU::data)
     if(WIN32)
         target_link_libraries(jhetz_ldap_ad PRIVATE dnsapi)
@@ -402,12 +338,8 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     endforeach()
 endif()
 
-# cmake --install: headers, libraries and the jhetz_ldap package, so
-# consumers can find_package(jhetz_ldap) and link jhetz::ldap (codec),
-# jhetz::ldap_net (connection, TLS) and jhetz::ldap_ad (Active Directory).
-# jhetz::ldap_net and jhetz::ldap_ad need Corosio and Capy
-# as installed packages (CMAKE_PREFIX_PATH): a fetched Corosio does not
-# export its targets, so it cannot be referenced from our export set.
+# cmake --install: headers, libraries and the jhetz_ldap package;
+# jhetz::ldap_net and jhetz::ldap_ad need Corosio and Capy installed.
 if(JHETZ_LDAP_INSTALL)
     include(CMakePackageConfigHelpers)
     set(jhetz_ldap_install_targets jhetz_ldap)
@@ -436,10 +368,8 @@ if(JHETZ_LDAP_INSTALL)
         install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             PATTERN "sasl_gssapi.hpp" EXCLUDE)
     else()
-        # Without jhetz::ldap_net, its headers (they need Corosio, or their
-        # implementation is in jhetz::ldap_net) are left out. Keep this list
-        # in step with jhetz_ldap_net_headers in tests/CMakeLists.txt and the
-        # absence check in tests/install/check_install.sh.
+        # Without jhetz::ldap_net its headers are left out; the same list as
+        # jhetz_ldap_net_headers in tests/CMakeLists.txt and check_install.sh.
         install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             PATTERN "net" EXCLUDE
             PATTERN "cancel.hpp" EXCLUDE

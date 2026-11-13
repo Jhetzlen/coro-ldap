@@ -1,13 +1,6 @@
-# find_package(jhetz_ldap) gives jhetz::ldap (codec, needs ICU) and, when
-# installed with networking, jhetz::ldap_net (also needs Corosio, Capy and
-# OpenSSL); the dependencies are found here as packages. Component `net`
-# requires jhetz::ldap_net:
-#   find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net)
-# Component `ad` requires jhetz::ldap_ad (Active Directory operations over
-# jhetz::ldap_net), installed with jhetz::ldap_net; it also links ICU and
-# the system's resolver library (resolv, or dnsapi on Windows) by name.
-# Component `gssapi`: jhetz::ldap_net was built with SASL GSSAPI
-# (JHETZ_LDAP_WITH_GSSAPI); the GSS-API library is then found with pkg-config.
+# find_package(jhetz_ldap): jhetz::ldap, and with components `net`, `ad` and
+# `gssapi` jhetz::ldap_net, jhetz::ldap_ad and SASL GSSAPI; their
+# dependencies are found here.
 @PACKAGE_INIT@
 
 set(jhetz_ldap_net_FOUND @JHETZ_LDAP_PACKAGE_NET@)
