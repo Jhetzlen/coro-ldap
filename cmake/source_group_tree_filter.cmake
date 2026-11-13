@@ -5,10 +5,18 @@
 # source_group(TREE .../include/boost/<lib>) is given the top-level
 # include/boost/<lib>.hpp. In those projects' directories,
 # source_group(TREE) leaves the files outside <root> out (IDE grouping
-# only); everywhere else source_group is CMake's own. Their sources are
-# not modified.
+# only); everywhere else source_group forwards its arguments unchanged.
+# Their sources are not modified. The override is defined once per CMake
+# run, whatever path this file is included from, and not at all when
+# source_group is already overridden (an earlier override is called
+# through _source_group, so wrapping it again would recurse).
 set(jhetz_ldap_source_group_tree_filter ON)
 include_guard(GLOBAL)
+get_property(jhetz_ldap_defined GLOBAL PROPERTY JHETZ_LDAP_SOURCE_GROUP_TREE_FILTER)
+if(jhetz_ldap_defined OR COMMAND _source_group)
+    return()
+endif()
+set_property(GLOBAL PROPERTY JHETZ_LDAP_SOURCE_GROUP_TREE_FILTER ON)
 
 # `jhetz_ldap_value` as a quoted CMake argument, appended to the caller's
 # variable named `jhetz_ldap_var`.
