@@ -2791,9 +2791,13 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   the I/O thread before it returns (`sync::search_paged` reads every page
   of its `paged_search` on the connection's strand, or destroys it
   there): the facades hand out no streams. A `static_assert` on the
-  `detail::io_thread_bound` trait rejects a task whose result is (or
+  `detail::io_context_bound` trait rejects a task whose result is (or
   wraps, in `result`, `std::optional` or a smart pointer) a stream, a
-  `paged_search`, a lease or a transaction.
+  `paged_search`, a lease, a transaction, an `ldap::connection` or an
+  `ldap::client`: a returned copy of the facade's connection handle
+  would outlive the I/O thread's io_context, and its destruction (the
+  last handle closing the core) would run on a destroyed io_context.
+  A copy smuggled out through a capture by reference is not caught.
 - The noexcept paths that end objects of the I/O thread (the
   destructors of `sync::connection`'s core and of the client's core,
   `sync::transaction`'s abort, `sync::lease::release()`) go through
@@ -3148,7 +3152,7 @@ decision left open.
   run again), but the rule stays: the connection is freed at once, its
   memory resource need not outlive the io_context, and no task is left
   that can only be destroyed. Closed is what a `connection` or a
-  `sync::connection` does when destroyed: no UnbindRequest, nothing left
+  `sync::connection` does when its last handle is destroyed: no UnbindRequest, nothing left
   on the io_context. Unbinding cleanly at `close()` still works while
   the executor runs (from a task, as `examples/pool.cpp` does).
 - `client_observer`: virtual hooks, no-ops by default, called

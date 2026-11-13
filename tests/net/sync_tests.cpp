@@ -210,6 +210,19 @@ TEST_CASE("sync: run() rejects results that must be destroyed on the I/O thread"
 	STATIC_CHECK_FALSE(io_thread_bound<ldap::result<std::optional<ldap::entry>>>);
 }
 
+TEST_CASE("sync: run() rejects results holding a connection or client", "[net][sync]")
+{
+	using ldap::sync::detail::io_context_bound;
+	STATIC_CHECK(io_context_bound<ldap::connection>);
+	STATIC_CHECK(io_context_bound<ldap::client>);
+	STATIC_CHECK(io_context_bound<ldap::result<ldap::connection>>);
+	STATIC_CHECK(io_context_bound<ldap::result<std::optional<ldap::connection>>>);
+	STATIC_CHECK(io_context_bound<ldap::result<std::shared_ptr<ldap::client>>>);
+	STATIC_CHECK(io_context_bound<ldap::result<ldap::search_stream>>);
+	STATIC_CHECK_FALSE(io_context_bound<ldap::result<void>>);
+	STATIC_CHECK_FALSE(io_context_bound<ldap::result<ldap::search_result>>);
+}
+
 TEST_CASE("sync: search_paged leaves nothing on the caller's resource once it returns", "[net][sync]")
 {
 	server_thread srv;

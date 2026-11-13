@@ -645,8 +645,10 @@ namespace detail {
 		template<class D> static auto runner(const D &d) { return d.runner(); }
 	};
 
-	// The types that must be destroyed on their connection's I/O thread
-	// (run.hpp).
+	// The types that must be destroyed on their connection's I/O thread,
+	// and those, with the connection and client, that must not outlive
+	// its io_context (run.hpp).
+	using ldap::detail::io_context_bound;
 	using ldap::detail::io_thread_bound;
 }// namespace detail
 
@@ -682,8 +684,11 @@ auto transaction::begin(basic_lease<Exclusive> &l, extended_controls controls) -
 // make_task, its task and `args` are used on the I/O thread while the call
 // runs; whatever the task creates there (a stream) must also end there,
 // before the task does. A task whose result holds a search_stream,
-// paged_search, record_stream, lease, exclusive_lease or transaction does
-// not compile. The facade's own errors come first:
+// paged_search, record_stream, lease, exclusive_lease, transaction,
+// ldap::connection or ldap::client does not compile. Copies of `a` must
+// not leave the task (through a capture by reference either): they must
+// not outlive the I/O thread's io_context. The facade's own errors come
+// first:
 // not_connected without a connection (a default or moved-from
 // sync::connection, a released lease), would_deadlock from the I/O thread
 // itself (context "sync::connection", or "sync::client" for a client and
@@ -693,9 +698,9 @@ template<directory D, class F, class... Args> [[nodiscard]] auto run(D &d, F &&m
 {
 	const auto task_of = [&](
 						   auto &a) { return std::invoke(std::forward<F>(make_task), a, std::forward<Args>(args)...); };
-	static_assert(!detail::io_thread_bound<decltype(detail::facade_access::call(d, task_of))>,
-	  "sync::run: the task's result holds a stream, lease or transaction, which must be destroyed on the I/O "
-	  "thread; consume it inside the task and return plain values");
+	static_assert(!detail::io_context_bound<decltype(detail::facade_access::call(d, task_of))>,
+	  "sync::run: the task's result holds a stream, lease, transaction, connection or client, which is bound to "
+	  "the I/O thread's io_context; consume it inside the task and return plain values");
 	return detail::facade_access::call(d, task_of);
 }
 
