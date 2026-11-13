@@ -49,10 +49,7 @@ auto decode_utf8(std::string_view s, std::size_t n) -> UChar32
 }
 
 // The length of the maximal subpart (Unicode section 3.9) at the start of
-// the ill-formed s, from the compile-time check: the longest prefix (at
-// least one octet) that some continuation octets complete into a
-// well-formed sequence. From two octets on, 0x80 octets complete any prefix
-// that can be completed.
+// the ill-formed s.
 auto maximal_subpart(std::string_view s) -> std::size_t
 {
 	std::size_t best = 1;
@@ -69,12 +66,8 @@ auto maximal_subpart(std::string_view s) -> std::size_t
 
 }// namespace
 
-// detail::utf8_sequence_length uses ICU at run time and a hand-rolled
-// check in constant evaluation (the consteval DN literals): both must agree
-// on every input. Every 1-, 2- and 3-octet string, and the 4-octet ones
-// built from the octets at the edges of the UTF-8 ranges. detail::utf8_next
-// (ICU's U8_NEXT) is checked against it too: the length and code point of a
-// well-formed sequence, and the maximal subpart of an ill-formed one.
+// The ICU and the constant-evaluation UTF-8 checks agree on every 1- to
+// 3-octet string and the 4-octet edge cases; utf8_next agrees too.
 TEST_CASE("utf8_sequence_length: the compile-time check matches ICU", "[attribute][utf8]")
 {
 	std::size_t mismatches = 0;
@@ -196,9 +189,8 @@ TEST_CASE("attribute::parse shows its input sanitized", "[attribute]")
 
 TEST_CASE("ci_hash / ci_equal fold A-Z only, in every byte position", "[attribute]")
 {
-	// Every pair of byte values, at each position of strings around the
-	// 8-byte word boundaries: ci_equal agrees with iequals (byte-wise
-	// ascii_lower), and equal strings hash the same.
+	// Every pair of byte values around the 8-byte word boundaries: ci_equal
+	// agrees with iequals, and equal strings hash the same.
 	const ldap::detail::ci_hash hash;
 	const ldap::detail::ci_equal equal;
 	const std::string base = "abcdefghijklmnopqrstuvwxyz";
@@ -295,8 +287,8 @@ TEST_CASE("ci_hash: strings of different lengths do not collide", "[attribute]")
 
 namespace {
 
-// The rounds of hash_value (attribute.cpp) and their inverse, to build names
-// that collide under the hash as it was before it had a seed.
+// The rounds of hash_value and their inverse, to build colliding names for
+// an unseeded hash.
 constexpr std::uint64_t k1 = 0x9E37'79B9'7F4A'7C15ull, k2 = 0xD6E8'FEB8'6659'FD93ull;
 
 constexpr auto inverse(std::uint64_t odd) -> std::uint64_t// mod 2^64, by Newton's iteration
@@ -329,12 +321,9 @@ static_assert(unmix(mix(0, 0x0123'4567'89AB'CDEFull)) == 0x0123'4567'89AB'CDEFul
 
 }// namespace
 
-// Names crafted to collide in all 64 bits under a fixed start state must
-// spread under the seeded hash (entry::from stays linear).
 TEST_CASE("ci_hash is seeded: names crafted to collide under a fixed start spread", "[attribute]")
 {
-	// 16-byte names "<8 digits><w2>": from a fixed start h0, the state after
-	// both words is the same for every name, so an unseeded hash would be too.
+	// 16-byte names "<8 digits><w2>" with the same state from a fixed start h0.
 	constexpr std::uint64_t h0 = 0xCBF2'9CE4'8422'2325ull;
 	const std::uint64_t target = mix(mix(h0, 1), 2);
 	const auto word = [](std::string_view s) {

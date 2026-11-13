@@ -604,9 +604,8 @@ TEST_CASE("decode_options limits", "[message][options]")
 
 TEST_CASE("regression: a huge AND filter in a search request fails fast", "[message][options]")
 {
-	// Reviewer's shape: [APPLICATION 3] SearchRequest whose filter is an AND of
-	// many 3-byte (a=*) children (87 01 61). Here about 1 MiB, far beyond
-	// max_filter_elements; decoding stops at element 10,001.
+	// A SearchRequest whose filter is an AND of about 350 000 (a=*): decoding
+	// stops at element 10,001.
 	constexpr std::size_t children = 350'000;
 	auto bytes = raw_message(1, [&](ber::writer &m) {
 		m.constructed(ber::application(3), [&](ber::writer &o) {
@@ -635,11 +634,8 @@ TEST_CASE("regression: a huge AND filter in a search request fails fast", "[mess
 
 TEST_CASE("regression: invalid list elements do not drive the reserve size", "[message][options]")
 {
-	// Reviewer's shape: a SearchResultEntry whose attribute list holds many
-	// empty SEQUENCEs (30 00, each invalid as a PartialAttribute), or whose
-	// value set holds NULLs (05 00). Decoding into a small arena with no
-	// upstream must return decode_error, not throw bad_alloc from a reserve
-	// sized by the invalid elements.
+	// Many invalid elements decoded into a small arena: decode_error, not
+	// bad_alloc.
 	constexpr std::size_t count = 200'000;
 	auto entry_with = [&](bool bad_attributes) {
 		return raw_message(1, [&](ber::writer &m) {
@@ -673,8 +669,6 @@ TEST_CASE("regression: invalid list elements do not drive the reserve size", "[m
 		ldap::result<ldap::message> r = std::unexpected(ldap::error{});
 		REQUIRE_NOTHROW(r = ldap::decode(bytes, { .from = ldap::origin::server, .memory = &arena }));
 		REQUIRE_FALSE(r);
-		// decode_error (empty SEQUENCE) or unexpected_tag (NULL value): a
-		// decoding error either way, reported instead of thrown.
 		CHECK(r.error().code.category() == ldap::make_error_code(client_errc::decode_error).category());
 	}
 }
@@ -700,12 +694,8 @@ TEST_CASE("decode_options::max_elements bounds the strings of one message", "[me
 
 TEST_CASE("regression: many tiny values cannot multiply a message's size in memory", "[message][options]")
 {
-	// A SearchResultEntry of `count` empty values (04 00) in one attribute,
-	// or of `count` attributes with an empty type and no values
-	// (30 04 04 00 31 00). Valid, so before max_elements every one became a
-	// string (a 16 MiB PDU took about 300 MB). Decoding must stop at the
-	// limit, and the reserve sized from the list must stop there too: a
-	// small arena with no upstream would throw bad_alloc otherwise.
+	// `count` empty values, or attributes: decoding stops at max_elements,
+	// and so does the reserve.
 	constexpr std::size_t count = 300'000;
 	auto entry_with = [&](bool many_attributes) {
 		return raw_message(1, [&](ber::writer &m) {
@@ -885,8 +875,6 @@ TEST_CASE("RFC 4511 4.5.3: a SearchResultReference carries at least one URI", "[
 	CHECK(round_trip(one) == one);
 }
 
-// A throwing emplace leaves the op valueless. The id 0 request check reads
-// its index, so encode reports bad_variant_access instead of terminating.
 TEST_CASE("encode of a valueless op with message id 0 throws", "[message]")
 {
 	struct throwing

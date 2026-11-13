@@ -1,6 +1,5 @@
-// The MS-NLMP messages (ntlm_message.hpp): MD4, the UTF-16LE forms, the
-// CHALLENGE_MESSAGE parser against MS-NLMP section 4.2.4.3 and malformed
-// input, and the NEGOTIATE and AUTHENTICATE encoders.
+// The MS-NLMP messages: MD4, UTF-16LE forms, the CHALLENGE_MESSAGE parser,
+// and the NEGOTIATE and AUTHENTICATE encoders.
 #include "jhetz/ldap/ntlm_message.hpp"
 #include "test_util.hpp"
 
@@ -278,10 +277,7 @@ TEST_CASE("ntlm: NEGOTIATE_MESSAGE and AUTHENTICATE_MESSAGE", "[ntlm]")
 	auto bytes = detail::encode_ntlm_authenticate(a);
 	REQUIRE(bytes.has_value());
 	REQUIRE(bytes->size() == detail::ntlm_authenticate_header_size + 12 + 8 + 16 + 24 + 11);
-	// DomainNameFields: 12 octets at 88; UserNameFields at 100,
-	// WorkstationFields at 108, LmChallengeResponseFields at 124,
-	// NtChallengeResponseFields at 148, EncryptedRandomSessionKeyFields
-	// empty at 159.
+	// The payload fields' offsets.
 	CHECK(hex_of(bytes->substr(12, 48))
 		  == hex_of(str("18001800 7c000000 0b000b00 94000000 0c000c00 58000000 08000800 64000000"
 						"10001000 6c000000 00000000 9f000000")));

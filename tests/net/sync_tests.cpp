@@ -281,9 +281,7 @@ TEST_CASE("sync: connect with the URL as text", "[net][sync]")
 
 // ---------------------------------------------------------------- wrappers
 //
-// Each wrapper against a scripted server (mock_ldap.hpp's serve_script) on
-// its own thread: the request on the wire, the value returned, and an LDAP
-// error result returned as the same ldap::error as the async API's.
+// Each wrapper against a scripted server on its own thread.
 
 namespace {
 
@@ -328,9 +326,7 @@ struct peer_server
 		start(serve_script(net::transport::wrap(socket_ref{ &peer }, "server"), std::move(script), log));
 	}
 
-	// Expects a StartTLS request and answers it with success, runs the
-	// server side of the handshake with `leaf`, then answers binds over TLS
-	// until the client hangs up.
+	// Answers StartTLS, handshakes with `leaf`, then answers binds over TLS.
 	void serve_start_tls(test_pki::issued leaf) { start(upgrade(peer, std::move(leaf), log)); }
 
 	auto url() const -> ldap::url
@@ -427,8 +423,7 @@ struct peer_server
 	}
 };
 
-// A sync::connection connected to `srv`. The operation timeout fails a call the
-// server never answers (a script too short) instead of hanging the test.
+// A sync::connection connected to `srv`, with an operation timeout.
 struct connected
 {
 	ldap::sync::connection c;

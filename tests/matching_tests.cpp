@@ -204,9 +204,8 @@ TEST_CASE("caseIgnoreMatch and caseExactMatch", "[matching]")
 	CHECK(ldap::case_ignore_match("JaneDoe", "jane doe") == no);
 	CHECK(ldap::case_exact_match("Jane  Doe ", " Jane Doe") == yes);
 	CHECK(ldap::case_exact_match("Jane Doe", "jane doe") == no);
-	// Directory String is 1*UTF8 (RFC 4517 section 3.3.6): an empty value is
-	// not one. A value of spaces only is, and prepares to two SPACEs (RFC
-	// 4518 section 2.6.1), as does one that maps to nothing (a soft hyphen).
+	// An empty Directory String is Undefined; spaces only prepare to two
+	// SPACEs, as does a soft hyphen.
 	CHECK(ldap::case_ignore_match("", "   ") == undefined);
 	CHECK(ldap::case_exact_match("", "") == undefined);
 	CHECK(ldap::case_ignore_match("", "a") == undefined);
@@ -758,9 +757,7 @@ TEST_CASE("distinguishedNameMatch: names and OIDs without a schema", "[matching]
 
 TEST_CASE("distinguishedNameMatch: a large multi-valued RDN in n log n", "[matching][dn]")
 {
-	// Pairwise type comparison took about 7 s for 4000 AVAs (ASan build);
-	// sorted keys take milliseconds. The bound is loose against a loaded
-	// machine but far below the quadratic time (minutes for 10000).
+	// Many AVAs: matching stays fast (sorted keys).
 	constexpr int count = 10'000;
 	std::string forward = "a0=x";
 	std::string backward = "a" + std::to_string(count - 1) + "=X";
@@ -799,9 +796,7 @@ TEST_CASE("distinguishedNameMatch: #hex values are decoded and transcoded", "[ma
 	// An odd-length BMPString, a UniversalString above U+10FFFF.
 	CHECK(ldap::distinguished_name_match(parse("cn=#1E03004A00"), parse("cn=J")) == undefined);
 	CHECK(ldap::distinguished_name_match(parse("cn=#1C0400110000"), parse("cn=a")) == undefined);
-	// Restricted strings are checked against their character sets:
-	// NumericString "12 " and "12a", PrintableString "a@", IA5String "a@",
-	// VisibleString "a\n".
+	// Restricted strings are checked against their character sets.
 	CHECK(ldap::distinguished_name_match(parse("cn=#1203313220"), parse("cn=12")) == yes);
 	CHECK(ldap::distinguished_name_match(parse("cn=#1203313261"), parse("cn=12a")) == undefined);
 	CHECK(ldap::distinguished_name_match(parse("cn=#13026140"), parse("cn=a@")) == undefined);

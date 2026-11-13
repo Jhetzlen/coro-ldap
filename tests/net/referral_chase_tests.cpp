@@ -1,7 +1,5 @@
-// chase_search and chase_compare (referral_chase.hpp) against several
-// scripted in-process servers on one io_context (mock_ldap.hpp's
-// serve_script over socket pairs), with a test connector that maps a URL's
-// host to one of them.
+// chase_search and chase_compare against several scripted in-process
+// servers, with a test connector mapping a URL's host to one of them.
 #include "../../src/connection/referral_chase_impl.hpp"
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/referral_chase.hpp"
@@ -422,9 +420,7 @@ TEST_CASE("chase_search: many references cost little once the limits are reached
 	auto r = w.run(ldap::chase_search(w.origin.conn, search(), w.connector(), { .max_targets = 2, .max_attempts = 4 }));
 	REQUIRE(r.has_value());
 	CHECK_FALSE(r->is_complete());
-	// Three unparseable and one skipped listed; the second skipped one
-	// counted over max_attempts, the other references once max_targets
-	// was reached.
+	// Three unparseable and one skipped listed; the rest counted.
 	CHECK(outcomes(r->referrals)
 		  == std::vector{ referral_outcome::unparseable,
 			referral_outcome::unparseable,
@@ -1477,10 +1473,8 @@ TEST_CASE("make_same_policy_connector: a failed connect fails the URI", "[net][r
 TEST_CASE("make_same_policy_connector: a closed connection is reopened", "[net][referral]")
 {
 	world w;
-	// The first connection answers one search, then hangs up on the next
-	// one (c's: it was still open when c was sent, whatever the order the
-	// chase and the reader run in); the second one is opened (and set up)
-	// for the URI after the one that found it closed.
+	// The first connection answers one search, then hangs up on c's; a second
+	// one is opened for the next URI.
 	tcp_targets t(w.ioc,
 	  { { answer({ bind_resp(1) }),
 		  answer({ entry_msg(2, "uid=jdoe,ou=b,dc=example,dc=org", "B"), done_msg(2) }),

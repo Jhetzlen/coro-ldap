@@ -1,13 +1,6 @@
-// SASL GSSAPI security layers end to end without slapd: a connection binds
-// with sasl_gssapi against an in-process LDAP server whose SASL side is an
-// MIT krb5 acceptor (gss_accept_sec_context), which offers the layers of
-// RFC 4752 section 3.1, then speaks LDAP through its own gss_wrap /
-// gss_unwrap layer, under a throwaway KDC:
-//
+// SASL GSSAPI security layers against an in-process LDAP server with an
+// MIT krb5 acceptor, under a throwaway KDC:
 //   tests/integration/run_kdc.sh ctest --test-dir build -L kerberos
-//
-// run_kdc.sh puts ldap/localhost's key in KRB5_KTNAME (the acceptor's
-// credentials) and user007's ticket in KRB5CCNAME (the initiator's).
 // Skipped without it.
 #include "../../src/net/sasl_layer.hpp"
 #include "../net/mock_ldap.hpp"
@@ -64,8 +57,7 @@ struct acceptor_context
 	}
 };
 
-// gss_wrap / gss_unwrap on `in`; throws on a GSS-API error. `conf_state`
-// reports whether the buffer was (is) encrypted.
+// gss_wrap / gss_unwrap on `in`; throws on a GSS-API error.
 auto acceptor_wrap(gss_ctx_id_t c, bool conf, std::string in, int *conf_state = nullptr) -> std::string
 {
 	OM_uint32 minor = 0;
@@ -93,8 +85,8 @@ auto acceptor_unwrap(gss_ctx_id_t c, std::string in, int *conf_state = nullptr) 
 	return out;
 }
 
-// The server's half of the layer, over the acceptor's context (not owned).
-// Records whether every buffer received from the client was encrypted.
+// The server's half of the layer; records whether every client buffer was
+// encrypted.
 class acceptor_layer final : public ldap::sasl_security_layer
 {
   public:
@@ -172,10 +164,8 @@ auto in_progress(std::int32_t id, std::string creds) -> ldap::message
 	return ldap::message{ id, ldap::bind_response{ ldap::ldap_result{ 14 }, creds } };
 }
 
-// The server: the Kerberos exchange, the offer of `offer` layers with
-// maximum buffer size `server_max`, and, when the client selected a
-// layer, one search answered through it with an entry whose description
-// is `value` (larger than the client's maximum: several buffers).
+// The server: the Kerberos exchange, the offer, and through the selected
+// layer one search answered with a large entry.
 auto serve(net::transport t, std::uint8_t offer, std::uint32_t server_max, std::string value, server_view &v)
   -> capy::task<void>
 {

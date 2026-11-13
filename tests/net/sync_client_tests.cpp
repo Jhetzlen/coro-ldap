@@ -1,7 +1,5 @@
-// ldap::sync::client, the blocking pool, against in-process LDAP servers on
-// loopback TCP running on their own thread and io_context: scripted ones
-// (one script per accepted connection, mock_ldap.hpp's serve_script) and
-// server_thread.hpp's, which answers whatever comes.
+// ldap::sync::client against in-process servers on their own thread:
+// scripted ones and server_thread.hpp's.
 #include "jhetz/ldap/ad/sync.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "jhetz/ldap/sync_extended_operations.hpp"
@@ -83,12 +81,8 @@ auto server_context() -> corosio::tls_context
 // (ldaps://).
 enum class served { clear, tls };
 
-// Accepts connections one after another and runs the n-th script on the
-// n-th, then stops accepting (a later connect is refused). stop() lets the
-// sessions finish (the client, gone by then, may have written its last
-// request, the UnbindRequest of a detached unbind(), without the server
-// having read it yet), ends those still running after session_grace, and
-// joins the server's thread: only then may the test read the logs.
+// Runs the n-th script on the n-th connection, then refuses connects.
+// stop() ends the sessions after session_grace and joins.
 class threaded_script_server
 {
   public:
@@ -172,7 +166,7 @@ class threaded_script_server
 	}
 
 	corosio::io_context ioc_{};
-	// Keeps run() going until stop(), so that its task runs.
+	// Keeps run() going until stop().
 	std::optional<capy::work_guard<corosio::io_context::executor_type>> guard_{ ioc_.get_executor() };
 	corosio::tcp_acceptor acc_{ ioc_, corosio::endpoint(corosio::ipv4_address::loopback(), 0), 8 };
 	std::uint16_t port_ = acc_.local_endpoint().port();
@@ -189,9 +183,8 @@ auto text(const ldap::url &u) -> std::string { return std::string(std::string_vi
 
 auto admin_setup() -> ldap::session_setup { return ldap::simple_bind_setup(*ldap::dn::parse(admin), "secret"); }
 
-// The pool's options for `server`, with the admin bind as setup. The
-// operation timeout fails a call the server never answers (a script too
-// short) instead of hanging the test.
+// The pool's options for `server`, with the admin bind as setup and an
+// operation timeout.
 auto options_for(const ldap::url &server) -> ldap::client_options
 {
 	return {

@@ -84,10 +84,8 @@ TEST_CASE("filetime_clock: conversions at the limits", "[ad][clock]")
 	CHECK(clock_cast<system_clock>(*traits::decode("-1")) == sys_days(1601y / January / 1) - ticks{ 1 });
 	CHECK(clock_cast<system_clock>(*traits::decode("0")) == sys_days(1601y / January / 1));
 	CHECK(clock_cast<ad::filetime_clock>(clock_cast<system_clock>(ad::pwd_set_now)) == ad::pwd_set_now);
-	// from_sys' domain ends at sys_time<ticks>::max() - offset whatever
-	// system_clock's period. With nanoseconds (libstdc++) every
-	// system_clock::time_point is in it; with MSVC's 100 ns ticks or
-	// libc++'s microseconds only those up to that bound are.
+	// from_sys' domain ends at sys_time<ticks>::max() - offset; every
+	// system_clock::time_point is in it only with nanoseconds.
 	if constexpr (std::ratio_less_equal_v<system_clock::period, std::nano>) {
 		CHECK(clock_cast<ad::filetime_clock>(system_clock::time_point::max())
 			  == filetime(floor<ticks>(system_clock::duration::max()) + offset));

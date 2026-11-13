@@ -187,9 +187,7 @@ TEST_CASE("read_message: PDUs split across arbitrary read boundaries", "[net][re
 		CHECK(*r == expected);
 	}
 	CHECK(m.buf.empty());
-	// The stream hands out `chunk` bytes per read, but every read offers all
-	// the free space of the first min_read buffer (these PDUs all fit in it):
-	// the reader never asks byte by byte by itself.
+	// Every read offers all the free space of the first buffer.
 	for (auto n : *m.reads) {
 		CHECK(n >= net::read_buffer::min_read - wire.size());
 	}
@@ -357,9 +355,7 @@ TEST_CASE("read_message: large PDUs and buffer bounds", "[net][read_message]")
 	auto r = m.read();
 	REQUIRE(r.has_value());
 	CHECK(*r == big);
-	// Once the header is in, the buffer is sized for exactly the rest of the
-	// PDU, so nothing of the next one was read, and once empty the large
-	// allocation is released.
+	// Nothing of the next PDU was read, and the large buffer is released.
 	CHECK(m.buf.empty());
 	CHECK(m.buf.capacity() == 0);
 	CHECK(m.reads->size() == 1 + ((wire.size() - net::read_buffer::min_read + (64uz * 1024) - 1) / (64uz * 1024)));

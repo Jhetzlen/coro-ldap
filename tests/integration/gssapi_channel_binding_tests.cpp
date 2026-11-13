@@ -1,12 +1,6 @@
-// SASL GSSAPI channel bindings, end to end without slapd (whose acceptor is
-// given none, see sasl_gssapi.hpp): sasl_gssapi's tokens go straight to an
-// in-process MIT krb5 acceptor (gss_accept_sec_context), given bindings or
-// not, under a throwaway KDC:
-//
+// SASL GSSAPI channel bindings against an in-process MIT krb5 acceptor,
+// under a throwaway KDC:
 //   tests/integration/run_kdc.sh ctest --test-dir build -L kerberos
-//
-// run_kdc.sh puts ldap/localhost's key in KRB5_KTNAME (the acceptor's
-// credentials) and user007's ticket in KRB5CCNAME (the initiator's).
 // Skipped without it.
 #include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/sasl_gssapi.hpp"
@@ -36,9 +30,8 @@ auto env(const char *name) -> std::string
 	return v == nullptr ? std::string() : std::string(v);
 }
 
-// GSS_C_CHANNEL_BOUND_FLAG (MIT gssapi_ext.h, Heimdal gssapi.h): set in the
-// acceptor's ret_flags when the initiator's bindings matched its own (MIT
-// accept_sec_context.c process_checksum).
+// GSS_C_CHANNEL_BOUND_FLAG: set in the acceptor's ret_flags when the
+// bindings matched.
 constexpr OM_uint32 channel_bound_flag = 2048;
 
 struct accepted
@@ -48,9 +41,8 @@ struct accepted
 	std::string token;// the AP-REP, for the initiator's step()
 };
 
-// One gss_accept_sec_context call with the default acceptor credentials
-// (KRB5_KTNAME) on `token`, given `bindings` as application_data (no
-// addresses, as sasl_gssapi sends them), or none.
+// One gss_accept_sec_context on `token` with `bindings` as
+// application_data, or none.
 auto accept(std::string token, std::optional<std::string> bindings) -> accepted
 {
 	gss_channel_bindings_struct cb{ .initiator_addrtype = GSS_C_AF_UNSPEC,
@@ -127,12 +119,7 @@ TEST_CASE("kerberos: GSSAPI channel bindings against an MIT acceptor", "[integra
 		const auto a = accept(first_token(mech, hash), ours);
 		CHECK(mech.channel_binding_used() == ldap::channel_binding_type::tls_server_end_point);
 		CHECK(a.major == GSS_S_COMPLETE);
-		// MIT sets GSS_C_CHANNEL_BOUND_FLAG in ret_flags whenever the
-		// bindings match, whether or not the initiator asserted
-		// KERB_AP_OPTIONS_CBT: the bit reflects the match, so this does not
-		// show that the client passes the flag with bindings (an acceptor
-		// cannot observe it then). Only the last section (no bindings, the
-		// acceptor given some) constrains the client's flag.
+		// MIT sets the flag whenever the bindings match.
 		CHECK((a.flags & channel_bound_flag) != 0);
 		CHECK(mech.step(a.token).has_value());
 	}

@@ -86,9 +86,6 @@ TEST_CASE("load_schema: reads the subschema named by the root DSE", "[net][schem
 	CHECK(sub.attributes == ldap::string_list{ "attributeTypes", "objectClasses", "dITContentRules" });
 }
 
-// The root DSE's subschemaSubentry is the server's text: quoted in the
-// context sanitized (valid UTF-8 kept, controls, bidi controls and
-// U+2028 shown as U+FFFD) and cut at 256 bytes.
 TEST_CASE("load_schema: quotes the subschemaSubentry sanitized", "[net][schema]")
 {
 	const std::string fffd = "\xEF\xBF\xBD";

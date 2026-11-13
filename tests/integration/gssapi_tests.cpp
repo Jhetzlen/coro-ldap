@@ -1,12 +1,6 @@
-// SASL GSSAPI against a real slapd and a throwaway MIT Kerberos KDC:
-//
+// SASL GSSAPI against slapd and a throwaway MIT KDC:
 //   tests/integration/run_kdc.sh tests/integration/run_slapd.sh ctest --test-dir build -L kerberos
-//
-// run_kdc.sh creates the realm EXAMPLE.ORG, the service principal
-// ldap/localhost (slapd's keytab) and the users user007 and jörg (tickets
-// in a credential cache collection, user007's the default); run_slapd.sh
-// maps a principal to the entry of the same uid. Skipped without them, or
-// when slapd does not offer GSSAPI (cyrus-sasl's gssapi plugin missing).
+// Skipped without them, or when slapd does not offer GSSAPI.
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/connection.hpp"
@@ -96,14 +90,8 @@ auto bind_and_who(corosio::io_context &ioc, ldap::connection &c, ldap::sasl_gssa
 	return *who;
 }
 
-// Sets slapd's SASL security properties (olcSaslSecProps) for the test,
-// then restores them. slapd applies a value field by field
-// (ldap_pvt_sasl_secprops): a field the value leaves out keeps its
-// running setting, and deleting the attribute changes none. So the
-// restore writes the old value, or slapd's default "noanonymous,noplain",
-// with minssf=0 unless it gives one: removing the attribute alone would
-// leave minssf=1 in force, and the next test case (Catch2's order is
-// random) would find a server that requires a security layer.
+// Sets slapd's olcSaslSecProps for the test, then restores the old value
+// (or the default with minssf=0).
 class sasl_secprops
 {
   public:
@@ -196,14 +184,7 @@ TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 	}
 	SECTION("over StartTLS and ldaps://")
 	{
-		// With tls-server-end-point channel bindings, which slapd's
-		// acceptor ignores: cyrus-sasl 2.1.28's gssapi plugin passes it
-		// GSS_C_NO_CHANNEL_BINDINGS ("sasl-cbinding tls-endpoint" is for
-		// SCRAM-SHA-256-PLUS), and its unreleased master passes them only
-		// with the secprops flag nonstdcbind, which run_slapd.sh cannot set
-		// (sasl_gssapi.hpp). So this shows that sending bindings does no
-		// harm, not that they are right: a wrong binding is not refused
-		// (gssapi_channel_binding_tests.cpp checks them, with an MIT acceptor).
+		// With tls-server-end-point bindings, which slapd's acceptor ignores.
 		auto o = trusting();
 		o.start_tls = true;
 		auto tls = open(ioc, localhost_url(), o);

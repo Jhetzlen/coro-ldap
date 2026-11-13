@@ -1,11 +1,6 @@
-// SASL NTLM (sasl_ntlm.hpp): the MS-NLMP section 4.2.4 NTLMv2 test
-// vectors, the mechanism's checks and channel binding, and binds against
-// the scripted mock server, which checks the NTProofStr and the MIC as a
-// domain controller would; the security layer (signing and sealing, MS-NLMP
-// section 3.4): the section 4.2.4.4 vector, a golden exchange and buffers,
-// tampering and replays, and a bind and search through a mock domain
-// controller whose own layer (dc_layer, written here from MS-NLMP) unwraps
-// and checks the client's buffers.
+// SASL NTLM: the MS-NLMP section 4.2.4 vectors, the mechanism's checks,
+// binds against a mock DC checking the NTProofStr and MIC, and the
+// security layer through a mock DC layer (dc_layer).
 #include "../../src/net/sasl_layer.hpp"
 #include "../test_util.hpp"
 #include "jhetz/ldap/connection.hpp"
@@ -33,7 +28,6 @@
 
 namespace jhetz::ldap::detail {
 
-// Tests only: a sasl_ntlm with a fixed ClientChallenge.
 struct ntlm_test_access
 {
 	static auto with_challenge(std::string username,
@@ -43,7 +37,6 @@ struct ntlm_test_access
 	{
 		return { std::move(username), std::move(password), std::move(options), client_challenge };
 	}
-	// A fixed ExportedSessionKey instead of a random one.
 	static void set_session_key(sasl_ntlm &mech, const ntlm_key &key) { mech.fixed_session_key_ = key; }
 };
 
@@ -149,9 +142,8 @@ auto dc_challenge(std::uint32_t flags = dc_flags, bool with_timestamp = true) ->
 	  .version = detail::ntlm_version{ .product_major_version = 10, .product_build = 20348 } });
 }
 
-// The NEGOTIATE_MESSAGE the client sends: flags 0x22880205 (Unicode,
-// RequestTarget, NTLM, extended session security, TargetInfo, Version,
-// 128-bit), a Version of zeros with NTLMSSP_REVISION_W2K3.
+// The NEGOTIATE_MESSAGE: flags 0x22880205, a zero Version with
+// NTLMSSP_REVISION_W2K3.
 const std::string expected_negotiate =
   str("4e544c4d53535000 01000000 05028822 0000000028000000 0000000028000000 000000000000000f");
 
@@ -174,10 +166,8 @@ auto abort_req(std::int32_t id) -> ldap::message
 	return ldap::message{ id, ldap::bind_request{ 3, "", ldap::simple_auth{ "" } } };
 }
 
-// What a domain controller checks, from what it knows (the user's NT
-// hash, i.e. its password, and the messages): the NTProofStr over the
-// client's temp structure, and the MIC keyed with the SessionBaseKey.
-// Returns the client's AV_PAIR list (temp's ServerName) as encoded.
+// What a DC checks: the NTProofStr and the MIC. Returns the client's
+// AV_PAIR list as encoded.
 auto dc_verify(std::string_view negotiate,
   std::string_view challenge,
   std::string_view authenticate,
@@ -394,7 +384,7 @@ TEST_CASE("ntlm: user names, domains and random client challenges", "[net][sasl]
 		auto lm = hmac_md5(*key, key_str(spec_server_challenge) + std::string(8, '\xAA'));
 		REQUIRE(lm.has_value());
 		CHECK(auth->lm_challenge_response.substr(0, 16) == key_str(*lm));
-		// A FILETIME after 2020-01-01 (132223104000000000).
+		// A FILETIME after 2020-01-01.
 		std::uint64_t t = 0;
 		for (int i = 7; i >= 0; --i) {
 			t = t << 8 | static_cast<unsigned char>(auth->nt_challenge_response[24 + static_cast<std::size_t>(i)]);
@@ -424,30 +414,12 @@ TEST_CASE("ntlm: TLS is required by default", "[net][sasl][ntlm]")
 
 TEST_CASE("ntlm: a golden AUTHENTICATE_MESSAGE from an independent implementation", "[sasl][ntlm][rfc]")
 {
-	// The three messages are the output of tests/net/ntlm_golden.py (run it
-	// with python3 -I), a standalone script written from MS-NLMP alone
-	// (stdlib hashlib/hmac, its own RFC 1320 MD4 checked against RFC 1320's
-	// and MS-NLMP 4.2.4.1.1's vectors), none of this library's code: user
-	// "CORP\jörg", password "pässwort€", workstation "WS01", MsvAvTargetName
-	// "ldap/dc1.example.org", ClientChallenge AA*8, the server's
-	// MsvAvTimestamp 0x01DB2B3C4D5E6F70 (so LmChallengeResponse is Z(24)),
-	// MsvAvChannelBindings over tls-server-end-point 00 01 .. 1F.
-	// Where MS-NLMP leaves the choice to the client, the script copies this
-	// library's, so the vector does not anchor these:
-	// - the NEGOTIATE_MESSAGE's flags and its zero Version;
-	// - the AUTHENTICATE_MESSAGE's NegotiateFlags, (client & server) |
-	//   VERSION (so no NEGOTIATE_56);
-	// - "DOMAIN\user" split at the first backslash;
-	// - the client's AV_PAIR order (2.2.2.1 allows any, MsvAvEOL last): the
-	//   server's pairs, then MsvAvFlags, MsvAvChannelBindings,
-	//   MsvAvTargetName;
-	// - the payload order (2.2.1.3 allows any): DomainName, UserName,
-	//   Workstation, LmChallengeResponse, NtChallengeResponse.
-	// The rest follows the spec's formulas: NTOWFv2, temp (with its trailing
-	// Z(4)), the NTProofStr, the LM Z(24), the SessionBaseKey, the
-	// gss_channel_bindings_struct MD5 and the MIC (offset 72,
-	// HMAC_MD5(ExportedSessionKey, NEGOTIATE || CHALLENGE || AUTHENTICATE
-	// with a zero MIC)), which the 4.2.4 vectors do not cover.
+	// The output of tests/net/ntlm_golden.py (python3 -I), written from
+	// MS-NLMP alone: user "CORP\jörg", password "pässwort€", workstation
+	// "WS01", target "ldap/dc1.example.org", ClientChallenge AA*8, server
+	// timestamp 0x01DB2B3C4D5E6F70, tls-server-end-point 00 01 .. 1F. The
+	// script copies the library's free choices (flags, AV_PAIR and payload
+	// order, the domain split), so the vector does not check those.
 	const std::string negotiate =
 	  str("4e544c4d53535000010000000502882200000000280000000000000028000000000000000000000f");
 	const std::string challenge = str(
@@ -698,9 +670,8 @@ auto uchars(std::string &s) -> std::span<unsigned char>
 	return { reinterpret_cast<unsigned char *>(s.data()), s.size() };
 }
 
-// The domain controller's side, from OpenSSL and MS-NLMP directly (no
-// library code but ntlm_rc4, which the RFC 6229 vectors check): MD5,
-// HMAC-MD5, and SIGNKEY / SEALKEY with the magic constants.
+// The DC's side from OpenSSL and MS-NLMP directly: MD5, HMAC-MD5,
+// SIGNKEY / SEALKEY.
 auto dc_md5(std::string_view data) -> detail::ntlm_key
 {
 	detail::ntlm_key out{};
@@ -730,9 +701,8 @@ auto dc_subkey(const detail::ntlm_key &exported, std::string_view direction, std
 				  + " key magic constant" + std::string(1, '\0'));
 }
 
-// What a domain controller's layer does: wraps with the server-to-client
-// keys, unwraps and checks with the client-to-server ones, each direction
-// with its RC4 handle and sequence number. Logs the protected buffers.
+// A DC's layer: wraps with the server-to-client keys, unwraps and checks
+// with the client-to-server ones; logs the buffers.
 class dc_layer final : public ldap::sasl_security_layer
 {
   public:
@@ -889,9 +859,7 @@ TEST_CASE("ntlm: the session security vectors of MS-NLMP section 4.2.4", "[sasl]
 		  == "01 00 00 00 7F B3 8E C5 C5 5D 49 76 00 00 00 00 "
 			 "54 E5 01 65 BF 19 36 DC 99 60 20 C1 81 1B 0F 06 FB 5F");
 
-	// Integrity only: the message in clear, the checksum (4.2.4.4's
-	// HMAC_MD5(SigningKey, ConcatenationOf(SeqNum, Message))[0..7],
-	// 70 35 28 51 F2 56 43 09) RC4-encrypted with a fresh handle.
+	// Integrity only: the message in clear and the RC4-encrypted checksum.
 	protection = ldap::sasl_protection::integrity;
 	detail::ntlm_security_layer signing(keys, protection, 1024);
 	std::string checksum = str("70 35 28 51 F2 56 43 09");
@@ -901,12 +869,8 @@ TEST_CASE("ntlm: the session security vectors of MS-NLMP section 4.2.4", "[sasl]
 
 TEST_CASE("ntlm: a golden security layer from an independent implementation", "[sasl][ntlm][rfc]")
 {
-	// The output of tests/net/ntlm_golden.py's second part (see the golden
-	// AUTHENTICATE_MESSAGE test for what it copies from the library): the
-	// same user, password, workstation, target, challenges and timestamp,
-	// no TLS (MsvAvChannelBindings Z(16)), confidentiality (ALWAYS_SIGN, SIGN,
-	// SEAL, KEY_EXCH), the ExportedSessionKey 00 11 .. FF; then two client
-	// buffers through one handle and the server's through the other.
+	// ntlm_golden.py's second part: no TLS, confidentiality, ExportedSessionKey
+	// 00 11 .. FF, then two client buffers and the server's.
 	const std::string negotiate =
 	  str("4e544c4d53535000010000003582886200000000280000000000000028000000000000000000000f");
 	const std::string challenge = str(
@@ -1150,9 +1114,8 @@ auto creds_of(const ldap::message &m) -> std::optional<std::string>
 	return std::string(*sasl->credentials);
 }
 
-// What the mock domain controller learns from the AUTHENTICATE_MESSAGE:
-// the ExportedSessionKey (EncryptedRandomSessionKey decrypted with the
-// SessionBaseKey), after checking the NTProofStr and the MIC keyed with it.
+// The ExportedSessionKey a mock DC gets from the AUTHENTICATE_MESSAGE,
+// after checking the NTProofStr and the MIC.
 auto dc_exported_key(std::string_view negotiate,
   std::string_view challenge,
   std::string_view authenticate,

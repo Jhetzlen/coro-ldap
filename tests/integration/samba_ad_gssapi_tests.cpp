@@ -1,13 +1,7 @@
-// SASL GSSAPI against the Samba AD DCs' Kerberos (run_samba_ad.sh: the
-// strict DC's KDC, a krb5.conf for CORO.TEST and alice's ticket):
-//
+// SASL GSSAPI against the Samba AD DCs' Kerberos:
 //   tests/integration/run_samba_ad.sh ctest --test-dir build/gssapi -L samba_ad --output-on-failure
-//
-// Binds as alice to ldap@dc1.coro.test over plain ldap:// (no layer,
-// integrity, confidentiality) and over TLS with channel bindings, on the
-// strict DC (signing or sealing required on plain ldap://, channel
-// bindings checked over TLS) and the relaxed one. Skipped without Samba or
-// without Kerberos (JHETZ_LDAP_IT_SAMBA_KRB5_TARGET).
+// Plain ldap:// with each layer, and TLS with channel bindings, on the
+// strict and relaxed DCs. Skipped without Samba or Kerberos.
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/extended_operations.hpp"

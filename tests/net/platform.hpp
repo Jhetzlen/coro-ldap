@@ -1,7 +1,5 @@
-// The few OS calls the tests make outside Corosio: the process id, a raw
-// write to a socket, a readiness poll, the environment, running a command
-// and a blocking loopback TCP socket. POSIX on Linux, the CRT and Winsock on
-// Windows.
+// The OS calls the tests make outside Corosio: POSIX on Linux, the CRT and
+// Winsock on Windows.
 #pragma once
 
 #include <boost/corosio/detail/native_handle.hpp>
@@ -53,8 +51,7 @@ namespace jhetz::ldap::test {
 #endif
 }
 
-// Whether the socket is readable right now (for a listening socket: a
-// connection waits to be accepted). Does not wait.
+// The socket is readable right now. Does not wait.
 [[nodiscard]] inline auto poll_readable(boost::corosio::native_handle_type socket) -> bool
 {
 #ifdef _WIN32
@@ -87,12 +84,7 @@ inline void unset_env(const char *name)
 #endif
 }
 
-// `arg` quoted as one word for the shell run_command uses: single quotes
-// for sh; double quotes for cmd.exe and the CRT's argv parsing, with the
-// backslashes that end the word doubled so the closing quote stays one.
-// cmd.exe cannot quote '"' and expands '%' even inside quotes: on Windows
-// an argument with either throws std::invalid_argument (the tests pass
-// paths, URLs and filters without them).
+// `arg` quoted as one shell word (sh, or cmd.exe, where '"' and '%' throw).
 [[nodiscard]] inline auto shell_quote(std::string_view arg) -> std::string
 {
 	std::string out;
@@ -131,9 +123,7 @@ struct command_result
 [[nodiscard]] inline auto run_command(const std::string &command) -> command_result
 {
 #ifdef _WIN32
-	// cmd /c strips the first and last quote of a line that starts with one:
-	// the extra pair keeps the command's own quotes. Text mode: CRLF reads
-	// as LF.
+	// Extra quotes for cmd /c; text mode.
 	FILE *p = ::_popen(("\"" + command + " 2>&1\"").c_str(), "rt");
 #else
 	// NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c): test-only, runs fixed commands
@@ -158,9 +148,7 @@ struct command_result
 
 // ---------------------------------------------------------------- blocking sockets
 //
-// For servers that run plain blocking OpenSSL on a thread of their own
-// (SSL_set_fd), outside any io_context: BSD sockets on Linux, Winsock on
-// Windows.
+// For plain blocking OpenSSL servers on a thread of their own.
 
 #ifdef _WIN32
 using raw_socket_handle = SOCKET;
@@ -242,8 +230,8 @@ class blocking_socket
 	auto operator=(const blocking_socket &) -> blocking_socket & = delete;
 	~blocking_socket() { close(); }
 
-	// A listener on 127.0.0.1 with a port the system picks; not valid()
-	// when that failed.
+	// A listener on 127.0.0.1 with a system-picked port; not valid() on
+	// failure.
 	[[nodiscard]] static auto listen_loopback(int backlog) -> blocking_socket
 	{
 		blocking_socket s = open_tcp();
@@ -258,7 +246,7 @@ class blocking_socket
 		return s;
 	}
 
-	// A connection to 127.0.0.1:`port`; not valid() when that failed.
+	// Not valid() on failure.
 	[[nodiscard]] static auto connect_loopback(std::uint16_t port) -> blocking_socket
 	{
 		blocking_socket s = open_tcp();
@@ -304,12 +292,8 @@ class blocking_socket
 #endif
 	}
 
-	// Wakes a thread blocked in accept() on this listener, or about to
-	// call it: connects to it and hangs up, so that accept returns a
-	// connection that ends at once. The same on both platforms (Winsock
-	// does not wake accept on shutdown), and the listener stays open: close
-	// it only once that thread is done, or its handle could be reused under
-	// an accept that has not started yet.
+	// Wakes a thread in (or about to call) accept() on this listener by
+	// connecting and hanging up; the listener stays open.
 	void wake_accept() const
 	{
 		if (const std::uint16_t p = port(); p != 0) {

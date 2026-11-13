@@ -199,9 +199,7 @@ TEST_CASE("ldap::error message sanitizes the server's text and keeps the fields 
 	const std::string ps = "\xE2\x80\xA9";// U+2029
 	CHECK(shown("ok" + rlo + "deliaf" + pdi + "!") == "ok" + fffd + "deliaf" + fffd + "!");
 	CHECK(shown("a" + ls + "b" + ps + "c" + alm + "d") == "a" + fffd + "b" + fffd + "c" + fffd + "d");
-	// Ill-formed UTF-8: one U+FFFD per maximal subpart, so a truncated
-	// sequence is one, and an overlong form, a surrogate or a stray byte one
-	// per byte.
+	// Ill-formed UTF-8: one U+FFFD per maximal subpart.
 	const std::string truncated3 = "\xE2\x80";
 	const std::string truncated4 = "\xF0\x9F\x98";
 	const std::string overlong = "\xC0\xAF";
@@ -215,9 +213,7 @@ TEST_CASE("ldap::error message sanitizes the server's text and keeps the fields 
 				"b\xF5\x80")
 		  == "a" + fffd + fffd + fffd + fffd + "b" + fffd + fffd);
 	CHECK(shown("a\xF4\x8F\xBF") == "a" + fffd);
-	// The edges of the replaced sets: U+009F (C1) and U+2069 (Bidi_Control)
-	// go, the characters next to them are kept, and so are U+10FFFF, the
-	// noncharacters and other format characters (ZWSP, BOM, U+206A).
+	// The edges of the replaced sets.
 	CHECK(shown("\xC2\x9F\xC2\xA0") == fffd + "\xC2\xA0");
 	const std::string kept =
 	  "\xE2\x80\xA7\xE2\x80\xAF\xE2\x81\xA5\xE2\x81\xAA\xE2\x80\x8B\xEF\xBB\xBF"
@@ -394,9 +390,7 @@ TEST_CASE("every client_errc maps to its documented condition", "[error][cond]")
 		{ client_errc::incomplete_values, std::nullopt },
 		{ client_errc::no_equality_rule, cond::invalid_input },
 	};
-	// Every value, in order: a new client_errc must be added here. The
-	// static_casts to std::size_t are deliberate: std::to_underlying gives
-	// int and would make signed/unsigned comparisons.
+	// Every value, in order.
 	REQUIRE(table.size() == static_cast<std::size_t>(client_errc::no_equality_rule));
 	for (std::size_t i = 0; i < table.size(); ++i) {
 		const auto &[e, expected] = table[i];
@@ -408,9 +402,7 @@ TEST_CASE("every client_errc maps to its documented condition", "[error][cond]")
 
 TEST_CASE("internal_error is a library failure, not invalid input", "[error][cond]")
 {
-	// SCRAM's OpenSSL and ICU failures, and ICU failures in
-	// ad::password_value, use it: a caller testing cond::invalid_input must
-	// not take the environment's failure for a bad username or password.
+	// internal_error matches no condition.
 	const std::error_code ec = ldap::client_errc::internal_error;
 	CHECK(ec.value() == 25);
 	CHECK(ec.message() == "a library the client uses failed");
@@ -434,9 +426,7 @@ TEST_CASE("system, Capy and TLS codes map to conditions", "[error][cond]")
 	CHECK(cond_of(std::make_error_code(std::errc::no_such_file_or_directory)) == cond::invalid_input);
 	CHECK(cond_of(std::make_error_code(std::errc::invalid_argument)) == cond::invalid_input);
 	CHECK(cond_of(std::make_error_code(std::errc::not_enough_memory)) == std::nullopt);
-	// The system category, as the network layer reports its errors: errno
-	// values, or on Windows Winsock's (the CRT's ETIMEDOUT and ECONNRESET
-	// are other Win32 codes there).
+	// The system category: errno values, or Winsock's on Windows.
 #ifdef _WIN32
 	constexpr int timed_out = 10060;// WSAETIMEDOUT
 	constexpr int reset = 10054;// WSAECONNRESET

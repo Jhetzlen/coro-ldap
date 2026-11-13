@@ -1,9 +1,5 @@
-// TLS channel bindings (channel_binding.hpp): tls-server-end-point's hash
-// choice per signature algorithm (RFC 5929 section 4.1, and OpenLDAP's),
-// then over ldaps:// against in-process servers: the peer certificate,
-// tls-exporter (RFC 9266) equal to what the server's side computes,
-// SCRAM-SHA-256-PLUS carrying it in c=, TLS 1.2 without the extended master
-// secret, an Ed25519 server certificate, and renegotiation refused.
+// TLS channel bindings: tls-server-end-point's hash per algorithm, then
+// over ldaps:// against in-process servers.
 #include "../../src/net/channel_binding.hpp"
 #include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/connection.hpp"
@@ -332,9 +328,7 @@ auto client_leaf() -> const test_pki::issued &
 	return leaf;
 }
 
-// What the server's side of the connection saw. Its SSL is reached the way
-// the library reaches the client's (src/net/tls.hpp): through the verify
-// callback, which runs because the server asks for a client certificate.
+// What the server's side saw, its SSL reached through the verify callback.
 struct server_view
 {
 	SSL *ssl = nullptr;
@@ -382,9 +376,7 @@ auto server_context(const std::shared_ptr<server_view> &view,
 	return ctx;
 }
 
-// TLS handshake, then answers SASL BindRequests: each gets `answers` in
-// turn (a saslBindInProgress with a SCRAM server-first-message built on
-// the client's nonce, then invalidCredentials), and records them.
+// TLS handshake, then each SASL BindRequest gets `answers` in turn.
 auto serve(corosio::tcp_acceptor &acc, corosio::tls_context ctx, std::shared_ptr<server_view> view)
   -> capy::task<std::string>
 {
@@ -426,10 +418,8 @@ auto serve(corosio::tcp_acceptor &acc, corosio::tls_context ctx, std::shared_ptr
 		}
 		const std::string creds(sasl->credentials.value_or(""));
 		view->sasl_credentials.push_back(creds);
-		// The client-first-message gets a server-first-message with the
-		// RFC 7677 salt and count on the client's nonce, the client-final-
-		// message invalidCredentials. Anything else (EXTERNAL) gets
-		// invalidCredentials straight away.
+		// SCRAM: a server-first-message on the client's nonce, then
+		// invalidCredentials; anything else invalidCredentials at once.
 		constexpr std::int32_t in_progress = 14;// saslBindInProgress
 		constexpr std::int32_t invalid_credentials = 49;
 		std::string server_first;
@@ -500,9 +490,7 @@ auto as_bytes(std::string_view s) -> bytes
 	return { b.begin(), b.end() };
 }
 
-// SCRAM-SHA-256-PLUS with `options` against the fixture's server: the
-// client-first-message must start with `gs2` and the client-final-message's
-// c= must be base64(gs2 + `data`).
+// SCRAM-SHA-256-PLUS with `options`: checks the GS2 header and c=.
 void check_scram_plus(tls_fixture &f,
   ldap::connection &c,
   const ldap::sasl_scram_options &options,
@@ -608,9 +596,8 @@ TEST_CASE("channel binding: ldaps:// with TLS 1.3", "[net][tls][channel_binding]
 
 namespace {
 
-// A third-party mechanism that reads the bindings (as a -PLUS mechanism
-// would) but does not override channel_binding_used(): its first message
-// carries a SCRAM-like ",r=" for the test server, its second ends the bind.
+// A mechanism reading the bindings without overriding
+// channel_binding_used().
 class binding_reader final : public ldap::sasl_mechanism
 {
   public:
@@ -636,9 +623,7 @@ class binding_reader final : public ldap::sasl_mechanism
 TEST_CASE("channel binding: tls-exporter serves one authentication per connection",
   "[net][tls][channel_binding][scram][rfc]")
 {
-	// RFC 9266 section 4.1: tls-exporter MUST NOT be used for more than one
-	// authentication mechanism instance on a TLS connection. The first
-	// bind fails (invalidCredentials) and still counts.
+	// RFC 9266 section 4.1: a failed bind still uses up tls-exporter.
 	const ldap::sasl_scram_options plus{ .channel_binding = ldap::scram_channel_binding::plus };
 	SECTION("ECDSA certificate: the next bind uses tls-server-end-point")
 	{
@@ -947,12 +932,8 @@ auto openssl_error() -> std::string
 	return reason != nullptr ? reason : "(no OpenSSL error)";
 }
 
-// A blocking OpenSSL server on a thread of its own, for what Corosio's
-// tls_context cannot set up (SSL_CTX options such as
-// SSL_OP_NO_EXTENDED_MASTER_SECRET) or do (renegotiation): it accepts one
-// connection on 127.0.0.1, handshakes as TLS 1.2 at most, then runs
-// `script` on the session. result() is the script's outcome (empty: as
-// expected), or why the server failed before it.
+// A blocking OpenSSL server on its own thread (TLS 1.2 at most) running
+// `script`; result() is empty when all went as expected.
 class raw_tls_server
 {
   public:
@@ -985,9 +966,7 @@ class raw_tls_server
 	raw_tls_server(const raw_tls_server &) = delete;
 	auto operator=(const raw_tls_server &) -> raw_tls_server & = delete;
 
-	// Unblocks the thread (accept, read) if a test failed half way. The
-	// listener and the connection close only after the join, or under the
-	// lock (serve), so no handle is reused under a call still to come.
+	// Unblocks the thread if a test failed half way.
 	~raw_tls_server()
 	{
 		if (!thread_.joinable()) {
@@ -1138,7 +1117,7 @@ TEST_CASE("channel binding: TLS 1.2 without the extended master secret", "[net][
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::tls_required);
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("no tls-exporter channel binding data"));
-		run_on(ioc, c.executor(), [&c] { c.close(); });// the socket closed now: the server sees it
+		run_on(ioc, c.executor(), [&c] { c.close(); });// the server sees the socket close
 		CHECK(srv.result().empty());
 	}
 	SECTION("Ed25519 certificate: no channel binding at all")
@@ -1157,19 +1136,15 @@ TEST_CASE("channel binding: TLS 1.2 without the extended master secret", "[net][
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::tls_required);
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("the TLS connection has no channel binding data"));
-		run_on(ioc, c.executor(), [&c] { c.close(); });// the socket closed now: the server sees it
+		run_on(ioc, c.executor(), [&c] { c.close(); });// the server sees the socket close
 		CHECK(srv.result().empty());
 	}
 }
 
 TEST_CASE("channel binding: the client refuses TLS 1.2 renegotiation", "[net][tls][channel_binding][rfc]")
 {
-	// RFC 9266 section 4.2: tls-exporter is undefined where renegotiation
-	// is enabled, and after one the recorded certificate and bindings would
-	// describe the old session. The server asks for a renegotiation
-	// (HelloRequest) with its answer to the first bind; the client answers
-	// with a no_renegotiation alert, which an OpenSSL server takes as a
-	// fatal error (handshake_failure alert): the next request fails.
+	// RFC 9266 section 4.2: the client refuses a renegotiation, and the next
+	// request fails.
 	corosio::io_context ioc;
 	raw_tls_server srv(ecdsa_identity(), 0, [](SSL *ssl) -> std::string {
 		std::array<std::byte, 4096> buf{};
@@ -1192,9 +1167,6 @@ TEST_CASE("channel binding: the client refuses TLS 1.2 renegotiation", "[net][tl
 			return "the client renegotiated";
 		}
 		std::string out = "refused: " + openssl_error();
-		// The second request is still unread: closing now would reset
-		// the connection, and Corosio fails a pending read on a reset
-		// without reading the handshake_failure alert queued before it.
 		// Read until the client closes, so the server's close sends a FIN.
 		drain_until_close(socket_of_openssl_fd(SSL_get_fd(ssl)));
 		return out;
@@ -1213,10 +1185,8 @@ TEST_CASE("channel binding: the client refuses TLS 1.2 renegotiation", "[net][tl
 	CHECK(srv.result() == "refused: no renegotiation");
 }
 
-// Concurrent first TLS handshakes all run the verify callback
-// (prime_corosio_openssl(), DESIGN.md section 3). The servers are plain
-// OpenSSL, so the clients' contexts are the process's only Corosio ones.
-// Meaningful in a fresh process (ctest runs each test case alone).
+// Concurrent first TLS handshakes all run the verify callback (in a fresh
+// process).
 TEST_CASE("channel binding: concurrent first TLS handshakes all record the peer", "[net][tls][channel_binding]")
 {
 	struct client_result
@@ -1234,9 +1204,7 @@ TEST_CASE("channel binding: concurrent first TLS handshakes all record the peer"
 	}
 	std::vector<client_result> results(clients);
 	std::latch start(static_cast<std::ptrdiff_t>(clients));
-	// No Catch2 assertion on these threads: results are checked after join.
-	// A thread that throws before arriving counts down in the catch, so the
-	// others are not left waiting at the latch.
+	// No Catch2 assertion on these threads; a throwing thread still counts down.
 	auto client = [&start, &ca_pem](const std::string &url, client_result &out) {
 		bool arrived = false;
 		try {

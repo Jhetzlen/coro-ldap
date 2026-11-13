@@ -1,9 +1,5 @@
-// SASL security layers (sasl.hpp, sasl_security_layer; src/net/sasl_layer.hpp)
-// with a made-up layer: the framing on the transport (lengths, chunking,
-// partial reads, oversized buffers), and connection::sasl_bind installing
-// a layer right after the successful BindResponse. GSSAPI's own layer is
-// tested end to end against an MIT acceptor
-// (tests/integration/gssapi_layer_tests.cpp).
+// SASL security layers with a made-up layer: the framing on the transport,
+// and sasl_bind installing the layer after the successful BindResponse.
 #include "../../src/net/sasl_layer.hpp"
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/ad/password.hpp"
@@ -307,9 +303,7 @@ TEST_CASE("sasl layer: incoming buffers are unwrapped", "[net][sasl][sasl_layer]
 
 TEST_CASE("sasl layer: a big buffer read in small pieces grows the read buffer once", "[net][sasl][sasl_layer]")
 {
-	// TCP-sized reads of a 64 KiB buffer: the layer's read buffer asks for
-	// exactly the buffer's rest once its length is in, so it grows once to
-	// the buffer's size instead of on every short read of its last 16 KiB.
+	// TCP-sized reads of a 64 KiB buffer: the read buffer grows once.
 	corosio::io_context ioc;
 	ldap::test::counting_resource counting;
 	auto [a, b] = capy::test::make_stream_pair();
@@ -340,9 +334,8 @@ TEST_CASE("sasl layer: a big buffer read in small pieces grows the read buffer o
 
 TEST_CASE("sasl layer: a cancelled read keeps the partial buffer", "[net][sasl][sasl_layer]")
 {
-	// The reader is stopped whenever nothing is outstanding, possibly
-	// inside a protected buffer: a whole buffer, then half of the next,
-	// arrive before the stop; the rest after it.
+	// A whole buffer and half of the next arrive before the reader stops, the
+	// rest after.
 	const auto pdu = bytes_of(bind_response_msg(1, "first"));
 	const std::string second = frame(std::string_view(pdu).substr(3));
 	const std::size_t half = second.size() / 2;
@@ -365,9 +358,8 @@ TEST_CASE("sasl layer: a cancelled read keeps the partial buffer", "[net][sasl][
 
 TEST_CASE("sasl layer: a write failure keeps its own context", "[net][sasl][sasl_layer]")
 {
-	// The read's layer error does not annotate a later write failure, and a
-	// protected buffer cut short says so (no plaintext counted: a part of a
-	// buffer delivers none).
+	// A read's layer error does not annotate a later write failure; a cut
+	// buffer counts no plaintext.
 	layered_pair p(1 << 20, 100);
 	p.write_raw(std::string("\x00\x00\x00\x65", 4));
 	auto r = finish(p.ioc, net::read_message(p.client, p.client_buf));
@@ -375,9 +367,7 @@ TEST_CASE("sasl layer: a write failure keeps its own context", "[net][sasl][sasl
 	CHECK(r.error().code == ldap::client_errc::message_too_large);
 
 #ifdef _WIN32
-	// Windows' AF_UNIX pair takes a whole 1 MiB protected buffer at once and
-	// completes or fails each write whole: 64 buffers fill it, and the
-	// failure falls between two of them (whole buffers' plaintext counted).
+	// 64 buffers fill the pair; the failure falls between two of them.
 	const std::string big(std::size_t{ 1 } << 26, 'x');
 #else
 	const std::string big(std::size_t{ 1 } << 20, 'x');
@@ -524,10 +514,8 @@ TEST_CASE("sasl layer: net::start_tls is refused over a layer", "[net][sasl][sas
 
 namespace {
 
-// The server's side of a bind that installs the xor_layer: reads the
-// BindRequest, answers it (`extra`, raw, in the same write: the start of
-// the protected stream), installs the layer on its end, then answers one
-// search with an entry and its done.
+// The server's side of a bind installing the xor_layer: answers it (with
+// `extra` in the same write), installs the layer, answers one search.
 auto serve_layered_bind(net::transport t, std::string extra, std::string &error) -> capy::task<void>
 {
 	net::read_buffer buf;
@@ -614,9 +602,8 @@ TEST_CASE("sasl layer: sasl_bind installs the negotiated layer", "[net][sasl][sa
 	}
 	SECTION("an exchange given up after the last step installs nothing")
 	{
-		// The 33rd credentials, with a layer, are never sent: the anonymous
-		// bind that aborts the exchange succeeds and the connection stays
-		// unprotected, like the server's end.
+		// The 33rd credentials are never sent: the aborting anonymous bind
+		// succeeds, the connection stays unprotected.
 		mech.endless = true;
 		std::vector<step> script;
 		constexpr std::int32_t steps = 32;
@@ -663,9 +650,8 @@ TEST_CASE("sasl layer: sasl_bind installs the negotiated layer", "[net][sasl][sa
 
 namespace {
 
-// A SASL bind answered with success, then the security layer `level`,
-// then, with `modify`, a ModifyRequest read through it and answered with
-// success.
+// A SASL bind answered with success, then the layer `level`; with
+// `modify`, a ModifyRequest read and answered through it.
 auto serve_layered_modify(net::transport t,
   ldap::sasl_protection level,
   bool modify,
@@ -761,10 +747,8 @@ constexpr auto ldap::schema<card> = ldap::describe(ldap::object_class("person"),
 
 namespace {
 
-// Answers a SASL bind, which installs the xor_layer, and searches: the
-// root DSE, cn=Subschema, and any other base with one entry. Logs each
-// request ("layer " before those read through the layer) until the client
-// hangs up.
+// Answers a layered SASL bind and searches, logging each request ("layer "
+// for those read through the layer) until the client hangs up.
 auto serve_schema_and_layer(net::transport t, std::vector<std::string> &log, std::string &error) -> capy::task<void>
 {
 	net::read_buffer buf;
@@ -856,9 +840,6 @@ struct layer_server_thread
 
 }// namespace
 
-// RFC 4513 section 5.2.1.6: once a SASL security layer is in effect, the
-// client "SHOULD discard or refresh all information about the server" it
-// obtained before.
 TEST_CASE("RFC 4513 5.2.1.6: a repository's schema check is made again after a SASL security layer",
   "[net][sasl][sasl_layer][rfc][schema][repository]")
 {

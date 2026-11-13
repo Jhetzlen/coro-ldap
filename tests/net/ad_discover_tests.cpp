@@ -1,6 +1,4 @@
-// ad::order_srv (RFC 2782) and ad::discover_domain_controllers /
-// discover_global_catalogs with a scripted resolver: the SRV names asked
-// for, the URLs built, sites, internationalized names and errors.
+// ad::order_srv and DC discovery with a scripted resolver.
 #include "jhetz/ldap/ad/discover.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -230,9 +228,8 @@ TEST_CASE("ad::resolve_srv: a name that does not exist", "[ad][discover][dns]")
 #ifndef _WIN32
 TEST_CASE("ad::resolve_srv: a failing res_ninit leaves descriptor 0 open", "[ad][discover][dns]")
 {
-	// In a child: descriptor 0 open, no free descriptor below RLIMIT_NOFILE,
-	// so res_ninit cannot open resolv.conf. Exit status 0: fd 0 still open,
-	// 1: closed, 2: res_ninit did not fail.
+	// In a child with no free descriptor, res_ninit fails. Exit status 0: fd 0
+	// still open, 1: closed, 2: res_ninit did not fail.
 	const pid_t pid = fork();
 	REQUIRE(pid >= 0);
 	if (pid == 0) {

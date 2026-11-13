@@ -149,9 +149,6 @@ TEST_CASE("schema: unparseable definitions are skipped", "[schema]")
 	CHECK(ldap::parse_attribute_type("( 1.2 name 'lower' single-value )")->single_value);
 }
 
-// RFC 4512 qdstrings (NAME, DESC) are UTF-8 (QUTF8) and the rest of the
-// grammar is ASCII: a definition that is not well-formed UTF-8 is skipped
-// like any other that does not parse, the rest of the schema kept.
 TEST_CASE("schema: a definition that is not UTF-8 is skipped", "[schema][rfc]")
 {
 	const std::pmr::vector<std::pmr::string> types{
@@ -182,10 +179,6 @@ TEST_CASE("schema: a definition that is not UTF-8 is skipped", "[schema][rfc]")
 	CHECK_FALSE(ldap::parse_object_class("( 1.2.10 NAME 'x' DESC '\xF5\x80\x80\x80' )").has_value());
 }
 
-// RFC 4512 section 4.1.2: SYNTAX is a noidlen, a numericoid with an
-// optional {len}. Anything else is the server's own text (it could never
-// match a syntax the mapping knows): the definition is skipped, and the
-// error does not quote it.
 TEST_CASE("schema: a SYNTAX that is not a numeric OID skips the definition", "[schema]")
 {
 	const std::pmr::vector<std::pmr::string> types{
@@ -214,11 +207,6 @@ TEST_CASE("schema: a SYNTAX that is not a numeric OID skips the definition", "[s
 	CHECK(ldap::parse_object_class(types[1]).has_value());
 }
 
-// noidlen's {len} is "{" 1*DIGIT "}" right after the OID (no space). A
-// spaced "{256}" is not a keyword: it fails the definition, which is
-// skipped and counted, instead of being read as a keyword that takes
-// SINGLE-VALUE as its value (single_value false, silently). Any other word
-// where a keyword goes fails the same way; X- extension names may hold '_'.
 TEST_CASE("schema: SYNTAX lengths are {digits} attached to the OID; other words are not keywords", "[schema]")
 {
 	const std::string desc = " DESC 'caf\xC3\xA9 \xE6\x97\xA5\xE6\x9C\xAC \xF0\x9F\x94\x91'";
@@ -430,10 +418,7 @@ template<>
 constexpr auto ldap::schema<long_syntax> =
   ldap::describe(ldap::object_class("top"), ldap::field<&long_syntax::n>("longSyntax"));
 
-// The SYNTAX is a numeric OID (checked when parsed), but of any length: the
-// report cuts it at 64 bytes. Both definitions carry a UTF-8 DESC (accents,
-// CJK, an emoji): the cut applies to the SYNTAX only, and the rest of the
-// definition is accepted.
+// The report cuts the SYNTAX at 64 bytes.
 TEST_CASE("schema: a syntax mismatch quotes the server's SYNTAX cut", "[schema][validate]")
 {
 	std::string oid = "1";
@@ -472,11 +457,6 @@ constexpr auto ldap::schema<broken_sup> = ldap::describe(ldap::object_class("top
   ldap::field<&broken_sup::parent>("parentAttr"),
   ldap::field<&broken_sup::child_text>("childAttr"));
 
-// A subtype without a SYNTAX of its own whose SUP was skipped (its SYNTAX is
-// not a numeric OID) or is not defined at all has no syntax_of: the syntax
-// cannot be checked, which is an error, not ok(). The member mapped to the
-// skipped definition itself is told why it is missing. The SUP is server
-// text: quoted sanitized (U+202E becomes U+FFFD). Definitions carry UTF-8.
 TEST_CASE("schema: a SUP that is missing or skipped for its SYNTAX is reported", "[schema][validate]")
 {
 	const std::pmr::vector<std::pmr::string> types{
@@ -530,9 +510,6 @@ constexpr auto ldap::schema<no_syntax> = ldap::describe(ldap::object_class("top"
   ldap::field<&no_syntax::child>("bareChild"),
   ldap::field<&no_syntax::bare_text>("bareAttr"));
 
-// RFC 4512 4.1.2 requires a SYNTAX or a SUP; a definition with neither (or a
-// chain ending in one) still parses, but its syntax cannot be checked: an
-// error, not ok(). Definitions carry UTF-8.
 TEST_CASE("schema: an attribute type with neither SYNTAX nor SUP is reported", "[schema][validate]")
 {
 	const std::pmr::vector<std::pmr::string> types{
@@ -561,9 +538,7 @@ TEST_CASE("schema: validate a matching descriptor", "[schema][validate]")
 	const auto s = ldap::server_schema::parse(openldap_types, openldap_classes);
 	const auto rep = ldap::validate<good_person>(s);
 	CHECK(rep.ok());
-	// uid is multi-valued on the server but a single member here, cn is
-	// mapped by its alias, person's sn is not mapped, its cn is a vector and
-	// no class allows uidNumber: warnings only.
+	// Warnings only.
 	REQUIRE(rep.issues.size() == 5);
 	CHECK(rep.issues[0].what == ldap::schema_issue::kind::single_member_multi_valued);
 	CHECK(rep.issues[0].name == "uid");
@@ -650,10 +625,6 @@ constexpr auto ldap::schema<binary_as_binary> = ldap::describe(ldap::object_clas
   ldap::field<&binary_as_binary::photo>("jpegPhoto"),
   ldap::field<&binary_as_binary::certificate>("userCertificate"));
 
-// The binary syntaxes (RFC 4517, RFC 4523, RFC 2252) hold octets, not UTF-8
-// text: a std::string or std::pmr::string member on one is a
-// syntax_mismatch (it would fail to decode), whatever its shape; ldap::binary
-// members pass. Definitions carry UTF-8 descriptions.
 TEST_CASE("schema: a string member on a binary syntax is a syntax mismatch", "[schema][validate]")
 {
 	const std::pmr::vector<std::pmr::string> types{
@@ -855,9 +826,8 @@ TEST_CASE("schema: object class SUP, kind, MUST and MAY", "[schema]")
 	CHECK(posix->kind == ldap::object_class_kind::auxiliary);
 	CHECK(posix->must == std::vector<std::string>{ "cn", "uid", "uidNumber", "gidNumber", "homeDirectory" });
 
-	// No kind: STRUCTURAL (RFC 4512 4.1.1). Several superclasses, numeric
-	// OIDs, keywords in any case, no space before ')' (as AD writes them).
-	// Entries that are not oids are dropped.
+	// No kind: STRUCTURAL; several superclasses, numeric OIDs, keywords in any
+	// case, no space before ')'.
 	auto c = ldap::parse_object_class(
 	  "( 1.2.3 NAME 'mixed' sup ( top $ 2.5.6.6 ) must (cn $ 2.5.4.4 $ 'bad name' $ 1.2.) may 'x-y')");
 	REQUIRE(c.has_value());
@@ -905,9 +875,7 @@ TEST_CASE("schema: an oidlist's '$' needs no spaces (RFC 4512 1.4)", "[schema]")
 		CHECK(c->may == std::vector<std::string>{ "a", "b", "c" });
 		CHECK(c->kind == ldap::object_class_kind::structural);
 	}
-	// Elsewhere, '$' outside a list is no value and no keyword: the
-	// definition is skipped, not cut short. So is an unparenthesised list
-	// with a '$' that no oid follows.
+	// A '$' outside a list, or one no oid follows, skips the definition.
 	const std::pmr::vector<std::pmr::string> bad{ "( 1.3 NAME 'b1' MUST cn$ )",
 		"( 1.4 NAME 'b2' MUST $ )",
 		"( 1.5 NAME 'b3' MUST ( sn ) $ )",
@@ -940,9 +908,8 @@ TEST_CASE("schema: MUST attributes mapped by required members", "[schema][valida
 	// objectClass (top's MUST) is what add sends from the declared classes;
 	// cn and sn are mapped through an option and an alias.
 	CHECK(must_issues(rep).empty());
-	// Only the multi-valued warnings are left (uid, cn, sn, mail, home),
-	// sn mapped by its alias, and the members whose attribute has no
-	// EQUALITY in this cut schema.
+	// Only the multi-valued warnings, sn by its alias, and the members without
+	// EQUALITY are left.
 	CHECK(std::ranges::all_of(rep.issues, [](const auto &i) {
 		return i.what == ldap::schema_issue::kind::single_member_multi_valued
 			   || i.what == ldap::schema_issue::kind::no_equality_rule
@@ -1078,9 +1045,7 @@ TEST_CASE("schema: MUST attributes not mapped, or mapped by members add may leav
 	// projection does not add entries.
 	CHECK(rep.ok());
 	using k = ldap::schema_issue::kind;
-	// Each attribute once, the declared classes first, then their
-	// superclasses (breadth first): cn, required by posixAccount and
-	// person, is reported for posixAccount.
+	// Each attribute once, declared classes first, then superclasses.
 	CHECK(must_issues(rep)
 		  == std::vector<std::pair<k, std::string>>{ { k::must_attribute_not_required, "cn" },
 			{ k::must_attribute_not_required, "uidNumber" },
@@ -1177,10 +1142,7 @@ TEST_CASE("schema: MUST checks follow the RFC 4512 rules", "[schema][validate]")
 
 TEST_CASE("schema: MUST checks scale with long SUP chains and MUST lists", "[schema][validate]")
 {
-	// A server schema is the server's: 20000 classes chained by SUP, each
-	// with a MUST the members map (cn) and one of 4000 the server does
-	// not define, all also in the declared class's MUST list. Linear
-	// lookups made this seconds (minutes under ASan).
+	// 20000 classes chained by SUP: validation stays fast.
 	constexpr std::size_t chain = 20'000;
 	constexpr std::size_t names = 4'000;
 	std::pmr::vector<std::pmr::string> classes;

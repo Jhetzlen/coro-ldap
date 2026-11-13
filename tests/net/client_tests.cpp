@@ -1,8 +1,5 @@
-// ldap::client against scripted in-process LDAP servers on loopback TCP:
-// each server accepts connections one after another and runs the n-th
-// script on the n-th connection (mock_ldap.hpp's serve_script), then stops
-// accepting, so a later connect is refused. Backoff runs on short real
-// delays, with the jitter fixed by detail::set_jitter.
+// ldap::client against scripted in-process servers (the n-th script on the
+// n-th connection), with the jitter fixed.
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/ad/dirsync.hpp"
@@ -282,15 +279,14 @@ struct pool_fixture
 	{
 		return servers.emplace_back(ioc, std::move(scripts), buffers);
 	}
-	// A URL nothing listens on while the fixture lives: connects are
-	// refused at once (see refused_port).
+	// Connects are refused at once while the fixture lives.
 	auto refused_url() -> ldap::url
 	{
 		auto u = ldap::url::parse(refused.emplace_back().url());
 		REQUIRE(u.has_value());
 		return *u;
 	}
-	// The client, with the jitter fixed at 1 (each backoff is its cap).
+	// The jitter fixed at 1: each backoff is its cap.
 	void make(ldap::client_options options)
 	{
 		pool.emplace(ioc, std::move(options));
@@ -838,10 +834,8 @@ TEST_CASE("client: a lease outlives its client", "[net][client]")
 
 namespace {
 
-// A client on `ioc` with one pooled idle connection, made through
-// io_context::run(), which leaves the context stopped as a program's run()
-// does. The connection's peer is `listener`'s backlog: nothing runs on the
-// server side.
+// A client with one pooled idle connection, made through io_context::run(),
+// which leaves the context stopped; the peer is `listener`'s backlog.
 auto pool_after_run(corosio::io_context &ioc, const corosio::tcp_acceptor &listener, std::pmr::memory_resource *mr)
   -> std::optional<ldap::client>
 {
@@ -1499,8 +1493,8 @@ TEST_CASE("client: the bind after an authentication backoff ends without a verdi
 		REQUIRE_FALSE(refused.has_value());
 		CHECK(refused.error().code == ldap::errc::invalid_credentials);
 		finish(f.ioc, sleep_for(milliseconds(350)));// both backoffs end
-		// `hung` times out again (backing off 3 s now), so the bind to `s`
-		// begins with about 150 ms (under half) left and is cut short.
+		// `hung` times out again, so the bind to `s` begins with under half the
+		// time left and is cut short.
 		auto cut = f.acquire();// fails with the stored error: `s` backs off again
 		REQUIRE_FALSE(cut.has_value());
 		CHECK(cut.error().code == ldap::errc::invalid_credentials);
@@ -1938,11 +1932,8 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 	}
 	SECTION("compare(): busy, the pool full: the retry shares a connection to the same server")
 	{
-		// max_connections is 1. The test's shared lease binds again while
-		// compare() waits on the same connection: another acquire() retires
-		// it and opens the only other connection, so when the busy answer
-		// comes the pool is full (the busy connection already retired) and
-		// the retry shares that connection rather than wait for a slot.
+		// The busy connection is already retired and the pool full: the retry
+		// shares the other connection.
 		pool_fixture f;
 		const ldap::dn jdoe{ "uid=jdoe,ou=people,dc=example,dc=org" };
 		auto &a = f.server({ { answer({ bind_resp(1) }),
@@ -1960,7 +1951,7 @@ TEST_CASE("client: read forwarders retry once on another connection", "[net][cli
 		outcome<ldap::result<void>> bound;
 		const auto binds = (*mine)->bind_count();
 		spawn(f.ioc, full(*mine).simple_bind(jdoe, "pw"), bound);
-		drive_until(f.ioc, [&] { return (*mine)->bind_count() != binds; });// binding: no longer handed out
+		drive_until(f.ioc, [&] { return (*mine)->bind_count() != binds; });// binding: not handed out
 		outcome<ldap::result<ldap::lease>> opener;
 		spawn(f.ioc, f.pool->acquire(), opener);
 		drive_until(f.ioc, [&] { return compared.done() && bound.done() && opener.done(); });
@@ -2909,9 +2900,7 @@ TEST_CASE("client: search_stream() failing before its first message", "[net][cli
 
 TEST_CASE("client: an observer overriding only on_connect", "[net][client][observer]")
 {
-	// The other hooks are client_observer's own, which do nothing: each
-	// runs below (on_retry, on_acquire_wait, on_probe, on_referral and
-	// on_disconnect, in that order).
+	// The other hooks are client_observer's own no-ops, each run below.
 	struct connects_only final : ldap::client_observer
 	{
 		std::vector<std::string> events{};

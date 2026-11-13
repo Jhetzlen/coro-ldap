@@ -1,16 +1,7 @@
-// Integration tests against a real Samba Active Directory domain controller,
-// started in Docker by run_samba_ad.sh (which sets the JHETZ_LDAP_IT_SAMBA_*
-// variables):
-//
+// Integration tests against Samba AD DCs in Docker:
 //   tests/integration/run_samba_ad.sh ctest --test-dir build -L samba_ad --output-on-failure
-//
-// Two DCs of the same domain (CORO.TEST, samba-ad/Dockerfile): the strict
-// one with Samba's default `ldap server require strong auth = yes` (on
-// plain ldap:// only signed or sealed SASL binds, over TLS channel bindings
-// required), the relaxed one with `no`. Their certificate is Samba's own,
-// for CN=DC1.coro.test without a subjectAltName: the tests connect to
-// 127.0.0.1 and match that name against the CN (host_name_matching::legacy).
-// Without the variables every test is skipped.
+// A strict DC (strong auth required) and a relaxed one, with certificates
+// matched by CN (host_name_matching::legacy). Skipped without them.
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/ad/dirsync.hpp"
@@ -385,9 +376,7 @@ auto ntlm_bind(corosio::io_context &ioc, ldap::connection &c, ldap::sasl_mechani
 	return finish(ioc, ldap::who_am_i(c));
 }
 
-// sasl_ntlm given the tls-server-end-point hash of another certificate (the
-// connection's with one bit flipped): what a man in the middle relaying
-// the bind to the DC over its own TLS connection would send.
+// sasl_ntlm with the tls-server-end-point hash of another certificate.
 class ntlm_wrong_binding final : public ldap::sasl_mechanism
 {
   public:
@@ -521,9 +510,7 @@ TEST_CASE("samba ad: sasl_ntlm channel binding policy", "[samba_ad][ntlm]")
 		CHECK(*who == "u:CORO\\alice");
 		CHECK_FALSE(mech.channel_binding_used().has_value());
 	}
-	// Samba checks the bindings a client sends even with `ldap server
-	// require strong auth = no` (only their absence is let through),
-	// where Windows' LdapEnforceChannelBinding = 0 checks none.
+	// Samba checks bindings that are sent even when not required.
 	SECTION("not required (relaxed): a wrong binding is still refused")
 	{
 		auto c = open_tls_to(ioc, relaxed_ldaps(), relaxed_ldap(), start_tls);
@@ -670,10 +657,8 @@ auto port_of(const std::string &url) -> std::uint16_t
 	return *u->port();
 }
 
-// The protected buffers in one direction of a recorded connection: after
-// `clear` LDAP messages in clear (the bind's), each four-octet big-endian
-// length and the buffer it announces. Fails the test on bytes that do not
-// frame that way.
+// The protected buffers of one direction of a recorded connection, after
+// `clear` LDAP messages.
 auto sasl_buffers(std::string_view bytes, std::size_t clear) -> std::vector<std::string_view>
 {
 	const auto octet = [&bytes](std::size_t i) -> std::size_t {
@@ -756,9 +741,7 @@ TEST_CASE("samba ad: the NTLM security layer on plain ldap://, entries over 128 
   "[samba_ad][ntlm][layer]")
 {
 	require_samba();
-	// Integrity negotiates signing only, but Samba (as Windows) seals over
-	// LDAP once signing is negotiated, and so does the client: both are
-	// sealed on the wire.
+	// Both directions are sealed even with integrity.
 	const auto protection = GENERATE(ldap::sasl_protection::integrity, ldap::sasl_protection::confidentiality);
 	CAPTURE(protection);
 	draining_context ioc;
@@ -773,9 +756,7 @@ TEST_CASE("samba ad: the NTLM security layer on plain ldap://, entries over 128 
 	CHECK(*who == "u:CORO\\Administrator");
 	CHECK(c.security_layer() == ldap::sasl_protection::confidentiality);
 
-	// A jpegPhoto (no rangeUpper in AD's schema) of 300 000 octets, more
-	// than two of the client's 128 KiB buffers, with a marker that would
-	// show if the PDU crossed the wire in clear.
+	// A 300 000-octet jpegPhoto with a marker, larger than two 128 KiB buffers.
 	const std::string marker = "coro-ldap: a marker never seen on the wire";
 	std::string photo(300'000, '\0');
 	// Every octet value, in no simple order (a multiplicative hash of the
@@ -807,11 +788,8 @@ TEST_CASE("samba ad: the NTLM security layer on plain ldap://, entries over 128 
 	relay.shut_down();
 	drive(ioc);
 
-	// Two BindRequests and two BindResponses in clear, then only protected
-	// buffers, each a signature then the (sealed) message.
-	// Integrity asks for signing only, so the sealing on the wire is the
-	// DC's force_wrap_seal (and the client's matching it), not a SEAL the
-	// client negotiated.
+	// Two BindRequests and BindResponses in clear, then only protected
+	// buffers.
 	const auto flags = negotiate_flags(relay.from_client());
 	CHECK((flags & ldap::detail::ntlmssp_negotiate_sign) != 0);
 	CHECK(

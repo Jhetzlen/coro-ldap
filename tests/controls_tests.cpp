@@ -515,8 +515,7 @@ TEST_CASE("decode_matched_values", "[controls][matched_values]")
 	CHECK(context_of(with_value(ldap::matched_values_oid, "30 10 87 02 63 6E A9 0A 82 02 63 6E 83 01 78 84 01 FF"))
 		  == "matched values: item 2 is an extensible match with dnAttributes, not a simple filter item (RFC 3876 "
 			 "section 2) at offset 6");
-	// SimpleMatchingAssertion has no dnAttributes field: an explicit FALSE
-	// is refused too.
+	// An explicit dnAttributes FALSE is refused too.
 	CHECK(context_of(with_value(ldap::matched_values_oid, "30 0C A9 0A 82 02 63 6E 83 01 78 84 01 00"))
 		  == "matched values: item 1 is an extensible match with dnAttributes, not a simple filter item (RFC 3876 "
 			 "section 2) at offset 2");
@@ -972,10 +971,9 @@ TEST_CASE("new typed controls and their results use the given resource", "[contr
 // ---------------------------------------------------------------- against OpenLDAP
 
 // Bytes captured between OpenLDAP 2.7's ldapsearch / ldapmodify and slapd
-// (with the sssvlv overlay) through a logging TCP proxy:
+// (sssvlv):
 //   ldapsearch -E '!sss=-uidNumber' / -E '!sss=-sn:caseIgnoreOrderingMatch'
 //   ldapmodify -e postread=sn,cn (add), -e '!assert=(sn=Ærø)' -e preread=sn -e postread=sn (modify)
-// The values are UTF-8 (sn "Ærø", then "日本"; cn "Zoë Ærø").
 namespace {
 
 constexpr const char cap_dn[] = "uid=cap,ou=people,dc=example,dc=org";

@@ -422,9 +422,8 @@ TEST_CASE("URL schemes and structure errors", "[url]")
 
 TEST_CASE("URL percent-encoding round trip of every byte", "[url]")
 {
-	// Every byte value in a DN value and a filter value (escaped), and every
-	// UTF-8 text in an attribute and an extension value, survives
-	// to_string -> parse.
+	// Every byte value in a DN or filter value, and every UTF-8 text in an
+	// attribute or extension value, survives to_string -> parse.
 	std::string all;
 	for (int b = 1; b < 256; ++b) {
 		all += static_cast<char>(b);
@@ -552,7 +551,7 @@ TEST_CASE("URL allocations go through the given memory resource", "[url][pmr]")
 		CHECK(referrals[0].get_allocator().resource() == &arena);
 		CHECK(referrals[0].attributes()[0].get_allocator().resource() == &arena);
 	}
-	CHECK(counting.outstanding() == 0);// everything allocated from it was given back
+	CHECK(counting.outstanding() == 0);// everything was given back
 }
 
 TEST_CASE("URL parsing into a monotonic buffer", "[url][pmr]")

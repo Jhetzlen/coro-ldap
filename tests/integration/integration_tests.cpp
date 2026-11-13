@@ -1,10 +1,6 @@
-// Integration tests against a real OpenLDAP slapd, started by
-// run_slapd.sh (which sets the JHETZ_LDAP_IT_* variables):
-//
+// Integration tests against OpenLDAP slapd, started by run_slapd.sh:
 //   tests/integration/run_slapd.sh ctest --test-dir build -L integration --output-on-failure
-//
-// Without those variables every test is skipped (ctest reports the run as
-// skipped). The data is make_fixture.py's.
+// Skipped without its JHETZ_LDAP_IT_* variables.
 #include "../net/net_test_support.hpp"
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
@@ -128,10 +124,8 @@ class scram_giving_up final : public ldap::sasl_mechanism
 	ldap::sasl_scram_sha256 scram{ "user007", "pw-user007" };
 };
 
-// slapd refuses anonymous binds (olcDisallows: bind_anon, set through
-// cn=config, which run_slapd.sh makes writable) while this lives. The
-// setting is global: the tests run one at a time, and it is restored even
-// when the test fails. A failed restore fails the test.
+// slapd refuses anonymous binds (olcDisallows: bind_anon) while this lives.
+// A failed restore fails the test.
 class anonymous_binds_disallowed
 {
   public:
@@ -152,9 +146,7 @@ class anonymous_binds_disallowed
 	anonymous_binds_disallowed(const anonymous_binds_disallowed &) = delete;
 	auto operator=(const anonymous_binds_disallowed &) -> anonymous_binds_disallowed & = delete;
 
-	// The failure is reported once, after the attempt. FAIL_CHECK throws
-	// when Catch2 aborts the run (-a, -x): that only ends the run, as asked,
-	// so it is caught rather than left to escape the destructor.
+	// Reports a failed restore; FAIL_CHECK's abort exception is caught.
 	~anonymous_binds_disallowed()
 	{
 		bool restored = false;
@@ -184,10 +176,8 @@ class anonymous_binds_disallowed
 	ldap::connection config_;
 };
 
-// slapd serves `cert_file` and `key_file` (olcTLSCertificateFile,
-// olcTLSCertificateKeyFile through cn=config: slapd builds a new TLS
-// context for later connections) while this lives, then run_slapd.sh's
-// certificate again. A failed restore fails the test.
+// slapd serves `cert_file` and `key_file` while this lives. A failed
+// restore fails the test.
 class server_certificate_swapped
 {
   public:
@@ -356,10 +346,8 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 	}
 	SECTION("a non-ASCII username and password, SASLprep'ed")
 	{
-		// Stored: uid "jörg", password "pässwörd 日本 €" (already in
-		// SASLprep form). Given: "jo" U+0308 "rg" (decomposed) and the
-		// password with a NO-BREAK SPACE and an IDEOGRAPHIC SPACE, which
-		// SASLprep turns into the stored forms.
+		// Stored: uid "jörg", password "pässwörd 日本 €". Given: decomposed "jörg"
+		// and the password with NO-BREAK and IDEOGRAPHIC SPACEs.
 		ldap::sasl_scram_sha256 mech(
 		  "jo\xCC\x88rg", "p\xC3\xA4ssw\xC3\xB6rd\xC2\xA0\xE6\x97\xA5\xE6\x9C\xAC\xE3\x80\x80\xE2\x82\xAC");
 		auto r = finish(ioc, c.sasl_bind(mech));
@@ -398,12 +386,8 @@ TEST_CASE("integration: SASL SCRAM-SHA-256", "[integration][sasl][scram]")
 	}
 	SECTION("a step the client fails, and a server that refuses the abort")
 	{
-		// slapd ends the exchange before it refuses the anonymous bind that
-		// aborts it (inappropriateAuthentication): the connection stays
-		// open and anonymous, and a bind then succeeds.
-		// bind_anon refuses only anonymous binds, not anonymous operations:
-		// the search succeeds only if the exchange ended (a server still in
-		// it would answer operationsError).
+		// slapd ends the exchange, refuses the aborting anonymous bind, and the
+		// connection stays usable.
 		const anonymous_binds_disallowed disallowed(ioc);
 		scram_giving_up mech;
 		auto r = finish(ioc, c.sasl_bind(mech));
@@ -433,10 +417,7 @@ TEST_CASE("integration: SASL SCRAM-SHA-256-PLUS (channel binding)", "[integratio
 		SKIP("no slapd: run under run_slapd.sh");
 	}
 	draining_context ioc;
-	// run_slapd.sh sets "sasl-cbinding tls-endpoint": slapd then offers
-	// SCRAM-SHA-256-PLUS over TLS, with tls-server-end-point in OpenLDAP's
-	// own form ("p=ldap", data "tls-server-end-point:<hash>"), not RFC
-	// 5802's (scram_channel_binding_form::openldap).
+	// slapd offers SCRAM-SHA-256-PLUS over TLS in OpenLDAP's form.
 	const bool over_start_tls = GENERATE(false, true);
 	ldap::connection_options o = trusting();
 	o.start_tls = over_start_tls;
@@ -643,9 +624,7 @@ TEST_CASE("integration: a paged search stopped between pages sends a release", "
 		.base = people, .filter = ldap::filters::attr("objectClass") == "posixAccount", .attributes = { "uid" }
 	};
 
-	// slapd answers a release (RFC 2696 section 3: page size 0 and the last
-	// cookie) with success, no entries and no cookie. Its paging state is
-	// only the last entry sent, so the cookie is not refused afterwards.
+	// slapd answers a release with success, no entries and no cookie.
 	auto first = page_by_hand(ioc, c, all_users, { .page_size = 40 });
 	REQUIRE(first.has_value());
 	CHECK(first->entries == 40);
@@ -655,9 +634,7 @@ TEST_CASE("integration: a paged search stopped between pages sends a release", "
 	CHECK(release->entries == 0);
 	CHECK(release->cookie.empty());
 
-	// The paged_search sends that release when destroyed between pages; its
-	// answer is read and dropped without harm. StartTLS waits for it (RFC
-	// 4513 section 3.1.1; slapd would refuse a StartTLS sent before).
+	// The release sent on destruction; StartTLS waits for its answer.
 	{
 		auto p = finish(ioc, ldap::search_paged(c, all_users, 40));
 		REQUIRE(p.has_value());
@@ -1004,9 +981,7 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 		REQUIRE(w.has_value());
 		REQUIRE(finish(ioc, w->del({ .entry = person(b).entry })).has_value());
 	}
-	// The destructor's abort is queued, not awaited, and slapd allows one
-	// transaction per connection: the next Start Transaction waits for its
-	// answer.
+	// The next Start Transaction waits for the destroyed one's abort.
 	for (int i = 0; i < 20; ++i) {
 		auto again = finish(ioc, ldap::transaction::begin(c));
 		REQUIRE(again.has_value());
@@ -1189,12 +1164,8 @@ TEST_CASE("integration: server side sort", "[integration][controls]")
 
 namespace {
 
-// One virtual list view window over the posixAccounts sorted by uidNumber
-// (user000 .. user249): the uids, the VLV response, or the search's error.
-// `context` is sent as the contextID and replaced by the response's: slapd
-// keeps a sort state per contextID and refuses new ones (busy) once a
-// connection holds sssvlv-maxperconn of them, so a client scrolling one list
-// sends it back.
+// One VLV window over the posixAccounts sorted by uidNumber; `context` is
+// sent as the contextID and replaced by the response's.
 struct vlv_window
 {
 	std::vector<std::string> uids{};
@@ -1302,8 +1273,7 @@ TEST_CASE("integration: virtual list view", "[integration][controls]")
 	REQUIRE(past.response.has_value());
 	CHECK(past.response->target_position == 251);
 
-	// An offset beyond the list fails the search with 76; the response
-	// control says why (slapd: 77, not the draft's offsetRangeError).
+	// An offset beyond the list fails with 76 (slapd's reason: 77).
 	auto beyond = vlv_window_of(
 	  ioc, c, context, { .after_count = 4, .target = ldap::vlv_by_offset{ .offset = 500, .content_count = 250 } });
 	REQUIRE(beyond.error.has_value());
@@ -1508,9 +1478,8 @@ TEST_CASE("integration: content synchronization (RFC 4533)", "[integration][cont
 	const std::string next_cookie((*resumed)->cookie->begin(), (*resumed)->cookie->end());
 	CHECK(next_cookie != cookie);
 
-	// refreshAndPersist from the latest cookie: the refresh ends with a
-	// Sync Info Message, then a change made on another connection arrives
-	// while the search runs on (no timeout: the connection's is 10 s).
+	// refreshAndPersist: the refresh ends with a Sync Info Message, then a
+	// change made on another connection arrives.
 	auto persist =
 	  sync_search(ldap::sync_request{ .mode = ldap::sync_mode::refresh_and_persist, .cookie = next_cookie });
 	REQUIRE(persist.has_value());
@@ -1547,17 +1516,8 @@ TEST_CASE("integration: content synchronization (RFC 4533)", "[integration][cont
 	}
 }
 
-// slapd keeps one paged search per connection (RFC 2696 section 3 lets a
-// server age out older ones). Without sorting, resuming any but the
-// last-answered one fails cleanly: back-mdb compares the request's cookie (an
-// entry ID) with the connection's last returned one, older gives 53
-// unwillingToPerform and newer 2 protocolError. With the sssvlv overlay
-// (sorted paged searches), any non-empty cookie resumes the connection's
-// latest sorted paged search: sssvlv looks the session up by ps_cookie, which
-// slapd's control parser copies from the connection's last returned cookie,
-// and never reads the request's own cookie (ps_cookieval; OpenLDAP 2.7.1).
-// The client cannot tell: concurrent sorted paged searches need one
-// connection each, which this checks.
+// slapd's one paged search per connection: resuming another fails without
+// sorting, and with sssvlv returns the latest sorted search's entries.
 TEST_CASE("integration: concurrent paged searches with and without sorting", "[integration][controls]")
 {
 	if (!have_slapd()) {
@@ -1570,9 +1530,7 @@ TEST_CASE("integration: concurrent paged searches with and without sorting", "[i
 
 	SECTION("unsorted on one connection: the older search's cookie is refused")
 	{
-		// unwilling_to_perform because user0xx were loaded before user1xx:
-		// A's cookie is a lower entry ID than B's. Started the other way
-		// round, A's next page would get protocol_error.
+		// unwilling_to_perform: A's cookie is a lower entry ID than B's.
 		auto c = open_admin(ioc);
 		auto a1 = uid_page_by_hand(ioc, c, hundred_users(0, false), { .page_size = 20 });
 		auto b1 = uid_page_by_hand(ioc, c, hundred_users(1, false), { .page_size = 20 });
@@ -1599,10 +1557,7 @@ TEST_CASE("integration: concurrent paged searches with and without sorting", "[i
 		CHECK(b1->uids == descending_uids(1, 0, 20));
 		REQUIRE_FALSE(a1->cookie.empty());
 		CHECK(a1->cookie != b1->cookie);
-		// The request carries A's own cookie, filter and sort; the answer is
-		// B's second page. Pins the slapd sssvlv bug: failing
-		// here means slapd fixed it, so update the notes of search_paged
-		// (connection.hpp), docs/API.md and this section.
+		// A's cookie, filter and sort get B's second page (the sssvlv bug).
 		INFO(
 		  "pinned slapd sssvlv bug (coro-ldap-seo): if this fails slapd fixed it; update search_paged notes, "
 		  "docs/API.md, this section");
@@ -1862,9 +1817,7 @@ TEST_CASE("integration: transactions through the sync connection", "[integration
 	REQUIRE(u->abort().has_value());
 	CHECK(state(renamed).has_value());
 
-	// Move-assigned over, an open transaction is aborted and its answer
-	// waited for: slapd allows one transaction per connection, and the
-	// next Start Transaction succeeds.
+	// Move-assigned over, an open transaction is aborted and waited for.
 	auto v = ldap::sync::transaction::begin(c);
 	REQUIRE(v.has_value());
 	REQUIRE(v->del({ .entry = renamed }).has_value());
@@ -2847,9 +2800,8 @@ auto bytes(std::string_view s) -> ldap::binary
 	return out;
 }
 
-// The database's ACL makes userPassword write-only for its owner
-// (olcAccess through cn=config) while this lives, then `to * by * read`
-// again. A failed restore fails the test.
+// userPassword is write-only for its owner while this lives. A failed
+// restore fails the test.
 class password_write_only
 {
   public:

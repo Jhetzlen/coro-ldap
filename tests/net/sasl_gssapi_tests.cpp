@@ -1,7 +1,5 @@
-// SASL GSSAPI (sasl_gssapi.hpp) without a KDC: the RFC 4752 security layer
-// messages, and the failures that happen before anything is sent. The
-// Kerberos exchange itself is tested against slapd and a throwaway KDC
-// (tests/integration/gssapi_tests.cpp, run_kdc.sh).
+// SASL GSSAPI without a KDC: the RFC 4752 security layer messages and the
+// failures before anything is sent.
 #include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl.hpp"
@@ -32,8 +30,6 @@ using ldap::detail::gssapi_layer_offer;
 namespace {
 
 // Sets an environment variable for the scope of a test, then restores it.
-// Declared before the connection: no other thread (the offloaded steps)
-// runs when it is set or restored, as the io_context waits for them.
 class scoped_env
 {
   public:
@@ -308,9 +304,6 @@ TEST_CASE("gssapi: challenges and success out of order", "[net][sasl][gssapi]")
 	CHECK(mech.name() == "GSSAPI");
 }
 
-// sasl_bind runs the gss_acquire_cred and gss_init_sec_context calls on a
-// thread of its own (offload_start, offload_step): the work shares the
-// GSS-API handles with the mechanism, which leaves them alone meanwhile.
 TEST_CASE("gssapi: offloaded steps", "[net][sasl][gssapi]")
 {
 	const scoped_env config("KRB5_CONFIG", "/dev/null");

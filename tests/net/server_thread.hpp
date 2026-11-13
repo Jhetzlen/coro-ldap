@@ -1,6 +1,5 @@
-// An in-process LDAP server on loopback TCP that runs on its own thread and
-// io_context and answers requests as they come (sync_tests.cpp,
-// sync_client_tests.cpp).
+// An in-process LDAP server on loopback TCP on its own thread, answering
+// requests as they come.
 #pragma once
 
 #include "mock_ldap.hpp"
@@ -20,10 +19,8 @@
 
 namespace jhetz::ldap::test {
 
-// Answers each request when it arrives: bind (49 for password "wrong"),
-// search (two entries under its base, then done), add, modify and delete
-// (success), extended (who am I),
-// until the client unbinds or hangs up. Abandons are ignored.
+// Answers bind (49 for "wrong"), search (two entries), add, modify, delete,
+// who am I, until the client leaves; ignores abandons.
 inline auto serve_session(net::transport t, std::atomic<int> &requests) -> capy::task<void>
 {
 	net::read_buffer buf;

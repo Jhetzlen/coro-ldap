@@ -1,6 +1,5 @@
-// Shared by the compile tests (tests/CMakeLists.txt): each file is compiled
-// with -fsyntax-only and must fail with the expected diagnostic, except
-// ok.cpp, which uses everything correctly and must compile.
+// Shared by the compile tests: each file must fail to compile with the
+// expected diagnostic, except ok.cpp.
 #pragma once
 
 #include "jhetz/ldap/mapping.hpp"

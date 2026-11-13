@@ -1,7 +1,5 @@
-// net::connect against in-process servers on loopback: TCP, TLS (throwaway
-// CA generated at run time) and Unix domain sockets. No external server, no
-// fixed ports (the kernel picks them), no sleeps: every wait ends on an
-// event, and the timeouts tested are the library's own.
+// net::connect against in-process servers on loopback: TCP, TLS (a CA made
+// at run time) and Unix sockets; no fixed ports, no sleeps.
 #include "../../src/net/happy_eyeballs.hpp"
 #include "../../src/net/tls.hpp"
 #include "../../src/net/trust_store.hpp"
@@ -75,21 +73,14 @@ using ldap::client_errc;
 
 // ---------------------------------------------------------------- DNS seam
 //
-// getaddrinfo is interposed for this test binary (Corosio calls it on a pool
-// thread; the real one is reached through RTLD_NEXT, via the sanitizer's own
-// interceptor when there is one). Names outside these test prefixes go
-// to the real resolver unchanged.
-//   slow-dns-*   answers 127.0.0.1 after slow_dns_delay: a lookup that no
-//                timeout can interrupt
+// getaddrinfo is interposed for these test names (Linux, RTLD_NEXT; the
+// tests skip elsewhere); other names go to the real resolver.
+//   slow-dns-*   answers 127.0.0.1 after slow_dns_delay
 //   two-addr-*   answers 127.0.0.2, then 127.0.0.1 (same port)
 //   three-addr-* answers 127.0.0.2, 127.0.0.3, then 127.0.0.1 (same port)
-//   no-ip-*      succeeds with only non-IP (AF_UNIX) entries, which the
-//                resolver drops: a lookup with no usable address
-//   stop-dns-*   requests stop on lookup_stop (from the lookup's thread),
-//                then answers 127.0.0.1 after slow_dns_delay: a connect
-//                stopped while the lookup runs
-// The interposer needs Linux symbol interposition (RTLD_NEXT); elsewhere the
-// tests that use these names skip (skip_unless_dns_seam).
+//   no-ip-*      succeeds with only non-IP (AF_UNIX) entries
+//   stop-dns-*   requests stop on lookup_stop, then answers 127.0.0.1 after
+//                slow_dns_delay
 namespace {
 std::atomic<std::stop_source *> lookup_stop{ nullptr };
 
@@ -398,9 +389,8 @@ TEST_CASE("connect timeout holds while the name lookup blocks", "[net][connect][
 
 namespace {
 
-// A listener on `addr`:`port` with backlog 0 whose one queue slot is taken:
-// Linux drops further SYNs, so a connect to it stays pending (see the TCP
-// timeout test below).
+// A listener with backlog 0 whose one queue slot is taken: a connect to it
+// stays pending (Linux).
 struct blackhole
 {
 	corosio::tcp_acceptor acc;
@@ -426,9 +416,7 @@ TEST_CASE("Happy Eyeballs: a black-holed first address costs the attempt delay",
 {
 	skip_unless_dns_seam();
 	skip_unless_linux_loopback();
-	// two-addr-* resolves to 127.0.0.2 first, then 127.0.0.1. The attempt on
-	// 127.0.0.2 hangs; 127.0.0.1 is tried 200 ms later, side by side, and
-	// wins long before the 10 s budget.
+	// The attempt on 127.0.0.2 hangs; 127.0.0.1 is tried 200 ms later and wins.
 	corosio::io_context ioc;
 	tcp_server good(ioc);
 	blackhole hole(ioc, "127.0.0.2", good.port);
@@ -455,8 +443,7 @@ TEST_CASE("Happy Eyeballs: a refused address starts the next attempt at once", "
 {
 	skip_unless_dns_seam();
 	skip_unless_linux_loopback();
-	// Nothing listens on 127.0.0.2:<port>: that attempt is refused at once,
-	// so 127.0.0.1 does not wait out the (long) attempt delay.
+	// 127.0.0.2 is refused at once, so 127.0.0.1 does not wait out the delay.
 	corosio::io_context ioc;
 	tcp_server good(ioc);
 	outcome<std::string> server;
@@ -599,9 +586,7 @@ TEST_CASE("Happy Eyeballs: stopped while the third attempt waits for the second 
 {
 	skip_unless_dns_seam();
 	skip_unless_linux_loopback();
-	// three-addr-* resolves to 127.0.0.2, 127.0.0.3, then 127.0.0.1. The
-	// second attempt waits for the first one's failure (or the 20 s delay),
-	// the third for the second one to start: the stop ends both waits.
+	// Three addresses: the stop ends both waiting attempts.
 	corosio::io_context ioc;
 	tcp_server good(ioc);
 	blackhole first(ioc, "127.0.0.2", good.port);
@@ -671,8 +656,7 @@ TEST_CASE("Happy Eyeballs: address families alternate", "[net][connect]")
 TEST_CASE("connect ldap://localhost resolves the name", "[net][connect][tcp]")
 {
 	corosio::io_context ioc;
-	tcp_server srv(
-	  ioc);// IPv4 only: if localhost resolves to ::1 first, that attempt is refused and 127.0.0.1 is tried next
+	tcp_server srv(ioc);// IPv4 only
 	outcome<std::string> server;
 	outcome<std::string> client;
 	spawn(ioc, accept_and_serve(srv.acc), server);
@@ -715,10 +699,8 @@ TEST_CASE("connection refused", "[net][connect][tcp]")
 TEST_CASE("connect timeout while the TCP handshake cannot complete", "[net][connect][tcp][timeout]")
 {
 	skip_unless_linux_loopback();
-	// A listening socket with backlog 0 whose one queue slot is taken: Linux
-	// drops further SYNs, so the next connect stays pending deterministically
-	// (a listening socket that merely never accepts would complete the TCP
-	// handshake in the kernel).
+	// A listener with backlog 0 whose one queue slot is taken: the next connect
+	// stays pending.
 	corosio::io_context ioc;
 	tcp_server srv(ioc, 0);
 	corosio::tcp_socket filler(ioc);
@@ -791,12 +773,7 @@ TEST_CASE("connect stopped during the name lookup", "[net][connect][cancel][dns]
 	CHECK(elapsed < std::chrono::milliseconds(700));// the lookup itself takes 1000 ms
 }
 
-// The decoded host is quoted sanitized and cut (as an operation's DN): the
-// URL is often a server's (a referral). U+202E and U+0085 become U+FFFD, the
-// accented letter stays; the encoded URL in the prefix is ASCII already,
-// cut at 256 bytes like the host. Neither name resolves (.invalid, RFC 6761;
-// a label over 63 bytes): without DNS access the lookup may fail
-// differently or time out, at the same stage.
+// The resolve context quotes the decoded host sanitized and cut.
 TEST_CASE("connect: the resolve context quotes the decoded host sanitized and cut", "[net][connect][tcp]")
 {
 	corosio::io_context ioc;
@@ -840,9 +817,7 @@ struct ipv6_server
 	}
 
 #ifdef __linux__
-	// The first link-local address of an up, non-loopback interface (glibc
-	// only accepts a zone on a link-local address, so [::1%25lo] cannot be
-	// used). Found with getifaddrs, so Linux only.
+	// The first link-local address of an up, non-loopback interface (Linux).
 	static auto link_local(corosio::io_context &ioc) -> ipv6_server
 	{
 		ipv6_server s;
@@ -999,9 +974,7 @@ TEST_CASE("connect ldapi:// to a Unix domain socket", "[net][connect][ldapi]")
 
 namespace {
 
-// What a connect to a socket path nobody created fails with: ENOENT on Linux.
-// Windows' AF_UNIX reports WSAECONNREFUSED or ENOENT depending on the
-// version, so either condition is accepted there.
+// ENOENT on Linux; on Windows also WSAECONNREFUSED.
 auto is_missing_socket(std::error_code ec) -> bool
 {
 #ifdef __linux__
@@ -1133,9 +1106,6 @@ TEST_CASE("ldaps:// verification failures", "[net][connect][tls]")
 	CHECK_THAT(server.get(), StartsWith("server handshake: "));
 }
 
-// RFC 6125 / RFC 4513 section 3.1.3: by default only subjectAltName DNS
-// names count (no subject CN fallback) and a wildcard is a whole leftmost
-// label; host_name_matching::legacy restores OpenSSL 3's defaults.
 TEST_CASE("ldaps:// host name matching", "[net][connect][tls][rfc]")
 {
 	struct case_t
@@ -1202,10 +1172,6 @@ TEST_CASE("ldaps:// host name matching", "[net][connect][tls][rfc]")
 	}
 }
 
-// host_name_matching::legacy's subject CN fallback, for a leaf without
-// subjectAltName DNS names: whole or partial CN wildcards and any of
-// several CNs match; it never matches another host, an IP literal, or a
-// leaf whose chain or validity fails.
 TEST_CASE("ldaps:// legacy host name matching by subject CN", "[net][connect][tls][rfc]")
 {
 	struct case_t
@@ -1430,7 +1396,7 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 	REQUIRE_FALSE(not_pem.has_value());
 	CHECK_THAT(std::string(not_pem.error().context), ContainsSubstring("tls: ca_pem: no PEM certificate found"));
 
-	// PEM armour around garbage: parsed now, not at handshake time.
+	// PEM armour around garbage.
 	const std::string broken = "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n";
 	auto bad_cert =
 	  connect_to(ioc, "ldaps://127.0.0.1:1", { .tls = { .ca_pem = std::pmr::string(pki().ca_pem() + broken) } });
@@ -1549,8 +1515,6 @@ TEST_CASE("TLS configuration errors fail before connecting", "[net][connect][tls
 
 TEST_CASE("TLS configuration errors leave the OpenSSL error queue empty", "[net][connect][tls]")
 {
-	// The checks run on the calling thread; a CA that does not parse used
-	// to leave PEM errors on its queue, for the next OpenSSL user to find.
 	ERR_clear_error();
 	const std::string broken = "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGU=\n-----END CERTIFICATE-----\n";
 	auto bad_ca = net::detail::make_tls_setup({ .ca_pem = std::pmr::string(pki().ca_pem() + broken) });
@@ -1718,10 +1682,8 @@ TEST_CASE("ldaps:// peer closing without close_notify", "[net][connect][tls]")
 
 namespace {
 
-// Accepts a TLS client and reads until its TLS session ends. Returns what
-// the read reported ("end of file" for a close_notify). `answer`: reply to
-// the close_notify with ours; otherwise stay silent until the client hangs
-// up the TCP connection.
+// Accepts a TLS client and reads until its session ends; returns what the
+// read reported. `answer`: reply to close_notify.
 auto serve_until_close(corosio::tcp_acceptor &acc, corosio::tls_context ctx, bool answer) -> capy::task<std::string>
 {
 	auto [ec, peer] = co_await acc.accept();
@@ -1969,10 +1931,8 @@ auto platform_throws(std::span<const std::vector<unsigned char>> chain,
 	throw std::bad_alloc();
 }
 
-// ldap:// then tls_handshake() with default verification and `verifier`
-// as the platform's; "" on success, else the error's context. A non-empty
-// `client_ciphers` is the client's cipher list (e.g. "DEFAULT:@SECLEVEL=3"
-// for another security level).
+// ldap:// then tls_handshake() with `verifier` as the platform's; "" on
+// success, else the error's context.
 auto handshake_with_platform_chain(corosio::io_context &ioc,
   std::string text,
   net::detail::verify_state::chain_verifier verifier,
@@ -2013,10 +1973,8 @@ auto handshake_with_platform_chain(corosio::io_context &ioc,
 
 }// namespace
 
-// Windows' default verification: CryptoAPI's verdict on the chain replaces
-// OpenSSL's, and OpenSSL's host name verdict is kept. Off Windows
-// make_tls_setup() never sets a platform verifier, so a stand-in runs the
-// same callback logic here.
+// The platform's verdict on the chain replaces OpenSSL's, the host name
+// verdict is kept; off Windows a stand-in verifier runs.
 TEST_CASE("TLS with the platform verifying the chain", "[net][connect][tls]")
 {
 	// The default (system) trust store: CryptoAPI verifies on Windows only.
@@ -2103,10 +2061,7 @@ TEST_CASE("TLS with the platform verifying the chain", "[net][connect][tls]")
 	}
 	SECTION("OpenSSL's verdict on the leaf's key size is kept")
 	{
-		// An RSA-2048 leaf (112 security bits) and the client at security
-		// level 3 (128 bits): EE_KEY_TOO_SMALL, whatever the platform says.
-		// (A server at level 2 cannot load an RSA-1024 key, and Corosio sets
-		// a cipher list's level only after loading the certificate.)
+		// An RSA-2048 leaf with the client at security level 3: EE_KEY_TOO_SMALL.
 		const auto leaf = pki().issue("localhost", "DNS:localhost,IP:127.0.0.1", "serverAuth", 2048);
 		spawn(ioc, accept_and_serve(srv.acc, server_context(leaf)), server);
 		spawn(ioc,

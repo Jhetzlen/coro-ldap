@@ -1,6 +1,4 @@
-// Step 6 operations against the scripted mock server (mock_ldap.hpp): add,
-// modify, delete, modify DN, compare, extended / who am I, typed controls,
-// paged search and referrals.
+// The operations against the scripted mock server.
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
@@ -155,10 +153,6 @@ TEST_CASE("operations: modify", "[net][operations]")
 				{ op::increment, { "uidNumber", { "2" } } } } } });
 }
 
-// The operation's DN is often one the server returned (an entry's, a
-// referral's): the context quotes it sanitized (valid UTF-8 kept, C1 and
-// bidi controls shown as U+FFFD) and cut at 256 bytes, as an entry's. So
-// is a password modify's user.
 TEST_CASE("operations: the context quotes the DN sanitized", "[net][operations]")
 {
 	mock_ldap m;
@@ -419,9 +413,8 @@ TEST_CASE("operations: extended operations with intermediate responses", "[net][
 	}
 	SECTION("late ones after an abandon are dropped, and so is the final response")
 	{
-		// The server sends them racing the AbandonRequest: an
-		// IntermediateResponse is not the last answer to the abandoned
-		// request, so its ExtendedResponse is still recognized and dropped.
+		// An IntermediateResponse racing the AbandonRequest is not the last
+		// answer: the ExtendedResponse is still dropped.
 		mock_ldap m;
 		m.serve({ step{},// reads the extended request, does not answer yet
 		  script(1),// reads its AbandonRequest, answers the abandoned request late
@@ -688,7 +681,6 @@ TEST_CASE("operations: matched values on a search", "[net][operations][controls]
 	CHECK(*r->entries.front().find("member") == ldap::string_list{ jdoe.to_string() });
 	m.check_server();
 
-	// The server reads back what was sent.
 	REQUIRE(m.log.received.size() == 1);
 	REQUIRE(m.log.received[0].controls.size() == 1);
 	const auto &sent = m.log.received[0].controls[0];
@@ -739,9 +731,8 @@ TEST_CASE("operations: a virtual list view window", "[net][operations][controls]
 	REQUIRE(r->has_value());
 	CHECK(**r == ldap::vlv_response{ 2, 3, 0, "ctx" });
 
-	// The next window sends the server's count and contextID back; the
-	// server refuses it with resultCode 76 and says why in the response
-	// control, which the stream keeps with the error.
+	// The server refuses the next window with 76; the stream keeps the
+	// response control with the error.
 	const ldap::virtual_list_view beyond{ .target =
 											ldap::vlv_by_offset{ .offset = 9, .content_count = (*r)->content_count },
 		.context_id = std::string(*(*r)->context_id) };
@@ -856,7 +847,7 @@ TEST_CASE("operations: paged search against a server without paging", "[net][ope
 	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"),
 	  entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B"),
 	  entry_msg(1, "uid=c,ou=people,dc=example,dc=org", "C"),
-	  done_msg(1) }) });// no paged control in the done: everything was one page
+	  done_msg(1) }) });// no paged control: one page
 	auto s = m.run(ldap::search_paged(m.conn, people_search(), 2));
 	REQUIRE(s.has_value());
 	auto dns = m.run(drain_paged(*s));
@@ -991,9 +982,8 @@ auto bind_admin(ldap::connection &c) -> capy::task<ldap::result<void>>
 	co_return co_await c.simple_bind(*ldap::dn::parse(admin), "secret");
 }
 
-// Reads one entry of a paged search of page size 1 whose first page ends
-// with cookie "page2", then destroys it: the release (id 2) is sent and
-// read by the server's second step. `M` is mock_ldap or tcp_mock_ldap.
+// Destroys a paged search after one entry: the release (id 2) is read by
+// the server's second step.
 template<class M> void release_after_one_page(M &m, ldap::search_params params = people_search())
 {
 	auto s = m.run(ldap::search_paged(m.conn, std::move(params), 1));
@@ -1015,10 +1005,7 @@ template<class M> void server_sends(M &m, const ldap::message &msg)
 	REQUIRE(m.run(net::write_bytes(t, std::as_bytes(std::span(bytes)))).has_value());
 }
 
-// Runs the io_context briefly (the reader stays parked): what is ready
-// runs, and a request sent meanwhile reaches the server. 20 ms proves
-// nothing positive under load: it only precedes checks that something did
-// not happen (not done yet, nothing more sent).
+// Runs the io_context briefly; only precedes checks that nothing happened.
 template<class M> void settle(M &m)
 {
 	m.ioc.run_for(std::chrono::milliseconds(20));
@@ -1454,8 +1441,7 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		CHECK(m.log.received[3].id == 4);
 		check_release(m.log.received[3], m.log.received[0], "page2");
 	}
-	// A lifetime test for ASan: whether the release was written before the
-	// connection closed depends on scheduling, so both outcomes pass.
+	// Both outcomes pass; the check is ASan's.
 	SECTION("the connection destroyed right after: nothing outlives it")
 	{
 		mock_ldap m;
@@ -1518,10 +1504,6 @@ TEST_CASE("operations: two paged search releases due at once", "[net][operations
 	check_release(m.log.received[3], m.log.received[1], "b2");
 }
 
-// RFC 4513 section 3.1.1: StartTLS is not sent while a response is still
-// due, and the answer to a release is always due: StartTLS waits for it.
-// Over tcp_mock_ldap StartTLS is sent once the wait ends, and the server
-// refuses it (errc::unavailable), which leaves the connection usable.
 TEST_CASE("operations: StartTLS waits for the answer to a paged search release", "[net][operations][paged][starttls]")
 {
 	SECTION("waits until the release's SearchResultDone arrives, then proceeds")
@@ -1799,9 +1781,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		spawn(m.ioc, m.conn.start_tls({}, std::chrono::milliseconds(100)), tls);
 		settle(m);
 		CHECK_FALSE(tls.done());
-		// The writer stays busy with the AddRequest (larger than the socket
-		// buffers), so unbind() waits for it (the answers due no longer
-		// counted) past StartTLS's timeout.
+		// unbind() waits for the busy writer past StartTLS's timeout.
 		outcome<ldap::result<ldap::response>> add;
 		spawn(m.ioc, m.conn.add(oversized_add()), add);
 		outcome<ldap::result<void>> unbind;
@@ -1900,11 +1880,6 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 	}
 }
 
-// The release's deadline and StartTLS's timeout are about the same here
-// (both connection_options::operation_timeout), so the wait ends with
-// little of StartTLS's timeout left: the ExtendedResponse gets a timeout of
-// its own, since giving up on StartTLS closes the connection (RFC 4511
-// section 4.11).
 TEST_CASE("operations: StartTLS after waiting for a release's answer has its whole timeout",
   "[net][operations][paged][starttls][timeout]")
 {
@@ -1918,8 +1893,6 @@ TEST_CASE("operations: StartTLS after waiting for a release's answer has its who
 	drive_until(m.ioc, [&m] { return m.log.received.size() == 3; });// once the release's deadline passed
 	REQUIRE(m.log.received.size() == 3);
 	CHECK(is_start_tls(m.log.received[2]));
-	// Much longer than what was left of StartTLS's timeout after the wait,
-	// well within a whole one.
 	m.ioc.run_for(std::chrono::milliseconds(300));
 	m.ioc.restart();
 	CHECK_FALSE(tls.done());
@@ -1934,10 +1907,6 @@ TEST_CASE("operations: StartTLS after waiting for a release's answer has its who
 	CHECK(m.run(bind_admin(m.conn)).has_value());
 }
 
-// The release's deadline and StartTLS's wait deadline (later by a little)
-// have both passed when the io_context next runs: StartTLS's wait may time
-// out before the due watcher expires the release's answer. It is expired
-// then, and StartTLS proceeds.
 TEST_CASE("operations: StartTLS whose wait times out with a release's deadline passed proceeds",
   "[net][operations][paged][starttls][timeout]")
 {
@@ -2041,9 +2010,6 @@ TEST_CASE("operations: a paged search whose next page could not be sent releases
 	CHECK(m.log.received[3] == bind_request_msg(4));
 }
 
-// The current page's SearchResultDone was received but not read by next():
-// if it failed or its paged control is malformed, the search ended on the
-// server, and nothing is released.
 TEST_CASE("operations: a paged search whose unread page failed sends no release", "[net][operations][paged]")
 {
 	const bool error_result = GENERATE(true, false);
@@ -2146,11 +2112,8 @@ TEST_CASE("operations: release answers' deadlines", "[net][operations][paged][ti
 
 namespace {
 
-// Reads the first page of a paged search (page size 1, cookie "page2", the
-// release's deadline `timeout`), waits until the reader and the writer are
-// idle (every frame allocated since `frames` was set has been freed), then
-// destroys it with the `failing`-th frame allocation failing. Returns the
-// allocations tried. `M` is mock_ldap or tcp_mock_ldap.
+// Destroys a paged search after its first page with the `failing`-th
+// frame allocation failing; returns the allocations tried.
 template<class M>
 auto release_failing(M &m,
   failing_frames &frames,
@@ -2178,12 +2141,6 @@ auto release_failing(M &m,
 
 }// namespace
 
-// A paged search's release starts the writer, the reader and the due
-// watcher from a destructor (no operation running), in that order: each
-// allocates its task's frame, then run_async's. Failing one of the task
-// frames throws bad_alloc there (the release is best effort: swallowed);
-// the flag that says the task runs must not be left set without it, or
-// that task is never started again.
 TEST_CASE("operations: a failed allocation for the writer, reader or due watcher wedges nothing",
   "[net][operations][paged][oom]")
 {
@@ -2198,9 +2155,7 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
 		return answer({ entry_msg(id, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(id, "page2") });
 	};
 
-	// On the strand, the writer starts at once: its write's two frames
-	// (write_bytes, capy::write) come before the reader's, whose read adds
-	// one.
+	// On the strand: the writer's two frames, then the reader's.
 	SECTION("nothing fails: the writer's frame, then the reader's, then the due watcher's, each with run_async's")
 	{
 		m.serve({ page(1), step{} });// reads the release
@@ -2259,10 +2214,6 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
 	}
 }
 
-// send_unanswered() could not start the reader (the release's task frame
-// failing, the due watcher's is then not tried): the release is sent, its
-// answer due, and nothing reads it or applies its deadline. StartTLS, with
-// no timeout of its own, waits for that answer: its wait starts them.
 TEST_CASE("operations: StartTLS waits for a release's answer whose reader could not start",
   "[net][operations][paged][starttls][oom]")
 {
@@ -2330,12 +2281,6 @@ void server_writes_now(mock_ldap &m, std::initializer_list<ldap::message> msgs)
 
 }// namespace
 
-// Where no exception may go (a destructor, a detached task), a failed frame
-// allocation closes the connection: what was to be sent or read is lost,
-// and the operations fail with not_enough_memory instead of waiting for it
-// (or the program ending). Nothing is spawned while an allocation is set to
-// fail: run_async's own frame failing ends the program (made in a noexcept
-// constructor, outside this library).
 TEST_CASE("operations: a failed allocation where nothing may throw closes the connection", "[net][operations][oom]")
 {
 	failing_frames frames;// outlives the io_context's coroutines
@@ -2375,10 +2320,7 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 	}
 	SECTION("the reader restarted for a request registered as it stopped: the request fails")
 	{
-		// The writer stays busy with the SearchRequest (larger than the
-		// socket buffers, and the server's end does not read): it cannot
-		// resume, so the frame that fails is the reader's, not the writer's
-		// next write.
+		// The writer stays busy, so the failing frame is the reader's.
 		tcp_mock_ldap t({}, socket_buffers::small);
 		REQUIRE(t.buffered_at_most() < oversized_add_value);
 		t.ioc.set_frame_allocator(&frames);
@@ -2388,11 +2330,8 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 		REQUIRE(s.has_value());
 		while (t.ioc.poll() != 0) {}// the reader parks on its read, the writer on its write
 		t.ioc.restart();
-		// In one go, so the reader cannot run in between: the stream is
-		// abandoned (nothing is outstanding, the reader is told to stop),
-		// then an AddRequest is registered while the reader still runs. The
-		// reader then ends on its cancelled read and starts afresh for it.
-		// body outlives its task: drive_until below runs the task to completion.
+		// The stream is abandoned and an AddRequest registered while the reader
+		// still runs.
 		// NOLINTNEXTLINE(cppcoreguidelines-avoid-capturing-lambda-coroutines): see above
 		auto body = [&] -> capy::task<ldap::result<ldap::response>> {
 			*s = ldap::search_stream{};
@@ -2470,9 +2409,6 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 	}
 }
 
-// Late responses are dropped for the last 1024 abandoned requests; when
-// there are more, a due release answer is kept over older abandoned
-// requests (which may never be answered).
 TEST_CASE("operations: a due release answer outlives older abandoned requests", "[net][operations][paged]")
 {
 	constexpr int abandoned_searches = 1024;// with the release: one more than are kept
@@ -2498,8 +2434,6 @@ TEST_CASE("operations: a due release answer outlives older abandoned requests", 
 	m.check_server();
 }
 
-// When every abandoned request kept is a due release answer, the oldest is
-// forgotten for a new one: its answer is no longer counted.
 TEST_CASE("operations: a due release answer forgotten past the limit is no longer counted", "[net][operations][paged]")
 {
 	constexpr int releases = 1024;// as many as are kept

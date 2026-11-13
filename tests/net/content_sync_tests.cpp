@@ -1,8 +1,5 @@
-// RFC 4533 content synchronization over search_stream::next_item(),
-// against the scripted in-process server (mock_ldap.hpp): the refresh
-// phase (entries with Sync State controls, Sync Info Messages), the Sync
-// Done of a refreshOnly search, and the persist phase of a
-// refreshAndPersist search outliving the operation timeout.
+// RFC 4533 content synchronization over next_item() against the scripted
+// server.
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/content_sync.hpp"
 #include "jhetz/ldap/net/message_io.hpp"

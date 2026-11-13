@@ -1,19 +1,5 @@
-// Golden LDAPMessage encodings cross-checked against an independent
-// implementation.
-//
-// Provenance: every hex vector below was produced by ldap3 2.9.1 with
-// pyasn1 0.6.4 (Python 3.11), using ldap3's own request builders
-// (bind_operation, search_operation with its RFC 4515 filter compiler,
-// modify_operation, add_operation, delete_operation, modify_dn_operation,
-// compare_operation, abandon_operation, extended_operation, unbind_operation,
-// paged_search_control) and, for responses, its pyasn1 RFC 4511 classes
-// (BindResponse, SearchResultEntry, ...), each wrapped in an LDAPMessage and
-// encoded with ldap3.utils.asn1.encode (pyasn1 BER, booleans as 0xFF, DEFAULT
-// FALSE criticality omitted). The generating script is reproduced at the end
-// of this file.
-//
-// Each test checks both directions: our encoder produces exactly these bytes,
-// and our decoder turns them back into the same model.
+// Golden LDAPMessage encodings produced by ldap3 2.9.1 with pyasn1 0.6.4
+// (the script is at the end of this file); each test encodes and decodes.
 #include "jhetz/ldap/message.hpp"
 #include "test_util.hpp"
 
@@ -140,9 +126,6 @@ TEST_CASE("golden: SASL bind", "[message][golden]")
 
 TEST_CASE("golden: search request with a complex filter", "[message][golden]")
 {
-	// and/or/not, substrings with initial/any/final, >=, <=, ~=, present,
-	// extensible match with :dn: and a rule, rule-only extensible match,
-	// escaped values. The text is canonical, so to_string() gives it back.
 	const std::string_view filter =
 	  "(&(objectClass=person)(|(cn=Jo*hn*Sm*ith)(!(uid=admin)))(uidNumber>=1000)"
 	  "(uidNumber<=2000)(sn~=smyth)(mail=*)(cn:dn:2.5.13.5:=John)(:caseExactMatch:=x\\2ay)"

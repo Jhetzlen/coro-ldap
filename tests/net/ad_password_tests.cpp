@@ -1,8 +1,5 @@
-// ad::change_password / ad::reset_password (unicodePwd modifies) against
-// the scripted mock server: the ModifyRequests over TLS (StartTLS or
-// ldaps://), their refusal without it or during StartTLS, the refusals
-// before sending, the server's AD diagnostics explained, and the
-// ldap::client overloads' shared lease and not_sent retry.
+// ad::change_password / ad::reset_password against the scripted mock
+// server.
 #include "jhetz/ldap/ad/password.hpp"
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
@@ -93,9 +90,8 @@ auto server_context() -> corosio::tls_context
 	return ctx;
 }
 
-// Serves `clear` in clear, the last step of which answers a StartTLS
-// request, then runs the server side of the handshake and serves `secure`
-// over TLS. With `clear` empty: an ldaps:// server.
+// Serves `clear`, whose last step answers StartTLS, then the TLS handshake
+// and `secure`; `clear` empty: an ldaps:// server.
 auto serve_upgrading(corosio::tcp_acceptor &acc,
   corosio::tls_context ctx,
   std::vector<step> clear,
@@ -285,10 +281,7 @@ auto only_tls_handshake_records(std::string_view bytes) -> bool
 
 }// namespace
 
-// StartTLS accepted, the client's handshake under way: the transport
-// already has its TLS layer (it is undone if the handshake fails), but
-// is_tls() is false until start_tls() returns. A password change then is
-// refused, and nothing is sent.
+// During StartTLS's handshake a password change is refused, nothing sent.
 TEST_CASE("ad::change_password: during StartTLS, refused before sending", "[net][password][starttls]")
 {
 	outcome<ldap::result<void>> tls;// outlive `m`
@@ -518,10 +511,7 @@ class session_server
 	outcome<void> accepting_{};
 };
 
-// How the pool's connector opens a connection: by ldap::connect, closed
-// before it is handed out (an operation on it fails with not_sent), or not
-// at all, failing with std::errc::invalid_argument (cond::invalid_input:
-// acquire() tries that server no more and fails at once).
+// How the pool's connector opens a connection.
 enum class opened { normally, closed, failed };
 
 auto open_as(corosio::io_context &ioc,

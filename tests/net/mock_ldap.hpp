@@ -1,11 +1,5 @@
-// The scripted in-process LDAP server used by the connection tests: the
-// server end decodes requests with origin::client and answers with encoded
-// responses from a script, over a Unix socket pair.
-//
-// Not capy::test::stream: at the pinned Capy commit its wake() posts the
-// parked continuation by reference and then clears the handle while it is
-// still queued, so a reader woken by the peer resumes a null handle. Its
-// provide()-before-read use in message_io_tests.cpp never parks a reader.
+// The scripted in-process LDAP server of the connection tests, over a Unix
+// socket pair. Not capy::test::stream: its wake() resumes a null handle.
 #pragma once
 
 #include "../../src/net/transport_layers.hpp"
@@ -109,11 +103,8 @@ inline auto ref_msg(std::int32_t id, ldap::string_list uris) -> ldap::message
 
 // ---------------------------------------------------------------- server
 
-// One step of a server script: optionally wait for one request, then send
-// `replies` (each written separately), then optionally hang up. Or, with
-// expect_close, wait for the client to hang up: a request instead is logged
-// and is an error. expect_close ignores read_request, replies and
-// close_after.
+// One script step: optionally read one request, send `replies`, optionally
+// hang up; or, with expect_close, wait for the client to hang up.
 struct step
 {
 	bool read_request = true;
@@ -287,21 +278,15 @@ struct mock_ldap : scripted_server<mock_ldap>
 	auto server_end() -> net::transport { return net::transport::wrap(socket_ref{ &sockets.server }, "server"); }
 };
 
-// The kernel buffers of tcp_mock_ldap's sockets: the system's (Linux
-// autotunes them, up to the tcp_wmem / tcp_rmem sysctls), or small fixed
-// ones, so that what the client can write while the server's end does not
-// read is bounded whatever the host's settings (oversized_add()).
+// The kernel buffers of tcp_mock_ldap's sockets: the system's, or small
+// fixed ones.
 enum class socket_buffers { system, small };
 
-// SO_SNDBUF and SO_RCVBUF asked for with socket_buffers::small. Linux
-// doubles them (for its bookkeeping) and caps them at net.core.wmem_max /
-// rmem_max; setting them also turns autotuning off.
+// SO_SNDBUF and SO_RCVBUF with socket_buffers::small.
 inline constexpr int small_socket_buffer = 64 * 1024;
 
-// What ldap::connect does for ldap://, but on a socket whose SO_SNDBUF is
-// small_socket_buffer, set before it connects to `to`. `name` is the
-// transport's name; `send_buffer` receives the SO_SNDBUF the kernel reports.
-// Errors are thrown.
+// ldap:// on a socket with a small SO_SNDBUF set before it connects; throws
+// on error.
 inline auto connect_small_tcp(corosio::io_context &ioc,
   corosio::endpoint to,
   std::string name,
@@ -331,11 +316,7 @@ inline auto connect_small_tcp(corosio::io_context &ioc,
 	co_return ldap::connection(ioc, std::move(t), options);
 }
 
-// mock_ldap over loopback TCP: the transport is plain TCP, so start_tls()
-// sends its request (the server can only refuse it: it does not speak TLS).
-// The connection is made by ldap::connect, or with socket_buffers::small
-// from a socket of the test's own with a small send buffer (connect() sets
-// no buffer sizes); the server's end has a small receive buffer then.
+// mock_ldap over loopback TCP, optionally with small socket buffers.
 struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 {
 	corosio::io_context ioc{};
@@ -378,9 +359,7 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 			drive_until(ioc, [&accepted] { return accepted.done(); });
 			accepted.get();
 		} catch (...) {
-			// No destructor runs: close the connection, as the destructor
-			// does, then end the accept, which refers to `accepted`, `acc` and
-			// `peer`, before they go.
+			// Close the connection, then end the accept before its operands go.
 			conn.close();
 			acc.close();
 			peer.close();
@@ -400,16 +379,12 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 		drive(ioc);
 	}
 
-	// The URL the connection was made to.
 	auto url() const -> std::string { return "ldap://127.0.0.1:" + std::to_string(acc.local_endpoint().port()); }
 
 	// The server's end, to write outside the script.
 	auto server_end() -> net::transport { return net::transport::wrap(socket_ref{ &peer }, "server"); }
 
-	// socket_buffers::small: at most what the kernel holds of a PDU the
-	// client writes while the server's end does not read (the client's send
-	// buffer and the server's receive buffer, as reported: on Linux they
-	// include the bookkeeping, so the data they hold is less).
+	// socket_buffers::small: at most what the kernel holds of an unread PDU.
 	auto buffered_at_most() const -> std::size_t
 	{
 		const auto [ec, received] = peer.get_option<corosio::socket_option::receive_buffer_size>();
@@ -424,11 +399,7 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 	}
 };
 
-// An AddRequest of 1 MiB: several times what tcp_mock_ldap with
-// socket_buffers::small holds while the server's end does not read (check
-// buffered_at_most()), so the writer is still busy with it until the server
-// reads. Less than read_options::max_message_size, so the server can read
-// it then.
+// 1 MiB: more than the small buffers hold, less than max_message_size.
 inline constexpr std::size_t oversized_add_value = std::size_t{ 1 } << 20;
 inline auto oversized_add() -> ldap::add_params
 {

@@ -384,9 +384,7 @@ TEST_CASE("filter views expose every node", "[filter]")
 	CHECK_FALSE(children[0].final());
 }
 
-// child_range and substring_range are borrowed views: their iterators refer
-// to the filter, so algorithms on a temporary range return usable iterators
-// (not std::ranges::dangling) and they compose with range adaptors.
+// child_range and substring_range are borrowed views.
 static_assert(std::ranges::view<ldap::filter::child_range>);
 static_assert(std::ranges::borrowed_range<ldap::filter::child_range>);
 static_assert(std::ranges::forward_range<ldap::filter::child_range>);
@@ -1051,9 +1049,6 @@ TEST_CASE("unescape_filter_value", "[filter][escape]")
 
 // ---------------------------------------------------------------- RFC conformance
 
-// RFC 4515 section 3: the string form is UTF-8 (valueencoding = 0*(normal /
-// escaped), normal = UTF1SUBSET / UTFMB); any other octet only appears
-// escaped as \XX.
 TEST_CASE("RFC 4515 3: printed filters are valid UTF-8", "[filter][rfc]")
 {
 	using namespace ldap::filters;

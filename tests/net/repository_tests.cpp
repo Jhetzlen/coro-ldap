@@ -837,9 +837,6 @@ TEST_CASE("repository: search returns records under the base, on the limit codes
 		  == "(&(objectClass=inetOrgPerson)(objectClass=*))");
 }
 
-// The base is often a DN the server returned: sanitized in the context
-// (valid UTF-8 kept, U+2028 shown as U+FFFD) and cut at 256 bytes, as the
-// entry's DN.
 TEST_CASE("repository: search quotes its base sanitized", "[net][repository]")
 {
 	mock_ldap m;

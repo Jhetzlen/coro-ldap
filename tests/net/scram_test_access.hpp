@@ -1,6 +1,4 @@
-// Tests only: builds a sasl_scram_sha256 with a fixed client nonce (e.g. the
-// RFC 7677 test vector's) instead of a fresh random one. Shared by every
-// test file that needs it, so the friend struct has a single definition.
+// Tests only: a sasl_scram_sha256 with a fixed client nonce.
 #pragma once
 
 #include "jhetz/ldap/sasl_scram.hpp"

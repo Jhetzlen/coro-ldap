@@ -1,12 +1,6 @@
-// Value semantics of the allocator-aware types (DESIGN.md section 8): runs
-// plain and allocator-extended copy and move construction, copy and move
-// assignment on a sample, checking the value and the resource the result and
-// its members allocate from:
-// - a plain copy goes to the default resource, a plain move keeps the source's;
-// - an allocator-extended copy or move uses the given resource;
-// - assignment keeps the target's resource, also across resources
-//   (polymorphic_allocator does not propagate), and for optional members that
-//   become engaged.
+// Value semantics of the allocator-aware types: a plain copy goes to the
+// default resource, a move keeps the source's, an allocator-extended one
+// uses the given resource, and assignment keeps the target's.
 #pragma once
 
 #include "counting_resource.hpp"
@@ -40,9 +34,8 @@ template<class T, class Members> void check_on(const T &x, std::pmr::memory_reso
 	}
 }
 
-// Runs every construction and assignment of T on `sample`, whose strings must
-// be long enough to allocate (no small-string optimisation) and whose optional
-// members must be engaged.
+// Runs every construction and assignment of T on `sample` (long strings,
+// engaged optionals).
 template<class T, class Members = no_members> void check_value_semantics(const T &sample, Members members = {})
 {
 	using alloc_t = T::allocator_type;

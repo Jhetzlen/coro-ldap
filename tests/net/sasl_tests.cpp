@@ -89,9 +89,8 @@ class echo_mechanism final : public ldap::sasl_mechanism
 	}
 };
 
-// What the offloaded steps of offload_mechanism share with the test (and
-// not with the mechanism, which may be gone while they run): each step
-// waits for a permit, on the thread sasl_bind gives it.
+// Shared by offload_mechanism's steps and the test: each step waits for a
+// permit.
 struct offload_gate
 {
 	std::atomic<int> permits{ 0 };
@@ -164,9 +163,8 @@ class offload_mechanism final : public ldap::sasl_mechanism
 	}
 };
 
-// Runs `ioc` until `done()` holds, at most io_limit: for conditions another
-// thread makes true, which drive_until() would sleep through (run_one()
-// waits for a handler).
+// Runs `ioc` until `done()` holds, at most io_limit, for conditions another
+// thread makes true.
 template<class Pred> void poll_until(corosio::io_context &ioc, Pred done)
 {
 	const auto deadline = std::chrono::steady_clock::now() + io_limit;
@@ -271,10 +269,8 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 	}
 	SECTION("a server that refuses the abort")
 	{
-		// Any BindResponse ends the exchange (RFC 4511 section 4.2.1), even a
-		// refusal from a server that disallows anonymous binds: the
-		// connection stays open (anonymous), the held search then goes out,
-		// and the mechanism's error is still the result.
+		// A refused aborting bind ends the exchange: the connection stays open and
+		// the held search goes out.
 		mock_ldap m;
 		m.serve({ answer({ sasl_resp(1, 14, "bad") }),
 		  answer({ bind_resp(3, 48, "anonymous bind disallowed") }),
@@ -296,9 +292,8 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 	}
 	SECTION("a server that answers the abort with saslBindInProgress")
 	{
-		// Not an answer to a simple bind (RFC 4511 section 4.2.2): the
-		// server may still be in the exchange, so the connection is closed
-		// and the held search fails with that error, without being sent.
+		// saslBindInProgress to a simple bind: the connection is closed and the
+		// held search fails unsent.
 		mock_ldap m;
 		m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(3, 14) }), client_hangs_up() });
 		echo_mechanism mech;
@@ -394,9 +389,6 @@ TEST_CASE("sasl: requests started during the exchange wait for its end", "[net][
 	CHECK(m.log.received[3].id == 2);
 }
 
-// RFC 4511 section 4.2.1: a client that gives up on a SASL exchange the
-// server still considers in progress aborts it with another bind before
-// anything else is sent.
 TEST_CASE("sasl: a failed exchange is aborted before held requests are sent", "[net][sasl][rfc]")
 {
 	mock_ldap m;
@@ -702,10 +694,7 @@ TEST_CASE("sasl: a timeout or cancellation gives up on an offloaded step", "[net
 // nothing of it outlives the scheduler it wakes and releases its work on.
 TEST_CASE("sasl: destroying the io_context waits for an offloaded step", "[net][sasl][offload]")
 {
-	// The step is let through only once the scope has checked it is still
-	// blocked (armed), shortly before the io_context is destroyed. If the
-	// scope exits early (a failed REQUIRE), the opener lets it through after
-	// 2 s anyway, so the io_context's destructor waits for it, not forever.
+	// The step is let through once checked blocked, or after 2 s anyway.
 	const auto gate = std::make_shared<offload_gate>();
 	std::binary_semaphore armed{ 0 };
 	const std::jthread opener([gate, &armed] {
@@ -735,10 +724,6 @@ TEST_CASE("sasl: destroying the io_context waits for an offloaded step", "[net][
 	CHECK(gate->finished == 1);
 }
 
-// The thread of an offloaded step posts to the io_context from outside, so
-// it needs the scheduler lock (locking_mode::safe or unsafe_io): under
-// unsafe the step fails before anything is sent, as Corosio's resolver
-// does.
 TEST_CASE("sasl: an offloaded step fails under locking_mode::unsafe", "[net][sasl][offload]")
 {
 	mock_ldap m(corosio::io_context_options{ .locking = corosio::locking_mode::unsafe });
@@ -815,10 +800,6 @@ class offload_recorder final : public ldap::sasl_mechanism
 	std::vector<std::thread::id> threads_;
 };
 
-// Under locking_mode::unsafe_io the scheduler keeps its lock, so the
-// offloaded step's thread may post its wakeup: the bind completes while
-// the I/O thread waits in the backend (epoll, and io_uring where the
-// kernel allows it). A lost wakeup would end the bind with its timeout.
 TEST_CASE("sasl: offloaded steps under locking_mode::unsafe_io", "[net][sasl][offload]")
 {
 	const corosio::io_context_options unsafe_io{ .locking = corosio::locking_mode::unsafe_io };
@@ -879,10 +860,6 @@ TEST_CASE("sasl: offloaded steps under locking_mode::unsafe_io", "[net][sasl][of
 	}
 }
 
-// A high iteration count runs PBKDF2 on a thread of its own, so the
-// io_context goes on meanwhile: a 1 ms timer ticks between the server's
-// first message and the client's final one (inline, PBKDF2 would block the
-// event loop for that whole time, ~0.1 s here).
 TEST_CASE("sasl: SCRAM-SHA-256 runs a costly PBKDF2 off the I/O thread", "[net][sasl][scram][offload]")
 {
 	constexpr std::string_view server_first = "r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=300000";

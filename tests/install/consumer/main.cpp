@@ -1,9 +1,5 @@
-// Uses the installed headers and libraries: the codec always (with the
-// operations.hpp mod:: builders and the codec's ad/ headers), the connection
-// (a connect that must be refused: no server), jhetz::ldap_ad (DC discovery
-// with a scripted resolver, a password
-// reset on no connection) and SCRAM's SASLprep (links ICU through the
-// package) with WITH_NET.
+// Uses the installed headers and libraries: the codec, and with WITH_NET
+// the connection, jhetz::ldap_ad and SCRAM's SASLprep.
 #include "jhetz/ldap/ad/filetime.hpp"
 #include "jhetz/ldap/ad/password_value.hpp"
 #include "jhetz/ldap/ad/sid.hpp"

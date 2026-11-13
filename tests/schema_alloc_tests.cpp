@@ -1,8 +1,5 @@
-// server_schema lookups do not allocate. A separate executable: it replaces
-// the global operator new / delete to count allocations, which must not
-// affect the other tests. The whole unaligned family is replaced (with
-// ASan, new and delete must come from the same side); the aligned family is
-// left to the implementation (std::string never uses it).
+// server_schema lookups do not allocate. A separate executable replacing
+// the global unaligned operator new / delete.
 #include "jhetz/ldap/schema.hpp"
 
 #include <catch2/catch_test_macros.hpp>

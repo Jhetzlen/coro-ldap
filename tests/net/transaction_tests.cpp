@@ -1,7 +1,4 @@
-// LDAP transactions (RFC 5805) against the scripted mock server
-// (mock_ldap.hpp): the connection's primitives (start_transaction,
-// end_transaction, the transaction_specification control) and the
-// ldap::transaction helper.
+// RFC 5805 transactions against the scripted mock server.
 #include "jhetz/ldap/cancel.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/controls.hpp"
@@ -450,7 +447,7 @@ TEST_CASE("transaction: an End Transaction never sent leaves it to the destructo
 		REQUIRE_FALSE(a.has_value());
 		CHECK(a.error().code == ldap::cond::canceled);
 		CHECK_FALSE(t->is_open());// settled for the API...
-		CHECK(m.log.received.size() == 1);// ...but nothing was sent
+		CHECK(m.log.received.size() == 1);// nothing was sent
 		run_on(m.ioc, m.conn.executor(), [&t] { *t = ldap::transaction{}; });
 	}
 	// ...so the destructor still aborts it on the server.
@@ -481,9 +478,8 @@ auto send_reply(net::transport t, ldap::message m) -> capy::task<void>
 	}
 }
 
-// Destroys a started transaction with `drop(m, t)` and begins another at
-// once: the Start Transaction goes out only after the destroyed one's abort
-// is answered.
+// Destroys a started transaction with `drop` and begins another: Start
+// Transaction waits for the abort's answer.
 template<class Drop> void drop_then_begin(Drop drop)
 {
 	mock_ldap m;
@@ -622,9 +618,6 @@ TEST_CASE("transaction: an Aborted Transaction Notice is ignored", "[net][transa
 	m.check_server();
 }
 
-// The destructor's abort starts the writer inline (on the io_context), and
-// its write fails at once: the connection is shut inside submit(), and the
-// abort is not counted as due.
 TEST_CASE("transaction: destroyed while the abort's write fails inline", "[net][transaction]")
 {
 	corosio::io_context ioc;

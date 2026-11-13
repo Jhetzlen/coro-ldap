@@ -1,10 +1,5 @@
-// ldap::connection against a scripted in-process LDAP server: the server end
-// decodes requests with origin::client and answers with encoded responses
-// from a script, over a Unix socket pair (and once over loopback TCP,
-// through ldap::connect: tcp_mock_ldap).
-//
-// Not capy::test::stream: its wake() resumes a null handle for a reader
-// parked before the peer writes.
+// ldap::connection against a scripted in-process LDAP server
+// (mock_ldap.hpp), and once over loopback TCP.
 #include "../counting_resource.hpp"
 #include "../value_semantics.hpp"
 #include "jhetz/ldap/connection.hpp"
@@ -361,9 +356,7 @@ TEST_CASE("connection: search_stream keeps the entries before an error", "[net][
 
 TEST_CASE("connection: search_stream yields intermediate responses when asked", "[net][connection][intermediate]")
 {
-	// RFC 4533's syncInfo is an IntermediateResponse with a value; others
-	// carry their data in controls, or have neither name nor value. As in
-	// a sync search, entries and references carry controls too.
+	// IntermediateResponses with a value, with controls, or with neither.
 	ldap::message with_control{ 1, ldap::intermediate_response{ "1.2.3.6" } };
 	with_control.controls.emplace_back("1.2.3.7", true, "c");
 	auto entry_b = entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B");
@@ -701,8 +694,7 @@ TEST_CASE("connection: a stream destroyed early abandons its search", "[net][con
 {
 	mock_ldap m;
 	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A") }),
-	  // The server reads the AbandonRequest, but the rest of the search was
-	  // already on its way: those late responses must be dropped.
+	  // Late responses after the AbandonRequest are dropped.
 	  answer({ entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B"),
 		ref_msg(1, { "ldap://r.example.org/" }),
 		done_msg(1, 4) }),
@@ -726,10 +718,6 @@ TEST_CASE("connection: a stream destroyed early abandons its search", "[net][con
 	CHECK(m.log.received[2] == bind_request_msg(3));
 }
 
-// Off the connection's strand (here: the test's thread, the io_context not
-// running), a stream's destructor and close() post their work: it runs when
-// the io_context next runs, so the stream's memory resource must outlive
-// that run. Once the io_context is stopped, they run at once.
 TEST_CASE("connection: off the strand, a stream's destructor and close() take effect when the io_context runs",
   "[net][connection][pmr]")
 {
@@ -1237,10 +1225,6 @@ TEST_CASE("connection: unbind with a stream open ends the stream", "[net][connec
 	CHECK(std::holds_alternative<ldap::unbind_request>(m.log.received[1].op));
 }
 
-// RFC 4511 section 4.3: nothing may follow the UnbindRequest. The writer is
-// kept busy with an AddRequest nothing reads yet (larger than the socket
-// buffers), so unbind() waits for it with its UnbindRequest queued behind;
-// what starts meanwhile is refused.
 TEST_CASE("RFC 4511 4.3: requests started while unbind waits for the writer are refused", "[net][connection][rfc]")
 {
 	tcp_mock_ldap m({}, socket_buffers::small);// over TCP, so StartTLS gets past its transport check
@@ -1279,14 +1263,8 @@ TEST_CASE("RFC 4511 4.3: requests started while unbind waits for the writer are 
 	CHECK(m.log.received[1] == ldap::message{ 2, ldap::unbind_request{} });
 }
 
-// Once the UnbindRequest is queued nothing may follow it, so an exception
-// from unbind() must not leave the connection open and "closing (unbind)"
-// for good. The writer is kept busy (as above), so every frame unbind()
-// allocates after it is spawned (finish_unbind's, its wait's) comes before
-// the wait: each is failed in turn. unbind() rethrows, the connection is
-// closed, and later operations name not_enough_memory, or the abort for an
-// exception that is not bad_alloc. Past them, unbind() waits for the writer
-// and completes.
+// Each frame allocation unbind() makes behind the busy writer fails in
+// turn: unbind() rethrows and the connection is closed.
 TEST_CASE("connection: a failed allocation in unbind closes the connection", "[net][connection][oom]")
 {
 	// True if the failing-th allocation threw, false if unbind() waited.
@@ -1623,8 +1601,7 @@ auto bind_or_delay(ldap::connection &c, std::chrono::milliseconds d) -> capy::ta
 	  ldap::raceable(c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")), corosio::delay(d));
 }
 
-// The search was abandoned (AbandonRequest for message 1, sent as message
-// 2) and the connection still works: a bind (message 3) is answered.
+// The search was abandoned and the connection still works.
 void check_abandoned_and_usable(mock_ldap &m)
 {
 	CHECK(m.conn.is_open());
@@ -1888,7 +1865,7 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 
 namespace {
 
-// Awaits `op`, then stops `ioc`, so that run() returns on the thread running it.
+// Awaits `op`, then stops `ioc`.
 auto then_stop_ioc(corosio::io_context &ioc, capy::task<entries> op) -> capy::task<entries>
 {
 	auto r = co_await std::move(op);
@@ -1898,14 +1875,8 @@ auto then_stop_ioc(corosio::io_context &ioc, capy::task<entries> op) -> capy::ta
 
 }// namespace
 
-// The io_context runs on a worker thread while the test thread requests the
-// stop, so the stop callbacks (Capy's wait cancellation and, with a timeout,
-// Corosio's timer cancellation) run concurrently with the event loop. The
-// latch is counted down by a handler run inside run(), and run() cannot
-// return before the search completes, which needs the stop: the stop always
-// lands while run() is executing on the worker (usually blocked in the
-// reactor wait, though nothing forces that exact point). Catch2 assertions
-// stay on the test thread, after the join.
+// The stop is requested from the test thread while run() executes on a
+// worker; assertions after the join.
 TEST_CASE("with_stop: stopped from another thread while the io_context runs", "[net][connection][cancel]")
 {
 	const auto stopped_while_running = [](const ldap::connection_options &options) {
@@ -2033,9 +2004,6 @@ TEST_CASE("connection: a disconnect fails every outstanding operation once", "[n
 	CHECK(m.log.received.size() == 1);
 }
 
-// client_errc::not_sent: the request never reached the writer, so the
-// server never saw it (ldap::client may retry it elsewhere, updates
-// included). It still matches cond::connection_lost.
 TEST_CASE("connection: requests the writer never took fail with not_sent", "[net][connection][not_sent]")
 {
 	SECTION("the connection is closed before the request is submitted")
@@ -2188,11 +2156,8 @@ TEST_CASE("connection: destroying the connection fails its outstanding operation
 
 namespace {
 
-// Reads `n` searches (skipping AbandonRequests, which may come in
-// between), then answers them all with their responses interleaved at
-// random (each search's own responses stay in order): two entries under
-// its base DN and a SearchResultDone. Abandoned requests are answered too:
-// the client must drop those late responses.
+// Reads `n` searches, then answers them interleaved at random (each
+// search's responses in order), abandoned ones included.
 auto serve_shuffled(net::transport t, std::size_t n, std::uint64_t seed, server_log &log) -> capy::task<void>
 {
 	net::read_buffer buf;
@@ -2266,9 +2231,7 @@ auto checked_search(ldap::connection &c, std::string base) -> capy::task<std::st
 
 }// namespace
 
-// Many concurrent searches, responses interleaved at random, some
-// cancelled while outstanding; 20 rounds (run under ASan in CI). Binds
-// cannot run concurrently with anything (RFC 4511 section 4.2.1).
+// Many concurrent searches with interleaved responses, some cancelled.
 TEST_CASE("connection: stress with many concurrent operations", "[net][connection][mux]")
 {
 	constexpr std::size_t ops = 64;
@@ -2304,17 +2267,13 @@ TEST_CASE("connection: stress with many concurrent operations", "[net][connectio
 		m.check_server();
 		CHECK(m.conn.is_open());
 		CHECK(m.conn.outstanding() == 0);
-		// Every late response for a cancelled operation was dropped; the
-		// connection still works.
+		// Late responses were dropped; the connection still works.
 		CHECK(m.log.received.size() == ops);
 	}
 }
 
-// Deterministic fuzzing of the response path: a valid search answer with
-// bytes flipped, dropped, inserted or cut off. The client must finish every
-// time (the server hangs up at the end), with entries or an error; a
-// transport or protocol error closes the connection, a server result error
-// does not.
+// A valid search answer with bytes flipped, dropped, inserted or cut: the
+// client always finishes, closing on transport or protocol errors only.
 TEST_CASE("connection: mutated server responses", "[net][connection]")
 {
 	std::string wire;
@@ -2735,11 +2694,8 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 	}
 	SECTION("a bind stopped after the first ends, before it resumes, is not sent")
 	{
-		// The first bind's end posts the waiting bind's resumption
-		// (bind_idle.set() claims the waiter); the stop comes before that
-		// resumption runs, so the wait itself is not cancelled. The first
-		// bind runs on the strand and requests the stop as it ends, ahead of
-		// the posted resumption.
+		// The stop comes after bind_idle.set() claimed the waiter, before it
+		// resumes.
 		mock_ldap m;
 		m.serve({ answer({ bind_resp(1) }), answer({ done_msg(2) }) });
 		outcome<ldap::result<void>> first;
@@ -2785,9 +2741,6 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 	}
 }
 
-// RFC 4511 section 4.1.1: a client "MUST NOT send a request with the same
-// messageID as an earlier request in the same LDAP session unless it can be
-// determined that the server is no longer servicing the earlier request".
 TEST_CASE("RFC 4511 4.1.1: ids still in use are skipped after wrapping", "[net][connection][rfc]")
 {
 	auto del_resp = [](std::int32_t id) { return ldap::message{ id, ldap::del_response{ ldap::ldap_result{ 0 } } }; };
@@ -2826,7 +2779,7 @@ TEST_CASE("RFC 4511 4.1.1: ids still in use are skipped after wrapping", "[net][
 		drive_until(m.ioc, [&] { return search.done() && m.log.received.size() == 2; });
 		ldap::detail::set_next_message_id(m.conn, ldap::max_int);
 		CHECK(m.run(m.conn.del({ .entry = x })).has_value());// max_int
-		CHECK(m.run(m.conn.del({ .entry = x })).has_value());// 2: 1 was abandoned (2, the AbandonRequest's, is free)
+		CHECK(m.run(m.conn.del({ .entry = x })).has_value());// 2: 1 was abandoned
 		m.check_server();
 		REQUIRE(m.log.received.size() == 4);
 		CHECK(m.log.received[1] == ldap::message{ 2, ldap::abandon_request{ 1 } });

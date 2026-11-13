@@ -1,8 +1,5 @@
-// StartTLS (RFC 4511 section 4.14) against an in-process server on
-// loopback: it speaks LDAP in clear, answers the StartTLS request, runs the
-// server side of the TLS handshake over the same socket (reference mode,
-// like the client) and then serves LDAP over TLS. Certificates come from the
-// in-memory test PKI (net_test_support.hpp).
+// StartTLS against an in-process server: LDAP in clear, the handshake over
+// the same socket, then LDAP over TLS.
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
@@ -253,10 +250,8 @@ TEST_CASE("start_tls: is_tls() is false once the server drops the connection", "
 	CHECK_FALSE(c.is_tls());
 }
 
-// The TLS layer is in place before the handshake runs: is_tls() waits for
-// start_tls() to succeed. The server answers StartTLS but never handshakes,
-// so the client's handshake runs until its timeout; is_tls() is checked
-// after every step of the io_context meanwhile.
+// The server answers StartTLS but never handshakes; is_tls() is checked
+// after every step.
 TEST_CASE("start_tls: is_tls() is false while the handshake runs", "[net][starttls]")
 {
 	tcp_mock_ldap m;
@@ -289,16 +284,9 @@ auto first_byte(corosio::tcp_socket &peer) -> capy::task<int>
 
 }// namespace
 
-// Once StartTLS is accepted the server expects a handshake, so the session
-// cannot go on in clear (RFC 4511 section 4.14.1). Each frame allocation
-// between the StartTLS response and the handshake's first write (the wait
-// for the reader and writer, net::start_tls's, tls_handshake's, the
-// handshake's and bounded()'s) is failed in turn: start_tls throws
-// bad_alloc, the connection is closed and not is_tls() (the TLS layer was
-// already in place for the last ones), and nothing is sent in clear: the
-// search after it is refused, and the server receives nothing (or the start
-// of the ClientHello, for the handshake's own allocations). Past them, the
-// handshake waits for the server's answer.
+// Each frame allocation between the StartTLS response and the handshake's
+// first write fails in turn: start_tls throws, the connection is closed,
+// nothing is sent in clear.
 TEST_CASE("start_tls: a failed allocation in the handshake's setup closes the connection", "[net][starttls][oom]")
 {
 	const ldap::message accepted{ 1,
@@ -340,8 +328,7 @@ TEST_CASE("start_tls: a failed allocation in the handshake's setup closes the co
 		REQUIRE_FALSE(later.has_value());
 		CHECK(later.error().code == ldap::client_errc::not_sent);
 		CHECK_THAT(std::string(later.error().context), ContainsSubstring(": connection closed by an earlier error: "));
-		// Nothing was sent after the StartTLS response but the start of the
-		// ClientHello, when the allocation failed after its first write.
+		// At most the start of the ClientHello was sent.
 		drive_until(m.ioc, [&sent] { return sent.done(); });
 		CHECK((sent.get() == -1 || sent.get() == 0x16));
 		return true;
@@ -353,9 +340,6 @@ TEST_CASE("start_tls: a failed allocation in the handshake's setup closes the co
 	CHECK(failing > 4);// the wait's frames, net::start_tls's, tls_handshake's, the handshake's, bounded()'s
 }
 
-// The same window, failed by an exception that is not bad_alloc (none is
-// known to escape it today): start_tls rethrows it, the connection is
-// closed, and later operations name the abort.
 TEST_CASE("start_tls: another exception in the handshake's setup closes the connection", "[net][starttls]")
 {
 	const ldap::message accepted{ 1,
@@ -405,11 +389,8 @@ TEST_CASE("start_tls: another exception in the handshake's setup closes the conn
 	CHECK(failing > 4);
 }
 
-// unbind() during the handshake closes the connection (nothing may be sent
-// until the handshake is done): start_tls fails with not_connected, as it
-// does while it waits for its response, not with the error the closed
-// socket gave the handshake. The server answers StartTLS, then reads the
-// first byte of the ClientHello and never handshakes.
+// The server answers StartTLS, reads one byte of the ClientHello and never
+// handshakes.
 TEST_CASE("start_tls: unbind during the handshake closes the connection", "[net][starttls]")
 {
 	outcome<ldap::result<void>> tls;// outlive `m`: what still waits ends with it
@@ -634,10 +615,6 @@ TEST_CASE("start_tls: only on plain TCP connections", "[net][starttls]")
 
 // ---------------------------------------------------------------- RFC conformance
 
-// RFC 4511 section 4.14.1: after the StartTLS request the client "MUST NOT
-// send any LDAP PDUs at this LDAP message layer following this request until
-// it receives a StartTLS extended response and, in the case of a successful
-// response, completes TLS negotiations".
 TEST_CASE("RFC 4511 4.14.1: requests are refused while StartTLS is in progress", "[net][starttls][rfc]")
 {
 	tls_fixture f;
@@ -710,10 +687,6 @@ TEST_CASE("RFC 4511 4.11: a StartTLS that times out is not abandoned", "[net][st
 	CHECK(std::holds_alternative<ldap::extended_request>(got[0].op));
 }
 
-// RFC 4511 section 4.14.1: not even an UnbindRequest may follow the StartTLS
-// request before its response. unbind() then closes the connection, as
-// during a bind (RFC 4511 section 4.2.1), and StartTLS fails: the
-// connection is never left open with its StartTLS given up on.
 TEST_CASE("RFC 4511 4.14.1: unbind while StartTLS waits for its response closes the connection", "[net][starttls][rfc]")
 {
 	tls_fixture f;
@@ -812,9 +785,8 @@ auto directory_reply(const ldap::message &req) -> std::string
 	return out + bytes_of(done_msg(req.id));
 }
 
-// Answers the root DSE and subschema searches, any other search (no
-// entries) and StartTLS, in clear and then over TLS, until the client hangs
-// up. Logs each request's kind_of(), prefixed with "tls " over TLS.
+// Answers the root DSE, subschema and other searches and StartTLS, in
+// clear then over TLS; logs each request ("tls " over TLS).
 auto serve_directory(corosio::tcp_acceptor &acc, corosio::tls_context ctx, std::vector<std::string> &log)
   -> capy::task<std::string>
 {
@@ -860,10 +832,6 @@ auto serve_directory(corosio::tcp_acceptor &acc, corosio::tls_context ctx, std::
 
 }// namespace
 
-// RFC 4513 section 3.1.5: once TLS is established, "the client SHOULD
-// discard or refresh all information about the server that it obtained
-// prior to the initiation of the TLS negotiation and that it did not obtain
-// through secure mechanisms".
 TEST_CASE("RFC 4513 3.1.5: the schema read in clear is read again after StartTLS", "[net][starttls][rfc][schema]")
 {
 	tls_fixture f;

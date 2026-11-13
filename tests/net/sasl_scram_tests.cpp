@@ -1,6 +1,5 @@
-// SCRAM-SHA-256 mechanism (sasl_scram.hpp), driven directly: the RFC 7677
-// test vector, input preparation and every rejection path. The exchange
-// through connection::sasl_bind is in sasl_tests.cpp.
+// SCRAM-SHA-256 driven directly: the RFC 7677 vector, input preparation and
+// the rejections.
 #include "jhetz/ldap/sasl_scram.hpp"
 #include "scram_test_access.hpp"
 
@@ -178,7 +177,7 @@ auto sent_username(std::string username) -> std::string
 }
 
 // The client-final-message for `password` (fixed username, nonce and
-// server-first-message): equal for passwords that SASLprep makes equal.
+// server-first-message).
 auto client_final_for(std::string password) -> std::string
 {
 	auto m = ldap::detail::scram_test_access::with_nonce("user", std::move(password), "", "fixednonce");
@@ -401,11 +400,8 @@ TEST_CASE("scram: the prepared password is held only from start() until the proo
 
 TEST_CASE("scram: a non-ASCII exchange", "[sasl][scram]")
 {
-	// Username "A" U+030A "ngstro" U+0308 "m" (decomposed), password
-	// "p" U+00E4 "ss" U+00A0 "w" U+00F6 "rd" U+2168 U+00AD. Expected values
-	// computed independently with Python: SASLprep from the stringprep
-	// module (Unicode 3.2 tables), PBKDF2 and HMAC from hashlib / hmac over
-	// the prepared UTF-8 bytes ("\xC3\x85ngstr\xC3\xB6m", "p\xC3\xA4ss w\xC3\xB6rdIX").
+	// Decomposed username and a password needing SASLprep; expected values
+	// from Python (stringprep, hashlib, hmac).
 	auto m = ldap::detail::scram_test_access::with_nonce(
 	  "A\xCC\x8Angstro\xCC\x88m", "p\xC3\xA4ss\xC2\xA0w\xC3\xB6rd\xE2\x85\xA8\xC2\xAD", "", "fixednonce");
 	CHECK(response(m.start()) == "n,,n=\xC3\x85ngstr\xC3\xB6m,r=fixednonce");
@@ -509,8 +505,7 @@ TEST_CASE("scram: server-final-message rejections (mutual authentication)", "[sa
 		CHECK(context("a\x01" "b\x7F" "c\xC2\x85" "d\xFF" "e\xC3" "f\xED\xA0\x80" "g")
 			  == prefix + "\"a\xEF\xBF\xBD" "b\xEF\xBF\xBD" "c\xEF\xBF\xBD" "d\xEF\xBF\xBD" "e\xEF\xBF\xBD"
 						  "f\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD" "g\"");
-		// The bidi controls (Bidi_Control: U+061C, U+200E, U+200F,
-		// U+202A-U+202E, U+2066-U+2069) and U+2028/U+2029 become U+FFFD.
+		// Bidi controls and U+2028/U+2029 become U+FFFD.
 		const std::string fffd = "\xEF\xBF\xBD";
 		const std::string_view replaced[] = {
 			"\xD8\x9C",// U+061C ARABIC LETTER MARK
@@ -536,10 +531,7 @@ TEST_CASE("scram: server-final-message rejections (mutual authentication)", "[sa
 		CHECK(context("ok\xE2\x80\xAE"
 					  "deliaf\xE2\x81\xA9!")
 			  == prefix + "\"ok" + fffd + "deliaf" + fffd + "!\"");
-		// Their neighbours and the other format characters are text and are
-		// kept: U+061B, U+200C ZWNJ, U+200D ZWJ in an emoji sequence, U+2027,
-		// U+202F, U+2065, U+206A, the tag characters of a subdivision flag,
-		// and letters, CJK and emoji.
+		// Their neighbours and other format characters are kept.
 		const std::string kept =
 		  "\xD8\x9B"// U+061B
 		  "\xE2\x80\x8C"// U+200C
@@ -635,9 +627,6 @@ TEST_CASE("scram: server-final-message rejections (mutual authentication)", "[sa
 	}
 }
 
-// With no exchange running (state::idle: before start(), or after a failed
-// step), a challenge or the server's success is refused, not taken as the
-// next message of an exchange; start() begins a new one.
 TEST_CASE("scram: step() and complete() with no exchange running", "[sasl][scram]")
 {
 	auto refused_with = [](const ldap::error &e, std::string_view what) {
@@ -913,9 +902,7 @@ TEST_CASE("scram: SCRAM-SHA-256-PLUS with a chosen type and an authorization ide
 
 namespace {
 
-// A self-signed Ed25519 certificate (openssl req -x509 -newkey ed25519
-// -subj /CN=cb), DER in base64. RFC 5929 defines no tls-server-end-point
-// for it; OpenLDAP hashes it with SHA-256.
+// A self-signed Ed25519 certificate, DER in base64.
 constexpr std::string_view ed25519_cert_base64 =
   "MIIBMDCB46ADAgECAhQk0rbaLVxVJgoTihG0BKqTDrm1GTAFBgMrZXAwDTELMAkGA1UEAwwCY2IwIBcNMjYxMDIwMTgzODIwWhgPMjEyNjA5MjYxODM4"
   "MjBaMA0xCzAJBgNVBAMMAmNiMCowBQYDK2VwAyEAwv4L6JzqVY43rKfTvk6Jl40HjJa9+WK9aQ2MNszQOiWjUzBRMB0GA1UdDgQWBBRK6BJVCeKlyh6h"
@@ -947,10 +934,8 @@ auto openldap_mech(std::optional<ldap::channel_binding_type> type = std::nullopt
 
 TEST_CASE("scram: SCRAM-SHA-256-PLUS in OpenLDAP's form", "[sasl][scram]")
 {
-	// "p=ldap,," and c= = base64("p=ldap,," + "tls-server-end-point:" +
-	// SHA-256 of the certificate), as libldap and slapd's sasl-cbinding do.
-	// Values from Python (hashlib, hmac). The connection's own bindings
-	// (made-up bytes, tls-exporter by default) are not used.
+	// "p=ldap,," and c= = base64("p=ldap,," + "tls-server-end-point:" + SHA-256
+	// of the certificate); values from Python.
 	const auto der = ed25519_cert();
 	auto context = tls13_context();
 	context.peer_certificate = der;

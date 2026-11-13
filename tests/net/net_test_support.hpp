@@ -48,20 +48,14 @@ namespace capy = boost::capy;
 namespace corosio = boost::corosio;
 using namespace std::chrono_literals;
 
-// Upper bound for one test's I/O. Only reached when a test is broken (a
-// coroutine waits for something that never comes); passing tests finish in
-// milliseconds, and nothing sleeps.
+// Upper bound for one test's I/O; only reached by a broken test.
 inline constexpr std::chrono::seconds io_limit{ 20 };
 
-// outcome::get() of a task still running: drive_until() returned without
-// it, so either nothing was left to resume it or io_limit passed.
 inline constexpr std::string_view unfinished_task =
   "task did not finish: the io_context ran out of work (nothing left to resume it) or io_limit passed";
 
-// What a task started by spawn() ended with: its result, or its exception.
-// The completion handlers share `state`, so a task that ends after its
-// outcome is gone (a test that failed, or gave up while the task still
-// ran) writes into that state rather than into a destroyed stack frame.
+// What a task started by spawn() ended with, in state shared with its
+// handlers.
 template<class T> struct outcome
 {
 	struct shared
@@ -121,8 +115,6 @@ template<class T> void spawn(corosio::io_context &ioc, capy::task<T> t, outcome<
 	}
 }
 
-// spawn() on `ex` (a connection's strand, say) instead of the io_context's
-// executor.
 template<class Ex, class T> void spawn_on(const Ex &ex, capy::task<T> t, outcome<T> &out)
 {
 	if constexpr (std::is_void_v<T>) {
@@ -163,9 +155,8 @@ inline void drive(corosio::io_context &ioc)
 	ioc.restart();
 }
 
-// Runs `ioc` until `done()` holds or it has no work left, at most io_limit.
-// Unlike drive(), returns as soon as `done()` holds even if other coroutines
-// (a scripted server waiting for the next request) still have work pending.
+// Runs `ioc` until `done()` holds or it has no work left, at most
+// io_limit.
 template<class Pred> void drive_until(corosio::io_context &ioc, Pred done)
 {
 	const auto deadline = std::chrono::steady_clock::now() + io_limit;
@@ -173,10 +164,7 @@ template<class Pred> void drive_until(corosio::io_context &ioc, Pred done)
 	ioc.restart();
 }
 
-// An io_context whose destructor first runs the work that is ready, as the
-// cleanups that destructors and close() post when called off a connection's
-// strand: tests that drive it with drive_until() or finish() and then let
-// their connections and streams go out of scope leave such work behind.
+// An io_context whose destructor first runs the work that is ready.
 class draining_context : public corosio::io_context
 {
   public:
@@ -193,10 +181,7 @@ class draining_context : public corosio::io_context
 	}
 };
 
-// Calls `f` on `strand` (a connection's or a client's executor), as code
-// running there does, and returns once it has: destructors and close()
-// called there take effect at once, where called off it they post their
-// work.
+// Calls `f` on `strand` and returns once it has.
 template<class Strand, class F> void run_on(corosio::io_context &ioc, const Strand &strand, F f)
 {
 	bool done = false;
@@ -236,16 +221,8 @@ template<class T> auto finish(corosio::io_context &ioc, capy::task<T> t) -> T
 	}
 }
 
-// A loopback port nothing listens on, held while this lives: a TCP socket
-// bound to it that never listens, so a connect there is refused (at once
-// on Linux, by the RST; Winsock instead retries the SYN after an RST for
-// about a second before WSAECONNREFUSED, so a test with a shorter timeout
-// may see the timeout there, see docs/DEVELOPMENT.md "Windows"), and no
-// other socket can bind the port meanwhile. A port freed by closing
-// its acceptor is not enough: a test process running in parallel may bind
-// it for a scripted server, which then accepts the connect the test
-// expected refused (and the scripted connection that process's own client
-// expected).
+// A loopback port bound but not listening while this lives: connects are
+// refused (on Windows only after about a second).
 class refused_port
 {
   public:
@@ -259,7 +236,6 @@ class refused_port
 		}
 	}
 	[[nodiscard]] auto port() const -> std::uint16_t { return socket_.local_endpoint().port(); }
-	// "<scheme>://127.0.0.1:<port>".
 	[[nodiscard]] auto url(std::string_view scheme = "ldap") const -> std::string
 	{
 		return std::string(scheme) + "://127.0.0.1:" + std::to_string(port());
@@ -270,14 +246,12 @@ class refused_port
 	corosio::tcp_socket socket_{ ioc_ };
 };
 
-// The io_context's frame allocator in the out-of-memory tests: counts the
-// coroutine frames allocated from it (every run_async's and its task's, and
-// their children's) and can fail one allocation with bad_alloc (or, with
-// `other`, a std::runtime_error: an exception that is not bad_alloc).
+// The frame allocator of the out-of-memory tests: counts frames and can
+// fail one allocation (bad_alloc, or with `other` a runtime_error).
 class failing_frames final : public std::pmr::memory_resource
 {
   public:
-	// The n-th allocation from now fails (1 for the next one; 0: none).
+	// The n-th allocation from now fails (1: the next; 0: none).
 	void fail_at(std::size_t n, bool other = false) noexcept
 	{
 		count_ = 0;
@@ -318,9 +292,7 @@ class failing_frames final : public std::pmr::memory_resource
 	bool other_ = false;
 };
 
-// Corosio resumes coroutines without restoring the thread's current frame
-// allocator, so it can still be a failing_frames once the io_context has
-// run: cleared before that goes, for the frames made after the test.
+// Resets the thread's frame allocator on destruction.
 struct clear_frame_allocator
 {
 	clear_frame_allocator() = default;
@@ -329,10 +301,8 @@ struct clear_frame_allocator
 	~clear_frame_allocator() { capy::set_current_frame_allocator(nullptr); }
 };
 
-// Tests that rely on Linux loopback behaviour: all of 127/8 is routed to lo
-// (127.0.0.2 works without configuration), and a listener with a full
-// backlog drops SYNs instead of refusing them, so a connect stays pending.
-// Other systems refuse such a connect or lack the address.
+// Skips unless Linux loopback: all of 127/8 routed, a full backlog drops
+// SYNs.
 inline void skip_unless_linux_loopback()
 {
 #ifndef __linux__
@@ -408,9 +378,8 @@ class test_pki
 		return from_bio(bio);
 	}
 
-	// A leaf certificate for `subject_alt_names` ("DNS:localhost,IP:127.0.0.1"),
-	// with the extended key usage `extended_key_usage`; its key is an RSA
-	// key of `rsa_bits` bits, or EC P-256 with 0.
+	// A leaf certificate for `subject_alt_names`; RSA of `rsa_bits`, or EC
+	// P-256 with 0.
 	auto issue(const char *cn,
 	  const std::string &subject_alt_names,
 	  const std::string &extended_key_usage = "serverAuth,clientAuth",
@@ -432,7 +401,7 @@ class test_pki
 		return { .cert_pem = to_pem(cert.get()), .key_pem = key_to_pem(key.get()) };
 	}
 
-	// A leaf's subject CNs (in order) and validity, in seconds from now.
+	// A leaf's subject CNs and validity, in seconds from now.
 	struct leaf_spec
 	{
 		std::vector<std::string> cns{};
@@ -484,7 +453,6 @@ class test_pki
 
 	auto next_serial() noexcept -> long { return ++serial_; }
 
-	// notBefore and notAfter, in seconds from now.
 	struct validity
 	{
 		long not_before = -3600;
@@ -614,10 +582,8 @@ inline auto certificate_der(const std::string &pem) -> std::vector<std::byte>
 
 // ---------------------------------------------------------------- files
 
-// A path in the temp directory, unique to this process and call, removed
-// when the object goes away. Short enough for sockaddr_un. The suffix is
-// UTF-8 and the path is built from it as such, not through the ANSI code
-// page on Windows.
+// A temp path unique to this process and call, removed on destruction;
+// short enough for sockaddr_un.
 class temp_path
 {
   public:

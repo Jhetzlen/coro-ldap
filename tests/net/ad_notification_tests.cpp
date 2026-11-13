@@ -1,6 +1,4 @@
-// ad::notification_search over a search_stream against the scripted mock
-// server: the request AD expects, changes long after the operation
-// timeout, and the AbandonRequest that ends it.
+// ad::notification_search against the scripted mock server.
 #include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "mock_ldap.hpp"

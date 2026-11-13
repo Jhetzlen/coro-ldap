@@ -1,6 +1,4 @@
-// change_password / reset_password (RFC 3062 password modify) against the
-// scripted mock server: the requests sent, the bound user's own change, and
-// the refusals before sending.
+// change_password / reset_password (RFC 3062) against the scripted server.
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
 #include "mock_ldap.hpp"

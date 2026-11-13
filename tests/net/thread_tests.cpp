@@ -1,7 +1,5 @@
-// A connection, a client and a repository used from several threads at once:
-// one io_context run by a thread pool, many operations in flight, against
-// an in-process server that answers every request. Meant for TSan too
-// (docs/DEVELOPMENT.md "ThreadSanitizer").
+// A connection, a client and a repository used from a thread pool at once
+// against an in-process server (also for TSan).
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
@@ -61,10 +59,8 @@ constexpr const char *hang_base = "ou=hang,dc=example,dc=org";
 
 const ldap::dn people_base{ "ou=people,dc=example,dc=org" };
 
-// Answers every request at once by its type: a search with two entries
-// (under hang_base: nothing, until abandoned), the schema searches a repository
-// makes, success for the updates, binds and extended operations, compareTrue.
-// Its coroutines run on a strand of their own.
+// Answers every request at once by its type; a search under hang_base is
+// never answered. Runs on a strand of its own.
 class answering_server
 {
   public:
@@ -455,9 +451,7 @@ TEST_CASE("threads: one connection used from several threads", "[net][threads]")
 		seconds.wait();
 		CHECK(t.in_progress == 2);
 
-		// The connection destroyed while operations of other threads are
-		// outstanding: they fail with not_connected (cond::connection_lost),
-		// the first next()s too.
+		// The connection destroyed with operations of other threads outstanding.
 		constexpr std::size_t hung = 8;
 		std::latch ended(hung);
 		for (std::size_t i = 0; i < hung; ++i) {
@@ -502,9 +496,7 @@ TEST_CASE("threads: copies of one connection used and released on several thread
 		CHECK(t.ok == workers * rounds * 10);
 		CHECK(c->is_open());
 
-		// Operations outstanding while the handles are released at once on
-		// the pool threads: only the last one closes the connection, and the
-		// operations fail with not_connected.
+		// Handles released at once on the pool threads: only the last closes.
 		constexpr std::size_t hung = 4;
 		std::latch ended(hung);
 		for (std::size_t i = 0; i < hung; ++i) {
