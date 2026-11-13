@@ -1390,7 +1390,18 @@ itself needs only ICU.
   full `connection` on an idle or new connection nobody else uses while it
   is held (for binds, `start_tls()`, `unbind()`). Breaking:
   `acquire_options` is gone. A lease returns the connection when destroyed
-  or `release()`d. The free `chase_search`, `chase_compare`,
+  or `release()`d. `max_connections` must be at least 1: 0 makes every
+  `acquire()` and `acquire_exclusive()` fail with
+  `std::errc::invalid_argument`. `acquire()` waits at most
+  `acquire_timeout` and fails with the last server's error (its context
+  names the server: `acquire ldap://ldap1.example.org: ...`), the stored
+  error of a server backing off after an authentication failure,
+  `capy::error::timeout` when no connection was ready in time and no
+  server failed, `capy::error::canceled` when the task's stop token is
+  set, and `client_errc::not_connected` once `close()` was called or on a
+  moved-from client; `acquire_exclusive()` fails the same way. The task
+  does not refer to the client, which may be moved or destroyed while it
+  runs (destroying it fails the task with `not_connected`). The free `chase_search`, `chase_compare`,
   `make_same_policy_connector` and `ad::change_password` /
   `reset_password` take a `connection &` (a lease's too). `servers` (checked with `url::check_server()` when the
   client is built: an empty list or a refused entry fails every
