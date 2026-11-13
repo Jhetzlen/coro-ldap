@@ -1,6 +1,4 @@
-// Deterministic driver for schema_fuzz (see schema_fuzz.cpp), so its
-// properties run under ctest with any compiler, without libFuzzer.
-// Seeds: OpenLDAP and Active Directory definitions as servers send them.
+// Deterministic driver for schema_fuzz under ctest.
 #include "replay.hpp"
 
 #include <array>

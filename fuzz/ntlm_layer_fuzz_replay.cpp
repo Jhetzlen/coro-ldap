@@ -1,11 +1,4 @@
-// Deterministic driver for ntlm_layer_fuzz (see ntlm_layer_fuzz.cpp), so its
-// properties run under ctest with any compiler, without libFuzzer.
-// Seeds: the server's first protected buffers, integrity and
-// confidentiality, of a short message and of an LDAP whoami response (valid
-// for the target's unwrap()), and messages to wrap: empty, one octet, and a
-// 16-octet one shaped like a signature. The confidentiality whoami seed must
-// equal the golden security layer test's server0 (the same keys), which the
-// replay checks rather than adding it as a duplicate seed.
+// Deterministic driver for ntlm_layer_fuzz under ctest.
 #include "jhetz/ldap/sasl_ntlm.hpp"
 
 #include "ntlm_layer.hpp"

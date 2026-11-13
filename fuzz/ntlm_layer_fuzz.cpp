@@ -1,23 +1,5 @@
-// libFuzzer target for the NTLM security layer (detail::ntlm_security_layer,
-// sasl_ntlm.hpp; also driven by ntlm_layer_fuzz_replay), which needs
-// OpenSSL's HMAC-MD5 and so links jhetz::ldap_net. Every layer is keyed with
-// the keys of fuzz::ntlm_layer_session_key (ntlm_layer.hpp); the server's
-// side is a layer with the client and server keys swapped.
-//
-// For any input it must not crash, and, for integrity and for
-// confidentiality:
-// - the client's unwrap() of the input as a protected buffer fails only
-//   with decode_error or unexpected_response, and then leaves `out` as it
-//   was; when it succeeds, the input is genuinely the server's first
-//   buffer: a fresh server layer wraps the plaintext appended to `out` back
-//   into the input, and `out`'s earlier contents are kept;
-// - the input as a message, wrapped by the client and unwrapped by the
-//   server, then wrapped by the server and unwrapped by the client, comes
-//   back unchanged, twice in a row (sequence numbers 0 and 1), each
-//   wrap() and unwrap() appending to what `out` holds;
-// - a buffer of a fresh client with one bit flipped (the position and bit
-//   from the input) is refused by the server with decode_error or
-//   unexpected_response, `out` unchanged.
+// libFuzzer target for the NTLM security layer: unwrap of the input, wrap
+// and unwrap round trips both ways, and a flipped bit refused.
 #include "jhetz/ldap/sasl_ntlm.hpp"
 
 #include "check.hpp"

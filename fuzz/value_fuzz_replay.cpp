@@ -1,8 +1,4 @@
-// Deterministic driver for value_fuzz (see value_fuzz.cpp), so its
-// properties run under ctest with any compiler, without libFuzzer.
-// Seeds: GeneralizedTime in every form (RFC 4517 section 3.3.13), integers,
-// booleans, DNs, the AD FILETIME limits, binary and text SIDs and GUIDs and
-// userAccountControl limits.
+// Deterministic driver for value_fuzz under ctest.
 #include "replay.hpp"
 
 #include <array>

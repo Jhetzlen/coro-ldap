@@ -1,22 +1,5 @@
-// libFuzzer target for search filters (also driven by filter_fuzz_replay).
-//
-// For any input it must not crash, and:
-// - as filter text: if filter::raw parses it, its BER decodes to an equal
-//   tree that encodes to the same BER, and its canonical text (to_string)
-//   parses to an equal tree again and is a fixed point; if it does not
-//   parse, the error is invalid_filter;
-// - as a value: every builder accepts it and its tree holds it unescaped;
-//   `attr("cn") == v` encodes to an equality whose value is exactly v; the
-//   text of every builder filter parses back to the same tree (so the
-//   escaping is right), and is "(cn=" + escape_filter_value(v) + ")";
-//   unescape_filter_value reverses escape_filter_value; builder trees
-//   round-trip through BER;
-// - as an escaped value without '*': unescape_filter_value accepts it
-//   exactly when filter::raw accepts "(cn=" + it + ")", with the same value;
-// - as BER: if a filter decodes, it re-encodes to BER that decodes to an
-//   equal tree, and its text parses to an equal tree;
-// - a parsed filter keeps its meaning when combined: (!f) holds exactly f's
-//   BER and prints as "(!" + text + ")".
+// libFuzzer target for search filters: the input as filter text, as a
+// value for the builders and escaping, and as BER; every form round-trips.
 #include "jhetz/ldap/filter.hpp"
 
 #include "check.hpp"

@@ -1,23 +1,5 @@
-// libFuzzer target for the MS-NLMP message parsers (ntlm_message.hpp; also
-// driven by ntlm_fuzz_replay): the CHALLENGE_MESSAGE a server sends, and the
-// AUTHENTICATE_MESSAGE of a test server.
-//
-// For any input it must not crash, and:
-// - rejected input fails with decode_error and a context naming the
-//   message ("CHALLENGE_MESSAGE: ", "AUTHENTICATE_MESSAGE: ");
-// - an accepted CHALLENGE_MESSAGE re-encodes to one that parses equal;
-// - the client's TargetInfo built from its AV_PAIRs (MsvAvFlags with the
-//   MIC bit, MsvAvChannelBindings) parses back as that list, with
-//   MsvAvFlags and MsvAvChannelBindings once each and the MIC bit set;
-// - an accepted AUTHENTICATE_MESSAGE re-encodes to one that parses equal;
-// - a protected buffer of the NTLM security layer (its signature, then the
-//   message) is refused only with decode_error ("NTLM protected buffer:
-//   "); an accepted one's signature re-encodes to its first 16 octets and
-//   the message is the rest;
-// - RC4 keyed with the input's first octets, applied twice from a fresh
-//   state, gives the input back. (The checksum and sequence number checks
-//   need OpenSSL's HMAC-MD5, in jhetz::ldap_net: ntlm_layer_fuzz covers
-//   them.)
+// libFuzzer target for the MS-NLMP parsers, the client's TargetInfo, the
+// protected buffer split and RC4.
 #include "jhetz/ldap/ntlm_message.hpp"
 
 #include "check.hpp"

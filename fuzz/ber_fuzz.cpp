@@ -1,13 +1,5 @@
-// libFuzzer target for the BER codec (also driven by ber_fuzz_replay).
-//
-// For any input it must not crash, and these properties must hold:
-// - framer and reader agree on the size of the first element;
-// - every element can be walked (constructed elements via `enter`, which is
-//   depth bounded), and the reader never consumes more than it has;
-// - OCTET STRING contents are also walked as encapsulated BER;
-// - decoded INTEGER / ENUMERATED / BOOLEAN / OCTET STRING / NULL values
-//   re-encode to something that decodes to the same value, and to the same
-//   content octets when the input was already minimal.
+// libFuzzer target for the BER codec: framer and reader agree, every
+// element walks, and decoded values re-encode.
 #include "jhetz/ldap/ber.hpp"
 
 #include "check.hpp"
@@ -213,7 +205,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 	} else if (framed) {
 		check(!e.has_value(), "!e.has_value()");// needs more bytes: reader must fail too
 	} else if (e) {
-		// Framer refused a readable element: only because it is too large.
+		// The framer refuses a readable element only when it is too large.
 		check(framed.error().code == client_errc::message_too_large,
 		  "framed.error().code == client_errc::message_too_large");
 		check(e->size() > max_size, "e->size() > max_size");

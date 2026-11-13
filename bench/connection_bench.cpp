@@ -1,17 +1,6 @@
-// Connection round-trip benchmark: CompareRequests over a Unix socket pair
-// to an in-process server that answers each at once, on an io_context run
-// by one thread. Measures the cost per operation of the connection's
-// machinery (submit, writer, reader, routing, the executor hops):
-//   1. sequential, awaited from a task of the io_context's executor;
-//   2. sequential, awaited from a task of connection::executor();
-//   3. `window` tasks of the io_context's executor at once, each running
-//      its share of the operations one after another.
-// Reports the best and median time per operation of several runs.
-//
+// Connection round-trip benchmark: CompareRequests to an in-process server
+// over a Unix socket pair, sequential and windowed.
 //   jhetz_ldap_connection_bench [operations=20000] [window=64] [runs=9]
-//
-// Built with -DJHETZ_LDAP_BUILD_BENCH=ON and JHETZ_LDAP_BUILD_NET (not part
-// of ctest); use an optimized build without sanitizers.
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/net/transport.hpp"

@@ -1,6 +1,4 @@
-// Deterministic driver for url_fuzz (see url_fuzz.cpp), so its properties run
-// under ctest with any compiler, without libFuzzer.
-// Seeds: RFC 4516 section 4 examples, IPv6 and ldapi forms, every part.
+// Deterministic driver for url_fuzz under ctest.
 #include "replay.hpp"
 
 #include <array>
@@ -28,7 +26,7 @@ auto main(int argc, char **argv) -> int
 	  "ldaps://127.0.0.1:636/cn=J%C3%BCrgen,dc=x",
 	  "ldap://h/????x,y=a%2Cb",
 	  "ldap://",
-	  "ldap://[fe80::1%25a%3Ab]",// zone with an encoded ':' (review finding)
+	  "ldap://[fe80::1%25a%3Ab]",// zone with an encoded ':'
 	});
 	fuzz::replay_config cfg{ .name = "url_fuzz_replay",
 		.extension = ".txt",

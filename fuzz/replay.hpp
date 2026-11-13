@@ -119,9 +119,8 @@ struct replay_config
 	std::uint64_t rng_seed = 1;
 };
 
-// `<name> --write-seeds DIR` writes the seeds and exits; without arguments,
-// runs every seed, every prefix of every seed, mutations of seeds and random
-// inputs built mostly from `interesting` bytes.
+// `<name> --write-seeds DIR` writes the seeds and exits; otherwise runs the
+// seeds, their prefixes and mutations, and random inputs.
 inline auto replay_main(int argc, char **argv, const replay_config &cfg) -> int
 {
 	if (argc == 3 && std::string_view(argv[1]) == "--write-seeds") {

@@ -1,29 +1,6 @@
-// libFuzzer target for LDAP string preparation (RFC 4518) and the matching
-// rules (matching.hpp), which read untrusted attribute values (also driven
-// by matching_fuzz_replay). The input is split in two values at an offset
-// given by its first byte.
-//
-// For any input it must not crash, and:
-// - prepare_string fails only with string_prep_failed (never ICU's
-//   internal_error), and a prepared value prepares to itself (idempotent;
-//   one SPACE more at most, for a value starting with a combining mark);
-// - a value matches itself under caseIgnoreMatch and caseExactMatch exactly
-//   when it prepares and is not empty (Directory String is 1*UTF8), and is
-//   Undefined otherwise;
-// - the equality rules are symmetric, caseExactMatch TRUE implies
-//   caseIgnoreMatch TRUE, and Undefined comes from either value failing;
-// - an ordering rule is never TRUE both ways, nor TRUE for equal values;
-// - substrings: a value contains its own prefix, suffix and the whole value;
-// - a DN that parses never fails to match itself (TRUE or Undefined), also
-//   with distinguishedNameMatch for every type (AVA values nested as DNs);
-// - distinguishedNameMatch is symmetric, also with a lookup that gives the
-//   names of one type different rules.
-// - objectIdentifierMatch, uniqueMemberMatch, generalizedTimeMatch,
-//   uuidMatch, bitStringMatch and caseIgnoreListMatch are symmetric; their
-//   ordering rules are never TRUE both ways nor TRUE for a value against
-//   itself or for equal instants; a value never fails to match itself
-//   (TRUE or Undefined), and objectIdentifierMatch is TRUE on a value
-//   against itself exactly when it is of the OID syntax.
+// libFuzzer target for LDAPprep and the matching rules; the first byte
+// splits the input into two values. Checks idempotence, symmetry and
+// self-matching.
 #include "jhetz/ldap/matching.hpp"
 
 #include "check.hpp"
@@ -70,9 +47,7 @@ auto prepares(std::string_view s, bool fold) -> bool
 		  "p.error().code == ldap::client_errc::string_prep_failed");
 		return false;
 	}
-	// Idempotent, except that a value starting with a combining mark gets
-	// one more SPACE (the SPACE added before the mark is not a space the
-	// second time, RFC 4518 section 2.6.1); then it is a fixed point.
+	// Idempotent, but for one more SPACE before a leading combining mark.
 	auto again = ldap::prepare_string(*p, o);
 	check(again.has_value(), "again.has_value()");
 	if (*again != *p) {

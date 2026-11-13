@@ -1,6 +1,5 @@
-// Shared by ntlm_layer_fuzz and ntlm_layer_fuzz_replay: the keys of every
-// NTLM security layer they build, so the replay's seeds are valid buffers
-// for the target.
+// The keys of every NTLM security layer the layer fuzzer and its replay
+// build.
 #pragma once
 
 #include "jhetz/ldap/error.hpp"

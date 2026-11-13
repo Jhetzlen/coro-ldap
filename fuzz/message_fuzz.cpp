@@ -1,36 +1,6 @@
-// libFuzzer target for the LDAPMessage codec (also driven by
-// message_fuzz_replay).
-//
-// For any input it must not crash, and if the input decodes as a message:
-// - it encodes (the decoder only accepts what the encoder can write);
-// - the encoding decodes to an equal message (exactly: filters are trees, so
-//   nothing is canonicalized) and re-encodes to the same bytes;
-// - decoding into a std::pmr::monotonic_buffer_resource gives an equal
-//   message without touching the default resource (a null resource is
-//   installed as the default meanwhile); a copy made before the arena is
-//   released stays valid after it (ASan reports any access to released
-//   arena memory);
-// - the framer measures the encoding as exactly one complete message;
-// - peek_message_header never crashes, and agrees with decode (id) and with
-//   the re-encoding (id, operation tag) whenever the input decodes;
-// - a paged results, sort result, pre-/post-read, matched values, VLV
-//   request or response, RFC 5805 transaction specification, or RFC 4533
-//   sync request, state or done control that decodes re-encodes to an equal
-//   value (the entry of a read control allocated from the message's
-//   resource), as does an Active Directory DirSync request or response
-//   control, and so do an RFC 4533 Sync Info Message, an RFC 5805
-//   txnEndReq (End Transaction request value) and txnEndRes (any extended
-//   response value);
-// - an attribute description of a search entry with an Active Directory
-//   range option splits (ad::parse_range) into a type and a range that
-//   ad::with_range() writes back to the same split;
-// - search entries convert to ldap::entry, results to ldap::error, whose
-//   message() is well-formed UTF-8 without C0 controls or DEL;
-// - decode_options::from accepts exactly the responses (origin::server) or the
-//   requests (origin::client), failing otherwise with unsupported_operation.
-// Also, with the input as (possibly non-canonical) filter text: if it
-// parses, the search request m carrying it encodes, decode(encode(m)) == m
-// and encode(decode(encode(m))) == encode(m).
+// libFuzzer target for the LDAPMessage codec and the controls: what
+// decodes encodes and round-trips exactly, also into an arena, and the
+// framer, header peek and origin checks agree.
 #include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/ad/range.hpp"
 #include "jhetz/ldap/content_sync.hpp"
@@ -355,9 +325,7 @@ class scoped_null_default
 	std::pmr::memory_resource *old_;
 };
 
-// Decodes into an arena whose memory all comes from the heap in chunks (no
-// initial buffer), so releasing it frees everything and ASan catches any
-// later access to it.
+// Decodes into a heap-chunked arena, so ASan catches access after release.
 void check_arena(std::span<const std::byte> input, const ldap::message &expected)
 {
 	std::pmr::monotonic_buffer_resource arena(std::pmr::new_delete_resource());

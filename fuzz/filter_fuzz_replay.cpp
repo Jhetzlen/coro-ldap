@@ -1,6 +1,4 @@
-// Deterministic driver for filter_fuzz (see filter_fuzz.cpp), so its
-// properties run under ctest with any compiler, without libFuzzer.
-// Seeds: filter texts covering every production, and the BER of a few.
+// Deterministic driver for filter_fuzz under ctest.
 #include "jhetz/ldap/filter.hpp"
 #include "replay.hpp"
 

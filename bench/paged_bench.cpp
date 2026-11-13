@@ -1,14 +1,6 @@
-// Paged search benchmark: ldap::search_paged over a Unix socket pair to an
-// in-process server that answers each page at once (Simple Paged Results,
-// RFC 2696, the cookie being the offset of the next page), on an io_context
-// run by one thread. Measures the cost per page and per entry of the paged
-// search's machinery for several page sizes. Reports the best and median of
-// several runs.
-//
+// Paged search benchmark: ldap::search_paged against an in-process server,
+// for several page sizes.
 //   jhetz_ldap_paged_bench [entries=20000] [runs=9]
-//
-// Built with -DJHETZ_LDAP_BUILD_BENCH=ON and JHETZ_LDAP_BUILD_NET (not part
-// of ctest); use an optimized build without sanitizers.
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
@@ -57,8 +49,7 @@ auto offset_of(std::string_view cookie) -> std::size_t
 	return n;
 }
 
-// Answers every paged SearchRequest with its page of `total` entries and
-// the cookie of the next page, until the client hangs up.
+// Answers every paged SearchRequest with its page and the next cookie.
 auto serve(net::transport t, std::size_t total) -> capy::task<void>
 {
 	net::read_buffer buf;

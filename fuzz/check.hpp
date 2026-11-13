@@ -1,7 +1,4 @@
-// Property check for the fuzz targets: aborts (a libFuzzer crash, a failed
-// replay test) with the failed condition. Each target defines its checker,
-// `constexpr fuzz::checker check{ "x_fuzz" };`, and calls
-// `check(cond, "cond")`.
+// Property check for the fuzz targets: aborts with the failed condition.
 #pragma once
 
 #include <cstdio>

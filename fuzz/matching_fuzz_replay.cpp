@@ -1,8 +1,4 @@
-// Deterministic driver for matching_fuzz (see matching_fuzz.cpp), so its
-// properties run under ctest with any compiler, without libFuzzer.
-// Seeds: the first byte splits the rest into two values; RFC 4518 examples,
-// case folding beyond ASCII, NFKC pairs, prohibited code points, ill-formed
-// UTF-8, DNs (names and OIDs, #hex values, nested DNs).
+// Deterministic driver for matching_fuzz under ctest.
 #include "replay.hpp"
 
 #include <array>

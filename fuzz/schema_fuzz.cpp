@@ -1,31 +1,6 @@
-// libFuzzer target for the RFC 4512 subschema parser (schema.hpp), which
-// reads server text (also driven by schema_fuzz_replay).
-//
-// For any input it must not crash, and:
-// - a rejected definition fails with decode_error;
-// - an accepted one is well-formed UTF-8 (RFC 4512 qdstrings), has a
-//   non-empty OID, and a SYNTAX that is a numeric OID (the input's noidlen
-//   without its "{" 1*DIGIT "}", the only length accepted; a length apart
-//   from the OID fails as a keyword);
-// - the object class grammar is the same, but SYNTAX is not checked and
-//   SUP, MUST and MAY also take an unparenthesised "a$b" list: what parses
-//   as an attribute type parses as an object class, and what parses only
-//   as an object class failed SYNTAX or has a "$"; an accepted object
-//   class's SUP, MUST and MAY entries are oids;
-// - a DIT content rule reads the object class grammar, AUX and NOT taking
-//   lists too: what parses as an object class parses as a rule, and an
-//   accepted rule's AUX, MUST, MAY and NOT entries are oids;
-// - server_schema::parse of the input (as both an attribute type and an
-//   object class) finds what parsed by OID and every NAME, and counts
-//   what did not as skipped; syntax_of terminates, and so does the MUST
-//   check of validate<T> (a SUP naming the class itself is a cycle) with
-//   the class declared and a member for each of its names, whose issues
-//   are warnings named by the MUST or SUP entries;
-// - split at its newlines, as several definitions (a schema with SUP
-//   chains, cycles and shared MUSTs), the MUST check with every class
-//   declared terminates (the lines also read as DIT content rules), and
-//   its issues are warnings named by a MUST or SUP entry of a class that
-//   parsed, or by a member.
+// libFuzzer target for the RFC 4512 subschema parser: the attribute type,
+// object class and content rule grammars agree, and server_schema lookups
+// and validate<T>'s MUST check terminate.
 #include "jhetz/ldap/schema.hpp"
 
 #include "check.hpp"
@@ -100,9 +75,8 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 		  "!a->syntax || ldap::detail::is_numericoid(*a->syntax)");
 	}
 	auto c = ldap::parse_object_class(text);
-	// Same grammar; only an attribute type's SYNTAX is checked, and only an
-	// object class's SUP, MUST and MAY take an unparenthesised list ("a$b"),
-	// whose "$" the attribute type finds where a keyword should be.
+	// Only an attribute type's SYNTAX is checked, and only an object class
+	// takes an unparenthesised list.
 	const bool unparenthesised_list = !a && text.contains('$') && a.error().context == "schema: expected a keyword";
 	check(!a ? !c || a.error().context == "schema: SYNTAX is not a numeric OID" || unparenthesised_list : c.has_value(),
 	  "!a ? !c || a.error().context == \"schema: SYNTAX is not a numeric OID\" || unparenthesised_list : "
@@ -143,9 +117,8 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 		}
 	}
 	if (c) {
-		// The MUST check, the class declared, a required member per NAME
-		// (an attribute of the same name, if one parsed) and an optional one
-		// for the OID.
+		// The class declared, a required member per NAME and an optional one for
+		// the OID.
 		const std::array<const char *, 1> classes{ c->oid.c_str() };
 		std::vector<ldap::detail::field_use> fields;
 		for (const auto &n : c->names) {

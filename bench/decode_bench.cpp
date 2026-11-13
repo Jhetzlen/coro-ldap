@@ -1,17 +1,7 @@
-// Decode benchmark (DESIGN.md section 8): a stream of large SearchResultEntry
-// messages decoded
-//   1. with the default resource (the heap), as decode() does by default;
-//   2. into one std::pmr::monotonic_buffer_resource with an initial buffer,
-//      release()d after each message (what a connection would do per response);
-//   3. the same without an initial buffer (release() then returns the chunks
-//      to the heap, so each message allocates them again).
-// Reports the best wall time of several runs over the whole stream and the
-// number of allocations that reach the heap (operator new).
-//
+// Decode benchmark: large SearchResultEntry messages decoded with the
+// default resource, and into a monotonic arena with and without an initial
+// buffer.
 //   jhetz_ldap_decode_bench [entries=1000] [attributes=30] [values=3] [runs=15]
-//
-// Built with -DJHETZ_LDAP_BUILD_BENCH=ON (off by default, not part of ctest);
-// use an optimized build without sanitizers for meaningful numbers.
 #include "jhetz/ldap/message.hpp"
 
 #include <algorithm>
@@ -60,7 +50,6 @@ struct stream
 	std::size_t values = 0;
 };
 
-// What make_stream generates (three counts, named at the call site).
 struct stream_shape
 {
 	std::size_t entries = 0;
@@ -68,9 +57,8 @@ struct stream_shape
 	std::size_t values = 0;
 };
 
-// `entries` entries of `attributes` attributes with `values` values each
-// (10 to 60 bytes, like names, mail addresses, descriptions); every 20th entry
-// also carries a 64 KiB jpegPhoto and a 4 KiB userCertificate.
+// `entries` entries of `attributes` attributes with `values` values each;
+// every 20th entry also has a jpegPhoto and a userCertificate.
 auto make_stream(const stream_shape &shape) -> stream
 {
 	const auto [entries, attributes, values] = shape;
@@ -126,15 +114,14 @@ struct outcome
 {
 	double best_ms = 0;
 	double median_ms = 0;
-	std::size_t allocations = 0;// heap allocations over one pass of the stream
+	std::size_t allocations = 0;// heap allocations over one pass
 	std::size_t allocated_bytes = 0;
 	std::size_t checksum = 0;
 };
 
 enum class mode { heap, arena_with_buffer, arena_without_buffer };
 
-// One pass over the stream. The arena lives across messages and is released
-// after each, as a connection would do per response.
+// One pass over the stream, the arena released after each message.
 auto pass(const stream &s, mode how, std::vector<std::byte> &buffer) -> std::size_t
 {
 	std::size_t sum = 0;

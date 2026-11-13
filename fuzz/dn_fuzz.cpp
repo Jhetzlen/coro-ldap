@@ -1,16 +1,5 @@
-// libFuzzer target for RFC 4514 DN parsing (also driven by dn_fuzz_replay).
-//
-// For any input it must not crash, and:
-// - the constexpr literal validator agrees with parse();
-// - a parsed DN prints as text that parses to an equal DN and prints the
-//   same again; parent() walks up in rdns().size() steps;
-// - rdn::parse() accepts exactly the one-RDN DNs, and each RDN of a DN prints
-//   as text that parses back to it;
-// - child() rebuilds the DN from its parts: parent().child(first RDN), and
-//   the empty DN's child(dn);
-// - rejected input fails with invalid_dn;
-// - as a value: "cn=" + escape_dn_value(v) parses to one AVA holding v, and
-//   is how to_string() prints it.
+// libFuzzer target for RFC 4514 DN parsing: the literal validator agrees
+// with parse(), and DNs, RDNs and escaped values round-trip.
 #include "jhetz/ldap/dn.hpp"
 
 #include "check.hpp"

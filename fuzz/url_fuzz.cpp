@@ -1,15 +1,5 @@
-// libFuzzer target for RFC 4516 URL parsing (also driven by url_fuzz_replay).
-//
-// For any input it must not crash, and:
-// - rejected input fails with invalid_url and a "url: " context;
-// - an accepted URL prints as text that parses to an equal URL and prints
-//   the same again (to_string is canonical);
-// - the printed text contains no byte outside RFC 3986 (no space, control,
-//   non-ASCII, '#', '"', '\\', ...): it is always fully encoded;
-// - authority() is a prefix of what follows "://" when the port is explicit;
-// - referral_target refuses exactly the URLs with a critical extension, and
-//   for a continuation reference those without a DN too; otherwise the
-//   search's base is the URL's DN when it has one.
+// libFuzzer target for RFC 4516 URL parsing: URLs round-trip canonically,
+// printed fully encoded, and referral_target agrees.
 #include "jhetz/ldap/referral.hpp"
 #include "jhetz/ldap/url.hpp"
 

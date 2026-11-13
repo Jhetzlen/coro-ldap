@@ -1,8 +1,4 @@
-// Deterministic driver for ntlm_fuzz (see ntlm_fuzz.cpp), so its properties
-// run under ctest with any compiler, without libFuzzer.
-// Seeds: the CHALLENGE_MESSAGE of MS-NLMP section 4.2.4.3, a domain
-// controller's with MsvAvFlags and MsvAvTimestamp, and an
-// AUTHENTICATE_MESSAGE, and MS-NLMP section 4.2.4.4's protected buffer.
+// Deterministic driver for ntlm_fuzz under ctest.
 #include "jhetz/ldap/ntlm_message.hpp"
 
 #include "replay.hpp"

@@ -1,21 +1,5 @@
-// libFuzzer target for the value conversions of the typed mapping
-// (mapping.hpp), which read untrusted attribute values (also driven by
-// value_fuzz_replay).
-//
-// For any input it must not crash, and for each decoder (GeneralizedTime,
-// integers, bool, dn, AD FILETIME dates and intervals, AD SIDs, GUIDs and
-// userAccountControl):
-// - rejected input fails with conversion_failed;
-// - accepted input encodes to text that decodes to the same value, and
-//   GeneralizedTime re-encodes to the same text (encoding is canonical).
-// AD FILETIME dates decode to the plain tick count (0 is tick 0, only the
-// maximum is ad::never), accept what int64 accepts from -1 up and encode
-// the same text; every decoded date other than ad::never clock_casts to
-// system_clock and back unchanged (UBSan catches an overflow).
-// AD SIDs and GUIDs: accepted binary re-encodes to the same octets, the
-// string forms (sid::parse, guid::parse) refuse with conversion_failed and
-// parse what to_string() writes back to the same value. userAccountControl
-// accepts what int64 accepts within -2^31 to 2^32 - 1.
+// libFuzzer target for the typed mapping's value conversions: rejected
+// input is conversion_failed, accepted input round-trips.
 #include "jhetz/ldap/ad/filetime.hpp"
 #include "jhetz/ldap/ad/guid.hpp"
 #include "jhetz/ldap/ad/sid.hpp"
@@ -46,9 +30,7 @@ template<class T> void round_trip(std::string_view text)
 		  "v.error().code == ldap::client_errc::conversion_failed");
 		return;
 	}
-	// What decodes encodes: strings check the same UTF-8 both ways and the
-	// other types are canonical. Not sys_seconds: a decoded offset can push
-	// the year out of 0000-9999 (checked in LLVMFuzzerTestOneInput).
+	// What decodes encodes, except sys_seconds.
 	const auto encoded = ldap::detail::encode_value(*v);
 	check(encoded.has_value(), "encoded.has_value()");
 	auto again = ldap::value_traits<T>::decode(*encoded);

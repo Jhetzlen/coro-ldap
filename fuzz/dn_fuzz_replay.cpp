@@ -1,6 +1,4 @@
-// Deterministic driver for dn_fuzz (see dn_fuzz.cpp), so its properties run
-// under ctest with any compiler, without libFuzzer.
-// Seeds: the RFC 4514 section 4 examples and escaping edge cases.
+// Deterministic driver for dn_fuzz under ctest.
 #include "replay.hpp"
 
 #include <array>

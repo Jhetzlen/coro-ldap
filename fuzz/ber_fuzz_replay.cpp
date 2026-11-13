@@ -1,9 +1,5 @@
-// Deterministic driver for LLVMFuzzerTestOneInput (see ber_fuzz.cpp), so the
-// fuzz properties run under ctest with any compiler, without libFuzzer.
-//
-// Inputs: pseudo-random buffers biased toward BER-looking bytes, plus random
-// mutations (bit flips, interesting bytes, insertions, deletions, truncation)
-// of valid encodings built with ber::writer.
+// Deterministic driver for ber_fuzz under ctest: random BER-like buffers
+// and mutations of valid encodings.
 #include "jhetz/ldap/ber.hpp"
 
 #include <array>
@@ -171,8 +167,7 @@ void mutate(rng &r, std::vector<std::uint8_t> &v)
 
 }// namespace
 
-// `ber_fuzz_replay --write-seeds DIR` writes the seed inputs to DIR (used to
-// refresh fuzz/corpus/ber_fuzz/, the libFuzzer seed corpus) and exits.
+// `--write-seeds DIR` writes the seed inputs to DIR and exits.
 static auto write_seeds(const char *dir) -> int
 {
 	const auto inputs = seeds();

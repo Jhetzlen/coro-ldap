@@ -1,7 +1,4 @@
-// Deterministic driver for message_fuzz (see message_fuzz.cpp), so its
-// properties run under ctest with any compiler, without libFuzzer.
-// Seeds: every sample message of the unit tests, a few with controls, and
-// an empty SearchResultReference.
+// Deterministic driver for message_fuzz under ctest.
 #include "../tests/sample_messages.hpp"
 #include "replay.hpp"
 
