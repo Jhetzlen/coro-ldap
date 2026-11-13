@@ -2692,10 +2692,11 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
     on, while other threads may still finish a handler on the strand, and
     nothing public tells whether one does, so the inline path is
     documented as needing those threads joined first: an interim
-    precondition, stated once in connection.hpp's threading paragraph
-    (client.hpp and API.md refer to it), that cannot be detected today
-    (the strand's lock is private, and `stopped()` says nothing about
-    threads still in a handler; TSan reports a violation). The way out
+    precondition, stated once in API.md (the connection.hpp entry's
+    "Threading"; the client.hpp entry refers to it), that cannot be
+    detected today (the strand's lock is private, and `stopped()` says
+    nothing about threads still in a handler; TSan reports a violation).
+    The way out
     is upstream: a synchronous try-enter on `capy::strand` (coro-ldap-nj9.11
     tracks it; nj9.10 has the proposal), after which `run_on_strand`
     runs the work inline when the strand is idle and posts it otherwise.

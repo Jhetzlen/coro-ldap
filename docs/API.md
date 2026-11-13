@@ -172,10 +172,6 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   escapes octets that are not valid UTF-8. `child(rdn)` throws
   `std::invalid_argument` for an RDN without an AVA, a bad type or an
   empty `#` value; `base.child({"uid=jdoe"})` is ambiguous: name the type.
-- `jhetz/ldap/attribute.hpp`: also `attribute::parse(text)` (runtime text,
-  `invalid_attribute`) and `attribute::unchecked(text)` for names a
-  server sent as they are (AD's `member;range=0-1499`). The hash is
-  seeded per process: its values must not be stored or sent.
 - `jhetz/ldap/matching.hpp`: RFC 4517 matching rules on values prepared by
   LDAPprep (RFC 4518). Each rule is a function named after it, taking the
   attribute value and the assertion value and returning `match_result`
@@ -219,7 +215,11 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   `cn`, `commonName`, `2.5.4.3`); RDNs that differ only in a type name
   nothing resolves compare Undefined.
 - `jhetz/ldap/attribute.hpp`: `ldap::attribute`, an attribute description with
-  case-insensitive equality, ordering and `std::hash`.
+  case-insensitive equality, ordering and `std::hash`; also
+  `attribute::parse(text)` (runtime text, `invalid_attribute`) and
+  `attribute::unchecked(text)` for names a server sent as they are (AD's
+  `member;range=0-1499`). The hash is seeded per process: its values must
+  not be stored or sent.
 - `jhetz/ldap/entry.hpp`: `ldap::entry`, the untyped search result entry
   (DN text + attributes, case-insensitive `find`); `entry::from` takes the
   strings of a decoded `search_result_entry` and keeps its resource,
@@ -273,7 +273,7 @@ itself needs only ICU.
   the tests with Capy's mock streams). Reads and writes go through a
   `capy::any_stream`. The TCP socket is owned separately from the TLS layer,
   which wraps it in reference mode, so StartTLS (step 7) can later add TLS to
-  a plain connection in place; the header describes how.
+  a plain connection in place (`net::start_tls`, below).
 - `jhetz/ldap/net/connect.hpp`: `co_await net::connect(ioc, url, options, mr)`
   returns `result<net::transport>`: resolves the host, races the addresses
   with Happy Eyeballs (RFC 8305: families alternate, a new attempt every
@@ -299,8 +299,9 @@ itself needs only ICU.
     entries only (never the subject CN), wildcards only as a whole leftmost
     label (`*.example.org`, not `ld*.example.org`); IP literals against
     iPAddress entries, without an IPv6 zone. `tls_options::host_matching =
-    host_name_matching::legacy` accepts what OpenSSL does by default (CN
-    when there is no subjectAltName, partial wildcards).
+    host_name_matching::legacy` accepts what OpenSSL does by default (the
+    subject CN when the leaf has no subjectAltName DNS name, partial
+    wildcards).
   - Errors keep the system / TLS `error_code` and name the stage:
     `connect ldaps://h:636: tls handshake: server certificate: hostname mismatch ...`.
   - Linux is the supported platform (macOS is not; configure rejects Apple
@@ -354,8 +355,9 @@ itself needs only ICU.
   error the connection must be dropped: a framing error consumes nothing,
   so every later call fails the same way, and only a decode error
   consumes the bad PDU. `read_frame` keeps the bytes received before a
-  cancellation, so a reader stopped between PDUs can resume. `read_options::decode.memory` is the
-  resource the message is decoded into (e.g. a per-response arena).
+  cancellation, so a reader stopped between PDUs can resume.
+  `read_options::decode.memory` is the resource the message is decoded
+  into (e.g. a per-response arena).
   `write_message(t, m, mr)` encodes into a buffer on `mr`;
   `write_message(t, m, writer)` reuses the caller's `ber::writer`;
   `write_bytes` sends raw bytes.
@@ -590,9 +592,14 @@ itself needs only ICU.
   next runs (`is_open()` reports it at once), and the memory resource of
   a destroyed stream's entries must outlive that run. On the strand, or
   with the io_context stopped and called outside its `run()`, they run at
-  once; the latter has the temporary precondition stated in
-  connection.hpp's threading paragraph (no thread may still be inside
-  `run()` of the stopped io_context: join them first). With
+  once.
+  Precondition (temporary, until Capy's strand can be entered
+  synchronously): `close()` and the destructors of a `connection`,
+  `search_stream`, `paged_search`, `transaction`, `client` or lease (and
+  a lease's `release()`), called from a thread outside `run()` of a
+  stopped io_context, require that no thread is still inside `run()` (or
+  `run_one()`, `run_for()`, `poll()`) of that io_context: join those
+  threads first. A violation is a data race, which TSan reports. With
   `std::jthread`s, declaration order decides: members and locals are
   destroyed in reverse order, so declare the threads after the
   connections, clients, streams and transactions they serve, and they are
@@ -666,9 +673,10 @@ itself needs only ICU.
   An update cancelled or timed out inside a transaction may be part of it:
   abort. A commit whose answer is lost has an unknown outcome. A bind or
   unbind aborts every transaction of the connection (RFC 5805 section
-  3.5); transactions do not nest. The codecs (`end_transaction_request`, `update_controls`,
-  `end_transaction_response`, `encode_` / `decode_end_transaction_request`
-  / `_response`, the OIDs) are in `message.hpp`;
+  3.5); transactions do not nest. The codecs (`end_transaction_request`,
+  `update_controls`, `end_transaction_response`, `encode_` /
+  `decode_end_transaction_request` / `_response`, the OIDs) are in
+  `message.hpp`;
   `ldap::search_paged(conn, params, page_size, max_pages =
   ldap::search_paged_default_max_pages, mr)` (a free function over
   `search_stream()`; `ldap::search_paged(client, ...)` runs it on one shared
@@ -1475,8 +1483,9 @@ itself needs only ICU.
   only if the io_context runs again, so call `restart()` just before
   running it again, or call `close()` from a task on the executor to
   unbind cleanly. Called from a thread outside `run()` of a stopped
-  io_context, `close()`, the destructor and a lease's release have
-  connection.hpp's precondition (no thread still inside `run()`).
+  io_context, `close()`, the destructor and a lease's release have the
+  temporary precondition of the connection.hpp entry's "Threading" above
+  (no thread still inside `run()`).
 - `jhetz/ldap/sync.hpp` (3pf.5): `ldap::sync::client`, the blocking facade
   over `ldap::client`. `sync::client(client_options, mr)` owns an
   io_context and an I/O thread, where the `ldap::client` lives (session
@@ -1503,10 +1512,15 @@ itself needs only ICU.
   until it is destroyed or released. `detail::io_thread` and
   `detail::connection_api` are the machinery `sync::connection` and the
   sync leases share.
-- `client_errc::not_sent` (connection.hpp, "Sent or not"): the operation
-  failed before its request reached the writer (connection closed before
-  it was submitted, still queued, or held behind a bind), so the server
-  never saw it. It matches `cond::connection_lost`, like `not_connected`.
+- `client_errc::not_sent`: the operation failed before the connection's
+  writer took its request (the connection closed while the request was
+  refused, still queued, or held behind a bind), so the server never saw
+  it and even an update may be retried elsewhere; the context names the
+  failure. Once the writer took it, the failure's own code is reported
+  (the server may have seen it). The exceptions (allocation failure,
+  `unbind()`, a default-constructed or moved-from connection) are in the
+  connection.hpp entry above. It matches `cond::connection_lost`, like
+  `not_connected`.
   A behaviour change: a request held behind a bind when a Notice of
   Disconnection (or any failure) closes the connection now fails with
   `not_sent` (`cond::connection_lost`), no longer with the notice's own
