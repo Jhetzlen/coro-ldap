@@ -1,29 +1,4 @@
 // jhetz-ldapsearch: connect, optionally bind, search, print LDIF, unbind.
-//
-//   ldapsearch [options] URL [FILTER [ATTRIBUTE...]]
-//
-//   -D DN        bind DN (simple bind); the password comes from -w or the
-//                LDAP_PASSWORD environment variable
-//   -w PASSWORD  bind password
-//   -b DN        search base (default: the URL's DN, else the root DSE)
-//   -s SCOPE     base | one | sub | children (default: the URL's, else sub)
-//   -z N         size limit (entries), -l N time limit (seconds)
-//   --page N     fetch the results in pages of N entries (RFC 2696)
-//   --ca-file F  CA certificates (PEM) for ldaps://
-//   -Y EXTERNAL  SASL EXTERNAL bind (identity from --cert or ldapi://);
-//                -X AUTHZID asks to act as another identity
-//   -Z           StartTLS before binding (ldap:// only)
-//   --cert F --key F  TLS client certificate and key (PEM)
-//   --insecure   do not verify the server certificate (testing only)
-//
-// The URL's filter and attributes apply when none are given on the command
-// line, as in `ldapsearch -H`. For example, against a local OpenLDAP:
-//
-//   ldapsearch -D cn=admin,dc=example,dc=org -w secret
-//       ldap://localhost/dc=example,dc=org '(objectClass=person)' cn mail
-//
-// (one command line).
-//
 // Exit status: 0 on success, 1 on an LDAP or connection error, 2 on bad usage.
 #include "jhetz/ldap/connection.hpp"
 
@@ -183,8 +158,7 @@ auto parse_args(int argc, char **argv) -> options
 
 // ---------------------------------------------------------------- LDIF
 
-// RFC 2849 SAFE-STRING: no NUL, CR, LF or non-ASCII octet, and no leading
-// space, ':' or '<'; no trailing space either (readers may strip it).
+// RFC 2849 SAFE-STRING, without a trailing space.
 auto ldif_safe(std::string_view v) noexcept -> bool
 {
 	if (v.empty()) {
@@ -202,7 +176,6 @@ auto ldif_safe(std::string_view v) noexcept -> bool
 auto base64(std::string_view in) -> std::string
 {
 	static constexpr std::string_view table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-	// Six bits per character.
 	constexpr unsigned bits = 6;
 	constexpr std::uint32_t mask = 0x3F;
 	std::string out;
@@ -252,8 +225,7 @@ void print_entry(const ldap::entry &e)
 
 // ---------------------------------------------------------------- session
 
-// Prints every entry of a search_stream or paged_search, then its
-// references and a count; 0, or 1 on an error.
+// Prints every entry, then the references and a count; 0, or 1 on an error.
 template<class Stream> auto print_all(ldap::result<Stream> &s) -> capy::task<int>
 {
 	if (!s) {
@@ -380,7 +352,7 @@ try {
 	options o = parse_args(argc, argv);
 	return ldap::run(ldapsearch, std::move(o));
 } catch (const std::exception &x) {
-	// fputs rather than println, which could throw again.
+	// fputs, which cannot throw.
 	(void)std::fputs("jhetz-ldapsearch: ", stderr);
 	(void)std::fputs(x.what(), stderr);
 	(void)std::fputc('\n', stderr);
