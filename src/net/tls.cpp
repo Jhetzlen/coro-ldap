@@ -61,10 +61,20 @@ namespace {
 	{
 		void operator()(ASN1_OCTET_STRING *p) const noexcept { ASN1_OCTET_STRING_free(p); }
 	};
+	struct x509_store_deleter
+	{
+		void operator()(X509_STORE *p) const noexcept { X509_STORE_free(p); }
+	};
+	struct x509_store_ctx_deleter
+	{
+		void operator()(X509_STORE_CTX *p) const noexcept { X509_STORE_CTX_free(p); }
+	};
 	using bio_ptr = std::unique_ptr<BIO, bio_deleter>;
 	using x509_ptr = std::unique_ptr<X509, x509_deleter>;
 	using evp_pkey_ptr = std::unique_ptr<EVP_PKEY, evp_pkey_deleter>;
 	using asn1_octet_string_ptr = std::unique_ptr<ASN1_OCTET_STRING, asn1_octet_string_deleter>;
+	using x509_store_ptr = std::unique_ptr<X509_STORE, x509_store_deleter>;
+	using x509_store_ctx_ptr = std::unique_ptr<X509_STORE_CTX, x509_store_ctx_deleter>;
 
 	// Read-only memory BIO over `pem`, or null. Null too above INT_MAX
 	// bytes: BIO_new_mem_buf takes an int, so a larger size would wrap to a
@@ -270,12 +280,56 @@ namespace {
 		return true;
 	}
 
+	// Whether `cert` matches `host` under X509_VERIFY_PARAM host `flags`:
+	// OpenSSL's own host check, run by verifying `cert` alone against an
+	// empty store whose verify callback accepts every error but
+	// X509_V_ERR_HOSTNAME_MISMATCH. False on any other failure.
+	// NOLINTNEXTLINE(misc-const-correctness): OpenSSL 3's X509_STORE_CTX_init takes X509 *
+	auto host_matches(X509 *cert, const std::string &host, unsigned flags) -> bool
+	{
+		const x509_store_ptr store(X509_STORE_new());
+		const x509_store_ctx_ptr ctx(X509_STORE_CTX_new());
+		if (!store || !ctx || X509_STORE_CTX_init(ctx.get(), store.get(), cert, nullptr) != 1) {
+			return false;
+		}
+		X509_VERIFY_PARAM *param = X509_STORE_CTX_get0_param(ctx.get());
+		if (X509_VERIFY_PARAM_set1_host(param, host.data(), host.size()) != 1) {
+			return false;
+		}
+		X509_VERIFY_PARAM_set_hostflags(param, flags);
+		X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_NO_CHECK_TIME);
+		X509_STORE_CTX_set_verify_cb(ctx.get(), [](int, X509_STORE_CTX *c) -> int {
+			return X509_STORE_CTX_get_error(c) == X509_V_ERR_HOSTNAME_MISMATCH ? 0 : 1;
+		});
+		ERR_set_mark();
+		const int verified = X509_verify_cert(ctx.get());
+		ERR_pop_to_mark();
+		return verified == 1;
+	}
+
+	// Whether `cert` has a subjectAltName DNS name.
+	auto has_dns_alt_name(const X509 *cert) -> bool
+	{
+		auto *names = static_cast<GENERAL_NAMES *>(X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr));
+		if (names == nullptr) {
+			return false;
+		}
+		bool found = false;
+		for (int i = 0; i < sk_GENERAL_NAME_num(names) && !found; ++i) {
+			found = sk_GENERAL_NAME_value(names, i)->type == GEN_DNS;
+		}
+		GENERAL_NAMES_free(names);
+		return found;
+	}
+
 	// The verify callback of certificate_verification::full: records why
 	// verification failed (the handshake error itself only says
-	// "certificate verify failed"). Never relaxes the built-in verdict; with
-	// strict_host set it also rejects a leaf that only OpenSSL's lenient
-	// host matching accepted (Corosio has no option for the
-	// X509_CHECK_FLAG_* flags, so the check is redone here). When the
+	// "certificate verify failed"). With strict_host set it also rejects a
+	// leaf that only OpenSSL's lenient host matching accepted (Corosio has
+	// no option for the X509_CHECK_FLAG_* flags, so the check is redone
+	// here); with legacy_host set it accepts a leaf without subjectAltName
+	// DNS names whose subject CN matches (OpenSSL 4's own check ignores the
+	// CN). It relaxes no other built-in verdict. When the
 	// platform verifies the chain (verify_state::system_chain), OpenSSL's
 	// errors other than fatal_with_platform_chain's are let through and the
 	// leaf's final callback asks the platform instead (tls_handshake() fails
@@ -286,6 +340,16 @@ namespace {
 			return preverified;
 		}
 		record_ssl(state, store);
+		if (!preverified && !state.legacy_host.empty()
+			&& X509_STORE_CTX_get_error(store) == X509_V_ERR_HOSTNAME_MISMATCH
+			&& X509_STORE_CTX_get_error_depth(store) == 0) {
+			X509 *leaf = X509_STORE_CTX_get_current_cert(store);
+			if (!has_dns_alt_name(leaf)
+				&& host_matches(leaf, state.legacy_host, X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT)) {
+				X509_STORE_CTX_set_error(store, X509_V_OK);
+				return true;
+			}
+		}
 		if (state.system_chain != nullptr && !preverified
 			&& !fatal_with_platform_chain(X509_STORE_CTX_get_error(store), X509_STORE_CTX_get_error_depth(store))) {
 			// After the platform accepted (the checks that follow the
@@ -299,8 +363,7 @@ namespace {
 		if (preverified && !state.strict_host.empty() && X509_STORE_CTX_get_error_depth(store) == 0) {
 			const std::string &host = state.strict_host;
 			constexpr unsigned flags = X509_CHECK_FLAG_NEVER_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS;
-			if (X509_check_host(X509_STORE_CTX_get_current_cert(store), host.data(), host.size(), flags, nullptr)
-				!= 1) {
+			if (!host_matches(X509_STORE_CTX_get_current_cert(store), host, flags)) {
 				X509_STORE_CTX_set_error(store, X509_V_ERR_HOSTNAME_MISMATCH);
 				preverified = false;
 				if (state.reason.empty()) {
@@ -587,6 +650,10 @@ auto tls_handshake(transport::layers &im,
 	if (options.verification == certificate_verification::full && options.host_matching == host_name_matching::strict
 		&& !is_ip_literal(name)) {
 		setup.state->strict_host = name;
+	}
+	if (options.verification == certificate_verification::full && options.host_matching == host_name_matching::legacy
+		&& !is_ip_literal(name)) {
+		setup.state->legacy_host = name;
 	}
 	setup.state->deadline = deadline;
 	// im.tls is set before the handshake and kept only if it succeeds

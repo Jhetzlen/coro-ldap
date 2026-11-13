@@ -102,11 +102,13 @@ auto self_signed_x509(EVP_PKEY *key, const EVP_MD *md, bool pss = false) -> x509
 	REQUIRE(X509_gmtime_adj(X509_getm_notBefore(cert.get()), 0) != nullptr);
 	REQUIRE(X509_gmtime_adj(X509_getm_notAfter(cert.get()), 3600) != nullptr);
 	REQUIRE(X509_set_pubkey(cert.get(), key) == 1);
-	X509_NAME *name = X509_get_subject_name(cert.get());
-	REQUIRE(
-	  X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char *>("cb"), -1, -1, 0)
-	  == 1);
-	REQUIRE(X509_set_issuer_name(cert.get(), name) == 1);
+	const std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)> name(X509_NAME_new(), &X509_NAME_free);
+	REQUIRE(name != nullptr);
+	REQUIRE(X509_NAME_add_entry_by_txt(
+			  name.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char *>("cb"), -1, -1, 0)
+			== 1);
+	REQUIRE(X509_set_subject_name(cert.get(), name.get()) == 1);
+	REQUIRE(X509_set_issuer_name(cert.get(), name.get()) == 1);
 	if (pss) {
 		const std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> ctx(EVP_MD_CTX_new(), &EVP_MD_CTX_free);
 		EVP_PKEY_CTX *pctx = nullptr;

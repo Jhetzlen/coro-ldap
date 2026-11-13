@@ -37,6 +37,10 @@ struct verify_state
 	// The DNS name to match strictly (host_name_matching::strict), set by
 	// tls_handshake(); empty for an IP literal or legacy matching.
 	std::string strict_host{};
+	// The DNS name to match with the subject CN fallback
+	// (host_name_matching::legacy), set by tls_handshake(); empty for an IP
+	// literal or strict matching.
+	std::string legacy_host{};
 	// The client's OpenSSL session. Corosio's openssl_stream does not expose
 	// its SSL, but the verify callback reaches it (the store's ex_data).
 	// Owned by the stream: only dereferenced by tls_handshake(), right after

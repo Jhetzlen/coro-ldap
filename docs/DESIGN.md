@@ -2295,9 +2295,18 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   4513 section 3.1.3): subjectAltName DNS names only, no subject CN
   fallback, wildcards only as a whole leftmost label. Corosio has no option
   for OpenSSL's check flags, so our verify callback redoes the check on the
-  leaf (X509_check_host with NEVER_CHECK_SUBJECT | NO_PARTIAL_WILDCARDS)
-  after OpenSSL's lenient one; `tls_options::host_matching = legacy` keeps
-  OpenSSL's defaults for old certificates.
+  leaf after OpenSSL's lenient one, with NEVER_CHECK_SUBJECT |
+  NO_PARTIAL_WILDCARDS. X509_check_host is deprecated in OpenSSL 4.1, so
+  the check runs OpenSSL's own matcher through the X509_VERIFY_PARAM host
+  API (in OpenSSL 3 too): the leaf alone is verified against an empty store
+  with those host flags, the verify callback accepting every error but
+  HOSTNAME_MISMATCH. `tls_options::host_matching = legacy` keeps OpenSSL
+  3's defaults for old certificates: partial wildcards, and the subject CN
+  when the certificate has no subjectAltName DNS name. OpenSSL 4 dropped
+  that CN fallback from its default check, so under legacy the callback
+  accepts a HOSTNAME_MISMATCH on such a leaf whose CN matches (the same
+  matcher with ALWAYS_CHECK_SUBJECT); with OpenSSL 3 that error never
+  comes.
   A CA bundle (`ca_file`, `ca_pem`) goes to Corosio whole: it trusts every
   certificate of it, but parses them only when the handshake starts and
   then reports a bad one as a setup failure. So the bundle is read first

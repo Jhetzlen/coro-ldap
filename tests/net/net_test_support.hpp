@@ -481,12 +481,14 @@ class test_pki
 		check(X509_gmtime_adj(X509_getm_notBefore(cert), -3600) != nullptr, "notBefore");
 		check(X509_gmtime_adj(X509_getm_notAfter(cert), 24L * 3600) != nullptr, "notAfter");
 		check(X509_set_pubkey(cert, key) == 1, "X509_set_pubkey");
-		X509_NAME *name = X509_get_subject_name(cert);
-		check(
-		  X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char *>(cn), -1, -1, 0)
-			== 1,
+		const std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)> name(X509_NAME_new(), &X509_NAME_free);
+		check(name != nullptr, "X509_NAME_new");
+		check(X509_NAME_add_entry_by_txt(
+				name.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char *>(cn), -1, -1, 0)
+				== 1,
 		  "CN");
-		check(X509_set_issuer_name(cert, issuer ? X509_get_subject_name(issuer) : name) == 1, "issuer");
+		check(X509_set_subject_name(cert, name.get()) == 1, "subject");
+		check(X509_set_issuer_name(cert, issuer ? X509_get_subject_name(issuer) : name.get()) == 1, "issuer");
 
 		X509V3_CTX ctx;
 		X509V3_set_ctx_nodb(&ctx);
