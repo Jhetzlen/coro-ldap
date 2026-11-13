@@ -29,13 +29,16 @@
 // client_errc::would_deadlock. Exceptions thrown by an operation are
 // rethrown in the calling thread; everything else is an ldap::error.
 //
-// sync::connection's destructor (and a move assignment, for the connection
-// it replaces) closes the connection without an UnbindRequest (call unbind()
-// first), lets running operations fail with not_connected, and joins the I/O
-// thread. It waits for a host name lookup in progress and for a SASL step
-// still running on its thread (e.g. GSSAPI waiting for a KDC), so it may take
-// as long as their timeouts. Do not destroy a sync::connection while another
-// thread is inside one of its methods, nor from its I/O thread.
+// A sync::connection is a handle: copies share the I/O thread and the
+// connection, and close() or unbind() through any copy ends it for all. The
+// last handle's destructor (or an assignment over the last handle) closes the
+// connection without an UnbindRequest (call unbind() first), lets running
+// operations fail with not_connected, and joins the I/O thread. It waits for a
+// host name lookup in progress and for a SASL step still running on its thread
+// (e.g. GSSAPI waiting for a KDC), so it may take as long as their timeouts.
+// Do not destroy or assign to a sync::connection while another thread is
+// inside one of its methods (other copies may be in use), nor destroy the last
+// handle from its I/O thread.
 #pragma once
 
 #include "jhetz/ldap/client.hpp"
@@ -213,8 +216,8 @@ namespace detail {
 // Destroyed while open, it aborts the transaction and waits for the answer
 // (ignored), at most five seconds; from the I/O thread it only queues the
 // abort. Made by a sync::connection, it must not outlive that connection's
-// I/O thread (moving the connection keeps it valid; destroying or
-// reassigning it ends it). Made by a sync::lease, it shares the I/O thread's
+// I/O thread (moves and copies of the connection keep it valid; destroying or
+// reassigning the last handle ends it). Made by a sync::lease, it shares the I/O thread's
 // ownership and may outlive the lease and client, but keep the lease while
 // using it, else the connection returns to the pool and may be shared or
 // closed under it. As the last owner of the I/O thread it must not be
@@ -380,8 +383,8 @@ namespace detail {
 
 namespace detail {
 
-	// What a connected sync::connection owns: the I/O thread and the
-	// ldap::connection on it, at a fixed address across moves.
+	// What the handles of a connected sync::connection share: the I/O
+	// thread and the ldap::connection on it, at a fixed address.
 	struct connection_core
 	{
 		io_thread io{ "sync::connection" };
@@ -392,7 +395,8 @@ namespace detail {
 		auto operator=(const connection_core &) -> connection_core & = delete;
 		connection_core(connection_core &&) = delete;
 		auto operator=(connection_core &&) -> connection_core & = delete;
-		// Closes the connection on the I/O thread and joins it.
+		// Closes the connection on the I/O thread (for every copy of the
+		// ldap::connection) and joins it.
 		~connection_core();
 	};
 
@@ -417,22 +421,22 @@ namespace detail {
 // detail::connection_api (bind, search, add, ..., unbind, close). A
 // default-constructed or moved-from one has no I/O thread and every
 // operation fails with client_errc::not_connected (is_open() is false,
-// close() does nothing). Move-only; moving keeps the I/O thread and the
-// connection where they are, so a sync::transaction made by it stays
-// valid. Not [[nodiscard]] as a class: it comes inside a result, which is
-// [[nodiscard]] on its own.
+// close() does nothing). Copyable: a copy is another handle on the same
+// I/O thread and connection (see the header comment); moves and copies keep
+// a sync::transaction made by it valid. Not [[nodiscard]] as a class: it
+// comes inside a result, which is [[nodiscard]] on its own.
 class connection : public detail::connection_api<connection>
 {
   public:
 	connection() noexcept = default;
+	connection(const connection &) noexcept = default;
 	connection(connection &&) noexcept = default;
-	// Ends the connection this one held first, as the destructor does.
+	// Releases the handle replaced first, as the destructor does.
+	auto operator=(const connection &) noexcept -> connection & = default;
 	auto operator=(connection &&) noexcept -> connection & = default;
-	connection(const connection &) = delete;
-	auto operator=(const connection &) -> connection & = delete;
-	// Closes the connection on the I/O thread and joins it. Not on the I/O
-	// thread itself: it would join itself, and std::terminate() is called
-	// with a message on stderr.
+	// Releases this handle. The last one closes the connection on the I/O
+	// thread and joins it. Not on the I/O thread itself: it would join
+	// itself, and std::terminate() is called with a message on stderr.
 	~connection() = default;
 
 	// The executor of the I/O thread, e.g. to run coroutines next to the
@@ -447,7 +451,7 @@ class connection : public detail::connection_api<connection>
 	friend class detail::connection_api<connection>;
 	friend struct detail::facade_access;
 	friend auto connect(url u, connection_options options, std::pmr::memory_resource *mr) -> result<connection>;
-	explicit connection(std::unique_ptr<detail::connection_core> core) noexcept : core_(std::move(core)) {}
+	explicit connection(std::shared_ptr<detail::connection_core> core) noexcept : core_(std::move(core)) {}
 
 	// Runs make_task(c) on the I/O thread with its ldap::connection c
 	// (const from a const member) and waits for its result; not_connected
@@ -462,13 +466,14 @@ class connection : public detail::connection_api<connection>
 		auto &c = std::forward_like<Self &>(self.core_->conn);
 		return self.core_->io.run([&] { return make_task(c); });
 	}
-	// Not owning: a transaction must not outlive its sync::connection.
+	// Not owning: a transaction must not outlive the last handle of its
+	// sync::connection.
 	[[nodiscard]] auto runner() const noexcept -> std::shared_ptr<const detail::io_thread>
 	{
 		return { std::shared_ptr<const detail::io_thread>{}, &core_->io };
 	}
 
-	std::unique_ptr<detail::connection_core> core_;
+	std::shared_ptr<detail::connection_core> core_;
 };
 
 namespace detail {

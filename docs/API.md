@@ -248,7 +248,18 @@ itself needs only ICU.
   `write_bytes` sends raw bytes.
 
 - `jhetz/ldap/connection.hpp` (steps 5a, 5b): `ldap::connection`, the
-  client API, with `ldap::connect()`. It includes
+  client API, with `ldap::connect()`. Breaking (coro-ldap-vk8):
+  `ldap::connection` is copyable, like Rust ldap3's `Ldap`: a copy is
+  another handle on the same session (operations multiplexed on its
+  strand; bind identity, TLS and security layer shared). Destroying or
+  assigning over a handle releases it and the last handle closes the
+  connection; `close()` or `unbind()` through any copy ends the session
+  for all (the others see a closed connection: requests fail with
+  `not_sent`, outstanding ones with `not_connected`). Streams,
+  paged searches and transactions keep working until it closes, whatever
+  the handles. `ldap::client` stays move-only; a copy of a leased
+  connection is not a lease (the pool does not count it and closes the
+  connection for every copy when it leaves the pool). It includes
   the headers below, so it is the one to include; each also compiles on
   its own:
   - `jhetz/ldap/connection_options.hpp`: `connection_options`.
@@ -1063,9 +1074,12 @@ itself needs only ICU.
   -> `result<sync::connection>` is the only way to open one (as
   `ldap::connect`, without an io_context); reconnecting is
   `c = sync::connect(...)`. A connected one owns an io_context and an I/O
-  thread in one heap core, so it is move-only and a move keeps its
-  transactions valid (destroying it, or assigning a new connection over it
-  to reconnect, ends them: they must not be used after that); a default-constructed (noexcept) or moved-from one
+  thread in one shared heap core: it is copyable, a copy being another
+  handle on that thread and connection (coro-ldap-vk8; `close()` or
+  `unbind()` through any copy ends it for all), and moves and copies keep
+  its transactions valid (destroying the last handle, or assigning a new
+  connection over it to reconnect, closes the connection, joins the thread
+  and ends them: they must not be used after that); a default-constructed (noexcept) or moved-from one
   has no thread and its operations fail with `not_connected`. Every
   method runs the corresponding connection operation on the I/O thread
   and waits, with the same types;

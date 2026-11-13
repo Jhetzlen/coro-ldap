@@ -106,9 +106,10 @@ inline constexpr std::size_t search_paged_default_max_pages = 10000;
 // connection (it refuses another's next page with unwilling_to_perform or
 // protocol_error) and, with server_side_sort (sssvlv), silently answers with
 // the latest sorted paged search's entries: give each concurrent paged
-// search its own connection there. The paged_search keeps the connection's
-// shared state: `c` may be moved or destroyed meanwhile (destroying it
-// closes the connection; next() then fails with not_connected).
+// search its own connection there (a copy of `c` shares its session). The
+// paged_search keeps the connection's shared state: `c` may be moved or
+// destroyed meanwhile (destroying its last handle closes the connection;
+// next() then fails with not_connected).
 auto search_paged(connection &c,
   search_params request,
   std::int32_t page_size,

@@ -76,13 +76,13 @@ TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 	CHECK(after.error().code == ldap::client_errc::not_sent);
 }
 
-TEST_CASE("sync: a connection without an I/O thread, moves and reconnecting", "[net][sync]")
+TEST_CASE("sync: a connection without an I/O thread, moves, copies and reconnecting", "[net][sync]")
 {
 	static_assert(std::is_nothrow_default_constructible_v<ldap::sync::connection>);
 	static_assert(std::is_nothrow_move_constructible_v<ldap::sync::connection>);
 	static_assert(std::is_nothrow_move_assignable_v<ldap::sync::connection>);
-	static_assert(!std::is_copy_constructible_v<ldap::sync::connection>);
-	static_assert(!std::is_copy_assignable_v<ldap::sync::connection>);
+	static_assert(std::is_nothrow_copy_constructible_v<ldap::sync::connection>);
+	static_assert(std::is_nothrow_copy_assignable_v<ldap::sync::connection>);
 	ldap::sync::connection none;
 	CHECK_FALSE(none.is_open());
 	CHECK(none.security_layer() == ldap::sasl_protection::none);
@@ -711,6 +711,85 @@ TEST_CASE("sync: password_modify", "[net][sync]")
 			ldap::extended_request{ ldap::password_modify_oid,
 			  "\x30\x14\x80\x08uid=jdoe\x81\x03"
 			  "bad\x82\x03new"s } });
+}
+
+TEST_CASE("sync: copies are handles on one connection and I/O thread", "[net][sync]")
+{
+	const auto ext = [](std::int32_t id, std::optional<std::string_view> value = std::nullopt) {
+		return ldap::message{ id, ldap::extended_response{ ldap::ldap_result{ 0 }, std::nullopt, value } };
+	};
+	server_thread srv;
+	SECTION("a copy keeps the connection; the last handle closes it")
+	{
+		auto opened = ldap::sync::connect(srv.url());
+		REQUIRE(opened.has_value());
+		std::optional<ldap::sync::connection> copy(*opened);
+		CHECK(copy->executor() == opened->executor());
+		*opened = ldap::sync::connection{};
+		CHECK(copy->is_open());
+		CHECK(ldap::sync::who_am_i(*copy) == "dn:cn=me");
+		ldap::sync::connection other = *copy;
+		copy.reset();
+		CHECK(other.is_open());
+		other = ldap::sync::connection{};
+		CHECK_FALSE(other.is_open());
+	}
+	SECTION("a transaction made by a copy outlives the other handles")
+	{
+		peer_server peer;
+		peer.serve({ answer({ ext(1, "t1") }), answer({ ext(2) }) });
+		connected k(peer);
+		ldap::sync::connection copy = k.c;
+		auto txn = ldap::sync::transaction::begin(copy);
+		REQUIRE(txn.has_value());
+		k.c = ldap::sync::connection{};
+		CHECK(copy.is_open());
+		CHECK(txn->is_open());
+		REQUIRE(txn->abort().has_value());
+	}
+	SECTION("close() or unbind() through one copy ends it for every copy")
+	{
+		auto opened = ldap::sync::connect(srv.url());
+		REQUIRE(opened.has_value());
+		ldap::sync::connection copy = *opened;
+		copy.close();
+		CHECK_FALSE(opened->is_open());
+		auto r = opened->search({ .base = ldap::dn{} });
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::not_sent);
+
+		auto again = ldap::sync::connect(srv.url());
+		REQUIRE(again.has_value());
+		copy = *again;
+		REQUIRE(copy.unbind().has_value());
+		CHECK_FALSE(again->is_open());
+	}
+	SECTION("copies used and dropped on several threads")
+	{
+		auto opened = ldap::sync::connect(srv.url());
+		REQUIRE(opened.has_value());
+		constexpr int threads = 8;
+		constexpr int per_thread = 10;
+		std::atomic<int> failures{ 0 };
+		std::vector<std::thread> pool;
+		pool.reserve(threads);
+		for (int t = 0; t < threads; ++t) {
+			pool.emplace_back([c = *opened, &failures] mutable {
+				for (int i = 0; i < per_thread; ++i) {
+					auto r = c.search({ .base = ldap::dn{ "ou=people,dc=example,dc=org" } });
+					if (!r || r->entries.size() != 2) {
+						++failures;
+					}
+				}
+				c = ldap::sync::connection{};
+			});
+		}
+		for (auto &th : pool) {
+			th.join();
+		}
+		CHECK(failures == 0);
+		CHECK(opened->is_open());
+	}
 }
 
 TEST_CASE("sync: transactions", "[net][sync][transaction]")

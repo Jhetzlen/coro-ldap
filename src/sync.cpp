@@ -172,6 +172,7 @@ namespace detail {
 		// open would hang, its reader keeping the io_context busy).
 		io.hand_over(
 		  [this] {
+			  conn.close();
 			  conn = ldap::connection{};
 			  return done();
 		  },
@@ -198,7 +199,7 @@ namespace detail {
 
 auto connect(url u, connection_options options, std::pmr::memory_resource *mr) -> result<connection>
 {
-	auto core = std::make_unique<detail::connection_core>();
+	auto core = std::make_shared<detail::connection_core>();
 	auto r = core->io.run([&] { return detail::open_on(*core, std::move(u), std::move(options), mr); });
 	if (!r) {
 		return std::unexpected(std::move(r.error()));

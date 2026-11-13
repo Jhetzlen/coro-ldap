@@ -141,6 +141,14 @@ class connection::core
 		alloc.delete_object(this);
 	}
 
+	// The ldap::connection handles on this state (a subset of refs).
+	// release_handle() is true for the last one.
+	void add_handle() noexcept { handles.fetch_add(1, std::memory_order_relaxed); }
+	[[nodiscard]] auto release_handle() noexcept -> bool
+	{
+		return handles.fetch_sub(1, std::memory_order_acq_rel) == 1;
+	}
+
 	// ---------------------------------------------------------------- configuration
 
 	auto executor() const noexcept -> const executor_type & { return ex; }
@@ -382,6 +390,7 @@ class connection::core
 	executor_type ex;
 	std::pmr::memory_resource *mr_;
 	std::atomic<std::size_t> refs = 0;
+	std::atomic<std::size_t> handles = 0;
 	std::atomic<bool> open_snapshot = true;
 	std::atomic<bool> accepting_snapshot = true;
 	std::atomic<bool> tls_snapshot = false;

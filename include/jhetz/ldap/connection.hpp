@@ -105,10 +105,20 @@
 // run_one(), run_for(), poll()) of that io_context: join those threads
 // first. A violation is a data race, which TSan reports. With std::jthread,
 // declare the threads after the objects they serve, so they are joined before
-// those are destroyed (docs/API.md, "Threading"). Streams, outstanding operations and the reader may outlive the
-// connection object (destroying it closes the connection; they fail with
+// those are destroyed (docs/API.md, "Threading"). Streams, paged searches,
+// transactions, outstanding operations and the reader may outlive every
+// handle (the last handle's destruction closes the connection; they fail with
 // not_connected). Destroying a task suspended in an operation is safe: the
 // operation is abandoned.
+//
+// Handles: a connection is a cheap handle on one session; copying it makes
+// another handle on the same session (the same message ids, bind identity,
+// TLS and security layer), and operations through any copies are
+// multiplexed on the one strand. Destroying or assigning over a handle
+// releases it; the last handle's destruction closes the connection, as
+// close() does. A bind, start_tls(), unbind() or close() through any handle
+// changes the session for every copy: after unbind() or close(), the others
+// see a closed connection (requests fail with not_sent, see "Sent or not").
 #pragma once
 
 #include "jhetz/ldap/ber.hpp"
@@ -204,13 +214,17 @@ class connection
 	  net::transport t,
 	  const connection_options &options = {},
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
+	// Another handle on the same connection (see "Handles" above).
+	connection(const connection &other) noexcept;
+	// Leaves `other` default-constructed.
 	connection(connection &&other) noexcept;
+	// Releases the handle replaced, as the destructor does.
+	auto operator=(const connection &other) noexcept -> connection &;
 	auto operator=(connection &&other) noexcept -> connection &;
-	connection(const connection &) = delete;
-	auto operator=(const connection &) -> connection & = delete;
-	// Closes the transport without sending an UnbindRequest (a destructor
-	// cannot wait for I/O); co_await unbind() first for a clean shutdown.
-	// Outstanding operations and open streams fail with not_connected.
+	// Releases this handle. The last handle closes the transport without
+	// sending an UnbindRequest (a destructor cannot wait for I/O); co_await
+	// unbind() first for a clean shutdown. Outstanding operations and open
+	// streams then fail with not_connected.
 	~connection();
 
 	// False before connecting, after unbind() or close(), and once a

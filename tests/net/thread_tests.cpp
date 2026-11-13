@@ -333,6 +333,21 @@ auto busy_search(ldap::connection &c) -> capy::task<void>
 	while ((co_await c.search(people_search())).has_value()) {}
 }
 
+// connection_worker on a copy of the connection, released on the thread
+// that ends the task.
+auto copy_worker(ldap::connection c, tally &t, int rounds) -> capy::task<void>
+{
+	co_await connection_worker(c, t, rounds);
+	c = ldap::connection{};
+}
+
+// Releases `c` on the pool.
+auto drop(ldap::connection c) -> capy::task<void>
+{
+	c = ldap::connection{};
+	co_return;
+}
+
 // Runs `t` on the pool and waits for its result on the test's thread.
 template<class T> auto run_on_pool(corosio::io_context &ioc, capy::task<T> t) -> T
 {
@@ -458,6 +473,58 @@ TEST_CASE("threads: one connection used from several threads", "[net][threads]")
 		// Off the strand too: their cleanup is posted, and runs on the pool.
 		*s = ldap::search_stream{};
 		*p = ldap::paged_search{};
+		server.stop();
+	}
+	CHECK(t.failed == 0);
+}
+
+TEST_CASE("threads: copies of one connection used and released on several threads", "[net][threads]")
+{
+	corosio::io_context ioc;
+	answering_server server(ioc);
+	auto c = finish(ioc, ldap::connect(ioc, server.url(), { .operation_timeout = std::chrono::seconds(30) }));
+	REQUIRE(c.has_value());
+	std::atomic<int> closes = 0;
+	ldap::detail::set_close_hook(*c, [&closes] noexcept { ++closes; });
+	tally t;
+	{
+		thread_pool pool(ioc);
+
+		// Each worker uses its own copy and releases it on a pool thread.
+		constexpr std::size_t workers = 16;
+		constexpr int rounds = 10;
+		std::latch done(workers);
+		for (std::size_t i = 0; i < workers; ++i) {
+			start(ioc, copy_worker(*c, t, rounds), done);
+		}
+		done.wait();
+		CHECK(t.failed == 0);
+		CHECK(t.ok == workers * rounds * 10);
+		CHECK(c->is_open());
+
+		// Operations outstanding while the handles are released at once on
+		// the pool threads: only the last one closes the connection, and the
+		// operations fail with not_connected.
+		constexpr std::size_t hung = 4;
+		std::latch ended(hung);
+		for (std::size_t i = 0; i < hung; ++i) {
+			start(ioc, hanging_search(*c, t), ended);
+		}
+		wait_for([&server] { return server.hanging() == hung; });
+		REQUIRE(server.hanging() == hung);
+		constexpr std::size_t copies = 8;
+		std::vector<ldap::connection> handles(copies, *c);
+		*c = ldap::connection{};
+		CHECK(handles.front().is_open());
+		std::latch dropped(copies);
+		for (auto &h : handles) {
+			start(ioc, drop(std::move(h)), dropped);
+		}
+		dropped.wait();
+		ended.wait();
+		CHECK(t.lost == hung);
+		wait_for([&closes] { return closes == 1; });
+		CHECK(closes == 1);
 		server.stop();
 	}
 	CHECK(t.failed == 0);

@@ -49,23 +49,36 @@ connection::connection(corosio::io_context &ioc,
 {
 	std::pmr::polymorphic_allocator<> alloc(mr);
 	core_ = core_ref(alloc.new_object<core>(executor_type(ioc.get_executor()), std::move(t), options, mr));
+	core_->add_handle();
+}
+
+connection::connection(const connection &other) noexcept : core_(other.core_)
+{
+	if (core_) {
+		core_->add_handle();
+	}
 }
 
 connection::connection(connection &&other) noexcept = default;
 
-// Not defaulted: the connection replaced is closed, not just released.
+// The handle replaced is released through `old`'s destructor.
+auto connection::operator=(const connection &other) noexcept -> connection &
+{
+	connection old(other);
+	std::swap(core_, old.core_);
+	return *this;
+}
+
 auto connection::operator=(connection &&other) noexcept -> connection &
 {
-	if (this != &other) {
-		const connection old(std::move(*this));
-		core_ = std::move(other.core_);
-	}
+	connection old(std::move(other));
+	std::swap(core_, old.core_);
 	return *this;
 }
 
 connection::~connection()
 {
-	if (core_) {
+	if (core_ && core_->release_handle()) {
 		close();
 	}
 }

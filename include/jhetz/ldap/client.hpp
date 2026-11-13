@@ -29,7 +29,10 @@
 // whose bind_count() changed since session_setup (a bind done, failed or in
 // progress) is never handed out again and leaves the pool once its last lease
 // returns, as does one whose unbind() has begun. Use one client per identity
-// and keep binds in session_setup.
+// and keep binds in session_setup. A copy of a leased connection
+// (connection.hpp, "Handles") is not a lease: the pool neither counts nor
+// waits for it, may hand the connection to other leases once the lease
+// returns, and closes or unbinds it for every copy when it leaves the pool.
 //
 // Servers and failover: `servers` is in priority order; a new connection
 // tries each server whose backoff has ended, in order. A failed connect,

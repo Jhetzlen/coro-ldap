@@ -2253,8 +2253,10 @@ constructor and no member `connect()`: it is made by `sync::connect()`,
 reconnecting is assigning a new one, and its noexcept default
 constructor makes one with no I/O thread whose operations fail with
 `not_connected`. The I/O thread and the `ldap::connection` live in one
-heap core (`sync::detail::connection_core`), so the type is move-only and
-a move leaves a `sync::transaction` made by it valid.
+heap core (`sync::detail::connection_core`) shared by the handles: a
+`sync::connection` is copyable like `ldap::connection`, the last handle
+closes the connection and joins the thread, and moves and copies leave a
+`sync::transaction` made by it valid.
 
 Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
 - `net::connect(ctx, url, connect_options, mr)` returns a `net::transport`
@@ -2619,10 +2621,19 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   too (they are `noexcept`; running the work on the calling thread
   instead would race the strand).
 - Lifetime: the state is one reference-counted block on the connection's
-  resource, held by the connection, each outstanding operation, each
-  stream, and the reader and writer frames. Moving a connection or stream
-  is a pointer move; destroying the connection closes it and the others
-  finish with `not_connected` and release the block. The public handles
+  resource, held by the connection handles, each outstanding operation,
+  each stream, paged search and transaction, and the reader and writer
+  frames. Moving a connection or stream is a pointer move. A connection is
+  copyable (coro-ldap-vk8, like Rust ldap3's `Ldap`): the block also counts
+  the handles, apart from the other references, so the last handle's
+  destruction closes the connection while streams and tasks still hold the
+  block; they finish with `not_connected` and release it. The handle count
+  is an atomic decremented with acq_rel, so exactly one handle sees it
+  reach zero, whatever threads drop the handles; a new handle is only made
+  from a live one, so the count never rises from zero. `close()` and
+  `unbind()` act on the shared state, so through any handle they end the
+  session for every copy. A separate `shared_connection` type was dropped
+  (coro-ldap-tfn): the connection itself is the shared handle. The public handles
   (`connection`, `net::transport`, the streams, `transaction`) hold their
   state by pointer for shared lifetime and address stability, not as a
   compilation firewall: the connection's `detail::core_ref` is shared
@@ -2986,7 +2997,12 @@ decision left open.
   compile; coro-ldap-tfn removed it by user decision (it was not
   useful), and what took one (the free `chase_search`, `chase_compare`,
   `make_same_policy_connector`, `ad::change_password` /
-  `reset_password`) takes `connection &` again. The `acquire_options{.exclusive}`
+  `reset_password`) takes `connection &` again. Copying the leased
+  `connection` (coro-ldap-vk8) makes a handle the pool does not track: the
+  pool's bookkeeping counts leases, not handles, and it ends a connection
+  leaving the pool with an explicit `close()` or `unbind()`, never by
+  dropping its own handle, so the session ends for such copies too; an
+  exclusive lease's exclusivity covers leases only. The `acquire_options{.exclusive}`
   run-time flag stays two calls. The blocking facade matches:
   `sync::lease` (`acquire()`) and `sync::exclusive_lease`
   (`acquire_exclusive()`) both have every `sync::connection` operation,

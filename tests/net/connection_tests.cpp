@@ -48,6 +48,7 @@
 #include <system_error>
 #include <thread>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -921,6 +922,105 @@ TEST_CASE("connection: moving connections and streams", "[net][connection]")
 		auto r = m.run(std::move(added));
 		REQUIRE(r.has_value());
 		m.check_server();
+	}
+}
+
+TEST_CASE("connection: copies are handles on one session", "[net][connection]")
+{
+	static_assert(std::is_nothrow_copy_constructible_v<ldap::connection>);
+	static_assert(std::is_nothrow_copy_assignable_v<ldap::connection>);
+
+	SECTION("a copy keeps the session when the original is destroyed")
+	{
+		mock_ldap m;
+		m.serve({ answer({ ldap::message{ 1, ldap::add_response{ ldap::ldap_result{ 0 } } } }) });
+		std::optional<ldap::connection> copy(m.conn);
+		CHECK(copy->name() == m.conn.name());
+		m.conn = ldap::connection{};
+		CHECK(copy->is_open());
+		auto r = m.run(copy->add({ .entry = ldap::dn{ "uid=a,ou=people,dc=example,dc=org" } }));
+		REQUIRE(r.has_value());
+		m.check_server();
+		bool closed = false;
+		ldap::detail::set_close_hook(*copy, [&closed] noexcept { closed = true; });
+		drive(m.ioc);
+		copy.reset();
+		drive(m.ioc);
+		CHECK(closed);
+	}
+	SECTION("a stream outlives every handle; the last one closes the connection")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A") }), step{} });
+		auto s = m.run(m.conn.search_stream(people_search()));
+		REQUIRE(s.has_value());
+		ldap::connection copy = m.conn;
+		m.conn = ldap::connection{};
+		CHECK(copy.is_open());
+		REQUIRE(m.run(s->next()).has_value());
+		copy = ldap::connection{};
+		auto e = m.run(s->next());
+		REQUIRE_FALSE(e.has_value());
+		CHECK(e.error().code == client_errc::not_connected);
+		CHECK(s->done());
+	}
+	SECTION("close() through one copy ends the session for every copy")
+	{
+		mock_ldap m;
+		m.serve({});
+		const ldap::connection copy = m.conn;
+		ldap::connection other = copy;
+		other.close();
+		CHECK_FALSE(m.conn.is_open());
+		CHECK_FALSE(copy.is_open());
+		auto r = m.run(m.conn.add({ .entry = ldap::dn{ "uid=a,ou=people,dc=example,dc=org" } }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::not_sent);
+		CHECK(r.error().code == ldap::cond::connection_lost);
+		auto u = m.run(m.conn.unbind());
+		REQUIRE_FALSE(u.has_value());
+		CHECK(u.error().code == client_errc::not_connected);
+		CHECK(m.log.received.empty());
+	}
+	SECTION("unbind() through one copy ends the session for every copy")
+	{
+		mock_ldap m;
+		m.serve({ step{} });
+		ldap::connection copy = m.conn;
+		REQUIRE(m.run(copy.unbind()).has_value());
+		CHECK_FALSE(m.conn.is_open());
+		auto r = m.run(m.conn.search({ .base = ldap::dn{} }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::not_sent);
+		m.check_server();
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(std::holds_alternative<ldap::unbind_request>(m.log.received[0].op));
+	}
+	SECTION("assigning over a handle releases it; over the last one closes it")
+	{
+		mock_ldap m;
+		m.serve({});
+		socket_pair sockets(m.ioc);
+		ldap::connection a(m.ioc, net::transport::wrap(socket_ref{ &sockets.client }, "other"));
+		bool closed = false;
+		ldap::detail::set_close_hook(a, [&closed] noexcept { closed = true; });
+		ldap::connection b = a;
+		auto &self = a;
+		a = self;
+		CHECK(a.is_open());
+		a = m.conn;
+		CHECK(a.name() == "mock");
+		CHECK(b.is_open());
+		drive(m.ioc);
+		CHECK_FALSE(closed);
+		b = std::move(a);
+		CHECK(b.name() == "mock");
+		drive(m.ioc);
+		CHECK(closed);
+		CHECK(m.conn.is_open());
+		sockets.client.close();
+		sockets.server.close();
+		drive(m.ioc);
 	}
 }
 
