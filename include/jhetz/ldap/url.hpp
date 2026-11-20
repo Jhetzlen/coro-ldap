@@ -151,7 +151,7 @@ namespace detail {
 	template<class Allowed>
 	constexpr auto is_encoded_host_text(std::string_view s, const Allowed &allowed, bool utf8) noexcept -> bool
 	{
-		constexpr unsigned ascii_delete = 0x7F;
+		constexpr unsigned delete_octet = 0x7F;
 		constexpr unsigned ascii_end = 0x80;
 		if (s.empty()) {
 			return false;
@@ -170,7 +170,7 @@ namespace detail {
 			} else if (!allowed(s[i])) {
 				return false;
 			}
-			if (byte < ' ' || byte == ascii_delete) {
+			if (byte < ' ' || byte == delete_octet) {
 				return false;
 			}
 			if (!utf8 || (pending == 0 && byte < ascii_end)) {

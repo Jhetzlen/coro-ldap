@@ -2446,8 +2446,14 @@ TEST_CASE("ldap::run(f, args...) returns the task's value or rethrows its except
 		co_return 0;
 	}),
 	  std::runtime_error);
-	CHECK_THROWS_AS(
-	  ldap::run([](corosio::io_context &) -> capy::task<int> { throw std::logic_error("from f"); }), std::logic_error);
+	// A condition the optimizer cannot fold, or MSVC finds run()'s return unreachable (C4702).
+	CHECK_THROWS_AS(ldap::run([](corosio::io_context &ioc) -> capy::task<int> {
+		if (!ioc.stopped()) {
+			throw std::logic_error("from f");
+		}
+		return []() -> capy::task<int> { co_return 0; }();
+	}),
+	  std::logic_error);
 	// The std::string made from the const char * lives until the run ends.
 	CHECK(ldap::run(echo_length, "a temporary string longer than the small-string buffer") == 54);
 

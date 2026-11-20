@@ -46,7 +46,7 @@ using Catch::Matchers::ContainsSubstring;
 namespace {
 
 constexpr auto marker = std::byte{ 0xa5 };
-constexpr auto key = std::byte{ 0x5a };
+constexpr auto xor_key = std::byte{ 0x5a };
 
 // Wraps a buffer as the marker followed by the bytes XORed with the key;
 // unwrap checks the marker. Counts its calls.
@@ -77,7 +77,7 @@ class xor_layer final : public ldap::sasl_security_layer
 		counts_->wrapped_sizes.push_back(plaintext.size());
 		out.push_back(marker);
 		for (auto b : plaintext) {
-			out.push_back(b ^ key);
+			out.push_back(b ^ xor_key);
 		}
 		return {};
 	}
@@ -90,7 +90,7 @@ class xor_layer final : public ldap::sasl_security_layer
 		}
 		out.reserve(out.size() + buffer.size() - 1);
 		for (auto b : buffer.subspan(1)) {
-			out.push_back(b ^ key);
+			out.push_back(b ^ xor_key);
 		}
 		return {};
 	}
@@ -111,7 +111,7 @@ auto frame(std::string_view plaintext) -> std::string
 	};
 	out += static_cast<char>(marker);
 	for (char c : plaintext) {
-		out += static_cast<char>(static_cast<std::byte>(c) ^ key);
+		out += static_cast<char>(static_cast<std::byte>(c) ^ xor_key);
 	}
 	return out;
 }

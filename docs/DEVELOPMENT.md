@@ -59,10 +59,20 @@ others; the list of `jhetz::ldap_net` headers is in `tests/CMakeLists.txt`).
 Status: the code has been ported to Windows (Winsock through Corosio, the
 CryptoAPI trust store and chain verification, wide file paths, MSVC-safe code and CMake). The
 Linux development setup has no Windows toolchain and checks the port only
-by syntax checks against the mingw-w64 headers. A first MSVC build ran on
-2026-11-06 (Visual Studio 2022 17.14, MSVC 19.44, vcpkg's ICU 79.1 and
-OpenSSL 3.6.5): `/W4` clean, 751 of 752 tests passing in RelWithDebInfo
-(coro-ldap-0wp is the one left). clang-cl and MinGW have not been built.
+by syntax checks against the mingw-w64 headers. The last MSVC build ran on
+2026-11-20 (Visual Studio 2022 17.14, MSVC 19.44, vcpkg's ICU 79.1 and
+OpenSSL 3.6.5): `/W4 /WX` clean in Debug and RelWithDebInfo; in
+RelWithDebInfo 847 of the 850 tests that run pass (17 skip without slapd,
+Samba or the DNS fixtures). The 3 left (coro-ldap-0wp) expect a write to a
+peer that does not read to stay pending, which Winsock's overlapped sends
+do not. Debug also fails 8 allocation-count tests, from the debug STL's
+iterator debugging (coro-ldap-af9). clang-cl and MinGW have not been built.
+
+MSVC warns where GCC and Clang do not: C4459 (a local or parameter hiding a
+namespace-scope name, also one from a test or from `src/`), C4127 (a
+constant `if` condition: use `if constexpr`), C4189 (a `constexpr` local
+used only as a template argument: `[[maybe_unused]]`), and C4702 from the
+optimizer on code made unreachable by inlining.
 
 Compilers: MSVC 19.40 (Visual Studio 2022 17.10) or newer, clang-cl on such
 a toolset (configure checks `MSVC_VERSION` for both), or MinGW-w64 with GCC

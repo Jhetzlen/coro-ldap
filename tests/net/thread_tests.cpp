@@ -374,7 +374,7 @@ template<class Pred> void wait_for(Pred done)
 
 // Every operation of a client (forwarders, leases, an exclusive lease
 // bound again) and a repository shared by every worker.
-auto client_worker(ldap::client &pool, ldap::repository<&person::uid, ldap::client> &people, tally &t, int rounds)
+auto client_worker(ldap::client &pool, ldap::repository<&person::uid, ldap::client> &repo, tally &t, int rounds)
   -> capy::task<void>
 {
 	for (int i = 0; i < rounds; ++i) {
@@ -386,8 +386,8 @@ auto client_worker(ldap::client &pool, ldap::repository<&person::uid, ldap::clie
 		t.check(same && same->value);
 		t.check((co_await pool.del({ .entry = ldap::dn{ "uid=y,ou=people,dc=example,dc=org" } })).has_value());
 		t.check((co_await ldap::who_am_i(pool)).has_value());
-		t.check((co_await people.get("a")).has_value());
-		t.check((co_await people.search()).has_value());
+		t.check((co_await repo.get("a")).has_value());
+		t.check((co_await repo.search()).has_value());
 		{
 			auto held = co_await pool.acquire();
 			t.check(held.has_value());
@@ -572,7 +572,13 @@ TEST_CASE("threads: a connection destroyed by a pool task after stop()", "[net][
 	auto c = finish(ioc, ldap::connect(ioc, server.url(), { .operation_timeout = std::chrono::seconds(30) }));
 	REQUIRE(c.has_value());
 	std::atomic<bool> closed = false;
-	ldap::detail::set_close_hook(*c, [&closed] noexcept { closed = true; });
+	std::atomic<bool> closed_inline = false;
+	// True on the stopping task's thread while it drops its handle.
+	static thread_local bool dropping = false;
+	ldap::detail::set_close_hook(*c, [&closed, &closed_inline] noexcept {
+		closed_inline = closed_inline || dropping;
+		closed = true;
+	});
 	tally t;
 	constexpr std::size_t hung = 4;
 	std::latch ended(hung);
@@ -585,12 +591,16 @@ TEST_CASE("threads: a connection destroyed by a pool task after stop()", "[net][
 		wait_for([&server] { return server.hanging() == hung; });
 		REQUIRE(server.hanging() == hung);
 		// Inside run() after stop(): the close is posted, not run while the
-		// other threads may still be on the strand.
+		// other threads may still be on the strand. Whether a pool thread
+		// still runs it before run() returns depends on the backend (IOCP
+		// does), so only the inline call is checked.
 		start(
 		  ioc,
 		  [](corosio::io_context &io, ldap::connection &conn) -> capy::task<void> {
 			  io.stop();
+			  dropping = true;
 			  conn = ldap::connection{};
+			  dropping = false;
 			  co_return;
 		  }(ioc, *c),
 		  stopped);
@@ -598,7 +608,7 @@ TEST_CASE("threads: a connection destroyed by a pool task after stop()", "[net][
 	}
 	CHECK(stopped.try_wait());
 	CHECK_FALSE(c->is_open());
-	CHECK_FALSE(closed);
+	CHECK_FALSE(closed_inline);
 	ioc.restart();
 	drive_until(ioc, [&] { return closed && ended.try_wait(); });
 	CHECK(closed);

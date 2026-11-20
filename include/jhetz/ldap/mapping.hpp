@@ -771,7 +771,7 @@ template<described T> [[nodiscard]] auto diff(const T &original, const T &change
 	  [&](const auto &...f) {
 		  (
 			[&] {
-				constexpr auto ptr = std::remove_cvref_t<decltype(f)>::ptr;
+				[[maybe_unused]] constexpr auto ptr = std::remove_cvref_t<decltype(f)>::ptr;
 				if constexpr (!detail::field_of<ptr>().read_only) {
 					return failed.has_value() || detail::append_diff<ptr>(original, changed, out, failed);
 				} else {
@@ -883,7 +883,7 @@ template<described T> [[nodiscard]] auto unchanged_filter(const T &original) -> 
 	  [&](const auto &...f) {
 		  (
 			[&] {
-				constexpr auto ptr = std::remove_cvref_t<decltype(f)>::ptr;
+				[[maybe_unused]] constexpr auto ptr = std::remove_cvref_t<decltype(f)>::ptr;
 				if constexpr (!detail::field_of<ptr>().read_only) {
 					return failed.has_value() || detail::append_unchanged<ptr>(original, out, failed);
 				} else {

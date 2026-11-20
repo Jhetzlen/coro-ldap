@@ -1055,8 +1055,10 @@ namespace detail {
 			} };
 			// An exclusive acquire ending without a lease: the shared ones look again.
 			const scope_exit leave{ [&self, &waited, &leased] noexcept {
-				if (exclusive && waited && !leased) {
-					self->notify();
+				if constexpr (exclusive) {
+					if (waited && !leased) {
+						self->notify();
+					}
 				}
 			} };
 			const auto hand_out = [&self, &leased](std::shared_ptr<pooled_connection> c) {

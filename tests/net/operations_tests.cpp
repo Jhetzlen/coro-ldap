@@ -1385,9 +1385,15 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 			spawn(m.ioc, bind_admin(m.conn), bound);
 			drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
 			CHECK_FALSE(bound.done());
-			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });// while the bind is outstanding
+			// Counted on the strand: once run_on drives the loop, the bind's
+			// answer (already sent) may be read before the bind resumes.
+			std::size_t outstanding = 0;
+			run_on(m.ioc, m.conn.executor(), [&s, &m, &outstanding] {
+				*s = ldap::paged_search{};// while the bind is outstanding
+				outstanding = m.conn.outstanding();
+			});
+			CHECK(outstanding == 2);// the bind, and the held release's answer
 		}
-		CHECK(m.conn.outstanding() == 2);// the bind, and the held release's answer
 		drive_until(m.ioc, [&bound] { return bound.done(); });
 		CHECK(bound.get().has_value());
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });// sent after the bind, and answered
