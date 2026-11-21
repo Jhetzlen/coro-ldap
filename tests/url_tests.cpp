@@ -616,6 +616,43 @@ TEST_CASE("server URLs: check_server and parse_server", "[url]")
 	refused("http://h", "url: scheme is not ldap, ldaps or ldapi at offset 0");
 }
 
+TEST_CASE("server URLs: url::server builds one from its parts", "[url]")
+{
+	using ldap::url_scheme;
+	const auto made = [](url_scheme scheme, std::string_view host, std::optional<std::uint16_t> port) {
+		auto u = ldap::url::server(scheme, host, port);
+		REQUIRE(u.has_value());
+		CHECK(ldap::url::parse_server(u->to_string()) == *u);
+		return std::string(u->to_string());
+	};
+	CHECK(made(url_scheme::ldaps, "dc1.example.org", 636) == "ldaps://dc1.example.org:636");
+	CHECK(made(url_scheme::ldap, "dc1.example.org", std::nullopt) == "ldap://dc1.example.org");
+	CHECK(made(url_scheme::ldap, "192.0.2.1", 389) == "ldap://192.0.2.1:389");
+	CHECK(made(url_scheme::ldap, "::1", 389) == "ldap://[::1]:389");
+	CHECK(made(url_scheme::ldap, "fe80::1%eth0", std::nullopt) == "ldap://[fe80::1%25eth0]");
+	CHECK(made(url_scheme::ldapi, "/run/slapd/ldapi", std::nullopt) == "ldapi://%2Frun%2Fslapd%2Fldapi");
+	// Taken as decoded: no percent-decoding, nothing parsed after the host.
+	CHECK(made(url_scheme::ldap, "a%41b", std::nullopt) == "ldap://a%2541b");
+	CHECK(ldap::url::server(url_scheme::ldap, "a%41b")->host() == "a%41b");
+	CHECK(made(url_scheme::ldap, "h/dc=x?cn", std::nullopt) == "ldap://h%2Fdc=x%3Fcn");
+	CHECK(made(url_scheme::ldap, "caf\xC3\xA9.example", std::nullopt) == "ldap://caf%C3%A9.example");
+	const auto refused =
+	  [](url_scheme scheme, std::string_view host, std::optional<std::uint16_t> port, std::string_view context) {
+		  INFO(host);
+		  auto u = ldap::url::server(scheme, host, port);
+		  REQUIRE_FALSE(u.has_value());
+		  CHECK(u.error().code == client_errc::invalid_url);
+		  CHECK(std::string_view(u.error().context) == context);
+	  };
+	refused(url_scheme::ldap, "", std::nullopt, "url: the URL names no host (or, for ldapi, no socket path)");
+	refused(url_scheme::ldap, "evil\n.example.org", std::nullopt, "url: control character in the host");
+	refused(url_scheme::ldap, "\xFF", std::nullopt, "url: ill-formed UTF-8 in the host");
+	refused(url_scheme::ldap, "h", 0, "url: port 0");
+	refused(url_scheme::ldapi, "/run/ldapi", 389, "url: port not allowed in an ldapi URL");
+	refused(url_scheme::ldap, "h:389", std::nullopt, "url: invalid IPv6 address");
+	refused(url_scheme::ldap, "fe80::1%", std::nullopt, "url: invalid IPv6 address");
+}
+
 TEST_CASE("server URLs: parse_servers", "[url]")
 {
 	auto list = ldap::url::parse_servers({ "ldap://a.example.org", "ldaps://b.example.org" });

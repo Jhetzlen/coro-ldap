@@ -3695,7 +3695,17 @@ any `uniform_random_bit_generator`, tested with a scripted one, and
 discovery itself uses a per-thread `mt19937_64`. Names are converted to
 A-labels with ICU's UTS #46 (nontransitional, as IDNA2008 resolvers do),
 so an internationalized domain or site is looked up as DNS holds it; the
-targets DNS returns are A-labels already. The calls block on DNS, as
+targets DNS returns go through the same conversion (A-labels already,
+lower-cased; one it refuses is skipped). URLs are built from host and
+port (`url::server`), never by concatenating text and parsing it, so a
+target cannot smuggle in percent-escapes, a DN or extensions. With TLS
+the target must be the queried domain or under it (RFC 6125 section
+6.2.1: label-wise, case-insensitive, on A-labels): SRV answers are
+unauthenticated, and the certificate check only proves the server is the
+target, so a spoofed answer naming `dc.attacker.example` (with a valid
+certificate for it) is skipped unless `require_target_in_domain` is
+false. Unusable records are skipped, and only when none is left does
+discovery fail, listing up to four of them with the reason. The calls block on DNS, as
 `getaddrinfo` would: discovery runs once before a client is built, so
 there is no async form. The link dependencies are private to
 `jhetz::ldap_ad` (ICU, `resolv` or `dnsapi` by name, carried in the

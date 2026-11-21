@@ -130,7 +130,7 @@ TEST_CASE("ad::discover_domain_controllers: duplicate targets ignore case", "[ad
 	auto r = ad::discover_domain_controllers("example.org", { .site = "berlin", .resolver = dns.resolver() });
 	REQUIRE(r.has_value());
 	REQUIRE(r->size() == 3);
-	CHECK(texts(*r).front() == "ldap://DC1.Example.ORG:389");
+	CHECK(texts(*r).front() == "ldap://dc1.example.org:389");// A-labels: lower case
 }
 
 TEST_CASE("ad::discover_domain_controllers: the site's DCs first", "[ad][discover]")
@@ -174,6 +174,87 @@ TEST_CASE("ad::discover_domain_controllers: internationalized names as A-labels"
 	auto r = ad::discover_domain_controllers("Bücher.example", { .site = "München", .resolver = dns.resolver() });
 	REQUIRE(r.has_value());
 	CHECK(texts(*r) == std::vector<std::string>{ "ldap://dc.xn--bcher-kva.example:389" });
+}
+
+TEST_CASE("ad::discover_domain_controllers: with TLS, targets outside the domain are skipped", "[ad][discover]")
+{
+	fake_dns dns{ .zone = { { "_ldap._tcp.dc._msdcs.example.org",
+					{ { .priority = 0, .port = 389, .target = "dc.attacker.example" },
+					  { .priority = 1, .port = 389, .target = "dc.evilexample.org" },
+					  { .priority = 2, .port = 389, .target = "DC1.Sub.EXAMPLE.org" },
+					  { .priority = 3, .port = 389, .target = "example.org" } } } } };
+	auto tls = ad::discover_domain_controllers("Example.ORG", { .tls = true, .resolver = dns.resolver() });
+	REQUIRE(tls.has_value());
+	CHECK(texts(*tls) == std::vector<std::string>{ "ldaps://dc1.sub.example.org:636", "ldaps://example.org:636" });
+
+	const std::vector<std::string> all{ "ldaps://dc.attacker.example:636",
+		"ldaps://dc.evilexample.org:636",
+		"ldaps://dc1.sub.example.org:636",
+		"ldaps://example.org:636" };
+	auto kept = ad::discover_domain_controllers(
+	  "example.org", { .tls = true, .require_target_in_domain = false, .resolver = dns.resolver() });
+	REQUIRE(kept.has_value());
+	CHECK(texts(*kept) == all);
+	auto plain = ad::discover_domain_controllers("example.org", { .resolver = dns.resolver() });
+	REQUIRE(plain.has_value());
+	CHECK(plain->size() == 4);
+
+	SECTION("internationalized: compared as A-labels")
+	{
+		fake_dns idn{ .zone = { { "_ldap._tcp.dc._msdcs.xn--bcher-kva.example",
+						{ { .port = 389,
+							.target = "dc.B\xC3\xBC"
+									  "cher.example" },
+						  { .port = 389, .target = "dc.xn--bcher-kva.example" },
+						  { .port = 389, .target = "dc.xn--bcher-kva.example.evil" } } } } };
+		auto r = ad::discover_domain_controllers(
+		  "b\xC3\xBC"
+		  "cher.example",
+		  { .tls = true, .resolver = idn.resolver() });
+		REQUIRE(r.has_value());
+		CHECK(texts(*r) == std::vector<std::string>{ "ldaps://dc.xn--bcher-kva.example:636" });
+	}
+	SECTION("only targets outside the domain: an error saying so")
+	{
+		fake_dns outside{
+			.zone = { { "_ldap._tcp.dc._msdcs.example.org", { { .port = 389, .target = "dc.attacker.example" } } } }
+		};
+		auto r = ad::discover_domain_controllers("example.org", { .tls = true, .resolver = outside.resolver() });
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == std::errc::host_unreachable);
+		CHECK(std::string(r.error().context)
+			  == "discover domain controllers of example.org: no usable SRV record (dc.attacker.example: outside "
+				 "the domain)");
+	}
+}
+
+TEST_CASE("ad::discover_domain_controllers: unusable records are skipped", "[ad][discover]")
+{
+	SECTION("a bad record among good ones")
+	{
+		fake_dns dns{ .zone = { { "_ldap._tcp.dc._msdcs.example.org",
+						{ { .priority = 0, .port = 389, .target = "bad..example.org" },
+						  { .priority = 1, .port = 389, .target = "dc1.example.org/dc=x?cn" },
+						  { .priority = 2, .port = 0, .target = "dc0.example.org" },
+						  { .priority = 3, .port = 389, .target = "dc2.example.org" } } } } };
+		auto r = ad::discover_domain_controllers("example.org", { .resolver = dns.resolver() });
+		REQUIRE(r.has_value());
+		CHECK(texts(*r) == std::vector<std::string>{ "ldap://dc2.example.org:389" });
+	}
+	SECTION("all records bad: an error naming each")
+	{
+		fake_dns dns{ .zone = { { "_ldap._tcp.dc._msdcs.example.org",
+						{ { .priority = 0, .port = 389, .target = "bad..example.org" },
+						  { .priority = 1, .port = 0, .target = "dc0.example.org" },
+						  { .priority = 2, .port = 389, .target = "dc\n1.example.org" } } } } };
+		auto r = ad::discover_domain_controllers("example.org", { .resolver = dns.resolver() });
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == std::errc::host_unreachable);
+		CHECK(r.error().code == ldap::cond::busy_or_unavailable);
+		CHECK(std::string(r.error().context)
+			  == "discover domain controllers of example.org: no usable SRV record (bad..example.org: not a valid "
+				 "domain name; dc0.example.org: url: port 0; dc\xEF\xBF\xBD" "1.example.org: not a valid domain name)");
+	}
 }
 
 TEST_CASE("ad::discover_domain_controllers: errors", "[ad][discover]")

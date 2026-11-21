@@ -1,6 +1,8 @@
 #include "jhetz/ldap/ad/discover.hpp"
 #include "jhetz/ldap/attribute.hpp"
 
+#include "../format_util.hpp"
+
 #include <unicode/uidna.h>
 #include <unicode/utypes.h>
 
@@ -20,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string>
 #include <string_view>
@@ -46,11 +49,16 @@ namespace {
 		void operator()(UIDNA *p) const noexcept { uidna_close(p); }
 	};
 
+	// UTS #46 with the STD3 rules: letters, digits and hyphens only (RFC
+	// 1123 host names).
+	constexpr auto host_name_options = uts46_options | static_cast<std::uint32_t>(UIDNA_USE_STD3_RULES);
+
 	// `name` (UTF-8) as A-labels (UTS #46, nontransitional).
-	auto to_ascii(std::string_view name, const std::string &context) -> result<std::string>
+	auto to_ascii(std::string_view name, const std::string &context, std::uint32_t options = uts46_options)
+	  -> result<std::string>
 	{
 		UErrorCode status = U_ZERO_ERROR;
-		const std::unique_ptr<UIDNA, idna_closer> idna(uidna_openUTS46(uts46_options, &status));
+		const std::unique_ptr<UIDNA, idna_closer> idna(uidna_openUTS46(options, &status));
 		if (failed(status)) {
 			return fail(client_errc::internal_error, context + ": ICU uidna_openUTS46: " + u_errorName(status));
 		}
@@ -75,6 +83,22 @@ namespace {
 		thread_local std::mt19937_64 engine{ std::random_device{}() };
 		return engine;
 	}
+
+	// `name` is `domain` or a name under it, both A-labels, compared per
+	// label without regard to ASCII case.
+	auto is_under(std::string_view name, std::string_view domain) noexcept -> bool
+	{
+		const auto trim = [](std::string_view s) { return s.ends_with('.') ? s.substr(0, s.size() - 1) : s; };
+		name = trim(name);
+		domain = trim(domain);
+		if (name.size() < domain.size() || !detail::iequals(name.substr(name.size() - domain.size()), domain)) {
+			return false;
+		}
+		return name.size() == domain.size() || name[name.size() - domain.size() - 1] == '.';
+	}
+
+	constexpr std::size_t max_quoted_target = 64;
+	constexpr std::size_t max_skipped_listed = 4;
 
 	struct query
 	{
@@ -128,14 +152,44 @@ namespace {
 		}
 		std::vector<url> out;
 		out.reserve(ordered.size());
-		for (const auto &r : ordered) {
-			const std::uint16_t port = options.tls ? q.tls_port : r.port;
-			const std::string text = (options.tls ? "ldaps://" : "ldap://") + r.target + ":" + std::to_string(port);
-			auto u = url::parse_server(text);
-			if (!u) {
-				return std::unexpected(detail::with_context(std::move(u.error()), context));
+		std::string skipped;
+		std::size_t skipped_count = 0;
+		const auto skip = [&](const srv_record &r, std::string_view why) {
+			if (skipped_count++ >= max_skipped_listed) {
+				return;
 			}
-			out.push_back(std::move(*u));
+			skipped += skipped.empty() ? " (" : "; ";
+			detail::append_sanitized(skipped, r.target, max_quoted_target);
+			skipped += ": ";
+			skipped += why;
+		};
+		for (const auto &r : ordered) {
+			auto host = to_ascii(r.target, "SRV target", host_name_options);
+			if (!host) {
+				skip(r, "not a valid domain name");
+				continue;
+			}
+			if (options.tls && options.require_target_in_domain && !is_under(*host, *ascii_domain)) {
+				skip(r, "outside the domain");
+				continue;
+			}
+			const std::uint16_t port = options.tls ? q.tls_port : r.port;
+			auto u = url::server(options.tls ? url_scheme::ldaps : url_scheme::ldap, *host, port);
+			if (!u) {
+				skip(r, u.error().context);
+				continue;
+			}
+			if (std::ranges::find(out, *u) == out.end()) {
+				out.push_back(std::move(*u));
+			}
+		}
+		if (out.empty()) {
+			if (skipped_count > max_skipped_listed) {
+				skipped += detail::format("; {} more", skipped_count - max_skipped_listed);
+			}
+			skipped += ')';
+			return fail(
+			  std::make_error_code(std::errc::host_unreachable), context + ": no usable SRV record" + skipped);
 		}
 		return out;
 	}
@@ -205,6 +259,7 @@ auto resolve_srv(std::string_view name) -> result<std::vector<srv_record>>
 	}
 	constexpr std::size_t fixed = 6;// priority, weight, port
 	std::vector<srv_record> out;
+	std::string_view malformed;
 	const int count = ns_msg_count(msg, ns_s_an);
 	for (int i = 0; i < count; ++i) {
 		ns_rr rr{};
@@ -216,17 +271,22 @@ auto resolve_srv(std::string_view name) -> result<std::vector<srv_record>>
 		}
 		const unsigned char *data = ns_rr_rdata(rr);
 		if (ns_rr_rdlen(rr) <= fixed) {
-			return fail(client_errc::decode_error, context + ": short SRV record");
+			malformed = "short SRV record";
+			continue;
 		}
 		std::array<char, NS_MAXDNAME> target{};
 		if (dn_expand(ns_msg_base(msg), ns_msg_end(msg), data + fixed, target.data(), static_cast<int>(target.size()))
 			< 0) {
-			return fail(client_errc::decode_error, context + ": malformed SRV target");
+			malformed = "malformed SRV target";
+			continue;
 		}
 		out.push_back({ .priority = static_cast<std::uint16_t>(ns_get16(data)),
 		  .weight = static_cast<std::uint16_t>(ns_get16(data + 2)),
 		  .port = static_cast<std::uint16_t>(ns_get16(data + 4)),
 		  .target = std::string(target.data()) });
+	}
+	if (out.empty() && !malformed.empty()) {
+		return fail(client_errc::decode_error, context + ": " + std::string(malformed));
 	}
 	return out;
 }

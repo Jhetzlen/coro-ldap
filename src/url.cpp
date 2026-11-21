@@ -395,6 +395,34 @@ auto url::check_server() const -> result<void>
 	return {};
 }
 
+auto url::server(url_scheme scheme,
+  std::string_view host,
+  std::optional<std::uint16_t> port,
+  std::pmr::memory_resource *mr) -> result<url>
+{
+	url u{ allocator_type(mr) };
+	u.scheme_ = scheme;
+	if (port && scheme == url_scheme::ldapi) {
+		return fail(client_errc::invalid_url, "url: port not allowed in an ldapi URL");
+	}
+	if (port == 0) {
+		return fail(client_errc::invalid_url, "url: port 0");
+	}
+	u.port_ = port;
+	if (scheme != url_scheme::ldapi && host.contains(':')) {
+		const std::size_t zone = host.find('%');
+		if (!detail::is_ipv6(host.substr(0, zone)) || zone + 1 == host.size()) {
+			return fail(client_errc::invalid_url, "url: invalid IPv6 address");
+		}
+		u.host_is_ipv6_ = true;
+	}
+	u.host_.assign(host);
+	if (auto r = detail::check_server_address(u); !r) {
+		return std::unexpected(detail::with_context(std::move(r.error()), "url"));
+	}
+	return u;
+}
+
 auto url::parse_server(std::string_view text, std::pmr::memory_resource *mr) -> result<url>
 {
 	auto u = parse(text, mr);

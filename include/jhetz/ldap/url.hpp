@@ -370,6 +370,13 @@ class url
 	{
 		return parse_servers<std::initializer_list<std::string_view>>(texts, mr);
 	}
+	// A server URL from its parts, without parsing text: `host` decoded (a
+	// name, IPv4, IPv6 without brackets, or the ldapi socket path);
+	// invalid_url as check_server().
+	[[nodiscard]] static auto server(url_scheme scheme,
+	  std::string_view host,
+	  std::optional<std::uint16_t> port = std::nullopt,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<url>;
 	// The valid LDAP URLs among `uris`, in order.
 	[[nodiscard]] static auto parse_list(const std::pmr::vector<std::pmr::string> &uris,
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> std::pmr::vector<url>;

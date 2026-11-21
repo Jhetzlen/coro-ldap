@@ -237,7 +237,12 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   characters, UTF-8 except for an ldapi path, no critical extension, no DN, attributes, scope or filter;
   an empty DN is allowed), `parse_server(text, mr)`, `parse_servers(texts,
   mr) -> result<std::vector<url>>` (any range of strings or a braced list;
-  the context names the failing index, `servers[1]`), and the explicit
+  the context names the failing index, `servers[1]`), `url::server(scheme,
+  host, port = nullopt, mr)` (a server URL from its parts, no text parsed:
+  `host` is taken decoded, as `host()` returns it, so a `%` or `/` in it
+  stays part of the host; an IPv6 address without brackets, an optional
+  `%zone`; a port with ldapi or port 0 is invalid_url, then the
+  `check_server()` host rules), and the explicit
   compile-time checked literal `ldap::url{"ldaps://ldap.example.org"}`
   (`scheme://host[:port]`, optional trailing `/`).
   Allocator-aware (`std::pmr`, see below). `parse()` validates the DN (RFC
@@ -1700,18 +1705,30 @@ package component `ad`:
   `_ldap._tcp.gc._msdcs.<forest>` (port 3268). `ad::discover_options`:
   `.site` (that site's `_ldap._tcp.<site>._sites....` records first, then
   the domain's others), `.tls` (`ldaps://` on 636, or 3269 for a Global
-  Catalog), `.resolver` (an `ad::srv_resolver`, a function from an ASCII
+  Catalog), `.require_target_in_domain` (default true: with `.tls`, a
+  record whose target is not the domain or a name under it is skipped,
+  since DNS is unauthenticated and the TLS certificate is checked against
+  the target; compared per label on the A-labels, ignoring ASCII case, as
+  RFC 6125 section 6.2.1 does, so `dc.evilexample.org` is not under
+  `example.org`; false keeps DCs outside the domain), `.resolver` (an `ad::srv_resolver`, a function from an ASCII
   DNS name to `result<std::vector<ad::srv_record>>`; empty: the system's
   `ad::resolve_srv`, res_nquery on Linux (links libresolv), DnsQuery_UTF8
   on Windows (dnsapi)). Each list is in RFC 2782 order
   (`ad::order_srv(records, g)`: by priority, then weighted random), without
   duplicates or the `.` target. Internationalized names are converted to
-  A-labels (UTS #46, ICU). Errors: `std::errc::invalid_argument` (empty
-  domain), `client_errc::string_prep_failed` (a name UTS #46 refuses),
-  `std::errc::host_unreachable` (no SRV record names a server;
+  A-labels (UTS #46, ICU), the SRV targets too (the URLs hold them in
+  lower case); each URL is built with `url::server`, not from text.
+  Unusable records (a target UTS #46 refuses, port 0, a target outside
+  the domain, above) are skipped. Errors: `std::errc::invalid_argument`
+  (empty domain), `client_errc::string_prep_failed` (a domain or site UTS
+  #46 refuses), `std::errc::host_unreachable` (no SRV record names a
+  server, or none is usable: the context lists the skipped targets and
+  why, `no usable SRV record (dc.attacker.example: outside the domain)`;
   `cond::busy_or_unavailable`), the resolver's error
   (`std::errc::resource_unavailable_try_again` for a temporary DNS
-  failure, `client_errc::decode_error` for an unparsable answer).
+  failure, `client_errc::decode_error` for an unparsable answer, or one
+  whose SRV records are all malformed; `ad::resolve_srv` skips a
+  malformed record among good ones).
   Blocking: call it before building the client or off the I/O thread.
 - `jhetz/ldap/ad/range.hpp` (`jhetz::ldap`): the range option itself:
   `ad::parse_range(description)` splits `member;range=0-1499` into

@@ -77,6 +77,9 @@ struct discover_options
 	std::string site{};
 	// ldaps:// on 636 (3269 for a Global Catalog).
 	bool tls = false;
+	// With tls: SRV targets outside the queried domain are skipped (RFC
+	// 6125 section 6.2.1 comparison); false keeps them.
+	bool require_target_in_domain = true;
 	// Empty: resolve_srv.
 	srv_resolver resolver{};
 };
