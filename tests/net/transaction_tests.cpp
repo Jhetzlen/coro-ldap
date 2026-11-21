@@ -337,6 +337,32 @@ TEST_CASE("transaction: destroyed while open, it is aborted without waiting", "[
 	CHECK(m.log.received.size() == 4);
 }
 
+TEST_CASE("transaction: destroyed during a bind that fails, it is still aborted", "[net][transaction]")
+{
+	mock_ldap m;
+	m.serve({ answer({ started(1) }),
+	  step{},// reads the BindRequest, does not answer yet
+	  step{ .read_request = false, .replies = { bytes_of(bind_resp(2, 49)) } },
+	  answer({ ended(3, 0, {}) }),// the abort's answer: dropped
+	  answer({ started(4) }) });
+	outcome<ldap::result<void>> bound;
+	{
+		auto t = m.run(ldap::transaction::begin(m.conn));
+		REQUIRE(t.has_value());
+		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "wrong"), bound);
+		drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+		run_on(m.ioc, m.conn.executor(), [&t] { *t = ldap::transaction{}; });
+	}
+	drive_until(m.ioc, [&bound] { return bound.done(); });
+	CHECK(bound.get().error().code == errc::invalid_credentials);
+	drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+	CHECK(m.run(ldap::transaction::begin(m.conn)).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 4);
+	CHECK(m.log.received[2].id == 3);
+	CHECK(end_request_of(m.log.received[2]) == ldap::end_transaction_request{ false, txn_id });
+}
+
 TEST_CASE("transaction: rejected updates leave it open", "[net][transaction]")
 {
 	mock_ldap m;

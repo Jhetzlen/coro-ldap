@@ -1407,12 +1407,13 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		check_release(m.log.received[2], m.log.received[0], "page2");
 		CHECK(m.log.received[3] == bind_request_msg(4));
 	}
-	SECTION("during a bind that fails: dropped with its due answer")
+	SECTION("during a bind that fails: still sent, and its answer read")
 	{
 		mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
 		  step{},// reads the BindRequest, does not answer yet
 		  step{ .read_request = false, .replies = { bytes_of(bind_resp(2, 49)) } },
+		  answer({ paged_done(3, "") }),// the release's answer: dropped
 		  answer({ bind_resp(4) }) });
 		outcome<ldap::result<void>> bound;
 		{
@@ -1429,12 +1430,15 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		}
 		drive_until(m.ioc, [&bound] { return bound.done(); });
 		CHECK(bound.get().error().code == ldap::errc::invalid_credentials);
+		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
 		CHECK(m.conn.outstanding() == 0);
 		CHECK(m.run(bind_admin(m.conn)).has_value());
 		m.check_server();
-		REQUIRE(m.log.received.size() == 3);
+		REQUIRE(m.log.received.size() == 4);
 		CHECK(m.log.received[1] == bind_request_msg(2));
-		CHECK(m.log.received[2] == bind_request_msg(4));
+		CHECK(m.log.received[2].id == 3);
+		check_release(m.log.received[2], m.log.received[0], "page2");
+		CHECK(m.log.received[3] == bind_request_msg(4));
 	}
 	SECTION("closed while the release's answer is due: no longer counted")
 	{

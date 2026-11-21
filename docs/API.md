@@ -510,7 +510,9 @@ itself needs only ICU.
   held requests fail with `client_errc::bind_failed`
   (`cond::auth_failed`) and none is sent (anonymously, or without the
   security layer the bind was to install); the context names the bind's
-  error. AbandonRequests held behind it are still sent.
+  error. Held requests that only discard server state are still sent:
+  AbandonRequests, a destroyed transaction's abort and a paged search's
+  release.
   Every response is decoded with `origin::server` and must answer an
   outstanding request (else `client_errc::unexpected_response`);
   IntermediateResponses (RFC 4511 section 4.13) are skipped unless the

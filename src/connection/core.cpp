@@ -333,8 +333,7 @@ auto connection::core::submit(message &m, pending_op *p, std::string_view contex
 			start_reader();
 		}
 		if (binding && !bind) {
-			held.push_back(
-			  { .id = m.id, .bytes = std::move(*bytes), .abandon = std::holds_alternative<abandon_request>(m.op) });
+			held.push_back({ .id = m.id, .bytes = std::move(*bytes), .unanswered = p == nullptr });
 		} else {
 			enqueue(m.id, std::move(*bytes));
 		}
@@ -381,10 +380,8 @@ void connection::core::fail_held(const error *bind_error) noexcept
 	held.clear();
 	try {
 		for (auto &h : requests) {
-			if (h.abandon) {
-				if (open) {
-					enqueue(h.id, std::move(h.bytes));
-				}
+			if (h.unanswered && open) {
+				enqueue(h.id, std::move(h.bytes));
 				continue;
 			}
 			if (const auto p = pending.find(h.id); p != pending.end()) {

@@ -2535,10 +2535,12 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   that fails, is cancelled or ends without an outcome (its frame
   destroyed) fails the held requests with `client_errc::bind_failed`
   quoting its error, unsent: sending them would run them anonymously, or
-  without the security layer the bind was to install. Held AbandonRequests
-  are still sent (they carry no authority); held unanswered requests (a
-  transaction abort, a paged results release) are dropped with their due
-  answers. Binds are serialized:
+  without the security layer the bind was to install. Held requests nothing
+  waits for are still sent, their answers still due: AbandonRequests, a
+  destroyed transaction's abort and a paged results release carry no
+  authority and only discard server state, which would otherwise stay
+  allocated (OpenLDAP allows one transaction per connection). Binds are
+  serialized:
   a second one waits for the first. `unbind()` during a bind closes without
   an UnbindRequest; `start_tls()` during one is refused. `unbind()` once StartTLS
   is sent closes the same way (RFC 4511 section 4.14.1) and fails it.

@@ -397,7 +397,7 @@ class connection::core
 	{
 		std::int32_t id;
 		std::pmr::vector<std::byte> bytes;
-		bool abandon = false;// an AbandonRequest: sent whatever the bind's outcome
+		bool unanswered = false;// AbandonRequest or send_unanswered: sent whatever the bind's outcome
 	};
 	std::pmr::deque<held_request> held;
 	// Reader: runs while `pending` is not empty or answers are due.
