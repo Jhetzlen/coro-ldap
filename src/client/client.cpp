@@ -1054,7 +1054,7 @@ namespace detail {
 				}
 			} };
 			// An exclusive acquire ending without a lease: the shared ones look again.
-			const scope_exit leave{ [&self, &waited, &leased] noexcept {
+			const scope_exit leave{ [&] noexcept {
 				if constexpr (exclusive) {
 					if (waited && !leased) {
 						self->notify();
