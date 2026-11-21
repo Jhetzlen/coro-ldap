@@ -49,16 +49,11 @@ namespace {
 		void operator()(UIDNA *p) const noexcept { uidna_close(p); }
 	};
 
-	// UTS #46 with the STD3 rules: letters, digits and hyphens only (RFC
-	// 1123 host names).
-	constexpr auto host_name_options = uts46_options | static_cast<std::uint32_t>(UIDNA_USE_STD3_RULES);
-
 	// `name` (UTF-8) as A-labels (UTS #46, nontransitional).
-	auto to_ascii(std::string_view name, const std::string &context, std::uint32_t options = uts46_options)
-	  -> result<std::string>
+	auto to_ascii(std::string_view name, const std::string &context) -> result<std::string>
 	{
 		UErrorCode status = U_ZERO_ERROR;
-		const std::unique_ptr<UIDNA, idna_closer> idna(uidna_openUTS46(options, &status));
+		const std::unique_ptr<UIDNA, idna_closer> idna(uidna_openUTS46(uts46_options, &status));
 		if (failed(status)) {
 			return fail(client_errc::internal_error, context + ": ICU uidna_openUTS46: " + u_errorName(status));
 		}
@@ -78,6 +73,15 @@ namespace {
 		return out;
 	}
 
+	// Letters, digits, '-', '_' and '.' only.
+	auto is_host_name(std::string_view name) noexcept -> bool
+	{
+		return std::ranges::all_of(name, [](char c) {
+			return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_'
+				   || c == '.';
+		});
+	}
+
 	auto random_engine() -> std::mt19937_64 &
 	{
 		thread_local std::mt19937_64 engine{ std::random_device{}() };
@@ -95,6 +99,22 @@ namespace {
 			return false;
 		}
 		return name.size() == domain.size() || name[name.size() - domain.size() - 1] == '.';
+	}
+
+	// `records` in RFC 2782 order after `ordered`, each target without one
+	// trailing dot, skipping '.', empty targets and those already listed.
+	void append_ordered(std::vector<srv_record> &ordered, std::vector<srv_record> records)
+	{
+		for (auto &r : order_srv(std::move(records), random_engine())) {
+			if (r.target.size() > 1 && r.target.ends_with('.')) {
+				r.target.pop_back();
+			}
+			const bool listed = std::ranges::any_of(
+			  ordered, [&](const srv_record &o) { return detail::iequals(o.target, r.target) && o.port == r.port; });
+			if (r.target != "." && !r.target.empty() && !listed) {
+				ordered.push_back(std::move(r));
+			}
+		}
 	}
 
 	constexpr std::size_t max_quoted_target = 64;
@@ -139,13 +159,7 @@ namespace {
 				where.append(": SRV ").append(name);
 				return std::unexpected(detail::with_context(std::move(records.error()), where));
 			}
-			for (auto &r : order_srv(std::move(*records), random_engine())) {
-				const bool listed = std::ranges::any_of(ordered,
-				  [&](const srv_record &o) { return detail::iequals(o.target, r.target) && o.port == r.port; });
-				if (r.target != "." && !r.target.empty() && !listed) {
-					ordered.push_back(std::move(r));
-				}
-			}
+			append_ordered(ordered, std::move(*records));
 		}
 		if (ordered.empty()) {
 			return fail(std::make_error_code(std::errc::host_unreachable), context + ": no SRV record " + names.back());
@@ -164,8 +178,8 @@ namespace {
 			skipped += why;
 		};
 		for (const auto &r : ordered) {
-			auto host = to_ascii(r.target, "SRV target", host_name_options);
-			if (!host) {
+			auto host = to_ascii(r.target, "SRV target");
+			if (!host || !is_host_name(*host)) {
 				skip(r, "not a valid domain name");
 				continue;
 			}

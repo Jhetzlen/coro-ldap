@@ -1720,10 +1720,13 @@ package component `ad`:
   on Windows (dnsapi)). Each list is in RFC 2782 order
   (`ad::order_srv(records, g)`: by priority, then weighted random), without
   duplicates or the `.` target. Internationalized names are converted to
-  A-labels (UTS #46, ICU), the SRV targets too (the URLs hold them in
-  lower case); each URL is built with `url::server`, not from text.
-  Unusable records (a target UTS #46 refuses, port 0, a target outside
-  the domain, above) are skipped. Errors: `std::errc::invalid_argument`
+  A-labels (UTS #46, ICU), the SRV targets too (one trailing dot removed
+  first, so `dc1.example.org.` and `dc1.example.org` are one server; the
+  URLs hold them in lower case); a converted target holds only letters,
+  digits, `-`, `_` (legacy AD host names such as `dc_01`) and `.`. Each
+  URL is built with `url::server`, not from text. Unusable records (a
+  target UTS #46 refuses or with another character, port 0, a target
+  outside the domain, above) are skipped. Errors: `std::errc::invalid_argument`
   (empty domain), `client_errc::string_prep_failed` (a domain or site UTS
   #46 refuses), `std::errc::host_unreachable` (no SRV record names a
   server, or none is usable: the context lists the skipped targets and

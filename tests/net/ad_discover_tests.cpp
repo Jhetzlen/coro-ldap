@@ -241,6 +241,31 @@ TEST_CASE("ad::discover_domain_controllers: unusable records are skipped", "[ad]
 		REQUIRE(r.has_value());
 		CHECK(texts(*r) == std::vector<std::string>{ "ldap://dc2.example.org:389" });
 	}
+	SECTION("an underscore in a host name: kept; other characters a host name cannot have: skipped")
+	{
+		fake_dns dns{ .zone = { { "_ldap._tcp.dc._msdcs.example.org",
+						{ { .priority = 0, .port = 389, .target = "dc_01.example.org" },
+						  { .priority = 1, .port = 389, .target = "dc/1.example.org" },
+						  { .priority = 2, .port = 389, .target = "dc 2.example.org" },
+						  { .priority = 3, .port = 389, .target = "dc3:389.example.org" },
+						  { .priority = 4,
+							.port = 389,
+							.target = "dc\x01"
+									  "4.example.org" } } } } };
+		auto r = ad::discover_domain_controllers("example.org", { .tls = true, .resolver = dns.resolver() });
+		REQUIRE(r.has_value());
+		CHECK(texts(*r) == std::vector<std::string>{ "ldaps://dc_01.example.org:636" });
+	}
+	SECTION("a trailing dot: the same host as without")
+	{
+		fake_dns dns{ .zone = { { "_ldap._tcp.dc._msdcs.example.org",
+						{ { .priority = 0, .port = 389, .target = "dc1.example.org." },
+						  { .priority = 1, .port = 389, .target = "DC1.example.org" },
+						  { .priority = 2, .port = 389, .target = "dc2.example.org." } } } } };
+		auto r = ad::discover_domain_controllers("example.org", { .resolver = dns.resolver() });
+		REQUIRE(r.has_value());
+		CHECK(texts(*r) == std::vector<std::string>{ "ldap://dc1.example.org:389", "ldap://dc2.example.org:389" });
+	}
 	SECTION("all records bad: an error naming each")
 	{
 		fake_dns dns{ .zone = { { "_ldap._tcp.dc._msdcs.example.org",

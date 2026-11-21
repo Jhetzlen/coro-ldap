@@ -3698,7 +3698,11 @@ discovery itself uses a per-thread `mt19937_64`. Names are converted to
 A-labels with ICU's UTS #46 (nontransitional, as IDNA2008 resolvers do),
 so an internationalized domain or site is looked up as DNS holds it; the
 targets DNS returns go through the same conversion (A-labels already,
-lower-cased; one it refuses is skipped). URLs are built from host and
+lower-cased, one trailing dot removed; one it refuses is skipped). The
+conversion runs without the STD3 rules, which refuse `_`, found in legacy
+AD host names (NetBIOS-derived, accepted by Microsoft DNS); a converted
+target must instead hold only letters, digits, `-`, `_` and `.`, so a
+space, a control character, `/` or `:` still skips it. URLs are built from host and
 port (`url::server`), never by concatenating text and parsing it, so a
 target cannot smuggle in percent-escapes, a DN or extensions. With TLS
 the target must be the queried domain or under it (RFC 6125 section
