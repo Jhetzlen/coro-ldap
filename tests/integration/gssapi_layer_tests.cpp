@@ -346,10 +346,10 @@ TEST_CASE("kerberos: GSSAPI security layers against an MIT acceptor", "[integrat
 		CHECK(m.conn.is_open());
 		CHECK(m.conn.security_layer() == ldap::sasl_protection::none);
 	}
-	SECTION("no layer by default")
+	SECTION("no layer by default (require_tls = false over plain LDAP)")
 	{
 		spawn(m.ioc, serve(m.server_end(), offer_all, 4096, value, v), server);
-		ldap::sasl_gssapi mech({ .target = "ldap@localhost" });
+		ldap::sasl_gssapi mech({ .target = "ldap@localhost", .require_tls = false });
 		REQUIRE(finish(m.ioc, m.conn.sasl_bind(mech)).has_value());
 		CHECK(v.selected == 1);
 		CHECK(v.client_max == 0);

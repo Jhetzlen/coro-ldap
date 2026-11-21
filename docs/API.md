@@ -932,10 +932,18 @@ itself needs only ICU.
   another (connect with the server's DNS name, not an address; ldapi://
   needs an explicit target); mutual authentication is required; an
   optional `authz_id`. By default the client chooses "no security layer"
-  (maximum buffer size 0), so SASL neither signs nor seals the session:
-  use it over ldaps:// or StartTLS unless the network is trusted. A
-  server that requires integrity or confidentiality then fails the bind
-  with `client_errc::security_layer_required`. `options.security_layer`
+  (maximum buffer size 0), so SASL neither signs nor seals the session,
+  and `options.require_tls` (default true) then fails the bind with
+  `client_errc::tls_required` on a connection without TLS (plain ldap://,
+  ldapi://) before anything is sent: Kerberos authenticates the bind, but
+  without TLS or a layer every later PDU is in clear and unsigned, so an
+  active attacker can take over the connection. A layer stands in for
+  TLS, as with NTLM: `integrity` or `confidentiality` bind over plain
+  ldap://, and `best_offered` there fails with `tls_required` when the
+  server offers no layer (the exchange is aborted). `require_tls = false`
+  allows a bind without either where the network is trusted. A
+  server that requires integrity or confidentiality fails a bind without
+  a layer with `client_errc::security_layer_required`. `options.security_layer`
   (`integrity`, `confidentiality`, `best_offered`: the strongest offered,
   none over TLS when offered) selects a layer instead, with
   `options.max_receive_size` (default 64 KiB) as the largest protected

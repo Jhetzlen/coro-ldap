@@ -300,8 +300,9 @@ namespace detail {
 			.max_size = (std::uint32_t{ byte(1) } << 16) | (std::uint32_t{ byte(2) } << 8) | std::uint32_t{ byte(3) } };
 	}
 
-	auto gssapi_select_layer(const gssapi_layer_offer &offer, gssapi_security_layer requested, bool tls)
-	  -> result<std::uint8_t>
+	auto
+	  gssapi_select_layer(const gssapi_layer_offer &offer, gssapi_security_layer requested, bool tls, bool require_tls)
+		-> result<std::uint8_t>
 	{
 		const bool none = (offer.layers & gssapi_no_layer) != 0;
 		const bool integrity = (offer.layers & gssapi_integrity) != 0;
@@ -342,6 +343,10 @@ namespace detail {
 				layer = gssapi_integrity;
 			}
 			break;
+		}
+		if (layer == gssapi_no_layer && require_tls && !tls) {
+			return fail(client_errc::tls_required,
+			  "the server offers no security layer and the connection has no TLS (sasl_gssapi_options::require_tls)");
 		}
 		if (layer != gssapi_no_layer && offer.max_size == 0) {
 			return refused("the server offers a security layer with a maximum buffer size of 0");
@@ -434,10 +439,12 @@ struct sasl_gssapi::state
 	// The channel bindings' application data (empty: none), the same for
 	// every gss_init_sec_context call of the exchange.
 	std::string bindings;
-	// The security layer to select, and the maximum buffer size to
-	// announce with one (sasl_gssapi_options), and whether TLS is below.
+	// The security layer to select, the maximum buffer size to announce
+	// with one and require_tls (sasl_gssapi_options), and whether TLS is
+	// below.
 	gssapi_security_layer requested_layer = gssapi_security_layer::none;
 	std::uint32_t max_receive_size = 0;
+	bool require_tls = true;
 	bool tls = false;
 	// The flags of the established context (gss_init_sec_context's
 	// ret_flags).
@@ -527,7 +534,7 @@ struct sasl_gssapi::state
 		if (!offer) {
 			return std::unexpected(std::move(offer.error()));
 		}
-		auto selected = detail::gssapi_select_layer(*offer, requested_layer, tls);
+		auto selected = detail::gssapi_select_layer(*offer, requested_layer, tls, require_tls);
 		if (!selected) {
 			return std::unexpected(std::move(selected.error()));
 		}
@@ -611,6 +618,7 @@ struct sasl_gssapi::state
 		}
 		requested_layer = options.security_layer;
 		max_receive_size = options.max_receive_size;
+		require_tls = options.require_tls;
 
 		if (auto n = import_name(target_name, GSS_C_NT_HOSTBASED_SERVICE, target); !n) {
 			return std::unexpected(std::move(n.error()));
@@ -658,10 +666,15 @@ void sasl_gssapi::prepare(const sasl_bind_context &context)
 	}
 }
 
+auto sasl_gssapi::unprotected() const noexcept -> bool
+{
+	return options_.require_tls && !tls_ && options_.security_layer == gssapi_security_layer::none;
+}
+
 auto sasl_gssapi::offload_start() -> sasl_work
 {
 	// Nothing to offload: start() fails on the I/O thread.
-	if (!binding_error_.empty()) {
+	if (!binding_error_.empty() || unprotected()) {
 		return {};
 	}
 	// A new state for each bind: one whose step sasl_bind gave up on may
@@ -695,6 +708,12 @@ auto sasl_gssapi::offload_step(std::optional<std::string_view> challenge) -> sas
 
 auto sasl_gssapi::start() -> result<std::optional<std::string>>
 {
+	if (unprotected()) {
+		state_ = std::make_shared<state>();// as offload_start(): this bind's state, idle
+		return fail(client_errc::tls_required,
+		  "GSSAPI without a security layer needs a TLS-protected connection (sasl_gssapi_options::require_tls, "
+		  "security_layer)");
+	}
 	if (!binding_error_.empty()) {
 		state_ = std::make_shared<state>();// as offload_start(): this bind's state, idle
 		return fail(client_errc::tls_required, binding_error_);

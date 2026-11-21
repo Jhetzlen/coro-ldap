@@ -54,6 +54,8 @@ struct sasl_gssapi_options
 	std::string authz_id{};
 	gssapi_channel_binding channel_binding = gssapi_channel_binding::tls_server_end_point;
 	gssapi_channel_binding_form binding_form = gssapi_channel_binding_form::rfc5929;
+	// Without TLS, a security layer stands in for it.
+	bool require_tls = true;
 	gssapi_security_layer security_layer = gssapi_security_layer::none;
 	// With a security layer: the largest protected buffer accepted (1 to
 	// gssapi_max_buffer_limit).
@@ -102,6 +104,9 @@ class sasl_gssapi final : public sasl_mechanism
 	// Why the TLS connection cannot be bound; empty: it can be.
 	std::string binding_error_;
 	std::shared_ptr<state> state_;// shared with an offloaded step
+
+	// require_tls without TLS and without a security layer.
+	[[nodiscard]] auto unprotected() const noexcept -> bool;
 };
 
 namespace detail {
@@ -122,9 +127,11 @@ namespace detail {
 	// Exactly four octets: the layer mask and the size in network byte order.
 	[[nodiscard]] auto parse_gssapi_layer_offer(std::string_view message) -> result<gssapi_layer_offer>;
 
-	// The layer to select from `offer` for `requested`.
-	[[nodiscard]] auto gssapi_select_layer(const gssapi_layer_offer &offer, gssapi_security_layer requested, bool tls)
-	  -> result<std::uint8_t>;
+	// The layer to select from `offer` for `requested`; with `require_tls`
+	// and without `tls`, never none.
+	[[nodiscard]] auto
+	  gssapi_select_layer(const gssapi_layer_offer &offer, gssapi_security_layer requested, bool tls, bool require_tls)
+		-> result<std::uint8_t>;
 
 	// From gss_init_sec_context's ret_flags.
 	struct gssapi_context_flags

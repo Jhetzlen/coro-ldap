@@ -855,7 +855,11 @@ default none), its maximum buffer size (0 without a layer, else
 default, an offer without the "none" bit fails with
 `client_errc::security_layer_required`, and a layer asked for but not
 offered fails with `security_layer_unavailable` (the exchange is
-aborted, the connection stays usable). `complete()` refuses a success
+aborted, the connection stays usable). `require_tls` (default true, as
+NTLM's) refuses no layer without TLS: `start()` fails with `tls_required`
+before anything is sent when the options ask for none, and the selection
+fails the same way when `best_offered` finds only "none" (Kerberos
+authenticates the bind, not the PDUs after it). `complete()` refuses a success
 that comes before that reply (the server was not authenticated, so
 `sasl_bind` closes the connection), and releases the context; with a
 layer, the context went to the layer (`take_security_layer()`) at the

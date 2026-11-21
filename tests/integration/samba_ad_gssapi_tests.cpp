@@ -61,9 +61,11 @@ auto open(corosio::io_context &ioc, const std::string &url) -> ldap::connection
 	return std::move(*c);
 }
 
+// Without a layer, plain ldap:// is allowed (require_tls = false).
 auto gssapi(ldap::gssapi_security_layer layer) -> ldap::sasl_gssapi
 {
-	return ldap::sasl_gssapi({ .target = env("JHETZ_LDAP_IT_SAMBA_KRB5_TARGET"), .security_layer = layer });
+	return ldap::sasl_gssapi(
+	  { .target = env("JHETZ_LDAP_IT_SAMBA_KRB5_TARGET"), .require_tls = false, .security_layer = layer });
 }
 
 // Binds `c` as alice with `layer`; the identity the DC reports after it.

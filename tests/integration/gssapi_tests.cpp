@@ -158,7 +158,7 @@ TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 	SECTION("default credentials, target ldap@<the URL's host>")
 	{
 		auto c = open(ioc, localhost_url());
-		ldap::sasl_gssapi mech;
+		ldap::sasl_gssapi mech({ .require_tls = false });
 		CHECK(bind_and_who(ioc, c, mech) == user007);
 		// The same object binds again, with a new security context.
 		CHECK(bind_and_who(ioc, c, mech) == user007);
@@ -166,21 +166,22 @@ TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 	SECTION("an explicit target, connected by address")
 	{
 		auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
-		ldap::sasl_gssapi mech({ .target = "ldap@localhost" });
+		ldap::sasl_gssapi mech({ .target = "ldap@localhost", .require_tls = false });
 		CHECK(bind_and_who(ioc, c, mech) == user007);
 	}
 	SECTION("an explicit principal, UTF-8, from the cache collection")
 	{
 		auto c = open(ioc, localhost_url());
-		ldap::sasl_gssapi jorg({ .principal = "j\xC3\xB6rg" });
+		ldap::sasl_gssapi jorg({ .principal = "j\xC3\xB6rg", .require_tls = false });
 		CHECK(bind_and_who(ioc, c, jorg) == "dn:uid=j\xC3\xB6rg,ou=people,dc=example,dc=org");
-		ldap::sasl_gssapi with_realm({ .principal = "user007@" + env("JHETZ_LDAP_IT_KRB5_REALM") });
+		ldap::sasl_gssapi with_realm(
+		  { .principal = "user007@" + env("JHETZ_LDAP_IT_KRB5_REALM"), .require_tls = false });
 		CHECK(bind_and_who(ioc, c, with_realm) == user007);
 	}
 	SECTION("an authorization identity (its own: no proxy authorization rules needed)")
 	{
 		auto c = open(ioc, localhost_url());
-		ldap::sasl_gssapi mech({ .authz_id = user007 });
+		ldap::sasl_gssapi mech({ .authz_id = user007, .require_tls = false });
 		CHECK(bind_and_who(ioc, c, mech) == user007);
 	}
 	SECTION("over StartTLS and ldaps://")
@@ -202,10 +203,23 @@ TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 		CHECK(bind_and_who(ioc, ldaps, unbound) == user007);
 		CHECK_FALSE(unbound.channel_binding_used().has_value());
 	}
+	SECTION("plain LDAP without a security layer: refused before anything is sent (require_tls)")
+	{
+		auto c = open(ioc, localhost_url());
+		ldap::sasl_gssapi mech;
+		auto r = finish(ioc, c.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::tls_required);
+		CHECK(c.is_open());
+		CHECK(finish(ioc, ldap::who_am_i(c)) == "");
+		ldap::sasl_gssapi layered({ .security_layer = ldap::gssapi_security_layer::integrity });
+		CHECK(bind_and_who(ioc, c, layered) == user007);
+		CHECK(c.security_layer() == ldap::sasl_protection::integrity);
+	}
 	SECTION("an unknown service principal")
 	{
 		auto c = open(ioc, env("JHETZ_LDAP_IT_LDAP"));
-		ldap::sasl_gssapi mech({ .target = "ldap@nowhere.example.org" });
+		ldap::sasl_gssapi mech({ .target = "ldap@nowhere.example.org", .require_tls = false });
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
@@ -218,7 +232,7 @@ TEST_CASE("integration: SASL GSSAPI", "[integration][sasl][gssapi]")
 	SECTION("a principal without credentials")
 	{
 		auto c = open(ioc, localhost_url());
-		ldap::sasl_gssapi mech({ .principal = "nobody" });
+		ldap::sasl_gssapi mech({ .principal = "nobody", .require_tls = false });
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
@@ -238,7 +252,7 @@ TEST_CASE("integration: SASL GSSAPI with a server that requires a security layer
 	SECTION("plain LDAP: refused, the exchange aborted, the connection usable")
 	{
 		auto c = open(ioc, localhost_url());
-		ldap::sasl_gssapi mech;
+		ldap::sasl_gssapi mech({ .require_tls = false });
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::security_layer_required);

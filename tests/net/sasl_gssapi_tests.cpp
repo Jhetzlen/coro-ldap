@@ -88,15 +88,15 @@ TEST_CASE("gssapi: the security layer selected", "[net][sasl][gssapi]")
 	{
 		for (std::uint8_t layers : std::to_array<std::uint8_t>({ 1, 3, 5, 7, 0xff })) {
 			INFO("layers " << int{ layers });
-			CHECK(gssapi_select_layer(offer(layers), gssapi_security_layer::none, false) == none);
-			CHECK(gssapi_select_layer(offer(layers), gssapi_security_layer::none, true) == none);
+			CHECK(gssapi_select_layer(offer(layers), gssapi_security_layer::none, false, false) == none);
+			CHECK(gssapi_select_layer(offer(layers), gssapi_security_layer::none, true, false) == none);
 		}
 	}
 	SECTION("none, from a server that requires integrity or confidentiality")
 	{
 		for (std::uint8_t layers : std::to_array<std::uint8_t>({ 2, 4, 6, 0xfe })) {
 			INFO("layers " << int{ layers });
-			auto r = gssapi_select_layer(offer(layers), gssapi_security_layer::none, false);
+			auto r = gssapi_select_layer(offer(layers), gssapi_security_layer::none, false, false);
 			REQUIRE_FALSE(r.has_value());
 			CHECK(r.error().code == ldap::client_errc::security_layer_required);
 			CHECK(r.error().code == ldap::cond::access_denied);
@@ -106,20 +106,20 @@ TEST_CASE("gssapi: the security layer selected", "[net][sasl][gssapi]")
 	}
 	SECTION("integrity: integrity, else confidentiality")
 	{
-		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::integrity, false) == integrity);
-		CHECK(gssapi_select_layer(offer(2), gssapi_security_layer::integrity, true) == integrity);
-		CHECK(gssapi_select_layer(offer(5), gssapi_security_layer::integrity, false) == confidentiality);
-		auto r = gssapi_select_layer(offer(1), gssapi_security_layer::integrity, false);
+		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::integrity, false, false) == integrity);
+		CHECK(gssapi_select_layer(offer(2), gssapi_security_layer::integrity, true, false) == integrity);
+		CHECK(gssapi_select_layer(offer(5), gssapi_security_layer::integrity, false, false) == confidentiality);
+		auto r = gssapi_select_layer(offer(1), gssapi_security_layer::integrity, false, false);
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::security_layer_unavailable);
 		CHECK(r.error().code == ldap::cond::access_denied);
 	}
 	SECTION("confidentiality only")
 	{
-		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::confidentiality, false) == confidentiality);
-		CHECK(gssapi_select_layer(offer(4), gssapi_security_layer::confidentiality, true) == confidentiality);
+		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::confidentiality, false, false) == confidentiality);
+		CHECK(gssapi_select_layer(offer(4), gssapi_security_layer::confidentiality, true, false) == confidentiality);
 		for (std::uint8_t layers : std::to_array<std::uint8_t>({ 1, 2, 3 })) {
-			auto r = gssapi_select_layer(offer(layers), gssapi_security_layer::confidentiality, false);
+			auto r = gssapi_select_layer(offer(layers), gssapi_security_layer::confidentiality, false, false);
 			REQUIRE_FALSE(r.has_value());
 			CHECK(r.error().code == ldap::client_errc::security_layer_unavailable);
 			CHECK(std::string(r.error().context) == "the server does not offer confidentiality protection");
@@ -127,18 +127,30 @@ TEST_CASE("gssapi: the security layer selected", "[net][sasl][gssapi]")
 	}
 	SECTION("best offered: the strongest, but none over TLS when offered")
 	{
-		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::best_offered, false) == confidentiality);
-		CHECK(gssapi_select_layer(offer(3), gssapi_security_layer::best_offered, false) == integrity);
-		CHECK(gssapi_select_layer(offer(1), gssapi_security_layer::best_offered, false) == none);
-		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::best_offered, true) == none);
-		CHECK(gssapi_select_layer(offer(6), gssapi_security_layer::best_offered, true) == confidentiality);
-		CHECK(gssapi_select_layer(offer(2), gssapi_security_layer::best_offered, true) == integrity);
+		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::best_offered, false, false) == confidentiality);
+		CHECK(gssapi_select_layer(offer(3), gssapi_security_layer::best_offered, false, false) == integrity);
+		CHECK(gssapi_select_layer(offer(1), gssapi_security_layer::best_offered, false, false) == none);
+		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::best_offered, true, false) == none);
+		CHECK(gssapi_select_layer(offer(6), gssapi_security_layer::best_offered, true, false) == confidentiality);
+		CHECK(gssapi_select_layer(offer(2), gssapi_security_layer::best_offered, true, false) == integrity);
+	}
+	SECTION("require_tls without TLS: never none")
+	{
+		auto r = gssapi_select_layer(offer(1), gssapi_security_layer::best_offered, false, true);
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::tls_required);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("sasl_gssapi_options::require_tls"));
+		CHECK_FALSE(gssapi_select_layer(offer(7), gssapi_security_layer::none, false, true).has_value());
+		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::best_offered, false, true) == confidentiality);
+		CHECK(gssapi_select_layer(offer(3), gssapi_security_layer::integrity, false, true) == integrity);
+		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::best_offered, true, true) == none);
+		CHECK(gssapi_select_layer(offer(7), gssapi_security_layer::none, true, true) == none);
 	}
 	SECTION("an offer of nothing")
 	{
 		for (std::uint8_t layers : std::to_array<std::uint8_t>({ 0, 8, 0xf0 })) {
 			for (auto requested : { gssapi_security_layer::none, gssapi_security_layer::best_offered }) {
-				auto r = gssapi_select_layer({ .layers = layers, .max_size = 0 }, requested, false);
+				auto r = gssapi_select_layer({ .layers = layers, .max_size = 0 }, requested, false, false);
 				REQUIRE_FALSE(r.has_value());
 				CHECK(r.error().code == ldap::client_errc::unexpected_response);
 			}
@@ -146,8 +158,8 @@ TEST_CASE("gssapi: the security layer selected", "[net][sasl][gssapi]")
 	}
 	SECTION("a layer offered with a maximum buffer size of 0")
 	{
-		CHECK(gssapi_select_layer({ .layers = 7, .max_size = 0 }, gssapi_security_layer::none, false) == none);
-		auto r = gssapi_select_layer({ .layers = 7, .max_size = 0 }, gssapi_security_layer::integrity, false);
+		CHECK(gssapi_select_layer({ .layers = 7, .max_size = 0 }, gssapi_security_layer::none, false, false) == none);
+		auto r = gssapi_select_layer({ .layers = 7, .max_size = 0 }, gssapi_security_layer::integrity, false, false);
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::unexpected_response);
 	}
@@ -219,7 +231,7 @@ TEST_CASE("gssapi: no target without a host, nothing sent", "[net][sasl][gssapi]
 {
 	mock_ldap m;// a wrapped transport: no host
 	m.serve({});
-	ldap::sasl_gssapi mech;
+	ldap::sasl_gssapi mech({ .require_tls = false });
 	auto r = m.run(m.conn.sasl_bind(mech));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::client_errc::encode_error);
@@ -240,9 +252,9 @@ TEST_CASE("gssapi: invalid names are refused before anything is sent", "[net][sa
 		CHECK(r.error().code == ldap::client_errc::encode_error);
 		CHECK(std::string(r.error().context) == "sasl bind GSSAPI: " + std::string(what));
 	};
-	refused({ .target = "ldap@\xFF" }, "target is not valid UTF-8");
-	refused({ .principal = "jdoe\r\n@EXAMPLE.ORG" }, "principal contains a control character");
-	refused({ .authz_id = "dn:\xE2\x82" }, "authorization identity is not valid UTF-8");
+	refused({ .target = "ldap@\xFF", .require_tls = false }, "target is not valid UTF-8");
+	refused({ .principal = "jdoe\r\n@EXAMPLE.ORG", .require_tls = false }, "principal contains a control character");
+	refused({ .authz_id = "dn:\xE2\x82", .require_tls = false }, "authorization identity is not valid UTF-8");
 	refused({ .security_layer = ldap::gssapi_security_layer::integrity, .max_receive_size = 0 },
 	  "max_receive_size 0 out of range (1 to 16777215)");
 	refused({ .security_layer = ldap::gssapi_security_layer::best_offered, .max_receive_size = 0x1000000 },
@@ -262,7 +274,7 @@ TEST_CASE("gssapi: GSS-API errors carry its status messages", "[net][sasl][gssap
 
 	SECTION("default credentials, default target ldap@<host>")
 	{
-		ldap::sasl_gssapi mech;
+		ldap::sasl_gssapi mech({ .require_tls = false });
 		auto r = m.run(m.conn.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
@@ -275,11 +287,49 @@ TEST_CASE("gssapi: GSS-API errors carry its status messages", "[net][sasl][gssap
 	}
 	SECTION("an explicit principal, UTF-8")
 	{
-		ldap::sasl_gssapi mech({ .target = "ldap@dc1.example.org", .principal = "j\xC3\xB6rg@EXAMPLE.ORG" });
+		ldap::sasl_gssapi mech(
+		  { .target = "ldap@dc1.example.org", .principal = "j\xC3\xB6rg@EXAMPLE.ORG", .require_tls = false });
 		auto r = m.run(m.conn.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::gssapi_failure);
 		CHECK_THAT(std::string(r.error().context), StartsWith("sasl bind GSSAPI: gss_acquire_cred: "));
+	}
+	CHECK(m.conn.is_open());
+	m.check_server();
+	CHECK(m.log.received.empty());
+}
+
+TEST_CASE("gssapi: require_tls refuses plain LDAP without a security layer", "[net][sasl][gssapi]")
+{
+	const scoped_env config("KRB5_CONFIG", "/dev/null");
+	const scoped_env cache("KRB5CCNAME", "FILE:/nonexistent/jhetz-ldap-test-ccache");
+	const scoped_env keytab("KRB5_CLIENT_KTNAME", "FILE:/nonexistent/jhetz-ldap-test-keytab");
+	tcp_mock_ldap m;
+	m.serve({});
+
+	SECTION("by default: tls_required before anything is sent")
+	{
+		ldap::sasl_gssapi mech;
+		CHECK_FALSE(mech.offload_start());// nothing to offload: start() fails inline
+		auto r = m.run(m.conn.sasl_bind(mech));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == ldap::client_errc::tls_required);
+		CHECK(r.error().code == ldap::cond::access_denied);
+		CHECK_THAT(std::string(r.error().context),
+		  StartsWith("sasl bind GSSAPI: GSSAPI without a security layer needs a TLS-protected connection"));
+	}
+	SECTION("a security layer stands in for TLS, as does require_tls = false: GSS-API is called")
+	{
+		for (const auto &options :
+		  { ldap::sasl_gssapi_options{ .security_layer = ldap::gssapi_security_layer::integrity },
+			ldap::sasl_gssapi_options{ .security_layer = ldap::gssapi_security_layer::confidentiality },
+			ldap::sasl_gssapi_options{ .security_layer = ldap::gssapi_security_layer::best_offered },
+			ldap::sasl_gssapi_options{ .require_tls = false } }) {
+			ldap::sasl_gssapi mech(options);
+			auto r = m.run(m.conn.sasl_bind(mech));
+			REQUIRE_FALSE(r.has_value());
+			CHECK(r.error().code == ldap::client_errc::gssapi_failure);
+		}
 	}
 	CHECK(m.conn.is_open());
 	m.check_server();
@@ -314,7 +364,7 @@ TEST_CASE("gssapi: offloaded steps", "[net][sasl][gssapi]")
 	{
 		ldap::sasl_work work;
 		{
-			ldap::sasl_gssapi mech({ .target = "ldap@dc1.example.org" });
+			ldap::sasl_gssapi mech({ .target = "ldap@dc1.example.org", .require_tls = false });
 			work = mech.offload_start();
 			REQUIRE(work);
 		}
@@ -325,7 +375,7 @@ TEST_CASE("gssapi: offloaded steps", "[net][sasl][gssapi]")
 	}
 	SECTION("steps while the work runs are refused; start() begins anew")
 	{
-		ldap::sasl_gssapi mech({ .target = "ldap@dc1.example.org" });
+		ldap::sasl_gssapi mech({ .target = "ldap@dc1.example.org", .require_tls = false });
 		auto work = mech.offload_start();
 		auto challenge = mech.step("token"sv);
 		REQUIRE_FALSE(challenge.has_value());
