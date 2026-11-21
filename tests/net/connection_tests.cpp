@@ -6,6 +6,7 @@
 #include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
+#include "jhetz/ldap/sasl.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -2763,8 +2764,84 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 	}
 }
 
+namespace {
+
+// A mechanism whose first step, run on a thread of its own, fails without
+// anything being sent.
+class refused_offload final : public ldap::sasl_mechanism
+{
+  public:
+	[[nodiscard]] auto name() const noexcept -> std::string_view override { return "X-REFUSED"; }
+	auto start() -> ldap::result<std::optional<std::string>> override { return std::nullopt; }
+	auto step(std::optional<std::string_view>) -> ldap::result<std::optional<std::string>> override
+	{
+		return std::nullopt;
+	}
+	auto offload_start() -> ldap::sasl_work override
+	{
+		return [] -> ldap::result<std::optional<std::string>> {
+			return ldap::fail(client_errc::tls_required, "refused before sending");
+		};
+	}
+};
+
+// A mechanism whose second step throws.
+class throwing_step final : public ldap::sasl_mechanism
+{
+  public:
+	[[nodiscard]] auto name() const noexcept -> std::string_view override { return "X-THROW"; }
+	auto start() -> ldap::result<std::optional<std::string>> override { return std::optional<std::string>("hello"); }
+	auto step(std::optional<std::string_view>) -> ldap::result<std::optional<std::string>> override
+	{
+		throw std::runtime_error("mechanism failure");
+	}
+};
+
+}// namespace
+
 TEST_CASE("requests held behind a failed bind fail without being sent", "[net][connection]")
 {
+	SECTION("a bind that fails before sending anything: the connection stays open")
+	{
+		mock_ldap m;
+		m.serve({ answer({ done_msg(2) }) });
+		refused_offload mech;
+		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<ldap::search_result>> held;
+		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
+		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), held);// id 1
+		drive_until(m.ioc, [&] { return bind.done() && held.done(); });
+		REQUIRE_FALSE(bind.get().has_value());
+		CHECK(bind.get().error().code == client_errc::tls_required);
+		REQUIRE_FALSE(held.get().has_value());
+		CHECK(held.get().error().code == client_errc::bind_failed);
+		CHECK_THAT(std::string(held.get().error().context), ContainsSubstring("held behind a failed bind: sasl bind"));
+		CHECK(m.conn.is_open());
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());// id 2
+		m.check_server();
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(m.log.received[0].id == 2);
+	}
+	SECTION("a bind that does not complete (the exchange throws)")
+	{
+		mock_ldap m;
+		m.serve({ answer({ bind_resp(1, 14) }) });
+		throwing_step mech;
+		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<ldap::search_result>> held;
+		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
+		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), held);// id 2
+		drive_until(m.ioc, [&] { return bind.done() && held.done(); });
+		CHECK_THROWS_AS(bind.get(), std::runtime_error);
+		REQUIRE_FALSE(held.get().has_value());
+		CHECK(held.get().error().code == client_errc::bind_failed);
+		CHECK_THAT(
+		  std::string(held.get().error().context), ContainsSubstring("held behind a bind that did not complete"));
+		m.check_server();
+		REQUIRE(m.log.received.size() == 1);
+		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+	}
 	SECTION("a bind the server refuses")
 	{
 		mock_ldap m;

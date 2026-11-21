@@ -157,7 +157,7 @@ namespace {
 								   detail::format("{}: still in progress after {} steps", context, max_steps))
 							   : detail::with_context(std::move(creds.error()), context);
 				// Past the first step the server answered saslBindInProgress:
-				// abort the exchange before the held requests are sent.
+				// aborts the exchange.
 				if (step > 0) {
 					co_await abort_sasl(self, context);
 				}

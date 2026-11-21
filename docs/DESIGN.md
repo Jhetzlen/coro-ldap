@@ -2532,9 +2532,11 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   connection as binding. Requests started meanwhile are encoded, registered
   and held, then sent in order when the exchange succeeds; one cancelled
   while held is dropped (never sent, so no AbandonRequest). An exchange
-  that fails, is cancelled or ends without an outcome (its frame
-  destroyed) fails the held requests with `client_errc::bind_failed`
-  quoting its error, unsent: sending them would run them anonymously, or
+  that fails, is stopped with none of its BindRequests outstanding or ends
+  without an outcome (its frame destroyed) fails the held requests with
+  `client_errc::bind_failed` quoting its error, unsent (one stopped while
+  a BindRequest is outstanding closes the connection, since a bind cannot
+  be abandoned, and they fail with `not_sent`): sending them would run them anonymously, or
   without the security layer the bind was to install. Held requests nothing
   waits for are still sent, their answers still due: AbandonRequests, a
   destroyed transaction's abort and a paged results release carry no

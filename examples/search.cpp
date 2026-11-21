@@ -29,7 +29,8 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 		co_return 1;
 	}
 	if (!people->is_complete()) {
-		std::cerr << "the result is partial: result code " << people->result_code << '\n';
+		std::cerr << "the result is partial: result code " << people->result_code << ", " << people->references.size()
+				  << " references not followed\n";
 	}
 	for (const ldap::entry &person : people->entries) {
 		std::cout << person.dn << ": " << person.find("cn")->front() << '\n';

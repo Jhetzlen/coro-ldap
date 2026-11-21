@@ -36,7 +36,8 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 		co_return 1;
 	}
 	if (!everything->is_complete()) {
-		std::cerr << "the result is partial: result code " << everything->result_code << '\n';
+		std::cerr << "the result is partial: result code " << everything->result_code << ", "
+				  << everything->references.size() << " references not followed\n";
 	}
 	std::cout << everything->entries.size() << " entries under dc=example,dc=org\n";
 	co_return 0;

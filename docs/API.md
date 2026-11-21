@@ -506,11 +506,14 @@ itself needs only ICU.
   either, and the connection stays open). Nothing is sent while a bind is
   outstanding (RFC 4511 section 4.2.1): requests started during a bind
   exchange are held and sent after it if the bind succeeds, and binds are
-  serialized. If the bind fails, is cancelled or does not complete, the
-  held requests fail with `client_errc::bind_failed`
-  (`cond::auth_failed`) and none is sent (anonymously, or without the
-  security layer the bind was to install); the context names the bind's
-  error. Held requests that only discard server state are still sent:
+  serialized. If the bind fails, is stopped while none of its
+  BindRequests is outstanding (during an offloaded GSSAPI start, say) or
+  does not complete, the held requests fail with
+  `client_errc::bind_failed` (`cond::auth_failed`) and none is sent
+  (anonymously, or without the security layer the bind was to install);
+  the context names the bind's error. A bind stopped while a BindRequest
+  is outstanding closes the connection (above), and the held requests
+  fail with `client_errc::not_sent`. Held requests that only discard server state are still sent:
   AbandonRequests, a destroyed transaction's abort and a paged search's
   release.
   Every response is decoded with `origin::server` and must answer an
@@ -1559,11 +1562,13 @@ itself needs only ICU.
   `detail::connection_api` are the machinery `sync::connection` and the
   sync leases share.
 - `client_errc::bind_failed`: the request was held behind a bind that
-  failed, was cancelled or did not complete (RFC 4511 section 4.2.1), so
-  it was never sent; the context quotes the bind's error. It matches
+  failed, was stopped with no BindRequest outstanding or did not complete
+  (RFC 4511 section 4.2.1), so it was never sent; the context quotes the
+  bind's error. It matches
   `cond::auth_failed`. A behaviour change: such requests used to be sent
   after the failed bind, anonymously and without the bind's security
-  layer. If the failure closed the connection they fail with `not_sent`.
+  layer. If the failure closed the connection (also a bind stopped while
+  its BindRequest is outstanding) they fail with `not_sent`.
 - `client_errc::not_sent`: the operation failed before the connection's
   writer took its request (the connection closed while the request was
   refused, still queued, or held behind a bind), so the server never saw
@@ -1714,8 +1719,9 @@ package component `ad`:
   since DNS is unauthenticated and the TLS certificate is checked against
   the target; compared per label on the A-labels, ignoring ASCII case, as
   RFC 6125 section 6.2.1 does, so `dc.evilexample.org` is not under
-  `example.org`; false keeps DCs outside the domain), `.resolver` (an `ad::srv_resolver`, a function from an ASCII
-  DNS name to `result<std::vector<ad::srv_record>>`; empty: the system's
+  `example.org`; false keeps DCs outside the domain), `.resolver` (an
+  `ad::srv_resolver`, a function from an ASCII DNS name to
+  `result<std::vector<ad::srv_record>>`; empty: the system's
   `ad::resolve_srv`, res_nquery on Linux (links libresolv), DnsQuery_UTF8
   on Windows (dnsapi)). Each list is in RFC 2782 order
   (`ad::order_srv(records, g)`: by priority, then weighted random), without
@@ -1724,9 +1730,10 @@ package component `ad`:
   first, so `dc1.example.org.` and `dc1.example.org` are one server; the
   URLs hold them in lower case); a converted target holds only letters,
   digits, `-`, `_` (legacy AD host names such as `dc_01`) and `.`. Each
-  URL is built with `url::server`, not from text. Unusable records (a
-  target UTS #46 refuses or with another character, port 0, a target
-  outside the domain, above) are skipped. Errors: `std::errc::invalid_argument`
+  URL is built with `url::server`, not from text. Unusable records are
+  skipped: a target UTS #46 refuses or with another character, port 0
+  (without `.tls` only, since `.tls` replaces the SRV port), a target
+  outside the domain (above). Errors: `std::errc::invalid_argument`
   (empty domain), `client_errc::string_prep_failed` (a domain or site UTS
   #46 refuses), `std::errc::host_unreachable` (no SRV record names a
   server, or none is usable: the context lists the skipped targets and
