@@ -120,6 +120,9 @@ auto search(boost::corosio::io_context &ioc) -> boost::capy::task<int>
 		std::cerr << people.error().message() << '\n';
 		co_return 1;
 	}
+	if (!people->is_complete()) {
+		std::cerr << "the result is partial: result code " << people->result_code << '\n';
+	}
 	for (const ldap::entry &person : people->entries) {
 		std::cout << person.dn << ": " << person.find("cn")->front() << '\n';
 	}
@@ -131,6 +134,10 @@ auto main() -> int
 	return ldap::run(search);
 }
 ```
+
+A search that hits a server limit (sizeLimitExceeded, timeLimitExceeded, adminLimitExceeded) still
+succeeds with the entries received so far, so `is_complete()` tells a partial answer apart; Active
+Directory's default limit of 1000 entries is the common case, and `ldap::search_paged` gets past it.
 
 More in [`examples/`](examples/): one small program per task (connect,
 search, add, modify, delete, transactions, password reset, StartTLS, cancellation, paged

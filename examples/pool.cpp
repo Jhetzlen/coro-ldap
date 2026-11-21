@@ -21,6 +21,9 @@ auto example(boost::corosio::io_context &ioc, ldap::url server) -> boost::capy::
 		std::cerr << people.error().message() << '\n';
 		co_return 1;
 	}
+	if (!people->is_complete()) {
+		std::cerr << "the result is partial: result code " << people->result_code << '\n';
+	}
 	for (const ldap::entry &person : people->entries) {
 		std::cout << person.dn << ": " << person.find("cn")->front() << '\n';
 	}

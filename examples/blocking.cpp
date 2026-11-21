@@ -24,6 +24,9 @@ auto main(int argc, char *const *argv) -> int
 		std::cerr << people.error().message() << '\n';
 		return 1;
 	}
+	if (!people->is_complete()) {
+		std::cerr << "the result is partial: result code " << people->result_code << '\n';
+	}
 	for (const ldap::entry &person : people->entries) {
 		std::cout << person.dn << ": " << person.find("cn")->front() << '\n';
 	}

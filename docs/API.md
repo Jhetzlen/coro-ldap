@@ -9,7 +9,7 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
 
 | To | Call | Notes |
 |---|---|---|
-| Search, all entries at once | `connection::search(params)` | `result<search_result>`: entries, references (not followed), the done's result code; a limit code (sizeLimitExceeded, ...) keeps the entries |
+| Search, all entries at once | `connection::search(params)` | `result<search_result>`: entries, references (not followed), the done's result code; a limit code (sizeLimitExceeded, timeLimitExceeded, adminLimitExceeded) is a value that keeps the entries received, so check `is_complete()` before treating `entries` as the whole answer (Active Directory ends an unpaged search past its MaxPageSize, 1000 by default, with sizeLimitExceeded: page it with `search_paged`) |
 | Search, entry by entry | `connection::search_stream(params)` | `next()` / `next_item()`; memory bounded by the caller's pace; abandons the search when destroyed early |
 | Search a large result in pages | `ldap::search_paged(conn_or_client, params, page_size)` | RFC 2696 paged results, one page requested at a time; `sync::search_paged` collects every page |
 | Search into structs | `repository<T>::search` / `search_stream` / `search_paged` (repository.hpp) | the same three shapes, entries decoded to `record<T>` |
@@ -457,7 +457,9 @@ itself needs only ICU.
   `references`, and the SearchResultDone's `result_code`, `matched_dn`,
   `diagnostic_message` and `controls`; a value for success and for
   sizeLimitExceeded, timeLimitExceeded and adminLimitExceeded, with the
-  entries received before it and `is_success()` false; any other code is
+  entries received before it and `is_success()` false, so `is_complete()`
+  is the check before using `entries` as the whole answer (AD's default
+  MaxPageSize of 1000 is the common case); any other code is
   an error; a repository's `search` returns the same as
   `typed_search_result<record<T>>`),
   `search_stream(search_params, mr)` whose `co_await s.next()` yields one
