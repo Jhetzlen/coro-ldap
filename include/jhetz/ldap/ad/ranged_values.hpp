@@ -11,6 +11,7 @@
 
 #include <boost/capy/task.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <string>
@@ -19,8 +20,14 @@ namespace jhetz::ldap::ad {
 
 struct range_options
 {
+	static constexpr std::size_t default_max_values = 1'000'000;
+	static constexpr std::size_t default_max_rounds = 10'000;
+
 	// 0: the windows the server chooses; N: `attribute;range=low-(low+N-1)`.
 	std::uint32_t step = 0;
+	// More values, or more searches, fail with client_errc::message_too_large.
+	std::size_t max_values = default_max_values;
+	std::size_t max_rounds = default_max_rounds;
 };
 
 // Every value of `attribute` of `object`, in the order sent, on `mr`. The

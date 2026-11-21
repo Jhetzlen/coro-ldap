@@ -319,8 +319,8 @@ TEST_CASE("connect ldap:// to a loopback server and exchange messages", "[net][c
 
 TEST_CASE("connect timeout semantics", "[net][connect][tcp][timeout]")
 {
-	// nullopt and values too large for the clock: no limit.
-	for (auto limit : { std::optional<std::chrono::milliseconds>{}, std::optional(std::chrono::milliseconds::max()) }) {
+	// no_timeout and values too large for the clock: no limit.
+	for (auto limit : { ldap::no_timeout, ldap::no_timeout - std::chrono::milliseconds(1) }) {
 		corosio::io_context ioc;
 		tcp_server srv(ioc);
 		outcome<std::string> server;

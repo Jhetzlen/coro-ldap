@@ -45,7 +45,7 @@ auto add_modify_delete(ldap::connection &c, in_flight &running, int i) -> capy::
 
 auto example(boost::corosio::io_context &ioc, std::string text) -> capy::task<int>
 {
-	auto c = co_await ldap::connect(ioc, text);
+	auto c = co_await ldap::connect(ioc, text, { .allow_cleartext_passwords = true });
 	if (!c) {
 		std::cerr << c.error().message() << '\n';
 		co_return 1;

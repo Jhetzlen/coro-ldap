@@ -9,7 +9,9 @@ namespace ldap = jhetz::ldap;
 auto example(boost::corosio::io_context &ioc, ldap::url server) -> boost::capy::task<int>
 {
 	ldap::client pool(ioc,
-	  { .servers = { server }, .setup = ldap::simple_bind_setup(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret") });
+	  { .servers = { server },
+		.connection = { .allow_cleartext_passwords = true },
+		.setup = ldap::simple_bind_setup(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret") });
 	auto people = co_await pool.search({
 	  .base = ldap::dn{ "ou=people,dc=example,dc=org" },
 	  .filter = ldap::filters::attr("uid").starts_with("user00"),

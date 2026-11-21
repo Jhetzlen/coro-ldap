@@ -187,9 +187,9 @@ auto admin_setup() -> ldap::session_setup { return ldap::simple_bind_setup(*ldap
 // operation timeout.
 auto options_for(const ldap::url &server) -> ldap::client_options
 {
-	return {
-		.servers = { server }, .connection = { .operation_timeout = std::chrono::seconds(10) }, .setup = admin_setup()
-	};
+	return { .servers = { server },
+		.connection = { .operation_timeout = std::chrono::seconds(10), .allow_cleartext_passwords = true },
+		.setup = admin_setup() };
 }
 
 auto whoami_msg(std::int32_t id) -> ldap::message
@@ -267,7 +267,8 @@ TEST_CASE("sync: a search ending with a limit code returns its entries", "[net][
 		  answer({ entry_msg(2, jdoe, "John"), done_msg(2, 11, "", "admin limit") }),
 		  unbind_read() } });
 		{
-			auto opened = ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10) });
+			auto opened = ldap::sync::connect(
+			  srv.url(), { .timeout = std::chrono::seconds(10), .allow_cleartext_passwords = true });
 			REQUIRE(opened.has_value());
 			auto &c = *opened;
 			auto r = c.search(people_search());
@@ -621,7 +622,7 @@ TEST_CASE("sync client: close() while another thread waits in acquire()", "[net]
 	first_retry obs;
 	const refused_port down;
 	ldap::sync::client pool({ .servers = { *ldap::url::parse(down.url()) },
-	  .acquire_timeout = std::nullopt,// retries until close()
+	  .acquire_timeout = ldap::no_timeout,// retries until close()
 	  .backoff = { .initial = std::chrono::seconds(10), .max = std::chrono::seconds(10) },
 	  .observer = &obs });
 	std::optional<ldap::result<ldap::sync::lease>> got;
@@ -906,7 +907,8 @@ TEST_CASE("sync load_schema: on a sync::connection and a sync::client", "[net][s
 		threaded_script_server srv(
 		  { { answer({ root_dse_msg(1), done_msg(1) }), answer({ subschema_msg(2), done_msg(2) }), unbind_read() } });
 		{
-			auto opened = ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10) });
+			auto opened = ldap::sync::connect(
+			  srv.url(), { .timeout = std::chrono::seconds(10), .allow_cleartext_passwords = true });
 			REQUIRE(opened.has_value());
 			auto &c = *opened;
 			auto s = ldap::sync::load_schema(c);

@@ -6,7 +6,7 @@ namespace ldap = jhetz::ldap;
 
 auto main(int argc, char *const *argv) -> int
 {
-	auto conn = ldap::sync::connect(argc > 1 ? argv[1] : "ldap://localhost");
+	auto conn = ldap::sync::connect(argc > 1 ? argv[1] : "ldap://localhost", { .allow_cleartext_passwords = true });
 	if (!conn) {
 		std::cerr << conn.error().message() << '\n';
 		return 1;

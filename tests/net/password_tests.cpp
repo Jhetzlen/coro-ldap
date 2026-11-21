@@ -98,6 +98,22 @@ TEST_CASE("change_password: refused before sending", "[net][password]")
 	CHECK(closed.error().code == client_errc::not_connected);
 }
 
+TEST_CASE("change_password: not sent in clear over TCP unless allowed", "[net][password]")
+{
+	tcp_mock_ldap m({}, socket_buffers::system, false);
+	m.serve({ step{} });
+	const ldap::dn user{ "uid=jdoe,ou=people,dc=example,dc=org" };
+	auto changed = m.run(ldap::change_password(m.conn, user, "old", "new"));
+	REQUIRE_FALSE(changed.has_value());
+	CHECK(changed.error().code == ldap::client_errc::tls_required);
+	auto reset = m.run(ldap::reset_password(m.conn, user, "new"));
+	REQUIRE_FALSE(reset.has_value());
+	CHECK(reset.error().code == ldap::client_errc::tls_required);
+	CHECK(m.run(m.conn.unbind()).has_value());
+	m.check_server();
+	CHECK(m.log.received.size() == 1);
+}
+
 TEST_CASE("change_password: a server error", "[net][password]")
 {
 	mock_ldap m;

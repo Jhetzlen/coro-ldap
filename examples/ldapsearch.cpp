@@ -304,6 +304,7 @@ auto ldapsearch(corosio::io_context &ioc, options o) -> capy::task<int>
 	copts.tls.cert_file = o.cert_file;
 	copts.tls.key_file = o.key_file;
 	copts.start_tls = o.start_tls;
+	copts.allow_cleartext_passwords = true;
 
 	auto c = co_await ldap::connect(ioc, std::move(*u), std::move(copts));
 	if (!c) {

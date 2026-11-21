@@ -79,6 +79,7 @@ auto trusting(ldap::connection_options o = {}) -> ldap::connection_options
 	o.tls.ca_file = env("JHETZ_LDAP_IT_CA");
 	o.timeout = std::chrono::seconds(10);
 	o.operation_timeout = std::chrono::seconds(10);
+	o.allow_cleartext_passwords = true;
 	return o;
 }
 

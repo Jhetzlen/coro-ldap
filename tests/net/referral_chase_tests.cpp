@@ -1298,6 +1298,7 @@ TEST_CASE("make_same_policy_connector: connects, sets up once, reuses", "[net][r
 
 	ldap::connection_options options;
 	options.operation_timeout = std::chrono::seconds(5);
+	options.allow_cleartext_passwords = true;
 	auto connector = ldap::make_same_policy_connector(w.ioc,
 	  w.origin.conn,
 	  options,
@@ -1402,6 +1403,7 @@ auto with_timeout() -> ldap::connection_options
 	ldap::connection_options options;
 	options.timeout = std::chrono::seconds(10);
 	options.operation_timeout = std::chrono::seconds(10);
+	options.allow_cleartext_passwords = true;
 	return options;
 }
 

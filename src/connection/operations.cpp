@@ -253,6 +253,11 @@ namespace detail {
 			// StartTLS goes through start_tls(), which sends no control.
 			co_return std::unexpected(make_error(client_errc::encode_error, context + ": use start_tls()"));
 		}
+		if (request.name == password_modify_oid && self->refuses_cleartext_password()) {
+			co_return fail(client_errc::tls_required,
+			  context + ": the passwords would be sent in clear (use ldaps://, start_tls() or "
+						"connection_options::allow_cleartext_passwords)");
+		}
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		std::optional<std::string_view> value;
 		if (request.value) {

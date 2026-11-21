@@ -148,6 +148,11 @@ namespace {
 			return std::optional<std::uint32_t>{};
 		}
 		auto &values = found->values->values;
+		if (values.size() > r.options.max_values - out.size()) {
+			return fail(client_errc::message_too_large,
+			  r.context + ": more than " + std::to_string(r.options.max_values)
+				+ " values (range_options::max_values)");
+		}
 		const auto append = [&] {
 			out.insert(out.end(), std::make_move_iterator(values.begin()), std::make_move_iterator(values.end()));
 		};
@@ -165,6 +170,11 @@ namespace {
 			  r.context + ": asked for the values from " + std::to_string(low) + ", got "
 				+ std::string(found->values->type.name()));
 		}
+		if (got.high && values.size() > std::uint64_t{ *got.high } - got.low + 1) {
+			return fail(client_errc::unexpected_response,
+			  r.context + ": " + std::to_string(values.size()) + " values in the window "
+				+ std::string(found->values->type.name()));
+		}
 		append();
 		type = std::move(found->ranged->type);
 		if (!got.high || *got.high == std::numeric_limits<std::uint32_t>::max()) {
@@ -179,7 +189,13 @@ namespace {
 		std::string type = r.attribute;
 		std::optional<std::uint32_t> low = 0;
 		bool plain = false;
+		std::size_t rounds = 0;
 		while (low) {
+			if (rounds++ == r.options.max_rounds) {
+				co_return fail(client_errc::message_too_large,
+				  r.context + ": more than " + std::to_string(r.options.max_rounds)
+					+ " searches (range_options::max_rounds)");
+			}
 			search_params query{ .base = r.object, .scope = search_scope::base_object };
 			query.attributes.emplace_back(selector(r, type, *low, plain));
 			auto found = co_await c.search(std::move(query), r.mr);

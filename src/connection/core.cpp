@@ -99,8 +99,10 @@ connection::core::core(executor_type strand,
   std::pmr::memory_resource *memory)
   : ex(std::move(strand)), mr_(memory), transport_(std::move(t)), buf(memory),
 	max_message_size(options.max_message_size), max_elements(options.max_elements),
-	default_timeout_(options.operation_timeout), tls_shutdown_timeout(options.tls_shutdown_timeout), pending(memory),
-	abandoned(memory), outbox(memory), held(memory), scratch(memory)
+	default_timeout_(detail::limit_of(options.operation_timeout)),
+	allow_cleartext_passwords_(options.allow_cleartext_passwords),
+	tls_shutdown_timeout(detail::limit_of(options.tls_shutdown_timeout)), pending(memory), abandoned(memory),
+	outbox(memory), held(memory), scratch(memory)
 {
 	write_idle.set();
 	reader_idle.set();

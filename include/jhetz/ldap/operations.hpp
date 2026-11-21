@@ -9,6 +9,7 @@
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
+#include "jhetz/ldap/timeout.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -22,9 +23,6 @@
 #include <vector>
 
 namespace jhetz::ldap {
-
-// For a request's `timeout`: no client-side limit for this operation.
-inline constexpr std::chrono::milliseconds no_timeout = std::chrono::milliseconds::max();
 
 // A dn with no default constructor, so a search names its base.
 struct search_base : dn

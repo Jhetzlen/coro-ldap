@@ -1,5 +1,6 @@
 #include "jhetz/ldap/controls.hpp"
 
+#include "control_util.hpp"
 #include "format_util.hpp"
 
 #include "jhetz/ldap/ber.hpp"
@@ -15,16 +16,14 @@
 
 namespace jhetz::ldap {
 
+using detail::control_value;
+using detail::find_decoded;
+using detail::in_control;
+using detail::next_is_exact;
+using detail::skip_rest;
+using detail::value_control;
+
 namespace {
-
-	// Control types a peer sent are shown in errors cut to this many bytes.
-	constexpr std::size_t max_shown_type = 64;
-
-	auto value_control(std::string_view oid, bool critical, const ber::writer &w, const control::allocator_type &alloc)
-	  -> control
-	{
-		return { oid, critical, detail::as_text(w.bytes()), alloc };
-	}
 
 	// SortKeyList ::= SEQUENCE OF SEQUENCE { attributeType AttributeDescription,
 	//   orderingRule [0] MatchingRuleId OPTIONAL, reverseOrder [1] BOOLEAN DEFAULT FALSE }
@@ -71,19 +70,6 @@ namespace {
 		return value_control(oid, critical, w, control::allocator_type(mr));
 	}
 
-	// The first control of type `oid`, decoded by `decode` (which returns
-	// a result<T>); nullopt if there is none.
-	template<class T, class Decode>
-	auto find_decoded(const std::pmr::vector<control> &controls, std::string_view oid, Decode decode)
-	  -> result<std::optional<T>>
-	{
-		const auto it = std::ranges::find(controls, oid, &control::type);
-		if (it == controls.end()) {
-			return std::optional<T>{};
-		}
-		return decode(*it).transform([](T &&v) { return std::optional<T>(std::move(v)); });
-	}
-
 	auto find_read_entry(const std::pmr::vector<control> &controls, std::string_view oid, std::pmr::memory_resource *mr)
 	  -> result<std::optional<entry>>
 	{
@@ -93,32 +79,6 @@ namespace {
 			return decode_read_entry(c, options).transform([](search_result_entry &&e) {
 				return entry::from(std::move(e));
 			});
-		});
-	}
-
-	// The value of a request control of type `oid`; decode_error otherwise.
-	auto control_value(const control &c, std::string_view oid, std::string_view what)
-	  -> result<std::span<const std::byte>>
-	{
-		if (c.type != oid) {
-			std::string text = detail::format("{}: control type is ", what);
-			detail::append_sanitized(text, c.type, max_shown_type);
-			detail::format_to(text, ", not {}", oid);
-			return fail(client_errc::decode_error, text);
-		}
-		if (!c.value) {
-			return fail(client_errc::decode_error, detail::format("{}: control has no value", what));
-		}
-		return std::as_bytes(std::span(*c.value));
-	}
-
-	// Errors from inside a control value name the control: their offsets
-	// are relative to the value.
-	template<class T> auto in_control(result<T> r, std::string_view what) -> result<T>
-	{
-		return std::move(r).transform_error([what](error e) {
-			e.context.insert(0, e.context.empty() ? std::string(what) : detail::format("{}: ", what));
-			return e;
 		});
 	}
 
@@ -344,27 +304,6 @@ namespace {
 		return static_cast<std::int32_t>(*v);
 	}
 
-	// RFC 4511 section 4: unrecognized trailing SEQUENCE elements are
-	// ignored, but must be well-formed.
-	auto skip_rest(ber::reader &r) -> result<void>
-	{
-		while (!r.empty()) {
-			if (auto e = r.read(); !e) {
-				return std::unexpected(std::move(e.error()));
-			}
-		}
-		return {};
-	}
-
-	auto next_is(const ber::reader &r, ber::tag t) -> bool
-	{
-		if (r.empty()) {
-			return false;
-		}
-		auto p = r.peek_tag();
-		return p && p->cls == t.cls && p->number == t.number && p->constructed == t.constructed;
-	}
-
 	auto read_vlv(std::span<const std::byte> value) -> result<virtual_list_view>
 	{
 		ber::reader r(value);
@@ -386,7 +325,7 @@ namespace {
 		}
 		out.before_count = *before;
 		out.after_count = *after;
-		if (next_is(*s, ber::context(0, true))) {
+		if (next_is_exact(*s, ber::context(0, true))) {
 			auto by = s->enter(ber::context(0, true));
 			if (!by) {
 				return std::unexpected(std::move(by.error()));
@@ -403,7 +342,7 @@ namespace {
 				return std::unexpected(std::move(done.error()));
 			}
 			out.target = vlv_by_offset{ .offset = *offset, .content_count = *count };
-		} else if (next_is(*s, ber::context(1))) {
+		} else if (next_is_exact(*s, ber::context(1))) {
 			auto v = s->read_octet_string(ber::context(1));
 			if (!v) {
 				return std::unexpected(std::move(v.error()));
@@ -413,7 +352,7 @@ namespace {
 			return fail(client_errc::decode_error,
 			  detail::format("target: expected [CONTEXT 0] or [CONTEXT 1] at offset {}", s->offset()));
 		}
-		if (next_is(*s, ber::tags::octet_string)) {
+		if (next_is_exact(*s, ber::tags::octet_string)) {
 			auto id = s->read_octet_string();
 			if (!id) {
 				return std::unexpected(std::move(id.error()));

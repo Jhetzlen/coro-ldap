@@ -10,7 +10,7 @@ namespace ldap = jhetz::ldap;
 
 auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::task<int>
 {
-	auto c = co_await ldap::connect(ioc, text);
+	auto c = co_await ldap::connect(ioc, text, { .allow_cleartext_passwords = true });
 	if (!c) {
 		std::cerr << c.error().message() << '\n';
 		co_return 1;

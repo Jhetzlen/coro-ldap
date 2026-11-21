@@ -141,14 +141,14 @@ template<auto Naming, directory D> class repository
 	}
 
 	[[nodiscard]] auto search(filter f = filters::attr("objectClass").present(),
-	  search_scope scope = search_scope::single_level) -> result<typed_search_result<record<value_type>>>
+	  search_scope scope = search_scope::whole_subtree) -> result<typed_search_result<record<value_type>>>
 	{
 		return sync::run(*source_, [&](auto &a) { return core_.search(a, std::move(f), scope); });
 	}
 	// search() in pages, every page collected.
 	[[nodiscard]] auto search_paged(std::int32_t page_size,
 	  filter f = filters::attr("objectClass").present(),
-	  search_scope scope = search_scope::single_level) -> result<typed_search_result<record<value_type>>>
+	  search_scope scope = search_scope::whole_subtree) -> result<typed_search_result<record<value_type>>>
 	{
 		return sync::run(*source_, [&](auto &a) { return collect_records(core_, a, page_size, std::move(f), scope); });
 	}

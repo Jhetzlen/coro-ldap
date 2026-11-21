@@ -175,9 +175,9 @@ struct client_options
 	std::chrono::milliseconds probe_timeout{ default_probe_timeout };
 	// Age after which a connection is no longer handed out; nullopt: no limit.
 	std::optional<std::chrono::milliseconds> max_lifetime{};
-	// Bounds each acquire(); nullopt or ldap::no_timeout: retries until success,
+	// Bounds each acquire(); ldap::no_timeout: retries until success,
 	// cancellation or close().
-	std::optional<std::chrono::milliseconds> acquire_timeout{ default_acquire_timeout };
+	std::chrono::milliseconds acquire_timeout{ default_acquire_timeout };
 	backoff_options backoff{};
 	// Age of an idle connection to a lower-priority server before acquire()
 	// closes it to return to a higher-priority one.

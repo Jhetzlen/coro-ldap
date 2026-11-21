@@ -1,5 +1,6 @@
 #include "jhetz/ldap/filter.hpp"
 
+#include "control_util.hpp"
 #include "filter_ast.hpp"
 #include "format_util.hpp"
 
@@ -1353,22 +1354,11 @@ auto encode_filter(ber::writer &w, const filter &f, const filter_limits &limits)
 
 namespace {
 
+	using detail::skip_rest;
+
 	auto bad(std::string_view what, std::size_t offset) -> std::unexpected<error>
 	{
 		return fail(client_errc::decode_error, detail::format("filter: {} at offset {}", what, offset));
-	}
-
-	// RFC 4511 section 4: unknown trailing SEQUENCE elements are ignored (but
-	// must be well-formed).
-	auto skip_rest(ber::reader &r) -> result<void>
-	{
-		while (!r.empty()) {
-			auto e = r.read();
-			if (!e) {
-				return std::unexpected(std::move(e.error()));
-			}
-		}
-		return {};
 	}
 
 	class filter_decoder

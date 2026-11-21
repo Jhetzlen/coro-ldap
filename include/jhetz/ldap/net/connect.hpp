@@ -4,6 +4,7 @@
 
 #include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/net/transport.hpp"
+#include "jhetz/ldap/timeout.hpp"
 #include "jhetz/ldap/url.hpp"
 
 #include <boost/capy/task.hpp>
@@ -63,8 +64,9 @@ struct connect_options
 	static constexpr std::chrono::milliseconds default_timeout = std::chrono::seconds(30);
 	static constexpr std::chrono::milliseconds default_attempt_delay = std::chrono::milliseconds(250);
 
-	// The whole connect; nullopt: no limit; zero or negative: fails at once.
-	std::optional<std::chrono::milliseconds> timeout{ default_timeout };
+	// The whole connect; ldap::no_timeout: no limit; zero or negative: fails
+	// at once.
+	std::chrono::milliseconds timeout{ default_timeout };
 	tls_options tls{};
 	// Happy Eyeballs Connection Attempt Delay (RFC 8305 section 5).
 	std::chrono::milliseconds attempt_delay{ default_attempt_delay };

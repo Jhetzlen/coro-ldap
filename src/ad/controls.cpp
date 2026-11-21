@@ -1,5 +1,6 @@
 #include "jhetz/ldap/ad/controls.hpp"
 
+#include "../control_util.hpp"
 #include "../format_util.hpp"
 
 #include "jhetz/ldap/ber.hpp"
@@ -16,62 +17,13 @@
 
 namespace jhetz::ldap::ad {
 
+using detail::control_value;
+using detail::enter_value;
+using detail::in_control;
+using detail::skip_rest;
+using detail::value_control;
+
 namespace {
-
-	constexpr std::size_t max_quoted_type = 64;
-
-	auto bad(const char *what, std::string_view why) -> std::unexpected<error>
-	{
-		return fail(client_errc::decode_error, detail::format("{}: {}", what, why));
-	}
-
-	// The DirSync control's value bytes.
-	auto expect_dirsync(const control &c, const char *what) -> result<std::span<const std::byte>>
-	{
-		if (c.type != dirsync_oid) {
-			std::string context = detail::format("{}: control type is ", what);
-			detail::append_sanitized(context, c.type, max_quoted_type);
-			context += detail::format(", not {}", dirsync_oid);
-			return fail(client_errc::decode_error, context);
-		}
-		if (!c.value) {
-			return bad(what, "control has no value");
-		}
-		return std::as_bytes(std::span(*c.value));
-	}
-
-	template<class T> auto named(result<T> r, const char *what) -> result<T>
-	{
-		return std::move(r).transform_error([what](error e) {
-			e.context.insert(0, e.context.empty() ? std::string(what) : std::string(what) + ": ");
-			return e;
-		});
-	}
-
-	// Enters the value's SEQUENCE; nothing may follow it.
-	auto enter_value(ber::reader &outer) -> result<ber::reader>
-	{
-		auto s = outer.enter();
-		if (!s) {
-			return std::unexpected(std::move(s.error()));
-		}
-		if (auto done = outer.expect_end(); !done) {
-			return std::unexpected(std::move(done.error()));
-		}
-		return s;
-	}
-
-	// RFC 4511 section 4: unrecognized trailing elements are ignored, if
-	// well-formed.
-	auto skip_rest(ber::reader &r) -> result<void>
-	{
-		while (!r.empty()) {
-			if (auto e = r.read(); !e) {
-				return std::unexpected(std::move(e.error()));
-			}
-		}
-		return {};
-	}
 
 	// An INTEGER in [low, high].
 	auto read_bounded(ber::reader &r, std::int64_t low, std::int64_t high, const char *field) -> result<std::int64_t>
@@ -91,12 +43,6 @@ namespace {
 	constexpr auto int32_min = std::int64_t{ std::numeric_limits<std::int32_t>::min() };
 	constexpr auto int32_max = std::int64_t{ std::numeric_limits<std::int32_t>::max() };
 	constexpr auto uint32_max = std::int64_t{ std::numeric_limits<std::uint32_t>::max() };
-
-	auto value_control(std::string_view oid, bool criticality, const ber::writer &w, std::pmr::memory_resource *mr)
-	  -> control
-	{
-		return { oid, criticality, detail::as_text(w.bytes()), control::allocator_type(mr) };
-	}
 
 }// namespace
 
@@ -118,7 +64,7 @@ auto encode_dirsync_request(const dirsync_request &value, std::pmr::memory_resou
 auto decode_dirsync_request(const control &c) -> result<dirsync_request>
 {
 	static constexpr const char *what = "DirSync request";
-	auto value = expect_dirsync(c, what);
+	auto value = control_value(c, dirsync_oid, what);
 	if (!value) {
 		return std::unexpected(std::move(value.error()));
 	}
@@ -148,7 +94,7 @@ auto decode_dirsync_request(const control &c) -> result<dirsync_request>
 			.cookie = std::string(detail::as_text(*cookie)),
 			.critical = c.criticality };
 	};
-	return named(read(), what);
+	return in_control(read(), what);
 }
 
 // ---------------------------------------------------------------- DirSync response
@@ -167,7 +113,7 @@ auto encode_dirsync_response(const dirsync_response &value, bool criticality, st
 auto decode_dirsync_response(const control &c) -> result<dirsync_response>
 {
 	static constexpr const char *what = "DirSync response";
-	auto value = expect_dirsync(c, what);
+	auto value = control_value(c, dirsync_oid, what);
 	if (!value) {
 		return std::unexpected(std::move(value.error()));
 	}
@@ -196,7 +142,7 @@ auto decode_dirsync_response(const control &c) -> result<dirsync_response>
 			.unused = static_cast<std::int32_t>(*unused),
 			.cookie_server = std::string(detail::as_text(*cookie)) };
 	};
-	return named(read(), what);
+	return in_control(read(), what);
 }
 
 auto find_dirsync_response(const std::pmr::vector<control> &controls) -> result<std::optional<dirsync_response>>

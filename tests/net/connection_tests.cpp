@@ -2405,6 +2405,22 @@ TEST_CASE("connection: ldap::connect, bind, search and unbind over TCP", "[net][
 	CHECK(std::holds_alternative<ldap::unbind_request>(m.log.received[2].op));
 }
 
+TEST_CASE("connection: a password is not sent in clear over TCP unless allowed", "[net][connection][bind]")
+{
+	tcp_mock_ldap m({}, socket_buffers::system, false);
+	m.serve({ answer({ bind_resp(1) }), step{} });
+	auto refused = m.run(m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"));
+	REQUIRE_FALSE(refused.has_value());
+	CHECK(refused.error().code == ldap::client_errc::tls_required);
+	CHECK_THAT(std::string(refused.error().context), ContainsSubstring("allow_cleartext_passwords"));
+	// An anonymous bind carries no password.
+	CHECK(m.run(m.conn.simple_bind(ldap::dn{}, "")).has_value());
+	CHECK(m.run(m.conn.unbind()).has_value());
+	m.check_server();
+	REQUIRE(m.log.received.size() == 2);
+	CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+}
+
 TEST_CASE("connection: ldap::connect failures", "[net][connection]")
 {
 	corosio::io_context ioc;

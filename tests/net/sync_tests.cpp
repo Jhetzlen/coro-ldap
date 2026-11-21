@@ -53,7 +53,8 @@ using Catch::Matchers::IsEmpty;
 TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 {
 	server_thread srv;
-	auto opened = ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10) });
+	auto opened =
+	  ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10), .allow_cleartext_passwords = true });
 	REQUIRE(opened.has_value());
 	auto &c = *opened;
 	CHECK(c.is_open());
@@ -93,12 +94,12 @@ TEST_CASE("sync: a connection without an I/O thread, moves, copies and reconnect
 	none.close();
 
 	server_thread srv;
-	auto opened = ldap::sync::connect(srv.url());
+	auto opened = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 	REQUIRE(opened.has_value());
 	ldap::sync::connection c = std::move(*opened);
 	CHECK(c.is_open());
 	CHECK(c.simple_bind(ldap::dn{}, "").has_value());
-	auto again = ldap::sync::connect(srv.url());
+	auto again = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 	REQUIRE(again.has_value());
 	c = std::move(*again);// closes the first connection
 	CHECK(c.is_open());
@@ -110,7 +111,7 @@ TEST_CASE("sync: a connection without an I/O thread, moves, copies and reconnect
 TEST_CASE("sync: many threads share one connection", "[net][sync]")
 {
 	server_thread srv;
-	auto opened = ldap::sync::connect(srv.url());
+	auto opened = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 	REQUIRE(opened.has_value());
 	auto &c = *opened;
 	constexpr int threads = 8;
@@ -146,7 +147,7 @@ TEST_CASE("sync: many threads share one connection", "[net][sync]")
 TEST_CASE("sync: a blocking call from the I/O thread fails with would_deadlock", "[net][sync]")
 {
 	server_thread srv;
-	auto opened = ldap::sync::connect(srv.url());
+	auto opened = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 	REQUIRE(opened.has_value());
 	auto &c = *opened;
 	std::promise<ldap::result<std::string>> got;
@@ -166,7 +167,7 @@ TEST_CASE("sync: a blocking call from the I/O thread fails with would_deadlock",
 TEST_CASE("sync: run() runs an async free function on the I/O thread", "[net][sync]")
 {
 	server_thread srv;
-	auto opened = ldap::sync::connect(srv.url());
+	auto opened = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 	REQUIRE(opened.has_value());
 	auto &c = *opened;
 	CHECK(ldap::sync::run(c, [](auto &a) { return ldap::who_am_i(a); }) == "dn:cn=me");
@@ -226,7 +227,8 @@ TEST_CASE("sync: run() rejects results holding a connection or client", "[net][s
 TEST_CASE("sync: search_paged leaves nothing on the caller's resource once it returns", "[net][sync]")
 {
 	server_thread srv;
-	auto opened = ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10) });
+	auto opened =
+	  ldap::sync::connect(srv.url(), { .timeout = std::chrono::seconds(10), .allow_cleartext_passwords = true });
 	REQUIRE(opened.has_value());
 	auto &c = *opened;
 	auto arena = std::make_unique<counting_resource>();
@@ -255,7 +257,7 @@ TEST_CASE("sync: connect failures and destruction without unbind", "[net][sync]"
 	}
 	server_thread srv;
 	{
-		auto opened = ldap::sync::connect(srv.url());
+		auto opened = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 		REQUIRE(opened.has_value());
 		auto &c = *opened;
 		REQUIRE(c.simple_bind(ldap::dn{}, "").has_value());
@@ -429,7 +431,8 @@ struct connected
 	ldap::sync::connection c;
 	explicit connected(peer_server &srv)
 	{
-		auto opened = ldap::sync::connect(srv.url(), { .operation_timeout = std::chrono::seconds(10) });
+		auto opened = ldap::sync::connect(
+		  srv.url(), { .operation_timeout = std::chrono::seconds(10), .allow_cleartext_passwords = true });
 		REQUIRE(opened.has_value());
 		c = std::move(*opened);
 	}
@@ -729,7 +732,7 @@ TEST_CASE("sync: copies are handles on one connection and I/O thread", "[net][sy
 	server_thread srv;
 	SECTION("a copy keeps the connection; the last handle closes it")
 	{
-		auto opened = ldap::sync::connect(srv.url());
+		auto opened = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 		REQUIRE(opened.has_value());
 		std::optional<ldap::sync::connection> copy(*opened);
 		CHECK(copy->executor() == opened->executor());
@@ -757,7 +760,7 @@ TEST_CASE("sync: copies are handles on one connection and I/O thread", "[net][sy
 	}
 	SECTION("close() or unbind() through one copy ends it for every copy")
 	{
-		auto opened = ldap::sync::connect(srv.url());
+		auto opened = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 		REQUIRE(opened.has_value());
 		ldap::sync::connection copy = *opened;
 		copy.close();
@@ -766,7 +769,7 @@ TEST_CASE("sync: copies are handles on one connection and I/O thread", "[net][sy
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::not_sent);
 
-		auto again = ldap::sync::connect(srv.url());
+		auto again = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 		REQUIRE(again.has_value());
 		copy = *again;
 		REQUIRE(copy.unbind().has_value());
@@ -774,7 +777,7 @@ TEST_CASE("sync: copies are handles on one connection and I/O thread", "[net][sy
 	}
 	SECTION("copies used and dropped on several threads")
 	{
-		auto opened = ldap::sync::connect(srv.url());
+		auto opened = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 		REQUIRE(opened.has_value());
 		constexpr int threads = 8;
 		constexpr int per_thread = 10;
@@ -959,7 +962,7 @@ TEST_CASE("sync: a transaction's destructor waits for the abort's answer only so
 	  step{},// the abort, never answered
 	  step{},// its abandon
 	  step{} });// the abort queued again by the ldap::transaction's destructor
-	auto opened = ldap::sync::connect(srv.url());// no default timeout
+	auto opened = ldap::sync::connect(srv.url(), { .operation_timeout = ldap::no_timeout });
 	REQUIRE(opened.has_value());
 	auto &c = *opened;
 	const auto started = std::chrono::steady_clock::now();

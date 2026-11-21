@@ -392,7 +392,7 @@ namespace detail {
 		// than half of acquire_timeout left.
 		[[nodiscard]] auto begun_late(net::detail::deadline_t deadline, clock::time_point begun) const noexcept -> bool
 		{
-			return deadline && options.acquire_timeout && (*deadline - begun) * 2 < *options.acquire_timeout;
+			return deadline && (*deadline - begun) * 2 < options.acquire_timeout;
 		}
 
 		// ---------------------------------------------------------------- pool

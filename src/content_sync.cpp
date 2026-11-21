@@ -2,6 +2,7 @@
 // section 2): content_sync.hpp.
 #include "jhetz/ldap/content_sync.hpp"
 
+#include "control_util.hpp"
 #include "format_util.hpp"
 #include "pmr_util.hpp"
 
@@ -18,8 +19,15 @@
 namespace jhetz::ldap {
 
 using detail::assign_optional;
+using detail::control_value;
+using detail::enter_value;
+using detail::find_decoded;
+using detail::in_control;
+using detail::next_is;
 using detail::optional_string;
 using detail::optional_with;
+using detail::skip_rest;
+using detail::value_control;
 
 // ---------------------------------------------------------------- allocator-aware members
 
@@ -170,54 +178,6 @@ namespace {
 		return fail(client_errc::decode_error, detail::format("{}: {}", what, why));
 	}
 
-	// The control's value bytes, once its type is `oid` and it has a value.
-	auto expect_control(const control &c, std::string_view oid, std::string_view what)
-	  -> result<std::span<const std::byte>>
-	{
-		if (c.type != oid) {
-			std::string context = detail::format("{}: control type is ", what);
-			detail::append_sanitized(context, c.type, 64);
-			context += detail::format(", not {}", oid);
-			return fail(client_errc::decode_error, context);
-		}
-		if (!c.value) {
-			return bad(what, "control has no value");
-		}
-		return std::as_bytes(std::span(*c.value));
-	}
-
-	// Errors from inside a value name it: their offsets are relative to
-	// the value, not to the message.
-	template<class T> auto named(result<T> r, std::string_view what) -> result<T>
-	{
-		return std::move(r).transform_error([what](error e) {
-			e.context.insert(0, e.context.empty() ? std::string(what) : std::string(what) + ": ");
-			return e;
-		});
-	}
-
-	// Class and number of the next element, without committing.
-	auto next_is(const ber::reader &r, ber::tag t) -> bool
-	{
-		if (r.empty()) {
-			return false;
-		}
-		auto p = r.peek_tag();
-		return p && p->cls == t.cls && p->number == t.number;
-	}
-
-	// RFC 4511 section 4: unrecognized elements at the end of a SEQUENCE
-	// are ignored, if well-formed.
-	auto skip_rest(ber::reader &r) -> result<void>
-	{
-		while (!r.empty()) {
-			if (auto e = r.read(); !e) {
-				return std::unexpected(std::move(e.error()));
-			}
-		}
-		return {};
-	}
-
 	// cookie syncCookie OPTIONAL (an OCTET STRING).
 	auto read_cookie(ber::reader &r, std::pmr::memory_resource *mr) -> result<std::optional<std::pmr::string>>
 	{
@@ -273,36 +233,6 @@ namespace {
 		return *v;
 	}
 
-	// Enters the value's outer SEQUENCE; nothing may follow it.
-	auto enter_value(ber::reader &outer) -> result<ber::reader>
-	{
-		auto s = outer.enter();
-		if (!s) {
-			return std::unexpected(std::move(s.error()));
-		}
-		if (auto done = outer.expect_end(); !done) {
-			return std::unexpected(std::move(done.error()));
-		}
-		return s;
-	}
-
-	template<class T, class Decode>
-	auto find_decoded(const std::pmr::vector<control> &controls, std::string_view oid, Decode decode)
-	  -> result<std::optional<T>>
-	{
-		const auto it = std::ranges::find(controls, oid, &control::type);
-		if (it == controls.end()) {
-			return std::optional<T>{};
-		}
-		return decode(*it).transform([](T &&v) { return std::optional<T>(std::move(v)); });
-	}
-
-	auto value_control(std::string_view oid, bool criticality, const ber::writer &w, std::pmr::memory_resource *mr)
-	  -> control
-	{
-		return { oid, criticality, detail::as_text(w.bytes()), control::allocator_type(mr) };
-	}
-
 	constexpr std::array<std::int64_t, 2> mode_values = { std::to_underlying(sync_mode::refresh_only),
 		std::to_underlying(sync_mode::refresh_and_persist) };
 	constexpr std::array<std::int64_t, 4> state_values = { std::to_underlying(sync_state_type::present),
@@ -339,7 +269,7 @@ auto encode_sync_request(const sync_request &value, std::pmr::memory_resource *m
 auto decode_sync_request(const control &c) -> result<sync_request>
 {
 	static constexpr std::string_view what = "sync request";
-	auto value = expect_control(c, sync_request_oid, what);
+	auto value = control_value(c, sync_request_oid, what);
 	if (!value) {
 		return std::unexpected(std::move(value.error()));
 	}
@@ -373,7 +303,7 @@ auto decode_sync_request(const control &c) -> result<sync_request>
 			.reload_hint = *reload,
 			.critical = c.criticality };
 	};
-	return named(read(), what);
+	return in_control(read(), what);
 }
 
 // ---------------------------------------------------------------- Sync State
@@ -396,7 +326,7 @@ auto encode_sync_state(const sync_state &value, bool criticality, std::pmr::memo
 auto decode_sync_state(const control &c, std::pmr::memory_resource *mr) -> result<sync_state>
 {
 	static constexpr std::string_view what = "sync state";
-	auto value = expect_control(c, sync_state_oid, what);
+	auto value = control_value(c, sync_state_oid, what);
 	if (!value) {
 		return std::unexpected(std::move(value.error()));
 	}
@@ -427,7 +357,7 @@ auto decode_sync_state(const control &c, std::pmr::memory_resource *mr) -> resul
 		out.cookie = std::move(*cookie);
 		return out;
 	};
-	return named(read(), what);
+	return in_control(read(), what);
 }
 
 auto find_sync_state(const std::pmr::vector<control> &controls, std::pmr::memory_resource *mr)
@@ -458,7 +388,7 @@ auto encode_sync_done(const sync_done &value, bool criticality, std::pmr::memory
 auto decode_sync_done(const control &c, std::pmr::memory_resource *mr) -> result<sync_done>
 {
 	static constexpr std::string_view what = "sync done";
-	auto value = expect_control(c, sync_done_oid, what);
+	auto value = control_value(c, sync_done_oid, what);
 	if (!value) {
 		return std::unexpected(std::move(value.error()));
 	}
@@ -484,7 +414,7 @@ auto decode_sync_done(const control &c, std::pmr::memory_resource *mr) -> result
 		out.refresh_deletes = *deletes;
 		return out;
 	};
-	return named(read(), what);
+	return in_control(read(), what);
 }
 
 auto find_sync_done(const std::pmr::vector<control> &controls, std::pmr::memory_resource *mr)
@@ -622,7 +552,7 @@ auto decode_sync_info(const intermediate_response &i, std::pmr::memory_resource 
 	if (!i.response_value) {
 		return bad(what, "no responseValue");
 	}
-	return named(read_sync_info(std::as_bytes(std::span(*i.response_value)), mr), what);
+	return in_control(read_sync_info(std::as_bytes(std::span(*i.response_value)), mr), what);
 }
 
 }// namespace jhetz::ldap

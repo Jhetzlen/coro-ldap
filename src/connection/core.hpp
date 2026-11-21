@@ -202,6 +202,14 @@ class connection::core
 	auto authentication_channel_bindings() const noexcept -> ldap::channel_bindings;
 	void mark_tls_exporter_used() noexcept;
 
+	// A password may not be sent: plain TCP with no confidentiality layer,
+	// and connection_options::allow_cleartext_passwords is off.
+	auto refuses_cleartext_password() const noexcept -> bool
+	{
+		return !allow_cleartext_passwords_ && transport_.type() == net::transport::kind::tcp && !transport_.is_tls()
+			   && transport_.security_layer() != sasl_protection::confidentiality;
+	}
+
 	// The SASL security layer in effect (connection::security_layer()).
 	auto security_layer() const noexcept -> sasl_protection
 	{
@@ -343,6 +351,7 @@ class connection::core
 	std::size_t max_message_size;
 	std::size_t max_elements;
 	std::optional<std::chrono::milliseconds> default_timeout_;
+	bool allow_cleartext_passwords_;
 	std::optional<std::chrono::milliseconds> tls_shutdown_timeout;
 	std::int32_t next_id = 1;
 	std::move_only_function<void() noexcept> close_hook{};// set_close_hook

@@ -88,6 +88,7 @@ auto samba_tls(ldap::connection_options o = {}) -> ldap::connection_options
 	o.tls.host_matching = ldap::net::host_name_matching::legacy;
 	o.timeout = std::chrono::seconds(10);
 	o.operation_timeout = std::chrono::seconds(30);
+	o.allow_cleartext_passwords = true;
 	return o;
 }
 

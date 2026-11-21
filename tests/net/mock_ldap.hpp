@@ -328,9 +328,12 @@ struct tcp_mock_ldap : scripted_server<tcp_mock_ldap>
 	// socket_buffers::small: the client's SO_SNDBUF as the kernel reports it.
 	std::size_t client_send_buffer = 0;
 
-	explicit tcp_mock_ldap(const ldap::connection_options &options = {},
-	  socket_buffers buffers = socket_buffers::system)
+	// The connection allows cleartext passwords unless `cleartext` is false.
+	explicit tcp_mock_ldap(ldap::connection_options options = {},
+	  socket_buffers buffers = socket_buffers::system,
+	  bool cleartext = true)
 	{
+		options.allow_cleartext_passwords = cleartext;
 		// The accepted socket inherits it; set before the client connects,
 		// so the window offered from the start is the small one.
 		if (buffers == socket_buffers::small) {

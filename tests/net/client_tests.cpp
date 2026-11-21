@@ -289,6 +289,7 @@ struct pool_fixture
 	// The jitter fixed at 1: each backoff is its cap.
 	void make(ldap::client_options options)
 	{
+		options.connection.allow_cleartext_passwords = true;
 		pool.emplace(ioc, std::move(options));
 		ldap::detail::set_jitter(*pool, [] { return 1.0; });
 	}
@@ -567,7 +568,7 @@ TEST_CASE("client: an authentication failure stops reconnecting to that server",
 		auto &b = f.server({ { answer({ bind_resp(1, 49) }) } });
 		f.make({ .servers = { a.url(), b.url() },
 		  .setup = admin_setup(),
-		  .acquire_timeout = std::nullopt,// would wait forever for a retry
+		  .acquire_timeout = ldap::no_timeout,// would wait forever for a retry
 		  .backoff = { .initial = milliseconds(10), .max = milliseconds(10) } });
 		auto l = f.acquire();
 		REQUIRE_FALSE(l.has_value());
@@ -1618,7 +1619,7 @@ TEST_CASE("client: acquire() stopped by its stop token", "[net][client][cancel]"
 		auto &s = f.server({ hang_up_at_once() });
 		f.make({ .servers = { s.url() },
 		  .setup = admin_setup(),
-		  .acquire_timeout = std::nullopt,
+		  .acquire_timeout = ldap::no_timeout,
 		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
 		std::stop_source stop;
 		outcome<ldap::result<ldap::lease>> a;
@@ -1654,7 +1655,7 @@ TEST_CASE("client: closed during acquire()", "[net][client][close]")
 		auto &s = f.server({ hang_up_at_once() });
 		f.make({ .servers = { s.url() },
 		  .setup = admin_setup(),
-		  .acquire_timeout = std::nullopt,
+		  .acquire_timeout = ldap::no_timeout,
 		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
 		outcome<ldap::result<ldap::lease>> a;
 		auto task = f.pool->acquire();
@@ -1671,7 +1672,7 @@ TEST_CASE("client: closed during acquire()", "[net][client][close]")
 		auto &s = f.server({ hang_up_at_once() });
 		f.make({ .servers = { s.url() },
 		  .setup = admin_setup(),
-		  .acquire_timeout = std::nullopt,
+		  .acquire_timeout = ldap::no_timeout,
 		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
 		outcome<ldap::result<ldap::lease>> a;
 		spawn(f.ioc, f.pool->acquire(), a);
@@ -1726,7 +1727,7 @@ TEST_CASE("client: no observer hook after close()", "[net][client][close]")
 		auto &s = f.server({ hang_up_at_once() });
 		f.make({ .servers = { s.url() },
 		  .setup = admin_setup(),
-		  .acquire_timeout = std::nullopt,
+		  .acquire_timeout = ldap::no_timeout,
 		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) },
 		  .observer = &f.obs });
 		outcome<ldap::result<ldap::lease>> a;

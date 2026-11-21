@@ -264,11 +264,12 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 		co_return fail(client_errc::invalid_url, target + ": " + str(r.error().context));
 	}
 
-	if (options.timeout && options.timeout->count() <= 0) {
+	const auto timeout = ldap::detail::limit_of(options.timeout);
+	if (timeout && timeout->count() <= 0) {
 		co_return fail(make_error_code(capy::error::timeout),
-		  ldap::detail::format("{}: the connect timeout ({} ms) is not positive", target, options.timeout->count()));
+		  ldap::detail::format("{}: the connect timeout ({} ms) is not positive", target, timeout->count()));
 	}
-	const deadline_t deadline = detail::deadline_after(options.timeout, start);
+	const deadline_t deadline = detail::deadline_after(timeout, start);
 
 	// ---- ldapi://
 	if (u.scheme() == url_scheme::ldapi) {
@@ -284,7 +285,7 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 		im.local.emplace(ioc);
 		auto [ec] = co_await bounded(im.local->connect(socket_path), deadline);
 		if (ec) {
-			co_return fail(ec, stage_context(target, quoted("connect", u.host()), ec, options.timeout));
+			co_return fail(ec, stage_context(target, quoted("connect", u.host()), ec, timeout));
 		}
 		im.stream = capy::any_stream(&*im.local);
 		co_return t;
@@ -306,7 +307,7 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 	// ---- ldap:// and ldaps://: resolve
 	auto [rec, endpoints] = co_await resolve_bounded(ioc, str(u.host()), std::to_string(u.port_or_default()), deadline);
 	if (rec) {
-		co_return fail(rec, stage_context(target, quoted("resolve", u.host()), rec, options.timeout));
+		co_return fail(rec, stage_context(target, quoted("resolve", u.host()), rec, timeout));
 	}
 	if (endpoints.empty()) {
 		co_return fail(
@@ -337,7 +338,7 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 		if (race.endpoints.size() > 1) {
 			ldap::detail::format_to(stage, " ({} of {} addresses tried)", race.attempted, race.endpoints.size());
 		}
-		co_return fail(ec, stage_context(target, stage, ec, options.timeout));
+		co_return fail(ec, stage_context(target, stage, ec, timeout));
 	}
 
 	transport t = transport_access::make(transport::kind::tcp, server, mr);
@@ -359,7 +360,7 @@ auto connect(corosio::io_context &ioc, url u, connect_options options, std::pmr:
 	auto hs = co_await detail::tls_handshake(im, u.host(), options.tls, std::move(*tls), deadline);
 	if (!hs) {
 		auto e = std::move(hs.error());
-		e.context = stage_context(target, e.context, e.code, options.timeout);
+		e.context = stage_context(target, e.context, e.code, timeout);
 		co_return std::unexpected(std::move(e));
 	}
 	co_return t;

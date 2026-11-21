@@ -323,6 +323,29 @@ TEST_CASE("ad::read_all_values: answers refused", "[net][ad][range]")
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == client_errc::unexpected_response);
 	}
+	SECTION("more values than the window names")
+	{
+		m.serve({ window(1, "member;range=0-1", values(0, 2)) });
+		auto r = m.run(ldap::ad::read_all_values(m.conn, group, "member"));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::unexpected_response);
+	}
+	SECTION("more values than max_values")
+	{
+		m.serve({ window(1, "member;range=0-2", values(0, 2)), window(2, "member;range=3-*", values(3, 5)) });
+		auto r = m.run(ldap::ad::read_all_values(m.conn, group, "member", { .max_values = 5 }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::message_too_large);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("max_values"));
+	}
+	SECTION("more searches than max_rounds")
+	{
+		m.serve({ window(1, "member;range=0-0", values(0, 0)), window(2, "member;range=1-1", values(1, 1)) });
+		auto r = m.run(ldap::ad::read_all_values(m.conn, group, "member", { .max_rounds = 2 }));
+		REQUIRE_FALSE(r.has_value());
+		CHECK(r.error().code == client_errc::message_too_large);
+		CHECK_THAT(std::string(r.error().context), ContainsSubstring("max_rounds"));
+	}
 	SECTION("a malformed range")
 	{
 		m.serve({ window(1, "member;range=2-1", values(0, 2)) });

@@ -1684,7 +1684,7 @@ co_await people.remove("jdoe");
 - Writes return `response`, as the core operations, so response
   controls (post-read, ...) stay reachable; each takes its operation's
   controls.
-- `search(filter, scope = single_level)` returns
+- `search(filter, scope = whole_subtree)` returns
   `typed_search_result<record<T>>`, `record<T>{dn, value}`: the DN as the
   server sent it, parsed, so entries named otherwise are returned too,
   and the limit codes are values, as `search()`.

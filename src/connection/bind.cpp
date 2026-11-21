@@ -92,6 +92,11 @@ namespace {
 			co_return std::unexpected(std::move(b.error()));
 		}
 		const connection::core::bind_scope exchange{ self };
+		if (!password.empty() && self->refuses_cleartext_password()) {
+			co_return fail(client_errc::tls_required,
+			  context + ": the password would be sent in clear (use ldaps://, start_tls() or "
+						"connection_options::allow_cleartext_passwords)");
+		}
 		message request(std::pmr::polymorphic_allocator<>(self->mr()));
 		request.op = bind_request(3, name.to_string(self->mr()), simple_auth(password, self->mr()), self->mr());
 		auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);

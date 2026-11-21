@@ -872,14 +872,14 @@ template<auto Naming, directory D> class repository
 	}
 
 	// The entries of T's object classes matching `f` under the base.
-	auto search(filter f = filters::attr("objectClass").present(), search_scope scope = search_scope::single_level)
+	auto search(filter f = filters::attr("objectClass").present(), search_scope scope = search_scope::whole_subtree)
 	  -> boost::capy::task<result<typed_search_result<record<value_type>>>>
 	{
 		return core_.search(*source_, std::move(f), scope);
 	}
 
 	auto search_stream(filter f = filters::attr("objectClass").present(),
-	  search_scope scope = search_scope::single_level)
+	  search_scope scope = search_scope::whole_subtree)
 	  -> boost::capy::task<result<record_stream<value_type, ldap::search_stream>>>
 	{
 		return core_.search_stream(*source_, std::move(f), scope);
@@ -887,7 +887,7 @@ template<auto Naming, directory D> class repository
 
 	auto search_paged(std::int32_t page_size,
 	  filter f = filters::attr("objectClass").present(),
-	  search_scope scope = search_scope::single_level)
+	  search_scope scope = search_scope::whole_subtree)
 	  -> boost::capy::task<result<record_stream<value_type, ldap::paged_search>>>
 	{
 		return core_.search_paged(*source_, page_size, std::move(f), scope);

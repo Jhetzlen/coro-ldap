@@ -101,7 +101,7 @@ namespace ldap = jhetz::ldap;
 
 auto search(boost::corosio::io_context &ioc) -> boost::capy::task<int>
 {
-	auto c = co_await ldap::connect(ioc, "ldap://localhost");
+	auto c = co_await ldap::connect(ioc, "ldap://localhost", { .start_tls = true });
 	if (!c) {
 		std::cerr << c.error().message() << '\n';
 		co_return 1;

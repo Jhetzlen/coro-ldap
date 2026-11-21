@@ -285,9 +285,9 @@ itself needs only ICU.
   certificate, `server_name`, and `certificate_verification::insecure_accept_any`
   as the explicit opt-out). TLS configuration (files, certificates, `ca_dir`,
   `server_name`) is checked before any network traffic.
-  - Timeout: `std::optional<milliseconds> timeout` (default 30 s) bounds the
-    whole connect; `nullopt` means no limit, zero or negative fails at once
-    with `capy::error::timeout`. The name lookup runs detached because
+  - Timeout: `milliseconds timeout` (default 30 s) bounds the
+    whole connect; `ldap::no_timeout` means no limit, zero or negative fails
+    at once with `capy::error::timeout`. The name lookup runs detached because
     getaddrinfo cannot be interrupted, so the timeout holds while it blocks
     (the io_context stays busy until it returns). Happy Eyeballs attempts
     all run within that one budget.
@@ -427,14 +427,27 @@ itself needs only ICU.
   wraps `net::connect` (`connection_options`: connect `timeout`, `tls`,
   `tcp_no_delay`, `max_message_size` (16 MiB by default), `max_elements`
   (1,000,000 decoded strings per response by default),
-  `operation_timeout`). The URL can also be given as text,
+  `attempt_delay`, `tls_shutdown_timeout` (1 s), `operation_timeout`
+  (30 s, the limit of each operation without a `.timeout` of its own),
+  `allow_cleartext_passwords`, `start_tls`). Timeouts are plain
+  `milliseconds` and `ldap::no_timeout` (timeout.hpp) is the one spelling
+  of "no limit", in the options and in a request's `.timeout`; `nullopt`
+  exists only in a request's `.timeout` and means the connection's
+  `operation_timeout`. A search that must outlive it (a large unpaged
+  result, refreshAndPersist, a notification search) sets `.timeout`. The
+  URL can also be given as text,
   `ldap::connect(ioc, "ldaps://ldap.example.org")`: it is parsed before
   connecting and a bad one fails with `url::parse`'s `invalid_url`. A
   connection can also be built on any `net::transport` with
   `connection(ioc, transport, options, mr)`.
   Operations: `simple_bind(dn, password)` (an empty name and password is
   anonymous; a name with an empty password is refused with
-  `client_errc::unauthenticated_bind`, RFC 4513 section 5.1.2),
+  `client_errc::unauthenticated_bind`, RFC 4513 section 5.1.2; a password
+  is refused with `client_errc::tls_required` before anything is sent on a
+  TCP connection with neither TLS nor a SASL confidentiality layer, unless
+  `connection_options::allow_cleartext_passwords` is set, and so is a
+  Password Modify (RFC 3062) extended operation; ldapi:// and a wrapped
+  stream are not checked),
   `search(search_params, mr)` returning `result<search_result>` (`entries`,
   `references`, and the SearchResultDone's `result_code`, `matched_dn`,
   `diagnostic_message` and `controls`; a value for success and for
@@ -570,7 +583,7 @@ itself needs only ICU.
   `operation_in_progress`, and an `unbind()` closes the connection (the
   StartTLS fails with `not_connected`). `timeout` bounds the wait for
   release answers, the exchange and the handshake each; `nullopt`:
-  `operation_timeout` for the first two, none for the handshake.
+  `operation_timeout`.
   `unbind()` during a bind or a StartTLS only closes; on TLS it then sends
   close_notify and waits for the server's within `tls_shutdown_timeout`
   (best effort). An operation started while the UnbindRequest is being
@@ -1284,7 +1297,7 @@ itself needs only ICU.
   `<naming attribute>=<to>`, deleteoldrdn TRUE) and `move(key, new_base)` /
   `move(key, other_repository)` (newSuperior, RDN kept) -> `task<result<response>>`, each with
   its operation's controls; `search(filter = (objectClass=*), scope =
-  single_level)` -> `task<result<typed_search_result<record<T>>>>`,
+  whole_subtree)` -> `task<result<typed_search_result<record<T>>>>`,
   `record<T>{dn, value}` with the DN the server sent (entries named
   otherwise included), the limit codes a value as for `search()`;
   `search_stream(filter, scope)` and `search_paged(page_size, filter,
@@ -1584,7 +1597,10 @@ package component `ad`:
   a range, a window ending with `*`, or no such attribute;
   `ad::range_options{.step = N}` asks for windows of N values instead
   (`member;range=0-999`, ...; a smaller window from the server is
-  followed). `c` is a `connection &` or a `client &` (one shared lease for
+  followed). More than `range_options::max_values` values (1,000,000 by
+  default) or `max_rounds` searches (10,000) is
+  `client_errc::message_too_large`; a window holding more values than its
+  range names is `unexpected_response`. `c` is a `connection &` or a `client &` (one shared lease for
   every window, run once more after `cond::connection_lost`). An empty
   attribute or one with a range option is `std::errc::invalid_argument`
   before sending; a window that does not continue the previous one, the

@@ -415,7 +415,9 @@ TEST_CASE("threads: one connection used from several threads", "[net][threads]")
 {
 	corosio::io_context ioc;
 	answering_server server(ioc);
-	auto c = finish(ioc, ldap::connect(ioc, server.url(), { .operation_timeout = std::chrono::seconds(30) }));
+	auto c = finish(ioc,
+	  ldap::connect(
+		ioc, server.url(), { .operation_timeout = std::chrono::seconds(30), .allow_cleartext_passwords = true }));
 	REQUIRE(c.has_value());
 	REQUIRE(finish(ioc, c->simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret")).has_value());
 	tally t;
@@ -476,7 +478,9 @@ TEST_CASE("threads: copies of one connection used and released on several thread
 {
 	corosio::io_context ioc;
 	answering_server server(ioc);
-	auto c = finish(ioc, ldap::connect(ioc, server.url(), { .operation_timeout = std::chrono::seconds(30) }));
+	auto c = finish(ioc,
+	  ldap::connect(
+		ioc, server.url(), { .operation_timeout = std::chrono::seconds(30), .allow_cleartext_passwords = true }));
 	REQUIRE(c.has_value());
 	std::atomic<int> closes = 0;
 	ldap::detail::set_close_hook(*c, [&closes] noexcept { ++closes; });
@@ -529,6 +533,7 @@ TEST_CASE("threads: one client and one repository used from several threads", "[
 	std::optional<ldap::client> pool(std::in_place,
 	  ioc,
 	  ldap::client_options{ .servers = { server.url() },
+		.connection = { .allow_cleartext_passwords = true },
 		.setup = ldap::simple_bind_setup(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret"),
 		.max_connections = 4 });
 	ldap::repository persons(
@@ -569,7 +574,9 @@ TEST_CASE("threads: a connection destroyed by a pool task after stop()", "[net][
 {
 	corosio::io_context ioc;
 	answering_server server(ioc);
-	auto c = finish(ioc, ldap::connect(ioc, server.url(), { .operation_timeout = std::chrono::seconds(30) }));
+	auto c = finish(ioc,
+	  ldap::connect(
+		ioc, server.url(), { .operation_timeout = std::chrono::seconds(30), .allow_cleartext_passwords = true }));
 	REQUIRE(c.has_value());
 	std::atomic<bool> closed = false;
 	std::atomic<bool> closed_inline = false;
@@ -623,7 +630,9 @@ TEST_CASE("threads: close() from another thread reads as closed at once", "[net]
 {
 	corosio::io_context ioc;
 	answering_server server(ioc);
-	auto c = finish(ioc, ldap::connect(ioc, server.url(), { .operation_timeout = std::chrono::seconds(30) }));
+	auto c = finish(ioc,
+	  ldap::connect(
+		ioc, server.url(), { .operation_timeout = std::chrono::seconds(30), .allow_cleartext_passwords = true }));
 	REQUIRE(c.has_value());
 	tally t;
 	constexpr std::size_t hung = 4;

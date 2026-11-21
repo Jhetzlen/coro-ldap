@@ -98,7 +98,7 @@ namespace {
 			if (!self->is_open()) {
 				co_return std::unexpected(self->not_connected(context));
 			}
-			r = co_await self->tls_handshake(std::move(options), timeout);
+			r = co_await self->tls_handshake(std::move(options), timeout ? timeout : self->default_timeout());
 		} catch (const std::bad_alloc &) {
 			self->shut_out_of_memory();
 			throw;

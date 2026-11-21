@@ -830,7 +830,7 @@ TEST_CASE("repository: search returns records under the base, on the limit codes
 	REQUIRE(m.log.received.size() == 2);
 	const auto &first = std::get<ldap::search_request>(m.log.received[0].op);
 	CHECK(first.base_object == "ou=people,dc=example,dc=org");
-	CHECK(first.scope == ldap::search_scope::single_level);
+	CHECK(first.scope == ldap::search_scope::whole_subtree);
 	CHECK(first.filter.to_string() == "(&(objectClass=inetOrgPerson)(uidNumber>=1000))");
 	CHECK(first.attributes == ldap::string_list{ "uid", "mail", "uidNumber", "modifyTimestamp" });
 	CHECK(std::get<ldap::search_request>(m.log.received[1].op).filter.to_string()
@@ -922,7 +922,7 @@ TEST_CASE("repository: search_stream decodes each entry as a record", "[net][rep
 
 	REQUIRE(m.log.received.size() == 2);
 	const auto &request = std::get<ldap::search_request>(m.log.received[0].op);
-	CHECK(request.scope == ldap::search_scope::single_level);
+	CHECK(request.scope == ldap::search_scope::whole_subtree);
 	CHECK(request.filter.to_string() == "(&(objectClass=inetOrgPerson)(uidNumber>=1000))");
 	CHECK(request.attributes == ldap::string_list{ "uid", "mail", "uidNumber", "modifyTimestamp" });
 }
@@ -935,7 +935,7 @@ TEST_CASE("repository: search_paged decodes the entries of every page", "[net][r
 	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 
 	auto pages =
-	  m.run(s.search_paged(1, ldap::filters::field<&person::uid>().present(), ldap::search_scope::whole_subtree));
+	  m.run(s.search_paged(1, ldap::filters::field<&person::uid>().present(), ldap::search_scope::single_level));
 	REQUIRE(pages.has_value());
 	auto a = m.run(pages->next());
 	REQUIRE(a.has_value());
@@ -952,7 +952,7 @@ TEST_CASE("repository: search_paged decodes the entries of every page", "[net][r
 	m.check_server();
 
 	REQUIRE(m.log.received.size() == 2);
-	CHECK(std::get<ldap::search_request>(m.log.received[0].op).scope == ldap::search_scope::whole_subtree);
+	CHECK(std::get<ldap::search_request>(m.log.received[0].op).scope == ldap::search_scope::single_level);
 	auto cookie = ldap::find_paged(m.log.received[1].controls);
 	REQUIRE(cookie.has_value());
 	REQUIRE(cookie->has_value());
@@ -1091,7 +1091,7 @@ TEST_CASE("repository: update_if's default guard on a member without an equality
 TEST_CASE("sync repository: the same operations, blocking", "[net][repository][sync]")
 {
 	server_thread srv;
-	auto opened = ldap::sync::connect(srv.url());
+	auto opened = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
 	REQUIRE(opened.has_value());
 	auto &c = *opened;
 	ldap::sync::repository s(c, people_base, ldap::named_by<&card::cn>);

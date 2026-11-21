@@ -11,8 +11,9 @@ auto main(int argc, char *const *argv) -> int
 		std::cerr << server.error().message() << '\n';
 		return 1;
 	}
-	ldap::sync::client pool(
-	  { .servers = { *server }, .setup = ldap::simple_bind_setup(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret") });
+	ldap::sync::client pool({ .servers = { *server },
+	  .connection = { .allow_cleartext_passwords = true },
+	  .setup = ldap::simple_bind_setup(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret") });
 	auto people = pool.search({
 	  .base = ldap::dn{ "ou=people,dc=example,dc=org" },
 	  .filter = ldap::filters::attr("uid").starts_with("user00"),

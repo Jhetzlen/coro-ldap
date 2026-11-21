@@ -1,5 +1,6 @@
 #include "jhetz/ldap/message.hpp"
 
+#include "control_util.hpp"
 #include "filter_ast.hpp"
 #include "format_util.hpp"
 #include "pmr_util.hpp"
@@ -15,8 +16,13 @@ namespace jhetz::ldap {
 
 using detail::assign_optional;
 using detail::assign_variant;
+using detail::control_value;
+using detail::in_control;
+using detail::next_is;
 using detail::optional_string;
 using detail::optional_with;
+using detail::skip_rest;
+using detail::value_control;
 using detail::variant_with;
 
 namespace {
@@ -721,29 +727,6 @@ namespace {
 	};
 
 	// ---------------------------------------------------------------- decoder
-
-	// RFC 4511 section 4: unrecognized trailing elements are skipped; they must
-	// be well-formed.
-	auto skip_rest(ber::reader &r) -> result<void>
-	{
-		while (!r.empty()) {
-			auto e = r.read();
-			if (!e) {
-				return std::unexpected(std::move(e.error()));
-			}
-		}
-		return {};
-	}
-
-	// Class and number of the next element, without committing.
-	auto next_is(const ber::reader &r, ber::tag t) -> bool
-	{
-		if (r.empty()) {
-			return false;
-		}
-		auto p = r.peek_tag();
-		return p && p->cls == t.cls && p->number == t.number;
-	}
 
 	auto read_ranged(ber::reader &r,
 	  ber::tag t,
@@ -1674,45 +1657,6 @@ auto peek_message_header(std::span<const std::byte> one_complete_message) -> res
 	return message_header{ .id = *id, .op = *op };
 }
 
-// ---------------------------------------------------------------- control values
-
-namespace {
-
-	// The control's value bytes, once its type is `oid` and it has a value.
-	auto expect_control(const control &c, std::string_view oid, std::string_view what)
-	  -> result<std::span<const std::byte>>
-	{
-		if (c.type != oid) {
-			return fail(client_errc::decode_error,
-			  sanitized_context(detail::format("{}: control type is ", what), c.type, detail::format(", not {}", oid)));
-		}
-		if (!c.value) {
-			return fail(client_errc::decode_error, detail::format("{}: control has no value", what));
-		}
-		return std::as_bytes(std::span(*c.value));
-	}
-
-	auto bytes_control(std::string_view oid, bool criticality, const ber::writer &w, std::pmr::memory_resource *mr)
-	  -> control
-	{
-		return { oid, criticality, detail::as_text(w.bytes()), control::allocator_type(mr) };
-	}
-
-	// Errors from inside a control value name the control: their offsets
-	// are relative to the value, not to the message.
-	template<class T> auto in_control(result<T> r, std::string_view name) -> result<T>
-	{
-		return std::move(r).transform_error([name](error e) {
-			if (!e.context.empty()) {
-				e.context.insert(0, ": ");
-			}
-			e.context.insert(0, name);
-			return e;
-		});
-	}
-
-}// namespace
-
 // ---------------------------------------------------------------- paged results
 
 auto encode_paged_results(const paged_results &value, bool criticality, std::pmr::memory_resource *mr)
@@ -1763,7 +1707,7 @@ namespace {
 
 auto decode_paged_results(const control &c, std::pmr::memory_resource *mr) -> result<paged_results>
 {
-	auto value = expect_control(c, paged_results_oid, "paged results");
+	auto value = control_value(c, paged_results_oid, "paged results");
 	if (!value) {
 		return std::unexpected(std::move(value.error()));
 	}
@@ -1781,7 +1725,7 @@ auto encode_sort_result(const sort_result &value, bool criticality, std::pmr::me
 			s.octet_string(value.attribute_type, ber::context(0));
 		}
 	});
-	return bytes_control(sort_response_oid, criticality, w, mr);
+	return value_control(sort_response_oid, criticality, w, mr);
 }
 
 namespace {
@@ -1825,7 +1769,7 @@ namespace {
 
 auto decode_sort_result(const control &c, std::pmr::memory_resource *mr) -> result<sort_result>
 {
-	auto value = expect_control(c, sort_response_oid, "sort result");
+	auto value = control_value(c, sort_response_oid, "sort result");
 	if (!value) {
 		return std::unexpected(std::move(value.error()));
 	}
@@ -1900,7 +1844,7 @@ auto encode_vlv_response(const vlv_response &value, bool criticality, std::pmr::
 			s.octet_string(*value.context_id);
 		}
 	});
-	return bytes_control(vlv_response_oid, criticality, w, mr);
+	return value_control(vlv_response_oid, criticality, w, mr);
 }
 
 namespace {
@@ -1956,7 +1900,7 @@ namespace {
 
 auto decode_vlv_response(const control &c, std::pmr::memory_resource *mr) -> result<vlv_response>
 {
-	auto value = expect_control(c, vlv_response_oid, "vlv response");
+	auto value = control_value(c, vlv_response_oid, "vlv response");
 	if (!value) {
 		return std::unexpected(std::move(value.error()));
 	}
@@ -1976,7 +1920,7 @@ auto encode_read_entry(std::string_view oid,
 	}
 	ber::writer w{ ber::writer::allocator_type(mr) };
 	op_writer{ &w }(entry);
-	return bytes_control(oid, criticality, w, mr);
+	return value_control(oid, criticality, w, mr);
 }
 
 auto decode_read_entry(const control &c, const decode_options &options) -> result<search_result_entry>
@@ -1986,7 +1930,7 @@ auto decode_read_entry(const control &c, const decode_options &options) -> resul
 		  sanitized_context("read entry: control type is ", c.type, ", not pre-read or post-read"));
 	}
 	const std::string_view name = c.type == pre_read_oid ? "pre-read" : "post-read";
-	auto value = expect_control(c, c.type, name);
+	auto value = control_value(c, c.type, name);
 	if (!value) {
 		return std::unexpected(std::move(value.error()));
 	}
