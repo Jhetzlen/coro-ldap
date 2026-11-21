@@ -837,6 +837,49 @@ TEST_CASE("repository: search returns records under the base, on the limit codes
 		  == "(&(objectClass=inetOrgPerson)(objectClass=*))");
 }
 
+namespace {
+
+// A directory whose every search returns `found`.
+struct canned_search
+{
+	ldap::search_result found{};
+
+	auto search(ldap::search_params) -> capy::task<ldap::result<ldap::search_result>> { co_return found; }
+	static auto add(ldap::add_params) -> capy::task<ldap::result<ldap::response>> { co_return ldap::response{}; }
+	static auto modify(ldap::modify_params) -> capy::task<ldap::result<ldap::response>> { co_return ldap::response{}; }
+	static auto del(ldap::del_params) -> capy::task<ldap::result<ldap::response>> { co_return ldap::response{}; }
+	static auto modify_dn(ldap::modify_dn_params) -> capy::task<ldap::result<ldap::response>>
+	{
+		co_return ldap::response{};
+	}
+	static auto compare(ldap::compare_params) -> capy::task<ldap::result<ldap::compare_result>>
+	{
+		co_return ldap::compare_result{};
+	}
+};
+
+}// namespace
+
+TEST_CASE("repository: search keeps the referral chase's attempts", "[net][repository]")
+{
+	canned_search d;
+	d.found.references = { "ldap://c.example.org/ou=people,dc=example,dc=org" };
+	d.found.referrals = { ldap::referral_attempt{ .uri = "ldap://b.example.org/ou=people,dc=example,dc=org",
+	  .kind = ldap::reference_kind::continuation_reference,
+	  .depth = 1,
+	  .outcome = ldap::referral_outcome::skipped_policy,
+	  .failure = std::nullopt } };
+	d.found.unlisted = 3;
+	ldap::repository s(d, people_base, ldap::named_by<&person::uid>);
+
+	corosio::io_context ioc;
+	auto r = run_task(ioc, s.search());
+	REQUIRE(r.has_value());
+	CHECK(r->references == d.found.references);
+	CHECK(r->referrals == d.found.referrals);
+	CHECK(r->unlisted == 3);
+}
+
 TEST_CASE("repository: search quotes its base sanitized", "[net][repository]")
 {
 	mock_ldap m;

@@ -338,7 +338,9 @@ namespace detail {
 				.result_code = found->result_code,
 				.matched_dn = std::move(found->matched_dn),
 				.diagnostic_message = std::move(found->diagnostic_message),
-				.controls = std::move(found->controls) };
+				.controls = std::move(found->controls),
+				.referrals = std::move(found->referrals),
+				.unlisted = found->unlisted };
 			out.entries.reserve(found->entries.size());
 			for (const auto &e : found->entries) {
 				auto r = record_of<value_type>(e, base);
