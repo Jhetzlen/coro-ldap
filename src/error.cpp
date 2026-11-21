@@ -176,6 +176,8 @@ namespace {
 			return "the entry holds only part of the attribute's values (a range option)";
 		case client_errc::no_equality_rule:
 			return "attribute has no equality matching rule";
+		case client_errc::bind_failed:
+			return "request not sent: the bind it was held behind did not succeed";
 		}
 		return {};
 	}
@@ -244,6 +246,7 @@ namespace {
 			return cond::connection_lost;
 		case client_errc::unauthenticated_bind:
 		case client_errc::gssapi_failure:
+		case client_errc::bind_failed:
 			return cond::auth_failed;
 		case client_errc::tls_required:
 		case client_errc::security_layer_required:

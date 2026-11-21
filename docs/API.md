@@ -498,7 +498,12 @@ itself needs only ICU.
   on one closes the connection (one stopped before it starts is not sent
   either, and the connection stays open). Nothing is sent while a bind is
   outstanding (RFC 4511 section 4.2.1): requests started during a bind
-  exchange are held and sent after it, and binds are serialized.
+  exchange are held and sent after it if the bind succeeds, and binds are
+  serialized. If the bind fails, is cancelled or does not complete, the
+  held requests fail with `client_errc::bind_failed`
+  (`cond::auth_failed`) and none is sent (anonymously, or without the
+  security layer the bind was to install); the context names the bind's
+  error. AbandonRequests held behind it are still sent.
   Every response is decoded with `origin::server` and must answer an
   outstanding request (else `client_errc::unexpected_response`);
   IntermediateResponses (RFC 4511 section 4.13) are skipped unless the
@@ -1536,6 +1541,12 @@ itself needs only ICU.
   until it is destroyed or released. `detail::io_thread` and
   `detail::connection_api` are the machinery `sync::connection` and the
   sync leases share.
+- `client_errc::bind_failed`: the request was held behind a bind that
+  failed, was cancelled or did not complete (RFC 4511 section 4.2.1), so
+  it was never sent; the context quotes the bind's error. It matches
+  `cond::auth_failed`. A behaviour change: such requests used to be sent
+  after the failed bind, anonymously and without the bind's security
+  layer. If the failure closed the connection they fail with `not_sent`.
 - `client_errc::not_sent`: the operation failed before the connection's
   writer took its request (the connection closed while the request was
   refused, still queued, or held behind a bind), so the server never saw

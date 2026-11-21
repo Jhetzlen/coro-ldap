@@ -285,8 +285,9 @@ class connection::core
 	// bind_scope ends it. A bind already stopped is not sent.
 	static auto begin_bind(detail::core_ref c, std::string_view context) -> boost::capy::task<result<void>>;
 
-	// Ends the bind exchange begun by begin_bind() and sends the requests
-	// it held. Defined after detail::core_ref.
+	// Ends the bind exchange begun by begin_bind(): sends the requests it
+	// held after a successful bind, fails them otherwise. Defined after
+	// detail::core_ref.
 	class bind_scope;
 
 	// ---------------------------------------------------------------- StartTLS
@@ -396,6 +397,7 @@ class connection::core
 	{
 		std::int32_t id;
 		std::pmr::vector<std::byte> bytes;
+		bool abandon = false;// an AbandonRequest: sent whatever the bind's outcome
 	};
 	std::pmr::deque<held_request> held;
 	// Reader: runs while `pending` is not empty or answers are due.
@@ -456,6 +458,11 @@ class connection::core
 	// Sends the requests the bind held, in order; closes the connection if one
 	// cannot be queued.
 	void release_held() noexcept;
+
+	// Fails the requests the bind held with client_errc::bind_failed naming
+	// `bind_error` (null: the bind did not complete), without sending them;
+	// AbandonRequests are still sent.
+	void fail_held(const error *bind_error) noexcept;
 
 	// Forgets an abandoned request: a later response for it is unexpected.
 	void forget_abandoned(const std::pmr::deque<abandoned_req>::iterator &a);
@@ -576,8 +583,14 @@ class connection::core::bind_scope
 	auto operator=(const bind_scope &) -> bind_scope & = delete;
 	~bind_scope();
 
+	// Records the exchange's outcome and returns it; without one the bind
+	// counts as failed.
+	auto end(result<void> r) noexcept -> result<void>;
+
   private:
 	detail::core_ref c_;
+	bool succeeded_ = false;
+	std::optional<error> failure_{};
 };
 
 namespace detail {

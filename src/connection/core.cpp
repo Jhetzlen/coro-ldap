@@ -333,7 +333,8 @@ auto connection::core::submit(message &m, pending_op *p, std::string_view contex
 			start_reader();
 		}
 		if (binding && !bind) {
-			held.push_back({ .id = m.id, .bytes = std::move(*bytes) });
+			held.push_back(
+			  { .id = m.id, .bytes = std::move(*bytes), .abandon = std::holds_alternative<abandon_request>(m.op) });
 		} else {
 			enqueue(m.id, std::move(*bytes));
 		}
@@ -361,6 +362,47 @@ void connection::core::release_held() noexcept
 		shut_out_of_memory();
 	}
 	held.clear();
+}
+
+void connection::core::fail_held(const error *bind_error) noexcept
+{
+	error e;
+	try {
+		std::string text = "held behind a bind that did not complete";
+		if (bind_error != nullptr) {
+			text = "held behind a failed bind: ";
+			text += bind_error->message();
+		}
+		e = make_error(client_errc::bind_failed, text);
+	} catch (const std::bad_alloc &) {
+		e = out_of_memory();
+	}
+	auto requests = std::move(held);
+	held.clear();
+	try {
+		for (auto &h : requests) {
+			if (h.abandon) {
+				if (open) {
+					enqueue(h.id, std::move(h.bytes));
+				}
+				continue;
+			}
+			if (const auto p = pending.find(h.id); p != pending.end()) {
+				pending_op *op = p->second;
+				pending.erase(p);
+				op->registered = false;
+				op->finished = true;
+				op->failure = copy_error(e);
+				op->ready.set();
+			} else if (const auto a = std::ranges::find(abandoned, h.id, &abandoned_req::id); a != abandoned.end()) {
+				forget_abandoned(a);
+			}
+		}
+	} catch (const std::bad_alloc &) {
+		shut_out_of_memory();
+	}
+	stop_reader_if_idle();
+	publish();
 }
 
 void connection::core::abandon(pending_op &p) noexcept
@@ -924,12 +966,26 @@ auto connection::core::begin_bind(core_ref c, std::string_view context) -> capy:
 	co_return result<void>{};
 }
 
+auto connection::core::bind_scope::end(result<void> r) noexcept -> result<void>
+{
+	if (r) {
+		succeeded_ = true;
+	} else {
+		failure_ = copy_error(r.error());
+	}
+	return r;
+}
+
 connection::core::bind_scope::~bind_scope()
 {
 	c_->armed_layer.reset();
 	c_->binding = false;
 	c_->bind_idle.set();
-	c_->release_held();
+	if (succeeded_) {
+		c_->release_held();
+		return;
+	}
+	c_->fail_held(failure_ ? &*failure_ : nullptr);
 }
 
 // ---------------------------------------------------------------- requests

@@ -79,19 +79,9 @@ namespace {
 
 namespace {
 
-	auto simple_bind_impl(core_ref self, dn name, std::string password) -> capy::task<result<void>>
+	auto simple_bind_exchange(core_ref self, const dn &name, const std::string &password, const std::string &context)
+	  -> capy::task<result<void>>
 	{
-		const std::string context = op_context("bind", name);
-		if (!self) {
-			co_return std::unexpected(no_connection(context));
-		}
-		if (!name.empty() && password.empty()) {
-			co_return fail(client_errc::unauthenticated_bind, context + ": empty password (RFC 4513 section 5.1.2)");
-		}
-		if (auto b = co_await connection::core::begin_bind(self, context); !b) {
-			co_return std::unexpected(std::move(b.error()));
-		}
-		const connection::core::bind_scope exchange{ self };
 		if (!password.empty() && self->refuses_cleartext_password()) {
 			co_return fail(client_errc::tls_required,
 			  context + ": the password would be sent in clear (use ldaps://, start_tls() or "
@@ -110,17 +100,25 @@ namespace {
 		co_return result<void>{};
 	}
 
-	auto sasl_bind_impl(core_ref self, sasl_mechanism &mechanism, dn name) -> capy::task<result<void>>
+	auto simple_bind_impl(core_ref self, dn name, std::string password) -> capy::task<result<void>>
 	{
-		std::string context = "sasl bind ";
-		context += mechanism.name();
+		const std::string context = op_context("bind", name);
 		if (!self) {
 			co_return std::unexpected(no_connection(context));
+		}
+		if (!name.empty() && password.empty()) {
+			co_return fail(client_errc::unauthenticated_bind, context + ": empty password (RFC 4513 section 5.1.2)");
 		}
 		if (auto b = co_await connection::core::begin_bind(self, context); !b) {
 			co_return std::unexpected(std::move(b.error()));
 		}
-		const connection::core::bind_scope exchange{ self };
+		connection::core::bind_scope exchange{ self };
+		co_return exchange.end(co_await simple_bind_exchange(self, name, password, context));
+	}
+
+	auto sasl_bind_exchange(core_ref self, sasl_mechanism &mechanism, const dn &name, const std::string &context)
+	  -> capy::task<result<void>>
+	{
 		constexpr int max_steps = 32;
 		sasl_bind_context bind_context;
 		if (self->transport().type() == net::transport::kind::tcp) {
@@ -201,6 +199,20 @@ namespace {
 				creds = mechanism.step(server_creds);
 			}
 		}
+	}
+
+	auto sasl_bind_impl(core_ref self, sasl_mechanism &mechanism, dn name) -> capy::task<result<void>>
+	{
+		std::string context = "sasl bind ";
+		context += mechanism.name();
+		if (!self) {
+			co_return std::unexpected(no_connection(context));
+		}
+		if (auto b = co_await connection::core::begin_bind(self, context); !b) {
+			co_return std::unexpected(std::move(b.error()));
+		}
+		connection::core::bind_scope exchange{ self };
+		co_return exchange.end(co_await sasl_bind_exchange(self, mechanism, name, context));
 	}
 
 }// namespace

@@ -1407,6 +1407,35 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		check_release(m.log.received[2], m.log.received[0], "page2");
 		CHECK(m.log.received[3] == bind_request_msg(4));
 	}
+	SECTION("during a bind that fails: dropped with its due answer")
+	{
+		mock_ldap m;
+		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+		  step{},// reads the BindRequest, does not answer yet
+		  step{ .read_request = false, .replies = { bytes_of(bind_resp(2, 49)) } },
+		  answer({ bind_resp(4) }) });
+		outcome<ldap::result<void>> bound;
+		{
+			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			REQUIRE(s.has_value());
+			auto e = m.run(s->next());
+			REQUIRE(e.has_value());
+			REQUIRE(e->has_value());
+			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
+			spawn(m.ioc, bind_admin(m.conn), bound);
+			drive_until(m.ioc, [&m] { return m.log.received.size() == 2; });
+			CHECK_FALSE(bound.done());
+			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
+		}
+		drive_until(m.ioc, [&bound] { return bound.done(); });
+		CHECK(bound.get().error().code == ldap::errc::invalid_credentials);
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.run(bind_admin(m.conn)).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 3);
+		CHECK(m.log.received[1] == bind_request_msg(2));
+		CHECK(m.log.received[2] == bind_request_msg(4));
+	}
 	SECTION("closed while the release's answer is due: no longer counted")
 	{
 		mock_ldap m;

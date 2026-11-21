@@ -2763,6 +2763,65 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 	}
 }
 
+TEST_CASE("requests held behind a failed bind fail without being sent", "[net][connection]")
+{
+	SECTION("a bind the server refuses")
+	{
+		mock_ldap m;
+		m.serve({ answer({ bind_resp(1, 49, "bad password") }), answer({ done_msg(4) }) });
+		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<ldap::search_result>> first;
+		outcome<ldap::result<ldap::search_result>> second;
+		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "wrong"), bind);
+		spawn(m.ioc, m.conn.search(people_search()), first);
+		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), second);
+		drive_until(m.ioc, [&] { return bind.done() && first.done() && second.done(); });
+		REQUIRE_FALSE(bind.get().has_value());
+		CHECK(bind.get().error().code == ldap::errc::invalid_credentials);
+		for (auto *held : { &first, &second }) {
+			REQUIRE_FALSE(held->get().has_value());
+			const auto &e = held->get().error();
+			CHECK(e.code == client_errc::bind_failed);
+			CHECK(e.code == ldap::cond::auth_failed);
+			CHECK_THAT(std::string(e.context), ContainsSubstring("held behind a failed bind: bind cn=admin"));
+			CHECK_THAT(std::string(e.context), ContainsSubstring("bad password"));
+		}
+		CHECK(m.conn.is_open());
+		CHECK(m.conn.outstanding() == 0);
+		CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());// id 4
+		m.check_server();
+		REQUIRE(m.log.received.size() == 2);
+		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[0].op));
+		CHECK(m.log.received[1].id == 4);
+	}
+	SECTION("an AbandonRequest held behind the bind is still sent")
+	{
+		mock_ldap m;
+		// Reads the search (id 1) and leaves it open, then the bind (2), the
+		// AbandonRequest for the search (4) and a later search (5).
+		m.serve({ step{}, answer({ bind_resp(2, 49) }), step{}, answer({ done_msg(5) }) });
+		std::stop_source stop;
+		outcome<ldap::result<ldap::search_result>> early;
+		outcome<ldap::result<void>> bind;
+		outcome<ldap::result<ldap::search_result>> held;
+		spawn(m.ioc, stop.get_token(), m.conn.search(people_search()), early);
+		drive_until(m.ioc, [&m] { return m.log.received.size() == 1; });
+		spawn(m.ioc, m.conn.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "wrong"), bind);
+		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), held);// id 3
+		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 3; });// the search is held
+		stop.request_stop();
+		drive_until(m.ioc, [&] { return early.done() && bind.done() && held.done(); });
+		CHECK(early.get().error().code == ldap::cond::canceled);
+		CHECK(held.get().error().code == client_errc::bind_failed);
+		CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 4);
+		CHECK(std::holds_alternative<ldap::bind_request>(m.log.received[1].op));
+		CHECK(m.log.received[2] == ldap::message{ 4, ldap::abandon_request{ 1 } });
+		CHECK(m.log.received[3].id == 5);
+	}
+}
+
 TEST_CASE("RFC 4511 4.1.1: ids still in use are skipped after wrapping", "[net][connection][rfc]")
 {
 	auto del_resp = [](std::int32_t id) { return ldap::message{ id, ldap::del_response{ ldap::ldap_result{ 0 } } }; };

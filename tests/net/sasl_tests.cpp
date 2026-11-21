@@ -270,11 +270,9 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 	SECTION("a server that refuses the abort")
 	{
 		// A refused aborting bind ends the exchange: the connection stays open and
-		// the held search goes out.
+		// the held search fails unsent.
 		mock_ldap m;
-		m.serve({ answer({ sasl_resp(1, 14, "bad") }),
-		  answer({ bind_resp(3, 48, "anonymous bind disallowed") }),
-		  answer({ done_msg(2) }) });
+		m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(3, 48, "anonymous bind disallowed") }) });
 		echo_mechanism mech;
 		outcome<ldap::result<void>> bind;
 		outcome<ldap::result<ldap::search_result>> search;
@@ -283,12 +281,12 @@ TEST_CASE("sasl: mechanism errors abort the bind", "[net][sasl]")
 		drive_until(m.ioc, [&] { return bind.done() && search.done(); });
 		REQUIRE_FALSE(bind.get().has_value());
 		CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
-		CHECK(search.get().has_value());
+		REQUIRE_FALSE(search.get().has_value());
+		CHECK(search.get().error().code == ldap::client_errc::bind_failed);
 		CHECK(m.conn.is_open());
 		m.check_server();
-		REQUIRE(m.log.received.size() == 3);
+		REQUIRE(m.log.received.size() == 2);
 		CHECK(m.log.received[1] == abort_req(3));
-		CHECK(m.log.received[2].id == 2);
 	}
 	SECTION("a server that answers the abort with saslBindInProgress")
 	{
@@ -389,10 +387,10 @@ TEST_CASE("sasl: requests started during the exchange wait for its end", "[net][
 	CHECK(m.log.received[3].id == 2);
 }
 
-TEST_CASE("sasl: a failed exchange is aborted before held requests are sent", "[net][sasl][rfc]")
+TEST_CASE("sasl: a failed exchange is aborted and the requests it held fail unsent", "[net][sasl][rfc]")
 {
 	mock_ldap m;
-	m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(3) }), answer({ done_msg(2) }) });
+	m.serve({ answer({ sasl_resp(1, 14, "bad") }), answer({ bind_resp(3) }), answer({ done_msg(4) }) });
 	echo_mechanism mech;
 	outcome<ldap::result<void>> bind;
 	outcome<ldap::result<ldap::search_result>> search;
@@ -401,12 +399,17 @@ TEST_CASE("sasl: a failed exchange is aborted before held requests are sent", "[
 	drive_until(m.ioc, [&] { return bind.done() && search.done(); });
 	REQUIRE_FALSE(bind.get().has_value());
 	CHECK(bind.get().error().context == "sasl bind X-ECHO: bad challenge");
-	CHECK(search.get().has_value());
+	REQUIRE_FALSE(search.get().has_value());
+	CHECK(search.get().error().code == ldap::client_errc::bind_failed);
+	CHECK(search.get().error().code == ldap::cond::auth_failed);
+	CHECK_THAT(std::string(search.get().error().context), ContainsSubstring("sasl bind X-ECHO: bad challenge"));
+	CHECK(m.conn.is_open());
+	CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());// id 4
 	m.check_server();
 	REQUIRE(m.log.received.size() == 3);
 	CHECK(m.log.received[0] == sasl_req(1, "X-ECHO", "hello"));
 	CHECK(m.log.received[1] == abort_req(3));
-	CHECK(m.log.received[2].id == 2);
+	CHECK(m.log.received[2].id == 4);
 }
 
 // A bind cannot be abandoned: an abort that gets no answer closes the

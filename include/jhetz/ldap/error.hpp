@@ -114,6 +114,9 @@ enum class client_errc : int {
 	// update_if's default guard on a member without an EQUALITY rule. Matches
 	// cond::invalid_input.
 	no_equality_rule,
+	// A request held behind a bind that failed or did not complete: never
+	// sent. Matches cond::auth_failed.
+	bind_failed,
 };
 
 // Error conditions: what an error means across categories, Capy, system

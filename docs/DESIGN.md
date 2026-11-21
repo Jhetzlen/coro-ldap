@@ -1870,7 +1870,7 @@ Error-code categories:
 | Category | Enum | Examples |
 |---|---|---|
 | `ldap.result` | `ldap::errc` — RFC 4511 resultCode values, numbers kept | `invalid_credentials` (49), `no_such_object` (32), `size_limit_exceeded` (4) |
-| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `gssapi_failure`, `security_layer_required`, `security_layer_unavailable`, `security_layer_in_effect`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `naming_value_changed`, `incomplete_values`, `no_equality_rule`; facade: `would_deadlock`; environment: `internal_error` |
+| `ldap.client` | `ldap::client_errc` | codec: `decode_error`, `message_too_large`, `nesting_too_deep`, `unsupported_tag`, `unexpected_tag`, `integer_overflow`, `unsupported_operation`, `encode_error`; input: `invalid_filter`, `invalid_dn`, `invalid_attribute`, `invalid_url`, `string_prep_failed`; connection: `unexpected_response`, `not_connected`, `not_sent`, `bind_failed`, `operation_in_progress`, `unauthenticated_bind`, `tls_required`, `gssapi_failure`, `security_layer_required`, `security_layer_unavailable`, `security_layer_in_effect`; mapping: `missing_attribute`, `too_many_values`, `conversion_failed`, `schema_mismatch`, `naming_value_changed`, `incomplete_values`, `no_equality_rule`; facade: `would_deadlock`; environment: `internal_error` |
 | system / TLS | from Corosio / Capy | `connection_refused`; `capy::error::timeout`, `canceled`, `stream_truncated`; TLS errors in the `corosio.openssl` category |
 
 `error`'s strings are `std::pmr::string` but always on the default
@@ -1919,7 +1919,8 @@ response with another message id or an operation that does not answer the
 request), `not_connected` (closed by `unbind`, `close` or an earlier
 failure, which the context names), `not_sent` (the connection closed
 before the request reached the writer: the server never saw it, see
-"Sent or not" in section 7), `operation_in_progress` (the connection
+"Sent or not" in section 7), `bind_failed` (a request held behind a bind
+that did not succeed, never sent), `operation_in_progress` (the connection
 is busy; nothing is queued), `unauthenticated_bind` (a name with an empty
 password), `tls_required` (channel binding on a connection without TLS,
 or an Active Directory password change on one with neither TLS nor a
@@ -1942,7 +1943,7 @@ a caller match none, deliberately (test them by exact code).
 | Condition | `ldap.result` (`errc`) | `ldap.client` (`client_errc`) | system / Capy / TLS |
 |---|---|---|---|
 | `not_found` | `no_such_object`, `no_such_attribute` | | |
-| `auth_failed` | `invalid_credentials`, `inappropriate_authentication`, `auth_method_not_supported` | `unauthenticated_bind`, `gssapi_failure` | |
+| `auth_failed` | `invalid_credentials`, `inappropriate_authentication`, `auth_method_not_supported` | `unauthenticated_bind`, `gssapi_failure`, `bind_failed` | |
 | `timeout` | `time_limit_exceeded` | | `timed_out`, `capy::error::timeout` |
 | `canceled` | | | `operation_canceled`, `capy::error::canceled` |
 | `connection_lost` | | `not_connected`, `not_sent` | `connection_reset`, `connection_aborted`, `broken_pipe`, `not_connected`; Capy `eof`, `stream_truncated` |
@@ -2525,8 +2526,15 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
 - Bind sequencing (RFC 4511 section 4.2.1: no PDU while a BindRequest is
   outstanding): a bind exchange (every step of a SASL bind) marks the
   connection as binding. Requests started meanwhile are encoded, registered
-  and held, then sent in order when the exchange ends; one cancelled while
-  held is dropped (never sent, so no AbandonRequest). Binds are serialized:
+  and held, then sent in order when the exchange succeeds; one cancelled
+  while held is dropped (never sent, so no AbandonRequest). An exchange
+  that fails, is cancelled or ends without an outcome (its frame
+  destroyed) fails the held requests with `client_errc::bind_failed`
+  quoting its error, unsent: sending them would run them anonymously, or
+  without the security layer the bind was to install. Held AbandonRequests
+  are still sent (they carry no authority); held unanswered requests (a
+  transaction abort, a paged results release) are dropped with their due
+  answers. Binds are serialized:
   a second one waits for the first. `unbind()` during a bind closes without
   an UnbindRequest; `start_tls()` during one is refused. `unbind()` once StartTLS
   is sent closes the same way (RFC 4511 section 4.14.1) and fails it.
