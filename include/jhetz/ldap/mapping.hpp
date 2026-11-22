@@ -64,7 +64,7 @@ namespace detail {
 		}
 	}
 
-	// "not an integer: \"12a\"", the value quoted, sanitized and cut at 64 bytes.
+	// "not an integer (3-octet value)": the value's length, not the value.
 	auto conversion_error(std::string_view what, std::string_view raw) -> error;
 
 	// conversion_failed "not valid UTF-8 (ill-formed sequence at offset N)".

@@ -290,7 +290,7 @@ TEST_CASE("repository: get returns the other errors and decode failures", "[net]
 	CHECK(bad.error().code == ldap::client_errc::conversion_failed);
 	CHECK(std::string(bad.error().context)
 		  == "search uid=jdoe,ou=people,dc=example,dc=org: entry uid=jdoe,ou=people,dc=example,dc=org: attribute "
-			 "uidNumber: not an integer: \"x\"");
+			 "uidNumber: not an integer (1-octet value)");
 	m.check_server();
 }
 
@@ -893,7 +893,7 @@ TEST_CASE("repository: search quotes its base sanitized", "[net][repository]")
 	CHECK(r.error().code == ldap::client_errc::conversion_failed);
 	CHECK(std::string(r.error().context)
 		  == "search ou=\xEF\xBF\xBDp\xC3\xA9pl\xC3\xA9" + std::string(256 - 13, 'o')
-			   + "...: entry uid=b,ou=people,dc=example,dc=org: attribute uidNumber: not an integer: \"x\"");
+			   + "...: entry uid=b,ou=people,dc=example,dc=org: attribute uidNumber: not an integer (1-octet value)");
 	CHECK(m.conn.is_open());// a mapping error is not a connection error
 }
 

@@ -19,10 +19,7 @@ namespace detail {
 
 	auto conversion_error(std::string_view what, std::string_view raw) -> error
 	{
-		std::string text = detail::format("{}: \"", what);
-		detail::append_sanitized(text, raw, 64);
-		text += '"';
-		return make_error(client_errc::conversion_failed, text);
+		return make_error(client_errc::conversion_failed, detail::format("{} ({}-octet value)", what, raw.size()));
 	}
 
 	auto utf8_conversion_error(std::size_t offset) -> error

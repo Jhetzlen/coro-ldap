@@ -160,7 +160,7 @@ TEST_CASE("value_traits for bool, strings, DNs and binary", "[mapping][traits]")
 	auto bad_dn = ldap::value_traits<ldap::dn>::decode("not a dn");
 	REQUIRE_FALSE(bad_dn.has_value());
 	CHECK(bad_dn.error().code == ldap::client_errc::conversion_failed);
-	CHECK_THAT(std::string(bad_dn.error().context), ContainsSubstring("not a distinguished name: \"not a dn\""));
+	CHECK_THAT(std::string(bad_dn.error().context), ContainsSubstring("not a distinguished name (8-octet value)"));
 
 	const ldap::binary raw{ std::byte{ 0 }, std::byte{ 0xff } };
 	CHECK(ldap::value_traits<ldap::binary>::decode(std::string_view("\x00\xff", 2)) == raw);
@@ -385,13 +385,14 @@ TEST_CASE("decode errors name the entry and the attribute", "[mapping][decode]")
 		  .attribute = "uidNumber",
 		  .values = { "12a" },
 		  .code = ldap::client_errc::conversion_failed,
-		  .context = "entry uid=jdoe,ou=people,dc=example,dc=org: attribute uidNumber: not an integer: \"12a\"" },
+		  .context =
+			"entry uid=jdoe,ou=people,dc=example,dc=org: attribute uidNumber: not an integer (3-octet value)" },
 		{ .name = "bad element of a vector",
 		  .attribute = "memberOf",
 		  .values = { "cn=ok,dc=example,dc=org", "bad" },
 		  .code = ldap::client_errc::conversion_failed,
-		  .context =
-			"entry uid=jdoe,ou=people,dc=example,dc=org: attribute memberOf: not a distinguished name: \"bad\"" },
+		  .context = "entry uid=jdoe,ou=people,dc=example,dc=org: attribute memberOf: not a distinguished name "
+					 "(3-octet value)" },
 		{ .name = "bad boolean",
 		  .attribute = "x-disabled",
 		  .values = { "yes" },
@@ -516,7 +517,7 @@ TEST_CASE("a mapping error message names the code once", "[mapping][decode]")
 			   + std::to_string(std::to_underlying(ldap::client_errc::missing_attribute)) + "]");
 }
 
-TEST_CASE("a conversion error shows the value and the DN sanitized", "[mapping][decode]")
+TEST_CASE("a conversion error leaves the value out and shows the DN sanitized", "[mapping][decode]")
 {
 	const std::string fffd = "\xEF\xBF\xBD";// U+FFFD
 	const auto context = [](std::string_view raw) {
@@ -524,16 +525,13 @@ TEST_CASE("a conversion error shows the value and the DN sanitized", "[mapping][
 		REQUIRE_FALSE(r.has_value());
 		return std::string(r.error().context);
 	};
-	// Valid UTF-8 is kept; controls, bidi controls and ill-formed bytes become U+FFFD.
-	CHECK(context("\xC3\xA9t\xC3\xA9 \xF0\x9F\x98\x80") == "not an integer: \"\xC3\xA9t\xC3\xA9 \xF0\x9F\x98\x80\"");
-	CHECK(context("1\r\n\x1B[0m\xE2\x80\xAE\xFF")
-		  == "not an integer: \"1" + fffd + fffd + fffd + "[0m" + fffd + fffd + "\"");
-	// At most 64 bytes, never half a character: a 2-byte character
-	// straddling byte 64 is left out with what follows.
-	const std::string straddling = std::string(63, '1') + "\xC3\xA9" + "1";
-	CHECK(context(straddling) == "not an integer: \"" + std::string(63, '1') + "...\"");
-	CHECK(context(std::string(62, '1') + "\xC3\xA9") == "not an integer: \"" + std::string(62, '1') + "\xC3\xA9\"");
-	CHECK(context(std::string(65, '1')) == "not an integer: \"" + std::string(64, '1') + "...\"");
+	// The server's bytes never reach the message: only their length.
+	CHECK(context("S3cret-12a") == "not an integer (10-octet value)");
+	CHECK(context("1\r\n\x1B[0m\xE2\x80\xAE\xFF") == "not an integer (11-octet value)");
+	CHECK(context(std::string(65, '1')) == "not an integer (65-octet value)");
+	auto secret = ldap::value_traits<bool>::decode("hunter2");
+	REQUIRE_FALSE(secret.has_value());
+	CHECK_FALSE(std::string(secret.error().message()).contains("hunter2"));
 
 	// The entry's DN (the server's text) too.
 	ldap::entry e = full_entry();

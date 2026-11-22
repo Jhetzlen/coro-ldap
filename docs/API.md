@@ -1175,7 +1175,9 @@ itself needs only ICU.
   `std::optional<T>`, `std::vector<T>`); `value_traits<T>` converts values
   (strings, which must be well-formed UTF-8 or the decode is
   `conversion_failed`, and one bad value fails the whole `decode<T>` and
-  so the whole repository search; integers, bool, `dn`, `binary` for binary
+  so the whole repository search; the error names the attribute, the
+  reason and the value's length, never the value, which may be a
+  secret; integers, bool, `dn`, `binary` for binary
   attributes such as userPassword (Octet String), jpegPhoto and
   userCertificate, `sys_seconds` as GeneralizedTime, enums with an
   `enum_names` table). `decode<T>(entry)` (an entry holding a mapped
