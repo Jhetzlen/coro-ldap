@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -119,27 +120,6 @@ namespace detail {
 		co_return std::make_unique<ldap::transaction>(std::move(*r));
 	}
 
-	auto is_open_of(const ldap::connection &c) -> capy::task<result<bool>> { co_return c.is_open(); }
-
-	auto is_tls_of(const ldap::connection &c) -> capy::task<result<bool>> { co_return c.is_tls(); }
-
-	auto security_layer_of(const ldap::connection &c) -> capy::task<result<sasl_protection>>
-	{
-		co_return c.security_layer();
-	}
-
-	auto peer_certificate_of(const ldap::connection &c) -> capy::task<result<std::vector<std::byte>>>
-	{
-		const auto der = c.peer_certificate();
-		co_return std::vector<std::byte>(der.begin(), der.end());
-	}
-
-	auto close_of(ldap::connection &c) -> capy::task<result<void>>
-	{
-		c.close();
-		co_return result<void>{};
-	}
-
 }// namespace detail
 
 // ---------------------------------------------------------------- connection
@@ -218,13 +198,6 @@ namespace {
 		co_return result<void>{};
 	}
 
-	// ldap::transaction's accessors, read on the I/O thread.
-	auto identifier_of(const ldap::transaction *t) -> capy::task<result<std::string>>
-	{
-		co_return std::string(t->identifier());
-	}
-	auto is_open_of(const ldap::transaction *t) -> capy::task<result<bool>> { co_return t->is_open(); }
-
 }// namespace
 
 transaction::transaction(std::shared_ptr<const detail::io_thread> io, std::unique_ptr<ldap::transaction> t) noexcept
@@ -268,7 +241,8 @@ auto transaction::identifier() const -> std::string
 		return {};
 	}
 	const ldap::transaction *t = txn_.get();
-	return io_->run([t] { return identifier_of(t); }).value_or(std::string{});
+	return io_->run([t] { return detail::invoked([t] { return std::string(t->identifier()); }); })
+	  .value_or(std::string{});
 }
 
 auto transaction::is_open() const -> bool
@@ -277,7 +251,7 @@ auto transaction::is_open() const -> bool
 		return false;
 	}
 	const ldap::transaction *t = txn_.get();
-	return io_->run([t] { return is_open_of(t); }).value_or(false);
+	return io_->run([t] { return detail::invoked([t] { return t->is_open(); }); }).value_or(false);
 }
 
 auto transaction::add(add_params request) -> result<response>
@@ -369,23 +343,24 @@ namespace detail {
 			io.join();
 		}
 
-		static auto close_now(ldap::client &pool) -> capy::task<result<void>>
-		{
-			pool.close();
-			co_return result<void>{};
-		}
-
 		// Closes the ldap::client on its strand.
 		static auto close(client_core &core) -> capy::task<result<void>>
 		{
 			if (!core.pool) {
 				co_return result<void>{};
 			}
-			co_return co_await ldap::detail::on_strand(core.pool->executor(), close_now(*core.pool));
+			co_return co_await ldap::detail::on_strand(
+			  core.pool->executor(), invoked([&pool = *core.pool] { pool.close(); }));
 		}
 	};
 
 	namespace {
+
+		// The ldap::client operation `Op` with `args`, run on the I/O thread.
+		template<auto Op, class... Args> auto on_pool(client_core &core, Args &&...args)
+		{
+			return core.io.run([&] { return std::invoke(Op, *core.pool, std::forward<Args>(args)...); });
+		}
 
 		template<class Lease> auto take_lease(ldap::client &pool) -> capy::task<result<std::pair<Lease, url>>>
 		{
@@ -401,11 +376,6 @@ namespace detail {
 			}
 			url server = l->server();
 			co_return std::pair{ std::move(*l), std::move(server) };
-		}
-
-		auto connections_of(const ldap::client &pool) -> capy::task<result<std::size_t>>
-		{
-			co_return pool.connections();
 		}
 
 	}// namespace
@@ -500,37 +470,37 @@ auto client::acquire_exclusive() -> result<exclusive_lease>
 }
 auto client::search(search_params request, std::pmr::memory_resource *mr) -> result<search_result>
 {
-	return core_->io.run([&] { return core_->pool->search(std::move(request), mr); });
+	return detail::on_pool<&ldap::client::search>(*core_, std::move(request), mr);
 }
 
 auto client::compare(compare_params request) -> result<compare_result>
 {
-	return core_->io.run([&] { return core_->pool->compare(std::move(request)); });
+	return detail::on_pool<&ldap::client::compare>(*core_, std::move(request));
 }
 
 auto client::add(add_params request) -> result<response>
 {
-	return core_->io.run([&] { return core_->pool->add(std::move(request)); });
+	return detail::on_pool<&ldap::client::add>(*core_, std::move(request));
 }
 
 auto client::modify(modify_params request) -> result<response>
 {
-	return core_->io.run([&] { return core_->pool->modify(std::move(request)); });
+	return detail::on_pool<&ldap::client::modify>(*core_, std::move(request));
 }
 
 auto client::del(del_params request) -> result<response>
 {
-	return core_->io.run([&] { return core_->pool->del(std::move(request)); });
+	return detail::on_pool<&ldap::client::del>(*core_, std::move(request));
 }
 
 auto client::modify_dn(modify_dn_params request) -> result<response>
 {
-	return core_->io.run([&] { return core_->pool->modify_dn(std::move(request)); });
+	return detail::on_pool<&ldap::client::modify_dn>(*core_, std::move(request));
 }
 
 auto client::extended(extended_params request) -> result<extended_result>
 {
-	return core_->io.run([&] { return core_->pool->extended(std::move(request)); });
+	return detail::on_pool<&ldap::client::extended>(*core_, std::move(request));
 }
 
 auto client::connections() const -> std::size_t
@@ -538,7 +508,7 @@ auto client::connections() const -> std::size_t
 	if (core_->io.on_this_thread()) {
 		return core_->pool ? core_->pool->connections() : 0;
 	}
-	return core_->io.run([this] { return detail::connections_of(*core_->pool); }).value_or(0);
+	return core_->io.run([this] { return detail::invoked([this] { return core_->pool->connections(); }); }).value_or(0);
 }
 
 void client::close() noexcept

@@ -137,12 +137,17 @@ namespace detail {
 	  std::pmr::memory_resource *mr) -> boost::capy::task<result<search_result>>;
 	[[nodiscard]] auto make_transaction(ldap::connection &c, extended_controls controls)
 	  -> boost::capy::task<result<std::unique_ptr<ldap::transaction>>>;
-	[[nodiscard]] auto is_open_of(const ldap::connection &c) -> boost::capy::task<result<bool>>;
-	[[nodiscard]] auto is_tls_of(const ldap::connection &c) -> boost::capy::task<result<bool>>;
-	[[nodiscard]] auto security_layer_of(const ldap::connection &c) -> boost::capy::task<result<sasl_protection>>;
-	[[nodiscard]] auto peer_certificate_of(const ldap::connection &c)
-	  -> boost::capy::task<result<std::vector<std::byte>>>;
-	[[nodiscard]] auto close_of(ldap::connection &c) -> boost::capy::task<result<void>>;
+
+	// A task returning f()'s value, or success after f() for a void f.
+	template<class F> auto invoked(F f) -> boost::capy::task<result<std::invoke_result_t<F &>>>
+	{
+		if constexpr (std::is_void_v<std::invoke_result_t<F &>>) {
+			f();
+			co_return result<void>{};
+		} else {
+			co_return f();
+		}
+	}
 
 	template<class Derived> class connection_api;
 	struct facade_access;
@@ -197,23 +202,32 @@ namespace detail {
 	  public:
 		[[nodiscard]] auto is_open() const -> bool
 		{
-			return self().call([](const ldap::connection &c) { return is_open_of(c); }).value_or(false);
+			return self()
+			  .call([](const ldap::connection &c) { return invoked([&c] { return c.is_open(); }); })
+			  .value_or(false);
 		}
 		[[nodiscard]] auto is_tls() const -> bool
 		{
-			return self().call([](const ldap::connection &c) { return is_tls_of(c); }).value_or(false);
+			return self()
+			  .call([](const ldap::connection &c) { return invoked([&c] { return c.is_tls(); }); })
+			  .value_or(false);
 		}
 		[[nodiscard]] auto security_layer() const -> sasl_protection
 		{
 			return self()
-			  .call([](const ldap::connection &c) { return security_layer_of(c); })
+			  .call([](const ldap::connection &c) { return invoked([&c] { return c.security_layer(); }); })
 			  .value_or(sasl_protection::none);
 		}
 		// Copied; empty unless is_tls().
 		[[nodiscard]] auto peer_certificate() const -> std::vector<std::byte>
 		{
 			return self()
-			  .call([](const ldap::connection &c) { return peer_certificate_of(c); })
+			  .call([](const ldap::connection &c) {
+				  return invoked([&c] {
+					  const auto der = c.peer_certificate();
+					  return std::vector<std::byte>(der.begin(), der.end());
+				  });
+			  })
 			  .value_or(std::vector<std::byte>{});
 		}
 
@@ -279,7 +293,7 @@ namespace detail {
 		// Closes at once, without an UnbindRequest.
 		void close()
 		{
-			(void)self().call([](ldap::connection &c) { return close_of(c); });
+			(void)self().call([](ldap::connection &c) { return invoked([&c] { c.close(); }); });
 		}
 
 	  private:
