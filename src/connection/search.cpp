@@ -213,23 +213,8 @@ namespace {
 		if (!s) {
 			co_return std::unexpected(std::move(s.error()));
 		}
-		search_result out{ .entries = std::pmr::vector<entry>(mr), .references = string_list(mr) };
-		while (true) {
-			auto e = co_await next_of<entry>(core_stream_state(*s));
-			if (!e) {
-				const ldap_result *done = detail::search_done(*s);
-				if (done == nullptr || !detail::limit_exceeded(done->result_code)) {
-					co_return std::unexpected(std::move(e.error()));
-				}
-				break;
-			}
-			if (!*e) {
-				break;
-			}
-			out.entries.push_back(std::move(**e));
-		}
-		detail::set_outcome(out, *detail::search_done(*s), s->references(), s->controls());
-		co_return out;
+		co_return co_await detail::collect_search(
+		  *s, [](ldap::search_stream &stream) { return next_of<entry>(core_stream_state(stream)); }, mr);
 	}
 
 }// namespace

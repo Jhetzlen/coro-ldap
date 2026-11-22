@@ -106,6 +106,50 @@ namespace detail {
 		out.controls.assign(controls.begin(), controls.end());
 	}
 
+	[[nodiscard]] inline auto done_of(const ldap::search_stream &s) noexcept -> const ldap_result *
+	{
+		return search_done(s);
+	}
+	[[nodiscard]] inline auto done_of(const ldap::paged_search &p) noexcept -> const ldap_result *
+	{
+		return paged_done(p);
+	}
+
+	// Hands each item `next(s)` returns to `take`; returns the
+	// SearchResultDone's LDAPResult, also after a limit code's failure.
+	template<class Stream, class Next, class Take>
+	auto drain_search(Stream &s, Next next, Take take) -> boost::capy::task<result<const ldap_result *>>
+	{
+		while (true) {
+			auto item = co_await next(s);
+			if (!item) {
+				const ldap_result *done = done_of(s);
+				if (done == nullptr || !limit_exceeded(done->result_code)) {
+					co_return std::unexpected(std::move(item.error()));
+				}
+				co_return done;
+			}
+			if (!*item) {
+				co_return done_of(s);
+			}
+			take(std::move(**item));
+		}
+	}
+
+	// The entries of `s` with its outcome.
+	template<class Stream, class Next>
+	auto collect_search(Stream &s, Next next, std::pmr::memory_resource *mr) -> boost::capy::task<result<search_result>>
+	{
+		search_result out{ .entries = std::pmr::vector<entry>(mr), .references = string_list(mr) };
+		auto done =
+		  co_await drain_search(s, std::move(next), [&out](entry &&e) { out.entries.push_back(std::move(e)); });
+		if (!done) {
+			co_return std::unexpected(std::move(done.error()));
+		}
+		set_outcome(out, **done, s.references(), s.controls());
+		co_return out;
+	}
+
 	// `owner` lives until `s` is destroyed.
 	void keep_alive(ldap::search_stream &s, std::shared_ptr<void> owner) noexcept;
 

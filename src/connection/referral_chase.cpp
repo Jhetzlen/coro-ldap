@@ -110,23 +110,22 @@ namespace {
 			co_return std::unexpected(std::move(s.error()));
 		}
 		search_run out{ .entries = std::pmr::vector<entry>(mr) };
-		while (true) {
-			auto item = co_await s->next_item();
-			if (!item || !*item) {
-				const ldap_result *done = detail::search_done(*s);
-				if (!item && (done == nullptr || !detail::limit_exceeded(done->result_code))) {
-					co_return std::unexpected(std::move(item.error()));
-				}
-				out.done = *done;// set once the search ended with a SearchResultDone
-				out.controls = s->controls();
-				co_return out;
-			}
-			if (auto *e = std::get_if<search_entry>(&**item)) {
-				out.entries.push_back(std::move(static_cast<entry &>(*e)));
-			} else if (auto *r = std::get_if<search_reference>(&**item)) {
-				out.references.push_back(std::move(r->uris));
-			}
+		auto done = co_await detail::drain_search(
+		  *s,
+		  [](ldap::search_stream &stream) { return stream.next_item(); },
+		  [&out](ldap::search_stream::item &&item) {
+			  if (auto *e = std::get_if<search_entry>(&item)) {
+				  out.entries.push_back(std::move(static_cast<entry &>(*e)));
+			  } else if (auto *r = std::get_if<search_reference>(&item)) {
+				  out.references.push_back(std::move(r->uris));
+			  }
+		  });
+		if (!done) {
+			co_return std::unexpected(std::move(done.error()));
 		}
+		out.done = **done;
+		out.controls = s->controls();
+		co_return out;
 	}
 
 	// On the connection's strand: the search_stream ends there, before the

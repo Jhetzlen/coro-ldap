@@ -67,23 +67,7 @@ namespace detail {
 		auto collect_pages(ldap::paged_search pages, std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
 		{
 			ldap::paged_search s = std::move(pages);
-			search_result out{ .entries = std::pmr::vector<entry>(mr), .references = string_list(mr) };
-			while (true) {
-				auto e = co_await s.next();
-				if (!e) {
-					const ldap_result *done = ldap::detail::paged_done(s);
-					if (done == nullptr || !ldap::detail::limit_exceeded(done->result_code)) {
-						co_return std::unexpected(std::move(e.error()));
-					}
-					break;
-				}
-				if (!*e) {
-					break;
-				}
-				out.entries.push_back(std::move(**e));
-			}
-			ldap::detail::set_outcome(out, *ldap::detail::paged_done(s), s.references(), s.controls());
-			co_return out;
+			co_return co_await ldap::detail::collect_search(s, [](ldap::paged_search &p) { return p.next(); }, mr);
 		}
 
 		template<class D>
