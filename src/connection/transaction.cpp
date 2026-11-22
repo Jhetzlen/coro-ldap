@@ -269,10 +269,9 @@ namespace {
 		return std::nullopt;
 	}
 
-	// Runs one update of the transaction: `run(conn, request, context)` is
-	// the connection's detail::*_impl.
-	template<class Params, class Run>
-	auto run_update(transaction::state *s, Params request, std::string context, Run run) -> capy::task<result<response>>
+	// Runs one update of the transaction with the connection's detail::*_impl.
+	template<class Params>
+	auto run_update(transaction::state *s, Params request, std::string context) -> capy::task<result<response>>
 	{
 		if (auto e = unusable(s, context)) {
 			co_return std::unexpected(std::move(*e));
@@ -282,12 +281,18 @@ namespace {
 		}
 		++s->in_flight;
 		const detail::scope_exit answered([s] noexcept { --s->in_flight; });
-		auto r = co_await run(s->conn, std::move(request), context);
+		auto r = co_await detail::update_op<Params>::run(s->conn, std::move(request), context);
 		if (r) {
 			s->updates.push_back(
 			  { .message_id = r->message_id, .context = std::pmr::string(context, s->updates.get_allocator()) });
 		}
 		co_return r;
+	}
+
+	template<class Params> auto update(transaction::state *s, Params request) -> capy::task<result<response>>
+	{
+		std::string context = detail::update_context(request);
+		return detail::on_strand(conn_of(s), run_update(s, std::move(request), std::move(context)));
 	}
 
 }// namespace
@@ -338,32 +343,18 @@ auto transaction::identifier() const noexcept -> std::string_view
 
 auto transaction::is_open() const noexcept -> bool { return state_ != nullptr && state_->open; }
 
-auto transaction::add(add_params request) -> capy::task<result<response>>
-{
-	std::string context = op_context("add", request.entry);
-	return detail::on_strand(
-	  conn_of(state_), run_update(state_, std::move(request), std::move(context), &detail::add_impl));
-}
+auto transaction::add(add_params request) -> capy::task<result<response>> { return update(state_, std::move(request)); }
 
 auto transaction::modify(modify_params request) -> capy::task<result<response>>
 {
-	std::string context = op_context("modify", request.object);
-	return detail::on_strand(
-	  conn_of(state_), run_update(state_, std::move(request), std::move(context), &detail::modify_impl));
+	return update(state_, std::move(request));
 }
 
-auto transaction::del(del_params request) -> capy::task<result<response>>
-{
-	std::string context = op_context("delete", request.entry);
-	return detail::on_strand(
-	  conn_of(state_), run_update(state_, std::move(request), std::move(context), &detail::del_impl));
-}
+auto transaction::del(del_params request) -> capy::task<result<response>> { return update(state_, std::move(request)); }
 
 auto transaction::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 {
-	std::string context = op_context("modify DN", request.entry);
-	return detail::on_strand(
-	  conn_of(state_), run_update(state_, std::move(request), std::move(context), &detail::modify_dn_impl));
+	return update(state_, std::move(request));
 }
 
 namespace {

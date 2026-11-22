@@ -185,6 +185,16 @@ namespace {
 		return make_error(client_errc::not_connected, std::string(what) + ": no transaction (moved from)");
 	}
 
+	// The update `Op` of `t`, on the I/O thread `io`.
+	template<auto Op, class Params>
+	auto update(const detail::io_thread *io, ldap::transaction *t, Params request) -> result<response>
+	{
+		if (t == nullptr) {
+			return std::unexpected(moved_from(ldap::detail::update_op<Params>::name));
+		}
+		return io->run([&] { return std::invoke(Op, *t, std::move(request)); });
+	}
+
 	// How long finish() waits at most for the answer to its abort.
 	constexpr std::chrono::seconds abort_wait_limit{ 5 };
 
@@ -256,34 +266,22 @@ auto transaction::is_open() const -> bool
 
 auto transaction::add(add_params request) -> result<response>
 {
-	if (!txn_) {
-		return std::unexpected(moved_from("add"));
-	}
-	return io_->run([&] { return txn_->add(std::move(request)); });
+	return update<&ldap::transaction::add>(io_.get(), txn_.get(), std::move(request));
 }
 
 auto transaction::modify(modify_params request) -> result<response>
 {
-	if (!txn_) {
-		return std::unexpected(moved_from("modify"));
-	}
-	return io_->run([&] { return txn_->modify(std::move(request)); });
+	return update<&ldap::transaction::modify>(io_.get(), txn_.get(), std::move(request));
 }
 
 auto transaction::del(del_params request) -> result<response>
 {
-	if (!txn_) {
-		return std::unexpected(moved_from("delete"));
-	}
-	return io_->run([&] { return txn_->del(std::move(request)); });
+	return update<&ldap::transaction::del>(io_.get(), txn_.get(), std::move(request));
 }
 
 auto transaction::modify_dn(modify_dn_params request) -> result<response>
 {
-	if (!txn_) {
-		return std::unexpected(moved_from("modify DN"));
-	}
-	return io_->run([&] { return txn_->modify_dn(std::move(request)); });
+	return update<&ldap::transaction::modify_dn>(io_.get(), txn_.get(), std::move(request));
 }
 
 auto transaction::commit() -> result<commit_result>

@@ -62,6 +62,16 @@ namespace {
 		co_return fail(code, context);
 	}
 
+	// Not a coroutine: the update's task runs on the strand.
+	template<class Params> auto update(core_ref self, Params request) -> capy::task<result<response>>
+	{
+		std::string context = detail::update_context(request);
+		if (!self) {
+			return refuse(client_errc::not_connected, std::move(context));
+		}
+		return detail::on_strand(self, detail::update_op<Params>::run(self, std::move(request), std::move(context)));
+	}
+
 }// namespace
 
 namespace detail {
@@ -78,6 +88,23 @@ namespace detail {
 
 using detail::build_request;
 
+namespace {
+
+	// Sends `op` with the controls of `p` and waits for its `Response`.
+	template<class Response, class Params>
+	auto exchange(core_ref self, protocol_op op, const Params &p, const std::string &context)
+	  -> capy::task<result<response>>
+	{
+		auto msg = build_request(std::move(op), p.controls, self->mr(), context);
+		if (!msg) {
+			co_return std::unexpected(std::move(msg.error()));
+		}
+		co_return to_response(
+		  co_await request_response(self, std::move(*msg), op_index<Response>, context, p.timeout), context);
+	}
+
+}// namespace
+
 // ---------------------------------------------------------------- other operations
 
 namespace detail {
@@ -88,26 +115,12 @@ namespace detail {
 		add_request op(alloc);
 		op.entry = request.entry.to_string(self->mr());
 		op.attributes.assign(request.attributes.begin(), request.attributes.end());
-		auto msg = build_request(std::move(op), request.controls, self->mr(), context);
-		if (!msg) {
-			co_return std::unexpected(std::move(msg.error()));
-		}
-		co_return to_response(
-		  co_await request_response(self, std::move(*msg), op_index<add_response>, context, request.timeout), context);
+		co_return co_await exchange<add_response>(self, std::move(op), request, context);
 	}
 
 }// namespace detail
 
-// Not a coroutine: the task of detail::add_impl() runs on the strand.
-auto connection::add(add_params request) -> capy::task<result<response>>
-{
-	std::string context = op_context("add", request.entry);
-	if (!core_) {
-		return refuse(client_errc::not_connected, std::move(context));
-	}
-	const core_ref self(core_);
-	return detail::on_strand(self, detail::add_impl(self, std::move(request), std::move(context)));
-}
+auto connection::add(add_params request) -> capy::task<result<response>> { return update(core_, std::move(request)); }
 
 namespace detail {
 
@@ -126,42 +139,24 @@ namespace detail {
 		modify_request op(alloc);
 		op.object = request.object.to_string(self->mr());
 		op.changes.assign(request.changes.begin(), request.changes.end());
-		auto msg = build_request(std::move(op), request.controls, self->mr(), context);
-		if (!msg) {
-			co_return std::unexpected(std::move(msg.error()));
-		}
-		co_return to_response(
-		  co_await request_response(self, std::move(*msg), op_index<modify_response>, context, request.timeout),
-		  context);
+		co_return co_await exchange<modify_response>(self, std::move(op), request, context);
 	}
 
 }// namespace detail
 
-// Not a coroutine: the task of detail::modify_impl() runs on the strand.
 auto connection::modify(modify_params request) -> capy::task<result<response>>
 {
-	std::string context = op_context("modify", request.object);
-	if (!core_) {
-		return refuse(client_errc::not_connected, std::move(context));
-	}
-	const core_ref self(core_);
-	return detail::on_strand(self, detail::modify_impl(self, std::move(request), std::move(context)));
+	return update(core_, std::move(request));
 }
 
 namespace detail {
 
 	auto del_impl(core_ref self, del_params request, std::string context) -> capy::task<result<response>>
 	{
-		auto msg =
-		  build_request(del_request(request.entry.to_string(self->mr()), std::pmr::polymorphic_allocator<>(self->mr())),
-			request.controls,
-			self->mr(),
-			context);
-		if (!msg) {
-			co_return std::unexpected(std::move(msg.error()));
-		}
-		co_return to_response(
-		  co_await request_response(self, std::move(*msg), op_index<del_response>, context, request.timeout), context);
+		co_return co_await exchange<del_response>(self,
+		  del_request(request.entry.to_string(self->mr()), std::pmr::polymorphic_allocator<>(self->mr())),
+		  request,
+		  context);
 	}
 
 	auto modify_dn_impl(core_ref self, modify_dn_params request, std::string context) -> capy::task<result<response>>
@@ -177,37 +172,16 @@ namespace detail {
 		if (request.new_superior) {
 			op.new_superior = request.new_superior->to_string(self->mr());
 		}
-		auto msg = build_request(std::move(op), request.controls, self->mr(), context);
-		if (!msg) {
-			co_return std::unexpected(std::move(msg.error()));
-		}
-		co_return to_response(
-		  co_await request_response(self, std::move(*msg), op_index<modify_dn_response>, context, request.timeout),
-		  context);
+		co_return co_await exchange<modify_dn_response>(self, std::move(op), request, context);
 	}
 
 }// namespace detail
 
-// Not a coroutine: the task of detail::del_impl() runs on the strand.
-auto connection::del(del_params request) -> capy::task<result<response>>
-{
-	std::string context = op_context("delete", request.entry);
-	if (!core_) {
-		return refuse(client_errc::not_connected, std::move(context));
-	}
-	const core_ref self(core_);
-	return detail::on_strand(self, detail::del_impl(self, std::move(request), std::move(context)));
-}
+auto connection::del(del_params request) -> capy::task<result<response>> { return update(core_, std::move(request)); }
 
-// Not a coroutine: the task of detail::modify_dn_impl() runs on the strand.
 auto connection::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 {
-	std::string context = op_context("modify DN", request.entry);
-	if (!core_) {
-		return refuse(client_errc::not_connected, std::move(context));
-	}
-	const core_ref self(core_);
-	return detail::on_strand(self, detail::modify_dn_impl(self, std::move(request), std::move(context)));
+	return update(core_, std::move(request));
 }
 
 namespace {

@@ -1427,6 +1427,19 @@ namespace {
 		co_return fail(client_errc::not_connected, context + ": client moved from");
 	}
 
+	// Not a coroutine: the task holds its own copy of the state.
+	template<class Params>
+	auto update(const std::shared_ptr<detail::client_state> &state, Params request) -> capy::task<result<response>>
+	{
+		if (state == nullptr) {
+			return read_refused<response>(detail::update_context(request));
+		}
+		return detail::on_strand(
+		  state->strand, detail::client_state::write(state, [request = std::move(request)](const lease &held) {
+			  return std::invoke(detail::update_op<Params>::member, *held, request);
+		  }));
+	}
+
 }// namespace
 
 // Not coroutines either: the tasks hold their own copy of the state.
@@ -1487,44 +1500,18 @@ auto client::compare(compare_params request) -> capy::task<result<compare_result
 		state_, [request = std::move(request)](const lease &held) { return held->compare(request); }));
 }
 
-auto client::add(add_params request) -> capy::task<result<response>>
-{
-	if (state_ == nullptr) {
-		return read_refused<response>(detail::op_context("add", request.entry));
-	}
-	return detail::on_strand(state_->strand,
-	  detail::client_state::write(
-		state_, [request = std::move(request)](const lease &held) { return held->add(request); }));
-}
+auto client::add(add_params request) -> capy::task<result<response>> { return update(state_, std::move(request)); }
 
 auto client::modify(modify_params request) -> capy::task<result<response>>
 {
-	if (state_ == nullptr) {
-		return read_refused<response>(detail::op_context("modify", request.object));
-	}
-	return detail::on_strand(state_->strand,
-	  detail::client_state::write(
-		state_, [request = std::move(request)](const lease &held) { return held->modify(request); }));
+	return update(state_, std::move(request));
 }
 
-auto client::del(del_params request) -> capy::task<result<response>>
-{
-	if (state_ == nullptr) {
-		return read_refused<response>(detail::op_context("delete", request.entry));
-	}
-	return detail::on_strand(state_->strand,
-	  detail::client_state::write(
-		state_, [request = std::move(request)](const lease &held) { return held->del(request); }));
-}
+auto client::del(del_params request) -> capy::task<result<response>> { return update(state_, std::move(request)); }
 
 auto client::modify_dn(modify_dn_params request) -> capy::task<result<response>>
 {
-	if (state_ == nullptr) {
-		return read_refused<response>(detail::op_context("modify DN", request.entry));
-	}
-	return detail::on_strand(state_->strand,
-	  detail::client_state::write(
-		state_, [request = std::move(request)](const lease &held) { return held->modify_dn(request); }));
+	return update(state_, std::move(request));
 }
 
 auto client::extended(extended_params request) -> capy::task<result<extended_result>>

@@ -673,6 +673,43 @@ namespace detail {
 
 	auto extended_impl(core_ref self, extended_params request) -> boost::capy::task<result<extended_result>>;
 
+	// Per update request type: the operation's name in errors, the DN its
+	// context names, its implementation and the connection's member.
+	template<class Params> struct update_op;
+	template<> struct update_op<add_params>
+	{
+		static constexpr std::string_view name = "add";
+		static auto target(const add_params &p) -> const dn & { return p.entry; }
+		static constexpr auto run = &add_impl;
+		static constexpr auto member = &connection::add;
+	};
+	template<> struct update_op<modify_params>
+	{
+		static constexpr std::string_view name = "modify";
+		static auto target(const modify_params &p) -> const dn & { return p.object; }
+		static constexpr auto run = &modify_impl;
+		static constexpr auto member = &connection::modify;
+	};
+	template<> struct update_op<del_params>
+	{
+		static constexpr std::string_view name = "delete";
+		static auto target(const del_params &p) -> const dn & { return p.entry; }
+		static constexpr auto run = &del_impl;
+		static constexpr auto member = &connection::del;
+	};
+	template<> struct update_op<modify_dn_params>
+	{
+		static constexpr std::string_view name = "modify DN";
+		static auto target(const modify_dn_params &p) -> const dn & { return p.entry; }
+		static constexpr auto run = &modify_dn_impl;
+		static constexpr auto member = &connection::modify_dn;
+	};
+
+	template<class Params> auto update_context(const Params &p) -> std::string
+	{
+		return op_context(update_op<Params>::name, update_op<Params>::target(p));
+	}
+
 }// namespace detail
 
 }// namespace jhetz::ldap
