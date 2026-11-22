@@ -1,6 +1,7 @@
 #include "jhetz/ldap/net/connect.hpp"
 
 #include "../format_util.hpp"
+#include "../scope_util.hpp"
 #include "deadline.hpp"
 #include "happy_eyeballs.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
@@ -115,23 +116,20 @@ namespace {
 		std::vector<corosio::endpoint> endpoints{};
 		try {
 			corosio::resolver resolver(ioc);
+			// Cleared before the resolver is destroyed, also on a throw.
+			const ldap::detail::scope_exit unpublish{ [&st] {
+				const std::scoped_lock lock(st->mutex);
+				st->resolver = nullptr;
+			} };
 			{
 				const std::scoped_lock lock(st->mutex);
 				st->resolver = &resolver;
 			}
 			auto [rec, found] = co_await resolver.resolve(host, port, corosio::resolve_flags::numeric_service);
-			{
-				const std::scoped_lock lock(st->mutex);
-				st->resolver = nullptr;
-			}
 			ec = rec;
 			endpoints = std::move(found);
 		} catch (...) {
 			// Never leave connect() waiting (it may have no deadline).
-			{
-				const std::scoped_lock lock(st->mutex);
-				st->resolver = nullptr;
-			}
 			ec = std::make_error_code(std::errc::not_enough_memory);
 			endpoints.clear();
 		}
