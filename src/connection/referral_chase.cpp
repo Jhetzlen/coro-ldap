@@ -481,18 +481,19 @@ namespace {
 
 	using search_reached = reached<search_params, search_run>;
 
-	// The search on the origin, and the chase of its referral result.
-	auto first_search(connection &origin, chase_state &st, search_params request, const search_op &op)
-	  -> capy::task<detail::chase_result<search_reached>>
+	// The operation on the origin, and the chase of its referral result.
+	template<class Params, class Value, class Op>
+	auto first_hop(connection &origin, chase_state &st, Params request, const Op &op)
+	  -> capy::task<detail::chase_result<reached<Params, Value>>>
 	{
 		auto r = co_await op(origin, request);
 		if (r) {
-			co_return { .value = search_reached{ .request = std::move(request), .value = std::move(*r) } };
+			co_return { .value = reached<Params, Value>{ .request = std::move(request), .value = std::move(*r) } };
 		}
 		if (r.error().code != errc::referral || !st.settings.referrals) {
 			co_return { .value = std::unexpected(std::move(r.error())), .origin_failed = true };
 		}
-		auto f = co_await follow<search_params, search_run>(
+		auto f = co_await follow<Params, Value>(
 		  st, std::span<const std::pmr::string>(r.error().referrals), reference_kind::referral, 1, request, op);
 		if (!f) {
 			co_return { .value = std::unexpected(std::move(f.error())) };
@@ -570,7 +571,7 @@ namespace detail {
 		chase_state st = start(origin, request, std::move(connector), policy, std::move(settings));
 		const search_op op{ mr };
 
-		auto first = co_await first_search(origin, st, std::move(request), op);
+		auto first = co_await first_hop<search_params, search_run>(origin, st, std::move(request), op);
 		if (!first.value) {
 			co_return { .value = std::unexpected(std::move(first.value.error())),
 				.origin_failed = first.origin_failed };
@@ -618,27 +619,13 @@ namespace detail {
 	  chase_settings settings) -> capy::task<chase_result<compare_result>>
 	{
 		chase_state st = start(origin, request, std::move(connector), policy, std::move(settings));
-		auto r = co_await origin.compare(request);
-		if (r) {
-			co_return { .value = std::move(*r) };
+		const compare_op op{};
+		auto first = co_await first_hop<compare_params, compare_result>(origin, st, std::move(request), op);
+		if (!first.value) {
+			co_return { .value = std::unexpected(std::move(first.value.error())),
+				.origin_failed = first.origin_failed };
 		}
-		if (r.error().code != errc::referral || !st.settings.referrals) {
-			co_return { .value = std::unexpected(std::move(r.error())), .origin_failed = true };
-		}
-		auto f = co_await follow<compare_params, compare_result>(st,
-		  std::span<const std::pmr::string>(r.error().referrals),
-		  reference_kind::referral,
-		  1,
-		  request,
-		  compare_op{});
-		if (!f) {
-			co_return { .value = std::unexpected(std::move(f.error())) };
-		}
-		if (!f->target) {
-			co_return { .value = std::unexpected(
-						  with_attempts(f->last_failure ? std::move(*f->last_failure) : std::move(r.error()), st)) };
-		}
-		compare_result out = std::move(f->target->value);
+		compare_result out = std::move(first.value->value);
 		out.referrals = std::move(st.attempts);
 		out.unlisted = st.unlisted;
 		co_return { .value = std::move(out) };

@@ -42,18 +42,21 @@ namespace {
 		std::pmr::vector<control> controls{};
 	};
 
+	// The End Transaction request; no control goes on it (RFC 5805 sections
+	// 4.1 to 4.5).
+	auto end_request(std::string_view identifier, bool commit, std::pmr::memory_resource *mr) -> extended_request
+	{
+		const std::pmr::polymorphic_allocator<> alloc(mr);
+		const std::pmr::string value =
+		  encode_end_transaction_request(end_transaction_request(commit, identifier, alloc), mr);
+		return extended_request(end_transaction_oid, std::string_view(value), alloc);
+	}
+
 	// `answered` is set once the server answered: the transaction is over.
 	auto end_exchange(core_ref self, std::string identifier, bool commit, std::string context, bool *answered)
 	  -> capy::task<result<end_reply>>
 	{
-		const std::pmr::polymorphic_allocator<> alloc(self->mr());
-		const std::pmr::string value =
-		  encode_end_transaction_request(end_transaction_request(commit, identifier, alloc), self->mr());
-		// RFC 5805 sections 4.1 to 4.5: no control goes on End Transaction.
-		auto msg = build_request(extended_request(end_transaction_oid, std::string_view(value), alloc),
-		  extended_controls{},
-		  self->mr(),
-		  context);
+		auto msg = build_request(end_request(identifier, commit, self->mr()), extended_controls{}, self->mr(), context);
 		if (!msg) {
 			co_return std::unexpected(std::move(msg.error()));
 		}
@@ -209,11 +212,7 @@ namespace {
 		try {
 			if (s->needs_abort && s->conn->is_open()) {
 				const std::string context = std::string(end_context) + " (abort, transaction destroyed)";
-				const std::pmr::polymorphic_allocator<> alloc(s->conn->mr());
-				const std::pmr::string value =
-				  encode_end_transaction_request(end_transaction_request(false, s->identifier, alloc), s->conn->mr());
-				message m = detail::with_controls(
-				  extended_request(end_transaction_oid, std::string_view(value), alloc), {}, s->conn->mr());
+				message m = detail::with_controls(end_request(s->identifier, false, s->conn->mr()), {}, s->conn->mr());
 				s->conn->send_unanswered(m, false, detail::deadline_after(s->conn->default_timeout()), context);
 			}
 		} catch (...) {// NOLINT(bugprone-empty-catch): out of memory, the abort is best effort
@@ -369,6 +368,18 @@ auto transaction::modify_dn(modify_dn_params request) -> capy::task<result<respo
 
 namespace {
 
+	// End Transaction on `s`, settled whatever the outcome.
+	auto settle(transaction::state *s, bool commit, std::string context) -> capy::task<result<end_reply>>
+	{
+		s->open = false;
+		bool answered = false;
+		auto reply = co_await end_exchange(s->conn, std::string(s->identifier), commit, std::move(context), &answered);
+		if (answered) {
+			s->needs_abort = false;
+		}
+		co_return reply;
+	}
+
 	auto commit_impl(transaction::state *s) -> capy::task<result<commit_result>>
 	{
 		std::string context = "commit transaction";
@@ -379,12 +390,7 @@ namespace {
 			co_return fail(client_errc::operation_in_progress,
 			  detail::format("{}: {} update(s) still in flight: await every update first", context, s->in_flight));
 		}
-		s->open = false;// settled, whatever the outcome
-		bool answered = false;
-		auto reply = co_await end_exchange(s->conn, std::string(s->identifier), true, context, &answered);
-		if (answered) {
-			s->needs_abort = false;
-		}
+		auto reply = co_await settle(s, true, context);
 		if (!reply) {
 			co_return std::unexpected(std::move(reply.error()));
 		}
@@ -407,12 +413,7 @@ namespace {
 		if (auto e = unusable(s, context)) {
 			co_return std::unexpected(std::move(*e));
 		}
-		s->open = false;
-		bool answered = false;
-		auto reply = co_await end_exchange(s->conn, std::string(s->identifier), false, context, &answered);
-		if (answered) {
-			s->needs_abort = false;
-		}
+		auto reply = co_await settle(s, false, context);
 		if (!reply) {
 			co_return std::unexpected(std::move(reply.error()));
 		}
