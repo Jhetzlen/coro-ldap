@@ -113,7 +113,7 @@ namespace {
 		auto done = co_await detail::drain_search(
 		  *s,
 		  [](ldap::search_stream &stream) { return stream.next_item(); },
-		  [&out](ldap::search_stream::item &&item) {
+		  [&out](ldap::search_stream::item item) {
 			  if (auto *e = std::get_if<search_entry>(&item)) {
 				  out.entries.push_back(std::move(static_cast<entry &>(*e)));
 			  } else if (auto *r = std::get_if<search_reference>(&item)) {
