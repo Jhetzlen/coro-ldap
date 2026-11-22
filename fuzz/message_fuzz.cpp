@@ -7,6 +7,7 @@
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/message.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 
 #include "check.hpp"
 
@@ -39,15 +40,15 @@ auto is_decode_failure(const ldap::error &e) -> bool
 // The DirSync OID names the request and the response control alike.
 void exercise_dirsync(const ldap::control &c)
 {
-	if (auto r = ldap::ad::decode_dirsync_request(c)) {
+	if (auto r = ldap::testing::ad::decode_dirsync_request(c)) {
 		check(r->critical == c.criticality, "r->critical == c.criticality");
-		check(ldap::ad::decode_dirsync_request(ldap::ad::encode_dirsync_request(*r)) == *r,
-		  "ldap::ad::decode_dirsync_request(encode(*r)) == *r");
+		check(ldap::testing::ad::decode_dirsync_request(ldap::ad::encode_dirsync_request(*r)) == *r,
+		  "ldap::testing::ad::decode_dirsync_request(encode(*r)) == *r");
 	} else {
 		check(is_decode_failure(r.error()), "is_decode_failure(r.error())");
 	}
 	if (auto r = ldap::ad::decode_dirsync_response(c)) {
-		const auto again = ldap::ad::encode_dirsync_response(*r, c.criticality);
+		const auto again = ldap::testing::ad::encode_dirsync_response(*r, c.criticality);
 		check(ldap::ad::decode_dirsync_response(again) == *r, "ldap::ad::decode_dirsync_response(again) == *r");
 	} else {
 		check(is_decode_failure(r.error()), "is_decode_failure(r.error())");
@@ -67,7 +68,7 @@ void exercise_control(const ldap::control &c)
 	} else if (c.type == ldap::sort_response_oid) {
 		if (auto s = ldap::decode_sort_result(c, c.get_allocator().resource())) {
 			check(s->get_allocator() == c.get_allocator(), "s->get_allocator() == c.get_allocator()");
-			const auto again = ldap::encode_sort_result(*s, c.criticality);
+			const auto again = ldap::testing::encode_sort_result(*s, c.criticality);
 			check(again.has_value(), "again.has_value()");
 			check(ldap::decode_sort_result(*again) == *s, "ldap::decode_sort_result(*again) == *s");
 		} else {
@@ -78,7 +79,7 @@ void exercise_control(const ldap::control &c)
 		options.memory = c.get_allocator().resource();
 		if (auto e = ldap::decode_read_entry(c, options)) {
 			check(e->get_allocator() == c.get_allocator(), "e->get_allocator() == c.get_allocator()");
-			const auto again = ldap::encode_read_entry(c.type, *e, c.criticality);
+			const auto again = ldap::testing::encode_read_entry(c.type, *e, c.criticality);
 			check(again.has_value(), "again.has_value()");
 			check(ldap::decode_read_entry(*again) == *e, "ldap::decode_read_entry(*again) == *e");
 		} else {
@@ -86,44 +87,46 @@ void exercise_control(const ldap::control &c)
 			  "is_decode_failure(e.error()) || e.error().code == ldap::client_errc::message_too_large");
 		}
 	} else if (c.type == ldap::matched_values_oid) {
-		if (auto v = ldap::decode_matched_values(c, c.get_allocator().resource())) {
+		if (auto v = ldap::testing::decode_matched_values(c, c.get_allocator().resource())) {
 			check(v->critical == c.criticality, "v->critical == c.criticality");
 			const auto again = ldap::to_control(*v);
 			check(again.has_value(), "again.has_value()");
-			check(ldap::decode_matched_values(*again) == *v, "ldap::decode_matched_values(*again) == *v");
+			check(
+			  ldap::testing::decode_matched_values(*again) == *v, "ldap::testing::decode_matched_values(*again) == *v");
 		} else {
 			check(is_decode_failure(v.error()), "is_decode_failure(v.error())");
 		}
 	} else if (c.type == ldap::vlv_request_oid) {
-		if (auto v = ldap::decode_virtual_list_view(c)) {
+		if (auto v = ldap::testing::decode_virtual_list_view(c)) {
 			check(v->critical == c.criticality, "v->critical == c.criticality");
 			const auto again = ldap::to_control(*v);
 			check(again.has_value(), "again.has_value()");
-			check(ldap::decode_virtual_list_view(*again) == *v, "ldap::decode_virtual_list_view(*again) == *v");
+			check(ldap::testing::decode_virtual_list_view(*again) == *v,
+			  "ldap::testing::decode_virtual_list_view(*again) == *v");
 		} else {
 			check(is_decode_failure(v.error()), "is_decode_failure(v.error())");
 		}
 	} else if (c.type == ldap::vlv_response_oid) {
 		if (auto v = ldap::decode_vlv_response(c, c.get_allocator().resource())) {
 			check(v->get_allocator() == c.get_allocator(), "v->get_allocator() == c.get_allocator()");
-			const auto again = ldap::encode_vlv_response(*v, c.criticality);
+			const auto again = ldap::testing::encode_vlv_response(*v, c.criticality);
 			check(again.has_value(), "again.has_value()");
 			check(ldap::decode_vlv_response(*again) == *v, "ldap::decode_vlv_response(*again) == *v");
 		} else {
 			check(is_decode_failure(v.error()), "is_decode_failure(v.error())");
 		}
 	} else if (c.type == ldap::sync_request_oid) {
-		if (auto r = ldap::decode_sync_request(c)) {
+		if (auto r = ldap::testing::decode_sync_request(c)) {
 			const auto again = ldap::encode_sync_request(*r);
 			check(again.has_value(), "again.has_value()");
-			check(ldap::decode_sync_request(*again) == *r, "ldap::decode_sync_request(*again) == *r");
+			check(ldap::testing::decode_sync_request(*again) == *r, "ldap::testing::decode_sync_request(*again) == *r");
 		} else {
 			check(is_decode_failure(r.error()), "is_decode_failure(r.error())");
 		}
 	} else if (c.type == ldap::sync_state_oid) {
 		if (auto s = ldap::decode_sync_state(c, c.get_allocator().resource())) {
 			check(s->get_allocator() == c.get_allocator(), "s->get_allocator() == c.get_allocator()");
-			const auto again = ldap::encode_sync_state(*s, c.criticality);
+			const auto again = ldap::testing::encode_sync_state(*s, c.criticality);
 			check(again.has_value(), "again.has_value()");
 			check(ldap::decode_sync_state(*again) == *s, "ldap::decode_sync_state(*again) == *s");
 		} else {
@@ -133,7 +136,7 @@ void exercise_control(const ldap::control &c)
 		exercise_dirsync(c);
 	} else if (c.type == ldap::sync_done_oid) {
 		if (auto d = ldap::decode_sync_done(c)) {
-			const auto again = ldap::encode_sync_done(*d, c.criticality);
+			const auto again = ldap::testing::encode_sync_done(*d, c.criticality);
 			check(again.has_value(), "again.has_value()");
 			check(ldap::decode_sync_done(*again) == *d, "ldap::decode_sync_done(*again) == *d");
 		} else {
@@ -147,7 +150,7 @@ void exercise_transaction_specification(const ldap::control &c)
 	if (c.type != ldap::transaction_specification_oid) {
 		return;
 	}
-	if (auto t = ldap::decode_transaction_specification(c)) {
+	if (auto t = ldap::testing::decode_transaction_specification(c)) {
 		const auto again = ldap::to_control(*t);
 		check(again.has_value(), "again.has_value()");
 		check(*again == c, "*again == c");
@@ -163,7 +166,7 @@ void exercise_sync_info(const ldap::intermediate_response &i)
 	}
 	if (auto info = ldap::decode_sync_info(i, i.get_allocator().resource())) {
 		check(info->get_allocator() == i.get_allocator(), "info->get_allocator() == i.get_allocator()");
-		const auto again = ldap::encode_sync_info(*info);
+		const auto again = ldap::testing::encode_sync_info(*info);
 		check(again.has_value(), "again.has_value()");
 		check(ldap::decode_sync_info(*again) == *info, "ldap::decode_sync_info(*again) == *info");
 	} else {
@@ -179,11 +182,11 @@ void exercise_transaction(const std::optional<std::pmr::string> &value, bool req
 		return;
 	}
 	if (request) {
-		if (auto r = ldap::decode_end_transaction_request(*value, value->get_allocator().resource())) {
+		if (auto r = ldap::testing::decode_end_transaction_request(*value, value->get_allocator().resource())) {
 			check(r->get_allocator() == value->get_allocator(), "r->get_allocator() == value->get_allocator()");
 			const auto again = ldap::encode_end_transaction_request(*r);
-			check(
-			  ldap::decode_end_transaction_request(again) == *r, "ldap::decode_end_transaction_request(again) == *r");
+			check(ldap::testing::decode_end_transaction_request(again) == *r,
+			  "ldap::testing::decode_end_transaction_request(again) == *r");
 		} else {
 			check(is_decode_failure(r.error()), "is_decode_failure(r.error())");
 		}
@@ -193,7 +196,7 @@ void exercise_transaction(const std::optional<std::pmr::string> &value, bool req
 	options.memory = value->get_allocator().resource();
 	if (auto r = ldap::decode_end_transaction_response(*value, options)) {
 		check(r->get_allocator() == value->get_allocator(), "r->get_allocator() == value->get_allocator()");
-		const auto again = ldap::encode_end_transaction_response(*r);
+		const auto again = ldap::testing::encode_end_transaction_response(*r);
 		check(again.has_value(), "again.has_value()");
 		if (*again) {
 			check(ldap::decode_end_transaction_response(**again) == *r,
@@ -279,8 +282,8 @@ constexpr bool is_request_v = std::is_same_v<T, ldap::bind_request> || std::is_s
 void check_origins(std::span<const std::byte> input, const ldap::message &m)
 {
 	const bool request = std::visit([](const auto &op) { return is_request_v<std::decay_t<decltype(op)>>; }, m.op);
-	auto from_server = ldap::decode(input, { .from = ldap::origin::server });
-	auto from_client = ldap::decode(input, { .from = ldap::origin::client });
+	auto from_server = ldap::decode(input);
+	auto from_client = ldap::testing::decode(input, { .from = ldap::testing::origin::client });
 	check(from_server.has_value() == !request, "from_server.has_value() == !request");
 	check(from_client.has_value() == request, "from_client.has_value() == request");
 	const auto &rejected = request ? from_server : from_client;
@@ -304,7 +307,7 @@ void check_filter_text(std::span<const std::uint8_t> data)
 	const ldap::message m{ 1, std::move(s) };
 	auto encoded = ldap::encode(m);
 	check(encoded.has_value(), "encoded.has_value()");
-	auto decoded = ldap::decode(*encoded);
+	auto decoded = ldap::testing::decode(*encoded);
 	check(decoded.has_value(), "decoded.has_value()");
 	check(*decoded == m, "*decoded == m");
 	auto again = ldap::encode(*decoded);
@@ -329,14 +332,14 @@ class scoped_null_default
 void check_arena(std::span<const std::byte> input, const ldap::message &expected)
 {
 	std::pmr::monotonic_buffer_resource arena(std::pmr::new_delete_resource());
-	ldap::decode_options options;
+	ldap::testing::decode_options options;
 	options.memory = &arena;
 	std::optional<ldap::message> copy;
 	{
 		std::optional<ldap::result<ldap::message>> in_arena;
 		{
 			const scoped_null_default guard;
-			in_arena.emplace(ldap::decode(input, options));
+			in_arena.emplace(ldap::testing::decode(input, options));
 		}
 		check(in_arena->has_value(), "in_arena->has_value()");
 		const ldap::message &m = **in_arena;
@@ -351,7 +354,7 @@ void check_arena(std::span<const std::byte> input, const ldap::message &expected
 	check(*copy == expected, "*copy == expected");
 	auto bytes = ldap::encode(*copy);
 	check(bytes.has_value(), "bytes.has_value()");
-	check(ldap::decode(*bytes).value() == expected, "ldap::decode(*bytes).value() == expected");
+	check(ldap::testing::decode(*bytes).value() == expected, "ldap::testing::decode(*bytes).value() == expected");
 }
 
 }// namespace
@@ -361,7 +364,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 	const auto input = std::as_bytes(std::span(data, size));
 	check_filter_text(std::span(data, size));
 	const auto header = ldap::peek_message_header(input);// must not crash on anything
-	auto m = ldap::decode(input);
+	auto m = ldap::testing::decode(input);
 	if (!m) {
 		check(static_cast<bool>(m.error().code), "static_cast<bool>(m.error().code)");
 		return 0;
@@ -371,7 +374,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 
 	auto encoded = ldap::encode(*m);
 	check(encoded.has_value(), "encoded.has_value()");
-	auto again = ldap::decode(*encoded);
+	auto again = ldap::testing::decode(*encoded);
 	check(again.has_value(), "again.has_value()");
 	check(*again == *m, "*again == *m");
 	auto reencoded = ldap::encode(*again);

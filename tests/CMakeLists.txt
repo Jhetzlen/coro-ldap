@@ -45,7 +45,7 @@ add_executable(jhetz_ldap_tests
     value_semantics_tests.cpp
 )
 # ICU::uc for its headers: attribute_tests.cpp checks src/icu_util.hpp.
-target_link_libraries(jhetz_ldap_tests PRIVATE jhetz::ldap ICU::uc Catch2::Catch2WithMain)
+target_link_libraries(jhetz_ldap_tests PRIVATE jhetz::ldap_testing ICU::uc Catch2::Catch2WithMain)
 jhetz_ldap_warnings(jhetz_ldap_tests)
 catch_discover_tests(jhetz_ldap_tests)
 
@@ -145,7 +145,7 @@ foreach(target ber_fuzz message_fuzz filter_fuzz dn_fuzz url_fuzz value_fuzz sch
         ${PROJECT_SOURCE_DIR}/fuzz/${target}.cpp
         ${PROJECT_SOURCE_DIR}/fuzz/${target}_replay.cpp
     )
-    target_link_libraries(${target}_replay PRIVATE jhetz::ldap)
+    target_link_libraries(${target}_replay PRIVATE jhetz::ldap_testing)
     jhetz_ldap_warnings(${target}_replay)
     add_test(NAME ${target}_replay COMMAND ${target}_replay)
 endforeach()
@@ -192,7 +192,7 @@ if(JHETZ_LDAP_BUILD_NET)
     if(JHETZ_LDAP_WITH_GSSAPI)
         target_sources(jhetz_ldap_net_tests PRIVATE net/sasl_gssapi_tests.cpp)
     endif()
-    target_link_libraries(jhetz_ldap_net_tests PRIVATE jhetz::ldap_ad Catch2::Catch2WithMain)
+    target_link_libraries(jhetz_ldap_net_tests PRIVATE jhetz::ldap_ad jhetz::ldap_testing_net Catch2::Catch2WithMain)
     # Against slapd (run_slapd.sh): label "integration", skipped without it.
     add_executable(jhetz_ldap_integration_tests integration/integration_tests.cpp)
     target_link_libraries(jhetz_ldap_integration_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
@@ -234,7 +234,7 @@ if(JHETZ_LDAP_BUILD_NET)
         # LDAP: needs the KDC only (run_kdc.sh); skipped without it.
         add_executable(jhetz_ldap_gssapi_layer_tests integration/gssapi_layer_tests.cpp)
         target_link_libraries(jhetz_ldap_gssapi_layer_tests
-            PRIVATE jhetz::ldap_net PkgConfig::JHETZ_LDAP_GSSAPI Catch2::Catch2WithMain)
+            PRIVATE jhetz::ldap_testing_net PkgConfig::JHETZ_LDAP_GSSAPI Catch2::Catch2WithMain)
         jhetz_ldap_warnings(jhetz_ldap_gssapi_layer_tests)
         add_test(NAME kerberos.security_layer COMMAND jhetz_ldap_gssapi_layer_tests)
         set_tests_properties(kerberos.security_layer PROPERTIES LABELS "integration;kerberos" SKIP_RETURN_CODE 4)

@@ -11,6 +11,7 @@
 #include "jhetz/ldap/repository.hpp"
 #include "jhetz/ldap/schema.hpp"
 #include "jhetz/ldap/sync.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -3451,7 +3452,7 @@ auto dirsync_page(std::int32_t id, std::string_view dn, bool more, std::string_v
 	}
 	ldap::message done = done_msg(id);
 	done.controls.push_back(
-	  ldap::ad::encode_dirsync_response({ .more_results = more, .cookie_server = std::string(cookie) }));
+	  ldap::testing::ad::encode_dirsync_response({ .more_results = more, .cookie_server = std::string(cookie) }));
 	out.replies.push_back(bytes_of(done));
 	return out;
 }
@@ -3459,7 +3460,7 @@ auto dirsync_page(std::int32_t id, std::string_view dn, bool more, std::string_v
 auto dirsync_cookie_sent(const ldap::message &received) -> std::string
 {
 	REQUIRE(received.controls.size() == 1);
-	auto r = ldap::ad::decode_dirsync_request(received.controls[0]);
+	auto r = ldap::testing::ad::decode_dirsync_request(received.controls[0]);
 	REQUIRE(r.has_value());
 	return r->cookie;
 }

@@ -58,8 +58,6 @@ struct sync_request
 // encode_error for an unknown mode.
 [[nodiscard]] auto encode_sync_request(const sync_request &value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
-// The request control as a server reads it (mock servers, tests).
-[[nodiscard]] auto decode_sync_request(const control &c) -> result<sync_request>;
 
 // ---------------------------------------------------------------- Sync State (section 2.3)
 
@@ -106,10 +104,6 @@ struct sync_state
 	allocator_type alloc_{};
 };
 
-// For mock servers and tests.
-[[nodiscard]] auto encode_sync_state(const sync_state &value,
-  bool criticality = false,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
 [[nodiscard]] auto decode_sync_state(const control &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
   -> result<sync_state>;
 // nullopt if absent.
@@ -152,10 +146,6 @@ struct sync_done
 	allocator_type alloc_{};
 };
 
-// For mock servers and tests.
-[[nodiscard]] auto encode_sync_done(const sync_done &value,
-  bool criticality = false,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
 [[nodiscard]] auto decode_sync_done(const control &c, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
   -> result<sync_done>;
 // nullopt if absent.
@@ -202,9 +192,6 @@ struct sync_info
 	friend auto operator==(const sync_info &, const sync_info &) -> bool = default;
 };
 
-// For mock servers and tests.
-[[nodiscard]] auto encode_sync_info(const sync_info &value,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<intermediate_response>;
 // decode_error unless `i` is a well-formed Sync Info Message.
 [[nodiscard]] auto decode_sync_info(const intermediate_response &i,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<sync_info>;

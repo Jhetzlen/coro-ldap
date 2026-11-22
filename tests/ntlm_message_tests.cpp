@@ -1,6 +1,7 @@
 // The MS-NLMP messages: MD4, UTF-16LE forms, the CHALLENGE_MESSAGE parser,
 // and the NEGOTIATE and AUTHENTICATE encoders.
 #include "jhetz/ldap/ntlm_message.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 #include "test_util.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -67,7 +68,7 @@ auto with_raw_target_info(std::string_view info) -> std::string
 {
 	detail::ntlm_challenge_message c{ .negotiate_flags =
 										detail::ntlmssp_negotiate_unicode | detail::ntlmssp_negotiate_target_info };
-	auto m = detail::encode_ntlm_challenge(c);
+	auto m = ldap::testing::encode_ntlm_challenge(c);
 	m.resize(m.size() - 4);// the MsvAvEOL encode_ntlm_challenge wrote
 	m += info;
 	m[40] = static_cast<char>(info.size() & 0xFF);
@@ -163,7 +164,7 @@ TEST_CASE("ntlm: the CHALLENGE_MESSAGE of MS-NLMP section 4.2.4.3", "[ntlm][rfc]
 		.product_major_version = 6, .product_minor_version = 0, .product_build = 6000, .ntlm_revision_current = 15 });
 	CHECK_FALSE(detail::ntlm_timestamp(c->target_info).has_value());
 	// encode_ntlm_challenge writes the same bytes.
-	CHECK(hex_of(detail::encode_ntlm_challenge(*c)) == hex_of(spec_challenge));
+	CHECK(hex_of(ldap::testing::encode_ntlm_challenge(*c)) == hex_of(spec_challenge));
 	CHECK(hex_of(detail::encode_ntlm_av_pairs(spec_pairs))
 		  == hex_of(str("02000c0044006f006d00610069006e0001000c00530065007200760065007200 00000000")));
 }
@@ -282,7 +283,7 @@ TEST_CASE("ntlm: NEGOTIATE_MESSAGE and AUTHENTICATE_MESSAGE", "[ntlm]")
 		  == hex_of(str("18001800 7c000000 0b000b00 94000000 0c000c00 58000000 08000800 64000000"
 						"10001000 6c000000 00000000 9f000000")));
 	CHECK(static_cast<unsigned char>((*bytes)[detail::ntlm_authenticate_mic_offset + 15]) == 0x77);
-	auto back = detail::parse_ntlm_authenticate(*bytes);
+	auto back = ldap::testing::parse_ntlm_authenticate(*bytes);
 	REQUIRE(back.has_value());
 	CHECK(*back == a);
 
@@ -291,7 +292,7 @@ TEST_CASE("ntlm: NEGOTIATE_MESSAGE and AUTHENTICATE_MESSAGE", "[ntlm]")
 	REQUIRE_FALSE(too_long.has_value());
 	CHECK(too_long.error().code == ldap::client_errc::encode_error);
 
-	auto short_auth = detail::parse_ntlm_authenticate(bytes->substr(0, 87));
+	auto short_auth = ldap::testing::parse_ntlm_authenticate(bytes->substr(0, 87));
 	REQUIRE_FALSE(short_auth.has_value());
 	CHECK_THAT(std::string(short_auth.error().context), ContainsSubstring("AUTHENTICATE_MESSAGE: 87 octets"));
 }

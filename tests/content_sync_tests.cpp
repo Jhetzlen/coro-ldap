@@ -1,5 +1,6 @@
 #include "jhetz/ldap/content_sync.hpp"
 #include "jhetz/ldap/controls.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 
 #include "counting_resource.hpp"
 #include "test_util.hpp"
@@ -75,17 +76,18 @@ TEST_CASE("sync request control", "[content_sync]")
 	REQUIRE(c.has_value());
 	CHECK_FALSE(c->criticality);
 	CHECK(value_hex(*c) == "30 0F 0A 01 03 04 07 72 69 64 3D 30 30 30 01 01 FF");
-	CHECK(ldap::decode_sync_request(*c) == full);
-	CHECK(ldap::decode_sync_request(*plain) == ldap::sync_request{});
+	CHECK(ldap::testing::decode_sync_request(*c) == full);
+	CHECK(ldap::testing::decode_sync_request(*plain) == ldap::sync_request{});
 
 	// An empty cookie is sent as such, apart from none.
 	const auto empty_cookie = ldap::to_control(ldap::sync_request{ .cookie = "" });
 	REQUIRE(empty_cookie.has_value());
 	CHECK(value_hex(*empty_cookie) == "30 05 0A 01 01 04 00");
-	CHECK(ldap::decode_sync_request(*empty_cookie)->cookie == std::optional<std::string>(""));
+	CHECK(ldap::testing::decode_sync_request(*empty_cookie)->cookie == std::optional<std::string>(""));
 
 	// reloadHint FALSE sent explicitly is accepted.
-	auto explicit_default = ldap::decode_sync_request(with_value(ldap::sync_request_oid, "30 06 0A 01 01 01 01 00"));
+	auto explicit_default =
+	  ldap::testing::decode_sync_request(with_value(ldap::sync_request_oid, "30 06 0A 01 01 01 01 00"));
 	REQUIRE(explicit_default.has_value());
 	CHECK_FALSE(explicit_default->reload_hint);
 
@@ -100,19 +102,19 @@ TEST_CASE("sync request control", "[content_sync]")
 		for (const auto *h :
 		  { "30 03 0A 01 00", "30 03 0A 01 02", "30 00", "04 00", "30 03 0A 01 01 00", "30 03 02 01 01" }) {
 			INFO(h);
-			auto r = ldap::decode_sync_request(with_value(ldap::sync_request_oid, h));
+			auto r = ldap::testing::decode_sync_request(with_value(ldap::sync_request_oid, h));
 			REQUIRE_FALSE(r.has_value());
 			CHECK(r.error().context.starts_with("sync request"));
 		}
-		CHECK_FALSE(ldap::decode_sync_request(ldap::control{ ldap::sync_request_oid }).has_value());
-		CHECK_FALSE(ldap::decode_sync_request(with_value(ldap::sync_state_oid, "30 03 0A 01 01")).has_value());
+		CHECK_FALSE(ldap::testing::decode_sync_request(ldap::control{ ldap::sync_request_oid }).has_value());
+		CHECK_FALSE(ldap::testing::decode_sync_request(with_value(ldap::sync_state_oid, "30 03 0A 01 01")).has_value());
 	}
 }
 
 TEST_CASE("sync state control", "[content_sync]")
 {
 	const ldap::sync_state added{ ldap::sync_state_type::add, counting_uuid(), "c" };
-	const auto c = ldap::encode_sync_state(added);
+	const auto c = ldap::testing::encode_sync_state(added);
 	REQUIRE(c.has_value());
 	CHECK(c->type == ldap::sync_state_oid);
 	CHECK(value_hex(*c) == "30 18 0A 01 01 04 10 " + std::string(counting_uuid_hex) + " 04 01 63");
@@ -123,7 +125,7 @@ TEST_CASE("sync state control", "[content_sync]")
 		   ldap::sync_state_type::modify,
 		   ldap::sync_state_type::del }) {
 		const ldap::sync_state s{ t, counting_uuid() };
-		auto back = ldap::decode_sync_state(ldap::encode_sync_state(s).value());
+		auto back = ldap::decode_sync_state(ldap::testing::encode_sync_state(s).value());
 		REQUIRE(back.has_value());
 		CHECK(*back == s);
 		CHECK_FALSE(back->cookie.has_value());
@@ -154,9 +156,9 @@ TEST_CASE("sync state control", "[content_sync]")
 
 TEST_CASE("sync done control", "[content_sync]")
 {
-	CHECK(value_hex(ldap::encode_sync_done(ldap::sync_done{}).value()) == "30 00");
+	CHECK(value_hex(ldap::testing::encode_sync_done(ldap::sync_done{}).value()) == "30 00");
 	const ldap::sync_done full{ "c", true };
-	const auto c = ldap::encode_sync_done(full);
+	const auto c = ldap::testing::encode_sync_done(full);
 	REQUIRE(c.has_value());
 	CHECK(value_hex(*c) == "30 06 04 01 63 01 01 FF");
 	CHECK(ldap::decode_sync_done(*c) == full);
@@ -179,8 +181,8 @@ TEST_CASE("find_sync_state and find_sync_done", "[content_sync]")
 
 	const ldap::sync_state s{ ldap::sync_state_type::modify, counting_uuid() };
 	std::pmr::vector<ldap::control> some{ ldap::control{ "1.2.3" },
-		ldap::encode_sync_state(s).value(),
-		ldap::encode_sync_done(ldap::sync_done{ "k" }).value() };
+		ldap::testing::encode_sync_state(s).value(),
+		ldap::testing::encode_sync_done(ldap::sync_done{ "k" }).value() };
 	CHECK(ldap::find_sync_state(some).value() == s);
 	CHECK(ldap::find_sync_done(some).value() == ldap::sync_done{ "k" });
 
@@ -193,7 +195,7 @@ TEST_CASE("find_sync_state and find_sync_done", "[content_sync]")
 TEST_CASE("sync info message", "[content_sync]")
 {
 	const auto round_trip = [](const ldap::sync_info &info, std::string_view expected_hex) {
-		const auto i = ldap::encode_sync_info(info);
+		const auto i = ldap::testing::encode_sync_info(info);
 		REQUIRE(i.has_value());
 		CHECK(i->response_name == ldap::sync_info_oid);
 		REQUIRE(i->response_value.has_value());
@@ -204,7 +206,7 @@ TEST_CASE("sync info message", "[content_sync]")
 	SECTION("newcookie [0]")
 	{
 		round_trip(ldap::sync_info{ ldap::sync_info_type::new_cookie, "c" }, "80 01 63");
-		auto no_cookie = ldap::encode_sync_info(ldap::sync_info{ ldap::sync_info_type::new_cookie });
+		auto no_cookie = ldap::testing::encode_sync_info(ldap::sync_info{ ldap::sync_info_type::new_cookie });
 		REQUIRE_FALSE(no_cookie.has_value());
 		CHECK(no_cookie.error().code == ldap::client_errc::encode_error);
 	}
@@ -264,8 +266,8 @@ TEST_CASE("sync values decode into the given resource", "[content_sync][pmr]")
 {
 	jhetz::ldap::test::counting_resource mr;
 	const std::pmr::vector<ldap::control> in{
-		ldap::encode_sync_state({ ldap::sync_state_type::add, counting_uuid(), std::string(64, 'c') }).value(),
-		ldap::encode_sync_done(ldap::sync_done{ std::string(64, 'd') }).value()
+		ldap::testing::encode_sync_state({ ldap::sync_state_type::add, counting_uuid(), std::string(64, 'c') }).value(),
+		ldap::testing::encode_sync_done(ldap::sync_done{ std::string(64, 'd') }).value()
 	};
 	auto s = ldap::find_sync_state(in, &mr);
 	REQUIRE(s.has_value());
@@ -279,7 +281,7 @@ TEST_CASE("sync values decode into the given resource", "[content_sync][pmr]")
 
 	ldap::sync_info set{ ldap::sync_info_type::sync_id_set, std::string(64, 'i') };
 	set.sync_uuids = { counting_uuid(), counting_uuid() };
-	auto i = ldap::decode_sync_info(ldap::encode_sync_info(set).value(), &mr);
+	auto i = ldap::decode_sync_info(ldap::testing::encode_sync_info(set).value(), &mr);
 	REQUIRE(i.has_value());
 	CHECK(i->get_allocator().resource() == &mr);
 	CHECK(i->cookie->get_allocator().resource() == &mr);

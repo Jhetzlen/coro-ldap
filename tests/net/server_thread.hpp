@@ -2,6 +2,7 @@
 // requests as they come.
 #pragma once
 
+#include "jhetz/ldap/testing/message_io.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -25,7 +26,7 @@ inline auto serve_session(net::transport t, std::atomic<int> &requests) -> capy:
 {
 	net::read_buffer buf;
 	while (true) {
-		auto r = co_await net::read_message(t, buf, as_server);
+		auto r = co_await ldap::testing::read_message(t, buf, as_server);
 		if (!r || std::holds_alternative<ldap::unbind_request>(r->op)) {
 			co_return;
 		}

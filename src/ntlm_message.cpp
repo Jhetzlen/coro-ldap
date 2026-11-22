@@ -3,6 +3,7 @@
 
 #include "format_util.hpp"
 #include "icu_util.hpp"
+#include "ntlm_wire.hpp"
 
 #include <unicode/uchar.h>
 
@@ -23,139 +24,7 @@ namespace jhetz::ldap::detail {
 
 namespace {
 
-	constexpr unsigned byte_bits = 8;
-	constexpr std::uint32_t byte_mask = 0xFF;
-	constexpr std::uint32_t max_field_length = 0xFFFF;// a USHORT Len
-
-	// The fixed parts (MS-NLMP sections 2.2.1.1 to 2.2.1.3).
-	constexpr std::size_t negotiate_size = 40;// with its Version
-	constexpr std::size_t challenge_fixed_size = 48;// up to TargetInfoFields
-	constexpr std::size_t challenge_version_size = 56;// with the Version
-	constexpr std::size_t version_size = 8;
-
-	// Field offsets in the CHALLENGE_MESSAGE.
-	constexpr std::size_t challenge_target_name_fields = 12;
-	constexpr std::size_t challenge_flags = 20;
-	constexpr std::size_t challenge_server_challenge = 24;
-	constexpr std::size_t challenge_target_info_fields = 40;
-	constexpr std::size_t challenge_version = 48;
-
-	// Field offsets in the AUTHENTICATE_MESSAGE.
-	constexpr std::size_t auth_lm_fields = 12;
-	constexpr std::size_t auth_nt_fields = 20;
-	constexpr std::size_t auth_domain_fields = 28;
-	constexpr std::size_t auth_user_fields = 36;
-	constexpr std::size_t auth_workstation_fields = 44;
-	constexpr std::size_t auth_session_key_fields = 52;
-	constexpr std::size_t auth_flags = 60;
-	constexpr std::size_t auth_version = 64;
-
-	constexpr std::size_t message_type_offset = 8;
-	constexpr std::size_t av_header_size = 4;// AvId, AvLen
-	constexpr std::size_t av_flags_size = 4;
-	constexpr std::size_t av_timestamp_size = 8;
-
-	// ---------------------------------------------------------------- little-endian integers
-
-	void put16(std::string &out, std::uint32_t v)
-	{
-		out += static_cast<char>(v & byte_mask);
-		out += static_cast<char>((v >> byte_bits) & byte_mask);
-	}
-
-	void put32(std::string &out, std::uint32_t v)
-	{
-		put16(out, v & max_field_length);
-		put16(out, v >> (2 * byte_bits));
-	}
-
-	// Little-endian integer of `n` octets at s[at] (the caller checked the bounds).
-	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): local, offset then size as substr()
-	auto get_le(std::string_view s, std::size_t at, std::size_t n) -> std::uint64_t
-	{
-		std::uint64_t v = 0;
-		for (std::size_t i = n; i > 0; --i) {
-			v = v << byte_bits | static_cast<unsigned char>(s[at + i - 1]);
-		}
-		return v;
-	}
-	auto get16(std::string_view s, std::size_t at) -> std::uint16_t
-	{
-		return static_cast<std::uint16_t>(get_le(s, at, 2));
-	}
-	auto get32(std::string_view s, std::size_t at) -> std::uint32_t
-	{
-		return static_cast<std::uint32_t>(get_le(s, at, 4));
-	}
-
-	void put_version(std::string &out, const ntlm_version &v)
-	{
-		out += static_cast<char>(v.product_major_version);
-		out += static_cast<char>(v.product_minor_version);
-		put16(out, v.product_build);
-		out.append(3, '\0');// Reserved
-		out += static_cast<char>(v.ntlm_revision_current);
-	}
-
-	auto get_version(std::string_view s, std::size_t at) -> ntlm_version
-	{
-		constexpr std::size_t revision_offset = 7;
-		return { .product_major_version = static_cast<std::uint8_t>(s[at]),
-			.product_minor_version = static_cast<std::uint8_t>(s[at + 1]),
-			.product_build = get16(s, at + 2),
-			.ntlm_revision_current = static_cast<std::uint8_t>(s[at + revision_offset]) };
-	}
-
-	// Len, MaxLen, BufferOffset of a payload field (MS-NLMP's *Fields).
-	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): local, in the wire order
-	void put_fields(std::string &out, std::size_t length, std::size_t offset)
-	{
-		put16(out, static_cast<std::uint32_t>(length));
-		put16(out, static_cast<std::uint32_t>(length));
-		put32(out, static_cast<std::uint32_t>(offset));
-	}
-
-	auto malformed(std::string_view message, std::string_view what) -> std::unexpected<error>
-	{
-		return fail(client_errc::decode_error, detail::format("{}: {}", message, what));
-	}
-
-	// The payload field described at `fields`, within the message; empty when
-	// its length is 0.
-	auto payload_field(std::string_view message, std::string_view kind, std::size_t fields, std::string_view name)
-	  -> result<std::string_view>
-	{
-		const std::uint64_t length = get16(message, fields);
-		const std::uint64_t offset = get32(message, fields + 4);
-		if (length == 0) {
-			return std::string_view{};
-		}
-		if (offset + length > message.size()) {
-			return malformed(kind,
-			  detail::format("{} ({} octets at offset {}) runs past the end of the {}-octet message",
-				name,
-				length,
-				offset,
-				message.size()));
-		}
-		return message.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(length));
-	}
-
-	auto check_header(std::string_view message, std::string_view kind, std::size_t fixed, std::uint32_t type)
-	  -> result<void>
-	{
-		if (message.size() < fixed) {
-			return malformed(
-			  kind, detail::format("{} octets, shorter than its {}-octet fixed part", message.size(), fixed));
-		}
-		if (!message.starts_with(ntlmssp_signature)) {
-			return malformed(kind, "no \"NTLMSSP\" signature");
-		}
-		if (const auto t = get32(message, message_type_offset); t != type) {
-			return malformed(kind, detail::format("MessageType {}, not {}", t, type));
-		}
-		return {};
-	}
+	using namespace ntlm_wire;
 
 	auto parse_av_pairs(std::string_view field) -> result<std::vector<ntlm_av_pair>>
 	{
@@ -403,28 +272,6 @@ auto encode_ntlm_av_pairs(std::span<const ntlm_av_pair> pairs) -> std::string
 	return out;
 }
 
-auto encode_ntlm_challenge(const ntlm_challenge_message &message) -> std::string
-{
-	const bool with_info =
-	  !message.target_info.empty() || (message.negotiate_flags & ntlmssp_negotiate_target_info) != 0;
-	const std::string info = with_info ? encode_ntlm_av_pairs(message.target_info) : std::string{};
-	std::string out(ntlmssp_signature);
-	put32(out, ntlm_challenge_message_type);
-	put_fields(out, message.target_name.size(), challenge_version_size);
-	put32(out, message.negotiate_flags);
-	out.append(reinterpret_cast<const char *>(message.server_challenge.data()), message.server_challenge.size());
-	out.append(ntlm_challenge_size, '\0');// Reserved
-	put_fields(out, info.size(), challenge_version_size + message.target_name.size());
-	if (message.version) {
-		put_version(out, *message.version);
-	} else {
-		out.append(version_size, '\0');
-	}
-	out += message.target_name;
-	out += info;
-	return out;
-}
-
 auto ntlm_timestamp(std::span<const ntlm_av_pair> pairs) -> std::optional<std::uint64_t>
 {
 	for (const auto &p : pairs) {
@@ -502,34 +349,6 @@ auto encode_ntlm_authenticate(const ntlm_authenticate_message &message) -> resul
 	put_version(tail, message.version);
 	tail.append(reinterpret_cast<const char *>(message.mic.data()), message.mic.size());
 	std::ranges::copy(tail, out.begin() + static_cast<std::ptrdiff_t>(auth_flags));
-	return out;
-}
-
-auto parse_ntlm_authenticate(std::string_view message) -> result<ntlm_authenticate_message>
-{
-	constexpr std::string_view kind = "AUTHENTICATE_MESSAGE";
-	if (auto h = check_header(message, kind, ntlm_authenticate_header_size, ntlm_authenticate_message_type); !h) {
-		return std::unexpected(std::move(h.error()));
-	}
-	ntlm_authenticate_message out;
-	const std::array<std::tuple<std::string *, std::size_t, std::string_view>, 6> fields{ {
-	  { &out.lm_challenge_response, auth_lm_fields, "LmChallengeResponse" },
-	  { &out.nt_challenge_response, auth_nt_fields, "NtChallengeResponse" },
-	  { &out.domain_name, auth_domain_fields, "DomainName" },
-	  { &out.user_name, auth_user_fields, "UserName" },
-	  { &out.workstation, auth_workstation_fields, "Workstation" },
-	  { &out.encrypted_random_session_key, auth_session_key_fields, "EncryptedRandomSessionKey" },
-	} };
-	for (const auto &[value, at, name] : fields) {
-		auto f = payload_field(message, kind, at, name);
-		if (!f) {
-			return std::unexpected(std::move(f.error()));
-		}
-		*value = std::string(*f);
-	}
-	out.negotiate_flags = get32(message, auth_flags);
-	out.version = get_version(message, auth_version);
-	std::ranges::copy(message.substr(ntlm_authenticate_mic_offset, ntlm_key_size), out.mic.begin());
 	return out;
 }
 

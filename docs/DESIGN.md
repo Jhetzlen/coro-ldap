@@ -208,8 +208,8 @@ f.to_string();   // "(&(objectClass=person)...)" for logs
   `(&)` / `(|)`, and text without a leading `(` is wrapped like `ldapsearch`.
 - `to_string()` is canonical (escapes `* ( ) \ NUL` as lower-case `\xx`,
   `:dn` lower case); equality compares trees, so
-  `raw("cn=x") == raw("(cn=x)")`. Decoding BER rebuilds the exact tree
-  (needed by the mock server).
+  `raw("cn=x") == raw("(cn=x)")`. Decoding BER (`testing::decode_filter`,
+  section 10) rebuilds the exact tree.
 
 ## 3. Requests
 
@@ -379,9 +379,9 @@ server's bad control fails only the caller who asks for it.
   rejected: it would duplicate the filter builders for no stronger check
   than the run-time one. `parse_values_return_filter()` reads the string
   form of RFC 3876 section 5 (`((mail=*@example.org)(cn=*))`, or one item
-  alone), item by item with `filter::raw`, and `decode_matched_values()`
-  reads the control back for mock servers (the items share one
-  `max_filter_elements` budget). OpenLDAP implements it in slapd itself;
+  alone), item by item with `filter::raw`, and
+  `testing::decode_matched_values()` reads the control back (the items
+  share one `max_filter_elements` budget). OpenLDAP implements it in slapd itself;
   it leaves out an attribute with no matching value, where RFC 3876 returns
   it with an empty set.
 - Virtual List View (draft-ietf-ldapext-ldapv3-vlv-09):
@@ -397,8 +397,8 @@ server's bad control fails only the caller who asks for it.
   before sending; a raw VLV control is not checked, as raw controls never
   are. The SearchResultDone's VirtualListViewResponse is
   `find_vlv_response()` -> `vlv_response{target_position, content_count,
-  result_code, context_id}` (the codec `encode_` / `decode_vlv_response`
-  is in `message.hpp` next to the sort result one), and resultCode 76 is
+  result_code, context_id}` (`decode_vlv_response` is in `message.hpp`
+  next to the sort result one), and resultCode 76 is
   `errc::virtual_list_view_error` (section 6.2.1, no condition), whose
   reason is the response's `result_code`. Unknown virtualListViewResult
   values are kept: OpenLDAP 2.7 reports an offset beyond the list as 77,
@@ -480,9 +480,9 @@ server's bad control fails only the caller who asks for it.
   unsolicited notifications, and the next use fails, section 3.3), and a
   `with_transaction(fn)` helper. A cancelled or timed-out update in a
   transaction may or may not be part of it, so the caller aborts; a commit
-  whose answer is lost has an unknown outcome. The txnEndReq and txnEndRes
-  codecs (`encode_` / `decode_end_transaction_request` / `_response`) are
-  in `message.hpp` for mock servers and the message fuzzer. OpenLDAP 2.7's
+  whose answer is lost has an unknown outcome. The client's txnEndReq
+  encoder and txnEndRes decoder are in `message.hpp`, the server's
+  halves in the testing target (section 10). OpenLDAP 2.7's
   slapd supports transactions on back-mdb without configuration; the
   integration tests run them there.
 - Pre-read / post-read (RFC 4527): `pre_read{.attributes}` on modify /
@@ -515,15 +515,13 @@ server's bad control fails only the caller who asks for it.
   reload that replaces the local copy. See section 7 for the streaming
   side.
 
-The response codecs (`encode_` / `decode_sort_result`,
-`encode_` / `decode_vlv_response`, `encode_` / `decode_read_entry`) live
-in `message.hpp` next to the paged
-results one, so mock servers and the fuzzers use them too (the RFC 4533
-ones are in `content_sync.hpp`, with the request control's decoder for
-mock servers, and so are the matched values and VLV ones, in
-`controls.hpp`).
-Other request controls are only encoded (no decoder: the client never
-reads them). Errors from
+The response control decoders (`decode_sort_result`,
+`decode_vlv_response`, `decode_read_entry`) live in `message.hpp` next
+to the paged results one (the RFC 4533 ones are in `content_sync.hpp`).
+Request controls are only encoded: the client never reads them. A
+server's side (their encoders, and the decoders of the matched values,
+VLV, Transaction Specification, Sync Request and DirSync request
+controls) is in the testing target (section 10). Errors from
 inside a response control's value name the control (`post-read: ber: ...
 at offset 9`), since their offsets are relative to the value; request
 encoding errors name the control too (`server side sort: key 2 has no
@@ -1048,7 +1046,9 @@ carrying raw NTLMSSP messages, not SPNEGO tokens, which AD accepts
 AUTHENTICATE_MESSAGE, the CHALLENGE_MESSAGE in the saslBindInProgress
 between them. The messages and MD4 are in the codec
 (`ntlm_message.hpp`, `jhetz::ldap::detail`, so the CHALLENGE_MESSAGE
-parser is fuzzed with the others: `ntlm_fuzz`); the mechanism is in
+parser is fuzzed with the others: `ntlm_fuzz`; a server's
+CHALLENGE_MESSAGE encoder and AUTHENTICATE_MESSAGE parser are in the
+testing target, section 10); the mechanism is in
 jhetz::ldap_net, with HMAC-MD5, MD5 and `RAND_bytes` from OpenSSL. MD4 is
 a self-contained RFC 1320 implementation, since OpenSSL 3 has it only in
 its legacy provider, often not loaded. The NEGOTIATE_MESSAGE asks for
@@ -2445,7 +2445,8 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   (ldap:// only).
 - `net::read_message` / `write_message`: rejects a PDU whose first octet is
   not SEQUENCE or whose declared size exceeds `read_options::max_message_size`
-  (16 MiB) from the header alone; decodes with `origin::server`; a TLS close
+  (16 MiB) from the header alone; decodes with `ldap::decode`, which rejects
+  request operations; a TLS close
   without close_notify between PDUs reads as a normal close. After any error
   the caller drops the connection (header errors repeat, they are not
   consumed). No timeout of its own: step 5 cancels with stop tokens.
@@ -2454,7 +2455,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
 - `ldap::connect(ioc, url, connection_options, mr)` wraps `net::connect`;
   `connection(ioc, net::transport, options, mr)` runs over any transport
   whose I/O runs on `ioc` (the tests use a Unix socket pair with a scripted
-  server that decodes with `origin::client`). `simple_bind`, `search`,
+  server that reads with `testing::read_message`). `simple_bind`, `search`,
   `search_stream`, `unbind`, `close()`.
 - Multiplexed (5b): any number of operations outstanding, matched by
   message id. Ids are per connection, from 1, wrapping at maxInt; after a
@@ -2554,7 +2555,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   a second one waits for the first. `unbind()` during a bind closes without
   an UnbindRequest; `start_tls()` during one is refused. `unbind()` once StartTLS
   is sent closes the same way (RFC 4511 section 4.14.1) and fails it.
-- Every response is decoded with `origin::server` and checked against the
+- Every response is decoded with `ldap::decode` (requests rejected) and checked against the
   request it answers (the operation, by id). IntermediateResponses are
   skipped without decoding unless the request opted in
   (`intermediate_responses` in `search_params` / `extended_params`): then
@@ -2943,8 +2944,10 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
 
 `jhetz/ldap/message.hpp` is a faithful wire model of RFC 4511: an
 `ldap::message {id, op, controls}` where `op` is a `std::variant` of every
-protocol operation, requests and responses. Covering both directions lets the
-same codec serve the client and a mock server for tests.
+protocol operation, requests and responses. The client libraries encode
+every operation but decode only what a server sends; the server side of
+the codec is the testing target (below), so the same model serves the
+client and the mock servers.
 
 - Wire fields (LDAPDN, LDAPString, attribute values) are `std::string` holding
   raw octets, so a server sending an odd DN never breaks decoding; the
@@ -2961,12 +2964,29 @@ same codec serve the client and a mock server for tests.
   requests, so both sides accept the same messages.
   `decode(encode(m)) == m` exactly (filters are trees), and
   `encode(decode(encode(m)))` is byte-identical to `encode(m)`.
-- `decode(bytes, decode_options)` takes exactly one framed message.
-  `decode_options::from` restricts which side sent it (default `origin::any`,
-  used by tests and round trips). The connection layer (step 5a) passes
-  `origin::server` for everything it reads; it rejects request operations, so a hostile server
-  cannot make the client parse client-only structures such as search filters.
-  Depth and filter-element limits are also options.
+- `decode(bytes, decode_options)` takes exactly one framed message from a
+  server. It rejects request operations before decoding them, so a hostile
+  server cannot make the client parse client-only structures such as
+  search filters; the client libraries have no request decoder at all.
+  Depth and element limits are options.
+- The server side of the codec is a separate, never installed library:
+  `testing/` builds `jhetz::ldap_testing` (over `jhetz::ldap`) and
+  `jhetz::ldap_testing_net` (adds `testing::read_message`, over
+  `jhetz::ldap_net`), only with the tests, fuzzers or benchmarks, which
+  link them, as do the mock servers. Namespace `ldap::testing`, headers in
+  `testing/include/jhetz/ldap/testing/`: `testing::decode(bytes,
+  testing::decode_options)` with `from = origin::any / server / client`
+  (default `any`, for round trips) and the filter limits;
+  `decode_filter`; the response controls a server writes (sort result, VLV
+  response, pre/post-read entry, Sync State / Done / Info, txnEndRes,
+  DirSync response); the request controls it reads (matched values, VLV,
+  Transaction Specification, Sync Request, txnEndReq, DirSync request);
+  and NTLM's CHALLENGE_MESSAGE encoder and AUTHENTICATE_MESSAGE parser. It
+  reuses the client's internals through `src/` (the message decoder in
+  `message_codec.hpp` takes a `request_reader` for the request
+  operations, the filter tree's access in `filter_ast.hpp`, the BER
+  helpers in `control_util.hpp`, the NTLM wire layout in `ntlm_wire.hpp`),
+  so nothing is duplicated and the client libraries ship none of it.
 - Leniency toward real servers: unknown trailing SEQUENCE elements are ignored
   (RFC 4511 section 4); scope 3 (subordinateSubtree) and modify operation 3
   (increment, RFC 4525) are accepted; unknown result codes are kept; lists

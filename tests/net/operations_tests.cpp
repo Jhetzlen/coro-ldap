@@ -3,6 +3,7 @@
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/sync.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -553,9 +554,9 @@ TEST_CASE("operations: assertion and pre/post-read on a modify", "[net][operatio
 {
 	mock_ldap m;
 	ldap::message ok = result_msg<ldap::modify_response>(1);
-	ok.controls.push_back(*ldap::encode_read_entry(ldap::pre_read_oid,
+	ok.controls.push_back(*ldap::testing::encode_read_entry(ldap::pre_read_oid,
 	  ldap::search_result_entry{ "uid=jdoe,ou=people,dc=example,dc=org", { { "sn", { "Doe" } } } }));
-	ok.controls.push_back(*ldap::encode_read_entry(ldap::post_read_oid,
+	ok.controls.push_back(*ldap::testing::encode_read_entry(ldap::post_read_oid,
 	  ldap::search_result_entry{ "uid=jdoe,ou=people,dc=example,dc=org", { { "sn", { "Roe" } } } }));
 	m.serve({ answer({ ok }), answer({ result_msg<ldap::modify_response>(2, 122, "assertion failed") }) });
 
@@ -601,9 +602,9 @@ TEST_CASE("operations: server side sort result of a search", "[net][operations][
 {
 	mock_ldap m;
 	ldap::message sorted = done_msg(1);
-	sorted.controls.push_back(*ldap::encode_sort_result(ldap::sort_result{ 0 }));
+	sorted.controls.push_back(*ldap::testing::encode_sort_result(ldap::sort_result{ 0 }));
 	ldap::message unsorted = done_msg(2);
-	unsorted.controls.push_back(*ldap::encode_sort_result({ 18, "cn" }));
+	unsorted.controls.push_back(*ldap::testing::encode_sort_result({ 18, "cn" }));
 	ldap::message garbage = done_msg(3);
 	garbage.controls.emplace_back(ldap::sort_response_oid, false, "x");
 	m.serve({ answer({ entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B"),
@@ -685,7 +686,7 @@ TEST_CASE("operations: matched values on a search", "[net][operations][controls]
 	REQUIRE(m.log.received[0].controls.size() == 1);
 	const auto &sent = m.log.received[0].controls[0];
 	CHECK(sent == ldap::to_control(only_jdoe).value());
-	CHECK(ldap::decode_matched_values(sent).value() == only_jdoe);
+	CHECK(ldap::testing::decode_matched_values(sent).value() == only_jdoe);
 
 	// An item RFC 3876 excludes fails before anything is sent.
 	auto bad = m.run(m.conn.search({ .base = ldap::dn{},
@@ -702,10 +703,10 @@ TEST_CASE("operations: a virtual list view window", "[net][operations][controls]
 {
 	mock_ldap m;
 	ldap::message window = done_msg(1);
-	window.controls.push_back(*ldap::encode_sort_result(ldap::sort_result{ 0 }));
-	window.controls.push_back(*ldap::encode_vlv_response({ 2, 3, 0, "ctx" }));
+	window.controls.push_back(*ldap::testing::encode_sort_result(ldap::sort_result{ 0 }));
+	window.controls.push_back(*ldap::testing::encode_vlv_response({ 2, 3, 0, "ctx" }));
 	ldap::message out_of_range = done_msg(2, 76, "", "offset out of range");
-	out_of_range.controls.push_back(*ldap::encode_vlv_response({ 0, 3, 61, "ctx" }));
+	out_of_range.controls.push_back(*ldap::testing::encode_vlv_response({ 0, 3, 61, "ctx" }));
 	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"),
 				entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B"),
 				window }),
@@ -753,8 +754,8 @@ TEST_CASE("operations: a virtual list view window", "[net][operations][controls]
 	REQUIRE(m.log.received.size() == 2);
 	REQUIRE(m.log.received[0].controls.size() == 2);
 	CHECK(m.log.received[0].controls[0] == ldap::to_control(by_cn).value());
-	CHECK(ldap::decode_virtual_list_view(m.log.received[0].controls[1]).value() == around_second);
-	CHECK(ldap::decode_virtual_list_view(m.log.received[1].controls.at(1)).value() == beyond);
+	CHECK(ldap::testing::decode_virtual_list_view(m.log.received[0].controls[1]).value() == around_second);
+	CHECK(ldap::testing::decode_virtual_list_view(m.log.received[1].controls.at(1)).value() == beyond);
 
 	// Without a sort control nothing is sent.
 	auto alone = m.run(m.conn.search({ .base = ldap::dn{}, .controls = { around_second } }));

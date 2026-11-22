@@ -6,6 +6,7 @@
 #include "jhetz/ldap/content_sync.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/message.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 
 #include <string>
 #include <string_view>
@@ -113,15 +114,15 @@ inline auto sample_messages() -> std::vector<message>
 		intermediate_response{ {}, "\x01"s },
 		intermediate_response{ "1.2.3", "v" },
 		// RFC 4533's Sync Info Messages, one per alternative.
-		encode_sync_info(sync_info{ sync_info_type::new_cookie, "rid=000,csn=1" }).value(),
-		encode_sync_info(sync_info{ sync_info_type::refresh_delete }).value(),
-		encode_sync_info(sample_refresh_present()).value(),
-		encode_sync_info(sample_sync_id_set()).value(),
+		testing::encode_sync_info(sync_info{ sync_info_type::new_cookie, "rid=000,csn=1" }).value(),
+		testing::encode_sync_info(sync_info{ sync_info_type::refresh_delete }).value(),
+		testing::encode_sync_info(sample_refresh_present()).value(),
+		testing::encode_sync_info(sample_sync_id_set()).value(),
 		// RFC 5805's End Transaction request and response values.
 		extended_request{ end_transaction_oid, encode_end_transaction_request({ false, "txn" }) },
 		extended_response{ ldap_result{ 68 },
 		  {},
-		  encode_end_transaction_response(
+		  testing::encode_end_transaction_response(
 			end_transaction_response{ 3, { update_controls{ 2, { control{ "1.2.3", false, "v" } } } } })
 			.value() },
 	};
@@ -141,12 +142,12 @@ inline auto sample_controls() -> std::pmr::vector<control>
 	return { encode_paged_results({ 100, "\x01\x02" }, true).value(),
 		control{ "1.2.840.113556.1.4.805" },
 		control{ "1.2.3.4", true, "" },
-		encode_sort_result({ 18, "cn" }).value(),
-		encode_read_entry(post_read_oid, search_result_entry{ "cn=x", { { "cn", { "x", "y" } } } }).value(),
+		testing::encode_sort_result({ 18, "cn" }).value(),
+		testing::encode_read_entry(post_read_oid, search_result_entry{ "cn=x", { { "cn", { "x", "y" } } } }).value(),
 		encode_sync_request(sync_request{ .mode = sync_mode::refresh_and_persist, .cookie = "c", .reload_hint = true })
 		  .value(),
-		encode_sync_state(sync_state{ sync_state_type::modify, sample_uuid(), "c" }).value(),
-		encode_sync_done(sync_done{ "c", true }).value(),
+		testing::encode_sync_state(sync_state{ sync_state_type::modify, sample_uuid(), "c" }).value(),
+		testing::encode_sync_done(sync_done{ "c", true }).value(),
 		to_control(matched_values{ .values_return_filter = { filters::attr("mail").ends_with("@example.org"),
 									 raw_filter("(cn:caseExactMatch:=x)") } })
 		  .value(),
@@ -156,11 +157,11 @@ inline auto sample_controls() -> std::pmr::vector<control>
 					 .context_id = "c" })
 		  .value(),
 		to_control(virtual_list_view{ .target = vlv_greater_than_or_equal{ "B" } }).value(),
-		encode_vlv_response(vlv_response{ 5, 250, 0, "c" }).value(),
+		testing::encode_vlv_response(vlv_response{ 5, 250, 0, "c" }).value(),
 		to_control(transaction_specification{ .identifier = "txn" }).value(),
 		ad::encode_dirsync_request(
 		  ad::dirsync_request{ .flags = ad::dirsync_flags::incremental_values, .max_bytes = 100, .cookie = "c" }),
-		ad::encode_dirsync_response(ad::dirsync_response{ .more_results = true, .cookie_server = "c" }) };
+		testing::ad::encode_dirsync_response(ad::dirsync_response{ .more_results = true, .cookie_server = "c" }) };
 }
 
 }// namespace jhetz::ldap::test

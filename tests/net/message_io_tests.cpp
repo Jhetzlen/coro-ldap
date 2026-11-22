@@ -1,6 +1,7 @@
 // read_message / write_message against Capy's in-memory test streams.
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 #include "net_test_support.hpp"
 
 #include <boost/capy/buffers.hpp>
@@ -152,6 +153,11 @@ struct mock
 	auto read(net::read_options options = {}) -> ldap::result<ldap::message>
 	{
 		return run_task(ioc, net::read_message(client, buf, options));
+	}
+
+	auto read_request(const ldap::testing::read_options &options) -> ldap::result<ldap::message>
+	{
+		return run_task(ioc, ldap::testing::read_message(client, buf, options));
 	}
 };
 
@@ -337,11 +343,11 @@ TEST_CASE("read_message: request operations from the server are rejected", "[net
 	// A server-side reader accepts requests and rejects responses.
 	mock s;
 	s.peer->provide(bytes_of(bind_request_msg(1)) + bytes_of(bind_response_msg(2)));
-	const net::read_options as_server{ .decode = { .from = ldap::origin::client } };
-	auto req = s.read(as_server);
+	const ldap::testing::read_options as_server{};
+	auto req = s.read_request(as_server);
 	REQUIRE(req.has_value());
 	CHECK(*req == bind_request_msg(1));
-	CHECK(s.read(as_server).error().code == client_errc::unsupported_operation);
+	CHECK(s.read_request(as_server).error().code == client_errc::unsupported_operation);
 }
 
 TEST_CASE("read_message: large PDUs and buffer bounds", "[net][read_message]")
@@ -402,9 +408,9 @@ TEST_CASE("write_message and write_bytes", "[net][write_message]")
 	REQUIRE(run_task(ioc, net::write_bytes(client, raw)).has_value());
 
 	net::read_buffer buf;
-	const net::read_options as_server{ .decode = { .from = ldap::origin::client } };
+	const ldap::testing::read_options as_server{};
 	for (int id = 1; id <= 3; ++id) {
-		auto r = run_task(ioc, net::read_message(server, buf, as_server));
+		auto r = run_task(ioc, ldap::testing::read_message(server, buf, as_server));
 		REQUIRE(r.has_value());
 		CHECK(*r == bind_request_msg(id));
 	}
@@ -482,7 +488,7 @@ TEST_CASE("write_message into a caller's resource or a reused writer", "[net][wr
 	auto [a, b] = capy::test::make_stream_pair();
 	auto client = net::transport::wrap(std::move(a), "client");
 	auto server = net::transport::wrap(std::move(b), "server");
-	const net::read_options as_server{ .decode = { .from = ldap::origin::client } };
+	const ldap::testing::read_options as_server{};
 	net::read_buffer buf;
 
 	ldap::test::counting_resource counting;
@@ -512,7 +518,7 @@ TEST_CASE("write_message into a caller's resource or a reused writer", "[net][wr
 	CHECK(w.bytes().empty());
 
 	for (int id = 1; id <= 4; ++id) {
-		auto r = run_task(ioc, net::read_message(server, buf, as_server));
+		auto r = run_task(ioc, ldap::testing::read_message(server, buf, as_server));
 		REQUIRE(r.has_value());
 		CHECK(*r == bind_request_msg(id));
 	}

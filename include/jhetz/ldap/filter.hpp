@@ -24,7 +24,7 @@ inline constexpr std::size_t max_filter_depth = 24;
 // Maximum number of filter elements, each substring part counted.
 inline constexpr std::size_t max_filter_elements = 10'000;
 
-// Limits applied by filter::raw, encode_filter and decode_filter.
+// Limits applied by filter::raw and encode_filter.
 struct filter_limits
 {
 	std::size_t max_depth = max_filter_depth;
@@ -339,12 +339,6 @@ namespace filters {
 // Appends the BER Filter of `f` to `w`; invalid_filter, nothing written, if
 // `f` is empty or beyond `limits`.
 [[nodiscard]] auto encode_filter(ber::writer &w, const filter &f, const filter_limits &limits = {}) -> result<void>;
-
-// Reads one BER Filter from `r` into a tree on `mr`; `r` is unchanged on
-// failure.
-[[nodiscard]] auto decode_filter(ber::reader &r,
-  const filter_limits &limits = {},
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<filter>;
 
 }// namespace jhetz::ldap
 

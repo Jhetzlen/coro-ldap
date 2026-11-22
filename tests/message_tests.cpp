@@ -1,4 +1,5 @@
 #include "jhetz/ldap/message.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 #include "sample_messages.hpp"
 #include "test_util.hpp"
 
@@ -33,7 +34,7 @@ auto round_trip(const ldap::message &m) -> ldap::message
 	REQUIRE(size.has_value());
 	REQUIRE(size->has_value());
 	CHECK(**size == bytes->size());
-	auto back = ldap::decode(*bytes);
+	auto back = ldap::testing::decode(*bytes);
 	REQUIRE(back.has_value());
 	auto again = ldap::encode(*back);
 	REQUIRE(again.has_value());
@@ -102,7 +103,7 @@ TEST_CASE("decoded filters are the same tree", "[message]")
 {
 	// Written as non-canonical text; the tree holds the unescaped value.
 	const auto m = search_message(raw("uid=\\4A\\2A*"));
-	auto back = ldap::decode(*ldap::encode(m));
+	auto back = ldap::testing::decode(*ldap::encode(m));
 	REQUIRE(back);
 	CHECK(*back == m);
 	const auto &f = std::get<ldap::search_request>(back->op).filter;
@@ -134,7 +135,7 @@ TEST_CASE("control criticality is omitted when false", "[message]")
 			  });
 		  });
 	  });
-	auto decoded = ldap::decode(raw);
+	auto decoded = ldap::testing::decode(raw);
 	REQUIRE(decoded);
 	REQUIRE(decoded->controls.size() == 1);
 	CHECK_FALSE(decoded->controls[0].criticality);
@@ -153,7 +154,7 @@ TEST_CASE("decode ignores unknown trailing SEQUENCE elements (RFC 4511 section 4
 				o.constructed(ber::context(29), [](ber::writer &x) { x.integer(5); });
 			});
 		});
-		auto m = ldap::decode(raw);
+		auto m = ldap::testing::decode(raw);
 		REQUIRE(m);
 		CHECK(*m == ldap::message{ 7, ldap::bind_response{ ldap::ldap_result{ 14 }, "creds" } });
 	}
@@ -163,7 +164,7 @@ TEST_CASE("decode ignores unknown trailing SEQUENCE elements (RFC 4511 section 4
 		  1,
 		  [](ber::writer &m) { m.null(ber::application(2)); },
 		  [](ber::writer &m) { m.octet_string("x", ber::context(5)); });
-		auto decoded = ldap::decode(no_controls);
+		auto decoded = ldap::testing::decode(no_controls);
 		REQUIRE(decoded);
 		CHECK(decoded->controls.empty());
 
@@ -181,7 +182,7 @@ TEST_CASE("decode ignores unknown trailing SEQUENCE elements (RFC 4511 section 4
 			  });
 			  m.octet_string("x", ber::context(1));
 		  });
-		decoded = ldap::decode(with_controls);
+		decoded = ldap::testing::decode(with_controls);
 		REQUIRE(decoded);
 		CHECK(decoded->controls == std::pmr::vector<ldap::control>{ { "1.2.3", true, "v" } });
 	}
@@ -200,7 +201,7 @@ TEST_CASE("decode ignores unknown trailing SEQUENCE elements (RFC 4511 section 4
 				o.null();
 			});
 		});
-		auto m = ldap::decode(raw);
+		auto m = ldap::testing::decode(raw);
 		REQUIRE(m);
 		CHECK(*m == ldap::message{ 2, ldap::search_result_entry{ "dc=x", { { "cn", { "a" } } } } });
 	}
@@ -213,7 +214,7 @@ TEST_CASE("decode ignores unknown trailing SEQUENCE elements (RFC 4511 section 4
 				o.octet_string("1.2.3", ber::context(10));// out of order: skipped
 			});
 		});
-		auto m = ldap::decode(raw);
+		auto m = ldap::testing::decode(raw);
 		REQUIRE(m);
 		const auto &x = std::get<ldap::extended_response>(m->op);
 		CHECK_FALSE(x.response_name.has_value());
@@ -224,15 +225,15 @@ TEST_CASE("decode ignores unknown trailing SEQUENCE elements (RFC 4511 section 4
 TEST_CASE("decode rejects unknown operations", "[message][extensibility]")
 {
 	auto app20 = raw_message(1, [](ber::writer &m) { m.constructed(ber::application(20), [](ber::writer &) {}); });
-	CHECK(code_of(ldap::decode(app20)) == client_errc::unsupported_operation);
+	CHECK(code_of(ldap::testing::decode(app20)) == client_errc::unsupported_operation);
 	auto app30 = raw_message(1, [](ber::writer &m) { m.null(ber::application(30)); });
-	CHECK(code_of(ldap::decode(app30)) == client_errc::unsupported_operation);
+	CHECK(code_of(ldap::testing::decode(app30)) == client_errc::unsupported_operation);
 	auto ctx = raw_message(1, [](ber::writer &m) { m.null(ber::context(2)); });
-	CHECK(code_of(ldap::decode(ctx)) == client_errc::unsupported_operation);
+	CHECK(code_of(ldap::testing::decode(ctx)) == client_errc::unsupported_operation);
 	auto universal = raw_message(1, [](ber::writer &m) { m.octet_string("x"); });
-	CHECK(code_of(ldap::decode(universal)) == client_errc::unsupported_operation);
+	CHECK(code_of(ldap::testing::decode(universal)) == client_errc::unsupported_operation);
 	auto missing = raw_message(1, [](ber::writer &) {});
-	CHECK(code_of(ldap::decode(missing)) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(missing)) == client_errc::decode_error);
 
 	// Bind authentication choices other than simple and SASL (e.g. the
 	// reserved Kerberos ones, or Active Directory's Sicily [9]).
@@ -243,7 +244,7 @@ TEST_CASE("decode rejects unknown operations", "[message][extensibility]")
 			o.octet_string("", ber::context(9));
 		});
 	});
-	auto r = ldap::decode(sicily);
+	auto r = ldap::testing::decode(sicily);
 	CHECK(code_of(r) == client_errc::unsupported_operation);
 	CHECK(r.error().context == "message: bind authentication choice [CONTEXT 9] at offset 12");
 }
@@ -264,12 +265,12 @@ TEST_CASE("decode checks enumerations and integer ranges", "[message]")
 			});
 		});
 	};
-	CHECK(ldap::decode(search(3, 3, 0)).has_value());
-	CHECK(code_of(ldap::decode(search(4, 0, 0))) == client_errc::decode_error);
-	CHECK(code_of(ldap::decode(search(-1, 0, 0))) == client_errc::decode_error);
-	CHECK(code_of(ldap::decode(search(0, 4, 0))) == client_errc::decode_error);
-	CHECK(code_of(ldap::decode(search(0, 0, -1))) == client_errc::decode_error);
-	CHECK(code_of(ldap::decode(search(0, 0, 0x8000'0000LL))) == client_errc::decode_error);
+	CHECK(ldap::testing::decode(search(3, 3, 0)).has_value());
+	CHECK(code_of(ldap::testing::decode(search(4, 0, 0))) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(search(-1, 0, 0))) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(search(0, 4, 0))) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(search(0, 0, -1))) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(search(0, 0, 0x8000'0000LL))) == client_errc::decode_error);
 
 	auto modify = [](std::int64_t op) {
 		return raw_message(1, [&](ber::writer &m) {
@@ -287,8 +288,8 @@ TEST_CASE("decode checks enumerations and integer ranges", "[message]")
 			});
 		});
 	};
-	CHECK(ldap::decode(modify(3)).has_value());
-	auto bad_op = ldap::decode(modify(4));
+	CHECK(ldap::testing::decode(modify(3)).has_value());
+	auto bad_op = ldap::testing::decode(modify(4));
 	CHECK(code_of(bad_op) == client_errc::decode_error);
 	CHECK(bad_op.error().context.contains("modify operation 4"));
 
@@ -301,34 +302,34 @@ TEST_CASE("decode checks enumerations and integer ranges", "[message]")
 			});
 		});
 	};
-	CHECK(ldap::decode(bind(1)).has_value());
-	CHECK(code_of(ldap::decode(bind(0))) == client_errc::decode_error);
-	CHECK(code_of(ldap::decode(bind(128))) == client_errc::decode_error);
+	CHECK(ldap::testing::decode(bind(1)).has_value());
+	CHECK(code_of(ldap::testing::decode(bind(0))) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(bind(128))) == client_errc::decode_error);
 
 	auto unbind_with_id = [](std::int64_t id) {
 		return raw_message(id, [](ber::writer &m) { m.null(ber::application(2)); });
 	};
-	CHECK(code_of(ldap::decode(unbind_with_id(0))) == client_errc::decode_error);// reserved, RFC 4511 4.1.1
-	CHECK(ldap::decode(unbind_with_id(1)).has_value());
-	CHECK(ldap::decode(unbind_with_id(ldap::max_int)).has_value());
-	CHECK(code_of(ldap::decode(unbind_with_id(-1))) == client_errc::decode_error);
-	CHECK(code_of(ldap::decode(unbind_with_id(0x8000'0000LL))) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(unbind_with_id(0))) == client_errc::decode_error);// reserved, RFC 4511 4.1.1
+	CHECK(ldap::testing::decode(unbind_with_id(1)).has_value());
+	CHECK(ldap::testing::decode(unbind_with_id(ldap::max_int)).has_value());
+	CHECK(code_of(ldap::testing::decode(unbind_with_id(-1))) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(unbind_with_id(0x8000'0000LL))) == client_errc::decode_error);
 
 	auto abandon = [](std::int64_t id) {
 		return raw_message(1, [&](ber::writer &m) { m.integer(id, ber::application(16)); });
 	};
-	CHECK(code_of(ldap::decode(abandon(-5))) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(abandon(-5))) == client_errc::decode_error);
 
 	// Unknown result codes are kept.
 	auto done = raw_message(
 	  1, [](ber::writer &m) { m.constructed(ber::application(5), [](ber::writer &o) { write_result(o, 4711); }); });
-	auto decoded = ldap::decode(done);
+	auto decoded = ldap::testing::decode(done);
 	REQUIRE(decoded);
 	CHECK(std::get<ldap::search_result_done>(decoded->op).result.result_code == 4711);
 	auto huge = raw_message(1, [](ber::writer &m) {
 		m.constructed(ber::application(5), [](ber::writer &o) { write_result(o, 0x1'0000'0000LL); });
 	});
-	CHECK(code_of(ldap::decode(huge)) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(huge)) == client_errc::decode_error);
 }
 
 TEST_CASE("decode rejects malformed messages", "[message]")
@@ -339,10 +340,10 @@ TEST_CASE("decode rejects malformed messages", "[message]")
 	{
 		auto bytes = *ldap::encode(samples.front());
 		bytes.push_back(std::byte{ 0 });
-		CHECK(code_of(ldap::decode(bytes)) == client_errc::decode_error);
+		CHECK(code_of(ldap::testing::decode(bytes)) == client_errc::decode_error);
 		auto twice = *ldap::encode(samples.front());
 		twice.insert(twice.end(), twice.begin(), twice.end());
-		CHECK(code_of(ldap::decode(twice)) == client_errc::decode_error);
+		CHECK(code_of(ldap::testing::decode(twice)) == client_errc::decode_error);
 	}
 	SECTION("every truncation of every sample")
 	{
@@ -351,17 +352,17 @@ TEST_CASE("decode rejects malformed messages", "[message]")
 			const auto bytes = *ldap::encode(m);
 			for (std::size_t n = 0; n < bytes.size(); ++n) {
 				INFO("sample " << m.id << " truncated to " << n);
-				CHECK_FALSE(ldap::decode(std::span(bytes).first(n)).has_value());
+				CHECK_FALSE(ldap::testing::decode(std::span(bytes).first(n)).has_value());
 			}
 		}
 	}
 	SECTION("wrong primitive/constructed form")
 	{
 		auto primitive_bind = raw_message(1, [](ber::writer &m) { m.octet_string("", ber::application(0)); });
-		CHECK(code_of(ldap::decode(primitive_bind)) == client_errc::unexpected_tag);
+		CHECK(code_of(ldap::testing::decode(primitive_bind)) == client_errc::unexpected_tag);
 		auto constructed_unbind =
 		  raw_message(1, [](ber::writer &m) { m.constructed(ber::application(2), [](ber::writer &) {}); });
-		CHECK(code_of(ldap::decode(constructed_unbind)) == client_errc::unexpected_tag);
+		CHECK(code_of(ldap::testing::decode(constructed_unbind)) == client_errc::unexpected_tag);
 	}
 	SECTION("filters that have no RFC 4515 text")
 	{
@@ -377,7 +378,7 @@ TEST_CASE("decode rejects malformed messages", "[message]")
 				o.constructed(ber::tags::sequence, [](ber::writer &) {});
 			});
 		});
-		CHECK(code_of(ldap::decode(raw)) == client_errc::decode_error);
+		CHECK(code_of(ldap::testing::decode(raw)) == client_errc::decode_error);
 	}
 	SECTION("nesting beyond the reader's limit")
 	{
@@ -385,7 +386,7 @@ TEST_CASE("decode rejects malformed messages", "[message]")
 		for (int i = 0; i < 40; ++i) {
 			deep.insert(deep.begin(), { std::byte{ 0x30 }, static_cast<std::byte>(deep.size()) });
 		}
-		CHECK_FALSE(ldap::decode(deep).has_value());
+		CHECK_FALSE(ldap::testing::decode(deep).has_value());
 	}
 }
 
@@ -545,7 +546,7 @@ TEST_CASE("decode(encode(m)) == m exactly and encode(decode(encode(m))) == encod
 		INFO("sample id " << m.id << ", op index " << m.op.index());
 		auto first = ldap::encode(m);
 		REQUIRE(first);
-		auto decoded = ldap::decode(*first);
+		auto decoded = ldap::testing::decode(*first);
 		REQUIRE(decoded);
 		CHECK(*decoded == m);
 		auto second = ldap::encode(*decoded);
@@ -577,9 +578,9 @@ TEST_CASE("decode_options::from rejects operations the peer may not send", "[mes
 		  || std::holds_alternative<ldap::compare_request>(m.op) || std::holds_alternative<ldap::abandon_request>(m.op)
 		  || std::holds_alternative<ldap::extended_request>(m.op);
 		INFO("sample id " << m.id << ", op index " << m.op.index());
-		CHECK(ldap::decode(bytes, { .from = ldap::origin::any }) == m);
-		auto from_server = ldap::decode(bytes, { .from = ldap::origin::server });
-		auto from_client = ldap::decode(bytes, { .from = ldap::origin::client });
+		CHECK(ldap::testing::decode(bytes, { .from = ldap::testing::origin::any }) == m);
+		auto from_server = ldap::decode(bytes);
+		auto from_client = ldap::testing::decode(bytes, { .from = ldap::testing::origin::client });
 		if (request) {
 			CHECK(code_of(from_server) == client_errc::unsupported_operation);
 			CHECK(from_client == m);
@@ -594,12 +595,12 @@ TEST_CASE("decode_options limits", "[message][options]")
 {
 	const auto m = search_message(raw("(&(a=*)(b=*)(c=*))"));
 	const auto bytes = *ldap::encode(m);
-	CHECK(ldap::decode(bytes).has_value());
-	CHECK(code_of(ldap::decode(bytes, { .filter = { .max_elements = 3 } })) == client_errc::decode_error);
-	CHECK(code_of(ldap::decode(bytes, { .filter = { .max_depth = 1 } })) == client_errc::nesting_too_deep);
+	CHECK(ldap::testing::decode(bytes).has_value());
+	CHECK(code_of(ldap::testing::decode(bytes, { .filter = { .max_elements = 3 } })) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(bytes, { .filter = { .max_depth = 1 } })) == client_errc::nesting_too_deep);
 	// Reader depth: LDAPMessage, SearchRequest and the AND need 3 levels.
-	CHECK(ldap::decode(bytes, { .max_depth = 3 }).has_value());
-	CHECK(code_of(ldap::decode(bytes, { .max_depth = 2 })) == client_errc::nesting_too_deep);
+	CHECK(ldap::testing::decode(bytes, { .max_depth = 3 }).has_value());
+	CHECK(code_of(ldap::testing::decode(bytes, { .max_depth = 2 })) == client_errc::nesting_too_deep);
 }
 
 TEST_CASE("regression: a huge AND filter in a search request fails fast", "[message][options]")
@@ -624,12 +625,12 @@ TEST_CASE("regression: a huge AND filter in a search request fails fast", "[mess
 		});
 	});
 	REQUIRE(bytes.size() > 1'000'000);
-	auto r = ldap::decode(bytes);
+	auto r = ldap::testing::decode(bytes);
 	REQUIRE_FALSE(r);
 	CHECK(r.error().code == client_errc::decode_error);
 	CHECK(r.error().context.contains("more than 10000 filter elements"));
-	// A client connection (origin::server) does not look at the filter at all.
-	CHECK(code_of(ldap::decode(bytes, { .from = ldap::origin::server })) == client_errc::unsupported_operation);
+	// ldap::decode (a client) does not look at the filter at all.
+	CHECK(code_of(ldap::decode(bytes)) == client_errc::unsupported_operation);
 }
 
 TEST_CASE("regression: invalid list elements do not drive the reserve size", "[message][options]")
@@ -667,7 +668,7 @@ TEST_CASE("regression: invalid list elements do not drive the reserve size", "[m
 		std::vector<std::byte> buffer(64uz * 1024);
 		std::pmr::monotonic_buffer_resource arena(buffer.data(), buffer.size(), std::pmr::null_memory_resource());
 		ldap::result<ldap::message> r = std::unexpected(ldap::error{});
-		REQUIRE_NOTHROW(r = ldap::decode(bytes, { .from = ldap::origin::server, .memory = &arena }));
+		REQUIRE_NOTHROW(r = ldap::decode(bytes, { .memory = &arena }));
 		REQUIRE_FALSE(r);
 		CHECK(r.error().code.category() == ldap::make_error_code(client_errc::decode_error).category());
 	}
@@ -680,16 +681,16 @@ TEST_CASE("decode_options::max_elements bounds the strings of one message", "[me
 	e.object_name = "cn=x";
 	e.attributes.push_back({ "cn", { "a", "b", "c" } });
 	const auto entry = *ldap::encode(ldap::message{ 1, e });
-	CHECK(ldap::decode(entry, { .max_elements = 5 }).has_value());
-	const auto over = ldap::decode(entry, { .max_elements = 4 });
+	CHECK(ldap::testing::decode(entry, { .max_elements = 5 }).has_value());
+	const auto over = ldap::testing::decode(entry, { .max_elements = 4 });
 	REQUIRE_FALSE(over);
 	CHECK(over.error().code == client_errc::message_too_large);
 	CHECK(over.error().context.starts_with("message: more than 4 elements at offset "));
 	// Referral URIs and control OIDs count too.
 	ldap::search_result_done done{ { 10, "", "", { "ldap://a/", "ldap://b/" } } };
 	const auto referral = *ldap::encode(ldap::message{ 2, done, { ldap::control{ "1.2.3" } } });
-	CHECK(ldap::decode(referral, { .max_elements = 5 }).has_value());
-	CHECK(code_of(ldap::decode(referral, { .max_elements = 4 })) == client_errc::message_too_large);
+	CHECK(ldap::testing::decode(referral, { .max_elements = 5 }).has_value());
+	CHECK(code_of(ldap::testing::decode(referral, { .max_elements = 4 })) == client_errc::message_too_large);
 }
 
 TEST_CASE("regression: many tiny values cannot multiply a message's size in memory", "[message][options]")
@@ -726,12 +727,11 @@ TEST_CASE("regression: many tiny values cannot multiply a message's size in memo
 	for (bool many_attributes : { false, true }) {
 		const auto bytes = entry_with(many_attributes);
 		// Under the default limit it decodes.
-		CHECK(ldap::decode(bytes).has_value());
+		CHECK(ldap::testing::decode(bytes).has_value());
 		std::vector<std::byte> buffer(256uz * 1024);
 		std::pmr::monotonic_buffer_resource arena(buffer.data(), buffer.size(), std::pmr::null_memory_resource());
 		ldap::result<ldap::message> r = std::unexpected(ldap::error{});
-		REQUIRE_NOTHROW(
-		  r = ldap::decode(bytes, { .from = ldap::origin::server, .max_elements = 1000, .memory = &arena }));
+		REQUIRE_NOTHROW(r = ldap::decode(bytes, { .max_elements = 1000, .memory = &arena }));
 		REQUIRE_FALSE(r);
 		CHECK(r.error().code == client_errc::message_too_large);
 	}
@@ -762,7 +762,7 @@ TEST_CASE("add and modify-add values must not be empty", "[message]")
 			});
 		});
 	});
-	CHECK(code_of(ldap::decode(add_bytes)) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(add_bytes)) == client_errc::decode_error);
 	auto mod_bytes = raw_message(1, [](ber::writer &m) {
 		m.constructed(ber::application(6), [](ber::writer &o) {
 			o.octet_string("cn=x");
@@ -777,7 +777,7 @@ TEST_CASE("add and modify-add values must not be empty", "[message]")
 			});
 		});
 	});
-	CHECK(code_of(ldap::decode(mod_bytes)) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(mod_bytes)) == client_errc::decode_error);
 }
 
 TEST_CASE("decode errors show the peer's attribute and control type sanitized", "[message]")
@@ -795,7 +795,7 @@ TEST_CASE("decode errors show the peer's attribute and control type sanitized", 
 				});
 			});
 		});
-		auto r = ldap::decode(bytes);
+		auto r = ldap::testing::decode(bytes);
 		REQUIRE_FALSE(r);
 		return std::string(r.error().context);
 	};
@@ -857,8 +857,8 @@ TEST_CASE("RFC 4511 4.1.1: requests never carry message id 0", "[message][rfc]")
 	CHECK(code_of(ldap::encode(ldap::message{ 0, ldap::del_request{ "cn=x" } })) == client_errc::encode_error);
 	CHECK(code_of(ldap::encode(ldap::message{ 0, ldap::unbind_request{} })) == client_errc::encode_error);
 	auto del = raw_message(0, [](ber::writer &m) { m.octet_string("cn=x", ber::application(10)); });
-	CHECK(code_of(ldap::decode(del, { .from = ldap::origin::client })) == client_errc::decode_error);
-	CHECK(code_of(ldap::decode(del)) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(del, { .from = ldap::testing::origin::client })) == client_errc::decode_error);
+	CHECK(code_of(ldap::testing::decode(del)) == client_errc::decode_error);
 	// Responses may: an unsolicited notification is an ExtendedResponse with id 0.
 	const ldap::message notice{ 0, ldap::extended_response{ {}, ldap::notice_of_disconnection_oid } };
 	CHECK(round_trip(notice) == notice);
@@ -867,7 +867,7 @@ TEST_CASE("RFC 4511 4.1.1: requests never carry message id 0", "[message][rfc]")
 TEST_CASE("RFC 4511 4.5.3: a SearchResultReference carries at least one URI", "[message][rfc]")
 {
 	auto empty = raw_message(2, [](ber::writer &m) { m.constructed(ber::application(19), [](ber::writer &) {}); });
-	auto r = ldap::decode(empty);
+	auto r = ldap::testing::decode(empty);
 	CHECK(code_of(r) == client_errc::decode_error);
 	CHECK(r.error().context.starts_with("message: search result reference without a URI at offset "));
 	CHECK(code_of(ldap::encode(ldap::message{ 2, ldap::search_result_reference{} })) == client_errc::encode_error);
@@ -898,7 +898,7 @@ TEST_CASE("End Transaction request value (RFC 5805 section 2.3)", "[message][tra
 
 	const auto decoded = [](std::string_view hex_value) {
 		const auto b = ldap::test::from_hex(hex_value);
-		return ldap::decode_end_transaction_request(ldap::detail::as_text(b));
+		return ldap::testing::decode_end_transaction_request(ldap::detail::as_text(b));
 	};
 	CHECK(decoded("30 05 04 03 74 78 31") == ldap::end_transaction_request{ true, "tx1" });
 	CHECK(decoded("30 08 01 01 FF 04 03 74 78 31") == ldap::end_transaction_request{ true, "tx1" });
@@ -920,18 +920,19 @@ TEST_CASE("End Transaction response value (RFC 5805 section 2.3)", "[message][tr
 		return hex(ldap::test::bytes_of(**s));
 	};
 	// Both fields absent: no responseValue at all.
-	const auto none = ldap::encode_end_transaction_response({});
+	const auto none = ldap::testing::encode_end_transaction_response({});
 	REQUIRE(none.has_value());
 	CHECK_FALSE(none->has_value());
-	CHECK(hex_of(ldap::encode_end_transaction_response(ldap::end_transaction_response{ 5 })) == "30 03 02 01 05");
+	CHECK(
+	  hex_of(ldap::testing::encode_end_transaction_response(ldap::end_transaction_response{ 5 })) == "30 03 02 01 05");
 	const ldap::end_transaction_response full{ 5,
 		{ ldap::update_controls{ 3, { ldap::control{ ldap::post_read_oid, false, "x" } } } } };
 	constexpr std::string_view full_hex =
 	  "30 21 02 01 05 30 1C 30 1A 02 01 03 30 15 30 13 04 0E 31 2E 33 2E 36 2E 31 2E 31 2E 31 33 2E 32 04 01 78";
-	CHECK(hex_of(ldap::encode_end_transaction_response(full)) == full_hex);
-	CHECK(code_of(ldap::encode_end_transaction_response(ldap::end_transaction_response{ -1 }))
+	CHECK(hex_of(ldap::testing::encode_end_transaction_response(full)) == full_hex);
+	CHECK(code_of(ldap::testing::encode_end_transaction_response(ldap::end_transaction_response{ -1 }))
 		  == client_errc::encode_error);
-	CHECK(code_of(ldap::encode_end_transaction_response({ std::nullopt, { ldap::update_controls{ -2 } } }))
+	CHECK(code_of(ldap::testing::encode_end_transaction_response({ std::nullopt, { ldap::update_controls{ -2 } } }))
 		  == client_errc::encode_error);
 
 	const auto decoded = [](std::string_view hex_value, const ldap::decode_options &options = {}) {

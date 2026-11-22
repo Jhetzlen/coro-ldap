@@ -1,6 +1,7 @@
 // Golden LDAPMessage encodings produced by ldap3 2.9.1 with pyasn1 0.6.4
 // (the script is at the end of this file); each test encodes and decodes.
 #include "jhetz/ldap/message.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 #include "test_util.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -100,7 +101,7 @@ void check_golden(std::string_view golden, const ldap::message &m)
 	auto encoded = ldap::encode(m);
 	REQUIRE(encoded.has_value());
 	CHECK(hex(*encoded) == hex(expected));
-	auto decoded = ldap::decode(expected);
+	auto decoded = ldap::testing::decode(expected);
 	REQUIRE(decoded.has_value());
 	CHECK(*decoded == m);
 }
@@ -243,7 +244,7 @@ TEST_CASE("golden: unsolicited notice of disconnection", "[message][golden]")
 		ldap::extended_response{ { 52, "", "server shutting down" }, ldap::notice_of_disconnection_oid } };
 	check_golden(notice_of_disconnection, notice);
 
-	auto m = ldap::decode(from_hex(notice_of_disconnection));
+	auto m = ldap::testing::decode(from_hex(notice_of_disconnection));
 	REQUIRE(m);
 	CHECK(m->id == 0);
 	const auto &x = std::get<ldap::extended_response>(m->op);

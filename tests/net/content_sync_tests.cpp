@@ -3,6 +3,7 @@
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/content_sync.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -41,19 +42,19 @@ auto synced_entry(std::int32_t id,
   std::optional<std::string_view> cookie = std::nullopt) -> ldap::message
 {
 	auto m = entry_msg(id, dn, "x");
-	m.controls.push_back(ldap::encode_sync_state(ldap::sync_state{ state, uuid_of(uuid), cookie }).value());
+	m.controls.push_back(ldap::testing::encode_sync_state(ldap::sync_state{ state, uuid_of(uuid), cookie }).value());
 	return m;
 }
 
 auto info_msg(std::int32_t id, const ldap::sync_info &info) -> ldap::message
 {
-	return ldap::message{ id, ldap::encode_sync_info(info).value() };
+	return ldap::message{ id, ldap::testing::encode_sync_info(info).value() };
 }
 
 auto sync_done_msg(std::int32_t id, const ldap::sync_done &done) -> ldap::message
 {
 	auto m = done_msg(id);
-	m.controls.push_back(ldap::encode_sync_done(done).value());
+	m.controls.push_back(ldap::testing::encode_sync_done(done).value());
 	return m;
 }
 
@@ -145,7 +146,7 @@ TEST_CASE("content sync: a refreshOnly search", "[net][content_sync]")
 	// What the server got: the critical Sync Request control, refreshOnly from c0.
 	REQUIRE(m.log.received.size() == 1);
 	REQUIRE(m.log.received[0].controls.size() == 1);
-	auto request = ldap::decode_sync_request(m.log.received[0].controls[0]);
+	auto request = ldap::testing::decode_sync_request(m.log.received[0].controls[0]);
 	REQUIRE(request.has_value());
 	CHECK(*request
 		  == ldap::sync_request{
@@ -158,7 +159,7 @@ TEST_CASE("content sync: an outdated cookie fails with e-syncRefreshRequired", "
 	// cookie to resume from (none would mean a full reload).
 	mock_ldap m;
 	auto refresh_required = done_msg(1, 4096);
-	refresh_required.controls.push_back(ldap::encode_sync_done(ldap::sync_done{ "resume" }).value());
+	refresh_required.controls.push_back(ldap::testing::encode_sync_done(ldap::sync_done{ "resume" }).value());
 	m.serve({ answer({ refresh_required }) });
 	auto s = m.run(m.conn.search_stream({ .base = ldap::dn::parse(people).value(),
 	  .controls = { ldap::sync_request{ .cookie = "old" } },

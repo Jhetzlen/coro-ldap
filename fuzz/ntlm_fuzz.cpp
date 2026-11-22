@@ -1,6 +1,7 @@
 // libFuzzer target for the MS-NLMP parsers, the client's TargetInfo, the
 // protected buffer split and RC4.
 #include "jhetz/ldap/ntlm_message.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 
 #include "check.hpp"
 
@@ -49,7 +50,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 		check(c.error().code == ldap::client_errc::decode_error, "c.error().code == decode_error");
 		check(c.error().context.starts_with("CHALLENGE_MESSAGE: "), "context starts with CHALLENGE_MESSAGE");
 	} else {
-		auto back = detail::parse_ntlm_challenge(detail::encode_ntlm_challenge(*c));
+		auto back = detail::parse_ntlm_challenge(ldap::testing::encode_ntlm_challenge(*c));
 		check(back.has_value(), "back.has_value()");
 		check(*back == *c, "*back == *c");
 
@@ -59,7 +60,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 		client.target_info = detail::ntlm_client_target_info(c->target_info, true, bindings, {});
 		client.negotiate_flags |= detail::ntlmssp_negotiate_target_info;
 		if (detail::encode_ntlm_av_pairs(client.target_info).size() <= 0xFFFF) {
-			auto info = detail::parse_ntlm_challenge(detail::encode_ntlm_challenge(client));
+			auto info = detail::parse_ntlm_challenge(ldap::testing::encode_ntlm_challenge(client));
 			check(info.has_value(), "info.has_value()");
 			check(info->target_info == client.target_info, "info->target_info == client.target_info");
 			int flags = 0;
@@ -79,7 +80,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 		}
 	}
 
-	auto a = detail::parse_ntlm_authenticate(bytes);
+	auto a = ldap::testing::parse_ntlm_authenticate(bytes);
 	if (!a) {
 		check(a.error().code == ldap::client_errc::decode_error, "a.error().code == decode_error");
 		check(a.error().context.starts_with("AUTHENTICATE_MESSAGE: "), "context starts with AUTHENTICATE_MESSAGE");
@@ -87,7 +88,7 @@ extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t siz
 	}
 	auto encoded = detail::encode_ntlm_authenticate(*a);
 	check(encoded.has_value(), "encoded.has_value()");
-	auto again = detail::parse_ntlm_authenticate(*encoded);
+	auto again = ldap::testing::parse_ntlm_authenticate(*encoded);
 	check(again.has_value(), "again.has_value()");
 	check(*again == *a, "*again == *a");
 	return 0;

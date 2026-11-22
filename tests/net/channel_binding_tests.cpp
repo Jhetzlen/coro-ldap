@@ -5,6 +5,7 @@
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/sasl_scram.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 #include "net_test_support.hpp"
 
 #include <boost/corosio/openssl_stream.hpp>
@@ -308,7 +309,7 @@ TEST_CASE("channel binding: the prefixed form of RFC 5056 section 2.1", "[net][c
 
 namespace {
 
-const net::read_options as_server{ .decode = { .from = ldap::origin::client } };
+const ldap::testing::read_options as_server{};
 
 auto pki() -> test_pki &
 {
@@ -407,7 +408,7 @@ auto serve(corosio::tcp_acceptor &acc, corosio::tls_context ctx, std::shared_ptr
 	net::transport t = net::transport::wrap(std::move(stream), "server");
 	net::read_buffer buf;
 	while (true) {
-		auto req = co_await net::read_message(t, buf, as_server);
+		auto req = co_await ldap::testing::read_message(t, buf, as_server);
 		if (!req) {
 			co_return "";// the client went away
 		}
@@ -1069,7 +1070,8 @@ auto answer_bind(SSL *ssl) -> std::int32_t
 	if (n <= 0) {
 		return 0;
 	}
-	auto req = ldap::decode(std::span(buf.data(), static_cast<std::size_t>(n)), { .from = ldap::origin::client });
+	auto req = ldap::testing::decode(
+	  std::span(buf.data(), static_cast<std::size_t>(n)), { .from = ldap::testing::origin::client });
 	if (!req || !std::holds_alternative<ldap::bind_request>(req->op)) {
 		return 0;
 	}
@@ -1152,7 +1154,8 @@ TEST_CASE("channel binding: the client refuses TLS 1.2 renegotiation", "[net][tl
 		if (n <= 0) {
 			return "read the first request: " + openssl_error();
 		}
-		auto req = ldap::decode(std::span(buf.data(), static_cast<std::size_t>(n)), { .from = ldap::origin::client });
+		auto req = ldap::testing::decode(
+		  std::span(buf.data(), static_cast<std::size_t>(n)), { .from = ldap::testing::origin::client });
 		if (!req) {
 			return "decode the first request";
 		}

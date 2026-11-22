@@ -128,9 +128,6 @@ inline constexpr std::size_t ntlm_authenticate_header_size = 88;
 // ("CHALLENGE_MESSAGE: ...") otherwise.
 [[nodiscard]] auto parse_ntlm_challenge(std::string_view message) -> result<ntlm_challenge_message>;
 
-// Encodes a CHALLENGE_MESSAGE (a test server's side).
-[[nodiscard]] auto encode_ntlm_challenge(const ntlm_challenge_message &message) -> std::string;
-
 // The AV_PAIR list as TargetInfo carries it, MsvAvEOL appended.
 [[nodiscard]] auto encode_ntlm_av_pairs(std::span<const ntlm_av_pair> pairs) -> std::string;
 
@@ -147,9 +144,6 @@ inline constexpr std::size_t ntlm_authenticate_header_size = 88;
 // Encodes an AUTHENTICATE_MESSAGE; encode_error for a field over 65535
 // octets.
 [[nodiscard]] auto encode_ntlm_authenticate(const ntlm_authenticate_message &message) -> result<std::string>;
-
-// Parses an AUTHENTICATE_MESSAGE (a test server's side).
-[[nodiscard]] auto parse_ntlm_authenticate(std::string_view message) -> result<ntlm_authenticate_message>;
 
 // UNICODE(s) of MS-NLMP: UTF-8 to UTF-16LE, not normalized.
 [[nodiscard]] auto ntlm_unicode(std::string_view utf8) -> result<std::string>;

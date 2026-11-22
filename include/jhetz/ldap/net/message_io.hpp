@@ -20,8 +20,7 @@ struct read_options
 	// Largest accepted PDU; a larger declared length fails before the body is
 	// read.
 	std::size_t max_message_size = ber::default_max_message_size;
-	// A client keeps origin::server.
-	decode_options decode{ .from = origin::server };
+	decode_options decode{};
 };
 
 // Bytes received but not consumed yet, kept across read_message() calls;

@@ -789,28 +789,19 @@ struct message
   -> result<std::pmr::vector<std::byte>>;
 [[nodiscard]] auto encode(ber::writer &w, const message &m) -> result<void>;
 
-// Which side sent the message being decoded.
-enum class origin {
-	any,// requests and responses
-	server,// responses only
-	client,// requests only
-};
-
 inline constexpr std::size_t default_max_elements = 1'000'000;
 
 struct decode_options
 {
-	// Operations the peer may not send fail with unsupported_operation.
-	origin from = origin::any;
 	std::size_t max_depth = ber::reader::default_max_depth;
-	filter_limits filter{};
 	// Strings one message may decode to; more fail with message_too_large.
 	std::size_t max_elements = default_max_elements;
 	// Everything the decoded message owns; errors use the default resource.
 	std::pmr::memory_resource *memory = std::pmr::get_default_resource();
 };
 
-// Decodes exactly one LDAPMessage; trailing bytes are a decode_error.
+// Decodes exactly one LDAPMessage a server sends; trailing bytes are a
+// decode_error, a request operation fails with unsupported_operation.
 [[nodiscard]] auto decode(std::span<const std::byte> one_complete_message, const decode_options &options = {})
   -> result<message>;
 
@@ -902,10 +893,6 @@ struct sort_result
 	friend auto operator==(const sort_result &, const sort_result &) -> bool = default;
 };
 
-// For mock servers and tests.
-[[nodiscard]] auto encode_sort_result(const sort_result &value,
-  bool criticality = false,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
 [[nodiscard]] auto decode_sort_result(const control &c,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<sort_result>;
 
@@ -958,10 +945,6 @@ struct vlv_response
 	allocator_type alloc_{};
 };
 
-// For mock servers and tests.
-[[nodiscard]] auto encode_vlv_response(const vlv_response &value,
-  bool criticality = false,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
 [[nodiscard]] auto decode_vlv_response(const control &c,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<vlv_response>;
 
@@ -969,11 +952,6 @@ struct vlv_response
 inline constexpr std::string_view pre_read_oid = "1.3.6.1.1.13.1";
 inline constexpr std::string_view post_read_oid = "1.3.6.1.1.13.2";
 
-// For mock servers and tests; `oid` is pre_read_oid or post_read_oid.
-[[nodiscard]] auto encode_read_entry(std::string_view oid,
-  const search_result_entry &entry,
-  bool criticality = false,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<control>;
 // The entry of a pre-read or post-read response control.
 [[nodiscard]] auto decode_read_entry(const control &c, const decode_options &options = {})
   -> result<search_result_entry>;
@@ -1018,9 +996,6 @@ struct end_transaction_request
 
 [[nodiscard]] auto encode_end_transaction_request(const end_transaction_request &value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> std::pmr::string;
-// For mock servers and tests.
-[[nodiscard]] auto decode_end_transaction_request(std::string_view value,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<end_transaction_request>;
 
 // updateControls: an update's response controls and request message id.
 struct update_controls
@@ -1090,9 +1065,6 @@ struct end_transaction_response
 	friend auto operator==(const end_transaction_response &, const end_transaction_response &) -> bool = default;
 };
 
-// For mock servers and tests; nullopt when both fields are absent.
-[[nodiscard]] auto encode_end_transaction_response(const end_transaction_response &value,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::optional<std::pmr::string>>;
 [[nodiscard]] auto decode_end_transaction_response(std::string_view value, const decode_options &options = {})
   -> result<end_transaction_response>;
 

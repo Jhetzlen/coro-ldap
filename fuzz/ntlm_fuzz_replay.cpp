@@ -1,5 +1,6 @@
 // Deterministic driver for ntlm_fuzz under ctest.
 #include "jhetz/ldap/ntlm_message.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 
 #include "replay.hpp"
 
@@ -71,7 +72,7 @@ auto main(int argc, char **argv) -> int
 	for (const auto m : messages) {
 		cfg.seeds.push_back(fuzz::to_input(m));
 	}
-	cfg.seeds.push_back(fuzz::to_input(detail::encode_ntlm_challenge(dc)));
+	cfg.seeds.push_back(fuzz::to_input(jhetz::ldap::testing::encode_ntlm_challenge(dc)));
 	cfg.seeds.push_back(fuzz::to_input(*detail::encode_ntlm_authenticate(auth)));
 	return fuzz::replay_main(argc, argv, cfg);
 }

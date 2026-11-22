@@ -20,25 +20,11 @@ namespace jhetz::ldap::ad {
 using detail::control_value;
 using detail::enter_value;
 using detail::in_control;
+using detail::read_bounded;
 using detail::skip_rest;
 using detail::value_control;
 
 namespace {
-
-	// An INTEGER in [low, high].
-	auto read_bounded(ber::reader &r, std::int64_t low, std::int64_t high, const char *field) -> result<std::int64_t>
-	{
-		const std::size_t offset = r.offset();
-		auto v = r.read_integer();
-		if (!v) {
-			return std::unexpected(std::move(v.error()));
-		}
-		if (*v < low || *v > high) {
-			return fail(
-			  client_errc::decode_error, detail::format("{} {} out of range at offset {}", field, *v, offset));
-		}
-		return *v;
-	}
 
 	constexpr auto int32_min = std::int64_t{ std::numeric_limits<std::int32_t>::min() };
 	constexpr auto int32_max = std::int64_t{ std::numeric_limits<std::int32_t>::max() };
@@ -61,54 +47,7 @@ auto encode_dirsync_request(const dirsync_request &value, std::pmr::memory_resou
 	return value_control(dirsync_oid, value.critical, w, mr);
 }
 
-auto decode_dirsync_request(const control &c) -> result<dirsync_request>
-{
-	static constexpr const char *what = "DirSync request";
-	auto value = control_value(c, dirsync_oid, what);
-	if (!value) {
-		return std::unexpected(std::move(value.error()));
-	}
-	const auto read = [&] -> result<dirsync_request> {
-		ber::reader r(*value);
-		auto s = enter_value(r);
-		if (!s) {
-			return std::unexpected(std::move(s.error()));
-		}
-		auto flags = read_bounded(*s, int32_min, uint32_max, "Flags");
-		if (!flags) {
-			return std::unexpected(std::move(flags.error()));
-		}
-		auto max_bytes = read_bounded(*s, int32_min, int32_max, "MaxBytes");
-		if (!max_bytes) {
-			return std::unexpected(std::move(max_bytes.error()));
-		}
-		auto cookie = s->read_octet_string();
-		if (!cookie) {
-			return std::unexpected(std::move(cookie.error()));
-		}
-		if (auto done = skip_rest(*s); !done) {
-			return std::unexpected(std::move(done.error()));
-		}
-		return dirsync_request{ .flags = static_cast<dirsync_flags>(static_cast<std::uint32_t>(*flags)),
-			.max_bytes = static_cast<std::int32_t>(*max_bytes),
-			.cookie = std::string(detail::as_text(*cookie)),
-			.critical = c.criticality };
-	};
-	return in_control(read(), what);
-}
-
 // ---------------------------------------------------------------- DirSync response
-
-auto encode_dirsync_response(const dirsync_response &value, bool criticality, std::pmr::memory_resource *mr) -> control
-{
-	ber::writer w{ ber::writer::allocator_type(mr) };
-	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
-		s.integer(value.more_results ? 1 : 0);
-		s.integer(value.unused);
-		s.octet_string(value.cookie_server);
-	});
-	return value_control(dirsync_oid, criticality, w, mr);
-}
 
 auto decode_dirsync_response(const control &c) -> result<dirsync_response>
 {

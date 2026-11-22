@@ -4,6 +4,7 @@
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/net/transport.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/ex/async_event.hpp>
@@ -48,9 +49,9 @@ struct socket_ref
 auto serve(net::transport t) -> capy::task<void>
 {
 	net::read_buffer buf;
-	const net::read_options as_server{ .decode = { .from = ldap::origin::client } };
+	const ldap::testing::read_options as_server{};
 	while (true) {
-		auto r = co_await net::read_message(t, buf, as_server);
+		auto r = co_await ldap::testing::read_message(t, buf, as_server);
 		if (!r || !std::holds_alternative<ldap::compare_request>(r->op)) {
 			co_return;
 		}

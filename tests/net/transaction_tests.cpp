@@ -3,6 +3,7 @@
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/extended_operations.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 #include "jhetz/ldap/transaction.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
@@ -50,7 +51,7 @@ auto started(std::int32_t id) -> ldap::message { return ext_resp(id, 0, std::nul
 // An End Transaction response carrying `value` as its txnEndRes.
 auto ended(std::int32_t id, std::int32_t code, const ldap::end_transaction_response &value) -> ldap::message
 {
-	const auto v = ldap::encode_end_transaction_response(value);
+	const auto v = ldap::testing::encode_end_transaction_response(value);
 	REQUIRE(v.has_value());
 	if (!v->has_value()) {
 		return ext_resp(id, code);
@@ -73,14 +74,14 @@ auto end_request_of(const ldap::message &m) -> ldap::end_transaction_request
 	CHECK(x->request_name == ldap::end_transaction_oid);
 	REQUIRE(x->request_value.has_value());
 	CHECK(m.controls.empty());// RFC 5805 section 4: no control on End Transaction
-	auto r = ldap::decode_end_transaction_request(*x->request_value);
+	auto r = ldap::testing::decode_end_transaction_request(*x->request_value);
 	REQUIRE(r.has_value());
 	return *r;
 }
 
 auto post_read_entry() -> ldap::control
 {
-	return ldap::encode_read_entry(ldap::post_read_oid,
+	return ldap::testing::encode_read_entry(ldap::post_read_oid,
 	  ldap::search_result_entry{ jdoe.to_string(), { ldap::partial_attribute{ "uid", { "jdoe" } } } })
 	  .value();
 }

@@ -5,6 +5,7 @@
 #include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/entry.hpp"
 #include "jhetz/ldap/message.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 #include "sample_messages.hpp"
 #include "test_util.hpp"
 
@@ -66,13 +67,13 @@ TEST_CASE("decode allocates only from decode_options::memory", "[pmr][message]")
 		const auto bytes = *ldap::encode(m);
 		counting_resource supplied;
 		counting_resource heap;
-		ldap::decode_options options;
+		ldap::testing::decode_options options;
 		options.memory = &supplied;
 		{
 			std::optional<ldap::result<ldap::message>> d;
 			{
 				scoped_default_resource guard(&heap);
-				d.emplace(ldap::decode(bytes, options));
+				d.emplace(ldap::testing::decode(bytes, options));
 			}
 			CHECK(heap.allocations() == 0);
 			REQUIRE(d->has_value());
@@ -92,12 +93,12 @@ TEST_CASE("decode into a monotonic buffer with a null upstream", "[pmr][message]
 		INFO("sample id " << m.id << ", op index " << m.op.index());
 		const auto bytes = *ldap::encode(m);
 		std::pmr::monotonic_buffer_resource arena(storage.data(), storage.size(), std::pmr::null_memory_resource());
-		ldap::decode_options options;
+		ldap::testing::decode_options options;
 		options.memory = &arena;
 		std::optional<ldap::result<ldap::message>> d;
 		{
 			scoped_default_resource guard(std::pmr::null_memory_resource());
-			REQUIRE_NOTHROW(d.emplace(ldap::decode(bytes, options)));
+			REQUIRE_NOTHROW(d.emplace(ldap::testing::decode(bytes, options)));
 		}
 		REQUIRE(d->has_value());
 		CHECK(**d == m);
@@ -114,10 +115,10 @@ TEST_CASE("errors never live in the caller's arena", "[pmr][message][error]")
 {
 	std::byte storage[4096];
 	std::pmr::monotonic_buffer_resource arena(storage, sizeof storage, std::pmr::null_memory_resource());
-	ldap::decode_options options;
+	ldap::testing::decode_options options;
 	options.memory = &arena;
 	const auto bytes = ldap::test::from_hex("3003020101");// no protocolOp
-	auto r = ldap::decode(bytes, options);
+	auto r = ldap::testing::decode(bytes, options);
 	REQUIRE_FALSE(r);
 	CHECK(r.error().context.get_allocator().resource() == std::pmr::get_default_resource());
 	CHECK(r.error().code == ldap::client_errc::decode_error);
@@ -183,7 +184,7 @@ TEST_CASE("filter::raw and decode_filter allocate from the given resource", "[pm
 	ldap::ber::writer w{ ldap::ber::writer::allocator_type(&arena) };
 	REQUIRE(ldap::encode_filter(w, *f));
 	ldap::ber::reader r(w.bytes());
-	auto back = ldap::decode_filter(r, {}, &arena);
+	auto back = ldap::testing::decode_filter(r, {}, &arena);
 	REQUIRE(back.has_value());
 	CHECK(*back == *f);
 	CHECK(back->get_allocator().resource() == &arena);
@@ -334,9 +335,9 @@ TEST_CASE("copies of arena objects go to the default resource", "[pmr]")
 		std::pmr::monotonic_buffer_resource arena(storage, sizeof storage, std::pmr::null_memory_resource());
 		auto d = ldap::dn::parse("cn=a value that is long enough,dc=example,dc=org", &arena);
 		auto f = ldap::filter::raw("(cn=a value that is long enough*)", &arena);
-		ldap::decode_options options;
+		ldap::testing::decode_options options;
 		options.memory = &arena;
-		auto m = ldap::decode(*ldap::encode(ldap::test::sample_messages()[12]), options);
+		auto m = ldap::testing::decode(*ldap::encode(ldap::test::sample_messages()[12]), options);
 		REQUIRE(d);
 		REQUIRE(f);
 		REQUIRE(m);

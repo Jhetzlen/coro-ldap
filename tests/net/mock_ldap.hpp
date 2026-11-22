@@ -5,6 +5,7 @@
 #include "../../src/net/transport_layers.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 #include "net_test_support.hpp"
 
 #include <boost/capy/buffers.hpp>
@@ -38,7 +39,7 @@ namespace jhetz::ldap::test {
 namespace net = jhetz::ldap::net;
 
 
-inline const net::read_options as_server{ .decode = { .from = ldap::origin::client } };
+inline const ldap::testing::read_options as_server{};
 inline constexpr std::string_view admin = "cn=admin,dc=example,dc=org";
 inline constexpr std::string_view people = "ou=people,dc=example,dc=org";
 
@@ -144,7 +145,7 @@ inline auto serve_script(net::transport t, std::vector<step> script, server_log 
 	net::read_buffer buf;
 	for (auto &st : script) {
 		if (st.expect_close) {
-			auto r = co_await net::read_message(t, buf, as_server);
+			auto r = co_await ldap::testing::read_message(t, buf, as_server);
 			if (r) {
 				log.received.push_back(std::move(*r));
 				log.error = "expected the client to hang up, got another request";
@@ -154,7 +155,7 @@ inline auto serve_script(net::transport t, std::vector<step> script, server_log 
 			co_return;
 		}
 		if (st.read_request) {
-			auto r = co_await net::read_message(t, buf, as_server);
+			auto r = co_await ldap::testing::read_message(t, buf, as_server);
 			if (!r) {
 				log.error = "server read: " + std::string(r.error().message());
 				co_return;

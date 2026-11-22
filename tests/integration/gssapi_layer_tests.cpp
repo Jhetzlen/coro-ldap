@@ -6,6 +6,7 @@
 #include "../net/mock_ldap.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl_gssapi.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -173,7 +174,7 @@ auto serve(net::transport t, std::uint8_t offer, std::uint32_t server_max, std::
 		net::read_buffer buf;
 		acceptor_context ctx;
 		// The AP-REQ, answered with the AP-REP.
-		auto first = co_await net::read_message(t, buf, as_server);
+		auto first = co_await ldap::testing::read_message(t, buf, as_server);
 		if (!first) {
 			throw std::runtime_error("read AP-REQ");
 		}
@@ -200,7 +201,7 @@ auto serve(net::transport t, std::uint8_t offer, std::uint32_t server_max, std::
 		}
 		(void)co_await net::write_message(t, in_progress(first->id, ap_rep));
 		// The client's last (empty) token, answered with the wrapped offer.
-		auto empty = co_await net::read_message(t, buf, as_server);
+		auto empty = co_await ldap::testing::read_message(t, buf, as_server);
 		if (!empty) {
 			throw std::runtime_error("read the empty token");
 		}
@@ -210,7 +211,7 @@ auto serve(net::transport t, std::uint8_t offer, std::uint32_t server_max, std::
 			static_cast<char>(server_max) };
 		(void)co_await net::write_message(t, in_progress(empty->id, acceptor_wrap(ctx.handle, false, offer_text)));
 		// The wrapped reply: the layer and the client's maximum.
-		auto reply = co_await net::read_message(t, buf, as_server);
+		auto reply = co_await ldap::testing::read_message(t, buf, as_server);
 		if (!reply) {
 			throw std::runtime_error("read the reply");
 		}
@@ -240,7 +241,7 @@ auto serve(net::transport t, std::uint8_t offer, std::uint32_t server_max, std::
 		  !l) {
 			throw std::runtime_error("install");
 		}
-		auto search = co_await net::read_message(t, buf, as_server);
+		auto search = co_await ldap::testing::read_message(t, buf, as_server);
 		if (!search) {
 			throw std::runtime_error("read the search: " + std::string(search.error().message()));
 		}
@@ -252,7 +253,7 @@ auto serve(net::transport t, std::uint8_t offer, std::uint32_t server_max, std::
 		(void)co_await net::write_message(t, entry);
 		(void)co_await net::write_message(t, done_msg(search->id));
 		// Keep the context until the client is done reading.
-		(void)co_await net::read_message(t, buf, as_server);
+		(void)co_await ldap::testing::read_message(t, buf, as_server);
 	} catch (const std::exception &e) {
 		v.error = e.what();
 	}

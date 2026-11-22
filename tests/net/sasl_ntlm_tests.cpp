@@ -6,6 +6,7 @@
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/ntlm_message.hpp"
 #include "jhetz/ldap/sasl_ntlm.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -135,7 +136,7 @@ auto dc_challenge(std::uint32_t flags = dc_flags, bool with_timestamp = true) ->
 	if (with_timestamp) {
 		pairs.push_back(timestamp_pair(server_time));
 	}
-	return detail::encode_ntlm_challenge({ .target_name = u16("EXAMPLE"),
+	return ldap::testing::encode_ntlm_challenge({ .target_name = u16("EXAMPLE"),
 	  .negotiate_flags = flags,
 	  .server_challenge = spec_server_challenge,
 	  .target_info = std::move(pairs),
@@ -175,7 +176,7 @@ auto dc_verify(std::string_view negotiate,
   std::string_view user,
   std::string_view domain) -> std::string
 {
-	auto auth = detail::parse_ntlm_authenticate(authenticate);
+	auto auth = ldap::testing::parse_ntlm_authenticate(authenticate);
 	REQUIRE(auth.has_value());
 	auto key = ntowfv2(password, user, domain);
 	REQUIRE(key.has_value());
@@ -289,7 +290,7 @@ TEST_CASE("ntlm: an NTLMv2 bind checked by the server", "[net][sasl][ntlm]")
 	CHECK(hex_of(negotiate) == hex_of(expected_negotiate));
 	const std::string authenticate = sasl_creds(m.log.received[1]);
 
-	auto auth = detail::parse_ntlm_authenticate(authenticate);
+	auto auth = ldap::testing::parse_ntlm_authenticate(authenticate);
 	REQUIRE(auth.has_value());
 	CHECK(auth->user_name == u16("j\xC3\xB6rg"));
 	CHECK(auth->domain_name == u16("EXAMPLE"));
@@ -338,7 +339,7 @@ TEST_CASE("ntlm: user names, domains and random client challenges", "[net][sasl]
 	SECTION("a UPN has no domain")
 	{
 		ldap::sasl_ntlm mech("jdoe@example.org", "secret", plain);
-		auto auth = detail::parse_ntlm_authenticate(bind(mech, challenge));
+		auto auth = ldap::testing::parse_ntlm_authenticate(bind(mech, challenge));
 		REQUIRE(auth.has_value());
 		CHECK(auth->user_name == u16("jdoe@example.org"));
 		CHECK(auth->domain_name.empty());
@@ -348,7 +349,7 @@ TEST_CASE("ntlm: user names, domains and random client challenges", "[net][sasl]
 	SECTION("an explicit domain keeps the user name as given")
 	{
 		ldap::sasl_ntlm mech("a\\b", "secret", { .domain = "CORP", .require_tls = false });
-		auto auth = detail::parse_ntlm_authenticate(bind(mech, challenge));
+		auto auth = ldap::testing::parse_ntlm_authenticate(bind(mech, challenge));
 		REQUIRE(auth.has_value());
 		CHECK(auth->user_name == u16("a\\b"));
 		CHECK(auth->domain_name == u16("CORP"));
@@ -358,8 +359,8 @@ TEST_CASE("ntlm: user names, domains and random client challenges", "[net][sasl]
 		ldap::sasl_ntlm mech("CORP\\jdoe", "secret", plain);
 		const std::string first = bind(mech, challenge);
 		const std::string second = bind(mech, challenge);
-		auto a = detail::parse_ntlm_authenticate(first);
-		auto b = detail::parse_ntlm_authenticate(second);
+		auto a = ldap::testing::parse_ntlm_authenticate(first);
+		auto b = ldap::testing::parse_ntlm_authenticate(second);
 		REQUIRE(a.has_value());
 		REQUIRE(b.has_value());
 		CHECK(a->nt_challenge_response.substr(32, 8) != b->nt_challenge_response.substr(32, 8));
@@ -375,7 +376,7 @@ TEST_CASE("ntlm: user names, domains and random client challenges", "[net][sasl]
 		const std::string no_time = dc_challenge(dc_flags, false);
 		auto mech = detail::ntlm_test_access::with_challenge("CORP\\jdoe", "secret", plain, spec_client_challenge);
 		const std::string authenticate = bind(mech, no_time);
-		auto auth = detail::parse_ntlm_authenticate(authenticate);
+		auto auth = ldap::testing::parse_ntlm_authenticate(authenticate);
 		REQUIRE(auth.has_value());
 		REQUIRE(auth->lm_challenge_response.size() == 24);
 		CHECK(auth->lm_challenge_response.substr(16) == std::string(8, '\xAA'));
@@ -536,7 +537,7 @@ TEST_CASE("ntlm: challenges that do not offer NTLMv2 are refused", "[net][sasl][
 	refused(dc_challenge(dc_flags & ~detail::ntlmssp_negotiate_unicode),
 	  ldap::client_errc::unexpected_response,
 	  "the server does not offer Unicode (no NTLMSSP_NEGOTIATE_UNICODE)");
-	refused(detail::encode_ntlm_challenge({ .negotiate_flags = dc_flags & ~detail::ntlmssp_negotiate_target_info,
+	refused(ldap::testing::encode_ntlm_challenge({ .negotiate_flags = dc_flags & ~detail::ntlmssp_negotiate_target_info,
 			  .server_challenge = spec_server_challenge,
 			  .version = detail::ntlm_version{} }),
 	  ldap::client_errc::unexpected_response,
@@ -1055,7 +1056,7 @@ TEST_CASE("ntlm: a security layer the server does not grant", "[net][sasl][ntlm]
 	REQUIRE(m.run(m.conn.sasl_bind(mech)).has_value());
 	CHECK(m.conn.security_layer() == ldap::sasl_protection::confidentiality);
 	REQUIRE(m.log.received.size() == 2);
-	auto auth = detail::parse_ntlm_authenticate(sasl_creds(m.log.received[1]));
+	auto auth = ldap::testing::parse_ntlm_authenticate(sasl_creds(m.log.received[1]));
 	REQUIRE(auth.has_value());
 	// ALWAYS_SIGN, SIGN, KEY_EXCH and the rest both sides set.
 	CHECK(auth->negotiate_flags == 0x6288'8215u);
@@ -1121,7 +1122,7 @@ auto dc_exported_key(std::string_view negotiate,
   std::string_view authenticate,
   std::string &error) -> detail::ntlm_key
 {
-	auto auth = detail::parse_ntlm_authenticate(authenticate);
+	auto auth = ldap::testing::parse_ntlm_authenticate(authenticate);
 	auto key = ntowfv2("secret", "jdoe", "CORP");
 	if (!auth || !key || auth->nt_challenge_response.size() < 48 || auth->encrypted_random_session_key.size() != 16) {
 		error = "dc: a malformed AUTHENTICATE_MESSAGE";
@@ -1157,7 +1158,7 @@ auto serve_ntlm_layer(net::transport t,
 {
 	net::read_buffer buf;
 	const std::string challenge = dc_challenge(dc_flags | layer_flags);
-	auto first = co_await net::read_message(t, buf, as_server);
+	auto first = co_await ldap::testing::read_message(t, buf, as_server);
 	const auto negotiate = first ? creds_of(*first) : std::nullopt;
 	if (!negotiate) {
 		error = "dc: no NEGOTIATE_MESSAGE";
@@ -1167,7 +1168,7 @@ auto serve_ntlm_layer(net::transport t,
 		error = "dc: write";
 		co_return;
 	}
-	auto second = co_await net::read_message(t, buf, as_server);
+	auto second = co_await ldap::testing::read_message(t, buf, as_server);
 	const auto authenticate = second ? creds_of(*second) : std::nullopt;
 	if (!authenticate) {
 		error = "dc: no AUTHENTICATE_MESSAGE";
@@ -1185,7 +1186,7 @@ auto serve_ntlm_layer(net::transport t,
 		error = "dc: install";
 		co_return;
 	}
-	auto search = co_await net::read_message(t, buf, as_server);
+	auto search = co_await ldap::testing::read_message(t, buf, as_server);
 	if (!search) {
 		error = "dc: search read: " + std::string(search.error().message());
 		co_return;

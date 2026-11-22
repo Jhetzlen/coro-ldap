@@ -8,6 +8,7 @@
 #include "jhetz/ldap/sync.hpp"
 #include "jhetz/ldap/sync_extended_operations.hpp"
 #include "jhetz/ldap/sync_repository.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 #include "server_thread.hpp"
@@ -364,7 +365,7 @@ struct peer_server
 	{
 		net::transport plain = net::transport::wrap(socket_ref{ &peer }, "server");
 		net::read_buffer buf;
-		auto req = co_await net::read_message(plain, buf, as_server);
+		auto req = co_await ldap::testing::read_message(plain, buf, as_server);
 		if (!req) {
 			log.error = "read StartTLS: " + std::string(req.error().message());
 			co_return;
@@ -400,7 +401,7 @@ struct peer_server
 		net::transport secure = net::transport::wrap(socket_ref{ &tls }, "server tls");
 		net::read_buffer tls_buf;
 		while (true) {
-			auto r = co_await net::read_message(secure, tls_buf, as_server);
+			auto r = co_await ldap::testing::read_message(secure, tls_buf, as_server);
 			if (!r) {
 				// The client hung up: close() sends no close_notify, so between
 				// PDUs that reads as stream_truncated rather than eof.
@@ -847,7 +848,8 @@ TEST_CASE("sync: transactions", "[net][sync][transaction]")
 	CHECK(got[1].controls
 		  == std::pmr::vector<ldap::control>{ ldap::control{ ldap::transaction_specification_oid, true, "t1" } });
 	const auto end_of = [](const ldap::message &m) {
-		return ldap::decode_end_transaction_request(*std::get<ldap::extended_request>(m.op).request_value).value();
+		return ldap::testing::decode_end_transaction_request(*std::get<ldap::extended_request>(m.op).request_value)
+		  .value();
 	};
 	CHECK(end_of(got[2]) == ldap::end_transaction_request{ true, "t1" });
 	CHECK(end_of(got[4]) == ldap::end_transaction_request{ false, "t2" });
@@ -901,8 +903,9 @@ TEST_CASE("sync: a transaction's add, modify and modify DN, then abort", "[net][
 	CHECK(got[2].controls == spec);
 	CHECK(got[3].op == ldap::protocol_op{ ldap::modify_dn_request{ jdoe_str, "uid=john" } });
 	CHECK(got[3].controls == spec);
-	CHECK(ldap::decode_end_transaction_request(*std::get<ldap::extended_request>(got[4].op).request_value).value()
-		  == ldap::end_transaction_request{ false, "t1" });
+	CHECK(
+	  ldap::testing::decode_end_transaction_request(*std::get<ldap::extended_request>(got[4].op).request_value).value()
+	  == ldap::end_transaction_request{ false, "t1" });
 }
 
 TEST_CASE("sync: a move-assigned transaction aborts the one it replaces", "[net][sync][transaction]")
@@ -947,7 +950,8 @@ TEST_CASE("sync: a move-assigned transaction aborts the one it replaces", "[net]
 	const auto &got = hang_up(k.c, srv);
 	REQUIRE(got.size() == 5);
 	const auto end_of = [](const ldap::message &m) {
-		return ldap::decode_end_transaction_request(*std::get<ldap::extended_request>(m.op).request_value).value();
+		return ldap::testing::decode_end_transaction_request(*std::get<ldap::extended_request>(m.op).request_value)
+		  .value();
 	};
 	CHECK(end_of(got[2]) == ldap::end_transaction_request{ false, "t1" });
 	CHECK(got[3].controls

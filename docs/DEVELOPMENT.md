@@ -42,6 +42,18 @@ for the codec's headers, against `jhetz::ldap` alone, so a codec header that
 needs Corosio or Capy fails, and `jhetz_ldap_net_header_check` for the
 others; the list of `jhetz::ldap_net` headers is in `tests/CMakeLists.txt`).
 
+The server side of the codec is not in the client libraries: `testing/`
+builds `jhetz::ldap_testing` (request decoding with `testing::decode` and
+`testing::decode_filter`, the request controls a server reads, the response
+controls it writes, NTLM's CHALLENGE_MESSAGE encoder and
+AUTHENTICATE_MESSAGE parser; over `jhetz::ldap`) and, with
+`JHETZ_LDAP_BUILD_NET`, `jhetz::ldap_testing_net` (`testing::read_message`,
+over `jhetz::ldap_net`), only when the tests, fuzzers or benchmarks are
+built, and never installs them (DESIGN.md section 10). The tests, the
+fuzz targets, the benchmarks and the mock servers (`tests/net/mock_ldap.hpp`)
+link them; their headers are under `testing/include/jhetz/ldap/testing/`,
+and they include the shared internal headers of `src/`.
+
 | Option | Default | |
 |---|---|---|
 | `JHETZ_LDAP_BUILD_TESTS` | `ON` | unit tests and the `*_fuzz_replay` tests |
@@ -95,14 +107,14 @@ for p in extra/any/mingw-w64-headers extra/any/mingw-w64-winpthreads extra/x86_6
 done
 ln -sfn /usr/include/openssl $M/deps/openssl; ln -sfn /usr/include/unicode $M/deps/unicode
 I=$M/root/usr/x86_64-w64-mingw32/include; C=$I/c++/$(ls $I/c++ | tail -1); D=$PWD/build/main/_deps
-for f in $(ls src/*.cpp src/*/*.cpp tests/*.cpp tests/net/*.cpp examples/*.cpp fuzz/*_replay.cpp bench/*.cpp \
+for f in $(ls src/*.cpp src/*/*.cpp testing/src/*.cpp tests/*.cpp tests/net/*.cpp examples/*.cpp fuzz/*_replay.cpp bench/*.cpp \
            | grep -v -e trust_store_default -e sasl_gssapi); do
   clang++ --target=x86_64-w64-mingw32 -std=c++23 -fsyntax-only -nostdinc++ -nostdlibinc \
     -isystem $C -isystem $C/x86_64-w64-mingw32 -isystem $C/backward -isystem $I -isystem $M/deps \
     -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX -DWIN32_LEAN_AND_MEAN -DCERT_CHAIN_PARA_HAS_EXTRA_FIELDS \
     -DBOOST_CAPY_NO_LIB -DBOOST_CAPY_STATIC_LINK -DBOOST_COROSIO_HAS_OPENSSL \
     -DBOOST_COROSIO_NO_LIB -DBOOST_COROSIO_STATIC_LINK -DJHETZ_LDAPSEARCH='"jhetz-ldapsearch.exe"' \
-    -Iinclude -isystem $D/corosio-src/include -isystem $D/capy-src/include \
+    -Iinclude -Itesting/include -Isrc -isystem $D/corosio-src/include -isystem $D/capy-src/include \
     -isystem $D/catch2-src/src -isystem $D/catch2-build/generated-includes \
     -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wno-c2y-extensions $f || echo "FAIL $f"
 done
@@ -679,7 +691,7 @@ site, where a NOLINT can silence it. Use Clang for the build directory, with GSS
 cmake -B build/tidy -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug \
   -DJHETZ_LDAP_WITH_GSSAPI=ON -DJHETZ_LDAP_BUILD_BENCH=ON
 cmake --build build/tidy -j8      # once, for the generated files and the dependencies
-run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|tests|examples|fuzz|bench)/.*'
+run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|testing|tests|examples|fuzz|bench)/.*'
 ```
 
 The fuzz targets are checked through their `*_fuzz_replay` builds. A full

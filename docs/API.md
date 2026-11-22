@@ -75,21 +75,23 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   writing anything with invalid_filter (an empty or over-limit filter) or
   encode_error (a value the wire format cannot carry). `peek_message_header`
   reads the message id and protocolOp tag of a PDU without decoding the
-  rest. The response control codecs (`encode_` / `decode_paged_results`,
-  `sort_result`, `vlv_response`, `read_entry`, `end_transaction_request` /
-  `_response`) are for mock servers and tests; `vlv_response::context_id`
+  rest. `encode_paged_results` / `decode_paged_results`,
+  `decode_sort_result`, `decode_vlv_response`, `decode_read_entry`,
+  `encode_end_transaction_request` and `decode_end_transaction_response`
+  are the control and value codecs; `vlv_response::context_id`
   is to be sent back unchanged, and `content_count` in the next
   `vlv_by_offset`. Assigning directly to an optional or variant member
   follows the standard types' rules (a newly engaged value uses its own
   resource), and nested initializer lists are built on the default
   resource first: to avoid it entirely, use the allocator constructor and
   assign the members.
+  `decode()` reads what a server sends: a request operation fails with
+  `unsupported_operation` before anything of it is decoded (the request
+  decoder is the testing target's, not installed: DESIGN.md section 10).
   `decode(encode(m)) == m` exactly, and re-encoding is byte-identical.
-  `decode_options` limits what a peer may send: `from = origin::server`
-  (a client connection) rejects request operations, `origin::client` (a
-  server) rejects responses, before anything is decoded; plus the reader
-  depth and the filter limits; `memory` is the resource everything decoded
-  is allocated from. The types have constructors taking the fields in order
+  `decode_options` limits the reader depth and the decoded strings;
+  `memory` is the resource everything decoded is allocated from. The
+  types have constructors taking the fields in order
   (`message{1, search_request{base, search_scope::whole_subtree, f, {"cn"}}}`);
   they are not aggregates, so designated initializers do not work on them.
 - `jhetz/ldap/content_sync.hpp`: RFC 4533 content synchronization
@@ -104,8 +106,7 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   Info Message, an IntermediateResponse (`sync_info{type = new_cookie /
   refresh_delete / refresh_present / sync_id_set, cookie, refresh_done,
   refresh_deletes, sync_uuids}`). Each fails with a decode error on a
-  malformed value; the `encode_` functions (and `decode_sync_request()`)
-  are for mock servers. Defaults are left out when encoding and accepted
+  malformed value. Defaults are left out when encoding and accepted
   when sent. A server that cannot continue a sync search (a cookie too old
   to resume from, say) ends it with `errc::e_sync_refresh_required` (RFC
   4533 section 3.8): resend it with the cookie of that result's Sync Done
@@ -126,13 +127,12 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   (never text), or parsed once from RFC 4515 text by `filter::raw(text)`,
   which returns `result<filter>` (malformed text fails there, with
   `invalid_filter`). `encode_filter` writes BER straight from the tree;
-  `decode_filter` builds a tree from BER (for a mock server);
   `to_string()` prints canonical RFC 4515 text for logs; `root()` gives a
   read-only view of the nodes. Equality compares trees. `&&`, `||` and `!`
   only add nodes (AND / OR chains are flattened), so combining parsed
   filters cannot change their meaning. Filters nest at most
   `max_filter_depth` (24) levels and have at most `max_filter_elements`
-  (10,000) elements (`filter_limits`): `raw` and `decode_filter` check while
+  (10,000) elements (`filter_limits`): `raw` checks while
   reading, and a builder-made filter beyond them fails with `invalid_filter`
   when encoded. Nodes live in one vector and the strings in one pool (two
   allocations per filter); combining reuses rvalue operands, so a chain
@@ -152,9 +152,7 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   combined from others uses the left operand's memory resource. An
   attribute given to `filters::attr` that is not a valid description (only
   possible with `attribute::unchecked`), or a bad extensible-match rule,
-  throws `std::invalid_argument`. `decode_filter` rejects what has no RFC
-  4515 form (decode_error), so every decoded filter re-encodes to the same
-  tree.
+  throws `std::invalid_argument`.
 - `jhetz/ldap/dn.hpp`: `ldap::dn` (RFC 4514 parse / `to_string`, multi-valued
   RDNs, `parent()`, `child()`, compile-time checked literals). Its `==` is
   syntactic (values exact after unescaping, `cn=A` != `cn=a`); compare as a
@@ -347,8 +345,8 @@ itself needs only ICU.
     views valid until the transport is destroyed or a StartTLS handshake
     is redone.
 - `jhetz/ldap/net/message_io.hpp`: `read_message(transport, read_buffer,
-  options)` returns the next complete `ldap::message`, decoded with
-  `origin::server` by default; bytes of the following PDUs stay in the
+  options)` returns the next complete `ldap::message` a server sent (a
+  request operation fails with `unsupported_operation`); bytes of the following PDUs stay in the
   `read_buffer`. A PDU that is not a SEQUENCE or declares more than
   `max_message_size` (16 MiB default) is rejected from its header, before its
   body is read; the buffer grows to one PDU (or 16 KiB) at most. A PDU that
@@ -516,7 +514,7 @@ itself needs only ICU.
   fail with `client_errc::not_sent`. Held requests that only discard server state are still sent:
   AbandonRequests, a destroyed transaction's abort and a paged search's
   release.
-  Every response is decoded with `origin::server` and must answer an
+  Every response is decoded with `ldap::decode` and must answer an
   outstanding request (else `client_errc::unexpected_response`);
   IntermediateResponses (RFC 4511 section 4.13) are skipped unless the
   request sets `.intermediate_responses` (`search_params`,
@@ -704,9 +702,9 @@ itself needs only ICU.
   abort. A commit whose answer is lost has an unknown outcome. A bind or
   unbind aborts every transaction of the connection (RFC 5805 section
   3.5); transactions do not nest. The codecs (`end_transaction_request`,
-  `update_controls`, `end_transaction_response`, `encode_` /
-  `decode_end_transaction_request` / `_response`, the OIDs) are in
-  `message.hpp`;
+  `update_controls`, `end_transaction_response`,
+  `encode_end_transaction_request`, `decode_end_transaction_response`,
+  the OIDs) are in `message.hpp`;
   `ldap::search_paged(conn, params, page_size, max_pages =
   ldap::search_paged_default_max_pages, mr)` (a free function over
   `search_stream()`; `ldap::search_paged(client, ...)` runs it on one shared
@@ -1093,16 +1091,14 @@ itself needs only ICU.
   3876: `.values_return_filter`, one `ldap::filter` per item; and, or, not
   and dnAttributes, which RFC 3876 excludes, fail with invalid_filter when
   encoded; `parse_values_return_filter("((mail=*)(cn=x))")` reads the RFC
-  3876 string form, `decode_matched_values` reads the control back for mock
-  servers), `virtual_list_view` (draft-ietf-ldapext-ldapv3-vlv-09:
+  3876 string form), `virtual_list_view` (draft-ietf-ldapext-ldapv3-vlv-09:
   `.before_count`, `.after_count`, `.target` = `vlv_by_offset{.offset,
   .content_count}` or `vlv_greater_than_or_equal{.value}`, `.context_id`;
   needs a `server_side_sort` on the same search, else encode_error before
-  sending; `decode_virtual_list_view` for mock servers),
+  sending),
   `transaction_specification` (RFC 5805: `.identifier`, always critical,
   on add, modify, modify DN and delete; with a proxied authorization
-  control, typed or raw, encode_error before sending;
-  `decode_transaction_specification` for mock servers)) or a raw
+  control, typed or raw, encode_error before sending)) or a raw
   `ldap::control`.
   Each operation's params take its own list: `search_controls`,
   `add_controls`, `modify_controls`, `modify_dn_controls`, `del_controls`,
@@ -1126,10 +1122,9 @@ itself needs only ICU.
   (`vlv_response{target_position, content_count, result_code,
   context_id}`), `find_pre_read` /
   `find_post_read` (the entry as an `ldap::entry`). Each returns nullopt when
-  the control is absent and an error when it is malformed. The response
-  control codecs (`encode_` / `decode_sort_result`, `encode_` /
-  `decode_vlv_response`, `encode_` / `decode_read_entry`) are in
-  `message.hpp`, for mock servers. The sort result and the VLV response
+  the control is absent and an error when it is malformed. Their decoders
+  (`decode_sort_result`, `decode_vlv_response`, `decode_read_entry`) are
+  in `message.hpp`. The sort result and the VLV response
   come with the SearchResultDone: `search_result::controls`, or
   `search_stream::controls()`, which keeps them when
   the search fails, e.g. with `errc::virtual_list_view_error` (76), whose
@@ -1857,8 +1852,7 @@ package component `ad`:
   response `ad::dirsync_response{.more_results, .unused, .cookie_server}`
   from `ad::decode_dirsync_response(c)` or
   `ad::find_dirsync_response(controls)`; and
-  `ad::encode_dirsync_request` / `decode_dirsync_request` /
-  `encode_dirsync_response` for servers and tests. Malformed values are
+  `ad::encode_dirsync_request`. Malformed values are
   `decode_error`.
 - `jhetz/ldap/ad/syntax.hpp` (`jhetz::ldap`): `ad::large_integer_syntax`,
   the Large Integer syntax OID (1.2.840.113556.1.4.906), which
@@ -1875,8 +1869,7 @@ and are allocator-aware: the message model (every operation, `ldap_result`,
 an allocator constructor, allocator-extended copy and move constructors, and
 assignment that keeps the target's resource (also for their `std::optional`
 and `std::variant` members). Parsing and decoding take the resource:
-`decode_options::memory`, `filter::raw(text, mr)`, `decode_filter(r, limits,
-mr)`, `dn::parse(text, mr)`, `rdn::parse(text, mr)`, `attribute::parse(text, mr)`,
+`decode_options::memory`, `filter::raw(text, mr)`, `dn::parse(text, mr)`, `rdn::parse(text, mr)`, `attribute::parse(text, mr)`,
 `url::parse(text, mr)`, `filters::attr(name, alloc)`, `encode(m, mr)`.
 `read_buffer`, `connect` and `transport::wrap` take a `memory_resource*` too.
 The defaults are the default resource, i.e. the heap, so nothing changes

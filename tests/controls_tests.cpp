@@ -1,4 +1,5 @@
 #include "jhetz/ldap/controls.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 
 #include "counting_resource.hpp"
 #include "test_util.hpp"
@@ -245,11 +246,11 @@ TEST_CASE("server side sort request control", "[controls][sort]")
 
 TEST_CASE("sort result response control", "[controls][sort]")
 {
-	const auto ok = ldap::encode_sort_result(ldap::sort_result{ 0 });
+	const auto ok = ldap::testing::encode_sort_result(ldap::sort_result{ 0 });
 	REQUIRE(ok.has_value());
 	CHECK(ok->type == ldap::sort_response_oid);
 	CHECK(value_hex(*ok) == "30 03 0A 01 00");
-	const auto failed = ldap::encode_sort_result({ 18, "cn" }, true);
+	const auto failed = ldap::testing::encode_sort_result({ 18, "cn" }, true);
 	REQUIRE(failed.has_value());
 	CHECK(failed->criticality);
 	CHECK(value_hex(*failed) == "30 07 0A 01 12 80 02 63 6E");
@@ -309,7 +310,7 @@ TEST_CASE("find_sort_result", "[controls][sort]")
 	REQUIRE(r.has_value());
 	CHECK_FALSE(r->has_value());
 
-	std::pmr::vector<ldap::control> some{ ldap::control{ "1.2.3" }, *ldap::encode_sort_result({ 53, "sn" }) };
+	std::pmr::vector<ldap::control> some{ ldap::control{ "1.2.3" }, *ldap::testing::encode_sort_result({ 53, "sn" }) };
 	auto s = ldap::find_sort_result(some);
 	REQUIRE(s.has_value());
 	REQUIRE(s->has_value());
@@ -378,7 +379,7 @@ TEST_CASE("matched values request control", "[controls][matched_values]")
 			 " A6 06 04 01 6E 04 01 32 87 02 63 6E A8 07 04 02 63 6E 04 01 63"
 			 " A9 11 81 08 32 2E 35 2E 31 33 2E 35 82 02 63 6E 83 01 64");
 	// ... and decodes back to the same items, with the criticality.
-	const auto back = ldap::decode_matched_values(*all);
+	const auto back = ldap::testing::decode_matched_values(*all);
 	REQUIRE(back.has_value());
 	CHECK(back->critical);
 	CHECK(*back
@@ -495,13 +496,13 @@ TEST_CASE("parse_values_return_filter", "[controls][matched_values]")
 TEST_CASE("decode_matched_values", "[controls][matched_values]")
 {
 	const auto c = with_value(ldap::matched_values_oid, "30 0B A3 09 04 04 6D 61 69 6C 04 01 78");
-	const auto v = ldap::decode_matched_values(c);
+	const auto v = ldap::testing::decode_matched_values(c);
 	REQUIRE(v.has_value());
 	CHECK_FALSE(v->critical);
 	CHECK(*v == ldap::matched_values{ .values_return_filter = { ldap::filters::attr("mail") == "x" } });
 
 	const auto context_of = [](const ldap::control &bad) {
-		auto r = ldap::decode_matched_values(bad);
+		auto r = ldap::testing::decode_matched_values(bad);
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::protocol_error);
 		return std::string(r.error().context);
@@ -563,8 +564,8 @@ TEST_CASE("matched values: the filter element limit", "[controls][matched_values
 		REQUIRE(ldap::encode_filter(list, many_substrings(ldap::max_filter_elements - 1)).has_value());
 		REQUIRE(ldap::encode_filter(list, attr("cn") == "x").has_value());
 	});
-	auto r =
-	  ldap::decode_matched_values(ldap::control{ ldap::matched_values_oid, false, ldap::detail::as_text(w.bytes()) });
+	auto r = ldap::testing::decode_matched_values(
+	  ldap::control{ ldap::matched_values_oid, false, ldap::detail::as_text(w.bytes()) });
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::client_errc::decode_error);
 	CHECK(std::string(r.error().context).starts_with("matched values: more than 10000 filter elements at offset "));
@@ -650,16 +651,16 @@ TEST_CASE("decode_virtual_list_view", "[controls][vlv]")
 	for (const auto &v : all) {
 		const auto c = ldap::to_control(v);
 		REQUIRE(c.has_value());
-		CHECK(ldap::decode_virtual_list_view(*c).value() == v);
+		CHECK(ldap::testing::decode_virtual_list_view(*c).value() == v);
 	}
 	// Unknown trailing elements are skipped.
-	CHECK(ldap::decode_virtual_list_view(
+	CHECK(ldap::testing::decode_virtual_list_view(
 			with_value(ldap::vlv_request_oid, "30 14 02 01 00 02 01 00 A0 09 02 01 01 02 01 00 01 01 00 02 01 07"))
 			.value()
 		  == ldap::virtual_list_view{});
 
 	const auto context_of = [](const ldap::control &bad) {
-		auto r = ldap::decode_virtual_list_view(bad);
+		auto r = ldap::testing::decode_virtual_list_view(bad);
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::protocol_error);
 		return std::string(r.error().context);
@@ -690,7 +691,7 @@ TEST_CASE("virtual list view response control", "[controls][vlv]")
 {
 	// slapd's answer to 1/1/5/0 over 250 sorted entries.
 	const ldap::vlv_response at5{ 5, 250, 0, sssvlv_context() };
-	const auto c = ldap::encode_vlv_response(at5);
+	const auto c = ldap::testing::encode_vlv_response(at5);
 	REQUIRE(c.has_value());
 	CHECK(c->type == ldap::vlv_response_oid);
 	CHECK(c->type == "2.16.840.1.113730.3.4.10");
@@ -717,7 +718,7 @@ TEST_CASE("virtual list view response control", "[controls][vlv]")
 	CHECK_FALSE(range->is_success());
 
 	// No contextID, an empty one, unknown trailing elements, unknown codes.
-	CHECK(value_hex(ldap::encode_vlv_response({ 1, 10 }, true).value()) == "30 09 02 01 01 02 01 0A 0A 01 00");
+	CHECK(value_hex(ldap::testing::encode_vlv_response({ 1, 10 }, true).value()) == "30 09 02 01 01 02 01 0A 0A 01 00");
 	const auto none = ldap::decode_vlv_response(with_value(ldap::vlv_response_oid, "30 09 02 01 01 02 01 0A 0A 01 3C"));
 	REQUIRE(none.has_value());
 	CHECK(*none == ldap::vlv_response{ 1, 10, 60 });
@@ -726,9 +727,9 @@ TEST_CASE("virtual list view response control", "[controls][vlv]")
 	  ldap::decode_vlv_response(with_value(ldap::vlv_response_oid, "30 0E 02 01 01 02 01 0A 0A 01 00 04 00 01 01 FF"));
 	REQUIRE(empty.has_value());
 	CHECK(*empty == ldap::vlv_response{ 1, 10, 0, "" });
-	CHECK(value_hex(ldap::encode_vlv_response(*empty).value()) == "30 0B 02 01 01 02 01 0A 0A 01 00 04 00");
+	CHECK(value_hex(ldap::testing::encode_vlv_response(*empty).value()) == "30 0B 02 01 01 02 01 0A 0A 01 00 04 00");
 
-	auto negative = ldap::encode_vlv_response({ -1, 10 });
+	auto negative = ldap::testing::encode_vlv_response({ -1, 10 });
 	REQUIRE_FALSE(negative.has_value());
 	CHECK(negative.error().code == ldap::client_errc::encode_error);
 	CHECK(negative.error().context == "vlv response: targetPosition -1 or contentCount 10 is negative");
@@ -752,12 +753,12 @@ TEST_CASE("virtual list view response control", "[controls][vlv]")
 
 TEST_CASE("find_vlv_response", "[controls][vlv][pmr]")
 {
-	const std::pmr::vector<ldap::control> none{ *ldap::encode_sort_result(ldap::sort_result{ 0 }) };
+	const std::pmr::vector<ldap::control> none{ *ldap::testing::encode_sort_result(ldap::sort_result{ 0 }) };
 	CHECK_FALSE(ldap::find_vlv_response(none).value().has_value());
 
 	jhetz::ldap::test::counting_resource mr;
-	const std::pmr::vector<ldap::control> some{ *ldap::encode_sort_result(ldap::sort_result{ 0 }),
-		*ldap::encode_vlv_response({ 3, 100, 0, "ctx" }) };
+	const std::pmr::vector<ldap::control> some{ *ldap::testing::encode_sort_result(ldap::sort_result{ 0 }),
+		*ldap::testing::encode_vlv_response({ 3, 100, 0, "ctx" }) };
 	auto r = ldap::find_vlv_response(some, &mr);
 	REQUIRE(r.has_value());
 	REQUIRE(r->has_value());
@@ -840,13 +841,13 @@ auto sample_entry() -> ldap::search_result_entry
 TEST_CASE("pre-read and post-read response controls", "[controls][read_entry]")
 {
 	const auto e = sample_entry();
-	const auto post = ldap::encode_read_entry(ldap::post_read_oid, e);
+	const auto post = ldap::testing::encode_read_entry(ldap::post_read_oid, e);
 	REQUIRE(post.has_value());
 	CHECK(post->type == ldap::post_read_oid);
 	// The value is a whole SearchResultEntry, [APPLICATION 4].
 	CHECK(value_hex(*post).starts_with("64 "));
 	CHECK(ldap::decode_read_entry(*post).value() == e);
-	const auto pre = ldap::encode_read_entry(ldap::pre_read_oid, e, true);
+	const auto pre = ldap::testing::encode_read_entry(ldap::pre_read_oid, e, true);
 	REQUIRE(pre.has_value());
 	CHECK(pre->criticality);
 	CHECK(ldap::decode_read_entry(*pre).value() == e);
@@ -858,7 +859,7 @@ TEST_CASE("pre-read and post-read response controls", "[controls][read_entry]")
 	CHECK(ldap::decode_read_entry(with_value(ldap::pre_read_oid, "64 0A 04 03 63 3D 78 30 00 04 01 7A")).value()
 		  == ldap::search_result_entry{ "c=x", {} });
 
-	auto wrong = ldap::encode_read_entry("1.2.3", e);
+	auto wrong = ldap::testing::encode_read_entry("1.2.3", e);
 	REQUIRE_FALSE(wrong.has_value());
 	CHECK(wrong.error().code == ldap::client_errc::encode_error);
 }
@@ -885,7 +886,7 @@ TEST_CASE("malformed pre-read and post-read controls", "[controls][read_entry]")
 	CHECK(code_of(with_value(ldap::post_read_oid, "64 0B 04 03 63 3D 78 30 04 30 02 04 00"))
 		  == ldap::client_errc::decode_error);
 	// Depth and element limits apply.
-	const auto big = ldap::encode_read_entry(ldap::pre_read_oid, sample_entry()).value();
+	const auto big = ldap::testing::encode_read_entry(ldap::pre_read_oid, sample_entry()).value();
 	CHECK(code_of(big, { .max_elements = 3 }) == ldap::client_errc::message_too_large);
 	CHECK(code_of(big, { .max_depth = 2 }) == ldap::client_errc::nesting_too_deep);
 	CHECK(ldap::decode_read_entry(big, { .max_elements = 6 }).has_value());
@@ -896,7 +897,7 @@ TEST_CASE("malformed pre-read and post-read controls", "[controls][read_entry]")
 	  ldap::decode_read_entry(ldap::control{ ldap::pre_read_oid }).error().context == "pre-read: control has no value");
 	CHECK(ldap::decode_read_entry(with_value(ldap::post_read_oid, "64 07 04 03 63 3D 78 30 00 00 00")).error().context
 		  == "post-read: ber: 2 unexpected trailing bytes at offset 9");
-	CHECK(ldap::encode_read_entry("1.2.3", sample_entry()).error().context
+	CHECK(ldap::testing::encode_read_entry("1.2.3", sample_entry()).error().context
 		  == "read entry control: 1.2.3 is not pre-read or post-read");
 }
 
@@ -910,7 +911,7 @@ TEST_CASE("control errors show the control type sanitized", "[controls]")
 		  == "sort result: control type is " + shown + ", not 1.2.840.113556.1.4.474");
 	CHECK(std::string(ldap::decode_read_entry(ldap::control{ type }).error().context)
 		  == "read entry: control type is " + shown + ", not pre-read or post-read");
-	CHECK(std::string(ldap::encode_read_entry(type, sample_entry()).error().context)
+	CHECK(std::string(ldap::testing::encode_read_entry(type, sample_entry()).error().context)
 		  == "read entry control: " + shown + " is not pre-read or post-read");
 	// Cut at 64 bytes, never inside a character.
 	CHECK(std::string(ldap::decode_sort_result(ldap::control{ std::string(63, '1') + "\xC3\xA9" }).error().context)
@@ -920,8 +921,10 @@ TEST_CASE("control errors show the control type sanitized", "[controls]")
 TEST_CASE("find_pre_read and find_post_read", "[controls][read_entry]")
 {
 	const std::pmr::vector<ldap::control> both{ ldap::control{ "1.2.3" },
-		*ldap::encode_read_entry(ldap::pre_read_oid, ldap::search_result_entry{ "uid=a", { { "sn", { "Old" } } } }),
-		*ldap::encode_read_entry(ldap::post_read_oid, ldap::search_result_entry{ "uid=a", { { "sn", { "New" } } } }) };
+		*ldap::testing::encode_read_entry(
+		  ldap::pre_read_oid, ldap::search_result_entry{ "uid=a", { { "sn", { "Old" } } } }),
+		*ldap::testing::encode_read_entry(
+		  ldap::post_read_oid, ldap::search_result_entry{ "uid=a", { { "sn", { "New" } } } }) };
 	auto pre = ldap::find_pre_read(both);
 	REQUIRE(pre.has_value());
 	REQUIRE(pre->has_value());
@@ -960,8 +963,8 @@ TEST_CASE("new typed controls and their results use the given resource", "[contr
 	}
 
 	jhetz::ldap::test::counting_resource decoded;
-	const std::pmr::vector<ldap::control> in{ *ldap::encode_sort_result({ 18, "cn" }),
-		*ldap::encode_read_entry(ldap::post_read_oid, sample_entry()) };
+	const std::pmr::vector<ldap::control> in{ *ldap::testing::encode_sort_result({ 18, "cn" }),
+		*ldap::testing::encode_read_entry(ldap::post_read_oid, sample_entry()) };
 	auto s = ldap::find_sort_result(in, &decoded);
 	REQUIRE(s.has_value());
 	REQUIRE(s->has_value());
@@ -999,7 +1002,7 @@ auto message_hex(const ldap::message &m) -> std::string
 auto decoded(std::string_view message_hex) -> ldap::message
 {
 	const auto b = from_hex(message_hex);
-	auto m = ldap::decode(b);
+	auto m = ldap::testing::decode(b);
 	REQUIRE(m.has_value());
 	return std::move(*m);
 }
@@ -1038,7 +1041,7 @@ TEST_CASE("server side sort controls match OpenLDAP", "[controls][sort][openldap
 	REQUIRE(sorted->has_value());
 	CHECK(**sorted == ldap::sort_result{ 0 });
 	// ... which is what encode_sort_result produces.
-	CHECK(ldap::encode_sort_result(ldap::sort_result{ 0 }).value() == done.controls.at(0));
+	CHECK(ldap::testing::encode_sort_result(ldap::sort_result{ 0 }).value() == done.controls.at(0));
 }
 
 TEST_CASE("virtual list view controls match OpenLDAP", "[controls][vlv][openldap]")
@@ -1077,7 +1080,7 @@ TEST_CASE("virtual list view controls match OpenLDAP", "[controls][vlv][openldap
 	REQUIRE(window.has_value());
 	REQUIRE(window->has_value());
 	CHECK(**window == ldap::vlv_response{ 5, 250, 0, sssvlv_context() });
-	CHECK(ldap::encode_vlv_response(**window).value() == done.controls.at(1));
+	CHECK(ldap::testing::encode_vlv_response(**window).value() == done.controls.at(1));
 }
 
 TEST_CASE("assertion and pre/post-read controls match OpenLDAP", "[controls][assertion][read_entry][openldap]")
@@ -1117,11 +1120,13 @@ TEST_CASE("assertion and pre/post-read controls match OpenLDAP", "[controls][ass
 	CHECK(*(*after)->find("sn") == ldap::string_list{ nihon });
 	// encode_read_entry gives slapd's control values back.
 	CHECK(
-	  ldap::encode_read_entry(ldap::pre_read_oid, ldap::search_result_entry{ cap_dn, { { "sn", { aero } } } }).value()
+	  ldap::testing::encode_read_entry(ldap::pre_read_oid, ldap::search_result_entry{ cap_dn, { { "sn", { aero } } } })
+		.value()
 	  == response.controls.at(0));
-	CHECK(
-	  ldap::encode_read_entry(ldap::post_read_oid, ldap::search_result_entry{ cap_dn, { { "sn", { nihon } } } }).value()
-	  == response.controls.at(1));
+	CHECK(ldap::testing::encode_read_entry(
+			ldap::post_read_oid, ldap::search_result_entry{ cap_dn, { { "sn", { nihon } } } })
+			.value()
+		  == response.controls.at(1));
 
 	// The add's post-read (two attributes, in the server's order).
 	const auto add_selection = ldap::to_control(ldap::post_read{ .attributes = { "sn", "cn" } });
@@ -1158,11 +1163,11 @@ TEST_CASE("transaction specification control", "[controls][transaction]")
 	const auto c = ldap::to_control(ldap::transaction_specification{ .identifier = std::string("t\0x", 3) });
 	REQUIRE(c.has_value());
 	CHECK(*c == ldap::control{ "1.3.6.1.1.21.2", true, std::string_view("t\0x", 3) });
-	CHECK(ldap::decode_transaction_specification(*c)
+	CHECK(ldap::testing::decode_transaction_specification(*c)
 		  == ldap::transaction_specification{ .identifier = std::string("t\0x", 3) });
 
 	const auto context_of = [](const ldap::control &bad) {
-		auto r = ldap::decode_transaction_specification(bad);
+		auto r = ldap::testing::decode_transaction_specification(bad);
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::decode_error);
 		return std::string(r.error().context);

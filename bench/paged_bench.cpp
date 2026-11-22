@@ -5,6 +5,7 @@
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/net/transport.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/ex/run_async.hpp>
@@ -53,10 +54,10 @@ auto offset_of(std::string_view cookie) -> std::size_t
 auto serve(net::transport t, std::size_t total) -> capy::task<void>
 {
 	net::read_buffer buf;
-	const net::read_options as_server{ .decode = { .from = ldap::origin::client } };
+	const ldap::testing::read_options as_server{};
 	std::vector<std::byte> bytes;
 	while (true) {
-		auto r = co_await net::read_message(t, buf, as_server);
+		auto r = co_await ldap::testing::read_message(t, buf, as_server);
 		if (!r || !std::holds_alternative<ldap::search_request>(r->op)) {
 			co_return;
 		}

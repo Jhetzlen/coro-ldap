@@ -3,6 +3,7 @@
 #include "control_util.hpp"
 #include "filter_ast.hpp"
 #include "format_util.hpp"
+#include "message_codec.hpp"
 #include "pmr_util.hpp"
 
 #include <algorithm>
@@ -23,7 +24,6 @@ using detail::next_is;
 using detail::optional_string;
 using detail::optional_with;
 using detail::skip_rest;
-using detail::value_control;
 using detail::variant_with;
 
 namespace {
@@ -32,16 +32,6 @@ namespace {
 	{
 		// Each element built straight on `alloc`.
 		return { list.begin(), list.end(), alloc };
-	}
-
-	// `before`, the peer's `text` sanitized and cut to 64 bytes, then `after`.
-	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-	auto sanitized_context(std::string_view before, std::string_view text, std::string_view after) -> std::string
-	{
-		std::string out(before);
-		detail::append_sanitized(out, text, 64);
-		out += after;
-		return out;
 	}
 
 }// namespace
@@ -439,22 +429,8 @@ auto message::operator=(message &&other) -> message &
 namespace {
 
 	namespace op_tag = detail::op_tag;
-
-	// Context tag numbers of operation fields (RFC 4511 sections 4.2.2 and
-	// 4.12).
-	namespace field_tag {
-		constexpr std::uint8_t server_sasl_creds = 7;// BindResponse
-		constexpr std::uint8_t response_name = 10;// ExtendedResponse
-		constexpr std::uint8_t response_value = 11;
-	}// namespace field_tag
-
-	// BindRequest's version INTEGER (1 .. 127) (RFC 4511 section 4.2).
-	constexpr std::int64_t max_bind_version = 127;
-
-	auto bad(std::string_view what, std::size_t offset) -> std::unexpected<error>
-	{
-		return fail(client_errc::decode_error, detail::format("message: {} at offset {}", what, offset));
-	}
+	namespace field_tag = detail::field_tag;
+	using detail::max_bind_version;
 
 	// ---------------------------------------------------------------- encoder
 
@@ -727,867 +703,9 @@ namespace {
 		}
 	};
 
-	// ---------------------------------------------------------------- decoder
-
-	auto read_ranged(ber::reader &r,
-	  ber::tag t,
-	  std::int64_t lo,
-	  std::int64_t hi,
-	  const char *what,
-	  bool enumerated = false) -> result<std::int32_t>
-	{
-		const std::size_t offset = r.offset();
-		auto copy = r;
-		auto v = enumerated ? copy.read_enumerated(t) : copy.read_integer(t);
-		if (!v) {
-			return std::unexpected(std::move(v.error()));
-		}
-		if (*v < lo || *v > hi) {
-			return bad(detail::format("{} {} outside {}..{}", what, *v, lo, hi), offset);
-		}
-		r = copy;
-		return static_cast<std::int32_t>(*v);
-	}
-
-	using alloc_t = std::pmr::polymorphic_allocator<>;
-
-	// Leading elements of tag `t` and at least `min_size` bytes, up to `limit`,
-	// to reserve vectors exactly.
-	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-	auto count_elements(ber::reader r, ber::tag t, std::size_t min_size, std::size_t limit) -> std::size_t
-	{
-		std::size_t n = 0;
-		while (!r.empty() && n < limit) {
-			auto e = r.read();
-			if (!e || e->t != t || e->size() < min_size) {
-				break;
-			}
-			++n;
-		}
-		return n;
-	}
-
-	// Smallest valid encodings: an OCTET STRING `04 00`, a PartialAttribute
-	// `30 04 04 00 31 00`.
-	constexpr std::size_t min_value_size = 2;
-	constexpr std::size_t min_attribute_size = 6;
-
-	// Decodes into `a` (decode_options::memory), moving the parts in.
-	class decoder
-	{
-	  public:
-		explicit decoder(const decode_options &options) : options_(&options), a_(options.memory) {}
-
-		// The value of a pre-read / post-read response control: exactly one
-		// SearchResultEntry.
-		auto run_entry(std::span<const std::byte> bytes) -> result<search_result_entry>
-		{
-			ber::reader top(bytes, options_->max_depth);
-			auto op = read_search_result_entry(top, ber::application(op_tag::search_result_entry));
-			if (!op) {
-				return std::unexpected(std::move(op.error()));
-			}
-			if (auto done = top.expect_end(); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			return std::move(std::get<search_result_entry>(*op));
-		}
-
-		// txnEndRes (RFC 5805 section 2.3).
-		auto run_end_transaction(std::span<const std::byte> bytes) -> result<end_transaction_response>
-		{
-			ber::reader top(bytes, options_->max_depth);
-			auto r = top.enter();
-			if (!r) {
-				return std::unexpected(std::move(r.error()));
-			}
-			if (auto done = top.expect_end(); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			end_transaction_response out(a_);
-			if (next_is(*r, ber::tags::integer)) {
-				auto id = read_ranged(*r, ber::tags::integer, 0, max_int, "messageID");
-				if (!id) {
-					return std::unexpected(std::move(id.error()));
-				}
-				out.message_id = *id;
-			}
-			if (next_is(*r, ber::tags::sequence)) {
-				auto list = r->enter();
-				if (!list) {
-					return std::unexpected(std::move(list.error()));
-				}
-				while (!list->empty()) {
-					auto u = list->enter();
-					if (!u) {
-						return std::unexpected(std::move(u.error()));
-					}
-					update_controls item(a_);
-					auto id = read_ranged(*u, ber::tags::integer, 0, max_int, "updateControls messageID");
-					if (!id) {
-						return std::unexpected(std::move(id.error()));
-					}
-					item.message_id = *id;
-					// Controls ::= SEQUENCE OF control Control (RFC 4511
-					// section 4.1.11), here with its universal tag.
-					auto controls = u->enter();
-					if (!controls) {
-						return std::unexpected(std::move(controls.error()));
-					}
-					while (!controls->empty()) {
-						auto c = read_control(*controls);
-						if (!c) {
-							return std::unexpected(std::move(c.error()));
-						}
-						item.controls.push_back(std::move(*c));
-					}
-					if (auto done = skip_rest(*u); !done) {
-						return std::unexpected(std::move(done.error()));
-					}
-					out.updates_controls.push_back(std::move(item));
-				}
-			}
-			if (auto done = skip_rest(*r); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			return out;
-		}
-
-		auto run(std::span<const std::byte> bytes) -> result<message>
-		{
-			ber::reader top(bytes, options_->max_depth);
-			auto r = top.enter();
-			if (!r) {
-				return std::unexpected(std::move(r.error()));
-			}
-			if (auto done = top.expect_end(); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			message m(a_);
-			auto id = read_ranged(*r, ber::tags::integer, 0, max_int, "message id");
-			if (!id) {
-				return std::unexpected(std::move(id.error()));
-			}
-			m.id = *id;
-			// RFC 4511 section 4.1.1: id 0 is reserved for unsolicited notifications.
-			if (*id == 0 && !r->empty()) {
-				auto t = r->peek_tag();
-				if (t && t->cls == ber::tag_class::application && is_request(t->number)) {
-					return bad("request with message id 0", r->offset());
-				}
-			}
-			auto op = read_op(*r);
-			if (!op) {
-				return std::unexpected(std::move(op.error()));
-			}
-			m.op = std::move(*op);// same resource: moved, not copied
-			if (next_is(*r, ber::context(0))) {
-				auto list = r->enter(ber::context(0));
-				if (!list) {
-					return std::unexpected(std::move(list.error()));
-				}
-				while (!list->empty()) {
-					auto c = read_control(*list);
-					if (!c) {
-						return std::unexpected(std::move(c.error()));
-					}
-					m.controls.push_back(std::move(*c));
-				}
-			}
-			if (auto done = skip_rest(*r); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			return m;
-		}
-
-	  private:
-		auto str(ber::reader &r, ber::tag t = ber::tags::octet_string) -> result<std::pmr::string>
-		{
-			if (strings_ == options_->max_elements) [[unlikely]] {
-				return too_many_elements(r.offset());
-			}
-			// Counted before reading (a failed read ends the decode anyway),
-			// so the result is returned directly, not copied.
-			++strings_;
-			return r.read_string(t, a_.resource());
-		}
-
-		// Kept out of str(), the hottest decoding path.
-		[[nodiscard]] auto too_many_elements(std::size_t offset) const -> std::unexpected<error>
-		{
-			return fail(client_errc::message_too_large,
-			  detail::format("message: more than {} elements at offset {}", options_->max_elements, offset));
-		}
-
-		// Elements str() may still decode.
-		[[nodiscard]] auto budget() const noexcept -> std::size_t { return options_->max_elements - strings_; }
-
-		auto optional_str(ber::reader &r, ber::tag t) -> result<std::optional<std::pmr::string>>
-		{
-			if (!next_is(r, t)) {
-				return std::optional<std::pmr::string>{};
-			}
-			auto s = str(r, t);
-			if (!s) {
-				return std::unexpected(std::move(s.error()));
-			}
-			return std::optional<std::pmr::string>{ std::move(*s) };
-		}
-
-		// COMPONENTS OF LDAPResult: the fields are inline in the op's SEQUENCE.
-		auto read_result(ber::reader &r, ldap_result &out) -> result<void>
-		{
-			auto code = read_ranged(r,
-			  ber::tags::enumerated,
-			  std::numeric_limits<std::int32_t>::min(),
-			  std::numeric_limits<std::int32_t>::max(),
-			  "resultCode",
-			  true);
-			if (!code) {
-				return std::unexpected(std::move(code.error()));
-			}
-			auto matched = str(r);
-			if (!matched) {
-				return std::unexpected(std::move(matched.error()));
-			}
-			auto diag = str(r);
-			if (!diag) {
-				return std::unexpected(std::move(diag.error()));
-			}
-			out.result_code = *code;
-			out.matched_dn = std::move(*matched);
-			out.diagnostic_message = std::move(*diag);
-			if (next_is(r, ber::context(3))) {
-				auto ref = r.enter(ber::context(3));
-				if (!ref) {
-					return std::unexpected(std::move(ref.error()));
-				}
-				while (!ref->empty()) {
-					auto uri = str(*ref);
-					if (!uri) {
-						return std::unexpected(std::move(uri.error()));
-					}
-					out.referral.push_back(std::move(*uri));
-				}
-			}
-			return {};
-		}
-
-		template<class T> auto result_only(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<T>, a_);
-			if (auto done = read_result(*o, std::get<T>(op).result); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			if (auto done = skip_rest(*o); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			return op;
-		}
-
-		auto read_attribute(ber::reader &r, partial_attribute &out) -> result<void>
-		{
-			auto pa = r.enter();
-			if (!pa) {
-				return std::unexpected(std::move(pa.error()));
-			}
-			auto type = str(*pa);
-			if (!type) {
-				return std::unexpected(std::move(type.error()));
-			}
-			auto vals = pa->enter(ber::tags::set);
-			if (!vals) {
-				return std::unexpected(std::move(vals.error()));
-			}
-			out.type = std::move(*type);
-			out.values.reserve(count_elements(*vals, ber::tags::octet_string, min_value_size, budget()));
-			while (!vals->empty()) {
-				auto v = str(*vals);
-				if (!v) {
-					return std::unexpected(std::move(v.error()));
-				}
-				out.values.push_back(std::move(*v));
-			}
-			if (auto done = skip_rest(*pa); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			return {};
-		}
-
-		auto read_attributes(ber::reader &r, std::pmr::vector<partial_attribute> &out) -> result<void>
-		{
-			auto list = r.enter();
-			if (!list) {
-				return std::unexpected(std::move(list.error()));
-			}
-			out.reserve(count_elements(*list, ber::tags::sequence, min_attribute_size, budget()));
-			while (!list->empty()) {
-				if (auto done = read_attribute(*list, out.emplace_back()); !done) {
-					return std::unexpected(std::move(done.error()));
-				}
-			}
-			return {};
-		}
-
-		auto read_bind_request(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<bind_request>, a_);
-			auto &b = std::get<bind_request>(op);
-			auto version = read_ranged(*o, ber::tags::integer, 1, max_bind_version, "bind version");
-			if (!version) {
-				return std::unexpected(std::move(version.error()));
-			}
-			auto name = str(*o);
-			if (!name) {
-				return std::unexpected(std::move(name.error()));
-			}
-			b.version = *version;
-			b.name = std::move(*name);
-			const std::size_t auth_at = o->offset();
-			if (next_is(*o, ber::context(0))) {
-				auto password = str(*o, ber::context(0));
-				if (!password) {
-					return std::unexpected(std::move(password.error()));
-				}
-				std::get<simple_auth>(b.authentication).password = std::move(*password);
-			} else if (next_is(*o, ber::context(3))) {
-				auto s = o->enter(ber::context(3));
-				if (!s) {
-					return std::unexpected(std::move(s.error()));
-				}
-				auto mechanism = str(*s);
-				if (!mechanism) {
-					return std::unexpected(std::move(mechanism.error()));
-				}
-				auto credentials = optional_str(*s, ber::tags::octet_string);
-				if (!credentials) {
-					return std::unexpected(std::move(credentials.error()));
-				}
-				if (auto done = skip_rest(*s); !done) {
-					return std::unexpected(std::move(done.error()));
-				}
-				auto &sasl = b.authentication.emplace<sasl_auth>(a_);
-				sasl.mechanism = std::move(*mechanism);
-				sasl.credentials = std::move(*credentials);
-			} else {
-				if (o->empty()) {
-					return bad("bind request without authentication", auth_at);
-				}
-				auto choice = o->peek_tag();
-				if (!choice) {
-					return std::unexpected(std::move(choice.error()));
-				}
-				return fail(client_errc::unsupported_operation,
-				  detail::format(
-					"message: bind authentication choice {} at offset {}", ber::to_string(*choice), auth_at));
-			}
-			if (auto done = skip_rest(*o); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			return op;
-		}
-
-		auto read_bind_response(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<bind_response>, a_);
-			auto &b = std::get<bind_response>(op);
-			if (auto done = read_result(*o, b.result); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			auto creds = optional_str(*o, ber::context(field_tag::server_sasl_creds));
-			if (!creds) {
-				return std::unexpected(std::move(creds.error()));
-			}
-			if (auto done = skip_rest(*o); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			b.server_sasl_creds = std::move(*creds);
-			return op;
-		}
-
-		auto read_search_request(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<search_request>, a_);
-			auto &s = std::get<search_request>(op);
-			auto base = str(*o);
-			if (!base) {
-				return std::unexpected(std::move(base.error()));
-			}
-			auto scope = read_ranged(*o, ber::tags::enumerated, 0, 3, "search scope", true);
-			if (!scope) {
-				return std::unexpected(std::move(scope.error()));
-			}
-			auto deref = read_ranged(*o, ber::tags::enumerated, 0, 3, "derefAliases", true);
-			if (!deref) {
-				return std::unexpected(std::move(deref.error()));
-			}
-			auto size_limit = read_ranged(*o, ber::tags::integer, 0, max_int, "size limit");
-			if (!size_limit) {
-				return std::unexpected(std::move(size_limit.error()));
-			}
-			auto time_limit = read_ranged(*o, ber::tags::integer, 0, max_int, "time limit");
-			if (!time_limit) {
-				return std::unexpected(std::move(time_limit.error()));
-			}
-			auto types_only = o->read_boolean();
-			if (!types_only) {
-				return std::unexpected(std::move(types_only.error()));
-			}
-			auto f = decode_filter(*o, options_->filter, a_.resource());
-			if (!f) {
-				return std::unexpected(std::move(f.error()));
-			}
-			auto attrs = o->enter();
-			if (!attrs) {
-				return std::unexpected(std::move(attrs.error()));
-			}
-			while (!attrs->empty()) {
-				auto a = str(*attrs);
-				if (!a) {
-					return std::unexpected(std::move(a.error()));
-				}
-				s.attributes.push_back(std::move(*a));
-			}
-			if (auto done = skip_rest(*o); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			s.base_object = std::move(*base);
-			s.scope = static_cast<search_scope>(*scope);
-			s.deref = static_cast<deref_aliases>(*deref);
-			s.size_limit = *size_limit;
-			s.time_limit = *time_limit;
-			s.types_only = *types_only;
-			s.filter = std::move(*f);
-			return op;
-		}
-
-		auto read_search_result_entry(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<search_result_entry>, a_);
-			auto &e = std::get<search_result_entry>(op);
-			auto name = str(*o);
-			if (!name) {
-				return std::unexpected(std::move(name.error()));
-			}
-			e.object_name = std::move(*name);
-			if (auto done = read_attributes(*o, e.attributes); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			if (auto done = skip_rest(*o); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			return op;
-		}
-
-		auto read_search_result_reference(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<search_result_reference>, a_);
-			auto &ref = std::get<search_result_reference>(op);
-			// RFC 4511 section 4.5.3: SEQUENCE SIZE (1..MAX) OF uri.
-			if (o->empty()) {
-				return bad("search result reference without a URI", o->offset());
-			}
-			while (!o->empty()) {
-				auto uri = str(*o);
-				if (!uri) {
-					return std::unexpected(std::move(uri.error()));
-				}
-				ref.uris.push_back(std::move(*uri));
-			}
-			return op;
-		}
-
-		auto read_modify_request(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<modify_request>, a_);
-			auto &m = std::get<modify_request>(op);
-			auto object = str(*o);
-			if (!object) {
-				return std::unexpected(std::move(object.error()));
-			}
-			m.object = std::move(*object);
-			auto changes = o->enter();
-			if (!changes) {
-				return std::unexpected(std::move(changes.error()));
-			}
-			while (!changes->empty()) {
-				auto change = changes->enter();
-				if (!change) {
-					return std::unexpected(std::move(change.error()));
-				}
-				auto op_code = read_ranged(*change, ber::tags::enumerated, 0, 3, "modify operation", true);
-				if (!op_code) {
-					return std::unexpected(std::move(op_code.error()));
-				}
-				const std::size_t attr_at = change->offset();
-				auto &c = m.changes.emplace_back();
-				c.operation = static_cast<modify_operation>(*op_code);
-				if (auto done = read_attribute(*change, c.modification); !done) {
-					return std::unexpected(std::move(done.error()));
-				}
-				if (c.operation == modify_operation::add && c.modification.values.empty()) {
-					return bad("modify add change without values", attr_at);
-				}
-				if (auto done = skip_rest(*change); !done) {
-					return std::unexpected(std::move(done.error()));
-				}
-			}
-			if (auto done = skip_rest(*o); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			return op;
-		}
-
-		auto read_add_request(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<add_request>, a_);
-			auto &add = std::get<add_request>(op);
-			auto entry = str(*o);
-			if (!entry) {
-				return std::unexpected(std::move(entry.error()));
-			}
-			add.entry = std::move(*entry);
-			const std::size_t attrs_at = o->offset();
-			if (auto done = read_attributes(*o, add.attributes); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			for (const auto &a : add.attributes) {
-				if (a.values.empty()) {
-					return bad(sanitized_context("add request attribute '", a.type, "' without values"), attrs_at);
-				}
-			}
-			if (auto done = skip_rest(*o); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			return op;
-		}
-
-		auto read_modify_dn_request(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<modify_dn_request>, a_);
-			auto &m = std::get<modify_dn_request>(op);
-			auto entry = str(*o);
-			if (!entry) {
-				return std::unexpected(std::move(entry.error()));
-			}
-			auto new_rdn = str(*o);
-			if (!new_rdn) {
-				return std::unexpected(std::move(new_rdn.error()));
-			}
-			auto delete_old = o->read_boolean();
-			if (!delete_old) {
-				return std::unexpected(std::move(delete_old.error()));
-			}
-			auto superior = optional_str(*o, ber::context(0));
-			if (!superior) {
-				return std::unexpected(std::move(superior.error()));
-			}
-			if (auto done = skip_rest(*o); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			m.entry = std::move(*entry);
-			m.new_rdn = std::move(*new_rdn);
-			m.delete_old_rdn = *delete_old;
-			m.new_superior = std::move(*superior);
-			return op;
-		}
-
-		auto read_compare_request(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<compare_request>, a_);
-			auto &c = std::get<compare_request>(op);
-			auto entry = str(*o);
-			if (!entry) {
-				return std::unexpected(std::move(entry.error()));
-			}
-			auto ava = o->enter();
-			if (!ava) {
-				return std::unexpected(std::move(ava.error()));
-			}
-			auto desc = str(*ava);
-			if (!desc) {
-				return std::unexpected(std::move(desc.error()));
-			}
-			auto value = str(*ava);
-			if (!value) {
-				return std::unexpected(std::move(value.error()));
-			}
-			if (auto done = skip_rest(*ava); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			if (auto done = skip_rest(*o); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			c.entry = std::move(*entry);
-			c.ava.attribute_desc = std::move(*desc);
-			c.ava.assertion_value = std::move(*value);
-			return op;
-		}
-
-		auto read_extended_request(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<extended_request>, a_);
-			auto &e = std::get<extended_request>(op);
-			auto name = str(*o, ber::context(0));
-			if (!name) {
-				return std::unexpected(std::move(name.error()));
-			}
-			auto value = optional_str(*o, ber::context(1));
-			if (!value) {
-				return std::unexpected(std::move(value.error()));
-			}
-			if (auto done = skip_rest(*o); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			e.request_name = std::move(*name);
-			e.request_value = std::move(*value);
-			return op;
-		}
-
-		auto read_extended_response(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<extended_response>, a_);
-			auto &e = std::get<extended_response>(op);
-			if (auto done = read_result(*o, e.result); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			auto name = optional_str(*o, ber::context(field_tag::response_name));
-			if (!name) {
-				return std::unexpected(std::move(name.error()));
-			}
-			auto value = optional_str(*o, ber::context(field_tag::response_value));
-			if (!value) {
-				return std::unexpected(std::move(value.error()));
-			}
-			if (auto done = skip_rest(*o); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			e.response_name = std::move(*name);
-			e.response_value = std::move(*value);
-			return op;
-		}
-
-		auto read_intermediate_response(ber::reader &r, ber::tag t) -> result<protocol_op>
-		{
-			auto o = r.enter(t);
-			if (!o) {
-				return std::unexpected(std::move(o.error()));
-			}
-			protocol_op op(std::in_place_type<intermediate_response>, a_);
-			auto &i = std::get<intermediate_response>(op);
-			auto name = optional_str(*o, ber::context(0));
-			if (!name) {
-				return std::unexpected(std::move(name.error()));
-			}
-			auto value = optional_str(*o, ber::context(1));
-			if (!value) {
-				return std::unexpected(std::move(value.error()));
-			}
-			if (auto done = skip_rest(*o); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			i.response_name = std::move(*name);
-			i.response_value = std::move(*value);
-			return op;
-		}
-
-		auto read_op(ber::reader &r) -> result<protocol_op>
-		{
-			const std::size_t offset = r.offset();
-			auto peeked = r.peek_tag();
-			if (!peeked) {
-				return std::unexpected(std::move(peeked.error()));
-			}
-			const ber::tag t = *peeked;
-			const auto unsupported = [&] {
-				return fail(client_errc::unsupported_operation,
-				  detail::format("message: unknown protocolOp {} at offset {}", ber::to_string(t), offset));
-			};
-			if (t.cls != ber::tag_class::application) {
-				return unsupported();
-			}
-			// Checked before decoding, so a peer cannot make us parse (for
-			// example) a huge search request filter it may not send at all.
-			if (options_->from == origin::server && is_request(t.number)) {
-				return fail(client_errc::unsupported_operation,
-				  detail::format(
-					"message: request operation {} from a server at offset {}", ber::to_string(t), offset));
-			}
-			if (options_->from == origin::client && !is_request(t.number)) {
-				return fail(client_errc::unsupported_operation,
-				  detail::format(
-					"message: response operation {} from a client at offset {}", ber::to_string(t), offset));
-			}
-			switch (t.number) {
-			case op_tag::bind_request:
-				return read_bind_request(r, t);
-			case op_tag::bind_response:
-				return read_bind_response(r, t);
-			case op_tag::unbind_request: {
-				if (auto done = r.read_null(t); !done) {
-					return std::unexpected(std::move(done.error()));
-				}
-				return protocol_op{ unbind_request{} };
-			}
-			case op_tag::search_request:
-				return read_search_request(r, t);
-			case op_tag::search_result_entry:
-				return read_search_result_entry(r, t);
-			case op_tag::search_result_done:
-				return result_only<search_result_done>(r, t);
-			case op_tag::search_result_reference:
-				return read_search_result_reference(r, t);
-			case op_tag::modify_request:
-				return read_modify_request(r, t);
-			case op_tag::modify_response:
-				return result_only<modify_response>(r, t);
-			case op_tag::add_request:
-				return read_add_request(r, t);
-			case op_tag::add_response:
-				return result_only<add_response>(r, t);
-			case op_tag::del_request: {
-				auto entry = str(r, t);
-				if (!entry) {
-					return std::unexpected(std::move(entry.error()));
-				}
-				protocol_op op(std::in_place_type<del_request>, a_);
-				std::get<del_request>(op).entry = std::move(*entry);
-				return op;
-			}
-			case op_tag::del_response:
-				return result_only<del_response>(r, t);
-			case op_tag::modify_dn_request:
-				return read_modify_dn_request(r, t);
-			case op_tag::modify_dn_response:
-				return result_only<modify_dn_response>(r, t);
-			case op_tag::compare_request:
-				return read_compare_request(r, t);
-			case op_tag::compare_response:
-				return result_only<compare_response>(r, t);
-			case op_tag::abandon_request: {
-				auto id = read_ranged(r, t, 0, max_int, "abandoned message id");
-				if (!id) {
-					return std::unexpected(std::move(id.error()));
-				}
-				return protocol_op{ abandon_request{ *id } };
-			}
-			case op_tag::extended_request:
-				return read_extended_request(r, t);
-			case op_tag::extended_response:
-				return read_extended_response(r, t);
-			case op_tag::intermediate_response:
-				return read_intermediate_response(r, t);
-			default:
-				return unsupported();
-			}
-		}
-
-		auto read_control(ber::reader &r) -> result<control>
-		{
-			auto c = r.enter();
-			if (!c) {
-				return std::unexpected(std::move(c.error()));
-			}
-			control out(a_);
-			auto type = str(*c);
-			if (!type) {
-				return std::unexpected(std::move(type.error()));
-			}
-			out.type = std::move(*type);
-			if (next_is(*c, ber::tags::boolean)) {
-				auto critical = c->read_boolean();
-				if (!critical) {
-					return std::unexpected(std::move(critical.error()));
-				}
-				out.criticality = *critical;
-			}
-			auto value = optional_str(*c, ber::tags::octet_string);
-			if (!value) {
-				return std::unexpected(std::move(value.error()));
-			}
-			out.value = std::move(*value);
-			if (auto done = skip_rest(*c); !done) {
-				return std::unexpected(std::move(done.error()));
-			}
-			return out;
-		}
-
-		// Operations a client sends (RFC 4511 section 4.2 protocolOp requests).
-		static auto is_request(std::uint8_t number) -> bool
-		{
-			switch (number) {
-			case op_tag::bind_request:
-			case op_tag::unbind_request:
-			case op_tag::search_request:
-			case op_tag::modify_request:
-			case op_tag::add_request:
-			case op_tag::del_request:
-			case op_tag::modify_dn_request:
-			case op_tag::compare_request:
-			case op_tag::abandon_request:
-			case op_tag::extended_request:
-				return true;
-			default:
-				return false;
-			}
-		}
-
-		const decode_options *options_;// non-null
-		alloc_t a_;
-		std::size_t strings_ = 0;// decoded by str(), against options_->max_elements
-	};
-
 }// namespace
 
-namespace {
+namespace detail {
 
 	void write_control_list(ber::writer &list, const std::pmr::vector<control> &controls)
 	{
@@ -1604,7 +722,9 @@ namespace {
 		}
 	}
 
-}// namespace
+	void write_search_result_entry(ber::writer &w, const search_result_entry &e) { op_writer{ &w }(e); }
+
+}// namespace detail
 
 auto encode(ber::writer &w, const message &m) -> result<void>
 {
@@ -1615,7 +735,7 @@ auto encode(ber::writer &w, const message &m) -> result<void>
 		msg.integer(m.id);
 		std::visit(op_writer{ &msg }, m.op);
 		if (!m.controls.empty()) {
-			msg.constructed(ber::context(0), [&](ber::writer &list) { write_control_list(list, m.controls); });
+			msg.constructed(ber::context(0), [&](ber::writer &list) { detail::write_control_list(list, m.controls); });
 		}
 	});
 	return {};
@@ -1634,7 +754,7 @@ auto encode(const message &m, std::pmr::memory_resource *mr) -> result<std::pmr:
 
 auto decode(std::span<const std::byte> one_complete_message, const decode_options &options) -> result<message>
 {
-	return decoder(options).run(one_complete_message);
+	return detail::message_decoder(options).run(one_complete_message);
 }
 
 auto peek_message_header(std::span<const std::byte> one_complete_message) -> result<message_header>
@@ -1644,7 +764,7 @@ auto peek_message_header(std::span<const std::byte> one_complete_message) -> res
 	if (!r) {
 		return std::unexpected(std::move(r.error()));
 	}
-	auto id = read_ranged(*r, ber::tags::integer, 0, max_int, "message id");
+	auto id = detail::read_ranged(*r, ber::tags::integer, 0, max_int, "message id");
 	if (!id) {
 		return std::unexpected(std::move(id.error()));
 	}
@@ -1684,7 +804,7 @@ namespace {
 		if (!s) {
 			return std::unexpected(std::move(s.error()));
 		}
-		auto size = read_ranged(*s, ber::tags::integer, 0, max_int, "size");
+		auto size = detail::read_ranged(*s, ber::tags::integer, 0, max_int, "size");
 		if (!size) {
 			return std::unexpected(std::move(size.error()));
 		}
@@ -1714,18 +834,6 @@ auto decode_paged_results(const control &c, std::pmr::memory_resource *mr) -> re
 
 // ---------------------------------------------------------------- server side sorting
 
-auto encode_sort_result(const sort_result &value, bool criticality, std::pmr::memory_resource *mr) -> result<control>
-{
-	ber::writer w{ ber::writer::allocator_type(mr) };
-	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
-		s.enumerated(value.result_code);
-		if (!value.attribute_type.empty()) {
-			s.octet_string(value.attribute_type, ber::context(0));
-		}
-	});
-	return value_control(sort_response_oid, criticality, w, mr);
-}
-
 namespace {
 
 	// SortResult ::= SEQUENCE { sortResult ENUMERATED, attributeType [0] AttributeDescription OPTIONAL }
@@ -1736,7 +844,7 @@ namespace {
 		if (!s) {
 			return std::unexpected(std::move(s.error()));
 		}
-		auto code = read_ranged(*s,
+		auto code = detail::read_ranged(*s,
 		  ber::tags::enumerated,
 		  std::numeric_limits<std::int32_t>::min(),
 		  std::numeric_limits<std::int32_t>::max(),
@@ -1822,26 +930,6 @@ auto vlv_response::operator=(vlv_response &&other) -> vlv_response &
 	return *this;
 }
 
-auto encode_vlv_response(const vlv_response &value, bool criticality, std::pmr::memory_resource *mr) -> result<control>
-{
-	if (value.target_position < 0 || value.content_count < 0) {
-		return fail(client_errc::encode_error,
-		  detail::format("vlv response: targetPosition {} or contentCount {} is negative",
-			value.target_position,
-			value.content_count));
-	}
-	ber::writer w{ ber::writer::allocator_type(mr) };
-	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
-		s.integer(value.target_position);
-		s.integer(value.content_count);
-		s.enumerated(value.result_code);
-		if (value.context_id) {
-			s.octet_string(*value.context_id);
-		}
-	});
-	return value_control(vlv_response_oid, criticality, w, mr);
-}
-
 namespace {
 
 	// VirtualListViewResponse ::= SEQUENCE { targetPosition INTEGER (0 .. maxInt),
@@ -1854,15 +942,15 @@ namespace {
 		if (!s) {
 			return std::unexpected(std::move(s.error()));
 		}
-		auto position = read_ranged(*s, ber::tags::integer, 0, max_int, "targetPosition");
+		auto position = detail::read_ranged(*s, ber::tags::integer, 0, max_int, "targetPosition");
 		if (!position) {
 			return std::unexpected(std::move(position.error()));
 		}
-		auto count = read_ranged(*s, ber::tags::integer, 0, max_int, "contentCount");
+		auto count = detail::read_ranged(*s, ber::tags::integer, 0, max_int, "contentCount");
 		if (!count) {
 			return std::unexpected(std::move(count.error()));
 		}
-		auto code = read_ranged(*s,
+		auto code = detail::read_ranged(*s,
 		  ber::tags::enumerated,
 		  std::numeric_limits<std::int32_t>::min(),
 		  std::numeric_limits<std::int32_t>::max(),
@@ -1901,32 +989,18 @@ auto decode_vlv_response(const control &c, std::pmr::memory_resource *mr) -> res
 
 // ---------------------------------------------------------------- pre-read / post-read
 
-auto encode_read_entry(std::string_view oid,
-  const search_result_entry &entry,
-  bool criticality,
-  std::pmr::memory_resource *mr) -> result<control>
-{
-	if (oid != pre_read_oid && oid != post_read_oid) {
-		return fail(
-		  client_errc::encode_error, sanitized_context("read entry control: ", oid, " is not pre-read or post-read"));
-	}
-	ber::writer w{ ber::writer::allocator_type(mr) };
-	op_writer{ &w }(entry);
-	return value_control(oid, criticality, w, mr);
-}
-
 auto decode_read_entry(const control &c, const decode_options &options) -> result<search_result_entry>
 {
 	if (c.type != pre_read_oid && c.type != post_read_oid) {
 		return fail(client_errc::decode_error,
-		  sanitized_context("read entry: control type is ", c.type, ", not pre-read or post-read"));
+		  detail::sanitized_context("read entry: control type is ", c.type, ", not pre-read or post-read"));
 	}
 	const std::string_view name = c.type == pre_read_oid ? "pre-read" : "post-read";
 	auto value = control_value(c, c.type, name);
 	if (!value) {
 		return std::unexpected(std::move(value.error()));
 	}
-	return in_control(decoder(options).run_entry(*value), name);
+	return in_control(detail::message_decoder(options).run_entry(*value), name);
 }
 
 // ---------------------------------------------------------------- transactions (RFC 5805)
@@ -1944,78 +1018,11 @@ auto encode_end_transaction_request(const end_transaction_request &value, std::p
 	return std::pmr::string(detail::as_text(w.bytes()), std::pmr::polymorphic_allocator<>(mr));
 }
 
-auto decode_end_transaction_request(std::string_view value, std::pmr::memory_resource *mr)
-  -> result<end_transaction_request>
-{
-	constexpr std::string_view name = "txnEndReq";
-	const auto in_value = [name](error e) {
-		e.context.insert(0, e.context.empty() ? std::string(name) : detail::format("{}: ", name));
-		return e;
-	};
-	ber::reader top(std::as_bytes(std::span(value)));
-	auto r = top.enter();
-	if (!r) {
-		return std::unexpected(in_value(std::move(r.error())));
-	}
-	if (auto done = top.expect_end(); !done) {
-		return std::unexpected(in_value(std::move(done.error())));
-	}
-	end_transaction_request out{ std::pmr::polymorphic_allocator<>(mr) };
-	if (next_is(*r, ber::tags::boolean)) {
-		auto commit = r->read_boolean();
-		if (!commit) {
-			return std::unexpected(in_value(std::move(commit.error())));
-		}
-		out.commit = *commit;
-	}
-	auto id = r->read_string(ber::tags::octet_string, mr);
-	if (!id) {
-		return std::unexpected(in_value(std::move(id.error())));
-	}
-	out.identifier = std::move(*id);
-	if (auto done = skip_rest(*r); !done) {
-		return std::unexpected(in_value(std::move(done.error())));
-	}
-	return out;
-}
-
-auto encode_end_transaction_response(const end_transaction_response &value, std::pmr::memory_resource *mr)
-  -> result<std::optional<std::pmr::string>>
-{
-	const auto out_of_range = [](std::int32_t id) { return id < 0; };
-	if ((value.message_id && out_of_range(*value.message_id))
-		|| std::ranges::any_of(value.updates_controls, out_of_range, &update_controls::message_id)) {
-		return fail(client_errc::encode_error, "txnEndRes: negative message id");
-	}
-	if (!value.message_id && value.updates_controls.empty()) {
-		return std::optional<std::pmr::string>{};
-	}
-	ber::writer w{ ber::writer::allocator_type(mr) };
-	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
-		if (value.message_id) {
-			s.integer(*value.message_id);
-		}
-		if (!value.updates_controls.empty()) {
-			s.constructed(ber::tags::sequence, [&](ber::writer &list) {
-				for (const auto &u : value.updates_controls) {
-					list.constructed(ber::tags::sequence, [&](ber::writer &item) {
-						item.integer(u.message_id);
-						item.constructed(ber::tags::sequence,
-						  [&](ber::writer &controls) { write_control_list(controls, u.controls); });
-					});
-				}
-			});
-		}
-	});
-	return std::optional<std::pmr::string>{
-		std::in_place, detail::as_text(w.bytes()), std::pmr::polymorphic_allocator<>(mr)
-	};
-}
-
 auto decode_end_transaction_response(std::string_view value, const decode_options &options)
   -> result<end_transaction_response>
 {
-	return in_control(decoder(options).run_end_transaction(std::as_bytes(std::span(value))), "txnEndRes");
+	return in_control(
+	  detail::message_decoder(options).run_end_transaction(std::as_bytes(std::span(value))), "txnEndRes");
 }
 
 }// namespace jhetz::ldap

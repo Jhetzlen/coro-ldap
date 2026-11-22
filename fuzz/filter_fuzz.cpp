@@ -1,6 +1,7 @@
 // libFuzzer target for search filters: the input as filter text, as a
 // value for the builders and escaping, and as BER; every form round-trips.
 #include "jhetz/ldap/filter.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 
 #include "check.hpp"
 
@@ -29,7 +30,7 @@ auto must_encode(const ldap::filter &f) -> std::pmr::vector<std::byte>
 auto must_decode(std::span<const std::byte> bytes) -> ldap::filter
 {
 	ber::reader r(bytes);
-	auto f = ldap::decode_filter(r);
+	auto f = ldap::testing::decode_filter(r);
 	check(f.has_value(), "f.has_value()");
 	check(r.empty(), "r.empty()");
 	return std::move(*f);
@@ -140,7 +141,7 @@ void check_unescape(std::string_view text)
 void check_ber(std::span<const std::byte> input)
 {
 	ber::reader r(input);
-	auto f = ldap::decode_filter(r);
+	auto f = ldap::testing::decode_filter(r);
 	if (!f) {
 		check(r.offset() == 0, "r.offset() == 0");
 		return;

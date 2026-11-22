@@ -100,10 +100,6 @@ struct matched_values
 [[nodiscard]] auto parse_values_return_filter(std::string_view text,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<std::vector<ldap::filter>>;
 
-// The request control as a server reads it (mock servers, tests).
-[[nodiscard]] auto decode_matched_values(const control &c,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<matched_values>;
-
 // Virtual List View (draft-ietf-ldapext-ldapv3-vlv-09); needs a
 // server_side_sort on the same search.
 struct vlv_by_offset
@@ -130,9 +126,6 @@ struct virtual_list_view
 	friend auto operator==(const virtual_list_view &, const virtual_list_view &) -> bool = default;
 };
 
-// The request control as a server reads it (mock servers, tests).
-[[nodiscard]] auto decode_virtual_list_view(const control &c) -> result<virtual_list_view>;
-
 // Transaction Specification (RFC 5805 section 2.2); always critical.
 struct transaction_specification
 {
@@ -140,9 +133,6 @@ struct transaction_specification
 
 	friend auto operator==(const transaction_specification &, const transaction_specification &) -> bool = default;
 };
-
-// The control as a server reads it (mock servers, tests).
-[[nodiscard]] auto decode_transaction_specification(const control &c) -> result<transaction_specification>;
 
 // ---------------------------------------------------------------- per-operation lists
 

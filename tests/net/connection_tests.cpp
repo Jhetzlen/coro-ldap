@@ -7,6 +7,7 @@
 #include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/sasl.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -2164,7 +2165,7 @@ auto serve_shuffled(net::transport t, std::size_t n, std::uint64_t seed, server_
 	net::read_buffer buf;
 	std::vector<std::vector<std::string>> queues;
 	while (queues.size() < n) {
-		auto r = co_await net::read_message(t, buf, as_server);
+		auto r = co_await ldap::testing::read_message(t, buf, as_server);
 		if (!r) {
 			log.error = "server read: " + std::string(r.error().message());
 			co_return;

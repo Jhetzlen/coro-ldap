@@ -5,6 +5,7 @@
 #include "jhetz/ldap/extended_operations.hpp"
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/repository.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -167,7 +168,7 @@ class answering_server
 	{
 		net::read_buffer buf;
 		while (true) {
-			auto r = co_await net::read_message(t, buf, as_server);
+			auto r = co_await ldap::testing::read_message(t, buf, as_server);
 			if (!r) {
 				co_return;// the client hung up, or stop()
 			}

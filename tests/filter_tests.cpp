@@ -1,5 +1,6 @@
 #include "counting_resource.hpp"
 #include "jhetz/ldap/filter.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 #include "test_util.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -47,7 +48,7 @@ auto to_ber(const ldap::filter &f, const ldap::filter_limits &limits = {}) -> ld
 auto from_ber(std::span<const std::byte> bytes, const ldap::filter_limits &limits = {}) -> ldap::result<ldap::filter>
 {
 	ber::reader r(bytes);
-	auto f = ldap::decode_filter(r, limits);
+	auto f = ldap::testing::decode_filter(r, limits);
 	if (f) {
 		CHECK(r.empty());
 	} else {

@@ -4,6 +4,7 @@
 #include "jhetz/ldap/mapping.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 #include "jhetz/ldap/repository.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -98,7 +99,7 @@ auto serve_start_tls(corosio::tcp_acceptor &acc, corosio::tls_context ctx, mode 
 	net::transport plain = net::transport::wrap(stream_ref<corosio::tcp_socket>{ &peer }, "server");
 	net::read_buffer buf;
 
-	auto req = co_await net::read_message(plain, buf, as_server);
+	auto req = co_await ldap::testing::read_message(plain, buf, as_server);
 	if (!req) {
 		co_return "read StartTLS: " + std::string(req.error().message());
 	}
@@ -126,7 +127,7 @@ auto serve_start_tls(corosio::tcp_acceptor &acc, corosio::tls_context ctx, mode 
 	}
 
 	auto answer_one = [](net::transport &t, net::read_buffer &b) -> capy::task<std::string> {
-		auto r = co_await net::read_message(t, b, as_server);
+		auto r = co_await ldap::testing::read_message(t, b, as_server);
 		if (!r) {
 			co_return "read request: " + std::string(r.error().message());
 		}
@@ -152,7 +153,7 @@ auto serve_start_tls(corosio::tcp_acceptor &acc, corosio::tls_context ctx, mode 
 		co_return r;
 	}
 
-	auto unbind = co_await net::read_message(secure, tls_buf, as_server);
+	auto unbind = co_await ldap::testing::read_message(secure, tls_buf, as_server);
 	if (!unbind || !std::holds_alternative<ldap::unbind_request>(unbind->op)) {
 		co_return "expected an UnbindRequest";
 	}
@@ -657,7 +658,7 @@ auto silent_start_tls(corosio::tcp_acceptor &acc) -> capy::task<std::vector<ldap
 	net::transport plain = net::transport::wrap(stream_ref<corosio::tcp_socket>{ &peer }, "server");
 	net::read_buffer buf;
 	for (int i = 0; i < 2; ++i) {
-		auto req = co_await net::read_message(plain, buf, as_server);
+		auto req = co_await ldap::testing::read_message(plain, buf, as_server);
 		if (!req) {
 			break;
 		}
@@ -797,7 +798,7 @@ auto serve_directory(corosio::tcp_acceptor &acc, corosio::tls_context ctx, std::
 	net::transport plain = net::transport::wrap(stream_ref<corosio::tcp_socket>{ &peer }, "server");
 	net::read_buffer buf;
 	while (true) {
-		auto req = co_await net::read_message(plain, buf, as_server);
+		auto req = co_await ldap::testing::read_message(plain, buf, as_server);
 		if (!req) {
 			co_return "read in clear: " + std::string(req.error().message());
 		}
@@ -818,7 +819,7 @@ auto serve_directory(corosio::tcp_acceptor &acc, corosio::tls_context ctx, std::
 	net::transport secure = net::transport::wrap(stream_ref<corosio::openssl_stream>{ &tls }, "server tls");
 	net::read_buffer tls_buf;
 	while (true) {
-		auto req = co_await net::read_message(secure, tls_buf, as_server);
+		auto req = co_await ldap::testing::read_message(secure, tls_buf, as_server);
 		if (!req) {
 			co_return "";// the client hung up
 		}

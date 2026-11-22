@@ -106,8 +106,6 @@ struct dirsync_request
 
 [[nodiscard]] auto encode_dirsync_request(const dirsync_request &value,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> control;
-// The request control as a server reads it (mock servers, tests).
-[[nodiscard]] auto decode_dirsync_request(const control &c) -> result<dirsync_request>;
 
 // DirSyncResponseValue.
 struct dirsync_response
@@ -119,10 +117,6 @@ struct dirsync_response
 	friend auto operator==(const dirsync_response &, const dirsync_response &) -> bool = default;
 };
 
-// For mock servers and tests.
-[[nodiscard]] auto encode_dirsync_response(const dirsync_response &value,
-  bool criticality = false,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> control;
 [[nodiscard]] auto decode_dirsync_response(const control &c) -> result<dirsync_response>;
 // nullopt without one.
 [[nodiscard]] auto find_dirsync_response(const std::pmr::vector<control> &controls)

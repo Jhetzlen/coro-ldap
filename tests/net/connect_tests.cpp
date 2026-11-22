@@ -7,6 +7,7 @@
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/net/connect.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 #include "net_test_support.hpp"
 
 #include <boost/capy/buffers.hpp>
@@ -162,14 +163,14 @@ extern "C" auto getaddrinfo(const char *name, const char *service, const struct 
 
 namespace {
 
-const net::read_options as_server{ .decode = { .from = ldap::origin::client } };
+const ldap::testing::read_options as_server{};
 
 // Serves one connection: [TLS handshake], read a bind request, answer it,
 // then wait for the client to go away. Returns "" or what went wrong.
 auto serve_one(net::transport t) -> capy::task<std::string>
 {
 	net::read_buffer buf;
-	auto req = co_await net::read_message(t, buf, as_server);
+	auto req = co_await ldap::testing::read_message(t, buf, as_server);
 	if (!req) {
 		co_return "server read: " + std::string(req.error().message());
 	}
@@ -179,7 +180,7 @@ auto serve_one(net::transport t) -> capy::task<std::string>
 	if (auto w = co_await net::write_message(t, bind_response_msg(1, "welcome")); !w) {
 		co_return "server write: " + std::string(w.error().message());
 	}
-	auto end = co_await net::read_message(t, buf, as_server);
+	auto end = co_await ldap::testing::read_message(t, buf, as_server);
 	co_return end ? "server: unexpected second request" : "";
 }
 

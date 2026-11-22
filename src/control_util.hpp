@@ -5,10 +5,12 @@
 
 #include "jhetz/ldap/ber.hpp"
 #include "jhetz/ldap/error.hpp"
+#include "jhetz/ldap/filter.hpp"
 #include "jhetz/ldap/message.hpp"
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -102,5 +104,51 @@ auto find_decoded(const std::pmr::vector<control> &controls, std::string_view oi
 	}
 	return decode(*it).transform([](T &&v) { return std::optional<T>(std::move(v)); });
 }
+
+// A BOOLEAN with a DEFAULT: `fallback` when absent.
+inline auto read_flag(ber::reader &r, bool fallback) -> result<bool>
+{
+	if (!next_is(r, ber::tags::boolean)) {
+		return fallback;
+	}
+	return r.read_boolean();
+}
+
+// An ENUMERATED among `allowed`, else decode_error naming `what`.
+inline auto read_enum(ber::reader &r, std::span<const std::int64_t> allowed, std::string_view what)
+  -> result<std::int64_t>
+{
+	const std::size_t offset = r.offset();
+	auto copy = r;
+	auto v = copy.read_enumerated();
+	if (!v) {
+		return std::unexpected(std::move(v.error()));
+	}
+	if (std::ranges::find(allowed, *v) == allowed.end()) {
+		return fail(client_errc::decode_error, detail::format("unknown {} {} at offset {}", what, *v, offset));
+	}
+	r = copy;
+	return *v;
+}
+
+// An INTEGER in [low, high].
+inline auto read_bounded(ber::reader &r, std::int64_t low, std::int64_t high, const char *field) -> result<std::int64_t>
+{
+	const std::size_t offset = r.offset();
+	auto v = r.read_integer();
+	if (!v) {
+		return std::unexpected(std::move(v.error()));
+	}
+	if (*v < low || *v > high) {
+		return fail(client_errc::decode_error, detail::format("{} {} out of range at offset {}", field, *v, offset));
+	}
+	return *v;
+}
+
+inline constexpr std::string_view matched_values_name = "matched values";
+
+// Whether `f` is a SimpleFilterItem (RFC 3876 section 2), else `code`;
+// `index` is 0-based.
+auto check_simple_item(const filter &f, std::size_t index, client_errc code) -> result<void>;
 
 }// namespace jhetz::ldap::detail

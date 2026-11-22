@@ -2,6 +2,7 @@
 #include "jhetz/ldap/controls.hpp"
 #include "jhetz/ldap/message.hpp"
 #include "jhetz/ldap/operations.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -69,7 +70,7 @@ TEST_CASE("ad::dirsync_request: the value (MS-ADTS 3.1.1.3.4.1.3)", "[ad][contro
 	CHECK(c.criticality);
 	// Flags as AD's signed 32-bit INTEGER, MaxBytes 1048576, Cookie.
 	CHECK(raw(c) == "\x30\x0E\x02\x04\x80\x00\x00\x01\x02\x03\x10\x00\x00\x04\x01\x63"s);
-	CHECK(ad::decode_dirsync_request(c) == r);
+	CHECK(ldap::testing::ad::decode_dirsync_request(c) == r);
 
 	// An empty cookie (the first poll) is an empty OCTET STRING.
 	const ldap::control first = ad::dirsync_request{ .max_bytes = 0, .critical = false };
@@ -80,7 +81,7 @@ TEST_CASE("ad::dirsync_request: the value (MS-ADTS 3.1.1.3.4.1.3)", "[ad][contro
 	const ldap::control unsigned_flags{
 		ad::dirsync_oid, true, "\x30\x0D\x02\x05\x00\x80\x00\x00\x00\x02\x01\x05\x04\x01x"s
 	};
-	auto d = ad::decode_dirsync_request(unsigned_flags);
+	auto d = ldap::testing::ad::decode_dirsync_request(unsigned_flags);
 	REQUIRE(d.has_value());
 	CHECK(d->flags == ad::dirsync_flags::incremental_values);
 	CHECK(has(d->flags, ad::dirsync_flags::incremental_values));
@@ -95,7 +96,7 @@ TEST_CASE("ad::dirsync_request: the value (MS-ADTS 3.1.1.3.4.1.3)", "[ad][contro
 TEST_CASE("ad::dirsync_response: the value", "[ad][controls][dirsync]")
 {
 	const ad::dirsync_response r{ .more_results = true, .cookie_server = "MSDS\x01"s };
-	const ldap::control c = ad::encode_dirsync_response(r);
+	const ldap::control c = ldap::testing::ad::encode_dirsync_response(r);
 	CHECK_FALSE(c.criticality);
 	CHECK(raw(c) == "\x30\x0D\x02\x01\x01\x02\x01\x00\x04\x05MSDS\x01"s);
 	CHECK(ad::decode_dirsync_response(c) == r);
@@ -130,7 +131,7 @@ TEST_CASE("ad::dirsync: malformed values", "[ad][controls][dirsync]")
 		 }) {
 		CAPTURE(value);
 		const ldap::control c{ ad::dirsync_oid, true, value };
-		auto req = ad::decode_dirsync_request(c);
+		auto req = ldap::testing::ad::decode_dirsync_request(c);
 		REQUIRE_FALSE(req.has_value());
 		CHECK((req.error().code == ldap::client_errc::decode_error
 			   || req.error().code == ldap::client_errc::unexpected_tag));
@@ -138,12 +139,12 @@ TEST_CASE("ad::dirsync: malformed values", "[ad][controls][dirsync]")
 		REQUIRE_FALSE(resp.has_value());
 	}
 	// MaxBytes outside the signed 32-bit range.
-	auto big = ad::decode_dirsync_request(
+	auto big = ldap::testing::ad::decode_dirsync_request(
 	  ldap::control{ ad::dirsync_oid, true, "\x30\x0C\x02\x01\x00\x02\x05\x00\x80\x00\x00\x00\x04\x00"s });
 	REQUIRE_FALSE(big.has_value());
 	CHECK(big.error().code == ldap::client_errc::decode_error);
 	// Another control, or none.
-	CHECK_FALSE(ad::decode_dirsync_request(ldap::control{ "1.2.3", true, "\x30\x00"s }).has_value());
+	CHECK_FALSE(ldap::testing::ad::decode_dirsync_request(ldap::control{ "1.2.3", true, "\x30\x00"s }).has_value());
 	CHECK_FALSE(ad::decode_dirsync_response(ldap::control{ ad::dirsync_oid }).has_value());
 }
 

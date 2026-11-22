@@ -3,6 +3,7 @@
 #include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/ad/dirsync.hpp"
 #include "jhetz/ldap/connection.hpp"
+#include "jhetz/ldap/testing/server_codec.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -47,7 +48,7 @@ auto page(std::int32_t id, std::string_view dn, std::optional<ldap::control> con
 
 auto response(bool more, std::string_view cookie) -> ldap::control
 {
-	return ad::encode_dirsync_response({ .more_results = more, .cookie_server = std::string(cookie) });
+	return ldap::testing::ad::encode_dirsync_response({ .more_results = more, .cookie_server = std::string(cookie) });
 }
 
 // The DirSync request control of a logged search.
@@ -55,7 +56,7 @@ auto sent(const ldap::message &m) -> ad::dirsync_request
 {
 	REQUIRE(std::holds_alternative<ldap::search_request>(m.op));
 	REQUIRE(m.controls.size() == 1);
-	auto r = ad::decode_dirsync_request(m.controls[0]);
+	auto r = ldap::testing::ad::decode_dirsync_request(m.controls[0]);
 	REQUIRE(r.has_value());
 	return *r;
 }

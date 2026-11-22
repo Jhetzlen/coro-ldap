@@ -26,6 +26,8 @@ using detail::in_control;
 using detail::next_is;
 using detail::optional_string;
 using detail::optional_with;
+using detail::read_enum;
+using detail::read_flag;
 using detail::skip_rest;
 using detail::value_control;
 
@@ -184,15 +186,6 @@ namespace {
 		});
 	}
 
-	// A BOOLEAN with a DEFAULT: `fallback` when absent.
-	auto read_flag(ber::reader &r, bool fallback) -> result<bool>
-	{
-		if (!next_is(r, ber::tags::boolean)) {
-			return fallback;
-		}
-		return r.read_boolean();
-	}
-
 	// syncUUID ::= OCTET STRING (SIZE(16))
 	auto read_uuid(ber::reader &r) -> result<sync_uuid>
 	{
@@ -210,22 +203,6 @@ namespace {
 		sync_uuid out;
 		std::ranges::copy(*bytes, out.bytes.begin());
 		return out;
-	}
-
-	// An ENUMERATED among `allowed`, else decode_error naming `what`.
-	auto read_enum(ber::reader &r, std::span<const std::int64_t> allowed, std::string_view what) -> result<std::int64_t>
-	{
-		const std::size_t offset = r.offset();
-		auto copy = r;
-		auto v = copy.read_enumerated();
-		if (!v) {
-			return std::unexpected(std::move(v.error()));
-		}
-		if (std::ranges::find(allowed, *v) == allowed.end()) {
-			return fail(client_errc::decode_error, detail::format("unknown {} {} at offset {}", what, *v, offset));
-		}
-		r = copy;
-		return *v;
 	}
 
 	constexpr std::array<std::int64_t, 2> mode_values = { std::to_underlying(sync_mode::refresh_only),
@@ -261,63 +238,10 @@ auto encode_sync_request(const sync_request &value, std::pmr::memory_resource *m
 	return value_control(sync_request_oid, value.critical, w, mr);
 }
 
-auto decode_sync_request(const control &c) -> result<sync_request>
-{
-	static constexpr std::string_view what = "sync request";
-	auto value = control_value(c, sync_request_oid, what);
-	if (!value) {
-		return std::unexpected(std::move(value.error()));
-	}
-	const auto read = [&] -> result<sync_request> {
-		ber::reader r(*value);
-		auto s = enter_value(r);
-		if (!s) {
-			return std::unexpected(std::move(s.error()));
-		}
-		auto mode = read_enum(*s, mode_values, "mode");
-		if (!mode) {
-			return std::unexpected(std::move(mode.error()));
-		}
-		std::optional<std::string> cookie;
-		if (next_is(*s, ber::tags::octet_string)) {
-			auto bytes = s->read_octet_string();
-			if (!bytes) {
-				return std::unexpected(std::move(bytes.error()));
-			}
-			cookie.emplace(detail::as_text(*bytes));
-		}
-		auto reload = read_flag(*s, false);
-		if (!reload) {
-			return std::unexpected(std::move(reload.error()));
-		}
-		if (auto done = skip_rest(*s); !done) {
-			return std::unexpected(std::move(done.error()));
-		}
-		return sync_request{ .mode = static_cast<sync_mode>(*mode),
-			.cookie = std::move(cookie),
-			.reload_hint = *reload,
-			.critical = c.criticality };
-	};
-	return in_control(read(), what);
-}
-
 // ---------------------------------------------------------------- Sync State
 
 // syncStateValue ::= SEQUENCE { state ENUMERATED { present (0), add (1),
 //   modify (2), delete (3) }, entryUUID syncUUID, cookie syncCookie OPTIONAL }
-auto encode_sync_state(const sync_state &value, bool criticality, std::pmr::memory_resource *mr) -> result<control>
-{
-	ber::writer w{ ber::writer::allocator_type(mr) };
-	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
-		s.enumerated(std::to_underlying(value.state));
-		s.octet_string(std::span<const std::byte>(value.entry_uuid.bytes));
-		if (value.cookie) {
-			s.octet_string(*value.cookie);
-		}
-	});
-	return value_control(sync_state_oid, criticality, w, mr);
-}
-
 auto decode_sync_state(const control &c, std::pmr::memory_resource *mr) -> result<sync_state>
 {
 	static constexpr std::string_view what = "sync state";
@@ -366,20 +290,6 @@ auto find_sync_state(const std::pmr::vector<control> &controls, std::pmr::memory
 
 // syncDoneValue ::= SEQUENCE { cookie syncCookie OPTIONAL,
 //   refreshDeletes BOOLEAN DEFAULT FALSE }
-auto encode_sync_done(const sync_done &value, bool criticality, std::pmr::memory_resource *mr) -> result<control>
-{
-	ber::writer w{ ber::writer::allocator_type(mr) };
-	w.constructed(ber::tags::sequence, [&](ber::writer &s) {
-		if (value.cookie) {
-			s.octet_string(*value.cookie);
-		}
-		if (value.refresh_deletes) {
-			s.boolean(true);
-		}
-	});
-	return value_control(sync_done_oid, criticality, w, mr);
-}
-
 auto decode_sync_done(const control &c, std::pmr::memory_resource *mr) -> result<sync_done>
 {
 	static constexpr std::string_view what = "sync done";
@@ -427,40 +337,6 @@ auto find_sync_done(const std::pmr::vector<control> &controls, std::pmr::memory_
 //   syncIdSet      [3] SEQUENCE { cookie syncCookie OPTIONAL, refreshDeletes BOOLEAN DEFAULT FALSE,
 //                                 syncUUIDs SET OF syncUUID } }
 // (implicit tags, as everywhere in LDAP).
-auto encode_sync_info(const sync_info &value, std::pmr::memory_resource *mr) -> result<intermediate_response>
-{
-	const auto number = std::to_underlying(value.type);
-	if (number > std::to_underlying(sync_info_type::sync_id_set)) {
-		return fail(client_errc::encode_error, detail::format("sync info: unknown type {}", number));
-	}
-	ber::writer w{ ber::writer::allocator_type(mr) };
-	if (value.type == sync_info_type::new_cookie) {
-		if (!value.cookie) {
-			return fail(client_errc::encode_error, "sync info: newcookie without a cookie");
-		}
-		w.octet_string(*value.cookie, ber::context(number));
-	} else {
-		w.constructed(ber::context(number, true), [&](ber::writer &s) {
-			if (value.cookie) {
-				s.octet_string(*value.cookie);
-			}
-			if (value.type == sync_info_type::sync_id_set) {
-				if (value.refresh_deletes) {
-					s.boolean(true);
-				}
-				s.constructed(ber::tags::set, [&](ber::writer &set) {
-					for (const auto &u : value.sync_uuids) {
-						set.octet_string(std::span<const std::byte>(u.bytes));
-					}
-				});
-			} else if (!value.refresh_done) {
-				s.boolean(false);
-			}
-		});
-	}
-	return intermediate_response(sync_info_oid, detail::as_text(w.bytes()), intermediate_response::allocator_type(mr));
-}
-
 namespace {
 
 	auto read_sync_info(std::span<const std::byte> value, std::pmr::memory_resource *mr) -> result<sync_info>

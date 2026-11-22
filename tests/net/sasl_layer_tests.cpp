@@ -11,6 +11,7 @@
 #include "jhetz/ldap/sasl.hpp"
 #include "jhetz/ldap/sync.hpp"
 #include "jhetz/ldap/sync_repository.hpp"
+#include "jhetz/ldap/testing/message_io.hpp"
 #include "mock_ldap.hpp"
 #include "net_test_support.hpp"
 
@@ -520,7 +521,7 @@ namespace {
 auto serve_layered_bind(net::transport t, std::string extra, std::string &error) -> capy::task<void>
 {
 	net::read_buffer buf;
-	auto bind = co_await net::read_message(t, buf, as_server);
+	auto bind = co_await ldap::testing::read_message(t, buf, as_server);
 	if (!bind) {
 		error = "bind read: " + std::string(bind.error().message());
 		co_return;
@@ -534,7 +535,7 @@ auto serve_layered_bind(net::transport t, std::string extra, std::string &error)
 		error = "install";
 		co_return;
 	}
-	auto search = co_await net::read_message(t, buf, as_server);
+	auto search = co_await ldap::testing::read_message(t, buf, as_server);
 	if (!search) {
 		error = "search read: " + std::string(search.error().message());
 		co_return;
@@ -660,7 +661,7 @@ auto serve_layered_modify(net::transport t,
   std::string &error) -> capy::task<void>
 {
 	net::read_buffer buf;
-	auto bind = co_await net::read_message(t, buf, as_server);
+	auto bind = co_await ldap::testing::read_message(t, buf, as_server);
 	if (!bind) {
 		error = "bind read: " + std::string(bind.error().message());
 		co_return;
@@ -680,7 +681,7 @@ auto serve_layered_modify(net::transport t,
 	if (!modify) {
 		co_return;
 	}
-	auto request = co_await net::read_message(t, buf, as_server);
+	auto request = co_await ldap::testing::read_message(t, buf, as_server);
 	if (!request) {
 		error = "modify read: " + std::string(request.error().message());
 		co_return;
@@ -757,7 +758,7 @@ auto serve_schema_and_layer(net::transport t, std::vector<std::string> &log, std
 	net::read_buffer buf;
 	std::string prefix;
 	while (true) {
-		auto req = co_await net::read_message(t, buf, as_server);
+		auto req = co_await ldap::testing::read_message(t, buf, as_server);
 		if (!req || std::holds_alternative<ldap::unbind_request>(req->op)) {
 			co_return;
 		}
