@@ -4,6 +4,8 @@
 //   jhetz_ldap_decode_bench [entries=1000] [attributes=30] [values=3] [runs=15]
 #include "jhetz/ldap/message.hpp"
 
+#include "args.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -177,20 +179,15 @@ auto measure(const stream &s, mode how, int runs) -> outcome
 	return out;
 }
 
-auto arg(int argc, char *const *argv, int i, std::size_t fallback) -> std::size_t
-{
-	return argc > i ? static_cast<std::size_t>(std::strtoull(argv[i], nullptr, 10)) : fallback;
-}
-
 }// namespace
 
 // NOLINTNEXTLINE(bugprone-exception-escape): a benchmark, terminating on an exception is fine
 auto main(int argc, char *const *argv) -> int
 {
-	const std::size_t entries = arg(argc, argv, 1, 1000);
-	const std::size_t attributes = arg(argc, argv, 2, 30);
-	const std::size_t values = arg(argc, argv, 3, 3);
-	const int runs = static_cast<int>(arg(argc, argv, 4, 15));
+	const std::size_t entries = ldap::bench::arg(argc, argv, 1, 1000);
+	const std::size_t attributes = ldap::bench::arg(argc, argv, 2, 30);
+	const std::size_t values = ldap::bench::arg(argc, argv, 3, 3);
+	const int runs = static_cast<int>(ldap::bench::arg(argc, argv, 4, 15));
 	if (entries == 0 || runs == 0) {
 		return 2;
 	}

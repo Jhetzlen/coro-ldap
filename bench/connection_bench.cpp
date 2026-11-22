@@ -1,19 +1,10 @@
 // Connection round-trip benchmark: CompareRequests to an in-process server
 // over a Unix socket pair, sequential and windowed.
 //   jhetz_ldap_connection_bench [operations=20000] [window=64] [runs=9]
-#include "jhetz/ldap/connection.hpp"
-#include "jhetz/ldap/net/message_io.hpp"
-#include "jhetz/ldap/net/transport.hpp"
-#include "jhetz/ldap/testing/message_io.hpp"
+#include "socket_pair.hpp"
 
-#include <boost/capy/buffers.hpp>
 #include <boost/capy/ex/async_event.hpp>
 #include <boost/capy/ex/run.hpp>
-#include <boost/capy/ex/run_async.hpp>
-#include <boost/capy/task.hpp>
-#include <boost/corosio/io_context.hpp>
-#include <boost/corosio/local_connect_pair.hpp>
-#include <boost/corosio/local_stream_socket.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -38,28 +29,15 @@ using clock = std::chrono::steady_clock;
 
 constexpr int compare_true = 6;
 
-struct socket_ref
-{
-	corosio::local_stream_socket *s;
-	template<capy::MutableBufferSequence MB> auto read_some(MB buffers) { return s->read_some(buffers); }
-	template<capy::ConstBufferSequence CB> auto write_some(CB buffers) { return s->write_some(buffers); }
-};
-
 // Answers every CompareRequest with compareTrue until the client hangs up.
 auto serve(net::transport t) -> capy::task<void>
 {
-	net::read_buffer buf;
-	const ldap::testing::read_options as_server{};
-	while (true) {
-		auto r = co_await ldap::testing::read_message(t, buf, as_server);
-		if (!r || !std::holds_alternative<ldap::compare_request>(r->op)) {
-			co_return;
-		}
-		auto bytes = ldap::encode(ldap::message{ r->id, ldap::compare_response{ ldap::ldap_result{ compare_true } } });
-		if (!bytes || !co_await net::write_bytes(t, *bytes)) {
-			co_return;
-		}
-	}
+	ldap::result<std::pmr::vector<std::byte>> bytes;
+	co_await ldap::bench::serve_each<ldap::compare_request>(
+	  std::move(t), [&bytes](const ldap::message &r) -> const std::pmr::vector<std::byte> * {
+		  bytes = ldap::encode(ldap::message{ r.id, ldap::compare_response{ ldap::ldap_result{ compare_true } } });
+		  return bytes ? &*bytes : nullptr;
+	  });
 }
 
 auto compare_params() -> ldap::compare_params
@@ -160,14 +138,6 @@ auto drive(const corosio::io_context &ioc,
 	server.close();
 }
 
-auto arg(int argc, char *const *argv, int i, std::size_t fallback) -> std::size_t
-{
-	if (i >= argc) {
-		return fallback;
-	}
-	return std::strtoull(argv[i], nullptr, 10);// NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-}
-
 }// namespace
 
 // NOLINTNEXTLINE(bugprone-exception-escape): a benchmark, terminating on an exception is fine
@@ -176,22 +146,16 @@ auto main(int argc, char *const *argv) -> int
 	constexpr std::size_t default_ops = 20000;
 	constexpr std::size_t default_window = 64;
 	constexpr std::size_t default_runs = 9;
-	const std::size_t ops = arg(argc, argv, 1, default_ops);
-	const std::size_t window = std::max<std::size_t>(arg(argc, argv, 2, default_window), 1);
-	const int runs = static_cast<int>(std::max<std::size_t>(arg(argc, argv, 3, default_runs), 1));
+	const std::size_t ops = ldap::bench::arg(argc, argv, 1, default_ops);
+	const std::size_t window = std::max<std::size_t>(ldap::bench::arg(argc, argv, 2, default_window), 1);
+	const int runs = static_cast<int>(std::max<std::size_t>(ldap::bench::arg(argc, argv, 3, default_runs), 1));
 
-	corosio::io_context ioc;
-	corosio::local_stream_socket client(ioc);
-	corosio::local_stream_socket server(ioc);
-	if (corosio::connect_pair(client, server)) {
-		std::println(stderr, "connect_pair failed");
+	results out;
+	if (!ldap::bench::run_pair(serve, [&](const corosio::io_context &ioc, ldap::connection &c, auto &server) {
+			return drive(ioc, c, server, ops, window, runs, out);
+		})) {
 		return EXIT_FAILURE;
 	}
-	ldap::connection c(ioc, net::transport::wrap(socket_ref{ &client }, "bench"));
-	results out;
-	capy::run_async(ioc.get_executor())(serve(net::transport::wrap(socket_ref{ &server }, "server")));
-	capy::run_async(ioc.get_executor())(drive(ioc, c, server, ops, window, runs, out));
-	ioc.run();
 
 	std::println("{} CompareRequests per run, {} runs, one thread", ops, runs);
 	out.outside.print("sequential, from the io_context's executor");

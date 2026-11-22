@@ -2,51 +2,24 @@
 // and mutations of valid encodings.
 #include "jhetz/ldap/ber.hpp"
 
+#include "replay.hpp"
+
 #include <array>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <format>
 #include <limits>
-#include <print>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
-extern "C" auto LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size) -> int;
-
 namespace {
 
 namespace ber = jhetz::ldap::ber;
+namespace fuzz = jhetz::ldap::fuzz;
 
-// splitmix64: tiny, deterministic, good enough for input generation.
-struct rng
+auto seeds() -> std::vector<fuzz::input>
 {
-	std::uint64_t state;
-	auto next() -> std::uint64_t
-	{
-		std::uint64_t z = (state += 0x9E3779B97F4A7C15ull);
-		z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-		z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-		return z ^ (z >> 31);
-	}
-	auto below(std::size_t n) -> std::size_t { return static_cast<std::size_t>(next() % n); }
-	auto byte() -> std::uint8_t { return static_cast<std::uint8_t>(next() & 0xFFu); }
-};
-
-auto to_u8(std::span<const std::byte> v) -> std::vector<std::uint8_t>
-{
-	std::vector<std::uint8_t> out(v.size());
-	for (std::size_t i = 0; i < v.size(); ++i) {
-		out[i] = std::to_integer<std::uint8_t>(v[i]);
-	}
-	return out;
-}
-
-auto seeds() -> std::vector<std::vector<std::uint8_t>>
-{
-	std::vector<std::vector<std::uint8_t>> out;
+	std::vector<fuzz::input> out;
 	ber::writer w;
 
 	// Anonymous simple bind request.
@@ -58,7 +31,7 @@ auto seeds() -> std::vector<std::vector<std::uint8_t>>
 			b.octet_string(std::string_view{}, ber::context(0));
 		});
 	});
-	out.push_back(to_u8(w.take()));
+	out.push_back(fuzz::to_input(w.take()));
 
 	// Search-request-like nesting with sets, enums, booleans and a long string.
 	w.constructed(ber::tags::sequence, [](ber::writer &m) {
@@ -82,7 +55,7 @@ auto seeds() -> std::vector<std::vector<std::uint8_t>>
 		m.constructed(ber::context(0),
 		  [](ber::writer &c) { c.constructed(ber::tags::set, [](ber::writer &x) { x.boolean(true); }); });
 	});
-	out.push_back(to_u8(w.take()));
+	out.push_back(fuzz::to_input(w.take()));
 
 	// Paged-results control: BER encapsulated in an OCTET STRING.
 	{
@@ -97,7 +70,7 @@ auto seeds() -> std::vector<std::vector<std::uint8_t>>
 			c.boolean(true);
 			c.octet_string(std::span<const std::byte>(value));
 		});
-		out.push_back(to_u8(w.take()));
+		out.push_back(fuzz::to_input(w.take()));
 	}
 
 	// Integers at the interesting boundaries.
@@ -111,11 +84,11 @@ auto seeds() -> std::vector<std::vector<std::uint8_t>>
 		   lo,
 		   hi }) {
 		w.integer(v);
-		out.push_back(to_u8(w.take()));
+		out.push_back(fuzz::to_input(w.take()));
 	}
 
 	// Deep nesting (beyond the default limit of 32), built inside out.
-	std::vector<std::uint8_t> deep{ 0x05, 0x00 };
+	fuzz::input deep{ 0x05, 0x00 };
 	for (int i = 0; i < 40; ++i) {
 		deep.insert(deep.begin(), { 0x30, static_cast<std::uint8_t>(deep.size()) });
 	}
@@ -123,121 +96,22 @@ auto seeds() -> std::vector<std::vector<std::uint8_t>>
 	return out;
 }
 
-void run(const std::vector<std::uint8_t> &input) { LLVMFuzzerTestOneInput(input.data(), input.size()); }
-
-void mutate(rng &r, std::vector<std::uint8_t> &v)
-{
-	static constexpr std::array<std::uint8_t, 12> interesting{
-		0x00, 0x01, 0x1F, 0x30, 0x7F, 0x80, 0x81, 0x82, 0x84, 0x85, 0xFE, 0xFF
-	};
-	const std::size_t count = 1 + r.below(4);
-	for (std::size_t i = 0; i < count; ++i) {
-		switch (r.below(6)) {
-		case 0:
-			if (!v.empty()) {
-				v[r.below(v.size())] ^= static_cast<std::uint8_t>(1u << r.below(8));
-			}
-			break;
-		case 1:
-			if (!v.empty()) {
-				v[r.below(v.size())] = interesting[r.below(interesting.size())];
-			}
-			break;
-		case 2:
-			v.insert(v.begin() + static_cast<std::ptrdiff_t>(r.below(v.size() + 1)), r.byte());
-			break;
-		case 3:
-			if (!v.empty()) {
-				v.erase(v.begin() + static_cast<std::ptrdiff_t>(r.below(v.size())));
-			}
-			break;
-		case 4:
-			if (!v.empty()) {
-				v.resize(r.below(v.size()));
-			}
-			break;
-		default:
-			if (!v.empty()) {
-				v[r.below(v.size())] = r.byte();
-			}
-			break;
-		}
-	}
-}
-
 }// namespace
-
-// `--write-seeds DIR` writes the seed inputs to DIR and exits.
-static auto write_seeds(const char *dir) -> int
-{
-	const auto inputs = seeds();
-	for (std::size_t i = 0; i < inputs.size(); ++i) {
-		const std::string path = std::format("{}/seed-{:02}.ber", dir, i);
-		std::FILE *f = std::fopen(path.c_str(), "wb");
-		if (f == nullptr) {
-			std::perror(path.c_str());
-			return 1;
-		}
-		const bool ok = std::fwrite(inputs[i].data(), 1, inputs[i].size(), f) == inputs[i].size();
-		if (std::fclose(f) != 0 || !ok) {
-			std::perror(path.c_str());
-			return 1;
-		}
-	}
-	std::println("wrote {} seeds to {}", inputs.size(), dir);
-	return 0;
-}
 
 auto main(int argc, char **argv) -> int
 {
-	if (argc == 3 && std::string_view(argv[1]) == "--write-seeds") {
-		return write_seeds(argv[2]);
-	}
-	if (argc != 1) {
-		std::println(stderr, "usage: {} [--write-seeds DIR]", argv[0]);
-		return 2;
-	}
-
-	rng r{ 0x5EED'1DA9'0000'0001ull };
-	const auto seed_inputs = seeds();
-	std::size_t runs = 0;
-
-	for (const auto &s : seed_inputs) {
-		run(s);
-		++runs;
-		// Every prefix: exercises the framer's "need more bytes" paths.
-		for (std::size_t n = 0; n < s.size(); ++n) {
-			run(std::vector<std::uint8_t>(s.begin(), s.begin() + static_cast<std::ptrdiff_t>(n)));
-			++runs;
-		}
-	}
-
-	constexpr std::size_t mutation_runs = 200'000;
-	for (std::size_t i = 0; i < mutation_runs; ++i) {
-		auto v = seed_inputs[r.below(seed_inputs.size())];
-		mutate(r, v);
-		run(v);
-		++runs;
-	}
-
-	constexpr std::size_t random_runs = 100'000;
-	static constexpr std::array<std::uint8_t, 10> ber_like{
-		0x01, 0x02, 0x04, 0x05, 0x0A, 0x30, 0x31, 0x60, 0x80, 0xA0
+	// The mutations' bytes, then BER tags for the random inputs.
+	static constexpr std::array<std::uint8_t, 19> interesting{
+		0x00, 0x01, 0x1F, 0x30, 0x7F, 0x80, 0x81, 0x82, 0x84, 0x85, 0xFE, 0xFF, 0x02, 0x04, 0x05, 0x0A, 0x31, 0x60, 0xA0
 	};
-	for (std::size_t i = 0; i < random_runs; ++i) {
-		std::vector<std::uint8_t> v(r.below(48));
-		for (auto &b : v) {
-			b = r.below(2) == 0 ? ber_like[r.below(ber_like.size())] : static_cast<std::uint8_t>(r.below(8));
-		}
-		for (std::size_t k = 0; k < v.size() / 4; ++k) {
-			if (!v.empty()) {
-				v[r.below(v.size())] = r.byte();
-			}
-		}
-		run(v);
-		++runs;
-	}
-
-	std::println("ber_fuzz_replay: {} inputs, no property violations", runs);
-	return 0;
+	return fuzz::replay_main(argc,
+	  argv,
+	  { .name = "ber_fuzz_replay",
+		.extension = ".ber",
+		.seeds = seeds(),
+		.interesting = { interesting.begin(), interesting.end() },
+		.mutation_runs = 200'000,
+		.random_runs = 100'000,
+		.max_random_size = 48,
+		.rng_seed = 0x5EED'1DA9'0000'0001ull });
 }
