@@ -134,17 +134,6 @@ The vcpkg bundled with Visual Studio (`VC\vcpkg`) has no classic mode
 `-DVCPKG_MANIFEST_MODE=OFF -DVCPKG_INSTALLED_DIR=<dir>` besides the
 toolchain file and triplet.
 
-CMake 4.5 stops in Capy's and Corosio's `CMakeLists.txt`
-(`source_group(TREE include/boost/<lib>)` given `<lib>.hpp`, outside its
-tree). From CMake 4.5 on, the root `CMakeLists.txt` includes
-`cmake/source_group_tree_filter.cmake` before their `project()`
-(`CMAKE_PROJECT_boost_capy_INCLUDE_BEFORE`, `..._boost_corosio_...`): in
-their directories it overrides `source_group` to leave the files outside the
-tree out of a `TREE` call. Their sources are not modified, so local
-checkouts (`FETCHCONTENT_SOURCE_DIR_CAPY` / `_COROSIO`) work too, and a pin
-bump updates the fetched clones cleanly; `tests/install/check_install.sh`
-configures its clones with the same file.
-
 Run the tests from a Release or RelWithDebInfo build: in Debug, MSVC's
 checked iterators (`_ITERATOR_DEBUG_LEVEL=2`) make every container allocate
 a proxy from its allocator, so the allocation-counting tests (`[pmr]`,
@@ -308,7 +297,7 @@ Corosio, jhetz_ldap, then a consumer in `tests/install/consumer/` with the
 `net` and `ad` components, also codec-only) and is the reference for doing
 it by hand. It takes Capy and Corosio from `FETCHCONTENT_SOURCE_DIR_CAPY` /
 `_COROSIO` when set, else clones the commits pinned in `CMakeLists.txt` into
-`WORK_DIR`, and configures both with `cmake/source_group_tree_filter.cmake`.
+`WORK_DIR`.
 
 ## Examples
 

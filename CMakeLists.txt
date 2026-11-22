@@ -196,23 +196,16 @@ jhetz_ldap_warnings(jhetz_ldap)
 if(JHETZ_LDAP_BUILD_NET)
     include(FetchContent)
     # Installed boost_capy / boost_corosio packages if found, else these
-    # pinned commits (SYSTEM headers). From CMake 4.5,
-    # cmake/source_group_tree_filter.cmake runs before their project().
-    if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.5)
-        foreach(dep_project boost_capy boost_corosio)
-            set(CMAKE_PROJECT_${dep_project}_INCLUDE_BEFORE
-                ${CMAKE_CURRENT_SOURCE_DIR}/cmake/source_group_tree_filter.cmake)
-        endforeach()
-    endif()
+    # pinned commits (SYSTEM headers).
     FetchContent_Declare(capy
         GIT_REPOSITORY https://github.com/cppalliance/capy.git
-        GIT_TAG bdadc6adef8c8eb79da6454373175bb1428be524
+        GIT_TAG 6a9569060f999453e1f7b59cc9ae31c808c0778b
         SYSTEM
         FIND_PACKAGE_ARGS NAMES boost_capy CONFIG
     )
     FetchContent_Declare(corosio
         GIT_REPOSITORY https://github.com/cppalliance/corosio.git
-        GIT_TAG fd8e95a7125047d5385068a4c640da8232b9588e
+        GIT_TAG 2d246de82c62a62d0da9c1e4c81a1865be7f9321
         SYSTEM
         FIND_PACKAGE_ARGS NAMES boost_corosio CONFIG
     )

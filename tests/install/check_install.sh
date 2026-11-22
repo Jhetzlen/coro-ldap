@@ -9,7 +9,6 @@ root=$(cd "$here/../.." && pwd)
 rm -rf "$work/prefix" "$work/prefix-codec" "$work/build"
 mkdir -p "$work/build"
 gen="-G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_SCAN_FOR_MODULES=OFF"
-filter="$root/cmake/source_group_tree_filter.cmake"
 
 # source_of NAME URL COMMIT OVERRIDE
 source_of() {
@@ -31,14 +30,12 @@ corosio=$(source_of corosio https://github.com/cppalliance/corosio.git "$(pin co
 step() { echo "== $*"; }
 step "Capy"
 cmake -S "$capy" -B "$work/build/capy" $gen -DCMAKE_INSTALL_PREFIX="$work/prefix" \
-	-DCMAKE_PROJECT_boost_capy_INCLUDE_BEFORE="$filter" \
 	-DBOOST_CAPY_BUILD_TESTS=OFF -DBOOST_CAPY_BUILD_EXAMPLES=OFF -DBOOST_CAPY_BUILD_BENCH=OFF >/dev/null
 cmake --build "$work/build/capy" >/dev/null
 cmake --install "$work/build/capy" >/dev/null
 step "Corosio"
 cmake -S "$corosio" -B "$work/build/corosio" $gen -DCMAKE_INSTALL_PREFIX="$work/prefix" \
 	-DCMAKE_PREFIX_PATH="$work/prefix" -DCMAKE_PROJECT_INCLUDE="$here/corosio_with_installed_capy.cmake" \
-	-DCMAKE_PROJECT_boost_corosio_INCLUDE_BEFORE="$filter" \
 	-DBOOST_COROSIO_BUILD_TESTS=OFF -DBOOST_COROSIO_BUILD_EXAMPLES=OFF \
 	-DBOOST_COROSIO_BUILD_BENCH=OFF >/dev/null
 cmake --build "$work/build/corosio" >/dev/null
