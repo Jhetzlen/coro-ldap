@@ -918,8 +918,11 @@ itself needs only ICU.
   without data of that type). `scram_channel_binding::not_offered`, for a
   server whose supportedSASLMechanisms lacks -PLUS
   (`scram_channel_binding_for(mechanisms)` picks plus or not_offered),
-  sends "y,," over TLS so that a server that does support -PLUS detects
-  the downgrade (RFC 5802 section 6); `none`, the default, keeps "n,,".
+  the default, sends "y,," over TLS so that a server that does support
+  -PLUS detects the downgrade (RFC 5802 section 6), and "n,," without TLS
+  or binding data; a server that advertises -PLUS (slapd with
+  `sasl-cbinding`) then refuses plain SCRAM-SHA-256 over TLS, so bind
+  with `plus` there, or with `none` ("n,,", no downgrade signal).
   OpenLDAP's slapd (`sasl-cbinding tls-endpoint`) uses its own form,
   "p=ldap" with "tls-server-end-point:<hash>" as data:
   `binding_form = scram_channel_binding_form::openldap` speaks it

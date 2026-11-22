@@ -50,7 +50,7 @@ struct sasl_scram_options
 {
 	// "dn:..." or "u:..."; empty: the authenticated identity.
 	std::string authz_id{};
-	scram_channel_binding channel_binding = scram_channel_binding::none;
+	scram_channel_binding channel_binding = scram_channel_binding::not_offered;
 	// nullopt: the connection's default type (tls-server-end-point in the
 	// openldap form).
 	std::optional<channel_binding_type> binding_type{};

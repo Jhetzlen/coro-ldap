@@ -699,8 +699,9 @@ refused. The authz_id must be valid UTF-8 and is not prepared. The
 prepared username and the authz_id are escaped ("=2C", "=3D"). cyrus-sasl
 (slapd) does not SASLprep the userPassword it derives the keys from, so
 only passwords stored in SASLprep form match there. Channel binding
-(RFC 5802 sections 6 and 7, below) is opt-in: by default the GS2 header
-is "n,,", as before. Key material is
+(RFC 5802 sections 6 and 7, below) is opt-in: by default
+(`not_offered`) the GS2 header is "y,," over TLS with binding data, so
+that a -PLUS server detects a stripped -PLUS, and "n,," otherwise. Key material is
 wiped with `OPENSSL_cleanse` (the password when the object is destroyed;
 its prepared form, our preparation buffers and the derived keys as soon as
 the proof is built, but the cached SaltedPassword; ICU's internal buffers cannot be). Server text quoted

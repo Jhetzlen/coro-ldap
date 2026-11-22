@@ -1064,9 +1064,23 @@ TEST_CASE("scram: the client supports channel binding, the server did not offer 
 		m.prepare(ldap::sasl_bind_context{ .tls = true });
 		to_client_final(m);
 	}
-	SECTION("none (the default) sends n,, over TLS too")
+	SECTION("not_offered is the default")
 	{
+		CHECK(ldap::sasl_scram_options{}.channel_binding == ldap::scram_channel_binding::not_offered);
 		auto m = rfc_mech();
+		m.prepare(tls13_context());
+		CHECK(response(m.start()) == "y,,n=user,r=rOprNGfwEbeRWgbNEkqO");
+		auto plain = rfc_mech();
+		plain.prepare(ldap::sasl_bind_context{});
+		to_client_final(plain);
+		CHECK(plain.complete(rfc_server_final).has_value());
+	}
+	SECTION("none sends n,, over TLS too")
+	{
+		auto m = ldap::detail::scram_test_access::with_nonce("user",
+		  "pencil",
+		  ldap::sasl_scram_options{ .channel_binding = ldap::scram_channel_binding::none },
+		  std::string(rfc_nonce));
 		m.prepare(tls13_context());
 		to_client_final(m);
 		CHECK(m.complete(rfc_server_final).has_value());

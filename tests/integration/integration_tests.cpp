@@ -469,10 +469,9 @@ TEST_CASE("integration: SASL SCRAM-SHA-256-PLUS (channel binding)", "[integratio
 	}
 	SECTION("y,, to a server that supports -PLUS is refused (RFC 5802 section 6)")
 	{
-		// What a client that saw a list stripped of -PLUS by a man in the middle sends.
-		ldap::sasl_scram_sha256 mech("user007",
-		  "pw-user007",
-		  ldap::sasl_scram_options{ .channel_binding = ldap::scram_channel_binding::not_offered });
+		// What a client that saw a list stripped of -PLUS by a man in the middle
+		// sends by default.
+		ldap::sasl_scram_sha256 mech("user007", "pw-user007");
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::auth_failed);
@@ -480,7 +479,8 @@ TEST_CASE("integration: SASL SCRAM-SHA-256-PLUS (channel binding)", "[integratio
 	}
 	SECTION("plain SCRAM-SHA-256 (n,,) still binds over TLS")
 	{
-		ldap::sasl_scram_sha256 mech("user007", "pw-user007");
+		ldap::sasl_scram_sha256 mech(
+		  "user007", "pw-user007", ldap::sasl_scram_options{ .channel_binding = ldap::scram_channel_binding::none });
 		REQUIRE(finish(ioc, c.sasl_bind(mech)).has_value());
 	}
 }
