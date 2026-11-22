@@ -524,14 +524,8 @@ namespace detail {
 		template<directory S>
 		auto add(S &s, value_type value, add_controls controls) -> boost::capy::task<result<response>>
 		{
-			auto request = codec::add_request(base_, value, controls);
-			if (!request) {
-				co_return std::unexpected(std::move(request.error()));
-			}
-			if (auto c = co_await check_schema(s); !c) {
-				co_return std::unexpected(std::move(c.error()));
-			}
-			co_return co_await s.add(std::move(*request));
+			co_return co_await send_checked(
+			  s, codec::add_request(base_, value, controls), [](S &d, add_params p) { return d.add(std::move(p)); });
 		}
 
 		template<directory S>
@@ -548,14 +542,9 @@ namespace detail {
 		auto modify_at(S &s, dn entry, std::vector<change<value_type>> changes, modify_controls controls)
 		  -> boost::capy::task<result<response>>
 		{
-			auto request = codec::modify_request(std::move(entry), std::move(changes), std::move(controls));
-			if (!request) {
-				co_return std::unexpected(std::move(request.error()));
-			}
-			if (auto c = co_await check_schema(s); !c) {
-				co_return std::unexpected(std::move(c.error()));
-			}
-			co_return co_await s.modify(std::move(*request));
+			co_return co_await send_checked(s,
+			  codec::modify_request(std::move(entry), std::move(changes), std::move(controls)),
+			  [](S &d, modify_params p) { return d.modify(std::move(p)); });
 		}
 
 		template<directory S>
@@ -610,36 +599,21 @@ namespace detail {
 		template<directory S>
 		auto remove_at(S &s, dn entry, del_controls controls) -> boost::capy::task<result<response>>
 		{
-			if (auto c = co_await check_schema(s); !c) {
-				co_return std::unexpected(std::move(c.error()));
-			}
-			co_return co_await s.del({ .entry = std::move(entry), .controls = std::move(controls) });
+			co_return co_await send_checked(s,
+			  result<del_params>(del_params{ .entry = std::move(entry), .controls = std::move(controls) }),
+			  [](S &d, del_params p) { return d.del(std::move(p)); });
 		}
 
 		template<directory S>
 		auto rename(S &s, key_type from, key_type to, modify_dn_controls controls)
 		  -> boost::capy::task<result<response>>
 		{
-			auto request = codec::rename_request(base_, from, to, controls);
-			if (!request) {
-				co_return std::unexpected(std::move(request.error()));
-			}
-			if (auto c = co_await check_schema(s); !c) {
-				co_return std::unexpected(std::move(c.error()));
-			}
-			co_return co_await s.modify_dn(std::move(*request));
+			co_return co_await send_checked(s, codec::rename_request(base_, from, to, controls), modify_dn_of<S>);
 		}
 		template<directory S>
 		auto move(S &s, key_type key, dn new_base, modify_dn_controls controls) -> boost::capy::task<result<response>>
 		{
-			auto request = codec::move_request(base_, key, new_base, controls);
-			if (!request) {
-				co_return std::unexpected(std::move(request.error()));
-			}
-			if (auto c = co_await check_schema(s); !c) {
-				co_return std::unexpected(std::move(c.error()));
-			}
-			co_return co_await s.modify_dn(std::move(*request));
+			co_return co_await send_checked(s, codec::move_request(base_, key, new_base, controls), modify_dn_of<S>);
 		}
 
 		template<directory S>
@@ -697,6 +671,24 @@ namespace detail {
 		}
 
 	  private:
+		template<directory S> static auto modify_dn_of(S &d, modify_dn_params p) -> boost::capy::task<result<response>>
+		{
+			return d.modify_dn(std::move(p));
+		}
+
+		// Sends `request` with `send(s, request)` once the schema check passed.
+		template<directory S, class Params, class Send>
+		auto send_checked(S &s, result<Params> request, Send send) -> boost::capy::task<result<response>>
+		{
+			if (!request) {
+				co_return std::unexpected(std::move(request.error()));
+			}
+			if (auto c = co_await check_schema(s); !c) {
+				co_return std::unexpected(std::move(c.error()));
+			}
+			co_return co_await send(s, std::move(*request));
+		}
+
 		// Sends `request` once the schema check passed; nullopt sends nothing.
 		template<directory S>
 		auto send_update(S &s, result<std::optional<modify_params>> request, bool default_guard = false)
