@@ -993,3 +993,27 @@ TEST_CASE("custom value_traits may return std::string or result<std::string>", "
 	CHECK(failed.error().code == ldap::client_errc::encode_error);
 	CHECK(std::string_view(failed.error().context) == "attribute x-count: odd");
 }
+
+TEST_CASE("diff: values_not_in keeps the order, each value once", "[mapping][diff]")
+{
+	using ldap::string_list;
+	CHECK(ldap::detail::values_not_in(string_list{ "c", "a", "b", "a", "c", "d" }, string_list{ "b", "x" })
+		  == string_list{ "c", "a", "d" });
+	CHECK(ldap::detail::values_not_in(string_list{ "a", "b" }, string_list{ "a", "b" }).empty());
+	CHECK(ldap::detail::values_not_in(string_list{}, string_list{ "a" }).empty());
+	CHECK(ldap::detail::values_not_in(string_list{ "b", "", "b", "" }, string_list{}) == string_list{ "b", "" });
+
+	// Many values, half of them excluded, sorted with no hashing.
+	string_list many;
+	string_list odd;
+	for (int i = 0; i < 20'000; ++i) {
+		many.emplace_back(std::to_string(i));
+		if (i % 2 == 1) {
+			odd.emplace_back(std::to_string(i));
+		}
+	}
+	const auto even = ldap::detail::values_not_in(many, odd);
+	REQUIRE(even.size() == 10'000);
+	CHECK(even.front() == "0");
+	CHECK(even.back() == "19998");
+}

@@ -6,10 +6,12 @@
 #include "generalized_time.hpp"
 
 #include <algorithm>
+#include <cstddef>
+#include <numeric>
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_set>
+#include <vector>
 
 namespace jhetz::ldap {
 
@@ -145,12 +147,23 @@ namespace detail {
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): the values, then the ones to leave out
 	auto values_not_in(const string_list &values, const string_list &other) -> string_list
 	{
-		const std::unordered_set<std::string_view> excluded(other.begin(), other.end());
-		std::unordered_set<std::string_view> taken;
+		std::vector<std::string_view> excluded(other.begin(), other.end());
+		std::ranges::sort(excluded);
+		// The indices of `values` by value, equal ones in order.
+		std::vector<std::size_t> order(values.size());
+		std::iota(order.begin(), order.end(), std::size_t{ 0 });
+		std::ranges::stable_sort(order, {}, [&values](std::size_t i) { return std::string_view(values[i]); });
+		std::vector<bool> keep(values.size(), false);
+		for (std::size_t k = 0; k < order.size(); ++k) {
+			const std::string_view v = values[order[k]];
+			if (k == 0 || v != values[order[k - 1]]) {
+				keep[order[k]] = !std::ranges::binary_search(excluded, v);
+			}
+		}
 		string_list out;
-		for (const auto &v : values) {
-			if (!excluded.contains(v) && taken.insert(v).second) {
-				out.push_back(v);
+		for (std::size_t i = 0; i < values.size(); ++i) {
+			if (keep[i]) {
+				out.push_back(values[i]);
 			}
 		}
 		return out;
