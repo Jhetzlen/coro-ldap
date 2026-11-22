@@ -171,6 +171,7 @@ add_library(jhetz_ldap STATIC
     src/error.cpp
     src/filter.cpp
     src/format_util.cpp
+    src/idna_util.cpp
     src/mapping.cpp
     src/matching.cpp
     src/ntlm_message.cpp

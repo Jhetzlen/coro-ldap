@@ -2,9 +2,9 @@
 #include "jhetz/ldap/attribute.hpp"
 
 #include "../format_util.hpp"
+#include "../idna_util.hpp"
 
 #include <unicode/uidna.h>
-#include <unicode/utypes.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -36,41 +36,20 @@ namespace {
 
 	constexpr std::uint16_t ldaps_port = 636;
 	constexpr std::uint16_t gc_ldaps_port = 3269;
-	constexpr std::size_t max_dns_name = 1025;
+	constexpr std::size_t max_dns_name = 1024;
 
 	constexpr auto uts46_options = static_cast<std::uint32_t>(UIDNA_NONTRANSITIONAL_TO_ASCII)
 								   | static_cast<std::uint32_t>(UIDNA_CHECK_BIDI)
 								   | static_cast<std::uint32_t>(UIDNA_CHECK_CONTEXTJ);
 
-	auto failed(UErrorCode status) noexcept -> bool { return U_FAILURE(status) != 0; }
-
-	struct idna_closer
-	{
-		void operator()(UIDNA *p) const noexcept { uidna_close(p); }
-	};
-
 	// `name` (UTF-8) as A-labels (UTS #46, nontransitional).
-	auto to_ascii(std::string_view name, const std::string &context) -> result<std::string>
+	auto to_ascii(std::string_view name, std::string_view context) -> result<std::string>
 	{
-		UErrorCode status = U_ZERO_ERROR;
-		const std::unique_ptr<UIDNA, idna_closer> idna(uidna_openUTS46(uts46_options, &status));
-		if (failed(status)) {
-			return fail(client_errc::internal_error, context + ": ICU uidna_openUTS46: " + u_errorName(status));
+		auto ascii = detail::idna_to_ascii(name, uts46_options, max_dns_name);
+		if (!ascii) {
+			return std::unexpected(detail::with_context(std::move(ascii.error()), context));
 		}
-		std::string out(max_dns_name, '\0');
-		UIDNAInfo info = UIDNA_INFO_INITIALIZER;
-		const int32_t n = uidna_nameToASCII_UTF8(idna.get(),
-		  name.data(),
-		  static_cast<int32_t>(name.size()),
-		  out.data(),
-		  static_cast<int32_t>(out.size()),
-		  &info,
-		  &status);
-		if (failed(status) || info.errors != 0 || n < 0 || static_cast<std::size_t>(n) >= out.size()) {
-			return fail(client_errc::string_prep_failed, context + ": not a valid domain name (UTS #46)");
-		}
-		out.resize(static_cast<std::size_t>(n));
-		return out;
+		return ascii;
 	}
 
 	// Letters, digits, '-', '_' and '.' only.

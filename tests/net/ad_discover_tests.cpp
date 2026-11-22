@@ -22,6 +22,7 @@
 namespace ldap = jhetz::ldap;
 namespace ad = jhetz::ldap::ad;
 using Catch::Matchers::ContainsSubstring;
+using Catch::Matchers::EndsWith;
 
 namespace {
 
@@ -308,6 +309,7 @@ TEST_CASE("ad::discover_domain_controllers: errors", "[ad][discover]")
 		auto r = ad::discover_domain_controllers("a..b", { .resolver = dns.resolver() });
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::string_prep_failed);
+		CHECK_THAT(std::string(r.error().context), EndsWith(" of a..b: not a valid domain name (UTS #46)"));
 	}
 	SECTION("the resolver's error")
 	{
