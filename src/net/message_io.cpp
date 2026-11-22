@@ -20,17 +20,6 @@ namespace capy = boost::capy;
 namespace jhetz::ldap::net {
 namespace {
 
-	auto with_context(error e, std::string_view prefix) -> error
-	{
-		if (e.context.empty()) {
-			e.context.assign(prefix);
-		} else {
-			e.context.insert(0, ": ");
-			e.context.insert(0, prefix);
-		}
-		return e;
-	}
-
 	auto hex_byte(std::byte b) -> std::string
 	{
 		const auto v = std::to_integer<unsigned>(b);
@@ -88,7 +77,7 @@ auto read_frame(transport &t, read_buffer &buf, std::size_t max_message_size) ->
 			}
 			auto size = ber::declared_message_size(data, max_message_size);
 			if (!size) {
-				co_return std::unexpected(with_context(std::move(size.error()), where));
+				co_return std::unexpected(ldap::detail::with_context(std::move(size.error()), where));
 			}
 			declared = *size;
 			if (declared && data.size() >= *declared) {
@@ -147,7 +136,8 @@ auto read_message(transport &t, read_buffer &buf, read_options options) -> capy:
 	auto m = decode(buf.data().first(*size), options.decode);
 	buf.consume(*size);
 	if (!m) {
-		co_return std::unexpected(with_context(std::move(m.error()), ldap::detail::format("read {}", t.name())));
+		co_return std::unexpected(
+		  ldap::detail::with_context(std::move(m.error()), ldap::detail::format("read {}", t.name())));
 	}
 	co_return m;
 }
@@ -174,7 +164,8 @@ auto write_message(transport &t, const message &m, std::pmr::memory_resource *mr
 {
 	auto bytes = encode(m, mr);
 	if (!bytes) {
-		co_return std::unexpected(with_context(std::move(bytes.error()), ldap::detail::format("write {}", t.name())));
+		co_return std::unexpected(
+		  ldap::detail::with_context(std::move(bytes.error()), ldap::detail::format("write {}", t.name())));
 	}
 	co_return co_await write_bytes(t, *bytes);
 }
@@ -183,7 +174,8 @@ auto write_message(transport &t, const message &m, ber::writer &w) -> capy::task
 {
 	w.clear();
 	if (auto e = encode(w, m); !e) {
-		co_return std::unexpected(with_context(std::move(e.error()), ldap::detail::format("write {}", t.name())));
+		co_return std::unexpected(
+		  ldap::detail::with_context(std::move(e.error()), ldap::detail::format("write {}", t.name())));
 	}
 	co_return co_await write_bytes(t, w.bytes());
 }
