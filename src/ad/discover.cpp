@@ -43,11 +43,11 @@ namespace {
 								   | static_cast<std::uint32_t>(UIDNA_CHECK_CONTEXTJ);
 
 	// `name` (UTF-8) as A-labels (UTS #46, nontransitional).
-	auto to_ascii(std::string_view name, std::string_view context) -> result<std::string>
+	auto to_ascii(std::string_view name, std::string_view what) -> result<std::string>
 	{
 		auto ascii = detail::idna_to_ascii(name, uts46_options, max_dns_name);
 		if (!ascii) {
-			return std::unexpected(detail::with_context(std::move(ascii.error()), context));
+			return std::unexpected(detail::with_context(std::move(ascii.error()), what));
 		}
 		return ascii;
 	}
