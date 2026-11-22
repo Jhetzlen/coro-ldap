@@ -222,8 +222,6 @@ namespace {
 		});
 	}
 
-	auto ascii_fold(char c) noexcept -> char { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
-
 	// A count past int32_t: the value is too long, not an ICU failure.
 	auto is_icu_overflow(UErrorCode status) noexcept -> bool
 	{
@@ -393,7 +391,7 @@ namespace {
 		if (is_printable_ascii(in)) {
 			if (options.case_fold) {
 				buffer.resize(in.size());
-				std::ranges::transform(in, buffer.begin(), ascii_fold);
+				std::ranges::transform(in, buffer.begin(), detail::ascii_lower);
 				mapped = buffer;
 			}
 		} else {

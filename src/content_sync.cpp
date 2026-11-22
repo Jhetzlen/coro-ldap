@@ -150,21 +150,16 @@ auto sync_info::operator=(sync_info &&other) -> sync_info &
 
 auto to_string(const sync_uuid &uuid) -> std::string
 {
-	static constexpr std::string_view hex = "0123456789abcdef";
 	// 8-4-4-4-12 hex digits: a dash before octets 4, 6, 8 and 10.
 	static constexpr std::array<std::size_t, 4> dash_before = { 4, 6, 8, 10 };
 	static constexpr std::size_t text_size = (2 * sync_uuid_size) + dash_before.size();
-	static constexpr unsigned nibble_bits = 4;
-	static constexpr unsigned low_nibble = 0x0FU;
 	std::string out;
 	out.reserve(text_size);
 	for (std::size_t i = 0; i < uuid.bytes.size(); ++i) {
 		if (std::ranges::contains(dash_before, i)) {
 			out += '-';
 		}
-		const auto b = std::to_integer<unsigned>(uuid.bytes[i]);
-		out += hex[b >> nibble_bits];
-		out += hex[b & low_nibble];
+		detail::append_hex_octet(out, std::to_integer<unsigned char>(uuid.bytes[i]));
 	}
 	return out;
 }

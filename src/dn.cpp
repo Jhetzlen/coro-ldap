@@ -44,14 +44,6 @@ namespace {
 		return out;
 	}
 
-	constexpr std::string_view hex_digits = "0123456789abcdef";
-
-	void append_hex(std::pmr::string &out, unsigned char c)
-	{
-		out += hex_digits[c >> 4];
-		out += hex_digits[c & detail::nibble_mask];
-	}
-
 	// RFC 4514 section 2.4 escaping of a string value, shared by to_string()
 	// and escape_dn_value().
 	void append_escaped(std::pmr::string &out, std::string_view v)
@@ -64,7 +56,7 @@ namespace {
 				const std::size_t len = detail::utf8_sequence_length(v, i);
 				if (len == 0) {
 					out += '\\';
-					append_hex(out, u);
+					detail::append_hex_octet(out, u);
 				} else {
 					out += v.substr(i, len);
 					i += len - 1;
@@ -87,7 +79,7 @@ namespace {
 			}
 			if (detail::is_ascii_control(u)) {
 				out += '\\';
-				append_hex(out, u);
+				detail::append_hex_octet(out, u);
 			} else if ((c == ' ' && (i == 0 || i + 1 == v.size())) || (c == '#' && i == 0)) {
 				out += '\\';
 				out += c;
@@ -102,7 +94,7 @@ namespace {
 		if (a.hex_form) {
 			out += '#';
 			for (const char c : a.value) {
-				append_hex(out, static_cast<unsigned char>(c));
+				detail::append_hex_octet(out, static_cast<unsigned char>(c));
 			}
 			return;
 		}

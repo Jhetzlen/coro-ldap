@@ -33,9 +33,8 @@ namespace {
 
 	auto hex_byte(std::byte b) -> std::string
 	{
-		constexpr std::string_view digits = "0123456789abcdef";
 		const auto v = std::to_integer<unsigned>(b);
-		return { '0', 'x', digits[v >> 4], digits[v & ldap::detail::nibble_mask] };
+		return { '0', 'x', ldap::detail::hex_digit(v >> ldap::detail::nibble_bits), ldap::detail::hex_digit(v) };
 	}
 
 }// namespace

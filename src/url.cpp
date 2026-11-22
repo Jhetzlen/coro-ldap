@@ -110,8 +110,6 @@ namespace {
 		return out;
 	}
 
-	constexpr auto hex_digit(unsigned v) noexcept -> char { return "0123456789ABCDEF"[v & detail::nibble_mask]; }
-
 	// Percent-encodes every byte for which `keep` is false.
 	template<class Keep> void encode(std::pmr::string &out, std::string_view s, Keep keep)
 	{
@@ -121,8 +119,8 @@ namespace {
 			} else {
 				const auto b = static_cast<unsigned char>(c);
 				out += '%';
-				out += hex_digit(b >> 4);
-				out += hex_digit(b);
+				out += detail::upper_hex_digit(b >> detail::nibble_bits);
+				out += detail::upper_hex_digit(b);
 			}
 		}
 	}

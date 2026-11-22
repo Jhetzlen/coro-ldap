@@ -1,5 +1,9 @@
 #include "jhetz/ldap/ad/guid.hpp"
 
+#include "../format_util.hpp"
+
+#include "jhetz/ldap/attribute.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -18,7 +22,6 @@ namespace {
 	constexpr std::size_t data4_offset = 8;
 	constexpr unsigned bits_per_octet = 8;
 	constexpr unsigned bits_per_digit = 4;
-	constexpr unsigned digit_mask = 0xF;
 	// Where each group of the string form starts; a hyphen precedes each but
 	// the first.
 	constexpr std::size_t data2_text = 9;
@@ -27,30 +30,15 @@ namespace {
 	constexpr std::size_t node_text = 24;
 	constexpr std::array<std::size_t, 4> hyphens{ data2_text - 1, data3_text - 1, data4_text - 1, node_text - 1 };
 
-	auto hex_value(char c) -> std::optional<unsigned>
-	{
-		if (c >= '0' && c <= '9') {
-			return static_cast<unsigned>(c - '0');
-		}
-		if (c >= 'a' && c <= 'f') {
-			return static_cast<unsigned>(c - 'a') + 10;
-		}
-		if (c >= 'A' && c <= 'F') {
-			return static_cast<unsigned>(c - 'A') + 10;
-		}
-		return std::nullopt;
-	}
-
 	// The first `Digits` hex digits of `text`, as a number.
 	template<std::size_t Digits> auto read_hex(std::string_view text) -> std::optional<std::uint64_t>
 	{
 		std::uint64_t v = 0;
 		for (std::size_t i = 0; i < Digits; ++i) {
-			const auto d = hex_value(text[i]);
-			if (!d) {
+			if (!ldap::detail::is_hex(text[i])) {
 				return std::nullopt;
 			}
-			v = (v << bits_per_digit) | *d;
+			v = (v << bits_per_digit) | ldap::detail::hex_value(text[i]);
 		}
 		return v;
 	}
@@ -58,7 +46,7 @@ namespace {
 	template<std::size_t Digits> void append_hex(std::string &out, std::uint64_t v)
 	{
 		for (std::size_t i = Digits; i-- > 0;) {
-			out += "0123456789abcdef"[(v >> (i * bits_per_digit)) & digit_mask];
+			out += ldap::detail::hex_digit(static_cast<unsigned>(v >> (i * bits_per_digit)));
 		}
 	}
 

@@ -1,5 +1,7 @@
 #include "jhetz/ldap/ad/sid.hpp"
 
+#include "../format_util.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -149,7 +151,7 @@ auto sid::to_string() const -> std::string
 		std::array<char, hex_authority_digits> digits{};
 		std::uint64_t v = authority_;
 		for (std::size_t i = hex_authority_digits; i-- > 0;) {
-			digits.at(i) = "0123456789ABCDEF"[v % hex_base];
+			digits.at(i) = ldap::detail::upper_hex_digit(static_cast<unsigned>(v % hex_base));
 			v /= hex_base;
 		}
 		out += "0x";

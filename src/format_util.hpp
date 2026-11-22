@@ -12,6 +12,19 @@ namespace jhetz::ldap::detail {
 
 // The low four bits of an octet: one hex digit.
 inline constexpr unsigned nibble_mask = 0xFu;
+inline constexpr unsigned nibble_bits = 4;
+
+// The lowercase hex digit of the low four bits of `v`.
+constexpr auto hex_digit(unsigned v) noexcept -> char { return "0123456789abcdef"[v & nibble_mask]; }
+// The uppercase hex digit of the low four bits of `v`.
+constexpr auto upper_hex_digit(unsigned v) noexcept -> char { return "0123456789ABCDEF"[v & nibble_mask]; }
+
+// Appends the two lowercase hex digits of `b`.
+template<class String> void append_hex_octet(String &out, unsigned char b)
+{
+	out += hex_digit(b >> nibble_bits);
+	out += hex_digit(b);
+}
 
 // DEL, the last ASCII character.
 inline constexpr unsigned char ascii_delete = 0x7Fu;

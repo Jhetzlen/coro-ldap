@@ -545,11 +545,9 @@ namespace {
 	// RFC 4515 section 3 escaping, and every octet not part of valid UTF-8.
 	void append_escaped(std::pmr::string &out, std::string_view value)
 	{
-		static constexpr std::string_view digits = "0123456789abcdef";
 		const auto escape = [&](unsigned char u) {
 			out += '\\';
-			out += digits[u >> 4];
-			out += digits[u & detail::nibble_mask];
+			detail::append_hex_octet(out, u);
 		};
 		for (std::size_t i = 0; i < value.size(); ++i) {
 			const char c = value[i];
