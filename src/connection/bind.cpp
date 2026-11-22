@@ -102,6 +102,7 @@ namespace {
 
 	auto simple_bind_impl(core_ref self, dn name, std::string password) -> capy::task<result<void>>
 	{
+		const detail::scope_exit wipe{ [&password] noexcept { detail::wipe_string(password); } };
 		const std::string context = op_context("bind", name);
 		if (!self) {
 			co_return std::unexpected(no_connection(context));

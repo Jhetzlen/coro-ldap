@@ -28,19 +28,28 @@ namespace detail {
 	[[nodiscard]] auto who_am_i_request(extended_controls controls) -> extended_params;
 	[[nodiscard]] auto who_am_i_result(result<extended_result> r) -> result<std::string>;
 
+	// Wipes the request value when destroyed.
 	struct password_modify_call
 	{
 		extended_params request;
 		std::string context;
+
+		password_modify_call(extended_params r, std::string c);
+		password_modify_call(const password_modify_call &) = delete;
+		password_modify_call(password_modify_call &&) noexcept;
+		auto operator=(const password_modify_call &) -> password_modify_call & = delete;
+		auto operator=(password_modify_call &&) -> password_modify_call & = delete;
+		~password_modify_call();
 	};
-	[[nodiscard]] auto password_modify_request(password_modify_params request) -> password_modify_call;
+	// The requests wipe the passwords they are given.
+	[[nodiscard]] auto password_modify_request(password_modify_params &request) -> password_modify_call;
 	[[nodiscard]] auto password_modify_result(result<extended_result> r, std::string_view context)
 	  -> result<std::optional<std::string>>;
-	// std::errc::invalid_argument on an empty new or old password.
-	[[nodiscard]] auto set_password_request(std::string_view op,
-	  const dn &user,
-	  std::optional<std::string> old_password,
-	  std::string new_password) -> result<password_modify_call>;
+	// std::errc::invalid_argument on an empty new or old password; null
+	// `old_password`: none.
+	[[nodiscard]] auto
+	  set_password_request(std::string_view op, const dn &user, std::string *old_password, std::string &new_password)
+		-> result<password_modify_call>;
 	[[nodiscard]] auto set_password_result(result<extended_result> r, std::string_view context) -> result<void>;
 }// namespace detail
 
@@ -57,7 +66,7 @@ auto who_am_i(D &d, extended_controls controls = {}) -> boost::capy::task<result
 template<extended_directory D>
 auto password_modify(D &d, password_modify_params request) -> boost::capy::task<result<std::optional<std::string>>>
 {
-	auto call = detail::password_modify_request(std::move(request));
+	auto call = detail::password_modify_request(request);
 	co_return detail::password_modify_result(co_await d.extended(std::move(call.request)), call.context);
 }
 
@@ -67,7 +76,7 @@ template<extended_directory D>
 auto change_password(D &d, dn user, std::string old_password, std::string new_password)
   -> boost::capy::task<result<void>>
 {
-	auto call = detail::set_password_request("change password", user, std::move(old_password), std::move(new_password));
+	auto call = detail::set_password_request("change password", user, &old_password, new_password);
 	if (!call) {
 		co_return std::unexpected(std::move(call.error()));
 	}
@@ -76,7 +85,7 @@ auto change_password(D &d, dn user, std::string old_password, std::string new_pa
 template<extended_directory D>
 auto reset_password(D &d, dn user, std::string new_password) -> boost::capy::task<result<void>>
 {
-	auto call = detail::set_password_request("reset password", user, std::nullopt, std::move(new_password));
+	auto call = detail::set_password_request("reset password", user, nullptr, new_password);
 	if (!call) {
 		co_return std::unexpected(std::move(call.error()));
 	}

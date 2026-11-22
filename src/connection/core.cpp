@@ -260,7 +260,7 @@ auto connection::core::writer(core *self) -> capy::task<void>
 			if (const auto p = self->pending.find(id); p != self->pending.end()) {
 				p->second->sent = true;
 			}
-			auto w = co_await net::write_bytes(self->transport_, bytes);
+			auto w = co_await net::write_bytes(self->transport_, bytes.bytes);
 			if (!w) {
 				self->shut(w.error(), true);
 			}
@@ -272,7 +272,7 @@ auto connection::core::writer(core *self) -> capy::task<void>
 	self->write_idle.set();
 }
 
-void connection::core::enqueue(std::int32_t id, std::pmr::vector<std::byte> bytes)
+void connection::core::enqueue(std::int32_t id, detail::pdu_bytes bytes)
 {
 	if (writing) {
 		outbox.push_back({ .id = id, .bytes = std::move(bytes) });
@@ -302,6 +302,48 @@ auto connection::core::free_id() const -> std::int32_t
 	return id;
 }
 
+namespace {
+
+	// Calls `f` on each password `m` carries: a simple bind's, Password
+	// Modify's, and a ModifyRequest's password attribute values; true if any.
+	template<class F> auto each_password(message &m, F f) -> bool
+	{
+		if (auto *b = std::get_if<bind_request>(&m.op)) {
+			auto *simple = std::get_if<simple_auth>(&b->authentication);
+			if (simple == nullptr || simple->password.empty()) {
+				return false;
+			}
+			f(simple->password);
+			return true;
+		}
+		if (auto *x = std::get_if<extended_request>(&m.op); x && x->request_name == password_modify_oid) {
+			if (x->request_value) {
+				f(*x->request_value);
+			}
+			return true;
+		}
+		bool any = false;
+		if (auto *mod = std::get_if<modify_request>(&m.op)) {
+			for (auto &c : mod->changes) {
+				if (detail::is_password_attribute(c.modification.type)) {
+					any = true;
+					for (auto &v : c.modification.values) {
+						f(v);
+					}
+				}
+			}
+		}
+		return any;
+	}
+
+	// Wipes the passwords `m` carries; true if it carried one.
+	auto wipe_password(message &m) noexcept -> bool
+	{
+		return each_password(m, [](std::pmr::string &s) noexcept { detail::wipe_string(s); });
+	}
+
+}// namespace
+
 auto connection::core::submit(message &m, pending_op *p, std::string_view context) -> result<void>
 {
 	if (!open || unbinding) {
@@ -311,10 +353,11 @@ auto connection::core::submit(message &m, pending_op *p, std::string_view contex
 		return fail(client_errc::operation_in_progress, std::string(context) + " during StartTLS");
 	}
 	m.id = free_id();
-	auto bytes = encode(m, mr_);
-	if (!bytes) {
-		return std::unexpected(detail::with_context(std::move(bytes.error()), context));
+	auto encoded = encode(m, mr_);
+	if (!encoded) {
+		return std::unexpected(detail::with_context(std::move(encoded.error()), context));
 	}
+	detail::pdu_bytes bytes(std::move(*encoded), wipe_password(m));
 	if (m.id == max_int) {
 		wrapped = true;
 	}
@@ -333,9 +376,9 @@ auto connection::core::submit(message &m, pending_op *p, std::string_view contex
 			start_reader();
 		}
 		if (binding && !bind) {
-			held.push_back({ .id = m.id, .bytes = std::move(*bytes), .unanswered = p == nullptr });
+			held.push_back({ .id = m.id, .bytes = std::move(bytes), .unanswered = p == nullptr });
 		} else {
-			enqueue(m.id, std::move(*bytes));
+			enqueue(m.id, std::move(bytes));
 		}
 	} catch (...) {
 		// Unregister `p`: its request is not sent.
@@ -996,6 +1039,7 @@ namespace detail {
 	  std::optional<std::chrono::milliseconds> timeout,
 	  std::pmr::vector<intermediate> *intermediates) -> capy::task<result<message>>
 	{
+		const scope_exit wipe{ [&request] noexcept { (void)wipe_password(request); } };
 		if (!std::holds_alternative<bind_request>(request.op)
 			// The analyzer does not model the promise's construction: Capy's env_ is
 			// nullptr-initialised and set by the awaiting caller before the first resume.

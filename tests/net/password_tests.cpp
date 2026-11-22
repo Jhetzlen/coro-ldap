@@ -6,7 +6,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -45,6 +47,34 @@ void check_no_password(const ldap::error &e)
 	CHECK_FALSE(text.contains(old_pw));
 	CHECK_FALSE(text.contains(new_pw));
 }
+
+// Records whether a block it frees still holds `needle`.
+class secret_scanner final : public std::pmr::memory_resource
+{
+  public:
+	explicit secret_scanner(std::string_view needle) : needle_(needle) {}
+	[[nodiscard]] auto leaked() const noexcept -> bool { return leaked_; }
+
+  private:
+	auto do_allocate(std::size_t n, std::size_t align) -> void * override
+	{
+		return std::pmr::new_delete_resource()->allocate(n, align);
+	}
+	void do_deallocate(void *p, std::size_t n, std::size_t align) override
+	{
+		if (std::string_view(static_cast<const char *>(p), n).contains(needle_)) {
+			leaked_ = true;
+		}
+		std::pmr::new_delete_resource()->deallocate(p, n, align);
+	}
+	[[nodiscard]] auto do_is_equal(const std::pmr::memory_resource &other) const noexcept -> bool override
+	{
+		return this == &other;
+	}
+
+	std::string_view needle_;
+	bool leaked_ = false;
+};
 
 }// namespace
 
@@ -124,4 +154,40 @@ TEST_CASE("change_password: a server error", "[net][password]")
 	CHECK(std::string(r.error().context) == "change password " + jdoe_context + ": password modify (RFC 3062)");
 	check_no_password(r.error());
 	m.check_server();
+}
+
+TEST_CASE("passwords: the connection wipes its copies before freeing them", "[net][password]")
+{
+	// Longer than a short string's buffer, so it lives on the resource.
+	constexpr std::string_view secret = "Wiped-Before-Free-S3cret";
+	secret_scanner scanner(secret);
+	{
+		mock_ldap m({}, &scanner);
+		m.serve({ answer({ ldap::message{ 1, ldap::bind_response{ ldap::ldap_result{ 0 } } } }),
+		  answer({ extended_ok(2) }),
+		  answer({ extended_ok(3) }),
+		  answer({ ldap::message{ 4, ldap::modify_response{ ldap::ldap_result{ 0 } } } }) });
+		CHECK(m.run(m.conn.simple_bind(jdoe, std::string(secret))).has_value());
+		CHECK(m.run(ldap::change_password(m.conn, jdoe, std::string(secret), std::string(new_pw))).has_value());
+		CHECK(m.run(ldap::reset_password(m.conn, jdoe, std::string(secret))).has_value());
+		CHECK(m.run(m.conn.modify({ .object = jdoe, .changes = { ldap::mod::replace("userPassword", { secret }) } }))
+			.has_value());
+		m.check_server();
+		REQUIRE(m.log.received.size() == 4);
+	}
+	CHECK_FALSE(scanner.leaked());
+}
+
+TEST_CASE("passwords: other requests are not wiped", "[net][password]")
+{
+	constexpr std::string_view value = "Kept-As-Given-Description";
+	secret_scanner scanner(value);
+	{
+		mock_ldap m({}, &scanner);
+		m.serve({ answer({ ldap::message{ 1, ldap::modify_response{ ldap::ldap_result{ 0 } } } }) });
+		CHECK(m.run(m.conn.modify({ .object = jdoe, .changes = { ldap::mod::replace("description", { value }) } }))
+			.has_value());
+		m.check_server();
+	}
+	CHECK(scanner.leaked());
 }

@@ -4,6 +4,9 @@
 #include "jhetz/ldap/ad/password_value.hpp"
 #include "jhetz/ldap/operations.hpp"
 
+#include "../scope_util.hpp"
+#include "../wipe_util.hpp"
+
 #include <boost/capy/task.hpp>
 
 #include <optional>
@@ -18,11 +21,26 @@ namespace jhetz::ldap::ad {
 
 namespace {
 
-	// The ModifyRequest of a change or a reset, and its error context.
+	// The ModifyRequest of a change or a reset, and its error context; the
+	// values are wiped when destroyed.
 	struct prepared
 	{
 		std::string context;
 		modify_params request;
+
+		prepared(std::string c, modify_params r) : context(std::move(c)), request(std::move(r)) {}
+		prepared(const prepared &) = delete;
+		prepared(prepared &&) = default;
+		auto operator=(const prepared &) -> prepared & = delete;
+		auto operator=(prepared &&) -> prepared & = delete;
+		~prepared()
+		{
+			for (auto &c : request.changes) {
+				for (auto &v : c.modification.values) {
+					detail::wipe_string(v);
+				}
+			}
+		}
 	};
 
 	auto
@@ -44,18 +62,21 @@ namespace {
 		if (!new_value) {
 			return std::unexpected(detail::with_context(std::move(new_value.error()), context));
 		}
-		modify_params request{ .object = std::move(user) };
+		const detail::scope_exit wipe_new{ [&new_value] noexcept { detail::wipe_string(*new_value); } };
+		prepared out(std::move(context), modify_params{ .object = std::move(user) });
+		auto &changes = out.request.changes;
 		if (old_password) {
 			auto old_value = password_value(*old_password);
 			if (!old_value) {
-				return std::unexpected(detail::with_context(std::move(old_value.error()), context));
+				return std::unexpected(detail::with_context(std::move(old_value.error()), out.context));
 			}
-			request.changes.push_back(mod::remove("unicodePwd", { *old_value }));
-			request.changes.push_back(mod::add("unicodePwd", { *new_value }));
+			const detail::scope_exit wipe_old{ [&old_value] noexcept { detail::wipe_string(*old_value); } };
+			changes.push_back(mod::remove("unicodePwd", { *old_value }));
+			changes.push_back(mod::add("unicodePwd", { *new_value }));
 		} else {
-			request.changes.push_back(mod::replace("unicodePwd", { *new_value }));
+			changes.push_back(mod::replace("unicodePwd", { *new_value }));
 		}
-		return prepared{ .context = std::move(context), .request = std::move(request) };
+		return out;
 	}
 
 	// The refusal of an open connection neither TLS nor a SASL

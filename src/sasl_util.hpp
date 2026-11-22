@@ -3,6 +3,8 @@
 
 #include "jhetz/ldap/error.hpp"
 
+#include "wipe_util.hpp"
+
 #include <openssl/crypto.h>
 
 #include <array>
@@ -30,15 +32,6 @@ inline auto library_error(std::string_view what) -> std::unexpected<error>
 inline auto refused(std::string_view what) -> std::unexpected<error>
 {
 	return fail(client_errc::unexpected_response, what);
-}
-
-// Wipes a string's whole buffer, also the bytes past size() that a move
-// out of a short (SSO) string leaves behind.
-inline void wipe_string(std::string &s) noexcept
-{
-	s.resize(s.capacity());// NOLINT(clang-analyzer-cplusplus.Move): wipes what a move left
-	OPENSSL_cleanse(s.data(), s.size());
-	s.clear();
 }
 
 // Key material, wiped when it goes out of scope.

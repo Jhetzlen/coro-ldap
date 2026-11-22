@@ -5,7 +5,11 @@
 #include "jhetz/ldap/mapping.hpp"
 
 #include "format_util.hpp"
+#include "scope_util.hpp"
+#include "wipe_util.hpp"
 
+#include <cstddef>
+#include <initializer_list>
 #include <optional>
 #include <span>
 #include <string>
@@ -25,7 +29,13 @@ namespace {
 		if (!request.user && !request.old_password && !request.new_password) {
 			return std::nullopt;
 		}
+		constexpr std::size_t headers = 24;
+		std::size_t size = headers;
+		for (const auto *p : { &request.user, &request.old_password, &request.new_password }) {
+			size += *p ? (*p)->size() : 0;
+		}
 		ber::writer w;
+		w.reserve(size);
 		w.constructed(ber::tags::sequence, [&](ber::writer &s) {
 			if (request.user) {
 				s.octet_string(*request.user, ber::context(0));
@@ -37,7 +47,9 @@ namespace {
 				s.octet_string(*request.new_password, ber::context(2));
 			}
 		});
-		return std::string(detail::as_text(w.bytes()));
+		auto bytes = w.take();
+		const detail::scope_exit wipe{ [&bytes] noexcept { detail::wipe_vector(bytes); } };
+		return std::string(detail::as_text(bytes));
 	}
 
 	// PasswdModifyResponseValue ::= SEQUENCE { genPasswd [0] OCTET STRING
@@ -91,8 +103,28 @@ auto detail::who_am_i_result(result<extended_result> r) -> result<std::string>
 	return std::string(*r->value);
 }
 
-auto detail::password_modify_request(password_modify_params request) -> password_modify_call
+detail::password_modify_call::password_modify_call(extended_params r, std::string c)
+  : request(std::move(r)), context(std::move(c))
+{}
+
+detail::password_modify_call::password_modify_call(password_modify_call &&) noexcept = default;
+
+detail::password_modify_call::~password_modify_call()
 {
+	if (request.value) {
+		wipe_string(*request.value);
+	}
+}
+
+auto detail::password_modify_request(password_modify_params &request) -> password_modify_call
+{
+	const scope_exit wipe{ [&request] noexcept {
+		for (auto *p : { &request.old_password, &request.new_password }) {
+			if (*p) {
+				wipe_string(**p);
+			}
+		}
+	} };
 	std::string context = "password modify";
 	if (request.user) {// usually a DN, often the server's: as op_context
 		context += ' ';
@@ -102,7 +134,7 @@ auto detail::password_modify_request(password_modify_params request) -> password
 		.value = encode_password_modify(request),
 		.controls = std::move(request.controls),
 		.timeout = request.timeout };
-	return { .request = std::move(x), .context = std::move(context) };
+	return { std::move(x), std::move(context) };
 }
 
 auto detail::password_modify_result(result<extended_result> r, std::string_view context)
@@ -130,22 +162,31 @@ auto detail::password_modify_result(result<extended_result> r, std::string_view 
 
 auto detail::set_password_request(std::string_view op,
   const dn &user,
-  std::optional<std::string> old_password,
-  std::string new_password) -> result<password_modify_call>
+  std::string *old_password,
+  std::string &new_password) -> result<password_modify_call>
 {
+	const scope_exit wipe{ [old_password, &new_password] noexcept {
+		if (old_password != nullptr) {
+			wipe_string(*old_password);
+		}
+		wipe_string(new_password);
+	} };
 	const std::string context = op_context(op, user);
 	if (new_password.empty()) {
 		return fail(std::make_error_code(std::errc::invalid_argument), context + ": empty new password");
 	}
-	if (old_password && old_password->empty()) {
+	if (old_password != nullptr && old_password->empty()) {
 		return fail(std::make_error_code(std::errc::invalid_argument),
 		  context + ": empty old password (reset_password() sets one without it)");
 	}
-	password_modify_params request{ .old_password = std::move(old_password), .new_password = std::move(new_password) };
+	password_modify_params request{ .new_password = std::move(new_password) };
+	if (old_password != nullptr) {
+		request.old_password = std::move(*old_password);
+	}
 	if (!user.empty()) {
 		request.user = std::string(user.to_string());
 	}
-	auto call = password_modify_request(std::move(request));
+	auto call = password_modify_request(request);
 	call.context = context + ": password modify (RFC 3062)";
 	return call;
 }

@@ -1,6 +1,8 @@
 #include "jhetz/ldap/ad/password_value.hpp"
 
 #include "../icu_util.hpp"
+#include "../scope_util.hpp"
+#include "../wipe_util.hpp"
 
 #include <unicode/ustring.h>
 #include <unicode/utypes.h>
@@ -38,6 +40,7 @@ auto password_value(std::string_view password) -> result<std::string>
 		return failed(status);
 	}
 	std::vector<UChar> units(static_cast<std::size_t>(n));
+	const detail::scope_exit wipe{ [&units] noexcept { detail::wipe_vector(units); } };
 	status = U_ZERO_ERROR;
 	if (n != 0) {
 		u_strFromUTF8(units.data(), n, &n, password.data(), static_cast<int32_t>(password.size()), &status);

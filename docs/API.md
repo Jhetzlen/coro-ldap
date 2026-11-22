@@ -822,10 +822,14 @@ itself needs only ICU.
   has no RFC 3062: its password changes are `ad::change_password` and
   `ad::reset_password` (section `ldap::ad`). Which one runs is the call's
   choice: nothing reads the root DSE to pick. Passwords never appear in
-  errors. Password memory is not wiped (simple binds, `password_modify`,
-  these calls, `ad::password_value`): the password goes through
-  `std::string` copies the library cannot all reach. Only
-  `sasl_scram_sha256` and `sasl_ntlm` wipe what they hold.
+  errors. The library wipes the password copies it makes before freeing
+  them: a simple bind's, `password_modify`'s and these calls', those of
+  `ad::change_password` / `ad::reset_password` and `ad::password_value`'s
+  UTF-16 buffer, the values of `unicodePwd` and `userPassword` in any
+  `modify`, and the encoded PDUs that carry them; `sasl_scram_sha256` and
+  `sasl_ntlm` wipe what they hold. Not wiped: the caller's strings, the
+  value `ad::password_value` returns, a generated password, and buffers
+  inside OpenSSL or a SASL security layer.
 - StartTLS (step 7): `connection::start_tls(tls_options)` upgrades a plain
   ldap:// connection in place (refused while operations are outstanding;
   it first waits for the answers due to paged search releases; bytes

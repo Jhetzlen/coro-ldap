@@ -570,13 +570,19 @@ next to it and not instead of it. Active Directory's `unicodePwd` Modify is
 12). The call picks the protocol; nothing reads the root DSE to choose, so
 there is no method option, no per-connection cache and no "no method"
 error. Tested against the scripted mock (`tests/net/password_tests.cpp`)
-and slapd (`integration`). Password memory is not wiped on these paths, nor in simple
-binds and `password_modify()`, whose generated password (a plain
-`std::string`) is not wiped either: the password passes through `std::string`
-copies (the caller's, the request's values, the encoded PDU in the
-connection's pmr buffers) that cannot all be reached, and wiping one of
-them would suggest a protection the library does not give. Only SCRAM
-wipes its key material (below).
+and slapd (`integration`). The copies the library makes are wiped
+(`detail::wipe_string` and `wipe_vector`, src/wipe_util.hpp, volatile
+stores so that the codec needs no OpenSSL) before they are freed: the
+by-value password parameters in the coroutine frames (the detail
+requests take the caller's strings by reference and wipe them, so a
+moved-from short string leaves nothing behind), the Password Modify
+encoder's buffer (reserved once so that it does not reallocate), the
+request message (`request_response` wipes a simple bind's password,
+Password Modify's value and the `unicodePwd` / `userPassword` values of a
+ModifyRequest, also on paths that never send it) and the encoded PDU
+(`detail::pdu_bytes`, wiped when the writer is done with it or the queue
+drops it). The caller's strings, a generated password, OpenSSL's record
+buffers and a SASL security layer's wrapped output are out of reach.
 
 SASL (implemented, #11, `sasl.hpp`): `connection::sasl_bind(mechanism,
 name)` sends one BindRequest per step while the server answers
@@ -702,7 +708,7 @@ only passwords stored in SASLprep form match there. Channel binding
 (RFC 5802 sections 6 and 7, below) is opt-in: by default
 (`not_offered`) the GS2 header is "y,," over TLS with binding data, so
 that a -PLUS server detects a stripped -PLUS, and "n,," otherwise. Key material is
-wiped with `OPENSSL_cleanse` (the password when the object is destroyed;
+wiped (the password when the object is destroyed;
 its prepared form, our preparation buffers and the derived keys as soon as
 the proof is built, but the cached SaltedPassword; ICU's internal buffers cannot be). Server text quoted
 in error contexts stays UTF-8: only control characters, ill-formed

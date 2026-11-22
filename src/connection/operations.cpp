@@ -113,6 +113,15 @@ namespace detail {
 
 	auto modify_impl(core_ref self, modify_params request, std::string context) -> capy::task<result<response>>
 	{
+		const scope_exit wipe{ [&request] noexcept {
+			for (auto &c : request.changes) {
+				if (is_password_attribute(c.modification.type)) {
+					for (auto &v : c.modification.values) {
+						wipe_string(v);
+					}
+				}
+			}
+		} };
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		modify_request op(alloc);
 		op.object = request.object.to_string(self->mr());
@@ -253,6 +262,11 @@ namespace detail {
 			// StartTLS goes through start_tls(), which sends no control.
 			co_return std::unexpected(make_error(client_errc::encode_error, context + ": use start_tls()"));
 		}
+		const scope_exit wipe{ [&request] noexcept {
+			if (request.name == password_modify_oid && request.value) {
+				wipe_string(*request.value);
+			}
+		} };
 		if (request.name == password_modify_oid && self->refuses_cleartext_password()) {
 			co_return fail(client_errc::tls_required,
 			  context + ": the passwords would be sent in clear (use ldaps://, start_tls() or "

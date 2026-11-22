@@ -4,11 +4,13 @@
 
 #include "jhetz/ldap/connection.hpp"
 
+#include "jhetz/ldap/attribute.hpp"
 #include "jhetz/ldap/net/message_io.hpp"
 
 #include "../net/deadline.hpp"
 #include "../scope_util.hpp"
 #include "../strand_util.hpp"
+#include "../wipe_util.hpp"
 
 #include <boost/capy/ex/async_event.hpp>
 #include <boost/capy/task.hpp>
@@ -38,6 +40,41 @@
 namespace jhetz::ldap {
 
 namespace detail {
+
+	// unicodePwd or userPassword, with or without options.
+	[[nodiscard]] inline auto is_password_attribute(std::string_view type) noexcept -> bool
+	{
+		const std::string_view base = type.substr(0, type.find(';'));
+		return iequals(base, "unicodePwd") || iequals(base, "userPassword");
+	}
+
+	// An encoded PDU; one that carries a password is wiped when destroyed.
+	struct pdu_bytes
+	{
+		std::pmr::vector<std::byte> bytes;
+		bool secret = false;
+
+		pdu_bytes(std::pmr::vector<std::byte> b, bool s) noexcept : bytes(std::move(b)), secret(s) {}
+		pdu_bytes(const pdu_bytes &) = delete;
+		pdu_bytes(pdu_bytes &&other) noexcept : bytes(std::move(other.bytes)), secret(other.secret) {}
+		auto operator=(const pdu_bytes &) -> pdu_bytes & = delete;
+		auto operator=(pdu_bytes &&other) -> pdu_bytes &
+		{
+			wipe();
+			bytes = std::move(other.bytes);
+			secret = other.secret;
+			other.wipe();
+			return *this;
+		}
+		~pdu_bytes() { wipe(); }
+
+		void wipe() noexcept
+		{
+			if (secret) {
+				wipe_vector(bytes);
+			}
+		}
+	};
 
 	template<class T, class... Ts> consteval auto index_in(const std::variant<Ts...> *) -> std::size_t
 	{
@@ -384,7 +421,7 @@ class connection::core
 	struct queued_pdu
 	{
 		std::int32_t id;
-		std::pmr::vector<std::byte> bytes;
+		detail::pdu_bytes bytes;
 	};
 	std::pmr::deque<queued_pdu> outbox;
 	bool writing = false;
@@ -396,7 +433,7 @@ class connection::core
 	struct held_request
 	{
 		std::int32_t id;
-		std::pmr::vector<std::byte> bytes;
+		detail::pdu_bytes bytes;
 		bool unanswered = false;// AbandonRequest or send_unanswered: sent whatever the bind's outcome
 	};
 	std::pmr::deque<held_request> held;
@@ -449,7 +486,7 @@ class connection::core
 	static auto writer(core *self) -> boost::capy::task<void>;
 
 	// Queues `bytes` and starts the writer if needed; a throw changes nothing.
-	void enqueue(std::int32_t id, std::pmr::vector<std::byte> bytes);
+	void enqueue(std::int32_t id, detail::pdu_bytes bytes);
 
 	// The next message id not outstanding or recently abandoned (RFC 4511
 	// section 4.1.1).
