@@ -36,7 +36,7 @@ struct ntlm_test_access
 	  sasl_ntlm_options options,
 	  const ntlm_challenge &client_challenge) -> sasl_ntlm
 	{
-		return { std::move(username), std::move(password), std::move(options), client_challenge };
+		return { std::move(username), password, std::move(options), client_challenge };
 	}
 	static void set_session_key(sasl_ntlm &mech, const ntlm_key &key) { mech.fixed_session_key_ = key; }
 };

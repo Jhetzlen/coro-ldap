@@ -69,7 +69,8 @@ class sasl_scram_sha256 final : public sasl_mechanism
 	// RFC 7677 section 4.
 	static constexpr std::uint32_t min_iterations = 4096;
 
-	// `password` is wiped once moved from; the inputs are checked by start().
+	// The `password` parameter is wiped once copied; the inputs are checked by
+	// start().
 	sasl_scram_sha256(std::string username, std::string password, std::string authz_id = {});
 	sasl_scram_sha256(std::string username, std::string password, sasl_scram_options options);
 	~sasl_scram_sha256() override;
@@ -105,9 +106,9 @@ class sasl_scram_sha256 final : public sasl_mechanism
 
   private:
 	friend struct detail::scram_test_access;
-	// Tests only: a fixed client nonce.
+	// Tests only: a fixed client nonce. Wipes `password`.
 	sasl_scram_sha256(std::string username,
-	  std::string password,
+	  std::string &password,
 	  sasl_scram_options options,
 	  std::optional<std::string> fixed_nonce);
 

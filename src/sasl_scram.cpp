@@ -431,29 +431,23 @@ struct sasl_scram_sha256::derivation
 
 sasl_scram_sha256::sasl_scram_sha256(std::string username, std::string password, std::string authz_id)
   : sasl_scram_sha256(std::move(username),
-	  std::move(password),
+	  password,
 	  sasl_scram_options{ .authz_id = std::move(authz_id) },
 	  std::nullopt)
-{
-	// This body runs after the target constructor: its moved-from argument,
-	// which may keep a short password in its buffer, is wiped here.
-	wipe_string(password);
-}
+{}
 
 sasl_scram_sha256::sasl_scram_sha256(std::string username, std::string password, sasl_scram_options options)
-  : sasl_scram_sha256(std::move(username), std::move(password), std::move(options), std::nullopt)
-{
-	wipe_string(password);// as above
-}
+  : sasl_scram_sha256(std::move(username), password, std::move(options), std::nullopt)
+{}
 
 sasl_scram_sha256::sasl_scram_sha256(std::string username,
-  std::string password,
+  std::string &password,
   sasl_scram_options options,
   std::optional<std::string> fixed_nonce)
-  : username_(std::move(username)), password_(std::move(password)), options_(std::move(options)),
+  : username_(std::move(username)), password_(password), options_(std::move(options)),
 	fixed_nonce_(std::move(fixed_nonce))
 {
-	wipe_string(password);// a short password was copied, not moved
+	wipe_string(password);// copied to password_
 }
 
 sasl_scram_sha256::~sasl_scram_sha256()

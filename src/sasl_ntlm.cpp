@@ -409,22 +409,17 @@ namespace detail {
 }// namespace detail
 
 sasl_ntlm::sasl_ntlm(std::string username, std::string password, sasl_ntlm_options options)
-  : sasl_ntlm(std::move(username), std::move(password), std::move(options), std::nullopt)
-{
-	// This body runs after the target constructor: its moved-from argument,
-	// which may keep a short password in its buffer, is wiped here.
-	wipe_string(password);
-}
+  : sasl_ntlm(std::move(username), password, std::move(options), std::nullopt)
+{}
 
 sasl_ntlm::sasl_ntlm(std::string username,
-  std::string password,
+  std::string &password,
   sasl_ntlm_options options,
   std::optional<detail::ntlm_challenge> client_challenge)
-  : username_(std::move(username)), password_(std::move(password)), options_(std::move(options)),
+  : username_(std::move(username)), password_(password), options_(std::move(options)),
 	fixed_client_challenge_(client_challenge)
 {
-	// The moved-from argument may keep the password in its short buffer.
-	wipe_string(password);
+	wipe_string(password);// copied to password_
 }
 
 sasl_ntlm::~sasl_ntlm()

@@ -49,8 +49,8 @@ struct sasl_ntlm_options
 class sasl_ntlm final : public sasl_mechanism
 {
   public:
-	// `username`: "DOMAIN\user", "user@dns.domain" or "user". `password` is
-	// wiped once moved from.
+	// `username`: "DOMAIN\user", "user@dns.domain" or "user". The `password`
+	// parameter is wiped once copied.
 	sasl_ntlm(std::string username, std::string password, sasl_ntlm_options options = {});
 	~sasl_ntlm() override;
 
@@ -79,9 +79,9 @@ class sasl_ntlm final : public sasl_mechanism
 
   private:
 	friend struct detail::ntlm_test_access;
-	// Tests only: a fixed ClientChallenge.
+	// Tests only: a fixed ClientChallenge. Wipes `password`.
 	sasl_ntlm(std::string username,
-	  std::string password,
+	  std::string &password,
 	  sasl_ntlm_options options,
 	  std::optional<detail::ntlm_challenge> client_challenge);
 

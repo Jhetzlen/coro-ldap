@@ -1105,9 +1105,9 @@ as Windows' RtlUpcaseUnicodeString maps each UTF-16 unit on its own; the
 domain is not uppercased. "DOMAIN\user" is split at its first
 backslash, a UPN goes as the user name with no domain, and
 `sasl_ntlm_options::domain` overrides both. The password is wiped with
-`OPENSSL_cleanse` in the destructor (the constructor's moved-from
-by-value parameter at once, as in `sasl_scram_sha256`), its UTF-16 form, the NT hash and
-NTOWFv2 once used (NTOWFv2 is computed in `start()` and wiped in
+`OPENSSL_cleanse` in the destructor (the constructor's by-value
+parameter once copied into the member, as in `sasl_scram_sha256`), its
+UTF-16 form, the NT hash and NTOWFv2 once used (NTOWFv2 is computed in `start()` and wiped in
 `step()`, the SessionBaseKey after the MIC). None of them is returned or
 moved by value, which would leave an unwiped copy in the callee's frame
 or in a moved-from short string: `ntlm_unicode(utf8, out)` converts the
