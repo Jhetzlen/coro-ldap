@@ -37,6 +37,7 @@
 #include <memory_resource>
 #include <numeric>
 #include <optional>
+#include <semaphore>
 #include <span>
 #include <stdexcept>
 #include <stop_token>
@@ -2768,7 +2769,7 @@ TEST_CASE("RFC 4511 4.2.1: requests started during a bind go out after its respo
 namespace {
 
 // A mechanism whose first step, run on a thread of its own, fails without
-// anything being sent.
+// anything being sent once release() is called.
 class refused_offload final : public ldap::sasl_mechanism
 {
   public:
@@ -2780,10 +2781,15 @@ class refused_offload final : public ldap::sasl_mechanism
 	}
 	auto offload_start() -> ldap::sasl_work override
 	{
-		return [] -> ldap::result<std::optional<std::string>> {
+		return [this] -> ldap::result<std::optional<std::string>> {
+			(void)gate_.try_acquire_for(std::chrono::seconds(10));
 			return ldap::fail(client_errc::tls_required, "refused before sending");
 		};
 	}
+	void release() { gate_.release(); }
+
+  private:
+	std::binary_semaphore gate_{ 0 };
 };
 
 // A mechanism whose second step throws.
@@ -2811,6 +2817,10 @@ TEST_CASE("requests held behind a failed bind fail without being sent", "[net][c
 		outcome<ldap::result<ldap::search_result>> held;
 		spawn(m.ioc, m.conn.sasl_bind(mech), bind);
 		spawn(m.ioc, m.conn.search({ .base = ldap::dn{} }), held);// id 1
+		while (m.ioc.poll() != 0) {}// the bind waits on its step, the search is held
+		m.ioc.restart();
+		CHECK_FALSE(held.done());
+		mech.release();
 		drive_until(m.ioc, [&] { return bind.done() && held.done(); });
 		REQUIRE_FALSE(bind.get().has_value());
 		CHECK(bind.get().error().code == client_errc::tls_required);
