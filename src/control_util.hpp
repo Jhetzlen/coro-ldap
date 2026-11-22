@@ -44,16 +44,6 @@ inline auto next_is(const ber::reader &r, ber::tag t) -> bool
 	return p && p->cls == t.cls && p->number == t.number;
 }
 
-// The next element has the class, number and form of `t`.
-inline auto next_is_exact(const ber::reader &r, ber::tag t) -> bool
-{
-	if (r.empty()) {
-		return false;
-	}
-	auto p = r.peek_tag();
-	return p && p->cls == t.cls && p->number == t.number && p->constructed == t.constructed;
-}
-
 // Enters the value's outer SEQUENCE; nothing may follow it.
 inline auto enter_value(ber::reader &outer) -> result<ber::reader>
 {

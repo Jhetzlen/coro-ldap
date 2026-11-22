@@ -679,6 +679,11 @@ TEST_CASE("decode_virtual_list_view", "[controls][vlv]")
 		.starts_with("virtual list view: ber: "));
 	CHECK(context_of(with_value(ldap::vlv_request_oid, "30 07 02 01 00 02 01 00 81"))
 		.starts_with("virtual list view: ber: "));
+	// A field's tag in the wrong form is malformed, not an unknown element.
+	CHECK(context_of(with_value(ldap::vlv_request_oid, "30 08 02 01 00 02 01 00 80 00"))
+		.starts_with("virtual list view: ber: "));
+	CHECK(context_of(with_value(ldap::vlv_request_oid, "30 0B 02 01 00 02 01 00 81 01 42 24 00"))
+		.starts_with("virtual list view: ber: "));
 }
 
 TEST_CASE("virtual list view response control", "[controls][vlv]")

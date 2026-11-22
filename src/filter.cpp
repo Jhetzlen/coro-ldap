@@ -1354,6 +1354,7 @@ auto encode_filter(ber::writer &w, const filter &f, const filter_limits &limits)
 
 namespace {
 
+	using detail::next_is;
 	using detail::skip_rest;
 
 	auto bad(std::string_view what, std::size_t offset) -> std::unexpected<error>
@@ -1496,18 +1497,10 @@ namespace {
 			if (!sub) {
 				return std::unexpected(std::move(sub.error()));
 			}
-			const auto next_is = [&](std::uint8_t number) {
-				// Checked first, before peek_tag().
-				if (sub->empty()) {
-					return false;
-				}
-				auto pt = sub->peek_tag();
-				return pt && pt->cls == ber::tag_class::context && pt->number == number;
-			};
 			std::string_view rule;
 			std::string_view type;
 			bool dn_attributes = false;
-			if (next_is(1)) {
+			if (next_is(*sub, ber::context(1))) {
 				const std::size_t rule_at = sub->offset();
 				auto s = sub->read_octet_string(ber::context(1));
 				if (!s) {
@@ -1518,7 +1511,7 @@ namespace {
 					return bad("invalid matching rule", rule_at);
 				}
 			}
-			if (next_is(2)) {
+			if (next_is(*sub, ber::context(2))) {
 				auto s = read_attr(*sub, ber::context(2));
 				if (!s) {
 					return std::unexpected(std::move(s.error()));
@@ -1529,7 +1522,7 @@ namespace {
 			if (!v) {
 				return std::unexpected(std::move(v.error()));
 			}
-			if (next_is(4)) {
+			if (next_is(*sub, ber::context(4))) {
 				auto b = sub->read_boolean(ber::context(4));
 				if (!b) {
 					return std::unexpected(std::move(b.error()));

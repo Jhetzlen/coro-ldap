@@ -17,6 +17,7 @@ namespace jhetz::ldap {
 using detail::assign_optional;
 using detail::assign_variant;
 using detail::control_value;
+using detail::enter_value;
 using detail::in_control;
 using detail::next_is;
 using detail::optional_string;
@@ -1679,12 +1680,9 @@ namespace {
 	auto read_paged_results(std::span<const std::byte> value, std::pmr::memory_resource *mr) -> result<paged_results>
 	{
 		ber::reader r(value);
-		auto s = r.enter();
+		auto s = enter_value(r);
 		if (!s) {
 			return std::unexpected(std::move(s.error()));
-		}
-		if (auto done = r.expect_end(); !done) {
-			return std::unexpected(std::move(done.error()));
 		}
 		auto size = read_ranged(*s, ber::tags::integer, 0, max_int, "size");
 		if (!size) {
@@ -1734,12 +1732,9 @@ namespace {
 	auto read_sort_result(std::span<const std::byte> value, std::pmr::memory_resource *mr) -> result<sort_result>
 	{
 		ber::reader r(value);
-		auto s = r.enter();
+		auto s = enter_value(r);
 		if (!s) {
 			return std::unexpected(std::move(s.error()));
-		}
-		if (auto done = r.expect_end(); !done) {
-			return std::unexpected(std::move(done.error()));
 		}
 		auto code = read_ranged(*s,
 		  ber::tags::enumerated,
@@ -1855,12 +1850,9 @@ namespace {
 	auto read_vlv_response(std::span<const std::byte> value, std::pmr::memory_resource *mr) -> result<vlv_response>
 	{
 		ber::reader r(value);
-		auto s = r.enter();
+		auto s = enter_value(r);
 		if (!s) {
 			return std::unexpected(std::move(s.error()));
-		}
-		if (auto done = r.expect_end(); !done) {
-			return std::unexpected(std::move(done.error()));
 		}
 		auto position = read_ranged(*s, ber::tags::integer, 0, max_int, "targetPosition");
 		if (!position) {

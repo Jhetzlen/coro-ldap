@@ -17,9 +17,10 @@
 namespace jhetz::ldap {
 
 using detail::control_value;
+using detail::enter_value;
 using detail::find_decoded;
 using detail::in_control;
-using detail::next_is_exact;
+using detail::next_is;
 using detail::skip_rest;
 using detail::value_control;
 
@@ -182,12 +183,9 @@ namespace {
 	auto read_matched_values(std::span<const std::byte> value, std::pmr::memory_resource *mr) -> result<matched_values>
 	{
 		ber::reader r(value);
-		auto s = r.enter();
+		auto s = enter_value(r);
 		if (!s) {
 			return std::unexpected(std::move(s.error()));
-		}
-		if (auto done = r.expect_end(); !done) {
-			return std::unexpected(std::move(done.error()));
 		}
 		matched_values out;
 		std::size_t elements = 0;
@@ -307,12 +305,9 @@ namespace {
 	auto read_vlv(std::span<const std::byte> value) -> result<virtual_list_view>
 	{
 		ber::reader r(value);
-		auto s = r.enter();
+		auto s = enter_value(r);
 		if (!s) {
 			return std::unexpected(std::move(s.error()));
-		}
-		if (auto done = r.expect_end(); !done) {
-			return std::unexpected(std::move(done.error()));
 		}
 		virtual_list_view out;
 		auto before = read_count(*s, 0, "beforeCount");
@@ -325,7 +320,7 @@ namespace {
 		}
 		out.before_count = *before;
 		out.after_count = *after;
-		if (next_is_exact(*s, ber::context(0, true))) {
+		if (next_is(*s, ber::context(0, true))) {
 			auto by = s->enter(ber::context(0, true));
 			if (!by) {
 				return std::unexpected(std::move(by.error()));
@@ -342,7 +337,7 @@ namespace {
 				return std::unexpected(std::move(done.error()));
 			}
 			out.target = vlv_by_offset{ .offset = *offset, .content_count = *count };
-		} else if (next_is_exact(*s, ber::context(1))) {
+		} else if (next_is(*s, ber::context(1))) {
 			auto v = s->read_octet_string(ber::context(1));
 			if (!v) {
 				return std::unexpected(std::move(v.error()));
@@ -352,7 +347,7 @@ namespace {
 			return fail(client_errc::decode_error,
 			  detail::format("target: expected [CONTEXT 0] or [CONTEXT 1] at offset {}", s->offset()));
 		}
-		if (next_is_exact(*s, ber::tags::octet_string)) {
+		if (next_is(*s, ber::tags::octet_string)) {
 			auto id = s->read_octet_string();
 			if (!id) {
 				return std::unexpected(std::move(id.error()));
