@@ -61,7 +61,7 @@ namespace detail {
 		connection_options options{};
 	};
 	[[nodiscard]] auto same_policy_plan(const url &target,
-	  bool origin_tls,
+	  bool origin_protected,
 	  const connection_options &options,
 	  std::span<const std::string> allowed_host_suffixes,
 	  std::optional<std::uint16_t> origin_port = std::nullopt) -> std::optional<referral_connect_plan>;

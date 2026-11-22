@@ -1,5 +1,6 @@
 // SASL security layers with a made-up layer: the framing on the transport,
 // and sasl_bind installing the layer after the successful BindResponse.
+#include "../../src/connection/referral_chase_impl.hpp"
 #include "../../src/net/sasl_layer.hpp"
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/ad/password.hpp"
@@ -709,6 +710,7 @@ TEST_CASE("sasl layer: an Active Directory password change needs confidentiality
 		REQUIRE(finish(m.ioc, m.conn.sasl_bind(mech)).has_value());
 		CHECK(m.conn.security_layer() == ldap::sasl_protection::confidentiality);
 		CHECK_FALSE(m.conn.is_tls());
+		CHECK(ldap::detail::origin_protected(m.conn));
 		auto r = finish(m.ioc, ldap::ad::reset_password(m.conn, jdoe, "New-S3cret"));
 		CHECK(r.has_value());
 		drive_until(m.ioc, [&] { return server.done(); });
@@ -723,6 +725,7 @@ TEST_CASE("sasl layer: an Active Directory password change needs confidentiality
 		spawn(m.ioc, serve_layered_modify(m.server_end(), mech.level, false, received, error), server);
 		REQUIRE(finish(m.ioc, m.conn.sasl_bind(mech)).has_value());
 		CHECK(m.conn.security_layer() == ldap::sasl_protection::integrity);
+		CHECK_FALSE(ldap::detail::origin_protected(m.conn));
 		drive_until(m.ioc, [&] { return server.done(); });
 		auto r = finish(m.ioc, ldap::ad::change_password(m.conn, jdoe, "Old-S3cret", "New-S3cret"));
 		REQUIRE_FALSE(r.has_value());

@@ -9,6 +9,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <boost/corosio/delay.hpp>
+#include <boost/corosio/local_endpoint.hpp>
+#include <boost/corosio/local_stream_acceptor.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -1153,6 +1155,28 @@ TEST_CASE("make_same_policy_connector: no TLS downgrade, the referred host check
 		REQUIRE(s);
 		CHECK_FALSE(s->options.start_tls);
 	}
+}
+
+TEST_CASE("referral connections: an ldapi:// origin counts as protected", "[net][referral][ldapi]")
+{
+	corosio::io_context ioc;
+	temp_path sock(u8".sock");
+	corosio::local_stream_acceptor acc(ioc);
+	REQUIRE_FALSE(acc.open());
+	const auto [pec, path] = corosio::make_local_endpoint(sock.str());
+	REQUIRE_FALSE(pec);
+	REQUIRE_FALSE(acc.bind(path, corosio::bind_option::unlink_existing));
+	REQUIRE_FALSE(acc.listen());
+	auto u = ldap::url::parse("ldapi://" + percent_encode(sock.str()));
+	REQUIRE(u.has_value());
+	auto c = finish(ioc, ldap::connect(ioc, *u));
+	REQUIRE(c.has_value());
+	CHECK_FALSE(c->is_tls());
+	CHECK(ldap::detail::origin_protected(*c));
+	c->close();
+
+	mock_ldap plain;
+	CHECK_FALSE(ldap::detail::origin_protected(plain.conn));
 }
 
 TEST_CASE("referral connections: the TLS client certificate goes with the client's setup only", "[net][referral]")

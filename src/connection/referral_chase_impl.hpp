@@ -73,18 +73,22 @@ struct referral_identity
 [[nodiscard]] auto client_referral_identity(referral_binding binding, const session_setup &client_setup)
   -> std::optional<referral_identity>;
 
+// TLS, ldapi://, or a SASL confidentiality layer.
+[[nodiscard]] auto origin_protected(const connection &origin) -> bool;
+
 // The URL and options a policy connector connects to `target` with, as
 // `chosen` binds it: nullopt when its host cannot be used.
-[[nodiscard]] auto
-  referral_plan(const url &target, bool origin_tls, const connection_options &options, const referral_identity &chosen)
-	-> std::optional<referral_connect_plan>;
+[[nodiscard]] auto referral_plan(const url &target,
+  bool origin_protected,
+  const connection_options &options,
+  const referral_identity &chosen) -> std::optional<referral_connect_plan>;
 
 // Decides for a URL that passed the fixed rules; nullopt skips it.
 using referral_chooser = std::function<std::optional<referral_identity>(const url &target, std::size_t depth)>;
 
 // make_same_policy_connector with `choose` deciding servers and binding.
 [[nodiscard]] auto make_policy_connector(boost::corosio::io_context &ioc,
-  bool origin_tls,
+  bool origin_protected,
   connection_options options,
   referral_chooser choose,
   std::pmr::memory_resource *mr) -> referral_connector;

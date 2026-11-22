@@ -1284,7 +1284,8 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   port (`host:port`, which allows it on the hosts the entry matches, its
   subdomains included: the setup's credentials go to whatever listens on the
   port a server names, so another port of an allowed host is opt-in), no TLS
-  downgrade (a TLS origin makes ldap:// targets use StartTLS, and a failed
+  downgrade (a protected origin, TLS, ldapi:// or a SASL confidentiality
+  layer, makes ldap:// targets use StartTLS, and a failed
   StartTLS fails the URI), the certificate checked against the referred
   host (RFC 4513 section 3.1.3: `server_name` cleared, IDNs connected to
   in ASCII form), and binding only through the caller's `session_setup`

@@ -777,7 +777,8 @@ itself needs only ICU.
   with bytes no host name has, and ports other than the scheme's default
   and the origin's (unless an entry names it: `host:port`, `[::1]:port`;
   `example.org:1389` allows that port on the subdomains too)
-  are skipped, a TLS origin makes ldap:// targets use StartTLS (failure fails
+  are skipped, a protected origin (TLS, ldapi://, or a SASL
+  confidentiality layer) makes ldap:// targets use StartTLS (failure fails
   the URI), the certificate is checked against the referred host, and
   each new connection is bound only by `setup` (a `session_setup`, e.g.
   `simple_bind_setup`; none: anonymous, and the TLS client certificate of
@@ -1504,8 +1505,9 @@ itself needs only ICU.
   or `same_setup` (bind with the client's `session_setup`) per URI;
   empty: nothing is contacted. `same_setup_for_domains(domains)` builds
   one from `make_same_policy_connector`'s allow-list rules. ldapi:// and
-  implausible hosts are refused before `authorize` is asked; a TLS pooled
-  connection makes ldap:// targets use StartTLS (no downgrade). Referred
+  implausible hosts are refused before `authorize` is asked; a protected
+  pooled connection (TLS, ldapi://, or a SASL confidentiality layer)
+  makes ldap:// targets use StartTLS (no downgrade). Referred
   connections belong to one call (closed when it ends, not pooled). Only
   the pooled connection's own failure is retried, never a referred
   server's. `search()` returns the chase's `search_result` (the URIs of

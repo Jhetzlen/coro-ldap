@@ -1205,7 +1205,7 @@ namespace detail {
 				  authorize(referral_hop{ .target = target, .depth = depth, .origin = origin }), self->options.setup);
 			};
 			return make_policy_connector(
-			  *self->ioc, held->is_tls(), self->options.connection, std::move(choose), self->mr);
+			  *self->ioc, detail::origin_protected(*held), self->options.connection, std::move(choose), self->mr);
 		}
 
 		// The switches of client_options::referrals, and the observer's hook.

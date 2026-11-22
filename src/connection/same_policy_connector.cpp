@@ -183,7 +183,7 @@ namespace {
 
 	// The connect plan for `target`, without the allow-list: nullopt when
 	// its host cannot be used (usable_host).
-	auto connect_plan(const url &target, bool origin_tls, const connection_options &options)
+	auto connect_plan(const url &target, bool origin_protected, const connection_options &options)
 	  -> std::optional<detail::referral_connect_plan>
 	{
 		if (!usable_host(target)) {
@@ -197,7 +197,7 @@ namespace {
 		plan.options.tls.server_name.clear();
 		if (target.scheme() == url_scheme::ldaps) {
 			plan.options.start_tls = false;
-		} else if (origin_tls) {
+		} else if (origin_protected) {
 			plan.options.start_tls = true;
 		}
 		return plan;
@@ -215,7 +215,7 @@ namespace {
 	struct connector_state
 	{
 		corosio::io_context *ioc;
-		bool origin_tls;
+		bool origin_protected;
 		connection_options options;
 		detail::referral_chooser choose;
 		std::pmr::memory_resource *mr;
@@ -237,7 +237,7 @@ namespace {
 		if ((co_await capy::this_coro::stop_token).stop_requested()) {
 			co_return std::unexpected(make_error(capy::error::canceled, "referral connect"));
 		}
-		auto plan = detail::referral_plan(target, st->origin_tls, st->options, *chosen);
+		auto plan = detail::referral_plan(target, st->origin_protected, st->options, *chosen);
 		if (!plan) {
 			co_return nullptr;
 		}
@@ -276,7 +276,7 @@ namespace {
 namespace detail {
 
 	auto same_policy_plan(const url &target,
-	  bool origin_tls,
+	  bool origin_protected,
 	  const connection_options &options,
 	  std::span<const std::string> allowed_host_suffixes,
 	  std::optional<std::uint16_t> origin_port) -> std::optional<referral_connect_plan>
@@ -284,15 +284,24 @@ namespace detail {
 		if (!server_allowed(target, allowed_host_suffixes, origin_port)) {
 			return std::nullopt;
 		}
-		return connect_plan(target, origin_tls, options);
+		return connect_plan(target, origin_protected, options);
+	}
+
+	auto origin_protected(const connection &origin) -> bool
+	{
+		if (origin.is_tls() || origin.security_layer() == sasl_protection::confidentiality) {
+			return true;
+		}
+		const auto u = url::parse(origin.name());
+		return u && u->scheme() == url_scheme::ldapi;
 	}
 
 	auto referral_plan(const url &target,
-	  bool origin_tls,
+	  bool origin_protected,
 	  const connection_options &options,
 	  const referral_identity &chosen) -> std::optional<referral_connect_plan>
 	{
-		auto plan = connect_plan(target, origin_tls, options);
+		auto plan = connect_plan(target, origin_protected, options);
 		if (plan && !chosen.client_certificate) {
 			plan->options.tls.cert_file.clear();
 			plan->options.tls.key_file.clear();
@@ -314,13 +323,13 @@ namespace detail {
 	}
 
 	auto make_policy_connector(corosio::io_context &ioc,
-	  bool origin_tls,
+	  bool origin_protected,
 	  connection_options options,
 	  referral_chooser choose,
 	  std::pmr::memory_resource *mr) -> referral_connector
 	{
 		auto st = std::make_shared<connector_state>(connector_state{ .ioc = &ioc,
-		  .origin_tls = origin_tls,
+		  .origin_protected = origin_protected,
 		  .options = std::move(options),
 		  .choose = std::move(choose),
 		  .mr = mr });
@@ -347,7 +356,7 @@ auto make_same_policy_connector(corosio::io_context &ioc,
 		return detail::same_policy_identity(setup);
 	};
 	return detail::make_policy_connector(
-	  ioc, origin.is_tls(), std::move(options), std::move(choose), std::pmr::get_default_resource());
+	  ioc, detail::origin_protected(origin), std::move(options), std::move(choose), std::pmr::get_default_resource());
 }
 
 }// namespace jhetz::ldap
