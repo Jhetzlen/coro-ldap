@@ -3523,6 +3523,46 @@ TEST_CASE("client: ad::dirsync starts over from the caller's cookie after a lost
 	}
 }
 
+TEST_CASE("client: the AD helpers retire the lost connection before the retry", "[net][client][ad][retry]")
+{
+	pool_fixture f;
+	const auto retried = [&f](const ldap::url &u) {
+		CHECK(f.obs.events
+			  == std::vector<std::string>{
+				"connect " + text(u) + " ok", "disconnect " + text(u) + " closed", "connect " + text(u) + " ok" });
+		CHECK(f.pool->connections() == 1);
+	};
+	SECTION("ad::read_all_values")
+	{
+		auto &s = f.server({ lost_after_bind(),
+		  { answer({ bind_resp(1) }),
+			answer({ staff_msg(2, "member;range=0-*", { "m0" }), done_msg(2) }),
+			step{},
+			client_hangs_up() } });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		auto r = finish(f.ioc, ldap::ad::read_all_values(*f.pool, staff, "member"));
+		REQUIRE(r.has_value());
+		CHECK(s.accepted() == 2);
+		retried(s.url());
+	}
+	SECTION("ad::dirsync")
+	{
+		auto &s = f.server({ lost_after_bind(),
+		  { answer({ bind_resp(1) }),
+			dirsync_page(2, "cn=b,dc=example,dc=org", false, "c9"),
+			step{},
+			client_hangs_up() } });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
+		auto r = finish(f.ioc,
+		  ldap::ad::dirsync(*f.pool,
+			{ .base = domain_root, .filter = ldap::filters::attr("objectClass") == "user" },
+			{ .cookie = "c0" }));
+		REQUIRE(r.has_value());
+		CHECK(s.accepted() == 2);
+		retried(s.url());
+	}
+}
+
 TEST_CASE("client: ad::dirsync honours max_rounds", "[net][client][ad][dirsync]")
 {
 	const ldap::search_params users{ .base = domain_root, .filter = ldap::filters::attr("objectClass") == "user" };

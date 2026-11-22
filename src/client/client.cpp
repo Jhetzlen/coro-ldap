@@ -8,6 +8,7 @@
 #include "../net/deadline.hpp"
 #include "../scope_util.hpp"
 #include "../strand_util.hpp"
+#include "lease_retry.hpp"
 
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
@@ -1119,12 +1120,12 @@ namespace detail {
 			return e.code == cond::connection_lost || e.code == cond::busy_or_unavailable;
 		}
 
-		// Retires `held`'s connection after the retryable failure `e`; returns the
-		// server to avoid (one that answered busy or unavailable).
-		auto set_aside(const lease &held, const error &e) noexcept -> std::optional<std::size_t>
+		// Retires `held`'s connection after the retryable failure `code`; returns
+		// the server to avoid (one that answered busy or unavailable).
+		auto set_aside(const lease &held, std::error_code code) noexcept -> std::optional<std::size_t>
 		{
 			const auto &c = held.conn_;
-			const bool refused = e.code == cond::busy_or_unavailable;
+			const bool refused = code == cond::busy_or_unavailable;
 			if (!closed && !c->retired && detail::accepts_requests(c->conn)
 				&& std::ranges::find(pool, c) != pool.end()) {
 				retire(c, refused ? disconnect_reason::busy_or_unavailable : disconnect_reason::closed);
@@ -1132,10 +1133,8 @@ namespace detail {
 			return refused ? std::optional<std::size_t>{ c->server } : std::nullopt;
 		}
 
-		// An operation's outcome: a result (the pooled connection's own), or
-		// a chase's (whose failure may be a referred server's).
-		template<class T> static auto value_of(result<T> &r) -> result<T> & { return r; }
-		template<class T> static auto value_of(chase_result<T> &r) -> result<T> & { return r.value; }
+		// Whether a failed outcome is the pooled connection's own (a chase's may
+		// be a referred server's).
 		template<class T> static auto origin_failed(const result<T> & /*r*/) -> bool { return true; }
 		template<class T> static auto origin_failed(const chase_result<T> &r) -> bool { return r.origin_failed; }
 
@@ -1143,19 +1142,10 @@ namespace detail {
 		// pooled connection's own operation.
 		template<class T, class Op> static auto read(std::shared_ptr<client_state> self, Op op) -> capy::task<result<T>>
 		{
-			std::optional<std::size_t> avoid;
-			for (bool retried = false;; retried = true) {
-				auto held = co_await acquire<lease>(self, avoid);
-				if (!held) {
-					co_return std::unexpected(std::move(held.error()));
-				}
-				auto r = co_await op(*held);
-				auto &v = value_of(r);
-				if (v || retried || !origin_failed(r) || !retryable(v.error())) {
-					co_return std::move(v);
-				}
-				avoid = self->set_aside(*held, v.error());
-			}
+			return retry_once_on_lease<T>(
+			  acquire<lease>(std::move(self)),
+			  [](auto &r) { return origin_failed(r) && retryable(lease_outcome(r).error()); },
+			  std::move(op));
 		}
 
 		// ---------------------------------------------------------------- write forwarders
@@ -1165,17 +1155,26 @@ namespace detail {
 		template<class T = response, class Op>
 		static auto write(std::shared_ptr<client_state> self, Op op) -> capy::task<result<T>>
 		{
-			for (bool retried = false;; retried = true) {
-				auto held = co_await acquire<lease>(self);
-				if (!held) {
-					co_return std::unexpected(std::move(held.error()));
-				}
-				auto r = co_await op(*held);
-				if (r || retried || r.error().code != client_errc::not_sent) {
-					co_return std::move(r);
-				}
-				(void)self->set_aside(*held, r.error());
-			}
+			return retry_once_on_lease<T>(
+			  acquire<lease>(std::move(self)),
+			  [](const result<T> &r) { return r.error().code == client_errc::not_sent; },
+			  std::move(op));
+		}
+
+		// reacquire(): on the strand.
+		static auto reacquire(lease failed, std::error_code code) -> capy::task<result<lease>>
+		{
+			auto self = failed.state_;
+			const client::executor_type strand = self->strand;
+			return on_strand(strand, set_aside_and_acquire(std::move(self), std::move(failed), code));
+		}
+
+		static auto set_aside_and_acquire(std::shared_ptr<client_state> self, lease failed, std::error_code code)
+		  -> capy::task<result<lease>>
+		{
+			const auto avoid = self->set_aside(failed, code);
+			failed.release();
+			co_return co_await acquire<lease>(std::move(self), avoid);
 		}
 
 		// ---------------------------------------------------------------- referrals
@@ -1306,7 +1305,7 @@ namespace detail {
 					if (s) {
 						co_await end_stream(**held, *s);
 					}
-					avoid = self->set_aside(*held, *failed);
+					avoid = self->set_aside(*held, failed->code);
 					continue;
 				}
 				if (!s) {
@@ -1317,6 +1316,11 @@ namespace detail {
 			}
 		}
 	};
+
+	auto reacquire(lease failed, std::error_code code) -> capy::task<result<lease>>
+	{
+		return client_state::reacquire(std::move(failed), code);
+	}
 
 	void set_jitter(const client &c, std::function<double()> unit) { c.state_->jitter = std::move(unit); }
 

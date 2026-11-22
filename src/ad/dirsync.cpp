@@ -4,6 +4,8 @@
 #include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/operations.hpp"
 
+#include "../client/lease_retry.hpp"
+
 #include <boost/capy/task.hpp>
 
 #include <algorithm>
@@ -73,35 +75,6 @@ namespace {
 		}
 	}
 
-	// `first` and `retry` are acquire() tasks of the same client: `retry`
-	// runs only after cond::connection_lost on the first lease.
-	auto poll(capy::task<result<lease>> first,
-	  capy::task<result<lease>> retry,
-	  search_params request,
-	  dirsync_request options,
-	  std::size_t max_rounds,
-	  std::pmr::memory_resource *mr) -> capy::task<result<dirsync_result>>
-	{
-		if (max_rounds == 0) {
-			co_return no_rounds(request);
-		}
-		{
-			auto l = co_await std::move(first);
-			if (!l) {
-				co_return std::unexpected(std::move(l.error()));
-			}
-			auto r = co_await poll(l->get(), request, options, max_rounds, mr);
-			if (r || r.error().code != cond::connection_lost) {
-				co_return r;
-			}
-		}
-		auto l = co_await std::move(retry);
-		if (!l) {
-			co_return std::unexpected(std::move(l.error()));
-		}
-		co_return co_await poll(l->get(), request, options, max_rounds, mr);
-	}
-
 	auto start(connection &c,
 	  search_params request,
 	  dirsync_request options,
@@ -112,6 +85,23 @@ namespace {
 			co_return no_rounds(request);
 		}
 		co_return co_await poll(c, request, options, max_rounds, mr);
+	}
+
+	// `first`: an acquire() task; after cond::connection_lost, once more on
+	// another lease.
+	auto start(capy::task<result<lease>> first,
+	  search_params request,
+	  dirsync_request options,
+	  std::size_t max_rounds,
+	  std::pmr::memory_resource *mr) -> capy::task<result<dirsync_result>>
+	{
+		if (max_rounds == 0) {
+			co_return no_rounds(request);
+		}
+		co_return co_await ldap::detail::retry_once_on_lease<dirsync_result>(
+		  std::move(first),
+		  [](const result<dirsync_result> &r) { return r.error().code == cond::connection_lost; },
+		  [&](const lease &held) { return poll(*held, request, options, max_rounds, mr); });
 	}
 
 }// namespace
@@ -131,7 +121,7 @@ auto dirsync(client &pool,
   std::size_t max_rounds,
   std::pmr::memory_resource *mr) -> capy::task<result<dirsync_result>>
 {
-	return poll(pool.acquire(), pool.acquire(), std::move(request), std::move(options), max_rounds, mr);
+	return start(pool.acquire(), std::move(request), std::move(options), max_rounds, mr);
 }
 
 }// namespace jhetz::ldap::ad

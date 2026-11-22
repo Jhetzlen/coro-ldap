@@ -5,6 +5,8 @@
 #include "jhetz/ldap/directory.hpp"
 #include "jhetz/ldap/operations.hpp"
 
+#include "../client/lease_retry.hpp"
+
 #include <boost/capy/task.hpp>
 
 #include <algorithm>
@@ -229,29 +231,17 @@ namespace {
 		co_return co_await read(c, *r);
 	}
 
-	// `first` and `retry` are acquire() tasks of the same client: `retry`
-	// runs only after cond::connection_lost on the first lease.
-	auto run(capy::task<result<lease>> first, capy::task<result<lease>> retry, result<request> r)
-	  -> capy::task<result<string_list>>
+	// `first`: an acquire() task; after cond::connection_lost, once more on
+	// another lease.
+	auto run(capy::task<result<lease>> first, result<request> r) -> capy::task<result<string_list>>
 	{
 		if (!r) {
 			co_return std::unexpected(std::move(r.error()));
 		}
-		{
-			auto l = co_await std::move(first);
-			if (!l) {
-				co_return std::unexpected(std::move(l.error()));
-			}
-			auto values = co_await read(l->get(), *r);
-			if (values || values.error().code != cond::connection_lost) {
-				co_return values;
-			}
-		}
-		auto l = co_await std::move(retry);
-		if (!l) {
-			co_return std::unexpected(std::move(l.error()));
-		}
-		co_return co_await read(l->get(), *r);
+		co_return co_await ldap::detail::retry_once_on_lease<string_list>(
+		  std::move(first),
+		  [](const result<string_list> &values) { return values.error().code == cond::connection_lost; },
+		  [&r](const lease &held) { return read(*held, *r); });
 	}
 
 }// namespace
@@ -271,7 +261,7 @@ auto read_all_values(client &pool,
   range_options options,
   std::pmr::memory_resource *mr) -> capy::task<result<string_list>>
 {
-	return run(pool.acquire(), pool.acquire(), prepare(std::move(object), std::move(attribute), options, mr));
+	return run(pool.acquire(), prepare(std::move(object), std::move(attribute), options, mr));
 }
 
 }// namespace jhetz::ldap::ad
