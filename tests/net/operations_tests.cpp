@@ -2376,13 +2376,13 @@ TEST_CASE("operations: a failed allocation where nothing may throw closes the co
 		auto body = [&] -> capy::task<ldap::result<ldap::response>> {
 			*s = ldap::search_stream{};
 			auto add = t.conn.add({ .entry = jdoe });
-			frames.fail_at(3);// the add's request_response and next_response, then the new reader's frame
+			frames.fail_at(4);// the add's exchange, request_response and next_response, then the new reader's frame
 			co_return co_await std::move(add);
 		};
 		outcome<ldap::result<ldap::response>> add;
 		spawn_on(t.conn.executor(), body(), add);// on the strand: the destructor runs inline
 		drive_until(t.ioc, [&add] { return add.done(); });
-		CHECK(frames.count() == 3);
+		CHECK(frames.count() == 4);
 		frames.fail_at(0);
 		CHECK_FALSE(t.conn.is_open());
 		CHECK(t.conn.outstanding() == 0);
