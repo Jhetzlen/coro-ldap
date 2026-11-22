@@ -3,6 +3,7 @@
 
 #include "format_util.hpp"
 #include "icu_util.hpp"
+#include "sasl_util.hpp"
 #include "scope_util.hpp"
 
 #include "net/channel_binding.hpp"
@@ -34,52 +35,18 @@
 namespace jhetz::ldap {
 
 using detail::icu_failed;
+using detail::input_error;
+using detail::library_error;
+using detail::refused;
+using detail::wipe_string;
+using detail::wiped;
 
 namespace {
 
 	constexpr std::size_t key_size = 32;// SHA-256 output
 	constexpr std::size_t nonce_bytes = 18;// 24 base64 characters, no padding
 
-	// Key material, wiped when it goes out of scope.
-	template<std::size_t N> struct wiped
-	{
-		std::array<unsigned char, N> bytes{};
-		wiped() = default;
-		wiped(const wiped &) = delete;
-		auto operator=(const wiped &) -> wiped & = delete;
-		~wiped() { OPENSSL_cleanse(bytes.data(), bytes.size()); }
-		auto data() -> unsigned char * { return bytes.data(); }
-		static constexpr auto size() -> std::size_t { return N; }
-		auto span() -> std::span<unsigned char, N> { return bytes; }
-		auto operator[](std::size_t i) -> unsigned char & { return bytes[i]; }
-	};
-
-	// An encode_error with `what` as its context.
-	auto input_error(std::string_view what) -> std::unexpected<error> { return fail(client_errc::encode_error, what); }
-
-	// OpenSSL or ICU failed (memory, missing ICU data): the environment, not
-	// the caller's username or password.
-	auto library_error(std::string_view what) -> std::unexpected<error>
-	{
-		return fail(client_errc::internal_error, what);
-	}
-
 	auto malformed(std::string_view what) -> std::unexpected<error> { return fail(client_errc::decode_error, what); }
-
-	auto refused(std::string_view what) -> std::unexpected<error>
-	{
-		return fail(client_errc::unexpected_response, what);
-	}
-
-	// Wipes a string's whole buffer, also the bytes past size() that a move
-	// out of a short (SSO) string leaves behind.
-	void wipe_string(std::string &s) noexcept
-	{
-		// Callers pass moved-from strings on purpose.
-		s.resize(s.capacity());// NOLINT(clang-analyzer-cplusplus.Move): wipes what a move left
-		OPENSSL_cleanse(s.data(), s.size());
-		s.clear();
-	}
 
 	// ------------------------------------------------------------ base64
 

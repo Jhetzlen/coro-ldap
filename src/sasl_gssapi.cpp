@@ -2,8 +2,11 @@
 // sasl_gssapi.hpp.
 #include "jhetz/ldap/sasl_gssapi.hpp"
 
+#include "jhetz/ldap/ber.hpp"
+
 #include "format_util.hpp"
 #include "icu_util.hpp"
+#include "sasl_util.hpp"
 #include "scope_util.hpp"
 
 #include "net/channel_binding.hpp"
@@ -26,6 +29,9 @@
 #include <vector>
 
 namespace jhetz::ldap {
+
+using detail::input_error;
+using detail::refused;
 namespace {
 
 	// The Kerberos V5 mechanism OID 1.2.840.113554.1.2.2 (RFC 1964), DER.
@@ -161,13 +167,6 @@ namespace {
 		return fail(client_errc::gssapi_failure, text);
 	}
 
-	auto input_error(std::string_view what) -> std::unexpected<error> { return fail(client_errc::encode_error, what); }
-
-	auto refused(std::string_view what) -> std::unexpected<error>
-	{
-		return fail(client_errc::unexpected_response, what);
-	}
-
 	// Well-formed UTF-8 without control characters (Cc).
 	auto check_text(std::string_view s, std::string_view what) -> result<void>
 	{
@@ -228,7 +227,7 @@ namespace {
 		  -> result<void> override
 		{
 			OM_uint32 minor = 0;
-			gss_buffer_desc in = input(as_text(plaintext));
+			gss_buffer_desc in = input(detail::as_text(plaintext));
 			output_buffer wrapped;
 			int conf_state = 0;
 			const OM_uint32 major = gss_wrap(
@@ -247,7 +246,7 @@ namespace {
 		  -> result<void> override
 		{
 			OM_uint32 minor = 0;
-			gss_buffer_desc in = input(as_text(buffer));
+			gss_buffer_desc in = input(detail::as_text(buffer));
 			output_buffer plain;
 			int conf_state = 0;
 			const OM_uint32 major = gss_unwrap(&minor, context_.get(), &in, &plain.desc, &conf_state, nullptr);
@@ -267,10 +266,6 @@ namespace {
 		}
 
 	  private:
-		static auto as_text(std::span<const std::byte> b) noexcept -> std::string_view
-		{
-			return { reinterpret_cast<const char *>(b.data()), b.size() };
-		}
 		static void append(std::pmr::vector<std::byte> &out, std::string_view bytes)
 		{
 			const auto *p = reinterpret_cast<const std::byte *>(bytes.data());

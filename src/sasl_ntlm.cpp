@@ -2,8 +2,10 @@
 #include "jhetz/ldap/sasl_ntlm.hpp"
 
 #include "format_util.hpp"
+#include "jhetz/ldap/ber.hpp"
 #include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/ntlm_message.hpp"
+#include "sasl_util.hpp"
 #include "scope_util.hpp"
 
 #include <openssl/crypto.h>
@@ -28,6 +30,13 @@
 #include <vector>
 
 namespace jhetz::ldap {
+
+using detail::as_chars;
+using detail::input_error;
+using detail::library_error;
+using detail::refused;
+using detail::wipe_string;
+using wiped_key = detail::wiped<detail::ntlm_key_size>;
 
 namespace {
 
@@ -112,27 +121,6 @@ namespace {
 	constexpr std::uint64_t filetime_unix_epoch = 116'444'736'000'000'000ull;
 	constexpr std::intmax_t filetime_per_second = 10'000'000;
 
-	auto input_error(std::string_view what) -> std::unexpected<error> { return fail(client_errc::encode_error, what); }
-
-	auto library_error(std::string_view what) -> std::unexpected<error>
-	{
-		return fail(client_errc::internal_error, what);
-	}
-
-	auto refused(std::string_view what) -> std::unexpected<error>
-	{
-		return fail(client_errc::unexpected_response, what);
-	}
-
-	// Wipes a string's whole buffer, also the bytes past size() that a move
-	// out of a short (SSO) string leaves behind.
-	void wipe_string(std::string &s) noexcept
-	{
-		s.resize(s.capacity());// NOLINT(clang-analyzer-cplusplus.Move): wipes what a move left
-		OPENSSL_cleanse(s.data(), s.size());
-		s.clear();
-	}
-
 	// The password's UTF-16, filled in place and wiped on scope exit.
 	struct wiped_string
 	{
@@ -142,26 +130,6 @@ namespace {
 		auto operator=(const wiped_string &) -> wiped_string & = delete;
 		~wiped_string() { wipe_string(s); }
 	};
-
-	struct wiped_key
-	{
-		ntlm_key k{};
-		wiped_key() = default;
-		explicit wiped_key(const ntlm_key &v) noexcept : k(v) {}
-		wiped_key(const wiped_key &) = delete;
-		auto operator=(const wiped_key &) -> wiped_key & = delete;
-		~wiped_key() { OPENSSL_cleanse(k.data(), k.size()); }
-	};
-
-	auto as_chars(std::span<const unsigned char> s) -> std::string_view
-	{
-		return { reinterpret_cast<const char *>(s.data()), s.size() };
-	}
-
-	auto as_chars(std::span<const std::byte> s) -> std::string_view
-	{
-		return { reinterpret_cast<const char *>(s.data()), s.size() };
-	}
 
 	// MD5(ConcatenationOf(key, magic)) into `out`, the concatenation in a
 	// wiped buffer.
@@ -256,7 +224,7 @@ namespace detail {
 			return input_error("the password is not valid UTF-8");
 		}
 		wiped_key nt_hash;
-		md4(std::as_bytes(std::span(pw.s)), nt_hash.k);// in place: no temporary copy
+		md4(std::as_bytes(std::span(pw.s)), nt_hash.bytes);// in place: no temporary copy
 		auto upper_user = ntlm_uppercase_unicode(user);
 		if (!upper_user) {
 			return input_error("the user name is not valid UTF-8");
@@ -265,7 +233,7 @@ namespace detail {
 		if (!unicode_domain) {
 			return input_error("the domain is not valid UTF-8");
 		}
-		return ntlm_hmac_md5(nt_hash.k, *upper_user + *unicode_domain, out);
+		return ntlm_hmac_md5(nt_hash.bytes, *upper_user + *unicode_domain, out);
 	}
 
 	auto ntlm_compute_response(const ntlm_key &response_key,
@@ -372,7 +340,8 @@ namespace detail {
 		std::ranges::copy(plaintext, buffer.begin() + static_cast<std::ptrdiff_t>(ntlm_signature_size));
 		ntlm_key mac{};
 		const scope_exit wipe_mac([&mac] { OPENSSL_cleanse(mac.data(), mac.size()); });
-		if (auto r = ntlm_hmac_md5(client_signing_key_, as_chars(buffer.subspan(ntlm_signature_seq_num_offset)), mac);
+		if (auto r =
+			  ntlm_hmac_md5(client_signing_key_, detail::as_text(buffer.subspan(ntlm_signature_seq_num_offset)), mac);
 		  !r) {
 			out.resize(base);
 			return r;
@@ -417,7 +386,7 @@ namespace detail {
 			OPENSSL_cleanse(checksum.data(), checksum.size());
 		});
 		server_handle_.apply(checksum);
-		if (auto r = ntlm_hmac_md5(server_signing_key_, as_chars(covered), mac); !r) {
+		if (auto r = ntlm_hmac_md5(server_signing_key_, detail::as_text(covered), mac); !r) {
 			out.resize(base);
 			return r;
 		}
@@ -615,7 +584,7 @@ auto sasl_ntlm::step(std::optional<std::string_view> challenge) -> result<std::o
 	}
 	const auto info = detail::ntlm_client_target_info(c.target_info, true, bindings, target_);
 	detail::ntlm_responses responses;
-	auto computed = detail::ntlm_compute_response(response_key.k,
+	auto computed = detail::ntlm_compute_response(response_key.bytes,
 	  c.server_challenge,
 	  client_challenge,
 	  time,
@@ -631,16 +600,16 @@ auto sasl_ntlm::step(std::optional<std::string_view> challenge) -> result<std::o
 	}
 	// With key exchange, a random ExportedSessionKey sent RC4K-encrypted
 	// (section 3.1.5.1.2).
-	wiped_key exported(key_exchange_key.k);
+	wiped_key exported(key_exchange_key.bytes);
 	std::string encrypted_random_session_key;
 	if (layer) {
 		if (fixed_session_key_) {
-			exported.k = *fixed_session_key_;
-		} else if (RAND_bytes(exported.k.data(), static_cast<int>(exported.k.size())) != 1) {
+			exported.bytes = *fixed_session_key_;
+		} else if (RAND_bytes(exported.bytes.data(), static_cast<int>(exported.bytes.size())) != 1) {
 			return library_error("OpenSSL RAND_bytes failed");
 		}
-		ntlm_key encrypted = exported.k;// encrypted in place, below
-		detail::ntlm_rc4(key_exchange_key.k).apply(encrypted);
+		ntlm_key encrypted = exported.bytes;// encrypted in place, below
+		detail::ntlm_rc4(key_exchange_key.bytes).apply(encrypted);
 		encrypted_random_session_key = as_chars(encrypted);
 	}
 
@@ -663,7 +632,7 @@ auto sasl_ntlm::step(std::optional<std::string_view> challenge) -> result<std::o
 	// MIC = HMAC_MD5(ExportedSessionKey, ConcatenationOf(NEGOTIATE_MESSAGE,
 	//   CHALLENGE_MESSAGE, AUTHENTICATE_MESSAGE)), its own field zero.
 	ntlm_key mic{};// not secret: it goes on the wire
-	if (auto r = detail::ntlm_hmac_md5(exported.k, negotiate_ + std::string(*challenge) + *authenticate, mic); !r) {
+	if (auto r = detail::ntlm_hmac_md5(exported.bytes, negotiate_ + std::string(*challenge) + *authenticate, mic); !r) {
 		return std::unexpected(std::move(r.error()));
 	}
 	std::ranges::copy(
@@ -678,7 +647,7 @@ auto sasl_ntlm::step(std::optional<std::string_view> challenge) -> result<std::o
 				OPENSSL_cleanse(k->data(), k->size());
 			}
 		});
-		if (auto r = detail::ntlm_derive_session_keys(exported.k, keys); !r) {
+		if (auto r = detail::ntlm_derive_session_keys(exported.bytes, keys); !r) {
 			return std::unexpected(std::move(r.error()));
 		}
 		// Always sealed: an LDAP DC treats SIGN as SEAL.
