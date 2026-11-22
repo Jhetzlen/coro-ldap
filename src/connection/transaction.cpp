@@ -25,7 +25,6 @@ namespace jhetz::ldap {
 using detail::build_request;
 using detail::core_ref;
 using detail::no_connection;
-using detail::op_context;
 using detail::op_index;
 using detail::request_response;
 
@@ -49,7 +48,7 @@ namespace {
 		const std::pmr::polymorphic_allocator<> alloc(mr);
 		const std::pmr::string value =
 		  encode_end_transaction_request(end_transaction_request(commit, identifier, alloc), mr);
-		return extended_request(end_transaction_oid, std::string_view(value), alloc);
+		return { end_transaction_oid, std::string_view(value), alloc };
 	}
 
 	// `answered` is set once the server answered: the transaction is over.
