@@ -63,7 +63,7 @@ namespace {
 	}
 
 	// Not a coroutine: the update's task runs on the strand.
-	template<class Params> auto update(core_ref self, Params request) -> capy::task<result<response>>
+	template<class Params> auto update(const core_ref &self, Params request) -> capy::task<result<response>>
 	{
 		std::string context = detail::update_context(request);
 		if (!self) {
