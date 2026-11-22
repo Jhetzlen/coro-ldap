@@ -148,7 +148,7 @@ namespace detail {
 		std::ranges::sort(excluded);
 		// The indices of `values` by value, equal ones in order.
 		std::vector<std::size_t> order(values.size());
-		std::iota(order.begin(), order.end(), std::size_t{ 0 });
+		std::ranges::iota(order, std::size_t{ 0 });
 		std::ranges::stable_sort(order, {}, [&values](std::size_t i) { return std::string_view(values[i]); });
 		std::vector<bool> keep(values.size(), false);
 		for (std::size_t k = 0; k < order.size(); ++k) {
