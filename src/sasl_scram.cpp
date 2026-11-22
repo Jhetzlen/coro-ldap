@@ -85,39 +85,14 @@ namespace {
 
 	constexpr std::string_view b64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-	// Each base64 character carries six bits: a group of three octets is
-	// four characters.
 	constexpr unsigned b64_bits = 6;
-	constexpr std::uint32_t b64_mask = 0x3F;
-
-	// The character for bits [6 * k, 6 * k + 6) of `v`.
-	auto b64_char(std::uint32_t v, unsigned k) -> char { return b64_alphabet[v >> (b64_bits * k) & b64_mask]; }
 
 	auto base64_encode(std::span<const unsigned char> data) -> std::string
 	{
-		const std::size_t n = data.size();
-		std::string out;
-		out.reserve((n + 2) / 3 * 4);
-		std::size_t i = 0;
-		for (; i + 3 <= n; i += 3) {
-			const std::uint32_t v = std::uint32_t{ data[i] } << 16 | std::uint32_t{ data[i + 1] } << 8 | data[i + 2];
-			out += b64_char(v, 3);
-			out += b64_char(v, 2);
-			out += b64_char(v, 1);
-			out += b64_char(v, 0);
-		}
-		if (n - i == 1) {
-			const std::uint32_t v = std::uint32_t{ data[i] } << 16;
-			out += b64_char(v, 3);
-			out += b64_char(v, 2);
-			out += "==";
-		} else if (n - i == 2) {
-			const std::uint32_t v = std::uint32_t{ data[i] } << 16 | std::uint32_t{ data[i + 1] } << 8;
-			out += b64_char(v, 3);
-			out += b64_char(v, 2);
-			out += b64_char(v, 1);
-			out += '=';
-		}
+		std::string out(((data.size() + 2) / 3 * 4) + 1, '\0');
+		const int n =
+		  EVP_EncodeBlock(reinterpret_cast<unsigned char *>(out.data()), data.data(), static_cast<int>(data.size()));
+		out.resize(static_cast<std::size_t>(n));
 		return out;
 	}
 
