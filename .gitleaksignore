@@ -1,0 +1,5 @@
+# Samba AD integration test fixture passwords (throwaway test DC), current and earlier lines
+tests/integration/samba_ad_tests.cpp:generic-api-key:72
+tests/integration/samba_ad_tests.cpp:generic-api-key:75
+tests/integration/samba_ad_tests.cpp:generic-api-key:51
+tests/integration/samba_ad_tests.cpp:generic-api-key:59

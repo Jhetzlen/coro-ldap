@@ -174,3 +174,7 @@ or add it with `add_subdirectory` / FetchContent and link the same targets.
 - [`docs/DESIGN.md`](docs/DESIGN.md): design notes and rationale
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md): build options, Windows,
   installing, integration tests against slapd, coverage, fuzzing, benchmark
+
+## License
+
+Distributed under the Boost Software License, Version 1.0 ([`LICENSE`](LICENSE)).
