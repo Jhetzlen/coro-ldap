@@ -157,6 +157,9 @@ namespace detail {
 
 	// `owner` lives until `s` is destroyed.
 	void keep_alive(ldap::search_stream &s, std::shared_ptr<void> owner) noexcept;
+	// Destroys `s` on its connection's strand, so what keep_alive gave it is
+	// released (a pool lease's return posted) when the task completes.
+	auto end_search_stream(ldap::search_stream &s) -> boost::capy::task<void>;
 
 	// Waits until the search has a message or ended; the error next() would
 	// return first, else nullopt. Fails only when stopped.

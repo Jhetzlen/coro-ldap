@@ -256,6 +256,18 @@ namespace detail {
 		}
 	}
 
+	auto end_search_stream(ldap::search_stream &s) -> capy::task<void>
+	{
+		const auto *state = connection::core::stream_state(s);
+		if (state == nullptr) {
+			return [] -> capy::task<void> { co_return; }();
+		}
+		return on_strand(state->conn, [](ldap::search_stream &stream) -> capy::task<void> {
+			stream = ldap::search_stream{};
+			co_return;
+		}(s));
+	}
+
 	namespace {
 
 		auto first_outcome_on_strand(search_stream::state &s) -> capy::task<result<std::optional<error>>>

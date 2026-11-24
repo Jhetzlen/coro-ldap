@@ -115,6 +115,16 @@ auto search_stream::operator=(search_stream &&other) noexcept -> search_stream &
 	return *this;
 }
 
+namespace {
+
+	auto end_search_stream(ldap::search_stream &s) -> capy::task<result<void>>
+	{
+		co_await ldap::detail::end_search_stream(s);
+		co_return result<void>{};
+	}
+
+}// namespace
+
 // io_, destroyed after settle(), may be the last owner of a client's core.
 search_stream::~search_stream() { settle(); }
 
@@ -127,13 +137,13 @@ void search_stream::settle() noexcept
 		stream_.reset();
 		return;
 	}
+	// On the connection's strand, so a pool stream's lease return is queued
+	// on the client's strand before settle() returns: a client closed next
+	// unbinds the connection rather than closing it as still leased.
 	// Terminates if the post cannot be allocated.
 	io_->hand_over(
-	  [this] {
-		  stream_.reset();
-		  return detail::done();
-	  },
-	  "out of memory ending a search stream on the I/O thread");
+	  [this] { return end_search_stream(*stream_); }, "out of memory ending a search stream on the I/O thread");
+	stream_.reset();// moved from on the strand: nothing left to post
 }
 
 namespace {

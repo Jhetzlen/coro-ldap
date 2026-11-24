@@ -3401,7 +3401,11 @@ and read through `detail::lease_access`.
   `sync::lease` exposes `sync::connection`'s operations
   (`detail::connection_api`) on the leased connection. `search_stream`
   returns a `sync::search_stream` holding one shared lease until
-  destroyed, retried as `client::search_stream` is.
+  destroyed, retried as `client::search_stream` is. Its destructor
+  destroys the stream on the connection's strand and returns once the
+  lease's return is queued on the client's strand, so a `sync::client`
+  destroyed next unbinds that connection instead of closing it as still
+  leased (coro-ldap-44h).
   Lifetime: the destructor closes the `ldap::client` on the I/O thread
   and drops its share of the core. The last owner (the client, or the
   last lease alive) destroys the `ldap::client` there and joins: the
