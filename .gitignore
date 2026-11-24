@@ -54,9 +54,9 @@ build/
 CMakeCache.txt
 CMakeFiles/
 
-# Claude Code local settings and agent worktrees
-.claude/settings.local.json
-.claude/worktrees/
+# Agent tooling (Claude Code, beads skills): local only
+.claude/
+.agents/
 
 # beads issue tracker: local only
 .beads/
