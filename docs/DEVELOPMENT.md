@@ -332,8 +332,26 @@ installed `jhetz_ldap-config-version.cmake` is generated from it with
    the Breaking lines added to `docs/API.md` since the last release).
 2. Tag the commit on main and push the tag: `git tag -a vX.Y.Z -m vX.Y.Z`,
    `git push origin vX.Y.Z`.
-3. Update the `jhetz-ldap` vcpkg port's version and `SHA512` for the tag
-   (below, "vcpkg").
+3. vcpkg: set `"version"` in `packaging/vcpkg/ports/jhetz-ldap/vcpkg.json`
+   (drop any `"port-version"`) and the `SHA512` in its `portfile.cmake` to
+   `curl -sL https://github.com/Jhetzlen/coro-ldap/archive/refs/tags/vX.Y.Z.tar.gz | sha512sum`.
+   Commit, then run `x-add-version` and commit `versions/` in a second
+   commit (below, "This repository as a vcpkg git registry").
+4. Conan: add `"X.Y.Z": {folder: all}` to
+   `packaging/conan/recipes/jhetz-ldap/config.yml` and the tarball's `url`
+   and `sha256` (the same `curl ... | sha256sum`) under `sources` in
+   `packaging/conan/recipes/jhetz-ldap/all/conandata.yml`; check with
+   `conan create packaging/conan/recipes/jhetz-ldap/all --version X.Y.Z`
+   (below, "Conan").
+5. Push, then set the registry `baseline` in the README's vcpkg snippet (and
+   in `packaging/vcpkg/vcpkg-configuration.example.json`) to the pushed
+   commit that has the new `versions/` entries, and the Conan and
+   FetchContent snippets' version and tag.
+
+When the Capy or Corosio pins in `CMakeLists.txt` move, update their vcpkg
+ports and Conan recipes (a new version in `config.yml`, `url` and `sha256`
+in `conandata.yml`, and the `requires` in the corosio and jhetz-ldap
+recipes) in the same commit, then `x-add-version`.
 
 ## vcpkg
 
@@ -401,10 +419,53 @@ git add versions && git commit -m "build: vcpkg versions for X.Y.Z"
 
 `x-add-version` records the committed tree of each port, so commit the port
 first, and add the version in a second commit. A consumer then lists the
-registry in its `vcpkg-configuration.json` next to its manifest, as in
+registry in its `vcpkg-configuration.json` next to its manifest, as in the
+README's Install section and
 `packaging/vcpkg/vcpkg-configuration.example.json`, with `baseline` set to
-a coro-ldap commit that has the `versions/` entries, and drops
-`VCPKG_OVERLAY_PORTS`.
+a coro-ldap commit on GitHub that has the `versions/` entries, and drops
+`VCPKG_OVERLAY_PORTS`. To try a registry change before pushing, point
+`repository` at a local clone (`git clone --bare . build/registry-test/coro-ldap.git`,
+then `"repository": "file:///<abs path>/coro-ldap.git"` and the local
+commit as `baseline`): vcpkg fetches it as it fetches GitHub, and
+`jhetz-ldap` downloads the release tarball.
+
+## Conan
+
+`packaging/conan/` is a Conan 2 local recipes index:
+`recipes/<name>/config.yml` lists the versions and
+`recipes/<name>/all/` holds `conanfile.py`, `conandata.yml` (source url and
+sha256) and `test_package/`. `capy` and `corosio` (`cci.<commit date>`)
+build the commits pinned in `CMakeLists.txt` and keep their upstream CMake
+names (`find_package(boost_capy / boost_corosio CONFIG)`, `Boost::capy`,
+`Boost::corosio`, `Boost::corosio_openssl`). `jhetz-ldap` builds the
+release tarball with `FETCHCONTENT_FULLY_DISCONNECTED=ON`, so Capy and
+Corosio come from Conan; its options are `net` (default `True`:
+`jhetz::ldap` and `jhetz::ldap_ad`; `False` is `jhetz::ldap_core` alone) and
+`gssapi` (default `False`; the system GSS-API through pkg-config, as in the
+vcpkg port), plus `fPIC` (`shared=True` is refused: the libraries are
+static). ICU and OpenSSL come from ConanCenter; ICU's data is built into
+`libicudata` (`icu/*:data_packaging=library`). The package is
+`find_package(jhetz_ldap)` with the targets `jhetz::ldap`,
+`jhetz::ldap_core` and `jhetz::ldap_ad`.
+
+Check with conan in a venv and a private `CONAN_HOME` under `build/tools`,
+on a GCC 16 profile with `compiler.cppstd=23`:
+
+```bash
+python3 -m venv build/tools/conan-venv && . build/tools/conan-venv/bin/activate && pip install conan
+export CONAN_HOME=$PWD/build/tools/conan-home
+conan profile detect && sed -i 's/^compiler.cppstd=.*/compiler.cppstd=23/' $CONAN_HOME/profiles/default
+conan create packaging/conan/recipes/capy/all --version cci.20261119 --build=missing
+conan create packaging/conan/recipes/corosio/all --version cci.20261120 --build=missing
+conan create packaging/conan/recipes/jhetz-ldap/all --version 0.1.0 --build=missing   # ICU, OpenSSL: ~15 min
+conan create packaging/conan/recipes/jhetz-ldap/all --version 0.1.0 -o 'jhetz-ldap/*:net=False'
+conan create packaging/conan/recipes/jhetz-ldap/all --version 0.1.0 -o 'jhetz-ldap/*:gssapi=True'
+```
+
+A consumer adds a clone as a remote
+(`conan remote add coro-ldap <clone>/packaging/conan --type=local-recipes-index`)
+and requires `jhetz-ldap/0.1.0`; recipes come from the clone's working tree,
+so `git pull` it for a new release.
 
 ## Examples
 

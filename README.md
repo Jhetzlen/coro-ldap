@@ -94,10 +94,13 @@ results) is in [`examples/`](examples/), one small program per task.
 | [Capy](https://github.com/cppalliance/capy) | The coroutine `task` type, executors and strands | fetched by CMake |
 | OpenSSL | TLS for `ldaps://` and StartTLS (through Corosio), and the hashing for SASL SCRAM and NTLM | install it |
 | ICU 60+ | UTF-8 handling and Unicode string preparation (RFC 4518, SASLprep) | install it |
-| MIT krb5 (optional) | SASL GSSAPI / Kerberos, only with `-DJHETZ_LDAP_WITH_GSSAPI=ON` (`libgssapi_krb5`, via pkg-config) | install it |
+| GSS-API from the OS: MIT krb5 or Heimdal (optional) | SASL GSSAPI / Kerberos, only with `-DJHETZ_LDAP_WITH_GSSAPI=ON` (pkg-config `krb5-gssapi` or `heimdal-gssapi`) | install it |
 | Catch2 | Tests only | fetched by CMake |
 
-Debian: `apt install libicu-dev libssl-dev` (plus `libkrb5-dev pkg-config` for GSSAPI).
+Debian: `apt install libicu-dev libssl-dev`, plus `libkrb5-dev pkg-config` for
+GSSAPI (Fedora `krb5-devel`, Arch `krb5`). The vcpkg `gssapi` feature and the
+Conan `gssapi` option use that system library too. There is no GSSAPI on
+Windows yet (SSPI is planned).
 
 ## Build and use
 
@@ -113,24 +116,47 @@ networking, and `jhetz::ldap_ad` adds the Active Directory operations. These
 are CMake target names only: the C++ namespace is `jhetz::ldap` in every case
 (with `ldap::sync`, `ldap::ad` and `ldap::net`).
 
-From your project, with FetchContent (or `add_subdirectory`):
+## Install
 
-```cmake
-include(FetchContent)
-FetchContent_Declare(coro_ldap GIT_REPOSITORY https://github.com/Jhetzlen/coro-ldap.git GIT_TAG main)
-FetchContent_MakeAvailable(coro_ldap)
-target_link_libraries(app PRIVATE jhetz::ldap)
+**vcpkg**, with this repository as a git registry: next to your `vcpkg.json`
+(`"dependencies": ["jhetz-ldap"]`; feature `gssapi`, or
+`{"name": "jhetz-ldap", "default-features": false}` for the codec alone), a
+`vcpkg-configuration.json`:
+
+```json
+{
+  "default-registry": { "kind": "git", "repository": "https://github.com/microsoft/vcpkg",
+                        "baseline": "432d982fb917e1d9b032197b01572b83bcb02a75" },
+  "registries": [ { "kind": "git", "repository": "https://github.com/Jhetzlen/coro-ldap",
+                    "baseline": "bab315ce7065e085b8253e5017ca6afe72f9dcd1",
+                    "packages": [ "jhetz-ldap", "capy", "corosio" ] } ]
+}
 ```
 
-Or, after `cmake --install` (`jhetz::ldap` needs Capy and Corosio installed too;
-`COMPONENTS core` gives `jhetz::ldap_core` alone):
+**Conan 2**, with a clone of this repository as a local recipes index
+(options `net`, `gssapi`):
+
+```sh
+git clone https://github.com/Jhetzlen/coro-ldap
+conan remote add coro-ldap ./coro-ldap/packaging/conan --type=local-recipes-index
+```
+
+and `jhetz-ldap/0.1.0` under `[requires]` in your `conanfile.txt` (with the
+`CMakeDeps` and `CMakeToolchain` generators). Both give the CMake package:
 
 ```cmake
 find_package(jhetz_ldap 0.1 REQUIRED)
-target_link_libraries(app PRIVATE jhetz::ldap)
+target_link_libraries(app PRIVATE jhetz::ldap)  # or jhetz::ldap_core, jhetz::ldap_ad
 ```
 
-vcpkg and Conan packages are planned.
+**CMake FetchContent** (or `add_subdirectory`), which fetches Capy and Corosio:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(coro_ldap GIT_REPOSITORY https://github.com/Jhetzlen/coro-ldap.git GIT_TAG v0.1.0)
+FetchContent_MakeAvailable(coro_ldap)
+target_link_libraries(app PRIVATE jhetz::ldap)
+```
 
 ## Documentation
 
