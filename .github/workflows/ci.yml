@@ -10,22 +10,26 @@ on:
       - "cmake/**"
       - "include/**"
       - "src/**"
+      - "testing/**"
       - "tests/**"
       - "fuzz/**"
       - "examples/**"
       - "bench/**"
       - ".github/workflows/ci.yml"
+      - ".github/badges.py"
   pull_request:
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
       - "include/**"
       - "src/**"
+      - "testing/**"
       - "tests/**"
       - "fuzz/**"
       - "examples/**"
       - "bench/**"
       - ".github/workflows/ci.yml"
+      - ".github/badges.py"
   workflow_dispatch:
 
 # A newer push to the same branch or PR cancels the older run.
@@ -33,6 +37,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Every job reads only; the badges job alone gets contents: write.
 permissions:
   contents: read
 
@@ -40,6 +45,9 @@ env:
   # UBSan findings abort (the build also uses -fno-sanitize-recover=all).
   UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
   DEBIAN_FRONTEND: noninteractive
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_MAXSIZE: 400M
+  CCACHE_COMPRESS: "1"
 
 # Toolchain: the project needs GCC 16 / Clang 23 with libstdc++ 16. The
 # Ubuntu runner images ship at most GCC 15 / Clang 22, and the only GCC 16
@@ -50,112 +58,199 @@ env:
 # newest installed GCC's libstdc++, so the Clang jobs install g++-16 too.
 # The sysctl gives the container an IPv6 loopback for the [::1] network
 # tests (they skip without one).
+#
+# Each build job keeps a ccache (actions/cache, one key per job and commit,
+# restored from the job's latest). Corosio, Capy and Catch2 are fetched at
+# configure time from GitHub (pinned commits), hence git everywhere.
 
 jobs:
   # clang-format 23, from the same debian:sid container as the build jobs.
   format:
     name: clang-format 23
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     container: debian:sid
     steps:
       - name: Install clang-format
         run: apt-get update && apt-get install -y git ca-certificates clang-format-23
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Check formatting
-        run: find include src tests fuzz examples bench -name '*.cpp' -o -name '*.hpp' | xargs clang-format-23 --dry-run --Werror
+        run: find include src testing tests fuzz examples bench -name '*.cpp' -o -name '*.hpp' | xargs clang-format-23 --dry-run --Werror
 
   gcc-sanitize:
     name: GCC 16 Debug (ASan + UBSan)
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     container:
       image: debian:sid
       options: --sysctl net.ipv6.conf.all.disable_ipv6=0
     steps:
-      # libssl-dev, libicu-dev: jhetz::ldap_net (Corosio's OpenSSL backend;
-      # ICU for SCRAM's SASLprep). Corosio and Capy are fetched from GitHub at
-      # configure time (pinned commits), hence git.
+      # libssl-dev, libicu-dev: jhetz::ldap_net (Corosio's OpenSSL backend)
+      # and the codec (ICU).
       - name: Install tools
-        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build g++-16 libssl-dev libicu-dev
-      - uses: actions/checkout@v4
+        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build ccache g++-16 libssl-dev libicu-dev
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-gcc-sanitize-${{ github.sha }}
+          restore-keys: ccache-gcc-sanitize-
       - name: Configure
         run: >
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_COMPILER=g++-16
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DJHETZ_LDAP_SANITIZE=ON
           -DJHETZ_LDAP_WERROR=ON
       - name: Build
         run: cmake --build build
       # Includes the net.* tests: in-process TCP, TLS and Unix socket servers.
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure -j4
       # The socket tests once more, a few times over, to catch flakiness.
       - name: Repeat network tests
-        run: ctest --test-dir build --output-on-failure -R '^net\.' --repeat until-fail:5
+        run: ctest --test-dir build --output-on-failure -j4 -R '^net\.' --repeat until-fail:5
+      - run: ccache -s
 
   clang-net:
     name: Clang 23 Debug with NET (ASan + UBSan)
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     container:
       image: debian:sid
       options: --sysctl net.ipv6.conf.all.disable_ipv6=0
     steps:
       # g++-16 for libstdc++ 16 (Clang uses the newest GCC installation's).
       - name: Install tools
-        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build clang-23 g++-16 libssl-dev libicu-dev
-      - uses: actions/checkout@v4
+        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build ccache clang-23 g++-16 libssl-dev libicu-dev
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-clang-net-${{ github.sha }}
+          restore-keys: ccache-clang-net-
       - name: Configure
         run: >
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_COMPILER=clang++-23
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DJHETZ_LDAP_SANITIZE=ON
           -DJHETZ_LDAP_WERROR=ON
       - name: Build
         run: cmake --build build
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure -j4
+      - run: ccache -s
 
+  # OpenLDAP's slapd (run_slapd.sh) and an MIT Kerberos KDC (run_kdc.sh) in
+  # the job container, for the integration and GSSAPI tests. Locally,
+  # run_openldap.sh runs the same run_slapd.sh in a pinned Debian image
+  # through Docker; here the build needs debian:sid's GCC 16, and a job
+  # container cannot share --network host with a sibling Docker container,
+  # so slapd is Debian's own package from the same container.
   integration:
-    name: Integration (OpenLDAP slapd, GCC 16, ASan + UBSan)
+    name: Integration (slapd + Kerberos, GCC 16, ASan + UBSan)
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     container:
       image: debian:sid
       options: --sysctl net.ipv6.conf.all.disable_ipv6=0
     steps:
-      # No systemd or AppArmor in the container: the packaged slapd is not
-      # started, and the tests run their own from a temporary directory.
-      # run_slapd.sh needs openssl (test PKI) and python3 (fixture).
-      - name: Install tools and slapd
+      # No systemd in the container: the packaged slapd and KDC are not
+      # started, and the scripts run their own from temporary directories.
+      # The slapd packages match tests/integration/openldap/Dockerfile;
+      # run_slapd.sh needs openssl (test PKI) and python3 (fixture);
+      # libkrb5-dev and pkg-config for JHETZ_LDAP_WITH_GSSAPI; krb5-kdc,
+      # krb5-admin-server and krb5-user for run_kdc.sh.
+      - name: Install tools, slapd and the KDC
         run: |
           apt-get update
           echo 'slapd slapd/no_configuration boolean true' | debconf-set-selections
-          apt-get install -y git ca-certificates cmake ninja-build g++-16 libssl-dev libicu-dev slapd openssl python3
-      - uses: actions/checkout@v4
+          apt-get install -y --no-install-recommends git ca-certificates cmake ninja-build ccache g++-16 libc6-dev \
+            libssl-dev libicu-dev libkrb5-dev pkg-config \
+            slapd libsasl2-modules libsasl2-modules-gssapi-mit openssl python3 \
+            krb5-kdc krb5-admin-server krb5-user
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-integration-${{ github.sha }}
+          restore-keys: ccache-integration-
       - name: Configure
         run: >
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
           -DCMAKE_CXX_COMPILER=g++-16
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DJHETZ_LDAP_SANITIZE=ON
           -DJHETZ_LDAP_WERROR=ON
+          -DJHETZ_LDAP_WITH_GSSAPI=ON
       - name: Build
-        run: cmake --build build --target jhetz_ldap_integration_tests
-      # run_slapd.sh starts slapd (ldap, ldaps, ldapi, test PKI, fixture),
-      # runs the command, and stops it.
+        run: >
+          cmake --build build --target
+          jhetz_ldap_integration_tests
+          jhetz_ldap_gssapi_integration_tests
+          jhetz_ldap_gssapi_channel_binding_tests
+          jhetz_ldap_gssapi_layer_tests
+      # run_kdc.sh starts the KDC (principals, keytab, tickets) and
+      # run_slapd.sh slapd (ldap, ldaps, ldapi, test PKI, fixture, GSSAPI);
+      # each runs the next command and stops its server. The Samba AD tests
+      # need run_samba_ad.sh's Samba DC and are left out. A test binary that
+      # finds no server exits 4 (ctest: Skipped), which would pass silently,
+      # so a skip fails the step.
       - name: Integration tests
-        run: tests/integration/run_slapd.sh ctest --test-dir build -L integration --output-on-failure
+        shell: bash
+        run: |
+          set -o pipefail
+          tests/integration/run_kdc.sh tests/integration/run_slapd.sh \
+            ctest --test-dir build -L integration -LE samba_ad --output-on-failure --no-tests=error | tee ctest.log
+          if grep -q '(Skipped)' ctest.log; then echo "::error::integration tests skipped"; exit 1; fi
+      - run: ccache -s
+
+  # tests/install/check_install.sh: installs Capy, Corosio and jhetz_ldap
+  # (full and codec-only) and builds a consumer against each: the install
+  # rules, jhetz_ldap-config.cmake and its find_dependency calls.
+  install:
+    name: Install and consume the CMake package (GCC 16)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container: debian:sid
+    steps:
+      - name: Install tools
+        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build ccache g++-16 libssl-dev libicu-dev
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-install-${{ github.sha }}
+          restore-keys: ccache-install-
+      # The script passes no compiler; CMake reads CXX and the launcher from
+      # the environment.
+      - name: Install check
+        env:
+          CXX: g++-16
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+        run: sh tests/install/check_install.sh "$RUNNER_TEMP/install"
+      - run: ccache -s
 
   clang-fuzz:
     name: Clang 23 fuzz smoke test
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     container: debian:sid
     steps:
       # libclang-rt-23-dev: libFuzzer and the sanitizer runtimes; g++-16 for
-      # libstdc++ 16.
+      # libstdc++ 16; libicu-dev for the codec.
       - name: Install tools
-        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build clang-23 libclang-rt-23-dev g++-16
-      - uses: actions/checkout@v4
+        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build ccache clang-23 libclang-rt-23-dev g++-16 libicu-dev
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-clang-fuzz-${{ github.sha }}
+          restore-keys: ccache-clang-fuzz-
       # A fuzz build leaves jhetz::ldap_net off by default (the fuzzers only
       # cover the codec and URLs), so nothing is fetched here.
       - name: Configure
@@ -163,20 +258,22 @@ jobs:
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
           -DCMAKE_CXX_COMPILER=clang++-23
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DJHETZ_LDAP_BUILD_FUZZERS=ON
           -DJHETZ_LDAP_BUILD_TESTS=OFF
           -DJHETZ_LDAP_WERROR=ON
       - name: Build
         run: cmake --build build
-      # ber_fuzz, message_fuzz, filter_fuzz, dn_fuzz, url_fuzz (every target in fuzz/CMakeLists.txt).
+      # Every target in fuzz/CMakeLists.txt.
       - name: Run each fuzzer for 60 s
+        shell: bash
         run: |
           set -e
           for fuzzer in build/fuzzers/*; do
             name=$(basename "$fuzzer")
             mkdir -p "corpus/$name" "artifacts/$name"
             # Seed with the checked-in corpus (same seeds as <name>_replay).
-            if [ -d "fuzz/corpus/$name" ]; then cp fuzz/corpus/$name/* "corpus/$name/"; fi
+            if [ -d "fuzz/corpus/$name" ]; then cp -f fuzz/corpus/$name/* "corpus/$name/"; fi
             # A dictionary, where there is one (fuzz/<name>.dict).
             dict=()
             if [ -f "fuzz/$name.dict" ]; then dict=(-dict="fuzz/$name.dict"); fi
@@ -187,7 +284,89 @@ jobs:
           done
       - name: Upload crash inputs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: fuzz-artifacts
           path: artifacts/
+      - run: ccache -s
+
+  # Clang source-based coverage (tests/coverage/run_coverage.sh, no
+  # sanitizers) of the unit tests, reported on src/ and include/. Writes the
+  # shields.io endpoint files tests.json and coverage.json, which the badges
+  # job publishes on pushes to main.
+  coverage:
+    name: Coverage (Clang 23, unit tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      image: debian:sid
+      options: --sysctl net.ipv6.conf.all.disable_ipv6=0
+    steps:
+      - name: Install tools
+        run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build ccache clang-23 llvm-23 g++-16 libssl-dev libicu-dev python3
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-coverage-${{ github.sha }}
+          restore-keys: ccache-coverage-
+      # A failing test still gets a report and badges; the last step fails
+      # the job.
+      - name: Build, test and report
+        id: run
+        shell: bash
+        env:
+          CXX: clang++-23
+          CMAKE_CXX_COMPILER_LAUNCHER: ccache
+          LLVM_PROFDATA: llvm-profdata-23
+          LLVM_COV: llvm-cov-23
+        run: |
+          set -o pipefail
+          status=0
+          tests/coverage/run_coverage.sh build/coverage 2>&1 | tee coverage.log || status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      - name: Badge files
+        shell: bash
+        run: python3 .github/badges.py coverage.log build/coverage/llvm-cov/summary.json badges >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: badges
+          path: badges/
+      - uses: actions/upload-artifact@v5
+        with:
+          name: coverage-report
+          path: build/coverage/llvm-cov/html/
+          retention-days: 7
+      - run: ccache -s
+      - name: Fail on test failures
+        if: steps.run.outputs.status != '0'
+        run: exit ${{ steps.run.outputs.status }}
+
+  # Publishes tests.json and coverage.json to the orphan branch badges (one
+  # force-pushed commit), read by the README's shields.io endpoint badges.
+  # Only on pushes to main, never for pull requests; the only job with
+  # write access.
+  badges:
+    name: Publish badges
+    needs: coverage
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: badges
+          path: badges
+      - name: Push to the badges branch
+        working-directory: badges
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q -b badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests.json coverage.json
+          git commit -q -m "badges for ${GITHUB_SHA}"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/badges
