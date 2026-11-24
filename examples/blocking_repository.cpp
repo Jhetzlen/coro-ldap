@@ -17,7 +17,7 @@ constexpr auto ldap::schema<person> = ldap::describe(ldap::object_class("inetOrg
   ldap::field<&person::uid>("uid"),
   ldap::field<&person::mail>("mail"));
 
-constexpr int page_size = 100;
+constexpr int entries_per_page = 100;
 
 auto main(int argc, char *const *argv) -> int
 {
@@ -27,7 +27,7 @@ auto main(int argc, char *const *argv) -> int
 		return 1;
 	}
 	ldap::repository people(*conn, ldap::dn{ "ou=people,dc=example,dc=org" }, ldap::named_by<&person::uid>);
-	auto all = people.search_paged(ldap::filters::field<&person::mail>().present(), page_size);
+	auto all = people.search_paged(ldap::filters::field<&person::mail>().present(), entries_per_page);
 	if (!all) {
 		std::cerr << all.error().message() << '\n';
 		return 1;
