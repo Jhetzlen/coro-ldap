@@ -129,7 +129,14 @@ jobs:
           path: vcpkg-bincache
           key: vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('.github/vcpkg/**') }}-${{ env.VCToolsVersion }}
 
+      # Debug without the checked iterators (_ITERATOR_DEBUG_LEVEL=2 makes
+      # every container allocate a proxy from its allocator, which the
+      # allocation-counting tests count), still with the debug CRT and
+      # asserts. Set through CXXFLAGS, so CMake keeps its default flags;
+      # Capy, Corosio and Catch2 get it too (ICU and OpenSSL are DLLs).
       - name: Configure
+        env:
+          CXXFLAGS: /D_ITERATOR_DEBUG_LEVEL=0
         run: >
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Debug
@@ -162,4 +169,4 @@ jobs:
       - name: Test
         run: |
           $env:PATH = "$env:VCPKG_INSTALLED\$env:VCPKG_TRIPLET\bin;$env:PATH"
-          ctest --test-dir build --output-on-failure -j4 -LE integration
+          ctest --test-dir build --output-on-failure -j4 -LE integration --timeout 600
