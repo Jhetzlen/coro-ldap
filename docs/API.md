@@ -231,7 +231,9 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   merging attributes of the same description (first spelling and order
   kept). `find(type)` compares options as a set (`a;x;y` is `a;y;x`, but
   `cn;lang-en` is not `cn`) and returns null when absent, an empty vector
-  for an attribute without values (typesOnly).
+  for an attribute without values (typesOnly). `parsed_dn(mr)` parses the
+  DN text into the `ldap::dn` the requests take (`invalid_dn` when the text
+  is not RFC 4514).
 - `jhetz/ldap/url.hpp`: `ldap::url`, RFC 4516 LDAP URLs (`ldap://`,
   `ldaps://`, `ldapi://` with a percent-encoded socket path): host (name,
   IPv4, bracketed IPv6 with optional zone), port (explicit or scheme

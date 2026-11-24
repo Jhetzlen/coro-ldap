@@ -2,6 +2,8 @@
 #pragma once
 
 #include "jhetz/ldap/attribute.hpp"
+#include "jhetz/ldap/dn.hpp"
+#include "jhetz/ldap/error.hpp"
 #include "jhetz/ldap/message.hpp"
 
 #include <initializer_list>
@@ -71,6 +73,10 @@ struct entry
 	{
 		return find(type.name());
 	}
+
+	// dn::parse(dn, mr).
+	[[nodiscard]] auto parsed_dn(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
+	  -> result<ldap::dn>;
 
 	// Takes the strings of `e`, on its resource; merges attributes with the
 	// same description.

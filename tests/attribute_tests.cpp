@@ -1,5 +1,7 @@
 #include "jhetz/ldap/attribute.hpp"
+#include "jhetz/ldap/dn.hpp"
 #include "jhetz/ldap/entry.hpp"
+#include "jhetz/ldap/error.hpp"
 
 #include "../src/icu_util.hpp"
 
@@ -420,6 +422,25 @@ TEST_CASE("entry from a search result entry", "[entry]")
 	REQUIRE(x.find("novalues") != nullptr);
 	CHECK(x.find("novalues")->empty());
 	CHECK(ldap::entry::from(e) == x);
+}
+
+TEST_CASE("entry::parsed_dn", "[entry]")
+{
+	ldap::entry x;
+	x.dn = "uid=J\\C3\\BCrgen,ou=Le\xc3\xbcte,dc=example,dc=org";
+	const auto d = x.parsed_dn();
+	REQUIRE(d.has_value());
+	CHECK(*d == ldap::dn::parse("uid=J\xc3\xbcrgen,ou=Le\xc3\xbcte,dc=example,dc=org").value());
+	CHECK(d->parent() == ldap::dn{ "ou=Le\xc3\xbcte,dc=example,dc=org" });
+
+	x.dn = "";
+	REQUIRE(x.parsed_dn().has_value());
+	CHECK(x.parsed_dn()->empty());
+
+	x.dn = "not a dn";
+	const auto bad = x.parsed_dn();
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(bad.error().code == ldap::client_errc::invalid_dn);
 }
 
 TEST_CASE("entry::find compares options as a set", "[entry]")

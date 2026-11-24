@@ -22,6 +22,8 @@ auto entry::find(std::string_view type) const noexcept -> const std::pmr::vector
 	return it == attributes.end() ? nullptr : &it->values;
 }
 
+auto entry::parsed_dn(std::pmr::memory_resource *mr) const -> result<ldap::dn> { return ldap::dn::parse(dn, mr); }
+
 auto entry::from(search_result_entry e) -> entry
 {
 	const allocator_type alloc = e.get_allocator();

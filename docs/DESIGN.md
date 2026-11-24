@@ -119,6 +119,8 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
   as servers send them (Active Directory's `member;range=0-1499`).
 - `entry`: untyped search result (DN text + ordered attributes) with
   case-insensitive `find()`; duplicate attributes from the server are merged.
+  The DN stays the text the server sent (RFC 4511 objectName);
+  `parsed_dn()` gives the `ldap::dn` for a follow-up request.
 - `url`: RFC 4516 (`ldap://`, `ldaps://`, `ldapi://`, IPv6 with RFC 6874
   zones, dn/attributes/scope/filter/extensions with the critical `!`).
   `parse(text, mr)` never throws; `to_string()` is canonical and
