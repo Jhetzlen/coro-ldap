@@ -286,6 +286,17 @@ enum class socket_buffers { system, small };
 // SO_SNDBUF and SO_RCVBUF with socket_buffers::small.
 inline constexpr int small_socket_buffer = 64 * 1024;
 
+// The client's SO_SNDBUF with socket_buffers::small. Winsock takes a whole
+// overlapped send into its buffer whenever that holds less than SO_SNDBUF,
+// so a 1 MiB write completes past a 64 KiB buffer and the writer never
+// parks (coro-ldap-0wp). With 0 it buffers nothing: the send completes as
+// the peer acknowledges it, and stays pending once the peer's window closes.
+#ifdef _WIN32
+inline constexpr int small_send_buffer = 0;
+#else
+inline constexpr int small_send_buffer = small_socket_buffer;
+#endif
+
 // ldap:// on a socket with a small SO_SNDBUF set before it connects; throws
 // on error.
 inline auto connect_small_tcp(corosio::io_context &ioc,
@@ -298,7 +309,7 @@ inline auto connect_small_tcp(corosio::io_context &ioc,
 	if (auto ec = s.open(); ec) {
 		throw std::system_error(ec, "open");
 	}
-	if (auto ec = s.set_option(corosio::socket_option::send_buffer_size(small_socket_buffer)); ec) {
+	if (auto ec = s.set_option(corosio::socket_option::send_buffer_size(small_send_buffer)); ec) {
 		throw std::system_error(ec, "SO_SNDBUF");
 	}
 	if (auto [ec] = co_await s.connect(to); ec) {
