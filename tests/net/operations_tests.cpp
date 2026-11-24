@@ -2110,7 +2110,9 @@ TEST_CASE("operations: release answers' deadlines", "[net][operations][paged][ti
 		  answer({ paged_done(3, "page2") }),
 		  step{} });// reads the second release, never answers
 		auto p = people_search();
-		p.timeout = std::chrono::milliseconds(50);// the pages' limit, and the releases'
+		// The pages' limit, and the releases': long enough for the pages' answers
+		// on a loaded CI runner (ASan, parallel tests).
+		p.timeout = std::chrono::milliseconds(500);
 		release_after_one_page(m, p);
 		drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
 		CHECK(m.conn.outstanding() == 0);
@@ -2140,7 +2142,7 @@ TEST_CASE("operations: release answers' deadlines", "[net][operations][paged][ti
 		release_after_one_page(m);
 		{
 			auto p = people_search();
-			p.timeout = std::chrono::milliseconds(50);
+			p.timeout = std::chrono::milliseconds(500);// page 3 must arrive before it, even on a loaded runner
 			auto s = m.run(ldap::search_paged_stream(m.conn, std::move(p), 1));
 			REQUIRE(s.has_value());
 			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 1; });// page 3 ended

@@ -740,11 +740,15 @@ TEST_CASE("client: max_connections", "[net][client][pool]")
 TEST_CASE("client: acquire_timeout", "[net][client][timeout]")
 {
 	pool_fixture f;
-	auto &s = f.server({ { step{} } });// reads the bind, never answers
+	// Each reads the bind and never answers. The second is for b: started a
+	// moment after a, b's deadline is a little later, so on a loaded runner it
+	// can wake from a's ended attempt with time left and try once more.
+	auto &s = f.server({ { step{} }, { step{} } });
 	f.make({ .servers = { s.url() },
 	  .setup = admin_setup(),
 	  .acquire_timeout = milliseconds(100),
-	  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
+	  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) },
+	  .observer = &f.obs });
 	outcome<ldap::result<ldap::lease>> a;
 	outcome<ldap::result<ldap::lease>> b;
 	const auto start = std::chrono::steady_clock::now();
@@ -758,7 +762,8 @@ TEST_CASE("client: acquire_timeout", "[net][client][timeout]")
 	REQUIRE_FALSE(b.get().has_value());
 	CHECK(b.get().error().code == ldap::cond::timeout);
 	CHECK_THAT(std::string(b.get().error().context), ContainsSubstring("acquire_timeout"));
-	CHECK(s.accepted() == 1);
+	CHECK(f.obs.waits.size() == 1);// b waited for a's connection rather than opening its own
+	CHECK(s.accepted() >= 1);
 }
 
 TEST_CASE("client: connections are not pooled again after", "[net][client][pool]")
