@@ -432,6 +432,10 @@ TEST_CASE("matched values items RFC 3876 excludes", "[controls][matched_values]"
 	const auto empty = refused({ .values_return_filter = { attr("cn") == "x", ldap::filter{} } });
 	CHECK(empty.code == ldap::client_errc::invalid_filter);
 	CHECK(empty.context == "matched values: item 2 is empty");
+	const auto failed = refused({ .values_return_filter = { attr("cn") == "x",
+									ldap::filter::failed(ldap::make_error(ldap::client_errc::encode_error, "why")) } });
+	CHECK(failed.code == ldap::client_errc::encode_error);
+	CHECK(failed.context == "matched values: item 2: why");
 	// Without dnAttributes an extensible match is fine.
 	CHECK(
 	  ldap::to_control(ldap::matched_values{ .values_return_filter = { ldap::filter::raw("(ou:=people)").value() } })

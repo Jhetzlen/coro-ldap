@@ -326,6 +326,10 @@ namespace detail {
 	{
 		const std::size_t n = index + 1;
 		if (f.empty()) {
+			if (auto why = f.build_error()) {
+				why->context.insert(0, detail::format("item {}: ", n));
+				return std::unexpected(std::move(*why));
+			}
 			return fail(code, detail::format("item {} is empty", n));
 		}
 		std::string_view shape;
