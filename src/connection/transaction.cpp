@@ -164,12 +164,14 @@ namespace {
 
 }// namespace
 
+// NOLINTNEXTLINE(misc-const-correctness): the exchange runs on `conn`
 auto start_transaction(connection &conn, extended_controls controls) -> capy::task<result<std::string>>
 {
 	const core_ref self(connection::core::of(conn));
 	return detail::on_strand(self, start_transaction_impl(self, std::move(controls)));
 }
 
+// NOLINTNEXTLINE(misc-const-correctness): the exchange runs on `conn`
 auto end_transaction(connection &conn, std::string identifier, bool commit)
   -> capy::task<result<end_transaction_result>>
 {

@@ -122,7 +122,7 @@ struct partial_attribute
 		if constexpr (std::ranges::sized_range<R>) {
 			values.reserve(std::ranges::size(values_));
 		}
-		for (auto &&v : values_) {
+		for (auto &&v : std::forward<R>(values_)) {
 			values.emplace_back(std::string_view(v));
 		}
 	}
@@ -390,8 +390,8 @@ struct modify_change
 	partial_attribute modification{};
 
 	modify_change() = default;
-	modify_change(modify_operation operation_, const partial_attribute &modification_)
-	  : operation(operation_), modification(modification_)
+	modify_change(modify_operation operation_, partial_attribute modification_)
+	  : operation(operation_), modification(std::move(modification_))
 	{}
 
 	friend auto operator==(const modify_change &, const modify_change &) -> bool = default;
@@ -474,7 +474,7 @@ struct compare_request
 	attribute_value_assertion ava{};
 
 	compare_request() = default;
-	compare_request(std::string_view entry_, const attribute_value_assertion &ava_) : entry(entry_), ava(ava_) {}
+	compare_request(std::string_view entry_, attribute_value_assertion ava_) : entry(entry_), ava(std::move(ava_)) {}
 
 	friend auto operator==(const compare_request &, const compare_request &) -> bool = default;
 };

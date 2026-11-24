@@ -1338,7 +1338,7 @@ namespace detail {
 		// ---------------------------------------------------------------- streams
 
 		// Destroys `s` on `c`'s strand.
-		auto end_stream(connection &c, ldap::search_stream &s) -> capy::task<void>
+		auto end_stream(const connection &c, ldap::search_stream &s) -> capy::task<void>
 		{
 			return detail::on_strand(c.executor(), [](ldap::search_stream &stream) -> capy::task<void> {
 				stream = ldap::search_stream{};
@@ -1346,7 +1346,7 @@ namespace detail {
 			}(s));
 		}
 
-		auto end_stream(connection & /*c*/, ldap::paged_search &s) -> capy::task<void> { return end_paged(s); }
+		auto end_stream(const connection & /*c*/, ldap::paged_search &s) -> capy::task<void> { return end_paged(s); }
 
 		// `start` on a shared lease, retried once if it fails before its first
 		// message.
