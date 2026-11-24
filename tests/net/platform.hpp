@@ -211,6 +211,17 @@ inline void set_receive_timeout(raw_socket_handle s, int seconds)
 #endif
 }
 
+// receive_some() leaving the bytes in the socket (MSG_PEEK): what is
+// buffered now, up to buf.size(), once there is at least one byte.
+[[nodiscard]] inline auto peek_some(raw_socket_handle s, std::span<char> buf) -> std::ptrdiff_t
+{
+#ifdef _WIN32
+	return ::recv(s, buf.data(), static_cast<int>(buf.size()), MSG_PEEK);
+#else
+	return ::recv(s, buf.data(), buf.size(), MSG_PEEK);
+#endif
+}
+
 // An owned blocking TCP socket, not inheritable by child processes.
 class blocking_socket
 {

@@ -24,6 +24,7 @@
 #include <openssl/x509.h>
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -1165,6 +1166,20 @@ TEST_CASE("channel binding: the client refuses TLS 1.2 renegotiation", "[net][tl
 		const std::string answer = bytes_of(ldap::message{ req->id, ldap::bind_response{ ldap::ldap_result{ 0 } } });
 		if (SSL_write(ssl, answer.data(), static_cast<int>(answer.size())) != static_cast<int>(answer.size())) {
 			return "write the first answer: " + openssl_error();
+		}
+		// The client's no_renegotiation alert comes first, and reading it
+		// sends the server's fatal alert at once: wait for the second
+		// request behind it, so that the client has written it by then
+		// (else the request may fail unsent, before the alert is read). An
+		// AEAD-encrypted alert record is at most 5 + 8 + 2 + 16 octets.
+		constexpr std::ptrdiff_t alert_record = 31;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		std::array<char, 256> peeked{};
+		while (peek_some(socket_of_openssl_fd(SSL_get_fd(ssl)), peeked) <= alert_record) {
+			if (std::chrono::steady_clock::now() > deadline) {
+				return "the second request did not come";
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
 		if (answer_bind(ssl) != 0) {
 			return "the client renegotiated";
