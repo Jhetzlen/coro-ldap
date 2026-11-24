@@ -1518,6 +1518,19 @@ TEST_CASE("schema: DIT content rules", "[schema][validate][content_rule]")
 		CHECK_THAT(ldap::validate<posix_person>(ldap::server_schema::parse(types, classes, rules)).to_string(),
 		  ContainsSubstring("warning: object class shadowAccount: auxiliary, but not in the AUX of the DIT content "
 							"rule of the structural object class"));
+
+		// A NAME another class took first is not the class's name: its OID is.
+		const std::pmr::vector<std::pmr::string> shared{ "( 1.2.3 NAME 'self' STRUCTURAL )",
+			"( 1.6 NAME 'self' AUXILIARY )" };
+		const std::pmr::vector<std::pmr::string> shared_rules{ "( 1.2.3 MAY cn )" };
+		const auto s = ldap::server_schema::parse({}, shared, shared_rules);
+		const std::array<const char *, 2> declared{ "1.2.3", "1.6" };
+		ldap::schema_report rep;
+		ldap::detail::check_class_attributes(s, declared, {}, rep);
+		REQUIRE(rep.issues.size() == 1);
+		CHECK(rep.issues[0].what == k::auxiliary_class_not_allowed);
+		CHECK(rep.issues[0].name == "1.6");
+		CHECK(s.find_object_class(rep.issues[0].name) == s.find_object_class("1.6"));
 	}
 	SECTION("an OBSOLETE rule is not active")
 	{

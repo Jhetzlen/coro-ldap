@@ -583,9 +583,13 @@ namespace {
 
 namespace {
 
-	auto class_name(const object_class_type &c) -> std::string_view
+	// c's first NAME that s resolves to c, else its OID: a server may give two
+	// classes one NAME, and an issue's name must find the class it reports.
+	auto class_name(const server_schema &s, const object_class_type &c) -> std::string_view
 	{
-		return c.names.empty() ? std::string_view(c.oid) : std::string_view(c.names.front());
+		const auto it =
+		  std::ranges::find_if(c.names, [&](const std::string &n) { return s.find_object_class(n) == &c; });
+		return it == c.names.end() ? std::string_view(c.oid) : std::string_view(*it);
 	}
 
 	// Names folded as lookups fold them (ASCII case only).
@@ -614,7 +618,7 @@ namespace {
 		ci_set unknown;
 		for (std::size_t i = 0; i < all.size(); ++i) {
 			const reached_class r = all[i];
-			const std::string_view declared = r.from.empty() ? class_name(*r.c) : r.from;
+			const std::string_view declared = r.from.empty() ? class_name(s, *r.c) : r.from;
 			for (const auto &sup : r.c->sup) {
 				if (const object_class_type *c = s.find_object_class(sup); c != nullptr) {
 					if (seen.insert(c).second) {
@@ -670,12 +674,16 @@ namespace {
 		return out;
 	}
 
-	void report_must(const reached_class &r, std::string_view must, const must_mapping &m, schema_report &out)
+	void report_must(const server_schema &s,
+	  const reached_class &r,
+	  std::string_view must,
+	  const must_mapping &m,
+	  schema_report &out)
 	{
 		if (m.required) {
 			return;
 		}
-		std::string text = detail::format("required (MUST) by object class {}", class_name(*r.c));
+		std::string text = detail::format("required (MUST) by object class {}", class_name(s, *r.c));
 		if (!r.from.empty()) {
 			detail::format_to(text, " (a superclass of {})", r.from);
 		}
@@ -802,7 +810,7 @@ namespace {
 				continue;
 			}
 			out.issues.push_back({ .what = schema_issue::kind::auxiliary_class_not_allowed,
-			  .name = std::string(class_name(*r.c)),
+			  .name = std::string(class_name(s, *r.c)),
 			  .detail = "auxiliary, but not in the AUX of the DIT content rule of the structural object class" });
 		}
 	}
@@ -971,7 +979,7 @@ namespace detail {
 				} else if (!done_names.insert(m).second) {
 					continue;
 				}
-				report_must(r, m, mapping_of(s, a, m, fields), out);
+				report_must(s, r, m, mapping_of(s, a, m, fields), out);
 			}
 		}
 		const std::vector<const dit_content_rule *> rules = content_rules(s, all);
