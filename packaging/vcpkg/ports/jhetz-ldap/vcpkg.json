@@ -15,6 +15,9 @@
       "host": true
     }
   ],
+  "default-features": [
+    "net"
+  ],
   "features": {
     "gssapi": {
       "description": "SASL GSSAPI (Kerberos) in jhetz::ldap_net",

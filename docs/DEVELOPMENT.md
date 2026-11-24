@@ -331,12 +331,12 @@ installed `jhetz_ldap-config-version.cmake` is generated from it with
 `packaging/vcpkg/ports/` has overlay ports for `capy` and `corosio` (the
 commits pinned in `CMakeLists.txt`) and `jhetz-ldap`, a static library with
 the features `net` (`jhetz::ldap_net` and `jhetz::ldap_ad`; `ad` is not a
-feature of its own, it is built with `net`) and `gssapi` (needs `net`, not
-on Windows). ICU, OpenSSL and krb5 come from vcpkg. Corosio's port disables
+feature of its own, it is built with `net`), a default feature, and `gssapi`
+(needs `net`, not on Windows). `jhetz-ldap[core]` is the codec only. ICU, OpenSSL and krb5 come from vcpkg. Corosio's port disables
 WolfSSL and liburing (the epoll backend). In a manifest:
 
 ```json
-{ "dependencies": [ { "name": "jhetz-ldap", "features": [ "net" ] } ] }
+{ "dependencies": [ "jhetz-ldap" ] }
 ```
 
 and configure with `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake
