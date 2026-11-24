@@ -305,7 +305,9 @@ dependencies are never installed with it. The package finds ICU
 need at link time, codec-only too. Corosio at the
 pinned commit needs help to install against an installed Capy;
 `tests/install/check_install.sh WORK_DIR` does the whole sequence (Capy,
-Corosio, jhetz_ldap, then a consumer in `tests/install/consumer/` with the
+Corosio, jhetz_ldap configured with `-DFETCHCONTENT_FULLY_DISCONNECTED=ON`,
+so it fails rather than fetch when the installed packages are not found,
+then a consumer in `tests/install/consumer/` with the
 `net` and `ad` components, also codec-only) and is the reference for doing
 it by hand. It takes Capy and Corosio from `FETCHCONTENT_SOURCE_DIR_CAPY` /
 `_COROSIO` when set, else clones the commits pinned in `CMakeLists.txt` into

@@ -1,6 +1,7 @@
 #!/bin/sh
-# Installs Capy, Corosio and jhetz_ldap, full and codec-only, and builds a
-# consumer against each (docs/DEVELOPMENT.md "Installing"):
+# Installs Capy, Corosio and jhetz_ldap (built with FetchContent fully
+# disconnected), full and codec-only, and builds a consumer against each
+# (docs/DEVELOPMENT.md "Installing"):
 #   tests/install/check_install.sh WORK_DIR
 set -eu
 work=$(realpath -m "${1:?usage: check_install.sh WORK_DIR}")
@@ -40,9 +41,24 @@ cmake -S "$corosio" -B "$work/build/corosio" $gen -DCMAKE_INSTALL_PREFIX="$work/
 	-DBOOST_COROSIO_BUILD_BENCH=OFF >/dev/null
 cmake --build "$work/build/corosio" >/dev/null
 cmake --install "$work/build/corosio" >/dev/null
-step "jhetz_ldap with networking"
+step "jhetz_ldap with networking, fully disconnected against the installed Capy and Corosio"
 cmake -S "$root" -B "$work/build/ldap" $gen -DCMAKE_INSTALL_PREFIX="$work/prefix" \
-	-DCMAKE_PREFIX_PATH="$work/prefix" -DJHETZ_LDAP_BUILD_TESTS=OFF -DJHETZ_LDAP_BUILD_EXAMPLES=OFF >/dev/null
+	-DCMAKE_PREFIX_PATH="$work/prefix" -DJHETZ_LDAP_BUILD_TESTS=OFF -DJHETZ_LDAP_BUILD_EXAMPLES=OFF \
+	-DFETCHCONTENT_FULLY_DISCONNECTED=ON >/dev/null
+for pkg in capy corosio; do
+	dir=$(sed -n "s/^${pkg}_DIR:PATH=//p" "$work/build/ldap/CMakeCache.txt")
+	case "$dir" in
+	"$work/prefix"/*) ;;
+	*)
+		echo "unexpected: $pkg not found in $work/prefix (${pkg}_DIR=$dir)"
+		exit 1
+		;;
+	esac
+done
+if [ -e "$work/build/ldap/_deps" ]; then
+	echo "unexpected: FetchContent populated $work/build/ldap/_deps"
+	exit 1
+fi
 cmake --build "$work/build/ldap" >/dev/null
 cmake --install "$work/build/ldap" >/dev/null
 step "consumer with jhetz::ldap_net"
