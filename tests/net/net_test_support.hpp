@@ -1,4 +1,4 @@
-// Helpers for the jhetz::ldap_net tests: running coroutines to completion
+// Helpers for the jhetz::ldap tests: running coroutines to completion
 // with a time limit, a throwaway PKI built with the OpenSSL API, temp paths.
 #pragma once
 

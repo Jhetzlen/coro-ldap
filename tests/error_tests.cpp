@@ -279,7 +279,7 @@ auto cond_of(std::error_code ec) -> std::optional<ldap::cond>
 	return found;
 }
 
-// Stands in for Capy's and Corosio's categories, which jhetz::ldap does not link.
+// Stands in for Capy's and Corosio's categories, which jhetz::ldap_core does not link.
 class named_category final : public std::error_category
 {
   public:

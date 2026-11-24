@@ -105,8 +105,8 @@ cmake --build build
 ctest --test-dir build
 ```
 
-Link the CMake target `jhetz::ldap_net` for the client (connections, TLS, SASL,
-the sync API). `jhetz::ldap` alone is the codec (BER, DN, filters) with no
+Link the CMake target `jhetz::ldap` for the client (connections, TLS, SASL,
+the sync API). `jhetz::ldap_core` alone is the codec (BER, DN, filters) with no
 networking, and `jhetz::ldap_ad` adds the Active Directory operations. These
 are CMake target names only: the C++ namespace is `jhetz::ldap` in every case
 (with `ldap::sync`, `ldap::ad` and `ldap::net`).
@@ -117,14 +117,15 @@ From your project, with FetchContent (or `add_subdirectory`):
 include(FetchContent)
 FetchContent_Declare(coro_ldap GIT_REPOSITORY https://github.com/Jhetzlen/coro-ldap.git GIT_TAG main)
 FetchContent_MakeAvailable(coro_ldap)
-target_link_libraries(app PRIVATE jhetz::ldap_net)
+target_link_libraries(app PRIVATE jhetz::ldap)
 ```
 
-Or, after `cmake --install` (the `net` component needs Capy and Corosio installed too):
+Or, after `cmake --install` (`jhetz::ldap` needs Capy and Corosio installed too;
+`COMPONENTS core` gives `jhetz::ldap_core` alone):
 
 ```cmake
-find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net)
-target_link_libraries(app PRIVATE jhetz::ldap_net)
+find_package(jhetz_ldap 0.1 REQUIRED)
+target_link_libraries(app PRIVATE jhetz::ldap)
 ```
 
 vcpkg and Conan packages are planned.

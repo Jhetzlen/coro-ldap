@@ -1,5 +1,5 @@
 // Internal: ICU helpers shared by the translation units that call ICU, in
-// jhetz::ldap (the codec) and jhetz::ldap_net.
+// jhetz::ldap_core (the codec) and jhetz::ldap.
 #pragma once
 
 #include <unicode/umachine.h>

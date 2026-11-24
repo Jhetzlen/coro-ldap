@@ -53,7 +53,7 @@ catch_discover_tests(jhetz_ldap_tests)
 # TSan.
 if(NOT CMAKE_CXX_FLAGS MATCHES "-fsanitize=([^ ]*,)?thread")
     add_executable(jhetz_ldap_alloc_tests schema_alloc_tests.cpp)
-    target_link_libraries(jhetz_ldap_alloc_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)
+    target_link_libraries(jhetz_ldap_alloc_tests PRIVATE jhetz::ldap_core Catch2::Catch2WithMain)
     jhetz_ldap_warnings(jhetz_ldap_alloc_tests)
     catch_discover_tests(jhetz_ldap_alloc_tests)
 endif()
@@ -105,12 +105,12 @@ if(NOT MSVC)
 endif()
 
 # Header self-containment: one generated TU per public header; the codec's
-# against jhetz::ldap alone.
+# against jhetz::ldap_core alone.
 file(GLOB_RECURSE jhetz_ldap_public_headers CONFIGURE_DEPENDS
     RELATIVE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/include/jhetz/ldap/*.hpp)
-# The headers that need jhetz::ldap_net (the same list as the root
+# The headers that need jhetz::ldap (the same list as the root
 # CMakeLists.txt's install EXCLUDE patterns).
-set(jhetz_ldap_net_headers
+set(jhetz_ldap_client_headers
     jhetz/ldap/cancel.hpp jhetz/ldap/client.hpp jhetz/ldap/connection.hpp jhetz/ldap/connection_options.hpp
     jhetz/ldap/paged_search.hpp jhetz/ldap/referral_chase.hpp jhetz/ldap/run.hpp jhetz/ldap/search_stream.hpp jhetz/ldap/sync.hpp jhetz/ldap/transaction.hpp
     jhetz/ldap/sasl_ntlm.hpp jhetz/ldap/sasl_scram.hpp jhetz/ldap/sasl_gssapi.hpp
@@ -118,24 +118,24 @@ set(jhetz_ldap_net_headers
     jhetz/ldap/sync_repository.hpp
     jhetz/ldap/ad/dirsync.hpp jhetz/ldap/ad/discover.hpp jhetz/ldap/ad/password.hpp jhetz/ldap/ad/ranged_values.hpp jhetz/ldap/ad/sync.hpp)
 set(jhetz_ldap_codec_header_tus)
-set(jhetz_ldap_net_header_tus)
+set(jhetz_ldap_client_header_tus)
 foreach(header ${jhetz_ldap_public_headers})
     string(REGEX REPLACE "[/.]" "_" stem ${header})
     set(tu ${CMAKE_CURRENT_BINARY_DIR}/header_check/${stem}.cpp)
     file(CONFIGURE OUTPUT ${tu} CONTENT "#include \"${header}\"\n#include \"${header}\" // NOLINT(readability-duplicate-include): included twice on purpose, to check #pragma once\n")
-    if(header MATCHES "^jhetz/ldap/net/" OR header IN_LIST jhetz_ldap_net_headers)
-        list(APPEND jhetz_ldap_net_header_tus ${tu})
+    if(header MATCHES "^jhetz/ldap/net/" OR header IN_LIST jhetz_ldap_client_headers)
+        list(APPEND jhetz_ldap_client_header_tus ${tu})
     else()
         list(APPEND jhetz_ldap_codec_header_tus ${tu})
     endif()
 endforeach()
 add_library(jhetz_ldap_header_check OBJECT ${jhetz_ldap_codec_header_tus})
-target_link_libraries(jhetz_ldap_header_check PRIVATE jhetz::ldap)
+target_link_libraries(jhetz_ldap_header_check PRIVATE jhetz::ldap_core)
 jhetz_ldap_warnings(jhetz_ldap_header_check)
 if(JHETZ_LDAP_BUILD_NET)
-    add_library(jhetz_ldap_net_header_check OBJECT ${jhetz_ldap_net_header_tus})
-    target_link_libraries(jhetz_ldap_net_header_check PRIVATE jhetz::ldap_net)
-    jhetz_ldap_warnings(jhetz_ldap_net_header_check)
+    add_library(jhetz_ldap_client_header_check OBJECT ${jhetz_ldap_client_header_tus})
+    target_link_libraries(jhetz_ldap_client_header_check PRIVATE jhetz::ldap)
+    jhetz_ldap_warnings(jhetz_ldap_client_header_check)
 endif()
 
 # <target>_fuzz_replay runs fuzz/<target>.cpp's entry point on
@@ -149,20 +149,20 @@ foreach(target ber_fuzz message_fuzz filter_fuzz dn_fuzz url_fuzz value_fuzz sch
     jhetz_ldap_warnings(${target}_replay)
     add_test(NAME ${target}_replay COMMAND ${target}_replay)
 endforeach()
-# The NTLM security layer's target needs OpenSSL's HMAC-MD5 (jhetz::ldap_net).
+# The NTLM security layer's target needs OpenSSL's HMAC-MD5 (jhetz::ldap).
 if(JHETZ_LDAP_BUILD_NET)
     add_executable(ntlm_layer_fuzz_replay
         ${PROJECT_SOURCE_DIR}/fuzz/ntlm_layer_fuzz.cpp
         ${PROJECT_SOURCE_DIR}/fuzz/ntlm_layer_fuzz_replay.cpp
     )
-    target_link_libraries(ntlm_layer_fuzz_replay PRIVATE jhetz::ldap_net)
+    target_link_libraries(ntlm_layer_fuzz_replay PRIVATE jhetz::ldap)
     jhetz_ldap_warnings(ntlm_layer_fuzz_replay)
     add_test(NAME ntlm_layer_fuzz_replay COMMAND ntlm_layer_fuzz_replay)
 endif()
 
-# jhetz::ldap_net tests; ctest names start with "net.".
+# jhetz::ldap tests; ctest names start with "net.".
 if(JHETZ_LDAP_BUILD_NET)
-    add_executable(jhetz_ldap_net_tests
+    add_executable(jhetz_ldap_client_tests
         net/ad_discover_tests.cpp
         net/ad_dirsync_tests.cpp
         net/ad_notification_tests.cpp
@@ -190,12 +190,12 @@ if(JHETZ_LDAP_BUILD_NET)
         net/thread_tests.cpp
     )
     if(JHETZ_LDAP_WITH_GSSAPI)
-        target_sources(jhetz_ldap_net_tests PRIVATE net/sasl_gssapi_tests.cpp)
+        target_sources(jhetz_ldap_client_tests PRIVATE net/sasl_gssapi_tests.cpp)
     endif()
-    target_link_libraries(jhetz_ldap_net_tests PRIVATE jhetz::ldap_ad jhetz::ldap_testing_net Catch2::Catch2WithMain)
+    target_link_libraries(jhetz_ldap_client_tests PRIVATE jhetz::ldap_ad jhetz::ldap_testing_net Catch2::Catch2WithMain)
     # Against slapd (run_slapd.sh): label "integration", skipped without it.
     add_executable(jhetz_ldap_integration_tests integration/integration_tests.cpp)
-    target_link_libraries(jhetz_ldap_integration_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
+    target_link_libraries(jhetz_ldap_integration_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)
     jhetz_ldap_warnings(jhetz_ldap_integration_tests)
     add_test(NAME integration COMMAND jhetz_ldap_integration_tests)
     set_tests_properties(integration PROPERTIES LABELS integration SKIP_RETURN_CODE 4)
@@ -212,13 +212,13 @@ if(JHETZ_LDAP_BUILD_NET)
         # Against the Samba AD DCs' Kerberos (run_samba_ad.sh): skipped
         # without Samba or kinit.
         add_executable(jhetz_ldap_samba_ad_gssapi_tests integration/samba_ad_gssapi_tests.cpp)
-        target_link_libraries(jhetz_ldap_samba_ad_gssapi_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
+        target_link_libraries(jhetz_ldap_samba_ad_gssapi_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)
         jhetz_ldap_warnings(jhetz_ldap_samba_ad_gssapi_tests)
         add_test(NAME integration.samba_ad.gssapi COMMAND jhetz_ldap_samba_ad_gssapi_tests)
         set_tests_properties(integration.samba_ad.gssapi PROPERTIES
             LABELS "integration;samba_ad;kerberos" SKIP_RETURN_CODE 4)
         add_executable(jhetz_ldap_gssapi_integration_tests integration/gssapi_tests.cpp)
-        target_link_libraries(jhetz_ldap_gssapi_integration_tests PRIVATE jhetz::ldap_net Catch2::Catch2WithMain)
+        target_link_libraries(jhetz_ldap_gssapi_integration_tests PRIVATE jhetz::ldap Catch2::Catch2WithMain)
         jhetz_ldap_warnings(jhetz_ldap_gssapi_integration_tests)
         add_test(NAME integration.gssapi COMMAND jhetz_ldap_gssapi_integration_tests)
         set_tests_properties(integration.gssapi PROPERTIES LABELS "integration;kerberos" SKIP_RETURN_CODE 4)
@@ -226,7 +226,7 @@ if(JHETZ_LDAP_BUILD_NET)
         # KDC only (run_kdc.sh), not slapd; skipped without it.
         add_executable(jhetz_ldap_gssapi_channel_binding_tests integration/gssapi_channel_binding_tests.cpp)
         target_link_libraries(jhetz_ldap_gssapi_channel_binding_tests
-            PRIVATE jhetz::ldap_net PkgConfig::JHETZ_LDAP_GSSAPI Catch2::Catch2WithMain)
+            PRIVATE jhetz::ldap PkgConfig::JHETZ_LDAP_GSSAPI Catch2::Catch2WithMain)
         jhetz_ldap_warnings(jhetz_ldap_gssapi_channel_binding_tests)
         add_test(NAME kerberos.channel_binding COMMAND jhetz_ldap_gssapi_channel_binding_tests)
         set_tests_properties(kerberos.channel_binding PROPERTIES LABELS "integration;kerberos" SKIP_RETURN_CODE 4)
@@ -242,10 +242,10 @@ if(JHETZ_LDAP_BUILD_NET)
 
     # sync_tests.cpp runs the CLI against its in-process server.
     if(TARGET jhetz_ldapsearch)
-        add_dependencies(jhetz_ldap_net_tests jhetz_ldapsearch)
-        target_compile_definitions(jhetz_ldap_net_tests PRIVATE JHETZ_LDAPSEARCH="$<TARGET_FILE:jhetz_ldapsearch>")
+        add_dependencies(jhetz_ldap_client_tests jhetz_ldapsearch)
+        target_compile_definitions(jhetz_ldap_client_tests PRIVATE JHETZ_LDAPSEARCH="$<TARGET_FILE:jhetz_ldapsearch>")
     endif()
-    jhetz_ldap_warnings(jhetz_ldap_net_tests)
+    jhetz_ldap_warnings(jhetz_ldap_client_tests)
     # A hung network test fails after two minutes, not after ctest's 1500 s.
-    catch_discover_tests(jhetz_ldap_net_tests TEST_PREFIX "net." PROPERTIES TIMEOUT 120)
+    catch_discover_tests(jhetz_ldap_client_tests TEST_PREFIX "net." PROPERTIES TIMEOUT 120)
 endif()

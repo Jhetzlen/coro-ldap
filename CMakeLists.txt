@@ -5,15 +5,15 @@ project(jhetz_ldap VERSION 0.1.0 LANGUAGES CXX)
 
 option(JHETZ_LDAP_BUILD_TESTS "Build the jhetz::ldap unit tests" ON)
 option(JHETZ_LDAP_BUILD_FUZZERS "Build the libFuzzer targets (Clang only)" OFF)
-# jhetz::ldap_net is off by default in a fuzz build (the fuzzers exercise
+# jhetz::ldap is off by default in a fuzz build (the fuzzers exercise
 # the codec).
 if(JHETZ_LDAP_BUILD_FUZZERS)
-    set(jhetz_ldap_net_default OFF)
+    set(jhetz_ldap_client_default OFF)
 else()
-    set(jhetz_ldap_net_default ON)
+    set(jhetz_ldap_client_default ON)
 endif()
-option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap_net (transports and connect; fetches Corosio and Capy, needs OpenSSL)"
-    ${jhetz_ldap_net_default})
+option(JHETZ_LDAP_BUILD_NET "Build jhetz::ldap (transports and connect; fetches Corosio and Capy, needs OpenSSL)"
+    ${jhetz_ldap_client_default})
 option(JHETZ_LDAP_SANITIZE "Build all targets with AddressSanitizer and UBSan" OFF)
 # Warnings as errors for our own builds, not as a subproject nor on
 # clang-cl.
@@ -25,7 +25,7 @@ endif()
 option(JHETZ_LDAP_WERROR "Treat warnings in jhetz::ldap code as errors" ${jhetz_ldap_werror_default})
 option(JHETZ_LDAP_COVERAGE "Instrument our own targets for Clang source-based coverage (llvm-cov)" OFF)
 option(JHETZ_LDAP_BUILD_BENCH "Build the benchmarks (bench/, not run by ctest)" OFF)
-option(JHETZ_LDAP_WITH_GSSAPI "Add SASL GSSAPI (Kerberos) to jhetz::ldap_net (needs the GSS-API library, MIT krb5's libgssapi_krb5, found with pkg-config)" OFF)
+option(JHETZ_LDAP_WITH_GSSAPI "Add SASL GSSAPI (Kerberos) to jhetz::ldap (needs the GSS-API library, MIT krb5's libgssapi_krb5, found with pkg-config)" OFF)
 option(JHETZ_LDAP_BUILD_EXAMPLES "Build the examples (examples/; need JHETZ_LDAP_BUILD_NET)" ON)
 option(JHETZ_LDAP_INSTALL "Generate install rules and the jhetz_ldap CMake package" ${PROJECT_IS_TOP_LEVEL})
 option(JHETZ_LDAP_CLANG_TIDY "Run clang-tidy (.clang-tidy) on our own targets while building them" OFF)
@@ -155,7 +155,7 @@ if(NOT ICU_FOUND)
         "vcpkg install icu and configure with -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake)")
 endif()
 
-add_library(jhetz_ldap STATIC
+add_library(jhetz_ldap_core STATIC
     src/ad/controls.cpp
     src/ad/diagnostic.cpp
     src/ad/guid.cpp
@@ -181,17 +181,17 @@ add_library(jhetz_ldap STATIC
     src/referral.cpp
     src/url.cpp
 )
-add_library(jhetz::ldap ALIAS jhetz_ldap)
+add_library(jhetz::ldap_core ALIAS jhetz_ldap_core)
 include(GNUInstallDirs)
-target_include_directories(jhetz_ldap PUBLIC
+target_include_directories(jhetz_ldap_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
-set_target_properties(jhetz_ldap PROPERTIES EXPORT_NAME ldap)
-target_compile_features(jhetz_ldap PUBLIC cxx_std_23)
+set_target_properties(jhetz_ldap_core PROPERTIES EXPORT_NAME ldap_core)
+target_compile_features(jhetz_ldap_core PUBLIC cxx_std_23)
 # PRIVATE: the public headers do not include ICU's.
-target_link_libraries(jhetz_ldap PRIVATE ICU::uc ICU::data)
-jhetz_ldap_warnings(jhetz_ldap)
+target_link_libraries(jhetz_ldap_core PRIVATE ICU::uc ICU::data)
+jhetz_ldap_warnings(jhetz_ldap_core)
 
 if(JHETZ_LDAP_BUILD_NET)
     include(FetchContent)
@@ -228,10 +228,10 @@ if(JHETZ_LDAP_BUILD_NET)
         endif()
     endforeach()
     if(NOT TARGET Boost::corosio_openssl)
-        message(FATAL_ERROR "jhetz::ldap_net needs OpenSSL (e.g. apt install libssl-dev; on Windows "
+        message(FATAL_ERROR "jhetz::ldap needs OpenSSL (e.g. apt install libssl-dev; on Windows "
             "vcpkg install openssl with the vcpkg toolchain file), or configure with -DJHETZ_LDAP_BUILD_NET=OFF")
     endif()
-    add_library(jhetz_ldap_net STATIC
+    add_library(jhetz_ldap STATIC
         src/connection/connection.cpp
         src/connection/start_tls.cpp
         src/connection/bind.cpp
@@ -260,19 +260,19 @@ if(JHETZ_LDAP_BUILD_NET)
     )
     # Default verification's trust anchors (src/net/trust_store.hpp).
     if(WIN32)
-        target_sources(jhetz_ldap_net PRIVATE src/net/trust_store_win.cpp)
+        target_sources(jhetz_ldap PRIVATE src/net/trust_store_win.cpp)
         # CERT_CHAIN_PARA's dwUrlRetrievalTimeout (verify_system_chain).
         set_source_files_properties(src/net/trust_store_win.cpp PROPERTIES
             COMPILE_DEFINITIONS CERT_CHAIN_PARA_HAS_EXTRA_FIELDS)
-        target_link_libraries(jhetz_ldap_net PRIVATE crypt32)
+        target_link_libraries(jhetz_ldap PRIVATE crypt32)
     else()
-        target_sources(jhetz_ldap_net PRIVATE src/net/trust_store_default.cpp)
+        target_sources(jhetz_ldap PRIVATE src/net/trust_store_default.cpp)
     endif()
-    add_library(jhetz::ldap_net ALIAS jhetz_ldap_net)
-    set_target_properties(jhetz_ldap_net PROPERTIES EXPORT_NAME ldap_net)
-    target_link_libraries(jhetz_ldap_net PUBLIC jhetz_ldap Boost::corosio Boost::corosio_openssl
+    add_library(jhetz::ldap ALIAS jhetz_ldap)
+    set_target_properties(jhetz_ldap PROPERTIES EXPORT_NAME ldap)
+    target_link_libraries(jhetz_ldap PUBLIC jhetz_ldap_core Boost::corosio Boost::corosio_openssl
         PRIVATE ICU::uc ICU::data)
-    jhetz_ldap_warnings(jhetz_ldap_net)
+    jhetz_ldap_warnings(jhetz_ldap)
     # SASL GSSAPI, optional: the GSS-API library through pkg-config.
     if(JHETZ_LDAP_WITH_GSSAPI)
         if(WIN32)
@@ -286,15 +286,15 @@ if(JHETZ_LDAP_BUILD_NET)
             message(FATAL_ERROR "JHETZ_LDAP_WITH_GSSAPI needs the GSS-API library and pkg-config "
                 "(e.g. apt install libkrb5-dev pkg-config), or configure with -DJHETZ_LDAP_WITH_GSSAPI=OFF")
         endif()
-        target_sources(jhetz_ldap_net PRIVATE src/sasl_gssapi.cpp)
-        target_link_libraries(jhetz_ldap_net PRIVATE PkgConfig::JHETZ_LDAP_GSSAPI)
+        target_sources(jhetz_ldap PRIVATE src/sasl_gssapi.cpp)
+        target_link_libraries(jhetz_ldap PRIVATE PkgConfig::JHETZ_LDAP_GSSAPI)
     endif()
 elseif(JHETZ_LDAP_WITH_GSSAPI)
     message(FATAL_ERROR "JHETZ_LDAP_WITH_GSSAPI needs JHETZ_LDAP_BUILD_NET")
 endif()
 
-# jhetz::ldap_ad: the Active Directory operations over jhetz::ldap_net's
-# public API; its codec-level headers are in jhetz::ldap.
+# jhetz::ldap_ad: the Active Directory operations over jhetz::ldap's
+# public API; its codec-level headers are in jhetz::ldap_core.
 if(JHETZ_LDAP_BUILD_NET)
     add_library(jhetz_ldap_ad STATIC
         src/ad/discover.cpp
@@ -305,7 +305,7 @@ if(JHETZ_LDAP_BUILD_NET)
     add_library(jhetz::ldap_ad ALIAS jhetz_ldap_ad)
     set_target_properties(jhetz_ldap_ad PROPERTIES EXPORT_NAME ldap_ad)
     # ICU for UTS #46; libresolv (dnsapi on Windows) for SRV lookups.
-    target_link_libraries(jhetz_ldap_ad PUBLIC jhetz_ldap_net PRIVATE ICU::uc ICU::data)
+    target_link_libraries(jhetz_ldap_ad PUBLIC jhetz_ldap PRIVATE ICU::uc ICU::data)
     if(WIN32)
         target_link_libraries(jhetz_ldap_ad PRIVATE dnsapi)
     else()
@@ -317,7 +317,7 @@ endif()
 if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     add_executable(jhetz_ldapsearch examples/ldapsearch.cpp)
     set_target_properties(jhetz_ldapsearch PROPERTIES OUTPUT_NAME jhetz-ldapsearch)
-    target_link_libraries(jhetz_ldapsearch PRIVATE jhetz::ldap_net)
+    target_link_libraries(jhetz_ldapsearch PRIVATE jhetz::ldap)
     jhetz_ldap_warnings(jhetz_ldapsearch)
 
     # Small programs showing the main use cases (docs/DEVELOPMENT.md, "Examples").
@@ -327,25 +327,25 @@ if(JHETZ_LDAP_BUILD_EXAMPLES AND JHETZ_LDAP_BUILD_NET)
     endif()
     foreach(example ${jhetz_ldap_examples})
         add_executable(jhetz_ldap_example_${example} examples/${example}.cpp)
-        target_link_libraries(jhetz_ldap_example_${example} PRIVATE jhetz::ldap_net)
+        target_link_libraries(jhetz_ldap_example_${example} PRIVATE jhetz::ldap)
         jhetz_ldap_warnings(jhetz_ldap_example_${example})
     endforeach()
     target_link_libraries(jhetz_ldap_example_dirsync PRIVATE jhetz::ldap_ad)
 endif()
 
 # cmake --install: headers, libraries and the jhetz_ldap package;
-# jhetz::ldap_net and jhetz::ldap_ad need Corosio and Capy installed.
+# jhetz::ldap and jhetz::ldap_ad need Corosio and Capy installed.
 if(JHETZ_LDAP_INSTALL)
     include(CMakePackageConfigHelpers)
-    set(jhetz_ldap_install_targets jhetz_ldap)
+    set(jhetz_ldap_install_targets jhetz_ldap_core)
     set(JHETZ_LDAP_PACKAGE_NET OFF)
     if(JHETZ_LDAP_BUILD_NET)
         get_target_property(jhetz_ldap_corosio_imported Boost::corosio IMPORTED)
         if(jhetz_ldap_corosio_imported)
-            list(APPEND jhetz_ldap_install_targets jhetz_ldap_net jhetz_ldap_ad)
+            list(APPEND jhetz_ldap_install_targets jhetz_ldap jhetz_ldap_ad)
             set(JHETZ_LDAP_PACKAGE_NET ON)
         else()
-            message(STATUS "jhetz_ldap: jhetz::ldap_net is not installed: Corosio was fetched, not found "
+            message(STATUS "jhetz_ldap: jhetz::ldap is not installed: Corosio was fetched, not found "
                 "as a package (install Capy and Corosio and add their prefix to CMAKE_PREFIX_PATH)")
         endif()
     endif()
@@ -363,8 +363,8 @@ if(JHETZ_LDAP_INSTALL)
         install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             PATTERN "sasl_gssapi.hpp" EXCLUDE)
     else()
-        # Without jhetz::ldap_net its headers are left out; the same list as
-        # jhetz_ldap_net_headers in tests/CMakeLists.txt and check_install.sh.
+        # Without jhetz::ldap its headers are left out; the same list as
+        # jhetz_ldap_client_headers in tests/CMakeLists.txt and check_install.sh.
         install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
             PATTERN "net" EXCLUDE
             PATTERN "cancel.hpp" EXCLUDE
@@ -421,7 +421,7 @@ endif()
 # numbers). Build it optimized and without sanitizers.
 if(JHETZ_LDAP_BUILD_BENCH)
     add_executable(jhetz_ldap_decode_bench bench/decode_bench.cpp)
-    target_link_libraries(jhetz_ldap_decode_bench PRIVATE jhetz::ldap)
+    target_link_libraries(jhetz_ldap_decode_bench PRIVATE jhetz::ldap_core)
     jhetz_ldap_warnings(jhetz_ldap_decode_bench)
     if(JHETZ_LDAP_BUILD_NET)
         add_executable(jhetz_ldap_connection_bench bench/connection_bench.cpp)

@@ -11,4 +11,4 @@ endif()
 
 add_executable(consumer ../consumer/main.cpp)
 target_compile_definitions(consumer PRIVATE WITH_NET $<$<BOOL:${WITH_GSSAPI}>:WITH_GSSAPI>)
-target_link_libraries(consumer PRIVATE jhetz::ldap jhetz::ldap_net jhetz::ldap_ad)
+target_link_libraries(consumer PRIVATE jhetz::ldap jhetz::ldap_ad)

@@ -85,7 +85,7 @@ jobs:
       image: debian:sid
       options: --sysctl net.ipv6.conf.all.disable_ipv6=0
     steps:
-      # libssl-dev, libicu-dev: jhetz::ldap_net (Corosio's OpenSSL backend)
+      # libssl-dev, libicu-dev: jhetz::ldap (Corosio's OpenSSL backend)
       # and the codec (ICU).
       - name: Install tools
         run: apt-get update && apt-get install -y git ca-certificates cmake ninja-build ccache g++-16 libssl-dev libicu-dev
@@ -251,7 +251,7 @@ jobs:
           path: .ccache
           key: ccache-clang-fuzz-${{ github.sha }}
           restore-keys: ccache-clang-fuzz-
-      # A fuzz build leaves jhetz::ldap_net off by default (the fuzzers only
+      # A fuzz build leaves jhetz::ldap off by default (the fuzzers only
       # cover the codec and URLs), so nothing is fetched here.
       - name: Configure
         run: >

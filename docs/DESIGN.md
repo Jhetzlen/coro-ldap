@@ -675,7 +675,7 @@ first BindRequest sends nothing (the connection stays usable); later the
 exchange is aborted as for a mechanism error (a cancellation also cancels
 that abort, which closes the connection).
 
-SCRAM-SHA-256 (`sasl_scram.hpp`, RFC 5802 / RFC 7677, in jhetz::ldap_net
+SCRAM-SHA-256 (`sasl_scram.hpp`, RFC 5802 / RFC 7677, in jhetz::ldap
 since it needs OpenSSL): `sasl_scram_sha256(username, password,
 authz_id)` or `(username, password, sasl_scram_options)`. `start()` sends the client-first-message with a fresh
 18-byte random nonce; `step()` checks the server-first-message (the nonce
@@ -848,7 +848,7 @@ deterministic SCRAM-PLUS exchanges with Python-computed values; ldaps://
 against an in-process server (TLS 1.3 and 1.2) whose own SSL gives the
 expected tls-exporter; slapd over ldaps:// and StartTLS.
 
-GSSAPI (`sasl_gssapi.hpp`, RFC 4752, Kerberos V5; in jhetz::ldap_net only
+GSSAPI (`sasl_gssapi.hpp`, RFC 4752, Kerberos V5; in jhetz::ldap only
 with the CMake option `JHETZ_LDAP_WITH_GSSAPI`, off by default): an
 optional dependency on the GSS-API C library (MIT krb5's
 `libgssapi_krb5`), found with pkg-config (`krb5-gssapi`, or Heimdal's
@@ -1062,7 +1062,7 @@ between them. The messages and MD4 are in the codec
 parser is fuzzed with the others: `ntlm_fuzz`; a server's
 CHALLENGE_MESSAGE encoder and AUTHENTICATE_MESSAGE parser are in the
 testing target, section 10); the mechanism is in
-jhetz::ldap_net, with HMAC-MD5, MD5 and `RAND_bytes` from OpenSSL. MD4 is
+jhetz::ldap, with HMAC-MD5, MD5 and `RAND_bytes` from OpenSSL. MD4 is
 a self-contained RFC 1320 implementation, since OpenSSL 3 has it only in
 its legacy provider, often not loaded. The NEGOTIATE_MESSAGE asks for
 Unicode, the target name, NTLM with extended session security,
@@ -1218,7 +1218,7 @@ and RC4 states when the connection drops it; each MAC is wiped after
 use (unwrap()'s computed one and the server's, once decrypted). The
 protected buffer's signature parser is in the codec and fuzzed (`ntlm_fuzz`,
 with RC4); the checksum, sequence and unsealing checks need OpenSSL's
-HMAC-MD5, in jhetz::ldap_net: `ntlm_layer_fuzz` (built when the fuzz
+HMAC-MD5, in jhetz::ldap: `ntlm_layer_fuzz` (built when the fuzz
 build turns `JHETZ_LDAP_BUILD_NET` on, its replay with the net tests)
 fuzzes unwrap() and the round trip both ways. Tested: MS-NLMP 4.2.4.2.3 (the
 EncryptedRandomSessionKey) and 4.2.4.4 (the client-to-server sealing and
@@ -1253,7 +1253,7 @@ Referral chasing is opt-in (coro-ldap-d8n), in three layers:
   singleLevel, is the one to write "base" in the URL). RFC 4516 section 2: a
   critical extension refuses the URL (none is implemented), others are
   ignored.
-- `chase_search` / `chase_compare` (`referral_chase.hpp`, `jhetz::ldap_net`)
+- `chase_search` / `chase_compare` (`referral_chase.hpp`, `jhetz::ldap`)
   run the operation on a connection and follow what it returned through a
   caller-supplied `referral_connector` (URL and depth to `connection *`;
   null skips): the library never decides on its own whom to trust or which
@@ -2030,7 +2030,7 @@ would make an application prompt for the password again) nor the server's
 doing, and no retry or fix is implied; file errors from TLS
 configuration are `invalid_input`, not `not_found`, which is for directory
 entries. System codes match through their generic condition, so both the
-system and generic categories work. `jhetz::ldap` does not link Capy or
+system and generic categories work. `jhetz::ldap_core` does not link Capy or
 Corosio, so their codes are matched by category name (`boost.capy` values
 `eof` = 1 and `stream_truncated` = 4; `canceled` and `timeout` already map
 to generic conditions); a Capy upgrade that renumbers them must update
@@ -2319,7 +2319,7 @@ heap core (`sync::detail::connection_core`) shared by the handles: a
 closes the connection and joins the thread, and moves and copies leave a
 `sync::transaction` made by it valid.
 
-Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
+Implemented under it (step 4, `jhetz_ldap`, namespace `ldap::net`):
 - `net::connect(ctx, url, connect_options, mr)` returns a `net::transport`
   over TCP, TLS or a Unix socket. One deadline (`timeout`, an
   `optional<milliseconds>`, default 30 s; `nullopt` = no limit; zero or
@@ -2499,7 +2499,7 @@ Implemented under it (step 4, `jhetz_ldap_net`, namespace `ldap::net`):
   the caller drops the connection (header errors repeat, they are not
   consumed). No timeout of its own: step 5 cancels with stop tokens.
 
-Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
+Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap`):
 - `ldap::connect(ioc, url, connection_options, mr)` wraps `net::connect`;
   `connection(ioc, net::transport, options, mr)` runs over any transport
   whose I/O runs on `ioc` (the tests use a Unix socket pair with a scripted
@@ -2979,14 +2979,14 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   MSVC (built clean with 19.44), off on clang-cl (not built yet). macOS is
   not supported.
 - Corosio and Capy pinned by commit (FetchContent), used only by
-  `jhetz_ldap_net` (option `JHETZ_LDAP_BUILD_NET`, off by default in fuzz builds);
+  `jhetz_ldap` (option `JHETZ_LDAP_BUILD_NET`, off by default in fuzz builds);
   it also needs OpenSSL.
 - ICU (decision 6; `find_package(ICU COMPONENTS uc data)`) for Unicode,
   linked privately by both libraries (the public headers do not include
   ICU's); the installed package config always finds it. The codec
-  (`jhetz_ldap`) decodes and validates UTF-8 with it (`U8_NEXT`) and asks
+  (`jhetz_ldap_core`) decodes and validates UTF-8 with it (`U8_NEXT`) and asks
   it for character properties (General_Category, Bidi_Control: what
-  `ldap::error::message()` replaces); `jhetz_ldap_net` uses its stringprep
+  `ldap::error::message()` replaces); `jhetz_ldap` uses its stringprep
   (SASLprep for SCRAM). One hand-rolled piece is left on purpose: the
   UTF-8 check of compile-time DN literals (`detail::scan_dn` in constant
   evaluation, `constexpr_utf8_sequence_length` in attribute.hpp), since ICU's
@@ -2994,7 +2994,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   headers in the public ones; a test checks it answers as ICU does.
 - Optional: the GSS-API library (MIT krb5) for SASL GSSAPI, with
   `JHETZ_LDAP_WITH_GSSAPI` (pkg-config `krb5-gssapi`), privately linked
-  by `jhetz_ldap_net`.
+  by `jhetz_ldap`.
 - Coverage: Clang source-based coverage (`JHETZ_LDAP_COVERAGE`, llvm-cov),
   scoped to our own targets like the warnings; `tests/coverage/run_coverage.sh`
   runs it (docs/DEVELOPMENT.md, "Coverage"). Local only, not in CI.
@@ -3033,9 +3033,9 @@ client and the mock servers.
   search filters; the client libraries have no request decoder at all.
   Depth and element limits are options.
 - The server side of the codec is a separate, never installed library:
-  `testing/` builds `jhetz::ldap_testing` (over `jhetz::ldap`) and
+  `testing/` builds `jhetz::ldap_testing` (over `jhetz::ldap_core`) and
   `jhetz::ldap_testing_net` (adds `testing::read_message`, over
-  `jhetz::ldap_net`), only with the tests, fuzzers or benchmarks, which
+  `jhetz::ldap`), only with the tests, fuzzers or benchmarks, which
   link them, as do the mock servers. Namespace `ldap::testing`, headers in
   `testing/include/jhetz/ldap/testing/`: `testing::decode(bytes,
   testing::decode_options)` with `from = origin::any / server / client`
@@ -3526,7 +3526,7 @@ AccountManagement on System.DirectoryServices.Protocols. The split rule:
 
 Layout:
 
-- Codec-level AD code (no network) is in `jhetz::ldap`: headers under
+- Codec-level AD code (no network) is in `jhetz::ldap_core`: headers under
   `include/jhetz/ldap/ad/`, sources under `src/ad/`. `ad/filetime.hpp`
   (the FILETIME clock and its `value_traits`, section 4),
   `ad/syntax.hpp` (AD's syntax OIDs), `ad/sid.hpp`, `ad/guid.hpp` and
@@ -3544,14 +3544,14 @@ Layout:
   next to the codec's, their headers under `include/jhetz/ldap/ad/` too,
   listed with the net headers in the codec-only install's EXCLUDE patterns
   and `tests/CMakeLists.txt`'s header check.
-  It links `jhetz::ldap_net` and includes only public headers, never
+  It links `jhetz::ldap` and includes only public headers, never
   `src/connection/` or `src/net/`; it is built and installed whenever
-  `jhetz::ldap_net` is. `ad/password.hpp`, `ad/ranged_values.hpp` and
+  `jhetz::ldap` is. `ad/password.hpp`, `ad/ranged_values.hpp` and
   `ad/dirsync.hpp` (async, `connection &` and `client &`),
   `ad/discover.hpp` (DNS discovery, blocking) and `ad/sync.hpp` (the
   blocking forms, over the sync facades through `sync::run`).
-  A target of its own rather than `src/ad/` inside `jhetz::ldap_net`: the
-  dependency is one-way and visible in CMake (`jhetz::ldap_net` cannot
+  A target of its own rather than `src/ad/` inside `jhetz::ldap`: the
+  dependency is one-way and visible in CMake (`jhetz::ldap` cannot
   reach `ldap::ad`, `jhetz::ldap_ad` sees no private header), a consumer
   who never talks to AD does not link it, and the package says by
   component whether it is there.
@@ -3706,7 +3706,7 @@ counterpart of RFC 4533's refreshOnly: a search carrying the DirSync
 control returns the objects changed in a naming context since the
 cookie, each with the requested attributes that changed, and the
 response control carries the next cookie and MoreResults. Codec in
-`ad/controls.hpp` (`jhetz::ldap`, so `message_fuzz` covers it):
+`ad/controls.hpp` (`jhetz::ldap_core`, so `message_fuzz` covers it):
 `dirsync_request` converts implicitly to a raw `control` like
 `show_deleted`, since every value is encodable; names and field order are
 the spec's (Flags, MaxBytes, Cookie; MoreResults, unused, CookieServer).

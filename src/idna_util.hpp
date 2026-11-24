@@ -1,4 +1,4 @@
-// Internal: UTS #46 ToASCII, shared by jhetz::ldap_net and jhetz::ldap_ad.
+// Internal: UTS #46 ToASCII, shared by jhetz::ldap and jhetz::ldap_ad.
 #pragma once
 
 #include "jhetz/ldap/error.hpp"

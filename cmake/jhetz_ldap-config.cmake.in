@@ -1,26 +1,32 @@
-# find_package(jhetz_ldap): jhetz::ldap, and with components `net`, `ad` and
-# `gssapi` jhetz::ldap_net, jhetz::ldap_ad and SASL GSSAPI; their
-# dependencies are found here.
+# find_package(jhetz_ldap): jhetz::ldap (component `net`, the default),
+# `core` for jhetz::ldap_core alone, `ad` for jhetz::ldap_ad and `gssapi`
+# for SASL GSSAPI; their dependencies are found here.
 @PACKAGE_INIT@
 
-set(jhetz_ldap_net_FOUND @JHETZ_LDAP_PACKAGE_NET@)
-set(jhetz_ldap_ad_FOUND @JHETZ_LDAP_PACKAGE_NET@)
+if(NOT jhetz_ldap_FIND_COMPONENTS)
+    set(jhetz_ldap_FIND_COMPONENTS net)
+    set(jhetz_ldap_FIND_REQUIRED_net TRUE)
+endif()
+set(jhetz_ldap_core_FOUND TRUE)
+foreach(_jhetz_ldap_component net ad)
+    set(jhetz_ldap_${_jhetz_ldap_component}_FOUND @JHETZ_LDAP_PACKAGE_NET@)
+endforeach()
 set(jhetz_ldap_gssapi_FOUND @JHETZ_LDAP_PACKAGE_GSSAPI@)
 include(CMakeFindDependencyMacro)
-# Linked privately, but the static jhetz::ldap and jhetz::ldap_net need it at
-# link time.
+# Linked privately, but the static jhetz::ldap_core and jhetz::ldap need it
+# at link time.
 find_dependency(ICU 60 COMPONENTS uc data)
-if(jhetz_ldap_net_FOUND)
+if(@JHETZ_LDAP_PACKAGE_NET@)
     find_dependency(boost_corosio CONFIG)
     if(jhetz_ldap_gssapi_FOUND)
-        # The same: the target jhetz::ldap_net links, PkgConfig::JHETZ_LDAP_GSSAPI.
+        # The same: the target jhetz::ldap links, PkgConfig::JHETZ_LDAP_GSSAPI.
         find_dependency(PkgConfig)
         if(NOT TARGET PkgConfig::JHETZ_LDAP_GSSAPI)
             pkg_search_module(JHETZ_LDAP_GSSAPI IMPORTED_TARGET krb5-gssapi heimdal-gssapi)
         endif()
         if(NOT TARGET PkgConfig::JHETZ_LDAP_GSSAPI)
             set(jhetz_ldap_FOUND FALSE)
-            set(jhetz_ldap_NOT_FOUND_MESSAGE "jhetz::ldap_net needs the GSS-API library (pkg-config krb5-gssapi)")
+            set(jhetz_ldap_NOT_FOUND_MESSAGE "jhetz::ldap needs the GSS-API library (pkg-config krb5-gssapi)")
             return()
         endif()
     endif()

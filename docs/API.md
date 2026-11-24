@@ -23,7 +23,12 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
 | A transaction, the easy way | `transaction::begin(conn)` | an `ldap::transaction`: its updates (`t->add`, `t->modify`, ...) carry the specification control; `commit()` / `abort()`; aborted when destroyed unsettled |
 | A transaction, by hand | `ldap::start_transaction(conn)`, `ldap::end_transaction(conn, id, commit)` (transaction.hpp) | RFC 5805's two extended operations; put `transaction_specification{id}` on each update yourself |
 
-## `jhetz::ldap`: the codec
+## `jhetz::ldap_core`: the codec
+
+The CMake target `jhetz::ldap_core` (no networking, ICU only). Breaking
+(coro-ldap-ckq): the codec target was `jhetz::ldap` and the client target
+`jhetz::ldap_net`; the client is now `jhetz::ldap` (below), with no aliases
+for the old names.
 
 - `jhetz/ldap/error.hpp`: `ldap::error`, `ldap::result<T>` (`std::expected`),
   `ldap::errc` (RFC 4511 result codes, RFC 4528's `assertion_failed`, RFC
@@ -289,11 +294,11 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   URL with a critical extension (RFC 4516 section 2: none is implemented)
   fails with `invalid_url`.
 
-## `jhetz::ldap_net`: transports and connecting
+## `jhetz::ldap`: transports and connecting
 
-A second library (target `jhetz::ldap_net`, option `JHETZ_LDAP_BUILD_NET`,
-on by default) with the network parts. It depends on Corosio and Capy
-(fetched with FetchContent at pinned commits), OpenSSL and ICU; `jhetz::ldap`
+The client library (target `jhetz::ldap`, option `JHETZ_LDAP_BUILD_NET`,
+on by default) with the network parts, over `jhetz::ldap_core`. It depends on Corosio and Capy
+(fetched with FetchContent at pinned commits), OpenSSL and ICU; `jhetz::ldap_core`
 itself needs only ICU.
 
 - `jhetz/ldap/net/transport.hpp`: `net::transport`, the one byte stream a
@@ -409,7 +414,7 @@ itself needs only ICU.
   the headers below, so it is the one to include; each also compiles on
   its own:
   - `jhetz/ldap/connection_options.hpp`: `connection_options`.
-  - `jhetz/ldap/operations.hpp` (part of the codec, `jhetz::ldap`): the
+  - `jhetz/ldap/operations.hpp` (part of the codec, `jhetz::ldap_core`): the
     request aggregates (`search_params`, `add_params`, `modify_params`,
     `del_params`, `modify_dn_params`, `compare_params`, `extended_params`,
     `password_modify_params`; `search_base`, the type of the required
@@ -1306,7 +1311,7 @@ itself needs only ICU.
   and results), satisfied by `connection` and `client`; `ldap::load_schema(directory &)`, the subschema
   read over the public `search`; a limit code with no entry on either
   read is an error. `ldap::load_schema(client &)` (coro-ldap-2cx.2.2,
-  defined in jhetz::ldap_net) runs both searches on one shared lease, so
+  defined in jhetz::ldap) runs both searches on one shared lease, so
   the root DSE and the subschema come from the same server, and runs
   them once more on a new lease after `cond::connection_lost` (not after
   busy or unavailable); `sync::load_schema(d)` runs it on a sync facade
@@ -1695,8 +1700,8 @@ itself needs only ICU.
 
 Active Directory behaviour no RFC describes, as free functions and types in
 `jhetz::ldap::ad` over the public API (DESIGN.md section 12). The
-codec-level headers are part of `jhetz::ldap`; the operations that need
-the network are in the target `jhetz::ldap_ad` (links `jhetz::ldap_net`;
+codec-level headers are part of `jhetz::ldap_core`; the operations that need
+the network are in the target `jhetz::ldap_ad` (links `jhetz::ldap`;
 package component `ad`:
 `find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net ad)`).
 
@@ -1846,7 +1851,7 @@ package component `ad`:
   whose SRV records are all malformed; `ad::resolve_srv` skips a
   malformed record among good ones).
   Blocking: call it before building the client or off the I/O thread.
-- `jhetz/ldap/ad/range.hpp` (`jhetz::ldap`): the range option itself:
+- `jhetz/ldap/ad/range.hpp` (`jhetz::ldap_core`): the range option itself:
   `ad::parse_range(description)` splits `member;range=0-1499` into
   `ad::ranged_description{.type = "member", .range = {0, 1499}}` (nullopt
   without a range option, `decode_error` for a malformed one), and
@@ -1856,18 +1861,18 @@ package component `ad`:
   over a sync facade (`sync::directory`: a `sync::connection`, a sync
   lease or a `sync::client`), each running the async one with
   `sync::run`.
-- `jhetz/ldap/ad/diagnostic.hpp` (`jhetz::ldap`): `ad::explain(error)`,
+- `jhetz/ldap/ad/diagnostic.hpp` (`jhetz::ldap_core`): `ad::explain(error)`,
   the explanation of the Win32 code (eight hex digits and a colon) that
   starts an AD diagnosticMessage, for the codes a password change commonly
   fails with: `00000005` (not allowed), `00000056` (wrong old password),
   `0000052D` (password policy), `00000775` (locked out); empty for any
   other code or text. The core leaves the diagnostic raw.
-- `jhetz/ldap/ad/password_value.hpp` (`jhetz::ldap`):
+- `jhetz/ldap/ad/password_value.hpp` (`jhetz::ldap_core`):
   `ad::password_value(password)`, the `unicodePwd` value (quoted, UTF-16LE,
   full Unicode; `client_errc::encode_error` for ill-formed UTF-8), for a
   ModifyRequest built by hand.
 
-- `jhetz/ldap/ad/filetime.hpp` (`jhetz::ldap`): Active Directory's Large
+- `jhetz/ldap/ad/filetime.hpp` (`jhetz::ldap_core`): Active Directory's Large
   Integer syntax (1.2.840.113556.1.4.906) as std::chrono types.
   `ad::filetime_clock` is a C++20 Clock for FILETIME (100 ns ticks since 1601-01-01 UTC;
   `clock_cast` to `system_clock` and `utc_clock`, and a `zoned_time` from
@@ -1890,7 +1895,7 @@ package component `ad`:
   `ad::never` misses accounts stored as 0: "never expires" is
   `(|(accountExpires=9223372036854775807)(accountExpires=0))`, and
   `>= 1` leaves those out of an "expired" filter.
-- `jhetz/ldap/ad/sid.hpp` (`jhetz::ldap`): `ad::sid`, a security
+- `jhetz/ldap/ad/sid.hpp` (`jhetz::ldap_core`): `ad::sid`, a security
   identifier (MS-DTYP 2.4.2): `sid::parse(text)` ("S-1-5-21-...", the
   authority in decimal or "0x" and 12 hex digits), `sid::from_binary(raw)`
   (objectSid's value: revision 1, count, 48-bit authority big-endian,
@@ -1900,19 +1905,19 @@ package component `ad`:
   is `client_errc::conversion_failed` (`std::errc::invalid_argument` for
   `make`). Its `value_traits` map objectSid, sIDHistory, tokenGroups
   (Octet String) as the binary form, so typed filters match on it.
-- `jhetz/ldap/ad/guid.hpp` (`jhetz::ldap`): `ad::guid`, a GUID by its
+- `jhetz/ldap/ad/guid.hpp` (`jhetz::ldap_core`): `ad::guid`, a GUID by its
   MS-DTYP 2.3.4 fields (`data1`, `data2`, `data3`, `data4`):
   `guid::from_binary(raw)` (16 octets, the first three fields
   little-endian, as objectGUID holds it), `guid::parse(text)` (with or
   without braces, either case), `to_string()` (lower case, no braces),
   `to_binary()`, `==` and `<=>`. `value_traits` on Octet String.
-- `jhetz/ldap/ad/user_account_control.hpp` (`jhetz::ldap`):
+- `jhetz/ldap/ad/user_account_control.hpp` (`jhetz::ldap_core`):
   `enum class ad::user_account_control : std::uint32_t`, the
   userAccountControl bits (MS-ADTS 2.2.16, `normal_account`,
   `account_disable`, `dont_expire_passwd`, ...), with `|`, `&`, `^`, `~`,
   their assignments and `has(flags, bits)`. `value_traits` on INTEGER: the
   signed 32-bit decimal AD writes (bits not named are kept).
-- `jhetz/ldap/ad/filters.hpp` (`jhetz::ldap`): AD's bitwise matching
+- `jhetz/ldap/ad/filters.hpp` (`jhetz::ldap_core`): AD's bitwise matching
   rules as extensible-match filters: `ad::matching_rule_bit_and`
   (LDAP_MATCHING_RULE_BIT_AND, 1.2.840.113556.1.4.803) and
   `ad::matching_rule_bit_or` (1.2.840.113556.1.4.804);
@@ -1923,7 +1928,7 @@ package component `ad`:
   (groupType, systemFlags, searchFlags; its own decimal value):
   `ad::all_bits<&user::uac>(account_disable)` is
   `(userAccountControl:1.2.840.113556.1.4.803:=2)`.
-- `jhetz/ldap/ad/controls.hpp` (`jhetz::ldap`): AD's request controls,
+- `jhetz/ldap/ad/controls.hpp` (`jhetz::ldap_core`): AD's request controls,
   converting to a raw `ldap::control`, so they go in any operation's
   `.controls` (and `request_controls`). `ad::show_deleted{}`
   (`ad::show_deleted_oid`, 1.2.840.113556.1.4.417, MS-ADTS
@@ -1951,7 +1956,7 @@ package component `ad`:
   `ad::find_dirsync_response(controls)`; and
   `ad::encode_dirsync_request`. Malformed values are
   `decode_error`.
-- `jhetz/ldap/ad/syntax.hpp` (`jhetz::ldap`): `ad::large_integer_syntax`,
+- `jhetz/ldap/ad/syntax.hpp` (`jhetz::ldap_core`): `ad::large_integer_syntax`,
   the Large Integer syntax OID (1.2.840.113556.1.4.906), which
   `validate<T>` accepts for signed integers of 64 bits or more and the
   FILETIME types.

@@ -11,9 +11,9 @@ ported in the code but has not been built or tested by us yet: see
 even for the codec-only target). Standalone CMake project (CMake 3.25+, GCC 16+ or Clang 23+;
 Clang needs libstdc++ 16+ too, so install g++-16 next to it; configure
 stops with an error on anything older; libc++ is neither supported nor
-checked, so use libstdc++). Catch2 v3, and for `jhetz::ldap_net` Corosio
+checked, so use libstdc++). Catch2 v3, and for `jhetz::ldap` Corosio
 and Capy, are fetched from GitHub. Both libraries need the ICU 60+ development
-files (`libicu-dev`; Arch: `icu`), and `jhetz::ldap_net` OpenSSL's too
+files (`libicu-dev`; Arch: `icu`), and `jhetz::ldap` OpenSSL's too
 (`libssl-dev`; Arch: `openssl`).
 
 ```sh
@@ -28,7 +28,7 @@ To build against local checkouts instead of downloading, pass
 Installed `boost_capy` / `boost_corosio` packages on `CMAKE_PREFIX_PATH`
 are used when found. Fetched ones build only the targets the library links,
 and their install rules are left out, so `cmake --install` installs
-jhetz_ldap alone. C++20 module scanning is off for the whole build
+the jhetz_ldap package alone. C++20 module scanning is off for the whole build
 (`CMAKE_CXX_SCAN_FOR_MODULES`): nothing uses modules, and GCC 16 crashes
 compiling Corosio in module mode.
 
@@ -38,17 +38,17 @@ certificates generated at run time through the OpenSSL API.
 
 Every public header compiles on its own: the build compiles one generated
 file per header in `include/jhetz/ldap/` (targets `jhetz_ldap_header_check`
-for the codec's headers, against `jhetz::ldap` alone, so a codec header that
-needs Corosio or Capy fails, and `jhetz_ldap_net_header_check` for the
-others; the list of `jhetz::ldap_net` headers is in `tests/CMakeLists.txt`).
+for the codec's headers, against `jhetz::ldap_core` alone, so a codec header that
+needs Corosio or Capy fails, and `jhetz_ldap_client_header_check` for the
+others; the list of `jhetz::ldap` headers is in `tests/CMakeLists.txt`).
 
 The server side of the codec is not in the client libraries: `testing/`
 builds `jhetz::ldap_testing` (request decoding with `testing::decode` and
 `testing::decode_filter`, the request controls a server reads, the response
 controls it writes, NTLM's CHALLENGE_MESSAGE encoder and
-AUTHENTICATE_MESSAGE parser; over `jhetz::ldap`) and, with
+AUTHENTICATE_MESSAGE parser; over `jhetz::ldap_core`) and, with
 `JHETZ_LDAP_BUILD_NET`, `jhetz::ldap_testing_net` (`testing::read_message`,
-over `jhetz::ldap_net`), only when the tests, fuzzers or benchmarks are
+over `jhetz::ldap`), only when the tests, fuzzers or benchmarks are
 built, and never installs them (DESIGN.md section 10). The tests, the
 fuzz targets, the benchmarks and the mock servers (`tests/net/mock_ldap.hpp`)
 link them; their headers are under `testing/include/jhetz/ldap/testing/`,
@@ -57,8 +57,8 @@ and they include the shared internal headers of `src/`.
 | Option | Default | |
 |---|---|---|
 | `JHETZ_LDAP_BUILD_TESTS` | `ON` | unit tests and the `*_fuzz_replay` tests |
-| `JHETZ_LDAP_BUILD_NET` | `ON` (`OFF` with fuzzers) | `jhetz::ldap_net`, `jhetz::ldap_ad` (Active Directory, DESIGN.md section 12) and their tests; fetches Corosio + Capy, needs OpenSSL |
-| `JHETZ_LDAP_WITH_GSSAPI` | `OFF` | SASL GSSAPI (Kerberos) in `jhetz::ldap_net`, its tests and example; needs the GSS-API library (pkg-config `krb5-gssapi`). The installed package then has the component `gssapi` |
+| `JHETZ_LDAP_BUILD_NET` | `ON` (`OFF` with fuzzers) | `jhetz::ldap`, `jhetz::ldap_ad` (Active Directory, DESIGN.md section 12) and their tests; fetches Corosio + Capy, needs OpenSSL |
+| `JHETZ_LDAP_WITH_GSSAPI` | `OFF` | SASL GSSAPI (Kerberos) in `jhetz::ldap`, its tests and example; needs the GSS-API library (pkg-config `krb5-gssapi`). The installed package then has the component `gssapi` |
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
 | `JHETZ_LDAP_WERROR` | `ON` (`OFF` as a subproject, and on clang-cl) | warnings are errors in our own targets (never in Corosio, Capy or Catch2); off when added with `add_subdirectory` or FetchContent, so a newer compiler's new warnings do not break consumers. `/WX` on MSVC; off on clang-cl, not built yet (`/W4` still shows the warnings; `-DJHETZ_LDAP_WERROR=ON` adds `/WX`) |
@@ -163,7 +163,7 @@ for Release) on `PATH`. Use the dynamic triplet: with a static ICU
 What the build does on Windows, for our own targets only: `/W4 /utf-8
 /bigobj` on MSVC and clang-cl (`-Wa,-mbig-obj` on MinGW),
 `_CRT_SECURE_NO_WARNINGS`, `NOMINMAX` and `WIN32_LEAN_AND_MEAN`, and
-`jhetz_ldap_net` links `crypt32`. Warnings are errors on MSVC (`/WX`) as
+`jhetz_ldap` links `crypt32`. Warnings are errors on MSVC (`/WX`) as
 with GCC and Clang, but not by default on clang-cl, which has not been
 built yet (`-DJHETZ_LDAP_WERROR=ON` turns it on).
 Corosio's and Capy's targets get none of these flags, so no `/bigobj`
@@ -282,24 +282,33 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
 ## Installing
 
 Either add it to the build (`add_subdirectory` or FetchContent) and
-link `jhetz::ldap` / `jhetz::ldap_net` / `jhetz::ldap_ad`, or install it
-and use the CMake package:
+link `jhetz::ldap` (the client) / `jhetz::ldap_core` (the codec only) /
+`jhetz::ldap_ad`, or install it and use the CMake package:
 
 ```cmake
-find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net)   # or without `net`
-target_link_libraries(app PRIVATE jhetz::ldap_net)     # jhetz::ldap: codec only
+find_package(jhetz_ldap 0.1 REQUIRED)                  # component `net`, the default
+target_link_libraries(app PRIVATE jhetz::ldap)
+# The codec only, also from a codec-only install:
+find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS core)
+target_link_libraries(app PRIVATE jhetz::ldap_core)
 # Active Directory operations (ldap::ad over the connection):
 find_package(jhetz_ldap 0.1 REQUIRED COMPONENTS net ad)
 target_link_libraries(app PRIVATE jhetz::ldap_ad)
 ```
 
+The components are `net` (`jhetz::ldap`, requested when none is named),
+`core` (`jhetz::ldap_core`), `ad` (`jhetz::ldap_ad`) and `gssapi` (SASL
+GSSAPI in `jhetz::ldap`). The libraries are `libjhetz_ldap_core.a`,
+`libjhetz_ldap.a` and `libjhetz_ldap_ad.a`.
+
 `cmake --install` installs the headers, the libraries and the `jhetz_ldap`
 package (`JHETZ_LDAP_INSTALL`, on when this is the top-level project).
-`jhetz::ldap_net` and `jhetz::ldap_ad` are part of the package only when
+`jhetz::ldap` and `jhetz::ldap_ad` are part of the package only when
 Capy and Corosio were found as installed packages (on `CMAKE_PREFIX_PATH`;
 configure prefers them to fetching): a fetched Corosio does not export its
 targets. Without them the
-package is the codec only, without the networking headers; fetched
+package is the codec only (`COMPONENTS core`; a plain
+`find_package(jhetz_ldap)` fails on it), without the networking headers; fetched
 dependencies are never installed with it. The package finds ICU
 (`find_dependency(ICU 60 COMPONENTS uc data)`), which the static libraries
 need at link time, codec-only too. Corosio at the
@@ -307,9 +316,9 @@ pinned commit needs help to install against an installed Capy;
 `tests/install/check_install.sh WORK_DIR` does the whole sequence (Capy,
 Corosio, jhetz_ldap configured with `-DFETCHCONTENT_FULLY_DISCONNECTED=ON`,
 so it fails rather than fetch when the installed packages are not found,
-then a consumer in `tests/install/consumer/` with the
-`net` and `ad` components, also codec-only) and is the reference for doing
-it by hand. It takes Capy and Corosio from `FETCHCONTENT_SOURCE_DIR_CAPY` /
+then a consumer in `tests/install/consumer/` with the default component
+and `jhetz::ldap_ad`, also codec-only with the `core` component) and is the
+reference for doing it by hand. It takes Capy and Corosio from `FETCHCONTENT_SOURCE_DIR_CAPY` /
 `_COROSIO` when set, else clones the commits pinned in `CMakeLists.txt` into
 `WORK_DIR`.
 
@@ -330,12 +339,13 @@ installed `jhetz_ldap-config-version.cmake` is generated from it with
 
 `packaging/vcpkg/ports/` has overlay ports for `capy` and `corosio` (the
 commits pinned in `CMakeLists.txt`) and `jhetz-ldap`, a static library with
-the features `net` (`jhetz::ldap_net` and `jhetz::ldap_ad`; `ad` is not a
+the features `net` (`jhetz::ldap` and `jhetz::ldap_ad`; `ad` is not a
 feature of its own, it is built with `net`), a default feature, and `gssapi`
-(needs `net`, not on Windows). `jhetz-ldap[core]` is the codec only. ICU and
-OpenSSL come from vcpkg. `gssapi` uses the system GSS-API library (MIT krb5
-or Heimdal), found with the system pkg-config as in a normal build, so the OS
-package must be installed: Debian `libkrb5-dev pkg-config`, Fedora
+(needs `net`, not on Windows). `jhetz-ldap[core]` is the codec only
+(`jhetz::ldap_core`, `COMPONENTS core`). ICU and OpenSSL come from vcpkg.
+`gssapi` uses the system GSS-API library (MIT krb5 or Heimdal), found with
+the system pkg-config as in a normal build, so the OS package must be
+installed: Debian `libkrb5-dev pkg-config`, Fedora
 `krb5-devel pkgconf`, Arch `krb5 pkgconf`. Corosio's port disables
 WolfSSL and liburing (the epoll backend). In a manifest:
 
@@ -832,7 +842,7 @@ finding aborts and fails the test or fuzz run.
 
 A fuzz build leaves `JHETZ_LDAP_BUILD_NET` off by default: the fuzzers then
 cover the codec and URLs. `ntlm_layer_fuzz` needs OpenSSL's HMAC-MD5 from
-`jhetz::ldap_net`, so it is built only with `-DJHETZ_LDAP_BUILD_NET=ON`
+`jhetz::ldap`, so it is built only with `-DJHETZ_LDAP_BUILD_NET=ON`
 (which fetches Corosio and Capy); its `ntlm_layer_fuzz_replay` is built
 with the net tests.
 
@@ -947,9 +957,9 @@ runtime does, is left out of a `-fsanitize=thread` build):
 CXX=clang++ cmake -B build/tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DJHETZ_LDAP_WERROR=OFF \
       -DJHETZ_LDAP_BUILD_EXAMPLES=OFF \
       -DCMAKE_CXX_FLAGS='-fsanitize=thread -fno-omit-frame-pointer' -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread
-cmake --build build/tsan --target jhetz_ldap_net_tests jhetz_ldap_integration_tests
-build/tsan/tests/jhetz_ldap_net_tests '[threads]'
-build/tsan/tests/jhetz_ldap_net_tests '[net]'
+cmake --build build/tsan --target jhetz_ldap_client_tests jhetz_ldap_integration_tests
+build/tsan/tests/jhetz_ldap_client_tests '[threads]'
+build/tsan/tests/jhetz_ldap_client_tests '[net]'
 tests/integration/run_openldap.sh build/tsan/tests/jhetz_ldap_integration_tests '[threads]'
 ```
 

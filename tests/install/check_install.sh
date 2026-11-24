@@ -61,7 +61,7 @@ if [ -e "$work/build/ldap/_deps" ]; then
 fi
 cmake --build "$work/build/ldap" >/dev/null
 cmake --install "$work/build/ldap" >/dev/null
-step "consumer with jhetz::ldap_net"
+step "consumer with jhetz::ldap (the default) and jhetz::ldap_ad"
 cmake -S "$here/consumer" -B "$work/build/consumer" $gen -DCMAKE_PREFIX_PATH="$work/prefix" >/dev/null
 cmake --build "$work/build/consumer" >/dev/null
 "$work/build/consumer/consumer"
@@ -75,19 +75,19 @@ cmake --install "$work/build/ldap-codec" >/dev/null
 for h in net cancel.hpp client.hpp connection.hpp connection_options.hpp directory.hpp extended_operations.hpp paged_search.hpp referral_chase.hpp run.hpp search_stream.hpp \
 	sasl_ntlm.hpp sasl_scram.hpp sasl_gssapi.hpp repository.hpp sync.hpp sync_extended_operations.hpp sync_repository.hpp transaction.hpp ad/dirsync.hpp ad/discover.hpp ad/password.hpp ad/ranged_values.hpp ad/sync.hpp; do
 	if [ -e "$work/prefix-codec/include/jhetz/ldap/$h" ]; then
-		echo "unexpected: $h installed without jhetz::ldap_net"
+		echo "unexpected: $h installed without jhetz::ldap"
 		exit 1
 	fi
 done
-step "consumer with jhetz::ldap only"
+step "consumer with COMPONENTS core (jhetz::ldap_core)"
 cmake -S "$here/consumer" -B "$work/build/consumer-codec" $gen -DCMAKE_PREFIX_PATH="$work/prefix-codec" \
 	-DWITH_NET=OFF >/dev/null
 cmake --build "$work/build/consumer-codec" >/dev/null
 "$work/build/consumer-codec/consumer"
-step "a net consumer of the codec-only package fails to configure"
+step "the default find_package fails to configure on the codec-only package"
 if cmake -S "$here/consumer" -B "$work/build/consumer-missing" $gen -DCMAKE_PREFIX_PATH="$work/prefix-codec" \
 	>/dev/null 2>&1; then
-	echo "unexpected: COMPONENTS net found in a codec-only install"
+	echo "unexpected: jhetz::ldap found in a codec-only install"
 	exit 1
 fi
 step "COMPONENTS ad alone fails to configure on the codec-only package"

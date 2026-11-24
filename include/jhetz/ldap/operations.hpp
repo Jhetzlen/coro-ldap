@@ -1,6 +1,6 @@
 // The requests of ldap::connection's operations as plain aggregates, the
 // ldap::mod builders, what the operations return, and extended operation
-// OIDs. Part of jhetz::ldap (the codec).
+// OIDs. Part of jhetz::ldap_core (the codec).
 #pragma once
 
 #include "jhetz/ldap/controls.hpp"
