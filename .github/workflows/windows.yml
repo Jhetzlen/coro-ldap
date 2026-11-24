@@ -154,7 +154,6 @@ jobs:
           -DFETCHCONTENT_BASE_DIR="$env:FETCHCONTENT_BASE_DIR"
           -DJHETZ_LDAP_BUILD_TESTS=ON
           -DJHETZ_LDAP_BUILD_FUZZERS=OFF
-          -DJHETZ_LDAP_BUILD_BENCH=OFF
           -DJHETZ_LDAP_WITH_GSSAPI=OFF
 
       - name: Save the FetchContent sources
