@@ -1468,7 +1468,11 @@ itself needs only ICU.
   `make_same_policy_connector` and `ad::change_password` /
   `reset_password` take a `connection &` (a lease's too). `servers` (checked with `url::check_server()` when the
   client is built: an empty list or a refused entry fails every
-  `acquire()` with `invalid_url`) fail over in priority order with a per-server
+  `acquire()` with `invalid_url`), then the text URLs of `server_urls`
+  (`{.server_urls = {"ldaps://ldap1.example.org", ...}}`, parsed with
+  `url::parse_server()` when the client is built, an unparsable one
+  failing every `acquire()` the same way, its context naming
+  `server_urls[i]` and the text) fail over in priority order with a per-server
   jittered exponential backoff (`backoff_options{initial, max,
   multiplier, auth_failure_min}`), and an idle connection to a
   lower-priority server goes back to the primary after `failback_after`.

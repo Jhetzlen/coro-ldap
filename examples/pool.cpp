@@ -3,13 +3,14 @@
 #include <boost/corosio/io_context.hpp>
 
 #include <iostream>
+#include <string>
 
 namespace ldap = jhetz::ldap;
 
-auto example(boost::corosio::io_context &ioc, ldap::url server) -> boost::capy::task<int>
+auto example(boost::corosio::io_context &ioc, std::string server) -> boost::capy::task<int>
 {
 	ldap::client pool(ioc,
-	  { .servers = { server },
+	  { .server_urls = { std::move(server) },
 		.connection = { .allow_cleartext_passwords = true },
 		.setup = ldap::simple_bind_setup(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret") });
 	auto people = co_await pool.search({
@@ -33,11 +34,6 @@ auto example(boost::corosio::io_context &ioc, ldap::url server) -> boost::capy::
 
 auto main(int argc, char *const *argv) -> int
 {
-	auto server = ldap::url::parse_server(argc > 1 ? argv[1] : "ldap://localhost");
-	if (!server) {
-		std::cerr << server.error().message() << '\n';
-		return 1;
-	}
 	boost::corosio::io_context ioc;
-	return ldap::run(ioc, example(ioc, *server));
+	return ldap::run(ioc, example(ioc, argc > 1 ? argv[1] : "ldap://localhost"));
 }

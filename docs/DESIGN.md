@@ -140,7 +140,11 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
   (`detail::check_server_address`) and ignores the DN and later parts, so
   `connect(ioc, "ldap://host/dc=x")` still works; the client checks every
   entry of `servers` when it is built, and a refused one makes every
-  `acquire()` fail at once (a typo is not hidden until failover).
+  `acquire()` fail at once (a typo is not hidden until failover). Its
+  `server_urls` takes the same servers as text, parsed with
+  `parse_server` when the client is built and tried after `servers`; the
+  client constructor never fails, so an unparsable one is reported the
+  same way.
 - `bytes`: not implemented; wire values are `std::pmr::string` holding raw
   octets (see section 10).
 - Literals go through `consteval` helper types (`dn::literal`,

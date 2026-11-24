@@ -174,6 +174,16 @@ namespace detail {
 						"acquire: client_options::servers[{}] {}", servers.size() - 1, servers.back().name));
 				}
 			}
+			for (std::size_t i = 0; i < options.server_urls.size(); ++i) {
+				auto u = url::parse_server(options.server_urls[i]);
+				if (u) {
+					std::string name(std::string_view(u->to_string()));
+					servers.push_back({ .address = std::move(*u), .name = std::move(name) });
+				} else if (!bad_server) {
+					bad_server = detail::with_context(std::move(u.error()),
+					  detail::format("acquire: client_options::server_urls[{}] {}", i, options.server_urls[i]));
+				}
+			}
 		}
 
 		corosio::io_context *ioc;
@@ -182,7 +192,8 @@ namespace detail {
 		client_options options;
 		std::pmr::memory_resource *mr;
 		std::vector<server_state> servers{};
-		// The first entry of options.servers check_server() refuses.
+		// The first entry of options.servers check_server() refuses, or of
+		// options.server_urls parse_server() refuses.
 		std::optional<error> bad_server{};
 		std::vector<std::shared_ptr<pooled_connection>> pool{};
 		std::atomic<std::size_t> pool_size = 0;// pool.size(), for client::connections() on any thread
@@ -972,11 +983,12 @@ namespace detail {
 		// Options acquire() cannot work with.
 		[[nodiscard]] auto unusable_options() const -> std::optional<error>
 		{
-			if (servers.empty()) {
-				return make_error(client_errc::invalid_url, "acquire: client_options::servers is empty");
-			}
 			if (bad_server) {
 				return bad_server;
+			}
+			if (servers.empty()) {
+				return make_error(
+				  client_errc::invalid_url, "acquire: client_options::servers and server_urls are empty");
 			}
 			if (options.max_connections == 0) {
 				return make_error(

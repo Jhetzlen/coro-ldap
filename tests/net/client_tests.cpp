@@ -370,6 +370,37 @@ TEST_CASE("client: a server URL check_server() refuses fails every acquire() up 
 	CHECK(f.obs.events.empty());// the first server is not tried either
 }
 
+TEST_CASE("client: server URL text", "[net][client]")
+{
+	pool_fixture f;
+	const auto down = text(f.refused_url());
+	auto &up = f.server({ bind_ok() });
+	f.make({ .server_urls = { down, text(up.url()) },
+	  .setup = admin_setup(),
+	  .backoff = { .initial = milliseconds(60'000), .max = milliseconds(60'000) } });
+	{
+		auto l = f.acquire();
+		REQUIRE(l.has_value());
+		CHECK(text(l->server()) == text(up.url()));
+	}
+
+	f.make({ .servers = { f.refused_url() }, .server_urls = { down, "ldap://h\xc3\xb6st/dc=example,dc=org" } });
+	for (int i = 0; i < 2; ++i) {
+		auto bad = f.acquire();
+		REQUIRE_FALSE(bad.has_value());
+		CHECK(bad.error().code == ldap::client_errc::invalid_url);
+		CHECK(std::string_view(bad.error().context)
+			.starts_with("acquire: client_options::server_urls[1] ldap://h\xc3\xb6st/dc=example,dc=org: "));
+	}
+
+	f.make({ .server_urls = { "not a url" } });
+	auto unparsable = f.acquire();
+	REQUIRE_FALSE(unparsable.has_value());
+	CHECK(unparsable.error().code == ldap::client_errc::invalid_url);
+	CHECK(
+	  std::string_view(unparsable.error().context).starts_with("acquire: client_options::server_urls[0] not a url"));
+}
+
 TEST_CASE("client: fails over to the next server", "[net][client][failover]")
 {
 	pool_fixture f;

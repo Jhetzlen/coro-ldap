@@ -162,6 +162,9 @@ struct client_options
 
 	// In priority order.
 	std::vector<url> servers{};
+	// Server URL text, parsed with url::parse_server() when the client is
+	// built; tried after `servers`, in priority order.
+	std::vector<std::string> server_urls{};
 	connection_options connection{};
 	// Empty: anonymous connections.
 	session_setup setup{};
