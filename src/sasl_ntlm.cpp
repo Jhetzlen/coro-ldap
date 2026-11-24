@@ -46,6 +46,7 @@ namespace {
 	constexpr unsigned byte_bits = 8;
 	constexpr std::uint32_t byte_mask = 0xFF;
 	constexpr std::size_t max_av_length = 0xFFFF;// AvLen is a USHORT
+	constexpr std::size_t seq_num_size = 4;
 
 	// NEGOTIATE_MESSAGE flags (MS-NLMP section 2.2.2.5) without a security
 	// layer.
@@ -148,7 +149,7 @@ namespace {
 
 	void put_seq_num(std::span<std::byte> out, std::uint32_t v) noexcept
 	{
-		for (std::size_t i = 0; i < 4; ++i) {
+		for (std::size_t i = 0; i < seq_num_size; ++i) {
 			out[i] = static_cast<std::byte>((v >> (byte_bits * i)) & byte_mask);
 		}
 	}
@@ -244,18 +245,18 @@ namespace detail {
 	  bool server_timestamp,
 	  ntlm_responses &out) -> result<void>
 	{
-		constexpr std::size_t z6 = 6;
-		constexpr std::size_t z4 = 4;
-		constexpr std::size_t z24 = 24;
+		constexpr std::size_t reserved_before_time = 6;
+		constexpr std::size_t reserved_size = 4;
+		constexpr std::size_t lm_response_size = 24;
 		// temp = ConcatenationOf(Responserversion, HiResponserversion, Z(6),
 		//   Time, ClientChallenge, Z(4), ServerName, Z(4))
 		std::string temp{ ntlmv2_response_version, ntlmv2_response_version };
-		temp.append(z6, '\0');
+		temp.append(reserved_before_time, '\0');
 		put64(temp, time);
 		temp += as_chars(client_challenge);
-		temp.append(z4, '\0');
+		temp.append(reserved_size, '\0');
 		temp += server_name;
-		temp.append(z4, '\0');
+		temp.append(reserved_size, '\0');
 
 		// NTProofStr = HMAC_MD5(ResponseKeyNT, ConcatenationOf(ServerChallenge, temp))
 		ntlm_key proof{};// not secret: it goes on the wire
@@ -269,7 +270,7 @@ namespace detail {
 			return r;
 		}
 		if (server_timestamp) {
-			out.lm_challenge_response.assign(z24, '\0');
+			out.lm_challenge_response.assign(lm_response_size, '\0');
 			return {};
 		}
 		// LmChallengeResponse = ConcatenationOf(HMAC_MD5(ResponseKeyLM,
@@ -336,7 +337,7 @@ namespace detail {
 		out.resize(base + ntlm_signature_size + plaintext.size());
 		const std::span<std::byte> buffer = std::span(out).subspan(base);
 		// The signature's SeqNum, then the message: what the MAC covers.
-		put_seq_num(buffer.subspan(ntlm_signature_seq_num_offset, 4), seq_num);
+		put_seq_num(buffer.subspan(ntlm_signature_seq_num_offset, seq_num_size), seq_num);
 		std::ranges::copy(plaintext, buffer.begin() + static_cast<std::ptrdiff_t>(ntlm_signature_size));
 		ntlm_key mac{};
 		const scope_exit wipe_mac([&mac] { OPENSSL_cleanse(mac.data(), mac.size()); });
@@ -371,12 +372,12 @@ namespace detail {
 		// The expected SeqNum, then the message (unsealed in place): what the
 		// server's MAC covers.
 		const std::size_t base = out.size();
-		out.resize(base + 4 + parsed->message.size());
+		out.resize(base + seq_num_size + parsed->message.size());
 		const std::span<std::byte> covered = std::span(out).subspan(base);
 		put_seq_num(covered, expected);
-		std::ranges::copy(parsed->message, covered.begin() + 4);
+		std::ranges::copy(parsed->message, covered.begin() + seq_num_size);
 		if (protection_ == sasl_protection::confidentiality) {
-			server_handle_.apply(covered.subspan(4));
+			server_handle_.apply(covered.subspan(seq_num_size));
 		}
 		auto checksum = parsed->signature.checksum;
 		ntlm_key mac{};
@@ -402,7 +403,8 @@ namespace detail {
 			return fail(client_errc::unexpected_response,
 			  "NTLM: a buffer whose checksum does not verify (changed in transit, or not the server's)");
 		}
-		out.erase(out.begin() + static_cast<std::ptrdiff_t>(base), out.begin() + static_cast<std::ptrdiff_t>(base + 4));
+		out.erase(out.begin() + static_cast<std::ptrdiff_t>(base),
+		  out.begin() + static_cast<std::ptrdiff_t>(base + seq_num_size));
 		return {};
 	}
 

@@ -200,9 +200,7 @@ namespace {
 		if (!self) {
 			co_return std::unexpected(no_connection(op_context("search", request.base)));
 		}
-		// The analyzer does not model the promise's construction: Capy's env_ is
-		// nullptr-initialised and set by the awaiting caller before the first resume.
-		// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
+		// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive, as in on_strand()
 		co_return start_search(*self, request, mr, co_await capy::this_coro::stop_token);
 	}
 

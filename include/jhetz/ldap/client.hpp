@@ -133,8 +133,7 @@ enum class referral_binding : std::uint8_t {
 	same_setup,
 };
 
-// Decides for each referred server, on the client's executor; an exception
-// propagates out of the operation.
+// Decides for each referred server, on the client's executor.
 using referral_authorizer = std::function<referral_binding(const referral_hop &hop)>;
 
 // same_setup for the hosts of `domains` (and their subdomains), refusal for
@@ -161,28 +160,26 @@ struct client_options
 	static constexpr std::chrono::milliseconds default_failback_after{ 300'000 };
 	static constexpr std::chrono::milliseconds default_probe_timeout{ 5'000 };
 
-	// In priority order. Empty, or an entry url::check_server() refuses: every
-	// acquire() fails with invalid_url.
+	// In priority order.
 	std::vector<url> servers{};
 	connection_options connection{};
 	// Empty: anonymous connections.
 	session_setup setup{};
-	// At least 1 (0 fails acquire() with std::errc::invalid_argument).
+	// At least 1.
 	std::size_t max_connections = 1;
 	// Probe an idle connection unused for longer than this; nullopt: never.
 	std::optional<std::chrono::milliseconds> idle_check{ default_idle_check };
-	// Bounds the idle check; ldap::no_timeout: only acquire_timeout bounds it.
+	// Bounds the idle check.
 	std::chrono::milliseconds probe_timeout{ default_probe_timeout };
 	// Age after which a connection is no longer handed out; nullopt: no limit.
 	std::optional<std::chrono::milliseconds> max_lifetime{};
-	// Bounds each acquire(); ldap::no_timeout: retries until success,
-	// cancellation or close().
+	// Bounds each acquire().
 	std::chrono::milliseconds acquire_timeout{ default_acquire_timeout };
 	backoff_options backoff{};
 	// Age of an idle connection to a lower-priority server before acquire()
 	// closes it to return to a higher-priority one.
 	std::chrono::milliseconds failback_after{ default_failback_after };
-	// Not owned; must outlive the client, or its close(). Null: none.
+	// Not owned; null: none.
 	client_observer *observer = nullptr;
 	referral_options referrals{};
 };

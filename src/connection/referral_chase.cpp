@@ -302,9 +302,7 @@ namespace {
 	  const Params &base,
 	  Op op) -> capy::task<result<followed<Params, Value>>>
 	{
-		// The analyzer does not model the promise's construction: Capy's env_ is
-		// nullptr-initialised and set by the awaiting caller before the first resume.
-		// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
+		// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive, as in on_strand()
 		const std::stop_token stop = co_await capy::this_coro::stop_token;
 		followed<Params, Value> out;
 		for (const auto &uri : uris) {

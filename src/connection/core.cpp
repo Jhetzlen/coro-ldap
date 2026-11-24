@@ -993,9 +993,7 @@ auto connection::core::begin_bind(core_ref c, std::string_view context) -> capy:
 			co_return fail(ec, context);
 		}
 	}
-	// The analyzer does not model the promise's construction: Capy's env_ is
-	// nullptr-initialised and set by the awaiting caller before the first resume.
-	// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
+	// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive, as in on_strand()
 	if ((co_await capy::this_coro::stop_token).stop_requested()) {
 		co_return fail(capy::error::canceled, context);
 	}
@@ -1041,9 +1039,7 @@ namespace detail {
 	{
 		const scope_exit wipe{ [&request] noexcept { (void)wipe_password(request); } };
 		if (!std::holds_alternative<bind_request>(request.op)
-			// The analyzer does not model the promise's construction: Capy's env_ is
-			// nullptr-initialised and set by the awaiting caller before the first resume.
-			// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive
+			// NOLINTNEXTLINE(clang-analyzer-core.uninitialized.Branch): false positive, as in on_strand()
 			&& (co_await capy::this_coro::stop_token).stop_requested()) {
 			co_return fail(capy::error::canceled, context);
 		}

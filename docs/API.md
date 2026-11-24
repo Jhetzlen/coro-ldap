@@ -575,7 +575,12 @@ itself needs only ICU.
   constructor, of whose `connection_options` only `max_message_size` and
   `operation_timeout` apply.
   Lifetime: the last handle's destruction closes the transport without an
-  UnbindRequest (`co_await unbind()` first for a clean shutdown).
+  UnbindRequest (`co_await unbind()` first for a clean shutdown); a moved-from
+  connection is default-constructed (not connected), `close()` is
+  idempotent, and `executor()` requires a connection built with a
+  transport, not moved from. `add`, `modify`, `del`, `modify_dn` and
+  `extended` return any result code but success as an error, referrals
+  included (`connection` never chases them).
   Streams, paged searches, transactions and outstanding operations may
   outlive every handle (they then fail with `not_connected`); destroying a
   task suspended in an operation abandons it. Work posted by a close or
@@ -1469,7 +1474,10 @@ itself needs only ICU.
   failure backs that server off for at least `auth_failure_min`, during
   which acquires fail at once with the stored error instead of binding
   again. An idle connection is probed (root DSE, `1.1`) after
-  `idle_check`, within `probe_timeout`; a connection older than
+  `idle_check` (`nullopt`: never), within `probe_timeout`
+  (`ldap::no_timeout`: only `acquire_timeout` bounds it); with
+  `acquire_timeout = ldap::no_timeout` an `acquire()` retries until it
+  succeeds, is cancelled or the client is closed; a connection older than
   `max_lifetime`, or whose `connection::bind_count()` changed (a bind
   done or in progress), is no longer handed out and closes once its last
   lease returns, and does not count against `max_connections` meanwhile.

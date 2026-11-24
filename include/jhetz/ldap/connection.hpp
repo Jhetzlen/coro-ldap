@@ -80,7 +80,7 @@ class connection
   public:
 	using executor_type = boost::capy::strand<boost::corosio::io_context::executor_type>;
 
-	// Not connected: every operation fails with client_errc::not_connected.
+	// Not connected.
 	connection() noexcept = default;
 	// Runs LDAP over an open transport whose I/O runs on `ioc`.
 	connection(boost::corosio::io_context &ioc,
@@ -89,17 +89,14 @@ class connection
 	  std::pmr::memory_resource *mr = std::pmr::get_default_resource());
 	// Another handle on the same session.
 	connection(const connection &other) noexcept;
-	// Leaves `other` default-constructed.
 	connection(connection &&other) noexcept;
 	auto operator=(const connection &other) noexcept -> connection &;
 	auto operator=(connection &&other) noexcept -> connection &;
-	// The last handle closes the transport without an UnbindRequest.
 	~connection();
 
 	[[nodiscard]] auto is_open() const noexcept -> bool;
 	// "ldap://127.0.0.1:389"; empty if never connected.
 	[[nodiscard]] auto name() const noexcept -> std::string_view;
-	// Precondition: constructed with a transport, not moved from.
 	[[nodiscard]] auto executor() const noexcept -> executor_type;
 	// Requests waiting for a response, paged search releases included.
 	[[nodiscard]] auto outstanding() const noexcept -> std::size_t;
@@ -117,25 +114,22 @@ class connection
 	// Simple bind (RFC 4511 section 4.2, RFC 4513 section 5.1).
 	auto simple_bind(dn name, std::string password) -> boost::capy::task<result<void>>;
 
-	// SASL bind (RFC 4513 section 5.2); `mechanism` must outlive the task.
+	// SASL bind (RFC 4513 section 5.2).
 	auto sasl_bind(sasl_mechanism &mechanism, dn name = {}) -> boost::capy::task<result<void>>;
 
 	// Runs a search to its end; entries are allocated from `mr`.
 	auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> boost::capy::task<result<search_result>>;
 
-	// A stream of the search's entries, each decoded into `mr`; destroyed
-	// early, it abandons the search.
+	// A stream of the search's entries, each decoded into `mr`.
 	auto search_stream(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> boost::capy::task<result<ldap::search_stream>>;
 
-	// Any result code but success is an error (referrals included, not chased).
 	auto add(add_params request) -> boost::capy::task<result<response>>;
 	auto modify(modify_params request) -> boost::capy::task<result<response>>;
 	auto del(del_params request) -> boost::capy::task<result<response>>;
 	auto modify_dn(modify_dn_params request) -> boost::capy::task<result<response>>;
 	auto compare(compare_params request) -> boost::capy::task<result<compare_result>>;
-	// Any extended operation but StartTLS (use start_tls()).
 	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
 
 	// RFC 5805 transactions (see transaction.hpp).
@@ -150,7 +144,7 @@ class connection
 	// Sends an UnbindRequest and closes (RFC 4511 section 4.3).
 	auto unbind() -> boost::capy::task<result<void>>;
 
-	// Closes at once, without an UnbindRequest. Idempotent.
+	// Closes at once, without an UnbindRequest.
 	void close() noexcept;
 
 	class core;
@@ -175,7 +169,7 @@ auto connect(boost::corosio::io_context &ioc,
   connection_options options = {},
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<connection>>;
 
-// As above, from the URL text; a bad URL fails with invalid_url.
+// As above, from the URL text.
 auto connect(boost::corosio::io_context &ioc,
   std::string_view text,
   connection_options options = {},

@@ -53,10 +53,18 @@ namespace {
 	constexpr std::string_view b64_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 	constexpr unsigned b64_bits = 6;
+	constexpr std::size_t b64_group_chars = 4;
+	constexpr std::size_t b64_group_octets = 3;
+	constexpr unsigned octet_bits = 8;
+	constexpr std::uint32_t octet_mask = 0xff;
+
+	// ICU lengths are int32_t, with room for SASLprep to lengthen the input.
+	constexpr std::size_t max_saslprep_input = INT32_MAX / 4;
+	constexpr std::size_t max_quoted = 64;
 
 	auto base64_encode(std::span<const unsigned char> data) -> std::string
 	{
-		std::string out(((data.size() + 2) / 3 * 4) + 1, '\0');
+		std::string out(((data.size() + b64_group_octets - 1) / b64_group_octets * b64_group_chars) + 1, '\0');
 		const int n =
 		  EVP_EncodeBlock(reinterpret_cast<unsigned char *>(out.data()), data.data(), static_cast<int>(data.size()));
 		out.resize(static_cast<std::size_t>(n));
@@ -79,21 +87,21 @@ namespace {
 	// stray bits in the last group (RFC 4648 section 3.5 canonical form).
 	auto base64_decode(std::string_view s) -> std::optional<std::string>
 	{
-		if (s.size() % 4 != 0) {
+		if (s.size() % b64_group_chars != 0) {
 			return std::nullopt;
 		}
 		std::string out;
-		out.reserve(s.size() / 4 * 3);
-		for (std::size_t i = 0; i < s.size(); i += 4) {
-			const bool last = i + 4 == s.size();
+		out.reserve(s.size() / b64_group_chars * b64_group_octets);
+		for (std::size_t i = 0; i < s.size(); i += b64_group_chars) {
+			const bool last = i + b64_group_chars == s.size();
 			std::size_t pad = 0;
 			if (last && s[i + 3] == '=') {
 				pad = s[i + 2] == '=' ? 2 : 1;
 			}
 			std::uint32_t v = 0;
-			for (std::size_t k = 0; k < 4; ++k) {
+			for (std::size_t k = 0; k < b64_group_chars; ++k) {
 				int d = 0;
-				if (k < 4 - pad) {
+				if (k < b64_group_chars - pad) {
 					d = b64_value(s[i + k]);
 					if (d < 0) {
 						return std::nullopt;
@@ -101,15 +109,15 @@ namespace {
 				}
 				v = v << b64_bits | static_cast<std::uint32_t>(d);
 			}
-			out += static_cast<char>(v >> 16 & 0xff);
+			out += static_cast<char>(v >> (2 * octet_bits) & octet_mask);
 			if (pad < 2) {
-				out += static_cast<char>(v >> 8 & 0xff);
+				out += static_cast<char>(v >> octet_bits & octet_mask);
 			}
 			if (pad < 1) {
-				out += static_cast<char>(v & 0xff);
+				out += static_cast<char>(v & octet_mask);
 			}
 			// The padded octets' bits must be zero.
-			if (pad != 0 && (v & ((std::uint32_t{ 1 } << (8 * pad)) - 1)) != 0) {
+			if (pad != 0 && (v & ((std::uint32_t{ 1 } << (octet_bits * pad)) - 1)) != 0) {
 				return std::nullopt;
 			}
 		}
@@ -151,7 +159,7 @@ namespace {
 		if (s.empty()) {
 			return input_error("empty " + name);
 		}
-		if (s.size() > static_cast<std::size_t>(INT32_MAX / 4)) {
+		if (s.size() > max_saslprep_input) {
 			return input_error(name + " is too long");
 		}
 
@@ -312,7 +320,7 @@ namespace {
 	auto quoted(std::string_view s) -> std::string
 	{
 		std::string out = "\"";
-		detail::append_sanitized(out, s, 64);
+		detail::append_sanitized(out, s, max_quoted);
 		out += '"';
 		return out;
 	}

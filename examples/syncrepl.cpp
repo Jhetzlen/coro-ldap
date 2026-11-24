@@ -5,7 +5,6 @@
 #include <array>
 #include <iostream>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <variant>
 
@@ -28,7 +27,7 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 		std::cerr << changes.error().message() << '\n';
 		co_return 1;
 	}
-	constexpr std::array<std::string_view, 4> states = { "present", "add", "modify", "delete" };
+	constexpr std::array states = { "present", "add", "modify", "delete" };
 	for (;;) {
 		auto item = co_await changes->next_item();
 		if (!item || !*item) {
