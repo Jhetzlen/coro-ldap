@@ -30,9 +30,11 @@ on:
       - ".github/workflows/windows.yml"
   workflow_dispatch:
 
+# A newer push to a PR cancels the older run; runs on main all finish, so
+# their caches are saved.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -78,13 +80,19 @@ jobs:
         shell: pwsh
         run: '"commit=$(git -C "$env:VCPKG_INSTALLATION_ROOT" rev-parse HEAD)" >> $env:GITHUB_OUTPUT'
 
-      - uses: actions/cache@v4
+      # Restored and saved in separate steps, so a failed build still saves
+      # them.
+      - name: Restore vcpkg's binary cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
         with:
           path: .vcpkg-cache
           key: vcpkg-${{ env.VCPKG_TRIPLET }}-${{ steps.vcpkg.outputs.commit }}
           restore-keys: vcpkg-${{ env.VCPKG_TRIPLET }}-
 
-      - uses: actions/cache@v4
+      - name: Restore the FetchContent sources
+        id: deps-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             .deps/*-src
@@ -95,6 +103,14 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force .vcpkg-cache | Out-Null
           & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install icu openssl --triplet $env:VCPKG_TRIPLET
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Save vcpkg's binary cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-${{ env.VCPKG_TRIPLET }}-${{ steps.vcpkg.outputs.commit }}
 
       - name: Configure
         run: >
@@ -109,8 +125,18 @@ jobs:
           -DJHETZ_LDAP_BUILD_BENCH=OFF
           -DJHETZ_LDAP_WITH_GSSAPI=OFF
 
+      - name: Save the FetchContent sources
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .deps/*-src
+            .deps/*-subbuild
+          key: fetchcontent-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt') }}
+
       - name: Build
-        run: cmake --build build
+        # -k 0: every failing file in one run.
+        run: cmake --build build -- -k 0
 
       # No slapd, Samba or KDC on Windows: the integration tests are left out.
       - name: Test
