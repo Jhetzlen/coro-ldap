@@ -51,6 +51,15 @@ void check_multi(std::string_view text)
 			  "a not-allowed issue names a member");
 			continue;
 		}
+		// The lines are content rules too, so a declared auxiliary class may be
+		// outside every rule's AUX.
+		if (i.what == ldap::schema_issue::kind::auxiliary_class_not_allowed) {
+			const auto *aux = multi.find_object_class(i.name);
+			check(aux != nullptr && aux->kind == ldap::object_class_kind::auxiliary
+					&& std::ranges::any_of(declared, [&](const char *d) { return multi.find_object_class(d) == aux; }),
+			  "an auxiliary-not-allowed issue names a declared auxiliary class");
+			continue;
+		}
 		const bool superclass = i.what == ldap::schema_issue::kind::unknown_superclass;
 		check(std::ranges::any_of(parsed,
 				[&](const ldap::object_class_type &pc) {
