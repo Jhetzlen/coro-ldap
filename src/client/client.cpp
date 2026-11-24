@@ -1440,6 +1440,11 @@ namespace {
 		co_return fail(client_errc::not_connected, context + ": client moved from");
 	}
 
+	template<class T> auto arguments_refused(error e) -> capy::task<result<T>>
+	{
+		co_return std::unexpected(std::move(e));
+	}
+
 	// Not a coroutine: the task holds its own copy of the state.
 	template<class Params>
 	auto update(const std::shared_ptr<detail::client_state> &state, Params request) -> capy::task<result<response>>
@@ -1480,25 +1485,25 @@ auto client::search_stream(search_params request, std::pmr::memory_resource *mr)
 		state_, [request = std::move(request), mr](connection &c) { return c.search_stream(request, mr); }));
 }
 
-namespace detail {
-
-	auto search_paged_of(const client &c,
-	  search_params request,
-	  std::int32_t page_size,
-	  std::size_t max_pages,
-	  std::pmr::memory_resource *mr) -> capy::task<result<ldap::paged_search>>
-	{
-		if (c.state_ == nullptr) {
-			return read_refused<ldap::paged_search>(op_context("search", request.base));
-		}
-		return on_strand(c.state_->strand,
-		  client_state::read_stream<ldap::paged_search>(
-			c.state_, [request = std::move(request), page_size, max_pages, mr](connection &conn) {
-				return ldap::search_paged(conn, request, page_size, max_pages, mr);
-			}));
+// NOLINTNEXTLINE(misc-const-correctness): the search runs on `c`'s pool
+auto search_paged_stream(client &c,
+  search_params request,
+  std::int32_t page_size,
+  std::size_t max_pages,
+  std::pmr::memory_resource *mr) -> capy::task<result<ldap::paged_search>>
+{
+	if (auto bad = detail::invalid_paged_arguments(request, page_size, max_pages)) {
+		return arguments_refused<ldap::paged_search>(std::move(*bad));
 	}
-
-}// namespace detail
+	if (c.state_ == nullptr) {
+		return read_refused<ldap::paged_search>(detail::op_context("search", request.base));
+	}
+	return detail::on_strand(c.state_->strand,
+	  detail::client_state::read_stream<ldap::paged_search>(
+		c.state_, [request = std::move(request), page_size, max_pages, mr](connection &conn) {
+			return search_paged_stream(conn, request, page_size, max_pages, mr);
+		}));
+}
 
 auto client::compare(compare_params request) -> capy::task<result<compare_result>>
 {

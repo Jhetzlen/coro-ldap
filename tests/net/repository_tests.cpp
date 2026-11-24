@@ -971,7 +971,7 @@ TEST_CASE("repository: search_stream decodes each entry as a record", "[net][rep
 	CHECK(request.attributes == ldap::string_list{ "uid", "mail", "uidNumber", "modifyTimestamp" });
 }
 
-TEST_CASE("repository: search_paged decodes the entries of every page", "[net][repository][paged]")
+TEST_CASE("repository: search_paged_stream decodes the entries of every page", "[net][repository][paged]")
 {
 	mock_ldap m;
 	m.serve({ answer({ person_entry(1, "a", "1000"), paged_done(1, "next") }),
@@ -979,7 +979,7 @@ TEST_CASE("repository: search_paged decodes the entries of every page", "[net][r
 	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
 
 	auto pages =
-	  m.run(s.search_paged(1, ldap::filters::field<&person::uid>().present(), ldap::search_scope::single_level));
+	  m.run(s.search_paged_stream(ldap::filters::field<&person::uid>().present(), 1, ldap::search_scope::single_level));
 	REQUIRE(pages.has_value());
 	auto a = m.run(pages->next());
 	REQUIRE(a.has_value());
@@ -1003,11 +1003,28 @@ TEST_CASE("repository: search_paged decodes the entries of every page", "[net][r
 	CHECK((*cookie)->cookie == "next");
 	CHECK((*cookie)->size == 1);
 
-	auto none = m.run(s.search_paged(10, ldap::filters::field<&person::uid>() == std::string("j\xC3")));
+	auto none = m.run(s.search_paged_stream(ldap::filters::field<&person::uid>() == std::string("j\xC3"), 10));
 	REQUIRE_FALSE(none.has_value());
 	CHECK(none.error().code == ldap::client_errc::encode_error);
 	CHECK_THAT(std::string(none.error().context),
 	  Catch::Matchers::EndsWith("filter uid: not valid UTF-8 (ill-formed sequence at offset 1)"));
+}
+
+TEST_CASE("repository: search_paged collects the entries of every page", "[net][repository][paged]")
+{
+	mock_ldap m;
+	m.serve({ answer({ person_entry(1, "a", "1000"), paged_done(1, "next") }),
+	  answer({ person_entry(2, "b", "1001"), paged_done(2, "") }) });
+	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
+
+	auto all = m.run(s.search_paged(ldap::filters::field<&person::uid>().present(), 1));
+	REQUIRE(all.has_value());
+	CHECK(all->is_success());
+	REQUIRE(all->entries.size() == 2);
+	CHECK(all->entries[0].value.uid == "a");
+	CHECK(all->entries[1].dn == ldap::dn{ "uid=b,ou=people,dc=example,dc=org" });
+	m.check_server();
+	CHECK(m.log.received.size() == 2);
 }
 
 TEST_CASE("repository: schema_check::on_first_use", "[net][repository][schema]")
@@ -1155,7 +1172,7 @@ TEST_CASE("sync repository: the same operations, blocking", "[net][repository][s
 	CHECK(s.modify("Z", { ldap::replace<&card::cn>("Z") }).has_value());
 	CHECK(s.remove("Z").has_value());
 	CHECK(srv.requests == 5);
-	auto paged = s.search_paged(10);
+	auto paged = s.search_paged(ldap::filters::attr("objectClass").present(), 10);
 	REQUIRE(paged.has_value());// the server ignores the control: one page
 	REQUIRE(paged->entries.size() == 2);
 	CHECK(paged->entries[1].dn == ldap::dn{ "uid=y,ou=people,dc=example,dc=org" });

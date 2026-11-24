@@ -7,7 +7,6 @@
 #include "jhetz/ldap/sync.hpp"
 
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -29,7 +28,6 @@ template<directory D> [[nodiscard]] auto load_schema(D &d) -> result<server_sche
 template<auto Naming, directory D> class repository
 {
 	using core = ldap::detail::repository_core<Naming>;
-	using codec = ldap::detail::repository_codec<Naming>;
 
   public:
 	using value_type = core::value_type;
@@ -161,28 +159,14 @@ template<auto Naming, directory D> class repository
 	{
 		return sync::run(*source_, [&](auto &a) { return core_.search(a, std::move(f), scope); });
 	}
-	// search() in pages, every page collected.
-	[[nodiscard]] auto search_paged(std::int32_t page_size,
-	  filter f = filters::attr("objectClass").present(),
-	  search_scope scope = search_scope::whole_subtree) -> result<typed_search_result<record<value_type>>>
+	// search() in pages of `page_size` entries, every page collected.
+	[[nodiscard]] auto search_paged(filter f, std::int32_t page_size, search_scope scope = search_scope::whole_subtree)
+	  -> result<typed_search_result<record<value_type>>>
 	{
-		return sync::run(*source_, [&](auto &a) { return collect_records(core_, a, page_size, std::move(f), scope); });
+		return sync::run(*source_, [&](auto &a) { return core_.search_paged(a, std::move(f), page_size, scope); });
 	}
 
   private:
-	template<class A>
-	static auto collect_records(core &c, A &a, std::int32_t page_size, filter f, search_scope scope)
-	  -> boost::capy::task<result<typed_search_result<record<value_type>>>>
-	{
-		auto request = co_await c.search_request(a, std::move(f), scope);
-		if (!request) {
-			co_return std::unexpected(std::move(request.error()));
-		}
-		auto found = co_await detail::collect_paged(
-		  a, std::move(*request), page_size, search_paged_default_max_pages, std::pmr::get_default_resource());
-		co_return codec::search_result_of(std::move(found), c.base());
-	}
-
 	D *source_;
 	core core_;
 };

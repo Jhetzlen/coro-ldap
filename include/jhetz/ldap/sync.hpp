@@ -124,17 +124,7 @@ namespace detail {
 		std::thread::id id_;
 	};
 
-	// The tasks behind connection_api's non-inline operations.
-	[[nodiscard]] auto collect_paged(ldap::connection &c,
-	  search_params request,
-	  std::int32_t page_size,
-	  std::size_t max_pages,
-	  std::pmr::memory_resource *mr) -> boost::capy::task<result<search_result>>;
-	[[nodiscard]] auto collect_paged(ldap::client &c,
-	  search_params request,
-	  std::int32_t page_size,
-	  std::size_t max_pages,
-	  std::pmr::memory_resource *mr) -> boost::capy::task<result<search_result>>;
+	// The task behind sync::transaction::begin.
 	[[nodiscard]] auto make_transaction(ldap::connection &c, extended_controls controls)
 	  -> boost::capy::task<result<std::unique_ptr<ldap::transaction>>>;
 
@@ -526,7 +516,7 @@ template<directory D, class F, class... Args> [[nodiscard]] auto run(D &d, F &&m
 	return detail::facade_access::call(d, task_of);
 }
 
-// ldap::search_paged, blocking: every page collected into one search_result.
+// ldap::search_paged, blocking.
 template<directory D>
 [[nodiscard]] auto search_paged(D &d,
   search_params request,
@@ -534,8 +524,7 @@ template<directory D>
   std::size_t max_pages = search_paged_default_max_pages,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<search_result>
 {
-	return sync::run(
-	  d, [&](auto &a) { return detail::collect_paged(a, std::move(request), page_size, max_pages, mr); });
+	return sync::run(d, [&](auto &a) { return ldap::search_paged(a, std::move(request), page_size, max_pages, mr); });
 }
 
 }// namespace jhetz::ldap::sync

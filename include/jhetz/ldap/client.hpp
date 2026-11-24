@@ -198,14 +198,6 @@ namespace detail {
 	  -> std::chrono::milliseconds;
 
 	struct test_access;
-
-	// ldap::search_paged(client &): the first page on a shared lease, retried
-	// as client::search_stream() is.
-	auto search_paged_of(const client &c,
-	  search_params request,
-	  std::int32_t page_size,
-	  std::size_t max_pages,
-	  std::pmr::memory_resource *mr) -> boost::capy::task<result<paged_search>>;
 }// namespace detail
 
 namespace detail {
@@ -338,9 +330,11 @@ class client
 
   private:
 	friend struct detail::test_access;
-	friend auto
-	  detail::search_paged_of(const client &, search_params, std::int32_t, std::size_t, std::pmr::memory_resource *)
-		-> boost::capy::task<result<paged_search>>;
+	friend auto search_paged_stream(client &c,
+	  search_params request,
+	  std::int32_t page_size,
+	  std::size_t max_pages,
+	  std::pmr::memory_resource *mr) -> boost::capy::task<result<paged_search>>;
 
 	std::shared_ptr<detail::client_state> state_{};
 };

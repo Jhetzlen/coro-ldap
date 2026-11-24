@@ -806,7 +806,7 @@ TEST_CASE("operations: paged search follows the cookie", "[net][operations][page
 		paged_done(2, "page3") }),
 	  answer({ entry_msg(3, "uid=e,ou=people,dc=example,dc=org", "E"), paged_done(3, "") }) });
 
-	auto s = m.run(ldap::search_paged(m.conn, people_search(), 2));
+	auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 2));
 	REQUIRE(s.has_value());
 	CHECK(s->pages() == 1);
 	auto dns = m.run(drain_paged(*s));
@@ -842,6 +842,26 @@ TEST_CASE("operations: paged search follows the cookie", "[net][operations][page
 	}
 }
 
+TEST_CASE("operations: search_paged collects every page", "[net][operations][paged]")
+{
+	mock_ldap m;
+	m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
+	  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), paged_done(2, "") }) });
+
+	auto all = m.run(ldap::search_paged(m.conn, people_search(), 1));
+	REQUIRE(all.has_value());
+	CHECK(all->is_success());
+	REQUIRE(all->entries.size() == 2);
+	CHECK(all->entries[0].dn == "uid=a,ou=people,dc=example,dc=org");
+	CHECK(all->entries[1].dn == "uid=b,ou=people,dc=example,dc=org");
+	m.check_server();
+	CHECK(m.log.received.size() == 2);
+
+	auto bad = m.run(ldap::search_paged(m.conn, people_search(), 0));
+	REQUIRE_FALSE(bad.has_value());
+	CHECK(bad.error().code == ldap::client_errc::encode_error);
+}
+
 TEST_CASE("operations: paged search against a server without paging", "[net][operations][paged]")
 {
 	mock_ldap m;
@@ -849,7 +869,7 @@ TEST_CASE("operations: paged search against a server without paging", "[net][ope
 	  entry_msg(1, "uid=b,ou=people,dc=example,dc=org", "B"),
 	  entry_msg(1, "uid=c,ou=people,dc=example,dc=org", "C"),
 	  done_msg(1) }) });// no paged control: one page
-	auto s = m.run(ldap::search_paged(m.conn, people_search(), 2));
+	auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 2));
 	REQUIRE(s.has_value());
 	auto dns = m.run(drain_paged(*s));
 	REQUIRE(dns.has_value());
@@ -866,7 +886,7 @@ TEST_CASE("operations: paged search errors", "[net][operations][paged]")
 		ldap::message done = done_msg(1);
 		done.controls.emplace_back(ldap::paged_results_oid, false, "garbage");
 		m.serve({ answer({ done }) });
-		auto s = m.run(ldap::search_paged(m.conn, people_search(), 2));
+		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 2));
 		REQUIRE(s.has_value());
 		auto r = m.run(drain_paged(*s));
 		REQUIRE_FALSE(r.has_value());
@@ -878,7 +898,7 @@ TEST_CASE("operations: paged search errors", "[net][operations][paged]")
 		mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "next") }),
 		  answer({ done_msg(2, 51, "", "busy") }) });
-		auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 		REQUIRE(s.has_value());
 		auto first = m.run(s->next());
 		REQUIRE(first.has_value());
@@ -891,7 +911,7 @@ TEST_CASE("operations: paged search errors", "[net][operations][paged]")
 	SECTION("a page size that is not positive")
 	{
 		mock_ldap m;
-		auto s = m.run(ldap::search_paged(m.conn, people_search(), 0));
+		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 0));
 		REQUIRE_FALSE(s.has_value());
 		CHECK(s.error().code == client_errc::encode_error);
 		CHECK(m.log.received.empty());
@@ -907,8 +927,7 @@ TEST_CASE("operations: collected pages end with a limit code as search() does", 
 					ref_msg(1, { "ldap://other.example.org/ou=people,dc=example,dc=org" }),
 					paged_done(1, "next") }),
 		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), done_msg(2, 4, "", "size limit") }) });
-		auto r = m.run(ldap::sync::detail::collect_paged(
-		  m.conn, people_search(), 1, ldap::search_paged_default_max_pages, std::pmr::get_default_resource()));
+		auto r = m.run(ldap::search_paged(m.conn, people_search(), 1));
 		REQUIRE(r.has_value());
 		CHECK(r->result_code == 4);
 		CHECK(r->diagnostic_message == "size limit");
@@ -924,8 +943,7 @@ TEST_CASE("operations: collected pages end with a limit code as search() does", 
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "next") }),
 		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), done_msg(2, code, "", "limit") }),
 		  answer({ done_msg(3) }) });
-		auto r = m.run(ldap::sync::detail::collect_paged(
-		  m.conn, people_search(), 1, ldap::search_paged_default_max_pages, std::pmr::get_default_resource()));
+		auto r = m.run(ldap::search_paged(m.conn, people_search(), 1));
 		REQUIRE(r.has_value());
 		CHECK(r->result_code == code);
 		CHECK(r->diagnostic_message == "limit");
@@ -941,8 +959,7 @@ TEST_CASE("operations: collected pages end with a limit code as search() does", 
 	{
 		mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1, 3) }) });
-		auto r = m.run(ldap::sync::detail::collect_paged(
-		  m.conn, people_search(), 1, ldap::search_paged_default_max_pages, std::pmr::get_default_resource()));
+		auto r = m.run(ldap::search_paged(m.conn, people_search(), 1));
 		REQUIRE(r.has_value());
 		CHECK(r->result_code == 3);
 		CHECK(r->entries.size() == 1);
@@ -955,8 +972,7 @@ TEST_CASE("operations: collected pages end with a limit code as search() does", 
 		ldap::message done = done_msg(1);
 		done.controls.emplace_back(ldap::paged_results_oid, false, "garbage");
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done }) });
-		auto r = m.run(ldap::sync::detail::collect_paged(
-		  m.conn, people_search(), 1, ldap::search_paged_default_max_pages, std::pmr::get_default_resource()));
+		auto r = m.run(ldap::search_paged(m.conn, people_search(), 1));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::protocol_error);
 	}
@@ -987,7 +1003,7 @@ auto bind_admin(ldap::connection &c) -> capy::task<ldap::result<void>>
 // the server's second step.
 template<class M> void release_after_one_page(M &m, ldap::search_params params = people_search())
 {
-	auto s = m.run(ldap::search_paged(m.conn, std::move(params), 1));
+	auto s = m.run(ldap::search_paged_stream(m.conn, std::move(params), 1));
 	REQUIRE(s.has_value());
 	auto e = m.run(s->next());
 	REQUIRE(e.has_value());
@@ -1036,7 +1052,7 @@ TEST_CASE("operations: a paged search stopped between pages releases the server'
 	  answer({ paged_done(3, "") }),// the release's answer: dropped
 	  answer({ bind_resp(4) }) });
 	{
-		auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 		REQUIRE(s.has_value());
 		for (int i = 0; i < 2; ++i) {
 			auto e = m.run(s->next());
@@ -1071,7 +1087,7 @@ TEST_CASE("operations: a paged search stops after max_pages pages", "[net][opera
 		  answer({ paged_done(4, "") }),// the release's answer: dropped
 		  answer({ bind_resp(5) }) });
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1, 3));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1, 3));
 			REQUIRE(s.has_value());
 			for (int i = 0; i < 3; ++i) {
 				auto e = m.run(s->next());
@@ -1099,7 +1115,7 @@ TEST_CASE("operations: a paged search stops after max_pages pages", "[net][opera
 		mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "next") }),
 		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), paged_done(2, "") }) });
-		auto s = m.run(ldap::search_paged(m.conn, people_search(), 1, 2));
+		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1, 2));
 		REQUIRE(s.has_value());
 		auto dns = m.run(drain_paged(*s));
 		REQUIRE(dns.has_value());
@@ -1110,7 +1126,7 @@ TEST_CASE("operations: a paged search stops after max_pages pages", "[net][opera
 	{
 		mock_ldap m;
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), done_msg(1) }) });
-		auto s = m.run(ldap::search_paged(m.conn, people_search(), 1, 1));
+		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1, 1));
 		REQUIRE(s.has_value());
 		auto dns = m.run(drain_paged(*s));
 		REQUIRE(dns.has_value());
@@ -1120,7 +1136,7 @@ TEST_CASE("operations: a paged search stops after max_pages pages", "[net][opera
 	SECTION("a max_pages of 0: nothing is sent")
 	{
 		mock_ldap m;
-		auto s = m.run(ldap::search_paged(m.conn, people_search(), 1, 0));
+		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1, 0));
 		REQUIRE_FALSE(s.has_value());
 		CHECK(s.error().code == std::errc::invalid_argument);
 		CHECK(s.error().context == "search ou=people,dc=example,dc=org: max_pages is 0");
@@ -1133,8 +1149,7 @@ TEST_CASE("operations: a paged search stops after max_pages pages", "[net][opera
 		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), paged_done(2, "p3") }),
 		  answer({ paged_done(3, "") }),// the release's answer: dropped
 		  answer({ bind_resp(4) }) });
-		auto r =
-		  m.run(ldap::sync::detail::collect_paged(m.conn, people_search(), 1, 2, std::pmr::get_default_resource()));
+		auto r = m.run(ldap::search_paged(m.conn, people_search(), 1, 2));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == std::errc::value_too_large);
 		CHECK(m.run(bind_admin(m.conn)).has_value());
@@ -1145,8 +1160,7 @@ TEST_CASE("operations: a paged search stops after max_pages pages", "[net][opera
 	SECTION("collected pages: a max_pages of 0")
 	{
 		mock_ldap m;
-		auto r =
-		  m.run(ldap::sync::detail::collect_paged(m.conn, people_search(), 1, 0, std::pmr::get_default_resource()));
+		auto r = m.run(ldap::search_paged(m.conn, people_search(), 1, 0));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == std::errc::invalid_argument);
 		CHECK(m.log.received.empty());
@@ -1164,7 +1178,7 @@ TEST_CASE("operations: a paged search stopped mid-page abandons it, then release
 		  answer({ paged_done(4, "") }),// the release's answer: dropped
 		  answer({ bind_resp(5) }) });
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			for (int i = 0; i < 2; ++i) {
 				auto e = m.run(s->next());
@@ -1196,7 +1210,7 @@ TEST_CASE("operations: a paged search stopped mid-page abandons it, then release
 		  answer({ paged_done(4, "") }),// the release's answer: dropped
 		  answer({ bind_resp(5) }) });
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			for (int i = 0; i < 2; ++i) {
 				auto e = m.run(s->next());
@@ -1232,7 +1246,7 @@ TEST_CASE("operations: a paged search stopped mid-page abandons it, then release
 		  answer({ paged_done(1, "page2") }),// reads the AbandonRequest; a late done, dropped
 		  answer({ bind_resp(3) }) });
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
@@ -1256,7 +1270,7 @@ TEST_CASE("operations: a paged search stopped mid-page abandons it, then release
 		{
 			auto p = people_search();
 			p.timeout = std::chrono::milliseconds(50);
-			auto s = m.run(ldap::search_paged(m.conn, std::move(p), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, std::move(p), 1));
 			REQUIRE(s.has_value());
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
@@ -1285,7 +1299,7 @@ TEST_CASE("operations: a paged search that ended sends no release", "[net][opera
 		  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), paged_done(2, "") }),
 		  answer({ bind_resp(3) }) });
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			auto dns = m.run(drain_paged(*s));
 			REQUIRE(dns.has_value());
@@ -1307,7 +1321,7 @@ TEST_CASE("operations: a paged search that ended sends no release", "[net][opera
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "") }),
 		  answer({ bind_resp(2) }) });
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
@@ -1327,7 +1341,7 @@ TEST_CASE("operations: a paged search that ended sends no release", "[net][opera
 		  answer({ done_msg(2, 51, "", "busy") }),
 		  answer({ bind_resp(3) }) });
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			auto r = m.run(drain_paged(*s));
 			REQUIRE_FALSE(r.has_value());
@@ -1349,7 +1363,7 @@ TEST_CASE("operations: a paged search that ended sends no release", "[net][opera
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
 		  step{} });// would read a release
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
@@ -1377,7 +1391,7 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		  answer({ bind_resp(4) }) });
 		outcome<ldap::result<void>> bound;
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
@@ -1418,7 +1432,7 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		  answer({ bind_resp(4) }) });
 		outcome<ldap::result<void>> bound;
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
@@ -1460,7 +1474,7 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		  step{},// reads the AbandonRequest
 		  answer({ paged_done(4, "") }) });// the release's answer, the script's last step
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			for (int i = 0; i < 2; ++i) {
 				auto e = m.run(s->next());
@@ -1488,7 +1502,7 @@ TEST_CASE("operations: a paged search release and the connection's state", "[net
 		m.serve({ answer({ entry_msg(1, "uid=a,ou=people,dc=example,dc=org", "A"), paged_done(1, "page2") }),
 		  step{} });// may read the release
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
@@ -1518,9 +1532,9 @@ TEST_CASE("operations: two paged search releases due at once", "[net][operations
 	ldap::search_params p = people_search();
 	p.timeout = std::chrono::seconds(30);
 	{
-		auto a = m.run(ldap::search_paged(m.conn, p, 1));
+		auto a = m.run(ldap::search_paged_stream(m.conn, p, 1));
 		REQUIRE(a.has_value());
-		auto b = m.run(ldap::search_paged(m.conn, p, 1));
+		auto b = m.run(ldap::search_paged_stream(m.conn, p, 1));
 		REQUIRE(b.has_value());
 		auto ea = m.run(a->next());
 		REQUIRE(ea.has_value());
@@ -1852,7 +1866,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		  answer({ paged_done(2, "") }),// the release's answer: read and dropped
 		  answer({ start_tls_refused(3) }) });
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
@@ -1902,7 +1916,7 @@ TEST_CASE("operations: StartTLS waits for the answer to a paged search release",
 		  step{},// reads the release, never answers
 		  step{} });// reads the UnbindRequest
 		{
-			auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 			REQUIRE(s.has_value());
 			auto e = m.run(s->next());
 			REQUIRE(e.has_value());
@@ -1987,7 +2001,7 @@ TEST_CASE("operations: a paged search destroyed during StartTLS sends no release
 	  answer({ bind_resp(3) }) });
 	outcome<ldap::result<void>> tls;
 	{
-		auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 		REQUIRE(s.has_value());
 		auto e = m.run(s->next());
 		REQUIRE(e.has_value());
@@ -2021,7 +2035,7 @@ TEST_CASE("operations: a paged search whose next page could not be sent releases
 	  answer({ paged_done(3, "") }),// the release's answer: dropped
 	  answer({ bind_resp(4) }) });
 	{
-		auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 		REQUIRE(s.has_value());
 		auto e = m.run(s->next());
 		REQUIRE(e.has_value());
@@ -2066,7 +2080,7 @@ TEST_CASE("operations: a paged search whose unread page failed sends no release"
 	  answer({ entry_msg(2, "uid=b,ou=people,dc=example,dc=org", "B"), page2_done }),
 	  answer({ bind_resp(3) }) });
 	{
-		auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 		REQUIRE(s.has_value());
 		for (int i = 0; i < 2; ++i) {
 			auto e = m.run(s->next());
@@ -2103,7 +2117,7 @@ TEST_CASE("operations: release answers' deadlines", "[net][operations][paged][ti
 		while (m.ioc.poll() != 0) {}// the due watcher sees no deadline left, and ends
 		m.ioc.restart();
 		{
-			auto s = m.run(ldap::search_paged(m.conn, p, 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, p, 1));
 			REQUIRE(s.has_value());
 			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 0; });
 			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
@@ -2127,7 +2141,7 @@ TEST_CASE("operations: release answers' deadlines", "[net][operations][paged][ti
 		{
 			auto p = people_search();
 			p.timeout = std::chrono::milliseconds(50);
-			auto s = m.run(ldap::search_paged(m.conn, std::move(p), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, std::move(p), 1));
 			REQUIRE(s.has_value());
 			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 1; });// page 3 ended
 			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
@@ -2162,7 +2176,7 @@ auto release_failing(M &m,
 {
 	auto p = people_search();
 	p.timeout = timeout;
-	auto s = m.run(ldap::search_paged(m.conn, std::move(p), 1));
+	auto s = m.run(ldap::search_paged_stream(m.conn, std::move(p), 1));
 	REQUIRE(s.has_value());
 	auto e = m.run(s->next());
 	REQUIRE(e.has_value());
@@ -2238,7 +2252,7 @@ TEST_CASE("operations: a failed allocation for the writer, reader or due watcher
 		{
 			auto p = people_search();
 			p.timeout = std::chrono::milliseconds(100);
-			auto s = m.run(ldap::search_paged(m.conn, std::move(p), 1));
+			auto s = m.run(ldap::search_paged_stream(m.conn, std::move(p), 1));
 			REQUIRE(s.has_value());
 			drive_until(m.ioc, [&m] { return m.conn.outstanding() == 1; });// page 3 ended
 			run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });
@@ -2486,7 +2500,7 @@ TEST_CASE("operations: a due release answer forgotten past the limit is no longe
 	script.resize(script.size() + 2);// a search and its AbandonRequest
 	m.serve(std::move(script));
 	for (int i = 0; i < releases; ++i) {
-		auto s = m.run(ldap::search_paged(m.conn, people_search(), 1));
+		auto s = m.run(ldap::search_paged_stream(m.conn, people_search(), 1));
 		REQUIRE(s.has_value());
 		drive_until(m.ioc, [&m, i] { return m.conn.outstanding() == static_cast<std::size_t>(i); });// page ended
 		run_on(m.ioc, m.conn.executor(), [&s] { *s = ldap::paged_search{}; });// released

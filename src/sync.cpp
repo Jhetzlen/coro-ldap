@@ -61,54 +61,6 @@ namespace detail {
 		thread_.join();
 	}
 
-	namespace {
-
-		// On the paged_search's strand: it ends there, before the result is
-		// delivered.
-		auto collect_pages(ldap::paged_search pages, std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
-		{
-			ldap::paged_search s = std::move(pages);
-			co_return co_await ldap::detail::collect_search(s, [](ldap::paged_search &p) { return p.next(); }, mr);
-		}
-
-		template<class D>
-		auto collect(D &d,
-		  search_params request,
-		  std::int32_t page_size,
-		  std::size_t max_pages,
-		  std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
-		{
-			auto s = co_await ldap::search_paged(d, std::move(request), page_size, max_pages, mr);
-			if (!s) {
-				co_return std::unexpected(std::move(s.error()));
-			}
-			const auto strand = ldap::detail::paged_executor(*s);
-			if (!strand) {
-				co_return co_await collect_pages(std::move(*s), mr);
-			}
-			co_return co_await ldap::detail::on_strand(*strand, collect_pages(std::move(*s), mr));
-		}
-
-	}// namespace
-
-	auto collect_paged(ldap::connection &c,
-	  search_params request,
-	  std::int32_t page_size,
-	  std::size_t max_pages,
-	  std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
-	{
-		return collect(c, std::move(request), page_size, max_pages, mr);
-	}
-
-	auto collect_paged(ldap::client &c,
-	  search_params request,
-	  std::int32_t page_size,
-	  std::size_t max_pages,
-	  std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
-	{
-		return collect(c, std::move(request), page_size, max_pages, mr);
-	}
-
 	// The ldap::transaction is made, and later destroyed, on the I/O thread.
 	auto make_transaction(ldap::connection &c, extended_controls controls)
 	  -> capy::task<result<std::unique_ptr<ldap::transaction>>>

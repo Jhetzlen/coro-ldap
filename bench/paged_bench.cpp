@@ -1,4 +1,4 @@
-// Paged search benchmark: ldap::search_paged against an in-process server,
+// Paged search benchmark: connection::search_paged_stream against an in-process server,
 // for several page sizes.
 //   jhetz_ldap_paged_bench [entries=20000] [runs=9]
 #include "jhetz/ldap/controls.hpp"
@@ -75,7 +75,7 @@ auto serve(net::transport t, std::size_t total) -> capy::task<void>
 auto drain(ldap::connection &c, std::int32_t page_size, std::size_t &entries) -> capy::task<bool>
 {
 	entries = 0;
-	auto s = co_await ldap::search_paged(c, { .base = ldap::dn{ "ou=people,dc=example,dc=org" } }, page_size);
+	auto s = co_await ldap::search_paged_stream(c, { .base = ldap::dn{ "ou=people,dc=example,dc=org" } }, page_size);
 	if (!s) {
 		co_return false;
 	}

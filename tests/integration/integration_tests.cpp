@@ -551,7 +551,7 @@ TEST_CASE("integration: plain, streaming and paged searches", "[integration]")
 	}
 	CHECK(streamed == 250);
 
-	auto p = finish(ioc, ldap::search_paged(c, all_users, 40));
+	auto p = finish(ioc, ldap::search_paged_stream(c, all_users, 40));
 	REQUIRE(p.has_value());
 	std::size_t paged = 0;
 	while (true) {
@@ -637,7 +637,7 @@ TEST_CASE("integration: a paged search stopped between pages sends a release", "
 
 	// The release sent on destruction; StartTLS waits for its answer.
 	{
-		auto p = finish(ioc, ldap::search_paged(c, all_users, 40));
+		auto p = finish(ioc, ldap::search_paged_stream(c, all_users, 40));
 		REQUIRE(p.has_value());
 		for (int i = 0; i < 40; ++i) {
 			auto e = finish(ioc, p->next());
@@ -1574,7 +1574,7 @@ TEST_CASE("integration: concurrent paged searches with and without sorting", "[i
 		std::vector<ldap::paged_search> searches;
 		for (int n = 0; n < 3; ++n) {
 			conns.push_back(open_admin(ioc));
-			auto p = finish(ioc, ldap::search_paged(conns.back(), hundred_users(n, true), 20));
+			auto p = finish(ioc, ldap::search_paged_stream(conns.back(), hundred_users(n, true), 20));
 			REQUIRE(p.has_value());
 			searches.push_back(std::move(*p));
 		}
@@ -2164,7 +2164,7 @@ TEST_CASE("integration: search_paged over ldap::client", "[integration][client]"
 	const ldap::search_params all_users{
 		.base = people, .filter = ldap::filters::attr("objectClass") == "posixAccount", .attributes = { "uid" }
 	};
-	auto p = finish(ioc, ldap::search_paged(pool, all_users, 40));
+	auto p = finish(ioc, ldap::search_paged_stream(pool, all_users, 40));
 	REQUIRE(p.has_value());
 	std::size_t paged = 0;
 	while (true) {
@@ -2209,7 +2209,7 @@ TEST_CASE("integration: ldap::repository over ldap::client", "[integration][clie
 	CHECK(found->entries[0].dn == *s.dn_of(name));
 	CHECK(found->entries[0].value.mail == name + "@example.org");
 
-	auto pages = finish(ioc, s.search_paged(1, ldap::filters::field<&staff::uid>() == name));
+	auto pages = finish(ioc, s.search_paged_stream(ldap::filters::field<&staff::uid>() == name, 1));
 	REQUIRE(pages.has_value());
 	auto paged = finish(ioc, pages->next());
 	REQUIRE(paged.has_value());

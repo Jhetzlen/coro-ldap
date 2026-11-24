@@ -11,8 +11,8 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
 |---|---|---|
 | Search, all entries at once | `connection::search(params)` | `result<search_result>`: entries, references (not followed), the done's result code; a limit code (sizeLimitExceeded, timeLimitExceeded, adminLimitExceeded) is a value that keeps the entries received, so check `is_complete()` before treating `entries` as the whole answer (Active Directory ends an unpaged search past its MaxPageSize, 1000 by default, with sizeLimitExceeded: page it with `search_paged`) |
 | Search, entry by entry | `connection::search_stream(params)` | `next()` / `next_item()`; memory bounded by the caller's pace; abandons the search when destroyed early |
-| Search a large result in pages | `ldap::search_paged(conn_or_client, params, page_size)` | RFC 2696 paged results, one page requested at a time; `sync::search_paged` collects every page |
-| Search into structs | `repository<T>::search` / `search_stream` / `search_paged` (repository.hpp) | the same three shapes, entries decoded to `record<T>` |
+| Search a large result in pages | `ldap::search_paged_stream(conn_or_client, params, page_size)` | RFC 2696 paged results, one page requested at a time; `ldap::search_paged` and `sync::search_paged` collect every page |
+| Search into structs | `repository<T>::search` / `search_stream` / `search_paged` / `search_paged_stream` (repository.hpp) | the same shapes, entries decoded to `record<T>` |
 | Search and follow referrals | `client::search(params)` with `client_options::referrals` | the pool chases referral results and continuation references; the report is in `search_result::referrals` / `unlisted`, `is_complete()`; a request's `follow_referrals` / `follow_references` override the pool's switches for one call; `client::search_stream`, `search_paged` and the `connection` / `sync::connection` calls ignore it (they never chase) |
 | Follow referrals from a bare connection | `ldap::chase_search(conn, params, connector)`, `chase_compare` (referral_chase.hpp) | the caller's `referral_connector` decides which servers and how to bind (`make_same_policy_connector`) |
 | Watch changes | `search_stream` with `ldap::sync_request` (content_sync.hpp) | RFC 4533 refreshOnly / refreshAndPersist |
@@ -421,7 +421,7 @@ itself needs only ICU.
     (`basic_search_result`), and the OIDs `who_am_i_oid` and
     `password_modify_oid`.
   - `jhetz/ldap/search_stream.hpp` and `jhetz/ldap/paged_search.hpp`: the
-    entry streams `search_stream()` and the free `ldap::search_paged()`
+    entry streams `search_stream()` and the free `ldap::search_paged_stream()`
     (on a connection, or on a client's pool through one shared lease the
     `paged_search` holds) return, and
     `search_entry` and `search_reference`, the items of
@@ -556,7 +556,7 @@ itself needs only ICU.
   `search_reference` (`uris` plus `controls`, also appended to
   `references()`) and `intermediate` (only when asked for). `next()` and
   `next_item()` may be mixed on a stream; `next()`, `search()` and
-  `search_paged()` drop the entries' controls and the intermediates.
+  `search_paged_stream()` drop the entries' controls and the intermediates.
   A stream is move-only; do not destroy or move it while `next()` or
   `next_item()` is suspended. After the end or an error, `next()` returns
   the same again without I/O. `references()` keeps every reference for
@@ -746,9 +746,9 @@ itself needs only ICU.
   `update_controls`, `end_transaction_response`,
   `encode_end_transaction_request`, `decode_end_transaction_response`,
   the OIDs) are in `message.hpp`;
-  `ldap::search_paged(conn, params, page_size, max_pages =
+  `ldap::search_paged_stream(conn, params, page_size, max_pages =
   ldap::search_paged_default_max_pages, mr)` (a free function over
-  `search_stream()`; `ldap::search_paged(client, ...)` runs it on one shared
+  `search_stream()`; `ldap::search_paged_stream(client, ...)` runs it on one shared
   lease, the first page retried as `client::search_stream()` is) follows
   the Simple Paged Results cookie across pages, at most `max_pages` pages
   (default 10000, about a million entries at a page size of 100; a page
@@ -773,6 +773,19 @@ itself needs only ICU.
   `error::referrals` and `search_stream::references()`), never chased by
   the connection; `url::parse_list` parses them, and
   `jhetz/ldap/referral_chase.hpp` (below) follows them on request.
+  `ldap::search_paged(conn_or_client, params, page_size, max_pages, mr)`
+  -> `task<result<search_result>>` reads every page of a
+  `search_paged_stream` into one `search_result` (the last page's done; a
+  limit code keeps the entries; more than `max_pages` pages fails with
+  `std::errc::value_too_large`). The names are the same in every layer:
+  `search_paged` collects every page (`ldap::`, `sync::`, both
+  repositories), `search_paged_stream` streams them (async only); the
+  arguments are the search, then the page size, then the rest. Breaking
+  (coro-ldap-bhe.5): `ldap::search_paged` was the stream, now
+  `ldap::search_paged_stream`; `repository::search_paged(page_size,
+  filter, scope)` was the stream, now `search_paged_stream(filter,
+  page_size, scope)`, and `search_paged(filter, page_size, scope)` collects
+  (also the order of `sync::repository::search_paged`).
 - `jhetz/ldap/referral_chase.hpp`: opt-in referral chasing.
   `co_await ldap::chase_search(conn, params, connector, policy, mr)` runs
   the search, then follows a referral result and the continuation
@@ -1374,7 +1387,9 @@ itself needs only ICU.
   whole_subtree)` -> `task<result<typed_search_result<record<T>>>>`,
   `record<T>{dn, value}` with the DN the server sent (entries named
   otherwise included), the limit codes a value as for `search()`;
-  `search_stream(filter, scope)` and `search_paged(page_size, filter,
+  `search_paged(filter, page_size, scope = whole_subtree)`, as `search()`
+  with every page collected;
+  `search_stream(filter, scope)` and `search_paged_stream(filter, page_size,
   scope)` -> `task<result<record_stream<T, search_stream | paged_search>>>`,
   whose `next()` yields `record<T>` one at a time (the first entry that does
   not decode ends the stream with its error, as it fails `search()`;
@@ -1418,9 +1433,7 @@ itself needs only ICU.
   method runs the corresponding connection operation on the I/O thread
   and waits, with the same types;
   `sync::search_paged(c, params, page_size, max_pages, mr)` (also on a
-  sync lease and a `sync::client`) collects every page into one
-  `search_result` (the last page's done; a limit code keeps the entries;
-  more than `max_pages` pages fails with `std::errc::value_too_large`).
+  sync lease and a `sync::client`) is `ldap::search_paged`, blocking.
   `sync::run(d, make_task, args...)` (coro-ldap-aw4.5) runs any async
   free function on a facade: `make_task(a, args...)` is called on the
   I/O thread with the facade's `ldap::connection` (a `sync::connection`'s
@@ -1523,7 +1536,7 @@ itself needs only ICU.
   shared lease and retry it
   once on another connection after `cond::connection_lost` or
   `cond::busy_or_unavailable` (a stream only before its first message;
-  it holds the lease until destroyed; `ldap::search_paged(client, ...)`
+  it holds the lease until destroyed; `ldap::search_paged_stream(client, ...)`
   retries its first page the same way). Write forwarders `add(params)`,
   `modify(params)`, `del(params)`, `modify_dn(params)`, each `->
   task<result<response>>`, and `extended(params)` (`->
@@ -1549,7 +1562,7 @@ itself needs only ICU.
   `unlisted`); each governs only its own mechanism (referral results,
   continuation references), and `chase_search` / `chase_compare` take
   them too (false turns chasing off). The calls that never chase ignore
-  both: `client::search_stream`, `ldap::search_paged` on a client, every
+  both: `client::search_stream`, `ldap::search_paged_stream` and `search_paged` on a client, every
   `connection` and `sync::connection` call, and a call on a lease
   (`(*lease)->search(...)`).
   `authorize`, a `std::function<referral_binding(const referral_hop &)>`

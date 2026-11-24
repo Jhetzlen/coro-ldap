@@ -1,6 +1,6 @@
-// ldap::search_paged and ldap::paged_search: the entries of a Simple Paged
-// Results search (RFC 2696) across pages, used like a search_stream;
-// destroyed early, it releases the server's paging state (docs/API.md).
+// ldap::paged_search: the entries of a Simple Paged Results search (RFC 2696)
+// across pages, used like a search_stream; destroyed early, it releases the
+// server's paging state (docs/API.md).
 #pragma once
 
 #include "jhetz/ldap/entry.hpp"
@@ -40,7 +40,7 @@ class paged_search
 	auto next() -> boost::capy::task<result<std::optional<entry>>>;
 
 	[[nodiscard]] auto done() const noexcept -> bool;
-	// 1 after search_paged().
+	// 1 after ldap::search_paged_stream().
 	[[nodiscard]] auto pages() const noexcept -> std::size_t;
 	// References of every page so far, in order.
 	[[nodiscard]] auto references() const noexcept -> const string_list &;
@@ -63,18 +63,29 @@ inline constexpr std::size_t search_paged_default_max_pages = 10000;
 
 // A search of `c` in pages of `page_size` entries, at most `max_pages`
 // pages; `request.timeout` bounds each page.
-auto search_paged(connection &c,
+auto search_paged_stream(connection &c,
+  search_params request,
+  std::int32_t page_size,
+  std::size_t max_pages = search_paged_default_max_pages,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<paged_search>>;
+// As above, on one shared lease of `c`'s pool, held until destroyed; the
+// first page is retried as client::search_stream() is.
+auto search_paged_stream(client &c,
   search_params request,
   std::int32_t page_size,
   std::size_t max_pages = search_paged_default_max_pages,
   std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<paged_search>>;
 
-// As above, on one shared lease of `c`'s pool, held until destroyed; the
-// first page is retried as client::search_stream() is.
+// search_paged_stream() with every page collected.
+auto search_paged(connection &c,
+  search_params request,
+  std::int32_t page_size,
+  std::size_t max_pages = search_paged_default_max_pages,
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<search_result>>;
 auto search_paged(client &c,
   search_params request,
   std::int32_t page_size,
   std::size_t max_pages = search_paged_default_max_pages,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<paged_search>>;
+  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> boost::capy::task<result<search_result>>;
 
 }// namespace jhetz::ldap

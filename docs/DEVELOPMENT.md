@@ -823,7 +823,7 @@ A caller off the strand pays for the two posts (onto the strand and back),
 a caller on it for the strand's locking of the writer's and reader's
 wake-ups only.
 
-`bench/paged_bench.cpp` drains `ldap::search_paged` over a Unix socket
+`bench/paged_bench.cpp` drains `ldap::search_paged_stream` over a Unix socket
 pair from an in-process server that answers each page at once (20,000
 entries, pages of 1, 10 and 100), and prints the time per page and per
 entry (best and median of 9 runs):

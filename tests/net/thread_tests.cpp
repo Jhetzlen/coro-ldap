@@ -285,7 +285,7 @@ auto connection_worker(ldap::connection &c, tally &t, int rounds) -> capy::task<
 			}
 		}
 		t.check(n == 2);
-		auto p = co_await ldap::search_paged(c, people_search(), 1);
+		auto p = co_await ldap::search_paged_stream(c, people_search(), 1);
 		t.check(p && (co_await p->next()).has_value());
 		// Read on any thread.
 		t.check(c.is_open() && !c.is_tls() && c.security_layer() == ldap::sasl_protection::none);
@@ -440,7 +440,7 @@ TEST_CASE("threads: one connection used from several threads", "[net][threads]")
 		auto params = hang_search();
 		params.timeout = std::chrono::seconds(5);
 		auto s = run_on_pool(ioc, c->search_stream(params));
-		auto p = run_on_pool(ioc, ldap::search_paged(*c, params, 10));
+		auto p = run_on_pool(ioc, ldap::search_paged_stream(*c, params, 10));
 		REQUIRE(s.has_value());
 		REQUIRE(p.has_value());
 		std::latch firsts(2);

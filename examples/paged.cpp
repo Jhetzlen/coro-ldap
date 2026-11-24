@@ -16,7 +16,7 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 		std::cerr << c.error().message() << '\n';
 		co_return 1;
 	}
-	auto pages = co_await ldap::search_paged(*c,
+	auto pages = co_await ldap::search_paged_stream(*c,
 	  {
 		.base = ldap::dn{ "ou=people,dc=example,dc=org" },
 		.filter = ldap::filters::attr("mail").present(),

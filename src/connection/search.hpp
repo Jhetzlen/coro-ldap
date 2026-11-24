@@ -90,6 +90,11 @@ namespace detail {
 	// The strand of `p`'s connection; nullopt for a default-constructed or
 	// moved-from paged_search.
 	[[nodiscard]] auto paged_executor(const ldap::paged_search &p) noexcept -> std::optional<connection::executor_type>;
+	// The error of paged search arguments refused before anything is sent,
+	// else nullopt.
+	[[nodiscard]] auto invalid_paged_arguments(const search_params &request,
+	  std::int32_t page_size,
+	  std::size_t max_pages) -> std::optional<error>;
 
 	// `out` with the outcome of `s`, which ended with `done`: its
 	// references, the LDAPResult's fields and the done's controls.

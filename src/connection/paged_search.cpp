@@ -152,20 +152,6 @@ namespace {
 		  detail::format("{}: page size {} is not positive", op_context("search", request.base), page_size));
 	}
 
-	// The error of arguments refused before anything is sent, else nullopt.
-	auto invalid_arguments(const search_params &request, std::int32_t page_size, std::size_t max_pages)
-	  -> std::optional<error>
-	{
-		if (auto bad = invalid_page_size(request, page_size)) {
-			return bad;
-		}
-		if (max_pages == 0) {
-			return make_error(std::make_error_code(std::errc::invalid_argument),
-			  op_context("search", request.base) + ": max_pages is 0");
-		}
-		return std::nullopt;
-	}
-
 	auto search_paged_impl(core_ref self,
 	  search_params request,
 	  std::int32_t page_size,
@@ -175,7 +161,7 @@ namespace {
 		if (!self) {
 			co_return std::unexpected(no_connection(op_context("search", request.base)));
 		}
-		if (auto bad = invalid_arguments(request, page_size, max_pages)) {
+		if (auto bad = detail::invalid_paged_arguments(request, page_size, max_pages)) {
 			co_return std::unexpected(std::move(*bad));
 		}
 		std::pmr::polymorphic_allocator<> alloc(self->mr());
@@ -190,35 +176,77 @@ namespace {
 
 }// namespace
 
+namespace detail {
+
+	auto invalid_paged_arguments(const search_params &request, std::int32_t page_size, std::size_t max_pages)
+	  -> std::optional<error>
+	{
+		if (auto bad = invalid_page_size(request, page_size)) {
+			return bad;
+		}
+		if (max_pages == 0) {
+			return make_error(std::make_error_code(std::errc::invalid_argument),
+			  op_context("search", request.base) + ": max_pages is 0");
+		}
+		return std::nullopt;
+	}
+
+}// namespace detail
+
 // NOLINTNEXTLINE(misc-const-correctness): the search runs on `c`
-auto search_paged(connection &c,
+auto search_paged_stream(connection &c,
   search_params request,
   std::int32_t page_size,
   std::size_t max_pages,
   std::pmr::memory_resource *mr) -> capy::task<result<ldap::paged_search>>
 {
-	core_ref self(connection::core::of(c));
+	const core_ref self(connection::core::of(c));
 	auto body = search_paged_impl(self, std::move(request), page_size, max_pages, mr);
 	return detail::on_strand(self, std::move(body));
 }
 
 namespace {
 
-	auto paged_refused(error e) -> capy::task<result<ldap::paged_search>> { co_return std::unexpected(std::move(e)); }
+	// On the paged_search's strand: it ends there, before the result is
+	// delivered.
+	auto collect_pages(ldap::paged_search pages, std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
+	{
+		ldap::paged_search s = std::move(pages);
+		co_return co_await detail::collect_search(s, [](ldap::paged_search &p) { return p.next(); }, mr);
+	}
+
+	auto collect_paged(capy::task<result<ldap::paged_search>> first, std::pmr::memory_resource *mr)
+	  -> capy::task<result<search_result>>
+	{
+		auto s = co_await std::move(first);
+		if (!s) {
+			co_return std::unexpected(std::move(s.error()));
+		}
+		const auto strand = detail::paged_executor(*s);
+		if (!strand) {
+			co_return co_await collect_pages(std::move(*s), mr);
+		}
+		co_return co_await detail::on_strand(*strand, collect_pages(std::move(*s), mr));
+	}
 
 }// namespace
 
-// NOLINTNEXTLINE(misc-const-correctness): the search runs on `c`'s pool
+auto search_paged(connection &c,
+  search_params request,
+  std::int32_t page_size,
+  std::size_t max_pages,
+  std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
+{
+	return collect_paged(search_paged_stream(c, std::move(request), page_size, max_pages, mr), mr);
+}
+
 auto search_paged(client &c,
   search_params request,
   std::int32_t page_size,
   std::size_t max_pages,
-  std::pmr::memory_resource *mr) -> capy::task<result<ldap::paged_search>>
+  std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
 {
-	if (auto bad = invalid_arguments(request, page_size, max_pages)) {
-		return paged_refused(std::move(*bad));
-	}
-	return detail::search_paged_of(c, std::move(request), page_size, max_pages, mr);
+	return collect_paged(search_paged_stream(c, std::move(request), page_size, max_pages, mr), mr);
 }
 
 namespace detail {

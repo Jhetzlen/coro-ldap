@@ -1058,7 +1058,7 @@ TEST_CASE("connection: operations on a moved-from connection", "[net][connection
 	  "compare uid=jdoe,ou=people,dc=example,dc=org");
 	refused(m.run(c.extended({ .name = "1.2.3" })), "extended operation 1.2.3");
 	refused(m.run(c.search_stream({ .base = ldap::dn{} })), "search \"\"");
-	refused(m.run(ldap::search_paged(c, { .base = ldap::dn{} }, 10)), "search \"\"");
+	refused(m.run(ldap::search_paged_stream(c, { .base = ldap::dn{} }, 10)), "search \"\"");
 	refused(m.run(ldap::start_transaction(c)), "start transaction");
 	refused(m.run(ldap::end_transaction(c, std::string("txn"))), "end transaction");
 	refused(m.run(ldap::transaction::begin(c)), "start transaction");
@@ -1796,7 +1796,8 @@ TEST_CASE("with_stop: an operation cancelled from a stop source of one's own", "
 	{
 		m.serve({ answer({ bind_resp(1) }) });
 		cancel.request_stop();
-		auto r = m.run(ldap::with_stop(cancel.get_token(), ldap::search_paged(m.conn, { .base = ldap::dn{} }, 10)));
+		auto r =
+		  m.run(ldap::with_stop(cancel.get_token(), ldap::search_paged_stream(m.conn, { .base = ldap::dn{} }, 10)));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::cond::canceled);
 		CHECK(r.error().context == "search \"\"");

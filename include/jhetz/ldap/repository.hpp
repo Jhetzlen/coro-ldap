@@ -618,14 +618,25 @@ namespace detail {
 			co_return record_stream<value_type, ldap::search_stream>(std::move(*stream), base_);
 		}
 		template<directory S>
-		auto search_paged(S &s, std::int32_t page_size, filter f, search_scope scope)
+		auto search_paged(S &s, filter f, std::int32_t page_size, search_scope scope)
+		  -> boost::capy::task<result<typed_search_result<record<value_type>>>>
+		{
+			auto request = co_await search_request(s, std::move(f), scope);
+			if (!request) {
+				co_return std::unexpected(std::move(request.error()));
+			}
+			auto found = co_await ldap::search_paged(s, std::move(*request), page_size);
+			co_return codec::search_result_of(std::move(found), base_);
+		}
+		template<directory S>
+		auto search_paged_stream(S &s, filter f, std::int32_t page_size, search_scope scope)
 		  -> boost::capy::task<result<record_stream<value_type, ldap::paged_search>>>
 		{
 			auto request = co_await search_request(s, std::move(f), scope);
 			if (!request) {
 				co_return std::unexpected(std::move(request.error()));
 			}
-			auto pages = co_await ldap::search_paged(s, std::move(*request), page_size);
+			auto pages = co_await ldap::search_paged_stream(s, std::move(*request), page_size);
 			if (!pages) {
 				co_return std::unexpected(std::move(pages.error()));
 			}
@@ -859,12 +870,16 @@ template<auto Naming, directory D> class repository
 		return core_.search_stream(*source_, std::move(f), scope);
 	}
 
-	auto search_paged(std::int32_t page_size,
-	  filter f = filters::attr("objectClass").present(),
-	  search_scope scope = search_scope::whole_subtree)
+	// search() in pages of `page_size` entries, every page collected.
+	auto search_paged(filter f, std::int32_t page_size, search_scope scope = search_scope::whole_subtree)
+	  -> boost::capy::task<result<typed_search_result<record<value_type>>>>
+	{
+		return core_.search_paged(*source_, std::move(f), page_size, scope);
+	}
+	auto search_paged_stream(filter f, std::int32_t page_size, search_scope scope = search_scope::whole_subtree)
 	  -> boost::capy::task<result<record_stream<value_type, ldap::paged_search>>>
 	{
-		return core_.search_paged(*source_, page_size, std::move(f), scope);
+		return core_.search_paged_stream(*source_, std::move(f), page_size, scope);
 	}
 
   private:

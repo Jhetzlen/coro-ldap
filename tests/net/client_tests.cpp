@@ -3650,7 +3650,7 @@ auto drain_pages(ldap::paged_search &s) -> capy::task<ldap::result<std::vector<s
 
 }// namespace
 
-TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
+TEST_CASE("client: search_paged_stream on one lease", "[net][client][paged]")
 {
 	const std::vector<std::string> both{ "uid=a,ou=people,dc=example,dc=org", "uid=b,ou=people,dc=example,dc=org" };
 	SECTION("the pages follow the cookie on the lease it holds")
@@ -3658,7 +3658,7 @@ TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
 		pool_fixture f;
 		auto &s = f.server({ two_pages_after_bind() });
 		f.make({ .servers = { s.url() }, .setup = admin_setup(), .acquire_timeout = milliseconds(200) });
-		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		auto pages = finish(f.ioc, ldap::search_paged_stream(*f.pool, people_search(), 1));
 		REQUIRE(pages.has_value());
 		// The paged_search holds its lease: an exclusive acquire() finds no
 		// connection free.
@@ -3680,6 +3680,19 @@ TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
 		REQUIRE(mine.has_value());
 		CHECK(s.accepted() == 1);
 	}
+	SECTION("search_paged collects every page and returns the lease")
+	{
+		pool_fixture f;
+		auto &s = f.server({ two_pages_after_bind() });
+		f.make({ .servers = { s.url() }, .setup = admin_setup(), .acquire_timeout = milliseconds(200) });
+		auto all = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		REQUIRE(all.has_value());
+		REQUIRE(all->entries.size() == 2);
+		CHECK(std::string(all->entries[0].dn) == both[0]);
+		CHECK(std::string(all->entries[1].dn) == both[1]);
+		auto mine = f.acquire_exclusive();
+		CHECK(mine.has_value());
+	}
 	SECTION("lost before the first page's first message: requested again on a new lease")
 	{
 		pool_fixture f;
@@ -3687,7 +3700,7 @@ TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
 		  { answer({ bind_resp(1) }),
 			answer({ entry_msg(2, "uid=a,ou=people,dc=example,dc=org", "A"), paged_page(2, "") }) } });
 		f.make({ .servers = { s.url() }, .setup = admin_setup() });
-		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		auto pages = finish(f.ioc, ldap::search_paged_stream(*f.pool, people_search(), 1));
 		REQUIRE(pages.has_value());
 		CHECK(s.accepted() == 2);
 		auto dns = finish(f.ioc, drain_pages(*pages));
@@ -3699,7 +3712,7 @@ TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
 		pool_fixture f;
 		auto &s = f.server({ busy_search(), two_pages_after_bind() });
 		f.make({ .servers = { s.url() }, .setup = admin_setup(), .observer = &f.obs });
-		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		auto pages = finish(f.ioc, ldap::search_paged_stream(*f.pool, people_search(), 1));
 		REQUIRE(pages.has_value());
 		auto dns = finish(f.ioc, drain_pages(*pages));
 		REQUIRE(dns.has_value());
@@ -3717,7 +3730,7 @@ TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
 		auto &a = f.server({ busy_search(), two_pages_after_bind() });
 		auto &b = f.server({ two_pages_after_bind() });
 		f.make({ .servers = { a.url(), b.url() }, .setup = admin_setup(), .max_connections = 2, .observer = &f.obs });
-		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		auto pages = finish(f.ioc, ldap::search_paged_stream(*f.pool, people_search(), 1));
 		REQUIRE(pages.has_value());
 		auto dns = finish(f.ioc, drain_pages(*pages));
 		REQUIRE(dns.has_value());
@@ -3737,7 +3750,7 @@ TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
 		  { answer({ bind_resp(1) }), answer({ done_msg(2, 52, "", "shutting down") }) },
 		  two_pages_after_bind() });
 		f.make({ .servers = { s.url() }, .setup = admin_setup() });
-		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		auto pages = finish(f.ioc, ldap::search_paged_stream(*f.pool, people_search(), 1));
 		REQUIRE(pages.has_value());
 		auto dns = finish(f.ioc, drain_pages(*pages));
 		REQUIRE_FALSE(dns.has_value());
@@ -3749,7 +3762,7 @@ TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
 		pool_fixture f;
 		auto &s = f.server({ two_pages_after_bind() });
 		f.make({ .servers = { s.url() }, .setup = admin_setup() });
-		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 0));
+		auto pages = finish(f.ioc, ldap::search_paged_stream(*f.pool, people_search(), 0));
 		REQUIRE_FALSE(pages.has_value());
 		CHECK(pages.error().code == ldap::client_errc::encode_error);
 		drive(f.ioc);
@@ -3761,7 +3774,7 @@ TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
 		pool_fixture f;
 		auto &s = f.server({ two_pages_after_bind() });
 		f.make({ .servers = { s.url() }, .setup = admin_setup() });
-		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1, 0));
+		auto pages = finish(f.ioc, ldap::search_paged_stream(*f.pool, people_search(), 1, 0));
 		REQUIRE_FALSE(pages.has_value());
 		CHECK(pages.error().code == std::errc::invalid_argument);
 		CHECK(pages.error().context == "search ou=people,dc=example,dc=org: max_pages is 0");
@@ -3776,7 +3789,7 @@ TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
 		  .setup = admin_setup(),
 		  .acquire_timeout = milliseconds(50),
 		  .backoff = { .initial = milliseconds(3'600'000), .max = milliseconds(3'600'000) } });
-		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		auto pages = finish(f.ioc, ldap::search_paged_stream(*f.pool, people_search(), 1));
 		REQUIRE_FALSE(pages.has_value());
 		CHECK_THAT(std::string(pages.error().context), ContainsSubstring("acquire "));
 	}
@@ -3785,7 +3798,7 @@ TEST_CASE("client: search_paged on one lease", "[net][client][paged]")
 		pool_fixture f;
 		auto &s = f.server({ two_pages_after_bind() });
 		f.make({ .servers = { s.url() }, .setup = admin_setup() });
-		auto pages = finish(f.ioc, ldap::search_paged(*f.pool, people_search(), 1));
+		auto pages = finish(f.ioc, ldap::search_paged_stream(*f.pool, people_search(), 1));
 		REQUIRE(pages.has_value());
 		f.pool.reset();// closes the leased connection
 		auto dns = finish(f.ioc, drain_pages(*pages));

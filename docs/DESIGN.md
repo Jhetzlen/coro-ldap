@@ -287,7 +287,7 @@ error (an `ldap::error` would carry entries for one operation only), and
 a success with a flag (the result code, matched DN and diagnostic would be
 lost). The same holds for a repository's `search` (`typed_search_result<record<T>>`,
 the same fields with `std::vector` entries), `client::search`, the sync
-facades' `search` and `sync::search_paged` (the pages collected: the last
+facades' `search` and `search_paged` (the pages collected: the last
 page's done), and `chase_search` (the done fields are the origin's or
 the referral target's, and when that is success the result code,
 matched DN and diagnostic of the first followed continuation reference
@@ -1337,7 +1337,7 @@ a chase has more to report.
 Paged search (step 6): `ldap::search_paged(connection &, params,
 page_size)` returns a `paged_search` that yields entries across pages,
 requesting the next page with the server's cookie when one ends, until the
-cookie is empty. It is a free function, not a connection member (the aw4
+cookie is empty. `search_paged_stream` is a free function, not a connection member (the aw4
 rule: core types keep only the protocol operations): each page is a
 `connection::search_stream()` (the same task, run on the connection's
 shared state, so that the `paged_search`, like a stream, does not depend
@@ -1346,19 +1346,19 @@ with bench/paged_bench.cpp against the internal search start it replaced
 (Release, one thread, in-process server; docs/DEVELOPMENT.md has the
 numbers): 1 to 3 µs more per page of 1 or 10 entries (a stream task and
 a copy of the search_params), +4 to 13% at one entry per page, +1 to 3%
-at 100, nothing against a network round trip. `search_paged(client &, ...)` runs it on one shared lease, which
+at 100, nothing against a network round trip. `search_paged_stream(client &, ...)` runs it on one shared lease, which
 the `paged_search` holds until destroyed (the cookies are bound to that
 connection), and requests the first page again on a new lease when it
 fails with `cond::connection_lost` or `cond::busy_or_unavailable` before
 its first message, as `client::search_stream()` does (the same loop in
-client.cpp, through the internal `detail::search_paged_of`): the
+client.cpp, `search_paged_stream` being the client's friend): the
 connection it failed on is set aside, and after busy or unavailable the
 retry prefers the other servers. A page size that is not positive, or a
 `max_pages` of 0, fails before a lease is acquired.
 
 A paged search is bounded by `max_pages` (default
 `search_paged_default_max_pages` = 10000, about a million entries at a
-page size of 100; `sync::search_paged` and the repositories' paged searches use
+page size of 100; `search_paged` and the repositories' paged searches use
 it too), as `ad::dirsync` is by `max_rounds`: a server that keeps answering
 with a cookie, an empty page or not, would otherwise keep the search, and
 the sync facade's collected result, growing without end. Once page
@@ -1412,10 +1412,18 @@ timeLimitExceeded, which ended the search). There is no awaitable
 `release()`: the destructor does everything that needs no waiting, and
 waiting for the server's answer would tell the caller nothing it could
 act on.
-`sync::search_paged` (a `sync::connection`, a sync lease or a
-`sync::client`) keeps the `paged_search` on the I/O thread and reads every
-page on its connection's strand, or destroys it there after an error, so
-it needs nothing more.
+`ldap::search_paged` (collecting) reads every page of its `paged_search`
+on the connection's strand, or destroys it there after an error, so the
+paged_search ends before the result is delivered; `sync::search_paged`
+runs it on the I/O thread and needs nothing more.
+
+The names follow one rule in every layer (coro-ldap-bhe.5): `search_paged`
+returns every page collected (the async free function, `sync::search_paged`,
+both repositories), `search_paged_stream` returns the stream (async only,
+as `search_stream` is), so a name never means a stream in one mode and a
+collected result in the other. The arguments are the search (the request,
+or the repository's filter), the page size, then the defaulted rest; the
+repository's filter has no default there, since the page size follows it.
 
 ## 4. Mapping entries to structs
 
@@ -1842,17 +1850,18 @@ co_await people.remove("jdoe");
   used to have (dropped: `modify_dn` with designated initializers is the
   one call there), these build both DNs from the naming member, escaping
   included, which is the repository's job.
-- `search_stream(filter, scope)` and `search_paged(page_size, filter,
+- `search_stream(filter, scope)` and `search_paged_stream(filter, page_size,
   scope)` return a `record_stream<T, Stream>` over the source's
-  `search_stream()` or `ldap::search_paged` (on a client: one shared lease,
+  `search_stream()` or `ldap::search_paged_stream` (on a client: one shared lease,
   held by the stream). Its `next()` decodes one entry at a time. A decode
   error is handled as in `search()`, where the first entry that does not
   decode fails the call: it ends the stream, and `next()` returns it again
   from then on (the alternative, skipping the entry and going on, would
   make a stream accept what `search()` refuses). `stream()` gives the
-  underlying stream (references, controls, pages). `sync::repository` has
-  `search_paged` with every page collected into a
-  `typed_search_result<record<T>>` (the blocking facade has no streams).
+  underlying stream (references, controls, pages). `search_paged(filter,
+  page_size, scope)` collects every page into a
+  `typed_search_result<record<T>>`, on both repositories (the blocking
+  facade has no streams).
 - No ORM traps: no whole-object save, no hidden reads, no relationships,
   no entry cache. One request per call, plus the schema load once.
 - `repository_options::schema_check = on_first_use` loads the schema with the
@@ -2843,7 +2852,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   dressed as a task and would not cover the non-template `client &`
   overloads. `sync::run` reaches the facades' private `call(make_task)`
   through `detail::facade_access`. The task must end what it creates on
-  the I/O thread before it returns (`sync::search_paged` reads every page
+  the I/O thread before it returns (`ldap::search_paged` reads every page
   of its `paged_search` on the connection's strand, or destroys it
   there): the facades hand out no streams. A `static_assert` on the
   `detail::io_context_bound` trait rejects a task whose result is (or
