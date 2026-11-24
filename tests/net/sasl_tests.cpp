@@ -865,7 +865,10 @@ TEST_CASE("sasl: offloaded steps under locking_mode::unsafe_io", "[net][sasl][of
 
 TEST_CASE("sasl: SCRAM-SHA-256 runs a costly PBKDF2 off the I/O thread", "[net][sasl][scram][offload]")
 {
-	constexpr std::string_view server_first = "r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=300000";
+	// The most iterations allowed (default_max_iterations): long enough for
+	// five ticks of the 1 ms timer below where timers fire at the 15.6 ms
+	// system tick (Windows), not only at 1 ms.
+	constexpr std::string_view server_first = "r=fixednoncesrv,s=QSXCR+Q6sek8bf92,i=1000000";
 	// The expected client-final-message, from step() on the calling thread.
 	auto direct = ldap::detail::scram_test_access::with_nonce("user", "pencil", "", "fixednonce");
 	REQUIRE(direct.start().has_value());
