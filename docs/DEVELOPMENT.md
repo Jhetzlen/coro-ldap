@@ -332,7 +332,11 @@ installed `jhetz_ldap-config-version.cmake` is generated from it with
 commits pinned in `CMakeLists.txt`) and `jhetz-ldap`, a static library with
 the features `net` (`jhetz::ldap_net` and `jhetz::ldap_ad`; `ad` is not a
 feature of its own, it is built with `net`), a default feature, and `gssapi`
-(needs `net`, not on Windows). `jhetz-ldap[core]` is the codec only. ICU, OpenSSL and krb5 come from vcpkg. Corosio's port disables
+(needs `net`, not on Windows). `jhetz-ldap[core]` is the codec only. ICU and
+OpenSSL come from vcpkg. `gssapi` uses the system GSS-API library (MIT krb5
+or Heimdal), found with the system pkg-config as in a normal build, so the OS
+package must be installed: Debian `libkrb5-dev pkg-config`, Fedora
+`krb5-devel pkgconf`, Arch `krb5 pkgconf`. Corosio's port disables
 WolfSSL and liburing (the epoll backend). In a manifest:
 
 ```json
@@ -343,7 +347,8 @@ and configure with `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cm
 -DVCPKG_OVERLAY_PORTS=<coro-ldap>/packaging/vcpkg/ports`
 (`tests/install/vcpkg_consumer/CMakePresets.json` does that).
 
-`tests/install/check_vcpkg.sh WORK_DIR [TRIPLET]` (default `x64-linux`)
+`tests/install/check_vcpkg.sh WORK_DIR [TRIPLET [gssapi]]` (default
+`x64-linux`; `gssapi` uses `jhetz-ldap[gssapi]` and the component `gssapi`)
 builds `tests/install/vcpkg_consumer` (the `consumer/main.cpp` of the
 install check) against the ports, with `jhetz-ldap` built from this source
 tree instead of the release tarball: it copies the ports into `WORK_DIR` and
@@ -354,7 +359,8 @@ with the binary cache and downloads in `build/tools/`:
 ```bash
 git clone https://github.com/microsoft/vcpkg build/tools/vcpkg
 build/tools/vcpkg/bootstrap-vcpkg.sh -disableMetrics
-tests/install/check_vcpkg.sh build/vcpkg-test   # ICU builds first: ~15 min
+tests/install/check_vcpkg.sh build/vcpkg-test   # ICU and OpenSSL build first: ~6 min
+tests/install/check_vcpkg.sh build/vcpkg-test-gss x64-linux gssapi
 ```
 
 The `jhetz-ldap` port downloads the tag `v${VERSION}` (its `vcpkg.json`

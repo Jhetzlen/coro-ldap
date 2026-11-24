@@ -6,3 +6,8 @@ jhetz-ldap provides CMake targets:
     # with the feature "net" (jhetz::ldap_ad comes with it):
     find_package(jhetz_ldap CONFIG REQUIRED COMPONENTS net ad)
     target_link_libraries(main PRIVATE jhetz::ldap_net jhetz::ldap_ad)
+
+    # with the feature "gssapi": the system GSS-API library and pkg-config
+    # must be installed (Debian: libkrb5-dev pkg-config, Fedora: krb5-devel
+    # pkgconf, Arch: krb5 pkgconf)
+    find_package(jhetz_ldap CONFIG REQUIRED COMPONENTS net gssapi)

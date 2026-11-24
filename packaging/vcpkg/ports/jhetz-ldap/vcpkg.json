@@ -20,7 +20,7 @@
   ],
   "features": {
     "gssapi": {
-      "description": "SASL GSSAPI (Kerberos) in jhetz::ldap_net",
+      "description": "SASL GSSAPI (Kerberos) in jhetz::ldap_net, with the system GSS-API library (MIT krb5 or Heimdal)",
       "supports": "!windows",
       "dependencies": [
         {
@@ -29,8 +29,7 @@
           "features": [
             "net"
           ]
-        },
-        "krb5"
+        }
       ]
     },
     "net": {

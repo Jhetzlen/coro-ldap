@@ -14,6 +14,10 @@
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/sasl_scram.hpp"
 
+#ifdef WITH_GSSAPI
+#include "jhetz/ldap/sasl_gssapi.hpp"
+#endif
+
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/corosio/io_context.hpp>
 #endif
@@ -88,6 +92,13 @@ auto main() -> int
 	auto first = mech.start();
 	if (!first || !*first || !(*first)->starts_with("n,,n=IX,r=")) {
 		std::puts("net: unexpected SCRAM client-first-message");
+		return 1;
+	}
+#endif
+#ifdef WITH_GSSAPI
+	ldap::sasl_gssapi gss;
+	if (gss.name() != "GSSAPI") {
+		std::puts("gssapi: unexpected mechanism name");
 		return 1;
 	}
 #endif

@@ -2,13 +2,15 @@
 # Builds tests/install/vcpkg_consumer in manifest mode with the overlay ports
 # in packaging/vcpkg/ports, jhetz-ldap taken from this source tree, and runs it
 # (docs/DEVELOPMENT.md "vcpkg"):
-#   tests/install/check_vcpkg.sh WORK_DIR [TRIPLET]
+#   tests/install/check_vcpkg.sh WORK_DIR [TRIPLET [gssapi]]
+# With gssapi the consumer uses jhetz-ldap[gssapi] (the system GSS-API).
 # The vcpkg is build/tools/vcpkg (JHETZ_LDAP_VCPKG overrides it, VCPKG_ROOT
 # is ignored); the binary cache and the downloads default to
 # build/tools/vcpkg-cache and build/tools/vcpkg-downloads.
 set -eu
-work=$(realpath -m "${1:?usage: check_vcpkg.sh WORK_DIR [TRIPLET]}")
+work=$(realpath -m "${1:?usage: check_vcpkg.sh WORK_DIR [TRIPLET [gssapi]]}")
 triplet=${2:-x64-linux}
+gssapi=${3:-}
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 vcpkg_root=${JHETZ_LDAP_VCPKG:-$root/build/tools/vcpkg}
@@ -23,7 +25,7 @@ fi
 
 step() { echo "== $*"; }
 step "overlay ports, jhetz-ldap from $root"
-rm -rf "$work/ports" "$work/build"
+rm -rf "$work/ports" "$work/build" "$work/manifest"
 mkdir -p "$work"
 cp -rf "$root/packaging/vcpkg/ports" "$work/ports"
 # The tree's content goes into the portfile, so a changed tree changes the
@@ -39,14 +41,29 @@ portfile="$work/ports/jhetz-ldap/portfile.cmake"
 	cat "$root/packaging/vcpkg/ports/jhetz-ldap/portfile.cmake"
 } >"$portfile"
 
-step "vcpkg install ($triplet)"
-"$vcpkg_root/vcpkg" install --vcpkg-root="$vcpkg_root" --triplet "$triplet" --x-manifest-root="$here/vcpkg_consumer" \
+manifest="$here/vcpkg_consumer"
+with_gssapi=OFF
+if [ "$gssapi" = gssapi ]; then
+	manifest="$work/manifest"
+	with_gssapi=ON
+	mkdir -p "$manifest"
+	cat >"$manifest/vcpkg.json" <<'EOF2'
+{
+  "name": "jhetz-ldap-vcpkg-consumer",
+  "version": "0.1.0",
+  "dependencies": [ { "name": "jhetz-ldap", "features": [ "gssapi" ] } ]
+}
+EOF2
+fi
+
+step "vcpkg install ($triplet${gssapi:+, $gssapi})"
+"$vcpkg_root/vcpkg" install --vcpkg-root="$vcpkg_root" --triplet "$triplet" --x-manifest-root="$manifest" \
 	--overlay-ports="$work/ports" --x-install-root="$work/vcpkg_installed" --clean-after-build
 
 step "consumer"
 cmake -S "$here/vcpkg_consumer" -B "$work/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_TOOLCHAIN_FILE="$vcpkg_root/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET="$triplet" \
-	-DVCPKG_MANIFEST_INSTALL=OFF -DVCPKG_INSTALLED_DIR="$work/vcpkg_installed" >/dev/null
+	-DVCPKG_MANIFEST_INSTALL=OFF -DVCPKG_INSTALLED_DIR="$work/vcpkg_installed" -DWITH_GSSAPI="$with_gssapi" >/dev/null
 cmake --build "$work/build" >/dev/null
 "$work/build/consumer"
 echo "vcpkg check passed"
