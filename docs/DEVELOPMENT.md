@@ -69,16 +69,24 @@ and they include the shared internal headers of `src/`.
 ## Windows
 
 Status: the code has been ported to Windows (Winsock through Corosio, the
-CryptoAPI trust store and chain verification, wide file paths, MSVC-safe code and CMake). The
-Linux development setup has no Windows toolchain and checks the port only
-by syntax checks against the mingw-w64 headers. The last MSVC build ran on
-2026-11-20 (Visual Studio 2022 17.14, MSVC 19.44, vcpkg's ICU 79.1 and
-OpenSSL 3.6.5): `/W4 /WX` clean in Debug and RelWithDebInfo; in
-RelWithDebInfo 847 of the 850 tests that run pass (17 skip without slapd,
-Samba or the DNS fixtures). The 3 left (coro-ldap-0wp) expect a write to a
-peer that does not read to stay pending, which Winsock's overlapped sends
-do not. Debug also fails 8 allocation-count tests, from the debug STL's
-iterator debugging (coro-ldap-af9). clang-cl and MinGW have not been built.
+CryptoAPI trust store and chain verification, wide file paths, MSVC-safe
+code and CMake), and the build and unit tests are CI-verified: the
+`windows` workflow (`.github/workflows/windows.yml`) builds a Debug
+`/W4 /WX` build with MSVC on `windows-latest` (Visual Studio 2026, MSVC
+19.52 at the time of writing) against vcpkg's ICU and OpenSSL, and runs
+every ctest test but the `integration` label (no slapd, Samba or KDC on
+Windows; the tests that need the DNS fixtures or Linux interfaces skip).
+Locally, the Linux setup still has no Windows toolchain and checks the
+port by syntax checks against the mingw-w64 headers. clang-cl and MinGW
+have not been built.
+
+The CI job pins vcpkg (`.github/vcpkg/vcpkg.json`'s `builtin-baseline`;
+the runner's vcpkg is not used), builds ICU and OpenSSL release-only
+(the `x64-windows-release` overlay triplet next to it: both are used
+through their DLLs, so the Debug build links them), keeps vcpkg's files
+binary cache and the FetchContent sources with `actions/cache`, and
+builds Debug with `_ITERATOR_DEBUG_LEVEL=0` (below). Its test counts are
+the README's "windows tests" badge.
 
 MSVC warns where GCC and Clang do not: C4459 (a local or parameter hiding a
 namespace-scope name, also one from a test or from `src/`), C4127 (a
@@ -146,10 +154,13 @@ The vcpkg bundled with Visual Studio (`VC\vcpkg`) has no classic mode
 `-DVCPKG_MANIFEST_MODE=OFF -DVCPKG_INSTALLED_DIR=<dir>` besides the
 toolchain file and triplet.
 
-Run the tests from a Release or RelWithDebInfo build: in Debug, MSVC's
-checked iterators (`_ITERATOR_DEBUG_LEVEL=2`) make every container allocate
-a proxy from its allocator, so the allocation-counting tests (`[pmr]`,
-`[alloc]`, the read and write buffers' counts) fail there.
+Run the tests from a Release or RelWithDebInfo build, or from a Debug
+build without checked iterators (`set CXXFLAGS=/D_ITERATOR_DEBUG_LEVEL=0`
+before the first configure, as CI does; Capy, Corosio and Catch2 get it
+too): with `_ITERATOR_DEBUG_LEVEL=2`, MSVC's Debug default, every
+container allocates a proxy from its allocator, so the
+allocation-counting tests (`[pmr]`, `[alloc]`, the read and write
+buffers' counts) fail, and the fuzz replays run many times slower.
 
 Catch2, Corosio and Capy are fetched as on Linux. The tests are listed when
 ctest runs them (`DISCOVERY_MODE PRE_TEST`), so the ICU and OpenSSL DLLs
@@ -235,10 +246,16 @@ compile-time diagnostics) are not registered with MSVC or clang-cl.
 - Refused connects: Winsock retries the SYN after an RST and fails with
   `WSAECONNREFUSED` about a second later, where Linux fails at once; a test
   that connects to `refused_port` needs a timeout above that.
-- Large writes: Windows completes an overlapped write of 1 MiB whole, on
-  AF_UNIX and on TCP with small socket buffers, where Linux fills the
+- Large writes: Winsock takes a whole overlapped send into its buffer
+  while that holds less than `SO_SNDBUF`, so a write of 1 MiB completes on
+  AF_UNIX and on TCP with a 64 KiB `SO_SNDBUF`, where Linux fills the
   socket and parks the writer. A test that needs a parked writer writes
-  more (`sasl_layer_tests.cpp`), or fails (coro-ldap-0wp).
+  more (`sasl_layer_tests.cpp`) or, over TCP, has `SO_SNDBUF` 0
+  (`socket_buffers::small` in `mock_ldap.hpp`): Winsock then buffers
+  nothing and the send stays pending once the peer's window closes.
+- Timers fire at the system tick (15.6 ms by default), not at 1 ms: a
+  test counting 1 ms delays during some work makes the work last long
+  enough (`sasl_tests.cpp`'s PBKDF2 offload test).
 - The ldapi, `[tls]` (CryptoAPI chain verification included) and
   `ad_filetime` tests pass.
 

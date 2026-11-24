@@ -13,7 +13,7 @@ that is not coroutine-based. It covers TLS, StartTLS and `ldapi://`, SASL
 EXTERNAL, SCRAM-SHA-256 and optionally GSSAPI, a connection pool, typed
 entry mapping, and full UTF-8 with RFC 4518 matching.
 
-Status: pre-1.0, the API may still change. Linux is the tested platform;
+Windows (MSVC) builds and passes the unit tests in CI; macOS is not supported.
 Windows is ported but unverified; macOS is not supported.
 
 ## Features
