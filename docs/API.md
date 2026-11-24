@@ -21,7 +21,7 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
 | Set a password as an administrator | `ldap::reset_password(d, user, new)` | RFC 3062 without the old password |
 | Active Directory passwords | `ldap::ad::change_password` / `ad::reset_password` (ad/password.hpp) | `unicodePwd` modify (AD does not implement RFC 3062); needs TLS or a SASL confidentiality layer |
 | A transaction, the easy way | `transaction::begin(conn)` | an `ldap::transaction`: its updates (`t->add`, `t->modify`, ...) carry the specification control; `commit()` / `abort()`; aborted when destroyed unsettled |
-| A transaction, by hand | `connection::start_transaction()`, `end_transaction(id, commit)` | RFC 5805's two extended operations; put `transaction_specification{id}` on each update yourself |
+| A transaction, by hand | `ldap::start_transaction(conn)`, `ldap::end_transaction(conn, id, commit)` (transaction.hpp) | RFC 5805's two extended operations; put `transaction_specification{id}` on each update yourself |
 
 ## `jhetz::ldap`: the codec
 
@@ -699,11 +699,12 @@ itself needs only ICU.
   with `.controls` (that operation's control list, see controls.hpp
   below) and `.timeout` (`extended` refuses the StartTLS name with
   encode_error before sending: use `start_tls`);
-  transactions (RFC 5805): `start_transaction(extended_controls)` ->
-  `result<std::string>` (the identifier; proxied authorization goes
-  here, section 4.4), updates carrying
+  transactions (RFC 5805), as non-members in transaction.hpp next to
+  `ldap::transaction`: `ldap::start_transaction(connection &,
+  extended_controls = {})` -> `result<std::string>` (the identifier;
+  proxied authorization goes here, section 4.4), updates carrying
   `ldap::transaction_specification{.identifier}`, and
-  `end_transaction(identifier, commit = true)` ->
+  `ldap::end_transaction(connection &, identifier, commit = true)` ->
   `result<end_transaction_result>` (`updates_controls`, the decoded
   updatesControls `{message_id, controls}`, with
   `find_update_controls(response::message_id)`, and `controls`); a refused
@@ -728,8 +729,11 @@ itself needs only ICU.
   leaves it open (await every update first). One destroyed while the server
   may still hold it (open, or a commit / abort whose End Transaction got no
   answer: stopped before sending, or given up on) queues an End
-  Transaction (abort) without waiting. `sync::connection` forwards
-  `start_transaction` and `end_transaction`, and the static
+  Transaction (abort) without waiting. Breaking (coro-ldap-bhe.13):
+  `connection::start_transaction` / `end_transaction` and their
+  `sync::connection` / sync lease forwarders are gone: call the
+  non-members (`ldap::sync::run(c, [](ldap::connection &a) { return
+  ldap::start_transaction(a); })` from a sync facade). The static
   `sync::transaction::begin(sync::connection &, extended_controls = {})`
   (and `begin(sync::basic_lease<E> &, ...)` for a lease) returns a
   `result<sync::transaction>`, which aborts synchronously when destroyed
@@ -851,9 +855,10 @@ itself needs only ICU.
   and the sync facades, and `client::who_am_i` /
   `sync::client::who_am_i` with them (`client::extended` replaces them,
   retried only after `not_sent`, so a Who am I? on a client is no longer
-  retried after a lost connection). The transactions
-  (`start_transaction`, `end_transaction`) stay connection members: a refused End Transaction's txnEndRes does not
-  reach the public `extended()`. Active Directory
+  retried after a lost connection). The raw transaction operations
+  (`ldap::start_transaction`, `ldap::end_transaction`) stay dedicated
+  functions: a refused End Transaction's txnEndRes does not reach the
+  public `extended()`. Active Directory
   has no RFC 3062: its password changes are `ad::change_password` and
   `ad::reset_password` (section `ldap::ad`). Which one runs is the call's
   choice: nothing reads the root DSE to pick. Passwords never appear in
@@ -1193,7 +1198,7 @@ itself needs only ICU.
   no-op. `vlv_by_offset`: offset 1 is the first entry, `content_count` 0
   means the server's count; `vlv_greater_than_or_equal`: the first entry
   whose primary sort key is >= the value. A `transaction_specification`
-  update is answered at once and applied at `end_transaction()`, where its
+  update is answered at once and applied at End Transaction, where its
   response controls come back (`end_transaction_result::updates_controls`);
   Password Modify takes it only as a raw control, and only a typed one is
   checked against proxied authorization.

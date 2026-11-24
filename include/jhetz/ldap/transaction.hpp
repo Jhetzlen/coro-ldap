@@ -1,5 +1,5 @@
-// RFC 5805 transactions: a helper over connection::start_transaction(),
-// end_transaction() and the transaction_specification control (docs/API.md).
+// RFC 5805 transactions: ldap::transaction, and the two extended operations
+// and the transaction_specification control it is built on (docs/API.md).
 #pragma once
 
 #include "jhetz/ldap/controls.hpp"
@@ -9,6 +9,7 @@
 
 #include <boost/capy/task.hpp>
 
+#include <string>
 #include <string_view>
 
 namespace jhetz::ldap {
@@ -16,6 +17,12 @@ namespace jhetz::ldap {
 class connection;
 
 using commit_result = end_transaction_result;
+
+// The raw extended operations: Start Transaction returns the identifier,
+// End Transaction settles it. Updates need transaction_specification{id}.
+auto start_transaction(connection &conn, extended_controls controls = {}) -> boost::capy::task<result<std::string>>;
+auto end_transaction(connection &conn, std::string identifier, bool commit = true)
+  -> boost::capy::task<result<end_transaction_result>>;
 
 class transaction
 {

@@ -168,15 +168,16 @@ namespace {
 
 }// namespace
 
-auto connection::start_transaction(extended_controls controls) -> capy::task<result<std::string>>
+auto start_transaction(connection &conn, extended_controls controls) -> capy::task<result<std::string>>
 {
-	const core_ref self(core_);
+	const core_ref self(connection::core::of(conn));
 	return detail::on_strand(self, start_transaction_impl(self, std::move(controls)));
 }
 
-auto connection::end_transaction(std::string identifier, bool commit) -> capy::task<result<end_transaction_result>>
+auto end_transaction(connection &conn, std::string identifier, bool commit)
+  -> capy::task<result<end_transaction_result>>
 {
-	const core_ref self(core_);
+	const core_ref self(connection::core::of(conn));
 	return detail::on_strand(self, end_transaction_impl(self, std::move(identifier), commit));
 }
 

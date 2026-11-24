@@ -991,7 +991,7 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 	CHECK(exists(person(b).entry));
 
 	// The primitives, deleting both in one transaction.
-	auto id = finish(ioc, c.start_transaction());
+	auto id = finish(ioc, ldap::start_transaction(c));
 	REQUIRE(id.has_value());
 	for (const auto &uid : { a, b }) {
 		auto d = finish(ioc,
@@ -999,7 +999,7 @@ TEST_CASE("integration: transactions (RFC 5805)", "[integration][transaction]")
 			.controls = { ldap::transaction_specification{ .identifier = std::string(*id) } } }));
 		REQUIRE(d.has_value());
 	}
-	REQUIRE(finish(ioc, c.end_transaction(*id)).has_value());
+	REQUIRE(finish(ioc, ldap::end_transaction(c, *id)).has_value());
 	CHECK(not_exists(person(a).entry));
 	CHECK(not_exists(person(b).entry));
 }

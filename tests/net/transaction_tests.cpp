@@ -180,20 +180,20 @@ TEST_CASE("transaction: the primitives", "[net][transaction]")
 	  answer({ started(4) }),
 	  answer({ ended(5, 68, ldap::end_transaction_response{ 7 }) }) });
 
-	auto id = m.run(m.conn.start_transaction({ ldap::proxied_authorization{ "u:jdoe" } }));
+	auto id = m.run(ldap::start_transaction(m.conn, { ldap::proxied_authorization{ "u:jdoe" } }));
 	REQUIRE(id.has_value());
 	CHECK(*id == txn_id);
 	auto d =
 	  m.run(m.conn.del({ .entry = jdoe, .controls = { ldap::transaction_specification{ .identifier = "txn-1" } } }));
 	REQUIRE(d.has_value());
 	CHECK(d->message_id == 2);
-	auto ok = m.run(m.conn.end_transaction(*id));
+	auto ok = m.run(ldap::end_transaction(m.conn, *id));
 	REQUIRE(ok.has_value());
 	CHECK(ok->updates_controls.empty());
 
-	auto again = m.run(m.conn.start_transaction());
+	auto again = m.run(ldap::start_transaction(m.conn));
 	REQUIRE(again.has_value());
-	auto refused = m.run(m.conn.end_transaction(*again));
+	auto refused = m.run(ldap::end_transaction(m.conn, *again));
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == errc::entry_already_exists);
 	CHECK(refused.error().context == "end transaction: update message 7");
@@ -426,11 +426,11 @@ TEST_CASE("transaction: answers RFC 5805 section 2 does not allow", "[net][trans
 	REQUIRE_FALSE(unsupported.has_value());
 	CHECK(unsupported.error().code == errc::protocol_error);
 	CHECK(unsupported.error().context == "start transaction");
-	auto named = m.run(m.conn.start_transaction());
+	auto named = m.run(ldap::start_transaction(m.conn));
 	REQUIRE_FALSE(named.has_value());
 	CHECK(named.error().code == client_errc::decode_error);
 	CHECK(named.error().context == "start transaction: the response has a responseName (RFC 5805 section 2.1)");
-	auto no_id = m.run(m.conn.start_transaction());
+	auto no_id = m.run(ldap::start_transaction(m.conn));
 	REQUIRE_FALSE(no_id.has_value());
 	CHECK(
 	  no_id.error().context == "start transaction: the response has no transaction identifier (RFC 5805 section 2.1)");

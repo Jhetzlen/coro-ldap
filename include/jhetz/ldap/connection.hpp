@@ -132,11 +132,6 @@ class connection
 	auto compare(compare_params request) -> boost::capy::task<result<compare_result>>;
 	auto extended(extended_params request) -> boost::capy::task<result<extended_result>>;
 
-	// RFC 5805 transactions (see transaction.hpp).
-	auto start_transaction(extended_controls controls = {}) -> boost::capy::task<result<std::string>>;
-	auto end_transaction(std::string identifier, bool commit = true)
-	  -> boost::capy::task<result<end_transaction_result>>;
-
 	// StartTLS (RFC 4511 section 4.14): upgrades a plain ldap:// connection.
 	auto start_tls(net::tls_options options = {}, std::optional<std::chrono::milliseconds> timeout = std::nullopt)
 	  -> boost::capy::task<result<void>>;

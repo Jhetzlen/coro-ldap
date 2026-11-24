@@ -839,10 +839,12 @@ TEST_CASE("sync: transactions", "[net][sync][transaction]")
 		CHECK(open->identifier().empty());
 		CHECK(open->commit().error().code == ldap::client_errc::not_connected);
 	}
-	auto id = k.c.start_transaction();
+	// The raw extended operations, through sync::run.
+	auto id = ldap::sync::run(k.c, [](ldap::connection &a) { return ldap::start_transaction(a); });
 	REQUIRE(id.has_value());
 	CHECK(*id == "t3");
-	REQUIRE(k.c.end_transaction(*id, false).has_value());
+	REQUIRE(
+	  ldap::sync::run(k.c, [&](ldap::connection &a) { return ldap::end_transaction(a, *id, false); }).has_value());
 	const auto &got = hang_up(k.c, srv);
 	REQUIRE(got.size() == 7);
 	CHECK(got[1].controls

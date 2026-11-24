@@ -423,9 +423,10 @@ server's bad control fails only the caller who asks for it.
   list sends the contextID back.
 - Transactions (RFC 5805): primitives first, a thin helper on top. The
   primitives are the typed control `transaction_specification{.identifier}`
-  (always critical, section 2.2), `connection::start_transaction(controls)`
-  -> `result<std::pmr::string>` (the identifier, section 2.1) and
-  `end_transaction(identifier, commit = true)` ->
+  (always critical, section 2.2), the non-members
+  `ldap::start_transaction(connection &, controls)` -> `result<std::string>`
+  (the identifier, section 2.1) and
+  `ldap::end_transaction(connection &, identifier, commit = true)` ->
   `result<end_transaction_result>` (section 2.3), whose `updates_controls`
   are the decoded txnEndRes updatesControls, `{message_id, controls}` each,
   looked up with `find_update_controls(message_id)`. That id is the
@@ -445,7 +446,9 @@ server's bad control fails only the caller who asks for it.
   Transaction carries the server's
   code, its context naming the update at fault (txnEndRes.messageID, "end
   transaction: update message 5"); no structured field was added to
-  `ldap::error` for it, as the helper reads the id itself. The helper,
+  `ldap::error` for it, as the helper reads the id itself. The primitives
+  are non-members beside the helper, not connection members, so the
+  connection lists one transaction API. The helper,
   `ldap::transaction` (`transaction.hpp`, move-only, made
   by the static `transaction::begin(connection &, extended_controls)`), is built only from those
   primitives: its `add` / `modify` / `del` / `modify_dn` append the control
