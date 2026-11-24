@@ -7,7 +7,6 @@
 #include <expected>
 #include <limits>
 #include <span>
-#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -324,41 +323,76 @@ namespace filters {
 
 	using kind = filter::kind;
 
-	attr::attr(const attribute &name, const allocator_type &alloc) : name_(name.name(), alloc)
-	{
-		if (!detail::is_attribute_description(name_)) {
-			throw std::invalid_argument("ldap::filters::attr: invalid attribute description");
+	attr::attr(const attribute &name, const allocator_type &alloc)
+	  : name_(name.name(), alloc), valid_(detail::is_attribute_description(name_))
+	{}
+
+	namespace {
+		auto failed(const filter::allocator_type &alloc, client_errc code, std::string_view context) -> filter
+		{
+			return filter::failed(make_error(code, context), alloc.resource());
 		}
-	}
+		auto invalid_name(const filter::allocator_type &alloc) -> filter
+		{
+			return failed(alloc, client_errc::invalid_attribute, "filters::attr: invalid attribute description");
+		}
+	}// namespace
 
 	auto attr::operator==(std::string_view value) const -> filter
 	{
+		if (!valid_) {
+			return invalid_name(name_.get_allocator());
+		}
 		return access::leaf(name_.get_allocator(), kind::equality, name_, value);
 	}
 	auto attr::operator>=(std::string_view value) const -> filter
 	{
+		if (!valid_) {
+			return invalid_name(name_.get_allocator());
+		}
 		return access::leaf(name_.get_allocator(), kind::greater_or_equal, name_, value);
 	}
 	auto attr::operator<=(std::string_view value) const -> filter
 	{
+		if (!valid_) {
+			return invalid_name(name_.get_allocator());
+		}
 		return access::leaf(name_.get_allocator(), kind::less_or_equal, name_, value);
 	}
 	auto attr::approx(std::string_view value) const -> filter
 	{
+		if (!valid_) {
+			return invalid_name(name_.get_allocator());
+		}
 		return access::leaf(name_.get_allocator(), kind::approx, name_, value);
 	}
-	auto attr::present() const -> filter { return access::leaf(name_.get_allocator(), kind::present, name_); }
+	auto attr::present() const -> filter
+	{
+		if (!valid_) {
+			return invalid_name(name_.get_allocator());
+		}
+		return access::leaf(name_.get_allocator(), kind::present, name_);
+	}
 
 	auto attr::starts_with(std::string_view value) const -> filter
 	{
+		if (!valid_) {
+			return invalid_name(name_.get_allocator());
+		}
 		return access::substrings(name_.get_allocator(), name_, value, {}, {});
 	}
 	auto attr::ends_with(std::string_view value) const -> filter
 	{
+		if (!valid_) {
+			return invalid_name(name_.get_allocator());
+		}
 		return access::substrings(name_.get_allocator(), name_, {}, {}, value);
 	}
 	auto attr::contains(std::string_view value) const -> filter
 	{
+		if (!valid_) {
+			return invalid_name(name_.get_allocator());
+		}
 		return access::substrings(name_.get_allocator(), name_, {}, value, {});
 	}
 
@@ -374,10 +408,12 @@ namespace filters {
 		// NOLINTEND(bugprone-easily-swappable-parameters)
 		{
 			if (!rule.empty() && !detail::is_oid(rule)) {
-				throw std::invalid_argument(detail::format("ldap::filters: invalid matching rule \"{}\"", rule));
+				return failed(
+				  alloc, client_errc::invalid_filter, detail::format("filters: invalid matching rule \"{}\"", rule));
 			}
 			if (!dn_attributes && detail::iequals(rule, "dn")) {
-				throw std::invalid_argument("ldap::filters: a matching rule named \"dn\" needs dn_attributes");
+				return failed(
+				  alloc, client_errc::invalid_filter, "filters: a matching rule named \"dn\" needs dn_attributes");
 			}
 			filter f = access::leaf(alloc, kind::extensible_match, attr, value);
 			if (!rule.empty()) {
@@ -390,6 +426,9 @@ namespace filters {
 
 	auto attr::matches(std::string_view rule, std::string_view value, bool dn_attributes) const -> filter
 	{
+		if (!valid_) {
+			return invalid_name(name_.get_allocator());
+		}
 		return extensible(name_.get_allocator(), name_, rule, value, dn_attributes);
 	}
 
@@ -399,7 +438,7 @@ namespace filters {
 	  const filter::allocator_type &alloc) -> filter
 	{
 		if (rule.empty()) {
-			throw std::invalid_argument("ldap::filters::rule_matches: the matching rule is required");
+			return failed(alloc, client_errc::invalid_filter, "filters::rule_matches: the matching rule is required");
 		}
 		return extensible(alloc, {}, rule, value, dn_attributes);
 	}

@@ -167,7 +167,11 @@ namespace detail {
 		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		modify_dn_request op(alloc);
 		op.entry = request.entry.to_string(self->mr());
-		op.new_rdn = dn{}.child(request.new_rdn).to_string(self->mr());// an RDN prints as a one-RDN DN
+		auto new_rdn = dn{}.child(request.new_rdn);// an RDN prints as a one-RDN DN
+		if (!new_rdn) {
+			co_return std::unexpected(with_context(std::move(new_rdn.error()), context));
+		}
+		op.new_rdn = new_rdn->to_string(self->mr());
 		op.delete_old_rdn = request.delete_old_rdn;
 		if (request.new_superior) {
 			op.new_superior = request.new_superior->to_string(self->mr());

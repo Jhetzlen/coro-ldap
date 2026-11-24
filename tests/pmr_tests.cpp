@@ -300,7 +300,7 @@ TEST_CASE("dn, attribute and entry allocate from the given resource", "[pmr][dn]
 	CHECK(d->rdns()[0].avas[1].type.get_allocator().resource() == &arena);
 	const auto parent = d->parent();
 	CHECK(parent.get_allocator().resource() == &arena);
-	const auto child = parent.child(ldap::rdn{ { ldap::ava{ ldap::attribute{ "cn" }, "x" } }, &arena });
+	const auto child = parent.child(ldap::rdn{ { ldap::ava{ ldap::attribute{ "cn" }, "x" } }, &arena }).value();
 	CHECK(child.get_allocator().resource() == &arena);
 	CHECK(child.rdns()[0].avas[0].value.get_allocator().resource() == &arena);
 	CHECK(d->to_string(&arena).get_allocator().resource() == &arena);

@@ -170,8 +170,10 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   fails with that error instead of `invalid_filter`. A filter
   combined from others uses the left operand's memory resource. An
   attribute given to `filters::attr` that is not a valid description (only
-  possible with `attribute::unchecked`), or a bad extensible-match rule,
-  throws `std::invalid_argument`.
+  possible with `attribute::unchecked`) makes every filter built from it a
+  `failed()` one (`invalid_attribute`), and so does a bad extensible-match
+  rule (`invalid_filter`). Breaking (coro-ldap-bhe.10): these threw
+  `std::invalid_argument`.
 - `jhetz/ldap/dn.hpp`: `ldap::dn` (RFC 4514 parse / `to_string`, multi-valued
   RDNs, `parent()`, `child()`, compile-time checked literals). Its `==` is
   syntactic (values exact after unescaping, `cn=A` != `cn=a`); compare as a
@@ -186,9 +188,12 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   Parsing follows RFC 4514 with RFC 2253 section 4's leniency (spaces
   around `,`, `+` and `=` ignored, unescaped trailing spaces dropped);
   `\` escapes any octet, so values need not be UTF-8, and `to_string()`
-  escapes octets that are not valid UTF-8. `child(rdn)` throws
-  `std::invalid_argument` for an RDN without an AVA, a bad type or an
-  empty `#` value; `base.child({"uid=jdoe"})` is ambiguous: name the type.
+  escapes octets that are not valid UTF-8. `child(rdn)` returns
+  `result<dn>`, `client_errc::invalid_dn` for an RDN without an AVA, a bad
+  type or an empty `#` value; `child(dn)` cannot fail and returns `dn`.
+  `base.child({"uid=jdoe"})` is ambiguous: name the type. Breaking
+  (coro-ldap-bhe.10): `child(rdn)` returned `dn` and threw
+  `std::invalid_argument`.
 - `jhetz/ldap/matching.hpp`: RFC 4517 matching rules on values prepared by
   LDAPprep (RFC 4518). Each rule is a function named after it, taking the
   attribute value and the assertion value and returning `match_result`
@@ -1899,6 +1904,28 @@ package component `ad`:
   the Large Integer syntax OID (1.2.840.113556.1.4.906), which
   `validate<T>` accepts for signed integers of 64 bits or more and the
   FILETIME types.
+
+## What throws
+
+Errors are values (`result<T>`); the exceptions left are these:
+
+- `std::bad_alloc` wherever memory is allocated.
+- `ber::make_tag` (and `universal`, `application`, `context`,
+  `private_tag`) and `ber::identifier_octet`: `std::invalid_argument` for a
+  tag number above 30 (a compile error in a constant expression);
+  `ber::writer::constructed`: `std::logic_error` when `body` calls
+  `clear()` or `take()`, and whatever `body` throws, after removing the
+  partial element.
+- `ldap::run`: the task's exception, rethrown, and `std::system_error`
+  (`capy::error::canceled`) when the task did not finish.
+- The sync facades: an exception an operation throws on the I/O thread,
+  rethrown in the calling thread.
+- An exception a user callback throws (a referral authorizer, for one)
+  propagates out of the call that ran it.
+- `result<T>::value()` on an error: `std::bad_expected_access`.
+
+The literal constructors (`dn`, `rdn`, `attribute`, `url`, the mapping
+descriptors) are consteval: an invalid literal does not compile.
 
 ## Memory
 

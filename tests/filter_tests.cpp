@@ -208,7 +208,12 @@ TEST_CASE("filter builders make one-node trees with unescaped values", "[filter]
 	SECTION("attribute objects")
 	{
 		CHECK(text_of(attr(ldap::attribute{ "mail" }) == "x") == "(mail=x)");
-		CHECK_THROWS_AS(attr(ldap::attribute::unchecked("uid=*)(cn")), std::invalid_argument);
+		const auto bad = attr(ldap::attribute::unchecked("uid=*)(cn")) == "x";
+		CHECK(bad.empty());
+		REQUIRE(bad.build_error().has_value());
+		CHECK(bad.build_error()->code == ldap::client_errc::invalid_attribute);
+		CHECK(
+		  attr(ldap::attribute::unchecked("")).present().build_error()->code == ldap::client_errc::invalid_attribute);
 	}
 	SECTION("empty filters")
 	{
@@ -1001,9 +1006,15 @@ TEST_CASE("extensible match builders", "[filter][builders]")
 	const auto f = attr("cn").matches("caseExactMatch", "Jane");
 	CHECK(from_ber(*to_ber(f)).value() == f);
 
-	CHECK_THROWS_AS(attr("cn").matches("not a rule!", "v"), std::invalid_argument);
-	CHECK_THROWS_AS(attr("cn").matches("dn", "v"), std::invalid_argument);
-	CHECK_THROWS_AS(ldap::filters::rule_matches("", "v"), std::invalid_argument);
+	const auto failed_with = [](const ldap::filter &bad) {
+		const auto why = bad.build_error();
+		return bad.empty() && why && why->code == ldap::client_errc::invalid_filter;
+	};
+	CHECK(failed_with(attr("cn").matches("not a rule!", "v")));
+	CHECK(failed_with(attr("cn").matches("dn", "v")));
+	CHECK(failed_with(ldap::filters::rule_matches("", "v")));
+	CHECK(attr("cn").matches("dn", "v").build_error()->context
+		  == "filters: a matching rule named \"dn\" needs dn_attributes");
 }
 
 // ---------------------------------------------------------------- escaping helpers

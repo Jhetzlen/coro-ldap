@@ -115,7 +115,7 @@ TEST_CASE("dn::to_string escapes what RFC 4514 requires", "[dn]")
 	  P{ "\xc3\xa9", "cn=\xc3\xa9" },
 	  P{ "", "cn=" });
 	INFO(text);
-	const auto d = ldap::dn{}.child(single("cn", value));
+	const auto d = ldap::dn{}.child(single("cn", value)).value();
 	CHECK(d.to_string() == std::string_view(text));
 	const auto back = parse(text);
 	CHECK(back == d);
@@ -144,7 +144,7 @@ TEST_CASE("escape_dn_value: RFC 4514 text that parses back to the value", "[dn][
 	REQUIRE(d.rdns().size() == 2);
 	CHECK(d.rdns()[0].avas[0].value == std::string_view(value));
 	CHECK_FALSE(d.rdns()[0].avas[0].hex_form);
-	CHECK(ldap::dn{}.child(single("cn", value)).to_string() == std::string_view("cn=" + std::string(text)));
+	CHECK(ldap::dn{}.child(single("cn", value))->to_string() == std::string_view("cn=" + std::string(text)));
 }
 
 TEST_CASE("escape_dn_value keeps UTF-8 and escapes only specials", "[dn][escape]")
@@ -220,9 +220,12 @@ TEST_CASE("dn structure: rdns, parent, child, empty", "[dn]")
 	CHECK(root.to_string().empty());
 	CHECK(root == ldap::dn{});
 
-	CHECK_THROWS_AS(d.child(ldap::rdn{}), std::invalid_argument);
-	CHECK_THROWS_AS(d.child(single("bad type", "x")), std::invalid_argument);
-	CHECK_THROWS_AS(d.child(ldap::rdn{ { ldap::ava{ ldap::attribute{ "cn" }, "", true } } }), std::invalid_argument);
+	CHECK(d.child(ldap::rdn{}).error().code == ldap::client_errc::invalid_dn);
+	CHECK(d.child(single("bad type", "x")).error().code == ldap::client_errc::invalid_dn);
+	const auto empty_hex = d.child(ldap::rdn{ { ldap::ava{ ldap::attribute{ "cn" }, "", true } } });
+	REQUIRE_FALSE(empty_hex);
+	CHECK(empty_hex.error().code == ldap::client_errc::invalid_dn);
+	CHECK(empty_hex.error().context == "dn::child: empty #hex value");
 }
 
 TEST_CASE("dn literal constructor", "[dn]")
@@ -317,13 +320,13 @@ TEST_CASE("dn::child of an rdn", "[dn][rdn]")
 {
 	const ldap::dn base{ "ou=people,dc=example,dc=org" };
 	CHECK(base.child(ldap::rdn{ "uid=jdoe" }) == ldap::dn{ "uid=jdoe,ou=people,dc=example,dc=org" });
-	CHECK(base.child(ldap::rdn{ "uid=jdoe" }).to_string() == "uid=jdoe,ou=people,dc=example,dc=org");
-	CHECK(base.child(ldap::rdn{ "cn=a+sn=b" }).to_string() == "cn=a+sn=b,ou=people,dc=example,dc=org");
+	CHECK(base.child(ldap::rdn{ "uid=jdoe" })->to_string() == "uid=jdoe,ou=people,dc=example,dc=org");
+	CHECK(base.child(ldap::rdn{ "cn=a+sn=b" })->to_string() == "cn=a+sn=b,ou=people,dc=example,dc=org");
 	const auto runtime = ldap::rdn::parse(std::string("uid=") + "x\\,y");
 	REQUIRE(runtime.has_value());
-	CHECK(base.child(*runtime).to_string() == "uid=x\\,y,ou=people,dc=example,dc=org");
+	CHECK(base.child(*runtime)->to_string() == "uid=x\\,y,ou=people,dc=example,dc=org");
 	CHECK(ldap::dn{}.child(ldap::rdn{ "dc=org" }) == ldap::dn{ "dc=org" });
-	CHECK(base.child(ldap::rdn{ "uid=jdoe" }).parent() == base);
+	CHECK(base.child(ldap::rdn{ "uid=jdoe" })->parent() == base);
 }
 
 TEST_CASE("dn::child of a relative dn", "[dn]")
@@ -365,7 +368,7 @@ TEST_CASE("rdn and child allocate from the given resource", "[dn][rdn][pmr]")
 	CHECK(under.get_allocator().resource() == &arena);
 	CHECK(under.rdns()[0].avas[0].value.get_allocator().resource() == &arena);
 	CHECK(under.rdns()[3].avas[0].type.get_allocator().resource() == &arena);
-	const auto child = base.child(*parsed);
+	const auto child = base.child(*parsed).value();
 	CHECK(child.get_allocator().resource() == &arena);
 	CHECK(child.rdns()[0].avas[0].value.get_allocator().resource() == &arena);
 }
@@ -381,7 +384,7 @@ TEST_CASE("child uses the dn's resource, not the argument's", "[dn][rdn][pmr]")
 	const std::size_t base_before = base_mr.allocations();
 
 	const auto a = base.child(relative);
-	const auto b = base.child(r);
+	const auto b = base.child(r).value();
 	CHECK(a.get_allocator().resource() == &base_mr);
 	CHECK(a.rdns()[0].avas[0].value.get_allocator().resource() == &base_mr);
 	CHECK(b.rdns()[0].avas[0].value.get_allocator().resource() == &base_mr);
@@ -398,7 +401,7 @@ TEST_CASE("child of an rvalue rdn on another resource uses the dn's resource", "
 	REQUIRE(r.has_value());
 	const std::size_t other_before = other_mr.allocations();
 
-	const auto d = base.child(std::move(*r));
+	const auto d = base.child(std::move(*r)).value();
 	CHECK(
 	  d.to_string() == "cn=a long common name to allocate+uid=someone-with-a-long-name,ou=people,dc=example,dc=org");
 	CHECK(d.get_allocator().resource() == &base_mr);
@@ -453,8 +456,10 @@ TEST_CASE("dn to_string/parse round-trips arbitrary values", "[dn]")
 	}
 	for (std::size_t start = 0; start < all.size(); start += 7) {
 		const std::string value = all.substr(start, 13) + " ";
-		const auto d = ldap::dn{ "dc=example" }.child(ldap::rdn{
-		  { ldap::ava{ ldap::attribute{ "cn" }, value }, ldap::ava{ ldap::attribute{ "2.5.4.4" }, " " + value } } });
+		const auto d = ldap::dn{ "dc=example" }
+						 .child(ldap::rdn{ { ldap::ava{ ldap::attribute{ "cn" }, value },
+						   ldap::ava{ ldap::attribute{ "2.5.4.4" }, " " + value } } })
+						 .value();
 		const auto text = d.to_string();
 		INFO(text);
 		CHECK(parse(text) == d);
@@ -469,14 +474,14 @@ TEST_CASE("dn to_string/parse round-trips arbitrary values", "[dn]")
 TEST_CASE("RFC 4514 2: printed DNs are valid UTF-8", "[dn][rfc]")
 {
 	CHECK(parse("cn=\\ff").to_string() == "cn=\\ff");
-	CHECK(ldap::dn{}.child(single("cn", "a\xc3")).to_string() == "cn=a\\c3");// truncated sequence
+	CHECK(ldap::dn{}.child(single("cn", "a\xc3"))->to_string() == "cn=a\\c3");// truncated sequence
 	CHECK(parse("cn=\\c3\\a9").to_string() == "cn=\xc3\xa9");// valid UTF-8 is kept
 	// Each octet of an ill-formed sequence is escaped; U+10FFFF and
 	// noncharacters are well-formed and kept.
-	CHECK(ldap::dn{}.child(single("cn", "\xf4\x90\x80\x80")).to_string() == "cn=\\f4\\90\\80\\80");
-	CHECK(ldap::dn{}.child(single("cn", "\xed\xa0\x80")).to_string() == "cn=\\ed\\a0\\80");
+	CHECK(ldap::dn{}.child(single("cn", "\xf4\x90\x80\x80"))->to_string() == "cn=\\f4\\90\\80\\80");
+	CHECK(ldap::dn{}.child(single("cn", "\xed\xa0\x80"))->to_string() == "cn=\\ed\\a0\\80");
 	CHECK(
-	  ldap::dn{}.child(single("cn", "\xf4\x8f\xbf\xbf\xef\xbf\xbf")).to_string() == "cn=\xf4\x8f\xbf\xbf\xef\xbf\xbf");
+	  ldap::dn{}.child(single("cn", "\xf4\x8f\xbf\xbf\xef\xbf\xbf"))->to_string() == "cn=\xf4\x8f\xbf\xbf\xef\xbf\xbf");
 }
 
 TEST_CASE("RFC 4514 3: DN text with invalid UTF-8 is rejected", "[dn][rfc]")

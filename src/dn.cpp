@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <memory_resource>
 #include <ranges>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -245,23 +244,23 @@ auto dn::parent() const -> dn
 	return out;
 }
 
-auto dn::child(const rdn &r) const -> dn
+auto dn::child(const rdn &r) const -> result<dn>
 {
 	return child(rdn(r, get_allocator()));// copied straight onto this DN's resource
 }
 
-auto dn::child(rdn &&r) const -> dn
+auto dn::child(rdn &&r) const -> result<dn>
 {
-	// Programming errors: the result would not survive to_string()/parse().
+	// The result would not survive to_string()/parse().
 	if (r.avas.empty()) {
-		throw std::invalid_argument("ldap::dn::child: empty RDN");
+		return fail(client_errc::invalid_dn, "dn::child: empty RDN");
 	}
 	for (const auto &a : r.avas) {
 		if (!detail::is_oid(a.type.name())) {
-			throw std::invalid_argument("ldap::dn::child: invalid attribute type");
+			return fail(client_errc::invalid_dn, "dn::child: invalid attribute type");
 		}
 		if (a.hex_form && a.value.empty()) {
-			throw std::invalid_argument("ldap::dn::child: empty #hex value");
+			return fail(client_errc::invalid_dn, "dn::child: empty #hex value");
 		}
 	}
 	dn out(get_allocator());

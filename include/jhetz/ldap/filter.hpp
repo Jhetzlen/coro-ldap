@@ -312,6 +312,7 @@ namespace filters {
 
 		// NOLINTNEXTLINE(cppcoreguidelines-explicit-constructor,misc-explicit-constructor)
 		attr(attribute::literal name, const allocator_type &alloc = {}) : name_(name.text, alloc) {}
+		// An invalid `name` makes every filter built from it a failed() one.
 		explicit attr(const attribute &name, const allocator_type &alloc = {});
 
 		[[nodiscard]] auto operator==(std::string_view value) const -> filter;
@@ -323,12 +324,14 @@ namespace filters {
 		[[nodiscard]] auto starts_with(std::string_view value) const -> filter;
 		[[nodiscard]] auto ends_with(std::string_view value) const -> filter;
 		[[nodiscard]] auto contains(std::string_view value) const -> filter;
-		// Extensible match (RFC 4515): `(a:rule:=v)`, `(a:dn:rule:=v)`.
+		// Extensible match (RFC 4515): `(a:rule:=v)`, `(a:dn:rule:=v)`; failed()
+		// for an invalid rule.
 		[[nodiscard]] auto matches(std::string_view rule, std::string_view value, bool dn_attributes = false) const
 		  -> filter;
 
 	  private:
 		std::pmr::string name_;
+		bool valid_ = true;
 	};
 
 	// Extensible match without an attribute: `(:rule:=v)`, `(:dn:rule:=v)`.

@@ -308,7 +308,11 @@ namespace detail {
 			if (!name) {
 				return std::unexpected(with_context(std::move(name.error()), "modify DN"));
 			}
-			return modify_dn_params{ .entry = base.child(*name),
+			auto entry = base.child(*name);
+			if (!entry) {
+				return std::unexpected(with_context(std::move(entry.error()), "modify DN"));
+			}
+			return modify_dn_params{ .entry = std::move(*entry),
 				.new_rdn = std::move(*name),
 				.delete_old_rdn = true,
 				.new_superior = new_base,

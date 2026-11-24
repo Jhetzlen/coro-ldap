@@ -22,7 +22,8 @@ this document is updated.
 - **Pass data around safely.** Public types own their data, are regular
   (copyable, movable, comparable), and can cross threads.
 - **Modern API.** Coroutines (Corosio/Capy), designated-initializer requests,
-  `std::expected` results, no exceptions for expected failures.
+  `std::expected` results, no exceptions for expected failures (the few
+  left are listed in API.md "What throws").
 - **Unicode.** Text is UTF-8 everywhere: the string forms of DNs and
   filters, values of string syntaxes (Directory String and the like), SASL
   usernames and passwords, error contexts. No ASCII-only restriction,
@@ -71,7 +72,8 @@ ldap::result<ldap::dn> d = ldap::dn::parse(user_text);  // runtime text: never t
 
 - `dn`: parsed RDN sequence (RFC 4514), `parent()`, `child(rdn)` /
   `child(dn)` (prepend one RDN or a relative DN: `base.child(ldap::rdn{"uid=x"})`
-  is `uid=x,<base>`), `rdns()`, `to_string()`. `operator==` is syntactic
+  is `uid=x,<base>`; `child(rdn)` is a `result<dn>`, as an RDN built from
+  its AVAs can be invalid), `rdns()`, `to_string()`. `operator==` is syntactic
   and stays so: attribute types case-insensitive, values exact after
   unescaping, AVA order inside a multi-valued RDN not significant, so
   `cn=A` ≠ `cn=a` there; no hash yet. Server-like comparison is explicit,

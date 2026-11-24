@@ -788,8 +788,8 @@ TEST_CASE("integration: modify DN to another OU and back, then rename", "[integr
 	auto c = open_admin(ioc);
 	const std::string name = unique("mv");
 	const ldap::dn groups{ "ou=groups,dc=example,dc=org" };
-	const ldap::dn entry = people.child(*ldap::rdn::parse("uid=" + name));
-	const ldap::dn moved = groups.child(entry.rdns().front());
+	const ldap::dn entry = people.child(*ldap::rdn::parse("uid=" + name)).value();
+	const ldap::dn moved = groups.child(entry.rdns().front()).value();
 	REQUIRE(finish(ioc,
 	  c.add({ .entry = entry,
 		.attributes = { { "objectClass", { "inetOrgPerson" } },
@@ -812,7 +812,7 @@ TEST_CASE("integration: modify DN to another OU and back, then rename", "[integr
 
 	// Keep the old RDN value: the entry then has both uids.
 	const ldap::rdn new_rdn = *ldap::rdn::parse("uid=" + name + "-r");
-	const ldap::dn renamed = people.child(new_rdn);
+	const ldap::dn renamed = people.child(new_rdn).value();
 	REQUIRE(finish(ioc, c.modify_dn({ .entry = entry, .new_rdn = new_rdn, .delete_old_rdn = false })).has_value());
 	CHECK_FALSE(exists(entry));
 	CHECK(finish(ioc, c.compare({ .entry = renamed, .attribute = "uid", .value = name })).value().value == true);
@@ -1418,8 +1418,8 @@ TEST_CASE("integration: content synchronization (RFC 4533)", "[integration][cont
 	auto c = open_admin(ioc);
 	const std::string name = unique("sync");
 	const ldap::dn base = *ldap::dn::parse("ou=" + name + ",dc=example,dc=org");
-	const ldap::dn first = base.child(ldap::rdn{ "cn=first" });
-	const ldap::dn second = base.child(ldap::rdn{ "cn=second" });
+	const ldap::dn first = base.child(ldap::rdn{ "cn=first" }).value();
+	const ldap::dn second = base.child(ldap::rdn{ "cn=second" }).value();
 	REQUIRE(
 	  finish(ioc, c.add({ .entry = base, .attributes = { { "objectClass", { "organizationalUnit" } } } })).has_value());
 	for (const auto &e : { first, second }) {
@@ -1735,7 +1735,7 @@ TEST_CASE("integration: the sync connection", "[integration][sync]")
 		REQUIRE(
 		  c.modify_dn({ .entry = renamed, .new_rdn = renamed.rdns().front(), .new_superior = groups }).has_value());
 		REQUIRE(
-		  c.modify_dn({ .entry = groups.child(renamed.rdns().front()),
+		  c.modify_dn({ .entry = groups.child(renamed.rdns().front()).value(),
 						.new_rdn = renamed.rdns().front(),
 						.new_superior = renamed.parent() })
 			.has_value());
@@ -2081,7 +2081,7 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 	ldap::client pool(
 	  ioc, { .servers = { *server }, .connection = trusting(), .setup = ldap::simple_bind_setup(admin, "secret") });
 	const std::string name = unique("pool");
-	const ldap::dn entry = people.child(*ldap::rdn::parse("uid=" + name));
+	const ldap::dn entry = people.child(*ldap::rdn::parse("uid=" + name)).value();
 	const ldap::dn groups{ "ou=groups,dc=example,dc=org" };
 	const auto exists = [&](const ldap::dn &d) {
 		return finish(ioc, pool.search({ .base = d, .scope = ldap::search_scope::base_object })).has_value();
@@ -2095,7 +2095,7 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 	REQUIRE_FALSE(again.has_value());
 	CHECK(again.error().code == ldap::errc::entry_already_exists);
 	CHECK(std::string_view(again.error().context) == "add " + std::string(entry.to_string()));
-	const ldap::dn incomplete = people.child(*ldap::rdn::parse("uid=" + name + "-x"));
+	const ldap::dn incomplete = people.child(*ldap::rdn::parse("uid=" + name + "-x")).value();
 	auto refused = finish(ioc,
 	  pool.add(
 		{ .entry = incomplete, .attributes = { { "objectClass", { "inetOrgPerson" } }, { "cn", { "No Sn" } } } }));
@@ -2109,12 +2109,12 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 
 	REQUIRE(finish(ioc, pool.modify_dn({ .entry = entry, .new_rdn = entry.rdns().front(), .new_superior = groups }))
 		.has_value());
-	const ldap::dn moved = groups.child(entry.rdns().front());
+	const ldap::dn moved = groups.child(entry.rdns().front()).value();
 	CHECK(exists(moved));
-	const ldap::dn back = people.child(*ldap::rdn::parse("uid=" + name + "-b"));
+	const ldap::dn back = people.child(*ldap::rdn::parse("uid=" + name + "-b")).value();
 	REQUIRE(finish(ioc, pool.modify_dn({ .entry = moved, .new_rdn = back.rdns().front(), .new_superior = people }))
 		.has_value());
-	const ldap::dn renamed = people.child(*ldap::rdn::parse("uid=" + name + "-r"));
+	const ldap::dn renamed = people.child(*ldap::rdn::parse("uid=" + name + "-r")).value();
 	REQUIRE(finish(ioc, pool.modify_dn({ .entry = back, .new_rdn = renamed.rdns().front() })).has_value());
 	CHECK_FALSE(exists(back));
 	CHECK(exists(renamed));

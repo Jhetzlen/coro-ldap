@@ -305,9 +305,9 @@ class dn
 	[[nodiscard]] auto empty() const noexcept -> bool { return rdns_.empty(); }
 	// The parent of the empty DN is the empty DN.
 	[[nodiscard]] auto parent() const -> dn;
-	// `r` prepended; throws std::invalid_argument for an invalid RDN.
-	[[nodiscard]] auto child(const rdn &r) const -> dn;
-	[[nodiscard]] auto child(rdn &&r) const -> dn;
+	// `r` prepended; invalid_dn for an invalid RDN.
+	[[nodiscard]] auto child(const rdn &r) const -> result<dn>;
+	[[nodiscard]] auto child(rdn &&r) const -> result<dn>;
 	// `relative` prepended, its RDNs in order.
 	[[nodiscard]] auto child(const dn &relative) const -> dn;
 
