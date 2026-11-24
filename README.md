@@ -128,7 +128,7 @@ are CMake target names only: the C++ namespace is `jhetz::ldap` in every case
   "default-registry": { "kind": "git", "repository": "https://github.com/microsoft/vcpkg",
                         "baseline": "432d982fb917e1d9b032197b01572b83bcb02a75" },
   "registries": [ { "kind": "git", "repository": "https://github.com/Jhetzlen/coro-ldap",
-                    "baseline": "bab315ce7065e085b8253e5017ca6afe72f9dcd1",
+                    "baseline": "92e2966d9567ccb7ef69e4e414bff4f8b70cca4b",
                     "packages": [ "jhetz-ldap", "capy", "corosio" ] } ]
 }
 ```
