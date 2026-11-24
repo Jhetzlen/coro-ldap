@@ -1,0 +1,117 @@
+name: windows
+
+# Windows build and unit tests (MSVC, vcpkg's ICU and OpenSSL). Separate
+# from ci.yml, which holds the Linux jobs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "include/**"
+      - "src/**"
+      - "testing/**"
+      - "tests/**"
+      - "fuzz/**"
+      - "examples/**"
+      - "bench/**"
+      - ".github/workflows/windows.yml"
+  pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "include/**"
+      - "src/**"
+      - "testing/**"
+      - "tests/**"
+      - "fuzz/**"
+      - "examples/**"
+      - "bench/**"
+      - ".github/workflows/windows.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  VCPKG_TRIPLET: x64-windows
+  # vcpkg's binary cache (actions/cache below): ICU and OpenSSL are built
+  # once per vcpkg commit.
+  VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.vcpkg-cache,readwrite
+  # Capy, Corosio and Catch2 are fetched here, outside the build dir, so
+  # their sources can be cached.
+  FETCHCONTENT_BASE_DIR: ${{ github.workspace }}\.deps
+
+jobs:
+  msvc:
+    name: MSVC Debug
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      # The x64 developer environment (cl, link, ninja, the Windows SDK) for
+      # the steps below.
+      - name: MSVC environment
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $vars = cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && set"
+          foreach ($line in $vars) {
+            if ($line -match '^([^=]+)=(.*)$') { "$($Matches[1])=$($Matches[2])" >> $env:GITHUB_ENV }
+          }
+
+      - name: Toolchain versions
+        run: |
+          cl 2>&1 | Select-Object -First 1
+          cmake --version
+          ninja --version
+          git -C "$env:VCPKG_INSTALLATION_ROOT" rev-parse HEAD
+
+      - name: vcpkg commit
+        id: vcpkg
+        shell: pwsh
+        run: '"commit=$(git -C "$env:VCPKG_INSTALLATION_ROOT" rev-parse HEAD)" >> $env:GITHUB_OUTPUT'
+
+      - uses: actions/cache@v4
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-${{ env.VCPKG_TRIPLET }}-${{ steps.vcpkg.outputs.commit }}
+          restore-keys: vcpkg-${{ env.VCPKG_TRIPLET }}-
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .deps/*-src
+            .deps/*-subbuild
+          key: fetchcontent-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt') }}
+
+      - name: Install ICU and OpenSSL
+        run: |
+          New-Item -ItemType Directory -Force .vcpkg-cache | Out-Null
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install icu openssl --triplet $env:VCPKG_TRIPLET
+
+      - name: Configure
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TRIPLET"
+          -DVCPKG_MANIFEST_MODE=OFF
+          -DFETCHCONTENT_BASE_DIR="$env:FETCHCONTENT_BASE_DIR"
+          -DJHETZ_LDAP_BUILD_TESTS=ON
+          -DJHETZ_LDAP_BUILD_FUZZERS=OFF
+          -DJHETZ_LDAP_BUILD_BENCH=OFF
+          -DJHETZ_LDAP_WITH_GSSAPI=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      # No slapd, Samba or KDC on Windows: the integration tests are left out.
+      - name: Test
+        run: ctest --test-dir build --output-on-failure -j4 -LE integration
