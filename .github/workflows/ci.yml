@@ -14,7 +14,6 @@ on:
       - "tests/**"
       - "fuzz/**"
       - "examples/**"
-      - "bench/**"
       - ".github/workflows/ci.yml"
       - ".github/badges.py"
       - ".github/publish_badges.sh"
@@ -28,7 +27,6 @@ on:
       - "tests/**"
       - "fuzz/**"
       - "examples/**"
-      - "bench/**"
       - ".github/workflows/ci.yml"
       - ".github/badges.py"
       - ".github/publish_badges.sh"
@@ -77,7 +75,7 @@ jobs:
         run: apt-get update && apt-get install -y git ca-certificates clang-format-23
       - uses: actions/checkout@v5
       - name: Check formatting
-        run: find include src testing tests fuzz examples bench -name '*.cpp' -o -name '*.hpp' | xargs clang-format-23 --dry-run --Werror
+        run: find include src testing tests fuzz examples -name '*.cpp' -o -name '*.hpp' | xargs clang-format-23 --dry-run --Werror
 
   gcc-sanitize:
     name: GCC 16 Debug (ASan + UBSan)

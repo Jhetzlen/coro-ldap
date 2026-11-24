@@ -89,7 +89,7 @@ CheckOptions:
   bugprone-signed-bitwise.IgnorePositiveIntegerLiterals: true
   # 'if (ptr)' is the idiom for the C API handles and lookups returning pointers.
   readability-implicit-bool-conversion.AllowPointerConditions: true
-  # Magic numbers (tests, fuzz and bench turn the checks off): 0-4, the
+  # Magic numbers (tests and fuzz turn the checks off): 0-4, the
   # decimal radix, powers of two (bit masks, shift widths, 8 bits per octet,
   # buffer and arena sizes) and the 0xFF octet mask read as themselves;
   # anything else gets a named constant.

@@ -1343,12 +1343,10 @@ cookie is empty; `ldap::search_paged` returns
 rule: core types keep only the protocol operations): each page is a
 `connection::search_stream()` (the same task, run on the connection's
 shared state, so that the `paged_search`, like a stream, does not depend
-on the connection object staying where it is) with the paged control. Measured
-with bench/paged_bench.cpp against the internal search start it replaced
-(Release, one thread, in-process server; docs/DEVELOPMENT.md has the
-numbers): 1 to 3 µs more per page of 1 or 10 entries (a stream task and
-a copy of the search_params), +4 to 13% at one entry per page, +1 to 3%
-at 100, nothing against a network round trip. `search_paged_stream(client &, ...)` runs it on one shared lease, which
+on the connection object staying where it is) with the paged control. Against
+the internal search start it replaced, the stream task and the copy of the
+search_params cost a few µs per page, nothing against a network round
+trip. `search_paged_stream(client &, ...)` runs it on one shared lease, which
 the `paged_search` holds until destroyed (the cookies are bound to that
 connection), and requests the first page again on a new lease when it
 fails with `cond::connection_lost` or `cond::busy_or_unavailable` before
@@ -2821,8 +2819,7 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap`):
     connection and the client destroyed with operations of other threads
     outstanding), clean under TSan (Clang, `build/tsan`); the integration
     test `[threads]` runs a connection, a client, a repository and streams
-    against slapd the same way. `bench/connection_bench.cpp` measures the
-    strand's price on one thread (docs/DEVELOPMENT.md "Benchmark").
+    against slapd the same way.
   - An io_context destroyed before it runs a posted cleanup again drops
     it (the state is leaked): the tests' `draining_context` polls before
     it is destroyed.
@@ -2919,9 +2916,8 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap`):
   bulk-decoded, they are plain values with `std::pmr` members on the default
   resource. Their allocator-aware special members were about 300 lines of
   constructors and assignments the decode path never used; the connection
-  copies results off its arena anyway. Dropping them changed nothing in
-  `bench/decode_bench.cpp` (docs/DEVELOPMENT.md): the decoded types keep
-  their allocator awareness. `decode_options::memory` sets where decoding
+  copies results off its arena anyway. Dropping them did not affect
+  decoding: the decoded types keep their allocator awareness. `decode_options::memory` sets where decoding
   allocates (`read_options.decode.memory` for the network path);
   `encode(m, mr)` and `write_message(t, m, mr | ber::writer&)` let callers
   pool write buffers. `tls_options` stays a plain aggregate with
@@ -2948,13 +2944,11 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap`):
   lifetimes.
 - Coroutine frames already accept a memory resource via Capy's
   `run_async(ex, mr)`.
-- Benchmark (`bench`, GCC 16 Release; 1,000 SearchResultEntry PDUs of
-  30 attributes x 3 values, every 20th with 68 KiB of binaries, 7.1 MiB):
-  default heap 10.0 ms and 111.7 allocations per entry; per-message
-  monotonic arena with a 256 KiB buffer 7.6 ms and 0 heap allocations.
-  Decoding counts list elements first to reserve vectors exactly (a third
-  fewer heap allocations); with the BER header fast path (#19) that costs
-  nothing measurable, so it is unconditional.
+- A per-message monotonic arena with a buffer that holds a typical
+  response decodes with no heap allocations, and faster than the default
+  heap resource. Decoding counts list elements first to reserve vectors
+  exactly (a third fewer heap allocations); with the BER header fast path
+  (#19) that costs nothing measurable, so it is unconditional.
 - Decoded memory is bounded by `decode_options::max_elements` (decoded
   strings per message, 1,000,000 by default; `connection_options::
   max_elements`), not only by the PDU size: a 16 MiB PDU of empty values
@@ -3035,7 +3029,7 @@ client and the mock servers.
 - The server side of the codec is a separate, never installed library:
   `testing/` builds `jhetz::ldap_testing` (over `jhetz::ldap_core`) and
   `jhetz::ldap_testing_net` (adds `testing::read_message`, over
-  `jhetz::ldap`), only with the tests, fuzzers or benchmarks, which
+  `jhetz::ldap`), only with the tests or fuzzers, which
   link them, as do the mock servers. Namespace `ldap::testing`, headers in
   `testing/include/jhetz/ldap/testing/`: `testing::decode(bytes,
   testing::decode_options)` with `from = origin::any / server / client`

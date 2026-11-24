@@ -72,14 +72,13 @@ ctest --test-dir build/main -j12        # serial ctest is ~4x slower (fuzz repla
 tests/integration/run_openldap.sh ctest --test-dir build/main -L integration --output-on-failure
 
 # clang-tidy 23 (.clang-tidy; build/tidy is a Clang build dir, see docs/DEVELOPMENT.md "clang-tidy"):
-run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|testing|tests|examples|fuzz|bench)/.*'
+run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|testing|tests|examples|fuzz)/.*'
 
 # Formatting: clang-format 23, same as CI
 /usr/bin/clang-format -i <files>
 ```
 
-Fuzzers (`build/fuzz`, Clang, `-DJHETZ_LDAP_BUILD_FUZZERS=ON`), the bench
-(`build/bench`, `-DJHETZ_LDAP_BUILD_BENCH=ON`) and coverage are described in docs/DEVELOPMENT.md.
+Fuzzers (`build/fuzz`, Clang, `-DJHETZ_LDAP_BUILD_FUZZERS=ON`) and coverage are described in docs/DEVELOPMENT.md.
 
 ## Architecture Overview
 
@@ -89,7 +88,7 @@ coro-ldap is a C++23 LDAP client library with two CMake targets:
 - **`jhetz::ldap`**: the async `ldap::connection` on Corosio/Capy coroutines, with multiplexed operations, OpenSSL TLS (ldaps://, StartTLS), ldapi://, and SASL (EXTERNAL, SCRAM-SHA-256), using ICU for SASLprep.
 - **`ldap::sync::connection`** (`sync.hpp`): a blocking facade over the async connection.
 
-Layout: `include/jhetz/ldap/` for the public headers (`net/` for the transport), `src/` for the implementation (`src/connection/` for the connection modules, `src/net/` for transport and TLS), `tests/` for the Catch2 unit tests (`tests/net/` for in-process network tests, `tests/integration/` for slapd), and `fuzz/`, `examples/` and `bench/`. The design notes are in `docs/DESIGN.md`.
+Layout: `include/jhetz/ldap/` for the public headers (`net/` for the transport), `src/` for the implementation (`src/connection/` for the connection modules, `src/net/` for transport and TLS), `tests/` for the Catch2 unit tests (`tests/net/` for in-process network tests, `tests/integration/` for slapd), and `fuzz/` and `examples/`. The design notes are in `docs/DESIGN.md`.
 
 ## Conventions & Patterns
 

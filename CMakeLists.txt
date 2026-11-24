@@ -24,7 +24,6 @@ else()
 endif()
 option(JHETZ_LDAP_WERROR "Treat warnings in jhetz::ldap code as errors" ${jhetz_ldap_werror_default})
 option(JHETZ_LDAP_COVERAGE "Instrument our own targets for Clang source-based coverage (llvm-cov)" OFF)
-option(JHETZ_LDAP_BUILD_BENCH "Build the benchmarks (bench/, not run by ctest)" OFF)
 option(JHETZ_LDAP_WITH_GSSAPI "Add SASL GSSAPI (Kerberos) to jhetz::ldap (needs the GSS-API library, MIT krb5's libgssapi_krb5, found with pkg-config)" OFF)
 option(JHETZ_LDAP_BUILD_EXAMPLES "Build the examples (examples/; need JHETZ_LDAP_BUILD_NET)" ON)
 option(JHETZ_LDAP_INSTALL "Generate install rules and the jhetz_ldap CMake package" ${PROJECT_IS_TOP_LEVEL})
@@ -209,7 +208,7 @@ if(JHETZ_LDAP_BUILD_NET)
         SYSTEM
         FIND_PACKAGE_ARGS NAMES boost_corosio CONFIG
     )
-    # Not their tests, examples or benchmarks (normal variables: both
+    # Only their libraries (normal variables: both
     # projects' option() calls honour them, policy CMP0077).
     foreach(var BOOST_CAPY_BUILD_TESTS BOOST_CAPY_BUILD_EXAMPLES BOOST_CAPY_BUILD_BENCH
             BOOST_COROSIO_BUILD_TESTS BOOST_COROSIO_BUILD_EXAMPLES BOOST_COROSIO_BUILD_BENCH)
@@ -404,7 +403,7 @@ if(JHETZ_LDAP_INSTALL)
 endif()
 
 # The server-side codec (testing/), not installed.
-if(JHETZ_LDAP_BUILD_TESTS OR JHETZ_LDAP_BUILD_FUZZERS OR JHETZ_LDAP_BUILD_BENCH)
+if(JHETZ_LDAP_BUILD_TESTS OR JHETZ_LDAP_BUILD_FUZZERS)
     add_subdirectory(testing)
 endif()
 
@@ -415,20 +414,4 @@ endif()
 
 if(JHETZ_LDAP_BUILD_FUZZERS)
     add_subdirectory(fuzz)
-endif()
-
-# Decode benchmark: default resource vs per-message arena (docs/DEVELOPMENT.md has
-# numbers). Build it optimized and without sanitizers.
-if(JHETZ_LDAP_BUILD_BENCH)
-    add_executable(jhetz_ldap_decode_bench bench/decode_bench.cpp)
-    target_link_libraries(jhetz_ldap_decode_bench PRIVATE jhetz::ldap_core)
-    jhetz_ldap_warnings(jhetz_ldap_decode_bench)
-    if(JHETZ_LDAP_BUILD_NET)
-        add_executable(jhetz_ldap_connection_bench bench/connection_bench.cpp)
-        target_link_libraries(jhetz_ldap_connection_bench PRIVATE jhetz::ldap_testing_net)
-        jhetz_ldap_warnings(jhetz_ldap_connection_bench)
-        add_executable(jhetz_ldap_paged_bench bench/paged_bench.cpp)
-        target_link_libraries(jhetz_ldap_paged_bench PRIVATE jhetz::ldap_testing_net)
-        jhetz_ldap_warnings(jhetz_ldap_paged_bench)
-    endif()
 endif()

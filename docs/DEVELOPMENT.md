@@ -1,6 +1,6 @@
 # Development
 
-Building, testing, fuzzing and benchmarking jhetz::ldap. The basics are in the
+Building, testing and fuzzing jhetz::ldap. The basics are in the
 [README](../README.md).
 
 ## Build and test
@@ -48,9 +48,9 @@ builds `jhetz::ldap_testing` (request decoding with `testing::decode` and
 controls it writes, NTLM's CHALLENGE_MESSAGE encoder and
 AUTHENTICATE_MESSAGE parser; over `jhetz::ldap_core`) and, with
 `JHETZ_LDAP_BUILD_NET`, `jhetz::ldap_testing_net` (`testing::read_message`,
-over `jhetz::ldap`), only when the tests, fuzzers or benchmarks are
+over `jhetz::ldap`), only when the tests or fuzzers are
 built, and never installs them (DESIGN.md section 10). The tests, the
-fuzz targets, the benchmarks and the mock servers (`tests/net/mock_ldap.hpp`)
+fuzz targets and the mock servers (`tests/net/mock_ldap.hpp`)
 link them; their headers are under `testing/include/jhetz/ldap/testing/`,
 and they include the shared internal headers of `src/`.
 
@@ -62,7 +62,6 @@ and they include the shared internal headers of `src/`.
 | `JHETZ_LDAP_BUILD_FUZZERS` | `OFF` | libFuzzer targets (Clang only) |
 | `JHETZ_LDAP_SANITIZE` | `OFF` | ASan + UBSan on every target |
 | `JHETZ_LDAP_WERROR` | `ON` (`OFF` as a subproject, and on clang-cl) | warnings are errors in our own targets (never in Corosio, Capy or Catch2); off when added with `add_subdirectory` or FetchContent, so a newer compiler's new warnings do not break consumers. `/WX` on MSVC; off on clang-cl, not built yet (`/W4` still shows the warnings; `-DJHETZ_LDAP_WERROR=ON` adds `/WX`) |
-| `JHETZ_LDAP_BUILD_BENCH` | `OFF` | `jhetz_ldap_decode_bench`, and with `JHETZ_LDAP_BUILD_NET` `jhetz_ldap_connection_bench` and `jhetz_ldap_paged_bench` (see below; not run by ctest or CI) |
 | `JHETZ_LDAP_COVERAGE` | `OFF` | Clang source-based coverage on our own targets (see [Coverage](#coverage)) |
 | `JHETZ_LDAP_CLANG_TIDY` | `OFF` | run clang-tidy (`.clang-tidy`) on our own targets while building them (see [clang-tidy](#clang-tidy)) |
 
@@ -115,7 +114,7 @@ for p in extra/any/mingw-w64-headers extra/any/mingw-w64-winpthreads extra/x86_6
 done
 ln -sfn /usr/include/openssl $M/deps/openssl; ln -sfn /usr/include/unicode $M/deps/unicode
 I=$M/root/usr/x86_64-w64-mingw32/include; C=$I/c++/$(ls $I/c++ | tail -1); D=$PWD/build/main/_deps
-for f in $(ls src/*.cpp src/*/*.cpp testing/src/*.cpp tests/*.cpp tests/net/*.cpp examples/*.cpp fuzz/*_replay.cpp bench/*.cpp \
+for f in $(ls src/*.cpp src/*/*.cpp testing/src/*.cpp tests/*.cpp tests/net/*.cpp examples/*.cpp fuzz/*_replay.cpp \
            | grep -v -e trust_store_default -e sasl_gssapi); do
   clang++ --target=x86_64-w64-mingw32 -std=c++23 -fsyntax-only -nostdinc++ -nostdlibinc \
     -isystem $C -isystem $C/x86_64-w64-mingw32 -isystem $C/backward -isystem $I -isystem $M/deps \
@@ -865,9 +864,9 @@ site, where a NOLINT can silence it. Use Clang for the build directory, with GSS
 
 ```sh
 cmake -B build/tidy -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Debug \
-  -DJHETZ_LDAP_WITH_GSSAPI=ON -DJHETZ_LDAP_BUILD_BENCH=ON
+  -DJHETZ_LDAP_WITH_GSSAPI=ON
 cmake --build build/tidy -j8      # once, for the generated files and the dependencies
-run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|testing|tests|examples|fuzz|bench)/.*'
+run-clang-tidy -p build/tidy -j6 -quiet -source-filter '.*/coro-ldap/(src|testing|tests|examples|fuzz)/.*'
 ```
 
 The fuzz targets are checked through their `*_fuzz_replay` builds. A full
@@ -882,7 +881,7 @@ cmake --build build/tidy-werror -j6
 ```
 
 The tree is clean: `.clang-tidy` sets `WarningsAsErrors: '*'` (inherited by
-`tests/.clang-tidy`, `fuzz/.clang-tidy` and `bench/.clang-tidy`), so every
+`tests/.clang-tidy` and `fuzz/.clang-tidy`), so every
 finding is an error,
 run-clang-tidy exits non-zero on one and a `-DJHETZ_LDAP_CLANG_TIDY=ON`
 build fails on it. The default build (option `OFF`) does not run
@@ -930,97 +929,6 @@ entry points on deterministic generated and mutated inputs (about 300,000 for
 `ber_fuzz`, 200,000 for `message_fuzz` and `url_fuzz`, 150,000 for `dn_fuzz`,
 45,000 for the slower `filter_fuzz`, and 12,000 for `ntlm_layer_fuzz`, whose
 inputs each take about twenty HMAC-MD5s and RC4 key schedules).
-
-## Benchmark
-
-`bench/decode_bench.cpp` (option `JHETZ_LDAP_BUILD_BENCH`) decodes a stream
-of 1,000 SearchResultEntry PDUs, 30 attributes x 3 values (10-60 bytes) each,
-plus a 64 KiB `jpegPhoto` and a 4 KiB `userCertificate` in every 20th entry
-(7.1 MiB, 90,100 values), with the default resource and with one
-`monotonic_buffer_resource` `release()`d after each message, with and
-without a 256 KiB initial buffer. Heap allocations are counted with a
-counting default resource in a separate pass.
-
-```sh
-cmake -B build/bench -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DJHETZ_LDAP_BUILD_BENCH=ON -DJHETZ_LDAP_BUILD_TESTS=OFF -DJHETZ_LDAP_BUILD_NET=OFF
-cmake --build build/bench && build/bench/jhetz_ldap_decode_bench
-```
-
-GCC 16.2, Release (`-O3`), a 12-thread desktop, best / median of 15 runs
-(three invocations; the heap row varies by about 10% between them, the
-arena rows by under 1%):
-
-| Mode | Best | Median | Heap allocations | per entry | Heap MiB |
-|---|---:|---:|---:|---:|---:|
-| default resource (heap) | 10.0 ms | 10.0 ms | 111,662 | 111.7 | 11.8 |
-| monotonic arena, 256 KiB buffer, `release()` | 7.6 ms | 7.6 ms | 0 | 0 | 0 |
-| monotonic arena, no buffer, `release()` | 8.0 ms | 8.0 ms | 5,100 | 5.1 | 17.4 |
-
-A reused arena with a buffer that holds a typical response removes every
-heap allocation and saves about 24% of the decode time here; without a
-buffer, `release()` hands the chunks back and each message fetches them
-again (about 5 per entry, larger ones for the photos). Decoding reserves the
-attribute and value vectors exactly (counting the elements first), which
-took the heap mode from 177 to 112 allocations per entry and the arena
-without buffer from 24.6 to 17.4 MiB, at the price of reading the element
-headers twice. Since BER headers are parsed without building a `result` in
-the common case (#19), that second read costs nothing measurable, and
-decoding got faster in every mode: on the same machine and in the same
-session, before and after that change, heap 11.5 to 10.0 ms (-13%), arena
-with buffer 9.3 to 7.6 ms (-18%), arena without buffer 9.6 to 8.0 ms
-(-17%). Counting decoded strings against `decode_options::max_elements`
-costs about 0.3 ms of that.
-
-`bench/connection_bench.cpp` (built when `JHETZ_LDAP_BUILD_NET` is on too)
-sends CompareRequests over a Unix socket pair to an in-process server that
-answers each at once, on an io_context run by one thread: one after
-another from a task of the io_context's executor, the same from a task of
-`connection::executor()`, and from 64 tasks at once. It prints the time
-per operation (best and median of 9 runs of 20,000).
-
-```sh
-cmake -B build/bench -G Ninja -DCMAKE_BUILD_TYPE=Release \
-      -DJHETZ_LDAP_BUILD_BENCH=ON -DJHETZ_LDAP_BUILD_TESTS=OFF
-cmake --build build/bench && build/bench/jhetz_ldap_connection_bench
-```
-
-The connection's strand (DESIGN.md section 7, "Threading"), measured
-against a worktree of main built the same way (GCC 16.2, Release, same
-session, two alternating invocations each, medians):
-
-| Mode | before the strand | on the strand | |
-|---|---:|---:|---:|
-| sequential, from the io_context's executor | 11.2-11.4 us | 13.4-13.9 us | +19-22% |
-| sequential, from `connection::executor()` | 11.2-11.3 us | 12.1-12.7 us | +8-13% |
-| 64 tasks at once | 6.1 us | 7.6 us | +24-25% |
-
-A caller off the strand pays for the two posts (onto the strand and back),
-a caller on it for the strand's locking of the writer's and reader's
-wake-ups only.
-
-`bench/paged_bench.cpp` drains `ldap::search_paged_stream` over a Unix socket
-pair from an in-process server that answers each page at once (20,000
-entries, pages of 1, 10 and 100), and prints the time per page and per
-entry (best and median of 9 runs):
-
-```sh
-cmake --build build/bench && build/bench/jhetz_ldap_paged_bench
-```
-
-`ldap::search_paged` as a free function, which requests each page through
-the same task as `connection::search_stream()` (`detail::search_stream_of`
-on the connection's shared state), measured against the member it replaced
-(the internal search start, no stream task, no copy of the search_params)
-in a worktree of 358238e built the same way (GCC, Release, same session,
-five alternating invocations each, medians; the difference is that of each
-pair of invocations):
-
-| Page size | member | free function | |
-|---:|---:|---:|---:|
-| 1 | 21.1-22.9 us/page | 22.4-25.4 us/page | +0.9-2.9 us (+4-13%) |
-| 10 | 43.3-45.0 us/page | 45.7-48.0 us/page | +1.2-2.9 us (+3-7%) |
-| 100 | 265-270 us/page | 272-274 us/page | +2.6-9.0 us (+1-3%) |
 
 ## ThreadSanitizer
 

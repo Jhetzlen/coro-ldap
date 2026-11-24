@@ -1,5 +1,5 @@
-// The server side of the codec, for the mock servers, tests, fuzzers and
-// benchmarks: request decoding and the response controls a server writes.
+// The server side of the codec, for the mock servers, tests and fuzzers:
+// request decoding and the response controls a server writes.
 // Not part of the installed library.
 #pragma once
 
