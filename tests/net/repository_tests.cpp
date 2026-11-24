@@ -283,6 +283,30 @@ TEST_CASE("repository: get reads one entry with a base-object search", "[net][re
 	CHECK(std::get<ldap::search_request>(m.log.received[2].op).base_object == "cn=config");
 }
 
+TEST_CASE("repository: require fails with no_such_object when get finds nothing", "[net][repository]")
+{
+	mock_ldap m;
+	m.serve({ answer({ person_entry(1, "jdoe", "1000"), done_msg(1) }),
+	  answer({ done_msg(2, 32, "ou=people,dc=example,dc=org", "no such entry") }),
+	  answer({ done_msg(3, 50, "", "no access") }) });
+	ldap::repository s(m.conn, people_base, ldap::named_by<&person::uid>);
+
+	auto found = m.run(s.require("jdoe"));
+	REQUIRE(found.has_value());
+	CHECK(found->uid == "jdoe");
+	auto missing = m.run(s.require_at(ldap::dn{ "uid=nobody,ou=people,dc=example,dc=org" }));
+	REQUIRE_FALSE(missing.has_value());
+	CHECK(missing.error().code == ldap::errc::no_such_object);
+	CHECK(std::string(missing.error().context) == "search uid=nobody,ou=people,dc=example,dc=org: no entry");
+	auto denied = m.run(s.require("jdoe"));
+	REQUIRE_FALSE(denied.has_value());
+	CHECK(denied.error().code == ldap::errc::insufficient_access_rights);
+	auto bad_key = m.run(s.require("j\xC3"));
+	REQUIRE_FALSE(bad_key.has_value());
+	CHECK(bad_key.error().code == ldap::client_errc::encode_error);
+	m.check_server();
+}
+
 TEST_CASE("repository: get returns the other errors and decode failures", "[net][repository]")
 {
 	mock_ldap m;

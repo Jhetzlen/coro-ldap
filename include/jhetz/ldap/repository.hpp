@@ -535,6 +535,15 @@ template<auto Naming, repository_source D> class repository
 	{
 		return call([&](auto &s) { return get_on(s, std::move(entry)); });
 	}
+	// get(), failing with errc::no_such_object when there is no entry.
+	[[nodiscard]] auto require(key_type key) -> returns<value_type>
+	{
+		return call([&](auto &s) { return require_on(s, dn_of(key)); });
+	}
+	[[nodiscard]] auto require_at(dn entry) -> returns<value_type>
+	{
+		return call([&](auto &s) { return require_on(s, std::move(entry)); });
+	}
 
 	// Adds `value` at dn_of(its naming member).
 	[[nodiscard]] auto add(value_type value, add_controls controls = {}) -> returns<response>
@@ -703,6 +712,21 @@ template<auto Naming, repository_source D> class repository
 		}
 		auto found = co_await s.search(codec::get_request(*entry));
 		co_return codec::get_result(std::move(found), *entry);
+	}
+
+	template<directory S> auto require_on(S &s, result<dn> entry) -> boost::capy::task<result<value_type>>
+	{
+		if (!entry) {
+			co_return std::unexpected(detail::with_context(std::move(entry.error()), "search"));
+		}
+		auto found = co_await get_on(s, *entry);
+		if (!found) {
+			co_return std::unexpected(std::move(found.error()));
+		}
+		if (!*found) {
+			co_return fail(errc::no_such_object, detail::op_context("search", *entry) + ": no entry");
+		}
+		co_return std::move(**found);
 	}
 
 	template<directory S>

@@ -1326,7 +1326,9 @@ itself needs only ICU.
   (`uid=<escaped key>,<base>`); `get(key)` / `get_at(dn)` -> `task<result<
   std::optional<T>>>` (a base-object search for T's attributes and object
   classes; noSuchObject or no entry of T's classes is nullopt, a limit
-  code with no entry is an error; a read, `get` or `search`, fails with
+  code with no entry is an error; `require(key)` / `require_at(dn)` ->
+  `task<result<T>>` are the same search with no entry an
+  `errc::no_such_object` error, "search <dn>: no entry"; a read, `get` or `search`, fails with
   `client_errc::schema_mismatch` when the answer holds an attribute whose
   description is none of the names T maps (RFC 4512 2.5: the same type
   and option set, options in any order) nor a subtype of a name without

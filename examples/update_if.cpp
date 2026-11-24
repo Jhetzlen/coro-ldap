@@ -37,14 +37,14 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 		co_return 1;
 	}
 	ldap::repository people(*c, ldap::dn{ "ou=people,dc=example,dc=org" }, ldap::named_by<&person::uid>);
-	auto found = co_await people.get("user001");
-	if (!found || !*found) {
-		std::cerr << "uid=user001 not found\n";
+	auto found = co_await people.require("user001");
+	if (!found) {
+		std::cerr << found.error().message() << '\n';
 		co_return 1;
 	}
-	person changed = **found;
+	person changed = *found;
 	changed.mail = "first.user@example.org";
-	auto updated = co_await people.update_if(**found, changed);
+	auto updated = co_await people.update_if(*found, changed);
 	if (!updated && updated.error().code == ldap::errc::assertion_failed) {
 		std::cerr << "uid=user001 changed since it was read: read it again and retry\n";
 		co_return 1;

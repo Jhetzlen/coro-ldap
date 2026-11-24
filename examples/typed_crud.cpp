@@ -52,12 +52,12 @@ auto example(boost::corosio::io_context &ioc, std::string text) -> boost::capy::
 		std::cerr << modified.error().message() << '\n';
 		co_return 1;
 	}
-	auto found = co_await people.get("jdoe");
-	if (!found || !*found) {
-		std::cerr << "uid=jdoe not found\n";
+	auto found = co_await people.require("jdoe");
+	if (!found) {
+		std::cerr << found.error().message() << '\n';
 		co_return 1;
 	}
-	std::cout << "uid=jdoe's mail is " << (*found)->mail.value_or("") << '\n';
+	std::cout << "uid=jdoe's mail is " << found->mail.value_or("") << '\n';
 	auto removed = co_await people.remove("jdoe");
 	if (!removed) {
 		std::cerr << removed.error().message() << '\n';

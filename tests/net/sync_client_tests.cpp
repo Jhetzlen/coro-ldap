@@ -1078,12 +1078,13 @@ TEST_CASE("sync repository: schema_check::on_first_use", "[net][sync][repository
 			ldap::sync::client pool(options_for(srv.url()));
 			ldap::repository cards(
 			  pool, cards_base, ldap::named_by<&card::cn>, { .schema_check = ldap::schema_check::on_first_use });
-			for (int i = 0; i < 2; ++i) {
-				auto r = cards.get("a");
-				REQUIRE(r.has_value());
-				REQUIRE(r->has_value());
-				CHECK((*r)->cn == "a");
-			}
+			auto r = cards.get("a");
+			REQUIRE(r.has_value());
+			REQUIRE(r->has_value());
+			CHECK((*r)->cn == "a");
+			auto required = cards.require("a");
+			REQUIRE(required.has_value());
+			CHECK(required->cn == "a");
 		}
 		srv.stop();
 		CHECK_THAT(srv.log(0).error, IsEmpty());
