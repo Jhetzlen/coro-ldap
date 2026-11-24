@@ -88,7 +88,14 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   `decode()` reads what a server sends: a request operation fails with
   `unsupported_operation` before anything of it is decoded (the request
   decoder is the testing target's, not installed: DESIGN.md section 10).
-  `decode(encode(m)) == m` exactly, and re-encoding is byte-identical.
+  `decode(encode(m)) == m` exactly for a response (for any operation with
+  the testing target's `testing::decode`), and re-encoding is
+  byte-identical. Breaking (coro-ldap-3jj.1): `decode_options::from` and
+  `::filter`, `ldap::origin`, `decode_filter` and the server-side control
+  and value codecs (`encode_sort_result`, `encode_vlv_response`,
+  `encode_read_entry`, `decode_sync_request`, `encode_sync_*`,
+  `ad::decode_dirsync_request`, ...) left the public headers for
+  `ldap::testing` (testing/include/, not installed).
   `decode_options` limits the reader depth and the decoded strings;
   `memory` is the resource everything decoded is allocated from. The
   types have constructors taking the fields in order

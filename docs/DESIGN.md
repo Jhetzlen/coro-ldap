@@ -2960,9 +2960,10 @@ client and the mock servers.
   format cannot carry: negative ids or limits, out-of-range enums, an add
   with no values, a request with message id 0, which RFC 4511 section 4.1.1
   reserves for unsolicited notifications), and all checks run before any
-  byte is written. The decoder rejects the same empty adds and id-0
-  requests, so both sides accept the same messages.
-  `decode(encode(m)) == m` exactly (filters are trees), and
+  byte is written. The testing target's `testing::decode` rejects the
+  same empty adds and id-0 requests, so it and `encode` accept the same
+  messages. `testing::decode(encode(m)) == m` exactly (filters are trees),
+  `decode(encode(m)) == m` for a response, and
   `encode(decode(encode(m)))` is byte-identical to `encode(m)`.
 - `decode(bytes, decode_options)` takes exactly one framed message from a
   server. It rejects request operations before decoding them, so a hostile

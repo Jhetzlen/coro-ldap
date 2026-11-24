@@ -784,7 +784,7 @@ struct message
 // ---------------------------------------------------------------- codec
 
 // Encodes one LDAPMessage into a vector on `mr`, or appends it to `w`.
-// decode(encode(m)) == m, and re-encoding is byte-identical.
+// decode(encode(m)) == m for a response, and re-encoding is byte-identical.
 [[nodiscard]] auto encode(const message &m, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
   -> result<std::pmr::vector<std::byte>>;
 [[nodiscard]] auto encode(ber::writer &w, const message &m) -> result<void>;
