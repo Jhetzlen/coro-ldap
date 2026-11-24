@@ -1857,7 +1857,9 @@ co_await people.remove("jdoe");
   Over a client that is one check for the whole pool (section 6).
 - `detail::repository_core<Naming>` holds the base, the options, the
   schema-check outcome and every operation, over a source passed to each
-  call; the requests and results without the I/O are
+  call. Each operation on one entry takes a `result<dn>`: the key forms
+  pass `dn_of(key)`, whose error the core gives the operation's context.
+  The requests and results without the I/O are
   `detail::repository_codec<Naming>`. `ldap::repository` runs the core on its
   source; `sync::repository` (sync_repository.hpp) runs it on its facade's
   `ldap::connection` or `ldap::client` with `sync::run` (section 7), one

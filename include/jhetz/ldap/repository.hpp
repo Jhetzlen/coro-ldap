@@ -506,21 +506,17 @@ namespace detail {
 		[[nodiscard]] auto base() const noexcept -> const dn & { return base_; }
 		[[nodiscard]] auto dn_of(const key_type &key) const -> result<dn> { return codec::dn_of(base_, key); }
 
-		template<directory S> auto get(S &s, key_type key) -> boost::capy::task<result<std::optional<value_type>>>
+		// `entry` is dn_of(key) for the key forms; its error gets the operation's context.
+		template<directory S> auto get(S &s, result<dn> entry) -> boost::capy::task<result<std::optional<value_type>>>
 		{
-			auto entry = dn_of(key);
 			if (!entry) {
 				co_return std::unexpected(with_context(std::move(entry.error()), "search"));
 			}
-			co_return co_await get_at(s, std::move(*entry));
-		}
-		template<directory S> auto get_at(S &s, dn entry) -> boost::capy::task<result<std::optional<value_type>>>
-		{
 			if (auto c = co_await check_schema(s); !c) {
 				co_return std::unexpected(std::move(c.error()));
 			}
-			auto found = co_await s.search(codec::get_request(entry));
-			co_return codec::get_result(std::move(found), entry);
+			auto found = co_await s.search(codec::get_request(*entry));
+			co_return codec::get_result(std::move(found), *entry);
 		}
 
 		template<directory S>
@@ -531,78 +527,52 @@ namespace detail {
 		}
 
 		template<directory S>
-		auto modify(S &s, key_type key, std::vector<change<value_type>> changes, modify_controls controls)
+		auto modify(S &s, result<dn> entry, std::vector<change<value_type>> changes, modify_controls controls)
 		  -> boost::capy::task<result<response>>
 		{
-			auto entry = dn_of(key);
 			if (!entry) {
 				co_return std::unexpected(with_context(std::move(entry.error()), "modify"));
 			}
-			co_return co_await modify_at(s, std::move(*entry), std::move(changes), std::move(controls));
-		}
-		template<directory S>
-		auto modify_at(S &s, dn entry, std::vector<change<value_type>> changes, modify_controls controls)
-		  -> boost::capy::task<result<response>>
-		{
 			co_return co_await send_checked(s,
-			  codec::modify_request(std::move(entry), std::move(changes), std::move(controls)),
+			  codec::modify_request(std::move(*entry), std::move(changes), std::move(controls)),
 			  [](S &d, modify_params p) { return d.modify(std::move(p)); });
 		}
 
 		template<directory S>
-		auto update(S &s, value_type original, value_type changed, modify_controls controls)
+		auto update(S &s, result<dn> entry, value_type original, value_type changed, modify_controls controls)
 		  -> boost::capy::task<result<std::optional<response>>>
 		{
-			auto entry = dn_of(original.*Naming);
 			if (!entry) {
 				co_return std::unexpected(with_context(std::move(entry.error()), "modify"));
 			}
-			co_return co_await update_at(
-			  s, std::move(*entry), std::move(original), std::move(changed), std::move(controls));
-		}
-		template<directory S>
-		auto update_at(S &s, dn entry, value_type original, value_type changed, modify_controls controls)
-		  -> boost::capy::task<result<std::optional<response>>>
-		{
 			co_return co_await send_update(
-			  s, codec::update_request(std::move(entry), original, changed, std::move(controls)));
+			  s, codec::update_request(std::move(*entry), original, changed, std::move(controls)));
 		}
 
 		template<directory S, class Guard>
-		auto update_if(S &s, value_type original, value_type changed, Guard guard, modify_controls controls)
-		  -> boost::capy::task<result<std::optional<response>>>
+		auto update_if(S &s,
+		  result<dn> entry,
+		  value_type original,
+		  value_type changed,
+		  Guard guard,
+		  modify_controls controls) -> boost::capy::task<result<std::optional<response>>>
 		{
-			auto entry = dn_of(original.*Naming);
 			if (!entry) {
 				co_return std::unexpected(with_context(std::move(entry.error()), "modify"));
 			}
-			co_return co_await update_if_at(
-			  s, std::move(*entry), std::move(original), std::move(changed), guard, std::move(controls));
-		}
-		template<directory S, class Guard>
-		auto
-		  update_if_at(S &s, dn entry, value_type original, value_type changed, Guard guard, modify_controls controls)
-			-> boost::capy::task<result<std::optional<response>>>
-		{
 			co_return co_await send_update(s,
-			  codec::update_if_request(std::move(entry), original, changed, guard, std::move(controls)),
+			  codec::update_if_request(std::move(*entry), original, changed, guard, std::move(controls)),
 			  std::same_as<Guard, every_mapped_value>);
 		}
 
 		template<directory S>
-		auto remove(S &s, key_type key, del_controls controls) -> boost::capy::task<result<response>>
+		auto remove(S &s, result<dn> entry, del_controls controls) -> boost::capy::task<result<response>>
 		{
-			auto entry = dn_of(key);
 			if (!entry) {
 				co_return std::unexpected(with_context(std::move(entry.error()), "delete"));
 			}
-			co_return co_await remove_at(s, std::move(*entry), std::move(controls));
-		}
-		template<directory S>
-		auto remove_at(S &s, dn entry, del_controls controls) -> boost::capy::task<result<response>>
-		{
 			co_return co_await send_checked(s,
-			  result<del_params>(del_params{ .entry = std::move(entry), .controls = std::move(controls) }),
+			  result<del_params>(del_params{ .entry = std::move(*entry), .controls = std::move(controls) }),
 			  [](S &d, del_params p) { return d.del(std::move(p)); });
 		}
 
@@ -770,11 +740,11 @@ template<auto Naming, directory D> class repository
 	// nullopt when there is no entry (or none of T's object classes).
 	auto get(key_type key) -> boost::capy::task<result<std::optional<value_type>>>
 	{
-		return core_.get(*source_, std::move(key));
+		return core_.get(*source_, core_.dn_of(key));
 	}
 	auto get_at(dn entry) -> boost::capy::task<result<std::optional<value_type>>>
 	{
-		return core_.get_at(*source_, std::move(entry));
+		return core_.get(*source_, std::move(entry));
 	}
 
 	// Adds `value` at dn_of(its naming member).
@@ -786,12 +756,12 @@ template<auto Naming, directory D> class repository
 	auto modify(key_type key, std::vector<change<value_type>> changes, modify_controls controls = {})
 	  -> boost::capy::task<result<response>>
 	{
-		return core_.modify(*source_, std::move(key), std::move(changes), std::move(controls));
+		return core_.modify(*source_, core_.dn_of(key), std::move(changes), std::move(controls));
 	}
 	auto modify_at(dn entry, std::vector<change<value_type>> changes, modify_controls controls = {})
 	  -> boost::capy::task<result<response>>
 	{
-		return core_.modify_at(*source_, std::move(entry), std::move(changes), std::move(controls));
+		return core_.modify(*source_, std::move(entry), std::move(changes), std::move(controls));
 	}
 
 	// One modify turning `original` into `changed`; nullopt, nothing sent,
@@ -799,12 +769,12 @@ template<auto Naming, directory D> class repository
 	auto update(const record<value_type> &original, value_type changed, modify_controls controls = {})
 	  -> boost::capy::task<result<std::optional<response>>>
 	{
-		return core_.update_at(*source_, original.dn, original.value, std::move(changed), std::move(controls));
+		return core_.update(*source_, original.dn, original.value, std::move(changed), std::move(controls));
 	}
 	auto update(const value_type &original, value_type changed, modify_controls controls = {})
 	  -> boost::capy::task<result<std::optional<response>>>
 	{
-		return core_.update(*source_, original, std::move(changed), std::move(controls));
+		return core_.update(*source_, core_.dn_of(original.*Naming), original, std::move(changed), std::move(controls));
 	}
 
 	// update() with an Assertion control (RFC 4528) on `original`; fails with
@@ -812,14 +782,18 @@ template<auto Naming, directory D> class repository
 	auto update_if(const record<value_type> &original, value_type changed, modify_controls controls = {})
 	  -> boost::capy::task<result<std::optional<response>>>
 	{
-		return core_.update_if_at(
+		return core_.update_if(
 		  *source_, original.dn, original.value, std::move(changed), detail::every_mapped_value{}, std::move(controls));
 	}
 	auto update_if(const value_type &original, value_type changed, modify_controls controls = {})
 	  -> boost::capy::task<result<std::optional<response>>>
 	{
-		return core_.update_if(
-		  *source_, original, std::move(changed), detail::every_mapped_value{}, std::move(controls));
+		return core_.update_if(*source_,
+		  core_.dn_of(original.*Naming),
+		  original,
+		  std::move(changed),
+		  detail::every_mapped_value{},
+		  std::move(controls));
 	}
 	template<auto Version>
 	auto update_if(const record<value_type> &original,
@@ -827,8 +801,7 @@ template<auto Naming, directory D> class repository
 	  versioned_by_t<Version> version,
 	  modify_controls controls = {}) -> boost::capy::task<result<std::optional<response>>>
 	{
-		return core_.update_if_at(
-		  *source_, original.dn, original.value, std::move(changed), version, std::move(controls));
+		return core_.update_if(*source_, original.dn, original.value, std::move(changed), version, std::move(controls));
 	}
 	template<auto Version>
 	auto update_if(const value_type &original,
@@ -836,16 +809,17 @@ template<auto Naming, directory D> class repository
 	  versioned_by_t<Version> version,
 	  modify_controls controls = {}) -> boost::capy::task<result<std::optional<response>>>
 	{
-		return core_.update_if(*source_, original, std::move(changed), version, std::move(controls));
+		return core_.update_if(
+		  *source_, core_.dn_of(original.*Naming), original, std::move(changed), version, std::move(controls));
 	}
 
 	auto remove(key_type key, del_controls controls = {}) -> boost::capy::task<result<response>>
 	{
-		return core_.remove(*source_, std::move(key), std::move(controls));
+		return core_.remove(*source_, core_.dn_of(key), std::move(controls));
 	}
 	auto remove_at(dn entry, del_controls controls = {}) -> boost::capy::task<result<response>>
 	{
-		return core_.remove_at(*source_, std::move(entry), std::move(controls));
+		return core_.remove(*source_, std::move(entry), std::move(controls));
 	}
 
 	// Renames `from` to `to` (deleteoldrdn TRUE).
