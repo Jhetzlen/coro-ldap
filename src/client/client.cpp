@@ -8,6 +8,7 @@
 #include "../net/deadline.hpp"
 #include "../scope_util.hpp"
 #include "../strand_util.hpp"
+#include "../test_access.hpp"
 #include "lease_retry.hpp"
 
 #include <boost/capy/cond.hpp>
@@ -1334,9 +1335,9 @@ namespace detail {
 		return client_state::reacquire(std::move(failed), code);
 	}
 
-	void set_jitter(const client &c, std::function<double()> unit) { c.state_->jitter = std::move(unit); }
+	void test_access::set_jitter(const client &c, std::function<double()> unit) { c.state_->jitter = std::move(unit); }
 
-	void set_connector(const client &c, pool_connector open) { c.state_->connector = std::move(open); }
+	void test_access::set_connector(const client &c, pool_connector open) { c.state_->connector = std::move(open); }
 
 }// namespace detail
 

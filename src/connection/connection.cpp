@@ -3,6 +3,7 @@
 #include "jhetz/ldap/net/connect.hpp"
 
 #include "../format_util.hpp"
+#include "../test_access.hpp"
 #include "core.hpp"
 
 #include <cstddef>
@@ -26,7 +27,10 @@ using detail::no_connection;
 // ---------------------------------------------------------------- connection
 
 // NOLINTNEXTLINE(misc-const-correctness): it changes the connection's state, through core_
-void detail::set_next_message_id(connection &c, std::int32_t id) noexcept { c.core_->set_next_message_id(id); }
+void detail::test_access::set_next_message_id(connection &c, std::int32_t id) noexcept
+{
+	c.core_->set_next_message_id(id);
+}
 
 // NOLINTNEXTLINE(misc-const-correctness): it changes the connection's state, through core_
 void detail::set_close_hook(connection &c, std::move_only_function<void() noexcept> hook) noexcept

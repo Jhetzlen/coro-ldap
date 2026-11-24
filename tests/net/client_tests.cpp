@@ -1,5 +1,6 @@
 // ldap::client against scripted in-process servers (the n-th script on the
 // n-th connection), with the jitter fixed.
+#include "../../src/test_access.hpp"
 #include "../counting_resource.hpp"
 #include "jhetz/ldap/ad/controls.hpp"
 #include "jhetz/ldap/ad/dirsync.hpp"
@@ -292,7 +293,7 @@ struct pool_fixture
 	{
 		options.connection.allow_cleartext_passwords = true;
 		pool.emplace(ioc, std::move(options));
-		ldap::detail::set_jitter(*pool, [] { return 1.0; });
+		ldap::detail::test_access::set_jitter(*pool, [] { return 1.0; });
 	}
 	auto acquire() -> ldap::result<ldap::lease> { return finish(ioc, pool->acquire()); }
 	auto acquire_exclusive() -> ldap::result<ldap::exclusive_lease> { return finish(ioc, pool->acquire_exclusive()); }
@@ -1005,7 +1006,7 @@ TEST_CASE("client: authentication failures back off", "[net][client][auth]")
 		  .setup = admin_setup(),
 		  .backoff = { .initial = milliseconds(100), .max = milliseconds(100), .auth_failure_min = milliseconds(70) },
 		  .observer = &f.obs });
-		ldap::detail::set_jitter(*f.pool, [] { return 0.0; });
+		ldap::detail::test_access::set_jitter(*f.pool, [] { return 0.0; });
 		REQUIRE_FALSE(f.acquire().has_value());
 		CHECK(f.obs.events.back() == "retry " + text(s.url()) + " 70ms");
 		auto &t = f.server({ refuse() });
@@ -1013,7 +1014,7 @@ TEST_CASE("client: authentication failures back off", "[net][client][auth]")
 		  .setup = admin_setup(),
 		  .backoff = { .initial = milliseconds(400), .max = milliseconds(400), .auth_failure_min = milliseconds(70) },
 		  .observer = &f.obs });
-		ldap::detail::set_jitter(*f.pool, [] { return 0.0; });
+		ldap::detail::test_access::set_jitter(*f.pool, [] { return 0.0; });
 		REQUIRE_FALSE(f.acquire().has_value());
 		CHECK(f.obs.events.back() == "retry " + text(t.url()) + " 200ms");// half the cap
 	}
@@ -1599,9 +1600,9 @@ TEST_CASE("client: the bind after an authentication backoff ends without a verdi
 			.initial = milliseconds(200), .max = milliseconds(200), .auth_failure_min = milliseconds(200) } });
 		REQUIRE_FALSE(f.acquire().has_value());
 		finish(f.ioc, sleep_for(milliseconds(250)));
-		ldap::detail::set_jitter(*f.pool, [] -> double { throw std::runtime_error("no jitter"); });
+		ldap::detail::test_access::set_jitter(*f.pool, [] -> double { throw std::runtime_error("no jitter"); });
 		CHECK_THROWS_AS(f.acquire(), std::runtime_error);// server_failed() throws for the timed-out bind
-		ldap::detail::set_jitter(*f.pool, [] { return 1.0; });
+		ldap::detail::test_access::set_jitter(*f.pool, [] { return 1.0; });
 		auto later = f.acquire();// the backoff started again all the same: no bind
 		REQUIRE_FALSE(later.has_value());
 		CHECK(later.error().code == ldap::errc::invalid_credentials);
@@ -3015,7 +3016,7 @@ auto open_small(corosio::io_context &ioc,
 // `server`; `send_buffer` receives their SO_SNDBUF.
 void connect_small(const ldap::client &pool, const ldap_server &server, std::size_t *send_buffer)
 {
-	ldap::detail::set_connector(pool,
+	ldap::detail::test_access::set_connector(pool,
 	  [to = server.endpoint(), send_buffer](corosio::io_context &ioc,
 		const ldap::url &u,
 		ldap::connection_options options,

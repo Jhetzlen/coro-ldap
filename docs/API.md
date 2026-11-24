@@ -1592,6 +1592,10 @@ itself needs only ICU.
   io_context, `close()`, the destructor and a lease's release have the
   temporary precondition of the connection.hpp entry's "Threading" above
   (no thread still inside `run()`).
+  Breaking (coro-ldap-bhe.7): the test hooks `detail::set_jitter`,
+  `detail::set_connector` (client.hpp) and `detail::set_next_message_id`
+  (connection.hpp) left the public headers for `detail::test_access` in
+  src/test_access.hpp (not installed).
 - `jhetz/ldap/sync.hpp` (3pf.5): `ldap::sync::client`, the blocking facade
   over `ldap::client`. `sync::client(client_options, mr)` owns an
   io_context and an I/O thread, where the `ldap::client` lives (session

@@ -182,7 +182,7 @@ class connection::core
 	auto transport() const noexcept -> const net::transport & { return transport_; }
 	auto default_timeout() const noexcept -> std::optional<std::chrono::milliseconds> { return default_timeout_; }
 
-	// Tests only (detail::set_next_message_id): the id the next request gets,
+	// Tests only (detail::test_access): the id the next request gets,
 	// to reach maxInt without sending 2^31 requests.
 	void set_next_message_id(std::int32_t id) noexcept { next_id = id; }
 

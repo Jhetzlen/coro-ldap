@@ -3323,15 +3323,15 @@ decision left open.
   write must still be queued when the connection closes, so the AddRequest
   must not fit in the kernel's buffers while the server reads nothing: the
   server's end has a small SO_RCVBUF, and the pooled connections are
-  opened by a test connector (`detail::set_connector`, tests only, like
-  `detail::set_jitter`) on a socket with a small SO_SNDBUF set before it
+  opened by a test connector (`detail::test_access::set_connector`, src/test_access.hpp, like
+  `set_jitter`) on a socket with a small SO_SNDBUF set before it
   connects. Setting SO_SNDBUF turns autotuning off, so `tcp_wmem` (whose
   default or maximum may reach several MiB) no longer applies, and the
   test requires the two buffers as the kernel reports them to hold less
   than the AddRequest.
 - Tests (`tests/net/client_tests.cpp`): loopback servers each running one
   script per accepted connection; backoff on real delays of 30 to 60 ms
-  with the jitter fixed by `detail::set_jitter` (tests only). One slapd
+  with the jitter fixed by `detail::test_access::set_jitter`. One slapd
   test drops a connection through a relay and acquires again.
 - Blocking facade (3pf.5, `jhetz/ldap/sync.hpp`): `sync::client(options,
   mr)` owns a `detail::client_core`, the `io_thread` (section 7) and the

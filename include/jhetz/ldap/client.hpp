@@ -197,13 +197,7 @@ namespace detail {
 	[[nodiscard]] auto backoff_delay(const backoff_options &options, std::size_t failures, double unit) noexcept
 	  -> std::chrono::milliseconds;
 
-	// Tests only: replaces the random jitter source.
-	void set_jitter(const client &c, std::function<double()> unit);
-
-	// Tests only: replaces ldap::connect for the pooled connections.
-	using pool_connector = std::function<boost::capy::task<result<
-	  connection>>(boost::corosio::io_context &ioc, url u, connection_options options, std::pmr::memory_resource *mr)>;
-	void set_connector(const client &c, pool_connector open);
+	struct test_access;
 
 	// ldap::search_paged(client &): the first page on a shared lease, retried
 	// as client::search_stream() is.
@@ -343,8 +337,7 @@ class client
 	void close() noexcept;
 
   private:
-	friend void detail::set_jitter(const client &, std::function<double()>);
-	friend void detail::set_connector(const client &, detail::pool_connector);
+	friend struct detail::test_access;
 	friend auto
 	  detail::search_paged_of(const client &, search_params, std::int32_t, std::size_t, std::pmr::memory_resource *)
 		-> boost::capy::task<result<paged_search>>;

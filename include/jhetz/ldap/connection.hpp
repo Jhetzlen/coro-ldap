@@ -44,8 +44,7 @@ namespace jhetz::ldap {
 class connection;
 
 namespace detail {
-	// Tests only: the message id the next request tries first.
-	void set_next_message_id(connection &c, std::int32_t id) noexcept;
+	struct test_access;
 	// For ldap::client: `hook` runs once on the executor when the connection
 	// closes; replaces an earlier hook.
 	void set_close_hook(connection &c, std::move_only_function<void() noexcept> hook) noexcept;
@@ -146,7 +145,7 @@ class connection
 
   private:
 	friend class ldap::search_stream;
-	friend void detail::set_next_message_id(connection &, std::int32_t) noexcept;
+	friend struct detail::test_access;
 	friend void detail::set_close_hook(connection &, std::move_only_function<void() noexcept>) noexcept;
 	friend auto detail::accepts_requests(const connection &) noexcept -> bool;
 

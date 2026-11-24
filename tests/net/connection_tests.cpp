@@ -1,5 +1,6 @@
 // ldap::connection against a scripted in-process LDAP server
 // (mock_ldap.hpp), and once over loopback TCP.
+#include "../../src/test_access.hpp"
 #include "../counting_resource.hpp"
 #include "../value_semantics.hpp"
 #include "jhetz/ldap/connection.hpp"
@@ -2924,7 +2925,7 @@ TEST_CASE("RFC 4511 4.1.1: ids still in use are skipped after wrapping", "[net][
 		auto s = m.run(m.conn.search_stream({ .base = ldap::dn{} }));
 		REQUIRE(s.has_value());
 		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
-		ldap::detail::set_next_message_id(m.conn, ldap::max_int);
+		ldap::detail::test_access::set_next_message_id(m.conn, ldap::max_int);
 		CHECK(m.run(m.conn.del({ .entry = x })).has_value());// max_int
 		CHECK(m.run(m.conn.del({ .entry = x })).has_value());// 2: 1 is the search's
 		auto rest = m.run(drain_stream(*s));
@@ -2947,7 +2948,7 @@ TEST_CASE("RFC 4511 4.1.1: ids still in use are skipped after wrapping", "[net][
 		drive_until(m.ioc, [&m] { return !m.log.received.empty(); });
 		stop.request_stop();
 		drive_until(m.ioc, [&] { return search.done() && m.log.received.size() == 2; });
-		ldap::detail::set_next_message_id(m.conn, ldap::max_int);
+		ldap::detail::test_access::set_next_message_id(m.conn, ldap::max_int);
 		CHECK(m.run(m.conn.del({ .entry = x })).has_value());// max_int
 		CHECK(m.run(m.conn.del({ .entry = x })).has_value());// 2: 1 was abandoned
 		m.check_server();

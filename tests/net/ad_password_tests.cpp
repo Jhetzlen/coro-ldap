@@ -1,5 +1,6 @@
 // ad::change_password / ad::reset_password against the scripted mock
 // server.
+#include "../../src/test_access.hpp"
 #include "jhetz/ldap/ad/password.hpp"
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
@@ -554,7 +555,7 @@ struct ad_pool
 		ldap::client_options o{ .servers = { server.url(scheme) }, .idle_check = std::nullopt };
 		o.connection.tls.ca_pem = std::pmr::string(pki().ca_pem());
 		pool.emplace(ioc, std::move(o));
-		ldap::detail::set_connector(*pool,
+		ldap::detail::test_access::set_connector(*pool,
 		  [how = std::move(how), n = std::size_t{ 0 }](corosio::io_context &io,
 			ldap::url u,
 			ldap::connection_options options,
