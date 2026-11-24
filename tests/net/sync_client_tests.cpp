@@ -460,7 +460,7 @@ TEST_CASE("sync client: the write forwarders", "[net][sync][client][write]")
 		auto r = pool.del({ .entry = jdoe_dn });
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::errc::no_such_object);
-		CHECK(r.error().diagnostic == "gone");
+		CHECK(r.error().diagnostic_message == "gone");
 		CHECK(srv.accepted() == 1);
 	}
 	SECTION("the connection is lost once the request was sent: not retried")

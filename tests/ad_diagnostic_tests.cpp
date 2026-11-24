@@ -12,7 +12,7 @@ namespace {
 auto explained(std::string_view diagnostic) -> std::string_view
 {
 	ldap::error e = ldap::make_error(ldap::errc::constraint_violation);
-	e.diagnostic.assign(diagnostic);
+	e.diagnostic_message.assign(diagnostic);
 	return ldap::ad::explain(e);
 }
 

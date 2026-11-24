@@ -159,9 +159,9 @@ auto cond_category() noexcept -> const std::error_category &;// "ldap.cond"
 struct error
 {
 	std::error_code code{};
-	std::pmr::string diagnostic{};// server's diagnosticMessage, if any
-	// Kept as text, exactly as the server sent them.
-	std::optional<std::pmr::string> matched_dn{};// server's matchedDN, if any
+	// The server's LDAPResult fields, as sent; empty when none.
+	std::pmr::string matched_dn{};
+	std::pmr::string diagnostic_message{};
 	std::pmr::vector<std::pmr::string> referrals{};// from a referral result
 	std::pmr::string context{};// client-side path, e.g. "ber: integer at offset 12"
 

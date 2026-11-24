@@ -63,10 +63,8 @@ auto ldap_result::to_error(std::string_view context) const -> error
 	// On the default resource (see error.hpp).
 	error e;
 	e.code = std::error_code(result_code, result_category());
-	e.diagnostic.assign(diagnostic_message);
-	if (!matched_dn.empty()) {
-		e.matched_dn.emplace(matched_dn);
-	}
+	e.diagnostic_message.assign(diagnostic_message);
+	e.matched_dn.assign(matched_dn);
 	e.referrals.assign(referral.begin(), referral.end());
 	e.context.assign(context);
 	return e;

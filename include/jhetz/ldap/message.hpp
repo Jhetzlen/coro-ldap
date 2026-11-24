@@ -58,6 +58,8 @@ struct ldap_result
 	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return matched_dn.get_allocator(); }
 
 	[[nodiscard]] auto is_success() const noexcept -> bool { return result_code == 0; }
+	// result_code in result_category(), comparable with errc.
+	[[nodiscard]] auto code() const noexcept -> std::error_code { return { result_code, result_category() }; }
 
 	// The result as an ldap::error, with `context`; check is_success() first.
 	[[nodiscard]] auto to_error(std::string_view context = {}) const -> error;
@@ -907,6 +909,8 @@ struct sort_result
 	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return attribute_type.get_allocator(); }
 
 	[[nodiscard]] auto is_success() const noexcept -> bool { return result_code == 0; }
+	// result_code in result_category(), comparable with errc.
+	[[nodiscard]] auto code() const noexcept -> std::error_code { return { result_code, result_category() }; }
 
 	friend auto operator==(const sort_result &, const sort_result &) -> bool = default;
 };
@@ -952,6 +956,8 @@ struct vlv_response
 	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return alloc_; }
 
 	[[nodiscard]] auto is_success() const noexcept -> bool { return result_code == 0; }
+	// result_code in result_category(), comparable with errc.
+	[[nodiscard]] auto code() const noexcept -> std::error_code { return { result_code, result_category() }; }
 
 	friend auto operator==(const vlv_response &a, const vlv_response &b) -> bool
 	{

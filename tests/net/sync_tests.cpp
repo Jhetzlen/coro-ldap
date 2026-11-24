@@ -472,7 +472,7 @@ TEST_CASE("sync: sasl_bind", "[net][sync][sasl]")
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::errc::inappropriate_authentication);
 	CHECK(r.error().code == ldap::cond::auth_failed);
-	CHECK(r.error().diagnostic == "no client certificate");
+	CHECK(r.error().diagnostic_message == "no client certificate");
 	CHECK(r.error().context == "sasl bind EXTERNAL");
 	CHECK(k.c.is_open());
 	const auto &got = hang_up(k.c, srv);
@@ -493,7 +493,7 @@ TEST_CASE("sync: start_tls refused leaves the connection in clear", "[net][sync]
 	auto r = k.c.start_tls();
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::errc::unavailable);
-	CHECK(r.error().diagnostic == "no TLS here");
+	CHECK(r.error().diagnostic_message == "no TLS here");
 	CHECK(r.error().context == "start tls");
 	CHECK(k.c.is_open());
 	CHECK_FALSE(k.c.is_tls());
@@ -547,7 +547,7 @@ TEST_CASE("sync: add", "[net][sync]")
 	CHECK(again.error().code == ldap::errc::entry_already_exists);
 	CHECK(again.error().code == ldap::cond::already_exists);
 	CHECK(again.error().context == "add uid=jdoe,ou=people,dc=example,dc=org");
-	CHECK(again.error().diagnostic == "exists");
+	CHECK(again.error().diagnostic_message == "exists");
 	const auto &got = hang_up(k.c, srv);
 	REQUIRE(got.size() == 2);
 	CHECK(got[0]
@@ -595,7 +595,7 @@ TEST_CASE("sync: del", "[net][sync]")
 	REQUIRE_FALSE(busy.has_value());
 	CHECK(busy.error().code == ldap::errc::not_allowed_on_non_leaf);
 	CHECK(busy.error().context == "delete ou=people,dc=example,dc=org");
-	CHECK(busy.error().diagnostic == "has children");
+	CHECK(busy.error().diagnostic_message == "has children");
 	const auto &got = hang_up(k.c, srv);
 	REQUIRE(got.size() == 2);
 	CHECK(got[0] == ldap::message{ 1, ldap::del_request{ jdoe_str } });
@@ -617,7 +617,7 @@ TEST_CASE("sync: modify_dn", "[net][sync]")
 	auto taken = k.c.modify_dn({ .entry = jdoe, .new_rdn = ldap::rdn{ "uid=jane" } });
 	REQUIRE_FALSE(taken.has_value());
 	CHECK(taken.error().code == ldap::errc::entry_already_exists);
-	CHECK(taken.error().diagnostic == "target exists");
+	CHECK(taken.error().diagnostic_message == "target exists");
 	// Refused before anything is sent.
 	auto empty = k.c.modify_dn({ .entry = jdoe });
 	REQUIRE_FALSE(empty.has_value());
@@ -671,7 +671,7 @@ TEST_CASE("sync: extended", "[net][sync]")
 	REQUIRE_FALSE(unknown.has_value());
 	CHECK(unknown.error().code == ldap::errc::protocol_error);
 	CHECK(unknown.error().context == "extended operation 1.9.9");
-	CHECK(unknown.error().diagnostic == "unsupported extended operation");
+	CHECK(unknown.error().diagnostic_message == "unsupported extended operation");
 	const auto &got = hang_up(k.c, srv);
 	REQUIRE(got.size() == 2);
 	CHECK(got[0] == ldap::message{ 1, ldap::extended_request{ "1.2.3.4", std::string("\x30\x00", 2) } });
@@ -709,7 +709,7 @@ TEST_CASE("sync: password_modify", "[net][sync]")
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == ldap::errc::invalid_credentials);
 	CHECK(refused.error().context == "password modify uid=jdoe");
-	CHECK(refused.error().diagnostic == "old password wrong");
+	CHECK(refused.error().diagnostic_message == "old password wrong");
 	const auto &got = hang_up(k.c, srv);
 	REQUIRE(got.size() == 2);
 	// SEQUENCE { [0] user }
@@ -877,7 +877,7 @@ TEST_CASE("sync: a transaction's add, modify and modify DN, then abort", "[net][
 	auto m = t->modify({ .object = group, .changes = { ldap::mod::add("member", { jdoe_str }) } });
 	REQUIRE_FALSE(m.has_value());
 	CHECK(m.error().code == ldap::errc::insufficient_access_rights);
-	CHECK(m.error().diagnostic == "no write access");
+	CHECK(m.error().diagnostic_message == "no write access");
 	auto r = t->modify_dn({ .entry = jdoe, .new_rdn = ldap::rdn{ "uid=john" } });
 	REQUIRE(r.has_value());
 	CHECK(r->message_id == 4);

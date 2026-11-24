@@ -100,7 +100,7 @@ TEST_CASE("connection: bind errors keep the connection usable", "[net][connectio
 	REQUIRE_FALSE(bad.has_value());
 	CHECK(bad.error().code == errc::invalid_credentials);
 	CHECK(bad.error().code == ldap::cond::auth_failed);
-	CHECK(bad.error().diagnostic == "bad password");
+	CHECK(bad.error().diagnostic_message == "bad password");
 	CHECK(bad.error().context == "bind cn=admin,dc=example,dc=org");
 	CHECK(m.conn.is_open());
 
@@ -196,7 +196,7 @@ TEST_CASE("connection: search result errors", "[net][connection]")
 	CHECK(r.error().code == errc::no_such_object);
 	CHECK(r.error().code == ldap::cond::not_found);
 	CHECK(r.error().matched_dn == "dc=example,dc=org");
-	CHECK(r.error().diagnostic == "no such entry");
+	CHECK(r.error().diagnostic_message == "no such entry");
 	CHECK(r.error().context == "search ou=missing,dc=example,dc=org");
 	CHECK(m.conn.is_open());
 
@@ -204,7 +204,7 @@ TEST_CASE("connection: search result errors", "[net][connection]")
 	REQUIRE_FALSE(referral.has_value());
 	CHECK(referral.error().code == errc::referral);
 	CHECK(referral.error().referrals == ldap::string_list{ "ldap://b.example.org/ou=missing,dc=example,dc=org" });
-	CHECK_FALSE(referral.error().matched_dn.has_value());
+	CHECK(referral.error().matched_dn.empty());
 
 	// Still usable.
 	CHECK(m.run(m.conn.search({ .base = ldap::dn{} })).has_value());
@@ -229,6 +229,7 @@ TEST_CASE("connection: search returns a search_result on the limit codes", "[net
 	auto size = m.run(m.conn.search(people_search()));
 	REQUIRE(size.has_value());
 	CHECK_FALSE(size->is_success());
+	CHECK(size->code() == ldap::errc::size_limit_exceeded);
 	CHECK(size->result_code == 4);
 	REQUIRE(size->entries.size() == 2);
 	CHECK(size->entries[0] == expected_entry("uid=a,ou=people,dc=example,dc=org", "A"));
@@ -252,7 +253,7 @@ TEST_CASE("connection: search returns a search_result on the limit codes", "[net
 	auto unwilling = m.run(m.conn.search(people_search()));
 	REQUIRE_FALSE(unwilling.has_value());
 	CHECK(unwilling.error().code == errc::unwilling_to_perform);
-	CHECK(unwilling.error().diagnostic == "unwilling");
+	CHECK(unwilling.error().diagnostic_message == "unwilling");
 
 	auto all = m.run(m.conn.search(people_search()));
 	REQUIRE(all.has_value());
@@ -1503,7 +1504,7 @@ TEST_CASE("connection: unsolicited notifications and intermediate responses", "[
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == errc::unavailable);
 		CHECK(r.error().code == ldap::cond::busy_or_unavailable);
-		CHECK(r.error().diagnostic == "shutting down");
+		CHECK(r.error().diagnostic_message == "shutting down");
 		CHECK(r.error().context == "search ou=people,dc=example,dc=org: notice of disconnection");
 		CHECK_FALSE(m.conn.is_open());
 	}
@@ -2118,10 +2119,10 @@ TEST_CASE("connection: a notice of disconnection fails every outstanding operati
 	REQUIRE_FALSE(bind.get().has_value());
 	REQUIRE_FALSE(search.get().has_value());
 	CHECK(bind.get().error().code == errc::busy);
-	CHECK(bind.get().error().diagnostic == "too busy");
+	CHECK(bind.get().error().diagnostic_message == "too busy");
 	CHECK(bind.get().error().context == "bind cn=admin,dc=example,dc=org: notice of disconnection");
 	CHECK(search.get().error().code == client_errc::not_sent);// held behind the bind
-	CHECK(search.get().error().diagnostic == "too busy");
+	CHECK(search.get().error().diagnostic_message == "too busy");
 	CHECK(search.get().error().context == "search ou=people,dc=example,dc=org: notice of disconnection");
 	CHECK_FALSE(m.conn.is_open());
 	auto later = m.run(m.conn.search({ .base = ldap::dn{} }));

@@ -466,7 +466,7 @@ TEST_CASE("start_tls: the server refuses", "[net][starttls]")
 	auto r = finish(f.ioc, c.start_tls({ .ca_pem = std::pmr::string(pki().ca_pem()) }));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::errc::unavailable);
-	CHECK(r.error().diagnostic == "no TLS here");
+	CHECK(r.error().diagnostic_message == "no TLS here");
 	CHECK(r.error().context == "start tls");
 	// Still usable, in clear.
 	CHECK(c.is_open());

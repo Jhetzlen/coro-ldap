@@ -397,14 +397,14 @@ TEST_CASE("ad::change_password: server errors, AD diagnostics explained", "[net]
 		  == context
 			   + ": the new password does not meet the password policy (length, complexity, history or minimum "
 				 "age) (Active Directory error 0000052D)");
-	CHECK(std::string(weak.error().diagnostic) == policy);// kept as sent
+	CHECK(std::string(weak.error().diagnostic_message) == policy);// kept as sent
 	check_no_password(weak.error());
 
 	auto old = f.run(ldap::ad::change_password(f.conn, jdoe, old_pw, new_pw));
 	REQUIRE_FALSE(old.has_value());
 	CHECK(
 	  std::string(old.error().context) == context + ": the old password is wrong (Active Directory error 00000056)");
-	CHECK(std::string(old.error().diagnostic) == wrong_old);
+	CHECK(std::string(old.error().diagnostic_message) == wrong_old);
 
 	// Codes it does not explain, and diagnostics that are not AD's.
 	auto other = f.run(ldap::ad::change_password(f.conn, jdoe, old_pw, new_pw));

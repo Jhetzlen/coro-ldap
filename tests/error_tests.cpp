@@ -151,7 +151,7 @@ TEST_CASE("ldap::error message and helpers", "[error]")
 
 	ldap::error s;
 	s.code = ldap::errc::no_such_object;
-	s.diagnostic = "entry not found";
+	s.diagnostic_message = "entry not found";
 	s.matched_dn = "dc=example,dc=org";
 	s.referrals = { "ldap://a.example.org", "ldap://b.example.org" };
 	CHECK(s.message()
@@ -173,7 +173,7 @@ TEST_CASE("ldap::error message sanitizes the server's text and keeps the fields 
 	const auto shown = [](std::string_view diagnostic) {
 		ldap::error e;
 		e.code = ldap::errc::unwilling_to_perform;
-		e.diagnostic = diagnostic;
+		e.diagnostic_message = diagnostic;
 		const std::string m(e.message());
 		const std::string_view prefix = "unwilling to perform [ldap.result:53]; server: ";
 		REQUIRE(m.starts_with(prefix));
@@ -227,7 +227,7 @@ TEST_CASE("ldap::error message sanitizes the server's text and keeps the fields 
 	// Matched DN and referrals too; at most 8 referrals are listed.
 	ldap::error e;
 	e.code = ldap::errc::referral;
-	e.diagnostic = "line1\nline2";
+	e.diagnostic_message = "line1\nline2";
 	e.matched_dn = "cn=" + rlo + "x\r\n,dc=example,dc=org";
 	for (int i = 0; i < 10; ++i) {
 		e.referrals.emplace_back("ldap://h" + std::to_string(i) + "/\n");
@@ -238,8 +238,8 @@ TEST_CASE("ldap::error message sanitizes the server's text and keeps the fields 
 			   + " ldap://h3/" + fffd + " ldap://h4/" + fffd + " ldap://h5/" + fffd + " ldap://h6/" + fffd
 			   + " ldap://h7/" + fffd + " (and 2 more)");
 	// The fields keep the server's text as sent.
-	CHECK(e.diagnostic == "line1\nline2");
-	CHECK(std::string(*e.matched_dn) == "cn=" + rlo + "x\r\n,dc=example,dc=org");
+	CHECK(e.diagnostic_message == "line1\nline2");
+	CHECK(std::string(e.matched_dn) == "cn=" + rlo + "x\r\n,dc=example,dc=org");
 	CHECK(e.referrals.size() == 10);
 	CHECK(e.referrals[9] == "ldap://h9/\n");
 }

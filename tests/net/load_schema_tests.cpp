@@ -175,7 +175,7 @@ TEST_CASE("load_schema: a limit code with no entry is an error", "[net][schema]"
 		auto s = m.run(ldap::load_schema(m.conn));
 		REQUIRE_FALSE(s.has_value());
 		CHECK(s.error().code == ldap::errc::time_limit_exceeded);
-		CHECK(s.error().diagnostic == "time limit");
+		CHECK(s.error().diagnostic_message == "time limit");
 		CHECK(std::string(s.error().context) == "load schema: search \"\"");
 		m.check_server();
 		CHECK(m.log.received.size() == 1);

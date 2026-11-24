@@ -225,7 +225,7 @@ TEST_CASE("sasl: failure codes keep the connection usable", "[net][sasl]")
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::errc::inappropriate_authentication);
 	CHECK(r.error().code == ldap::cond::auth_failed);
-	CHECK(r.error().diagnostic == "no client certificate");
+	CHECK(r.error().diagnostic_message == "no client certificate");
 	CHECK(r.error().context == "sasl bind EXTERNAL");
 	auto unsupported = m.run(m.conn.sasl_bind(mech));
 	REQUIRE_FALSE(unsupported.has_value());

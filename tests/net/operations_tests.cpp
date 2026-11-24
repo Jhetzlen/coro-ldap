@@ -74,7 +74,7 @@ TEST_CASE("operations: add", "[net][operations]")
 	CHECK(again.error().code == errc::entry_already_exists);
 	CHECK(again.error().code == ldap::cond::already_exists);
 	CHECK(again.error().context == "add uid=jdoe,ou=people,dc=example,dc=org");
-	CHECK(again.error().diagnostic == "exists");
+	CHECK(again.error().diagnostic_message == "exists");
 	CHECK(m.conn.is_open());
 	m.check_server();
 
@@ -743,7 +743,7 @@ TEST_CASE("operations: a virtual list view window", "[net][operations][controls]
 	auto failed = m.run(s2->next());
 	REQUIRE_FALSE(failed.has_value());
 	CHECK(failed.error().code == errc::virtual_list_view_error);
-	CHECK(failed.error().diagnostic == "offset out of range");
+	CHECK(failed.error().diagnostic_message == "offset out of range");
 	auto why = ldap::find_vlv_response(s2->controls());
 	REQUIRE(why.has_value());
 	REQUIRE(why->has_value());
@@ -2568,7 +2568,7 @@ TEST_CASE("operations: password modify (RFC 3062)", "[net][operations]")
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == errc::invalid_credentials);
 	CHECK(refused.error().context == "password modify uid=jdoe");
-	CHECK(refused.error().diagnostic == "old password wrong");
+	CHECK(refused.error().diagnostic_message == "old password wrong");
 	// A malformed response value.
 	auto bad = m.run(ldap::password_modify(m.conn, {}));
 	REQUIRE_FALSE(bad.has_value());

@@ -3082,7 +3082,7 @@ TEST_CASE("client: when write forwarders do not retry", "[net][client][write][re
 		auto r = finish(f.ioc, f.pool->add(jdoe_add()));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::errc::entry_already_exists);
-		CHECK(r.error().diagnostic == "already there");
+		CHECK(r.error().diagnostic_message == "already there");
 		CHECK(std::string_view(r.error().context) == "add " + std::string(jdoe_text));
 		CHECK(s.accepted() == 1);
 		CHECK(f.pool->connections() == 1);// still pooled

@@ -459,9 +459,10 @@ TEST_CASE("ldap_result::to_error", "[message][error]")
 	{
 		const auto r = ldap::test::sample_result();
 		CHECK_FALSE(r.is_success());
+		CHECK(r.code() == ldap::errc::no_such_object);
 		const auto e = r.to_error("search ou=people");
 		CHECK(e.code == ldap::errc::no_such_object);
-		CHECK(e.diagnostic == "no such entry");
+		CHECK(e.diagnostic_message == "no such entry");
 		CHECK(e.matched_dn == "dc=example,dc=org");
 		CHECK(e.referrals == ldap::string_list{ "ldap://a.example.org/", "ldap://b.example.org/" });
 		CHECK(e.context == "search ou=people");
@@ -474,8 +475,10 @@ TEST_CASE("ldap_result::to_error", "[message][error]")
 		const ldap::ldap_result r{ 4711 };
 		const auto e = r.to_error();
 		CHECK(e.code.value() == 4711);
+		CHECK(r.code() == e.code);
+		CHECK_FALSE(ldap::ldap_result{ 0 }.code());
 		CHECK(&e.code.category() == &ldap::result_category());
-		CHECK_FALSE(e.matched_dn.has_value());
+		CHECK(e.matched_dn.empty());
 		CHECK(e.message() == "unknown LDAP result code 4711 [ldap.result:4711]");
 	}
 	SECTION("referral and compare results")

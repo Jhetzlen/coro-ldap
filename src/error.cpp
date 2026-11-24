@@ -486,13 +486,13 @@ auto error::message(std::pmr::memory_resource *mr) const -> std::pmr::string
 	out += ':';
 	out += std::to_string(code.value());
 	out += ']';
-	if (!diagnostic.empty()) {
+	if (!diagnostic_message.empty()) {
 		out += "; server: ";
-		detail::append_sanitized(out, diagnostic, max_shown);
+		detail::append_sanitized(out, diagnostic_message, max_shown);
 	}
-	if (matched_dn && !matched_dn->empty()) {
+	if (!matched_dn.empty()) {
 		out += "; matched DN: ";
-		detail::append_sanitized(out, *matched_dn, max_shown);
+		detail::append_sanitized(out, matched_dn, max_shown);
 	}
 	if (!referrals.empty()) {
 		out += "; referrals:";

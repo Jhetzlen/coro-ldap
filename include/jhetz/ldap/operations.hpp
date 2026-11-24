@@ -107,6 +107,8 @@ template<class Entries> struct basic_search_result
 	std::size_t unlisted = 0;
 
 	[[nodiscard]] auto is_success() const noexcept -> bool { return result_code == 0; }
+	// result_code in result_category(), comparable with errc.
+	[[nodiscard]] auto code() const noexcept -> std::error_code { return { result_code, result_category() }; }
 	// resultCode success and no continuation reference left unfollowed.
 	[[nodiscard]] auto is_complete() const noexcept -> bool { return is_success() && references.empty(); }
 

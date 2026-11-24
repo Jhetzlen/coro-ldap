@@ -36,7 +36,15 @@ Several calls overlap: the RFC-named operation, and conveniences on top.
   `busy_or_unavailable`, `access_denied`, `already_exists`,
   `invalid_input`) that group LDAP, client, system, Capy and TLS codes by
   meaning: `if (r.error().code == ldap::cond::auth_failed)`. The mapping
-  table is in DESIGN.md section 5.
+  table is in DESIGN.md section 5. `ldap::error` is `{code, matched_dn,
+  diagnostic_message, referrals, context}`, the server's LDAPResult fields
+  under their RFC 4511 names, empty when none. Every type with a raw
+  `result_code` (`ldap_result`, `basic_search_result`, `sort_result`,
+  `vlv_response`) also has `code()`, the `std::error_code` in
+  `ldap.result`: `if (found->code() == ldap::errc::size_limit_exceeded)`.
+  Breaking (coro-ldap-bhe.9): `error::diagnostic` is now
+  `error::diagnostic_message`, and `error::matched_dn` is a plain string
+  (was `std::optional`; empty means none).
 - `jhetz/ldap/ber.hpp`: the restricted BER codec LDAP uses (RFC 4511 section 5.1):
   `ber::writer` (its buffer on a `memory_resource`, reusable), `ber::reader`
   (non-owning, depth-bounded, safe on untrusted input) and the framer
@@ -1654,7 +1662,7 @@ package component `ad`:
   (`client_errc::encode_error`). AD's diagnostics for common refusals
   (`0000052D` password policy, `00000056` wrong old password, `00000005`,
   `00000775`) are explained in the error's context (`ad::explain`);
-  `error::diagnostic` keeps the server's text. The `client &` overloads
+  `error::diagnostic_message` keeps the server's text. The `client &` overloads
   run on a shared lease and retry once after `client_errc::not_sent`, as
   the client's write forwarders do (the connection that failed is closed,
   so the retry gets another). The connection must outlive the task; the

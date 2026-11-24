@@ -108,7 +108,7 @@ namespace {
 		}
 		if (const auto text = explain(e); !text.empty()) {
 			e.context.append(": ").append(text).append(" (Active Directory error ");
-			e.context.append(std::string_view(e.diagnostic).substr(0, 8)).append(")");
+			e.context.append(std::string_view(e.diagnostic_message).substr(0, 8)).append(")");
 		}
 		return std::unexpected(std::move(e));
 	}

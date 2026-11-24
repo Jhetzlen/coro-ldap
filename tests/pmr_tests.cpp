@@ -126,8 +126,8 @@ TEST_CASE("errors never live in the caller's arena", "[pmr][message][error]")
 	// to_error() of a result in an arena: on the default resource too.
 	ldap::ldap_result in_arena(ldap::ldap_result{ 32, "dc=example,dc=org", "no such entry", { "ldap://x/" } }, &arena);
 	const auto e = in_arena.to_error("ctx");
-	CHECK(e.diagnostic.get_allocator().resource() == std::pmr::get_default_resource());
-	CHECK(e.matched_dn->get_allocator().resource() == std::pmr::get_default_resource());
+	CHECK(e.diagnostic_message.get_allocator().resource() == std::pmr::get_default_resource());
+	CHECK(e.matched_dn.get_allocator().resource() == std::pmr::get_default_resource());
 	CHECK(e.referrals.get_allocator().resource() == std::pmr::get_default_resource());
 	CHECK(e.referrals[0].get_allocator().resource() == std::pmr::get_default_resource());
 }

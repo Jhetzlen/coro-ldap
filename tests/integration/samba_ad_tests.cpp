@@ -225,7 +225,7 @@ TEST_CASE("samba ad: ad::change_password and ad::reset_password", "[samba_ad][pa
 		REQUIRE_FALSE(r.has_value());
 		INFO(r.error().message());
 		CHECK(r.error().code == ldap::errc::constraint_violation);
-		CHECK_THAT(std::string(r.error().diagnostic), StartsWith("0000052D"));
+		CHECK_THAT(std::string(r.error().diagnostic_message), StartsWith("0000052D"));
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("does not meet the password policy"));
 		// An administrator's reset is held to the policy too.
 		auto admin = open_bound(ioc, start_tls, administrator, administrator_password);
@@ -233,7 +233,7 @@ TEST_CASE("samba ad: ad::change_password and ad::reset_password", "[samba_ad][pa
 		REQUIRE_FALSE(a.has_value());
 		INFO(a.error().message());
 		CHECK(a.error().code == ldap::errc::constraint_violation);
-		CHECK_THAT(std::string(a.error().diagnostic), StartsWith("0000052D"));
+		CHECK_THAT(std::string(a.error().diagnostic_message), StartsWith("0000052D"));
 		CHECK(try_bind(ioc, pwchange, "Policy-Passw0rd").has_value());
 	}
 
@@ -245,7 +245,7 @@ TEST_CASE("samba ad: ad::change_password and ad::reset_password", "[samba_ad][pa
 		REQUIRE_FALSE(r.has_value());
 		INFO(r.error().message());
 		CHECK(r.error().code == ldap::errc::constraint_violation);
-		CHECK_THAT(std::string(r.error().diagnostic), StartsWith("00000056"));
+		CHECK_THAT(std::string(r.error().diagnostic_message), StartsWith("00000056"));
 		CHECK_THAT(std::string(r.error().context), ContainsSubstring("the old password is wrong"));
 		CHECK(try_bind(ioc, pwchange, "Right-Passw0rd").has_value());
 	}
@@ -260,7 +260,7 @@ TEST_CASE("samba ad: a password change on plain ldap:// is refused before sendin
 	auto r = finish(ioc, ldap::ad::reset_password(c, pwchange, "Never-Passw0rd"));
 	REQUIRE_FALSE(r.has_value());
 	CHECK(r.error().code == ldap::client_errc::tls_required);
-	CHECK(r.error().diagnostic.empty());
+	CHECK(r.error().diagnostic_message.empty());
 	auto ch = finish(ioc, ldap::ad::change_password(c, pwchange, "Plain-Passw0rd", "Never-Passw0rd"));
 	REQUIRE_FALSE(ch.has_value());
 	CHECK(ch.error().code == ldap::client_errc::tls_required);
@@ -346,7 +346,7 @@ TEST_CASE("samba ad: a password change over the NTLM security layer on plain lda
 		auto r = finish(ioc, ldap::ad::reset_password(c, pwchange, "Never-Passw0rd"));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::tls_required);
-		CHECK(r.error().diagnostic.empty());
+		CHECK(r.error().diagnostic_message.empty());
 		CHECK(try_bind(ioc, pwchange, "Unsealed-Passw0rd").has_value());
 	}
 }
@@ -469,8 +469,8 @@ TEST_CASE("samba ad: sasl_ntlm binds over TLS with channel binding", "[samba_ad]
 		CHECK(r.error().code == ldap::errc::invalid_credentials);
 		// SEC_E_LOGON_DENIED (0x8009030C), "data 52e" (ERROR_LOGON_FAILURE),
 		// in Windows' format.
-		CHECK_THAT(std::string(r.error().diagnostic), StartsWith("8009030C"));
-		CHECK_THAT(std::string(r.error().diagnostic), ContainsSubstring("data 52e"));
+		CHECK_THAT(std::string(r.error().diagnostic_message), StartsWith("8009030C"));
+		CHECK_THAT(std::string(r.error().diagnostic_message), ContainsSubstring("data 52e"));
 	}
 }
 
@@ -486,7 +486,7 @@ TEST_CASE("samba ad: sasl_ntlm channel binding policy", "[samba_ad][ntlm]")
 		REQUIRE_FALSE(r.has_value());
 		INFO(r.error().message());
 		CHECK(r.error().code == ldap::errc::invalid_credentials);
-		CHECK_THAT(std::string(r.error().diagnostic), StartsWith("80090346"));
+		CHECK_THAT(std::string(r.error().diagnostic_message), StartsWith("80090346"));
 	};
 	SECTION("required (strict): a wrong binding is refused")
 	{
@@ -541,7 +541,7 @@ TEST_CASE("samba ad: sasl_ntlm without a security layer on plain ldap://", "[sam
 		auto r = finish(ioc, c.sasl_bind(mech));
 		REQUIRE_FALSE(r.has_value());
 		CHECK(r.error().code == ldap::client_errc::tls_required);
-		CHECK(r.error().diagnostic.empty());
+		CHECK(r.error().diagnostic_message.empty());
 		CHECK(c.is_open());
 	}
 	SECTION("signing required (strict): strongerAuthRequired")
@@ -554,7 +554,7 @@ TEST_CASE("samba ad: sasl_ntlm without a security layer on plain ldap://", "[sam
 		CHECK(r.error().code == ldap::errc::stronger_auth_required);
 		// Windows says "00002028: LdapErr: ... The server requires binds to
 		// turn on integrity checking ..."; Samba has no Win32 code here.
-		CHECK(std::string(r.error().diagnostic) == "SASL:[GSS-SPNEGO]: Sign or Seal are required.");
+		CHECK(std::string(r.error().diagnostic_message) == "SASL:[GSS-SPNEGO]: Sign or Seal are required.");
 	}
 	SECTION("signing not required (relaxed): accepted")
 	{

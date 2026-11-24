@@ -432,7 +432,7 @@ TEST_CASE("repository: get fails on a limit code with no entry", "[net][reposito
 	auto timed_out = m.run(s.get("jdoe"));
 	REQUIRE_FALSE(timed_out.has_value());
 	CHECK(timed_out.error().code == ldap::errc::time_limit_exceeded);
-	CHECK(timed_out.error().diagnostic == "time limit");
+	CHECK(timed_out.error().diagnostic_message == "time limit");
 	CHECK(std::string(timed_out.error().context) == "search uid=jdoe,ou=people,dc=example,dc=org");
 	auto limited = m.run(s.get("jdoe"));
 	REQUIRE_FALSE(limited.has_value());

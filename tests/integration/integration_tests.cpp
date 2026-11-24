@@ -2101,7 +2101,7 @@ TEST_CASE("integration: ldap::client's write forwarders", "[integration][client]
 		{ .entry = incomplete, .attributes = { { "objectClass", { "inetOrgPerson" } }, { "cn", { "No Sn" } } } }));
 	REQUIRE_FALSE(refused.has_value());
 	CHECK(refused.error().code == ldap::errc::object_class_violation);
-	CHECK_THAT(std::string(refused.error().diagnostic), ContainsSubstring("sn"));
+	CHECK_THAT(std::string(refused.error().diagnostic_message), ContainsSubstring("sn"));
 
 	REQUIRE(finish(ioc, pool.modify({ .object = entry, .changes = { ldap::mod::add("mail", { "pool@example.org" }) } }))
 		.has_value());

@@ -20,7 +20,7 @@ namespace {
 
 auto explain(const error &e) noexcept -> std::string_view
 {
-	const std::string_view diagnostic = e.diagnostic;
+	const std::string_view diagnostic = e.diagnostic_message;
 	constexpr std::size_t code_digits = 8;
 	if (diagnostic.size() <= code_digits || diagnostic[code_digits] != ':') {
 		return {};

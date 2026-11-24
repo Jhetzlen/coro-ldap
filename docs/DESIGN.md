@@ -1876,8 +1876,8 @@ namespace jhetz::ldap {
 
 struct error {
     std::error_code         code;        // see categories below
-    std::string             diagnostic;  // server's diagnosticMessage, if any
-    std::optional<dn>       matched_dn;  // server's matchedDN, if any
+    std::string             matched_dn;  // server's matchedDN; empty: none
+    std::string             diagnostic_message; // server's diagnosticMessage; empty: none
     std::vector<url>        referrals;   // from a referral result
     std::string             context;     // client-side path, e.g.
                                          // "search ou=people: entry uid=x: attribute uidNumber"
