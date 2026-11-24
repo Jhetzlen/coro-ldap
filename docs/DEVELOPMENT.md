@@ -425,13 +425,14 @@ URL (`ldap://localhost`).
 | `delete.cpp` | delete the user `uid=jane` from `ou=alumni` (run `add`, `move`, then `delete`) |
 | `password.cpp` | reset a user's password (RFC 3062 Password Modify) |
 | `transaction.cpp` | add the user `uid=jane` and set the `manager` of `uid=user001` in one RFC 5805 transaction: both applied, or neither (run `delete` or remove `uid=jane` to run it again) |
+| `repository.cpp` | a typed `person` struct mapped to `inetOrgPerson` through an `ldap::repository` (schema checked on first use): add `uid=jdoe`, modify its `mail`, read it back, delete it |
 | `update_if.cpp` | read `uid=user001` through a `repository`, then set its `mail` with `update_if`: applied only if the entry still holds the values read (RFC 4528 Assertion control), else `assertion_failed` |
 | `starttls.cpp` | connect with StartTLS, then bind |
 | `cancel.cpp` | search the whole tree; Ctrl-C gives up on it (`capy::when_any` with `ldap::raceable`) |
 | `paged.cpp` | page through `ou=people` 100 entries at a time, sorted by `mail` (RFC 2696 paging, RFC 2891 server-side sort) |
 | `blocking.cpp` | the same search with the blocking `ldap::sync::connection` |
-| `blocking_pool.cpp` | the same search through the blocking pool `ldap::sync::client` |
-| `blocking_repository.cpp` | every person with a `mail` through an `ldap::repository` over the blocking `ldap::sync::connection`, 100 per page, collected (`search_paged`) |
+| `sync_pool.cpp` | the same search through the blocking pool `ldap::sync::client` |
+| `sync_repository.cpp` | every person with a `mail` through an `ldap::repository` over the blocking `ldap::sync::connection`, 100 per page, collected (`search_paged`) |
 | `referrals.cpp` | search `dc=example,dc=org` and follow its referrals to hosts under `example.org` (`chase_search` with `make_same_policy_connector`) |
 | `gssapi.cpp` | StartTLS, then a Kerberos bind with the default ticket (`sasl_gssapi`; built with `JHETZ_LDAP_WITH_GSSAPI`) |
 | `ntlm.cpp` | an NTLMv2 bind to Active Directory with a user name and a password (from `LDAP_PASSWORD`) over ldaps:// (`sasl_ntlm`, SASL GSS-SPNEGO; TLS required by default) |
