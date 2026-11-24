@@ -60,3 +60,6 @@ CMakeFiles/
 
 # beads issue tracker: local only
 .beads/
+
+# Conan test_package output
+CMakeUserPresets.json

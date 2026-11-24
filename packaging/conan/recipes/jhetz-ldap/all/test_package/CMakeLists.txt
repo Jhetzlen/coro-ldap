@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.25)
+project(test_package LANGUAGES CXX)
+
+option(WITH_NET "Use jhetz::ldap and jhetz::ldap_ad, not jhetz::ldap_core alone" ON)
+option(WITH_GSSAPI "Use SASL GSSAPI" OFF)
+find_package(jhetz_ldap CONFIG REQUIRED)
+
+add_executable(test_package test_package.cpp)
+target_compile_features(test_package PRIVATE cxx_std_23)
+target_compile_definitions(test_package PRIVATE $<$<BOOL:${WITH_NET}>:WITH_NET> $<$<BOOL:${WITH_GSSAPI}>:WITH_GSSAPI>)
+if(WITH_NET)
+    target_link_libraries(test_package PRIVATE jhetz::ldap jhetz::ldap_ad)
+else()
+    target_link_libraries(test_package PRIVATE jhetz::ldap_core)
+endif()
