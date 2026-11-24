@@ -127,7 +127,7 @@ namespace detail {
 	struct pooled_connection
 	{
 		connection conn{};
-		std::size_t server = 0;// index in client_state::servers
+		std::size_t server = 0;// index in server_health::servers
 		// Leases holding it, plus an acquire() probing it.
 		std::size_t leases = 0;
 		clock::time_point created{};
@@ -161,71 +161,17 @@ namespace detail {
 		bool auth_retrying = false;
 	};
 
-	struct client_state
-	{
-		client_state(corosio::io_context &io, client_options o, std::pmr::memory_resource *memory)
-		  : ioc(&io), strand(io.get_executor()), options(std::move(o)), mr(memory), rng(std::random_device{}())
-		{
-			servers.reserve(options.servers.size());
-			for (const auto &u : options.servers) {
-				servers.push_back({ .address = u, .name = std::string(std::string_view(u.to_string())) });
-				if (auto r = u.check_server(); !r && !bad_server) {
-					bad_server = detail::with_context(std::move(r.error()),
-					  detail::format(
-						"acquire: client_options::servers[{}] {}", servers.size() - 1, servers.back().name));
-				}
-			}
-			for (std::size_t i = 0; i < options.server_urls.size(); ++i) {
-				auto u = url::parse_server(options.server_urls[i]);
-				if (u) {
-					std::string name(std::string_view(u->to_string()));
-					servers.push_back({ .address = std::move(*u), .name = std::move(name) });
-				} else if (!bad_server) {
-					bad_server = detail::with_context(std::move(u.error()),
-					  detail::format("acquire: client_options::server_urls[{}] {}", i, options.server_urls[i]));
-				}
-			}
-		}
+	// ---------------------------------------------------------------- server health
 
-		corosio::io_context *ioc;
-		// Everything below is used on it.
-		client::executor_type strand;
-		client_options options;
-		std::pmr::memory_resource *mr;
+	// The servers in priority order and their backoff.
+	struct server_health
+	{
+		explicit server_health(const backoff_options &b) : backoff(&b), rng(std::random_device{}()) {}
+
+		const backoff_options *backoff;
 		std::vector<server_state> servers{};
-		// The first entry of options.servers check_server() refuses, or of
-		// options.server_urls parse_server() refuses.
-		std::optional<error> bad_server{};
-		std::vector<std::shared_ptr<pooled_connection>> pool{};
-		std::atomic<std::size_t> pool_size = 0;// pool.size(), for client::connections() on any thread
-		std::size_t opening = 0;// connection attempts in progress (they count against max_connections)
-		// Their stop sources (copies share the stop state): close() stops them.
-		std::vector<std::stop_source> attempts{};
-		// Those of the referral chases running: close() stops them too.
-		std::vector<std::stop_source> chases_running{};
-		// Exclusive acquires waiting: shared ones leave idle connections to them.
-		std::size_t exclusive_waiting = 0;
-		// Set on every change an acquire() may wait for; `version` counts them.
-		capy::async_event changed{};
-		std::uint64_t version = 0;
-		bool closed = false;
 		std::minstd_rand rng;
 		std::function<double()> jitter{};// tests: replaces rng
-		pool_connector connector{};// tests: replaces ldap::connect
-
-		// ---------------------------------------------------------------- events
-
-		void notify() noexcept
-		{
-			pool_size.store(pool.size(), std::memory_order_relaxed);
-			++version;
-			changed.set();
-		}
-
-		// Null once close() has run.
-		[[nodiscard]] auto observer() const noexcept -> client_observer * { return options.observer; }
-
-		// ---------------------------------------------------------------- servers
 
 		auto jitter_unit() -> double
 		{
@@ -235,22 +181,9 @@ namespace detail {
 			return std::uniform_real_distribution<double>(0.0, 1.0)(rng);
 		}
 
-		// try_servers()' attempt on server `i` ended; `settled`: server_failed() or
-		// server_succeeded() handled it.
-		void attempt_ended(std::size_t i, bool auth_retry, bool settled) noexcept
-		{
-			--opening;
-			if (auth_retry) {
-				servers[i].auth_retrying = false;
-				if (!settled) {
-					restart_auth_backoff(i);
-				}
-			}
-			notify();
-		}
-
-		// Server `i` failed with `e` in an attempt begun at `episode`.
-		void server_failed(std::size_t i, const error &e, std::uint64_t episode, bool auth_retry)
+		// Server `i` failed with `e` in an attempt begun at `episode`; `o`
+		// hears of the retry.
+		void failed(std::size_t i, const error &e, std::uint64_t episode, bool auth_retry, client_observer *o)
 		{
 			auto &s = servers[i];
 			const bool auth_failed = e.code == cond::auth_failed;
@@ -269,14 +202,13 @@ namespace detail {
 			}
 			++s.episode;
 			++s.failures;
-			const milliseconds delay =
-			  auth ? auth_delay(s.failures, unit) : backoff_delay(options.backoff, s.failures, unit);
+			const milliseconds delay = auth ? auth_delay(s.failures, unit) : backoff_delay(*backoff, s.failures, unit);
 			if (auth_failed) {
 				++s.auth_failures;
 			}
 			s.retry_at = clock::now() + delay;
 			s.auth_backoff = auth;
-			if (auto *o = observer()) {
+			if (o != nullptr) {
 				// Unproven: report the stored authentication error.
 				o->on_retry(s.address, unproven && s.last_error ? *s.last_error : e, delay);
 			}
@@ -287,8 +219,7 @@ namespace detail {
 		[[nodiscard]] auto auth_delay(std::size_t failures, double unit) const noexcept -> milliseconds
 		{
 			constexpr double half = 0.5;
-			return std::max(
-			  options.backoff.auth_failure_min, backoff_delay(options.backoff, failures, half + (half * unit)));
+			return std::max(backoff->auth_failure_min, backoff_delay(*backoff, failures, half + (half * unit)));
 		}
 
 		// An auth retry left unsettled by a destroyed task: restarts the backoff,
@@ -310,7 +241,7 @@ namespace detail {
 			s.retry_at = clock::now() + auth_delay(s.failures, unit);
 		}
 
-		void server_succeeded(std::size_t i) noexcept
+		void succeeded(std::size_t i) noexcept
 		{
 			auto &s = servers[i];
 			++s.episode;// attempts begun before it do not join a later failure's episode
@@ -362,16 +293,28 @@ namespace detail {
 			return next;
 		}
 
-		// A slot is free and a server not excluded (nor `skip`) may be tried now.
-		[[nodiscard]] auto can_open(const std::vector<bool> &excluded,
+		// A server not excluded (nor `skip`) may be tried now.
+		[[nodiscard]] auto any_ready(const std::vector<bool> &excluded,
 		  clock::time_point now,
-		  std::optional<std::size_t> skip = std::nullopt) const noexcept -> bool
+		  std::optional<std::size_t> skip) const noexcept -> bool
 		{
-			if (!has_free_slot()) {
-				return false;
-			}
 			for (std::size_t i = 0; i < servers.size(); ++i) {
 				if (!excluded[i] && i != skip && servers[i].retry_at <= now && !servers[i].auth_retrying) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		// A server of higher priority than `server`, not excluded (nor `avoid`),
+		// is past its backoff.
+		[[nodiscard]] auto higher_priority_ready(std::size_t server,
+		  const std::vector<bool> &excluded,
+		  clock::time_point now,
+		  std::optional<std::size_t> avoid) const noexcept -> bool
+		{
+			for (std::size_t i = 0; i < server; ++i) {
+				if (!excluded[i] && i != avoid && servers[i].retry_at <= now) {
 					return true;
 				}
 			}
@@ -400,19 +343,51 @@ namespace detail {
 			e.context += " (backing off: acquire_timeout ends first)";
 			return e;
 		}
+	};
 
-		// Whether an attempt cut short by `deadline` is excused: it began with less
-		// than half of acquire_timeout left.
-		[[nodiscard]] auto begun_late(net::detail::deadline_t deadline, clock::time_point begun) const noexcept -> bool
+	// ---------------------------------------------------------------- pool
+
+	// The pooled connections, the slots they and the attempts take, and the
+	// event acquire() waits on.
+	struct connection_pool
+	{
+		connection_pool(corosio::io_context &io, const client_options &o, const server_health &h) noexcept
+		  : ioc(&io), options(&o), health(&h)
+		{}
+
+		corosio::io_context *ioc;
+		const client_options *options;
+		const server_health *health;
+		std::vector<std::shared_ptr<pooled_connection>> conns{};
+		std::atomic<std::size_t> size = 0;// conns.size(), for client::connections() on any thread
+		std::size_t opening = 0;// connection attempts in progress (they count against max_connections)
+		// Exclusive acquires waiting: shared ones leave idle connections to them.
+		std::size_t exclusive_waiting = 0;
+		// Set on every change an acquire() may wait for; `version` counts them.
+		capy::async_event changed{};
+		std::uint64_t version = 0;
+		bool closed = false;
+
+		void notify() noexcept
 		{
-			return deadline && (*deadline - begun) * 2 < options.acquire_timeout;
+			size.store(conns.size(), std::memory_order_relaxed);
+			++version;
+			changed.set();
 		}
 
-		// ---------------------------------------------------------------- pool
+		// Null once close() has run.
+		[[nodiscard]] auto observer() const noexcept -> client_observer * { return options->observer; }
+
+		// `p`, new and leased, joins the pool.
+		void add(std::shared_ptr<pooled_connection> p)
+		{
+			conns.push_back(std::move(p));
+			size.store(conns.size(), std::memory_order_relaxed);
+		}
 
 		[[nodiscard]] auto expired(const pooled_connection &c, clock::time_point now) const noexcept -> bool
 		{
-			return options.max_lifetime && now - c.created >= *options.max_lifetime;
+			return options->max_lifetime && now - c.created >= *options->max_lifetime;
 		}
 
 		[[nodiscard]] auto retire_reason(const pooled_connection &c, clock::time_point now) const noexcept
@@ -435,22 +410,22 @@ namespace detail {
 		[[nodiscard]] auto live() const noexcept -> std::size_t
 		{
 			return opening
-				   + static_cast<std::size_t>(std::ranges::count_if(pool, [](const auto &c) { return !c->retired; }));
+				   + static_cast<std::size_t>(std::ranges::count_if(conns, [](const auto &c) { return !c->retired; }));
 		}
 
-		[[nodiscard]] auto has_free_slot() const noexcept -> bool { return live() < options.max_connections; }
+		[[nodiscard]] auto has_free_slot() const noexcept -> bool { return live() < options->max_connections; }
 
 		// When the first connection that may be handed out passes
 		// max_lifetime: acquire() waiting for a slot looks again then.
 		[[nodiscard]] auto next_expiry() const noexcept -> std::optional<clock::time_point>
 		{
 			std::optional<clock::time_point> next;
-			if (!options.max_lifetime) {
+			if (!options->max_lifetime) {
 				return next;
 			}
-			for (const auto &c : pool) {
-				if (!c->retired && (!next || c->created + *options.max_lifetime < *next)) {
-					next = c->created + *options.max_lifetime;
+			for (const auto &c : conns) {
+				if (!c->retired && (!next || c->created + *options->max_lifetime < *next)) {
+					next = c->created + *options->max_lifetime;
 				}
 			}
 			return next;
@@ -486,13 +461,13 @@ namespace detail {
 		// Takes `c` out of the pool and ends it.
 		void remove(const std::shared_ptr<pooled_connection> &c, disconnect_reason reason) noexcept
 		{
-			const auto it = std::ranges::find(pool, c);
-			if (it == pool.end()) {
+			const auto it = std::ranges::find(conns, c);
+			if (it == conns.end()) {
 				return;
 			}
-			pool.erase(it);
+			conns.erase(it);
 			if (auto *o = observer()) {
-				o->on_disconnect(servers[c->server].address, reason);
+				o->on_disconnect(health->servers[c->server].address, reason);
 			}
 			shut_down(*c);
 			notify();
@@ -515,7 +490,7 @@ namespace detail {
 		// connections.
 		void prune(clock::time_point now) noexcept
 		{
-			const auto all = pool;// remove() changes `pool`
+			const auto all = conns;// remove() changes `conns`
 			for (const auto &c : all) {
 				if (!c->retired) {
 					if (const auto why = retire_reason(*c, now); why) {
@@ -538,7 +513,7 @@ namespace detail {
 		{
 			std::shared_ptr<pooled_connection> idle;
 			std::shared_ptr<pooled_connection> shared;
-			for (const auto &c : pool) {
+			for (const auto &c : conns) {
 				if (c->retired || c->probing || c->exclusive || c->server == avoid || retire_reason(*c, now)) {
 					continue;
 				}
@@ -563,6 +538,14 @@ namespace detail {
 			return shared;
 		}
 
+		// A slot is free and a server not excluded (nor `skip`) may be tried now.
+		[[nodiscard]] auto can_open(const std::vector<bool> &excluded,
+		  clock::time_point now,
+		  std::optional<std::size_t> skip = std::nullopt) const noexcept -> bool
+		{
+			return has_free_slot() && health->any_ready(excluded, now, skip);
+		}
+
 		// pick() preferring other servers to `avoid`.
 		[[nodiscard]] auto pick_avoiding(bool exclusive,
 		  const std::vector<bool> &excluded,
@@ -578,6 +561,14 @@ namespace detail {
 			return pick(exclusive, can_open(excluded, now), now);
 		}
 
+		// A shared acquire with nothing to share while an idle connection is left
+		// to a waiting exclusive acquire: it waits.
+		[[nodiscard]] auto waits_for_exclusive() const -> bool
+		{
+			const auto now = clock::now();
+			return exclusive_waiting != 0 && !pick(false, false, now) && pick(true, false, now);
+		}
+
 		// `c` (idle) is to a lower-priority server, failback_after old, and a
 		// higher-priority server may be tried.
 		[[nodiscard]] auto should_fail_back(const pooled_connection &c,
@@ -585,20 +576,15 @@ namespace detail {
 		  clock::time_point now,
 		  std::optional<std::size_t> avoid) const noexcept -> bool
 		{
-			if (c.leases != 0 || c.server == 0 || now - c.created < options.failback_after) {
+			if (c.leases != 0 || c.server == 0 || now - c.created < options->failback_after) {
 				return false;
 			}
-			for (std::size_t i = 0; i < c.server; ++i) {
-				if (!excluded[i] && i != avoid && servers[i].retry_at <= now) {
-					return true;
-				}
-			}
-			return false;
+			return health->higher_priority_ready(c.server, excluded, now, avoid);
 		}
 
 		[[nodiscard]] auto needs_probe(const pooled_connection &c, clock::time_point now) const noexcept -> bool
 		{
-			return c.leases == 0 && options.idle_check && now - c.last_used >= *options.idle_check;
+			return c.leases == 0 && options->idle_check && now - c.last_used >= *options->idle_check;
 		}
 
 		// A lease returned.
@@ -610,7 +596,7 @@ namespace detail {
 			}
 			const auto now = clock::now();
 			c->last_used = now;
-			if (closed || std::ranges::find(pool, c) == pool.end()) {
+			if (closed || std::ranges::find(conns, c) == conns.end()) {
 				return;
 			}
 			if (!c->retired) {
@@ -622,21 +608,155 @@ namespace detail {
 			notify();
 		}
 
+		// Retires `c` after the retryable failure `code`; returns the server to
+		// avoid (one that answered busy or unavailable).
+		auto set_aside(const std::shared_ptr<pooled_connection> &c, std::error_code code) noexcept
+		  -> std::optional<std::size_t>
+		{
+			const bool refused = code == cond::busy_or_unavailable;
+			if (!closed && !c->retired && detail::accepts_requests(c->conn)
+				&& std::ranges::find(conns, c) != conns.end()) {
+				retire(c, refused ? disconnect_reason::busy_or_unavailable : disconnect_reason::closed);
+			}
+			return refused ? std::optional<std::size_t>{ c->server } : std::nullopt;
+		}
+
+		// Ends every pooled connection; the pool hands out nothing again.
 		void close() noexcept
 		{
-			if (closed) {
-				return;
-			}
 			closed = true;
-			const auto all = std::move(pool);
-			pool.clear();
+			const auto all = std::move(conns);
+			conns.clear();
 			for (const auto &c : all) {
 				c->retired = disconnect_reason::client_closed;
 				if (auto *o = observer()) {
-					o->on_disconnect(servers[c->server].address, disconnect_reason::client_closed);
+					o->on_disconnect(health->servers[c->server].address, disconnect_reason::client_closed);
 				}
 				shut_down(*c);
 			}
+		}
+
+		// Waits for notify(), until `until` at most. An error only if stopped.
+		auto wait_for_change(std::optional<clock::time_point> until) -> capy::task<std::error_code>
+		{
+			changed.clear();
+			std::error_code ec;
+			if (until) {
+				auto [e] = co_await corosio::timeout(changed.wait(), *until);
+				ec = e;
+			} else {
+				auto [e] = co_await changed.wait();
+				ec = e;
+			}
+			co_return ec == capy::cond::timeout ? std::error_code{} : ec;
+		}
+	};
+
+	// ---------------------------------------------------------------- client state
+
+	struct client_state
+	{
+		client_state(corosio::io_context &io, client_options o, std::pmr::memory_resource *memory)
+		  : ioc(&io), strand(io.get_executor()), options(std::move(o)), mr(memory), health(options.backoff),
+			pool(io, options, health)
+		{
+			auto &servers = health.servers;
+			servers.reserve(options.servers.size());
+			for (const auto &u : options.servers) {
+				servers.push_back({ .address = u, .name = std::string(std::string_view(u.to_string())) });
+				if (auto r = u.check_server(); !r && !bad_server) {
+					bad_server = detail::with_context(std::move(r.error()),
+					  detail::format(
+						"acquire: client_options::servers[{}] {}", servers.size() - 1, servers.back().name));
+				}
+			}
+			for (std::size_t i = 0; i < options.server_urls.size(); ++i) {
+				auto u = url::parse_server(options.server_urls[i]);
+				if (u) {
+					std::string name(std::string_view(u->to_string()));
+					servers.push_back({ .address = std::move(*u), .name = std::move(name) });
+				} else if (!bad_server) {
+					bad_server = detail::with_context(std::move(u.error()),
+					  detail::format("acquire: client_options::server_urls[{}] {}", i, options.server_urls[i]));
+				}
+			}
+		}
+
+		corosio::io_context *ioc;
+		// Everything below is used on it.
+		client::executor_type strand;
+		client_options options;
+		std::pmr::memory_resource *mr;
+		server_health health;
+		connection_pool pool;
+		// The first entry of options.servers check_server() refuses, or of
+		// options.server_urls parse_server() refuses.
+		std::optional<error> bad_server{};
+		// Stop sources of the connection attempts (copies share the stop state):
+		// close() stops them.
+		std::vector<std::stop_source> attempts{};
+		// Those of the referral chases running: close() stops them too.
+		std::vector<std::stop_source> chases_running{};
+		pool_connector connector{};// tests: replaces ldap::connect
+
+		// Null once close() has run.
+		[[nodiscard]] auto observer() const noexcept -> client_observer * { return options.observer; }
+
+		// Whether an attempt cut short by `deadline` is excused: it began with less
+		// than half of acquire_timeout left.
+		[[nodiscard]] auto begun_late(net::detail::deadline_t deadline, clock::time_point begun) const noexcept -> bool
+		{
+			return deadline && (*deadline - begun) * 2 < options.acquire_timeout;
+		}
+
+		// An attempt on server `i` ended; `settled`: health.failed() or
+		// health.succeeded() handled it.
+		void attempt_ended(std::size_t i, bool auth_retry, bool settled) noexcept
+		{
+			--pool.opening;
+			if (auth_retry) {
+				health.servers[i].auth_retrying = false;
+				if (!settled) {
+					health.restart_auth_backoff(i);
+				}
+			}
+			pool.notify();
+		}
+
+		// Options acquire() cannot work with.
+		[[nodiscard]] auto unusable_options() const -> std::optional<error>
+		{
+			if (bad_server) {
+				return bad_server;
+			}
+			if (health.servers.empty()) {
+				return make_error(
+				  client_errc::invalid_url, "acquire: client_options::servers and server_urls are empty");
+			}
+			if (options.max_connections == 0) {
+				return make_error(
+				  std::make_error_code(std::errc::invalid_argument), "acquire: client_options::max_connections is 0");
+			}
+			return std::nullopt;
+		}
+
+		// Whether `request`, with its overrides, chases.
+		[[nodiscard]] auto chases(const search_params &request) const noexcept -> bool
+		{
+			return request.follow_referrals.value_or(options.referrals.follow_referrals)
+				   || request.follow_references.value_or(options.referrals.follow_references);
+		}
+		[[nodiscard]] auto chases(const compare_params &request) const noexcept -> bool
+		{
+			return request.follow_referrals.value_or(options.referrals.follow_referrals);
+		}
+
+		void close() noexcept
+		{
+			if (pool.closed) {
+				return;
+			}
+			pool.close();
 			// Stop the connection attempts in progress: waiting acquires fail
 			// at once.
 			// NOLINTNEXTLINE(misc-const-correctness): request_stop() is non-const in the standard (MSVC)
@@ -651,19 +771,34 @@ namespace detail {
 			}
 			// The observer need only outlive close(): no hook runs after it.
 			options.observer = nullptr;
-			notify();
+			pool.notify();
 		}
+	};
 
-		// ---------------------------------------------------------------- tasks
+	// What the client's tasks need of a lease.
+	struct lease_access
+	{
+		template<class Lease>
+		static auto make(std::shared_ptr<client_state> state, std::shared_ptr<pooled_connection> conn) -> Lease
+		{
+			return Lease(std::move(state), std::move(conn));
+		}
+		static auto state(const lease_base &l) noexcept -> const std::shared_ptr<client_state> & { return l.state_; }
+		static auto conn(const lease_base &l) noexcept -> const std::shared_ptr<pooled_connection> & { return l.conn_; }
+	};
+
+	namespace {
+
+		using state_ptr = std::shared_ptr<client_state>;
+
+		// ---------------------------------------------------------------- acquire
 
 		// Connect, StartTLS (by connect, per the options) and the setup.
-		static auto connect_and_set_up(std::shared_ptr<client_state> self, std::size_t i)
-		  -> capy::task<result<connection>>
+		auto connect_and_set_up(state_ptr self, std::size_t i) -> capy::task<result<connection>>
 		{
-			auto c =
-			  self->connector
-				? co_await self->connector(*self->ioc, self->servers[i].address, self->options.connection, self->mr)
-				: co_await ldap::connect(*self->ioc, self->servers[i].address, self->options.connection, self->mr);
+			const auto &address = self->health.servers[i].address;
+			auto c = self->connector ? co_await self->connector(*self->ioc, address, self->options.connection, self->mr)
+									 : co_await ldap::connect(*self->ioc, address, self->options.connection, self->mr);
 			if (!c) {
 				co_return std::unexpected(std::move(c.error()));
 			}
@@ -679,9 +814,8 @@ namespace detail {
 
 		// connect_and_set_up within `deadline`, stopped by close().
 		// `cut_short`: set if the deadline ended it.
-		static auto
-		  open_one(std::shared_ptr<client_state> self, std::size_t i, net::detail::deadline_t deadline, bool &cut_short)
-			-> capy::task<result<connection>>
+		auto open_one(state_ptr self, std::size_t i, net::detail::deadline_t deadline, bool &cut_short)
+		  -> capy::task<result<connection>>
 		{
 			const std::stop_source stop;
 			self->attempts.push_back(stop);
@@ -699,19 +833,19 @@ namespace detail {
 		}
 
 		// Tells waiting acquires when `c` closes, whatever closes it.
-		static void watch_close(const std::shared_ptr<client_state> &self, connection &c) noexcept
+		void watch_close(const state_ptr &self, connection &c) noexcept
 		{
 			detail::set_close_hook(c, [state = std::weak_ptr<client_state>(self)] noexcept {
 				if (auto s = state.lock()) {
 					const client::executor_type strand = s->strand;
-					detail::run_on_strand(strand, [s = std::move(s)] noexcept { s->notify(); });
+					detail::run_on_strand(strand, [s = std::move(s)] noexcept { s->pool.notify(); });
 				}
 			});
 		}
 
 		// The k-th server try_servers() tries: priority order, `avoid` last.
-		[[nodiscard]] static auto
-		  nth_server(std::size_t k, std::size_t count, std::optional<std::size_t> avoid) noexcept -> std::size_t
+		[[nodiscard]] auto nth_server(std::size_t k, std::size_t count, std::optional<std::size_t> avoid) noexcept
+		  -> std::size_t
 		{
 			if (!avoid) {
 				return k;
@@ -724,11 +858,8 @@ namespace detail {
 
 		// try_servers()' new connection to server `i`, pooled with one lease
 		// (exclusive or not). Fails if on_connect closed the client.
-		static auto adopt(const std::shared_ptr<client_state> &self,
-		  std::size_t i,
-		  connection conn,
-		  bool exclusive,
-		  const std::string &context) -> result<std::shared_ptr<pooled_connection>>
+		auto adopt(const state_ptr &self, std::size_t i, connection conn, bool exclusive, const std::string &context)
+		  -> result<std::shared_ptr<pooled_connection>>
 		{
 			auto p = std::make_shared<pooled_connection>();
 			p->conn = std::move(conn);
@@ -739,63 +870,63 @@ namespace detail {
 			p->binds = p->conn.bind_count();
 			p->exclusive = exclusive;
 			watch_close(self, p->conn);
-			self->pool.push_back(p);
-			self->pool_size.store(self->pool.size(), std::memory_order_relaxed);
+			self->pool.add(p);
 			if (auto *o = self->observer()) {
-				o->on_connect(self->servers[i].address, result<void>{});
+				o->on_connect(self->health.servers[i].address, result<void>{});
 			}
-			if (self->closed) {// closed by the hook: close() closed `p` too
+			if (self->pool.closed) {// closed by the hook: close() closed `p` too
 				return fail(client_errc::not_connected, context + ": client closed");
 			}
 			return p;
 		}
 
 		// try_servers()' attempt on server `i` failed with `e`, the
-		// server's failure: on_connect, then server_failed().
-		void connect_failed(std::size_t i, const error &e, std::uint64_t episode, bool auth_retry)
+		// server's failure: on_connect, then health.failed().
+		void connect_failed(client_state &self, std::size_t i, const error &e, std::uint64_t episode, bool auth_retry)
 		{
-			if (auto *o = observer()) {
-				o->on_connect(servers[i].address, std::unexpected(e));
+			if (auto *o = self.observer()) {
+				o->on_connect(self.health.servers[i].address, std::unexpected(e));
 			}
-			server_failed(i, e, episode, auth_retry);
+			self.health.failed(i, e, episode, auth_retry, self.observer());
 		}
 
 		// One pass over the servers whose backoff has ended, `avoid` last: the
 		// connection pooled with one lease, or null (`last` is then the last
 		// failure). Fails only when the client closed or the task stopped.
-		static auto try_servers(std::shared_ptr<client_state> self,
+		auto try_servers(state_ptr self,
 		  net::detail::deadline_t deadline,
 		  bool exclusive,
 		  std::vector<bool> &excluded,
 		  std::optional<error> &last,
 		  std::optional<std::size_t> avoid) -> capy::task<result<std::shared_ptr<pooled_connection>>>
 		{
-			const std::size_t count = self->servers.size();
+			auto &health = self->health;
+			const std::size_t count = health.servers.size();
 			for (std::size_t k = 0; k < count; ++k) {
 				const std::size_t i = nth_server(k, count, avoid);
-				if (self->closed) {// an observer hook may close the client
+				if (self->pool.closed) {// an observer hook may close the client
 					co_return fail(client_errc::not_connected, "acquire: client closed");
 				}
 				const auto now = clock::now();
 				if (deadline && now >= *deadline) {
 					co_return nullptr;
 				}
-				auto &server = self->servers[i];
+				auto &server = health.servers[i];
 				if (excluded[i] || server.retry_at > now || server.auth_retrying) {
 					continue;
 				}
 				// The avoided server comes last; a pooled connection pick_avoiding() would
 				// now hand out serves instead.
-				if (i == avoid && self->pick_avoiding(exclusive, excluded, now, avoid)) {
+				if (i == avoid && self->pool.pick_avoiding(exclusive, excluded, now, avoid)) {
 					co_return nullptr;
 				}
 				const std::uint64_t episode = server.episode;
 				// After an authentication backoff, one attempt only.
 				const bool auth_retry = server.auth_backoff;
 				server.auth_retrying = auth_retry;
-				++self->opening;
-				// Set once server_failed() or server_succeeded() handled the attempt; an
-				// auth retry left unsettled restarts its backoff.
+				++self->pool.opening;
+				// Set once health.failed() or health.succeeded() handled the attempt;
+				// an auth retry left unsettled restarts its backoff.
 				bool settled = false;
 				const scope_exit done{ [&self, i, auth_retry, &settled] noexcept {
 					self->attempt_ended(i, auth_retry, settled);
@@ -804,7 +935,7 @@ namespace detail {
 				bool cut_short = false;
 				auto r = co_await open_one(self, i, deadline, cut_short);
 				const std::string context = "acquire " + server.name;
-				if (self->closed) {
+				if (self->pool.closed) {
 					settled = true;
 					if (r) {
 						r->close();
@@ -814,25 +945,25 @@ namespace detail {
 				if (!r && cut_short && late) {// excused; the deadline passed: nothing more is tried
 					last = detail::with_context(std::move(r.error()), context);
 					if (auth_retry) {// no on_connect, but the auth backoff starts again
-						self->server_failed(i, *last, episode, true);
+						health.failed(i, *last, episode, true, self->observer());
 					}
 					settled = true;
 					co_return nullptr;
 				}
 				if (r) {
-					self->server_succeeded(i);
+					health.succeeded(i);
 					settled = true;
 					co_return adopt(self, i, std::move(*r), exclusive, context);
 				}
 				error e = detail::with_context(std::move(r.error()), context);
 				if (e.code == cond::canceled && (co_await capy::this_coro::stop_token).stop_requested()) {
 					if (auth_retry) {// no on_connect, but the auth backoff starts again
-						self->server_failed(i, e, episode, true);
+						health.failed(i, e, episode, true, self->observer());
 					}
 					settled = true;
 					co_return std::unexpected(std::move(e));// not the server's fault
 				}
-				self->connect_failed(i, e, episode, auth_retry);
+				connect_failed(*self, i, e, episode, auth_retry);
 				settled = true;
 				if (e.code == cond::auth_failed || e.code == cond::invalid_input) {
 					excluded[i] = true;// retrying cannot help: not again in this acquire()
@@ -845,17 +976,16 @@ namespace detail {
 		// The idle check: a root DSE base search for no attributes, within
 		// probe_timeout and `deadline`. `cut_short`: the deadline ended it and it is
 		// excused.
-		static auto probe(std::shared_ptr<client_state> self,
-		  std::shared_ptr<pooled_connection> c,
-		  net::detail::deadline_t deadline,
-		  bool &cut_short) -> capy::task<result<void>>
+		auto
+		  probe(state_ptr self, std::shared_ptr<pooled_connection> c, net::detail::deadline_t deadline, bool &cut_short)
+			-> capy::task<result<void>>
 		{
 			c->probing = true;
 			++c->leases;// so that nothing removes it meanwhile
 			const scope_exit done{ [&self, &c] noexcept {
 				c->probing = false;
 				--c->leases;
-				self->notify();
+				self->pool.notify();
 			} };
 			milliseconds timeout = self->options.probe_timeout;
 			bool capped = false;
@@ -876,31 +1006,32 @@ namespace detail {
 				outcome = std::unexpected(std::move(r.error()));
 			}
 			if (auto *o = self->observer()) {
-				o->on_probe(self->servers[c->server].address, outcome);
+				o->on_probe(self->health.servers[c->server].address, outcome);
 			}
 			co_return outcome;
 		}
 
 		// acquire()'s look at the pool: an error, nullopt (nothing to hand out), a
 		// connection with its lease counted, or null to look again.
-		static auto from_pool(std::shared_ptr<client_state> self,
+		auto from_pool(state_ptr self,
 		  net::detail::deadline_t deadline,
 		  bool exclusive,
 		  const std::vector<bool> &excluded,
 		  std::optional<std::size_t> avoid) -> capy::task<result<std::optional<std::shared_ptr<pooled_connection>>>>
 		{
 			using found = std::optional<std::shared_ptr<pooled_connection>>;
+			auto &pool = self->pool;
 			const auto now = clock::now();
-			self->prune(now);
-			auto c = self->pick_avoiding(exclusive, excluded, now, avoid);
+			pool.prune(now);
+			auto c = pool.pick_avoiding(exclusive, excluded, now, avoid);
 			if (!c) {
 				co_return found{};
 			}
-			if (self->should_fail_back(*c, excluded, now, avoid)) {
-				self->retire(c, disconnect_reason::failback);
+			if (pool.should_fail_back(*c, excluded, now, avoid)) {
+				pool.retire(c, disconnect_reason::failback);
 				co_return found{ nullptr };
 			}
-			if (self->needs_probe(*c, now)) {
+			if (pool.needs_probe(*c, now)) {
 				if (deadline && now >= *deadline) {
 					co_return found{};// no time left to probe it: acquire() gives up
 				}
@@ -913,10 +1044,10 @@ namespace detail {
 					co_return fail(capy::error::canceled, "acquire");// the connection stays
 				}
 				if (!p) {
-					self->retire(c, disconnect_reason::probe_failed);
+					pool.retire(c, disconnect_reason::probe_failed);
 					co_return found{ nullptr };
 				}
-				if (self->closed || c->retired || self->retire_reason(*c, clock::now())) {
+				if (pool.closed || c->retired || pool.retire_reason(*c, clock::now())) {
 					co_return found{ nullptr };
 				}
 			}
@@ -928,37 +1059,24 @@ namespace detail {
 
 		// acquire() gives up at its deadline: the last failure, else (if
 		// `backing_off`) the error of the server backing off, else a timeout.
-		[[nodiscard]] auto give_up(const std::vector<bool> &excluded, std::optional<error> last, bool backing_off) const
-		  -> error
+		[[nodiscard]] auto give_up(const server_health &health,
+		  const std::vector<bool> &excluded,
+		  std::optional<error> last,
+		  bool backing_off) -> error
 		{
 			if (last) {
 				return std::move(*last);
 			}
 			if (backing_off) {
-				if (auto e = backoff_error(excluded, clock::now()); e) {
+				if (auto e = health.backoff_error(excluded, clock::now()); e) {
 					return std::move(*e);
 				}
 			}
 			return make_error(capy::error::timeout, "acquire: no connection ready within acquire_timeout");
 		}
 
-		// Waits for notify(), until `until` at most. An error only if stopped.
-		auto wait_for_change(std::optional<clock::time_point> until) -> capy::task<std::error_code>
-		{
-			changed.clear();
-			std::error_code ec;
-			if (until) {
-				auto [e] = co_await corosio::timeout(changed.wait(), *until);
-				ec = e;
-			} else {
-				auto [e] = co_await changed.wait();
-				ec = e;
-			}
-			co_return ec == capy::cond::timeout ? std::error_code{} : ec;
-		}
-
 		// The earliest of `times` (nullopt: none).
-		[[nodiscard]] static auto earliest(std::initializer_list<std::optional<clock::time_point>> times) noexcept
+		[[nodiscard]] auto earliest(std::initializer_list<std::optional<clock::time_point>> times) noexcept
 		  -> std::optional<clock::time_point>
 		{
 			std::optional<clock::time_point> first;
@@ -972,30 +1090,12 @@ namespace detail {
 
 		// wait_for_change(), counted in exclusive_waiting for an exclusive
 		// acquire (until it resumes, or its task is destroyed).
-		static auto wait(std::shared_ptr<client_state> self, std::optional<clock::time_point> until, bool exclusive)
-		  -> capy::task<std::error_code>
+		auto wait(state_ptr self, std::optional<clock::time_point> until, bool exclusive) -> capy::task<std::error_code>
 		{
 			const std::size_t counted = exclusive ? 1 : 0;
-			self->exclusive_waiting += counted;
-			const scope_exit done{ [&self, counted] noexcept { self->exclusive_waiting -= counted; } };
-			co_return co_await self->wait_for_change(until);
-		}
-
-		// Options acquire() cannot work with.
-		[[nodiscard]] auto unusable_options() const -> std::optional<error>
-		{
-			if (bad_server) {
-				return bad_server;
-			}
-			if (servers.empty()) {
-				return make_error(
-				  client_errc::invalid_url, "acquire: client_options::servers and server_urls are empty");
-			}
-			if (options.max_connections == 0) {
-				return make_error(
-				  std::make_error_code(std::errc::invalid_argument), "acquire: client_options::max_connections is 0");
-			}
-			return std::nullopt;
+			self->pool.exclusive_waiting += counted;
+			const scope_exit done{ [&self, counted] noexcept { self->pool.exclusive_waiting -= counted; } };
+			co_return co_await self->pool.wait_for_change(until);
 		}
 
 		// What open_new() leaves acquire() to do.
@@ -1012,14 +1112,14 @@ namespace detail {
 
 		// acquire() found nothing in the pool: try_servers() if a slot is free,
 		// else `wake` is when the earliest backoff ends.
-		static auto open_new(std::shared_ptr<client_state> self,
+		auto open_new(state_ptr self,
 		  net::detail::deadline_t deadline,
 		  bool exclusive,
 		  std::vector<bool> &excluded,
 		  std::optional<error> &last,
 		  std::optional<std::size_t> avoid) -> capy::task<result<opened>>
 		{
-			if (!self->has_free_slot()) {
+			if (!self->pool.has_free_slot()) {
 				co_return opened{};
 			}
 			auto r = co_await try_servers(self, deadline, exclusive, excluded, last, avoid);
@@ -1029,26 +1129,18 @@ namespace detail {
 			if (*r) {
 				co_return opened{ .conn = std::move(*r) };
 			}
-			const auto wake = self->next_retry(excluded);
-			if (!wake && (exclusive || (!self->pick(false, false, clock::now()) && !self->waits_for_exclusive()))) {
-				co_return std::unexpected(self->give_up(excluded, std::move(last), false));
+			const auto &pool = self->pool;
+			const auto wake = self->health.next_retry(excluded);
+			if (!wake && (exclusive || (!pool.pick(false, false, clock::now()) && !pool.waits_for_exclusive()))) {
+				co_return std::unexpected(give_up(self->health, excluded, std::move(last), false));
 			}
-			co_return opened{ .look_again = !wake && !self->waits_for_exclusive(), .wake = wake };
-		}
-
-		// A shared acquire with nothing to share while an idle connection is left
-		// to a waiting exclusive acquire: it waits.
-		[[nodiscard]] auto waits_for_exclusive() const -> bool
-		{
-			const auto now = clock::now();
-			return exclusive_waiting != 0 && !pick(false, false, now) && pick(true, false, now);
+			co_return opened{ .look_again = !wake && !pool.waits_for_exclusive(), .wake = wake };
 		}
 
 		// `avoid`: a server used only when no other serves; its backoff is
 		// untouched.
 		template<class Lease>
-		static auto acquire(std::shared_ptr<client_state> self, std::optional<std::size_t> avoid = std::nullopt)
-		  -> capy::task<result<Lease>>
+		auto acquire_lease(state_ptr self, std::optional<std::size_t> avoid = std::nullopt) -> capy::task<result<Lease>>
 		{
 			constexpr bool exclusive = std::is_same_v<Lease, exclusive_lease>;
 			constexpr std::string_view context = "acquire";
@@ -1057,8 +1149,8 @@ namespace detail {
 			}
 			const auto start = clock::now();
 			const auto deadline = net::detail::deadline_after(self->options.acquire_timeout, start);
-			std::vector<bool> excluded(self->servers.size(), false);
-			const auto auth_seen = self->auth_failure_counts();
+			std::vector<bool> excluded(self->health.servers.size(), false);
+			const auto auth_seen = self->health.auth_failure_counts();
 			std::optional<error> last;
 			bool waited = false;
 			bool leased = false;
@@ -1071,23 +1163,23 @@ namespace detail {
 			const scope_exit leave{ [&] noexcept {
 				if constexpr (exclusive) {
 					if (waited && !leased) {
-						self->notify();
+						self->pool.notify();
 					}
 				}
 			} };
 			const auto hand_out = [&self, &leased](std::shared_ptr<pooled_connection> c) {
 				leased = true;
-				return Lease(self, std::move(c));
+				return lease_access::make<Lease>(self, std::move(c));
 			};
 			while (true) {
-				if (self->closed) {
+				if (self->pool.closed) {
 					co_return fail(client_errc::not_connected, "acquire: client closed");
 				}
 				if ((co_await capy::this_coro::stop_token).stop_requested()) {
 					co_return fail(capy::error::canceled, context);
 				}
-				self->exclude_auth_failures(excluded, auth_seen, last, clock::now());
-				const std::uint64_t seen = self->version;
+				self->health.exclude_auth_failures(excluded, auth_seen, last, clock::now());
+				const std::uint64_t seen = self->pool.version;
 				auto pooled = co_await from_pool(self, deadline, exclusive, excluded, avoid);
 				if (!pooled) {
 					co_return std::unexpected(std::move(pooled.error()));
@@ -1099,7 +1191,7 @@ namespace detail {
 					continue;
 				}
 				if (deadline && clock::now() >= *deadline) {// nothing is tried after the deadline
-					co_return std::unexpected(self->give_up(excluded, std::move(last), false));
+					co_return std::unexpected(give_up(self->health, excluded, std::move(last), false));
 				}
 				auto r = co_await open_new(self, deadline, exclusive, excluded, last, avoid);
 				if (!r) {
@@ -1108,17 +1200,17 @@ namespace detail {
 				if (r->conn) {
 					co_return hand_out(std::move(r->conn));
 				}
-				if (r->look_again || self->version != seen) {
+				if (r->look_again || self->pool.version != seen) {
 					continue;// an open connection to share, or something changed meanwhile
 				}
 				const auto wake = r->wake;
 				if (deadline && (clock::now() >= *deadline || (wake && *wake > *deadline))) {
-					co_return std::unexpected(self->give_up(excluded, std::move(last), wake.has_value()));
+					co_return std::unexpected(give_up(self->health, excluded, std::move(last), wake.has_value()));
 				}
 				waited = true;
 				// Looks again when the earliest backoff ends, a held connection expires, or
 				// at the deadline.
-				const auto until = earliest({ wake, self->next_expiry(), deadline });
+				const auto until = earliest({ wake, self->pool.next_expiry(), deadline });
 				if (const auto ec = co_await wait(self, until, exclusive); ec) {
 					co_return fail(ec, context);
 				}
@@ -1128,35 +1220,22 @@ namespace detail {
 		// ---------------------------------------------------------------- read forwarders
 
 		// A read forwarder's failure it retries once, on another connection.
-		[[nodiscard]] static auto retryable(const error &e) noexcept -> bool
+		[[nodiscard]] auto retryable(const error &e) noexcept -> bool
 		{
 			return e.code == cond::connection_lost || e.code == cond::busy_or_unavailable;
 		}
 
-		// Retires `held`'s connection after the retryable failure `code`; returns
-		// the server to avoid (one that answered busy or unavailable).
-		auto set_aside(const lease &held, std::error_code code) noexcept -> std::optional<std::size_t>
-		{
-			const auto &c = held.conn_;
-			const bool refused = code == cond::busy_or_unavailable;
-			if (!closed && !c->retired && detail::accepts_requests(c->conn)
-				&& std::ranges::find(pool, c) != pool.end()) {
-				retire(c, refused ? disconnect_reason::busy_or_unavailable : disconnect_reason::closed);
-			}
-			return refused ? std::optional<std::size_t>{ c->server } : std::nullopt;
-		}
-
 		// Whether a failed outcome is the pooled connection's own (a chase's may
 		// be a referred server's).
-		template<class T> static auto origin_failed(const result<T> & /*r*/) -> bool { return true; }
-		template<class T> static auto origin_failed(const chase_result<T> &r) -> bool { return r.origin_failed; }
+		template<class T> auto origin_failed(const result<T> & /*r*/) -> bool { return true; }
+		template<class T> auto origin_failed(const chase_result<T> &r) -> bool { return r.origin_failed; }
 
 		// `op` on a shared lease, retried once after a retryable failure of the
 		// pooled connection's own operation.
-		template<class T, class Op> static auto read(std::shared_ptr<client_state> self, Op op) -> capy::task<result<T>>
+		template<class T, class Op> auto forward_read(state_ptr self, Op op) -> capy::task<result<T>>
 		{
 			return retry_once_on_lease<T>(
-			  acquire<lease>(std::move(self)),
+			  acquire_lease<lease>(std::move(self)),
 			  [](auto &r) { return origin_failed(r) && retryable(lease_outcome(r).error()); },
 			  std::move(op));
 		}
@@ -1165,52 +1244,31 @@ namespace detail {
 
 		// `op` on a shared lease, retried once on another connection only if its
 		// request never reached the writer.
-		template<class T = response, class Op>
-		static auto write(std::shared_ptr<client_state> self, Op op) -> capy::task<result<T>>
+		template<class T = response, class Op> auto forward_write(state_ptr self, Op op) -> capy::task<result<T>>
 		{
 			return retry_once_on_lease<T>(
-			  acquire<lease>(std::move(self)),
+			  acquire_lease<lease>(std::move(self)),
 			  [](const result<T> &r) { return r.error().code == client_errc::not_sent; },
 			  std::move(op));
 		}
 
-		// reacquire(): on the strand.
-		static auto reacquire(lease failed, std::error_code code) -> capy::task<result<lease>>
+		auto set_aside_and_acquire(state_ptr self, lease failed, std::error_code code) -> capy::task<result<lease>>
 		{
-			auto self = failed.state_;
-			const client::executor_type strand = self->strand;
-			return on_strand(strand, set_aside_and_acquire(std::move(self), std::move(failed), code));
-		}
-
-		static auto set_aside_and_acquire(std::shared_ptr<client_state> self, lease failed, std::error_code code)
-		  -> capy::task<result<lease>>
-		{
-			const auto avoid = self->set_aside(failed, code);
+			const auto avoid = self->pool.set_aside(lease_access::conn(failed), code);
 			failed.release();
-			co_return co_await acquire<lease>(std::move(self), avoid);
+			co_return co_await acquire_lease<lease>(std::move(self), avoid);
 		}
 
 		// ---------------------------------------------------------------- referrals
 
-		// Whether `request`, with its overrides, chases.
-		[[nodiscard]] auto chases(const search_params &request) const noexcept -> bool
-		{
-			return request.follow_referrals.value_or(options.referrals.follow_referrals)
-				   || request.follow_references.value_or(options.referrals.follow_references);
-		}
-		[[nodiscard]] auto chases(const compare_params &request) const noexcept -> bool
-		{
-			return request.follow_referrals.value_or(options.referrals.follow_referrals);
-		}
-
 		// The connector of a chase from `held`'s connection, with
 		// referral_options::authorize deciding.
-		static auto connector_for(const std::shared_ptr<client_state> &self, const lease &held) -> referral_connector
+		auto connector_for(const state_ptr &self, const lease &held) -> referral_connector
 		{
 			auto choose = [self, origin = held.server()](
 							const url &target, std::size_t depth) -> std::optional<referral_identity> {
 				const auto &authorize = self->options.referrals.authorize;
-				if (!authorize || self->closed) {
+				if (!authorize || self->pool.closed) {
 					return std::nullopt;
 				}
 				return client_referral_identity(
@@ -1221,7 +1279,7 @@ namespace detail {
 		}
 
 		// The switches of client_options::referrals, and the observer's hook.
-		static auto settings_for(const std::shared_ptr<client_state> &self, const lease &held) -> chase_settings
+		auto settings_for(const state_ptr &self, const lease &held) -> chase_settings
 		{
 			return { .referrals = self->options.referrals.follow_referrals,
 				.references = self->options.referrals.follow_references,
@@ -1234,29 +1292,27 @@ namespace detail {
 
 		// `chase`, stopped by close() (then not_connected, not retried).
 		template<class T>
-		static auto stopped_by_close(std::shared_ptr<client_state> self, capy::task<chase_result<T>> chase)
-		  -> capy::task<chase_result<T>>
+		auto stopped_by_close(state_ptr self, capy::task<chase_result<T>> chase) -> capy::task<chase_result<T>>
 		{
 			std::stop_source stop;
-			if (self->closed) {
+			if (self->pool.closed) {
 				stop.request_stop();
 			} else {
 				self->chases_running.push_back(stop);
 			}
 			const scope_exit unregister{ [&self, &stop] noexcept { std::erase(self->chases_running, stop); } };
 			auto r = co_await with_stop(stop.get_token(), std::move(chase));
-			if (!r.value && self->closed) {
+			if (!r.value && self->pool.closed) {
 				r.value = fail(client_errc::not_connected, "referral chase: client closed");
 				r.origin_failed = false;
 			}
 			co_return r;
 		}
 
-		static auto chase_search(const std::shared_ptr<client_state> &self,
-		  search_params request,
-		  std::pmr::memory_resource *mr) -> capy::task<result<search_result>>
+		auto chasing_search(const state_ptr &self, search_params request, std::pmr::memory_resource *mr)
+		  -> capy::task<result<search_result>>
 		{
-			return read<search_result>(self, [self, request = std::move(request), mr](const lease &held) {
+			return forward_read<search_result>(self, [self, request = std::move(request), mr](const lease &held) {
 				return stopped_by_close(self,
 				  detail::chase_search(*held,
 					request,
@@ -1267,10 +1323,9 @@ namespace detail {
 			});
 		}
 
-		static auto chase_compare(const std::shared_ptr<client_state> &self, compare_params request)
-		  -> capy::task<result<compare_result>>
+		auto chasing_compare(const state_ptr &self, compare_params request) -> capy::task<result<compare_result>>
 		{
-			return read<compare_result>(self, [self, request = std::move(request)](const lease &held) {
+			return forward_read<compare_result>(self, [self, request = std::move(request)](const lease &held) {
 				return stopped_by_close(self,
 				  detail::chase_compare(*held,
 					request,
@@ -1280,8 +1335,10 @@ namespace detail {
 			});
 		}
 
+		// ---------------------------------------------------------------- streams
+
 		// Destroys `s` on `c`'s strand.
-		static auto end_stream(connection &c, ldap::search_stream &s) -> capy::task<void>
+		auto end_stream(connection &c, ldap::search_stream &s) -> capy::task<void>
 		{
 			return detail::on_strand(c.executor(), [](ldap::search_stream &stream) -> capy::task<void> {
 				stream = ldap::search_stream{};
@@ -1289,16 +1346,16 @@ namespace detail {
 			}(s));
 		}
 
-		static auto end_stream(connection & /*c*/, ldap::paged_search &s) -> capy::task<void> { return end_paged(s); }
+		auto end_stream(connection & /*c*/, ldap::paged_search &s) -> capy::task<void> { return end_paged(s); }
 
 		// `start` on a shared lease, retried once if it fails before its first
 		// message.
 		template<class Stream, class Start>
-		static auto read_stream(std::shared_ptr<client_state> self, Start start) -> capy::task<result<Stream>>
+		auto forward_stream(state_ptr self, Start start) -> capy::task<result<Stream>>
 		{
 			std::optional<std::size_t> avoid;
 			for (bool retried = false;; retried = true) {
-				auto held = co_await acquire<lease>(self, avoid);
+				auto held = co_await acquire_lease<lease>(self, avoid);
 				if (!held) {
 					co_return std::unexpected(std::move(held.error()));
 				}
@@ -1318,7 +1375,7 @@ namespace detail {
 					if (s) {
 						co_await end_stream(**held, *s);
 					}
-					avoid = self->set_aside(*held, failed->code);
+					avoid = self->pool.set_aside(lease_access::conn(*held), failed->code);
 					continue;
 				}
 				if (!s) {
@@ -1328,14 +1385,20 @@ namespace detail {
 				co_return std::move(*s);
 			}
 		}
-	};
+
+	}// namespace
 
 	auto reacquire(lease failed, std::error_code code) -> capy::task<result<lease>>
 	{
-		return client_state::reacquire(std::move(failed), code);
+		auto self = lease_access::state(failed);
+		const client::executor_type strand = self->strand;
+		return on_strand(strand, set_aside_and_acquire(std::move(self), std::move(failed), code));
 	}
 
-	void test_access::set_jitter(const client &c, std::function<double()> unit) { c.state_->jitter = std::move(unit); }
+	void test_access::set_jitter(const client &c, std::function<double()> unit)
+	{
+		c.state_->health.jitter = std::move(unit);
+	}
 
 	void test_access::set_connector(const client &c, pool_connector open) { c.state_->connector = std::move(open); }
 
@@ -1363,7 +1426,7 @@ namespace detail {
 
 	auto lease_base::pooled() const noexcept -> connection & { return conn_->conn; }
 
-	auto lease_base::server() const noexcept -> const url & { return state_->servers[conn_->server].address; }
+	auto lease_base::server() const noexcept -> const url & { return state_->health.servers[conn_->server].address; }
 
 	void lease_base::release() noexcept
 	{
@@ -1372,7 +1435,7 @@ namespace detail {
 		}
 		const client::executor_type strand = state_->strand;
 		detail::run_on_strand(
-		  strand, [state = std::move(state_), conn = std::move(conn_)] noexcept { state->release(conn); });
+		  strand, [state = std::move(state_), conn = std::move(conn_)] noexcept { state->pool.release(conn); });
 		conn_.reset();
 		state_.reset();
 	}
@@ -1422,7 +1485,7 @@ auto client::acquire() -> capy::task<result<lease>>
 	if (state_ == nullptr) {
 		return acquire_refused<lease>();
 	}
-	return detail::on_strand(state_->strand, detail::client_state::acquire<lease>(state_));
+	return detail::on_strand(state_->strand, detail::acquire_lease<lease>(state_));
 }
 
 auto client::acquire_exclusive() -> capy::task<result<exclusive_lease>>
@@ -1430,7 +1493,7 @@ auto client::acquire_exclusive() -> capy::task<result<exclusive_lease>>
 	if (state_ == nullptr) {
 		return acquire_refused<exclusive_lease>();
 	}
-	return detail::on_strand(state_->strand, detail::client_state::acquire<exclusive_lease>(state_));
+	return detail::on_strand(state_->strand, detail::acquire_lease<exclusive_lease>(state_));
 }
 
 namespace {
@@ -1453,7 +1516,7 @@ namespace {
 			return read_refused<response>(detail::update_context(request));
 		}
 		return detail::on_strand(
-		  state->strand, detail::client_state::write(state, [request = std::move(request)](const lease &held) {
+		  state->strand, detail::forward_write(state, [request = std::move(request)](const lease &held) {
 			  return std::invoke(detail::update_op<Params>::member, *held, request);
 		  }));
 	}
@@ -1467,10 +1530,10 @@ auto client::search(search_params request, std::pmr::memory_resource *mr) -> cap
 		return read_refused<search_result>(detail::op_context("search", request.base));
 	}
 	if (state_->chases(request)) {
-		return detail::on_strand(state_->strand, detail::client_state::chase_search(state_, std::move(request), mr));
+		return detail::on_strand(state_->strand, detail::chasing_search(state_, std::move(request), mr));
 	}
 	return detail::on_strand(state_->strand,
-	  detail::client_state::read<search_result>(
+	  detail::forward_read<search_result>(
 		state_, [request = std::move(request), mr](const lease &held) { return held->search(request, mr); }));
 }
 
@@ -1481,7 +1544,7 @@ auto client::search_stream(search_params request, std::pmr::memory_resource *mr)
 		return read_refused<ldap::search_stream>(detail::op_context("search", request.base));
 	}
 	return detail::on_strand(state_->strand,
-	  detail::client_state::read_stream<ldap::search_stream>(
+	  detail::forward_stream<ldap::search_stream>(
 		state_, [request = std::move(request), mr](connection &c) { return c.search_stream(request, mr); }));
 }
 
@@ -1499,7 +1562,7 @@ auto search_paged_stream(client &c,
 		return read_refused<ldap::paged_search>(detail::op_context("search", request.base));
 	}
 	return detail::on_strand(c.state_->strand,
-	  detail::client_state::read_stream<ldap::paged_search>(
+	  detail::forward_stream<ldap::paged_search>(
 		c.state_, [request = std::move(request), page_size, max_pages, mr](connection &conn) {
 			return search_paged_stream(conn, request, page_size, max_pages, mr);
 		}));
@@ -1511,10 +1574,10 @@ auto client::compare(compare_params request) -> capy::task<result<compare_result
 		return read_refused<compare_result>(detail::op_context("compare", request.entry));
 	}
 	if (state_->chases(request)) {
-		return detail::on_strand(state_->strand, detail::client_state::chase_compare(state_, std::move(request)));
+		return detail::on_strand(state_->strand, detail::chasing_compare(state_, std::move(request)));
 	}
 	return detail::on_strand(state_->strand,
-	  detail::client_state::read<compare_result>(
+	  detail::forward_read<compare_result>(
 		state_, [request = std::move(request)](const lease &held) { return held->compare(request); }));
 }
 
@@ -1538,13 +1601,13 @@ auto client::extended(extended_params request) -> capy::task<result<extended_res
 		return read_refused<extended_result>("extended operation " + request.name);
 	}
 	return detail::on_strand(state_->strand,
-	  detail::client_state::write<extended_result>(
+	  detail::forward_write<extended_result>(
 		state_, [request = std::move(request)](const lease &held) { return held->extended(request); }));
 }
 
 auto client::connections() const noexcept -> std::size_t
 {
-	return state_ == nullptr ? 0 : state_->pool_size.load(std::memory_order_relaxed);
+	return state_ == nullptr ? 0 : state_->pool.size.load(std::memory_order_relaxed);
 }
 
 void client::close() noexcept

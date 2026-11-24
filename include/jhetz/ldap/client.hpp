@@ -192,6 +192,7 @@ class client;
 namespace detail {
 	struct client_state;
 	struct pooled_connection;
+	struct lease_access;
 
 	// unit * min(max, initial * multiplier^(failures - 1)), unit in [0, 1].
 	[[nodiscard]] auto backoff_delay(const backoff_options &options, std::size_t failures, double unit) noexcept
@@ -225,7 +226,7 @@ namespace detail {
 		[[nodiscard]] auto pooled() const noexcept -> connection &;
 
 	  private:
-		friend struct client_state;
+		friend struct lease_access;
 
 		std::shared_ptr<client_state> state_{};
 		std::shared_ptr<pooled_connection> conn_{};
@@ -250,7 +251,7 @@ class lease : public detail::lease_base
 	auto operator->() const noexcept -> connection * { return &pooled(); }
 
   private:
-	friend struct detail::client_state;
+	friend struct detail::lease_access;
 	lease(std::shared_ptr<detail::client_state> state, std::shared_ptr<detail::pooled_connection> conn) noexcept;
 };
 
@@ -271,7 +272,7 @@ class exclusive_lease : public detail::lease_base
 	auto operator->() const noexcept -> connection * { return &pooled(); }
 
   private:
-	friend struct detail::client_state;
+	friend struct detail::lease_access;
 	exclusive_lease(std::shared_ptr<detail::client_state> state,
 	  std::shared_ptr<detail::pooled_connection> conn) noexcept;
 };

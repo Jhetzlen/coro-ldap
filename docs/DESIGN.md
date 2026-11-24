@@ -3054,6 +3054,15 @@ client and the mock servers.
 3pf notes); this section records what was built and the choices the
 decision left open.
 
+`client.cpp` keeps the state in three parts, all used on the pool's
+strand: `server_health` (the servers in priority order and their
+backoff), `connection_pool` (the pooled connections, the slots they and
+the attempts take, `closed`, and the event acquire() waits on), and
+`client_state`, which owns both with the options and the stop sources
+close() stops. The acquire loop, the forwarders and the referral wiring
+are free coroutines over a `shared_ptr<client_state>`; leases are built
+and read through `detail::lease_access`.
+
 - One type, `ldap::client` (the name `naming-connection` reserved), built
   from `client_options{servers, connection, setup, max_connections = 1,
   idle_check = 60 s, probe_timeout = 5 s, max_lifetime, acquire_timeout =
@@ -3090,7 +3099,7 @@ decision left open.
   task<result<exclusive_lease>>`: an idle connection, else a new one
   while a slot is free, else it waits; no other acquire (shared or
   exclusive) gets that connection while the exclusive lease holds it.
-  While an exclusive acquire waits (`client_state::exclusive_waiting`),
+  While an exclusive acquire waits (`connection_pool::exclusive_waiting`),
   shared acquires never take an idle connection: they share one already
   shared, else open a new one (a slot free, a server to try) or wait, so
   shared load cannot starve it (3pf.7; 3pf.9 for the case with no other
@@ -3336,7 +3345,7 @@ decision left open.
   returned and the caller decides (reading the entry back, an idempotent
   change, a transaction). The retry's `acquire()` goes by priority order
   (no `avoid`): `not_sent` says nothing about the server.
-  `client_state::write<Op>` is the loop, a template like `read<T, Op>`,
+  `forward_write<T, Op>` is the loop, a template like `forward_read<T, Op>`,
   the operation called once per attempt on the lease, copying the request
   into each; a forwarder builds its error context only for a moved-from
   client. A referral result is never chased for a write, whatever
