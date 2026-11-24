@@ -17,6 +17,7 @@ on:
       - "bench/**"
       - ".github/workflows/ci.yml"
       - ".github/badges.py"
+      - ".github/publish_badges.sh"
   pull_request:
     paths:
       - "CMakeLists.txt"
@@ -30,6 +31,7 @@ on:
       - "bench/**"
       - ".github/workflows/ci.yml"
       - ".github/badges.py"
+      - ".github/publish_badges.sh"
   workflow_dispatch:
 
 # A newer push to the same branch or PR cancels the older run.
@@ -292,7 +294,7 @@ jobs:
 
   # Clang source-based coverage (tests/coverage/run_coverage.sh, no
   # sanitizers) of the unit tests, reported on src/ and include/. Writes the
-  # shields.io endpoint files tests.json and coverage.json, which the badges
+  # shields.io endpoint files tests-linux.json and coverage.json, which the badges
   # job publishes on pushes to main.
   coverage:
     name: Coverage (Clang 23, unit tests)
@@ -327,7 +329,9 @@ jobs:
           echo "status=$status" >> "$GITHUB_OUTPUT"
       - name: Badge files
         shell: bash
-        run: python3 .github/badges.py coverage.log build/coverage/llvm-cov/summary.json badges >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          python3 .github/badges.py tests "linux tests" coverage.log badges/tests-linux.json >> "$GITHUB_STEP_SUMMARY"
+          python3 .github/badges.py coverage build/coverage/llvm-cov/summary.json badges/coverage.json >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v5
         with:
           name: badges
@@ -342,10 +346,12 @@ jobs:
         if: steps.run.outputs.status != '0'
         run: exit ${{ steps.run.outputs.status }}
 
-  # Publishes tests.json and coverage.json to the orphan branch badges (one
-  # force-pushed commit), read by the README's shields.io endpoint badges.
-  # Only on pushes to main, never for pull requests; the only job with
-  # write access.
+  # Publishes tests-linux.json and coverage.json to the branch badges, read
+  # by the README's shields.io endpoint badges. windows.yml publishes
+  # tests-windows.json there too: each updates only its own files and
+  # pushes without force (.github/publish_badges.sh retries on top of the
+  # other's commit); tests.json, the old name, is removed. Only on pushes to
+  # main, never for pull requests; the only job with write access.
   badges:
     name: Publish badges
     needs: coverage
@@ -354,19 +360,18 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+    concurrency:
+      group: badges-publish
+      cancel-in-progress: false
     steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github
       - uses: actions/download-artifact@v5
         with:
           name: badges
           path: badges
       - name: Push to the badges branch
-        working-directory: badges
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          git init -q -b badges
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tests.json coverage.json
-          git commit -q -m "badges for ${GITHUB_SHA}"
-          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/badges
+        run: .github/publish_badges.sh badges tests-linux.json coverage.json -- tests.json

@@ -1,7 +1,9 @@
 # coro-ldap
 
-[![ldap](https://github.com/Jhetzlen/coro-ldap/actions/workflows/ci.yml/badge.svg)](https://github.com/Jhetzlen/coro-ldap/actions/workflows/ci.yml)
-[![tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Jhetzlen/coro-ldap/badges/tests.json)](https://github.com/Jhetzlen/coro-ldap/actions/workflows/ci.yml)
+[![linux](https://img.shields.io/github/actions/workflow/status/Jhetzlen/coro-ldap/ci.yml?branch=main&label=linux)](https://github.com/Jhetzlen/coro-ldap/actions/workflows/ci.yml)
+[![linux tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Jhetzlen/coro-ldap/badges/tests-linux.json)](https://github.com/Jhetzlen/coro-ldap/actions/workflows/ci.yml)
+[![windows](https://img.shields.io/github/actions/workflow/status/Jhetzlen/coro-ldap/windows.yml?branch=main&label=windows)](https://github.com/Jhetzlen/coro-ldap/actions/workflows/windows.yml)
+[![windows tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Jhetzlen/coro-ldap/badges/tests-windows.json)](https://github.com/Jhetzlen/coro-ldap/actions/workflows/windows.yml)
 [![coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Jhetzlen/coro-ldap/badges/coverage.json)](https://github.com/Jhetzlen/coro-ldap/actions/workflows/ci.yml)
 
 An asynchronous LDAP client library for C++23, built on coroutines over

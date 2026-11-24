@@ -17,6 +17,8 @@ on:
       - "bench/**"
       - ".github/workflows/windows.yml"
       - ".github/vcpkg/**"
+      - ".github/badges.py"
+      - ".github/publish_badges.sh"
   pull_request:
     paths:
       - "CMakeLists.txt"
@@ -30,6 +32,8 @@ on:
       - "bench/**"
       - ".github/workflows/windows.yml"
       - ".github/vcpkg/**"
+      - ".github/badges.py"
+      - ".github/publish_badges.sh"
   workflow_dispatch:
 
 # A newer push to a PR cancels the older run; runs on main all finish, so
@@ -171,7 +175,53 @@ jobs:
       # No slapd, Samba or KDC on Windows: the integration tests are left out.
       # The ICU and OpenSSL DLLs from PATH: vcpkg's toolchain copies a Debug
       # build's from debug\bin, which the release-only triplet does not have.
+      # A failing test still gets its badge; the last step fails the job.
       - name: Test
+        id: test
         run: |
           $env:PATH = "$env:VCPKG_INSTALLED\$env:VCPKG_TRIPLET\bin;$env:PATH"
-          ctest --test-dir build --output-on-failure -j4 -LE integration --timeout 600
+          ctest --test-dir build --output-on-failure -j4 -LE integration --timeout 600 2>&1 | Tee-Object ctest.log
+          "status=$LASTEXITCODE" >> $env:GITHUB_OUTPUT
+          exit 0
+
+      - name: Badge file
+        if: ${{ !cancelled() }}
+        run: python .github/badges.py tests "windows tests" ctest.log badges/tests-windows.json >> $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v5
+        if: ${{ !cancelled() }}
+        with:
+          name: badges-windows
+          path: badges/
+
+      - name: Fail on test failures
+        if: ${{ steps.test.outputs.status != '0' }}
+        run: exit 1
+
+  # Publishes tests-windows.json to the branch badges, next to ci.yml's
+  # files, which it leaves alone; pushed without force, retried on top of
+  # ci.yml's commit (.github/publish_badges.sh). Only on pushes to main,
+  # never for pull requests; the only job with write access.
+  badges:
+    name: Publish badges
+    needs: msvc
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    concurrency:
+      group: badges-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github
+      - uses: actions/download-artifact@v5
+        with:
+          name: badges-windows
+          path: badges
+      - name: Push to the badges branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/publish_badges.sh badges tests-windows.json
