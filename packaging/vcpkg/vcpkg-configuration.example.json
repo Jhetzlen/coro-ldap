@@ -1,0 +1,19 @@
+{
+  "default-registry": {
+    "kind": "git",
+    "repository": "https://github.com/microsoft/vcpkg",
+    "baseline": "<a microsoft/vcpkg commit>"
+  },
+  "registries": [
+    {
+      "kind": "git",
+      "repository": "https://github.com/Jhetzlen/coro-ldap",
+      "baseline": "<a coro-ldap commit that has versions/>",
+      "packages": [
+        "capy",
+        "corosio",
+        "jhetz-ldap"
+      ]
+    }
+  ]
+}

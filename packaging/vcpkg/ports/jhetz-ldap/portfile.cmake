@@ -1,0 +1,46 @@
+vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
+
+if(DEFINED JHETZ_LDAP_SOURCE_PATH)
+    set(SOURCE_PATH "${JHETZ_LDAP_SOURCE_PATH}")
+else()
+    vcpkg_from_github(
+        OUT_SOURCE_PATH SOURCE_PATH
+        REPO Jhetzlen/coro-ldap
+        REF "v${VERSION}"
+        SHA512 0
+        HEAD_REF main
+    )
+endif()
+
+vcpkg_check_features(OUT_FEATURE_OPTIONS FEATURE_OPTIONS
+    FEATURES
+        net JHETZ_LDAP_BUILD_NET
+        gssapi JHETZ_LDAP_WITH_GSSAPI
+)
+set(PKGCONFIG_OPTIONS "")
+if("gssapi" IN_LIST FEATURES)
+    vcpkg_find_acquire_program(PKGCONFIG)
+    set(PKGCONFIG_OPTIONS "-DPKG_CONFIG_EXECUTABLE=${PKGCONFIG}")
+endif()
+
+vcpkg_cmake_configure(
+    SOURCE_PATH "${SOURCE_PATH}"
+    OPTIONS
+        ${FEATURE_OPTIONS}
+        ${PKGCONFIG_OPTIONS}
+        -DJHETZ_LDAP_INSTALL=ON
+        -DJHETZ_LDAP_BUILD_TESTS=OFF
+        -DJHETZ_LDAP_BUILD_EXAMPLES=OFF
+        -DJHETZ_LDAP_BUILD_FUZZERS=OFF
+        -DJHETZ_LDAP_BUILD_BENCH=OFF
+        -DJHETZ_LDAP_WERROR=OFF
+        -DFETCHCONTENT_FULLY_DISCONNECTED=ON
+    MAYBE_UNUSED_VARIABLES
+        PKG_CONFIG_EXECUTABLE
+)
+vcpkg_cmake_install()
+vcpkg_cmake_config_fixup(PACKAGE_NAME jhetz_ldap CONFIG_PATH lib/cmake/jhetz_ldap)
+
+file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include")
+file(INSTALL "${CMAKE_CURRENT_LIST_DIR}/usage" DESTINATION "${CURRENT_PACKAGES_DIR}/share/${PORT}")
+vcpkg_install_copyright(FILE_LIST "${SOURCE_PATH}/LICENSE")

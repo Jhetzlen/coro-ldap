@@ -1,0 +1,19 @@
+{
+  "name": "corosio",
+  "version-date": "2026-11-20",
+  "description": "Boost.Corosio: coroutine-first networking on Capy, with OpenSSL TLS streams.",
+  "homepage": "https://github.com/cppalliance/corosio",
+  "license": "BSL-1.0",
+  "dependencies": [
+    "capy",
+    "openssl",
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ]
+}

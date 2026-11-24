@@ -1,0 +1,8 @@
+jhetz-ldap provides CMake targets:
+
+    find_package(jhetz_ldap CONFIG REQUIRED)
+    target_link_libraries(main PRIVATE jhetz::ldap)
+
+    # with the feature "net" (jhetz::ldap_ad comes with it):
+    find_package(jhetz_ldap CONFIG REQUIRED COMPONENTS net ad)
+    target_link_libraries(main PRIVATE jhetz::ldap_net jhetz::ldap_ad)

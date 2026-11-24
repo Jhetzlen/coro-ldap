@@ -1,0 +1,41 @@
+{
+  "name": "jhetz-ldap",
+  "version": "0.1.0",
+  "description": "C++23 LDAP client library: the LDAP codec, and an async connection on Corosio/Capy coroutines.",
+  "homepage": "https://github.com/Jhetzlen/coro-ldap",
+  "license": "BSL-1.0",
+  "dependencies": [
+    "icu",
+    {
+      "name": "vcpkg-cmake",
+      "host": true
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "host": true
+    }
+  ],
+  "features": {
+    "gssapi": {
+      "description": "SASL GSSAPI (Kerberos) in jhetz::ldap_net",
+      "supports": "!windows",
+      "dependencies": [
+        {
+          "name": "jhetz-ldap",
+          "default-features": false,
+          "features": [
+            "net"
+          ]
+        },
+        "krb5"
+      ]
+    },
+    "net": {
+      "description": "jhetz::ldap_net (the connection, TLS, SASL) and jhetz::ldap_ad",
+      "dependencies": [
+        "corosio",
+        "openssl"
+      ]
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "jhetz-ldap-vcpkg-consumer",
+  "version": "0.1.0",
+  "dependencies": [
+    {
+      "name": "jhetz-ldap",
+      "features": [
+        "net"
+      ]
+    }
+  ]
+}

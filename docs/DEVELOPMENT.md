@@ -323,6 +323,72 @@ installed `jhetz_ldap-config-version.cmake` is generated from it with
    the Breaking lines added to `docs/API.md` since the last release).
 2. Tag the commit on main and push the tag: `git tag -a vX.Y.Z -m vX.Y.Z`,
    `git push origin vX.Y.Z`.
+3. Update the `jhetz-ldap` vcpkg port's version and `SHA512` for the tag
+   (below, "vcpkg").
+
+## vcpkg
+
+`packaging/vcpkg/ports/` has overlay ports for `capy` and `corosio` (the
+commits pinned in `CMakeLists.txt`) and `jhetz-ldap`, a static library with
+the features `net` (`jhetz::ldap_net` and `jhetz::ldap_ad`; `ad` is not a
+feature of its own, it is built with `net`) and `gssapi` (needs `net`, not
+on Windows). ICU, OpenSSL and krb5 come from vcpkg. Corosio's port disables
+WolfSSL and liburing (the epoll backend). In a manifest:
+
+```json
+{ "dependencies": [ { "name": "jhetz-ldap", "features": [ "net" ] } ] }
+```
+
+and configure with `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake
+-DVCPKG_OVERLAY_PORTS=<coro-ldap>/packaging/vcpkg/ports`
+(`tests/install/vcpkg_consumer/CMakePresets.json` does that).
+
+`tests/install/check_vcpkg.sh WORK_DIR [TRIPLET]` (default `x64-linux`)
+builds `tests/install/vcpkg_consumer` (the `consumer/main.cpp` of the
+install check) against the ports, with `jhetz-ldap` built from this source
+tree instead of the release tarball: it copies the ports into `WORK_DIR` and
+sets `JHETZ_LDAP_SOURCE_PATH` in the copied portfile. It uses the vcpkg in
+`build/tools/vcpkg` (not `VCPKG_ROOT`; `JHETZ_LDAP_VCPKG` overrides it),
+with the binary cache and downloads in `build/tools/`:
+
+```bash
+git clone https://github.com/microsoft/vcpkg build/tools/vcpkg
+build/tools/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+tests/install/check_vcpkg.sh build/vcpkg-test   # ICU builds first: ~15 min
+```
+
+The `jhetz-ldap` port downloads the tag `v${VERSION}` (its `vcpkg.json`
+version). After a release tag is pushed, set `"version"` in
+`packaging/vcpkg/ports/jhetz-ldap/vcpkg.json` (reset `"port-version"` if
+any) and the `SHA512` in its `portfile.cmake` to
+
+```bash
+curl -sL https://github.com/Jhetzlen/coro-ldap/archive/refs/tags/vX.Y.Z.tar.gz | sha512sum
+```
+
+(or install with `SHA512 0`: vcpkg fails and prints the expected hash).
+When the Capy or Corosio pins move, update their ports' `REF`, `SHA512`
+(`curl -sL https://github.com/cppalliance/<repo>/archive/<sha>.tar.gz |
+sha512sum`) and `version-date` (the commit date) in the same commit.
+
+### This repository as a vcpkg git registry
+
+A git registry needs `versions/` (`baseline.json` and one file per port) at
+the repository root; the ports can stay in `packaging/vcpkg/ports/`, since a
+version points to its port by git tree hash. After committing a port change:
+
+```bash
+build/tools/vcpkg/vcpkg x-add-version --all --x-builtin-ports-root=packaging/vcpkg/ports \
+    --x-builtin-registry-versions-dir=versions
+git add versions && git commit -m "build: vcpkg versions for X.Y.Z"
+```
+
+`x-add-version` records the committed tree of each port, so commit the port
+first, and add the version in a second commit. A consumer then lists the
+registry in its `vcpkg-configuration.json` next to its manifest, as in
+`packaging/vcpkg/vcpkg-configuration.example.json`, with `baseline` set to
+a coro-ldap commit that has the `versions/` entries, and drops
+`VCPKG_OVERLAY_PORTS`.
 
 ## Examples
 
