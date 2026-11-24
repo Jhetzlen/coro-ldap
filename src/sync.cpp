@@ -72,7 +72,133 @@ namespace detail {
 		co_return std::make_unique<ldap::transaction>(std::move(*r));
 	}
 
+	auto make_stream(ldap::connection &c, search_params request, std::pmr::memory_resource *mr)
+	  -> capy::task<result<std::unique_ptr<ldap::search_stream>>>
+	{
+		auto r = co_await c.search_stream(std::move(request), mr);
+		if (!r) {
+			co_return std::unexpected(std::move(r.error()));
+		}
+		co_return std::make_unique<ldap::search_stream>(std::move(*r));
+	}
+
+	auto make_stream(ldap::client &c, search_params request, std::pmr::memory_resource *mr)
+	  -> capy::task<result<std::unique_ptr<ldap::search_stream>>>
+	{
+		auto r = co_await c.search_stream(std::move(request), mr);
+		if (!r) {
+			co_return std::unexpected(std::move(r.error()));
+		}
+		co_return std::make_unique<ldap::search_stream>(std::move(*r));
+	}
+
 }// namespace detail
+
+// ---------------------------------------------------------------- search_stream
+
+search_stream::search_stream(std::shared_ptr<const detail::io_thread> io,
+  std::unique_ptr<ldap::search_stream> s) noexcept
+  : io_(std::move(io)), stream_(std::move(s))
+{}
+
+search_stream::search_stream(search_stream &&other) noexcept
+  : io_(std::move(other.io_)), stream_(std::move(other.stream_))
+{}
+
+auto search_stream::operator=(search_stream &&other) noexcept -> search_stream &
+{
+	if (this != &other) {
+		settle();
+		io_ = std::move(other.io_);
+		stream_ = std::move(other.stream_);
+	}
+	return *this;
+}
+
+// io_, destroyed after settle(), may be the last owner of a client's core.
+search_stream::~search_stream() { settle(); }
+
+void search_stream::settle() noexcept
+{
+	if (!stream_) {
+		return;
+	}
+	if (io_->on_this_thread()) {
+		stream_.reset();
+		return;
+	}
+	// Terminates if the post cannot be allocated.
+	io_->hand_over(
+	  [this] {
+		  stream_.reset();
+		  return detail::done();
+	  },
+	  "out of memory ending a search stream on the I/O thread");
+}
+
+namespace {
+
+	auto no_stream() -> error
+	{
+		return make_error(client_errc::not_connected, "search: no search stream (moved from)");
+	}
+
+}// namespace
+
+auto search_stream::next() -> result<std::optional<entry>>
+{
+	if (!stream_) {
+		return std::unexpected(no_stream());
+	}
+	return io_->run([this] { return stream_->next(); });
+}
+
+auto search_stream::next_item() -> result<std::optional<ldap::search_stream::item>>
+{
+	if (!stream_) {
+		return std::unexpected(no_stream());
+	}
+	return io_->run([this] { return stream_->next_item(); });
+}
+
+auto search_stream::done() const -> bool
+{
+	if (!stream_) {
+		return true;
+	}
+	const ldap::search_stream *s = stream_.get();
+	return io_->run([s] { return detail::invoked([s] { return s->done(); }); }).value_or(true);
+}
+
+auto search_stream::references() const -> string_list
+{
+	if (!stream_) {
+		return {};
+	}
+	const ldap::search_stream *s = stream_.get();
+	return io_->run([s] { return detail::invoked([s] { return string_list(s->references()); }); })
+	  .value_or(string_list{});
+}
+
+auto search_stream::reference_urls(std::pmr::memory_resource *mr) const -> std::pmr::vector<url>
+{
+	if (!stream_) {
+		return std::pmr::vector<url>(mr);
+	}
+	const ldap::search_stream *s = stream_.get();
+	return io_->run([s, mr] { return detail::invoked([s, mr] { return s->reference_urls(mr); }); })
+	  .value_or(std::pmr::vector<url>(mr));
+}
+
+auto search_stream::controls() const -> std::pmr::vector<control>
+{
+	if (!stream_) {
+		return {};
+	}
+	const ldap::search_stream *s = stream_.get();
+	return io_->run([s] { return detail::invoked([s] { return std::pmr::vector<control>(s->controls()); }); })
+	  .value_or(std::pmr::vector<control>{});
+}
 
 // ---------------------------------------------------------------- connection
 
@@ -421,6 +547,16 @@ auto client::acquire_exclusive() -> result<exclusive_lease>
 auto client::search(search_params request, std::pmr::memory_resource *mr) -> result<search_result>
 {
 	return detail::on_pool<&ldap::client::search>(*core_, std::move(request), mr);
+}
+
+auto client::search_stream(search_params request, std::pmr::memory_resource *mr) -> result<sync::search_stream>
+{
+	auto s = core_->io.run([&] { return detail::make_stream(*core_->pool, std::move(request), mr); });
+	if (!s) {
+		return std::unexpected(std::move(s.error()));
+	}
+	// The stream shares the ownership of the core, as a lease does.
+	return sync::search_stream(std::shared_ptr<const detail::io_thread>(core_, &core_->io), std::move(*s));
 }
 
 auto client::compare(compare_params request) -> result<compare_result>

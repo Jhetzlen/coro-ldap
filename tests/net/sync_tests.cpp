@@ -78,6 +78,30 @@ TEST_CASE("sync: connect, bind, search and unbind", "[net][sync]")
 	CHECK(after.error().code == ldap::client_errc::not_sent);
 }
 
+TEST_CASE("sync: name, outstanding, bind_count and channel_bindings", "[net][sync]")
+{
+	ldap::sync::connection none;
+	CHECK(none.name().empty());
+	CHECK(none.outstanding() == 0);
+	CHECK(none.bind_count() == 0);
+	CHECK(none.channel_bindings().default_type == std::nullopt);
+	CHECK(none.search_stream({ .base = ldap::dn{} }).error().code == ldap::client_errc::not_connected);
+
+	server_thread srv;
+	auto opened = ldap::sync::connect(srv.url(), { .allow_cleartext_passwords = true });
+	REQUIRE(opened.has_value());
+	auto &c = *opened;
+	CHECK(c.name().starts_with("ldap://127.0.0.1:"));
+	CHECK(c.bind_count() == 0);
+	CHECK(c.simple_bind(ldap::dn{ "cn=admin,dc=example,dc=org" }, "secret").has_value());
+	CHECK(c.bind_count() == 1);
+	CHECK(c.outstanding() == 0);
+	const auto cb = c.channel_bindings();// no TLS
+	CHECK(cb.tls_server_end_point.empty());
+	CHECK(cb.get(ldap::channel_binding_type::tls_exporter).empty());
+	CHECK_FALSE(cb.default_type.has_value());
+}
+
 TEST_CASE("sync: a connection without an I/O thread, moves, copies and reconnecting", "[net][sync]")
 {
 	static_assert(std::is_nothrow_default_constructible_v<ldap::sync::connection>);

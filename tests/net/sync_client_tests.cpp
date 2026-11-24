@@ -211,6 +211,7 @@ auto lost_after_bind() -> std::vector<step>
 
 // Reads one request (the UnbindRequest) and answers nothing.
 auto unbind_read() -> step { return step{ .read_request = true, .replies = {} }; }
+auto abandon_read() -> step { return step{ .read_request = true, .replies = {} }; }
 
 constexpr std::string_view jdoe = "uid=jdoe,ou=people,dc=example,dc=org";
 const ldap::dn jdoe_dn{ "uid=jdoe,ou=people,dc=example,dc=org" };
@@ -313,6 +314,106 @@ TEST_CASE("sync: a search ending with a limit code returns its entries", "[net][
 		CHECK_THAT(srv.log(0).error, IsEmpty());
 		CHECK(srv.accepted() == 1);
 		CHECK(srv.log(0).received.size() == 4);
+	}
+}
+
+TEST_CASE("sync: search_stream reads one message at a time", "[net][sync][client]")
+{
+	SECTION("sync::connection: entries, a reference, the done's controls")
+	{
+		ldap::message done = done_msg(1);
+		done.controls.push_back(*ldap::encode_paged_results({ 0, "" }));
+		threaded_script_server srv({ { answer({ entry_msg(1, jdoe, "John"),
+										 ref_msg(1, { "ldap://other.example.org/dc=example,dc=org" }),
+										 entry_msg(1, "uid=jane,ou=people,dc=example,dc=org", "Jane"),
+										 done }),
+		  unbind_read() } });
+		{
+			auto opened = ldap::sync::connect(
+			  srv.url(), { .timeout = std::chrono::seconds(10), .allow_cleartext_passwords = true });
+			REQUIRE(opened.has_value());
+			auto &c = *opened;
+			auto s = c.search_stream(people_search());
+			REQUIRE(s.has_value());
+			auto first = s->next();
+			REQUIRE(first.has_value());
+			REQUIRE(first->has_value());
+			CHECK(**first == expected_entry(jdoe, "John"));
+			CHECK_FALSE(s->done());
+			auto item = s->next_item();
+			REQUIRE(item.has_value());
+			REQUIRE(item->has_value());
+			CHECK(std::holds_alternative<ldap::search_reference>(**item));
+			auto second = s->next();
+			REQUIRE(second.has_value());
+			REQUIRE(second->has_value());
+			CHECK((*second)->dn == "uid=jane,ou=people,dc=example,dc=org");
+			auto end = s->next();
+			REQUIRE(end.has_value());
+			CHECK_FALSE(end->has_value());
+			CHECK(s->done());
+			REQUIRE(s->references().size() == 1);
+			REQUIRE(s->reference_urls().size() == 1);
+			CHECK(ldap::find_paged(s->controls()).has_value());
+			ldap::sync::search_stream moved = std::move(*s);
+			CHECK(moved.done());
+			CHECK(s->done());// moved from
+			CHECK(s->next().error().code == ldap::client_errc::not_connected);
+			CHECK(c.unbind().has_value());
+		}
+		srv.stop();
+		CHECK_THAT(srv.log(0).error, IsEmpty());
+		CHECK(srv.log(0).received.size() == 2);
+	}
+	SECTION("destroyed unfinished: abandoned")
+	{
+		threaded_script_server srv({ { answer({ entry_msg(1, jdoe, "John") }),
+		  abandon_read(),
+		  answer({ entry_msg(3, jdoe, "John"), done_msg(3) }),
+		  unbind_read() } });
+		{
+			auto opened = ldap::sync::connect(
+			  srv.url(), { .timeout = std::chrono::seconds(10), .allow_cleartext_passwords = true });
+			REQUIRE(opened.has_value());
+			auto &c = *opened;
+			{
+				auto s = c.search_stream(people_search());
+				REQUIRE(s.has_value());
+				CHECK(s->next().has_value());
+			}
+			auto r = c.search(people_search());
+			REQUIRE(r.has_value());
+			CHECK(r->entries.size() == 1);
+			CHECK(c.unbind().has_value());
+		}
+		srv.stop();
+		CHECK_THAT(srv.log(0).error, IsEmpty());
+		REQUIRE(srv.log(0).received.size() == 4);
+		CHECK(std::holds_alternative<ldap::abandon_request>(srv.log(0).received[1].op));
+	}
+	SECTION("sync::client and sync::lease: the stream holds its lease")
+	{
+		threaded_script_server srv({ { answer({ bind_resp(1) }),
+		  answer({ entry_msg(2, jdoe, "John"), done_msg(2) }),
+		  answer({ entry_msg(3, jdoe, "John"), done_msg(3) }),
+		  unbind_read() } });
+		{
+			ldap::sync::client pool(options_for(srv.url()));
+			auto s = pool.search_stream(people_search());
+			REQUIRE(s.has_value());
+			auto one = s->next();
+			REQUIRE(one.has_value());
+			CHECK(one->has_value());
+			auto l = pool.acquire();
+			REQUIRE(l.has_value());
+			auto on_lease = l->search_stream(people_search());
+			REQUIRE(on_lease.has_value());
+			CHECK(on_lease->next().has_value());
+			CHECK_FALSE(on_lease->next()->has_value());
+			CHECK(pool.connections() == 1);
+		}
+		srv.stop();
+		CHECK_THAT(srv.log(0).error, IsEmpty());
 	}
 }
 

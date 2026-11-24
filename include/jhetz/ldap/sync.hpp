@@ -2,6 +2,7 @@
 // io_context and one I/O thread (docs/API.md, "jhetz/ldap/sync.hpp").
 #pragma once
 
+#include "jhetz/ldap/channel_binding.hpp"
 #include "jhetz/ldap/client.hpp"
 #include "jhetz/ldap/connection.hpp"
 #include "jhetz/ldap/directory.hpp"
@@ -23,6 +24,7 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -125,9 +127,13 @@ namespace detail {
 		std::thread::id id_;
 	};
 
-	// The task behind sync::transaction::begin.
+	// The tasks behind sync::transaction::begin and the facades' search_stream.
 	[[nodiscard]] auto make_transaction(ldap::connection &c, extended_controls controls)
 	  -> boost::capy::task<result<std::unique_ptr<ldap::transaction>>>;
+	[[nodiscard]] auto make_stream(ldap::connection &c, search_params request, std::pmr::memory_resource *mr)
+	  -> boost::capy::task<result<std::unique_ptr<ldap::search_stream>>>;
+	[[nodiscard]] auto make_stream(ldap::client &c, search_params request, std::pmr::memory_resource *mr)
+	  -> boost::capy::task<result<std::unique_ptr<ldap::search_stream>>>;
 
 	// A task returning f()'s value, or success after f() for a void f.
 	template<class F> auto invoked(F f) -> boost::capy::task<result<std::invoke_result_t<F &>>>
@@ -184,6 +190,63 @@ class transaction
 	std::unique_ptr<ldap::transaction> txn_;
 };
 
+// ldap::search_stream for a sync::connection, a sync lease or a
+// sync::client, read on the I/O thread; next() blocks until the next
+// message. Destroyed unfinished, it abandons the search. Made by a
+// sync::connection, it must not outlive its last handle.
+class search_stream
+{
+  public:
+	search_stream() noexcept = default;
+	search_stream(search_stream &&other) noexcept;
+	auto operator=(search_stream &&other) noexcept -> search_stream &;
+	search_stream(const search_stream &) = delete;
+	auto operator=(const search_stream &) -> search_stream & = delete;
+	~search_stream();
+
+	// The next entry, nullopt at the end, or an error.
+	[[nodiscard]] auto next() -> result<std::optional<entry>>;
+	// As next(), every message before the SearchResultDone, in order.
+	[[nodiscard]] auto next_item() -> result<std::optional<ldap::search_stream::item>>;
+
+	// True once moved from.
+	[[nodiscard]] auto done() const -> bool;
+	// Copied; empty once moved from.
+	[[nodiscard]] auto references() const -> string_list;
+	[[nodiscard]] auto reference_urls(std::pmr::memory_resource *mr = std::pmr::get_default_resource()) const
+	  -> std::pmr::vector<url>;
+	[[nodiscard]] auto controls() const -> std::pmr::vector<control>;
+
+  private:
+	template<class> friend class detail::connection_api;
+	friend class client;
+	search_stream(std::shared_ptr<const detail::io_thread> io, std::unique_ptr<ldap::search_stream> s) noexcept;
+
+	// Destroys the ldap::search_stream on the I/O thread.
+	void settle() noexcept;
+
+	// As sync::transaction's.
+	std::shared_ptr<const detail::io_thread> io_{};
+	// Touched only on the I/O thread; null once moved from.
+	std::unique_ptr<ldap::search_stream> stream_;
+};
+
+// The TLS channel bindings (RFC 5056) of a blocking facade's connection,
+// copied.
+struct channel_bindings
+{
+	std::vector<std::byte> tls_server_end_point{};
+	std::vector<std::byte> tls_exporter{};
+	std::optional<channel_binding_type> default_type{};
+
+	// Empty when not available.
+	[[nodiscard]] auto get(channel_binding_type t) const noexcept -> std::span<const std::byte>
+	{
+		return ldap::channel_bindings{ .tls_server_end_point = tls_server_end_point, .tls_exporter = tls_exporter }.get(
+		  t);
+	}
+};
+
 namespace detail {
 
 	// The blocking ldap::connection operations shared by sync::connection and
@@ -196,6 +259,25 @@ namespace detail {
 			return self()
 			  .call([](const ldap::connection &c) { return invoked([&c] { return c.is_open(); }); })
 			  .value_or(false);
+		}
+		// Copied; empty if never connected.
+		[[nodiscard]] auto name() const -> std::string
+		{
+			return self()
+			  .call([](const ldap::connection &c) { return invoked([&c] { return std::string(c.name()); }); })
+			  .value_or(std::string{});
+		}
+		[[nodiscard]] auto outstanding() const -> std::size_t
+		{
+			return self()
+			  .call([](const ldap::connection &c) { return invoked([&c] { return c.outstanding(); }); })
+			  .value_or(0);
+		}
+		[[nodiscard]] auto bind_count() const -> std::uint64_t
+		{
+			return self()
+			  .call([](const ldap::connection &c) { return invoked([&c] { return c.bind_count(); }); })
+			  .value_or(0);
 		}
 		[[nodiscard]] auto is_tls() const -> bool
 		{
@@ -221,6 +303,23 @@ namespace detail {
 			  })
 			  .value_or(std::vector<std::byte>{});
 		}
+		// Copied; empty unless is_tls().
+		[[nodiscard]] auto channel_bindings() const -> sync::channel_bindings
+		{
+			return self()
+			  .call([](const ldap::connection &c) {
+				  return invoked([&c] {
+					  const auto b = c.channel_bindings();
+					  return sync::channel_bindings{
+						  .tls_server_end_point =
+							std::vector<std::byte>(b.tls_server_end_point.begin(), b.tls_server_end_point.end()),
+						  .tls_exporter = std::vector<std::byte>(b.tls_exporter.begin(), b.tls_exporter.end()),
+						  .default_type = b.default_type,
+					  };
+				  });
+			  })
+			  .value_or(sync::channel_bindings{});
+		}
 
 		[[nodiscard]] auto simple_bind(dn name, std::string password) -> result<void>
 		{
@@ -242,6 +341,15 @@ namespace detail {
 		  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<search_result>
 		{
 			return self().call([&](ldap::connection &c) { return c.search(std::move(request), mr); });
+		}
+		[[nodiscard]] auto search_stream(search_params request,
+		  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<sync::search_stream>
+		{
+			auto s = self().call([&](ldap::connection &c) { return make_stream(c, std::move(request), mr); });
+			if (!s) {
+				return std::unexpected(std::move(s.error()));
+			}
+			return sync::search_stream(self().runner(), std::move(*s));
 		}
 		[[nodiscard]] auto add(add_params request) -> result<response>
 		{
@@ -422,7 +530,7 @@ extern template class basic_lease<false>;
 extern template class basic_lease<true>;
 
 // The blocking ldap::client: the ldap::client, its setup and observer run
-// on an I/O thread the facade owns. No search_stream().
+// on an I/O thread the facade owns.
 class client
 {
   public:
@@ -442,6 +550,9 @@ class client
 	// Read forwarders, as ldap::client's.
 	[[nodiscard]] auto search(search_params request, std::pmr::memory_resource *mr = std::pmr::get_default_resource())
 	  -> result<search_result>;
+	// The stream holds its shared lease until destroyed.
+	[[nodiscard]] auto search_stream(search_params request,
+	  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<sync::search_stream>;
 	[[nodiscard]] auto compare(compare_params request) -> result<compare_result>;
 
 	// Write forwarders, as ldap::client's.

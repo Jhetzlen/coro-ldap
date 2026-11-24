@@ -1436,9 +1436,25 @@ itself needs only ICU.
   its transactions valid (destroying the last handle, or assigning a new
   connection over it to reconnect, closes the connection, joins the thread
   and ends them: they must not be used after that); a default-constructed (noexcept) or moved-from one
-  has no thread and its operations fail with `not_connected`. Every
-  method runs the corresponding connection operation on the I/O thread
-  and waits, with the same types;
+  has no thread and its operations fail with `not_connected`. Each
+  method runs the `ldap::connection` member of the same name on the I/O
+  thread and waits, with the same types, except: `name()` returns a
+  `std::string`, `peer_certificate()` a `std::vector<std::byte>` and
+  `channel_bindings()` a `sync::channel_bindings` (the two bindings as
+  `std::vector<std::byte>`, `default_type`, `get(type)`), all copied, and
+  `executor()` is the I/O thread's, not the connection's strand (a
+  default-constructed one returns empty or zero values: `name()`,
+  `outstanding()`, `bind_count()`); `search_stream(params, mr)` returns a
+  `sync::search_stream`, whose `next()` and `next_item()` block until the
+  next message, `done()`, `references()`, `reference_urls(mr)` and
+  `controls()` copy the stream's state from the I/O thread, and which
+  abandons the search when destroyed unfinished (on the I/O thread; made
+  by a `sync::connection` it must not outlive the last handle, as a
+  `sync::transaction`; made by a lease or a `sync::client` it keeps the
+  client's I/O thread alive, and a client's stream holds its shared lease
+  until destroyed; moved from, `next()` fails with `not_connected`). The
+  paged stream stays async only (`sync::search_paged` collects every
+  page);
   `sync::search_paged(c, params, page_size, max_pages, mr)` (also on a
   sync lease and a `sync::client`) is `ldap::search_paged`, blocking.
   `sync::run(d, make_task, args...)` (coro-ldap-aw4.5) runs any async
@@ -1631,8 +1647,9 @@ itself needs only ICU.
   `modify`, `del`, `modify_dn` and `extended`, block and retry as the
   async ones (`compare` returns a `compare_result`; both chase
   referrals as `client_options::referrals` says, the authorizer and
-  `on_referral` running on the I/O thread); no `search_stream` (no
-  blocking stream, as for `sync::connection`). `close()` (from any thread,
+  `on_referral` running on the I/O thread); `search_stream` returns a
+  `sync::search_stream` holding one shared lease until destroyed, retried
+  as `client::search_stream` is. `close()` (from any thread,
   the I/O thread included) fails waiting and later `acquire()` calls with
   `not_connected`; `connections()`, `executor()`. A call from the I/O
   thread fails with `would_deadlock` (context `"sync::client"`). The
@@ -1917,7 +1934,8 @@ package component `ad`:
   each time an object in scope changes (no initial content) until it is
   destroyed or stopped. On an `ldap::client`, open it on a lease
   (`client::search_stream()` returns only at the first message, here the
-  first change); the sync facade has no streams.
+  first change); on a sync facade, `search_stream()` returns a blocking
+  `sync::search_stream`.
   DirSync's codec (`ad::dirsync_oid`, 1.2.840.113556.1.4.841, MS-ADTS
   3.1.1.3.4.1.3): `ad::dirsync_request{.flags, .max_bytes, .cookie,
   .critical = true}` converts to the request control (Flags as AD's signed

@@ -1860,8 +1860,8 @@ co_await people.remove("jdoe");
   make a stream accept what `search()` refuses). `stream()` gives the
   underlying stream (references, controls, pages). `search_paged(filter,
   page_size, scope)` collects every page into a
-  `typed_search_result<record<T>>`, on both repositories (the blocking
-  facade has no streams).
+  `typed_search_result<record<T>>`, in both modes (a repository over a
+  blocking facade has no streams).
 - No ORM traps: no whole-object save, no hidden reads, no relationships,
   no entry cache. One request per call, plus the schema load once.
 - `repository_options::schema_check = on_first_use` loads the schema with the
@@ -2875,7 +2875,11 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
   through `detail::facade_access`. The task must end what it creates on
   the I/O thread before it returns (`ldap::search_paged` reads every page
   of its `paged_search` on the connection's strand, or destroys it
-  there): the facades hand out no streams. A `static_assert` on the
+  there): `sync::run` hands out no streams; the facades' own
+  `search_stream()` returns a `sync::search_stream`, which keeps the
+  `ldap::search_stream` on the I/O thread behind a `unique_ptr`, runs
+  each `next()` there and destroys it there (`hand_over`), as
+  `sync::transaction` does with its `ldap::transaction`. A `static_assert` on the
   `detail::io_context_bound` trait rejects a task whose result is (or
   wraps, in `result`, `std::optional` or a smart pointer) a stream, a
   `paged_search`, a lease, a transaction, an `ldap::connection` or an
