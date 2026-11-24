@@ -45,10 +45,8 @@ namespace {
 	// 4.1 to 4.5).
 	auto end_request(std::string_view identifier, bool commit, std::pmr::memory_resource *mr) -> extended_request
 	{
-		const std::pmr::polymorphic_allocator<> alloc(mr);
-		const std::pmr::string value =
-		  encode_end_transaction_request(end_transaction_request(commit, identifier, alloc), mr);
-		return { end_transaction_oid, std::string_view(value), alloc };
+		const std::pmr::string value = encode_end_transaction_request(end_transaction_request(commit, identifier), mr);
+		return { end_transaction_oid, std::string_view(value) };
 	}
 
 	// `answered` is set once the server answered: the transaction is over.
@@ -109,9 +107,7 @@ namespace {
 				  ec, detail::format("{} (waiting for {} answer{} due)", context, left, left == 1 ? "" : "s"));
 			}
 		}
-		const std::pmr::polymorphic_allocator<> alloc(self->mr());
-		auto msg =
-		  build_request(extended_request(start_transaction_oid, std::nullopt, alloc), controls, self->mr(), context);
+		auto msg = build_request(extended_request(start_transaction_oid), controls, self->mr(), context);
 		if (!msg) {
 			co_return std::unexpected(std::move(msg.error()));
 		}

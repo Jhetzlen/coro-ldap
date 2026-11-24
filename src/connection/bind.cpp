@@ -46,7 +46,7 @@ namespace {
 		// The anonymous bind's success installs no layer the exchange negotiated.
 		self->disarm_security_layer();
 		message request(std::pmr::polymorphic_allocator<>(self->mr()));
-		request.op = bind_request(3, {}, simple_auth(std::string_view(), self->mr()), self->mr());
+		request.op = bind_request(3, {}, simple_auth());
 		auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
 		if (!m) {
 			co_return;
@@ -88,7 +88,7 @@ namespace {
 						"connection_options::allow_cleartext_passwords)");
 		}
 		message request(std::pmr::polymorphic_allocator<>(self->mr()));
-		request.op = bind_request(3, name.to_string(self->mr()), simple_auth(password, self->mr()), self->mr());
+		request.op = bind_request(3, name.to_string(), simple_auth(password));
 		auto m = co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
 		if (!m) {
 			co_return std::unexpected(std::move(m.error()));
@@ -169,8 +169,7 @@ namespace {
 			if (*creds) {
 				c = **creds;
 			}
-			request.op =
-			  bind_request(3, name.to_string(self->mr()), sasl_auth(mechanism.name(), c, self->mr()), self->mr());
+			request.op = bind_request(3, name.to_string(), sasl_auth(mechanism.name(), c));
 			auto m =
 			  co_await request_response(self, std::move(request), op_index<bind_response>, context, std::nullopt);
 			if (!m) {

@@ -111,9 +111,7 @@ namespace detail {
 
 	auto add_impl(core_ref self, add_params request, std::string context) -> capy::task<result<response>>
 	{
-		const std::pmr::polymorphic_allocator<> alloc(self->mr());
-		add_request op(alloc);
-		op.entry = request.entry.to_string(self->mr());
+		add_request op(request.entry.to_string());
 		op.attributes.assign(request.attributes.begin(), request.attributes.end());
 		co_return co_await exchange<add_response>(self, std::move(op), request, context);
 	}
@@ -135,9 +133,7 @@ namespace detail {
 				}
 			}
 		} };
-		const std::pmr::polymorphic_allocator<> alloc(self->mr());
-		modify_request op(alloc);
-		op.object = request.object.to_string(self->mr());
+		modify_request op(request.object.to_string());
 		op.changes.assign(request.changes.begin(), request.changes.end());
 		co_return co_await exchange<modify_response>(self, std::move(op), request, context);
 	}
@@ -153,10 +149,7 @@ namespace detail {
 
 	auto del_impl(core_ref self, del_params request, std::string context) -> capy::task<result<response>>
 	{
-		co_return co_await exchange<del_response>(self,
-		  del_request(request.entry.to_string(self->mr()), std::pmr::polymorphic_allocator<>(self->mr())),
-		  request,
-		  context);
+		co_return co_await exchange<del_response>(self, del_request(request.entry.to_string()), request, context);
 	}
 
 	auto modify_dn_impl(core_ref self, modify_dn_params request, std::string context) -> capy::task<result<response>>
@@ -164,17 +157,16 @@ namespace detail {
 		if (request.new_rdn.avas.empty()) {
 			co_return fail(client_errc::invalid_dn, context + ": empty new RDN");
 		}
-		const std::pmr::polymorphic_allocator<> alloc(self->mr());
-		modify_dn_request op(alloc);
-		op.entry = request.entry.to_string(self->mr());
+		modify_dn_request op;
+		op.entry = request.entry.to_string();
 		auto new_rdn = dn{}.child(request.new_rdn);// an RDN prints as a one-RDN DN
 		if (!new_rdn) {
 			co_return std::unexpected(with_context(std::move(new_rdn.error()), context));
 		}
-		op.new_rdn = new_rdn->to_string(self->mr());
+		op.new_rdn = new_rdn->to_string();
 		op.delete_old_rdn = request.delete_old_rdn;
 		if (request.new_superior) {
-			op.new_superior = request.new_superior->to_string(self->mr());
+			op.new_superior = request.new_superior->to_string();
 		}
 		co_return co_await exchange<modify_dn_response>(self, std::move(op), request, context);
 	}
@@ -196,10 +188,7 @@ namespace {
 		if (!self) {
 			co_return std::unexpected(no_connection(context));
 		}
-		const std::pmr::polymorphic_allocator<> alloc(self->mr());
-		auto msg = build_request(compare_request(request.entry.to_string(self->mr()),
-								   attribute_value_assertion(request.attribute, request.value, alloc),
-								   alloc),
+		auto msg = build_request(compare_request(request.entry.to_string(), { request.attribute, request.value }),
 		  request.controls,
 		  self->mr(),
 		  context);
@@ -250,12 +239,11 @@ namespace detail {
 			  context + ": the passwords would be sent in clear (use ldaps://, start_tls() or "
 						"connection_options::allow_cleartext_passwords)");
 		}
-		const std::pmr::polymorphic_allocator<> alloc(self->mr());
 		std::optional<std::string_view> value;
 		if (request.value) {
 			value = *request.value;
 		}
-		auto msg = build_request(extended_request(request.name, value, alloc), request.controls, self->mr(), context);
+		auto msg = build_request(extended_request(request.name, value), request.controls, self->mr(), context);
 		if (!msg) {
 			co_return std::unexpected(std::move(msg.error()));
 		}

@@ -56,7 +56,7 @@ namespace {
 				if (!entry) {
 					return std::unexpected(std::move(entry.error()));
 				}
-				protocol_op op(std::in_place_type<del_request>, d.allocator());
+				protocol_op op(std::in_place_type<del_request>);
 				std::get<del_request>(op).entry = std::move(*entry);
 				return op;
 			}
@@ -86,7 +86,7 @@ namespace {
 			if (!o) {
 				return std::unexpected(std::move(o.error()));
 			}
-			protocol_op op(std::in_place_type<bind_request>, d.allocator());
+			protocol_op op(std::in_place_type<bind_request>);
 			auto &b = std::get<bind_request>(op);
 			auto version = read_ranged(*o, ber::tags::integer, 1, max_bind_version, "bind version");
 			if (!version) {
@@ -121,7 +121,7 @@ namespace {
 				if (auto done = skip_rest(*s); !done) {
 					return std::unexpected(std::move(done.error()));
 				}
-				auto &sasl = b.authentication.emplace<sasl_auth>(d.allocator());
+				auto &sasl = b.authentication.emplace<sasl_auth>();
 				sasl.mechanism = std::move(*mechanism);
 				sasl.credentials = std::move(*credentials);
 			} else {
@@ -148,7 +148,7 @@ namespace {
 			if (!o) {
 				return std::unexpected(std::move(o.error()));
 			}
-			protocol_op op(std::in_place_type<search_request>, d.allocator());
+			protocol_op op(std::in_place_type<search_request>);
 			auto &s = std::get<search_request>(op);
 			auto base = d.str(*o);
 			if (!base) {
@@ -174,7 +174,7 @@ namespace {
 			if (!types_only) {
 				return std::unexpected(std::move(types_only.error()));
 			}
-			auto f = decode_filter(*o, filter_, d.allocator().resource());
+			auto f = decode_filter(*o, filter_, std::pmr::get_default_resource());
 			if (!f) {
 				return std::unexpected(std::move(f.error()));
 			}
@@ -208,7 +208,7 @@ namespace {
 			if (!o) {
 				return std::unexpected(std::move(o.error()));
 			}
-			protocol_op op(std::in_place_type<modify_request>, d.allocator());
+			protocol_op op(std::in_place_type<modify_request>);
 			auto &m = std::get<modify_request>(op);
 			auto object = d.str(*o);
 			if (!object) {
@@ -253,7 +253,7 @@ namespace {
 			if (!o) {
 				return std::unexpected(std::move(o.error()));
 			}
-			protocol_op op(std::in_place_type<add_request>, d.allocator());
+			protocol_op op(std::in_place_type<add_request>);
 			auto &add = std::get<add_request>(op);
 			auto entry = d.str(*o);
 			if (!entry) {
@@ -283,7 +283,7 @@ namespace {
 			if (!o) {
 				return std::unexpected(std::move(o.error()));
 			}
-			protocol_op op(std::in_place_type<modify_dn_request>, d.allocator());
+			protocol_op op(std::in_place_type<modify_dn_request>);
 			auto &m = std::get<modify_dn_request>(op);
 			auto entry = d.str(*o);
 			if (!entry) {
@@ -317,7 +317,7 @@ namespace {
 			if (!o) {
 				return std::unexpected(std::move(o.error()));
 			}
-			protocol_op op(std::in_place_type<compare_request>, d.allocator());
+			protocol_op op(std::in_place_type<compare_request>);
 			auto &c = std::get<compare_request>(op);
 			auto entry = d.str(*o);
 			if (!entry) {
@@ -353,7 +353,7 @@ namespace {
 			if (!o) {
 				return std::unexpected(std::move(o.error()));
 			}
-			protocol_op op(std::in_place_type<extended_request>, d.allocator());
+			protocol_op op(std::in_place_type<extended_request>);
 			auto &e = std::get<extended_request>(op);
 			auto name = d.str(*o, ber::context(0));
 			if (!name) {
@@ -433,8 +433,7 @@ auto encode_read_entry(std::string_view oid,
 	return value_control(oid, criticality, w, mr);
 }
 
-auto decode_end_transaction_request(std::string_view value, std::pmr::memory_resource *mr)
-  -> result<end_transaction_request>
+auto decode_end_transaction_request(std::string_view value) -> result<end_transaction_request>
 {
 	constexpr std::string_view name = "txnEndReq";
 	const auto in_value = [name](error e) {
@@ -449,7 +448,7 @@ auto decode_end_transaction_request(std::string_view value, std::pmr::memory_res
 	if (auto done = top.expect_end(); !done) {
 		return std::unexpected(in_value(std::move(done.error())));
 	}
-	end_transaction_request out{ std::pmr::polymorphic_allocator<>(mr) };
+	end_transaction_request out;
 	if (next_is(*r, ber::tags::boolean)) {
 		auto commit = r->read_boolean();
 		if (!commit) {
@@ -457,7 +456,7 @@ auto decode_end_transaction_request(std::string_view value, std::pmr::memory_res
 		}
 		out.commit = *commit;
 	}
-	auto id = r->read_string(ber::tags::octet_string, mr);
+	auto id = r->read_string(ber::tags::octet_string);
 	if (!id) {
 		return std::unexpected(in_value(std::move(id.error())));
 	}

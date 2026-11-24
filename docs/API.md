@@ -1977,13 +1977,22 @@ descriptors) are consteval: an invalid literal does not compile.
 ## Memory
 
 Memory (DESIGN.md section 8): the public types use `std::pmr` containers
-and are allocator-aware: the message model (every operation, `ldap_result`,
-`control`, `partial_attribute`, `message`, `paged_results`), `filter`,
+and are allocator-aware: the decoded part of the message model (`message`,
+every response operation, `ldap_result`, `control`, `partial_attribute`,
+the typed response controls such as `paged_results`, `sort_result`,
+`vlv_response` and `end_transaction_response`), `filter`,
 `dn` / `rdn` / `ava`, `attribute`, `entry` / `attribute_values`, `url` /
 `url_extension` and `ber::writer` have `allocator_type`, `get_allocator()`,
 an allocator constructor, allocator-extended copy and move constructors, and
 assignment that keeps the target's resource (also for their `std::optional`
-and `std::variant` members). Parsing and decoding take the resource:
+and `std::variant` members). The request operations (`bind_request`,
+`search_request`, `add_request`, ..., `attribute_value_assertion`,
+`modify_change`, `end_transaction_request`) are plain values on the default
+resource: they are built once per operation, never bulk-decoded. Breaking
+(coro-ldap-3jj.2): their `allocator_type`, allocator constructors,
+allocator-extended copy and move constructors, `get_allocator()` and
+trailing allocator parameters are gone, and so is the `mr` parameter of
+`testing::decode_end_transaction_request`. Parsing and decoding take the resource:
 `decode_options::memory`, `filter::raw(text, mr)`, `dn::parse(text, mr)`, `rdn::parse(text, mr)`, `attribute::parse(text, mr)`,
 `url::parse(text, mr)`, `filters::attr(name, alloc)`, `encode(m, mr)`.
 `read_buffer`, `connect` and `transport::wrap` take a `memory_resource*` too.
@@ -1998,7 +2007,7 @@ unless a resource is given.
   when decoding into one fails, because they outlive the operation (they go
   up the call stack and into logs). Errors are the cold path.
 - Decoding is tested to allocate only from `decode_options::memory` for every
-  sample message (a large entry included), and a builder-made filter plus
+  sample response (a large entry included), and a builder-made filter plus
   `encode` only from the resource given, with a counting resource and with a
   `monotonic_buffer_resource` over a fixed buffer with a null upstream while
   the default resource is `null_memory_resource()` (`tests/pmr_tests.cpp`).

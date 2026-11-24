@@ -242,8 +242,9 @@ operation takes only the typed controls its specification allows there:
 so `pre_read` on an add does not compile.
 
 The designated-initializer style above is for the step 5 request structs,
-which stay aggregates. The wire model of section 10 is allocator-aware and
-uses constructors instead (`message{1, search_request{base, scope, f, {"cn"}}}`).
+which stay aggregates. The wire model of section 10 uses constructors
+instead (`message{1, search_request{base, scope, f, {"cn"}}}`); its decoded
+types are allocator-aware.
 
 Implemented (steps 5a and 6, `operations.hpp`): one aggregate per
 operation — `search_params`, `add_params`, `modify_params` (changes built
@@ -2909,9 +2910,17 @@ Implemented (steps 5a and 5b, `ldap::connection`, also in `jhetz_ldap_net`):
 - Zero-copy views exist only inside the BER decoder.
 - `std::pmr` status (step 4b: done). Every public type that owns strings is
   allocator-aware (`allocator_type`, allocator-extended copy/move, assignment
-  keeps the target's resource): the message model, `filter`, `dn`,
-  `attribute`, `entry`, `url`, `ber::writer`. `error` is the deliberate
-  exception (section 5). `decode_options::memory` sets where decoding
+  keeps the target's resource): the decoded message model (`message`, the
+  responses, `ldap_result`, `control`, `partial_attribute`, the typed
+  response controls), `filter`, `dn`, `attribute`, `entry`, `url`,
+  `ber::writer`. `error` is the deliberate exception (section 5), and so
+  are the request operations (3jj.2): built once per operation and never
+  bulk-decoded, they are plain values with `std::pmr` members on the default
+  resource. Their allocator-aware special members were about 300 lines of
+  constructors and assignments the decode path never used; the connection
+  copies results off its arena anyway. Dropping them changed nothing in
+  `bench/decode_bench.cpp` (docs/DEVELOPMENT.md): the decoded types keep
+  their allocator awareness. `decode_options::memory` sets where decoding
   allocates (`read_options.decode.memory` for the network path);
   `encode(m, mr)` and `write_message(t, m, mr | ber::writer&)` let callers
   pool write buffers. `tls_options` stays a plain aggregate with
@@ -3002,8 +3011,10 @@ client and the mock servers.
 - Wire fields (LDAPDN, LDAPString, attribute values) are `std::string` holding
   raw octets, so a server sending an odd DN never breaks decoding; the
   vocabulary types of section 1 are for the API layer.
-- Types are allocator-aware with value constructors (not aggregates); wire
-  strings are `std::pmr::string`, lists `std::pmr::vector` (`string_list`).
+- Types have value constructors (not aggregates); wire strings are
+  `std::pmr::string`, lists `std::pmr::vector` (`string_list`). The
+  decoded ones (responses, `message`, `control`) are allocator-aware, the
+  requests are plain values (section 8).
 - `encode(const message&, mr)` returns `result<std::pmr::vector<std::byte>>`.
   It fails with `invalid_filter` (empty or over-limit filter) or
   `encode_error` (values the wire

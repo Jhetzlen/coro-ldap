@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -182,8 +183,7 @@ void exercise_transaction(const std::optional<std::pmr::string> &value, bool req
 		return;
 	}
 	if (request) {
-		if (auto r = ldap::testing::decode_end_transaction_request(*value, value->get_allocator().resource())) {
-			check(r->get_allocator() == value->get_allocator(), "r->get_allocator() == value->get_allocator()");
+		if (auto r = ldap::testing::decode_end_transaction_request(*value)) {
 			const auto again = ldap::encode_end_transaction_request(*r);
 			check(ldap::testing::decode_end_transaction_request(again) == *r,
 			  "ldap::testing::decode_end_transaction_request(again) == *r");
@@ -328,9 +328,18 @@ class scoped_null_default
 	std::pmr::memory_resource *old_;
 };
 
-// Decodes into a heap-chunked arena, so ASan catches access after release.
+// Decodes a response into a heap-chunked arena, so ASan catches access
+// after release; requests are built on the default resource.
 void check_arena(std::span<const std::byte> input, const ldap::message &expected)
 {
+	const bool response = std::visit(
+	  [](const auto &op) {
+		  return std::uses_allocator_v<std::remove_cvref_t<decltype(op)>, std::pmr::polymorphic_allocator<>>;
+	  },
+	  expected.op);
+	if (!response) {
+		return;
+	}
 	std::pmr::monotonic_buffer_resource arena(std::pmr::new_delete_resource());
 	ldap::testing::decode_options options;
 	options.memory = &arena;

@@ -146,32 +146,14 @@ struct partial_attribute
 // AttributeValueAssertion (RFC 4511 section 4.1.8).
 struct attribute_value_assertion
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
-
 	std::pmr::string attribute_desc{};
 	std::pmr::string assertion_value{};
 
 	attribute_value_assertion() = default;
-	explicit attribute_value_assertion(const allocator_type &alloc) : attribute_desc(alloc), assertion_value(alloc) {}
 	// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-	attribute_value_assertion(std::string_view attribute_desc_,
-	  std::string_view assertion_value_,
-	  const allocator_type &alloc = {})
-	  : attribute_desc(attribute_desc_, alloc), assertion_value(assertion_value_, alloc)
+	attribute_value_assertion(std::string_view attribute_desc_, std::string_view assertion_value_)
+	  : attribute_desc(attribute_desc_), assertion_value(assertion_value_)
 	{}
-	attribute_value_assertion(const attribute_value_assertion &) = default;
-	attribute_value_assertion(attribute_value_assertion &&) noexcept = default;
-	attribute_value_assertion(const attribute_value_assertion &other, const allocator_type &alloc)
-	  : attribute_desc(other.attribute_desc, alloc), assertion_value(other.assertion_value, alloc)
-	{}
-	attribute_value_assertion(attribute_value_assertion &&other, const allocator_type &alloc)
-	  : attribute_desc(std::move(other.attribute_desc), alloc), assertion_value(std::move(other.assertion_value), alloc)
-	{}
-	auto operator=(const attribute_value_assertion &) -> attribute_value_assertion & = default;
-	auto operator=(attribute_value_assertion &&) -> attribute_value_assertion & = default;
-	~attribute_value_assertion() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return attribute_desc.get_allocator(); }
 
 	friend auto operator==(const attribute_value_assertion &, const attribute_value_assertion &) -> bool = default;
 };
@@ -231,48 +213,22 @@ template<std::uint8_t Tag> struct result_response
 
 struct simple_auth
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
-
 	std::pmr::string password{};// [0] OCTET STRING
 
 	simple_auth() = default;
-	explicit simple_auth(const allocator_type &alloc) : password(alloc) {}
-	explicit simple_auth(std::string_view password_, const allocator_type &alloc = {}) : password(password_, alloc) {}
-	simple_auth(const simple_auth &) = default;
-	simple_auth(simple_auth &&) noexcept = default;
-	simple_auth(const simple_auth &other, const allocator_type &alloc) : password(other.password, alloc) {}
-	simple_auth(simple_auth &&other, const allocator_type &alloc) : password(std::move(other.password), alloc) {}
-	auto operator=(const simple_auth &) -> simple_auth & = default;
-	auto operator=(simple_auth &&) -> simple_auth & = default;
-	~simple_auth() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return password.get_allocator(); }
+	explicit simple_auth(std::string_view password_) : password(password_) {}
 
 	friend auto operator==(const simple_auth &, const simple_auth &) -> bool = default;
 };
 
 struct sasl_auth
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
-
 	std::pmr::string mechanism{};
 	std::optional<std::pmr::string> credentials{};
 
 	sasl_auth() = default;
-	explicit sasl_auth(const allocator_type &alloc) : mechanism(alloc) {}
-	explicit sasl_auth(std::string_view mechanism_) : sasl_auth(mechanism_, {}) {}
-	sasl_auth(std::string_view mechanism_,
-	  std::optional<std::string_view> credentials_,
-	  const allocator_type &alloc = {});
-	sasl_auth(const sasl_auth &) = default;
-	sasl_auth(sasl_auth &&) noexcept = default;
-	sasl_auth(const sasl_auth &other, const allocator_type &alloc);
-	sasl_auth(sasl_auth &&other, const allocator_type &alloc);
-	auto operator=(const sasl_auth &other) -> sasl_auth &;
-	auto operator=(sasl_auth &&other) -> sasl_auth &;
-	~sasl_auth() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return mechanism.get_allocator(); }
+	explicit sasl_auth(std::string_view mechanism_) : mechanism(mechanism_) {}
+	sasl_auth(std::string_view mechanism_, std::optional<std::string_view> credentials_);
 
 	friend auto operator==(const sasl_auth &, const sasl_auth &) -> bool = default;
 };
@@ -280,7 +236,6 @@ struct sasl_auth
 // [APPLICATION 0]
 struct bind_request
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
 	using auth_type = std::variant<simple_auth, sasl_auth>;
 
 	std::int32_t version = 3;
@@ -288,23 +243,10 @@ struct bind_request
 	auth_type authentication{};
 
 	bind_request() = default;
-	explicit bind_request(const allocator_type &alloc)
-	  : name(alloc), authentication(std::in_place_type<simple_auth>, alloc)
+	explicit bind_request(std::int32_t version_) : version(version_) {}
+	bind_request(std::int32_t version_, std::string_view name_, auth_type authentication_ = {})
+	  : version(version_), name(name_), authentication(std::move(authentication_))
 	{}
-	explicit bind_request(std::int32_t version_) : bind_request(version_, {}) {}
-	bind_request(std::int32_t version_,
-	  std::string_view name_,
-	  auth_type authentication_ = {},
-	  const allocator_type &alloc = {});
-	bind_request(const bind_request &) = default;
-	bind_request(bind_request &&) noexcept = default;
-	bind_request(const bind_request &other, const allocator_type &alloc);
-	bind_request(bind_request &&other, const allocator_type &alloc);
-	auto operator=(const bind_request &other) -> bind_request &;
-	auto operator=(bind_request &&other) -> bind_request &;
-	~bind_request() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return name.get_allocator(); }
 
 	friend auto operator==(const bind_request &, const bind_request &) -> bool = default;
 };
@@ -355,8 +297,6 @@ enum class deref_aliases : std::int32_t { never = 0, in_searching = 1, finding_b
 // [APPLICATION 3]
 struct search_request
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
-
 	std::pmr::string base_object{};
 	search_scope scope = search_scope::base_object;
 	deref_aliases deref = deref_aliases::never;
@@ -368,22 +308,11 @@ struct search_request
 	string_list attributes{};
 
 	search_request() = default;
-	explicit search_request(const allocator_type &alloc);
 	// Base, scope, filter and attributes; the other fields are set by name.
 	search_request(std::string_view base_object_,
 	  search_scope scope_,
 	  ldap::filter filter_,
-	  std::initializer_list<std::string_view> attributes_ = {},
-	  const allocator_type &alloc = {});
-	search_request(const search_request &) = default;
-	search_request(search_request &&) noexcept = default;
-	search_request(const search_request &other, const allocator_type &alloc);
-	search_request(search_request &&other, const allocator_type &alloc);
-	auto operator=(const search_request &) -> search_request & = default;
-	auto operator=(search_request &&) -> search_request & = default;
-	~search_request() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return base_object.get_allocator(); }
+	  std::initializer_list<std::string_view> attributes_ = {});
 
 	friend auto operator==(const search_request &, const search_request &) -> bool = default;
 };
@@ -457,29 +386,13 @@ enum class modify_operation : std::int32_t { add = 0, delete_ = 1, replace = 2, 
 
 struct modify_change
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
-
 	modify_operation operation = modify_operation::add;
 	partial_attribute modification{};
 
 	modify_change() = default;
-	explicit modify_change(const allocator_type &alloc) : modification(alloc) {}
-	modify_change(modify_operation operation_, const partial_attribute &modification_, const allocator_type &alloc = {})
-	  : operation(operation_), modification(modification_, alloc)
+	modify_change(modify_operation operation_, const partial_attribute &modification_)
+	  : operation(operation_), modification(modification_)
 	{}
-	modify_change(const modify_change &) = default;
-	modify_change(modify_change &&) noexcept = default;
-	modify_change(const modify_change &other, const allocator_type &alloc)
-	  : operation(other.operation), modification(other.modification, alloc)
-	{}
-	modify_change(modify_change &&other, const allocator_type &alloc)
-	  : operation(other.operation), modification(std::move(other.modification), alloc)
-	{}
-	auto operator=(const modify_change &) -> modify_change & = default;
-	auto operator=(modify_change &&) -> modify_change & = default;
-	~modify_change() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return modification.get_allocator(); }
 
 	friend auto operator==(const modify_change &, const modify_change &) -> bool = default;
 };
@@ -487,32 +400,14 @@ struct modify_change
 // [APPLICATION 6]
 struct modify_request
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
-
 	std::pmr::string object{};
 	std::pmr::vector<modify_change> changes{};
 
 	modify_request() = default;
-	explicit modify_request(const allocator_type &alloc) : object(alloc), changes(alloc) {}
-	explicit modify_request(std::string_view object_) : modify_request(object_, {}) {}
-	modify_request(std::string_view object_,
-	  std::initializer_list<modify_change> changes_,
-	  const allocator_type &alloc = {})
-	  : object(object_, alloc), changes(changes_, alloc)
+	explicit modify_request(std::string_view object_) : object(object_) {}
+	modify_request(std::string_view object_, std::initializer_list<modify_change> changes_)
+	  : object(object_), changes(changes_)
 	{}
-	modify_request(const modify_request &) = default;
-	modify_request(modify_request &&) noexcept = default;
-	modify_request(const modify_request &other, const allocator_type &alloc)
-	  : object(other.object, alloc), changes(other.changes, alloc)
-	{}
-	modify_request(modify_request &&other, const allocator_type &alloc)
-	  : object(std::move(other.object), alloc), changes(std::move(other.changes), alloc)
-	{}
-	auto operator=(const modify_request &) -> modify_request & = default;
-	auto operator=(modify_request &&) -> modify_request & = default;
-	~modify_request() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return object.get_allocator(); }
 
 	friend auto operator==(const modify_request &, const modify_request &) -> bool = default;
 };
@@ -523,32 +418,14 @@ using modify_response = result_response<detail::op_tag::modify_response>;
 // [APPLICATION 8]
 struct add_request
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
-
 	std::pmr::string entry{};
 	std::pmr::vector<partial_attribute> attributes{};
 
 	add_request() = default;
-	explicit add_request(const allocator_type &alloc) : entry(alloc), attributes(alloc) {}
-	explicit add_request(std::string_view entry_) : add_request(entry_, {}) {}
-	add_request(std::string_view entry_,
-	  std::initializer_list<partial_attribute> attributes_,
-	  const allocator_type &alloc = {})
-	  : entry(entry_, alloc), attributes(attributes_, alloc)
+	explicit add_request(std::string_view entry_) : entry(entry_) {}
+	add_request(std::string_view entry_, std::initializer_list<partial_attribute> attributes_)
+	  : entry(entry_), attributes(attributes_)
 	{}
-	add_request(const add_request &) = default;
-	add_request(add_request &&) noexcept = default;
-	add_request(const add_request &other, const allocator_type &alloc)
-	  : entry(other.entry, alloc), attributes(other.attributes, alloc)
-	{}
-	add_request(add_request &&other, const allocator_type &alloc)
-	  : entry(std::move(other.entry), alloc), attributes(std::move(other.attributes), alloc)
-	{}
-	auto operator=(const add_request &) -> add_request & = default;
-	auto operator=(add_request &&) -> add_request & = default;
-	~add_request() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
 
 	friend auto operator==(const add_request &, const add_request &) -> bool = default;
 };
@@ -559,22 +436,10 @@ using add_response = result_response<detail::op_tag::add_response>;
 // [APPLICATION 10]
 struct del_request
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
-
 	std::pmr::string entry{};
 
 	del_request() = default;
-	explicit del_request(const allocator_type &alloc) : entry(alloc) {}
-	explicit del_request(std::string_view entry_, const allocator_type &alloc = {}) : entry(entry_, alloc) {}
-	del_request(const del_request &) = default;
-	del_request(del_request &&) noexcept = default;
-	del_request(const del_request &other, const allocator_type &alloc) : entry(other.entry, alloc) {}
-	del_request(del_request &&other, const allocator_type &alloc) : entry(std::move(other.entry), alloc) {}
-	auto operator=(const del_request &) -> del_request & = default;
-	auto operator=(del_request &&) -> del_request & = default;
-	~del_request() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
+	explicit del_request(std::string_view entry_) : entry(entry_) {}
 
 	friend auto operator==(const del_request &, const del_request &) -> bool = default;
 };
@@ -585,29 +450,16 @@ using del_response = result_response<detail::op_tag::del_response>;
 // [APPLICATION 12]
 struct modify_dn_request
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
-
 	std::pmr::string entry{};
 	std::pmr::string new_rdn{};
 	bool delete_old_rdn = true;
 	std::optional<std::pmr::string> new_superior{};// [0]
 
 	modify_dn_request() = default;
-	explicit modify_dn_request(const allocator_type &alloc) : entry(alloc), new_rdn(alloc) {}
 	modify_dn_request(std::string_view entry_,
 	  std::string_view new_rdn_,
 	  bool delete_old_rdn_ = true,
-	  std::optional<std::string_view> new_superior_ = {},
-	  const allocator_type &alloc = {});
-	modify_dn_request(const modify_dn_request &) = default;
-	modify_dn_request(modify_dn_request &&) noexcept = default;
-	modify_dn_request(const modify_dn_request &other, const allocator_type &alloc);
-	modify_dn_request(modify_dn_request &&other, const allocator_type &alloc);
-	auto operator=(const modify_dn_request &other) -> modify_dn_request &;
-	auto operator=(modify_dn_request &&other) -> modify_dn_request &;
-	~modify_dn_request() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
+	  std::optional<std::string_view> new_superior_ = {});
 
 	friend auto operator==(const modify_dn_request &, const modify_dn_request &) -> bool = default;
 };
@@ -618,29 +470,11 @@ using modify_dn_response = result_response<detail::op_tag::modify_dn_response>;
 // [APPLICATION 14]
 struct compare_request
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
-
 	std::pmr::string entry{};
 	attribute_value_assertion ava{};
 
 	compare_request() = default;
-	explicit compare_request(const allocator_type &alloc) : entry(alloc), ava(alloc) {}
-	compare_request(std::string_view entry_, const attribute_value_assertion &ava_, const allocator_type &alloc = {})
-	  : entry(entry_, alloc), ava(ava_, alloc)
-	{}
-	compare_request(const compare_request &) = default;
-	compare_request(compare_request &&) noexcept = default;
-	compare_request(const compare_request &other, const allocator_type &alloc)
-	  : entry(other.entry, alloc), ava(other.ava, alloc)
-	{}
-	compare_request(compare_request &&other, const allocator_type &alloc)
-	  : entry(std::move(other.entry), alloc), ava(std::move(other.ava), alloc)
-	{}
-	auto operator=(const compare_request &) -> compare_request & = default;
-	auto operator=(compare_request &&) -> compare_request & = default;
-	~compare_request() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return entry.get_allocator(); }
+	compare_request(std::string_view entry_, const attribute_value_assertion &ava_) : entry(entry_), ava(ava_) {}
 
 	friend auto operator==(const compare_request &, const compare_request &) -> bool = default;
 };
@@ -658,26 +492,12 @@ struct abandon_request
 // [APPLICATION 23]
 struct extended_request
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
-
 	std::pmr::string request_name{};// [0]
 	std::optional<std::pmr::string> request_value{};// [1]
 
 	extended_request() = default;
-	explicit extended_request(const allocator_type &alloc) : request_name(alloc) {}
-	explicit extended_request(std::string_view request_name_) : extended_request(request_name_, {}) {}
-	extended_request(std::string_view request_name_,
-	  std::optional<std::string_view> request_value_,
-	  const allocator_type &alloc = {});
-	extended_request(const extended_request &) = default;
-	extended_request(extended_request &&) noexcept = default;
-	extended_request(const extended_request &other, const allocator_type &alloc);
-	extended_request(extended_request &&other, const allocator_type &alloc);
-	auto operator=(const extended_request &other) -> extended_request &;
-	auto operator=(extended_request &&other) -> extended_request &;
-	~extended_request() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return request_name.get_allocator(); }
+	explicit extended_request(std::string_view request_name_) : request_name(request_name_) {}
+	extended_request(std::string_view request_name_, std::optional<std::string_view> request_value_);
 
 	friend auto operator==(const extended_request &, const extended_request &) -> bool = default;
 };
@@ -991,29 +811,11 @@ inline constexpr std::string_view aborted_transaction_notice_oid = "1.3.6.1.1.21
 // txnEndReq (RFC 5805 section 2.3)
 struct end_transaction_request
 {
-	using allocator_type = std::pmr::polymorphic_allocator<>;
-
 	bool commit = true;// FALSE: abort
 	std::pmr::string identifier{};
 
 	end_transaction_request() = default;
-	explicit end_transaction_request(const allocator_type &alloc) : identifier(alloc) {}
-	end_transaction_request(bool commit_, std::string_view identifier_, const allocator_type &alloc = {})
-	  : commit(commit_), identifier(identifier_, alloc)
-	{}
-	end_transaction_request(const end_transaction_request &) = default;
-	end_transaction_request(end_transaction_request &&) noexcept = default;
-	end_transaction_request(const end_transaction_request &other, const allocator_type &alloc)
-	  : commit(other.commit), identifier(other.identifier, alloc)
-	{}
-	end_transaction_request(end_transaction_request &&other, const allocator_type &alloc)
-	  : commit(other.commit), identifier(std::move(other.identifier), alloc)
-	{}
-	auto operator=(const end_transaction_request &) -> end_transaction_request & = default;
-	auto operator=(end_transaction_request &&) -> end_transaction_request & = default;
-	~end_transaction_request() = default;
-
-	[[nodiscard]] auto get_allocator() const noexcept -> allocator_type { return identifier.get_allocator(); }
+	end_transaction_request(bool commit_, std::string_view identifier_) : commit(commit_), identifier(identifier_) {}
 
 	friend auto operator==(const end_transaction_request &, const end_transaction_request &) -> bool = default;
 };

@@ -153,9 +153,8 @@ namespace detail {
 			  detail::format("{}: time_limit of {} s is outside 0 .. 2^31-1", context, seconds));
 		}
 
-		const std::pmr::polymorphic_allocator<> alloc(c.mr());
-		search_request wire(alloc);
-		wire.base_object = p.base.to_string(c.mr());
+		search_request wire;
+		wire.base_object = p.base.to_string();
 		wire.scope = p.scope;
 		wire.deref = p.deref;
 		wire.size_limit = p.size_limit;

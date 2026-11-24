@@ -12,10 +12,13 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace ldap = jhetz::ldap;
@@ -47,12 +50,22 @@ auto large_entry() -> ldap::message
 	return { 42, std::move(e), { ldap::control{ "1.2.840.113556.1.4.319", false, "cookie-cookie-cookie" } } };
 }
 
-auto all_samples() -> std::vector<ldap::message>
+// The sample responses, with and without controls: the operations decoding
+// puts on decode_options::memory (requests stay on the default resource).
+auto response_samples() -> std::vector<ldap::message>
 {
-	auto out = ldap::test::sample_messages();
-	for (auto m : ldap::test::sample_messages()) {
-		m.controls = ldap::test::sample_controls();
-		out.push_back(std::move(m));
+	std::vector<ldap::message> out;
+	for (const auto &m : ldap::test::sample_messages()) {
+		const bool response = std::visit(
+		  [](const auto &op) {
+			  return std::uses_allocator_v<std::remove_cvref_t<decltype(op)>, std::pmr::polymorphic_allocator<>>;
+		  },
+		  m.op);
+		if (response) {
+			out.push_back(m);
+			out.push_back(m);
+			out.back().controls = ldap::test::sample_controls();
+		}
 	}
 	out.push_back(large_entry());
 	return out;
@@ -62,7 +75,7 @@ auto all_samples() -> std::vector<ldap::message>
 
 TEST_CASE("decode allocates only from decode_options::memory", "[pmr][message]")
 {
-	for (const auto &m : all_samples()) {
+	for (const auto &m : response_samples()) {
 		INFO("sample id " << m.id << ", op index " << m.op.index());
 		const auto bytes = *ldap::encode(m);
 		counting_resource supplied;
@@ -89,7 +102,7 @@ TEST_CASE("decode into a monotonic buffer with a null upstream", "[pmr][message]
 	// Fails loudly (std::bad_alloc) on any allocation outside the buffer,
 	// from the default resource included.
 	std::vector<std::byte> storage(8 << 20);
-	for (const auto &m : all_samples()) {
+	for (const auto &m : response_samples()) {
 		INFO("sample id " << m.id << ", op index " << m.op.index());
 		const auto bytes = *ldap::encode(m);
 		std::pmr::monotonic_buffer_resource arena(storage.data(), storage.size(), std::pmr::null_memory_resource());
@@ -132,42 +145,34 @@ TEST_CASE("errors never live in the caller's arena", "[pmr][message][error]")
 	CHECK(e.referrals[0].get_allocator().resource() == std::pmr::get_default_resource());
 }
 
-TEST_CASE("a builder-made filter and its encoding allocate only from the given resource", "[pmr][filter]")
+TEST_CASE("a builder-made filter and an encoding allocate only from the given resource", "[pmr][filter]")
 {
 	std::byte storage[16384];
 	std::pmr::monotonic_buffer_resource arena(storage, sizeof storage, std::pmr::null_memory_resource());
 	const std::string user_input = "a user-supplied value, long enough to need an allocation";
+	using namespace ldap::filters;
+	const ldap::message heap{ 7,
+		ldap::search_request{ "ou=people,dc=example,dc=org",
+		  ldap::search_scope::whole_subtree,
+		  attr("objectClass") == "person" && (attr("uid") == user_input || attr("mail").starts_with(user_input))
+			&& !attr("nsAccountLock").present() && attr("cn;lang-en").contains(user_input),
+		  { "uid", "a-long-attribute-name-that-does-not-fit-inline" } },
+		{ *ldap::encode_paged_results({ 500, "" }, true) } };
 	std::optional<ldap::result<std::pmr::vector<std::byte>>> bytes;
 	{
 		scoped_default_resource guard(std::pmr::null_memory_resource());
-		using namespace ldap::filters;
 		const attr::allocator_type a(&arena);
 		auto f = attr("objectClass", a) == "person"
 				 && (attr("uid", a) == user_input || attr("mail", a).starts_with(user_input))
 				 && !attr("nsAccountLock", a).present() && attr("cn;lang-en", a).contains(user_input);
-		ldap::search_request s(a);
-		s.base_object = "ou=people,dc=example,dc=org";
-		s.scope = ldap::search_scope::whole_subtree;
-		s.filter = std::move(f);
-		s.attributes.emplace_back("uid");
-		s.attributes.emplace_back("a-long-attribute-name-that-does-not-fit-inline");
-		ldap::message m(a);
-		m.id = 7;
-		m.op = std::move(s);
-		m.controls.push_back(*ldap::encode_paged_results({ 500, "" }, true, &arena));
-		REQUIRE_NOTHROW(bytes.emplace(ldap::encode(m, &arena)));
+		CHECK(f.get_allocator().resource() == &arena);
+		CHECK(f == std::get<ldap::search_request>(heap.op).filter);
+		ldap::ber::writer w{ ldap::ber::writer::allocator_type(&arena) };
+		REQUIRE(ldap::encode_filter(w, f));
+		REQUIRE_NOTHROW(bytes.emplace(ldap::encode(heap, &arena)));
 		REQUIRE(bytes->has_value());
 		CHECK((*bytes)->get_allocator().resource() == &arena);
-		CHECK(std::get<ldap::search_request>(m.op).filter.get_allocator().resource() == &arena);
 	}
-	// The same message built on the heap encodes to the same bytes.
-	using namespace ldap::filters;
-	ldap::search_request s("ou=people,dc=example,dc=org",
-	  ldap::search_scope::whole_subtree,
-	  attr("objectClass") == "person" && (attr("uid") == user_input || attr("mail").starts_with(user_input))
-		&& !attr("nsAccountLock").present() && attr("cn;lang-en").contains(user_input),
-	  { "uid", "a-long-attribute-name-that-does-not-fit-inline" });
-	const ldap::message heap{ 7, std::move(s), { *ldap::encode_paged_results({ 500, "" }, true) } };
 	CHECK(hex(**bytes) == hex(*ldap::encode(heap)));
 }
 
@@ -196,7 +201,7 @@ TEST_CASE("message model types are allocator-aware", "[pmr][message]")
 {
 	std::vector<std::byte> storage(16 << 20);// the large entry is copied 4 times
 	const ldap::message other = ldap::test::sample_messages().back();// on the default resource
-	for (const auto &m : all_samples()) {
+	for (const auto &m : response_samples()) {
 		INFO("sample id " << m.id << ", op index " << m.op.index());
 		std::pmr::monotonic_buffer_resource arena(storage.data(), storage.size(), std::pmr::null_memory_resource());
 		const ldap::message::allocator_type a(&arena);
@@ -246,14 +251,6 @@ TEST_CASE("assignment keeps the target's resource for optional and variant membe
 	CHECK(x.response_name->get_allocator().resource() == &arena);
 	CHECK(x.response_value->get_allocator().resource() == &arena);
 	CHECK(target.controls[0].value->get_allocator().resource() == &arena);
-
-	ldap::bind_request b(a);
-	b = ldap::bind_request{
-		3, "cn=a-long-name-for-the-bind,dc=example,dc=org", ldap::sasl_auth{ "GSSAPI", std::string(40, 'x') }
-	};
-	const auto &sasl = std::get<ldap::sasl_auth>(b.authentication);
-	CHECK(sasl.mechanism.get_allocator().resource() == &arena);
-	CHECK(sasl.credentials->get_allocator().resource() == &arena);
 
 	ldap::intermediate_response i(a);
 	i = ldap::intermediate_response{ std::string(40, 'n'), std::string(40, 'v') };

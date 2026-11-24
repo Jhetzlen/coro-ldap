@@ -56,6 +56,20 @@ auto result_members(const ldap::ldap_result &r) -> resources
 	return { mr(r.diagnostic_message), r.referral.get_allocator().resource(), mr(r.referral.at(0)) };
 }
 
+// The request types are plain values on the default resource.
+template<class T> void check_plain_value(const T &sample)
+{
+	T copy(sample);
+	CHECK(copy == sample);
+	const T moved(std::move(copy));
+	CHECK(moved == sample);
+	T assigned;
+	assigned = sample;
+	CHECK(assigned == sample);
+	assigned = T{};
+	CHECK(assigned == T{});
+}
+
 }// namespace
 
 TEST_CASE("value semantics: shared parts", "[value_semantics][message]")
@@ -64,8 +78,7 @@ TEST_CASE("value semantics: shared parts", "[value_semantics][message]")
 	check_value_semantics(sample_control(), [](const ldap::control &c) { return resources{ mr(c.value.value()) }; });
 	check_value_semantics(ldap::partial_attribute{ "a-long-attribute-type", { long_value, "another long value" } },
 	  [](const ldap::partial_attribute &p) { return resources{ mr(p.values.at(1)) }; });
-	check_value_semantics(ldap::attribute_value_assertion{ "a-long-attribute-description", long_value },
-	  [](const ldap::attribute_value_assertion &x) { return resources{ mr(x.assertion_value) }; });
+	check_plain_value(ldap::attribute_value_assertion{ "a-long-attribute-description", long_value });
 	check_value_semantics(
 	  ldap::del_response{ sample_result() }, [](const ldap::del_response &r) { return result_members(r.result); });
 }
@@ -75,23 +88,10 @@ TEST_CASE("value semantics: bind", "[value_semantics][message]")
 	const ldap::sasl_auth mechanism_only("SCRAM-SHA-256-PLUS-LONG");
 	CHECK(mechanism_only.mechanism == "SCRAM-SHA-256-PLUS-LONG");
 	CHECK_FALSE(mechanism_only.credentials.has_value());
-	check_value_semantics(ldap::simple_auth{ "a password long enough to allocate" });
-	check_value_semantics(
-	  sample_sasl(), [](const ldap::sasl_auth &s) { return resources{ mr(s.credentials.value()) }; });
-	const auto bind_members = [](const ldap::bind_request &r) {
-		resources out{ mr(r.name) };
-		if (const auto *s = std::get_if<ldap::sasl_auth>(&r.authentication)) {
-			out.push_back(mr(s->mechanism));
-			if (s->credentials) {
-				out.push_back(mr(*s->credentials));
-			}
-		} else {
-			out.push_back(mr(std::get<ldap::simple_auth>(r.authentication).password));
-		}
-		return out;
-	};
-	check_value_semantics(ldap::bind_request{ 3, long_dn, sample_sasl() }, bind_members);
-	check_value_semantics(ldap::bind_request{ 3, long_dn, ldap::simple_auth{ long_value } }, bind_members);
+	check_plain_value(ldap::simple_auth{ "a password long enough to allocate" });
+	check_plain_value(sample_sasl());
+	check_plain_value(ldap::bind_request{ 3, long_dn, sample_sasl() });
+	check_plain_value(ldap::bind_request{ 3, long_dn, ldap::simple_auth{ long_value } });
 	check_value_semantics(
 	  ldap::bind_response{ sample_result(), "server-sasl-credentials-long-enough" }, [](const ldap::bind_response &r) {
 		  auto out = result_members(r.result);
@@ -102,13 +102,10 @@ TEST_CASE("value semantics: bind", "[value_semantics][message]")
 
 TEST_CASE("value semantics: search", "[value_semantics][message]")
 {
-	check_value_semantics(ldap::search_request{ long_dn,
-							ldap::search_scope::whole_subtree,
-							ldap::filters::attr("uid") == long_value,
-							{ "a-long-attribute-name", "another-long-attribute" } },
-	  [](const ldap::search_request &r) {
-		  return resources{ r.filter.get_allocator().resource(), mr(r.attributes.at(1)) };
-	  });
+	check_plain_value(ldap::search_request{ long_dn,
+	  ldap::search_scope::whole_subtree,
+	  ldap::filters::attr("uid") == long_value,
+	  { "a-long-attribute-name", "another-long-attribute" } });
 	check_value_semantics(ldap::search_result_entry{ long_dn, { { "a-long-attribute-type", { long_value } } } },
 	  [](const ldap::search_result_entry &e) {
 		  return resources{ mr(e.attributes.at(0).type), mr(e.attributes.at(0).values.at(0)) };
@@ -121,30 +118,24 @@ TEST_CASE("value semantics: search", "[value_semantics][message]")
 TEST_CASE("value semantics: update operations", "[value_semantics][message]")
 {
 	const ldap::modify_change change{ ldap::modify_operation::replace, { "a-long-attribute-type", { long_value } } };
-	check_value_semantics(
-	  change, [](const ldap::modify_change &c) { return resources{ mr(c.modification.values.at(0)) }; });
-	check_value_semantics(ldap::modify_request{ long_dn, { change } },
-	  [](const ldap::modify_request &r) { return resources{ mr(r.changes.at(0).modification.type) }; });
-	check_value_semantics(ldap::add_request{ long_dn, { { "a-long-attribute-type", { long_value } } } },
-	  [](const ldap::add_request &r) { return resources{ mr(r.attributes.at(0).values.at(0)) }; });
+	check_plain_value(change);
+	check_plain_value(ldap::modify_request{ long_dn, { change } });
+	check_plain_value(ldap::add_request{ long_dn, { { "a-long-attribute-type", { long_value } } } });
 	const ldap::modify_request no_changes(long_dn);
 	CHECK(no_changes.object == long_dn);
 	CHECK(no_changes.changes.empty());
 	const ldap::add_request no_attributes(long_dn);
 	CHECK(no_attributes.entry == long_dn);
 	CHECK(no_attributes.attributes.empty());
-	check_value_semantics(ldap::del_request{ long_dn });
-	check_value_semantics(sample_modify_dn(),
-	  [](const ldap::modify_dn_request &r) { return resources{ mr(r.new_rdn), mr(r.new_superior.value()) }; });
-	check_value_semantics(ldap::compare_request{ long_dn, { "a-long-attribute-description", long_value } },
-	  [](const ldap::compare_request &r) { return resources{ mr(r.ava.attribute_desc), mr(r.ava.assertion_value) }; });
+	check_plain_value(ldap::del_request{ long_dn });
+	check_plain_value(sample_modify_dn());
+	check_plain_value(ldap::compare_request{ long_dn, { "a-long-attribute-description", long_value } });
 	check_value_semantics(ldap::modify_dn_response{ sample_result() });
 }
 
 TEST_CASE("value semantics: extended and intermediate", "[value_semantics][message]")
 {
-	check_value_semantics(ldap::extended_request{ ldap::start_tls_oid, long_value },
-	  [](const ldap::extended_request &r) { return resources{ mr(r.request_value.value()) }; });
+	check_plain_value(ldap::extended_request{ ldap::start_tls_oid, long_value });
 	check_value_semantics(ldap::extended_response{ sample_result(), ldap::notice_of_disconnection_oid, long_value },
 	  [](const ldap::extended_response &r) {
 		  return resources{ mr(r.response_name.value()), mr(r.response_value.value()) };
@@ -175,9 +166,13 @@ TEST_CASE("value semantics: message and controls", "[value_semantics][message]")
 		}
 		return out;
 	};
-	check_value_semantics(ldap::message{ 7, sample_modify_dn(), { sample_control() } }, message_members);
+	check_value_semantics(ldap::message{ 7,
+							ldap::search_result_entry{ long_dn, { { "a-long-attribute-type", { long_value } } } },
+							{ sample_control() } },
+	  message_members);
 	check_value_semantics(
-	  ldap::message{ 8, ldap::extended_request{ ldap::start_tls_oid, long_value } }, message_members);
+	  ldap::message{ 8, ldap::extended_response{ sample_result(), ldap::start_tls_oid, long_value } }, message_members);
+	check_plain_value(ldap::message{ 9, sample_modify_dn(), { sample_control() } });
 	check_value_semantics(ldap::paged_results{ 500, "a-paged-results-cookie-long-enough" });
 	check_value_semantics(ldap::sort_result{ 16, "a-long-attribute-type-name" });
 }
@@ -382,8 +377,7 @@ TEST_CASE("value semantics: virtual list view and transactions", "[value_semanti
 	check_value_semantics(ldap::vlv_response{ 3, 120, 0, "a-context-id-long-enough-to-allocate" },
 	  [](const ldap::vlv_response &x) { return resources{ mr(x.context_id.value()) }; });
 	check_self_move(ldap::vlv_response{ 3, 120, 0, "a-context-id-long-enough-to-allocate" });
-	check_value_semantics(ldap::end_transaction_request{ false, "a-transaction-identifier-long-enough" },
-	  [](const ldap::end_transaction_request &x) { return resources{ mr(x.identifier) }; });
+	check_plain_value(ldap::end_transaction_request{ false, "a-transaction-identifier-long-enough" });
 	const ldap::update_controls updates{ 7, { sample_control() } };
 	check_value_semantics(
 	  updates, [](const ldap::update_controls &x) { return resources{ mr(x.controls.at(0).value.value()) }; });

@@ -93,8 +93,7 @@ struct decode_options
 
 // ---------------------------------------------------------------- transactions (RFC 5805)
 
-[[nodiscard]] auto decode_end_transaction_request(std::string_view value,
-  std::pmr::memory_resource *mr = std::pmr::get_default_resource()) -> result<end_transaction_request>;
+[[nodiscard]] auto decode_end_transaction_request(std::string_view value) -> result<end_transaction_request>;
 
 // nullopt when both fields are absent.
 [[nodiscard]] auto encode_end_transaction_response(const end_transaction_response &value,

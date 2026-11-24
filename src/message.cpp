@@ -111,71 +111,9 @@ partial_attribute::partial_attribute(std::string_view type_,
   : type(type_, alloc), values(strings(values_, alloc))
 {}
 
-sasl_auth::sasl_auth(std::string_view mechanism_,
-  std::optional<std::string_view> credentials_,
-  const allocator_type &alloc)
-  : mechanism(mechanism_, alloc), credentials(optional_string(credentials_, alloc))
+sasl_auth::sasl_auth(std::string_view mechanism_, std::optional<std::string_view> credentials_)
+  : mechanism(mechanism_), credentials(optional_string(credentials_, {}))
 {}
-
-sasl_auth::sasl_auth(const sasl_auth &other, const allocator_type &alloc)
-  : mechanism(other.mechanism, alloc), credentials(optional_with(other.credentials, alloc))
-{}
-
-sasl_auth::sasl_auth(sasl_auth &&other, const allocator_type &alloc)
-  : mechanism(std::move(other.mechanism), alloc), credentials(optional_with(std::move(other.credentials), alloc))
-{}
-
-auto sasl_auth::operator=(const sasl_auth &other) -> sasl_auth &
-{
-	if (this == &other) {
-		return *this;
-	}
-	mechanism = other.mechanism;
-	assign_optional(credentials, other.credentials, get_allocator());
-	return *this;
-}
-
-auto sasl_auth::operator=(sasl_auth &&other) -> sasl_auth &
-{
-	mechanism = std::move(other.mechanism);
-	assign_optional(credentials, std::move(other.credentials), get_allocator());
-	return *this;
-}
-
-bind_request::bind_request(std::int32_t version_,
-  std::string_view name_,
-  auth_type authentication_,
-  const allocator_type &alloc)
-  : version(version_), name(name_, alloc), authentication(variant_with(std::move(authentication_), alloc))
-{}
-
-bind_request::bind_request(const bind_request &other, const allocator_type &alloc)
-  : version(other.version), name(other.name, alloc), authentication(variant_with(other.authentication, alloc))
-{}
-
-bind_request::bind_request(bind_request &&other, const allocator_type &alloc)
-  : version(other.version), name(std::move(other.name), alloc),
-	authentication(variant_with(std::move(other.authentication), alloc))
-{}
-
-auto bind_request::operator=(const bind_request &other) -> bind_request &
-{
-	if (this == &other) {
-		return *this;
-	}
-	version = other.version;
-	name = other.name;
-	assign_variant(authentication, other.authentication, get_allocator());
-	return *this;
-}
-
-auto bind_request::operator=(bind_request &&other) -> bind_request &
-{
-	version = other.version;
-	name = std::move(other.name);
-	assign_variant(authentication, std::move(other.authentication), get_allocator());
-	return *this;
-}
 
 bind_response::bind_response(const ldap_result &result_,
   std::optional<std::string_view> server_sasl_creds_,
@@ -208,29 +146,12 @@ auto bind_response::operator=(bind_response &&other) -> bind_response &
 	return *this;
 }
 
-search_request::search_request(const allocator_type &alloc)
-  : base_object(alloc), filter(filters::attr("objectClass", alloc).present()), attributes(alloc)
-{}
-
 search_request::search_request(std::string_view base_object_,
   search_scope scope_,
   ldap::filter filter_,
-  std::initializer_list<std::string_view> attributes_,
-  const allocator_type &alloc)
-  : base_object(base_object_, alloc), scope(scope_), filter(std::move(filter_), alloc),
-	attributes(strings(attributes_, alloc))
-{}
-
-search_request::search_request(const search_request &other, const allocator_type &alloc)
-  : base_object(other.base_object, alloc), scope(other.scope), deref(other.deref), size_limit(other.size_limit),
-	time_limit(other.time_limit), types_only(other.types_only), filter(other.filter, alloc),
-	attributes(other.attributes, alloc)
-{}
-
-search_request::search_request(search_request &&other, const allocator_type &alloc)
-  : base_object(std::move(other.base_object), alloc), scope(other.scope), deref(other.deref),
-	size_limit(other.size_limit), time_limit(other.time_limit), types_only(other.types_only),
-	filter(std::move(other.filter), alloc), attributes(std::move(other.attributes), alloc)
+  std::initializer_list<std::string_view> attributes_)
+  : base_object(base_object_), scope(scope_), filter(std::move(filter_)),
+	attributes(attributes_.begin(), attributes_.end())
 {}
 
 // Public API, RFC 4511 field order.
@@ -238,74 +159,13 @@ search_request::search_request(search_request &&other, const allocator_type &all
 modify_dn_request::modify_dn_request(std::string_view entry_,
   std::string_view new_rdn_,
   bool delete_old_rdn_,
-  std::optional<std::string_view> new_superior_,
-  const allocator_type &alloc)
-  : entry(entry_, alloc), new_rdn(new_rdn_, alloc), delete_old_rdn(delete_old_rdn_),
-	new_superior(optional_string(new_superior_, alloc))
+  std::optional<std::string_view> new_superior_)
+  : entry(entry_), new_rdn(new_rdn_), delete_old_rdn(delete_old_rdn_), new_superior(optional_string(new_superior_, {}))
 {}
 
-modify_dn_request::modify_dn_request(const modify_dn_request &other, const allocator_type &alloc)
-  : entry(other.entry, alloc), new_rdn(other.new_rdn, alloc), delete_old_rdn(other.delete_old_rdn),
-	new_superior(optional_with(other.new_superior, alloc))
+extended_request::extended_request(std::string_view request_name_, std::optional<std::string_view> request_value_)
+  : request_name(request_name_), request_value(optional_string(request_value_, {}))
 {}
-
-modify_dn_request::modify_dn_request(modify_dn_request &&other, const allocator_type &alloc)
-  : entry(std::move(other.entry), alloc), new_rdn(std::move(other.new_rdn), alloc),
-	delete_old_rdn(other.delete_old_rdn), new_superior(optional_with(std::move(other.new_superior), alloc))
-{}
-
-auto modify_dn_request::operator=(const modify_dn_request &other) -> modify_dn_request &
-{
-	if (this == &other) {
-		return *this;
-	}
-	entry = other.entry;
-	new_rdn = other.new_rdn;
-	delete_old_rdn = other.delete_old_rdn;
-	assign_optional(new_superior, other.new_superior, get_allocator());
-	return *this;
-}
-
-auto modify_dn_request::operator=(modify_dn_request &&other) -> modify_dn_request &
-{
-	entry = std::move(other.entry);
-	new_rdn = std::move(other.new_rdn);
-	delete_old_rdn = other.delete_old_rdn;
-	assign_optional(new_superior, std::move(other.new_superior), get_allocator());
-	return *this;
-}
-
-extended_request::extended_request(std::string_view request_name_,
-  std::optional<std::string_view> request_value_,
-  const allocator_type &alloc)
-  : request_name(request_name_, alloc), request_value(optional_string(request_value_, alloc))
-{}
-
-extended_request::extended_request(const extended_request &other, const allocator_type &alloc)
-  : request_name(other.request_name, alloc), request_value(optional_with(other.request_value, alloc))
-{}
-
-extended_request::extended_request(extended_request &&other, const allocator_type &alloc)
-  : request_name(std::move(other.request_name), alloc),
-	request_value(optional_with(std::move(other.request_value), alloc))
-{}
-
-auto extended_request::operator=(const extended_request &other) -> extended_request &
-{
-	if (this == &other) {
-		return *this;
-	}
-	request_name = other.request_name;
-	assign_optional(request_value, other.request_value, get_allocator());
-	return *this;
-}
-
-auto extended_request::operator=(extended_request &&other) -> extended_request &
-{
-	request_name = std::move(other.request_name);
-	assign_optional(request_value, std::move(other.request_value), get_allocator());
-	return *this;
-}
 
 // Public API, RFC 4511 field order.
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
@@ -388,7 +248,7 @@ auto intermediate_response::operator=(intermediate_response &&other) -> intermed
 	return *this;
 }
 
-message::message(const allocator_type &alloc) : op(std::in_place_type<bind_request>, alloc), controls(alloc) {}
+message::message(const allocator_type &alloc) : controls(alloc) {}
 
 message::message(std::int32_t id_,
   protocol_op op_,
